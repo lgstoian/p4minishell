@@ -1,0 +1,17 @@
+menu "P4MiniShell"
+
+config P4MINISHELL_WIFI_DEFAULT_SSID
+    string "Default Wi-Fi SSID"
+    default ""
+    help
+        Default station SSID used when the shell command `wifi connect` is
+        entered without explicit credentials.
+
+config P4MINISHELL_WIFI_DEFAULT_PASSWORD
+    string "Default Wi-Fi password"
+    default ""
+    help
+        Default station password used when the shell command `wifi connect` is
+        entered without explicit credentials.
+
+endmenu

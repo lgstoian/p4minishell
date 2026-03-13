@@ -104,6 +104,9 @@ board:
     built_in_commands:
       - help
       - sysinfo
+      - wifi status
+      - wifi connect
+      - wifi disconnect
       - clear
       - reboot
     command_history_depth: 10
@@ -111,7 +114,28 @@ board:
     command_recall_ui:
       - prev_button
       - next_button
-    wifi_status_policy: unsupported_on_current_esp32p4_target
+    wifi_status_policy: runtime_init_from_sdkconfig_or_report_skip_reason
+    wifi_runtime_requirements:
+      - esp_hosted connects to an ESP32-C6 co-processor before host Wi-Fi start
+      - ESP32-C6 SDIO link on CLK 18, CMD 19, D0 14, D1 15, D2 16, D3 17, reset 54
+      - version-matched ESP32-C6 firmware can be built from coprocessor/esp32c6_slave
+      - NVS initialized before esp_wifi_init
+      - CONFIG_ESP_HOSTED_ENABLED
+      - CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE
+      - CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6
+      - CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY
+    wifi_runtime_shell_commands:
+      - wifi status
+      - wifi connect
+      - wifi connect <ssid> <pass>
+      - wifi disconnect
+    wifi_runtime_password_policy: mask_runtime_passwords_in_transcript_and_history
+    wifi_runtime_failure_policy: report the hosted ESP32-C6 SDIO pin map explicitly when esp_hosted cannot connect to the slave
+    size_guardrails:
+      - disable_lvgl_examples_when_shell_ui_is_active
+      - prefer_station_only_wifi_profile_on_esp32p4
+      - prefer_nano_newlib_warn_logs_and_no_ampdu_for_shell_wifi_builds
+      - disable_psram_xip_mapping_if_host_wifi_overflows_link_window
   esp_idf:
     spi_flash_support_boya_chip: true
   future_roadmap:

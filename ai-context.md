@@ -8,6 +8,16 @@ P4MiniShell rules – FIXED 2026:
 - Copilot must update the five meta files at the end of every task
 - Current app behavior = BSP-preserving LVGL shell in main/main.c, not lv_demo_widgets()
 - Display and touch init must continue through bsp_display_start_with_config() with the existing BOARD_CFG_* values
-- sysinfo must report Wi-Fi as unsupported on the current esp32p4 target/config unless the repo gains a real Wi-Fi path later
+- Wi-Fi startup must follow sdkconfig only and now supports shell commands for `wifi status`, `wifi connect`, and `wifi disconnect`
+- When Wi-Fi is enabled, initialize NVS before esp_wifi_init() and keep the standard erase-and-retry recovery path for incompatible NVS metadata
+- On esp32p4 host Wi-Fi builds, use ESP-Hosted plus esp_wifi_remote and connect to the ESP32-C6 co-processor over SDIO before esp_wifi_init()
+- Current hosted transport assumption in this workspace: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 with reset GPIO54; if the link does not come up, fail explicitly and report the hosted pin map instead of the older extconn hardware note
+- Keep ESP-Hosted on `CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY` unless a task explicitly requires forcing a co-processor reset on every host boot
+- For ESP-Hosted version mismatch fixes, build the C6 firmware from `coprocessor/esp32c6_slave` instead of suppressing the warning or downgrading the host-side ESP-Hosted dependency
+- Keep `CONFIG_LV_BUILD_EXAMPLES` disabled unless the app explicitly needs LVGL example code, because Wi-Fi support pushes the esp32p4 image over the link budget otherwise
+- Prefer a station-only sdkconfig Wi-Fi profile on esp32p4 shell builds; disable unused WPA3, enterprise, SoftAP, and Wi-Fi IRAM options unless a task explicitly needs them
+- Prefer nano-format newlib, warn-level compile-time logging, and no AMPDU when fitting shell + host Wi-Fi into the esp32p4 image window
+- If final link fails in the shared flash/PSRAM mapping window, disable PSRAM XIP instruction/rodata mapping before cutting shell functionality
+- Runtime Wi-Fi passwords typed in `wifi connect <ssid> <pass>` must be masked in transcript output and skipped from command recall history
 - Current shell layout = transcript textarea + prompt-bearing input line + on-screen keyboard + basic 10-command recall controls
 - Input submission must be driven by LV_EVENT_READY on the input line while keeping transcript history immutable from normal typing
