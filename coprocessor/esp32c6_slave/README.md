@@ -17,7 +17,10 @@ From this directory:
 ```powershell
 idf.py set-target esp32c6
 idf.py build
+idf.py merge-bin -o build/esp32c6_hosted_slave_merged.bin
 ```
+
+The host-side `c6update` command expects the merged flash image at offset `0x0`, not the app-only `build/esp32c6_hosted_slave.bin`. Use `build/esp32c6_hosted_slave_merged.bin` for SD-card recovery updates.
 
 ## Flash
 

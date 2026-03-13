@@ -3,6 +3,8 @@ dependencies:
     version: "~2.12.1"
     rules:
       - if: "target in [esp32p4]"
+  espressif/esp-serial-flasher:
+    version: "^1.11.0"
   espressif/esp_wifi_remote:
     version: "~1.4.0"
     rules:

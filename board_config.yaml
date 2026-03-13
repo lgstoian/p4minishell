@@ -103,17 +103,27 @@ board:
     ui_mode: transcript_and_input_line_shell
     built_in_commands:
       - help
+      - c6update
       - sysinfo
       - wifi status
+      - wifi scan
       - wifi connect
       - wifi disconnect
+      - sd ls
+      - mem
+      - gpio status
+      - debug
       - clear
       - reboot
+      - version
+      - about
     command_history_depth: 10
     input_prompt: "P4Shell> "
     command_recall_ui:
       - prev_button
       - next_button
+    terminal_style: dos_like_locked_transcript_with_touch_keyboard
+    command_execution: LV_EVENT_READY_on_input_line
     wifi_status_policy: runtime_init_from_sdkconfig_or_report_skip_reason
     wifi_runtime_requirements:
       - esp_hosted connects to an ESP32-C6 co-processor before host Wi-Fi start
@@ -126,11 +136,30 @@ board:
       - CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY
     wifi_runtime_shell_commands:
       - wifi status
+      - wifi scan
       - wifi connect
       - wifi connect <ssid> <pass>
       - wifi disconnect
     wifi_runtime_password_policy: mask_runtime_passwords_in_transcript_and_history
     wifi_runtime_failure_policy: report the hosted ESP32-C6 SDIO pin map explicitly when esp_hosted cannot connect to the slave
+    debug_policy:
+      - keep_last_5_errors_and_warnings_in_memory
+      - show_recent_errors_heap_wifi_state_and_warning_count_in_debug_command
+    c6_update_path:
+      command: "c6update [path|default]"
+      accepted_path_prefixes:
+        - "sd:/"
+        - "/sdcard/"
+      image_requirement: merged_flash_image_for_offset_0x0
+      transport: esp_serial_flasher_over_dedicated_uart
+      progress_reporting: append_status_lines_to_locked_transcript
+      config_keys:
+        - CONFIG_P4MINISHELL_C6_FLASH_UART_PORT
+        - CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO
+        - CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO
+        - CONFIG_P4MINISHELL_C6_EN_GPIO
+        - CONFIG_P4MINISHELL_C6_RESET_GPIO
+        - CONFIG_P4MINISHELL_C6_BOOT_GPIO
     size_guardrails:
       - disable_lvgl_examples_when_shell_ui_is_active
       - prefer_station_only_wifi_profile_on_esp32p4

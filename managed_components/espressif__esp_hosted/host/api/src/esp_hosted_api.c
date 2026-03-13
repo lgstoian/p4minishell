@@ -176,8 +176,7 @@ static inline esp_err_t esp_hosted_reconfigure(void)
 		return ESP_FAIL;
 	}
 
-	ESP_ERROR_CHECK_WITHOUT_ABORT(transport_drv_reconfigure());
-	return ESP_OK;
+	return transport_drv_reconfigure();
 }
 
 int esp_hosted_connect_to_slave(void)
@@ -220,7 +219,10 @@ esp_err_t esp_hosted_remove_channel(esp_remote_channel_t eh_chan)
 
 esp_err_t esp_wifi_remote_init(const wifi_init_config_t *arg)
 {
-	ESP_ERROR_CHECK_WITHOUT_ABORT(esp_hosted_reconfigure());
+	esp_err_t err = esp_hosted_reconfigure();
+	if (err != ESP_OK) {
+		return err;
+	}
 	check_transport_up();
 	return rpc_wifi_init(arg);
 }

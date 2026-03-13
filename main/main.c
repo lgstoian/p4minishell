@@ -1,15 +1,20 @@
 #include <ctype.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/param.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#include "esp_loader.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
@@ -23,6 +28,7 @@
 #include "soc/soc_caps.h"
 #include "lwip/ip4_addr.h"
 #include "lvgl.h"
+#include "esp32_port.h"
 #include "board_config.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
@@ -32,14 +38,22 @@
 #define SHELL_BOARD_DETECTED "ESP32-P4-Function-EV-Board"
 #define SHELL_BOOT_MESSAGE "P4MiniShell v0.1 ready | JC1060P470C | type help"
 #define SHELL_PROMPT "P4Shell> "
+#define SHELL_C6UPDATE_DEFAULT_IMAGE "sd:/esp32c6_hosted_slave_merged.bin"
 #define SHELL_TRANSCRIPT_BYTES 8192
+#define SHELL_ASYNC_TRANSCRIPT_BYTES 2048
 #define SHELL_COMMAND_BYTES 256
 #define SHELL_COMMAND_HISTORY_DEPTH 10
 #define SHELL_KEYBOARD_HEIGHT 240
 #define SHELL_INPUT_ROW_HEIGHT 52
+#define SHELL_DEBUG_LOG_DEPTH 5
+#define SHELL_DEBUG_ENTRY_BYTES 192
 #define SHELL_WIFI_SSID_BYTES 33
 #define SHELL_WIFI_PASSWORD_BYTES 65
 #define SHELL_WIFI_DETAIL_BYTES 256
+#define SHELL_WIFI_INIT_TASK_STACK_BYTES 6144
+#define SHELL_C6UPDATE_TASK_STACK_BYTES 8192
+#define SHELL_C6UPDATE_FLASH_BLOCK_BYTES 1024
+#define SHELL_C6UPDATE_PROGRESS_STEP_PERCENT 5
 #define SHELL_WIFI_RUNTIME_ENABLED (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED)
 
 #ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID
@@ -52,11 +66,28 @@
 
 typedef enum {
     SHELL_WIFI_STATE_NOT_ATTEMPTED = 0,
+    SHELL_WIFI_STATE_STARTING,
     SHELL_WIFI_STATE_STARTED,
     SHELL_WIFI_STATE_FAILED,
     SHELL_WIFI_STATE_SKIPPED_DISABLED,
     SHELL_WIFI_STATE_SKIPPED_UNSUPPORTED,
 } shell_wifi_state_t;
+
+typedef struct {
+    char path[SHELL_COMMAND_BYTES];
+} shell_c6update_request_t;
+
+typedef struct {
+    bool use_defaults;
+    char ssid[SHELL_WIFI_SSID_BYTES];
+    char password[SHELL_WIFI_PASSWORD_BYTES];
+} shell_wifi_connect_request_t;
+
+typedef struct {
+    char entries[SHELL_DEBUG_LOG_DEPTH][SHELL_DEBUG_ENTRY_BYTES];
+    size_t count;
+    size_t next_index;
+} shell_debug_log_t;
 
 static lv_obj_t *s_history_transcript;
 static lv_obj_t *s_input_line;
@@ -64,16 +95,24 @@ static lv_obj_t *s_keyboard;
 static lv_obj_t *s_history_prev_button;
 static lv_obj_t *s_history_next_button;
 static char s_transcript[SHELL_TRANSCRIPT_BYTES];
+static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static char s_command_history[SHELL_COMMAND_HISTORY_DEPTH][SHELL_COMMAND_BYTES];
 static size_t s_command_history_count;
 static int s_command_history_cursor = -1;
 static char s_history_draft[SHELL_COMMAND_BYTES];
+static size_t s_async_transcript_len;
 static shell_wifi_state_t s_wifi_state = SHELL_WIFI_STATE_NOT_ATTEMPTED;
 static esp_err_t s_wifi_last_error = ESP_OK;
 static bool s_wifi_connected;
 static bool s_wifi_connect_requested;
 static char s_wifi_target_ssid[SHELL_WIFI_SSID_BYTES];
 static char s_wifi_last_detail[SHELL_WIFI_DETAIL_BYTES];
+static bool s_wifi_init_task_in_progress;
+static bool s_c6_update_in_progress;
+static bool s_async_transcript_flush_queued;
+static size_t s_runtime_warning_count;
+static shell_debug_log_t s_debug_log;
+static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
 
 #if SHELL_WIFI_RUNTIME_ENABLED
 static esp_netif_t *s_wifi_sta_netif;
@@ -82,9 +121,495 @@ static esp_event_handler_instance_t s_wifi_got_ip_event;
 #endif
 
 static void shell_input_line_reset(void);
+static void shell_transcript_append_text(const char *text);
+static void shell_transcript_appendf(const char *format, ...);
+static int shell_split_args(char *text, char **argv, int max_args);
+static void shell_schedule_transcript_appendf(const char *format, ...);
+static void shell_async_transcript_flush_cb(void *user_data);
+static void shell_debug_log_push(const char *tag, const char *message);
+static void shell_record_errorf(const char *tag, esp_err_t error, const char *format, ...);
+static void shell_record_warningf(const char *tag, const char *format, ...);
+static void shell_record_infof(const char *tag, const char *format, ...);
+static void shell_command_mem(void);
+static void shell_command_gpio_status(void);
+static void shell_command_debug(void);
+static void shell_command_version(void);
+static void shell_command_about(void);
+static void shell_command_sd_ls(char *command);
+static void shell_command_wifi_scan(void);
+static void shell_wifi_runtime_init(void);
+static void shell_wifi_connect_task(void *arg);
+
+static const char *shell_loader_error_string(esp_loader_error_t error)
+{
+    static const char *mapping[] = {
+        "success",
+        "unspecified failure",
+        "timeout",
+        "image too large",
+        "invalid md5",
+        "invalid parameter",
+        "invalid target",
+        "unsupported chip",
+        "unsupported function",
+        "invalid response",
+    };
+
+    if (error < 0 || error >= (esp_loader_error_t)(sizeof(mapping) / sizeof(mapping[0]))) {
+        return "unknown loader error";
+    }
+
+    return mapping[error];
+}
+
+static const char *shell_target_chip_string(target_chip_t target)
+{
+    switch (target) {
+    case ESP8266_CHIP:
+        return "ESP8266";
+    case ESP32_CHIP:
+        return "ESP32";
+    case ESP32S2_CHIP:
+        return "ESP32-S2";
+    case ESP32C3_CHIP:
+        return "ESP32-C3";
+    case ESP32S3_CHIP:
+        return "ESP32-S3";
+    case ESP32C2_CHIP:
+        return "ESP32-C2";
+    case ESP32C6_CHIP:
+        return "ESP32-C6";
+    case ESP32H2_CHIP:
+        return "ESP32-H2";
+    case ESP32C5_CHIP:
+        return "ESP32-C5";
+    case ESP32P4_CHIP:
+        return "ESP32-P4";
+    default:
+        return "unknown";
+    }
+}
+
+static int shell_c6_effective_reset_gpio(void)
+{
+    if (CONFIG_P4MINISHELL_C6_RESET_GPIO >= 0) {
+        return CONFIG_P4MINISHELL_C6_RESET_GPIO;
+    }
+
+    return CONFIG_P4MINISHELL_C6_EN_GPIO;
+}
+
+static bool shell_c6update_config_ready(char *reason, size_t reason_size)
+{
+    if (CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO < 0 || CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO < 0) {
+        snprintf(reason, reason_size,
+                 "No verified P4-to-C6 flash UART is wired on this board baseline. Use PROG_C6 with ESP-Prog first, or ESP-Hosted OTA once the link works.");
+        return false;
+    }
+
+    if (CONFIG_P4MINISHELL_C6_BOOT_GPIO < 0) {
+        snprintf(reason, reason_size,
+                 "Set CONFIG_P4MINISHELL_C6_BOOT_GPIO so the host can enter ROM download mode, or use the external PROG_C6 header if this board does not route C6 BOOT to the P4 host.");
+        return false;
+    }
+
+    if (shell_c6_effective_reset_gpio() < 0) {
+        snprintf(reason, reason_size,
+                 "Set CONFIG_P4MINISHELL_C6_RESET_GPIO or CONFIG_P4MINISHELL_C6_EN_GPIO for target reset control.");
+        return false;
+    }
+
+    snprintf(reason, reason_size, "ok");
+    return true;
+}
+
+static void shell_c6update_normalize_path(const char *input, char *output, size_t output_size)
+{
+    if (strncmp(input, "sd:/", 4) == 0) {
+        snprintf(output, output_size, "%s%s", BSP_SD_MOUNT_POINT, input + 3);
+        return;
+    }
+
+    if (strncmp(input, BSP_SD_MOUNT_POINT "/", strlen(BSP_SD_MOUNT_POINT) + 1) == 0 ||
+        strcmp(input, BSP_SD_MOUNT_POINT) == 0) {
+        snprintf(output, output_size, "%s", input);
+        return;
+    }
+
+    if (input[0] == '/') {
+        snprintf(output, output_size, "%s", input);
+        return;
+    }
+
+    snprintf(output, output_size, "%s/%s", BSP_SD_MOUNT_POINT, input);
+}
+
+static void shell_c6update_drive_enable_gpio(bool enabled)
+{
+    if (CONFIG_P4MINISHELL_C6_EN_GPIO < 0) {
+        return;
+    }
+
+    gpio_reset_pin((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO);
+    gpio_set_pull_mode((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO, GPIO_PULLUP_ONLY);
+    gpio_set_direction((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO, enabled ? 1 : 0);
+}
+
+static esp_loader_error_t shell_c6update_connect(uint32_t baudrate)
+{
+    esp_loader_connect_args_t connect_args = ESP_LOADER_CONNECT_DEFAULT();
+    esp_loader_error_t loader_error = esp_loader_connect(&connect_args);
+
+    if (loader_error != ESP_LOADER_SUCCESS) {
+        shell_schedule_transcript_appendf("c6update: connect failed: %s\n",
+                                          shell_loader_error_string(loader_error));
+        if (loader_error == ESP_LOADER_ERROR_TIMEOUT) {
+            shell_schedule_transcript_appendf("c6update: check UART%d TX=%d RX=%d BOOT=%d RESET=%d EN=%d wiring and C6 power.\n",
+                                              CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
+                                              CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
+                                              CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
+                                              CONFIG_P4MINISHELL_C6_BOOT_GPIO,
+                                              CONFIG_P4MINISHELL_C6_RESET_GPIO,
+                                              CONFIG_P4MINISHELL_C6_EN_GPIO);
+        }
+        return loader_error;
+    }
+
+    if (baudrate > 115200 && esp_loader_get_target() != ESP8266_CHIP) {
+        loader_error = esp_loader_change_transmission_rate(baudrate);
+        if (loader_error == ESP_LOADER_SUCCESS) {
+            loader_error = loader_port_change_transmission_rate(baudrate);
+        }
+        if (loader_error != ESP_LOADER_SUCCESS) {
+            shell_schedule_transcript_appendf("c6update: baudrate change to %u failed: %s\n",
+                                              (unsigned int)baudrate,
+                                              shell_loader_error_string(loader_error));
+            return loader_error;
+        }
+    }
+
+    return ESP_LOADER_SUCCESS;
+}
+
+static void shell_c6update_task(void *arg)
+{
+    shell_c6update_request_t *request = (shell_c6update_request_t *)arg;
+    char reason[192];
+    char normalized_path[320];
+    FILE *firmware = NULL;
+    esp_err_t error;
+    esp_loader_error_t loader_error = ESP_LOADER_SUCCESS;
+    bool mounted_here = false;
+    bool flasher_initialized = false;
+    bool update_succeeded = false;
+    long file_size_long = 0;
+    size_t file_size;
+    size_t aligned_size;
+    size_t padded_remaining;
+    size_t actual_remaining;
+    size_t last_reported_percent = 0;
+    uint8_t payload[SHELL_C6UPDATE_FLASH_BLOCK_BYTES];
+    const int effective_reset_gpio = shell_c6_effective_reset_gpio();
+
+    if (request == NULL) {
+        s_c6_update_in_progress = false;
+        shell_record_errorf("c6update", ESP_ERR_INVALID_ARG, "Background updater request was null");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    shell_schedule_transcript_appendf("c6update: preparing %s\n", request->path);
+
+    if (!shell_c6update_config_ready(reason, sizeof(reason))) {
+        shell_schedule_transcript_appendf("c6update: %s\n", reason);
+        shell_record_warningf("c6update", "%s", reason);
+        goto cleanup;
+    }
+
+    shell_c6update_normalize_path(request->path, normalized_path, sizeof(normalized_path));
+    shell_schedule_transcript_appendf("c6update: mounting SD card for %s\n", normalized_path);
+    error = bsp_sdcard_mount();
+    if (error == ESP_OK) {
+        mounted_here = true;
+    } else if (error != ESP_ERR_INVALID_STATE) {
+        shell_schedule_transcript_appendf("c6update: SD mount failed: %s (0x%x)\n",
+                                          esp_err_to_name(error),
+                                          (unsigned int)error);
+        shell_record_errorf("c6update", error, "SD card not present or mount failed");
+        goto cleanup;
+    }
+
+    firmware = fopen(normalized_path, "rb");
+    if (firmware == NULL) {
+        shell_schedule_transcript_appendf("c6update: could not open %s\n", normalized_path);
+        shell_record_errorf("c6update", ESP_ERR_NOT_FOUND, "Merged image not found at %s", normalized_path);
+        goto cleanup;
+    }
+
+    if (fseek(firmware, 0, SEEK_END) != 0) {
+        shell_schedule_transcript_appendf("c6update: failed to seek %s\n", normalized_path);
+        shell_record_errorf("c6update", ESP_FAIL, "Failed to seek image %s", normalized_path);
+        goto cleanup;
+    }
+
+    file_size_long = ftell(firmware);
+    if (file_size_long <= 0) {
+        shell_schedule_transcript_appendf("c6update: invalid image size in %s\n", normalized_path);
+        shell_record_errorf("c6update", ESP_ERR_INVALID_SIZE, "Invalid image size in %s", normalized_path);
+        goto cleanup;
+    }
+
+    if (fseek(firmware, 0, SEEK_SET) != 0) {
+        shell_schedule_transcript_appendf("c6update: failed to rewind %s\n", normalized_path);
+        shell_record_errorf("c6update", ESP_FAIL, "Failed to rewind image %s", normalized_path);
+        goto cleanup;
+    }
+
+    file_size = (size_t)file_size_long;
+    aligned_size = (file_size + 3U) & ~((size_t)3U);
+    padded_remaining = aligned_size;
+    actual_remaining = file_size;
+
+    shell_schedule_transcript_appendf("c6update: image=%s size=%u bytes flash_addr=0x0\n",
+                                      normalized_path,
+                                      (unsigned int)file_size);
+    shell_schedule_transcript_appendf("c6update: UART%d sync_baud=115200 flash_baud=%u tx=%d rx=%d en=%d reset=%d boot=%d\n",
+                                      CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
+                                      (unsigned int)CONFIG_P4MINISHELL_C6_FLASH_UART_BAUDRATE,
+                                      CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
+                                      CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
+                                      CONFIG_P4MINISHELL_C6_EN_GPIO,
+                                      CONFIG_P4MINISHELL_C6_RESET_GPIO,
+                                      CONFIG_P4MINISHELL_C6_BOOT_GPIO);
+    shell_schedule_transcript_appendf("%s", "c6update: expecting a merged ESP-IDF flash image produced for offset 0x0\n");
+
+    shell_c6update_drive_enable_gpio(true);
+
+    // AI: use the esp-serial-flasher ESP32 host port so BOOT/reset sequencing stays in the supported library path.
+    const loader_esp32_config_t loader_config = {
+        .baud_rate = 115200,
+        .uart_port = CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
+        .uart_rx_pin = CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
+        .uart_tx_pin = CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
+        .reset_trigger_pin = effective_reset_gpio,
+        .gpio0_trigger_pin = CONFIG_P4MINISHELL_C6_BOOT_GPIO,
+    };
+
+    loader_error = loader_port_esp32_init(&loader_config);
+    if (loader_error != ESP_LOADER_SUCCESS) {
+        shell_schedule_transcript_appendf("c6update: flasher UART init failed: %s\n",
+                                          shell_loader_error_string(loader_error));
+        shell_record_errorf("c6update", ESP_FAIL, "Flasher UART init failed: %s", shell_loader_error_string(loader_error));
+        goto cleanup;
+    }
+    flasher_initialized = true;
+
+    shell_schedule_transcript_appendf("%s", "c6update: entering bootloader and connecting to target\n");
+    loader_error = shell_c6update_connect(CONFIG_P4MINISHELL_C6_FLASH_UART_BAUDRATE);
+    if (loader_error != ESP_LOADER_SUCCESS) {
+        shell_record_errorf("c6update", ESP_FAIL, "Target connect failed: %s", shell_loader_error_string(loader_error));
+        goto cleanup;
+    }
+
+    shell_schedule_transcript_appendf("c6update: connected to %s\n",
+                                      shell_target_chip_string(esp_loader_get_target()));
+    if (esp_loader_get_target() != ESP32C6_CHIP) {
+        shell_schedule_transcript_appendf("c6update: refusing to flash %s, expected ESP32-C6\n",
+                                          shell_target_chip_string(esp_loader_get_target()));
+        shell_record_errorf("c6update", ESP_ERR_INVALID_RESPONSE, "Connected target was %s instead of ESP32-C6", shell_target_chip_string(esp_loader_get_target()));
+        goto cleanup;
+    }
+
+    loader_error = esp_loader_flash_start(0x0, aligned_size, sizeof(payload));
+    if (loader_error != ESP_LOADER_SUCCESS) {
+        shell_schedule_transcript_appendf("c6update: flash start failed: %s\n",
+                                          shell_loader_error_string(loader_error));
+        shell_record_errorf("c6update", ESP_FAIL, "Flash start failed: %s", shell_loader_error_string(loader_error));
+        goto cleanup;
+    }
+
+    shell_schedule_transcript_appendf("%s", "c6update: erase complete, programming\n");
+    while (padded_remaining > 0) {
+        const size_t chunk = MIN(sizeof(payload), padded_remaining);
+        const size_t read_len = MIN(chunk, actual_remaining);
+        size_t bytes_read = 0;
+        size_t percent;
+
+        memset(payload, 0xFF, chunk);
+        if (read_len > 0) {
+            bytes_read = fread(payload, 1, read_len, firmware);
+            if (bytes_read != read_len) {
+                shell_schedule_transcript_appendf("c6update: read failed at byte %u\n",
+                                                  (unsigned int)(file_size - actual_remaining));
+                shell_record_errorf("c6update", ESP_FAIL, "Read failed at byte %u", (unsigned int)(file_size - actual_remaining));
+                goto cleanup;
+            }
+        }
+
+        loader_error = esp_loader_flash_write(payload, chunk);
+        if (loader_error != ESP_LOADER_SUCCESS) {
+            shell_schedule_transcript_appendf("c6update: write failed: %s\n",
+                                              shell_loader_error_string(loader_error));
+            shell_record_errorf("c6update", ESP_FAIL, "Flash write failed: %s", shell_loader_error_string(loader_error));
+            goto cleanup;
+        }
+
+        padded_remaining -= chunk;
+        actual_remaining -= bytes_read;
+        percent = ((file_size - actual_remaining) * 100U) / file_size;
+        if (percent >= last_reported_percent + SHELL_C6UPDATE_PROGRESS_STEP_PERCENT || actual_remaining == 0) {
+            last_reported_percent = percent;
+            shell_schedule_transcript_appendf("c6update: progress %u%%\n", (unsigned int)percent);
+        }
+    }
+
+    loader_error = esp_loader_flash_finish(true);
+    if (loader_error != ESP_LOADER_SUCCESS) {
+        shell_schedule_transcript_appendf("c6update: flash finish failed: %s\n",
+                                          shell_loader_error_string(loader_error));
+        shell_record_errorf("c6update", ESP_FAIL, "Flash finish failed: %s", shell_loader_error_string(loader_error));
+        goto cleanup;
+    }
+
+    shell_schedule_transcript_appendf("%s", "c6update: flash complete, target rebooted\n");
+    shell_record_infof("c6update", "C6 flash completed successfully");
+    update_succeeded = true;
+
+cleanup:
+    if (firmware != NULL) {
+        fclose(firmware);
+    }
+    if (flasher_initialized && !update_succeeded) {
+        esp_loader_reset_target();
+    }
+    if (flasher_initialized) {
+        loader_port_esp32_deinit();
+    }
+    shell_c6update_drive_enable_gpio(true);
+    if (mounted_here) {
+        esp_err_t unmount_error = bsp_sdcard_unmount();
+        if (unmount_error != ESP_OK) {
+            shell_schedule_transcript_appendf("c6update: SD unmount warning: %s (0x%x)\n",
+                                              esp_err_to_name(unmount_error),
+                                              (unsigned int)unmount_error);
+            shell_record_warningf("c6update", "SD unmount warning: %s", esp_err_to_name(unmount_error));
+        }
+    }
+    free(request);
+    s_c6_update_in_progress = false;
+    vTaskDelete(NULL);
+}
+
+static void shell_execute_c6update_command(char *command)
+{
+    char *argv[3];
+    int argc = shell_split_args(command, argv, 3);
+    shell_c6update_request_t *request;
+    const char *image_path = NULL;
+
+    if (argc > 2) {
+        shell_transcript_append_text("Usage: c6update [default|slave|sd:/path/to/merged-image.bin]\n");
+        shell_record_warningf("c6update", "Usage error for c6update command");
+        return;
+    }
+
+    if (s_c6_update_in_progress) {
+        shell_transcript_append_text("c6update: another update is already running\n");
+        shell_record_warningf("c6update", "Rejected because another update is already running");
+        return;
+    }
+
+    request = (shell_c6update_request_t *)calloc(1, sizeof(*request));
+    if (request == NULL) {
+        shell_transcript_append_text("c6update: out of memory\n");
+        shell_record_errorf("c6update", ESP_ERR_NO_MEM, "Out of memory allocating update request");
+        return;
+    }
+
+    if (argc == 1 || strcmp(argv[1], "default") == 0 || strcmp(argv[1], "slave") == 0) {
+        image_path = SHELL_C6UPDATE_DEFAULT_IMAGE;
+        shell_transcript_appendf("c6update: using default image %s\n", image_path);
+        shell_record_infof("c6update", "Using default image %s", image_path);
+    } else {
+        image_path = argv[1];
+    }
+
+    snprintf(request->path, sizeof(request->path), "%s", image_path);
+    s_c6_update_in_progress = true;
+    if (xTaskCreate(shell_c6update_task,
+                    "c6update_task",
+                    SHELL_C6UPDATE_TASK_STACK_BYTES,
+                    request,
+                    tskIDLE_PRIORITY + 2,
+                    NULL) != pdPASS) {
+        s_c6_update_in_progress = false;
+        free(request);
+        shell_transcript_append_text("c6update: failed to start background updater task\n");
+        shell_record_errorf("c6update", ESP_FAIL, "Failed to start background updater task");
+    }
+}
+
+// AI: error handling & history buffer keeps the last few failures and warnings visible for the debug command.
+static void shell_debug_log_push(const char *tag, const char *message)
+{
+    char entry[SHELL_DEBUG_ENTRY_BYTES];
+    size_t index;
+
+    snprintf(entry, sizeof(entry), "%s: %s", tag != NULL ? tag : "log", message != NULL ? message : "");
+    index = s_debug_log.next_index;
+    snprintf(s_debug_log.entries[index], sizeof(s_debug_log.entries[index]), "%s", entry);
+    s_debug_log.next_index = (index + 1) % SHELL_DEBUG_LOG_DEPTH;
+    if (s_debug_log.count < SHELL_DEBUG_LOG_DEPTH) {
+        s_debug_log.count++;
+    }
+}
+
+static void shell_record_errorf(const char *tag, esp_err_t error, const char *format, ...)
+{
+    char message[SHELL_DEBUG_ENTRY_BYTES];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    shell_debug_log_push(tag, message);
+    shell_schedule_transcript_appendf("%s: %s: %s (0x%x)\n",
+                                      tag,
+                                      message,
+                                      esp_err_to_name(error),
+                                      (unsigned int)error);
+}
+
+static void shell_record_warningf(const char *tag, const char *format, ...)
+{
+    char message[SHELL_DEBUG_ENTRY_BYTES];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    s_runtime_warning_count++;
+    shell_debug_log_push(tag, message);
+}
+
+static void shell_record_infof(const char *tag, const char *format, ...)
+{
+    char message[SHELL_DEBUG_ENTRY_BYTES];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    shell_debug_log_push(tag, message);
+}
 
 static void shell_transcript_render(void)
 {
+    if (s_history_transcript == NULL) {
+        return;
+    }
+
     lv_textarea_set_text(s_history_transcript, s_transcript);
     lv_textarea_set_cursor_pos(s_history_transcript, LV_TEXTAREA_CURSOR_LAST);
     lv_obj_update_layout(s_history_transcript);
@@ -205,41 +730,105 @@ static void shell_format_command_for_transcript(const char *command, char *outpu
     snprintf(output, output_size, "%s", command != NULL ? command : "");
 }
 
-static void shell_async_transcript_append_cb(void *user_data)
+static void shell_async_transcript_append_pending(const char *text)
 {
-    char *text = (char *)user_data;
+    size_t text_len;
 
     if (text == NULL) {
         return;
     }
 
-    shell_transcript_append_text(text);
+    text_len = strlen(text);
+    if (text_len >= sizeof(s_async_transcript)) {
+        text += text_len - (sizeof(s_async_transcript) - 1);
+        text_len = strlen(text);
+        s_async_transcript_len = 0;
+        s_async_transcript[0] = '\0';
+    }
+
+    if (s_async_transcript_len + text_len + 1 >= sizeof(s_async_transcript)) {
+        size_t drop = s_async_transcript_len + text_len + 1 - sizeof(s_async_transcript);
+
+        if (drop >= s_async_transcript_len) {
+            s_async_transcript_len = 0;
+            s_async_transcript[0] = '\0';
+        } else {
+            memmove(s_async_transcript, s_async_transcript + drop, s_async_transcript_len - drop);
+            s_async_transcript_len -= drop;
+            s_async_transcript[s_async_transcript_len] = '\0';
+        }
+    }
+
+    if (s_async_transcript_len + text_len + 1 >= sizeof(s_async_transcript)) {
+        text_len = sizeof(s_async_transcript) - s_async_transcript_len - 1;
+    }
+
+    memcpy(s_async_transcript + s_async_transcript_len, text, text_len);
+    s_async_transcript_len += text_len;
+    s_async_transcript[s_async_transcript_len] = '\0';
+}
+
+static void shell_async_transcript_flush_cb(void *user_data)
+{
+    char pending[SHELL_ASYNC_TRANSCRIPT_BYTES];
+    bool requeue = false;
+
+    (void)user_data;
+
+    portENTER_CRITICAL(&s_async_transcript_lock);
+    if (s_async_transcript_len == 0) {
+        s_async_transcript_flush_queued = false;
+        portEXIT_CRITICAL(&s_async_transcript_lock);
+        return;
+    }
+
+    memcpy(pending, s_async_transcript, s_async_transcript_len + 1);
+    s_async_transcript_len = 0;
+    s_async_transcript[0] = '\0';
+    s_async_transcript_flush_queued = false;
+    portEXIT_CRITICAL(&s_async_transcript_lock);
+
+    shell_transcript_append_text(pending);
     shell_history_transcript_scroll_to_end();
-    free(text);
+
+    portENTER_CRITICAL(&s_async_transcript_lock);
+    if (s_async_transcript_len > 0 && !s_async_transcript_flush_queued) {
+        s_async_transcript_flush_queued = true;
+        requeue = true;
+    }
+    portEXIT_CRITICAL(&s_async_transcript_lock);
+
+    if (requeue && lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
+        portENTER_CRITICAL(&s_async_transcript_lock);
+        s_async_transcript_flush_queued = false;
+        portEXIT_CRITICAL(&s_async_transcript_lock);
+        ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+    }
 }
 
 static void shell_schedule_transcript_appendf(const char *format, ...)
 {
     char stack_buffer[512];
-    char *heap_buffer;
     va_list args;
-    size_t buffer_len;
+    bool queue_flush = false;
 
     va_start(args, format);
     vsnprintf(stack_buffer, sizeof(stack_buffer), format, args);
     va_end(args);
 
-    buffer_len = strlen(stack_buffer) + 1;
-    heap_buffer = (char *)malloc(buffer_len);
-    if (heap_buffer == NULL) {
-        ESP_LOGW(SHELL_TAG, "Failed to allocate transcript message buffer");
-        return;
+    portENTER_CRITICAL(&s_async_transcript_lock);
+    shell_async_transcript_append_pending(stack_buffer);
+    if (!s_async_transcript_flush_queued) {
+        s_async_transcript_flush_queued = true;
+        queue_flush = true;
     }
+    portEXIT_CRITICAL(&s_async_transcript_lock);
 
-    memcpy(heap_buffer, stack_buffer, buffer_len);
-    if (lv_async_call(shell_async_transcript_append_cb, heap_buffer) != LV_RESULT_OK) {
-        ESP_LOGW(SHELL_TAG, "Failed to queue transcript update");
-        free(heap_buffer);
+    if (queue_flush && lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
+        portENTER_CRITICAL(&s_async_transcript_lock);
+        s_async_transcript_flush_queued = false;
+        portEXIT_CRITICAL(&s_async_transcript_lock);
+        ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
     }
 }
 
@@ -260,6 +849,8 @@ static bool shell_wifi_defaults_available(void)
 static const char *shell_wifi_state_string(void)
 {
     switch (s_wifi_state) {
+    case SHELL_WIFI_STATE_STARTING:
+        return "starting";
     case SHELL_WIFI_STATE_STARTED:
         return "started";
     case SHELL_WIFI_STATE_FAILED:
@@ -277,6 +868,7 @@ static const char *shell_wifi_state_string(void)
 static void shell_wifi_append_step(const char *step)
 {
     shell_schedule_transcript_appendf("[wifi] %s\n", step);
+    shell_record_infof("wifi", "%s", step);
 }
 
 #if SHELL_WIFI_RUNTIME_ENABLED
@@ -288,6 +880,7 @@ static void shell_wifi_append_error(const char *step, esp_err_t error)
                                       step,
                                       esp_err_to_name(error),
                                       (unsigned int)error);
+    shell_debug_log_push("wifi", step);
 }
 
 static void shell_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
@@ -417,14 +1010,142 @@ static esp_err_t shell_wifi_connect_with_credentials(const char *ssid, const cha
     return ESP_OK;
 }
 
+static bool shell_wifi_begin_connect_request(const char *ssid, const char *password, bool use_defaults)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    shell_wifi_connect_request_t *request;
+
+    if (s_wifi_init_task_in_progress || s_wifi_state == SHELL_WIFI_STATE_STARTING) {
+        shell_transcript_append_text("wifi: initialization is already in progress\n");
+        return false;
+    }
+
+    request = (shell_wifi_connect_request_t *)calloc(1, sizeof(*request));
+    if (request == NULL) {
+        shell_transcript_append_text("wifi: failed to allocate connect request\n");
+        return false;
+    }
+
+    request->use_defaults = use_defaults;
+    if (!use_defaults) {
+        snprintf(request->ssid, sizeof(request->ssid), "%s", ssid);
+        snprintf(request->password, sizeof(request->password), "%s", password != NULL ? password : "");
+    }
+
+    s_wifi_init_task_in_progress = true;
+    s_wifi_state = SHELL_WIFI_STATE_STARTING;
+    s_wifi_last_error = ESP_OK;
+    s_wifi_connected = false;
+    s_wifi_connect_requested = false;
+    shell_schedule_transcript_appendf("[wifi] queued %s connection request\n",
+                                      use_defaults ? "default profile" : request->ssid);
+
+    if (xTaskCreate(shell_wifi_connect_task,
+                    "wifi_connect",
+                    SHELL_WIFI_INIT_TASK_STACK_BYTES,
+                    request,
+                    tskIDLE_PRIORITY + 1,
+                    NULL) != pdPASS) {
+        s_wifi_init_task_in_progress = false;
+        s_wifi_state = SHELL_WIFI_STATE_NOT_ATTEMPTED;
+        free(request);
+        shell_transcript_append_text("wifi: failed to start background init task\n");
+        return false;
+    }
+
+    return true;
+#else
+    (void)ssid;
+    (void)password;
+    (void)use_defaults;
+    return false;
+#endif
+}
+
+static void shell_wifi_connect_task(void *arg)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    shell_wifi_connect_request_t *request = (shell_wifi_connect_request_t *)arg;
+
+    shell_wifi_runtime_init();
+    if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
+        if (request->use_defaults) {
+            if (shell_wifi_defaults_available()) {
+                (void)shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
+                                                          CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
+            } else {
+                s_wifi_state = SHELL_WIFI_STATE_FAILED;
+                s_wifi_last_error = ESP_ERR_INVALID_STATE;
+                shell_transcript_append_text("wifi: sdkconfig default credentials are not configured\n");
+            }
+        } else {
+            (void)shell_wifi_connect_with_credentials(request->ssid, request->password);
+        }
+    }
+
+    s_wifi_init_task_in_progress = false;
+    free(request);
+#else
+    (void)arg;
+#endif
+    vTaskDelete(NULL);
+}
+
 static void shell_command_wifi_help(void)
 {
     shell_transcript_append_text("Wi-Fi commands:\n");
     shell_transcript_append_text("  wifi status                 Show Wi-Fi runtime state and IP info\n");
+    shell_transcript_append_text("  wifi scan                   Scan for nearby SSIDs after Wi-Fi starts\n");
     shell_transcript_append_text("  wifi connect                Connect using sdkconfig default credentials\n");
     shell_transcript_append_text("  wifi connect <ssid> <pass>  Connect using runtime credentials\n");
     shell_transcript_append_text("  wifi disconnect             Disconnect the current station session\n");
+    shell_transcript_append_text("  wifi connect probes ESP-Hosted in a background task so the shell remains responsive\n");
     shell_transcript_append_text("  wifi connect passwords are masked in transcript history and not stored in command recall\n");
+}
+
+static void shell_command_wifi_scan(void)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    esp_err_t error;
+    wifi_ap_record_t records[16];
+    uint16_t record_count = (uint16_t)(sizeof(records) / sizeof(records[0]));
+    uint16_t index;
+
+    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
+        shell_transcript_append_text("wifi: scan requires the Wi-Fi runtime to be started first\n");
+        shell_record_warningf("wifi", "Scan rejected because Wi-Fi is not started");
+        return;
+    }
+
+    shell_transcript_append_text("wifi: scanning for access points...\n");
+    error = esp_wifi_scan_start(NULL, true);
+    if (error != ESP_OK) {
+        shell_record_errorf("wifi", error, "WiFi scan failed - check sdkconfig or hosted link");
+        return;
+    }
+
+    error = esp_wifi_scan_get_ap_records(&record_count, records);
+    if (error != ESP_OK) {
+        shell_record_errorf("wifi", error, "Failed to read WiFi scan results");
+        return;
+    }
+
+    if (record_count == 0) {
+        shell_transcript_append_text("wifi.scan: no access points found\n");
+        shell_record_infof("wifi", "Scan completed with no visible APs");
+        return;
+    }
+
+    for (index = 0; index < record_count; index++) {
+        shell_transcript_appendf("wifi.scan[%u]: ssid=%s rssi=%d auth=%u channel=%u\n",
+                                 (unsigned int)index,
+                                 records[index].ssid,
+                                 records[index].rssi,
+                                 (unsigned int)records[index].authmode,
+                                 (unsigned int)records[index].primary);
+    }
+    shell_record_infof("wifi", "Scan completed with %u APs", (unsigned int)record_count);
+#endif
 }
 
 static void shell_command_wifi_status(void)
@@ -448,6 +1169,9 @@ static void shell_command_wifi_status(void)
             shell_transcript_appendf("wifi.last_error: %s (0x%x)\n",
                                      esp_err_to_name(s_wifi_last_error),
                                      (unsigned int)s_wifi_last_error);
+        }
+        if (s_wifi_state == SHELL_WIFI_STATE_STARTING) {
+            shell_transcript_append_text("wifi.progress: ESP-Hosted probe is still running\n");
         }
         return;
     }
@@ -479,6 +1203,11 @@ static void shell_command_wifi_status(void)
 static void shell_command_wifi_disconnect(void)
 {
     esp_err_t error;
+
+    if (s_wifi_state == SHELL_WIFI_STATE_STARTING) {
+        shell_transcript_append_text("wifi: initialization is in progress\n");
+        return;
+    }
 
     if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
         shell_transcript_appendf("wifi: stack is not ready (%s)\n", shell_wifi_state_string());
@@ -514,6 +1243,11 @@ static void shell_execute_wifi_command(char *command)
         return;
     }
 
+    if (strcmp(argv[1], "scan") == 0) {
+        shell_command_wifi_scan();
+        return;
+    }
+
     if (strcmp(argv[1], "disconnect") == 0) {
         shell_command_wifi_disconnect();
         return;
@@ -526,13 +1260,23 @@ static void shell_execute_wifi_command(char *command)
                 return;
             }
 
-            (void)shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
-                                                      CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
+            if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
+                (void)shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
+                                                          CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
+            } else {
+                shell_transcript_append_text("wifi: starting stack on demand\n");
+                (void)shell_wifi_begin_connect_request(NULL, NULL, true);
+            }
             return;
         }
 
         if (argc == 4) {
-            (void)shell_wifi_connect_with_credentials(argv[2], argv[3]);
+            if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
+                (void)shell_wifi_connect_with_credentials(argv[2], argv[3]);
+            } else {
+                shell_transcript_append_text("wifi: starting stack on demand\n");
+                (void)shell_wifi_begin_connect_request(argv[2], argv[3], false);
+            }
             return;
         }
 
@@ -564,6 +1308,7 @@ static void shell_wifi_runtime_init(void)
         shell_wifi_set_detail("ESP-Hosted did not connect to the ESP32-C6 co-processor on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54. Check the hosted slave firmware, pull-ups on CMD/DAT0-DAT3, and the reset wiring.");
         shell_wifi_append_error("esp_hosted_connect_to_slave()", error);
         shell_schedule_transcript_appendf("[wifi] %s\n", s_wifi_last_detail);
+        shell_schedule_transcript_appendf("%s", "[wifi] Recovery: copy coprocessor/esp32c6_slave/build/esp32c6_hosted_slave_merged.bin to the SD card and run c6update <sd:/path/to/esp32c6_hosted_slave_merged.bin> if the C6 firmware is missing or stale\n");
         return;
     }
 #endif
@@ -775,11 +1520,20 @@ static void shell_command_help(void)
 {
     shell_transcript_append_text("Built-in commands:\n");
     shell_transcript_append_text("  help    Show available commands\n");
+    shell_transcript_append_text("  c6update [path|default] Flash a merged ESP32-C6 image from the SD card\n");
     shell_transcript_append_text("  sysinfo Show board/runtime information\n");
+    shell_transcript_append_text("  wifi scan Scan for nearby access points after Wi-Fi startup\n");
+    shell_transcript_append_text("  sd ls [path] List files on the SD card with DOS-style names\n");
+    shell_transcript_append_text("  mem     Show heap and PSRAM usage\n");
+    shell_transcript_append_text("  gpio status Show key board and co-processor GPIO levels\n");
+    shell_transcript_append_text("  debug   Show last 5 errors, Wi-Fi state, heap, and warnings\n");
+    shell_transcript_append_text("  version Show app and ESP-IDF version\n");
+    shell_transcript_append_text("  about   Show shell and board summary\n");
     shell_transcript_append_text("  wifi    Wi-Fi status/connect/disconnect commands\n");
     shell_transcript_append_text("  clear   Clear the terminal history\n");
     shell_transcript_append_text("  reboot  Restart the board\n");
     shell_transcript_append_text("History recall: Prev/Next buttons above the keyboard\n");
+    shell_transcript_appendf("  c6update default uses %s\n", SHELL_C6UPDATE_DEFAULT_IMAGE);
 }
 
 static void shell_command_sysinfo(void)
@@ -821,6 +1575,17 @@ static void shell_command_sysinfo(void)
                              BOARD_CFG_TOUCH_MIRROR_X,
                              BOARD_CFG_TOUCH_MIRROR_Y);
     shell_transcript_appendf("storage: spiffs=%s, sd=%s\n", BSP_SPIFFS_MOUNT_POINT, BSP_SD_MOUNT_POINT);
+    shell_transcript_appendf("c6.flash_uart: port=%d tx=%d rx=%d baud=%d\n",
+                             CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
+                             CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
+                             CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
+                             CONFIG_P4MINISHELL_C6_FLASH_UART_BAUDRATE);
+    shell_transcript_appendf("c6.flash_ctrl: en=%d reset=%d effective_reset=%d boot=%d busy=%s\n",
+                             CONFIG_P4MINISHELL_C6_EN_GPIO,
+                             CONFIG_P4MINISHELL_C6_RESET_GPIO,
+                             shell_c6_effective_reset_gpio(),
+                             CONFIG_P4MINISHELL_C6_BOOT_GPIO,
+                             s_c6_update_in_progress ? "yes" : "no");
     shell_transcript_appendf("idf: %s\n", esp_get_idf_version());
     shell_transcript_appendf("heap: free=%u bytes, internal_free=%u bytes\n",
                              (unsigned int)free_heap,
@@ -834,6 +1599,9 @@ static void shell_command_sysinfo(void)
 #endif
 
     switch (s_wifi_state) {
+    case SHELL_WIFI_STATE_STARTING:
+        shell_transcript_append_text("wifi: runtime initialization is in progress\n");
+        break;
     case SHELL_WIFI_STATE_STARTED:
         shell_transcript_appendf("wifi: runtime initialized in STA mode from sdkconfig, connected=%s\n",
                                  s_wifi_connected ? "yes" : "no");
@@ -853,6 +1621,138 @@ static void shell_command_sysinfo(void)
     default:
         shell_transcript_append_text("wifi: runtime initialization not attempted yet\n");
         break;
+    }
+}
+
+static void shell_command_mem(void)
+{
+    // AI: MSDOS styling keeps command output compact and scan-friendly for the retro terminal presentation.
+    size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    size_t min_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+
+    shell_transcript_appendf("mem.heap.free=%u bytes\n", (unsigned int)free_heap);
+    shell_transcript_appendf("mem.heap.min=%u bytes\n", (unsigned int)min_heap);
+    shell_transcript_appendf("mem.heap.internal=%u bytes\n", (unsigned int)free_internal);
+#if CONFIG_SPIRAM
+    shell_transcript_appendf("mem.psram.free=%u bytes\n", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    shell_transcript_appendf("mem.psram.total=%u bytes\n", (unsigned int)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+#else
+    shell_transcript_append_text("mem.psram: disabled\n");
+#endif
+}
+
+static void shell_print_gpio_level(const char *name, int gpio_num)
+{
+    int level;
+
+    if (gpio_num < 0) {
+        shell_transcript_appendf("gpio.%s: not-configured\n", name);
+        return;
+    }
+
+    level = gpio_get_level((gpio_num_t)gpio_num);
+    shell_transcript_appendf("gpio.%s: gpio=%d level=%d\n", name, gpio_num, level);
+}
+
+static void shell_command_gpio_status(void)
+{
+    shell_print_gpio_level("display_reset", BSP_LCD_RST);
+    shell_print_gpio_level("backlight", BSP_LCD_BACKLIGHT);
+    shell_print_gpio_level("c6_en", CONFIG_P4MINISHELL_C6_EN_GPIO);
+    shell_print_gpio_level("c6_reset", CONFIG_P4MINISHELL_C6_RESET_GPIO);
+    shell_print_gpio_level("c6_boot", CONFIG_P4MINISHELL_C6_BOOT_GPIO);
+}
+
+static void shell_command_debug(void)
+{
+    size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    size_t idx;
+    size_t start;
+
+    shell_transcript_appendf("debug.wifi_state: %s\n", shell_wifi_state_string());
+    shell_transcript_appendf("debug.free_heap: %u bytes\n", (unsigned int)free_heap);
+    shell_transcript_appendf("debug.runtime_warnings: %u\n", (unsigned int)s_runtime_warning_count);
+    if (s_debug_log.count == 0) {
+        shell_transcript_append_text("debug.log: empty\n");
+        return;
+    }
+
+    start = (s_debug_log.next_index + SHELL_DEBUG_LOG_DEPTH - s_debug_log.count) % SHELL_DEBUG_LOG_DEPTH;
+    for (idx = 0; idx < s_debug_log.count; idx++) {
+        size_t slot = (start + idx) % SHELL_DEBUG_LOG_DEPTH;
+        shell_transcript_appendf("debug.log[%u]: %s\n", (unsigned int)idx, s_debug_log.entries[slot]);
+    }
+}
+
+static void shell_command_version(void)
+{
+    shell_transcript_appendf("version.app: %s\n", SHELL_BOOT_MESSAGE);
+    shell_transcript_appendf("version.idf: %s\n", esp_get_idf_version());
+}
+
+static void shell_command_about(void)
+{
+    shell_transcript_appendf("about.shell: %s\n", SHELL_BOOT_MESSAGE);
+    shell_transcript_appendf("about.board: %s / %s\n", SHELL_BOARD_REQUESTED, SHELL_BOARD_DETECTED);
+    shell_transcript_append_text("about.ui: locked transcript with touch keyboard, history buttons, and command prompt\n");
+}
+
+static void shell_command_sd_ls(char *command)
+{
+    char *argv[3];
+    int argc = shell_split_args(command, argv, 3);
+    const char *input_path = argc >= 3 ? argv[2] : BSP_SD_MOUNT_POINT;
+    char normalized_path[320];
+    DIR *dir;
+    struct dirent *entry;
+    esp_err_t error;
+    bool mounted_here = false;
+
+    if (argc > 3) {
+        shell_transcript_append_text("Usage: sd ls [path]\n");
+        shell_record_warningf("sd", "Usage error for sd ls command");
+        return;
+    }
+
+    if (strncmp(input_path, "sd:/", 4) == 0 || input_path[0] != '/') {
+        shell_c6update_normalize_path(input_path, normalized_path, sizeof(normalized_path));
+    } else {
+        snprintf(normalized_path, sizeof(normalized_path), "%s", input_path);
+    }
+
+    error = bsp_sdcard_mount();
+    if (error == ESP_OK) {
+        mounted_here = true;
+    } else if (error != ESP_ERR_INVALID_STATE) {
+        shell_transcript_append_text("sd: SD card not present - insert and retry\n");
+        shell_record_errorf("sd", error, "SD card not present or mount failed");
+        return;
+    }
+
+    dir = opendir(normalized_path);
+    if (dir == NULL) {
+        shell_transcript_appendf("sd: could not open %s\n", normalized_path);
+        shell_record_errorf("sd", ESP_ERR_NOT_FOUND, "Could not open directory %s", normalized_path);
+        goto cleanup;
+    }
+
+    shell_transcript_appendf("sd: listing %s\n", normalized_path);
+    while ((entry = readdir(dir)) != NULL) {
+        shell_transcript_appendf("sd: %s\n", entry->d_name);
+    }
+    closedir(dir);
+    dir = NULL;
+
+cleanup:
+    if (dir != NULL) {
+        closedir(dir);
+    }
+    if (mounted_here) {
+        error = bsp_sdcard_unmount();
+        if (error != ESP_OK) {
+            shell_record_warningf("sd", "Unmount warning after sd ls: %s", esp_err_to_name(error));
+        }
     }
 }
 
@@ -876,8 +1776,53 @@ static void shell_execute_command(char *command)
         return;
     }
 
+    if (strncmp(trimmed, "c6update", 8) == 0 && (trimmed[8] == '\0' || isspace((unsigned char)trimmed[8]))) {
+        shell_execute_c6update_command(trimmed);
+        return;
+    }
+
     if (strcmp(trimmed, "sysinfo") == 0) {
         shell_command_sysinfo();
+        return;
+    }
+
+    if (strcmp(trimmed, "mem") == 0) {
+        shell_command_mem();
+        return;
+    }
+
+    if (strcmp(trimmed, "debug") == 0) {
+        shell_command_debug();
+        return;
+    }
+
+    if (strcmp(trimmed, "version") == 0) {
+        shell_command_version();
+        return;
+    }
+
+    if (strcmp(trimmed, "about") == 0) {
+        shell_command_about();
+        return;
+    }
+
+    if (strncmp(trimmed, "gpio", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+        if (strcmp(trimmed, "gpio") == 0 || strcmp(trimmed, "gpio status") == 0) {
+            shell_command_gpio_status();
+            return;
+        }
+        shell_transcript_append_text("Usage: gpio status\n");
+        shell_record_warningf("gpio", "Usage error for gpio command");
+        return;
+    }
+
+    if (strncmp(trimmed, "sd", 2) == 0 && (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
+        if (strcmp(trimmed, "sd") == 0 || strncmp(trimmed, "sd ls", 5) == 0) {
+            shell_command_sd_ls(trimmed);
+            return;
+        }
+        shell_transcript_append_text("Usage: sd ls [path]\n");
+        shell_record_warningf("sd", "Usage error for sd command");
         return;
     }
 
@@ -892,16 +1837,20 @@ static void shell_execute_command(char *command)
 
     if (strcmp(trimmed, "clear") == 0) {
         shell_transcript_reset();
+        shell_record_infof("shell", "Transcript cleared");
         return;
     }
 
     if (strcmp(trimmed, "reboot") == 0) {
         shell_transcript_append_text("Rebooting...\n");
-        xTaskCreate(reboot_task, "reboot_task", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);
+        if (xTaskCreate(reboot_task, "reboot_task", 2048, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+            shell_record_errorf("reboot", ESP_FAIL, "Failed to schedule reboot task");
+        }
         return;
     }
 
     shell_transcript_appendf("Unknown command: %s\n", trimmed);
+    shell_record_warningf("shell", "Unknown command: %s", trimmed);
 }
 
 static void shell_history_button_event_cb(lv_event_t *event)
@@ -957,6 +1906,7 @@ static void shell_input_line_event_cb(lv_event_t *event)
         char command[SHELL_COMMAND_BYTES];
         char transcript_command[SHELL_COMMAND_BYTES];
 
+        // AI: LV_EVENT_READY handler is the confirmed working Enter path for command execution on the locked transcript UI.
         shell_extract_input_text(command, sizeof(command));
         shell_format_command_for_transcript(command, transcript_command, sizeof(transcript_command));
         shell_transcript_appendf("%s%s\n", SHELL_PROMPT, transcript_command);
@@ -1005,7 +1955,7 @@ static void shell_build_ui(void)
     lv_obj_set_style_pad_all(screen, 0, 0);
     lv_obj_set_style_pad_row(screen, 0, 0);
 
-    // AI: the transcript and input line are separated so command submission does not mutate the visible history.
+    // AI: locked transcript UI keeps the scrollback read-only while commands are entered on the dedicated prompt line.
     s_history_transcript = lv_textarea_create(screen);
     lv_obj_set_width(s_history_transcript, LV_PCT(100));
     lv_obj_set_flex_grow(s_history_transcript, 1);
@@ -1060,6 +2010,7 @@ static void shell_build_ui(void)
     lv_obj_set_style_text_font(s_input_line, terminal_font, 0);
     lv_obj_add_event_cb(s_input_line, shell_input_line_event_cb, LV_EVENT_ALL, NULL);
 
+    // AI: MSDOS styling keeps the shell dense, keyboard-driven, and visually close to a classic terminal.
     s_keyboard = lv_keyboard_create(screen);
     lv_obj_set_width(s_keyboard, LV_PCT(100));
     lv_obj_set_height(s_keyboard, SHELL_KEYBOARD_HEIGHT);
@@ -1096,6 +2047,7 @@ void app_main(void)
     display = bsp_display_start_with_config(&cfg);
     if (display == NULL) {
         ESP_LOGE(SHELL_TAG, "Display initialization failed");
+        shell_record_errorf("init", ESP_FAIL, "Display initialization failed");
         return;
     }
 
@@ -1106,8 +2058,9 @@ void app_main(void)
     shell_build_ui();
     bsp_display_unlock();
 
-    // AI: initialize the Wi-Fi stack after the UI exists so boot-time status messages can be queued safely into the transcript.
-    shell_wifi_runtime_init();
+    // AI: WiFi init stays on-demand so the shell remains bootable even when the hosted C6 is down.
+    shell_transcript_append_text("Wi-Fi initializes on demand when you run a wifi command.\n");
+    shell_transcript_append_text("Enter runs commands from the prompt line; history stays locked above.\n");
 
     // AI: command parsing, prompt management, transcript updates, history recall, and runtime Wi-Fi control are event-driven from the dedicated input line.
 }

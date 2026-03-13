@@ -8,10 +8,13 @@ P4MiniShell rules – FIXED 2026:
 - Copilot must update the five meta files at the end of every task
 - Current app behavior = BSP-preserving LVGL shell in main/main.c, not lv_demo_widgets()
 - Display and touch init must continue through bsp_display_start_with_config() with the existing BOARD_CFG_* values
-- Wi-Fi startup must follow sdkconfig only and now supports shell commands for `wifi status`, `wifi connect`, and `wifi disconnect`
+- Wi-Fi startup must follow sdkconfig only and now supports shell commands for `wifi status`, `wifi scan`, `wifi connect`, and `wifi disconnect`
+- ESP32-C6 maintenance now also includes a `c6update <path>` shell command that flashes a merged C6 image from the SD card over a dedicated UART using `esp-serial-flasher`
 - When Wi-Fi is enabled, initialize NVS before esp_wifi_init() and keep the standard erase-and-retry recovery path for incompatible NVS metadata
 - On esp32p4 host Wi-Fi builds, use ESP-Hosted plus esp_wifi_remote and connect to the ESP32-C6 co-processor over SDIO before esp_wifi_init()
 - Current hosted transport assumption in this workspace: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 with reset GPIO54; if the link does not come up, fail explicitly and report the hosted pin map instead of the older extconn hardware note
+- The C6 updater must keep its UART and BOOT/reset wiring in sdkconfig under the `P4MiniShell` menu; do not hardcode board-specific flasher pins in source
+- The C6 updater expects a merged flash image at offset `0x0`; document that requirement instead of pretending a plain `app.bin` is enough
 - Keep ESP-Hosted on `CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY` unless a task explicitly requires forcing a co-processor reset on every host boot
 - For ESP-Hosted version mismatch fixes, build the C6 firmware from `coprocessor/esp32c6_slave` instead of suppressing the warning or downgrading the host-side ESP-Hosted dependency
 - Keep `CONFIG_LV_BUILD_EXAMPLES` disabled unless the app explicitly needs LVGL example code, because Wi-Fi support pushes the esp32p4 image over the link budget otherwise
@@ -21,3 +24,5 @@ P4MiniShell rules – FIXED 2026:
 - Runtime Wi-Fi passwords typed in `wifi connect <ssid> <pass>` must be masked in transcript output and skipped from command recall history
 - Current shell layout = transcript textarea + prompt-bearing input line + on-screen keyboard + basic 10-command recall controls
 - Input submission must be driven by LV_EVENT_READY on the input line while keeping transcript history immutable from normal typing
+- Current shell command surface also includes `sd ls`, `mem`, `gpio status`, `debug`, `version`, and `about`
+- Keep the small debug/error history buffer populated by friendly command/runtime failures so the `debug` command can surface recent problems without opening a serial monitor

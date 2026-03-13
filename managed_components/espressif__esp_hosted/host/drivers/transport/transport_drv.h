@@ -152,7 +152,7 @@ uint8_t is_transport_tx_ready(void);
 
 #define H_DEFLT_FREE_FUNC g_h.funcs->_h_free
 
-#define MAX_RETRY_TRANSPORT_ACTIVE 100
+#define MAX_RETRY_TRANSPORT_ACTIVE 15
 
 
 int esp_hosted_tx(uint8_t iface_type, uint8_t iface_num,
