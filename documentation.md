@@ -7,9 +7,10 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - All active LCD and touch settings still come from board_config-generated BOARD_CFG_* macros and sdkconfig-backed BSP behavior
 
 ## UI model
-- A scrollable textarea acts as the visible shell history and current input surface
-- A bottom lv_keyboard is attached directly to that textarea
-- The shell seeds the display with the boot message and then appends a prompt for command entry
+- A scrollable transcript textarea shows shell history and command output
+- A dedicated one-line input textarea holds the prompt and current command entry
+- A bottom lv_keyboard is attached only to the input line
+- Prev and Next buttons provide basic recall of the last 10 commands for touch-only use
 
 ## Built-in commands
 - help: list available commands
@@ -21,6 +22,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Active target is esp32p4
 - Wi-Fi is reported as unsupported on the current target/config because this workspace does not expose an enabled Wi-Fi stack
 - The repository still carries a requested JC1060P470C name while the checked-in BSP baseline is ESP32-P4-Function-EV-Board
+- Command submission is handled by LV_EVENT_READY on the input line, not by editing the transcript directly
 
 ## Build and flash
 ```sh

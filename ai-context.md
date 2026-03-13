@@ -9,3 +9,5 @@ P4MiniShell rules – FIXED 2026:
 - Current app behavior = BSP-preserving LVGL shell in main/main.c, not lv_demo_widgets()
 - Display and touch init must continue through bsp_display_start_with_config() with the existing BOARD_CFG_* values
 - sysinfo must report Wi-Fi as unsupported on the current esp32p4 target/config unless the repo gains a real Wi-Fi path later
+- Current shell layout = transcript textarea + prompt-bearing input line + on-screen keyboard + basic 10-command recall controls
+- Input submission must be driven by LV_EVENT_READY on the input line while keeping transcript history immutable from normal typing

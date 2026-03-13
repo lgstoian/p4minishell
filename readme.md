@@ -5,8 +5,9 @@ The app keeps the existing BSP display and touch bring-up intact and replaces th
 
 ## Current behavior
 - Boot banner: P4MiniShell v0.1 ready | JC1060P470C | type help
-- UI: full-screen shell area plus attached lv_keyboard
+- UI: transcript area, prompt-bearing input line, recall buttons, and attached lv_keyboard
 - Commands: help, sysinfo, clear, reboot
+- Command recall: last 10 commands via Prev/Next buttons, with the input line kept separate from transcript history
 - Display/touch init: still owned by the managed BSP and board_config-generated constants
 
 ## Hardware and software baseline

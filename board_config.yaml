@@ -100,12 +100,17 @@ board:
     app_name: P4MiniShell
     app_version: 0.1
     boot_message: "P4MiniShell v0.1 ready | JC1060P470C | type help"
-    ui_mode: textarea_shell_with_keyboard
+    ui_mode: transcript_and_input_line_shell
     built_in_commands:
       - help
       - sysinfo
       - clear
       - reboot
+    command_history_depth: 10
+    input_prompt: "P4Shell> "
+    command_recall_ui:
+      - prev_button
+      - next_button
     wifi_status_policy: unsupported_on_current_esp32p4_target
   esp_idf:
     spi_flash_support_boya_chip: true
