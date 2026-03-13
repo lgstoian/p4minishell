@@ -1,0 +1,115 @@
+# AI-OPTIMIZED BOARD CONFIG - SINGLE SOURCE OF TRUTH
+# Workspace baseline verified from these files:
+# - managed_components/lvgl__lvgl/lv_version.h
+# - managed_components/espressif__esp32_p4_function_ev_board/include/bsp/display.h
+# - managed_components/espressif__esp32_p4_function_ev_board/include/bsp/esp32_p4_function_ev_board.h
+# - managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_function_ev_board.c
+# - sdkconfig
+#
+# Anti-hallucination note:
+# The user request names JC1060P470C, but this workspace currently builds against
+# espressif/esp32_p4_function_ev_board for target esp32p4. Values below mirror the
+# checked-in workspace exactly. TODO-AI: verify from the official JC1060P470C datasheet
+# before claiming this repository is a native JC1060 board port.
+
+board:
+  requested_name: JC1060P470C
+  detected_name: ESP32-P4-Function-EV-Board
+  mcu: ESP32-P4
+  source_of_truth:
+    lvgl_version_header: managed_components/lvgl__lvgl/lv_version.h
+    bsp_header: managed_components/espressif__esp32_p4_function_ev_board/include/bsp/esp32_p4_function_ev_board.h
+    display_header: managed_components/espressif__esp32_p4_function_ev_board/include/bsp/display.h
+    bsp_source: managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_function_ev_board.c
+    sdkconfig: sdkconfig
+    component_manifest: managed_components/espressif__esp32_p4_function_ev_board/idf_component.yml
+  chip_revision:
+    support_mode: less_than_v3
+    minimum_supported: v1.0
+    maximum_supported: v1.99
+    rationale: ESP-IDF 5.5.x treats ESP32-P4 revisions below v3.0 as a separate compatibility family.
+  display:
+    width: 1024
+    height: 600
+    rotation: 0
+    type_1024_600: true
+    panel_driver: JD9165
+    panel_supports_hw_swap_xy: false
+    alt_panel_driver_in_bsp_docs: EK79007
+    color_format_rgb888: false
+    backlight_gpio: GPIO_NUM_23
+    backlight_control: ledc_pwm
+    backlight_pwm_frequency_hz: 5000
+    backlight_pwm_timer: 1
+    backlight_pwm_resolution_bits: 10
+    reset_gpio: GPIO_NUM_27
+    touch_reset_gpio: GPIO_NUM_NC
+    touch_interrupt_gpio: GPIO_NUM_NC
+    pixel_clock_mhz: 80
+    mipi_dsi_lane_num: 2
+    mipi_dsi_lane_bitrate_mbps_macro: 1000
+    mipi_dsi_bus_lane_bitrate_mbps_runtime: 550
+    hsync: 1344
+    hbp: 160
+    hfp: 160
+    vsync: 635
+    vbp: 23
+    vfp: 12
+    draw_buffer_lines: 50
+    draw_buffer_double: 0
+    dpi_buffer_count: 1
+    brightness_ledc_channel: 1
+  touch:
+    controller: GT911
+    i2c_port: 1
+    i2c_sda_gpio: GPIO_NUM_7
+    i2c_scl_gpio: GPIO_NUM_8
+    i2c_clock_hz: 400000
+    enable_internal_pullup: true
+    swap_xy: false
+    mirror_x: false
+    mirror_y: false
+  audio:
+    i2s_port: 1
+    sclk_gpio: GPIO_NUM_12
+    mclk_gpio: GPIO_NUM_13
+    lclk_gpio: GPIO_NUM_10
+    dout_gpio: GPIO_NUM_9
+    dsin_gpio: GPIO_NUM_11
+    power_amp_gpio: GPIO_NUM_20
+  storage:
+    sd_mount_point: "/sdcard"
+    sd_format_on_mount_fail: false
+    spiffs_mount_point: "/spiffs"
+    spiffs_partition_label: "storage"
+    spiffs_max_files: 5
+    spiffs_format_on_mount_fail: false
+  lvgl:
+    version_major: 9
+    version_minor: 2
+    version_patch: 2
+    demo: shell
+    app_buffer_dma: true
+    app_buffer_spiram: false
+    app_sw_rotate: false
+    bsp_default_sw_rotate: true
+    avoid_tearing: false
+    full_refresh: false
+    direct_mode: false
+  software:
+    app_name: P4MiniShell
+    app_version: 0.1
+    boot_message: "P4MiniShell v0.1 ready | JC1060P470C | type help"
+    ui_mode: textarea_shell_with_keyboard
+    built_in_commands:
+      - help
+      - sysinfo
+      - clear
+      - reboot
+    wifi_status_policy: unsupported_on_current_esp32p4_target
+  esp_idf:
+    spi_flash_support_boya_chip: true
+  future_roadmap:
+    v1_1: "Verify whether the intended hardware is JC1060P470C or the current ESP32-P4 BSP baseline. Effort: 0.5 day."
+    v1_2: "Move board-specific BSP code into a first-party component after hardware verification so Component Manager updates do not overwrite local intent. Effort: 1-2 days."
+    v2_0: "Evaluate a selectable demo launcher using LVGL 9 scene/widget abstractions without changing BSP startup order. Effort: 2 days."

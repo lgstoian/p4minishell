@@ -1,0 +1,4 @@
+build/
+.vscode/
+sdkconfig.old
+managed_components/idf_component_manager.lock

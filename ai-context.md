@@ -1,0 +1,11 @@
+P4MiniShell rules – FIXED 2026:
+- Base = official JC1060P470C Demo_IDF (lvgl_demo_v9 or equivalent)
+- Hardware config source: idf_component.yml + managed_components/ + dependencies.lock + sdkconfig
+- ALWAYS read before any change: changelog.md, readme.md, documentation.md, board_config.yaml, sdkconfig, idf_component.yml, board_config.xml (if exists)
+- Use ONLY drivers from managed_components (esp_lvgl_port + esp_lcd_jd9165 + esp_lcd_touch_gt911)
+- Shell = LVGL textarea + on-screen lv_keyboard
+- All major sections need // AI: comment
+- Copilot must update the five meta files at the end of every task
+- Current app behavior = BSP-preserving LVGL shell in main/main.c, not lv_demo_widgets()
+- Display and touch init must continue through bsp_display_start_with_config() with the existing BOARD_CFG_* values
+- sysinfo must report Wi-Fi as unsupported on the current esp32p4 target/config unless the repo gains a real Wi-Fi path later
