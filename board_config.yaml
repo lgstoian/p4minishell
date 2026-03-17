@@ -105,10 +105,30 @@ board:
     app_name: P4MiniShell
     app_version: 0.1
     boot_message: "P4MiniShell v0.1 ready | JC1060P470C | type help"
+    project_documents:
+      - readme.md
+      - roadmap.md
+      - licence.md
     ui_mode: transcript_and_input_line_shell
     built_in_commands:
       - help
       - c6ota
+      - cd
+      - dir
+      - copy
+      - move
+      - del
+      - ren
+      - mkdir
+      - rmdir
+      - type
+      - write
+      - append
+      - touch
+      - set
+      - path
+      - echo
+      - call
       - sysinfo
       - wifi status
       - wifi scan
@@ -123,8 +143,10 @@ board:
       - gpio status
       - debug
       - clear
+      - cls
       - reboot
       - version
+      - ver
       - about
     command_history_depth: 10
     input_prompt: "P4Shell> "
@@ -137,6 +159,17 @@ board:
       - next_button
     terminal_style: dos_like_locked_transcript_with_touch_keyboard
     command_execution: LV_EVENT_READY_on_input_line
+    shell_runtime_state:
+      cwd_scope: ram_only
+      env_scope: ram_only
+      path_scope: ram_only
+      batch_scope: ram_only
+      redirection:
+        supported: true
+        operators:
+          - ">"
+          - ">>"
+        behavior: transcript_delta_is_written_to_sd_target_file_after_command_execution
     wifi_status_policy: background_runtime_init_from_sdkconfig_on_boot_or_report_skip_reason
     wifi_runtime_requirements:
       - esp_hosted connects to an ESP32-C6 co-processor before host Wi-Fi start
@@ -170,12 +203,21 @@ board:
       - record_successful_shell_ui_startup_in_debug_history_without_emitting_a_boot_warning
     sd_policy:
       - sd_commands_share_a_guarded_mount_unmount_path
+      - dos_style_file_commands_share_the_same_guarded_mount_unmount_path
       - fatfs_lfn_enabled_with_heap_buffers_and_255_char_limit
       - validate_and_normalize_sd_paths_before_filesystem_access
       - bound_directory_output_to_128_entries
       - bound_sd_cat_preview_to_8192_bytes_and_sanitize_non_printable_data
       - prefer_read_only_sd_shell_features_for_on_device_diagnostics
       - sd_ls_uses_direct_fatfs_directory_reads_for_full_long_filenames
+      - dos_style_shell_tracks_a_ram_only_current_directory_rooted_at_sdcard
+      - redirection_writes_text_output_to_sd_without_bypassing_the_transcript
+    batch_policy:
+      - resolve_bat_files_from_current_directory_then_path
+      - support_percent_1_through_percent_9_argument_expansion
+      - support_rem_and_double_colon_comment_lines
+      - support_echo_on_and_echo_off_during_batch_execution
+      - bound_batch_recursion_depth_to_protect_the_worker_task
     sd_power_policy:
       - acquire_sd_vo4_ldo_explicitly_at_3300mv_before_sd_mount_on_esp32p4
       - keep_plain_sdmmc_fallback_when_on_chip_ldo_control_is_invalid_or_unsupported

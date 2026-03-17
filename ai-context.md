@@ -2,6 +2,7 @@ P4MiniShell rules – FIXED 2026:
 - Base = official JC1060P470C Demo_IDF (lvgl_demo_v9 or equivalent)
 - Hardware config source: idf_component.yml + managed_components/ + dependencies.lock + sdkconfig
 - ALWAYS read before any change: changelog.md, readme.md, documentation.md, ai-context.md, board_config.yaml, command.md, sdkconfig, idf_component.yml, board_config.xml (if exists)
+- For roadmap or packaging work, also read roadmap.md and licence.md when those files exist so planning and license statements stay consistent with the checked-in project position
 - Use ONLY drivers from managed_components (esp_lvgl_port + esp_lcd_jd9165 + esp_lcd_touch_gt911)
 - Shell = LVGL textarea + on-screen lv_keyboard
 - All major sections need // AI: comment
@@ -30,8 +31,11 @@ P4MiniShell rules – FIXED 2026:
 - Current shell layout = transcript textarea + prompt-bearing input line + on-screen keyboard + basic 10-command recall controls
 - Input submission must be driven by LV_EVENT_READY on the input line while keeping transcript history immutable from normal typing
 - Keep heavy shell command execution off the raw LVGL input callback stack; queue command work onto a dedicated task when SD/FATFS or other deeper command paths would otherwise risk stack overflow in the event handler
-- Current shell command surface includes `c6ota`, `sd info`, `sd ls`, `sd stat`, `sd cat`, `mem`, `gpio status`, `debug`, `version`, and `about`; see `command.md` for the current command reference
+- Current shell command surface includes the original diagnostic commands plus DOS-style shell commands such as `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`, `set`, `path`, `echo`, `call`, `cls`, and `ver`; see `command.md` for the current command reference
 - All SD shell commands must use a shared guarded mount or unmount path, bounded output, and friendly transcript errors so bad media or invalid paths cannot crash or wedge the shell
+- DOS-style shell state must remain RAM-only: current working directory, environment variables, PATH entries, batch `%1..%9` arguments, and `echo on/off` state are runtime conveniences and must not persist outside the current boot session
+- `>` and `>>` redirection must stay text-only and SD-backed by copying the transcript delta for the current command into the target file, rather than bypassing the transcript or rewriting every command handler
+- Batch execution must stay on the existing worker-task command path, resolve `.bat` files through the current directory plus PATH, and keep depth bounded so recursive scripts cannot wedge the shell task
 - Keep FATFS LFN enabled for this workspace with heap-backed buffers, `CONFIG_FATFS_MAX_LFN=255`, and the ESP-IDF 5.5.3 UTF-8 symbol `CONFIG_FATFS_API_ENCODING_UTF_8` so SD root long filenames work for both `sd ls` and `c6ota default`
 - Preserve the BSP-side SD power-control fix: on esp32p4 the managed board layer now acquires SD VO4 explicitly at 3300 mV before SD mounts, instead of relying only on the stock helper path that emitted repeated `ldo` voltage-0 warnings
 - Keep `c6ota` aligned with the proven lboshuizen CrowPanel method: stop Wi-Fi fully before transfer, keep the ESP-Hosted host dependency aligned to the current ESP32-C6 `2.12.x` line, transfer in 1500-byte chunks, validate ESP32-C6 image magic plus chip ID, and retain the exact YES confirmation and success strings

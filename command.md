@@ -2,13 +2,39 @@
 
 P4MiniShell currently exposes the following shell commands.
 
+Project planning and license notes live in `roadmap.md` and `licence.md`.
+
 ## Core commands
 - `help`: Show the built-in command list.
 - `sysinfo`: Show board, display, storage, heap, and Wi-Fi runtime state.
 - `version`: Show the app banner string and ESP-IDF version.
+- `ver`: Alias of `version`.
 - `about`: Show the shell and board summary.
 - `clear`: Clear transcript history.
+- `cls`: Alias of `clear`.
 - `reboot`: Restart the board.
+
+## DOS-style shell commands
+- `cd` or `chdir`: Show the current SD working directory.
+- `cd <path>`: Change the RAM-only current working directory. Supports `sd:/...`, `/sdcard/...`, relative paths, `.`, and `..`.
+- `dir [path]`: List directory entries from the current directory or an explicit target path with bounded transcript output.
+- `copy <src> <dst>`: Copy a file on SD using the guarded shell worker path.
+- `move <src> <dst>`: Move or rename a file or directory on SD.
+- `del <path>` or `erase <path>`: Delete a file from SD.
+- `ren <src> <dst>` or `rename <src> <dst>`: Rename a file or directory on SD.
+- `md <path>` or `mkdir <path>`: Create a directory on SD.
+- `rd <path>` or `rmdir <path>`: Remove an empty directory from SD.
+- `type <path>`: Print a text-safe file preview without dumping raw binary bytes into the transcript.
+- `write <path> <text>`: Create or overwrite a text file with the provided text.
+- `append <path> <text>`: Append text to a file, creating it if needed.
+- `touch <path>`: Create an empty file if missing or refresh its timestamp if it already exists.
+- `set`: List RAM-only environment variables.
+- `set NAME=VALUE`: Create or update a RAM-only environment variable.
+- `path`: Show the current RAM-only batch PATH.
+- `path <dir1>;<dir2>;...`: Replace the PATH used for `.bat` lookup.
+- `echo <text>`: Print text after variable expansion.
+- `echo on` or `echo off`: Enable or disable batch command echoing.
+- `call <file.bat> [args]`: Execute a batch file from SD with `%1` through `%9` argument expansion.
 
 ## Wi-Fi commands
 - `wifi status`: Show Wi-Fi runtime state, target SSID, and connection state.
@@ -40,5 +66,8 @@ P4MiniShell currently exposes the following shell commands.
 - `sd ls` shows full long filenames because FATFS LFN support is enabled with heap-backed buffers and a 255-character limit.
 - `c6ota default` resolves `esp32c6_hosted_slave.bin` or `network_adapter.bin` from the SD root correctly.
 - Shell commands entered from the prompt run on a dedicated command worker task rather than directly on the LVGL input-event callback stack, which avoids stack-protection panics during heavier commands such as `sd ls`.
+- DOS-style file commands reuse the same guarded SD mount path as the `sd` command family, but maintain their own RAM-only current working directory and PATH state.
+- `>` and `>>` redirection write the transcript delta for a command to an SD file while still leaving the command output visible in the shell transcript.
+- Batch files support `.bat` lookup through the current working directory and PATH, `%1` through `%9` argument expansion, `rem` and `::` comments, and `echo on` or `echo off` flow control.
 - `c6ota` avoids `esp_hosted_deinit()` before transfer because the current ESP-Hosted SDIO teardown path can assert on this esp32p4 host configuration.
 - Wi-Fi starts in a background task on normal boot, runs the same restore path after successful `c6ota`, and keeps the transcript diagnostic pass during those restore flows while still exposing `wifi diag` for an extra on-demand report.

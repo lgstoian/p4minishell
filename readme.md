@@ -1,7 +1,30 @@
 # P4MiniShell
-P4MiniShell is a minimal LVGL shell for the current ESP32-P4 workspace baseline.
+P4MiniShell is an embedded, touch-driven command shell for the ESP32-P4 host and ESP32-C6 co-processor baseline used in this workspace. It replaces the demo UI with a persistent DOS-style shell surface built on LVGL while preserving the checked-in BSP display, touch, SD, and hosted Wi-Fi bring-up path.
 
-The app keeps the existing BSP display and touch bring-up intact and replaces the old demo screen with a shell surface made from a scrollable textarea and an on-screen keyboard.
+The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-compatible runtime. What it already provides is the embedded foundation for that direction: a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi on the C6, and a real OTA maintenance path for the co-processor.
+
+## What this project is
+- A single-binary ESP32-P4 shell application implemented in C in [main/main.c](main/main.c)
+- A DOS-inspired command environment for SD-card workflows on an embedded touchscreen device
+- A host-side control surface for an ESP32-C6 connected over ESP-Hosted SDIO
+- A base for future native application loading, shell SDK work, and broader MS-DOS-style command compatibility
+
+## What this project is not yet
+- A full MS-DOS-compatible command interpreter
+- A real process-based operating system with executable loading and isolation
+- A literal x86 `.exe` runtime
+- A complete application SDK for third-party shell apps
+
+## Architecture summary
+- UI: LVGL transcript textarea, prompt-bearing input line, on-screen keyboard, and touch recall controls
+- Storage model: guarded SD-card access with DOS-style relative paths rooted at `/sdcard`
+- Shell model: worker-task command execution, RAM-only environment variables, PATH, batch frames, and transcript-backed redirection
+- Connectivity: ESP32-P4 host Wi-Fi routed through ESP-Hosted plus `esp_wifi_remote` to the ESP32-C6 over SDIO
+- Maintenance path: `c6ota` for validated ESP32-C6 application updates from SD or HTTP/S sources
+
+## Planning and licensing
+- Implementation roadmap: see [roadmap.md](roadmap.md)
+- Project and third-party license summary: see [licence.md](licence.md)
 
 ## Current behavior
 - Boot banner: P4MiniShell v0.1 ready | JC1060P470C | type help
@@ -9,7 +32,7 @@ The app keeps the existing BSP display and touch bring-up intact and replaces th
 - Healthy boot behavior: shell UI startup no longer emits a warning-level serial log; the same milestone is stored in the existing `debug` history instead
 - Enter behavior: command execution is confirmed on the input line through LV_EVENT_READY, while transcript history remains locked above it
 - Command execution safety: the input callback now queues shell work onto a dedicated command task, so heavier commands such as `sd ls` do not overflow the small LVGL event stack
-- Commands: help, c6ota, sysinfo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio status, debug, clear, reboot, version, about
+- Commands: help, cls, c6ota, sysinfo, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio status, debug, clear, reboot, version, ver, about
 - Command recall: last 10 commands via Prev/Next buttons, with the input line kept separate from transcript history
 - Display/touch init: still owned by the managed BSP and board_config-generated constants
 - Wi-Fi startup: attempted automatically in a background task after normal boot using the original sdkconfig-driven hosted routine, with default credentials available for `wifi connect` and password masking for `wifi connect <ssid> <pass>` in transcript/history
@@ -36,6 +59,7 @@ The app keeps the existing BSP display and touch bring-up intact and replaces th
 - SD long filename support: FATFS LFN is now enabled with heap-backed buffers and a 255-character limit, so `sd ls` shows full names from the SD root and `c6ota default` can resolve `esp32c6_hosted_slave.bin` or `network_adapter.bin` without truncation-related misses
 - SD BSP power control: the managed board layer now acquires SD VO4 explicitly at 3300 mV for SD-card IO power, which removes the repeated `ldo` voltage-0 warning spam seen during SD mounts on the esp32p4 path
 - SD shell tools: `sd info` reports card metadata, `sd ls` now shows entry types and file sizes, `sd stat` reports file or directory details, and `sd cat` provides a bounded text-safe file preview for quick inspection on-device
+- DOS-style SD shell tools: the shell now keeps a RAM-only current SD working directory, RAM-only environment variables and PATH, text-file creation and editing helpers, COMMAND.COM-style file operations, batch-file execution from SD, and transcript-safe `>` / `>>` output redirection back onto SD files
 
 ## Hardware and software baseline
 - Target: esp32p4

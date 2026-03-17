@@ -10,9 +10,12 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <unistd.h>
+#include <utime.h>
 
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_err.h"
@@ -83,6 +86,13 @@
 #define SHELL_SD_CAT_DEFAULT_BYTES 1024
 #define SHELL_SD_CAT_MAX_BYTES 8192
 #define SHELL_SD_IO_BUFFER_BYTES 128
+#define SHELL_ENV_VAR_MAX 24
+#define SHELL_ENV_NAME_BYTES 32
+#define SHELL_ENV_VALUE_BYTES 256
+#define SHELL_BATCH_LINE_BYTES 384
+#define SHELL_BATCH_ARGS_MAX 9
+#define SHELL_BATCH_DEPTH_MAX 4
+#define SHELL_FILE_IO_BUFFER_BYTES 512
 #define SHELL_WIFI_RUNTIME_ENABLED (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED)
 
 #ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID
@@ -153,6 +163,20 @@ typedef struct {
     bool mounted_here;
 } shell_sd_session_t;
 
+typedef struct {
+    bool used;
+    char name[SHELL_ENV_NAME_BYTES];
+    char value[SHELL_ENV_VALUE_BYTES];
+} shell_env_var_t;
+
+typedef struct shell_batch_frame {
+    bool echo_enabled;
+    int argc;
+    int depth;
+    char args[SHELL_BATCH_ARGS_MAX][SHELL_COMMAND_BYTES];
+    struct shell_batch_frame *parent;
+} shell_batch_frame_t;
+
 static lv_obj_t *s_history_transcript;
 static lv_obj_t *s_input_line;
 static lv_obj_t *s_keyboard;
@@ -179,6 +203,10 @@ static size_t s_runtime_warning_count;
 static shell_debug_log_t s_debug_log;
 static shell_c6ota_confirmation_t s_c6ota_confirmation;
 static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_shell_command_lock;
+static char s_shell_cwd[SHELL_SD_PATH_BYTES];
+static shell_env_var_t s_shell_env_vars[SHELL_ENV_VAR_MAX];
+static shell_batch_frame_t *s_active_batch_frame;
 
 #if SHELL_WIFI_RUNTIME_ENABLED
 static esp_netif_t *s_wifi_sta_netif;
@@ -192,6 +220,7 @@ static void shell_transcript_appendf(const char *format, ...);
 static int shell_split_args(char *text, char **argv, int max_args);
 static void shell_schedule_transcript_appendf(const char *format, ...);
 static void shell_async_transcript_flush_cb(void *user_data);
+static char *shell_trim(char *text);
 static void shell_debug_log_push(const char *tag, const char *message);
 static void shell_record_errorf(const char *tag, esp_err_t error, const char *format, ...);
 static void shell_record_warningf(const char *tag, const char *format, ...);
@@ -207,6 +236,7 @@ static void shell_command_sd_stat(char *command);
 static void shell_command_sd_cat(char *command);
 static void shell_command_wifi_scan(void);
 static bool shell_text_equals_ignore_case(const char *left, const char *right);
+static void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size);
 static bool shell_c6ota_source_is_http(const char *source);
 static bool shell_c6ota_source_is_sd(const char *source);
 static bool shell_c6ota_source_is_default(const char *source);
@@ -218,6 +248,33 @@ static esp_err_t shell_sd_stat_path(const char *path, struct stat *st);
 static void shell_sd_format_size(uint64_t size_bytes, char *output, size_t output_size);
 static const char *shell_sd_entry_type(const struct stat *st);
 static bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_value, size_t *value_out);
+static void shell_set_default_state(void);
+static esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_size);
+static void shell_fs_print_cwd(void);
+static void shell_env_print_all(void);
+static const char *shell_env_get(const char *name);
+static esp_err_t shell_env_set(const char *name, const char *value);
+static void shell_expand_variables(const char *input, char *output, size_t output_size);
+static bool shell_parse_redirection(char *command, char **command_part, char **redirect_target, bool *append_mode);
+static esp_err_t shell_write_redirect_output(const char *path, const char *text, bool append_mode);
+static esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path);
+static esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv);
+static bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size);
+static void shell_command_cd(int argc, char **argv);
+static void shell_command_dir(int argc, char **argv);
+static void shell_command_copy(int argc, char **argv);
+static void shell_command_del(int argc, char **argv);
+static void shell_command_rename(int argc, char **argv, const char *verb);
+static void shell_command_mkdir(int argc, char **argv);
+static void shell_command_rmdir(int argc, char **argv);
+static void shell_command_type_file(int argc, char **argv);
+static void shell_command_write_file(int argc, char **argv, bool append_mode);
+static void shell_command_touch(int argc, char **argv);
+static void shell_command_move(int argc, char **argv);
+static void shell_command_set(int argc, char **argv);
+static void shell_command_path(int argc, char **argv);
+static void shell_command_echo(int argc, char **argv);
+static bool shell_execute_command_core(char *command);
 static void shell_command_sd_info(void);
 static bool shell_handle_c6ota_confirmation(char *command);
 static void shell_execute_c6ota_command(char *command);
@@ -550,6 +607,356 @@ static bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_
 
     *value_out = (size_t)parsed_value;
     return true;
+}
+
+static void shell_env_normalize_name(const char *name, char *output, size_t output_size)
+{
+    size_t index = 0;
+
+    if (output == NULL || output_size == 0) {
+        return;
+    }
+
+    output[0] = '\0';
+    if (name == NULL) {
+        return;
+    }
+
+    while (name[index] != '\0' && index + 1 < output_size) {
+        output[index] = (char)toupper((unsigned char)name[index]);
+        index++;
+    }
+    output[index] = '\0';
+}
+
+static bool shell_env_name_is_valid(const char *name)
+{
+    size_t index;
+
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+
+    for (index = 0; name[index] != '\0'; index++) {
+        if (!(isalnum((unsigned char)name[index]) || name[index] == '_')) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static shell_env_var_t *shell_env_find_slot(const char *name)
+{
+    char normalized[SHELL_ENV_NAME_BYTES];
+    size_t index;
+
+    shell_env_normalize_name(name, normalized, sizeof(normalized));
+    for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
+        if (s_shell_env_vars[index].used && strcmp(s_shell_env_vars[index].name, normalized) == 0) {
+            return &s_shell_env_vars[index];
+        }
+    }
+
+    return NULL;
+}
+
+static shell_env_var_t *shell_env_find_free_slot(void)
+{
+    size_t index;
+
+    for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
+        if (!s_shell_env_vars[index].used) {
+            return &s_shell_env_vars[index];
+        }
+    }
+
+    return NULL;
+}
+
+static void shell_set_default_state(void)
+{
+    memset(s_shell_env_vars, 0, sizeof(s_shell_env_vars));
+    snprintf(s_shell_cwd, sizeof(s_shell_cwd), "%s", BSP_SD_MOUNT_POINT);
+    (void)shell_env_set("PATH", "sd:/");
+}
+
+static const char *shell_env_get(const char *name)
+{
+    shell_env_var_t *slot = shell_env_find_slot(name);
+
+    return slot != NULL ? slot->value : NULL;
+}
+
+static esp_err_t shell_env_set(const char *name, const char *value)
+{
+    char normalized[SHELL_ENV_NAME_BYTES];
+    shell_env_var_t *slot;
+
+    shell_env_normalize_name(name, normalized, sizeof(normalized));
+    if (!shell_env_name_is_valid(normalized)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    slot = shell_env_find_slot(normalized);
+    if (value == NULL || value[0] == '\0') {
+        if (slot != NULL) {
+            memset(slot, 0, sizeof(*slot));
+        }
+        return ESP_OK;
+    }
+
+    if (slot == NULL) {
+        slot = shell_env_find_free_slot();
+        if (slot == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    slot->used = true;
+    snprintf(slot->name, sizeof(slot->name), "%s", normalized);
+    snprintf(slot->value, sizeof(slot->value), "%s", value);
+    return ESP_OK;
+}
+
+static void shell_env_print_all(void)
+{
+    size_t index;
+    bool any = false;
+
+    for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
+        if (!s_shell_env_vars[index].used) {
+            continue;
+        }
+        shell_transcript_appendf("%s=%s\n", s_shell_env_vars[index].name, s_shell_env_vars[index].value);
+        any = true;
+    }
+
+    if (!any) {
+        shell_transcript_append_text("No environment variables defined\n");
+    }
+}
+
+static void shell_expand_variables(const char *input, char *output, size_t output_size)
+{
+    size_t out_index = 0;
+
+    if (output == NULL || output_size == 0) {
+        return;
+    }
+
+    output[0] = '\0';
+    if (input == NULL) {
+        return;
+    }
+
+    while (*input != '\0' && out_index + 1 < output_size) {
+        if (*input == '%') {
+            const char *end = strchr(input + 1, '%');
+            if (end != NULL) {
+                size_t token_len = (size_t)(end - (input + 1));
+                char token[SHELL_ENV_NAME_BYTES];
+                const char *replacement = NULL;
+
+                if (token_len == 1 && isdigit((unsigned char)input[1]) && s_active_batch_frame != NULL) {
+                    int arg_index = input[1] - '1';
+                    replacement = (arg_index >= 0 && arg_index < s_active_batch_frame->argc)
+                                      ? s_active_batch_frame->args[arg_index]
+                                      : "";
+                } else if (token_len == 0) {
+                    replacement = "%";
+                } else if (token_len < sizeof(token)) {
+                    memcpy(token, input + 1, token_len);
+                    token[token_len] = '\0';
+                    replacement = shell_env_get(token);
+                }
+
+                if (replacement != NULL) {
+                    while (*replacement != '\0' && out_index + 1 < output_size) {
+                        output[out_index++] = *replacement++;
+                    }
+                    input = end + 1;
+                    continue;
+                }
+            }
+        }
+
+        output[out_index++] = *input++;
+    }
+
+    output[out_index] = '\0';
+}
+
+static bool shell_parse_redirection(char *command, char **command_part, char **redirect_target, bool *append_mode)
+{
+    bool in_quotes = false;
+    char *cursor;
+
+    if (command_part == NULL || redirect_target == NULL || append_mode == NULL) {
+        return false;
+    }
+
+    *command_part = command;
+    *redirect_target = NULL;
+    *append_mode = false;
+
+    if (command == NULL) {
+        return false;
+    }
+
+    for (cursor = command; *cursor != '\0'; cursor++) {
+        if (*cursor == '"') {
+            in_quotes = !in_quotes;
+            continue;
+        }
+
+        if (!in_quotes && *cursor == '>') {
+            char *target;
+
+            *append_mode = cursor[1] == '>';
+            *cursor = '\0';
+            target = cursor + (*append_mode ? 2 : 1);
+            target = shell_trim(target);
+            if (target[0] == '"') {
+                target++;
+                if (target[0] != '\0') {
+                    char *end_quote = strrchr(target, '"');
+                    if (end_quote != NULL) {
+                        *end_quote = '\0';
+                    }
+                }
+            }
+            *command_part = shell_trim(command);
+            *redirect_target = target;
+            return true;
+        }
+    }
+
+    *command_part = shell_trim(command);
+    return false;
+}
+
+static esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_size)
+{
+    char combined[SHELL_SD_PATH_BYTES];
+    char scratch[SHELL_SD_PATH_BYTES];
+    char *segments[32];
+    size_t segment_count = 0;
+    char *token;
+    char *context = NULL;
+    int written;
+    size_t index;
+
+    if (output == NULL || output_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (input == NULL || input[0] == '\0') {
+        snprintf(output, output_size, "%s", s_shell_cwd[0] != '\0' ? s_shell_cwd : BSP_SD_MOUNT_POINT);
+        return ESP_OK;
+    }
+
+    if (strncmp(input, "sd:/", 4) == 0) {
+        snprintf(combined, sizeof(combined), "/%s", input + 4);
+    } else if (strcmp(input, BSP_SD_MOUNT_POINT) == 0) {
+        snprintf(combined, sizeof(combined), "/");
+    } else if (strncmp(input, BSP_SD_MOUNT_POINT "/", strlen(BSP_SD_MOUNT_POINT) + 1) == 0) {
+        snprintf(combined, sizeof(combined), "%s", input + strlen(BSP_SD_MOUNT_POINT));
+    } else if (input[0] == '/') {
+        snprintf(combined, sizeof(combined), "%s", input);
+    } else if (strcmp(s_shell_cwd, BSP_SD_MOUNT_POINT) == 0) {
+        snprintf(combined, sizeof(combined), "/%s", input);
+    } else {
+        snprintf(combined,
+                 sizeof(combined),
+                 "%s/%s",
+                 s_shell_cwd + strlen(BSP_SD_MOUNT_POINT),
+                 input);
+    }
+
+    snprintf(scratch, sizeof(scratch), "%s", combined);
+    token = strtok_r(scratch, "/\\", &context);
+    while (token != NULL && segment_count < (sizeof(segments) / sizeof(segments[0]))) {
+        if (strcmp(token, ".") == 0 || token[0] == '\0') {
+            token = strtok_r(NULL, "/\\", &context);
+            continue;
+        }
+
+        if (strcmp(token, "..") == 0) {
+            if (segment_count > 0) {
+                segment_count--;
+            }
+            token = strtok_r(NULL, "/\\", &context);
+            continue;
+        }
+
+        segments[segment_count++] = token;
+        token = strtok_r(NULL, "/\\", &context);
+    }
+
+    written = snprintf(output, output_size, "%s", BSP_SD_MOUNT_POINT);
+    if (written < 0 || (size_t)written >= output_size) {
+        output[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    for (index = 0; index < segment_count; index++) {
+        size_t used = strlen(output);
+        written = snprintf(output + used, output_size - used, "/%s", segments[index]);
+        if (written < 0 || (size_t)written >= output_size - used) {
+            output[0] = '\0';
+            return ESP_ERR_INVALID_SIZE;
+        }
+    }
+
+    return ESP_OK;
+}
+
+static void shell_fs_print_cwd(void)
+{
+    if (strcmp(s_shell_cwd, BSP_SD_MOUNT_POINT) == 0) {
+        shell_transcript_append_text("\\\n");
+        return;
+    }
+
+    shell_transcript_appendf("%s\n", s_shell_cwd + strlen(BSP_SD_MOUNT_POINT));
+}
+
+static esp_err_t shell_write_redirect_output(const char *path, const char *text, bool append_mode)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    esp_err_t error;
+
+    error = shell_fs_resolve_path(path, resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    file = fopen(resolved_path, append_mode ? "ab" : "wb");
+    if (file == NULL) {
+        shell_sd_end(&session, "redirection");
+        return ESP_FAIL;
+    }
+
+    if (text != NULL && text[0] != '\0') {
+        size_t text_len = strlen(text);
+        if (fwrite(text, 1, text_len, file) != text_len) {
+            fclose(file);
+            shell_sd_end(&session, "redirection");
+            return ESP_FAIL;
+        }
+    }
+
+    fclose(file);
+    shell_sd_end(&session, "redirection");
+    return ESP_OK;
 }
 
 static esp_err_t shell_c6ota_wait_for_wifi_ready(void)
@@ -1787,15 +2194,68 @@ static void shell_history_transcript_scroll_to_end(void)
 static int shell_split_args(char *text, char **argv, int max_args)
 {
     int argc = 0;
-    char *context = NULL;
-    char *token = strtok_r(text, " \t", &context);
+    char *cursor = text;
 
-    while (token != NULL && argc < max_args) {
-        argv[argc++] = token;
-        token = strtok_r(NULL, " \t", &context);
+    while (cursor != NULL && *cursor != '\0' && argc < max_args) {
+        while (isspace((unsigned char)*cursor)) {
+            cursor++;
+        }
+
+        if (*cursor == '\0') {
+            break;
+        }
+
+        if (*cursor == '"') {
+            cursor++;
+            argv[argc++] = cursor;
+            while (*cursor != '\0' && *cursor != '"') {
+                cursor++;
+            }
+            if (*cursor == '"') {
+                *cursor = '\0';
+                cursor++;
+            }
+        } else {
+            argv[argc++] = cursor;
+            while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
+                cursor++;
+            }
+            if (*cursor != '\0') {
+                *cursor = '\0';
+                cursor++;
+            }
+        }
     }
 
     return argc;
+}
+
+static void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size)
+{
+    int index;
+    size_t used = 0;
+
+    if (output == NULL || output_size == 0) {
+        return;
+    }
+
+    output[0] = '\0';
+    for (index = start_index; index < argc; index++) {
+        int written = snprintf(output + used,
+                               output_size - used,
+                               "%s%s",
+                               index == start_index ? "" : " ",
+                               argv[index]);
+        if (written < 0) {
+            output[0] = '\0';
+            return;
+        }
+        if ((size_t)written >= output_size - used) {
+            output[output_size - 1] = '\0';
+            return;
+        }
+        used += (size_t)written;
+    }
 }
 
 static bool shell_command_is_sensitive(const char *command)
@@ -3012,19 +3472,37 @@ static void shell_command_help(void)
 {
     shell_transcript_append_text("Built-in commands:\n");
     shell_transcript_append_text("  help    Show available commands\n");
+    shell_transcript_append_text("  cls     Alias of clear\n");
     shell_transcript_append_text("  c6ota <sd:/file.bin|http[s]://url|default> Run ESP-Hosted SDIO OTA from SD, HTTP, or SD root default\n");
     shell_transcript_append_text("  sysinfo Show board/runtime information\n");
+    shell_transcript_append_text("  cd | chdir [path] Change or show the current SD working directory\n");
+    shell_transcript_append_text("  dir [path] List files from the current SD working directory\n");
+    shell_transcript_append_text("  copy <src> <dst>  Copy a file on SD\n");
+    shell_transcript_append_text("  move <src> <dst>  Move or rename a file on SD\n");
+    shell_transcript_append_text("  del | erase <path> Delete a file on SD\n");
+    shell_transcript_append_text("  ren | rename <src> <dst> Rename a file or directory on SD\n");
+    shell_transcript_append_text("  md | mkdir <path>  Create a directory on SD\n");
+    shell_transcript_append_text("  rd | rmdir <path>  Remove an empty directory on SD\n");
+    shell_transcript_append_text("  type <path>        Show a text-safe file dump\n");
+    shell_transcript_append_text("  write <path> <text>  Overwrite a text file with one line\n");
+    shell_transcript_append_text("  append <path> <text> Append one line to a text file\n");
+    shell_transcript_append_text("  touch <path>       Create an empty file or refresh its timestamp\n");
+    shell_transcript_append_text("  call <file.bat> [args] Run a batch file from SD\n");
+    shell_transcript_append_text("  set [NAME[=VALUE]] Show, set, or clear RAM-only variables\n");
+    shell_transcript_append_text("  path [dir1;dir2]   Show or set the RAM-only batch search path\n");
+    shell_transcript_append_text("  echo [text]        Print text; in batch files, echo on/off toggles line echo\n");
     shell_transcript_append_text("  wifi scan Scan for nearby access points after Wi-Fi startup\n");
     shell_transcript_append_text("  sd info | ls [path] | stat <path> | cat <path> [max_bytes]\n");
     shell_transcript_append_text("  mem     Show heap and PSRAM usage\n");
     shell_transcript_append_text("  gpio status Show key board and co-processor GPIO levels\n");
     shell_transcript_append_text("  debug   Show last 5 errors, Wi-Fi state, heap, and warnings\n");
-    shell_transcript_append_text("  version Show app and ESP-IDF version\n");
+    shell_transcript_append_text("  version | ver Show app and ESP-IDF version\n");
     shell_transcript_append_text("  about   Show shell and board summary\n");
     shell_transcript_append_text("  wifi    Wi-Fi status/connect/disconnect commands\n");
     shell_transcript_append_text("  clear   Clear the terminal history\n");
     shell_transcript_append_text("  reboot  Restart the board\n");
     shell_transcript_append_text("History recall: Prev/Next buttons above the keyboard\n");
+    shell_transcript_append_text("Redirection: command > file.txt or command >> file.txt writes transcript output to SD\n");
     shell_transcript_append_text("  c6ota sd:/file.bin streams the image after Wi-Fi is stopped and then restores the original Wi-Fi routine with diagnostics\n");
     shell_transcript_append_text("  c6ota http://host/path.bin or https://host/path.bin downloads first, then transfers with Wi-Fi off\n");
     shell_transcript_append_text("  c6ota default uses esp32c6_hosted_slave.bin or network_adapter.bin from the SD root\n");
@@ -3182,6 +3660,883 @@ static void shell_command_about(void)
     shell_transcript_appendf("about.shell: %s\n", SHELL_BOOT_MESSAGE);
     shell_transcript_appendf("about.board: %s / %s\n", SHELL_BOARD_REQUESTED, SHELL_BOARD_DETECTED);
     shell_transcript_append_text("about.ui: locked transcript with touch keyboard, history buttons, and command prompt\n");
+}
+
+static bool shell_path_has_directory_component(const char *path)
+{
+    return path != NULL && (strchr(path, '/') != NULL || strchr(path, '\\') != NULL);
+}
+
+static bool shell_path_has_extension(const char *path, const char *extension)
+{
+    size_t path_len;
+    size_t ext_len;
+
+    if (path == NULL || extension == NULL) {
+        return false;
+    }
+
+    path_len = strlen(path);
+    ext_len = strlen(extension);
+    if (path_len < ext_len) {
+        return false;
+    }
+
+    return shell_text_equals_ignore_case(path + path_len - ext_len, extension);
+}
+
+static esp_err_t shell_resolve_target_from_source(const char *source_path,
+                                                  const char *target_input,
+                                                  char *target_path,
+                                                  size_t target_path_size)
+{
+    char source_dir[SHELL_SD_PATH_BYTES];
+    char *last_sep;
+
+    if (source_path == NULL || target_input == NULL || target_path == NULL || target_path_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (shell_path_has_directory_component(target_input) ||
+        strncmp(target_input, "sd:/", 4) == 0 ||
+        target_input[0] == '/') {
+        return shell_fs_resolve_path(target_input, target_path, target_path_size);
+    }
+
+    snprintf(source_dir, sizeof(source_dir), "%s", source_path);
+    last_sep = strrchr(source_dir, '/');
+    if (last_sep == NULL || strcmp(source_dir, BSP_SD_MOUNT_POINT) == 0) {
+        return shell_fs_resolve_path(target_input, target_path, target_path_size);
+    }
+
+    *last_sep = '\0';
+    if (source_dir[0] == '\0') {
+        snprintf(source_dir, sizeof(source_dir), "%s", BSP_SD_MOUNT_POINT);
+    }
+
+    if (snprintf(target_path, target_path_size, "%s/%s", source_dir, target_input) >= (int)target_path_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
+{
+    shell_sd_session_t session;
+    FILE *source = NULL;
+    FILE *dest = NULL;
+    uint8_t buffer[SHELL_FILE_IO_BUFFER_BYTES];
+    esp_err_t error;
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    source = fopen(source_path, "rb");
+    if (source == NULL) {
+        shell_sd_end(&session, "copy");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    dest = fopen(dest_path, "wb");
+    if (dest == NULL) {
+        fclose(source);
+        shell_sd_end(&session, "copy");
+        return ESP_FAIL;
+    }
+
+    while (!feof(source)) {
+        size_t bytes_read = fread(buffer, 1, sizeof(buffer), source);
+        if (bytes_read == 0) {
+            break;
+        }
+        if (fwrite(buffer, 1, bytes_read, dest) != bytes_read) {
+            fclose(dest);
+            fclose(source);
+            shell_sd_end(&session, "copy");
+            return ESP_FAIL;
+        }
+    }
+
+    fclose(dest);
+    fclose(source);
+    shell_sd_end(&session, "copy");
+    return ESP_OK;
+}
+
+static esp_err_t shell_list_directory_path(const char *normalized_path)
+{
+    char fatfs_path[SHELL_SD_PATH_BYTES];
+    char lfn[256];
+    char size_text[32];
+    struct stat path_stat;
+    FF_DIR dir;
+    FILINFO entry_info;
+    FRESULT result;
+    esp_err_t error;
+    size_t listed_entries = 0;
+    shell_sd_session_t session;
+    bool dir_open = false;
+    unsigned int dir_count = 0;
+    unsigned int file_count = 0;
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_stat_path(normalized_path, &path_stat);
+    if (error != ESP_OK) {
+        shell_sd_end(&session, "dir");
+        return error;
+    }
+
+    if (!S_ISDIR(path_stat.st_mode)) {
+        shell_sd_format_size((uint64_t)path_stat.st_size, size_text, sizeof(size_text));
+        shell_transcript_appendf("%s  %s\n", size_text, normalized_path);
+        shell_sd_end(&session, "dir");
+        return ESP_OK;
+    }
+
+    error = shell_sd_vfs_to_fatfs_path(normalized_path, fatfs_path, sizeof(fatfs_path));
+    if (error != ESP_OK) {
+        shell_sd_end(&session, "dir");
+        return error;
+    }
+
+    memset(&dir, 0, sizeof(dir));
+    memset(&entry_info, 0, sizeof(entry_info));
+    result = f_opendir(&dir, fatfs_path);
+    if (result != FR_OK) {
+        shell_sd_end(&session, "dir");
+        return shell_sd_fresult_to_esp_err(result);
+    }
+    dir_open = true;
+
+    shell_transcript_appendf(" Directory of %s\n", normalized_path);
+    while (true) {
+        result = f_readdir(&dir, &entry_info);
+        if (result != FR_OK) {
+            error = shell_sd_fresult_to_esp_err(result);
+            break;
+        }
+
+        if (entry_info.fname[0] == '\0') {
+            error = ESP_OK;
+            break;
+        }
+
+        snprintf(lfn, sizeof(lfn), "%s", entry_info.fname);
+        if (strcmp(lfn, ".") == 0 || strcmp(lfn, "..") == 0) {
+            continue;
+        }
+
+        if (listed_entries == SHELL_SD_LIST_LIMIT) {
+            shell_transcript_appendf("dir: listing truncated after %u entries\n", (unsigned int)SHELL_SD_LIST_LIMIT);
+            shell_record_warningf("dir", "Truncated directory listing for %s", normalized_path);
+            error = ESP_OK;
+            break;
+        }
+
+        if (entry_info.fattrib & AM_DIR) {
+            shell_transcript_appendf("<DIR>      %s\n", lfn);
+            dir_count++;
+        } else {
+            shell_sd_format_size((uint64_t)entry_info.fsize, size_text, sizeof(size_text));
+            shell_transcript_appendf("%10s %s\n", size_text, lfn);
+            file_count++;
+        }
+        listed_entries++;
+    }
+
+    shell_transcript_appendf("%u file(s)  %u dir(s)\n", file_count, dir_count);
+    if (dir_open) {
+        (void)f_closedir(&dir);
+    }
+    shell_sd_end(&session, "dir");
+    return error;
+}
+
+static esp_err_t shell_print_file_text(const char *normalized_path)
+{
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    struct stat path_stat;
+    esp_err_t error;
+    unsigned char buffer[SHELL_SD_IO_BUFFER_BYTES + 1];
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_stat_path(normalized_path, &path_stat);
+    if (error != ESP_OK) {
+        shell_sd_end(&session, "type");
+        return error;
+    }
+
+    if (!S_ISREG(path_stat.st_mode)) {
+        shell_sd_end(&session, "type");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    file = fopen(normalized_path, "rb");
+    if (file == NULL) {
+        shell_sd_end(&session, "type");
+        return ESP_FAIL;
+    }
+
+    while (!feof(file)) {
+        size_t bytes_read = fread(buffer, 1, sizeof(buffer) - 1, file);
+        size_t index;
+
+        if (bytes_read == 0) {
+            break;
+        }
+
+        for (index = 0; index < bytes_read; index++) {
+            if (buffer[index] == '\n' || buffer[index] == '\r' || buffer[index] == '\t') {
+                continue;
+            }
+            if (!isprint(buffer[index])) {
+                buffer[index] = '.';
+            }
+        }
+
+        buffer[bytes_read] = '\0';
+        shell_transcript_appendf("%s", (char *)buffer);
+    }
+
+    fclose(file);
+    shell_transcript_append_text("\n");
+    shell_sd_end(&session, "type");
+    return ESP_OK;
+}
+
+static void shell_command_cd(int argc, char **argv)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    struct stat path_stat;
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (argc == 1) {
+        shell_fs_print_cwd();
+        return;
+    }
+
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: cd <path>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("cd: invalid path\n");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("cd: SD card not present - insert and retry\n");
+        return;
+    }
+
+    error = shell_sd_stat_path(resolved_path, &path_stat);
+    if (error != ESP_OK || !S_ISDIR(path_stat.st_mode)) {
+        shell_transcript_appendf("cd: path not found %s\n", argv[1]);
+        shell_sd_end(&session, "cd");
+        return;
+    }
+
+    shell_sd_end(&session, "cd");
+
+    snprintf(s_shell_cwd, sizeof(s_shell_cwd), "%s", resolved_path);
+    shell_fs_print_cwd();
+}
+
+static void shell_command_dir(int argc, char **argv)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    esp_err_t error;
+
+    if (argc > 2) {
+        shell_transcript_append_text("Usage: dir [path]\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argc == 2 ? argv[1] : NULL, resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("dir: invalid path\n");
+        return;
+    }
+
+    error = shell_list_directory_path(resolved_path);
+    if (error == ESP_ERR_NOT_FOUND) {
+        shell_transcript_appendf("dir: path not found %s\n", resolved_path);
+    } else if (error != ESP_OK) {
+        shell_transcript_appendf("dir: failed to read %s (%s)\n", resolved_path, esp_err_to_name(error));
+    }
+}
+
+static void shell_command_copy(int argc, char **argv)
+{
+    char source_path[SHELL_SD_PATH_BYTES];
+    char dest_path[SHELL_SD_PATH_BYTES];
+    esp_err_t error;
+
+    if (argc != 3) {
+        shell_transcript_append_text("Usage: copy <source> <destination>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], source_path, sizeof(source_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("copy: invalid source path\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[2], dest_path, sizeof(dest_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("copy: invalid destination path\n");
+        return;
+    }
+
+    error = shell_fs_copy_file(source_path, dest_path);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("copy: failed (%s)\n", esp_err_to_name(error));
+        return;
+    }
+
+    shell_transcript_appendf("1 file(s) copied to %s\n", dest_path);
+}
+
+static void shell_command_del(int argc, char **argv)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: del <path>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("del: invalid path\n");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("del: SD card not present - insert and retry\n");
+        return;
+    }
+
+    if (unlink(resolved_path) != 0) {
+        shell_transcript_appendf("del: failed to delete %s (%s)\n", resolved_path, strerror(errno));
+        shell_sd_end(&session, "del");
+        return;
+    }
+
+    shell_sd_end(&session, "del");
+    shell_transcript_appendf("Deleted %s\n", resolved_path);
+}
+
+static void shell_command_rename(int argc, char **argv, const char *verb)
+{
+    char source_path[SHELL_SD_PATH_BYTES];
+    char target_path[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (argc != 3) {
+        shell_transcript_appendf("Usage: %s <source> <destination>\n", verb);
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], source_path, sizeof(source_path));
+    if (error != ESP_OK) {
+        shell_transcript_appendf("%s: invalid source path\n", verb);
+        return;
+    }
+
+    error = shell_resolve_target_from_source(source_path, argv[2], target_path, sizeof(target_path));
+    if (error != ESP_OK) {
+        shell_transcript_appendf("%s: invalid destination path\n", verb);
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("%s: SD card not present - insert and retry\n", verb);
+        return;
+    }
+
+    if (rename(source_path, target_path) != 0) {
+        shell_transcript_appendf("%s: failed (%s)\n", verb, strerror(errno));
+        shell_sd_end(&session, verb);
+        return;
+    }
+
+    shell_sd_end(&session, verb);
+    shell_transcript_appendf("%s -> %s\n", source_path, target_path);
+}
+
+static void shell_command_mkdir(int argc, char **argv)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: mkdir <path>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("mkdir: invalid path\n");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("mkdir: SD card not present - insert and retry\n");
+        return;
+    }
+
+    if (mkdir(resolved_path, 0775) != 0) {
+        shell_transcript_appendf("mkdir: failed to create %s (%s)\n", resolved_path, strerror(errno));
+        shell_sd_end(&session, "mkdir");
+        return;
+    }
+
+    shell_sd_end(&session, "mkdir");
+    shell_transcript_appendf("Created directory %s\n", resolved_path);
+}
+
+static void shell_command_rmdir(int argc, char **argv)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: rmdir <path>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("rmdir: invalid path\n");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("rmdir: SD card not present - insert and retry\n");
+        return;
+    }
+
+    if (rmdir(resolved_path) != 0) {
+        shell_transcript_appendf("rmdir: failed to remove %s (%s)\n", resolved_path, strerror(errno));
+        shell_sd_end(&session, "rmdir");
+        return;
+    }
+
+    shell_sd_end(&session, "rmdir");
+    shell_transcript_appendf("Removed directory %s\n", resolved_path);
+}
+
+static void shell_command_type_file(int argc, char **argv)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    esp_err_t error;
+
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: type <path>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("type: invalid path\n");
+        return;
+    }
+
+    error = shell_print_file_text(resolved_path);
+    if (error == ESP_ERR_INVALID_ARG) {
+        shell_transcript_appendf("type: %s is not a regular text file\n", resolved_path);
+    } else if (error != ESP_OK) {
+        shell_transcript_appendf("type: failed to read %s (%s)\n", resolved_path, esp_err_to_name(error));
+    }
+}
+
+static void shell_command_write_file(int argc, char **argv, bool append_mode)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    char text[SHELL_BATCH_LINE_BYTES];
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    esp_err_t error;
+
+    if (argc < 3) {
+        shell_transcript_appendf("Usage: %s <path> <text>\n", append_mode ? "append" : "write");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_appendf("%s: invalid path\n", append_mode ? "append" : "write");
+        return;
+    }
+
+    shell_join_args(argv, 2, argc, text, sizeof(text));
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("%s: SD card not present - insert and retry\n", append_mode ? "append" : "write");
+        return;
+    }
+
+    file = fopen(resolved_path, append_mode ? "ab" : "wb");
+    if (file == NULL) {
+        shell_transcript_appendf("%s: failed to open %s (%s)\n",
+                                 append_mode ? "append" : "write",
+                                 resolved_path,
+                                 strerror(errno));
+        shell_sd_end(&session, append_mode ? "append" : "write");
+        return;
+    }
+
+    if (fwrite(text, 1, strlen(text), file) != strlen(text) || fwrite("\n", 1, 1, file) != 1) {
+        shell_transcript_appendf("%s: failed while writing %s\n", append_mode ? "append" : "write", resolved_path);
+        fclose(file);
+        shell_sd_end(&session, append_mode ? "append" : "write");
+        return;
+    }
+
+    fclose(file);
+    shell_sd_end(&session, append_mode ? "append" : "write");
+    shell_transcript_appendf("%s: %s\n", append_mode ? "Appended" : "Wrote", resolved_path);
+}
+
+static void shell_command_touch(int argc, char **argv)
+{
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    esp_err_t error;
+
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: touch <path>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("touch: invalid path\n");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("touch: SD card not present - insert and retry\n");
+        return;
+    }
+
+    file = fopen(resolved_path, "ab");
+    if (file == NULL) {
+        shell_transcript_appendf("touch: failed to open %s (%s)\n", resolved_path, strerror(errno));
+        shell_sd_end(&session, "touch");
+        return;
+    }
+
+    fclose(file);
+    (void)utime(resolved_path, NULL);
+    shell_sd_end(&session, "touch");
+    shell_transcript_appendf("Touched %s\n", resolved_path);
+}
+
+static void shell_command_move(int argc, char **argv)
+{
+    char source_path[SHELL_SD_PATH_BYTES];
+    char target_path[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (argc != 3) {
+        shell_transcript_append_text("Usage: move <source> <destination>\n");
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], source_path, sizeof(source_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("move: invalid source path\n");
+        return;
+    }
+
+    error = shell_resolve_target_from_source(source_path, argv[2], target_path, sizeof(target_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("move: invalid destination path\n");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("move: SD card not present - insert and retry\n");
+        return;
+    }
+
+    if (rename(source_path, target_path) == 0) {
+        shell_sd_end(&session, "move");
+        shell_transcript_appendf("Moved %s -> %s\n", source_path, target_path);
+        return;
+    }
+
+    shell_sd_end(&session, "move");
+    error = shell_fs_copy_file(source_path, target_path);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("move: failed to copy %s (%s)\n", source_path, esp_err_to_name(error));
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error == ESP_OK) {
+        if (unlink(source_path) != 0) {
+            shell_transcript_appendf("move: warning, copied but could not remove %s (%s)\n",
+                                     source_path,
+                                     strerror(errno));
+        }
+        shell_sd_end(&session, "move");
+    }
+    shell_transcript_appendf("Moved %s -> %s\n", source_path, target_path);
+}
+
+static void shell_command_set(int argc, char **argv)
+{
+    char assignment[SHELL_ENV_NAME_BYTES + SHELL_ENV_VALUE_BYTES];
+    char *equals;
+
+    if (argc == 1) {
+        shell_env_print_all();
+        return;
+    }
+
+    shell_join_args(argv, 1, argc, assignment, sizeof(assignment));
+    equals = strchr(assignment, '=');
+    if (equals == NULL) {
+        const char *value = shell_env_get(assignment);
+        if (value == NULL) {
+            shell_transcript_appendf("%s is not defined\n", assignment);
+            return;
+        }
+        shell_transcript_appendf("%s=%s\n", assignment, value);
+        return;
+    }
+
+    *equals = '\0';
+    equals++;
+    if (shell_env_set(assignment, equals) != ESP_OK) {
+        shell_transcript_append_text("set: invalid variable name or environment is full\n");
+        return;
+    }
+
+    if (equals[0] == '\0') {
+        shell_transcript_appendf("Cleared %s\n", assignment);
+    } else {
+        shell_transcript_appendf("%s=%s\n", assignment, equals);
+    }
+}
+
+static void shell_command_path(int argc, char **argv)
+{
+    char value[SHELL_ENV_VALUE_BYTES];
+    const char *current;
+
+    if (argc == 1) {
+        current = shell_env_get("PATH");
+        shell_transcript_appendf("PATH=%s\n", current != NULL ? current : "");
+        return;
+    }
+
+    shell_join_args(argv, 1, argc, value, sizeof(value));
+    if (shell_env_set("PATH", value) != ESP_OK) {
+        shell_transcript_append_text("path: failed to update PATH\n");
+        return;
+    }
+
+    shell_transcript_appendf("PATH=%s\n", value);
+}
+
+static void shell_command_echo(int argc, char **argv)
+{
+    char text[SHELL_BATCH_LINE_BYTES];
+
+    if (argc == 1) {
+        shell_transcript_appendf("ECHO is %s\n",
+                                 (s_active_batch_frame != NULL && !s_active_batch_frame->echo_enabled) ? "off" : "on");
+        return;
+    }
+
+    if (s_active_batch_frame != NULL && argc == 2) {
+        if (shell_text_equals_ignore_case(argv[1], "on")) {
+            s_active_batch_frame->echo_enabled = true;
+            return;
+        }
+        if (shell_text_equals_ignore_case(argv[1], "off")) {
+            s_active_batch_frame->echo_enabled = false;
+            return;
+        }
+    }
+
+    shell_join_args(argv, 1, argc, text, sizeof(text));
+    shell_transcript_appendf("%s\n", text);
+}
+
+static bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size)
+{
+    char candidate[SHELL_SD_PATH_BYTES];
+    char path_copy[SHELL_ENV_VALUE_BYTES];
+    char *entry;
+    char *context = NULL;
+    struct stat st;
+    shell_sd_session_t session;
+    esp_err_t error;
+    const char *path_env = shell_env_get("PATH");
+
+    if (command_name == NULL || command_name[0] == '\0' || resolved_path == NULL || resolved_path_size == 0) {
+        return false;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return false;
+    }
+
+    error = shell_fs_resolve_path(command_name, candidate, sizeof(candidate));
+    if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+        snprintf(resolved_path, resolved_path_size, "%s", candidate);
+        shell_sd_end(&session, "call");
+        return true;
+    }
+
+    if (!shell_path_has_extension(command_name, ".bat")) {
+        char with_ext[SHELL_SD_PATH_BYTES];
+
+        snprintf(with_ext, sizeof(with_ext), "%s.bat", command_name);
+        error = shell_fs_resolve_path(with_ext, candidate, sizeof(candidate));
+        if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+            snprintf(resolved_path, resolved_path_size, "%s", candidate);
+            shell_sd_end(&session, "call");
+            return true;
+        }
+    }
+
+    if (path_env != NULL && path_env[0] != '\0' && !shell_path_has_directory_component(command_name)) {
+        snprintf(path_copy, sizeof(path_copy), "%s", path_env);
+        entry = strtok_r(path_copy, ";", &context);
+        while (entry != NULL) {
+            char dir_path[SHELL_SD_PATH_BYTES];
+
+            if (shell_fs_resolve_path(entry, dir_path, sizeof(dir_path)) == ESP_OK) {
+                int written = snprintf(candidate, sizeof(candidate), "%s/%s", dir_path, command_name);
+                if (written > 0 && (size_t)written < sizeof(candidate) &&
+                    shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+                    snprintf(resolved_path, resolved_path_size, "%s", candidate);
+                    shell_sd_end(&session, "call");
+                    return true;
+                }
+
+                if (!shell_path_has_extension(command_name, ".bat")) {
+                    written = snprintf(candidate, sizeof(candidate), "%s/%s.bat", dir_path, command_name);
+                    if (written > 0 && (size_t)written < sizeof(candidate) &&
+                        shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+                        snprintf(resolved_path, resolved_path_size, "%s", candidate);
+                        shell_sd_end(&session, "call");
+                        return true;
+                    }
+                }
+            }
+
+            entry = strtok_r(NULL, ";", &context);
+        }
+    }
+
+    shell_sd_end(&session, "call");
+    return false;
+}
+
+static esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
+{
+    shell_batch_frame_t frame = {
+        .echo_enabled = true,
+        .argc = MIN(argc, SHELL_BATCH_ARGS_MAX),
+        .depth = s_active_batch_frame != NULL ? s_active_batch_frame->depth + 1 : 1,
+        .parent = s_active_batch_frame,
+    };
+    FILE *file = NULL;
+    char line[SHELL_BATCH_LINE_BYTES];
+    shell_sd_session_t session;
+    esp_err_t error;
+    int index;
+
+    if (frame.depth > SHELL_BATCH_DEPTH_MAX) {
+        shell_transcript_append_text("call: maximum batch nesting depth reached\n");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("call: SD card not present - insert and retry\n");
+        return error;
+    }
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        shell_sd_end(&session, "call");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    for (index = 0; index < frame.argc; index++) {
+        snprintf(frame.args[index], sizeof(frame.args[index]), "%s", argv[index]);
+    }
+
+    s_active_batch_frame = &frame;
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *trimmed = shell_trim(line);
+        bool suppress_echo = false;
+        size_t line_len;
+
+        line_len = strlen(trimmed);
+        while (line_len > 0 && (trimmed[line_len - 1] == '\n' || trimmed[line_len - 1] == '\r')) {
+            trimmed[--line_len] = '\0';
+        }
+
+        if (trimmed[0] == '@') {
+            suppress_echo = true;
+            trimmed = shell_trim(trimmed + 1);
+        }
+
+        if (trimmed[0] == '\0') {
+            continue;
+        }
+
+        if (!suppress_echo && frame.echo_enabled) {
+            shell_transcript_appendf("%s%s\n", SHELL_PROMPT, trimmed);
+        }
+
+        shell_execute_command(trimmed);
+    }
+
+    s_active_batch_frame = frame.parent;
+    fclose(file);
+    shell_sd_end(&session, "call");
+    return ESP_OK;
 }
 
 static void shell_sd_print_usage(void)
@@ -3568,9 +4923,16 @@ static void shell_command_task(void *arg)
         return;
     }
 
+    if (s_shell_command_lock != NULL) {
+        (void)xSemaphoreTake(s_shell_command_lock, portMAX_DELAY);
+    }
+
     if (!lvgl_port_lock(0)) {
         shell_schedule_transcript_appendf("shell: failed to lock LVGL for command %s\n", request->command);
         shell_record_errorf("shell", ESP_FAIL, "Failed to lock LVGL for command %s", request->command);
+        if (s_shell_command_lock != NULL) {
+            xSemaphoreGive(s_shell_command_lock);
+        }
         free(request);
         vTaskDelete(NULL);
         return;
@@ -3580,97 +4942,242 @@ static void shell_command_task(void *arg)
     shell_history_transcript_scroll_to_end();
     lvgl_port_unlock();
 
+    if (s_shell_command_lock != NULL) {
+        xSemaphoreGive(s_shell_command_lock);
+    }
+
     free(request);
     vTaskDelete(NULL);
 }
 
 static void shell_execute_command(char *command)
 {
+    char expanded[SHELL_BATCH_LINE_BYTES * 2];
+    char command_buffer[SHELL_BATCH_LINE_BYTES * 2];
+    char *command_part = NULL;
+    char *redirect_target = NULL;
+    bool append_mode = false;
+    size_t transcript_len_before;
+
+    shell_expand_variables(command, expanded, sizeof(expanded));
+    snprintf(command_buffer, sizeof(command_buffer), "%s", expanded);
+    shell_parse_redirection(command_buffer, &command_part, &redirect_target, &append_mode);
+    transcript_len_before = strlen(s_transcript);
+
+    if (!shell_execute_command_core(command_part)) {
+        shell_transcript_appendf("Unknown command: %s\n", command_part);
+        shell_record_warningf("shell", "Unknown command: %s", command_part);
+    }
+
+    if (redirect_target != NULL && redirect_target[0] != '\0') {
+        esp_err_t error = shell_write_redirect_output(redirect_target, s_transcript + transcript_len_before, append_mode);
+        if (error != ESP_OK) {
+            shell_transcript_appendf("redirection: failed to write %s (%s)\n",
+                                     redirect_target,
+                                     esp_err_to_name(error));
+            shell_record_warningf("shell", "Failed to redirect command output to %s", redirect_target);
+        }
+    }
+}
+
+static bool shell_execute_command_core(char *command)
+{
     char *trimmed = shell_trim(command);
+    char *argv[16];
+    int argc;
+    char batch_path[SHELL_SD_PATH_BYTES];
 
     if (trimmed[0] == '\0') {
-        return;
+        return true;
     }
 
     if (shell_handle_c6ota_confirmation(trimmed)) {
-        return;
+        return true;
     }
 
-    if (strcmp(trimmed, "help") == 0) {
+    if (strncmp(trimmed, "::", 2) == 0) {
+        return true;
+    }
+
+    argc = shell_split_args(trimmed, argv, 16);
+    if (argc == 0) {
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "rem")) {
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "help")) {
         shell_command_help();
-        return;
+        return true;
     }
 
-    if (strncmp(trimmed, "c6ota", 5) == 0 && (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
-        shell_execute_c6ota_command(trimmed);
-        return;
+    if (shell_text_equals_ignore_case(argv[0], "cls") || shell_text_equals_ignore_case(argv[0], "clear")) {
+        shell_transcript_reset();
+        shell_record_infof("shell", "Transcript cleared");
+        return true;
     }
 
-    if (strcmp(trimmed, "sysinfo") == 0) {
-        shell_command_sysinfo();
-        return;
-    }
-
-    if (strcmp(trimmed, "mem") == 0) {
-        shell_command_mem();
-        return;
-    }
-
-    if (strcmp(trimmed, "debug") == 0) {
-        shell_command_debug();
-        return;
-    }
-
-    if (strcmp(trimmed, "version") == 0) {
+    if (shell_text_equals_ignore_case(argv[0], "version") || shell_text_equals_ignore_case(argv[0], "ver")) {
         shell_command_version();
-        return;
+        return true;
     }
 
-    if (strcmp(trimmed, "about") == 0) {
+    if (shell_text_equals_ignore_case(argv[0], "about")) {
         shell_command_about();
-        return;
+        return true;
     }
 
-    if (strncmp(trimmed, "gpio", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-        if (strcmp(trimmed, "gpio") == 0 || strcmp(trimmed, "gpio status") == 0) {
-            shell_command_gpio_status();
-            return;
+    if (shell_text_equals_ignore_case(argv[0], "sysinfo")) {
+        shell_command_sysinfo();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mem")) {
+        shell_command_mem();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "debug")) {
+        shell_command_debug();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "echo")) {
+        shell_command_echo(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "set")) {
+        shell_command_set(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "path")) {
+        shell_command_path(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "cd") || shell_text_equals_ignore_case(argv[0], "chdir")) {
+        shell_command_cd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "dir")) {
+        shell_command_dir(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "copy")) {
+        shell_command_copy(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "del") || shell_text_equals_ignore_case(argv[0], "erase")) {
+        shell_command_del(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "ren") || shell_text_equals_ignore_case(argv[0], "rename")) {
+        shell_command_rename(argc, argv, argv[0]);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "md") || shell_text_equals_ignore_case(argv[0], "mkdir")) {
+        shell_command_mkdir(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "rd") || shell_text_equals_ignore_case(argv[0], "rmdir")) {
+        shell_command_rmdir(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "type")) {
+        shell_command_type_file(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "write")) {
+        shell_command_write_file(argc, argv, false);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "append")) {
+        shell_command_write_file(argc, argv, true);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "touch")) {
+        shell_command_touch(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "move")) {
+        shell_command_move(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "call")) {
+        if (argc < 2) {
+            shell_transcript_append_text("Usage: call <file.bat> [args]\n");
+            return true;
         }
-        shell_transcript_append_text("Usage: gpio status\n");
-        shell_record_warningf("gpio", "Usage error for gpio command");
-        return;
+        if (!shell_resolve_batch_path(argv[1], batch_path, sizeof(batch_path))) {
+            shell_transcript_appendf("call: batch file not found %s\n", argv[1]);
+            return true;
+        }
+        (void)shell_execute_batch_file(batch_path, argc - 2, &argv[2]);
+        return true;
     }
 
-    if (strncmp(trimmed, "sd", 2) == 0 && (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
+    if (strncmp(argv[0], "c6ota", 5) == 0 && (argv[0][5] == '\0')) {
+        shell_execute_c6ota_command(trimmed);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "gpio")) {
+        if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "status"))) {
+            shell_command_gpio_status();
+        } else {
+            shell_transcript_append_text("Usage: gpio status\n");
+            shell_record_warningf("gpio", "Usage error for gpio command");
+        }
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sd")) {
         shell_command_sd(trimmed);
-        return;
+        return true;
     }
 
-    if (strncmp(trimmed, "wifi", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-    #if SHELL_WIFI_RUNTIME_ENABLED
+    if (shell_text_equals_ignore_case(argv[0], "wifi")) {
+#if SHELL_WIFI_RUNTIME_ENABLED
         shell_execute_wifi_command(trimmed);
 #else
         shell_transcript_append_text("wifi commands unavailable because sdkconfig does not enable the Wi-Fi stack\n");
 #endif
-        return;
+        return true;
     }
 
-    if (strcmp(trimmed, "clear") == 0) {
-        shell_transcript_reset();
-        shell_record_infof("shell", "Transcript cleared");
-        return;
-    }
-
-    if (strcmp(trimmed, "reboot") == 0) {
+    if (shell_text_equals_ignore_case(argv[0], "reboot")) {
         shell_transcript_append_text("Rebooting...\n");
         if (xTaskCreate(reboot_task, "reboot_task", 2048, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
             shell_record_errorf("reboot", ESP_FAIL, "Failed to schedule reboot task");
         }
-        return;
+        return true;
     }
 
-    shell_transcript_appendf("Unknown command: %s\n", trimmed);
-    shell_record_warningf("shell", "Unknown command: %s", trimmed);
+    if (shell_path_has_extension(argv[0], ".bat") || shell_resolve_batch_path(argv[0], batch_path, sizeof(batch_path))) {
+        if (!shell_resolve_batch_path(argv[0], batch_path, sizeof(batch_path))) {
+            return false;
+        }
+        (void)shell_execute_batch_file(batch_path, argc - 1, &argv[1]);
+        return true;
+    }
+
+    return false;
 }
 
 static void shell_history_button_event_cb(lv_event_t *event)
@@ -3892,6 +5399,11 @@ void app_main(void)
         ESP_LOGE(SHELL_TAG, "Display initialization failed");
         shell_record_errorf("init", ESP_FAIL, "Display initialization failed");
         return;
+    }
+
+    shell_set_default_state();
+    if (s_shell_command_lock == NULL) {
+        s_shell_command_lock = xSemaphoreCreateMutex();
     }
 
     bsp_display_backlight_on();

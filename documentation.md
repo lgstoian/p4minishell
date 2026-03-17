@@ -1,6 +1,11 @@
 ## Overview
 P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 
+## Project documents
+- `readme.md`: user-facing introduction, current behavior, and build notes
+- `roadmap.md`: parity plan for the DOS-style shell, native app runtime, and future SDK work
+- `licence.md`: proprietary notice for project-authored code plus third-party license summary
+
 ## Hardware reuse policy
 - Display init remains on the existing BSP path through bsp_display_start_with_config()
 - Touch init remains on the existing BSP path through the managed GT911 driver
@@ -19,7 +24,15 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 
 ## Built-in commands
 - help: list available commands
+- cls: alias of `clear`
 - c6ota <sd:/file.bin|http[s]://url|default>: perform the real ESP-Hosted SDIO OTA update against the ESP32-C6, using a staged HTTP download or SD/default image source before a Wi-Fi-off transport-only transfer after the exact YES confirmation prompt
+- cd / chdir [path]: show or change the RAM-only current SD working directory used by DOS-style file commands
+- dir [path]: list files and directories from the current SD working directory using the guarded SD access path
+- copy, move, del / erase, ren / rename, md / mkdir, rd / rmdir: COMMAND.COM-style SD file management commands using long filenames and UTF-8 paths
+- type <path>: print a text-safe file dump from SD without raw binary output
+- write <path> <text>, append <path> <text>, touch <path>: create or modify SD text files through the shell worker task only
+- call <file.bat> [args]: execute a batch file from SD with `%1`..`%9`, `rem`, and `echo on/off`
+- set, path, echo: RAM-only environment and batch control commands, including PATH-based `.bat` lookup
 - Wi-Fi/ESP-Hosted startup is asynchronous: the UI boots first, then the original hosted Wi-Fi routine runs in a worker task during normal boot so a dead or blank C6 does not block the shell surface
 - Wi-Fi/ESP-Hosted startup now includes a firm compatibility gate: once the SDIO link is up, the shell reads the ESP32-C6 hosted firmware version and aborts Wi-Fi startup unless the co-processor matches the host `2.12.x` ESP-Hosted release line
 - The same background worker now restores Wi-Fi after successful `c6ota`, and the working project configuration keeps the transcript status + scan diagnostic pass on boot and post-OTA restore while still leaving `wifi diag` available on demand
@@ -52,6 +65,8 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - The updater mounts the BSP SD card path on demand, accepts `sd:/...` or `/sdcard/...` paths, and unmounts the card after a successful mount it initiated itself
 - FATFS long filename support is now enabled with heap-backed buffers and `CONFIG_FATFS_MAX_LFN=255`, using the ESP-IDF 5.5.3 symbol `CONFIG_FATFS_API_ENCODING_UTF_8` for UTF-8 API paths so long SD root names resolve correctly
 - The `sd` command family now shares the same guarded BSP mount path, treats `sd:/...`, `/sdcard/...`, and relative SD-root paths consistently, limits directory listings to 128 entries, bounds file previews to at most 8192 bytes, and uses direct FatFs directory reads for `sd ls` so long filenames no longer truncate or trigger invalid-name failures
+- The DOS-style file commands reuse the same guarded SD mount path, but keep their own RAM-only current working directory and PATH so `cd`, `dir`, `call`, and `.bat` files behave predictably without persisting state outside runtime RAM
+- Output redirection now supports `>` and `>>` for text-producing shell commands by copying the transcript delta for that command into an SD file, so transcript output remains visible on-screen while the same text is written to SD
 - The managed BSP now acquires the SD IO VO4 LDO rail explicitly at 3300 mV before SD mounts on esp32p4, which fixes the earlier repeated `ldo` voltage-0 warnings without removing the plain-SD fallback for unsupported power-control cases
 - The OTA worker auto-starts Wi-Fi from sdkconfig defaults when possible for `http://` or `https://` sources, otherwise it requires an existing Wi-Fi session before opening the HTTP download stage
 - After the image is available locally, the OTA worker stops Wi-Fi with `esp_wifi_stop()` plus `esp_wifi_deinit()`, keeps the existing ESP-Hosted transport alive, reconnects the SDIO link in Wi-Fi-off mode, and then streams the payload through `esp_hosted_slave_ota_begin/write/end`

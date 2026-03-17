@@ -1,3 +1,13 @@
+## [0.1.15] - 2026-03-17
+- Rewrote the README introduction to describe P4MiniShell as an embedded ESP32-P4 and ESP32-C6 DOS-style shell platform instead of a minimal demo replacement
+- Added `roadmap.md` to capture the missing work for COMMAND.COM parity, native app loading, a future shell SDK and API, and the separate design decision needed for literal DOS `.exe` compatibility
+- Added `licence.md` to mark the project-authored code as proprietary to Stoian Alexandru while preserving the verified third-party Apache, MIT, and protobuf-c license obligations already present in the workspace
+
+## [0.1.14] - 2026-03-17
+- Expanded the shell toward a COMMAND.COM-style SD workflow with RAM-only `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch`, `set`, `path`, `echo`, and `call`, while keeping all execution on the existing shell worker task
+- Added SD-backed redirection for transcript-safe text commands using `>` and `>>`, with writes confined to the guarded SD mount path and no filesystem writes outside the SD card
+- Added a lightweight batch engine for `.bat` files on SD, including `%1`..`%9` argument expansion, `rem` comments, `echo on/off`, PATH-based batch lookup, and direct `.bat` invocation through the normal shell dispatcher
+
 ## [0.1.13] - 2026-03-17
 - Confirmed the working ESP32-P4 host and ESP32-C6 co-processor baseline end to end: shell UI, BSP-managed display and touch init, hosted Wi-Fi startup, Wi-Fi shell commands, SD tools, and `c6ota` now operate together on the checked-in project configuration
 - Finalized the host-side ESP-Hosted profile around `espressif/esp_hosted 2.12.1` plus `espressif/esp_wifi_remote 1.4.1`, 1-bit SDIO at 10 MHz on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, forced ESP32-C6 reset on every host boot through GPIO54, and 1500-byte `c6ota` transfer chunks
