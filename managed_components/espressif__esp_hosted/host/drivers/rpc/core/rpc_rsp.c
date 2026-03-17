@@ -18,6 +18,35 @@
 
 DEFINE_LOG_TAG(rpc_rsp);
 
+#define RPC_RESP_CODE_EARLY_BOOT_RETRY 12294
+
+static inline bool rpc_resp_is_expected_boot_status(const ctrl_cmd_t *app_resp)
+{
+	if (app_resp->resp_event_status == RPC_RESP_CODE_EARLY_BOOT_RETRY) {
+		return true;
+	}
+
+	if (app_resp->msg_id == RPC_ID__Resp_WifiStaGetApInfo &&
+			app_resp->resp_event_status == ESP_ERR_WIFI_NOT_CONNECT) {
+		return true;
+	}
+
+	return false;
+}
+
+static inline void rpc_log_resp_error(const ctrl_cmd_t *app_resp)
+{
+	if (rpc_resp_is_expected_boot_status(app_resp)) {
+		/* Expected during normal boot sequencing before the C6 is fully ready or associated. */
+		ESP_LOGD(TAG, "Hosted RPC_Resp [0x%"PRIx16"], uid [%"PRIu32"], resp code [%"PRIi32"]",
+				app_resp->msg_id, app_resp->uid, app_resp->resp_event_status);
+		return;
+	}
+
+	ESP_LOGW(TAG, "Hosted RPC_Resp [0x%"PRIx16"], uid [%"PRIu32"], resp code [%"PRIi32"]",
+			app_resp->msg_id, app_resp->uid, app_resp->resp_event_status);
+}
+
 /* RPC response is result of remote function invocation at slave from host
  * The response will contain the return values of the RPC procedure
  * Return values typically will be simple integer return value of rpc call
@@ -38,8 +67,7 @@ DEFINE_LOG_TAG(rpc_rsp);
 #define RPC_ERR_IN_RESP(msGparaM)                                             \
     if (rpc_msg->msGparaM->resp) {                                            \
         app_resp->resp_event_status = rpc_msg->msGparaM->resp;                \
-        ESP_LOGW(TAG, "Hosted RPC_Resp [0x%"PRIx16"], uid [%"PRIu32"], resp code [%"PRIi32"]", \
-                app_resp->msg_id, app_resp->uid, app_resp->resp_event_status); \
+	rpc_log_resp_error(app_resp);                                         \
         goto fail_parse_rpc_msg;                                              \
     }
 

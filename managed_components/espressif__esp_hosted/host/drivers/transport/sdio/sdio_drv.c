@@ -1478,11 +1478,13 @@ void check_if_max_freq_used(uint8_t chip_type)
 {
 #ifdef CONFIG_IDF_TARGET
 	if (H_SDIO_CLOCK_FREQ_KHZ < 40000) {
-		ESP_LOGW(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz", H_SDIO_CLOCK_FREQ_KHZ);
+		/* A lower negotiated clock is a supported board-specific fallback, not a fault. */
+		ESP_LOGD(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz", H_SDIO_CLOCK_FREQ_KHZ);
 	}
 #else
 	if (H_SDIO_CLOCK_FREQ_KHZ < 50000) {
-		ESP_LOGW(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 50000KHz", H_SDIO_CLOCK_FREQ_KHZ);
+		/* A lower negotiated clock is a supported board-specific fallback, not a fault. */
+		ESP_LOGD(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 50000KHz", H_SDIO_CLOCK_FREQ_KHZ);
 	}
 #endif
 }
@@ -1588,7 +1590,8 @@ int ensure_slave_bus_ready(void *bus_handle)
 		}
 	} else {
 		/* Always reset slave on host boot up */
-		ESP_LOGW(TAG, "Reset slave using GPIO[%u]", reset_pin.pin);
+		/* GPIO reset on this board is required during normal boot. */
+		ESP_LOGD(TAG, "Reset slave using GPIO[%u]", reset_pin.pin);
 		transport_gpio_reset(bus_handle, reset_pin);
 
 		res = transport_card_init(bus_handle, CARD_INIT_TIMEOUT_MS);
