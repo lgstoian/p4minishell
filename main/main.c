@@ -1,4 +1,6 @@
 #include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -6,29 +8,37 @@
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
+#include <sys/stat.h>
 #include <sys/param.h>
 
+#include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
-#include "esp_loader.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_crt_bundle.h"
+#include "esp_app_format.h"
+#include "esp_app_desc.h"
 #include "nvs_flash.h"
 #include "esp_system.h"
 #include "esp_wifi_default.h"
 #include "esp_wifi.h"
 #if CONFIG_ESP_HOSTED_ENABLED
 #include "esp_hosted.h"
+#include "esp_hosted_api_types.h"
+#include "esp_hosted_host_fw_ver.h"
+#include "esp_hosted_ota.h"
 #endif
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
 #include "lwip/ip4_addr.h"
 #include "lvgl.h"
-#include "esp32_port.h"
+#include "esp_lvgl_port.h"
 #include "board_config.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
@@ -38,7 +48,6 @@
 #define SHELL_BOARD_DETECTED "ESP32-P4-Function-EV-Board"
 #define SHELL_BOOT_MESSAGE "P4MiniShell v0.1 ready | JC1060P470C | type help"
 #define SHELL_PROMPT "P4Shell> "
-#define SHELL_C6UPDATE_DEFAULT_IMAGE "sd:/esp32c6_hosted_slave_merged.bin"
 #define SHELL_TRANSCRIPT_BYTES 8192
 #define SHELL_ASYNC_TRANSCRIPT_BYTES 2048
 #define SHELL_COMMAND_BYTES 256
@@ -50,10 +59,30 @@
 #define SHELL_WIFI_SSID_BYTES 33
 #define SHELL_WIFI_PASSWORD_BYTES 65
 #define SHELL_WIFI_DETAIL_BYTES 256
+#define SHELL_WIFI_ORIGIN_BYTES 32
 #define SHELL_WIFI_INIT_TASK_STACK_BYTES 6144
-#define SHELL_C6UPDATE_TASK_STACK_BYTES 8192
-#define SHELL_C6UPDATE_FLASH_BLOCK_BYTES 1024
-#define SHELL_C6UPDATE_PROGRESS_STEP_PERCENT 5
+#define SHELL_COMMAND_TASK_STACK_BYTES 8192
+#define SHELL_C6OTA_TASK_STACK_BYTES 8192
+#define SHELL_C6OTA_HTTP_BLOCK_BYTES 2048
+#define SHELL_C6OTA_TRANSFER_CHUNK_BYTES 1500
+#define SHELL_C6OTA_PROGRESS_STEP_PERCENT 5
+#define SHELL_C6_HOST_RESET_GPIO 54
+#define SHELL_C6OTA_URL_BYTES 256
+#define SHELL_C6OTA_WIFI_WAIT_MS 30000
+#define SHELL_C6OTA_CONNECT_LOG_STEP_MS 5000
+#define SHELL_C6OTA_DEFAULT_SOURCE "default"
+#define SHELL_C6OTA_DEFAULT_PRIMARY_FILENAME "esp32c6_hosted_slave.bin"
+#define SHELL_C6OTA_DEFAULT_FALLBACK_FILENAME "network_adapter.bin"
+#define SHELL_C6OTA_EXPECTED_CHIP_ID 0x000D
+#define SHELL_C6OTA_MIN_RELIABLE_MAJOR 2
+#define SHELL_C6OTA_MIN_RELIABLE_MINOR 9
+#define SHELL_C6OTA_MIN_RELIABLE_PATCH 7
+#define SHELL_SD_FATFS_DRIVE "0:"
+#define SHELL_SD_PATH_BYTES 320
+#define SHELL_SD_LIST_LIMIT 128
+#define SHELL_SD_CAT_DEFAULT_BYTES 1024
+#define SHELL_SD_CAT_MAX_BYTES 8192
+#define SHELL_SD_IO_BUFFER_BYTES 128
 #define SHELL_WIFI_RUNTIME_ENABLED (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED)
 
 #ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID
@@ -73,9 +102,24 @@ typedef enum {
     SHELL_WIFI_STATE_SKIPPED_UNSUPPORTED,
 } shell_wifi_state_t;
 
+typedef enum {
+    SHELL_C6OTA_MODE_HTTP = 0,
+    SHELL_C6OTA_MODE_SD,
+} shell_c6ota_mode_t;
+
 typedef struct {
-    char path[SHELL_COMMAND_BYTES];
-} shell_c6update_request_t;
+    shell_c6ota_mode_t mode;
+    char source[SHELL_C6OTA_URL_BYTES];
+} shell_c6ota_request_t;
+
+typedef struct {
+    bool active;
+    shell_c6ota_request_t request;
+} shell_c6ota_confirmation_t;
+
+typedef struct {
+    char command[SHELL_COMMAND_BYTES];
+} shell_command_request_t;
 
 typedef struct {
     bool use_defaults;
@@ -84,10 +128,30 @@ typedef struct {
 } shell_wifi_connect_request_t;
 
 typedef struct {
+    bool start_runtime;
+    bool connect_with_defaults;
+    bool run_diagnostic;
+    char origin[SHELL_WIFI_ORIGIN_BYTES];
+    char ssid[SHELL_WIFI_SSID_BYTES];
+    char password[SHELL_WIFI_PASSWORD_BYTES];
+} shell_wifi_background_request_t;
+
+typedef struct {
+    bool should_restore_runtime;
+    bool should_restore_connection;
+    char ssid[SHELL_WIFI_SSID_BYTES];
+    char password[SHELL_WIFI_PASSWORD_BYTES];
+} shell_wifi_restore_state_t;
+
+typedef struct {
     char entries[SHELL_DEBUG_LOG_DEPTH][SHELL_DEBUG_ENTRY_BYTES];
     size_t count;
     size_t next_index;
 } shell_debug_log_t;
+
+typedef struct {
+    bool mounted_here;
+} shell_sd_session_t;
 
 static lv_obj_t *s_history_transcript;
 static lv_obj_t *s_input_line;
@@ -106,12 +170,14 @@ static esp_err_t s_wifi_last_error = ESP_OK;
 static bool s_wifi_connected;
 static bool s_wifi_connect_requested;
 static char s_wifi_target_ssid[SHELL_WIFI_SSID_BYTES];
+static char s_wifi_target_password[SHELL_WIFI_PASSWORD_BYTES];
 static char s_wifi_last_detail[SHELL_WIFI_DETAIL_BYTES];
 static bool s_wifi_init_task_in_progress;
 static bool s_c6_update_in_progress;
 static bool s_async_transcript_flush_queued;
 static size_t s_runtime_warning_count;
 static shell_debug_log_t s_debug_log;
+static shell_c6ota_confirmation_t s_c6ota_confirmation;
 static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
 
 #if SHELL_WIFI_RUNTIME_ENABLED
@@ -135,422 +201,1458 @@ static void shell_command_gpio_status(void);
 static void shell_command_debug(void);
 static void shell_command_version(void);
 static void shell_command_about(void);
+static void shell_command_sd(char *command);
 static void shell_command_sd_ls(char *command);
+static void shell_command_sd_stat(char *command);
+static void shell_command_sd_cat(char *command);
 static void shell_command_wifi_scan(void);
+static bool shell_text_equals_ignore_case(const char *left, const char *right);
+static bool shell_c6ota_source_is_http(const char *source);
+static bool shell_c6ota_source_is_sd(const char *source);
+static bool shell_c6ota_source_is_default(const char *source);
+static void shell_sd_print_usage(void);
+static esp_err_t shell_sd_begin(shell_sd_session_t *session);
+static void shell_sd_end(shell_sd_session_t *session, const char *operation);
+static esp_err_t shell_sd_resolve_path(const char *input, char *output, size_t output_size);
+static esp_err_t shell_sd_stat_path(const char *path, struct stat *st);
+static void shell_sd_format_size(uint64_t size_bytes, char *output, size_t output_size);
+static const char *shell_sd_entry_type(const struct stat *st);
+static bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_value, size_t *value_out);
+static void shell_command_sd_info(void);
+static bool shell_handle_c6ota_confirmation(char *command);
+static void shell_execute_c6ota_command(char *command);
+static void shell_execute_command(char *command);
+static void shell_command_task(void *arg);
 static void shell_wifi_runtime_init(void);
+static esp_err_t shell_wifi_runtime_shutdown(void);
 static void shell_wifi_connect_task(void *arg);
+static void shell_wifi_background_task(void *arg);
+static bool shell_wifi_defaults_available(void);
+static void shell_wifi_set_detail(const char *format, ...);
+static esp_err_t shell_wifi_connect_with_credentials(const char *ssid, const char *password);
+static bool shell_wifi_begin_background_request(const shell_wifi_background_request_t *template_request);
+static esp_err_t shell_wifi_run_diagnostic(const char *origin);
+static void shell_wifi_request_boot_restore(void);
+static void shell_wifi_request_post_c6ota_restore(const shell_wifi_restore_state_t *restore_state);
+#if CONFIG_ESP_HOSTED_ENABLED
+static esp_err_t shell_c6ota_parse_header(const uint8_t *buffer,
+                                          size_t buffer_size,
+                                          char *version,
+                                          size_t version_size);
+static bool shell_c6ota_activate_supported(const esp_hosted_coprocessor_fwver_t *version);
+static esp_err_t shell_c6ota_read_slave_version(esp_hosted_coprocessor_fwver_t *version);
+static bool shell_c6ota_reliable_supported(const esp_hosted_coprocessor_fwver_t *version);
+static esp_err_t shell_wifi_validate_hosted_version(void);
+static uint8_t *shell_c6ota_alloc_transfer_buffer(void);
+static void shell_c6ota_free_transfer_buffer(uint8_t *payload);
+static void shell_c6ota_report_progress(size_t transferred_bytes,
+                                        size_t total_bytes,
+                                        size_t *last_reported_percent);
+static void shell_wifi_capture_restore_state(shell_wifi_restore_state_t *restore_state);
+static esp_err_t shell_wifi_restore_after_c6ota_failure(const shell_wifi_restore_state_t *restore_state);
+static esp_err_t shell_c6ota_reset_hosted_transport(char *failure_hint,
+                                                    size_t failure_hint_size);
+static esp_err_t shell_c6ota_prepare_session(esp_hosted_coprocessor_fwver_t *version,
+                                             bool *activate_supported,
+                                             shell_wifi_restore_state_t *restore_state,
+                                             char *failure_hint,
+                                             size_t failure_hint_size);
+static esp_err_t shell_c6ota_write_chunk(uint8_t *payload,
+                                         size_t payload_len,
+                                         size_t *transferred_bytes,
+                                         size_t total_bytes,
+                                         size_t *last_reported_percent,
+                                         char *failure_hint,
+                                         size_t failure_hint_size);
+static esp_err_t shell_c6ota_finish_session(bool *ota_started,
+                                            bool activate_supported,
+                                            size_t transferred_bytes,
+                                            char *failure_hint,
+                                            size_t failure_hint_size);
+static void shell_c6ota_abort_session(bool ota_started);
+static esp_err_t shell_c6ota_transfer_image_buffer(const uint8_t *image_data,
+                                                   size_t image_size,
+                                                   bool activate_supported,
+                                                   char *failure_hint,
+                                                   size_t failure_hint_size);
+static esp_err_t shell_c6ota_download_http_image(const char *url,
+                                                 uint8_t **image_data,
+                                                 size_t *image_size,
+                                                 char *incoming_version,
+                                                 size_t incoming_version_size,
+                                                 char *failure_hint,
+                                                 size_t failure_hint_size);
+static esp_err_t shell_c6ota_resolve_sd_source(const char *source,
+                                               char *resolved_path,
+                                               size_t resolved_path_size,
+                                               bool *used_default,
+                                               char *failure_hint,
+                                               size_t failure_hint_size);
+static esp_err_t shell_c6ota_run_http_source(const char *url,
+                                             char *failure_hint,
+                                             size_t failure_hint_size);
+static esp_err_t shell_c6ota_run_sd_source(const char *source,
+                                           char *failure_hint,
+                                           size_t failure_hint_size);
+#endif
+static esp_err_t shell_c6ota_wait_for_wifi_ready(void);
 
-static const char *shell_loader_error_string(esp_loader_error_t error)
+static bool shell_text_equals_ignore_case(const char *left, const char *right)
 {
-    static const char *mapping[] = {
-        "success",
-        "unspecified failure",
-        "timeout",
-        "image too large",
-        "invalid md5",
-        "invalid parameter",
-        "invalid target",
-        "unsupported chip",
-        "unsupported function",
-        "invalid response",
-    };
-
-    if (error < 0 || error >= (esp_loader_error_t)(sizeof(mapping) / sizeof(mapping[0]))) {
-        return "unknown loader error";
+    if (left == NULL || right == NULL) {
+        return false;
     }
 
-    return mapping[error];
+    while (*left != '\0' && *right != '\0') {
+        if (tolower((unsigned char)*left) != tolower((unsigned char)*right)) {
+            return false;
+        }
+        left++;
+        right++;
+    }
+
+    return *left == '\0' && *right == '\0';
 }
 
-static const char *shell_target_chip_string(target_chip_t target)
+static bool shell_c6ota_source_is_http(const char *source)
 {
-    switch (target) {
-    case ESP8266_CHIP:
-        return "ESP8266";
-    case ESP32_CHIP:
-        return "ESP32";
-    case ESP32S2_CHIP:
-        return "ESP32-S2";
-    case ESP32C3_CHIP:
-        return "ESP32-C3";
-    case ESP32S3_CHIP:
-        return "ESP32-S3";
-    case ESP32C2_CHIP:
-        return "ESP32-C2";
-    case ESP32C6_CHIP:
-        return "ESP32-C6";
-    case ESP32H2_CHIP:
-        return "ESP32-H2";
-    case ESP32C5_CHIP:
-        return "ESP32-C5";
-    case ESP32P4_CHIP:
-        return "ESP32-P4";
+    return source != NULL &&
+           (strncmp(source, "http://", 7) == 0 || strncmp(source, "https://", 8) == 0);
+}
+
+static bool shell_c6ota_source_is_sd(const char *source)
+{
+    if (source == NULL) {
+        return false;
+    }
+
+    if (shell_c6ota_source_is_default(source)) {
+        return true;
+    }
+
+    return strncmp(source, "sd:/", 4) == 0 ||
+           strcmp(source, BSP_SD_MOUNT_POINT) == 0 ||
+           strncmp(source, BSP_SD_MOUNT_POINT "/", strlen(BSP_SD_MOUNT_POINT) + 1) == 0;
+}
+
+static bool shell_c6ota_source_is_default(const char *source)
+{
+    return source != NULL && shell_text_equals_ignore_case(source, SHELL_C6OTA_DEFAULT_SOURCE);
+}
+
+// AI: All shell-side SD commands share a single guarded mount path so failures cannot leak mounted state or dereference missing card metadata.
+static esp_err_t shell_sd_begin(shell_sd_session_t *session)
+{
+    esp_err_t error;
+
+    if (session == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    session->mounted_here = false;
+    error = bsp_sdcard_mount();
+    if (error == ESP_OK) {
+        session->mounted_here = true;
+        return ESP_OK;
+    }
+
+    if (error == ESP_ERR_INVALID_STATE) {
+        return ESP_OK;
+    }
+
+    return error;
+}
+
+static void shell_sd_end(shell_sd_session_t *session, const char *operation)
+{
+    esp_err_t error;
+
+    if (session == NULL || !session->mounted_here) {
+        return;
+    }
+
+    error = bsp_sdcard_unmount();
+    if (error != ESP_OK) {
+        shell_record_warningf("sd", "Unmount warning after %s: %s",
+                              operation != NULL ? operation : "sd command",
+                              esp_err_to_name(error));
+    }
+}
+
+static esp_err_t shell_sd_resolve_path(const char *input, char *output, size_t output_size)
+{
+    int written;
+    const char *source = input;
+
+    if (output == NULL || output_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (source == NULL || source[0] == '\0') {
+        source = BSP_SD_MOUNT_POINT;
+    }
+
+    if (strncmp(source, "sd:/", 4) == 0) {
+        written = snprintf(output, output_size, "%s%s", BSP_SD_MOUNT_POINT, source + 3);
+    } else if (strncmp(source, BSP_SD_MOUNT_POINT "/", strlen(BSP_SD_MOUNT_POINT) + 1) == 0 ||
+               strcmp(source, BSP_SD_MOUNT_POINT) == 0) {
+        written = snprintf(output, output_size, "%s", source);
+    } else if (source[0] == '/') {
+        written = snprintf(output, output_size, "%s", source);
+    } else {
+        written = snprintf(output, output_size, "%s/%s", BSP_SD_MOUNT_POINT, source);
+    }
+
+    if (written < 0) {
+        output[0] = '\0';
+        return ESP_FAIL;
+    }
+
+    if ((size_t)written >= output_size) {
+        output[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t shell_sd_stat_path(const char *path, struct stat *st)
+{
+    if (path == NULL || st == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (stat(path, st) == 0) {
+        return ESP_OK;
+    }
+
+    if (errno == ENOENT) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    return ESP_FAIL;
+}
+
+static esp_err_t shell_sd_fresult_to_esp_err(FRESULT result)
+{
+    switch (result) {
+    case FR_OK:
+        return ESP_OK;
+    case FR_NO_FILE:
+    case FR_NO_PATH:
+        return ESP_ERR_NOT_FOUND;
+    case FR_INVALID_NAME:
+    case FR_INVALID_PARAMETER:
+    case FR_INVALID_DRIVE:
+        return ESP_ERR_INVALID_ARG;
+    case FR_NOT_READY:
+    case FR_NOT_ENABLED:
+    case FR_NO_FILESYSTEM:
+        return ESP_ERR_INVALID_STATE;
+    case FR_NOT_ENOUGH_CORE:
+        return ESP_ERR_NO_MEM;
+    case FR_TIMEOUT:
+        return ESP_ERR_TIMEOUT;
     default:
+        return ESP_FAIL;
+    }
+}
+
+// AI: LFN fixed with CONFIG_FATFS_LFN_HEAP + MAX_LFN=255 (fixes sd ls + c6ota default)
+static esp_err_t shell_sd_vfs_to_fatfs_path(const char *vfs_path, char *fatfs_path, size_t fatfs_path_size)
+{
+    const char *relative_path;
+    int written;
+
+    if (vfs_path == NULL || fatfs_path == NULL || fatfs_path_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (strcmp(vfs_path, BSP_SD_MOUNT_POINT) == 0) {
+        relative_path = "/";
+    } else if (strncmp(vfs_path, BSP_SD_MOUNT_POINT "/", strlen(BSP_SD_MOUNT_POINT) + 1) == 0) {
+        relative_path = vfs_path + strlen(BSP_SD_MOUNT_POINT);
+    } else {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    written = snprintf(fatfs_path, fatfs_path_size, "%s%s", SHELL_SD_FATFS_DRIVE, relative_path);
+    if (written < 0) {
+        fatfs_path[0] = '\0';
+        return ESP_FAIL;
+    }
+
+    if ((size_t)written >= fatfs_path_size) {
+        fatfs_path[0] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
+static void shell_sd_format_size(uint64_t size_bytes, char *output, size_t output_size)
+{
+    static const char *units[] = {"B", "KiB", "MiB", "GiB"};
+    double value = (double)size_bytes;
+    size_t unit_index = 0;
+
+    if (output == NULL || output_size == 0) {
+        return;
+    }
+
+    while (value >= 1024.0 && unit_index < (sizeof(units) / sizeof(units[0])) - 1) {
+        value /= 1024.0;
+        unit_index++;
+    }
+
+    if (unit_index == 0) {
+        snprintf(output, output_size, "%llu %s", (unsigned long long)size_bytes, units[unit_index]);
+    } else {
+        snprintf(output, output_size, "%.1f %s", value, units[unit_index]);
+    }
+}
+
+static const char *shell_sd_entry_type(const struct stat *st)
+{
+    if (st == NULL) {
         return "unknown";
     }
+
+    if (S_ISDIR(st->st_mode)) {
+        return "dir";
+    }
+
+    if (S_ISREG(st->st_mode)) {
+        return "file";
+    }
+
+    return "other";
 }
 
-static int shell_c6_effective_reset_gpio(void)
+static bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_value, size_t *value_out)
 {
-    if (CONFIG_P4MINISHELL_C6_RESET_GPIO >= 0) {
-        return CONFIG_P4MINISHELL_C6_RESET_GPIO;
-    }
+    char *end = NULL;
+    unsigned long parsed_value;
 
-    return CONFIG_P4MINISHELL_C6_EN_GPIO;
-}
-
-static bool shell_c6update_config_ready(char *reason, size_t reason_size)
-{
-    if (CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO < 0 || CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO < 0) {
-        snprintf(reason, reason_size,
-                 "No verified P4-to-C6 flash UART is wired on this board baseline. Use PROG_C6 with ESP-Prog first, or ESP-Hosted OTA once the link works.");
+    if (text == NULL || value_out == NULL || text[0] == '\0') {
         return false;
     }
 
-    if (CONFIG_P4MINISHELL_C6_BOOT_GPIO < 0) {
-        snprintf(reason, reason_size,
-                 "Set CONFIG_P4MINISHELL_C6_BOOT_GPIO so the host can enter ROM download mode, or use the external PROG_C6 header if this board does not route C6 BOOT to the P4 host.");
+    errno = 0;
+    parsed_value = strtoul(text, &end, 10);
+    if (errno != 0 || end == NULL || *end != '\0') {
         return false;
     }
 
-    if (shell_c6_effective_reset_gpio() < 0) {
-        snprintf(reason, reason_size,
-                 "Set CONFIG_P4MINISHELL_C6_RESET_GPIO or CONFIG_P4MINISHELL_C6_EN_GPIO for target reset control.");
+    if (parsed_value < min_value || parsed_value > max_value) {
         return false;
     }
 
-    snprintf(reason, reason_size, "ok");
+    *value_out = (size_t)parsed_value;
     return true;
 }
 
-static void shell_c6update_normalize_path(const char *input, char *output, size_t output_size)
+static esp_err_t shell_c6ota_wait_for_wifi_ready(void)
 {
-    if (strncmp(input, "sd:/", 4) == 0) {
-        snprintf(output, output_size, "%s%s", BSP_SD_MOUNT_POINT, input + 3);
-        return;
+#if SHELL_WIFI_RUNTIME_ENABLED
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SHELL_C6OTA_WIFI_WAIT_MS);
+    TickType_t next_log = xTaskGetTickCount();
+
+    if (s_wifi_state == SHELL_WIFI_STATE_STARTING) {
+        shell_schedule_transcript_appendf("%s", "c6ota: waiting for Wi-Fi startup already in progress\n");
     }
 
-    if (strncmp(input, BSP_SD_MOUNT_POINT "/", strlen(BSP_SD_MOUNT_POINT) + 1) == 0 ||
-        strcmp(input, BSP_SD_MOUNT_POINT) == 0) {
-        snprintf(output, output_size, "%s", input);
-        return;
-    }
-
-    if (input[0] == '/') {
-        snprintf(output, output_size, "%s", input);
-        return;
-    }
-
-    snprintf(output, output_size, "%s/%s", BSP_SD_MOUNT_POINT, input);
-}
-
-static void shell_c6update_drive_enable_gpio(bool enabled)
-{
-    if (CONFIG_P4MINISHELL_C6_EN_GPIO < 0) {
-        return;
-    }
-
-    gpio_reset_pin((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO);
-    gpio_set_pull_mode((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO, GPIO_PULLUP_ONLY);
-    gpio_set_direction((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)CONFIG_P4MINISHELL_C6_EN_GPIO, enabled ? 1 : 0);
-}
-
-static esp_loader_error_t shell_c6update_connect(uint32_t baudrate)
-{
-    esp_loader_connect_args_t connect_args = ESP_LOADER_CONNECT_DEFAULT();
-    esp_loader_error_t loader_error = esp_loader_connect(&connect_args);
-
-    if (loader_error != ESP_LOADER_SUCCESS) {
-        shell_schedule_transcript_appendf("c6update: connect failed: %s\n",
-                                          shell_loader_error_string(loader_error));
-        if (loader_error == ESP_LOADER_ERROR_TIMEOUT) {
-            shell_schedule_transcript_appendf("c6update: check UART%d TX=%d RX=%d BOOT=%d RESET=%d EN=%d wiring and C6 power.\n",
-                                              CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
-                                              CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
-                                              CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
-                                              CONFIG_P4MINISHELL_C6_BOOT_GPIO,
-                                              CONFIG_P4MINISHELL_C6_RESET_GPIO,
-                                              CONFIG_P4MINISHELL_C6_EN_GPIO);
+    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
+        if (!shell_wifi_defaults_available()) {
+            shell_schedule_transcript_appendf("%s", "c6ota: OTA requires Wi-Fi. Run wifi connect first or configure sdkconfig defaults.\n");
+            return ESP_ERR_INVALID_STATE;
         }
-        return loader_error;
-    }
 
-    if (baudrate > 115200 && esp_loader_get_target() != ESP8266_CHIP) {
-        loader_error = esp_loader_change_transmission_rate(baudrate);
-        if (loader_error == ESP_LOADER_SUCCESS) {
-            loader_error = loader_port_change_transmission_rate(baudrate);
-        }
-        if (loader_error != ESP_LOADER_SUCCESS) {
-            shell_schedule_transcript_appendf("c6update: baudrate change to %u failed: %s\n",
-                                              (unsigned int)baudrate,
-                                              shell_loader_error_string(loader_error));
-            return loader_error;
+        shell_schedule_transcript_appendf("%s", "c6ota: starting Wi-Fi with sdkconfig default credentials for OTA\n");
+        shell_wifi_runtime_init();
+        if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
+            return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_ERR_INVALID_STATE;
         }
     }
 
-    return ESP_LOADER_SUCCESS;
+    if (!s_wifi_connected && !s_wifi_connect_requested) {
+        if (!shell_wifi_defaults_available()) {
+            shell_schedule_transcript_appendf("%s", "c6ota: OTA requires an active network link. Run wifi connect <ssid> <pass> first.\n");
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        shell_schedule_transcript_appendf("[wifi] ota: connecting to default SSID %s\n",
+                                          CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
+        if (shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
+                                                CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD) != ESP_OK) {
+            return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_FAIL;
+        }
+    }
+
+    while (!s_wifi_connected) {
+        TickType_t now = xTaskGetTickCount();
+
+        if ((int32_t)(now - deadline) >= 0) {
+            shell_schedule_transcript_appendf("%s", "c6ota: Wi-Fi connection timeout before OTA download\n");
+            return ESP_ERR_TIMEOUT;
+        }
+
+        if ((int32_t)(now - next_log) >= 0) {
+            shell_schedule_transcript_appendf("%s", "c6ota: waiting for Wi-Fi IP before OTA download\n");
+            next_log = now + pdMS_TO_TICKS(SHELL_C6OTA_CONNECT_LOG_STEP_MS);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+
+    return ESP_OK;
+#else
+    shell_schedule_transcript_appendf("%s", "c6ota: OTA is unavailable because Wi-Fi/ESP-Hosted is disabled in sdkconfig\n");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
-static void shell_c6update_task(void *arg)
+#if CONFIG_ESP_HOSTED_ENABLED
+static esp_err_t shell_c6ota_parse_header(const uint8_t *buffer,
+                                          size_t buffer_size,
+                                          char *version,
+                                          size_t version_size)
 {
-    shell_c6update_request_t *request = (shell_c6update_request_t *)arg;
-    char reason[192];
-    char normalized_path[320];
-    FILE *firmware = NULL;
+    esp_image_header_t image_header;
+    esp_image_segment_header_t segment_header;
+    esp_app_desc_t app_desc;
+    const size_t app_desc_offset = sizeof(image_header) + sizeof(segment_header);
+
+    if (buffer == NULL || version == NULL || version_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (buffer_size < app_desc_offset + sizeof(app_desc)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    memcpy(&image_header, buffer, sizeof(image_header));
+    if (image_header.magic != ESP_IMAGE_HEADER_MAGIC) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (image_header.chip_id != SHELL_C6OTA_EXPECTED_CHIP_ID) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    memcpy(&app_desc, buffer + app_desc_offset, sizeof(app_desc));
+    snprintf(version, version_size, "%s", app_desc.version);
+    return ESP_OK;
+}
+
+static bool shell_c6ota_activate_supported(const esp_hosted_coprocessor_fwver_t *version)
+{
+    if (version == NULL) {
+        return false;
+    }
+
+    return version->major1 > 2 || (version->major1 == 2 && version->minor1 > 5);
+}
+
+static esp_err_t shell_c6ota_read_slave_version(esp_hosted_coprocessor_fwver_t *version)
+{
+    if (version == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(version, 0, sizeof(*version));
+    return esp_hosted_get_coprocessor_fwversion(version);
+}
+
+static bool shell_c6ota_reliable_supported(const esp_hosted_coprocessor_fwver_t *version)
+{
+    if (version == NULL) {
+        return false;
+    }
+
+    if (version->major1 > SHELL_C6OTA_MIN_RELIABLE_MAJOR) {
+        return true;
+    }
+
+    if (version->major1 < SHELL_C6OTA_MIN_RELIABLE_MAJOR) {
+        return false;
+    }
+
+    if (version->minor1 > SHELL_C6OTA_MIN_RELIABLE_MINOR) {
+        return true;
+    }
+
+    if (version->minor1 < SHELL_C6OTA_MIN_RELIABLE_MINOR) {
+        return false;
+    }
+
+    return version->patch1 >= SHELL_C6OTA_MIN_RELIABLE_PATCH;
+}
+
+// AI: gate the host Wi-Fi runtime on an explicitly version-matched ESP-Hosted C6 image so incompatible RPC traffic never reaches esp_wifi_remote.
+static esp_err_t shell_wifi_validate_hosted_version(void)
+{
+    esp_hosted_coprocessor_fwver_t version = { 0 };
     esp_err_t error;
-    esp_loader_error_t loader_error = ESP_LOADER_SUCCESS;
-    bool mounted_here = false;
-    bool flasher_initialized = false;
-    bool update_succeeded = false;
-    long file_size_long = 0;
-    size_t file_size;
-    size_t aligned_size;
-    size_t padded_remaining;
-    size_t actual_remaining;
-    size_t last_reported_percent = 0;
-    uint8_t payload[SHELL_C6UPDATE_FLASH_BLOCK_BYTES];
-    const int effective_reset_gpio = shell_c6_effective_reset_gpio();
 
-    if (request == NULL) {
-        s_c6_update_in_progress = false;
-        shell_record_errorf("c6update", ESP_ERR_INVALID_ARG, "Background updater request was null");
-        vTaskDelete(NULL);
+    error = shell_c6ota_read_slave_version(&version);
+    if (error != ESP_OK) {
+        shell_wifi_set_detail("ESP-Hosted connected but the shell could not read the ESP32-C6 firmware version. Wi-Fi stays off because the hosted link is not trustworthy for remote Wi-Fi init. Rebuild or externally refresh coprocessor/esp32c6_slave and retry.");
+        shell_schedule_transcript_appendf("[wifi] failed to read C6 hosted firmware version: %s (0x%x)\n",
+                                          esp_err_to_name(error),
+                                          (unsigned int)error);
+        shell_schedule_transcript_appendf("[wifi] Recovery: flash a matching %u.%u.x ESP32-C6 image from coprocessor/esp32c6_slave or use c6ota default with esp32c6_hosted_slave.bin\n",
+                                          ESP_HOSTED_VERSION_MAJOR_1,
+                                          ESP_HOSTED_VERSION_MINOR_1);
+        shell_record_warningf("wifi", "Failed to read hosted firmware version: %s", esp_err_to_name(error));
+        return error;
+    }
+
+    if (version.major1 != ESP_HOSTED_VERSION_MAJOR_1 || version.minor1 != ESP_HOSTED_VERSION_MINOR_1) {
+        shell_wifi_set_detail("ESP-Hosted host %u.%u.%u requires ESP32-C6 firmware %u.%u.x, but the co-processor reports %" PRIu32 ".%" PRIu32 ".%" PRIu32 ". Wi-Fi stays off to avoid SDIO/RPC errors. Update the C6 from coprocessor/esp32c6_slave or run c6ota default with esp32c6_hosted_slave.bin.",
+                              ESP_HOSTED_VERSION_MAJOR_1,
+                              ESP_HOSTED_VERSION_MINOR_1,
+                              ESP_HOSTED_VERSION_PATCH_1,
+                              ESP_HOSTED_VERSION_MAJOR_1,
+                              ESP_HOSTED_VERSION_MINOR_1,
+                              version.major1,
+                              version.minor1,
+                              version.patch1);
+        shell_schedule_transcript_appendf("[wifi] hosted version mismatch: host %u.%u.%u, C6 %" PRIu32 ".%" PRIu32 ".%" PRIu32 "\n",
+                                          ESP_HOSTED_VERSION_MAJOR_1,
+                                          ESP_HOSTED_VERSION_MINOR_1,
+                                          ESP_HOSTED_VERSION_PATCH_1,
+                                          version.major1,
+                                          version.minor1,
+                                          version.patch1);
+        shell_schedule_transcript_appendf("[wifi] Recovery: flash a matching %u.%u.x ESP32-C6 image from coprocessor/esp32c6_slave or use c6ota default with esp32c6_hosted_slave.bin\n",
+                          ESP_HOSTED_VERSION_MAJOR_1,
+                          ESP_HOSTED_VERSION_MINOR_1);
+        shell_record_warningf("wifi",
+                              "Hosted version mismatch: host %u.%u.%u vs C6 %" PRIu32 ".%" PRIu32 ".%" PRIu32,
+                              ESP_HOSTED_VERSION_MAJOR_1,
+                              ESP_HOSTED_VERSION_MINOR_1,
+                              ESP_HOSTED_VERSION_PATCH_1,
+                              version.major1,
+                              version.minor1,
+                              version.patch1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    shell_record_infof("wifi",
+                       "Hosted firmware compatible: host %u.%u.%u, C6 %" PRIu32 ".%" PRIu32 ".%" PRIu32,
+                       ESP_HOSTED_VERSION_MAJOR_1,
+                       ESP_HOSTED_VERSION_MINOR_1,
+                       ESP_HOSTED_VERSION_PATCH_1,
+                       version.major1,
+                       version.minor1,
+                       version.patch1);
+    return ESP_OK;
+}
+
+static uint8_t *shell_c6ota_alloc_transfer_buffer(void)
+{
+    uint8_t *payload = heap_caps_malloc(SHELL_C6OTA_TRANSFER_CHUNK_BYTES,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (payload == NULL) {
+        payload = heap_caps_malloc(SHELL_C6OTA_TRANSFER_CHUNK_BYTES, MALLOC_CAP_8BIT);
+    }
+
+    return payload;
+}
+
+static void shell_c6ota_free_transfer_buffer(uint8_t *payload)
+{
+    if (payload != NULL) {
+        heap_caps_free(payload);
+    }
+}
+
+// AI: report OTA progress from validated ESP32-C6 images using the fixed Wi-Fi-off OTA flow.
+static void shell_c6ota_report_progress(size_t transferred_bytes,
+                                        size_t total_bytes,
+                                        size_t *last_reported_percent)
+{
+    size_t percent;
+
+    if (total_bytes == 0 || last_reported_percent == NULL) {
         return;
     }
 
-    shell_schedule_transcript_appendf("c6update: preparing %s\n", request->path);
+    percent = (transferred_bytes * 100U) / total_bytes;
+    if (percent >= *last_reported_percent + SHELL_C6OTA_PROGRESS_STEP_PERCENT ||
+        transferred_bytes >= total_bytes) {
+        *last_reported_percent = percent;
+        shell_schedule_transcript_appendf("C6 OTA: %u%% (%u KB / %u KB)\n",
+                                          (unsigned int)percent,
+                                          (unsigned int)((transferred_bytes + 1023U) / 1024U),
+                                          (unsigned int)((total_bytes + 1023U) / 1024U));
+    }
+}
 
-    if (!shell_c6update_config_ready(reason, sizeof(reason))) {
-        shell_schedule_transcript_appendf("c6update: %s\n", reason);
-        shell_record_warningf("c6update", "%s", reason);
+static void shell_wifi_capture_restore_state(shell_wifi_restore_state_t *restore_state)
+{
+    if (restore_state == NULL) {
+        return;
+    }
+
+    memset(restore_state, 0, sizeof(*restore_state));
+    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
+        return;
+    }
+
+    restore_state->should_restore_runtime = true;
+    if (s_wifi_target_ssid[0] == '\0') {
+        return;
+    }
+
+    restore_state->should_restore_connection = s_wifi_connected || s_wifi_connect_requested;
+    snprintf(restore_state->ssid, sizeof(restore_state->ssid), "%s", s_wifi_target_ssid);
+    snprintf(restore_state->password, sizeof(restore_state->password), "%s", s_wifi_target_password);
+}
+
+static esp_err_t shell_wifi_restore_after_c6ota_failure(const shell_wifi_restore_state_t *restore_state)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    esp_err_t error;
+
+    if (restore_state == NULL || !restore_state->should_restore_runtime) {
+        return ESP_OK;
+    }
+
+    shell_schedule_transcript_appendf("%s", "c6ota: restoring Wi-Fi after OTA failure\n");
+    shell_wifi_runtime_init();
+    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
+        return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_FAIL;
+    }
+
+    if (!restore_state->should_restore_connection || restore_state->ssid[0] == '\0') {
+        return ESP_OK;
+    }
+
+    error = shell_wifi_connect_with_credentials(restore_state->ssid, restore_state->password);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    return ESP_OK;
+#else
+    (void)restore_state;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static esp_err_t shell_c6ota_reset_hosted_transport(char *failure_hint,
+                                                    size_t failure_hint_size)
+{
+    esp_err_t error;
+
+    shell_schedule_transcript_appendf("%s", "c6ota: reinitializing ESP-Hosted transport for OTA recovery\n");
+    error = esp_hosted_deinit();
+    if (error != ESP_OK) {
+        shell_schedule_transcript_appendf("c6ota: hosted deinit returned %s (0x%x)\n",
+                                          esp_err_to_name(error),
+                                          (unsigned int)error);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    error = esp_hosted_init();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        snprintf(failure_hint, failure_hint_size, "failed to reinitialize hosted transport before OTA");
+        return error;
+    }
+
+    error = esp_hosted_connect_to_slave();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        snprintf(failure_hint, failure_hint_size, "hosted transport is unavailable after OTA recovery reset");
+        return error;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t shell_c6ota_prepare_session(esp_hosted_coprocessor_fwver_t *version,
+                                             bool *activate_supported,
+                                             shell_wifi_restore_state_t *restore_state,
+                                             char *failure_hint,
+                                             size_t failure_hint_size)
+{
+    esp_err_t error;
+
+    if (version == NULL || activate_supported == NULL || restore_state == NULL ||
+        failure_hint == NULL || failure_hint_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_wifi_state == SHELL_WIFI_STATE_STARTING) {
+        snprintf(failure_hint, failure_hint_size, "Wi-Fi startup is in progress - retry in a moment");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    shell_wifi_capture_restore_state(restore_state);
+    if (restore_state->should_restore_runtime) {
+        shell_schedule_transcript_appendf("%s", "c6ota: stopping Wi-Fi completely before OTA\n");
+        error = shell_wifi_runtime_shutdown();
+        if (error != ESP_OK) {
+            snprintf(failure_hint, failure_hint_size, "failed to stop Wi-Fi before OTA");
+            return error;
+        }
+    }
+
+    shell_schedule_transcript_appendf("%s", "c6ota: switching ESP-Hosted to Wi-Fi-off OTA mode\n");
+
+    // AI: stay on the existing hosted transport path for OTA because full hosted teardown before transfer is still fragile on this esp32p4 baseline.
+    error = esp_hosted_init();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        snprintf(failure_hint, failure_hint_size, "failed to initialize hosted transport before OTA");
+        return error;
+    }
+
+    error = esp_hosted_connect_to_slave();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        snprintf(failure_hint, failure_hint_size, "hosted transport is unavailable - recover the C6 link and retry");
+        return error;
+    }
+
+    *activate_supported = false;
+    error = shell_c6ota_read_slave_version(version);
+    if (error != ESP_OK) {
+        shell_schedule_transcript_appendf("%s", "c6ota: could not read current C6 firmware version on the reused transport\n");
+
+        error = shell_c6ota_reset_hosted_transport(failure_hint, failure_hint_size);
+        if (error == ESP_OK) {
+            error = shell_c6ota_read_slave_version(version);
+        }
+
+        if (error != ESP_OK) {
+            shell_schedule_transcript_appendf("%s", "c6ota: current C6 version is still unreadable after transport reset; continuing in recovery mode without activate support\n");
+            shell_record_warningf("c6ota", "Proceeding without current C6 version after hosted transport reset");
+            memset(version, 0, sizeof(*version));
+            return ESP_OK;
+        }
+    }
+
+    *activate_supported = shell_c6ota_activate_supported(version);
+    shell_schedule_transcript_appendf("c6ota: current C6 hosted firmware %" PRIu32 ".%" PRIu32 ".%" PRIu32 "\n",
+                                      version->major1,
+                                      version->minor1,
+                                      version->patch1);
+
+    if (version->major1 == 2 && version->minor1 == 3 && version->patch1 == 0) {
+        snprintf(failure_hint,
+                 failure_hint_size,
+                 "Factory v2.3.0 requires one-time standalone tool from https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota first.");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    if (!shell_c6ota_reliable_supported(version)) {
+        shell_schedule_transcript_appendf("%s", "c6ota: legacy C6 firmware detected; using Wi-Fi-off SDIO-only OTA path\n");
+    }
+
+    return ESP_OK;
+}
+
+// AI: c6ota fixed using lboshuizen/crowpanel-p4-c6-sdio-ota method (no WiFi during transfer + 1.5KB chunks).
+static esp_err_t shell_c6ota_write_chunk(uint8_t *payload,
+                                         size_t payload_len,
+                                         size_t *transferred_bytes,
+                                         size_t total_bytes,
+                                         size_t *last_reported_percent,
+                                         char *failure_hint,
+                                         size_t failure_hint_size)
+{
+    esp_err_t error;
+
+    if (payload == NULL || transferred_bytes == NULL || last_reported_percent == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = esp_hosted_slave_ota_write(payload, (uint32_t)payload_len);
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "hosted OTA write failed - recover the transport and retry");
+        return error;
+    }
+
+    *transferred_bytes += payload_len;
+    shell_c6ota_report_progress(*transferred_bytes, total_bytes, last_reported_percent);
+    return ESP_OK;
+}
+
+// AI: complete OTA with the hosted begin/write/end/activate sequence after the transport-only transfer.
+static esp_err_t shell_c6ota_finish_session(bool *ota_started,
+                                            bool activate_supported,
+                                            size_t transferred_bytes,
+                                            char *failure_hint,
+                                            size_t failure_hint_size)
+{
+    esp_err_t error = esp_hosted_slave_ota_end();
+
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "OTA finalize failed - retry after restoring the hosted link");
+        return error;
+    }
+
+    if (ota_started != NULL) {
+        *ota_started = false;
+    }
+
+    if (!activate_supported) {
+        return ESP_OK;
+    }
+
+    error = esp_hosted_slave_ota_activate();
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "activate failed - power cycle the board and retry");
+        return error;
+    }
+
+    shell_schedule_transcript_appendf("%s", "c6ota: activate requested; the C6 will reboot now\n");
+    return ESP_OK;
+}
+
+static void shell_c6ota_abort_session(bool ota_started)
+{
+    if (ota_started) {
+        esp_err_t end_error = esp_hosted_slave_ota_end();
+        if (end_error != ESP_OK) {
+            shell_schedule_transcript_appendf("c6ota: OTA cleanup warning: %s (0x%x)\n",
+                                              esp_err_to_name(end_error),
+                                              (unsigned int)end_error);
+        }
+    }
+}
+
+static esp_err_t shell_c6ota_transfer_image_buffer(const uint8_t *image_data,
+                                                   size_t image_size,
+                                                   bool activate_supported,
+                                                   char *failure_hint,
+                                                   size_t failure_hint_size)
+{
+    bool ota_started = false;
+    size_t transferred_bytes = 0;
+    size_t last_reported_percent = 0;
+    esp_err_t error;
+
+    if (image_data == NULL || image_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = esp_hosted_slave_ota_begin();
+    if (error != ESP_OK) {
+        shell_schedule_transcript_appendf("%s", "c6ota: OTA begin failed on the current hosted link; retrying after transport reset\n");
+        error = shell_c6ota_reset_hosted_transport(failure_hint, failure_hint_size);
+        if (error != ESP_OK) {
+            return error;
+        }
+
+        error = esp_hosted_slave_ota_begin();
+        if (error != ESP_OK) {
+            snprintf(failure_hint, failure_hint_size, "OTA begin failed - check hosted transport health");
+            return error;
+        }
+    }
+    ota_started = true;
+
+    while (transferred_bytes < image_size) {
+        size_t chunk_size = MIN(image_size - transferred_bytes, (size_t)SHELL_C6OTA_TRANSFER_CHUNK_BYTES);
+
+        error = shell_c6ota_write_chunk((uint8_t *)(image_data + transferred_bytes),
+                                        chunk_size,
+                                        &transferred_bytes,
+                                        image_size,
+                                        &last_reported_percent,
+                                        failure_hint,
+                                        failure_hint_size);
+        if (error != ESP_OK) {
+            shell_c6ota_abort_session(ota_started);
+            return error;
+        }
+    }
+
+    error = shell_c6ota_finish_session(&ota_started,
+                                       activate_supported,
+                                       transferred_bytes,
+                                       failure_hint,
+                                       failure_hint_size);
+    if (error != ESP_OK) {
+        shell_c6ota_abort_session(ota_started);
+    }
+
+    return error;
+}
+
+static esp_err_t shell_c6ota_download_http_image(const char *url,
+                                                 uint8_t **image_data,
+                                                 size_t *image_size,
+                                                 char *incoming_version,
+                                                 size_t incoming_version_size,
+                                                 char *failure_hint,
+                                                 size_t failure_hint_size)
+{
+    esp_http_client_config_t http_config = {
+        .url = url,
+        .timeout_ms = 15000,
+        .buffer_size = SHELL_C6OTA_HTTP_BLOCK_BYTES,
+        .buffer_size_tx = SHELL_C6OTA_HTTP_BLOCK_BYTES,
+        .keep_alive_enable = true,
+        .keep_alive_idle = 5,
+        .keep_alive_interval = 5,
+        .keep_alive_count = 3,
+    };
+    esp_http_client_handle_t client = NULL;
+    esp_err_t error;
+    int64_t remote_length;
+    int http_status;
+    size_t content_length;
+    size_t total_read = 0;
+    uint8_t *download_buffer = NULL;
+
+    if (!shell_c6ota_source_is_http(url) || image_data == NULL || image_size == NULL ||
+        incoming_version == NULL || incoming_version_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *image_data = NULL;
+    *image_size = 0;
+
+    error = shell_c6ota_wait_for_wifi_ready();
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "network unavailable - connect Wi-Fi and retry");
+        return error;
+    }
+
+    if (strncmp(url, "https://", 8) == 0) {
+        http_config.crt_bundle_attach = esp_crt_bundle_attach;
+    }
+
+    shell_schedule_transcript_appendf("c6ota: downloading %s\n", url);
+    client = esp_http_client_init(&http_config);
+    if (client == NULL) {
+        snprintf(failure_hint, failure_hint_size, "failed to allocate HTTP client");
+        return ESP_ERR_NO_MEM;
+    }
+
+    error = esp_http_client_open(client, 0);
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "download open failed - check URL or Wi-Fi routing");
         goto cleanup;
     }
 
-    shell_c6update_normalize_path(request->path, normalized_path, sizeof(normalized_path));
-    shell_schedule_transcript_appendf("c6update: mounting SD card for %s\n", normalized_path);
+    remote_length = esp_http_client_fetch_headers(client);
+    http_status = esp_http_client_get_status_code(client);
+    if (http_status != 200) {
+        snprintf(failure_hint, failure_hint_size, "server returned HTTP status %d", http_status);
+        error = ESP_FAIL;
+        goto cleanup;
+    }
+
+    if (remote_length <= 0) {
+        snprintf(failure_hint, failure_hint_size, "server did not return a valid Content-Length");
+        error = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    content_length = (size_t)remote_length;
+    download_buffer = heap_caps_malloc(content_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (download_buffer == NULL) {
+        download_buffer = heap_caps_malloc(content_length, MALLOC_CAP_8BIT);
+    }
+    if (download_buffer == NULL) {
+        snprintf(failure_hint, failure_hint_size, "out of memory buffering HTTP OTA image");
+        error = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    while (total_read < content_length) {
+        int bytes_read = esp_http_client_read(client,
+                                              (char *)(download_buffer + total_read),
+                                              (int)MIN((size_t)SHELL_C6OTA_HTTP_BLOCK_BYTES, content_length - total_read));
+
+        if (bytes_read < 0) {
+            snprintf(failure_hint, failure_hint_size, "HTTP read failed before download completed");
+            error = ESP_FAIL;
+            goto cleanup;
+        }
+
+        if (bytes_read == 0) {
+            break;
+        }
+
+        total_read += (size_t)bytes_read;
+    }
+
+    if (total_read != content_length) {
+        snprintf(failure_hint, failure_hint_size, "HTTP download ended before the full image was received");
+        error = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    error = shell_c6ota_parse_header(download_buffer,
+                                     total_read,
+                                     incoming_version,
+                                     incoming_version_size);
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "downloaded image is not a valid ESP32-C6 ESP-IDF app image");
+        goto cleanup;
+    }
+
+    shell_schedule_transcript_appendf("c6ota: HTTP image header OK, version=%s\n", incoming_version);
+    *image_data = download_buffer;
+    *image_size = total_read;
+    error = ESP_OK;
+
+cleanup:
+    if (client != NULL) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+    }
+    if (error != ESP_OK && download_buffer != NULL) {
+        heap_caps_free(download_buffer);
+    }
+
+    return error;
+}
+
+static esp_err_t shell_c6ota_resolve_sd_source(const char *source,
+                                               char *resolved_path,
+                                               size_t resolved_path_size,
+                                               bool *used_default,
+                                               char *failure_hint,
+                                               size_t failure_hint_size)
+{
+    char candidate[320];
+    char fatfs_candidate[320];
+    const char *default_names[] = {
+        SHELL_C6OTA_DEFAULT_PRIMARY_FILENAME,
+        SHELL_C6OTA_DEFAULT_FALLBACK_FILENAME,
+    };
+    size_t index;
+    FRESULT result;
+
+    if (source == NULL || resolved_path == NULL || resolved_path_size == 0 || used_default == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *used_default = false;
+    if (!shell_c6ota_source_is_default(source)) {
+        return shell_sd_resolve_path(source, resolved_path, resolved_path_size);
+    }
+
+    *used_default = true;
+    for (index = 0; index < sizeof(default_names) / sizeof(default_names[0]); index++) {
+        snprintf(candidate, sizeof(candidate), "%s/%s", BSP_SD_MOUNT_POINT, default_names[index]);
+        if (shell_sd_vfs_to_fatfs_path(candidate, fatfs_candidate, sizeof(fatfs_candidate)) != ESP_OK) {
+            continue;
+        }
+
+        result = f_stat(fatfs_candidate, NULL);
+        if (result == FR_OK) {
+            snprintf(resolved_path, resolved_path_size, "%s", candidate);
+            return ESP_OK;
+        }
+    }
+
+    snprintf(failure_hint,
+             failure_hint_size,
+             "default firmware not found on SD root (%s or %s)",
+             SHELL_C6OTA_DEFAULT_PRIMARY_FILENAME,
+             SHELL_C6OTA_DEFAULT_FALLBACK_FILENAME);
+    return ESP_ERR_NOT_FOUND;
+}
+
+// AI: accept HTTP, SD, and default-root OTA payloads while keeping Wi-Fi off during the actual transfer.
+static esp_err_t shell_c6ota_run_http_source(const char *url,
+                                             char *failure_hint,
+                                             size_t failure_hint_size)
+{
+    esp_err_t error;
+    shell_wifi_restore_state_t restore_state = { 0 };
+    esp_hosted_coprocessor_fwver_t current_version = { 0 };
+    uint8_t *image_data = NULL;
+    char incoming_version[32] = "unknown";
+    size_t image_size = 0;
+    bool activate_supported = false;
+
+    if (!shell_c6ota_source_is_http(url)) {
+        snprintf(failure_hint, failure_hint_size, "use c6ota http[s]://host/path/to/firmware.bin");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = shell_c6ota_download_http_image(url,
+                                            &image_data,
+                                            &image_size,
+                                            incoming_version,
+                                            sizeof(incoming_version),
+                                            failure_hint,
+                                            failure_hint_size);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_c6ota_prepare_session(&current_version,
+                                        &activate_supported,
+                                        &restore_state,
+                                        failure_hint,
+                                        failure_hint_size);
+    if (error != ESP_OK) {
+        goto cleanup;
+    }
+
+    shell_schedule_transcript_appendf("c6ota: transferring HTTP image version %s over SDIO-only OTA\n",
+                                      incoming_version);
+    error = shell_c6ota_transfer_image_buffer(image_data,
+                                              image_size,
+                                              activate_supported,
+                                              failure_hint,
+                                              failure_hint_size);
+    if (error == ESP_OK) {
+        shell_wifi_request_post_c6ota_restore(&restore_state);
+    }
+
+cleanup:
+    if (error != ESP_OK) {
+        esp_err_t restore_error = shell_wifi_restore_after_c6ota_failure(&restore_state);
+
+        if (restore_error != ESP_OK) {
+            shell_schedule_transcript_appendf("c6ota: Wi-Fi restore failed: %s (0x%x)\n",
+                                              esp_err_to_name(restore_error),
+                                              (unsigned int)restore_error);
+            shell_record_warningf("c6ota", "Wi-Fi restore failed: %s", esp_err_to_name(restore_error));
+        }
+    }
+    if (image_data != NULL) {
+        heap_caps_free(image_data);
+    }
+    return error;
+}
+
+static esp_err_t shell_c6ota_run_sd_source(const char *source,
+                                           char *failure_hint,
+                                           size_t failure_hint_size)
+{
+    char normalized_path[320];
+    FILE *firmware = NULL;
+    esp_err_t error = ESP_OK;
+    esp_hosted_coprocessor_fwver_t current_version = { 0 };
+    shell_wifi_restore_state_t restore_state = { 0 };
+    uint8_t *payload = NULL;
+    char incoming_version[32] = "unknown";
+    bool mounted_here = false;
+    bool used_default = false;
+    bool ota_started = false;
+    bool activate_supported = false;
+    long file_size_long = 0;
+    size_t file_size;
+    size_t transferred_bytes = 0;
+    size_t last_reported_percent = 0;
+    size_t first_chunk;
+
+    if (!shell_c6ota_source_is_sd(source)) {
+        snprintf(failure_hint, failure_hint_size, "use c6ota sd:/path/to/firmware.bin or c6ota default");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    shell_schedule_transcript_appendf("c6ota: mounting SD card for %s\n", source);
     error = bsp_sdcard_mount();
     if (error == ESP_OK) {
         mounted_here = true;
     } else if (error != ESP_ERR_INVALID_STATE) {
-        shell_schedule_transcript_appendf("c6update: SD mount failed: %s (0x%x)\n",
-                                          esp_err_to_name(error),
-                                          (unsigned int)error);
-        shell_record_errorf("c6update", error, "SD card not present or mount failed");
+        snprintf(failure_hint, failure_hint_size, "SD mount failed - insert the card and retry");
+        return error;
+    }
+
+    error = shell_c6ota_resolve_sd_source(source,
+                                          normalized_path,
+                                          sizeof(normalized_path),
+                                          &used_default,
+                                          failure_hint,
+                                          failure_hint_size);
+    if (error != ESP_OK) {
         goto cleanup;
+    }
+
+    if (used_default) {
+        shell_schedule_transcript_appendf("c6ota: default source resolved to %s\n", normalized_path);
     }
 
     firmware = fopen(normalized_path, "rb");
     if (firmware == NULL) {
-        shell_schedule_transcript_appendf("c6update: could not open %s\n", normalized_path);
-        shell_record_errorf("c6update", ESP_ERR_NOT_FOUND, "Merged image not found at %s", normalized_path);
+        snprintf(failure_hint, failure_hint_size, "firmware file not found on SD");
+        error = ESP_ERR_NOT_FOUND;
         goto cleanup;
     }
 
     if (fseek(firmware, 0, SEEK_END) != 0) {
-        shell_schedule_transcript_appendf("c6update: failed to seek %s\n", normalized_path);
-        shell_record_errorf("c6update", ESP_FAIL, "Failed to seek image %s", normalized_path);
+        snprintf(failure_hint, failure_hint_size, "failed to seek the SD image");
+        error = ESP_FAIL;
         goto cleanup;
     }
 
     file_size_long = ftell(firmware);
     if (file_size_long <= 0) {
-        shell_schedule_transcript_appendf("c6update: invalid image size in %s\n", normalized_path);
-        shell_record_errorf("c6update", ESP_ERR_INVALID_SIZE, "Invalid image size in %s", normalized_path);
+        snprintf(failure_hint, failure_hint_size, "image file is empty or invalid");
+        error = ESP_ERR_INVALID_SIZE;
         goto cleanup;
     }
 
     if (fseek(firmware, 0, SEEK_SET) != 0) {
-        shell_schedule_transcript_appendf("c6update: failed to rewind %s\n", normalized_path);
-        shell_record_errorf("c6update", ESP_FAIL, "Failed to rewind image %s", normalized_path);
+        snprintf(failure_hint, failure_hint_size, "failed to rewind the SD image");
+        error = ESP_FAIL;
         goto cleanup;
     }
 
     file_size = (size_t)file_size_long;
-    aligned_size = (file_size + 3U) & ~((size_t)3U);
-    padded_remaining = aligned_size;
-    actual_remaining = file_size;
+    payload = shell_c6ota_alloc_transfer_buffer();
+    if (payload == NULL) {
+        snprintf(failure_hint, failure_hint_size, "out of memory allocating OTA buffer");
+        error = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
 
-    shell_schedule_transcript_appendf("c6update: image=%s size=%u bytes flash_addr=0x0\n",
+    shell_schedule_transcript_appendf("c6ota: SD source=%s size=%u bytes\n",
                                       normalized_path,
                                       (unsigned int)file_size);
-    shell_schedule_transcript_appendf("c6update: UART%d sync_baud=115200 flash_baud=%u tx=%d rx=%d en=%d reset=%d boot=%d\n",
-                                      CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
-                                      (unsigned int)CONFIG_P4MINISHELL_C6_FLASH_UART_BAUDRATE,
-                                      CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
-                                      CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
-                                      CONFIG_P4MINISHELL_C6_EN_GPIO,
-                                      CONFIG_P4MINISHELL_C6_RESET_GPIO,
-                                      CONFIG_P4MINISHELL_C6_BOOT_GPIO);
-    shell_schedule_transcript_appendf("%s", "c6update: expecting a merged ESP-IDF flash image produced for offset 0x0\n");
 
-    shell_c6update_drive_enable_gpio(true);
-
-    // AI: use the esp-serial-flasher ESP32 host port so BOOT/reset sequencing stays in the supported library path.
-    const loader_esp32_config_t loader_config = {
-        .baud_rate = 115200,
-        .uart_port = CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
-        .uart_rx_pin = CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
-        .uart_tx_pin = CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
-        .reset_trigger_pin = effective_reset_gpio,
-        .gpio0_trigger_pin = CONFIG_P4MINISHELL_C6_BOOT_GPIO,
-    };
-
-    loader_error = loader_port_esp32_init(&loader_config);
-    if (loader_error != ESP_LOADER_SUCCESS) {
-        shell_schedule_transcript_appendf("c6update: flasher UART init failed: %s\n",
-                                          shell_loader_error_string(loader_error));
-        shell_record_errorf("c6update", ESP_FAIL, "Flasher UART init failed: %s", shell_loader_error_string(loader_error));
-        goto cleanup;
-    }
-    flasher_initialized = true;
-
-    shell_schedule_transcript_appendf("%s", "c6update: entering bootloader and connecting to target\n");
-    loader_error = shell_c6update_connect(CONFIG_P4MINISHELL_C6_FLASH_UART_BAUDRATE);
-    if (loader_error != ESP_LOADER_SUCCESS) {
-        shell_record_errorf("c6update", ESP_FAIL, "Target connect failed: %s", shell_loader_error_string(loader_error));
+    first_chunk = fread(payload, 1, MIN(file_size, (size_t)SHELL_C6OTA_TRANSFER_CHUNK_BYTES), firmware);
+    if (first_chunk == 0) {
+        snprintf(failure_hint, failure_hint_size, "failed to read the OTA image header from SD");
+        error = ESP_FAIL;
         goto cleanup;
     }
 
-    shell_schedule_transcript_appendf("c6update: connected to %s\n",
-                                      shell_target_chip_string(esp_loader_get_target()));
-    if (esp_loader_get_target() != ESP32C6_CHIP) {
-        shell_schedule_transcript_appendf("c6update: refusing to flash %s, expected ESP32-C6\n",
-                                          shell_target_chip_string(esp_loader_get_target()));
-        shell_record_errorf("c6update", ESP_ERR_INVALID_RESPONSE, "Connected target was %s instead of ESP32-C6", shell_target_chip_string(esp_loader_get_target()));
+    error = shell_c6ota_parse_header(payload, first_chunk, incoming_version, sizeof(incoming_version));
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "SD image is not a valid ESP-IDF app image");
+        goto cleanup;
+    }
+    shell_schedule_transcript_appendf("c6ota: SD image header OK, version=%s\n", incoming_version);
+
+    error = shell_c6ota_prepare_session(&current_version,
+                                        &activate_supported,
+                                        &restore_state,
+                                        failure_hint,
+                                        failure_hint_size);
+    if (error != ESP_OK) {
         goto cleanup;
     }
 
-    loader_error = esp_loader_flash_start(0x0, aligned_size, sizeof(payload));
-    if (loader_error != ESP_LOADER_SUCCESS) {
-        shell_schedule_transcript_appendf("c6update: flash start failed: %s\n",
-                                          shell_loader_error_string(loader_error));
-        shell_record_errorf("c6update", ESP_FAIL, "Flash start failed: %s", shell_loader_error_string(loader_error));
+    error = esp_hosted_slave_ota_begin();
+    if (error != ESP_OK) {
+        snprintf(failure_hint, failure_hint_size, "OTA begin failed - check hosted transport health");
+        goto cleanup;
+    }
+    ota_started = true;
+
+    error = shell_c6ota_write_chunk(payload,
+                                    first_chunk,
+                                    &transferred_bytes,
+                                    file_size,
+                                    &last_reported_percent,
+                                    failure_hint,
+                                    failure_hint_size);
+    if (error != ESP_OK) {
         goto cleanup;
     }
 
-    shell_schedule_transcript_appendf("%s", "c6update: erase complete, programming\n");
-    while (padded_remaining > 0) {
-        const size_t chunk = MIN(sizeof(payload), padded_remaining);
-        const size_t read_len = MIN(chunk, actual_remaining);
-        size_t bytes_read = 0;
-        size_t percent;
+    while (transferred_bytes < file_size) {
+        size_t chunk = MIN(file_size - transferred_bytes, (size_t)SHELL_C6OTA_TRANSFER_CHUNK_BYTES);
+        size_t bytes_read = fread(payload, 1, chunk, firmware);
 
-        memset(payload, 0xFF, chunk);
-        if (read_len > 0) {
-            bytes_read = fread(payload, 1, read_len, firmware);
-            if (bytes_read != read_len) {
-                shell_schedule_transcript_appendf("c6update: read failed at byte %u\n",
-                                                  (unsigned int)(file_size - actual_remaining));
-                shell_record_errorf("c6update", ESP_FAIL, "Read failed at byte %u", (unsigned int)(file_size - actual_remaining));
-                goto cleanup;
-            }
-        }
-
-        loader_error = esp_loader_flash_write(payload, chunk);
-        if (loader_error != ESP_LOADER_SUCCESS) {
-            shell_schedule_transcript_appendf("c6update: write failed: %s\n",
-                                              shell_loader_error_string(loader_error));
-            shell_record_errorf("c6update", ESP_FAIL, "Flash write failed: %s", shell_loader_error_string(loader_error));
+        if (bytes_read != chunk) {
+            snprintf(failure_hint, failure_hint_size, "SD read failed before OTA transfer completed");
+            error = ESP_FAIL;
             goto cleanup;
         }
 
-        padded_remaining -= chunk;
-        actual_remaining -= bytes_read;
-        percent = ((file_size - actual_remaining) * 100U) / file_size;
-        if (percent >= last_reported_percent + SHELL_C6UPDATE_PROGRESS_STEP_PERCENT || actual_remaining == 0) {
-            last_reported_percent = percent;
-            shell_schedule_transcript_appendf("c6update: progress %u%%\n", (unsigned int)percent);
+        error = shell_c6ota_write_chunk(payload,
+                                        bytes_read,
+                                        &transferred_bytes,
+                                        file_size,
+                                        &last_reported_percent,
+                                        failure_hint,
+                                        failure_hint_size);
+        if (error != ESP_OK) {
+            goto cleanup;
         }
     }
 
-    loader_error = esp_loader_flash_finish(true);
-    if (loader_error != ESP_LOADER_SUCCESS) {
-        shell_schedule_transcript_appendf("c6update: flash finish failed: %s\n",
-                                          shell_loader_error_string(loader_error));
-        shell_record_errorf("c6update", ESP_FAIL, "Flash finish failed: %s", shell_loader_error_string(loader_error));
-        goto cleanup;
+    error = shell_c6ota_finish_session(&ota_started,
+                                       activate_supported,
+                                       transferred_bytes,
+                                       failure_hint,
+                                       failure_hint_size);
+    if (error == ESP_OK) {
+        shell_wifi_request_post_c6ota_restore(&restore_state);
     }
 
-    shell_schedule_transcript_appendf("%s", "c6update: flash complete, target rebooted\n");
-    shell_record_infof("c6update", "C6 flash completed successfully");
-    update_succeeded = true;
-
 cleanup:
+    shell_c6ota_abort_session(ota_started);
+    if (error != ESP_OK) {
+        esp_err_t restore_error = shell_wifi_restore_after_c6ota_failure(&restore_state);
+
+        if (restore_error != ESP_OK) {
+            shell_schedule_transcript_appendf("c6ota: Wi-Fi restore failed: %s (0x%x)\n",
+                                              esp_err_to_name(restore_error),
+                                              (unsigned int)restore_error);
+            shell_record_warningf("c6ota", "Wi-Fi restore failed: %s", esp_err_to_name(restore_error));
+        }
+    }
     if (firmware != NULL) {
         fclose(firmware);
     }
-    if (flasher_initialized && !update_succeeded) {
-        esp_loader_reset_target();
-    }
-    if (flasher_initialized) {
-        loader_port_esp32_deinit();
-    }
-    shell_c6update_drive_enable_gpio(true);
     if (mounted_here) {
         esp_err_t unmount_error = bsp_sdcard_unmount();
         if (unmount_error != ESP_OK) {
-            shell_schedule_transcript_appendf("c6update: SD unmount warning: %s (0x%x)\n",
+            shell_schedule_transcript_appendf("c6ota: SD unmount warning: %s (0x%x)\n",
                                               esp_err_to_name(unmount_error),
                                               (unsigned int)unmount_error);
-            shell_record_warningf("c6update", "SD unmount warning: %s", esp_err_to_name(unmount_error));
         }
     }
+    shell_c6ota_free_transfer_buffer(payload);
+    return error;
+}
+#endif
+
+static void shell_c6ota_task(void *arg)
+{
+    shell_c6ota_request_t *request = (shell_c6ota_request_t *)arg;
+    esp_err_t error = ESP_OK;
+    bool update_succeeded = false;
+    char failure_hint[192] = "hosted transport is unavailable - recover the C6 link and retry";
+
+    if (request == NULL) {
+        s_c6_update_in_progress = false;
+        shell_record_errorf("c6ota", ESP_ERR_INVALID_ARG, "Background OTA request was null");
+        vTaskDelete(NULL);
+        return;
+    }
+
+#if CONFIG_ESP_HOSTED_ENABLED
+    shell_schedule_transcript_appendf("c6ota: preparing %s\n", request->source);
+    if (request->mode == SHELL_C6OTA_MODE_SD) {
+        error = shell_c6ota_run_sd_source(request->source, failure_hint, sizeof(failure_hint));
+    } else {
+        error = shell_c6ota_run_http_source(request->source, failure_hint, sizeof(failure_hint));
+    }
+
+    if (error == ESP_OK) {
+        shell_schedule_transcript_appendf("%s", "C6 OTA completed successfully! Type reboot to activate new firmware.\n");
+        shell_record_infof("c6ota", "C6 OTA completed for %s", request->source);
+        update_succeeded = true;
+    }
+#else
+    error = ESP_ERR_NOT_SUPPORTED;
+    snprintf(failure_hint, sizeof(failure_hint), "ESP-Hosted OTA is disabled in sdkconfig");
+#endif
+
+    if (!update_succeeded) {
+        shell_schedule_transcript_appendf("C6 OTA failed: %s - %s\n",
+                                          esp_err_to_name(error),
+                                          failure_hint);
+        shell_record_warningf("c6ota", "C6 OTA failed: %s - %s", esp_err_to_name(error), failure_hint);
+    }
+
     free(request);
     s_c6_update_in_progress = false;
     vTaskDelete(NULL);
 }
 
-static void shell_execute_c6update_command(char *command)
+static bool shell_handle_c6ota_confirmation(char *command)
+{
+    shell_c6ota_request_t *request;
+
+    if (!s_c6ota_confirmation.active) {
+        return false;
+    }
+
+    if (shell_text_equals_ignore_case(command, "YES")) {
+        request = (shell_c6ota_request_t *)calloc(1, sizeof(*request));
+        if (request == NULL) {
+            shell_transcript_append_text("c6ota: out of memory\n");
+            shell_record_errorf("c6ota", ESP_ERR_NO_MEM, "Out of memory allocating OTA request");
+            s_c6ota_confirmation.active = false;
+            return true;
+        }
+
+        memcpy(request, &s_c6ota_confirmation.request, sizeof(*request));
+        s_c6ota_confirmation.active = false;
+        s_c6_update_in_progress = true;
+        shell_transcript_append_text("c6ota: confirmation accepted - starting OTA task\n");
+        if (xTaskCreate(shell_c6ota_task,
+                        "c6ota_task",
+                        SHELL_C6OTA_TASK_STACK_BYTES,
+                        request,
+                        tskIDLE_PRIORITY + 2,
+                        NULL) != pdPASS) {
+            s_c6_update_in_progress = false;
+            free(request);
+            shell_transcript_append_text("c6ota: failed to start background OTA task\n");
+            shell_record_errorf("c6ota", ESP_FAIL, "Failed to start background OTA task");
+        }
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(command, "NO")) {
+        s_c6ota_confirmation.active = false;
+        shell_transcript_append_text("c6ota: cancelled before rebooting the C6\n");
+        shell_record_infof("c6ota", "User cancelled OTA confirmation");
+        return true;
+    }
+
+    shell_transcript_append_text("c6ota: type YES to continue or NO to cancel\n");
+    shell_transcript_append_text("WARNING: This will reboot the C6. Type YES to continue\n");
+    return true;
+}
+
+static void shell_execute_c6ota_command(char *command)
 {
     char *argv[3];
     int argc = shell_split_args(command, argv, 3);
-    shell_c6update_request_t *request;
-    const char *image_path = NULL;
 
-    if (argc > 2) {
-        shell_transcript_append_text("Usage: c6update [default|slave|sd:/path/to/merged-image.bin]\n");
-        shell_record_warningf("c6update", "Usage error for c6update command");
+#if !CONFIG_ESP_HOSTED_ENABLED
+    (void)argv;
+    shell_transcript_append_text("c6ota: unavailable because ESP-Hosted is disabled in sdkconfig\n");
+    shell_record_warningf("c6ota", "Rejected because ESP-Hosted is disabled");
+    return;
+#else
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: c6ota <sd:/path/to/firmware.bin|http[s]://host/path.bin|default>\n");
+        shell_record_warningf("c6ota", "Usage error for c6ota command");
         return;
     }
 
-    if (s_c6_update_in_progress) {
-        shell_transcript_append_text("c6update: another update is already running\n");
-        shell_record_warningf("c6update", "Rejected because another update is already running");
+    if (s_c6_update_in_progress || s_c6ota_confirmation.active) {
+        shell_transcript_append_text("c6ota: another C6 update is already running or awaiting confirmation\n");
+        shell_record_warningf("c6ota", "Rejected because an update is already running or pending confirmation");
         return;
     }
 
-    request = (shell_c6update_request_t *)calloc(1, sizeof(*request));
-    if (request == NULL) {
-        shell_transcript_append_text("c6update: out of memory\n");
-        shell_record_errorf("c6update", ESP_ERR_NO_MEM, "Out of memory allocating update request");
-        return;
-    }
-
-    if (argc == 1 || strcmp(argv[1], "default") == 0 || strcmp(argv[1], "slave") == 0) {
-        image_path = SHELL_C6UPDATE_DEFAULT_IMAGE;
-        shell_transcript_appendf("c6update: using default image %s\n", image_path);
-        shell_record_infof("c6update", "Using default image %s", image_path);
+    memset(&s_c6ota_confirmation, 0, sizeof(s_c6ota_confirmation));
+    if (shell_c6ota_source_is_sd(argv[1])) {
+        s_c6ota_confirmation.request.mode = SHELL_C6OTA_MODE_SD;
+    } else if (shell_c6ota_source_is_http(argv[1])) {
+        s_c6ota_confirmation.request.mode = SHELL_C6OTA_MODE_HTTP;
     } else {
-        image_path = argv[1];
+        shell_transcript_append_text("Usage: c6ota <sd:/path/to/firmware.bin|http[s]://host/path.bin|default>\n");
+        shell_record_warningf("c6ota", "Unsupported OTA source: %s", argv[1]);
+        return;
     }
 
-    snprintf(request->path, sizeof(request->path), "%s", image_path);
-    s_c6_update_in_progress = true;
-    if (xTaskCreate(shell_c6update_task,
-                    "c6update_task",
-                    SHELL_C6UPDATE_TASK_STACK_BYTES,
-                    request,
-                    tskIDLE_PRIORITY + 2,
-                    NULL) != pdPASS) {
-        s_c6_update_in_progress = false;
-        free(request);
-        shell_transcript_append_text("c6update: failed to start background updater task\n");
-        shell_record_errorf("c6update", ESP_FAIL, "Failed to start background updater task");
-    }
+    snprintf(s_c6ota_confirmation.request.source,
+             sizeof(s_c6ota_confirmation.request.source),
+             "%s",
+             argv[1]);
+    s_c6ota_confirmation.active = true;
+    shell_transcript_appendf("c6ota: queued source %s\n", argv[1]);
+    shell_transcript_append_text("Factory v2.3.0 requires one-time standalone tool from https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota first.\n");
+    shell_transcript_append_text("WARNING: This will reboot the C6. Type YES to continue\n");
+    shell_record_infof("c6ota", "Awaiting confirmation for %s", argv[1]);
+#endif
 }
 
-// AI: error handling & history buffer keeps the last few failures and warnings visible for the debug command.
+// AI: keep recent shell/runtime failures, including OTA restore failures, visible through the debug command.
 static void shell_debug_log_push(const char *tag, const char *message)
 {
     char entry[SHELL_DEBUG_ENTRY_BYTES];
@@ -710,6 +1812,10 @@ static bool shell_command_is_sensitive(const char *command)
 
 static bool shell_command_should_store_history(const char *command)
 {
+    if (s_c6ota_confirmation.active) {
+        return false;
+    }
+
     return !shell_command_is_sensitive(command);
 }
 
@@ -883,6 +1989,32 @@ static void shell_wifi_append_error(const char *step, esp_err_t error)
     shell_debug_log_push("wifi", step);
 }
 
+static void shell_wifi_cleanup_runtime_artifacts(void)
+{
+    if (s_wifi_event_any_id != NULL) {
+        (void)esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_event_any_id);
+        s_wifi_event_any_id = NULL;
+    }
+
+    if (s_wifi_got_ip_event != NULL) {
+        (void)esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_wifi_got_ip_event);
+        s_wifi_got_ip_event = NULL;
+    }
+
+    (void)esp_wifi_stop();
+    (void)esp_wifi_deinit();
+
+    if (s_wifi_sta_netif != NULL) {
+        esp_netif_destroy_default_wifi(s_wifi_sta_netif);
+        s_wifi_sta_netif = NULL;
+    }
+
+    s_wifi_connected = false;
+    s_wifi_connect_requested = false;
+    s_wifi_target_ssid[0] = '\0';
+    s_wifi_target_password[0] = '\0';
+}
+
 static void shell_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
@@ -996,6 +2128,10 @@ static esp_err_t shell_wifi_connect_with_credentials(const char *ssid, const cha
     }
 
     snprintf(s_wifi_target_ssid, sizeof(s_wifi_target_ssid), "%s", ssid);
+    snprintf(s_wifi_target_password,
+             sizeof(s_wifi_target_password),
+             "%s",
+             password != NULL ? password : "");
     s_wifi_connect_requested = true;
     s_wifi_connected = false;
     shell_schedule_transcript_appendf("[wifi] connect requested for %s\n", s_wifi_target_ssid);
@@ -1008,6 +2144,56 @@ static esp_err_t shell_wifi_connect_with_credentials(const char *ssid, const cha
     }
 
     return ESP_OK;
+}
+
+static esp_err_t shell_wifi_runtime_shutdown(void)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    esp_err_t error;
+
+    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
+        return ESP_OK;
+    }
+
+    error = esp_wifi_disconnect();
+    if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_CONNECT && error != ESP_ERR_WIFI_NOT_INIT &&
+        error != ESP_ERR_WIFI_NOT_STARTED) {
+        return error;
+    }
+
+    error = esp_wifi_stop();
+    if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_INIT && error != ESP_ERR_WIFI_NOT_STARTED) {
+        return error;
+    }
+
+    if (s_wifi_event_any_id != NULL) {
+        (void)esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_event_any_id);
+        s_wifi_event_any_id = NULL;
+    }
+    if (s_wifi_got_ip_event != NULL) {
+        (void)esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_wifi_got_ip_event);
+        s_wifi_got_ip_event = NULL;
+    }
+
+    error = esp_wifi_deinit();
+    if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_INIT) {
+        return error;
+    }
+
+    if (s_wifi_sta_netif != NULL) {
+        esp_netif_destroy_default_wifi(s_wifi_sta_netif);
+        s_wifi_sta_netif = NULL;
+    }
+
+    s_wifi_state = SHELL_WIFI_STATE_NOT_ATTEMPTED;
+    s_wifi_last_error = ESP_OK;
+    s_wifi_connected = false;
+    s_wifi_connect_requested = false;
+    s_wifi_last_detail[0] = '\0';
+    return ESP_OK;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 static bool shell_wifi_begin_connect_request(const char *ssid, const char *password, bool use_defaults)
@@ -1062,6 +2248,61 @@ static bool shell_wifi_begin_connect_request(const char *ssid, const char *passw
 #endif
 }
 
+static bool shell_wifi_begin_background_request(const shell_wifi_background_request_t *template_request)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    shell_wifi_background_request_t *request;
+
+    if (template_request == NULL) {
+        return false;
+    }
+
+    if (s_wifi_init_task_in_progress || s_wifi_state == SHELL_WIFI_STATE_STARTING) {
+        shell_transcript_append_text("wifi: background Wi-Fi work is already in progress\n");
+        return false;
+    }
+
+    request = (shell_wifi_background_request_t *)calloc(1, sizeof(*request));
+    if (request == NULL) {
+        shell_transcript_append_text("wifi: failed to allocate background Wi-Fi request\n");
+        return false;
+    }
+
+    *request = *template_request;
+    s_wifi_init_task_in_progress = true;
+
+    if (request->start_runtime) {
+        s_wifi_state = SHELL_WIFI_STATE_STARTING;
+        s_wifi_last_error = ESP_OK;
+        s_wifi_connected = false;
+        s_wifi_connect_requested = false;
+    }
+
+    shell_schedule_transcript_appendf("[wifi] queued background %s workflow\n",
+                                      request->origin[0] != '\0' ? request->origin : "runtime");
+
+    if (xTaskCreate(shell_wifi_background_task,
+                    "wifi_bg",
+                    SHELL_WIFI_INIT_TASK_STACK_BYTES,
+                    request,
+                    tskIDLE_PRIORITY + 1,
+                    NULL) != pdPASS) {
+        s_wifi_init_task_in_progress = false;
+        if (request->start_runtime) {
+            s_wifi_state = SHELL_WIFI_STATE_NOT_ATTEMPTED;
+        }
+        free(request);
+        shell_transcript_append_text("wifi: failed to start background Wi-Fi task\n");
+        return false;
+    }
+
+    return true;
+#else
+    (void)template_request;
+    return false;
+#endif
+}
+
 static void shell_wifi_connect_task(void *arg)
 {
 #if SHELL_WIFI_RUNTIME_ENABLED
@@ -1091,15 +2332,218 @@ static void shell_wifi_connect_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static esp_err_t shell_wifi_run_diagnostic(const char *origin)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    esp_err_t error;
+    wifi_ap_record_t ap_info;
+    wifi_ap_record_t records[16];
+    uint16_t record_count = (uint16_t)(sizeof(records) / sizeof(records[0]));
+    uint16_t index;
+    esp_netif_ip_info_t ip_info = { 0 };
+    const char *label = (origin != NULL && origin[0] != '\0') ? origin : "runtime";
+
+    shell_schedule_transcript_appendf("[wifi.diag] origin=%s state=%s connected=%s requested=%s\n",
+                                      label,
+                                      shell_wifi_state_string(),
+                                      s_wifi_connected ? "yes" : "no",
+                                      s_wifi_connect_requested ? "yes" : "no");
+
+    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
+        shell_schedule_transcript_appendf("[wifi.diag] origin=%s runtime not started\n", label);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = esp_wifi_sta_get_ap_info(&ap_info);
+    if (error == ESP_OK) {
+        shell_schedule_transcript_appendf("[wifi.diag] connected_ssid=%s rssi=%d channel=%u\n",
+                                          ap_info.ssid[0] != '\0' ? (const char *)ap_info.ssid : "<hidden>",
+                                          ap_info.rssi,
+                                          (unsigned int)ap_info.primary);
+    } else if (error == ESP_ERR_WIFI_NOT_CONNECT) {
+        shell_schedule_transcript_appendf("[wifi.diag] origin=%s not connected to an AP\n", label);
+    } else {
+        shell_schedule_transcript_appendf("[wifi.diag] ap info failed: %s (0x%x)\n",
+                                          esp_err_to_name(error),
+                                          (unsigned int)error);
+    }
+
+    if (s_wifi_sta_netif != NULL && esp_netif_get_ip_info(s_wifi_sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+        shell_schedule_transcript_appendf("[wifi.diag] ip=" IPSTR "\n", IP2STR(&ip_info.ip));
+    } else {
+        shell_schedule_transcript_appendf("[wifi.diag] origin=%s ip=not-assigned\n", label);
+    }
+
+    shell_schedule_transcript_appendf("[wifi.diag] origin=%s scanning for nearby networks...\n", label);
+    error = esp_wifi_scan_start(NULL, true);
+    if (error != ESP_OK) {
+        shell_schedule_transcript_appendf("[wifi.diag] scan failed: %s (0x%x)\n",
+                                          esp_err_to_name(error),
+                                          (unsigned int)error);
+        shell_record_warningf("wifi", "diagnostic scan failed from %s", label);
+        return error;
+    }
+
+    error = esp_wifi_scan_get_ap_records(&record_count, records);
+    if (error != ESP_OK) {
+        shell_schedule_transcript_appendf("[wifi.diag] reading scan results failed: %s (0x%x)\n",
+                                          esp_err_to_name(error),
+                                          (unsigned int)error);
+        shell_record_warningf("wifi", "diagnostic scan result read failed from %s", label);
+        return error;
+    }
+
+    shell_schedule_transcript_appendf("[wifi.diag] origin=%s networks=%u\n",
+                                      label,
+                                      (unsigned int)record_count);
+
+    if (record_count == 0) {
+        shell_schedule_transcript_appendf("[wifi.diag] origin=%s no networks found\n", label);
+        return ESP_OK;
+    }
+
+    for (index = 0; index < record_count; index++) {
+        shell_schedule_transcript_appendf("[wifi.diag][%u] ssid=%s rssi=%d channel=%u auth=%u\n",
+                                          (unsigned int)index,
+                                          records[index].ssid[0] != '\0' ? (const char *)records[index].ssid : "<hidden>",
+                                          records[index].rssi,
+                                          (unsigned int)records[index].primary,
+                                          (unsigned int)records[index].authmode);
+    }
+
+    shell_record_infof("wifi", "diagnostic scan completed from %s with %u APs", label, (unsigned int)record_count);
+    return ESP_OK;
+#else
+    (void)origin;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static void shell_wifi_background_task(void *arg)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    shell_wifi_background_request_t *request = (shell_wifi_background_request_t *)arg;
+
+    if (request->start_runtime) {
+        shell_wifi_runtime_init();
+    }
+
+    if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
+        if (request->connect_with_defaults) {
+            if (shell_wifi_defaults_available()) {
+                esp_err_t connect_error = shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
+                                                                              CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
+                if (connect_error != ESP_OK) {
+                    shell_schedule_transcript_appendf("[wifi] %s default connect failed: %s (0x%x)\n",
+                                                      request->origin,
+                                                      esp_err_to_name(connect_error),
+                                                      (unsigned int)connect_error);
+                    shell_record_warningf("wifi", "%s default connect failed", request->origin);
+                }
+            } else {
+                shell_schedule_transcript_appendf("[wifi] %s: sdkconfig default credentials are not configured\n",
+                                                  request->origin);
+                shell_record_warningf("wifi",
+                                      "%s requested default connect without configured credentials",
+                                      request->origin);
+            }
+        } else if (request->ssid[0] != '\0') {
+            esp_err_t connect_error = shell_wifi_connect_with_credentials(request->ssid, request->password);
+            if (connect_error != ESP_OK) {
+                shell_schedule_transcript_appendf("[wifi] %s connect failed for %s: %s (0x%x)\n",
+                                                  request->origin,
+                                                  request->ssid,
+                                                  esp_err_to_name(connect_error),
+                                                  (unsigned int)connect_error);
+                shell_record_warningf("wifi", "%s connect failed for %s", request->origin, request->ssid);
+            }
+        }
+
+        if (request->run_diagnostic) {
+            esp_err_t diagnostic_error = shell_wifi_run_diagnostic(request->origin);
+            if (diagnostic_error != ESP_OK && diagnostic_error != ESP_ERR_INVALID_STATE) {
+                shell_schedule_transcript_appendf("[wifi] %s diagnostic finished with %s (0x%x)\n",
+                                                  request->origin,
+                                                  esp_err_to_name(diagnostic_error),
+                                                  (unsigned int)diagnostic_error);
+            }
+        }
+    } else {
+        shell_schedule_transcript_appendf("[wifi] %s could not start the Wi-Fi runtime cleanly\n",
+                                          request->origin[0] != '\0' ? request->origin : "runtime");
+        shell_record_warningf("wifi",
+                      "%s failed to start Wi-Fi runtime",
+                      request->origin[0] != '\0' ? request->origin : "runtime");
+    }
+
+    s_wifi_init_task_in_progress = false;
+    free(request);
+#else
+    (void)arg;
+#endif
+    vTaskDelete(NULL);
+}
+
+static void shell_wifi_request_boot_restore(void)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    shell_wifi_background_request_t request = {
+        .start_runtime = true,
+        .connect_with_defaults = shell_wifi_defaults_available(),
+        .run_diagnostic = true,
+    };
+
+    snprintf(request.origin, sizeof(request.origin), "%s", "boot");
+    // AI: keep the proven boot-time restore flow intact, including the transcript-facing diagnostic pass used on the working hosted baseline.
+    if (!shell_wifi_begin_background_request(&request)) {
+        shell_transcript_append_text("wifi: boot-time Wi-Fi startup request could not be queued\n");
+    }
+#endif
+}
+
+static void shell_wifi_request_post_c6ota_restore(const shell_wifi_restore_state_t *restore_state)
+{
+#if SHELL_WIFI_RUNTIME_ENABLED
+    shell_wifi_background_request_t request = {
+        .start_runtime = true,
+        .connect_with_defaults = false,
+        .run_diagnostic = true,
+    };
+
+    snprintf(request.origin, sizeof(request.origin), "%s", "c6ota-restore");
+
+    if (restore_state != NULL && restore_state->should_restore_runtime) {
+        if (restore_state->should_restore_connection && restore_state->ssid[0] != '\0') {
+            snprintf(request.ssid, sizeof(request.ssid), "%s", restore_state->ssid);
+            snprintf(request.password, sizeof(request.password), "%s", restore_state->password);
+        } else if (shell_wifi_defaults_available()) {
+            request.connect_with_defaults = true;
+        }
+    } else if (shell_wifi_defaults_available()) {
+        request.connect_with_defaults = true;
+    }
+
+    // AI: restore Wi-Fi after OTA without auto-running a hosted scan, so the normal recovery path stays stable.
+    if (!shell_wifi_begin_background_request(&request)) {
+        shell_schedule_transcript_appendf("[wifi] %s: failed to queue post-OTA Wi-Fi restore\n", request.origin);
+        shell_debug_log_push("wifi", "failed to queue post-OTA Wi-Fi restore");
+    }
+#else
+    (void)restore_state;
+#endif
+}
+
 static void shell_command_wifi_help(void)
 {
     shell_transcript_append_text("Wi-Fi commands:\n");
     shell_transcript_append_text("  wifi status                 Show Wi-Fi runtime state and IP info\n");
     shell_transcript_append_text("  wifi scan                   Scan for nearby SSIDs after Wi-Fi starts\n");
+    shell_transcript_append_text("  wifi diag                   Run a diagnostic status + scan report in the transcript\n");
     shell_transcript_append_text("  wifi connect                Connect using sdkconfig default credentials\n");
     shell_transcript_append_text("  wifi connect <ssid> <pass>  Connect using runtime credentials\n");
     shell_transcript_append_text("  wifi disconnect             Disconnect the current station session\n");
-    shell_transcript_append_text("  wifi connect probes ESP-Hosted in a background task so the shell remains responsive\n");
+    shell_transcript_append_text("  Wi-Fi now starts in the background on normal boot and after successful c6ota restore\n");
+    shell_transcript_append_text("  wifi connect still probes ESP-Hosted in a background task so the shell remains responsive\n");
     shell_transcript_append_text("  wifi connect passwords are masked in transcript history and not stored in command recall\n");
 }
 
@@ -1248,6 +2692,18 @@ static void shell_execute_wifi_command(char *command)
         return;
     }
 
+    if (strcmp(argv[1], "diag") == 0) {
+        shell_wifi_background_request_t request = {
+            .start_runtime = (s_wifi_state != SHELL_WIFI_STATE_STARTED),
+            .connect_with_defaults = false,
+            .run_diagnostic = true,
+        };
+
+        snprintf(request.origin, sizeof(request.origin), "%s", "diag");
+        (void)shell_wifi_begin_background_request(&request);
+        return;
+    }
+
     if (strcmp(argv[1], "disconnect") == 0) {
         shell_command_wifi_disconnect();
         return;
@@ -1294,12 +2750,25 @@ static void shell_wifi_runtime_init(void)
     esp_err_t error;
     wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
 
-    // AI: keep Wi-Fi startup strictly runtime-driven from sdkconfig and report every step into the shell transcript.
+    if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
+        shell_wifi_append_step("Wi-Fi runtime already started");
+        return;
+    }
+
+    if (s_wifi_state == SHELL_WIFI_STATE_STARTING && !s_wifi_init_task_in_progress) {
+        shell_wifi_append_step("Wi-Fi runtime startup already in progress");
+        return;
+    }
+
+    s_wifi_state = SHELL_WIFI_STATE_STARTING;
+    s_wifi_last_error = ESP_OK;
+
+    // AI: keep Wi-Fi startup aligned with the original working hosted routine while making retries safe after boot and post-c6ota restore.
     s_wifi_last_detail[0] = '\0';
     shell_wifi_append_step("runtime Wi-Fi initialization requested from sdkconfig");
 
 #if CONFIG_ESP_HOSTED_ENABLED
-    // AI: the checked-in esp32p4 host path now targets an ESP32-C6 co-processor over ESP-Hosted SDIO.
+    // AI: the checked-in esp32p4 host path targets an ESP32-C6 over ESP-Hosted SDIO and is reused for Wi-Fi-off C6 OTA.
     shell_wifi_set_detail("ESP-Hosted SDIO backend targeting ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54");
     shell_wifi_append_step("ESP-Hosted SDIO backend: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54");
     shell_wifi_append_step("esp_hosted_connect_to_slave()");
@@ -1308,7 +2777,15 @@ static void shell_wifi_runtime_init(void)
         shell_wifi_set_detail("ESP-Hosted did not connect to the ESP32-C6 co-processor on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54. Check the hosted slave firmware, pull-ups on CMD/DAT0-DAT3, and the reset wiring.");
         shell_wifi_append_error("esp_hosted_connect_to_slave()", error);
         shell_schedule_transcript_appendf("[wifi] %s\n", s_wifi_last_detail);
-        shell_schedule_transcript_appendf("%s", "[wifi] Recovery: copy coprocessor/esp32c6_slave/build/esp32c6_hosted_slave_merged.bin to the SD card and run c6update <sd:/path/to/esp32c6_hosted_slave_merged.bin> if the C6 firmware is missing or stale\n");
+        shell_schedule_transcript_appendf("%s", "[wifi] Recovery: rebuild or externally refresh the ESP32-C6 firmware from coprocessor/esp32c6_slave if the hosted slave image is missing or stale\n");
+        return;
+    }
+
+    shell_wifi_append_step("esp_hosted_get_coprocessor_fwversion()");
+    error = shell_wifi_validate_hosted_version();
+    if (error != ESP_OK) {
+        shell_wifi_append_error("hosted firmware compatibility check", error);
+        shell_schedule_transcript_appendf("[wifi] %s\n", s_wifi_last_detail);
         return;
     }
 #endif
@@ -1320,6 +2797,7 @@ static void shell_wifi_runtime_init(void)
         error = nvs_flash_erase();
         if (error != ESP_OK) {
             shell_wifi_append_error("nvs_flash_erase()", error);
+            shell_wifi_cleanup_runtime_artifacts();
             return;
         }
 
@@ -1329,6 +2807,7 @@ static void shell_wifi_runtime_init(void)
 
     if (error != ESP_OK) {
         shell_wifi_append_error("nvs_flash_init()", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1336,6 +2815,7 @@ static void shell_wifi_runtime_init(void)
     error = esp_netif_init();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
         shell_wifi_append_error("esp_netif_init()", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1343,13 +2823,20 @@ static void shell_wifi_runtime_init(void)
     error = esp_event_loop_create_default();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
         shell_wifi_append_error("esp_event_loop_create_default()", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
+    }
+
+    if (s_wifi_sta_netif != NULL) {
+        esp_netif_destroy_default_wifi(s_wifi_sta_netif);
+        s_wifi_sta_netif = NULL;
     }
 
     shell_wifi_append_step("esp_netif_create_default_wifi_sta()");
     s_wifi_sta_netif = esp_netif_create_default_wifi_sta();
     if (s_wifi_sta_netif == NULL) {
         shell_wifi_append_error("esp_netif_create_default_wifi_sta()", ESP_FAIL);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1357,6 +2844,7 @@ static void shell_wifi_runtime_init(void)
     error = esp_wifi_init(&wifi_init_cfg);
     if (error != ESP_OK) {
         shell_wifi_append_error("esp_wifi_init()", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1364,6 +2852,7 @@ static void shell_wifi_runtime_init(void)
     error = shell_wifi_register_event_handlers();
     if (error != ESP_OK) {
         shell_wifi_append_error("esp_event_handler_instance_register(...)", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1371,6 +2860,7 @@ static void shell_wifi_runtime_init(void)
     error = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     if (error != ESP_OK) {
         shell_wifi_append_error("esp_wifi_set_storage(WIFI_STORAGE_RAM)", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1378,6 +2868,7 @@ static void shell_wifi_runtime_init(void)
     error = esp_wifi_set_mode(WIFI_MODE_STA);
     if (error != ESP_OK) {
         shell_wifi_append_error("esp_wifi_set_mode(WIFI_MODE_STA)", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1385,6 +2876,7 @@ static void shell_wifi_runtime_init(void)
     error = esp_wifi_start();
     if (error != ESP_OK) {
         shell_wifi_append_error("esp_wifi_start()", error);
+        shell_wifi_cleanup_runtime_artifacts();
         return;
     }
 
@@ -1401,7 +2893,7 @@ static void shell_wifi_runtime_init(void)
         shell_wifi_append_step("no default sdkconfig credentials configured; use wifi connect <ssid> <pass>");
     }
 #elif SOC_WIRELESS_HOST_SUPPORTED
-    // AI: the current esp32p4 board can host an external radio, but the checked-in sdkconfig does not enable that path.
+    // AI: the current esp32p4 board can host an external radio, but the checked-in sdkconfig does not enable that non-hosted path.
     s_wifi_state = SHELL_WIFI_STATE_SKIPPED_DISABLED;
     shell_wifi_append_step("skipped: sdkconfig does not enable native Wi-Fi or ESP-Hosted Wi-Fi");
     shell_wifi_append_step("expected CONFIG_ESP_WIFI_ENABLED, CONFIG_ESP_HOST_WIFI_ENABLED, or CONFIG_ESP_HOSTED_ENABLED from sdkconfig");
@@ -1520,10 +3012,10 @@ static void shell_command_help(void)
 {
     shell_transcript_append_text("Built-in commands:\n");
     shell_transcript_append_text("  help    Show available commands\n");
-    shell_transcript_append_text("  c6update [path|default] Flash a merged ESP32-C6 image from the SD card\n");
+    shell_transcript_append_text("  c6ota <sd:/file.bin|http[s]://url|default> Run ESP-Hosted SDIO OTA from SD, HTTP, or SD root default\n");
     shell_transcript_append_text("  sysinfo Show board/runtime information\n");
     shell_transcript_append_text("  wifi scan Scan for nearby access points after Wi-Fi startup\n");
-    shell_transcript_append_text("  sd ls [path] List files on the SD card with DOS-style names\n");
+    shell_transcript_append_text("  sd info | ls [path] | stat <path> | cat <path> [max_bytes]\n");
     shell_transcript_append_text("  mem     Show heap and PSRAM usage\n");
     shell_transcript_append_text("  gpio status Show key board and co-processor GPIO levels\n");
     shell_transcript_append_text("  debug   Show last 5 errors, Wi-Fi state, heap, and warnings\n");
@@ -1533,7 +3025,11 @@ static void shell_command_help(void)
     shell_transcript_append_text("  clear   Clear the terminal history\n");
     shell_transcript_append_text("  reboot  Restart the board\n");
     shell_transcript_append_text("History recall: Prev/Next buttons above the keyboard\n");
-    shell_transcript_appendf("  c6update default uses %s\n", SHELL_C6UPDATE_DEFAULT_IMAGE);
+    shell_transcript_append_text("  c6ota sd:/file.bin streams the image after Wi-Fi is stopped and then restores the original Wi-Fi routine with diagnostics\n");
+    shell_transcript_append_text("  c6ota http://host/path.bin or https://host/path.bin downloads first, then transfers with Wi-Fi off\n");
+    shell_transcript_append_text("  c6ota default uses esp32c6_hosted_slave.bin or network_adapter.bin from the SD root\n");
+    shell_transcript_append_text("  c6ota prerequisite: factory C6 v2.3.0 needs the standalone tool from https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota first\n");
+    shell_transcript_append_text("  Warning: the C6 reboots after successful OTA; run reboot when the shell reports success\n");
 }
 
 static void shell_command_sysinfo(void)
@@ -1575,16 +3071,8 @@ static void shell_command_sysinfo(void)
                              BOARD_CFG_TOUCH_MIRROR_X,
                              BOARD_CFG_TOUCH_MIRROR_Y);
     shell_transcript_appendf("storage: spiffs=%s, sd=%s\n", BSP_SPIFFS_MOUNT_POINT, BSP_SD_MOUNT_POINT);
-    shell_transcript_appendf("c6.flash_uart: port=%d tx=%d rx=%d baud=%d\n",
-                             CONFIG_P4MINISHELL_C6_FLASH_UART_PORT,
-                             CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO,
-                             CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO,
-                             CONFIG_P4MINISHELL_C6_FLASH_UART_BAUDRATE);
-    shell_transcript_appendf("c6.flash_ctrl: en=%d reset=%d effective_reset=%d boot=%d busy=%s\n",
-                             CONFIG_P4MINISHELL_C6_EN_GPIO,
-                             CONFIG_P4MINISHELL_C6_RESET_GPIO,
-                             shell_c6_effective_reset_gpio(),
-                             CONFIG_P4MINISHELL_C6_BOOT_GPIO,
+    shell_transcript_appendf("c6.hosted_transport: sdio reset_gpio=%d busy=%s\n",
+                             SHELL_C6_HOST_RESET_GPIO,
                              s_c6_update_in_progress ? "yes" : "no");
     shell_transcript_appendf("idf: %s\n", esp_get_idf_version());
     shell_transcript_appendf("heap: free=%u bytes, internal_free=%u bytes\n",
@@ -1626,7 +3114,7 @@ static void shell_command_sysinfo(void)
 
 static void shell_command_mem(void)
 {
-    // AI: MSDOS styling keeps command output compact and scan-friendly for the retro terminal presentation.
+    // AI: keep the terminal output dense and readable in the MSDOS-style transcript, including 5% C6 OTA progress lines.
     size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t min_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -1659,9 +3147,7 @@ static void shell_command_gpio_status(void)
 {
     shell_print_gpio_level("display_reset", BSP_LCD_RST);
     shell_print_gpio_level("backlight", BSP_LCD_BACKLIGHT);
-    shell_print_gpio_level("c6_en", CONFIG_P4MINISHELL_C6_EN_GPIO);
-    shell_print_gpio_level("c6_reset", CONFIG_P4MINISHELL_C6_RESET_GPIO);
-    shell_print_gpio_level("c6_boot", CONFIG_P4MINISHELL_C6_BOOT_GPIO);
+    shell_print_gpio_level("c6_host_reset", SHELL_C6_HOST_RESET_GPIO);
 }
 
 static void shell_command_debug(void)
@@ -1698,62 +3184,370 @@ static void shell_command_about(void)
     shell_transcript_append_text("about.ui: locked transcript with touch keyboard, history buttons, and command prompt\n");
 }
 
+static void shell_sd_print_usage(void)
+{
+    shell_transcript_append_text("Usage:\n");
+    shell_transcript_append_text("  sd info\n");
+    shell_transcript_append_text("  sd ls [path]\n");
+    shell_transcript_append_text("  sd stat <path>\n");
+    shell_transcript_append_text("  sd cat <path> [max_bytes]\n");
+    shell_transcript_append_text("Paths: sd:/file.txt, /sdcard/file.txt, or relative-to-sd-root\n");
+}
+
+static void shell_command_sd_info(void)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+    struct stat root_stat;
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("sd: SD card not present - insert and retry\n");
+        shell_record_errorf("sd", error, "SD info mount failed");
+        return;
+    }
+
+    shell_transcript_appendf("sd.mount_point: %s\n", BSP_SD_MOUNT_POINT);
+    if (bsp_sdcard != NULL) {
+        char capacity_text[32];
+        uint64_t capacity_bytes = (uint64_t)bsp_sdcard->csd.capacity * (uint64_t)bsp_sdcard->csd.sector_size;
+
+        shell_sd_format_size(capacity_bytes, capacity_text, sizeof(capacity_text));
+        shell_transcript_appendf("sd.card_name: %s\n", bsp_sdcard->cid.name);
+        shell_transcript_appendf("sd.sector_size: %u\n", (unsigned int)bsp_sdcard->csd.sector_size);
+        shell_transcript_appendf("sd.capacity: %s\n", capacity_text);
+        shell_transcript_appendf("sd.max_freq_khz: %u\n", (unsigned int)bsp_sdcard->max_freq_khz);
+    } else {
+        shell_transcript_append_text("sd.card_name: unavailable\n");
+    }
+
+    error = shell_sd_stat_path(BSP_SD_MOUNT_POINT, &root_stat);
+    if (error == ESP_OK) {
+        shell_transcript_appendf("sd.root: %s\n", shell_sd_entry_type(&root_stat));
+    } else {
+        shell_transcript_appendf("sd.root: unavailable (%s)\n", esp_err_to_name(error));
+    }
+
+    shell_sd_end(&session, "sd info");
+}
+
 static void shell_command_sd_ls(char *command)
 {
-    char *argv[3];
-    int argc = shell_split_args(command, argv, 3);
+    char *argv[4];
+    int argc = shell_split_args(command, argv, 4);
     const char *input_path = argc >= 3 ? argv[2] : BSP_SD_MOUNT_POINT;
-    char normalized_path[320];
-    DIR *dir;
-    struct dirent *entry;
+    char normalized_path[SHELL_SD_PATH_BYTES];
+    char fatfs_path[SHELL_SD_PATH_BYTES];
+    char lfn[256];
+    char size_text[32];
+    struct stat path_stat;
+    FF_DIR dir;
+    FILINFO entry_info;
+    FRESULT result;
     esp_err_t error;
-    bool mounted_here = false;
+    size_t listed_entries = 0;
+    shell_sd_session_t session;
+    bool dir_open = false;
 
     if (argc > 3) {
-        shell_transcript_append_text("Usage: sd ls [path]\n");
+        shell_sd_print_usage();
         shell_record_warningf("sd", "Usage error for sd ls command");
         return;
     }
 
-    if (strncmp(input_path, "sd:/", 4) == 0 || input_path[0] != '/') {
-        shell_c6update_normalize_path(input_path, normalized_path, sizeof(normalized_path));
-    } else {
-        snprintf(normalized_path, sizeof(normalized_path), "%s", input_path);
+    error = shell_sd_resolve_path(input_path, normalized_path, sizeof(normalized_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("sd: path is too long or invalid\n");
+        shell_record_warningf("sd", "Rejected invalid path for sd ls");
+        return;
     }
 
-    error = bsp_sdcard_mount();
-    if (error == ESP_OK) {
-        mounted_here = true;
-    } else if (error != ESP_ERR_INVALID_STATE) {
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
         shell_transcript_append_text("sd: SD card not present - insert and retry\n");
         shell_record_errorf("sd", error, "SD card not present or mount failed");
         return;
     }
 
-    dir = opendir(normalized_path);
-    if (dir == NULL) {
-        shell_transcript_appendf("sd: could not open %s\n", normalized_path);
-        shell_record_errorf("sd", ESP_ERR_NOT_FOUND, "Could not open directory %s", normalized_path);
+    error = shell_sd_stat_path(normalized_path, &path_stat);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("sd: path not found %s\n", normalized_path);
+        shell_record_errorf("sd", error, "Could not stat path %s", normalized_path);
         goto cleanup;
     }
 
-    shell_transcript_appendf("sd: listing %s\n", normalized_path);
-    while ((entry = readdir(dir)) != NULL) {
-        shell_transcript_appendf("sd: %s\n", entry->d_name);
+    if (!S_ISDIR(path_stat.st_mode)) {
+        shell_sd_format_size((uint64_t)path_stat.st_size, size_text, sizeof(size_text));
+        shell_transcript_appendf("sd: %s type=%s size=%s\n",
+                                 normalized_path,
+                                 shell_sd_entry_type(&path_stat),
+                                 size_text);
+        goto cleanup;
     }
-    closedir(dir);
-    dir = NULL;
+
+    error = shell_sd_vfs_to_fatfs_path(normalized_path, fatfs_path, sizeof(fatfs_path));
+    if (error != ESP_OK) {
+        shell_transcript_appendf("sd: invalid FAT path for %s\n", normalized_path);
+        shell_record_errorf("sd", error, "Could not convert directory path %s to FatFs path", normalized_path);
+        goto cleanup;
+    }
+
+    memset(&dir, 0, sizeof(dir));
+    memset(&entry_info, 0, sizeof(entry_info));
+    result = f_opendir(&dir, fatfs_path);
+    if (result != FR_OK) {
+        error = shell_sd_fresult_to_esp_err(result);
+        shell_transcript_appendf("sd: could not open %s (FatFs=%u)\n",
+                                 normalized_path,
+                                 (unsigned int)result);
+        shell_record_errorf("sd", error, "Could not open directory %s (FatFs=%u)", normalized_path, (unsigned int)result);
+        goto cleanup;
+    }
+    dir_open = true;
+
+    shell_transcript_appendf("sd: listing %s\n", normalized_path);
+    while (true) {
+        result = f_readdir(&dir, &entry_info);
+        if (result != FR_OK) {
+            error = shell_sd_fresult_to_esp_err(result);
+            shell_transcript_appendf("sd: directory read failed for %s (FatFs=%u)\n",
+                                     normalized_path,
+                                     (unsigned int)result);
+            shell_record_errorf("sd", error, "Directory read failed for %s (FatFs=%u)", normalized_path, (unsigned int)result);
+            break;
+        }
+
+        if (entry_info.fname[0] == '\0') {
+            break;
+        }
+
+        snprintf(lfn, sizeof(lfn), "%s", entry_info.fname);
+        if (strcmp(lfn, ".") == 0 || strcmp(lfn, "..") == 0) {
+            continue;
+        }
+
+        if (listed_entries == SHELL_SD_LIST_LIMIT) {
+            shell_transcript_appendf("sd: listing truncated after %u entries\n", (unsigned int)SHELL_SD_LIST_LIMIT);
+            shell_record_warningf("sd", "Truncated directory listing for %s", normalized_path);
+            break;
+        }
+
+        shell_sd_format_size((uint64_t)entry_info.fsize, size_text, sizeof(size_text));
+        shell_transcript_appendf("sd: %-4s %s (%s)\n",
+                                 (entry_info.fattrib & AM_DIR) ? "DIR" : "FILE",
+                                 lfn,
+                                 (entry_info.fattrib & AM_DIR) ? "-" : size_text);
+        listed_entries++;
+    }
 
 cleanup:
-    if (dir != NULL) {
-        closedir(dir);
+    if (dir_open) {
+        (void)f_closedir(&dir);
     }
-    if (mounted_here) {
-        error = bsp_sdcard_unmount();
-        if (error != ESP_OK) {
-            shell_record_warningf("sd", "Unmount warning after sd ls: %s", esp_err_to_name(error));
+    shell_sd_end(&session, "sd ls");
+}
+
+static void shell_command_sd_stat(char *command)
+{
+    char *argv[4];
+    int argc = shell_split_args(command, argv, 4);
+    char normalized_path[SHELL_SD_PATH_BYTES];
+    char size_text[32];
+    struct stat path_stat;
+    esp_err_t error;
+    shell_sd_session_t session;
+
+    if (argc != 3) {
+        shell_sd_print_usage();
+        shell_record_warningf("sd", "Usage error for sd stat command");
+        return;
+    }
+
+    error = shell_sd_resolve_path(argv[2], normalized_path, sizeof(normalized_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("sd: path is too long or invalid\n");
+        shell_record_warningf("sd", "Rejected invalid path for sd stat");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("sd: SD card not present - insert and retry\n");
+        shell_record_errorf("sd", error, "SD stat mount failed");
+        return;
+    }
+
+    error = shell_sd_stat_path(normalized_path, &path_stat);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("sd: path not found %s\n", normalized_path);
+        shell_record_errorf("sd", error, "Could not stat path %s", normalized_path);
+        shell_sd_end(&session, "sd stat");
+        return;
+    }
+
+    shell_sd_format_size((uint64_t)path_stat.st_size, size_text, sizeof(size_text));
+    shell_transcript_appendf("sd.path: %s\n", normalized_path);
+    shell_transcript_appendf("sd.type: %s\n", shell_sd_entry_type(&path_stat));
+    shell_transcript_appendf("sd.size: %s\n", size_text);
+    shell_transcript_appendf("sd.mode: 0%o\n", (unsigned int)(path_stat.st_mode & 0777));
+
+    shell_sd_end(&session, "sd stat");
+}
+
+static void shell_command_sd_cat(char *command)
+{
+    char *argv[5];
+    int argc = shell_split_args(command, argv, 5);
+    char normalized_path[SHELL_SD_PATH_BYTES];
+    struct stat path_stat;
+    esp_err_t error;
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    size_t max_bytes = SHELL_SD_CAT_DEFAULT_BYTES;
+    size_t displayed_bytes = 0;
+    bool truncated = false;
+    bool ended_with_newline = false;
+    unsigned char buffer[SHELL_SD_IO_BUFFER_BYTES + 1];
+
+    if (argc < 3 || argc > 4) {
+        shell_sd_print_usage();
+        shell_record_warningf("sd", "Usage error for sd cat command");
+        return;
+    }
+
+    if (argc == 4 && !shell_parse_size_arg(argv[3], 1, SHELL_SD_CAT_MAX_BYTES, &max_bytes)) {
+        shell_transcript_appendf("sd: max_bytes must be between 1 and %u\n", (unsigned int)SHELL_SD_CAT_MAX_BYTES);
+        shell_record_warningf("sd", "Rejected invalid max_bytes for sd cat");
+        return;
+    }
+
+    error = shell_sd_resolve_path(argv[2], normalized_path, sizeof(normalized_path));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("sd: path is too long or invalid\n");
+        shell_record_warningf("sd", "Rejected invalid path for sd cat");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("sd: SD card not present - insert and retry\n");
+        shell_record_errorf("sd", error, "SD cat mount failed");
+        return;
+    }
+
+    error = shell_sd_stat_path(normalized_path, &path_stat);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("sd: path not found %s\n", normalized_path);
+        shell_record_errorf("sd", error, "Could not stat path %s", normalized_path);
+        goto cleanup;
+    }
+
+    if (!S_ISREG(path_stat.st_mode)) {
+        shell_transcript_appendf("sd: %s is not a regular file\n", normalized_path);
+        shell_record_warningf("sd", "Rejected non-file path for sd cat: %s", normalized_path);
+        goto cleanup;
+    }
+
+    file = fopen(normalized_path, "rb");
+    if (file == NULL) {
+        shell_transcript_appendf("sd: could not open %s (%s)\n", normalized_path, strerror(errno));
+        shell_record_errorf("sd", ESP_FAIL, "Could not open file %s", normalized_path);
+        goto cleanup;
+    }
+
+    shell_transcript_appendf("sd: preview %s (%u bytes max)\n", normalized_path, (unsigned int)max_bytes);
+    while (displayed_bytes < max_bytes) {
+        size_t index;
+        size_t bytes_to_read = MIN(sizeof(buffer) - 1, max_bytes - displayed_bytes);
+        size_t bytes_read = fread(buffer, 1, bytes_to_read, file);
+
+        if (bytes_read == 0) {
+            break;
+        }
+
+        for (index = 0; index < bytes_read; index++) {
+            if (buffer[index] == '\n' || buffer[index] == '\r' || buffer[index] == '\t') {
+                continue;
+            }
+            if (!isprint(buffer[index])) {
+                buffer[index] = '.';
+            }
+        }
+        buffer[bytes_read] = '\0';
+        ended_with_newline = bytes_read > 0 && buffer[bytes_read - 1] == '\n';
+
+        shell_transcript_appendf("%s", (char *)buffer);
+        displayed_bytes += bytes_read;
+        if (bytes_read < bytes_to_read) {
+            break;
         }
     }
+
+    if (displayed_bytes == 0) {
+        shell_transcript_append_text("sd: file is empty\n");
+    } else if (!feof(file)) {
+        truncated = true;
+    }
+
+    if (displayed_bytes > 0 && !ended_with_newline) {
+        shell_transcript_append_text("\n");
+    }
+
+    if (truncated) {
+        shell_transcript_appendf("sd: preview truncated at %u bytes\n", (unsigned int)max_bytes);
+    }
+
+cleanup:
+    if (file != NULL) {
+        fclose(file);
+    }
+    shell_sd_end(&session, "sd cat");
+}
+
+// AI: `sd` is now a small command family so storage operations can share validated parsing, bounded output, and consistent cleanup behavior.
+static void shell_command_sd(char *command)
+{
+    char *argv[5];
+    int argc = shell_split_args(command, argv, 5);
+
+    if (argc <= 1) {
+        shell_command_sd_info();
+        shell_sd_print_usage();
+        return;
+    }
+
+    if (strcmp(argv[1], "help") == 0) {
+        shell_sd_print_usage();
+        return;
+    }
+
+    if (strcmp(argv[1], "info") == 0) {
+        if (argc != 2) {
+            shell_sd_print_usage();
+            shell_record_warningf("sd", "Usage error for sd info command");
+            return;
+        }
+        shell_command_sd_info();
+        return;
+    }
+
+    if (strcmp(argv[1], "ls") == 0) {
+        shell_command_sd_ls(command);
+        return;
+    }
+
+    if (strcmp(argv[1], "stat") == 0) {
+        shell_command_sd_stat(command);
+        return;
+    }
+
+    if (strcmp(argv[1], "cat") == 0) {
+        shell_command_sd_cat(command);
+        return;
+    }
+
+    shell_sd_print_usage();
+    shell_record_warningf("sd", "Unknown sd subcommand: %s", argv[1]);
 }
 
 static void reboot_task(void *arg)
@@ -1761,6 +3555,33 @@ static void reboot_task(void *arg)
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(150));
     esp_restart();
+}
+
+// AI: run shell commands on a dedicated worker stack so heavier SD and OTA parsing paths never overflow the small LVGL input-event stack.
+static void shell_command_task(void *arg)
+{
+    shell_command_request_t *request = (shell_command_request_t *)arg;
+
+    if (request == NULL) {
+        shell_record_errorf("shell", ESP_ERR_INVALID_ARG, "Shell command task request was null");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (!lvgl_port_lock(0)) {
+        shell_schedule_transcript_appendf("shell: failed to lock LVGL for command %s\n", request->command);
+        shell_record_errorf("shell", ESP_FAIL, "Failed to lock LVGL for command %s", request->command);
+        free(request);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    shell_execute_command(request->command);
+    shell_history_transcript_scroll_to_end();
+    lvgl_port_unlock();
+
+    free(request);
+    vTaskDelete(NULL);
 }
 
 static void shell_execute_command(char *command)
@@ -1771,13 +3592,17 @@ static void shell_execute_command(char *command)
         return;
     }
 
+    if (shell_handle_c6ota_confirmation(trimmed)) {
+        return;
+    }
+
     if (strcmp(trimmed, "help") == 0) {
         shell_command_help();
         return;
     }
 
-    if (strncmp(trimmed, "c6update", 8) == 0 && (trimmed[8] == '\0' || isspace((unsigned char)trimmed[8]))) {
-        shell_execute_c6update_command(trimmed);
+    if (strncmp(trimmed, "c6ota", 5) == 0 && (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
+        shell_execute_c6ota_command(trimmed);
         return;
     }
 
@@ -1817,12 +3642,7 @@ static void shell_execute_command(char *command)
     }
 
     if (strncmp(trimmed, "sd", 2) == 0 && (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
-        if (strcmp(trimmed, "sd") == 0 || strncmp(trimmed, "sd ls", 5) == 0) {
-            shell_command_sd_ls(trimmed);
-            return;
-        }
-        shell_transcript_append_text("Usage: sd ls [path]\n");
-        shell_record_warningf("sd", "Usage error for sd command");
+        shell_command_sd(trimmed);
         return;
     }
 
@@ -1905,8 +3725,9 @@ static void shell_input_line_event_cb(lv_event_t *event)
     if (code == LV_EVENT_READY) {
         char command[SHELL_COMMAND_BYTES];
         char transcript_command[SHELL_COMMAND_BYTES];
+        shell_command_request_t *request;
 
-        // AI: LV_EVENT_READY handler is the confirmed working Enter path for command execution on the locked transcript UI.
+        // AI: LV_EVENT_READY remains the confirmed command submission path, including YES or NO replies for C6 OTA confirmation.
         shell_extract_input_text(command, sizeof(command));
         shell_format_command_for_transcript(command, transcript_command, sizeof(transcript_command));
         shell_transcript_appendf("%s%s\n", SHELL_PROMPT, transcript_command);
@@ -1916,7 +3737,29 @@ static void shell_input_line_event_cb(lv_event_t *event)
         s_command_history_cursor = -1;
         s_history_draft[0] = '\0';
         shell_input_line_reset();
-        shell_execute_command(command);
+
+        request = (shell_command_request_t *)calloc(1, sizeof(*request));
+        if (request == NULL) {
+            shell_transcript_append_text("shell: out of memory starting command task\n");
+            shell_record_errorf("shell", ESP_ERR_NO_MEM, "Out of memory starting command task for %s", command);
+            shell_history_transcript_scroll_to_end();
+            return;
+        }
+
+        snprintf(request->command, sizeof(request->command), "%s", command);
+        if (xTaskCreate(shell_command_task,
+                        "shell_cmd",
+                        SHELL_COMMAND_TASK_STACK_BYTES,
+                        request,
+                        tskIDLE_PRIORITY + 2,
+                        NULL) != pdPASS) {
+            free(request);
+            shell_transcript_append_text("shell: failed to start command task\n");
+            shell_record_errorf("shell", ESP_FAIL, "Failed to start command task for %s", command);
+            shell_history_transcript_scroll_to_end();
+            return;
+        }
+
         shell_history_transcript_scroll_to_end();
         return;
     }
@@ -1955,7 +3798,7 @@ static void shell_build_ui(void)
     lv_obj_set_style_pad_all(screen, 0, 0);
     lv_obj_set_style_pad_row(screen, 0, 0);
 
-    // AI: locked transcript UI keeps the scrollback read-only while commands are entered on the dedicated prompt line.
+    // AI: keep transcript history read-only while input stays on the dedicated prompt line for shell commands and OTA confirmation replies.
     s_history_transcript = lv_textarea_create(screen);
     lv_obj_set_width(s_history_transcript, LV_PCT(100));
     lv_obj_set_flex_grow(s_history_transcript, 1);
@@ -2010,7 +3853,7 @@ static void shell_build_ui(void)
     lv_obj_set_style_text_font(s_input_line, terminal_font, 0);
     lv_obj_add_event_cb(s_input_line, shell_input_line_event_cb, LV_EVENT_ALL, NULL);
 
-    // AI: MSDOS styling keeps the shell dense, keyboard-driven, and visually close to a classic terminal.
+    // AI: keep the shell visually close to a dense, keyboard-driven classic terminal while OTA progress stays easy to scan.
     s_keyboard = lv_keyboard_create(screen);
     lv_obj_set_width(s_keyboard, LV_PCT(100));
     lv_obj_set_height(s_keyboard, SHELL_KEYBOARD_HEIGHT);
@@ -2032,7 +3875,7 @@ void app_main(void)
 {
     lv_display_t *display;
 
-    // AI: preserve the BSP-driven LCD and touch startup path exactly as the original demo.
+    // AI: preserve the BSP-driven LCD and touch startup path from the original demo while OTA changes stay inside the shell handler.
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
@@ -2053,14 +3896,17 @@ void app_main(void)
 
     bsp_display_backlight_on();
 
-    // AI: create the LVGL shell surface after the BSP has started LVGL and touch input.
+    // AI: create the LVGL shell surface only after BSP display and touch startup completes so OTA status has a stable transcript surface.
     bsp_display_lock(0);
     shell_build_ui();
     bsp_display_unlock();
 
-    // AI: WiFi init stays on-demand so the shell remains bootable even when the hosted C6 is down.
-    shell_transcript_append_text("Wi-Fi initializes on demand when you run a wifi command.\n");
-    shell_transcript_append_text("Enter runs commands from the prompt line; history stays locked above.\n");
+    // AI: keep shell boot status visible through the debug surface without emitting a boot warning during normal startup.
+    shell_record_infof("shell", "Shell UI initialized; boot banner is shown on the display transcript");
 
-    // AI: command parsing, prompt management, transcript updates, history recall, and runtime Wi-Fi control are event-driven from the dedicated input line.
+    shell_transcript_append_text("Wi-Fi starts in the background on boot; wifi diag is also available for an extra status + scan report.\n");
+    shell_transcript_append_text("Enter runs commands from the prompt line; history stays locked above.\n");
+    shell_wifi_request_boot_restore();
+
+    // AI: drive command parsing and shell state updates from the dedicated input line events so OTA confirmation stays in the same shell flow.
 }

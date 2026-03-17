@@ -23,37 +23,6 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.1.4
-  espressif/esp-serial-flasher:
-    component_hash: 6f5d6859ce5b4a2d1a9eb42fa50aa1101096cb775cfea54440aab209bcb17c53
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.3'
-    - name: espressif/usb_host_cdc_acm
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=4.4
-      - if: target in [esp32s2, esp32s3, esp32p4]
-      version: ^2
-    - name: espressif/usb_host_ch34x_vcp
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=4.4
-      - if: target in [esp32s2, esp32s3, esp32p4]
-      version: ^2.2
-    - name: espressif/usb_host_cp210x_vcp
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=4.4
-      - if: target in [esp32s2, esp32s3, esp32p4]
-      version: ^2.2
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.11.0
   espressif/esp_codec_dev:
     component_hash: 014948481bda426cd46714f297fe1891711246c62bea288863a8cc8cf13ef1f0
     dependencies:
@@ -141,7 +110,7 @@ dependencies:
       type: service
     version: 1.1.2
   espressif/esp_wifi_remote:
-    component_hash: 5dc0b754dca5fdfd0430602f2f771432d1d6ce8b0cf33c26726528f64c9a911a
+    component_hash: ce04a94a92323bf28609c94519ee3173d140b20abc49b1daceb23eb262e1e8e0
     dependencies:
     - name: espressif/esp_hosted
       registry_url: https://components.espressif.com
@@ -159,58 +128,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.4.0
-  espressif/usb_host_cdc_acm:
-    component_hash: 71f9ae30021b1edb6f42980eb151ab24d0b602b8463861569a151b5254ba1e4b
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    - name: espressif/usb
-      registry_url: https://components.espressif.com
-      require: public
-      rules:
-      - if: idf_version >=6.0
-      - if: target not in ["linux"]
-      version: ^1.0.0
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    targets:
-    - esp32s2
-    - esp32s3
-    - esp32p4
-    - esp32h4
-    - linux
-    version: 2.3.0
-  espressif/usb_host_ch34x_vcp:
-    component_hash: cc6f17936a11aa0ba460e716bd9b70fcd445824bcc7882afbe3ede3513f80c59
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.4'
-    - name: espressif/usb_host_cdc_acm
-      registry_url: https://components.espressif.com
-      require: public
-      version: ^2.1.0
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 2.2.0
-  espressif/usb_host_cp210x_vcp:
-    component_hash: c0404c598e2620fe88c35b5bf24d8e3b3ded41d9946fc865843be7f2f75da40e
-    dependencies:
-    - name: espressif/usb_host_cdc_acm
-      registry_url: https://components.espressif.com
-      require: public
-      version: ^2.1.0
-    - name: idf
-      require: private
-      version: '>=4.4'
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 2.2.0
+    version: 1.4.1
   espressif/wifi_remote_over_eppp:
     component_hash: ac4d13625cc9f88597cd612d2758580fac287d8ec731b606f2a0720d28cda6cd
     dependencies:
@@ -237,7 +155,6 @@ dependencies:
     version: 9.2.2
 direct_dependencies:
 - espressif/cmake_utilities
-- espressif/esp-serial-flasher
 - espressif/esp_codec_dev
 - espressif/esp_hosted
 - espressif/esp_lcd_ek79007
@@ -249,6 +166,6 @@ direct_dependencies:
 - espressif/esp_wifi_remote
 - idf
 - lvgl/lvgl
-manifest_hash: 32d3ad520c9e65e7bbd2a78b8ca928fe14e11f679f6d6513f49c430b794c9322
+manifest_hash: 8fb36fa6fea9b45a1fa25dc48a8911756383596914280e1f1c2d904ccd8003a5
 target: esp32p4
 version: 2.0.0

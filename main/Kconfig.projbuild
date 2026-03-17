@@ -1,55 +1,5 @@
 menu "P4MiniShell"
 
-config P4MINISHELL_C6_FLASH_UART_PORT
-    int "ESP32-C6 flasher UART port"
-    default 1
-    range 0 5
-    help
-        Dedicated UART used by the P4 host to flash the ESP32-C6 with esp-serial-flasher.
-
-config P4MINISHELL_C6_FLASH_UART_TX_GPIO
-    int "ESP32-C6 flasher UART TX GPIO"
-    default -1
-    range -1 54
-    help
-        P4 TX GPIO routed to the ESP32-C6 RX pin for serial flashing.
-
-config P4MINISHELL_C6_FLASH_UART_RX_GPIO
-    int "ESP32-C6 flasher UART RX GPIO"
-    default -1
-    range -1 54
-    help
-        P4 RX GPIO routed to the ESP32-C6 TX pin for serial flashing.
-
-config P4MINISHELL_C6_FLASH_UART_BAUDRATE
-    int "ESP32-C6 flasher UART baudrate"
-    default 115200
-    range 9600 5000000
-    help
-        UART baudrate used for the ESP32-C6 ROM loader session.
-
-config P4MINISHELL_C6_EN_GPIO
-    int "ESP32-C6 EN GPIO"
-    default -1
-    range -1 54
-    help
-        Optional P4 GPIO wired to ESP32-C6 EN to hold the co-processor enabled during flashing.
-
-config P4MINISHELL_C6_RESET_GPIO
-    int "ESP32-C6 reset GPIO"
-    default -1
-    range -1 54
-    help
-        P4 GPIO used to reset the ESP32-C6 into and out of ROM download mode.
-        If left unset, the updater falls back to toggling the EN GPIO instead.
-
-config P4MINISHELL_C6_BOOT_GPIO
-    int "ESP32-C6 BOOT GPIO"
-    default -1
-    range -1 54
-    help
-        P4 GPIO wired to ESP32-C6 GPIO0/BOOT for entering ROM download mode.
-
 config P4MINISHELL_WIFI_DEFAULT_SSID
     string "Default Wi-Fi SSID"
     default ""

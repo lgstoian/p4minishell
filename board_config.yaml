@@ -80,6 +80,11 @@ board:
   storage:
     sd_mount_point: "/sdcard"
     sd_format_on_mount_fail: false
+    sd_long_filename_support:
+      enabled: true
+      buffer_source: heap
+      max_lfn: 255
+      api_encoding_symbol: CONFIG_FATFS_API_ENCODING_UTF_8
     spiffs_mount_point: "/spiffs"
     spiffs_partition_label: "storage"
     spiffs_max_files: 5
@@ -103,13 +108,17 @@ board:
     ui_mode: transcript_and_input_line_shell
     built_in_commands:
       - help
-      - c6update
+      - c6ota
       - sysinfo
       - wifi status
       - wifi scan
+      - wifi diag
       - wifi connect
       - wifi disconnect
+      - sd info
       - sd ls
+      - sd stat
+      - sd cat
       - mem
       - gpio status
       - debug
@@ -119,12 +128,16 @@ board:
       - about
     command_history_depth: 10
     input_prompt: "P4Shell> "
+    command_execution_worker:
+      enabled: true
+      stack_bytes: 8192
+      rationale: keep_heavier_sd_and_fatfs_commands_off_the_lvgl_input_event_stack
     command_recall_ui:
       - prev_button
       - next_button
     terminal_style: dos_like_locked_transcript_with_touch_keyboard
     command_execution: LV_EVENT_READY_on_input_line
-    wifi_status_policy: runtime_init_from_sdkconfig_or_report_skip_reason
+    wifi_status_policy: background_runtime_init_from_sdkconfig_on_boot_or_report_skip_reason
     wifi_runtime_requirements:
       - esp_hosted connects to an ESP32-C6 co-processor before host Wi-Fi start
       - ESP32-C6 SDIO link on CLK 18, CMD 19, D0 14, D1 15, D2 16, D3 17, reset 54
@@ -132,34 +145,75 @@ board:
       - NVS initialized before esp_wifi_init
       - CONFIG_ESP_HOSTED_ENABLED
       - CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE
-      - CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6
-      - CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY
+      - CONFIG_SLAVE_IDF_TARGET_ESP32C6
+      - CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP
     wifi_runtime_shell_commands:
       - wifi status
       - wifi scan
+      - wifi diag
       - wifi connect
       - wifi connect <ssid> <pass>
       - wifi disconnect
     wifi_runtime_password_policy: mask_runtime_passwords_in_transcript_and_history
     wifi_runtime_failure_policy: report the hosted ESP32-C6 SDIO pin map explicitly when esp_hosted cannot connect to the slave
+    wifi_runtime_compatibility_policy:
+      - read_the_esp32_c6_hosted_firmware_version_immediately_after_esp_hosted_connect_to_slave
+      - keep_wifi_off_when_the_c6_major_or_minor_version_does_not_match_the_host_2_12_x_release_line
+      - point_recovery_to_coprocessor_esp32c6_slave_or_c6ota_default_instead_of_suppressing_hosted_version_warnings
+    wifi_runtime_diagnostic_policy:
+      - keep_boot_time_wifi_restore_on_the_background_runtime_plus_diagnostic_flow_used_by_the_working_project
+      - keep_post_c6ota_wifi_restore_on_the_same_background_runtime_plus_diagnostic_flow
+      - expose_manual_wifi_diag_command_for_additional_status_plus_scan_output
     debug_policy:
       - keep_last_5_errors_and_warnings_in_memory
       - show_recent_errors_heap_wifi_state_and_warning_count_in_debug_command
-    c6_update_path:
-      command: "c6update [path|default]"
+      - record_successful_shell_ui_startup_in_debug_history_without_emitting_a_boot_warning
+    sd_policy:
+      - sd_commands_share_a_guarded_mount_unmount_path
+      - fatfs_lfn_enabled_with_heap_buffers_and_255_char_limit
+      - validate_and_normalize_sd_paths_before_filesystem_access
+      - bound_directory_output_to_128_entries
+      - bound_sd_cat_preview_to_8192_bytes_and_sanitize_non_printable_data
+      - prefer_read_only_sd_shell_features_for_on_device_diagnostics
+      - sd_ls_uses_direct_fatfs_directory_reads_for_full_long_filenames
+    sd_power_policy:
+      - acquire_sd_vo4_ldo_explicitly_at_3300mv_before_sd_mount_on_esp32p4
+      - keep_plain_sdmmc_fallback_when_on_chip_ldo_control_is_invalid_or_unsupported
+      - release_sd_power_handle_on_mount_failure_and_unmount
+    c6_ota_path:
+      command: "c6ota <sd:/file.bin|http[s]://url|default>"
       accepted_path_prefixes:
         - "sd:/"
         - "/sdcard/"
-      image_requirement: merged_flash_image_for_offset_0x0
-      transport: esp_serial_flasher_over_dedicated_uart
-      progress_reporting: append_status_lines_to_locked_transcript
-      config_keys:
-        - CONFIG_P4MINISHELL_C6_FLASH_UART_PORT
-        - CONFIG_P4MINISHELL_C6_FLASH_UART_TX_GPIO
-        - CONFIG_P4MINISHELL_C6_FLASH_UART_RX_GPIO
-        - CONFIG_P4MINISHELL_C6_EN_GPIO
-        - CONFIG_P4MINISHELL_C6_RESET_GPIO
-        - CONFIG_P4MINISHELL_C6_BOOT_GPIO
+        - "default"
+      image_requirement: esp_idf_app_image_for_hosted_ota
+      transport: hosted_sdio_ota_from_sd_http_or_default_after_wifi_shutdown_without_hosted_deinit
+      gpio54_reference: hosted_reset_line
+      ota_prerequisite: factory_v2_3_0_requires_one_time_standalone_tool_first
+      ota_prerequisite_url: https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota
+      ota_example:
+        - "c6ota sd:/esp32c6_hosted_slave.bin"
+        - "c6ota https://host/path/to/esp32c6.bin"
+        - "c6ota default"
+      progress_reporting: c6ota_emits_live_percent_progress
+      progress_format: "C6 OTA: XX% (YYYY KB / ZZZZ KB)"
+      confirmation_prompt: "WARNING: This will reboot the C6. Type YES to continue"
+      success_behavior: print_exact_success_and_reboot_host_reminder_then_restore_wifi
+      failure_behavior: restore_wifi_and_store_c6ota_transport_failure_hint_in_debug_history
+      hosted_session_policy: keep_existing_hosted_transport_alive_for_wifi_off_ota_and_avoid_pre_ota_deinit
+      default_sd_lookup: resolves_esp32c6_hosted_slave_bin_or_network_adapter_bin_with_lfn_enabled
+      stable_hosted_baseline:
+        - host_dependency_esp_hosted_2_12_1
+        - host_dependency_esp_wifi_remote_1_4_1
+        - sdio_1_bit_10000_khz
+        - slave_reset_on_every_host_bootup
+        - ota_chunk_size_1500_bytes
+    sd_command_examples:
+      - "sd info"
+      - "sd ls"
+      - "sd ls sd:/logs"
+      - "sd stat sd:/esp32c6_hosted_slave.bin"
+      - "sd cat sd:/notes.txt 512"
     size_guardrails:
       - disable_lvgl_examples_when_shell_ui_is_active
       - prefer_station_only_wifi_profile_on_esp32p4

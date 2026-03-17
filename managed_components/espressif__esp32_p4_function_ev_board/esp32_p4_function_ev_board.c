@@ -6,6 +6,7 @@
 
 #include "board_config.h"
 #include "sdkconfig.h"
+#include <stdlib.h>
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
@@ -17,7 +18,8 @@
 #include "esp_ldo_regulator.h"
 #include "esp_vfs_fat.h"
 #include "usb/usb_host.h"
-#include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#include "sd_pwr_ctrl.h"
+#include "sd_pwr_ctrl_interface.h"
 
 
 #if BOARD_CFG_LCD_TYPE_1024_600
@@ -36,11 +38,15 @@
 
 static const char *TAG = "ESP32_P4_EV";
 
+#define BSP_SD_IO_PWR_LDO_CHAN       (4)
+#define BSP_SD_IO_PWR_LDO_VOLTAGE_MV (3300)
+
 #if (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
 static lv_indev_t *disp_indev = NULL;
 #endif // (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
 
 sdmmc_card_t *bsp_sdcard = NULL;    // Global uSD card handler
+static sd_pwr_ctrl_handle_t bsp_sd_pwr_ctrl_handle = NULL;
 static bool i2c_initialized = false;
 static bool backlight_initialized = false;
 static TaskHandle_t usb_host_task;  // USB Host Library task
@@ -50,6 +56,77 @@ static i2c_master_bus_handle_t i2c_handle = NULL;  // I2C Handle
 static i2s_chan_handle_t i2s_tx_chan = NULL;
 static i2s_chan_handle_t i2s_rx_chan = NULL;
 static const audio_codec_data_if_t *i2s_data_if = NULL;  /* Codec data interface */
+
+typedef struct {
+    esp_ldo_channel_handle_t ldo_chan;
+    int voltage_mv;
+} bsp_sd_pwr_ctrl_ldo_ctx_t;
+
+static esp_err_t bsp_sd_ldo_set_voltage(void *ctx_arg, int voltage_mv)
+{
+    bsp_sd_pwr_ctrl_ldo_ctx_t *ctx = (bsp_sd_pwr_ctrl_ldo_ctx_t *)ctx_arg;
+
+    ESP_RETURN_ON_FALSE(ctx != NULL, ESP_ERR_INVALID_ARG, TAG, "invalid sd ldo ctx");
+    if (ctx->voltage_mv == voltage_mv) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(esp_ldo_channel_adjust_voltage(ctx->ldo_chan, voltage_mv), TAG,
+                        "failed to set SD IO LDO voltage");
+    ctx->voltage_mv = voltage_mv;
+    return ESP_OK;
+}
+
+// AI: Use an explicit initial voltage for the SD VO4 power path so the LDO driver never acquires the channel with an implicit 0 mV configuration.
+static esp_err_t bsp_sd_pwr_ctrl_new(sd_pwr_ctrl_handle_t *ret_handle)
+{
+    esp_err_t ret = ESP_OK;
+    sd_pwr_ctrl_drv_t *driver = NULL;
+    bsp_sd_pwr_ctrl_ldo_ctx_t *ctx = NULL;
+    esp_ldo_channel_handle_t ldo_chan = NULL;
+    esp_ldo_channel_config_t chan_cfg = {
+        .chan_id = BSP_SD_IO_PWR_LDO_CHAN,
+        .voltage_mv = BSP_SD_IO_PWR_LDO_VOLTAGE_MV,
+        .flags.adjustable = true,
+    };
+
+    ESP_RETURN_ON_FALSE(ret_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "invalid sd pwr ctrl handle");
+    driver = calloc(1, sizeof(*driver));
+    ESP_GOTO_ON_FALSE(driver != NULL, ESP_ERR_NO_MEM, err, TAG, "no memory for sd pwr ctrl driver");
+    ctx = calloc(1, sizeof(*ctx));
+    ESP_GOTO_ON_FALSE(ctx != NULL, ESP_ERR_NO_MEM, err, TAG, "no memory for sd pwr ctrl context");
+
+    ESP_GOTO_ON_ERROR(esp_ldo_acquire_channel(&chan_cfg, &ldo_chan), err, TAG,
+                      "failed to acquire SD IO LDO channel");
+
+    ctx->ldo_chan = ldo_chan;
+    ctx->voltage_mv = BSP_SD_IO_PWR_LDO_VOLTAGE_MV;
+    driver->set_io_voltage = bsp_sd_ldo_set_voltage;
+    driver->ctx = ctx;
+    *ret_handle = driver;
+    return ESP_OK;
+
+err:
+    if (ldo_chan != NULL) {
+        esp_ldo_release_channel(ldo_chan);
+    }
+    free(ctx);
+    free(driver);
+    return ret;
+}
+
+static esp_err_t bsp_sd_pwr_ctrl_del(sd_pwr_ctrl_handle_t handle)
+{
+    bsp_sd_pwr_ctrl_ldo_ctx_t *ctx;
+
+    ESP_RETURN_ON_FALSE(handle != NULL, ESP_ERR_INVALID_ARG, TAG, "invalid sd pwr ctrl handle");
+    ctx = (bsp_sd_pwr_ctrl_ldo_ctx_t *)handle->ctx;
+    ESP_RETURN_ON_FALSE(ctx != NULL, ESP_ERR_INVALID_ARG, TAG, "invalid sd pwr ctrl ctx");
+    ESP_RETURN_ON_ERROR(esp_ldo_release_channel(ctx->ldo_chan), TAG, "failed to release SD IO LDO channel");
+    free(ctx);
+    free(handle);
+    return ESP_OK;
+}
 
 /* Can be used for `i2s_std_gpio_config_t` and/or `i2s_std_config_t` initialization */
 #define BSP_I2S_GPIO_CFG       \
@@ -110,13 +187,14 @@ i2c_master_bus_handle_t bsp_i2c_get_handle(void)
 
 esp_err_t bsp_sdcard_mount(void)
 {
-    const esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+    esp_err_t ret;
+    const esp_vfs_fat_mount_config_t mount_config = {
     #if BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL
         .format_if_mount_failed = true,
 #else
         .format_if_mount_failed = false,
 #endif
-        .max_files = 5,
+        .max_files = 8,
         .allocation_unit_size = 64 * 1024
     };
 
@@ -124,16 +202,17 @@ esp_err_t bsp_sdcard_mount(void)
     host.slot = SDMMC_HOST_SLOT_0;
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
 
-    sd_pwr_ctrl_ldo_config_t ldo_config = {
-        .ldo_chan_id = 4,
-    };
     sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL;
-    esp_err_t ret = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &pwr_ctrl_handle);
-    if (ret != ESP_OK) {
+    ret = bsp_sd_pwr_ctrl_new(&pwr_ctrl_handle);
+    if (ret == ESP_OK) {
+        host.pwr_ctrl_handle = pwr_ctrl_handle;
+        bsp_sd_pwr_ctrl_handle = pwr_ctrl_handle;
+    } else if (ret == ESP_ERR_INVALID_ARG || ret == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "Skipping on-chip SD LDO power control: %s", esp_err_to_name(ret));
+    } else {
         ESP_LOGE(TAG, "Failed to create a new on-chip LDO power control driver");
         return ret;
     }
-    host.pwr_ctrl_handle = pwr_ctrl_handle;
 
     const sdmmc_slot_config_t slot_config = {
         /* SD card is connected to Slot 0 pins. Slot 0 uses IO MUX, so not specifying the pins here */
@@ -143,12 +222,31 @@ esp_err_t bsp_sdcard_mount(void)
         .flags = 0,
     };
 
-    return esp_vfs_fat_sdmmc_mount(BSP_SD_MOUNT_POINT, &host, &slot_config, &mount_config, &bsp_sdcard);
+    ret = esp_vfs_fat_sdmmc_mount(BSP_SD_MOUNT_POINT, &host, &slot_config, &mount_config, &bsp_sdcard);
+    if (ret != ESP_OK && bsp_sd_pwr_ctrl_handle != NULL) {
+        ESP_RETURN_ON_ERROR(bsp_sd_pwr_ctrl_del(bsp_sd_pwr_ctrl_handle), TAG,
+                            "Failed to delete the SD IO LDO power control driver after mount failure");
+        bsp_sd_pwr_ctrl_handle = NULL;
+    }
+
+    return ret;
 }
 
 esp_err_t bsp_sdcard_unmount(void)
 {
-    return esp_vfs_fat_sdcard_unmount(BSP_SD_MOUNT_POINT, bsp_sdcard);
+    esp_err_t ret = esp_vfs_fat_sdcard_unmount(BSP_SD_MOUNT_POINT, bsp_sdcard);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (bsp_sd_pwr_ctrl_handle != NULL) {
+        ESP_RETURN_ON_ERROR(bsp_sd_pwr_ctrl_del(bsp_sd_pwr_ctrl_handle), TAG,
+                            "Failed to delete the SD IO LDO power control driver");
+        bsp_sd_pwr_ctrl_handle = NULL;
+    }
+
+    bsp_sdcard = NULL;
+    return ESP_OK;
 }
 
 esp_err_t bsp_spiffs_mount(void)

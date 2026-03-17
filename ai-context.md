@@ -1,22 +1,27 @@
 P4MiniShell rules – FIXED 2026:
 - Base = official JC1060P470C Demo_IDF (lvgl_demo_v9 or equivalent)
 - Hardware config source: idf_component.yml + managed_components/ + dependencies.lock + sdkconfig
-- ALWAYS read before any change: changelog.md, readme.md, documentation.md, board_config.yaml, sdkconfig, idf_component.yml, board_config.xml (if exists)
+- ALWAYS read before any change: changelog.md, readme.md, documentation.md, ai-context.md, board_config.yaml, command.md, sdkconfig, idf_component.yml, board_config.xml (if exists)
 - Use ONLY drivers from managed_components (esp_lvgl_port + esp_lcd_jd9165 + esp_lcd_touch_gt911)
 - Shell = LVGL textarea + on-screen lv_keyboard
 - All major sections need // AI: comment
-- Copilot must update the five meta files at the end of every task
+- Copilot must update changelog.md, readme.md, documentation.md, ai-context.md, board_config.yaml, and command.md at the end of every task
 - Current app behavior = BSP-preserving LVGL shell in main/main.c, not lv_demo_widgets()
 - Display and touch init must continue through bsp_display_start_with_config() with the existing BOARD_CFG_* values
-- Wi-Fi startup must follow sdkconfig only and now supports shell commands for `wifi status`, `wifi scan`, `wifi connect`, and `wifi disconnect`
-- ESP32-C6 maintenance now also includes a `c6update <path>` shell command that flashes a merged C6 image from the SD card over a dedicated UART using `esp-serial-flasher`
+- Wi-Fi startup must follow sdkconfig only, auto-start cleanly in a background task on normal boot, restore after successful `c6ota`, and support shell commands for `wifi status`, `wifi scan`, `wifi diag`, `wifi connect`, and `wifi disconnect`; boot-time and post-`c6ota` restore include the transcript-facing diagnostic pass used by the working project baseline
+- c6update permanently removed – no C6 flashing code
+- ESP32-C6 maintenance now uses only `c6ota <sd:/file.bin|http[s]://url|default>` for ESP-Hosted SDIO OTA after the exact `WARNING: This will reboot the C6. Type YES to continue` confirmation
 - When Wi-Fi is enabled, initialize NVS before esp_wifi_init() and keep the standard erase-and-retry recovery path for incompatible NVS metadata
 - On esp32p4 host Wi-Fi builds, use ESP-Hosted plus esp_wifi_remote and connect to the ESP32-C6 co-processor over SDIO before esp_wifi_init()
 - Current hosted transport assumption in this workspace: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 with reset GPIO54; if the link does not come up, fail explicitly and report the hosted pin map instead of the older extconn hardware note
-- The C6 updater must keep its UART and BOOT/reset wiring in sdkconfig under the `P4MiniShell` menu; do not hardcode board-specific flasher pins in source
-- The C6 updater expects a merged flash image at offset `0x0`; document that requirement instead of pretending a plain `app.bin` is enough
-- Keep ESP-Hosted on `CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY` unless a task explicitly requires forcing a co-processor reset on every host boot
+- `c6ota` expects a valid ESP-IDF ESP32-C6 application image and validates the image header magic plus chip ID before transfer
+- GPIO54 remains the hosted reset reference for the ESP32-C6 path
+- On stock hardware, recovery from a missing or stale C6 image now points to rebuilding or externally refreshing `coprocessor/esp32c6_slave`; the shell no longer exposes a serial flash command
+- `c6ota` downloads HTTP sources first, then stops Wi-Fi completely before OTA, keeps the existing ESP-Hosted transport alive in Wi-Fi-off mode, transfers in 1500-byte chunks, and successful OTA activation reboots the C6
+- Factory ESP32-C6 firmware `v2.3.0` still needs the one-time standalone tool from `lboshuizen/crowpanel-p4-c6-sdio-ota` before shell-driven OTA is used
+- Keep ESP-Hosted on `CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP` unless a task explicitly proves a different reset policy is safe on the current ESP32-P4 to ESP32-C6 hardware path
 - For ESP-Hosted version mismatch fixes, build the C6 firmware from `coprocessor/esp32c6_slave` instead of suppressing the warning or downgrading the host-side ESP-Hosted dependency
+- The normal shell Wi-Fi startup path must fail fast after `esp_hosted_connect_to_slave()` when the ESP32-C6 hosted firmware major or minor version does not match the host `2.12.x` line, so the UI stays up and incompatible RPC traffic never reaches `esp_wifi_remote`
 - Keep `CONFIG_LV_BUILD_EXAMPLES` disabled unless the app explicitly needs LVGL example code, because Wi-Fi support pushes the esp32p4 image over the link budget otherwise
 - Prefer a station-only sdkconfig Wi-Fi profile on esp32p4 shell builds; disable unused WPA3, enterprise, SoftAP, and Wi-Fi IRAM options unless a task explicitly needs them
 - Prefer nano-format newlib, warn-level compile-time logging, and no AMPDU when fitting shell + host Wi-Fi into the esp32p4 image window
@@ -24,5 +29,12 @@ P4MiniShell rules – FIXED 2026:
 - Runtime Wi-Fi passwords typed in `wifi connect <ssid> <pass>` must be masked in transcript output and skipped from command recall history
 - Current shell layout = transcript textarea + prompt-bearing input line + on-screen keyboard + basic 10-command recall controls
 - Input submission must be driven by LV_EVENT_READY on the input line while keeping transcript history immutable from normal typing
-- Current shell command surface also includes `sd ls`, `mem`, `gpio status`, `debug`, `version`, and `about`
+- Keep heavy shell command execution off the raw LVGL input callback stack; queue command work onto a dedicated task when SD/FATFS or other deeper command paths would otherwise risk stack overflow in the event handler
+- Current shell command surface includes `c6ota`, `sd info`, `sd ls`, `sd stat`, `sd cat`, `mem`, `gpio status`, `debug`, `version`, and `about`; see `command.md` for the current command reference
+- All SD shell commands must use a shared guarded mount or unmount path, bounded output, and friendly transcript errors so bad media or invalid paths cannot crash or wedge the shell
+- Keep FATFS LFN enabled for this workspace with heap-backed buffers, `CONFIG_FATFS_MAX_LFN=255`, and the ESP-IDF 5.5.3 UTF-8 symbol `CONFIG_FATFS_API_ENCODING_UTF_8` so SD root long filenames work for both `sd ls` and `c6ota default`
+- Preserve the BSP-side SD power-control fix: on esp32p4 the managed board layer now acquires SD VO4 explicitly at 3300 mV before SD mounts, instead of relying only on the stock helper path that emitted repeated `ldo` voltage-0 warnings
+- Keep `c6ota` aligned with the proven lboshuizen CrowPanel method: stop Wi-Fi fully before transfer, keep the ESP-Hosted host dependency aligned to the current ESP32-C6 `2.12.x` line, transfer in 1500-byte chunks, validate ESP32-C6 image magic plus chip ID, and retain the exact YES confirmation and success strings
+- After successful `c6ota`, restore the normal Wi-Fi routine in the background, including the existing diagnostic pass used by the working hosted baseline
 - Keep the small debug/error history buffer populated by friendly command/runtime failures so the `debug` command can surface recent problems without opening a serial monitor
+- Do not emit warning-level logs for successful shell UI startup; record healthy boot milestones through the existing `debug` history instead
