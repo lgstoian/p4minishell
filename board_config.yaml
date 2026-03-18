@@ -122,6 +122,30 @@ board:
       bluetooth_module: components/networking/bluetooth.c
       bluetooth_transport: esp_hosted_nimble_vhci
       bluetooth_lifecycle: stateful_controller_reuse
+    usb_component:
+      path: components/usb
+      module: components/usb/usb.c
+      header: components/usb/usb.h
+      storage_mount_point: /usb0
+      class_drivers:
+        - usb_host_msc
+        - usb_host_hid
+      public_api:
+        - usb_init
+        - usb_handle_command
+        - usb_status
+        - usb_msc_mount
+        - usb_msc_ls
+        - usb_hid_keyboard_enable
+        - usb_hid_mouse_enable
+      shell_commands:
+        - usb status
+        - usb ls
+        - usb keyboard on
+        - usb keyboard off
+        - usb mouse on
+        - usb mouse off
+      status: USB host modularized with MSC and HID support
     c6ota_component:
       path: components/c6ota
       module: components/c6ota/c6ota.c
@@ -167,6 +191,12 @@ board:
       - sd ls
       - sd stat
       - sd cat
+      - usb status
+      - usb ls
+      - usb keyboard on
+      - usb keyboard off
+      - usb mouse on
+      - usb mouse off
       - mem
       - gpio list
       - gpio status

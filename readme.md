@@ -4,7 +4,7 @@ P4MiniShell is an embedded, touch-driven command shell for the ESP32-P4 host and
 The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-compatible runtime. What it already provides is the embedded foundation for that direction: a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi on the C6, and a real OTA maintenance path for the co-processor.
 
 ## What this project is
-- A single-binary ESP32-P4 shell application with the shell UI in [main/main.c](main/main.c), hosted connectivity in `components/networking`, and ESP32-C6 OTA maintenance isolated in `components/c6ota`
+- A single-binary ESP32-P4 shell application with the shell UI in [main/main.c](main/main.c), hosted connectivity in `components/networking`, USB host support in `components/usb`, and ESP32-C6 OTA maintenance isolated in `components/c6ota`
 - A DOS-inspired command environment for SD-card workflows on an embedded touchscreen device
 - A host-side control surface for an ESP32-C6 connected over ESP-Hosted SDIO
 - A base for future native application loading, shell SDK work, and broader MS-DOS-style command compatibility
@@ -21,6 +21,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Storage model: guarded SD-card access with DOS-style relative paths rooted at `/sdcard`
 - Shell model: worker-task command execution, RAM-only environment variables, PATH, batch frames, and transcript-backed redirection
 - Connectivity: ESP32-P4 host Wi-Fi and BLE routed through a dedicated networking component using ESP-Hosted plus `esp_wifi_remote` and hosted NimBLE on the ESP32-C6 over SDIO
+- USB host: dedicated `components/usb` module using ESP-IDF USB Host MSC and HID class drivers, with MSC storage mounted at `/usb0` and HID keyboard or mouse debug echo available on demand
 - Maintenance path: `c6ota` for validated ESP32-C6 application updates from SD or HTTP/S sources
 
 ## Planning and licensing
@@ -38,7 +39,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Command-family dispatch safety: the shell now preserves the original unsplit command line before tokenization, so `wifi`, `sd`, and `c6ota` subcommands continue to work after the worker-task parser hands control to their family-specific handlers
 - UART and monitor interaction: the firmware now consumes stdin on the configured ESP-IDF console, prints the same prompt on the serial side, mirrors transcript output to stdout, and routes typed monitor commands back through the same shell parser, password masking, history, and transcript flow used on-screen
 - Serial prompt behavior: the monitor prompt is now emitted only when a fresh command entry is needed, which prevents idle stdin polling from flooding repeated `P4Shell>` prompts
-- Commands: help, cls, c6ota, sysinfo, brightness, rotate, battery, volume, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio list, gpio status, gpio read, gpio set, bluetooth status, bluetooth scan, bluetooth advertise on, bluetooth advertise off, bt (alias), rgb, camera, debug, clear, reboot, version, ver, about
+- Commands: help, cls, c6ota, sysinfo, brightness, rotate, battery, volume, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, usb status, usb ls, usb keyboard on or off, usb mouse on or off, mem, gpio list, gpio status, gpio read, gpio set, bluetooth status, bluetooth scan, bluetooth advertise on, bluetooth advertise off, bt (alias), rgb, camera, debug, clear, reboot, version, ver, about
 - Command recall: last 10 commands via Prev/Next buttons, with the input line kept separate from transcript history
 - Display/touch init: still owned by the managed BSP and board_config-generated constants
 - Display controls: `brightness <0-100>` drives the BSP backlight PWM path and `rotate <0|90|180|270>` rotates the active LVGL display while remapping GT911 touch coordinates to match
@@ -65,6 +66,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Co-processor firmware upgrade path: `coprocessor/esp32c6_slave` remains the repo-local ESP32-C6 firmware project, and the shell host path stays on the same `2.12.x` ESP-Hosted release line used by that project
 - Networking module layout: `components/networking/networking.c` owns hosted Wi-Fi startup, state, events, scans, diagnostics, and OTA restore hooks, while `components/networking/bluetooth.c` owns hosted NimBLE controller bring-up, scan, and advertising control
 - OTA module layout: `components/c6ota/c6ota.c` owns the validated ESP32-C6 OTA path behind the preserved shell command surface, while `components/c6ota/c6ota.h` exposes the stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` API
+- USB module layout: `components/usb/usb.c` owns USB Host Library bring-up, MSC VFS registration at `/usb0`, HID keyboard or mouse attach tracking, and the shell-facing `usb` command family, while `components/usb/usb.h` exposes the stable USB entry points documented in `API.md` and `SDK.md`
 - Monitor usage: after flashing, `idf.py monitor` can now be used as a real shell endpoint over the configured console path, not only as a log viewer
 - Command reference: see `command.md` for the current shell command surface and usage notes
 - OTA developer notes: see `API.md` and `SDK.md` for module-level integration details
@@ -78,6 +80,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - SD long filename support: FATFS LFN is now enabled with heap-backed buffers and a 255-character limit, so `sd ls` shows full names from the SD root and `c6ota default` can resolve `esp32c6_hosted_slave.bin` or `network_adapter.bin` without truncation-related misses
 - SD BSP power control: the managed board layer now acquires SD VO4 explicitly at 3300 mV for SD-card IO power, which removes the repeated `ldo` voltage-0 warning spam seen during SD mounts on the esp32p4 path
 - SD shell tools: `sd info` reports card metadata, `sd ls` now shows entry types and file sizes, `sd stat` reports file or directory details, and `sd cat` provides a bounded text-safe file preview for quick inspection on-device
+- USB shell tools: `usb status` reports host, MSC, and HID state, `usb ls` mounts a connected MSC drive at `/usb0` on demand and lists files in the same transcript-safe style as the SD tools, and `usb keyboard` or `usb mouse` toggles transcript echo for attached HID boot devices
 - DOS-style SD shell tools: the shell now keeps a RAM-only current SD working directory, RAM-only environment variables and PATH, text-file creation and editing helpers, COMMAND.COM-style file operations, batch-file execution from SD, and transcript-safe `>` / `>>` output redirection back onto SD files
 
 ## Hardware and software baseline

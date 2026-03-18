@@ -8,3 +8,6 @@ dependencies:
     version: "1.4.1"
     rules:
       - if: "target in [esp32p4]"
+  espressif/usb: "*"
+  espressif/usb_host_msc: "*"
+  espressif/usb_host_hid: "*"

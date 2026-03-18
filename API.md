@@ -5,6 +5,7 @@ This document describes the public integration surface exposed by the hosted run
 ## Shared integration pattern
 - `main/main.c` remains the shell UI, transcript, parser, and orchestration layer.
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
+- `components/usb` owns USB Host Library state, USB MSC storage, and USB HID keyboard or mouse debug behavior.
 - `components/c6ota` owns the shell-visible ESP32-C6 OTA workflow and depends on `components/networking` for Wi-Fi wait and restore hooks.
 - All three areas keep user-visible behavior in the shell transcript instead of returning rich status objects to the caller.
 
@@ -63,6 +64,30 @@ This document describes the public integration surface exposed by the hosted run
 - `void bluetooth_advertise(bool enable)`
   - Focused Bluetooth helpers for shell subcommands.
 
+## USB API
+- `void usb_init(void)`
+  - Call once during boot after `networking_init(...)` so the USB module can install the shared host library and both class drivers.
+
+- `void usb_handle_command(char *command)`
+  - Entry point for shell-level `usb ...` command dispatch.
+  - Preserves the same transcript-first behavior used by the other modular shell families.
+
+- `void usb_status(void)`
+  - Prints transcript-visible host, MSC, and HID state.
+
+- `void usb_msc_mount(void)`
+  - Mounts a connected MSC device at `/usb0` with `msc_host_vfs_register(...)`.
+
+- `void usb_msc_ls(const char *path)`
+  - Lists files from `usb:/...`, `/usb0/...`, or a relative USB-root path.
+  - Keeps directory output bounded and user-facing so it matches the existing SD command feel.
+
+- `void usb_hid_keyboard_enable(void)`
+- `void usb_hid_keyboard_disable(void)`
+- `void usb_hid_mouse_enable(void)`
+- `void usb_hid_mouse_disable(void)`
+  - Toggle transcript echo for attached HID boot devices without changing the rest of the shell input path.
+
 ## C6 OTA API
 - `void c6ota_init(void)`
   - Call once during boot after the shell transcript path is ready.
@@ -84,8 +109,9 @@ This document describes the public integration surface exposed by the hosted run
   - Shell-integration helpers used by `main/main.c` to keep the confirmation flow and `sysinfo` state outside the OTA implementation details.
 
 ## Behavioral contract
-- Public shell command surfaces remain `wifi ...`, `bluetooth ...`, and `c6ota <sd:/path/to/firmware.bin|http[s]://host/path.bin|default>`.
+- Public shell command surfaces remain `wifi ...`, `bluetooth ...`, `usb ...`, and `c6ota <sd:/path/to/firmware.bin|http[s]://host/path.bin|default>`.
 - Wi-Fi and Bluetooth continue to report user-facing state through the shared transcript and debug hooks.
+- USB continues that same transcript-first contract and mounts MSC storage at `/usb0` instead of changing the existing SD path.
 - OTA confirmation text remains `WARNING: This will reboot the C6. Type YES to continue`.
 - OTA success text remains `C6 OTA completed successfully! Type reboot to activate new firmware.`.
 - OTA progress text remains `C6 OTA: XX% (YYYY KB / ZZZZ KB)`.

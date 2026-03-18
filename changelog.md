@@ -1,3 +1,8 @@
+## [0.1.23] - 2026-03-18
+- Added a new `components/usb` module that owns ESP-IDF USB Host bring-up for MSC external storage and HID keyboard or mouse devices, keeping `main/main.c` limited to shell orchestration and family-command dispatch
+- Added the shell-facing `usb` command family with `usb status`, `usb ls [path]`, `usb keyboard <on|off>`, and `usb mouse <on|off>`, mounting MSC media through VFS or FATFS at `/usb0` with the same transcript-friendly MSDOS-style output pattern used by the SD tools
+- Added managed component dependencies for `espressif/usb_host_msc` and `espressif/usb_host_hid`, plus updated the API and SDK docs so USB integration follows the same documented module contract as networking and `c6ota`
+
 ## [0.1.22] - 2026-03-18
 - c6ota refactored to separate module with identical API and behavior
 - Moved the full ESP32-C6 OTA flow into `components/c6ota` while preserving the existing shell-visible confirmation flow, transcript output, source handling, hosted OTA RPC sequence, Wi-Fi stop or restore behavior, and success or failure handling

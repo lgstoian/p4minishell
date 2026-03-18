@@ -8,6 +8,7 @@ idf_component_register(
         bootloader_support
         c6ota
         networking
+        p4_usb
         esp_adc
         esp_event
         esp_hosted

@@ -61,6 +61,10 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - `sd ls [path]`: Mount the SD card on demand and list directory entries from `sd:/...`, `/sdcard/...`, or a relative SD-root path. Output is bounded to avoid transcript floods, and file targets are summarized instead of treated as directories.
 - `sd stat <path>`: Show the resolved path, entry type, size, and mode bits for a file or directory.
 - `sd cat <path> [max_bytes]`: Show a bounded text-safe preview of a file. Non-printable bytes are sanitized, regular files only are accepted, and `max_bytes` is limited to `1..8192`.
+- `usb status`: Show USB host state, MSC attach or mount state, detected MSC identity and capacity, and HID keyboard or mouse attach plus echo state.
+- `usb ls [path]`: Mount a connected USB MSC drive on demand at `/usb0` and list files from `usb:/...`, `/usb0/...`, or a relative USB-root path with the same bounded transcript style used by `sd ls`.
+- `usb keyboard on` or `usb keyboard off`: Enable or disable transcript echo for attached USB HID boot keyboards.
+- `usb mouse on` or `usb mouse off`: Enable or disable transcript echo for attached USB HID boot mice.
 - `mem`: Show free heap, minimum heap, internal heap, and PSRAM state.
 - `gpio list`: Show the exposed board GPIO table, including current level, shell write policy, and a short role description for each board pin.
 - `gpio status`: Show the current levels plus role text for the full exposed board pin table.
@@ -97,6 +101,7 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - Wi-Fi starts in a background task on normal boot, runs the same restore path after successful `c6ota`, and keeps the transcript diagnostic pass during those restore flows while still exposing `wifi diag` for an extra on-demand report.
 - Hosted Wi-Fi and hosted Bluetooth now live under `components/networking`, so the shell parser delegates those command families instead of owning the runtime transport logic directly in `main/main.c`.
 - Hosted OTA now lives under `components/c6ota`, so `main/main.c` only provides transcript and parser orchestration while the OTA module keeps the proven update flow intact.
+- USB host runtime now lives under `components/usb`, so `main/main.c` only exposes the `usb` family and host transcript hooks while the module owns host-library bring-up, MSC mounting at `/usb0`, and HID keyboard or mouse debug echo.
 - The `wifi`, `sd`, and `c6ota` command families now preserve the full unsplit command line before subcommand parsing, which fixes the regression where family commands could lose their subcommand text after the generic parser tokenized the first word in place.
 - `idf.py monitor` is now interactive on the configured console path because the firmware consumes stdin and mirrors shell transcript output to stdout instead of leaving the serial path as logs only.
 - `rgb` and `camera` stay intentionally explicit about unsupported states: the JC1060 reference repo does not expose authoritative RGB LED wiring, and this workspace still lacks the local camera stack needed by the JC1060 camera examples.

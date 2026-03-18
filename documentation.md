@@ -5,14 +5,15 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Hosted connectivity no longer lives directly in the shell monolith.
 - `components/networking/networking.c` now owns hosted Wi-Fi startup, event handling, command execution, status reporting, and OTA restore or wait hooks.
 - `components/networking/bluetooth.c` now owns hosted Bluetooth bring-up through NimBLE VHCI on the ESP32-C6, including scan and advertising control.
+- `components/usb/usb.c` now owns ESP-IDF USB Host bring-up, USB MSC mount or list behavior, and HID keyboard or mouse attach plus echo handling.
 - `components/c6ota/c6ota.c` now owns the full ESP32-C6 OTA path, including source parsing, confirmation tracking, background transfer, Wi-Fi stop or restore, progress reporting, and the hosted OTA RPC sequence.
 - The Bluetooth module keeps hosted controller state across shell commands so scan and advertising requests reuse the active host stack instead of reissuing hosted controller init or enable calls.
-- `main/main.c` remains the shell UI and orchestration layer, passes transcript plus logging callbacks into the networking component, and now delegates `c6ota` to the separate OTA module through `c6ota_perform()` without changing shell-visible behavior.
+- `main/main.c` remains the shell UI and orchestration layer, passes transcript plus logging callbacks into the networking component, exposes transcript hooks for the USB module, and delegates `c6ota` plus `usb` to separate modules without changing existing shell-visible behavior.
 
 ## Project documents
 - `readme.md`: user-facing introduction, current behavior, and build notes
 - `API.md`: stable public API for the modular `c6ota` component
-- `SDK.md`: integration notes and usage examples for the modular `c6ota` component
+- `SDK.md`: integration notes and usage examples for the modular `c6ota` and `usb` components
 - `roadmap.md`: parity plan for the DOS-style shell, native app runtime, and future SDK work
 - `licence.md`: proprietary notice for project-authored code plus third-party license summary
 
@@ -20,6 +21,14 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - `c6ota_init()`: reset and prepare the OTA module once at boot.
 - `c6ota_perform(const char *source)`: accept `sd:/...`, `/sdcard/...`, `http[s]://...`, or `default` and preserve the established shell confirmation and OTA behavior.
 - `c6ota_register_progress_callback(void (*cb)(int percent, const char *msg))`: let the shell transcript consume module-generated progress and status messages without moving OTA logic back into `main/main.c`.
+
+## USB module API
+- `usb_init()`: initialize the shared USB Host Library plus MSC and HID class drivers once after networking is configured.
+- `usb_handle_command(char *command)`: entry point for the shell-level `usb ...` family parser.
+- `usb_status()`: print transcript-visible USB host, MSC, and HID state.
+- `usb_msc_mount()`: mount a connected MSC device at `/usb0` through `msc_host_vfs_register()`.
+- `usb_msc_ls(const char *path)`: list files from `usb:/...`, `/usb0/...`, or a relative USB-root path with SD-style bounded transcript output.
+- `usb_hid_keyboard_enable()` and `usb_hid_mouse_enable()`: enable transcript echo for attached HID boot devices.
 
 ## Hardware reuse policy
 - Display init remains on the existing BSP path through bsp_display_start_with_config()
@@ -75,6 +84,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - bluetooth status: show hosted Bluetooth readiness, NimBLE state, and advertising state
 - bluetooth scan: run a BLE scan through hosted NimBLE on the ESP32-C6 and print discovered devices to the shell transcript
 - bluetooth advertise on | off: start or stop non-connectable BLE advertising through the hosted NimBLE path
+- usb status | ls [path] | keyboard <on|off> | mouse <on|off>: new USB host family routed through `components/usb`, with MSC storage exposed at `/usb0` and HID echo intentionally opt-in for debug use
 - sd: show SD status and available SD subcommands
 - sd info: mount the SD card on demand and report card metadata plus root availability
 - sd ls [path]: mount the SD card on demand, enumerate directory entries through the FatFs LFN path, list full long filenames with entry type and file sizes, and report a friendly insert-and-retry message when no card is present

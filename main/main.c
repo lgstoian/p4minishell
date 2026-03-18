@@ -55,6 +55,7 @@
 #include "bluetooth.h"
 #include "c6ota.h"
 #include "networking.h"
+#include "usb.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 
@@ -119,21 +120,6 @@ typedef enum {
 typedef struct {
     char command[SHELL_COMMAND_BYTES];
 } shell_command_request_t;
-
-typedef struct {
-    bool use_defaults;
-    char ssid[SHELL_WIFI_SSID_BYTES];
-    char password[SHELL_WIFI_PASSWORD_BYTES];
-} shell_wifi_connect_request_t;
-
-typedef struct {
-    bool start_runtime;
-    bool connect_with_defaults;
-    bool run_diagnostic;
-    char origin[SHELL_WIFI_ORIGIN_BYTES];
-    char ssid[SHELL_WIFI_SSID_BYTES];
-    char password[SHELL_WIFI_PASSWORD_BYTES];
-} shell_wifi_background_request_t;
 
 typedef struct {
     char entries[SHELL_DEBUG_LOG_DEPTH][SHELL_DEBUG_ENTRY_BYTES];
@@ -274,14 +260,12 @@ static void shell_execute_gpio_command(int argc, char **argv);
 static void shell_command_debug(void);
 static void shell_command_version(void);
 static void shell_command_about(void);
-static void shell_execute_bt_command(int argc, char **argv);
 static void shell_execute_rgb_command(int argc, char **argv);
 static void shell_execute_camera_command(int argc, char **argv);
 static void shell_command_sd(char *command);
 static void shell_command_sd_ls(char *command);
 static void shell_command_sd_stat(char *command);
 static void shell_command_sd_cat(char *command);
-static void shell_command_wifi_scan(void);
 static bool shell_text_equals_ignore_case(const char *left, const char *right);
 static void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size);
 static void shell_sd_print_usage(void);
@@ -323,16 +307,8 @@ static bool shell_execute_command_core(char *command);
 static void shell_command_sd_info(void);
 static void shell_execute_command(char *command);
 static void shell_command_task(void *arg);
-static void shell_wifi_runtime_init(void);
-static esp_err_t shell_wifi_runtime_shutdown(void);
-static void shell_wifi_connect_task(void *arg);
-static void shell_wifi_background_task(void *arg);
 static bool shell_wifi_defaults_available(void);
 static void shell_wifi_set_detail(const char *format, ...);
-static esp_err_t shell_wifi_connect_with_credentials(const char *ssid, const char *password);
-static bool shell_wifi_begin_background_request(const shell_wifi_background_request_t *template_request);
-static esp_err_t shell_wifi_run_diagnostic(const char *origin);
-static void shell_wifi_request_boot_restore(void);
 #if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
 static esp_err_t shell_bt_ensure_ready(void);
 static void shell_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
@@ -1341,6 +1317,31 @@ void c6ota_host_record_info(const char *message)
     shell_record_infof("c6ota", "%s", message != NULL ? message : "");
 }
 
+void usb_host_transcript_append_text(const char *text)
+{
+    shell_transcript_append_text(text);
+}
+
+void usb_host_schedule_transcript_append_text(const char *text)
+{
+    shell_schedule_transcript_appendf("%s", text);
+}
+
+void usb_host_record_error(esp_err_t error, const char *message)
+{
+    shell_record_errorf("usb", error, "%s", message != NULL ? message : "");
+}
+
+void usb_host_record_warning(const char *message)
+{
+    shell_record_warningf("usb", "%s", message != NULL ? message : "");
+}
+
+void usb_host_record_info(const char *message)
+{
+    shell_record_infof("usb", "%s", message != NULL ? message : "");
+}
+
 // AI: c6ota fully refactored to separate module with identical public API and 100% same behavior
 // AI: API preserved for shell parser - only moved code, no functional change
 // AI: SDK.md and API.md created for modular OTA usage
@@ -1678,7 +1679,6 @@ static void shell_uart_console_submit_command(const char *command)
 
     snprintf(command_copy, sizeof(command_copy), "%s", command);
     shell_format_command_for_transcript(command_copy, transcript_command, sizeof(transcript_command));
-
     if (s_shell_command_lock != NULL) {
         (void)xSemaphoreTake(s_shell_command_lock, portMAX_DELAY);
     }
@@ -1741,7 +1741,6 @@ static void shell_uart_console_task(void *arg)
             continue;
         }
 
-        // AI: keep the UART monitor interactive by routing serial-entered commands through the same shell parser, history policy, and LVGL-safe execution path used by the on-screen shell.
         shell_uart_console_submit_command(trimmed);
         prompt_visible = false;
     }
@@ -1915,7 +1914,8 @@ static esp_err_t shell_wifi_register_event_handlers(void)
     return ESP_OK;
 }
 
-static esp_err_t shell_wifi_connect_with_credentials(const char *ssid, const char *password)
+// Retained to preserve the earlier shell-local Wi-Fi runtime path while command dispatch now runs through networking_handle_wifi_command().
+static esp_err_t __attribute__((unused)) shell_wifi_connect_with_credentials(const char *ssid, const char *password)
 {
     wifi_config_t wifi_config = { 0 };
     esp_err_t error;
@@ -1974,193 +1974,7 @@ static esp_err_t shell_wifi_connect_with_credentials(const char *ssid, const cha
     return ESP_OK;
 }
 
-static esp_err_t shell_wifi_runtime_shutdown(void)
-{
-#if SHELL_WIFI_RUNTIME_ENABLED
-    esp_err_t error;
-
-    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-        return ESP_OK;
-    }
-
-    error = esp_wifi_disconnect();
-    if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_CONNECT && error != ESP_ERR_WIFI_NOT_INIT &&
-        error != ESP_ERR_WIFI_NOT_STARTED) {
-        return error;
-    }
-
-    error = esp_wifi_stop();
-    if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_INIT && error != ESP_ERR_WIFI_NOT_STARTED) {
-        return error;
-    }
-
-    if (s_wifi_event_any_id != NULL) {
-        (void)esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_event_any_id);
-        s_wifi_event_any_id = NULL;
-    }
-    if (s_wifi_got_ip_event != NULL) {
-        (void)esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_wifi_got_ip_event);
-        s_wifi_got_ip_event = NULL;
-    }
-
-    error = esp_wifi_deinit();
-    if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_INIT) {
-        return error;
-    }
-
-    if (s_wifi_sta_netif != NULL) {
-        esp_netif_destroy_default_wifi(s_wifi_sta_netif);
-        s_wifi_sta_netif = NULL;
-    }
-
-    s_wifi_state = SHELL_WIFI_STATE_NOT_ATTEMPTED;
-    s_wifi_last_error = ESP_OK;
-    s_wifi_connected = false;
-    s_wifi_connect_requested = false;
-    s_wifi_last_detail[0] = '\0';
-    return ESP_OK;
-#else
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
-}
-
-static bool shell_wifi_begin_connect_request(const char *ssid, const char *password, bool use_defaults)
-{
-#if SHELL_WIFI_RUNTIME_ENABLED
-    shell_wifi_connect_request_t *request;
-
-    if (s_wifi_init_task_in_progress || s_wifi_state == SHELL_WIFI_STATE_STARTING) {
-        shell_transcript_append_text("wifi: initialization is already in progress\n");
-        return false;
-    }
-
-    request = (shell_wifi_connect_request_t *)calloc(1, sizeof(*request));
-    if (request == NULL) {
-        shell_transcript_append_text("wifi: failed to allocate connect request\n");
-        return false;
-    }
-
-    request->use_defaults = use_defaults;
-    if (!use_defaults) {
-        snprintf(request->ssid, sizeof(request->ssid), "%s", ssid);
-        snprintf(request->password, sizeof(request->password), "%s", password != NULL ? password : "");
-    }
-
-    s_wifi_init_task_in_progress = true;
-    s_wifi_state = SHELL_WIFI_STATE_STARTING;
-    s_wifi_last_error = ESP_OK;
-    s_wifi_connected = false;
-    s_wifi_connect_requested = false;
-    shell_schedule_transcript_appendf("[wifi] queued %s connection request\n",
-                                      use_defaults ? "default profile" : request->ssid);
-
-    if (xTaskCreate(shell_wifi_connect_task,
-                    "wifi_connect",
-                    SHELL_WIFI_INIT_TASK_STACK_BYTES,
-                    request,
-                    tskIDLE_PRIORITY + 1,
-                    NULL) != pdPASS) {
-        s_wifi_init_task_in_progress = false;
-        s_wifi_state = SHELL_WIFI_STATE_NOT_ATTEMPTED;
-        free(request);
-        shell_transcript_append_text("wifi: failed to start background init task\n");
-        return false;
-    }
-
-    return true;
-#else
-    (void)ssid;
-    (void)password;
-    (void)use_defaults;
-    return false;
-#endif
-}
-
-static bool shell_wifi_begin_background_request(const shell_wifi_background_request_t *template_request)
-{
-#if SHELL_WIFI_RUNTIME_ENABLED
-    shell_wifi_background_request_t *request;
-
-    if (template_request == NULL) {
-        return false;
-    }
-
-    if (s_wifi_init_task_in_progress || s_wifi_state == SHELL_WIFI_STATE_STARTING) {
-        shell_transcript_append_text("wifi: background Wi-Fi work is already in progress\n");
-        return false;
-    }
-
-    request = (shell_wifi_background_request_t *)calloc(1, sizeof(*request));
-    if (request == NULL) {
-        shell_transcript_append_text("wifi: failed to allocate background Wi-Fi request\n");
-        return false;
-    }
-
-    *request = *template_request;
-    s_wifi_init_task_in_progress = true;
-
-    if (request->start_runtime) {
-        s_wifi_state = SHELL_WIFI_STATE_STARTING;
-        s_wifi_last_error = ESP_OK;
-        s_wifi_connected = false;
-        s_wifi_connect_requested = false;
-    }
-
-    shell_schedule_transcript_appendf("[wifi] queued background %s workflow\n",
-                                      request->origin[0] != '\0' ? request->origin : "runtime");
-
-    if (xTaskCreate(shell_wifi_background_task,
-                    "wifi_bg",
-                    SHELL_WIFI_INIT_TASK_STACK_BYTES,
-                    request,
-                    tskIDLE_PRIORITY + 1,
-                    NULL) != pdPASS) {
-        s_wifi_init_task_in_progress = false;
-        if (request->start_runtime) {
-            s_wifi_state = SHELL_WIFI_STATE_NOT_ATTEMPTED;
-        }
-        free(request);
-        shell_transcript_append_text("wifi: failed to start background Wi-Fi task\n");
-        return false;
-    }
-
-    return true;
-#else
-    (void)template_request;
-    return false;
-#endif
-}
-
-static void shell_wifi_connect_task(void *arg)
-{
-#if SHELL_WIFI_RUNTIME_ENABLED
-    shell_wifi_connect_request_t *request = (shell_wifi_connect_request_t *)arg;
-
-    shell_wifi_runtime_init();
-    if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
-        if (request->use_defaults) {
-            if (shell_wifi_defaults_available()) {
-                (void)shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
-                                                          CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
-            } else {
-                s_wifi_state = SHELL_WIFI_STATE_FAILED;
-                s_wifi_last_error = ESP_ERR_INVALID_STATE;
-                shell_transcript_append_text("wifi: sdkconfig default credentials are not configured\n");
-            }
-        } else {
-            (void)shell_wifi_connect_with_credentials(request->ssid, request->password);
-        }
-    }
-
-    s_wifi_init_task_in_progress = false;
-    free(request);
-#else
-    (void)arg;
-#endif
-    vTaskDelete(NULL);
-}
-
-static esp_err_t shell_wifi_run_diagnostic(const char *origin)
+static esp_err_t __attribute__((unused)) shell_wifi_run_diagnostic(const char *origin)
 {
 #if SHELL_WIFI_RUNTIME_ENABLED
     esp_err_t error;
@@ -2253,234 +2067,13 @@ static esp_err_t shell_wifi_run_diagnostic(const char *origin)
 #endif
 }
 
-static void shell_wifi_background_task(void *arg)
-{
-#if SHELL_WIFI_RUNTIME_ENABLED
-    shell_wifi_background_request_t *request = (shell_wifi_background_request_t *)arg;
-
-    if (request->start_runtime) {
-        shell_wifi_runtime_init();
-    }
-
-    if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
-        if (request->connect_with_defaults) {
-            if (shell_wifi_defaults_available()) {
-                esp_err_t connect_error = shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
-                                                                              CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
-                if (connect_error != ESP_OK) {
-                    shell_schedule_transcript_appendf("[wifi] %s default connect failed: %s (0x%x)\n",
-                                                      request->origin,
-                                                      esp_err_to_name(connect_error),
-                                                      (unsigned int)connect_error);
-                    shell_record_warningf("wifi", "%s default connect failed", request->origin);
-                }
-            } else {
-                shell_schedule_transcript_appendf("[wifi] %s: sdkconfig default credentials are not configured\n",
-                                                  request->origin);
-                shell_record_warningf("wifi",
-                                      "%s requested default connect without configured credentials",
-                                      request->origin);
-            }
-        } else if (request->ssid[0] != '\0') {
-            esp_err_t connect_error = shell_wifi_connect_with_credentials(request->ssid, request->password);
-            if (connect_error != ESP_OK) {
-                shell_schedule_transcript_appendf("[wifi] %s connect failed for %s: %s (0x%x)\n",
-                                                  request->origin,
-                                                  request->ssid,
-                                                  esp_err_to_name(connect_error),
-                                                  (unsigned int)connect_error);
-                shell_record_warningf("wifi", "%s connect failed for %s", request->origin, request->ssid);
-            }
-        }
-
-        if (request->run_diagnostic) {
-            esp_err_t diagnostic_error = shell_wifi_run_diagnostic(request->origin);
-            if (diagnostic_error != ESP_OK && diagnostic_error != ESP_ERR_INVALID_STATE) {
-                shell_schedule_transcript_appendf("[wifi] %s diagnostic finished with %s (0x%x)\n",
-                                                  request->origin,
-                                                  esp_err_to_name(diagnostic_error),
-                                                  (unsigned int)diagnostic_error);
-            }
-        }
-    } else {
-        shell_schedule_transcript_appendf("[wifi] %s could not start the Wi-Fi runtime cleanly\n",
-                                          request->origin[0] != '\0' ? request->origin : "runtime");
-        shell_record_warningf("wifi",
-                      "%s failed to start Wi-Fi runtime",
-                      request->origin[0] != '\0' ? request->origin : "runtime");
-    }
-
-    s_wifi_init_task_in_progress = false;
-    free(request);
-#else
-    (void)arg;
-#endif
-    vTaskDelete(NULL);
-}
-
-static void shell_wifi_request_boot_restore(void)
-{
-#if SHELL_WIFI_RUNTIME_ENABLED
-    shell_wifi_background_request_t request = {
-        .start_runtime = true,
-        .connect_with_defaults = shell_wifi_defaults_available(),
-        .run_diagnostic = true,
-    };
-
-    snprintf(request.origin, sizeof(request.origin), "%s", "boot");
-    // AI: keep the proven boot-time restore flow intact, including the transcript-facing diagnostic pass used on the working hosted baseline.
-    if (!shell_wifi_begin_background_request(&request)) {
-        shell_transcript_append_text("wifi: boot-time Wi-Fi startup request could not be queued\n");
-    }
-#endif
-}
-
-static void shell_command_wifi_help(void)
-{
-    shell_transcript_append_text("Wi-Fi commands:\n");
-    shell_transcript_append_text("  wifi status                 Show Wi-Fi runtime state and IP info\n");
-    shell_transcript_append_text("  wifi scan                   Scan for nearby SSIDs after Wi-Fi starts\n");
-    shell_transcript_append_text("  wifi diag                   Run a diagnostic status + scan report in the transcript\n");
-    shell_transcript_append_text("  wifi connect                Connect using sdkconfig default credentials\n");
-    shell_transcript_append_text("  wifi connect <ssid> <pass>  Connect using runtime credentials\n");
-    shell_transcript_append_text("  wifi disconnect             Disconnect the current station session\n");
-    shell_transcript_append_text("  Wi-Fi now starts in the background on normal boot and after successful c6ota restore\n");
-    shell_transcript_append_text("  wifi connect still probes ESP-Hosted in a background task so the shell remains responsive\n");
-    shell_transcript_append_text("  wifi connect passwords are masked in transcript history and not stored in command recall\n");
-}
-
-static void shell_command_wifi_scan(void)
-{
-#if SHELL_WIFI_RUNTIME_ENABLED
-    esp_err_t error;
-    wifi_ap_record_t records[16];
-    uint16_t record_count = (uint16_t)(sizeof(records) / sizeof(records[0]));
-    uint16_t index;
-
-    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-        shell_transcript_append_text("wifi: scan requires the Wi-Fi runtime to be started first\n");
-        shell_record_warningf("wifi", "Scan rejected because Wi-Fi is not started");
-        return;
-    }
-
-    shell_transcript_append_text("wifi: scanning for access points...\n");
-    error = esp_wifi_scan_start(NULL, true);
-    if (error != ESP_OK) {
-        shell_record_errorf("wifi", error, "WiFi scan failed - check sdkconfig or hosted link");
-        return;
-    }
-
-    error = esp_wifi_scan_get_ap_records(&record_count, records);
-    if (error != ESP_OK) {
-        shell_record_errorf("wifi", error, "Failed to read WiFi scan results");
-        return;
-    }
-
-    if (record_count == 0) {
-        shell_transcript_append_text("wifi.scan: no access points found\n");
-        shell_record_infof("wifi", "Scan completed with no visible APs");
-        return;
-    }
-
-    for (index = 0; index < record_count; index++) {
-        shell_transcript_appendf("wifi.scan[%u]: ssid=%s rssi=%d auth=%u channel=%u\n",
-                                 (unsigned int)index,
-                                 records[index].ssid,
-                                 records[index].rssi,
-                                 (unsigned int)records[index].authmode,
-                                 (unsigned int)records[index].primary);
-    }
-    shell_record_infof("wifi", "Scan completed with %u APs", (unsigned int)record_count);
-#endif
-}
-
-static void shell_command_wifi_status(void)
-{
-    esp_err_t error;
-    wifi_ap_record_t ap_info;
-    char ap_ssid[SHELL_WIFI_SSID_BYTES];
-    esp_netif_ip_info_t ip_info;
-
-    shell_transcript_appendf("wifi.state: %s\n", shell_wifi_state_string());
-    shell_transcript_appendf("wifi.default_profile: %s\n", shell_wifi_defaults_available() ? "configured" : "missing");
-    if (shell_wifi_defaults_available()) {
-        shell_transcript_appendf("wifi.default_ssid: %s\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
-    }
-    if (s_wifi_last_detail[0] != '\0') {
-        shell_transcript_appendf("wifi.note: %s\n", s_wifi_last_detail);
-    }
-
-    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-        if (s_wifi_state == SHELL_WIFI_STATE_FAILED) {
-            shell_transcript_appendf("wifi.last_error: %s (0x%x)\n",
-                                     esp_err_to_name(s_wifi_last_error),
-                                     (unsigned int)s_wifi_last_error);
-        }
-        if (s_wifi_state == SHELL_WIFI_STATE_STARTING) {
-            shell_transcript_append_text("wifi.progress: ESP-Hosted probe is still running\n");
-        }
-        return;
-    }
-
-    shell_transcript_appendf("wifi.connect_requested: %s\n", s_wifi_connect_requested ? "yes" : "no");
-    shell_transcript_appendf("wifi.connected: %s\n", s_wifi_connected ? "yes" : "no");
-    if (s_wifi_target_ssid[0] != '\0') {
-        shell_transcript_appendf("wifi.target_ssid: %s\n", s_wifi_target_ssid);
-    }
-
-    error = esp_wifi_sta_get_ap_info(&ap_info);
-    if (error == ESP_OK) {
-        snprintf(ap_ssid, sizeof(ap_ssid), "%s", (const char *)ap_info.ssid);
-        shell_transcript_appendf("wifi.ap: %s, rssi=%d, channel=%u\n",
-                                 ap_ssid,
-                                 ap_info.rssi,
-                                 (unsigned int)ap_info.primary);
-    } else if (error != ESP_ERR_WIFI_NOT_CONNECT) {
-        shell_transcript_appendf("wifi.ap_info_error: %s (0x%x)\n",
-                                 esp_err_to_name(error),
-                                 (unsigned int)error);
-    }
-
-    if (s_wifi_sta_netif != NULL && esp_netif_get_ip_info(s_wifi_sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
-        shell_transcript_appendf("wifi.ip: " IPSTR "\n", IP2STR(&ip_info.ip));
-    }
-}
-
-static void shell_command_wifi_disconnect(void)
-{
-    esp_err_t error;
-
-    if (s_wifi_state == SHELL_WIFI_STATE_STARTING) {
-        shell_transcript_append_text("wifi: initialization is in progress\n");
-        return;
-    }
-
-    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-        shell_transcript_appendf("wifi: stack is not ready (%s)\n", shell_wifi_state_string());
-        return;
-    }
-
-    s_wifi_connect_requested = false;
-    s_wifi_connected = false;
-    shell_wifi_append_step("esp_wifi_disconnect()");
-    error = esp_wifi_disconnect();
-    if (error == ESP_OK || error == ESP_ERR_WIFI_NOT_CONNECT) {
-        shell_transcript_append_text("wifi: disconnect requested\n");
-        return;
-    }
-
-    shell_transcript_appendf("wifi: disconnect failed with %s (0x%x)\n",
-                             esp_err_to_name(error),
-                             (unsigned int)error);
-}
-
 static void shell_execute_wifi_command(char *command)
 {
     networking_handle_wifi_command(command);
 }
 #endif
 
-static void shell_wifi_runtime_init(void)
+static void __attribute__((unused)) shell_wifi_runtime_init(void)
 {
 #if SHELL_WIFI_RUNTIME_ENABLED
     esp_err_t error;
@@ -2750,6 +2343,7 @@ static void shell_command_help(void)
     shell_transcript_append_text("  help    Show available commands\n");
     shell_transcript_append_text("  cls     Alias of clear\n");
     shell_transcript_append_text("  c6ota <sd:/file.bin|http[s]://url|default> Run ESP-Hosted SDIO OTA from SD, HTTP, or SD root default\n");
+    shell_transcript_append_text("  usb status | ls [path] | keyboard <on|off> | mouse <on|off>\n");
     shell_transcript_append_text("  brightness <0-100> Set the LCD backlight brightness\n");
     shell_transcript_append_text("  rotate <0|90|180|270> Rotate the display and remap GT911 touch\n");
     shell_transcript_append_text("  battery [sleep <on|off|status>] Show battery voltage/percent and light-sleep state\n");
@@ -3400,26 +2994,6 @@ static void shell_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *
     }
 }
 #endif
-
-static void shell_execute_bt_command(int argc, char **argv)
-{
-    char command_buffer[128] = "bt";
-    int index;
-
-    for (index = 1; index < argc; index++) {
-        size_t used = strlen(command_buffer);
-
-        if (used + 1 >= sizeof(command_buffer)) {
-            break;
-        }
-
-        command_buffer[used++] = ' ';
-        command_buffer[used] = '\0';
-        strncat(command_buffer, argv[index], sizeof(command_buffer) - used - 1);
-    }
-
-    bluetooth_handle_command(command_buffer);
-}
 
 static void shell_execute_rgb_command(int argc, char **argv)
 {
@@ -5011,6 +4585,11 @@ static bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "usb")) {
+        usb_handle_command(command_copy);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "wifi")) {
         shell_execute_wifi_command(command_copy);
         return true;
@@ -5282,6 +4861,7 @@ void app_main(void)
     shell_transcript_append_text("UART monitor accepts the same shell commands as the on-screen prompt.\n");
     shell_transcript_append_text("Wi-Fi starts in the background on boot; wifi diag is also available for an extra status + scan report.\n");
     shell_transcript_append_text("Bluetooth commands are routed through the ESP32-C6 hosted NimBLE module.\n");
+    shell_transcript_append_text("USB host commands are available as usb status, usb ls, usb keyboard, and usb mouse.\n");
     shell_transcript_append_text("Enter runs commands from the prompt line; history stays locked above.\n");
     c6ota_init();
     c6ota_register_progress_callback(shell_c6ota_progress_callback);
@@ -5292,6 +4872,7 @@ void app_main(void)
         .record_warning = shell_networking_record_warning,
         .record_info = shell_networking_record_info,
     });
+    usb_init();
 
     // AI: drive command parsing and shell state updates from the dedicated input line events so OTA confirmation stays in the same shell flow.
 }

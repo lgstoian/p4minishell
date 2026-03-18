@@ -26,6 +26,7 @@ Current hardware gaps still intentionally blocked in the checked-in firmware:
 Hosted connectivity status in the current baseline:
 - Wi-Fi has been moved into `components/networking/networking.c` while preserving the working boot, command, and OTA restore behavior
 - Bluetooth now has a real hosted NimBLE baseline in `components/networking/bluetooth.c` for `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>`
+- USB now has a dedicated `components/usb` baseline for USB MSC storage at `/usb0` plus HID keyboard or mouse attach and debug echo through the `usb` command family
 - `c6ota` has now been fully refactored into `components/c6ota` with the same shell-visible behavior and a documented public API in `API.md` and `SDK.md`
 - Future Bluetooth work should build on the hosted NimBLE module rather than reviving the older Bluedroid experiment
 
@@ -92,6 +93,7 @@ To support third-party apps written in C, the project needs a minimal stable run
 ### Recent completions
 - Done: `c6ota` refactor into `components/c6ota` with stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` documentation
 - Done: initial `API.md` and `SDK.md` published for the modular OTA component
+- Done: USB host refactor into `components/usb` with documented `usb_init`, `usb_handle_command`, `usb_status`, `usb_msc_mount`, `usb_msc_ls`, and HID echo controls
 
 ## Suggested delivery phases
 
