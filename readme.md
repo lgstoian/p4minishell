@@ -4,7 +4,7 @@ P4MiniShell is an embedded, touch-driven command shell for the ESP32-P4 host and
 The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-compatible runtime. What it already provides is the embedded foundation for that direction: a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi on the C6, and a real OTA maintenance path for the co-processor.
 
 ## What this project is
-- A single-binary ESP32-P4 shell application with the shell UI in [main/main.c](main/main.c) and hosted connectivity extracted into `components/networking`
+- A single-binary ESP32-P4 shell application with the shell UI in [main/main.c](main/main.c), hosted connectivity in `components/networking`, and ESP32-C6 OTA maintenance isolated in `components/c6ota`
 - A DOS-inspired command environment for SD-card workflows on an embedded touchscreen device
 - A host-side control surface for an ESP32-C6 connected over ESP-Hosted SDIO
 - A base for future native application loading, shell SDK work, and broader MS-DOS-style command compatibility
@@ -25,6 +25,8 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 
 ## Planning and licensing
 - Implementation roadmap: see [roadmap.md](roadmap.md)
+- OTA module API: see [API.md](API.md)
+- OTA integration guide: see [SDK.md](SDK.md)
 - Project and third-party license summary: see [licence.md](licence.md)
 
 ## Current behavior
@@ -50,6 +52,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Hosted compatibility guard: normal Wi-Fi startup now reads the ESP32-C6 hosted firmware version right after the SDIO link comes up and refuses to continue unless the co-processor matches the host `2.12.x` ESP-Hosted line, which prevents the earlier SDIO queue drops and RPC response errors seen with mismatched firmware
 - Wi-Fi status: enabled in the checked-in sdkconfig through ESP-Hosted plus `esp_wifi_remote`, with `wifi scan` available once the runtime has started
 - C6 firmware update path: `c6ota <sd:/file.bin|http[s]://url|default>` downloads or opens a valid ESP32-C6 app image, then performs the Wi-Fi-off ESP-Hosted SDIO OTA flow over the existing hosted link without tearing the SDIO transport down first
+- C6 OTA module layout: `main/main.c` now delegates the shell-facing `c6ota` command to `components/c6ota/c6ota.c`, which owns confirmation, source parsing, Wi-Fi stop or restore, live progress, the hosted OTA RPC sequence, and the stable OTA API documented in `API.md` and `SDK.md`
 - Hosted Wi-Fi restores automatically after normal boot and after successful `c6ota`, while the shell stays usable because the hosted probe and reconnect run in a background task with the normal transcript-facing diagnostic pass
 - `wifi diag` emits transcript-facing status plus scan output, and `wifi connect` still probes ESP-Hosted in a background task so a missing C6 fails visibly without blocking the shell
 - Wi-Fi command reliability: `wifi status | scan | diag | connect | disconnect` now share the fixed family-dispatch path, so post-boot shell control works again after the parser regression that had been dropping subcommands at runtime
@@ -61,8 +64,10 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Hosted reset policy: this project resets the ESP32-C6 on every host boot before the SDIO Wi-Fi bring-up path continues
 - Co-processor firmware upgrade path: `coprocessor/esp32c6_slave` remains the repo-local ESP32-C6 firmware project, and the shell host path stays on the same `2.12.x` ESP-Hosted release line used by that project
 - Networking module layout: `components/networking/networking.c` owns hosted Wi-Fi startup, state, events, scans, diagnostics, and OTA restore hooks, while `components/networking/bluetooth.c` owns hosted NimBLE controller bring-up, scan, and advertising control
+- OTA module layout: `components/c6ota/c6ota.c` owns the validated ESP32-C6 OTA path behind the preserved shell command surface, while `components/c6ota/c6ota.h` exposes the stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` API
 - Monitor usage: after flashing, `idf.py monitor` can now be used as a real shell endpoint over the configured console path, not only as a log viewer
 - Command reference: see `command.md` for the current shell command surface and usage notes
+- OTA developer notes: see `API.md` and `SDK.md` for module-level integration details
 - Build footprint: unused LVGL examples are disabled in sdkconfig so the Wi-Fi-enabled shell still links on the esp32p4 baseline
 - Wi-Fi profile: sdkconfig is trimmed for station use only, with WPA2-style credential flow and Wi-Fi IRAM optimizations disabled to stay within the esp32p4 image budget
 - Toolchain profile: sdkconfig now uses newlib nano formatting and warn-level compile-time logging to keep the shell build inside the esp32p4 image window

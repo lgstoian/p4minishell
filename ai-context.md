@@ -12,6 +12,7 @@ P4MiniShell rules – FIXED 2026:
 - Wi-Fi startup must follow sdkconfig only, auto-start cleanly in a background task on normal boot, restore after successful `c6ota`, and support shell commands for `wifi status`, `wifi scan`, `wifi diag`, `wifi connect`, and `wifi disconnect`; boot-time and post-`c6ota` restore include the transcript-facing diagnostic pass used by the working project baseline
 - c6update permanently removed – no C6 flashing code
 - ESP32-C6 maintenance now uses only `c6ota <sd:/file.bin|http[s]://url|default>` for ESP-Hosted SDIO OTA after the exact `WARNING: This will reboot the C6. Type YES to continue` confirmation
+- `c6ota` now lives in `components/c6ota` with `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback`; keep the public shell API and transcript-visible behavior unchanged when working on OTA
 - When Wi-Fi is enabled, initialize NVS before esp_wifi_init() and keep the standard erase-and-retry recovery path for incompatible NVS metadata
 - On esp32p4 host Wi-Fi builds, use ESP-Hosted plus esp_wifi_remote and connect to the ESP32-C6 co-processor over SDIO before esp_wifi_init()
 - Current hosted transport assumption in this workspace: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 with reset GPIO54; if the link does not come up, fail explicitly and report the hosted pin map instead of the older extconn hardware note

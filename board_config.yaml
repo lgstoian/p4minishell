@@ -122,6 +122,18 @@ board:
       bluetooth_module: components/networking/bluetooth.c
       bluetooth_transport: esp_hosted_nimble_vhci
       bluetooth_lifecycle: stateful_controller_reuse
+    c6ota_component:
+      path: components/c6ota
+      module: components/c6ota/c6ota.c
+      header: components/c6ota/c6ota.h
+      public_api:
+        - c6ota_init
+        - c6ota_perform
+        - c6ota_register_progress_callback
+      integration_docs:
+        - API.md
+        - SDK.md
+      status: C6 OTA modularized with stable API
     built_in_commands:
       - help
       - c6ota
@@ -274,6 +286,7 @@ board:
       - release_sd_power_handle_on_mount_failure_and_unmount
     c6_ota_path:
       command: "c6ota <sd:/file.bin|http[s]://url|default>"
+      module_status: C6 OTA modularized with stable API
       accepted_path_prefixes:
         - "sd:/"
         - "/sdcard/"

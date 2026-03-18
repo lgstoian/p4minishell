@@ -79,6 +79,7 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - `debug`: Show recent shell/runtime status entries, free heap, runtime warning count, and Wi-Fi state. Healthy shell UI startup is recorded here instead of as a boot warning.
 
 ## ESP32-C6 OTA
+- Implementation: the shell parser now delegates `c6ota` to `components/c6ota/c6ota.c`, with the stable module entry points documented in `API.md` and `SDK.md`.
 - `c6ota sd:/path/to/firmware.bin`: Stream a valid ESP-IDF ESP32-C6 application image from SD over the existing ESP-Hosted SDIO link.
 - `c6ota http://host/path/to/firmware.bin`: Download a valid ESP-IDF ESP32-C6 application image over HTTP or HTTPS, then stop Wi-Fi and stream it over a Wi-Fi-off ESP-Hosted SDIO OTA session without tearing down the hosted transport first.
 - `c6ota default`: Load `esp32c6_hosted_slave.bin` or `network_adapter.bin` from the SD card root automatically.
@@ -95,6 +96,7 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - `c6ota` avoids `esp_hosted_deinit()` before transfer because the current ESP-Hosted SDIO teardown path can assert on this esp32p4 host configuration.
 - Wi-Fi starts in a background task on normal boot, runs the same restore path after successful `c6ota`, and keeps the transcript diagnostic pass during those restore flows while still exposing `wifi diag` for an extra on-demand report.
 - Hosted Wi-Fi and hosted Bluetooth now live under `components/networking`, so the shell parser delegates those command families instead of owning the runtime transport logic directly in `main/main.c`.
+- Hosted OTA now lives under `components/c6ota`, so `main/main.c` only provides transcript and parser orchestration while the OTA module keeps the proven update flow intact.
 - The `wifi`, `sd`, and `c6ota` command families now preserve the full unsplit command line before subcommand parsing, which fixes the regression where family commands could lose their subcommand text after the generic parser tokenized the first word in place.
 - `idf.py monitor` is now interactive on the configured console path because the firmware consumes stdin and mirrors shell transcript output to stdout instead of leaving the serial path as logs only.
 - `rgb` and `camera` stay intentionally explicit about unsupported states: the JC1060 reference repo does not expose authoritative RGB LED wiring, and this workspace still lacks the local camera stack needed by the JC1060 camera examples.

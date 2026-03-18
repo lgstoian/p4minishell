@@ -1,3 +1,8 @@
+## [0.1.22] - 2026-03-18
+- c6ota refactored to separate module with identical API and behavior
+- Moved the full ESP32-C6 OTA flow into `components/c6ota` while preserving the existing shell-visible confirmation flow, transcript output, source handling, hosted OTA RPC sequence, Wi-Fi stop or restore behavior, and success or failure handling
+- Added `API.md` and `SDK.md` to document the stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` integration surface for the modular OTA component
+
 ## [0.1.21] - 2026-03-18
 - Refactored the hosted connectivity stack out of the shell monolith into a new `components/networking` component so Wi-Fi runtime state, hosted startup, OTA restore hooks, and Bluetooth handling no longer live directly in `main/main.c`
 - Preserved the existing hosted Wi-Fi behavior and transcript-visible command flow while rewiring `wifi status | scan | diag | connect | disconnect`, boot restore, and post-`c6ota` recovery through the new networking module APIs

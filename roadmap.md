@@ -26,6 +26,7 @@ Current hardware gaps still intentionally blocked in the checked-in firmware:
 Hosted connectivity status in the current baseline:
 - Wi-Fi has been moved into `components/networking/networking.c` while preserving the working boot, command, and OTA restore behavior
 - Bluetooth now has a real hosted NimBLE baseline in `components/networking/bluetooth.c` for `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>`
+- `c6ota` has now been fully refactored into `components/c6ota` with the same shell-visible behavior and a documented public API in `API.md` and `SDK.md`
 - Future Bluetooth work should build on the hosted NimBLE module rather than reviving the older Bluedroid experiment
 
 ## Main gaps to full feature parity
@@ -87,6 +88,10 @@ To support third-party apps written in C, the project needs a minimal stable run
 - Build templates for app targets
 - Packaging rules for SD deployment
 - A documented ABI or loader manifest format
+
+### Recent completions
+- Done: `c6ota` refactor into `components/c6ota` with stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` documentation
+- Done: initial `API.md` and `SDK.md` published for the modular OTA component
 
 ## Suggested delivery phases
 

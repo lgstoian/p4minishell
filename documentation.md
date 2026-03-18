@@ -5,13 +5,21 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Hosted connectivity no longer lives directly in the shell monolith.
 - `components/networking/networking.c` now owns hosted Wi-Fi startup, event handling, command execution, status reporting, and OTA restore or wait hooks.
 - `components/networking/bluetooth.c` now owns hosted Bluetooth bring-up through NimBLE VHCI on the ESP32-C6, including scan and advertising control.
+- `components/c6ota/c6ota.c` now owns the full ESP32-C6 OTA path, including source parsing, confirmation tracking, background transfer, Wi-Fi stop or restore, progress reporting, and the hosted OTA RPC sequence.
 - The Bluetooth module keeps hosted controller state across shell commands so scan and advertising requests reuse the active host stack instead of reissuing hosted controller init or enable calls.
-- `main/main.c` remains the shell UI and orchestration layer, and passes transcript plus logging callbacks into the networking component so user-visible Wi-Fi behavior stays aligned with the established shell output.
+- `main/main.c` remains the shell UI and orchestration layer, passes transcript plus logging callbacks into the networking component, and now delegates `c6ota` to the separate OTA module through `c6ota_perform()` without changing shell-visible behavior.
 
 ## Project documents
 - `readme.md`: user-facing introduction, current behavior, and build notes
+- `API.md`: stable public API for the modular `c6ota` component
+- `SDK.md`: integration notes and usage examples for the modular `c6ota` component
 - `roadmap.md`: parity plan for the DOS-style shell, native app runtime, and future SDK work
 - `licence.md`: proprietary notice for project-authored code plus third-party license summary
+
+## OTA module API
+- `c6ota_init()`: reset and prepare the OTA module once at boot.
+- `c6ota_perform(const char *source)`: accept `sd:/...`, `/sdcard/...`, `http[s]://...`, or `default` and preserve the established shell confirmation and OTA behavior.
+- `c6ota_register_progress_callback(void (*cb)(int percent, const char *msg))`: let the shell transcript consume module-generated progress and status messages without moving OTA logic back into `main/main.c`.
 
 ## Hardware reuse policy
 - Display init remains on the existing BSP path through bsp_display_start_with_config()
@@ -36,6 +44,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - help: list available commands
 - cls: alias of `clear`
 - c6ota <sd:/file.bin|http[s]://url|default>: perform the real ESP-Hosted SDIO OTA update against the ESP32-C6, using a staged HTTP download or SD/default image source before a Wi-Fi-off transport-only transfer after the exact YES confirmation prompt
+- The shell parser now routes `c6ota` through `c6ota_perform()` in `components/c6ota`, while `YES` or `NO` confirmation replies stay in the same input flow through the module-owned pending-confirmation state.
 - cd / chdir [path]: show or change the RAM-only current SD working directory used by DOS-style file commands
 - dir [path]: list files and directories from the current SD working directory using the guarded SD access path
 - copy, move, del / erase, ren / rename, md / mkdir, rd / rmdir: COMMAND.COM-style SD file management commands using long filenames and UTF-8 paths
@@ -94,6 +103,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - The OTA worker auto-starts Wi-Fi from sdkconfig defaults when possible for `http://` or `https://` sources, otherwise it requires an existing Wi-Fi session before opening the HTTP download stage
 - After the image is available locally, the OTA worker stops Wi-Fi with `esp_wifi_stop()` plus `esp_wifi_deinit()`, keeps the existing ESP-Hosted transport alive, reconnects the SDIO link in Wi-Fi-off mode, and then streams the payload through `esp_hosted_slave_ota_begin/write/end`
 - The OTA worker accepts `sd:/...`, `/sdcard/...`, or `default`, validates the incoming ESP-IDF image header for magic `0xE9` and ESP32-C6 chip ID `0x000D`, resolves `default` from the SD root using the same LFN-safe path handling, streams the payload in 1500-byte chunks, reports progress every 5% as `C6 OTA: XX% (YYYY KB / ZZZZ KB)`, and requests `esp_hosted_slave_ota_activate()` when the running C6 firmware exposes that API
+- The OTA component API is now documented separately in `API.md` and `SDK.md`, but the runtime flow and transcript-visible behavior stay identical to the pre-refactor shell implementation.
 - Factory first-upgrade note: ESP32-C6 firmware `v2.3.0` still requires the one-time standalone tool from `https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota` before shell-driven OTA is used
 - Wi-Fi startup now follows sdkconfig at runtime and the checked-in workspace enables the host Wi-Fi path for the esp32p4 board baseline
 - Wi-Fi runtime now initializes NVS first and falls back to erase-and-retry when the stored NVS layout is incompatible, because esp_wifi_init() depends on NVS being ready on this configuration
@@ -112,6 +122,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Serial monitor submission is handled by a dedicated stdin reader task that forwards full lines into the existing shell submit path, so there is still only one parser and one transcript model
 - The `sd ls` panic seen after the LFN change was caused by stack pressure on the LVGL input callback, so shell command execution now runs on a separate worker task with an explicit stack budget while LVGL access is wrapped by the port mutex
 - The hosted OTA path no longer calls `esp_hosted_deinit()` before `c6ota` transfers because the ESP-Hosted SDIO teardown path can assert on this esp32p4 baseline; OTA now follows the upstream example flow of stopping Wi-Fi, reusing the existing hosted transport, then restoring the original Wi-Fi routine after success
+- Hosted Wi-Fi, hosted Bluetooth, and hosted OTA are now split across `components/networking` and `components/c6ota`, while `main/main.c` stays focused on the shell UI, parser, transcript, and orchestration hooks.
 - The `wifi`, `sd`, and `c6ota` command families now preserve their full subcommand text across the worker-task parser handoff, which fixes the runtime regression where family commands could appear inert after the generic parser split the first token in place
 - Every command path now wraps failure-prone ESP-IDF calls with friendly transcript output and pushes summary entries into a small in-memory debug history buffer for later inspection
 - Normal shell UI initialization is also pushed into that debug history so the boot path stays observable without producing a warning on successful startup

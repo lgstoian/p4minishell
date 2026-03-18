@@ -6,18 +6,15 @@ idf_component_register(
         espressif__esp_lcd_touch
         espressif__esp_lvgl_port
         bootloader_support
+        c6ota
         networking
         esp_adc
-        esp_app_format
         esp_event
-        esp_http_client
         esp_hosted
         esp_netif
         fatfs
         lvgl__lvgl
-        mbedtls
         nvs_flash
-        esp-tls
         esp_wifi
         esp_psram
 )
