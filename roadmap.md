@@ -20,9 +20,13 @@ Implemented today in the checked-in firmware:
 - `c6ota` for validated ESP32-C6 firmware updates from SD or HTTP/S
 
 Current hardware gaps still intentionally blocked in the checked-in firmware:
-- Hosted Bluetooth remains disabled on the current ESP32-C6 baseline until a proven BLE-safe host path replaces the unstable Bluedroid experiment
 - RGB LED control remains blocked until the board metadata declares a real RGB output pin and driver model
 - Camera capture remains blocked until the board metadata declares a real camera device and capture path
+
+Hosted connectivity status in the current baseline:
+- Wi-Fi has been moved into `components/networking/networking.c` while preserving the working boot, command, and OTA restore behavior
+- Bluetooth now has a real hosted NimBLE baseline in `components/networking/bluetooth.c` for `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>`
+- Future Bluetooth work should build on the hosted NimBLE module rather than reviving the older Bluedroid experiment
 
 ## Main gaps to full feature parity
 

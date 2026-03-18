@@ -116,6 +116,12 @@ board:
       - roadmap.md
       - licence.md
     ui_mode: transcript_and_input_line_shell
+    networking_component:
+      path: components/networking
+      wifi_module: components/networking/networking.c
+      bluetooth_module: components/networking/bluetooth.c
+      bluetooth_transport: esp_hosted_nimble_vhci
+      bluetooth_lifecycle: stateful_controller_reuse
     built_in_commands:
       - help
       - c6ota
@@ -154,9 +160,11 @@ board:
       - gpio status
       - gpio read
       - gpio set
-      - bt status
-      - bt enable
-      - bt scan
+      - bluetooth status
+      - bluetooth scan
+      - bluetooth advertise on
+      - bluetooth advertise off
+      - bt
       - rgb led
       - rgb <r> <g> <b>
       - camera init

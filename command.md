@@ -66,9 +66,12 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - `gpio status`: Show the current levels plus role text for the full exposed board pin table.
 - `gpio read <pin>`: Read the current logic level from an arbitrary GPIO number.
 - `gpio set <pin> <0|1>`: Drive a GPIO only when the shell pin table marks that pin safe for writes.
-- `bt status`: Explain that hosted Bluetooth is intentionally disabled on the current ESP32-C6 baseline.
-- `bt enable`: Report that the earlier hosted Bluedroid bring-up path is disabled because it can crash this board.
-- `bt scan`: Report that Bluetooth scanning is disabled on the current ESP32-C6 baseline.
+- `bluetooth status`: Show hosted Bluetooth readiness, NimBLE sync state, and current advertising state.
+- `bluetooth scan`: Run a BLE scan through the hosted NimBLE path on the ESP32-C6 and print discovered devices to the transcript.
+- `bluetooth advertise on`: Start non-connectable BLE advertising through hosted NimBLE on the ESP32-C6.
+- `bluetooth advertise off`: Stop hosted BLE advertising.
+- `bt ...`: Alias for the `bluetooth` command family.
+- Lifecycle note: `bluetooth enable` is the one-time host bring-up path for the current boot; later scan and advertising commands reuse that running hosted controller session instead of restarting it.
 - `rgb led <color>`: Reserved color-name command surface for a future board-declared RGB LED implementation.
 - `rgb <r> <g> <b>`: Reserved numeric RGB command surface for a future board-declared RGB LED implementation.
 - `camera init`: Reserved camera initialization command surface for a future board-declared camera implementation.
@@ -91,6 +94,7 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - Batch files support `.bat` lookup through the current working directory and PATH, `%1` through `%9` argument expansion, `rem` and `::` comments, and `echo on` or `echo off` flow control.
 - `c6ota` avoids `esp_hosted_deinit()` before transfer because the current ESP-Hosted SDIO teardown path can assert on this esp32p4 host configuration.
 - Wi-Fi starts in a background task on normal boot, runs the same restore path after successful `c6ota`, and keeps the transcript diagnostic pass during those restore flows while still exposing `wifi diag` for an extra on-demand report.
+- Hosted Wi-Fi and hosted Bluetooth now live under `components/networking`, so the shell parser delegates those command families instead of owning the runtime transport logic directly in `main/main.c`.
 - The `wifi`, `sd`, and `c6ota` command families now preserve the full unsplit command line before subcommand parsing, which fixes the regression where family commands could lose their subcommand text after the generic parser tokenized the first word in place.
 - `idf.py monitor` is now interactive on the configured console path because the firmware consumes stdin and mirrors shell transcript output to stdout instead of leaving the serial path as logs only.
 - `rgb` and `camera` stay intentionally explicit about unsupported states: the JC1060 reference repo does not expose authoritative RGB LED wiring, and this workspace still lacks the local camera stack needed by the JC1060 camera examples.

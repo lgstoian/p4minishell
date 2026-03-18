@@ -43,7 +43,7 @@
 #include "esp_hosted_host_fw_ver.h"
 #include "esp_hosted_ota.h"
 #endif
-// AI: keep the shell BT runtime hard-disabled on this ESP32-C6 hosted baseline until a proven non-crashing BLE path replaces the earlier Bluedroid experiment.
+// AI: legacy Bluedroid bring-up stays disabled here; hosted NimBLE now lives in components/networking for the ESP32-C6 SDIO path.
 #define SHELL_BT_HOSTED_RUNTIME_SUPPORTED 0
 
 #if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
@@ -58,6 +58,8 @@
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
 #include "board_config.h"
+#include "bluetooth.h"
+#include "networking.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 
@@ -1315,62 +1317,7 @@ static esp_err_t shell_write_redirect_output(const char *path, const char *text,
 
 static esp_err_t shell_c6ota_wait_for_wifi_ready(void)
 {
-#if SHELL_WIFI_RUNTIME_ENABLED
-    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SHELL_C6OTA_WIFI_WAIT_MS);
-    TickType_t next_log = xTaskGetTickCount();
-
-    if (s_wifi_state == SHELL_WIFI_STATE_STARTING) {
-        shell_schedule_transcript_appendf("%s", "c6ota: waiting for Wi-Fi startup already in progress\n");
-    }
-
-    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-        if (!shell_wifi_defaults_available()) {
-            shell_schedule_transcript_appendf("%s", "c6ota: OTA requires Wi-Fi. Run wifi connect first or configure sdkconfig defaults.\n");
-            return ESP_ERR_INVALID_STATE;
-        }
-
-        shell_schedule_transcript_appendf("%s", "c6ota: starting Wi-Fi with sdkconfig default credentials for OTA\n");
-        shell_wifi_runtime_init();
-        if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-            return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_ERR_INVALID_STATE;
-        }
-    }
-
-    if (!s_wifi_connected && !s_wifi_connect_requested) {
-        if (!shell_wifi_defaults_available()) {
-            shell_schedule_transcript_appendf("%s", "c6ota: OTA requires an active network link. Run wifi connect <ssid> <pass> first.\n");
-            return ESP_ERR_INVALID_STATE;
-        }
-
-        shell_schedule_transcript_appendf("[wifi] ota: connecting to default SSID %s\n",
-                                          CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
-        if (shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
-                                                CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD) != ESP_OK) {
-            return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_FAIL;
-        }
-    }
-
-    while (!s_wifi_connected) {
-        TickType_t now = xTaskGetTickCount();
-
-        if ((int32_t)(now - deadline) >= 0) {
-            shell_schedule_transcript_appendf("%s", "c6ota: Wi-Fi connection timeout before OTA download\n");
-            return ESP_ERR_TIMEOUT;
-        }
-
-        if ((int32_t)(now - next_log) >= 0) {
-            shell_schedule_transcript_appendf("%s", "c6ota: waiting for Wi-Fi IP before OTA download\n");
-            next_log = now + pdMS_TO_TICKS(SHELL_C6OTA_CONNECT_LOG_STEP_MS);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(250));
-    }
-
-    return ESP_OK;
-#else
-    shell_schedule_transcript_appendf("%s", "c6ota: OTA is unavailable because Wi-Fi/ESP-Hosted is disabled in sdkconfig\n");
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
+    return networking_wifi_wait_for_ota();
 }
 
 #if CONFIG_ESP_HOSTED_ENABLED
@@ -1554,54 +1501,12 @@ static void shell_c6ota_report_progress(size_t transferred_bytes,
 
 static void shell_wifi_capture_restore_state(shell_wifi_restore_state_t *restore_state)
 {
-    if (restore_state == NULL) {
-        return;
-    }
-
-    memset(restore_state, 0, sizeof(*restore_state));
-    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-        return;
-    }
-
-    restore_state->should_restore_runtime = true;
-    if (s_wifi_target_ssid[0] == '\0') {
-        return;
-    }
-
-    restore_state->should_restore_connection = s_wifi_connected || s_wifi_connect_requested;
-    snprintf(restore_state->ssid, sizeof(restore_state->ssid), "%s", s_wifi_target_ssid);
-    snprintf(restore_state->password, sizeof(restore_state->password), "%s", s_wifi_target_password);
+    networking_wifi_capture_restore_state((networking_wifi_restore_state_t *)restore_state);
 }
 
 static esp_err_t shell_wifi_restore_after_c6ota_failure(const shell_wifi_restore_state_t *restore_state)
 {
-#if SHELL_WIFI_RUNTIME_ENABLED
-    esp_err_t error;
-
-    if (restore_state == NULL || !restore_state->should_restore_runtime) {
-        return ESP_OK;
-    }
-
-    shell_schedule_transcript_appendf("%s", "c6ota: restoring Wi-Fi after OTA failure\n");
-    shell_wifi_runtime_init();
-    if (s_wifi_state != SHELL_WIFI_STATE_STARTED) {
-        return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_FAIL;
-    }
-
-    if (!restore_state->should_restore_connection || restore_state->ssid[0] == '\0') {
-        return ESP_OK;
-    }
-
-    error = shell_wifi_connect_with_credentials(restore_state->ssid, restore_state->password);
-    if (error != ESP_OK) {
-        return error;
-    }
-
-    return ESP_OK;
-#else
-    (void)restore_state;
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
+    return networking_wifi_restore_after_ota_failure((const networking_wifi_restore_state_t *)restore_state);
 }
 
 static esp_err_t shell_c6ota_reset_hosted_transport(char *failure_hint,
@@ -2465,6 +2370,26 @@ static void shell_record_infof(const char *tag, const char *format, ...)
     vsnprintf(message, sizeof(message), format, args);
     va_end(args);
     shell_debug_log_push(tag, message);
+}
+
+static void shell_networking_record_error(const char *tag, esp_err_t error, const char *message)
+{
+    shell_record_errorf(tag, error, "%s", message);
+}
+
+static void shell_networking_schedule_text(const char *text)
+{
+    shell_schedule_transcript_appendf("%s", text);
+}
+
+static void shell_networking_record_warning(const char *tag, const char *message)
+{
+    shell_record_warningf(tag, "%s", message);
+}
+
+static void shell_networking_record_info(const char *tag, const char *message)
+{
+    shell_record_infof(tag, "%s", message);
 }
 
 static void shell_transcript_render(void)
@@ -3446,34 +3371,7 @@ static void shell_wifi_request_boot_restore(void)
 
 static void shell_wifi_request_post_c6ota_restore(const shell_wifi_restore_state_t *restore_state)
 {
-#if SHELL_WIFI_RUNTIME_ENABLED
-    shell_wifi_background_request_t request = {
-        .start_runtime = true,
-        .connect_with_defaults = false,
-        .run_diagnostic = true,
-    };
-
-    snprintf(request.origin, sizeof(request.origin), "%s", "c6ota-restore");
-
-    if (restore_state != NULL && restore_state->should_restore_runtime) {
-        if (restore_state->should_restore_connection && restore_state->ssid[0] != '\0') {
-            snprintf(request.ssid, sizeof(request.ssid), "%s", restore_state->ssid);
-            snprintf(request.password, sizeof(request.password), "%s", restore_state->password);
-        } else if (shell_wifi_defaults_available()) {
-            request.connect_with_defaults = true;
-        }
-    } else if (shell_wifi_defaults_available()) {
-        request.connect_with_defaults = true;
-    }
-
-    // AI: restore Wi-Fi after OTA without auto-running a hosted scan, so the normal recovery path stays stable.
-    if (!shell_wifi_begin_background_request(&request)) {
-        shell_schedule_transcript_appendf("[wifi] %s: failed to queue post-OTA Wi-Fi restore\n", request.origin);
-        shell_debug_log_push("wifi", "failed to queue post-OTA Wi-Fi restore");
-    }
-#else
-    (void)restore_state;
-#endif
+    networking_wifi_request_post_ota_restore((const networking_wifi_restore_state_t *)restore_state);
 }
 
 static void shell_command_wifi_help(void)
@@ -3617,73 +3515,7 @@ static void shell_command_wifi_disconnect(void)
 
 static void shell_execute_wifi_command(char *command)
 {
-    char *argv[5];
-    int argc = shell_split_args(command, argv, 5);
-
-    if (argc <= 1 || strcmp(argv[1], "help") == 0) {
-        shell_command_wifi_help();
-        return;
-    }
-
-    if (strcmp(argv[1], "status") == 0) {
-        shell_command_wifi_status();
-        return;
-    }
-
-    if (strcmp(argv[1], "scan") == 0) {
-        shell_command_wifi_scan();
-        return;
-    }
-
-    if (strcmp(argv[1], "diag") == 0) {
-        shell_wifi_background_request_t request = {
-            .start_runtime = (s_wifi_state != SHELL_WIFI_STATE_STARTED),
-            .connect_with_defaults = false,
-            .run_diagnostic = true,
-        };
-
-        snprintf(request.origin, sizeof(request.origin), "%s", "diag");
-        (void)shell_wifi_begin_background_request(&request);
-        return;
-    }
-
-    if (strcmp(argv[1], "disconnect") == 0) {
-        shell_command_wifi_disconnect();
-        return;
-    }
-
-    if (strcmp(argv[1], "connect") == 0) {
-        if (argc == 2) {
-            if (!shell_wifi_defaults_available()) {
-                shell_transcript_append_text("wifi: sdkconfig default credentials are not configured\n");
-                return;
-            }
-
-            if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
-                (void)shell_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
-                                                          CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
-            } else {
-                shell_transcript_append_text("wifi: starting stack on demand\n");
-                (void)shell_wifi_begin_connect_request(NULL, NULL, true);
-            }
-            return;
-        }
-
-        if (argc == 4) {
-            if (s_wifi_state == SHELL_WIFI_STATE_STARTED) {
-                (void)shell_wifi_connect_with_credentials(argv[2], argv[3]);
-            } else {
-                shell_transcript_append_text("wifi: starting stack on demand\n");
-                (void)shell_wifi_begin_connect_request(argv[2], argv[3], false);
-            }
-            return;
-        }
-
-        shell_transcript_append_text("Usage: wifi connect or wifi connect <ssid> <pass>\n");
-        return;
-    }
-
-    shell_transcript_appendf("Unknown wifi subcommand: %s\n", argv[1]);
+    networking_handle_wifi_command(command);
 }
 #endif
 
@@ -3982,7 +3814,7 @@ static void shell_command_help(void)
     shell_transcript_append_text("  sd info | ls [path] | stat <path> | cat <path> [max_bytes]\n");
     shell_transcript_append_text("  mem     Show heap and PSRAM usage\n");
     shell_transcript_append_text("  gpio list | status | read <pin> | set <pin> <0|1>\n");
-    shell_transcript_append_text("  bt status | enable | scan  Hosted Bluetooth control for ESP32-C6 when enabled in sdkconfig\n");
+    shell_transcript_append_text("  bluetooth status | scan | advertise <on|off>  Hosted NimBLE control for the ESP32-C6 co-processor\n");
     shell_transcript_append_text("  rgb led <color> | rgb <r> <g> <b>  RGB LED control when declared in board metadata\n");
     shell_transcript_append_text("  camera init | camera snap <filename>  Camera control when declared in board metadata\n");
     shell_transcript_append_text("  debug   Show last 5 errors, Wi-Fi state, heap, and warnings\n");
@@ -4075,30 +3907,7 @@ static void shell_command_sysinfo(void)
     shell_transcript_append_text("psram: disabled\n");
 #endif
 
-    switch (s_wifi_state) {
-    case SHELL_WIFI_STATE_STARTING:
-        shell_transcript_append_text("wifi: runtime initialization is in progress\n");
-        break;
-    case SHELL_WIFI_STATE_STARTED:
-        shell_transcript_appendf("wifi: runtime initialized in STA mode from sdkconfig, connected=%s\n",
-                                 s_wifi_connected ? "yes" : "no");
-        break;
-    case SHELL_WIFI_STATE_FAILED:
-        shell_transcript_appendf("wifi: runtime initialization failed with %s (0x%x)\n",
-                                 esp_err_to_name(s_wifi_last_error),
-                                 (unsigned int)s_wifi_last_error);
-        break;
-    case SHELL_WIFI_STATE_SKIPPED_DISABLED:
-        shell_transcript_append_text("wifi: skipped because sdkconfig does not enable native or ESP-Hosted Wi-Fi\n");
-        break;
-    case SHELL_WIFI_STATE_SKIPPED_UNSUPPORTED:
-        shell_transcript_append_text("wifi: unsupported on current target/SoC caps\n");
-        break;
-    case SHELL_WIFI_STATE_NOT_ATTEMPTED:
-    default:
-        shell_transcript_append_text("wifi: runtime initialization not attempted yet\n");
-        break;
-    }
+    networking_append_sysinfo_summary();
 }
 
 static void shell_command_brightness(int argc, char **argv)
@@ -4633,64 +4442,22 @@ static void shell_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *
 
 static void shell_execute_bt_command(int argc, char **argv)
 {
-    if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "status"))) {
-#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
-        shell_transcript_appendf("bt: sdkconfig=enabled controller=%s bluedroid=%s scan_active=%s last_scan_results=%u\n",
-                                 s_bt_state.controller_enabled ? "yes" : "no",
-                                 s_bt_state.bluedroid_enabled ? "yes" : "no",
-                                 s_bt_state.scan_active ? "yes" : "no",
-                                 (unsigned int)s_bt_state.result_count);
-#else
-    shell_transcript_append_text("bt: unavailable on the current ESP32-C6 hosted baseline because the earlier Bluedroid host path proved unstable here; Wi-Fi remains the supported hosted feature set\n");
-#endif
-        return;
+    char command_buffer[128] = "bt";
+    int index;
+
+    for (index = 1; index < argc; index++) {
+        size_t used = strlen(command_buffer);
+
+        if (used + 1 >= sizeof(command_buffer)) {
+            break;
+        }
+
+        command_buffer[used++] = ' ';
+        command_buffer[used] = '\0';
+        strncat(command_buffer, argv[index], sizeof(command_buffer) - used - 1);
     }
 
-    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "enable")) {
-#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
-        esp_err_t error = shell_bt_ensure_ready();
-        if (error != ESP_OK) {
-            shell_transcript_appendf("bt: enable failed (%s)\n", esp_err_to_name(error));
-            shell_record_errorf("bt", error, "Failed to enable Bluetooth host stack");
-            return;
-        }
-        shell_transcript_append_text("bt enabled on the ESP32-C6 hosted stack\n");
-#else
-    shell_transcript_append_text("bt: disabled to protect the ESP32-C6 hosted Wi-Fi baseline because the current Bluedroid bring-up path can crash this board\n");
-#endif
-        return;
-    }
-
-    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "scan")) {
-#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
-        esp_err_t error = shell_bt_ensure_ready();
-        if (error != ESP_OK) {
-            shell_transcript_appendf("bt: scan failed during stack startup (%s)\n", esp_err_to_name(error));
-            shell_record_errorf("bt", error, "Failed to prepare Bluetooth scan");
-            return;
-        }
-        if (s_bt_state.scan_active) {
-            shell_transcript_append_text("bt: scan already in progress\n");
-            return;
-        }
-        s_bt_state.result_count = 0;
-        s_bt_state.scan_active = true;
-        error = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
-        if (error != ESP_OK) {
-            s_bt_state.scan_active = false;
-            shell_transcript_appendf("bt: scan start failed (%s)\n", esp_err_to_name(error));
-            shell_record_errorf("bt", error, "Failed to start Bluetooth discovery");
-            return;
-        }
-        shell_transcript_append_text("bt scan started on the ESP32-C6 hosted stack\n");
-#else
-        shell_transcript_append_text("bt: disabled to protect the ESP32-C6 hosted Wi-Fi baseline because the current Bluedroid bring-up path can crash this board\n");
-#endif
-        return;
-    }
-
-    shell_transcript_append_text("Usage: bt status | bt enable | bt scan\n");
-    shell_record_warningf("bt", "Usage error for bt command");
+    bluetooth_handle_command(command_buffer);
 }
 
 static void shell_execute_rgb_command(int argc, char **argv)
@@ -4732,7 +4499,7 @@ static void shell_command_debug(void)
     size_t idx;
     size_t start;
 
-    shell_transcript_appendf("debug.wifi_state: %s\n", shell_wifi_state_string());
+    shell_transcript_appendf("debug.wifi_state: %s\n", networking_wifi_state_string());
     shell_transcript_appendf("debug.free_heap: %u bytes\n", (unsigned int)free_heap);
     shell_transcript_appendf("debug.runtime_warnings: %u\n", (unsigned int)s_runtime_warning_count);
     if (s_debug_log.count == 0) {
@@ -6263,8 +6030,8 @@ static bool shell_execute_command_core(char *command)
         return true;
     }
 
-    if (shell_text_equals_ignore_case(argv[0], "bt")) {
-        shell_execute_bt_command(argc, argv);
+    if (shell_text_equals_ignore_case(argv[0], "bt") || shell_text_equals_ignore_case(argv[0], "bluetooth")) {
+        bluetooth_handle_command(command_copy);
         return true;
     }
 
@@ -6284,11 +6051,7 @@ static bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "wifi")) {
-#if SHELL_WIFI_RUNTIME_ENABLED
         shell_execute_wifi_command(command_copy);
-#else
-        shell_transcript_append_text("wifi commands unavailable because sdkconfig does not enable the Wi-Fi stack\n");
-#endif
         return true;
     }
 
@@ -6557,8 +6320,15 @@ void app_main(void)
 
     shell_transcript_append_text("UART monitor accepts the same shell commands as the on-screen prompt.\n");
     shell_transcript_append_text("Wi-Fi starts in the background on boot; wifi diag is also available for an extra status + scan report.\n");
+    shell_transcript_append_text("Bluetooth commands are routed through the ESP32-C6 hosted NimBLE module.\n");
     shell_transcript_append_text("Enter runs commands from the prompt line; history stays locked above.\n");
-    shell_wifi_request_boot_restore();
+    networking_init(&(networking_host_ops_t){
+        .transcript_append_text = shell_transcript_append_text,
+        .schedule_transcript_append_text = shell_networking_schedule_text,
+        .record_error = shell_networking_record_error,
+        .record_warning = shell_networking_record_warning,
+        .record_info = shell_networking_record_info,
+    });
 
     // AI: drive command parsing and shell state updates from the dedicated input line events so OTA confirmation stays in the same shell flow.
 }

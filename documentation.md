@@ -1,6 +1,13 @@
 ## Overview
 P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 
+## Connectivity layout
+- Hosted connectivity no longer lives directly in the shell monolith.
+- `components/networking/networking.c` now owns hosted Wi-Fi startup, event handling, command execution, status reporting, and OTA restore or wait hooks.
+- `components/networking/bluetooth.c` now owns hosted Bluetooth bring-up through NimBLE VHCI on the ESP32-C6, including scan and advertising control.
+- The Bluetooth module keeps hosted controller state across shell commands so scan and advertising requests reuse the active host stack instead of reissuing hosted controller init or enable calls.
+- `main/main.c` remains the shell UI and orchestration layer, and passes transcript plus logging callbacks into the networking component so user-visible Wi-Fi behavior stays aligned with the established shell output.
+
 ## Project documents
 - `readme.md`: user-facing introduction, current behavior, and build notes
 - `roadmap.md`: parity plan for the DOS-style shell, native app runtime, and future SDK work
@@ -42,10 +49,11 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - battery sleep <on|off|status>: request or query light sleep only when power management is enabled in sdkconfig
 - volume <0-100>: set speaker output volume through the ES8311 codec device already used by the BSP audio path
 - gpio list | status | read <pin> | set <pin> <0|1>: expose the board pin table, allow reads, and restrict writes to shell-safe GPIOs only
-- bt status | bt enable | bt scan: shell-facing Bluetooth command surface kept parser-visible, but intentionally disabled on the current ESP32-C6 hosted baseline because the attempted Bluedroid bring-up path proved unstable during controller startup
+- bluetooth status | scan | advertise <on|off> and bt ...: shell-facing Bluetooth command surface now routed through hosted NimBLE on the ESP32-C6 over ESP-Hosted VHCI, with `bt` preserved as an alias for the same family
 - rgb led <color> or rgb <r> <g> <b>: reserved command surface for a future board-declared RGB LED implementation; the current workspace still reports unsupported because the JC1060 reference repo does not expose authoritative RGB LED wiring or a declared RGB driver here
 - camera init | camera snap <filename>: reserved command surface for a future board-declared camera path; the current workspace still reports unsupported because the JC1060 reference repo shows a camera add-on path, but this workspace does not ship the declared sensor, CSI map, or local camera stack needed to use it
 - Wi-Fi/ESP-Hosted startup is asynchronous: the UI boots first, then the original hosted Wi-Fi routine runs in a worker task during normal boot so a dead or blank C6 does not block the shell surface
+- The Wi-Fi worker path now lives inside the networking component instead of `main/main.c`, but it preserves the same boot-time restore model, command behavior, and transcript-facing status flow
 - Wi-Fi/ESP-Hosted startup now includes a firm compatibility gate: once the SDIO link is up, the shell reads the ESP32-C6 hosted firmware version and aborts Wi-Fi startup unless the co-processor matches the host `2.12.x` ESP-Hosted release line
 - The same background worker now restores Wi-Fi after successful `c6ota`, and the working project configuration keeps the transcript status + scan diagnostic pass on boot and post-OTA restore while still leaving `wifi diag` available on demand
 - sysinfo: report board_config-backed display/touch/storage values, IDF version, heap, PSRAM, and current Wi-Fi runtime state
@@ -55,6 +63,9 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - wifi connect: connect using sdkconfig default credentials
 - wifi connect <ssid> <pass>: connect using runtime credentials without writing the password into transcript history or recall history
 - wifi disconnect: disconnect the current station session
+- bluetooth status: show hosted Bluetooth readiness, NimBLE state, and advertising state
+- bluetooth scan: run a BLE scan through hosted NimBLE on the ESP32-C6 and print discovered devices to the shell transcript
+- bluetooth advertise on | off: start or stop non-connectable BLE advertising through the hosted NimBLE path
 - sd: show SD status and available SD subcommands
 - sd info: mount the SD card on demand and report card metadata plus root availability
 - sd ls [path]: mount the SD card on demand, enumerate directory entries through the FatFs LFN path, list full long filenames with entry type and file sizes, and report a friendly insert-and-retry message when no card is present
@@ -105,6 +116,8 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Every command path now wraps failure-prone ESP-IDF calls with friendly transcript output and pushes summary entries into a small in-memory debug history buffer for later inspection
 - Normal shell UI initialization is also pushed into that debug history so the boot path stays observable without producing a warning on successful startup
 - The new hardware command family follows the same rule: unsupported Bluetooth, RGB LED, or camera paths fail explicitly in the transcript instead of inventing board support or silently touching undeclared GPIO wiring
+- Hosted Bluetooth now follows the same explicit-shell rule, but the current checked-in baseline does expose a real hosted NimBLE path for status, scan, and advertising instead of the earlier disabled Bluedroid stub
+- Hosted Bluetooth commands now follow a stateful lifecycle: `bluetooth enable` brings the hosted controller and NimBLE host up once, and later scan or advertising commands reuse that session.
 - Example OTA commands: `c6ota sd:/esp32c6_hosted_slave.bin`, `c6ota https://host/path/to/esp32c6.bin`, and `c6ota default`
 
 ## Build and flash

@@ -1,3 +1,9 @@
+## [0.1.21] - 2026-03-18
+- Refactored the hosted connectivity stack out of the shell monolith into a new `components/networking` component so Wi-Fi runtime state, hosted startup, OTA restore hooks, and Bluetooth handling no longer live directly in `main/main.c`
+- Preserved the existing hosted Wi-Fi behavior and transcript-visible command flow while rewiring `wifi status | scan | diag | connect | disconnect`, boot restore, and post-`c6ota` recovery through the new networking module APIs
+- Replaced the earlier disabled hosted Bluedroid shell stub with hosted NimBLE on the ESP32-C6 over ESP-Hosted VHCI, and added `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>` command support while keeping `bt` as an alias
+- Fixed the first hosted NimBLE command cycle so `bluetooth scan` and `bluetooth advertise` now reuse the already enabled controller and host stack instead of re-running hosted BT init or enable RPCs after `bluetooth enable`
+
 ## [0.1.20] - 2026-03-18
 - Added a real serial console bridge for the existing shell so the configured ESP-IDF UART or USB-Serial-JTAG monitor is no longer log-only and now accepts the same commands as the on-screen prompt
 - Mirrored shell transcript output to stdout and routed stdin lines back through the existing shell worker, transcript, masking, and history flow instead of creating a second command parser or a separate REPL feature set

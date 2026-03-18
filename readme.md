@@ -4,7 +4,7 @@ P4MiniShell is an embedded, touch-driven command shell for the ESP32-P4 host and
 The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-compatible runtime. What it already provides is the embedded foundation for that direction: a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi on the C6, and a real OTA maintenance path for the co-processor.
 
 ## What this project is
-- A single-binary ESP32-P4 shell application implemented in C in [main/main.c](main/main.c)
+- A single-binary ESP32-P4 shell application with the shell UI in [main/main.c](main/main.c) and hosted connectivity extracted into `components/networking`
 - A DOS-inspired command environment for SD-card workflows on an embedded touchscreen device
 - A host-side control surface for an ESP32-C6 connected over ESP-Hosted SDIO
 - A base for future native application loading, shell SDK work, and broader MS-DOS-style command compatibility
@@ -20,7 +20,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Serial console: the configured ESP-IDF console stdin and stdout now mirror the same shell transcript and command path used by the touch UI, so `idf.py monitor` can act as an interactive shell endpoint
 - Storage model: guarded SD-card access with DOS-style relative paths rooted at `/sdcard`
 - Shell model: worker-task command execution, RAM-only environment variables, PATH, batch frames, and transcript-backed redirection
-- Connectivity: ESP32-P4 host Wi-Fi routed through ESP-Hosted plus `esp_wifi_remote` to the ESP32-C6 over SDIO
+- Connectivity: ESP32-P4 host Wi-Fi and BLE routed through a dedicated networking component using ESP-Hosted plus `esp_wifi_remote` and hosted NimBLE on the ESP32-C6 over SDIO
 - Maintenance path: `c6ota` for validated ESP32-C6 application updates from SD or HTTP/S sources
 
 ## Planning and licensing
@@ -36,16 +36,17 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Command-family dispatch safety: the shell now preserves the original unsplit command line before tokenization, so `wifi`, `sd`, and `c6ota` subcommands continue to work after the worker-task parser hands control to their family-specific handlers
 - UART and monitor interaction: the firmware now consumes stdin on the configured ESP-IDF console, prints the same prompt on the serial side, mirrors transcript output to stdout, and routes typed monitor commands back through the same shell parser, password masking, history, and transcript flow used on-screen
 - Serial prompt behavior: the monitor prompt is now emitted only when a fresh command entry is needed, which prevents idle stdin polling from flooding repeated `P4Shell>` prompts
-- Commands: help, cls, c6ota, sysinfo, brightness, rotate, battery, volume, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio list, gpio status, gpio read, gpio set, bt status, bt enable, bt scan, rgb, camera, debug, clear, reboot, version, ver, about
+- Commands: help, cls, c6ota, sysinfo, brightness, rotate, battery, volume, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio list, gpio status, gpio read, gpio set, bluetooth status, bluetooth scan, bluetooth advertise on, bluetooth advertise off, bt (alias), rgb, camera, debug, clear, reboot, version, ver, about
 - Command recall: last 10 commands via Prev/Next buttons, with the input line kept separate from transcript history
 - Display/touch init: still owned by the managed BSP and board_config-generated constants
 - Display controls: `brightness <0-100>` drives the BSP backlight PWM path and `rotate <0|90|180|270>` rotates the active LVGL display while remapping GT911 touch coordinates to match
 - Battery and power status: `battery` reads the configured ADC pin and divider values from board metadata, reports scaled voltage plus an estimated percentage, and `battery sleep <on|off|status>` reports or requests light sleep only when `CONFIG_PM_ENABLE` is enabled in sdkconfig
 - Audio control: `volume <0-100>` uses the existing ES8311 speaker path exposed by the BSP codec device
 - GPIO controls: `gpio list` and `gpio status` now report the exposed board pins with clearer board-role text for the shared I2C bus, audio path, ESP32-C6 hosted SDIO link, battery monitor, and MicroSD bus, while `gpio set <pin> <0|1>` stays limited to pins marked safe for shell-side writes
-- Bluetooth command surface: `bt status`, `bt enable`, and `bt scan` stay visible in the shell, but they are intentionally disabled on the current ESP32-C6 hosted baseline because the attempted Bluedroid bring-up path proved unstable and could crash the board during controller startup
+- Bluetooth command surface: `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>` now route through hosted NimBLE on the ESP32-C6 over ESP-Hosted VHCI, with `bt` kept as a parser alias for the same command family
+- Bluetooth lifecycle: after `bluetooth enable`, later `bluetooth scan` or `bluetooth advertise <on|off>` calls reuse the existing hosted controller and NimBLE host state instead of reinitializing the controller path
 - RGB and camera command surface: `rgb led <color>`, `rgb <r> <g> <b>`, `camera init`, and `camera snap <filename>` stay intentionally blocked for now because the JC1060 reference repo still does not expose authoritative RGB LED wiring and this workspace still lacks the declared camera stack used by the JC1060 camera examples
-- Wi-Fi startup: attempted automatically in a background task after normal boot using the original sdkconfig-driven hosted routine, with default credentials available for `wifi connect` and password masking for `wifi connect <ssid> <pass>` in transcript/history
+- Wi-Fi startup: attempted automatically in a background task after normal boot through the `components/networking` module using the original sdkconfig-driven hosted routine, with default credentials available for `wifi connect` and password masking for `wifi connect <ssid> <pass>` in transcript/history
 - Hosted compatibility guard: normal Wi-Fi startup now reads the ESP32-C6 hosted firmware version right after the SDIO link comes up and refuses to continue unless the co-processor matches the host `2.12.x` ESP-Hosted line, which prevents the earlier SDIO queue drops and RPC response errors seen with mismatched firmware
 - Wi-Fi status: enabled in the checked-in sdkconfig through ESP-Hosted plus `esp_wifi_remote`, with `wifi scan` available once the runtime has started
 - C6 firmware update path: `c6ota <sd:/file.bin|http[s]://url|default>` downloads or opens a valid ESP32-C6 app image, then performs the Wi-Fi-off ESP-Hosted SDIO OTA flow over the existing hosted link without tearing the SDIO transport down first
@@ -59,6 +60,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Host Wi-Fi hardware requirement: the checked-in hosted path expects ESP32-C6 over SDIO on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 with reset GPIO54; if the co-processor does not answer there, the shell reports the hosted-link failure explicitly
 - Hosted reset policy: this project resets the ESP32-C6 on every host boot before the SDIO Wi-Fi bring-up path continues
 - Co-processor firmware upgrade path: `coprocessor/esp32c6_slave` remains the repo-local ESP32-C6 firmware project, and the shell host path stays on the same `2.12.x` ESP-Hosted release line used by that project
+- Networking module layout: `components/networking/networking.c` owns hosted Wi-Fi startup, state, events, scans, diagnostics, and OTA restore hooks, while `components/networking/bluetooth.c` owns hosted NimBLE controller bring-up, scan, and advertising control
 - Monitor usage: after flashing, `idf.py monitor` can now be used as a real shell endpoint over the configured console path, not only as a log viewer
 - Command reference: see `command.md` for the current shell command surface and usage notes
 - Build footprint: unused LVGL examples are disabled in sdkconfig so the Wi-Fi-enabled shell still links on the esp32p4 baseline

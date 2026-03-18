@@ -6,6 +6,7 @@ idf_component_register(
         espressif__esp_lcd_touch
         espressif__esp_lvgl_port
         bootloader_support
+        networking
         esp_adc
         esp_app_format
         esp_event
