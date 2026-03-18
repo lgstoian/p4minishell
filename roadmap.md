@@ -11,6 +11,7 @@ Implemented today in the checked-in firmware:
 - Touch-first LVGL shell UI with transcript, prompt, keyboard, and command recall
 - Worker-task command execution to protect the LVGL event stack
 - Stable family-command dispatch for `wifi`, `sd`, and `c6ota`, with the original command line preserved for second-stage subcommand parsing
+- Interactive serial monitor access through the configured ESP-IDF console, reusing the same shell transcript and command path as the touch UI
 - Live hardware shell controls for display brightness, display rotation with GT911 remap, battery telemetry, speaker volume, and safer GPIO inspection or limited writes
 - DOS-style file commands on SD: `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`
 - RAM-only environment variables, PATH, `%1`..`%9` expansion, `.bat` execution, and `echo on/off`

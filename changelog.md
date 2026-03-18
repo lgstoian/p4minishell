@@ -1,3 +1,9 @@
+## [0.1.20] - 2026-03-18
+- Added a real serial console bridge for the existing shell so the configured ESP-IDF UART or USB-Serial-JTAG monitor is no longer log-only and now accepts the same commands as the on-screen prompt
+- Mirrored shell transcript output to stdout and routed stdin lines back through the existing shell worker, transcript, masking, and history flow instead of creating a second command parser or a separate REPL feature set
+- Kept the existing boot, display, hosted Wi-Fi, SD, and `c6ota` paths unchanged while fixing the earlier monitor write-timeout behavior caused by the firmware not consuming interactive serial input at all
+- Fixed the new serial console prompt loop so idle monitor polling no longer floods `P4Shell>` when no complete stdin line is available yet
+
 ## [0.1.19] - 2026-03-18
 - Fixed the shell command-family dispatch regression that left `wifi status`, `wifi scan`, `wifi diag`, `wifi connect`, and `wifi disconnect` effectively inert even though boot-time hosted Wi-Fi still initialized and connected correctly
 - Fixed the root cause in the shell parser by preserving the original unsplit command text before tokenization, so family handlers that re-parse subcommands now receive the full command line instead of only the first token

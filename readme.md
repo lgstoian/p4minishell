@@ -17,6 +17,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 
 ## Architecture summary
 - UI: LVGL transcript textarea, prompt-bearing input line, on-screen keyboard, and touch recall controls
+- Serial console: the configured ESP-IDF console stdin and stdout now mirror the same shell transcript and command path used by the touch UI, so `idf.py monitor` can act as an interactive shell endpoint
 - Storage model: guarded SD-card access with DOS-style relative paths rooted at `/sdcard`
 - Shell model: worker-task command execution, RAM-only environment variables, PATH, batch frames, and transcript-backed redirection
 - Connectivity: ESP32-P4 host Wi-Fi routed through ESP-Hosted plus `esp_wifi_remote` to the ESP32-C6 over SDIO
@@ -33,6 +34,8 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Enter behavior: command execution is confirmed on the input line through LV_EVENT_READY, while transcript history remains locked above it
 - Command execution safety: the input callback now queues shell work onto a dedicated command task, so heavier commands such as `sd ls` do not overflow the small LVGL event stack
 - Command-family dispatch safety: the shell now preserves the original unsplit command line before tokenization, so `wifi`, `sd`, and `c6ota` subcommands continue to work after the worker-task parser hands control to their family-specific handlers
+- UART and monitor interaction: the firmware now consumes stdin on the configured ESP-IDF console, prints the same prompt on the serial side, mirrors transcript output to stdout, and routes typed monitor commands back through the same shell parser, password masking, history, and transcript flow used on-screen
+- Serial prompt behavior: the monitor prompt is now emitted only when a fresh command entry is needed, which prevents idle stdin polling from flooding repeated `P4Shell>` prompts
 - Commands: help, cls, c6ota, sysinfo, brightness, rotate, battery, volume, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio list, gpio status, gpio read, gpio set, bt status, bt enable, bt scan, rgb, camera, debug, clear, reboot, version, ver, about
 - Command recall: last 10 commands via Prev/Next buttons, with the input line kept separate from transcript history
 - Display/touch init: still owned by the managed BSP and board_config-generated constants
@@ -56,6 +59,7 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Host Wi-Fi hardware requirement: the checked-in hosted path expects ESP32-C6 over SDIO on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 with reset GPIO54; if the co-processor does not answer there, the shell reports the hosted-link failure explicitly
 - Hosted reset policy: this project resets the ESP32-C6 on every host boot before the SDIO Wi-Fi bring-up path continues
 - Co-processor firmware upgrade path: `coprocessor/esp32c6_slave` remains the repo-local ESP32-C6 firmware project, and the shell host path stays on the same `2.12.x` ESP-Hosted release line used by that project
+- Monitor usage: after flashing, `idf.py monitor` can now be used as a real shell endpoint over the configured console path, not only as a log viewer
 - Command reference: see `command.md` for the current shell command surface and usage notes
 - Build footprint: unused LVGL examples are disabled in sdkconfig so the Wi-Fi-enabled shell still links on the esp32p4 baseline
 - Wi-Fi profile: sdkconfig is trimmed for station use only, with WPA2-style credential flow and Wi-Fi IRAM optimizations disabled to stay within the esp32p4 image budget

@@ -19,6 +19,11 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - `cls`: Alias of `clear`.
 - `reboot`: Restart the board.
 
+## Console access
+- On-screen shell: the LVGL prompt remains the primary touch-driven shell entry point.
+- Serial shell: the configured ESP-IDF console exposed through `idf.py monitor` now accepts the same commands and prints the same prompt and transcript output.
+- Shared behavior: commands entered through the serial console reuse the same shell submit path, masking rules, history policy, and transcript output model as touch-entered commands, and the prompt is only reprinted when a fresh serial command line is expected.
+
 ## DOS-style shell commands
 - `cd` or `chdir`: Show the current SD working directory.
 - `cd <path>`: Change the RAM-only current working directory. Supports `sd:/...`, `/sdcard/...`, relative paths, `.`, and `..`.
@@ -87,4 +92,5 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - `c6ota` avoids `esp_hosted_deinit()` before transfer because the current ESP-Hosted SDIO teardown path can assert on this esp32p4 host configuration.
 - Wi-Fi starts in a background task on normal boot, runs the same restore path after successful `c6ota`, and keeps the transcript diagnostic pass during those restore flows while still exposing `wifi diag` for an extra on-demand report.
 - The `wifi`, `sd`, and `c6ota` command families now preserve the full unsplit command line before subcommand parsing, which fixes the regression where family commands could lose their subcommand text after the generic parser tokenized the first word in place.
+- `idf.py monitor` is now interactive on the configured console path because the firmware consumes stdin and mirrors shell transcript output to stdout instead of leaving the serial path as logs only.
 - `rgb` and `camera` stay intentionally explicit about unsupported states: the JC1060 reference repo does not expose authoritative RGB LED wiring, and this workspace still lacks the local camera stack needed by the JC1060 camera examples.

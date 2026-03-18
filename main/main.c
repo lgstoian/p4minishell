@@ -81,6 +81,7 @@
 #define SHELL_WIFI_INIT_TASK_STACK_BYTES 6144
 #define SHELL_COMMAND_TASK_STACK_BYTES 8192
 #define SHELL_C6OTA_TASK_STACK_BYTES 8192
+#define SHELL_UART_CONSOLE_TASK_STACK_BYTES 4096
 #define SHELL_GPIO_NAME_BYTES 32
 #define SHELL_GPIO_PIN_LIMIT 24
 #define SHELL_BT_SCAN_LIMIT 8
@@ -253,6 +254,7 @@ static shell_debug_log_t s_debug_log;
 static shell_c6ota_confirmation_t s_c6ota_confirmation;
 static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
 static SemaphoreHandle_t s_shell_command_lock;
+static SemaphoreHandle_t s_uart_console_lock;
 static char s_shell_cwd[SHELL_SD_PATH_BYTES];
 static shell_env_var_t s_shell_env_vars[SHELL_ENV_VAR_MAX];
 static shell_batch_frame_t *s_active_batch_frame;
@@ -281,6 +283,11 @@ static shell_bt_state_t s_bt_state;
 static void shell_input_line_reset(void);
 static void shell_transcript_append_text(const char *text);
 static void shell_transcript_appendf(const char *format, ...);
+static void shell_uart_console_write_text(const char *text);
+static void shell_uart_console_print_prompt(void);
+static void shell_uart_console_submit_command(const char *command);
+static void shell_uart_console_task(void *arg);
+static void shell_uart_console_start(void);
 static int shell_split_args(char *text, char **argv, int max_args);
 static void shell_schedule_transcript_appendf(const char *format, ...);
 static void shell_async_transcript_flush_cb(void *user_data);
@@ -355,6 +362,7 @@ static void shell_command_move(int argc, char **argv);
 static void shell_command_set(int argc, char **argv);
 static void shell_command_path(int argc, char **argv);
 static void shell_command_echo(int argc, char **argv);
+static void shell_store_command_history(const char *command);
 static bool shell_execute_command_core(char *command);
 static void shell_command_sd_info(void);
 static bool shell_handle_c6ota_confirmation(char *command);
@@ -2476,6 +2484,24 @@ static void shell_transcript_reset(void)
     s_transcript[0] = '\0';
 }
 
+static void shell_uart_console_write_text(const char *text)
+{
+    if (text == NULL || text[0] == '\0') {
+        return;
+    }
+
+    if (s_uart_console_lock != NULL) {
+        (void)xSemaphoreTake(s_uart_console_lock, portMAX_DELAY);
+    }
+
+    fputs(text, stdout);
+    fflush(stdout);
+
+    if (s_uart_console_lock != NULL) {
+        xSemaphoreGive(s_uart_console_lock);
+    }
+}
+
 static void shell_transcript_append_text(const char *text)
 {
     size_t current_len;
@@ -2518,6 +2544,7 @@ static void shell_transcript_append_text(const char *text)
 
     memcpy(s_transcript + current_len, text, text_len);
     s_transcript[current_len + text_len] = '\0';
+    shell_uart_console_write_text(text);
 }
 
 static void shell_transcript_appendf(const char *format, ...)
@@ -2741,6 +2768,110 @@ static void shell_schedule_transcript_appendf(const char *format, ...)
         s_async_transcript_flush_queued = false;
         portEXIT_CRITICAL(&s_async_transcript_lock);
         ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+    }
+}
+
+static void shell_uart_console_print_prompt(void)
+{
+    shell_uart_console_write_text(SHELL_PROMPT);
+}
+
+static void shell_uart_console_submit_command(const char *command)
+{
+    char command_copy[SHELL_COMMAND_BYTES];
+    char transcript_command[SHELL_COMMAND_BYTES];
+
+    if (command == NULL || command[0] == '\0') {
+        return;
+    }
+
+    snprintf(command_copy, sizeof(command_copy), "%s", command);
+    shell_format_command_for_transcript(command_copy, transcript_command, sizeof(transcript_command));
+
+    if (s_shell_command_lock != NULL) {
+        (void)xSemaphoreTake(s_shell_command_lock, portMAX_DELAY);
+    }
+
+    if (!lvgl_port_lock(0)) {
+        shell_schedule_transcript_appendf("shell: failed to lock LVGL for UART command %s\n", transcript_command);
+        shell_record_errorf("uart", ESP_FAIL, "Failed to lock LVGL for UART command %s", transcript_command);
+        if (s_shell_command_lock != NULL) {
+            xSemaphoreGive(s_shell_command_lock);
+        }
+        return;
+    }
+
+    shell_transcript_appendf("%s%s\n", SHELL_PROMPT, transcript_command);
+    if (shell_command_should_store_history(command_copy)) {
+        shell_store_command_history(command_copy);
+    }
+    s_command_history_cursor = -1;
+    s_history_draft[0] = '\0';
+    shell_execute_command(command_copy);
+    shell_history_transcript_scroll_to_end();
+    lvgl_port_unlock();
+
+    if (s_shell_command_lock != NULL) {
+        xSemaphoreGive(s_shell_command_lock);
+    }
+}
+
+static void shell_uart_console_task(void *arg)
+{
+    char line[SHELL_COMMAND_BYTES];
+    bool prompt_visible = false;
+
+    (void)arg;
+    shell_uart_console_write_text("\nUART console ready. Type help for commands.\n");
+
+    while (true) {
+        char *trimmed;
+        size_t length;
+
+        if (!prompt_visible) {
+            shell_uart_console_print_prompt();
+            prompt_visible = true;
+        }
+
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            clearerr(stdin);
+            continue;
+        }
+
+        trimmed = shell_trim(line);
+        length = strlen(trimmed);
+        while (length > 0 && (trimmed[length - 1] == '\n' || trimmed[length - 1] == '\r')) {
+            trimmed[--length] = '\0';
+        }
+
+        if (trimmed[0] == '\0') {
+            prompt_visible = false;
+            continue;
+        }
+
+        // AI: keep the UART monitor interactive by routing serial-entered commands through the same shell parser, history policy, and LVGL-safe execution path used by the on-screen shell.
+        shell_uart_console_submit_command(trimmed);
+        prompt_visible = false;
+    }
+}
+
+static void shell_uart_console_start(void)
+{
+    setvbuf(stdin, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+    if (s_uart_console_lock == NULL) {
+        s_uart_console_lock = xSemaphoreCreateMutex();
+    }
+
+    if (xTaskCreate(shell_uart_console_task,
+                    "shell_uart",
+                    SHELL_UART_CONSOLE_TASK_STACK_BYTES,
+                    NULL,
+                    tskIDLE_PRIORITY + 1,
+                    NULL) != pdPASS) {
+        shell_record_errorf("uart", ESP_FAIL, "Failed to start UART console task");
     }
 }
 
@@ -6402,6 +6533,8 @@ void app_main(void)
         s_shell_command_lock = xSemaphoreCreateMutex();
     }
 
+    shell_uart_console_start();
+
     bsp_display_backlight_on();
 
     // AI: create the LVGL shell surface only after BSP display and touch startup completes so OTA status has a stable transcript surface.
@@ -6416,6 +6549,7 @@ void app_main(void)
     // AI: keep shell boot status visible through the debug surface without emitting a boot warning during normal startup.
     shell_record_infof("shell", "Shell UI initialized; boot banner is shown on the display transcript");
 
+    shell_transcript_append_text("UART monitor accepts the same shell commands as the on-screen prompt.\n");
     shell_transcript_append_text("Wi-Fi starts in the background on boot; wifi diag is also available for an extra status + scan report.\n");
     shell_transcript_append_text("Enter runs commands from the prompt line; history stays locked above.\n");
     shell_wifi_request_boot_restore();

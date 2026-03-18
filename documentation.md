@@ -19,6 +19,8 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Enter/OK on the input line is handled by `LV_EVENT_READY`, which is the confirmed command execution path in the current shell
 - Heavy shell commands no longer run on the LVGL input-event stack directly; the callback now hands work to a dedicated command task before command parsing and SD/FATFS traversal begin
 - Command-family handlers now receive a preserved copy of the original command line before the generic parser tokenizes it, which keeps `wifi`, `sd`, and `c6ota` subcommands functional when they perform their own second-stage parsing
+- The configured ESP-IDF console now also acts as a real shell endpoint: stdin lines are consumed in a dedicated serial task, stdout mirrors transcript text, and serial-entered commands re-enter the same shell path as touch-entered commands
+- The serial prompt is stateful inside that task and is only re-emitted after a completed or intentionally blank line, which prevents prompt spam while the monitor polls stdin with no new command ready
 - The visual style intentionally stays close to a compact DOS/MS-DOS terminal: dense text, immutable history pane, prompt line, and scan-friendly output
 - Healthy shell startup is treated as normal status, not a warning; the boot milestone is retained in the `debug` command history instead of the serial warning stream
 - See `command.md` for the current command reference
@@ -96,6 +98,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - PSRAM XIP instruction and rodata mapping are also disabled in sdkconfig because the host Wi-Fi image exceeded the shared flash/PSRAM mapping window during link with those options enabled
 - The repository still carries a requested JC1060P470C name while the checked-in BSP baseline is ESP32-P4-Function-EV-Board
 - Command submission is handled by LV_EVENT_READY on the input line, not by editing the transcript directly
+- Serial monitor submission is handled by a dedicated stdin reader task that forwards full lines into the existing shell submit path, so there is still only one parser and one transcript model
 - The `sd ls` panic seen after the LFN change was caused by stack pressure on the LVGL input callback, so shell command execution now runs on a separate worker task with an explicit stack budget while LVGL access is wrapped by the port mutex
 - The hosted OTA path no longer calls `esp_hosted_deinit()` before `c6ota` transfers because the ESP-Hosted SDIO teardown path can assert on this esp32p4 baseline; OTA now follows the upstream example flow of stopping Wi-Fi, reusing the existing hosted transport, then restoring the original Wi-Fi routine after success
 - The `wifi`, `sd`, and `c6ota` command families now preserve their full subcommand text across the worker-task parser handoff, which fixes the runtime regression where family commands could appear inert after the generic parser split the first token in place

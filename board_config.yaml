@@ -170,6 +170,13 @@ board:
       - about
     command_history_depth: 10
     input_prompt: "P4Shell> "
+    serial_console:
+      enabled: true
+      purpose: mirror_transcript_output_and_accept_shell_input_from_the_configured_esp_idf_console
+      input_source: stdin_line_reader_task
+      output_source: stdout_transcript_mirror
+      parser_policy: reuse_existing_shell_submit_path
+      prompt_policy: print_only_when_a_fresh_serial_command_entry_is_needed
     command_execution_worker:
       enabled: true
       stack_bytes: 8192

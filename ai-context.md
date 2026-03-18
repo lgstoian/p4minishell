@@ -30,6 +30,8 @@ P4MiniShell rules – FIXED 2026:
 - Runtime Wi-Fi passwords typed in `wifi connect <ssid> <pass>` must be masked in transcript output and skipped from command recall history
 - Current shell layout = transcript textarea + prompt-bearing input line + on-screen keyboard + basic 10-command recall controls
 - Input submission must be driven by LV_EVENT_READY on the input line while keeping transcript history immutable from normal typing
+- Keep the configured ESP-IDF console wired into the same shell path as the touch UI: serial stdin should feed full commands into the existing submit flow and stdout should mirror transcript output instead of introducing a separate command parser or REPL-only behavior
+- Keep the serial prompt stateful inside the stdin reader task so idle or polling reads do not reprint `P4Shell>` over and over when no complete line is available yet
 - Keep heavy shell command execution off the raw LVGL input callback stack; queue command work onto a dedicated task when SD/FATFS or other deeper command paths would otherwise risk stack overflow in the event handler
 - Preserve the original unsplit command text before generic tokenization whenever a command family such as `wifi`, `sd`, or `c6ota` performs its own subcommand parsing, otherwise the family handler will only see the first token and runtime shell commands will appear inert
 - Current shell command surface includes the original diagnostic commands plus DOS-style shell commands such as `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`, `set`, `path`, `echo`, `call`, `cls`, and `ver`; see `command.md` for the current command reference
