@@ -3311,6 +3311,12 @@ static esp_err_t shell_wifi_run_diagnostic(const char *origin)
         shell_schedule_transcript_appendf("[wifi.diag] origin=%s ip=not-assigned\n", label);
     }
 
+    if (s_wifi_connect_requested && !s_wifi_connected) {
+        shell_schedule_transcript_appendf("[wifi.diag] origin=%s scan skipped while station connect is in progress\n",
+                                          label);
+        return ESP_OK;
+    }
+
     shell_schedule_transcript_appendf("[wifi.diag] origin=%s scanning for nearby networks...\n", label);
     error = esp_wifi_scan_start(NULL, true);
     if (error != ESP_OK) {
