@@ -31,11 +31,26 @@
 #include "esp_system.h"
 #include "esp_wifi_default.h"
 #include "esp_wifi.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_codec_dev.h"
+#include "esp_lcd_touch.h"
+#include "esp_pm.h"
 #if CONFIG_ESP_HOSTED_ENABLED
 #include "esp_hosted.h"
 #include "esp_hosted_api_types.h"
 #include "esp_hosted_host_fw_ver.h"
 #include "esp_hosted_ota.h"
+#endif
+// AI: keep the shell BT runtime hard-disabled on this ESP32-C6 hosted baseline until a proven non-crashing BLE path replaces the earlier Bluedroid experiment.
+#define SHELL_BT_HOSTED_RUNTIME_SUPPORTED 0
+
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+#include "esp_bt_main.h"
+#include "esp_gap_bt_api.h"
+#include "esp_bluedroid_hci.h"
+#include "esp_hosted_bluedroid.h"
 #endif
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
@@ -66,6 +81,9 @@
 #define SHELL_WIFI_INIT_TASK_STACK_BYTES 6144
 #define SHELL_COMMAND_TASK_STACK_BYTES 8192
 #define SHELL_C6OTA_TASK_STACK_BYTES 8192
+#define SHELL_GPIO_NAME_BYTES 32
+#define SHELL_GPIO_PIN_LIMIT 24
+#define SHELL_BT_SCAN_LIMIT 8
 #define SHELL_C6OTA_HTTP_BLOCK_BYTES 2048
 #define SHELL_C6OTA_TRANSFER_CHUNK_BYTES 1500
 #define SHELL_C6OTA_PROGRESS_STEP_PERCENT 5
@@ -94,6 +112,8 @@
 #define SHELL_BATCH_DEPTH_MAX 4
 #define SHELL_FILE_IO_BUFFER_BYTES 512
 #define SHELL_WIFI_RUNTIME_ENABLED (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED)
+#define SHELL_BATTERY_ATTEN ADC_ATTEN_DB_12
+#define SHELL_BATTERY_MIN_SLEEP_FREQ_MHZ 40
 
 #ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID
 #define CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID ""
@@ -177,11 +197,40 @@ typedef struct shell_batch_frame {
     struct shell_batch_frame *parent;
 } shell_batch_frame_t;
 
+typedef struct {
+    const char *name;
+    gpio_num_t gpio;
+    const char *role;
+    bool allow_output;
+    bool critical;
+} shell_gpio_pin_desc_t;
+
+typedef struct {
+    esp_lcd_touch_handle_t handle;
+    lv_indev_t *indev;
+    struct {
+        float x;
+        float y;
+    } scale;
+} shell_lvgl_touch_ctx_t;
+
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+typedef struct {
+    size_t result_count;
+    bool scan_active;
+    bool controller_enabled;
+    bool bluedroid_enabled;
+    bool hci_attached;
+    bool gap_registered;
+} shell_bt_state_t;
+#endif
+
 static lv_obj_t *s_history_transcript;
 static lv_obj_t *s_input_line;
 static lv_obj_t *s_keyboard;
 static lv_obj_t *s_history_prev_button;
 static lv_obj_t *s_history_next_button;
+static lv_display_t *s_display;
 static char s_transcript[SHELL_TRANSCRIPT_BYTES];
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static char s_command_history[SHELL_COMMAND_HISTORY_DEPTH][SHELL_COMMAND_BYTES];
@@ -207,11 +256,26 @@ static SemaphoreHandle_t s_shell_command_lock;
 static char s_shell_cwd[SHELL_SD_PATH_BYTES];
 static shell_env_var_t s_shell_env_vars[SHELL_ENV_VAR_MAX];
 static shell_batch_frame_t *s_active_batch_frame;
+static esp_lcd_touch_handle_t s_touch_handle;
+static int s_backlight_percent = 100;
+static int s_volume_percent = 60;
+static lv_display_rotation_t s_display_rotation = LV_DISPLAY_ROTATION_0;
+static bool s_light_sleep_requested;
+static esp_codec_dev_handle_t s_speaker_dev;
+static adc_oneshot_unit_handle_t s_battery_adc_unit;
+static adc_channel_t s_battery_adc_channel;
+static bool s_battery_adc_ready;
+static adc_cali_handle_t s_battery_cali_handle;
+static bool s_battery_cali_ready;
 
 #if SHELL_WIFI_RUNTIME_ENABLED
 static esp_netif_t *s_wifi_sta_netif;
 static esp_event_handler_instance_t s_wifi_event_any_id;
 static esp_event_handler_instance_t s_wifi_got_ip_event;
+#endif
+
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+static shell_bt_state_t s_bt_state;
 #endif
 
 static void shell_input_line_reset(void);
@@ -225,11 +289,28 @@ static void shell_debug_log_push(const char *tag, const char *message);
 static void shell_record_errorf(const char *tag, esp_err_t error, const char *format, ...);
 static void shell_record_warningf(const char *tag, const char *format, ...);
 static void shell_record_infof(const char *tag, const char *format, ...);
+static bool shell_parse_percentage_arg(const char *text, int *percentage_out);
+static const shell_gpio_pin_desc_t *shell_find_gpio_pin(int gpio_num);
+static esp_err_t shell_get_touch_handle_from_bsp(void);
+static void shell_update_touch_rotation(lv_display_rotation_t rotation);
+static esp_err_t shell_rotation_apply(lv_display_rotation_t rotation);
+static esp_err_t shell_audio_ensure_speaker(void);
+static esp_err_t shell_battery_ensure_adc(void);
+static esp_err_t shell_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out);
+static void shell_battery_print_usage(void);
+static void shell_command_brightness(int argc, char **argv);
+static void shell_command_rotate(int argc, char **argv);
+static void shell_command_battery(int argc, char **argv);
+static void shell_command_volume(int argc, char **argv);
 static void shell_command_mem(void);
 static void shell_command_gpio_status(void);
+static void shell_execute_gpio_command(int argc, char **argv);
 static void shell_command_debug(void);
 static void shell_command_version(void);
 static void shell_command_about(void);
+static void shell_execute_bt_command(int argc, char **argv);
+static void shell_execute_rgb_command(int argc, char **argv);
+static void shell_execute_camera_command(int argc, char **argv);
 static void shell_command_sd(char *command);
 static void shell_command_sd_ls(char *command);
 static void shell_command_sd_stat(char *command);
@@ -291,6 +372,10 @@ static bool shell_wifi_begin_background_request(const shell_wifi_background_requ
 static esp_err_t shell_wifi_run_diagnostic(const char *origin);
 static void shell_wifi_request_boot_restore(void);
 static void shell_wifi_request_post_c6ota_restore(const shell_wifi_restore_state_t *restore_state);
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+static esp_err_t shell_bt_ensure_ready(void);
+static void shell_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
+#endif
 #if CONFIG_ESP_HOSTED_ENABLED
 static esp_err_t shell_c6ota_parse_header(const uint8_t *buffer,
                                           size_t buffer_size,
@@ -607,6 +692,267 @@ static bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_
 
     *value_out = (size_t)parsed_value;
     return true;
+}
+
+static bool shell_parse_percentage_arg(const char *text, int *percentage_out)
+{
+    size_t parsed = 0;
+
+    if (percentage_out == NULL) {
+        return false;
+    }
+
+    if (!shell_parse_size_arg(text, 0, 100, &parsed)) {
+        return false;
+    }
+
+    *percentage_out = (int)parsed;
+    return true;
+}
+
+static const shell_gpio_pin_desc_t s_gpio_pins[] = {
+    {"i2c_sda", BSP_I2C_SDA, "Shared control bus for GT911 touch and onboard peripherals", false, true},
+    {"i2c_scl", BSP_I2C_SCL, "Shared control clock for GT911 touch and onboard peripherals", false, true},
+    {"i2s_dout", BSP_I2S_DOUT, "Audio codec data from the ESP32-P4 to the speaker path", false, true},
+    {"i2s_lclk", BSP_I2S_LCLK, "Audio codec word-select clock", false, true},
+    {"i2s_dsin", BSP_I2S_DSIN, "Audio codec data into the ESP32-P4", false, true},
+    {"i2s_sclk", BSP_I2S_SCLK, "Audio codec bit clock", false, true},
+    {"i2s_mclk", BSP_I2S_MCLK, "Audio codec master clock", false, true},
+    {"power_amp", BSP_POWER_AMP_IO, "Speaker amplifier enable line", true, false},
+    {"backlight", BSP_LCD_BACKLIGHT, "JD9165 panel backlight control", false, true},
+    {"lcd_reset", BSP_LCD_RST, "JD9165 panel hardware reset", false, true},
+    {"battery_adc", BOARD_CFG_BATTERY_ADC_GPIO, "Battery divider sense input", false, true},
+    {"hosted_sdio_d0", GPIO_NUM_14, "ESP32-C6 hosted SDIO data lane D0", false, true},
+    {"hosted_sdio_d1", GPIO_NUM_15, "ESP32-C6 hosted SDIO data lane D1", false, true},
+    {"hosted_sdio_d2", GPIO_NUM_16, "ESP32-C6 hosted SDIO data lane D2", false, true},
+    {"hosted_sdio_d3", GPIO_NUM_17, "ESP32-C6 hosted SDIO data lane D3", false, true},
+    {"hosted_sdio_clk", GPIO_NUM_18, "ESP32-C6 hosted SDIO clock", false, true},
+    {"hosted_sdio_cmd", GPIO_NUM_19, "ESP32-C6 hosted SDIO command", false, true},
+    {"c6_host_reset", (gpio_num_t)SHELL_C6_HOST_RESET_GPIO, "ESP32-C6 hosted reset or enable control", false, true},
+    {"sd_d0", BSP_SD_D0, "MicroSD data lane D0", false, true},
+    {"sd_d1", BSP_SD_D1, "MicroSD data lane D1", false, true},
+    {"sd_d2", BSP_SD_D2, "MicroSD data lane D2", false, true},
+    {"sd_d3", BSP_SD_D3, "MicroSD data lane D3", false, true},
+    {"sd_clk", BSP_SD_CLK, "MicroSD clock", false, true},
+    {"sd_cmd", BSP_SD_CMD, "MicroSD command", false, true},
+};
+
+static const shell_gpio_pin_desc_t *shell_find_gpio_pin(int gpio_num)
+{
+    size_t index;
+
+    for (index = 0; index < sizeof(s_gpio_pins) / sizeof(s_gpio_pins[0]); index++) {
+        if ((int)s_gpio_pins[index].gpio == gpio_num) {
+            return &s_gpio_pins[index];
+        }
+    }
+
+    return NULL;
+}
+
+static esp_err_t shell_get_touch_handle_from_bsp(void)
+{
+    lv_indev_t *touch_indev;
+    shell_lvgl_touch_ctx_t *touch_ctx;
+
+    if (s_touch_handle != NULL) {
+        return ESP_OK;
+    }
+
+    touch_indev = bsp_display_get_input_dev();
+    if (touch_indev == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    touch_ctx = (shell_lvgl_touch_ctx_t *)lv_indev_get_driver_data(touch_indev);
+    if (touch_ctx == NULL || touch_ctx->handle == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_touch_handle = touch_ctx->handle;
+    return ESP_OK;
+}
+
+static void shell_update_touch_rotation(lv_display_rotation_t rotation)
+{
+    bool swap_xy = false;
+    bool mirror_x = false;
+    bool mirror_y = false;
+
+    if (shell_get_touch_handle_from_bsp() != ESP_OK || s_touch_handle == NULL) {
+        return;
+    }
+
+    switch (rotation) {
+    case LV_DISPLAY_ROTATION_90:
+        swap_xy = true;
+        mirror_x = true;
+        mirror_y = false;
+        break;
+    case LV_DISPLAY_ROTATION_180:
+        swap_xy = false;
+        mirror_x = true;
+        mirror_y = true;
+        break;
+    case LV_DISPLAY_ROTATION_270:
+        swap_xy = true;
+        mirror_x = false;
+        mirror_y = true;
+        break;
+    case LV_DISPLAY_ROTATION_0:
+    default:
+        swap_xy = false;
+        mirror_x = false;
+        mirror_y = false;
+        break;
+    }
+
+    (void)esp_lcd_touch_set_swap_xy(s_touch_handle, swap_xy);
+    (void)esp_lcd_touch_set_mirror_x(s_touch_handle, mirror_x);
+    (void)esp_lcd_touch_set_mirror_y(s_touch_handle, mirror_y);
+}
+
+static esp_err_t shell_rotation_apply(lv_display_rotation_t rotation)
+{
+    if (s_display == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    lv_display_set_rotation(s_display, rotation);
+    shell_update_touch_rotation(rotation);
+    s_display_rotation = rotation;
+    return ESP_OK;
+}
+
+static esp_err_t shell_audio_ensure_speaker(void)
+{
+    if (s_speaker_dev != NULL) {
+        return ESP_OK;
+    }
+
+    s_speaker_dev = bsp_audio_codec_speaker_init();
+    if (s_speaker_dev == NULL) {
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t shell_battery_ensure_adc(void)
+{
+    esp_err_t error;
+    adc_unit_t unit_id;
+    adc_oneshot_unit_init_cfg_t unit_cfg = {0};
+    adc_oneshot_chan_cfg_t channel_cfg = {
+        .atten = SHELL_BATTERY_ATTEN,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+
+    if (s_battery_adc_ready) {
+        return ESP_OK;
+    }
+
+    error = adc_oneshot_io_to_channel(BOARD_CFG_BATTERY_ADC_GPIO, &unit_id, &s_battery_adc_channel);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    unit_cfg.unit_id = unit_id;
+    error = adc_oneshot_new_unit(&unit_cfg, &s_battery_adc_unit);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = adc_oneshot_config_channel(s_battery_adc_unit, s_battery_adc_channel, &channel_cfg);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    {
+        adc_cali_curve_fitting_config_t cali_cfg = {
+            .unit_id = unit_id,
+            .chan = s_battery_adc_channel,
+            .atten = SHELL_BATTERY_ATTEN,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_battery_cali_handle) == ESP_OK) {
+            s_battery_cali_ready = true;
+        }
+    }
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    {
+        adc_cali_line_fitting_config_t cali_cfg = {
+            .unit_id = unit_id,
+            .atten = SHELL_BATTERY_ATTEN,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        if (adc_cali_create_scheme_line_fitting(&cali_cfg, &s_battery_cali_handle) == ESP_OK) {
+            s_battery_cali_ready = true;
+        }
+    }
+#endif
+
+    s_battery_adc_ready = true;
+    return ESP_OK;
+}
+
+static esp_err_t shell_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out)
+{
+    esp_err_t error;
+    int raw = 0;
+    int gpio_mv = 0;
+    int battery_mv;
+    int percent;
+
+    error = shell_battery_ensure_adc();
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = adc_oneshot_read(s_battery_adc_unit, s_battery_adc_channel, &raw);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    if (s_battery_cali_ready) {
+        error = adc_cali_raw_to_voltage(s_battery_cali_handle, raw, &gpio_mv);
+        if (error != ESP_OK) {
+            return error;
+        }
+    } else {
+        gpio_mv = (raw * 3300) / 4095;
+    }
+
+    battery_mv = (gpio_mv * BOARD_CFG_BATTERY_DIVIDER_NUMERATOR) / BOARD_CFG_BATTERY_DIVIDER_DENOMINATOR;
+    if (battery_mv <= BOARD_CFG_BATTERY_EMPTY_MV) {
+        percent = 0;
+    } else if (battery_mv >= BOARD_CFG_BATTERY_FULL_MV) {
+        percent = 100;
+    } else {
+        percent = ((battery_mv - BOARD_CFG_BATTERY_EMPTY_MV) * 100) /
+                  (BOARD_CFG_BATTERY_FULL_MV - BOARD_CFG_BATTERY_EMPTY_MV);
+    }
+
+    if (battery_mv_out != NULL) {
+        *battery_mv_out = battery_mv;
+    }
+    if (percent_out != NULL) {
+        *percent_out = percent;
+    }
+    if (raw_out != NULL) {
+        *raw_out = raw;
+    }
+    if (gpio_mv_out != NULL) {
+        *gpio_mv_out = gpio_mv;
+    }
+
+    return ESP_OK;
+}
+
+static void shell_battery_print_usage(void)
+{
+    shell_transcript_append_text("Usage: battery or battery sleep <on|off|status>\n");
 }
 
 static void shell_env_normalize_name(const char *name, char *output, size_t output_size)
@@ -3474,6 +3820,10 @@ static void shell_command_help(void)
     shell_transcript_append_text("  help    Show available commands\n");
     shell_transcript_append_text("  cls     Alias of clear\n");
     shell_transcript_append_text("  c6ota <sd:/file.bin|http[s]://url|default> Run ESP-Hosted SDIO OTA from SD, HTTP, or SD root default\n");
+    shell_transcript_append_text("  brightness <0-100> Set the LCD backlight brightness\n");
+    shell_transcript_append_text("  rotate <0|90|180|270> Rotate the display and remap GT911 touch\n");
+    shell_transcript_append_text("  battery [sleep <on|off|status>] Show battery voltage/percent and light-sleep state\n");
+    shell_transcript_append_text("  volume <0-100> Set speaker output volume through the ES8311 codec path\n");
     shell_transcript_append_text("  sysinfo Show board/runtime information\n");
     shell_transcript_append_text("  cd | chdir [path] Change or show the current SD working directory\n");
     shell_transcript_append_text("  dir [path] List files from the current SD working directory\n");
@@ -3494,7 +3844,10 @@ static void shell_command_help(void)
     shell_transcript_append_text("  wifi scan Scan for nearby access points after Wi-Fi startup\n");
     shell_transcript_append_text("  sd info | ls [path] | stat <path> | cat <path> [max_bytes]\n");
     shell_transcript_append_text("  mem     Show heap and PSRAM usage\n");
-    shell_transcript_append_text("  gpio status Show key board and co-processor GPIO levels\n");
+    shell_transcript_append_text("  gpio list | status | read <pin> | set <pin> <0|1>\n");
+    shell_transcript_append_text("  bt status | enable | scan  Hosted Bluetooth control for ESP32-C6 when enabled in sdkconfig\n");
+    shell_transcript_append_text("  rgb led <color> | rgb <r> <g> <b>  RGB LED control when declared in board metadata\n");
+    shell_transcript_append_text("  camera init | camera snap <filename>  Camera control when declared in board metadata\n");
     shell_transcript_append_text("  debug   Show last 5 errors, Wi-Fi state, heap, and warnings\n");
     shell_transcript_append_text("  version | ver Show app and ESP-IDF version\n");
     shell_transcript_append_text("  about   Show shell and board summary\n");
@@ -3523,6 +3876,9 @@ static void shell_command_sysinfo(void)
     shell_transcript_appendf("board.detected_name: %s\n", SHELL_BOARD_DETECTED);
     shell_transcript_appendf("display: %d x %d, JD9165, reset GPIO %d, backlight GPIO %d\n",
                              BSP_LCD_H_RES, BSP_LCD_V_RES, BSP_LCD_RST, BSP_LCD_BACKLIGHT);
+    shell_transcript_appendf("display.state: brightness=%d%% rotation=%u\n",
+                             s_backlight_percent,
+                             (unsigned int)(s_display_rotation * 90));
     shell_transcript_appendf("display.timing: pclk=%dMHz, lanes=%d, bitrate=%dMbps, hsync=%d hbp=%d hfp=%d vsync=%d vbp=%d vfp=%d\n",
                              BSP_LCD_PIXEL_CLOCK_MHZ,
                              BSP_LCD_MIPI_DSI_LANE_NUM,
@@ -3548,6 +3904,24 @@ static void shell_command_sysinfo(void)
                              BOARD_CFG_TOUCH_SWAP_XY,
                              BOARD_CFG_TOUCH_MIRROR_X,
                              BOARD_CFG_TOUCH_MIRROR_Y);
+    shell_transcript_appendf("audio: I2S%d BCLK=%d WS=%d DOUT=%d MCLK=%d amp=%d volume=%d%%\n",
+                             BOARD_CFG_I2S_PORT,
+                             BSP_I2S_SCLK,
+                             BSP_I2S_LCLK,
+                             BSP_I2S_DOUT,
+                             BSP_I2S_MCLK,
+                             BSP_POWER_AMP_IO,
+                             s_volume_percent);
+    shell_transcript_appendf("battery: adc_gpio=%d divider=%d:%d range=%dmV..%dmV\n",
+                             BOARD_CFG_BATTERY_ADC_GPIO,
+                             BOARD_CFG_BATTERY_DIVIDER_NUMERATOR,
+                             BOARD_CFG_BATTERY_DIVIDER_DENOMINATOR,
+                             BOARD_CFG_BATTERY_EMPTY_MV,
+                             BOARD_CFG_BATTERY_FULL_MV);
+    shell_transcript_appendf("hardware.rgb: gpio=%d ws2812=%d\n",
+                             BOARD_CFG_RGB_LED_GPIO,
+                             BOARD_CFG_RGB_LED_IS_WS2812);
+    shell_transcript_appendf("hardware.camera: supported=%d\n", BOARD_CFG_CAMERA_SUPPORTED);
     shell_transcript_appendf("storage: spiffs=%s, sd=%s\n", BSP_SPIFFS_MOUNT_POINT, BSP_SD_MOUNT_POINT);
     shell_transcript_appendf("c6.hosted_transport: sdio reset_gpio=%d busy=%s\n",
                              SHELL_C6_HOST_RESET_GPIO,
@@ -3590,9 +3964,166 @@ static void shell_command_sysinfo(void)
     }
 }
 
+static void shell_command_brightness(int argc, char **argv)
+{
+    esp_err_t error;
+    int percent;
+
+    if (argc != 2 || !shell_parse_percentage_arg(argv[1], &percent)) {
+        shell_transcript_append_text("Usage: brightness <0-100>\n");
+        shell_record_warningf("brightness", "Usage error for brightness command");
+        return;
+    }
+
+    error = bsp_display_brightness_set(percent);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("brightness: failed to set backlight (%s)\n", esp_err_to_name(error));
+        shell_record_errorf("brightness", error, "Failed to set brightness to %d%%", percent);
+        return;
+    }
+
+    s_backlight_percent = percent;
+    shell_transcript_appendf("brightness set to %d%%\n", percent);
+}
+
+static void shell_command_rotate(int argc, char **argv)
+{
+    lv_display_rotation_t rotation;
+    esp_err_t error;
+
+    if (argc != 2) {
+        shell_transcript_append_text("Usage: rotate <0|90|180|270>\n");
+        shell_record_warningf("rotate", "Usage error for rotate command");
+        return;
+    }
+
+    if (strcmp(argv[1], "0") == 0) {
+        rotation = LV_DISPLAY_ROTATION_0;
+    } else if (strcmp(argv[1], "90") == 0) {
+        rotation = LV_DISPLAY_ROTATION_90;
+    } else if (strcmp(argv[1], "180") == 0) {
+        rotation = LV_DISPLAY_ROTATION_180;
+    } else if (strcmp(argv[1], "270") == 0) {
+        rotation = LV_DISPLAY_ROTATION_270;
+    } else {
+        shell_transcript_append_text("Usage: rotate <0|90|180|270>\n");
+        shell_record_warningf("rotate", "Invalid rotation angle: %s", argv[1]);
+        return;
+    }
+
+    error = shell_rotation_apply(rotation);
+    if (error != ESP_OK) {
+        shell_transcript_appendf("rotate: failed to apply display rotation (%s)\n", esp_err_to_name(error));
+        shell_record_errorf("rotate", error, "Failed to apply rotation %s", argv[1]);
+        return;
+    }
+
+    shell_transcript_appendf("rotation set to %s degrees and GT911 remap updated\n", argv[1]);
+}
+
+static void shell_command_battery(int argc, char **argv)
+{
+    int battery_mv;
+    int percent;
+    int raw;
+    int gpio_mv;
+    esp_err_t error;
+
+    if (argc == 1) {
+        error = shell_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
+        if (error != ESP_OK) {
+            shell_transcript_appendf("battery: failed to read ADC on GPIO %d (%s)\n",
+                                     BOARD_CFG_BATTERY_ADC_GPIO,
+                                     esp_err_to_name(error));
+            shell_record_errorf("battery", error, "Failed to read battery ADC");
+            return;
+        }
+
+        shell_transcript_appendf("battery: %d%%, %d.%03d V\n", percent, battery_mv / 1000, battery_mv % 1000);
+        shell_transcript_appendf("battery.detail: gpio=%d raw=%d gpio_mv=%d scaled_mv=%d\n",
+                                 BOARD_CFG_BATTERY_ADC_GPIO,
+                                 raw,
+                                 gpio_mv,
+                                 battery_mv);
+#if CONFIG_PM_ENABLE
+        shell_transcript_appendf("battery.sleep: light sleep requested=%s\n", s_light_sleep_requested ? "yes" : "no");
+#else
+        shell_transcript_append_text("battery.sleep: unavailable because CONFIG_PM_ENABLE is off in sdkconfig\n");
+#endif
+        return;
+    }
+
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "sleep") &&
+        shell_text_equals_ignore_case(argv[2], "status")) {
+        shell_transcript_appendf("battery.sleep: light sleep requested=%s\n", s_light_sleep_requested ? "yes" : "no");
+        return;
+    }
+
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "sleep")) {
+        if (!shell_text_equals_ignore_case(argv[2], "on") && !shell_text_equals_ignore_case(argv[2], "off")) {
+            shell_battery_print_usage();
+            shell_record_warningf("battery", "Invalid battery sleep argument: %s", argv[2]);
+            return;
+        }
+#if CONFIG_PM_ENABLE
+        esp_pm_config_t pm_config = {
+            .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+            .min_freq_mhz = SHELL_BATTERY_MIN_SLEEP_FREQ_MHZ,
+            .light_sleep_enable = shell_text_equals_ignore_case(argv[2], "on"),
+        };
+
+        error = esp_pm_configure(&pm_config);
+        if (error != ESP_OK) {
+            shell_transcript_appendf("battery.sleep: failed to apply power management (%s)\n", esp_err_to_name(error));
+            shell_record_errorf("battery", error, "Failed to update light sleep request");
+            return;
+        }
+
+        s_light_sleep_requested = pm_config.light_sleep_enable;
+        shell_transcript_appendf("battery.sleep: light sleep %s\n", s_light_sleep_requested ? "enabled" : "disabled");
+#else
+        shell_transcript_append_text("battery.sleep: unavailable because CONFIG_PM_ENABLE is off in sdkconfig\n");
+#endif
+        return;
+    }
+
+    shell_battery_print_usage();
+    shell_record_warningf("battery", "Usage error for battery command");
+}
+
+static void shell_command_volume(int argc, char **argv)
+{
+    int percent;
+    int result;
+    esp_err_t error;
+
+    if (argc != 2 || !shell_parse_percentage_arg(argv[1], &percent)) {
+        shell_transcript_append_text("Usage: volume <0-100>\n");
+        shell_record_warningf("volume", "Usage error for volume command");
+        return;
+    }
+
+    error = shell_audio_ensure_speaker();
+    if (error != ESP_OK) {
+        shell_transcript_appendf("volume: failed to initialize the ES8311 speaker path (%s)\n", esp_err_to_name(error));
+        shell_record_errorf("volume", error, "Failed to initialize speaker device");
+        return;
+    }
+
+    result = esp_codec_dev_set_out_vol(s_speaker_dev, percent);
+    if (result != ESP_CODEC_DEV_OK) {
+        shell_transcript_appendf("volume: failed to set speaker volume (codec=%d)\n", result);
+        shell_record_warningf("volume", "Failed to set speaker volume to %d%% (codec=%d)", percent, result);
+        return;
+    }
+
+    s_volume_percent = percent;
+    shell_transcript_appendf("volume set to %d%%\n", percent);
+}
+
 static void shell_command_mem(void)
 {
-    // AI: keep the terminal output dense and readable in the MSDOS-style transcript, including 5% C6 OTA progress lines.
+    // AI: new hardware control commands added for brightness rotation battery volume gpio bt rgb camera using official drivers from board_config.yaml no regressions to boot render or WiFi.
     size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t min_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -3608,24 +4139,454 @@ static void shell_command_mem(void)
 #endif
 }
 
-static void shell_print_gpio_level(const char *name, int gpio_num)
+static const char *shell_gpio_access_label(const shell_gpio_pin_desc_t *pin)
+{
+    if (pin == NULL) {
+        return "unknown";
+    }
+
+    if (pin->allow_output && !pin->critical) {
+        return "shell-settable";
+    }
+
+    return "monitor-only";
+}
+
+static void shell_print_gpio_entry(const shell_gpio_pin_desc_t *pin)
 {
     int level;
 
-    if (gpio_num < 0) {
-        shell_transcript_appendf("gpio.%s: not-configured\n", name);
+    if (pin == NULL || pin->gpio < 0) {
         return;
     }
 
-    level = gpio_get_level((gpio_num_t)gpio_num);
-    shell_transcript_appendf("gpio.%s: gpio=%d level=%d\n", name, gpio_num, level);
+    level = gpio_get_level(pin->gpio);
+    shell_transcript_appendf("gpio.list: name=%s gpio=%d level=%d access=%s critical=%s role=%s\n",
+                             pin->name,
+                             pin->gpio,
+                             level,
+                             shell_gpio_access_label(pin),
+                             pin->critical ? "yes" : "no",
+                             pin->role != NULL ? pin->role : "unspecified");
+}
+
+static esp_err_t shell_gpio_set_safe_level(int gpio_num, int level)
+{
+    const shell_gpio_pin_desc_t *pin = shell_find_gpio_pin(gpio_num);
+    gpio_config_t config = {
+        .pin_bit_mask = 1ULL << gpio_num,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    if (pin == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (!pin->allow_output || pin->critical) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    if (gpio_config(&config) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    return gpio_set_level((gpio_num_t)gpio_num, level);
 }
 
 static void shell_command_gpio_status(void)
 {
-    shell_print_gpio_level("display_reset", BSP_LCD_RST);
-    shell_print_gpio_level("backlight", BSP_LCD_BACKLIGHT);
-    shell_print_gpio_level("c6_host_reset", SHELL_C6_HOST_RESET_GPIO);
+    size_t index;
+
+    for (index = 0; index < sizeof(s_gpio_pins) / sizeof(s_gpio_pins[0]); index++) {
+        const shell_gpio_pin_desc_t *pin = &s_gpio_pins[index];
+        int level = gpio_get_level(pin->gpio);
+
+        shell_transcript_appendf("gpio.status: name=%s gpio=%d level=%d access=%s role=%s\n",
+                                 pin->name,
+                                 pin->gpio,
+                                 level,
+                                 shell_gpio_access_label(pin),
+                                 pin->role != NULL ? pin->role : "unspecified");
+    }
+}
+
+static void shell_execute_gpio_command(int argc, char **argv)
+{
+    size_t index;
+    char *end = NULL;
+    long gpio_num;
+    long level;
+    esp_err_t error;
+
+    if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "status"))) {
+        shell_command_gpio_status();
+        return;
+    }
+
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "list")) {
+        for (index = 0; index < sizeof(s_gpio_pins) / sizeof(s_gpio_pins[0]); index++) {
+            shell_print_gpio_entry(&s_gpio_pins[index]);
+        }
+        return;
+    }
+
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "read")) {
+        const shell_gpio_pin_desc_t *pin;
+
+        gpio_num = strtol(argv[2], &end, 10);
+        if (end == NULL || *end != '\0') {
+            shell_transcript_append_text("Usage: gpio read <pin>\n");
+            shell_record_warningf("gpio", "Usage error for gpio read command");
+            return;
+        }
+        pin = shell_find_gpio_pin((int)gpio_num);
+        if (pin != NULL) {
+            shell_transcript_appendf("gpio read: name=%s pin=%ld level=%d role=%s\n",
+                                     pin->name,
+                                     gpio_num,
+                                     gpio_get_level((gpio_num_t)gpio_num),
+                                     pin->role != NULL ? pin->role : "unspecified");
+        } else {
+            shell_transcript_appendf("gpio read: pin=%ld level=%d\n", gpio_num, gpio_get_level((gpio_num_t)gpio_num));
+        }
+        return;
+    }
+
+    if (argc == 4 && shell_text_equals_ignore_case(argv[1], "set")) {
+        gpio_num = strtol(argv[2], &end, 10);
+        if (end == NULL || *end != '\0') {
+            shell_transcript_append_text("Usage: gpio set <pin> <0|1>\n");
+            shell_record_warningf("gpio", "Usage error for gpio set pin argument");
+            return;
+        }
+
+        end = NULL;
+        level = strtol(argv[3], &end, 10);
+        if (end == NULL || *end != '\0' || (level != 0 && level != 1)) {
+            shell_transcript_append_text("Usage: gpio set <pin> <0|1>\n");
+            shell_record_warningf("gpio", "Usage error for gpio set level argument");
+            return;
+        }
+
+        error = shell_gpio_set_safe_level((int)gpio_num, (int)level);
+        if (error == ESP_ERR_NOT_SUPPORTED) {
+            shell_transcript_appendf("gpio set: pin %ld is reserved for active board functions and is read-only from the shell\n", gpio_num);
+            shell_record_warningf("gpio", "Rejected unsafe gpio set on pin %ld", gpio_num);
+            return;
+        }
+        if (error == ESP_ERR_NOT_FOUND) {
+            shell_transcript_appendf("gpio set: pin %ld is not in the exposed board pin list\n", gpio_num);
+            shell_record_warningf("gpio", "Unknown gpio set pin %ld", gpio_num);
+            return;
+        }
+        if (error != ESP_OK) {
+            shell_transcript_appendf("gpio set: failed to drive pin %ld (%s)\n", gpio_num, esp_err_to_name(error));
+            shell_record_errorf("gpio", error, "Failed to set gpio %ld", gpio_num);
+            return;
+        }
+
+        shell_transcript_appendf("gpio set: pin=%ld level=%ld\n", gpio_num, level);
+        return;
+    }
+
+    shell_transcript_append_text("Usage: gpio list | gpio status | gpio read <pin> | gpio set <pin> <0|1>\n");
+    shell_record_warningf("gpio", "Usage error for gpio command");
+}
+
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+static void shell_bt_format_address(const esp_bd_addr_t address, char *output, size_t output_size)
+{
+    if (output == NULL || output_size == 0) {
+        return;
+    }
+
+    snprintf(output,
+             output_size,
+             "%02x:%02x:%02x:%02x:%02x:%02x",
+             address[0],
+             address[1],
+             address[2],
+             address[3],
+             address[4],
+             address[5]);
+}
+
+static void shell_bt_extract_name(const esp_bt_gap_cb_param_t *param, char *name, size_t name_size)
+{
+    int property_index;
+
+    if (name == NULL || name_size == 0) {
+        return;
+    }
+
+    name[0] = '\0';
+    if (param == NULL) {
+        return;
+    }
+
+    for (property_index = 0; property_index < param->disc_res.num_prop; property_index++) {
+        const esp_bt_gap_dev_prop_t *property = &param->disc_res.prop[property_index];
+
+        if (property->type == ESP_BT_GAP_DEV_PROP_BDNAME && property->val != NULL && property->len > 0) {
+            size_t copy_len = property->len < (int)(name_size - 1) ? (size_t)property->len : (name_size - 1);
+            memcpy(name, property->val, copy_len);
+            name[copy_len] = '\0';
+            return;
+        }
+
+        if (property->type == ESP_BT_GAP_DEV_PROP_EIR && property->val != NULL) {
+            uint8_t eir_name_len = 0;
+            const uint8_t *eir_name = esp_bt_gap_resolve_eir_data((uint8_t *)property->val,
+                                                                  ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME,
+                                                                  &eir_name_len);
+
+            if (eir_name == NULL) {
+                eir_name = esp_bt_gap_resolve_eir_data((uint8_t *)property->val,
+                                                       ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME,
+                                                       &eir_name_len);
+            }
+
+            if (eir_name != NULL && eir_name_len > 0) {
+                size_t copy_len = eir_name_len < (name_size - 1) ? (size_t)eir_name_len : (name_size - 1);
+                memcpy(name, eir_name, copy_len);
+                name[copy_len] = '\0';
+                return;
+            }
+        }
+    }
+}
+
+// AI: retain the earlier hosted BT code only behind a hard gate so the shell can reject bt enable and bt scan safely instead of touching the crashing runtime path.
+static esp_err_t shell_bt_ensure_ready(void)
+{
+    esp_err_t error;
+
+    error = esp_hosted_init();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        return error;
+    }
+
+    error = esp_hosted_connect_to_slave();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        return error;
+    }
+
+    if (!s_bt_state.controller_enabled) {
+        error = esp_hosted_bt_controller_init();
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            return error;
+        }
+
+        error = esp_hosted_bt_controller_enable();
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            return error;
+        }
+
+        s_bt_state.controller_enabled = true;
+    }
+
+    if (!s_bt_state.hci_attached) {
+        esp_bluedroid_hci_driver_operations_t operations = {
+            .send = hosted_hci_bluedroid_send,
+            .check_send_available = hosted_hci_bluedroid_check_send_available,
+            .register_host_callback = hosted_hci_bluedroid_register_host_callback,
+        };
+
+        hosted_hci_bluedroid_open();
+        esp_bluedroid_attach_hci_driver(&operations);
+        s_bt_state.hci_attached = true;
+    }
+
+    if (!s_bt_state.bluedroid_enabled) {
+        error = esp_bluedroid_init();
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            return error;
+        }
+
+        error = esp_bluedroid_enable();
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            return error;
+        }
+
+        s_bt_state.bluedroid_enabled = true;
+    }
+
+    if (!s_bt_state.gap_registered) {
+        error = esp_bt_gap_register_callback(shell_bt_gap_cb);
+        if (error != ESP_OK) {
+            return error;
+        }
+
+        error = esp_bt_gap_set_device_name("P4MiniShell BT Host");
+        if (error != ESP_OK) {
+            return error;
+        }
+
+        error = esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        if (error != ESP_OK) {
+            return error;
+        }
+
+        s_bt_state.gap_registered = true;
+    }
+
+    return ESP_OK;
+}
+
+static void shell_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
+{
+    switch (event) {
+        case ESP_BT_GAP_DISC_RES_EVT: {
+            char address[18];
+            char name[ESP_BT_GAP_MAX_BDNAME_LEN + 1];
+            int property_index;
+            int rssi = 0;
+            bool have_rssi = false;
+
+            if (param == NULL) {
+                return;
+            }
+
+            shell_bt_format_address(param->disc_res.bda, address, sizeof(address));
+            shell_bt_extract_name(param, name, sizeof(name));
+            for (property_index = 0; property_index < param->disc_res.num_prop; property_index++) {
+                const esp_bt_gap_dev_prop_t *property = &param->disc_res.prop[property_index];
+
+                if (property->type == ESP_BT_GAP_DEV_PROP_RSSI && property->val != NULL) {
+                    rssi = *(int8_t *)property->val;
+                    have_rssi = true;
+                }
+            }
+
+            s_bt_state.result_count++;
+            shell_schedule_transcript_appendf("bt.scan: device=%s rssi=%d name=%s\n",
+                                              address,
+                                              have_rssi ? rssi : 0,
+                                              name[0] != '\0' ? name : "(unnamed)");
+
+            if (s_bt_state.result_count >= SHELL_BT_SCAN_LIMIT) {
+                esp_bt_gap_cancel_discovery();
+            }
+            break;
+        }
+
+        case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
+            if (param == NULL) {
+                return;
+            }
+
+            if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED) {
+                s_bt_state.scan_active = true;
+                shell_schedule_transcript_appendf("%s", "bt: discovery in progress\n");
+            } else if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
+                s_bt_state.scan_active = false;
+                shell_schedule_transcript_appendf("bt: discovery complete, %u result(s) reported\n",
+                                                  (unsigned int)s_bt_state.result_count);
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+#endif
+
+static void shell_execute_bt_command(int argc, char **argv)
+{
+    if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "status"))) {
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+        shell_transcript_appendf("bt: sdkconfig=enabled controller=%s bluedroid=%s scan_active=%s last_scan_results=%u\n",
+                                 s_bt_state.controller_enabled ? "yes" : "no",
+                                 s_bt_state.bluedroid_enabled ? "yes" : "no",
+                                 s_bt_state.scan_active ? "yes" : "no",
+                                 (unsigned int)s_bt_state.result_count);
+#else
+    shell_transcript_append_text("bt: unavailable on the current ESP32-C6 hosted baseline because the earlier Bluedroid host path proved unstable here; Wi-Fi remains the supported hosted feature set\n");
+#endif
+        return;
+    }
+
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "enable")) {
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+        esp_err_t error = shell_bt_ensure_ready();
+        if (error != ESP_OK) {
+            shell_transcript_appendf("bt: enable failed (%s)\n", esp_err_to_name(error));
+            shell_record_errorf("bt", error, "Failed to enable Bluetooth host stack");
+            return;
+        }
+        shell_transcript_append_text("bt enabled on the ESP32-C6 hosted stack\n");
+#else
+    shell_transcript_append_text("bt: disabled to protect the ESP32-C6 hosted Wi-Fi baseline because the current Bluedroid bring-up path can crash this board\n");
+#endif
+        return;
+    }
+
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "scan")) {
+#if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
+        esp_err_t error = shell_bt_ensure_ready();
+        if (error != ESP_OK) {
+            shell_transcript_appendf("bt: scan failed during stack startup (%s)\n", esp_err_to_name(error));
+            shell_record_errorf("bt", error, "Failed to prepare Bluetooth scan");
+            return;
+        }
+        if (s_bt_state.scan_active) {
+            shell_transcript_append_text("bt: scan already in progress\n");
+            return;
+        }
+        s_bt_state.result_count = 0;
+        s_bt_state.scan_active = true;
+        error = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+        if (error != ESP_OK) {
+            s_bt_state.scan_active = false;
+            shell_transcript_appendf("bt: scan start failed (%s)\n", esp_err_to_name(error));
+            shell_record_errorf("bt", error, "Failed to start Bluetooth discovery");
+            return;
+        }
+        shell_transcript_append_text("bt scan started on the ESP32-C6 hosted stack\n");
+#else
+        shell_transcript_append_text("bt: disabled to protect the ESP32-C6 hosted Wi-Fi baseline because the current Bluedroid bring-up path can crash this board\n");
+#endif
+        return;
+    }
+
+    shell_transcript_append_text("Usage: bt status | bt enable | bt scan\n");
+    shell_record_warningf("bt", "Usage error for bt command");
+}
+
+static void shell_execute_rgb_command(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    if (BOARD_CFG_RGB_LED_GPIO == GPIO_NUM_NC) {
+        shell_transcript_append_text("rgb: unsupported because the JC1060 reference repo does not expose authoritative onboard RGB LED wiring and this workspace still has no declared RGB driver\n");
+        shell_record_warningf("rgb", "RGB LED command requested without a configured RGB LED pin");
+        return;
+    }
+
+    shell_transcript_append_text("rgb: RGB LED control is reserved until the board metadata declares the exact driver mode\n");
+}
+
+static void shell_execute_camera_command(int argc, char **argv)
+{
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "init")) {
+        shell_transcript_append_text("camera: unsupported because the JC1060 reference repo shows a camera add-on path, but this workspace still does not declare the sensor, CSI pin map, or local esp_video camera stack needed to initialize it\n");
+        shell_record_warningf("camera", "Camera init requested without camera metadata in the workspace");
+        return;
+    }
+
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "snap")) {
+        shell_transcript_appendf("camera: snap unavailable for %s because the workspace still lacks the declared sensor, CSI pin map, and local camera stack that the JC1060 examples depend on\n",
+                                 argv[2]);
+        shell_record_warningf("camera", "Camera snap requested without camera metadata in the workspace");
+        return;
+    }
+
+    shell_transcript_append_text("Usage: camera init | camera snap <filename>\n");
+    shell_record_warningf("camera", "Usage error for camera command");
 }
 
 static void shell_command_debug(void)
@@ -4983,6 +5944,7 @@ static void shell_execute_command(char *command)
 static bool shell_execute_command_core(char *command)
 {
     char *trimmed = shell_trim(command);
+    char command_copy[SHELL_BATCH_LINE_BYTES * 2];
     char *argv[16];
     int argc;
     char batch_path[SHELL_SD_PATH_BYTES];
@@ -4999,6 +5961,8 @@ static bool shell_execute_command_core(char *command)
         return true;
     }
 
+    // AI: preserve the unsplit command text for family handlers that perform their own subcommand parsing.
+    snprintf(command_copy, sizeof(command_copy), "%s", trimmed);
     argc = shell_split_args(trimmed, argv, 16);
     if (argc == 0) {
         return true;
@@ -5031,6 +5995,26 @@ static bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "sysinfo")) {
         shell_command_sysinfo();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "brightness")) {
+        shell_command_brightness(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "rotate")) {
+        shell_command_rotate(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "battery")) {
+        shell_command_battery(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "volume")) {
+        shell_command_volume(argc, argv);
         return true;
     }
 
@@ -5133,28 +6117,38 @@ static bool shell_execute_command_core(char *command)
     }
 
     if (strncmp(argv[0], "c6ota", 5) == 0 && (argv[0][5] == '\0')) {
-        shell_execute_c6ota_command(trimmed);
+        shell_execute_c6ota_command(command_copy);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "gpio")) {
-        if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "status"))) {
-            shell_command_gpio_status();
-        } else {
-            shell_transcript_append_text("Usage: gpio status\n");
-            shell_record_warningf("gpio", "Usage error for gpio command");
-        }
+        shell_execute_gpio_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "bt")) {
+        shell_execute_bt_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "rgb")) {
+        shell_execute_rgb_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "camera")) {
+        shell_execute_camera_command(argc, argv);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "sd")) {
-        shell_command_sd(trimmed);
+        shell_command_sd(command_copy);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "wifi")) {
 #if SHELL_WIFI_RUNTIME_ENABLED
-        shell_execute_wifi_command(trimmed);
+        shell_execute_wifi_command(command_copy);
 #else
         shell_transcript_append_text("wifi commands unavailable because sdkconfig does not enable the Wi-Fi stack\n");
 #endif
@@ -5382,7 +6376,7 @@ void app_main(void)
 {
     lv_display_t *display;
 
-    // AI: preserve the BSP-driven LCD and touch startup path from the original demo while OTA changes stay inside the shell handler.
+    // AI: new hardware control commands added for brightness rotation battery volume gpio bt rgb camera using official drivers from board_config.yaml no regressions to boot render or WiFi.
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
@@ -5401,6 +6395,8 @@ void app_main(void)
         return;
     }
 
+    s_display = display;
+
     shell_set_default_state();
     if (s_shell_command_lock == NULL) {
         s_shell_command_lock = xSemaphoreCreateMutex();
@@ -5412,6 +6408,10 @@ void app_main(void)
     bsp_display_lock(0);
     shell_build_ui();
     bsp_display_unlock();
+
+    if (shell_get_touch_handle_from_bsp() != ESP_OK) {
+        shell_record_warningf("init", "GT911 touch handle lookup failed after BSP startup; rotate will stay display-only");
+    }
 
     // AI: keep shell boot status visible through the debug surface without emitting a boot warning during normal startup.
     shell_record_infof("shell", "Shell UI initialized; boot banner is shown on the display transcript");

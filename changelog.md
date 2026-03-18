@@ -1,3 +1,23 @@
+## [0.1.19] - 2026-03-18
+- Fixed the shell command-family dispatch regression that left `wifi status`, `wifi scan`, `wifi diag`, `wifi connect`, and `wifi disconnect` effectively inert even though boot-time hosted Wi-Fi still initialized and connected correctly
+- Fixed the root cause in the shell parser by preserving the original unsplit command text before tokenization, so family handlers that re-parse subcommands now receive the full command line instead of only the first token
+- Applied the same command-routing fix to the `sd` and `c6ota` family handlers so their subcommand parsing stays reliable without changing the proven boot, display, hosted Wi-Fi, or OTA runtime paths
+
+## [0.1.18] - 2026-03-17
+- Disabled the earlier hosted Bluedroid Bluetooth bring-up path on the ESP32-C6 baseline after `bt enable` proved able to crash the board inside the Bluedroid HCI parser during controller startup
+- Kept the `bt` command surface visible, but changed it back to an explicit unsupported state on this current ESP32-C6 hosted configuration so boot, display, SD, and Wi-Fi remain stable
+- Removed the direct host BT build dependency and hard-gated the shell's Bluetooth runtime path so `bt enable` and `bt scan` now fail safely instead of entering the unstable controller startup path
+
+## [0.1.17] - 2026-03-17
+- Tightened `gpio list` and `gpio status` so the shell now reports the exposed board pins with clearer JC1060 and ESP32-P4 role text instead of terse raw labels
+- Enabled the hosted Bluedroid Bluetooth path in the host build, added the required BT component dependency, and completed the shell-side `bt status | enable | scan` runtime helpers against the local ESP-Hosted example flow
+- Kept `rgb` and `camera` intentionally blocked, but updated those shell messages to explain the current evidence more honestly: the JC1060 reference repo does not expose authoritative RGB LED wiring, and this workspace still lacks the local camera stack needed by the JC1060 camera examples
+
+## [0.1.16] - 2026-03-17
+- Expanded the shell with hardware control commands for `brightness`, `rotate`, `battery`, `volume`, and the safer `gpio list | status | read | set` flow while preserving the existing BSP boot path, locked transcript UI, SD tools, Wi-Fi restore flow, and `c6ota` behavior
+- Added runtime display rotation with GT911 touch remapping, ADC-backed battery reporting using board-configured divider values, and ES8311 speaker volume control through the existing BSP codec path
+- Surfaced `bt status | enable | scan`, `rgb`, and `camera` in the parser and help output with explicit sdkconfig or board-metadata gates so unsupported hardware paths fail clearly instead of pretending support on the current workspace baseline
+
 ## [0.1.15] - 2026-03-17
 - Rewrote the README introduction to describe P4MiniShell as an embedded ESP32-P4 and ESP32-C6 DOS-style shell platform instead of a minimal demo replacement
 - Added `roadmap.md` to capture the missing work for COMMAND.COM parity, native app loading, a future shell SDK and API, and the separate design decision needed for literal DOS `.exe` compatibility

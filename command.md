@@ -7,6 +7,11 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 ## Core commands
 - `help`: Show the built-in command list.
 - `sysinfo`: Show board, display, storage, heap, and Wi-Fi runtime state.
+- `brightness <0-100>`: Set the LCD backlight brightness through the BSP PWM brightness path.
+- `rotate <0|90|180|270>`: Rotate the display and remap GT911 touch orientation to match.
+- `battery`: Read the configured battery ADC pin, show scaled voltage, estimated percentage, raw ADC data, and current light-sleep request state.
+- `battery sleep <on|off|status>`: Request or inspect light sleep only when `CONFIG_PM_ENABLE` is enabled.
+- `volume <0-100>`: Set the speaker volume through the existing ES8311 codec path.
 - `version`: Show the app banner string and ESP-IDF version.
 - `ver`: Alias of `version`.
 - `about`: Show the shell and board summary.
@@ -52,7 +57,17 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - `sd stat <path>`: Show the resolved path, entry type, size, and mode bits for a file or directory.
 - `sd cat <path> [max_bytes]`: Show a bounded text-safe preview of a file. Non-printable bytes are sanitized, regular files only are accepted, and `max_bytes` is limited to `1..8192`.
 - `mem`: Show free heap, minimum heap, internal heap, and PSRAM state.
-- `gpio status`: Show display reset, backlight, and hosted C6 reset GPIO levels.
+- `gpio list`: Show the exposed board GPIO table, including current level, shell write policy, and a short role description for each board pin.
+- `gpio status`: Show the current levels plus role text for the full exposed board pin table.
+- `gpio read <pin>`: Read the current logic level from an arbitrary GPIO number.
+- `gpio set <pin> <0|1>`: Drive a GPIO only when the shell pin table marks that pin safe for writes.
+- `bt status`: Explain that hosted Bluetooth is intentionally disabled on the current ESP32-C6 baseline.
+- `bt enable`: Report that the earlier hosted Bluedroid bring-up path is disabled because it can crash this board.
+- `bt scan`: Report that Bluetooth scanning is disabled on the current ESP32-C6 baseline.
+- `rgb led <color>`: Reserved color-name command surface for a future board-declared RGB LED implementation.
+- `rgb <r> <g> <b>`: Reserved numeric RGB command surface for a future board-declared RGB LED implementation.
+- `camera init`: Reserved camera initialization command surface for a future board-declared camera implementation.
+- `camera snap <filename>`: Reserved snapshot command surface for a future board-declared camera implementation.
 - `debug`: Show recent shell/runtime status entries, free heap, runtime warning count, and Wi-Fi state. Healthy shell UI startup is recorded here instead of as a boot warning.
 
 ## ESP32-C6 OTA
@@ -71,3 +86,5 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - Batch files support `.bat` lookup through the current working directory and PATH, `%1` through `%9` argument expansion, `rem` and `::` comments, and `echo on` or `echo off` flow control.
 - `c6ota` avoids `esp_hosted_deinit()` before transfer because the current ESP-Hosted SDIO teardown path can assert on this esp32p4 host configuration.
 - Wi-Fi starts in a background task on normal boot, runs the same restore path after successful `c6ota`, and keeps the transcript diagnostic pass during those restore flows while still exposing `wifi diag` for an extra on-demand report.
+- The `wifi`, `sd`, and `c6ota` command families now preserve the full unsplit command line before subcommand parsing, which fixes the regression where family commands could lose their subcommand text after the generic parser tokenized the first word in place.
+- `rgb` and `camera` stay intentionally explicit about unsupported states: the JC1060 reference repo does not expose authoritative RGB LED wiring, and this workspace still lacks the local camera stack needed by the JC1060 camera examples.

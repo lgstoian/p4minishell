@@ -8,7 +8,7 @@ All rights reserved.
 
 No permission is granted to copy, redistribute, sublicense, publish, or use the original project-specific source, documentation, or compiled outputs except with prior written permission from Stoian Alexandru.
 
-This proprietary notice applies to the project-authored parts of the repository, including the shell application logic, project documentation, board metadata, and other original files created for P4MiniShell.
+This proprietary notice applies to the project-authored parts of the repository, including the shell application logic, parser and command-dispatch maintenance fixes, project documentation, board metadata, command reference files, roadmap notes, and other original files created for P4MiniShell.
 
 ## Third-party code
 This repository also contains third-party components and dependencies that remain under their own licenses. Those licenses are not replaced by the proprietary notice above.

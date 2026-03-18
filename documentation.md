@@ -18,6 +18,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Prev and Next buttons provide basic recall of the last 10 commands for touch-only use
 - Enter/OK on the input line is handled by `LV_EVENT_READY`, which is the confirmed command execution path in the current shell
 - Heavy shell commands no longer run on the LVGL input-event stack directly; the callback now hands work to a dedicated command task before command parsing and SD/FATFS traversal begin
+- Command-family handlers now receive a preserved copy of the original command line before the generic parser tokenizes it, which keeps `wifi`, `sd`, and `c6ota` subcommands functional when they perform their own second-stage parsing
 - The visual style intentionally stays close to a compact DOS/MS-DOS terminal: dense text, immutable history pane, prompt line, and scan-friendly output
 - Healthy shell startup is treated as normal status, not a warning; the boot milestone is retained in the `debug` command history instead of the serial warning stream
 - See `command.md` for the current command reference
@@ -33,6 +34,15 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - write <path> <text>, append <path> <text>, touch <path>: create or modify SD text files through the shell worker task only
 - call <file.bat> [args]: execute a batch file from SD with `%1`..`%9`, `rem`, and `echo on/off`
 - set, path, echo: RAM-only environment and batch control commands, including PATH-based `.bat` lookup
+- brightness <0-100>: set the LCD backlight level through the existing BSP brightness API
+- rotate <0|90|180|270>: rotate the active display and remap the GT911 touch transform so pointer coordinates stay aligned with the panel
+- battery: report scaled battery voltage, estimated percentage, raw ADC reading, and configured light-sleep status
+- battery sleep <on|off|status>: request or query light sleep only when power management is enabled in sdkconfig
+- volume <0-100>: set speaker output volume through the ES8311 codec device already used by the BSP audio path
+- gpio list | status | read <pin> | set <pin> <0|1>: expose the board pin table, allow reads, and restrict writes to shell-safe GPIOs only
+- bt status | bt enable | bt scan: shell-facing Bluetooth command surface kept parser-visible, but intentionally disabled on the current ESP32-C6 hosted baseline because the attempted Bluedroid bring-up path proved unstable during controller startup
+- rgb led <color> or rgb <r> <g> <b>: reserved command surface for a future board-declared RGB LED implementation; the current workspace still reports unsupported because the JC1060 reference repo does not expose authoritative RGB LED wiring or a declared RGB driver here
+- camera init | camera snap <filename>: reserved command surface for a future board-declared camera path; the current workspace still reports unsupported because the JC1060 reference repo shows a camera add-on path, but this workspace does not ship the declared sensor, CSI map, or local camera stack needed to use it
 - Wi-Fi/ESP-Hosted startup is asynchronous: the UI boots first, then the original hosted Wi-Fi routine runs in a worker task during normal boot so a dead or blank C6 does not block the shell surface
 - Wi-Fi/ESP-Hosted startup now includes a firm compatibility gate: once the SDIO link is up, the shell reads the ESP32-C6 hosted firmware version and aborts Wi-Fi startup unless the co-processor matches the host `2.12.x` ESP-Hosted release line
 - The same background worker now restores Wi-Fi after successful `c6ota`, and the working project configuration keeps the transcript status + scan diagnostic pass on boot and post-OTA restore while still leaving `wifi diag` available on demand
@@ -88,8 +98,10 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Command submission is handled by LV_EVENT_READY on the input line, not by editing the transcript directly
 - The `sd ls` panic seen after the LFN change was caused by stack pressure on the LVGL input callback, so shell command execution now runs on a separate worker task with an explicit stack budget while LVGL access is wrapped by the port mutex
 - The hosted OTA path no longer calls `esp_hosted_deinit()` before `c6ota` transfers because the ESP-Hosted SDIO teardown path can assert on this esp32p4 baseline; OTA now follows the upstream example flow of stopping Wi-Fi, reusing the existing hosted transport, then restoring the original Wi-Fi routine after success
+- The `wifi`, `sd`, and `c6ota` command families now preserve their full subcommand text across the worker-task parser handoff, which fixes the runtime regression where family commands could appear inert after the generic parser split the first token in place
 - Every command path now wraps failure-prone ESP-IDF calls with friendly transcript output and pushes summary entries into a small in-memory debug history buffer for later inspection
 - Normal shell UI initialization is also pushed into that debug history so the boot path stays observable without producing a warning on successful startup
+- The new hardware command family follows the same rule: unsupported Bluetooth, RGB LED, or camera paths fail explicitly in the transcript instead of inventing board support or silently touching undeclared GPIO wiring
 - Example OTA commands: `c6ota sd:/esp32c6_hosted_slave.bin`, `c6ota https://host/path/to/esp32c6.bin`, and `c6ota default`
 
 ## Build and flash

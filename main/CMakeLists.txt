@@ -3,8 +3,10 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         espressif__esp32_p4_function_ev_board
+        espressif__esp_lcd_touch
         espressif__esp_lvgl_port
         bootloader_support
+        esp_adc
         esp_app_format
         esp_event
         esp_http_client

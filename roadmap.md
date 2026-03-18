@@ -5,17 +5,23 @@ The long-term goal is to turn P4MiniShell into a practical embedded shell enviro
 
 On this hardware, that goal needs to be interpreted carefully:
 - Practical target: DOS-like shell behavior, native ESP32-P4 applications stored on SD, and a small C SDK/API for those apps.
-- Separate, much harder target: literal MS-DOS x86 `.exe` compatibility. That would require an x86-compatible DOS runtime, emulator, translator, or custom VM and is not close to the current architecture.
 
 ## Current baseline
 Implemented today in the checked-in firmware:
 - Touch-first LVGL shell UI with transcript, prompt, keyboard, and command recall
 - Worker-task command execution to protect the LVGL event stack
+- Stable family-command dispatch for `wifi`, `sd`, and `c6ota`, with the original command line preserved for second-stage subcommand parsing
+- Live hardware shell controls for display brightness, display rotation with GT911 remap, battery telemetry, speaker volume, and safer GPIO inspection or limited writes
 - DOS-style file commands on SD: `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`
 - RAM-only environment variables, PATH, `%1`..`%9` expansion, `.bat` execution, and `echo on/off`
 - Transcript-backed `>` and `>>` output redirection to SD
 - ESP-Hosted Wi-Fi on ESP32-P4 through the ESP32-C6 over SDIO
 - `c6ota` for validated ESP32-C6 firmware updates from SD or HTTP/S
+
+Current hardware gaps still intentionally blocked in the checked-in firmware:
+- Hosted Bluetooth remains disabled on the current ESP32-C6 baseline until a proven BLE-safe host path replaces the unstable Bluedroid experiment
+- RGB LED control remains blocked until the board metadata declares a real RGB output pin and driver model
+- Camera capture remains blocked until the board metadata declares a real camera device and capture path
 
 ## Main gaps to full feature parity
 
@@ -120,4 +126,4 @@ The most realistic next milestone is not a full `.exe` runtime. It is:
 - define a minimal native app ABI for ESP32-P4 C programs
 - load those native apps from SD with a simple manifest or wrapper format
 
-That path gets the project to a usable embedded DOS-like platform quickly, without committing yet to full x86 DOS emulation.
+That path gets the project to a usable embedded DOS-like platform quickly.

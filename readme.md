@@ -32,15 +32,23 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Healthy boot behavior: shell UI startup no longer emits a warning-level serial log; the same milestone is stored in the existing `debug` history instead
 - Enter behavior: command execution is confirmed on the input line through LV_EVENT_READY, while transcript history remains locked above it
 - Command execution safety: the input callback now queues shell work onto a dedicated command task, so heavier commands such as `sd ls` do not overflow the small LVGL event stack
-- Commands: help, cls, c6ota, sysinfo, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio status, debug, clear, reboot, version, ver, about
+- Command-family dispatch safety: the shell now preserves the original unsplit command line before tokenization, so `wifi`, `sd`, and `c6ota` subcommands continue to work after the worker-task parser hands control to their family-specific handlers
+- Commands: help, cls, c6ota, sysinfo, brightness, rotate, battery, volume, cd, chdir, dir, copy, move, del, erase, ren, rename, md, mkdir, rd, rmdir, type, write, append, touch, call, set, path, echo, wifi status, wifi scan, wifi diag, wifi connect, wifi disconnect, sd info, sd ls, sd stat, sd cat, mem, gpio list, gpio status, gpio read, gpio set, bt status, bt enable, bt scan, rgb, camera, debug, clear, reboot, version, ver, about
 - Command recall: last 10 commands via Prev/Next buttons, with the input line kept separate from transcript history
 - Display/touch init: still owned by the managed BSP and board_config-generated constants
+- Display controls: `brightness <0-100>` drives the BSP backlight PWM path and `rotate <0|90|180|270>` rotates the active LVGL display while remapping GT911 touch coordinates to match
+- Battery and power status: `battery` reads the configured ADC pin and divider values from board metadata, reports scaled voltage plus an estimated percentage, and `battery sleep <on|off|status>` reports or requests light sleep only when `CONFIG_PM_ENABLE` is enabled in sdkconfig
+- Audio control: `volume <0-100>` uses the existing ES8311 speaker path exposed by the BSP codec device
+- GPIO controls: `gpio list` and `gpio status` now report the exposed board pins with clearer board-role text for the shared I2C bus, audio path, ESP32-C6 hosted SDIO link, battery monitor, and MicroSD bus, while `gpio set <pin> <0|1>` stays limited to pins marked safe for shell-side writes
+- Bluetooth command surface: `bt status`, `bt enable`, and `bt scan` stay visible in the shell, but they are intentionally disabled on the current ESP32-C6 hosted baseline because the attempted Bluedroid bring-up path proved unstable and could crash the board during controller startup
+- RGB and camera command surface: `rgb led <color>`, `rgb <r> <g> <b>`, `camera init`, and `camera snap <filename>` stay intentionally blocked for now because the JC1060 reference repo still does not expose authoritative RGB LED wiring and this workspace still lacks the declared camera stack used by the JC1060 camera examples
 - Wi-Fi startup: attempted automatically in a background task after normal boot using the original sdkconfig-driven hosted routine, with default credentials available for `wifi connect` and password masking for `wifi connect <ssid> <pass>` in transcript/history
 - Hosted compatibility guard: normal Wi-Fi startup now reads the ESP32-C6 hosted firmware version right after the SDIO link comes up and refuses to continue unless the co-processor matches the host `2.12.x` ESP-Hosted line, which prevents the earlier SDIO queue drops and RPC response errors seen with mismatched firmware
 - Wi-Fi status: enabled in the checked-in sdkconfig through ESP-Hosted plus `esp_wifi_remote`, with `wifi scan` available once the runtime has started
 - C6 firmware update path: `c6ota <sd:/file.bin|http[s]://url|default>` downloads or opens a valid ESP32-C6 app image, then performs the Wi-Fi-off ESP-Hosted SDIO OTA flow over the existing hosted link without tearing the SDIO transport down first
 - Hosted Wi-Fi restores automatically after normal boot and after successful `c6ota`, while the shell stays usable because the hosted probe and reconnect run in a background task with the normal transcript-facing diagnostic pass
 - `wifi diag` emits transcript-facing status plus scan output, and `wifi connect` still probes ESP-Hosted in a background task so a missing C6 fails visibly without blocking the shell
+- Wi-Fi command reliability: `wifi status | scan | diag | connect | disconnect` now share the fixed family-dispatch path, so post-boot shell control works again after the parser regression that had been dropping subcommands at runtime
 - C6 firmware update image requirement: the OTA path expects a valid ESP-IDF application image with a readable app header
 - Wi-Fi runtime prerequisite: NVS is initialized before esp_wifi_init(), with an automatic erase-and-retry path if stored NVS metadata is incompatible
 - Host Wi-Fi prerequisite: ESP-Hosted is enabled and the shell connects to an ESP32-C6 co-processor over SDIO before esp_wifi_init() runs on esp32p4
@@ -65,8 +73,11 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Target: esp32p4
 - Display: JD9165 1024x600 via the existing BSP and esp_lcd_jd9165
 - Touch: GT911 via the existing BSP and esp_lcd_touch_gt911
+- Battery monitor: ADC on GPIO53 with a 2:1 divider model and 3.3 V to 4.2 V scaling window for the current shell estimate
 - LVGL port: esp_lvgl_port from managed_components
 - Config source: board_config.yaml, sdkconfig, and the managed component manifests
+- RGB LED declaration: not present in the current board metadata, so RGB shell commands stay blocked intentionally
+- Camera declaration: not present in the current board metadata, so camera shell commands stay blocked intentionally
 - Current Wi-Fi config: ESP-Hosted + esp_wifi_remote are enabled in sdkconfig for an ESP32-C6 SDIO co-processor and the shell can connect using either sdkconfig defaults or runtime credentials
 - GPIO54 reference: GPIO54 remains the documented ESP32-C6 reset line used by the hosted SDIO path
 - C6 OTA progress and errors: the locked transcript emits `C6 OTA: XX% (YYYY KB / ZZZZ KB)` every 5% for `c6ota <sd:/file.bin|http[s]://url|default>`, restores Wi-Fi after success, restores Wi-Fi after failures, and stores clear SD, HTTP, Wi-Fi, and hosted-link failure hints in the debug history buffer

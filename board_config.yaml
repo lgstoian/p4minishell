@@ -77,6 +77,12 @@ board:
     dout_gpio: GPIO_NUM_9
     dsin_gpio: GPIO_NUM_11
     power_amp_gpio: GPIO_NUM_20
+  battery:
+    adc_gpio: GPIO_NUM_53
+    adc_divider_numerator: 2
+    adc_divider_denominator: 1
+    empty_mv: 3300
+    full_mv: 4200
   storage:
     sd_mount_point: "/sdcard"
     sd_format_on_mount_fail: false
@@ -113,6 +119,10 @@ board:
     built_in_commands:
       - help
       - c6ota
+      - brightness
+      - rotate
+      - battery
+      - volume
       - cd
       - dir
       - copy
@@ -140,7 +150,17 @@ board:
       - sd stat
       - sd cat
       - mem
+      - gpio list
       - gpio status
+      - gpio read
+      - gpio set
+      - bt status
+      - bt enable
+      - bt scan
+      - rgb led
+      - rgb <r> <g> <b>
+      - camera init
+      - camera snap <filename>
       - debug
       - clear
       - cls
@@ -154,6 +174,12 @@ board:
       enabled: true
       stack_bytes: 8192
       rationale: keep_heavier_sd_and_fatfs_commands_off_the_lvgl_input_event_stack
+    command_dispatch_policy:
+      preserve_unsplit_command_text_for_family_handlers: true
+      affected_command_families:
+        - wifi
+        - sd
+        - c6ota
     command_recall_ui:
       - prev_button
       - next_button
@@ -189,6 +215,15 @@ board:
       - wifi disconnect
     wifi_runtime_password_policy: mask_runtime_passwords_in_transcript_and_history
     wifi_runtime_failure_policy: report the hosted ESP32-C6 SDIO pin map explicitly when esp_hosted cannot connect to the slave
+    hardware_command_policy:
+      - brightness_uses_existing_bsp_backlight_pwm_path
+      - rotate_updates_display_rotation_and_gt911_touch_transform_together
+      - battery_reads_adc_gpio_53_and_scales_by_the_declared_divider
+      - volume_uses_the_existing_es8311_codec_output_path
+      - gpio_set_only_allows_board_pins_marked_safe_for_shell_writes
+      - bt_commands_remain_visible_but_disabled_on_the_current_esp32c6_hosted_baseline_until_a_proven_ble_safe_path_exists
+      - rgb_commands_remain_blocked_until_real_rgb_led_metadata_is_declared
+      - camera_commands_remain_blocked_until_real_camera_metadata_plus_local_camera_stack_are_declared
     wifi_runtime_compatibility_policy:
       - read_the_esp32_c6_hosted_firmware_version_immediately_after_esp_hosted_connect_to_slave
       - keep_wifi_off_when_the_c6_major_or_minor_version_does_not_match_the_host_2_12_x_release_line
@@ -256,6 +291,12 @@ board:
       - "sd ls sd:/logs"
       - "sd stat sd:/esp32c6_hosted_slave.bin"
       - "sd cat sd:/notes.txt 512"
+    unsupported_hardware:
+      rgb_led:
+        declared_gpio: GPIO_NUM_NC
+        driver_mode: undeclared
+      camera:
+        supported: false
     size_guardrails:
       - disable_lvgl_examples_when_shell_ui_is_active
       - prefer_station_only_wifi_profile_on_esp32p4
