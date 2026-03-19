@@ -2,6 +2,7 @@
 #define P4MINISHELL_NETWORKING_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -30,6 +31,7 @@ typedef struct {
     void (*record_error)(const char *tag, esp_err_t error, const char *message);
     void (*record_warning)(const char *tag, const char *message);
     void (*record_info)(const char *tag, const char *message);
+    void (*notify_header)(const char *text, uint32_t timeout_ms);
 } networking_host_ops_t;
 
 void networking_init(const networking_host_ops_t *ops);

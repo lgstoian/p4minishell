@@ -8,6 +8,7 @@ On this hardware, that goal needs to be interpreted carefully:
 
 ## Current baseline
 Implemented today in the checked-in firmware:
+- Fixed top header bar module for notifications plus passive Wi-Fi, battery, Bluetooth, USB, and SD status, integrated without changing the locked transcript shell flow
 - Touch-first LVGL shell UI with transcript, prompt, keyboard, and command recall
 - Worker-task command execution to protect the LVGL event stack
 - Stable family-command dispatch for `wifi`, `sd`, and `c6ota`, with the original command line preserved for second-stage subcommand parsing
@@ -27,6 +28,7 @@ Hosted connectivity status in the current baseline:
 - Wi-Fi has been moved into `components/networking/networking.c` while preserving the working boot, command, and OTA restore behavior
 - Bluetooth now has a real hosted NimBLE baseline in `components/networking/bluetooth.c` for `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>`
 - USB now has a dedicated `components/usb` baseline for USB MSC storage at `/usb0` plus HID keyboard or mouse attach and debug echo through the `usb` command family
+- Header now has a dedicated `components/header` baseline for a fixed notification and status bar above the locked transcript
 - `c6ota` has now been fully refactored into `components/c6ota` with the same shell-visible behavior and a documented public API in `API.md` and `SDK.md`
 - Future Bluetooth work should build on the hosted NimBLE module rather than reviving the older Bluedroid experiment
 
@@ -91,6 +93,8 @@ To support third-party apps written in C, the project needs a minimal stable run
 - A documented ABI or loader manifest format
 
 ### Recent completions
+- Done: fixed `components/header` top-bar module with passive `header_init`, `header_update_status`, and `header_update_*` integration for notifications and system status
+- Done: fixed SD card status icon visibility and styling so it matches the other header status icons when a card is mounted
 - Done: `c6ota` refactor into `components/c6ota` with stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` documentation
 - Done: initial `API.md` and `SDK.md` published for the modular OTA component
 - Done: USB host refactor into `components/usb` with documented `usb_init`, `usb_handle_command`, `usb_status`, `usb_msc_mount`, `usb_msc_ls`, and HID echo controls

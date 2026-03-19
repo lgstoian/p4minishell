@@ -30,6 +30,8 @@ P4MiniShell rules – FIXED 2026:
 - If final link fails in the shared flash/PSRAM mapping window, disable PSRAM XIP instruction/rodata mapping before cutting shell functionality
 - Runtime Wi-Fi passwords typed in `wifi connect <ssid> <pass>` must be masked in transcript output and skipped from command recall history
 - Current shell layout = transcript textarea + prompt-bearing input line + on-screen keyboard + basic 10-command recall controls
+- Header module handles top bar notifications and status display, and the main transcript must remain fully compatible below that fixed bar
+- Header status icons (Wi-Fi/Battery/Bluetooth/USB/SD) must use consistent LVGL symbol/text styling and update logic; the SD icon must show correctly when a card is mounted
 - Input submission must be driven by LV_EVENT_READY on the input line while keeping transcript history immutable from normal typing
 - Keep the configured ESP-IDF console wired into the same shell path as the touch UI: serial stdin should feed full commands into the existing submit flow and stdout should mirror transcript output instead of introducing a separate command parser or REPL-only behavior
 - Keep the serial prompt stateful inside the stdin reader task so idle or polling reads do not reprint `P4Shell>` over and over when no complete line is available yet
@@ -41,6 +43,7 @@ P4MiniShell rules – FIXED 2026:
 - Hosted Bluetooth is now implemented through `components/networking/bluetooth.c` using ESP-Hosted NimBLE VHCI on the ESP32-C6; preserve Wi-Fi stability first, keep `bt` as an alias of `bluetooth`, and keep the supported shell surface limited to `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>` unless a task explicitly expands it
 - Keep Wi-Fi and Bluetooth module ownership inside `components/networking`; `main/main.c` should remain the shell, UI, and orchestration layer that delegates connectivity work through the module API
 - Keep USB host ownership inside `components/usb`; `main/main.c` should only expose transcript hooks, boot orchestration, and parser delegation for the `usb` family while the module owns host stack details
+- Keep fixed top-bar ownership inside `components/header`; `main/main.c` should only initialize it, feed passive status updates, and preserve the locked MSDOS shell layout below it
 - Keep hosted BLE bring-up idempotent: once `bluetooth enable` has initialized the controller and NimBLE host, later scan or advertising commands must reuse that state instead of re-running hosted BT controller init or enable RPCs.
 - All SD shell commands must use a shared guarded mount or unmount path, bounded output, and friendly transcript errors so bad media or invalid paths cannot crash or wedge the shell
 - USB MSC shell commands should mirror the same bounded, transcript-friendly storage behavior as the SD command family, but stay mounted under `/usb0` through the USB module instead of reusing the SD path directly

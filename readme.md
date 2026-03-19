@@ -4,7 +4,7 @@ P4MiniShell is an embedded, touch-driven command shell for the ESP32-P4 host and
 The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-compatible runtime. What it already provides is the embedded foundation for that direction: a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi on the C6, and a real OTA maintenance path for the co-processor.
 
 ## What this project is
-- A single-binary ESP32-P4 shell application with the shell UI in [main/main.c](main/main.c), hosted connectivity in `components/networking`, USB host support in `components/usb`, and ESP32-C6 OTA maintenance isolated in `components/c6ota`
+- A single-binary ESP32-P4 shell application with the shell UI in [main/main.c](main/main.c), a fixed status bar in `components/header`, hosted connectivity in `components/networking`, USB host support in `components/usb`, and ESP32-C6 OTA maintenance isolated in `components/c6ota`
 - A DOS-inspired command environment for SD-card workflows on an embedded touchscreen device
 - A host-side control surface for an ESP32-C6 connected over ESP-Hosted SDIO
 - A base for future native application loading, shell SDK work, and broader MS-DOS-style command compatibility
@@ -16,25 +16,28 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - A complete application SDK for third-party shell apps
 
 ## Architecture summary
-- UI: LVGL transcript textarea, prompt-bearing input line, on-screen keyboard, and touch recall controls
+- UI: LVGL fixed top header bar, transcript textarea, prompt-bearing input line, on-screen keyboard, and touch recall controls
 - Serial console: the configured ESP-IDF console stdin and stdout now mirror the same shell transcript and command path used by the touch UI, so `idf.py monitor` can act as an interactive shell endpoint
 - Storage model: guarded SD-card access with DOS-style relative paths rooted at `/sdcard`
 - Shell model: worker-task command execution, RAM-only environment variables, PATH, batch frames, and transcript-backed redirection
 - Connectivity: ESP32-P4 host Wi-Fi and BLE routed through a dedicated networking component using ESP-Hosted plus `esp_wifi_remote` and hosted NimBLE on the ESP32-C6 over SDIO
 - USB host: dedicated `components/usb` module using ESP-IDF USB Host MSC and HID class drivers, with MSC storage mounted at `/usb0` and HID keyboard or mouse debug echo available on demand
+- Header bar: dedicated `components/header` module using LVGL labels and a battery bar to present transient notifications plus passive Wi-Fi, battery, Bluetooth, USB, and SD state without changing shell behavior
 - Maintenance path: `c6ota` for validated ESP32-C6 application updates from SD or HTTP/S sources
 
 ## Planning and licensing
 - Implementation roadmap: see [roadmap.md](roadmap.md)
 - OTA module API: see [API.md](API.md)
-- OTA integration guide: see [SDK.md](SDK.md)
+- Module integration guide: see [SDK.md](SDK.md)
 - Project and third-party license summary: see [licence.md](licence.md)
 
 ## Current behavior
 - Boot banner: P4MiniShell v0.1 ready | JC1060P470C | type help
-- UI: DOS-style transcript area, prompt-bearing input line, recall buttons, and attached lv_keyboard
+- UI: fixed top header bar for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status, followed by the DOS-style transcript area, prompt-bearing input line, recall buttons, and attached lv_keyboard
 - Healthy boot behavior: shell UI startup no longer emits a warning-level serial log; the same milestone is stored in the existing `debug` history instead
 - Enter behavior: command execution is confirmed on the input line through LV_EVENT_READY, while transcript history remains locked above it
+- Header behavior: the top status bar is fixed and non-scrollable, scales its height from the active display resolution, lines status icons up from left to right, and keeps the notification area pinned on the far right while the main transcript starts below it with no change to keyboard or transcript behavior
+- Header visibility: Wi-Fi, Bluetooth, USB, and SD status indicators are now consistently styled and the SD indicator correctly appears when a card is mounted, while the notification area remains blank until a live module event is active and then clears again after its timeout expires
 - Command execution safety: the input callback now queues shell work onto a dedicated command task, so heavier commands such as `sd ls` do not overflow the small LVGL event stack
 - Command-family dispatch safety: the shell now preserves the original unsplit command line before tokenization, so `wifi`, `sd`, and `c6ota` subcommands continue to work after the worker-task parser hands control to their family-specific handlers
 - UART and monitor interaction: the firmware now consumes stdin on the configured ESP-IDF console, prints the same prompt on the serial side, mirrors transcript output to stdout, and routes typed monitor commands back through the same shell parser, password masking, history, and transcript flow used on-screen
@@ -67,9 +70,11 @@ The current firmware is not a desktop DOS clone and it is not yet an MS-DOS-comp
 - Networking module layout: `components/networking/networking.c` owns hosted Wi-Fi startup, state, events, scans, diagnostics, and OTA restore hooks, while `components/networking/bluetooth.c` owns hosted NimBLE controller bring-up, scan, and advertising control
 - OTA module layout: `components/c6ota/c6ota.c` owns the validated ESP32-C6 OTA path behind the preserved shell command surface, while `components/c6ota/c6ota.h` exposes the stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` API
 - USB module layout: `components/usb/usb.c` owns USB Host Library bring-up, MSC VFS registration at `/usb0`, HID keyboard or mouse attach tracking, and the shell-facing `usb` command family, while `components/usb/usb.h` exposes the stable USB entry points documented in `API.md` and `SDK.md`
+- Header module layout: `components/header/header.c` owns the fixed top-bar widget tree, notification timeout handling, and passive status rendering for Wi-Fi, battery, Bluetooth, USB, and SD, while `components/header/header.h` exposes the stable `header_*` entry points documented in `API.md` and `SDK.md`
+- Live header notices: Wi-Fi, USB, Bluetooth sync or scan, observed SD mount-state changes, and `c6ota` now feed short event-driven notifications into the fixed header immediately instead of waiting only for the periodic refresh timer
 - Monitor usage: after flashing, `idf.py monitor` can now be used as a real shell endpoint over the configured console path, not only as a log viewer
 - Command reference: see `command.md` for the current shell command surface and usage notes
-- OTA developer notes: see `API.md` and `SDK.md` for module-level integration details
+- Module developer notes: see `API.md` and `SDK.md` for networking, USB, OTA, and header integration details
 - Build footprint: unused LVGL examples are disabled in sdkconfig so the Wi-Fi-enabled shell still links on the esp32p4 baseline
 - Wi-Fi profile: sdkconfig is trimmed for station use only, with WPA2-style credential flow and Wi-Fi IRAM optimizations disabled to stay within the esp32p4 image budget
 - Toolchain profile: sdkconfig now uses newlib nano formatting and warn-level compile-time logging to keep the shell build inside the esp32p4 image window

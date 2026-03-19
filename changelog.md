@@ -1,3 +1,12 @@
+## [0.1.24] - 2026-03-18
+- Added a new `components/header` module that owns the fixed LVGL top bar for shell-safe notifications plus passive Wi-Fi, battery, Bluetooth, USB, and SD status indicators, keeping the locked MSDOS transcript layout intact below it
+- Fixed the SD card status icon so it appears consistently in the header bar with the same size, color, and alignment as the other status icons when a card is mounted
+- Preserved the existing boot, transcript rendering, keyboard input, hosted Wi-Fi, `c6ota`, networking, and USB behavior by integrating the header as a passive display-only component fed from `main/main.c` through lightweight periodic status updates
+- Expanded the public module docs in `API.md` and `SDK.md`, and updated the project docs and board metadata so the fixed header bar is now part of the documented workspace baseline
+- Switched the fixed header status indicators to guaranteed-visible retro ASCII labels instead of relying on LVGL symbol glyph availability in the active shell font, and added live header notifications from Wi-Fi, USB, and `c6ota` event paths
+- Reworked the header into a non-scrollable resolution-scaled top bar, restored left-to-right status icons with the notification area on the far right, and added live header notices for Bluetooth sync or scan plus shared SD mount or unmount events
+- Refined the header idle state so the notification area stays blank until a live module event arrives, and moved SD card notices onto observed mount-state transitions in the periodic header refresh path
+
 ## [0.1.23] - 2026-03-18
 - Added a new `components/usb` module that owns ESP-IDF USB Host bring-up for MSC external storage and HID keyboard or mouse devices, keeping `main/main.c` limited to shell orchestration and family-command dispatch
 - Added the shell-facing `usb` command family with `usb status`, `usb ls [path]`, `usb keyboard <on|off>`, and `usb mouse <on|off>`, mounting MSC media through VFS or FATFS at `/usb0` with the same transcript-friendly MSDOS-style output pattern used by the SD tools

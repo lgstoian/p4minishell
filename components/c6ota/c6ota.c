@@ -64,6 +64,7 @@ extern void c6ota_host_schedule_transcript_append_text(const char *text);
 extern void c6ota_host_record_error(esp_err_t error, const char *message);
 extern void c6ota_host_record_warning(const char *message);
 extern void c6ota_host_record_info(const char *message);
+extern void c6ota_host_notify_header(const char *text, uint32_t timeout_ms);
 
 static c6ota_progress_callback_t s_progress_callback;
 static bool s_update_in_progress;
@@ -154,6 +155,17 @@ static void c6ota_emit_asyncf(const char *format, ...)
     }
 
     c6ota_host_schedule_transcript_append_text(buffer);
+}
+
+static void c6ota_notify_headerf(uint32_t timeout_ms, const char *format, ...)
+{
+    char buffer[160];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    c6ota_host_notify_header(buffer, timeout_ms);
 }
 
 static bool c6ota_source_is_http(const char *source)
@@ -1077,6 +1089,7 @@ static void c6ota_task(void *arg)
     if (error == ESP_OK) {
         c6ota_emit_asyncf("%s", "C6 OTA completed successfully! Type reboot to activate new firmware.\n");
         c6ota_record_infof("C6 OTA completed for %s", request->source);
+        c6ota_notify_headerf(5000, "C6 OTA complete - reboot to activate");
         update_succeeded = true;
     }
 #else
@@ -1087,6 +1100,7 @@ static void c6ota_task(void *arg)
     if (!update_succeeded) {
         c6ota_emit_asyncf("C6 OTA failed: %s - %s\n", esp_err_to_name(error), failure_hint);
         c6ota_record_warningf("C6 OTA failed: %s - %s", esp_err_to_name(error), failure_hint);
+        c6ota_notify_headerf(5000, "C6 OTA failed");
     }
 
     free(request);
@@ -1126,6 +1140,7 @@ bool c6ota_try_handle_input(const char *input)
         s_confirmation.active = false;
         s_update_in_progress = true;
         c6ota_emit_syncf("%s", "c6ota: confirmation accepted - starting OTA task\n");
+        c6ota_notify_headerf(3500, "C6 OTA starting");
         if (xTaskCreate(c6ota_task,
                         "c6ota_task",
                         C6OTA_TASK_STACK_BYTES,
@@ -1144,6 +1159,7 @@ bool c6ota_try_handle_input(const char *input)
         s_confirmation.active = false;
         c6ota_emit_syncf("%s", "c6ota: cancelled before rebooting the C6\n");
         c6ota_record_infof("User cancelled OTA confirmation");
+        c6ota_notify_headerf(3000, "C6 OTA cancelled");
         return true;
     }
 
@@ -1186,6 +1202,7 @@ void c6ota_perform(const char *source)
     snprintf(s_confirmation.request.source, sizeof(s_confirmation.request.source), "%s", source);
     s_confirmation.active = true;
     c6ota_emit_syncf("c6ota: queued source %s\n", source);
+    c6ota_notify_headerf(3500, "C6 OTA queued");
     c6ota_emit_syncf("%s", "Factory v2.3.0 requires one-time standalone tool from https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota first.\n");
     c6ota_emit_syncf("%s", "WARNING: This will reboot the C6. Type YES to continue\n");
     c6ota_record_infof("Awaiting confirmation for %s", source);

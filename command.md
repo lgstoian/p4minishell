@@ -4,6 +4,8 @@ P4MiniShell currently exposes the following shell commands.
 
 Project planning and license notes live in `roadmap.md` and `licence.md`.
 
+System status is now also displayed in a fixed header bar at the top of the screen. That header is passive, does not add new shell commands, and keeps its notification region blank whenever no live module event is active. The SD status icon now correctly appears in the header when a card is mounted.
+
 ## Core commands
 - `help`: Show the built-in command list.
 - `sysinfo`: Show board, display, storage, heap, and Wi-Fi runtime state.
@@ -102,6 +104,8 @@ Project planning and license notes live in `roadmap.md` and `licence.md`.
 - Hosted Wi-Fi and hosted Bluetooth now live under `components/networking`, so the shell parser delegates those command families instead of owning the runtime transport logic directly in `main/main.c`.
 - Hosted OTA now lives under `components/c6ota`, so `main/main.c` only provides transcript and parser orchestration while the OTA module keeps the proven update flow intact.
 - USB host runtime now lives under `components/usb`, so `main/main.c` only exposes the `usb` family and host transcript hooks while the module owns host-library bring-up, MSC mounting at `/usb0`, and HID keyboard or mouse debug echo.
+- The screen now reserves a fixed top header bar for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD indicators, while the locked transcript, input row, and keyboard continue unchanged below it.
+- The header notification region is transient-only: Wi-Fi, USB, Bluetooth sync or scan, observed SD mount-state changes, and `c6ota` can populate it briefly, then it returns to an empty idle state.
 - The `wifi`, `sd`, and `c6ota` command families now preserve the full unsplit command line before subcommand parsing, which fixes the regression where family commands could lose their subcommand text after the generic parser tokenized the first word in place.
 - `idf.py monitor` is now interactive on the configured console path because the firmware consumes stdin and mirrors shell transcript output to stdout instead of leaving the serial path as logs only.
 - `rgb` and `camera` stay intentionally explicit about unsupported states: the JC1060 reference repo does not expose authoritative RGB LED wiring, and this workspace still lacks the local camera stack needed by the JC1060 camera examples.

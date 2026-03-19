@@ -12,5 +12,7 @@ void bluetooth_handle_command(char *command);
 void bluetooth_status(void);
 void bluetooth_scan(void);
 void bluetooth_advertise(bool enable);
+bool bluetooth_is_enabled(void);
+bool bluetooth_is_connected(void);
 
 #endif

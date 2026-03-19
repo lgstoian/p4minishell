@@ -178,6 +178,21 @@ static void bluetooth_record_infof(const char *format, ...)
     s_host_ops.record_info(BLUETOOTH_TAG, buffer);
 }
 
+static void bluetooth_notify_headerf(uint32_t timeout_ms, const char *format, ...)
+{
+    char buffer[160];
+    va_list args;
+
+    if (s_host_ops.notify_header == NULL) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    s_host_ops.notify_header(buffer, timeout_ms);
+}
+
 #if CONFIG_BT_NIMBLE_ENABLED
 static int bluetooth_gap_event(struct ble_gap_event *event, void *arg);
 
@@ -271,6 +286,7 @@ static void bluetooth_on_sync(void)
 
     s_bluetooth_state.synced = true;
     bluetooth_schedulef("bluetooth: BLE host synchronized with the C6 controller\n");
+    bluetooth_notify_headerf(3500, "Bluetooth synced with C6");
 
     if (s_bluetooth_state.advertising_requested && !s_bluetooth_state.advertising_active) {
         if (bluetooth_start_advertising() == ESP_OK) {
@@ -284,6 +300,7 @@ static void bluetooth_on_sync(void)
     if (s_bluetooth_state.scan_requested && !s_bluetooth_state.scan_active) {
         if (bluetooth_start_scan() == ESP_OK) {
             bluetooth_schedulef("bluetooth: passive scan started\n");
+            bluetooth_notify_headerf(3500, "Bluetooth scan started");
         } else {
             s_bluetooth_state.last_error = ESP_FAIL;
             bluetooth_schedulef("bluetooth: failed to start pending scan request after sync\n");
@@ -398,6 +415,9 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
         s_bluetooth_state.scan_requested = false;
         bluetooth_schedulef("bluetooth: scan complete, %u device(s) reported\n",
                             (unsigned int)s_bluetooth_state.discovered_count);
+        bluetooth_notify_headerf(4000,
+                                 "Bluetooth scan complete: %u device(s)",
+                                 (unsigned int)s_bluetooth_state.discovered_count);
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -574,6 +594,7 @@ void bluetooth_scan(void)
     s_bluetooth_state.scan_requested = true;
     if (!s_bluetooth_state.synced) {
         bluetooth_appendf("bluetooth: waiting for BLE host sync before scan\n");
+        bluetooth_notify_headerf(3500, "Bluetooth waiting for sync");
         return;
     }
 
@@ -585,6 +606,7 @@ void bluetooth_scan(void)
 
     bluetooth_appendf("bluetooth: passive scan started\n");
     bluetooth_record_infof("Passive BLE scan started");
+    bluetooth_notify_headerf(3500, "Bluetooth scan started");
 #else
     bluetooth_report_not_available(ESP_ERR_NOT_SUPPORTED);
 #endif
@@ -625,6 +647,16 @@ void bluetooth_advertise(bool enable)
     (void)enable;
     bluetooth_report_not_available(ESP_ERR_NOT_SUPPORTED);
 #endif
+}
+
+bool bluetooth_is_enabled(void)
+{
+    return s_bluetooth_state.controller_enabled || s_bluetooth_state.nimble_initialized;
+}
+
+bool bluetooth_is_connected(void)
+{
+    return s_bluetooth_state.synced;
 }
 
 void bluetooth_handle_command(char *command)

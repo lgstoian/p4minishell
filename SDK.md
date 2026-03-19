@@ -1,21 +1,24 @@
 # Hosted Module SDK Guide
 
-This guide describes how `main/main.c` integrates the hosted runtime modules in this workspace: `components/networking`, `components/bluetooth`, `components/usb`, and `components/c6ota`.
+This guide describes how `main/main.c` integrates the hosted runtime modules in this workspace: `components/header`, `components/networking`, `components/bluetooth`, `components/usb`, and `components/c6ota`.
 
 ## Architecture
 - `main/main.c` owns the transcript, parser, command history rules, and boot banner.
+- `components/header` owns the fixed top-bar LVGL widgets for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status.
 - `components/networking` owns hosted Wi-Fi runtime state, boot restore, diagnostics, and OTA restore hooks.
 - `components/networking/bluetooth.c` owns the hosted NimBLE control path for Bluetooth commands.
 - `components/usb` owns ESP-IDF USB Host Library bring-up, MSC VFS registration at `/usb0`, and HID keyboard or mouse debug echo.
 - `components/c6ota` owns the ESP32-C6 OTA workflow and uses `components/networking` when it needs Wi-Fi readiness or restore behavior.
 
 ## Required boot-time integration
-1. Include `networking.h`, `bluetooth.h`, `usb.h`, and `c6ota.h` where those modules are orchestrated.
+1. Include `header.h`, `networking.h`, `bluetooth.h`, `usb.h`, and `c6ota.h` where those modules are orchestrated.
 2. Build a single `networking_host_ops_t` callback table backed by the shell transcript and debug-history functions.
-3. Call `c6ota_init()` once after the transcript path is ready.
-4. Register the OTA transcript callback with `c6ota_register_progress_callback(...)`.
-5. Call `networking_init(&host_ops)` once so the Wi-Fi module can capture the host hooks and the Bluetooth module can inherit the same callback surface.
-6. Call `usb_init()` once after `networking_init(&host_ops)` so the USB host stack starts after the existing networking bootstrap without regressing boot orchestration.
+3. Call `header_init()` once after LVGL is ready and before the transcript widgets are created so the fixed bar is the first child on the screen.
+4. Call `c6ota_init()` once after the transcript path is ready.
+5. Register the OTA transcript callback with `c6ota_register_progress_callback(...)`.
+6. Call `networking_init(&host_ops)` once so the Wi-Fi module can capture the host hooks and the Bluetooth module can inherit the same callback surface.
+7. Call `usb_init()` once after `networking_init(&host_ops)` so the USB host stack starts after the existing networking bootstrap without regressing boot orchestration.
+8. Start a small periodic status refresh, for example an LVGL timer every 5 seconds, that feeds `header_update_wifi`, `header_update_battery`, `header_update_bluetooth`, `header_update_usb`, `header_update_sd`, and then `header_update_status()`.
 
 ## Shared host callback model
 `networking_host_ops_t` is the common host-to-module bridge for Wi-Fi and Bluetooth:
@@ -34,6 +37,8 @@ static const networking_host_ops_t host_ops = {
 - `networking_init(...)` also calls `bluetooth_init(&s_host_ops)`, so Bluetooth uses the same transcript and debug hooks automatically.
 - `c6ota` currently uses dedicated host bridge functions implemented in `main/main.c` plus a progress callback registration step, rather than consuming `networking_host_ops_t` directly.
 - `components/usb` also uses dedicated host bridge functions implemented in `main/main.c`, mirroring the transcript and debug behavior already used by `c6ota`.
+- `components/header` is display-only and is updated through its public `header_update_*` calls rather than consuming the transcript callback surface directly.
+- Wi-Fi now also uses the `notify_header` host callback for immediate header notices on key connection lifecycle events, while USB and `c6ota` use dedicated host bridge functions in `main/main.c` for the same purpose.
 
 ## Shell parser integration
 1. Route `wifi ...` commands to `networking_handle_wifi_command(...)`.
@@ -46,6 +51,18 @@ static const networking_host_ops_t host_ops = {
 
 ## Example boot integration
 ```c
+static void shell_header_status_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    header_update_wifi(networking_wifi_is_connected(), current_rssi);
+    header_update_battery(current_battery_percent);
+    header_update_bluetooth(bluetooth_is_enabled(), bluetooth_is_connected());
+    header_update_usb(usb_is_connected());
+    /* Update the header SD icon immediately after mount/unmount so the SD indicator matches the actual card state. */
+    header_update_sd(sd_is_mounted);
+    header_update_status();
+}
+
 static void shell_c6ota_progress(int percent, const char *msg)
 {
     (void)percent;
@@ -56,6 +73,7 @@ static void shell_c6ota_progress(int percent, const char *msg)
 
 void shell_boot_init(void)
 {
+    header_init();
     c6ota_init();
     c6ota_register_progress_callback(shell_c6ota_progress);
 
@@ -68,8 +86,16 @@ void shell_boot_init(void)
     });
 
     usb_init();
+    lv_timer_create(shell_header_status_timer_cb, 5000, NULL);
 }
 ```
+
+## Header integration notes
+- The header is passive and display-only. It must not own Wi-Fi, Bluetooth, USB, SD, or battery runtime behavior.
+- The header is passive and display-only. It must not own Wi-Fi, Bluetooth, USB, SD, or battery runtime behavior.
+- The current workspace integration polls Wi-Fi RSSI through `esp_wifi_sta_get_ap_info(...)`, battery percentage through the existing shell ADC helper, hosted Bluetooth readiness through `bluetooth_is_enabled()` and `bluetooth_is_connected()`, USB attachment through `usb_is_connected()`, and SD mount state through the existing shell path checks.
+- `header_set_notification(...)` is async-safe and can be used from shell worker tasks or module callbacks when short transcript-adjacent notices belong in the fixed top bar instead of the scrollable transcript.
+- The current header keeps the bar itself non-scrollable, scales height from the display resolution, lays status icons out from left to right, and keeps the notification label on the far right. Bluetooth sync or scan and shared SD mount or unmount events now also feed live header notifications through the same bridge model already used for Wi-Fi, USB, and `c6ota`.
 
 ## Example command dispatch
 ```c

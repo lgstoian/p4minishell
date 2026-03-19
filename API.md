@@ -4,10 +4,45 @@ This document describes the public integration surface exposed by the hosted run
 
 ## Shared integration pattern
 - `main/main.c` remains the shell UI, transcript, parser, and orchestration layer.
+- `components/header` owns the fixed top-bar UI for notifications and passive status display.
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
 - `components/usb` owns USB Host Library state, USB MSC storage, and USB HID keyboard or mouse debug behavior.
 - `components/c6ota` owns the shell-visible ESP32-C6 OTA workflow and depends on `components/networking` for Wi-Fi wait and restore hooks.
-- All three areas keep user-visible behavior in the shell transcript instead of returning rich status objects to the caller.
+- All four areas keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
+
+## Header API
+- `void header_init(void)`
+  - Call once after LVGL is ready and before the transcript widgets are created.
+  - Builds the fixed non-scrollable top bar, scales its height from the active display resolution, and places status icons left-to-right with the notification area on the far right.
+
+- `void header_update_status(void)`
+  - Request a header re-render from the currently cached state.
+  - Useful after a batch of `header_update_*` calls when the caller wants one final refresh point.
+
+- `void header_set_notification(const char *text, uint32_t timeout_ms)`
+  - Show a short notification in the left side of the fixed header.
+  - Uses LVGL async dispatch so callers can invoke it from shell worker tasks or other non-LVGL contexts.
+
+- `void header_update_wifi(bool connected, int rssi)`
+  - Update the Wi-Fi status indicator in the header.
+  - `connected` drives active or inactive styling and `rssi` is used for the signal-quality label rendered as a retro ASCII indicator such as `WF:HI`.
+
+- `void header_update_battery(int percent)`
+  - Update the battery icon, small battery bar, and percentage label in the header.
+
+- `void header_update_bluetooth(bool enabled, bool connected)`
+  - Update the Bluetooth indicator for the current hosted BLE lifecycle.
+  - The current integration maps `enabled` to hosted controller or NimBLE readiness and `connected` to BLE host synchronization on the ESP32-C6.
+
+- `void header_update_usb(bool connected)`
+  - Update the USB indicator for attached MSC or HID devices.
+
+- `void header_update_sd(bool mounted)`
+  - Update the SD indicator based on whether the shell SD root is currently mounted.
+  - When `mounted` is true the SD icon and label are shown in the header with the same size/color/alignment as the other status icons; when false the SD indicator is hidden.
+
+- `void (*notify_header)(const char *text, uint32_t timeout_ms)` inside `networking_host_ops_t`
+  - Optional host callback used by the networking module to surface live Wi-Fi notices directly in the fixed header without moving header ownership into `components/networking`.
 
 ## Host callback surface
 `components/networking` and `components/bluetooth` share the same host callback table:
@@ -64,6 +99,10 @@ This document describes the public integration surface exposed by the hosted run
 - `void bluetooth_advertise(bool enable)`
   - Focused Bluetooth helpers for shell subcommands.
 
+- `bool bluetooth_is_enabled(void)`
+- `bool bluetooth_is_connected(void)`
+  - Read-only state helpers used by the header integration to show hosted BLE readiness without moving Bluetooth ownership back into `main/main.c`.
+
 ## USB API
 - `void usb_init(void)`
   - Call once during boot after `networking_init(...)` so the USB module can install the shared host library and both class drivers.
@@ -87,6 +126,10 @@ This document describes the public integration surface exposed by the hosted run
 - `void usb_hid_mouse_enable(void)`
 - `void usb_hid_mouse_disable(void)`
   - Toggle transcript echo for attached HID boot devices without changing the rest of the shell input path.
+
+- `bool usb_is_connected(void)`
+- `bool usb_is_mounted(void)`
+  - Read-only state helpers used by the header component integration in `main/main.c`.
 
 ## C6 OTA API
 - `void c6ota_init(void)`

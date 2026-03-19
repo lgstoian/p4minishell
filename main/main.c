@@ -54,6 +54,7 @@
 #include "board_config.h"
 #include "bluetooth.h"
 #include "c6ota.h"
+#include "header.h"
 #include "networking.h"
 #include "usb.h"
 #include "bsp/esp-bsp.h"
@@ -69,6 +70,7 @@
 #define SHELL_COMMAND_BYTES 256
 #define SHELL_COMMAND_HISTORY_DEPTH 10
 #define SHELL_KEYBOARD_HEIGHT 240
+#define SHELL_HEADER_REFRESH_PERIOD_MS 5000
 #define SHELL_INPUT_ROW_HEIGHT 52
 #define SHELL_DEBUG_LOG_DEPTH 5
 #define SHELL_DEBUG_ENTRY_BYTES 192
@@ -179,6 +181,7 @@ static lv_obj_t *s_keyboard;
 static lv_obj_t *s_history_prev_button;
 static lv_obj_t *s_history_next_button;
 static lv_display_t *s_display;
+static lv_timer_t *s_header_status_timer;
 static char s_transcript[SHELL_TRANSCRIPT_BYTES];
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static char s_command_history[SHELL_COMMAND_HISTORY_DEPTH][SHELL_COMMAND_BYTES];
@@ -208,6 +211,8 @@ static int s_backlight_percent = 100;
 static int s_volume_percent = 60;
 static lv_display_rotation_t s_display_rotation = LV_DISPLAY_ROTATION_0;
 static bool s_light_sleep_requested;
+static bool s_header_sd_state_known;
+static bool s_header_sd_last_mounted;
 static esp_codec_dev_handle_t s_speaker_dev;
 static adc_oneshot_unit_handle_t s_battery_adc_unit;
 static adc_channel_t s_battery_adc_channel;
@@ -241,6 +246,7 @@ static void shell_debug_log_push(const char *tag, const char *message);
 static void shell_record_errorf(const char *tag, esp_err_t error, const char *format, ...);
 static void shell_record_warningf(const char *tag, const char *format, ...);
 static void shell_record_infof(const char *tag, const char *format, ...);
+static void shell_header_notify(const char *text, uint32_t timeout_ms);
 static bool shell_parse_percentage_arg(const char *text, int *percentage_out);
 static const shell_gpio_pin_desc_t *shell_find_gpio_pin(int gpio_num);
 static esp_err_t shell_get_touch_handle_from_bsp(void);
@@ -249,6 +255,9 @@ static esp_err_t shell_rotation_apply(lv_display_rotation_t rotation);
 static esp_err_t shell_audio_ensure_speaker(void);
 static esp_err_t shell_battery_ensure_adc(void);
 static esp_err_t shell_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out);
+static bool shell_sd_header_is_mounted(void);
+static void shell_header_status_refresh(void);
+static void shell_header_status_timer_cb(lv_timer_t *timer);
 static void shell_battery_print_usage(void);
 static void shell_command_brightness(int argc, char **argv);
 static void shell_command_rotate(int argc, char **argv);
@@ -335,6 +344,7 @@ static bool shell_text_equals_ignore_case(const char *left, const char *right)
 }
 
 // AI: All shell-side SD commands share a single guarded mount path so failures cannot leak mounted state or dereference missing card metadata.
+// AI: Also update the fixed header SD icon immediately on mount/unmount so the status bar stays in sync with the actual card state.
 static esp_err_t shell_sd_begin(shell_sd_session_t *session)
 {
     esp_err_t error;
@@ -347,10 +357,14 @@ static esp_err_t shell_sd_begin(shell_sd_session_t *session)
     error = bsp_sdcard_mount();
     if (error == ESP_OK) {
         session->mounted_here = true;
+        shell_header_notify("SD card mounted", 3000);
+        header_update_sd(true);
         return ESP_OK;
     }
 
     if (error == ESP_ERR_INVALID_STATE) {
+        /* Already mounted: ensure the header icon stays visible. */
+        header_update_sd(true);
         return ESP_OK;
     }
 
@@ -370,6 +384,9 @@ static void shell_sd_end(shell_sd_session_t *session, const char *operation)
         shell_record_warningf("sd", "Unmount warning after %s: %s",
                               operation != NULL ? operation : "sd command",
                               esp_err_to_name(error));
+    } else {
+        shell_header_notify("SD card unmounted", 3000);
+        header_update_sd(false);
     }
 }
 
@@ -800,6 +817,51 @@ static esp_err_t shell_battery_read(int *battery_mv_out, int *percent_out, int *
     }
 
     return ESP_OK;
+}
+
+static bool shell_sd_header_is_mounted(void)
+{
+    struct stat root_stat;
+
+    return shell_sd_stat_path(BSP_SD_MOUNT_POINT, &root_stat) == ESP_OK && S_ISDIR(root_stat.st_mode);
+}
+
+static void shell_header_status_refresh(void)
+{
+    int battery_percent = 0;
+    wifi_ap_record_t ap_info;
+    bool wifi_connected = networking_wifi_is_connected();
+    int wifi_rssi = -127;
+    bool sd_mounted = shell_sd_header_is_mounted();
+
+    if (wifi_connected && esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        wifi_rssi = ap_info.rssi;
+    }
+
+    if (shell_battery_read(NULL, &battery_percent, NULL, NULL) == ESP_OK) {
+        header_update_battery(battery_percent);
+    }
+
+    header_update_wifi(wifi_connected, wifi_rssi);
+    header_update_bluetooth(bluetooth_is_enabled(), bluetooth_is_connected());
+    header_update_usb(usb_is_connected());
+    header_update_sd(sd_mounted);
+
+    if (!s_header_sd_state_known) {
+        s_header_sd_state_known = true;
+        s_header_sd_last_mounted = sd_mounted;
+    } else if (sd_mounted != s_header_sd_last_mounted) {
+        shell_header_notify(sd_mounted ? "SD card mounted" : "SD card unmounted", 3000);
+        s_header_sd_last_mounted = sd_mounted;
+    }
+
+    header_update_status();
+}
+
+static void shell_header_status_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    shell_header_status_refresh();
 }
 
 static void shell_battery_print_usage(void)
@@ -1277,6 +1339,15 @@ static void shell_networking_record_error(const char *tag, esp_err_t error, cons
     shell_record_errorf(tag, error, "%s", message);
 }
 
+static void shell_header_notify(const char *text, uint32_t timeout_ms)
+{
+    if (text == NULL || text[0] == '\0') {
+        return;
+    }
+
+    header_set_notification(text, timeout_ms);
+}
+
 static void shell_networking_schedule_text(const char *text)
 {
     shell_schedule_transcript_appendf("%s", text);
@@ -1317,6 +1388,11 @@ void c6ota_host_record_info(const char *message)
     shell_record_infof("c6ota", "%s", message != NULL ? message : "");
 }
 
+void c6ota_host_notify_header(const char *text, uint32_t timeout_ms)
+{
+    shell_header_notify(text, timeout_ms);
+}
+
 void usb_host_transcript_append_text(const char *text)
 {
     shell_transcript_append_text(text);
@@ -1340,6 +1416,11 @@ void usb_host_record_warning(const char *message)
 void usb_host_record_info(const char *message)
 {
     shell_record_infof("usb", "%s", message != NULL ? message : "");
+}
+
+void usb_host_notify_header(const char *text, uint32_t timeout_ms)
+{
+    shell_header_notify(text, timeout_ms);
 }
 
 // AI: c6ota fully refactored to separate module with identical public API and 100% same behavior
@@ -4739,7 +4820,10 @@ static void shell_build_ui(void)
     lv_obj_set_style_pad_all(screen, 0, 0);
     lv_obj_set_style_pad_row(screen, 0, 0);
 
-    // AI: keep transcript history read-only while input stays on the dedicated prompt line for shell commands and OTA confirmation replies.
+    // AI: Header module added as a separate component with a fixed top bar for notifications plus status, and the main transcript stays below it with no shell behavior change.
+    header_init();
+
+    // AI: Main transcript offset is preserved by the screen flex-column layout: the fixed header is created first, then the locked MSDOS transcript UI, input row, and keyboard follow unchanged.
     s_history_transcript = lv_textarea_create(screen);
     lv_obj_set_width(s_history_transcript, LV_PCT(100));
     lv_obj_set_flex_grow(s_history_transcript, 1);
@@ -4816,7 +4900,7 @@ void app_main(void)
 {
     lv_display_t *display;
 
-    // AI: new hardware control commands added for brightness rotation battery volume gpio bt rgb camera using official drivers from board_config.yaml no regressions to boot render or WiFi.
+    // AI: hardware controls and the new fixed header bar keep the BSP boot, render path, keyboard flow, and hosted modules unchanged while main stays the orchestration layer.
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
@@ -4846,7 +4930,7 @@ void app_main(void)
 
     bsp_display_backlight_on();
 
-    // AI: create the LVGL shell surface only after BSP display and touch startup completes so OTA status has a stable transcript surface.
+    // AI: create the LVGL shell surface only after BSP display and touch startup completes so the header bar and transcript share one stable LVGL screen.
     bsp_display_lock(0);
     shell_build_ui();
     bsp_display_unlock();
@@ -4871,8 +4955,16 @@ void app_main(void)
         .record_error = shell_networking_record_error,
         .record_warning = shell_networking_record_warning,
         .record_info = shell_networking_record_info,
+        .notify_header = shell_header_notify,
     });
     usb_init();
 
-    // AI: drive command parsing and shell state updates from the dedicated input line events so OTA confirmation stays in the same shell flow.
+    // AI: Public API matches the c6ota, networking, and usb module style - main only feeds passive header updates, with zero regressions to the locked MSDOS transcript UI.
+    bsp_display_lock(0);
+    shell_header_status_refresh();
+    if (s_header_status_timer == NULL) {
+        s_header_status_timer = lv_timer_create(shell_header_status_timer_cb, SHELL_HEADER_REFRESH_PERIOD_MS, NULL);
+    }
+    bsp_display_unlock();
+    // AI: drive command parsing, shell state updates, and the new passive header status bar from the dedicated shell flow so OTA confirmation stays unchanged.
 }

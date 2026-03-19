@@ -3,17 +3,18 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 
 ## Connectivity layout
 - Hosted connectivity no longer lives directly in the shell monolith.
+- `components/header/header.c` now owns the fixed LVGL top bar for notifications and passive system status.
 - `components/networking/networking.c` now owns hosted Wi-Fi startup, event handling, command execution, status reporting, and OTA restore or wait hooks.
 - `components/networking/bluetooth.c` now owns hosted Bluetooth bring-up through NimBLE VHCI on the ESP32-C6, including scan and advertising control.
 - `components/usb/usb.c` now owns ESP-IDF USB Host bring-up, USB MSC mount or list behavior, and HID keyboard or mouse attach plus echo handling.
 - `components/c6ota/c6ota.c` now owns the full ESP32-C6 OTA path, including source parsing, confirmation tracking, background transfer, Wi-Fi stop or restore, progress reporting, and the hosted OTA RPC sequence.
 - The Bluetooth module keeps hosted controller state across shell commands so scan and advertising requests reuse the active host stack instead of reissuing hosted controller init or enable calls.
-- `main/main.c` remains the shell UI and orchestration layer, passes transcript plus logging callbacks into the networking component, exposes transcript hooks for the USB module, and delegates `c6ota` plus `usb` to separate modules without changing existing shell-visible behavior.
+- `main/main.c` remains the shell UI and orchestration layer, creates the header first so the transcript starts below it, passes transcript plus logging callbacks into the networking component, exposes transcript hooks for the USB module, and delegates `c6ota` plus `usb` to separate modules without changing existing shell-visible behavior.
 
 ## Project documents
 - `readme.md`: user-facing introduction, current behavior, and build notes
-- `API.md`: stable public API for the modular `c6ota` component
-- `SDK.md`: integration notes and usage examples for the modular `c6ota` and `usb` components
+- `API.md`: stable public API for the modular hosted runtime components, including the new header bar
+- `SDK.md`: integration notes and usage examples for the modular `header`, `c6ota`, and `usb` components
 - `roadmap.md`: parity plan for the DOS-style shell, native app runtime, and future SDK work
 - `licence.md`: proprietary notice for project-authored code plus third-party license summary
 
@@ -36,6 +37,8 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - All active LCD and touch settings still come from board_config-generated BOARD_CFG_* macros and sdkconfig-backed BSP behavior
 
 ## UI model
+- A fixed top header bar shows left-to-right status icons plus passive Wi-Fi, battery, Bluetooth, USB, and SD status (the SD icon now appears consistently when a card is mounted), with the notification text area aligned on the far right.
+- The notification area remains empty when no event is active, so transient messages such as `c6ota` progress only appear while a live module event is running and then disappear after the timeout.
 - A scrollable transcript textarea shows shell history and command output
 - A dedicated one-line input textarea holds the prompt and current command entry
 - A bottom lv_keyboard is attached only to the input line
@@ -45,7 +48,7 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - Command-family handlers now receive a preserved copy of the original command line before the generic parser tokenizes it, which keeps `wifi`, `sd`, and `c6ota` subcommands functional when they perform their own second-stage parsing
 - The configured ESP-IDF console now also acts as a real shell endpoint: stdin lines are consumed in a dedicated serial task, stdout mirrors transcript text, and serial-entered commands re-enter the same shell path as touch-entered commands
 - The serial prompt is stateful inside that task and is only re-emitted after a completed or intentionally blank line, which prevents prompt spam while the monitor polls stdin with no new command ready
-- The visual style intentionally stays close to a compact DOS/MS-DOS terminal: dense text, immutable history pane, prompt line, and scan-friendly output
+- The visual style intentionally stays close to a compact DOS/MS-DOS terminal: dense text, immutable history pane, prompt line, scan-friendly output, and a fixed retro status bar above the transcript
 - Healthy shell startup is treated as normal status, not a warning; the boot milestone is retained in the `debug` command history instead of the serial warning stream
 - See `command.md` for the current command reference
 
@@ -114,6 +117,8 @@ P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
 - After the image is available locally, the OTA worker stops Wi-Fi with `esp_wifi_stop()` plus `esp_wifi_deinit()`, keeps the existing ESP-Hosted transport alive, reconnects the SDIO link in Wi-Fi-off mode, and then streams the payload through `esp_hosted_slave_ota_begin/write/end`
 - The OTA worker accepts `sd:/...`, `/sdcard/...`, or `default`, validates the incoming ESP-IDF image header for magic `0xE9` and ESP32-C6 chip ID `0x000D`, resolves `default` from the SD root using the same LFN-safe path handling, streams the payload in 1500-byte chunks, reports progress every 5% as `C6 OTA: XX% (YYYY KB / ZZZZ KB)`, and requests `esp_hosted_slave_ota_activate()` when the running C6 firmware exposes that API
 - The OTA component API is now documented separately in `API.md` and `SDK.md`, but the runtime flow and transcript-visible behavior stay identical to the pre-refactor shell implementation.
+- The header component API is now documented separately in `API.md` and `SDK.md`, but the main shell flow and transcript-visible behavior remain unchanged because the header is passive and display-only.
+- The header is now non-scrollable and scales its height from the active display resolution so the same top-bar structure remains stable across screen sizes, while Wi-Fi, USB, Bluetooth sync or scan, observed SD mount-state changes, and `c6ota` feed live notification text into that bar through module event hooks.
 - Factory first-upgrade note: ESP32-C6 firmware `v2.3.0` still requires the one-time standalone tool from `https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota` before shell-driven OTA is used
 - Wi-Fi startup now follows sdkconfig at runtime and the checked-in workspace enables the host Wi-Fi path for the esp32p4 board baseline
 - Wi-Fi runtime now initializes NVS first and falls back to erase-and-retry when the stored NVS layout is incompatible, because esp_wifi_init() depends on NVS being ready on this configuration

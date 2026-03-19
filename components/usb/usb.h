@@ -15,5 +15,7 @@ void usb_hid_keyboard_enable(void);
 void usb_hid_keyboard_disable(void);
 void usb_hid_mouse_enable(void);
 void usb_hid_mouse_disable(void);
+bool usb_is_connected(void);
+bool usb_is_mounted(void);
 
 #endif

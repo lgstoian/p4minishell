@@ -115,7 +115,29 @@ board:
       - readme.md
       - roadmap.md
       - licence.md
-    ui_mode: transcript_and_input_line_shell
+    ui_mode: fixed_header_plus_transcript_and_input_line_shell
+    header_component:
+      path: components/header
+      module: components/header/header.c
+      header: components/header/header.h
+      height_px: 40
+      notifications: temporary_label_with_timeout_or_marquee
+      displayed_statuses:
+        - wifi
+        - battery
+        - bluetooth
+        - usb
+        - sd
+      public_api:
+        - header_init
+        - header_update_status
+        - header_set_notification
+        - header_update_wifi
+        - header_update_battery
+        - header_update_bluetooth
+        - header_update_usb
+        - header_update_sd
+      status: Header fixed top bar added with WiFi/Battery/Bluetooth/USB/SD status (SD indicator now reliably visible when mounted)
     networking_component:
       path: components/networking
       wifi_module: components/networking/networking.c
@@ -240,7 +262,7 @@ board:
     command_recall_ui:
       - prev_button
       - next_button
-    terminal_style: dos_like_locked_transcript_with_touch_keyboard
+    terminal_style: dos_like_locked_transcript_with_fixed_status_header_and_touch_keyboard
     command_execution: LV_EVENT_READY_on_input_line
     shell_runtime_state:
       cwd_scope: ram_only

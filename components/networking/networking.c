@@ -198,6 +198,21 @@ static void networking_record_infof(const char *format, ...)
     s_host_ops.record_info(NETWORKING_TAG, buffer);
 }
 
+static void networking_notify_headerf(uint32_t timeout_ms, const char *format, ...)
+{
+    char buffer[160];
+    va_list args;
+
+    if (s_host_ops.notify_header == NULL) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    s_host_ops.notify_header(buffer, timeout_ms);
+}
+
 static bool networking_wifi_defaults_available(void)
 {
     return CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID[0] != '\0';
@@ -235,6 +250,7 @@ static void networking_wifi_append_step(const char *step)
 {
     networking_schedulef("[wifi] %s\n", step);
     networking_record_infof("%s", step);
+    networking_notify_headerf(3500, "%s", step);
 }
 
 static void networking_wifi_append_error(const char *step, esp_err_t error)
@@ -243,6 +259,7 @@ static void networking_wifi_append_error(const char *step, esp_err_t error)
     s_wifi_last_error = error;
     networking_schedulef("[wifi] %s failed: %s (0x%x)\n", step, esp_err_to_name(error), (unsigned int)error);
     networking_record_errorf(error, "%s failed", step);
+    networking_notify_headerf(5000, "WiFi error: %s", step);
 }
 
 static void networking_wifi_cleanup_runtime_artifacts(void)
@@ -301,6 +318,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
             s_wifi_connected = false;
             s_wifi_connect_requested = false;
             networking_schedulef("[wifi] event: disconnected\n");
+            networking_notify_headerf(4000, "WiFi disconnected");
             break;
 
         default:
@@ -314,6 +332,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
         s_wifi_connected = true;
         s_wifi_connect_requested = false;
         networking_schedulef("[wifi] event: got IP " IPSTR "\n", IP2STR(&event->ip_info.ip));
+        networking_notify_headerf(4000, "WiFi connected: " IPSTR, IP2STR(&event->ip_info.ip));
     }
 }
 

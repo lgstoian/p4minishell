@@ -108,6 +108,7 @@ extern void usb_host_schedule_transcript_append_text(const char *text);
 extern void usb_host_record_error(esp_err_t error, const char *message);
 extern void usb_host_record_warning(const char *message);
 extern void usb_host_record_info(const char *message);
+extern void usb_host_notify_header(const char *text, uint32_t timeout_ms);
 
 static SemaphoreHandle_t s_usb_lock;
 static QueueHandle_t s_usb_event_queue;
@@ -175,6 +176,17 @@ static void usb_emit_asyncf(const char *format, ...)
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     usb_host_schedule_transcript_append_text(buffer);
+}
+
+static void usb_notify_headerf(uint32_t timeout_ms, const char *format, ...)
+{
+    char buffer[160];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    usb_host_notify_header(buffer, timeout_ms);
 }
 
 static bool usb_text_equals_ignore_case(const char *left, const char *right)
@@ -595,8 +607,10 @@ static void usb_module_task(void *arg)
                                     product[0] != '\0' ? product : "<unnamed>",
                                     serial[0] != '\0' ? " sn=" : "",
                                     serial);
+                    usb_notify_headerf(4500, "USB MSC connected");
                 } else {
                     usb_emit_asyncf("usb: MSC device connected at /usb0\n");
+                    usb_notify_headerf(4500, "USB MSC connected");
                 }
             } else {
                 usb_record_errorf(error, "USB MSC install_device failed for address %u", (unsigned int)event.data.msc_connected.address);
@@ -614,6 +628,7 @@ static void usb_module_task(void *arg)
                 (void)msc_host_uninstall_device(s_usb_msc.device);
                 memset(&s_usb_msc, 0, sizeof(s_usb_msc));
                 usb_emit_asyncf("usb: MSC device disconnected\n");
+                usb_notify_headerf(4500, "USB MSC disconnected");
             }
             xSemaphoreGive(s_usb_lock);
             break;
@@ -672,6 +687,8 @@ static void usb_module_task(void *arg)
                     s_mouse_y = 0;
                 }
                 usb_emit_asyncf("usb: HID %s connected\n", params.proto == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse");
+                usb_notify_headerf(3500,
+                                   params.proto == HID_PROTOCOL_KEYBOARD ? "USB keyboard connected" : "USB mouse connected");
                 xSemaphoreGive(s_usb_lock);
             }
             break;
@@ -697,6 +714,7 @@ static void usb_module_task(void *arg)
                 usb_clear_hid_slot(&s_usb_keyboard);
                 memset(&s_prev_keyboard_report, 0, sizeof(s_prev_keyboard_report));
                 usb_emit_asyncf("usb: HID keyboard disconnected\n");
+                usb_notify_headerf(3500, "USB keyboard disconnected");
             }
             if (s_usb_mouse.handle == event.data.hid_interface.handle) {
                 (void)hid_host_device_stop(s_usb_mouse.handle);
@@ -705,6 +723,7 @@ static void usb_module_task(void *arg)
                 s_mouse_x = 0;
                 s_mouse_y = 0;
                 usb_emit_asyncf("usb: HID mouse disconnected\n");
+                usb_notify_headerf(3500, "USB mouse disconnected");
             }
             xSemaphoreGive(s_usb_lock);
             break;
@@ -926,6 +945,7 @@ void usb_msc_mount(void)
         s_usb_msc.mounted = true;
         xSemaphoreGive(s_usb_lock);
         usb_emit_syncf("usb: mounted %s\n", USB_MSC_BASE_PATH);
+        usb_notify_headerf(3500, "USB storage mounted");
         return;
     }
 
@@ -1074,6 +1094,40 @@ void usb_hid_mouse_disable(void)
     s_usb_mouse.echo_enabled = false;
     xSemaphoreGive(s_usb_lock);
     usb_emit_syncf("usb: mouse echo off\n");
+}
+
+bool usb_is_connected(void)
+{
+    bool connected = false;
+
+    if (!s_usb_initialized) {
+        return false;
+    }
+
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    connected = s_usb_msc.connected || s_usb_keyboard.attached || s_usb_mouse.attached;
+    xSemaphoreGive(s_usb_lock);
+    return connected;
+}
+
+bool usb_is_mounted(void)
+{
+    bool mounted = false;
+
+    if (!s_usb_initialized) {
+        return false;
+    }
+
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    mounted = s_usb_msc.mounted;
+    xSemaphoreGive(s_usb_lock);
+    return mounted;
 }
 
 void usb_handle_command(char *command)
