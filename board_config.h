@@ -1,7 +1,23 @@
+/**
+ * @file board_config.h
+ * @brief Hardware configuration constants for the P4MiniShell board baseline.
+ *
+ * Single source of truth for all hardware pin assignments, display timing,
+ * touch configuration, battery ADC parameters, and storage mount points.
+ * Generated from board_config.yaml - do not edit manually without updating
+ * the YAML source as well.
+ *
+ * Board baseline: ESP32-P4-Function-EV-Board (requested: JC1060P470C)
+ * Target: esp32p4
+ * Display: JD9165 1024x600 MIPI-DSI
+ * Touch: GT911 via I2C
+ */
+
 #pragma once
 
 #include "driver/gpio.h"
 
+// ---- I2C bus (shared by GT911 touch and onboard peripherals) ----
 #define BOARD_CFG_I2C_PORT 1
 #define BOARD_CFG_I2C_SDA_GPIO GPIO_NUM_7
 #define BOARD_CFG_I2C_SCL_GPIO GPIO_NUM_8

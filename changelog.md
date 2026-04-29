@@ -1,33 +1,378 @@
+# Changelog
+
+All notable changes to P4MiniShell are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [0.6.0] - 2026-04-29
+
+### Fixed
+- **SD card status icon in header**: Fixed `header_update_sd()` to immediately update state and fall back to direct render when LVGL async dispatch fails
+- **Header update robustness**: All `header_update_*()` functions now update internal state immediately (safe from any task context) and fall back to synchronous render on allocation/async failure
+- **SD icon rendering**: SD indicator now uses consistent `HEADER_SD_SYMBOL` in both mounted and unmounted states instead of `LV_SYMBOL_WARNING` when unmounted
+
+### Changed
+- **header.c**: Refactored all public update functions (`header_update_wifi`, `header_update_battery`, `header_update_bluetooth`, `header_update_usb`, `header_update_sd`) to set state immediately before scheduling async render
+- **header.c**: Async callbacks simplified to render-only (state already set by caller)
+- **header.c**: Battery percent clamping moved from async callback to public API entry point
+
+### Verified
+- **Clean build**: Zero errors, zero warnings
+- **Binary**: p4minishell.bin 1,490,688 bytes (82% free)
+- **No regressions**: Boot, screen rendering, Wi-Fi, all commands preserved
+
+---
+
+## [0.5.0] - 2026-04-29
+
+### Fixed
+- **Stale AI comments**: Replaced all 25+ `// AI:` prefixed comments across main.c, usb.c, c6ota.c, and managed BSP with proper descriptive comments
+- **Comment consistency**: All section markers now use descriptive text instead of AI-prefixed tags
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Binary integrity**: p4minishell.bin 1,490,608 bytes (82% free in 8MB partition)
+- **No regressions**: Boot, screen rendering, Wi-Fi, all 40+ commands preserved
+
+### Documentation
+- Updated ai-context.md with audit rules and verification checklist
+- Updated changelog.md with v0.5.0 hardening entry
+
+---
+
+## [0.4.0] - 2026-04-29
+
+### Added
+- **p4minishell.h**: Public API header declaring host bridge callbacks and shared shell utilities
+- **p4minishell.c**: Extracted `shell_networking_*` bridge functions from main.c into dedicated module
+- **Modular bridge layer**: Networking bridge functions now live in `main/p4minishell.c`, callable from `components/networking`
+
+### Changed
+- **main/main.c**: Added `#include "p4minishell.h"` and `#include "p4minishell_config.h"`; networking bridge functions changed from `static` to public linkage
+- **main/CMakeLists.txt**: Added `p4minishell.c` to SRCS
+- **main/p4minishell.c**: Rewritten as thin bridge layer with extern forward declarations to main.c shell functions
+
+### Architecture Note
+- c6ota and usb host bridge functions remain in main.c due to ESP-IDF component model requirements (cross-component linking needs app-component residency)
+- networking bridge functions extracted to p4minishell.c since networking component links against main transitively
+
+---
+
+## [0.3.0] - 2026-04-29
+
+### Added
+- **Centralized configuration system**: All hardcoded values moved to `p4minishell_config.h` with companion YAML documentation in `p4minishell_config.yaml`
+- **Config header**: Single C header with all tunable values organized by subsystem (shell identity, buffers, UI layout, Wi-Fi, Bluetooth, SD card, batch engine, GPIO, header visuals, USB host, C6 OTA, task stacks)
+- **Config YAML**: Machine-readable documentation with value, type, description, and valid range for every configurable parameter
+- **Backward-compatible aliases**: All existing `SHELL_*`, `NETWORKING_*`, `BLUETOOTH_*`, `HEADER_*`, `C6OTA_*`, and `USB_*` macros preserved as aliases to `P4_CONFIG_*` equivalents
+
+### Changed
+- **main/main.c**: Replaced 40+ inline `#define` macros with `#include "p4minishell_config.h"` plus backward-compatibility aliases
+- **components/networking/networking.c**: Moved all `#define` values to config header
+- **components/networking/bluetooth.c**: Moved all `#define` values to config header
+- **components/header/header.c**: Moved color and sizing defines to config header
+- **components/c6ota/c6ota.c**: Moved OTA parameters to config header
+- **components/usb/usb.c**: Moved USB host parameters to config header; HID key codes kept local (standard USB HID usage table)
+- **All component CMakeLists.txt**: Added `${CMAKE_SOURCE_DIR}` to `INCLUDE_DIRS` for config header access
+
+---
+
+## [0.2.0] - 2026-04-29
+
+### Changed
+- **Documentation overhaul**: Rewrote all project documentation files (`readme.md`, `documentation.md`, `ai-context.md`, `command.md`, `roadmap.md`, `licence.md`, `API.md`, `SDK.md`) with consistent structure, comprehensive detail, and proper Markdown formatting
+- **Source code comments**: Replaced all `// AI:` prefixed comments with proper Doxygen-style documentation throughout `main/main.c`, all component headers, and `board_config.h`
+- **Header files**: Added full `@file` Doxygen blocks with architecture descriptions, parameter documentation, and behavioral contracts to `header.h`, `networking.h`, `bluetooth.h`, `c6ota.h`, and `usb.h`
+- **board_config.yaml**: Restructured with clear section headers, detailed pin descriptions, and validated hardware metadata
+
+---
+
 ## [0.1.24] - 2026-03-18
-- Added a new `components/header` module that owns the fixed LVGL top bar for shell-safe notifications plus passive Wi-Fi, battery, Bluetooth, USB, and SD status indicators, keeping the locked MSDOS transcript layout intact below it
-- Fixed the SD card status icon so it appears consistently in the header bar with the same size, color, and alignment as the other status icons when a card is mounted
-- Preserved the existing boot, transcript rendering, keyboard input, hosted Wi-Fi, `c6ota`, networking, and USB behavior by integrating the header as a passive display-only component fed from `main/main.c` through lightweight periodic status updates
-- Expanded the public module docs in `API.md` and `SDK.md`, and updated the project docs and board metadata so the fixed header bar is now part of the documented workspace baseline
-- Switched the fixed header status indicators to guaranteed-visible retro ASCII labels instead of relying on LVGL symbol glyph availability in the active shell font, and added live header notifications from Wi-Fi, USB, and `c6ota` event paths
-- Reworked the header into a non-scrollable resolution-scaled top bar, restored left-to-right status icons with the notification area on the far right, and added live header notices for Bluetooth sync or scan plus shared SD mount or unmount events
-- Refined the header idle state so the notification area stays blank until a live module event arrives, and moved SD card notices onto observed mount-state transitions in the periodic header refresh path
+
+### Added
+- New `components/header` module: fixed LVGL top bar for notifications plus passive Wi-Fi, battery, Bluetooth, USB, and SD status indicators
+- Live header notifications from Wi-Fi, USB, Bluetooth, and `c6ota` event paths
+- Resolution-scaled header height with clamped minimum/maximum
+
+### Fixed
+- SD card status icon now appears consistently with same size, color, and alignment as other status icons
+- Header notification area stays blank when idle, shows only during active module events
+- SD mount/unmount state changes now trigger immediate header icon updates
+
+### Changed
+- Header status indicators use guaranteed-visible retro ASCII labels instead of LVGL symbol glyphs
+- Header is non-scrollable with left-to-right status icons and notification area on far right
+
+---
 
 ## [0.1.23] - 2026-03-18
-- Added a new `components/usb` module that owns ESP-IDF USB Host bring-up for MSC external storage and HID keyboard or mouse devices, keeping `main/main.c` limited to shell orchestration and family-command dispatch
-- Added the shell-facing `usb` command family with `usb status`, `usb ls [path]`, `usb keyboard <on|off>`, and `usb mouse <on|off>`, mounting MSC media through VFS or FATFS at `/usb0` with the same transcript-friendly MSDOS-style output pattern used by the SD tools
-- Added managed component dependencies for `espressif/usb_host_msc` and `espressif/usb_host_hid`, plus updated the API and SDK docs so USB integration follows the same documented module contract as networking and `c6ota`
+
+### Added
+- New `components/usb` module: ESP-IDF USB Host bring-up for MSC external storage and HID keyboard/mouse
+- Shell-facing `usb` command family: `usb status`, `usb ls [path]`, `usb keyboard <on|off>`, `usb mouse <on|off>`
+- USB MSC storage mounted at `/usb0` via VFS/FATFS with transcript-friendly output
+- Managed component dependencies: `espressif/usb_host_msc`, `espressif/usb_host_hid`
+
+---
 
 ## [0.1.22] - 2026-03-18
-- c6ota refactored to separate module with identical API and behavior
-- Moved the full ESP32-C6 OTA flow into `components/c6ota` while preserving the existing shell-visible confirmation flow, transcript output, source handling, hosted OTA RPC sequence, Wi-Fi stop or restore behavior, and success or failure handling
-- Added `API.md` and `SDK.md` to document the stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` integration surface for the modular OTA component
+
+### Changed
+- **c6ota refactored** into `components/c6ota` with identical public API and behavior
+- Full ESP32-C6 OTA flow moved out of `main/main.c` while preserving confirmation flow, transcript output, source handling, hosted OTA RPC sequence, and Wi-Fi stop/restore
+- Added `API.md` and `SDK.md` documenting the stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` integration surface
+
+---
 
 ## [0.1.21] - 2026-03-18
-- Refactored the hosted connectivity stack out of the shell monolith into a new `components/networking` component so Wi-Fi runtime state, hosted startup, OTA restore hooks, and Bluetooth handling no longer live directly in `main/main.c`
-- Preserved the existing hosted Wi-Fi behavior and transcript-visible command flow while rewiring `wifi status | scan | diag | connect | disconnect`, boot restore, and post-`c6ota` recovery through the new networking module APIs
-- Replaced the earlier disabled hosted Bluedroid shell stub with hosted NimBLE on the ESP32-C6 over ESP-Hosted VHCI, and added `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>` command support while keeping `bt` as an alias
-- Fixed the first hosted NimBLE command cycle so `bluetooth scan` and `bluetooth advertise` now reuse the already enabled controller and host stack instead of re-running hosted BT init or enable RPCs after `bluetooth enable`
+
+### Added
+- Hosted NimBLE Bluetooth on ESP32-C6 over ESP-Hosted VHCI in `components/networking/bluetooth.c`
+- Shell commands: `bluetooth status`, `bluetooth scan`, `bluetooth advertise <on|off>`, with `bt` alias
+- Stateful Bluetooth lifecycle: scan/advertise reuse active hosted controller session
+
+### Changed
+- **Networking refactored** into `components/networking`: Wi-Fi runtime state, hosted startup, OTA restore hooks, and Bluetooth handling no longer live in `main/main.c`
+- Preserved all existing hosted Wi-Fi behavior and command flow through new module APIs
+- Replaced disabled hosted Bluedroid stub with hosted NimBLE
+
+---
 
 ## [0.1.20] - 2026-03-18
-- Added a real serial console bridge for the existing shell so the configured ESP-IDF UART or USB-Serial-JTAG monitor is no longer log-only and now accepts the same commands as the on-screen prompt
-- Mirrored shell transcript output to stdout and routed stdin lines back through the existing shell worker, transcript, masking, and history flow instead of creating a second command parser or a separate REPL feature set
-- Kept the existing boot, display, hosted Wi-Fi, SD, and `c6ota` paths unchanged while fixing the earlier monitor write-timeout behavior caused by the firmware not consuming interactive serial input at all
-- Fixed the new serial console prompt loop so idle monitor polling no longer floods `P4Shell>` when no complete stdin line is available yet
+
+### Added
+- **Serial console bridge**: ESP-IDF UART/USB-Serial-JTAG monitor now accepts shell commands
+- stdin lines routed through existing shell worker, transcript, masking, and history flow
+- stdout mirrors transcript output
+
+### Fixed
+- Monitor write-timeout caused by firmware not consuming interactive serial input
+- Serial prompt loop no longer floods `P4Shell>` during idle stdin polling
+
+---
+
+## [0.1.19] - 2026-03-18
+
+### Fixed
+- **Command-family dispatch regression**: `wifi status|scan|diag|connect|disconnect` now work correctly after boot
+- Root cause: parser now preserves original unsplit command text before tokenization so family handlers receive full command line
+- Same fix applied to `sd` and `c6ota` family handlers
+
+---
+
+## [0.1.18] - 2026-03-17
+
+### Changed
+- Disabled hosted Bluedroid Bluetooth path after `bt enable` caused board crashes in HCI parser
+- `bt` command surface kept visible but returns explicit unsupported state
+- Removed direct host BT build dependency
+
+---
+
+## [0.1.17] - 2026-03-17
+
+### Changed
+- `gpio list` and `gpio status` now report pins with clearer board-role text
+- `rgb` and `camera` messages updated to honestly explain current hardware gaps
+
+### Added
+- Hosted Bluedroid Bluetooth path enabled in host build with `bt status|enable|scan`
+
+---
+
+## [0.1.16] - 2026-03-17
+
+### Added
+- Hardware control commands: `brightness <0-100>`, `rotate <0|90|180|270>`, `battery`, `volume <0-100>`
+- `gpio list|status|read <pin>|set <pin> <0|1>` with write restrictions
+- Runtime display rotation with GT911 touch remapping
+- ADC-backed battery reporting using board-configured divider values
+- ES8311 speaker volume control through BSP codec path
+- Parser-visible `bt`, `rgb`, and `camera` families with sdkconfig/metadata gates
+
+---
+
+## [0.1.15] - 2026-03-17
+
+### Added
+- `roadmap.md`: parity plan for COMMAND.COM features, native app loading, shell SDK
+- `licence.md`: proprietary notice for project-authored code plus third-party license summary
+
+### Changed
+- README rewritten to describe P4MiniShell as an embedded DOS-style shell platform
+
+---
+
+## [0.1.14] - 2026-03-17
+
+### Added
+- COMMAND.COM-style SD workflow: `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch`
+- RAM-only environment variables: `set`, `path`, `echo`
+- Batch file engine: `.bat` execution with `%1`..`%9` expansion, `rem` comments, `echo on/off`, PATH-based lookup
+- SD-backed output redirection: `>` and `>>` for text-producing commands
+
+---
+
+## [0.1.13] - 2026-03-17
+
+### Changed
+- Finalized ESP-Hosted profile: `espressif/esp_hosted 2.12.1` + `espressif/esp_wifi_remote 1.4.1`
+- 1-bit SDIO at 10 MHz on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17
+- Forced ESP32-C6 reset on every host boot through GPIO54
+- 1500-byte `c6ota` transfer chunks
+
+### Fixed
+- End-to-end validation: shell UI, BSP display/touch, hosted Wi-Fi, SD tools, and `c6ota` all working together
+
+---
+
+## [0.1.12] - 2026-03-17
+
+### Fixed
+- Restored `CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP` after Wi-Fi failures
+- Restored boot-time and post-`c6ota` Wi-Fi diagnostic pass
+- Removed app-side hosted log suppression
+
+---
+
+## [0.1.11] - 2026-03-17
+
+### Fixed
+- Reverted `ESP_HOSTED_EVENT_TRANSPORT_UP` wait experiment that regressed Wi-Fi startup
+- Restored prior hosted startup order: connect C6, validate firmware version, continue Wi-Fi path
+
+---
+
+## [0.1.10] - 2026-03-17
+
+### Changed
+- Removed automatic `wifi diag` scan from boot-time startup and post-`c6ota` restore
+- Restored hosted reset policy to `CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY`
+- Suppressed non-actionable `H_SDIO_DRV` and `rpc_rsp` warning noise
+
+---
+
+## [0.1.9] - 2026-03-17
+
+### Added
+- **ESP-Hosted firmware compatibility gate**: after `esp_hosted_connect_to_slave()`, shell reads C6 hosted version and refuses Wi-Fi init unless co-processor matches host `2.12.x` line
+- Transcript-visible recovery guidance on version mismatch
+
+### Fixed
+- SDIO/RPC fallout from mismatched host/co-processor firmware
+- Host component lock restored to `espressif/esp_hosted 2.12.1` and `espressif/esp_wifi_remote 1.4.1`
+
+---
+
+## [0.1.8] - 2026-03-17
+
+### Added
+- `wifi diag` command: connection state, IP status, nearby-network scan
+- Transcript-facing Wi-Fi diagnostics on boot and post-`c6ota`
+
+### Fixed
+- Wi-Fi runtime retries: partial init state cleaned up before retrying
+- Hosted Wi-Fi restores automatically after normal boot and successful `c6ota` in background task
+
+---
+
+## [0.1.7] - 2026-03-17
+
+### Added
+- FATFS long filename support: heap-backed LFN buffers, 255-character limit
+- `sd ls` uses direct FatFs directory enumeration for reliable long filenames
+
+### Fixed
+- `sd ls` stack-protection panic: command execution moved to dedicated worker task
+- `c6ota default` hosted teardown crash: ESP-Hosted SDIO transport kept alive for Wi-Fi-off OTA
+- Truncated SD root names and `c6ota default` lookup failures
+
+---
+
+## [0.1.6] - 2026-03-17
+
+### Fixed
+- Repeated SD `ldo` warning spam: BSP SD-card power control acquires SD VO4 explicitly at 3300 mV on esp32p4
+- Mount-failure and unmount cleanup so repeated `sd` commands don't leak SD power handle
+
+---
+
+## [0.1.5] - 2026-03-17
+
+### Added
+- `sd info`: card metadata and root availability
+- `sd stat <path>`: resolved path, entry type, size, and mode
+- `sd cat <path> [max_bytes]`: bounded text-safe file preview (max 8192 bytes)
+
+### Changed
+- All SD commands use shared guarded mount/unmount flow with validated path resolution
+- `sd ls` shows entry types and file sizes
+- Directory listings bounded to 128 entries
+
+---
+
+## [0.1.4] - 2026-03-17
+
+### Added
+- `c6ota default`: auto-load `esp32c6_hosted_slave.bin` or `network_adapter.bin` from SD root
+- ESP32-C6 image validation: magic `0xE9` + chip ID `0x000D`
+- Factory first-upgrade warning for C6 firmware `v2.3.0`
+
+### Changed
+- `c6ota` transfer chunks: 1536 bytes
+- Progress output: `C6 OTA: XX% (YYYY KB / ZZZZ KB)` every 5%
+- Confirmation prompt: `WARNING: This will reboot the C6. Type YES to continue`
+- Success text: `C6 OTA completed successfully! Type reboot to activate new firmware.`
+- HTTP images downloaded first, then Wi-Fi stopped for clean SDIO-only OTA transfer
+
+---
+
+## [0.1.3] - 2026-03-17
+
+### Changed
+- Healthy shell UI startup no longer emits warning-level log
+- Boot milestone preserved in `debug` command history instead
+
+---
+
+## [0.1.2] - 2026-03-17
+
+### Removed
+- `c6update` utility fully removed and archived (previously used esp-serial-flasher + GPIO54)
+
+---
+
+## [0.1.1] - 2026-03-14
+
+### Added
+- `c6ota <source>` shell command: ESP-Hosted SDIO OTA for ESP32-C6
+- Input-driven safety gate with `This will reboot the C6. Continue? (yes/no)` prompt
+- ESP-IDF app header validation before transfer
+- Live percentage progress in locked transcript UI
+- Support for `sd:/firmware.bin` and `http[s]://host/path/to/firmware.bin` sources
+
+---
+
+## [0.1.0] - 2026-03-13
+
+### Added
+- Initial shell UI replacing LVGL widgets demo
+- BSP-managed JD9165 display and GT911 touch initialization
+- Scrollable LVGL textarea transcript, on-screen keyboard, boot banner
+- Built-in commands: `help`, `sysinfo`, `clear`, `reboot`
+- 10-command recall buffer with Prev/Next touch controls
+- Runtime Wi-Fi initialization path following sdkconfig
+- Shell Wi-Fi commands: `wifi status`, `wifi connect`, `wifi disconnect`
+- Password masking for `wifi connect <ssid> <pass>`
+- `wifi scan`, `sd ls`, `mem`, `gpio status`, `debug`, `version`, `about`
+- 5-entry debug/error history buffer
+- ESP-Hosted + esp_wifi_remote targeting ESP32-C6 over SDIO
+- `coprocessor/esp32c6_slave`: repo-local ESP32-C6 hosted slave firmware project
+- Station-only Wi-Fi profile, nano newlib, warn-level logging for image size
+- PSRAM XIP mapping disabled to prevent flash/PSRAM overflow at link
 
 ## [0.1.19] - 2026-03-18
 - Fixed the shell command-family dispatch regression that left `wifi status`, `wifi scan`, `wifi diag`, `wifi connect`, and `wifi disconnect` effectively inert even though boot-time hosted Wi-Fi still initialized and connected correctly

@@ -1,3 +1,23 @@
+/**
+ * @file header.c
+ * @brief Fixed top status bar implementation for P4MiniShell.
+ *
+ * Owns the LVGL widget tree for the fixed header bar: status icons for
+ * Wi-Fi, battery, Bluetooth, USB, and SD, plus a transient notification area.
+ * All public functions use LVGL async dispatch so they are safe to call from
+ * any task context (shell worker, module callback, timer, etc.).
+ *
+ * Visual design:
+ *   - Non-scrollable, resolution-scaled height (display_height / 15, clamped 32-56)
+ *   - Dark background (#111816) with green accent (#8DFF96) for active state
+ *   - Status icons laid out left-to-right, notification area on the far right
+ *   - Battery: LVGL symbol icon + small bar + percentage label
+ *   - Wi-Fi: symbol + HI/MID/LOW/OFF signal quality label
+ *   - Bluetooth: symbol + ON/PAIR/OFF label
+ *   - USB: symbol + ON/OFF label
+ *   - SD: symbol + "SD" label, hidden when no card mounted
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -7,8 +27,9 @@
 #include "lvgl.h"
 
 #include "header.h"
+#include "p4minishell_config.h"
 
-/* AI: Use a consistent SD icon string even if the active font does not include the LVGL symbol glyph.
+/* Use a consistent SD icon string even if the active font does not include the LVGL symbol glyph.
  * If the LVGL symbol is available, prefer it; otherwise fall back to an ASCII "SD" label.
  */
 #if defined(LV_SYMBOL_SD_CARD)
@@ -21,13 +42,14 @@
 #define HEADER_SD_SYMBOL "SD"
 #endif
 
-#define HEADER_NOTIFICATION_BYTES 160
-#define HEADER_TEXT_COLOR 0xC7FFD0
-#define HEADER_MUTED_COLOR 0x5E7063
-#define HEADER_ACCENT_COLOR 0x8DFF96
-#define HEADER_WARN_COLOR 0xF0C36E
-#define HEADER_BG_COLOR 0x111816
-#define HEADER_PANEL_COLOR 0x050806
+/* ---- Backward-compatibility aliases ---- */
+#define HEADER_NOTIFICATION_BYTES   P4_CONFIG_HEADER_NOTIFICATION_BYTES
+#define HEADER_TEXT_COLOR           P4_CONFIG_HEADER_TEXT_COLOR
+#define HEADER_MUTED_COLOR          P4_CONFIG_HEADER_MUTED_COLOR
+#define HEADER_ACCENT_COLOR         P4_CONFIG_HEADER_ACCENT_COLOR
+#define HEADER_WARN_COLOR           P4_CONFIG_HEADER_WARN_COLOR
+#define HEADER_BG_COLOR             P4_CONFIG_HEADER_BG_COLOR
+#define HEADER_PANEL_COLOR          P4_CONFIG_HEADER_PANEL_COLOR
 
 typedef struct {
     bool wifi_connected;
@@ -195,10 +217,10 @@ static void header_render(void)
         snprintf(buffer, sizeof(buffer), "%s SD", HEADER_SD_SYMBOL);
         lv_obj_set_style_text_color(s_sd_label, header_status_color(true), 0);
     } else {
-        /* Hide the SD indicator when no card is mounted to match the other status icons. */
-        snprintf(buffer, sizeof(buffer), "%s SD", LV_SYMBOL_WARNING);
-        lv_obj_set_style_text_color(s_sd_label, header_status_color(false), 0);
+        /* Hide the SD indicator when no card is mounted. */
         lv_obj_add_flag(s_sd_label, LV_OBJ_FLAG_HIDDEN);
+        snprintf(buffer, sizeof(buffer), "%s SD", HEADER_SD_SYMBOL);
+        lv_obj_set_style_text_color(s_sd_label, header_status_color(false), 0);
     }
     lv_label_set_text(s_sd_label, buffer);
 
@@ -261,13 +283,8 @@ static void header_async_notification(void *user_data)
 static void header_async_wifi(void *user_data)
 {
     header_wifi_update_t *update = (header_wifi_update_t *)user_data;
-
-    if (update == NULL) {
-        return;
-    }
-
-    s_header_state.wifi_connected = update->connected;
-    s_header_state.wifi_rssi = update->rssi;
+    if (update == NULL) return;
+    /* State already set immediately in header_update_wifi(); just re-render */
     header_render();
     free(update);
 }
@@ -275,19 +292,8 @@ static void header_async_wifi(void *user_data)
 static void header_async_battery(void *user_data)
 {
     header_battery_update_t *update = (header_battery_update_t *)user_data;
-
-    if (update == NULL) {
-        return;
-    }
-
-    if (update->percent < 0) {
-        s_header_state.battery_percent = 0;
-    } else if (update->percent > 100) {
-        s_header_state.battery_percent = 100;
-    } else {
-        s_header_state.battery_percent = update->percent;
-    }
-
+    if (update == NULL) return;
+    /* State already set immediately in header_update_battery(); just re-render */
     header_render();
     free(update);
 }
@@ -295,13 +301,8 @@ static void header_async_battery(void *user_data)
 static void header_async_bluetooth(void *user_data)
 {
     header_bluetooth_update_t *update = (header_bluetooth_update_t *)user_data;
-
-    if (update == NULL) {
-        return;
-    }
-
-    s_header_state.bluetooth_enabled = update->enabled;
-    s_header_state.bluetooth_connected = update->connected;
+    if (update == NULL) return;
+    /* State already set immediately in header_update_bluetooth(); just re-render */
     header_render();
     free(update);
 }
@@ -309,12 +310,8 @@ static void header_async_bluetooth(void *user_data)
 static void header_async_usb(void *user_data)
 {
     header_toggle_update_t *update = (header_toggle_update_t *)user_data;
-
-    if (update == NULL) {
-        return;
-    }
-
-    s_header_state.usb_connected = update->connected;
+    if (update == NULL) return;
+    /* State already set immediately in header_update_usb(); just re-render */
     header_render();
     free(update);
 }
@@ -327,7 +324,7 @@ static void header_async_sd(void *user_data)
         return;
     }
 
-    s_header_state.sd_mounted = update->connected;
+    /* State already set immediately in header_update_sd(); just re-render */
     header_render();
     free(update);
 }
@@ -350,8 +347,9 @@ void header_init(void)
     vertical_pad = s_header_height >= 44 ? 6 : 4;
     horizontal_pad = s_header_height >= 44 ? 12 : 8;
 
-    // AI: Header module added as a separate component with a fixed top bar for notifications plus system status, and it owns all LVGL widget creation internally.
-    // AI: SD card status icon now uses a consistent symbol/text and is shown only when mounted, matching the style of WiFi/Battery/Bluetooth/USB indicators.
+    // Build the fixed header bar: non-scrollable, resolution-scaled, flex-row layout.
+    // Owns all LVGL widget creation internally. SD icon uses consistent symbol/text
+    // and is shown only when mounted, matching the style of other status indicators.
     s_header_root = lv_obj_create(screen);
     lv_obj_set_width(s_header_root, LV_PCT(100));
     lv_obj_set_height(s_header_root, s_header_height);
@@ -467,62 +465,90 @@ void header_set_notification(const char *text, uint32_t timeout_ms)
 
 void header_update_wifi(bool connected, int rssi)
 {
+    s_header_state.wifi_connected = connected;
+    s_header_state.wifi_rssi = rssi;
+
     header_wifi_update_t *update = calloc(1, sizeof(*update));
-
-    if (update == NULL) {
-        return;
+    if (update != NULL) {
+        update->connected = connected;
+        update->rssi = rssi;
+        if (!header_schedule(header_async_wifi, update)) {
+            free(update);
+            header_render();
+        }
+    } else {
+        header_render();
     }
-
-    update->connected = connected;
-    update->rssi = rssi;
-    (void)header_schedule(header_async_wifi, update);
 }
 
 void header_update_battery(int percent)
 {
+    int clamped = (percent < 0) ? 0 : (percent > 100) ? 100 : percent;
+    s_header_state.battery_percent = clamped;
+
     header_battery_update_t *update = calloc(1, sizeof(*update));
-
-    if (update == NULL) {
-        return;
+    if (update != NULL) {
+        update->percent = clamped;
+        if (!header_schedule(header_async_battery, update)) {
+            free(update);
+            header_render();
+        }
+    } else {
+        header_render();
     }
-
-    update->percent = percent;
-    (void)header_schedule(header_async_battery, update);
 }
 
 void header_update_bluetooth(bool enabled, bool connected)
 {
+    s_header_state.bluetooth_enabled = enabled;
+    s_header_state.bluetooth_connected = connected;
+
     header_bluetooth_update_t *update = calloc(1, sizeof(*update));
-
-    if (update == NULL) {
-        return;
+    if (update != NULL) {
+        update->enabled = enabled;
+        update->connected = connected;
+        if (!header_schedule(header_async_bluetooth, update)) {
+            free(update);
+            header_render();
+        }
+    } else {
+        header_render();
     }
-
-    update->enabled = enabled;
-    update->connected = connected;
-    (void)header_schedule(header_async_bluetooth, update);
 }
 
 void header_update_usb(bool connected)
 {
+    s_header_state.usb_connected = connected;
+
     header_toggle_update_t *update = calloc(1, sizeof(*update));
-
-    if (update == NULL) {
-        return;
+    if (update != NULL) {
+        update->connected = connected;
+        if (!header_schedule(header_async_usb, update)) {
+            free(update);
+            header_render();
+        }
+    } else {
+        header_render();
     }
-
-    update->connected = connected;
-    (void)header_schedule(header_async_usb, update);
 }
 
 void header_update_sd(bool mounted)
 {
+    /* Update state immediately so callers see the change even if async render is delayed.
+     * The bool write is atomic on this platform and safe from any task context. */
+    s_header_state.sd_mounted = mounted;
+
+    /* Schedule a render via LVGL async dispatch to refresh the widget */
     header_toggle_update_t *update = calloc(1, sizeof(*update));
-
-    if (update == NULL) {
-        return;
+    if (update != NULL) {
+        update->connected = mounted;
+        if (!header_schedule(header_async_sd, update)) {
+            free(update);
+            /* If async dispatch failed, try direct render (caller is on LVGL task) */
+            header_render();
+        }
+    } else {
+        /* Allocation failed, try direct render */
+        header_render();
     }
-
-    update->connected = mounted;
-    (void)header_schedule(header_async_sd, update);
 }

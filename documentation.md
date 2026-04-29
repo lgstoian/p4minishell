@@ -1,152 +1,194 @@
-## Overview
-P4MiniShell now boots into a simple shell UI instead of the LVGL widgets demo.
+﻿# P4MiniShell Technical Documentation
 
-## Connectivity layout
-- Hosted connectivity no longer lives directly in the shell monolith.
-- `components/header/header.c` now owns the fixed LVGL top bar for notifications and passive system status.
-- `components/networking/networking.c` now owns hosted Wi-Fi startup, event handling, command execution, status reporting, and OTA restore or wait hooks.
-- `components/networking/bluetooth.c` now owns hosted Bluetooth bring-up through NimBLE VHCI on the ESP32-C6, including scan and advertising control.
-- `components/usb/usb.c` now owns ESP-IDF USB Host bring-up, USB MSC mount or list behavior, and HID keyboard or mouse attach plus echo handling.
-- `components/c6ota/c6ota.c` now owns the full ESP32-C6 OTA path, including source parsing, confirmation tracking, background transfer, Wi-Fi stop or restore, progress reporting, and the hosted OTA RPC sequence.
-- The Bluetooth module keeps hosted controller state across shell commands so scan and advertising requests reuse the active host stack instead of reissuing hosted controller init or enable calls.
-- `main/main.c` remains the shell UI and orchestration layer, creates the header first so the transcript starts below it, passes transcript plus logging callbacks into the networking component, exposes transcript hooks for the USB module, and delegates `c6ota` plus `usb` to separate modules without changing existing shell-visible behavior.
+## Architecture Overview
 
-## Project documents
-- `readme.md`: user-facing introduction, current behavior, and build notes
-- `API.md`: stable public API for the modular hosted runtime components, including the new header bar
-- `SDK.md`: integration notes and usage examples for the modular `header`, `c6ota`, and `usb` components
-- `roadmap.md`: parity plan for the DOS-style shell, native app runtime, and future SDK work
-- `licence.md`: proprietary notice for project-authored code plus third-party license summary
+P4MiniShell is a modular embedded shell application for ESP32-P4 with an ESP32-C6 co-processor. The codebase is organized into a shell orchestration layer and dedicated component modules.
 
-## OTA module API
-- `c6ota_init()`: reset and prepare the OTA module once at boot.
-- `c6ota_perform(const char *source)`: accept `sd:/...`, `/sdcard/...`, `http[s]://...`, or `default` and preserve the established shell confirmation and OTA behavior.
-- `c6ota_register_progress_callback(void (*cb)(int percent, const char *msg))`: let the shell transcript consume module-generated progress and status messages without moving OTA logic back into `main/main.c`.
+### Module Layout
 
-## USB module API
-- `usb_init()`: initialize the shared USB Host Library plus MSC and HID class drivers once after networking is configured.
-- `usb_handle_command(char *command)`: entry point for the shell-level `usb ...` family parser.
-- `usb_status()`: print transcript-visible USB host, MSC, and HID state.
-- `usb_msc_mount()`: mount a connected MSC device at `/usb0` through `msc_host_vfs_register()`.
-- `usb_msc_ls(const char *path)`: list files from `usb:/...`, `/usb0/...`, or a relative USB-root path with SD-style bounded transcript output.
-- `usb_hid_keyboard_enable()` and `usb_hid_mouse_enable()`: enable transcript echo for attached HID boot devices.
-
-## Hardware reuse policy
-- Display init remains on the existing BSP path through bsp_display_start_with_config()
-- Touch init remains on the existing BSP path through the managed GT911 driver
-- All active LCD and touch settings still come from board_config-generated BOARD_CFG_* macros and sdkconfig-backed BSP behavior
-
-## UI model
-- A fixed top header bar shows left-to-right status icons plus passive Wi-Fi, battery, Bluetooth, USB, and SD status (the SD icon now appears consistently when a card is mounted), with the notification text area aligned on the far right.
-- The notification area remains empty when no event is active, so transient messages such as `c6ota` progress only appear while a live module event is running and then disappear after the timeout.
-- A scrollable transcript textarea shows shell history and command output
-- A dedicated one-line input textarea holds the prompt and current command entry
-- A bottom lv_keyboard is attached only to the input line
-- Prev and Next buttons provide basic recall of the last 10 commands for touch-only use
-- Enter/OK on the input line is handled by `LV_EVENT_READY`, which is the confirmed command execution path in the current shell
-- Heavy shell commands no longer run on the LVGL input-event stack directly; the callback now hands work to a dedicated command task before command parsing and SD/FATFS traversal begin
-- Command-family handlers now receive a preserved copy of the original command line before the generic parser tokenizes it, which keeps `wifi`, `sd`, and `c6ota` subcommands functional when they perform their own second-stage parsing
-- The configured ESP-IDF console now also acts as a real shell endpoint: stdin lines are consumed in a dedicated serial task, stdout mirrors transcript text, and serial-entered commands re-enter the same shell path as touch-entered commands
-- The serial prompt is stateful inside that task and is only re-emitted after a completed or intentionally blank line, which prevents prompt spam while the monitor polls stdin with no new command ready
-- The visual style intentionally stays close to a compact DOS/MS-DOS terminal: dense text, immutable history pane, prompt line, scan-friendly output, and a fixed retro status bar above the transcript
-- Healthy shell startup is treated as normal status, not a warning; the boot milestone is retained in the `debug` command history instead of the serial warning stream
-- See `command.md` for the current command reference
-
-## Built-in commands
-- help: list available commands
-- cls: alias of `clear`
-- c6ota <sd:/file.bin|http[s]://url|default>: perform the real ESP-Hosted SDIO OTA update against the ESP32-C6, using a staged HTTP download or SD/default image source before a Wi-Fi-off transport-only transfer after the exact YES confirmation prompt
-- The shell parser now routes `c6ota` through `c6ota_perform()` in `components/c6ota`, while `YES` or `NO` confirmation replies stay in the same input flow through the module-owned pending-confirmation state.
-- cd / chdir [path]: show or change the RAM-only current SD working directory used by DOS-style file commands
-- dir [path]: list files and directories from the current SD working directory using the guarded SD access path
-- copy, move, del / erase, ren / rename, md / mkdir, rd / rmdir: COMMAND.COM-style SD file management commands using long filenames and UTF-8 paths
-- type <path>: print a text-safe file dump from SD without raw binary output
-- write <path> <text>, append <path> <text>, touch <path>: create or modify SD text files through the shell worker task only
-- call <file.bat> [args]: execute a batch file from SD with `%1`..`%9`, `rem`, and `echo on/off`
-- set, path, echo: RAM-only environment and batch control commands, including PATH-based `.bat` lookup
-- brightness <0-100>: set the LCD backlight level through the existing BSP brightness API
-- rotate <0|90|180|270>: rotate the active display and remap the GT911 touch transform so pointer coordinates stay aligned with the panel
-- battery: report scaled battery voltage, estimated percentage, raw ADC reading, and configured light-sleep status
-- battery sleep <on|off|status>: request or query light sleep only when power management is enabled in sdkconfig
-- volume <0-100>: set speaker output volume through the ES8311 codec device already used by the BSP audio path
-- gpio list | status | read <pin> | set <pin> <0|1>: expose the board pin table, allow reads, and restrict writes to shell-safe GPIOs only
-- bluetooth status | scan | advertise <on|off> and bt ...: shell-facing Bluetooth command surface now routed through hosted NimBLE on the ESP32-C6 over ESP-Hosted VHCI, with `bt` preserved as an alias for the same family
-- rgb led <color> or rgb <r> <g> <b>: reserved command surface for a future board-declared RGB LED implementation; the current workspace still reports unsupported because the JC1060 reference repo does not expose authoritative RGB LED wiring or a declared RGB driver here
-- camera init | camera snap <filename>: reserved command surface for a future board-declared camera path; the current workspace still reports unsupported because the JC1060 reference repo shows a camera add-on path, but this workspace does not ship the declared sensor, CSI map, or local camera stack needed to use it
-- Wi-Fi/ESP-Hosted startup is asynchronous: the UI boots first, then the original hosted Wi-Fi routine runs in a worker task during normal boot so a dead or blank C6 does not block the shell surface
-- The Wi-Fi worker path now lives inside the networking component instead of `main/main.c`, but it preserves the same boot-time restore model, command behavior, and transcript-facing status flow
-- Wi-Fi/ESP-Hosted startup now includes a firm compatibility gate: once the SDIO link is up, the shell reads the ESP32-C6 hosted firmware version and aborts Wi-Fi startup unless the co-processor matches the host `2.12.x` ESP-Hosted release line
-- The same background worker now restores Wi-Fi after successful `c6ota`, and the working project configuration keeps the transcript status + scan diagnostic pass on boot and post-OTA restore while still leaving `wifi diag` available on demand
-- sysinfo: report board_config-backed display/touch/storage values, IDF version, heap, PSRAM, and current Wi-Fi runtime state
-- wifi status: show Wi-Fi runtime state, target SSID, AP info, and IP info when available
-- wifi scan: only runs after Wi-Fi startup succeeds, then lists SSIDs, RSSI, auth mode, and channel
-- wifi diag: run the transcript-facing Wi-Fi status and scan diagnostic path manually
-- wifi connect: connect using sdkconfig default credentials
-- wifi connect <ssid> <pass>: connect using runtime credentials without writing the password into transcript history or recall history
-- wifi disconnect: disconnect the current station session
-- bluetooth status: show hosted Bluetooth readiness, NimBLE state, and advertising state
-- bluetooth scan: run a BLE scan through hosted NimBLE on the ESP32-C6 and print discovered devices to the shell transcript
-- bluetooth advertise on | off: start or stop non-connectable BLE advertising through the hosted NimBLE path
-- usb status | ls [path] | keyboard <on|off> | mouse <on|off>: new USB host family routed through `components/usb`, with MSC storage exposed at `/usb0` and HID echo intentionally opt-in for debug use
-- sd: show SD status and available SD subcommands
-- sd info: mount the SD card on demand and report card metadata plus root availability
-- sd ls [path]: mount the SD card on demand, enumerate directory entries through the FatFs LFN path, list full long filenames with entry type and file sizes, and report a friendly insert-and-retry message when no card is present
-- sd stat <path>: show resolved path, entry type, size, and mode for a file or directory
-- sd cat <path> [max_bytes]: show a bounded text-safe preview of a regular file without dumping arbitrary binary data into the transcript
-- mem: report current free heap, minimum heap, internal heap, and PSRAM usage
-- gpio status: report key GPIO levels for display and C6-related pins
-- debug: show the last 5 stored error/warning entries plus Wi-Fi state, heap, and warning count
-- clear: clear terminal history and redraw a fresh prompt
-- reboot: print a reboot message and restart the board
-- version/about: report app, board, and ESP-IDF identity details
-
-## Runtime constraints
-- Active target is esp32p4
-- GPIO54 remains the documented ESP32-C6 reset reference for the hosted SDIO path
-- The shell exposes only the hosted OTA path; if the C6 firmware is missing or too old for OTA, rebuild or externally refresh `coprocessor/esp32c6_slave`
-- Reboot is still required after a successful OTA C6 firmware update so the P4 host reconnects against the new co-processor firmware
-- Factory first-upgrade prerequisite: ESP32-C6 factory firmware `v2.3.0` still needs the one-time standalone tool from `lboshuizen/crowpanel-p4-c6-sdio-ota` before shell-driven OTA is used
-- Warning: the ESP32-C6 reboots after successful OTA activation
-- The updater mounts the BSP SD card path on demand, accepts `sd:/...` or `/sdcard/...` paths, and unmounts the card after a successful mount it initiated itself
-- FATFS long filename support is now enabled with heap-backed buffers and `CONFIG_FATFS_MAX_LFN=255`, using the ESP-IDF 5.5.3 symbol `CONFIG_FATFS_API_ENCODING_UTF_8` for UTF-8 API paths so long SD root names resolve correctly
-- The `sd` command family now shares the same guarded BSP mount path, treats `sd:/...`, `/sdcard/...`, and relative SD-root paths consistently, limits directory listings to 128 entries, bounds file previews to at most 8192 bytes, and uses direct FatFs directory reads for `sd ls` so long filenames no longer truncate or trigger invalid-name failures
-- The DOS-style file commands reuse the same guarded SD mount path, but keep their own RAM-only current working directory and PATH so `cd`, `dir`, `call`, and `.bat` files behave predictably without persisting state outside runtime RAM
-- Output redirection now supports `>` and `>>` for text-producing shell commands by copying the transcript delta for that command into an SD file, so transcript output remains visible on-screen while the same text is written to SD
-- The managed BSP now acquires the SD IO VO4 LDO rail explicitly at 3300 mV before SD mounts on esp32p4, which fixes the earlier repeated `ldo` voltage-0 warnings without removing the plain-SD fallback for unsupported power-control cases
-- The OTA worker auto-starts Wi-Fi from sdkconfig defaults when possible for `http://` or `https://` sources, otherwise it requires an existing Wi-Fi session before opening the HTTP download stage
-- After the image is available locally, the OTA worker stops Wi-Fi with `esp_wifi_stop()` plus `esp_wifi_deinit()`, keeps the existing ESP-Hosted transport alive, reconnects the SDIO link in Wi-Fi-off mode, and then streams the payload through `esp_hosted_slave_ota_begin/write/end`
-- The OTA worker accepts `sd:/...`, `/sdcard/...`, or `default`, validates the incoming ESP-IDF image header for magic `0xE9` and ESP32-C6 chip ID `0x000D`, resolves `default` from the SD root using the same LFN-safe path handling, streams the payload in 1500-byte chunks, reports progress every 5% as `C6 OTA: XX% (YYYY KB / ZZZZ KB)`, and requests `esp_hosted_slave_ota_activate()` when the running C6 firmware exposes that API
-- The OTA component API is now documented separately in `API.md` and `SDK.md`, but the runtime flow and transcript-visible behavior stay identical to the pre-refactor shell implementation.
-- The header component API is now documented separately in `API.md` and `SDK.md`, but the main shell flow and transcript-visible behavior remain unchanged because the header is passive and display-only.
-- The header is now non-scrollable and scales its height from the active display resolution so the same top-bar structure remains stable across screen sizes, while Wi-Fi, USB, Bluetooth sync or scan, observed SD mount-state changes, and `c6ota` feed live notification text into that bar through module event hooks.
-- Factory first-upgrade note: ESP32-C6 firmware `v2.3.0` still requires the one-time standalone tool from `https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota` before shell-driven OTA is used
-- Wi-Fi startup now follows sdkconfig at runtime and the checked-in workspace enables the host Wi-Fi path for the esp32p4 board baseline
-- Wi-Fi runtime now initializes NVS first and falls back to erase-and-retry when the stored NVS layout is incompatible, because esp_wifi_init() depends on NVS being ready on this configuration
-- On the esp32p4 host Wi-Fi path, ESP-Hosted now connects to an ESP32-C6 co-processor over SDIO before esp_wifi_init() runs so the standard `esp_wifi_*` shell code can stay unchanged via `esp_wifi_remote`
-- To avoid incompatible remote-Wi-Fi RPC traffic, the shell now stops that startup path immediately when the ESP32-C6 hosted firmware major or minor version does not match the checked-in host `2.12.x` line; recovery stays on the repo-local `coprocessor/esp32c6_slave` or `c6ota default` path instead of suppressing the warning
-- The checked-in hosted transport uses CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 and reset GPIO54; if the ESP32-C6 path is absent or miswired, the shell reports the exact hosted-link failure instead of the old extconn hardware note
-- ESP-Hosted reset policy is `SLAVE_RESET_ON_EVERY_HOST_BOOTUP`, because the working ESP32-P4 to ESP32-C6 configuration in this workspace depends on a forced co-processor reset during host boot
-- `coprocessor/esp32c6_slave` is the repo-local co-processor project for ESP32-C6 recovery and hosted-firmware work, and the shell host build stays on the same `2.12.x` release line
-- Default Wi-Fi credentials are stored in sdkconfig for local validation, while runtime `wifi connect <ssid> <pass>` masks the password in transcript output and keeps it out of command recall
-- LVGL example compilation is disabled in sdkconfig because the shell app no longer uses those sources and the Wi-Fi-enabled image otherwise overruns the esp32p4 link region
-- The checked-in Wi-Fi profile is intentionally station-only for the shell use case, with WPA3, enterprise auth, SoftAP, and Wi-Fi IRAM optimizations disabled to reduce linker pressure on esp32p4
-- Additional size controls now active in sdkconfig are warn-level compile-time logging, newlib nano formatting, and disabled AMPDU aggregation because the shell does not need peak Wi-Fi throughput
-- PSRAM XIP instruction and rodata mapping are also disabled in sdkconfig because the host Wi-Fi image exceeded the shared flash/PSRAM mapping window during link with those options enabled
-- The repository still carries a requested JC1060P470C name while the checked-in BSP baseline is ESP32-P4-Function-EV-Board
-- Command submission is handled by LV_EVENT_READY on the input line, not by editing the transcript directly
-- Serial monitor submission is handled by a dedicated stdin reader task that forwards full lines into the existing shell submit path, so there is still only one parser and one transcript model
-- The `sd ls` panic seen after the LFN change was caused by stack pressure on the LVGL input callback, so shell command execution now runs on a separate worker task with an explicit stack budget while LVGL access is wrapped by the port mutex
-- The hosted OTA path no longer calls `esp_hosted_deinit()` before `c6ota` transfers because the ESP-Hosted SDIO teardown path can assert on this esp32p4 baseline; OTA now follows the upstream example flow of stopping Wi-Fi, reusing the existing hosted transport, then restoring the original Wi-Fi routine after success
-- Hosted Wi-Fi, hosted Bluetooth, and hosted OTA are now split across `components/networking` and `components/c6ota`, while `main/main.c` stays focused on the shell UI, parser, transcript, and orchestration hooks.
-- The `wifi`, `sd`, and `c6ota` command families now preserve their full subcommand text across the worker-task parser handoff, which fixes the runtime regression where family commands could appear inert after the generic parser split the first token in place
-- Every command path now wraps failure-prone ESP-IDF calls with friendly transcript output and pushes summary entries into a small in-memory debug history buffer for later inspection
-- Normal shell UI initialization is also pushed into that debug history so the boot path stays observable without producing a warning on successful startup
-- The new hardware command family follows the same rule: unsupported Bluetooth, RGB LED, or camera paths fail explicitly in the transcript instead of inventing board support or silently touching undeclared GPIO wiring
-- Hosted Bluetooth now follows the same explicit-shell rule, but the current checked-in baseline does expose a real hosted NimBLE path for status, scan, and advertising instead of the earlier disabled Bluedroid stub
-- Hosted Bluetooth commands now follow a stateful lifecycle: `bluetooth enable` brings the hosted controller and NimBLE host up once, and later scan or advertising commands reuse that session.
-- Example OTA commands: `c6ota sd:/esp32c6_hosted_slave.bin`, `c6ota https://host/path/to/esp32c6.bin`, and `c6ota default`
-
-## Build and flash
-```sh
-idf.py build flash monitor
 ```
+main/main.c                     Shell UI, parser, transcript, orchestration
+p4minishell_config.h            Centralized configuration header
+p4minishell_config.yaml         Configuration documentation (YAML)
+components/header/header.c      Fixed top status bar (LVGL widgets)
+components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
+components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
+components/usb/usb.c            USB Host (MSC storage + HID keyboard/mouse)
+components/c6ota/c6ota.c        ESP32-C6 OTA updates (ESP-Hosted SDIO)
+coprocessor/esp32c6_slave/      ESP32-C6 hosted slave firmware project
+```
+
+### Configuration System
+
+All tunable values are centralized in `p4minishell_config.h`. The header is organized
+by subsystem with `P4_CONFIG_` prefixed macros. The companion `p4minishell_config.yaml`
+documents every value with type, description, and valid range.
+
+Backward-compatible `SHELL_*`, `NETWORKING_*`, `BLUETOOTH_*`, `HEADER_*`, `C6OTA_*`,
+and `USB_*` aliases are defined in each source file that needs them.
+
+Three config sources exist, each with a distinct role:
+- `p4minishell_config.h` — C-level tunable values (buffer sizes, limits, colors, stack sizes)
+- `board_config.h` — Hardware pin assignments and display timing (from board_config.yaml)
+- `sdkconfig` — ESP-IDF build configuration (Kconfig-driven)
+
+### Shell Layer (main/main.c)
+
+The shell is the UI and orchestration layer. It owns:
+
+- **LVGL display and touch**: BSP-managed JD9165 1024x600 MIPI-DSI display and GT911 touch via `bsp_display_start_with_config()`
+- **Transcript system**: Scrollable textarea for command output with overflow protection and truncation markers
+- **Async transcript buffer**: Thread-safe buffer for background task output, flushed via LVGL async callback
+- **Command parser**: Tokenization with quote support, family dispatch, and preserved original command text
+- **Command history**: 10-entry recall buffer with password masking for `wifi connect`
+- **Serial console bridge**: stdin/stdout routed through same shell path as touch UI
+- **Worker task**: Dedicated FreeRTOS task for command execution (prevents LVGL stack overflow)
+- **SD access layer**: Guarded mount/unmount with path resolution, FATFS LFN support (255 chars)
+- **File system**: RAM-only current working directory, environment variables (24 max), PATH
+- **Batch engine**: `.bat` file execution with `%1`..`%9` expansion, `rem` comments, `echo on/off`
+- **Output redirection**: `>` and `>>` to SD files via transcript delta copy
+- **Hardware controls**: Backlight PWM, display rotation with touch remapping, battery ADC, audio codec volume
+- **GPIO management**: Pin table with board roles, read access for all pins, write restricted to safe pins
+- **Debug history**: 5-entry circular buffer surfaced via `debug` command
+
+### Header Module (components/header)
+
+Passive, display-only module that owns the fixed top bar:
+
+- Non-scrollable LVGL flex-row container
+- Resolution-scaled height (display_height / 15, clamped 32-56px)
+- Status icons (left-to-right): Wi-Fi, Bluetooth, USB, SD
+- Battery: LVGL symbol icon + bar widget + percentage label
+- Notification area on far right for transient module events
+- All public functions use LVGL async dispatch (safe from any task context)
+- SD icon hidden when no card mounted, shown with consistent styling when mounted
+
+### Networking Module (components/networking)
+
+Owns ESP-Hosted Wi-Fi and bootstraps Bluetooth:
+
+- **Wi-Fi startup**: Background task on boot, version compatibility gate against C6 firmware
+- **Hosted transport**: ESP32-C6 over SDIO (CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54)
+- **Version gate**: Reads C6 hosted firmware version after SDIO link up; refuses Wi-Fi init if major/minor mismatch
+- **Event handling**: WIFI_EVENT and IP_EVENT handlers for connection state tracking
+- **Command dispatch**: `wifi status|scan|diag|connect|disconnect` with password masking
+- **OTA hooks**: `networking_wifi_wait_for_ota()`, `networking_wifi_shutdown()`, capture/restore state
+- **Boot restore**: Automatic Wi-Fi restore after normal boot and after successful `c6ota`
+- **Diagnostics**: Transcript-facing status + scan output via `wifi diag`
+
+### Bluetooth Module (components/networking/bluetooth.c)
+
+Owns hosted NimBLE Bluetooth on ESP32-C6:
+
+- **NimBLE VHCI**: Bluetooth HCI transport over ESP-Hosted SDIO
+- **Controller lifecycle**: Stateful - `bluetooth enable` initializes once, subsequent commands reuse
+- **BLE scan**: Active scanning with device name resolution, bounded to 8 results
+- **BLE advertising**: Non-connectable advertising with configurable on/off
+- **Status reporting**: Controller readiness, NimBLE sync state, advertising state
+- **Shared callbacks**: Uses same `networking_host_ops_t` as Wi-Fi module
+
+### USB Module (components/usb)
+
+Owns ESP-IDF USB Host Library with two class drivers:
+
+- **MSC (Mass Storage Class)**: VFS/FATFS registration at `/usb0`, mount on demand
+- **HID (Human Interface Device)**: Keyboard and mouse with opt-in transcript echo
+- **Command family**: `usb status|ls|keyboard on|off|mouse on|off`
+- **Bounded output**: Directory listings and file previews mirror SD command style
+- **Transcript integration**: Uses dedicated host bridge functions in main.c
+
+### C6 OTA Module (components/c6ota)
+
+Owns the full ESP32-C6 firmware update workflow:
+
+- **Source parsing**: `sd:/path`, `/sdcard/path`, `http[s]://url`, or `default`
+- **Default resolution**: LFN-safe SD root lookup for `esp32c6_hosted_slave.bin` or `network_adapter.bin`
+- **HTTP download**: Uses `esp_http_client` with Wi-Fi readiness wait
+- **Image validation**: ESP-IDF app magic `0xE9` + ESP32-C6 chip ID `0x000D`
+- **Factory warning**: C6 firmware `v2.3.0` requires one-time standalone tool first
+- **Confirmation flow**: Exact prompt `WARNING: This will reboot the C6. Type YES to continue`
+- **Transfer**: 1500-byte chunks over ESP-Hosted SDIO in Wi-Fi-off mode
+- **Progress**: `C6 OTA: XX% (YYYY KB / ZZZZ KB)` every 5%
+- **Wi-Fi management**: Stop before transfer, restore on failure, request post-OTA restore on success
+- **Hosted transport**: Kept alive during transfer (no `esp_hosted_deinit()` to avoid assert)
+
+## Hardware Configuration
+
+### Pin Assignments
+
+| Function | GPIO | Notes |
+|----------|------|-------|
+| I2C SDA | 7 | Shared bus for GT911 touch and peripherals |
+| I2C SCL | 8 | Shared clock |
+| I2S DOUT | 9 | Audio codec data out |
+| I2S LCLK | 10 | Word-select clock |
+| I2S DSIN | 11 | Audio codec data in |
+| I2S SCLK | 12 | Bit clock |
+| I2S MCLK | 13 | Master clock |
+| SDIO D0 | 14 | ESP32-C6 hosted data lane 0 |
+| SDIO D1 | 15 | ESP32-C6 hosted data lane 1 |
+| SDIO D2 | 16 | ESP32-C6 hosted data lane 2 |
+| SDIO D3 | 17 | ESP32-C6 hosted data lane 3 |
+| SDIO CLK | 18 | ESP32-C6 hosted clock |
+| SDIO CMD | 19 | ESP32-C6 hosted command |
+| Power Amp | 20 | Speaker amplifier enable |
+| LCD Backlight | 23 | JD9165 panel backlight PWM |
+| LCD Reset | 27 | JD9165 panel hardware reset |
+| Battery ADC | 53 | Battery divider sense input (2:1) |
+| C6 Reset | 54 | ESP32-C6 hosted reset/enable |
+
+### Display Timing
+
+| Parameter | Value |
+|-----------|-------|
+| Resolution | 1024 x 600 |
+| Pixel Clock | 80 MHz |
+| H Sync | 1344 |
+| H BP | 160 |
+| H FP | 160 |
+| V Sync | 635 |
+| V BP | 23 |
+| V FP | 12 |
+| MIPI DSI Lanes | 2 |
+| DSI Bitrate | 1000 Mbps (macro), 550 Mbps (runtime) |
+
+### Storage
+
+- **SD Card**: FATFS at `/sdcard`, LFN with 255-char limit, heap-backed buffers
+- **USB MSC**: VFS/FATFS at `/usb0`, mounted on demand
+- **SPIFFS**: Partition `storage` at `/spiffs`, 7 MB
+
+## Build System
+
+### CMake Structure
+
+- Root `CMakeLists.txt`: Sets `EXTRA_COMPONENT_DIRS` for managed components, configures `board_config.h`
+- `main/CMakeLists.txt`: Registers `main.c` with component dependencies
+- Component `CMakeLists.txt` files: Standard `idf_component_register()` for each module
+
+### sdkconfig Profile
+
+- Target: `esp32p4`
+- Flash: 16 MB, QIO mode
+- Optimization: Performance (`-O3`)
+- PSRAM: Enabled, 200 MHz, XIP from PSRAM disabled
+- ESP-Hosted: SDIO host interface, 1-bit bus, reset GPIO 54
+- Wi-Fi: Station-only, WPA2, nano newlib, warn-level logging
+- FATFS: LFN heap-backed, 255 chars, UTF-8 encoding
+- Power: Light sleep enabled (`CONFIG_PM_ENABLE`)
+- Console: USB-Serial-JTAG
+
+## Runtime Constraints
+
+- ESP-Hosted reset policy: `SLAVE_RESET_ON_EVERY_HOST_BOOTUP` (required for this hardware)
+- PSRAM XIP mapping disabled (prevents flash/PSRAM overflow at link)
+- LVGL examples disabled (image budget)
+- Station-only Wi-Fi (no SoftAP, WPA3, or enterprise)
+- Heap-backed FATFS LFN buffers (not stack)
+- SD VO4 LDO explicitly acquired at 3300 mV before mounts
+- No `esp_hosted_deinit()` before OTA (causes assert on esp32p4)
+- Command execution on dedicated worker task (not LVGL input callback stack)
+- Original command text preserved for family handlers (wifi, sd, c6ota)
+- Password masking in transcript and command history
+- SD directory listings bounded to 128 entries
+- `sd cat` preview bounded to 8192 bytes

@@ -37,8 +37,9 @@
 #include "esp_hosted_api_types.h"
 #include "esp_hosted_host_fw_ver.h"
 #endif
-// AI: legacy Bluedroid bring-up stays disabled here; hosted NimBLE now lives in components/networking for the ESP32-C6 SDIO path.
-#define SHELL_BT_HOSTED_RUNTIME_SUPPORTED 0
+// Legacy Bluedroid disabled; hosted NimBLE in components/networking.
+// P4_CONFIG_BT_HOSTED_RUNTIME_SUPPORTED from p4minishell_config.h
+#define SHELL_BT_HOSTED_RUNTIME_SUPPORTED P4_CONFIG_BT_HOSTED_RUNTIME_SUPPORTED
 
 #if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
 #include "esp_bt_main.h"
@@ -59,56 +60,51 @@
 #include "usb.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
+#include "p4minishell_config.h"
+#include "p4minishell.h"
 
-#define SHELL_TAG "p4minishell"
-#define SHELL_BOARD_REQUESTED "JC1060P470C"
-#define SHELL_BOARD_DETECTED "ESP32-P4-Function-EV-Board"
-#define SHELL_BOOT_MESSAGE "P4MiniShell v0.1 ready | JC1060P470C | type help"
-#define SHELL_PROMPT "P4Shell> "
-#define SHELL_TRANSCRIPT_BYTES 8192
-#define SHELL_ASYNC_TRANSCRIPT_BYTES 2048
-#define SHELL_COMMAND_BYTES 256
-#define SHELL_COMMAND_HISTORY_DEPTH 10
-#define SHELL_KEYBOARD_HEIGHT 240
-#define SHELL_HEADER_REFRESH_PERIOD_MS 5000
-#define SHELL_INPUT_ROW_HEIGHT 52
-#define SHELL_DEBUG_LOG_DEPTH 5
-#define SHELL_DEBUG_ENTRY_BYTES 192
-#define SHELL_WIFI_SSID_BYTES 33
-#define SHELL_WIFI_PASSWORD_BYTES 65
-#define SHELL_WIFI_DETAIL_BYTES 256
-#define SHELL_WIFI_ORIGIN_BYTES 32
-#define SHELL_WIFI_INIT_TASK_STACK_BYTES 6144
-#define SHELL_COMMAND_TASK_STACK_BYTES 8192
-#define SHELL_UART_CONSOLE_TASK_STACK_BYTES 4096
-#define SHELL_GPIO_NAME_BYTES 32
-#define SHELL_GPIO_PIN_LIMIT 24
-#define SHELL_BT_SCAN_LIMIT 8
-#define SHELL_C6_HOST_RESET_GPIO 54
-#define SHELL_SD_FATFS_DRIVE "0:"
-#define SHELL_SD_PATH_BYTES 320
-#define SHELL_SD_LIST_LIMIT 128
-#define SHELL_SD_CAT_DEFAULT_BYTES 1024
-#define SHELL_SD_CAT_MAX_BYTES 8192
-#define SHELL_SD_IO_BUFFER_BYTES 128
-#define SHELL_ENV_VAR_MAX 24
-#define SHELL_ENV_NAME_BYTES 32
-#define SHELL_ENV_VALUE_BYTES 256
-#define SHELL_BATCH_LINE_BYTES 384
-#define SHELL_BATCH_ARGS_MAX 9
-#define SHELL_BATCH_DEPTH_MAX 4
-#define SHELL_FILE_IO_BUFFER_BYTES 512
-#define SHELL_WIFI_RUNTIME_ENABLED (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED)
-#define SHELL_BATTERY_ATTEN ADC_ATTEN_DB_12
-#define SHELL_BATTERY_MIN_SLEEP_FREQ_MHZ 40
-
-#ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID
-#define CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID ""
-#endif
-
-#ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD
-#define CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD ""
-#endif
+/* Backward-compatibility aliases */
+#define SHELL_TAG                       P4_CONFIG_SHELL_TAG
+#define SHELL_BOARD_REQUESTED           P4_CONFIG_BOARD_REQUESTED
+#define SHELL_BOARD_DETECTED            P4_CONFIG_BOARD_DETECTED
+#define SHELL_BOOT_MESSAGE              P4_CONFIG_BOOT_MESSAGE
+#define SHELL_PROMPT                    P4_CONFIG_SHELL_PROMPT
+#define SHELL_TRANSCRIPT_BYTES          P4_CONFIG_TRANSCRIPT_BYTES
+#define SHELL_ASYNC_TRANSCRIPT_BYTES    P4_CONFIG_ASYNC_TRANSCRIPT_BYTES
+#define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
+#define SHELL_COMMAND_HISTORY_DEPTH     P4_CONFIG_COMMAND_HISTORY_DEPTH
+#define SHELL_KEYBOARD_HEIGHT           P4_CONFIG_KEYBOARD_HEIGHT
+#define SHELL_HEADER_REFRESH_PERIOD_MS  P4_CONFIG_HEADER_REFRESH_PERIOD_MS
+#define SHELL_INPUT_ROW_HEIGHT          P4_CONFIG_INPUT_ROW_HEIGHT
+#define SHELL_DEBUG_LOG_DEPTH           P4_CONFIG_DEBUG_LOG_DEPTH
+#define SHELL_DEBUG_ENTRY_BYTES         P4_CONFIG_DEBUG_ENTRY_BYTES
+#define SHELL_WIFI_SSID_BYTES           P4_CONFIG_WIFI_SSID_BYTES
+#define SHELL_WIFI_PASSWORD_BYTES       P4_CONFIG_WIFI_PASSWORD_BYTES
+#define SHELL_WIFI_DETAIL_BYTES         P4_CONFIG_WIFI_DETAIL_BYTES
+#define SHELL_WIFI_ORIGIN_BYTES         P4_CONFIG_WIFI_ORIGIN_BYTES
+#define SHELL_WIFI_INIT_TASK_STACK_BYTES P4_CONFIG_WIFI_INIT_TASK_STACK
+#define SHELL_COMMAND_TASK_STACK_BYTES  P4_CONFIG_COMMAND_TASK_STACK
+#define SHELL_UART_CONSOLE_TASK_STACK_BYTES P4_CONFIG_UART_CONSOLE_TASK_STACK
+#define SHELL_GPIO_NAME_BYTES           P4_CONFIG_GPIO_NAME_BYTES
+#define SHELL_GPIO_PIN_LIMIT            P4_CONFIG_GPIO_PIN_LIMIT
+#define SHELL_BT_SCAN_LIMIT             P4_CONFIG_BT_SCAN_LIMIT
+#define SHELL_C6_HOST_RESET_GPIO        P4_CONFIG_C6_HOST_RESET_GPIO
+#define SHELL_SD_FATFS_DRIVE            P4_CONFIG_SD_FATFS_DRIVE
+#define SHELL_SD_PATH_BYTES             P4_CONFIG_SD_PATH_BYTES
+#define SHELL_SD_LIST_LIMIT             P4_CONFIG_SD_LIST_LIMIT
+#define SHELL_SD_CAT_DEFAULT_BYTES      P4_CONFIG_SD_CAT_DEFAULT_BYTES
+#define SHELL_SD_CAT_MAX_BYTES          P4_CONFIG_SD_CAT_MAX_BYTES
+#define SHELL_SD_IO_BUFFER_BYTES        P4_CONFIG_SD_IO_BUFFER_BYTES
+#define SHELL_ENV_VAR_MAX               P4_CONFIG_ENV_VAR_MAX
+#define SHELL_ENV_NAME_BYTES            P4_CONFIG_ENV_NAME_BYTES
+#define SHELL_ENV_VALUE_BYTES           P4_CONFIG_ENV_VALUE_BYTES
+#define SHELL_BATCH_LINE_BYTES          P4_CONFIG_BATCH_LINE_BYTES
+#define SHELL_BATCH_ARGS_MAX            P4_CONFIG_BATCH_ARGS_MAX
+#define SHELL_BATCH_DEPTH_MAX           P4_CONFIG_BATCH_DEPTH_MAX
+#define SHELL_FILE_IO_BUFFER_BYTES      P4_CONFIG_FILE_IO_BUFFER_BYTES
+#define SHELL_WIFI_RUNTIME_ENABLED      P4_CONFIG_WIFI_RUNTIME_ENABLED
+#define SHELL_BATTERY_ATTEN             P4_CONFIG_BATTERY_ATTEN
+#define SHELL_BATTERY_MIN_SLEEP_FREQ_MHZ P4_CONFIG_BATTERY_MIN_SLEEP_FREQ_MHZ
 
 typedef enum {
     SHELL_WIFI_STATE_NOT_ATTEMPTED = 0,
@@ -343,8 +339,8 @@ static bool shell_text_equals_ignore_case(const char *left, const char *right)
     return *left == '\0' && *right == '\0';
 }
 
-// AI: All shell-side SD commands share a single guarded mount path so failures cannot leak mounted state or dereference missing card metadata.
-// AI: Also update the fixed header SD icon immediately on mount/unmount so the status bar stays in sync with the actual card state.
+// All shell-side SD commands share a single guarded mount path so failures cannot leak mounted state or dereference missing card metadata.
+// Also update the fixed header SD icon immediately on mount/unmount so the status bar stays in sync with the actual card state.
 static esp_err_t shell_sd_begin(shell_sd_session_t *session)
 {
     esp_err_t error;
@@ -469,7 +465,7 @@ static esp_err_t shell_sd_fresult_to_esp_err(FRESULT result)
     }
 }
 
-// AI: LFN fixed with CONFIG_FATFS_LFN_HEAP + MAX_LFN=255 (fixes sd ls + c6ota default)
+// FATFS LFN enabled with CONFIG_FATFS_LFN_HEAP + MAX_LFN=255 (fixes sd ls long filenames + c6ota default lookup)
 static esp_err_t shell_sd_vfs_to_fatfs_path(const char *vfs_path, char *fatfs_path, size_t fatfs_path_size)
 {
     const char *relative_path;
@@ -1219,7 +1215,7 @@ static esp_err_t shell_write_redirect_output(const char *path, const char *text,
     return ESP_OK;
 }
 
-// AI: gate the host Wi-Fi runtime on an explicitly version-matched ESP-Hosted C6 image so incompatible RPC traffic never reaches esp_wifi_remote.
+// Gate the host Wi-Fi runtime on an explicitly version-matched ESP-Hosted C6 image so incompatible RPC traffic never reaches esp_wifi_remote.
 static esp_err_t shell_wifi_validate_hosted_version(void)
 {
     esp_hosted_coprocessor_fwver_t version = { 0 };
@@ -1280,7 +1276,7 @@ static esp_err_t shell_wifi_validate_hosted_version(void)
     return ESP_OK;
 }
 
-// AI: keep recent shell/runtime failures, including OTA restore failures, visible through the debug command.
+// Keep recent shell/runtime failures, including OTA restore failures, visible through the debug command.
 static void shell_debug_log_push(const char *tag, const char *message)
 {
     char entry[SHELL_DEBUG_ENTRY_BYTES];
@@ -1334,7 +1330,7 @@ static void shell_record_infof(const char *tag, const char *format, ...)
     shell_debug_log_push(tag, message);
 }
 
-static void shell_networking_record_error(const char *tag, esp_err_t error, const char *message)
+void shell_networking_record_error(const char *tag, esp_err_t error, const char *message)
 {
     shell_record_errorf(tag, error, "%s", message);
 }
@@ -1348,17 +1344,17 @@ static void shell_header_notify(const char *text, uint32_t timeout_ms)
     header_set_notification(text, timeout_ms);
 }
 
-static void shell_networking_schedule_text(const char *text)
+void shell_networking_schedule_text(const char *text)
 {
     shell_schedule_transcript_appendf("%s", text);
 }
 
-static void shell_networking_record_warning(const char *tag, const char *message)
+void shell_networking_record_warning(const char *tag, const char *message)
 {
     shell_record_warningf(tag, "%s", message);
 }
 
-static void shell_networking_record_info(const char *tag, const char *message)
+void shell_networking_record_info(const char *tag, const char *message)
 {
     shell_record_infof(tag, "%s", message);
 }
@@ -1423,9 +1419,9 @@ void usb_host_notify_header(const char *text, uint32_t timeout_ms)
     shell_header_notify(text, timeout_ms);
 }
 
-// AI: c6ota fully refactored to separate module with identical public API and 100% same behavior
-// AI: API preserved for shell parser - only moved code, no functional change
-// AI: SDK.md and API.md created for modular OTA usage
+// c6ota module integration: OTA flow lives in components/c6ota with stable public API.
+// Shell parser delegates to c6ota_perform(); preserves exact confirmation, progress, and success text.
+// Module API documented in API.md and SDK.md.
 static void shell_c6ota_progress_callback(int percent, const char *msg)
 {
     if (msg == NULL || msg[0] == '\0') {
@@ -2173,12 +2169,12 @@ static void __attribute__((unused)) shell_wifi_runtime_init(void)
     s_wifi_state = SHELL_WIFI_STATE_STARTING;
     s_wifi_last_error = ESP_OK;
 
-    // AI: keep Wi-Fi startup aligned with the original working hosted routine while making retries safe after boot and post-c6ota restore.
+    // Keep Wi-Fi startup aligned with the original working hosted routine while making retries safe after boot and post-c6ota restore.
     s_wifi_last_detail[0] = '\0';
     shell_wifi_append_step("runtime Wi-Fi initialization requested from sdkconfig");
 
 #if CONFIG_ESP_HOSTED_ENABLED
-    // AI: the checked-in esp32p4 host path targets an ESP32-C6 over ESP-Hosted SDIO and is reused for Wi-Fi-off C6 OTA.
+    // The checked-in esp32p4 host path targets an ESP32-C6 over ESP-Hosted SDIO and is reused for Wi-Fi-off C6 OTA.
     shell_wifi_set_detail("ESP-Hosted SDIO backend targeting ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54");
     shell_wifi_append_step("ESP-Hosted SDIO backend: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54");
     shell_wifi_append_step("esp_hosted_connect_to_slave()");
@@ -2303,7 +2299,7 @@ static void __attribute__((unused)) shell_wifi_runtime_init(void)
         shell_wifi_append_step("no default sdkconfig credentials configured; use wifi connect <ssid> <pass>");
     }
 #elif SOC_WIRELESS_HOST_SUPPORTED
-    // AI: the current esp32p4 board can host an external radio, but the checked-in sdkconfig does not enable that non-hosted path.
+    // The current esp32p4 board can host an external radio, but the checked-in sdkconfig does not enable that non-hosted path.
     s_wifi_state = SHELL_WIFI_STATE_SKIPPED_DISABLED;
     shell_wifi_append_step("skipped: sdkconfig does not enable native Wi-Fi or ESP-Hosted Wi-Fi");
     shell_wifi_append_step("expected CONFIG_ESP_WIFI_ENABLED, CONFIG_ESP_HOST_WIFI_ENABLED, or CONFIG_ESP_HOSTED_ENABLED from sdkconfig");
@@ -2705,7 +2701,7 @@ static void shell_command_volume(int argc, char **argv)
 
 static void shell_command_mem(void)
 {
-    // AI: new hardware control commands added for brightness rotation battery volume gpio bt rgb camera using official drivers from board_config.yaml no regressions to boot render or WiFi.
+    // Hardware control commands (brightness, rotation, battery, volume, gpio, bt, rgb, camera) use official drivers from board_config.yaml with no regressions.
     size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t min_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -2941,7 +2937,7 @@ static void shell_bt_extract_name(const esp_bt_gap_cb_param_t *param, char *name
     }
 }
 
-// AI: retain the earlier hosted BT code only behind a hard gate so the shell can reject bt enable and bt scan safely instead of touching the crashing runtime path.
+// Legacy hosted Bluedroid BT code retained behind compile gate (SHELL_BT_HOSTED_RUNTIME_SUPPORTED=0). Current baseline uses hosted NimBLE via components/networking/bluetooth.c.
 static esp_err_t shell_bt_ensure_ready(void)
 {
     esp_err_t error;
@@ -4340,7 +4336,7 @@ cleanup:
     shell_sd_end(&session, "sd cat");
 }
 
-// AI: `sd` is now a small command family so storage operations can share validated parsing, bounded output, and consistent cleanup behavior.
+// `sd` is a small command family so storage operations share validated parsing, bounded output, and consistent cleanup behavior.
 static void shell_command_sd(char *command)
 {
     char *argv[5];
@@ -4393,7 +4389,7 @@ static void reboot_task(void *arg)
     esp_restart();
 }
 
-// AI: run shell commands on a dedicated worker stack so heavier SD and OTA parsing paths never overflow the small LVGL input-event stack.
+// Run shell commands on a dedicated worker stack so heavier SD and OTA parsing paths never overflow the small LVGL input-event stack.
 static void shell_command_task(void *arg)
 {
     shell_command_request_t *request = (shell_command_request_t *)arg;
@@ -4481,7 +4477,7 @@ static bool shell_execute_command_core(char *command)
         return true;
     }
 
-    // AI: preserve the unsplit command text for family handlers that perform their own subcommand parsing.
+    // Preserve the unsplit command text for family handlers that perform their own subcommand parsing.
     snprintf(command_copy, sizeof(command_copy), "%s", trimmed);
     argc = shell_split_args(trimmed, argv, 16);
     if (argc == 0) {
@@ -4749,7 +4745,7 @@ static void shell_input_line_event_cb(lv_event_t *event)
         char transcript_command[SHELL_COMMAND_BYTES];
         shell_command_request_t *request;
 
-        // AI: LV_EVENT_READY remains the confirmed command submission path, including YES or NO replies for C6 OTA confirmation.
+        // LV_EVENT_READY remains the confirmed command submission path, including YES/NO replies for C6 OTA confirmation.
         shell_extract_input_text(command, sizeof(command));
         shell_format_command_for_transcript(command, transcript_command, sizeof(transcript_command));
         shell_transcript_appendf("%s%s\n", SHELL_PROMPT, transcript_command);
@@ -4820,10 +4816,10 @@ static void shell_build_ui(void)
     lv_obj_set_style_pad_all(screen, 0, 0);
     lv_obj_set_style_pad_row(screen, 0, 0);
 
-    // AI: Header module added as a separate component with a fixed top bar for notifications plus status, and the main transcript stays below it with no shell behavior change.
+    // Header module: fixed top bar for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status. Created first so flex-column layout places it above transcript.
     header_init();
 
-    // AI: Main transcript offset is preserved by the screen flex-column layout: the fixed header is created first, then the locked MSDOS transcript UI, input row, and keyboard follow unchanged.
+    // Main transcript area: scrollable, read-only textarea fills remaining vertical space below the header.
     s_history_transcript = lv_textarea_create(screen);
     lv_obj_set_width(s_history_transcript, LV_PCT(100));
     lv_obj_set_flex_grow(s_history_transcript, 1);
@@ -4878,7 +4874,7 @@ static void shell_build_ui(void)
     lv_obj_set_style_text_font(s_input_line, terminal_font, 0);
     lv_obj_add_event_cb(s_input_line, shell_input_line_event_cb, LV_EVENT_ALL, NULL);
 
-    // AI: keep the shell visually close to a dense, keyboard-driven classic terminal while OTA progress stays easy to scan.
+    // On-screen keyboard: attached to input line, styled as dense retro terminal keyboard.
     s_keyboard = lv_keyboard_create(screen);
     lv_obj_set_width(s_keyboard, LV_PCT(100));
     lv_obj_set_height(s_keyboard, SHELL_KEYBOARD_HEIGHT);
@@ -4900,7 +4896,7 @@ void app_main(void)
 {
     lv_display_t *display;
 
-    // AI: hardware controls and the new fixed header bar keep the BSP boot, render path, keyboard flow, and hosted modules unchanged while main stays the orchestration layer.
+    // Hardware controls and fixed header bar keep BSP boot, render path, keyboard flow, and hosted modules unchanged while main stays the orchestration layer.
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
@@ -4930,7 +4926,7 @@ void app_main(void)
 
     bsp_display_backlight_on();
 
-    // AI: create the LVGL shell surface only after BSP display and touch startup completes so the header bar and transcript share one stable LVGL screen.
+    // Create the LVGL shell surface only after BSP display and touch startup completes so the header bar and transcript share one stable LVGL screen.
     bsp_display_lock(0);
     shell_build_ui();
     bsp_display_unlock();
@@ -4939,7 +4935,7 @@ void app_main(void)
         shell_record_warningf("init", "GT911 touch handle lookup failed after BSP startup; rotate will stay display-only");
     }
 
-    // AI: keep shell boot status visible through the debug surface without emitting a boot warning during normal startup.
+    // Keep shell boot status visible through the debug surface without emitting a boot warning during normal startup.
     shell_record_infof("shell", "Shell UI initialized; boot banner is shown on the display transcript");
 
     shell_transcript_append_text("UART monitor accepts the same shell commands as the on-screen prompt.\n");
@@ -4959,12 +4955,12 @@ void app_main(void)
     });
     usb_init();
 
-    // AI: Public API matches the c6ota, networking, and usb module style - main only feeds passive header updates, with zero regressions to the locked MSDOS transcript UI.
+    // Public API matches the c6ota, networking, and usb module style - main only feeds passive header updates, with zero regressions to the locked MSDOS transcript UI.
     bsp_display_lock(0);
     shell_header_status_refresh();
     if (s_header_status_timer == NULL) {
         s_header_status_timer = lv_timer_create(shell_header_status_timer_cb, SHELL_HEADER_REFRESH_PERIOD_MS, NULL);
     }
     bsp_display_unlock();
-    // AI: drive command parsing, shell state updates, and the new passive header status bar from the dedicated shell flow so OTA confirmation stays unchanged.
+    // Drive command parsing, shell state updates, and the new passive header status bar from the dedicated shell flow so OTA confirmation stays unchanged.
 }

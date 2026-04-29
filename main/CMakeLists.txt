@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c"
+    SRCS "main.c" "p4minishell.c"
     INCLUDE_DIRS "."
     REQUIRES
         espressif__esp32_p4_function_ev_board

@@ -27,20 +27,22 @@
 #include "bsp/esp-bsp.h"
 
 #include "c6ota.h"
+#include "p4minishell_config.h"
 
-#define C6OTA_TASK_STACK_BYTES 8192
-#define C6OTA_HTTP_BLOCK_BYTES 2048
-#define C6OTA_TRANSFER_CHUNK_BYTES 1500
-#define C6OTA_PROGRESS_STEP_PERCENT 5
-#define C6OTA_URL_BYTES 256
-#define C6OTA_DEFAULT_SOURCE "default"
-#define C6OTA_DEFAULT_PRIMARY_FILENAME "esp32c6_hosted_slave.bin"
-#define C6OTA_DEFAULT_FALLBACK_FILENAME "network_adapter.bin"
-#define C6OTA_EXPECTED_CHIP_ID 0x000D
-#define C6OTA_MIN_RELIABLE_MAJOR 2
-#define C6OTA_MIN_RELIABLE_MINOR 9
-#define C6OTA_MIN_RELIABLE_PATCH 7
-#define C6OTA_SD_FATFS_DRIVE "0:"
+/* ---- Backward-compatibility aliases ---- */
+#define C6OTA_TASK_STACK_BYTES          P4_CONFIG_C6OTA_TASK_STACK
+#define C6OTA_HTTP_BLOCK_BYTES          P4_CONFIG_C6OTA_HTTP_BLOCK_BYTES
+#define C6OTA_TRANSFER_CHUNK_BYTES      P4_CONFIG_C6OTA_TRANSFER_CHUNK
+#define C6OTA_PROGRESS_STEP_PERCENT     P4_CONFIG_C6OTA_PROGRESS_STEP
+#define C6OTA_URL_BYTES                 P4_CONFIG_C6OTA_URL_BYTES
+#define C6OTA_DEFAULT_SOURCE            P4_CONFIG_C6OTA_DEFAULT_SOURCE
+#define C6OTA_DEFAULT_PRIMARY_FILENAME  P4_CONFIG_C6OTA_DEFAULT_PRIMARY
+#define C6OTA_DEFAULT_FALLBACK_FILENAME P4_CONFIG_C6OTA_DEFAULT_FALLBACK
+#define C6OTA_EXPECTED_CHIP_ID          P4_CONFIG_C6OTA_EXPECTED_CHIP_ID
+#define C6OTA_MIN_RELIABLE_MAJOR        P4_CONFIG_C6OTA_MIN_MAJOR
+#define C6OTA_MIN_RELIABLE_MINOR        P4_CONFIG_C6OTA_MIN_MINOR
+#define C6OTA_MIN_RELIABLE_PATCH        P4_CONFIG_C6OTA_MIN_PATCH
+#define C6OTA_SD_FATFS_DRIVE            P4_CONFIG_C6OTA_SD_FATFS_DRIVE
 
 typedef enum {
     C6OTA_MODE_HTTP = 0,
@@ -455,7 +457,7 @@ static esp_err_t c6ota_prepare_session(esp_hosted_coprocessor_fwver_t *version,
 
     c6ota_emit_asyncf("%s", "c6ota: switching ESP-Hosted to Wi-Fi-off OTA mode\n");
 
-    // AI: c6ota fully refactored to separate module with identical public API and 100% same behavior
+    // c6ota module integration: OTA flow lives in components/c6ota with stable public API.
     error = esp_hosted_init();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
         snprintf(failure_hint, failure_hint_size, "failed to initialize hosted transport before OTA");

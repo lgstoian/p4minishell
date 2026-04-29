@@ -92,10 +92,13 @@ void shell_boot_init(void)
 
 ## Header integration notes
 - The header is passive and display-only. It must not own Wi-Fi, Bluetooth, USB, SD, or battery runtime behavior.
-- The header is passive and display-only. It must not own Wi-Fi, Bluetooth, USB, SD, or battery runtime behavior.
-- The current workspace integration polls Wi-Fi RSSI through `esp_wifi_sta_get_ap_info(...)`, battery percentage through the existing shell ADC helper, hosted Bluetooth readiness through `bluetooth_is_enabled()` and `bluetooth_is_connected()`, USB attachment through `usb_is_connected()`, and SD mount state through the existing shell path checks.
-- `header_set_notification(...)` is async-safe and can be used from shell worker tasks or module callbacks when short transcript-adjacent notices belong in the fixed top bar instead of the scrollable transcript.
-- The current header keeps the bar itself non-scrollable, scales height from the display resolution, lays status icons out from left to right, and keeps the notification label on the far right. Bluetooth sync or scan and shared SD mount or unmount events now also feed live header notifications through the same bridge model already used for Wi-Fi, USB, and `c6ota`.
+- All `header_update_*()` functions are safe to call from any task context.
+- State is set immediately (atomic bool/int writes); render is scheduled via LVGL async dispatch.
+- If async dispatch fails, a synchronous `header_render()` fallback ensures the widget updates.
+- Poll Wi-Fi RSSI through `esp_wifi_sta_get_ap_info()`, battery through shell ADC helper.
+- `header_set_notification(...)` is async-safe (uses LVGL async dispatch internally).
+- Header is non-scrollable, resolution-scaled, left-to-right status icons, notification on far right.
+- SD indicator is hidden when no card mounted, visible with consistent `HEADER_SD_SYMBOL` when mounted.
 
 ## Example command dispatch
 ```c

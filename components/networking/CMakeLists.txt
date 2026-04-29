@@ -2,7 +2,7 @@ idf_component_register(
     SRCS
         "networking.c"
         "bluetooth.c"
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         bt
         esp_event

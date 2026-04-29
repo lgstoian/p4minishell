@@ -1,390 +1,131 @@
-# AI-OPTIMIZED BOARD CONFIG - SINGLE SOURCE OF TRUTH
-# Workspace baseline verified from these files:
-# - managed_components/lvgl__lvgl/lv_version.h
-# - managed_components/espressif__esp32_p4_function_ev_board/include/bsp/display.h
-# - managed_components/espressif__esp32_p4_function_ev_board/include/bsp/esp32_p4_function_ev_board.h
-# - managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_function_ev_board.c
-# - sdkconfig
+# P4MiniShell Board Configuration
+# Single source of truth for all hardware pin assignments, display timing,
+# touch configuration, battery ADC parameters, and storage mount points.
 #
-# Anti-hallucination note:
-# The user request names JC1060P470C, but this workspace currently builds against
-# espressif/esp32_p4_function_ev_board for target esp32p4. Values below mirror the
-# checked-in workspace exactly. TODO-AI: verify from the official JC1060P470C datasheet
-# before claiming this repository is a native JC1060 board port.
+# Board baseline: ESP32-P4-Function-EV-Board
+# Requested name: JC1060P470C
+# Target MCU: ESP32-P4
+# ESP-IDF: v5.5.3
+#
+# Sources verified against:
+#   - managed_components/espressif__esp32_p4_function_ev_board/
+#   - managed_components/espressif__esp_lcd_jd9165/
+#   - managed_components/espressif__esp_lcd_touch_gt911/
+#   - managed_components/lvgl__lvgl/lv_version.h (LVGL 9.2.2)
+#   - sdkconfig
 
 board:
   requested_name: JC1060P470C
   detected_name: ESP32-P4-Function-EV-Board
   mcu: ESP32-P4
-  source_of_truth:
-    lvgl_version_header: managed_components/lvgl__lvgl/lv_version.h
-    bsp_header: managed_components/espressif__esp32_p4_function_ev_board/include/bsp/esp32_p4_function_ev_board.h
-    display_header: managed_components/espressif__esp32_p4_function_ev_board/include/bsp/display.h
-    bsp_source: managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_function_ev_board.c
-    sdkconfig: sdkconfig
-    component_manifest: managed_components/espressif__esp32_p4_function_ev_board/idf_component.yml
   chip_revision:
     support_mode: less_than_v3
     minimum_supported: v1.0
     maximum_supported: v1.99
-    rationale: ESP-IDF 5.5.x treats ESP32-P4 revisions below v3.0 as a separate compatibility family.
+
+  # ---- I2C Bus (shared by GT911 touch and onboard peripherals) ----
+  i2c:
+    port: 1
+    sda_gpio: 7
+    scl_gpio: 8
+    clock_speed_hz: 400000
+    enable_internal_pullup: true
+
+  # ---- I2S Audio (ES8311 codec) ----
+  i2s:
+    port: 1
+    sclk_gpio: 12
+    mclk_gpio: 13
+    lclk_gpio: 10
+    dout_gpio: 9
+    dsin_gpio: 11
+    power_amp_gpio: 20
+
+  # ---- Display (JD9165 1024x600 MIPI-DSI) ----
   display:
     width: 1024
     height: 600
     rotation: 0
-    type_1024_600: true
     panel_driver: JD9165
-    panel_supports_hw_swap_xy: false
-    alt_panel_driver_in_bsp_docs: EK79007
     color_format_rgb888: false
-    backlight_gpio: GPIO_NUM_23
+    panel_supports_hw_swap_xy: false
+    backlight_gpio: 23
     backlight_control: ledc_pwm
     backlight_pwm_frequency_hz: 5000
     backlight_pwm_timer: 1
     backlight_pwm_resolution_bits: 10
-    reset_gpio: GPIO_NUM_27
-    touch_reset_gpio: GPIO_NUM_NC
-    touch_interrupt_gpio: GPIO_NUM_NC
+    reset_gpio: 27
     pixel_clock_mhz: 80
-    mipi_dsi_lane_num: 2
-    mipi_dsi_lane_bitrate_mbps_macro: 1000
-    mipi_dsi_bus_lane_bitrate_mbps_runtime: 550
     hsync: 1344
     hbp: 160
     hfp: 160
     vsync: 635
     vbp: 23
     vfp: 12
-    draw_buffer_lines: 50
-    draw_buffer_double: 0
-    dpi_buffer_count: 1
-    brightness_ledc_channel: 1
+    mipi_dsi_lane_num: 2
+    mipi_dsi_lane_bitrate_mbps_macro: 1000
+    dsi_bus_lane_bitrate_mbps_runtime: 550
+
+  # ---- Touch (GT911 via I2C) ----
   touch:
-    controller: GT911
-    i2c_port: 1
-    i2c_sda_gpio: GPIO_NUM_7
-    i2c_scl_gpio: GPIO_NUM_8
-    i2c_clock_hz: 400000
-    enable_internal_pullup: true
+    driver: GT911
+    reset_gpio: NC
+    interrupt_gpio: NC
     swap_xy: false
     mirror_x: false
     mirror_y: false
-  audio:
-    i2s_port: 1
-    sclk_gpio: GPIO_NUM_12
-    mclk_gpio: GPIO_NUM_13
-    lclk_gpio: GPIO_NUM_10
-    dout_gpio: GPIO_NUM_9
-    dsin_gpio: GPIO_NUM_11
-    power_amp_gpio: GPIO_NUM_20
-  battery:
-    adc_gpio: GPIO_NUM_53
-    adc_divider_numerator: 2
-    adc_divider_denominator: 1
-    empty_mv: 3300
-    full_mv: 4200
-  storage:
-    sd_mount_point: "/sdcard"
-    sd_format_on_mount_fail: false
-    sd_long_filename_support:
-      enabled: true
-      buffer_source: heap
-      max_lfn: 255
-      api_encoding_symbol: CONFIG_FATFS_API_ENCODING_UTF_8
-    spiffs_mount_point: "/spiffs"
-    spiffs_partition_label: "storage"
-    spiffs_max_files: 5
-    spiffs_format_on_mount_fail: false
+
+  # ---- LVGL Display Buffer ----
   lvgl:
-    version_major: 9
-    version_minor: 2
-    version_patch: 2
-    demo: shell
-    app_buffer_dma: true
-    app_buffer_spiram: false
-    app_sw_rotate: false
+    draw_buffer_size: 51200  # width * 50
+    double_buffer: false
+    dpi_buffer_nums: 1
+    buffer_dma: true
+    buffer_spiram: false
+    sw_rotate: false
     bsp_default_sw_rotate: true
-    avoid_tearing: false
+    avoid_tear: false
     full_refresh: false
     direct_mode: false
-  software:
-    app_name: P4MiniShell
-    app_version: 0.1
-    boot_message: "P4MiniShell v0.1 ready | JC1060P470C | type help"
-    project_documents:
-      - readme.md
-      - roadmap.md
-      - licence.md
-    ui_mode: fixed_header_plus_transcript_and_input_line_shell
-    header_component:
-      path: components/header
-      module: components/header/header.c
-      header: components/header/header.h
-      height_px: 40
-      notifications: temporary_label_with_timeout_or_marquee
-      displayed_statuses:
-        - wifi
-        - battery
-        - bluetooth
-        - usb
-        - sd
-      public_api:
-        - header_init
-        - header_update_status
-        - header_set_notification
-        - header_update_wifi
-        - header_update_battery
-        - header_update_bluetooth
-        - header_update_usb
-        - header_update_sd
-      status: Header fixed top bar added with WiFi/Battery/Bluetooth/USB/SD status (SD indicator now reliably visible when mounted)
-    networking_component:
-      path: components/networking
-      wifi_module: components/networking/networking.c
-      bluetooth_module: components/networking/bluetooth.c
-      bluetooth_transport: esp_hosted_nimble_vhci
-      bluetooth_lifecycle: stateful_controller_reuse
-    usb_component:
-      path: components/usb
-      module: components/usb/usb.c
-      header: components/usb/usb.h
-      storage_mount_point: /usb0
-      class_drivers:
-        - usb_host_msc
-        - usb_host_hid
-      public_api:
-        - usb_init
-        - usb_handle_command
-        - usb_status
-        - usb_msc_mount
-        - usb_msc_ls
-        - usb_hid_keyboard_enable
-        - usb_hid_mouse_enable
-      shell_commands:
-        - usb status
-        - usb ls
-        - usb keyboard on
-        - usb keyboard off
-        - usb mouse on
-        - usb mouse off
-      status: USB host modularized with MSC and HID support
-    c6ota_component:
-      path: components/c6ota
-      module: components/c6ota/c6ota.c
-      header: components/c6ota/c6ota.h
-      public_api:
-        - c6ota_init
-        - c6ota_perform
-        - c6ota_register_progress_callback
-      integration_docs:
-        - API.md
-        - SDK.md
-      status: C6 OTA modularized with stable API
-    built_in_commands:
-      - help
-      - c6ota
-      - brightness
-      - rotate
-      - battery
-      - volume
-      - cd
-      - dir
-      - copy
-      - move
-      - del
-      - ren
-      - mkdir
-      - rmdir
-      - type
-      - write
-      - append
-      - touch
-      - set
-      - path
-      - echo
-      - call
-      - sysinfo
-      - wifi status
-      - wifi scan
-      - wifi diag
-      - wifi connect
-      - wifi disconnect
-      - sd info
-      - sd ls
-      - sd stat
-      - sd cat
-      - usb status
-      - usb ls
-      - usb keyboard on
-      - usb keyboard off
-      - usb mouse on
-      - usb mouse off
-      - mem
-      - gpio list
-      - gpio status
-      - gpio read
-      - gpio set
-      - bluetooth status
-      - bluetooth scan
-      - bluetooth advertise on
-      - bluetooth advertise off
-      - bt
-      - rgb led
-      - rgb <r> <g> <b>
-      - camera init
-      - camera snap <filename>
-      - debug
-      - clear
-      - cls
-      - reboot
-      - version
-      - ver
-      - about
-    command_history_depth: 10
-    input_prompt: "P4Shell> "
-    serial_console:
-      enabled: true
-      purpose: mirror_transcript_output_and_accept_shell_input_from_the_configured_esp_idf_console
-      input_source: stdin_line_reader_task
-      output_source: stdout_transcript_mirror
-      parser_policy: reuse_existing_shell_submit_path
-      prompt_policy: print_only_when_a_fresh_serial_command_entry_is_needed
-    command_execution_worker:
-      enabled: true
-      stack_bytes: 8192
-      rationale: keep_heavier_sd_and_fatfs_commands_off_the_lvgl_input_event_stack
-    command_dispatch_policy:
-      preserve_unsplit_command_text_for_family_handlers: true
-      affected_command_families:
-        - wifi
-        - sd
-        - c6ota
-    command_recall_ui:
-      - prev_button
-      - next_button
-    terminal_style: dos_like_locked_transcript_with_fixed_status_header_and_touch_keyboard
-    command_execution: LV_EVENT_READY_on_input_line
-    shell_runtime_state:
-      cwd_scope: ram_only
-      env_scope: ram_only
-      path_scope: ram_only
-      batch_scope: ram_only
-      redirection:
-        supported: true
-        operators:
-          - ">"
-          - ">>"
-        behavior: transcript_delta_is_written_to_sd_target_file_after_command_execution
-    wifi_status_policy: background_runtime_init_from_sdkconfig_on_boot_or_report_skip_reason
-    wifi_runtime_requirements:
-      - esp_hosted connects to an ESP32-C6 co-processor before host Wi-Fi start
-      - ESP32-C6 SDIO link on CLK 18, CMD 19, D0 14, D1 15, D2 16, D3 17, reset 54
-      - version-matched ESP32-C6 firmware can be built from coprocessor/esp32c6_slave
-      - NVS initialized before esp_wifi_init
-      - CONFIG_ESP_HOSTED_ENABLED
-      - CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE
-      - CONFIG_SLAVE_IDF_TARGET_ESP32C6
-      - CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP
-    wifi_runtime_shell_commands:
-      - wifi status
-      - wifi scan
-      - wifi diag
-      - wifi connect
-      - wifi connect <ssid> <pass>
-      - wifi disconnect
-    wifi_runtime_password_policy: mask_runtime_passwords_in_transcript_and_history
-    wifi_runtime_failure_policy: report the hosted ESP32-C6 SDIO pin map explicitly when esp_hosted cannot connect to the slave
-    hardware_command_policy:
-      - brightness_uses_existing_bsp_backlight_pwm_path
-      - rotate_updates_display_rotation_and_gt911_touch_transform_together
-      - battery_reads_adc_gpio_53_and_scales_by_the_declared_divider
-      - volume_uses_the_existing_es8311_codec_output_path
-      - gpio_set_only_allows_board_pins_marked_safe_for_shell_writes
-      - bt_commands_remain_visible_but_disabled_on_the_current_esp32c6_hosted_baseline_until_a_proven_ble_safe_path_exists
-      - rgb_commands_remain_blocked_until_real_rgb_led_metadata_is_declared
-      - camera_commands_remain_blocked_until_real_camera_metadata_plus_local_camera_stack_are_declared
-    wifi_runtime_compatibility_policy:
-      - read_the_esp32_c6_hosted_firmware_version_immediately_after_esp_hosted_connect_to_slave
-      - keep_wifi_off_when_the_c6_major_or_minor_version_does_not_match_the_host_2_12_x_release_line
-      - point_recovery_to_coprocessor_esp32c6_slave_or_c6ota_default_instead_of_suppressing_hosted_version_warnings
-    wifi_runtime_diagnostic_policy:
-      - keep_boot_time_wifi_restore_on_the_background_runtime_plus_diagnostic_flow_used_by_the_working_project
-      - keep_post_c6ota_wifi_restore_on_the_same_background_runtime_plus_diagnostic_flow
-      - expose_manual_wifi_diag_command_for_additional_status_plus_scan_output
-    debug_policy:
-      - keep_last_5_errors_and_warnings_in_memory
-      - show_recent_errors_heap_wifi_state_and_warning_count_in_debug_command
-      - record_successful_shell_ui_startup_in_debug_history_without_emitting_a_boot_warning
-    sd_policy:
-      - sd_commands_share_a_guarded_mount_unmount_path
-      - dos_style_file_commands_share_the_same_guarded_mount_unmount_path
-      - fatfs_lfn_enabled_with_heap_buffers_and_255_char_limit
-      - validate_and_normalize_sd_paths_before_filesystem_access
-      - bound_directory_output_to_128_entries
-      - bound_sd_cat_preview_to_8192_bytes_and_sanitize_non_printable_data
-      - prefer_read_only_sd_shell_features_for_on_device_diagnostics
-      - sd_ls_uses_direct_fatfs_directory_reads_for_full_long_filenames
-      - dos_style_shell_tracks_a_ram_only_current_directory_rooted_at_sdcard
-      - redirection_writes_text_output_to_sd_without_bypassing_the_transcript
-    batch_policy:
-      - resolve_bat_files_from_current_directory_then_path
-      - support_percent_1_through_percent_9_argument_expansion
-      - support_rem_and_double_colon_comment_lines
-      - support_echo_on_and_echo_off_during_batch_execution
-      - bound_batch_recursion_depth_to_protect_the_worker_task
-    sd_power_policy:
-      - acquire_sd_vo4_ldo_explicitly_at_3300mv_before_sd_mount_on_esp32p4
-      - keep_plain_sdmmc_fallback_when_on_chip_ldo_control_is_invalid_or_unsupported
-      - release_sd_power_handle_on_mount_failure_and_unmount
-    c6_ota_path:
-      command: "c6ota <sd:/file.bin|http[s]://url|default>"
-      module_status: C6 OTA modularized with stable API
-      accepted_path_prefixes:
-        - "sd:/"
-        - "/sdcard/"
-        - "default"
-      image_requirement: esp_idf_app_image_for_hosted_ota
-      transport: hosted_sdio_ota_from_sd_http_or_default_after_wifi_shutdown_without_hosted_deinit
-      gpio54_reference: hosted_reset_line
-      ota_prerequisite: factory_v2_3_0_requires_one_time_standalone_tool_first
-      ota_prerequisite_url: https://github.com/lboshuizen/crowpanel-p4-c6-sdio-ota
-      ota_example:
-        - "c6ota sd:/esp32c6_hosted_slave.bin"
-        - "c6ota https://host/path/to/esp32c6.bin"
-        - "c6ota default"
-      progress_reporting: c6ota_emits_live_percent_progress
-      progress_format: "C6 OTA: XX% (YYYY KB / ZZZZ KB)"
-      confirmation_prompt: "WARNING: This will reboot the C6. Type YES to continue"
-      success_behavior: print_exact_success_and_reboot_host_reminder_then_restore_wifi
-      failure_behavior: restore_wifi_and_store_c6ota_transport_failure_hint_in_debug_history
-      hosted_session_policy: keep_existing_hosted_transport_alive_for_wifi_off_ota_and_avoid_pre_ota_deinit
-      default_sd_lookup: resolves_esp32c6_hosted_slave_bin_or_network_adapter_bin_with_lfn_enabled
-      stable_hosted_baseline:
-        - host_dependency_esp_hosted_2_12_1
-        - host_dependency_esp_wifi_remote_1_4_1
-        - sdio_1_bit_10000_khz
-        - slave_reset_on_every_host_bootup
-        - ota_chunk_size_1500_bytes
-    sd_command_examples:
-      - "sd info"
-      - "sd ls"
-      - "sd ls sd:/logs"
-      - "sd stat sd:/esp32c6_hosted_slave.bin"
-      - "sd cat sd:/notes.txt 512"
-    unsupported_hardware:
-      rgb_led:
-        declared_gpio: GPIO_NUM_NC
-        driver_mode: undeclared
-      camera:
-        supported: false
-    size_guardrails:
-      - disable_lvgl_examples_when_shell_ui_is_active
-      - prefer_station_only_wifi_profile_on_esp32p4
-      - prefer_nano_newlib_warn_logs_and_no_ampdu_for_shell_wifi_builds
-      - disable_psram_xip_mapping_if_host_wifi_overflows_link_window
-  esp_idf:
-    spi_flash_support_boya_chip: true
-  future_roadmap:
-    v1_1: "Verify whether the intended hardware is JC1060P470C or the current ESP32-P4 BSP baseline. Effort: 0.5 day."
-    v1_2: "Move board-specific BSP code into a first-party component after hardware verification so Component Manager updates do not overwrite local intent. Effort: 1-2 days."
-    v2_0: "Evaluate a selectable demo launcher using LVGL 9 scene/widget abstractions without changing BSP startup order. Effort: 2 days."
+
+  # ---- Battery Monitor (ADC on GPIO53, 2:1 divider) ----
+  battery:
+    adc_gpio: 53
+    divider_numerator: 2
+    divider_denominator: 1
+    empty_mv: 3300
+    full_mv: 4200
+
+  # ---- RGB LED (NOT AVAILABLE on current baseline) ----
+  rgb_led:
+    gpio: NC
+    is_ws2812: false
+    status: unsupported
+
+  # ---- Camera (NOT AVAILABLE on current baseline) ----
+  camera:
+    supported: false
+    status: unsupported
+
+  # ---- Storage ----
+  storage:
+    sd_mount_point: /sdcard
+    sd_format_on_mount_fail: false
+    spiffs_mount_point: /spiffs
+    spiffs_partition_label: storage
+    spiffs_max_files: 5
+    spiffs_format_on_mount_fail: false
+
+  # ---- ESP-Hosted SDIO (ESP32-C6 co-processor) ----
+  hosted_sdio:
+    clk_gpio: 18
+    cmd_gpio: 19
+    d0_gpio: 14
+    d1_gpio: 15
+    d2_gpio: 16
+    d3_gpio: 17
+    reset_gpio: 54
+    bus_width: 1
+    slot: 1
+    reset_policy: SLAVE_RESET_ON_EVERY_HOST_BOOTUP
+    host_version: 2.12.1

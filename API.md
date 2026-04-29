@@ -11,6 +11,12 @@ This document describes the public integration surface exposed by the hosted run
 - All four areas keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
 
 ## Header API
+
+All `header_update_*()` functions are **safe to call from any task context** (LVGL task, shell worker, timer callback, interrupt handler). They:
+1. Update internal state immediately (atomic bool/int writes)
+2. Schedule an LVGL async render callback
+3. Fall back to synchronous `header_render()` if async dispatch fails or allocation fails
+
 - `void header_init(void)`
   - Call once after LVGL is ready and before the transcript widgets are created.
   - Builds the fixed non-scrollable top bar, scales its height from the active display resolution, and places status icons left-to-right with the notification area on the far right.
@@ -25,9 +31,24 @@ This document describes the public integration surface exposed by the hosted run
 
 - `void header_update_wifi(bool connected, int rssi)`
   - Update the Wi-Fi status indicator in the header.
-  - `connected` drives active or inactive styling and `rssi` is used for the signal-quality label rendered as a retro ASCII indicator such as `WF:HI`.
+  - State set immediately; render happens via async dispatch or direct fallback.
 
 - `void header_update_battery(int percent)`
+  - Update the battery icon, bar, and percentage label. Clamped to 0-100.
+  - State set immediately; render happens via async dispatch or direct fallback.
+
+- `void header_update_bluetooth(bool enabled, bool connected)`
+  - Update the Bluetooth indicator for the current hosted BLE lifecycle.
+  - State set immediately; render happens via async dispatch or direct fallback.
+
+- `void header_update_usb(bool connected)`
+  - Update the USB indicator for attached MSC or HID devices.
+  - State set immediately; render happens via async dispatch or direct fallback.
+
+- `void header_update_sd(bool mounted)`
+  - Update the SD indicator. When mounted, the icon is visible with consistent styling.
+  - When false, the SD indicator is hidden.
+  - State set immediately; render happens via async dispatch or direct fallback.
   - Update the battery icon, small battery bar, and percentage label in the header.
 
 - `void header_update_bluetooth(bool enabled, bool connected)`

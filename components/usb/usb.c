@@ -26,17 +26,21 @@
 #include "usb/usb_host.h"
 
 #include "usb.h"
+#include "p4minishell_config.h"
 
-#define USB_HOST_LIB_TASK_STACK_BYTES 4096
-#define USB_EVENT_TASK_STACK_BYTES 6144
-#define USB_DRIVER_TASK_STACK_BYTES 4096
-#define USB_EVENT_QUEUE_DEPTH 16
-#define USB_TEXT_BYTES 192
-#define USB_PATH_BYTES 320
-#define USB_MSC_BASE_PATH "/usb0"
-#define USB_LIST_LIMIT 128
-#define USB_HID_REPORT_MAX_BYTES 64
-#define USB_KEYBOARD_KEYS 6
+/* ---- Backward-compatibility aliases ---- */
+#define USB_HOST_LIB_TASK_STACK_BYTES   P4_CONFIG_USB_HOST_LIB_TASK_STACK
+#define USB_EVENT_TASK_STACK_BYTES      P4_CONFIG_USB_EVENT_TASK_STACK
+#define USB_DRIVER_TASK_STACK_BYTES     P4_CONFIG_USB_DRIVER_TASK_STACK
+#define USB_EVENT_QUEUE_DEPTH           P4_CONFIG_USB_EVENT_QUEUE_DEPTH
+#define USB_TEXT_BYTES                  P4_CONFIG_USB_TEXT_BYTES
+#define USB_PATH_BYTES                  P4_CONFIG_USB_PATH_BYTES
+#define USB_MSC_BASE_PATH               P4_CONFIG_USB_MSC_BASE_PATH
+#define USB_LIST_LIMIT                  P4_CONFIG_USB_LIST_LIMIT
+#define USB_HID_REPORT_MAX_BYTES        P4_CONFIG_USB_HID_REPORT_MAX_BYTES
+#define USB_KEYBOARD_KEYS               P4_CONFIG_USB_KEYBOARD_KEYS
+
+/* USB HID key codes (standard USB HID usage table — not project-configurable) */
 #define USB_HID_KEY_A 0x04
 #define USB_HID_KEY_Z 0x1D
 #define USB_HID_KEY_1 0x1E
@@ -809,8 +813,8 @@ static esp_err_t usb_install_host_stack(void)
 #endif
 }
 
-// AI: USB module owns the full host stack bring-up and keeps main/main.c limited to orchestration plus shell dispatch.
-// AI: Existing boot, SD, Wi-Fi, Bluetooth, and c6ota behavior must remain unchanged; this module only adds new USB command-family behavior.
+// USB module owns the full host stack bring-up and keeps main/main.c limited to orchestration plus shell dispatch.
+// Existing boot, SD, Wi-Fi, Bluetooth, and c6ota behavior must remain unchanged; this module only adds new USB command-family behavior.
 void usb_init(void)
 {
     esp_err_t error;

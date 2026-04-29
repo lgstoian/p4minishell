@@ -21,12 +21,14 @@
 #endif
 
 #include "bluetooth.h"
+#include "p4minishell_config.h"
 
-#define BLUETOOTH_TAG "bluetooth"
-#define BLUETOOTH_DEVICE_NAME "P4MiniShell BLE"
-#define BLUETOOTH_DISCOVERY_LIMIT 16
-#define BLUETOOTH_NAME_BYTES 32
-#define BLUETOOTH_ADDR_BYTES 18
+/* ---- Backward-compatibility aliases ---- */
+#define BLUETOOTH_TAG               P4_CONFIG_BLUETOOTH_TAG
+#define BLUETOOTH_DEVICE_NAME       P4_CONFIG_BLUETOOTH_DEVICE_NAME
+#define BLUETOOTH_DISCOVERY_LIMIT   P4_CONFIG_BLUETOOTH_DISCOVERY_LIMIT
+#define BLUETOOTH_NAME_BYTES        P4_CONFIG_BLUETOOTH_NAME_BYTES
+#define BLUETOOTH_ADDR_BYTES        P4_CONFIG_BLUETOOTH_ADDR_BYTES
 
 typedef struct {
     char address[BLUETOOTH_ADDR_BYTES];

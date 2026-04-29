@@ -77,7 +77,7 @@ static esp_err_t bsp_sd_ldo_set_voltage(void *ctx_arg, int voltage_mv)
     return ESP_OK;
 }
 
-// AI: Use an explicit initial voltage for the SD VO4 power path so the LDO driver never acquires the channel with an implicit 0 mV configuration.
+// Use an explicit initial voltage for the SD VO4 power path so the LDO driver never acquires the channel with an implicit 0 mV configuration.
 static esp_err_t bsp_sd_pwr_ctrl_new(sd_pwr_ctrl_handle_t *ret_handle)
 {
     esp_err_t ret = ESP_OK;
@@ -725,9 +725,12 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
 
 static lv_indev_t *bsp_display_indev_init(lv_display_t *disp)
 {
-    esp_lcd_touch_handle_t tp;
-    BSP_ERROR_CHECK_RETURN_NULL(bsp_touch_new(NULL, &tp));
-    assert(tp);
+    esp_lcd_touch_handle_t tp = NULL;
+    esp_err_t ret = bsp_touch_new(NULL, &tp);
+    if (ret != ESP_OK || tp == NULL) {
+        ESP_LOGW("bsp", "Touch controller init failed (err 0x%x). Display will work without touch input.", ret);
+        return NULL;
+    }
 
     /* Add touch input (for selected screen) */
     const lvgl_port_touch_cfg_t touch_cfg = {
@@ -768,7 +771,11 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
 
     BSP_NULL_CHECK(disp = bsp_display_lcd_init(cfg), NULL);
 
-    BSP_NULL_CHECK(disp_indev = bsp_display_indev_init(disp), NULL);
+    /* Touch is optional - display still works without it */
+    disp_indev = bsp_display_indev_init(disp);
+    if (disp_indev == NULL) {
+        ESP_LOGW("bsp", "Running without touch input - use serial console (idf.py monitor)");
+    }
 
     return disp;
 }
