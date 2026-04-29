@@ -5,50 +5,65 @@
  * @file header.h
  * @brief Fixed top status bar for P4MiniShell.
  *
- * This is a passive, display-only module that owns the LVGL widgets for the
- * fixed top bar. It displays:
- *   - Wi-Fi status (connected/disconnected + signal quality)
- *   - Battery percentage (icon + bar + numeric)
- *   - Bluetooth readiness (enabled/connected/off)
- *   - USB attachment state
- *   - SD card mount state
- *   - Transient notifications from module events
+ * Passive, display-only module owning the LVGL fixed top bar.
+ * All public functions are safe to call from any task context.
  *
- * The header is non-scrollable, scales its height from the display resolution,
- * and places status icons left-to-right with the notification area on the far right.
- * It must not own Wi-Fi, Bluetooth, USB, SD, or battery runtime behavior.
+ * Layout (config-driven):
+ *   [status_row: 4 icons left-to-right] [notification_area right]
+ *
+ * Icons (always visible, show state text):
+ *   WiFi:  symbol + HI/MID/LOW/OFF
+ *   BT:    symbol + ON/PAIR/OFF
+ *   USB:   symbol + ON/OFF
+ *   SD:    ASCII "SD:" + NO/INS/ON/ERR  (4 persistent states)
+ *   BAT:   symbol + bar + percentage
+ *
+ * The SD icon uses plain ASCII prefix for guaranteed visibility across all fonts.
  */
 
 #include <stdbool.h>
 #include <stdint.h>
 
+/** Base header height in pixels. Scaled dynamically from display resolution. */
 #define HEADER_HEIGHT 40
 
-// Public API - all functions use LVGL async dispatch internally so they are
-// safe to call from shell worker tasks or module callbacks.
+/** SD card status enumeration for persistent display. */
+typedef enum {
+    HEADER_SD_NONE = 0,       /**< No SD card detected */
+    HEADER_SD_INSERTED,       /**< Card detected but not mounted */
+    HEADER_SD_MOUNTED,        /**< Card mounted and ready */
+    HEADER_SD_ERROR,          /**< Card error or mount failure */
+} header_sd_state_t;
 
-/** Initialize the header bar. Call once after LVGL is ready and before transcript widgets. */
+/** Initialize the header bar. Call once after LVGL is ready, before transcript. */
 void header_init(void);
 
-/** Request a header re-render from currently cached state. */
+/** Request a header re-render from cached state via async dispatch. */
 void header_update_status(void);
 
-/** Show a short notification text for the given timeout (milliseconds). */
+/** Show a transient notification (right side). Clears after timeout_ms. */
 void header_set_notification(const char *text, uint32_t timeout_ms);
 
-/** Update Wi-Fi indicator: connected state and RSSI for signal quality label. */
+/** Update Wi-Fi indicator. connected drives styling, rssi for HI/MID/LOW label. */
 void header_update_wifi(bool connected, int rssi);
 
-/** Update battery icon, bar, and percentage label. */
+/** Update battery icon, bar, and percentage label. Clamped 0-100. */
 void header_update_battery(int percent);
 
-/** Update Bluetooth indicator for hosted BLE lifecycle state. */
+/** Update Bluetooth indicator. enabled for controller ready, connected for sync. */
 void header_update_bluetooth(bool enabled, bool connected);
 
 /** Update USB indicator for attached MSC or HID devices. */
 void header_update_usb(bool connected);
 
-/** Update SD indicator. When mounted, the icon is visible; when false, it is hidden. */
-void header_update_sd(bool mounted);
+/**
+ * Update SD card indicator with persistent state.
+ * @param state  HEADER_SD_NONE (no card), HEADER_SD_INSERTED (card present),
+ *               HEADER_SD_MOUNTED (filesystem ready), HEADER_SD_ERROR (failure)
+ */
+void header_update_sd(header_sd_state_t state);
+
+/** Force a synchronous header re-render. Call only from LVGL task context. */
+void header_force_render(void);
 
 #endif

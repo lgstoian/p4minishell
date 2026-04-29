@@ -271,6 +271,7 @@ static void shell_command_sd(char *command);
 static void shell_command_sd_ls(char *command);
 static void shell_command_sd_stat(char *command);
 static void shell_command_sd_cat(char *command);
+static void shell_command_sd_eject(void);
 static bool shell_text_equals_ignore_case(const char *left, const char *right);
 static void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size);
 static void shell_sd_print_usage(void);
@@ -354,13 +355,13 @@ static esp_err_t shell_sd_begin(shell_sd_session_t *session)
     if (error == ESP_OK) {
         session->mounted_here = true;
         shell_header_notify("SD card mounted", 3000);
-        header_update_sd(true);
+        header_update_sd(HEADER_SD_MOUNTED);
         return ESP_OK;
     }
 
     if (error == ESP_ERR_INVALID_STATE) {
         /* Already mounted: ensure the header icon stays visible. */
-        header_update_sd(true);
+        header_update_sd(HEADER_SD_MOUNTED);
         return ESP_OK;
     }
 
@@ -382,7 +383,7 @@ static void shell_sd_end(shell_sd_session_t *session, const char *operation)
                               esp_err_to_name(error));
     } else {
         shell_header_notify("SD card unmounted", 3000);
-        header_update_sd(false);
+        header_update_sd(HEADER_SD_NONE);
     }
 }
 
@@ -841,7 +842,7 @@ static void shell_header_status_refresh(void)
     header_update_wifi(wifi_connected, wifi_rssi);
     header_update_bluetooth(bluetooth_is_enabled(), bluetooth_is_connected());
     header_update_usb(usb_is_connected());
-    header_update_sd(sd_mounted);
+    header_update_sd(sd_mounted ? HEADER_SD_MOUNTED : HEADER_SD_NONE);
 
     if (!s_header_sd_state_known) {
         s_header_sd_state_known = true;
@@ -851,7 +852,8 @@ static void shell_header_status_refresh(void)
         s_header_sd_last_mounted = sd_mounted;
     }
 
-    header_update_status();
+    /* Force synchronous render so SD icon updates immediately on state change */
+    header_force_render();
 }
 
 static void shell_header_status_timer_cb(lv_timer_t *timer)
@@ -4023,7 +4025,29 @@ static void shell_sd_print_usage(void)
     shell_transcript_append_text("  sd ls [path]\n");
     shell_transcript_append_text("  sd stat <path>\n");
     shell_transcript_append_text("  sd cat <path> [max_bytes]\n");
+    shell_transcript_append_text("  sd eject          (safe unmount before card removal)\n");
+    shell_transcript_append_text("  sdeject           (alias for sd eject)\n");
     shell_transcript_append_text("Paths: sd:/file.txt, /sdcard/file.txt, or relative-to-sd-root\n");
+}
+
+static void shell_command_sd_eject(void)
+{
+    esp_err_t error;
+
+    /* Force unmount the SD card unconditionally (not session-guarded).
+     * This is the safe-removal path: unmounts even if mounted by another session. */
+    error = bsp_sdcard_unmount();
+    if (error == ESP_OK) {
+        shell_transcript_append_text("SD card unmounted safely. You may now remove the card.\n");
+        shell_header_notify("SD card ejected", 3000);
+        header_update_sd(HEADER_SD_NONE);
+        header_force_render();
+    } else if (error == ESP_ERR_INVALID_STATE) {
+        shell_transcript_append_text("SD card is not currently mounted.\n");
+    } else {
+        shell_transcript_appendf("SD eject warning: %s (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
+        shell_record_warningf("sd", "Eject unmount warning: %s", esp_err_to_name(error));
+    }
 }
 
 static void shell_command_sd_info(void)
@@ -4378,6 +4402,11 @@ static void shell_command_sd(char *command)
         return;
     }
 
+    if (strcmp(argv[1], "eject") == 0) {
+        shell_command_sd_eject();
+        return;
+    }
+
     shell_sd_print_usage();
     shell_record_warningf("sd", "Unknown sd subcommand: %s", argv[1]);
 }
@@ -4659,6 +4688,11 @@ static bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "sd")) {
         shell_command_sd(command_copy);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sdeject")) {
+        shell_command_sd_eject();
         return true;
     }
 
