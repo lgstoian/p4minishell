@@ -10,10 +10,10 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.2.0
+# Version: 0.3.0
 # Last updated: 2026-04-29
 
-config_version: "0.2.0"
+config_version: "0.3.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -286,6 +286,21 @@ header_visuals:
     value: "0x050806"
     type: uint32_t
     description: "Panel/transcript background color"
+  cpu_warn_pct:
+    value: 85
+    type: int
+    description: "CPU usage percentage threshold for warning color in header"
+    range: "50..100"
+  mem_low_pct:
+    value: 30
+    type: int
+    description: "Memory free percentage threshold for LOW label in header"
+    range: "10..50"
+  bat_low_pct:
+    value: 15
+    type: int
+    description: "Battery percentage threshold for warning color in header"
+    range: "5..30"
 
 # ---- USB Host ----
 usb_host:

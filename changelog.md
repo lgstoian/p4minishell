@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-04-29
+
+### Added
+- **Header system panel redesigned**: MEM | CPU | BAT all on the far right, dynamically linked to FreeRTOS runtime statistics
+- **CPU usage in header**: Real-time CPU bar + percentage from FreeRTOS idle task runtime counter deltas (CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS)
+- **Battery always visible**: Shows "BAT N/C" with muted styling when ADC is not connected or unavailable
+- **header_update_mem()**: New API for real-time heap statistics (free/total from heap_caps)
+- **header_update_cpu()**: New API for real-time CPU usage and task count
+- **header_update_uptime()**: New API for system uptime tracking
+- **header_update_battery() signature change**: Now takes `bool adc_ready` second parameter
+
+### Changed
+- **sysinfo command**: Now includes FreeRTOS task count, uptime (days/hours/minutes/seconds), total heap with percentage
+- **version command**: Expanded with chip info, uptime, heap stats, and active task count
+- **mem command**: Added total heap, percentage free, and task count
+- **about command**: Added header description, uptime, and task count
+- **header.c**: System panel layout changed to MEM | CPU | BAT with CPU bar widget and separators
+- **header.c**: Battery rendering split into adc_ready (live data) and !adc_ready (N/C muted) paths
+- **main.c**: shell_header_status_refresh() now collects FreeRTOS runtime stats, calculates CPU usage from idle task deltas, and pushes all metrics to header
+- **main.c**: Boot timestamp captured via esp_timer_get_time() for real-time uptime
+
+### Verified
+- **Clean build**: Zero errors, zero warnings
+- **No regressions**: Boot, screen rendering, Wi-Fi, all 40+ commands preserved
+- **FreeRTOS configs**: CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS, CONFIG_FREERTOS_USE_TRACE_FACILITY, CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS all enabled
+
+### Documentation
+- Updated API.md with new header_update_mem/cpu/uptime signatures
+- Updated SDK.md with real-time FreeRTOS integration notes
+- Updated p4minishell_config.h with CPU/MEM/BAT threshold constants
+- Updated p4minishell_config.yaml to v0.3.0
+
+---
+
 ## [0.6.0] - 2026-04-29
 
 ### Fixed

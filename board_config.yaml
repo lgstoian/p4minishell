@@ -13,6 +13,8 @@
 #   - managed_components/espressif__esp_lcd_touch_gt911/
 #   - managed_components/lvgl__lvgl/lv_version.h (LVGL 9.2.2)
 #   - sdkconfig
+#
+# Last updated: 2026-04-29 (v0.7.0 header redesign)
 
 board:
   requested_name: JC1060P470C

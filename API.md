@@ -19,48 +19,53 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 
 - `void header_init(void)`
   - Call once after LVGL is ready and before the transcript widgets are created.
-  - Builds the fixed non-scrollable top bar, scales its height from the active display resolution, and places status icons left-to-right with the notification area on the far right.
+  - Builds the fixed non-scrollable top bar, scales its height from the active display resolution, and places status icons left-to-right with the notification area in the center.
+  - System panel (MEM | CPU | BAT) is on the far right, all dynamically linked to FreeRTOS runtime stats.
 
 - `void header_update_status(void)`
   - Request a header re-render from the currently cached state.
   - Useful after a batch of `header_update_*` calls when the caller wants one final refresh point.
 
 - `void header_set_notification(const char *text, uint32_t timeout_ms)`
-  - Show a short notification in the left side of the fixed header.
+  - Show a short notification in the center of the fixed header with "!" icon prefix.
   - Uses LVGL async dispatch so callers can invoke it from shell worker tasks or other non-LVGL contexts.
 
 - `void header_update_wifi(bool connected, int rssi)`
-  - Update the Wi-Fi status indicator in the header.
+  - Update the Wi-Fi status indicator (WiFi HI/MID/LOW/WEAK/OFF).
   - State set immediately; render happens via async dispatch or direct fallback.
 
-- `void header_update_battery(int percent)`
+- `void header_update_battery(int percent, bool adc_ready)`
   - Update the battery icon, bar, and percentage label. Clamped to 0-100.
+  - When `adc_ready` is false, shows "BAT N/C" with muted styling (battery always visible).
   - State set immediately; render happens via async dispatch or direct fallback.
 
 - `void header_update_bluetooth(bool enabled, bool connected)`
-  - Update the Bluetooth indicator for the current hosted BLE lifecycle.
+  - Update the Bluetooth indicator (BT ON/BT IDLE/BT OFF).
   - State set immediately; render happens via async dispatch or direct fallback.
 
 - `void header_update_usb(bool connected)`
-  - Update the USB indicator for attached MSC or HID devices.
+  - Update the USB indicator (USB ON/USB OFF).
   - State set immediately; render happens via async dispatch or direct fallback.
 
-- `void header_update_sd(bool mounted)`
-  - Update the SD indicator. When mounted, the icon is visible with consistent styling.
-  - When false, the SD indicator is hidden.
+- `void header_update_sd(header_sd_state_t state)`
+  - Update the SD indicator with persistent state (SD NO/SD INS/SD ON/SD ERR).
   - State set immediately; render happens via async dispatch or direct fallback.
-  - Update the battery icon, small battery bar, and percentage label in the header.
 
-- `void header_update_bluetooth(bool enabled, bool connected)`
-  - Update the Bluetooth indicator for the current hosted BLE lifecycle.
-  - The current integration maps `enabled` to hosted controller or NimBLE readiness and `connected` to BLE host synchronization on the ESP32-C6.
+- `void header_update_mem(uint32_t free_heap_bytes, uint32_t total_heap_bytes)`
+  - Update the memory display (MEM/MEM LOW + formatted size) from real-time FreeRTOS heap stats.
+  - State set immediately; render happens via async dispatch or direct fallback.
 
-- `void header_update_usb(bool connected)`
-  - Update the USB indicator for attached MSC or HID devices.
+- `void header_update_cpu(int cpu_percent, uint32_t task_count)`
+  - Update the CPU usage bar and percentage label from real-time FreeRTOS runtime stats.
+  - Clamped 0-100; warning color above P4_CONFIG_HEADER_CPU_WARN_PCT (85%).
+  - State set immediately; render happens via async dispatch or direct fallback.
 
-- `void header_update_sd(bool mounted)`
-  - Update the SD indicator based on whether the shell SD root is currently mounted.
-  - When `mounted` is true the SD icon and label are shown in the header with the same size/color/alignment as the other status icons; when false the SD indicator is hidden.
+- `void header_update_uptime(uint32_t uptime_seconds)`
+  - Update the uptime counter (used internally for formatting).
+  - State set immediately; render happens via async dispatch or direct fallback.
+
+- `void header_force_render(void)`
+  - Force a synchronous header re-render. Call only from LVGL task context.
 
 - `void (*notify_header)(const char *text, uint32_t timeout_ms)` inside `networking_host_ops_t`
   - Optional host callback used by the networking module to surface live Wi-Fi notices directly in the fixed header without moving header ownership into `components/networking`.

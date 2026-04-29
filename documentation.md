@@ -58,10 +58,13 @@ Passive, display-only module that owns the fixed top bar:
 - Non-scrollable LVGL flex-row container
 - Resolution-scaled height (display_height / 15, clamped 32-56px)
 - Status icons (left-to-right): Wi-Fi, Bluetooth, USB, SD
-- Battery: LVGL symbol icon + bar widget + percentage label
-- Notification area on far right for transient module events
+- System panel (far right): MEM (free heap), CPU (bar + percentage), BAT (bar + percentage)
+- Battery always visible — shows "BAT N/C" when ADC is not connected
+- All system panel values dynamically linked to FreeRTOS runtime statistics
+- CPU usage calculated from FreeRTOS idle task runtime counter deltas
+- Notification area in center for transient module events
 - All public functions use LVGL async dispatch (safe from any task context)
-- SD icon hidden when no card mounted, shown with consistent styling when mounted
+- SD icon shows persistent state (NO/INS/ON/ERR)
 
 ### Networking Module (components/networking)
 

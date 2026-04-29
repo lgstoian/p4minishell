@@ -4,7 +4,7 @@ Complete reference for all shell commands available in P4MiniShell.
 
 ## UI Model
 
-- Fixed top header bar with status icons (Wi-Fi, battery, Bluetooth, USB, SD) and transient notifications
+- Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
 - Scrollable transcript textarea for command output (read-only)
 - Single-line input textarea with prompt for command entry
 - On-screen LVGL keyboard attached to input line
@@ -18,13 +18,13 @@ Complete reference for all shell commands available in P4MiniShell.
 | Command | Description |
 |---------|-------------|
 | help | Show built-in command list |
-| sysinfo | Show board, display, storage, heap, Wi-Fi, and OTA state |
+| sysinfo | Show board, display, storage, heap, FreeRTOS tasks, uptime, Wi-Fi, and OTA state |
 | clear / cls | Clear transcript history and redraw prompt |
 | reboot | Restart the board |
-| version / ver | Show app banner and ESP-IDF version |
-| about | Show shell and board summary |
+| version / ver | Show app banner, ESP-IDF version, chip info, uptime, heap, and task count |
+| about | Show shell and board summary with header description, uptime, and task count |
 | debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count |
-| mem | Show free heap, minimum heap, internal heap, PSRAM state |
+| mem | Show free heap, total heap, minimum heap, internal heap, task count, PSRAM state |
 
 ## Hardware Commands
 

@@ -54,7 +54,13 @@
 - If LVGL async dispatch fails (lv_async_call returns error), fall back to synchronous header_render()
 - If allocation fails for the async payload, fall back to synchronous header_render()
 - SD indicator uses consistent HEADER_SD_SYMBOL in both mounted and unmounted states
-- SD indicator is hidden (LV_OBJ_FLAG_HIDDEN) when no card is mounted, visible when mounted
+- SD indicator shows persistent state (NO/INS/ON/ERR)
+- Battery is ALWAYS visible — shows "BAT N/C" with muted styling when ADC is not connected
+- System panel (MEM | CPU | BAT) is on the far right, all dynamically linked to FreeRTOS runtime stats
+- header_update_battery(int percent, bool adc_ready) — pass adc_ready=false for N/C display
+- header_update_mem(uint32_t free_heap, uint32_t total_heap) — real-time from heap_caps
+- header_update_cpu(int percent, uint32_t task_count) — real-time from FreeRTOS runtime stats
+- header_update_uptime(uint32_t seconds) — system uptime from esp_timer_get_time()
 - Touch init failure must not prevent header rendering (BSP touch is optional)
 
 ### Display and Touch

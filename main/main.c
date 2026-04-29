@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <utime.h>
 
+#include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -215,6 +216,7 @@ static adc_channel_t s_battery_adc_channel;
 static bool s_battery_adc_ready;
 static adc_cali_handle_t s_battery_cali_handle;
 static bool s_battery_cali_ready;
+static int64_t s_boot_timestamp_us;   /* captured at boot for uptime calculation */
 
 #if SHELL_WIFI_RUNTIME_ENABLED
 static esp_netif_t *s_wifi_sta_netif;
@@ -826,23 +828,85 @@ static bool shell_sd_header_is_mounted(void)
 static void shell_header_status_refresh(void)
 {
     int battery_percent = 0;
+    bool battery_ok = false;
     wifi_ap_record_t ap_info;
     bool wifi_connected = networking_wifi_is_connected();
     int wifi_rssi = -127;
     bool sd_mounted = shell_sd_header_is_mounted();
 
+    /* FreeRTOS real-time heap stats */
+    uint32_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    uint32_t total_heap = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+
+    /* FreeRTOS runtime stats for CPU usage */
+    int cpu_percent = 0;
+    uint32_t task_count = uxTaskGetNumberOfTasks();
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    {
+        /* Calculate CPU usage from idle task counter delta */
+        static uint32_t s_last_idle_count = 0;
+        static uint32_t s_last_total_runtime = 0;
+        TaskStatus_t *task_status_array = NULL;
+        uint32_t total_runtime = 0;
+        uint32_t idle_runtime = 0;
+
+        task_status_array = calloc(task_count, sizeof(TaskStatus_t));
+        if (task_status_array != NULL) {
+            uint32_t obtained = uxTaskGetSystemState(task_status_array, task_count, &total_runtime);
+            for (uint32_t i = 0; i < obtained; i++) {
+                if (strcmp(task_status_array[i].pcTaskName, "IDLE") == 0 ||
+                    strncmp(task_status_array[i].pcTaskName, "IDLE", 4) == 0) {
+                    idle_runtime = task_status_array[i].ulRunTimeCounter;
+                    break;
+                }
+            }
+            free(task_status_array);
+
+            if (s_last_total_runtime > 0 && total_runtime > s_last_total_runtime) {
+                uint32_t total_delta = total_runtime - s_last_total_runtime;
+                uint32_t idle_delta = (idle_runtime >= s_last_idle_count)
+                    ? (idle_runtime - s_last_idle_count) : 0;
+                if (total_delta > 0) {
+                    cpu_percent = 100 - (int)((idle_delta * 100) / total_delta);
+                    if (cpu_percent < 0) cpu_percent = 0;
+                    if (cpu_percent > 100) cpu_percent = 100;
+                }
+            }
+            s_last_idle_count = idle_runtime;
+            s_last_total_runtime = total_runtime;
+        }
+    }
+#else
+    /* Fallback: approximate from free heap ratio */
+    {
+        int heap_pct = (total_heap > 0) ? (int)((free_heap * 100) / total_heap) : 100;
+        cpu_percent = 100 - heap_pct;  /* rough approximation */
+        if (cpu_percent < 0) cpu_percent = 0;
+        if (cpu_percent > 100) cpu_percent = 100;
+    }
+#endif
+
+    /* Uptime from boot timestamp */
+    uint32_t uptime_sec = (uint32_t)((esp_timer_get_time() - s_boot_timestamp_us) / 1000000);
+
     if (wifi_connected && esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
         wifi_rssi = ap_info.rssi;
     }
 
+    /* Battery: always update header even when ADC fails */
     if (shell_battery_read(NULL, &battery_percent, NULL, NULL) == ESP_OK) {
-        header_update_battery(battery_percent);
+        battery_ok = true;
     }
+    header_update_battery(battery_percent, battery_ok);
 
     header_update_wifi(wifi_connected, wifi_rssi);
     header_update_bluetooth(bluetooth_is_enabled(), bluetooth_is_connected());
     header_update_usb(usb_is_connected());
     header_update_sd(sd_mounted ? HEADER_SD_MOUNTED : HEADER_SD_NONE);
+    header_update_mem(free_heap, total_heap);
+    header_update_cpu(cpu_percent, task_count);
+    header_update_uptime(uptime_sec);
 
     if (!s_header_sd_state_known) {
         s_header_sd_state_known = true;
@@ -852,7 +916,7 @@ static void shell_header_status_refresh(void)
         s_header_sd_last_mounted = sd_mounted;
     }
 
-    /* Force synchronous render so SD icon updates immediately on state change */
+    /* Force synchronous render so all icons update immediately on state change */
     header_force_render();
 }
 
@@ -2470,6 +2534,13 @@ static void shell_command_sysinfo(void)
 {
     size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t total_heap = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+    uint32_t task_count = uxTaskGetNumberOfTasks();
+    uint32_t uptime_sec = (uint32_t)((esp_timer_get_time() - s_boot_timestamp_us) / 1000000);
+    uint32_t days = uptime_sec / 86400;
+    uint32_t hours = (uptime_sec % 86400) / 3600;
+    uint32_t mins = (uptime_sec % 3600) / 60;
+    uint32_t secs = uptime_sec % 60;
 #if CONFIG_SPIRAM
     size_t total_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -2530,9 +2601,13 @@ static void shell_command_sysinfo(void)
                              SHELL_C6_HOST_RESET_GPIO,
                              c6ota_is_busy() ? "yes" : "no");
     shell_transcript_appendf("idf: %s\n", esp_get_idf_version());
-    shell_transcript_appendf("heap: free=%u bytes, internal_free=%u bytes\n",
+    shell_transcript_appendf("freertos: tasks=%" PRIu32 " uptime=%" PRIu32 "d %" PRIu32 "h %" PRIu32 "m %" PRIu32 "s\n",
+                             task_count, days, hours, mins, secs);
+    shell_transcript_appendf("heap: free=%u bytes, internal_free=%u bytes, total=%u bytes (%u%% free)\n",
                              (unsigned int)free_heap,
-                             (unsigned int)free_internal);
+                             (unsigned int)free_internal,
+                             (unsigned int)total_heap,
+                             (unsigned int)(total_heap > 0 ? (free_heap * 100 / total_heap) : 0));
 #if CONFIG_SPIRAM
     shell_transcript_appendf("psram: enabled, total=%u bytes, free=%u bytes\n",
                              (unsigned int)total_psram,
@@ -2703,14 +2778,20 @@ static void shell_command_volume(int argc, char **argv)
 
 static void shell_command_mem(void)
 {
-    // Hardware control commands (brightness, rotation, battery, volume, gpio, bt, rgb, camera) use official drivers from board_config.yaml with no regressions.
+    /* Real-time FreeRTOS heap and task statistics */
     size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t min_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t total_heap = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+    uint32_t task_count = uxTaskGetNumberOfTasks();
 
     shell_transcript_appendf("mem.heap.free=%u bytes\n", (unsigned int)free_heap);
+    shell_transcript_appendf("mem.heap.total=%u bytes (%u%% free)\n",
+                             (unsigned int)total_heap,
+                             (unsigned int)(total_heap > 0 ? (free_heap * 100 / total_heap) : 0));
     shell_transcript_appendf("mem.heap.min=%u bytes\n", (unsigned int)min_heap);
     shell_transcript_appendf("mem.heap.internal=%u bytes\n", (unsigned int)free_internal);
+    shell_transcript_appendf("mem.tasks=%" PRIu32 "\n", task_count);
 #if CONFIG_SPIRAM
     shell_transcript_appendf("mem.psram.free=%u bytes\n", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     shell_transcript_appendf("mem.psram.total=%u bytes\n", (unsigned int)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
@@ -3130,15 +3211,43 @@ static void shell_command_debug(void)
 
 static void shell_command_version(void)
 {
+    uint32_t uptime_sec = (uint32_t)((esp_timer_get_time() - s_boot_timestamp_us) / 1000000);
+    uint32_t days = uptime_sec / 86400;
+    uint32_t hours = (uptime_sec % 86400) / 3600;
+    uint32_t mins = (uptime_sec % 3600) / 60;
+    uint32_t secs = uptime_sec % 60;
+    uint32_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    uint32_t total_heap = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+    uint32_t task_count = uxTaskGetNumberOfTasks();
+
     shell_transcript_appendf("version.app: %s\n", SHELL_BOOT_MESSAGE);
     shell_transcript_appendf("version.idf: %s\n", esp_get_idf_version());
+    shell_transcript_appendf("version.chip: %s (%d cores, %d MHz)\n",
+                             CONFIG_IDF_TARGET,
+                             CONFIG_FREERTOS_NUMBER_OF_CORES,
+                             CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+    shell_transcript_appendf("version.uptime: %" PRIu32 "d %" PRIu32 "h %" PRIu32 "m %" PRIu32 "s\n",
+                             days, hours, mins, secs);
+    shell_transcript_appendf("version.heap: %" PRIu32 " free / %" PRIu32 " total (%" PRIu32 "%% free)\n",
+                             free_heap, total_heap,
+                             (uint32_t)(total_heap > 0 ? (free_heap * 100 / total_heap) : 0));
+    shell_transcript_appendf("version.tasks: %" PRIu32 " active\n", task_count);
 }
 
 static void shell_command_about(void)
 {
+    uint32_t uptime_sec = (uint32_t)((esp_timer_get_time() - s_boot_timestamp_us) / 1000000);
+    uint32_t days = uptime_sec / 86400;
+    uint32_t hours = (uptime_sec % 86400) / 3600;
+    uint32_t mins = (uptime_sec % 3600) / 60;
+    uint32_t task_count = uxTaskGetNumberOfTasks();
+
     shell_transcript_appendf("about.shell: %s\n", SHELL_BOOT_MESSAGE);
     shell_transcript_appendf("about.board: %s / %s\n", SHELL_BOARD_REQUESTED, SHELL_BOARD_DETECTED);
-    shell_transcript_append_text("about.ui: locked transcript with touch keyboard, history buttons, and command prompt\n");
+    shell_transcript_appendf("about.ui: locked transcript with touch keyboard, history buttons, and command prompt\n");
+    shell_transcript_appendf("about.header: real-time status bar (WiFi, BT, USB, SD, MEM, CPU, BAT) from FreeRTOS\n");
+    shell_transcript_appendf("about.uptime: %" PRIu32 "d %" PRIu32 "h %" PRIu32 "m\n", days, hours, mins);
+    shell_transcript_appendf("about.tasks: %" PRIu32 " active FreeRTOS tasks\n", task_count);
 }
 
 static bool shell_path_has_directory_component(const char *path)
@@ -4930,7 +5039,10 @@ void app_main(void)
 {
     lv_display_t *display;
 
-    // Hardware controls and fixed header bar keep BSP boot, render path, keyboard flow, and hosted modules unchanged while main stays the orchestration layer.
+    /* Capture boot timestamp for real-time uptime tracking */
+    s_boot_timestamp_us = esp_timer_get_time();
+
+    /* Hardware controls and fixed header bar keep BSP boot, render path, keyboard flow, and hosted modules unchanged while main stays the orchestration layer. */
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,

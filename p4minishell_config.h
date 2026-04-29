@@ -237,6 +237,15 @@
 /** Header panel/transcript background color. */
 #define P4_CONFIG_HEADER_PANEL_COLOR         0x050806
 
+/** Header CPU bar warning threshold (percent). */
+#define P4_CONFIG_HEADER_CPU_WARN_PCT        85
+
+/** Header memory low threshold (percent). */
+#define P4_CONFIG_HEADER_MEM_LOW_PCT         30
+
+/** Header battery low threshold (percent). */
+#define P4_CONFIG_HEADER_BAT_LOW_PCT         15
+
 /* ========================================================================
  * USB HOST PARAMETERS
  * ======================================================================== */

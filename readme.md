@@ -63,6 +63,7 @@ the YAML to match.
 - **C6 OTA updates**: Validated firmware updates from SD or HTTP/S over ESP-Hosted SDIO
 - **Hardware controls**: Brightness, rotation, battery telemetry, volume, GPIO inspection
 - **Fixed header bar**: Wi-Fi, battery, Bluetooth, USB, SD status with transient notifications
+- **Real-time system panel**: Memory (MEM), CPU usage (CPU bar + %), and Battery (BAT) all dynamically linked to FreeRTOS runtime statistics on the far right of the header
 - **Debug history**: 5-entry error/warning buffer surfaced via `debug` command
 
 ## Command Set

@@ -18,7 +18,7 @@ This guide describes how `main/main.c` integrates the hosted runtime modules in 
 5. Register the OTA transcript callback with `c6ota_register_progress_callback(...)`.
 6. Call `networking_init(&host_ops)` once so the Wi-Fi module can capture the host hooks and the Bluetooth module can inherit the same callback surface.
 7. Call `usb_init()` once after `networking_init(&host_ops)` so the USB host stack starts after the existing networking bootstrap without regressing boot orchestration.
-8. Start a small periodic status refresh, for example an LVGL timer every 5 seconds, that feeds `header_update_wifi`, `header_update_battery`, `header_update_bluetooth`, `header_update_usb`, `header_update_sd`, and then `header_update_status()`.
+8. Start a small periodic status refresh, for example an LVGL timer every 5 seconds, that feeds `header_update_wifi`, `header_update_battery`, `header_update_bluetooth`, `header_update_usb`, `header_update_sd`, `header_update_mem`, `header_update_cpu`, and then `header_update_status()`.
 
 ## Shared host callback model
 `networking_host_ops_t` is the common host-to-module bridge for Wi-Fi and Bluetooth:
@@ -55,11 +55,13 @@ static void shell_header_status_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
     header_update_wifi(networking_wifi_is_connected(), current_rssi);
-    header_update_battery(current_battery_percent);
+    header_update_battery(current_battery_percent, battery_adc_ok);
     header_update_bluetooth(bluetooth_is_enabled(), bluetooth_is_connected());
     header_update_usb(usb_is_connected());
     /* Update the header SD icon immediately after mount/unmount so the SD indicator matches the actual card state. */
     header_update_sd(sd_is_mounted);
+    header_update_mem(heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_total_size(MALLOC_CAP_8BIT));
+    header_update_cpu(current_cpu_percent, uxTaskGetNumberOfTasks());
     header_update_status();
 }
 
@@ -98,7 +100,16 @@ void shell_boot_init(void)
 - Poll Wi-Fi RSSI through `esp_wifi_sta_get_ap_info()`, battery through shell ADC helper.
 - `header_set_notification(...)` is async-safe (uses LVGL async dispatch internally).
 - Header is non-scrollable, resolution-scaled, left-to-right status icons, notification on far right.
-- SD indicator is hidden when no card mounted, visible with consistent `HEADER_SD_SYMBOL` when mounted.
+- SD indicator shows persistent state (NO/INS/ON/ERR) with consistent styling.
+- Battery is ALWAYS visible — shows "BAT N/C" with muted styling when ADC is not connected.
+- Memory (MEM), CPU (CPU bar + %), and Battery (BAT bar + %) are in the system panel on the far right.
+- All system panel values (MEM, CPU, BAT) are dynamically linked to FreeRTOS runtime statistics.
+- `header_update_battery(int percent, bool adc_ready)` — pass adc_ready=false to show N/C state.
+- `header_update_mem(uint32_t free_heap, uint32_t total_heap)` — real-time heap from FreeRTOS.
+- `header_update_cpu(int percent, uint32_t task_count)` — real-time CPU from runtime stats.
+- `header_update_uptime(uint32_t seconds)` — system uptime in seconds.
+- CPU usage is calculated from FreeRTOS idle task runtime counter deltas (CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS).
+- Falls back to heap-ratio approximation when runtime stats are unavailable.
 
 ## Example command dispatch
 ```c

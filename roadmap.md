@@ -94,6 +94,10 @@ To support third-party apps written in C, the project needs a minimal stable run
 
 ### Recent completions
 - Done: fixed `components/header` top-bar module with passive `header_init`, `header_update_status`, and `header_update_*` integration for notifications and system status
+- Done: header system panel redesigned with MEM | CPU | BAT all on the far right, dynamically linked to FreeRTOS runtime statistics
+- Done: CPU usage bar + percentage from FreeRTOS idle task runtime counter deltas
+- Done: battery always visible — shows "BAT N/C" when ADC not connected
+- Done: `sysinfo`, `version`, `mem`, and `about` commands expanded with real-time FreeRTOS data (uptime, task count, heap percentage)
 - Done: fixed SD card status icon visibility and styling so it matches the other header status icons when a card is mounted
 - Done: `c6ota` refactor into `components/c6ota` with stable `c6ota_init`, `c6ota_perform`, and `c6ota_register_progress_callback` documentation
 - Done: initial `API.md` and `SDK.md` published for the modular OTA component
