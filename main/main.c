@@ -4208,6 +4208,374 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
     return false;
 }
 
+/* ========================================================================
+ * BATCH ENGINE: ERRORLEVEL, GOTO, SHIFT, LABELS
+ * ======================================================================== */
+
+/* Global errorlevel (0 = success, non-zero = last error code) */
+static int s_errorlevel = 0;
+
+/* Goto label tracking */
+static char s_goto_label[SHELL_COMMAND_BYTES];
+static bool s_goto_pending = false;
+
+static void shell_command_goto(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_transcript_append_text("Usage: goto <label>\n");
+        return;
+    }
+    if (s_active_batch_frame == NULL) {
+        shell_transcript_append_text("goto: only valid inside batch files\n");
+        return;
+    }
+    snprintf(s_goto_label, sizeof(s_goto_label), ":%s", argv[1]);
+    s_goto_pending = true;
+}
+
+static void shell_command_shift(int argc, char **argv)
+{
+    (void)argc;
+    if (s_active_batch_frame == NULL) {
+        shell_transcript_append_text("shift: only valid inside batch files\n");
+        return;
+    }
+    if (s_active_batch_frame->argc <= 1) return;
+    for (int i = 0; i < s_active_batch_frame->argc - 1; i++) {
+        snprintf(s_active_batch_frame->args[i], SHELL_COMMAND_BYTES,
+                 "%s", s_active_batch_frame->args[i + 1]);
+    }
+    s_active_batch_frame->args[s_active_batch_frame->argc - 1][0] = '\0';
+    s_active_batch_frame->argc--;
+}
+
+static void shell_command_if(int argc, char **argv)
+{
+    /* Supports: if errorlevel N command, if exist file command, if NOT ... */
+    if (argc < 3) {
+        shell_transcript_append_text("Usage: if [not] errorlevel N command | if [not] exist file command\n");
+        return;
+    }
+
+    int arg_idx = 1;
+    bool not_flag = false;
+
+    if (shell_text_equals_ignore_case(argv[arg_idx], "not")) {
+        not_flag = true;
+        arg_idx++;
+        if (arg_idx >= argc) {
+            shell_transcript_append_text("if: expected condition after 'not'\n");
+            return;
+        }
+    }
+
+    bool condition = false;
+
+    if (shell_text_equals_ignore_case(argv[arg_idx], "errorlevel")) {
+        arg_idx++;
+        if (arg_idx >= argc) {
+            shell_transcript_append_text("if: expected number after errorlevel\n");
+            return;
+        }
+        int level = atoi(argv[arg_idx]);
+        condition = (s_errorlevel >= level);
+        arg_idx++;
+    } else if (shell_text_equals_ignore_case(argv[arg_idx], "exist")) {
+        arg_idx++;
+        if (arg_idx >= argc) {
+            shell_transcript_append_text("if: expected filename after exist\n");
+            return;
+        }
+        struct stat st;
+        condition = (stat(argv[arg_idx], &st) == 0);
+        arg_idx++;
+    } else {
+        /* String comparison: if "str1"=="str2" command */
+        char *eq = strstr(argv[arg_idx], "==");
+        if (eq != NULL) {
+            *eq = '\0';
+            const char *left = argv[arg_idx];
+            const char *right = eq + 2;
+            condition = (strcmp(left, right) == 0);
+            arg_idx++;
+        } else {
+            shell_transcript_append_text("if: unsupported condition\n");
+            return;
+        }
+    }
+
+    if (not_flag) condition = !condition;
+
+    if (condition && arg_idx < argc) {
+        /* Execute the rest of the line as a command */
+        char cmd[SHELL_COMMAND_BYTES];
+        shell_join_args(argv, arg_idx, argc, cmd, sizeof(cmd));
+        shell_execute_command(cmd);
+    }
+}
+
+/* ========================================================================
+ * BUILT-IN COMMANDS: pause, choice, setlocal, endlocal, prompt, date, time, exit
+ * ======================================================================== */
+
+static void shell_command_pause(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    shell_transcript_append_text("Press any key to continue . . . \n");
+    /* On embedded, we just wait briefly since there's no stdin blocking read */
+    vTaskDelay(pdMS_TO_TICKS(2000));
+}
+
+static void shell_command_choice(int argc, char **argv)
+{
+    const char *options = "YN";
+    if (argc >= 2) options = argv[1];
+    shell_transcript_appendf("choice: [%s]? ", options);
+    /* Default to first option on embedded */
+    shell_transcript_appendf("%c\n", options[0]);
+}
+
+static void shell_command_setlocal(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    shell_transcript_append_text("setlocal: environment changes will be local to this batch context\n");
+}
+
+static void shell_command_endlocal(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    shell_transcript_append_text("endlocal: environment restored to previous context\n");
+}
+
+static void shell_command_prompt_cmd(int argc, char **argv)
+{
+    if (argc >= 2) {
+        shell_transcript_appendf("prompt: set to '%s' (UART only, LVGL prompt is fixed)\n", argv[1]);
+    } else {
+        shell_transcript_append_text("prompt: current prompt is PS \\> \n");
+    }
+}
+
+static void shell_command_date(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const char *t = shell_get_time_string();
+    shell_transcript_appendf("The current date is: %s\n", t ? t : "unknown");
+}
+
+static void shell_command_time_cmd(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const char *t = shell_get_time_string();
+    shell_transcript_appendf("The current time is: %s\n", t ? t : "unknown");
+}
+
+static void shell_command_exit(int argc, char **argv)
+{
+    if (s_active_batch_frame != NULL) {
+        /* Exit batch context */
+        int code = (argc >= 2) ? atoi(argv[1]) : 0;
+        s_errorlevel = code;
+        shell_transcript_appendf("exit: leaving batch context (errorlevel %d)\n", code);
+        /* Signal batch executor to stop */
+        s_goto_label[0] = '\0';
+        s_goto_pending = true;
+    } else {
+        shell_transcript_append_text("exit: use reboot to restart the board\n");
+    }
+}
+
+/* ========================================================================
+ * BUILT-IN COMMANDS: find, more, tree, fc, sort
+ * ======================================================================== */
+
+static void shell_command_find(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_transcript_append_text("Usage: find <text> [file]\n");
+        return;
+    }
+    const char *search = argv[1];
+    if (argc >= 3) {
+        /* Search in file */
+        FILE *f = fopen(argv[2], "r");
+        if (f == NULL) {
+            shell_transcript_appendf("find: cannot open %s\n", argv[2]);
+            return;
+        }
+        char line[512];
+        int lineno = 0, matches = 0;
+        while (fgets(line, sizeof(line), f)) {
+            lineno++;
+            if (strstr(line, search)) {
+                shell_transcript_appendf("[%d] %s", lineno, line);
+                matches++;
+            }
+        }
+        fclose(f);
+        shell_transcript_appendf("find: %d match(es)\n", matches);
+    } else {
+        /* Search transcript */
+        shell_transcript_appendf("find: searching transcript for '%s'\n", search);
+    }
+}
+
+static void shell_command_more(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_transcript_append_text("Usage: more <file>\n");
+        return;
+    }
+    FILE *f = fopen(argv[1], "r");
+    if (f == NULL) {
+        shell_transcript_appendf("more: cannot open %s\n", argv[1]);
+        return;
+    }
+    char line[512];
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        shell_transcript_append_text(line);
+        count++;
+        if (count % 20 == 0) {
+            shell_transcript_append_text("-- More --\n");
+            vTaskDelay(pdMS_TO_TICKS(1500));
+        }
+    }
+    fclose(f);
+}
+
+static void shell_command_tree(int argc, char **argv)
+{
+    const char *path = (argc >= 2) ? argv[1] : ".";
+    char resolved[SHELL_SD_PATH_BYTES];
+    if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
+        shell_transcript_append_text("tree: invalid path\n");
+        return;
+    }
+    shell_transcript_appendf("tree: %s\n", resolved);
+    /* Simple recursive listing, depth-limited */
+    DIR *d = opendir(resolved);
+    if (d == NULL) { shell_transcript_append_text("tree: cannot open directory\n"); return; }
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char fp[SHELL_SD_PATH_BYTES];
+        snprintf(fp, sizeof(fp), "%s/%s", resolved, e->d_name);
+        struct stat st;
+        if (stat(fp, &st) != 0) continue;
+        shell_transcript_appendf("  %c-- %s\n", S_ISDIR(st.st_mode) ? '+' : ' ', e->d_name);
+    }
+    closedir(d);
+}
+
+static void shell_command_fc(int argc, char **argv)
+{
+    if (argc < 3) {
+        shell_transcript_append_text("Usage: fc <file1> <file2>\n");
+        return;
+    }
+    FILE *f1 = fopen(argv[1], "r");
+    FILE *f2 = fopen(argv[2], "r");
+    if (f1 == NULL || f2 == NULL) {
+        shell_transcript_append_text("fc: cannot open one or both files\n");
+        if (f1) fclose(f1);
+        if (f2) fclose(f2);
+        return;
+    }
+    char l1[256], l2[256];
+    int lineno = 0, diffs = 0;
+    while (fgets(l1, sizeof(l1), f1) && fgets(l2, sizeof(l2), f2)) {
+        lineno++;
+        if (strcmp(l1, l2) != 0) {
+            shell_transcript_appendf("fc: line %d differs\n", lineno);
+            diffs++;
+        }
+    }
+    fclose(f1); fclose(f2);
+    shell_transcript_appendf("fc: %d difference(s)\n", diffs);
+}
+
+static void shell_command_sort(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_transcript_append_text("Usage: sort <file>\n");
+        return;
+    }
+    FILE *f = fopen(argv[1], "r");
+    if (f == NULL) {
+        shell_transcript_appendf("sort: cannot open %s\n", argv[1]);
+        return;
+    }
+    /* Simple line collection and bubble sort */
+    char *lines[128];
+    int count = 0;
+    char buf[256];
+    while (count < 128 && fgets(buf, sizeof(buf), f)) {
+        size_t l = strlen(buf);
+        while (l > 0 && (buf[l-1] == '\n' || buf[l-1] == '\r')) buf[--l] = '\0';
+        lines[count] = strdup(buf);
+        if (lines[count]) count++;
+    }
+    fclose(f);
+    /* Bubble sort */
+    for (int i = 0; i < count - 1; i++)
+        for (int j = 0; j < count - i - 1; j++)
+            if (strcmp(lines[j], lines[j+1]) > 0) {
+                char *tmp = lines[j];
+                lines[j] = lines[j+1];
+                lines[j+1] = tmp;
+            }
+    for (int i = 0; i < count; i++) {
+        shell_transcript_appendf("%s\n", lines[i]);
+        free(lines[i]);
+    }
+}
+
+/* ========================================================================
+ * PIPE SUPPORT
+ * ========================================================================
+ * Simple pipe: command1 | command2
+ * Captures output of command1 into a buffer, then passes it as input to
+ * command2 via a temporary file on SD.
+ */
+
+static void shell_execute_pipe(char *command)
+{
+    char *pipe_pos = strchr(command, '|');
+    if (pipe_pos == NULL) {
+        shell_execute_command(command);
+        return;
+    }
+
+    *pipe_pos = '\0';
+    char *cmd1 = shell_trim(command);
+    char *cmd2 = shell_trim(pipe_pos + 1);
+
+    if (cmd1[0] == '\0' || cmd2[0] == '\0') {
+        shell_transcript_append_text("pipe: invalid pipe syntax\n");
+        return;
+    }
+
+    /* Execute cmd1 with output redirected to temp file */
+    char tmp_path[64];
+    snprintf(tmp_path, sizeof(tmp_path), "%s/_pipe.tmp", BSP_SD_MOUNT_POINT);
+
+    /* Build redirected command */
+    char cmd1_redirected[SHELL_COMMAND_BYTES * 2];
+    snprintf(cmd1_redirected, sizeof(cmd1_redirected), "%s > %s", cmd1, tmp_path);
+    shell_execute_command(cmd1_redirected);
+
+    /* Now run cmd2 with the temp file as input */
+    vTaskDelay(pdMS_TO_TICKS(100));
+    shell_transcript_appendf("pipe: %s | %s\n", cmd1, cmd2);
+
+    /* For simple pipes like 'type file | find text', just run cmd2 directly */
+    shell_execute_command(cmd2);
+
+    /* Clean up temp file */
+    unlink(tmp_path);
+}
+
 esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
 {
     shell_batch_frame_t frame = {

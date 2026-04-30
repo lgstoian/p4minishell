@@ -97,6 +97,13 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* Check for pipe operator */
+    if (strchr(trimmed, '|') != NULL) {
+        extern void shell_execute_pipe(char *command);
+        shell_execute_pipe(trimmed);
+        return true;
+    }
+
     argc = shell_split_args(trimmed, argv, 32);
     if (argc == 0) {
         return false;
@@ -405,6 +412,105 @@ bool shell_execute_command_core(char *command)
     if (shell_text_equals_ignore_case(argv[0], "call")) {
         extern void shell_bridge_call_command(int argc, char **argv);
         shell_bridge_call_command(argc, argv);
+        return true;
+    }
+
+    /* Batch control flow commands */
+    if (shell_text_equals_ignore_case(argv[0], "if")) {
+        extern void shell_command_if(int argc, char **argv);
+        shell_command_if(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "goto")) {
+        extern void shell_command_goto(int argc, char **argv);
+        shell_command_goto(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "shift")) {
+        extern void shell_command_shift(int argc, char **argv);
+        shell_command_shift(argc, argv);
+        return true;
+    }
+
+    /* Extended built-in commands */
+    if (shell_text_equals_ignore_case(argv[0], "pause")) {
+        extern void shell_command_pause(int argc, char **argv);
+        shell_command_pause(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "choice")) {
+        extern void shell_command_choice(int argc, char **argv);
+        shell_command_choice(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "setlocal")) {
+        extern void shell_command_setlocal(int argc, char **argv);
+        shell_command_setlocal(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "endlocal")) {
+        extern void shell_command_endlocal(int argc, char **argv);
+        shell_command_endlocal(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "prompt")) {
+        extern void shell_command_prompt_cmd(int argc, char **argv);
+        shell_command_prompt_cmd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "date")) {
+        extern void shell_command_date(int argc, char **argv);
+        shell_command_date(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "time")) {
+        extern void shell_command_time_cmd(int argc, char **argv);
+        shell_command_time_cmd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "exit")) {
+        extern void shell_command_exit(int argc, char **argv);
+        shell_command_exit(argc, argv);
+        return true;
+    }
+
+    /* File utility commands */
+    if (shell_text_equals_ignore_case(argv[0], "find")) {
+        extern void shell_command_find(int argc, char **argv);
+        shell_command_find(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "more")) {
+        extern void shell_command_more(int argc, char **argv);
+        shell_command_more(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "tree")) {
+        extern void shell_command_tree(int argc, char **argv);
+        shell_command_tree(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "fc")) {
+        extern void shell_command_fc(int argc, char **argv);
+        shell_command_fc(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sort")) {
+        extern void shell_command_sort(int argc, char **argv);
+        shell_command_sort(argc, argv);
         return true;
     }
 
