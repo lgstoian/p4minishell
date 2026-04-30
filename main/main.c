@@ -70,6 +70,12 @@
 /* ANSI-aware transcript function (declared in shell.h, used for boot banner) */
 extern void shell_transcript_appendf_ansi(const char *format, ...);
 
+/* Time string function (declared in shell.h, used by date/time commands) */
+extern const char *shell_get_time_string(void);
+
+/* CWD accessor for PowerShell prompt (declared in shell.h) */
+extern const char *shell_get_cwd_for_prompt(void);
+
 /* USB keyboard input bridge (declared in shell.h, used for CLI injection) */
 extern void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed);
 
@@ -267,10 +273,14 @@ static void shell_command_about(void);
 static void shell_execute_rgb_command(int argc, char **argv);
 static void shell_execute_camera_command(int argc, char **argv);
 void shell_command_sd(char *command);
+
+/* Forward declarations for functions used before their definitions */
+bool shell_wildcard_match(const char *pattern, const char *name);
+void shell_execute_pipe(char *command);
 static void shell_command_sd_ls(char *command);
 static void shell_command_sd_stat(char *command);
 static void shell_command_sd_cat(char *command);
-static void shell_command_sd_eject(void);
+void shell_command_sd_eject(void);
 static bool shell_text_equals_ignore_case(const char *left, const char *right);
 static void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size);
 static void shell_sd_print_usage(void);
@@ -307,6 +317,34 @@ void shell_command_move(int argc, char **argv);
 void shell_command_set(int argc, char **argv);
 void shell_command_path(int argc, char **argv);
 void shell_command_echo(int argc, char **argv);
+
+/* Extended DOS commands */
+void shell_command_attrib(int argc, char **argv);
+void shell_command_label(int argc, char **argv);
+void shell_command_xcopy(int argc, char **argv);
+
+/* Batch control flow */
+void shell_command_if(int argc, char **argv);
+void shell_command_goto(int argc, char **argv);
+void shell_command_shift(int argc, char **argv);
+
+/* Extended built-in commands */
+void shell_command_pause(int argc, char **argv);
+void shell_command_choice(int argc, char **argv);
+void shell_command_setlocal(int argc, char **argv);
+void shell_command_endlocal(int argc, char **argv);
+void shell_command_prompt_cmd(int argc, char **argv);
+void shell_command_date(int argc, char **argv);
+void shell_command_time_cmd(int argc, char **argv);
+void shell_command_exit(int argc, char **argv);
+
+/* File utility commands */
+void shell_command_find(int argc, char **argv);
+void shell_command_more(int argc, char **argv);
+void shell_command_tree(int argc, char **argv);
+void shell_command_fc(int argc, char **argv);
+void shell_command_sort(int argc, char **argv);
+
 static void shell_store_command_history(const char *command);
 static bool shell_execute_command_core(char *command);
 static void shell_command_sd_info(void);
@@ -3562,7 +3600,7 @@ void shell_command_dir(int argc, char **argv)
                 continue;
             if (!shell_wildcard_match(pattern, entry->d_name))
                 continue;
-            char fp[SHELL_SD_PATH_BYTES];
+            char fp[SHELL_SD_PATH_BYTES + 256];
             snprintf(fp, sizeof(fp), "%s/%s", resolved_path, entry->d_name);
             struct stat st;
             if (stat(fp, &st) != 0) continue;
@@ -3578,7 +3616,7 @@ void shell_command_dir(int argc, char **argv)
             FILINFO fi;
             char sfn[16] = "";
             if (f_stat(fp, &fi) == FR_OK && fi.altname[0] != '\0') {
-                char upper[32];
+                char upper[256];
                 snprintf(upper, sizeof(upper), "%s", entry->d_name);
                 for (char *p = upper; *p; p++) *p = (char)toupper((unsigned char)*p);
                 if (strcmp(fi.altname, upper) != 0)
@@ -3656,7 +3694,7 @@ void shell_command_copy(int argc, char **argv)
         while ((entry = readdir(d)) != NULL) {
             if (!shell_wildcard_match(pattern, entry->d_name))
                 continue;
-            char sf[SHELL_SD_PATH_BYTES], df[SHELL_SD_PATH_BYTES];
+            char sf[SHELL_SD_PATH_BYTES + 256], df[SHELL_SD_PATH_BYTES + 256];
             snprintf(sf, sizeof(sf), "%s/%s", source_path, entry->d_name);
             snprintf(df, sizeof(df), "%s/%s", dest_path, entry->d_name);
             struct stat cs;
@@ -3746,7 +3784,7 @@ void shell_command_del(int argc, char **argv)
         while ((entry = readdir(d)) != NULL) {
             if (!shell_wildcard_match(pattern, entry->d_name))
                 continue;
-            char fp[SHELL_SD_PATH_BYTES];
+            char fp[SHELL_SD_PATH_BYTES + 256];
             snprintf(fp, sizeof(fp), "%s/%s", resolved_path, entry->d_name);
             if (unlink(fp) == 0) {
                 shell_transcript_appendf("  Deleted %s\n", entry->d_name);
@@ -4219,7 +4257,7 @@ static int s_errorlevel = 0;
 static char s_goto_label[SHELL_COMMAND_BYTES];
 static bool s_goto_pending = false;
 
-static void shell_command_goto(int argc, char **argv)
+void shell_command_goto(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_append_text("Usage: goto <label>\n");
@@ -4233,7 +4271,7 @@ static void shell_command_goto(int argc, char **argv)
     s_goto_pending = true;
 }
 
-static void shell_command_shift(int argc, char **argv)
+void shell_command_shift(int argc, char **argv)
 {
     (void)argc;
     if (s_active_batch_frame == NULL) {
@@ -4242,14 +4280,13 @@ static void shell_command_shift(int argc, char **argv)
     }
     if (s_active_batch_frame->argc <= 1) return;
     for (int i = 0; i < s_active_batch_frame->argc - 1; i++) {
-        snprintf(s_active_batch_frame->args[i], SHELL_COMMAND_BYTES,
-                 "%s", s_active_batch_frame->args[i + 1]);
+        memmove(s_active_batch_frame->args[i], s_active_batch_frame->args[i + 1], SHELL_COMMAND_BYTES);
     }
     s_active_batch_frame->args[s_active_batch_frame->argc - 1][0] = '\0';
     s_active_batch_frame->argc--;
 }
 
-static void shell_command_if(int argc, char **argv)
+void shell_command_if(int argc, char **argv)
 {
     /* Supports: if errorlevel N command, if exist file command, if NOT ... */
     if (argc < 3) {
@@ -4318,7 +4355,7 @@ static void shell_command_if(int argc, char **argv)
  * BUILT-IN COMMANDS: pause, choice, setlocal, endlocal, prompt, date, time, exit
  * ======================================================================== */
 
-static void shell_command_pause(int argc, char **argv)
+void shell_command_pause(int argc, char **argv)
 {
     (void)argc; (void)argv;
     shell_transcript_append_text("Press any key to continue . . . \n");
@@ -4326,7 +4363,7 @@ static void shell_command_pause(int argc, char **argv)
     vTaskDelay(pdMS_TO_TICKS(2000));
 }
 
-static void shell_command_choice(int argc, char **argv)
+void shell_command_choice(int argc, char **argv)
 {
     const char *options = "YN";
     if (argc >= 2) options = argv[1];
@@ -4335,19 +4372,19 @@ static void shell_command_choice(int argc, char **argv)
     shell_transcript_appendf("%c\n", options[0]);
 }
 
-static void shell_command_setlocal(int argc, char **argv)
+void shell_command_setlocal(int argc, char **argv)
 {
     (void)argc; (void)argv;
     shell_transcript_append_text("setlocal: environment changes will be local to this batch context\n");
 }
 
-static void shell_command_endlocal(int argc, char **argv)
+void shell_command_endlocal(int argc, char **argv)
 {
     (void)argc; (void)argv;
     shell_transcript_append_text("endlocal: environment restored to previous context\n");
 }
 
-static void shell_command_prompt_cmd(int argc, char **argv)
+void shell_command_prompt_cmd(int argc, char **argv)
 {
     if (argc >= 2) {
         shell_transcript_appendf("prompt: set to '%s' (UART only, LVGL prompt is fixed)\n", argv[1]);
@@ -4356,21 +4393,21 @@ static void shell_command_prompt_cmd(int argc, char **argv)
     }
 }
 
-static void shell_command_date(int argc, char **argv)
+void shell_command_date(int argc, char **argv)
 {
     (void)argc; (void)argv;
     const char *t = shell_get_time_string();
     shell_transcript_appendf("The current date is: %s\n", t ? t : "unknown");
 }
 
-static void shell_command_time_cmd(int argc, char **argv)
+void shell_command_time_cmd(int argc, char **argv)
 {
     (void)argc; (void)argv;
     const char *t = shell_get_time_string();
     shell_transcript_appendf("The current time is: %s\n", t ? t : "unknown");
 }
 
-static void shell_command_exit(int argc, char **argv)
+void shell_command_exit(int argc, char **argv)
 {
     if (s_active_batch_frame != NULL) {
         /* Exit batch context */
@@ -4389,7 +4426,7 @@ static void shell_command_exit(int argc, char **argv)
  * BUILT-IN COMMANDS: find, more, tree, fc, sort
  * ======================================================================== */
 
-static void shell_command_find(int argc, char **argv)
+void shell_command_find(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_append_text("Usage: find <text> [file]\n");
@@ -4420,7 +4457,7 @@ static void shell_command_find(int argc, char **argv)
     }
 }
 
-static void shell_command_more(int argc, char **argv)
+void shell_command_more(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_append_text("Usage: more <file>\n");
@@ -4444,7 +4481,7 @@ static void shell_command_more(int argc, char **argv)
     fclose(f);
 }
 
-static void shell_command_tree(int argc, char **argv)
+void shell_command_tree(int argc, char **argv)
 {
     const char *path = (argc >= 2) ? argv[1] : ".";
     char resolved[SHELL_SD_PATH_BYTES];
@@ -4459,7 +4496,7 @@ static void shell_command_tree(int argc, char **argv)
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.') continue;
-        char fp[SHELL_SD_PATH_BYTES];
+        char fp[SHELL_SD_PATH_BYTES + 256];
         snprintf(fp, sizeof(fp), "%s/%s", resolved, e->d_name);
         struct stat st;
         if (stat(fp, &st) != 0) continue;
@@ -4468,7 +4505,7 @@ static void shell_command_tree(int argc, char **argv)
     closedir(d);
 }
 
-static void shell_command_fc(int argc, char **argv)
+void shell_command_fc(int argc, char **argv)
 {
     if (argc < 3) {
         shell_transcript_append_text("Usage: fc <file1> <file2>\n");
@@ -4495,7 +4532,7 @@ static void shell_command_fc(int argc, char **argv)
     shell_transcript_appendf("fc: %d difference(s)\n", diffs);
 }
 
-static void shell_command_sort(int argc, char **argv)
+void shell_command_sort(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_append_text("Usage: sort <file>\n");
@@ -4539,7 +4576,7 @@ static void shell_command_sort(int argc, char **argv)
  * command2 via a temporary file on SD.
  */
 
-static void shell_execute_pipe(char *command)
+void shell_execute_pipe(char *command)
 {
     char *pipe_pos = strchr(command, '|');
     if (pipe_pos == NULL) {
@@ -4789,7 +4826,7 @@ void shell_command_attrib(int argc, char **argv)
         struct dirent *entry;
         int count = 0;
         while ((entry = readdir(d)) != NULL && count < SHELL_SD_LIST_LIMIT) {
-            char fp[SHELL_SD_PATH_BYTES];
+            char fp[SHELL_SD_PATH_BYTES + 256];
             snprintf(fp, sizeof(fp), "%s/%s", resolved, entry->d_name);
             if (f_stat(fp, &info) == FR_OK) {
                 char a[5] = {
@@ -4939,7 +4976,7 @@ void shell_command_xcopy(int argc, char **argv)
         while ((entry = readdir(d)) != NULL) {
             if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
                 continue;
-            char sc[SHELL_SD_PATH_BYTES], dc[SHELL_SD_PATH_BYTES];
+            char sc[SHELL_SD_PATH_BYTES + 256], dc[SHELL_SD_PATH_BYTES + 256];
             snprintf(sc, sizeof(sc), "%s/%s", src_resolved, entry->d_name);
             snprintf(dc, sizeof(dc), "%s/%s", dst_resolved, entry->d_name);
             struct stat cs;
@@ -4980,7 +5017,7 @@ static void shell_sd_print_usage(void)
     shell_transcript_append_text("Paths: sd:/file.txt, /sdcard/file.txt, or relative-to-sd-root\n");
 }
 
-static void shell_command_sd_eject(void)
+void shell_command_sd_eject(void)
 {
     esp_err_t error;
 
@@ -5459,6 +5496,13 @@ static bool shell_execute_command_core(char *command)
 
     // Preserve the unsplit command text for family handlers that perform their own subcommand parsing.
     snprintf(command_copy, sizeof(command_copy), "%s", trimmed);
+
+    /* Pipe support — check before splitting args since '|' is a shell metachar */
+    if (strchr(command_copy, '|') != NULL) {
+        shell_execute_pipe(command_copy);
+        return true;
+    }
+
     argc = shell_split_args(trimmed, argv, 16);
     if (argc == 0) {
         return true;
@@ -5738,6 +5782,105 @@ static bool shell_execute_command_core(char *command)
             return false;
         }
         (void)shell_execute_batch_file(batch_path, argc - 1, &argv[1]);
+        return true;
+    }
+
+    /* Extended DOS commands */
+    if (shell_text_equals_ignore_case(argv[0], "attrib")) {
+        shell_command_attrib(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "label")) {
+        shell_command_label(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "xcopy")) {
+        shell_command_xcopy(argc, argv);
+        return true;
+    }
+
+    /* Batch control flow */
+    if (shell_text_equals_ignore_case(argv[0], "if")) {
+        shell_command_if(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "goto")) {
+        shell_command_goto(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "shift")) {
+        shell_command_shift(argc, argv);
+        return true;
+    }
+
+    /* Extended built-in commands */
+    if (shell_text_equals_ignore_case(argv[0], "pause")) {
+        shell_command_pause(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "choice")) {
+        shell_command_choice(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "setlocal")) {
+        shell_command_setlocal(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "endlocal")) {
+        shell_command_endlocal(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "prompt")) {
+        shell_command_prompt_cmd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "date")) {
+        shell_command_date(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "time")) {
+        shell_command_time_cmd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "exit")) {
+        shell_command_exit(argc, argv);
+        return true;
+    }
+
+    /* File utility commands */
+    if (shell_text_equals_ignore_case(argv[0], "find")) {
+        shell_command_find(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "more")) {
+        shell_command_more(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "tree")) {
+        shell_command_tree(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "fc")) {
+        shell_command_fc(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sort")) {
+        shell_command_sort(argc, argv);
         return true;
     }
 

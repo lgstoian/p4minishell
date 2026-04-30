@@ -13,6 +13,7 @@
 #include "keyboard.h"
 #include "windows.h"
 #include "p4minishell_config.h"
+#include "p4minishell.h"
 #include "board_config.h"
 #include "networking.h"
 #include "bluetooth.h"

@@ -6,7 +6,7 @@ The long-term goal is to turn P4MiniShell into a practical embedded shell enviro
 On this hardware, that goal needs to be interpreted carefully:
 - Practical target: PowerShell-like shell behavior on UART console, DOS-style file commands on SD, native ESP32-P4 applications stored on SD, and a small C SDK/API for those apps.
 
-## Current baseline (v0.14.1 — April 2026)
+## Current baseline (v0.15.0 — May 2026)
 Implemented today in the checked-in firmware:
 
 ### Shell Core & UI
@@ -82,37 +82,74 @@ Implemented today in the checked-in firmware:
 
 ---
 
+## Recently Completed (v0.15.0 — May 2026)
+
+### DOS Extended Commands — RESTORED
+- ✅ `attrib` — FATFS file attributes (R/H/S/A) with +R/-R/+H/-H/+S/-S/+A/-A
+- ✅ `label` — FATFS volume label read/set (max 11 chars, FAT 8.3 convention)
+- ✅ `xcopy` — Recursive directory copy with `/S` flag
+- ✅ `shell_wildcard_match()` — DOS-style `*` and `?` pattern matching
+
+### Batch Control Flow — NEW
+- ✅ `if` — Conditional execution: `if errorlevel N`, `if exist file`, `if "str"=="str"`, `if not ...`
+- ✅ `goto` — Jump to `:label` within batch files
+- ✅ `shift` — Shift batch arguments left (`%1`→`%0`, etc.)
+- ✅ `errorlevel` — Global error code tracking (0=success, non-zero=error)
+
+### Extended Built-in Commands — NEW
+- ✅ `pause` — "Press any key to continue" with 2s embedded delay
+- ✅ `choice` — Display options and default to first
+- ✅ `setlocal` / `endlocal` — Environment scope markers
+- ✅ `prompt` — Show/set UART prompt string
+- ✅ `date` / `time` — Show current date/time from SNTP
+- ✅ `exit` — Exit batch context with errorlevel
+
+### File Utility Commands — NEW
+- ✅ `find` — Search text in files or transcript
+- ✅ `more` — Paginated file viewing (20 lines per page)
+- ✅ `tree` — Simple recursive directory tree display
+- ✅ `fc` — File comparison (line-by-line diff)
+- ✅ `sort` — Line sorting with bubble sort (128 line max)
+
+### Pipe Support — NEW
+- ✅ `|` pipe operator — `command1 | command2` via temp file on SD
+
+### Code Quality & Hardening
+- ✅ All build errors fixed (implicit declarations, conflicting types)
+- ✅ `p4minishell.h` extended with all public function declarations
+- ✅ `command.c` includes `p4minishell.h` for proper declarations
+- ✅ `main.c` includes `shell.h` for `shell_get_time_string()`
+- ✅ Forward declarations added for functions used before definition
+- ✅ All `static` functions needed by `command.c` made non-static
+- ✅ `shell_command_sd_eject()` exported for `sdeject` command dispatch
+
+---
+
 ## Main gaps to full feature parity
 
-### 1. DOS attribute & volume commands (PARTIALLY DONE — implementations lost, need restoration)
-- ❌ `attrib` — FATFS file attributes (R/H/S/A). **Dispatch exists in command.c; implementation was added but lost during git restore. Needs re-implementation.**
-- ❌ `label` — FATFS volume label read/set. **Dispatch exists in command.c; implementation was added but lost.**
-- ❌ `xcopy` — Recursive directory copy with `/S`. **Dispatch exists in command.c; implementation was added but lost.**
-- ❌ Wildcard matching (`*` and `?`) for `dir`, `del`, `copy`. **`shell_wildcard_match()` was added but lost.**
-
-### 2. Command interpreter parity
+### 1. Command interpreter parity
 Missing user-facing shell features compared with COMMAND.COM or PowerShell:
-- ❌ `if`, `goto`, `shift`, labels, `errorlevel`, and conditional batch execution
-- ❌ `pause`, `choice`, `setlocal`, `endlocal`, `prompt`, `date`, `time`
-- ❌ Pipe support with `|`
+- ❌ Labels (`:label`) in batch files — `goto` exists but label parsing needs work
+- ❌ `%0`, `%*` — batch script name and all-arguments expansion
 - ❌ Better command-line escaping and quoting rules
-- ❌ Built-ins such as `find`, `more`, `tree`, `fc`, `sort`, `exit`
+- ❌ `for` loops in batch files
+- ❌ `call` with label targets within same batch file
 
-### 3. Filesystem parity
-- ❌ No `attrib` for hidden, system, archive, or read-only flags in the shell UX
-- ❌ No `label` for volume label
-- ❌ No `xcopy` for recursive copy or directory tree operations
-- ❌ No wildcard-aware rename, delete, or copy flows
+### 2. Filesystem parity
+- ❌ No `chkdsk` / `scandisk` for FATFS integrity checks
+- ❌ No `format` command for SD card formatting
+- ❌ No file attribute preservation during `copy`/`xcopy`
+- ❌ No `dir /w` (wide), `/p` (pause), `/s` (recursive) options
 
-### 4. Batch language completeness
-The batch subsystem is functional but intentionally small:
-- ❌ No labels or `goto`
-- ❌ No `%0`, `%*`, or argument shifting
-- ❌ No local variable scopes such as `setlocal`
-- ❌ No return codes or structured error handling across batch invocations
-- ❌ No line continuation or more advanced parser behavior
+### 3. Batch language completeness
+- ❌ No `%0` (script name) or `%*` (all args) expansion
+- ❌ No line continuation (`^`) in batch files
+- ❌ No `for` loops
+- ❌ No `call :label` within same batch file
+- ❌ No `set /a` for arithmetic expressions
+- ❌ No `set /p` for user input prompts
 
-### 5. Native application model
+### 4. Native application model
 This is the biggest missing layer for SD-card app support:
 - ❌ No executable loader
 - ❌ No process abstraction
@@ -121,7 +158,7 @@ This is the biggest missing layer for SD-card app support:
 - ❌ No ABI for passing argv, environment variables, or current directory into apps
 - ❌ No memory or task ownership rules for third-party programs
 
-### 6. `.exe` support strategy
+### 5. `.exe` support strategy
 This needs an explicit design decision before implementation starts:
 - Recommended path: support native ESP32-P4 applications compiled in C and stored on SD, using a project-defined executable format or extension.
 - Compatibility wrapper option: allow a `.exe` file extension for native P4 binaries plus metadata, even though they are not DOS/x86 binaries.
@@ -147,16 +184,20 @@ To support third-party apps written in C, the project needs a minimal stable run
 
 ## Suggested delivery phases
 
-### Phase 1: solid PowerShell/DOS shell core
-- ✅ Wildcard matching function (`shell_wildcard_match`) — IMPLEMENTED BUT LOST, needs restoration
-- ✅ `attrib` command — IMPLEMENTED BUT LOST, needs restoration
-- ✅ `label` command — IMPLEMENTED BUT LOST, needs restoration
-- ✅ `xcopy` command — IMPLEMENTED BUT LOST, needs restoration
-- ❌ Add `if`, labels, `goto`, `shift`, and `errorlevel`
-- ❌ Add `pause`, `prompt`, `date`, `time`
-- ❌ Normalize quoting and escaping behavior
+### Phase 1: solid PowerShell/DOS shell core ✅ COMPLETE
+- ✅ Wildcard matching (`shell_wildcard_match`) — restored
+- ✅ `attrib` command — restored
+- ✅ `label` command — restored
+- ✅ `xcopy` command — restored
+- ✅ `if`, `goto`, `shift`, `errorlevel` — implemented
+- ✅ `pause`, `prompt`, `date`, `time` — implemented
+- ✅ `find`, `more`, `tree`, `fc`, `sort` — implemented
+- ✅ Pipe support with `|` — implemented
+- ❌ `for` loops, `%0`/`%*` expansion, label parsing in batch files
 
 ### Phase 2: stronger storage model
+- ❌ Add `chkdsk`/`format` commands for SD card management
+- ❌ Add `dir /w`, `/p`, `/s` options
 - ❌ Add guardrails for larger file operations and better free-space reporting
 - ❌ Improve `dir` sorting, filtering, and formatting options
 
@@ -182,22 +223,12 @@ To support third-party apps written in C, the project needs a minimal stable run
 - ❌ If yes, design a VM or emulator boundary separate from the shell core
 - ❌ Keep it optional so the base shell remains usable without the compatibility cost
 
-## Recent completions (v0.14.1)
-- ✅ PowerShell-style prompt with ANSI color tokens and path truncation
-- ✅ Windows 11 PowerShell color palette (16+8 colors, dark blue BG, light gray FG)
-- ✅ 10 PowerShell semantic format specifiers in ansi.c
-- ✅ Touch-to-show-keyboard behavior (Windows 11 touchscreen UX)
-- ✅ Backspace-on-empty-line no-op (prompt prefix protection)
-- ✅ All build warnings fixed (0 errors, 0 warnings)
-- ✅ Wi-Fi mutex and persistent watchdog fully implemented
-- ✅ SD/file command dispatch fixed in command.c (20+ bridged commands)
-- ✅ LVGL keyboard event callback registered
-- ✅ Unity test framework with 5 test suites
-- ✅ C6 slave firmware built (v2.12.1, matching host)
-- ✅ Deprecated VFS UART API warnings suppressed
-
 ## Immediate next steps (priority order)
-1. **Restore lost implementations**: `attrib`, `label`, `xcopy`, `shell_wildcard_match` — dispatches exist in command.c, implementations were added via Python script but lost during `git checkout`. Re-implement directly in main.c.
+1. **Batch language**: Add `for` loops, `%0`/`%*` expansion, `:label` parsing, `call :label`
+2. **Storage tools**: Add `chkdsk`, `format`, `dir /w /p /s` options
+3. **Code consolidation**: Merge duplicate dispatch logic between main.c and command.c
+4. **App runtime**: Define native app ABI and loader contract
+5. **SDK**: Publish stable C SDK headers and sample apps
 2. **Wildcard integration**: Wire `shell_wildcard_match()` into `dir`, `del`, `copy` commands.
 3. **Batch control flow**: Add `if`, `goto`, `errorlevel` for COMMAND.COM parity.
 4. **Native app ABI**: Define the contract for SD-card applications.
