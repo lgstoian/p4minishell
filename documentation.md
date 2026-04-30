@@ -10,8 +10,12 @@ P4MiniShell is a modular embedded shell application for ESP32-P4 with an ESP32-C
 main/main.c                     Shell UI, parser, transcript, orchestration
 p4minishell_config.h            Centralized configuration header
 p4minishell_config.yaml         Configuration documentation (YAML)
+components/ansi/ansi.c          ANSI/VT escape sequence module (SGR colors, attributes, formatting)
 components/display/display.c    Display manager (rotation, resolution, refresh, brightness, power)
 components/windows/windows.c    Window manager (LVGL screen layout, dynamic scaling, styling)
+components/keyboard/keyboard.c  Keyboard manager (LVGL keyboard, visibility, modes)
+components/shell/shell.c        Shell core (transcript, history, debug log, UART, sysinfo)
+components/command/command.c    Command dispatcher (parser, execution task, all built-ins)
 components/header/header.c      Fixed top status bar (LVGL widgets)
 components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
 components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
@@ -97,6 +101,20 @@ Passive, display-only module that owns the fixed top bar:
 - All public functions use LVGL async dispatch (safe from any task context)
 - SD icon shows persistent state (NO/INS/ON/ERR)
 
+### ANSI/VT Module (components/ansi)
+
+Provides SGR (Select Graphic Rendition) escape sequence processing for colored terminal output:
+
+- **16-color palette**: PowerShell-inspired color scheme with standard and bright variants
+- **SGR parsing**: Full ESC[...m sequence parser with state machine tracking
+- **Text attributes**: Bold, dim, italic, underline, blink, reverse, hidden, strikethrough
+- **Format string builder**: `ansi_format()` with `@`-prefixed color/attribute specifiers
+- **ANSI-to-plain stripping**: `ansi_strip_to_plain()` for LVGL transcript textarea
+- **UART pass-through**: Raw ANSI codes forwarded to serial terminal for native rendering
+- **Configurable palette**: All 16 colors configurable via `P4_CONFIG_ANSI_*` macros
+- **Runtime palette modification**: `ansi_set_palette_color()` for dynamic color changes
+- **Thread safety**: Palette is read-only after init; runtime modifications not thread-safe by design
+
 ### Networking Module (components/networking)
 
 Owns ESP-Hosted Wi-Fi and bootstraps Bluetooth:
@@ -127,6 +145,12 @@ Owns ESP-IDF USB Host Library with two class drivers:
 
 - **MSC (Mass Storage Class)**: VFS/FATFS registration at `/usb0`, mount on demand
 - **HID (Human Interface Device)**: Keyboard and mouse with opt-in transcript echo
+- **USB keyboard auto-detect**: Automatically detects USB HID keyboard on plug-in; routes keystrokes to CLI input line via `shell_usb_keyboard_input()` bridge
+- **Full US key map**: 60+ USB HID key codes including symbols, keypad, navigation, function keys, and modifier-aware shifted characters
+- **On-screen keyboard auto-hide**: LVGL keyboard automatically hidden when USB keyboard attached; restored on detach
+- **External input mode API**: `keyboard_set_external_input()`, `keyboard_force_visible()`, `keyboard_clear_force_visible()`
+- **Input callback**: `usb_register_keyboard_input_callback()` for shell CLI integration
+- **Public key mapping**: `usb_key_to_ascii_full()`, `usb_key_name_full()` for external consumers
 - **Command family**: `usb status|ls|keyboard on|off|mouse on|off`
 - **Bounded output**: Directory listings and file previews mirror SD command style
 - **Transcript integration**: Uses dedicated host bridge functions in main.c

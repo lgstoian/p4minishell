@@ -97,6 +97,36 @@ void header_update_cpu(int cpu_percent, uint32_t task_count);
  */
 void header_update_uptime(uint32_t uptime_seconds);
 
+/**
+ * Batch-update all header state at once and schedule a single async render.
+ * This is more efficient than calling individual header_update_*() functions
+ * because it avoids multiple lv_async_call dispatches and redundant renders.
+ * Safe to call from any task context.
+ *
+ * @param wifi_connected    Wi-Fi link status
+ * @param wifi_rssi         Wi-Fi signal strength in dBm
+ * @param battery_percent   Battery charge 0-100 (only meaningful if adc_ready)
+ * @param battery_adc_ready ADC readiness flag
+ * @param bt_enabled        Bluetooth controller enabled
+ * @param bt_connected      Bluetooth connected
+ * @param usb_connected     Any USB device attached
+ * @param sd_state          SD card state (NONE/INSERTED/MOUNTED/ERROR)
+ * @param free_heap         Free 8-bit capable heap bytes
+ * @param total_heap        Total 8-bit capable heap bytes
+ * @param cpu_percent       CPU utilization 0-100
+ * @param task_count        Number of FreeRTOS tasks
+ * @param uptime_seconds    System uptime in seconds
+ */
+void header_update_batch(
+    bool wifi_connected, int wifi_rssi,
+    int battery_percent, bool battery_adc_ready,
+    bool bt_enabled, bool bt_connected,
+    bool usb_connected, header_sd_state_t sd_state,
+    uint32_t free_heap, uint32_t total_heap,
+    int cpu_percent, uint32_t task_count,
+    uint32_t uptime_seconds
+);
+
 /** Force a synchronous header re-render. Call only from LVGL task context. */
 void header_force_render(void);
 

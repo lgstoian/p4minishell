@@ -7,6 +7,176 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.1] - 2026-04-30
+
+### Fixed
+- **Backspace CLI bug**: Pressing Backspace when the command line is empty no longer inserts the literal text `P4Shell>`. The `LV_EVENT_VALUE_CHANGED` handler now correctly detects partial prompt deletion and restores only the user text portion, not duplicating the prompt prefix.
+- **Touch keyboard button**: The on-screen keyboard's "keyboard" button (LV_SYMBOL_KEYBOARD) now correctly hides the keyboard when pressed. Added `LV_EVENT_CANCEL` handling in `shell_input_line_event_cb` that calls `keyboard_hide()`.
+- **Wi-Fi mutex implementation**: The Wi-Fi mutex (`wifi_lock`/`wifi_unlock`) and atomic init-task claim (`wifi_try_claim_init_task`/`wifi_release_init_task`) that were declared in the changelog for v0.13.1 but never implemented are now fully functional. All shared Wi-Fi state access is mutex-protected.
+- **Wi-Fi persistent watchdog**: The watchdog task (`networking_wifi_watchdog_task`) that was declared but never implemented is now fully functional. It monitors Wi-Fi connection state and retries with exponential backoff (1s → 2s → 4s → ... → 30s cap) for up to 120 seconds total, handling the C6's typical associate-then-disconnect boot behavior.
+- **Null pointer safety**: Added NULL checks for `lv_textarea_get_text()` return values in the USB keyboard injection Home/End handlers in `shell_usb_keyboard_inject_cb`.
+- **Async dispatch error handling**: Added `lv_async_call` return value check in `shell_usb_keyboard_input` to free the context on dispatch failure.
+
+### Changed
+- **networking.c**: All Wi-Fi state transitions in the event handler, `networking_wifi_connect_with_credentials`, `networking_wifi_begin_connect_request`, and `networking_wifi_begin_background_request` are now mutex-protected.
+- **networking.c**: `wifi_try_claim_init_task`/`wifi_release_init_task` replace direct `s_wifi_init_task_in_progress` manipulation for TOCTOU-safe init-task claiming.
+- **main.c**: `shell_input_line_event_cb` `LV_EVENT_VALUE_CHANGED` handler rewritten to correctly handle partial prompt deletion by detecting common prefix length and extracting only user text.
+- **shell.c**: `shell_usb_keyboard_input` now checks `lv_async_call` return value and frees context on failure.
+
+### Verified
+- **Clean build**: Zero errors, zero warnings (3 pre-existing deprecated API warnings from ESP-IDF v5.5.3 VFS API)
+- **Boot**: Clean, Wi-Fi watchdog operational with exponential backoff retry
+- **Flash**: Successful to COM3
+- **Runtime**: No crashes observed; watchdog correctly retries disconnected Wi-Fi
+
+---
+
+## [0.14.0] - 2026-04-30
+
+### Added
+- **ANSI/VT escape sequence module**: New `components/ansi/` module providing SGR (Select Graphic Rendition) escape sequence parsing and formatting
+- **16-color ANSI palette**: PowerShell-inspired color palette with configurable standard and bright colors (black, red, green, yellow, blue, magenta, cyan, white)
+- **SGR attribute support**: Bold, dim, italic, underline, blink, reverse, hidden, strikethrough
+- **ANSI format string builder**: `ansi_format()` / `ansi_vformat()` with `@`-prefixed color/attribute specifiers (`@g` for green, `@r` for red, `@B` for bold, `@R` for reset, etc.)
+- **ANSI-aware transcript functions**: `shell_transcript_append_ansi()` and `shell_transcript_appendf_ansi()` for colored transcript output
+- **ANSI text processing**: `ansi_process_text()` state machine for segment-by-segment ANSI rendering
+- **ANSI-to-plain stripping**: `ansi_strip_to_plain()` for LVGL transcript textarea (which doesn't support per-character styling)
+- **UART console ANSI pass-through**: Raw ANSI codes passed to serial terminal for native rendering
+- **Config macros**: `P4_CONFIG_ANSI_*` for all 16 colors + default FG/BG + buffer size
+
+### Changed
+- **All system info commands**: `help`, `sysinfo`, `version`, `about`, `mem`, `debug` now use ANSI-colored output with green headers, cyan labels, red errors, yellow warnings
+- **All hardware commands**: `brightness`, `rotate`, `battery`, `volume`, `reboot` now use ANSI-colored output (green success, red errors, yellow usage)
+- **Display/keyboard/windows commands**: All now use ANSI-colored output with consistent color scheme
+- **Unknown command error**: Now shown in red
+- **Boot banner**: Now displayed in bright green
+- **Debug log**: Errors shown in red, warnings in yellow, info in default color
+- **Shell prompt**: UART console prompt now passes through ANSI codes for colored terminal rendering
+- **shell.h**: Added `shell_transcript_append_ansi()` and `shell_transcript_appendf_ansi()` public API
+- **p4minishell_config.h**: Version bumped to 0.14.0; added ANSI color palette section (16 colors + defaults + buffer size)
+- **p4minishell_config.yaml**: Documented all ANSI color values with descriptions and valid ranges
+- **CMakeLists.txt**: Added `components/ansi` to EXTRA_COMPONENT_DIRS
+- **shell.c**: Now calls `ansi_init()` during `shell_init()`; imports `ansi.h`
+
+### Architecture
+- New `components/ansi/` module with `ansi.h` (public API) and `ansi.c` (implementation)
+- ANSI module is independent of LVGL; only depends on `p4minishell_config.h` and ESP-IDF
+- Color palette initialized from config macros; runtime-modifiable via `ansi_set_palette_color()`
+- `shell_transcript_append_ansi()` strips ANSI for LVGL textarea, passes raw ANSI to UART console
+- All existing `shell_transcript_append_text()` / `shell_transcript_appendf()` calls continue to work unchanged
+- Backward compatible: no existing API removed or broken
+
+---
+
+## [0.13.0] - 2026-04-30
+
+### Added
+- **USB keyboard auto-detect**: USB HID keyboard automatically detected when plugged in
+- **USB keyboard CLI injection**: Keystrokes from USB keyboard routed to shell input line
+- **Full USB HID key map**: Complete US keyboard layout including all symbols, keypad, navigation, function keys, and modifier-aware shifted characters
+- **On-screen keyboard auto-hide**: LVGL keyboard automatically hidden when USB keyboard attached; restored when unplugged
+- **External input mode**: `keyboard_set_external_input()` / `keyboard_is_external_input_enabled()` API for keyboard component
+- **Force-visible override**: `keyboard_force_visible()` / `keyboard_clear_force_visible()` to keep on-screen keyboard visible even with USB keyboard
+- **USB keyboard state queries**: `usb_is_keyboard_attached()`, `usb_is_mouse_attached()` public API
+- **USB keyboard input callback**: `usb_register_keyboard_input_callback()` for shell CLI integration
+- **Public key mapping API**: `usb_key_to_ascii_full()`, `usb_key_name_full()` for external consumers
+- **Config macros**: `P4_CONFIG_USB_KEYBOARD_AUTO_DETECT`, `P4_CONFIG_USB_KEYBOARD_CLI_INJECT`, `P4_CONFIG_USB_KEYBOARD_NOTIFY_MS`
+- **Header notification**: "USB keyboard detected" / "USB keyboard removed" on plug/unplug events
+
+### Changed
+- **usb.c**: Extended key map from 11 to 60+ USB HID key codes; keyboard input handler routes to both echo and CLI callback
+- **keyboard.c**: Added external input mode with auto-hide/restore logic
+- **shell.c**: Added `shell_usb_keyboard_input()` bridge function with LVGL async dispatch for safe input line injection
+- **main.c**: Registers USB keyboard callback after `usb_init()`; header refresh timer monitors USB keyboard attach state
+- **usb.h**: Expanded public API surface with new types, callbacks, and query functions
+- **p4minishell_config.h**: Version bumped to 0.13.0; added USB keyboard config macros
+- **p4minishell_config.yaml**: Documented new USB keyboard config values
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Boot**: Clean, Wi-Fi connects, display renders, no regressions
+
+---
+
+## [0.13.1] - 2026-04-30
+
+### Fixed
+- **SD card header status**: Fixed "SD NO" showing in header even when SD card is mounted. Replaced `stat()`-based mount detection with persistent mount tracking via `s_sd_persistent_mounted` flag set/cleared by `shell_sd_begin()`/`shell_sd_end()`
+- **Wi-Fi random boot failure**: Added mutex (`s_wifi_mutex`) protecting all shared Wi-Fi state (s_wifi_state, s_wifi_connected, s_wifi_target_ssid, etc.) from race conditions
+- **TOCTOU race in Wi-Fi init**: Replaced unprotected `s_wifi_init_task_in_progress` check with atomic `wifi_try_claim_init_task()` / `wifi_release_init_task()` to prevent double-init
+- **Wi-Fi disconnect during boot**: Added `networking_wifi_auto_reconnect_task()` that retries `esp_wifi_connect()` after 1 second delay on `WIFI_EVENT_STA_DISCONNECTED`
+- **NVS init reliability**: Added retry loop (2 attempts) with erase-and-retry for `nvs_flash_init()` to handle transient NFS errors
+- **Wi-Fi connect flow**: Removed unnecessary `esp_wifi_disconnect()` before `esp_wifi_connect()` to avoid race with event handler
+
+### Added
+- **Wi-Fi mutex**: `wifi_lock()` / `wifi_unlock()` helpers protecting all state transitions in event handler, init, connect, and diagnostics
+- **Wi-Fi auto-reconnect**: Dedicated task spawned on disconnect to retry connection after 1s delay
+- **SD persistent mount flag**: `s_sd_persistent_mounted` tracks actual card state across mount/unmount cycles for accurate header display
+- **NVS retry logic**: `networking_wifi_runtime_init()` now retries NVS init twice with erase recovery
+
+### Changed
+- **networking.c**: Added `s_wifi_mutex`, `wifi_lock()`, `wifi_unlock()`, `wifi_try_claim_init_task()`, `wifi_release_init_task()`, `networking_wifi_auto_reconnect_task()` — all state transitions now mutex-protected
+- **main.c**: Added `s_sd_persistent_mounted` flag; `shell_sd_header_is_mounted()` now uses persistent flag instead of `stat()`; `shell_sd_begin()`/`shell_sd_end()` update the flag
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Boot**: Clean, Wi-Fi connects reliably, SD card accessible, header shows correct SD state
+- **Flash**: Successful to COM3
+
+---
+
+## [0.12.0] - 2026-04-30
+
+### Fixed
+- **Screen flash**: Removed `header_force_render()` from periodic header refresh timer
+
+### Added
+- **Clock component**: New `components/clock/` with SNTP time sync from pool.ntp.org
+- **Timezone support**: POSIX TZ string support
+- **Time in ver/sysinfo/about**: Formatted local time with NTP sync status
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Flash**: Successful to COM3
+
+---
+
+## [0.11.0] - 2026-04-30
+
+### Added
+- **Shell component**: New `components/shell/` owning transcript, history, debug log, UART console, system info commands
+- **Command component**: New `components/command/` owning command dispatch, execution task, all built-in commands
+- **Windows info command**: `windows info` shows display dimensions and region rectangles
+
+### Changed
+- **main.c**: Retains only app_main(), shell_build_ui(), LVGL callbacks, Wi-Fi/Bluetooth/SD/FS/batch state
+- All transcript/history/debug/UART/command code moved to shell.c and command.c
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Boot**: Clean, Wi-Fi connects, all commands preserved
+
+---
+
+## [0.10.0] - 2026-04-30
+
+### Added
+- **Keyboard component**: New `components/keyboard/` module owning the LVGL keyboard widget
+- **keyboard.h / keyboard.c**: Keyboard manager with visibility control, mode switching, textarea binding
+- **Keyboard hide/show**: `keyboard_hide()` / `keyboard_show()` with automatic UI reflow
+- **Shell command**: `keyboard show|hide|toggle|status`
+- **Config macros**: `P4_CONFIG_KEYBOARD_*` for height, visibility defaults
+
+### Changed
+- **windows.c**: Keyboard delegated to keyboard component; `windows_get_rect()` accounts for keyboard visibility
+- **main.c**: Added `keyboard` command family dispatch
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Boot**: Clean, Wi-Fi connects, no regressions
+
+---
+
 ## [0.9.0] - 2026-04-30
 
 ### Added

@@ -12,6 +12,7 @@
 #include "esp_hosted_api_types.h"
 #include "esp_hosted_host_fw_ver.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
@@ -57,6 +58,21 @@ static char s_wifi_target_password[NETWORKING_WIFI_PASSWORD_BYTES];
 static char s_wifi_last_detail[NETWORKING_WIFI_DETAIL_BYTES];
 static bool s_wifi_init_task_in_progress;
 static bool s_networking_initialized;
+static SemaphoreHandle_t s_wifi_mutex;  /* protects all shared Wi-Fi state */
+
+/* ---- Persistent Wi-Fi watchdog ---- */
+/* A single persistent task that monitors Wi-Fi connection state and retries
+ * with exponential backoff. This is more reliable than spawning per-disconnect
+ * tasks because it handles the C6's typical boot behavior: associate then
+ * immediately disconnect during 4-way handshake or DHCP. */
+#define WIFI_WATCHDOG_STACK_BYTES    4096
+#define WIFI_WATCHDOG_DELAY_MS       1000      /* initial delay before first retry */
+#define WIFI_WATCHDOG_MAX_DELAY_MS   30000     /* maximum backoff delay */
+#define WIFI_WATCHDOG_TOTAL_TIMEOUT_MS 120000  /* stop retrying after this long */
+
+static TaskHandle_t s_wifi_watchdog_task;       /* NULL when not running */
+static int64_t s_wifi_watchdog_started_us;      /* when watchdog began */
+static int s_wifi_watchdog_retry_count;         /* for exponential backoff */
 
 #if NETWORKING_WIFI_RUNTIME_ENABLED
 static esp_netif_t *s_wifi_sta_netif;
@@ -67,10 +83,15 @@ static esp_event_handler_instance_t s_wifi_got_ip_event;
 static void networking_wifi_runtime_init(void);
 static void networking_wifi_connect_task(void *arg);
 static void networking_wifi_background_task(void *arg);
+static void networking_wifi_watchdog_task(void *arg);
+static void networking_wifi_start_watchdog(void);
 static esp_err_t networking_wifi_connect_with_credentials(const char *ssid, const char *password);
-static esp_err_t networking_wifi_run_diagnostic(const char *origin);
-static bool networking_wifi_begin_connect_request(const char *ssid, const char *password, bool use_defaults);
-static bool networking_wifi_begin_background_request(const networking_wifi_background_request_t *template_request);
+
+/* Wi-Fi mutex helpers — forward declarations for use in event handler */
+static void wifi_lock(void);
+static void wifi_unlock(void);
+static bool wifi_try_claim_init_task(void);
+static void wifi_release_init_task(void);
 
 static bool networking_text_equals_ignore_case(const char *left, const char *right)
 {
@@ -291,6 +312,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
             break;
 
         case WIFI_EVENT_STA_CONNECTED:
+            wifi_lock();
             if (event_data != NULL) {
                 const wifi_event_sta_connected_t *event = (const wifi_event_sta_connected_t *)event_data;
                 size_t copy_len = event->ssid_len;
@@ -305,13 +327,18 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
                                      s_wifi_target_ssid,
                                      (unsigned int)event->channel);
             }
+            wifi_unlock();
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED:
+            wifi_lock();
             s_wifi_connected = false;
             s_wifi_connect_requested = false;
+            wifi_unlock();
             networking_schedulef("[wifi] event: disconnected\n");
             networking_notify_headerf(4000, "WiFi disconnected");
+            /* Start the persistent watchdog to attempt reconnection */
+            networking_wifi_start_watchdog();
             break;
 
         default:
@@ -322,8 +349,10 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP && event_data != NULL) {
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)event_data;
 
+        wifi_lock();
         s_wifi_connected = true;
         s_wifi_connect_requested = false;
+        wifi_unlock();
         networking_schedulef("[wifi] event: got IP " IPSTR "\n", IP2STR(&event->ip_info.ip));
         networking_notify_headerf(4000, "WiFi connected: " IPSTR, IP2STR(&event->ip_info.ip));
     }
@@ -421,10 +450,13 @@ static esp_err_t networking_wifi_connect_with_credentials(const char *ssid, cons
     esp_err_t error;
     wifi_config_t config = { 0 };
 
+    wifi_lock();
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
+        wifi_unlock();
         networking_appendf("wifi: stack is not ready (%s)\n", networking_wifi_state_string_internal());
         return ESP_ERR_INVALID_STATE;
     }
+    wifi_unlock();
 
     snprintf((char *)config.sta.ssid, sizeof(config.sta.ssid), "%s", ssid);
     snprintf((char *)config.sta.password, sizeof(config.sta.password), "%s", password);
@@ -442,11 +474,13 @@ static esp_err_t networking_wifi_connect_with_credentials(const char *ssid, cons
         return error;
     }
 
+    wifi_lock();
     snprintf(s_wifi_target_ssid, sizeof(s_wifi_target_ssid), "%s", ssid);
     snprintf(s_wifi_target_password, sizeof(s_wifi_target_password), "%s", password);
     s_wifi_connect_requested = true;
     s_wifi_connected = false;
     networking_schedulef("[wifi] connect requested for %s\n", s_wifi_target_ssid);
+    wifi_unlock();
 
     networking_wifi_append_step("esp_wifi_connect()");
     error = esp_wifi_connect();
@@ -492,7 +526,7 @@ static bool networking_wifi_begin_connect_request(const char *ssid, const char *
 #if NETWORKING_WIFI_RUNTIME_ENABLED
     networking_wifi_connect_request_t *request;
 
-    if (s_wifi_init_task_in_progress || s_wifi_state == NETWORKING_WIFI_STATE_STARTING) {
+    if (!wifi_try_claim_init_task()) {
         networking_appendf("wifi: initialization is already in progress\n");
         return false;
     }
@@ -500,6 +534,7 @@ static bool networking_wifi_begin_connect_request(const char *ssid, const char *
     request = (networking_wifi_connect_request_t *)calloc(1, sizeof(*request));
     if (request == NULL) {
         networking_record_errorf(ESP_ERR_NO_MEM, "Failed to allocate Wi-Fi connect request");
+        wifi_release_init_task();
         return false;
     }
 
@@ -511,11 +546,12 @@ static bool networking_wifi_begin_connect_request(const char *ssid, const char *
         snprintf(request->password, sizeof(request->password), "%s", password);
     }
 
-    s_wifi_init_task_in_progress = true;
+    wifi_lock();
     s_wifi_state = NETWORKING_WIFI_STATE_STARTING;
     s_wifi_last_error = ESP_OK;
     s_wifi_connected = false;
     s_wifi_connect_requested = false;
+    wifi_unlock();
 
     if (xTaskCreate(networking_wifi_connect_task,
                     "wifi_connect",
@@ -524,8 +560,10 @@ static bool networking_wifi_begin_connect_request(const char *ssid, const char *
                     tskIDLE_PRIORITY + 1,
                     NULL) != pdPASS) {
         free(request);
-        s_wifi_init_task_in_progress = false;
+        wifi_lock();
         s_wifi_state = NETWORKING_WIFI_STATE_NOT_ATTEMPTED;
+        wifi_unlock();
+        wifi_release_init_task();
         networking_record_errorf(ESP_FAIL, "Failed to start Wi-Fi connect task");
         return false;
     }
@@ -548,7 +586,7 @@ static bool networking_wifi_begin_background_request(const networking_wifi_backg
         return false;
     }
 
-    if (s_wifi_init_task_in_progress || s_wifi_state == NETWORKING_WIFI_STATE_STARTING) {
+    if (!wifi_try_claim_init_task()) {
         networking_appendf("wifi: initialization is already in progress\n");
         return false;
     }
@@ -556,16 +594,18 @@ static bool networking_wifi_begin_background_request(const networking_wifi_backg
     request = (networking_wifi_background_request_t *)calloc(1, sizeof(*request));
     if (request == NULL) {
         networking_record_errorf(ESP_ERR_NO_MEM, "Failed to allocate Wi-Fi background request");
+        wifi_release_init_task();
         return false;
     }
 
     *request = *template_request;
-    s_wifi_init_task_in_progress = true;
     if (request->start_runtime) {
+        wifi_lock();
         s_wifi_state = NETWORKING_WIFI_STATE_STARTING;
         s_wifi_last_error = ESP_OK;
         s_wifi_connected = false;
         s_wifi_connect_requested = false;
+        wifi_unlock();
     }
 
     if (xTaskCreate(networking_wifi_background_task,
@@ -575,10 +615,12 @@ static bool networking_wifi_begin_background_request(const networking_wifi_backg
                     tskIDLE_PRIORITY + 1,
                     NULL) != pdPASS) {
         free(request);
-        s_wifi_init_task_in_progress = false;
         if (template_request->start_runtime) {
+            wifi_lock();
             s_wifi_state = NETWORKING_WIFI_STATE_NOT_ATTEMPTED;
+            wifi_unlock();
         }
+        wifi_release_init_task();
         networking_record_errorf(ESP_FAIL, "Failed to start Wi-Fi background task");
         return false;
     }
@@ -611,7 +653,7 @@ static void networking_wifi_connect_task(void *arg)
         }
     }
 
-    s_wifi_init_task_in_progress = false;
+    wifi_release_init_task();
     free(request);
 #else
     (void)arg;
@@ -759,7 +801,7 @@ static void networking_wifi_background_task(void *arg)
                                    request->origin[0] != '\0' ? request->origin : "runtime");
     }
 
-    s_wifi_init_task_in_progress = false;
+    wifi_release_init_task();
     free(request);
 #else
     (void)arg;
@@ -1175,12 +1217,20 @@ esp_err_t networking_wifi_last_error(void)
 
 bool networking_wifi_is_connected(void)
 {
-    return s_wifi_connected;
+    bool connected;
+    wifi_lock();
+    connected = s_wifi_connected;
+    wifi_unlock();
+    return connected;
 }
 
 bool networking_wifi_is_starting(void)
 {
-    return s_wifi_state == NETWORKING_WIFI_STATE_STARTING;
+    bool starting;
+    wifi_lock();
+    starting = (s_wifi_state == NETWORKING_WIFI_STATE_STARTING);
+    wifi_unlock();
+    return starting;
 }
 
 static void networking_wifi_runtime_init(void)
@@ -1331,9 +1381,160 @@ void networking_init(const networking_host_ops_t *ops)
         s_host_ops = *ops;
     }
 
+    /* Create the Wi-Fi state mutex for thread-safe access to shared state.
+     * This protects s_wifi_state, s_wifi_connected, s_wifi_target_ssid, etc.
+     * from concurrent access by the event handler, init task, and shell commands. */
+    if (s_wifi_mutex == NULL) {
+        s_wifi_mutex = xSemaphoreCreateMutex();
+    }
+
     bluetooth_init(&s_host_ops);
     if (!s_networking_initialized) {
         s_networking_initialized = true;
         networking_wifi_request_boot_restore();
     }
+}
+
+/* ========================================================================
+ * WI-FI MUTEX HELPERS
+ * ======================================================================== */
+
+static void wifi_lock(void)
+{
+    if (s_wifi_mutex != NULL) {
+        xSemaphoreTake(s_wifi_mutex, portMAX_DELAY);
+    }
+}
+
+static void wifi_unlock(void)
+{
+    if (s_wifi_mutex != NULL) {
+        xSemaphoreGive(s_wifi_mutex);
+    }
+}
+
+static bool wifi_try_claim_init_task(void)
+{
+    bool claimed = false;
+
+    wifi_lock();
+    if (!s_wifi_init_task_in_progress) {
+        s_wifi_init_task_in_progress = true;
+        claimed = true;
+    }
+    wifi_unlock();
+
+    return claimed;
+}
+
+static void wifi_release_init_task(void)
+{
+    wifi_lock();
+    s_wifi_init_task_in_progress = false;
+    wifi_unlock();
+}
+
+/* ========================================================================
+ * WI-FI PERSISTENT WATCHDOG
+ * ========================================================================
+ * A single persistent task that monitors Wi-Fi connection state and retries
+ * with exponential backoff. This handles the C6's typical boot behavior:
+ * associate then immediately disconnect during 4-way handshake or DHCP.
+ * The watchdog runs for WIFI_WATCHDOG_TOTAL_TIMEOUT_MS then exits. */
+
+static void networking_wifi_start_watchdog(void)
+{
+    /* Only start if not already running */
+    wifi_lock();
+    if (s_wifi_watchdog_task != NULL) {
+        wifi_unlock();
+        return;
+    }
+    wifi_unlock();
+
+    s_wifi_watchdog_started_us = esp_timer_get_time();
+    s_wifi_watchdog_retry_count = 0;
+
+    if (xTaskCreate(networking_wifi_watchdog_task,
+                    "wifi_wdog",
+                    WIFI_WATCHDOG_STACK_BYTES,
+                    NULL,
+                    tskIDLE_PRIORITY + 1,
+                    &s_wifi_watchdog_task) != pdPASS) {
+        s_wifi_watchdog_task = NULL;
+        networking_record_warningf("Failed to start Wi-Fi watchdog task");
+    }
+}
+
+static void networking_wifi_watchdog_task(void *arg)
+{
+    (void)arg;
+    int64_t total_elapsed_ms;
+    int delay_ms = WIFI_WATCHDOG_DELAY_MS;
+
+    /* Initial delay before first check */
+    vTaskDelay(pdMS_TO_TICKS(WIFI_WATCHDOG_DELAY_MS));
+
+    while (1) {
+        total_elapsed_ms = (esp_timer_get_time() - s_wifi_watchdog_started_us) / 1000;
+
+        /* Stop if total timeout exceeded */
+        if (total_elapsed_ms >= WIFI_WATCHDOG_TOTAL_TIMEOUT_MS) {
+            networking_schedulef("[wifi] watchdog: giving up after %d seconds\n",
+                                (int)(total_elapsed_ms / 1000));
+            break;
+        }
+
+        wifi_lock();
+        bool should_retry = (s_wifi_state == NETWORKING_WIFI_STATE_STARTED) &&
+                            !s_wifi_connected &&
+                            s_wifi_target_ssid[0] != '\0';
+        char ssid_copy[NETWORKING_WIFI_SSID_BYTES];
+        char pass_copy[NETWORKING_WIFI_PASSWORD_BYTES];
+        if (should_retry) {
+            snprintf(ssid_copy, sizeof(ssid_copy), "%s", s_wifi_target_ssid);
+            snprintf(pass_copy, sizeof(pass_copy), "%s", s_wifi_target_password);
+        }
+        wifi_unlock();
+
+        if (!should_retry) {
+            /* Connected or no target — stop watchdog */
+            break;
+        }
+
+        networking_schedulef("[wifi] watchdog: retry %d for %s (delay %d ms)\n",
+                            s_wifi_watchdog_retry_count + 1, ssid_copy, delay_ms);
+
+        esp_err_t error = networking_wifi_connect_with_credentials(ssid_copy, pass_copy);
+        if (error == ESP_OK) {
+            /* Connection attempt started — wait and check if it succeeded */
+            vTaskDelay(pdMS_TO_TICKS(3000));
+
+            wifi_lock();
+            bool connected = s_wifi_connected;
+            wifi_unlock();
+
+            if (connected) {
+                networking_schedulef("[wifi] watchdog: connected successfully\n");
+                break;
+            }
+        }
+
+        s_wifi_watchdog_retry_count++;
+
+        /* Exponential backoff with cap */
+        delay_ms *= 2;
+        if (delay_ms > WIFI_WATCHDOG_MAX_DELAY_MS) {
+            delay_ms = WIFI_WATCHDOG_MAX_DELAY_MS;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS((TickType_t)delay_ms));
+    }
+
+    /* Clean up */
+    wifi_lock();
+    s_wifi_watchdog_task = NULL;
+    wifi_unlock();
+
+    vTaskDelete(NULL);
 }

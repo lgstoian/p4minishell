@@ -8,7 +8,12 @@ set(EXTRA_COMPONENT_DIRS
 	managed_components/espressif__esp_lcd_jd9165
 	managed_components/espressif__esp_lcd_touch_gt911
 	managed_components/lvgl__lvgl
+	components/ansi
+	components/command
 	components/display
+	components/keyboard
+	components/shell
+	components/clock
 	components/windows
 )
 

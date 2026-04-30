@@ -17,6 +17,7 @@
 #include "windows.h"
 #include "display.h"
 #include "header.h"
+#include "keyboard.h"
 #include "board_config.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
@@ -40,7 +41,6 @@ static struct {
     lv_obj_t *transcript;
     lv_obj_t *input_row;
     lv_obj_t *input_line;
-    lv_obj_t *keyboard;
     lv_obj_t *prev_button;
     lv_obj_t *next_button;
 } s_windows = {
@@ -49,7 +49,6 @@ static struct {
     .transcript = NULL,
     .input_row = NULL,
     .input_line = NULL,
-    .keyboard = NULL,
     .prev_button = NULL,
     .next_button = NULL,
 };
@@ -61,7 +60,6 @@ static struct {
 static void windows_create_header(void);
 static void windows_create_transcript(void);
 static void windows_create_input_row(void);
-static void windows_create_keyboard(void);
 static void windows_apply_screen_style(void);
 
 /* ========================================================================
@@ -105,9 +103,8 @@ window_rect_t windows_get_rect(window_region_t region)
     lv_coord_t input_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
                                                        P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN,
                                                        P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MAX);
-    lv_coord_t kb_h = windows_scale_height_percent(P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_PCT,
-                                                    P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MIN,
-                                                    P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MAX);
+    /* Keyboard height depends on visibility - 0 when hidden */
+    lv_coord_t kb_h = keyboard_is_visible() ? keyboard_get_height() : 0;
 
     switch (region) {
     case WINDOW_REGION_HEADER:
@@ -117,7 +114,8 @@ window_rect_t windows_get_rect(window_region_t region)
     case WINDOW_REGION_TRANSCRIPT:
         rect.y = header_h;
         rect.width = disp_w;
-        /* Transcript fills remaining space between header and input row */
+        /* Transcript fills remaining space between header and input row.
+         * When keyboard is hidden, transcript expands to use that space. */
         rect.height = disp_h - header_h - input_h - kb_h;
         if (rect.height < P4_CONFIG_WINDOW_TRANSCRIPT_HEIGHT_MIN) {
             rect.height = P4_CONFIG_WINDOW_TRANSCRIPT_HEIGHT_MIN;
@@ -280,22 +278,14 @@ static void windows_create_input_row(void)
 
 static void windows_create_keyboard(void)
 {
-    const lv_font_t *font = windows_get_terminal_font();
-    lv_obj_t *screen = s_windows.screen;
-    lv_coord_t kb_h = windows_scale_height_percent(P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_PCT,
-                                                    P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MIN,
-                                                    P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MAX);
-
-    s_windows.keyboard = lv_keyboard_create(screen);
-    lv_obj_set_width(s_windows.keyboard, LV_PCT(100));
-    lv_obj_set_height(s_windows.keyboard, kb_h);
-    lv_keyboard_set_mode(s_windows.keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_keyboard_set_textarea(s_windows.keyboard, s_windows.input_line);
-    lv_obj_set_style_text_font(s_windows.keyboard, font, 0);
-    lv_obj_set_style_bg_color(s_windows.keyboard,
-                               windows_get_color(WINDOWS_COLOR_BG_KEYBOARD), 0);
-    lv_obj_set_style_bg_opa(s_windows.keyboard, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_windows.keyboard, 0, 0);
+    /* Delegate keyboard creation to the keyboard component.
+     * The keyboard component owns the LVGL keyboard widget and its visibility.
+     * We register a callback so the window manager can reflow when
+     * keyboard visibility changes. */
+    lv_obj_t *kb = keyboard_init(s_windows.screen);
+    if (kb != NULL && s_windows.input_line != NULL) {
+        keyboard_bind_textarea(s_windows.input_line);
+    }
 }
 
 /* ========================================================================
@@ -314,7 +304,7 @@ lv_obj_t *windows_get_input_line(void)
 
 lv_obj_t *windows_get_keyboard(void)
 {
-    return s_windows.keyboard;
+    return keyboard_get_widget();
 }
 
 lv_obj_t *windows_get_prev_button(void)
@@ -382,9 +372,11 @@ void windows_deinit(void)
         return;
     }
 
-    /* Deinitialize the header before cleaning the screen so it can be
-     * re-initialized fresh — needed for display rotation support. */
+    /* Deinitialize the header and keyboard before cleaning the screen
+     * so they can be re-initialized fresh — needed for display rotation
+     * support. */
     header_deinit();
+    keyboard_deinit();
 
     if (s_windows.screen != NULL) {
         lv_obj_clean(s_windows.screen);
@@ -394,7 +386,6 @@ void windows_deinit(void)
     s_windows.transcript = NULL;
     s_windows.input_row = NULL;
     s_windows.input_line = NULL;
-    s_windows.keyboard = NULL;
     s_windows.prev_button = NULL;
     s_windows.next_button = NULL;
     s_windows.initialized = false;
@@ -434,4 +425,24 @@ void windows_reset_input_line(const char *prompt)
     if (prompt != NULL && strlen(prompt) > 0) {
         lv_textarea_set_cursor_pos(s_windows.input_line, (int32_t)strlen(prompt));
     }
+}
+
+void windows_notify_keyboard_visibility(bool visible)
+{
+    lv_coord_t disp_h = windows_get_display_height();
+    lv_coord_t input_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
+                                                       P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN,
+                                                       P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MAX);
+    lv_coord_t kb_h = visible ? keyboard_get_height() : 0;
+
+    if (s_windows.input_row != NULL) {
+        lv_obj_set_y(s_windows.input_row, disp_h - input_h - kb_h);
+    }
+
+    if (s_windows.transcript != NULL) {
+        lv_obj_update_layout(s_windows.transcript);
+    }
+
+    ESP_LOGI(WINDOWS_TAG, "Keyboard visibility changed: %s (kb_h=%" PRIu32 ")",
+             visible ? "visible" : "hidden", (uint32_t)kb_h);
 }

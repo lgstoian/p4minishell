@@ -4,13 +4,70 @@ This document describes the public integration surface exposed by the hosted run
 
 ## Shared integration pattern
 - `main/main.c` remains the shell UI, transcript, parser, and orchestration layer.
+- `components/ansi` owns the ANSI/VT escape sequence processing: SGR color palette, format string builder, text processing.
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar UI for notifications and passive status display.
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
 - `components/usb` owns USB Host Library state, USB MSC storage, and USB HID keyboard or mouse debug behavior.
 - `components/c6ota` owns the shell-visible ESP32-C6 OTA workflow and depends on `components/networking` for Wi-Fi wait and restore hooks.
-- All six areas keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
+- All modules keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
+
+## ANSI/VT Module API
+
+The ANSI module (`components/ansi/`) provides SGR (Select Graphic Rendition) escape sequence processing for colored terminal output. It owns the 16-color palette, format string builder, and ANSI text processing state machine.
+
+### Lifecycle
+- `void ansi_init(void)` — Initialize the color palette from `p4minishell_config.h`. Called once during `shell_init()`.
+- `bool ansi_is_initialized(void)` — Check if the ANSI module is initialized.
+
+### Color Palette
+- `uint32_t ansi_get_palette_color(ansi_color_index_t index)` — Get a palette color by index.
+- `uint32_t ansi_get_default_fg(void)` / `uint32_t ansi_get_default_bg(void)` — Get default foreground/background colors.
+- `void ansi_set_palette_color(ansi_color_index_t index, uint32_t color)` — Modify a palette entry at runtime.
+
+### Format String Builder
+- `int ansi_format(char *dst, size_t dst_size, const char *format, ...)` — Build an ANSI-formatted string with `@`-prefixed color/attribute specifiers.
+- `int ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args)` — Variadic version.
+
+### Text Processing
+- `void ansi_process_text(const char *text, ansi_segment_fn_t segment_fn, void *user_data)` — Parse ANSI escape sequences and emit plain-text segments with style state.
+- `int ansi_strip_to_plain(char *dst, size_t dst_size, const char *src)` — Strip all ANSI escape sequences, returning plain text only.
+- `bool ansi_contains_escapes(const char *text)` — Check if text contains ANSI escape sequences.
+
+### Quick Formatters
+- `int ansi_fg_text(char *dst, size_t dst_size, int fg_code, const char *text)` — Wrap text in foreground color SGR codes.
+- `int ansi_fg_bg_text(char *dst, size_t dst_size, int fg_code, int bg_code, const char *text)` — Wrap text in foreground + background SGR codes.
+- `int ansi_attr_text(char *dst, size_t dst_size, int attr_code, const char *text)` — Wrap text in attribute SGR codes.
+
+### Shell Integration
+- `void shell_transcript_append_ansi(const char *text)` — Append ANSI-formatted text to transcript (strips ANSI for LVGL, passes through to UART).
+- `void shell_transcript_appendf_ansi(const char *format, ...)` — Append printf-style ANSI-formatted text to transcript.
+
+### ANSI Format Specifiers
+| Specifier | SGR Code | Meaning |
+|-----------|----------|---------|
+| `@R` | 0 | Reset all attributes |
+| `@B` | 1 | Bold on |
+| `@D` | 2 | Dim on |
+| `@I` | 3 | Italic on |
+| `@U` | 4 | Underline on |
+| `@k` | 30 | Foreground black |
+| `@r` | 31 | Foreground red |
+| `@g` | 32 | Foreground green |
+| `@y` | 33 | Foreground yellow |
+| `@b` | 34 | Foreground blue |
+| `@m` | 35 | Foreground magenta |
+| `@c` | 36 | Foreground cyan |
+| `@w` | 37 | Foreground white |
+| `@K` | 90 | Foreground bright black |
+| `@Rr` | 91 | Foreground bright red |
+| `@G` | 92 | Foreground bright green |
+| `@Y` | 93 | Foreground bright yellow |
+| `@L` | 94 | Foreground bright blue |
+| `@M` | 95 | Foreground bright magenta |
+| `@C` | 96 | Foreground bright cyan |
+| `@W` | 97 | Foreground bright white |
 
 ## Window Manager API
 
@@ -291,7 +348,42 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 
 - `bool usb_is_connected(void)`
 - `bool usb_is_mounted(void)`
+- `bool usb_is_keyboard_attached(void)`
+- `bool usb_is_mouse_attached(void)`
   - Read-only state helpers used by the header component integration in `main/main.c`.
+
+- `void usb_register_keyboard_input_callback(usb_keyboard_input_cb_t cb)`
+  - Register a callback to receive USB keyboard input events (press/release with key code and modifiers).
+  - The shell registers `shell_usb_keyboard_input()` here for CLI injection.
+
+- `bool usb_key_to_ascii_full(uint8_t key_code, uint8_t modifiers, char *out)`
+  - Convert a USB HID key code and modifiers to an ASCII character.
+  - Supports full US keyboard layout: letters, numbers, symbols, keypad, with modifier-aware shifted characters.
+
+- `const char *usb_key_name_full(uint8_t key_code)`
+  - Get a human-readable name for any USB HID key code (F1-F12, arrows, navigation, etc.).
+
+## Keyboard API (External Input Mode)
+
+- `void keyboard_set_external_input(bool enabled)`
+  - Enable/disable external input mode. When enabled, on-screen keyboard auto-hides.
+  - Used by the shell when a USB keyboard is detected/removed.
+
+- `bool keyboard_is_external_input_enabled(void)`
+  - Query whether external input mode is active.
+
+- `void keyboard_force_visible(void)`
+  - Force on-screen keyboard to stay visible even when external input is enabled.
+
+- `void keyboard_clear_force_visible(void)`
+  - Clear force-visible override; re-evaluate auto-hide based on external input state.
+
+## Shell USB Keyboard Bridge
+
+- `void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed)`
+  - Handle a USB keyboard input event for CLI injection.
+  - Dispatches to LVGL task via `lv_async_call` for safe input line manipulation.
+  - Supports: printable characters, Enter (submit), Backspace, ESC (clear), Tab, arrows (cursor/history), Delete, Home, End.
 
 ## C6 OTA API
 - `void c6ota_init(void)`

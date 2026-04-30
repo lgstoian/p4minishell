@@ -15,6 +15,8 @@
 #   - sdkconfig
 #
 # Last updated: 2026-04-29 (v0.7.0 header redesign)
+# Updated: 2026-04-30 (v0.13.0 USB keyboard auto-detect)
+# Updated: 2026-04-30 (v0.14.0 ANSI/VT color support)
 
 board:
   requested_name: JC1060P470C

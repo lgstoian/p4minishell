@@ -47,6 +47,9 @@
 - Semaphore/mutex acquisition must always have a corresponding release path
 - Buffer operations must bounds-check before memcpy/snprintf
 - NULL pointer checks required before dereference in all public API functions
+- All `lv_async_call` return values must be checked; free payload on failure
+- All `lv_textarea_get_text()` return values must be NULL-checked before use
+- Forward declarations without implementations are a critical bug; never commit them
 
 ### Header Bar Rules
 - All `header_update_*()` functions MUST update internal state immediately before scheduling async render
@@ -62,6 +65,28 @@
 - header_update_cpu(int percent, uint32_t task_count) — real-time from FreeRTOS runtime stats
 - header_update_uptime(uint32_t seconds) — system uptime from esp_timer_get_time()
 - Touch init failure must not prevent header rendering (BSP touch is optional)
+
+### Shell Core Rules
+- ALL transcript output MUST go through `shell_transcript_append_text()` / `shell_transcript_appendf()` from `components/shell/`
+- ANSI-colored transcript output MUST go through `shell_transcript_append_ansi()` / `shell_transcript_appendf_ansi()` using `@`-prefixed format specifiers
+- ANSI color palette is defined in `p4minishell_config.h` via `P4_CONFIG_ANSI_*` macros; never hardcode ANSI color values
+- ALL debug logging MUST use `shell_record_errorf()` / `shell_record_warningf()` / `shell_record_infof()`
+- Command history MUST use `shell_store_command_history()` / `shell_recall_history()`
+- UART console MUST use `shell_uart_console_start()` / `shell_uart_console_write_text()`
+- System info commands (help, sysinfo, version, about, mem, debug) live in `components/shell/`
+
+### Command Rules
+- ALL command dispatch MUST go through `shell_execute_command()` / `shell_execute_command_core()` from `components/command/`
+- Command execution runs on a dedicated worker task to protect the LVGL stack
+- Module-routed commands (wifi, bluetooth, usb, c6ota) are dispatched from command.c
+
+### Keyboard Manager Rules
+- ALL keyboard operations MUST go through `components/keyboard/` — never call LVGL keyboard APIs directly from main.c
+- `keyboard_init()` MUST be called after `display_init()` and from the LVGL task context
+- Keyboard visibility changes trigger automatic UI reflow via the window manager callback
+- When keyboard is hidden, the transcript area expands to fill the freed space
+- Keyboard height is configurable via `P4_CONFIG_KEYBOARD_*` macros
+- Keyboard modes (text_lower, text_upper, number, symbols) are managed by the keyboard component
 
 ### Window Manager Rules
 - ALL LVGL screen layout MUST go through `components/windows/` — never create screen-level widgets directly in main.c
@@ -97,6 +122,10 @@
 - NVS initialized before esp_wifi_init() with erase-and-retry recovery
 - Station-only profile; no SoftAP, WPA3, or enterprise
 - Password masking in transcript and command history
+- ALL shared Wi-Fi state (s_wifi_state, s_wifi_connected, s_wifi_target_ssid, etc.) MUST be accessed through wifi_lock()/wifi_unlock() mutex
+- Wi-Fi init task claiming MUST use wifi_try_claim_init_task()/wifi_release_init_task() (TOCTOU-safe atomic)
+- Persistent watchdog (networking_wifi_watchdog_task) retries disconnected Wi-Fi with exponential backoff (1s→30s cap, 120s total timeout)
+- Watchdog starts automatically on WIFI_EVENT_STA_DISCONNECTED; stops on successful connection or timeout
 
 ### Bluetooth Rules
 - Hosted NimBLE on C6 over ESP-Hosted VHCI (not Bluedroid)
@@ -116,6 +145,11 @@
 - MSC mounts at /usb0 via VFS/FATFS
 - HID echo is opt-in (keyboard/mouse on/off)
 - Follows same bounded transcript style as SD commands
+- USB keyboard auto-detect: automatically hides on-screen keyboard when USB keyboard attached
+- USB keystrokes injected into shell CLI input line via shell_usb_keyboard_input() bridge
+- Full US keyboard layout supported (60+ HID key codes with modifier-aware mapping)
+- Auto-detect runs in periodic header refresh timer; state transitions trigger notifications
+- keyboard_set_external_input() / keyboard_clear_force_visible() for manual control
 
 ### OTA Rules (c6ota)
 - Lives in components/c6ota with stable public API

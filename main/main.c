@@ -57,6 +57,8 @@
 #include "c6ota.h"
 #include "display.h"
 #include "header.h"
+#include "keyboard.h"
+#include "clock.h"
 #include "networking.h"
 #include "usb.h"
 #include "windows.h"
@@ -64,6 +66,18 @@
 #include "bsp/display.h"
 #include "p4minishell_config.h"
 #include "p4minishell.h"
+
+/* ANSI-aware transcript function (declared in shell.h, used for boot banner) */
+extern void shell_transcript_appendf_ansi(const char *format, ...);
+
+/* USB keyboard input bridge (declared in shell.h, used for CLI injection) */
+extern void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed);
+
+/* Wrapper to match usb_keyboard_input_cb_t signature */
+static void shell_usb_keyboard_cb(uint8_t key_code, uint8_t modifiers, usb_key_event_t event)
+{
+    shell_usb_keyboard_input(key_code, modifiers, (event == USB_KEY_EVENT_PRESS));
+}
 
 /* Backward-compatibility aliases */
 #define SHELL_TAG                       P4_CONFIG_SHELL_TAG
@@ -193,6 +207,8 @@ static int s_volume_percent = 60;
 static bool s_light_sleep_requested;
 static bool s_header_sd_state_known;
 static bool s_header_sd_last_mounted;
+static bool s_sd_persistent_mounted;  /* tracks actual SD mount state for header */
+static bool s_sd_ejected;             /* set by sdeject to prevent auto-remount */
 static esp_codec_dev_handle_t s_speaker_dev;
 static adc_oneshot_unit_handle_t s_battery_adc_unit;
 static adc_channel_t s_battery_adc_channel;
@@ -334,16 +350,28 @@ static esp_err_t shell_sd_begin(shell_sd_session_t *session)
     }
 
     session->mounted_here = false;
+
+    /* If already mounted, just return success (persistent mount) */
+    if (s_sd_persistent_mounted) {
+        return ESP_OK;
+    }
+
+    /* If ejected, refuse to mount unless user runs an explicit command */
+    if (s_sd_ejected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     error = bsp_sdcard_mount();
     if (error == ESP_OK) {
         session->mounted_here = true;
-        shell_header_notify("SD card mounted", 3000);
+        s_sd_persistent_mounted = true;
         header_update_sd(HEADER_SD_MOUNTED);
         return ESP_OK;
     }
 
     if (error == ESP_ERR_INVALID_STATE) {
-        /* Already mounted: ensure the header icon stays visible. */
+        /* Already mounted (BSP internal state) */
+        s_sd_persistent_mounted = true;
         header_update_sd(HEADER_SD_MOUNTED);
         return ESP_OK;
     }
@@ -353,21 +381,11 @@ static esp_err_t shell_sd_begin(shell_sd_session_t *session)
 
 static void shell_sd_end(shell_sd_session_t *session, const char *operation)
 {
-    esp_err_t error;
-
-    if (session == NULL || !session->mounted_here) {
-        return;
-    }
-
-    error = bsp_sdcard_unmount();
-    if (error != ESP_OK) {
-        shell_record_warningf("sd", "Unmount warning after %s: %s",
-                              operation != NULL ? operation : "sd command",
-                              esp_err_to_name(error));
-    } else {
-        shell_header_notify("SD card unmounted", 3000);
-        header_update_sd(HEADER_SD_NONE);
-    }
+    /* Persistent mount: do NOT unmount after each command.
+     * Only unmount on explicit sdeject command.
+     * This keeps the SD card accessible and the header icon accurate. */
+    (void)session;
+    (void)operation;
 }
 
 static esp_err_t shell_sd_resolve_path(const char *input, char *output, size_t output_size)
@@ -729,9 +747,10 @@ static esp_err_t shell_battery_read(int *battery_mv_out, int *percent_out, int *
 
 static bool shell_sd_header_is_mounted(void)
 {
-    struct stat root_stat;
-
-    return shell_sd_stat_path(BSP_SD_MOUNT_POINT, &root_stat) == ESP_OK && S_ISDIR(root_stat.st_mode);
+    /* Use persistent mount tracking instead of stat() which only works
+     * while the SD card is mounted. The flag is set by shell_sd_begin()
+     * and cleared by shell_sd_end(). */
+    return s_sd_persistent_mounted;
 }
 
 static void shell_header_status_refresh(void)
@@ -807,15 +826,40 @@ static void shell_header_status_refresh(void)
     if (shell_battery_read(NULL, &battery_percent, NULL, NULL) == ESP_OK) {
         battery_ok = true;
     }
-    header_update_battery(battery_percent, battery_ok);
 
-    header_update_wifi(wifi_connected, wifi_rssi);
-    header_update_bluetooth(bluetooth_is_enabled(), bluetooth_is_connected());
-    header_update_usb(usb_is_connected());
-    header_update_sd(sd_mounted ? HEADER_SD_MOUNTED : HEADER_SD_NONE);
-    header_update_mem(free_heap, total_heap);
-    header_update_cpu(cpu_percent, task_count);
-    header_update_uptime(uptime_sec);
+    /* Batch all header updates into a single async render to prevent
+     * screen flashes from multiple lv_async_call dispatches.
+     * Individual header_update_*() calls would each schedule a separate
+     * render, causing visible flicker every refresh period. */
+    header_update_batch(
+        wifi_connected, wifi_rssi,
+        battery_percent, battery_ok,
+        bluetooth_is_enabled(), bluetooth_is_connected(),
+        usb_is_connected(),
+        sd_mounted ? HEADER_SD_MOUNTED : HEADER_SD_NONE,
+        free_heap, total_heap,
+        cpu_percent, task_count,
+        uptime_sec
+    );
+
+    /* USB keyboard auto-detect: hide on-screen keyboard when USB keyboard
+     * is attached, restore it when detached. Uses a static tracking variable
+     * to detect state transitions and avoid repeated toggling. */
+    {
+        static bool s_last_usb_kb_attached = false;
+        bool usb_kb_attached = usb_is_keyboard_attached();
+
+        if (usb_kb_attached != s_last_usb_kb_attached) {
+            s_last_usb_kb_attached = usb_kb_attached;
+            if (usb_kb_attached) {
+                keyboard_set_external_input(true);
+                shell_header_notify("USB keyboard detected", 3000);
+            } else {
+                keyboard_set_external_input(false);
+                shell_header_notify("USB keyboard removed", 3000);
+            }
+        }
+    }
 
     if (!s_header_sd_state_known) {
         s_header_sd_state_known = true;
@@ -825,8 +869,9 @@ static void shell_header_status_refresh(void)
         s_header_sd_last_mounted = sd_mounted;
     }
 
-    /* Force synchronous render so all icons update immediately on state change */
-    header_force_render();
+    /* header_update_*() functions schedule async renders internally.
+     * Do NOT call header_force_render() here — it triggers a synchronous
+     * full redraw every 5 seconds, causing visible screen flashes. */
 }
 
 static void shell_header_status_timer_cb(lv_timer_t *timer)
@@ -4064,10 +4109,11 @@ static void shell_command_sd_eject(void)
      * This is the safe-removal path: unmounts even if mounted by another session. */
     error = bsp_sdcard_unmount();
     if (error == ESP_OK) {
+        s_sd_persistent_mounted = false;
+        s_sd_ejected = true;
         shell_transcript_append_text("SD card unmounted safely. You may now remove the card.\n");
         shell_header_notify("SD card ejected", 3000);
         header_update_sd(HEADER_SD_NONE);
-        header_force_render();
     } else if (error == ESP_ERR_INVALID_STATE) {
         shell_transcript_append_text("SD card is not currently mounted.\n");
     } else {
@@ -4579,6 +4625,27 @@ static bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "keyboard")) {
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "hide")) {
+            keyboard_hide();
+            shell_transcript_append_text("keyboard hidden\n");
+        } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "show")) {
+            keyboard_show();
+            shell_transcript_append_text("keyboard shown\n");
+        } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "toggle")) {
+            keyboard_toggle();
+            shell_transcript_appendf("keyboard %s\n", keyboard_is_visible() ? "shown" : "hidden");
+        } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "status")) {
+            shell_transcript_appendf("keyboard: %s, mode=%d, height=%" PRId32 "\n",
+                                     keyboard_is_visible() ? "visible" : "hidden",
+                                     (int)keyboard_get_mode(),
+                                     (int32_t)keyboard_get_height());
+        } else {
+            shell_transcript_append_text("Usage: keyboard <show|hide|toggle|status>\n");
+        }
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "display")) {
         if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "info")) {
             display_print_info(shell_transcript_appendf);
@@ -4848,14 +4915,55 @@ static void shell_input_line_event_cb(lv_event_t *event)
         return;
     }
 
+    /* Handle the LVGL keyboard's "keyboard" button (LV_SYMBOL_KEYBOARD).
+     * When pressed, the keyboard widget sends LV_EVENT_CANCEL to the
+     * bound textarea. We respond by hiding the on-screen keyboard. */
+    if (code == LV_EVENT_CANCEL) {
+        keyboard_hide();
+        return;
+    }
+
     if (code == LV_EVENT_VALUE_CHANGED) {
         lv_obj_t *il3 = windows_get_input_line();
         const char *text = il3 ? lv_textarea_get_text(il3) : NULL;
 
-        if (strncmp(text, SHELL_PROMPT, strlen(SHELL_PROMPT)) != 0) {
-            char repaired[SHELL_COMMAND_BYTES];
+        if (text == NULL) {
+            return;
+        }
 
-            snprintf(repaired, sizeof(repaired), "%s", text);
+        /* Guard against the LVGL keyboard backspace deleting into the prompt prefix.
+         * When the text doesn't start with SHELL_PROMPT, extract the user portion
+         * (everything after the prompt, or the whole text if the prompt was fully
+         * deleted) and restore the prompt + user text. */
+        if (strncmp(text, SHELL_PROMPT, strlen(SHELL_PROMPT)) != 0) {
+            const char *user_text = text;
+
+            /* If the prompt prefix is partially present (e.g., "P4Shell>" after
+             * one backspace from "P4Shell> "), skip as many prompt characters as
+             * remain, then restore with the full prompt. */
+            size_t prompt_len = strlen(SHELL_PROMPT);
+            size_t text_len = strlen(text);
+            size_t common = 0;
+            while (common < prompt_len && common < text_len &&
+                   SHELL_PROMPT[common] == text[common]) {
+                common++;
+            }
+
+            if (common > 0 && common < prompt_len) {
+                /* Prompt was partially deleted — skip the remaining prompt chars */
+                user_text = text + common;
+                /* Also skip any leading space that may remain */
+                while (*user_text == ' ') {
+                    user_text++;
+                }
+            } else if (common == 0) {
+                /* Prompt was fully deleted — the whole text is user text */
+                user_text = text;
+            }
+
+            /* Trim and restore with full prompt */
+            char repaired[SHELL_COMMAND_BYTES];
+            snprintf(repaired, sizeof(repaired), "%s", user_text);
             shell_trim(repaired);
             shell_input_line_set_text(repaired);
         }
@@ -4961,8 +5069,7 @@ static void shell_build_ui(void)
 
     /* Show boot banner and reset input line */
     shell_transcript_reset();
-    shell_transcript_append_text(SHELL_BOOT_MESSAGE);
-    shell_transcript_append_text("\n");
+    shell_transcript_appendf_ansi("@G%s@R\n", SHELL_BOOT_MESSAGE);
     shell_history_transcript_scroll_to_end();
     shell_input_line_reset();
 }
@@ -5014,6 +5121,7 @@ void app_main(void)
     shell_transcript_append_text("Wi-Fi starts in the background on boot; wifi diag is also available for an extra status + scan report.\n");
     shell_transcript_append_text("Bluetooth commands are routed through the ESP32-C6 hosted NimBLE module.\n");
     shell_transcript_append_text("USB host commands are available as usb status, usb ls, usb keyboard, and usb mouse.\n");
+    shell_transcript_append_text("USB keyboard auto-detection: plug in a USB keyboard to type commands; on-screen keyboard hides automatically.\n");
     shell_transcript_append_text("Enter runs commands from the prompt line; history stays locked above.\n");
     c6ota_init();
     c6ota_register_progress_callback(shell_c6ota_progress_callback);
@@ -5026,6 +5134,16 @@ void app_main(void)
         .notify_header = shell_header_notify,
     });
     usb_init();
+
+    /* Register USB keyboard input callback for CLI injection.
+     * When a USB keyboard is plugged in, keystrokes are routed to the
+     * shell input line via shell_usb_keyboard_input(). */
+    usb_register_keyboard_input_callback(shell_usb_keyboard_cb);
+
+    /* Initialize the time module (timezone setup only).
+     * SNTP client is started later when Wi-Fi connects,
+     * because SNTP requires the lwIP TCP/IP thread to be running. */
+    time_init();
 
     /* Start the periodic header status refresh timer.
      * Public API matches the c6ota, networking, and usb module style —

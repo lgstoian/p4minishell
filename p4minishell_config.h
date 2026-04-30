@@ -46,8 +46,24 @@
 /** Board name detected from the BSP component. */
 #define P4_CONFIG_BOARD_DETECTED             "ESP32-P4-Function-EV-Board"
 
+/**
+ * P4MiniShell semantic version.
+ * Update these when the project version changes in changelog.md.
+ * The boot message and all version commands read from these macros.
+ */
+#define P4_CONFIG_VERSION_MAJOR             0
+#define P4_CONFIG_VERSION_MINOR             14
+#define P4_CONFIG_VERSION_PATCH             1
+
+/** Full version string assembled from the components above. */
+#define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
+
+/** Helper for stringification. */
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+
 /** Boot banner displayed in the transcript on startup. */
-#define P4_CONFIG_BOOT_MESSAGE               "P4MiniShell v0.2 ready | JC1060P470C | type help"
+#define P4_CONFIG_BOOT_MESSAGE               "P4MiniShell " P4_CONFIG_VERSION_STRING " ready | " P4_CONFIG_BOARD_REQUESTED " | type help"
 
 /** Shell prompt string shown on the input line and serial console. */
 #define P4_CONFIG_SHELL_PROMPT               "P4Shell> "
@@ -142,6 +158,25 @@
 
 /** Minimum transcript height in pixels. */
 #define P4_CONFIG_WINDOW_TRANSCRIPT_HEIGHT_MIN 40
+
+/* ========================================================================
+ * KEYBOARD PARAMETERS
+ * ======================================================================== */
+
+/** Default keyboard visibility on boot: 0=hidden, 1=visible. */
+#define P4_CONFIG_KEYBOARD_DEFAULT_VISIBLE    1
+
+/** Keyboard height as percentage of display height. */
+#define P4_CONFIG_KEYBOARD_HEIGHT_PCT         35
+
+/** Keyboard height clamp minimum in pixels. */
+#define P4_CONFIG_KEYBOARD_HEIGHT_MIN         180
+
+/** Keyboard height clamp maximum in pixels. */
+#define P4_CONFIG_KEYBOARD_HEIGHT_MAX         280
+
+/** Keyboard log tag. */
+#define P4_CONFIG_KEYBOARD_TAG                "keyboard"
 
 /* ========================================================================
  * WI-FI PARAMETERS
@@ -303,6 +338,39 @@
 #define P4_CONFIG_HEADER_BAT_LOW_PCT         15
 
 /* ========================================================================
+ * ANSI/VT TERMINAL COLOR PALETTE
+ * ======================================================================== */
+
+/** ANSI default foreground color (green text on black, PowerShell-inspired). */
+#define P4_CONFIG_ANSI_DEFAULT_FG            0x8DFF96
+
+/** ANSI default background color (black). */
+#define P4_CONFIG_ANSI_DEFAULT_BG            0x000000
+
+/** ANSI standard colors — 16-color palette mapped to PowerShell-like theme. */
+#define P4_CONFIG_ANSI_BLACK                 0x000000
+#define P4_CONFIG_ANSI_RED                   0xC50F1F
+#define P4_CONFIG_ANSI_GREEN                 0x13A10E
+#define P4_CONFIG_ANSI_YELLOW                0xC19C00
+#define P4_CONFIG_ANSI_BLUE                  0x0037DA
+#define P4_CONFIG_ANSI_MAGENTA               0x881798
+#define P4_CONFIG_ANSI_CYAN                  0x3A96DD
+#define P4_CONFIG_ANSI_WHITE                 0xCCCCCC
+
+/** ANSI bright colors — PowerShell-like bright variants. */
+#define P4_CONFIG_ANSI_BRIGHT_BLACK          0x767676
+#define P4_CONFIG_ANSI_BRIGHT_RED            0xE74856
+#define P4_CONFIG_ANSI_BRIGHT_GREEN          0x16C60C
+#define P4_CONFIG_ANSI_BRIGHT_YELLOW         0xF9F1A5
+#define P4_CONFIG_ANSI_BRIGHT_BLUE           0x3B78FF
+#define P4_CONFIG_ANSI_BRIGHT_MAGENTA        0xB4009E
+#define P4_CONFIG_ANSI_BRIGHT_CYAN           0x61D6D6
+#define P4_CONFIG_ANSI_BRIGHT_WHITE          0xF2F2F2
+
+/** Maximum bytes for an ANSI-formatted string buffer. */
+#define P4_CONFIG_ANSI_BUFFER_BYTES          512
+
+/* ========================================================================
  * USB HOST PARAMETERS
  * ======================================================================== */
 
@@ -335,6 +403,15 @@
 
 /** Number of simultaneous keys in a USB keyboard report. */
 #define P4_CONFIG_USB_KEYBOARD_KEYS          6
+
+/** Auto-detect USB keyboard: automatically hide on-screen keyboard when USB keyboard is attached. */
+#define P4_CONFIG_USB_KEYBOARD_AUTO_DETECT   1
+
+/** USB keyboard input injection: route USB keystrokes to shell CLI input line. */
+#define P4_CONFIG_USB_KEYBOARD_CLI_INJECT    1
+
+/** USB keyboard notification timeout in milliseconds. */
+#define P4_CONFIG_USB_KEYBOARD_NOTIFY_MS     3000
 
 /* ========================================================================
  * C6 OTA PARAMETERS

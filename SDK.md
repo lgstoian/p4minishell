@@ -4,6 +4,7 @@ This guide describes how `main/main.c` integrates the hosted runtime modules in 
 
 ## Architecture
 - `main/main.c` owns the transcript, parser, command history rules, and boot banner.
+- `components/ansi` owns ANSI/VT SGR escape sequence processing, 16-color palette, and format string builder.
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar LVGL widgets for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status.
@@ -13,7 +14,8 @@ This guide describes how `main/main.c` integrates the hosted runtime modules in 
 - `components/c6ota` owns the ESP32-C6 OTA workflow and uses `components/networking` when it needs Wi-Fi readiness or restore behavior.
 
 ## Required boot-time integration
-1. Include `display.h`, `windows.h`, `header.h`, `networking.h`, `bluetooth.h`, `usb.h`, and `c6ota.h` where those modules are orchestrated.
+1. Include `ansi.h`, `display.h`, `windows.h`, `header.h`, `networking.h`, `bluetooth.h`, `usb.h`, and `c6ota.h` where those modules are orchestrated.
+2. Call `ansi_init()` during shell module initialization (done automatically by `shell_init()`).
 2. Call `display_init()` first to initialize the display hardware and LVGL port.
 3. Register the UI rebuild callback with `display_register_ui_rebuild_callback(shell_build_ui)` so rotation changes trigger full UI rebuilds.
 4. Call `windows_init()` to build the LVGL shell surface (header, transcript, input row, keyboard).
@@ -98,9 +100,35 @@ void shell_boot_init(void)
     });
 
     usb_init();
+
+    /* Register USB keyboard input callback for CLI injection */
+    usb_register_keyboard_input_callback(shell_usb_keyboard_input);
+
     lv_timer_create(shell_header_status_timer_cb, 5000, NULL);
 }
 ```
+
+## ANSI/VT color integration notes
+- The ANSI module (`components/ansi/`) is initialized automatically by `shell_init()`.
+- Use `shell_transcript_appendf_ansi()` for colored command output with `@`-prefixed format specifiers.
+- Color scheme: `@G` (bright green) for headers, `@C` (cyan) for field labels, `@g` (green) for success, `@r` (red) for errors, `@y` (yellow) for warnings.
+- The ANSI palette is configurable via `P4_CONFIG_ANSI_*` macros in `p4minishell_config.h`.
+- LVGL transcript textarea receives plain text (ANSI codes stripped); UART console receives raw ANSI for native terminal rendering.
+- For new commands, always use `shell_transcript_appendf_ansi()` with appropriate color specifiers.
+- Never hardcode ANSI escape sequences in command output — use the `@`-prefixed format specifiers.
+- The `@R` specifier resets all attributes at the end of each output line.
+- Available format specifiers: `@R` (reset), `@B` (bold), `@D` (dim), `@I` (italic), `@U` (underline), `@k`-`@w` (standard FG colors), `@K`-`@W` (bright FG colors).
+
+## USB keyboard integration notes
+- USB keyboard auto-detection runs in the periodic header status refresh timer.
+- When a USB HID keyboard is attached, `keyboard_set_external_input(true)` hides the on-screen keyboard.
+- When detached, `keyboard_set_external_input(false)` restores the on-screen keyboard.
+- USB keystrokes are routed to the shell CLI via `shell_usb_keyboard_input()` bridge.
+- The bridge uses `lv_async_call` to safely manipulate the input line from the LVGL task context.
+- Full US keyboard layout is supported: letters, numbers, symbols, keypad, navigation, function keys.
+- Modifier keys (Shift, Ctrl, Alt, GUI) are tracked for proper shifted character mapping.
+- Users can force the on-screen keyboard visible via `keyboard_force_visible()` / `keyboard_clear_force_visible()`.
+- `usb_key_to_ascii_full()` and `usb_key_name_full()` are available for external key mapping.
 
 ## Window manager integration notes
 - The window manager (`components/windows/`) OWNS all LVGL screen-level widgets.

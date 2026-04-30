@@ -382,6 +382,23 @@ static bool header_schedule(lv_async_cb_t cb, void *payload)
     return true;
 }
 
+/* ---- Batch async update payload ---- */
+typedef struct {
+    bool wifi_connected;
+    int wifi_rssi;
+    int battery_percent;
+    bool battery_adc_ready;
+    bool bluetooth_enabled;
+    bool bluetooth_connected;
+    bool usb_connected;
+    header_sd_state_t sd_state;
+    uint32_t free_heap_bytes;
+    uint32_t total_heap_bytes;
+    int cpu_percent;
+    uint32_t task_count;
+    uint32_t uptime_seconds;
+} header_batch_update_t;
+
 /* ---- Async callbacks ---- */
 static void header_async_refresh(void *user_data)     { (void)user_data; header_render(); }
 static void header_async_notification(void *user_data) {
@@ -413,7 +430,27 @@ static void header_async_sd(void *u_data)         { free(u_data); header_render(
 static void header_async_mem(void *u_data)        { free(u_data); header_render(); }
 static void header_async_cpu(void *u_data)        { free(u_data); header_render(); }
 static void header_async_uptime(void *u_data)     { free(u_data); header_render(); }
-
+/* ---- Batch async callback: updates all state then renders once ---- */
+static void header_async_batch(void *user_data)
+{
+    header_batch_update_t *u = (header_batch_update_t *)user_data;
+    if (u == NULL) return;
+    s_header_state.wifi_connected = u->wifi_connected;
+    s_header_state.wifi_rssi = u->wifi_rssi;
+    s_header_state.battery_percent = u->battery_percent;
+    s_header_state.battery_adc_ready = u->battery_adc_ready;
+    s_header_state.bluetooth_enabled = u->bluetooth_enabled;
+    s_header_state.bluetooth_connected = u->bluetooth_connected;
+    s_header_state.usb_connected = u->usb_connected;
+    s_header_state.sd_state = u->sd_state;
+    s_header_state.free_heap_bytes = u->free_heap_bytes;
+    s_header_state.total_heap_bytes = u->total_heap_bytes;
+    s_header_state.cpu_percent = u->cpu_percent;
+    s_header_state.task_count = u->task_count;
+    s_header_state.uptime_seconds = u->uptime_seconds;
+    free(u);
+    header_render();
+}
 /* ========================================================================
  * PUBLIC API
  * ======================================================================== */
@@ -724,6 +761,36 @@ void header_update_uptime(uint32_t uptime_seconds)
         u->uptime_seconds = uptime_seconds;
         if (!header_schedule(header_async_uptime, u)) { free(u); header_render(); }
     } else { header_render(); }
+}
+
+void header_update_batch(
+    bool wifi_connected, int wifi_rssi,
+    int battery_percent, bool battery_adc_ready,
+    bool bt_enabled, bool bt_connected,
+    bool usb_connected, header_sd_state_t sd_state,
+    uint32_t free_heap, uint32_t total_heap,
+    int cpu_percent, uint32_t task_count,
+    uint32_t uptime_seconds)
+{
+    /* Set all state directly (atomic on this platform) then schedule
+     * a single async render. No dynamic allocation needed — avoids
+     * heap corruption from deferred async call payloads. */
+    s_header_state.wifi_connected = wifi_connected;
+    s_header_state.wifi_rssi = wifi_rssi;
+    s_header_state.battery_percent = (battery_percent < 0) ? 0 : (battery_percent > 100) ? 100 : battery_percent;
+    s_header_state.battery_adc_ready = battery_adc_ready;
+    s_header_state.bluetooth_enabled = bt_enabled;
+    s_header_state.bluetooth_connected = bt_connected;
+    s_header_state.usb_connected = usb_connected;
+    s_header_state.sd_state = sd_state;
+    s_header_state.free_heap_bytes = free_heap;
+    s_header_state.total_heap_bytes = total_heap;
+    s_header_state.cpu_percent = (cpu_percent < 0) ? 0 : (cpu_percent > 100) ? 100 : cpu_percent;
+    s_header_state.task_count = task_count;
+    s_header_state.uptime_seconds = uptime_seconds;
+
+    /* Schedule a single async render (no payload needed) */
+    (void)lv_async_call(header_async_refresh, NULL);
 }
 
 void header_deinit(void)

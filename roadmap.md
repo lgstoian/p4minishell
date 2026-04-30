@@ -28,10 +28,18 @@ Hosted connectivity status in the current baseline:
 - Wi-Fi has been moved into `components/networking/networking.c` while preserving the working boot, command, and OTA restore behavior
 - Bluetooth now has a real hosted NimBLE baseline in `components/networking/bluetooth.c` for `bluetooth status`, `bluetooth scan`, and `bluetooth advertise <on|off>`
 - USB now has a dedicated `components/usb` baseline for USB MSC storage at `/usb0` plus HID keyboard or mouse attach and debug echo through the `usb` command family
+- USB keyboard auto-detect is now implemented: plug in a USB keyboard to type commands; on-screen keyboard hides automatically
+- Full US keyboard layout supported: 60+ USB HID key codes with modifier-aware shifted character mapping
+- Keyboard external input mode API: `keyboard_set_external_input()`, `keyboard_force_visible()`, `keyboard_clear_force_visible()`
+- USB keyboard CLI injection bridge: `shell_usb_keyboard_input()` with LVGL async dispatch for safe input line manipulation
 - Header now has a dedicated `components/header` baseline for a fixed notification and status bar above the locked transcript
 - `c6ota` has now been fully refactored into `components/c6ota` with the same shell-visible behavior and a documented public API in `API.md` and `SDK.md`
 - Display now has a dedicated `components/display` baseline for centralized display hardware management: rotation, resolution, refresh rate, brightness, power state, touch handle, and diagnostics — all routed through a single public API
 - Windows now has a dedicated `components/windows` baseline for LVGL screen layout management: named regions, resolution-aware scaling, rotation-aware layout, consistent styling, and clean lifecycle — working together with display.c and header.c
+- Keyboard now has a dedicated `components/keyboard` baseline for LVGL keyboard management: visibility control, mode switching, textarea binding, and dynamic height scaling — with automatic UI reflow when hidden
+- ANSI/VT escape sequence module now has a dedicated `components/ansi` baseline for SGR color processing: 16-color PowerShell-inspired palette, format string builder, text processing state machine, and UART pass-through
+- Shell now has a dedicated `components/shell` baseline for transcript management, command history, debug logging, UART console bridge, and system info commands
+- Command now has a dedicated `components/command` baseline for command parsing, dispatch, worker task execution, and all built-in command implementations
 - Future Bluetooth work should build on the hosted NimBLE module rather than reviving the older Bluedroid experiment
 
 ## Main gaps to full feature parity
@@ -95,6 +103,9 @@ To support third-party apps written in C, the project needs a minimal stable run
 - A documented ABI or loader manifest format
 
 ### Recent completions
+- Done: `components/shell` shell core module with transcript, history, debug log, UART console, and system info commands
+- Done: `components/command` command dispatcher module with parser, worker task, and all built-in commands
+- Done: `components/keyboard` keyboard manager module with visibility control, mode switching, and automatic UI reflow
 - Done: `components/windows` window manager module with LVGL screen layout, dynamic scaling, rotation-aware regions, and consistent styling
 - Done: `components/display` display manager module with centralized rotation, resolution, refresh rate, brightness, power management, and touch handle control
 - Done: all display-related shell commands (`brightness`, `rotate`) refactored to use display manager public API

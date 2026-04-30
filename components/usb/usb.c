@@ -51,12 +51,51 @@
 #define USB_HID_KEY_BACKSPACE 0x2A
 #define USB_HID_KEY_TAB 0x2B
 #define USB_HID_KEY_SPACE 0x2C
+#define USB_HID_KEY_MINUS 0x2D
+#define USB_HID_KEY_EQUAL 0x2E
+#define USB_HID_KEY_LEFT_BRACE 0x2F
+#define USB_HID_KEY_RIGHT_BRACE 0x30
+#define USB_HID_KEY_BACKSLASH 0x31
+#define USB_HID_KEY_SEMICOLON 0x33
+#define USB_HID_KEY_APOSTROPHE 0x34
+#define USB_HID_KEY_GRAVE 0x35
+#define USB_HID_KEY_COMMA 0x36
+#define USB_HID_KEY_PERIOD 0x37
+#define USB_HID_KEY_SLASH 0x38
+#define USB_HID_KEY_CAPS_LOCK 0x39
+#define USB_HID_KEY_F1 0x3A
+#define USB_HID_KEY_F12 0x45
+#define USB_HID_KEY_PRINT_SCREEN 0x46
+#define USB_HID_KEY_SCROLL_LOCK 0x47
+#define USB_HID_KEY_PAUSE 0x48
+#define USB_HID_KEY_INSERT 0x49
+#define USB_HID_KEY_HOME 0x4A
+#define USB_HID_KEY_PAGE_UP 0x4B
+#define USB_HID_KEY_DELETE 0x4C
+#define USB_HID_KEY_END 0x4D
+#define USB_HID_KEY_PAGE_DOWN 0x4E
 #define USB_HID_KEY_RIGHT 0x4F
 #define USB_HID_KEY_LEFT 0x50
 #define USB_HID_KEY_DOWN 0x51
 #define USB_HID_KEY_UP 0x52
+#define USB_HID_KEY_NUM_LOCK 0x53
+#define USB_HID_KEY_KP_SLASH 0x54
+#define USB_HID_KEY_KP_ASTERISK 0x55
+#define USB_HID_KEY_KP_MINUS 0x56
+#define USB_HID_KEY_KP_PLUS 0x57
+#define USB_HID_KEY_KP_ENTER 0x58
+#define USB_HID_KEY_KP_1 0x59
+#define USB_HID_KEY_KP_9 0x61
+#define USB_HID_KEY_KP_0 0x62
+#define USB_HID_KEY_KP_PERIOD 0x63
+#define USB_HID_MOD_LEFT_CTRL  0x01
 #define USB_HID_MOD_LEFT_SHIFT 0x02
+#define USB_HID_MOD_LEFT_ALT   0x04
+#define USB_HID_MOD_LEFT_GUI   0x08
+#define USB_HID_MOD_RIGHT_CTRL  0x10
 #define USB_HID_MOD_RIGHT_SHIFT 0x20
+#define USB_HID_MOD_RIGHT_ALT   0x40
+#define USB_HID_MOD_RIGHT_GUI   0x80
 
 typedef enum {
     USB_MODULE_EVENT_MSC_CONNECTED = 0,
@@ -126,6 +165,7 @@ static usb_hid_slot_t s_usb_mouse;
 static hid_keyboard_input_report_boot_t s_prev_keyboard_report;
 static int s_mouse_x;
 static int s_mouse_y;
+static usb_keyboard_input_cb_t s_keyboard_input_cb;
 
 static void usb_record_errorf(esp_err_t error, const char *format, ...)
 {
@@ -310,26 +350,27 @@ static bool usb_keyboard_key_present(const uint8_t *keys, uint8_t key)
 static const char *usb_key_name(uint8_t key_code)
 {
     switch (key_code) {
-    case USB_HID_KEY_ENTER:
-        return "ENTER";
-    case USB_HID_KEY_ESC:
-        return "ESC";
-    case USB_HID_KEY_BACKSPACE:
-        return "BACKSPACE";
-    case USB_HID_KEY_TAB:
-        return "TAB";
-    case USB_HID_KEY_SPACE:
-        return "SPACE";
-    case USB_HID_KEY_LEFT:
-        return "LEFT";
-    case USB_HID_KEY_RIGHT:
-        return "RIGHT";
-    case USB_HID_KEY_UP:
-        return "UP";
-    case USB_HID_KEY_DOWN:
-        return "DOWN";
-    default:
-        return NULL;
+    case USB_HID_KEY_ENTER:      return "ENTER";
+    case USB_HID_KEY_ESC:        return "ESC";
+    case USB_HID_KEY_BACKSPACE:  return "BACKSPACE";
+    case USB_HID_KEY_TAB:        return "TAB";
+    case USB_HID_KEY_SPACE:      return "SPACE";
+    case USB_HID_KEY_LEFT:       return "LEFT";
+    case USB_HID_KEY_RIGHT:      return "RIGHT";
+    case USB_HID_KEY_UP:         return "UP";
+    case USB_HID_KEY_DOWN:       return "DOWN";
+    case USB_HID_KEY_CAPS_LOCK:  return "CAPS";
+    case USB_HID_KEY_INSERT:     return "INS";
+    case USB_HID_KEY_HOME:       return "HOME";
+    case USB_HID_KEY_PAGE_UP:    return "PGUP";
+    case USB_HID_KEY_DELETE:     return "DEL";
+    case USB_HID_KEY_END:        return "END";
+    case USB_HID_KEY_PAGE_DOWN:  return "PGDN";
+    case USB_HID_KEY_NUM_LOCK:   return "NUMLK";
+    case USB_HID_KEY_PRINT_SCREEN: return "PRTSC";
+    case USB_HID_KEY_SCROLL_LOCK:  return "SCRLK";
+    case USB_HID_KEY_PAUSE:        return "PAUSE";
+    default: return NULL;
     }
 }
 
@@ -347,12 +388,17 @@ static bool usb_key_to_ascii(uint8_t key_code, uint8_t modifiers, char *characte
     }
 
     if (key_code >= USB_HID_KEY_1 && key_code <= USB_HID_KEY_9) {
-        *character_out = (char)('1' + (key_code - USB_HID_KEY_1));
+        if (shifted) {
+            static const char shifted_nums[] = "!@#$%^&*(";
+            *character_out = shifted_nums[key_code - USB_HID_KEY_1];
+        } else {
+            *character_out = (char)('1' + (key_code - USB_HID_KEY_1));
+        }
         return true;
     }
 
     if (key_code == USB_HID_KEY_0) {
-        *character_out = '0';
+        *character_out = shifted ? ')' : '0';
         return true;
     }
 
@@ -361,7 +407,141 @@ static bool usb_key_to_ascii(uint8_t key_code, uint8_t modifiers, char *characte
         return true;
     }
 
+    if (key_code == USB_HID_KEY_MINUS) {
+        *character_out = shifted ? '_' : '-';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_EQUAL) {
+        *character_out = shifted ? '+' : '=';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_LEFT_BRACE) {
+        *character_out = shifted ? '{' : '[';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_RIGHT_BRACE) {
+        *character_out = shifted ? '}' : ']';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_BACKSLASH) {
+        *character_out = shifted ? '|' : '\\';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_SEMICOLON) {
+        *character_out = shifted ? ':' : ';';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_APOSTROPHE) {
+        *character_out = shifted ? '"' : '\'';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_GRAVE) {
+        *character_out = shifted ? '~' : '`';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_COMMA) {
+        *character_out = shifted ? '<' : ',';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_PERIOD) {
+        *character_out = shifted ? '>' : '.';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_SLASH) {
+        *character_out = shifted ? '?' : '/';
+        return true;
+    }
+
+    /* Keypad number keys */
+    if (key_code >= USB_HID_KEY_KP_1 && key_code <= USB_HID_KEY_KP_9) {
+        *character_out = (char)('1' + (key_code - USB_HID_KEY_KP_1));
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_KP_0) {
+        *character_out = '0';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_KP_PERIOD) {
+        *character_out = '.';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_KP_SLASH) {
+        *character_out = '/';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_KP_ASTERISK) {
+        *character_out = '*';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_KP_MINUS) {
+        *character_out = '-';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_KP_PLUS) {
+        *character_out = '+';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_KP_ENTER) {
+        *character_out = '\n';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_ENTER) {
+        *character_out = '\n';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_TAB) {
+        *character_out = '\t';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_BACKSPACE) {
+        *character_out = '\b';
+        return true;
+    }
+
+    if (key_code == USB_HID_KEY_ESC) {
+        *character_out = 0x1B;  /* ESC */
+        return true;
+    }
+
     return false;
+}
+
+/* ---- Public API: full key mapping (exported for shell use) ---- */
+
+const char *usb_key_name_full(uint8_t key_code)
+{
+    /* Check F1-F12 range */
+    if (key_code >= USB_HID_KEY_F1 && key_code <= USB_HID_KEY_F12) {
+        static char fname[4];
+        snprintf(fname, sizeof(fname), "F%d", (int)(key_code - USB_HID_KEY_F1 + 1));
+        return fname;
+    }
+    return usb_key_name(key_code);
+}
+
+bool usb_key_to_ascii_full(uint8_t key_code, uint8_t modifiers, char *out)
+{
+    return usb_key_to_ascii(key_code, modifiers, out);
 }
 
 static usb_hid_slot_t *usb_slot_for_proto(uint8_t proto)
@@ -529,27 +709,63 @@ static void usb_handle_keyboard_input_locked(const usb_module_event_t *event)
     hid_keyboard_input_report_boot_t report = { 0 };
     size_t index;
 
-    if (event->data.hid_input.length < sizeof(report) || !s_usb_keyboard.echo_enabled) {
+    if (event->data.hid_input.length < sizeof(report)) {
         return;
     }
 
     memcpy(&report, event->data.hid_input.data, sizeof(report));
+
+    /* Route new key presses to the registered input callback (shell CLI injection).
+     * Also detect key releases (keys in prev report but not current). */
     for (index = 0; index < USB_KEYBOARD_KEYS; index++) {
         uint8_t key_code = report.key[index];
-        char character = '\0';
-        const char *name;
 
-        if (key_code == 0 || usb_keyboard_key_present(s_prev_keyboard_report.key, key_code)) {
+        if (key_code == 0) {
             continue;
         }
 
-        name = usb_key_name(key_code);
-        if (usb_key_to_ascii(key_code, report.modifier.val, &character)) {
-            usb_emit_asyncf("usb keyboard: %c\n", character);
-        } else if (name != NULL) {
-            usb_emit_asyncf("usb keyboard: %s\n", name);
-        } else {
-            usb_emit_asyncf("usb keyboard: key 0x%02X\n", key_code);
+        /* New key press (not in previous report) */
+        if (!usb_keyboard_key_present(s_prev_keyboard_report.key, key_code)) {
+            if (s_keyboard_input_cb != NULL) {
+                s_keyboard_input_cb(key_code, report.modifier.val, USB_KEY_EVENT_PRESS);
+            }
+        }
+    }
+
+    /* Detect key releases (in previous report but not current) */
+    for (index = 0; index < USB_KEYBOARD_KEYS; index++) {
+        uint8_t key_code = s_prev_keyboard_report.key[index];
+
+        if (key_code == 0) {
+            continue;
+        }
+
+        if (!usb_keyboard_key_present(report.key, key_code)) {
+            if (s_keyboard_input_cb != NULL) {
+                s_keyboard_input_cb(key_code, s_prev_keyboard_report.modifier.val, USB_KEY_EVENT_RELEASE);
+            }
+        }
+    }
+
+    /* Echo mode: print key names to transcript for debug */
+    if (s_usb_keyboard.echo_enabled) {
+        for (index = 0; index < USB_KEYBOARD_KEYS; index++) {
+            uint8_t key_code = report.key[index];
+            char character = '\0';
+            const char *name;
+
+            if (key_code == 0 || usb_keyboard_key_present(s_prev_keyboard_report.key, key_code)) {
+                continue;
+            }
+
+            name = usb_key_name(key_code);
+            if (usb_key_to_ascii(key_code, report.modifier.val, &character)) {
+                usb_emit_asyncf("usb keyboard: %c\n", character);
+            } else if (name != NULL) {
+                usb_emit_asyncf("usb keyboard: %s\n", name);
+            } else {
+                usb_emit_asyncf("usb keyboard: key 0x%02X\n", key_code);
+            }
         }
     }
 
@@ -1132,6 +1348,49 @@ bool usb_is_mounted(void)
     mounted = s_usb_msc.mounted;
     xSemaphoreGive(s_usb_lock);
     return mounted;
+}
+
+bool usb_is_keyboard_attached(void)
+{
+    bool attached = false;
+
+    if (!s_usb_initialized) {
+        return false;
+    }
+
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    attached = s_usb_keyboard.attached;
+    xSemaphoreGive(s_usb_lock);
+    return attached;
+}
+
+bool usb_is_mouse_attached(void)
+{
+    bool attached = false;
+
+    if (!s_usb_initialized) {
+        return false;
+    }
+
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    attached = s_usb_mouse.attached;
+    xSemaphoreGive(s_usb_lock);
+    return attached;
+}
+
+void usb_register_keyboard_input_callback(usb_keyboard_input_cb_t cb)
+{
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_keyboard_input_cb = cb;
+    xSemaphoreGive(s_usb_lock);
 }
 
 void usb_handle_command(char *command)

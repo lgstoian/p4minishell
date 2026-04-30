@@ -1,0 +1,416 @@
+/**
+ * @file command.c
+ * @brief Command parser and dispatcher implementation for P4MiniShell.
+ *
+ * Owns the command execution pipeline. All built-in commands are implemented
+ * here. Uses shell.c for transcript output and debug logging.
+ */
+
+#include "command.h"
+#include "shell.h"
+#include "ansi.h"
+#include "display.h"
+#include "keyboard.h"
+#include "windows.h"
+#include "p4minishell_config.h"
+#include "board_config.h"
+#include "networking.h"
+#include "bluetooth.h"
+#include "c6ota.h"
+#include "usb.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* Backward-compatibility aliases */
+#define COMMAND_TAG                     P4_CONFIG_SHELL_TAG
+#define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
+#define SHELL_COMMAND_TASK_STACK_BYTES  P4_CONFIG_COMMAND_TASK_STACK
+#define SHELL_PROMPT                    P4_CONFIG_SHELL_PROMPT
+#define SHELL_WIFI_SSID_BYTES           P4_CONFIG_WIFI_SSID_BYTES
+#define SHELL_WIFI_PASSWORD_BYTES       P4_CONFIG_WIFI_PASSWORD_BYTES
+
+/* ========================================================================
+ * INTERNAL STATE
+ * ======================================================================== */
+
+static bool s_initialized = false;
+
+typedef struct {
+    char command[SHELL_COMMAND_BYTES];
+} command_request_t;
+
+/* ========================================================================
+ * FORWARD DECLARATIONS — ALL COMMAND HANDLERS
+ * ======================================================================== */
+
+static void cmd_brightness(int argc, char **argv);
+static void cmd_rotate(int argc, char **argv);
+static void cmd_battery(int argc, char **argv);
+static void cmd_volume(int argc, char **argv);
+static void cmd_reboot(void);
+static void cmd_clear(void);
+
+/* ========================================================================
+ * COMMAND EXECUTION TASK
+ * ======================================================================== */
+
+static void command_task(void *arg)
+{
+    command_request_t *request = (command_request_t *)arg;
+
+    if (request == NULL) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    shell_execute_command_core(request->command);
+    free(request);
+    vTaskDelete(NULL);
+}
+
+/* ========================================================================
+ * COMMAND DISPATCH
+ * ======================================================================== */
+
+bool shell_execute_command_core(char *command)
+{
+    char *argv[32];
+    int argc;
+    char *trimmed;
+
+    if (command == NULL) {
+        return false;
+    }
+
+    trimmed = shell_trim(command);
+    if (trimmed[0] == '\0') {
+        return false;
+    }
+
+    /* Check for C6 OTA confirmation first */
+    if (c6ota_try_handle_input(trimmed)) {
+        return true;
+    }
+
+    argc = shell_split_args(trimmed, argv, 32);
+    if (argc == 0) {
+        return false;
+    }
+
+    /* System commands */
+    if (shell_text_equals_ignore_case(argv[0], "help")) {
+        shell_command_help();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "cls") || shell_text_equals_ignore_case(argv[0], "clear")) {
+        cmd_clear();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "reboot")) {
+        cmd_reboot();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "version") || shell_text_equals_ignore_case(argv[0], "ver")) {
+        shell_command_version();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "about")) {
+        shell_command_about();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sysinfo")) {
+        shell_command_sysinfo();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mem")) {
+        shell_command_mem();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "debug")) {
+        shell_command_debug();
+        return true;
+    }
+
+    /* Hardware commands */
+    if (shell_text_equals_ignore_case(argv[0], "brightness")) {
+        cmd_brightness(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "rotate")) {
+        cmd_rotate(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "battery")) {
+        cmd_battery(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "volume")) {
+        cmd_volume(argc, argv);
+        return true;
+    }
+
+    /* Display commands */
+    if (shell_text_equals_ignore_case(argv[0], "display")) {
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "info")) {
+            display_print_info(shell_transcript_appendf);
+            return true;
+        }
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "resolution")) {
+            display_resolution_t res = display_get_resolution();
+            shell_transcript_appendf_ansi("@Cdisplay.resolution:@R %" PRId32 " x %" PRId32
+                                     " (native %" PRId32 " x %" PRId32 ")\n",
+                                     res.current_width, res.current_height,
+                                     res.native_width, res.native_height);
+            return true;
+        }
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "refresh")) {
+            display_refresh_config_t ref = display_get_refresh_config();
+            shell_transcript_appendf_ansi("@Cdisplay.refresh:@R target=%" PRIu32 "Hz current=%" PRIu32 "Hz "
+                                     "pclk=%" PRIu32 "MHz dsi_bitrate=%" PRIu32 "Mbps\n",
+                                     ref.target_hz, ref.current_hz,
+                                     ref.pixel_clock_mhz, ref.dsi_lane_bitrate_mbps);
+            return true;
+        }
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "power")) {
+            if (argc >= 3) {
+                if (shell_text_equals_ignore_case(argv[2], "on")) {
+                    display_set_power_state(DISPLAY_POWER_ON);
+                    shell_transcript_appendf_ansi("@gdisplay power on@R\n");
+                } else if (shell_text_equals_ignore_case(argv[2], "sleep")) {
+                    display_set_power_state(DISPLAY_POWER_SLEEP);
+                    shell_transcript_appendf_ansi("@ydisplay sleep@R\n");
+                } else if (shell_text_equals_ignore_case(argv[2], "off")) {
+                    display_set_power_state(DISPLAY_POWER_OFF);
+                    shell_transcript_appendf_ansi("@rdisplay power off@R\n");
+                } else {
+                    shell_transcript_appendf_ansi("@yUsage: display power <on|sleep|off>@R\n");
+                }
+            } else {
+                display_power_state_t ps = display_get_power_state();
+                shell_transcript_appendf_ansi("@Cdisplay.power:@R %s\n",
+                                         ps == DISPLAY_POWER_ON ? "@gon@R" :
+                                         ps == DISPLAY_POWER_SLEEP ? "@ysleep@R" : "@roff@R");
+            }
+            return true;
+        }
+        shell_transcript_appendf_ansi("@yUsage: display <info|resolution|refresh|power>@R\n");
+        return true;
+    }
+
+    /* Keyboard commands */
+    if (shell_text_equals_ignore_case(argv[0], "keyboard")) {
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "hide")) {
+            keyboard_hide();
+            shell_transcript_appendf_ansi("@gkeyboard hidden@R\n");
+        } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "show")) {
+            keyboard_show();
+            shell_transcript_appendf_ansi("@gkeyboard shown@R\n");
+        } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "toggle")) {
+            keyboard_toggle();
+            shell_transcript_appendf_ansi("@gkeyboard %s@R\n", keyboard_is_visible() ? "shown" : "hidden");
+        } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "status")) {
+            shell_transcript_appendf_ansi("@Ckeyboard:@R %s, mode=%d, height=%" PRId32 "\n",
+                                     keyboard_is_visible() ? "@gvisible@R" : "@khidden@R",
+                                     (int)keyboard_get_mode(),
+                                     (int32_t)keyboard_get_height());
+        } else {
+            shell_transcript_appendf_ansi("@yUsage: keyboard <show|hide|toggle|status>@R\n");
+        }
+        return true;
+    }
+
+    /* Windows commands */
+    if (shell_text_equals_ignore_case(argv[0], "windows")) {
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "info")) {
+            lv_coord_t dw = windows_get_display_width();
+            lv_coord_t dh = windows_get_display_height();
+            shell_transcript_appendf_ansi("@Cwindows.display:@R %" PRId32 " x %" PRId32 "\n", (int32_t)dw, (int32_t)dh);
+            for (int r = 0; r < WINDOW_REGION_COUNT; r++) {
+                window_rect_t rect = windows_get_rect((window_region_t)r);
+                const char *names[] = {"header", "transcript", "input_row", "keyboard"};
+                shell_transcript_appendf_ansi("  @Cwindows.%s:@R x=%" PRId32 " y=%" PRId32 " w=%" PRId32 " h=%" PRId32 "\n",
+                                         names[r], (int32_t)rect.x, (int32_t)rect.y,
+                                         (int32_t)rect.width, (int32_t)rect.height);
+            }
+            return true;
+        }
+        shell_transcript_appendf_ansi("@yUsage: windows <info>@R\n");
+        return true;
+    }
+
+    /* Module-routed commands */
+    if (shell_text_equals_ignore_case(argv[0], "wifi")) {
+        networking_handle_wifi_command(command);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "bluetooth") || shell_text_equals_ignore_case(argv[0], "bt")) {
+        bluetooth_handle_command(command);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "usb")) {
+        usb_handle_command(command);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "c6ota")) {
+        c6ota_perform(argc >= 2 ? argv[1] : NULL);
+        return true;
+    }
+
+    shell_transcript_appendf_ansi("@rUnknown command:@R %s\n", argv[0]);
+    return false;
+}
+
+void shell_execute_command(char *command)
+{
+    command_request_t *request;
+
+    if (command == NULL || strlen(command) == 0) {
+        return;
+    }
+
+    shell_store_command_history(command);
+
+    request = (command_request_t *)calloc(1, sizeof(*request));
+    if (request == NULL) {
+        shell_transcript_appendf_ansi("@rshell:@R out of memory starting command task\n");
+        shell_record_errorf("shell", -1, "Out of memory starting command task");
+        return;
+    }
+
+    snprintf(request->command, sizeof(request->command), "%s", command);
+    if (xTaskCreate(command_task,
+                    "shell_cmd",
+                    SHELL_COMMAND_TASK_STACK_BYTES,
+                    request,
+                    tskIDLE_PRIORITY + 2,
+                    NULL) != pdPASS) {
+        free(request);
+        shell_transcript_append_text("shell: failed to start command task\n");
+        shell_record_errorf("shell", -1, "Failed to start command task");
+    }
+}
+
+bool shell_command_ota_is_pending(void)
+{
+    return c6ota_is_confirmation_pending();
+}
+
+/* ========================================================================
+ * HARDWARE COMMAND IMPLEMENTATIONS
+ * ======================================================================== */
+
+static void cmd_brightness(int argc, char **argv)
+{
+    int percent;
+
+    if (argc != 2 || !shell_parse_percentage_arg(argv[1], &percent)) {
+        shell_transcript_appendf_ansi("@yUsage: brightness <0-100>@R\n");
+        shell_record_warningf("brightness", "Usage error for brightness command");
+        return;
+    }
+
+    esp_err_t error = display_set_brightness(percent);
+    if (error != ESP_OK) {
+        shell_transcript_appendf_ansi("@rbrightness:@R failed to set backlight (@r%s@R)\n", esp_err_to_name(error));
+        shell_record_errorf("brightness", error, "Failed to set brightness to %d%%", percent);
+        return;
+    }
+
+    shell_transcript_appendf_ansi("@gbrightness set to %d%%@R\n", percent);
+}
+
+static void cmd_rotate(int argc, char **argv)
+{
+    display_rotation_t rotation;
+
+    if (argc != 2) {
+        shell_transcript_appendf_ansi("@yUsage: rotate <0|90|180|270>@R\n");
+        shell_record_warningf("rotate", "Usage error for rotate command");
+        return;
+    }
+
+    esp_err_t error = display_rotation_parse(argv[1], &rotation);
+    if (error != ESP_OK) {
+        shell_transcript_appendf_ansi("@yUsage: rotate <0|90|180|270>@R\n");
+        shell_record_warningf("rotate", "Invalid rotation angle: %s", argv[1]);
+        return;
+    }
+
+    error = display_set_rotation(rotation);
+    if (error != ESP_OK) {
+        shell_transcript_appendf_ansi("@rrotate:@R failed to apply display rotation (@r%s@R)\n", esp_err_to_name(error));
+        shell_record_errorf("rotate", error, "Failed to apply rotation %s", argv[1]);
+        return;
+    }
+
+    shell_transcript_appendf_ansi("@grotation set to %s degrees and GT911 remap updated@R\n", argv[1]);
+}
+
+static void cmd_battery(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    shell_transcript_appendf_ansi("@ybattery:@R ADC telemetry not available in this build\n");
+}
+
+static void cmd_volume(int argc, char **argv)
+{
+    int percent;
+
+    if (argc != 2 || !shell_parse_percentage_arg(argv[1], &percent)) {
+        shell_transcript_appendf_ansi("@yUsage: volume <0-100>@R\n");
+        return;
+    }
+
+    shell_transcript_appendf_ansi("@gvolume set to %d%%@R\n", percent);
+}
+
+static void cmd_reboot(void)
+{
+    shell_transcript_appendf_ansi("@rRebooting...@R\n");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
+static void cmd_clear(void)
+{
+    shell_transcript_reset();
+    shell_record_infof("shell", "Transcript cleared");
+}
+
+/* ========================================================================
+ * LIFECYCLE
+ * ======================================================================== */
+
+void command_init(void)
+{
+    if (s_initialized) {
+        return;
+    }
+
+    s_initialized = true;
+    ESP_LOGI(COMMAND_TAG, "Command module initialized");
+}
+
+bool command_is_initialized(void)
+{
+    return s_initialized;
+}

@@ -7,10 +7,14 @@ idf_component_register(
         espressif__esp_lvgl_port
         bootloader_support
         c6ota
+        command
         display
         header
+        keyboard
         networking
         p4_usb
+        shell
+        clock
         windows
         esp_adc
         esp_event

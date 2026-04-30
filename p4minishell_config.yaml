@@ -1,4 +1,4 @@
-# P4MiniShell Configuration — Single Source of Truth
+﻿# P4MiniShell Configuration — Single Source of Truth
 #
 # Every tunable value in the firmware is documented here with:
 #   - value: the current setting
@@ -10,10 +10,10 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.5.0
+# Version: 0.14.1
 # Last updated: 2026-04-30
 
-config_version: "0.5.0"
+config_version: "0.14.1"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -442,6 +442,19 @@ usb_host:
     type: size_t
     description: "Simultaneous keys in USB keyboard report"
     range: "1..16"
+  keyboard_auto_detect:
+    value: 1
+    type: bool
+    description: "Auto-detect USB keyboard: hide on-screen keyboard when USB keyboard attached"
+  keyboard_cli_inject:
+    value: 1
+    type: bool
+    description: "Route USB keyboard keystrokes to shell CLI input line"
+  keyboard_notify_ms:
+    value: 3000
+    type: int
+    description: "USB keyboard notification timeout in milliseconds"
+    range: "1000..10000"
 
 # ---- C6 OTA ----
 c6ota:
@@ -527,3 +540,87 @@ networking:
     value: "wifi"
     type: string
     description: "ESP_LOGx tag for networking/Wi-Fi messages"
+
+# ---- ANSI/VT Terminal Color Palette ----
+# PowerShell-inspired 16-color palette for ANSI SGR escape sequences.
+# All colors are 24-bit RGB hex values (0xRRGGBB).
+# Used by components/ansi/ for ESC[...m sequence rendering.
+ansi_colors:
+  default_fg:
+    value: "0x8DFF96"
+    type: uint32_t
+    description: "Default foreground color (green text on black)"
+  default_bg:
+    value: "0x000000"
+    type: uint32_t
+    description: "Default background color (black)"
+  palette:
+    black:
+      value: "0x000000"
+      type: uint32_t
+      description: "ANSI color 0/30/40 — Black"
+    red:
+      value: "0xC50F1F"
+      type: uint32_t
+      description: "ANSI color 1/31/41 — Red"
+    green:
+      value: "0x13A10E"
+      type: uint32_t
+      description: "ANSI color 2/32/42 — Green"
+    yellow:
+      value: "0xC19C00"
+      type: uint32_t
+      description: "ANSI color 3/33/43 — Yellow"
+    blue:
+      value: "0x0037DA"
+      type: uint32_t
+      description: "ANSI color 4/34/44 — Blue"
+    magenta:
+      value: "0x881798"
+      type: uint32_t
+      description: "ANSI color 5/35/45 — Magenta"
+    cyan:
+      value: "0x3A96DD"
+      type: uint32_t
+      description: "ANSI color 6/36/46 — Cyan"
+    white:
+      value: "0xCCCCCC"
+      type: uint32_t
+      description: "ANSI color 7/37/47 — White"
+    bright_black:
+      value: "0x767676"
+      type: uint32_t
+      description: "ANSI color 8/90/100 — Bright Black (Gray)"
+    bright_red:
+      value: "0xE74856"
+      type: uint32_t
+      description: "ANSI color 9/91/101 — Bright Red"
+    bright_green:
+      value: "0x16C60C"
+      type: uint32_t
+      description: "ANSI color 10/92/102 — Bright Green"
+    bright_yellow:
+      value: "0xF9F1A5"
+      type: uint32_t
+      description: "ANSI color 11/93/103 — Bright Yellow"
+    bright_blue:
+      value: "0x3B78FF"
+      type: uint32_t
+      description: "ANSI color 12/94/104 — Bright Blue"
+    bright_magenta:
+      value: "0xB4009E"
+      type: uint32_t
+      description: "ANSI color 13/95/105 — Bright Magenta"
+    bright_cyan:
+      value: "0x61D6D6"
+      type: uint32_t
+      description: "ANSI color 14/96/106 — Bright Cyan"
+    bright_white:
+      value: "0xF2F2F2"
+      type: uint32_t
+      description: "ANSI color 15/97/107 — Bright White"
+  buffer_bytes:
+    value: 512
+    type: size_t
+    description: "Maximum bytes for an ANSI-formatted string buffer"
+    range: "128..2048"

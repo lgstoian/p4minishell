@@ -14,8 +14,13 @@ The current firmware is not a desktop DOS clone and is not yet an MS-DOS-compati
 main/main.c                 Shell UI, parser, transcript, command history, orchestration
 p4minishell_config.h        Centralized configuration (all tunable values)
 p4minishell_config.yaml     Configuration documentation (YAML source of truth)
+components/ansi/            ANSI/VT escape sequence module (SGR colors, attributes, formatting)
 components/display/         Display manager (rotation, resolution, refresh, brightness, power)
 components/windows/         Window manager (LVGL screen layout, dynamic scaling, styling)
+components/clock/           Clock manager (SNTP time sync, timezone, local/UTC formatting)
+components/keyboard/        Keyboard manager (LVGL keyboard, visibility, modes)
+components/shell/           Shell core (transcript, history, debug log, UART, sysinfo)
+components/command/         Command dispatcher (parser, execution task, all built-ins)
 components/header/          Fixed top status bar (Wi-Fi, battery, Bluetooth, USB, SD)
 components/networking/      ESP-Hosted Wi-Fi + hosted NimBLE Bluetooth on C6
 components/usb/             USB Host MSC storage (/usb0) + HID keyboard/mouse
@@ -52,6 +57,7 @@ the YAML to match.
 ## Key Features
 
 - **Touch-first shell UI**: Transcript textarea, prompt input line, on-screen keyboard, 10-command recall
+- **ANSI/VT color support**: PowerShell-inspired 16-color palette with SGR escape sequences (ESC[...m) for colored command output on both LVGL transcript and UART console
 - **Serial console bridge**: `idf.py monitor` acts as interactive shell endpoint over UART/USB-Serial-JTAG
 - **Worker-task execution**: Heavy commands run off LVGL event stack to prevent overflow
 - **Guarded SD access**: All SD operations use shared mount/unmount with validation and bounded output
@@ -62,6 +68,7 @@ the YAML to match.
 - **Hosted Wi-Fi**: ESP-Hosted + esp_wifi_remote on C6 with version compatibility gate
 - **Hosted Bluetooth**: NimBLE VHCI on C6 for BLE scan and advertising
 - **USB Host**: MSC mass storage at `/usb0`, HID keyboard/mouse with opt-in echo
+- **USB Keyboard Auto-Detect**: Plug in a USB keyboard to type commands; on-screen keyboard hides automatically. Full US keyboard layout supported including symbols, keypad, navigation keys, and function keys.
 - **C6 OTA updates**: Validated firmware updates from SD or HTTP/S over ESP-Hosted SDIO
 - **Hardware controls**: Brightness, rotation, battery telemetry, volume, GPIO inspection
 - **Fixed header bar**: Wi-Fi, battery, Bluetooth, USB, SD status with transient notifications

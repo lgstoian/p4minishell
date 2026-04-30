@@ -183,6 +183,14 @@ void windows_show_boot_banner(const char *message);
  */
 void windows_reset_input_line(const char *prompt);
 
+/**
+ * Notify the window manager that the keyboard visibility has changed.
+ * Called by the keyboard component when keyboard is shown/hidden.
+ * Triggers a reflow of window region rectangles.
+ * @param visible  true if keyboard is now visible, false if hidden.
+ */
+void windows_notify_keyboard_visibility(bool visible);
+
 #ifdef __cplusplus
 }
 #endif

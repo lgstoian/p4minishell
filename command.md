@@ -2,6 +2,42 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
+## ANSI/VT Color Support
+
+All command output uses ANSI SGR escape sequences (ESC[...m) for colored text rendering.
+The color palette is PowerShell-inspired with green base text on black background.
+
+### Color Scheme
+| Context | Color | ANSI Code |
+|---------|-------|-----------|
+| Headers/titles | Bright Green | `\e[92m` |
+| Field labels | Cyan | `\e[36m` |
+| Success values | Green | `\e[32m` |
+| Errors | Red | `\e[31m` |
+| Warnings | Yellow | `\e[33m` |
+| Muted/secondary | Bright Black (Gray) | `\e[90m` |
+| Default text | Bright Green (base) | `\e[92m` |
+| Reset | Default | `\e[0m` |
+
+### ANSI Format Specifiers (for shell_transcript_appendf_ansi)
+| Specifier | Meaning |
+|-----------|---------|
+| `@R` | Reset all attributes |
+| `@B` | Bold on |
+| `@g` | Foreground green |
+| `@G` | Foreground bright green |
+| `@r` | Foreground red |
+| `@y` | Foreground yellow |
+| `@c` | Foreground cyan |
+| `@C` | Foreground bright cyan |
+| `@k` | Foreground black (gray) |
+| `@w` | Foreground white |
+| `@W` | Foreground bright white |
+| `@m` | Foreground magenta |
+| `@M` | Foreground bright magenta |
+| `@b` | Foreground blue |
+| `@Y` | Foreground bright yellow |
+
 ## UI Model
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
@@ -57,6 +93,11 @@ backlight; on restores it.
 Show window manager layout information: display dimensions, region rectangles for
 header, transcript, input row, and keyboard. Uses `windows_get_rect()` and
 `windows_get_display_width()`/`windows_get_display_height()`.
+
+### keyboard show|hide|toggle|status
+Control the on-screen keyboard visibility. `hide` removes the keyboard and
+expands the transcript area; `show` restores it. `toggle` switches between
+visible and hidden. `status` reports current visibility, mode, and height.
 
 ### battery
 Read battery ADC pin (GPIO53, 2:1 divider), show scaled voltage, estimated percentage (3.3V-4.2V range), raw ADC data, and light-sleep state.
@@ -165,6 +206,16 @@ All file commands operate on SD card through guarded mount/unmount. Working dire
 | usb keyboard off | Disable keyboard transcript echo |
 | usb mouse on | Enable transcript echo for HID boot mouse |
 | usb mouse off | Disable mouse transcript echo |
+
+### USB Keyboard Auto-Detect
+- Plug in a USB HID keyboard to automatically type commands into the shell
+- On-screen keyboard is automatically hidden when USB keyboard is detected
+- On-screen keyboard is restored when USB keyboard is unplugged
+- Full US keyboard layout supported: letters, numbers, symbols, keypad, navigation keys, function keys
+- Modifier keys (Shift, Ctrl, Alt, GUI) are tracked for proper character mapping
+- Special keys: Enter (submit command), Backspace, ESC (clear line), Tab, arrows (cursor/history), Delete, Home, End
+- Use `keyboard show` to force the on-screen keyboard visible even with USB keyboard attached
+- Use `keyboard hide` to hide it again; auto-detect resumes on next plug/unplug event
 
 ## SD Tools
 
