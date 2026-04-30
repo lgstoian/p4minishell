@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.2] - 2026-04-30
+
+### Added
+- **attrib command**: Show and set FATFS file attributes (R=read-only, H=hidden, S=system, A=archive). Uses `f_stat()`/`f_chmod()`. Supports `attrib [path]`, `attrib +R file`, `attrib -H file`, etc.
+- **label command**: Read and set FATFS volume label via `f_getlabel()`/`f_setlabel()`. Max 11 characters (FAT 8.3 convention).
+- **xcopy command**: Recursive directory copy with `/S` flag for subdirectory traversal.
+- **Wildcard matching**: `shell_wildcard_match()` for DOS-style `*` and `?` pattern matching.
+- **Wildcard-aware dir**: `dir *.txt` filters directory listings by wildcard pattern with short/long filename display.
+- **Wildcard-aware del**: `del *.bak` deletes all matching files in a directory.
+- **Wildcard-aware copy**: `copy *.txt backup\` copies all matching files to a destination directory.
+
+### Changed
+- **main.c**: `shell_command_dir()`, `shell_command_del()`, `shell_command_copy()` now detect wildcard characters and use filtered directory iteration.
+- **main.c**: `shell_wildcard_match()`, `shell_command_attrib()`, `shell_command_label()`, `shell_command_xcopy()` are non-static for `command.c` extern dispatch.
+- **command.c**: Existing `extern` declarations for `attrib`, `label`, `xcopy` now resolve correctly against main.c implementations.
+
+### Verified
+- **Clean build**: Zero errors, zero warnings
+- **Flash**: Successful to COM3
+- **c6ota**: Verified working end-to-end (SD source, image validation, OTA transfer to 100%, Wi-Fi restore)
+
+---
+
 ## [0.14.1] - 2026-04-30
 
 ### Fixed

@@ -163,6 +163,25 @@ All file commands operate on SD card through guarded mount/unmount. Working dire
 - > file: Write command transcript output to SD file (overwrite)
 - >> file: Append command transcript output to SD file
 
+## DOS-Style Extended Commands
+
+| Command | Description |
+|---------|-------------|
+| attrib [path] | Show file/directory attributes (R/H/S/A) |
+| attrib +R\|-R <file> | Set or clear read-only attribute |
+| attrib +H\|-H <file> | Set or clear hidden attribute |
+| attrib +S\|-S <file> | Set or clear system attribute |
+| attrib +A\|-A <file> | Set or clear archive attribute |
+| label | Show current FAT volume label |
+| label <name> | Set volume label (max 11 chars) |
+| xcopy <src> <dst> [/S] | Copy files and directories recursively |
+
+### Wildcard Support
+- `*` matches any sequence of characters
+- `?` matches any single character
+- Supported in: `dir`, `del`, `copy`
+- Example: `dir *.txt`, `del *.bak`, `copy *.c backup\`
+
 ## Wi-Fi Commands
 
 | Command | Description |

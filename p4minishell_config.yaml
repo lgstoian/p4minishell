@@ -10,10 +10,10 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.14.1
+# Version: 0.14.2
 # Last updated: 2026-04-30
 
-config_version: "0.14.1"
+config_version: "0.14.2"
 
 # ---- Shell Identity ----
 shell_identity:
