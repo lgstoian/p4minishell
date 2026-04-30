@@ -88,6 +88,62 @@
 #define P4_CONFIG_INPUT_ROW_HEIGHT           52
 
 /* ========================================================================
+ * DISPLAY MANAGER PARAMETERS
+ * ======================================================================== */
+
+/** Default backlight brightness percentage on boot (0-100). */
+#define P4_CONFIG_DISPLAY_DEFAULT_BRIGHTNESS 100
+
+/** Default display rotation on boot (0, 90, 180, or 270). */
+#define P4_CONFIG_DISPLAY_DEFAULT_ROTATION   0
+
+/** Default display power state on boot: 0=on, 1=sleep, 2=off. */
+#define P4_CONFIG_DISPLAY_DEFAULT_POWER      0
+
+/** Whether dynamic refresh rate changes are supported by the panel. */
+#define P4_CONFIG_DISPLAY_REFRESH_DYNAMIC    0
+
+/** Display panel driver name for diagnostics. */
+#define P4_CONFIG_DISPLAY_PANEL_DRIVER       "JD9165"
+
+/** Touch controller driver name for diagnostics. */
+#define P4_CONFIG_DISPLAY_TOUCH_DRIVER       "GT911"
+
+/* ========================================================================
+ * WINDOW MANAGER PARAMETERS
+ * ======================================================================== */
+
+/** Header height as percentage of display height. */
+#define P4_CONFIG_WINDOW_HEADER_HEIGHT_PCT   7
+
+/** Header height clamp minimum in pixels. */
+#define P4_CONFIG_WINDOW_HEADER_HEIGHT_MIN   32
+
+/** Header height clamp maximum in pixels. */
+#define P4_CONFIG_WINDOW_HEADER_HEIGHT_MAX   56
+
+/** Input row height as percentage of display height. */
+#define P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT 8
+
+/** Input row height clamp minimum in pixels. */
+#define P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN 40
+
+/** Input row height clamp maximum in pixels. */
+#define P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MAX 56
+
+/** Keyboard height as percentage of display height. */
+#define P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_PCT 35
+
+/** Keyboard height clamp minimum in pixels. */
+#define P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MIN 180
+
+/** Keyboard height clamp maximum in pixels. */
+#define P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MAX 280
+
+/** Minimum transcript height in pixels. */
+#define P4_CONFIG_WINDOW_TRANSCRIPT_HEIGHT_MIN 40
+
+/* ========================================================================
  * WI-FI PARAMETERS
  * ======================================================================== */
 
@@ -334,7 +390,7 @@
 #define P4_CONFIG_COMMAND_TASK_STACK         8192
 
 /** Stack size for the UART/serial console reader task. */
-#define P4_CONFIG_UART_CONSOLE_TASK_STACK    4096
+#define P4_CONFIG_UART_CONSOLE_TASK_STACK    12288
 
 /** Log tag for networking/Wi-Fi module. */
 #define P4_CONFIG_NETWORKING_TAG             "wifi"

@@ -29,10 +29,34 @@ Complete reference for all shell commands available in P4MiniShell.
 ## Hardware Commands
 
 ### brightness <0-100>
-Set LCD backlight brightness through BSP PWM path.
+Set LCD backlight brightness through the display manager's PWM path (BSP LEDC).
+Uses `display_set_brightness()` from `components/display/`.
 
 ### rotate <0|90|180|270>
 Rotate display and remap GT911 touch orientation to match.
+Uses `display_set_rotation()` from `components/display/`. Triggers full UI rebuild
+via the window manager's `windows_deinit()` + `windows_init()` cycle through the
+registered callback. Touch remapping is handled automatically by the display manager.
+
+### display info
+Show comprehensive display information from the display manager: resolution, rotation,
+brightness, refresh rate, power state, panel driver, touch driver, timing parameters,
+buffer configuration, and MIPI DSI lane info. Uses `display_get_info()` / `display_print_info()`.
+
+### display resolution
+Show current effective and native display resolution. Uses `display_get_resolution()`.
+
+### display refresh
+Show current display refresh rate configuration. Uses `display_get_refresh_config()`.
+
+### display power <on|sleep|off>
+Control display power state. Uses `display_set_power_state()`. Sleep/off turns off
+backlight; on restores it.
+
+### windows info
+Show window manager layout information: display dimensions, region rectangles for
+header, transcript, input row, and keyboard. Uses `windows_get_rect()` and
+`windows_get_display_width()`/`windows_get_display_height()`.
 
 ### battery
 Read battery ADC pin (GPIO53, 2:1 divider), show scaled voltage, estimated percentage (3.3V-4.2V range), raw ADC data, and light-sleep state.

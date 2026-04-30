@@ -13,7 +13,7 @@ Implemented today in the checked-in firmware:
 - Worker-task command execution to protect the LVGL event stack
 - Stable family-command dispatch for `wifi`, `sd`, and `c6ota`, with the original command line preserved for second-stage subcommand parsing
 - Interactive serial monitor access through the configured ESP-IDF console, reusing the same shell transcript and command path as the touch UI
-- Live hardware shell controls for display brightness, display rotation with GT911 remap, battery telemetry, speaker volume, and safer GPIO inspection or limited writes
+- Live hardware shell controls for display brightness, display rotation with GT911 remap, battery telemetry, speaker volume, and safer GPIO inspection or limited writes — all display controls now routed through `components/display/` display manager
 - DOS-style file commands on SD: `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`
 - RAM-only environment variables, PATH, `%1`..`%9` expansion, `.bat` execution, and `echo on/off`
 - Transcript-backed `>` and `>>` output redirection to SD
@@ -30,6 +30,8 @@ Hosted connectivity status in the current baseline:
 - USB now has a dedicated `components/usb` baseline for USB MSC storage at `/usb0` plus HID keyboard or mouse attach and debug echo through the `usb` command family
 - Header now has a dedicated `components/header` baseline for a fixed notification and status bar above the locked transcript
 - `c6ota` has now been fully refactored into `components/c6ota` with the same shell-visible behavior and a documented public API in `API.md` and `SDK.md`
+- Display now has a dedicated `components/display` baseline for centralized display hardware management: rotation, resolution, refresh rate, brightness, power state, touch handle, and diagnostics — all routed through a single public API
+- Windows now has a dedicated `components/windows` baseline for LVGL screen layout management: named regions, resolution-aware scaling, rotation-aware layout, consistent styling, and clean lifecycle — working together with display.c and header.c
 - Future Bluetooth work should build on the hosted NimBLE module rather than reviving the older Bluedroid experiment
 
 ## Main gaps to full feature parity
@@ -93,6 +95,11 @@ To support third-party apps written in C, the project needs a minimal stable run
 - A documented ABI or loader manifest format
 
 ### Recent completions
+- Done: `components/windows` window manager module with LVGL screen layout, dynamic scaling, rotation-aware regions, and consistent styling
+- Done: `components/display` display manager module with centralized rotation, resolution, refresh rate, brightness, power management, and touch handle control
+- Done: all display-related shell commands (`brightness`, `rotate`) refactored to use display manager public API
+- Done: display manager provides `display_info_t` for comprehensive sysinfo diagnostics
+- Done: display manager owns touch handle acquisition and rotation remapping internally
 - Done: fixed `components/header` top-bar module with passive `header_init`, `header_update_status`, and `header_update_*` integration for notifications and system status
 - Done: header system panel redesigned with MEM | CPU | BAT all on the far right, dynamically linked to FreeRTOS runtime statistics
 - Done: CPU usage bar + percentage from FreeRTOS idle task runtime counter deltas

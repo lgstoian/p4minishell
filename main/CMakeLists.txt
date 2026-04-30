@@ -7,9 +7,11 @@ idf_component_register(
         espressif__esp_lvgl_port
         bootloader_support
         c6ota
+        display
         header
         networking
         p4_usb
+        windows
         esp_adc
         esp_event
         esp_hosted

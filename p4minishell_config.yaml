@@ -10,10 +10,10 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.3.0
-# Last updated: 2026-04-29
+# Version: 0.5.0
+# Last updated: 2026-04-30
 
-config_version: "0.3.0"
+config_version: "0.5.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -88,6 +88,95 @@ ui_layout:
     type: int
     description: "Input row (prompt line) height in pixels"
     range: "32..100"
+
+# ---- Display Manager ----
+# Managed by: components/display/display.c
+# All display state (rotation, brightness, power) is owned by the display manager.
+# Shell commands route through display manager public API.
+display:
+  default_brightness_percent:
+    value: 100
+    type: int
+    description: "Default backlight brightness on boot (0-100)"
+    range: "0..100"
+  default_rotation:
+    value: 0
+    type: int
+    description: "Default display rotation on boot (0, 90, 180, or 270)"
+    range: "0|90|180|270"
+  default_power_state:
+    value: "on"
+    type: string
+    description: "Default display power state on boot (on, sleep, off)"
+    range: "on|sleep|off"
+  refresh_rate_dynamic_supported:
+    value: false
+    type: bool
+    description: "Whether dynamic refresh rate changes are supported by the panel"
+  panel_driver:
+    value: "JD9165"
+    type: string
+    description: "Display panel driver name for diagnostics"
+  touch_driver:
+    value: "GT911"
+    type: string
+    description: "Touch controller driver name for diagnostics"
+
+# ---- Window Manager ----
+# Managed by: components/windows/windows.c
+# All LVGL screen layout, scaling, and styling is owned by the window manager.
+# Works together with display.c for resolution queries and header.c for status bar.
+windows:
+  header_height_pct:
+    value: 7
+    type: int
+    description: "Header height as percentage of display height"
+    range: "3..15"
+  header_height_min:
+    value: 32
+    type: int
+    description: "Header height minimum clamp in pixels"
+    range: "24..64"
+  header_height_max:
+    value: 56
+    type: int
+    description: "Header height maximum clamp in pixels"
+    range: "40..80"
+  input_row_height_pct:
+    value: 8
+    type: int
+    description: "Input row height as percentage of display height"
+    range: "4..15"
+  input_row_height_min:
+    value: 40
+    type: int
+    description: "Input row height minimum clamp in pixels"
+    range: "32..64"
+  input_row_height_max:
+    value: 56
+    type: int
+    description: "Input row height maximum clamp in pixels"
+    range: "40..80"
+  keyboard_height_pct:
+    value: 35
+    type: int
+    description: "Keyboard height as percentage of display height"
+    range: "20..50"
+  keyboard_height_min:
+    value: 180
+    type: int
+    description: "Keyboard height minimum clamp in pixels"
+    range: "100..300"
+  keyboard_height_max:
+    value: 280
+    type: int
+    description: "Keyboard height maximum clamp in pixels"
+    range: "200..400"
+  transcript_height_min:
+    value: 40
+    type: int
+    description: "Minimum transcript height in pixels"
+    range: "20..200"
 
 # ---- Wi-Fi ----
 wifi:
@@ -427,10 +516,10 @@ task_stacks:
     description: "Shell command worker task stack"
     range: "4096..32768"
   uart_console:
-    value: 4096
+    value: 12288
     type: size_t
     description: "UART/serial console reader task stack"
-    range: "2048..8192"
+    range: "4096..16384"
 
 # ---- Networking ----
 networking:

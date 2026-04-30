@@ -10,6 +10,8 @@ P4MiniShell is a modular embedded shell application for ESP32-P4 with an ESP32-C
 main/main.c                     Shell UI, parser, transcript, orchestration
 p4minishell_config.h            Centralized configuration header
 p4minishell_config.yaml         Configuration documentation (YAML)
+components/display/display.c    Display manager (rotation, resolution, refresh, brightness, power)
+components/windows/windows.c    Window manager (LVGL screen layout, dynamic scaling, styling)
 components/header/header.c      Fixed top status bar (LVGL widgets)
 components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
 components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
@@ -36,7 +38,7 @@ Three config sources exist, each with a distinct role:
 
 The shell is the UI and orchestration layer. It owns:
 
-- **LVGL display and touch**: BSP-managed JD9165 1024x600 MIPI-DSI display and GT911 touch via `bsp_display_start_with_config()`
+- **LVGL display and touch**: BSP-managed JD9165 1024x600 MIPI-DSI display and GT911 touch via `display_init()` (delegated to `components/display/`)
 - **Transcript system**: Scrollable textarea for command output with overflow protection and truncation markers
 - **Async transcript buffer**: Thread-safe buffer for background task output, flushed via LVGL async callback
 - **Command parser**: Tokenization with quote support, family dispatch, and preserved original command text
@@ -47,9 +49,38 @@ The shell is the UI and orchestration layer. It owns:
 - **File system**: RAM-only current working directory, environment variables (24 max), PATH
 - **Batch engine**: `.bat` file execution with `%1`..`%9` expansion, `rem` comments, `echo on/off`
 - **Output redirection**: `>` and `>>` to SD files via transcript delta copy
-- **Hardware controls**: Backlight PWM, display rotation with touch remapping, battery ADC, audio codec volume
+- **Hardware controls**: Backlight PWM, display rotation with touch remapping, battery ADC, audio codec volume — all routed through `components/display/` for display operations
 - **GPIO management**: Pin table with board roles, read access for all pins, write restricted to safe pins
 - **Debug history**: 5-entry circular buffer surfaced via `debug` command
+
+### Display Module (components/display)
+
+Central display controller owning all display hardware state and operations:
+
+- **Rotation control**: 0/90/180/270 degree rotation with automatic GT911 touch remapping
+- **Resolution queries**: Native panel resolution (1024x600) and current effective resolution (accounting for rotation)
+- **Refresh rate**: Query current refresh rate (~60 Hz from panel timing); dynamic rate change API exists but is noted as not supported on JD9165 panel
+- **Backlight brightness**: 0-100% PWM brightness control through BSP LEDC path
+- **Power management**: Display on/sleep/off power state transitions with backlight control
+- **Display diagnostics**: Comprehensive `display_info_t` struct with all timing, buffer, and config data
+- **Thread safety**: State variables protected by critical sections; LVGL operations dispatched via `lv_async_call`
+- **UI rebuild callback**: Registered callback invoked after rotation changes to trigger full UI rebuild
+- **Touch handle**: Lazy acquisition of GT911 touch handle from BSP; cached for rotation remapping
+- **Public API**: `display_init()`, `display_set_rotation()`, `display_get_rotation()`, `display_set_brightness()`, `display_get_brightness()`, `display_get_resolution()`, `display_get_info()`, `display_set_power_state()`, `display_sleep()`, `display_wake()`, `display_set_refresh_rate()`, `display_register_ui_rebuild_callback()`
+
+### Window Manager (components/windows)
+
+Central layout manager owning the LVGL screen region partitioning and dynamic scaling:
+
+- **Named regions**: HEADER, TRANSCRIPT, INPUT_ROW, KEYBOARD — each with computed bounding rectangles
+- **Resolution-aware scaling**: All dimensions derived from display.c's current resolution
+- **Rotation-aware**: Recalculates layout on rotation change via the display manager's UI rebuild callback
+- **Consistent styling**: All colors accessed through semantic names via `windows_get_color()`
+- **Font management**: Centralized terminal font selection via `windows_get_terminal_font()`
+- **Lifecycle**: `windows_init()` builds all UI regions; `windows_deinit()` tears down before rotation rebuild
+- **Public accessors**: Individual window objects accessible via getter functions for event callback registration
+- **Works with display.c**: Queries `display_get_width()`/`display_get_height()` for current resolution
+- **Delegates to header.c**: Header region creation delegated to `header_init()`/`header_deinit()`
 
 ### Header Module (components/header)
 

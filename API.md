@@ -4,11 +4,142 @@ This document describes the public integration surface exposed by the hosted run
 
 ## Shared integration pattern
 - `main/main.c` remains the shell UI, transcript, parser, and orchestration layer.
+- `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
+- `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar UI for notifications and passive status display.
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
 - `components/usb` owns USB Host Library state, USB MSC storage, and USB HID keyboard or mouse debug behavior.
 - `components/c6ota` owns the shell-visible ESP32-C6 OTA workflow and depends on `components/networking` for Wi-Fi wait and restore hooks.
-- All four areas keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
+- All six areas keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
+
+## Window Manager API
+
+The window manager (`components/windows/`) is the central layout controller for the LVGL shell UI. It owns the screen region partitioning, dynamic scaling, and consistent styling. All LVGL screen-level widgets are created and owned by this module.
+
+### Lifecycle
+- `esp_err_t windows_init(void)` — Build all UI windows on the LVGL screen. Must be called after `display_init()`.
+- `void windows_deinit(void)` — Tear down all windows. Calls `header_deinit()` internally.
+- `bool windows_is_initialized(void)` — Check if the window manager is initialized.
+
+### Window Object Accessors
+- `lv_obj_t *windows_get_transcript(void)` — Scrollable command output textarea
+- `lv_obj_t *windows_get_input_line(void)` — Single-line command entry textarea
+- `lv_obj_t *windows_get_keyboard(void)` — On-screen LVGL keyboard
+- `lv_obj_t *windows_get_prev_button(void)` — Previous history button
+- `lv_obj_t *windows_get_next_button(void)` — Next history button
+- `lv_obj_t *windows_get_input_row(void)` — Input row container
+- `lv_obj_t *windows_get_screen(void)` — Active LVGL screen
+
+### Dimension & Scaling
+- `lv_coord_t windows_get_display_width(void)` — Current display width from display.c
+- `lv_coord_t windows_get_display_height(void)` — Current display height from display.c
+- `lv_coord_t windows_scale_height_percent(int pct, lv_coord_t min, lv_coord_t max)` — Scale height as percentage of display height
+- `lv_coord_t windows_scale_width_percent(int pct, lv_coord_t min, lv_coord_t max)` — Scale width as percentage of display width
+- `window_rect_t windows_get_rect(window_region_t region)` — Get bounding rectangle for a named region
+
+### Styling
+- `lv_color_t windows_get_color(const char *name)` — Get color by semantic name (`bg_screen`, `bg_transcript`, `bg_input_row`, `bg_keyboard`, `text`, `text_muted`)
+- `const lv_font_t *windows_get_terminal_font(void)` — Get the terminal font
+
+### Helpers
+- `void windows_show_boot_banner(const char *message)` — Show boot message in transcript
+- `void windows_reset_input_line(const char *prompt)` — Reset input line to prompt
+
+### Thread Safety
+All LVGL object creation/destruction must happen on the LVGL task. Public accessors return raw LVGL object pointers — callers must use from LVGL task context or via `lv_async_call`.
+
+## Display API
+
+The display manager (`components/display/`) is the central controller for all display hardware. It owns rotation, resolution, refresh rate, brightness, power state, and touch handle management. All display-related shell commands route through this module.
+
+### Initialization & Lifecycle
+
+- `esp_err_t display_init(void)`
+  - Initialize the display manager and physical display hardware.
+  - Wraps `bsp_display_start_with_config()` with `BOARD_CFG_*` values.
+  - Turns on backlight by default. Returns `ESP_FAIL` if display init fails.
+
+- `void display_deinit(void)`
+  - Deinitialize the display manager (resets internal state tracking).
+  - Does NOT power off the display hardware.
+
+- `bool display_is_initialized(void)`
+  - Returns true if `display_init()` completed successfully.
+
+- `lv_display_t *display_get_lvgl_handle(void)`
+  - Get the LVGL display handle for direct LVGL operations.
+
+- `void *display_get_touch_handle(void)`
+  - Get the touch handle for direct touch operations.
+
+- `void display_register_ui_rebuild_callback(void (*rebuild_fn)(void))`
+  - Register a callback invoked via `lv_async_call` after rotation changes.
+  - The shell registers `shell_build_ui()` here so the display manager can trigger full UI rebuilds.
+
+### Rotation Control
+
+- `display_rotation_t display_get_rotation(void)`
+  - Get the current display rotation (0, 90, 180, or 270).
+
+- `esp_err_t display_set_rotation(display_rotation_t rotation)`
+  - Apply a new display rotation. Triggers LVGL software rotation, touch controller remapping, and schedules UI rebuild via registered callback.
+
+- `esp_err_t display_rotation_parse(const char *str, display_rotation_t *rotation_out)`
+  - Parse a rotation string ("0", "90", "180", "270") into `display_rotation_t`.
+
+- `const char *display_rotation_to_string(display_rotation_t rotation)`
+  - Get the rotation as a human-readable string.
+
+- `lv_display_rotation_t display_rotation_to_lvgl(display_rotation_t rotation)`
+- `display_rotation_t display_rotation_from_lvgl(lv_display_rotation_t lvgl_rotation)`
+  - Convert between display manager and LVGL rotation enums.
+
+### Resolution
+
+- `display_resolution_t display_get_resolution(void)`
+  - Get current effective resolution accounting for rotation.
+
+- `display_resolution_t display_get_native_resolution(void)`
+  - Get native panel resolution (1024x600).
+
+### Refresh Rate
+
+- `display_refresh_config_t display_get_refresh_config(void)`
+  - Get current refresh rate configuration (estimated ~60 Hz from panel timing).
+
+- `esp_err_t display_set_refresh_rate(uint32_t target_hz)`
+  - Set target refresh rate. Returns `ESP_ERR_NOT_SUPPORTED` on JD9165 panel (fixed timing).
+
+### Brightness
+
+- `int display_get_brightness(void)`
+  - Get current backlight brightness percentage (0-100).
+
+- `esp_err_t display_set_brightness(int percent)`
+  - Set backlight brightness via BSP PWM path. Returns `ESP_ERR_INVALID_ARG` if out of range.
+
+### Power Management
+
+- `display_power_state_t display_get_power_state(void)`
+  - Get current display power state (on/sleep/off).
+
+- `esp_err_t display_set_power_state(display_power_state_t state)`
+  - Set display power state. Controls backlight on/off.
+
+- `esp_err_t display_sleep(void)` / `esp_err_t display_wake(void)`
+  - Convenience functions for sleep/wake transitions.
+
+### Display Info & Diagnostics
+
+- `display_info_t display_get_info(void)`
+  - Get comprehensive display information (resolution, rotation, refresh, brightness, timing, buffer config, panel/touch driver names).
+
+- `void display_print_info(void (*print_fn)(const char *format, ...))`
+  - Print formatted display info through a caller-provided print function (e.g., `shell_transcript_appendf`).
+
+### Thread Safety
+
+All display manager state is protected by a `portMUX_TYPE` spinlock. Public API functions use `portENTER_CRITICAL`/`portEXIT_CRITICAL` for atomic access. LVGL operations are dispatched via `lv_async_call` when called from non-LVGL task contexts.
 
 ## Header API
 
@@ -66,6 +197,11 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 
 - `void header_force_render(void)`
   - Force a synchronous header re-render. Call only from LVGL task context.
+
+- `void header_deinit(void)`
+  - Deinitialize the header bar, releasing all widgets and resetting state.
+  - Call before rebuilding the UI after display rotation or resolution change.
+  - Must be called from LVGL task context only.
 
 - `void (*notify_header)(const char *text, uint32_t timeout_ms)` inside `networking_host_ops_t`
   - Optional host callback used by the networking module to surface live Wi-Fi notices directly in the fixed header without moving header ownership into `components/networking`.

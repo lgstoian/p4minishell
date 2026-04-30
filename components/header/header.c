@@ -725,3 +725,45 @@ void header_update_uptime(uint32_t uptime_seconds)
         if (!header_schedule(header_async_uptime, u)) { free(u); header_render(); }
     } else { header_render(); }
 }
+
+void header_deinit(void)
+{
+    /* Do NOT call lv_timer_delete here — the timer may have been invalidated
+     * by a previous cleanup or may be owned by a different LVGL context.
+     * lv_obj_clean() in shell_build_ui will destroy all widgets and the
+     * timer will be cleaned up by LVGL's internal timer management.
+     * Just NULL out the pointer so header_init() creates a fresh one. */
+    s_notification_timer = NULL;
+
+    /* Clear all widget handles — the screen will be cleaned by shell_build_ui
+     * via lv_obj_clean(), which deletes all children including our widgets.
+     * Reset state to defaults for fresh init. */
+    s_header_root = NULL;
+    s_notification_label = NULL;
+    s_notification_icon = NULL;
+    s_status_panel = NULL;
+    s_sys_panel = NULL;
+    s_battery_icon_label = NULL;
+    s_battery_bar = NULL;
+    s_battery_value_label = NULL;
+    s_mem_label = NULL;
+    s_cpu_label = NULL;
+    s_cpu_bar = NULL;
+    s_cpu_value_label = NULL;
+    for (int i = 0; i < HEADER_ICON_COUNT; i++) {
+        s_status_icons[i] = NULL;
+    }
+
+    /* Reset state to defaults for fresh init */
+    s_header_state = (header_state_t){
+        .battery_percent = 100,
+        .battery_adc_ready = false,
+        .wifi_rssi = -127,
+        .sd_state = HEADER_SD_NONE,
+        .free_heap_bytes = 0,
+        .total_heap_bytes = 0,
+        .cpu_percent = 0,
+        .task_count = 0,
+        .uptime_seconds = 0,
+    };
+}

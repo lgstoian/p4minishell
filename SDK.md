@@ -1,9 +1,11 @@
 # Hosted Module SDK Guide
 
-This guide describes how `main/main.c` integrates the hosted runtime modules in this workspace: `components/header`, `components/networking`, `components/bluetooth`, `components/usb`, and `components/c6ota`.
+This guide describes how `main/main.c` integrates the hosted runtime modules in this workspace: `components/display`, `components/windows`, `components/header`, `components/networking`, `components/bluetooth`, `components/usb`, and `components/c6ota`.
 
 ## Architecture
 - `main/main.c` owns the transcript, parser, command history rules, and boot banner.
+- `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
+- `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar LVGL widgets for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status.
 - `components/networking` owns hosted Wi-Fi runtime state, boot restore, diagnostics, and OTA restore hooks.
 - `components/networking/bluetooth.c` owns the hosted NimBLE control path for Bluetooth commands.
@@ -11,14 +13,16 @@ This guide describes how `main/main.c` integrates the hosted runtime modules in 
 - `components/c6ota` owns the ESP32-C6 OTA workflow and uses `components/networking` when it needs Wi-Fi readiness or restore behavior.
 
 ## Required boot-time integration
-1. Include `header.h`, `networking.h`, `bluetooth.h`, `usb.h`, and `c6ota.h` where those modules are orchestrated.
-2. Build a single `networking_host_ops_t` callback table backed by the shell transcript and debug-history functions.
-3. Call `header_init()` once after LVGL is ready and before the transcript widgets are created so the fixed bar is the first child on the screen.
-4. Call `c6ota_init()` once after the transcript path is ready.
-5. Register the OTA transcript callback with `c6ota_register_progress_callback(...)`.
-6. Call `networking_init(&host_ops)` once so the Wi-Fi module can capture the host hooks and the Bluetooth module can inherit the same callback surface.
-7. Call `usb_init()` once after `networking_init(&host_ops)` so the USB host stack starts after the existing networking bootstrap without regressing boot orchestration.
-8. Start a small periodic status refresh, for example an LVGL timer every 5 seconds, that feeds `header_update_wifi`, `header_update_battery`, `header_update_bluetooth`, `header_update_usb`, `header_update_sd`, `header_update_mem`, `header_update_cpu`, and then `header_update_status()`.
+1. Include `display.h`, `windows.h`, `header.h`, `networking.h`, `bluetooth.h`, `usb.h`, and `c6ota.h` where those modules are orchestrated.
+2. Call `display_init()` first to initialize the display hardware and LVGL port.
+3. Register the UI rebuild callback with `display_register_ui_rebuild_callback(shell_build_ui)` so rotation changes trigger full UI rebuilds.
+4. Call `windows_init()` to build the LVGL shell surface (header, transcript, input row, keyboard).
+5. Build a single `networking_host_ops_t` callback table backed by the shell transcript and debug-history functions.
+6. Call `c6ota_init()` once after the transcript path is ready.
+7. Register the OTA transcript callback with `c6ota_register_progress_callback(...)`.
+8. Call `networking_init(&host_ops)` once so the Wi-Fi module can capture the host hooks.
+9. Call `usb_init()` once after `networking_init(&host_ops)`.
+10. Start a periodic status refresh timer that feeds `header_update_*` functions.
 
 ## Shared host callback model
 `networking_host_ops_t` is the common host-to-module bridge for Wi-Fi and Bluetooth:
@@ -75,7 +79,13 @@ static void shell_c6ota_progress(int percent, const char *msg)
 
 void shell_boot_init(void)
 {
-    header_init();
+    /* Display manager must be initialized first */
+    display_init();
+    display_register_ui_rebuild_callback(shell_build_ui);
+
+    /* Window manager builds the LVGL shell surface */
+    windows_init();
+
     c6ota_init();
     c6ota_register_progress_callback(shell_c6ota_progress);
 
@@ -91,6 +101,28 @@ void shell_boot_init(void)
     lv_timer_create(shell_header_status_timer_cb, 5000, NULL);
 }
 ```
+
+## Window manager integration notes
+- The window manager (`components/windows/`) OWNS all LVGL screen-level widgets.
+- `windows_init()` must be called after `display_init()` and from the LVGL task context.
+- `windows_deinit()` must be called before rebuilding the UI after rotation.
+- All window objects are accessed via `windows_get_*()` accessors — never stored as static variables.
+- Window region dimensions are computed dynamically from display resolution via `windows_scale_height_percent()` and `windows_scale_width_percent()`.
+- All styling uses semantic color names via `windows_get_color()`.
+- The window manager delegates header creation to `header_init()`/`header_deinit()`.
+- The window manager queries display resolution from `display_get_width()`/`display_get_height()`.
+
+## Display manager integration notes
+- The display manager (`components/display/`) OWNS all display hardware state.
+- `display_init()` must be called first, before any LVGL UI construction.
+- `display_register_ui_rebuild_callback()` must be called after `display_init()` so rotation changes trigger full UI rebuilds.
+- All display operations (brightness, rotation, power, info) go through the display manager's public API.
+- The display manager handles touch handle acquisition and rotation remapping internally.
+- `display_get_lvgl_handle()` is available if direct LVGL access is needed (e.g., for `lv_display_get_vertical_resolution()`).
+- `display_get_info()` provides comprehensive diagnostics for `sysinfo` output.
+- Thread safety: all display manager state is protected by critical sections; safe to call from any task context.
+- Dynamic refresh rate change is noted as not supported on the current JD9165 panel (fixed 80 MHz pixel clock).
+- The display manager does NOT own LVGL widgets or UI layout — that remains the shell's responsibility.
 
 ## Header integration notes
 - The header is passive and display-only. It must not own Wi-Fi, Bluetooth, USB, SD, or battery runtime behavior.

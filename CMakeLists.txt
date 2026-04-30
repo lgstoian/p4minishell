@@ -8,6 +8,8 @@ set(EXTRA_COMPONENT_DIRS
 	managed_components/espressif__esp_lcd_jd9165
 	managed_components/espressif__esp_lcd_touch_gt911
 	managed_components/lvgl__lvgl
+	components/display
+	components/windows
 )
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/config)

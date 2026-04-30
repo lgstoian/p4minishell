@@ -63,10 +63,30 @@
 - header_update_uptime(uint32_t seconds) — system uptime from esp_timer_get_time()
 - Touch init failure must not prevent header rendering (BSP touch is optional)
 
+### Window Manager Rules
+- ALL LVGL screen layout MUST go through `components/windows/` — never create screen-level widgets directly in main.c
+- `windows_init()` MUST be called after `display_init()` and from the LVGL task context (inside `bsp_display_lock`)
+- `windows_deinit()` MUST be called before rebuilding the UI after rotation changes
+- Window objects MUST be accessed via `windows_get_*()` accessors, never stored as static variables in main.c
+- All window region dimensions MUST use config macros (`P4_CONFIG_WINDOW_*`), never hardcoded
+- Colors MUST be accessed through `windows_get_color()` with semantic names, never raw hex values
+- The window manager delegates header rendering to `components/header/` via `header_init()`/`header_deinit()`
+- The window manager queries display resolution from `components/display/` via `display_get_width()`/`display_get_height()`
+
 ### Display and Touch
-- Display init MUST use bsp_display_start_with_config() with existing BOARD_CFG_* values
-- Touch init MUST use the managed GT911 driver through BSP
+- Display init MUST use `display_init()` (which wraps `bsp_display_start_with_config()` with BOARD_CFG_* values)
+- ALL display operations MUST go through `components/display/` public API — never call BSP display functions directly from main.c
+- Touch init MUST use the managed GT911 driver through BSP (handled internally by display manager)
 - Never replace the BSP display/touch path with raw driver calls
+- After `display_set_rotation()`, the display manager schedules a UI rebuild via the registered callback
+- `shell_build_ui()` MUST call `header_deinit()` before `lv_obj_clean()` for clean header re-init
+- Touch rotation mapping is handled automatically by the display manager on rotation change
+- Keyboard height scales dynamically (~35% of vertical resolution, clamped 180-280px)
+- Input row height scales dynamically (~8% of vertical resolution, clamped 40-56px)
+- Header height is rotation-aware (uses correct resolution axis for 90/270)
+- Display state variables (rotation, brightness, power) are owned by the display manager and accessed through its public API
+- `display_register_ui_rebuild_callback()` MUST be called after `display_init()` to register the shell's UI rebuild function
+- The display manager's `display_info_t` struct is the canonical source for sysinfo display diagnostics
 
 ### Wi-Fi Rules
 - Wi-Fi startup MUST follow sdkconfig only

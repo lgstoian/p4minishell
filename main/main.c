@@ -31,7 +31,6 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_codec_dev.h"
-#include "esp_lcd_touch.h"
 #include "esp_pm.h"
 #if CONFIG_ESP_HOSTED_ENABLED
 #include "esp_hosted.h"
@@ -56,9 +55,11 @@
 #include "board_config.h"
 #include "bluetooth.h"
 #include "c6ota.h"
+#include "display.h"
 #include "header.h"
 #include "networking.h"
 #include "usb.h"
+#include "windows.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 #include "p4minishell_config.h"
@@ -152,15 +153,6 @@ typedef struct {
     bool critical;
 } shell_gpio_pin_desc_t;
 
-typedef struct {
-    esp_lcd_touch_handle_t handle;
-    lv_indev_t *indev;
-    struct {
-        float x;
-        float y;
-    } scale;
-} shell_lvgl_touch_ctx_t;
-
 #if SHELL_BT_HOSTED_RUNTIME_SUPPORTED
 typedef struct {
     size_t result_count;
@@ -172,12 +164,6 @@ typedef struct {
 } shell_bt_state_t;
 #endif
 
-static lv_obj_t *s_history_transcript;
-static lv_obj_t *s_input_line;
-static lv_obj_t *s_keyboard;
-static lv_obj_t *s_history_prev_button;
-static lv_obj_t *s_history_next_button;
-static lv_display_t *s_display;
 static lv_timer_t *s_header_status_timer;
 static char s_transcript[SHELL_TRANSCRIPT_BYTES];
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
@@ -203,10 +189,7 @@ static SemaphoreHandle_t s_uart_console_lock;
 static char s_shell_cwd[SHELL_SD_PATH_BYTES];
 static shell_env_var_t s_shell_env_vars[SHELL_ENV_VAR_MAX];
 static shell_batch_frame_t *s_active_batch_frame;
-static esp_lcd_touch_handle_t s_touch_handle;
-static int s_backlight_percent = 100;
 static int s_volume_percent = 60;
-static lv_display_rotation_t s_display_rotation = LV_DISPLAY_ROTATION_0;
 static bool s_light_sleep_requested;
 static bool s_header_sd_state_known;
 static bool s_header_sd_last_mounted;
@@ -247,9 +230,7 @@ static void shell_record_infof(const char *tag, const char *format, ...);
 static void shell_header_notify(const char *text, uint32_t timeout_ms);
 static bool shell_parse_percentage_arg(const char *text, int *percentage_out);
 static const shell_gpio_pin_desc_t *shell_find_gpio_pin(int gpio_num);
-static esp_err_t shell_get_touch_handle_from_bsp(void);
-static void shell_update_touch_rotation(lv_display_rotation_t rotation);
-static esp_err_t shell_rotation_apply(lv_display_rotation_t rotation);
+static void shell_build_ui(void);
 static esp_err_t shell_audio_ensure_speaker(void);
 static esp_err_t shell_battery_ensure_adc(void);
 static esp_err_t shell_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out);
@@ -618,79 +599,7 @@ static const shell_gpio_pin_desc_t *shell_find_gpio_pin(int gpio_num)
     return NULL;
 }
 
-static esp_err_t shell_get_touch_handle_from_bsp(void)
-{
-    lv_indev_t *touch_indev;
-    shell_lvgl_touch_ctx_t *touch_ctx;
 
-    if (s_touch_handle != NULL) {
-        return ESP_OK;
-    }
-
-    touch_indev = bsp_display_get_input_dev();
-    if (touch_indev == NULL) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    touch_ctx = (shell_lvgl_touch_ctx_t *)lv_indev_get_driver_data(touch_indev);
-    if (touch_ctx == NULL || touch_ctx->handle == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    s_touch_handle = touch_ctx->handle;
-    return ESP_OK;
-}
-
-static void shell_update_touch_rotation(lv_display_rotation_t rotation)
-{
-    bool swap_xy = false;
-    bool mirror_x = false;
-    bool mirror_y = false;
-
-    if (shell_get_touch_handle_from_bsp() != ESP_OK || s_touch_handle == NULL) {
-        return;
-    }
-
-    switch (rotation) {
-    case LV_DISPLAY_ROTATION_90:
-        swap_xy = true;
-        mirror_x = true;
-        mirror_y = false;
-        break;
-    case LV_DISPLAY_ROTATION_180:
-        swap_xy = false;
-        mirror_x = true;
-        mirror_y = true;
-        break;
-    case LV_DISPLAY_ROTATION_270:
-        swap_xy = true;
-        mirror_x = false;
-        mirror_y = true;
-        break;
-    case LV_DISPLAY_ROTATION_0:
-    default:
-        swap_xy = false;
-        mirror_x = false;
-        mirror_y = false;
-        break;
-    }
-
-    (void)esp_lcd_touch_set_swap_xy(s_touch_handle, swap_xy);
-    (void)esp_lcd_touch_set_mirror_x(s_touch_handle, mirror_x);
-    (void)esp_lcd_touch_set_mirror_y(s_touch_handle, mirror_y);
-}
-
-static esp_err_t shell_rotation_apply(lv_display_rotation_t rotation)
-{
-    if (s_display == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    lv_display_set_rotation(s_display, rotation);
-    shell_update_touch_rotation(rotation);
-    s_display_rotation = rotation;
-    return ESP_OK;
-}
 
 static esp_err_t shell_audio_ensure_speaker(void)
 {
@@ -1504,14 +1413,15 @@ static void shell_c6ota_progress_callback(int percent, const char *msg)
 
 static void shell_transcript_render(void)
 {
-    if (s_history_transcript == NULL) {
+    lv_obj_t *transcript = windows_get_transcript();
+    if (transcript == NULL) {
         return;
     }
 
-    lv_textarea_set_text(s_history_transcript, s_transcript);
-    lv_textarea_set_cursor_pos(s_history_transcript, LV_TEXTAREA_CURSOR_LAST);
-    lv_obj_update_layout(s_history_transcript);
-    lv_obj_scroll_to_y(s_history_transcript, LV_COORD_MAX, LV_ANIM_OFF);
+    lv_textarea_set_text(transcript, s_transcript);
+    lv_textarea_set_cursor_pos(transcript, LV_TEXTAREA_CURSOR_LAST);
+    lv_obj_update_layout(transcript);
+    lv_obj_scroll_to_y(transcript, LV_COORD_MAX, LV_ANIM_OFF);
 }
 
 static void shell_transcript_reset(void)
@@ -2399,8 +2309,11 @@ static void shell_input_line_set_text(const char *command_text)
     const char *safe_command = command_text != NULL ? command_text : "";
 
     snprintf(buffer, sizeof(buffer), "%s%s", SHELL_PROMPT, safe_command);
-    lv_textarea_set_text(s_input_line, buffer);
-    lv_textarea_set_cursor_pos(s_input_line, LV_TEXTAREA_CURSOR_LAST);
+    lv_obj_t *input_line = windows_get_input_line();
+    if (input_line != NULL) {
+        lv_textarea_set_text(input_line, buffer);
+        lv_textarea_set_cursor_pos(input_line, LV_TEXTAREA_CURSOR_LAST);
+    }
 }
 
 static void shell_input_line_reset(void)
@@ -2410,7 +2323,8 @@ static void shell_input_line_reset(void)
 
 static void shell_extract_input_text(char *output, size_t output_size)
 {
-    const char *text = lv_textarea_get_text(s_input_line);
+    lv_obj_t *il = windows_get_input_line();
+    const char *text = il ? lv_textarea_get_text(il) : "";
 
     if (strncmp(text, SHELL_PROMPT, strlen(SHELL_PROMPT)) == 0) {
         snprintf(output, output_size, "%s", text + strlen(SHELL_PROMPT));
@@ -2548,36 +2462,47 @@ static void shell_command_sysinfo(void)
 
     shell_transcript_appendf("board.requested_name: %s\n", SHELL_BOARD_REQUESTED);
     shell_transcript_appendf("board.detected_name: %s\n", SHELL_BOARD_DETECTED);
-    shell_transcript_appendf("display: %d x %d, JD9165, reset GPIO %d, backlight GPIO %d\n",
-                             BSP_LCD_H_RES, BSP_LCD_V_RES, BSP_LCD_RST, BSP_LCD_BACKLIGHT);
-    shell_transcript_appendf("display.state: brightness=%d%% rotation=%u\n",
-                             s_backlight_percent,
-                             (unsigned int)(s_display_rotation * 90));
-    shell_transcript_appendf("display.timing: pclk=%dMHz, lanes=%d, bitrate=%dMbps, hsync=%d hbp=%d hfp=%d vsync=%d vbp=%d vfp=%d\n",
-                             BSP_LCD_PIXEL_CLOCK_MHZ,
-                             BSP_LCD_MIPI_DSI_LANE_NUM,
-                             BOARD_CFG_LCD_DSI_BUS_LANE_BITRATE_MBPS_RUNTIME,
-                             BSP_LCD_MIPI_DSI_LCD_HSYNC,
-                             BSP_LCD_MIPI_DSI_LCD_HBP,
-                             BSP_LCD_MIPI_DSI_LCD_HFP,
-                             BSP_LCD_MIPI_DSI_LCD_VSYNC,
-                             BSP_LCD_MIPI_DSI_LCD_VBP,
-                             BSP_LCD_MIPI_DSI_LCD_VFP);
-    shell_transcript_appendf("display.buffer: draw=%d, double=%d, dma=%d, spiram=%d, sw_rotate=%d\n",
-                             BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
-                             BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE,
-                             BOARD_CFG_APP_BUFFER_DMA,
-                             BOARD_CFG_APP_BUFFER_SPIRAM,
-                             BOARD_CFG_APP_SW_ROTATE);
-    shell_transcript_appendf("touch: GT911 on I2C%d, SDA GPIO %d, SCL GPIO %d, %dHz, pullup=%d, swap_xy=%d, mirror_x=%d, mirror_y=%d\n",
-                             BSP_I2C_NUM,
-                             BSP_I2C_SDA,
-                             BSP_I2C_SCL,
-                             BOARD_CFG_I2C_CLK_SPEED_HZ,
-                             BOARD_CFG_I2C_ENABLE_INTERNAL_PULLUP,
-                             BOARD_CFG_TOUCH_SWAP_XY,
-                             BOARD_CFG_TOUCH_MIRROR_X,
-                             BOARD_CFG_TOUCH_MIRROR_Y);
+
+    /* Display info from the display manager */
+    {
+        display_info_t disp_info = display_get_info();
+        shell_transcript_appendf("display: %" PRId32 " x %" PRId32 " (native %" PRId32 " x %" PRId32
+                                 "), %s, reset GPIO %d, backlight GPIO %d\n",
+                                 disp_info.resolution.current_width,
+                                 disp_info.resolution.current_height,
+                                 disp_info.resolution.native_width,
+                                 disp_info.resolution.native_height,
+                                 disp_info.panel_driver,
+                                 BOARD_CFG_LCD_RST_GPIO,
+                                 BOARD_CFG_LCD_BACKLIGHT_GPIO);
+        shell_transcript_appendf("display.state: brightness=%d%% rotation=%s power=%s refresh=%" PRIu32 "Hz\n",
+                                 disp_info.brightness_percent,
+                                 display_rotation_to_string(disp_info.rotation),
+                                 disp_info.power_state == DISPLAY_POWER_ON ? "on" :
+                                 disp_info.power_state == DISPLAY_POWER_SLEEP ? "sleep" : "off",
+                                 disp_info.refresh.current_hz);
+        shell_transcript_appendf("display.timing: pclk=%" PRIu32 "MHz, lanes=%d, bitrate=%" PRIu32
+                                 "Mbps, hsync=%" PRIu32 " hbp=%" PRIu32 " hfp=%" PRIu32
+                                 " vsync=%" PRIu32 " vbp=%" PRIu32 " vfp=%" PRIu32 "\n",
+                                 disp_info.refresh.pixel_clock_mhz,
+                                 disp_info.mipi_lane_num,
+                                 disp_info.refresh.dsi_lane_bitrate_mbps,
+                                 disp_info.hsync, disp_info.hbp, disp_info.hfp,
+                                 disp_info.vsync, disp_info.vbp, disp_info.vfp);
+        shell_transcript_appendf("display.buffer: draw=%" PRIu32 ", double=%d, dma=%d, spiram=%d, sw_rotate=%d\n",
+                                 disp_info.draw_buffer_size,
+                                 disp_info.double_buffer ? 1 : 0,
+                                 disp_info.buffer_dma ? 1 : 0,
+                                 disp_info.buffer_spiram ? 1 : 0,
+                                 disp_info.sw_rotate ? 1 : 0);
+        shell_transcript_appendf("touch: %s on I2C%d, SDA GPIO %d, SCL GPIO %d, %dHz, pullup=%d\n",
+                                 disp_info.touch_driver,
+                                 BOARD_CFG_I2C_PORT,
+                                 BOARD_CFG_I2C_SDA_GPIO,
+                                 BOARD_CFG_I2C_SCL_GPIO,
+                                 BOARD_CFG_I2C_CLK_SPEED_HZ,
+                                 BOARD_CFG_I2C_ENABLE_INTERNAL_PULLUP);
+    }
     shell_transcript_appendf("audio: I2S%d BCLK=%d WS=%d DOUT=%d MCLK=%d amp=%d volume=%d%%\n",
                              BOARD_CFG_I2S_PORT,
                              BSP_I2S_SCLK,
@@ -2630,20 +2555,19 @@ static void shell_command_brightness(int argc, char **argv)
         return;
     }
 
-    error = bsp_display_brightness_set(percent);
+    error = display_set_brightness(percent);
     if (error != ESP_OK) {
         shell_transcript_appendf("brightness: failed to set backlight (%s)\n", esp_err_to_name(error));
         shell_record_errorf("brightness", error, "Failed to set brightness to %d%%", percent);
         return;
     }
 
-    s_backlight_percent = percent;
     shell_transcript_appendf("brightness set to %d%%\n", percent);
 }
 
 static void shell_command_rotate(int argc, char **argv)
 {
-    lv_display_rotation_t rotation;
+    display_rotation_t rotation;
     esp_err_t error;
 
     if (argc != 2) {
@@ -2652,21 +2576,14 @@ static void shell_command_rotate(int argc, char **argv)
         return;
     }
 
-    if (strcmp(argv[1], "0") == 0) {
-        rotation = LV_DISPLAY_ROTATION_0;
-    } else if (strcmp(argv[1], "90") == 0) {
-        rotation = LV_DISPLAY_ROTATION_90;
-    } else if (strcmp(argv[1], "180") == 0) {
-        rotation = LV_DISPLAY_ROTATION_180;
-    } else if (strcmp(argv[1], "270") == 0) {
-        rotation = LV_DISPLAY_ROTATION_270;
-    } else {
+    error = display_rotation_parse(argv[1], &rotation);
+    if (error != ESP_OK) {
         shell_transcript_append_text("Usage: rotate <0|90|180|270>\n");
         shell_record_warningf("rotate", "Invalid rotation angle: %s", argv[1]);
         return;
     }
 
-    error = shell_rotation_apply(rotation);
+    error = display_set_rotation(rotation);
     if (error != ESP_OK) {
         shell_transcript_appendf("rotate: failed to apply display rotation (%s)\n", esp_err_to_name(error));
         shell_record_errorf("rotate", error, "Failed to apply rotation %s", argv[1]);
@@ -4662,6 +4579,53 @@ static bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "display")) {
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "info")) {
+            display_print_info(shell_transcript_appendf);
+            return true;
+        }
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "resolution")) {
+            display_resolution_t res = display_get_resolution();
+            shell_transcript_appendf("display.resolution: %" PRId32 " x %" PRId32
+                                     " (native %" PRId32 " x %" PRId32 ")\n",
+                                     res.current_width, res.current_height,
+                                     res.native_width, res.native_height);
+            return true;
+        }
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "refresh")) {
+            display_refresh_config_t ref = display_get_refresh_config();
+            shell_transcript_appendf("display.refresh: target=%" PRIu32 "Hz current=%" PRIu32 "Hz "
+                                     "pclk=%" PRIu32 "MHz dsi_bitrate=%" PRIu32 "Mbps\n",
+                                     ref.target_hz, ref.current_hz,
+                                     ref.pixel_clock_mhz, ref.dsi_lane_bitrate_mbps);
+            return true;
+        }
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "power")) {
+            if (argc >= 3) {
+                if (shell_text_equals_ignore_case(argv[2], "on")) {
+                    display_set_power_state(DISPLAY_POWER_ON);
+                    shell_transcript_append_text("display power on\n");
+                } else if (shell_text_equals_ignore_case(argv[2], "sleep")) {
+                    display_set_power_state(DISPLAY_POWER_SLEEP);
+                    shell_transcript_append_text("display sleep\n");
+                } else if (shell_text_equals_ignore_case(argv[2], "off")) {
+                    display_set_power_state(DISPLAY_POWER_OFF);
+                    shell_transcript_append_text("display power off\n");
+                } else {
+                    shell_transcript_append_text("Usage: display power <on|sleep|off>\n");
+                }
+            } else {
+                display_power_state_t ps = display_get_power_state();
+                shell_transcript_appendf("display.power: %s\n",
+                                         ps == DISPLAY_POWER_ON ? "on" :
+                                         ps == DISPLAY_POWER_SLEEP ? "sleep" : "off");
+            }
+            return true;
+        }
+        shell_transcript_append_text("Usage: display <info|resolution|refresh|power>\n");
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "battery")) {
         shell_command_battery(argc, argv);
         return true;
@@ -4842,9 +4806,11 @@ static void shell_history_button_event_cb(lv_event_t *event)
         return;
     }
 
-    if (lv_event_get_target(event) == s_history_prev_button) {
+    lv_obj_t *prev_btn = windows_get_prev_button();
+    lv_obj_t *next_btn = windows_get_next_button();
+    if (prev_btn != NULL && lv_event_get_target(event) == prev_btn) {
         shell_recall_history(-1);
-    } else if (lv_event_get_target(event) == s_history_next_button) {
+    } else if (next_btn != NULL && lv_event_get_target(event) == next_btn) {
         shell_recall_history(1);
     }
 }
@@ -4854,9 +4820,15 @@ static void shell_transcript_event_cb(lv_event_t *event)
     lv_event_code_t code = lv_event_get_code(event);
 
     if (code == LV_EVENT_CLICKED || code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(s_keyboard, s_input_line);
-        lv_obj_add_state(s_input_line, LV_STATE_FOCUSED);
-        lv_textarea_set_cursor_pos(s_input_line, LV_TEXTAREA_CURSOR_LAST);
+        lv_obj_t *kb = windows_get_keyboard();
+        lv_obj_t *il = windows_get_input_line();
+        if (kb != NULL && il != NULL) {
+            lv_keyboard_set_textarea(kb, il);
+        }
+        if (il != NULL) {
+            lv_obj_add_state(il, LV_STATE_FOCUSED);
+            lv_textarea_set_cursor_pos(il, LV_TEXTAREA_CURSOR_LAST);
+        }
     }
 }
 
@@ -4865,13 +4837,20 @@ static void shell_input_line_event_cb(lv_event_t *event)
     lv_event_code_t code = lv_event_get_code(event);
 
     if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED) {
-        lv_keyboard_set_textarea(s_keyboard, s_input_line);
-        lv_textarea_set_cursor_pos(s_input_line, LV_TEXTAREA_CURSOR_LAST);
+        lv_obj_t *kb2 = windows_get_keyboard();
+        lv_obj_t *il2 = windows_get_input_line();
+        if (kb2 != NULL && il2 != NULL) {
+            lv_keyboard_set_textarea(kb2, il2);
+        }
+        if (il2 != NULL) {
+            lv_textarea_set_cursor_pos(il2, LV_TEXTAREA_CURSOR_LAST);
+        }
         return;
     }
 
     if (code == LV_EVENT_VALUE_CHANGED) {
-        const char *text = lv_textarea_get_text(s_input_line);
+        lv_obj_t *il3 = windows_get_input_line();
+        const char *text = il3 ? lv_textarea_get_text(il3) : NULL;
 
         if (strncmp(text, SHELL_PROMPT, strlen(SHELL_PROMPT)) != 0) {
             char repaired[SHELL_COMMAND_BYTES];
@@ -4936,98 +4915,51 @@ static void shell_input_line_event_cb(lv_event_t *event)
     }
 }
 
-static const lv_font_t *shell_select_font(void)
+/* LVGL callback to rebuild the UI after display rotation.
+ * Registered with the display manager so it gets called when rotation changes.
+ * Runs on the LVGL task with adequate stack depth. */
+static void shell_rebuild_ui_callback(void)
 {
-#if LV_FONT_UNSCII_16
-    return &lv_font_unscii_16;
-#else
-    return LV_FONT_DEFAULT;
-#endif
+    shell_build_ui();
 }
 
 static void shell_build_ui(void)
 {
-    lv_obj_t *input_row;
-    lv_obj_t *screen = lv_screen_active();
-    const lv_font_t *terminal_font = shell_select_font();
+    esp_err_t err;
 
-    lv_obj_clean(screen);
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x0B0F10), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_layout(screen, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(screen, 0, 0);
-    lv_obj_set_style_pad_row(screen, 0, 0);
+    /* Deinitialize the window manager before rebuilding so all widgets
+     * are released cleanly — needed for display rotation support. */
+    windows_deinit();
 
-    // Header module: fixed top bar for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status. Created first so flex-column layout places it above transcript.
-    header_init();
+    /* Initialize the window manager which builds header, transcript,
+     * input row, and keyboard with resolution-aware scaling. */
+    err = windows_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(SHELL_TAG, "Window manager initialization failed");
+        shell_record_errorf("init", ESP_FAIL, "Window manager init failed");
+        return;
+    }
 
-    // Main transcript area: scrollable, read-only textarea fills remaining vertical space below the header.
-    s_history_transcript = lv_textarea_create(screen);
-    lv_obj_set_width(s_history_transcript, LV_PCT(100));
-    lv_obj_set_flex_grow(s_history_transcript, 1);
-    lv_textarea_set_one_line(s_history_transcript, false);
-    lv_textarea_set_cursor_click_pos(s_history_transcript, false);
-    lv_obj_set_style_bg_color(s_history_transcript, lv_color_hex(0x050806), 0);
-    lv_obj_set_style_bg_opa(s_history_transcript, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_history_transcript, 0, 0);
-    lv_obj_set_style_pad_all(s_history_transcript, 16, 0);
-    lv_obj_set_style_text_color(s_history_transcript, lv_color_hex(0x8DFF96), 0);
-    lv_obj_set_style_text_font(s_history_transcript, terminal_font, 0);
-    lv_obj_set_scrollbar_mode(s_history_transcript, LV_SCROLLBAR_MODE_ACTIVE);
-    lv_obj_add_event_cb(s_history_transcript, shell_transcript_event_cb, LV_EVENT_ALL, NULL);
+    /* Register event callbacks on the window manager's objects */
+    lv_obj_t *transcript = windows_get_transcript();
+    lv_obj_t *input_line = windows_get_input_line();
+    lv_obj_t *prev_btn = windows_get_prev_button();
+    lv_obj_t *next_btn = windows_get_next_button();
 
-    input_row = lv_obj_create(screen);
-    lv_obj_set_width(input_row, LV_PCT(100));
-    lv_obj_set_height(input_row, SHELL_INPUT_ROW_HEIGHT);
-    lv_obj_set_layout(input_row, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(input_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_hor(input_row, 8, 0);
-    lv_obj_set_style_pad_ver(input_row, 6, 0);
-    lv_obj_set_style_pad_column(input_row, 8, 0);
-    lv_obj_set_style_bg_color(input_row, lv_color_hex(0x111816), 0);
-    lv_obj_set_style_bg_opa(input_row, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(input_row, 0, 0);
+    if (transcript != NULL) {
+        lv_obj_add_event_cb(transcript, shell_transcript_event_cb, LV_EVENT_ALL, NULL);
+    }
+    if (input_line != NULL) {
+        lv_obj_add_event_cb(input_line, shell_input_line_event_cb, LV_EVENT_ALL, NULL);
+    }
+    if (prev_btn != NULL) {
+        lv_obj_add_event_cb(prev_btn, shell_history_button_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+    if (next_btn != NULL) {
+        lv_obj_add_event_cb(next_btn, shell_history_button_event_cb, LV_EVENT_CLICKED, NULL);
+    }
 
-    s_history_prev_button = lv_button_create(input_row);
-    lv_obj_set_size(s_history_prev_button, 82, LV_PCT(100));
-    lv_obj_add_event_cb(s_history_prev_button, shell_history_button_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *prev_label = lv_label_create(s_history_prev_button);
-    lv_label_set_text(prev_label, "Prev");
-    lv_obj_center(prev_label);
-
-    s_history_next_button = lv_button_create(input_row);
-    lv_obj_set_size(s_history_next_button, 82, LV_PCT(100));
-    lv_obj_add_event_cb(s_history_next_button, shell_history_button_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *next_label = lv_label_create(s_history_next_button);
-    lv_label_set_text(next_label, "Next");
-    lv_obj_center(next_label);
-
-    s_input_line = lv_textarea_create(input_row);
-    lv_obj_set_flex_grow(s_input_line, 1);
-    lv_obj_set_height(s_input_line, LV_PCT(100));
-    lv_textarea_set_one_line(s_input_line, true);
-    lv_textarea_set_cursor_click_pos(s_input_line, false);
-    lv_obj_set_style_bg_color(s_input_line, lv_color_hex(0x050806), 0);
-    lv_obj_set_style_bg_opa(s_input_line, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_input_line, 0, 0);
-    lv_obj_set_style_pad_hor(s_input_line, 12, 0);
-    lv_obj_set_style_pad_ver(s_input_line, 10, 0);
-    lv_obj_set_style_text_color(s_input_line, lv_color_hex(0x8DFF96), 0);
-    lv_obj_set_style_text_font(s_input_line, terminal_font, 0);
-    lv_obj_add_event_cb(s_input_line, shell_input_line_event_cb, LV_EVENT_ALL, NULL);
-
-    // On-screen keyboard: attached to input line, styled as dense retro terminal keyboard.
-    s_keyboard = lv_keyboard_create(screen);
-    lv_obj_set_width(s_keyboard, LV_PCT(100));
-    lv_obj_set_height(s_keyboard, SHELL_KEYBOARD_HEIGHT);
-    lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_keyboard_set_textarea(s_keyboard, s_input_line);
-    lv_obj_set_style_text_font(s_keyboard, terminal_font, 0);
-    lv_obj_set_style_bg_color(s_keyboard, lv_color_hex(0x1D2625), 0);
-    lv_obj_set_style_bg_opa(s_keyboard, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_keyboard, 0, 0);
-
+    /* Show boot banner and reset input line */
     shell_transcript_reset();
     shell_transcript_append_text(SHELL_BOOT_MESSAGE);
     shell_transcript_append_text("\n");
@@ -5037,31 +4969,24 @@ static void shell_build_ui(void)
 
 void app_main(void)
 {
-    lv_display_t *display;
+    esp_err_t disp_error;
 
     /* Capture boot timestamp for real-time uptime tracking */
     s_boot_timestamp_us = esp_timer_get_time();
 
-    /* Hardware controls and fixed header bar keep BSP boot, render path, keyboard flow, and hosted modules unchanged while main stays the orchestration layer. */
-    bsp_display_cfg_t cfg = {
-        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
-        .double_buffer = BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE,
-        .flags = {
-            .buff_dma = BOARD_CFG_APP_BUFFER_DMA,
-            .buff_spiram = BOARD_CFG_APP_BUFFER_SPIRAM,
-            .sw_rotate = BOARD_CFG_APP_SW_ROTATE,
-        }
-    };
-
-    display = bsp_display_start_with_config(&cfg);
-    if (display == NULL) {
+    /* Initialize the display manager — wraps bsp_display_start_with_config()
+     * and owns all display state (rotation, brightness, power, touch handle).
+     * The display manager handles the BSP display config internally. */
+    disp_error = display_init();
+    if (disp_error != ESP_OK) {
         ESP_LOGE(SHELL_TAG, "Display initialization failed");
         shell_record_errorf("init", ESP_FAIL, "Display initialization failed");
         return;
     }
 
-    s_display = display;
+    /* Register the UI rebuild callback so the display manager can trigger
+     * a full UI rebuild after rotation changes. */
+    display_register_ui_rebuild_callback(shell_rebuild_ui_callback);
 
     shell_set_default_state();
     if (s_shell_command_lock == NULL) {
@@ -5070,18 +4995,19 @@ void app_main(void)
 
     shell_uart_console_start();
 
-    bsp_display_backlight_on();
-
-    // Create the LVGL shell surface only after BSP display and touch startup completes so the header bar and transcript share one stable LVGL screen.
+    /* Display is already initialized and backlight is on from display_init().
+     * Build the LVGL shell surface so the header bar and transcript share
+     * one stable LVGL screen. */
     bsp_display_lock(0);
     shell_build_ui();
     bsp_display_unlock();
 
-    if (shell_get_touch_handle_from_bsp() != ESP_OK) {
+    if (display_get_touch_handle() == NULL) {
         shell_record_warningf("init", "GT911 touch handle lookup failed after BSP startup; rotate will stay display-only");
     }
 
-    // Keep shell boot status visible through the debug surface without emitting a boot warning during normal startup.
+    /* Keep shell boot status visible through the debug surface without
+     * emitting a boot warning during normal startup. */
     shell_record_infof("shell", "Shell UI initialized; boot banner is shown on the display transcript");
 
     shell_transcript_append_text("UART monitor accepts the same shell commands as the on-screen prompt.\n");
@@ -5101,12 +5027,14 @@ void app_main(void)
     });
     usb_init();
 
-    // Public API matches the c6ota, networking, and usb module style - main only feeds passive header updates, with zero regressions to the locked MSDOS transcript UI.
+    /* Start the periodic header status refresh timer.
+     * Public API matches the c6ota, networking, and usb module style —
+     * main only feeds passive header updates, with zero regressions to
+     * the locked MSDOS transcript UI. */
     bsp_display_lock(0);
     shell_header_status_refresh();
     if (s_header_status_timer == NULL) {
         s_header_status_timer = lv_timer_create(shell_header_status_timer_cb, SHELL_HEADER_REFRESH_PERIOD_MS, NULL);
     }
     bsp_display_unlock();
-    // Drive command parsing, shell state updates, and the new passive header status bar from the dedicated shell flow so OTA confirmation stays unchanged.
 }

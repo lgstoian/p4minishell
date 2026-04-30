@@ -44,6 +44,10 @@ board:
     power_amp_gpio: 20
 
   # ---- Display (JD9165 1024x600 MIPI-DSI) ----
+  # Managed by: components/display/display.c (display manager)
+  # All display state (rotation, brightness, power, touch) is owned by the display manager.
+  # Shell commands (brightness, rotate) route through display manager public API.
+  # The display manager wraps bsp_display_start_with_config() using these BOARD_CFG_* values.
   display:
     width: 1024
     height: 600
@@ -67,6 +71,10 @@ board:
     mipi_dsi_lane_num: 2
     mipi_dsi_lane_bitrate_mbps_macro: 1000
     dsi_bus_lane_bitrate_mbps_runtime: 550
+    refresh_rate_hz: 60
+    refresh_rate_dynamic_supported: false
+    display_manager_component: components/display
+    window_manager_component: components/windows
 
   # ---- Touch (GT911 via I2C) ----
   touch:
@@ -83,8 +91,8 @@ board:
     double_buffer: false
     dpi_buffer_nums: 1
     buffer_dma: true
-    buffer_spiram: false
-    sw_rotate: false
+    buffer_spiram: true
+    sw_rotate: true
     bsp_default_sw_rotate: true
     avoid_tear: false
     full_refresh: false

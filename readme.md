@@ -14,6 +14,8 @@ The current firmware is not a desktop DOS clone and is not yet an MS-DOS-compati
 main/main.c                 Shell UI, parser, transcript, command history, orchestration
 p4minishell_config.h        Centralized configuration (all tunable values)
 p4minishell_config.yaml     Configuration documentation (YAML source of truth)
+components/display/         Display manager (rotation, resolution, refresh, brightness, power)
+components/windows/         Window manager (LVGL screen layout, dynamic scaling, styling)
 components/header/          Fixed top status bar (Wi-Fi, battery, Bluetooth, USB, SD)
 components/networking/      ESP-Hosted Wi-Fi + hosted NimBLE Bluetooth on C6
 components/usb/             USB Host MSC storage (/usb0) + HID keyboard/mouse

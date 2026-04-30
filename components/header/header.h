@@ -100,4 +100,11 @@ void header_update_uptime(uint32_t uptime_seconds);
 /** Force a synchronous header re-render. Call only from LVGL task context. */
 void header_force_render(void);
 
+/**
+ * Deinitialize the header bar, releasing all widgets and resetting state.
+ * Call before rebuilding the UI after display rotation or resolution change.
+ * Must be called from LVGL task context only.
+ */
+void header_deinit(void);
+
 #endif

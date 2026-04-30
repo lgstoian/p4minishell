@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] - 2026-04-30
+
+### Added
+- **Window manager module**: New `components/windows/` that owns the LVGL screen layout and dynamic scaling
+- **windows.h / windows.c**: Central window/layout manager dividing the screen into named regions (HEADER, TRANSCRIPT, INPUT_ROW, KEYBOARD)
+- **Resolution-aware scaling**: All window regions dynamically scale based on current display resolution from display.c
+- **Rotation-aware layout**: Window manager recalculates all dimensions on rotation change
+- **Consistent styling API**: `windows_get_color()` with semantic color names
+- **Window object accessors**: `windows_get_transcript()`, `windows_get_input_line()`, `windows_get_keyboard()`, etc.
+- **Dimension query API**: `windows_get_rect()`, `windows_get_display_width()`, `windows_get_display_height()`
+- **Scaling helpers**: `windows_scale_height_percent()`, `windows_scale_width_percent()` with min/max clamping
+- **display.h expanded**: Added `display_get_width()` and `display_get_height()` convenience functions
+- **Config macros**: `P4_CONFIG_WINDOW_*` for all window region scaling parameters
+
+### Changed
+- **main.c shell_build_ui()**: Refactored from ~80 lines of manual LVGL widget creation to ~40 lines using window manager API
+- **main.c LVGL widgets**: Removed 5 static LVGL object variables — now owned by windows.c
+- **All hardcoded scaling values**: Moved to `P4_CONFIG_WINDOW_*` config macros
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Boot**: Clean boot, shell UI renders correctly, Wi-Fi connects
+- **No regressions**: All shell commands preserved
+
+---
+
+## [0.8.0] - 2026-04-30
+
+### Added
+- **Display manager module**: New `components/display/` module that owns all display hardware state and operations
+- **display.h / display.c**: Central display controller with public API for rotation, resolution, refresh rate, brightness, and power management
+- **Rotation API**: `display_set_rotation()`, `display_get_rotation()`, `display_rotation_parse()`, `display_rotation_to_string()` — clean rotation control with automatic touch remapping
+- **Resolution API**: `display_get_resolution()`, `display_get_native_resolution()` — query current and native panel resolution accounting for rotation
+- **Refresh rate API**: `display_get_refresh_config()`, `display_set_refresh_rate()` — query and configure display refresh rate (dynamic rate change noted as not supported on current JD9165 panel)
+- **Brightness API**: `display_get_brightness()`, `display_set_brightness()` — backlight control through display manager
+- **Power management API**: `display_set_power_state()`, `display_sleep()`, `display_wake()` — display power state transitions (on/sleep/off)
+- **Display info API**: `display_get_info()`, `display_print_info()` — comprehensive display diagnostics for sysinfo
+- **UI rebuild callback**: `display_register_ui_rebuild_callback()` — allows the shell to register a callback for rotation-triggered UI rebuilds
+- **Thread-safe state tracking**: All display state protected by critical sections; LVGL operations dispatched via `lv_async_call`
+- **Touch handle management**: Lazy touch handle acquisition cached internally; touch rotation remapping handled automatically on rotation change
+
+### Changed
+- **main.c refactored**: All display-related code extracted to `components/display/`
+- **Removed from main.c**: `s_display`, `s_touch_handle`, `s_backlight_percent`, `s_display_rotation` static variables
+- **Removed from main.c**: `shell_get_touch_handle_from_bsp()`, `shell_update_touch_rotation()`, `shell_rotation_apply()`, `shell_async_rebuild_ui()` — now handled by display manager
+- **shell_command_brightness()**: Now calls `display_set_brightness()` instead of `bsp_display_brightness_set()`
+- **shell_command_rotate()**: Now calls `display_rotation_parse()` + `display_set_rotation()` instead of inline LVGL rotation logic
+- **app_main()**: Display init now uses `display_init()` which wraps `bsp_display_start_with_config()`; UI rebuild callback registered via `display_register_ui_rebuild_callback()`
+- **sysinfo display output**: Now uses `display_get_info()` for comprehensive, structured display diagnostics
+- **CMakeLists.txt**: Added `components/display` to `EXTRA_COMPONENT_DIRS`; main component now requires `display`
+- **shell_lvgl_touch_ctx_t**: Removed from main.c (now internal to display.c)
+
+### Architecture
+- **Display state ownership**: The display manager OWNS all display state. The shell layer calls into the display manager for all display operations.
+- **Component layout**: `components/display/` follows the same pattern as `components/header/`, `components/networking/`, etc.
+- **Backward compatibility**: All existing shell commands (`brightness`, `rotate`) continue to work identically
+- **No BSP bypass**: Display init still uses `bsp_display_start_with_config()` with `BOARD_CFG_*` values
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **No regressions**: Boot path, screen rendering, Wi-Fi, all commands preserved
+- **Binary**: p4minishell.bin generated successfully
+
+### Documentation
+- Updated all project documentation files with display manager architecture
+- Added display manager to module layout in documentation.md
+- Added display API to API.md and SDK.md
+- Updated ai-context.md with display manager rules
+- Updated command.md with display manager notes
+- Updated board_config.yaml display section
+- Updated roadmap.md with display manager completion
+
+---
+
+## [0.7.1] - 2026-04-29
+
+### Fixed
+- **rotate command**: Now correctly rebuilds the entire UI after display rotation via `lv_display_set_rotation()`
+- **Touch sync**: GT911 touch remapping now properly matches the rotated display orientation
+- **UI scaling**: All UI elements (header, transcript, input row, keyboard) now dynamically rescale to the rotated resolution
+- **header_deinit()**: New function to clean up header widgets before UI rebuild after rotation
+
+### Changed
+- **shell_rotation_apply()**: Now calls `shell_build_ui()` after rotation to recreate all widgets at the new resolution
+- **shell_build_ui()**: Calls `header_deinit()` before `lv_obj_clean()` so header can re-initialize fresh
+- **Keyboard height**: Now dynamically scaled to ~35% of vertical resolution (clamped 180-280px)
+- **Input row height**: Now dynamically scaled to ~8% of vertical resolution (clamped 40-56px)
+- **header_scale_height()**: Already rotation-aware (uses correct resolution axis for 90/270 degree rotations)
+
+### Verified
+- **Clean build**: Zero errors, zero warnings
+- **Binary**: p4minishell.bin 1,494,768 bytes (82% free)
+- **No regressions**: Boot, screen rendering, Wi-Fi, all commands preserved
+
+---
+
 ## [0.7.0] - 2026-04-29
 
 ### Added
