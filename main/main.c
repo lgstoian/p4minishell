@@ -3511,16 +3511,85 @@ void shell_command_cd(int argc, char **argv)
 void shell_command_dir(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
+    char dir_part[SHELL_SD_PATH_BYTES];
+    const char *pattern = NULL;
     esp_err_t error;
 
     if (argc > 2) {
-        shell_transcript_append_text("Usage: dir [path]\n");
+        shell_transcript_append_text("Usage: dir [path|pattern]\n");
         return;
     }
 
-    error = shell_fs_resolve_path(argc == 2 ? argv[1] : NULL, resolved_path, sizeof(resolved_path));
+    /* Check if the argument contains wildcard characters */
+    if (argc == 2 && (strchr(argv[1], '*') != NULL || strchr(argv[1], '?') != NULL)) {
+        /* Extract directory part and pattern from the path */
+        const char *last_sep = strrchr(argv[1], '/');
+        if (last_sep == NULL) last_sep = strrchr(argv[1], '\\');
+        if (last_sep != NULL) {
+            size_t dir_len = (size_t)(last_sep - argv[1]);
+            if (dir_len >= sizeof(dir_part)) dir_len = sizeof(dir_part) - 1;
+            memcpy(dir_part, argv[1], dir_len);
+            dir_part[dir_len] = '\0';
+            pattern = last_sep + 1;
+        } else {
+            /* No separator — pattern applies to current directory */
+            snprintf(dir_part, sizeof(dir_part), ".");
+            pattern = argv[1];
+        }
+        error = shell_fs_resolve_path(dir_part, resolved_path, sizeof(resolved_path));
+    } else {
+        error = shell_fs_resolve_path(argc == 2 ? argv[1] : NULL, resolved_path, sizeof(resolved_path));
+    }
+
     if (error != ESP_OK) {
         shell_transcript_append_text("dir: invalid path\n");
+        return;
+    }
+
+    /* If wildcard pattern, use filtered listing */
+    if (pattern != NULL) {
+        DIR *d = opendir(resolved_path);
+        if (d == NULL) {
+            shell_transcript_appendf("dir: cannot open %s\n", resolved_path);
+            return;
+        }
+        struct dirent *entry;
+        int count = 0;
+        int dirs = 0, files = 0;
+        shell_transcript_appendf("\n Directory of %s\n\n", resolved_path);
+        while ((entry = readdir(d)) != NULL && count < SHELL_SD_LIST_LIMIT) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+            if (!shell_wildcard_match(pattern, entry->d_name))
+                continue;
+            char fp[SHELL_SD_PATH_BYTES];
+            snprintf(fp, sizeof(fp), "%s/%s", resolved_path, entry->d_name);
+            struct stat st;
+            if (stat(fp, &st) != 0) continue;
+            char size_str[16];
+            if (S_ISDIR(st.st_mode)) {
+                snprintf(size_str, sizeof(size_str), "<DIR>");
+                dirs++;
+            } else {
+                shell_sd_format_size((uint64_t)st.st_size, size_str, sizeof(size_str));
+                files++;
+            }
+            /* Show short name if available */
+            FILINFO fi;
+            char sfn[16] = "";
+            if (f_stat(fp, &fi) == FR_OK && fi.altname[0] != '\0') {
+                char upper[32];
+                snprintf(upper, sizeof(upper), "%s", entry->d_name);
+                for (char *p = upper; *p; p++) *p = (char)toupper((unsigned char)*p);
+                if (strcmp(fi.altname, upper) != 0)
+                    snprintf(sfn, sizeof(sfn), " [%s]", fi.altname);
+            }
+            shell_transcript_appendf("  %8s  %s%s\n", size_str, entry->d_name, sfn);
+            count++;
+        }
+        closedir(d);
+        shell_transcript_appendf("       %d File(s)\n", files);
+        shell_transcript_appendf("       %d Dir(s)\n", dirs);
         return;
     }
 
@@ -3536,13 +3605,76 @@ void shell_command_copy(int argc, char **argv)
 {
     char source_path[SHELL_SD_PATH_BYTES];
     char dest_path[SHELL_SD_PATH_BYTES];
+    char src_dir[SHELL_SD_PATH_BYTES];
+    const char *pattern = NULL;
     esp_err_t error;
 
     if (argc != 3) {
-        shell_transcript_append_text("Usage: copy <source> <destination>\n");
+        shell_transcript_append_text("Usage: copy <source|pattern> <destination>\n");
         return;
     }
 
+    /* Check for wildcard in source */
+    if (strchr(argv[1], '*') != NULL || strchr(argv[1], '?') != NULL) {
+        const char *last_sep = strrchr(argv[1], '/');
+        if (last_sep == NULL) last_sep = strrchr(argv[1], '\\');
+        if (last_sep != NULL) {
+            size_t dir_len = (size_t)(last_sep - argv[1]);
+            if (dir_len >= sizeof(src_dir)) dir_len = sizeof(src_dir) - 1;
+            memcpy(src_dir, argv[1], dir_len);
+            src_dir[dir_len] = '\0';
+            pattern = last_sep + 1;
+        } else {
+            snprintf(src_dir, sizeof(src_dir), ".");
+            pattern = argv[1];
+        }
+        error = shell_fs_resolve_path(src_dir, source_path, sizeof(source_path));
+        if (error != ESP_OK) {
+            shell_transcript_append_text("copy: invalid source path\n");
+            return;
+        }
+        error = shell_fs_resolve_path(argv[2], dest_path, sizeof(dest_path));
+        if (error != ESP_OK) {
+            shell_transcript_append_text("copy: invalid destination path\n");
+            return;
+        }
+
+        /* Ensure destination is a directory for wildcard copy */
+        struct stat dst_st;
+        if (stat(dest_path, &dst_st) != 0 || !S_ISDIR(dst_st.st_mode)) {
+            shell_transcript_append_text("copy: destination must be a directory for wildcard copy\n");
+            return;
+        }
+
+        DIR *d = opendir(source_path);
+        if (d == NULL) {
+            shell_transcript_appendf("copy: cannot open %s\n", source_path);
+            return;
+        }
+        struct dirent *entry;
+        int copied = 0;
+        while ((entry = readdir(d)) != NULL) {
+            if (!shell_wildcard_match(pattern, entry->d_name))
+                continue;
+            char sf[SHELL_SD_PATH_BYTES], df[SHELL_SD_PATH_BYTES];
+            snprintf(sf, sizeof(sf), "%s/%s", source_path, entry->d_name);
+            snprintf(df, sizeof(df), "%s/%s", dest_path, entry->d_name);
+            struct stat cs;
+            if (stat(sf, &cs) != 0 || S_ISDIR(cs.st_mode))
+                continue;
+            if (shell_fs_copy_file(sf, df) == ESP_OK) {
+                shell_transcript_appendf("  %s\n", entry->d_name);
+                copied++;
+            } else {
+                shell_transcript_appendf("  %s (failed)\n", entry->d_name);
+            }
+        }
+        closedir(d);
+        shell_transcript_appendf("copy: %d file(s) copied\n", copied);
+        return;
+    }
+
+    /* Single file copy (original behavior) */
     error = shell_fs_resolve_path(argv[1], source_path, sizeof(source_path));
     if (error != ESP_OK) {
         shell_transcript_append_text("copy: invalid source path\n");
@@ -3567,14 +3699,69 @@ void shell_command_copy(int argc, char **argv)
 void shell_command_del(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
+    char dir_part[SHELL_SD_PATH_BYTES];
+    const char *pattern = NULL;
     shell_sd_session_t session;
     esp_err_t error;
 
     if (argc != 2) {
-        shell_transcript_append_text("Usage: del <path>\n");
+        shell_transcript_append_text("Usage: del <path|pattern>\n");
         return;
     }
 
+    /* Check for wildcard pattern */
+    if (strchr(argv[1], '*') != NULL || strchr(argv[1], '?') != NULL) {
+        const char *last_sep = strrchr(argv[1], '/');
+        if (last_sep == NULL) last_sep = strrchr(argv[1], '\\');
+        if (last_sep != NULL) {
+            size_t dir_len = (size_t)(last_sep - argv[1]);
+            if (dir_len >= sizeof(dir_part)) dir_len = sizeof(dir_part) - 1;
+            memcpy(dir_part, argv[1], dir_len);
+            dir_part[dir_len] = '\0';
+            pattern = last_sep + 1;
+        } else {
+            snprintf(dir_part, sizeof(dir_part), ".");
+            pattern = argv[1];
+        }
+        error = shell_fs_resolve_path(dir_part, resolved_path, sizeof(resolved_path));
+        if (error != ESP_OK) {
+            shell_transcript_append_text("del: invalid path\n");
+            return;
+        }
+
+        error = shell_sd_begin(&session);
+        if (error != ESP_OK) {
+            shell_transcript_append_text("del: SD card not present\n");
+            return;
+        }
+
+        DIR *d = opendir(resolved_path);
+        if (d == NULL) {
+            shell_transcript_appendf("del: cannot open %s\n", resolved_path);
+            shell_sd_end(&session, "del");
+            return;
+        }
+        struct dirent *entry;
+        int deleted = 0;
+        while ((entry = readdir(d)) != NULL) {
+            if (!shell_wildcard_match(pattern, entry->d_name))
+                continue;
+            char fp[SHELL_SD_PATH_BYTES];
+            snprintf(fp, sizeof(fp), "%s/%s", resolved_path, entry->d_name);
+            if (unlink(fp) == 0) {
+                shell_transcript_appendf("  Deleted %s\n", entry->d_name);
+                deleted++;
+            } else {
+                shell_transcript_appendf("  Failed: %s (%s)\n", entry->d_name, strerror(errno));
+            }
+        }
+        closedir(d);
+        shell_transcript_appendf("del: %d file(s) deleted\n", deleted);
+        shell_sd_end(&session, "del");
+        return;
+    }
+
+    /* Single file deletion (original behavior) */
     error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
     if (error != ESP_OK) {
         shell_transcript_append_text("del: invalid path\n");
@@ -4087,6 +4274,330 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
     fclose(file);
     shell_sd_end(&session, "call");
     return ESP_OK;
+}
+
+/* ========================================================================
+ * WILDCARD MATCHING (DOS-style * and ?)
+ * ======================================================================== */
+
+bool shell_wildcard_match(const char *pattern, const char *name)
+{
+    if (pattern == NULL || name == NULL) return false;
+
+    while (*pattern) {
+        if (*pattern == '*') {
+            pattern++;
+            if (*pattern == '\0') return true;
+            while (*name) {
+                if (shell_wildcard_match(pattern, name)) return true;
+                name++;
+            }
+            return false;
+        } else if (*pattern == '?') {
+            if (*name == '\0') return false;
+            pattern++;
+            name++;
+        } else {
+            if (toupper((unsigned char)*pattern) != toupper((unsigned char)*name))
+                return false;
+            pattern++;
+            name++;
+        }
+    }
+    return *name == '\0';
+}
+
+/* ========================================================================
+ * DOS ATTRIBUTE COMMAND (attrib)
+ * ========================================================================
+ * Reads and sets FATFS file attributes: R (read-only), H (hidden),
+ * S (system), A (archive). Uses f_stat() and f_chmod() from FATFS.
+ *
+ * Usage:
+ *   attrib [path]              Show attributes
+ *   attrib +R <path>           Set read-only
+ *   attrib -R <path>           Clear read-only
+ *   attrib +H <path>           Set hidden
+ *   attrib -H <path>           Clear hidden
+ *   attrib +S <path>           Set system
+ *   attrib -S <path>           Clear system
+ *   attrib +A <path>           Set archive
+ *   attrib -A <path>           Clear archive
+ */
+
+void shell_command_attrib(int argc, char **argv)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+    char resolved[SHELL_SD_PATH_BYTES];
+    FILINFO info;
+    FRESULT fr;
+    BYTE attr = 0;
+    bool set_attr = false;
+    char attr_char = 0;
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("attrib: SD card not present\n");
+        return;
+    }
+
+    /* Parse attribute operation: +R, -R, +H, -H, +S, -S, +A, -A */
+    if (argc >= 2 && (argv[1][0] == '+' || argv[1][0] == '-') &&
+        argv[1][1] != '\0' && argv[1][2] == '\0') {
+        set_attr = (argv[1][0] == '+');
+        attr_char = (char)toupper((unsigned char)argv[1][1]);
+
+        switch (attr_char) {
+        case 'R': attr = AM_RDO; break;
+        case 'H': attr = AM_HID; break;
+        case 'S': attr = AM_SYS; break;
+        case 'A': attr = AM_ARC; break;
+        default:
+            shell_transcript_append_text("attrib: invalid attribute. Use R, H, S, or A\n");
+            shell_sd_end(&session, "attrib");
+            return;
+        }
+
+        if (argc < 3) {
+            shell_transcript_append_text("attrib: path required when setting/clearing attributes\n");
+            shell_sd_end(&session, "attrib");
+            return;
+        }
+
+        error = shell_sd_resolve_path(argv[2], resolved, sizeof(resolved));
+        if (error != ESP_OK) {
+            shell_transcript_append_text("attrib: invalid path\n");
+            shell_sd_end(&session, "attrib");
+            return;
+        }
+
+        fr = f_stat(resolved, &info);
+        if (fr != FR_OK) {
+            shell_transcript_appendf("attrib: cannot access %s\n", argv[2]);
+            shell_sd_end(&session, "attrib");
+            return;
+        }
+
+        if (set_attr) info.fattrib |= attr;
+        else           info.fattrib &= ~attr;
+
+        fr = f_chmod(resolved, info.fattrib, AM_RDO | AM_HID | AM_SYS | AM_ARC);
+        if (fr != FR_OK) {
+            shell_transcript_appendf("attrib: failed to change attributes\n");
+        } else {
+            shell_transcript_appendf("attrib: %c%c set for %s\n",
+                                     set_attr ? '+' : '-', attr_char, argv[2]);
+        }
+        shell_sd_end(&session, "attrib");
+        return;
+    }
+
+    /* Show attributes for a file or directory listing */
+    const char *path = (argc >= 2) ? argv[1] : ".";
+    error = shell_sd_resolve_path(path, resolved, sizeof(resolved));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("attrib: invalid path\n");
+        shell_sd_end(&session, "attrib");
+        return;
+    }
+
+    fr = f_stat(resolved, &info);
+    if (fr == FR_OK && !(info.fattrib & AM_DIR)) {
+        char a[5] = {
+            (info.fattrib & AM_RDO) ? 'R' : '-',
+            (info.fattrib & AM_HID) ? 'H' : '-',
+            (info.fattrib & AM_SYS) ? 'S' : '-',
+            (info.fattrib & AM_ARC) ? 'A' : '-', 0
+        };
+        shell_transcript_appendf("  %s  %s\n", a, info.fname);
+    } else {
+        DIR *d = opendir(resolved);
+        if (d == NULL) {
+            shell_transcript_appendf("attrib: cannot access %s\n", path);
+            shell_sd_end(&session, "attrib");
+            return;
+        }
+        struct dirent *entry;
+        int count = 0;
+        while ((entry = readdir(d)) != NULL && count < SHELL_SD_LIST_LIMIT) {
+            char fp[SHELL_SD_PATH_BYTES];
+            snprintf(fp, sizeof(fp), "%s/%s", resolved, entry->d_name);
+            if (f_stat(fp, &info) == FR_OK) {
+                char a[5] = {
+                    (info.fattrib & AM_RDO) ? 'R' : '-',
+                    (info.fattrib & AM_HID) ? 'H' : '-',
+                    (info.fattrib & AM_SYS) ? 'S' : '-',
+                    (info.fattrib & AM_ARC) ? 'A' : '-', 0
+                };
+                shell_transcript_appendf("  %s  %s  %s\n", a,
+                    (info.fattrib & AM_DIR) ? "<DIR>" : "     ",
+                    entry->d_name);
+                count++;
+            }
+        }
+        closedir(d);
+    }
+    shell_sd_end(&session, "attrib");
+}
+
+/* ========================================================================
+ * VOLUME LABEL COMMAND (label)
+ * ========================================================================
+ * Reads and sets the FATFS volume label using f_getlabel()/f_setlabel().
+ *
+ * Usage:
+ *   label                Show current volume label
+ *   label <name>         Set volume label (max 11 chars, FAT 8.3 convention)
+ */
+
+void shell_command_label(int argc, char **argv)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+    char label[12];
+    FRESULT fr;
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("label: SD card not present\n");
+        return;
+    }
+
+    if (argc >= 2) {
+        if (strlen(argv[1]) > 11) {
+            shell_transcript_append_text("label: volume name must be 11 characters or fewer\n");
+            shell_sd_end(&session, "label");
+            return;
+        }
+        memset(label, ' ', 11);
+        label[11] = '\0';
+        size_t len = strlen(argv[1]);
+        for (size_t i = 0; i < len && i < 11; i++)
+            label[i] = (char)toupper((unsigned char)argv[1][i]);
+        fr = f_setlabel(label);
+        if (fr == FR_OK)
+            shell_transcript_appendf("label: volume label set to \"%s\"\n", argv[1]);
+        else
+            shell_transcript_appendf("label: failed to set volume label\n");
+    } else {
+        fr = f_getlabel("0:", label, NULL);
+        if (fr == FR_OK) {
+            int end = 10;
+            while (end >= 0 && label[end] == ' ') end--;
+            label[end + 1] = '\0';
+            shell_transcript_appendf("label: %s\n",
+                                     label[0] ? label : "(no volume label)");
+        } else {
+            shell_transcript_appendf("label: failed to read volume label\n");
+        }
+    }
+    shell_sd_end(&session, "label");
+}
+
+/* ========================================================================
+ * RECURSIVE COPY (xcopy)
+ * ========================================================================
+ * Copies files and directory trees recursively.
+ * Usage: xcopy <source> <destination> [/S]
+ *   /S  Copy directories and subdirectories (except empty ones)
+ */
+
+void shell_command_xcopy(int argc, char **argv)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+    char src_resolved[SHELL_SD_PATH_BYTES];
+    char dst_resolved[SHELL_SD_PATH_BYTES];
+    bool recursive = false;
+    const char *src_arg = NULL;
+    const char *dst_arg = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '/' && toupper((unsigned char)argv[i][1]) == 'S')
+            recursive = true;
+        else if (src_arg == NULL) src_arg = argv[i];
+        else if (dst_arg == NULL) dst_arg = argv[i];
+    }
+    if (src_arg == NULL || dst_arg == NULL) {
+        shell_transcript_append_text("Usage: xcopy <source> <destination> [/S]\n");
+        shell_transcript_append_text("  /S  Copy directories and subdirectories\n");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_transcript_append_text("xcopy: SD card not present\n");
+        return;
+    }
+
+    error = shell_sd_resolve_path(src_arg, src_resolved, sizeof(src_resolved));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("xcopy: invalid source path\n");
+        shell_sd_end(&session, "xcopy");
+        return;
+    }
+    error = shell_sd_resolve_path(dst_arg, dst_resolved, sizeof(dst_resolved));
+    if (error != ESP_OK) {
+        shell_transcript_append_text("xcopy: invalid destination path\n");
+        shell_sd_end(&session, "xcopy");
+        return;
+    }
+
+    struct stat src_st;
+    if (stat(src_resolved, &src_st) != 0) {
+        shell_transcript_appendf("xcopy: source not found: %s\n", src_arg);
+        shell_sd_end(&session, "xcopy");
+        return;
+    }
+
+    if (S_ISDIR(src_st.st_mode)) {
+        if (!recursive) {
+            shell_transcript_append_text("xcopy: use /S to copy directories\n");
+            shell_sd_end(&session, "xcopy");
+            return;
+        }
+        struct stat dst_st;
+        if (stat(dst_resolved, &dst_st) != 0) mkdir(dst_resolved, 0755);
+
+        DIR *d = opendir(src_resolved);
+        if (d == NULL) {
+            shell_transcript_append_text("xcopy: cannot open source directory\n");
+            shell_sd_end(&session, "xcopy");
+            return;
+        }
+        struct dirent *entry;
+        int copied = 0;
+        while ((entry = readdir(d)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+            char sc[SHELL_SD_PATH_BYTES], dc[SHELL_SD_PATH_BYTES];
+            snprintf(sc, sizeof(sc), "%s/%s", src_resolved, entry->d_name);
+            snprintf(dc, sizeof(dc), "%s/%s", dst_resolved, entry->d_name);
+            struct stat cs;
+            if (stat(sc, &cs) != 0) continue;
+            if (S_ISDIR(cs.st_mode)) {
+                char *xa[4] = { "xcopy", sc, dc, "/S" };
+                shell_command_xcopy(4, xa);
+            } else {
+                if (shell_fs_copy_file(sc, dc) == ESP_OK) {
+                    shell_transcript_appendf("  %s\n", entry->d_name);
+                    copied++;
+                } else {
+                    shell_transcript_appendf("  %s (failed)\n", entry->d_name);
+                }
+            }
+        }
+        closedir(d);
+        shell_transcript_appendf("xcopy: %d file(s) copied\n", copied);
+    } else {
+        error = shell_fs_copy_file(src_resolved, dst_resolved);
+        if (error == ESP_OK)
+            shell_transcript_append_text("xcopy: 1 file copied\n");
+        else
+            shell_transcript_appendf("xcopy: copy failed (%s)\n", esp_err_to_name(error));
+    }
+    shell_sd_end(&session, "xcopy");
 }
 
 static void shell_sd_print_usage(void)
