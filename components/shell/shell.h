@@ -212,6 +212,17 @@ bool shell_is_initialized(void);
  */
 void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed);
 
+/* ========================================================================
+ * POWERSHELL-STYLE PROMPT SUPPORT
+ * ======================================================================== */
+
+/**
+ * Get the current working directory formatted for the PowerShell-style prompt.
+ * Long paths are truncated with "..." prefix.
+ * @return Static string with the formatted path (do not free).
+ */
+const char *shell_get_cwd_for_prompt(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -65,8 +65,11 @@
 /** Boot banner displayed in the transcript on startup. */
 #define P4_CONFIG_BOOT_MESSAGE               "P4MiniShell " P4_CONFIG_VERSION_STRING " ready | " P4_CONFIG_BOARD_REQUESTED " | type help"
 
-/** Shell prompt string shown on the input line and serial console. */
-#define P4_CONFIG_SHELL_PROMPT               "P4Shell> "
+/** Shell prompt string shown on the input line and serial console.
+ *  The LVGL input line uses a plain-text version; the UART console
+ *  renders with ANSI color codes for PowerShell-style coloring.
+ *  Format: "PS " (bright white) + path (bright yellow) + "> " (bright white) */
+#define P4_CONFIG_SHELL_PROMPT               "PS " P4_CONFIG_PS_PATH_SEPARATOR "> "
 
 /* ========================================================================
  * TRANSCRIPT AND COMMAND BUFFER SIZING
@@ -338,17 +341,31 @@
 #define P4_CONFIG_HEADER_BAT_LOW_PCT         15
 
 /* ========================================================================
- * ANSI/VT TERMINAL COLOR PALETTE
- * ======================================================================== */
+ * ANSI/VT TERMINAL COLOR PALETTE — Windows 11 PowerShell Theme
+ * ========================================================================
+ * Colors match the Windows 11 PowerShell default color scheme.
+ * Reference: Windows Terminal "Campbell PowerShell" / PSReadLine defaults.
+ *   - Default text: Light gray (#CCCCCC) on dark background (#012456)
+ *   - Errors: Bright red (#E74856)
+ *   - Warnings: Yellow (#F9F1A5)
+ *   - Success: Green (#16C60C)
+ *   - Paths: Cyan (#61D6D6)
+ *   - Prompt path: Bright yellow (#F9F1A5) on dark blue bg
+ *   - Commands: Bright white (#F2F2F2)
+ *   - Parameters/args: Light gray (#CCCCCC)
+ *   - Operators: Bright cyan (#61D6D6)
+ *   - Strings: Dark yellow (#C19C00)
+ *   - Numbers: Bright magenta (#B4009E)
+ */
 
-/** ANSI default foreground color (green text on black, PowerShell-inspired). */
-#define P4_CONFIG_ANSI_DEFAULT_FG            0x8DFF96
+/** ANSI default foreground color (PS default: light gray). */
+#define P4_CONFIG_ANSI_DEFAULT_FG            0xCCCCCC
 
-/** ANSI default background color (black). */
-#define P4_CONFIG_ANSI_DEFAULT_BG            0x000000
+/** ANSI default background color (PS default: dark blue). */
+#define P4_CONFIG_ANSI_DEFAULT_BG            0x012456
 
-/** ANSI standard colors — 16-color palette mapped to PowerShell-like theme. */
-#define P4_CONFIG_ANSI_BLACK                 0x000000
+/** ANSI standard colors — Windows 11 PowerShell theme. */
+#define P4_CONFIG_ANSI_BLACK                 0x0C0C0C
 #define P4_CONFIG_ANSI_RED                   0xC50F1F
 #define P4_CONFIG_ANSI_GREEN                 0x13A10E
 #define P4_CONFIG_ANSI_YELLOW                0xC19C00
@@ -357,7 +374,7 @@
 #define P4_CONFIG_ANSI_CYAN                  0x3A96DD
 #define P4_CONFIG_ANSI_WHITE                 0xCCCCCC
 
-/** ANSI bright colors — PowerShell-like bright variants. */
+/** ANSI bright colors — Windows 11 PowerShell bright variants. */
 #define P4_CONFIG_ANSI_BRIGHT_BLACK          0x767676
 #define P4_CONFIG_ANSI_BRIGHT_RED            0xE74856
 #define P4_CONFIG_ANSI_BRIGHT_GREEN          0x16C60C
@@ -369,6 +386,59 @@
 
 /** Maximum bytes for an ANSI-formatted string buffer. */
 #define P4_CONFIG_ANSI_BUFFER_BYTES          512
+
+/* ========================================================================
+ * POWERSHELL-STYLE PROMPT CONFIGURATION
+ * ======================================================================== */
+
+/** PowerShell-style prompt: "PS " prefix in bright white. */
+#define P4_CONFIG_PS_PREFIX                  "PS "
+
+/** PowerShell-style prompt path separator. */
+#define P4_CONFIG_PS_PATH_SEPARATOR          "\\"
+
+/** PowerShell-style prompt suffix: "> ". */
+#define P4_CONFIG_PS_SUFFIX                  "> "
+
+/** Maximum length of the displayed path in the prompt before truncation.
+ *  Longer paths show "...\\" prefix with the last components. */
+#define P4_CONFIG_PS_PATH_MAX_DISPLAY        48
+
+/** ANSI SGR for the "PS" prefix token. */
+#define P4_CONFIG_PS_COLOR_PREFIX            97  /* Bright white */
+
+/** ANSI SGR for the path token. */
+#define P4_CONFIG_PS_COLOR_PATH              93  /* Bright yellow */
+
+/** ANSI SGR for the ">" suffix token. */
+#define P4_CONFIG_PS_COLOR_SUFFIX            97  /* Bright white */
+
+/** ANSI SGR for error output prefix "ERROR: ". */
+#define P4_CONFIG_PS_COLOR_ERROR             91  /* Bright red */
+
+/** ANSI SGR for warning output prefix "WARNING: ". */
+#define P4_CONFIG_PS_COLOR_WARNING           93  /* Bright yellow */
+
+/** ANSI SGR for success output prefix "SUCCESS: ". */
+#define P4_CONFIG_PS_COLOR_SUCCESS           92  /* Bright green */
+
+/** ANSI SGR for info output prefix. */
+#define P4_CONFIG_PS_COLOR_INFO              96  /* Bright cyan */
+
+/** ANSI SGR for command names in output. */
+#define P4_CONFIG_PS_COLOR_COMMAND           97  /* Bright white */
+
+/** ANSI SGR for parameter/flag names. */
+#define P4_CONFIG_PS_COLOR_PARAMETER         37  /* White/gray */
+
+/** ANSI SGR for string values. */
+#define P4_CONFIG_PS_COLOR_STRING            33  /* Yellow */
+
+/** ANSI SGR for numeric values. */
+#define P4_CONFIG_PS_COLOR_NUMBER            95  /* Bright magenta */
+
+/** ANSI SGR for path values. */
+#define P4_CONFIG_PS_COLOR_PATH_VALUE        36  /* Cyan */
 
 /* ========================================================================
  * USB HOST PARAMETERS

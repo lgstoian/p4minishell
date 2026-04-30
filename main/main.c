@@ -4912,6 +4912,13 @@ static void shell_input_line_event_cb(lv_event_t *event)
         if (il2 != NULL) {
             lv_textarea_set_cursor_pos(il2, LV_TEXTAREA_CURSOR_LAST);
         }
+        /* Touch-to-show-keyboard: if the on-screen keyboard is hidden and
+         * the user taps the input line, show the keyboard. This mimics
+         * the Windows 11 touch keyboard behavior where touching a text
+         * field brings up the OSK. */
+        if (!keyboard_is_visible() && !keyboard_is_external_input_enabled()) {
+            keyboard_show();
+        }
         return;
     }
 
@@ -5178,4 +5185,13 @@ void app_main(void)
         s_header_status_timer = lv_timer_create(shell_header_status_timer_cb, SHELL_HEADER_REFRESH_PERIOD_MS, NULL);
     }
     bsp_display_unlock();
+}
+
+/* ========================================================================
+ * PUBLIC CWD ACCESSOR (for PowerShell-style prompt)
+ * ======================================================================== */
+
+const char *shell_get_cwd(void)
+{
+    return s_shell_cwd;
 }

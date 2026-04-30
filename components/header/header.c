@@ -129,7 +129,7 @@ static lv_obj_t *s_cpu_label;
 static lv_obj_t *s_cpu_bar;
 static lv_obj_t *s_cpu_value_label;
 static lv_timer_t *s_notification_timer;
-static lv_coord_t s_header_height = HEADER_HEIGHT;
+__attribute__((unused)) static lv_coord_t s_header_height = HEADER_HEIGHT;
 static header_state_t s_header_state = {
     .battery_percent = 100,
     .battery_adc_ready = false,
@@ -143,7 +143,7 @@ static header_state_t s_header_state = {
 };
 
 /* ---- Dynamic height scaling - rotation-aware ---- */
-static lv_coord_t header_scale_height(void)
+__attribute__((unused)) static lv_coord_t header_scale_height(void)
 {
     lv_display_t *display = lv_display_get_default();
     int32_t vertical_res = 600;
@@ -431,7 +431,7 @@ static void header_async_mem(void *u_data)        { free(u_data); header_render(
 static void header_async_cpu(void *u_data)        { free(u_data); header_render(); }
 static void header_async_uptime(void *u_data)     { free(u_data); header_render(); }
 /* ---- Batch async callback: updates all state then renders once ---- */
-static void header_async_batch(void *user_data)
+__attribute__((unused)) static void header_async_batch(void *user_data)
 {
     header_batch_update_t *u = (header_batch_update_t *)user_data;
     if (u == NULL) return;

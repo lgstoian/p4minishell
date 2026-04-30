@@ -562,7 +562,24 @@ void shell_uart_console_write_text(const char *text)
 
 void shell_uart_console_print_prompt(void)
 {
-    shell_uart_console_write_text(SHELL_PROMPT);
+    /* PowerShell-style colored prompt: "PS " (bright white) + path (bright yellow) + "> " (bright white)
+     * On the UART console this renders with ANSI SGR codes for a native PowerShell look.
+     * The LVGL input line uses a plain-text prompt set by shell_input_line_set_text(). */
+    char prompt_buf[P4_CONFIG_ANSI_BUFFER_BYTES];
+    extern const char *shell_get_cwd_for_prompt(void);
+    const char *cwd = shell_get_cwd_for_prompt();
+
+    /* Build colored prompt: \e[97mPS \e[93m<path>\e[97m> \e[0m */
+    int len = snprintf(prompt_buf, sizeof(prompt_buf),
+                       "\x1B[%dm" P4_CONFIG_PS_PREFIX "\x1B[%dm%s\x1B[%dm" P4_CONFIG_PS_SUFFIX "\x1B[0m",
+                       P4_CONFIG_PS_COLOR_PREFIX,
+                       P4_CONFIG_PS_COLOR_PATH, cwd ? cwd : P4_CONFIG_PS_PATH_SEPARATOR,
+                       P4_CONFIG_PS_COLOR_SUFFIX);
+    if (len > 0 && (size_t)len < sizeof(prompt_buf)) {
+        shell_uart_console_write_text(prompt_buf);
+    } else {
+        shell_uart_console_write_text(P4_CONFIG_SHELL_PROMPT);
+    }
 }
 
 void shell_uart_console_submit_command(const char *command)
@@ -578,6 +595,52 @@ void shell_uart_console_submit_command(const char *command)
 
     snprintf(cmd_copy, sizeof(cmd_copy), "%s", command);
     shell_execute_command(cmd_copy);
+}
+
+/* ========================================================================
+ * POWERSHELL-STYLE PROMPT PATH HELPER
+ * ========================================================================
+ * Returns the current working directory formatted for the prompt.
+ * Truncates long paths with "..." prefix to keep the prompt compact.
+ * The path is stored in a static buffer (not thread-safe — single UART task).
+ */
+
+const char *shell_get_cwd_for_prompt(void)
+{
+    static char path_buf[P4_CONFIG_PS_PATH_MAX_DISPLAY + 8];
+    extern const char *shell_get_cwd(void);  /* defined in main.c */
+    const char *cwd = shell_get_cwd();
+
+    if (cwd == NULL || cwd[0] == '\0') {
+        return P4_CONFIG_PS_PATH_SEPARATOR;
+    }
+
+    size_t len = strlen(cwd);
+    if (len <= P4_CONFIG_PS_PATH_MAX_DISPLAY) {
+        return cwd;
+    }
+
+    /* Truncate: show "..." + last portion */
+    const char *last_sep = strrchr(cwd, '\\');
+    if (last_sep == NULL) last_sep = strrchr(cwd, '/');
+    if (last_sep == NULL) {
+        /* No separator found — truncate from beginning */
+        size_t keep = P4_CONFIG_PS_PATH_MAX_DISPLAY - 3;
+        if (keep > len) keep = len;
+        snprintf(path_buf, sizeof(path_buf), "...%s", cwd + len - keep);
+        return path_buf;
+    }
+
+    size_t suffix_len = strlen(last_sep);
+    if (suffix_len + 3 > P4_CONFIG_PS_PATH_MAX_DISPLAY) {
+        /* Even the suffix alone is too long */
+        size_t keep = P4_CONFIG_PS_PATH_MAX_DISPLAY - 3;
+        if (keep > suffix_len) keep = suffix_len;
+        snprintf(path_buf, sizeof(path_buf), "...%s", last_sep + suffix_len - keep);
+    } else {
+        snprintf(path_buf, sizeof(path_buf), "...%s", last_sep);
+    }
+    return path_buf;
 }
 
 /* ========================================================================

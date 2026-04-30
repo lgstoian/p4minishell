@@ -547,6 +547,51 @@ int ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args)
                 p++;
                 break;
 
+            /* PowerShell semantic tokens — map to PS color scheme.
+             * Use unique letters that don't conflict with existing color codes:
+             * @P=PS prefix, @H=Path, @Q=Suffix, @X=Error, @V=Warning,
+             * @O=Success, @N=Info, @T=String, @Z=Number, @F=Path value */
+            case 'P':  /* @P = PS prefix ("PS ") */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_PREFIX);
+                p++;
+                break;
+            case 'H':  /* @H = Path in prompt */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_PATH);
+                p++;
+                break;
+            case 'Q':  /* @Q = Prompt suffix ("> ") */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_SUFFIX);
+                p++;
+                break;
+            case 'X':  /* @X = Error prefix */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_ERROR);
+                p++;
+                break;
+            case 'V':  /* @V = Warning prefix */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_WARNING);
+                p++;
+                break;
+            case 'O':  /* @O = Success prefix */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_SUCCESS);
+                p++;
+                break;
+            case 'N':  /* @N = Info prefix */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_INFO);
+                p++;
+                break;
+            case 'T':  /* @T = String value */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_STRING);
+                p++;
+                break;
+            case 'Z':  /* @Z = Numeric value */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_NUMBER);
+                p++;
+                break;
+            case 'F':  /* @F = Path value */
+                ansi_write_sgr(dst, dst_size, &pos, P4_CONFIG_PS_COLOR_PATH_VALUE);
+                p++;
+                break;
+
             /* @@ is literal @ */
             case '@':
                 if (pos < dst_size - 1) {
