@@ -260,13 +260,13 @@ static void shell_command_battery(int argc, char **argv);
 static void shell_command_volume(int argc, char **argv);
 static void shell_command_mem(void);
 static void shell_command_gpio_status(void);
-static void shell_execute_gpio_command(int argc, char **argv);
+void shell_execute_gpio_command(int argc, char **argv);
 static void shell_command_debug(void);
 static void shell_command_version(void);
 static void shell_command_about(void);
 static void shell_execute_rgb_command(int argc, char **argv);
 static void shell_execute_camera_command(int argc, char **argv);
-static void shell_command_sd(char *command);
+void shell_command_sd(char *command);
 static void shell_command_sd_ls(char *command);
 static void shell_command_sd_stat(char *command);
 static void shell_command_sd_cat(char *command);
@@ -291,22 +291,22 @@ static void shell_expand_variables(const char *input, char *output, size_t outpu
 static bool shell_parse_redirection(char *command, char **command_part, char **redirect_target, bool *append_mode);
 static esp_err_t shell_write_redirect_output(const char *path, const char *text, bool append_mode);
 static esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path);
-static esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv);
-static bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size);
-static void shell_command_cd(int argc, char **argv);
-static void shell_command_dir(int argc, char **argv);
-static void shell_command_copy(int argc, char **argv);
-static void shell_command_del(int argc, char **argv);
-static void shell_command_rename(int argc, char **argv, const char *verb);
-static void shell_command_mkdir(int argc, char **argv);
-static void shell_command_rmdir(int argc, char **argv);
-static void shell_command_type_file(int argc, char **argv);
-static void shell_command_write_file(int argc, char **argv, bool append_mode);
-static void shell_command_touch(int argc, char **argv);
-static void shell_command_move(int argc, char **argv);
-static void shell_command_set(int argc, char **argv);
-static void shell_command_path(int argc, char **argv);
-static void shell_command_echo(int argc, char **argv);
+esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv);
+bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size);
+void shell_command_cd(int argc, char **argv);
+void shell_command_dir(int argc, char **argv);
+void shell_command_copy(int argc, char **argv);
+void shell_command_del(int argc, char **argv);
+void shell_command_rename(int argc, char **argv, const char *verb);
+void shell_command_mkdir(int argc, char **argv);
+void shell_command_rmdir(int argc, char **argv);
+void shell_command_type_file(int argc, char **argv);
+void shell_command_write_file(int argc, char **argv, bool append_mode);
+void shell_command_touch(int argc, char **argv);
+void shell_command_move(int argc, char **argv);
+void shell_command_set(int argc, char **argv);
+void shell_command_path(int argc, char **argv);
+void shell_command_echo(int argc, char **argv);
 static void shell_store_command_history(const char *command);
 static bool shell_execute_command_core(char *command);
 static void shell_command_sd_info(void);
@@ -2836,7 +2836,7 @@ static void shell_command_gpio_status(void)
     }
 }
 
-static void shell_execute_gpio_command(int argc, char **argv)
+void shell_execute_gpio_command(int argc, char **argv)
 {
     size_t index;
     char *end = NULL;
@@ -3466,7 +3466,7 @@ static esp_err_t shell_print_file_text(const char *normalized_path)
     return ESP_OK;
 }
 
-static void shell_command_cd(int argc, char **argv)
+void shell_command_cd(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     struct stat path_stat;
@@ -3508,7 +3508,7 @@ static void shell_command_cd(int argc, char **argv)
     shell_fs_print_cwd();
 }
 
-static void shell_command_dir(int argc, char **argv)
+void shell_command_dir(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     esp_err_t error;
@@ -3532,7 +3532,7 @@ static void shell_command_dir(int argc, char **argv)
     }
 }
 
-static void shell_command_copy(int argc, char **argv)
+void shell_command_copy(int argc, char **argv)
 {
     char source_path[SHELL_SD_PATH_BYTES];
     char dest_path[SHELL_SD_PATH_BYTES];
@@ -3564,7 +3564,7 @@ static void shell_command_copy(int argc, char **argv)
     shell_transcript_appendf("1 file(s) copied to %s\n", dest_path);
 }
 
-static void shell_command_del(int argc, char **argv)
+void shell_command_del(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     shell_sd_session_t session;
@@ -3597,7 +3597,7 @@ static void shell_command_del(int argc, char **argv)
     shell_transcript_appendf("Deleted %s\n", resolved_path);
 }
 
-static void shell_command_rename(int argc, char **argv, const char *verb)
+void shell_command_rename(int argc, char **argv, const char *verb)
 {
     char source_path[SHELL_SD_PATH_BYTES];
     char target_path[SHELL_SD_PATH_BYTES];
@@ -3637,7 +3637,7 @@ static void shell_command_rename(int argc, char **argv, const char *verb)
     shell_transcript_appendf("%s -> %s\n", source_path, target_path);
 }
 
-static void shell_command_mkdir(int argc, char **argv)
+void shell_command_mkdir(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     shell_sd_session_t session;
@@ -3670,7 +3670,7 @@ static void shell_command_mkdir(int argc, char **argv)
     shell_transcript_appendf("Created directory %s\n", resolved_path);
 }
 
-static void shell_command_rmdir(int argc, char **argv)
+void shell_command_rmdir(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     shell_sd_session_t session;
@@ -3703,7 +3703,7 @@ static void shell_command_rmdir(int argc, char **argv)
     shell_transcript_appendf("Removed directory %s\n", resolved_path);
 }
 
-static void shell_command_type_file(int argc, char **argv)
+void shell_command_type_file(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     esp_err_t error;
@@ -3727,7 +3727,7 @@ static void shell_command_type_file(int argc, char **argv)
     }
 }
 
-static void shell_command_write_file(int argc, char **argv, bool append_mode)
+void shell_command_write_file(int argc, char **argv, bool append_mode)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     char text[SHELL_BATCH_LINE_BYTES];
@@ -3775,7 +3775,7 @@ static void shell_command_write_file(int argc, char **argv, bool append_mode)
     shell_transcript_appendf("%s: %s\n", append_mode ? "Appended" : "Wrote", resolved_path);
 }
 
-static void shell_command_touch(int argc, char **argv)
+void shell_command_touch(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     shell_sd_session_t session;
@@ -3812,7 +3812,7 @@ static void shell_command_touch(int argc, char **argv)
     shell_transcript_appendf("Touched %s\n", resolved_path);
 }
 
-static void shell_command_move(int argc, char **argv)
+void shell_command_move(int argc, char **argv)
 {
     char source_path[SHELL_SD_PATH_BYTES];
     char target_path[SHELL_SD_PATH_BYTES];
@@ -3867,7 +3867,7 @@ static void shell_command_move(int argc, char **argv)
     shell_transcript_appendf("Moved %s -> %s\n", source_path, target_path);
 }
 
-static void shell_command_set(int argc, char **argv)
+void shell_command_set(int argc, char **argv)
 {
     char assignment[SHELL_ENV_NAME_BYTES + SHELL_ENV_VALUE_BYTES];
     char *equals;
@@ -3903,7 +3903,7 @@ static void shell_command_set(int argc, char **argv)
     }
 }
 
-static void shell_command_path(int argc, char **argv)
+void shell_command_path(int argc, char **argv)
 {
     char value[SHELL_ENV_VALUE_BYTES];
     const char *current;
@@ -3923,7 +3923,7 @@ static void shell_command_path(int argc, char **argv)
     shell_transcript_appendf("PATH=%s\n", value);
 }
 
-static void shell_command_echo(int argc, char **argv)
+void shell_command_echo(int argc, char **argv)
 {
     char text[SHELL_BATCH_LINE_BYTES];
 
@@ -3948,7 +3948,7 @@ static void shell_command_echo(int argc, char **argv)
     shell_transcript_appendf("%s\n", text);
 }
 
-static bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size)
+bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size)
 {
     char candidate[SHELL_SD_PATH_BYTES];
     char path_copy[SHELL_ENV_VALUE_BYTES];
@@ -4021,7 +4021,7 @@ static bool shell_resolve_batch_path(const char *command_name, char *resolved_pa
     return false;
 }
 
-static esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
+esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
 {
     shell_batch_frame_t frame = {
         .echo_enabled = true,
@@ -4433,7 +4433,7 @@ cleanup:
 }
 
 // `sd` is a small command family so storage operations share validated parsing, bounded output, and consistent cleanup behavior.
-static void shell_command_sd(char *command)
+void shell_command_sd(char *command)
 {
     char *argv[5];
     int argc = shell_split_args(command, argv, 5);
@@ -5023,6 +5023,24 @@ static void shell_input_line_event_cb(lv_event_t *event)
     }
 }
 
+/* Keyboard widget event callback: handles mode changes and button presses
+ * from the on-screen LVGL keyboard for richer interaction. */
+static void shell_keyboard_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        /* Mode change or special button pressed — log for debug */
+        uint32_t btn_id = lv_buttonmatrix_get_selected_button(lv_event_get_current_target(event));
+        if (btn_id != LV_BUTTONMATRIX_BUTTON_NONE) {
+            const char *txt = lv_buttonmatrix_get_button_text(lv_event_get_current_target(event), btn_id);
+            if (txt != NULL) {
+                ESP_LOGI(SHELL_TAG, "Keyboard button: %s (id=%" PRIu32 ")", txt, btn_id);
+            }
+        }
+    }
+}
+
 /* LVGL callback to rebuild the UI after display rotation.
  * Registered with the display manager so it gets called when rotation changes.
  * Runs on the LVGL task with adequate stack depth. */
@@ -5066,6 +5084,11 @@ static void shell_build_ui(void)
     if (next_btn != NULL) {
         lv_obj_add_event_cb(next_btn, shell_history_button_event_cb, LV_EVENT_CLICKED, NULL);
     }
+
+    /* Register a keyboard event callback for richer keyboard interaction.
+     * Receives LV_EVENT_VALUE_CHANGED for mode/button presses,
+     * LV_EVENT_READY for OK button, LV_EVENT_CANCEL for hide button. */
+    keyboard_register_event_callback(shell_keyboard_event_cb, NULL);
 
     /* Show boot banner and reset input line */
     shell_transcript_reset();

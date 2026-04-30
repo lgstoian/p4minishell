@@ -274,6 +274,158 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ====================================================================
+     * SD / FILE / BATCH COMMANDS — bridged to main.c via p4minishell.h
+     * ==================================================================== */
+
+    /* SD tools */
+    if (shell_text_equals_ignore_case(argv[0], "sd")) {
+        extern void shell_bridge_sd_command(char *command);
+        shell_bridge_sd_command(command);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sdeject")) {
+        extern void shell_command_sd_eject(void);
+        shell_command_sd_eject();
+        return true;
+    }
+
+    /* DOS-style file commands */
+    if (shell_text_equals_ignore_case(argv[0], "cd") || shell_text_equals_ignore_case(argv[0], "chdir")) {
+        extern void shell_bridge_cd_command(int argc, char **argv);
+        shell_bridge_cd_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "dir")) {
+        extern void shell_bridge_dir_command(int argc, char **argv);
+        shell_bridge_dir_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "copy")) {
+        extern void shell_bridge_copy_command(int argc, char **argv);
+        shell_bridge_copy_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "move")) {
+        extern void shell_bridge_move_command(int argc, char **argv);
+        shell_bridge_move_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "del") || shell_text_equals_ignore_case(argv[0], "erase")) {
+        extern void shell_bridge_del_command(int argc, char **argv);
+        shell_bridge_del_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "ren") || shell_text_equals_ignore_case(argv[0], "rename")) {
+        extern void shell_bridge_ren_command(int argc, char **argv, const char *verb);
+        shell_bridge_ren_command(argc, argv, argv[0]);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "md") || shell_text_equals_ignore_case(argv[0], "mkdir")) {
+        extern void shell_bridge_mkdir_command(int argc, char **argv);
+        shell_bridge_mkdir_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "rd") || shell_text_equals_ignore_case(argv[0], "rmdir")) {
+        extern void shell_bridge_rmdir_command(int argc, char **argv);
+        shell_bridge_rmdir_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "type")) {
+        extern void shell_bridge_type_command(int argc, char **argv);
+        shell_bridge_type_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "write")) {
+        extern void shell_bridge_write_command(int argc, char **argv, bool append_mode);
+        shell_bridge_write_command(argc, argv, false);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "append")) {
+        extern void shell_bridge_write_command(int argc, char **argv, bool append_mode);
+        shell_bridge_write_command(argc, argv, true);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "touch")) {
+        extern void shell_bridge_touch_command(int argc, char **argv);
+        shell_bridge_touch_command(argc, argv);
+        return true;
+    }
+
+    /* DOS-style extended commands */
+    if (shell_text_equals_ignore_case(argv[0], "attrib")) {
+        extern void shell_command_attrib(int argc, char **argv);
+        shell_command_attrib(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "label")) {
+        extern void shell_command_label(int argc, char **argv);
+        shell_command_label(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "xcopy")) {
+        extern void shell_command_xcopy(int argc, char **argv);
+        shell_command_xcopy(argc, argv);
+        return true;
+    }
+
+    /* Environment and batch commands */
+    if (shell_text_equals_ignore_case(argv[0], "set")) {
+        extern void shell_bridge_set_command(int argc, char **argv);
+        shell_bridge_set_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "path")) {
+        extern void shell_bridge_path_command(int argc, char **argv);
+        shell_bridge_path_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "echo")) {
+        extern void shell_bridge_echo_command(int argc, char **argv);
+        shell_bridge_echo_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "call")) {
+        extern void shell_bridge_call_command(int argc, char **argv);
+        shell_bridge_call_command(argc, argv);
+        return true;
+    }
+
+    /* GPIO commands */
+    if (shell_text_equals_ignore_case(argv[0], "gpio")) {
+        extern void shell_bridge_gpio_command(int argc, char **argv);
+        shell_bridge_gpio_command(argc, argv);
+        return true;
+    }
+
+    /* Batch file direct execution */
+    if (strstr(argv[0], ".bat") != NULL) {
+        extern bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size);
+        extern void shell_bridge_batch_file(const char *path, int argc, char **argv);
+        char batch_path[256];
+        if (shell_resolve_batch_path(argv[0], batch_path, sizeof(batch_path))) {
+            shell_bridge_batch_file(batch_path, argc - 1, &argv[1]);
+            return true;
+        }
+    }
+
     shell_transcript_appendf_ansi("@rUnknown command:@R %s\n", argv[0]);
     return false;
 }

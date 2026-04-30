@@ -217,6 +217,28 @@ lv_coord_t keyboard_get_configured_height(void);
  */
 lv_obj_t *keyboard_get_widget(void);
 
+/* ========================================================================
+ * LVGL EVENT CALLBACK
+ * ======================================================================== */
+
+/**
+ * Register an LVGL event callback on the keyboard widget.
+ * The callback receives all LVGL events from the keyboard widget
+ * (LV_EVENT_VALUE_CHANGED for mode/button presses, LV_EVENT_READY
+ * for OK button, LV_EVENT_CANCEL for keyboard hide button, etc.).
+ *
+ * This enables richer keyboard interaction such as:
+ *   - Detecting mode changes (abc → ABC → 1#)
+ *   - Handling the OK/done button press
+ *   - Responding to keyboard hide requests
+ *
+ * Only one callback can be registered at a time. Pass NULL to unregister.
+ *
+ * @param cb        LVGL event callback function.
+ * @param user_data Opaque user data passed to the callback.
+ */
+void keyboard_register_event_callback(lv_event_cb_t cb, void *user_data);
+
 #ifdef __cplusplus
 }
 #endif

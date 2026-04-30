@@ -489,12 +489,16 @@ static void shell_uart_console_task(void *arg)
     (void)arg;
 
     /* Initialize UART for stdin.
-     * Note: esp_vfs_dev_uart_* functions are deprecated in favor of uart_vfs_dev_*
-     * but the new API is not available in this ESP-IDF version. */
+     * The esp_vfs_dev_uart_* API is deprecated in ESP-IDF v5.5.3 in favor of
+     * uart_vfs_dev_* replacements which are not yet available. Suppress the
+     * deprecation warnings since we must use the only available API. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM, 256, 0, 0, NULL, 0);
     esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
     esp_vfs_dev_uart_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_uart_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CRLF);
+#pragma GCC diagnostic pop
 
     /* Print initial prompt */
     shell_uart_console_write_text("\nUART console ready. Type help for commands.\n");

@@ -1,0 +1,20 @@
+idf_component_register(
+    SRCS
+        test_main.c
+        test_shell_parser.c
+        test_shell_history.c
+        test_wifi_state.c
+        test_ansi_format.c
+    INCLUDE_DIRS
+        .
+        "${CMAKE_SOURCE_DIR}"
+        "${CMAKE_SOURCE_DIR}/../components/shell"
+        "${CMAKE_SOURCE_DIR}/../components/ansi"
+        "${CMAKE_SOURCE_DIR}/../components/networking"
+    REQUIRES
+        unity
+        shell
+        ansi
+        networking
+        esp_timer
+)

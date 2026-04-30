@@ -355,3 +355,23 @@ lv_obj_t *keyboard_get_widget(void)
 {
     return s_keyboard.widget;
 }
+
+/* ========================================================================
+ * LVGL EVENT CALLBACK
+ * ======================================================================== */
+
+void keyboard_register_event_callback(lv_event_cb_t cb, void *user_data)
+{
+    if (s_keyboard.widget == NULL) {
+        ESP_LOGW(KEYBOARD_TAG, "Cannot register event callback: keyboard not initialized");
+        return;
+    }
+
+    /* Remove any previously registered callback to avoid duplicates */
+    lv_obj_remove_event_cb(s_keyboard.widget, NULL);
+
+    if (cb != NULL) {
+        lv_obj_add_event_cb(s_keyboard.widget, cb, LV_EVENT_ALL, user_data);
+        ESP_LOGI(KEYBOARD_TAG, "Keyboard event callback registered");
+    }
+}
