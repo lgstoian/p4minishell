@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.15.0] - 2026-04-30
+
+### Added
+- **Consistent ANSI color-coding across all components** — All text output (header, shell, commands, Wi-Fi, USB, OTA) now uses a unified color scheme:
+  - `@C` (bright cyan) = subsystem labels and property keys (e.g., `wifi.state:`, `board.name:`)
+  - `@G` (bright green) = success/connected/active status
+  - `@r` (red) = errors and failures
+  - `@y` (yellow) = warnings and cautions
+  - `@Y` (bright yellow) = section headings
+  - `@W` (bright white) = important values (SSIDs, IPs, paths)
+  - `@Z` (bright magenta) = numeric values
+  - `@k` (bright black/gray) = muted/secondary text
+  - `@N` (bright cyan) = progress/info messages
+  - `@R` = reset to default at end of every colored segment
+- **ANSI callback in networking_host_ops_t** — New `schedule_transcript_appendf_ansi` callback for colored output from components
+- **`networking_schedulef_ansi()` helper** — ANSI-capable formatted output for the networking module
+
+### Changed
+- **networking.c**: All wifi_status, wifi_scan, wifi_diag, wifi_disconnect, wifi help, event handler, watchdog, and sysinfo output now uses ANSI color tokens
+- **networking.c**: `networking_appendf()` now routes through ANSI path for color support
+- **main.c**: Wired `shell_transcript_appendf_ansi` into networking host ops
+- **p4minishell_config.h**: Added new semantic color token definitions (subsystem, key, muted, heading, IP, connected, disconnected, progress, prompt)
+
+### Verified
+- **Clean build**: Zero errors, zero warnings
+- **Flash**: Successful to COM3
+- **Boot**: Device boots, Wi-Fi connects with colored output
+
+---
+
 ## [0.14.2] - 2026-04-30
 
 ### Added

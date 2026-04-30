@@ -4,6 +4,7 @@ idf_component_register(
         "bluetooth.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
+        ansi
         bt
         esp_event
         esp_hosted

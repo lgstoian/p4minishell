@@ -46,6 +46,7 @@ typedef struct {
 typedef struct {
     void (*transcript_append_text)(const char *text);
     void (*schedule_transcript_append_text)(const char *text);
+    void (*transcript_append_ansi)(const char *text);
     void (*record_error)(const char *tag, esp_err_t error, const char *message);
     void (*record_warning)(const char *tag, const char *message);
     void (*record_info)(const char *tag, const char *message);

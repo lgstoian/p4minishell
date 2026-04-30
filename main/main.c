@@ -70,6 +70,9 @@
 /* ANSI-aware transcript function (declared in shell.h, used for boot banner) */
 extern void shell_transcript_appendf_ansi(const char *format, ...);
 
+/* ANSI text append (declared in shell.h, used by networking host ops) */
+extern void shell_transcript_append_ansi(const char *text);
+
 /* Time string function (declared in shell.h, used by date/time commands) */
 extern const char *shell_get_time_string(void);
 
@@ -6180,6 +6183,7 @@ void app_main(void)
     networking_init(&(networking_host_ops_t){
         .transcript_append_text = shell_transcript_append_text,
         .schedule_transcript_append_text = shell_networking_schedule_text,
+        .transcript_append_ansi = shell_transcript_append_ansi,
         .record_error = shell_networking_record_error,
         .record_warning = shell_networking_record_warning,
         .record_info = shell_networking_record_info,

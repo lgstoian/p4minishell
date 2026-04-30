@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/ip4_addr.h"
+#include "ansi.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
@@ -139,17 +140,16 @@ static int networking_split_args(char *text, char **argv, int max_args)
 
 static void networking_appendf(const char *format, ...)
 {
-    char buffer[512];
-    va_list args;
-
-    if (s_host_ops.transcript_append_text == NULL) {
+    if (s_host_ops.transcript_append_ansi == NULL) {
         return;
     }
 
+    char buffer[512];
+    va_list args;
     va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    ansi_vformat(buffer, sizeof(buffer), format, args);
     va_end(args);
-    s_host_ops.transcript_append_text(buffer);
+    s_host_ops.transcript_append_ansi(buffer);
 }
 
 static void networking_schedulef(const char *format, ...)
@@ -165,6 +165,22 @@ static void networking_schedulef(const char *format, ...)
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     s_host_ops.schedule_transcript_append_text(buffer);
+}
+
+static void networking_schedulef_ansi(const char *format, ...)
+{
+    if (s_host_ops.transcript_append_ansi == NULL) {
+        return;
+    }
+
+    char buffer[512];
+    va_list args;
+    va_start(args, format);
+    /* Use ansi_vformat to convert @ tokens to real ANSI escape sequences */
+    ansi_vformat(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    s_host_ops.transcript_append_ansi(buffer);
 }
 
 static void networking_record_errorf(esp_err_t error, const char *format, ...)
@@ -262,7 +278,7 @@ static const char *networking_wifi_state_string_internal(void)
 
 static void networking_wifi_append_step(const char *step)
 {
-    networking_schedulef("[wifi] %s\n", step);
+    networking_schedulef_ansi("@C[wifi]@R %s\n", step);
     networking_record_infof("%s", step);
     networking_notify_headerf(3500, "%s", step);
 }
@@ -271,7 +287,7 @@ static void networking_wifi_append_error(const char *step, esp_err_t error)
 {
     s_wifi_state = NETWORKING_WIFI_STATE_FAILED;
     s_wifi_last_error = error;
-    networking_schedulef("[wifi] %s failed: %s (0x%x)\n", step, esp_err_to_name(error), (unsigned int)error);
+    networking_schedulef_ansi("@C[wifi]@R @r%s failed@R: @r%s@R (0x%x)\n", step, esp_err_to_name(error), (unsigned int)error);
     networking_record_errorf(error, "%s failed", step);
     networking_notify_headerf(5000, "WiFi error: %s", step);
 }
@@ -323,7 +339,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
 
                 memcpy(s_wifi_target_ssid, event->ssid, copy_len);
                 s_wifi_target_ssid[copy_len] = '\0';
-                networking_schedulef("[wifi] event: associated with %s on channel %u\n",
+                networking_schedulef_ansi("@C[wifi]@R event: @Gassociated@R with @W%s@R on channel @Z%u@R\n",
                                      s_wifi_target_ssid,
                                      (unsigned int)event->channel);
             }
@@ -335,7 +351,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
             s_wifi_connected = false;
             s_wifi_connect_requested = false;
             wifi_unlock();
-            networking_schedulef("[wifi] event: disconnected\n");
+            networking_schedulef_ansi("@C[wifi]@R event: @ydisconnected@R\n");
             networking_notify_headerf(4000, "WiFi disconnected");
             /* Start the persistent watchdog to attempt reconnection */
             networking_wifi_start_watchdog();
@@ -479,7 +495,7 @@ static esp_err_t networking_wifi_connect_with_credentials(const char *ssid, cons
     snprintf(s_wifi_target_password, sizeof(s_wifi_target_password), "%s", password);
     s_wifi_connect_requested = true;
     s_wifi_connected = false;
-    networking_schedulef("[wifi] connect requested for %s\n", s_wifi_target_ssid);
+    networking_schedulef_ansi("@C[wifi]@R @Gconnect requested@R for @W%s@R\n", s_wifi_target_ssid);
     wifi_unlock();
 
     networking_wifi_append_step("esp_wifi_connect()");
@@ -672,67 +688,67 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
     esp_netif_ip_info_t ip_info = { 0 };
     const char *label = (origin != NULL && origin[0] != '\0') ? origin : "runtime";
 
-    networking_schedulef("[wifi.diag] origin=%s state=%s connected=%s requested=%s\n",
+    networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Cstate@R=@W%s@R @Cconnected@R=%s @Crequested@R=%s\n",
                          label,
                          networking_wifi_state_string_internal(),
-                         s_wifi_connected ? "yes" : "no",
-                         s_wifi_connect_requested ? "yes" : "no");
+                         s_wifi_connected ? "@Gyes@R" : "@kno@R",
+                         s_wifi_connect_requested ? "@Gyes@R" : "@kno@R");
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
-        networking_schedulef("[wifi.diag] origin=%s runtime not started\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @yruntime not started@R\n", label);
         return ESP_ERR_INVALID_STATE;
     }
 
     error = esp_wifi_sta_get_ap_info(&ap_info);
     if (error == ESP_OK) {
-        networking_schedulef("[wifi.diag] connected_ssid=%s rssi=%d channel=%u\n",
+        networking_schedulef_ansi("@C[wifi.diag]@R @Cconnected_ssid@R=@W%s@R @Crssi@R=@Z%d@R @Cchannel@R=@Z%u@R\n",
                              ap_info.ssid[0] != '\0' ? (const char *)ap_info.ssid : "<hidden>",
                              ap_info.rssi,
                              (unsigned int)ap_info.primary);
     } else if (error == ESP_ERR_WIFI_NOT_CONNECT) {
-        networking_schedulef("[wifi.diag] origin=%s not connected to an AP\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @knot connected to an AP@R\n", label);
     } else {
-        networking_schedulef("[wifi.diag] ap info failed: %s (0x%x)\n",
+        networking_schedulef_ansi("@C[wifi.diag]@R @rap info failed@R: @r%s@R (0x%x)\n",
                              esp_err_to_name(error),
                              (unsigned int)error);
     }
 
     if (s_wifi_sta_netif != NULL && esp_netif_get_ip_info(s_wifi_sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
-        networking_schedulef("[wifi.diag] ip=" IPSTR "\n", IP2STR(&ip_info.ip));
+        networking_schedulef_ansi("@C[wifi.diag]@R @Cip@R=@W" IPSTR "@R\n", IP2STR(&ip_info.ip));
     } else {
-        networking_schedulef("[wifi.diag] origin=%s ip=not-assigned\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @kip=not-assigned@R\n", label);
     }
 
     if (s_wifi_connect_requested && !s_wifi_connected) {
-        networking_schedulef("[wifi.diag] origin=%s scan skipped while station connect is in progress\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @yscan skipped while station connect is in progress@R\n", label);
         return ESP_OK;
     }
 
-    networking_schedulef("[wifi.diag] origin=%s scanning for nearby networks...\n", label);
+    networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Nscanning for nearby networks...@R\n", label);
     error = esp_wifi_scan_start(NULL, true);
     if (error != ESP_OK) {
-        networking_schedulef("[wifi.diag] scan failed: %s (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
+        networking_schedulef_ansi("@C[wifi.diag]@R @rscan failed@R: @r%s@R (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
         networking_record_warningf("diagnostic scan failed from %s", label);
         return error;
     }
 
     error = esp_wifi_scan_get_ap_records(&record_count, records);
     if (error != ESP_OK) {
-        networking_schedulef("[wifi.diag] reading scan results failed: %s (0x%x)\n",
+        networking_schedulef_ansi("@C[wifi.diag]@R @rreading scan results failed@R: @r%s@R (0x%x)\n",
                              esp_err_to_name(error),
                              (unsigned int)error);
         networking_record_warningf("diagnostic scan result read failed from %s", label);
         return error;
     }
 
-    networking_schedulef("[wifi.diag] origin=%s networks=%u\n", label, (unsigned int)record_count);
+    networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Cnetworks@R=@Z%u@R\n", label, (unsigned int)record_count);
     if (record_count == 0) {
-        networking_schedulef("[wifi.diag] origin=%s no networks found\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @kno networks found@R\n", label);
         return ESP_OK;
     }
 
     for (index = 0; index < record_count; index++) {
-        networking_schedulef("[wifi.diag][%u] ssid=%s rssi=%d channel=%u auth=%u\n",
+        networking_schedulef_ansi("@C[wifi.diag][%u]@R @Wssid@R=@W%s@R @Crssi@R=@Z%d@R @Cchannel@R=@Z%u@R @Cauth@R=@Z%u@R\n",
                              (unsigned int)index,
                              records[index].ssid[0] != '\0' ? (const char *)records[index].ssid : "<hidden>",
                              records[index].rssi,
@@ -973,12 +989,12 @@ void networking_wifi_scan(void)
     uint16_t index;
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
-        networking_appendf("wifi: scan requires the Wi-Fi runtime to be started first\n");
+        networking_appendf("@Cwifi:@R @yscan requires the Wi-Fi runtime to be started first@R\n");
         networking_record_warningf("Scan rejected because Wi-Fi is not started");
         return;
     }
 
-    networking_appendf("wifi: scanning for access points...\n");
+    networking_appendf("@Cwifi:@R @Nscanning for access points...@R\n");
     error = esp_wifi_scan_start(NULL, true);
     if (error != ESP_OK) {
         networking_record_errorf(error, "WiFi scan failed - check sdkconfig or hosted link");
@@ -992,13 +1008,13 @@ void networking_wifi_scan(void)
     }
 
     if (record_count == 0) {
-        networking_appendf("wifi.scan: no access points found\n");
+        networking_appendf("@Cwifi.scan:@R @kno access points found@R\n");
         networking_record_infof("Scan completed with no visible APs");
         return;
     }
 
     for (index = 0; index < record_count; index++) {
-        networking_appendf("wifi.scan[%u]: ssid=%s rssi=%d auth=%u channel=%u\n",
+        networking_appendf("@Cwifi.scan[%u]:@R @Wssid@R=@W%s@R @Crssi@R=@Z%d@R @Cauth@R=@Z%u@R @Cchannel@R=@Z%u@R\n",
                            (unsigned int)index,
                            records[index].ssid,
                            records[index].rssi,
@@ -1017,44 +1033,44 @@ void networking_wifi_status(void)
     char ap_ssid[NETWORKING_WIFI_SSID_BYTES];
     esp_netif_ip_info_t ip_info;
 
-    networking_appendf("wifi.state: %s\n", networking_wifi_state_string_internal());
-    networking_appendf("wifi.default_profile: %s\n", networking_wifi_defaults_available() ? "configured" : "missing");
+    networking_appendf("@Cwifi.state:@R %s\n", networking_wifi_state_string_internal());
+    networking_appendf("@Cwifi.default_profile:@R %s\n", networking_wifi_defaults_available() ? "@Gconfigured@R" : "@ymissing@R");
     if (networking_wifi_defaults_available()) {
-        networking_appendf("wifi.default_ssid: %s\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
+        networking_appendf("@Cwifi.default_ssid:@R @W%s@R\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
     }
     if (s_wifi_last_detail[0] != '\0') {
-        networking_appendf("wifi.note: %s\n", s_wifi_last_detail);
+        networking_appendf("@Cwifi.note:@R @k%s@R\n", s_wifi_last_detail);
     }
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
         if (s_wifi_state == NETWORKING_WIFI_STATE_FAILED) {
-            networking_appendf("wifi.last_error: %s (0x%x)\n", esp_err_to_name(s_wifi_last_error), (unsigned int)s_wifi_last_error);
+            networking_appendf("@Cwifi.last_error:@R @r%s@R (0x%x)\n", esp_err_to_name(s_wifi_last_error), (unsigned int)s_wifi_last_error);
         }
         if (s_wifi_state == NETWORKING_WIFI_STATE_STARTING) {
-            networking_appendf("wifi.progress: ESP-Hosted probe is still running\n");
+            networking_appendf("@Cwifi.progress:@R @yESP-Hosted probe is still running@R\n");
         }
         return;
     }
 
-    networking_appendf("wifi.connect_requested: %s\n", s_wifi_connect_requested ? "yes" : "no");
-    networking_appendf("wifi.connected: %s\n", s_wifi_connected ? "yes" : "no");
+    networking_appendf("@Cwifi.connect_requested:@R %s\n", s_wifi_connect_requested ? "@Gyes@R" : "@kno@R");
+    networking_appendf("@Cwifi.connected:@R %s\n", s_wifi_connected ? "@Gyes@R" : "@kno@R");
     if (s_wifi_target_ssid[0] != '\0') {
-        networking_appendf("wifi.target_ssid: %s\n", s_wifi_target_ssid);
+        networking_appendf("@Cwifi.target_ssid:@R @W%s@R\n", s_wifi_target_ssid);
     }
 
     error = esp_wifi_sta_get_ap_info(&ap_info);
     if (error == ESP_OK) {
         snprintf(ap_ssid, sizeof(ap_ssid), "%s", (const char *)ap_info.ssid);
-        networking_appendf("wifi.ap: %s, rssi=%d, channel=%u\n", ap_ssid, ap_info.rssi, (unsigned int)ap_info.primary);
+        networking_appendf("@Cwifi.ap:@R @W%s@R, @Crssi@R=@Z%d@R, @Cchannel@R=@Z%u@R\n", ap_ssid, ap_info.rssi, (unsigned int)ap_info.primary);
     } else if (error != ESP_ERR_WIFI_NOT_CONNECT) {
-        networking_appendf("wifi.ap_info_error: %s (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
+        networking_appendf("@Cwifi.ap_info_error:@R @r%s@R (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
     }
 
     if (s_wifi_sta_netif != NULL && esp_netif_get_ip_info(s_wifi_sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
-        networking_appendf("wifi.ip: " IPSTR "\n", IP2STR(&ip_info.ip));
+        networking_appendf("@Cwifi.ip:@R @W" IPSTR "@R\n", IP2STR(&ip_info.ip));
     }
 #else
-    networking_appendf("wifi: sdkconfig does not enable the Wi-Fi stack\n");
+    networking_appendf("@Cwifi:@R @ksdkconfig does not enable the Wi-Fi stack@R\n");
 #endif
 }
 
@@ -1064,12 +1080,12 @@ void networking_wifi_disconnect(void)
     esp_err_t error;
 
     if (s_wifi_state == NETWORKING_WIFI_STATE_STARTING) {
-        networking_appendf("wifi: initialization is in progress\n");
+        networking_appendf("@Cwifi:@R @yinitialization is in progress@R\n");
         return;
     }
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
-        networking_appendf("wifi: stack is not ready (%s)\n", networking_wifi_state_string_internal());
+        networking_appendf("@Cwifi:@R @ystack is not ready@R (@k%s@R)\n", networking_wifi_state_string_internal());
         return;
     }
 
@@ -1078,11 +1094,11 @@ void networking_wifi_disconnect(void)
     networking_wifi_append_step("esp_wifi_disconnect()");
     error = esp_wifi_disconnect();
     if (error == ESP_OK || error == ESP_ERR_WIFI_NOT_CONNECT) {
-        networking_appendf("wifi: disconnect requested\n");
+        networking_appendf("@Cwifi:@R @gdisconnect requested@R\n");
         return;
     }
 
-    networking_appendf("wifi: disconnect failed with %s (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
+    networking_appendf("@Cwifi:@R @rdisconnect failed@R with @r%s@R (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
 #endif
 }
 
@@ -1106,16 +1122,16 @@ void networking_handle_wifi_command(char *command)
     int argc = networking_split_args(command, argv, 5);
 
     if (argc <= 1 || networking_text_equals_ignore_case(argv[1], "help")) {
-        networking_appendf("Wi-Fi commands:\n");
-        networking_appendf("  wifi status                 Show Wi-Fi runtime state and IP info\n");
-        networking_appendf("  wifi scan                   Scan for nearby SSIDs after Wi-Fi starts\n");
-        networking_appendf("  wifi diag                   Run a diagnostic status + scan report in the transcript\n");
-        networking_appendf("  wifi connect                Connect using sdkconfig default credentials\n");
-        networking_appendf("  wifi connect <ssid> <pass>  Connect using runtime credentials\n");
-        networking_appendf("  wifi disconnect             Disconnect the current station session\n");
-        networking_appendf("  Wi-Fi now starts in the background on normal boot and after successful c6ota restore\n");
-        networking_appendf("  wifi connect still probes ESP-Hosted in a background task so the shell remains responsive\n");
-        networking_appendf("  wifi connect passwords are masked in transcript history and not stored in command recall\n");
+        networking_appendf("@Y@BWi-Fi Commands:@R\n");
+        networking_appendf("  @Gwifi status@R                 Show Wi-Fi runtime state and IP info\n");
+        networking_appendf("  @Gwifi scan@R                   Scan for nearby SSIDs after Wi-Fi starts\n");
+        networking_appendf("  @Gwifi diag@R                   Run a diagnostic status + scan report in the transcript\n");
+        networking_appendf("  @Gwifi connect@R                Connect using sdkconfig default credentials\n");
+        networking_appendf("  @Gwifi connect@R @T<ssid>@R @T<pass>@R  Connect using runtime credentials\n");
+        networking_appendf("  @Gwifi disconnect@R             Disconnect the current station session\n");
+        networking_appendf("  @kWi-Fi now starts in the background on normal boot and after successful c6ota restore@R\n");
+        networking_appendf("  @kwifi connect still probes ESP-Hosted in a background task so the shell remains responsive@R\n");
+        networking_appendf("  @kwifi connect passwords are masked in transcript history and not stored in command recall@R\n");
         return;
     }
 
@@ -1142,7 +1158,7 @@ void networking_handle_wifi_command(char *command)
     if (networking_text_equals_ignore_case(argv[1], "connect")) {
         if (argc == 2) {
             if (!networking_wifi_defaults_available()) {
-                networking_appendf("wifi: sdkconfig default credentials are not configured\n");
+                networking_appendf("@Cwifi:@R @ysdkconfig default credentials are not configured@R\n");
                 return;
             }
 
@@ -1150,7 +1166,7 @@ void networking_handle_wifi_command(char *command)
                 (void)networking_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
                                                                CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
             } else {
-                networking_appendf("wifi: starting stack on demand\n");
+                networking_appendf("@Cwifi:@R @Nstarting stack on demand@R\n");
                 (void)networking_wifi_begin_connect_request(NULL, NULL, true);
             }
             return;
@@ -1160,42 +1176,42 @@ void networking_handle_wifi_command(char *command)
             if (s_wifi_state == NETWORKING_WIFI_STATE_STARTED) {
                 (void)networking_wifi_connect_with_credentials(argv[2], argv[3]);
             } else {
-                networking_appendf("wifi: starting stack on demand\n");
+                networking_appendf("@Cwifi:@R @Nstarting stack on demand@R\n");
                 (void)networking_wifi_begin_connect_request(argv[2], argv[3], false);
             }
             return;
         }
 
-        networking_appendf("Usage: wifi connect or wifi connect <ssid> <pass>\n");
+        networking_appendf("@yUsage: wifi connect or wifi connect <ssid> <pass>@R\n");
         return;
     }
 
-    networking_appendf("Unknown wifi subcommand: %s\n", argv[1]);
+    networking_appendf("@rUnknown wifi subcommand:@R %s\n", argv[1]);
 }
 
 void networking_append_sysinfo_summary(void)
 {
     switch (s_wifi_state) {
     case NETWORKING_WIFI_STATE_STARTING:
-        networking_appendf("wifi: runtime initialization is in progress\n");
+        networking_appendf("@Cwifi:@R @yruntime initialization is in progress@R\n");
         break;
     case NETWORKING_WIFI_STATE_STARTED:
-        networking_appendf("wifi: runtime initialized in STA mode from sdkconfig, connected=%s\n", s_wifi_connected ? "yes" : "no");
+        networking_appendf("@Cwifi:@R @Gruntime initialized@R in STA mode from sdkconfig, @Cconnected@R=%s\n", s_wifi_connected ? "@Gyes@R" : "@kno@R");
         break;
     case NETWORKING_WIFI_STATE_FAILED:
-        networking_appendf("wifi: runtime initialization failed with %s (0x%x)\n",
+        networking_appendf("@Cwifi:@R @rruntime initialization failed@R with @r%s@R (0x%x)\n",
                            esp_err_to_name(s_wifi_last_error),
                            (unsigned int)s_wifi_last_error);
         break;
     case NETWORKING_WIFI_STATE_SKIPPED_DISABLED:
-        networking_appendf("wifi: skipped because sdkconfig does not enable native or ESP-Hosted Wi-Fi\n");
+        networking_appendf("@Cwifi:@R @kskipped because sdkconfig does not enable native or ESP-Hosted Wi-Fi@R\n");
         break;
     case NETWORKING_WIFI_STATE_SKIPPED_UNSUPPORTED:
-        networking_appendf("wifi: unsupported on current target/SoC caps\n");
+        networking_appendf("@Cwifi:@R @kunsupported on current target/SoC caps@R\n");
         break;
     case NETWORKING_WIFI_STATE_NOT_ATTEMPTED:
     default:
-        networking_appendf("wifi: runtime initialization not attempted yet\n");
+        networking_appendf("@Cwifi:@R @kruntime initialization not attempted yet@R\n");
         break;
     }
 }
@@ -1361,7 +1377,7 @@ static void networking_wifi_runtime_init(void)
     s_wifi_target_ssid[0] = '\0';
     networking_wifi_append_step("Wi-Fi runtime started in STA mode");
     if (networking_wifi_defaults_available()) {
-        networking_schedulef("[wifi] default sdkconfig profile ready for ssid %s\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
+        networking_schedulef_ansi("@C[wifi]@R @Gdefault sdkconfig profile ready@R for ssid @W%s@R\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
     } else {
         networking_wifi_append_step("no default sdkconfig credentials configured; use wifi connect <ssid> <pass>");
     }
@@ -1480,7 +1496,7 @@ static void networking_wifi_watchdog_task(void *arg)
 
         /* Stop if total timeout exceeded */
         if (total_elapsed_ms >= WIFI_WATCHDOG_TOTAL_TIMEOUT_MS) {
-            networking_schedulef("[wifi] watchdog: giving up after %d seconds\n",
+            networking_schedulef_ansi("@C[wifi]@R @Ywatchdog:@R @rgiving up@R after @Z%d@R seconds\n",
                                 (int)(total_elapsed_ms / 1000));
             break;
         }
@@ -1502,7 +1518,7 @@ static void networking_wifi_watchdog_task(void *arg)
             break;
         }
 
-        networking_schedulef("[wifi] watchdog: retry %d for %s (delay %d ms)\n",
+        networking_schedulef_ansi("@C[wifi]@R @Ywatchdog:@R retry @Z%d@R for @W%s@R (delay @Z%d@R ms)\n",
                             s_wifi_watchdog_retry_count + 1, ssid_copy, delay_ms);
 
         esp_err_t error = networking_wifi_connect_with_credentials(ssid_copy, pass_copy);
@@ -1515,7 +1531,7 @@ static void networking_wifi_watchdog_task(void *arg)
             wifi_unlock();
 
             if (connected) {
-                networking_schedulef("[wifi] watchdog: connected successfully\n");
+                networking_schedulef_ansi("@C[wifi]@R @Ywatchdog:@R @Gconnected successfully@R\n");
                 break;
             }
         }

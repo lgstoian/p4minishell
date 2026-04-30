@@ -440,6 +440,33 @@
 /** ANSI SGR for path values. */
 #define P4_CONFIG_PS_COLOR_PATH_VALUE        36  /* Cyan */
 
+/** ANSI SGR for subsystem/module labels (e.g., "[wifi]", "[usb]"). */
+#define P4_CONFIG_PS_COLOR_SUBSYSTEM         96  /* Bright cyan */
+
+/** ANSI SGR for key names / property labels. */
+#define P4_CONFIG_PS_COLOR_KEY               37  /* White */
+
+/** ANSI SGR for muted/secondary text. */
+#define P4_CONFIG_PS_COLOR_MUTED             90  /* Bright black (gray) */
+
+/** ANSI SGR for heading/title text. */
+#define P4_CONFIG_PS_COLOR_HEADING           93  /* Bright yellow */
+
+/** ANSI SGR for IP addresses. */
+#define P4_CONFIG_PS_COLOR_IP                95  /* Bright magenta */
+
+/** ANSI SGR for connected/active status. */
+#define P4_CONFIG_PS_COLOR_CONNECTED         92  /* Bright green */
+
+/** ANSI SGR for disconnected/inactive status. */
+#define P4_CONFIG_PS_COLOR_DISCONNECTED      90  /* Bright black (gray) */
+
+/** ANSI SGR for progress/step messages. */
+#define P4_CONFIG_PS_COLOR_PROGRESS          96  /* Bright cyan */
+
+/** ANSI SGR for prompt/input indicators. */
+#define P4_CONFIG_PS_COLOR_PROMPT            97  /* Bright white */
+
 /* ========================================================================
  * USB HOST PARAMETERS
  * ======================================================================== */

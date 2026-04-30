@@ -2,9 +2,16 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
+**Version:** 0.15.0 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+
 ## Overview
 
 P4MiniShell replaces the default LVGL demo UI with a persistent DOS-style shell surface built on LVGL 9.2.2. It provides a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi and Bluetooth on the C6, USB host support, and a real OTA maintenance path for the co-processor.
+
+**Color-coded output** — All text output uses a consistent ANSI color scheme for readability:
+- Cyan labels for property keys, green for success/connected, red for errors, yellow for warnings
+- Bright white for important values (SSIDs, IPs), bright magenta for numbers
+- Gray for muted/secondary text, bright yellow for section headings
 
 The current firmware is not a desktop DOS clone and is not yet an MS-DOS-compatible runtime. It provides the embedded foundation for that direction.
 
