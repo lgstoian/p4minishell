@@ -1,0 +1,246 @@
+/**
+ * @file keyboard.h
+ * @brief On-screen keyboard manager for P4MiniShell LVGL shell UI.
+ *
+ * Owns the LVGL keyboard widget and all keyboard-related state:
+ * visibility, mode, textarea binding, and dynamic scaling.
+ * Works together with the window manager (windows.c) for layout
+ * and the display manager (display.c) for resolution queries.
+ *
+ * Features:
+ *   - Show/hide keyboard with automatic UI reflow
+ *   - Multiple keyboard modes (text_lower, text_upper, number, symbols)
+ *   - Dynamic height scaling based on display resolution
+ *   - Textarea binding for input routing
+ *   - Keyboard visibility state tracking
+ *   - Transcript area auto-expansion when keyboard is hidden
+ *   - External input mode: auto-hide when USB keyboard is present
+ *
+ * Architecture:
+ *   This module OWNS the LVGL keyboard widget and its visibility state.
+ *   The window manager delegates keyboard creation to this module.
+ *   When keyboard visibility changes, the window manager is notified
+ *   to recalculate region rectangles (transcript expands when keyboard hidden).
+ *
+ * Usage:
+ *   1. keyboard_init()          — create the keyboard widget
+ *   2. keyboard_bind_textarea() — attach to input line
+ *   3. keyboard_show()/keyboard_hide() — toggle visibility
+ *   4. keyboard_is_visible()    — query state for layout calculations
+ *   5. keyboard_get_height()    — get current keyboard height for layout
+ *   6. keyboard_deinit()        — release keyboard widget
+ */
+
+#ifndef P4MINISHELL_KEYBOARD_H
+#define P4MINISHELL_KEYBOARD_H
+
+#include <stdbool.h>
+#include <stdint.h>
+#include "lvgl.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ========================================================================
+ * KEYBOARD MODE
+ * ======================================================================== */
+
+/** Keyboard input modes. */
+typedef enum {
+    KEYBOARD_MODE_TEXT_LOWER = 0,   /**< Lowercase text */
+    KEYBOARD_MODE_TEXT_UPPER,       /**< Uppercase text */
+    KEYBOARD_MODE_NUMBER,           /**< Numbers only */
+    KEYBOARD_MODE_SYMBOLS,          /**< Symbols only */
+    KEYBOARD_MODE_COUNT             /**< Sentinel */
+} keyboard_mode_t;
+
+/* ========================================================================
+ * LIFECYCLE
+ * ======================================================================== */
+
+/**
+ * Initialize the keyboard manager and create the LVGL keyboard widget.
+ * Must be called after display_init() and from the LVGL task context.
+ * The keyboard is created visible by default.
+ *
+ * @param parent  Parent LVGL object (typically the active screen).
+ * @return Pointer to the keyboard LVGL object, or NULL on failure.
+ */
+lv_obj_t *keyboard_init(lv_obj_t *parent);
+
+/**
+ * Deinitialize the keyboard manager and release the keyboard widget.
+ * Safe to call even if keyboard is not initialized.
+ */
+void keyboard_deinit(void);
+
+/**
+ * Check if the keyboard manager is initialized.
+ * @return true if keyboard_init() completed successfully.
+ */
+bool keyboard_is_initialized(void);
+
+/**
+ * Register a callback to be invoked when keyboard visibility changes.
+ * The window manager uses this to recalculate region rectangles.
+ * @param cb  Callback function. Pass NULL to clear.
+ */
+void keyboard_register_visibility_callback(void (*cb)(bool visible));
+
+/* ========================================================================
+ * VISIBILITY
+ * ======================================================================== */
+
+/**
+ * Show the keyboard. If already visible, this is a no-op.
+ * Triggers a window manager reflow so the transcript shrinks to
+ * accommodate the keyboard.
+ * If external input is enabled, this forces the keyboard visible
+ * regardless of external input state.
+ */
+void keyboard_show(void);
+
+/**
+ * Hide the keyboard. If already hidden, this is a no-op.
+ * Triggers a window manager reflow so the transcript expands to
+ * fill the freed space.
+ */
+void keyboard_hide(void);
+
+/**
+ * Toggle keyboard visibility.
+ * If external input is enabled, this forces a toggle regardless.
+ */
+void keyboard_toggle(void);
+
+/**
+ * Query whether the keyboard is currently visible.
+ * @return true if keyboard is visible.
+ */
+bool keyboard_is_visible(void);
+
+/* ========================================================================
+ * EXTERNAL INPUT MODE (USB KEYBOARD)
+ * ======================================================================== */
+
+/**
+ * Enable or disable external input mode.
+ * When enabled, the on-screen keyboard is automatically hidden
+ * (unless manually overridden by the user).
+ * @param enabled  true to enable external input, false to disable.
+ */
+void keyboard_set_external_input(bool enabled);
+
+/**
+ * Query whether external input mode is active.
+ * @return true if external input is enabled.
+ */
+bool keyboard_is_external_input_enabled(void);
+
+/**
+ * Force the keyboard to stay visible even when external input is enabled.
+ * Reset by calling keyboard_set_external_input() again or
+ * keyboard_clear_force_visible().
+ */
+void keyboard_force_visible(void);
+
+/**
+ * Clear the force-visible override, allowing external input mode
+ * to hide the keyboard again.
+ */
+void keyboard_clear_force_visible(void);
+
+/* ========================================================================
+ * TEXTAREA BINDING
+ * ======================================================================== */
+
+/**
+ * Bind the keyboard to a textarea for input routing.
+ * @param textarea  LVGL textarea object to receive keyboard input.
+ */
+void keyboard_bind_textarea(lv_obj_t *textarea);
+
+/**
+ * Get the currently bound textarea.
+ * @return The bound textarea, or NULL if none.
+ */
+lv_obj_t *keyboard_get_textarea(void);
+
+/* ========================================================================
+ * MODE CONTROL
+ * ======================================================================== */
+
+/**
+ * Set the keyboard input mode.
+ * @param mode  Desired keyboard mode.
+ */
+void keyboard_set_mode(keyboard_mode_t mode);
+
+/**
+ * Get the current keyboard mode.
+ * @return Current keyboard mode.
+ */
+keyboard_mode_t keyboard_get_mode(void);
+
+/**
+ * Cycle to the next keyboard mode.
+ * Order: TEXT_LOWER → TEXT_UPPER → NUMBER → SYMBOLS → TEXT_LOWER
+ */
+void keyboard_cycle_mode(void);
+
+/* ========================================================================
+ * DIMENSIONS
+ * ======================================================================== */
+
+/**
+ * Get the current keyboard height in pixels.
+ * Returns 0 when keyboard is hidden.
+ * @return Keyboard height, or 0 if hidden.
+ */
+lv_coord_t keyboard_get_height(void);
+
+/**
+ * Get the keyboard height that would be used if visible.
+ * This is the configured height regardless of current visibility.
+ * @return Configured keyboard height.
+ */
+lv_coord_t keyboard_get_configured_height(void);
+
+/* ========================================================================
+ * WIDGET ACCESS
+ * ======================================================================== */
+
+/**
+ * Get the LVGL keyboard widget for direct manipulation.
+ * @return The keyboard LVGL object, or NULL if not initialized.
+ */
+lv_obj_t *keyboard_get_widget(void);
+
+/* ========================================================================
+ * LVGL EVENT CALLBACK
+ * ======================================================================== */
+
+/**
+ * Register an LVGL event callback on the keyboard widget.
+ * The callback receives all LVGL events from the keyboard widget
+ * (LV_EVENT_VALUE_CHANGED for mode/button presses, LV_EVENT_READY
+ * for OK button, LV_EVENT_CANCEL for keyboard hide button, etc.).
+ *
+ * This enables richer keyboard interaction such as:
+ *   - Detecting mode changes (abc → ABC → 1#)
+ *   - Handling the OK/done button press
+ *   - Responding to keyboard hide requests
+ *
+ * Only one callback can be registered at a time. Pass NULL to unregister.
+ *
+ * @param cb        LVGL event callback function.
+ * @param user_data Opaque user data passed to the callback.
+ */
+void keyboard_register_event_callback(lv_event_cb_t cb, void *user_data);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* P4MINISHELL_KEYBOARD_H */

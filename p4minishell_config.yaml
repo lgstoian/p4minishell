@@ -1,0 +1,626 @@
+﻿# P4MiniShell Configuration — Single Source of Truth
+#
+# Every tunable value in the firmware is documented here with:
+#   - value: the current setting
+#   - type: C type for the generated header
+#   - description: what it controls
+#   - range: valid range or constraint
+#
+# The companion C header is p4minishell_config.h.
+# board_config.yaml remains the hardware-pin source of truth.
+# sdkconfig remains the ESP-IDF build-configuration source of truth.
+#
+# Version: 0.14.2
+# Last updated: 2026-04-30
+
+config_version: "0.14.2"
+
+# ---- Shell Identity ----
+shell_identity:
+  log_tag:
+    value: "p4minishell"
+    type: string
+    description: "ESP_LOGx tag for shell-layer messages"
+  board_requested:
+    value: "JC1060P470C"
+    type: string
+    description: "User-requested board name"
+  board_detected:
+    value: "ESP32-P4-Function-EV-Board"
+    type: string
+    description: "Board name detected from BSP component"
+  boot_message:
+    value: "P4MiniShell v0.2 ready | JC1060P470C | type help"
+    type: string
+    description: "Startup banner shown in transcript"
+  shell_prompt:
+    value: "P4Shell> "
+    type: string
+    description: "Prompt string on input line and serial console"
+
+# ---- Transcript and Command Buffers ----
+buffers:
+  transcript_bytes:
+    value: 8192
+    type: size_t
+    description: "Maximum bytes in on-screen transcript buffer"
+    range: "1024..65536"
+  async_transcript_bytes:
+    value: 2048
+    type: size_t
+    description: "Maximum bytes in async transcript staging buffer"
+    range: "256..8192"
+  command_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum bytes for a single command line"
+    range: "64..1024"
+  command_history_depth:
+    value: 10
+    type: size_t
+    description: "Number of commands in recall history"
+    range: "1..100"
+  debug_log_depth:
+    value: 5
+    type: size_t
+    description: "Number of entries in debug/error ring buffer"
+    range: "1..32"
+  debug_entry_bytes:
+    value: 192
+    type: size_t
+    description: "Maximum bytes per debug log entry"
+    range: "32..512"
+
+# ---- UI Layout ----
+ui_layout:
+  keyboard_height:
+    value: 240
+    type: int
+    description: "On-screen LVGL keyboard height in pixels"
+    range: "100..600"
+  header_refresh_period_ms:
+    value: 5000
+    type: int
+    description: "Header status refresh timer period in milliseconds"
+    range: "1000..30000"
+  input_row_height:
+    value: 52
+    type: int
+    description: "Input row (prompt line) height in pixels"
+    range: "32..100"
+
+# ---- Display Manager ----
+# Managed by: components/display/display.c
+# All display state (rotation, brightness, power) is owned by the display manager.
+# Shell commands route through display manager public API.
+display:
+  default_brightness_percent:
+    value: 100
+    type: int
+    description: "Default backlight brightness on boot (0-100)"
+    range: "0..100"
+  default_rotation:
+    value: 0
+    type: int
+    description: "Default display rotation on boot (0, 90, 180, or 270)"
+    range: "0|90|180|270"
+  default_power_state:
+    value: "on"
+    type: string
+    description: "Default display power state on boot (on, sleep, off)"
+    range: "on|sleep|off"
+  refresh_rate_dynamic_supported:
+    value: false
+    type: bool
+    description: "Whether dynamic refresh rate changes are supported by the panel"
+  panel_driver:
+    value: "JD9165"
+    type: string
+    description: "Display panel driver name for diagnostics"
+  touch_driver:
+    value: "GT911"
+    type: string
+    description: "Touch controller driver name for diagnostics"
+
+# ---- Window Manager ----
+# Managed by: components/windows/windows.c
+# All LVGL screen layout, scaling, and styling is owned by the window manager.
+# Works together with display.c for resolution queries and header.c for status bar.
+windows:
+  header_height_pct:
+    value: 7
+    type: int
+    description: "Header height as percentage of display height"
+    range: "3..15"
+  header_height_min:
+    value: 32
+    type: int
+    description: "Header height minimum clamp in pixels"
+    range: "24..64"
+  header_height_max:
+    value: 56
+    type: int
+    description: "Header height maximum clamp in pixels"
+    range: "40..80"
+  input_row_height_pct:
+    value: 8
+    type: int
+    description: "Input row height as percentage of display height"
+    range: "4..15"
+  input_row_height_min:
+    value: 40
+    type: int
+    description: "Input row height minimum clamp in pixels"
+    range: "32..64"
+  input_row_height_max:
+    value: 56
+    type: int
+    description: "Input row height maximum clamp in pixels"
+    range: "40..80"
+  keyboard_height_pct:
+    value: 35
+    type: int
+    description: "Keyboard height as percentage of display height"
+    range: "20..50"
+  keyboard_height_min:
+    value: 180
+    type: int
+    description: "Keyboard height minimum clamp in pixels"
+    range: "100..300"
+  keyboard_height_max:
+    value: 280
+    type: int
+    description: "Keyboard height maximum clamp in pixels"
+    range: "200..400"
+  transcript_height_min:
+    value: 40
+    type: int
+    description: "Minimum transcript height in pixels"
+    range: "20..200"
+
+# ---- Wi-Fi ----
+wifi:
+  ssid_bytes:
+    value: 33
+    type: size_t
+    description: "Maximum SSID length including null terminator"
+    range: "1..33"
+  password_bytes:
+    value: 65
+    type: size_t
+    description: "Maximum password length including null terminator"
+    range: "1..65"
+  detail_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum Wi-Fi detail/status message length"
+    range: "64..1024"
+  origin_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum Wi-Fi origin/backend description length"
+    range: "16..128"
+  default_ssid:
+    value: ""
+    type: string
+    description: "Default SSID from sdkconfig (empty if not set)"
+  default_password:
+    value: ""
+    type: string
+    description: "Default password from sdkconfig (empty if not set)"
+  runtime_enabled_guard:
+    value: "CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED"
+    type: macro
+    description: "Compile-time guard for Wi-Fi runtime code"
+
+# ---- Bluetooth ----
+bluetooth:
+  log_tag:
+    value: "bluetooth"
+    type: string
+    description: "ESP_LOGx tag for Bluetooth messages"
+  device_name:
+    value: "P4MiniShell BLE"
+    type: string
+    description: "BLE device name used during advertising"
+  discovery_limit:
+    value: 16
+    type: size_t
+    description: "Maximum BLE scan results to report"
+    range: "1..64"
+  name_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum Bluetooth device name string length"
+    range: "8..128"
+  addr_bytes:
+    value: 18
+    type: size_t
+    description: "Maximum Bluetooth address string length (XX:XX:XX:XX:XX:XX)"
+    range: "18"
+  hosted_runtime_supported:
+    value: 0
+    type: bool
+    description: "Legacy Bluedroid compile gate (0=disabled, 1=enabled)"
+  scan_limit:
+    value: 8
+    type: size_t
+    description: "Maximum BLE scan results surfaced via shell bt/scan"
+    range: "1..32"
+
+# ---- SD Card and Filesystem ----
+sd_card:
+  fatfs_drive:
+    value: "0:"
+    type: string
+    description: "FatFs drive letter prefix for SD access"
+  path_bytes:
+    value: 320
+    type: size_t
+    description: "Maximum resolved SD path length"
+    range: "64..1024"
+  list_limit:
+    value: 128
+    type: size_t
+    description: "Maximum directory entries per sd ls"
+    range: "16..512"
+  cat_default_bytes:
+    value: 1024
+    type: size_t
+    description: "Default preview size for sd cat"
+    range: "64..8192"
+  cat_max_bytes:
+    value: 8192
+    type: size_t
+    description: "Maximum preview size for sd cat"
+    range: "256..32768"
+  io_buffer_bytes:
+    value: 128
+    type: size_t
+    description: "I/O buffer size for SD file operations"
+    range: "32..1024"
+
+# ---- Batch Engine and Environment ----
+batch_env:
+  env_var_max:
+    value: 24
+    type: size_t
+    description: "Maximum RAM-only environment variables"
+    range: "1..128"
+  env_name_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum environment variable name length"
+    range: "8..128"
+  env_value_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum environment variable value length"
+    range: "16..1024"
+  batch_line_bytes:
+    value: 384
+    type: size_t
+    description: "Maximum single batch file line length"
+    range: "64..2048"
+  batch_args_max:
+    value: 9
+    type: size_t
+    description: "Maximum batch arguments (%1 through %9)"
+    range: "1..26"
+  batch_depth_max:
+    value: 4
+    type: size_t
+    description: "Maximum nested batch file call depth"
+    range: "1..16"
+  file_io_buffer_bytes:
+    value: 512
+    type: size_t
+    description: "I/O buffer size for general file operations"
+    range: "64..4096"
+
+# ---- GPIO and Hardware Control ----
+gpio_hardware:
+  gpio_name_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum GPIO pin name string length"
+    range: "8..64"
+  gpio_pin_limit:
+    value: 24
+    type: size_t
+    description: "Maximum exposed GPIO pins in board pin table"
+    range: "8..64"
+  c6_host_reset_gpio:
+    value: 54
+    type: gpio_num_t
+    description: "GPIO number for ESP32-C6 hosted reset line"
+  battery_atten:
+    value: "ADC_ATTEN_DB_12"
+    type: adc_atten_t
+    description: "ADC attenuation for battery voltage reading"
+  battery_min_sleep_freq_mhz:
+    value: 40
+    type: int
+    description: "Minimum CPU frequency in MHz for light sleep entry"
+    range: "10..240"
+
+# ---- Header Bar Visuals ----
+header_visuals:
+  notification_bytes:
+    value: 160
+    type: size_t
+    description: "Maximum header notification string length"
+    range: "32..512"
+  text_color:
+    value: "0xC7FFD0"
+    type: uint32_t
+    description: "Header text color (light green)"
+  muted_color:
+    value: "0x5E7063"
+    type: uint32_t
+    description: "Header muted/inactive color (dim green)"
+  accent_color:
+    value: "0x8DFF96"
+    type: uint32_t
+    description: "Header accent/active color (bright green)"
+  warn_color:
+    value: "0xF0C36E"
+    type: uint32_t
+    description: "Header warning color (amber)"
+  bg_color:
+    value: "0x111816"
+    type: uint32_t
+    description: "Header background color (dark green-black)"
+  panel_color:
+    value: "0x050806"
+    type: uint32_t
+    description: "Panel/transcript background color"
+  cpu_warn_pct:
+    value: 85
+    type: int
+    description: "CPU usage percentage threshold for warning color in header"
+    range: "50..100"
+  mem_low_pct:
+    value: 30
+    type: int
+    description: "Memory free percentage threshold for LOW label in header"
+    range: "10..50"
+  bat_low_pct:
+    value: 15
+    type: int
+    description: "Battery percentage threshold for warning color in header"
+    range: "5..30"
+
+# ---- USB Host ----
+usb_host:
+  host_lib_task_stack:
+    value: 4096
+    type: size_t
+    description: "USB Host Library task stack size"
+    range: "2048..16384"
+  event_task_stack:
+    value: 6144
+    type: size_t
+    description: "USB event processing task stack size"
+    range: "2048..16384"
+  driver_task_stack:
+    value: 4096
+    type: size_t
+    description: "USB class driver task stack size"
+    range: "2048..16384"
+  event_queue_depth:
+    value: 16
+    type: size_t
+    description: "USB event queue depth"
+    range: "4..64"
+  text_bytes:
+    value: 192
+    type: size_t
+    description: "Maximum USB status text message length"
+    range: "32..512"
+  path_bytes:
+    value: 320
+    type: size_t
+    description: "Maximum USB filesystem path length"
+    range: "64..1024"
+  msc_base_path:
+    value: "/usb0"
+    type: string
+    description: "VFS mount point for USB MSC devices"
+  list_limit:
+    value: 128
+    type: size_t
+    description: "Maximum directory entries for USB ls"
+    range: "16..512"
+  hid_report_max_bytes:
+    value: 64
+    type: size_t
+    description: "Maximum USB HID report size"
+    range: "8..256"
+  keyboard_keys:
+    value: 6
+    type: size_t
+    description: "Simultaneous keys in USB keyboard report"
+    range: "1..16"
+  keyboard_auto_detect:
+    value: 1
+    type: bool
+    description: "Auto-detect USB keyboard: hide on-screen keyboard when USB keyboard attached"
+  keyboard_cli_inject:
+    value: 1
+    type: bool
+    description: "Route USB keyboard keystrokes to shell CLI input line"
+  keyboard_notify_ms:
+    value: 3000
+    type: int
+    description: "USB keyboard notification timeout in milliseconds"
+    range: "1000..10000"
+
+# ---- C6 OTA ----
+c6ota:
+  task_stack:
+    value: 8192
+    type: size_t
+    description: "OTA worker task stack size"
+    range: "4096..32768"
+  http_block_bytes:
+    value: 2048
+    type: size_t
+    description: "HTTP download block size"
+    range: "512..8192"
+  transfer_chunk:
+    value: 1500
+    type: size_t
+    description: "ESP-Hosted SDIO OTA transfer chunk size"
+    range: "256..4096"
+  progress_step:
+    value: 5
+    type: int
+    description: "Progress reporting interval in percent"
+    range: "1..25"
+  url_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum OTA source URL length"
+    range: "64..2048"
+  default_source:
+    value: "default"
+    type: string
+    description: "Keyword for default OTA source lookup"
+  default_primary:
+    value: "esp32c6_hosted_slave.bin"
+    type: string
+    description: "Primary filename for default OTA"
+  default_fallback:
+    value: "network_adapter.bin"
+    type: string
+    description: "Fallback filename for default OTA"
+  expected_chip_id:
+    value: "0x000D"
+    type: uint16_t
+    description: "Expected ESP32-C6 chip ID in app header"
+  min_major:
+    value: 2
+    type: int
+    description: "Minimum C6 firmware major for reliable OTA"
+  min_minor:
+    value: 9
+    type: int
+    description: "Minimum C6 firmware minor for reliable OTA"
+  min_patch:
+    value: 7
+    type: int
+    description: "Minimum C6 firmware patch for reliable OTA"
+  sd_fatfs_drive:
+    value: "0:"
+    type: string
+    description: "FatFs drive letter for SD OTA sources"
+
+# ---- Task Stacks ----
+task_stacks:
+  wifi_init:
+    value: 6144
+    type: size_t
+    description: "Wi-Fi initialization background task stack"
+    range: "4096..16384"
+  command:
+    value: 8192
+    type: size_t
+    description: "Shell command worker task stack"
+    range: "4096..32768"
+  uart_console:
+    value: 12288
+    type: size_t
+    description: "UART/serial console reader task stack"
+    range: "4096..16384"
+
+# ---- Networking ----
+networking:
+  log_tag:
+    value: "wifi"
+    type: string
+    description: "ESP_LOGx tag for networking/Wi-Fi messages"
+
+# ---- ANSI/VT Terminal Color Palette ----
+# PowerShell-inspired 16-color palette for ANSI SGR escape sequences.
+# All colors are 24-bit RGB hex values (0xRRGGBB).
+# Used by components/ansi/ for ESC[...m sequence rendering.
+ansi_colors:
+  default_fg:
+    value: "0x8DFF96"
+    type: uint32_t
+    description: "Default foreground color (green text on black)"
+  default_bg:
+    value: "0x000000"
+    type: uint32_t
+    description: "Default background color (black)"
+  palette:
+    black:
+      value: "0x000000"
+      type: uint32_t
+      description: "ANSI color 0/30/40 — Black"
+    red:
+      value: "0xC50F1F"
+      type: uint32_t
+      description: "ANSI color 1/31/41 — Red"
+    green:
+      value: "0x13A10E"
+      type: uint32_t
+      description: "ANSI color 2/32/42 — Green"
+    yellow:
+      value: "0xC19C00"
+      type: uint32_t
+      description: "ANSI color 3/33/43 — Yellow"
+    blue:
+      value: "0x0037DA"
+      type: uint32_t
+      description: "ANSI color 4/34/44 — Blue"
+    magenta:
+      value: "0x881798"
+      type: uint32_t
+      description: "ANSI color 5/35/45 — Magenta"
+    cyan:
+      value: "0x3A96DD"
+      type: uint32_t
+      description: "ANSI color 6/36/46 — Cyan"
+    white:
+      value: "0xCCCCCC"
+      type: uint32_t
+      description: "ANSI color 7/37/47 — White"
+    bright_black:
+      value: "0x767676"
+      type: uint32_t
+      description: "ANSI color 8/90/100 — Bright Black (Gray)"
+    bright_red:
+      value: "0xE74856"
+      type: uint32_t
+      description: "ANSI color 9/91/101 — Bright Red"
+    bright_green:
+      value: "0x16C60C"
+      type: uint32_t
+      description: "ANSI color 10/92/102 — Bright Green"
+    bright_yellow:
+      value: "0xF9F1A5"
+      type: uint32_t
+      description: "ANSI color 11/93/103 — Bright Yellow"
+    bright_blue:
+      value: "0x3B78FF"
+      type: uint32_t
+      description: "ANSI color 12/94/104 — Bright Blue"
+    bright_magenta:
+      value: "0xB4009E"
+      type: uint32_t
+      description: "ANSI color 13/95/105 — Bright Magenta"
+    bright_cyan:
+      value: "0x61D6D6"
+      type: uint32_t
+      description: "ANSI color 14/96/106 — Bright Cyan"
+    bright_white:
+      value: "0xF2F2F2"
+      type: uint32_t
+      description: "ANSI color 15/97/107 — Bright White"
+  buffer_bytes:
+    value: 512
+    type: size_t
+    description: "Maximum bytes for an ANSI-formatted string buffer"
+    range: "128..2048"

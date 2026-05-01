@@ -1,0 +1,143 @@
+# P4MiniShell Board Configuration
+# Single source of truth for all hardware pin assignments, display timing,
+# touch configuration, battery ADC parameters, and storage mount points.
+#
+# Board baseline: ESP32-P4-Function-EV-Board
+# Requested name: JC1060P470C
+# Target MCU: ESP32-P4
+# ESP-IDF: v5.5.3
+#
+# Sources verified against:
+#   - managed_components/espressif__esp32_p4_function_ev_board/
+#   - managed_components/espressif__esp_lcd_jd9165/
+#   - managed_components/espressif__esp_lcd_touch_gt911/
+#   - managed_components/lvgl__lvgl/lv_version.h (LVGL 9.2.2)
+#   - sdkconfig
+#
+# Last updated: 2026-04-29 (v0.7.0 header redesign)
+# Updated: 2026-04-30 (v0.13.0 USB keyboard auto-detect)
+# Updated: 2026-04-30 (v0.14.0 ANSI/VT color support)
+
+board:
+  requested_name: JC1060P470C
+  detected_name: ESP32-P4-Function-EV-Board
+  mcu: ESP32-P4
+  chip_revision:
+    support_mode: less_than_v3
+    minimum_supported: v1.0
+    maximum_supported: v1.99
+
+  # ---- I2C Bus (shared by GT911 touch and onboard peripherals) ----
+  i2c:
+    port: 1
+    sda_gpio: 7
+    scl_gpio: 8
+    clock_speed_hz: 400000
+    enable_internal_pullup: true
+
+  # ---- I2S Audio (ES8311 codec) ----
+  i2s:
+    port: 1
+    sclk_gpio: 12
+    mclk_gpio: 13
+    lclk_gpio: 10
+    dout_gpio: 9
+    dsin_gpio: 11
+    power_amp_gpio: 20
+
+  # ---- Display (JD9165 1024x600 MIPI-DSI) ----
+  # Managed by: components/display/display.c (display manager)
+  # All display state (rotation, brightness, power, touch) is owned by the display manager.
+  # Shell commands (brightness, rotate) route through display manager public API.
+  # The display manager wraps bsp_display_start_with_config() using these BOARD_CFG_* values.
+  display:
+    width: 1024
+    height: 600
+    rotation: 0
+    panel_driver: JD9165
+    color_format_rgb888: false
+    panel_supports_hw_swap_xy: false
+    backlight_gpio: 23
+    backlight_control: ledc_pwm
+    backlight_pwm_frequency_hz: 5000
+    backlight_pwm_timer: 1
+    backlight_pwm_resolution_bits: 10
+    reset_gpio: 27
+    pixel_clock_mhz: 80
+    hsync: 1344
+    hbp: 160
+    hfp: 160
+    vsync: 635
+    vbp: 23
+    vfp: 12
+    mipi_dsi_lane_num: 2
+    mipi_dsi_lane_bitrate_mbps_macro: 1000
+    dsi_bus_lane_bitrate_mbps_runtime: 550
+    refresh_rate_hz: 60
+    refresh_rate_dynamic_supported: false
+    display_manager_component: components/display
+    window_manager_component: components/windows
+
+  # ---- Touch (GT911 via I2C) ----
+  touch:
+    driver: GT911
+    reset_gpio: NC
+    interrupt_gpio: NC
+    swap_xy: false
+    mirror_x: false
+    mirror_y: false
+
+  # ---- LVGL Display Buffer ----
+  lvgl:
+    draw_buffer_size: 51200  # width * 50
+    double_buffer: false
+    dpi_buffer_nums: 1
+    buffer_dma: true
+    buffer_spiram: true
+    sw_rotate: true
+    bsp_default_sw_rotate: true
+    avoid_tear: false
+    full_refresh: false
+    direct_mode: false
+
+  # ---- Battery Monitor (ADC on GPIO53, 2:1 divider) ----
+  battery:
+    adc_gpio: 53
+    divider_numerator: 2
+    divider_denominator: 1
+    empty_mv: 3300
+    full_mv: 4200
+
+  # ---- RGB LED (NOT AVAILABLE on current baseline) ----
+  rgb_led:
+    gpio: NC
+    is_ws2812: false
+    status: unsupported
+
+  # ---- Camera (NOT AVAILABLE on current baseline) ----
+  camera:
+    supported: false
+    status: unsupported
+
+  # ---- Storage ----
+  storage:
+    sd_mount_point: /sdcard
+    sd_format_on_mount_fail: false
+    spiffs_mount_point: /spiffs
+    spiffs_partition_label: storage
+    spiffs_max_files: 5
+    spiffs_format_on_mount_fail: false
+
+  # ---- ESP-Hosted SDIO (ESP32-C6 co-processor) ----
+  hosted_sdio:
+    clk_gpio: 18
+    cmd_gpio: 19
+    d0_gpio: 14
+    d1_gpio: 15
+    d2_gpio: 16
+    d3_gpio: 17
+    reset_gpio: 54
+    bus_width: 1
+    slot: 1
+    reset_policy: SLAVE_RESET_ON_EVERY_HOST_BOOTUP
+    host_version: 2.12.1

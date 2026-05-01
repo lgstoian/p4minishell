@@ -1,0 +1,13 @@
+dependencies:
+  # Reconfigure after managed component version changes: idf.py reconfigure
+  espressif/esp_hosted:
+    version: "2.12.1"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_wifi_remote:
+    version: "1.4.1"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/usb: "*"
+  espressif/usb_host_msc: "*"
+  espressif/usb_host_hid: "*"
