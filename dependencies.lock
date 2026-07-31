@@ -10,7 +10,7 @@ dependencies:
       type: service
     version: 0.5.3
   espressif/eppp_link:
-    component_hash: 9472e6825f4bb71eca2b39cf1bc92659c1ac60bfd7416560ad033a7dd8641b17
+    component_hash: 04f7f31868b8ae6014c96132740a192d09611a6e46aaa7038c865ffc7e26b38f
     dependencies:
     - name: espressif/esp_serial_slave_link
       registry_url: https://components.espressif.com
@@ -22,7 +22,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.4
+    version: 1.1.5
   espressif/esp_codec_dev:
     component_hash: 014948481bda426cd46714f297fe1891711246c62bea288863a8cc8cf13ef1f0
     dependencies:
@@ -74,7 +74,7 @@ dependencies:
   espressif/esp_lcd_jd9165:
     dependencies: []
     source:
-      path: D:\Code\p4minishell\managed_components\espressif__esp_lcd_jd9165
+      path: /home/ubuntu/repos/p4minishell/managed_components/espressif__esp_lcd_jd9165
       type: local
     version: 1.0.2
   espressif/esp_lcd_touch:
@@ -90,13 +90,13 @@ dependencies:
   espressif/esp_lcd_touch_gt911:
     dependencies: []
     source:
-      path: D:\Code\p4minishell\managed_components\espressif__esp_lcd_touch_gt911
+      path: /home/ubuntu/repos/p4minishell/managed_components/espressif__esp_lcd_touch_gt911
       type: local
     version: 1.2.0~1
   espressif/esp_lvgl_port:
     dependencies: []
     source:
-      path: D:\Code\p4minishell\managed_components\espressif__esp_lvgl_port
+      path: /home/ubuntu/repos/p4minishell/managed_components/espressif__esp_lvgl_port
       type: local
     version: 2.7.2
   espressif/esp_serial_slave_link:
@@ -130,23 +130,24 @@ dependencies:
       type: service
     version: 1.4.1
   espressif/usb:
-    component_hash: 9da54c646719bdbf30bd33e6c06b3b7e9b224faa0265e060abcde206cdf1033d
+    component_hash: 6c2cff118141dbbca181d0d27d71801fdddfc78f7ac03ae43f6e5a8cbd89cb99
     dependencies:
     - name: idf
       require: private
-      version: '>=5.4'
+      version: '>=5.5.3'
     source:
       registry_url: https://components.espressif.com/
       type: service
     targets:
     - esp32s2
     - esp32s3
+    - esp32s31
     - esp32p4
     - esp32h4
     - linux
-    version: 1.3.0
+    version: 1.5.0
   espressif/usb_host_hid:
-    component_hash: 99d9ec2c6799ec4c8b366af5271b6e50700f6de3f5258e157de2b6799639cf66
+    component_hash: a6c5366f9b6d80b0d5f56d085d62941464512e0968b96c5877e76a80fcc23f13
     dependencies:
     - name: idf
       require: private
@@ -166,14 +167,15 @@ dependencies:
     - esp32s3
     - esp32p4
     - esp32h4
+    - esp32s31
     - linux
-    version: 1.1.0
+    version: 1.2.0
   espressif/usb_host_msc:
-    component_hash: 865a651c08d0bf2ce255a369778375e493df588dfb0720c3d97e12bfdcc4c0f9
+    component_hash: a7330d2bc4f81c21fd335df073405085bbad5cdf084a1be79fb52383d0d0d6fd
     dependencies:
     - name: idf
       require: private
-      version: '>=4.4.1'
+      version: '>=5.0'
     - name: espressif/usb
       registry_url: https://components.espressif.com
       require: public
@@ -189,9 +191,11 @@ dependencies:
     - esp32s3
     - esp32p4
     - esp32h4
-    version: 1.1.4
+    - esp32s31
+    - linux
+    version: 1.2.0
   espressif/wifi_remote_over_eppp:
-    component_hash: ac4d13625cc9f88597cd612d2758580fac287d8ec731b606f2a0720d28cda6cd
+    component_hash: 1fd6968af20f0b19e421f6b519b0a8caf81d689afc3783b564c28559e45f66ef
     dependencies:
     - name: espressif/eppp_link
       registry_url: https://components.espressif.com
@@ -203,7 +207,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.3.1
+    version: 0.3.3
   idf:
     source:
       type: idf
@@ -211,7 +215,7 @@ dependencies:
   lvgl/lvgl:
     dependencies: []
     source:
-      path: D:\Code\p4minishell\managed_components\lvgl__lvgl
+      path: /home/ubuntu/repos/p4minishell/managed_components/lvgl__lvgl
       type: local
     version: 9.2.2
 direct_dependencies:
