@@ -4738,6 +4738,7 @@ void shell_command_attrib(int argc, char **argv)
     shell_sd_session_t session;
     esp_err_t error;
     char resolved[SHELL_SD_PATH_BYTES];
+    char fatfs_path[SHELL_SD_PATH_BYTES];
     FILINFO info;
     FRESULT fr;
     BYTE attr = 0;
@@ -4774,13 +4775,16 @@ void shell_command_attrib(int argc, char **argv)
         }
 
         error = shell_sd_resolve_path(argv[2], resolved, sizeof(resolved));
+        if (error == ESP_OK) {
+            error = shell_sd_vfs_to_fatfs_path(resolved, fatfs_path, sizeof(fatfs_path));
+        }
         if (error != ESP_OK) {
             shell_transcript_append_text("attrib: invalid path\n");
             shell_sd_end(&session, "attrib");
             return;
         }
 
-        fr = f_stat(resolved, &info);
+        fr = f_stat(fatfs_path, &info);
         if (fr != FR_OK) {
             shell_transcript_appendf("attrib: cannot access %s\n", argv[2]);
             shell_sd_end(&session, "attrib");
@@ -4790,7 +4794,7 @@ void shell_command_attrib(int argc, char **argv)
         if (set_attr) info.fattrib |= attr;
         else           info.fattrib &= ~attr;
 
-        fr = f_chmod(resolved, info.fattrib, AM_RDO | AM_HID | AM_SYS | AM_ARC);
+        fr = f_chmod(fatfs_path, info.fattrib, AM_RDO | AM_HID | AM_SYS | AM_ARC);
         if (fr != FR_OK) {
             shell_transcript_appendf("attrib: failed to change attributes\n");
         } else {
@@ -4804,13 +4808,16 @@ void shell_command_attrib(int argc, char **argv)
     /* Show attributes for a file or directory listing */
     const char *path = (argc >= 2) ? argv[1] : ".";
     error = shell_sd_resolve_path(path, resolved, sizeof(resolved));
+    if (error == ESP_OK) {
+        error = shell_sd_vfs_to_fatfs_path(resolved, fatfs_path, sizeof(fatfs_path));
+    }
     if (error != ESP_OK) {
         shell_transcript_append_text("attrib: invalid path\n");
         shell_sd_end(&session, "attrib");
         return;
     }
 
-    fr = f_stat(resolved, &info);
+    fr = f_stat(fatfs_path, &info);
     if (fr == FR_OK && !(info.fattrib & AM_DIR)) {
         char a[5] = {
             (info.fattrib & AM_RDO) ? 'R' : '-',
@@ -4830,7 +4837,7 @@ void shell_command_attrib(int argc, char **argv)
         int count = 0;
         while ((entry = readdir(d)) != NULL && count < SHELL_SD_LIST_LIMIT) {
             char fp[SHELL_SD_PATH_BYTES + 256];
-            snprintf(fp, sizeof(fp), "%s/%s", resolved, entry->d_name);
+            snprintf(fp, sizeof(fp), "%s/%s", fatfs_path, entry->d_name);
             if (f_stat(fp, &info) == FR_OK) {
                 char a[5] = {
                     (info.fattrib & AM_RDO) ? 'R' : '-',
@@ -4873,6 +4880,7 @@ void shell_command_label(int argc, char **argv)
     }
 
     if (argc >= 2) {
+        char drive_label[16];
         if (strlen(argv[1]) > 11) {
             shell_transcript_append_text("label: volume name must be 11 characters or fewer\n");
             shell_sd_end(&session, "label");
@@ -4883,13 +4891,14 @@ void shell_command_label(int argc, char **argv)
         size_t len = strlen(argv[1]);
         for (size_t i = 0; i < len && i < 11; i++)
             label[i] = (char)toupper((unsigned char)argv[1][i]);
-        fr = f_setlabel(label);
+        snprintf(drive_label, sizeof(drive_label), "%s%s", SHELL_SD_FATFS_DRIVE, label);
+        fr = f_setlabel(drive_label);
         if (fr == FR_OK)
             shell_transcript_appendf("label: volume label set to \"%s\"\n", argv[1]);
         else
             shell_transcript_appendf("label: failed to set volume label\n");
     } else {
-        fr = f_getlabel("0:", label, NULL);
+        fr = f_getlabel(SHELL_SD_FATFS_DRIVE, label, NULL);
         if (fr == FR_OK) {
             int end = 10;
             while (end >= 0 && label[end] == ' ') end--;
@@ -5616,6 +5625,28 @@ static bool shell_execute_command_core(char *command)
             return true;
         }
         shell_transcript_append_text("Usage: display <info|resolution|refresh|power>\n");
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "windows")) {
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "info")) {
+            static const char *region_names[WINDOW_REGION_COUNT] = {
+                "header", "transcript", "input_row", "keyboard"
+            };
+            shell_transcript_appendf("windows.display: %" PRId32 " x %" PRId32 "\n",
+                                     (int32_t)windows_get_display_width(),
+                                     (int32_t)windows_get_display_height());
+            for (int region = 0; region < WINDOW_REGION_COUNT; region++) {
+                window_rect_t rect = windows_get_rect((window_region_t)region);
+                shell_transcript_appendf("  windows.%s: x=%" PRId32 " y=%" PRId32
+                                         " w=%" PRId32 " h=%" PRId32 "\n",
+                                         region_names[region],
+                                         (int32_t)rect.x, (int32_t)rect.y,
+                                         (int32_t)rect.width, (int32_t)rect.height);
+            }
+            return true;
+        }
+        shell_transcript_append_text("Usage: windows <info>\n");
         return true;
     }
 

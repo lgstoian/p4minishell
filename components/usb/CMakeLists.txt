@@ -70,5 +70,7 @@ elseif(idf_version_string VERSION_GREATER_EQUAL "5.5.3")
 endif()
 
 if(remote_wake_hal_supported)
-    target_compile_definitions(${COMPONENT_LIB} PUBLIC REMOTE_WAKE_HAL_SUPPORTED)
+    # Match the definition in usb_host.h exactly so translation units that
+    # include the header do not emit macro redefinition warnings.
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC "REMOTE_WAKE_HAL_SUPPORTED=(1)")
 endif()
