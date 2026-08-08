@@ -691,8 +691,8 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
     networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Cstate@R=@W%s@R @Cconnected@R=%s @Crequested@R=%s\n",
                          label,
                          networking_wifi_state_string_internal(),
-                         s_wifi_connected ? "@Gyes@R" : "@kno@R",
-                         s_wifi_connect_requested ? "@Gyes@R" : "@kno@R");
+                         s_wifi_connected ? "@Gyes@R" : "@Kno@R",
+                         s_wifi_connect_requested ? "@Gyes@R" : "@Kno@R");
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
         networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @yruntime not started@R\n", label);
@@ -706,7 +706,7 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
                              ap_info.rssi,
                              (unsigned int)ap_info.primary);
     } else if (error == ESP_ERR_WIFI_NOT_CONNECT) {
-        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @knot connected to an AP@R\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Knot connected to an AP@R\n", label);
     } else {
         networking_schedulef_ansi("@C[wifi.diag]@R @rap info failed@R: @r%s@R (0x%x)\n",
                              esp_err_to_name(error),
@@ -716,7 +716,7 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
     if (s_wifi_sta_netif != NULL && esp_netif_get_ip_info(s_wifi_sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
         networking_schedulef_ansi("@C[wifi.diag]@R @Cip@R=@W" IPSTR "@R\n", IP2STR(&ip_info.ip));
     } else {
-        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @kip=not-assigned@R\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Kip=not-assigned@R\n", label);
     }
 
     if (s_wifi_connect_requested && !s_wifi_connected) {
@@ -743,7 +743,7 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
 
     networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Cnetworks@R=@Z%u@R\n", label, (unsigned int)record_count);
     if (record_count == 0) {
-        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @kno networks found@R\n", label);
+        networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Kno networks found@R\n", label);
         return ESP_OK;
     }
 
@@ -1008,7 +1008,7 @@ void networking_wifi_scan(void)
     }
 
     if (record_count == 0) {
-        networking_appendf("@Cwifi.scan:@R @kno access points found@R\n");
+        networking_appendf("@Cwifi.scan:@R @Kno access points found@R\n");
         networking_record_infof("Scan completed with no visible APs");
         return;
     }
@@ -1039,7 +1039,7 @@ void networking_wifi_status(void)
         networking_appendf("@Cwifi.default_ssid:@R @W%s@R\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
     }
     if (s_wifi_last_detail[0] != '\0') {
-        networking_appendf("@Cwifi.note:@R @k%s@R\n", s_wifi_last_detail);
+        networking_appendf("@Cwifi.note:@R @K%s@R\n", s_wifi_last_detail);
     }
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
@@ -1052,8 +1052,8 @@ void networking_wifi_status(void)
         return;
     }
 
-    networking_appendf("@Cwifi.connect_requested:@R %s\n", s_wifi_connect_requested ? "@Gyes@R" : "@kno@R");
-    networking_appendf("@Cwifi.connected:@R %s\n", s_wifi_connected ? "@Gyes@R" : "@kno@R");
+    networking_appendf("@Cwifi.connect_requested:@R %s\n", s_wifi_connect_requested ? "@Gyes@R" : "@Kno@R");
+    networking_appendf("@Cwifi.connected:@R %s\n", s_wifi_connected ? "@Gyes@R" : "@Kno@R");
     if (s_wifi_target_ssid[0] != '\0') {
         networking_appendf("@Cwifi.target_ssid:@R @W%s@R\n", s_wifi_target_ssid);
     }
@@ -1070,7 +1070,7 @@ void networking_wifi_status(void)
         networking_appendf("@Cwifi.ip:@R @W" IPSTR "@R\n", IP2STR(&ip_info.ip));
     }
 #else
-    networking_appendf("@Cwifi:@R @ksdkconfig does not enable the Wi-Fi stack@R\n");
+    networking_appendf("@Cwifi:@R @Ksdkconfig does not enable the Wi-Fi stack@R\n");
 #endif
 }
 
@@ -1085,7 +1085,7 @@ void networking_wifi_disconnect(void)
     }
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
-        networking_appendf("@Cwifi:@R @ystack is not ready@R (@k%s@R)\n", networking_wifi_state_string_internal());
+        networking_appendf("@Cwifi:@R @ystack is not ready@R (@K%s@R)\n", networking_wifi_state_string_internal());
         return;
     }
 
@@ -1129,9 +1129,9 @@ void networking_handle_wifi_command(char *command)
         networking_appendf("  @Gwifi connect@R                Connect using sdkconfig default credentials\n");
         networking_appendf("  @Gwifi connect@R @T<ssid>@R @T<pass>@R  Connect using runtime credentials\n");
         networking_appendf("  @Gwifi disconnect@R             Disconnect the current station session\n");
-        networking_appendf("  @kWi-Fi now starts in the background on normal boot and after successful c6ota restore@R\n");
-        networking_appendf("  @kwifi connect still probes ESP-Hosted in a background task so the shell remains responsive@R\n");
-        networking_appendf("  @kwifi connect passwords are masked in transcript history and not stored in command recall@R\n");
+        networking_appendf("  @KWi-Fi now starts in the background on normal boot and after successful c6ota restore@R\n");
+        networking_appendf("  @Kwifi connect still probes ESP-Hosted in a background task so the shell remains responsive@R\n");
+        networking_appendf("  @Kwifi connect passwords are masked in transcript history and not stored in command recall@R\n");
         return;
     }
 
@@ -1196,7 +1196,7 @@ void networking_append_sysinfo_summary(void)
         networking_appendf("@Cwifi:@R @yruntime initialization is in progress@R\n");
         break;
     case NETWORKING_WIFI_STATE_STARTED:
-        networking_appendf("@Cwifi:@R @Gruntime initialized@R in STA mode from sdkconfig, @Cconnected@R=%s\n", s_wifi_connected ? "@Gyes@R" : "@kno@R");
+        networking_appendf("@Cwifi:@R @Gruntime initialized@R in STA mode from sdkconfig, @Cconnected@R=%s\n", s_wifi_connected ? "@Gyes@R" : "@Kno@R");
         break;
     case NETWORKING_WIFI_STATE_FAILED:
         networking_appendf("@Cwifi:@R @rruntime initialization failed@R with @r%s@R (0x%x)\n",
@@ -1204,14 +1204,14 @@ void networking_append_sysinfo_summary(void)
                            (unsigned int)s_wifi_last_error);
         break;
     case NETWORKING_WIFI_STATE_SKIPPED_DISABLED:
-        networking_appendf("@Cwifi:@R @kskipped because sdkconfig does not enable native or ESP-Hosted Wi-Fi@R\n");
+        networking_appendf("@Cwifi:@R @Kskipped because sdkconfig does not enable native or ESP-Hosted Wi-Fi@R\n");
         break;
     case NETWORKING_WIFI_STATE_SKIPPED_UNSUPPORTED:
-        networking_appendf("@Cwifi:@R @kunsupported on current target/SoC caps@R\n");
+        networking_appendf("@Cwifi:@R @Kunsupported on current target/SoC caps@R\n");
         break;
     case NETWORKING_WIFI_STATE_NOT_ATTEMPTED:
     default:
-        networking_appendf("@Cwifi:@R @kruntime initialization not attempted yet@R\n");
+        networking_appendf("@Cwifi:@R @Kruntime initialization not attempted yet@R\n");
         break;
     }
 }
@@ -1238,6 +1238,30 @@ bool networking_wifi_is_connected(void)
     connected = s_wifi_connected;
     wifi_unlock();
     return connected;
+}
+
+bool networking_wifi_get_rssi(int *rssi_out)
+{
+    wifi_ap_record_t ap_info;
+
+    if (rssi_out == NULL) {
+        return false;
+    }
+
+    /* Only query the driver while associated. Calling esp_wifi_sta_get_ap_info()
+     * when disconnected returns an error and, on the hosted path, costs a
+     * needless SDIO round trip on every header refresh. */
+    if (!networking_wifi_is_connected()) {
+        return false;
+    }
+
+    memset(&ap_info, 0, sizeof(ap_info));
+    if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) {
+        return false;
+    }
+
+    *rssi_out = ap_info.rssi;
+    return true;
 }
 
 bool networking_wifi_is_starting(void)
@@ -1267,6 +1291,42 @@ static void networking_wifi_runtime_init(void)
     networking_wifi_append_step("runtime Wi-Fi initialization requested from sdkconfig");
     networking_wifi_append_step("ESP-Hosted SDIO backend: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54");
 
+    /* ---- Step 1: bring up the hosted transport ----
+     * The SDIO link to the C6 comes up first. Everything below depends on it:
+     * esp_wifi_init() is the esp_wifi_remote shim, and it has nothing to talk
+     * to until the slave is connected. Bringing the transport up before NVS
+     * also means a dead or mismatched co-processor is reported as a transport
+     * fault rather than surfacing later as a confusing Wi-Fi init error. */
+    networking_wifi_append_step("esp_hosted_init()");
+    error = esp_hosted_init();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        networking_wifi_append_error("esp_hosted_init()", error);
+        return;
+    }
+
+    networking_wifi_append_step("esp_hosted_connect_to_slave()");
+    error = esp_hosted_connect_to_slave();
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        networking_wifi_append_error("esp_hosted_connect_to_slave()", error);
+        return;
+    }
+
+    /* ---- Step 2: version compatibility gate ----
+     * Refuse to go any further when the C6 firmware does not match the host's
+     * expected range. Running esp_wifi_remote against an incompatible slave
+     * produces failures that are much harder to diagnose than this message. */
+    networking_wifi_append_step("esp_hosted_get_coprocessor_fwversion()");
+    error = networking_wifi_validate_hosted_version();
+    if (error != ESP_OK) {
+        s_wifi_state = NETWORKING_WIFI_STATE_FAILED;
+        s_wifi_last_error = error;
+        return;
+    }
+
+    /* ---- Step 3: NVS ----
+     * esp_wifi_init() persists calibration and configuration to NVS, so the
+     * partition must be mounted before it runs. Erase-and-retry recovers a
+     * partition left in a bad state by a previous firmware version. */
     error = nvs_flash_init();
     if (error == ESP_ERR_NVS_NO_FREE_PAGES || error == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         error = nvs_flash_erase();
@@ -1280,27 +1340,7 @@ static void networking_wifi_runtime_init(void)
     }
     networking_wifi_append_step("nvs_flash_init()");
 
-    networking_wifi_append_step("esp_hosted_connect_to_slave()");
-    error = esp_hosted_init();
-    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
-        networking_wifi_append_error("esp_hosted_init()", error);
-        return;
-    }
-
-    error = esp_hosted_connect_to_slave();
-    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
-        networking_wifi_append_error("esp_hosted_connect_to_slave()", error);
-        return;
-    }
-
-    networking_wifi_append_step("esp_hosted_get_coprocessor_fwversion()");
-    error = networking_wifi_validate_hosted_version();
-    if (error != ESP_OK) {
-        s_wifi_state = NETWORKING_WIFI_STATE_FAILED;
-        s_wifi_last_error = error;
-        return;
-    }
-
+    /* ---- Step 4: TCP/IP stack and event loop ---- */
     networking_wifi_append_step("esp_netif_init()");
     error = esp_netif_init();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {

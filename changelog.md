@@ -7,6 +7,1110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.1] - 2026-08-08
+
+Hardware bring-up release for real-ESP32-P4 testing. Three stack-protection faults
+and one LVGL concurrency bug discovered and fixed during first-flash bring-up on
+the JC1060P470 development board. Documentation issues from the roadmap resolved.
+
+### Fixed — main-task stack overflow during UI construction
+
+- `app_main()` builds the entire LVGL UI on the 3584-byte main-task stack via
+  `shell_build_ui()` → `windows_init()`. The transcript append and prompt rendering
+  paths include newlib `vfprintf` calls that consume ~1–1.5 KB of stack alone,
+  overflowing the guard and triggering `Stack protection fault` in
+  `vfprintf` → `__sbprintf`.
+- Bumped `CONFIG_ESP_MAIN_TASK_STACK_SIZE` from 3584 to 8192 in
+  `sdkconfig.defaults`, matching the command-worker-task budget and the
+  `esp_lvgl_port` task's own 7168-byte stack.
+- Added the new config value to `sdkconfig.defaults` with a descriptive comment
+  explaining why the default is insufficient.
+
+### Fixed — LVGL assertion hang from concurrent transcript appends
+
+- `shell_transcript_append_internal()`, `shell_transcript_reset()`,
+  `shell_history_transcript_scroll_to_end()`, and `shell_input_line_set_text()`
+  performed direct LVGL object manipulation (`lv_textarea_set_text`,
+  `lv_obj_update_layout`, `lv_obj_scroll_to_y`) from any calling task — including
+  the Wi-Fi background task, the command worker task, and the UART console task
+  — without holding the LVGL render lock.
+- When the Wi-Fi background task called these functions while the LVGL task was
+  mid-render, the `LV_ASSERT_MSG(!disp->rendering_in_progress, ...)` assertion
+  fired, invoking the default `while(1)` handler. The task watchdog triggered
+  every five seconds on CPU 1, but the system never recovered.
+- All four functions now acquire `lvgl_port_lock(0)` (recursive mutex) around
+  their LVGL sections. The mutex is recursive, so the LVGL event path, the async
+  transcript flush callback, and the UART-console command path — all of which
+  already hold the lock — nest without deadlock. The lock is only taken when the
+  LVGL port is initialized (guarded by transcript/input-line non-NULL checks).
+
+### Fixed — esp_event task stack overflow during Wi-Fi handler
+
+- The `sys_evt` task (CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE, default 2304) runs
+  the project's Wi-Fi event handler (`networking_wifi_event_handler`). That handler
+  calls `networking_wifi_append_step()` → `networking_schedulef_ansi()` →
+  `vsnprintf()` into a 512-byte stack buffer, then `networking_record_infof()` and
+  `networking_notify_headerf()`. The newlib `vfprintf` machinery on this path
+  consumes ~1.5–2 KB, overflowing the 2304-byte task stack immediately after
+  `esp_wifi_start()`.
+- Bumped `CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE` from 2304 to 8192 in
+  `sdkconfig.defaults`. The esp_event system task is created once; the extra
+  ~5.8 KB SRAM cost is negligible and consistent with the other task budgets in
+  this firmware.
+
+### Documentation — roadmap issues resolved
+
+- **`command.md` `rgb`/`camera` in wrong table** — The "Where Commands Live" table
+  listed `rgb` and `camera` as hardware commands alongside working commands like
+  `brightness`, `rotate`, etc., but these are stubs that only print error messages.
+  Moved them out of the hardware table and clarified the "Unsupported Commands" table
+  to note that these entries are stubs.
+- **`p4minishell_config.yaml` missing v0.23.0 Kconfig changes** — The YAML file
+  header still said version 0.24.0 and did not document the two new task stack size
+  entries added during hardware bring-up. Updated the header to version 0.24.1 with
+  the bring-up notes, and added `main_task` (8192) and `system_event` (8192) entries
+  to the `task_stacks` section with full descriptions explaining why the defaults
+  were insufficient.
+
+### Hardware support — roadmap review resolved
+
+- **ESP32-P4 ADC attenuation value (issue 9)** — Verified as false alarm. The
+  ESP-IDF header `hal/adc_types.h:51` defines `ADC_ATTEN_DB_12 = 3` which IS the
+  correct enum value on ESP32-P4. The code at `p4minishell_config.h:451` using
+  `P4_CONFIG_BATTERY_ATTEN = 3` with comment `/* ADC_ATTEN_DB_12 */` is correct.
+- **ADC calibration fallback (issue 10)** — Confirmed as informational, not a bug.
+  ESP32-P4 supports curve fitting calibration. The uncalibrated fallback is expected
+  when eFuse data is absent and degrades gracefully.
+- **Coprocessor firmware directory (issue 11)** — Already documented in
+  `coprocessor/esp32c6_slave/README.md` which states "No custom slave source code"
+  and explains the upstream build approach. No change needed.
+
+- **`command.md` `rgb`/`camera` in wrong table** — The "Where Commands Live" table
+  listed `rgb` and `camera` as hardware commands alongside working commands like
+  `brightness`, `rotate`, etc., but these are stubs that only print error messages.
+  Moved them out of the hardware table and clarified the "Unsupported Commands" table
+  to note that these entries are stubs.
+- **`p4minishell_config.yaml` missing v0.23.0 Kconfig changes** — The YAML file
+  header still said version 0.24.0 and did not document the two new task stack size
+  entries added during hardware bring-up. Updated the header to version 0.24.1 with
+  the bring-up notes, and added `main_task` (8192) and `system_event` (8192) entries
+  to the `task_stacks` section with full descriptions explaining why the defaults
+  were insufficient.
+
+### Code quality — semantic helper newline consolidation
+
+- Refactored `shell_print_coloured()` to accept a `bool newline` parameter, so the
+  newline is included in the ANSI output rather than appended as a separate plain-text
+  call. All six single-colour helpers (`shell_print_heading`, `shell_print_ok`,
+  `shell_print_error`, `shell_print_warning`, `shell_print_muted`, `shell_print_usage`)
+  now call `shell_print_coloured(..., true, args)` directly. `shell_print_field` and
+  `shell_print_field_num` were unchanged — they embed `\n` in their own snprintf and
+  do not use `shell_print_coloured()`.
+
+### Code quality — shell_extract_input_text optimization
+
+- `shell_extract_input_text()` called `strlen(s_input_line_prompt)` and
+  `strlen(SHELL_PROMPT)` twice each (once for `strncmp`, once for the pointer
+  offset). Cached both lengths in local variables so each is computed once.
+
+### Code quality — UART console fgets() documentation
+
+- Added clarifying comment to `shell_uart_console_task()` explaining why the
+  `fgets()` + `clearerr(stdin)` + `vTaskDelay(20ms)` pattern is safe for
+  USB-Serial-JTAG: stdin is set to unbuffered mode (`_IONBF`) so `fgets()`
+  reads character-by-character from the underlying driver, and the error
+  recovery loop handles disconnect/reconnect correctly.
+
+### Code quality — debug command deduplication
+
+- Removed `debug.wifi_state` (same as `wifi status` state line) and
+  `debug.free_heap` (same as `mem` heap line) from `shell_command_debug()`.
+  The debug command now focuses on its unique value: the debug log entries
+  and warning count. Users can run `wifi status` or `mem` for the full
+  network and memory state.
+
+### API — ansi.h documentation corrected
+
+- Rewrote the `ansi_vformat()` specifier table in `ansi.h` to match the actual
+  implementation. Removed the non-existent lowercase "off" specifiers (`@d`,
+  `@i`, `@u`) that were documented but never implemented. Removed the duplicate
+  `@b` entry (was listed as both "bold off" and "foreground blue"). Corrected
+  `@k`/`@K` descriptions to match the implementation (standard black vs bright
+  black). Added `@@` literal escape to the documented table.
+
+---
+
+## [0.24.0] - 2026-08-08
+
+Bug fixes and correctness release. **No commands, options, output formats, or behaviors
+were removed.** The semantic `SH_*` palette migration started in v0.22.0 is now complete,
+and two latent correctness issues are resolved.
+
+### Fixed — `shell_get_cwd_for_prompt()` was not thread-safe
+
+- The function used a `static` buffer and returned a pointer to it. Both the UART
+  console task and the LVGL input-line task render the prompt and call this function,
+  so the shared buffer was a race condition: a path truncation in one task could be
+  overwritten by the other before the first task finished using it.
+- The function now writes into a caller-provided buffer. `shell_prompt_expand()` and
+  `shell_uart_console_print_prompt()` each provide their own stack buffer. No shared
+  state remains.
+- Updated the declaration in `components/shell/shell.h`, the test in
+  `test/main/test_shell_prompt.c`, and the API reference in `API.md`.
+
+### Fixed — semantic palette migration incomplete
+
+- `shell_command_debug()` in `components/shell/` and the `display`, `keyboard`,
+  `windows`, `reboot`, "Unknown command", and out-of-memory paths in
+  `components/command/` still used raw `@`-specifiers (`@C`, `@R`, `@Y`, `@y`, `@g`,
+  `@r`, `@G`, `@B`, `@K`) instead of the `SH_*` macros from
+  `components/ansi/ansi_palette.h`. The v0.22.0 changelog claimed "every command
+  group migrated" — that is now true.
+- Every site in `shell_command_help()`, `shell_command_sysinfo()`,
+  `shell_command_version()`, `shell_command_about()`, `shell_command_mem()`, and
+  `shell_command_debug()` in `shell.c`, and `shell_command_reboot()`,
+  `shell_execute_rgb_command()` stubs, and the `display`/`keyboard`/`windows`
+  subcommand handlers in `command.c`, now uses `SH_*` macros.
+
+### Fixed — stale documentation
+
+- `documentation.md` described the optimization level as "Performance (-O3)" but
+  `sdkconfig.defaults` has specified `CONFIG_COMPILER_OPTIMIZATION_SIZE=y` since
+  v0.23.0. The documentation now says "Size (`-Os`)".
+- `roadmap.md` claimed "main.c is 445 lines" and "command.c is 1,140 lines". The
+  actual counts are 499 and 1,793 respectively. Corrected.
+
+### Added — pipeline and chain test coverage
+
+- Added `test/main/test_shell_pipeline.c` with seven new test functions
+  covering the command pipeline surfaces that previously had no tests:
+  - `test_pipe_detection_agreement` — verifies that `shell_has_unquoted_char()`
+    and `shell_split_args()` never disagree about whether a `|` is syntax or
+    data, across double quotes, single quotes, caret escapes, pipes after
+    closed quotes, and mixed real/quoted pipes.
+  - `test_redirection_quote_awareness` — verifies that `>`, `>>`, and `<`
+    inside double quotes, single quotes, and caret escapes are treated as data.
+  - `test_chain_pipe_vs_chain_under_quotes` — verifies that a `|` inside
+    quotes does not split a command chain.
+  - `test_chain_single_quote_protection` — verifies that `&`, `&&`, `||`
+    inside single quotes are data, not chain separators.
+  - `test_chain_truncation_with_pipelines` — verifies that the segment limit
+    works correctly when each link is itself a pipeline.
+  - `test_chain_empty_and_whitespace` — verifies edge cases for empty input
+    and leading separators.
+  - `test_find_unquoted_pipe` — verifies the pipe scanner directly: bare pipe,
+    quoted pipe, escaped pipe, pipe after closed quote, NULL input.
+
+### Changed — architecture and maintainability
+
+- **`shell.c` no longer depends on networking, Bluetooth, USB, or C6 OTA.** The
+  shell core previously included `networking.h`, `bluetooth.h`, `usb.h`, and
+  `c6ota.h` directly. External-module state is now read through 11 new function
+  pointers in `shell_command_ops_t` (`wifi_is_connected`, `wifi_get_rssi`,
+  `wifi_state_string`, `append_sysinfo_summary`, `bluetooth_is_enabled`,
+  `bluetooth_is_connected`, `usb_is_connected`, `usb_is_keyboard_attached`,
+  `usb_key_to_ascii`, `c6ota_is_pending`, `c6ota_is_busy`), all registered
+  from `command_init()`. Every hook is NULL-checked before use, so the shell
+  degrades gracefully if a module is unavailable.
+- **`command_ui.c` extracted from `command.c`.** The `display`, `keyboard`, and
+  `windows` subcommand handlers now live in their own translation unit, so
+  `command.c` no longer includes `keyboard.h` or `windows.h`. `display.h` is
+  still required for the `brightness` and `rotate` hardware commands.
+- **`coprocessor/esp32c6_slave/README.md`** now explicitly states that there is
+  no custom slave source code — the firmware is built entirely from the managed
+  `espressif__esp_hosted` component.
+- **`p4minishell_config.yaml`** gained a `build_constraints` section documenting
+  the build-affecting Kconfig options (`CONFIG_SPIRAM_XIP_FROM_PSRAM`,
+  `CONFIG_COMPILER_OPTIMIZATION_SIZE`, `CONFIG_LOG_DEFAULT_LEVEL_WARN`,
+  `CONFIG_ESP_WIFI_SOFTAP_SUPPORT`, `CONFIG_WIFI_RMT_SOFTAP_SUPPORT`).
+
+### Notes
+
+- No regressions: every change is a semantics-preserving substitution (raw
+  specifier → `SH_*` macro that expands to the exact same specifier), a
+  signature change with all call sites updated, or a pure code-move to a new
+  translation unit. No command output text was altered.
+- `shell_parse_redirection()` and `shell_execute_pipe()` are not directly
+  unit-tested: the former is `static` (its quote-aware behavior is verified
+  indirectly through `test_redirection_quote_awareness`), and the latter is
+  tightly coupled to SD card spool files and `batch_run_nested()`.
+- Clean build: 0 errors, 0 warnings for firmware and tests on ESP-IDF v5.5.5 /
+  esp32p4 (to be verified).
+
+---
+
+## [0.23.0] - 2026-08-08
+
+Consolidates the networking layer onto the official Espressif path and makes the
+station-only constraint structural. **No commands, options, or output were removed** —
+the dispatcher stays at 71 verbs and `wifi`, `bluetooth`/`bt`, and `c6ota` behave
+identically.
+
+The module was already centralized and already used only `espressif/esp_hosted` plus
+`espressif/esp_wifi_remote`, with no custom RPC or alternative transport. This release
+closes the gaps that remained: initialization order, one encapsulation leak, and
+several constraints that were conventional rather than enforced.
+
+### Changed — canonical initialization order
+
+`networking_wifi_start_runtime()` previously ran `nvs_flash_init()` **before** bringing
+up the hosted transport. The order is now exactly as specified, and documented in
+`networking.h` with the reason each step precedes the next:
+
+1. `esp_hosted_init()`
+2. `esp_hosted_connect_to_slave()`
+3. Version compatibility gate
+4. `nvs_flash_init()` (erase-and-retry on a corrupt partition)
+5. `esp_netif_init()`
+6. `esp_event_loop_create_default()`
+7. `esp_netif_create_default_wifi_sta()`
+8. `esp_wifi_init()` via `esp_wifi_remote`
+9. Event handler registration
+10. `esp_wifi_set_mode(WIFI_MODE_STA)`
+11. `esp_wifi_start()`
+
+Bringing the transport up first means a dead or mismatched co-processor is reported as
+a transport fault instead of surfacing later as a confusing Wi-Fi init error.
+
+### Fixed — encapsulation leak in the header status refresh
+
+- `shell_header_status_refresh()` called `esp_wifi_sta_get_ap_info()` directly to read
+  RSSI, which was the only `esp_wifi_*` call outside `components/networking/`.
+- Added **`networking_wifi_get_rssi()`** to the module's public API. It also skips the
+  driver query entirely when disconnected, saving a needless SDIO round trip on every
+  header refresh.
+- `components/shell/` no longer includes `esp_wifi.h` and no longer declares `esp_wifi`
+  as a component dependency.
+- Verified: no `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, or NimBLE call remains
+  outside `components/networking/`. The sole sanctioned exception is
+  `components/c6ota/`, which drives `esp_hosted_slave_ota_*` because co-processor
+  firmware update is its entire purpose.
+
+### Changed — station-only is now structural
+
+- `CONFIG_ESP_WIFI_SOFTAP_SUPPORT` and `CONFIG_WIFI_RMT_SOFTAP_SUPPORT` are both
+  disabled in `sdkconfig.defaults`. The code always called
+  `esp_wifi_set_mode(WIFI_MODE_STA)`, but SoftAP was still compiled in.
+- Both symbols are needed: `esp_wifi_remote` mirrors the Wi-Fi Kconfig under its own
+  `WIFI_RMT_` prefix, and on the hosted path that mirror is the authoritative one.
+
+### Fixed — build constraints were not durable
+
+Regenerating `sdkconfig` from `sdkconfig.defaults` revealed that three documented
+constraints existed only in the generated file, so any regeneration silently reverted
+them. All three are now pinned in `sdkconfig.defaults`:
+
+- **`CONFIG_SPIRAM_XIP_FROM_PSRAM=n`** — the defaults file actually had this set to `y`,
+  directly contradicting the documented constraint that PSRAM XIP mapping must stay
+  disabled to avoid overflowing the flash/PSRAM budget at link time
+- **`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** — the defaults file specified
+  `OPTIMIZATION_PERF`, and regenerating grew the image by roughly 280 KB
+- **`CONFIG_LOG_DEFAULT_LEVEL_WARN=y`** — warn-level compile-time logging
+
+### Fixed — latent buffer truncation in `dir /w`
+
+- The wide-listing row buffer could not hold a full set of columns plus one clipped
+  over-long cell, and the `strncat()` bound was computed from a runtime `strlen()` so
+  the compiler could not prove it safe. Surfaced as `-Werror=stringop-truncation` once
+  the regenerated config restored the stricter optimization level.
+- The row buffer is now sized for every column at full width plus one clipped cell, and
+  the append tracks the row length explicitly so the bound is a compile-time constant.
+
+### Notes
+
+- Only the official path is used: `espressif/esp_hosted` for transport,
+  `espressif/esp_wifi_remote` for the Wi-Fi API, hosted NimBLE over VHCI for BLE. No
+  custom RPC, no alternative transport, no re-implemented control plane.
+- The version compatibility gate is unchanged and still refuses init with a clear
+  diagnostic when the C6 firmware is outside the host's supported range.
+- `c6ota` remains the only supported co-processor update path, and its capture,
+  shutdown, wait, and restore hooks are unchanged.
+- Clean build: 0 errors, 0 warnings for both firmware and test projects on ESP-IDF
+  v5.5.5 / esp32p4
+
+---
+
+## [0.22.0] - 2026-08-08
+
+Gives the shell a complete, built-in default colour scheme. Every category of
+output now uses a consistent colour chosen centrally, applied automatically on both
+the LVGL transcript and the serial console, with no per-command decisions left to
+individual implementations. **No commands, options, or output text were removed** —
+the dispatcher stays at 71 verbs and every message keeps its exact wording.
+
+### Added — Semantic colour palette
+
+- **New `components/ansi/ansi_palette.h`** is the single source of truth for what
+  colour each kind of output is. It defines named `SH_*` macros that expand to the
+  existing `@`-specifiers, so nothing scattered across the tree picks colours by hand
+  and a future palette change is a one-file edit.
+- The ansi module owns the header because it owns the specifier vocabulary. The macros
+  are plain string literals, so this introduces **no new component dependencies** and
+  the ansi module remains a leaf.
+
+| Category | Macro | Colour |
+|----------|-------|--------|
+| Section heading | `SH_HEAD` | Bright green |
+| Sub-heading | `SH_SUBHEAD` | Bright yellow |
+| Field label / key | `SH_LBL` | Cyan |
+| Body text | `SH_TEXT` | Bright green |
+| Muted / secondary / timestamp | `SH_MUTE` | Bright black (grey) |
+| Success | `SH_OK` / `SH_OK_HI` | Green / bright green |
+| Error | `SH_ERR` / `SH_ERR_HI` | Red / bright red |
+| Warning | `SH_WARN` / `SH_WARN_HI` | Yellow / bright yellow |
+| Important value (SSID, IP, MAC) | `SH_VAL` | Bright white |
+| Number, size, percentage | `SH_NUM` | Bright magenta |
+| Path / filename | `SH_PATH` | Bright blue |
+| Prompt / command name | `SH_PROMPT` / `SH_CMD` | Bright cyan |
+| Usage syntax | `SH_USAGE` | Yellow |
+| Help description | `SH_DESC` | White |
+| Directory entry | `SH_DIR` | Bold bright blue |
+| File entry | `SH_FILE` | White |
+| Executable / `.bat` entry | `SH_EXE` | Bright green |
+| Listing size / timestamp | `SH_SIZE` / `SH_TIME` | Bright magenta / grey |
+| Wi-Fi up / down | `SH_NET_UP` / `SH_NET_DOWN` | Green / grey |
+| Bluetooth | `SH_BT` | Magenta |
+| USB attached / detached | `SH_USB_UP` / `SH_USB_DOWN` | Green / grey |
+| OTA | `SH_OTA` | Bright green |
+
+### Added — Semantic print helpers
+
+Seven wrappers over `shell_transcript_appendf_ansi()` in `components/shell/`, so the
+common shapes need no colour decision at the call site. Each emits its own reset and
+newline:
+
+```c
+void shell_print_heading(const char *format, ...);
+void shell_print_field(const char *label, const char *format, ...);
+void shell_print_field_num(const char *label, long value);
+void shell_print_ok(const char *format, ...);
+void shell_print_error(const char *format, ...);
+void shell_print_warning(const char *format, ...);
+void shell_print_muted(const char *format, ...);
+void shell_print_usage(const char *format, ...);
+```
+
+They render the caller's text with real `vsnprintf` before wrapping it, so a `%s` value
+containing an `@` can never be mistaken for a colour specifier.
+
+### Fixed — muted text was nearly invisible
+
+- **`@k` is pure black (0x0C0C0C), not grey**, and the default background is dark blue
+  (0x012456). Thirty output sites across `networking.c`, `shell.c`, and `command.c`
+  used `@k` for muted text, rendering it almost unreadable. All now use `@K`
+  (bright black / grey) via `SH_MUTE`. This affected `wifi status`, `wifi diag`,
+  `wifi scan`, and the keyboard status line among others.
+- The palette header documents this and the other specifier traps (`@E` is bright red,
+  `@B` is bold rather than blue, `@L` is bright blue) so the mistake is not repeatable.
+
+### Fixed — `ansi_format()` discarded printf width and precision
+
+- The formatter captured the full specifier but then re-rendered with only the bare
+  conversion, silently dropping flags. `%10s`, `%-4s`, `%05d`, and `%.2f` all lost their
+  formatting when routed through the ANSI path.
+- It now passes the captured specifier to `snprintf` verbatim and detects `l` and `ll`
+  length modifiers to pull the correct type from the `va_list`.
+- This is what makes the right-aligned `chkdsk` capacity report and the `dir` column
+  layout survive colouring. Covered by a new test suite.
+
+### Changed — every command group migrated
+
+- **System**: `help`, `sysinfo`, `version`, `about`, `mem`, `debug`
+- **Hardware**: `brightness`, `rotate`, `battery`, `volume`, `gpio`, `display`,
+  `keyboard`, `windows` — cyan labels with bright-magenta numbers throughout
+- **Storage**: every file command, plus `attrib`, `label`, `xcopy`, `chkdsk`, `format`,
+  and the `sd` family. Around 105 error paths and 51 usage lines now route through
+  `shell_print_error()` and `shell_print_usage()`.
+- **Directory listings**: `dir` and `sd ls` colour each entry by kind — bold bright
+  blue for directories, bright green for runnable `.bat` files, white for ordinary
+  files — with grey timestamps and magenta sizes. The colour is applied *after* all
+  width formatting so column alignment is unaffected, and `dir /b` stays deliberately
+  uncoloured so redirected output remains machine-parsable.
+- **Batch**: `set`, `set /a`, `set /p`, `path`, `echo`, and echoed batch lines
+- **Wi-Fi, Bluetooth, USB**: status fields now use the shared label/value colouring,
+  with connected states in green and disconnected in grey
+- **C6 OTA**: progress, completion, warnings, and the YES prompt are coloured at the
+  `main.c` bridge rather than inside the module, so `components/c6ota` keeps emitting
+  the exact contractual strings documented in `API.md`. The destructive confirmation
+  prompt is bright red.
+- `usb_host_transcript_append_text()` and the Bluetooth emitter now route through the
+  ANSI path so palette macros in those modules are interpreted.
+
+### Notes
+
+- Defaults only. There is no runtime theme or user configuration in this change.
+- Dual-output correctness is preserved: the transcript strips escapes for the LVGL
+  textarea while the serial console receives the raw sequences, exactly as before.
+- The single remaining raw-SGR site is `shell_uart_console_print_prompt()`, which writes
+  straight to the console with colour numbers parameterised from `P4_CONFIG_PS_COLOR_*`
+  and never passes through `ansi_format()`. It is commented as the documented exception.
+
+### Testing
+
+- Added `test_ansi_format_width_flags` covering string and integer width, left and right
+  alignment, zero padding, float precision, the `l` modifier, hex width, and width
+  combined with a colour code
+- Clean build: 0 errors, 0 warnings for both firmware and test projects on ESP-IDF
+  v5.5.5 / esp32p4
+
+---
+
+## [0.21.0] - 2026-08-08
+
+Completes the batch language and closes the last filesystem parity gap. Delivery phase 1 is
+now fully done alongside phase 2. **No commands, options, output formats, or behaviors were
+removed.** The dispatcher stays at 71 verbs — `set /a` and `set /p` are sub-forms of the
+existing `set`, not new commands — and every previously working `set`, `copy`, `xcopy`, and
+batch file still behaves identically.
+
+### Added — `set /a` arithmetic expressions
+
+A recursive-descent evaluator over 32-bit signed integers implementing the COMMAND.COM
+operator set and precedence:
+
+| Precedence | Operators |
+|------------|-----------|
+| Lowest | `\|` bitwise or |
+| | `^` bitwise xor |
+| | `&` bitwise and |
+| | `<<` `>>` shifts |
+| | `+` `-` additive |
+| | `*` `/` `%` multiplicative |
+| | `-` `~` `!` unary |
+| Highest | `( )` grouping |
+
+- **`set /a NAME=<expression>`** evaluates and stores; **`set /a <expression>`** with no
+  assignment prints the result without touching the environment
+- **Compound assignments**: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
+- Numbers accept decimal, `0x` hex, and leading-zero octal
+- A bare identifier reads an environment variable, and **an undefined variable evaluates to
+  0** exactly as DOS does — which is what makes `set /a count=count+1` work on first use
+- Errors are detected and reported rather than trapping: divide by zero, modulo by zero,
+  `INT32_MIN / -1` overflow, unbalanced parentheses, malformed numbers, and trailing garbage
+- Shifts of 32 or more are clamped instead of invoking undefined behavior
+- The `&` and `|` handlers deliberately refuse to consume `&&` and `||`, so an expression can
+  never swallow a command-chain separator from v0.19.0
+- Exposed as `shell_expr_evaluate()` in `batch.h` so the evaluator is unit-testable
+
+### Added — `set /p` prompted input
+
+- **`set /p NAME=<prompt text>`** prints the prompt and reads a line through the key-wait
+  facility added in v0.18.0
+- Backspace edits the line, ESC cancels, and Enter submits
+- **An empty line leaves the variable unchanged**, matching DOS, rather than clearing it
+- Sets errorlevel to 1 when input was cancelled, timed out, or unavailable, so a batch file
+  can branch on it
+- Added **`shell_read_line()`** to the shell core — the reusable line-collection primitive
+  `set /p` needed, echoing as it types and opening its own keypress wait so input never
+  reaches the command dispatcher
+
+### Added — Line continuation
+
+- A trailing **`^`** joins the next physical line, so a long command can be split for
+  readability
+- Bounded by `P4_CONFIG_LINE_CONTINUATION_MAX` (8) so a malformed file cannot loop
+- Uses an **odd-caret-count rule**: `^^` at end of line is an escaped literal caret and not a
+  continuation, consistent with the escaping rules added in v0.19.0
+- **The label scanner applies the identical rule.** Without this, a continued line whose tail
+  begins with `:` would register a phantom label and silently corrupt `goto` targets.
+
+### Added — Attribute preservation across `copy` and `xcopy`
+
+- New **`storage_copy_attributes()`** carries R/H/S/A from source to destination
+- Wired into `shell_fs_copy_file()`, so all five copy call sites inherit it at once: `copy`,
+  wildcard `copy`, `move`'s copy-then-delete fallback, `xcopy`, and `xcopy /S`
+- **`xcopy /S` also carries attributes onto the directories it creates**, so a hidden or
+  system folder stays that way
+- Only the user-visible bits are copied; `AM_DIR` is structural and is never forced onto a
+  destination
+- Applied **after** the data is written, because a read-only destination cannot be opened for
+  writing
+- **Non-fatal by design**: the file content is already correct, so losing an archive bit does
+  not discard a completed transfer. The failure is recorded in the debug log instead.
+
+### Changed
+
+- A copy that fails because the destination is read-only now reports
+  `use attrib -R to clear it` instead of a bare error. This matters more now that copies
+  propagate the read-only bit, making the situation reachable in normal use.
+- `help` lists the `set /a` and `set /p` forms
+
+### Configuration
+
+New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
+- `P4_CONFIG_SET_EXPR_DEPTH_MAX` (16) — parenthesis nesting limit in `set /a`
+- `P4_CONFIG_SET_PROMPT_INPUT_BYTES` (128) — maximum `set /p` input length
+- `P4_CONFIG_LINE_CONTINUATION_MAX` (8) — maximum lines joined by trailing `^`
+
+### Testing
+
+- Added `test/main/test_batch_expr.c` with five suites: literals and number bases, arithmetic
+  and precedence including associativity, bitwise and shift operators including the clamped
+  over-wide shift, variable reads including the undefined-reads-as-zero rule, and error
+  detection including divide by zero and `INT32_MIN / -1`
+- `test/main/CMakeLists.txt` gained the `batch` component; `test_main.c` calls `batch_init()`
+- Clean build: 0 errors, 0 warnings for both firmware and test projects on ESP-IDF v5.5.5 /
+  esp32p4
+
+---
+
+## [0.20.0] - 2026-08-08
+
+Completes roadmap Phase 2, the stronger storage model. **No commands, options, output
+formats, or behaviors were removed.** Three verbs were added (`chkdsk`, `scandisk`,
+`format`), taking the dispatcher from 68 to 71; every previously working invocation of
+`dir`, `copy`, `move`, `write`, and `sd info` still works unchanged.
+
+### Added — Volume management
+
+- **`chkdsk [path] [/F]`** (alias **`scandisk`**) — reports the volume label, total, used and
+  free space, allocation unit size, and total and free cluster counts. `/F` additionally walks
+  every directory verifying each entry is readable, reporting file and directory counts and
+  any unreadable directory.
+  The check is deliberately **read-only**. This firmware never rewrites FAT structures: a card
+  with real corruption should be imaged and repaired on a host, so problems are reported
+  honestly rather than silently "fixed" by an embedded shell. The output says so explicitly.
+- **`format [/FS:FAT|FAT32|EXFAT] [/V:label] [/Q]`** — reformats the card through
+  `esp_vfs_fat_sdcard_format()`, then optionally applies a volume label and reports the
+  resulting geometry.
+  Gated behind the exact confirmation word `P4_CONFIG_FORMAT_CONFIRM_WORD`, collected one key
+  at a time through the shared key queue so the answer never reaches the command dispatcher —
+  the same danger contract `c6ota` uses. **Refuses outright when no interactive input source
+  is attached**, so a batch file can never silently wipe a card. The filesystem type is
+  validated before the warning is even shown, so a typo cannot reach the prompt.
+
+### Added — Full `dir` option set
+
+| Option | Behavior |
+|--------|----------|
+| `/W` | Wide multi-column listing, DOS-style `[dirname]` bracketing, `~` clipping for long names |
+| `/P` | Pause after each screenful; Enter or Space continues, `Q` quits |
+| `/S` | Recurse into subdirectories with per-directory counts plus a grand total |
+| `/B` | Bare output, names only; full paths under `/S` so it can be piped |
+| `/L` | Lowercase names |
+| `/A[:]attrs` | Filter by `D` dir, `H` hidden, `S` system, `R` read-only, `A` archive; `-` prefix excludes |
+| `/O[:]order` | Sort by `N` name, `S` size, `E` extension, `D` date, `G` dirs first; `-` reverses |
+
+- Detailed listings now include a `YYYY-MM-DD  HH:MM` timestamp per entry, decoded from the
+  FATFS date and time words
+- Every listing closes with free space; `/S` adds an explicit grand-total banner so the
+  per-directory counts above are not mistaken for the whole tree
+- Name is the tie-breaker for every sort key, so ordering is deterministic
+- Options may appear before or after the path, with or without the `:` separator
+- The existing no-option and wildcard behaviors are unchanged
+
+### Added — Free-space reporting and guardrails
+
+- **`storage_get_space_info()`** — total, used, and free bytes plus cluster geometry via
+  `f_getfree()`. Handles both FATFS sector-size configurations.
+- **`storage_check_free_space()`** — refuses a write that would leave less than
+  `P4_CONFIG_STORAGE_FREE_MARGIN_BYTES` (64 KB) free, so the volume never fills to the point
+  where FAT metadata updates begin to fail. An overwrite correctly credits the space the
+  destination already occupies, so replacing a file in place does not need double the room.
+  When the capacity query itself fails the operation is allowed to proceed rather than
+  blocking a legitimate write on a diagnostic failure.
+- **`storage_paths_are_same()`** and **`storage_get_file_size()`** supporting helpers
+- **`sd info`** now reports filesystem total, used, and free space and the allocation unit
+  size alongside the existing raw card capacity
+
+### Fixed — data-loss bug in `copy`
+
+- **`copy` onto itself truncated the source.** `copy a.txt a.txt` opened the destination with
+  `"wb"`, which truncated the file to zero bytes before the first read, destroying it. The
+  copy helper now detects this (case-insensitively, since FAT is) and refuses. `move` gained
+  the same guard because its copy-then-delete fallback hit the identical path.
+- **A failed copy left a truncated destination.** A write error mid-transfer left a partial
+  file that looked complete. The partial destination is now removed and the removal is
+  reported.
+- `copy` prechecks free space before opening either file, and reports percentage progress for
+  files above `P4_CONFIG_COPY_PROGRESS_THRESHOLD` so a multi-megabyte transfer does not look
+  like a hang.
+- `write` and `append` precheck free space **before** opening the file, so a truncating
+  overwrite cannot destroy the existing contents and then fail for lack of room.
+
+### Fixed — recursive directory walkers overflowed the worker stack
+
+Found by applying the stack-discipline rule added in v0.19.0 to the new code, which also
+surfaced the same problem in the existing `tree` walker.
+
+- All three recursive walkers held large per-level buffers on the shared 8 KB command worker
+  task stack. At the 8-level depth limit they exceeded it.
+- Moved each walker's per-level state into a single heap block released before descending:
+  `dir` **1472 → 752** bytes, `chkdsk` **1024 → 400**, `tree` **976 → 752**.
+- At full depth these now total roughly 6 KB, 3.2 KB, and 6 KB respectively, inside the 8 KB
+  budget. Verified from the disassembled prologues rather than by inspection.
+
+### Configuration
+
+New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
+- `P4_CONFIG_DIR_SORT_ENTRY_MAX` (128) — entries buffered per level for sorting
+- `P4_CONFIG_DIR_WIDE_COLUMNS` (4) and `P4_CONFIG_DIR_WIDE_COLUMN_WIDTH` (18)
+- `P4_CONFIG_DIR_PAGE_LINES` (20) — rows between `/P` pauses
+- `P4_CONFIG_DIR_RECURSE_DEPTH_MAX` (8) — `/S` and `chkdsk /F` recursion limit
+- `P4_CONFIG_STORAGE_FREE_MARGIN_BYTES` (64 KB) — free-space safety margin
+- `P4_CONFIG_COPY_PROGRESS_THRESHOLD` (256 KB) and `P4_CONFIG_COPY_PROGRESS_STEP_PCT` (10)
+- `P4_CONFIG_FORMAT_CONFIRM_WORD` (`"YES"`) and `P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES` (0)
+
+### Testing
+
+- Added `test/main/test_storage_format.c` with four suites: size formatting across every unit
+  boundary including the GiB ceiling, DOS wildcard matching including multi-star cases, the
+  self-copy path-identity guard, and the path helpers
+- `test/main/CMakeLists.txt` gained the `storage` component
+- Clean build: 0 errors, 0 warnings for both firmware and test projects on ESP-IDF v5.5.5 /
+  esp32p4
+
+---
+
+## [0.19.0] - 2026-08-08
+
+Completes the command interpreter parity section of the roadmap. **No commands, options,
+output formats, or behaviors were removed.** The dispatcher verb table is unchanged at 68
+verbs, verified by diff against the previous release.
+
+### Added — Quoting and escaping rules
+
+The shell gained one quote/escape scanner in `components/shell/`, and every surface that has
+to tell syntax from data now shares it: the argument tokenizer, redirection parsing, pipe
+splitting, chain splitting, and variable expansion. Previously each had its own ad-hoc
+double-quote check, and none of them handled escapes.
+
+- **`"text"`** groups an argument and still expands `%VAR%`, matching COMMAND.COM
+- **`'text'`** groups an argument literally — no variable expansion and no escape processing
+  inside the run
+- **`^c`** escapes any single character, so `^&`, `^|`, `^>`, `^<`, `^"`, `^%`, and `^^` are
+  data rather than syntax
+- **New API**: `shell_find_unquoted_char()`, `shell_find_unquoted_any()`,
+  `shell_has_unquoted_char()`, `shell_unescape_in_place()`, and the `shell_quote_state_t` enum
+- **`shell_split_args()` rewritten** to honor all three rules and strip the markup, so a
+  handler receives the literal value. `echo "hello world"`, `echo 'hello world'`, and
+  `echo hello^ world` all produce the same single argument.
+- **`shell_expand_variables()`** skips single-quoted runs entirely and passes `^%` through
+  untouched
+
+### Added — Command chaining with `&`, `&&`, and `||`
+
+- **`a & b`** runs both commands unconditionally
+- **`a && b`** runs `b` only when `a` succeeded
+- **`a || b`** runs `b` only when `a` failed
+- Operators mix freely on one line: `a && b || c & d`
+- Up to `P4_CONFIG_CHAIN_SEGMENT_MAX` (8) commands per chain, with truncation reported rather
+  than silently dropping the tail
+- **New API**: `shell_split_chain()` with `shell_chain_segment_t` and `shell_chain_op_t`
+- **A single `|` is deliberately not a chain separator**, so pipelines still reach the pipe
+  executor. `type f | sort && echo done` splits into one pipeline plus one conditional link.
+- **Splitting happens before expansion**, per segment, so a variable whose value contains `&`
+  cannot inject a new command. This is the same ordering COMMAND.COM uses and it is a
+  deliberate safety property, not an implementation artifact.
+- **Success is tracked per link** rather than re-read from global errorlevel, so a stale value
+  from an earlier line cannot send the next link down the wrong branch
+- Unrecognized commands now set `P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND` (9009), matching
+  COMMAND.COM, which is what makes `badcmd || echo fallback` work
+
+### Fixed — batch frame overflowed the worker task stack (pre-existing)
+
+Found while reviewing the stack cost of the new chaining code. This bug predates this release
+and would have caused stack-overflow crashes on any batch file.
+
+- `shell_execute_batch_file()` placed a **12,272-byte stack frame** on the **8,192-byte**
+  command worker task stack, so a single batch file already overflowed it before any nesting.
+- The label table alone accounted for 8 KB: 32 label slots each sized at the full 256-byte
+  command width, when a label is one short identifier.
+- **Fix**: label names are bounded by the new `P4_CONFIG_BATCH_LABEL_BYTES` (48), and both the
+  frame and the line buffer moved to the heap. The stack frame is now **96 bytes**.
+- The command pipeline's two expansion buffers also moved to the heap, taking
+  `shell_execute_command()` from **2,032 to 480 bytes**, because it sits on the same recursion
+  path — a batch file re-enters it for every line.
+- Four levels of batch nesting now consume roughly 5.6 KB of the 8 KB stack with headroom to
+  spare. Verified by disassembling the function prologues, not by inspection.
+- Every new allocation is released on every exit path, including the early-return error paths.
+
+### Fixed — `if` command correctness
+
+- **`if exist <file>`** now resolves the path against the current directory and runs inside a
+  guarded SD session, like every other filesystem command. It previously called `stat()` on the
+  raw argument, so `if exist notes.txt` reported "not found" for any relative path.
+- **`if "a"=="b"`** accepts the joined (`a==b`), spaced (`a == b`), and half-spaced (`a ==b`)
+  spellings. The comparison previously required the `==` to be glued to the left operand, which
+  broke once the tokenizer began removing quotes.
+
+### Configuration
+
+New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
+- `P4_CONFIG_ESCAPE_CHAR` (`^`) — the escape character
+- `P4_CONFIG_CHAIN_SEGMENT_MAX` (8) — maximum chained commands
+- `P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND` (9009) — errorlevel for an unknown command
+- `P4_CONFIG_BATCH_LABEL_BYTES` (48) — maximum `:label` name length
+
+### Testing
+
+- Added `test/main/test_shell_quoting.c` with four suites: unquoted-operator scanning across
+  all three quoting forms, markup removal, the quoting-aware tokenizer, and chain splitting
+  including the pipe-versus-chain distinction and truncation reporting
+- Clean build: 0 errors, 0 warnings for both firmware and test projects on ESP-IDF v5.5.5 /
+  esp32p4
+
+---
+
+## [0.18.0] - 2026-08-08
+
+Completes every roadmap item that was marked ⚠️ (partially implemented). **No commands,
+options, output formats, or behaviors were removed.** Every previously working invocation
+still works; the changes are additive or replace a stub with the real implementation.
+
+### Added — Interactive keypress wait
+
+The shell core gained a real keypress facility, which is what `pause`, `choice`, and `more`
+needed to stop faking a key wait with a timed delay.
+
+- **`components/shell/` keypress queue** with `shell_key_wait_begin()`,
+  `shell_wait_for_key()`, `shell_key_wait_end()`, `shell_key_wait_submit()`,
+  `shell_key_wait_is_active()`, and `shell_key_input_available()`
+- **All three input sources feed it**: the UART console reader forwards the first character of
+  a line, the USB HID bridge forwards the decoded key synchronously, and the LVGL on-screen
+  keyboard forwards through `main.c`'s input-line callback
+- **Input routing is suppressed during a wait**, so a key answering a prompt is never
+  dispatched as a shell command and never lingers at the prompt
+- **Bounded by `P4_CONFIG_KEY_WAIT_TIMEOUT_MS`** (30 s). When no interactive key source is
+  attached, commands fall back to the previous timed behavior, so a headless board never
+  stalls a batch file.
+
+### Added — Input redirection and multi-stage pipes
+
+- **`<` input redirection operator** — `sort < notes.txt` reads the file as command input
+- **Multi-stage pipelines** — `cmd1 | cmd2 | cmd3`, up to `P4_CONFIG_PIPE_STAGE_MAX` (4)
+- **Quote-aware pipe splitting** — `echo "a | b"` is no longer mistaken for a pipeline
+- **Shared mechanism** — the `<` operator and each pipe stage both publish through the
+  storage input-redirection slot, so `sort < f.txt` and `type f.txt | sort` reach the same
+  code path in the text-processing commands
+- **Guaranteed spool cleanup** — every stage's temp file is removed on every exit path,
+  including a stage failure or an `exit` mid-pipeline
+
+### Changed — Batch control flow is now complete
+
+- **`pause`** blocks on a real keypress instead of a fixed 2-second delay
+- **`choice`** blocks on a real keypress and gained the DOS switch set: `/C:list` (allowed
+  keys), `/N` (hide the list), `/T:c,secs` (timed default), `/S` (case-sensitive). Unmatched
+  keys are ignored like DOS, and errorlevel is set to the 1-based index of the chosen key.
+- **`setlocal` / `endlocal`** perform real environment scoping. `setlocal` pushes a snapshot of
+  the variable table onto a stack (`P4_CONFIG_SETLOCAL_DEPTH_MAX` = 8) and `endlocal` restores
+  it, which correctly reverts creations, modifications, and deletions in one step. A scope left
+  open when a batch frame returns is unwound automatically, so a child file cannot leak
+  variables into its caller and no snapshot allocation is ever leaked.
+- **`exit /b [code]`** leaves only the current batch file; a bare `exit [code]` unwinds every
+  nested level. Added `batch_stop_mode_t` so the executor and `for` loops honor both. Previously
+  `exit` abused the pending-goto flag, which meant a `goto` on the same line could resurrect
+  execution.
+
+### Changed — Runtime prompt engine
+
+- **`prompt` is a full DOS template engine** supporting `$p` (path), `$g` (`>`), `$l` (`<`),
+  `$b` (`|`), `$n` (drive), `$d` (date), `$t` (time), `$v` (version), `$s` (space),
+  `$_` (newline), `$q` (`=`), `$$` (`$`), `$a` (`&`), `$c` (`(`), `$f` (`)`), `$e` (ESC), and
+  `$h` (destructive backspace). Metacharacters are case-insensitive; an unknown one renders
+  literally, both matching COMMAND.COM.
+- **The template drives both surfaces** — the UART console prompt and the LVGL input line —
+  so they can never disagree. Previously the LVGL prompt was fixed and `prompt` only printed
+  a message.
+- **The input line snapshots the prefix it painted.** Extraction and repair compare against
+  that snapshot rather than re-rendering, so a template or path change landing between two
+  LVGL events cannot make the shell mis-parse what the user typed.
+- **`prompt /?`** lists the metacharacters; `prompt` with no argument shows the stored template
+  and its rendered form.
+
+### Changed — `date` and `time` can set the clock
+
+- **`date [MM-DD-YYYY]`** and **`time [HH:MM[:SS]]`** now set the system clock in addition to
+  reporting it. Both validate ranges, accept `-` or `/` separators for the date, make seconds
+  optional for the time, and report honestly when the clock is not NTP-synchronized. A later
+  SNTP sync still wins.
+
+### Changed — File utility commands are now complete
+
+- **`tree` is fully recursive.** Draws the DOS box-drawing outline with correct `+---` and
+  `\---` connectors, and gained `/F` (include files; DOS default is directories only) and `/A`
+  (plain ASCII connectors). Bounded by `P4_CONFIG_TREE_DEPTH_MAX` (8) and the existing
+  128-entry listing cap. Each directory level is buffered on the heap rather than the
+  worker-task stack, and prints the DOS `Folder PATH listing` header and summary counts.
+- **`sort` replaced the bubble sort with `qsort()`**, raised the capacity from 128 to 1024
+  lines, and gained `/R` (reverse), `/I` (case-insensitive), and `/U` (unique). The
+  **memory leak is fixed**: there is now a single release path that frees every successful
+  `strdup()` even when a mid-read allocation fails or the line cap is hit, and the line table
+  itself is freed on every early return.
+- **`find` gained `/I`** (case-insensitive), **`/N`** (line numbers), **`/C`** (count only),
+  and **`/V`** (invert match), and prints the DOS `---------- <file>` banner.
+- **`more` waits for a keypress** between pages: Enter or Space advances, `Q` quits.
+- **`fc` reports differing lines in DOS style** with both file contents shown, and now detects
+  trailing length differences instead of stopping at the shorter file.
+- **All five now resolve paths and use guarded SD sessions.** They previously called `fopen()`
+  on the raw argument, so a relative path failed and a missing card produced a bare errno
+  message instead of the standard "SD card not present" text.
+
+### Fixed
+
+- **Redirection parser rewritten as a two-pass scan.** The old parser stopped at the first `>`,
+  so it could not handle `<` at all and mis-parsed `sort < in.txt > out.txt`. The new parser
+  locates every unquoted operator before overwriting any of them, so each target is naturally
+  terminated by the next operator with no byte needing to be restored.
+- **`for` loops now stop on `exit`.** A loop body that ran `exit` previously kept iterating
+  because only the goto flag was checked.
+
+### Configuration
+
+New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
+- `P4_CONFIG_PIPE_STAGE_MAX` (4) — maximum stages in one pipeline
+- `P4_CONFIG_SETLOCAL_DEPTH_MAX` (8) — setlocal nesting limit
+- `P4_CONFIG_TREE_DEPTH_MAX` (8) — tree recursion limit
+- `P4_CONFIG_PROMPT_TEMPLATE_BYTES` (64) — prompt template buffer
+- `P4_CONFIG_PROMPT_DEFAULT_TEMPLATE` (`"PS $p$g "`) — default prompt
+- `P4_CONFIG_KEY_QUEUE_DEPTH` (16) — keypress queue depth
+- `P4_CONFIG_KEY_WAIT_TIMEOUT_MS` (30000) — single keypress wait timeout
+- `P4_CONFIG_SD_DRIVE_LETTER` (`"A:"`) — DOS drive letter for `prompt $n` and `tree`
+
+Changed values:
+- `P4_CONFIG_SORT_LINE_MAX` raised from 128 to 1024
+- `P4_CONFIG_MORE_PAGE_DELAY_MS` and `P4_CONFIG_PAUSE_DELAY_MS` are now documented as
+  fallbacks used only when no interactive key source is attached
+
+### Testing
+
+- Added `test/main/test_shell_prompt.c` with four suites covering template storage, every
+  prompt metacharacter, `$p` path expansion, and the keypress-wait state machine
+- `test_main.c` now calls `shell_init()` before running the suites that need shell-core state
+- Clean build: 0 errors, 0 warnings for both firmware and test projects on ESP-IDF v5.5.5 /
+  esp32p4
+
+---
+
+## [0.17.0] - 2026-08-08
+
+### Changed — Phase B: Extract Modules
+
+Roadmap Phase B is complete. The batch engine and the SD/storage layer are now separate
+components, and the DOS file commands live with the storage layer instead of inside the
+dispatcher. **No commands, options, output formats, error messages, or bounds were changed
+or removed.** The dispatcher verb table is identical to v0.16.0.
+
+- **Created `components/storage/`** — owns everything between the shell commands and the SD card:
+  - `storage.c` / `storage.h`: guarded SD sessions (`shell_sd_begin()` / `shell_sd_end()`),
+    persistent mount tracking, `storage_sd_is_mounted()`, the `sd eject` implementation,
+    path resolution (`shell_sd_resolve_path()`, `shell_fs_resolve_path()`,
+    `shell_resolve_target_from_source()`), FATFS conversion (`shell_sd_vfs_to_fatfs_path()`,
+    `shell_sd_fresult_to_esp_err()`), size formatting (`shell_sd_format_size()`),
+    `shell_sd_entry_type()`, DOS wildcard matching (`shell_wildcard_match()`), the RAM-only
+    current working directory (`shell_get_cwd()`, `storage_set_cwd()`, `shell_fs_print_cwd()`),
+    the shared file helpers (`shell_fs_copy_file()`, `shell_list_directory_path()`,
+    `shell_print_file_text()`), and the output-redirection writer
+    (`shell_write_redirect_output()`)
+  - `storage_commands.c` / `storage_commands.h`: every DOS file command — `cd`/`chdir`, `dir`,
+    `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`,
+    `append`, `touch`, `attrib`, `label`, `xcopy`, `find`, `more`, `tree`, `fc`, `sort`, and the
+    `sd info|ls|stat|cat|eject` family
+- **Created `components/batch/`** — owns the whole `.bat` interpreter:
+  - Batch file execution with nesting (`shell_execute_batch_file()`), batch path resolution
+    (`shell_resolve_batch_path()`), `:label` scanning, `goto`, `call :label`,
+    `for %%var in (set) do command` loops, and the `|` pipe operator (`shell_execute_pipe()`)
+  - The RAM-only environment variable table (24 slots), PATH, and variable expansion
+    (`%VAR%`, `%0`, `%1`..`%9`, `%*`) via `shell_env_get()`, `shell_env_set()`, and
+    `shell_expand_variables()`
+  - Errorlevel tracking (`batch_get_errorlevel()` / `batch_set_errorlevel()`)
+  - The batch language commands: `set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`,
+    `choice`, `setlocal`, `endlocal`, `exit`
+- **`components/command/command.c` reduced from 4,384 lines to 1,140 lines** (74% smaller).
+  It now owns only the dispatcher (`shell_execute_command_core()`), the execution pipeline
+  (`shell_execute_command()`), the worker task (`shell_execute_command_async()`), redirection
+  parsing, the hardware commands (`brightness`, `rotate`, `battery`, `volume`, `gpio`, `rgb`,
+  `camera`), the UI query commands (`display`, `keyboard`, `windows`), the system commands
+  (`reboot`, `clear`/`cls`, `prompt`, `date`, `time`), and the family routing for
+  `wifi`/`bluetooth`/`usb`/`c6ota`/`sd`.
+
+### Changed — Architecture
+
+- **Added `batch_command_ops_t`** — a registration table (mirroring `shell_command_ops_t`) that
+  lets the batch engine re-enter the full command pipeline for nested contexts (`if` bodies,
+  `for` bodies, pipe stages, batch lines) without depending on `command.h`. Registered by
+  `command_init()`. The hook is NULL-checked, so nested execution degrades gracefully with an
+  explicit message rather than dereferencing a null pointer.
+- **Dependency direction extended and still strictly one-way**:
+  `main` → `command` → `batch` → `storage` → `shell` → (`ansi`, `display`, `windows`, `header`,
+  `keyboard`, `clock`). No component declares `main` as a requirement, and no module depends
+  upward at include time.
+- **`command_init()` now sequences module startup**: `storage_init()` (current working
+  directory, mount tracking) and `batch_init()` (environment table, PATH default, errorlevel)
+  run before either operations table is registered, so no dispatch can observe uninitialized
+  state.
+- **`shell_get_cwd()` moved from `command.c` to `storage.c`** and `command_sd_is_mounted()` was
+  replaced by `storage_sd_is_mounted()`. `shell_command_ops_t` is unchanged; `command_init()`
+  simply points the `get_cwd` and `sd_is_mounted` hooks at the storage implementations, so
+  `shell.c` sees no difference.
+
+### Build
+
+- Root `CMakeLists.txt` gained `components/batch` and `components/storage` in
+  `EXTRA_COMPONENT_DIRS`
+- `components/command/CMakeLists.txt` now requires `batch` and `storage`
+- `test/CMakeLists.txt` gained the `storage` and `batch` component directories, per the
+  unit-test rule that a new `shell`/`command` dependency must be added there
+- Clean build: 0 errors, 0 warnings for both firmware and test projects on ESP-IDF v5.5.5 /
+  esp32p4
+
+### Documentation
+
+- Updated `readme.md`, `documentation.md`, `ai-context.md`, `command.md`, `API.md`, `SDK.md`,
+  `roadmap.md`, `p4minishell_config.yaml`, and `board_config.yaml` for the new module boundaries
+- `roadmap.md` Phase B is marked complete
+
+---
+
+## [0.16.0] - 2026-08-07
+
+### Added
+- **Batch `for` loops** — Full `for %%var in (set) do command` implementation with variable expansion
+- **Batch `%0` and `%*` expansion** — `%0` expands to script name, `%*` expands to all arguments
+- **`:label` parsing** — Labels scanned at batch file load, stored in label table for `goto`/`call :label`
+- **`call :label`** — Jump to label within same batch file, with label table lookup
+- **`for` loop variable expansion** — `%%var` expanded per iteration in `do` command
+
+### Changed — Phase A: Command Implementation Consolidation
+
+Roadmap Phase A is complete. Every command implementation now lives in
+`components/command/command.c`, and `main.c` is reduced to boot orchestration
+and LVGL event routing. No commands, options, or output formats were removed.
+
+- **Moved all command implementations from `main.c` to `components/command/command.c`**:
+  - Hardware: `brightness`, `rotate`, `battery`, `volume`, `gpio`, `rgb`, `camera`
+  - System: `reboot`, `clear`/`cls`
+  - File/SD: `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`
+  - SD family: `sd info|ls|stat|cat|eject`, `sdeject`
+  - Extended DOS: `attrib`, `label`, `xcopy`, `find`, `more`, `tree`, `fc`, `sort`
+  - Environment/batch: `set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`,
+    `choice`, `setlocal`, `endlocal`, `prompt`, `date`, `time`, `exit`
+  - Batch engine: batch file execution, label scanning, `for` loops, pipes, wildcard matching
+  - SD session management, path resolution, environment variables, PATH, and current working directory
+- **Removed duplicate hardware command implementations from `main.c`** — the placeholder
+  `cmd_battery()`/`cmd_volume()` stubs in `command.c` were replaced by the real ADC and
+  ES8311 codec implementations, so `battery` and `volume` no longer depend on a bridge
+- **Removed duplicate `shell_execute_command_core()` and `shell_execute_command()` from `main.c`** —
+  `command.c` owns the whole pipeline: variable expansion, redirection, dispatch, and the worker task
+- **Removed duplicate transcript functions from `main.c`** — `shell_transcript_append_text()`,
+  `shell_transcript_appendf()`, `shell_transcript_render()`, `shell_transcript_reset()`,
+  `shell_schedule_transcript_appendf()`, the async staging buffer, and the UART console now exist
+  only in `components/shell/shell.c`. The shell copies retain `main.c`'s richer behavior:
+  half-buffer truncation with a `[history truncated]` marker, oldest-first async drop policy,
+  and UART mirroring.
+- **Removed duplicate debug functions from `main.c`** — `shell_debug_log_push()`,
+  `shell_record_errorf()`, `shell_record_warningf()`, `shell_record_infof()`, and
+  `shell_command_debug()` now exist only in `components/shell/shell.c`, keeping `main.c`'s
+  transcript surfacing of errors and the Wi-Fi state/heap lines in `debug` output
+- **Removed all bridge trampolines** — the 18 `shell_bridge_*` functions and
+  `shell_execute_command_core_bridge()` are gone; `p4minishell.h` now declares only the
+  c6ota, usb, and networking host callbacks that ESP-IDF requires in the app component
+- **Moved input line ownership to `components/shell/`** — added `shell_input_line_set_text()`,
+  `shell_input_line_reset()`, `shell_extract_input_text()`, and `shell_input_line_repair_prompt()`
+  so the prompt-prefix contract lives in one place
+- **Moved `Kconfig.projbuild` from `main/` to `components/networking/`** — that component is the
+  only consumer of `CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID`/`_PASSWORD`, and the move lets the
+  unit-test project resolve the symbols too
+
+### Changed — Architecture
+
+- **Removed the `command` → `main` component dependency**, which was a layering inversion.
+  Dependencies now flow one way: `command` → `shell` → (`ansi`, `display`, `windows`, `header`,
+  `keyboard`, `clock`).
+- **Added `shell_command_ops_t`** — a registration table (mirroring `networking_host_ops_t`) that
+  lets `shell.c` reach command-owned services (dispatch, current working directory, volume,
+  SD mount state, battery telemetry) without including `command.h`. Registered by `command_init()`.
+- **`main.c` reduced from 5,990 to 397 lines** and now contains only `app_main()`, LVGL event
+  callbacks, UI construction, and the c6ota/usb host bridges.
+- **Eliminated all 80+ forward declarations** from `main.c`.
+
+### Removed — Dead Code
+
+- Legacy shell-local Wi-Fi runtime in `main.c` (`shell_wifi_runtime_init`, event handlers,
+  `shell_wifi_connect_with_credentials`, `shell_wifi_run_diagnostic`, and helpers). All were
+  marked `__attribute__((unused))`; `components/networking/` owns this path.
+- Legacy hosted Bluedroid Bluetooth path in `main.c`, compiled out behind
+  `P4_CONFIG_BT_HOSTED_RUNTIME_SUPPORTED == 0`. `components/networking/bluetooth.c` owns
+  hosted NimBLE.
+- `reboot_task()` and all unused `static` command duplicates that the compiler had been
+  reporting as `-Wunused-function`.
+- Unused `var_str` variable in the `for` loop parser.
+- Ten leftover `fix_main*.py` / `add_hw_cmds.py` / `clean_corruption.py` migration scripts.
+
+### Fixed
+
+- **Command history buffer overlap** — the full-buffer shift used `snprintf()` with overlapping
+  source and destination slots (undefined behavior, caught as `-Werror=restrict`). Now uses `memmove()`.
+- **Duplicate ANSI output on the serial console** — `shell_transcript_append_ansi()` wrote the
+  plain text and then the raw ANSI text to UART, printing every colored line twice. The plain
+  append no longer mirrors to UART.
+- **Async transcript flush held a critical section across LVGL calls** — the staging buffer is now
+  drained into a local copy before the append, and a re-queue check catches text staged during the flush.
+- **`shell_transcript_append_text()` silently dropped output when full** — it now truncates the
+  oldest half and inserts a `[history truncated]` marker, matching the previous `main.c` behavior.
+
+### Added — Configuration
+
+All newly extracted literals are `P4_CONFIG_*` macros in `p4minishell_config.h`, documented in
+`p4minishell_config.yaml`:
+- `P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS`, `P4_CONFIG_HEADER_RSSI_UNKNOWN`
+- `P4_CONFIG_BATCH_LABEL_MAX`, `P4_CONFIG_COMMAND_ARGV_MAX`, `P4_CONFIG_SORT_LINE_MAX`
+- `P4_CONFIG_MORE_PAGE_LINES`, `P4_CONFIG_MORE_PAGE_DELAY_MS`, `P4_CONFIG_PAUSE_DELAY_MS`
+- `P4_CONFIG_PIPE_SETTLE_DELAY_MS`, `P4_CONFIG_REBOOT_DELAY_MS`
+- `P4_CONFIG_TEXT_LINE_BYTES`, `P4_CONFIG_LFN_BYTES`, `P4_CONFIG_VOLUME_DEFAULT_PCT`
+
+### Fixed — Unit Test Project
+
+The `test/` project did not configure. It now builds standalone:
+- Pinned `IDF_TARGET` to `esp32p4` (previously defaulted to `esp32` and failed on the toolchain)
+- Added `test/main/idf_component.yml` pinning `esp_hosted` 2.12.1 and `esp_wifi_remote` 1.4.1
+  (the manager was resolving `esp_hosted` 3.x, whose Kconfig is incompatible)
+- Added `test/sdkconfig.defaults` mirroring the firmware's build-affecting options, including
+  the FATFS LFN settings that `FILINFO.altname` requires
+- Staged `board_config.h` and `p4minishell_config.h` into the generated config directory
+- Added the missing `components/p4_usb`, `espressif__usb_host_hid`, `espressif__usb_host_msc`,
+  and `espressif__esp_lcd_touch` component directories
+- Added tests for `shell_format_command_for_transcript()` covering password masking,
+  pass-through, and NULL input
+
+### Updated
+
+- **Version bump**: 0.15.1 → 0.16.0 (`p4minishell_config.h` version macros were stale at 0.14.2
+  and are now correct)
+- **`.gitignore`**: ignore `test/managed_components/`
+
+### Verified
+- **Clean build**: Zero errors, zero warnings for both the firmware and the unit-test project
+  on ESP-IDF v5.5.5 / esp32p4
+- **No regressions**: All 65 command dispatch verbs preserved and reachable; every command
+  implementation, option, and output string carried across unchanged
+- **Batch features**: `for` loops, `%0`/`%*`, `:label`, `goto`, `call :label` all still functional
+- **Hardware commands**: `brightness`, `rotate`, `battery`, `volume`, `gpio` all still functional
+
+---
+
+## [0.15.1] - 2026-08-07
+
+### Changed
+- **Merged duplicate command dispatch logic** — Consolidated command execution pipeline from `main.c` and `components/command/command.c` into a single path:
+  - `main.c` now handles variable expansion (`%VAR%`, `%1`..`%9`) and output redirection (`>` / `>>`) before dispatch
+  - `components/command/command.c` owns the unified command dispatcher (`shell_execute_command_core`) and worker task
+  - Removed duplicate `shell_execute_command`, `shell_execute_command_core`, and `shell_command_task` from `main.c`
+  - Added bridge function `shell_execute_command_core_bridge` for main.c to invoke command.c's dispatcher
+- **Updated all documentation** — All `.md` files, configs, and references updated to reflect ESP-IDF v5.5.5 and merged dispatch architecture
+- **Fixed deprecation warning** — Updated `esp_lvgl_port` DSI callback from deprecated `on_refresh_done` to `on_frame_buf_complete` for ESP-IDF 5.5.0+
+
+### Updated
+- **ESP-IDF baseline**: v5.5.3 → v5.5.5 across all configs, lock files, and documentation
+- **Version bump**: 0.15.0 → 0.15.1
+
+### Verified
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4
+- **Flash**: Successful
+- **Boot**: Device boots, Wi-Fi connects, all commands functional
+
+---
+
 ## [0.15.0] - 2026-04-30
 
 ### Added
@@ -54,7 +1158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **command.c**: Existing `extern` declarations for `attrib`, `label`, `xcopy` now resolve correctly against main.c implementations.
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Flash**: Successful to COM3
 - **c6ota**: Verified working end-to-end (SD source, image validation, OTA transfer to 100%, Wi-Fi restore)
 
@@ -146,7 +1250,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **p4minishell_config.yaml**: Documented new USB keyboard config values
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Boot**: Clean, Wi-Fi connects, display renders, no regressions
 
 ---
@@ -172,7 +1276,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **main.c**: Added `s_sd_persistent_mounted` flag; `shell_sd_header_is_mounted()` now uses persistent flag instead of `stat()`; `shell_sd_begin()`/`shell_sd_end()` update the flag
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Boot**: Clean, Wi-Fi connects reliably, SD card accessible, header shows correct SD state
 - **Flash**: Successful to COM3
 
@@ -189,7 +1293,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Time in ver/sysinfo/about**: Formatted local time with NTP sync status
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Flash**: Successful to COM3
 
 ---
@@ -206,7 +1310,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All transcript/history/debug/UART/command code moved to shell.c and command.c
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Boot**: Clean, Wi-Fi connects, all commands preserved
 
 ---
@@ -225,7 +1329,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **main.c**: Added `keyboard` command family dispatch
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Boot**: Clean, Wi-Fi connects, no regressions
 
 ---
@@ -250,7 +1354,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **All hardcoded scaling values**: Moved to `P4_CONFIG_WINDOW_*` config macros
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Boot**: Clean boot, shell UI renders correctly, Wi-Fi connects
 - **No regressions**: All shell commands preserved
 
@@ -289,7 +1393,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No BSP bypass**: Display init still uses `bsp_display_start_with_config()` with `BOARD_CFG_*` values
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **No regressions**: Boot path, screen rendering, Wi-Fi, all commands preserved
 - **Binary**: p4minishell.bin generated successfully
 
@@ -386,7 +1490,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Comment consistency**: All section markers now use descriptive text instead of AI-prefixed tags
 
 ### Verified
-- **Clean build**: Zero errors, zero warnings on ESP-IDF 5.5.3 / esp32p4 target
+- **Clean build**: Zero errors, zero warnings on ESP-IDF v5.5.5 / esp32p4 target
 - **Binary integrity**: p4minishell.bin 1,490,608 bytes (82% free in 8MB partition)
 - **No regressions**: Boot, screen rendering, Wi-Fi, all 40+ commands preserved
 

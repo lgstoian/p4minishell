@@ -3,6 +3,11 @@ idf_component_register(
         test_main.c
         test_shell_parser.c
         test_shell_history.c
+        test_shell_prompt.c
+        test_shell_quoting.c
+        test_shell_pipeline.c
+        test_storage_format.c
+        test_batch_expr.c
         test_wifi_state.c
         test_ansi_format.c
     INCLUDE_DIRS
@@ -10,11 +15,15 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}"
         "${CMAKE_SOURCE_DIR}/../components/shell"
         "${CMAKE_SOURCE_DIR}/../components/ansi"
+        "${CMAKE_SOURCE_DIR}/../components/storage"
+        "${CMAKE_SOURCE_DIR}/../components/batch"
         "${CMAKE_SOURCE_DIR}/../components/networking"
     REQUIRES
         unity
         shell
         ansi
+        storage
+        batch
         networking
         esp_timer
 )

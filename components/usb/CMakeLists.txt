@@ -65,7 +65,7 @@ set(idf_version_string "${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}.${IDF_VERSION_
 
 if(idf_version_string VERSION_GREATER_EQUAL "5.4.4" AND idf_version_string VERSION_LESS "5.5.0")
     set(remote_wake_hal_supported ON)
-elseif(idf_version_string VERSION_GREATER_EQUAL "5.5.3")
+elseif(idf_version_string VERSION_GREATER_EQUAL "5.5.5")
     set(remote_wake_hal_supported ON)
 endif()
 

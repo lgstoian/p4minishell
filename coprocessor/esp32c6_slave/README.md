@@ -4,6 +4,8 @@ This project builds the ESP-Hosted co-processor firmware that matches the host-s
 
 It reuses the checked-in upstream slave sources from `managed_components/espressif__esp_hosted/slave`, so the host and co-processor stay on the same ESP-Hosted release line.
 
+**No custom slave source code.** The `main/` directory contains only build configuration files (`CMakeLists.txt`, `idf_component.yml`, `Kconfig.projbuild`). There are no `.c` files — the entire slave firmware is built from the managed `espressif__esp_hosted` component's upstream slave sources. To modify the slave behavior, change the `esp_hosted` version in `idf_component.yml` or add Kconfig options in `Kconfig.projbuild`.
+
 ## Target
 
 - Co-processor: `esp32c6`

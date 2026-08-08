@@ -1,0 +1,16 @@
+dependencies:
+  # Pin the managed components to the same versions the firmware uses so the
+  # unit tests compile the shell and command modules against an identical
+  # dependency set. Without these pins the component manager resolves newer
+  # majors (for example esp_hosted 3.x) whose Kconfig is incompatible.
+  espressif/esp_hosted:
+    version: "2.12.1"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_wifi_remote:
+    version: "1.4.1"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/usb: "*"
+  espressif/usb_host_msc: "*"
+  espressif/usb_host_hid: "*"

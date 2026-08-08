@@ -26,6 +26,7 @@
 #include "usb/usb_host.h"
 
 #include "usb.h"
+#include "ansi_palette.h"
 #include "p4minishell_config.h"
 
 /* ---- Backward-compatibility aliases ---- */
@@ -1095,10 +1096,10 @@ void usb_status(void)
         return;
     }
 
-    usb_emit_syncf("usb.host: %s\n", s_usb_host_installed ? "ready" : "not_ready");
-    usb_emit_syncf("usb.msc: connected=%s mounted=%s path=%s\n",
-                   s_usb_msc.connected ? "yes" : "no",
-                   s_usb_msc.mounted ? "yes" : "no",
+    usb_emit_syncf(SH_LBL "usb.host:" SH_RST " %s" SH_RST "\n", s_usb_host_installed ? SH_USB_UP "ready" : SH_USB_DOWN "not_ready");
+    usb_emit_syncf(SH_LBL "usb.msc:" SH_RST " " SH_LBL "connected=" SH_RST "%s" SH_RST " " SH_LBL "mounted=" SH_RST "%s" SH_RST " " SH_LBL "path=" SH_RST SH_PATH "%s" SH_RST "\n",
+                   s_usb_msc.connected ? SH_USB_UP "yes" : SH_USB_DOWN "no",
+                   s_usb_msc.mounted ? SH_USB_UP "yes" : SH_USB_DOWN "no",
                    USB_MSC_BASE_PATH);
     if (s_usb_msc.connected) {
         usb_wide_to_ascii(s_usb_msc.info.iManufacturer, manufacturer, sizeof(manufacturer));

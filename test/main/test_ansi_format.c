@@ -123,3 +123,63 @@ void test_ansi_strip_to_plain(void)
     TEST_ASSERT_EQUAL(0, len);
     TEST_ASSERT_FALSE(ansi_contains_escapes(NULL));
 }
+
+/* ========================================================================
+ * PRINTF WIDTH AND PRECISION FLAGS
+ * ========================================================================
+ * ansi_format() re-implements printf specifier handling so it can interleave
+ * colour codes. It must honour flags, width, precision, and length modifiers
+ * exactly as printf does: the shell relies on them for column alignment in
+ * chkdsk, dir, and the capacity reports.
+ */
+
+void test_ansi_format_width_flags(void)
+{
+    char buf[128];
+    char plain[128];
+
+    /* Right-aligned string width. */
+    ansi_format(buf, sizeof(buf), "[%8s]", "ab");
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[      ab]", plain);
+
+    /* Left-aligned string width. */
+    ansi_format(buf, sizeof(buf), "[%-8s]", "ab");
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[ab      ]", plain);
+
+    /* Integer width and zero padding. */
+    ansi_format(buf, sizeof(buf), "[%5d]", 42);
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[   42]", plain);
+
+    ansi_format(buf, sizeof(buf), "[%05d]", 42);
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[00042]", plain);
+
+    /* Unsigned width, as the allocation-unit report uses. */
+    ansi_format(buf, sizeof(buf), "[%6u]", 123u);
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[   123]", plain);
+
+    /* Float precision. */
+    ansi_format(buf, sizeof(buf), "[%.2f]", 1.5);
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[1.50]", plain);
+
+    /* Long modifier. */
+    ansi_format(buf, sizeof(buf), "[%ld]", 1234567L);
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[1234567]", plain);
+
+    /* Width combined with a colour code: the padding must be unaffected by
+     * the escape bytes, which is the property the aligned reports depend on. */
+    ansi_format(buf, sizeof(buf), "@c%8s@R", "ab");
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("      ab", plain);
+
+    /* Hex with width. */
+    ansi_format(buf, sizeof(buf), "[%04x]", 0xABu);
+    ansi_strip_to_plain(plain, sizeof(plain), buf);
+    TEST_ASSERT_EQUAL_STRING("[00ab]", plain);
+}

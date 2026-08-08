@@ -21,6 +21,7 @@
 #endif
 
 #include "bluetooth.h"
+#include "ansi_palette.h"
 #include "p4minishell_config.h"
 
 /* ---- Backward-compatibility aliases ---- */
@@ -105,18 +106,31 @@ static int bluetooth_split_args(char *text, char **argv, int max_args)
     return argc;
 }
 
+/**
+ * Append plain text to the transcript.
+ *
+ * Routed through the ANSI hook when the host provides one so palette macros
+ * embedded in the format string are interpreted, matching every other
+ * subsystem. Falls back to the plain hook when only that is registered.
+ */
 static void bluetooth_appendf(const char *format, ...)
 {
     char buffer[512];
     va_list args;
 
-    if (s_host_ops.transcript_append_text == NULL) {
+    if (s_host_ops.transcript_append_ansi == NULL && s_host_ops.transcript_append_text == NULL) {
         return;
     }
 
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
+
+    if (s_host_ops.transcript_append_ansi != NULL) {
+        s_host_ops.transcript_append_ansi(buffer);
+        return;
+    }
+
     s_host_ops.transcript_append_text(buffer);
 }
 
@@ -541,12 +555,12 @@ static void bluetooth_report_not_available(esp_err_t error)
     }
 
     if (error == ESP_ERR_NOT_SUPPORTED) {
-        bluetooth_appendf("bluetooth: unavailable because hosted NimBLE is not enabled in sdkconfig\n");
+        bluetooth_appendf(SH_WARN "bluetooth: unavailable because hosted NimBLE is not enabled in sdkconfig" SH_RST "\n");
         bluetooth_record_warningf("Hosted NimBLE not enabled in sdkconfig");
         return;
     }
 
-    bluetooth_appendf("bluetooth: startup failed with %s (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
+    bluetooth_appendf(SH_ERR "bluetooth: startup failed with %s (0x%x)" SH_RST "\n", esp_err_to_name(error), (unsigned int)error);
     bluetooth_record_errorf(error, "Hosted BLE startup failed");
 }
 
@@ -559,9 +573,9 @@ void bluetooth_init(const networking_host_ops_t *ops)
 
 void bluetooth_status(void)
 {
-    bluetooth_appendf("bluetooth.hosted_ready: %s\n", s_bluetooth_state.hosted_ready ? "yes" : "no");
-    bluetooth_appendf("bluetooth.controller: %s\n", s_bluetooth_state.controller_enabled ? "enabled" : "disabled");
-    bluetooth_appendf("bluetooth.nimble: %s\n", s_bluetooth_state.nimble_initialized ? "initialized" : "off");
+    bluetooth_appendf(SH_LBL "bluetooth.hosted_ready:" SH_RST " %s" SH_RST "\n", s_bluetooth_state.hosted_ready ? SH_OK "yes" : SH_MUTE "no");
+    bluetooth_appendf(SH_LBL "bluetooth.controller:" SH_RST " %s" SH_RST "\n", s_bluetooth_state.controller_enabled ? SH_OK "enabled" : SH_MUTE "disabled");
+    bluetooth_appendf(SH_LBL "bluetooth.nimble:" SH_RST " %s" SH_RST "\n", s_bluetooth_state.nimble_initialized ? SH_OK "initialized" : SH_MUTE "off");
     bluetooth_appendf("bluetooth.synced: %s\n", s_bluetooth_state.synced ? "yes" : "no");
     bluetooth_appendf("bluetooth.scan: %s\n", s_bluetooth_state.scan_active ? "active" : "idle");
     bluetooth_appendf("bluetooth.advertise: %s\n", s_bluetooth_state.advertising_active ? "on" : "off");

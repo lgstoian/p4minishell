@@ -626,38 +626,60 @@ int ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args)
                 }
                 p++;
             } else if (*p != '\0') {
-                /* Capture the full format specifier */
+                /* Capture the full format specifier, including any flags,
+                 * width, precision, and length modifiers. */
                 size_t fmt_len = (size_t)(p - fmt_start) + 1;
                 if (fmt_len < sizeof(temp)) {
-                    memcpy(temp, fmt_start, fmt_len);
-                    temp[fmt_len] = '\0';
+                    char spec_buf[32];
+                    char spec;
+                    int written;
+                    bool is_long = false;
+                    bool is_long_long = false;
+
+                    memcpy(spec_buf, fmt_start, fmt_len);
+                    spec_buf[fmt_len] = '\0';
                     p++;
 
-                    /* Determine the type for va_arg */
-                    char spec = temp[fmt_len - 1];
-                    int written;
+                    spec = spec_buf[fmt_len - 1];
+
+                    /* Detect length modifiers so the correct type is pulled
+                     * from the va_list; `ll` must be checked before `l`. */
+                    if (fmt_len >= 3 && spec_buf[fmt_len - 3] == 'l' && spec_buf[fmt_len - 2] == 'l') {
+                        is_long_long = true;
+                    } else if (fmt_len >= 2 && spec_buf[fmt_len - 2] == 'l') {
+                        is_long = true;
+                    }
+
+                    /* The captured specifier is handed to snprintf verbatim,
+                     * so flags such as %-4s, %10s, and %.1f behave exactly as
+                     * they do in printf. Passing only the bare conversion
+                     * would silently drop the caller's column alignment. */
                     if (spec == 's') {
                         char *s = va_arg(args, char *);
-                        written = snprintf(temp, sizeof(temp), "%s", s ? s : "(null)");
+                        written = snprintf(temp, sizeof(temp), spec_buf, s ? s : "(null)");
                     } else if (spec == 'd' || spec == 'i') {
-                        int d = va_arg(args, int);
-                        written = snprintf(temp, sizeof(temp), "%d", d);
+                        if (is_long_long) {
+                            written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, long long));
+                        } else if (is_long) {
+                            written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, long));
+                        } else {
+                            written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, int));
+                        }
                     } else if (spec == 'u' || spec == 'x' || spec == 'X' || spec == 'o') {
-                        unsigned int u = va_arg(args, unsigned int);
-                        if (spec == 'u') written = snprintf(temp, sizeof(temp), "%u", u);
-                        else if (spec == 'x') written = snprintf(temp, sizeof(temp), "%x", u);
-                        else if (spec == 'X') written = snprintf(temp, sizeof(temp), "%X", u);
-                        else written = snprintf(temp, sizeof(temp), "%o", u);
+                        if (is_long_long) {
+                            written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, unsigned long long));
+                        } else if (is_long) {
+                            written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, unsigned long));
+                        } else {
+                            written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, unsigned int));
+                        }
                     } else if (spec == 'f' || spec == 'F' || spec == 'e' || spec == 'E' ||
                                spec == 'g' || spec == 'G' || spec == 'a' || spec == 'A') {
-                        double f = va_arg(args, double);
-                        written = snprintf(temp, sizeof(temp), "%f", f);
+                        written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, double));
                     } else if (spec == 'c') {
-                        int c = va_arg(args, int);
-                        written = snprintf(temp, sizeof(temp), "%c", c);
+                        written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, int));
                     } else if (spec == 'p') {
-                        void *ptr = va_arg(args, void *);
-                        written = snprintf(temp, sizeof(temp), "%p", ptr);
+                        written = snprintf(temp, sizeof(temp), spec_buf, va_arg(args, void *));
                     } else {
                         written = snprintf(temp, sizeof(temp), "%s", "(fmt)");
                     }

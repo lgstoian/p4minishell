@@ -221,32 +221,29 @@ void ansi_set_palette_color(ansi_color_index_t index, uint32_t color);
  * Special format specifiers (prefixed with @):
  *   @R  — reset all attributes
  *   @B  — bold on
- *   @b  — bold off
  *   @D  — dim on
- *   @d  — dim off
  *   @I  — italic on
- *   @i  — italic off
  *   @U  — underline on
- *   @u  — underline off
- *   @K  — foreground black
- *   @k  — foreground bright black
- *   @r  — foreground red
- *   @Rr — foreground bright red
- *   @g  — foreground green
+ *   @k  — foreground black (standard)
+ *   @r  — foreground red (standard)
+ *   @g  — foreground green (standard)
+ *   @y  — foreground yellow (standard)
+ *   @b  — foreground blue (standard)
+ *   @m  — foreground magenta (standard)
+ *   @c  — foreground cyan (standard)
+ *   @w  — foreground white (standard)
+ *   @K  — foreground bright black (grey)
+ *   @E  — foreground bright red
  *   @G  — foreground bright green
- *   @y  — foreground yellow
  *   @Y  — foreground bright yellow
- *   @b  — foreground blue (use @B for bold)
- *   @Bl — foreground bright blue
- *   @m  — foreground magenta
+ *   @L  — foreground bright blue
  *   @M  — foreground bright magenta
- *   @c  — foreground cyan
  *   @C  — foreground bright cyan
- *   @w  — foreground white
  *   @W  — foreground bright white
- *   @kK — background black
- *   ... (bg prefix @K@, @R@, @G@, etc.)
+ *   @@  — literal '@'
  *
+ * Note: there are no individual "off" specifiers for bold, dim, italic, or
+ * underline. Use @R to reset all attributes, or @B/@D/@I/@U to toggle them.
  * Standard printf format specifiers (%s, %d, etc.) are passed through.
  *
  * @param dst       Output buffer.

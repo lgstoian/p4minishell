@@ -52,8 +52,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             14
-#define P4_CONFIG_VERSION_PATCH             2
+#define P4_CONFIG_VERSION_MINOR             24
+#define P4_CONFIG_VERSION_PATCH             1
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -247,6 +247,9 @@
 /** FatFs drive letter prefix for SD card access. */
 #define P4_CONFIG_SD_FATFS_DRIVE             "0:"
 
+/** DOS-style drive letter shown by `prompt $n` and `tree`. */
+#define P4_CONFIG_SD_DRIVE_LETTER            "A:"
+
 /** Maximum bytes for an SD card path (resolved absolute path). */
 #define P4_CONFIG_SD_PATH_BYTES              320
 
@@ -261,6 +264,47 @@
 
 /** I/O buffer size for SD file operations. */
 #define P4_CONFIG_SD_IO_BUFFER_BYTES         128
+
+/* ========================================================================
+ * DIRECTORY LISTING AND STORAGE GUARDRAILS
+ * ======================================================================== */
+
+/** Maximum entries buffered per directory level for `dir` sorting. */
+#define P4_CONFIG_DIR_SORT_ENTRY_MAX         128
+
+/** Columns printed by `dir /w` (wide listing). */
+#define P4_CONFIG_DIR_WIDE_COLUMNS           4
+
+/** Column width in characters for each `dir /w` cell. */
+#define P4_CONFIG_DIR_WIDE_COLUMN_WIDTH      18
+
+/** Rows shown between pauses by `dir /p`. */
+#define P4_CONFIG_DIR_PAGE_LINES             20
+
+/** Maximum directory recursion depth for `dir /s`. */
+#define P4_CONFIG_DIR_RECURSE_DEPTH_MAX      8
+
+/**
+ * Free-space safety margin in bytes. A write that would leave less than this
+ * free is refused, so the volume never fills to the point where FAT metadata
+ * updates start failing.
+ */
+#define P4_CONFIG_STORAGE_FREE_MARGIN_BYTES  (64 * 1024)
+
+/**
+ * File size in bytes above which copy operations report progress.
+ * Keeps small copies silent while giving feedback on large transfers.
+ */
+#define P4_CONFIG_COPY_PROGRESS_THRESHOLD    (256 * 1024)
+
+/** Percent step between `copy` progress updates for large files. */
+#define P4_CONFIG_COPY_PROGRESS_STEP_PCT     10
+
+/** Exact confirmation word required by the destructive `format` command. */
+#define P4_CONFIG_FORMAT_CONFIRM_WORD        "YES"
+
+/** Allocation unit size in bytes requested when formatting. 0 = automatic. */
+#define P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES    0
 
 /* ========================================================================
  * BATCH ENGINE AND ENVIRONMENT VARIABLES
@@ -286,6 +330,109 @@
 
 /** I/O buffer size for general file operations. */
 #define P4_CONFIG_FILE_IO_BUFFER_BYTES       512
+
+/** Maximum `:label` targets tracked per batch file for goto/call. */
+#define P4_CONFIG_BATCH_LABEL_MAX            32
+
+/**
+ * Maximum bytes for a single `:label` name.
+ * A label is one identifier, so this is far smaller than a command line.
+ * The label table is sized LABEL_MAX * LABEL_BYTES, so keeping this tight
+ * matters for the batch frame footprint.
+ */
+#define P4_CONFIG_BATCH_LABEL_BYTES          48
+
+/** Maximum argv slots produced by the command tokenizer. */
+#define P4_CONFIG_COMMAND_ARGV_MAX           32
+
+/** Maximum lines the `sort` command can hold in memory. */
+#define P4_CONFIG_SORT_LINE_MAX              1024
+
+/** Lines printed per page by the `more` command. */
+#define P4_CONFIG_MORE_PAGE_LINES            20
+
+/**
+ * Fallback delay between `more` pages in milliseconds. Used only when no
+ * interactive key source is attached; otherwise `more` waits for a keypress.
+ */
+#define P4_CONFIG_MORE_PAGE_DELAY_MS         1500
+
+/**
+ * Fallback delay used by `pause` in milliseconds. Used only when no
+ * interactive key source is attached; otherwise `pause` waits for a keypress.
+ */
+#define P4_CONFIG_PAUSE_DELAY_MS             2000
+
+/** Settle delay between two stages of a piped command in milliseconds. */
+#define P4_CONFIG_PIPE_SETTLE_DELAY_MS       100
+
+/** Maximum command stages in a single `a | b | c` pipeline. */
+#define P4_CONFIG_PIPE_STAGE_MAX             4
+
+/* ========================================================================
+ * QUOTING, ESCAPING, AND COMMAND CHAINING
+ * ======================================================================== */
+
+/**
+ * Escape character. Follows COMMAND.COM: a caret makes the next character
+ * literal, so `^&`, `^|`, `^>`, `^"`, and `^^` lose their special meaning.
+ */
+#define P4_CONFIG_ESCAPE_CHAR                '^'
+
+/** Maximum commands in a single `a & b && c || d` chain. */
+#define P4_CONFIG_CHAIN_SEGMENT_MAX          8
+
+/**
+ * Errorlevel reported when a command name is not recognized.
+ * COMMAND.COM uses 9009 for "command not found"; conditional chaining relies
+ * on a non-zero value here so `badcmd || echo failed` behaves correctly.
+ */
+#define P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND 9009
+
+/** Maximum nesting depth for `setlocal` / `endlocal` environment scopes. */
+#define P4_CONFIG_SETLOCAL_DEPTH_MAX         8
+
+/** Maximum parenthesis nesting depth in a `set /a` arithmetic expression. */
+#define P4_CONFIG_SET_EXPR_DEPTH_MAX         16
+
+/** Maximum bytes of user input accepted by `set /p`. */
+#define P4_CONFIG_SET_PROMPT_INPUT_BYTES     128
+
+/**
+ * Maximum batch lines joined by trailing `^` continuations.
+ * Bounds a runaway continuation chain so a malformed file cannot loop.
+ */
+#define P4_CONFIG_LINE_CONTINUATION_MAX      8
+
+/** Maximum directory recursion depth for the `tree` command. */
+#define P4_CONFIG_TREE_DEPTH_MAX             8
+
+/** Maximum bytes for a user-defined `prompt` template string. */
+#define P4_CONFIG_PROMPT_TEMPLATE_BYTES      64
+
+/** Default `prompt` template. `$p` expands to the path, `$g` to `>`. */
+#define P4_CONFIG_PROMPT_DEFAULT_TEMPLATE    "PS $p$g "
+
+/** Depth of the interactive keypress queue used by `pause`, `choice`, `more`. */
+#define P4_CONFIG_KEY_QUEUE_DEPTH            16
+
+/**
+ * Timeout in milliseconds for a single blocking keypress wait. Prevents a
+ * headless board from stalling a batch file forever.
+ */
+#define P4_CONFIG_KEY_WAIT_TIMEOUT_MS        30000
+
+/** Delay before esp_restart() so the reboot message reaches the transcript. */
+#define P4_CONFIG_REBOOT_DELAY_MS            500
+
+/** Line buffer size for text-processing commands (find, more, fc, sort). */
+#define P4_CONFIG_TEXT_LINE_BYTES            512
+
+/** Buffer size for FATFS long file names (matches CONFIG_FATFS_MAX_LFN + 1). */
+#define P4_CONFIG_LFN_BYTES                  256
+
+/** Default speaker volume percentage applied at boot. */
+#define P4_CONFIG_VOLUME_DEFAULT_PCT         60
 
 /* ========================================================================
  * GPIO AND HARDWARE CONTROL
@@ -339,6 +486,12 @@
 
 /** Header battery low threshold (percent). */
 #define P4_CONFIG_HEADER_BAT_LOW_PCT         15
+
+/** Display duration for transient header notifications in milliseconds. */
+#define P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS   3000
+
+/** Sentinel RSSI reported when no Wi-Fi AP information is available (dBm). */
+#define P4_CONFIG_HEADER_RSSI_UNKNOWN        (-127)
 
 /* ========================================================================
  * ANSI/VT TERMINAL COLOR PALETTE — Windows 11 PowerShell Theme

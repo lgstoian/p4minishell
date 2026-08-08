@@ -1,4 +1,4 @@
-﻿# P4MiniShell Configuration — Single Source of Truth
+# P4MiniShell Configuration � Single Source of Truth
 #
 # Every tunable value in the firmware is documented here with:
 #   - value: the current setting
@@ -10,10 +10,14 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.14.2
-# Last updated: 2026-04-30
+# Version: 0.24.1
+# Last updated: 2026-08-08 (bug fixes: prompt path thread safety, SH_* palette migration completed,
+#                           stale documentation corrected, test coverage for pipeline/chain,
+#                           architecture: shell.c decoupled from networking/bt/usb/c6ota,
+#                           command_ui.c split out, Kconfig docs in YAML,
+#                           hardware bring-up: LVGL locking race, main-task + sys_evt stack sizes)
 
-config_version: "0.14.2"
+config_version: "0.24.1"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -254,6 +258,10 @@ sd_card:
     value: "0:"
     type: string
     description: "FatFs drive letter prefix for SD access"
+  drive_letter:
+    value: "A:"
+    type: string
+    description: "DOS-style drive letter shown by prompt $n and the tree header"
   path_bytes:
     value: 320
     type: size_t
@@ -274,6 +282,55 @@ sd_card:
     type: size_t
     description: "Maximum preview size for sd cat"
     range: "256..32768"
+  dir_sort_entry_max:
+    value: 128
+    type: int
+    description: "Maximum entries buffered per directory level for dir sorting"
+    range: "16..512"
+  dir_wide_columns:
+    value: 4
+    type: int
+    description: "Columns printed by dir /w"
+    range: "2..8"
+  dir_wide_column_width:
+    value: 18
+    type: int
+    description: "Column width in characters for each dir /w cell"
+    range: "10..40"
+  dir_page_lines:
+    value: 20
+    type: int
+    description: "Rows shown between pauses by dir /p"
+    range: "5..80"
+  dir_recurse_depth_max:
+    value: 8
+    type: int
+    description: "Maximum directory recursion depth for dir /s"
+    range: "1..32"
+  storage_free_margin_bytes:
+    value: 65536
+    type: uint64_t
+    description: "Free-space safety margin; a write leaving less than this free is refused"
+    range: "0..1048576"
+  copy_progress_threshold:
+    value: 262144
+    type: uint64_t
+    description: "File size above which copy reports progress"
+    range: "0..16777216"
+  copy_progress_step_pct:
+    value: 10
+    type: int
+    description: "Percent step between copy progress updates for large files"
+    range: "1..50"
+  format_confirm_word:
+    value: "YES"
+    type: string
+    description: "Exact confirmation word required by the destructive format command"
+  format_alloc_unit_bytes:
+    value: 0
+    type: uint32_t
+    description: "Allocation unit size requested when formatting; 0 selects automatic"
+    range: "0..65536"
   io_buffer_bytes:
     value: 128
     type: size_t
@@ -317,6 +374,124 @@ batch_env:
     type: size_t
     description: "I/O buffer size for general file operations"
     range: "64..4096"
+  batch_label_max:
+    value: 32
+    type: int
+    description: "Maximum :label targets tracked per batch file for goto/call"
+    range: "8..128"
+  batch_label_bytes:
+    value: 48
+    type: size_t
+    description: "Maximum bytes for a single :label name; the label table is label_max * label_bytes, so this drives the batch frame footprint"
+    range: "16..128"
+  command_argv_max:
+    value: 32
+    type: int
+    description: "Maximum argv slots produced by the command tokenizer"
+    range: "8..64"
+  sort_line_max:
+    value: 1024
+    type: int
+    description: "Maximum lines the sort command can hold in memory"
+    range: "16..4096"
+  more_page_lines:
+    value: 20
+    type: int
+    description: "Lines printed per page by the more command"
+    range: "5..80"
+  more_page_delay_ms:
+    value: 1500
+    type: uint32_t
+    description: "Fallback delay between more pages in milliseconds, used only when no interactive key source is attached"
+    range: "100..10000"
+  pause_delay_ms:
+    value: 2000
+    type: uint32_t
+    description: "Fallback delay used by pause in milliseconds, used only when no interactive key source is attached"
+    range: "100..10000"
+  pipe_settle_delay_ms:
+    value: 100
+    type: uint32_t
+    description: "Settle delay between two stages of a piped command in milliseconds"
+    range: "0..2000"
+  pipe_stage_max:
+    value: 4
+    type: int
+    description: "Maximum command stages in a single a | b | c pipeline"
+    range: "2..8"
+  escape_char:
+    value: "^"
+    type: char
+    description: "Escape character; a caret makes the next character literal, as in COMMAND.COM"
+  chain_segment_max:
+    value: 8
+    type: int
+    description: "Maximum commands in a single a & b && c || d chain"
+    range: "2..32"
+  errorlevel_unknown_command:
+    value: 9009
+    type: int
+    description: "Errorlevel reported when a command name is not recognized, matching COMMAND.COM"
+    range: "1..65535"
+  setlocal_depth_max:
+    value: 8
+    type: int
+    description: "Maximum nesting depth for setlocal/endlocal environment scopes"
+    range: "1..32"
+  set_expr_depth_max:
+    value: 16
+    type: int
+    description: "Maximum parenthesis nesting depth in a set /a arithmetic expression"
+    range: "4..64"
+  set_prompt_input_bytes:
+    value: 128
+    type: size_t
+    description: "Maximum bytes of user input accepted by set /p"
+    range: "16..512"
+  line_continuation_max:
+    value: 8
+    type: int
+    description: "Maximum batch lines joined by trailing ^ continuations"
+    range: "1..32"
+  tree_depth_max:
+    value: 8
+    type: int
+    description: "Maximum directory recursion depth for the tree command"
+    range: "1..32"
+  prompt_template_bytes:
+    value: 64
+    type: size_t
+    description: "Maximum bytes for a user-defined prompt template string"
+    range: "16..256"
+  prompt_default_template:
+    value: "PS $p$g "
+    type: string
+    description: "Default prompt template; $p expands to the path and $g to >"
+  key_queue_depth:
+    value: 16
+    type: int
+    description: "Depth of the interactive keypress queue used by pause, choice, and more"
+    range: "4..64"
+  key_wait_timeout_ms:
+    value: 30000
+    type: uint32_t
+    description: "Timeout for a single blocking keypress wait, so a headless board cannot stall a batch file forever"
+    range: "1000..600000"
+  reboot_delay_ms:
+    value: 500
+    type: uint32_t
+    description: "Delay before esp_restart() so the reboot message reaches the transcript"
+    range: "0..5000"
+  text_line_bytes:
+    value: 512
+    type: size_t
+    description: "Line buffer size for text-processing commands (find, more, fc, sort)"
+    range: "128..2048"
+  lfn_bytes:
+    value: 256
+    type: size_t
+    description: "Buffer size for FATFS long file names (CONFIG_FATFS_MAX_LFN + 1)"
+    range: "64..512"
 
 # ---- GPIO and Hardware Control ----
 gpio_hardware:
@@ -343,6 +518,11 @@ gpio_hardware:
     type: int
     description: "Minimum CPU frequency in MHz for light sleep entry"
     range: "10..240"
+  volume_default_pct:
+    value: 60
+    type: int
+    description: "Default speaker volume percentage applied at boot"
+    range: "0..100"
 
 # ---- Header Bar Visuals ----
 header_visuals:
@@ -390,6 +570,16 @@ header_visuals:
     type: int
     description: "Battery percentage threshold for warning color in header"
     range: "5..30"
+  notify_timeout_ms:
+    value: 3000
+    type: uint32_t
+    description: "Display duration for transient header notifications in milliseconds"
+    range: "500..15000"
+  rssi_unknown:
+    value: -127
+    type: int
+    description: "Sentinel RSSI reported when no Wi-Fi AP information is available (dBm)"
+    range: "-127..-1"
 
 # ---- USB Host ----
 usb_host:
@@ -533,6 +723,24 @@ task_stacks:
     type: size_t
     description: "UART/serial console reader task stack"
     range: "4096..16384"
+  main_task:
+    value: 8192
+    type: size_t
+    description: >-
+      Main task stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE). The default 3584 overflows
+      during shell_build_ui() because app_main builds the entire LVGL UI including
+      transcript append and prompt rendering, which invoke the vfprintf machinery.
+      8192 matches the command worker task budget. Pinned in sdkconfig.defaults.
+    range: "4096..32768"
+  system_event:
+    value: 8192
+    type: size_t
+    description: >-
+      System event task stack (CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE). The default
+      2304 overflows when the Wi-Fi event handler calls networking_schedulef_ansi()
+      and networking_notify_headerf(), which invoke vsnprintf on the handler's stack.
+      8192 gives the handler path real headroom. Pinned in sdkconfig.defaults.
+    range: "4096..32768"
 
 # ---- Networking ----
 networking:
@@ -558,69 +766,112 @@ ansi_colors:
     black:
       value: "0x000000"
       type: uint32_t
-      description: "ANSI color 0/30/40 — Black"
+      description: "ANSI color 0/30/40 � Black"
     red:
       value: "0xC50F1F"
       type: uint32_t
-      description: "ANSI color 1/31/41 — Red"
+      description: "ANSI color 1/31/41 � Red"
     green:
       value: "0x13A10E"
       type: uint32_t
-      description: "ANSI color 2/32/42 — Green"
+      description: "ANSI color 2/32/42 � Green"
     yellow:
       value: "0xC19C00"
       type: uint32_t
-      description: "ANSI color 3/33/43 — Yellow"
+      description: "ANSI color 3/33/43 � Yellow"
     blue:
       value: "0x0037DA"
       type: uint32_t
-      description: "ANSI color 4/34/44 — Blue"
+      description: "ANSI color 4/34/44 � Blue"
     magenta:
       value: "0x881798"
       type: uint32_t
-      description: "ANSI color 5/35/45 — Magenta"
+      description: "ANSI color 5/35/45 � Magenta"
     cyan:
       value: "0x3A96DD"
       type: uint32_t
-      description: "ANSI color 6/36/46 — Cyan"
+      description: "ANSI color 6/36/46 � Cyan"
     white:
       value: "0xCCCCCC"
       type: uint32_t
-      description: "ANSI color 7/37/47 — White"
+      description: "ANSI color 7/37/47 � White"
     bright_black:
       value: "0x767676"
       type: uint32_t
-      description: "ANSI color 8/90/100 — Bright Black (Gray)"
+      description: "ANSI color 8/90/100 � Bright Black (Gray)"
     bright_red:
       value: "0xE74856"
       type: uint32_t
-      description: "ANSI color 9/91/101 — Bright Red"
+      description: "ANSI color 9/91/101 � Bright Red"
     bright_green:
       value: "0x16C60C"
       type: uint32_t
-      description: "ANSI color 10/92/102 — Bright Green"
+      description: "ANSI color 10/92/102 � Bright Green"
     bright_yellow:
       value: "0xF9F1A5"
       type: uint32_t
-      description: "ANSI color 11/93/103 — Bright Yellow"
+      description: "ANSI color 11/93/103 � Bright Yellow"
     bright_blue:
       value: "0x3B78FF"
       type: uint32_t
-      description: "ANSI color 12/94/104 — Bright Blue"
+      description: "ANSI color 12/94/104 � Bright Blue"
     bright_magenta:
       value: "0xB4009E"
       type: uint32_t
-      description: "ANSI color 13/95/105 — Bright Magenta"
+      description: "ANSI color 13/95/105 � Bright Magenta"
     bright_cyan:
       value: "0x61D6D6"
       type: uint32_t
-      description: "ANSI color 14/96/106 — Bright Cyan"
+      description: "ANSI color 14/96/106 � Bright Cyan"
     bright_white:
       value: "0xF2F2F2"
       type: uint32_t
-      description: "ANSI color 15/97/107 — Bright White"
+      description: "ANSI color 15/97/107 � Bright White"
   buffer_bytes:
     value: 512
     type: size_t
     description: "Maximum bytes for an ANSI-formatted string buffer"
     range: "128..2048"
+
+# =============================================================================
+# BUILD-AFFECTING KCONFIG OPTIONS
+# =============================================================================
+# These are ESP-IDF Kconfig settings that affect firmware behavior and are
+# pinned in sdkconfig.defaults. They are documented here so developers have a
+# single source of truth, but their canonical location is sdkconfig.defaults.
+
+build_constraints:
+  spiram_xip_from_psram:
+    value: "n"
+    type: bool
+    description: >-
+      Disable PSRAM XIP instruction/rodata mapping. Must stay disabled or the
+      flash/PSRAM budget overflows at link time. Pinned in sdkconfig.defaults.
+  compiler_optimization:
+    value: "size"
+    type: string
+    description: >-
+      Compiler optimization level. Size (-Os) keeps the image within budget;
+      Performance (-O3) grows it by roughly 280 KB. Pinned in sdkconfig.defaults.
+    options: ["size", "perf", "debug", "none"]
+  log_default_level:
+    value: "warn"
+    type: string
+    description: >-
+      Compile-time log level. Warn keeps the console usable without debug spam.
+      Pinned in sdkconfig.defaults.
+    options: ["none", "error", "warn", "info", "debug", "verbose"]
+  wifi_softap_support:
+    value: "n"
+    type: bool
+    description: >-
+      Disable Wi-Fi SoftAP support. Station-only is enforced structurally: both
+      CONFIG_ESP_WIFI_SOFTAP_SUPPORT and CONFIG_WIFI_RMT_SOFTAP_SUPPORT must be
+      disabled because esp_wifi_remote mirrors the Wi-Fi Kconfig under its own
+      WIFI_RMT_ prefix. Pinned in sdkconfig.defaults.
+  wifi_rmt_softap_support:
+    value: "n"
+    type: bool
+    description: >-
+      Mirror of CONFIG_ESP_WIFI_SOFTAP_SUPPORT for the esp_wifi_remote component.
+      Both symbols must be disabled together. Pinned in sdkconfig.defaults.

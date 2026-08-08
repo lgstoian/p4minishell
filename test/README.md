@@ -22,7 +22,7 @@ test/
 From the project root:
 
 ```powershell
-$env:IDF_PATH = "C:\esp\v5.5.3\esp-idf"
+$env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"
 . $env:IDF_PATH\export.ps1
 cd test
 idf.py build flash monitor

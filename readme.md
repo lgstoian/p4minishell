@@ -1,39 +1,62 @@
-﻿# P4MiniShell
+# P4MiniShell
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.15.0 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.24.1 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
 P4MiniShell replaces the default LVGL demo UI with a persistent DOS-style shell surface built on LVGL 9.2.2. It provides a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi and Bluetooth on the C6, USB host support, and a real OTA maintenance path for the co-processor.
 
-**Color-coded output** — All text output uses a consistent ANSI color scheme for readability:
-- Cyan labels for property keys, green for success/connected, red for errors, yellow for warnings
-- Bright white for important values (SSIDs, IPs), bright magenta for numbers
-- Gray for muted/secondary text, bright yellow for section headings
+**Color-coded output** - Every command uses the same built-in colour scheme by default, with
+nothing to configure. Colours are defined once in `components/ansi/ansi_palette.h` and applied
+automatically to both the on-screen transcript and the serial console:
+- Bright green section headings, cyan field labels, bright white important values
+- Bright magenta numbers, sizes, and percentages; grey muted and secondary text
+- Green for success and connected, red for errors, yellow for warnings
+- `dir` colours entries by kind: bold blue directories, green `.bat` files, white files
 
 The current firmware is not a desktop DOS clone and is not yet an MS-DOS-compatible runtime. It provides the embedded foundation for that direction.
 
 ## Architecture
 
 ```
-main/main.c                 Shell UI, parser, transcript, command history, orchestration
+main/main.c                 App entry point, LVGL event callbacks, UI construction, host bridges
 p4minishell_config.h        Centralized configuration (all tunable values)
 p4minishell_config.yaml     Configuration documentation (YAML source of truth)
-components/ansi/            ANSI/VT escape sequence module (SGR colors, attributes, formatting)
+components/ansi/            ANSI/VT escape sequence module (SGR colors, attributes, formatting) + semantic palette
 components/display/         Display manager (rotation, resolution, refresh, brightness, power)
 components/windows/         Window manager (LVGL screen layout, dynamic scaling, styling)
 components/clock/           Clock manager (SNTP time sync, timezone, local/UTC formatting)
 components/keyboard/        Keyboard manager (LVGL keyboard, visibility, modes)
-components/shell/           Shell core (transcript, history, debug log, UART, sysinfo)
-components/command/         Command dispatcher (parser, execution task, all built-ins)
+components/shell/           Shell core (transcript, history, debug log, UART console, input line, sysinfo)
+components/storage/         SD sessions, path resolution, FATFS conversion, cwd, DOS file commands
+components/batch/           Batch engine, labels, for loops, pipes, environment variables, PATH
+components/command/         Command module (parser, dispatcher, worker task, execution pipeline, hardware and system commands)
 components/header/          Fixed top status bar (Wi-Fi, battery, Bluetooth, USB, SD)
-components/networking/      ESP-Hosted Wi-Fi + hosted NimBLE Bluetooth on C6
+components/networking/      Sole owner of ESP-Hosted + esp_wifi_remote: Wi-Fi station lifecycle, hosted NimBLE, status accessors
 components/usb/             USB Host MSC storage (/usb0) + HID keyboard/mouse
 components/c6ota/           ESP32-C6 firmware OTA via ESP-Hosted SDIO
 coprocessor/esp32c6_slave/  ESP32-C6 hosted slave firmware project
 ```
+
+### Module Ownership
+
+Dependencies flow one way: `command` → `batch` → `storage` → `shell` → (`ansi`, `display`, `windows`, `header`, `keyboard`, `clock`).
+
+| Module | Owns |
+|--------|------|
+| `main/main.c` | `app_main()`, boot sequencing, LVGL event callbacks, UI construction, c6ota/usb host bridges |
+| `components/shell/` | Transcript + async buffer, command history, debug log, UART console, input line prompt contract, the interactive keypress queue, the DOS prompt template engine, system info commands (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) |
+| `components/storage/` | Guarded SD sessions, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, current working directory, volume capacity queries and write guardrails, input/output redirection plumbing, and every DOS file, text, and volume command |
+| `components/batch/` | Batch file execution, `:label` scanning, `goto`, `call :label`, `for` loops, multi-stage `\|` pipes, environment variables, PATH, variable expansion, errorlevel, `setlocal`/`endlocal` scoping, and the batch language commands |
+| `components/command/` | Command dispatch and worker task, the execution pipeline, output redirection parsing, hardware commands, UI query commands, system commands, hardware telemetry |
+
+Two registration tables invert the only upward dependencies:
+`shell.c` reaches command-owned services (dispatch, cwd, volume, SD mount state, battery) through
+the `shell_command_ops_t` table, and `batch.c` re-enters the command pipeline through
+`batch_command_ops_t`. Both are registered by `command_init()`, so neither the shell core nor the
+batch engine depends on the command module at include time.
 
 ## Configuration
 
@@ -58,7 +81,7 @@ the YAML to match.
 | **Battery** | ADC on GPIO53 with 2:1 divider (3.3V-4.2V range) |
 | **Hosted SDIO** | CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 |
 | **USB Host** | MSC storage at /usb0 + HID keyboard/mouse |
-| **ESP-IDF** | v5.5.3 |
+| **ESP-IDF** | v5.5.5 |
 | **Build target** | esp32p4 |
 
 ## Key Features
@@ -69,10 +92,20 @@ the YAML to match.
 - **Worker-task execution**: Heavy commands run off LVGL event stack to prevent overflow
 - **Guarded SD access**: All SD operations use shared mount/unmount with validation and bounded output
 - **DOS-style file commands**: `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`
+- **Full `dir` option set**: `/W` wide, `/P` paged, `/S` recursive, `/B` bare, `/L` lowercase, `/A` attribute filter, `/O` sort order
+- **Volume management**: `chkdsk`/`scandisk` capacity and integrity report, `format` behind an exact confirmation word
+- **Storage guardrails**: free-space prechecks, self-copy protection, partial-destination cleanup, copy progress
 - **RAM-only shell state**: Environment variables, PATH, current working directory, batch arguments
-- **Batch file engine**: `.bat` execution with `%1`..`%9` expansion, `rem` comments, `echo on/off`
-- **Output redirection**: `>` and `>>` to SD files
-- **Hosted Wi-Fi**: ESP-Hosted + esp_wifi_remote on C6 with version compatibility gate
+- **Batch file engine**: `.bat` execution with `%0`/`%1`..`%9`/`%*` expansion, `:label` targets, `goto`, `call :label`, `for` loops, `rem` comments, `echo on/off`
+- **Real batch control flow**: `pause` and `choice` block on an actual keypress, `setlocal`/`endlocal` scope the environment, `exit /b` leaves one batch file
+- **Batch expressions**: `set /a` integer arithmetic with the full DOS operator set, `set /p` prompted input, trailing `^` line continuation
+- **DOS prompt engine**: `prompt` template with `$p $g $t $d $v $n` and more, driving both the UART console and the on-screen input line
+- **Text utilities**: `find` (`/I /N /C /V`), `more` (keypress paging), `tree` (recursive, `/F /A`), `fc`, `sort` (`/R /I /U`)
+- **Redirection**: `>`, `>>`, and `<` in any order on one line
+- **Multi-stage pipes**: `cmd1 | cmd2 | cmd3` with quote-aware splitting
+- **Command chaining**: `a & b` (both), `a && b` (on success), `a || b` (on failure)
+- **DOS quoting and escaping**: `"text"` groups with expansion, `'text'` groups literally, `^c` escapes any character
+- **Hosted Wi-Fi**: ESP-Hosted + esp_wifi_remote on C6 with version compatibility gate. Station-only, enforced in code and by compiling SoftAP out. Every Hosted and wifi_remote call is confined to `components/networking/`.
 - **Hosted Bluetooth**: NimBLE VHCI on C6 for BLE scan and advertising
 - **USB Host**: MSC mass storage at `/usb0`, HID keyboard/mouse with opt-in echo
 - **USB Keyboard Auto-Detect**: Plug in a USB keyboard to type commands; on-screen keyboard hides automatically. Full US keyboard layout supported including symbols, keypad, navigation keys, and function keys.
@@ -91,19 +124,24 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | **System** | `help`, `sysinfo`, `clear`/`cls`, `reboot`, `version`/`ver`, `about`, `debug`, `mem` |
 | **Hardware** | `brightness`, `rotate`, `battery`, `volume`, `gpio list|status|read|set` |
 | **Storage** | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` |
+| **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` |
 | **SD Tools** | `sd info`, `sd ls`, `sd stat`, `sd cat` |
 | **Wi-Fi** | `wifi status|scan|diag|connect|disconnect` |
 | **Bluetooth** | `bluetooth status|scan|advertise on|off`, `bt` (alias) |
 | **USB** | `usb status|ls|keyboard on|off|mouse on|off` |
-| **Batch** | `set`, `path`, `echo on|off`, `call <file.bat>` |
-| **Redirection** | `>` and `>>` to SD files |
+| **Batch** | `set`, `set /a`, `set /p`, `path`, `echo on|off`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]` |
+| **Text tools** | `find`, `more`, `tree`, `fc`, `sort`, `prompt`, `date`, `time` |
+| **Redirection** | `>`, `>>`, and `<` to and from SD files |
+| **Pipes** | `cmd1 | cmd2 | cmd3` (up to 4 stages) |
+| **Chaining** | `a & b`, `a && b`, `a || b` (up to 8 commands) |
+| **Quoting** | `"grouped"`, `'literal'`, `^` escapes |
 | **OTA** | `c6ota sd:/path|http[s]://url|default` |
 
 ## Build and Flash
 
 ```sh
 # Source ESP-IDF environment
-$env:IDF_PATH = "C:\esp\v5.5.3\esp-idf"
+$env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"
 . $env:IDF_PATH\export.ps1
 
 # Build

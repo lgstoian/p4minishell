@@ -3,14 +3,53 @@
 
 /**
  * @file networking.h
- * @brief Hosted Wi-Fi runtime module for P4MiniShell.
+ * @brief Hosted networking module for P4MiniShell.
  *
- * Owns ESP-Hosted Wi-Fi startup, event handling, command execution, status
- * reporting, and OTA restore/wait hooks. Wi-Fi runs on the ESP32-C6 co-processor
- * over SDIO (ESP-Hosted + esp_wifi_remote).
+ * The single owner of every ESP-Hosted and esp_wifi_remote call in the
+ * firmware. Wi-Fi and Bluetooth both run on the ESP32-C6 co-processor over
+ * SDIO; this module owns the transport bring-up, the Wi-Fi station lifecycle,
+ * the hosted NimBLE lifecycle (delegated to bluetooth.c), status reporting,
+ * and the OTA wait/restore hooks.
  *
- * The module also bootstraps the hosted Bluetooth module (bluetooth.h) by
- * forwarding the same host callback surface during networking_init().
+ * Only the official Espressif path is used: `espressif/esp_hosted` for the
+ * transport and `espressif/esp_wifi_remote` for the Wi-Fi API. There is no
+ * custom RPC, no alternative transport, and no re-implemented control plane.
+ *
+ * Ownership rule:
+ *   No `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, or NimBLE call may appear
+ *   outside `components/networking/`. The one sanctioned exception is
+ *   `components/c6ota/`, which drives `esp_hosted_slave_ota_*` because
+ *   co-processor firmware update is its entire purpose. Consumers that need
+ *   networking state use the status helpers below.
+ *
+ * ---------------------------------------------------------------------------
+ * CANONICAL INITIALIZATION ORDER
+ * ---------------------------------------------------------------------------
+ * `networking_wifi_start_runtime()` performs these steps in exactly this
+ * order. The order is load-bearing, not stylistic:
+ *
+ *   1. esp_hosted_init()
+ *   2. esp_hosted_connect_to_slave()
+ *        The SDIO link must exist before anything else. esp_wifi_init() is
+ *        the esp_wifi_remote shim and has no peer to talk to until the slave
+ *        is connected.
+ *   3. version compatibility gate
+ *        Refuse to continue when the C6 firmware is outside the host's
+ *        supported range. Proceeding produces failures far harder to diagnose.
+ *   4. nvs_flash_init()          (erase-and-retry on a corrupt partition)
+ *        esp_wifi_init() persists calibration and config to NVS.
+ *   5. esp_netif_init()
+ *   6. esp_event_loop_create_default()
+ *   7. esp_netif_create_default_wifi_sta()
+ *   8. esp_wifi_init()           (via esp_wifi_remote)
+ *   9. event handler registration
+ *  10. esp_wifi_set_mode(WIFI_MODE_STA)   — station only, always
+ *  11. esp_wifi_start()
+ *
+ * Hosted NimBLE is brought up separately and lazily by bluetooth.c, which
+ * receives the same host callback surface during networking_init().
+ *
+ * Station-only is a hard constraint: no SoftAP, no APSTA, no concurrent modes.
  */
 
 #include <stdbool.h>
@@ -69,6 +108,19 @@ networking_wifi_state_t networking_wifi_state(void);
 esp_err_t networking_wifi_last_error(void);
 bool networking_wifi_is_connected(void);
 void networking_append_sysinfo_summary(void);
+
+/**
+ * Read the RSSI of the currently associated access point.
+ *
+ * Exists so the header status bar and any other consumer can report signal
+ * strength without calling esp_wifi_* directly. Every ESP-Hosted and
+ * esp_wifi_remote call in the firmware stays inside this module.
+ *
+ * @param rssi_out  Receives the RSSI in dBm. Untouched on failure.
+ * @return true when a value was read, false when not associated or the
+ *         query failed.
+ */
+bool networking_wifi_get_rssi(int *rssi_out);
 
 // ---- OTA support hooks (consumed by components/c6ota) ----
 esp_err_t networking_wifi_wait_for_ota(void);

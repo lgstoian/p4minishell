@@ -9,10 +9,12 @@ set(EXTRA_COMPONENT_DIRS
 	managed_components/espressif__esp_lcd_touch_gt911
 	managed_components/lvgl__lvgl
 	components/ansi
+	components/batch
 	components/command
 	components/display
 	components/keyboard
 	components/shell
+	components/storage
 	components/clock
 	components/windows
 )

@@ -49,3 +49,36 @@ void test_shell_history_password_mask(void)
     /* All should not crash */
     TEST_ASSERT_TRUE(1);
 }
+
+/* ========================================================================
+ * TRANSCRIPT COMMAND FORMATTING TESTS
+ * ======================================================================== */
+
+void test_shell_format_command_masks_password(void)
+{
+    char output[128];
+
+    shell_format_command_for_transcript("wifi connect MyWiFi secret123", output, sizeof(output));
+    TEST_ASSERT_EQUAL_STRING("wifi connect MyWiFi ********", output);
+    TEST_ASSERT_NULL(strstr(output, "secret123"));
+}
+
+void test_shell_format_command_passthrough(void)
+{
+    char output[128];
+
+    /* Commands without a password argument are passed through unchanged. */
+    shell_format_command_for_transcript("dir sd:/logs", output, sizeof(output));
+    TEST_ASSERT_EQUAL_STRING("dir sd:/logs", output);
+
+    shell_format_command_for_transcript("wifi connect MyWiFi", output, sizeof(output));
+    TEST_ASSERT_EQUAL_STRING("wifi connect MyWiFi", output);
+}
+
+void test_shell_format_command_handles_null(void)
+{
+    char output[32];
+
+    shell_format_command_for_transcript(NULL, output, sizeof(output));
+    TEST_ASSERT_EQUAL_STRING("", output);
+}

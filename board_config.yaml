@@ -5,7 +5,7 @@
 # Board baseline: ESP32-P4-Function-EV-Board
 # Requested name: JC1060P470C
 # Target MCU: ESP32-P4
-# ESP-IDF: v5.5.3
+# ESP-IDF: v5.5.5
 #
 # Sources verified against:
 #   - managed_components/espressif__esp32_p4_function_ev_board/
@@ -17,6 +17,14 @@
 # Last updated: 2026-04-29 (v0.7.0 header redesign)
 # Updated: 2026-04-30 (v0.13.0 USB keyboard auto-detect)
 # Updated: 2026-04-30 (v0.14.0 ANSI/VT color support)
+# Updated: 2026-08-07 (ESP-IDF v5.5.5 update)
+# Updated: 2026-08-07 (v0.16.0 Phase A consolidation — no hardware changes; the GPIO table,
+#                      battery ADC parameters, and audio pin usage moved verbatim from
+#                      main/main.c to components/command/command.c)
+# Updated: 2026-08-08 (v0.17.0 Phase B module extraction — no hardware changes. The GPIO table,
+#                      battery ADC parameters, and audio pin usage stay in
+#                      components/command/command.c. The SD pin group is now consumed by
+#                      components/storage/storage.c, which owns the guarded mount session.)
 
 board:
   requested_name: JC1060P470C

@@ -3,7 +3,11 @@
 This document describes the public integration surface exposed by the hosted runtime modules under `components/`.
 
 ## Shared integration pattern
-- `main/main.c` remains the shell UI, transcript, parser, and orchestration layer.
+- `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It holds no command implementations and no shell state.
+- `components/shell` owns the transcript and async buffer, command history, debug log, UART console, the input-line prompt contract, and the system info commands.
+- `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, and every DOS file command.
+- `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, `for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, and the batch language commands.
+- `components/command` owns the single dispatcher, the execution pipeline, output-redirection parsing, the worker task, the hardware commands, the UI query commands, and the remaining system commands.
 - `components/ansi` owns the ANSI/VT escape sequence processing: SGR color palette, format string builder, text processing.
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
@@ -12,6 +16,498 @@ This document describes the public integration surface exposed by the hosted run
 - `components/usb` owns USB Host Library state, USB MSC storage, and USB HID keyboard or mouse debug behavior.
 - `components/c6ota` owns the shell-visible ESP32-C6 OTA workflow and depends on `components/networking` for Wi-Fi wait and restore hooks.
 - All modules keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
+
+### Dependency direction
+
+```
+main  ->  command  ->  batch  ->  storage  ->  shell  ->  ansi, display, windows, header, keyboard, clock
+```
+
+No component declares `main` as a requirement. Two registered function tables invert the only
+upward dependencies rather than creating include cycles — the same pattern
+`components/networking` uses with `networking_host_ops_t`:
+
+| Table | Declared in | Registered by | Lets the lower layer reach |
+|-------|-------------|---------------|-----------------------------|
+| `shell_command_ops_t` | `shell.h` | `command_init()` | dispatch, cwd, volume, SD mount state, battery |
+| `batch_command_ops_t` | `batch.h` | `command_init()` | the full command pipeline for nested lines |
+
+## Shell Core API
+
+Declared in `components/shell/shell.h`.
+
+### Command module hooks
+
+```c
+typedef struct {
+    void        (*execute_command)(char *command);
+    const char *(*get_cwd)(void);
+    int         (*get_volume_percent)(void);
+    bool        (*sd_is_mounted)(void);
+    esp_err_t   (*battery_read)(int *battery_mv, int *percent, int *raw, int *gpio_mv);
+    /* External-module accessors (all NULL-checked before use): */
+    bool        (*wifi_is_connected)(void);
+    bool        (*wifi_get_rssi)(int *rssi_out);
+    const char *(*wifi_state_string)(void);
+    void        (*append_sysinfo_summary)(void);
+    bool        (*bluetooth_is_enabled)(void);
+    bool        (*bluetooth_is_connected)(void);
+    bool        (*usb_is_connected)(void);
+    bool        (*usb_is_keyboard_attached)(void);
+    bool        (*usb_key_to_ascii)(uint8_t key_code, uint8_t modifiers, char *out);
+    bool        (*c6ota_is_pending)(void);
+    bool        (*c6ota_is_busy)(void);
+} shell_command_ops_t;
+
+void shell_register_command_ops(const shell_command_ops_t *ops);
+```
+- Registered once by `command_init()`. Passing `NULL` clears the table.
+- Every hook is NULL-checked at the call site, so the shell degrades gracefully if used
+  before the command module initializes.
+- The external-module accessors let `shell.c` read state from the networking, Bluetooth,
+  USB, and C6 OTA modules without including their headers, keeping the dependency
+  direction one-way.
+
+### Semantic output helpers
+```c
+void shell_print_heading(const char *format, ...);
+void shell_print_field(const char *label, const char *format, ...);
+void shell_print_field_num(const char *label, long value);
+void shell_print_ok(const char *format, ...);
+void shell_print_error(const char *format, ...);
+void shell_print_warning(const char *format, ...);
+void shell_print_muted(const char *format, ...);
+void shell_print_usage(const char *format, ...);
+```
+- Apply the shared palette from `components/ansi/ansi_palette.h`, so commands never choose
+  colours themselves. Each emits its own reset and trailing newline.
+- The caller's text is rendered with real `vsnprintf` before the colour wrap, so printf
+  flags work and a value containing `@` cannot be mistaken for a colour specifier.
+- Prefer these over raw `shell_transcript_appendf_ansi()` for headings, labelled fields,
+  and the success / error / warning / usage shapes. Use `shell_transcript_appendf_ansi()`
+  with `SH_*` macros directly only for composite lines that mix several categories.
+
+### Transcript
+```c
+void        shell_transcript_append_text(const char *text);
+void        shell_transcript_appendf(const char *format, ...);
+void        shell_transcript_append_ansi(const char *text);
+void        shell_transcript_appendf_ansi(const char *format, ...);
+void        shell_schedule_transcript_appendf(const char *format, ...);
+void        shell_transcript_reset(void);
+void        shell_history_transcript_scroll_to_end(void);
+size_t      shell_transcript_get_length(void);
+const char *shell_transcript_get_text_from(size_t offset);
+```
+- `shell_schedule_transcript_appendf()` is the safe entry point from non-LVGL tasks.
+- `shell_transcript_get_length()` / `shell_transcript_get_text_from()` let the command
+  module capture the output delta produced by a single command for `>` / `>>` redirection.
+
+### Command history
+```c
+void        shell_store_command_history(const char *command);
+void        shell_recall_history(int direction);   /* -1 older, +1 newer */
+const char *shell_get_history_draft(void);
+void        shell_reset_history_cursor(void);
+bool        shell_command_should_store_history(const char *command);
+void        shell_format_command_for_transcript(const char *command, char *output, size_t output_size);
+```
+- `shell_command_should_store_history()` returns false for `wifi connect <ssid> <password>`
+  and while a C6 OTA confirmation is pending.
+- `shell_format_command_for_transcript()` masks the password argument.
+
+### Input line
+```c
+void shell_input_line_set_text(const char *command_text);
+void shell_input_line_reset(void);
+void shell_extract_input_text(char *output, size_t output_size);
+void shell_input_line_repair_prompt(const char *text);
+```
+- The input line always renders the shell prompt as a literal prefix. These helpers are the
+  only place that knows about that contract.
+
+### Interactive keypress wait
+```c
+void shell_key_wait_begin(void);
+void shell_key_wait_end(void);
+bool shell_key_wait_is_active(void);
+bool shell_wait_for_key(uint32_t timeout_ms, char *key_out);
+bool shell_key_input_available(void);
+bool shell_key_wait_submit(char key);
+bool shell_read_line(char *output, size_t output_size, uint32_t timeout_ms);
+```
+- `shell_key_wait_begin()` flushes stale keys and marks the shell as waiting; every input
+  source then routes keystrokes into the key queue instead of the command line. Pair it with
+  `shell_key_wait_end()` on every return path.
+- `shell_wait_for_key()` blocks until a key arrives or the timeout elapses. It returns false
+  immediately when no wait is active, so a caller that forgets `begin` cannot hang.
+- `shell_key_input_available()` reports whether the UART console is running or a USB keyboard
+  is attached. Commands check it first and fall back to a timed path on a headless board.
+- `shell_key_wait_submit()` is what the UART reader, the USB HID bridge, and `main.c`'s LVGL
+  input-line callback call. It is a no-op when no wait is active.
+- `shell_read_line()` collects a whole line, echoing as it types and opening its own keypress
+  wait so input never reaches the command dispatcher. Backspace edits, ESC cancels, Enter
+  submits. Returns false on cancel, timeout, or when no key source is attached. Backs `set /p`.
+
+### Runtime prompt template
+```c
+void        shell_prompt_set_template(const char *template_text);
+const char *shell_prompt_get_template(void);
+const char *shell_prompt_render_plain(void);
+void        shell_prompt_reset(void);
+```
+- One template drives both the UART console prompt and the LVGL input line.
+- Supported metacharacters: `$p` path, `$g` `>`, `$l` `<`, `$b` `|`, `$n` drive, `$d` date,
+  `$t` time, `$v` version, `$s` space, `$_` newline, `$q` `=`, `$$` `$`, `$a` `&`, `$c` `(`,
+  `$f` `)`, `$e` ESC, `$h` destructive backspace. Codes are case-insensitive and an unknown
+  code renders literally, both matching COMMAND.COM.
+- `shell_prompt_render_plain()` omits `$e` because an LVGL textarea cannot render escapes.
+- Passing NULL or an empty string to `shell_prompt_set_template()` restores the default.
+
+### Debug log
+```c
+void   shell_debug_log_push(const char *tag, const char *message);
+void   shell_record_errorf(const char *tag, int error, const char *format, ...);
+void   shell_record_warningf(const char *tag, const char *format, ...);
+void   shell_record_infof(const char *tag, const char *format, ...);
+size_t shell_get_warning_count(void);
+void   shell_command_debug(void);
+```
+
+### Quoting and escaping
+```c
+typedef enum { SHELL_QUOTE_NONE, SHELL_QUOTE_DOUBLE, SHELL_QUOTE_SINGLE } shell_quote_state_t;
+
+char *shell_find_unquoted_char(const char *text, char target);
+char *shell_find_unquoted_any(const char *text, const char *targets);
+bool  shell_has_unquoted_char(const char *text, char target);
+char *shell_unescape_in_place(char *text);
+```
+- One scanner backs the argument tokenizer, redirection parsing, pipe splitting, chain
+  splitting, and variable expansion, so those surfaces cannot disagree about syntax versus data.
+- Rules: `"text"` groups and still expands variables, `'text'` groups literally with no
+  expansion, and `^c` makes any single character literal (`^&`, `^|`, `^>`, `^"`, `^^`).
+- `shell_unescape_in_place()` removes the markup once an extent is known. Redirection targets
+  and every tokenized argument pass through it, so handlers receive literal values.
+- Any new code that searches a command line for an operator must use these rather than a local
+  quote check.
+
+### Command chaining
+```c
+typedef enum {
+    SHELL_CHAIN_FIRST,        /* first segment, always runs */
+    SHELL_CHAIN_ALWAYS,       /* preceded by &  */
+    SHELL_CHAIN_ON_SUCCESS,   /* preceded by && */
+    SHELL_CHAIN_ON_FAILURE,   /* preceded by || */
+} shell_chain_op_t;
+
+typedef struct {
+    char            *command;
+    shell_chain_op_t op;
+} shell_chain_segment_t;
+
+int shell_split_chain(char *text, shell_chain_segment_t *segments,
+                      int max_segments, bool *truncated_out);
+```
+- Splits on unquoted `&`, `&&`, and `||`. A line with no separator yields one
+  `SHELL_CHAIN_FIRST` segment, so callers need no special case.
+- A single `|` is deliberately **not** a separator; it is left in place for the pipeline
+  splitter, which is what allows a pipeline to be one link in a chain.
+- `truncated_out` reports that the line had more separators than `max_segments` allows.
+- The command module owns the execution loop and the success test; this function only splits.
+
+### Lifecycle and utilities
+```c
+void        shell_init(void);
+bool        shell_is_initialized(void);
+void        shell_uart_console_start(void);
+void        shell_header_status_refresh(void);
+bool        shell_text_equals_ignore_case(const char *left, const char *right);
+char       *shell_trim(char *text);
+int         shell_split_args(char *text, char **argv, int max_args);  /* quote/escape aware */
+bool        shell_parse_percentage_arg(const char *text, int *percentage_out);
+bool        shell_parse_size_arg(const char *text, size_t min, size_t max, size_t *out);
+void        shell_join_args(char **argv, int start, int argc, char *out, size_t out_size);
+void        shell_header_notify(const char *text, uint32_t timeout_ms);
+void shell_get_cwd_for_prompt(char *buf, size_t buf_size);
+```
+
+## Command Module API
+
+Declared in `components/command/command.h`.
+
+### Execution
+```c
+void shell_execute_command(char *command);        /* expand + redirect + dispatch */
+bool shell_execute_command_core(char *command);   /* dispatch only */
+void shell_execute_command_async(char *command);  /* queue on the worker task */
+bool shell_command_ota_is_pending(void);
+```
+- `shell_execute_command()` is the full pipeline and the correct entry point for nested
+  contexts (`if`, `for`, pipes, batch lines) so they inherit expansion and redirection. The
+  batch engine reaches it through `batch_command_ops_t` rather than including `command.h`.
+- `shell_execute_command_core()` skips expansion and redirection; use it only when the caller
+  has already performed both.
+- `shell_execute_command_async()` is what the LVGL input path uses, so heavy commands never
+  run on the event-callback stack.
+
+### State accessors
+```c
+int         command_get_volume_percent(void);
+esp_err_t   command_battery_read(int *battery_mv, int *percent, int *raw, int *gpio_mv);
+```
+- These are the concrete implementations behind two of the `shell_command_ops_t` hooks. The
+  `get_cwd` and `sd_is_mounted` hooks are satisfied by `shell_get_cwd()` and
+  `storage_sd_is_mounted()` from `components/storage/`. Any output pointer passed to
+  `command_battery_read()` may be `NULL`.
+
+### Lifecycle
+```c
+void command_init(void);           /* storage_init() + batch_init(), then registers both ops tables */
+bool command_is_initialized(void);
+```
+- `command_init()` brings up `components/storage/` and `components/batch/` before registering
+  `batch_command_ops_t` and `shell_command_ops_t`, so no dispatch can observe uninitialized state.
+
+## Storage Module API
+
+Declared in `components/storage/storage.h` and `components/storage/storage_commands.h`.
+
+### SD session
+```c
+typedef struct { bool mounted_here; } shell_sd_session_t;
+
+esp_err_t shell_sd_begin(shell_sd_session_t *session);
+void      shell_sd_end(shell_sd_session_t *session, const char *operation);
+bool      storage_sd_is_mounted(void);
+void      shell_command_sd_eject(void);
+```
+- `shell_sd_begin()` is the only mount path in the firmware. It returns `ESP_OK` when the card is
+  usable, `ESP_ERR_INVALID_STATE` when the card was explicitly ejected, or the BSP mount error.
+- The mount is persistent: `shell_sd_end()` deliberately does not unmount. It exists so every
+  command has a symmetric cleanup point. Only `shell_command_sd_eject()` tears the mount down.
+- Every `shell_sd_begin()` must have a matching `shell_sd_end()` on every return path.
+
+### Path resolution and conversion
+```c
+esp_err_t   shell_sd_resolve_path(const char *input, char *output, size_t output_size);
+esp_err_t   shell_fs_resolve_path(const char *input, char *output, size_t output_size);
+esp_err_t   shell_resolve_target_from_source(const char *source_path, const char *target_input,
+                                             char *target_path, size_t target_path_size);
+esp_err_t   shell_sd_stat_path(const char *path, struct stat *st);
+esp_err_t   shell_sd_fresult_to_esp_err(FRESULT result);
+esp_err_t   shell_sd_vfs_to_fatfs_path(const char *vfs_path, char *fatfs_path, size_t size);
+bool        shell_path_has_directory_component(const char *path);
+bool        shell_path_has_extension(const char *path, const char *extension);
+```
+- `shell_sd_resolve_path()` resolves against the SD root; `shell_fs_resolve_path()` resolves
+  against the current working directory and collapses `.` and `..`.
+- `shell_sd_vfs_to_fatfs_path()` is required for listings because the direct FATFS API exposes
+  long file names and the 8.3 alternate name that POSIX `dirent` does not.
+
+### Formatting, matching, and cwd
+```c
+void        shell_sd_format_size(uint64_t size_bytes, char *output, size_t output_size);
+const char *shell_sd_entry_type(const struct stat *st);
+bool        shell_wildcard_match(const char *pattern, const char *name);
+const char *shell_get_cwd(void);
+void        storage_set_cwd(const char *absolute_path);
+void        shell_fs_print_cwd(void);
+```
+
+### Shared file operations
+```c
+esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path);
+esp_err_t storage_copy_attributes(const char *source_path, const char *dest_path);
+esp_err_t shell_list_directory_path(const char *normalized_path);
+esp_err_t shell_print_file_text(const char *normalized_path);
+esp_err_t shell_write_redirect_output(const char *path, const char *text, bool append_mode);
+```
+- Each opens and closes its own guarded SD session.
+- `shell_write_redirect_output()` is what the command pipeline calls for `>` and `>>`.
+- `storage_copy_attributes()` carries R/H/S/A between two files. `shell_fs_copy_file()` calls
+  it automatically after the data is written, so every copy path inherits it; call it directly
+  only when copying something the shared helper does not handle, such as a directory.
+
+### Volume capacity and guardrails
+```c
+typedef struct {
+    uint64_t total_bytes;
+    uint64_t free_bytes;
+    uint64_t used_bytes;
+    uint32_t cluster_bytes;
+    uint32_t total_clusters;
+    uint32_t free_clusters;
+} storage_space_info_t;
+
+esp_err_t storage_get_space_info(storage_space_info_t *info_out);
+bool      storage_check_free_space(uint64_t needed_bytes, uint64_t reclaim_bytes,
+                                   const char *operation);
+bool      storage_paths_are_same(const char *left, const char *right);
+uint64_t  storage_get_file_size(const char *resolved_path);
+```
+- `storage_get_space_info()` opens its own guarded session, so the caller does not need one.
+  Backed by `f_getfree()`; handles both FATFS sector-size build configurations.
+- `storage_check_free_space()` enforces `P4_CONFIG_STORAGE_FREE_MARGIN_BYTES`. Pass the size of
+  a destination about to be truncated as `reclaim_bytes` so an in-place overwrite is not
+  charged twice. Prints the refusal message itself and returns false. When the capacity query
+  fails it returns true rather than blocking a legitimate write on a diagnostic failure.
+- `storage_paths_are_same()` compares two already-resolved paths case-insensitively, matching
+  FAT. Every copy-like command must call it before opening the destination for truncation.
+- Any new command that writes a file must use these; see the rules in `ai-context.md`.
+
+### Input redirection
+```c
+void        storage_set_input_redirect(const char *resolved_path);
+const char *storage_get_input_redirect(void);
+void        storage_clear_input_redirect(void);
+esp_err_t   storage_resolve_input_source(const char *argument, char *output, size_t output_size);
+```
+- One slot serves both the `<` operator and each `|` pipe stage, so `sort < f.txt` and
+  `type f.txt | sort` reach the same code path in the text-processing commands.
+- `storage_resolve_input_source()` prefers an explicit filename argument and falls back to the
+  pending redirection, returning `ESP_ERR_NOT_FOUND` when neither exists.
+- The slot belongs to exactly one command. `shell_execute_command()` clears it after dispatch,
+  including when the dispatch fails.
+
+### DOS file commands
+Declared in `storage_commands.h`; all are called directly by the dispatcher.
+```c
+void shell_command_cd(int argc, char **argv);
+void shell_command_dir(int argc, char **argv);
+void shell_command_tree(int argc, char **argv);
+void shell_command_copy(int argc, char **argv);
+void shell_command_move(int argc, char **argv);
+void shell_command_del(int argc, char **argv);
+void shell_command_rename(int argc, char **argv, const char *verb);
+void shell_command_mkdir(int argc, char **argv);
+void shell_command_rmdir(int argc, char **argv);
+void shell_command_type_file(int argc, char **argv);
+void shell_command_write_file(int argc, char **argv, bool append_mode);
+void shell_command_touch(int argc, char **argv);
+void shell_command_attrib(int argc, char **argv);
+void shell_command_label(int argc, char **argv);
+void shell_command_xcopy(int argc, char **argv);
+void shell_command_find(int argc, char **argv);    /* /I /N /C /V */
+void shell_command_more(int argc, char **argv);    /* keypress paging, Q quits */
+void shell_command_fc(int argc, char **argv);
+void shell_command_sort(int argc, char **argv);    /* /R /I /U */
+void shell_command_sd(char *command);   /* receives the original unsplit line */
+
+void shell_command_chkdsk(int argc, char **argv);  /* [path] [/F] */
+void shell_command_format(int argc, char **argv);  /* [/FS:type] [/V:label] [/Q] */
+```
+- `shell_command_dir()` accepts `/W` `/P` `/S` `/B` `/L` `/A:attrs` `/O:order`, buffers each
+  level on the heap for sorting, and closes with per-directory counts, a `/S` grand total, and
+  free space.
+- `shell_command_chkdsk()` is read-only: it reports capacity and, with `/F`, verifies every
+  directory is readable. It never rewrites FAT structures.
+- `shell_command_format()` requires the exact `P4_CONFIG_FORMAT_CONFIRM_WORD` through the
+  shell key queue and refuses when `shell_key_input_available()` is false.
+- `shell_command_tree()` accepts `/F` (include files) and `/A` (ASCII connectors), recurses to
+  `P4_CONFIG_TREE_DEPTH_MAX`, and buffers each directory level on the heap.
+- `find`, `more`, and `sort` read the pending input-redirection source when no filename
+  argument is supplied.
+- All of them resolve relative paths and run inside a guarded SD session.
+
+### Lifecycle
+```c
+void storage_init(void);          /* resets cwd to the SD mount point and clears mount tracking */
+bool storage_is_initialized(void);
+```
+
+## Batch Module API
+
+Declared in `components/batch/batch.h`.
+
+### Command pipeline hook
+```c
+typedef struct {
+    void (*execute_command)(char *command);
+} batch_command_ops_t;
+
+void batch_register_command_ops(const batch_command_ops_t *ops);
+```
+- Registered once by `command_init()`. Passing `NULL` clears the table.
+- Every nested context (`if` bodies, `for` bodies, pipe stages, batch file lines) runs through
+  this hook so it inherits variable expansion and output redirection. The hook is NULL-checked;
+  if it is unset the batch engine prints an explicit message instead of crashing.
+
+### Environment and expansion
+```c
+const char *shell_env_get(const char *name);
+esp_err_t   shell_env_set(const char *name, const char *value);
+void        shell_expand_variables(const char *input, char *output, size_t output_size);
+```
+- Names are normalized to upper case and must be alphanumeric plus underscore. Setting an empty
+  or `NULL` value clears the slot. `shell_env_set()` returns `ESP_ERR_NO_MEM` when all 24 slots
+  are used.
+- `shell_expand_variables()` handles `%VAR%`, `%0` (script name), `%1`..`%9`, `%*` (all
+  arguments), and `%%` → `%`. Unknown names are left untouched.
+
+### Arithmetic expressions
+```c
+bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char **error_out);
+```
+- Recursive-descent evaluator over 32-bit signed integers with the COMMAND.COM operator set
+  and precedence: `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`, unary `- ~ !`, and parentheses.
+- A bare identifier reads an environment variable; an undefined name evaluates to 0, as in
+  DOS. Numbers accept decimal, `0x` hex, and leading-zero octal.
+- Returns false with a static reason in `error_out` on divide by zero, `INT32_MIN / -1`
+  overflow, unbalanced parentheses, a malformed number, or trailing characters.
+- Backs `set /a`, including its compound assignment operators. Deliberately refuses to consume
+  `&&` and `||` so an expression cannot swallow a command-chain separator.
+
+### Errorlevel
+```c
+int  batch_get_errorlevel(void);
+void batch_set_errorlevel(int level);
+```
+- `choice` sets it to the 1-based index of the chosen key; `if errorlevel N` reads it.
+- `set /a` and `set /p` set it to 1 on failure and 0 on success.
+
+### Batch engine
+```c
+bool      shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t size);
+esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv);
+void      shell_execute_pipe(char *command);
+```
+- `shell_resolve_batch_path()` tries the literal name, then `<name>.bat`, then each
+  `;`-separated PATH entry with both forms.
+- `shell_execute_batch_file()` returns `ESP_ERR_INVALID_STATE` past 4 nesting levels and
+  `ESP_ERR_NOT_FOUND` when the file cannot be opened. On return it unwinds any `setlocal`
+  scope the file left open and resolves the pending `exit` stop mode.
+- `shell_execute_pipe()` splits on unquoted `|` into up to `P4_CONFIG_PIPE_STAGE_MAX` stages,
+  spools each stage but the last to its own file, hands it to the next stage through the
+  storage input-redirection slot, and removes every spool file on every exit path.
+
+### Batch language commands
+```c
+void shell_command_set(int argc, char **argv);   /* also handles /a and /p */
+void shell_command_path(int argc, char **argv);
+void shell_command_echo(int argc, char **argv);
+void shell_command_call(int argc, char **argv);
+void shell_command_if(int argc, char **argv);
+void shell_command_goto(int argc, char **argv);
+void shell_command_shift(int argc, char **argv);
+void shell_command_pause(int argc, char **argv);      /* blocks on a real keypress */
+void shell_command_choice(int argc, char **argv);     /* /C:list /N /T:c,secs /S */
+void shell_command_setlocal(int argc, char **argv);   /* pushes an environment snapshot */
+void shell_command_endlocal(int argc, char **argv);   /* pops the snapshot */
+void shell_command_exit(int argc, char **argv);       /* exit [/b] [code] */
+```
+- `pause` and `choice` use the shell core's key queue and fall back to a timed path when
+  `shell_key_input_available()` is false.
+- `setlocal` / `endlocal` maintain a stack of full environment snapshots up to
+  `P4_CONFIG_SETLOCAL_DEPTH_MAX`. Snapshotting the whole table means a restore correctly
+  reverts creations, modifications, and deletions in one step.
+- `exit /b [code]` leaves one batch file; a bare `exit [code]` unwinds every nested level.
+
+### Lifecycle
+```c
+void batch_init(void);          /* clears the environment, sets PATH=sd:/, resets errorlevel */
+bool batch_is_initialized(void);
+```
 
 ## ANSI/VT Module API
 
@@ -40,9 +536,37 @@ The ANSI module (`components/ansi/`) provides SGR (Select Graphic Rendition) esc
 - `int ansi_fg_bg_text(char *dst, size_t dst_size, int fg_code, int bg_code, const char *text)` — Wrap text in foreground + background SGR codes.
 - `int ansi_attr_text(char *dst, size_t dst_size, int attr_code, const char *text)` — Wrap text in attribute SGR codes.
 
+### Semantic Palette (`ansi_palette.h`)
+
+The single source of truth for what colour each category of shell output uses. Named
+macros expand to the `@`-specifiers below, so no command picks a colour by hand.
+
+| Macro | Category | Macro | Category |
+|-------|----------|-------|----------|
+| `SH_HEAD` | Section heading | `SH_VAL` | Important value |
+| `SH_SUBHEAD` | Sub-heading | `SH_NUM` | Number / size / percent |
+| `SH_LBL` | Field label | `SH_PATH` | Path or filename |
+| `SH_TEXT` | Body text | `SH_STR` | Quoted string |
+| `SH_MUTE` | Muted / timestamp | `SH_PROMPT` | Prompt accent |
+| `SH_OK` / `SH_OK_HI` | Success | `SH_CMD` | Command name |
+| `SH_ERR` / `SH_ERR_HI` | Error | `SH_USAGE` | Usage syntax |
+| `SH_WARN` / `SH_WARN_HI` | Warning | `SH_DESC` | Help description |
+| `SH_DIR` | Directory entry | `SH_NET_UP` / `SH_NET_DOWN` | Wi-Fi state |
+| `SH_FILE` | File entry | `SH_BT` | Bluetooth |
+| `SH_EXE` | Executable entry | `SH_USB_UP` / `SH_USB_DOWN` | USB state |
+| `SH_SIZE` / `SH_TIME` | Listing size / time | `SH_OTA` | OTA accent |
+| `SH_RST` | Reset | `SH_BOLD` | Bold |
+
+The macros are plain string literals, so the header adds no dependencies and the ansi
+module remains a leaf. Colours are compile-time defaults; there is no runtime theming.
+
+**Specifier traps the palette exists to hide**: `@k` is pure black and nearly invisible
+on the default background — muted text must use `@K`. `@B` is bold, not blue. `@E` is
+bright red. `@L` is bright blue.
+
 ### Shell Integration
 - `void shell_transcript_append_ansi(const char *text)` — Append ANSI-formatted text to transcript (strips ANSI for LVGL, passes through to UART).
-- `void shell_transcript_appendf_ansi(const char *format, ...)` — Append printf-style ANSI-formatted text to transcript.
+- `void shell_transcript_appendf_ansi(const char *format, ...)` — Append printf-style ANSI-formatted text to transcript. Honours printf flags, width, precision, and `l`/`ll` modifiers.
 
 ### ANSI Format Specifiers
 | Specifier | SGR Code | Meaning |
@@ -294,8 +818,45 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 - `networking_wifi_state_t networking_wifi_state(void)`
 - `esp_err_t networking_wifi_last_error(void)`
 - `bool networking_wifi_is_connected(void)`
+- `bool networking_wifi_get_rssi(int *rssi_out)`
 - `void networking_append_sysinfo_summary(void)`
-  - Status helpers used by the shell and `sysinfo` output.
+  - Status helpers used by the shell, the header status bar, `sysinfo`, and `debug`.
+  - `networking_wifi_get_rssi()` returns false when not associated or the query fails,
+    leaving `*rssi_out` untouched. It exists so no consumer needs to call
+    `esp_wifi_sta_get_ap_info()` directly.
+
+### Ownership rule
+
+Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, and NimBLE call in the firmware lives
+inside `components/networking/`. The single sanctioned exception is `components/c6ota/`,
+which drives `esp_hosted_slave_ota_*` because co-processor firmware update is its entire
+purpose. Anything else that needs networking state uses the accessors above; if a needed
+value is missing, add an accessor rather than reaching into the driver.
+
+Only the official Espressif path is used: `espressif/esp_hosted` for the transport and
+`espressif/esp_wifi_remote` for the Wi-Fi API.
+
+### Initialization order
+
+`networking_init()` starts a background task that runs this sequence. The order is
+load-bearing and documented in `networking.h`:
+
+```
+esp_hosted_init()
+  -> esp_hosted_connect_to_slave()
+  -> version compatibility gate
+  -> nvs_flash_init()            (erase-and-retry on a corrupt partition)
+  -> esp_netif_init()
+  -> esp_event_loop_create_default()
+  -> esp_netif_create_default_wifi_sta()
+  -> esp_wifi_init()             (via esp_wifi_remote)
+  -> event handler registration
+  -> esp_wifi_set_mode(WIFI_MODE_STA)
+  -> esp_wifi_start()
+```
+
+Hosted NimBLE is initialized separately and lazily by `bluetooth.c`. Station-only is a
+hard constraint enforced both in code and by disabling SoftAP in Kconfig.
 
 - `esp_err_t networking_wifi_wait_for_ota(void)`
 - `bool networking_wifi_is_starting(void)`
@@ -320,7 +881,7 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 
 - `bool bluetooth_is_enabled(void)`
 - `bool bluetooth_is_connected(void)`
-  - Read-only state helpers used by the header integration to show hosted BLE readiness without moving Bluetooth ownership back into `main/main.c`.
+  - Read-only state helpers used by the header status refresh in `components/shell/` to show hosted BLE readiness without moving Bluetooth ownership out of this module.
 
 ## USB API
 - `void usb_init(void)`
@@ -350,7 +911,7 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 - `bool usb_is_mounted(void)`
 - `bool usb_is_keyboard_attached(void)`
 - `bool usb_is_mouse_attached(void)`
-  - Read-only state helpers used by the header component integration in `main/main.c`.
+  - Read-only state helpers used by the header status refresh in `components/shell/`.
 
 - `void usb_register_keyboard_input_callback(usb_keyboard_input_cb_t cb)`
   - Register a callback to receive USB keyboard input events (press/release with key code and modifiers).
@@ -403,7 +964,7 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 - `bool c6ota_try_handle_input(const char *input)`
 - `bool c6ota_is_busy(void)`
 - `bool c6ota_is_confirmation_pending(void)`
-  - Shell-integration helpers used by `main/main.c` to keep the confirmation flow and `sysinfo` state outside the OTA implementation details.
+  - Shell-integration helpers used by `components/command/` (confirmation flow) and `components/shell/` (`sysinfo` state) to keep those concerns outside the OTA implementation details.
 
 ## Behavioral contract
 - Public shell command surfaces remain `wifi ...`, `bluetooth ...`, `usb ...`, and `c6ota <sd:/path/to/firmware.bin|http[s]://host/path.bin|default>`.

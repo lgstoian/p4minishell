@@ -1,16 +1,14 @@
 # This file was generated using idf.py save-defconfig. It can be edited manually.
-# Espressif IoT Development Framework (ESP-IDF) 5.5.3 Project Minimal Configuration
+# Espressif IoT Development Framework (ESP-IDF) 5.5.5 Project Minimal Configuration
 #
 CONFIG_IDF_TARGET="esp32p4"
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_SPEED_200M=y
-CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 CONFIG_CACHE_L2_CACHE_256KB=y
 CONFIG_CACHE_L2_CACHE_LINE_128B=y
 
@@ -23,6 +21,19 @@ CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_PM_ENABLE=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# app_main builds the full LVGL UI (windows_init -> transcript/input/keyboard
+# creation + transcript mirror printf) on the main task. The 3584-byte default
+# overflows with a stack protection fault in vfprintf during shell_build_ui;
+# 8192 matches the command worker task budget and gives the boot path headroom.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Wi-Fi/IP event handlers call the shell transcript (vsnprintf formatting) and
+# header notify hooks directly on the esp_event `sys_evt` task. The 2304-byte
+# default overflows with a stack protection fault in the vfprintf machinery
+# right after esp_wifi_start(); 8192 gives the handler path real headroom.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
+
 
 # ESP-Hosted on ESP32-P4 with ESP32-C6 co-processor over SDIO
 CONFIG_ESP_HOSTED_ENABLED=y
@@ -64,3 +75,22 @@ CONFIG_USB_HOST_RESUME_HOLD_MS=30
 CONFIG_USB_HOST_RESUME_RECOVERY_MS=20
 CONFIG_USB_HOST_SUSPEND_ENTRY_MS=20
 CONFIG_USB_OTG_SUPPORTED=y
+
+# Station-only Wi-Fi profile. The networking module always calls
+# esp_wifi_set_mode(WIFI_MODE_STA); disabling SoftAP support here makes the
+# constraint structural rather than conventional, and reclaims the AP code
+# path from the image.
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+# esp_wifi_remote mirrors the Wi-Fi Kconfig under its own WIFI_RMT_ prefix, and
+# on the hosted path that mirror is the one that matters. Both must be set.
+CONFIG_WIFI_RMT_SOFTAP_SUPPORT=n
+
+# Image-budget constraints. These were previously only in the generated
+# sdkconfig, so regenerating it silently reverted them to the ESP-IDF defaults
+# and grew the image. Pinning them here makes them durable.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+
+# PSRAM XIP instruction/rodata mapping must stay disabled: enabling it
+# overflows the flash/PSRAM budget at link time on this board.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=n

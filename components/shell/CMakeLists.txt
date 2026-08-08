@@ -1,4 +1,4 @@
-﻿idf_component_register(
+idf_component_register(
     SRCS "shell.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
