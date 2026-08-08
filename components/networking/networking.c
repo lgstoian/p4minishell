@@ -424,6 +424,22 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
     }
 
     if (version.major1 != ESP_HOSTED_VERSION_MAJOR_1 || version.minor1 != ESP_HOSTED_VERSION_MINOR_1) {
+#if P4_CONFIG_HOSTED_SKIP_VERSION_GATE
+        networking_schedulef("[wifi] hosted version mismatch (gate skipped): host %u.%u.%u, C6 %u.%u.%u\n",
+                             ESP_HOSTED_VERSION_MAJOR_1,
+                             ESP_HOSTED_VERSION_MINOR_1,
+                             ESP_HOSTED_VERSION_PATCH_1,
+                             version.major1,
+                             version.minor1,
+                             version.patch1);
+        networking_record_warningf("Hosted version mismatch (gate skipped): host %u.%u.%u vs C6 %u.%u.%u",
+                                   ESP_HOSTED_VERSION_MAJOR_1,
+                                   ESP_HOSTED_VERSION_MINOR_1,
+                                   ESP_HOSTED_VERSION_PATCH_1,
+                                   version.major1,
+                                   version.minor1,
+                                   version.patch1);
+#else
         networking_wifi_set_detail("ESP-Hosted host %u.%u.%u requires ESP32-C6 firmware %u.%u.x, but the co-processor reports %u.%u.%u. Flash the matching hosted slave build before retrying Wi-Fi.",
                                    ESP_HOSTED_VERSION_MAJOR_1,
                                    ESP_HOSTED_VERSION_MINOR_1,
@@ -449,6 +465,7 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
                                    version.minor1,
                                    version.patch1);
         return ESP_ERR_INVALID_STATE;
+#endif
     }
 
     networking_record_infof("Hosted firmware compatible: host %u.%u.%u, C6 %u.%u.%u",

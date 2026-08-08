@@ -216,6 +216,14 @@ wifi:
     value: "CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED"
     type: macro
     description: "Compile-time guard for Wi-Fi runtime code"
+  hosted_skip_version_gate:
+    value: 0
+    type: bool
+    description: >-
+      Skip ESP-Hosted version compatibility gate. When 1, the Wi-Fi and
+      Bluetooth init paths do not reject C6 firmware version mismatches.
+      Useful for development and testing with mismatched host/co-processor
+      firmware. Set to 0 in production to enforce the version gate.
 
 # ---- Bluetooth ----
 bluetooth:

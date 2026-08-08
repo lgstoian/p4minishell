@@ -138,6 +138,51 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   `@k`/`@K` descriptions to match the implementation (standard black vs bright
   black). Added `@@` literal escape to the documented table.
 
+### SDK — ESP-Hosted version gate configurable
+
+- Added `P4_CONFIG_HOSTED_SKIP_VERSION_GATE` (default 0) to
+  `p4minishell_config.h`. When set to 1, the Wi-Fi and Bluetooth init paths
+  do not reject C6 firmware version mismatches — mismatches are logged as
+  warnings instead of returning `ESP_ERR_INVALID_STATE`. Useful for
+  development and testing with mismatched host/co-processor firmware. Both
+  `networking_wifi_validate_hosted_version()` in `networking.c` and the
+  bluetooth version check in `bluetooth.c` respect this config. Documented
+  in `p4minishell_config.yaml` under `wifi.hosted_skip_version_gate`.
+
+### Testing — variable expansion and debug log coverage
+
+- Added `test/main/test_shell_variables.c` with nine test functions covering
+  `shell_expand_variables()`: environment variable expansion (`%VAR%`),
+  undefined variables, empty variable names (`%%`), single-quote literal
+  protection, double-quote expansion, caret-escape passthrough, multiple
+  variables, output buffer truncation, NULL safety, and batch argument
+  expansion without an active frame.
+- Added `test/main/test_shell_debug_log.c` with six test functions covering
+  the debug log ring buffer and warning counter: `shell_debug_log_push()`,
+  `shell_record_warningf()`, `shell_record_errorf()`, `shell_record_infof()`,
+  `shell_get_warning_count()`, ring overflow behavior, and NULL safety.
+- Updated `test/main/test_main.c` and `test/main/CMakeLists.txt` to register
+  the new test suites.
+
+### Optimization — persistent command worker task
+
+- Replaced per-command FreeRTOS task creation with a persistent worker task
+  (`command_worker_task`) and a FreeRTOS queue (`s_command_queue`, depth 4).
+  `shell_execute_command_async()` now posts commands to the queue via
+  `xQueueSend` instead of calling `xTaskCreate` + `calloc` for each command.
+  The worker task runs at `tskIDLE_PRIORITY + 2` and processes commands
+  sequentially. Eliminates ~1-2ms task-creation overhead per command and
+  reduces heap fragmentation from repeated task stack allocation. Full queues
+  are logged as warnings with the command dropped.
+
+### Optimization — SD I/O buffer size increased
+
+- Increased `P4_CONFIG_SD_IO_BUFFER_BYTES` from 128 to 512 bytes (matching
+  `P4_CONFIG_FILE_IO_BUFFER_BYTES` for consistency). Reduces the number of
+  small read/write calls for `storage_copy_file()`, pipe spool operations,
+  and `sd cat`. Stack impact is +384 bytes per function — well within the
+  8192-byte command worker task budget.
+
 ---
 
 ## [0.24.0] - 2026-08-08

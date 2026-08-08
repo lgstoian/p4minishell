@@ -215,6 +215,12 @@
 #define P4_CONFIG_WIFI_RUNTIME_ENABLED \
     (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED)
 
+/** Skip ESP-Hosted version compatibility gate. When 1, the Wi-Fi init path
+ *  does not reject C6 firmware version mismatches. Useful for development
+ *  and testing with mismatched host/co-processor firmware. Set to 0 in
+ *  production to enforce the version gate. */
+#define P4_CONFIG_HOSTED_SKIP_VERSION_GATE  0
+
 /* ========================================================================
  * BLUETOOTH PARAMETERS
  * ======================================================================== */
@@ -262,8 +268,10 @@
 /** Maximum preview size in bytes for sd cat. */
 #define P4_CONFIG_SD_CAT_MAX_BYTES           8192
 
-/** I/O buffer size for SD file operations. */
-#define P4_CONFIG_SD_IO_BUFFER_BYTES         128
+/** I/O buffer size for SD file operations. Larger buffers reduce the number
+ *  of small read/write calls for copy, pipe, and sd cat operations. Matches
+ *  P4_CONFIG_FILE_IO_BUFFER_BYTES for consistency. */
+#define P4_CONFIG_SD_IO_BUFFER_BYTES         512
 
 /* ========================================================================
  * DIRECTORY LISTING AND STORAGE GUARDRAILS

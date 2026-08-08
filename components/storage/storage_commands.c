@@ -3218,49 +3218,38 @@ cleanup:
 void shell_command_sd(char *command)
 {
     char *argv[5];
-    int argc = shell_split_args(command, argv, 5);
+    int argc;
+    char *cmd_copy = (command != NULL) ? strdup(command) : NULL;
+
+    /* shell_split_args() writes token terminators into the buffer in place,
+     * so `command` would be truncated to just "sd" for the sub-handlers.
+     * Hand them a preserved heap copy instead. */
+    argc = shell_split_args(command, argv, 5);
 
     if (argc <= 1) {
         shell_command_sd_info();
         shell_sd_print_usage();
-        return;
-    }
-
-    if (strcmp(argv[1], "help") == 0) {
+    } else if (strcmp(argv[1], "help") == 0) {
         shell_sd_print_usage();
-        return;
-    }
-
-    if (strcmp(argv[1], "info") == 0) {
+    } else if (strcmp(argv[1], "info") == 0) {
         if (argc != 2) {
             shell_sd_print_usage();
             shell_record_warningf("sd", "Usage error for sd info command");
-            return;
+        } else {
+            shell_command_sd_info();
         }
-        shell_command_sd_info();
-        return;
-    }
-
-    if (strcmp(argv[1], "ls") == 0) {
-        shell_command_sd_ls(command);
-        return;
-    }
-
-    if (strcmp(argv[1], "stat") == 0) {
-        shell_command_sd_stat(command);
-        return;
-    }
-
-    if (strcmp(argv[1], "cat") == 0) {
-        shell_command_sd_cat(command);
-        return;
-    }
-
-    if (strcmp(argv[1], "eject") == 0) {
+    } else if (strcmp(argv[1], "ls") == 0) {
+        shell_command_sd_ls(cmd_copy);
+    } else if (strcmp(argv[1], "stat") == 0) {
+        shell_command_sd_stat(cmd_copy);
+    } else if (strcmp(argv[1], "cat") == 0) {
+        shell_command_sd_cat(cmd_copy);
+    } else if (strcmp(argv[1], "eject") == 0) {
         shell_command_sd_eject();
-        return;
+    } else {
+        shell_sd_print_usage();
+        shell_record_warningf("sd", "Unknown sd subcommand: %s", argv[1]);
     }
 
-    shell_sd_print_usage();
-    shell_record_warningf("sd", "Unknown sd subcommand: %s", argv[1]);
+    free(cmd_copy);
 }

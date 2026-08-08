@@ -50,10 +50,12 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -96,6 +98,14 @@ typedef struct {
  * ======================================================================== */
 
 static bool s_initialized = false;
+
+/** Persistent worker task and its command queue. Replaces the per-command
+ *  task creation pattern: commands are posted to the queue and processed
+ *  sequentially by a single long-lived task, eliminating task-creation
+ *  overhead (~1-2ms per command) and reducing heap fragmentation. */
+#define SHELL_COMMAND_QUEUE_DEPTH  4
+static QueueHandle_t s_command_queue = NULL;
+static TaskHandle_t s_command_worker_handle = NULL;
 
 /* Hardware handles */
 static esp_codec_dev_handle_t s_speaker_dev;
@@ -1030,6 +1040,7 @@ bool shell_execute_command_core(char *command)
     char *argv[SHELL_ARGV_MAX];
     int argc;
     char *trimmed;
+    char *family_command = NULL;
 
     if (command == NULL) {
         return false;
@@ -1052,8 +1063,33 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* Module-routed family handlers (wifi, bluetooth/bt, usb, sd) parse the
+     * full command line themselves, so they need the original text. The
+     * shell_split_args() call below writes token terminators into the buffer
+     * in place — after it runs, `command` would be truncated to the first
+     * token ("wifi status" -> "wifi"). Preserve a heap copy of the trimmed
+     * line for those branches. The copy is only made for family prefixes, and
+     * every family branch frees it, so normal commands never allocate. */
+    if (strncmp(trimmed, "wifi", 4) == 0 &&
+        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+        family_command = strdup(trimmed);
+    } else if (strncmp(trimmed, "bluetooth", 9) == 0 &&
+               (trimmed[9] == '\0' || isspace((unsigned char)trimmed[9]))) {
+        family_command = strdup(trimmed);
+    } else if (strncmp(trimmed, "bt", 2) == 0 &&
+               (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
+        family_command = strdup(trimmed);
+    } else if (strncmp(trimmed, "usb", 3) == 0 &&
+               (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]))) {
+        family_command = strdup(trimmed);
+    } else if (strncmp(trimmed, "sd", 2) == 0 &&
+               (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
+        family_command = strdup(trimmed);
+    }
+
     argc = shell_split_args(trimmed, argv, SHELL_ARGV_MAX);
     if (argc == 0) {
+        free(family_command);
         return false;
     }
 
@@ -1153,32 +1189,38 @@ bool shell_execute_command_core(char *command)
      * These receive the original unsplit line because their own parsers
      * need the full text (for example `wifi connect <ssid> <password>`). */
     if (shell_text_equals_ignore_case(argv[0], "wifi")) {
-        networking_handle_wifi_command(command);
+        networking_handle_wifi_command(family_command);
+        free(family_command);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "bluetooth") || shell_text_equals_ignore_case(argv[0], "bt")) {
-        bluetooth_handle_command(command);
+        bluetooth_handle_command(family_command);
+        free(family_command);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "usb")) {
-        usb_handle_command(command);
+        usb_handle_command(family_command);
+        free(family_command);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "c6ota")) {
+        free(family_command);
         c6ota_perform(argc >= 2 ? argv[1] : NULL);
         return true;
     }
 
     /* ---- SD tools ---- */
     if (shell_text_equals_ignore_case(argv[0], "sd")) {
-        shell_command_sd(command);
+        shell_command_sd(family_command);
+        free(family_command);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "sdeject")) {
+        free(family_command);
         shell_command_sd_eject();
         return true;
     }
@@ -1391,6 +1433,7 @@ bool shell_execute_command_core(char *command)
         }
     }
 
+    free(family_command);
     return false;
 }
 
@@ -1613,48 +1656,40 @@ void shell_execute_command(char *command)
     free(chain_buffer);
 }
 
-/** Worker-task entry point: runs one queued command, then exits. */
-static void command_task(void *arg)
+/** Persistent worker task: waits on the command queue and executes commands
+ *  sequentially. This replaces the per-command task creation pattern. */
+static void command_worker_task(void *arg)
 {
-    command_request_t *request = (command_request_t *)arg;
+    command_request_t request;
 
-    if (request == NULL) {
-        vTaskDelete(NULL);
-        return;
+    (void)arg;
+
+    while (true) {
+        if (xQueueReceive(s_command_queue, &request, portMAX_DELAY) == pdTRUE) {
+            shell_execute_command(request.command);
+        }
     }
-
-    shell_execute_command(request->command);
-    free(request);
-    vTaskDelete(NULL);
 }
 
 void shell_execute_command_async(char *command)
 {
-    command_request_t *request;
+    command_request_t request;
 
     if (command == NULL || command[0] == '\0') {
         return;
     }
 
-    request = (command_request_t *)calloc(1, sizeof(*request));
-    if (request == NULL) {
-        shell_transcript_appendf_ansi(SH_ERR "shell:" SH_RST " out of memory starting command task\n");
-        shell_record_errorf("shell", ESP_ERR_NO_MEM, "Out of memory starting command task");
+    if (s_command_queue == NULL) {
+        shell_print_error("shell: command worker not initialized");
+        shell_record_errorf("shell", ESP_FAIL, "Command worker not initialized");
         return;
     }
 
-    snprintf(request->command, sizeof(request->command), "%s", command);
+    snprintf(request.command, sizeof(request.command), "%s", command);
 
-    /* Heavy commands must not run on the LVGL event-callback stack. */
-    if (xTaskCreate(command_task,
-                    "shell_cmd",
-                    SHELL_COMMAND_TASK_STACK_BYTES,
-                    request,
-                    tskIDLE_PRIORITY + 2,
-                    NULL) != pdPASS) {
-        free(request);
-        shell_print_error("shell: failed to start command task");
-        shell_record_errorf("shell", ESP_FAIL, "Failed to start command task");
+    if (xQueueSend(s_command_queue, &request, 0) != pdTRUE) {
+        shell_print_error("shell: command queue full, command dropped");
+        shell_record_warningf("shell", "Command queue full, dropped: %s", command);
     }
 }
 
@@ -1713,6 +1748,24 @@ void command_init(void)
      * batch owns the environment table, PATH, and errorlevel. */
     storage_init();
     batch_init();
+
+    /* Create the persistent command queue and worker task. The queue
+     * replaces per-command task creation: commands are posted to the
+     * queue and processed sequentially by one long-lived task, eliminating
+     * task-creation overhead and heap fragmentation. */
+    s_command_queue = xQueueCreate(SHELL_COMMAND_QUEUE_DEPTH, sizeof(command_request_t));
+    if (s_command_queue == NULL) {
+        ESP_LOGE(COMMAND_TAG, "Failed to create command queue");
+    } else if (xTaskCreate(command_worker_task,
+                           "shell_cmd",
+                           SHELL_COMMAND_TASK_STACK_BYTES,
+                           NULL,
+                           tskIDLE_PRIORITY + 2,
+                           &s_command_worker_handle) != pdPASS) {
+        ESP_LOGE(COMMAND_TAG, "Failed to create command worker task");
+        vQueueDelete(s_command_queue);
+        s_command_queue = NULL;
+    }
 
     /* Publish the command pipeline to the batch engine so nested contexts
      * (if bodies, for bodies, pipe stages, batch lines) inherit variable

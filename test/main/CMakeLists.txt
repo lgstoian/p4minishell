@@ -10,6 +10,8 @@ idf_component_register(
         test_batch_expr.c
         test_wifi_state.c
         test_ansi_format.c
+        test_shell_variables.c
+        test_shell_debug_log.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"

@@ -311,28 +311,28 @@ void shell_transcript_appendf_ansi(const char *format, ...)
 static void shell_print_coloured(const char *colour, const char *format,
                                  bool newline, va_list args)
 {
-    /* The body is rendered into a smaller buffer than the line it is wrapped
-     * into, leaving guaranteed room for the colour prefix, the reset, and the
+    /* The body is rendered into a smaller buffer than the composed line so
+     * there is guaranteed room for the colour prefix, the reset, and the
      * optional trailing newline. */
     char body[SHELL_SEMANTIC_BODY_BYTES];
-    char line[P4_CONFIG_ANSI_BUFFER_BYTES];
+    char fmt[P4_CONFIG_ANSI_BUFFER_BYTES];
 
     if (format == NULL) {
         return;
     }
 
     /* Render the caller's text with the real printf, so width and precision
-     * flags work; ansi_vformat() understands only bare specifiers. Doing it
-     * first also means a '%s' value containing '@' can never be mistaken for
-     * a colour specifier. */
+     * flags work. Doing it first also means a '%s' value containing '@' can
+     * never be mistaken for a colour specifier. */
     vsnprintf(body, sizeof(body), format, args);
 
-    if (newline) {
-        snprintf(line, sizeof(line), "%s%s%s\n", colour, body, SH_RST);
-    } else {
-        snprintf(line, sizeof(line), "%s%s%s", colour, body, SH_RST);
-    }
-    shell_transcript_append_ansi(line);
+    /* The SH_* macros expand to '@'-specifiers, which ansi_vformat (reached
+     * through shell_transcript_appendf_ansi) converts to real SGR escapes.
+     * The colour and reset must be literal in the format string for that
+     * conversion to happen; the rendered body is passed as a %s argument so
+     * any literal '%' in it stays data. */
+    snprintf(fmt, sizeof(fmt), "%s%%s%s%s", colour, SH_RST, newline ? "\n" : "");
+    shell_transcript_appendf_ansi(fmt, body);
 }
 
 void shell_print_heading(const char *format, ...)

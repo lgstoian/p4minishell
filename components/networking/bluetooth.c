@@ -494,8 +494,15 @@ static esp_err_t bluetooth_ensure_ready(void)
 
     if (s_bluetooth_state.fw_version.major1 != ESP_HOSTED_VERSION_MAJOR_1 ||
         s_bluetooth_state.fw_version.minor1 != ESP_HOSTED_VERSION_MINOR_1) {
+#if P4_CONFIG_HOSTED_SKIP_VERSION_GATE
+        ESP_LOGW("bluetooth", "Hosted version mismatch (gate skipped): host %u.%u.%u, C6 %u.%u.%u",
+                 ESP_HOSTED_VERSION_MAJOR_1, ESP_HOSTED_VERSION_MINOR_1, ESP_HOSTED_VERSION_PATCH_1,
+                 s_bluetooth_state.fw_version.major1, s_bluetooth_state.fw_version.minor1,
+                 s_bluetooth_state.fw_version.patch1);
+#else
         s_bluetooth_state.last_error = ESP_ERR_INVALID_STATE;
         return ESP_ERR_INVALID_STATE;
+#endif
     }
 
     if (!s_bluetooth_state.controller_enabled) {

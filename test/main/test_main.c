@@ -54,6 +54,23 @@ extern void test_batch_expr_bitwise(void);
 extern void test_batch_expr_variables(void);
 extern void test_batch_expr_errors(void);
 
+extern void test_variable_expansion_env_var(void);
+extern void test_variable_expansion_empty_name(void);
+extern void test_variable_expansion_single_quotes(void);
+extern void test_variable_expansion_caret_escape(void);
+extern void test_variable_expansion_multiple(void);
+extern void test_variable_expansion_output_truncated(void);
+extern void test_variable_expansion_null_input(void);
+extern void test_variable_expansion_null_output(void);
+extern void test_variable_expansion_no_batch_frame(void);
+
+extern void test_debug_log_push_and_read(void);
+extern void test_debug_log_warning_count(void);
+extern void test_debug_log_error_does_not_increment_warning(void);
+extern void test_debug_log_info_does_not_increment_warning(void);
+extern void test_debug_log_ring_overflow(void);
+extern void test_debug_log_push_null(void);
+
 extern void test_wifi_state_transitions(void);
 extern void test_wifi_mutex(void);
 
@@ -136,6 +153,29 @@ void app_main(void)
     RUN_TEST(test_batch_expr_bitwise);
     RUN_TEST(test_batch_expr_variables);
     RUN_TEST(test_batch_expr_errors);
+    UNITY_END();
+
+    /* Variable expansion tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_variable_expansion_env_var);
+    RUN_TEST(test_variable_expansion_empty_name);
+    RUN_TEST(test_variable_expansion_single_quotes);
+    RUN_TEST(test_variable_expansion_caret_escape);
+    RUN_TEST(test_variable_expansion_multiple);
+    RUN_TEST(test_variable_expansion_output_truncated);
+    RUN_TEST(test_variable_expansion_null_input);
+    RUN_TEST(test_variable_expansion_null_output);
+    RUN_TEST(test_variable_expansion_no_batch_frame);
+    UNITY_END();
+
+    /* Debug log tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_debug_log_push_and_read);
+    RUN_TEST(test_debug_log_warning_count);
+    RUN_TEST(test_debug_log_error_does_not_increment_warning);
+    RUN_TEST(test_debug_log_info_does_not_increment_warning);
+    RUN_TEST(test_debug_log_ring_overflow);
+    RUN_TEST(test_debug_log_push_null);
     UNITY_END();
 
     /* Wi-Fi state machine tests */
