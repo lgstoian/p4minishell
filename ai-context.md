@@ -5,7 +5,7 @@
 - **Type**: Embedded DOS-style command shell
 - **Target**: ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO)
 - **Framework**: ESP-IDF v5.5.5
-- **UI**: LVGL 9.2.2 with JD9165 1024x600 display + GT911 touch
+- **UI**: LVGL 9.4.0 with JD9165 1024x600 display + GT911 touch
 
 ## Mandatory Reading Before Any Change
 1. changelog.md - version history and recent changes
@@ -108,6 +108,12 @@
   specifier. The palette is compile-time only: no runtime theming or user configuration.
 - Plain transcript appends mirror to UART; ANSI appends must NOT mirror the stripped copy or
   every colored line prints twice on the serial console
+- The on-screen transcript is an LVGL span group (`lv_spangroup`), not a textarea. Coloured
+  output reaches it through `windows_set_transcript_text()` (in `components/windows/`), which
+  parses the raw ANSI text into per-colour spans. That rebuild deletes/recreates spans, so it
+  is DEFERRED to an `lv_async_call` to avoid a use-after-free when the rebuild is triggered from
+  an LVGL event or during a redraw pass. Never call LVGL textarea APIs on the transcript, and
+  never rebuild the span group synchronously from an LVGL event context.
 - ALL debug logging MUST use `shell_record_errorf()` / `shell_record_warningf()` / `shell_record_infof()`
 - Command history MUST use `shell_store_command_history()` / `shell_recall_history()`
 - UART console MUST use `shell_uart_console_start()` / `shell_uart_console_write_text()`

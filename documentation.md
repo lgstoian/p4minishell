@@ -372,7 +372,8 @@ Provides SGR (Select Graphic Rendition) escape sequence processing for colored t
 - **SGR parsing**: Full ESC[...m sequence parser with state machine tracking
 - **Text attributes**: Bold, dim, italic, underline, blink, reverse, hidden, strikethrough
 - **Format string builder**: `ansi_format()` with `@`-prefixed color/attribute specifiers
-- **ANSI-to-plain stripping**: `ansi_strip_to_plain()` for LVGL transcript textarea
+- **ANSI-to-plain stripping**: `ansi_strip_to_plain()` for plain text/history; the on-screen
+  transcript keeps the ANSI and renders per-colour spans (`lv_spangroup`) via `ansi_process_text()`
 - **UART pass-through**: Raw ANSI codes forwarded to serial terminal for native rendering
 - **Configurable palette**: All 16 colors configurable via `P4_CONFIG_ANSI_*` macros
 - **Runtime palette modification**: `ansi_set_palette_color()` for dynamic color changes

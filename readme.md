@@ -2,15 +2,18 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.24.1 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.24.6 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
-P4MiniShell replaces the default LVGL demo UI with a persistent DOS-style shell surface built on LVGL 9.2.2. It provides a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi and Bluetooth on the C6, USB host support, and a real OTA maintenance path for the co-processor.
+P4MiniShell replaces the default LVGL demo UI with a persistent DOS-style shell surface built on LVGL 9.4.0. It provides a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi and Bluetooth on the C6, USB host support, and a real OTA maintenance path for the co-processor.
 
 **Color-coded output** - Every command uses the same built-in colour scheme by default, with
 nothing to configure. Colours are defined once in `components/ansi/ansi_palette.h` and applied
-automatically to both the on-screen transcript and the serial console:
+automatically to both the on-screen transcript and the serial console. On the display the
+transcript is an LVGL span group (`lv_spangroup`) where each coloured run of the ANSI text is
+rendered as its own span with an explicit text colour; the UART console receives the raw SGR
+escape sequences natively:
 - Bright green section headings, cyan field labels, bright white important values
 - Bright magenta numbers, sizes, and percentages; grey muted and secondary text
 - Green for success and connected, red for errors, yellow for warnings
@@ -74,7 +77,7 @@ the YAML to match.
 |-----------|--------|
 | **Host MCU** | ESP32-P4 |
 | **Co-processor** | ESP32-C6 over ESP-Hosted SDIO |
-| **Display** | JD9165 1024x600 MIPI-DSI via LVGL 9.2.2 |
+| **Display** | JD9165 1024x600 MIPI-DSI via LVGL 9.4.0 |
 | **Touch** | GT911 via I2C |
 | **Storage** | FATFS on SD with LFN support (255 chars) |
 | **Audio** | ES8311 codec via I2S |
@@ -86,8 +89,8 @@ the YAML to match.
 
 ## Key Features
 
-- **Touch-first shell UI**: Transcript textarea, prompt input line, on-screen keyboard, 10-command recall
-- **ANSI/VT color support**: PowerShell-inspired 16-color palette with SGR escape sequences (ESC[...m) for colored command output on both LVGL transcript and UART console
+- **Touch-first shell UI**: Transcript span group, prompt input line, on-screen keyboard, 10-command recall
+- **ANSI/VT color support**: PowerShell-inspired 16-color palette with SGR escape sequences (ESC[...m) for colored command output on both LVGL transcript (per-span colours) and UART console
 - **Serial console bridge**: `idf.py monitor` acts as interactive shell endpoint over UART/USB-Serial-JTAG
 - **Worker-task execution**: Heavy commands run off LVGL event stack to prevent overflow
 - **Guarded SD access**: All SD operations use shared mount/unmount with validation and bounded output

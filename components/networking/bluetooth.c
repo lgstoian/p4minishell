@@ -21,6 +21,7 @@
 #endif
 
 #include "bluetooth.h"
+#include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 
@@ -123,7 +124,7 @@ static void bluetooth_appendf(const char *format, ...)
     }
 
     va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    ansi_vformat(buffer, sizeof(buffer), format, args);
     va_end(args);
 
     if (s_host_ops.transcript_append_ansi != NULL) {
@@ -580,9 +581,21 @@ void bluetooth_init(const networking_host_ops_t *ops)
 
 void bluetooth_status(void)
 {
-    bluetooth_appendf(SH_LBL "bluetooth.hosted_ready:" SH_RST " %s" SH_RST "\n", s_bluetooth_state.hosted_ready ? SH_OK "yes" : SH_MUTE "no");
-    bluetooth_appendf(SH_LBL "bluetooth.controller:" SH_RST " %s" SH_RST "\n", s_bluetooth_state.controller_enabled ? SH_OK "enabled" : SH_MUTE "disabled");
-    bluetooth_appendf(SH_LBL "bluetooth.nimble:" SH_RST " %s" SH_RST "\n", s_bluetooth_state.nimble_initialized ? SH_OK "initialized" : SH_MUTE "off");
+    if (s_bluetooth_state.hosted_ready) {
+        bluetooth_appendf(SH_LBL "bluetooth.hosted_ready:" SH_RST " " SH_OK "yes" SH_RST "\n");
+    } else {
+        bluetooth_appendf(SH_LBL "bluetooth.hosted_ready:" SH_RST " " SH_MUTE "no" SH_RST "\n");
+    }
+    if (s_bluetooth_state.controller_enabled) {
+        bluetooth_appendf(SH_LBL "bluetooth.controller:" SH_RST " " SH_OK "enabled" SH_RST "\n");
+    } else {
+        bluetooth_appendf(SH_LBL "bluetooth.controller:" SH_RST " " SH_MUTE "disabled" SH_RST "\n");
+    }
+    if (s_bluetooth_state.nimble_initialized) {
+        bluetooth_appendf(SH_LBL "bluetooth.nimble:" SH_RST " " SH_OK "initialized" SH_RST "\n");
+    } else {
+        bluetooth_appendf(SH_LBL "bluetooth.nimble:" SH_RST " " SH_MUTE "off" SH_RST "\n");
+    }
     bluetooth_appendf("bluetooth.synced: %s\n", s_bluetooth_state.synced ? "yes" : "no");
     bluetooth_appendf("bluetooth.scan: %s\n", s_bluetooth_state.scan_active ? "active" : "idle");
     bluetooth_appendf("bluetooth.advertise: %s\n", s_bluetooth_state.advertising_active ? "on" : "off");

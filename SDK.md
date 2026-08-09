@@ -527,7 +527,8 @@ static void shell_input_line_event_cb(lv_event_t *event)
 - Use `shell_transcript_appendf_ansi()` for colored command output with `@`-prefixed format specifiers.
 - Color scheme: `@G` (bright green) for headers, `@C` (cyan) for field labels, `@g` (green) for success, `@r` (red) for errors, `@y` (yellow) for warnings.
 - The ANSI palette is configurable via `P4_CONFIG_ANSI_*` macros in `p4minishell_config.h`.
-- LVGL transcript textarea receives plain text (ANSI codes stripped); UART console receives raw ANSI for native terminal rendering.
+- LVGL transcript is a span group (`lv_spangroup`) that renders the ANSI colours as per-span
+  text colours; UART console receives the raw ANSI for native terminal rendering.
 - For new commands, always use `shell_transcript_appendf_ansi()` with appropriate color specifiers.
 - Never hardcode ANSI escape sequences in command output — use the `@`-prefixed format specifiers.
 - The `@R` specifier resets all attributes at the end of each output line.

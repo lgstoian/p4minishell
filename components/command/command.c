@@ -552,8 +552,14 @@ static void shell_command_battery(int argc, char **argv)
                                  raw,
                                  gpio_mv,
                                  battery_mv);
+        shell_transcript_appendf_ansi(SH_LBL "calibrated=" SH_RST "%s" SH_RST "\n",
+                                 s_battery_cali_ready ? "yes" : "no");
 #if CONFIG_PM_ENABLE
-        shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST "%s" SH_RST "\n", s_light_sleep_requested ? SH_OK "yes" : SH_MUTE "no");
+        if (s_light_sleep_requested) {
+            shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST SH_OK "yes" SH_RST "\n");
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST SH_MUTE "no" SH_RST "\n");
+        }
 #else
         shell_print_muted("battery.sleep: unavailable because CONFIG_PM_ENABLE is off in sdkconfig");
 #endif
@@ -562,7 +568,11 @@ static void shell_command_battery(int argc, char **argv)
 
     if (argc == 3 && shell_text_equals_ignore_case(argv[1], "sleep") &&
         shell_text_equals_ignore_case(argv[2], "status")) {
-        shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST "%s" SH_RST "\n", s_light_sleep_requested ? SH_OK "yes" : SH_MUTE "no");
+        if (s_light_sleep_requested) {
+            shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST SH_OK "yes" SH_RST "\n");
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST SH_MUTE "no" SH_RST "\n");
+        }
         return;
     }
 
@@ -587,7 +597,11 @@ static void shell_command_battery(int argc, char **argv)
         }
 
         s_light_sleep_requested = pm_config.light_sleep_enable;
-        shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep" SH_RST " %s" SH_RST "\n", s_light_sleep_requested ? SH_OK "enabled" : SH_MUTE "disabled");
+        if (s_light_sleep_requested) {
+            shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep" SH_RST " " SH_OK "enabled" SH_RST "\n");
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep" SH_RST " " SH_MUTE "disabled" SH_RST "\n");
+        }
 #else
         shell_print_muted("battery.sleep: unavailable because CONFIG_PM_ENABLE is off in sdkconfig");
 #endif
@@ -735,7 +749,9 @@ static void shell_command_date(int argc, char **argv)
     }
 
     if (month < 1 || month > 12 || day < 1 || day > 31 || year < 1970 || year > 2099) {
+        shell_print_usage("Usage: date [MM-DD-YYYY]");
         shell_transcript_append_text("date: value out of range (months 1-12, days 1-31, years 1970-2099)\n");
+        shell_record_warningf("date", "Out of range or wrong order (expected MM-DD-YYYY): %s", argv[1]);
         return;
     }
 

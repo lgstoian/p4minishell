@@ -159,7 +159,7 @@ dependencies:
     source:
       path: D:\p4minishell\managed_components\lvgl__lvgl
       type: local
-    version: 9.2.2
+    version: 9.4.0
 direct_dependencies:
 - espressif/cmake_utilities
 - espressif/esp_codec_dev
@@ -177,6 +177,6 @@ direct_dependencies:
 - espressif/wifi_remote_over_eppp
 - idf
 - lvgl/lvgl
-manifest_hash: d7147b236c7e282708b9a2604ca5992137aab5a36b111f0923cee39d9c7e6c50
+manifest_hash: ff62cd8a400b9b37e7b3270bd391225b34f79242c10864ef584e02abb2f58c44
 target: esp32p4
 version: 2.0.0

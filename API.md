@@ -603,7 +603,9 @@ The window manager (`components/windows/`) is the central layout controller for 
 - `bool windows_is_initialized(void)` — Check if the window manager is initialized.
 
 ### Window Object Accessors
-- `lv_obj_t *windows_get_transcript(void)` — Scrollable command output textarea
+- `lv_obj_t *windows_get_transcript(void)` — Scrollable command output (LVGL span group)
+- `void windows_set_transcript_text(const char *text)` — Set transcript from ANSI text
+  (parses it into per-colour spans; the rebuild is deferred to the LVGL task)
 - `lv_obj_t *windows_get_input_line(void)` — Single-line command entry textarea
 - `lv_obj_t *windows_get_keyboard(void)` — On-screen LVGL keyboard
 - `lv_obj_t *windows_get_prev_button(void)` — Previous history button

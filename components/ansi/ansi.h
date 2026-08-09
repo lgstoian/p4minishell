@@ -306,6 +306,18 @@ int ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args);
 void ansi_process_text(const char *text, ansi_segment_fn_t segment_fn, void *user_data);
 
 /**
+ * Convert a string containing real SGR escape sequences (as produced by
+ * ansi_vformat / the @-palette pipeline) into LVGL recolor markup
+ * (`#rrggbb text #`), suitable for an LVGL label with recolor enabled.
+ *
+ * @param src       Input text with ANSI SGR escapes.
+ * @param dst       Output buffer for the recolor-markup string.
+ * @param dst_size  Size of the output buffer.
+ * @return          Number of bytes written to dst.
+ */
+int ansi_to_lvgl_recolor(const char *src, char *dst, size_t dst_size);
+
+/**
  * Strip ANSI escape sequences entirely, returning only plain text.
  * Useful for UART console output where the terminal handles ANSI natively
  * (pass-through mode) or for plain-text logging.

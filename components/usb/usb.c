@@ -26,6 +26,7 @@
 #include "usb/usb_host.h"
 
 #include "usb.h"
+#include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 
@@ -207,7 +208,10 @@ static void usb_emit_syncf(const char *format, ...)
     va_list args;
 
     va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    /* Route through ansi_vformat so SH_* palette macros in the format string
+     * are converted to real SGR escapes — plain vsnprintf would leave the
+     * @-specifiers literal on the transcript and UART. */
+    ansi_vformat(buffer, sizeof(buffer), format, args);
     va_end(args);
     usb_host_transcript_append_text(buffer);
 }
@@ -1096,11 +1100,22 @@ void usb_status(void)
         return;
     }
 
-    usb_emit_syncf(SH_LBL "usb.host:" SH_RST " %s" SH_RST "\n", s_usb_host_installed ? SH_USB_UP "ready" : SH_USB_DOWN "not_ready");
-    usb_emit_syncf(SH_LBL "usb.msc:" SH_RST " " SH_LBL "connected=" SH_RST "%s" SH_RST " " SH_LBL "mounted=" SH_RST "%s" SH_RST " " SH_LBL "path=" SH_RST SH_PATH "%s" SH_RST "\n",
-                   s_usb_msc.connected ? SH_USB_UP "yes" : SH_USB_DOWN "no",
-                   s_usb_msc.mounted ? SH_USB_UP "yes" : SH_USB_DOWN "no",
-                   USB_MSC_BASE_PATH);
+    usb_emit_syncf(SH_LBL "usb.host:" SH_RST " %s" SH_RST "\n", s_usb_host_installed ? "ready" : "not_ready");
+    /* Values coloured inline so @-specifiers stay in the format string instead
+     * of being passed as %s arguments (where they would render literally). */
+    usb_emit_syncf(SH_LBL "usb.msc:" SH_RST " " SH_LBL "connected=" SH_RST);
+    if (s_usb_msc.connected) {
+        usb_emit_syncf(SH_USB_UP "yes" SH_RST);
+    } else {
+        usb_emit_syncf(SH_USB_DOWN "no" SH_RST);
+    }
+    usb_emit_syncf(" " SH_LBL "mounted=" SH_RST);
+    if (s_usb_msc.mounted) {
+        usb_emit_syncf(SH_USB_UP "yes" SH_RST);
+    } else {
+        usb_emit_syncf(SH_USB_DOWN "no" SH_RST);
+    }
+    usb_emit_syncf(" " SH_LBL "path=" SH_RST SH_PATH "%s" SH_RST "\n", USB_MSC_BASE_PATH);
     if (s_usb_msc.connected) {
         usb_wide_to_ascii(s_usb_msc.info.iManufacturer, manufacturer, sizeof(manufacturer));
         usb_wide_to_ascii(s_usb_msc.info.iProduct, product, sizeof(product));

@@ -59,9 +59,13 @@ bool shell_command_display(int argc, char **argv)
             }
         } else {
             display_power_state_t ps = display_get_power_state();
-            shell_transcript_appendf_ansi(SH_LBL "display.power:" SH_RST " %s\n",
-                                     ps == DISPLAY_POWER_ON ? SH_OK "on" SH_RST :
-                                     ps == DISPLAY_POWER_SLEEP ? SH_WARN "sleep" SH_RST : SH_ERR "off" SH_RST);
+            if (ps == DISPLAY_POWER_ON) {
+                shell_transcript_appendf_ansi(SH_LBL "display.power:" SH_RST " " SH_OK "on" SH_RST "\n");
+            } else if (ps == DISPLAY_POWER_SLEEP) {
+                shell_transcript_appendf_ansi(SH_LBL "display.power:" SH_RST " " SH_WARN "sleep" SH_RST "\n");
+            } else {
+                shell_transcript_appendf_ansi(SH_LBL "display.power:" SH_RST " " SH_ERR "off" SH_RST "\n");
+            }
         }
         return true;
     }
@@ -85,10 +89,17 @@ bool shell_command_keyboard(int argc, char **argv)
         keyboard_toggle();
         shell_transcript_appendf_ansi(SH_OK "keyboard %s" SH_RST "\n", keyboard_is_visible() ? "shown" : "hidden");
     } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "status")) {
-        shell_transcript_appendf_ansi(SH_LBL "keyboard:" SH_RST " %s, mode=%d, height=%" PRId32 "\n",
-                                 keyboard_is_visible() ? SH_OK "visible" SH_RST : SH_MUTE "hidden" SH_RST,
-                                 (int)keyboard_get_mode(),
-                                 (int32_t)keyboard_get_height());
+        /* Colours must be literal in the format string for ansi_vformat to
+         * convert them — @-specifiers in a %s argument are not converted. */
+        if (keyboard_is_visible()) {
+            shell_transcript_appendf_ansi(SH_LBL "keyboard:" SH_RST " " SH_OK "visible" SH_RST ", mode=%d, height=%" PRId32 "\n",
+                                     (int)keyboard_get_mode(),
+                                     (int32_t)keyboard_get_height());
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "keyboard:" SH_RST " " SH_MUTE "hidden" SH_RST ", mode=%d, height=%" PRId32 "\n",
+                                     (int)keyboard_get_mode(),
+                                     (int32_t)keyboard_get_height());
+        }
     } else {
         shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status>" SH_RST "\n");
     }

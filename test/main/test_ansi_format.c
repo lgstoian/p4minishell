@@ -183,3 +183,53 @@ void test_ansi_format_width_flags(void)
     ansi_strip_to_plain(plain, sizeof(plain), buf);
     TEST_ASSERT_EQUAL_STRING("[00ab]", plain);
 }
+
+/* ========================================================================
+ * ANSI -> LVGL RECOLOR MARKUP TESTS
+ * ======================================================================== */
+
+void test_ansi_to_lvgl_recolor(void)
+{
+    char buf[512];
+    char out[512];
+    int len;
+
+    ansi_init();
+
+    /* Plain text with no escapes stays plain (no recolor markup). */
+    len = ansi_to_lvgl_recolor("hello world", out, sizeof(out));
+    TEST_ASSERT_TRUE(len > 0);
+    TEST_ASSERT_EQUAL_STRING("hello world", out);
+
+    /* A green segment becomes #rrggbb text # markup. ANSI green is
+     * P4_CONFIG_ANSI_GREEN = 0x13A10E. */
+    ansi_format(buf, sizeof(buf), "@ggreen@R");
+    len = ansi_to_lvgl_recolor(buf, out, sizeof(out));
+    TEST_ASSERT_TRUE(len > 0);
+    TEST_ASSERT_TRUE(strstr(out, "#13A10E") != NULL);
+    TEST_ASSERT_TRUE(strstr(out, "green") != NULL);
+    /* The markup must not contain a raw ESC byte. */
+    TEST_ASSERT_NULL(strchr(out, '\x1B'));
+
+    /* Two colours on one line produce two spans, each closed with ' #'. */
+    ansi_format(buf, sizeof(buf), "@rred@R @ccyan@R");
+    len = ansi_to_lvgl_recolor(buf, out, sizeof(out));
+    TEST_ASSERT_TRUE(len > 0);
+    TEST_ASSERT_TRUE(strstr(out, "#C50F1F") != NULL);   /* ANSI_RED */
+    TEST_ASSERT_TRUE(strstr(out, "#3A96DD") != NULL);   /* ANSI_CYAN */
+    TEST_ASSERT_TRUE(strstr(out, "red") != NULL);
+    TEST_ASSERT_TRUE(strstr(out, "cyan") != NULL);
+
+    /* NULL safety. */
+    TEST_ASSERT_EQUAL(0, ansi_to_lvgl_recolor(NULL, out, sizeof(out)));
+    TEST_ASSERT_EQUAL(0, ansi_to_lvgl_recolor("x", NULL, sizeof(out)));
+    TEST_ASSERT_EQUAL(0, ansi_to_lvgl_recolor("x", out, 0));
+
+    /* A too-small output buffer must not leave a dangling '#' (which would
+     * make LVGL render colour codes literally). The result, if any, must be a
+     * closed span. */
+    ansi_format(buf, sizeof(buf), "@ggreen@R text");
+    ansi_to_lvgl_recolor(buf, out, 8);
+    TEST_ASSERT_TRUE(strlen(out) < 8);
+    TEST_ASSERT_TRUE(strchr(out, '#') == NULL || strrchr(out, '#') != strchr(out, '#'));
+}

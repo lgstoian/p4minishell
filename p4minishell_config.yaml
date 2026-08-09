@@ -10,14 +10,12 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.1
-# Last updated: 2026-08-08 (bug fixes: prompt path thread safety, SH_* palette migration completed,
-#                           stale documentation corrected, test coverage for pipeline/chain,
-#                           architecture: shell.c decoupled from networking/bt/usb/c6ota,
-#                           command_ui.c split out, Kconfig docs in YAML,
-#                           hardware bring-up: LVGL locking race, main-task + sys_evt stack sizes)
-
-config_version: "0.24.1"
+# Version: 0.24.6
+# Last updated: 2026-08-09 (crash fix: dir detailed listing called ansi_vformat()
+#                           with a char* where a va_list was expected, so the %s
+#                           handler read the entry-name bytes as a pointer and
+#                           strlen faulted; fixed by using ansi_format())
+config_version: "0.24.6"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -49,6 +47,16 @@ buffers:
     type: size_t
     description: "Maximum bytes in on-screen transcript buffer"
     range: "1024..65536"
+  transcript_recolor_bytes:
+    value: 16384
+    type: size_t
+    description: >-
+      Maximum bytes of LVGL recolor markup staged for the on-screen transcript
+      label. The recolor form (#RRGGBB text #) inflates the raw ANSI text by
+      roughly 1.5-2x because every colour change carries an open/close marker,
+      so a full 8 KiB transcript needs ~16 KiB of recolor markup. Sized at 2x
+      the plain transcript so the entire scrollback fits on the label.
+    range: "2048..131072"
   async_transcript_bytes:
     value: 2048
     type: size_t
@@ -481,9 +489,13 @@ batch_env:
     description: "Depth of the interactive keypress queue used by pause, choice, and more"
     range: "4..64"
   key_wait_timeout_ms:
-    value: 30000
+    value: 10000
     type: uint32_t
-    description: "Timeout for a single blocking keypress wait, so a headless board cannot stall a batch file forever"
+    description: >-
+      Timeout for a single blocking keypress wait in milliseconds. Shorter than
+      the DOS default so a headless board stalls for less time before falling
+      back; still long enough for a human to respond interactively. Pinned in
+      p4minishell_config.h.
     range: "1000..600000"
   reboot_delay_ms:
     value: 500

@@ -90,7 +90,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 ## UI Model
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
-- Scrollable transcript textarea for command output (read-only)
+- Scrollable transcript (LVGL span group) for coloured command output (read-only)
 - Single-line input textarea with prompt for command entry
 - On-screen LVGL keyboard attached to input line
 - Prev/Next buttons for 10-command recall history

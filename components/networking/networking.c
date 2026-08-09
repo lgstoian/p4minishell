@@ -705,11 +705,19 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
     esp_netif_ip_info_t ip_info = { 0 };
     const char *label = (origin != NULL && origin[0] != '\0') ? origin : "runtime";
 
+    char connected_str[24];
+    char requested_str[24];
+    /* Pre-colour the yes/no values with real SGR escapes (via ansi_format) so
+     * they render correctly when passed as %s arguments — @-specifiers in a %s
+     * argument are not converted by ansi_vformat. Real escapes pass through
+     * safely and are stripped for the LVGL transcript by ansi_strip_to_plain. */
+    ansi_format(connected_str, sizeof(connected_str), s_wifi_connected ? "@Gyes@R" : "@Kno@R");
+    ansi_format(requested_str, sizeof(requested_str), s_wifi_connect_requested ? "@Gyes@R" : "@Kno@R");
     networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Cstate@R=@W%s@R @Cconnected@R=%s @Crequested@R=%s\n",
                          label,
                          networking_wifi_state_string_internal(),
-                         s_wifi_connected ? "@Gyes@R" : "@Kno@R",
-                         s_wifi_connect_requested ? "@Gyes@R" : "@Kno@R");
+                         connected_str,
+                         requested_str);
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
         networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @yruntime not started@R\n", label);
@@ -1051,7 +1059,14 @@ void networking_wifi_status(void)
     esp_netif_ip_info_t ip_info;
 
     networking_appendf("@Cwifi.state:@R %s\n", networking_wifi_state_string_internal());
-    networking_appendf("@Cwifi.default_profile:@R %s\n", networking_wifi_defaults_available() ? "@Gconfigured@R" : "@ymissing@R");
+    /* Colours must be literal in the format string for ansi_vformat to convert
+     * them — @-specifiers passed as %s arguments are not converted. Use a
+     * conditional format string for the value-dependent colour. */
+    if (networking_wifi_defaults_available()) {
+        networking_appendf("@Cwifi.default_profile:@R @Gconfigured@R\n");
+    } else {
+        networking_appendf("@Cwifi.default_profile:@R @ymissing@R\n");
+    }
     if (networking_wifi_defaults_available()) {
         networking_appendf("@Cwifi.default_ssid:@R @W%s@R\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
     }
@@ -1069,8 +1084,16 @@ void networking_wifi_status(void)
         return;
     }
 
-    networking_appendf("@Cwifi.connect_requested:@R %s\n", s_wifi_connect_requested ? "@Gyes@R" : "@Kno@R");
-    networking_appendf("@Cwifi.connected:@R %s\n", s_wifi_connected ? "@Gyes@R" : "@Kno@R");
+    if (s_wifi_connect_requested) {
+        networking_appendf("@Cwifi.connect_requested:@R @Gyes@R\n");
+    } else {
+        networking_appendf("@Cwifi.connect_requested:@R @Kno@R\n");
+    }
+    if (s_wifi_connected) {
+        networking_appendf("@Cwifi.connected:@R @Gyes@R\n");
+    } else {
+        networking_appendf("@Cwifi.connected:@R @Kno@R\n");
+    }
     if (s_wifi_target_ssid[0] != '\0') {
         networking_appendf("@Cwifi.target_ssid:@R @W%s@R\n", s_wifi_target_ssid);
     }
@@ -1213,7 +1236,11 @@ void networking_append_sysinfo_summary(void)
         networking_appendf("@Cwifi:@R @yruntime initialization is in progress@R\n");
         break;
     case NETWORKING_WIFI_STATE_STARTED:
-        networking_appendf("@Cwifi:@R @Gruntime initialized@R in STA mode from sdkconfig, @Cconnected@R=%s\n", s_wifi_connected ? "@Gyes@R" : "@Kno@R");
+        if (s_wifi_connected) {
+            networking_appendf("@Cwifi:@R @Gruntime initialized@R in STA mode from sdkconfig, @Cconnected@R=@Gyes@R\n");
+        } else {
+            networking_appendf("@Cwifi:@R @Gruntime initialized@R in STA mode from sdkconfig, @Cconnected@R=@Kno@R\n");
+        }
         break;
     case NETWORKING_WIFI_STATE_FAILED:
         networking_appendf("@Cwifi:@R @rruntime initialization failed@R with @r%s@R (0x%x)\n",

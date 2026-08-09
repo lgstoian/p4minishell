@@ -19,6 +19,7 @@
 #include "storage_commands.h"
 #include "storage.h"
 #include "shell.h"
+#include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "bsp/esp-bsp.h"
@@ -218,7 +219,10 @@ static bool shell_dir_emitf(dir_ctx_t *ctx, const char *format, ...)
     va_list args;
 
     va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    /* Route through ansi_vformat so SH_* palette macros (e.g. @K, @M, @w) in
+     * the format string are converted to real SGR escapes — plain vsnprintf
+     * would leave the @-specifiers literal on the transcript and UART. */
+    ansi_vformat(buffer, sizeof(buffer), format, args);
     va_end(args);
 
     return shell_dir_emit(ctx, buffer);
@@ -594,12 +598,19 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
              * escape bytes never affect the column alignment computed above:
              * muted timestamp, magenta size, and an entry colour chosen by
              * kind (directory, runnable .bat, or ordinary file). */
+            char coloured_name[SHELL_LFN_BYTES + 8];
+            /* entry_colour holds @-specifiers (e.g. SH_FILE = @w). Build a
+             * format string with the colour literal so ansi_vformat converts
+             * it to real SGR escapes; the entry name is substituted as %s. */
+            char colour_fmt[16];
+            snprintf(colour_fmt, sizeof(colour_fmt), "%s%%s", entry_colour);
+            ansi_format(coloured_name, sizeof(coloured_name), colour_fmt, display_name);
             keep_going = shell_dir_emitf(ctx,
                                          SH_TIME "%s" SH_RST "  "
                                          SH_SIZE "%s" SH_RST "  "
-                                         "%s%s" SH_RST
+                                         "%s" SH_RST
                                          SH_MUTE "%s" SH_RST "\n",
-                                         stamp, size_text, entry_colour, display_name, sfn);
+                                         stamp, size_text, coloured_name, sfn);
         }
     }
 
@@ -649,13 +660,23 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
         scratch = NULL;
 
         if (subdirs != NULL) {
+            /* child_path lives on the heap because this function recurses once
+             * per directory level: a 320-byte stack copy multiplied by
+             * P4_CONFIG_DIR_RECURSE_DEPTH_MAX would overflow the 8 KB command
+             * worker task stack (a stack overflow corrupts memory and shows up
+             * as an intermittent crash). */
+            char *child_path = malloc(SHELL_SD_PATH_BYTES);
+            if (child_path == NULL) {
+                free(subdirs);
+                free(scratch);
+                return false;
+            }
             for (index = 0; index < subdir_count && keep_going && !ctx->aborted; index++) {
-                char child[SHELL_SD_PATH_BYTES];
-
-                if (snprintf(child, sizeof(child), "%s/%s", dir_path, subdirs[index]) < (int)sizeof(child)) {
-                    keep_going = shell_dir_list_one(child, pattern, depth + 1, ctx);
+                if (snprintf(child_path, SHELL_SD_PATH_BYTES, "%s/%s", dir_path, subdirs[index]) < SHELL_SD_PATH_BYTES) {
+                    keep_going = shell_dir_list_one(child_path, pattern, depth + 1, ctx);
                 }
             }
+            free(child_path);
             free(subdirs);
         }
     }
@@ -1696,7 +1717,12 @@ void shell_command_attrib(int argc, char **argv)
     }
 
     /* Show attributes for a file or directory listing */
-    const char *path = (argc >= 2) ? argv[1] : ".";
+    if (argc < 2) {
+        shell_print_usage("Usage: attrib [path] | attrib [+-RHSA] <file>");
+        shell_sd_end(&session, "attrib");
+        return;
+    }
+    const char *path = argv[1];
     error = shell_sd_resolve_path(path, resolved, sizeof(resolved));
     if (error == ESP_OK) {
         error = shell_sd_vfs_to_fatfs_path(resolved, fatfs_path, sizeof(fatfs_path));
@@ -2013,13 +2039,21 @@ static void shell_chkdsk_walk(const char *dir_path, int depth, chkdsk_scan_t *sc
     if (subdirs != NULL) {
         size_t index;
 
+        /* child lives on the heap because this function recurses once per
+         * directory level: a 320-byte stack copy multiplied by the recursion
+         * depth would overflow the 8 KB command worker task stack and corrupt
+         * memory (seen as an intermittent crash). */
+        char *child = malloc(SHELL_SD_PATH_BYTES);
+        if (child == NULL) {
+            free(subdirs);
+            return;
+        }
         for (index = 0; index < subdir_count; index++) {
-            char child[SHELL_SD_PATH_BYTES];
-
-            if (snprintf(child, sizeof(child), "%s/%s", dir_path, subdirs[index]) < (int)sizeof(child)) {
+            if (snprintf(child, SHELL_SD_PATH_BYTES, "%s/%s", dir_path, subdirs[index]) < SHELL_SD_PATH_BYTES) {
                 shell_chkdsk_walk(child, depth + 1, scan);
             }
         }
+        free(child);
         free(subdirs);
     }
 }

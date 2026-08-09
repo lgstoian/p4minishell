@@ -3,6 +3,10 @@ dependencies:
   # unit tests compile the shell and command modules against an identical
   # dependency set. Without these pins the component manager resolves newer
   # majors (for example esp_hosted 3.x) whose Kconfig is incompatible.
+  lvgl/lvgl:
+    version: "9.4.0"
+    rules:
+      - if: "target in [esp32p4]"
   espressif/esp_hosted:
     version: "2.12.1"
     rules:

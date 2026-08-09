@@ -26,6 +26,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <ctype.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -449,25 +450,38 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                 char token[SHELL_ENV_NAME_BYTES];
                 const char *replacement = NULL;
 
-                if (token_len == 1 && isdigit((unsigned char)input[1]) && s_active_batch_frame != NULL) {
-                    int arg_index = input[1] - '1';
-                    replacement = (arg_index >= 0 && arg_index < s_active_batch_frame->argc)
-                                      ? s_active_batch_frame->args[arg_index]
-                                      : "";
-                } else if (token_len == 1 && input[1] == '0' && s_active_batch_frame != NULL) {
-                    /* %0 - script name (first argument) */
-                    replacement = (s_active_batch_frame->argc > 0) ? s_active_batch_frame->args[0] : "";
-                } else if (token_len == 1 && input[1] == '*' && s_active_batch_frame != NULL) {
-                    /* %* - all arguments */
-                    static char all_args[SHELL_BATCH_LINE_BYTES];
-                    all_args[0] = '\0';
-                    for (int i = 0; i < s_active_batch_frame->argc; i++) {
-                        if (i > 0) {
-                            strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
-                        }
-                        strncat(all_args, s_active_batch_frame->args[i], sizeof(all_args) - strlen(all_args) - 1);
+                if (token_len == 1 && isdigit((unsigned char)input[1])) {
+                    if (s_active_batch_frame != NULL) {
+                        int arg_index = input[1] - '1';
+                        replacement = (arg_index >= 0 && arg_index < s_active_batch_frame->argc)
+                                          ? s_active_batch_frame->args[arg_index]
+                                          : "";
+                    } else {
+                        /* No active batch frame: positional args are empty. */
+                        replacement = "";
                     }
-                    replacement = all_args;
+                } else if (token_len == 1 && input[1] == '0') {
+                    if (s_active_batch_frame != NULL) {
+                        /* %0 - script name (first argument) */
+                        replacement = (s_active_batch_frame->argc > 0) ? s_active_batch_frame->args[0] : "";
+                    } else {
+                        replacement = "";
+                    }
+                } else if (token_len == 1 && input[1] == '*') {
+                    if (s_active_batch_frame != NULL) {
+                        /* %* - all arguments */
+                        static char all_args[SHELL_BATCH_LINE_BYTES];
+                        all_args[0] = '\0';
+                        for (int i = 0; i < s_active_batch_frame->argc; i++) {
+                            if (i > 0) {
+                                strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
+                            }
+                            strncat(all_args, s_active_batch_frame->args[i], sizeof(all_args) - strlen(all_args) - 1);
+                        }
+                        replacement = all_args;
+                    } else {
+                        replacement = "";
+                    }
                 } else if (token_len == 0) {
                     replacement = "%";
                 } else if (token_len < sizeof(token)) {
@@ -483,6 +497,34 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                     input = end + 1;
                     continue;
                 }
+            } else if (input[1] == '0' || input[1] == '*' || isdigit((unsigned char)input[1])) {
+                /* A bare positional argument marker with no closing '%'
+                 * (%0, %1..%9, %*). Expands to the frame argument, or to
+                 * empty when no batch frame is active. */
+                const char *replacement = "";
+                if (s_active_batch_frame != NULL) {
+                    if (input[1] == '*') {
+                        static char all_args[SHELL_BATCH_LINE_BYTES];
+                        all_args[0] = '\0';
+                        for (int i = 0; i < s_active_batch_frame->argc; i++) {
+                            if (i > 0) {
+                                strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
+                            }
+                            strncat(all_args, s_active_batch_frame->args[i], sizeof(all_args) - strlen(all_args) - 1);
+                        }
+                        replacement = all_args;
+                    } else {
+                        int arg_index = (input[1] == '0') ? 0 : (input[1] - '1');
+                        replacement = (arg_index < s_active_batch_frame->argc)
+                                          ? s_active_batch_frame->args[arg_index]
+                                          : "";
+                    }
+                }
+                while (*replacement != '\0' && out_index + 1 < output_size) {
+                    output[out_index++] = *replacement++;
+                }
+                input += 2;
+                continue;
             }
         }
 
@@ -600,12 +642,18 @@ static int32_t shell_expr_parse_primary(expr_parser_t *parser)
         return value;
     }
 
-    /* Numeric literal: strtol handles decimal, 0x hex, and octal via base 0. */
+    /* Numeric literal: strtol handles decimal, 0x hex, and octal via base 0.
+     * Out-of-range literals (e.g. 2147483648) are rejected rather than
+     * silently clamped, so `-2147483648/-1` is reported as an error instead
+     * of evaluating to a wrapped value. */
     if (isdigit((unsigned char)*parser->cursor)) {
         char *end = NULL;
-        long value = strtol(parser->cursor, &end, 0);
+        long value;
 
-        if (end == parser->cursor) {
+        errno = 0;
+        value = strtol(parser->cursor, &end, 0);
+
+        if (end == parser->cursor || errno == ERANGE) {
             shell_expr_fail(parser, "malformed number");
             return 0;
         }

@@ -78,6 +78,7 @@ extern void test_ansi_format_basic(void);
 extern void test_ansi_format_colors(void);
 extern void test_ansi_strip_to_plain(void);
 extern void test_ansi_format_width_flags(void);
+extern void test_ansi_to_lvgl_recolor(void);
 
 void app_main(void)
 {
@@ -190,6 +191,7 @@ void app_main(void)
     RUN_TEST(test_ansi_format_colors);
     RUN_TEST(test_ansi_strip_to_plain);
     RUN_TEST(test_ansi_format_width_flags);
+    RUN_TEST(test_ansi_to_lvgl_recolor);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             1
+#define P4_CONFIG_VERSION_PATCH             6
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -77,6 +77,15 @@
 
 /** Maximum bytes stored in the on-screen transcript buffer. */
 #define P4_CONFIG_TRANSCRIPT_BYTES           8192
+
+/**
+ * Maximum bytes of LVGL recolor markup staged for the on-screen transcript
+ * label. The recolor form (`#RRGGBB text #`) inflates the raw ANSI text by
+ * roughly 1.5-2x because every colour change carries an open/close marker, so
+ * a full 8 KiB transcript needs ~16 KiB of recolor markup. Sized at 2x the
+ * plain transcript so the entire scrollback fits on the label.
+ */
+#define P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES   (P4_CONFIG_TRANSCRIPT_BYTES * 2)
 
 /** Maximum bytes in the async (background task) transcript staging buffer. */
 #define P4_CONFIG_ASYNC_TRANSCRIPT_BYTES     2048
@@ -428,7 +437,7 @@
  * Timeout in milliseconds for a single blocking keypress wait. Prevents a
  * headless board from stalling a batch file forever.
  */
-#define P4_CONFIG_KEY_WAIT_TIMEOUT_MS        30000
+#define P4_CONFIG_KEY_WAIT_TIMEOUT_MS        10000
 
 /** Delay before esp_restart() so the reboot message reaches the transcript. */
 #define P4_CONFIG_REBOOT_DELAY_MS            500

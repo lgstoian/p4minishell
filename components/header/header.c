@@ -26,6 +26,7 @@
 #include <inttypes.h>
 
 #include "lvgl.h"
+#include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
 
 #include "header.h"
@@ -299,6 +300,17 @@ static void header_format_cpu(char *buf, size_t buf_size)
 /* ---- Main render: updates all icons, battery, mem, cpu, notification ---- */
 static void header_render(void)
 {
+    if (s_header_root == NULL) {
+        return;
+    }
+
+    /* Header rendering touches LVGL objects directly. The async callbacks
+     * that call this function run on the LVGL task, but the fallback paths
+     * (when lv_async_call fails to schedule) and the periodic refresh timer
+     * can invoke it from other tasks. Hold the recursive LVGL port lock so
+     * every call serialises with the LVGL render cycle regardless of caller. */
+    lvgl_port_lock(0);
+
     lv_color_t battery_color;
     lv_color_t cpu_color;
     char mem_buf[32];
@@ -370,6 +382,8 @@ static void header_render(void)
 
     /* Force layout update */
     lv_obj_update_layout(s_header_root);
+
+    lvgl_port_unlock();
 }
 
 /* ---- Async dispatch helper ---- */
@@ -463,7 +477,6 @@ void header_init(void)
     lv_coord_t horz_pad;
     lv_coord_t panel_pad_v;
     int i;
-
     if (screen == NULL || s_header_root != NULL) {
         return;
     }

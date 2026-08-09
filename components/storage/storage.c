@@ -490,12 +490,9 @@ void storage_set_cwd(const char *absolute_path)
 
 void shell_fs_print_cwd(void)
 {
-    if (strcmp(s_shell_cwd, BSP_SD_MOUNT_POINT) == 0) {
-        shell_transcript_append_text("\\\n");
-        return;
-    }
-
-    shell_transcript_appendf("%s\n", s_shell_cwd + strlen(BSP_SD_MOUNT_POINT));
+    /* Print the full VFS path so the transcript agrees with the prompt, which
+     * also renders the full path (e.g. "/sdcard" at the root, not "\"). */
+    shell_transcript_appendf("%s\n", s_shell_cwd);
 }
 
 /* ========================================================================

@@ -738,3 +738,112 @@ int ansi_attr_text(char *dst, size_t dst_size, int attr_code, const char *text)
 {
     return snprintf(dst, dst_size, "\x1B[%dm%s\x1B[0m", attr_code, text ? text : "");
 }
+
+/* ========================================================================
+ * LVGL RECOLOR MARKUP
+ * ========================================================================
+ * LVGL labels with lv_label_set_recolor(true) render per-span colors using
+ * `#rrggbb text #` markup. This converts a string containing real SGR escape
+ * sequences (as produced by ansi_vformat / the @-palette pipeline) into that
+ * markup, so the LVGL transcript can show the same colours as the UART
+ * console.
+ */
+
+typedef struct {
+    char *dst;
+    size_t dst_size;
+    size_t pos;
+    uint32_t last_color;
+    bool last_color_set;
+} ansi_recolor_ctx_t;
+
+static void ansi_recolor_segment(const char *text, const ansi_state_t *state, void *user_data)
+{
+    ansi_recolor_ctx_t *ctx = (ansi_recolor_ctx_t *)user_data;
+    size_t len;
+    size_t needed;
+
+    if (text == NULL || state == NULL || ctx == NULL) {
+        return;
+    }
+
+    len = strlen(text);
+    if (len == 0) {
+        return;
+    }
+
+    /* Estimate the bytes needed for this segment including a colour-change
+     * marker (open "#rrggbb " + close " #") plus the text. */
+    needed = len + 1;
+    if (!ctx->last_color_set || ctx->last_color != state->fg_color) {
+        needed += 10 + 2;
+    }
+
+    /* Keep the newest output: a terminal transcript must never lose its tail.
+     * When the staged markup cannot hold the whole scrollback, discard what is
+     * already staged and restart from this segment, so the newest lines are the
+     * ones that stay visible. A single segment larger than the whole buffer
+     * cannot be rendered and is dropped. */
+    if (ctx->pos + needed > ctx->dst_size) {
+        ctx->pos = 0;
+        ctx->last_color_set = false;
+        ctx->dst[0] = '\0';
+        if (needed > ctx->dst_size) {
+            return;
+        }
+    }
+
+    /* Emit a recolor open/close pair only when the foreground differs from
+     * the previous segment's, so runs of the same colour stay compact. */
+    if (!ctx->last_color_set || ctx->last_color != state->fg_color) {
+        if (ctx->last_color_set) {
+            ctx->dst[ctx->pos++] = ' ';
+            ctx->dst[ctx->pos++] = '#';
+        }
+        int written = snprintf(ctx->dst + ctx->pos, ctx->dst_size - ctx->pos,
+                               "#%06X ", (unsigned int)(state->fg_color & 0xFFFFFFu));
+        if (written > 0) {
+            ctx->pos += (size_t)written;
+        }
+        ctx->last_color = state->fg_color;
+        ctx->last_color_set = true;
+    }
+
+    if (ctx->pos + len + 1 > ctx->dst_size) {
+        return;
+    }
+    memcpy(ctx->dst + ctx->pos, text, len);
+    ctx->pos += len;
+}
+
+int ansi_to_lvgl_recolor(const char *src, char *dst, size_t dst_size)
+{
+    ansi_recolor_ctx_t ctx;
+
+    if (src == NULL || dst == NULL || dst_size == 0) {
+        return 0;
+    }
+
+    ctx.dst = dst;
+    ctx.dst_size = dst_size;
+    ctx.pos = 0;
+    ctx.last_color = 0;
+    ctx.last_color_set = false;
+
+    dst[0] = '\0';
+
+    ansi_process_text(src, ansi_recolor_segment, &ctx);
+
+    /* Close any open colour span. */
+    if (ctx.last_color_set && ctx.pos + 2 < ctx.dst_size) {
+        ctx.dst[ctx.pos++] = ' ';
+        ctx.dst[ctx.pos++] = '#';
+    }
+
+    if (ctx.pos < ctx.dst_size) {
+        ctx.dst[ctx.pos] = '\0';
+    } else {
+        ctx.dst[ctx.dst_size - 1] = '\0';
+    }
+    return (int)ctx.pos;
+}

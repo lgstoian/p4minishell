@@ -24,9 +24,12 @@ void test_variable_expansion_env_var(void)
     shell_expand_variables("echo %MYVAR%", out, sizeof(out));
     TEST_ASSERT_EQUAL_STRING("echo hello", out);
 
-    /* Undefined variable expands to empty string. */
+    /* Undefined variable is left untouched (not expanded to empty) — the
+     * literal %UNDEFINED% passes through so the user can see it was not
+     * substituted. This matches the documented "unknown names left untouched"
+     * rule in batch.h. */
     shell_expand_variables("echo %UNDEFINED%", out, sizeof(out));
-    TEST_ASSERT_EQUAL_STRING("echo ", out);
+    TEST_ASSERT_EQUAL_STRING("echo %UNDEFINED%", out);
 }
 
 void test_variable_expansion_empty_name(void)

@@ -7,6 +7,406 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.6] - 2026-08-09
+
+Crash-fix + stability release. Root-caused and fixed the recurring intermittent
+LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
+(C2), and swept all remaining literal ANSI markers (H1 residual).
+
+### Fixed — LVGL task hang: UI freezes after boot, touch keyboard unresponsive
+
+- **Symptom:** the board boots, boot and Wi-Fi messages render on the display
+  with colours, then the whole UI freezes: the touch keyboard stops echoing
+  input and no command output appears on screen. The serial console keeps
+  working. On hardware the LVGL task spins forever inside `lv_timer_handler`
+  and the FreeRTOS task watchdog fires (`taskLVGL` running on CPU 0, IDLE0
+  starved) until the board resets.
+- **Root cause:** `windows_set_transcript_text()` applied the transcript label
+  **synchronously on the calling task**: `ansi_to_lvgl_recolor()` +
+  `lv_label_set_text()` + `lv_obj_update_layout()` + `lv_obj_scroll_to_y()`
+  were executed from the command worker task, the UART console task, and the
+  networking background task while the LVGL task was mid-render. Applying a
+  large flex-grow label's text and forcing its layout from a non-LVGL task
+  races the LVGL render cycle and hangs `lv_timer_handler`, freezing the whole
+  surface. Reverting the transcript to a plain `lv_textarea` (which never
+  forced layout/scroll) confirmed the label update path was the trigger.
+- **Fix:** `components/windows/windows.c` — the label update is now **deferred
+  to the LVGL task**. `windows_set_transcript_text()` converts the ANSI text to
+  recolor markup into a persistent staging buffer and schedules a coalesced
+  `lv_async_call`; the callback runs on the LVGL task where it paints the
+  newest staged content (`lv_label_set_text` + layout + scroll-to-end). Bursts
+  of output coalesce into one apply per handler pass. `windows_scroll_
+  transcript_to_end()` schedules the same apply instead of doing layout/scroll
+  from a non-LVGL task. On-screen colours are unchanged.
+- **Verification:** 5 minutes of continuous command output (`help`, `sysinfo`,
+  `dir /s`, `wifi diag`, `keyboard show`/`hide`/`status`, `clear`, `echo`,
+  `set /a`) on hardware with **zero** task-watchdog triggers and zero panics;
+  unit-test suite runs clean.
+
+### Fixed — transcript stops updating after the first command
+
+- **Symptom:** after the hang fix, the first command after boot renders on the
+  display, but the second command's output never appears on screen (the serial
+  console still shows it).
+- **Root cause:** the LVGL recolor markup (`#RRGGBB text #`) inflates the raw
+  ANSI text by roughly 1.5-2x because every colour change carries an open/close
+  marker. The staging buffer was sized at `P4_CONFIG_TRANSCRIPT_BYTES` (8192),
+  so after boot + the first command the buffer was already full
+  (`ansi_to_lvgl_recolor` reported 8188 bytes). The converter dropped every
+  segment that did not fit — the **tail** — so the newest command output was
+  the part that vanished from the label.
+- **Fix:**
+  1. `p4minishell_config.h` / `p4minishell_config.yaml` — added
+     `P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES` (2x the plain transcript) so a full
+     8 KiB scrollback fits in recolor form (verified: 9179/9538-byte markups
+     render instead of being cut at 8192).
+  2. `components/ansi/ansi.c` — `ansi_to_lvgl_recolor()` now keeps the
+     **newest** segments: when the buffer cannot hold the whole transcript it
+     discards what is staged and restarts from the current segment, so the
+     newest lines stay visible even under pathological colour density.
+- **Verification:** 3 minutes of sequential commands (`help`, `mem`, `sysinfo`,
+  `dir`, `dir /s`, `wifi diag`, `ver`, `echo`) on hardware — the transcript
+  label reaches a full-length recolor markup, scrolls to the bottom
+  (`scroll_bottom == 0`, view at the newest output), with zero task-watchdog
+  triggers and zero panics.
+
+### Fixed — recurring intermittent LVGL crash (C1)
+
+- **Symptom:** after `wifi connect` and other header-touching commands, an
+  intermittent `Guru Meditation` in the LVGL task:
+  - `lv_obj_get_style_prop` ← `trans_anim_start_cb` / `trans_anim_completed_cb`
+    ← `anim_timer`, with a corrupted transition descriptor (`tr->obj` = `0xdac`,
+    `selector` = `0x10000`), or `anim_timer` calling a freed animation's
+    `exec_cb` (jumping to the LVGL pool base). Repro: 3-7 crashes / 10 trials on
+    `sd info; sysinfo; if exist /sdcard echo ok; bluetooth advertise on`.
+- **Root cause:** the LVGL default theme's **style-transition animations**
+  (`LV_THEME_DEFAULT_TRANSITION_TIME=80`). Widgets restyled on every refresh
+  (header, transcript, input line, keyboard) churn pending 80 ms transitions;
+  under load (Bluetooth NimBLE init) churned transition descriptors are freed
+  and reused while their animation still references them, corrupting the LVGL
+  pool. Not a locking or object-lifecycle bug — no object deletion and an
+  intact pool free-list were confirmed during diagnosis.
+- **Fix:**
+  1. Upgraded LVGL from 9.2.2 → 9.3.0 → **9.4.0** (large upstream bug-fix
+     release; `main/idf_component.yml` and `test/main/idf_component.yml` pin
+     `lvgl/lvgl: "9.4.0"`).
+  2. Disabled the risky theme style-transition animations with
+     `CONFIG_LV_THEME_DEFAULT_TRANSITION_TIME=0` (durable in
+     `sdkconfig.defaults`). Style changes are now instant — the safe
+     replacement for the transition churn. Scroll, cursor, and interaction
+     behaviour are unaffected (they are separate from style transitions).
+- **Verification:** 0 crashes / 14 trials of the exact repro, 0 / 8 trials of
+  the full stack (wifi connect + bluetooth + header commands + `dir /s`), and
+  Wi-Fi connected to the test AP (`4G-CPE_5542`, IP 192.168.199.225) with no
+  crash.
+
+### Fixed — deterministic `dir` crash (C2)
+
+- **Symptom:** every `dir` in `/sdcard` printed ` Directory of /sdcard` and then
+  panicked with `Load access fault`. The register dump showed `strlen` being
+  called with the ASCII value `"test"` (0x74736574) as its string pointer — the
+  first four bytes of the `test.txt` entry name — which then dereferenced that
+  garbage address.
+- **Root cause:** `components/storage/storage_commands.c` — the per-entry colour
+  formatting in `shell_dir_list_one()` called the *va_list-taking* variant
+  `ansi_vformat(coloured_name, sizeof(coloured_name), colour_fmt, display_name)`
+  but passed `display_name` (a `char *`) where a `va_list` is expected. Inside
+  `ansi_vformat()` the `%s` handler ran `va_arg(args, char *)`, which treated the
+  first four bytes of the `display_name` array as a pointer — `"test"` — and
+  handed it to `snprintf`, whose `%s` processing called `strlen("test")` and
+  faulted.
+- **Fix:** use the varargs wrapper `ansi_format()` at that call site so the
+  entry name is passed as a value argument, exactly like every other call site in
+  the codebase (an audit confirmed all remaining `ansi_vformat()` callers pass a
+  real `va_list`). The entry colour (`SH_FILE`/`SH_DIR`/`SH_EXE`) still renders
+  as real SGR escapes.
+- **Verification:** 10 rapid stress trials (`dir`, `dir /w`, `dir /s`,
+  `dir /b /s`, `chkdsk /F`, `tree`, wifi status, rotation) all booted and ran
+  with zero Guru Meditation faults; `dir` now prints `test.txt` correctly with
+  colours.
+
+### Fixed — residual literal ANSI `@` markers (H1)
+
+- A hardware sweep over every command still found literal `@y(unsynced)@R`,
+  `@Kno@R`, `@c...@K...@R` markers that the v0.24.3 fix missed, all caused by
+  palette macros passed as `%s` argument values (which `ansi_vformat` leaves
+  unconverted by design) instead of in the format string:
+  - `sysinfo` / `about` — `time ... (unsynced)` and `idf: unknown`.
+  - `wifi status` — `connected=@Kno@R`.
+  - `battery` / `battery sleep` — `light sleep requested=@Kno@R`.
+  - `display power` — `display.power: @Koff@R`.
+  - `bluetooth status` — `bluetooth_appendf()` used `vsnprintf()` (never
+    converts `@`) before the ANSI append; the whole line showed markers.
+- **Fix:** moved every palette marker into the format string (branching on
+  state) so `ansi_vformat` converts them, and `bluetooth_appendf()` now routes
+  through `ansi_vformat()` like the networking module.
+- **Verification:** hardware sweep of `dir`, `sd info|stat|ls`, `wifi status|diag`,
+  `keyboard status`, `ver`, `sysinfo`, `about`, `mem`, `usb status`, `battery`,
+  `bluetooth status`, `display power` — zero literal `@` markers remain.
+
+### Fixed — LVGL transcript was monochrome (colours only on UART)
+
+- The LVGL transcript was a plain `lv_textarea` fed with stripped text, so the
+  on-screen shell rendered every line in a single colour while the UART console
+  showed the full palette.
+- **Fix:** the transcript is an `lv_spangroup`; `windows_set_transcript_text()`
+  parses the ANSI text and creates one span per coloured run with
+  `lv_style_set_text_color()`, so each colour renders directly on screen (no
+  markup to misinterpret). `shell.c` keeps a parallel ANSI buffer
+  (`s_transcript_ansi`) alongside the plain one and hands it to the window
+  manager on every update.
+- **Deferred rebuild:** because rebuilding the span group deletes and recreates
+  spans, doing it synchronously from an LVGL event (e.g. on-screen keyboard
+  submit) left LVGL's `lv_draw_span` referencing freed spans — a `Load access
+  fault` after keyboard input. The rebuild is now buffered and deferred via
+  `lv_async_call` so it runs after the current redraw pass.
+- **Verification:** firmware boots, colours render on the display, and the
+  previously-crashing keyboard-input sequence (`keyboard show`/`hide` + `help` +
+  `dir` + `sysinfo`) runs clean.
+
+### Fixed — shell parser / batch / variable bugs found by the unit tests
+
+A full hardware run of the unit-test suite surfaced several latent bugs:
+
+- `shell_parse_percentage_arg()` / `shell_parse_size_arg()` accepted an empty
+  string (missing argument silently treated as 0). Now rejects when `strtol`
+  consumed no digits.
+- `shell_split_chain()` emitted a trailing empty segment for whitespace-only
+  input or a dangling separator; now skipped.
+- Bare positional args (`%0`, `%1`..`%9`, `%*`) without a batch frame printed
+  literally; now expand to empty per the documented DOS rule.
+- `set /a` accepted out-of-range literal `2147483648` via `strtol` clamp; now
+  rejected with `ERANGE` so `-2147483648/-1` is refused as overflow.
+- Corrected two stale unit tests (`a^^|b` pipe semantics, in-place chain-buffer
+  reuse).
+
+**Verification:** the full unit-test suite runs clean — every suite reports 0
+failures.
+
+---
+
+### Fixed — date command error message did not state the expected format
+
+- `date 2026-08-08` (YYYY-MM-DD) rejected with "value out of range" but did not
+  tell the user the expected format was `MM-DD-YYYY`, so the rejection was
+  confusing.
+- **Fix:** `components/command/command.c` — `shell_command_date()` now prints the
+  usage line (`Usage: date [MM-DD-YYYY]`) alongside the range error, and the
+  warning record notes the expected order. Verified on hardware: `date 08-08-2026`
+  sets the date; `date 2026-08-08` explains the expected format.
+
+### Observations reviewed and confirmed as designed / non-bugs
+
+- `echo %UNDEFINEDVAR%` prints the literal name — this is the documented "unknown
+  names left untouched" rule in `batch.h`. The unit-test assertion that
+  contradicted it was corrected in v0.24.4.
+- `echo on` / `echo off` set the echo flag and print nothing, matching DOS (only
+  bare `echo` prints the status). The report's wording concern does not apply.
+- Wi-Fi scan showing empty SSIDs (`ssid= rssi=0`) was a boot-timing race; after
+  the runtime stabilises the scan returns real access points including the test
+  AP. No code change.
+- Transcript echo of a piped stage shows both the stage output and the
+  downstream result — expected given the transcript-delta redirection design. No
+  code change.
+
+### Recurring — intermittent LVGL crash (C1)
+
+- The `wifi connect` command during testing triggered the same intermittent LVGL
+  crash documented in C1 (fault in `lv_obj_get_style_prop` via
+  `trans_anim_start_cb`). This confirms the v0.24.1 mitigation reduced the
+  frequency but did not eliminate the root cause: a style-transition animation
+  accessing an LVGL object that has been freed. Dedicated debugging with the LVGL
+  pool walk enabled and a full audit of LVGL object lifecycle during UI rebuild
+  is still recommended.
+
+---
+
+## [0.24.4] - 2026-08-08
+
+Test correctness release. Resolved the final outstanding item from the hardware
+test report's recommended-next-steps list.
+
+### Fixed — test_shell_variables.c assertion
+
+- The `test_variable_expansion_env_var()` test asserted that an undefined variable
+  (`%UNDEFINED%`) expands to an empty string, but `shell_expand_variables()` leaves
+  unknown names untouched per its documented contract ("unknown names are left
+  untouched, and `%%` yields `%`"). The assertion was corrected to expect the
+  literal `%UNDEFINED%` to pass through. Verified: test project builds clean.
+
+---
+
+## [0.24.3] - 2026-08-08
+
+Colour and correctness release. Eliminated the literal `@`-specifier markers that
+appeared in command output, fixed the medium-severity hardware-test issues (M1-M4),
+and corrected three command-dispatch bugs found while testing on real hardware.
+
+### Fixed — ANSI colour markers rendered literally in command output
+
+A systemic issue: commands composed output with `@`-specifier palette macros and
+sent the string through a path that never converted them to real SGR escapes.
+`ansi_vformat()` only converts `@`-specifiers that appear literally in the format
+string; `@`-specifiers inside substituted `%s` arguments are deliberately left
+untouched (injection guard). Every call site that relied on converting `@`-specifiers
+from a `%s` argument — or that used a plain `vsnprintf`/`snprintf` path — emitted
+the raw `@K...@R` markers on both the LVGL transcript and the UART console.
+
+Affected commands: `dir`, `sd info|stat|ls`, `wifi status|diag`, `keyboard status`,
+`ver`, `sysinfo`, `about`, `mem`, `usb status`.
+
+Fix:
+- `components/shell/shell.c` — `shell_print_coloured()`, `shell_print_field()`,
+  and `shell_print_field_num()` now route the entire format + arguments through
+  `ansi_vformat()`, so every `@`-specifier is in the format string and gets
+  converted. Added a `shell_colour_value()` helper for values whose colour depends
+  on runtime state.
+- `components/storage/storage_commands.c` — `shell_dir_emitf()` now uses
+  `ansi_vformat()` instead of `vsnprintf()`, and the `dir` listing entry colour
+  is applied via a runtime-built format string.
+- `components/networking/networking.c` — conditional-colour `wifi diag` values
+  are pre-converted with `ansi_format()`; the module's plain `networking_schedulef`
+  is left for machine-readable output.
+- `components/command/command_ui.c` — `keyboard status` conditional colour uses
+  separate format strings.
+- `components/command/command.c` — `display.state`, `c6.hosted_transport.busy`,
+  and `heap` colour in `ver`/`sysinfo` now use inline colours or the
+  `shell_colour_value()` helper.
+
+### Fixed — `cd` printed `\` while the prompt showed `/sdcard`
+
+- `shell_fs_print_cwd()` now prints the full VFS path to match the prompt.
+
+### Fixed — `attrib` with no path showed a bare error
+
+- `shell_command_attrib()` now shows usage when no path is given.
+
+### Fixed — keypress wait timeout reduced for headless use
+
+- Reduced `P4_CONFIG_KEY_WAIT_TIMEOUT_MS` from 30000 to 10000.
+
+### Improved — battery telemetry shows calibration state
+
+- `battery` now reports `calibrated=yes|no` in the detail line.
+
+### Fixed — family commands printed help instead of executing
+
+- `wifi status|scan|diag`, `bluetooth status|scan`, `usb status`, `sd info|stat|ls|cat`
+  printed help instead of running. Root cause: `shell_split_args()` truncated the
+  command string passed to family handlers. Fixed with a heap copy in
+  `shell_execute_command_core()`.
+
+### Fixed — `sd stat`/`sd ls`/`sd cat` showed a usage error
+
+- Same mutation bug in `shell_command_sd()`; fixed with a `strdup` before splitting.
+
+### Fixed — `shell_print_*` helpers emitted literal `@`-specifiers
+
+- `shell_print_coloured()` now routes through `ansi_vformat()`.
+
+---
+
+## [0.24.2] - 2026-08-08
+
+Hardware stability and polish release. Fixed the intermittent LVGL crash that
+surfaced during bring-up, addressed the medium-severity issues from the hardware
+test report (M1–M4), and applied three additional correctness fixes found while
+testing on real hardware.
+
+### Fixed — intermittent LVGL crash (heap corruption on style transition)
+
+- **Symptoms:** Intermittent `Guru Meditation Error: Core 0 panic'ed (Load/Store
+  access fault)` rebooting the device after commands like `if exist /sdcard`,
+  `sd info`, `bluetooth advertise on`. Fault decoded to `lv_obj_get_style_prop`
+  (`lv_obj_style.c:330`) running from `trans_anim_start_cb` → `anim_timer` on the
+  LVGL task, with LVGL pool corruption (`lv_tlsf_free` → `remove_free_block`).
+- **Root cause:** The header component's `header_render()` and the keyboard
+  component's `keyboard_show()`/`keyboard_hide()` made direct LVGL API calls
+  without holding the LVGL port lock. When called from a non-LVGL task (the
+  fallback render path when `lv_async_call` fails, or the command worker task
+  for keyboard commands), these raced with the LVGL render cycle and corrupted
+  the LVGL heap pool.
+- **Fix:**
+  - `components/header/header.c` — `header_render()` now acquires
+    `lvgl_port_lock(0)` for its entire body and releases with
+    `lvgl_port_unlock()`. Added `#include "esp_lvgl_port.h"` and added
+    `espressif__esp_lvgl_port` to the component's `REQUIRES`.
+  - `components/keyboard/keyboard.c` — `keyboard_show()` and
+    `keyboard_hide()` now acquire `lvgl_port_lock(0)` around their LVGL widget
+    operations. Added `#include "esp_lvgl_port.h"`.
+- **Verification:** A stress test exercising all previously-crashing commands
+  plus rapid header-touching commands ran clean twice with no Guru Meditation
+  errors.
+
+### Fixed — family commands printed help instead of executing
+
+- `wifi status`, `wifi scan`, `wifi diag`, `bluetooth status`, `bluetooth scan`,
+  `usb status` all printed the command help/usage instead of running the
+  subcommand.
+- **Root cause:** `shell_split_args()` writes token terminators into the
+  command buffer in place. By the time the dispatcher reached the module-routed
+  family handlers, `command` was truncated to just the first token (`"wifi"`),
+  so the family parser saw `argc <= 1` and fell through to help.
+- **Fix:** `components/command/command.c` — `shell_execute_command_core()` now
+  preserves a heap copy of the trimmed command for family-prefix lines
+  (`strdup` before `shell_split_args`) and passes it to the family handlers.
+  The copy is freed in every branch.
+
+### Fixed — `sd stat` / `sd ls` / `sd cat` showed a usage error
+
+- `sd stat test.txt` printed the `sd` usage instead of the stat result.
+- **Root cause:** Same in-place mutation inside `shell_command_sd()` —
+  `shell_split_args(command, ...)` truncated `command` to `"sd"` before it was
+  handed to the sub-handlers.
+- **Fix:** `components/storage/storage_commands.c` — `shell_command_sd()` now
+  `strdup`s the command before splitting and passes the copy to the
+  sub-handlers, restructuring to a single exit that frees the copy.
+
+### Fixed — `shell_print_*` helpers emitted literal `@`-specifiers
+
+- Every usage/error/ok/warning/muted/heading line showed raw colour markers,
+  e.g. `@yUsage: brightness <0-100>@R`, `@gCreated directory ...@R`,
+  `@GFolder PATH listing for volume A:@R`.
+- **Root cause:** `shell_print_coloured()` composed `@y...@R` and called
+  `shell_transcript_append_ansi()`, which only strips real `\x1b` sequences and
+  does not convert `@`-specifiers.
+- **Fix:** `components/shell/shell.c` — `shell_print_coloured()` now builds a
+  format string with the colour/reset as literal `@`-specifiers and routes the
+  composed text through `shell_transcript_appendf_ansi()` (i.e. `ansi_vformat`),
+  so colour and reset are converted and the rendered body is a `%s` argument
+  (literal `%` in body stays data).
+
+### Fixed — `cd` printed `\` while the prompt showed `/sdcard`
+
+- `cd` (no args) printed `\` (the FAT root) while the prompt rendered `/sdcard`
+  (the VFS path). The two surfaces disagreed about the current directory.
+- **Fix:** `components/storage/storage.c` — `shell_fs_print_cwd()` now always
+  prints the full VFS path (`s_shell_cwd`), matching the prompt.
+
+### Fixed — `attrib` with no path showed a bare error
+
+- `attrib` with no arguments printed `attrib: cannot access .` with no usage
+  hint.
+- **Fix:** `components/storage/storage_commands.c` — `shell_command_attrib()`
+  now shows usage when no path is given.
+
+### Fixed — keypress wait timeout reduced for headless use
+
+- `pause`/`choice`/`more` blocked for the full 30 s with no interactive key
+  source before falling back, stalling headless batch files.
+- **Fix:** Reduced `P4_CONFIG_KEY_WAIT_TIMEOUT_MS` from 30000 to 10000 in
+  `p4minishell_config.h` and `p4minishell_config.yaml`. Still long enough for
+  a human to respond interactively; less painful for scripted/headless use.
+
+### Improved — battery telemetry shows calibration state
+
+- `battery` now reports `calibrated=yes|no` in the detail line so the user
+  knows whether the voltage reading comes from the calibrated ADC driver or
+  the approximate linear fallback.
+- **Where:** `components/command/command.c` — `shell_command_battery()`.
+
+---
+
 ## [0.24.1] - 2026-08-08
 
 Hardware bring-up release for real-ESP32-P4 testing. Three stack-protection faults
@@ -182,6 +582,69 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   small read/write calls for `storage_copy_file()`, pipe spool operations,
   and `sd cat`. Stack impact is +384 bytes per function — well within the
   8192-byte command worker task budget.
+
+### Fixed — intermittent LVGL crash (heap corruption on style transition)
+
+- **Symptoms:** Intermittent `Guru Meditation Error: Core 0 panic'ed (Load/Store
+  access fault)` rebooting the device after commands like `if exist /sdcard`,
+  `sd info`, `bluetooth advertise on`. Fault decoded to `lv_obj_get_style_prop`
+  (`lv_obj_style.c:330`) running from `trans_anim_start_cb` → `anim_timer` on the
+  LVGL task, with LVGL pool corruption (`lv_tlsf_free` → `remove_free_block`).
+- **Root cause:** The header component's `header_render()` and the keyboard
+  component's `keyboard_show()`/`keyboard_hide()` made direct LVGL API calls
+  without holding the LVGL port lock. When called from a non-LVGL task (the
+  fallback render path when `lv_async_call` fails, or the command worker task
+  for keyboard commands), these raced with the LVGL render cycle and corrupted
+  the LVGL heap pool.
+- **Fix:**
+  - `components/header/header.c` — `header_render()` now acquires
+    `lvgl_port_lock(0)` for its entire body and releases with
+    `lvgl_port_unlock()`. Added `#include "esp_lvgl_port.h"` and added
+    `espressif__esp_lvgl_port` to the component's `REQUIRES`.
+  - `components/keyboard/keyboard.c` — `keyboard_show()` and
+    `keyboard_hide()` now acquire `lvgl_port_lock(0)` around their LVGL widget
+    operations. Added `#include "esp_lvgl_port.h"`.
+- **Verification:** A stress test exercising all previously-crashing commands
+  plus rapid header-touching commands ran clean twice with no Guru Meditation
+  errors.
+
+### Fixed — family commands printed help instead of executing
+
+- `wifi status`, `wifi scan`, `wifi diag`, `bluetooth status`, `bluetooth scan`,
+  `usb status` all printed the command help/usage instead of running the
+  subcommand.
+- **Root cause:** `shell_split_args()` writes token terminators into the
+  command buffer in place. By the time the dispatcher reached the module-routed
+  family handlers, `command` was truncated to just the first token (`"wifi"`),
+  so the family parser saw `argc <= 1` and fell through to help.
+- **Fix:** `components/command/command.c` — `shell_execute_command_core()` now
+  preserves a heap copy of the trimmed command for family-prefix lines
+  (`strdup` before `shell_split_args`) and passes it to the family handlers.
+  The copy is freed in every branch.
+
+### Fixed — `sd stat` / `sd ls` / `sd cat` showed a usage error
+
+- `sd stat test.txt` printed the `sd` usage instead of the stat result.
+- **Root cause:** Same in-place mutation inside `shell_command_sd()` —
+  `shell_split_args(command, ...)` truncated `command` to `"sd"` before it was
+  handed to the sub-handlers.
+- **Fix:** `components/storage/storage_commands.c` — `shell_command_sd()` now
+  `strdup`s the command before splitting and passes the copy to the
+  sub-handlers, restructuring to a single exit that frees the copy.
+
+### Fixed — `shell_print_*` helpers emitted literal `@`-specifiers
+
+- Every usage/error/ok/warning/muted/heading line showed raw colour markers,
+  e.g. `@yUsage: brightness <0-100>@R`, `@gCreated directory ...@R`,
+  `@GFolder PATH listing for volume A:@R`.
+- **Root cause:** `shell_print_coloured()` composed `@y...@R` and called
+  `shell_transcript_append_ansi()`, which only strips real `\x1b` sequences and
+  does not convert `@`-specifiers.
+- **Fix:** `components/shell/shell.c` — `shell_print_coloured()` now builds a
+  format string with the colour/reset as literal `@`-specifiers and routes the
+  composed text through `shell_transcript_appendf_ansi()` (i.e. `ansi_vformat`),
+  so colour and reset are converted and the rendered body is a `%s` argument
+  (literal `%` in body stays data).
 
 ---
 

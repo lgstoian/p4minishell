@@ -18,6 +18,8 @@
 #include "display.h"
 #include "header.h"
 #include "keyboard.h"
+#include "ansi.h"
+#include "esp_lvgl_port.h"
 #include "board_config.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
@@ -208,11 +210,23 @@ static void windows_create_transcript(void)
     const lv_font_t *font = windows_get_terminal_font();
     lv_obj_t *screen = s_windows.screen;
 
-    s_windows.transcript = lv_textarea_create(screen);
+    /* The transcript is an LVGL label with recolor enabled. ANSI SGR escape
+     * sequences are converted to LVGL recolor markup (#RRGGBB text #) before
+     * being set as the label text. Labels handle text updates atomically with
+     * no pool churn, unlike span groups which must delete/recreate spans.
+     *
+     * The actual widget update (set text, force layout, scroll to end) is
+     * DEFERRED to the LVGL task via lv_async_call (see
+     * windows_set_transcript_text): applying label text and forcing a flex
+     * layout synchronously from a non-LVGL task races with the LVGL render
+     * cycle and hangs lv_timer_handler on the LVGL task, freezing the whole
+     * UI. The apply is coalesced so bursty output paints once per handler pass.
+     */
+    s_windows.transcript = lv_label_create(screen);
     lv_obj_set_width(s_windows.transcript, LV_PCT(100));
     lv_obj_set_flex_grow(s_windows.transcript, 1);
-    lv_textarea_set_one_line(s_windows.transcript, false);
-    lv_textarea_set_cursor_click_pos(s_windows.transcript, false);
+    lv_label_set_long_mode(s_windows.transcript, LV_LABEL_LONG_MODE_WRAP);
+    lv_label_set_recolor(s_windows.transcript, true);
     lv_obj_set_style_bg_color(s_windows.transcript,
                                windows_get_color(WINDOWS_COLOR_BG_TRANSCRIPT), 0);
     lv_obj_set_style_bg_opa(s_windows.transcript, LV_OPA_COVER, 0);
@@ -287,14 +301,108 @@ static void windows_create_keyboard(void)
         keyboard_bind_textarea(s_windows.input_line);
     }
 }
-
 /* ========================================================================
  * WINDOW OBJECT ACCESSORS
- * ======================================================================== */
+ * ========================================================================
+ */
 
 lv_obj_t *windows_get_transcript(void)
 {
     return s_windows.transcript;
+}
+
+/* ---- LVGL label-with-recolor transcript implementation -----------------
+ * The transcript renders coloured shell output on the display. ANSI SGR escape
+ * sequences are converted to LVGL recolor markup (#RRGGBB text #) and set as
+ * the label text. Labels handle text updates atomically — no span create/delete
+ * churn, no pool corruption, no deferred rebuild needed.
+ *
+ * The widget update itself is DEFERRED to the LVGL task. Applying the label
+ * text and forcing the flex layout synchronously from a non-LVGL task (the
+ * command worker, UART console, or networking background task) while the LVGL
+ * task is mid-render hangs lv_timer_handler and freezes the whole UI. Every
+ * request stages the recolor markup into a persistent buffer and schedules a
+ * single lv_async_call; the callback runs on the LVGL task where it paints the
+ * newest staged content and scrolls to the end. Bursts of output coalesce into
+ * one apply per handler pass, which also keeps the render cost bounded.
+ */
+
+static bool s_transcript_apply_pending = false;
+static char s_transcript_recolor[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
+
+/**
+ * Paint the staged recolor markup onto the transcript label and scroll to the
+ * end. Runs on the LVGL task (from the async apply callback) or, in the
+ * lv_async_call failure fallback, on the caller's task while holding the LVGL
+ * port lock. Both callers serialize with the render cycle, so the staging
+ * buffer is never written and read concurrently.
+ */
+static void windows_transcript_apply(void)
+{
+    lv_obj_t *transcript = s_windows.transcript;
+
+    if (transcript == NULL) {
+        return;
+    }
+
+    lv_label_set_text(transcript, s_transcript_recolor);
+    lv_obj_update_layout(transcript);
+    lv_obj_scroll_to_y(transcript, LV_COORD_MAX, LV_ANIM_OFF);
+}
+
+static void windows_transcript_apply_cb(void *user_data)
+{
+    (void)user_data;
+    s_transcript_apply_pending = false;
+    windows_transcript_apply();
+}
+
+/**
+ * Schedule a transcript repaint on the LVGL task. Coalesces: if an apply is
+ * already queued, the staging buffer already holds the newest text and the
+ * queued callback paints it; no second async call is needed.
+ */
+static void windows_transcript_schedule_apply(void)
+{
+    if (s_transcript_apply_pending) {
+        return;
+    }
+
+    s_transcript_apply_pending = true;
+    if (lv_async_call(windows_transcript_apply_cb, NULL) != LV_RESULT_OK) {
+        s_transcript_apply_pending = false;
+        windows_transcript_apply();
+    }
+}
+
+void windows_set_transcript_text(const char *text)
+{
+    lv_obj_t *transcript = s_windows.transcript;
+
+    if (transcript == NULL) {
+        return;
+    }
+    if (text == NULL) {
+        text = "";
+    }
+
+    /* Convert ANSI SGR escape sequences to LVGL recolor markup and stage it
+     * for the deferred apply. Callers hold the LVGL port lock, so the staging
+     * buffer is never written and read concurrently. */
+    ansi_to_lvgl_recolor(text, s_transcript_recolor, sizeof(s_transcript_recolor));
+
+    windows_transcript_schedule_apply();
+}
+
+void windows_scroll_transcript_to_end(void)
+{
+    if (s_windows.transcript == NULL) {
+        return;
+    }
+
+    /* Repaint from the staged markup, which repaints and scrolls to the end.
+     * Runs on the LVGL task via the deferred apply. */
+    windows_transcript_schedule_apply();
 }
 
 lv_obj_t *windows_get_input_line(void)
@@ -366,6 +474,29 @@ esp_err_t windows_init(void)
     return ESP_OK;
 }
 
+/**
+ * Recursively delete all LVGL animations on @p obj and its descendants.
+ * Style-transition animations are created on style changes; if the target
+ * object is deleted while such an animation is pending, the start callback
+ * fires on freed memory and crashes in lv_obj_get_style_prop. Killing every
+ * animation before lv_obj_clean() removes that window.
+ */
+static void windows_kill_animations(lv_obj_t *obj)
+{
+    if (obj == NULL) {
+        return;
+    }
+
+    /* Delete every animation that targets this object. */
+    lv_anim_del(obj, NULL);
+
+    /* Recurse into children. */
+    uint32_t child_cnt = lv_obj_get_child_cnt(obj);
+    for (uint32_t i = 0; i < child_cnt; i++) {
+        windows_kill_animations(lv_obj_get_child(obj, i));
+    }
+}
+
 void windows_deinit(void)
 {
     if (!s_windows.initialized) {
@@ -379,6 +510,10 @@ void windows_deinit(void)
     keyboard_deinit();
 
     if (s_windows.screen != NULL) {
+        /* Kill every pending animation on the screen and its descendants
+         * BEFORE deleting any object, so no transition start callback can
+         * fire on freed memory afterwards. */
+        windows_kill_animations(s_windows.screen);
         lv_obj_clean(s_windows.screen);
     }
 
@@ -402,17 +537,9 @@ void windows_show_boot_banner(const char *message)
         return;
     }
 
-    lv_textarea_add_text(s_windows.transcript, message);
-    lv_textarea_add_text(s_windows.transcript, "\n");
-
-    /* Scroll to end */
-    const char *txt = lv_textarea_get_text(s_windows.transcript);
-    if (txt != NULL) {
-        size_t len = strlen(txt);
-        if (len > 0) {
-            lv_textarea_set_cursor_pos(s_windows.transcript, (int32_t)len);
-        }
-    }
+    /* Render the banner via the label-with-recolor transcript. ANSI codes in
+     * the message are converted to recolor markup and set directly. */
+    windows_set_transcript_text(message);
 }
 
 void windows_reset_input_line(const char *prompt)

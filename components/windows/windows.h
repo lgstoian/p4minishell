@@ -99,8 +99,21 @@ lv_coord_t windows_scale_width_percent(int percent, lv_coord_t min_w, lv_coord_t
  * WINDOW OBJECT ACCESSORS
  * ======================================================================== */
 
-/** Get the transcript textarea (read-only command output). */
+/** Get the transcript (LVGL label showing coloured command output). */
 lv_obj_t *windows_get_transcript(void);
+
+/**
+ * Set the transcript text, converting ANSI SGR escape sequences to LVGL
+ * recolor markup for coloured rendering on the label.
+ *
+ * @param text  ANSI text to render (may contain ESC[..m sequences).
+ */
+void windows_set_transcript_text(const char *text);
+
+/**
+ * Scroll the transcript to the end.
+ */
+void windows_scroll_transcript_to_end(void);
 
 /** Get the input line textarea (single-line command entry). */
 lv_obj_t *windows_get_input_line(void);

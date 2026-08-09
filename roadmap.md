@@ -159,7 +159,17 @@ Implemented today in the checked-in firmware:
 
 ---
 
-## Recently Completed (v0.23.0 - August 2026)
+## Recently Completed (v0.24.6 - August 2026)
+
+### LVGL transcript colour rendering and crash fixes
+- ✅ The on-screen transcript now renders the ANSI colour scheme: it is an `lv_spangroup`
+      where each coloured run of the output becomes a span with an explicit text colour, so
+      the display matches the UART console (previously monochrome green).
+- ✅ The span-group rebuild is deferred to an `lv_async_call` so deleting/recreating spans
+      never races a running redraw (fixed a `Load access fault` in `lv_draw_span` after
+      on-screen keyboard input).
+- ✅ Upgraded LVGL from 9.2.2 to 9.4.0 (large bug-fix release) and pinned it in the project
+      and test manifests.
 
 ### Networking layer consolidation
 - ✅ Corrected the initialization order to the canonical ESP-Hosted sequence: transport

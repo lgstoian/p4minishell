@@ -3,4 +3,5 @@ idf_component_register(
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         lvgl__lvgl
+        espressif__esp_lvgl_port
 )

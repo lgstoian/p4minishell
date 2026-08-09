@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -72,6 +73,11 @@ static bool s_initialized = false;
 
 /* Transcript */
 static char s_transcript[SHELL_TRANSCRIPT_BYTES];
+/* ANSI form of the transcript (real SGR escapes). Kept in parallel with the
+ * plain s_transcript: the label renders this via ansi_to_lvgl_recolor() so
+ * on-screen colours match the UART console, while history/redirection keep
+ * using the plain form. */
+static char s_transcript_ansi[SHELL_TRANSCRIPT_BYTES];
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static size_t s_async_transcript_len;
 static bool s_async_transcript_flush_queued;
@@ -153,7 +159,130 @@ static void shell_prompt_expand(char *output, size_t output_size, bool allow_esc
  * ======================================================================== */
 
 /**
- * Append text to the transcript buffer and repaint the LVGL textarea.
+ * Format a value wrapped in a colour spec into a caller buffer, converting
+ * the `@`-specifiers to real SGR escapes. The result is safe to hand to
+ * shell_transcript_appendf_ansi() as a %s argument: ansi_vformat() will not
+ * touch the already-converted bytes, ansi_strip_to_plain() (used for the LVGL
+ * transcript) strips the real escapes back to plain text, and the UART console
+ * renders the escapes as colour. Without this helper, callers that pass a
+ * coloured value as a %s argument would emit the literal "@G...@R" markers.
+ *
+ * @param buf       Caller-provided output buffer.
+ * @param buf_size  Size of @p buf.
+ * @param colour    Palette macro for the value (e.g. SH_OK).
+ * @param value     Plain text to colour.
+ * @return Pointer to @p buf.
+ */
+static const char *shell_colour_value(char *buf, size_t buf_size, const char *colour, const char *value)
+{
+    char spec[P4_CONFIG_ANSI_BUFFER_BYTES];
+
+    if (buf == NULL || buf_size == 0) {
+        return buf;
+    }
+
+    snprintf(spec, sizeof(spec), "%s%s%s", colour, value != NULL ? value : "", SH_RST);
+    ansi_format(buf, buf_size, spec);
+    return buf;
+}
+
+/**
+ * Append to the plain transcript buffer with tail-keeping / truncation, and
+ * mirror the same tail-cut into the ANSI transcript buffer so the two stay
+ * aligned for the label render.
+ */
+static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
+                                              char *ansi, size_t ansi_size,
+                                              const char *plain_text,
+                                              const char *ansi_text,
+                                              const char *truncation_marker)
+{
+    size_t plain_len = strlen(plain);
+    size_t ansi_len = strlen(ansi);
+    size_t plain_text_len = strlen(plain_text);
+    size_t ansi_text_len = strlen(ansi_text);
+
+    if (plain_text == NULL || plain_text[0] == '\0') {
+        return;
+    }
+
+    /* A single append larger than the whole buffer keeps only its tail. */
+    if (plain_text_len >= plain_size) {
+        plain_text += plain_text_len - (plain_size - 1);
+        plain_text_len = strlen(plain_text);
+        ansi_text += ansi_text_len - (ansi_size - 1);
+        ansi_text_len = strlen(ansi_text);
+        plain[0] = '\0';
+        plain_len = 0;
+        ansi[0] = '\0';
+        ansi_len = 0;
+    }
+
+    /* Drop the oldest half and mark the cut. */
+    if (plain_len + plain_text_len + 1 >= plain_size) {
+        size_t keep = plain_size / 2;
+
+        if (plain_len > keep) {
+            memmove(plain, plain + plain_len - keep, keep);
+            plain_len = keep;
+            plain[plain_len] = '\0';
+        }
+        if (ansi_len > keep) {
+            memmove(ansi, ansi + ansi_len - keep, keep);
+            ansi_len = keep;
+            ansi[ansi_len] = '\0';
+        }
+
+        if (plain_len + strlen(truncation_marker) < plain_size) {
+            size_t marker_len = strlen(truncation_marker) - 1;
+            memcpy(plain + plain_len, truncation_marker, marker_len);
+            plain_len += marker_len;
+            plain[plain_len] = '\0';
+            if (ansi_len + marker_len < ansi_size) {
+                memcpy(ansi + ansi_len, truncation_marker, marker_len);
+                ansi_len += marker_len;
+                ansi[ansi_len] = '\0';
+            }
+        }
+    }
+
+    if (plain_len + plain_text_len + 1 >= plain_size) {
+        plain_text_len = plain_size - plain_len - 1;
+    }
+    memcpy(plain + plain_len, plain_text, plain_text_len);
+    plain[plain_len + plain_text_len] = '\0';
+
+    if (ansi_len + ansi_text_len + 1 >= ansi_size) {
+        ansi_text_len = ansi_size - ansi_len - 1;
+    }
+    memcpy(ansi + ansi_len, ansi_text, ansi_text_len);
+    ansi[ansi_len + ansi_text_len] = '\0';
+}
+
+/**
+ * Repaint the transcript label from the ANSI transcript buffer, converting
+ * the real SGR escapes into LVGL recolor markup so colours render on screen.
+ * Caller must hold the LVGL port lock.
+ */
+static void shell_transcript_update_label(void)
+{
+    lv_obj_t *transcript = windows_get_transcript();
+
+    if (transcript == NULL) {
+        return;
+    }
+
+    /* The transcript is an LVGL label with recolor enabled. windows_set_
+     * transcript_text() converts the ANSI buffer to recolor markup and defers
+     * the actual widget update (set text, layout, scroll) to the LVGL task via
+     * a coalesced lv_async_call, so no label work races the render cycle from
+     * a non-LVGL task. Called under lvgl_port lock from
+     * shell_transcript_append_internal. */
+    windows_set_transcript_text(s_transcript_ansi);
+}
+
+/**
+ * Append text to the transcript buffer and repaint the LVGL label.
  *
  * @param text           Text to append (already plain, no ANSI sequences).
  * @param mirror_to_uart When true, the same text is echoed to the serial
@@ -164,8 +293,6 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
 {
     static const char truncation_marker[] = "\n[history truncated]\n";
     lv_obj_t *transcript;
-    size_t current_len;
-    size_t text_len;
 
     if (text == NULL || text[0] == '\0') {
         return;
@@ -176,7 +303,7 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
     /* Once the UI is up, the transcript is LVGL-backed state. Serialize every
      * appender (the LVGL task, UART console task, Wi-Fi background task, and
      * command worker) against the render cycle with the recursive LVGL port
-     * lock, so the shared buffer and the textarea are never touched while the
+     * lock, so the shared buffers and the label are never touched while the
      * LVGL task is mid-render. The mutex is recursive, so call paths that
      * already hold it (LVGL event callbacks, shell_uart_console_submit_command)
      * nest without deadlock. */
@@ -184,41 +311,12 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
         lvgl_port_lock(0);
     }
 
-    current_len = strlen(s_transcript);
-    text_len = strlen(text);
-
-    /* A single append larger than the whole buffer keeps only its tail. */
-    if (text_len >= sizeof(s_transcript)) {
-        text += text_len - (sizeof(s_transcript) - 1);
-        text_len = strlen(text);
-        s_transcript[0] = '\0';
-        current_len = 0;
-    }
-
-    /* Drop the oldest half of the transcript and mark the cut so the user
-     * can tell scrollback was discarded rather than silently lost. */
-    if (current_len + text_len + 1 >= sizeof(s_transcript)) {
-        size_t keep = sizeof(s_transcript) / 2;
-
-        if (current_len > keep) {
-            memmove(s_transcript, s_transcript + current_len - keep, keep);
-            current_len = keep;
-            s_transcript[current_len] = '\0';
-        }
-
-        if (current_len + sizeof(truncation_marker) < sizeof(s_transcript)) {
-            memcpy(s_transcript + current_len, truncation_marker, sizeof(truncation_marker) - 1);
-            current_len += sizeof(truncation_marker) - 1;
-            s_transcript[current_len] = '\0';
-        }
-    }
-
-    if (current_len + text_len + 1 >= sizeof(s_transcript)) {
-        text_len = sizeof(s_transcript) - current_len - 1;
-    }
-
-    memcpy(s_transcript + current_len, text, text_len);
-    s_transcript[current_len + text_len] = '\0';
+    /* Append to both the plain transcript (history/redirection) and the ANSI
+     * transcript (on-screen label rendering). Plain input is identical in both
+     * forms. */
+    shell_transcript_append_to_buffer(s_transcript, sizeof(s_transcript),
+                                      s_transcript_ansi, sizeof(s_transcript_ansi),
+                                      text, text, truncation_marker);
 
     /* Mirror plain transcript output to the serial console so idf.py monitor
      * stays a first-class shell endpoint. */
@@ -226,10 +324,9 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
         shell_uart_console_write_text(text);
     }
 
-    transcript = windows_get_transcript();
+    shell_transcript_update_label();
+
     if (transcript != NULL) {
-        lv_textarea_set_text(transcript, s_transcript);
-        lv_textarea_set_cursor_pos(transcript, LV_TEXTAREA_CURSOR_LAST);
         lvgl_port_unlock();
     }
 }
@@ -258,18 +355,32 @@ void shell_transcript_appendf(const char *format, ...)
 void shell_transcript_append_ansi(const char *text)
 {
     char plain[P4_CONFIG_ANSI_BUFFER_BYTES];
+    lv_obj_t *transcript;
 
     if (text == NULL) {
         return;
     }
 
-    /* Strip ANSI escape sequences for the transcript textarea.
-     * LVGL textareas don't support per-character coloring, so we
-     * deliver plain text to the transcript. The UART console path
-     * passes ANSI codes through natively for real terminals, so the
-     * plain append must not mirror to UART or the line would print twice. */
+    /* The UART console passes the raw ANSI code through natively for real
+     * terminals; the LVGL transcript renders it via recolor markup so colours
+     * appear on screen too. s_transcript stays plain for history/redirection,
+     * while s_transcript_ansi keeps the real escape sequences for the label. */
     ansi_strip_to_plain(plain, sizeof(plain), text);
-    shell_transcript_append_internal(plain, false);
+
+    transcript = windows_get_transcript();
+    if (transcript != NULL) {
+        lvgl_port_lock(0);
+    }
+
+    shell_transcript_append_to_buffer(s_transcript, sizeof(s_transcript),
+                                      s_transcript_ansi, sizeof(s_transcript_ansi),
+                                      plain, text, "\n[history truncated]\n");
+
+    shell_transcript_update_label();
+
+    if (transcript != NULL) {
+        lvgl_port_unlock();
+    }
 
     /* Write the raw ANSI text to the UART console for
      * terminals that support ANSI rendering. */
@@ -311,28 +422,22 @@ void shell_transcript_appendf_ansi(const char *format, ...)
 static void shell_print_coloured(const char *colour, const char *format,
                                  bool newline, va_list args)
 {
-    /* The body is rendered into a smaller buffer than the composed line so
-     * there is guaranteed room for the colour prefix, the reset, and the
-     * optional trailing newline. */
-    char body[SHELL_SEMANTIC_BODY_BYTES];
+    char line[P4_CONFIG_ANSI_BUFFER_BYTES];
     char fmt[P4_CONFIG_ANSI_BUFFER_BYTES];
 
     if (format == NULL) {
         return;
     }
 
-    /* Render the caller's text with the real printf, so width and precision
-     * flags work. Doing it first also means a '%s' value containing '@' can
-     * never be mistaken for a colour specifier. */
-    vsnprintf(body, sizeof(body), format, args);
-
-    /* The SH_* macros expand to '@'-specifiers, which ansi_vformat (reached
-     * through shell_transcript_appendf_ansi) converts to real SGR escapes.
-     * The colour and reset must be literal in the format string for that
-     * conversion to happen; the rendered body is passed as a %s argument so
-     * any literal '%' in it stays data. */
-    snprintf(fmt, sizeof(fmt), "%s%%s%s%s", colour, SH_RST, newline ? "\n" : "");
-    shell_transcript_appendf_ansi(fmt, body);
+    /* Compose the full format string with the colour prefix and reset suffix
+     * literal, then render the whole thing through ansi_vformat so every
+     * @-specifier (both the palette wrapper and any the caller embedded, e.g.
+     * SH_LBL/SH_VAL in shell_print_field) is converted to real SGR escapes.
+     * The caller's args go straight through ansi_vformat, so any '%s' value
+     * containing '@' is treated as data (injection guard). */
+    snprintf(fmt, sizeof(fmt), "%s%s%s%s", colour, format, SH_RST, newline ? "\n" : "");
+    ansi_vformat(line, sizeof(line), fmt, args);
+    shell_transcript_append_ansi(line);
 }
 
 void shell_print_heading(const char *format, ...)
@@ -361,7 +466,12 @@ void shell_print_field(const char *label, const char *format, ...)
         va_end(args);
     }
 
-    snprintf(line, sizeof(line), SH_LBL "%s" SH_RST " " SH_VAL "%s" SH_RST "\n", label, value);
+    /* The SH_* macros expand to @-specifiers; render the whole line through
+     * ansi_format so every specifier (label colour, value colour, resets) is
+     * converted to real SGR escapes. label and value are substituted as %s
+     * arguments so any literal '%' or '@' in them stays data. */
+    const char *fmt = SH_LBL "%s" SH_RST " " SH_VAL "%s" SH_RST "\n";
+    ansi_format(line, sizeof(line), fmt, label, value);
     shell_transcript_append_ansi(line);
 }
 
@@ -373,7 +483,12 @@ void shell_print_field_num(const char *label, long value)
         return;
     }
 
-    snprintf(line, sizeof(line), SH_LBL "%s" SH_RST " " SH_NUM "%ld" SH_RST "\n", label, value);
+    /* The SH_* macros expand to @-specifiers; render the whole line through
+     * ansi_format so every specifier is converted to real SGR escapes. label
+     * is substituted as a %s argument so any literal '%' or '@' in it stays
+     * data. */
+    const char *fmt = SH_LBL "%s" SH_RST " " SH_NUM "%ld" SH_RST "\n";
+    ansi_format(line, sizeof(line), fmt, label, value);
     shell_transcript_append_ansi(line);
 }
 
@@ -547,26 +662,20 @@ void shell_transcript_reset(void)
     lv_obj_t *transcript = windows_get_transcript();
 
     s_transcript[0] = '\0';
+    s_transcript_ansi[0] = '\0';
 
     if (transcript != NULL) {
         lvgl_port_lock(0);
-        lv_textarea_set_text(transcript, "");
+        windows_set_transcript_text("");
         lvgl_port_unlock();
     }
 }
 
 void shell_history_transcript_scroll_to_end(void)
 {
-    lv_obj_t *transcript = windows_get_transcript();
-
-    if (transcript == NULL) {
-        return;
-    }
-
-    lvgl_port_lock(0);
-    lv_obj_update_layout(transcript);
-    lv_obj_scroll_to_y(transcript, LV_COORD_MAX, LV_ANIM_OFF);
-    lvgl_port_unlock();
+    /* The transcript label is owned by the LVGL task; the window manager
+     * scrolls it directly under lvgl_port_lock. */
+    windows_scroll_transcript_to_end();
 }
 
 size_t shell_transcript_get_length(void)
@@ -1779,7 +1888,6 @@ void shell_command_sysinfo(void)
     uint32_t mins = (uptime_sec % 3600) / 60;
     uint32_t secs = uptime_sec % 60;
     unsigned int heap_pct = (unsigned int)(total_heap > 0 ? (free_heap * 100 / total_heap) : 0);
-    const char *heap_color = (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) ? SH_ERR : SH_OK;
 
     shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell System Information:" SH_RST "\n");
     shell_transcript_appendf_ansi("  " SH_LBL "board.requested_name:" SH_RST " %s\n", SHELL_BOARD_REQUESTED);
@@ -1788,10 +1896,15 @@ void shell_command_sysinfo(void)
                              P4_CONFIG_VERSION_MAJOR,
                              P4_CONFIG_VERSION_MINOR,
                              P4_CONFIG_VERSION_PATCH);
-    shell_transcript_appendf_ansi("  " SH_LBL "time:" SH_RST " %s %s%s\n",
-                             time_get_formatted(),
-                             time_get_timezone(),
-                             time_is_synchronized() ? " " SH_OK "(synced)" SH_RST : " " SH_WARN "(unsynced)" SH_RST);
+    if (time_is_synchronized()) {
+        shell_transcript_appendf_ansi("  " SH_LBL "time:" SH_RST " %s %s " SH_OK "(synced)" SH_RST "\n",
+                                 time_get_formatted(),
+                                 time_get_timezone());
+    } else {
+        shell_transcript_appendf_ansi("  " SH_LBL "time:" SH_RST " %s %s " SH_WARN "(unsynced)" SH_RST "\n",
+                                 time_get_formatted(),
+                                 time_get_timezone());
+    }
 
     /* Display info from the display manager */
     {
@@ -1805,11 +1918,16 @@ void shell_command_sysinfo(void)
                                  disp_info.panel_driver,
                                  BOARD_CFG_LCD_RST_GPIO,
                                  BOARD_CFG_LCD_BACKLIGHT_GPIO);
+        char power_str[24];
+        shell_colour_value(power_str, sizeof(power_str),
+                           disp_info.power_state == DISPLAY_POWER_ON ? SH_OK :
+                           disp_info.power_state == DISPLAY_POWER_SLEEP ? SH_WARN : SH_ERR,
+                           disp_info.power_state == DISPLAY_POWER_ON ? "on" :
+                           disp_info.power_state == DISPLAY_POWER_SLEEP ? "sleep" : "off");
         shell_transcript_appendf_ansi("  " SH_LBL "display.state:" SH_RST " brightness=%d%% rotation=%s power=%s refresh=%" PRIu32 "Hz\n",
                                  disp_info.brightness_percent,
                                  display_rotation_to_string(disp_info.rotation),
-                                 disp_info.power_state == DISPLAY_POWER_ON ? SH_OK "on" SH_RST :
-                                 disp_info.power_state == DISPLAY_POWER_SLEEP ? SH_WARN "sleep" SH_RST : SH_ERR "off" SH_RST,
+                                 power_str,
                                  disp_info.refresh.current_hz);
         shell_transcript_appendf_ansi("  " SH_LBL "display.timing:" SH_RST " pclk=%" PRIu32 "MHz, lanes=%d, bitrate=%" PRIu32
                                  "Mbps, hsync=%" PRIu32 " hbp=%" PRIu32 " hfp=%" PRIu32
@@ -1854,16 +1972,24 @@ void shell_command_sysinfo(void)
                              BOARD_CFG_RGB_LED_IS_WS2812);
     shell_transcript_appendf_ansi("  " SH_LBL "hardware.camera:" SH_RST " supported=%d\n", BOARD_CFG_CAMERA_SUPPORTED);
     shell_transcript_appendf_ansi("  " SH_LBL "storage:" SH_RST " spiffs=%s, sd=%s\n", BSP_SPIFFS_MOUNT_POINT, BSP_SD_MOUNT_POINT);
-    shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport:" SH_RST " sdio reset_gpio=%d busy=%s\n",
-                             P4_CONFIG_C6_HOST_RESET_GPIO,
-                             s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy()
-                                 ? SH_WARN "yes" SH_RST : SH_OK "no" SH_RST);
-    shell_transcript_appendf_ansi("  " SH_LBL "idf:" SH_RST " %s\n", esp_get_idf_version());
-    shell_transcript_appendf_ansi("  " SH_LBL "freertos:" SH_RST " tasks=%" PRIu32 " uptime=%" PRIu32 "d %" PRIu32 "h %" PRIu32 "m %" PRIu32 "s\n",
-                             task_count, days, hours, mins, secs);
-    shell_transcript_appendf_ansi("  " SH_LBL "heap:" SH_RST " free=%u bytes, internal_free=%u bytes, total=%u bytes (%s%u%%%%" SH_RST ")\n",
-                             (unsigned int)free_heap, (unsigned int)free_internal,
-                             (unsigned int)total_heap, heap_color, heap_pct);
+    shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport:" SH_RST " sdio reset_gpio=%d\n",
+                                 P4_CONFIG_C6_HOST_RESET_GPIO);
+    if (s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy()) {
+        shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport.busy:" SH_RST " " SH_WARN "yes" SH_RST "\n");
+    } else {
+        shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport.busy:" SH_RST " " SH_OK "no" SH_RST "\n");
+    }
+        shell_transcript_appendf_ansi("  " SH_LBL "idf:" SH_RST " %s\n", esp_get_idf_version());
+        shell_transcript_appendf_ansi("  " SH_LBL "freertos:" SH_RST " tasks=%" PRIu32 " uptime=%" PRIu32 "d %" PRIu32 "h %" PRIu32 "m %" PRIu32 "s\n",
+                                 task_count, days, hours, mins, secs);
+        shell_transcript_appendf_ansi("  " SH_LBL "heap:" SH_RST " free=%u bytes, internal_free=%u bytes, total=%u bytes (",
+                                 (unsigned int)free_heap, (unsigned int)free_internal,
+                                 (unsigned int)total_heap);
+        if (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) {
+            shell_transcript_appendf_ansi(SH_ERR "%u%%%%" SH_RST ")\n", heap_pct);
+        } else {
+            shell_transcript_appendf_ansi(SH_OK "%u%%%%" SH_RST ")\n", heap_pct);
+        }
 #if CONFIG_SPIRAM
     shell_transcript_appendf_ansi("  " SH_LBL "psram:" SH_RST " " SH_OK "enabled" SH_RST ", total=%u bytes, free=%u bytes\n",
                              (unsigned int)heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
@@ -1885,25 +2011,36 @@ void shell_command_version(void)
     size_t total_heap = heap_caps_get_total_size(MALLOC_CAP_8BIT);
     const char *idf_ver = esp_get_idf_version();
     unsigned int heap_pct = (unsigned int)(total_heap > 0 ? (free_heap * 100 / total_heap) : 0);
-    const char *heap_color = (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) ? SH_ERR : SH_OK;
 
     shell_transcript_appendf_ansi(SH_HEAD "%s" SH_RST "\n", SHELL_BOOT_MESSAGE);
     shell_transcript_appendf_ansi("  " SH_LBL "version:" SH_RST " %d.%d.%d\n",
                              P4_CONFIG_VERSION_MAJOR,
                              P4_CONFIG_VERSION_MINOR,
                              P4_CONFIG_VERSION_PATCH);
-    shell_transcript_appendf_ansi("  " SH_LBL "idf:" SH_RST " %s\n", idf_ver != NULL ? idf_ver : SH_ERR "unknown" SH_RST);
+    if (idf_ver != NULL) {
+        shell_transcript_appendf_ansi("  " SH_LBL "idf:" SH_RST " %s\n", idf_ver);
+    } else {
+        shell_transcript_appendf_ansi("  " SH_LBL "idf:" SH_RST " " SH_ERR "unknown" SH_RST "\n");
+    }
     shell_transcript_appendf_ansi("  " SH_LBL "board:" SH_RST " %s (%s)\n", SHELL_BOARD_REQUESTED, SHELL_BOARD_DETECTED);
     shell_transcript_appendf_ansi("  " SH_LBL "chip:" SH_RST " %s rev %d, %d cores\n",
                              CONFIG_IDF_TARGET, 1, 2);
-    shell_transcript_appendf_ansi("  " SH_LBL "time:" SH_RST " %s %s%s\n",
+    char synced_str[24];
+    shell_colour_value(synced_str, sizeof(synced_str),
+                       time_is_synchronized() ? SH_OK : SH_WARN,
+                       time_is_synchronized() ? "(synced)" : "(unsynced)");
+    shell_transcript_appendf_ansi("  " SH_LBL "time:" SH_RST " %s %s " SH_RST "%s\n",
                              time_get_formatted(),
                              time_get_timezone(),
-                             time_is_synchronized() ? " " SH_OK "(synced)" SH_RST : " " SH_WARN "(unsynced)" SH_RST);
+                             synced_str);
     shell_transcript_appendf_ansi("  " SH_LBL "uptime:" SH_RST " %" PRIu32 "s\n", uptime_sec);
-    shell_transcript_appendf_ansi("  " SH_LBL "heap:" SH_RST " %u/%u bytes free (%s%u%%%%" SH_RST ")\n",
-                             (unsigned int)free_heap, (unsigned int)total_heap,
-                             heap_color, heap_pct);
+    shell_transcript_appendf_ansi("  " SH_LBL "heap:" SH_RST " %u/%u bytes free (",
+                             (unsigned int)free_heap, (unsigned int)total_heap);
+    if (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) {
+        shell_transcript_appendf_ansi(SH_ERR "%u%%%%" SH_RST ")\n", heap_pct);
+    } else {
+        shell_transcript_appendf_ansi(SH_OK "%u%%%%" SH_RST ")\n", heap_pct);
+    }
     shell_transcript_appendf_ansi("  " SH_LBL "tasks:" SH_RST " %" PRIu32 "\n", task_count);
 }
 
@@ -1914,13 +2051,17 @@ void shell_command_about(void)
     uint32_t uptime_sec = (uint32_t)(uptime_us / 1000000ULL);
     const char *idf_ver = esp_get_idf_version();
 
-    shell_transcript_appendf_ansi(SH_HEAD SH_BOLD "P4MiniShell" SH_RST " — Embedded DOS-style command shell\n");
+    shell_transcript_appendf_ansi(SH_HEAD SH_BOLD "P4MiniShell" SH_RST " - Embedded DOS-style command shell\n");
     shell_transcript_appendf_ansi("  " SH_LBL "about.version:" SH_RST " %d.%d.%d\n",
                              P4_CONFIG_VERSION_MAJOR,
                              P4_CONFIG_VERSION_MINOR,
                              P4_CONFIG_VERSION_PATCH);
     shell_transcript_appendf_ansi("  " SH_LBL "about.board:" SH_RST " %s (%s)\n", SHELL_BOARD_REQUESTED, SHELL_BOARD_DETECTED);
-    shell_transcript_appendf_ansi("  " SH_LBL "about.idf:" SH_RST " %s\n", idf_ver != NULL ? idf_ver : SH_ERR "unknown" SH_RST);
+    if (idf_ver != NULL) {
+        shell_transcript_appendf_ansi("  " SH_LBL "about.idf:" SH_RST " %s\n", idf_ver);
+    } else {
+        shell_transcript_appendf_ansi("  " SH_LBL "about.idf:" SH_RST " " SH_ERR "unknown" SH_RST "\n");
+    }
     shell_transcript_appendf_ansi("  " SH_LBL "about.display:" SH_RST " JD9165 1024x600 MIPI-DSI, GT911 touch\n");
     shell_transcript_appendf_ansi("  " SH_LBL "about.ui:" SH_RST " locked transcript with touch keyboard, history buttons, and command prompt\n");
     shell_transcript_appendf_ansi("  " SH_LBL "about.header:" SH_RST " real-time status bar (WiFi, BT, USB, SD, MEM, CPU, BAT) from FreeRTOS\n");
@@ -1940,11 +2081,14 @@ void shell_command_mem(void)
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     uint32_t task_count = uxTaskGetNumberOfTasks();
     unsigned int heap_pct = (unsigned int)(total_heap > 0 ? (free_heap * 100 / total_heap) : 0);
-    const char *heap_color = (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) ? SH_ERR : SH_OK;
 
-    shell_transcript_appendf_ansi("  " SH_LBL "mem.heap:" SH_RST " free=%u bytes, total=%u bytes (%s%u%%%%" SH_RST ")\n",
-                             (unsigned int)free_heap, (unsigned int)total_heap,
-                             heap_color, heap_pct);
+    shell_transcript_appendf_ansi("  " SH_LBL "mem.heap:" SH_RST " free=%u bytes, total=%u bytes (",
+                             (unsigned int)free_heap, (unsigned int)total_heap);
+    if (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) {
+        shell_transcript_appendf_ansi(SH_ERR "%u%%%%" SH_RST ")\n", heap_pct);
+    } else {
+        shell_transcript_appendf_ansi(SH_OK "%u%%%%" SH_RST ")\n", heap_pct);
+    }
     shell_transcript_appendf_ansi("  " SH_LBL "mem.heap_min:" SH_RST " %u bytes\n", (unsigned int)min_free);
     shell_transcript_appendf_ansi("  " SH_LBL "mem.internal:" SH_RST " %u bytes free\n", (unsigned int)free_internal);
     shell_transcript_appendf_ansi("  " SH_LBL "mem.tasks:" SH_RST " %" PRIu32 "\n", task_count);
@@ -2434,9 +2578,16 @@ int shell_split_chain(char *text,
         return count;
     }
 
-    segments[count].command = shell_trim(segment_start);
-    segments[count].op = pending_op;
-    count++;
+    {
+        char *final_command = shell_trim(segment_start);
+        /* Do not emit a trailing empty segment (e.g. after a dangling
+         * separator, or for an all-whitespace line). */
+        if (final_command[0] != '\0') {
+            segments[count].command = final_command;
+            segments[count].op = pending_op;
+            count++;
+        }
+    }
 
     return count;
 }
@@ -2451,7 +2602,7 @@ bool shell_parse_percentage_arg(const char *text, int *percentage_out)
     }
 
     value = strtol(text, &endptr, 10);
-    if (*endptr != '\0' || value < 0 || value > 100) {
+    if (endptr == text || *endptr != '\0' || value < 0 || value > 100) {
         return false;
     }
 
@@ -2469,7 +2620,7 @@ bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_value, 
     }
 
     value = strtoul(text, &endptr, 10);
-    if (*endptr != '\0' || value < min_value || value > max_value) {
+    if (endptr == text || *endptr != '\0' || value < min_value || value > max_value) {
         return false;
     }
 

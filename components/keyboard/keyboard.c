@@ -19,6 +19,7 @@
 #include "keyboard.h"
 #include "display.h"
 #include "p4minishell_config.h"
+#include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -182,17 +183,23 @@ void keyboard_show(void)
         return; /* Already visible */
     }
 
+    /* LVGL widget access — lock for safety when called from command worker
+     * task (e.g. `keyboard show`/`hide`/`toggle` commands). */
+    lvgl_port_lock(0);
+
     lv_obj_remove_flag(s_keyboard.widget, LV_OBJ_FLAG_HIDDEN);
     s_keyboard.visible = true;
-
-    /* Notify window manager to reflow layout */
-    if (s_keyboard.visibility_callback != NULL) {
-        s_keyboard.visibility_callback(true);
-    }
 
     /* Re-bind textarea if one was set */
     if (s_keyboard.textarea != NULL) {
         lv_keyboard_set_textarea(s_keyboard.widget, s_keyboard.textarea);
+    }
+
+    lvgl_port_unlock();
+
+    /* Notify window manager to reflow layout */
+    if (s_keyboard.visibility_callback != NULL) {
+        s_keyboard.visibility_callback(true);
     }
 
     ESP_LOGI(KEYBOARD_TAG, "Keyboard shown");
@@ -208,8 +215,14 @@ void keyboard_hide(void)
         return; /* Already hidden */
     }
 
+    /* LVGL widget access — lock for safety when called from command worker
+     * task (e.g. `keyboard show`/`hide`/`toggle` commands). */
+    lvgl_port_lock(0);
+
     lv_obj_add_flag(s_keyboard.widget, LV_OBJ_FLAG_HIDDEN);
     s_keyboard.visible = false;
+
+    lvgl_port_unlock();
 
     /* Notify window manager to reflow layout */
     if (s_keyboard.visibility_callback != NULL) {

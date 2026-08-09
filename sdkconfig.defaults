@@ -94,3 +94,18 @@ CONFIG_LOG_DEFAULT_LEVEL_WARN=y
 # PSRAM XIP instruction/rodata mapping must stay disabled: enabling it
 # overflows the flash/PSRAM budget at link time on this board.
 CONFIG_SPIRAM_XIP_FROM_PSRAM=n
+
+# On RISC-V the IDF default backtrace method is "None", which hides the call
+# stack on a panic. Enable unwinding so crash reports include a real
+# backtrace for triage on hardware.
+CONFIG_ESP_SYSTEM_USE_EH_FRAME=y
+
+# Disable the LVGL default theme's style-transition animations. The theme
+# starts an 80 ms transition animation on every style change; widgets that are
+# restyled on every refresh (header, transcript, input line, keyboard) churn
+# pending transitions, and under load (e.g. Bluetooth NimBLE init) the churned
+# transition descriptors corrupt the LVGL pool - an intermittent fault in the
+# transition start/completed callbacks dereferencing reused memory. Style
+# changes become instant. Scroll, cursor, and interaction behaviour are
+# unaffected (they are separate from style transitions).
+CONFIG_LV_THEME_DEFAULT_TRANSITION_TIME=0

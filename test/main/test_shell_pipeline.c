@@ -46,12 +46,17 @@ void test_pipe_detection_agreement(void)
     TEST_ASSERT_EQUAL(2, argc);
     TEST_ASSERT_EQUAL_STRING("a | b", argv[1]);
 
-    /* A caret-escaped pipe is data. */
+    /* A single caret escapes the pipe; a doubled caret is a literal caret,
+     * so the pipe that follows it is real syntax. */
     strcpy(buf, "echo a^|b");
     TEST_ASSERT_FALSE(shell_has_unquoted_char(buf, '|'));
     argc = shell_split_args(buf, argv, 8);
     TEST_ASSERT_EQUAL(2, argc);
     TEST_ASSERT_EQUAL_STRING("a|b", argv[1]);
+
+    /* A doubled caret yields a literal caret; the pipe after it is real. */
+    strcpy(buf, "echo a^^|b");
+    TEST_ASSERT_TRUE(shell_has_unquoted_char(buf, '|'));
 
     /* A pipe after a closed quote is real syntax. */
     strcpy(buf, "echo \"hello\" | sort");
@@ -64,10 +69,6 @@ void test_pipe_detection_agreement(void)
     /* Mixed: one quoted pipe and one real pipe. The real one is detected. */
     strcpy(buf, "echo \"a | b\" | sort");
     TEST_ASSERT_TRUE(shell_has_unquoted_char(buf, '|'));
-
-    /* An escaped caret before a pipe: the pipe is still data. */
-    strcpy(buf, "echo a^^|b");
-    TEST_ASSERT_FALSE(shell_has_unquoted_char(buf, '|'));
 
     /* NULL safety. */
     TEST_ASSERT_FALSE(shell_has_unquoted_char(NULL, '|'));
@@ -191,7 +192,9 @@ void test_chain_truncation_with_pipes(void)
     TEST_ASSERT_EQUAL(2, count);
     TEST_ASSERT_TRUE(truncated);
 
-    /* Without truncation, all three links are produced. */
+    /* Without truncation, all three links are produced. (The chain splitter
+     * modifies its input in place, so restore the buffer first.) */
+    strcpy(buf, "type a.txt | sort && type b.txt | sort && type c.txt | sort");
     count = shell_split_chain(buf, segments, 8, &truncated);
     TEST_ASSERT_EQUAL(3, count);
     TEST_ASSERT_FALSE(truncated);
