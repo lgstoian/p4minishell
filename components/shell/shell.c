@@ -74,9 +74,9 @@ static bool s_initialized = false;
 /* Transcript */
 static char s_transcript[SHELL_TRANSCRIPT_BYTES];
 /* ANSI form of the transcript (real SGR escapes). Kept in parallel with the
- * plain s_transcript: the label renders this via ansi_to_lvgl_recolor() so
- * on-screen colours match the UART console, while history/redirection keep
- * using the plain form. */
+ * plain s_transcript: the span-group transcript parses this into coloured
+ * spans so on-screen colours match the UART console, while history/
+ * redirection keep using the plain form. */
 static char s_transcript_ansi[SHELL_TRANSCRIPT_BYTES];
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static size_t s_async_transcript_len;

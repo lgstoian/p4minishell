@@ -10,11 +10,12 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.12
-# Last updated: 2026-08-10 (Screenshot command: `screenshot` / `scr` / `capture`
-#                           captures the LVGL screen as a BMP image, streaming
-#                           to serial console with magic markers or saving to SD)
-config_version: "0.24.12"
+# Version: 0.24.13
+# Last updated: 2026-08-10 (Transcript colour fix: the on-screen transcript is
+#                           now an LVGL span group that parses raw ANSI SGR
+#                           codes into coloured spans, so `#RRGGBB` recolor
+#                           markup can no longer leak into visible text)
+config_version: "0.24.13"
 
 # ---- Shell Identity ----
 shell_identity:

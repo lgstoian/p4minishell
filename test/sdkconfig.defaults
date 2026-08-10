@@ -62,3 +62,10 @@ CONFIG_USB_HOST_RESUME_HOLD_MS=30
 CONFIG_USB_HOST_RESUME_RECOVERY_MS=20
 CONFIG_USB_HOST_SUSPEND_ENTRY_MS=20
 CONFIG_USB_OTG_SUPPORTED=y
+
+# LVGL features used by components/command (screenshot) and components/windows
+# (coloured transcript span group). command.c calls lv_snapshot_take_to_draw_buf
+# and windows.c builds an lv_spangroup, so both must be compiled in for the
+# test project to link the shared components.
+CONFIG_LV_USE_SNAPSHOT=y
+CONFIG_LV_USE_SPAN=y

@@ -210,30 +210,28 @@ static void windows_create_transcript(void)
     const lv_font_t *font = windows_get_terminal_font();
     lv_obj_t *screen = s_windows.screen;
 
-    /* The transcript is an LVGL label with recolor enabled. ANSI SGR escape
-     * sequences are converted to LVGL recolor markup (#RRGGBB text #) before
-     * being set as the label text. Labels handle text updates atomically with
-     * no pool churn, unlike span groups which must delete/recreate spans.
+    /* The transcript is an LVGL span group. Raw ANSI SGR escape sequences
+     * (as produced by the shell's semantic helpers) are parsed into one
+     * coloured span per run, so the on-screen transcript matches the UART
+     * console. This is the documented architecture: no recolor markup is
+     * ever set on the widget, so `#RRGGBB` control tokens can never leak
+     * into the visible text.
      *
-     * The actual widget update (set text, force layout, scroll to end) is
-     * DEFERRED to the LVGL task via lv_async_call (see
-     * windows_set_transcript_text): applying label text and forcing a flex
-     * layout synchronously from a non-LVGL task races with the LVGL render
-     * cycle and hangs lv_timer_handler on the LVGL task, freezing the whole
-     * UI. The apply is coalesced so bursty output paints once per handler pass.
+     * The actual widget update (rebuild spans, force layout, scroll to end)
+     * is DEFERRED to the LVGL task via lv_async_call (see
+     * windows_set_transcript_text): rebuilding spans synchronously from a
+     * non-LVGL task races with the LVGL render cycle and hangs
+     * lv_timer_handler on the LVGL task, freezing the whole UI. The apply is
+     * coalesced so bursty output paints once per handler pass.
      */
-    s_windows.transcript = lv_label_create(screen);
+    s_windows.transcript = lv_spangroup_create(screen);
     lv_obj_set_width(s_windows.transcript, LV_PCT(100));
     lv_obj_set_flex_grow(s_windows.transcript, 1);
-    lv_label_set_long_mode(s_windows.transcript, LV_LABEL_LONG_MODE_WRAP);
-    lv_label_set_recolor(s_windows.transcript, true);
     lv_obj_set_style_bg_color(s_windows.transcript,
                                windows_get_color(WINDOWS_COLOR_BG_TRANSCRIPT), 0);
     lv_obj_set_style_bg_opa(s_windows.transcript, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_windows.transcript, 0, 0);
     lv_obj_set_style_pad_all(s_windows.transcript, 16, 0);
-    lv_obj_set_style_text_color(s_windows.transcript,
-                                 windows_get_color(WINDOWS_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(s_windows.transcript, font, 0);
     lv_obj_set_scrollbar_mode(s_windows.transcript, LV_SCROLLBAR_MODE_ACTIVE);
 }
@@ -311,28 +309,57 @@ lv_obj_t *windows_get_transcript(void)
     return s_windows.transcript;
 }
 
-/* ---- LVGL label-with-recolor transcript implementation -----------------
- * The transcript renders coloured shell output on the display. ANSI SGR escape
- * sequences are converted to LVGL recolor markup (#RRGGBB text #) and set as
- * the label text. Labels handle text updates atomically — no span create/delete
- * churn, no pool corruption, no deferred rebuild needed.
+/* ---- LVGL span-group transcript implementation --------------------------
+ * The transcript renders coloured shell output on the display. Raw ANSI SGR
+ * escape sequences (as produced by the shell's semantic helpers) are parsed
+ * into one coloured span per run. No recolor markup is ever generated, so
+ * `#RRGGBB` control tokens can never appear as visible characters.
  *
- * The widget update itself is DEFERRED to the LVGL task. Applying the label
- * text and forcing the flex layout synchronously from a non-LVGL task (the
- * command worker, UART console, or networking background task) while the LVGL
- * task is mid-render hangs lv_timer_handler and freezes the whole UI. Every
- * request stages the recolor markup into a persistent buffer and schedules a
- * single lv_async_call; the callback runs on the LVGL task where it paints the
- * newest staged content and scrolls to the end. Bursts of output coalesce into
- * one apply per handler pass, which also keeps the render cost bounded.
+ * The widget update itself is DEFERRED to the LVGL task. Rebuilding spans and
+ * forcing the flex layout synchronously from a non-LVGL task (the command
+ * worker, UART console, or networking background task) while the LVGL task is
+ * mid-render hangs lv_timer_handler and freezes the whole UI. Every request
+ * stages the raw ANSI text into a persistent buffer and schedules a single
+ * lv_async_call; the callback runs on the LVGL task where it rebuilds the
+ * spans from the newest staged content and scrolls to the end. Bursts of
+ * output coalesce into one apply per handler pass, which also keeps the
+ * render cost bounded.
  */
 
 static bool s_transcript_apply_pending = false;
-static char s_transcript_recolor[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
+static char s_transcript_staged[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
 
 /**
- * Paint the staged recolor markup onto the transcript label and scroll to the
- * end. Runs on the LVGL task (from the async apply callback) or, in the
+ * Segment callback for ansi_process_text(): append one coloured span holding
+ * @p text with the ANSI state's foreground colour. Runs on the LVGL task from
+ * windows_transcript_apply().
+ */
+static void windows_span_segment(const char *text, const ansi_state_t *state, void *user_data)
+{
+    lv_obj_t *group = (lv_obj_t *)user_data;
+    lv_span_t *span;
+    lv_style_t *style;
+
+    if (group == NULL || text == NULL || text[0] == '\0') {
+        return;
+    }
+
+    span = lv_spangroup_add_span(group);
+    if (span == NULL) {
+        return;
+    }
+
+    lv_span_set_text(span, text);
+    style = lv_span_get_style(span);
+    if (state != NULL) {
+        lv_style_set_text_color(style, lv_color_hex(state->fg_color));
+    }
+    lv_style_set_text_font(style, windows_get_terminal_font());
+}
+
+/**
+ * Paint the staged raw ANSI text onto the transcript span group and scroll to
+ * the end. Runs on the LVGL task (from the async apply callback) or, in the
  * lv_async_call failure fallback, on the caller's task while holding the LVGL
  * port lock. Both callers serialize with the render cycle, so the staging
  * buffer is never written and read concurrently.
@@ -340,12 +367,31 @@ static char s_transcript_recolor[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
 static void windows_transcript_apply(void)
 {
     lv_obj_t *transcript = s_windows.transcript;
+    uint32_t count;
+    uint32_t index;
 
     if (transcript == NULL) {
         return;
     }
 
-    lv_label_set_text(transcript, s_transcript_recolor);
+    /* Remove every existing span before rebuilding from the staged ANSI. */
+    count = lv_spangroup_get_span_count(transcript);
+    for (index = 0; index < count; index++) {
+        lv_span_t *span = lv_spangroup_get_child(transcript, 0);
+
+        if (span != NULL) {
+            lv_spangroup_delete_span(transcript, span);
+        }
+    }
+
+    if (s_transcript_staged[0] != '\0') {
+        ansi_process_text(s_transcript_staged, windows_span_segment, transcript);
+    }
+
+    ESP_LOGD(WINDOWS_TAG, "transcript: %u spans, staged=%u bytes",
+             (unsigned int)lv_spangroup_get_span_count(transcript),
+             (unsigned int)strlen(s_transcript_staged));
+
     lv_obj_update_layout(transcript);
     lv_obj_scroll_to_y(transcript, LV_COORD_MAX, LV_ANIM_OFF);
 }
@@ -386,10 +432,11 @@ void windows_set_transcript_text(const char *text)
         text = "";
     }
 
-    /* Convert ANSI SGR escape sequences to LVGL recolor markup and stage it
-     * for the deferred apply. Callers hold the LVGL port lock, so the staging
-     * buffer is never written and read concurrently. */
-    ansi_to_lvgl_recolor(text, s_transcript_recolor, sizeof(s_transcript_recolor));
+    /* Stage the raw ANSI text for the deferred span rebuild. Callers hold the
+     * LVGL port lock, so the staging buffer is never written and read
+     * concurrently. The staging buffer is twice the ANSI transcript size, so
+     * the accumulated scrollback always fits. */
+    snprintf(s_transcript_staged, sizeof(s_transcript_staged), "%s", text);
 
     windows_transcript_schedule_apply();
 }

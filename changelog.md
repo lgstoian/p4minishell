@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.13] - 2026-08-10
+
+Transcript colour rendering fix. The on-screen transcript was showing LVGL
+recolor markup (`#RRGGBB … #`) as literal visible characters instead of
+applying the colours, leaving the shell monochrome.
+
+### Fixed - transcript now renders ANSI colours as a span group
+
+- Root cause: `windows_create_transcript()` created an `lv_label` and relied on
+  LVGL's recolor feature (`lv_label_set_recolor(true)`) to interpret
+  `#RRGGBB` markup produced by `ansi_to_lvgl_recolor()`. In this LVGL 9.4
+  build the markup was not interpreted and was dumped into the visible string,
+  so every colour change left a literal `#RRGGBB` token on the display.
+- Fix: `components/windows/windows.c` now creates the transcript as an
+  `lv_spangroup` (the architecture already documented in `ai-context.md`) and
+  parses the raw ANSI SGR text directly into one coloured span per run via
+  `ansi_process_text()`. No recolor markup is ever generated, so colour
+  control tokens cannot leak into the visible text.
+- The deferred rebuild (coalesced `lv_async_call` onto the LVGL task) is
+  preserved, so bursty output still paints once per handler pass with no
+  render-cycle race.
+- Verified on hardware (COM11) with the `screenshot` command: `wifi status`
+  and `sysinfo` now render cyan labels, magenta numbers, green headings and
+  yellow warnings. Pre-fix screenshot: 0 magenta pixels; post-fix: cyan,
+  magenta, green and yellow all present.
+- Build: 0 errors, 0 warnings for the firmware and the test project.
+
+---
+
 ## [0.24.12] - 2026-08-10
 
 Screenshot feature. Adds the `screenshot` command (aliases `scr`, `capture`) for
