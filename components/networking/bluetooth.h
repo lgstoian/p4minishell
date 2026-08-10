@@ -26,11 +26,25 @@ void bluetooth_handle_command(char *command);
 /** Print transcript-visible Bluetooth readiness, NimBLE state, and advertising state. */
 void bluetooth_status(void);
 
-/** Run a BLE scan through hosted NimBLE and print discovered devices to transcript. */
-void bluetooth_scan(void);
+/**
+ * Run a bounded BLE scan through hosted NimBLE and print the discovered
+ * devices (name + address + RSSI) sorted by signal strength.
+ *
+ * @param limit  Maximum results to print. <= 0 selects the configured default
+ *               (P4_CONFIG_BT_SCAN_LIMIT). The scan always terminates after
+ *               P4_CONFIG_BT_SCAN_DURATION_MS so the command never hangs.
+ */
+void bluetooth_scan(int limit);
 
-/** Start (true) or stop (false) non-connectable BLE advertising. */
-void bluetooth_advertise(bool enable);
+/**
+ * Start (true) or stop (false) non-connectable BLE advertising.
+ *
+ * @param enable  true to advertise, false to stop.
+ * @param name    Session-only advertising name. When non-NULL and non-empty,
+ *                it overrides the configured default device name for the rest
+ *                of this session; it is never persisted across boots.
+ */
+void bluetooth_advertise(bool enable, const char *name);
 
 /** Returns true when hosted controller and NimBLE host are initialized. */
 bool bluetooth_is_enabled(void);

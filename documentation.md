@@ -18,6 +18,7 @@ components/shell/shell.c        Shell core (transcript, history, debug log, UART
 components/storage/storage.c    SD sessions, path resolution, FATFS conversion, size formatting, cwd
 components/storage/storage_commands.c  DOS file commands, extended DOS tools, text utilities, sd family
 components/batch/batch.c        Batch engine, labels, for loops, pipes, environment variables, PATH
+components/boot/boot.c            DOS-style boot scripting (CONFIG.SYS parser, AUTOEXEC.BAT runner)
 components/command/command.c    Command module (dispatcher, worker task, execution pipeline, hardware and system commands)
 components/command/command_ui.c  UI query commands (display, keyboard, windows subcommands)
 components/header/header.c      Fixed top status bar (LVGL widgets)
@@ -100,8 +101,11 @@ Owns the shell's runtime surface and output plumbing:
   When full, the oldest half is dropped and a `[history truncated]` marker is inserted.
 - **Async transcript buffer**: Thread-safe 2 KB staging buffer for background-task output,
   flushed via `lv_async_call`. Oldest bytes are dropped first when full, so the newest module
-  output always reaches the user. The buffer is drained into a local copy before the LVGL
-  append so no LVGL work runs inside a critical section.
+  output always reaches the user. The buffer is drained into a heap copy (never a line-sized
+  stack buffer — it can be 2 KB) before the LVGL append so no LVGL work runs inside a critical
+  section. Before the UI exists (`windows_get_transcript()` is NULL — unit tests, early boot)
+  the flush runs synchronously instead of through `lv_async_call`, so an uninitialized LVGL
+  heap is never touched.
 - **ANSI output**: `shell_transcript_append_ansi()` strips escape sequences for the LVGL
   textarea and forwards the raw sequences to the serial console for native rendering
 - **Semantic print helpers**: `shell_print_heading()`, `shell_print_field()`,
@@ -130,6 +134,12 @@ Owns the shell's runtime surface and output plumbing:
   a timed delay on a headless board.
 - **Line input**: `shell_read_line()` collects a typed line through the key queue, echoing as
   it goes. Backspace edits, ESC cancels, Enter submits. Backs `set /p`.
+- **UART console line assembly**: the console reader (`shell_uart_console_task`) uses
+  line-buffered `fgets` on unbuffered stdin, and USB-Serial-JTAG delivers one logical line
+  across several reads (its RX FIFO is 64 bytes). The task assembles fragments until a line
+  terminator (or the 256-byte command buffer fills) before submitting, so a long command is
+  never split into two. During an active key wait the first newly-read character is still
+  answered immediately, without waiting for the terminator.
 - **DOS prompt template engine**: `shell_prompt_set_template()` stores the template the
   `prompt` command supplies; `shell_prompt_render_plain()` expands `$p $g $l $b $n $d $t $v $s
   $_ $q $$ $a $c $f $e $h` against live state. One template drives both the UART console prompt
@@ -210,8 +220,14 @@ Owns everything that sits between the shell commands and the SD card. Split into
 - Volume management: `chkdsk`/`scandisk` reports capacity and cluster geometry, with `/F`
   walking every directory to verify readability. The scan is read-only by design: the firmware
   never rewrites FAT structures, so a genuinely corrupt card is reported rather than modified.
-  `format` reformats through `esp_vfs_fat_sdcard_format()` behind the exact confirmation word,
-  collected through the shell key queue, and refuses when no interactive source is attached.
+  `format` reformats through `esp_vfs_fat_sdcard_format_cfg()` (honouring `/FS:FAT|FAT32`,
+  `/A:size` cluster size, `/V:label`, and `/Q`) behind the exact confirmation word, collected
+  through the shell key queue, and refuses when no interactive source is attached.
+- Disk and partitions: the `disk` family (`list`, `detail`, `clean`, `create partition
+  primary [size=N]`, `delete partition N`, `format`) manages the MBR partition table through
+  `sdmmc_read_sectors`/`sdmmc_write_sectors` on the BSP card handle, unmounting the FATFS
+  volume first. The volume services in `storage.c` are parameterized by `storage_volume_t`
+  so a future USB OTG MSC volume can be added without changing the command surface.
 - Recursive directory tree: `tree [path] [/F] [/A]` with DOS box-drawing connectors, bounded by
   `P4_CONFIG_TREE_DEPTH_MAX` and the 128-entry listing cap. Each directory level is buffered on
   the heap rather than the worker-task stack, so a wide directory cannot overflow it.
@@ -241,7 +257,16 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   `.bat` appended, then each `;`-separated PATH entry with both forms
 - **Labels and jumps**: The label table is built with a full-file scan on load
   (`P4_CONFIG_BATCH_LABEL_MAX` = 32 targets), so `goto` and `call :label` are an `fseek()`
-- **`for` loops**: `for %%var in (set) do command` with per-iteration `%var` substitution
+  across the file. `goto :eof` is an implicit end-of-file label: it ends the current frame
+  exactly like reaching the end of the file, unwinding any open setlocal scopes. A pending
+  goto is always cleared when a frame returns, so a `goto`/`goto :eof` issued from inside a
+  `for` or `if` body in a called script cannot leak into the caller's line loop.
+- **`for` loops**: `for %%var in (set) do command` with per-iteration `%var` substitution.
+  The set is either a space-separated literal token list (`for %%I in (a b c) do echo %%I`)
+  or a single wildcard pattern (`for %%F in (*.txt) do echo %%F`), which is expanded through
+  the storage layer's `storage_expand_wildcard()`. The loop body is expanded into a
+  heap-allocated buffer because the loop re-enters the command pipeline on the recursive
+  batch path.
 - **Multi-stage pipes**: `shell_execute_pipe()` splits on unquoted `|` into up to
   `P4_CONFIG_PIPE_STAGE_MAX` stages. Each stage but the last spools to its own file, and the
   next stage reads it through the storage input-redirection slot. Spooling rather than streaming
@@ -255,25 +280,36 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   scope a batch file leaves open is unwound when that frame returns, so a child cannot leak
   variables into its caller and no snapshot allocation is ever lost.
 - **Variable expansion**: `shell_expand_variables()` handles `%VAR%`, `%0` (script name),
-  `%1`..`%9`, `%*` (all arguments), and `%%` → `%`
+  `%1`..`%9` (the caller's arguments), `%*` (every argument from `%1` onward), and `%%` → `%`
 - **Errorlevel**: `batch_get_errorlevel()` / `batch_set_errorlevel()`, consumed by `if errorlevel N`
-  and set by `choice` to the 1-based index of the chosen key
+  and set by `choice` to the 1-based index of the chosen key. `call` propagates the called
+  script's final errorlevel back to the caller, matching DOS.
 - **Stop modes**: `batch_stop_mode_t` distinguishes `exit /b` (leave one file) from a bare
   `exit` (unwind every nested level). The executor and `for` loops both honor it.
 - **Arithmetic expressions**: `shell_expr_evaluate()` is a recursive-descent evaluator over
-  32-bit signed integers implementing the COMMAND.COM operator set and precedence
-  (`|`, `^`, `&`, `<< >>`, `+ -`, `* / %`, unary `- ~ !`, parentheses). Backs `set /a`,
-  including its compound assignment operators. An undefined variable evaluates to 0, matching
-  DOS, which is what lets `set /a n=n+1` work on first use. The `&` and `|` handlers refuse to
-  consume `&&` and `||` so an expression cannot swallow a chain separator.
+  32-bit signed integers. Precedence follows cmd.exe: `||` then `&&` then the comparisons
+  `== != < > <= >=` (each yielding 1/0) then `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`, unary
+  `- ~ !`, and parentheses. Backs `set /a`, including its compound assignment operators
+  (`+=` through `>>=`). An undefined variable evaluates to 0, matching DOS, which is what lets
+  `set /a n=n+1` work on first use. `shell_expr_find_assignment()` splits `NAME[OP]=expr` while
+  skipping the `=` of `==`/`!=`/`<=`/`>=`, so comparisons inside the expression are not mistaken
+  for the assignment. The `&`, `|`, `&&` and `||` handlers refuse to consume a chain separator
+  that survives as shell syntax, and an expression using those operators must be quoted at the
+  shell level (unquoted `&&`/`||`/`&`/`|`/`<`/`>` are split first).
+- **Numeric `if` comparisons**: `shell_command_if()` recognises the cmd.exe keywords
+  `EQU`, `NEQ`, `LSS`, `LEQ`, `GTR`, `GEQ` between two operands (`if %n% GTR 5 echo ...`),
+  parsed as decimal with non-numeric operands reading as 0. This is a separate branch from the
+  `==` string comparison.
 - **Prompted input**: `set /p` reads a line through the shell core's `shell_read_line()`. An
   empty line leaves the variable unchanged, as in DOS.
 - **Line continuation**: a trailing `^` joins the next physical line, bounded by
   `P4_CONFIG_LINE_CONTINUATION_MAX`. An odd-caret-count rule distinguishes a continuation from
   an escaped `^^`. The label scanner applies the same rule, so a continued line cannot
   register a phantom `:label`.
-- **Batch language commands**: `set` (with `/a` and `/p`), `path`, `echo`, `call`, `if`,
-  `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`. `pause` and `choice`
+- **Batch language commands**: `set` (with `/a` and `/p`), `path`, `echo`, `call`, `if`
+  (with `errorlevel N` — true when errorlevel ≥ N, `exist <path>`, `/i` case-insensitive
+  string comparison, and `not` for all three), `goto` (including `goto :eof`), `shift`,
+  `pause`, `choice`, `setlocal`, `endlocal`, `exit`. `pause` and `choice`
   block on a real keystroke through the shell core's key queue.
 - **Nested execution**: every nested line goes back through the full command pipeline via
   `batch_command_ops_t`, so it inherits variable expansion and redirection
@@ -430,8 +466,28 @@ Wi-Fi Kconfig under its own `WIFI_RMT_` prefix.
 - **Wi-Fi startup**: Background task on boot, version compatibility gate against C6 firmware
 - **Hosted transport**: ESP32-C6 over SDIO (CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54)
 - **Version gate**: Reads C6 hosted firmware version after SDIO link up; refuses Wi-Fi init if major/minor mismatch
-- **Event handling**: WIFI_EVENT and IP_EVENT handlers for connection state tracking
-- **Command dispatch**: `wifi status|scan|diag|connect|disconnect` with password masking
+- **Event handling**: WIFI_EVENT and IP_EVENT handlers for connection state tracking; the
+  STA_CONNECTED handler also records `s_wifi_associated_at_us` so `wifi status` can report
+  association uptime
+- **Command dispatch**: `wifi status|scan [/b]|diag|connect|disconnect` with password masking.
+  `wifi status` prints a multi-line colour-coded report (SSID, BSSID, channel, RSSI, PHY mode
+  + bandwidth, IPv4, netmask, gateway, DNS, uptime); `wifi scan` returns results sorted by RSSI
+  in aligned columns capped at `P4_CONFIG_WIFI_SCAN_LIMIT`, and `wifi scan /b` emits bare SSID
+  lines that stay uncoloured so redirected output is machine-parsable.
+- **Ping**: `networking_wifi_ping()` runs a classic ICMP echo over the lwIP `esp_ping` session
+  (this module is the sole owner of the lwIP surface). Resolves the target with `getaddrinfo`,
+  prints reply lines and a DOS-style statistics summary, and returns an `esp_err_t` the
+  dispatcher maps onto ERRORLEVEL. The session runs on its own task; the worker task blocks for
+  a strictly bounded total (`count` x (timeout + interval) + margin).
+- **DNS**: `networking_wifi_dns_lookup()` resolves A records through lwIP `getaddrinfo` and
+  prints the IPv4 list (bounded by `P4_CONFIG_DNS_RESULT_LIMIT`), also errorlevel-aware.
+- **HTTP client (`httpget` / `wget`)**: `networking_http_get()` performs a simple HTTPS or
+  HTTP GET over `esp_http_client` (the same stack c6ota uses for firmware downloads), with
+  the certificate bundle attached for `https://`, a bounded timeout, redirects following
+  `P4_CONFIG_HTTP_FOLLOW_REDIRECTS`, the User-Agent from `P4_CONFIG_HTTP_USER_AGENT`, and the
+  body buffered in PSRAM up to `P4_CONFIG_HTTP_MAX_BODY_BYTES`. It prints the response header
+  (status / content-type / size) with semantic colours and returns the body for the command
+  layer to print or save to SD; the return value maps onto ERRORLEVEL (0 = HTTP 2xx).
 - **OTA hooks**: `networking_wifi_wait_for_ota()`, `networking_wifi_shutdown()`, capture/restore state
 - **Boot restore**: Automatic Wi-Fi restore after normal boot and after successful `c6ota`
 - **Diagnostics**: Transcript-facing status + scan output via `wifi diag`
@@ -447,9 +503,16 @@ Owns hosted NimBLE Bluetooth on ESP32-C6:
 
 - **NimBLE VHCI**: Bluetooth HCI transport over ESP-Hosted SDIO
 - **Controller lifecycle**: Stateful - `bluetooth enable` initializes once, subsequent commands reuse
-- **BLE scan**: Active scanning with device name resolution, bounded to 8 results
-- **BLE advertising**: Non-connectable advertising with configurable on/off
-- **Status reporting**: Controller readiness, NimBLE sync state, advertising state
+- **BLE scan**: Passive scanning with device name resolution. A scan run is bounded by
+  `P4_CONFIG_BT_SCAN_DURATION_MS` (passed as the `ble_gap_disc` duration) so it always
+  terminates; results are collected, sorted by RSSI strongest-first, and printed as an aligned
+  `NAME  ADDRESS  RSSI` report capped by `P4_CONFIG_BT_SCAN_LIMIT` (or the optional per-run
+  limit).
+- **BLE advertising**: Non-connectable advertising. `bluetooth advertise on [name]` accepts a
+  session-only advertising name stored in `s_bluetooth_state.session_advertise_name` (RAM-only,
+  never persisted); without one the configured default device name is used.
+- **Status reporting**: Colour-coded report of controller readiness, NimBLE sync state,
+  advertising state (with active name), C6 firmware version, and last error
 - **Shared callbacks**: Uses same `networking_host_ops_t` as Wi-Fi module
 
 ### USB Module (components/usb)
@@ -578,3 +641,34 @@ A new component under `components/` must be added to BOTH the root `CMakeLists.t
 - Password masking in transcript and command history
 - SD directory listings bounded to 128 entries
 - `sd cat` preview bounded to 8192 bytes
+
+### Boot Scripting (components/boot)
+
+DOS-style boot configuration that runs at every boot before the interactive
+prompt. Owned by components/boot (oot.c, oot.h), kept deliberately
+small and free of private-state access.
+
+- **Startup:** oot_run_startup() is called once from pp_main after all
+  modules (storage, batch, command, display, networking, usb) are initialized.
+- **File handling:** looks for CONFIG.SYS and AUTOEXEC.BAT on the SD root.
+  Missing files are generated once from built-in templates when
+  P4_CONFIG_BOOT_GENERATE_DEFAULTS is set. Safe no-op with no SD card.
+- **CONFIG.SYS parser:** line-oriented, case-insensitive, skips blank lines and
+  REM/; comments. Classic directives: SET, PATH=, PROMPT=, ECHO ON|OFF.
+  Modern: ROTATE=, BRIGHTNESS=, DISPLAY_POWER=, VOLUME=, WIFI_SSID=,
+  WIFI_PASSWORD=, WIFI_AUTOCONNECT=, WIFI=ON|OFF, BLUETOOTH=ON|OFF,
+  BT_ADVERTISE=ON|OFF, USB_KEYBOARD=ON|OFF, USB_MOUSE=ON|OFF,
+  GPIO <n> = OUT [HIGH|LOW]. Unknown directives warn once and are skipped.
+- **Application:** hardware directives execute their command-line equivalent
+  through the batch pipeline (atch_boot_execute_command()), reusing existing
+  validation. State-only directives use module accessors
+  (
+etworking_wifi_set_boot_credentials, 
+etworking_wifi_set_boot_autoconnect,
+  atch_set_default_echo). Wi-Fi password is never echoed/logged. GPIO directives
+  delegate to the existing gpio set safety check.
+- **AUTOEXEC.BAT:** runs through the normal batch pipeline
+  (shell_execute_batch_file()), cwd = SD root. Non-zero errorlevel is a warning.
+- **Configurability:** all limits and names in p4minishell_config.h
+  (P4_CONFIG_BOOT_*), documented in p4minishell_config.yaml under
+  oot_scripting.

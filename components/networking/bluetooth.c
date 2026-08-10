@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_err.h"
@@ -53,6 +54,12 @@ typedef struct {
     esp_hosted_coprocessor_fwver_t fw_version;
     bluetooth_device_t discovered[BLUETOOTH_DISCOVERY_LIMIT];
     size_t discovered_count;
+    /** Result cap for the current scan run (0 = config default). */
+    int scan_limit;
+    /** Advertising name chosen by `bluetooth advertise on [name]`. This is
+     *  session-only: it never survives a reboot, matching the RAM-only shell
+     *  environment contract. Empty means "use the configured default name". */
+    char session_advertise_name[BLUETOOTH_NAME_BYTES];
 } bluetooth_state_t;
 
 static networking_host_ops_t s_host_ops;
@@ -342,12 +349,16 @@ static esp_err_t bluetooth_start_advertising(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    const char *advertise_name = s_bluetooth_state.session_advertise_name[0] != '\0'
+                                     ? s_bluetooth_state.session_advertise_name
+                                     : BLUETOOTH_DEVICE_NAME;
+
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.tx_pwr_lvl_is_present = 1;
     fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
-    fields.name = (uint8_t *)BLUETOOTH_DEVICE_NAME;
-    fields.name_len = strlen(BLUETOOTH_DEVICE_NAME);
+    fields.name = (uint8_t *)advertise_name;
+    fields.name_len = strlen(advertise_name);
     fields.name_is_complete = 1;
 
     rc = ble_gap_adv_set_fields(&fields);
@@ -387,8 +398,11 @@ static esp_err_t bluetooth_start_scan(void)
     disc_params.filter_duplicates = 1;
     s_bluetooth_state.discovered_count = 0;
 
+    /* Bounded duration (milliseconds) so the scan always ends and the shell
+     * command never hangs waiting on BLE_HS_FOREVER. The duration is the
+     * second argument of ble_gap_disc, not a field of disc_params. */
     rc = ble_gap_disc(s_bluetooth_state.own_addr_type,
-                      BLE_HS_FOREVER,
+                      (int32_t)P4_CONFIG_BT_SCAN_DURATION_MS,
                       &disc_params,
                       bluetooth_gap_event,
                       NULL);
@@ -400,6 +414,51 @@ static esp_err_t bluetooth_start_scan(void)
     return ESP_OK;
 }
 
+/**
+ * Sort the discovered devices by RSSI (strongest first) and print the result
+ * as an aligned name / address / RSSI report, capped by the scan limit.
+ *
+ * Called once when the bounded scan ends. Also registered for the pending
+ * scan request in bluetooth_on_sync via BLE_GAP_EVENT_DISC_COMPLETE.
+ */
+static void bluetooth_report_scan_results(void)
+{
+    size_t count = s_bluetooth_state.discovered_count;
+    size_t limit = count;
+    size_t index;
+    size_t inner;
+
+    if (s_bluetooth_state.scan_limit > 0 && limit > (size_t)s_bluetooth_state.scan_limit) {
+        limit = (size_t)s_bluetooth_state.scan_limit;
+    }
+
+    /* Selection sort by RSSI, strongest first. The device set is bounded by
+     * BLUETOOTH_DISCOVERY_LIMIT (16), so the O(n^2) loop is trivial. */
+    for (index = 0; index < count; index++) {
+        for (inner = index + 1; inner < count; inner++) {
+            if (s_bluetooth_state.discovered[inner].rssi > s_bluetooth_state.discovered[index].rssi) {
+                bluetooth_device_t swap = s_bluetooth_state.discovered[index];
+                s_bluetooth_state.discovered[index] = s_bluetooth_state.discovered[inner];
+                s_bluetooth_state.discovered[inner] = swap;
+            }
+        }
+    }
+
+    bluetooth_appendf(SH_HEAD "  %-32s %-17s %s" SH_RST "\n", "NAME", "ADDRESS", "RSSI");
+    for (index = 0; index < limit; index++) {
+        bluetooth_appendf("  " SH_VAL "%-32s" SH_RST " " SH_VAL "%-17s" SH_RST " " SH_NUM "%d" SH_RST "\n",
+                          s_bluetooth_state.discovered[index].name,
+                          s_bluetooth_state.discovered[index].address,
+                          s_bluetooth_state.discovered[index].rssi);
+    }
+    bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " scan complete, " SH_NUM "%u" SH_RST
+                      " device(s) reported (%u shown, cap %u)\n",
+                      (unsigned int)count, (unsigned int)limit, (unsigned int)P4_CONFIG_BT_SCAN_LIMIT);
+    bluetooth_notify_headerf(4000,
+                             "Bluetooth scan complete: %u device(s)",
+                             (unsigned int)count);
+}
+
 static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -408,7 +467,6 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISC: {
         struct ble_hs_adv_fields fields;
         char name[BLUETOOTH_NAME_BYTES];
-        int index;
 
         if (ble_hs_adv_parse_fields(&fields, event->disc.data, event->disc.length_data) == 0) {
             bluetooth_extract_name(&fields, name, sizeof(name));
@@ -416,25 +474,16 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
             name[0] = '\0';
         }
 
-        index = bluetooth_store_discovered_device(&event->disc.addr, event->disc.rssi, name);
-        if (index >= 0) {
-            bluetooth_schedulef("bluetooth.scan[%u]: addr=%s rssi=%d name=%s\n",
-                                (unsigned int)index,
-                                s_bluetooth_state.discovered[index].address,
-                                s_bluetooth_state.discovered[index].rssi,
-                                s_bluetooth_state.discovered[index].name);
-        }
+        /* Collect every device first; the sorted report is printed once the
+         * bounded scan ends (BLE_GAP_EVENT_DISC_COMPLETE). */
+        (void)bluetooth_store_discovered_device(&event->disc.addr, event->disc.rssi, name);
         return 0;
     }
 
     case BLE_GAP_EVENT_DISC_COMPLETE:
         s_bluetooth_state.scan_active = false;
         s_bluetooth_state.scan_requested = false;
-        bluetooth_schedulef("bluetooth: scan complete, %u device(s) reported\n",
-                            (unsigned int)s_bluetooth_state.discovered_count);
-        bluetooth_notify_headerf(4000,
-                                 "Bluetooth scan complete: %u device(s)",
-                                 (unsigned int)s_bluetooth_state.discovered_count);
+        bluetooth_report_scan_results();
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -581,38 +630,40 @@ void bluetooth_init(const networking_host_ops_t *ops)
 
 void bluetooth_status(void)
 {
-    if (s_bluetooth_state.hosted_ready) {
-        bluetooth_appendf(SH_LBL "bluetooth.hosted_ready:" SH_RST " " SH_OK "yes" SH_RST "\n");
+    bluetooth_appendf(SH_HEAD "Bluetooth Status" SH_RST "\n");
+    bluetooth_appendf("  " SH_LBL "hosted ready:" SH_RST " %s\n",
+                      s_bluetooth_state.hosted_ready ? SH_OK "yes" SH_RST : SH_MUTE "no" SH_RST);
+    bluetooth_appendf("  " SH_LBL "controller:" SH_RST " %s\n",
+                      s_bluetooth_state.controller_enabled ? SH_OK "enabled" SH_RST : SH_MUTE "disabled" SH_RST);
+    bluetooth_appendf("  " SH_LBL "NimBLE host:" SH_RST " %s\n",
+                      s_bluetooth_state.nimble_initialized ? SH_OK "initialized" SH_RST : SH_MUTE "off" SH_RST);
+    bluetooth_appendf("  " SH_LBL "synced:" SH_RST " %s\n",
+                      s_bluetooth_state.synced ? SH_OK "yes" SH_RST : SH_MUTE "no" SH_RST);
+    bluetooth_appendf("  " SH_LBL "scan:" SH_RST " %s\n",
+                      s_bluetooth_state.scan_active ? SH_WARN "active" SH_RST : SH_MUTE "idle" SH_RST);
+    if (s_bluetooth_state.advertising_active) {
+        bluetooth_appendf("  " SH_LBL "advertising:" SH_RST " " SH_BT "on" SH_RST
+                          " (name " SH_VAL "%s" SH_RST ")\n",
+                          s_bluetooth_state.session_advertise_name[0] != '\0'
+                              ? s_bluetooth_state.session_advertise_name
+                              : BLUETOOTH_DEVICE_NAME);
     } else {
-        bluetooth_appendf(SH_LBL "bluetooth.hosted_ready:" SH_RST " " SH_MUTE "no" SH_RST "\n");
+        bluetooth_appendf("  " SH_LBL "advertising:" SH_RST " " SH_MUTE "off" SH_RST "\n");
     }
-    if (s_bluetooth_state.controller_enabled) {
-        bluetooth_appendf(SH_LBL "bluetooth.controller:" SH_RST " " SH_OK "enabled" SH_RST "\n");
-    } else {
-        bluetooth_appendf(SH_LBL "bluetooth.controller:" SH_RST " " SH_MUTE "disabled" SH_RST "\n");
-    }
-    if (s_bluetooth_state.nimble_initialized) {
-        bluetooth_appendf(SH_LBL "bluetooth.nimble:" SH_RST " " SH_OK "initialized" SH_RST "\n");
-    } else {
-        bluetooth_appendf(SH_LBL "bluetooth.nimble:" SH_RST " " SH_MUTE "off" SH_RST "\n");
-    }
-    bluetooth_appendf("bluetooth.synced: %s\n", s_bluetooth_state.synced ? "yes" : "no");
-    bluetooth_appendf("bluetooth.scan: %s\n", s_bluetooth_state.scan_active ? "active" : "idle");
-    bluetooth_appendf("bluetooth.advertise: %s\n", s_bluetooth_state.advertising_active ? "on" : "off");
     if (s_bluetooth_state.fw_version_valid) {
-        bluetooth_appendf("bluetooth.c6_fw: %u.%u.%u\n",
+        bluetooth_appendf("  " SH_LBL "C6 firmware:" SH_RST " " SH_NUM "%u.%u.%u" SH_RST "\n",
                           s_bluetooth_state.fw_version.major1,
                           s_bluetooth_state.fw_version.minor1,
                           s_bluetooth_state.fw_version.patch1);
     }
     if (s_bluetooth_state.last_error != ESP_OK) {
-        bluetooth_appendf("bluetooth.last_error: %s (0x%x)\n",
+        bluetooth_appendf("  " SH_LBL "last error:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
                           esp_err_to_name(s_bluetooth_state.last_error),
                           (unsigned int)s_bluetooth_state.last_error);
     }
 }
 
-void bluetooth_scan(void)
+void bluetooth_scan(int limit)
 {
 #if CONFIG_BT_NIMBLE_ENABLED
     esp_err_t error = bluetooth_ensure_ready();
@@ -623,13 +674,18 @@ void bluetooth_scan(void)
     }
 
     if (s_bluetooth_state.scan_active) {
-        bluetooth_appendf("bluetooth: scan already in progress\n");
+        bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " a scan is already in progress\n");
         return;
+    }
+
+    s_bluetooth_state.scan_limit = (limit > 0) ? limit : P4_CONFIG_BT_SCAN_LIMIT;
+    if (s_bluetooth_state.scan_limit > BLUETOOTH_DISCOVERY_LIMIT) {
+        s_bluetooth_state.scan_limit = BLUETOOTH_DISCOVERY_LIMIT;
     }
 
     s_bluetooth_state.scan_requested = true;
     if (!s_bluetooth_state.synced) {
-        bluetooth_appendf("bluetooth: waiting for BLE host sync before scan\n");
+        bluetooth_appendf(SH_PROMPT "bluetooth:" SH_RST " waiting for BLE host sync before scan\n");
         bluetooth_notify_headerf(3500, "Bluetooth waiting for sync");
         return;
     }
@@ -640,24 +696,31 @@ void bluetooth_scan(void)
         return;
     }
 
-    bluetooth_appendf("bluetooth: passive scan started\n");
+    bluetooth_appendf(SH_PROMPT "bluetooth:" SH_RST " passive scan started for " SH_NUM "%dms" SH_RST " (max " SH_NUM "%d" SH_RST " devices)\n",
+                      (int)P4_CONFIG_BT_SCAN_DURATION_MS, s_bluetooth_state.scan_limit);
     bluetooth_record_infof("Passive BLE scan started");
     bluetooth_notify_headerf(3500, "Bluetooth scan started");
 #else
+    (void)limit;
     bluetooth_report_not_available(ESP_ERR_NOT_SUPPORTED);
 #endif
 }
 
-void bluetooth_advertise(bool enable)
+void bluetooth_advertise(bool enable, const char *name)
 {
 #if CONFIG_BT_NIMBLE_ENABLED
+    if (name != NULL && name[0] != '\0') {
+        snprintf(s_bluetooth_state.session_advertise_name,
+                 sizeof(s_bluetooth_state.session_advertise_name), "%s", name);
+    }
+
     if (!enable) {
         s_bluetooth_state.advertising_requested = false;
         if (s_bluetooth_state.advertising_active) {
             (void)ble_gap_adv_stop();
             s_bluetooth_state.advertising_active = false;
         }
-        bluetooth_appendf("bluetooth: advertising disabled\n");
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " advertising disabled\n");
         return;
     }
 
@@ -668,7 +731,7 @@ void bluetooth_advertise(bool enable)
 
     s_bluetooth_state.advertising_requested = true;
     if (!s_bluetooth_state.synced) {
-        bluetooth_appendf("bluetooth: waiting for BLE host sync before advertising\n");
+        bluetooth_appendf(SH_PROMPT "bluetooth:" SH_RST " waiting for BLE host sync before advertising\n");
         return;
     }
 
@@ -677,10 +740,14 @@ void bluetooth_advertise(bool enable)
         return;
     }
 
-    bluetooth_appendf("bluetooth: advertising enabled\n");
+    bluetooth_appendf(SH_OK "bluetooth:" SH_RST " advertising enabled as " SH_VAL "%s" SH_RST "\n",
+                      s_bluetooth_state.session_advertise_name[0] != '\0'
+                          ? s_bluetooth_state.session_advertise_name
+                          : BLUETOOTH_DEVICE_NAME);
     bluetooth_record_infof("BLE advertising enabled");
 #else
     (void)enable;
+    (void)name;
     bluetooth_report_not_available(ESP_ERR_NOT_SUPPORTED);
 #endif
 }
@@ -697,16 +764,16 @@ bool bluetooth_is_connected(void)
 
 void bluetooth_handle_command(char *command)
 {
-    char *argv[4];
-    int argc = bluetooth_split_args(command, argv, 4);
+    char *argv[6];
+    int argc = bluetooth_split_args(command, argv, 6);
 
     if (argc <= 1 || bluetooth_text_equals_ignore_case(argv[1], "help")) {
-        bluetooth_appendf("Bluetooth commands:\n");
-        bluetooth_appendf("  bluetooth status            Show hosted BLE state on the ESP32-C6\n");
-        bluetooth_appendf("  bluetooth scan              Run a passive BLE scan via hosted NimBLE\n");
-        bluetooth_appendf("  bluetooth advertise on      Start non-connectable BLE advertising\n");
-        bluetooth_appendf("  bluetooth advertise off     Stop BLE advertising\n");
-        bluetooth_appendf("  bt enable                   Initialize hosted BLE without advertising\n");
+        bluetooth_appendf(SH_SUBHEAD SH_BOLD "Bluetooth Commands:" SH_RST "\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth status" SH_RST "            Show hosted BLE state on the ESP32-C6\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth scan" SH_RST " [limit]     Bounded passive BLE scan, sorted by RSSI\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth advertise on" SH_RST " [name]  Start non-connectable advertising (session name)\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth advertise off" SH_RST "     Stop BLE advertising\n");
+        bluetooth_appendf("  " SH_CMD "bt ..." SH_RST "                      Alias for the bluetooth family\n");
         return;
     }
 
@@ -716,7 +783,19 @@ void bluetooth_handle_command(char *command)
     }
 
     if (bluetooth_text_equals_ignore_case(argv[1], "scan")) {
-        bluetooth_scan();
+        int limit = 0;
+
+        if (argc >= 3) {
+            char *end = NULL;
+            long parsed = strtol(argv[2], &end, 10);
+
+            if (end == NULL || *end != '\0' || parsed < 1 || parsed > BLUETOOTH_DISCOVERY_LIMIT) {
+                bluetooth_appendf(SH_USAGE "Usage: bluetooth scan [1..%d]" SH_RST "\n", (int)BLUETOOTH_DISCOVERY_LIMIT);
+                return;
+            }
+            limit = (int)parsed;
+        }
+        bluetooth_scan(limit);
         return;
     }
 
@@ -726,21 +805,22 @@ void bluetooth_handle_command(char *command)
             bluetooth_report_not_available(error);
             return;
         }
-        bluetooth_appendf("bluetooth: BLE host enabled on the ESP32-C6 co-processor\n");
+        bluetooth_appendf(SH_OK "bluetooth:" SH_RST " BLE host enabled on the ESP32-C6 co-processor\n");
         return;
     }
 
     if (bluetooth_text_equals_ignore_case(argv[1], "advertise") && argc >= 3) {
         if (bluetooth_text_equals_ignore_case(argv[2], "on")) {
-            bluetooth_advertise(true);
+            /* The optional name is session-only and never persisted. */
+            bluetooth_advertise(true, argc >= 4 ? argv[3] : NULL);
             return;
         }
 
         if (bluetooth_text_equals_ignore_case(argv[2], "off")) {
-            bluetooth_advertise(false);
+            bluetooth_advertise(false, NULL);
             return;
         }
     }
 
-    bluetooth_appendf("Usage: bluetooth status | bluetooth scan | bluetooth advertise <on|off>\n");
+    bluetooth_appendf(SH_USAGE "Usage: bluetooth status | bluetooth scan [limit] | bluetooth advertise <on [name]|off>" SH_RST "\n");
 }

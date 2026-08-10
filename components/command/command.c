@@ -1048,6 +1048,60 @@ static void shell_execute_camera_command(int argc, char **argv)
 }
 
 /* ========================================================================
+ * HTTPGET / WGET
+ * ========================================================================
+ * `httpget <url> [localfile]` — the HTTP engine lives in
+ * components/networking (the sole owner of the esp_http_client surface); this
+ * file only dispatches, renders the body, and saves it to SD through the
+ * storage write path with the usual free-space guardrails. ERRORLEVEL is 0 on
+ * an HTTP 2xx, 1 on any failure, 2 on a usage error.
+ */
+
+/**
+ * Print an httpget response body to the transcript, bounded and sanitized so a
+ * binary or control-character payload cannot corrupt the transcript or inject
+ * ANSI sequences. Plain text keeps `httpget url > file` redirectable.
+ */
+static void shell_print_http_body(const uint8_t *body, size_t size)
+{
+    char chunk[160];
+    size_t limit = size;
+    size_t index;
+    size_t used = 0;
+
+    if (body == NULL || size == 0) {
+        return;
+    }
+    if (limit > P4_CONFIG_HTTP_PRINT_BODY_BYTES) {
+        limit = P4_CONFIG_HTTP_PRINT_BODY_BYTES;
+    }
+
+    for (index = 0; index < limit; index++) {
+        char ch = (char)body[index];
+
+        /* Keep printable ASCII and the common text separators; render
+         * everything else (including ESC and NUL) as a harmless dot. */
+        if ((unsigned char)ch < 0x20 && ch != '\n' && ch != '\r' && ch != '\t') {
+            ch = '.';
+        }
+        chunk[used++] = ch;
+        if (used >= sizeof(chunk) - 1) {
+            chunk[used] = '\0';
+            shell_transcript_append_text(chunk);
+            used = 0;
+        }
+    }
+    if (used > 0) {
+        chunk[used] = '\0';
+        shell_transcript_append_text(chunk);
+    }
+    if (limit < size) {
+        shell_print_muted("httpget: body truncated at %u bytes (use httpget <url> <file> for the full body)",
+                          (unsigned int)limit);
+    }
+}
+
+/* ========================================================================
  * COMMAND DISPATCH
  * ======================================================================== */
 
@@ -1079,8 +1133,8 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
-    /* Module-routed family handlers (wifi, bluetooth/bt, usb, sd) parse the
-     * full command line themselves, so they need the original text. The
+    /* Module-routed family handlers (wifi, bluetooth/bt, usb, sd, disk) parse
+     * the full command line themselves, so they need the original text. The
      * shell_split_args() call below writes token terminators into the buffer
      * in place — after it runs, `command` would be truncated to the first
      * token ("wifi status" -> "wifi"). Preserve a heap copy of the trimmed
@@ -1100,6 +1154,9 @@ bool shell_execute_command_core(char *command)
         family_command = strdup(trimmed);
     } else if (strncmp(trimmed, "sd", 2) == 0 &&
                (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
+        family_command = strdup(trimmed);
+    } else if (strncmp(trimmed, "disk", 4) == 0 &&
+               (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
         family_command = strdup(trimmed);
     }
 
@@ -1231,6 +1288,13 @@ bool shell_execute_command_core(char *command)
     /* ---- SD tools ---- */
     if (shell_text_equals_ignore_case(argv[0], "sd")) {
         shell_command_sd(family_command);
+        free(family_command);
+        return true;
+    }
+
+    /* ---- Disk and partition tools (diskpart style) ---- */
+    if (shell_text_equals_ignore_case(argv[0], "disk")) {
+        shell_command_disk(family_command);
         free(family_command);
         return true;
     }
@@ -1436,6 +1500,145 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "sort")) {
         shell_command_sort(argc, argv);
+        return true;
+    }
+
+    /* ---- Network connectivity commands: ping, dns ----
+     * These live in components/networking (the sole owner of the lwIP /
+     * esp_ping surface) and return an esp_err_t that the dispatcher maps onto
+     * ERRORLEVEL, so `ping host && echo up`, `ping host || echo down`, and the
+     * equivalent batch-file forms work exactly like DOS. Redirection and pipes
+     * capture their transcript output automatically. */
+    if (shell_text_equals_ignore_case(argv[0], "ping")) {
+        int count = 0;
+        esp_err_t error;
+
+        if (argc < 2) {
+            shell_print_usage("Usage: ping <host-or-ip> [count]");
+            batch_set_errorlevel(2);
+            return true;
+        }
+        if (argc > 3) {
+            shell_print_usage("Usage: ping <host-or-ip> [count]");
+            batch_set_errorlevel(2);
+            return true;
+        }
+        if (argc == 3) {
+            char *end = NULL;
+            long parsed = strtol(argv[2], &end, 10);
+
+            if (end == NULL || *end != '\0' || parsed < 1) {
+                shell_print_usage("Usage: ping <host-or-ip> [count]  (count 1..%d)", P4_CONFIG_PING_COUNT_MAX);
+                batch_set_errorlevel(2);
+                return true;
+            }
+            count = (int)parsed;
+        }
+
+        error = networking_wifi_ping(argv[1], count);
+        batch_set_errorlevel(error == ESP_OK ? 0 : 1);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "dns") || shell_text_equals_ignore_case(argv[0], "nslookup")) {
+        esp_err_t error;
+
+        if (argc != 2) {
+            shell_print_usage("Usage: dns <hostname>");
+            batch_set_errorlevel(2);
+            return true;
+        }
+
+        error = networking_wifi_dns_lookup(argv[1]);
+        batch_set_errorlevel(error == ESP_OK ? 0 : 1);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "httpget") || shell_text_equals_ignore_case(argv[0], "wget")) {
+        networking_http_result_t result;
+        esp_err_t error;
+
+        if (argc < 2 || argc > 3) {
+            shell_print_usage("Usage: httpget <url> [localfile]");
+            batch_set_errorlevel(2);
+            return true;
+        }
+
+        error = networking_http_get(argv[1], &result);
+        if (error != ESP_OK) {
+            networking_http_result_free(&result);
+            batch_set_errorlevel(1);
+            return true;
+        }
+
+        if (argc == 3) {
+            /* Save the exact body to the SD card through the storage write
+             * path: cwd-relative resolution, guarded session, free-space
+             * precheck, and partial-destination cleanup on failure. */
+            char resolved[SHELL_SD_PATH_BYTES];
+            shell_sd_session_t session;
+            FILE *file = NULL;
+
+            if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("httpget: invalid path %s", argv[2]);
+                networking_http_result_free(&result);
+                batch_set_errorlevel(1);
+                return true;
+            }
+
+            if (shell_sd_begin(&session) != ESP_OK) {
+                shell_print_error("httpget: SD card not present - insert and retry");
+                networking_http_result_free(&result);
+                batch_set_errorlevel(1);
+                return true;
+            }
+
+            /* Refuse before opening so an overwrite cannot destroy the existing
+             * file and then fail for lack of room. */
+            {
+                uint64_t reclaim = storage_get_file_size(resolved);
+
+                if (!storage_check_free_space(result.body_size, reclaim, "httpget")) {
+                    shell_sd_end(&session, "httpget");
+                    networking_http_result_free(&result);
+                    batch_set_errorlevel(1);
+                    return true;
+                }
+            }
+
+            file = fopen(resolved, "wb");
+            if (file == NULL) {
+                shell_print_error("httpget: failed to open %s", resolved);
+                shell_sd_end(&session, "httpget");
+                networking_http_result_free(&result);
+                batch_set_errorlevel(1);
+                return true;
+            }
+
+            if (result.body_size > 0 &&
+                fwrite(result.body, 1, result.body_size, file) != result.body_size) {
+                fclose(file);
+                (void)remove(resolved);
+                shell_print_error("httpget: write failed - removed partial %s", resolved);
+                shell_sd_end(&session, "httpget");
+                networking_http_result_free(&result);
+                batch_set_errorlevel(1);
+                return true;
+            }
+
+            fclose(file);
+            shell_sd_end(&session, "httpget");
+            shell_print_ok("httpget: saved %u bytes to %s",
+                           (unsigned int)result.body_size, resolved);
+        } else {
+            /* Print the body to the transcript (bounded and sanitized). A
+             * trailing newline keeps the next prompt on its own line. */
+            shell_print_http_body(result.body, result.body_size);
+            shell_transcript_append_text("\n");
+        }
+
+        networking_http_result_free(&result);
+        batch_set_errorlevel(0);
         return true;
     }
 
@@ -1723,6 +1926,27 @@ int command_get_volume_percent(void)
     return s_volume_percent;
 }
 
+void command_set_volume(int percent)
+{
+    esp_err_t error;
+
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    error = shell_audio_ensure_speaker();
+    if (error != ESP_OK) {
+        ESP_LOGW(COMMAND_TAG, "command_set_volume: speaker init failed (%s)", esp_err_to_name(error));
+        return;
+    }
+
+    if (esp_codec_dev_set_out_vol(s_speaker_dev, percent) != ESP_CODEC_DEV_OK) {
+        ESP_LOGW(COMMAND_TAG, "command_set_volume: codec set failed");
+        return;
+    }
+
+    s_volume_percent = percent;
+}
+
 /* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
@@ -1731,6 +1955,7 @@ void command_init(void)
 {
     static const shell_command_ops_t shell_ops = {
         .execute_command    = shell_execute_command,
+        .execute_command_async = shell_execute_command_async,
         .get_cwd            = shell_get_cwd,
         .get_volume_percent = command_get_volume_percent,
         .sd_is_mounted      = storage_sd_is_mounted,

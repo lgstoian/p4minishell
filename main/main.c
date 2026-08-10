@@ -46,6 +46,7 @@
 #include "networking.h"
 #include "ansi_palette.h"
 #include "shell.h"
+#include "boot.h"
 #include "usb.h"
 #include "windows.h"
 
@@ -485,6 +486,11 @@ void app_main(void)
     /* Timezone setup only. The SNTP client starts when Wi-Fi connects,
      * because it requires the lwIP TCP/IP thread to be running. */
     time_init();
+
+    /* DOS-style boot scripting: ensure CONFIG.SYS / AUTOEXEC.BAT exist
+     * (generating defaults once), apply CONFIG.SYS directives, then run
+     * AUTOEXEC.BAT through the batch pipeline. Safe with no SD card. */
+    boot_run_startup();
 
     /* Start the periodic header status refresh. main only feeds passive
      * header updates; the header module owns all rendering. */

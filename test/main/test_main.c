@@ -53,6 +53,8 @@ extern void test_batch_expr_arithmetic(void);
 extern void test_batch_expr_bitwise(void);
 extern void test_batch_expr_variables(void);
 extern void test_batch_expr_errors(void);
+extern void test_batch_expr_comparisons(void);
+extern void test_batch_expr_logical(void);
 
 extern void test_variable_expansion_env_var(void);
 extern void test_variable_expansion_empty_name(void);
@@ -153,6 +155,8 @@ void app_main(void)
     RUN_TEST(test_batch_expr_arithmetic);
     RUN_TEST(test_batch_expr_bitwise);
     RUN_TEST(test_batch_expr_variables);
+    RUN_TEST(test_batch_expr_comparisons);
+    RUN_TEST(test_batch_expr_logical);
     RUN_TEST(test_batch_expr_errors);
     UNITY_END();
 

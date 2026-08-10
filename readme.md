@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.24.6 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.24.11 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -97,19 +97,22 @@ the YAML to match.
 - **DOS-style file commands**: `cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`, `write`, `append`, `touch`
 - **Full `dir` option set**: `/W` wide, `/P` paged, `/S` recursive, `/B` bare, `/L` lowercase, `/A` attribute filter, `/O` sort order
 - **Volume management**: `chkdsk`/`scandisk` capacity and integrity report, `format` behind an exact confirmation word
+- **diskpart-style disk tools**: `disk list`/`detail`/`clean`/`create partition primary`/`delete partition`/`format` for MBR partition-table management and FORMAT.COM-style formatting with `/FS:` `/A:` `/V:` `/Q`
+- **DOS-style boot scripting**: `CONFIG.SYS` directives (SET, PATH, PROMPT, ECHO, ROTATE, BRIGHTNESS, VOLUME, WIFI_*, BLUETOOTH, USB_*, GPIO) and `AUTOEXEC.BAT` execution at boot, with default-file generation
 - **Storage guardrails**: free-space prechecks, self-copy protection, partial-destination cleanup, copy progress
 - **RAM-only shell state**: Environment variables, PATH, current working directory, batch arguments
-- **Batch file engine**: `.bat` execution with `%0`/`%1`..`%9`/`%*` expansion, `:label` targets, `goto`, `call :label`, `for` loops, `rem` comments, `echo on/off`
-- **Real batch control flow**: `pause` and `choice` block on an actual keypress, `setlocal`/`endlocal` scope the environment, `exit /b` leaves one batch file
-- **Batch expressions**: `set /a` integer arithmetic with the full DOS operator set, `set /p` prompted input, trailing `^` line continuation
+- **Batch file engine**: `.bat` execution with `%0`/`%1`..`%9`/`%*` expansion, `:label` targets, `goto` (including the implicit `:eof` label), `call` (with argument forwarding and errorlevel propagation), `for %%var in (set) do ...` loops (literal tokens or a wildcard pattern), `rem` comments, `echo on/off`
+- **Real batch control flow**: `pause` and `choice` block on an actual keypress, `setlocal`/`endlocal` scope the environment, `exit /b` leaves one batch file, `if` with `errorlevel N` (≥), `exist <path>`, case-insensitive `/i` string tests, and `not`
+- **Batch expressions**: `set /a` integer arithmetic with the full DOS operator set plus comparison (`== != < > <= >=`) and logical (`&& ||`) operators that yield 1/0, `set /p` prompted input, trailing `^` line continuation
 - **DOS prompt engine**: `prompt` template with `$p $g $t $d $v $n` and more, driving both the UART console and the on-screen input line
 - **Text utilities**: `find` (`/I /N /C /V`), `more` (keypress paging), `tree` (recursive, `/F /A`), `fc`, `sort` (`/R /I /U`)
 - **Redirection**: `>`, `>>`, and `<` in any order on one line
 - **Multi-stage pipes**: `cmd1 | cmd2 | cmd3` with quote-aware splitting
 - **Command chaining**: `a & b` (both), `a && b` (on success), `a || b` (on failure)
 - **DOS quoting and escaping**: `"text"` groups with expansion, `'text'` groups literally, `^c` escapes any character
-- **Hosted Wi-Fi**: ESP-Hosted + esp_wifi_remote on C6 with version compatibility gate. Station-only, enforced in code and by compiling SoftAP out. Every Hosted and wifi_remote call is confined to `components/networking/`.
-- **Hosted Bluetooth**: NimBLE VHCI on C6 for BLE scan and advertising
+- **Hosted Wi-Fi**: ESP-Hosted + esp_wifi_remote on C6 with version compatibility gate. Station-only, enforced in code and by compiling SoftAP out. Every Hosted and wifi_remote call is confined to `components/networking/`. `wifi status` reports SSID/BSSID/channel/RSSI/PHY/IP/DNS/uptime, `wifi scan` is RSSI-sorted with a bare `/b` form, and classic `ping` + `dns`/`nslookup` connectivity commands set ERRORLEVEL for batch use.
+- **Basic HTTPS**: `httpget <url> [localfile]` (alias `wget`) performs a simple HTTPS/HTTP GET over the same `esp_http_client` stack c6ota uses, printing the body or saving it to SD with free-space guardrails, setting ERRORLEVEL, and supporting redirection/pipes. All HTTP/TLS code lives in `components/networking/`.
+- **Hosted Bluetooth**: NimBLE VHCI on C6 for BLE scan and advertising, with a sorted bounded scan report and session-scoped `advertise on [name]`
 - **USB Host**: MSC mass storage at `/usb0`, HID keyboard/mouse with opt-in echo
 - **USB Keyboard Auto-Detect**: Plug in a USB keyboard to type commands; on-screen keyboard hides automatically. Full US keyboard layout supported including symbols, keypad, navigation keys, and function keys.
 - **C6 OTA updates**: Validated firmware updates from SD or HTTP/S over ESP-Hosted SDIO
@@ -128,9 +131,11 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | **Hardware** | `brightness`, `rotate`, `battery`, `volume`, `gpio list|status|read|set` |
 | **Storage** | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` |
 | **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` |
+| **Disk / partitions** | `disk list`, `disk detail`, `disk clean`, `disk create partition primary [size=N]`, `disk delete partition N`, `disk format` |
 | **SD Tools** | `sd info`, `sd ls`, `sd stat`, `sd cat` |
-| **Wi-Fi** | `wifi status|scan|diag|connect|disconnect` |
-| **Bluetooth** | `bluetooth status|scan|advertise on|off`, `bt` (alias) |
+| **Wi-Fi** | `wifi status|scan [/b]|diag|connect|disconnect` |
+| **Connectivity** | `ping <host-or-ip> [count]`, `dns <hostname>` (alias `nslookup`), `httpget <url> [localfile]` (alias `wget`) |
+| **Bluetooth** | `bluetooth status|scan [limit]|advertise <on [name]|off>`, `bt` (alias) |
 | **USB** | `usb status|ls|keyboard on|off|mouse on|off` |
 | **Batch** | `set`, `set /a`, `set /p`, `path`, `echo on|off`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]` |
 | **Text tools** | `find`, `more`, `tree`, `fc`, `sort`, `prompt`, `date`, `time` |

@@ -85,6 +85,16 @@ bool shell_command_ota_is_pending(void);
 int command_get_volume_percent(void);
 
 /**
+ * Set the speaker volume directly (boot CONFIG.SYS VOLUME= directive).
+ *
+ * Clamps @p percent to 0..100 and mirrors the validation in the interactive
+ * `volume` command. No transcript output is produced.
+ *
+ * @param percent  Volume percentage in the range 0..100.
+ */
+void command_set_volume(int percent);
+
+/**
  * Read the battery ADC and convert it to millivolts and a charge percentage.
  * Any output pointer may be NULL when that value is not needed.
  *

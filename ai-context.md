@@ -117,6 +117,10 @@
 - ALL debug logging MUST use `shell_record_errorf()` / `shell_record_warningf()` / `shell_record_infof()`
 - Command history MUST use `shell_store_command_history()` / `shell_recall_history()`
 - UART console MUST use `shell_uart_console_start()` / `shell_uart_console_write_text()`
+- The UART console task assembles partial reads: USB-Serial-JTAG delivers one logical line across
+  several reads (its RX FIFO is 64 bytes), so a read without a line terminator is NOT a complete
+  command. Buffer the fragment and keep reading. During a key wait, forward the first newly-read
+  character immediately (do not wait for the terminator).
 - Input line text MUST go through `shell_input_line_set_text()` / `shell_input_line_reset()` /
   `shell_extract_input_text()`; never manipulate the prompt prefix directly
 - System info commands (help, sysinfo, version, about, mem, debug) live in `components/shell/`
@@ -135,6 +139,10 @@
   against that snapshot, never against a freshly rendered prompt.
 - The async transcript buffer MUST be drained into a local copy before appending; never hold
   `s_async_transcript_lock` across an LVGL call
+- The async transcript flush scratch is heap-allocated (it can be up to
+  `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES`, which is too large for the main task stack). Before the UI
+  exists (`windows_get_transcript()` returns NULL — unit tests, very early boot) the flush runs
+  synchronously instead of via `lv_async_call`, so an uninitialized LVGL heap is never touched.
 - Overlapping array slots MUST use `memmove()`, never `snprintf()` (triggers `-Werror=restrict`)
 - `shell_transcript_append_internal()`, `shell_transcript_reset()`,
   `shell_history_transcript_scroll_to_end()`, and `shell_input_line_set_text()` all call LVGL
@@ -182,11 +190,27 @@
   path, including failure.
 - Nested execution contexts (`if`, `for`, pipes, batch lines) MUST re-enter the full pipeline via
   `batch_command_ops_t.execute_command` so they inherit expansion and redirection
+- Batch argument mapping is COMMAND.COM-style: the frame stores the script path in `args[0]` and
+  the caller's arguments in `args[1]..`, so `%0` = script name, `%1`..`%9` = the arguments, and
+  `%*` = the arguments from `%1` onward (never the script name). Any change to the frame layout
+  MUST update `shell_expand_variables()` in lockstep.
+- `goto :eof` is the implicit end-of-file label and ends only the current batch frame. A pending
+  `goto`/`goto :eof` MUST be cleared when a frame returns so it cannot leak into the caller's
+  line loop when issued from inside a `for` or `if` body.
+- `for` loop sets support literal token lists and a single wildcard pattern; both re-enter the
+  pipeline per iteration, so the substituted body buffer MUST be heap-allocated (the loop is on
+  the recursive batch path).
 - The batch executor and the label scanner MUST agree on where a logical line ends. Both apply
   the same odd-trailing-caret continuation rule; changing one without the other lets a
   continued line register a phantom `:label` and silently corrupt `goto` targets.
-- `set /a` operator parsing MUST NOT consume `&&` or `||`. A lone `&` is bitwise and, a lone
-  `|` is bitwise or, but the doubled forms belong to command chaining.
+- `set /a` operator parsing MUST NOT consume a shell chain separator. A lone `&` is bitwise and,
+  a lone `|` is bitwise or, and the doubled forms `&&`/`||` belong to the logical level of the
+  expression grammar (and to command chaining at the shell level). The bitwise levels refuse
+  `&&`/`||`; the logical levels consume them. From the shell, an expression using `&&`/`||`/`&`/
+  `|`/`<`/`>` must be quoted (unquoted they are split as chain/pipe/redirection before the
+  command runs). Comparisons `== != < > <= >=` yield 1/0 and sit between the logical and bitwise
+  levels; `shell_expr_find_assignment()` splits `NAME[OP]=expr` while skipping the `=` of a
+  comparison so `set /a x=5==5` assigns x=1 rather than splitting on the `==`.
 - Command execution from the LVGL path MUST use `shell_execute_command_async()` to protect the LVGL stack
 - Module-routed commands (wifi, bluetooth, usb, c6ota, sd) receive the original unsplit command text
 - State ownership: cwd and SD mount tracking belong to `components/storage/` (reset by
@@ -227,9 +251,23 @@
 - The display manager's `display_info_t` struct is the canonical source for sysinfo display diagnostics
 
 ### Wi-Fi Rules
-- ALL ESP-Hosted, esp_wifi_remote, esp_netif, and NimBLE calls MUST live inside
-  `components/networking/`. The only sanctioned exception is `components/c6ota/`, which
-  drives `esp_hosted_slave_ota_*` because co-processor update is its purpose.
+- ALL ESP-Hosted, esp_wifi_remote, esp_netif, NimBLE, lwIP-connectivity (ping/DNS), and
+  esp_http_client/mbedTLS/TLS calls MUST live inside `components/networking/`. The only
+  sanctioned exceptions are `components/c6ota/`, which drives `esp_hosted_slave_ota_*` and its
+  own esp_http_client download because co-processor update is its purpose.
+- `ping` and `dns`/`nslookup` are implemented in `components/networking/networking.c` over the
+  lwIP `esp_ping` session and `getaddrinfo`; `components/command/command.c` only dispatches
+  them and maps the returned `esp_err_t` onto ERRORLEVEL (0 success, 1 failure, 2 usage). They
+  MUST set errorlevel and MUST stay redirectable/pipable like every other command. The ping
+  worker-side wait is always bounded by `count * (timeout + interval) + margin`.
+- `httpget` / `wget` is implemented as `networking_http_get()` in
+  `components/networking/networking.c` over the same `esp_http_client` stack c6ota uses. The
+  command layer only dispatches and writes the returned body to SD through the storage write
+  path (free-space precheck, partial-destination cleanup). It MUST set ERRORLEVEL (0 = HTTP
+  2xx, 1 = failure, 2 = usage), MUST be redirectable/pipable, MUST require an active
+  connection (clear DOS-style error when disconnected), MUST buffer the body in PSRAM capped by
+  `P4_CONFIG_HTTP_MAX_BODY_BYTES`, and MUST be timeout-bounded so the worker task never hangs.
+  Never call `esp_http_client` / mbedTLS / socket APIs from shell/, command/, batch/, or main/.
 - When another layer needs networking state, add a status accessor to `networking.h`.
   Never call `esp_wifi_*` from `shell/`, `command/`, `storage/`, `batch/`, or `main/`.
 - Only the official path is permitted: `espressif/esp_hosted` + `espressif/esp_wifi_remote`.
@@ -260,7 +298,11 @@
 - Hosted NimBLE on C6 over ESP-Hosted VHCI (not Bluedroid)
 - Stateful lifecycle: enable once, reuse for scan/advertise
 - bt is alias for bluetooth
-- Supported: status, scan, advertise on|off
+- Supported: status, scan [limit], advertise on [name]|off
+- A scan run MUST be bounded by P4_CONFIG_BT_SCAN_DURATION_MS (passed as the ble_gap_disc
+  duration), so `bluetooth scan` always terminates and the worker task never hangs
+- `bluetooth advertise on [name]` stores the name in s_bluetooth_state.session_advertise_name;
+  it is session-only and must never be persisted across boots
 
 ### SD Card Rules
 - All SD access goes through `components/storage/`. No other module may call `bsp_sdcard_mount()`
@@ -317,6 +359,11 @@
 - NEVER add a line-sized or larger buffer as a local variable in any function on that cycle.
   Allocate it on the heap and free it on every exit path. A 12 KB batch frame on the 8 KB stack
   was a real crash fixed in v0.19.0.
+- This includes the batch command handlers themselves: `shell_resolve_batch_path`,
+  `shell_command_set`/`set /a`/`set /p`, `shell_command_path`, `shell_command_echo`,
+  `shell_command_if`, and `shell_command_choice` all run on the recursive batch path and keep
+  their SD-path/line-sized scratch on the heap. A nested `call` whose callee runs `set`/`echo`
+  stacked these frames and overflowed the worker stack (fixed in v0.24.8).
 - When changing anything on that path, verify the frame size from the disassembly
   (`riscv32-esp-elf-objdump -d <obj>`, read the `addi sp,sp,-N` prologue), not by inspection
 - Structures stored per batch frame (label table, argument copies) must be sized deliberately;
@@ -357,6 +404,25 @@
 - Pipeline stages: max 4 (`P4_CONFIG_PIPE_STAGE_MAX`). Every spool file MUST be removed on
   every exit path, including a stage failure.
 - Prompt template: max 64 bytes (`P4_CONFIG_PROMPT_TEMPLATE_BYTES`)
+
+### Boot Scripting (CONFIG.SYS / AUTOEXEC.BAT)
+- The firmware looks for `CONFIG.SYS` and `AUTOEXEC.BAT` on the SD card root at every boot.
+- When either file is missing and `P4_CONFIG_BOOT_GENERATE_DEFAULTS` is set, default files are written once.
+- `CONFIG.SYS` directives are parsed line-by-line by `components/boot/boot.c`. Supported: `SET`,
+  `PATH=`, `PROMPT=`, `ECHO ON|OFF`, `ROTATE=`, `BRIGHTNESS=`, `DISPLAY_POWER=`, `VOLUME=`,
+  `WIFI_SSID=`, `WIFI_PASSWORD=`, `WIFI_AUTOCONNECT=`, `WIFI=ON|OFF`, `BLUETOOTH=ON|OFF`,
+  `BT_ADVERTISE=ON|OFF`, `USB_KEYBOARD=ON|OFF`, `USB_MOUSE=ON|OFF`, `GPIO <n> = OUT [HIGH|LOW]`.
+- Hardware directives are applied by executing their command-line equivalent through the batch
+  pipeline (`batch_boot_execute_command()`), reusing existing validation. State-only directives
+  (Wi-Fi credentials, autoconnect policy, echo default) use accessors exposed by the owning modules.
+- `AUTOEXEC.BAT` runs through the normal batch pipeline (`shell_execute_batch_file()`), with cwd =
+  SD root. Non-zero errorlevel is a warning only; the shell continues.
+- Unknown or malformed directives produce a single muted warning and are never fatal.
+- Safe with no SD card (silent skip), empty files, or read-only/full media.
+- Wi-Fi password from `WIFI_PASSWORD=` is never echoed to transcript, history, or debug log.
+- GPIO directives are delegated to the existing `gpio set` safety check; reserved pins are refused.
+- All tunable values live in `p4minishell_config.h` and are documented in `p4minishell_config.yaml`
+  under `boot_scripting`.
 
 ### Kconfig Rules
 - `Kconfig.projbuild` MUST live with the component that consumes its options, not in `main/`.

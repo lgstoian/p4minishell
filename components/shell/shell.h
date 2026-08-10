@@ -49,6 +49,12 @@ typedef struct {
     /** Execute a command line with variable expansion and redirection. */
     void (*execute_command)(char *command);
 
+    /** Queue a command line for execution on the command worker task.
+     *  Used by the UART console so a blocking key wait (pause, choice,
+     *  more, format confirmation, set /p) can still be answered from the
+     *  serial input while the command runs on the worker task. */
+    void (*execute_command_async)(char *command);
+
     /** Return the shell current working directory as an absolute VFS path. */
     const char *(*get_cwd)(void);
 

@@ -156,6 +156,85 @@ void test_batch_expr_variables(void)
 }
 
 /* ========================================================================
+ * COMPARISON OPERATORS (== != < > <= >=)
+ * ======================================================================== */
+
+void test_batch_expr_comparisons(void)
+{
+    /* Equality and inequality yield 1/0. */
+    expect_value("5==5", 1);
+    expect_value("5==6", 0);
+    expect_value("5!=6", 1);
+    expect_value("5!=5", 0);
+
+    /* Ordering relations. */
+    expect_value("5<6", 1);
+    expect_value("6<5", 0);
+    expect_value("5>6", 0);
+    expect_value("6>5", 1);
+    expect_value("5<=5", 1);
+    expect_value("6<=5", 0);
+    expect_value("5>=5", 1);
+    expect_value("5>=6", 0);
+
+    /* Comparisons bind looser than arithmetic, so arithmetic wins first. */
+    expect_value("2+3==5", 1);
+    expect_value("2+3==6", 0);
+    expect_value("10-2*3==4", 1);
+    expect_value("(2+3)==5", 1);
+
+    /* Bitwise operators bind tighter than comparisons (cmd.exe order). */
+    expect_value("1|0==0", 0);          /* (1|0) == 0 */
+    expect_value("6&3==2", 1);          /* (6&3) == 2 */
+
+    /* Shift binds tighter than comparison. */
+    expect_value("1<<2==4", 1);
+    expect_value("4>>1==2", 1);
+
+    /* Hex literals compare as their numeric value. */
+    expect_value("0x10==16", 1);
+    expect_value("0xFF>254", 1);
+
+    /* A chain of comparisons uses the previous result as the left side. */
+    expect_value("3>2>0", 1);           /* (3>2) > 0 -> 1 > 0 */
+
+    /* Comparisons can be used anywhere an integer is expected. */
+    expect_value("(5>3)*10", 10);
+    expect_value("2+(4<=4)", 3);
+}
+
+/* ========================================================================
+ * LOGICAL OPERATORS (&& ||)
+ * ======================================================================== */
+
+void test_batch_expr_logical(void)
+{
+    expect_value("1&&1", 1);
+    expect_value("1&&0", 0);
+    expect_value("0&&1", 0);
+    expect_value("0||1", 1);
+    expect_value("0||0", 0);
+    expect_value("1||0", 1);
+
+    /* Any non-zero is truthy, exactly like the unary `!`. */
+    expect_value("5&&5", 1);
+    expect_value("5&&0", 0);
+    expect_value("0||-1", 1);
+
+    /* `&&` binds tighter than `||`. */
+    expect_value("1||0&&0", 1);         /* 1 || (0&&0) */
+
+    /* Both sides are evaluated (no short-circuiting, matching cmd.exe), so a
+     * division by zero on the right side is still an error. */
+    expect_error("0&&1/0");
+    expect_error("1||1/0");
+
+    /* Comparisons feed logical operators. */
+    expect_value("(5==5)&&(6>5)", 1);
+    expect_value("(5==5)&&(6<5)", 0);
+}
+
+/* ========================================================================
  * ERROR DETECTION
  * ======================================================================== */
 

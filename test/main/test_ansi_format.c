@@ -196,10 +196,13 @@ void test_ansi_to_lvgl_recolor(void)
 
     ansi_init();
 
-    /* Plain text with no escapes stays plain (no recolor markup). */
+    /* Plain text with no escapes is still wrapped in the default-foreground
+     * recolor markup: the transcript label has no explicit text colour, so
+     * `#CCCCCC text #` is what keeps the plain (uncoloured) runs visible on
+     * the dark background. P4_CONFIG_ANSI_DEFAULT_FG = 0xCCCCCC. */
     len = ansi_to_lvgl_recolor("hello world", out, sizeof(out));
     TEST_ASSERT_TRUE(len > 0);
-    TEST_ASSERT_EQUAL_STRING("hello world", out);
+    TEST_ASSERT_EQUAL_STRING("#CCCCCC hello world #", out);
 
     /* A green segment becomes #rrggbb text # markup. ANSI green is
      * P4_CONFIG_ANSI_GREEN = 0x13A10E. */

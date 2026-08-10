@@ -2167,12 +2167,217 @@ void shell_command_chkdsk(int argc, char **argv)
     shell_sd_end(&session, "chkdsk");
 }
 
+/* ========================================================================
+ * DESTRUCTIVE-OPERATION CONFIRMATION
+ * ========================================================================
+ * Shared by `format`, `disk clean`, and `disk delete partition`. Requires the
+ * exact confirmation word through the shell key queue and refuses to run when
+ * no interactive input source is attached, so a batch file can never wipe the
+ * card unattended.
+ */
+
+/**
+ * Collect the exact confirmation word for a destructive operation.
+ *
+ * @param operation    Command name used in messages and the debug log.
+ * @param warning      Bright-red warning line printed before the prompt.
+ * @param detail       Optional detail lines (filesystem, label, size), or "".
+ * @return true when the user typed the exact confirmation word.
+ */
+static bool shell_confirm_destructive(const char *operation, const char *warning, const char *detail)
+{
+    char confirm[32];
+
+    shell_transcript_appendf_ansi(SH_ERR "%s" SH_RST "\n", warning);
+    if (detail != NULL && detail[0] != '\0') {
+        shell_transcript_append_text(detail);
+    }
+    shell_transcript_appendf("Type %s to continue: ", P4_CONFIG_FORMAT_CONFIRM_WORD);
+
+    if (!shell_key_input_available()) {
+        shell_transcript_appendf("\n%s: refused, no interactive input is available to confirm\n", operation);
+        shell_record_warningf(operation, "Refused destructive operation with no interactive confirmation source");
+        return false;
+    }
+
+    {
+        size_t length = 0;
+
+        confirm[0] = '\0';
+        shell_key_wait_begin();
+        while (length + 1 < sizeof(confirm)) {
+            char key = '\0';
+
+            if (!shell_wait_for_key(P4_CONFIG_KEY_WAIT_TIMEOUT_MS, &key)) {
+                break;
+            }
+            if (key == '\r' || key == '\n') {
+                break;
+            }
+            if (key == '\b' || key == 0x7F) {
+                if (length > 0) {
+                    confirm[--length] = '\0';
+                }
+                continue;
+            }
+            confirm[length++] = key;
+            confirm[length] = '\0';
+        }
+        shell_key_wait_end();
+    }
+
+    shell_transcript_appendf("%s\n", confirm);
+    return strcmp(confirm, P4_CONFIG_FORMAT_CONFIRM_WORD) == 0;
+}
+
+/**
+ * Parse an allocation-unit token with an optional K/M suffix (DOS `/A:4K`).
+ * @return true on success.
+ */
+static bool shell_parse_alloc_unit(const char *text, uint32_t *bytes_out)
+{
+    char *end;
+    unsigned long value;
+    uint64_t multiplier = 1;
+
+    if (text == NULL || bytes_out == NULL || *text == '\0') {
+        return false;
+    }
+
+    value = strtoul(text, &end, 10);
+    if (end == text) {
+        return false;
+    }
+
+    if (*end == 'k' || *end == 'K') {
+        multiplier = 1024ULL;
+        end++;
+    } else if (*end == 'm' || *end == 'M') {
+        multiplier = 1024ULL * 1024ULL;
+        end++;
+    }
+
+    if (*end != '\0' || value == 0) {
+        return false;
+    }
+
+    *bytes_out = (uint32_t)((uint64_t)value * multiplier);
+    return true;
+}
+
+/**
+ * Shared FORMAT.COM / diskpart `format` core: mounts the card if needed,
+ * requires the exact confirmation word, formats via storage_format_volume(),
+ * and reports the resulting geometry with the semantic palette.
+ *
+ * @param operation   Command name used in messages ("format" or "disk format").
+ * @param fs_type     Requested filesystem ("FAT", "FAT32", "EXFAT", or NULL).
+ * @param new_label   Requested volume label, or NULL.
+ * @param alloc_unit  Allocation-unit size in bytes (ignored unless @p alloc_set).
+ * @param alloc_set   True when the user supplied /A: or au=.
+ */
+static void shell_format_execute(const char *operation,
+                                 const char *fs_type,
+                                 const char *new_label,
+                                 uint32_t alloc_unit,
+                                 bool alloc_set)
+{
+    storage_format_opts_t opts;
+    esp_err_t error;
+
+    memset(&opts, 0, sizeof(opts));
+    opts.alloc_unit_bytes = P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES;
+
+    if (!storage_sd_is_mounted()) {
+        shell_sd_session_t session;
+
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_print_error("%s: SD card not present - insert and retry", operation);
+            return;
+        }
+        shell_sd_end(&session, operation);
+    }
+
+    if (bsp_sdcard == NULL) {
+        shell_print_error("%s: no SD card handle is available", operation);
+        shell_record_errorf(operation, ESP_ERR_INVALID_STATE, "bsp_sdcard is NULL");
+        return;
+    }
+
+    /* Destructive operation: require the exact confirmation word. */
+    {
+        char detail[SHELL_SD_PATH_BYTES];
+        size_t pos = 0;
+
+        detail[0] = '\0';
+        if (fs_type != NULL) {
+            pos += (size_t)snprintf(detail + pos, sizeof(detail) - pos, "Filesystem: %s\n", fs_type);
+        }
+        if (new_label != NULL) {
+            pos += (size_t)snprintf(detail + pos, sizeof(detail) - pos, "Volume label: %s\n", new_label);
+        }
+        if (alloc_set) {
+            pos += (size_t)snprintf(detail + pos, sizeof(detail) - pos, "Allocation unit: %u bytes\n",
+                                    (unsigned)alloc_unit);
+        }
+
+        if (!shell_confirm_destructive(operation,
+                                       "WARNING: This will erase ALL data on the SD card.",
+                                       detail)) {
+            shell_print_warning("%s: cancelled, the card was not modified", operation);
+            shell_record_warningf(operation, "Cancelled %s by user", operation);
+            return;
+        }
+    }
+
+    shell_print_warning("%s: formatting, do not remove the card ...", operation);
+
+    if (alloc_set) {
+        opts.alloc_unit_bytes = alloc_unit;
+    }
+    if (new_label != NULL) {
+        snprintf(opts.label, sizeof(opts.label), "%s", new_label);
+    }
+
+    error = storage_format_volume(STORAGE_VOLUME_SD, &opts);
+    if (error != ESP_OK) {
+        shell_print_error("%s: failed (%s)", operation, esp_err_to_name(error));
+        shell_record_errorf(operation, error, "SD card format failed");
+        return;
+    }
+
+    shell_print_ok("%s: complete", operation);
+    shell_record_infof(operation, "SD card reformatted");
+
+    /* Report the resulting geometry so the user sees the outcome. Colours
+     * match chkdsk: magenta numbers, cyan labels. */
+    {
+        storage_space_info_t space;
+        const char *fat_type = storage_get_fat_type();
+
+        shell_transcript_appendf_ansi(SH_HEAD "Volume" SH_RST " %s (%s)\n",
+                                      new_label != NULL ? new_label : SHELL_SD_FATFS_DRIVE,
+                                      fat_type);
+        if (storage_get_space_info(&space) == ESP_OK) {
+            char text[24];
+
+            shell_transcript_append_text("\n");
+            shell_sd_format_size(space.total_bytes, text, sizeof(text));
+            shell_transcript_appendf_ansi(SH_NUM "%16s" SH_RST " " SH_LBL "total disk space" SH_RST "\n", text);
+            shell_sd_format_size(space.free_bytes, text, sizeof(text));
+            shell_transcript_appendf_ansi(SH_NUM "%16s" SH_RST " " SH_LBL "available" SH_RST "\n", text);
+            shell_transcript_appendf_ansi(SH_NUM "%16u" SH_RST " " SH_LBL "bytes in each allocation unit" SH_RST "\n",
+                                          (unsigned int)space.cluster_bytes);
+        }
+    }
+}
+
 void shell_command_format(int argc, char **argv)
 {
     const char *fs_type = NULL;
     const char *new_label = NULL;
-    char confirm[32];
-    esp_err_t error;
+    bool alloc_set = false;
+    uint32_t alloc_unit = P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES;
     int index;
 
     for (index = 1; index < argc; index++) {
@@ -2182,7 +2387,7 @@ void shell_command_format(int argc, char **argv)
 
         if (token[0] != '/') {
             shell_print_error("format: unexpected argument %s", token);
-            shell_print_usage("Usage: format [/FS:FAT|FAT32|EXFAT] [/V:label] [/Q]");
+            shell_print_usage("Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]");
             return;
         }
 
@@ -2218,6 +2423,20 @@ void shell_command_format(int argc, char **argv)
             }
             new_label = value;
             continue;
+        case 'A':
+            if (*value == '\0') {
+                shell_print_error("format: /A needs a size, for example /A:32K");
+                return;
+            }
+            if (!shell_parse_alloc_unit(value, &alloc_unit) ||
+                alloc_unit < P4_CONFIG_FORMAT_ALLOC_UNIT_MIN ||
+                alloc_unit > P4_CONFIG_FORMAT_ALLOC_UNIT_MAX) {
+                shell_print_error("format: invalid /A allocation unit size %s", value);
+                shell_print_usage("Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]");
+                return;
+            }
+            alloc_set = true;
+            continue;
         case 'Q':
             /* Accepted for DOS familiarity. The ESP-IDF helper always does
              * the equivalent of a quick format, so this is a no-op rather
@@ -2225,140 +2444,30 @@ void shell_command_format(int argc, char **argv)
             continue;
         default:
             shell_print_error("format: unknown option %s", token);
-            shell_print_usage("Usage: format [/FS:FAT|FAT32|EXFAT] [/V:label] [/Q]");
+            shell_print_usage("Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]");
             return;
         }
     }
 
     /* Validate the filesystem type before warning the user, so a typo does
-     * not get as far as the confirmation prompt. */
-    if (fs_type != NULL &&
-        !shell_text_equals_ignore_case(fs_type, "FAT") &&
-        !shell_text_equals_ignore_case(fs_type, "FAT32") &&
-        !shell_text_equals_ignore_case(fs_type, "EXFAT")) {
-        shell_print_error("format: unsupported filesystem type %s", fs_type);
-        shell_transcript_append_text("  Supported: FAT, FAT32, EXFAT\n");
-        return;
-    }
-
-    if (!storage_sd_is_mounted()) {
-        shell_sd_session_t session;
-
-        if (shell_sd_begin(&session) != ESP_OK) {
-            shell_print_error("format: SD card not present - insert and retry");
+     * not get as far as the confirmation prompt. FAT/FAT32 use the standard
+     * IDF helper's size-appropriate selection (FAT12/16 for small volumes,
+     * FAT32 for modern SD cards). exFAT cannot be created in this firmware
+     * build (FF_FS_EXFAT is off) - warn honestly and format as FAT32 rather
+     * than pretending. */
+    if (fs_type != NULL) {
+        if (shell_text_equals_ignore_case(fs_type, "EXFAT")) {
+            shell_print_warning("format: exFAT is not supported in this firmware build");
+            shell_transcript_append_text("  Formatting as FAT32 instead.\n");
+        } else if (!shell_text_equals_ignore_case(fs_type, "FAT") &&
+                   !shell_text_equals_ignore_case(fs_type, "FAT32")) {
+            shell_print_error("format: unsupported filesystem type %s", fs_type);
+            shell_transcript_append_text("  Supported: FAT, FAT32\n");
             return;
         }
-        shell_sd_end(&session, "format");
     }
 
-    /* Destructive operation: require the exact confirmation word, mirroring
-     * the c6ota flow so the shell has one consistent danger contract. */
-    shell_transcript_appendf_ansi(SH_ERR "WARNING: This will erase ALL data on the SD card." SH_RST "\n");
-    if (fs_type != NULL) {
-        shell_transcript_appendf("Filesystem: %s\n", fs_type);
-    }
-    if (new_label != NULL) {
-        shell_transcript_appendf("Volume label: %s\n", new_label);
-    }
-    shell_transcript_appendf("Type %s to continue: ", P4_CONFIG_FORMAT_CONFIRM_WORD);
-
-    if (!shell_key_input_available()) {
-        shell_transcript_append_text("\nformat: refused, no interactive input is available to confirm\n");
-        shell_record_warningf("format", "Refused format with no interactive confirmation source");
-        return;
-    }
-
-    /* Collect the confirmation word one key at a time through the shared
-     * key queue, so the answer never reaches the command dispatcher. */
-    {
-        size_t length = 0;
-
-        confirm[0] = '\0';
-        shell_key_wait_begin();
-        while (length + 1 < sizeof(confirm)) {
-            char key = '\0';
-
-            if (!shell_wait_for_key(P4_CONFIG_KEY_WAIT_TIMEOUT_MS, &key)) {
-                break;
-            }
-
-            if (key == '\r' || key == '\n') {
-                break;
-            }
-
-            if (key == '\b' || key == 0x7F) {
-                if (length > 0) {
-                    confirm[--length] = '\0';
-                }
-                continue;
-            }
-
-            confirm[length++] = key;
-            confirm[length] = '\0';
-        }
-        shell_key_wait_end();
-    }
-
-    shell_transcript_appendf("%s\n", confirm);
-
-    if (strcmp(confirm, P4_CONFIG_FORMAT_CONFIRM_WORD) != 0) {
-        shell_print_warning("format: cancelled, the card was not modified");
-        return;
-    }
-
-    shell_print_warning("format: formatting, do not remove the card ...");
-
-    /* esp_vfs_fat_sdcard_format() unmounts, formats, and remounts. The card
-     * handle must be the live one the BSP mounted. */
-    if (bsp_sdcard == NULL) {
-        shell_print_error("format: no SD card handle is available");
-        shell_record_errorf("format", ESP_ERR_INVALID_STATE, "bsp_sdcard is NULL");
-        return;
-    }
-
-    error = esp_vfs_fat_sdcard_format(BSP_SD_MOUNT_POINT, bsp_sdcard);
-    if (error != ESP_OK) {
-        shell_print_error("format: failed (%s)", esp_err_to_name(error));
-        shell_record_errorf("format", error, "SD card format failed");
-        return;
-    }
-
-    /* Apply the requested label to the freshly formatted volume. */
-    if (new_label != NULL) {
-        char drive_label[24];
-        char padded[12];
-        size_t length = strlen(new_label);
-        size_t position;
-
-        memset(padded, ' ', 11);
-        padded[11] = '\0';
-        for (position = 0; position < length && position < 11; position++) {
-            padded[position] = (char)toupper((unsigned char)new_label[position]);
-        }
-
-        snprintf(drive_label, sizeof(drive_label), "%s%s", SHELL_SD_FATFS_DRIVE, padded);
-        if (f_setlabel(drive_label) != FR_OK) {
-            shell_print_warning("format: volume formatted, but the label could not be set");
-            shell_record_warningf("format", "f_setlabel failed after format");
-        }
-    }
-
-    shell_print_ok("format: complete");
-    shell_record_infof("format", "SD card reformatted");
-
-    /* Report the resulting geometry so the user sees the outcome. */
-    {
-        storage_space_info_t space;
-
-        if (storage_get_space_info(&space) == ESP_OK) {
-            char text[24];
-
-            shell_sd_format_size(space.total_bytes, text, sizeof(text));
-            shell_transcript_appendf("%16s total disk space\n", text);
-            shell_sd_format_size(space.free_bytes, text, sizeof(text));
-            shell_transcript_appendf("%16s available\n", text);
-        }
-    }
+    shell_format_execute("format", fs_type, new_label, alloc_unit, alloc_set);
 }
 
 /* ========================================================================
@@ -3286,4 +3395,361 @@ void shell_command_sd(char *command)
     }
 
     free(cmd_copy);
+}
+
+/* ========================================================================
+ * DISK COMMAND FAMILY (diskpart-style disk and partition management)
+ * ========================================================================
+ * Physical-disk operations on the SD card: geometry, MBR partition-table
+ * inspection and editing, and a diskpart-style format alias. The storage
+ * module owns the low-level mechanics; these handlers own parsing and the
+ * destructive-confirmation contract. USB OTG MSC is a future target - the
+ * storage_volume_t plumbing is already in place for it.
+ */
+
+static void shell_disk_print_usage(void)
+{
+    shell_print_usage("Usage:");
+    shell_transcript_append_text("  disk list                     show the physical disk(s)\n");
+    shell_transcript_append_text("  disk detail                   show disk geometry and the MBR partition table\n");
+    shell_transcript_append_text("  disk clean                    remove the partition table (destructive)\n");
+    shell_transcript_append_text("  disk create partition primary [size=N]  create a primary partition (N in MB)\n");
+    shell_transcript_append_text("  disk delete partition N       delete MBR partition N (1-4)\n");
+    shell_transcript_append_text("  disk format [fs=FAT32] [label=X] [au=size] [quick]   format the volume (diskpart style)\n");
+    shell_transcript_append_text("After clean or create, run 'format' (or 'disk format') to create the filesystem.\n");
+}
+
+/** Friendly name for an MBR partition-type byte. */
+static const char *shell_disk_partition_type_name(uint8_t type)
+{
+    switch (type) {
+    case 0x01:
+    case 0x04:
+    case 0x06:
+    case 0x0E:
+        return "FAT12/FAT16";
+    case 0x0B:
+    case 0x0C:
+        return "FAT32";
+    case 0x05:
+    case 0x0F:
+        return "Extended";
+    case 0x07:
+        return "NTFS/exFAT";
+    default:
+        return "Unknown";
+    }
+}
+
+static void shell_disk_report_geometry(const storage_disk_info_t *info)
+{
+    char capacity_text[32];
+
+    shell_sd_format_size(info->capacity_bytes, capacity_text, sizeof(capacity_text));
+    shell_print_field("disk.number:", "%u", 0);
+    shell_print_field("disk.name:", "%s", info->card_name);
+    shell_print_field("disk.capacity:", "%s", capacity_text);
+    shell_print_field_num("disk.sector_size:", (long)info->sector_size);
+    shell_print_field_num("disk.sector_count:", (long)info->sector_count);
+    shell_print_field_num("disk.max_freq_khz:", (long)info->max_freq_khz);
+}
+
+static void shell_command_disk_list(void)
+{
+    storage_disk_info_t info;
+    esp_err_t error;
+
+    error = storage_disk_get_info(STORAGE_VOLUME_SD, &info);
+    if (error != ESP_OK) {
+        shell_print_error("disk: no SD card available (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk list could not read the card");
+        return;
+    }
+
+    shell_print_heading("Physical Disks");
+    shell_disk_report_geometry(&info);
+}
+
+static void shell_command_disk_detail(void)
+{
+    storage_disk_info_t info;
+    storage_mbr_t mbr;
+    esp_err_t error;
+    int index;
+
+    error = storage_disk_get_info(STORAGE_VOLUME_SD, &info);
+    if (error != ESP_OK) {
+        shell_print_error("disk: no SD card available (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk detail could not read the card");
+        return;
+    }
+
+    shell_print_heading("Disk 0 - %s", info.card_name);
+    shell_disk_report_geometry(&info);
+
+    error = storage_disk_read_mbr(STORAGE_VOLUME_SD, &mbr);
+    if (error != ESP_OK) {
+        shell_print_error("disk: could not read the partition table (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk detail MBR read failed");
+        return;
+    }
+
+    shell_print_heading("MBR Partition Table");
+    if (!mbr.valid) {
+        shell_print_warning("disk: no valid MBR partition table (0x55AA signature missing)");
+        shell_transcript_append_text("  Run 'disk create partition primary' then 'format' to create one.\n");
+        return;
+    }
+
+    for (index = 0; index < 4; index++) {
+        const storage_partition_t *part = &mbr.partitions[index];
+        char size_text[24];
+
+        if (part->type == 0 && part->size_lba == 0) {
+            shell_transcript_appendf_ansi(SH_MUTE "  Partition %d: <unused>" SH_RST "\n", index + 1);
+            continue;
+        }
+
+        shell_sd_format_size((uint64_t)part->size_lba * (uint64_t)info.sector_size,
+                             size_text, sizeof(size_text));
+        shell_transcript_appendf_ansi("  " SH_LBL "Partition %d:" SH_RST
+                                      " " SH_USAGE "type=0x%02X %s" SH_RST
+                                      " " SH_LBL "start" SH_RST "=" SH_NUM "%" PRIu32 SH_RST
+                                      " " SH_LBL "size" SH_RST "=" SH_NUM "%s" SH_RST "%s\n",
+                                      index + 1,
+                                      part->type, shell_disk_partition_type_name(part->type),
+                                      part->start_lba, size_text,
+                                      part->bootable ? " (boot)" : "");
+    }
+}
+
+static void shell_command_disk_clean(void)
+{
+    esp_err_t error;
+
+    if (!shell_confirm_destructive("disk clean",
+                                   "WARNING: This will remove ALL partitions on the SD card.",
+                                   "  Run 'disk create partition primary' then 'format' to recreate a filesystem.\n")) {
+        shell_print_warning("disk: clean cancelled, the card was not modified");
+        shell_record_warningf("disk", "Cancelled disk clean by user");
+        return;
+    }
+
+    error = storage_disk_clean(STORAGE_VOLUME_SD);
+    if (error != ESP_OK) {
+        shell_print_error("disk: clean failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk clean failed");
+        return;
+    }
+
+    shell_print_ok("disk: partition table removed");
+    shell_transcript_append_text("  Run 'disk create partition primary' then 'format' to recreate a filesystem.\n");
+}
+
+/**
+ * Parse a partition-size token. diskpart uses megabytes by default; an
+ * optional K/M/G suffix overrides that. @p bytes_out receives bytes.
+ */
+static bool shell_disk_parse_partition_size(const char *text, uint64_t *bytes_out)
+{
+    char *end;
+    unsigned long value;
+    uint64_t multiplier = 1024ULL * 1024ULL;
+
+    if (text == NULL || bytes_out == NULL || *text == '\0') {
+        return false;
+    }
+
+    value = strtoul(text, &end, 10);
+    if (end == text) {
+        return false;
+    }
+
+    if (*end == 'k' || *end == 'K') {
+        multiplier = 1024ULL;
+        end++;
+    } else if (*end == 'm' || *end == 'M') {
+        multiplier = 1024ULL * 1024ULL;
+        end++;
+    } else if (*end == 'g' || *end == 'G') {
+        multiplier = 1024ULL * 1024ULL * 1024ULL;
+        end++;
+    }
+
+    if (*end != '\0' || value == 0) {
+        return false;
+    }
+
+    *bytes_out = (uint64_t)value * multiplier;
+    return true;
+}
+
+static void shell_command_disk_create(int argc, char **argv)
+{
+    uint64_t size_bytes = 0;
+    esp_err_t error;
+    int index;
+
+    /* disk create partition primary [size=N] */
+    if (argc < 4 || strcmp(argv[2], "partition") != 0) {
+        shell_disk_print_usage();
+        shell_record_warningf("disk", "Usage error for disk create command");
+        return;
+    }
+    if (strcmp(argv[3], "primary") != 0) {
+        shell_print_error("disk: only 'primary' partitions are supported");
+        shell_record_warningf("disk", "Unsupported partition type: %s", argv[3]);
+        return;
+    }
+
+    for (index = 4; index < argc; index++) {
+        if (strncmp(argv[index], "size=", 5) == 0) {
+            if (!shell_disk_parse_partition_size(argv[index] + 5, &size_bytes)) {
+                shell_print_error("disk: invalid partition size %s", argv[index] + 5);
+                return;
+            }
+        } else {
+            shell_print_error("disk: unexpected argument %s", argv[index]);
+            shell_disk_print_usage();
+            return;
+        }
+    }
+
+    error = storage_disk_create_primary_partition(STORAGE_VOLUME_SD, size_bytes);
+    if (error == ESP_ERR_INVALID_STATE) {
+        shell_print_error("disk: no free partition slot (all 4 MBR entries are used)");
+        return;
+    }
+    if (error != ESP_OK) {
+        shell_print_error("disk: create partition failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk create partition failed");
+        return;
+    }
+
+    shell_print_ok("disk: primary partition created");
+    shell_transcript_append_text("  Run 'format' (or 'disk format') to create the filesystem.\n");
+}
+
+static void shell_command_disk_delete(int argc, char **argv)
+{
+    char *end;
+    unsigned long partition_index;
+    esp_err_t error;
+
+    /* disk delete partition N (1-4) */
+    if (argc < 4 || strcmp(argv[2], "partition") != 0) {
+        shell_disk_print_usage();
+        shell_record_warningf("disk", "Usage error for disk delete command");
+        return;
+    }
+
+    partition_index = strtoul(argv[3], &end, 10);
+    if (end == argv[3] || *end != '\0' || partition_index < 1 || partition_index > 4) {
+        shell_print_error("disk: partition number must be 1-4");
+        return;
+    }
+
+    if (!shell_confirm_destructive("disk delete",
+                                   "WARNING: This will remove partition information from the SD card.",
+                                   "")) {
+        shell_print_warning("disk: delete cancelled, the card was not modified");
+        shell_record_warningf("disk", "Cancelled disk delete by user");
+        return;
+    }
+
+    error = storage_disk_delete_partition(STORAGE_VOLUME_SD, (unsigned)(partition_index - 1));
+    if (error != ESP_OK) {
+        shell_print_error("disk: delete partition failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk delete partition failed");
+        return;
+    }
+
+    shell_print_ok("disk: partition %lu removed", partition_index);
+    shell_transcript_append_text("  Run 'format' (or 'disk format') to recreate a filesystem.\n");
+}
+
+static void shell_command_disk_format(int argc, char **argv)
+{
+    const char *fs_type = NULL;
+    const char *label = NULL;
+    uint32_t alloc_unit = P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES;
+    bool alloc_set = false;
+    int index;
+
+    /* disk format [fs=FAT32] [label=X] [au=size] [quick] */
+    for (index = 2; index < argc; index++) {
+        const char *token = argv[index];
+
+        if (strncmp(token, "fs=", 3) == 0) {
+            fs_type = token + 3;
+        } else if (strncmp(token, "label=", 6) == 0) {
+            label = token + 6;
+            if (strlen(label) > 11) {
+                shell_print_error("disk format: volume label must be 11 characters or fewer");
+                return;
+            }
+        } else if (strncmp(token, "au=", 3) == 0) {
+            if (!shell_parse_alloc_unit(token + 3, &alloc_unit) ||
+                alloc_unit < P4_CONFIG_FORMAT_ALLOC_UNIT_MIN ||
+                alloc_unit > P4_CONFIG_FORMAT_ALLOC_UNIT_MAX) {
+                shell_print_error("disk format: invalid allocation unit size %s", token + 3);
+                return;
+            }
+            alloc_set = true;
+        } else if (strcmp(token, "quick") == 0) {
+            /* Accepted for diskpart familiarity; the format is always quick. */
+        } else {
+            shell_print_error("disk format: unexpected argument %s", token);
+            shell_disk_print_usage();
+            return;
+        }
+    }
+
+    /* Same filesystem validation as FORMAT.COM. */
+    if (fs_type != NULL) {
+        if (shell_text_equals_ignore_case(fs_type, "EXFAT")) {
+            shell_print_warning("disk format: exFAT is not supported in this firmware build");
+            shell_transcript_append_text("  Formatting as FAT32 instead.\n");
+        } else if (!shell_text_equals_ignore_case(fs_type, "FAT") &&
+                   !shell_text_equals_ignore_case(fs_type, "FAT32")) {
+            shell_print_error("disk format: unsupported filesystem type %s", fs_type);
+            shell_transcript_append_text("  Supported: FAT, FAT32\n");
+            return;
+        }
+    }
+
+    shell_format_execute("disk format", fs_type, label, alloc_unit, alloc_set);
+}
+
+/**
+ * `disk` command family entry point.
+ */
+void shell_command_disk(char *command)
+{
+    char *argv[8];
+    int argc;
+
+    argc = shell_split_args(command, argv, 8);
+
+    if (argc <= 1) {
+        shell_command_disk_list();
+        shell_disk_print_usage();
+    } else if (strcmp(argv[1], "help") == 0) {
+        shell_disk_print_usage();
+    } else if (strcmp(argv[1], "list") == 0) {
+        shell_command_disk_list();
+    } else if (strcmp(argv[1], "detail") == 0) {
+        shell_command_disk_detail();
+    } else if (strcmp(argv[1], "clean") == 0) {
+        shell_command_disk_clean();
+    } else if (strcmp(argv[1], "create") == 0) {
+        shell_command_disk_create(argc, argv);
+    } else if (strcmp(argv[1], "delete") == 0) {
+        shell_command_disk_delete(argc, argv);
+    } else if (strcmp(argv[1], "format") == 0) {
+        shell_command_disk_format(argc, argv);
+    } else {
+        shell_disk_print_usage();
+        shell_record_warningf("disk", "Unknown disk subcommand: %s", argv[1]);
+    }
 }

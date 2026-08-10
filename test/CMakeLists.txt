@@ -27,6 +27,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/shell
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/storage
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/batch
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/boot
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/command
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/networking
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/keyboard

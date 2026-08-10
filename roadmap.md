@@ -249,12 +249,17 @@ Implemented today in the checked-in firmware:
 
 ### Batch expressions
 - ✅ **`set /a`** — a recursive-descent evaluator over 32-bit signed integers implementing the
-      COMMAND.COM operator set and precedence: `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`, unary
-      `- ~ !`, and parentheses. Compound assignment operators are supported. Divide by zero,
-      `INT32_MIN / -1` overflow, unbalanced parentheses, and trailing garbage are all detected
-      and reported rather than trapping or producing a wrong answer.
-- ✅ The `&` and `|` handlers deliberately refuse to consume `&&` and `||`, so an expression
-      can never swallow a command-chain separator
+      cmd.exe operator set and precedence: `||`, `&&`, comparisons `== != < > <= >=` (1/0),
+      `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`, unary `- ~ !`, and parentheses. Compound
+      assignment operators are supported. Divide by zero, `INT32_MIN / -1` overflow,
+      unbalanced parentheses, and trailing garbage are all detected and reported rather than
+      trapping or producing a wrong answer.
+- ✅ The `&` and `|` levels deliberately refuse to consume `&&` and `||`, so an expression
+      can never swallow a command-chain separator; the logical levels consume them. The
+      assignment splitter (`shell_expr_find_assignment`) skips the `=` of a comparison so
+      `set /a x=5==3` assigns the comparison result.
+- ✅ **`if` numeric keywords** — `EQU`, `NEQ`, `LSS`, `LEQ`, `GTR`, `GEQ` between two decimal
+      operands (non-numeric reads as 0), added in v0.24.9.
 - ✅ **`set /p`** — prompts and reads a line through the v0.18.0 key-wait facility. Backspace
       edits, ESC cancels, and an empty line leaves the variable unchanged as DOS does.
 - ✅ Added `shell_read_line()` to the shell core, which is the reusable piece `set /p` needed

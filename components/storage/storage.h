@@ -183,6 +183,27 @@ esp_err_t storage_copy_attributes(const char *source_path, const char *dest_path
 /** Print a bounded directory listing using the FATFS long-file-name API. */
 esp_err_t shell_list_directory_path(const char *normalized_path);
 
+/**
+ * Expand a DOS wildcard pattern into matching paths.
+ *
+ * Splits @p pattern into a directory part and a filename pattern, lists the
+ * directory, and returns every entry whose name matches the pattern (via
+ * shell_wildcard_match). The returned tokens are full paths (directory +
+ * name) so they can be substituted straight into a `for` body. The array and
+ * every token are heap-allocated; the caller frees them with
+ * storage_free_wildcard_expansion(). Returns an empty result (not an error)
+ * when nothing matches.
+ *
+ * @param pattern    Wildcard pattern as typed (e.g. `*.txt`, `sub\*.bat`).
+ * @param tokens_out Receives a NULL-terminated heap array of heap strings.
+ * @param count_out  Receives the number of tokens.
+ * @return ESP_OK, or the resolution/read error.
+ */
+esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *count_out);
+
+/** Free a wildcard expansion returned by storage_expand_wildcard(). */
+void storage_free_wildcard_expansion(char **tokens, int count);
+
 /** Print the contents of a text file, sanitizing non-printable bytes. */
 esp_err_t shell_print_file_text(const char *normalized_path);
 
@@ -250,6 +271,134 @@ bool storage_paths_are_same(const char *left, const char *right);
  * Convenience wrapper used by the free-space prechecks.
  */
 uint64_t storage_get_file_size(const char *resolved_path);
+
+/* ========================================================================
+ * DISK AND PARTITION SERVICES (diskpart / DOS FORMAT style)
+ * ========================================================================
+ * Physical-disk operations: geometry queries, MBR partition-table
+ * inspection and editing, and the format engine. The command layer
+ * (storage_commands.c) owns argument parsing and the destructive-confirmation
+ * contract; the mechanics live here so the storage module stays the single
+ * owner of mount state and low-level FATFS/sdmmc access.
+ *
+ * Volume targeting is parameterized so a second volume (USB OTG MSC at
+ * /usb0) can be added later without changing the command surface.
+ */
+
+/** Physical storage volume that a disk/format operation targets. */
+typedef enum {
+    STORAGE_VOLUME_SD = 0,   /**< SD card on the BSP SDMMC host. */
+    /* Future: STORAGE_VOLUME_USB for the USB OTG MSC device at /usb0. */
+} storage_volume_t;
+
+/** Physical disk geometry (from the SDMMC card descriptor). */
+typedef struct {
+    char card_name[32];      /**< Card name from the CID register. */
+    uint32_t sector_size;    /**< Logical sector size in bytes. */
+    uint32_t sector_count;   /**< Total sector count. */
+    uint64_t capacity_bytes; /**< sector_size * sector_count. */
+    uint32_t max_freq_khz;   /**< Negotiated bus clock. */
+} storage_disk_info_t;
+
+/** One MBR partition-table entry (16-byte PTE decoded). */
+typedef struct {
+    bool bootable;           /**< Boot-indicator flag (0x80). */
+    uint8_t type;            /**< Partition type byte (0x0C FAT32 LBA, ...). */
+    uint32_t start_lba;      /**< First sector of the partition. */
+    uint32_t size_lba;       /**< Partition length in sectors. */
+} storage_partition_t;
+
+/** MBR partition table decoded from sector 0. */
+typedef struct {
+    bool valid;              /**< 0x55AA signature present. */
+    storage_partition_t partitions[4];
+} storage_mbr_t;
+
+/** Options for storage_format_volume(). */
+typedef struct {
+    uint32_t alloc_unit_bytes;  /**< Cluster size, 0 = FATFS automatic. */
+    char label[12];             /**< Volume label, empty for none. */
+    bool quick;                 /**< Accepted for DOS /Q familiarity. */
+} storage_format_opts_t;
+
+/**
+ * Get physical disk geometry for a volume.
+ *
+ * @param vol   Target volume (STORAGE_VOLUME_SD).
+ * @param out   Receives the geometry.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED for an unknown volume, or the mount
+ *         error when the card cannot be brought up.
+ */
+esp_err_t storage_disk_get_info(storage_volume_t vol, storage_disk_info_t *out);
+
+/**
+ * Read and decode the MBR partition table of a volume.
+ *
+ * @param vol   Target volume.
+ * @param out   Receives the decoded table.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, or the mount/read error.
+ */
+esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out);
+
+/**
+ * Remove the partition table (diskpart `clean`).
+ *
+ * Unmounts the FATFS volume, zeroes the four MBR partition entries (keeping
+ * the 0x55AA signature), and leaves the volume unmounted so the card state
+ * matches reality. Run `format` afterwards to create a fresh filesystem.
+ *
+ * @param vol   Target volume.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, or the mount/write error.
+ */
+esp_err_t storage_disk_clean(storage_volume_t vol);
+
+/**
+ * Create a primary MBR partition (diskpart `create partition primary`).
+ *
+ * Writes a FAT32-LBA (0x0C) partition-table entry aligned to
+ * P4_CONFIG_DISK_PARTITION_ALIGN_SECTORS. When @p size_bytes is 0 the
+ * partition spans the remaining card capacity. The volume is unmounted first.
+ *
+ * @param vol         Target volume.
+ * @param size_bytes  Desired partition size, or 0 for the rest of the card.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, ESP_ERR_INVALID_STATE when the
+ *         requested slot is already occupied, or the mount/write error.
+ */
+esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t size_bytes);
+
+/**
+ * Delete an MBR partition (diskpart `delete partition`).
+ *
+ * Zeroes the partition-table entry at @p partition_index (0..3) and writes
+ * the table back. The volume is unmounted first.
+ *
+ * @param vol              Target volume.
+ * @param partition_index  0-based index into the MBR partition table.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, ESP_ERR_INVALID_ARG for an out-of-
+ *         range index, or the mount/write error.
+ */
+esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition_index);
+
+/**
+ * Format a volume (DOS FORMAT.COM / diskpart `format`).
+ *
+ * Uses esp_vfs_fat_sdcard_format_cfg(), which unmounts, formats, and remounts
+ * the volume. FAT type is selected size-appropriately (FAT12/16 for small
+ * volumes, FAT32 for large); exFAT is not available in this firmware build.
+ * The requested label is applied after formatting.
+ *
+ * @param vol   Target volume.
+ * @param opts  Format options (cluster size, label, quick).
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, or the format error.
+ */
+esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_t *opts);
+
+/**
+ * Report the mounted volume's FAT type as a short string.
+ *
+ * @return "FAT12", "FAT16", "FAT32", or "unknown".
+ */
+const char *storage_get_fat_type(void);
 
 /* ========================================================================
  * INPUT REDIRECTION

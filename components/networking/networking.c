@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -6,19 +7,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_crt_bundle.h"
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_hosted.h"
 #include "esp_hosted_api_types.h"
 #include "esp_hosted_host_fw_ver.h"
+#include "esp_http_client.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/ip4_addr.h"
+#include "lwip/ip_addr.h"
+#include "lwip/inet.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
+#include "apps/ping/ping_sock.h"
 #include "ansi.h"
+#include "ansi_palette.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
@@ -60,6 +71,11 @@ static char s_wifi_last_detail[NETWORKING_WIFI_DETAIL_BYTES];
 static bool s_wifi_init_task_in_progress;
 static bool s_networking_initialized;
 static SemaphoreHandle_t s_wifi_mutex;  /* protects all shared Wi-Fi state */
+
+/* Association uptime tracking: when the station last completed the 4-way
+ * handshake (esp_timer_get_time(), 0 = not associated). `wifi status` uses
+ * it to report how long the current association has been up. */
+static int64_t s_wifi_associated_at_us;
 
 /* ---- Persistent Wi-Fi watchdog ---- */
 /* A single persistent task that monitors Wi-Fi connection state and retries
@@ -313,6 +329,7 @@ static void networking_wifi_cleanup_runtime_artifacts(void)
 
     s_wifi_connected = false;
     s_wifi_connect_requested = false;
+    s_wifi_associated_at_us = 0;
     s_wifi_target_ssid[0] = '\0';
     s_wifi_target_password[0] = '\0';
 }
@@ -339,6 +356,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
 
                 memcpy(s_wifi_target_ssid, event->ssid, copy_len);
                 s_wifi_target_ssid[copy_len] = '\0';
+                s_wifi_associated_at_us = esp_timer_get_time();
                 networking_schedulef_ansi("@C[wifi]@R event: @Gassociated@R with @W%s@R on channel @Z%u@R\n",
                                      s_wifi_target_ssid,
                                      (unsigned int)event->channel);
@@ -350,6 +368,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
             wifi_lock();
             s_wifi_connected = false;
             s_wifi_connect_requested = false;
+            s_wifi_associated_at_us = 0;
             wifi_unlock();
             networking_schedulef_ansi("@C[wifi]@R event: @ydisconnected@R\n");
             networking_notify_headerf(4000, "WiFi disconnected");
@@ -1005,49 +1024,223 @@ esp_err_t networking_wifi_wait_for_ota(void)
 #endif
 }
 
-void networking_wifi_scan(void)
+/**
+ * Map a `wifi_auth_mode_t` to the short DOS-style label used by the scan
+ * table and the status report.
+ */
+static const char *networking_wifi_auth_label(wifi_auth_mode_t authmode)
+{
+    switch (authmode) {
+    case WIFI_AUTH_OPEN:
+        return "OPEN";
+    case WIFI_AUTH_WEP:
+        return "WEP";
+    case WIFI_AUTH_WPA_PSK:
+        return "WPA";
+    case WIFI_AUTH_WPA2_PSK:
+        return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK:
+        return "WPA/WPA2";
+    case WIFI_AUTH_WPA2_ENTERPRISE:
+        return "WPA2-EAP";
+    case WIFI_AUTH_WPA3_PSK:
+        return "WPA3";
+    case WIFI_AUTH_WPA2_WPA3_PSK:
+        return "WPA2/WPA3";
+    case WIFI_AUTH_WAPI_PSK:
+        return "WAPI";
+    default:
+        return "?";
+    }
+}
+
+/**
+ * Build a human-readable PHY descriptor for an AP record, e.g. "802.11n".
+ * The AP record exposes the negotiated PHY generation flags but not a live
+ * bitrate, so the mode plus the current STA bandwidth is the closest honest
+ * "PHY rate" the hosted stack reports.
+ */
+static void networking_wifi_format_phy(const wifi_ap_record_t *ap,
+                                       const char *bandwidth,
+                                       char *out, size_t out_size)
+{
+    if (ap == NULL || out == NULL || out_size == 0) {
+        return;
+    }
+
+    const char *bw = (bandwidth != NULL && bandwidth[0] != '\0') ? bandwidth : "";
+
+    if (ap->phy_11ax) {
+        snprintf(out, out_size, "802.11ax %s", bw);
+    } else if (ap->phy_11ac) {
+        snprintf(out, out_size, "802.11ac %s", bw);
+    } else if (ap->phy_11n) {
+        snprintf(out, out_size, "802.11n %s", bw);
+    } else if (ap->phy_11g) {
+        snprintf(out, out_size, "802.11g");
+    } else if (ap->phy_11b) {
+        snprintf(out, out_size, "802.11b");
+    } else if (ap->phy_lr) {
+        snprintf(out, out_size, "802.11 LR");
+    } else {
+        snprintf(out, out_size, "unknown");
+    }
+}
+
+/**
+ * Format a 6-byte BSSID as "xx:xx:xx:xx:xx:xx".
+ */
+static void networking_wifi_format_bssid(const uint8_t bssid[6], char *out, size_t out_size)
+{
+    snprintf(out, out_size, "%02x:%02x:%02x:%02x:%02x:%02x",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+}
+
+/**
+ * `wifi scan [/b] [max]` — sorted by RSSI, column-aligned, optionally bare.
+ *
+ * The AP table is heap-allocated (a busy channel can return far more records
+ * than the worker task stack should hold) and sorted strongest-signal first.
+ * `bare` selects the machine-readable form (bare SSID lines, no colour), so
+ * `wifi scan /b > ap.txt` produces a clean list for a batch file to consume.
+ */
+void networking_wifi_scan(bool bare)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
     esp_err_t error;
-    wifi_ap_record_t records[16];
-    uint16_t record_count = (uint16_t)(sizeof(records) / sizeof(records[0]));
+    wifi_ap_record_t *records = NULL;
+    uint16_t requested = P4_CONFIG_WIFI_SCAN_LIMIT;
+    uint16_t record_count;
+    uint16_t limit;
     uint16_t index;
+    uint16_t inner;
+
+    if (requested < 1) {
+        requested = 1;
+    }
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
-        networking_appendf("@Cwifi:@R @yscan requires the Wi-Fi runtime to be started first@R\n");
+        networking_appendf(SH_WARN "wifi.scan:" SH_RST " the Wi-Fi runtime is not started (@K%s@R)\n",
+                           networking_wifi_state_string_internal());
         networking_record_warningf("Scan rejected because Wi-Fi is not started");
         return;
     }
 
-    networking_appendf("@Cwifi:@R @Nscanning for access points...@R\n");
+    records = (wifi_ap_record_t *)calloc(requested, sizeof(wifi_ap_record_t));
+    if (records == NULL) {
+        networking_record_errorf(ESP_ERR_NO_MEM, "WiFi scan failed to allocate the AP table");
+        return;
+    }
+    record_count = requested;
+
+    networking_appendf(SH_PROMPT "wifi.scan:" SH_RST " scanning for access points...\n");
     error = esp_wifi_scan_start(NULL, true);
     if (error != ESP_OK) {
         networking_record_errorf(error, "WiFi scan failed - check sdkconfig or hosted link");
+        free(records);
         return;
     }
 
     error = esp_wifi_scan_get_ap_records(&record_count, records);
     if (error != ESP_OK) {
         networking_record_errorf(error, "Failed to read WiFi scan results");
+        free(records);
         return;
     }
 
     if (record_count == 0) {
-        networking_appendf("@Cwifi.scan:@R @Kno access points found@R\n");
+        networking_appendf(SH_MUTE "wifi.scan:" SH_RST " no access points found\n");
         networking_record_infof("Scan completed with no visible APs");
+        free(records);
         return;
     }
 
+    /* Selection sort by RSSI, strongest first. The record set is bounded by
+     * the driver's own caps, so the O(n^2) loop is cheap in practice. */
     for (index = 0; index < record_count; index++) {
-        networking_appendf("@Cwifi.scan[%u]:@R @Wssid@R=@W%s@R @Crssi@R=@Z%d@R @Cauth@R=@Z%u@R @Cchannel@R=@Z%u@R\n",
-                           (unsigned int)index,
-                           records[index].ssid,
-                           records[index].rssi,
-                           (unsigned int)records[index].authmode,
-                           (unsigned int)records[index].primary);
+        for (inner = index + 1; inner < record_count; inner++) {
+            if (records[inner].rssi > records[index].rssi) {
+                wifi_ap_record_t swap = records[index];
+                records[index] = records[inner];
+                records[inner] = swap;
+            }
+        }
     }
+
+    limit = record_count;
+    if (limit > P4_CONFIG_WIFI_SCAN_LIMIT) {
+        limit = P4_CONFIG_WIFI_SCAN_LIMIT;
+    }
+
+    if (bare) {
+        /* Machine-readable form: bare SSID lines, no colour. Redirectable
+         * output that a batch file can loop over with `for /f`. */
+        for (index = 0; index < limit; index++) {
+            networking_appendf("%s\n", records[index].ssid[0] != '\0'
+                                            ? (const char *)records[index].ssid
+                                            : "<hidden>");
+        }
+        networking_record_infof("Scan completed with %u APs (bare)", (unsigned int)record_count);
+        free(records);
+        return;
+    }
+
+    networking_appendf(SH_HEAD "  %-32s %8s %4s %s" SH_RST "\n",
+                       "SSID", "RSSI", "CH", "AUTH");
+    for (index = 0; index < limit; index++) {
+        const char *ssid = records[index].ssid[0] != '\0'
+                               ? (const char *)records[index].ssid
+                               : "<hidden>";
+        /* Colours are applied around the width-specified field, so the
+         * escape bytes never shift the column alignment. */
+        networking_appendf("  " SH_VAL "%-32s" SH_RST " " SH_NUM "%8d" SH_RST " " SH_NUM "%4u" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                           ssid,
+                           records[index].rssi,
+                           (unsigned int)records[index].primary,
+                           networking_wifi_auth_label(records[index].authmode));
+    }
+    networking_appendf(SH_MUTE "wifi.scan:" SH_RST " %u AP(s) shown (%u found, cap %u)\n",
+                       (unsigned int)limit, (unsigned int)record_count, (unsigned int)P4_CONFIG_WIFI_SCAN_LIMIT);
     networking_record_infof("Scan completed with %u APs", (unsigned int)record_count);
+    free(records);
 #endif
+}
+
+/**
+ * Read the DNS server list currently configured on the STA netif and join the
+ * configured IPv4 servers into a single space-separated string for `wifi status`.
+ */
+static size_t networking_wifi_format_dns_servers(char *out, size_t out_size)
+{
+    esp_netif_dns_info_t dns_info;
+    size_t count = 0;
+    size_t written = 0;
+    int index;
+
+    if (out == NULL || out_size == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+
+    if (s_wifi_sta_netif == NULL) {
+        return 0;
+    }
+
+    for (index = 0; index < ESP_NETIF_DNS_MAX; index++) {
+        if (esp_netif_get_dns_info(s_wifi_sta_netif, (esp_netif_dns_type_t)index, &dns_info) == ESP_OK &&
+            dns_info.ip.type == ESP_IPADDR_TYPE_V4 && dns_info.ip.u_addr.ip4.addr != 0) {
+            size_t need = (size_t)snprintf(out + written, out_size - written,
+                                           "%s" IPSTR, count > 0 ? " " : "",
+                                           IP2STR(&dns_info.ip.u_addr.ip4));
+            if (need >= out_size - written) {
+                break;
+            }
+            written += need;
+            count++;
+        }
+    }
+
+    return count;
 }
 
 void networking_wifi_status(void)
@@ -1055,59 +1248,95 @@ void networking_wifi_status(void)
 #if NETWORKING_WIFI_RUNTIME_ENABLED
     esp_err_t error;
     wifi_ap_record_t ap_info;
-    char ap_ssid[NETWORKING_WIFI_SSID_BYTES];
     esp_netif_ip_info_t ip_info;
+    char bssid_str[18];
+    char phy_str[24];
+    char dns_str[96];
+    char uptime_str[24];
+    wifi_bandwidth_t bandwidth = WIFI_BW_HT20;
+    int64_t associated_us;
 
-    networking_appendf("@Cwifi.state:@R %s\n", networking_wifi_state_string_internal());
-    /* Colours must be literal in the format string for ansi_vformat to convert
-     * them — @-specifiers passed as %s arguments are not converted. Use a
-     * conditional format string for the value-dependent colour. */
+    networking_appendf(SH_HEAD "Wi-Fi Status" SH_RST "\n");
+    networking_appendf("  " SH_LBL "state:" SH_RST " %s\n", networking_wifi_state_string_internal());
+
     if (networking_wifi_defaults_available()) {
-        networking_appendf("@Cwifi.default_profile:@R @Gconfigured@R\n");
+        networking_appendf("  " SH_LBL "default profile:" SH_RST " " SH_OK "configured" SH_RST "\n");
+        networking_appendf("  " SH_LBL "default SSID:" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                           CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
     } else {
-        networking_appendf("@Cwifi.default_profile:@R @ymissing@R\n");
+        networking_appendf("  " SH_LBL "default profile:" SH_RST " " SH_WARN "missing" SH_RST "\n");
     }
-    if (networking_wifi_defaults_available()) {
-        networking_appendf("@Cwifi.default_ssid:@R @W%s@R\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
-    }
+
     if (s_wifi_last_detail[0] != '\0') {
-        networking_appendf("@Cwifi.note:@R @K%s@R\n", s_wifi_last_detail);
+        networking_appendf("  " SH_LBL "note:" SH_RST " " SH_MUTE "%s" SH_RST "\n", s_wifi_last_detail);
     }
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
         if (s_wifi_state == NETWORKING_WIFI_STATE_FAILED) {
-            networking_appendf("@Cwifi.last_error:@R @r%s@R (0x%x)\n", esp_err_to_name(s_wifi_last_error), (unsigned int)s_wifi_last_error);
+            networking_appendf("  " SH_LBL "last error:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
+                               esp_err_to_name(s_wifi_last_error), (unsigned int)s_wifi_last_error);
         }
         if (s_wifi_state == NETWORKING_WIFI_STATE_STARTING) {
-            networking_appendf("@Cwifi.progress:@R @yESP-Hosted probe is still running@R\n");
+            networking_appendf("  " SH_LBL "progress:" SH_RST " " SH_WARN "ESP-Hosted probe is still running" SH_RST "\n");
         }
         return;
     }
 
-    if (s_wifi_connect_requested) {
-        networking_appendf("@Cwifi.connect_requested:@R @Gyes@R\n");
-    } else {
-        networking_appendf("@Cwifi.connect_requested:@R @Kno@R\n");
-    }
+    /* Colours must be literal in the format string for ansi_vformat to
+     * convert them — @-specifiers passed as %s arguments are not converted.
+     * Use a conditional format string for the value-dependent colour. */
     if (s_wifi_connected) {
-        networking_appendf("@Cwifi.connected:@R @Gyes@R\n");
+        networking_appendf("  " SH_LBL "connected:" SH_RST " " SH_OK "yes" SH_RST "\n");
     } else {
-        networking_appendf("@Cwifi.connected:@R @Kno@R\n");
-    }
-    if (s_wifi_target_ssid[0] != '\0') {
-        networking_appendf("@Cwifi.target_ssid:@R @W%s@R\n", s_wifi_target_ssid);
+        networking_appendf("  " SH_LBL "connected:" SH_RST " " SH_MUTE "no" SH_RST "\n");
     }
 
+    if (s_wifi_connect_requested) {
+        networking_appendf("  " SH_LBL "connect requested:" SH_RST " " SH_OK "yes" SH_RST "\n");
+    }
+    if (s_wifi_target_ssid[0] != '\0') {
+        networking_appendf("  " SH_LBL "target SSID:" SH_RST " " SH_VAL "%s" SH_RST "\n", s_wifi_target_ssid);
+    }
+
+    memset(&ap_info, 0, sizeof(ap_info));
     error = esp_wifi_sta_get_ap_info(&ap_info);
-    if (error == ESP_OK) {
-        snprintf(ap_ssid, sizeof(ap_ssid), "%s", (const char *)ap_info.ssid);
-        networking_appendf("@Cwifi.ap:@R @W%s@R, @Crssi@R=@Z%d@R, @Cchannel@R=@Z%u@R\n", ap_ssid, ap_info.rssi, (unsigned int)ap_info.primary);
+    if (error == ESP_OK && ap_info.ssid[0] != '\0') {
+        networking_appendf("  " SH_LBL "SSID:" SH_RST " " SH_VAL "%s" SH_RST "\n", (const char *)ap_info.ssid);
+        networking_wifi_format_bssid(ap_info.bssid, bssid_str, sizeof(bssid_str));
+        networking_appendf("  " SH_LBL "BSSID:" SH_RST " " SH_VAL "%s" SH_RST "\n", bssid_str);
+        networking_appendf("  " SH_LBL "channel:" SH_RST " " SH_NUM "%u" SH_RST "\n", (unsigned int)ap_info.primary);
+        networking_appendf("  " SH_LBL "RSSI:" SH_RST " " SH_NUM "%d" SH_RST " " SH_MUTE "dBm" SH_RST "\n", ap_info.rssi);
+        if (esp_wifi_get_bandwidth(WIFI_IF_STA, &bandwidth) == ESP_OK) {
+            const char *bw = (bandwidth == WIFI_BW_HT40) ? "HT40"
+                             : (bandwidth == WIFI_BW_HT20) ? "HT20"
+                             : "20MHz";
+            networking_wifi_format_phy(&ap_info, bw, phy_str, sizeof(phy_str));
+            networking_appendf("  " SH_LBL "PHY:" SH_RST " " SH_VAL "%s" SH_RST "\n", phy_str);
+        }
     } else if (error != ESP_ERR_WIFI_NOT_CONNECT) {
-        networking_appendf("@Cwifi.ap_info_error:@R @r%s@R (0x%x)\n", esp_err_to_name(error), (unsigned int)error);
+        networking_appendf("  " SH_LBL "AP info error:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
+                           esp_err_to_name(error), (unsigned int)error);
     }
 
     if (s_wifi_sta_netif != NULL && esp_netif_get_ip_info(s_wifi_sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
-        networking_appendf("@Cwifi.ip:@R @W" IPSTR "@R\n", IP2STR(&ip_info.ip));
+        networking_appendf("  " SH_LBL "IPv4:" SH_RST " " SH_VAL IPSTR SH_RST "\n", IP2STR(&ip_info.ip));
+        networking_appendf("  " SH_LBL "netmask:" SH_RST " " SH_VAL IPSTR SH_RST "\n", IP2STR(&ip_info.netmask));
+        networking_appendf("  " SH_LBL "gateway:" SH_RST " " SH_VAL IPSTR SH_RST "\n", IP2STR(&ip_info.gw));
+        if (networking_wifi_format_dns_servers(dns_str, sizeof(dns_str)) > 0) {
+            networking_appendf("  " SH_LBL "DNS:" SH_RST " " SH_VAL "%s" SH_RST "\n", dns_str);
+        }
+    }
+
+    wifi_lock();
+    associated_us = s_wifi_associated_at_us;
+    wifi_unlock();
+    if (associated_us > 0 && s_wifi_connected) {
+        uint32_t seconds = (uint32_t)((esp_timer_get_time() - associated_us) / 1000000);
+        uint32_t hours = seconds / 3600;
+        uint32_t mins = (seconds % 3600) / 60;
+        uint32_t secs = seconds % 60;
+        snprintf(uptime_str, sizeof(uptime_str), "%02u:%02u:%02u", (unsigned int)hours, (unsigned int)mins, (unsigned int)secs);
+        networking_appendf("  " SH_LBL "association uptime:" SH_RST " " SH_NUM "%s" SH_RST "\n", uptime_str);
     }
 #else
     networking_appendf("@Cwifi:@R @Ksdkconfig does not enable the Wi-Fi stack@R\n");
@@ -1142,6 +1371,504 @@ void networking_wifi_disconnect(void)
 #endif
 }
 
+/* ========================================================================
+ * PING AND DNS
+ * ========================================================================
+ * Classic DOS-style connectivity commands. Both live here — the single owner
+ * of the lwIP / esp_ping surface — and both produce transcript output, so
+ * redirection and pipes capture them like any other command. The return
+ * value is mapped onto ERRORLEVEL by the dispatcher in components/command.
+ */
+
+/** Shared state between the esp_ping callbacks (ping task) and the caller. */
+typedef struct {
+    SemaphoreHandle_t done;       /**< Given once by the on_ping_end callback. */
+    esp_ping_handle_t handle;     /**< Ping session handle for profile reads. */
+    ip_addr_t target;             /**< Resolved target address (IPv4). */
+    char target_str[48];          /**< Dotted IPv4 text of the target. */
+    volatile bool any_reply;      /**< True once at least one echo reply landed. */
+    uint32_t replies;             /**< Reply count (for the min/avg/max stats). */
+    uint32_t min_rtt_ms;          /**< Smallest round-trip time seen. */
+    uint32_t max_rtt_ms;          /**< Largest round-trip time seen. */
+    uint32_t total_rtt_ms;        /**< Sum of round-trip times (for the average). */
+} networking_ping_ctx_t;
+
+static void networking_ping_success_cb(esp_ping_handle_t hdl, void *args)
+{
+    networking_ping_ctx_t *ctx = (networking_ping_ctx_t *)args;
+    uint32_t rtt_ms = 0;
+    uint32_t seq = 0;
+    uint32_t ttl = 0;
+    uint32_t size = 0;
+
+    (void)esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &rtt_ms, sizeof(rtt_ms));
+    (void)esp_ping_get_profile(hdl, ESP_PING_PROF_SEQNO, &seq, sizeof(seq));
+    (void)esp_ping_get_profile(hdl, ESP_PING_PROF_TTL, &ttl, sizeof(ttl));
+    (void)esp_ping_get_profile(hdl, ESP_PING_PROF_SIZE, &size, sizeof(size));
+
+    ctx->any_reply = true;
+    if (ctx->replies == 0) {
+        ctx->min_rtt_ms = rtt_ms;
+        ctx->max_rtt_ms = rtt_ms;
+    } else {
+        if (rtt_ms < ctx->min_rtt_ms) {
+            ctx->min_rtt_ms = rtt_ms;
+        }
+        if (rtt_ms > ctx->max_rtt_ms) {
+            ctx->max_rtt_ms = rtt_ms;
+        }
+    }
+    ctx->total_rtt_ms += rtt_ms;
+    ctx->replies++;
+
+    networking_appendf("Reply from " SH_VAL "%s" SH_RST ": " SH_LBL "bytes" SH_RST "=" SH_NUM "%" PRIu32 SH_RST
+                       " " SH_LBL "time" SH_RST "=" SH_NUM "%" PRIu32 "ms" SH_RST
+                       " " SH_LBL "TTL" SH_RST "=" SH_NUM "%" PRIu32 SH_RST "\n",
+                       ctx->target_str, size, rtt_ms, ttl);
+    (void)seq;
+}
+
+static void networking_ping_timeout_cb(esp_ping_handle_t hdl, void *args)
+{
+    networking_ping_ctx_t *ctx = (networking_ping_ctx_t *)args;
+
+    (void)hdl;
+    networking_appendf("Request to " SH_VAL "%s" SH_RST " " SH_WARN "timed out" SH_RST ".\n", ctx->target_str);
+}
+
+static void networking_ping_end_cb(esp_ping_handle_t hdl, void *args)
+{
+    networking_ping_ctx_t *ctx = (networking_ping_ctx_t *)args;
+    uint32_t transmitted = 0;
+    uint32_t received = 0;
+    uint32_t loss_pct = 0;
+
+    (void)esp_ping_get_profile(hdl, ESP_PING_PROF_REQUEST, &transmitted, sizeof(transmitted));
+    (void)esp_ping_get_profile(hdl, ESP_PING_PROF_REPLY, &received, sizeof(received));
+
+    if (transmitted > 0) {
+        loss_pct = ((transmitted - received) * 100) / transmitted;
+    }
+
+    networking_appendf("\n--- " SH_VAL "%s" SH_RST " ping statistics ---\n", ctx->target_str);
+    networking_appendf("    " SH_LBL "Packets:" SH_RST " " SH_LBL "Sent" SH_RST " = " SH_NUM "%" PRIu32 SH_RST
+                       ", " SH_LBL "Received" SH_RST " = " SH_NUM "%" PRIu32 SH_RST
+                       ", " SH_LBL "Lost" SH_RST " = " SH_NUM "%" PRIu32 SH_RST
+                       " (" SH_NUM "%" PRIu32 "%%" SH_RST " loss),\n",
+                       transmitted, received, transmitted - received, loss_pct);
+    networking_appendf(SH_LBL "Approximate round trip times in milli-seconds:" SH_RST "\n");
+    if (ctx->replies > 0) {
+        networking_appendf("    " SH_LBL "Minimum" SH_RST " = " SH_NUM "%" PRIu32 "ms" SH_RST
+                           ", " SH_LBL "Maximum" SH_RST " = " SH_NUM "%" PRIu32 "ms" SH_RST
+                           ", " SH_LBL "Average" SH_RST " = " SH_NUM "%" PRIu32 "ms" SH_RST "\n",
+                           ctx->min_rtt_ms, ctx->max_rtt_ms, ctx->total_rtt_ms / ctx->replies);
+    } else {
+        networking_appendf("    " SH_LBL "Minimum" SH_RST " = 0ms, " SH_LBL "Maximum" SH_RST
+                           " = 0ms, " SH_LBL "Average" SH_RST " = 0ms\n");
+    }
+
+    xSemaphoreGive(ctx->done);
+}
+
+esp_err_t networking_wifi_ping(const char *host, int count)
+{
+#if NETWORKING_WIFI_RUNTIME_ENABLED
+    networking_ping_ctx_t ctx;
+    esp_ping_config_t config;
+    esp_ping_callbacks_t callbacks;
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    uint32_t request_count;
+    uint32_t wait_ms;
+    esp_err_t error;
+
+    if (host == NULL || host[0] == '\0') {
+        networking_appendf(SH_ERR "ping:" SH_RST " missing host argument\n");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
+        networking_appendf(SH_ERR "ping:" SH_RST " Wi-Fi is not started (" SH_MUTE "%s" SH_RST ")\n",
+                           networking_wifi_state_string_internal());
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!networking_wifi_is_connected()) {
+        networking_appendf(SH_ERR "ping:" SH_RST " no active connection; run " SH_CMD "wifi connect" SH_RST " first\n");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    request_count = (count > 0) ? (uint32_t)count : (uint32_t)P4_CONFIG_PING_COUNT_DEFAULT;
+    if (request_count > (uint32_t)P4_CONFIG_PING_COUNT_MAX) {
+        networking_appendf(SH_WARN "ping:" SH_RST " count clamped from " SH_NUM "%u" SH_RST " to " SH_NUM "%u" SH_RST "\n",
+                           (unsigned int)request_count, (unsigned int)P4_CONFIG_PING_COUNT_MAX);
+        request_count = (uint32_t)P4_CONFIG_PING_COUNT_MAX;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    /* Resolve a hostname or dotted IPv4 to a single A record. */
+    if (getaddrinfo(host, NULL, &hints, &res) != 0 || res == NULL || res->ai_addr == NULL) {
+        networking_appendf(SH_ERR "ping:" SH_RST " cannot resolve host " SH_VAL "%s" SH_RST "\n", host);
+        if (res != NULL) {
+            freeaddrinfo(res);
+        }
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.done = xSemaphoreCreateBinary();
+    if (ctx.done == NULL) {
+        freeaddrinfo(res);
+        networking_appendf(SH_ERR "ping:" SH_RST " out of memory\n");
+        return ESP_ERR_NO_MEM;
+    }
+
+    {
+        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+        ip4_addr_t ip4;
+
+        inet_addr_to_ip4addr(&ip4, &sin->sin_addr);
+        ip_addr_copy_from_ip4(ctx.target, ip4);
+        snprintf(ctx.target_str, sizeof(ctx.target_str), IPSTR, IP2STR(&ip4));
+    }
+    freeaddrinfo(res);
+
+    config = (esp_ping_config_t)ESP_PING_DEFAULT_CONFIG();
+    config.count = request_count;
+    config.interval_ms = P4_CONFIG_PING_INTERVAL_MS;
+    config.timeout_ms = P4_CONFIG_PING_TIMEOUT_MS;
+    config.data_size = P4_CONFIG_PING_DATA_BYTES;
+    config.target_addr = ctx.target;
+
+    callbacks.cb_args = &ctx;
+    callbacks.on_ping_success = networking_ping_success_cb;
+    callbacks.on_ping_timeout = networking_ping_timeout_cb;
+    callbacks.on_ping_end = networking_ping_end_cb;
+
+    error = esp_ping_new_session(&config, &callbacks, &ctx.handle);
+    if (error != ESP_OK) {
+        vSemaphoreDelete(ctx.done);
+        networking_appendf(SH_ERR "ping:" SH_RST " session creation failed (" SH_ERR "%s" SH_RST ")\n",
+                           esp_err_to_name(error));
+        return error;
+    }
+
+    error = esp_ping_start(ctx.handle);
+    if (error != ESP_OK) {
+        (void)esp_ping_delete_session(ctx.handle);
+        vSemaphoreDelete(ctx.done);
+        networking_appendf(SH_ERR "ping:" SH_RST " failed to start (" SH_ERR "%s" SH_RST ")\n",
+                           esp_err_to_name(error));
+        return error;
+    }
+
+    /* Block the worker task only for a strictly bounded budget: each request
+     * can take at most timeout_ms (the raw-socket receive timeout) followed by
+     * interval_ms of spacing, so count * (timeout + interval) plus margin is a
+     * hard ceiling. A ping is supposed to block the shell, like DOS. */
+    wait_ms = request_count * (P4_CONFIG_PING_TIMEOUT_MS + P4_CONFIG_PING_INTERVAL_MS) + 1000;
+    if (xSemaphoreTake(ctx.done, pdMS_TO_TICKS(wait_ms)) != pdTRUE) {
+        networking_appendf(SH_WARN "ping:" SH_RST " session exceeded its time budget, stopping\n");
+        (void)esp_ping_stop(ctx.handle);
+        /* Let the ping task reach its on_ping_end callback so ctx is no
+         * longer referenced before we return. */
+        (void)xSemaphoreTake(ctx.done, pdMS_TO_TICKS(P4_CONFIG_PING_TIMEOUT_MS + 1000));
+        (void)esp_ping_delete_session(ctx.handle);
+        vSemaphoreDelete(ctx.done);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    (void)esp_ping_delete_session(ctx.handle);
+    vSemaphoreDelete(ctx.done);
+    return ctx.any_reply ? ESP_OK : ESP_ERR_TIMEOUT;
+#else
+    (void)host;
+    (void)count;
+    networking_appendf(SH_ERR "ping:" SH_RST " the Wi-Fi stack is not enabled in sdkconfig\n");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t networking_wifi_dns_lookup(const char *hostname)
+{
+#if NETWORKING_WIFI_RUNTIME_ENABLED
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *cur;
+    char ip_str[INET_ADDRSTRLEN];
+    int count = 0;
+
+    if (hostname == NULL || hostname[0] == '\0') {
+        networking_appendf(SH_ERR "dns:" SH_RST " missing hostname argument\n");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
+        networking_appendf(SH_ERR "dns:" SH_RST " Wi-Fi is not started (" SH_MUTE "%s" SH_RST ")\n",
+                           networking_wifi_state_string_internal());
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    networking_appendf(SH_PROMPT "dns:" SH_RST " resolving " SH_VAL "%s" SH_RST "...\n", hostname);
+    if (getaddrinfo(hostname, NULL, &hints, &res) != 0 || res == NULL) {
+        networking_appendf(SH_ERR "dns:" SH_RST " could not resolve " SH_VAL "%s" SH_RST "\n", hostname);
+        if (res != NULL) {
+            freeaddrinfo(res);
+        }
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    for (cur = res; cur != NULL && count < P4_CONFIG_DNS_RESULT_LIMIT; cur = cur->ai_next) {
+        if (cur->ai_family == AF_INET && cur->ai_addr != NULL) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)cur->ai_addr;
+
+            if (inet_ntop(AF_INET, &sin->sin_addr, ip_str, sizeof(ip_str)) != NULL) {
+                networking_appendf("  " SH_LBL "%s" SH_RST "  " SH_VAL "%s" SH_RST "\n",
+                                   count == 0 ? "IPv4 A:" : "        ", ip_str);
+                count++;
+            }
+        }
+    }
+    freeaddrinfo(res);
+
+    if (count == 0) {
+        networking_appendf(SH_ERR "dns:" SH_RST " no A records for " SH_VAL "%s" SH_RST "\n", hostname);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    networking_appendf(SH_OK "dns:" SH_RST " " SH_VAL "%s" SH_RST " resolved to " SH_NUM "%d" SH_RST " address(es)\n",
+                       hostname, count);
+    return ESP_OK;
+#else
+    (void)hostname;
+    networking_appendf(SH_ERR "dns:" SH_RST " the Wi-Fi stack is not enabled in sdkconfig\n");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+/* ========================================================================
+ * HTTP CLIENT (httpget / wget)
+ * ========================================================================
+ * A deliberately minimal HTTPS/HTTP GET built on the same esp_http_client
+ * stack c6ota uses for firmware downloads — no new HTTP library, no POST, no
+ * sockets outside this module. The response body is buffered in PSRAM (capped
+ * by P4_CONFIG_HTTP_MAX_BODY_BYTES) and handed to the command layer to print
+ * or save to SD. Errorlevel is decided by the caller from the return code.
+ */
+
+/** Read chunk size for the body loop. Kept modest so the esp_http_client
+ *  transport buffer stays small while large bodies stream through PSRAM. */
+#define HTTP_READ_CHUNK_BYTES               2048
+
+static bool networking_http_url_is_supported(const char *url)
+{
+    return url != NULL &&
+           (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
+}
+
+void networking_http_result_free(networking_http_result_t *result)
+{
+    if (result != NULL && result->body != NULL) {
+        heap_caps_free(result->body);
+        result->body = NULL;
+        result->body_size = 0;
+    }
+}
+
+esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
+{
+    esp_http_client_config_t http_config = { 0 };
+    esp_http_client_handle_t client = NULL;
+    networking_http_result_t *out = result;
+    esp_err_t error = ESP_FAIL;
+    int64_t remote_length;
+    int http_status;
+    char *content_type = NULL;
+    uint8_t probe;
+    size_t total_read = 0;
+    int chunk_read;
+
+    if (url == NULL || url[0] == '\0' || result == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Zero the result on entry so every early-return path leaves a clean
+     * struct whose body pointer is NULL — the caller always runs
+     * networking_http_result_free() on the error path. */
+    memset(out, 0, sizeof(*out));
+
+    if (!networking_http_url_is_supported(url)) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " unsupported URL scheme; use http:// or https://\n");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!networking_wifi_is_connected()) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " no active connection; run " SH_CMD "wifi connect" SH_RST " first\n");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    http_config.url = url;
+    http_config.timeout_ms = P4_CONFIG_HTTP_TIMEOUT_MS;
+    http_config.buffer_size = HTTP_READ_CHUNK_BYTES;
+    http_config.buffer_size_tx = 1024;
+    http_config.user_agent = P4_CONFIG_HTTP_USER_AGENT;
+    /* Follow redirects only when configured. disable_auto_redirect is the
+     * master switch; max_redirection_count bounds the chain. */
+    http_config.disable_auto_redirect = !P4_CONFIG_HTTP_FOLLOW_REDIRECTS;
+    http_config.max_redirection_count = P4_CONFIG_HTTP_FOLLOW_REDIRECTS ? 3 : 0;
+
+    if (strncmp(url, "https://", 8) == 0) {
+        http_config.crt_bundle_attach = esp_crt_bundle_attach;
+    }
+
+    networking_appendf(SH_PROMPT "httpget:" SH_RST " downloading " SH_VAL "%s" SH_RST "\n", url);
+
+    client = esp_http_client_init(&http_config);
+    if (client == NULL) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " failed to allocate the HTTP client\n");
+        return ESP_ERR_NO_MEM;
+    }
+
+    error = esp_http_client_open(client, 0);
+    if (error != ESP_OK) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " connection failed (" SH_ERR "%s" SH_RST
+                           ") - check the URL or Wi-Fi routing\n", esp_err_to_name(error));
+        goto cleanup;
+    }
+
+    remote_length = esp_http_client_fetch_headers(client);
+    http_status = esp_http_client_get_status_code(client);
+    if (http_status < 200 || http_status >= 300) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " server returned HTTP status " SH_NUM "%d" SH_RST "\n",
+                           http_status);
+        error = ESP_ERR_NOT_FOUND;
+        goto cleanup;
+    }
+
+    if (esp_http_client_get_header(client, "Content-Type", &content_type) == ESP_OK &&
+        content_type != NULL && content_type[0] != '\0') {
+        snprintf(out->content_type, sizeof(out->content_type), "%s", content_type);
+    }
+    if (remote_length > 0) {
+        out->content_length = (size_t)remote_length;
+    }
+    if (out->content_length > P4_CONFIG_HTTP_MAX_BODY_BYTES) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " response of " SH_NUM "%u" SH_RST
+                           " bytes exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
+                           (unsigned int)out->content_length, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+        error = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    /* Large response buffer from PSRAM first, internal RAM as a fallback. */
+    out->body = heap_caps_malloc(P4_CONFIG_HTTP_MAX_BODY_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (out->body == NULL) {
+        out->body = heap_caps_malloc(P4_CONFIG_HTTP_MAX_BODY_BYTES, MALLOC_CAP_8BIT);
+    }
+    if (out->body == NULL) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " out of memory buffering the response\n");
+        error = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    while (total_read < P4_CONFIG_HTTP_MAX_BODY_BYTES) {
+        size_t wanted = P4_CONFIG_HTTP_MAX_BODY_BYTES - total_read;
+
+        if (wanted > HTTP_READ_CHUNK_BYTES) {
+            wanted = HTTP_READ_CHUNK_BYTES;
+        }
+        chunk_read = esp_http_client_read(client, (char *)(out->body + total_read), (int)wanted);
+        if (chunk_read < 0) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " read failed mid-response\n");
+            error = ESP_FAIL;
+            goto cleanup;
+        }
+        if (chunk_read == 0) {
+            break;
+        }
+        total_read += (size_t)chunk_read;
+    }
+    out->body_size = total_read;
+
+    /* If we filled the cap exactly, probe once more to tell a truncated body
+     * from a body that ends right at the limit. */
+    if (total_read == P4_CONFIG_HTTP_MAX_BODY_BYTES &&
+        esp_http_client_read(client, (char *)&probe, 1) > 0) {
+        networking_appendf(SH_ERR "httpget:" SH_RST " response exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
+                           (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+        error = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    networking_appendf(SH_OK "httpget:" SH_RST " " SH_LBL "status" SH_RST "=" SH_NUM "%d" SH_RST
+                       " " SH_LBL "type" SH_RST "=" SH_VAL "%s" SH_RST
+                       " " SH_LBL "bytes" SH_RST "=" SH_NUM "%u" SH_RST "\n",
+                       http_status,
+                       out->content_type[0] != '\0' ? out->content_type : "n/a",
+                       (unsigned int)total_read);
+    error = ESP_OK;
+
+cleanup:
+    if (client != NULL) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+    }
+    if (error != ESP_OK && out->body != NULL) {
+        heap_caps_free(out->body);
+        out->body = NULL;
+        out->body_size = 0;
+    }
+    return error;
+}
+
+#if NETWORKING_WIFI_RUNTIME_ENABLED
+static bool s_wifi_boot_autoconnect = true;
+#endif
+
+void networking_wifi_set_boot_credentials(const char *ssid, const char *password)
+{
+#if NETWORKING_WIFI_RUNTIME_ENABLED
+    char masked[NETWORKING_WIFI_SSID_BYTES];
+
+    if (ssid == NULL) {
+        ssid = "";
+    }
+    if (password == NULL) {
+        password = "";
+    }
+
+    wifi_lock();
+    snprintf(s_wifi_target_ssid, sizeof(s_wifi_target_ssid), "%s", ssid);
+    snprintf(s_wifi_target_password, sizeof(s_wifi_target_password), "%s", password);
+    if (ssid[0] != '\0') {
+        s_wifi_connect_requested = true;
+        s_wifi_connected = false;
+        snprintf(masked, sizeof(masked), "%s ********", ssid);
+        networking_schedulef_ansi("@C[wifi]@R @Gboot credentials set@R for @W%s@R\n", masked);
+    } else {
+        s_wifi_connect_requested = false;
+        networking_schedulef_ansi("@C[wifi]@R @Kboot target cleared@R\n");
+    }
+    wifi_unlock();
+#endif
+}
+
+void networking_wifi_set_boot_autoconnect(bool enabled)
+{
+#if NETWORKING_WIFI_RUNTIME_ENABLED
+    wifi_lock();
+    s_wifi_boot_autoconnect = enabled;
+    wifi_unlock();
+    networking_schedulef_ansi("@C[wifi]@R @Gboot autoconnect policy@R set to @W%s@R\n", enabled ? "ON" : "OFF");
+#endif
+}
+
 void networking_wifi_diag(void)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
@@ -1163,12 +1890,15 @@ void networking_handle_wifi_command(char *command)
 
     if (argc <= 1 || networking_text_equals_ignore_case(argv[1], "help")) {
         networking_appendf("@Y@BWi-Fi Commands:@R\n");
-        networking_appendf("  @Gwifi status@R                 Show Wi-Fi runtime state and IP info\n");
-        networking_appendf("  @Gwifi scan@R                   Scan for nearby SSIDs after Wi-Fi starts\n");
+        networking_appendf("  @Gwifi status@R                 Full association and IP report (SSID/BSSID/PHY/DNS)\n");
+        networking_appendf("  @Gwifi scan@R                   Scan for nearby SSIDs, sorted by RSSI\n");
+        networking_appendf("  @Gwifi scan /b@R                Bare scan output (names only, redirectable)\n");
         networking_appendf("  @Gwifi diag@R                   Run a diagnostic status + scan report in the transcript\n");
         networking_appendf("  @Gwifi connect@R                Connect using sdkconfig default credentials\n");
         networking_appendf("  @Gwifi connect@R @T<ssid>@R @T<pass>@R  Connect using runtime credentials\n");
         networking_appendf("  @Gwifi disconnect@R             Disconnect the current station session\n");
+        networking_appendf("  @Gping@R @T<host>@R [@T<count>@R]         Classic ICMP ping (sets ERRORLEVEL)\n");
+        networking_appendf("  @Gdns@R @T<hostname>@R            Resolve A records (alias: nslookup)\n");
         networking_appendf("  @KWi-Fi now starts in the background on normal boot and after successful c6ota restore@R\n");
         networking_appendf("  @Kwifi connect still probes ESP-Hosted in a background task so the shell remains responsive@R\n");
         networking_appendf("  @Kwifi connect passwords are masked in transcript history and not stored in command recall@R\n");
@@ -1181,7 +1911,22 @@ void networking_handle_wifi_command(char *command)
     }
 
     if (networking_text_equals_ignore_case(argv[1], "scan")) {
-        networking_wifi_scan();
+        bool bare = false;
+
+        /* Parse the optional `wifi scan [/b]` argument. A leading `/b`
+         * selects the bare machine-readable form; the result cap always comes
+         * from P4_CONFIG_WIFI_SCAN_LIMIT. */
+        if (argc > 2) {
+            if (argc == 3 && argv[2][0] == '/' &&
+                (argv[2][1] == 'b' || argv[2][1] == 'B') &&
+                argv[2][2] == '\0') {
+                bare = true;
+            } else {
+                networking_appendf("@yUsage: wifi scan [/b]@R\n");
+                return;
+            }
+        }
+        networking_wifi_scan(bare);
         return;
     }
 
@@ -1588,6 +2333,8 @@ static void networking_wifi_watchdog_task(void *arg)
         wifi_lock();
         bool should_retry = (s_wifi_state == NETWORKING_WIFI_STATE_STARTED) &&
                             !s_wifi_connected &&
+                            s_wifi_connect_requested &&
+                            s_wifi_boot_autoconnect &&
                             s_wifi_target_ssid[0] != '\0';
         char ssid_copy[NETWORKING_WIFI_SSID_BYTES];
         char pass_copy[NETWORKING_WIFI_PASSWORD_BYTES];

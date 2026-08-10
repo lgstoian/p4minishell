@@ -113,6 +113,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `brightness`, `rotate`, `battery`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
 | `reboot`, `clear`/`cls`, `prompt`, `date`, `time` | `components/command/command.c` |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota` (family routing) | `components/command/command.c` → owning module |
+| `ping`, `dns`/`nslookup`, `httpget`/`wget` (dispatched here, implemented in networking) | `components/command/command.c` → `components/networking/` |
 
 Every command is reached through the single dispatcher `shell_execute_command_core()` in
 `components/command/command.c`. `main/main.c` contains no command implementations. It routes
@@ -274,11 +275,13 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | path <dir1>;<dir2>;... | Replace PATH for .bat lookup |
 | echo <text> | Print text after variable expansion |
 | echo on / echo off | Enable/disable batch command echoing |
-| call <file.bat> [args] | Execute batch file with %1..%9 expansion |
+| call <file.bat> [args] | Execute batch file; `%0` is the script name, `%1..%9`/`%*` are the forwarded arguments, and the caller's errorlevel becomes the script's final errorlevel |
 | if [not] errorlevel N cmd | Run cmd when errorlevel is at least N |
-| if [not] exist <file> cmd | Run cmd when the file exists |
-| if [not] "a"=="b" cmd | Run cmd when the strings match |
+| if [not] exist <file> cmd | Run cmd when the file or directory exists |
+| if [/i] [not] "a"=="b" cmd | Run cmd when the strings match; `/i` makes the comparison case-insensitive |
+| if [not] a EQU\|NEQ\|LSS\|LEQ\|GTR\|GEQ b cmd | Run cmd on a numeric comparison of `a` and `b` (parsed as decimal; non-numeric reads as 0) |
 | goto <label> | Jump to a `:label` in the running batch file |
+| goto :eof | Jump to the end of the current batch file, unwinding its open setlocal scopes |
 | shift | Shift batch arguments left by one position |
 | pause | Wait for a keypress |
 | choice [/C:keys] [/N] [/T:c,secs] [/S] [text] | Wait for one of the listed keys |
@@ -290,11 +293,15 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 ### set /a — integer arithmetic
 
 Evaluates a 32-bit signed integer expression. With an assignment the result is
-stored; without one it is printed.
+stored; without one it is printed. Comparison and logical operators yield `1`
+when true and `0` when false, so a boolean can be stored and tested later.
 
 | Precedence | Operators |
 |------------|-----------|
-| Lowest | `\|` bitwise or |
+| Lowest | `\|\|` logical or |
+| | `&&` logical and |
+| | `==` `!=` `<` `>` `<=` `>=` comparison (1/0) |
+| | `\|` bitwise or |
 | | `^` bitwise xor |
 | | `&` bitwise and |
 | | `<<` `>>` shifts |
@@ -314,12 +321,66 @@ a counter works on first use without initialising it.
 set /a total=2+3*4          total=14
 set /a total=(2+3)*4        total=20
 set /a count+=1             Increment, works even when count is undefined
-set /a mask=0xF0 >> 4       mask=15
+set /a mask=0xF0 << 4       mask=3840
 set /a 100/7                Prints 14 without storing anything
+set /a x=5==5               x=1   (comparison result)
+set /a x=5!=5               x=0
+set /a ok=(5>3)&&(2<4)      ok=1  (logical and)
+set /a (1||0)               Prints 1
+set /a x=17%%5              x=2   (%% is a literal % in a batch file)
 ```
+
+**Quoting operators that the shell also uses.** `&&`, `||`, `&`, `|`, `<`,
+`>` and `<<` / `>>` are command-chain, pipe, or redirection operators at the
+shell level, so an expression containing them must be quoted (or the character
+escaped) or the line is split before `set /a` runs:
+
+```
+set /a "x=5<6"              x=1
+set /a "x=(%total%==14)&&(%total%>10)"
+set /a "x=6&3"              x=2   (bitwise and)
+set /a "x=5^3"              x=6   (^ is the escape character; ^^ inside
+                                   quotes is a literal ^)
+```
+
+`==` and `!=` contain no shell operator, so they work unquoted (`set /a x=5==5`).
+An expression with no assignment (for example `set /a 5==3`) is evaluated and
+the result is printed. `set /a x==5` therefore prints the value of the
+comparison `x==5` rather than assigning it; write `set /a x=(x==5)` to store
+it. Both operands of `&&`/`||` are always evaluated (no short-circuiting),
+matching cmd.exe, so `set /a "(0&&1/0)"` reports a divide-by-zero error.
 
 Divide by zero, unbalanced parentheses, and malformed input are reported and
 set errorlevel to 1 rather than producing a wrong answer.
+
+### if — numeric comparison keywords
+
+`if` accepts the cmd.exe-style numeric keywords in the form
+`if [not] [/i] <operand1> <OP> <operand2> <command>`. The operands are parsed
+as decimal integers (a non-numeric operand reads as 0), so the result of a
+`set /a` computation can be branched on directly:
+
+| Keyword | Meaning |
+|---------|---------|
+| `EQU` | equal to |
+| `NEQ` | not equal to |
+| `LSS` | less than |
+| `LEQ` | less than or equal to |
+| `GTR` | greater than |
+| `GEQ` | greater than or equal to |
+
+```
+set /a n=42
+if %n% EQU 42 echo n_is_42
+if %n% GTR 10 echo n_is_large
+if 5 LSS 3 echo never
+if not 2 GTR 1 echo never
+if abc EQU 0 echo non_numeric_reads_as_zero
+```
+
+`/i` is ignored for the numeric form (numbers have no case). The keyword form
+is separate from the `==` string comparison, so `if a==b` stays a string test
+while `if a EQU b` compares numerically.
 
 ### set /p — prompted input
 
@@ -349,15 +410,15 @@ Up to 8 lines may be joined. A doubled `^^` at end of line is an escaped
 literal caret, not a continuation.
 
 ### Batch File Features
-- %0 (script name), %1 through %9, and %* (all arguments) expansion
+- %0 (script name), %1 through %9, and %* (all arguments, from %1 onward) expansion
 - %VAR% environment variable expansion
 - rem and :: comment lines
 - @ line prefix to suppress echo for one line
 - echo on/off flow control
-- `:label` targets for `goto` and `call :label`
-- `for %%var in (set) do command` loops
+- `:label` targets for `goto` and `call :label`, including the implicit `:eof` end-of-file label
+- `for %%var in (set) do command` loops over literal tokens or a single wildcard pattern (for example `for %%F in (*.txt) do echo %%F`)
 - PATH-based .bat lookup
-- Nested calls up to 4 levels deep
+- Nested calls up to 4 levels deep; `call` forwards arguments and propagates the callee's errorlevel
 - setlocal/endlocal scoping up to 8 levels deep, auto-unwound when a file returns
 - `set /a` integer arithmetic and `set /p` prompted input
 - Trailing `^` line continuation, up to 8 joined lines
@@ -505,7 +566,11 @@ whenever no filename argument is supplied.
 |---------|-------------|
 | chkdsk [path] [/F] | Report volume capacity; `/F` also verifies every directory is readable |
 | scandisk | Alias for `chkdsk` |
-| format [/FS:type] [/V:label] [/Q] | Reformat the SD card, destroying all data |
+| format [/FS:FAT\|FAT32] [/A:size] [/V:label] [/Q] | Reformat the SD card, destroying all data |
+| disk list / detail / clean | Physical-disk info, MBR partition table, remove partitions |
+| disk create partition primary [size=N] | Create a primary MBR partition (N in MB) |
+| disk delete partition N | Delete MBR partition N (1-4) |
+| disk format [fs=...] [label=...] [au=...] [quick] | diskpart-style format of the volume |
 
 ### chkdsk
 
@@ -533,23 +598,96 @@ Reformats the SD card. **All data is destroyed.**
 
 | Option | Meaning |
 |--------|---------|
-| /FS:type | Filesystem type: `FAT`, `FAT32`, or `EXFAT` |
+| /FS:type | Filesystem type: `FAT` or `FAT32`. Both use the standard ESP-IDF
+  helper's size-appropriate selection (FAT12/16 for small volumes, FAT32 for
+  modern SD cards). `EXFAT` is not available in this firmware build; requesting
+  it warns and formats as FAT32 instead. |
+| /A:size | Allocation unit (cluster) size in bytes, with an optional K/M suffix
+  (e.g. `/A:32K`). Range `P4_CONFIG_FORMAT_ALLOC_UNIT_MIN`..`_MAX`. |
 | /V:label | Volume label to apply afterwards, 11 characters or fewer |
 | /Q | Accepted for DOS familiarity; the underlying operation is always quick |
 
 The command prints a warning and requires the exact word `YES` typed at the
 prompt before anything is written. The confirmation is read one key at a time
 through the shell's key queue, so the reply never reaches the command
-dispatcher.
+dispatcher. (Over serial each key must be sent on its own line; the on-screen
+keyboard types it naturally.)
 
 If no interactive input source is attached (no UART console and no USB
 keyboard) the command **refuses outright** rather than proceeding, so a batch
 file can never silently wipe a card.
 
+After formatting, the FAT type, label, capacity and allocation unit size are
+reported. The card must be initialized (mounted, or left initialized by a prior
+`disk` command in the same session); a card the BSP cannot mount after a reboot
+must be recovered on a host machine or with `BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL`.
+
 ```
 format
 format /FS:FAT32 /V:DATA
+format /FS:FAT32 /A:64K /V:ROOT
 ```
+
+### disk
+
+diskpart-style physical-disk and partition management for the SD card.
+
+| Subcommand | Meaning |
+|------------|---------|
+| disk list | Show the physical disk(s): card name, capacity, sectors, sector size |
+| disk detail | Show disk geometry and the MBR partition table (boot flag, type, start, size) |
+| disk clean | Remove all MBR partitions (destructive, requires `YES`) |
+| disk create partition primary [size=N] | Create a primary FAT32 partition aligned to 1 MiB; `size` in MB (default: rest of card) |
+| disk delete partition N | Delete MBR partition N (1-4), destructive, requires `YES` |
+| disk format [fs=FAT32] [label=X] [au=size] [quick] | diskpart-style format of the volume |
+
+After `disk clean` or `disk create partition primary`, run `format` (or
+`disk format`) to create the filesystem. `disk clean`/`delete`/`format` require
+the exact `YES` confirmation word like `format`.
+
+```
+disk list
+disk detail
+disk clean
+disk create partition primary
+disk create partition primary size=2048
+disk delete partition 1
+disk format fs=fat32 label=DATA au=32K quick
+```
+
+## Boot Scripting
+
+At every boot the firmware looks for CONFIG.SYS and AUTOEXEC.BAT on the SD
+card root (components/boot). Missing files are generated once from built-in
+templates when P4_CONFIG_BOOT_GENERATE_DEFAULTS is set; with no SD card the
+whole sequence is a silent no-op, identical to the previous boot behaviour.
+
+CONFIG.SYS is parsed line-by-line. Blank lines and REM/; comments are
+skipped; keywords are case-insensitive. Directives:
+
+| Directive | Effect |
+|-----------|--------|
+| SET name=value | Set a batch environment variable |
+| PATH=dir1;dir2;... | Set the command search PATH |
+| PROMPT=template | Set the DOS prompt template |
+| ECHO ON\|OFF | Set the batch echo default |
+| ROTATE=0\|90\|180\|270 | Set display rotation |
+| BRIGHTNESS=0-100 | Set backlight brightness |
+| DISPLAY_POWER=ON\|OFF\|SLEEP | Set display power state |
+| VOLUME=0-100 | Set speaker volume |
+| WIFI_SSID=... WIFI_PASSWORD=... | Store auto-connect target (password never echoed) |
+| WIFI=ON\|OFF WIFI_AUTOCONNECT=ON\|OFF | Wi-Fi runtime policy |
+| BLUETOOTH=ON\|OFF BT_ADVERTISE=ON\|OFF | Hosted BLE policy |
+| USB_KEYBOARD=ON\|OFF USB_MOUSE=ON\|OFF | USB HID policy |
+| GPIO <n> = OUT [HIGH\|LOW] | Initial level at a safe output pin (reserved pins refused) |
+
+Unknown directives print a single muted warning and are skipped. AUTOEXEC.BAT
+then runs through the normal batch pipeline with full batch power
+(if/or/goto/call, pipes, redirection, chaining).
+
+All limits and filenames are configurable in p4minishell_config.h
+(P4_CONFIG_BOOT_*) and documented in p4minishell_config.yaml under
+oot_scripting.
 
 ## Storage Guardrails
 
@@ -659,8 +797,9 @@ Example: `sort names.txt /I /U > unique.txt`
 
 | Command | Description |
 |---------|-------------|
-| wifi status | Show Wi-Fi runtime state, target SSID, AP info, IP info |
-| wifi scan | Scan for nearby access points (SSID, RSSI, channel, auth mode) |
+| wifi status | Multi-line colour-coded report: state, target SSID, SSID, BSSID, channel, RSSI, PHY mode, IPv4, netmask, gateway, DNS, association uptime |
+| wifi scan | Scan for nearby access points, sorted by RSSI (strongest first), column-aligned, capped at `P4_CONFIG_WIFI_SCAN_LIMIT` |
+| wifi scan /b | Bare scan: one SSID per line, no colour — redirectable, machine-parsable |
 | wifi diag | Run full diagnostic: connection state, IP status, network scan |
 | wifi connect | Connect using sdkconfig default credentials |
 | wifi connect <ssid> <pass> | Connect with runtime credentials (password masked) |
@@ -673,13 +812,128 @@ Example: `sort names.txt /I /U > unique.txt`
 - Restores automatically after successful c6ota
 - Transcript-facing diagnostics on boot and post-OTA restore
 
+## Connectivity Commands
+
+### ping <host-or-ip> [count]
+
+Classic ICMP echo. Sends `count` echo requests (default 4, hard maximum 10),
+prints each reply line and a DOS-style statistics summary, then sets
+ERRORLEVEL so batch files can branch:
+
+- **ERRORLEVEL 0** — at least one reply was received (success)
+- **ERRORLEVEL 1** — every request timed out, the host did not resolve, or
+  Wi-Fi is not started / not connected
+- **ERRORLEVEL 2** — usage error (missing or malformed arguments)
+
+```
+ping 8.8.8.8
+ping 192.168.1.1 5
+ping example.com
+```
+
+Example output:
+
+```
+Reply from 192.168.1.1: bytes=32 time=2ms TTL=64
+
+--- 192.168.1.1 ping statistics ---
+    Packets: Sent = 4, Received = 4, Lost = 0 (0% loss),
+Approximate round trip times in milli-seconds:
+    Minimum = 2ms, Maximum = 4ms, Average = 3ms
+```
+
+The command participates fully in the pipeline:
+
+- **Redirection**: `ping 8.8.8.8 > ping.txt` writes the plain-text report to
+  an SD file (ANSI colour is stripped for redirected output).
+- **Pipes**: `ping 192.168.1.1 | find "Reply"` feeds the reply lines to the
+  next stage.
+- **Chaining**: `ping 8.8.8.8 && echo network_up`, `ping 10.0.0.1 || echo down`.
+- **Batch files / AUTOEXEC.BAT**: `if errorlevel 1 goto nolink` works exactly
+  as in DOS; the session runs on its own task and the worker task blocks only
+  for a bounded total (`count` × (timeout + interval) + margin), so it never
+  hangs.
+
+A count above 10 is clamped with a warning; timings and packet loss are
+reported in classic `Sent/Received/Lost` + `Minimum/Maximum/Average` form.
+
+### dns <hostname> (alias nslookup)
+
+Resolves the A records of a hostname through lwIP DNS and prints the IPv4
+address list.
+
+```
+dns example.com
+nslookup example.com
+```
+
+- **ERRORLEVEL 0** — resolved at least one A record
+- **ERRORLEVEL 1** — could not resolve, or Wi-Fi is not started
+- **ERRORLEVEL 2** — usage error
+
+Redirectable and piped like any other command: `dns example.com > dns.txt`.
+With this build's lwIP DNS cache (`CONFIG_LWIP_DNS_MAX_HOST_IP=1`) a name
+normally resolves to a single A record.
+
+### httpget <url> [localfile] (alias wget)
+
+Performs a simple HTTPS (or HTTP) GET over the same `esp_http_client` stack
+used by `c6ota`. No headers to set, no methods beyond GET — this is the
+deliberately minimal diagnostic/scraping tool.
+
+- `httpget https://example.com` — prints the response header (HTTP status,
+  content-type, size) and then the response body to the transcript. The body
+  print is bounded (`P4_CONFIG_HTTP_PRINT_BODY_BYTES`, 4 KiB) and sanitized so
+  a binary payload cannot corrupt the transcript.
+- `httpget https://example.com/page.html` — saves the **exact** body to the
+  current working directory / SD card through the storage write path: cwd-
+  relative resolution, guarded SD session, free-space precheck (an overwrite
+  reclaims the old file's space), and partial-destination cleanup if the write
+  fails. Prints `httpget: saved N bytes to <path>` on success.
+
+```
+httpget https://example.com
+httpget http://192.168.1.1/status > status.txt
+httpget https://example.com/page.html downloaded.html
+```
+
+**ERRORLEVEL** (works in batch files and AUTOEXEC.BAT):
+
+- **0** — an HTTP 2xx was received and (with a localfile) the body saved.
+- **1** — any failure: non-2xx status, connection refused / TLS failure,
+  unreachable host or timeout, body over the size cap, SD write failure, or
+  Wi-Fi not connected.
+- **2** — usage error (missing URL or unsupported URL scheme).
+
+Examples in a batch file:
+
+```
+httpget https://example.com/api/v1/status > srv.json
+if errorlevel 1 echo server_down
+httpget https://example.com/page.html page.html && echo downloaded
+```
+
+**Redirection and pipes.** Output goes through the transcript appenders, so
+`httpget url > file` captures the printed header + body and
+`httpget url | find "200"` pipes it. For the complete untruncated body, use
+the localfile form rather than `>` redirection.
+
+**Config.** `P4_CONFIG_HTTP_TIMEOUT_MS` (default 15 s), 
+`P4_CONFIG_HTTP_MAX_BODY_BYTES` (512 KiB PSRAM cap; larger responses are
+refused with a clear error), `P4_CONFIG_HTTP_FOLLOW_REDIRECTS` (1 = follow up
+to 3 redirects), and `P4_CONFIG_HTTP_USER_AGENT`. All HTTP/TLS code lives in
+`components/networking/`; no socket, mbedTLS, or esp_http_client call exists
+outside it. Requires an active Wi-Fi connection (`wifi connect` first); with
+no connection it prints a clear DOS-style error and sets a non-zero
+errorlevel. Timeouts are bounded so the worker task is never hung.
+
 ## Bluetooth Commands
 
 | Command | Description |
 |---------|-------------|
-| bluetooth status | Show hosted Bluetooth readiness, NimBLE state, advertising state |
-| bluetooth scan | BLE scan through hosted NimBLE on C6 (up to 8 devices) |
-| bluetooth advertise on | Start non-connectable BLE advertising |
+| bluetooth status | Colour-coded report: hosted readiness, controller, NimBLE, sync, scan, advertising (with active name), C6 firmware version, last error |
+| bluetooth scan [limit] | Bounded BLE scan (default 8 s) through hosted NimBLE on C6; prints name + address + RSSI sorted strongest-first, up to `limit` (default 8) |
+| bluetooth advertise on [name] | Start non-connectable BLE advertising. `name` is session-only (RAM-only, never persisted); without it the configured default name is used |
 | bluetooth advertise off | Stop BLE advertising |
 | bt ... | Alias for bluetooth command family |
 
@@ -687,6 +941,8 @@ Example: `sort names.txt /I /U > unique.txt`
 - bluetooth enable initializes hosted controller and NimBLE host once
 - Subsequent scan/advertise commands reuse active session
 - Hosted NimBLE VHCI on ESP32-C6 over ESP-Hosted SDIO
+- `bluetooth scan` is always bounded by `P4_CONFIG_BT_SCAN_DURATION_MS`, so it
+  always terminates and the worker task never hangs
 
 ## USB Commands
 

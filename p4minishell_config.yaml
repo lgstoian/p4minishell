@@ -10,12 +10,12 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.6
-# Last updated: 2026-08-09 (crash fix: dir detailed listing called ansi_vformat()
-#                           with a char* where a va_list was expected, so the %s
-#                           handler read the entry-name bytes as a pointer and
-#                           strlen faulted; fixed by using ansi_format())
-config_version: "0.24.6"
+# Version: 0.24.11
+# Last updated: 2026-08-10 (HTTPS support: `httpget` / `wget` performs a
+#                           simple HTTPS or HTTP GET over the same
+#                           esp_http_client stack c6ota uses, with ERRORLEVEL,
+#                           SD-file save, and redirect/redirection support)
+config_version: "0.24.11"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -232,6 +232,88 @@ wifi:
       Bluetooth init paths do not reject C6 firmware version mismatches.
       Useful for development and testing with mismatched host/co-processor
       firmware. Set to 0 in production to enforce the version gate.
+  scan_limit:
+    value: 32
+    type: size_t
+    description: >-
+      Maximum access points surfaced by wifi scan. Results are sorted by RSSI
+      (strongest first) and capped at this value so a busy channel cannot flood
+      the transcript.
+    range: "1..128"
+
+# ---- Ping and DNS ----
+# `ping` and `dns` (alias `nslookup`) are classic DOS-style connectivity
+# commands implemented inside components/networking, the sole owner of the
+# lwIP / esp_ping surface. They set ERRORLEVEL so batch files can branch, and
+# they participate in redirection and pipes like every other command.
+ping_dns:
+  ping_count_default:
+    value: 4
+    type: int
+    description: "Default echo-request count for ping when no count is given"
+    range: "1..10"
+  ping_count_max:
+    value: 10
+    type: int
+    description: "Hard upper bound for ping <host> <count>; larger requests are clamped"
+    range: "1..100"
+  ping_timeout_ms:
+    value: 1000
+    type: uint32_t
+    description: >-
+      Milliseconds each ping waits for a single reply before reporting a
+      timeout. Also bounds how long the command worker task can block per reply.
+    range: "100..60000"
+  ping_interval_ms:
+    value: 1000
+    type: uint32_t
+    description: "Milliseconds between two consecutive ping echo requests"
+    range: "10..60000"
+  ping_data_bytes:
+    value: 32
+    type: uint32_t
+    description: "Payload size in bytes of each ICMP echo request"
+    range: "0..1024"
+  dns_result_limit:
+    value: 8
+    type: size_t
+    description: "Maximum A records dns / nslookup prints for one hostname"
+    range: "1..32"
+
+# ---- HTTP Client (httpget / wget) ----
+# `httpget <url> [localfile]` performs a simple HTTPS or HTTP GET through the
+# esp_http_client stack (the same one c6ota uses for firmware downloads). All
+# HTTP / TLS code lives inside components/networking; the command layer only
+# dispatches and writes the returned body to SD. ERRORLEVEL is 0 on an HTTP
+# 2xx, non-zero otherwise.
+http_client:
+  timeout_ms:
+    value: 15000
+    type: uint32_t
+    description: "Network timeout in milliseconds for a single httpget request"
+    range: "1000..120000"
+  max_body_bytes:
+    value: 524288
+    type: size_t
+    description: >-
+      Maximum response body bytes httpget buffers into PSRAM. A larger
+      response is refused with a clear error rather than exhausting memory.
+    range: "1024..4194304"
+  follow_redirects:
+    value: 1
+    type: bool
+    description: "Follow HTTP redirects (1) or treat a 3xx status as an error (0)"
+  user_agent:
+    value: "P4MiniShell/0.24.11 httpget"
+    type: string
+    description: "User-Agent string sent by httpget; kept short and identifiable"
+  print_body_bytes:
+    value: 4096
+    type: size_t
+    description: >-
+      Maximum response body bytes printed to the transcript when no localfile
+      is given. The full body is always available via httpget <url> <localfile>.
+    range: "256..65536"
 
 # ---- Bluetooth ----
 bluetooth:
@@ -267,6 +349,13 @@ bluetooth:
     type: size_t
     description: "Maximum BLE scan results surfaced via shell bt/scan"
     range: "1..32"
+  scan_duration_ms:
+    value: 8000
+    type: uint32_t
+    description: >-
+      Duration in milliseconds of a single bluetooth scan run. The scan is
+      bounded so the command always terminates and the worker task never hangs.
+    range: "1000..60000"
 
 # ---- SD Card and Filesystem ----
 sd_card:
@@ -345,8 +434,70 @@ sd_card:
   format_alloc_unit_bytes:
     value: 0
     type: uint32_t
-    description: "Allocation unit size requested when formatting; 0 selects automatic"
+    description: >-
+      Default allocation unit size requested when formatting; 0 selects
+      FATFS automatic. The /A: option overrides it.
     range: "0..65536"
+  format_alloc_unit_min:
+    value: 4096
+    type: uint32_t
+    description: "Smallest /A: allocation unit (cluster) size accepted by format"
+    range: "512..65536"
+  format_alloc_unit_max:
+    value: 131072
+    type: uint32_t
+    description: "Largest /A: allocation unit (cluster) size accepted by format"
+    range: "512..131072"
+  disk_partition_align_sectors:
+    value: 2048
+    type: uint32_t
+    description: >-
+      MBR partition-table alignment for disk create partition, in 512-byte
+      sectors. 2048 sectors = 1 MiB, the diskpart/SD standard alignment.
+    range: "1..65536"
+  storage_volume_max:
+    value: 1
+    type: uint32_t
+    description: "Number of supported storage volumes (SD only today; USB OTG MSC is a future target)"
+    range: "1..4"
+
+# ---- Boot Scripting (CONFIG.SYS / AUTOEXEC.BAT) ----
+boot_scripting:
+  config_sys_name:
+    value: "CONFIG.SYS"
+    type: string
+    description: "Filename checked for boot directives on the SD volume root"
+  autoexec_bat_name:
+    value: "AUTOEXEC.BAT"
+    type: string
+    description: "Filename checked for the boot batch file on the SD volume root"
+  generate_defaults:
+    value: 1
+    type: uint8_t
+    description: >-
+      When CONFIG.SYS / AUTOEXEC.BAT are missing, generate default files once.
+      When 0, missing files are silently skipped.
+    range: "0..1"
+  run_on_startup:
+    value: 1
+    type: uint8_t
+    description: "Run CONFIG.SYS + AUTOEXEC.BAT on every normal boot"
+    range: "0..1"
+  line_bytes:
+    value: 256
+    type: uint16_t
+    description: "Maximum line length accepted by the CONFIG.SYS parser"
+    range: "64..1024"
+  max_directives:
+    value: 64
+    type: uint16_t
+    description: "Maximum number of directives CONFIG.SYS may contain"
+    range: "16..256"
+  max_gpio_lines:
+    value: 16
+    type: uint8_t
+    description: "Maximum number of GPIO directives CONFIG.SYS may contain"
+    range: "0..64"
   io_buffer_bytes:
     value: 128
     type: size_t

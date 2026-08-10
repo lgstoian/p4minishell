@@ -7,11 +7,454 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.11] - 2026-08-10
+
+HTTPS support release. Adds the simplest possible, lowest-risk basic HTTPS
+capability for development, diagnostics, and scripting: a `httpget` / `wget`
+command that performs a plain HTTPS or HTTP GET by reusing the exact
+`esp_http_client` stack c6ota already uses for firmware downloads. No new HTTP
+library, no POST/PUT, no WebSocket, no certificate-pinning UI, and no change
+to the station-only Wi-Fi model.
+
+### Added - `httpget <url> [localfile]` (alias `wget`)
+
+- Performs a simple HTTPS (or HTTP) GET. With no localfile it prints the
+  response body to the transcript (bounded, sanitized) after a clear header
+  showing HTTP status, content-type, and size; with a localfile it saves the
+  exact body to the current working directory / SD card through the storage
+  write path (cwd-relative resolution, guarded SD session, free-space
+  precheck, partial-destination cleanup on a failed write).
+- Sets ERRORLEVEL like DOS: 0 on an HTTP 2xx, 1 on any failure (non-2xx,
+  connection refused, TLS failure, body over the size cap, unreachable
+  host, Wi-Fi not connected), 2 on a usage error. Works in batch files and
+  AUTOEXEC.BAT (`httpget ... && echo ok`, `if errorlevel 1 goto nolink`).
+- Supports redirection and pipes: `httpget https://host/page > page.txt`
+  captures the printed report; `httpget url | find "200"` pipes it.
+- Graceful degradation: with no active connection it prints a clear
+  DOS-style error (`run wifi connect first`) and exits non-zero; a network
+  timeout is bounded by `P4_CONFIG_HTTP_TIMEOUT_MS` so the worker task is
+  never hung.
+- All HTTP / TLS code lives inside `components/networking/`
+  (`networking_http_get()`), the sole owner of the esp_http_client surface;
+  `components/command/` only dispatches and writes the returned body. The
+  large receive buffer is allocated from PSRAM
+  (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`) with an internal-RAM fallback.
+
+### Config
+
+- New tunables in `p4minishell_config.h`, documented in
+  `p4minishell_config.yaml` under `http_client`:
+  `P4_CONFIG_HTTP_TIMEOUT_MS` (15 s), `P4_CONFIG_HTTP_MAX_BODY_BYTES`
+  (512 KiB PSRAM cap), `P4_CONFIG_HTTP_FOLLOW_REDIRECTS` (1), and
+  `P4_CONFIG_HTTP_USER_AGENT` ("P4MiniShell/0.24.11 httpget"), plus
+  `P4_CONFIG_HTTP_PRINT_BODY_BYTES` (4 KiB transcript print cap).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- The only CMake change is adding `esp_http_client` and `esp-tls` to the
+  networking component's `REQUIRES`. No SoftAP, new transports, custom RPC,
+  or third-party libraries were introduced; station-only Wi-Fi is untouched.
+- Hardware (COM11): connected to a 2.4 GHz access point and fetched an HTTPS
+  page and an HTTP text endpoint, verifying status/content-type/size output,
+  ERRORLEVEL on success, the SD-file save form, the transcript print form,
+  and the non-connected error path.
+
+---
+
+## [0.24.10] - 2026-08-10
+
+Networking expansion release. Enriches the Wi-Fi and Bluetooth surfaces so
+they feel native to the DOS environment: a full colour-coded `wifi status`
+report, an RSSI-sorted `wifi scan` with a bare redirectable form, classic
+`ping` and `dns`/`nslookup` connectivity commands that set ERRORLEVEL and
+participate in redirection/pipes, and improved hosted Bluetooth status, scan,
+and session-scoped advertising names.
+
+### Added - `ping <host-or-ip> [count]`
+
+- Classic ICMP echo over lwIP's `esp_ping` session (inside
+  `components/networking`, the sole owner of the lwIP surface). Default 4
+  requests, hard cap 10 (`P4_CONFIG_PING_COUNT_MAX`), 1 s timeout and 1 s
+  interval.
+- Works from the interactive shell **and** from batch files / AUTOEXEC.BAT.
+  Sets ERRORLEVEL exactly like DOS: 0 when at least one reply landed, 1 on
+  total loss / resolution failure / no connection, 2 on a usage error, so
+  `ping 8.8.8.8 && echo up` and `if errorlevel 1 echo down` behave.
+- Output goes through the transcript appenders, so `>` / `>>` redirection and
+  `|` pipes capture it: `ping 8.8.8.8 > ping.txt`, `ping gw | find "Reply"`.
+- Prints each reply line plus the classic summary: packets transmitted /
+  received / lost, loss %, and RTT min/avg/max.
+- Bounded by construction: the session runs on its own task and the worker
+  task blocks for at most `count * (timeout + interval) + margin`, so it
+  never hangs the command worker task.
+- Requires an active connection; reports Wi-Fi-not-started / not-connected
+  states honestly and redirectably.
+
+### Added - `dns <hostname>` (alias `nslookup`)
+
+- Resolves A records through lwIP `getaddrinfo` and prints the IPv4 address
+  list (bounded by `P4_CONFIG_DNS_RESULT_LIMIT`).
+- Errorlevel-aware like `ping` (0 success / 1 not resolved / 2 usage) and
+  redirectable: `dns example.com > dns.txt`, `dns host || echo unresolved`.
+- With this build's lwIP DNS cache (`CONFIG_LWIP_DNS_MAX_HOST_IP=1`) a name
+  normally resolves to a single A record.
+
+### Added - enriched `wifi status`
+
+- Multi-line colour-coded report: state, connected, target SSID, SSID, BSSID,
+  channel, RSSI (dBm), PHY mode + bandwidth (802.11b/g/n/ax + HT20/HT40), IPv4,
+  netmask, gateway, DNS server(s), and association uptime (HH:MM:SS since the
+  4-way handshake completed).
+
+### Added - improved `wifi scan`
+
+- Results sorted by RSSI (strongest first), column-aligned
+  `SSID  RSSI  CH  AUTH` report, capped at the new `P4_CONFIG_WIFI_SCAN_LIMIT`
+  (32) so a busy channel cannot flood the transcript.
+- Optional `wifi scan /b` prints bare SSID lines (no colour) so
+  `wifi scan /b > ap.txt` is machine-parsable from a batch file.
+
+### Added - enriched hosted Bluetooth
+
+- `bluetooth status` / `bt status` is now a colour-coded report: hosted
+  ready, controller, NimBLE host, sync, scan, advertising (with the active
+  name), C6 firmware version, and last error.
+- `bluetooth scan [limit]` is a bounded scan (default 8 s,
+  `P4_CONFIG_BT_SCAN_DURATION_MS`) that prints a sorted-by-RSSI
+  `NAME  ADDRESS  RSSI` report with the optional per-run limit.
+- `bluetooth advertise on [name]` accepts a session-only advertising name
+  (RAM-only, never persisted); `bluetooth advertise off` and the boot
+  `BT_ADVERTISE=ON|OFF` path are unchanged.
+
+### Documentation
+
+- `command.md` documents `ping`, `dns`/`nslookup`, the `wifi scan /b` and
+  enriched status/scan forms, and the new Bluetooth forms. `documentation.md`,
+  `ai-context.md`, `readme.md`, `p4minishell_config.h`, and
+  `p4minishell_config.yaml` document the new lwIP/esp_ping surface and the new
+  config macros (`P4_CONFIG_WIFI_SCAN_LIMIT`, `P4_CONFIG_PING_*`,
+  `P4_CONFIG_DNS_RESULT_LIMIT`, `P4_CONFIG_BT_SCAN_DURATION_MS`).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Networking code stays confined to `components/networking`; the only
+  CMake change is adding `lwip` to that component's `REQUIRES`. No SoftAP,
+  Bluedroid, custom RPC, or non-ESP-Hosted transport was introduced.
+
+---
+
+## [0.24.9] - 2026-08-10
+
+Batch mathematics release. Expands `set /a` with the comparison and logical
+operators cmd.exe users expect, adds numeric comparison keywords to `if`, and
+fully documents the batch math surface. No regressions to the existing
+arithmetic, bitwise, shift, compound-assignment, or `if` forms.
+
+### Added — `set /a` comparison operators
+
+- `==`, `!=`, `<`, `>`, `<=`, `>=` now evaluate to 1 when the relation holds
+  and 0 otherwise, so a boolean can be computed and stored:
+  `set /a x=5==5` sets x=1, `set /a ok=(5>3)&&(2<4)` sets ok=1.
+- Precedence follows cmd.exe: comparisons sit below the bitwise operators
+  (`|` `^` `&` and the shifts bind tighter), so `set /a "x=1|0==0"` is
+  `(1|0)==0` → 0.
+- The assignment splitter no longer mistakes the `=` of a comparison for the
+  assignment: `set /a x=5==3` assigns x the comparison result (0) instead of
+  splitting into `x=5` with a dangling `==3`. An expression with no assignment
+  (`set /a 5==3`) is evaluated and printed.
+- **Quoting:** `<`, `>`, `&`, `|`, `<<`, `>>`, `&&` and `||` are shell
+  redirection/chain/pipe operators, so an expression using them must be quoted
+  (`set /a "x=5<6"`) or the line is split first. `==` and `!=` contain no
+  shell operator and work unquoted. This matches how the pre-existing bitwise
+  operators already behaved.
+
+### Added — `set /a` logical operators
+
+- `&&` and `||` return 1/0 and form the lowest precedence levels (`&&` binds
+  tighter than `||`, so `1||0&&0` is `1||(0&&0)` → 1). Both sides are always
+  evaluated (no short-circuiting), matching cmd.exe: `set /a "(0&&1/0)"`
+  reports a divide-by-zero error.
+- The bitwise `&`/`|` levels continue to refuse `&&`/`||`, so a chain separator
+  that survives as shell syntax is never swallowed by the expression.
+
+### Added — `if` numeric comparison keywords
+
+- `if [not] [/i] <a> EQU|NEQ|LSS|LEQ|GTR|GEQ <b> <command>` performs a numeric
+  comparison. Operands are parsed as decimal integers; a non-numeric operand
+  reads as 0, matching cmd.exe. This is a separate branch from the `==` string
+  comparison, so `if a==b` stays a string test while `if a EQU b` compares
+  numerically. `/i` is ignored for the numeric form.
+
+### Documentation
+
+- `command.md` gained a full `set /a` operator/precedence table, quoting
+  rules for shell-conflicting operators, and an `if` numeric-keyword
+  reference with examples. `documentation.md`, `ai-context.md`, `API.md`,
+  `readme.md`, and `batch.h` document the expanded grammar and the
+  `shell_expr_find_assignment()` splitter.
+
+### Testing
+
+- New unit tests `test_batch_expr_comparisons` and `test_batch_expr_logical`
+  cover every comparison, `&&`/`||` precedence, parenthesised logical
+  expressions, the no-short-circuit rule, and hex/`0x` comparisons.
+- Hardware (COM11): exercised `set /a` with `==`/`!=` (unquoted) and
+  `<`/`>`/`<=`/`>=`/`&&`/`||` (quoted), mixed precedence, `%%` modulo and
+  `^^` xor escapes, every `if` numeric keyword (including `not` and
+  variables), and a batch file that computes a total, branches on `EQU`, and
+  stores a computed boolean. Full unit-test suite: 0 failures, 0 ignored.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- CONFIG.SYS / AUTOEXEC.BAT boot path, transcript colours, key waits, and the
+  serial console are unchanged.
+
+---
+
+## [0.24.8] - 2026-08-10
+
+Batch correctness release. Fixes the six batch features after the frame layout
+change that introduced `%0` (script name) broke `%1..%9` / `%*` argument
+forwarding, tightens `goto :eof` frame scoping, and moves the `for` loop
+buffers off the recursive command/batch stack.
+
+### Fixed — `%1..%9` / `%*` argument forwarding after the `%0` change
+
+- **Symptom:** `call script.bat one two` ran the script, but inside the callee
+  `echo %1` printed the script path instead of `one`, `%2` printed `one`, and
+  `%*` included the script name.
+- **Root cause:** `shell_execute_batch_file()` was updated to store the script
+  path in `args[0]` (classic DOS `%0`) and shift the caller's arguments into
+  `args[1..]`, but `shell_expand_variables()` still indexed `%N` as
+  `args[N-1]` and built `%*` from `args[0]`. The two disagreeing views made
+  every positional reference off by one. `%0` was also unreachable: the
+  `isdigit()` branch caught `'0'` first and mapped it to an out-of-range index.
+- **Fix:** `shell_expand_variables()` now maps `%0` → `args[0]`, `%1..%9` →
+  `args[1..9]`, and `%*` → every argument from `%1` onward (never the script
+  name), matching COMMAND.COM. `%0` is tested before `isdigit()`. A single
+  `shell_batch_all_args_string()` helper builds `%*` for both the closed
+  (`%*`) and bare (`%*` with no trailing `%`) forms.
+- **Verification (hardware, COM11):** `call` with `%0 %1 %2 %*` prints the
+  script name, the two forwarded arguments, and exactly the two arguments for
+  `%*`; `shift` keeps `%1` aligned with the frame slots.
+
+### Fixed — `goto :eof` now unwinds only the current frame from `for`/`if` bodies
+
+- **Symptom:** `goto :eof` (and `goto`) issued inside a `for` loop body in a
+  called script terminated the caller too: after the callee returned, the
+  caller's line loop broke out and the whole batch run stopped early.
+- **Root cause:** a `goto` inside a `for`/`if` body breaks the current frame's
+  line loop before the normal flag-clearing path runs, leaving
+  `s_goto_pending` / `s_goto_eof` set. The caller's loop then saw the stale
+  flags and broke as well.
+- **Fix:** `shell_execute_batch_file()` clears `s_goto_pending`,
+  `s_goto_eof`, and `s_goto_label` whenever a frame returns. A goto target
+  always belongs to the frame that set it (labels are resolved against that
+  frame's label table), so the flags are stale after the frame is gone.
+- **Verification (hardware, COM11):** a callee with `for %%I in (x) do goto
+  :eof` returns without running further callee lines and the caller continues
+  to its next line.
+
+### Fixed — `goto :eof` accepted case-insensitively
+
+- `goto :eof` matched with `strcmp`, so `goto :EOF` fell through to the label
+  scan and reported "label not found". Now compared case-insensitively, like
+  every other batch label.
+
+### Fixed — `for %%I in (set) do ...` accepted the DOS `%%` form
+
+- The loop body substitution only matched a single `%var`, so the correct
+  batch-file spelling `for %%I in (a b c) do echo %%I` produced `echo %a`
+  (the doubled percent collapsed to one and the variable was lost) instead of
+  `echo a`. The substitution now matches `%%var` first (the batch-file escape
+  for a literal `%`), then `%var` for tolerance. Verified on hardware:
+  `for %%I in (alpha beta gamma) do echo ITEM_%%I` prints ITEM_alpha, ITEM_beta,
+  ITEM_gamma.
+
+### Fixed — `%N` / `%0` / `%*` recognized anywhere in a line
+
+- Positional arguments were only expanded when they were the final percent
+  marker in the line (or a whole `%...%` pair), so `p0=[%0] p1=[%1]` printed
+  `p0=[%0]` literally (a later `%` collapsed `%0] p1=[` into one unknown
+  token). They are now consumed as `%` plus one character immediately,
+  matching COMMAND.COM, so `[%0] [%1]` expands both.
+
+### Fixed — nested `call` + command overflowed the worker task stack
+
+- **Symptom:** a batch file that `call`ed a second script, and the callee ran a
+  `set`/`echo`, panicked with `Stack protection fault` in the `shell_cmd`
+  task — the recursive dispatch chain plus newlib's `vfprintf` machinery
+  exceeded the 8192-byte worker stack.
+- **Root cause:** the recursive-path functions kept SD-path/line-sized buffers
+  as stack locals that stacked with nesting depth: `shell_resolve_batch_path`
+  (1040-byte frame), `shell_command_set` (512), `shell_command_echo` (416,
+  a full `SHELL_BATCH_LINE_BYTES` text buffer), `shell_command_if` (464),
+  `shell_command_choice` (736). A two-level `call` with a `set` in the callee
+  was enough to overflow.
+- **Fix:** every line/path-sized buffer on the recursive batch path is now
+  heap-allocated and freed on every exit: `shell_resolve_batch_path`
+  (1040 → 160 bytes of stack), `shell_command_set`, `shell_command_echo`
+  (416 → 32), `shell_command_set`/`set /a`/`set /p`/`path` statements,
+  `shell_command_if`'s resolved path + nested command, and
+  `shell_command_choice`'s prompt text (736 → 352).
+- **Verification (hardware, COM11):** the exact repro (call → callee runs
+  `setlocal`, `set`, `goto :eof`) runs clean with no stack fault; nested
+  `call` chains with `set`/`echo`/`if` in the callee all complete.
+
+### Fixed — UART console dropped the tail of long commands
+
+- **Symptom:** commands past ~64 bytes were split into two commands, the second
+  becoming an "Unknown command" (e.g. a long `write`/`append` line lost its
+  final characters, corrupting batch files created from the serial console —
+  this was why the previous test batch files on the SD card were truncated).
+- **Root cause:** the USB-Serial-JTAG driver delivers one logical line across
+  several reads (its RX FIFO is 64 bytes). The console task treated each read
+  as a complete command.
+- **Fix:** `shell_uart_console_task()` now assembles partial reads until a line
+  terminator (or the buffer fills), and only then submits the command. Key-wait
+  forwarding is unchanged: during a key wait the first newly-read character is
+  still answered immediately. Verified on hardware: `write`/`append` of 65+
+  character lines lands intact, and `pause`/`choice` are still answered by a
+  single key.
+
+### Fixed — unit-test app crashed after the debug-log suite
+
+- The test app ran all suites with 0 failures, then panicked. Two pre-existing
+  issues, previously masked by the crash, are fixed so the suite runs clean:
+  - `shell_schedule_transcript_appendf()` called `lv_async_call()` even before
+    any UI exists; in the test app LVGL is never initialized, so the flush
+    crashed in LVGL's TLSF allocator. When the transcript widget is NULL the
+    flush now runs synchronously instead.
+  - The synchronous flush used the async callback's 2048-byte stack scratch,
+    overflowing the test app's main task. The scratch is now heap-allocated.
+  - The `test_ansi_to_lvgl_recolor` assertion expected plain text to pass
+    through uncoloured, but the recolor path deliberately wraps every run in
+    `#CCCCCC text #` (the transcript label has no explicit text colour, so that
+    is what keeps plain text visible on the dark background). The assertion was
+    corrected to match the documented rendering contract.
+- **Verification (hardware, COM11):** the full unit-test suite runs to
+  "All tests completed" — 56 tests across 11 suites, 0 failures, 0 ignored,
+  no panic.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11): exercised `if exist` / `if not exist`, `if errorlevel N`,
+  `goto :eof`, `for %%I in (set)` and wildcard `for`, `if /i`, and `call` with
+  argument forwarding + errorlevel propagation; CONFIG.SYS / AUTOEXEC.BAT boot
+  path, transcript colours, key waits, and serial console behaviour unchanged.
+
+---
+
+## [0.24.7] - 2026-08-10
+
+Feature release. Adds DOS-style boot scripting (`CONFIG.SYS` + `AUTOEXEC.BAT`)
+that runs at every boot.
+
+### Added — DOS-style boot scripting (`CONFIG.SYS` / `AUTOEXEC.BAT`)
+
+- **Symptom this replaces:** previously the shell had no boot-time
+  configuration; every setting had to be typed or scripted by hand after
+  power-on.
+- **Behavior:** on every boot the firmware looks for `CONFIG.SYS` and
+  `AUTOEXEC.BAT` on the SD card root. When either is missing and
+  `P4_CONFIG_BOOT_GENERATE_DEFAULTS` is set, default files are written once.
+  `CONFIG.SYS` directives are parsed and applied (classic DOS: `SET`, `PATH`,
+  `PROMPT`, `ECHO ON|OFF`; display/audio: `ROTATE`, `BRIGHTNESS`,
+  `DISPLAY_POWER`, `VOLUME`; policy: `WIFI_SSID`/`WIFI_PASSWORD`/
+  `WIFI_AUTOCONNECT`, `BLUETOOTH`, `BT_ADVERTISE`, `USB_KEYBOARD`,
+  `USB_MOUSE`, `GPIO`). `AUTOEXEC.BAT` then runs through the normal batch
+  pipeline with full batch power. Unknown directives produce a single muted
+  warning and are skipped. Safe with no SD card (silent skip, identical to
+  before) and with empty/malformed files.
+- **Implementation:** `components/boot/` owns the parser and runner
+  (`components/boot/boot.c`, `boot.h`). Hardware directives are applied by
+  executing their command-line equivalent through the batch pipeline, so every
+  existing validation path is reused and no private state is reached into.
+  State-only directives (Wi-Fi target credentials, autoconnect policy, the
+  echo default) use the small set of accessors the owning modules expose
+  (`networking_wifi_set_boot_credentials`/`_autoconnect`,
+  `batch_set_default_echo`). Wi-Fi password is never echoed to transcript,
+  history, or debug log. GPIO directives refuse reserved pins (delegated to
+  the existing `gpio set` safety check). Serial console key waits now work:
+  `shell_uart_console_submit_command()` routes commands through the command
+  worker task so blocking key waits (`pause`, `choice`, `more`, the
+  `format`/`disk clean` confirmation) can be answered from serial input.
+- **Configuration:** `p4minishell_config.h` adds
+  `P4_CONFIG_BOOT_CONFIG_SYS_NAME`, `P4_CONFIG_BOOT_AUTOEXEC_BAT_NAME`,
+  `P4_CONFIG_BOOT_GENERATE_DEFAULTS`, `P4_CONFIG_BOOT_RUN_ON_STARTUP`,
+  `P4_CONFIG_BOOT_LINE_BYTES`, `P4_CONFIG_BOOT_MAX_DIRECTIVES`,
+  `P4_CONFIG_BOOT_MAX_GPIO_LINES`; all documented in
+  `p4minishell_config.yaml` under `boot_scripting`.
+- **Verification (hardware, COM11):** `CONFIG.SYS` with `ECHO OFF`,
+  `SET TESTVAR=helloboot`, `BRIGHTNESS=50`, `ROTATE=0`, `VOLUME=30`,
+  `WIFI_AUTOCONNECT=OFF`, `USB_KEYBOARD=ON`, `GPIO 42 = OUT HIGH` (refused:
+  reserved pin), and an unknown directive (muted warning) — all applied as
+  expected; `AUTOEXEC.BAT` with `@echo off` +
+  `echo testvar=%TESTVAR%` ran and expanded the variable; unit-test suite
+  runs 0 failures.
+
+---
+
 ## [0.24.6] - 2026-08-09
 
 Crash-fix + stability release. Root-caused and fixed the recurring intermittent
 LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
 (C2), and swept all remaining literal ANSI markers (H1 residual).
+
+### Added — diskpart / DOS FORMAT disk and volume management (`format` + `disk`)
+
+- **`format` is now a real FORMAT.COM.** It keeps `/FS:`, `/V:label`, `/Q` and
+  the exact-`YES` confirmation contract, and adds `/A:size` (allocation unit /
+  cluster size, with K/M suffix). `/FS:` is honored honestly: FAT/FAT32 use the
+  standard ESP-IDF helper's size-appropriate selection (FAT12/16 for small
+  volumes, FAT32 for modern SD cards), and `EXFAT` is refused with a clear
+  "not supported in this firmware build" warning that falls back to FAT32
+  rather than silently lying. After formatting the command reports the FAT
+  type, label, capacity and cluster size with the semantic palette.
+- **New `disk` command family** (diskpart-style), owned by `components/storage`:
+  - `disk list` — physical disk geometry (name, capacity, sectors, sector size).
+  - `disk detail` — disk geometry plus the decoded MBR partition table (boot
+    flag, type with a friendly name, start LBA, size).
+  - `disk clean` — remove the partition table (destructive, `YES` required).
+  - `disk create partition primary [size=N]` — create a primary FAT32 MBR
+    partition aligned to 1 MiB; `size` is in MB (default: rest of the card).
+  - `disk delete partition N` — delete MBR partition N (1-4), `YES` required.
+  - `disk format [fs=...] [label=...] [au=...] [quick]` — diskpart-style alias
+    for the `format` engine.
+- **Engine:** `components/storage/storage.c` gained the volume services
+  (`storage_disk_get_info`, `storage_disk_read_mbr`, `storage_disk_clean`,
+  `storage_disk_create_primary_partition`, `storage_disk_delete_partition`,
+  `storage_format_volume`, `storage_get_fat_type`), parameterized by a
+  `storage_volume_t` so a future USB OTG MSC volume can be added without
+  changing the command surface. Formatting uses the standard
+  `esp_vfs_fat_sdcard_format_cfg()`; MBR access uses `sdmmc_read_sectors` /
+  `sdmmc_write_sectors` on the BSP card handle; the FATFS volume is unmounted
+  (`f_mount`) before partition-table writes and recreated by `format`.
+- **Serial console key waits now work.** `shell_uart_console_submit_command()`
+  routes serial commands through the command worker task (a new
+  `execute_command_async` hook in `shell_command_ops_t`) instead of executing
+  synchronously on the UART task, so blocking key waits - `pause`, `choice`,
+  `more`, the `format`/`disk clean` confirmation, `set /p` - can be answered
+  from the serial input. The touch path is unchanged.
+- **Configuration:** `P4_CONFIG_FORMAT_ALLOC_UNIT_MIN`/`_MAX`,
+  `P4_CONFIG_DISK_PARTITION_ALIGN_SECTORS`, `P4_CONFIG_STORAGE_VOLUME_MAX`
+  added to `p4minishell_config.h` and documented in
+  `p4minishell_config.yaml`.
+- **Verification (hardware, COM11):** `format /FS:FAT32 /V:TEST /A:64K`,
+  `format /FS:FAT32`, `disk format fs=fat32 label=DATA au=32K quick`,
+  `disk clean`, `disk create partition primary size=1024/2048`,
+  `disk delete partition 1`, `disk list`, `disk detail` all execute with the
+  expected result and ANSI colours; `disk detail` verifies the created MBR
+  (type 0x0C FAT32, 1 MiB-aligned start, requested size); the
+  clean → create → format → `dir` flow works end-to-end; unit-test suite
+  runs 0 failures. Known limitation: a card the BSP cannot mount after a
+  reboot (e.g. a partition with no filesystem) cannot be re-initialized
+  in-firmware without `BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL` - the pre-existing
+  constraint that formatting requires an initialized card.
 
 ### Fixed — LVGL task hang: UI freezes after boot, touch keyboard unresponsive
 

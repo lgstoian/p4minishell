@@ -121,7 +121,9 @@ static shell_batch_frame_t *s_active_batch_frame;
 static int s_errorlevel;
 static char s_goto_label[SHELL_COMMAND_BYTES];
 static bool s_goto_pending;
+static bool s_goto_eof;            /* goto :eof — jump to end of current frame */
 static batch_stop_mode_t s_stop_mode;
+static bool s_default_echo = true;   /* CONFIG.SYS ECHO ON|OFF sets this; batch frames inherit it */
 
 /**
  * setlocal environment scope stack.
@@ -387,12 +389,47 @@ static void shell_setlocal_unwind_to(int depth)
 }
 
 /**
+ * Build the `%*` expansion: every frame argument from `%1` onward, joined
+ * with spaces. `%0` is the script name and is excluded, matching DOS.
+ *
+ * The scratch buffer is static because it is only ever consumed by the
+ * caller of this helper before the next call can overwrite it, and the
+ * command path is single-threaded. Sized by the existing batch line limit.
+ */
+static const char *shell_batch_all_args_string(void)
+{
+    static char all_args[SHELL_BATCH_LINE_BYTES];
+    int index;
+
+    all_args[0] = '\0';
+
+    if (s_active_batch_frame == NULL || s_active_batch_frame->argc <= 1) {
+        return all_args;
+    }
+
+    for (index = 1; index < s_active_batch_frame->argc; index++) {
+        if (index > 1) {
+            strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
+        }
+        strncat(all_args, s_active_batch_frame->args[index],
+                sizeof(all_args) - strlen(all_args) - 1);
+    }
+
+    return all_args;
+}
+
+/**
  * Expand `%VAR%` and batch argument references.
  *
  * Quote and escape aware, following the shell's documented rules:
  *   - Inside `'...'` nothing expands; the run is fully literal.
  *   - Inside `"..."` expansion still applies, matching COMMAND.COM.
  *   - `^%` suppresses expansion for that one percent sign.
+ *
+ * Batch arguments follow COMMAND.COM: `%0` is the script name (args[0]),
+ * `%1`..`%9` are the caller's arguments (args[1]..args[9]), and `%*` is all
+ * of them from `%1` onward joined with spaces. With no active batch frame all
+ * three expand to empty.
  *
  * Quoting and escape markup is preserved here because the argument tokenizer
  * strips it later. Removing it now would let an expanded value that happens
@@ -444,86 +481,59 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
         }
 
         if (*input == '%') {
-            const char *end = strchr(input + 1, '%');
-            if (end != NULL) {
-                size_t token_len = (size_t)(end - (input + 1));
-                char token[SHELL_ENV_NAME_BYTES];
-                const char *replacement = NULL;
+            /* Batch arguments are a `%` plus exactly one character and are
+             * recognized immediately wherever they appear, matching
+             * COMMAND.COM: `%0` is the script name, `%1`..`%9` the caller's
+             * arguments, `%*` all of them from `%1` onward. They never wait
+             * for a closing `%`, so `p0=[%0] p1=[%1]` expands both. With no
+             * active batch frame they expand to empty. */
+            const char *replacement = NULL;
+            const char *after = NULL;
 
-                if (token_len == 1 && isdigit((unsigned char)input[1])) {
-                    if (s_active_batch_frame != NULL) {
-                        int arg_index = input[1] - '1';
-                        replacement = (arg_index >= 0 && arg_index < s_active_batch_frame->argc)
-                                          ? s_active_batch_frame->args[arg_index]
-                                          : "";
-                    } else {
-                        /* No active batch frame: positional args are empty. */
-                        replacement = "";
-                    }
-                } else if (token_len == 1 && input[1] == '0') {
-                    if (s_active_batch_frame != NULL) {
-                        /* %0 - script name (first argument) */
-                        replacement = (s_active_batch_frame->argc > 0) ? s_active_batch_frame->args[0] : "";
-                    } else {
-                        replacement = "";
-                    }
-                } else if (token_len == 1 && input[1] == '*') {
-                    if (s_active_batch_frame != NULL) {
-                        /* %* - all arguments */
-                        static char all_args[SHELL_BATCH_LINE_BYTES];
-                        all_args[0] = '\0';
-                        for (int i = 0; i < s_active_batch_frame->argc; i++) {
-                            if (i > 0) {
-                                strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
-                            }
-                            strncat(all_args, s_active_batch_frame->args[i], sizeof(all_args) - strlen(all_args) - 1);
-                        }
-                        replacement = all_args;
-                    } else {
-                        replacement = "";
-                    }
-                } else if (token_len == 0) {
-                    replacement = "%";
-                } else if (token_len < sizeof(token)) {
-                    memcpy(token, input + 1, token_len);
-                    token[token_len] = '\0';
-                    replacement = shell_env_get(token);
-                }
-
-                if (replacement != NULL) {
-                    while (*replacement != '\0' && out_index + 1 < output_size) {
-                        output[out_index++] = *replacement++;
-                    }
-                    input = end + 1;
-                    continue;
-                }
-            } else if (input[1] == '0' || input[1] == '*' || isdigit((unsigned char)input[1])) {
-                /* A bare positional argument marker with no closing '%'
-                 * (%0, %1..%9, %*). Expands to the frame argument, or to
-                 * empty when no batch frame is active. */
-                const char *replacement = "";
+            if (input[1] == '0') {
+                replacement = (s_active_batch_frame != NULL && s_active_batch_frame->argc > 0)
+                                  ? s_active_batch_frame->args[0]
+                                  : "";
+                after = input + 2;
+            } else if (input[1] == '*') {
+                replacement = (s_active_batch_frame != NULL) ? shell_batch_all_args_string() : "";
+                after = input + 2;
+            } else if (isdigit((unsigned char)input[1])) {
                 if (s_active_batch_frame != NULL) {
-                    if (input[1] == '*') {
-                        static char all_args[SHELL_BATCH_LINE_BYTES];
-                        all_args[0] = '\0';
-                        for (int i = 0; i < s_active_batch_frame->argc; i++) {
-                            if (i > 0) {
-                                strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
-                            }
-                            strncat(all_args, s_active_batch_frame->args[i], sizeof(all_args) - strlen(all_args) - 1);
-                        }
-                        replacement = all_args;
-                    } else {
-                        int arg_index = (input[1] == '0') ? 0 : (input[1] - '1');
-                        replacement = (arg_index < s_active_batch_frame->argc)
-                                          ? s_active_batch_frame->args[arg_index]
-                                          : "";
-                    }
+                    int arg_index = input[1] - '0';
+                    replacement = (arg_index >= 0 && arg_index < s_active_batch_frame->argc)
+                                      ? s_active_batch_frame->args[arg_index]
+                                      : "";
+                } else {
+                    /* No active batch frame: positional args are empty. */
+                    replacement = "";
                 }
+                after = input + 2;
+            } else {
+                /* Environment variable `%VAR%` or a literal `%%`: needs the
+                 * closing `%`. An unknown name is left untouched. */
+                const char *end = strchr(input + 1, '%');
+                if (end != NULL) {
+                    size_t token_len = (size_t)(end - (input + 1));
+                    char token[SHELL_ENV_NAME_BYTES];
+
+                    if (token_len == 0) {
+                        replacement = "%";
+                    } else if (token_len < sizeof(token)) {
+                        memcpy(token, input + 1, token_len);
+                        token[token_len] = '\0';
+                        replacement = shell_env_get(token);
+                    }
+                    after = end + 1;
+                }
+                /* No closing `%`: the percent is copied literally below. */
+            }
+
+            if (replacement != NULL && after != NULL) {
                 while (*replacement != '\0' && out_index + 1 < output_size) {
                     output[out_index++] = *replacement++;
                 }
-                input += 2;
+                input = after;
                 continue;
             }
         }
@@ -581,6 +591,9 @@ typedef struct {
 } expr_parser_t;
 
 static int32_t shell_expr_parse_or(expr_parser_t *parser);
+static int32_t shell_expr_parse_compare(expr_parser_t *parser);
+static int32_t shell_expr_parse_logical_and(expr_parser_t *parser);
+static int32_t shell_expr_parse_logical(expr_parser_t *parser);
 
 /** Record the first error and stop evaluating. */
 static void shell_expr_fail(expr_parser_t *parser, const char *message)
@@ -633,7 +646,7 @@ static int32_t shell_expr_parse_primary(expr_parser_t *parser)
 
         parser->cursor++;
         parser->depth++;
-        value = shell_expr_parse_or(parser);
+        value = shell_expr_parse_logical(parser);
         parser->depth--;
 
         if (!shell_expr_accept(parser, ")")) {
@@ -864,6 +877,93 @@ static int32_t shell_expr_parse_or(expr_parser_t *parser)
     return left;
 }
 
+/**
+ * Relational / equality operators: `==`, `!=`, `<`, `>`, `<=`, `>=`.
+ *
+ * Lower precedence than the bitwise operators, matching cmd.exe: each operand
+ * is a full `|`/`^`/`&`/shift expression and the comparison yields 1 when the
+ * relation holds, 0 otherwise. A single `<`/`>` is never confused with the
+ * shift operators `<<`/`>>`, which a tighter precedence level consumes first.
+ */
+static int32_t shell_expr_parse_compare(expr_parser_t *parser)
+{
+    int32_t left = shell_expr_parse_or(parser);
+
+    while (!parser->failed) {
+        shell_expr_skip_space(parser);
+
+        if (shell_expr_accept(parser, "==")) {
+            left = (left == shell_expr_parse_or(parser)) ? 1 : 0;
+        } else if (shell_expr_accept(parser, "!=")) {
+            left = (left != shell_expr_parse_or(parser)) ? 1 : 0;
+        } else if (shell_expr_accept(parser, "<=")) {
+            left = (left <= shell_expr_parse_or(parser)) ? 1 : 0;
+        } else if (shell_expr_accept(parser, ">=")) {
+            left = (left >= shell_expr_parse_or(parser)) ? 1 : 0;
+        } else if (shell_expr_accept(parser, "<")) {
+            left = (left < shell_expr_parse_or(parser)) ? 1 : 0;
+        } else if (shell_expr_accept(parser, ">")) {
+            left = (left > shell_expr_parse_or(parser)) ? 1 : 0;
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+/**
+ * Logical `&&` — binds tighter than `||`, matching cmd.exe.
+ *
+ * Returns 1/0. Both sides are always evaluated (no short-circuiting), so
+ * `0 && 1/0` still reports a divide-by-zero error. The right operand is
+ * parsed into a local before combining: a C `&&` would short-circuit and skip
+ * consuming it, leaving a dangling tail that fails the expression.
+ */
+static int32_t shell_expr_parse_logical_and(expr_parser_t *parser)
+{
+    int32_t left = shell_expr_parse_compare(parser);
+
+    while (!parser->failed) {
+        shell_expr_skip_space(parser);
+
+        if (shell_expr_accept(parser, "&&")) {
+            int32_t right = shell_expr_parse_compare(parser);
+            left = ((left != 0) && (right != 0)) ? 1 : 0;
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+/**
+ * Logical `||` — the lowest-precedence operator in the grammar.
+ *
+ * Returns 1/0, evaluating both sides (no short-circuiting), matching
+ * cmd.exe. From the shell an expression using `&&`/`||` must be quoted: an
+ * unquoted `&&`/`||` is a command-chain separator and is split before the
+ * command ever runs.
+ */
+static int32_t shell_expr_parse_logical(expr_parser_t *parser)
+{
+    int32_t left = shell_expr_parse_logical_and(parser);
+
+    while (!parser->failed) {
+        shell_expr_skip_space(parser);
+
+        if (shell_expr_accept(parser, "||")) {
+            int32_t right = shell_expr_parse_logical_and(parser);
+            left = ((left != 0) || (right != 0)) ? 1 : 0;
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
 bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char **error_out)
 {
     expr_parser_t parser;
@@ -888,7 +988,7 @@ bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char
     parser.failed = false;
     parser.message = NULL;
 
-    value = shell_expr_parse_or(&parser);
+    value = shell_expr_parse_logical(&parser);
 
     if (!parser.failed) {
         shell_expr_skip_space(&parser);
@@ -912,13 +1012,66 @@ bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char
 }
 
 /**
+ * Locate the assignment `=` in a `set /a` statement.
+ *
+ * The statement is `NAME[OP]=<expression>`; the expression may itself contain
+ * comparison operators (`==`, `!=`, `<=`, `>=`), so a plain strchr would split
+ * on the first `=` of a comparison. This scans left to right and treats an `=`
+ * as the assignment only when it is not part of a comparison operator:
+ *   - `==`, `!=`, `<=`, `>=` are skipped (their `=` is comparison syntax);
+ *   - `<<=` / `>>=` are compound shift assignments (their `=` IS the one);
+ *   - anything else is the assignment (`=`, or compound `+= -= *= /= %= &= |= ^=`).
+ *
+ * @return Pointer to the assignment `=`, or NULL when the statement is a pure
+ *         expression with no assignment (which `set /a` then evaluates and
+ *         prints rather than storing).
+ */
+static char *shell_expr_find_assignment(char *statement)
+{
+    char *p;
+
+    for (p = statement; *p != '\0'; p++) {
+        if (*p != '=') {
+            continue;
+        }
+
+        {
+            char prev = (p > statement) ? p[-1] : '\0';
+            char next = p[1];
+
+            if (prev == '=' || prev == '!') {
+                continue;   /* second of `==`, or the `=` of `!=` */
+            }
+
+            if (prev == '<' || prev == '>') {
+                if (p > statement + 1 && p[-2] == prev) {
+                    return p;   /* `<<=` or `>>=` : compound shift assignment */
+                }
+                continue;   /* `<=` or `>=` : comparison, not the assignment */
+            }
+
+            if (next == '=') {
+                p++;        /* first of `==` : skip the pair */
+                continue;
+            }
+
+            return p;       /* plain `=` or compound `+= -= *= /= %= &= |= ^=` */
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * `set /a` — evaluate an arithmetic expression and store the result.
  *
  * Usage: set /a NAME=<expression>
  *        set /a <expression>          (prints the result without storing)
  *
  * Compound assignment operators (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`,
- * `^=`, `<<=`, `>>=`) are supported, as in DOS.
+ * `^=`, `<<=`, `>>=`) are supported, as in DOS. Expressions may also use the
+ * comparison operators `==`, `!=`, `<`, `>`, `<=`, `>=` (1 when true, else 0)
+ * and the logical operators `&&`, `||` (1/0), following cmd.exe precedence.
  */
 static void shell_command_set_arithmetic(int argc, char **argv)
 {
@@ -932,7 +1085,7 @@ static void shell_command_set_arithmetic(int argc, char **argv)
 
     if (argc < 3) {
         shell_print_usage("Usage: set /a NAME=<expression>");
-        shell_transcript_append_text("  Operators: + - * / % & | ^ ~ ! << >> ( )\n");
+        shell_transcript_append_text("  Operators: + - * / % & | ^ ~ ! << >> == != < > <= >= && || ( )\n");
         s_errorlevel = 1;
         return;
     }
@@ -942,7 +1095,7 @@ static void shell_command_set_arithmetic(int argc, char **argv)
 
     /* Find the assignment '=' that is not part of a comparison or a
      * compound operator's own character. */
-    equals = strchr(statement, '=');
+    equals = shell_expr_find_assignment(statement);
 
     if (equals == NULL) {
         /* No assignment: evaluate and report, leaving the environment alone. */
@@ -1120,7 +1273,7 @@ static void shell_command_set_prompt(int argc, char **argv)
 
 void shell_command_set(int argc, char **argv)
 {
-    char assignment[SHELL_ENV_NAME_BYTES + SHELL_ENV_VALUE_BYTES];
+    char *assignment = NULL;
     char *equals;
 
     if (argc == 1) {
@@ -1144,15 +1297,25 @@ void shell_command_set(int argc, char **argv)
         }
     }
 
-    shell_join_args(argv, 1, argc, assignment, sizeof(assignment));
+    /* The joined statement is env-sized and `set` runs on the recursive
+     * batch path, so it is heap-allocated and freed on every exit. */
+    assignment = malloc(SHELL_ENV_NAME_BYTES + SHELL_ENV_VALUE_BYTES);
+    if (assignment == NULL) {
+        shell_print_error("set: out of memory");
+        return;
+    }
+
+    shell_join_args(argv, 1, argc, assignment, SHELL_ENV_NAME_BYTES + SHELL_ENV_VALUE_BYTES);
     equals = strchr(assignment, '=');
     if (equals == NULL) {
         const char *value = shell_env_get(assignment);
         if (value == NULL) {
             shell_print_warning("%s is not defined", assignment);
+            free(assignment);
             return;
         }
         shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n", assignment, value);
+        free(assignment);
         return;
     }
 
@@ -1160,6 +1323,7 @@ void shell_command_set(int argc, char **argv)
     equals++;
     if (shell_env_set(assignment, equals) != ESP_OK) {
         shell_print_error("set: invalid variable name or environment is full");
+        free(assignment);
         return;
     }
 
@@ -1168,12 +1332,13 @@ void shell_command_set(int argc, char **argv)
     } else {
         shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n", assignment, equals);
     }
+    free(assignment);
 }
 
 void shell_command_path(int argc, char **argv)
 {
-    char value[SHELL_ENV_VALUE_BYTES];
     const char *current;
+    char *value = NULL;
 
     if (argc == 1) {
         current = shell_env_get("PATH");
@@ -1181,18 +1346,30 @@ void shell_command_path(int argc, char **argv)
         return;
     }
 
-    shell_join_args(argv, 1, argc, value, sizeof(value));
+    /* The value is env-sized and `path` runs on the recursive batch path. */
+    value = malloc(SHELL_ENV_VALUE_BYTES);
+    if (value == NULL) {
+        shell_print_error("path: out of memory");
+        return;
+    }
+
+    shell_join_args(argv, 1, argc, value, SHELL_ENV_VALUE_BYTES);
     if (shell_env_set("PATH", value) != ESP_OK) {
+        free(value);
         shell_print_error("path: failed to update PATH");
         return;
     }
 
     shell_transcript_appendf_ansi(SH_LBL "PATH" SH_RST "=" SH_PATH "%s" SH_RST "\n", value);
+    free(value);
 }
 
 void shell_command_echo(int argc, char **argv)
 {
-    char text[SHELL_BATCH_LINE_BYTES];
+    /* The joined text is line-sized and `echo` runs on the recursive batch
+     * path (every batch line dispatches through it), so the buffer is
+     * heap-allocated and freed on the single exit. */
+    char *text = NULL;
 
     if (argc == 1) {
         shell_transcript_appendf_ansi(SH_LBL "ECHO is" SH_RST " " SH_VAL "%s" SH_RST "\n",
@@ -1211,8 +1388,15 @@ void shell_command_echo(int argc, char **argv)
         }
     }
 
-    shell_join_args(argv, 1, argc, text, sizeof(text));
+    text = malloc(SHELL_BATCH_LINE_BYTES);
+    if (text == NULL) {
+        shell_transcript_append_text("echo: out of memory\n");
+        return;
+    }
+
+    shell_join_args(argv, 1, argc, text, SHELL_BATCH_LINE_BYTES);
     shell_transcript_appendf("%s\n", text);
+    free(text);
 }
 
 /* ========================================================================
@@ -1221,65 +1405,84 @@ void shell_command_echo(int argc, char **argv)
 
 bool shell_resolve_batch_path(const char *command_name, char *resolved_path, size_t resolved_path_size)
 {
-    char candidate[SHELL_SD_PATH_BYTES];
-    char path_copy[SHELL_ENV_VALUE_BYTES];
+    char *candidate = NULL;
+    char *path_copy = NULL;
+    char *dir_path = NULL;
+    char *with_ext = NULL;
     char *entry;
     char *context = NULL;
     struct stat st;
     shell_sd_session_t session;
     esp_err_t error;
+    bool found = false;
     const char *path_env = shell_env_get("PATH");
 
     if (command_name == NULL || command_name[0] == '\0' || resolved_path == NULL || resolved_path_size == 0) {
         return false;
     }
 
-    error = shell_sd_begin(&session);
-    if (error != ESP_OK) {
+    /* The path buffers are SD-path sized, and this function runs on the
+     * recursive batch path (a nested `call` dispatches through it, so it
+     * stacks with the nested dispatch frames). They are heap-allocated and
+     * released at the single exit, keeping the stack frame small. */
+    candidate = malloc(SHELL_SD_PATH_BYTES);
+    path_copy = malloc(SHELL_ENV_VALUE_BYTES);
+    dir_path = malloc(SHELL_SD_PATH_BYTES);
+    with_ext = malloc(SHELL_SD_PATH_BYTES);
+    if (candidate == NULL || path_copy == NULL || dir_path == NULL || with_ext == NULL) {
+        free(candidate);
+        free(path_copy);
+        free(dir_path);
+        free(with_ext);
         return false;
     }
 
-    error = shell_fs_resolve_path(command_name, candidate, sizeof(candidate));
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        free(candidate);
+        free(path_copy);
+        free(dir_path);
+        free(with_ext);
+        return false;
+    }
+
+    error = shell_fs_resolve_path(command_name, candidate, SHELL_SD_PATH_BYTES);
     if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
         snprintf(resolved_path, resolved_path_size, "%s", candidate);
-        shell_sd_end(&session, "call");
-        return true;
+        found = true;
+        goto done;
     }
 
     if (!shell_path_has_extension(command_name, ".bat")) {
-        char with_ext[SHELL_SD_PATH_BYTES];
-
-        snprintf(with_ext, sizeof(with_ext), "%s.bat", command_name);
-        error = shell_fs_resolve_path(with_ext, candidate, sizeof(candidate));
+        snprintf(with_ext, SHELL_SD_PATH_BYTES, "%s.bat", command_name);
+        error = shell_fs_resolve_path(with_ext, candidate, SHELL_SD_PATH_BYTES);
         if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
             snprintf(resolved_path, resolved_path_size, "%s", candidate);
-            shell_sd_end(&session, "call");
-            return true;
+            found = true;
+            goto done;
         }
     }
 
     if (path_env != NULL && path_env[0] != '\0' && !shell_path_has_directory_component(command_name)) {
-        snprintf(path_copy, sizeof(path_copy), "%s", path_env);
+        snprintf(path_copy, SHELL_ENV_VALUE_BYTES, "%s", path_env);
         entry = strtok_r(path_copy, ";", &context);
         while (entry != NULL) {
-            char dir_path[SHELL_SD_PATH_BYTES];
-
-            if (shell_fs_resolve_path(entry, dir_path, sizeof(dir_path)) == ESP_OK) {
-                int written = snprintf(candidate, sizeof(candidate), "%s/%s", dir_path, command_name);
-                if (written > 0 && (size_t)written < sizeof(candidate) &&
+            if (shell_fs_resolve_path(entry, dir_path, SHELL_SD_PATH_BYTES) == ESP_OK) {
+                int written = snprintf(candidate, SHELL_SD_PATH_BYTES, "%s/%s", dir_path, command_name);
+                if (written > 0 && (size_t)written < SHELL_SD_PATH_BYTES &&
                     shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
                     snprintf(resolved_path, resolved_path_size, "%s", candidate);
-                    shell_sd_end(&session, "call");
-                    return true;
+                    found = true;
+                    goto done;
                 }
 
                 if (!shell_path_has_extension(command_name, ".bat")) {
-                    written = snprintf(candidate, sizeof(candidate), "%s/%s.bat", dir_path, command_name);
-                    if (written > 0 && (size_t)written < sizeof(candidate) &&
+                    written = snprintf(candidate, SHELL_SD_PATH_BYTES, "%s/%s.bat", dir_path, command_name);
+                    if (written > 0 && (size_t)written < SHELL_SD_PATH_BYTES &&
                         shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
                         snprintf(resolved_path, resolved_path_size, "%s", candidate);
-                        shell_sd_end(&session, "call");
-                        return true;
+                        found = true;
+                        goto done;
                     }
                 }
             }
@@ -1288,8 +1491,13 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
         }
     }
 
+done:
     shell_sd_end(&session, "call");
-    return false;
+    free(candidate);
+    free(path_copy);
+    free(dir_path);
+    free(with_ext);
+    return found;
 }
 
 /* ========================================================================
@@ -1323,6 +1531,16 @@ void shell_command_goto(int argc, char **argv)
         shell_transcript_append_text("goto: only valid inside batch files\n");
         return;
     }
+    /* :eof is an implicit end-of-file label: jump to the end of the current
+     * batch frame, unwinding any open setlocal scopes — exactly like reaching
+     * the end of the file. Compared case-insensitively like every other
+     * batch label, so `goto :EOF` works too. */
+    if (strcasecmp(argv[1], ":eof") == 0 || strcasecmp(argv[1], "eof") == 0) {
+        s_goto_eof = true;
+        s_goto_pending = true;
+        s_goto_label[0] = '\0';
+        return;
+    }
     snprintf(s_goto_label, sizeof(s_goto_label), ":%s", argv[1]);
     s_goto_pending = true;
 }
@@ -1345,22 +1563,34 @@ void shell_command_shift(int argc, char **argv)
 
 void shell_command_if(int argc, char **argv)
 {
-    /* Supports: if errorlevel N command, if exist file command, if NOT ... */
+    /* Supports: if errorlevel N command, if exist file command, if NOT ...,
+     * and the numeric keyword comparisons (EQU NEQ LSS LEQ GTR GEQ). */
     if (argc < 3) {
-        shell_print_usage("Usage: if [not] errorlevel N command | if [not] exist file command");
+        shell_print_usage("Usage: if [/i] [not] errorlevel N cmd | if [/i] [not] exist file cmd | if [/i] [not] \"a\"==\"b\" cmd | if [not] a EQU|NEQ|LSS|LEQ|GTR|GEQ b cmd");
         return;
     }
 
     int arg_idx = 1;
     bool not_flag = false;
+    bool ignore_case = false;
 
-    if (shell_text_equals_ignore_case(argv[arg_idx], "not")) {
-        not_flag = true;
-        arg_idx++;
-        if (arg_idx >= argc) {
-            shell_transcript_append_text("if: expected condition after 'not'\n");
-            return;
+    /* Consume the optional `/i` (case-insensitive) and `not` flags in either
+     * order: `if /i not X cmd`, `if not /i X cmd`, `if /i X cmd`, etc. */
+    for (int i = 0; i < 2 && arg_idx < argc; i++) {
+        if (shell_text_equals_ignore_case(argv[arg_idx], "/i")) {
+            ignore_case = true;
+            arg_idx++;
+        } else if (shell_text_equals_ignore_case(argv[arg_idx], "not")) {
+            not_flag = true;
+            arg_idx++;
+        } else {
+            break;
         }
+    }
+
+    if (arg_idx >= argc) {
+        shell_transcript_append_text("if: expected condition\n");
+        return;
     }
 
     bool condition = false;
@@ -1383,57 +1613,107 @@ void shell_command_if(int argc, char **argv)
         {
             /* Resolve against the current directory and inside a guarded SD
              * session, the same as every other filesystem command. A bare
-             * stat() on the raw argument fails for any relative path. */
-            char resolved[SHELL_SD_PATH_BYTES];
+             * stat() on the raw argument fails for any relative path. The
+             * path buffer is SD-path sized and `if` runs on the recursive
+             * batch path, so it is heap-allocated. */
+            char *resolved = malloc(SHELL_SD_PATH_BYTES);
             shell_sd_session_t session;
             struct stat st;
 
             condition = false;
-            if (shell_fs_resolve_path(argv[arg_idx], resolved, sizeof(resolved)) == ESP_OK &&
+            if (resolved == NULL) {
+                shell_transcript_append_text("if: out of memory\n");
+                return;
+            }
+            if (shell_fs_resolve_path(argv[arg_idx], resolved, SHELL_SD_PATH_BYTES) == ESP_OK &&
                 shell_sd_begin(&session) == ESP_OK) {
                 condition = (shell_sd_stat_path(resolved, &st) == ESP_OK);
                 shell_sd_end(&session, "if exist");
             }
+            free(resolved);
         }
         arg_idx++;
     } else {
-        /* String comparison. The tokenizer already removed the quoting, so
-         * `if "%VAR%"=="yes"` arrives as a single argument `<value>==yes`
-         * and `if a == b` arrives as three. Handle both spellings.
-         *
-         * Quoting still matters to the user: it is what keeps an empty or
-         * space-containing value from collapsing the comparison into a
-         * malformed expression before it reaches here. */
-        char *eq = strstr(argv[arg_idx], "==");
+        /* Numeric comparison via the cmd.exe keywords, or a string
+         * comparison with `==`. The numeric form is
+         * `if [not] [/i] <operand1> <OP> <operand2> <command>` where OP is
+         * EQU, NEQ, LSS, LEQ, GTR or GEQ. Operands are parsed as decimal
+         * integers; a non-numeric operand reads as 0, matching cmd.exe. */
+        if (arg_idx + 2 < argc &&
+            (shell_text_equals_ignore_case(argv[arg_idx + 1], "EQU") ||
+             shell_text_equals_ignore_case(argv[arg_idx + 1], "NEQ") ||
+             shell_text_equals_ignore_case(argv[arg_idx + 1], "LSS") ||
+             shell_text_equals_ignore_case(argv[arg_idx + 1], "LEQ") ||
+             shell_text_equals_ignore_case(argv[arg_idx + 1], "GTR") ||
+             shell_text_equals_ignore_case(argv[arg_idx + 1], "GEQ"))) {
+            const char *op = argv[arg_idx + 1];
+            long left = strtol(argv[arg_idx], NULL, 10);
+            long right = strtol(argv[arg_idx + 2], NULL, 10);
 
-        if (eq != NULL) {
-            /* Joined form: left==right in one argument. */
-            *eq = '\0';
-            const char *left = argv[arg_idx];
-            const char *right = eq + 2;
-            condition = (strcmp(left, right) == 0);
-            arg_idx++;
-        } else if (arg_idx + 2 < argc && strcmp(argv[arg_idx + 1], "==") == 0) {
-            /* Spaced form: left == right as three arguments. */
-            condition = (strcmp(argv[arg_idx], argv[arg_idx + 2]) == 0);
+            if (shell_text_equals_ignore_case(op, "EQU")) {
+                condition = (left == right);
+            } else if (shell_text_equals_ignore_case(op, "NEQ")) {
+                condition = (left != right);
+            } else if (shell_text_equals_ignore_case(op, "LSS")) {
+                condition = (left < right);
+            } else if (shell_text_equals_ignore_case(op, "LEQ")) {
+                condition = (left <= right);
+            } else if (shell_text_equals_ignore_case(op, "GTR")) {
+                condition = (left > right);
+            } else {
+                condition = (left >= right);
+            }
             arg_idx += 3;
-        } else if (arg_idx + 1 < argc && strncmp(argv[arg_idx + 1], "==", 2) == 0) {
-            /* Half-spaced form: left ==right. */
-            condition = (strcmp(argv[arg_idx], argv[arg_idx + 1] + 2) == 0);
-            arg_idx += 2;
         } else {
-            shell_print_error("if: unsupported condition");
-            return;
+            /* String comparison. The tokenizer already removed the quoting, so
+             * `if "%VAR%"=="yes"` arrives as a single argument `<value>==yes`
+             * and `if a == b` arrives as three. Handle both spellings.
+             *
+             * Quoting still matters to the user: it is what keeps an empty or
+             * space-containing value from collapsing the comparison into a
+             * malformed expression before it reaches here.
+             *
+             * `/i` selects case-insensitive comparison (strcasecmp). */
+            int (*cmp)(const char *, const char *) = ignore_case ? strcasecmp : strcmp;
+            char *eq = strstr(argv[arg_idx], "==");
+
+            if (eq != NULL) {
+                /* Joined form: left==right in one argument. */
+                *eq = '\0';
+                const char *left = argv[arg_idx];
+                const char *right = eq + 2;
+                condition = (cmp(left, right) == 0);
+                arg_idx++;
+            } else if (arg_idx + 2 < argc && strcmp(argv[arg_idx + 1], "==") == 0) {
+                /* Spaced form: left == right as three arguments. */
+                condition = (cmp(argv[arg_idx], argv[arg_idx + 2]) == 0);
+                arg_idx += 3;
+            } else if (arg_idx + 1 < argc && strncmp(argv[arg_idx + 1], "==", 2) == 0) {
+                /* Half-spaced form: left ==right. */
+                condition = (cmp(argv[arg_idx], argv[arg_idx + 1] + 2) == 0);
+                arg_idx += 2;
+            } else {
+                shell_print_error("if: unsupported condition");
+                return;
+            }
         }
     }
 
     if (not_flag) condition = !condition;
 
     if (condition && arg_idx < argc) {
-        /* Execute the rest of the line as a command */
-        char cmd[SHELL_COMMAND_BYTES];
-        shell_join_args(argv, arg_idx, argc, cmd, sizeof(cmd));
+        /* Execute the rest of the line as a command. The joined command is
+         * line-width and `if` re-enters the pipeline (recursive batch path),
+         * so the buffer is heap-allocated and freed after the nested run. */
+        char *cmd = malloc(SHELL_COMMAND_BYTES);
+
+        if (cmd == NULL) {
+            shell_transcript_append_text("if: out of memory\n");
+            return;
+        }
+        shell_join_args(argv, arg_idx, argc, cmd, SHELL_COMMAND_BYTES);
         batch_run_nested(cmd);
+        free(cmd);
     }
 }
 
@@ -1468,7 +1748,7 @@ void shell_command_pause(int argc, char **argv)
 void shell_command_choice(int argc, char **argv)
 {
     char options[SHELL_COMMAND_BYTES];
-    char message[SHELL_BATCH_LINE_BYTES];
+    char *message = NULL;
     const char *default_key = NULL;
     bool show_list = true;
     bool case_sensitive = false;
@@ -1479,6 +1759,14 @@ void shell_command_choice(int argc, char **argv)
     int chosen = -1;
 
     snprintf(options, sizeof(options), "YN");
+
+    /* The prompt text is line-sized and `choice` runs on the recursive batch
+     * path, so it is heap-allocated and freed at the single exit. */
+    message = malloc(SHELL_BATCH_LINE_BYTES);
+    if (message == NULL) {
+        shell_transcript_append_text("choice: out of memory\n");
+        return;
+    }
     message[0] = '\0';
 
     /* Parse the DOS switch set. Anything that is not a switch becomes the
@@ -1498,7 +1786,7 @@ void shell_command_choice(int argc, char **argv)
             case 'C':
                 if (*value == '\0') {
                     shell_transcript_append_text("choice: /C needs a key list, for example /C:YNC\n");
-                    return;
+                    goto done;
                 }
                 snprintf(options, sizeof(options), "%s", value);
                 continue;
@@ -1514,7 +1802,7 @@ void shell_command_choice(int argc, char **argv)
 
                 if (value[0] == '\0' || comma == NULL || comma == value) {
                     shell_transcript_append_text("choice: /T needs a key and seconds, for example /T:Y,10\n");
-                    return;
+                    goto done;
                 }
 
                 {
@@ -1535,20 +1823,20 @@ void shell_command_choice(int argc, char **argv)
             default:
                 shell_print_error("choice: unknown option %s", token);
                 shell_print_usage("Usage: choice [/C:list] [/N] [/T:c,secs] [/S] [text]");
-                return;
+                goto done;
             }
         }
 
         if (message[0] != '\0') {
-            strncat(message, " ", sizeof(message) - strlen(message) - 1);
+            strncat(message, " ", SHELL_BATCH_LINE_BYTES - strlen(message) - 1);
         }
-        strncat(message, token, sizeof(message) - strlen(message) - 1);
+        strncat(message, token, SHELL_BATCH_LINE_BYTES - strlen(message) - 1);
     }
 
     option_count = strlen(options);
     if (option_count == 0) {
         shell_transcript_append_text("choice: the key list is empty\n");
-        return;
+        goto done;
     }
 
     /* Render the prompt in DOS form: "text [Y,N]?" */
@@ -1583,7 +1871,7 @@ void shell_command_choice(int argc, char **argv)
 
         shell_transcript_appendf("%c (no interactive input, using the default)\n", options[chosen]);
         s_errorlevel = chosen + 1;
-        return;
+        goto done;
     }
 
     shell_key_wait_begin();
@@ -1631,6 +1919,9 @@ void shell_command_choice(int argc, char **argv)
 
     /* DOS reports the 1-based index of the chosen key in errorlevel. */
     s_errorlevel = chosen + 1;
+
+done:
+    free(message);
 }
 
 void shell_command_setlocal(int argc, char **argv)
@@ -1866,8 +2157,15 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
         return ESP_ERR_NO_MEM;
     }
 
-    frame->echo_enabled = true;
-    frame->argc = MIN(argc, SHELL_BATCH_ARGS_MAX);
+    frame->echo_enabled = s_default_echo;
+    /* Classic DOS: %0 is the script name (path as invoked), and the caller's
+     * arguments begin at %1. Store the path in args[0] and shift the passed
+     * arguments up by one slot so argv[0] -> args[1], etc. */
+    frame->argc = MIN(argc + 1, SHELL_BATCH_ARGS_MAX);
+    snprintf(frame->args[0], sizeof(frame->args[0]), "%s", path);
+    for (index = 0; index < argc && index + 1 < SHELL_BATCH_ARGS_MAX; index++) {
+        snprintf(frame->args[index + 1], sizeof(frame->args[index + 1]), "%s", argv[index]);
+    }
     frame->depth = depth;
     frame->parent = s_active_batch_frame;
     frame->label_count = 0;
@@ -1892,9 +2190,8 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
 
     frame->batch_file = file;
 
-    for (index = 0; index < frame->argc; index++) {
-        snprintf(frame->args[index], sizeof(frame->args[index]), "%s", argv[index]);
-    }
+    /* args[0] already holds the script path; the caller's arguments were
+     * copied into args[1..] above, so no further copying is needed here. */
 
     /* Scan for labels first */
     shell_scan_batch_labels(frame, file);
@@ -2011,6 +2308,13 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
             break;
         }
 
+        /* `goto :eof` jumps to the end of the current batch frame. */
+        if (s_goto_eof) {
+            s_goto_eof = false;
+            s_goto_pending = false;
+            break;
+        }
+
         /* Check for goto or call :label that may have changed execution flow */
         if (s_goto_pending) {
             long label_pos = shell_find_label_pos(frame, s_goto_label + 1);
@@ -2033,6 +2337,16 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
     /* Discard any setlocal scope this file left open, restoring the caller's
      * environment and releasing the snapshots. */
     shell_setlocal_unwind_to(setlocal_depth_on_entry);
+
+    /* A pending `goto` / `goto :eof` belongs to this frame only: labels are
+     * resolved against this file's label table. Once the frame returns the
+     * flags are stale and must not leak into the caller, which would
+     * otherwise break out of its own line loop. `exit` already clears them;
+     * this also covers a goto issued from inside a `for` or `if` body that
+     * ended the loop early. */
+    s_goto_pending = false;
+    s_goto_eof = false;
+    s_goto_label[0] = '\0';
 
     /* `exit /b` stops only this file; the caller keeps running. A bare
      * `exit` keeps unwinding until no batch frame is left. */
@@ -2088,8 +2402,17 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
     if (frame == NULL || file == NULL) return;
 
     long current_pos = ftell(file);
-    char line[SHELL_BATCH_LINE_BYTES];
     long line_pos = 0;
+    bool previous_continues = false;
+
+    /* The read buffer is line-sized, so it lives on the heap: this function
+     * runs from shell_execute_batch_file(), which is on the recursive batch
+     * path, and a line-sized stack buffer there would stack up across nesting
+     * levels. */
+    char *line = malloc(SHELL_BATCH_LINE_BYTES);
+    if (line == NULL) {
+        return;
+    }
 
     rewind(file);
     frame->label_count = 0;
@@ -2097,9 +2420,7 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
     /* Tracks whether the previous physical line ended with an unescaped
      * continuation caret. A line that is the tail of a continuation is part
      * of the command above it, so a ':' at its start is data, not a label. */
-    bool previous_continues = false;
-
-    while (fgets(line, sizeof(line), file) != NULL) {
+    while (fgets(line, SHELL_BATCH_LINE_BYTES, file) != NULL) {
         line_pos = ftell(file);
         char *trimmed = shell_trim(line);
         bool this_continues;
@@ -2136,15 +2457,73 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
     }
 
     fseek(file, current_pos, SEEK_SET);
+    free(line);
+}
+
+/* Helper: substitute a `for` variable with a value in the body and run it. */
+static void shell_for_substitute_and_run(const char *do_command, char var_name, const char *value)
+{
+    /* The expanded body is line-sized and this helper runs from the
+     * recursive batch path (for-loop body re-enters the command pipeline),
+     * so the buffer is heap-allocated and freed after the nested command
+     * returns. */
+    const size_t cmd_size = SHELL_BATCH_LINE_BYTES * 2;
+    char *expanded_cmd = malloc(cmd_size);
+    const char *src;
+    char *dst;
+    size_t remaining;
+
+    if (expanded_cmd == NULL) {
+        shell_transcript_append_text("for: out of memory expanding the loop body\n");
+        return;
+    }
+
+    src = do_command;
+    dst = expanded_cmd;
+    remaining = cmd_size - 1;
+
+    while (*src != '\0' && remaining > 0) {
+        /* In a batch file the loop variable is written `%%var` (the doubled
+         * percent is the batch-file escape for a literal `%`). Accept that
+         * form first, then the single `%var` for tolerance, and substitute
+         * the current value for either. */
+        if (*src == '%' && *(src + 1) == '%' && *(src + 2) == var_name) {
+            const char *replacement = value;
+            while (*replacement != '\0' && remaining > 0) {
+                *dst++ = *replacement++;
+                remaining--;
+            }
+            src += 3;
+        } else if (*src == '%' && *(src + 1) == var_name) {
+            const char *replacement = value;
+            while (*replacement != '\0' && remaining > 0) {
+                *dst++ = *replacement++;
+                remaining--;
+            }
+            src += 2;
+        } else {
+            *dst++ = *src++;
+            remaining--;
+        }
+    }
+    *dst = '\0';
+
+    batch_run_nested(expanded_cmd);
+    free(expanded_cmd);
 }
 
 /* Helper: execute a for loop command */
 static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_line)
 {
+    char *set_str = NULL;
+    char *for_ptr;
+    char *do_command;
+    char var_name;
+
     (void)frame;
 
     /* Parse: for %%var in (set) do command */
-    char *for_ptr = strstr(command_line, "for ");
+    for_ptr = strstr(command_line, "for ");
     if (for_ptr == NULL) return;
 
     /* Skip "for " */
@@ -2155,7 +2534,7 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
     if (*for_ptr != '%' || *(for_ptr + 1) != '%') return;
     for_ptr += 2;
 
-    char var_name = *for_ptr;
+    var_name = *for_ptr;
     if (!isalpha((unsigned char)var_name)) return;
     for_ptr++;
     while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
@@ -2169,67 +2548,95 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
     if (*for_ptr != '(') return;
     for_ptr++;
 
-    /* Parse the set - everything until ")" */
-    char set_str[SHELL_BATCH_LINE_BYTES];
-    char *set_ptr = set_str;
-    int paren_depth = 1;
-    while (*for_ptr && paren_depth > 0 && set_ptr - set_str < (int)sizeof(set_str) - 1) {
-        if (*for_ptr == '(') paren_depth++;
-        else if (*for_ptr == ')') paren_depth--;
-        if (paren_depth > 0) {
-            *set_ptr++ = *for_ptr;
-        }
-        for_ptr++;
+    /* Parse the set - everything until ")". The set is line-sized and this
+     * function sits on the recursive batch path, so it is heap-allocated and
+     * freed on every exit. */
+    set_str = malloc(SHELL_BATCH_LINE_BYTES);
+    if (set_str == NULL) {
+        shell_transcript_append_text("for: out of memory parsing the set\n");
+        return;
     }
-    *set_ptr = '\0';
+    {
+        char *set_ptr = set_str;
+        int paren_depth = 1;
+
+        while (*for_ptr && paren_depth > 0 && set_ptr - set_str < SHELL_BATCH_LINE_BYTES - 1) {
+            if (*for_ptr == '(') paren_depth++;
+            else if (*for_ptr == ')') paren_depth--;
+            if (paren_depth > 0) {
+                *set_ptr++ = *for_ptr;
+            }
+            for_ptr++;
+        }
+        *set_ptr = '\0';
+    }
 
     while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
 
     /* Expect "do" */
-    if (strncasecmp(for_ptr, "do", 2) != 0) return;
+    if (strncasecmp(for_ptr, "do", 2) != 0) {
+        free(set_str);
+        return;
+    }
     for_ptr += 2;
     while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
 
-    if (*for_ptr == '\0') return;
+    if (*for_ptr == '\0') {
+        free(set_str);
+        return;
+    }
 
-    char *do_command = shell_trim(for_ptr);
-    if (*do_command == '\0') return;
+    do_command = shell_trim(for_ptr);
+    if (*do_command == '\0') {
+        free(set_str);
+        return;
+    }
 
-    /* Now iterate over the set */
-    char *save_ptr = NULL;
-    char *token = strtok_r(set_str, " \t", &save_ptr);
-    while (token != NULL) {
-        /* Substitute every %<var> occurrence in the body with this token */
-        char expanded_cmd[SHELL_BATCH_LINE_BYTES * 2];
-        char *src = do_command;
-        char *dst = expanded_cmd;
-        size_t remaining = sizeof(expanded_cmd) - 1;
+    /* Wildcard set: if the set contains `*` or `?`, expand it against the
+     * filesystem and iterate over matching paths. Otherwise fall through to
+     * the classic in-line token set. */
+    if (strchr(set_str, '*') != NULL || strchr(set_str, '?') != NULL) {
+        char **tokens = NULL;
+        int count = 0;
+        esp_err_t error = storage_expand_wildcard(set_str, &tokens, &count);
 
-        while (*src && remaining > 0) {
-            if (*src == '%' && *(src + 1) == var_name) {
-                const char *replacement = token;
-                while (*replacement && remaining > 0) {
-                    *dst++ = *replacement++;
-                    remaining--;
-                }
-                src += 2;
-            } else {
-                *dst++ = *src++;
-                remaining--;
-            }
-        }
-        *dst = '\0';
-
-        /* Execute the expanded command */
-        batch_run_nested(expanded_cmd);
-
-        /* Check for goto/exit conditions that end the loop early */
-        if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+        if (error != ESP_OK) {
+            shell_print_warning("for: could not expand %s (%s)", set_str, esp_err_to_name(error));
+            shell_record_warningf("for", "Wildcard expansion failed for %s", set_str);
+            free(set_str);
             return;
         }
 
-        token = strtok_r(NULL, " \t", &save_ptr);
+        for (int i = 0; i < count; i++) {
+            shell_for_substitute_and_run(do_command, var_name, tokens[i]);
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+        }
+
+        storage_free_wildcard_expansion(tokens, count);
+        free(set_str);
+        return;
     }
+
+    /* Now iterate over the set */
+    {
+        char *save_ptr = NULL;
+        char *token = strtok_r(set_str, " \t", &save_ptr);
+
+        while (token != NULL) {
+            shell_for_substitute_and_run(do_command, var_name, token);
+
+            /* Check for goto/exit conditions that end the loop early */
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+
+            token = strtok_r(NULL, " \t", &save_ptr);
+        }
+    }
+
+    free(set_str);
 }
 
 /* ========================================================================
@@ -2263,4 +2670,37 @@ void batch_init(void)
 bool batch_is_initialized(void)
 {
     return s_initialized;
+}
+
+void batch_set_default_echo(bool enabled)
+{
+    s_default_echo = enabled;
+}
+
+void batch_boot_execute_command(const char *command)
+{
+    char *command_copy;
+    size_t command_len;
+
+    if (command == NULL || command[0] == '\0') {
+        return;
+    }
+    if (s_command_ops.execute_command == NULL) {
+        return;
+    }
+
+    /* The pipeline takes a mutable buffer, and the caller's string may be
+     * read-only storage. Copy it on the heap (this may run at boot, outside
+     * the worker task's command path) and release it when the command
+     * returns. */
+    command_len = strlen(command);
+    command_copy = malloc(command_len + 1);
+    if (command_copy == NULL) {
+        shell_transcript_append_text("shell: out of memory executing a boot command\n");
+        return;
+    }
+
+    snprintf(command_copy, command_len + 1, "%s", command);
+    s_command_ops.execute_command(command_copy);
+    free(command_copy);
 }

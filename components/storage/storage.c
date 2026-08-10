@@ -18,6 +18,7 @@
 #include "header.h"
 #include "p4minishell_config.h"
 #include "bsp/esp-bsp.h"
+#include "sdmmc_cmd.h"
 #include "esp_log.h"
 #include <ctype.h>
 #include <errno.h>
@@ -820,6 +821,171 @@ esp_err_t shell_print_file_text(const char *normalized_path)
     return ESP_OK;
 }
 
+/* ========================================================================
+ * WILDCARD EXPANSION (for `for` loops)
+ * ======================================================================== */
+
+/**
+ * Split a pattern into its directory part and filename-wildcard part.
+ * Mutates @p pattern in place by null-terminating the directory and returning
+ * a pointer to the name. For `sub\*.txt` the directory is `sub` and the name
+ * is `*.txt`; for `*.txt` the directory is empty and the name is the whole
+ * pattern.
+ */
+static char *storage_split_pattern(char *pattern, char **dir_out)
+{
+    char *last_sep = NULL;
+    char *p = pattern;
+
+    while (*p != '\0') {
+        if (*p == '\\' || *p == '/') {
+            last_sep = p;
+        }
+        p++;
+    }
+
+    if (last_sep == NULL) {
+        *dir_out = "";
+        return pattern;
+    }
+
+    *last_sep = '\0';
+    *dir_out = pattern;
+    return last_sep + 1;
+}
+
+esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *count_out)
+{
+    shell_sd_session_t session;
+    char pattern_copy[SHELL_SD_PATH_BYTES];
+    char *name_pattern;
+    char *dir_part;
+    char dir_resolved[SHELL_SD_PATH_BYTES];
+    char fatfs_path[SHELL_SD_PATH_BYTES];
+    char lfn[SHELL_LFN_BYTES];
+    FF_DIR dir;
+    FILINFO entry_info;
+    FRESULT result;
+    esp_err_t error;
+    char **tokens = NULL;
+    int count = 0;
+    int capacity = 0;
+
+    if (pattern == NULL || tokens_out == NULL || count_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *tokens_out = NULL;
+    *count_out = 0;
+
+    if (strlen(pattern) >= sizeof(pattern_copy)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    snprintf(pattern_copy, sizeof(pattern_copy), "%s", pattern);
+
+    name_pattern = storage_split_pattern(pattern_copy, &dir_part);
+
+    /* Resolve the directory portion against the SD root / cwd. An empty
+     * directory means the current working directory. */
+    {
+        char *resolve_input = (dir_part[0] != '\0') ? dir_part : ".";
+        error = shell_fs_resolve_path(resolve_input, dir_resolved, sizeof(dir_resolved));
+        if (error != ESP_OK) {
+            return error;
+        }
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_vfs_to_fatfs_path(dir_resolved, fatfs_path, sizeof(fatfs_path));
+    if (error != ESP_OK) {
+        shell_sd_end(&session, "wildcard");
+        return error;
+    }
+
+    memset(&dir, 0, sizeof(dir));
+    memset(&entry_info, 0, sizeof(entry_info));
+    result = f_opendir(&dir, fatfs_path);
+    if (result != FR_OK) {
+        shell_sd_end(&session, "wildcard");
+        return shell_sd_fresult_to_esp_err(result);
+    }
+
+    while (true) {
+        result = f_readdir(&dir, &entry_info);
+        if (result != FR_OK || entry_info.fname[0] == '\0') {
+            break;
+        }
+
+        if (strcmp(entry_info.fname, ".") == 0 || strcmp(entry_info.fname, "..") == 0) {
+            continue;
+        }
+        if (entry_info.fattrib & AM_DIR) {
+            continue;   /* file-only wildcard for basic set form */
+        }
+        if (!shell_wildcard_match(name_pattern, entry_info.fname)) {
+            continue;
+        }
+
+        if (count >= SHELL_SD_LIST_LIMIT) {
+            shell_record_warningf("wildcard", "Wildcard expansion truncated at %d entries", SHELL_SD_LIST_LIMIT);
+            break;
+        }
+
+        /* Grow the token array. Start small and double; heap-allocated so it
+         * never lives on the recursive command/batch stack. */
+        if (count >= capacity) {
+            int new_cap = (capacity == 0) ? 8 : capacity * 2;
+            char **grown = realloc(tokens, sizeof(char *) * new_cap);
+            if (grown == NULL) {
+                free(tokens);
+                f_closedir(&dir);
+                shell_sd_end(&session, "wildcard");
+                return ESP_ERR_NO_MEM;
+            }
+            tokens = grown;
+            capacity = new_cap;
+        }
+
+        snprintf(lfn, sizeof(lfn), "%s", entry_info.fname);
+        size_t token_len = strlen(dir_resolved) + 1 + strlen(lfn) + 1;
+        char *token = malloc(token_len);
+        if (token == NULL) {
+            storage_free_wildcard_expansion(tokens, count);
+            f_closedir(&dir);
+            shell_sd_end(&session, "wildcard");
+            return ESP_ERR_NO_MEM;
+        }
+        if (dir_resolved[0] != '\0' && strcmp(dir_resolved, BSP_SD_MOUNT_POINT) != 0) {
+            snprintf(token, token_len, "%s/%s", dir_resolved, lfn);
+        } else {
+            snprintf(token, token_len, "%s", lfn);
+        }
+        tokens[count++] = token;
+    }
+
+    f_closedir(&dir);
+    shell_sd_end(&session, "wildcard");
+
+    *tokens_out = tokens;
+    *count_out = count;
+    return ESP_OK;
+}
+
+void storage_free_wildcard_expansion(char **tokens, int count)
+{
+    if (tokens == NULL) {
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        free(tokens[i]);
+    }
+    free(tokens);
+}
+
 esp_err_t shell_write_redirect_output(const char *path, const char *text, bool append_mode)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
@@ -908,6 +1074,384 @@ esp_err_t storage_get_space_info(storage_space_info_t *info_out)
 
     shell_sd_end(&session, "space");
     return ESP_OK;
+}
+
+/* ========================================================================
+ * DISK AND PARTITION SERVICES (diskpart / DOS FORMAT style)
+ * ========================================================================
+ * Physical-disk operations for the SD card. The command layer owns argument
+ * parsing and the destructive-confirmation contract; the mechanics here keep
+ * storage.c as the single owner of mount state and low-level FATFS/sdmmc
+ * access. Volume targeting is parameterized (storage_volume_t) so a future
+ * USB OTG MSC volume can be added without changing the command surface.
+ */
+
+/* MBR partition-table layout, matching FatFs ff.c's own constants. */
+#define STORAGE_MBR_TABLE_OFFSET      446
+#define STORAGE_MBR_PTE_SIZE          16
+#define STORAGE_MBR_SIGNATURE_OFFSET  510
+#define STORAGE_PTE_BOOT_FLAG         0
+#define STORAGE_PTE_TYPE_OFFSET       4
+#define STORAGE_PTE_START_OFFSET      8
+#define STORAGE_PTE_SIZE_OFFSET       12
+#define STORAGE_PTE_BOOTABLE          0x80
+/* FAT32 with LBA addressing; the partition type `format` produces for a
+ * modern (>= 2 GiB) SD card. FAT12/16 use 0x01/0x04/0x06/0x0E. */
+#define STORAGE_PARTITION_TYPE_FAT32_LBA 0x0C
+
+/** Decode a little-endian DWORD from an MBR PTE. */
+static uint32_t storage_mbr_get_dword(const uint8_t *src)
+{
+    return (uint32_t)src[0]
+         | ((uint32_t)src[1] << 8)
+         | ((uint32_t)src[2] << 16)
+         | ((uint32_t)src[3] << 24);
+}
+
+static void storage_mbr_put_dword(uint8_t *dst, uint32_t value)
+{
+    dst[0] = (uint8_t)(value & 0xFF);
+    dst[1] = (uint8_t)((value >> 8) & 0xFF);
+    dst[2] = (uint8_t)((value >> 16) & 0xFF);
+    dst[3] = (uint8_t)((value >> 24) & 0xFF);
+}
+
+static esp_err_t storage_volume_require_sd(storage_volume_t vol)
+{
+    if (vol != STORAGE_VOLUME_SD) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return ESP_OK;
+}
+
+esp_err_t storage_disk_get_info(storage_volume_t vol, storage_disk_info_t *out)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    if (bsp_sdcard != NULL) {
+        snprintf(out->card_name, sizeof(out->card_name), "%s", bsp_sdcard->cid.name);
+        out->sector_size = bsp_sdcard->csd.sector_size;
+        out->sector_count = bsp_sdcard->csd.capacity;
+        out->capacity_bytes = (uint64_t)out->sector_size * (uint64_t)out->sector_count;
+        out->max_freq_khz = bsp_sdcard->max_freq_khz;
+    }
+
+    shell_sd_end(&session, "disk info");
+    return (bsp_sdcard != NULL) ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out)
+{
+    shell_sd_session_t session;
+    uint8_t sector[512];
+    esp_err_t error;
+    int index;
+
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (bsp_sdcard == NULL) {
+        shell_sd_end(&session, "disk detail");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = sdmmc_read_sectors(bsp_sdcard, sector, 0, 1);
+    shell_sd_end(&session, "disk detail");
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    if (sector[STORAGE_MBR_SIGNATURE_OFFSET] != 0x55 ||
+        sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
+        /* No valid partition table; the struct stays valid=false. */
+        return ESP_OK;
+    }
+
+    out->valid = true;
+    for (index = 0; index < 4; index++) {
+        const uint8_t *pte = sector + STORAGE_MBR_TABLE_OFFSET + index * STORAGE_MBR_PTE_SIZE;
+
+        out->partitions[index].bootable = (pte[STORAGE_PTE_BOOT_FLAG] == STORAGE_PTE_BOOTABLE);
+        out->partitions[index].type = pte[STORAGE_PTE_TYPE_OFFSET];
+        out->partitions[index].start_lba = storage_mbr_get_dword(pte + STORAGE_PTE_START_OFFSET);
+        out->partitions[index].size_lba = storage_mbr_get_dword(pte + STORAGE_PTE_SIZE_OFFSET);
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t storage_disk_clean(storage_volume_t vol)
+{
+    shell_sd_session_t session;
+    uint8_t sector[512];
+    esp_err_t error;
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (bsp_sdcard == NULL) {
+        shell_sd_end(&session, "disk clean");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Unmount the FATFS volume so no stale partition cache survives the MBR
+     * rewrite. The card stays initialized, so `format` can run afterwards. */
+    f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
+
+    memset(sector, 0, sizeof(sector));
+    sector[STORAGE_MBR_SIGNATURE_OFFSET] = 0x55;
+    sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+
+    error = sdmmc_write_sectors(bsp_sdcard, sector, 0, 1);
+
+    /* Even on write failure the volume is unmounted and the old partition
+     * table may be gone, so reflect "card present, no filesystem". */
+    header_update_sd(HEADER_SD_INSERTED);
+    shell_sd_end(&session, "disk clean");
+    return error;
+}
+
+esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t size_bytes)
+{
+    shell_sd_session_t session;
+    uint8_t sector[512];
+    uint64_t total_sectors;
+    uint64_t start_lba;
+    uint64_t size_lba;
+    int slot = -1;
+    int index;
+    esp_err_t error;
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (bsp_sdcard == NULL) {
+        shell_sd_end(&session, "disk create");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = sdmmc_read_sectors(bsp_sdcard, sector, 0, 1);
+    if (error != ESP_OK) {
+        shell_sd_end(&session, "disk create");
+        return error;
+    }
+
+    /* Find the first free partition-table slot (no type and no size). */
+    for (index = 0; index < 4; index++) {
+        const uint8_t *pte = sector + STORAGE_MBR_TABLE_OFFSET + index * STORAGE_MBR_PTE_SIZE;
+        bool occupied = (pte[STORAGE_PTE_TYPE_OFFSET] != 0) ||
+                        (storage_mbr_get_dword(pte + STORAGE_PTE_SIZE_OFFSET) != 0);
+
+        if (!occupied && slot == -1) {
+            slot = index;
+        }
+    }
+    if (slot == -1) {
+        shell_sd_end(&session, "disk create");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Size and align the partition. */
+    total_sectors = (uint64_t)bsp_sdcard->csd.capacity;
+    start_lba = P4_CONFIG_DISK_PARTITION_ALIGN_SECTORS;
+    if (size_bytes > 0) {
+        size_lba = size_bytes / (uint64_t)bsp_sdcard->csd.sector_size;
+    } else {
+        size_lba = 0;
+    }
+    if (size_lba == 0 || start_lba + size_lba > total_sectors) {
+        size_lba = (start_lba < total_sectors) ? (total_sectors - start_lba) : 0;
+    }
+    if (size_lba == 0) {
+        shell_sd_end(&session, "disk create");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    {
+        uint8_t *pte = sector + STORAGE_MBR_TABLE_OFFSET + slot * STORAGE_MBR_PTE_SIZE;
+
+        memset(pte, 0, STORAGE_MBR_PTE_SIZE);
+        pte[STORAGE_PTE_TYPE_OFFSET] = STORAGE_PARTITION_TYPE_FAT32_LBA;
+        storage_mbr_put_dword(pte + STORAGE_PTE_START_OFFSET, (uint32_t)start_lba);
+        storage_mbr_put_dword(pte + STORAGE_PTE_SIZE_OFFSET, (uint32_t)size_lba);
+    }
+    sector[STORAGE_MBR_SIGNATURE_OFFSET] = 0x55;
+    sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+
+    /* Unmount before writing so the mounted volume cannot cache a stale
+     * partition table. The card stays initialized for `format`. */
+    f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
+    error = sdmmc_write_sectors(bsp_sdcard, sector, 0, 1);
+
+    header_update_sd(HEADER_SD_INSERTED);
+    shell_sd_end(&session, "disk create");
+    return error;
+}
+
+esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition_index)
+{
+    shell_sd_session_t session;
+    uint8_t sector[512];
+    esp_err_t error;
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (partition_index >= 4) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (bsp_sdcard == NULL) {
+        shell_sd_end(&session, "disk delete");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = sdmmc_read_sectors(bsp_sdcard, sector, 0, 1);
+    if (error != ESP_OK) {
+        shell_sd_end(&session, "disk delete");
+        return error;
+    }
+
+    memset(sector + STORAGE_MBR_TABLE_OFFSET + partition_index * STORAGE_MBR_PTE_SIZE,
+           0, STORAGE_MBR_PTE_SIZE);
+    sector[STORAGE_MBR_SIGNATURE_OFFSET] = 0x55;
+    sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+
+    f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
+    error = sdmmc_write_sectors(bsp_sdcard, sector, 0, 1);
+
+    header_update_sd(HEADER_SD_INSERTED);
+    shell_sd_end(&session, "disk delete");
+    return error;
+}
+
+esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_t *opts)
+{
+    esp_vfs_fat_mount_config_t cfg;
+    esp_err_t error;
+
+    if (opts == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    /* esp_vfs_fat_sdcard_format_cfg() needs an initialized card whose FATFS
+     * context is still registered (a mount or the disk commands keep it so). */
+    if (bsp_sdcard == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* The standard IDF helper unmounts, formats with a size-appropriate FAT
+     * type (FAT12/16 for small volumes, FAT32 for large), and remounts. The
+     * allocation-unit size comes straight from the /A: option; 0 lets FATFS
+     * choose. max_files must match the BSP mount so the remount's VFS
+     * registration is consistent. */
+    cfg.format_if_mount_failed = false;
+    cfg.max_files = 8;
+    cfg.allocation_unit_size = opts->alloc_unit_bytes;
+    cfg.disk_status_check_enable = false;
+    cfg.use_one_fat = false;
+
+    error = esp_vfs_fat_sdcard_format_cfg(BSP_SD_MOUNT_POINT, bsp_sdcard, &cfg);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    /* Apply the requested label to the freshly formatted volume. */
+    if (opts->label[0] != '\0') {
+        char drive_label[24];
+        char padded[12];
+        size_t length = strlen(opts->label);
+        size_t position;
+
+        memset(padded, ' ', 11);
+        padded[11] = '\0';
+        for (position = 0; position < length && position < 11; position++) {
+            padded[position] = (char)toupper((unsigned char)opts->label[position]);
+        }
+        snprintf(drive_label, sizeof(drive_label), "%s%s", SHELL_SD_FATFS_DRIVE, padded);
+        (void)f_setlabel(drive_label);
+    }
+
+    header_update_sd(HEADER_SD_MOUNTED);
+    return ESP_OK;
+}
+
+const char *storage_get_fat_type(void)
+{
+    shell_sd_session_t session;
+    FATFS *fatfs = NULL;
+    DWORD free_clusters = 0;
+
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return "unknown";
+    }
+    if (f_getfree(SHELL_SD_FATFS_DRIVE, &free_clusters, &fatfs) != FR_OK || fatfs == NULL) {
+        shell_sd_end(&session, "fat type");
+        return "unknown";
+    }
+    shell_sd_end(&session, "fat type");
+
+    switch (fatfs->fs_type) {
+    case FS_FAT12:
+        return "FAT12";
+    case FS_FAT16:
+        return "FAT16";
+    case FS_FAT32:
+        return "FAT32";
+    default:
+        return "unknown";
+    }
 }
 
 uint64_t storage_get_file_size(const char *resolved_path)

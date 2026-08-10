@@ -14,6 +14,7 @@ idf_component_register(
         networking
         p4_usb
         shell
+        boot
         clock
         windows
         esp_adc

@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             6
+#define P4_CONFIG_VERSION_PATCH             11
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -230,6 +230,64 @@
  *  production to enforce the version gate. */
 #define P4_CONFIG_HOSTED_SKIP_VERSION_GATE  0
 
+/** Maximum access points surfaced by `wifi scan`. Scan results are sorted by
+ *  RSSI (strongest first) and capped at this value, so a busy channel cannot
+ *  flood the transcript. */
+#define P4_CONFIG_WIFI_SCAN_LIMIT           32
+
+/* ========================================================================
+ * PING AND DNS
+ * ========================================================================
+ * `ping` and `dns` (alias `nslookup`) are classic DOS-style connectivity
+ * commands implemented inside components/networking (the sole owner of the
+ * lwIP / esp_ping surface). They set ERRORLEVEL so batch files can branch,
+ * and they participate in redirection and pipes like every other command. */
+
+/** Default echo-request count for `ping` when no count is given. */
+#define P4_CONFIG_PING_COUNT_DEFAULT        4
+
+/** Hard upper bound for `ping <host> <count>`. A larger request is clamped. */
+#define P4_CONFIG_PING_COUNT_MAX            10
+
+/** Milliseconds each `ping` waits for a single reply before reporting a
+ *  timeout. Also bounds how long the worker task can be blocked per reply. */
+#define P4_CONFIG_PING_TIMEOUT_MS           1000
+
+/** Milliseconds between two consecutive `ping` echo requests. */
+#define P4_CONFIG_PING_INTERVAL_MS          1000
+
+/** Payload size in bytes of each ICMP echo request. */
+#define P4_CONFIG_PING_DATA_BYTES           32
+
+/** Maximum A records `dns` / `nslookup` prints for one hostname. */
+#define P4_CONFIG_DNS_RESULT_LIMIT          8
+
+/* ========================================================================
+ * HTTP CLIENT (httpget / wget)
+ * ========================================================================
+ * `httpget <url> [localfile]` performs a simple HTTPS or HTTP GET through the
+ * esp_http_client stack (the same one c6ota uses for firmware downloads).
+ * All HTTP / TLS code lives inside components/networking; the command layer
+ * only dispatches and writes the returned body to SD. ERRORLEVEL is 0 on an
+ * HTTP 2xx, non-zero otherwise. */
+
+/** Network timeout in milliseconds for a single `httpget` request. */
+#define P4_CONFIG_HTTP_TIMEOUT_MS           15000
+
+/** Maximum response body bytes `httpget` buffers into PSRAM. A larger
+ *  response is refused with a clear error rather than exhausting memory. */
+#define P4_CONFIG_HTTP_MAX_BODY_BYTES       (512 * 1024)
+
+/** Follow HTTP redirects (1) or treat a 3xx status as an error (0). */
+#define P4_CONFIG_HTTP_FOLLOW_REDIRECTS     1
+
+/** User-Agent string sent by `httpget`; keep it short and identifiable. */
+#define P4_CONFIG_HTTP_USER_AGENT           "P4MiniShell/0.24.11 httpget"
+
+/** Maximum response body bytes printed to the transcript when no localfile is
+ *  given. The full body is always available via `httpget <url> <localfile>`. */
+#define P4_CONFIG_HTTP_PRINT_BODY_BYTES     4096
+
 /* ========================================================================
  * BLUETOOTH PARAMETERS
  * ======================================================================== */
@@ -254,6 +312,10 @@
 
 /** Maximum BLE scan results surfaced through the shell bt/scan command. */
 #define P4_CONFIG_BT_SCAN_LIMIT              8
+
+/** Duration in milliseconds of a single `bluetooth scan` run. The scan is
+ *  bounded so the command always terminates and the worker task never hangs. */
+#define P4_CONFIG_BT_SCAN_DURATION_MS        8000
 
 /* ========================================================================
  * SD CARD AND FILESYSTEM
@@ -320,8 +382,53 @@
 /** Exact confirmation word required by the destructive `format` command. */
 #define P4_CONFIG_FORMAT_CONFIRM_WORD        "YES"
 
-/** Allocation unit size in bytes requested when formatting. 0 = automatic. */
+/** Default allocation unit size in bytes requested when formatting. 0 = let
+ *  FATFS (via esp_vfs_fat_sdcard_format_cfg) choose a size-appropriate value. */
 #define P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES    0
+
+/** Smallest `/A:` allocation unit (cluster) size accepted by `format`. */
+#define P4_CONFIG_FORMAT_ALLOC_UNIT_MIN      4096
+
+/** Largest `/A:` allocation unit (cluster) size accepted by `format`. */
+#define P4_CONFIG_FORMAT_ALLOC_UNIT_MAX      (128 * 1024)
+
+/** MBR partition-table alignment for `disk create partition` (in 512-byte
+ *  sectors). 2048 sectors = 1 MiB, the diskpart/SD standard alignment. */
+#define P4_CONFIG_DISK_PARTITION_ALIGN_SECTORS 2048
+
+/** Maximum number of `disk` / `format` volume targets. The firmware currently
+ *  supports the SD card only; USB OTG MSC is a future target. */
+#define P4_CONFIG_STORAGE_VOLUME_MAX         1
+
+/* ========================================================================
+ * BOOT CONFIGURATION (CONFIG.SYS / AUTOEXEC.BAT)
+ * ========================================================================
+ * Optional DOS-style boot scripting. On every boot the firmware looks for
+ * CONFIG.SYS and AUTOEXEC.BAT on the SD card, generates default files when
+ * they are absent, applies the CONFIG.SYS directives, then runs AUTOEXEC.BAT
+ * through the normal batch pipeline. All toggles, names and limits live here
+ * and are mirrored in p4minishell_config.yaml. */
+
+/** Filename checked for boot directives on the SD volume root. */
+#define P4_CONFIG_BOOT_CONFIG_SYS_NAME       "CONFIG.SYS"
+
+/** Filename checked for the boot batch file on the SD volume root. */
+#define P4_CONFIG_BOOT_AUTOEXEC_BAT_NAME     "AUTOEXEC.BAT"
+
+/** When no CONFIG.SYS / AUTOEXEC.BAT exist, generate default files once. */
+#define P4_CONFIG_BOOT_GENERATE_DEFAULTS     1
+
+/** Run CONFIG.SYS + AUTOEXEC.BAT on every normal boot. */
+#define P4_CONFIG_BOOT_RUN_ON_STARTUP        1
+
+/** Maximum line length accepted by the CONFIG.SYS parser (bytes). */
+#define P4_CONFIG_BOOT_LINE_BYTES            256
+
+/** Maximum number of directives CONFIG.SYS may contain. */
+#define P4_CONFIG_BOOT_MAX_DIRECTIVES        64
+
+/** Maximum number of GPIO directives CONFIG.SYS may contain. */
+#define P4_CONFIG_BOOT_MAX_GPIO_LINES        16
 
 /* ========================================================================
  * BATCH ENGINE AND ENVIRONMENT VARIABLES

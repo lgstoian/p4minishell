@@ -608,23 +608,36 @@ void shell_schedule_transcript_appendf(const char *format, ...)
     }
     portEXIT_CRITICAL(&s_async_transcript_lock);
 
-    if (queue_flush && lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
-        portENTER_CRITICAL(&s_async_transcript_lock);
-        s_async_transcript_flush_queued = false;
-        portEXIT_CRITICAL(&s_async_transcript_lock);
-        ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+    if (queue_flush) {
+        /* The flush callback touches LVGL (the transcript label). Before the
+         * UI exists - unit tests, or very early boot - there is no widget, so
+         * lv_async_call would allocate from an uninitialized LVGL heap. Flush
+         * synchronously instead: the transcript buffers are RAM-backed and the
+         * append path is NULL-safe, so the output still lands. */
+        if (windows_get_transcript() == NULL) {
+            shell_async_transcript_flush_cb(NULL);
+        } else if (lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
+            portENTER_CRITICAL(&s_async_transcript_lock);
+            s_async_transcript_flush_queued = false;
+            portEXIT_CRITICAL(&s_async_transcript_lock);
+            ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+        }
     }
 }
 
 static void shell_async_transcript_flush_cb(void *user_data)
 {
-    char pending[SHELL_ASYNC_TRANSCRIPT_BYTES];
+    char *pending = NULL;
     bool requeue = false;
 
     (void)user_data;
 
     /* Drain the staging buffer under the critical section, then append
-     * outside it so LVGL work never runs with interrupts masked. */
+     * outside it so LVGL work never runs with interrupts masked. The
+     * scratch copy is heap-allocated: it can be up to
+     * SHELL_ASYNC_TRANSCRIPT_BYTES, which is far too large for the main task
+     * stack when this callback runs synchronously before the UI exists, and
+     * wasteful on the LVGL task stack in the normal async path. */
     portENTER_CRITICAL(&s_async_transcript_lock);
     if (s_async_transcript_len == 0) {
         s_async_transcript_flush_queued = false;
@@ -632,6 +645,14 @@ static void shell_async_transcript_flush_cb(void *user_data)
         return;
     }
 
+    pending = malloc(s_async_transcript_len + 1);
+    if (pending == NULL) {
+        /* Cannot drain now; leave the staged text intact and drop the flush
+         * request so the next append schedules a fresh flush. */
+        s_async_transcript_flush_queued = false;
+        portEXIT_CRITICAL(&s_async_transcript_lock);
+        return;
+    }
     memcpy(pending, s_async_transcript, s_async_transcript_len + 1);
     s_async_transcript_len = 0;
     s_async_transcript[0] = '\0';
@@ -639,6 +660,7 @@ static void shell_async_transcript_flush_cb(void *user_data)
     portEXIT_CRITICAL(&s_async_transcript_lock);
 
     shell_transcript_append_text(pending);
+    free(pending);
     shell_history_transcript_scroll_to_end();
 
     /* Producers may have staged more text while we were appending. */
@@ -649,11 +671,18 @@ static void shell_async_transcript_flush_cb(void *user_data)
     }
     portEXIT_CRITICAL(&s_async_transcript_lock);
 
-    if (requeue && lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
-        portENTER_CRITICAL(&s_async_transcript_lock);
-        s_async_transcript_flush_queued = false;
-        portEXIT_CRITICAL(&s_async_transcript_lock);
-        ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+    if (requeue) {
+        if (windows_get_transcript() == NULL) {
+            /* Still no UI: drain synchronously. The scratch is now heap, so
+             * the recursion is stack-light; it terminates as soon as the
+             * staging buffer empties. */
+            shell_async_transcript_flush_cb(NULL);
+        } else if (lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
+            portENTER_CRITICAL(&s_async_transcript_lock);
+            s_async_transcript_flush_queued = false;
+            portEXIT_CRITICAL(&s_async_transcript_lock);
+            ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+        }
     }
 }
 
@@ -1448,6 +1477,7 @@ const char *shell_prompt_render_plain(void)
 static void shell_uart_console_task(void *arg)
 {
     char line[SHELL_COMMAND_BYTES];
+    size_t length = 0;
     bool prompt_visible = false;
 
     (void)arg;
@@ -1455,46 +1485,72 @@ static void shell_uart_console_task(void *arg)
     shell_uart_console_write_text("\nUART console ready. Type help for commands.\n");
 
     while (true) {
-        char *trimmed;
-        size_t length;
+        char *newline;
+        size_t got;
 
         if (!prompt_visible && !s_key_wait_active) {
             shell_uart_console_print_prompt();
             prompt_visible = true;
         }
 
-        if (fgets(line, sizeof(line), stdin) == NULL) {
+        /* Read into the space after any partial line already buffered. */
+        if (fgets(line + length, sizeof(line) - length, stdin) == NULL) {
             vTaskDelay(pdMS_TO_TICKS(20));
             clearerr(stdin);
             continue;
         }
 
-        /* A pending keypress wait swallows the line before any command
-         * lookup, so answering `pause` or `choice` never dispatches a
-         * command. A bare Enter reports as '\r'. */
+        got = strlen(line + length);
+        length += got;
+
+        /* A pending keypress wait swallows input before any command lookup,
+         * so answering `pause` or `choice` never dispatches a command. The
+         * key is the first character of whatever arrived; a bare Enter
+         * reports as '\r'. This must not wait for a line terminator - a key
+         * wait is answered as soon as the key is readable. */
         if (s_key_wait_active) {
-            char key = line[0];
+            char key = line[length - got];
 
             if (key == '\n' || key == '\0') {
                 key = '\r';
             }
             shell_key_wait_submit(key);
             prompt_visible = false;
+            length = 0;
             continue;
         }
 
-        trimmed = shell_trim(line);
-        length = strlen(trimmed);
-        while (length > 0 && (trimmed[length - 1] == '\n' || trimmed[length - 1] == '\r')) {
-            trimmed[--length] = '\0';
+        /* The USB-Serial-JTAG driver delivers a logical line across several
+         * reads (its RX FIFO is 64 bytes), so a chunk without a newline is
+         * not a complete command. Buffer it and keep reading until the line
+         * terminates, flushing over-long lines so the console never wedges. */
+        newline = memchr(line, '\n', length);
+        if (newline == NULL) {
+            if (length > 0 && line[length - 1] == '\r') {
+                /* CR-terminated line (no LF); treat as complete. */
+                newline = line + length;
+            } else if (length >= sizeof(line) - 1) {
+                /* No terminator and the buffer is full: flush what we have. */
+                newline = line + length;
+            } else {
+                continue;
+            }
         }
 
-        if (trimmed[0] == '\0') {
-            prompt_visible = false;
-            continue;
+        /* A complete line is ready: strip the trailing newline marker(s). */
+        {
+            size_t line_len = (size_t)(newline - line);
+
+            while (line_len > 0 && (line[line_len - 1] == '\n' || line[line_len - 1] == '\r')) {
+                line[--line_len] = '\0';
+            }
+
+            if (line_len > 0) {
+                shell_uart_console_submit_command(shell_trim(line));
+            }
         }
 
-        shell_uart_console_submit_command(trimmed);
+        length = 0;
         prompt_visible = false;
     }
 }
@@ -1629,9 +1685,20 @@ void shell_uart_console_submit_command(const char *command)
         shell_store_command_history(command_copy);
     }
     shell_reset_history_cursor();
-    if (s_command_ops.execute_command != NULL) {
+
+    /* Run the command on the worker task when possible. Executing it here
+     * synchronously would block this (UART console) task inside the command,
+     * so a blocking key wait - pause, choice, more, the format/disk clean
+     * confirmation, set /p - could never be answered from the serial input.
+     * The worker path frees this task to read stdin and route keystrokes into
+     * the key queue while the command runs. Falls back to the synchronous
+     * path when the hook is unavailable. */
+    if (s_command_ops.execute_command_async != NULL) {
+        s_command_ops.execute_command_async(command_copy);
+    } else if (s_command_ops.execute_command != NULL) {
         s_command_ops.execute_command(command_copy);
     }
+
     shell_history_transcript_scroll_to_end();
     lvgl_port_unlock();
 
@@ -1855,15 +1922,18 @@ void shell_command_help(void)
     shell_transcript_appendf_ansi("  " SH_EXE "set" SH_RST " [NAME=VALUE] | " SH_EXE "set /a" SH_RST " NAME=<expr> | " SH_EXE "set /p" SH_RST " NAME=<prompt>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "path" SH_RST " [dirs] | " SH_EXE "echo" SH_RST " <text> | " SH_EXE "echo" SH_RST " on|off | " SH_EXE "call" SH_RST " <file.bat>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "attrib" SH_RST " [+-RHSA] <path> | " SH_EXE "label" SH_RST " [name] | " SH_EXE "xcopy" SH_RST " <src> <dst> [/S]\n");
-    shell_transcript_appendf_ansi("  " SH_EXE "chkdsk" SH_RST " [path] [/F] | " SH_EXE "format" SH_RST " [/FS:type] [/V:label]\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "chkdsk" SH_RST " [path] [/F] | " SH_EXE "format" SH_RST " [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "if" SH_RST " [not] errorlevel|exist|\"a\"==\"b\" cmd | " SH_EXE "goto" SH_RST " <label> | " SH_EXE "shift" SH_RST " | " SH_EXE "exit" SH_RST " [/b] [code]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "pause" SH_RST " | " SH_EXE "choice" SH_RST " [/C:keys] [/N] [/T:c,secs] [/S] [text] | " SH_EXE "setlocal" SH_RST " | " SH_EXE "endlocal" SH_RST "\n");
     shell_transcript_appendf_ansi("  " SH_EXE "prompt" SH_RST " [template] | " SH_EXE "date" SH_RST " [MM-DD-YYYY] | " SH_EXE "time" SH_RST " [HH:MM[:SS]]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "find" SH_RST " <text> [file] [/I] [/N] [/C] [/V] | " SH_EXE "more" SH_RST " [file] | " SH_EXE "fc" SH_RST " <f1> <f2>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "tree" SH_RST " [path] [/F] [/A] | " SH_EXE "sort" SH_RST " [file] [/R] [/I] [/U]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "sd" SH_RST " info | ls [path] | stat <path> | cat <path> [bytes] | " SH_EXE "sdeject" SH_RST "\n");
-    shell_transcript_appendf_ansi("  " SH_EXE "wifi" SH_RST " status | scan | diag | connect [ssid pass] | disconnect\n");
-    shell_transcript_appendf_ansi("  " SH_EXE "bluetooth" SH_RST " status | scan | advertise on|off\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "disk" SH_RST " list | detail | clean | create partition primary [size=N] | delete partition N | format\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "wifi" SH_RST " status | scan [/b] | diag | connect [ssid pass] | disconnect\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "ping" SH_RST " <host-or-ip> [count] | " SH_EXE "dns" SH_RST " <hostname> (nslookup)\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "httpget" SH_RST " <url> [localfile]  (alias " SH_EXE "wget" SH_RST ")\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "bluetooth" SH_RST " status | scan [limit] | advertise <on [name]|off>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "usb" SH_RST " status | ls [path] | keyboard <on|off> | mouse <on|off>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "c6ota" SH_RST " <sd:/path|http[s]://url|default>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "display" SH_RST " info | resolution | refresh | power <on|sleep|off>\n");

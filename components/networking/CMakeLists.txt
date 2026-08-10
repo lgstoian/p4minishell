@@ -8,7 +8,10 @@ idf_component_register(
         bt
         esp_event
         esp_hosted
+        esp_http_client
         esp_netif
+        esp-tls
         esp_wifi
+        lwip
         nvs_flash
 )

@@ -240,16 +240,22 @@ Prefer `shell_fs_copy_file()` over rolling your own loop: it already does all fo
 Anything that can lose user data must be unattended-proof:
 
 ```c
-/* Refuse outright when nobody can answer, so a batch file cannot run it. */
-if (!shell_key_input_available()) {
-    shell_transcript_append_text("mycmd: refused, no interactive input to confirm\n");
+/* Shared helper in storage_commands.c used by format, disk clean, and
+ * disk delete partition. Collects the exact confirmation word through the
+ * key queue and refuses when nobody can answer. */
+if (!shell_confirm_destructive("mycmd", "WARNING: ...", detail_lines)) {
     return;
 }
 
 shell_transcript_appendf("Type %s to continue: ", P4_CONFIG_FORMAT_CONFIRM_WORD);
 /* Collect the word through the key queue so the reply never reaches the
- * command dispatcher. See shell_command_format() for the full loop. */
+ * command dispatcher. See shell_confirm_destructive() for the loop. */
 ```
+
+Over serial each key of the confirmation word must be sent on its own line (the
+UART console submits one key per line to the key queue); the on-screen keyboard
+types the word naturally. Serial commands now run on the command worker task,
+so the UART console stays free to read the reply while a key wait is active.
 
 Integrity tools must stay read-only. This firmware does not rewrite FAT structures: report a
 problem and let the user repair the card on a host, rather than risking an in-place "fix" that

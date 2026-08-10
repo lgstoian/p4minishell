@@ -395,7 +395,8 @@ void shell_command_sort(int argc, char **argv);    /* /R /I /U */
 void shell_command_sd(char *command);   /* receives the original unsplit line */
 
 void shell_command_chkdsk(int argc, char **argv);  /* [path] [/F] */
-void shell_command_format(int argc, char **argv);  /* [/FS:type] [/V:label] [/Q] */
+void shell_command_format(int argc, char **argv);  /* [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q] */
+void shell_command_disk(char *command);  /* diskpart-style; receives the original unsplit line */
 ```
 - `shell_command_dir()` accepts `/W` `/P` `/S` `/B` `/L` `/A:attrs` `/O:order`, buffers each
   level on the heap for sorting, and closes with per-directory counts, a `/S` grand total, and
@@ -403,12 +404,38 @@ void shell_command_format(int argc, char **argv);  /* [/FS:type] [/V:label] [/Q]
 - `shell_command_chkdsk()` is read-only: it reports capacity and, with `/F`, verifies every
   directory is readable. It never rewrites FAT structures.
 - `shell_command_format()` requires the exact `P4_CONFIG_FORMAT_CONFIRM_WORD` through the
-  shell key queue and refuses when `shell_key_input_available()` is false.
+  shell key queue and refuses when `shell_key_input_available()` is false. `/FS:` accepts
+  `FAT`/`FAT32` (size-appropriate auto-selection via `esp_vfs_fat_sdcard_format_cfg`; `EXFAT`
+  is not available in this build and warns, falling back to FAT32), `/A:` sets the cluster
+  size, `/V:` sets the label, `/Q` is accepted for DOS familiarity.
+- `shell_command_disk()` is the diskpart-style family: `list`, `detail`, `clean`,
+  `create partition primary [size=N]`, `delete partition N`, `format`. It routes to the
+  volume services in `storage.c`, which are parameterized by `storage_volume_t` so a future
+  USB OTG MSC volume can be added without changing the command surface.
 - `shell_command_tree()` accepts `/F` (include files) and `/A` (ASCII connectors), recurses to
   `P4_CONFIG_TREE_DEPTH_MAX`, and buffers each directory level on the heap.
 - `find`, `more`, and `sort` read the pending input-redirection source when no filename
   argument is supplied.
 - All of them resolve relative paths and run inside a guarded SD session.
+
+### Disk and partition services (storage.c)
+```c
+typedef enum { STORAGE_VOLUME_SD = 0 } storage_volume_t;   /* USB OTG MSC is a future target */
+
+esp_err_t storage_disk_get_info(storage_volume_t vol, storage_disk_info_t *out);
+esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out);
+esp_err_t storage_disk_clean(storage_volume_t vol);
+esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t size_bytes);
+esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition_index);
+esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_t *opts);
+const char *storage_get_fat_type(void);
+```
+- `storage_format_volume()` uses `esp_vfs_fat_sdcard_format_cfg()` (unmount, format, remount),
+  applies the requested label, and reports FAT type/geometry.
+- `storage_disk_*` read and write the MBR partition table through `sdmmc_read_sectors` /
+  `sdmmc_write_sectors` on the BSP card handle, unmounting the FATFS volume
+  (`f_mount(NULL, "0:", 0)`) first so no stale partition cache survives.
+- Every function opens its own guarded SD session; callers do not need one.
 
 ### Lifecycle
 ```c
@@ -442,21 +469,24 @@ void        shell_expand_variables(const char *input, char *output, size_t outpu
 - Names are normalized to upper case and must be alphanumeric plus underscore. Setting an empty
   or `NULL` value clears the slot. `shell_env_set()` returns `ESP_ERR_NO_MEM` when all 24 slots
   are used.
-- `shell_expand_variables()` handles `%VAR%`, `%0` (script name), `%1`..`%9`, `%*` (all
-  arguments), and `%%` → `%`. Unknown names are left untouched.
+- `shell_expand_variables()` handles `%VAR%`, `%0` (script name), `%1`..`%9` (the caller's
+  arguments), `%*` (every argument from `%1` onward), and `%%` → `%`. Unknown names are left
+  untouched. With no active batch frame `%0`/`%1`..`%9`/`%*` expand to empty.
 
 ### Arithmetic expressions
 ```c
 bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char **error_out);
 ```
-- Recursive-descent evaluator over 32-bit signed integers with the COMMAND.COM operator set
-  and precedence: `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`, unary `- ~ !`, and parentheses.
+- Recursive-descent evaluator over 32-bit signed integers with cmd.exe precedence:
+  `||`, `&&`, comparisons `== != < > <= >=` (each yielding 1/0), then `|`, `^`, `&`,
+  `<< >>`, `+ -`, `* / %`, unary `- ~ !`, and parentheses.
 - A bare identifier reads an environment variable; an undefined name evaluates to 0, as in
   DOS. Numbers accept decimal, `0x` hex, and leading-zero octal.
 - Returns false with a static reason in `error_out` on divide by zero, `INT32_MIN / -1`
   overflow, unbalanced parentheses, a malformed number, or trailing characters.
-- Backs `set /a`, including its compound assignment operators. Deliberately refuses to consume
-  `&&` and `||` so an expression cannot swallow a command-chain separator.
+- Backs `set /a`, including its compound assignment operators. The `&`/`|`/`&&`/`||` levels
+  never swallow a shell chain separator; an expression using `&&`/`||`/`&`/`|`/`<`/`>` must be
+  quoted at the shell level.
 
 ### Errorlevel
 ```c
@@ -502,6 +532,12 @@ void shell_command_exit(int argc, char **argv);       /* exit [/b] [code] */
   `P4_CONFIG_SETLOCAL_DEPTH_MAX`. Snapshotting the whole table means a restore correctly
   reverts creations, modifications, and deletions in one step.
 - `exit /b [code]` leaves one batch file; a bare `exit [code]` unwinds every nested level.
+- `if` supports `[not] errorlevel N` (true when errorlevel ≥ N), `[not] exist <path>`
+  (files and directories), `[/i] [not] "a"=="b"` (case-insensitive with `/i`), the cmd.exe
+  numeric keywords `[not] a EQU|NEQ|LSS|LEQ|GTR|GEQ b` (operands parsed as decimal,
+  non-numeric reads as 0), and `not` for each form. `goto :eof` jumps to the end of the
+  current batch file, unwinding its open setlocal scopes. `call` propagates the called
+  script's final errorlevel to the caller.
 
 ### Lifecycle
 ```c
@@ -811,10 +847,31 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
   - Entry point for shell-level `wifi ...` command dispatch.
 
 - `void networking_wifi_status(void)`
-- `void networking_wifi_scan(void)`
+  - Prints the colour-coded association + IP report (SSID, BSSID, channel, RSSI,
+    PHY mode, IPv4, netmask, gateway, DNS, association uptime).
+- `void networking_wifi_scan(bool bare)`
+  - Prints the RSSI-sorted scan report. `bare=true` emits uncoloured SSID lines
+    for redirection / pipes.
 - `void networking_wifi_diag(void)`
 - `void networking_wifi_disconnect(void)`
   - Shell-facing Wi-Fi helpers used when the parser wants explicit subcommand entry points.
+
+- `esp_err_t networking_wifi_ping(const char *host, int count)`
+  - Classic ICMP echo over the lwIP `esp_ping` session. `count <= 0` selects the
+    default (4); values above the hard cap (10) are clamped. Returns ESP_OK when at
+    least one reply was received so the dispatcher can map it onto ERRORLEVEL.
+- `esp_err_t networking_wifi_dns_lookup(const char *hostname)`
+  - Resolves A records through lwIP `getaddrinfo` and prints the IPv4 list.
+    Returns ESP_OK when at least one record resolved.
+
+- `esp_err_t networking_http_get(const char *url, networking_http_result_t *result)`
+- `void networking_http_result_free(networking_http_result_t *result)`
+  - The `httpget` / `wget` engine: a simple HTTPS or HTTP GET over the same
+    `esp_http_client` stack c6ota uses. Buffers the body in PSRAM up to
+    `P4_CONFIG_HTTP_MAX_BODY_BYTES`, follows redirects per config, prints the
+    response header with semantic colours, and returns the body for the
+    command layer to print or save to SD. Returns ESP_OK on an HTTP 2xx;
+    the caller maps the return value onto ERRORLEVEL.
 
 - `const char *networking_wifi_state_string(void)`
 - `networking_wifi_state_t networking_wifi_state(void)`
@@ -829,11 +886,12 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 
 ### Ownership rule
 
-Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, and NimBLE call in the firmware lives
-inside `components/networking/`. The single sanctioned exception is `components/c6ota/`,
-which drives `esp_hosted_slave_ota_*` because co-processor firmware update is its entire
-purpose. Anything else that needs networking state uses the accessors above; if a needed
-value is missing, add an accessor rather than reaching into the driver.
+Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, NimBLE, lwIP-connectivity (ping / DNS),
+and esp_http_client / mbedTLS / TLS call in the firmware lives inside
+`components/networking/`. The sanctioned exceptions are `components/c6ota/`, which drives
+`esp_hosted_slave_ota_*` and its own esp_http_client download because co-processor firmware
+update is its entire purpose. Anything else that needs networking state uses the accessors
+above; if a needed value is missing, add an accessor rather than reaching into the driver.
 
 Only the official Espressif path is used: `espressif/esp_hosted` for the transport and
 `espressif/esp_wifi_remote` for the Wi-Fi API.
@@ -877,8 +935,12 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
   - Entry point for shell-level `bluetooth ...` command dispatch.
 
 - `void bluetooth_status(void)`
-- `void bluetooth_scan(void)`
-- `void bluetooth_advertise(bool enable)`
+- `void bluetooth_scan(int limit)`
+  - Bounded scan (P4_CONFIG_BT_SCAN_DURATION_MS); prints devices sorted by RSSI.
+    `limit <= 0` selects the configured default cap.
+- `void bluetooth_advertise(bool enable, const char *name)`
+  - `name` is a session-only advertising name (RAM-only, never persisted); NULL
+    or empty falls back to the configured default device name.
   - Focused Bluetooth helpers for shell subcommands.
 
 - `bool bluetooth_is_enabled(void)`

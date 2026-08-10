@@ -119,12 +119,25 @@ void shell_command_chkdsk(int argc, char **argv);
 /**
  * `format` — reformat the SD card, destroying all data.
  *
- * Usage: format [/FS:FAT|FAT32|EXFAT] [/V:label] [/Q]
+ * Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]
  *
  * Requires the exact confirmation word P4_CONFIG_FORMAT_CONFIRM_WORD typed
- * at the prompt before anything is written.
+ * at the prompt before anything is written. FAT/FAT32 select size-appropriately
+ * through the standard IDF format helper; exFAT is not available in this
+ * firmware build and is reported honestly.
  */
 void shell_command_format(int argc, char **argv);
+
+/**
+ * `disk` — diskpart-style physical-disk and partition management.
+ *
+ * Usage: disk list | detail | clean | create partition primary [size=N] |
+ *        delete partition N | format [fs=...] [label=...] [au=...] [quick]
+ *
+ * Receives the original unsplit command text because the subcommands
+ * re-tokenize it, mirroring the `sd` family.
+ */
+void shell_command_disk(char *command);
 
 /* ========================================================================
  * TEXT UTILITIES

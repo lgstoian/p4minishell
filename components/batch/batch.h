@@ -128,9 +128,10 @@ void shell_execute_pipe(char *command);
 /**
  * Evaluate a DOS `set /a` arithmetic expression over 32-bit signed integers.
  *
- * Supports `+ - * / %`, bitwise `& | ^ ~`, logical `!`, shifts `<< >>`, unary
- * minus, and parentheses, with COMMAND.COM precedence. A bare identifier reads
- * an environment variable; an undefined name evaluates to 0, as in DOS.
+ * Supports `+ - * / %`, bitwise `& | ^ ~`, logical `! && ||`, shifts `<< >>`,
+ * the comparison operators `== != < > <= >=` (1 when true, 0 otherwise),
+ * unary minus, and parentheses, with cmd.exe precedence. A bare identifier
+ * reads an environment variable; an undefined name evaluates to 0, as in DOS.
  * Numbers accept decimal, `0x` hex, and leading-zero octal.
  *
  * @param expression  Expression text.
@@ -214,6 +215,28 @@ void batch_init(void);
 
 /** Check if the batch module is initialized. */
 bool batch_is_initialized(void);
+
+/**
+ * Set the default batch-echo state that new batch frames inherit.
+ *
+ * CONFIG.SYS `ECHO ON|OFF` sets this before AUTOEXEC.BAT runs, so the
+ * batch file sees the requested echo policy. Defaults to true (echo on).
+ *
+ * @param enabled  true for ECHO ON, false for ECHO OFF.
+ */
+void batch_set_default_echo(bool enabled);
+
+/**
+ * Execute a single command line through the full batch/command pipeline
+ * (variable expansion, redirection, pipes, chaining). Used by the boot
+ * CONFIG.SYS runner to apply hardware directives (rotate, brightness, volume,
+ * etc.) without re-implementing their parsers.
+ *
+ * NULL-checked against the registered ops hook; a missing hook is a no-op.
+ *
+ * @param command  Command line to execute (e.g. "rotate 90").
+ */
+void batch_boot_execute_command(const char *command);
 
 #ifdef __cplusplus
 }
