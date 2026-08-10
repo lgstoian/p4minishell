@@ -10,12 +10,12 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.13
-# Last updated: 2026-08-10 (Transcript colour fix: the on-screen transcript is
-#                           now an LVGL span group that parses raw ANSI SGR
-#                           codes into coloured spans, so `#RRGGBB` recolor
-#                           markup can no longer leak into visible text)
-config_version: "0.24.13"
+# Version: 0.24.14
+# Last updated: 2026-08-10 (Full printable-ASCII keyboard: the on-screen
+#                           symbols keyboard now includes the shell-critical
+#                           pipe |, caret ^, tilde ~ and backtick characters
+#                           via a custom LVGL keyboard map)
+config_version: "0.24.14"
 
 # ---- Shell Identity ----
 shell_identity:

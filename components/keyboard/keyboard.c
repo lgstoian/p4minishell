@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file keyboard.c
  * @brief On-screen keyboard manager implementation for P4MiniShell.
  *
@@ -50,6 +50,73 @@ static struct {
     .external_input = false,
     .force_visible = false,
 };
+
+/* ========================================================================
+ * CUSTOM KEYBOARD MAPS - FULL PRINTABLE-ASCII (0x20-0x7E) COVERAGE
+ * ========================================================================
+ * The LVGL default SPECIAL map omits four printable-ASCII characters that are
+ * shell-critical: the pipe | (the pipe operator), the caret ^ (the shell
+ * escape character), the tilde ~, and the backtick. This custom map keeps
+ * every default symbol and digit and adds those four in a fourth symbol row,
+ * so the on-screen keyboard can type every printable ASCII character:
+ *
+ *   letters a-z / A-Z   -> TEXT_LOWER / TEXT_UPPER modes (unchanged)
+ *   digits 0-9          -> SPECIAL row 1 (unchanged)
+ *   + & / * = % ! ? # < >  (unchanged)
+ *   \ @ $ ( ) { } [ ] ; " '  (unchanged)
+ *   ^ | ~ ` - _ , . :    -> NEW fourth symbol row
+ *
+ * The map uses the exact control-button labels LVGL's event handler matches
+ * by text ("abc", LV_SYMBOL_BACKSPACE, LV_SYMBOL_NEW_LINE,
+ * LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT/RIGHT, LV_SYMBOL_OK), so the built-in
+ * mode switching and character routing keep working untouched.
+ */
+static const char * const keyboard_special_map[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", LV_SYMBOL_BACKSPACE, "\n",
+    "abc", "+", "&", "/", "*", "=", "%", "!", "?", "#", "<", ">", "\n",
+    "\\", "@", "$", "(", ")", "{", "}", "[", "]", ";", "\"", "'", "\n",
+    "^", "|", "~", "`", "-", "_", ",", ".", ":", LV_SYMBOL_NEW_LINE, "\n",
+    LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""
+};
+
+static const lv_buttonmatrix_ctrl_t keyboard_special_ctrl_map[] = {
+    /* Row 1: digits + backspace. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    LV_BUTTONMATRIX_CTRL_CHECKED | 2,
+    /* Row 2: "abc" toggle + 11 symbols. */
+    LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 3: 12 symbols. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 4: ^ | ~ ` - _ , . : + newline. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    LV_BUTTONMATRIX_CTRL_CHECKED | 2,
+    /* Row 5: hide, left, space, right, ok. */
+    LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    6,
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
+};
+
+static void keyboard_install_custom_maps(void)
+{
+    if (s_keyboard.widget == NULL) {
+        return;
+    }
+
+    /* Install the full-ASCII SPECIAL map. lv_keyboard_set_map() stores it per
+     * mode and immediately reapplies the current mode's map, so the built-in
+     * "1#"/"abc" mode buttons switch to it correctly. */
+    lv_keyboard_set_map(s_keyboard.widget, LV_KEYBOARD_MODE_SPECIAL,
+                        keyboard_special_map, keyboard_special_ctrl_map);
+}
 
 /* ========================================================================
  * FORWARD DECLARATIONS
@@ -127,6 +194,7 @@ lv_obj_t *keyboard_init(lv_obj_t *parent)
 
     lv_obj_set_width(s_keyboard.widget, LV_PCT(100));
     lv_obj_set_height(s_keyboard.widget, kb_h);
+    keyboard_install_custom_maps();
     lv_keyboard_set_mode(s_keyboard.widget, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_obj_set_style_text_font(s_keyboard.widget, font, 0);
     lv_obj_set_style_bg_color(s_keyboard.widget,
@@ -183,7 +251,7 @@ void keyboard_show(void)
         return; /* Already visible */
     }
 
-    /* LVGL widget access — lock for safety when called from command worker
+    /* LVGL widget access â€” lock for safety when called from command worker
      * task (e.g. `keyboard show`/`hide`/`toggle` commands). */
     lvgl_port_lock(0);
 
@@ -215,7 +283,7 @@ void keyboard_hide(void)
         return; /* Already hidden */
     }
 
-    /* LVGL widget access — lock for safety when called from command worker
+    /* LVGL widget access â€” lock for safety when called from command worker
      * task (e.g. `keyboard show`/`hide`/`toggle` commands). */
     lvgl_port_lock(0);
 

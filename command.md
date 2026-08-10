@@ -170,6 +170,12 @@ Control the on-screen keyboard visibility. `hide` removes the keyboard and
 expands the transcript area; `show` restores it. `toggle` switches between
 visible and hidden. `status` reports current visibility, mode, and height.
 
+The on-screen symbols keyboard covers every printable ASCII character
+(0x20-0x7E), including the shell-critical pipe `|`, caret `^` (the shell
+escape character), tilde `~`, and backtick, so DOS operators and escaped
+characters can be typed directly. Use the `1#` / `abc` mode buttons to switch
+between text and symbols.
+
 ### battery
 Read battery ADC pin (GPIO53, 2:1 divider), show scaled voltage, estimated percentage (3.3V-4.2V range), raw ADC data, and light-sleep state.
 

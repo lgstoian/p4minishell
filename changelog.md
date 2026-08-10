@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.14] - 2026-08-10
+
+Full printable-ASCII keyboard support. The on-screen LVGL keyboard can now type
+every printable ASCII character (0x20-0x7E), including the shell-critical
+characters the default LVGL symbols map omitted.
+
+### Added - shell-critical symbols on the on-screen keyboard
+
+- The default LVGL symbols map had no way to type four printable ASCII
+  characters that a DOS shell needs: the pipe `|` (pipe operator), the caret
+  `^` (the shell escape character), the tilde `~`, and the backtick.
+- `components/keyboard/keyboard.c` now installs a custom symbols map via the
+  official `lv_keyboard_set_map()` API: it keeps every default symbol and digit
+  and adds a fourth symbol row (`^ | ~ ` - _ , . :`). Together with the text
+  and number modes, the on-screen keyboard now covers all of 0x20-0x7E.
+- The custom map preserves the exact LVGL control-button labels (`"abc"`,
+  `LV_SYMBOL_BACKSPACE`, `LV_SYMBOL_NEW_LINE`, `LV_SYMBOL_KEYBOARD`,
+  `LV_SYMBOL_LEFT/RIGHT`, `LV_SYMBOL_OK`), so the built-in mode switching and
+  character routing work unchanged.
+
+### Verification
+
+- Static coverage check: every printable ASCII character (0x20-0x7E) is now
+  typeable across the four keyboard modes.
+- Hardware (COM11 + screenshot): the symbols keyboard renders the new fifth
+  row; `echo ^| ^~ ^^` prints `| ~ ^`, and tilde/backtick pass through the
+  shell pipeline unchanged. Build: 0 errors, 0 warnings for the firmware and
+  the test project.
+
+---
+
 ## [0.24.13] - 2026-08-10
 
 Transcript colour rendering fix. The on-screen transcript was showing LVGL
