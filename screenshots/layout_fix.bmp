@@ -1,0 +1,3267 @@
+ spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (117) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (118) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (121) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (246) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (258) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (261) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (267) boot: Loaded app from partition at offset 0x10000
+I (267) boot: Disabling RNG early entropy source...
+W (947) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (24) boot: chip revision: v1.0
+I (24) boot: efuse block revision: v0.3
+I (24) qio_mode: Enabling default flash chip QIO
+I (24) boot.esp32p4: SPI Speed      : 80MHz
+I (25) boot.esp32p4: SPI Mode       : QIO
+I (25) boot.esp32p4: SPI Flash Size : 16MB
+I (25) boot: Enabling RNG early entropy source...
+I (26) boot: Partition Table:
+I (26) boot: ## Label            Usage          Type ST Offset   Length
+I (26) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (27) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (27) boot:  2 factory          factory app      00 00 00010000 00800000
+I (28) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (29) boot: End of partition table
+I (29) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (117) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (118) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (122) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (246) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (258) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (261) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (267) boot: Loaded app from partition at offset 0x10000
+I (267) boot: Disabling RNG early entropy source...
+W (947) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (959) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (959) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (22) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (22) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (959) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (22) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (23) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (24) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (120) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (256) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (945) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig
+
+UART console ready. Type help for commands.
+[97mPS [93m/sdcard[97m> [0m[92mP4MiniShell v0.24.14 ready | JC1060P470C | type help[0m
+Guru Meditation Error: Core  0 panic'ed (Stack protection fault). 
+
+Detected in task "taskLVGL" at 0x4002f3b2
+Stack pointer: 0x4ff39050
+Stack bounds: 0x4ff3b57c - 0x4ff3d170
+
+
+Core  0 register dump:
+MEPC    : 0x4002f3c4  RA      : 0x400488ee  SP      : 0x4ff39050  GP      : 0x4ff16580  
+TP      : 0x4ff3d150  T0      : 0xffffc000  T1      : 0x4ff0b12a  T2      : 0x00000000  
+S0/FP   : 0x4ff2ac44  S1      : 0x4ff43f98  A0      : 0x4ff26bf8  A1      : 0x0000000d  
+A2      : 0x00000001  A3      : 0x00000201  A4      : 0x000035f8  A5      : 0x4ff2abf8  
+A6      : 0x4ff43f90  A7      : 0x4fc10a5c  S2      : 0x4ff42834  S3      : 0x4ff27000  
+S4      : 0x4ff41f28  S5      : 0x4ff52000  S6      : 0x00000001  S7      : 0x00010000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000226  T4      : 0x00000258  T5      : 0x61000032  T6      : 0x00000000  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x0000001b  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+Backtrace: 0x4002f3c4:0x4ff39050 0x400488ec:0x4ff3d090 0x400342e0:0x4ff3d0d0 0xfffffffe:0x4ff3d130
+Backtrace ended abruptly: cannot find DWARF information for instruction at address 0xfffffffe
+
+
+
+
+ELF file SHA256: 98aade76c
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20e (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff005a0
+Core1 Saved PC:0x400013e0
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x17bc
+load:0x4ff29ed0,len:0xfec
+load:0x4ff2cbd0,len:0x3638
+entry 0x4ff29eda
+I (20) boot: ESP-IDF v5.5.5 2nd stage bootloader
+I (20) boot: compile time Aug 10 2026 13:54:12
+I (20) boot: Multicore bootloader
+I (21) boot: chip revision: v1.0
+I (22) boot: efuse block revision: v0.3
+I (22) qio_mode: Enabling default flash chip QIO
+I (22) boot.esp32p4: SPI Speed      : 80MHz
+I (22) boot.esp32p4: SPI Mode       : QIO
+I (23) boot.esp32p4: SPI Flash Size : 16MB
+I (23) boot: Enabling RNG early entropy source...
+I (23) boot: Partition Table:
+I (24) boot: ## Label            Usage          Type ST Offset   Length
+I (24) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (25) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (25) boot:  2 factory          factory app      00 00 00010000 00800000
+I (26) boot:  3 storage          Unknown data     01 82 00810000 00700000
+I (27) boot: End of partition table
+I (27) esp_image: segment 0: paddr=00010020 vaddr=40110020 size=bc4c4h (771268) map
+I (115) esp_image: segment 1: paddr=000cc4ec vaddr=30100000 size=00568h (  1384) load
+I (116) esp_image: segment 2: paddr=000cca5c vaddr=4ff00000 size=035bch ( 13756) load
+I (119) esp_image: segment 3: paddr=000d0020 vaddr=40000020 size=10e010h (1105936) map
+I (244) esp_image: segment 4: paddr=001de038 vaddr=4ff035bc size=12788h ( 75656) load
+I (255) esp_image: segment 5: paddr=001f07c8 vaddr=4ff15d80 size=039ech ( 14828) load
+I (259) esp_image: segment 6: paddr=001f41bc vaddr=50108080 size=00020h (    32) load
+I (265) boot: Loaded app from partition at offset 0x10000
+I (265) boot: Disabling RNG early entropy source...
+W (958) spi_flash: Detected boya flash chip but using generic driver. For optimal functionality, enable `SPI_FLASH_SUPPORT_BOYA_CHIP` in menuconfig

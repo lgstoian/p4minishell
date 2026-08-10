@@ -111,6 +111,16 @@ lv_obj_t *windows_get_transcript(void);
 void windows_set_transcript_text(const char *text);
 
 /**
+ * Apply the transcript's computed region height.
+ *
+ * The transcript must have an explicit, bounded height (not LV_SIZE_CONTENT)
+ * so its span content overflows the widget and becomes vertically scrollable.
+ * Call after the window layout is built and again on keyboard-visibility
+ * changes so the height tracks the available slot.
+ */
+void windows_apply_transcript_height(void);
+
+/**
  * Scroll the transcript to the end.
  */
 void windows_scroll_transcript_to_end(void);

@@ -366,11 +366,22 @@ void keyboard_cycle_mode(void)
 
 lv_coord_t keyboard_get_height(void)
 {
+    lv_coord_t height;
+
     if (!s_keyboard.visible || s_keyboard.widget == NULL) {
         return 0;
     }
 
-    return lv_obj_get_height(s_keyboard.widget);
+    height = lv_obj_get_height(s_keyboard.widget);
+
+    /* The widget's height is not computed until the first LVGL layout pass,
+     * so a query during windows_init() can read 0. Fall back to the configured
+     * height so the transcript slot is sized correctly from the start. */
+    if (height <= 0) {
+        height = keyboard_get_configured_height();
+    }
+
+    return height;
 }
 
 lv_coord_t keyboard_get_configured_height(void)

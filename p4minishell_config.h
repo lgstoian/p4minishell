@@ -75,17 +75,21 @@
  * TRANSCRIPT AND COMMAND BUFFER SIZING
  * ======================================================================== */
 
-/** Maximum bytes stored in the on-screen transcript buffer. */
-#define P4_CONFIG_TRANSCRIPT_BYTES           8192
+/** Maximum bytes stored in the on-screen transcript buffer.
+ *  Sized so the scrollable transcript holds a useful history (~30 lines of
+ *  coloured output) instead of only the last screenful; the LVGL span group
+ *  shows ~15 lines and scrolls through the rest. Kept modest because the
+ *  buffer lives in internal RAM: growing it past this starves the internal/
+ *  DMA heap and the heap init aborts at boot. */
+#define P4_CONFIG_TRANSCRIPT_BYTES           16384
 
 /**
- * Maximum bytes of LVGL recolor markup staged for the on-screen transcript
- * label. The recolor form (`#RRGGBB text #`) inflates the raw ANSI text by
- * roughly 1.5-2x because every colour change carries an open/close marker, so
- * a full 8 KiB transcript needs ~16 KiB of recolor markup. Sized at 2x the
- * plain transcript so the entire scrollback fits on the label.
+ * Maximum bytes staged for the on-screen transcript span group. The staged
+ * copy is the raw ANSI transcript, so it only needs to hold the same size as
+ * the transcript itself (no recolor inflation: the span-group renders SGR
+ * escapes directly instead of recolor markup).
  */
-#define P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES   (P4_CONFIG_TRANSCRIPT_BYTES * 2)
+#define P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES   P4_CONFIG_TRANSCRIPT_BYTES
 
 /** Maximum bytes in the async (background task) transcript staging buffer. */
 #define P4_CONFIG_ASYNC_TRANSCRIPT_BYTES     2048
@@ -170,6 +174,10 @@
 
 /** Minimum transcript height in pixels. */
 #define P4_CONFIG_WINDOW_TRANSCRIPT_HEIGHT_MIN 40
+
+/** Horizontal margin in pixels added to the screen root so no shell region
+ *  (header, transcript, input row, keyboard) ever touches the display edges. */
+#define P4_CONFIG_WINDOW_SCREEN_PAD_HOR       8
 
 /* ========================================================================
  * KEYBOARD PARAMETERS

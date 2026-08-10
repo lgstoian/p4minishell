@@ -26,6 +26,7 @@
 #include "esp_log.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* Backward-compatibility aliases */
 #define WINDOWS_TAG                     P4_CONFIG_SHELL_TAG
@@ -41,6 +42,7 @@ static struct {
     bool initialized;
     lv_obj_t *screen;
     lv_obj_t *transcript;
+    lv_obj_t *transcript_spans;
     lv_obj_t *input_row;
     lv_obj_t *input_line;
     lv_obj_t *prev_button;
@@ -49,6 +51,7 @@ static struct {
     .initialized = false,
     .screen = NULL,
     .transcript = NULL,
+    .transcript_spans = NULL,
     .input_row = NULL,
     .input_line = NULL,
     .prev_button = NULL,
@@ -193,7 +196,12 @@ static void windows_apply_screen_style(void)
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_layout(screen, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(screen, 0, 0);
+    /* Horizontal margin keeps every full-width region off the display edges,
+     * so shell text and the header are never clipped at the margins. */
+    lv_obj_set_style_pad_left(screen, P4_CONFIG_WINDOW_SCREEN_PAD_HOR, 0);
+    lv_obj_set_style_pad_right(screen, P4_CONFIG_WINDOW_SCREEN_PAD_HOR, 0);
+    lv_obj_set_style_pad_top(screen, 0, 0);
+    lv_obj_set_style_pad_bottom(screen, 0, 0);
     lv_obj_set_style_pad_row(screen, 0, 0);
 }
 
@@ -224,16 +232,50 @@ static void windows_create_transcript(void)
      * lv_timer_handler on the LVGL task, freezing the whole UI. The apply is
      * coalesced so bursty output paints once per handler pass.
      */
-    s_windows.transcript = lv_spangroup_create(screen);
+    /* The transcript is a scrollable CONTAINER holding a content-sized span
+     * group. The spangroup must not be bounded itself: a spangroup clips its
+     * own spans to its widget height (LV_SPAN_OVERFLOW_CLIP), so a bounded
+     * spangroup reports no overflow and can never scroll. Instead the container
+     * owns the fixed height, background and padding, and the spangroup grows
+     * to its full wrapped content height (LV_SIZE_CONTENT). The container then
+     * sees a taller-than-itself child and scrolls through it.
+     *
+     * The actual widget update (rebuild spans, force layout, scroll to end)
+     * is DEFERRED to the LVGL task via lv_async_call (see
+     * windows_set_transcript_text): rebuilding spans synchronously from a
+     * non-LVGL task races with the LVGL render cycle and hangs
+     * lv_timer_handler on the LVGL task, freezing the whole UI. The apply is
+     * coalesced so bursty output paints once per handler pass.
+     */
+    s_windows.transcript = lv_obj_create(screen);
     lv_obj_set_width(s_windows.transcript, LV_PCT(100));
-    lv_obj_set_flex_grow(s_windows.transcript, 1);
+    /* The height is set explicitly to the computed transcript slot by
+     * windows_apply_transcript_height() after the window layout is built, and
+     * re-applied on keyboard visibility changes. */
     lv_obj_set_style_bg_color(s_windows.transcript,
                                windows_get_color(WINDOWS_COLOR_BG_TRANSCRIPT), 0);
     lv_obj_set_style_bg_opa(s_windows.transcript, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_windows.transcript, 0, 0);
     lv_obj_set_style_pad_all(s_windows.transcript, 16, 0);
-    lv_obj_set_style_text_font(s_windows.transcript, font, 0);
-    lv_obj_set_scrollbar_mode(s_windows.transcript, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_style_radius(s_windows.transcript, 0, 0);
+    /* Make the transcript a vertical scroll container: touch pan, USB mouse
+     * wheel, and USB keyboard Up/Down all drive it via LVGL's built-in scroll
+     * handling. */
+    lv_obj_add_flag(s_windows.transcript,
+                    LV_OBJ_FLAG_SCROLLABLE |
+                    LV_OBJ_FLAG_SCROLL_WITH_ARROW |
+                    LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scroll_dir(s_windows.transcript, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_windows.transcript, LV_SCROLLBAR_MODE_AUTO);
+
+    s_windows.transcript_spans = lv_spangroup_create(s_windows.transcript);
+    lv_obj_set_width(s_windows.transcript_spans, LV_PCT(100));
+    lv_obj_set_height(s_windows.transcript_spans, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(s_windows.transcript_spans, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(s_windows.transcript_spans, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_windows.transcript_spans, 0, 0);
+    lv_obj_set_style_pad_all(s_windows.transcript_spans, 0, 0);
+    lv_obj_set_style_text_font(s_windows.transcript_spans, font, 0);
 }
 
 static void windows_create_input_row(void)
@@ -329,6 +371,17 @@ lv_obj_t *windows_get_transcript(void)
 static bool s_transcript_apply_pending = false;
 static char s_transcript_staged[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
 
+/* Incremental-render bookkeeping. s_transcript_rendered_len is the byte count
+ * of s_transcript_staged already converted into spans; the prefix snapshot lets
+ * the apply detect scrollback truncation (the shell drops the oldest bytes
+ * when its buffer fills). s_transcript_last_fg carries the ANSI foreground
+ * across an append that splits a colour run, so the next fragment keeps its
+ * hue instead of restarting at the default colour. */
+static size_t s_transcript_rendered_len = 0;
+static char s_transcript_rendered_prefix[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
+static uint32_t s_transcript_last_fg = 0;
+static uint32_t s_transcript_seen_fg = 0;
+
 /**
  * Segment callback for ansi_process_text(): append one coloured span holding
  * @p text with the ANSI state's foreground colour. Runs on the LVGL task from
@@ -340,6 +393,9 @@ static void windows_span_segment(const char *text, const ansi_state_t *state, vo
     lv_span_t *span;
     lv_style_t *style;
 
+    if (state != NULL) {
+        s_transcript_seen_fg = state->fg_color;
+    }
     if (group == NULL || text == NULL || text[0] == '\0') {
         return;
     }
@@ -357,25 +413,12 @@ static void windows_span_segment(const char *text, const ansi_state_t *state, vo
     lv_style_set_text_font(style, windows_get_terminal_font());
 }
 
-/**
- * Paint the staged raw ANSI text onto the transcript span group and scroll to
- * the end. Runs on the LVGL task (from the async apply callback) or, in the
- * lv_async_call failure fallback, on the caller's task while holding the LVGL
- * port lock. Both callers serialize with the render cycle, so the staging
- * buffer is never written and read concurrently.
- */
-static void windows_transcript_apply(void)
+/** Delete every span currently held by the transcript span group. */
+static void windows_transcript_clear_spans(lv_obj_t *transcript)
 {
-    lv_obj_t *transcript = s_windows.transcript;
-    uint32_t count;
+    uint32_t count = lv_spangroup_get_span_count(transcript);
     uint32_t index;
 
-    if (transcript == NULL) {
-        return;
-    }
-
-    /* Remove every existing span before rebuilding from the staged ANSI. */
-    count = lv_spangroup_get_span_count(transcript);
     for (index = 0; index < count; index++) {
         lv_span_t *span = lv_spangroup_get_child(transcript, 0);
 
@@ -383,17 +426,110 @@ static void windows_transcript_apply(void)
             lv_spangroup_delete_span(transcript, span);
         }
     }
+}
 
-    if (s_transcript_staged[0] != '\0') {
-        ansi_process_text(s_transcript_staged, windows_span_segment, transcript);
+/**
+ * Map a 24-bit RGB colour back to the closest 16-colour SGR foreground code
+ * (30-37 / 90-97) by comparing against the ANSI palette. Used to re-emit a
+ * carried colour as a real SGR prefix when an append splits a colour run.
+ * Returns -1 when the colour is not one of the 16 palette entries.
+ */
+static int windows_ansi_sgr_for_color(uint32_t color)
+{
+    int index;
+
+    if (color == 0) {
+        return -1;
+    }
+    for (index = 0; index < ANSI_COLOR_COUNT; index++) {
+        if (ansi_get_palette_color((ansi_color_index_t)index) == color) {
+            return (index < 8) ? (30 + index) : (90 + (index - 8));
+        }
+    }
+    return -1;
+}
+
+/**
+ * Paint the staged raw ANSI text onto the transcript span group and scroll to
+ * the end. Runs on the LVGL task (from the async apply callback) or, in the
+ * lv_async_call failure fallback, on the caller's task while holding the LVGL
+ * port lock. Both callers serialize with the render cycle, so the staging
+ * buffer is never written and read concurrently.
+ *
+ * To avoid flicker, the apply renders INCREMENTALLY: when the staged buffer
+ * still begins with the bytes already turned into spans, only the newly
+ * appended fragment is parsed into new spans and existing spans are left
+ * untouched. A full teardown/rebuild happens only when the scrollback
+ * truncated (the staged content no longer starts with the rendered prefix).
+ */
+static void windows_transcript_apply(void)
+{
+    lv_obj_t *container = s_windows.transcript;
+    lv_obj_t *spans = s_windows.transcript_spans;
+    size_t new_len;
+    const char *append_start;
+    uint32_t default_fg;
+
+    if (container == NULL || spans == NULL) {
+        return;
     }
 
-    ESP_LOGD(WINDOWS_TAG, "transcript: %u spans, staged=%u bytes",
-             (unsigned int)lv_spangroup_get_span_count(transcript),
-             (unsigned int)strlen(s_transcript_staged));
+    new_len = strlen(s_transcript_staged);
 
-    lv_obj_update_layout(transcript);
-    lv_obj_scroll_to_y(transcript, LV_COORD_MAX, LV_ANIM_OFF);
+    /* Scrollback truncation: the staged content shrank, or the first rendered
+     * bytes no longer match what we already drew. Rebuild from scratch. */
+    if (s_transcript_rendered_len > new_len ||
+        strncmp(s_transcript_staged, s_transcript_rendered_prefix,
+                s_transcript_rendered_len) != 0) {
+        windows_transcript_clear_spans(spans);
+        s_transcript_rendered_len = 0;
+        s_transcript_last_fg = 0;
+    }
+
+    append_start = s_transcript_staged + s_transcript_rendered_len;
+    if (*append_start != '\0') {
+        size_t append_len = strlen(append_start);
+        char *fragment = malloc(append_len + 16);
+        int carry_code = -1;
+
+        /* If the new bytes begin mid-colour (the previous append left the SGR
+         * state non-default and the fragment does not open with its own SGR
+         * sequence), re-emit the carried colour so the first span matches. The
+         * fragment is heap-allocated because it can exceed the LVGL task stack. */
+        default_fg = ansi_get_default_fg();
+        if (s_transcript_last_fg != 0 && s_transcript_last_fg != default_fg &&
+            append_start[0] != '\x1B') {
+            carry_code = windows_ansi_sgr_for_color(s_transcript_last_fg);
+        }
+
+        if (fragment != NULL) {
+            if (carry_code > 0) {
+                snprintf(fragment, append_len + 16, "\x1B[%dm%s", carry_code, append_start);
+            } else {
+                snprintf(fragment, append_len + 16, "%s", append_start);
+            }
+
+            s_transcript_seen_fg = 0;
+            ansi_process_text(fragment, windows_span_segment, spans);
+            if (s_transcript_seen_fg != 0) {
+                s_transcript_last_fg = s_transcript_seen_fg;
+            }
+            free(fragment);
+        } else {
+            ESP_LOGW(WINDOWS_TAG, "transcript: out of memory for fragment");
+        }
+    }
+
+    /* Record how much of the staged buffer is now rendered. */
+    s_transcript_rendered_len = new_len;
+    snprintf(s_transcript_rendered_prefix, sizeof(s_transcript_rendered_prefix),
+             "%s", s_transcript_staged);
+
+    /* Force a layout pass so the scroll-to-end targets the real content
+     * height, then pin the container to the bottom. lv_obj_update_layout on
+     * the container also lays out its children (the span group). */
+    lv_obj_update_layout(container);
+    lv_obj_scroll_to_y(container, LV_COORD_MAX, LV_ANIM_OFF);
 }
 
 static void windows_transcript_apply_cb(void *user_data)
@@ -432,7 +568,7 @@ void windows_set_transcript_text(const char *text)
         text = "";
     }
 
-    /* Stage the raw ANSI text for the deferred span rebuild. Callers hold the
+    /* Stage the raw ANSI text for the deferred span render. Callers hold the
      * LVGL port lock, so the staging buffer is never written and read
      * concurrently. The staging buffer is twice the ANSI transcript size, so
      * the accumulated scrollback always fits. */
@@ -447,9 +583,27 @@ void windows_scroll_transcript_to_end(void)
         return;
     }
 
-    /* Repaint from the staged markup, which repaints and scrolls to the end.
+    /* Repaint from the staged text, which repaints and scrolls to the end.
      * Runs on the LVGL task via the deferred apply. */
     windows_transcript_schedule_apply();
+}
+
+/**
+ * Apply the transcript's computed region height.
+ *
+ * The transcript must have an explicit, bounded height (not LV_SIZE_CONTENT)
+ * so its span content overflows the widget and becomes vertically scrollable.
+ * Re-applied whenever the layout changes (keyboard visibility, rotation
+ * rebuild). Runs on the LVGL task.
+ */
+void windows_apply_transcript_height(void)
+{
+    if (s_windows.transcript == NULL) {
+        return;
+    }
+
+    lv_obj_set_height(s_windows.transcript,
+                      windows_get_rect(WINDOW_REGION_TRANSCRIPT).height);
 }
 
 lv_obj_t *windows_get_input_line(void)
@@ -512,6 +666,11 @@ esp_err_t windows_init(void)
     windows_create_input_row();
     windows_create_keyboard();
 
+    /* Bound the transcript to its computed slot so its content overflows and
+     * becomes scrollable. Must run after the keyboard exists (its height
+     * factors into the slot). */
+    windows_apply_transcript_height();
+
     s_windows.initialized = true;
 
     ESP_LOGI(WINDOWS_TAG, "Window manager initialized: %" PRId32 "x%" PRId32,
@@ -566,6 +725,7 @@ void windows_deinit(void)
 
     s_windows.screen = NULL;
     s_windows.transcript = NULL;
+    s_windows.transcript_spans = NULL;
     s_windows.input_row = NULL;
     s_windows.input_line = NULL;
     s_windows.prev_button = NULL;
@@ -614,6 +774,9 @@ void windows_notify_keyboard_visibility(bool visible)
     }
 
     if (s_windows.transcript != NULL) {
+        /* Re-bind the transcript to its (now resized) slot so it keeps
+         * scrolling within the space freed/used by the keyboard. */
+        windows_apply_transcript_height();
         lv_obj_update_layout(s_windows.transcript);
     }
 
