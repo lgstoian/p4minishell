@@ -51,6 +51,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "lvgl.h"
+#include "esp_heap_caps.h"
+#include "esp_lvgl_port.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1102,6 +1105,387 @@ static void shell_print_http_body(const uint8_t *body, size_t size)
 }
 
 /* ========================================================================
+ * SCREENSHOT / SCR / CAPTURE
+ * ========================================================================
+ * Captures the current LVGL screen as a BMP image and either streams it
+ * over the UART/USB-Serial-JTAG console with magic markers, or writes
+ * it to an SD card file. Uses the LVGL snapshot API for pixel-perfect
+ * capture with the LVGL lock held for thread safety.
+ */
+
+/**
+ * Write a standard 14-byte BMP file header + 40-byte info header for an
+ * RGB888 image into the output buffer, then return the header size (54).
+ *
+ * BMP format (bottom-up, 24-bit RGB888):
+ *   - File header: signature 'BM', file size, reserved, pixel data offset
+ *   - Info header: header size (40), width, height, planes (1), bpp (24),
+ *     compression (0=BI_RGB), image size, resolution, color count
+ */
+static int screenshot_write_bmp_headers(uint8_t *buf, uint32_t width, uint32_t height)
+{
+    uint32_t row_bytes = width * 3;  /* 24-bit RGB */
+    uint32_t img_size = row_bytes * height;
+    uint32_t file_size = 54 + img_size;
+    uint32_t bpp = 24;
+    uint32_t planes = 1;
+    uint32_t compression = 0;
+    int32_t xppm = 3780;  /* 96 DPI */
+    int32_t yppm = 3780;
+
+    memset(buf, 0, 54);
+
+    /* File header */
+    buf[0] = 'B';
+    buf[1] = 'M';
+    buf[2] = (uint8_t)(file_size);
+    buf[3] = (uint8_t)(file_size >> 8);
+    buf[4] = (uint8_t)(file_size >> 16);
+    buf[5] = (uint8_t)(file_size >> 24);
+    buf[10] = 54;  /* offset to pixel data */
+
+    /* Info header */
+    buf[14] = 40;  /* header size */
+    buf[18] = (uint8_t)(width);
+    buf[19] = (uint8_t)(width >> 8);
+    buf[20] = (uint8_t)(width >> 16);
+    buf[21] = (uint8_t)(width >> 24);
+    buf[22] = (uint8_t)(height);
+    buf[23] = (uint8_t)(height >> 8);
+    buf[24] = (uint8_t)(height >> 16);
+    buf[25] = (uint8_t)(height >> 24);
+    buf[26] = (uint8_t)(planes);       /* planes = 1 */
+    buf[28] = (uint8_t)(bpp);          /* bits per pixel */
+    buf[30] = (uint8_t)(compression);
+    buf[34] = (uint8_t)(img_size);
+    buf[35] = (uint8_t)(img_size >> 8);
+    buf[36] = (uint8_t)(img_size >> 16);
+    buf[37] = (uint8_t)(img_size >> 24);
+    buf[38] = (uint8_t)(xppm);
+    buf[39] = (uint8_t)(xppm >> 8);
+    buf[40] = (uint8_t)(xppm >> 16);
+    buf[41] = (uint8_t)(xppm >> 24);
+    buf[42] = (uint8_t)(yppm);
+    buf[43] = (uint8_t)(yppm >> 8);
+    buf[44] = (uint8_t)(yppm >> 16);
+    buf[45] = (uint8_t)(yppm >> 24);
+
+    return 54;
+}
+
+/**
+ * Convert a single RGB565 pixel (uint16_t, little-endian) to 3 bytes of
+ * RGB888 in the output buffer. BMP bottom-up format expects BGR ordering.
+ */
+static inline void rgb565_to_bmp_row(uint8_t *dst, const uint16_t *src, uint32_t width)
+{
+    uint32_t i;
+    for (i = 0; i < width; i++) {
+        uint16_t px = src[i];
+        uint8_t r = (uint8_t)(((px >> 11) & 0x1F) << 3);
+        uint8_t g = (uint8_t)(((px >> 5) & 0x3F) << 2);
+        uint8_t b = (uint8_t)((px & 0x1F) << 3);
+        *dst++ = b;
+        *dst++ = g;
+        *dst++ = r;
+    }
+}
+
+/**
+ * `screenshot` / `scr` / `capture` — capture the LVGL screen as a BMP image.
+ *
+ * Usage:
+ *   screenshot              → stream BMP over UART with magic markers
+ *   screenshot file.bmp     → save BMP to SD card (current directory)
+ *
+ * Captures via lv_snapshot_take_to_draw_buf(), converts RGB565 → RGB888 for the BMP,
+ * and outputs either to the serial console (with begin/end markers for
+ * host-side extraction) or to an SD card file with free-space precheck.
+ */
+static void shell_command_screenshot(int argc, char **argv)
+{
+    lv_draw_buf_t *draw_buf = NULL;
+    void *pixel_data = NULL;
+    lv_obj_t *screen;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    bool to_sd = (argc >= 2);
+
+    if (argc > 2) {
+        shell_print_usage("Usage: screenshot [filename.bmp]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    shell_print_muted("screenshot: capturing current screen...");
+
+    /* Allocate the lv_draw_buf_t structure from PSRAM */
+    draw_buf = (lv_draw_buf_t *)heap_caps_malloc(sizeof(lv_draw_buf_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (draw_buf == NULL) {
+        draw_buf = (lv_draw_buf_t *)malloc(sizeof(lv_draw_buf_t));
+    }
+    if (draw_buf == NULL) {
+        shell_print_error("screenshot: out of memory for draw buffer structure");
+        batch_set_errorlevel(1);
+        return;
+    }
+    memset(draw_buf, 0, sizeof(lv_draw_buf_t));
+
+    /* Take the LVGL lock and do all LVGL operations inside it. */
+    if (!lvgl_port_lock(0)) {
+        shell_print_error("screenshot: could not acquire LVGL lock");
+        free(draw_buf);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    screen = lv_screen_active();
+    if (screen == NULL) {
+        lvgl_port_unlock();
+        free(draw_buf);
+        shell_print_error("screenshot: no active LVGL screen");
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    width = lv_display_get_horizontal_resolution(NULL);
+    height = lv_display_get_vertical_resolution(NULL);
+
+    if (width == 0 || height == 0) {
+        lvgl_port_unlock();
+        free(draw_buf);
+        shell_print_error("screenshot: invalid display resolution %lux%lu",
+                          (unsigned long)width, (unsigned long)height);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    /* Calculate required buffer size for RGB565 */
+    uint32_t data_size = width * height * 2;  /* RGB565 = 2 bytes per pixel */
+    uint32_t stride = width * 2;  /* stride in bytes */
+
+    /* Allocate pixel data from PSRAM */
+    pixel_data = heap_caps_malloc(data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (pixel_data == NULL) {
+        pixel_data = malloc(data_size);
+    }
+    if (pixel_data == NULL) {
+        lvgl_port_unlock();
+        free(draw_buf);
+        shell_print_error("screenshot: out of memory for pixel data (%lu bytes)",
+                          (unsigned long)data_size);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    /* Initialize the draw buffer with the pre-allocated PSRAM buffer */
+    lv_result_t init_result = lv_draw_buf_init(draw_buf, width, height,
+                                               LV_COLOR_FORMAT_RGB565,
+                                               stride, pixel_data, data_size);
+    if (init_result != LV_RESULT_OK) {
+        lvgl_port_unlock();
+        free(pixel_data);
+        free(draw_buf);
+        shell_print_error("screenshot: failed to initialize draw buffer");
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    /* Take the snapshot into the pre-created buffer */
+    lv_result_t result = lv_snapshot_take_to_draw_buf(screen, LV_COLOR_FORMAT_RGB565, draw_buf);
+    lvgl_port_unlock();
+
+    if (result != LV_RESULT_OK) {
+        shell_print_error("screenshot: snapshot capture failed");
+        lv_draw_buf_destroy(draw_buf);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    shell_print_ok("screenshot: captured %lux%lu RGB565 (%lu bytes)",
+                   (unsigned long)width, (unsigned long)height,
+                   (unsigned long)(draw_buf->data_size));
+
+    if (to_sd) {
+        /* Write to SD card file */
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        shell_sd_session_t session;
+
+        if (shell_fs_resolve_path(argv[1], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("screenshot: invalid path %s", argv[1]);
+            lv_draw_buf_destroy(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_print_error("screenshot: SD card not present");
+            lv_draw_buf_destroy(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        /* Precheck free space: 54-byte header + width*height*3 pixel data */
+        {
+            uint64_t needed = 54 + (uint64_t)width * (uint64_t)height * 3;
+            uint64_t reclaim = storage_get_file_size(resolved);
+            if (!storage_check_free_space(needed, reclaim, "screenshot")) {
+                shell_sd_end(&session, "screenshot");
+                lv_draw_buf_destroy(draw_buf);
+                batch_set_errorlevel(1);
+                return;
+            }
+        }
+
+        FILE *f = fopen(resolved, "wb");
+        if (f == NULL) {
+            shell_print_error("screenshot: cannot create %s", resolved);
+            shell_sd_end(&session, "screenshot");
+            lv_draw_buf_destroy(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        /* Write BMP headers */
+        uint8_t headers[54];
+        int hdr_size = screenshot_write_bmp_headers(headers, width, height);
+        size_t written = fwrite(headers, 1, hdr_size, f);
+        if (written != (size_t)hdr_size) {
+            shell_print_error("screenshot: failed to write BMP header");
+            fclose(f);
+            remove(resolved);
+            shell_sd_end(&session, "screenshot");
+            lv_draw_buf_destroy(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        /* Convert RGB565 to RGB888 row-by-row, bottom-up (BMP convention).
+         * Allocate a row buffer on heap to avoid stack pressure. */
+        uint32_t row_bytes = width * 3;
+        uint8_t *row_buf = heap_caps_malloc(row_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (row_buf == NULL) {
+            row_buf = malloc(row_bytes);
+        }
+        if (row_buf == NULL) {
+            shell_print_error("screenshot: out of memory for row buffer");
+            fclose(f);
+            remove(resolved);
+            shell_sd_end(&session, "screenshot");
+            lv_draw_buf_destroy(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        bool write_ok = true;
+        int32_t y;
+        for (y = height - 1; y >= 0; y--) {
+            const uint16_t *row = (const uint16_t *)((const uint8_t *)draw_buf->data +
+                                                       (uint32_t)y * draw_buf->header.stride);
+            rgb565_to_bmp_row(row_buf, row, width);
+            if (fwrite(row_buf, 1, row_bytes, f) != row_bytes) {
+                write_ok = false;
+                break;
+            }
+        }
+
+        free(row_buf);
+        fclose(f);
+        shell_sd_end(&session, "screenshot");
+
+        if (!write_ok) {
+            shell_print_error("screenshot: write failed at row, removing partial file");
+            remove(resolved);
+            lv_draw_buf_destroy(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        shell_print_ok("screenshot: saved %s (%lu bytes)", resolved,
+                       (unsigned long)(54 + (uint64_t)width * height * 3));
+        lv_draw_buf_destroy(draw_buf);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    /* Stream raw BMP binary to UART/USB-Serial-JTAG console.
+     * Protocol: 4-byte magic "BMPX" + 4-byte little-endian size + raw data.
+     * The host reads the magic, then the size, then exactly that many bytes. */
+    {
+        size_t total_size = 54 + (size_t)width * height * 3;
+        shell_print_muted("screenshot: streaming %lu bytes to serial...", (unsigned long)total_size);
+
+        /* Build the full BMP in memory first */
+        uint8_t *bmp_data = heap_caps_malloc(total_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (bmp_data == NULL) {
+            bmp_data = malloc(total_size);
+        }
+        if (bmp_data == NULL) {
+            shell_print_error("screenshot: out of memory for BMP buffer");
+            free(pixel_data);
+            free(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        /* Write BMP header */
+        screenshot_write_bmp_headers(bmp_data, width, height);
+
+        /* Convert RGB565 to RGB888 row-by-row, bottom-up (BMP convention) */
+        uint32_t row_bytes = width * 3;
+        uint8_t *row_buf = heap_caps_malloc(row_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (row_buf == NULL) {
+            row_buf = malloc(row_bytes);
+        }
+        if (row_buf == NULL) {
+            shell_print_error("screenshot: out of memory for row buffer");
+            free(bmp_data);
+            free(pixel_data);
+            free(draw_buf);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        int32_t y;
+        for (y = height - 1; y >= 0; y--) {
+            const uint16_t *row = (const uint16_t *)((const uint8_t *)draw_buf->data +
+                                                       (uint32_t)y * draw_buf->header.stride);
+            rgb565_to_bmp_row(row_buf, row, width);
+            memcpy(bmp_data + 54 + (height - 1 - y) * row_bytes, row_buf, row_bytes);
+        }
+        free(row_buf);
+
+        /* Send magic header */
+        const char magic[4] = {'B', 'M', 'P', 'X'};
+        fwrite(magic, 1, 4, stdout);
+        /* Send size as 4-byte little-endian */
+        uint8_t size_bytes[4];
+        size_bytes[0] = (uint8_t)(total_size);
+        size_bytes[1] = (uint8_t)(total_size >> 8);
+        size_bytes[2] = (uint8_t)(total_size >> 16);
+        size_bytes[3] = (uint8_t)(total_size >> 24);
+        fwrite(size_bytes, 1, 4, stdout);
+        /* Send raw BMP data */
+        size_t written = fwrite(bmp_data, 1, total_size, stdout);
+        fflush(stdout);
+
+        free(bmp_data);
+
+        shell_print_ok("screenshot: streamed %lu bytes to serial",
+                       (unsigned long)written);
+    }
+
+    /* Free the pixel data and draw buffer structure */
+    if (pixel_data != NULL) {
+        free(pixel_data);
+    }
+    if (draw_buf != NULL) {
+        free(draw_buf);
+    }
+    batch_set_errorlevel(0);
+}
+
+/* ========================================================================
  * COMMAND DISPATCH
  * ======================================================================== */
 
@@ -1256,6 +1640,14 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "windows")) {
         return shell_command_windows(argc, argv);
+    }
+
+    /* ---- Screenshot command ---- */
+    if (shell_text_equals_ignore_case(argv[0], "screenshot") ||
+        shell_text_equals_ignore_case(argv[0], "scr") ||
+        shell_text_equals_ignore_case(argv[0], "capture")) {
+        shell_command_screenshot(argc, argv);
+        return true;
     }
 
     /* ---- Module-routed commands ----
@@ -1741,7 +2133,7 @@ static bool shell_execute_command_segment(char *command)
      * exactly the output this command produced. */
     transcript_len_before = shell_transcript_get_length();
 
-    /* Snapshot errorlevel rather than clearing it. Clearing would destroy the
+    /* draw_buf errorlevel rather than clearing it. Clearing would destroy the
      * value that the very next `if errorlevel N` is meant to read, and DOS
      * only changes errorlevel when a command actually reports a status. A
      * command counts as failed for chaining purposes when it leaves a new
@@ -1779,7 +2171,7 @@ static bool shell_execute_command_segment(char *command)
     free(command_buffer);
 
     /* A command "succeeded" when it was recognized and did not raise a new
-     * non-zero errorlevel. Comparing against the snapshot means a stale value
+     * non-zero errorlevel. Comparing against the draw_buf means a stale value
      * from an earlier line cannot make this command look failed. */
     if (!recognized) {
         return false;

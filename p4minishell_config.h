@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             11
+#define P4_CONFIG_VERSION_PATCH             12
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -845,5 +845,30 @@
 
 /** Log tag for networking/Wi-Fi module. */
 #define P4_CONFIG_NETWORKING_TAG             "wifi"
+
+/* ========================================================================
+ * SCREENSHOT (screenshot / scr / capture)
+ * ========================================================================
+ * Captures the current LVGL screen as a BMP image and streams it over the
+ * serial console or writes it to the SD card. Uses LVGL's snapshot API to
+ * grab a pixel-perfect copy of the active screen. */
+
+/** Display width for BMP header (1024 pixels). */
+#define P4_CONFIG_SCREENSHOT_WIDTH           1024
+
+/** Display height for BMP header (600 pixels). */
+#define P4_CONFIG_SCREENSHOT_HEIGHT          600
+
+/** Color format for LVGL snapshot (RGB565 = 16-bit, 2 bytes per pixel). */
+#define P4_CONFIG_SCREENSHOT_COLOR_FORMAT    0x12  /* LV_COLOR_FORMAT_RGB565 */
+
+/** Magic marker sent before the BMP binary data on serial output. */
+#define P4_CONFIG_SCREENSHOT_BMP_BEGIN       "=== SCREENSHOT BMP BEGIN ==="
+
+/** Magic marker sent after the BMP binary data on serial output. */
+#define P4_CONFIG_SCREENSHOT_BMP_END         "=== SCREENSHOT BMP END ==="
+
+/** Maximum bytes per write chunk when streaming BMP to UART. */
+#define P4_CONFIG_SCREENSHOT_UART_CHUNK      512
 
 #endif /* P4MINISHELL_CONFIG_H */

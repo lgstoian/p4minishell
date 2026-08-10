@@ -164,6 +164,7 @@
     `choice`, `setlocal`, `endlocal`, `exit`) -> `components/batch/batch.c`
   - System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c`
   - Hardware, UI-query, and remaining system verbs -> `components/command/command.c`
+  - Screenshot/capture/scr (LVGL screen capture as BMP) -> `components/command/command.c`
 - ALL command dispatch MUST go through `shell_execute_command()` (full pipeline) or
   `shell_execute_command_core()` (dispatch only) from `components/command/`
 - Variable expansion (`%VAR%`, `%0`, `%1`..`%9`, `%*`) is implemented in `components/batch/` and

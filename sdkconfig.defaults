@@ -109,3 +109,8 @@ CONFIG_ESP_SYSTEM_USE_EH_FRAME=y
 # changes become instant. Scroll, cursor, and interaction behaviour are
 # unaffected (they are separate from style transitions).
 CONFIG_LV_THEME_DEFAULT_TRANSITION_TIME=0
+
+# Enable LVGL snapshot feature for the screenshot command.
+# Required by the `screenshot` / `scr` / `capture` command to capture
+# the current screen as a BMP image.
+CONFIG_LV_USE_SNAPSHOT=y

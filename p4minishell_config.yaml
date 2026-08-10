@@ -10,12 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.11
-# Last updated: 2026-08-10 (HTTPS support: `httpget` / `wget` performs a
-#                           simple HTTPS or HTTP GET over the same
-#                           esp_http_client stack c6ota uses, with ERRORLEVEL,
-#                           SD-file save, and redirect/redirection support)
-config_version: "0.24.11"
+# Version: 0.24.12
+# Last updated: 2026-08-10 (Screenshot command: `screenshot` / `scr` / `capture`
+#                           captures the LVGL screen as a BMP image, streaming
+#                           to serial console with magic markers or saving to SD)
+config_version: "0.24.12"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -1003,6 +1002,36 @@ ansi_colors:
     type: size_t
     description: "Maximum bytes for an ANSI-formatted string buffer"
     range: "128..2048"
+
+# ---- Screenshot ----
+screenshot:
+  width:
+    value: 1024
+    type: uint32_t
+    description: "Display width in pixels for BMP header"
+    range: "1..65535"
+  height:
+    value: 600
+    type: uint32_t
+    description: "Display height in pixels for BMP header"
+    range: "1..65535"
+  color_format:
+    value: "0x12"
+    type: hex
+    description: "LVGL color format for snapshot (0x12 = LV_COLOR_FORMAT_RGB565)"
+  bmp_begin_marker:
+    value: "=== SCREENSHOT BMP BEGIN ==="
+    type: string
+    description: "Magic marker sent before BMP binary data on serial output"
+  bmp_end_marker:
+    value: "=== SCREENSHOT BMP END ==="
+    type: string
+    description: "Magic marker sent after BMP binary data on serial output"
+  uart_chunk_bytes:
+    value: 512
+    type: size_t
+    description: "Maximum bytes per write chunk when streaming BMP to UART"
+    range: "128..4096"
 
 # =============================================================================
 # BUILD-AFFECTING KCONFIG OPTIONS

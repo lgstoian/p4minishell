@@ -349,6 +349,7 @@ filesystem or the batch language:
   `windows info` — implemented in `command_ui.c` to keep `keyboard.h` and `windows.h` out of
   `command.c`
 - **System commands**: `reboot`, `clear`/`cls`, `prompt`, `date`, `time`
+- **Screenshot command**: `screenshot`/`scr`/`capture` — captures the LVGL screen as a BMP image, streams to serial with magic markers or saves to SD card
 - **GPIO management**: Pin table with board roles; reads allowed on all pins, writes restricted
   to pins marked safe
 - **Module startup**: `command_init()` runs `storage_init()` and `batch_init()`, then registers

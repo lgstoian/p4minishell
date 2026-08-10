@@ -191,6 +191,40 @@ Read current logic level from any GPIO number.
 ### gpio set <pin> <0|1>
 Drive a GPIO output. Only allowed for pins marked safe for writes in the shell pin table.
 
+### screenshot [filename.bmp] (aliases: scr, capture)
+Capture the current LVGL screen as a BMP image. Without a filename, streams the
+BMP over the UART/USB-Serial-JTAG console with magic markers for host-side
+extraction. With a filename, saves to the SD card with free-space precheck and
+partial-destination cleanup on failure.
+
+BMP format: 24-bit RGB888, bottom-up, no compression, 96 DPI. Pixel-perfect
+capture of the entire screen (1024x600 = 1,228,800 bytes of pixels + 54-byte header).
+
+**Usage:**
+```
+screenshot                  Stream BMP to serial with magic markers
+screenshot shot.bmp         Save BMP to SD card (current directory)
+scr shot.bmp                Alias form
+capture shot.bmp            Alias form
+```
+
+**Serial streaming:** The BMP is preceded by `=== SCREENSHOT BMP BEGIN ===` and
+followed by `=== SCREENSHOT BMP END ===`. Hex-encoded rows are printed for easy
+extraction by host tools or a simple Python script.
+
+**SD card save:** Uses the same storage path as `copy`, `write`, etc. Free-space
+is prechecked, the session is guarded, and a partial destination is removed on
+write failure.
+
+**ERRORLEVEL:** 0 on success, 1 on failure (snapshot error, PSRAM exhaustion, SD
+write error, invalid path), 2 on usage error (too many arguments).
+
+**Batch file example:**
+```batch
+screenshot shot.bmp
+if errorlevel 1 echo Screenshot failed
+```
+
 ## DOS-Style File Commands
 
 All file commands operate on SD card through guarded mount/unmount. Working directory and environment are RAM-only (not persisted across boots).

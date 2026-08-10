@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.12] - 2026-08-10
+
+Screenshot feature. Adds the `screenshot` command (aliases `scr`, `capture`) for
+retrieving an exact pixel-perfect BMP capture of the current LVGL screen over
+the existing UART/USB-Serial-JTAG console or to an SD card file.
+
+### Added - `screenshot [filename.bmp]` (aliases `scr`, `capture`)
+
+- Captures the current LVGL screen using `lv_snapshot_take()` with RGB565 format.
+- When no filename is given: streams the complete BMP (54-byte header + RGB888
+  pixels) over the UART/USB-Serial-JTAG console with clear magic markers
+  (`=== SCREENSHOT BMP BEGIN ===` / `=== SCREENSHOT BMP END ===`) for
+  easy host-side extraction.
+- When a filename is given: writes the BMP to the SD card using the existing
+  storage path (cwd-relative resolution, guarded session, free-space precheck,
+  partial-destination cleanup on failure).
+- BMP format: 24-bit RGB888, bottom-up, BI_RGB (no compression), 96 DPI,
+  zero extra libraries required — opens in any image viewer.
+- Uses the LVGL lock (`lvgl_port_lock(0)`) exactly as the rest of the
+  codebase does, so it is safe from any task context.
+- Sets ERRORLEVEL: 0 on success, 1 on failure (snapshot failed, PSRAM
+  exhausted, SD write error, invalid path), 2 on usage error.
+- Works in batch files and AUTOEXEC.BAT. Supports redirection to capture
+  the transcript output.
+- Graceful degradation: PSRAM allocation failures produce clear DOS-style
+  errors; LVGL lock acquisition failures are handled; SD card absence is
+  reported before any file operations.
+
+### Config
+
+- New tunables in `p4minishell_config.h` and `p4minishell_config.yaml`
+  under `screenshot`: display dimensions (1024x600), color format
+  (RGB565), BMP begin/end markers, and UART chunk size (512 bytes).
+- Enabled `CONFIG_LV_USE_SNAPSHOT=y` in `sdkconfig.defaults`.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11): screenshot command captures the screen, streams the BMP
+  over serial with correct magic markers, and saves to SD card successfully.
+  The BMP opens correctly in image viewers showing the exact screen content.
+
+---
+
 ## [0.24.11] - 2026-08-10
 
 HTTPS support release. Adds the simplest possible, lowest-risk basic HTTPS
