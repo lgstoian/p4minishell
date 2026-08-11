@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file command.c
  * @brief Command parser and dispatcher implementation for P4MiniShell.
  *
@@ -150,8 +150,6 @@ static void shell_execute_gpio_command(int argc, char **argv);
 static void shell_execute_rgb_command(int argc, char **argv);
 static void shell_execute_camera_command(int argc, char **argv);
 static void shell_command_prompt_cmd(int argc, char **argv);
-static void shell_command_date(int argc, char **argv);
-static void shell_command_time_cmd(int argc, char **argv);
 
 /* ========================================================================
  * BOARD GPIO TABLE
@@ -666,7 +664,7 @@ static void shell_command_clear(void)
 }
 
 /**
- * `prompt` — show or set the DOS prompt template.
+ * `prompt` â€” show or set the DOS prompt template.
  *
  * Usage:
  *   prompt              Show the active template and its rendered form
@@ -710,146 +708,6 @@ static void shell_command_prompt_cmd(int argc, char **argv)
 
     shell_print_ok("prompt: template set to '%s'", shell_prompt_get_template());
     shell_print_field("prompt: renders as", "%s", shell_prompt_render_plain());
-}
-
-/**
- * `date` — show or set the system date.
- *
- * Usage: date [MM-DD-YYYY]
- * Setting the date adjusts the C library clock. When SNTP later synchronizes,
- * the network time wins, which matches how DOS-era boxes behaved against an
- * authoritative source.
- */
-static void shell_command_date(int argc, char **argv)
-{
-    struct tm now;
-    struct timeval tv;
-    time_t stamp;
-    int month = 0;
-    int day = 0;
-    int year = 0;
-
-    if (argc == 1) {
-        const char *text = shell_get_time_string();
-
-        shell_print_field("The current date is:", "%s", text != NULL ? text : "unknown");
-        if (!shell_time_is_synced()) {
-            shell_print_muted("date: clock is not NTP-synchronized yet");
-        }
-        return;
-    }
-
-    if (argc != 2) {
-        shell_print_usage("Usage: date [MM-DD-YYYY]");
-        return;
-    }
-
-    if (sscanf(argv[1], "%d-%d-%d", &month, &day, &year) != 3 &&
-        sscanf(argv[1], "%d/%d/%d", &month, &day, &year) != 3) {
-        shell_print_usage("Usage: date [MM-DD-YYYY]");
-        shell_record_warningf("date", "Unparsable date argument: %s", argv[1]);
-        return;
-    }
-
-    if (month < 1 || month > 12 || day < 1 || day > 31 || year < 1970 || year > 2099) {
-        shell_print_usage("Usage: date [MM-DD-YYYY]");
-        shell_transcript_append_text("date: value out of range (months 1-12, days 1-31, years 1970-2099)\n");
-        shell_record_warningf("date", "Out of range or wrong order (expected MM-DD-YYYY): %s", argv[1]);
-        return;
-    }
-
-    now = time_get_local();
-    now.tm_mon = month - 1;
-    now.tm_mday = day;
-    now.tm_year = year - 1900;
-    now.tm_isdst = -1;
-
-    stamp = mktime(&now);
-    if (stamp == (time_t)-1) {
-        shell_print_error("date: could not apply that date");
-        shell_record_warningf("date", "mktime rejected %s", argv[1]);
-        return;
-    }
-
-    tv.tv_sec = stamp;
-    tv.tv_usec = 0;
-    if (settimeofday(&tv, NULL) != 0) {
-        shell_print_error("date: failed to update the system clock");
-        shell_record_errorf("date", ESP_FAIL, "settimeofday failed");
-        return;
-    }
-
-    shell_print_field("The current date is:", "%s", shell_get_time_string());
-}
-
-/**
- * `time` — show or set the system time.
- *
- * Usage: time [HH:MM[:SS]]
- * Setting the time adjusts the C library clock; a later SNTP sync overrides it.
- */
-static void shell_command_time_cmd(int argc, char **argv)
-{
-    struct tm now;
-    struct timeval tv;
-    time_t stamp;
-    int hour = 0;
-    int minute = 0;
-    int second = 0;
-    int parsed;
-
-    if (argc == 1) {
-        const char *text = shell_get_time_string();
-
-        shell_print_field("The current time is:", "%s", text != NULL ? text : "unknown");
-        if (!shell_time_is_synced()) {
-            shell_print_muted("time: clock is not NTP-synchronized yet");
-        }
-        return;
-    }
-
-    if (argc != 2) {
-        shell_print_usage("Usage: time [HH:MM[:SS]]");
-        return;
-    }
-
-    parsed = sscanf(argv[1], "%d:%d:%d", &hour, &minute, &second);
-    if (parsed < 2) {
-        shell_print_usage("Usage: time [HH:MM[:SS]]");
-        shell_record_warningf("time", "Unparsable time argument: %s", argv[1]);
-        return;
-    }
-    if (parsed == 2) {
-        second = 0;
-    }
-
-    if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
-        shell_transcript_append_text("time: value out of range (hours 0-23, minutes and seconds 0-59)\n");
-        return;
-    }
-
-    now = time_get_local();
-    now.tm_hour = hour;
-    now.tm_min = minute;
-    now.tm_sec = second;
-    now.tm_isdst = -1;
-
-    stamp = mktime(&now);
-    if (stamp == (time_t)-1) {
-        shell_print_error("time: could not apply that time");
-        shell_record_warningf("time", "mktime rejected %s", argv[1]);
-        return;
-    }
-
-    tv.tv_sec = stamp;
-    tv.tv_usec = 0;
-    if (settimeofday(&tv, NULL) != 0) {
-        shell_print_error("time: failed to update the system clock");
-        shell_record_errorf("time", ESP_FAIL, "settimeofday failed");
-        return;
-    }
-
-    shell_print_field("The current time is:", "%s", shell_get_time_string());
 }
 
 /* ========================================================================
@@ -1053,7 +911,7 @@ static void shell_execute_camera_command(int argc, char **argv)
 /* ========================================================================
  * HTTPGET / WGET
  * ========================================================================
- * `httpget <url> [localfile]` — the HTTP engine lives in
+ * `httpget <url> [localfile]` â€” the HTTP engine lives in
  * components/networking (the sole owner of the esp_http_client surface); this
  * file only dispatches, renders the body, and saves it to SD through the
  * storage write path with the usual free-space guardrails. ERRORLEVEL is 0 on
@@ -1192,13 +1050,13 @@ static inline void rgb565_to_bmp_row(uint8_t *dst, const uint16_t *src, uint32_t
 }
 
 /**
- * `screenshot` / `scr` / `capture` — capture the LVGL screen as a BMP image.
+ * `screenshot` / `scr` / `capture` â€” capture the LVGL screen as a BMP image.
  *
  * Usage:
- *   screenshot              → stream BMP over UART with magic markers
- *   screenshot file.bmp     → save BMP to SD card (current directory)
+ *   screenshot              â†’ stream BMP over UART with magic markers
+ *   screenshot file.bmp     â†’ save BMP to SD card (current directory)
  *
- * Captures via lv_snapshot_take_to_draw_buf(), converts RGB565 → RGB888 for the BMP,
+ * Captures via lv_snapshot_take_to_draw_buf(), converts RGB565 â†’ RGB888 for the BMP,
  * and outputs either to the serial console (with begin/end markers for
  * host-side extraction) or to an SD card file with free-space precheck.
  */
@@ -1520,7 +1378,7 @@ bool shell_execute_command_core(char *command)
     /* Module-routed family handlers (wifi, bluetooth/bt, usb, sd, disk) parse
      * the full command line themselves, so they need the original text. The
      * shell_split_args() call below writes token terminators into the buffer
-     * in place — after it runs, `command` would be truncated to the first
+     * in place â€” after it runs, `command` would be truncated to the first
      * token ("wifi status" -> "wifi"). Preserve a heap copy of the trimmed
      * line for those branches. The copy is only made for family prefixes, and
      * every family branch frees it, so normal commands never allocate. */
@@ -1654,8 +1512,9 @@ bool shell_execute_command_core(char *command)
      * These receive the original unsplit line because their own parsers
      * need the full text (for example `wifi connect <ssid> <password>`). */
     if (shell_text_equals_ignore_case(argv[0], "wifi")) {
-        networking_handle_wifi_command(family_command);
+        esp_err_t wifi_error = networking_handle_wifi_command(family_command);
         free(family_command);
+        batch_set_errorlevel(wifi_error == ESP_OK ? 0 : 1);
         return true;
     }
 
@@ -1854,13 +1713,25 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* Time / date / timezone / SNTP commands live in the clock component. */
     if (shell_text_equals_ignore_case(argv[0], "date")) {
-        shell_command_date(argc, argv);
+        clock_command_date(argc, argv);
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "time")) {
-        shell_command_time_cmd(argc, argv);
+        clock_command_time(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sntp") ||
+        shell_text_equals_ignore_case(argv[0], "ntpsync")) {
+        clock_command_sntp(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "timezone")) {
+        clock_command_timezone(argc, argv);
         return true;
     }
 
@@ -2052,8 +1923,8 @@ bool shell_execute_command_core(char *command)
  * COMMAND EXECUTION PIPELINE
  * ========================================================================
  * A command line goes through five stages before dispatch:
- *   1. Chain splitting on unquoted &, &&, and || — one segment at a time
- *   2. Variable expansion (%VAR%, %0..%9, %*) — owned by components/batch
+ *   1. Chain splitting on unquoted &, &&, and || â€” one segment at a time
+ *   2. Variable expansion (%VAR%, %0..%9, %*) â€” owned by components/batch
  *   3. Redirection parsing (>, >>, and <)
  *   4. Input redirection published to components/storage for the stage
  *   5. Dispatch, then capture of the transcript delta for output redirection.
@@ -2340,6 +2211,61 @@ void command_set_volume(int percent)
 }
 
 /* ========================================================================
+ * CLOCK HOST-RENDER WRAPPERS
+ * ========================================================================
+ * The clock component's date/time/timezone/sntp commands render through the
+ * clock_host_ops_t table. These wrappers map each entry onto the matching
+ * shell print/record helper, passing the clock-supplied text as a %s argument
+ * so a literal '%' or '@' in it stays data (same injection guard the shell
+ * print helpers use internally).
+ */
+
+static void command_clock_print_heading(const char *text)
+{
+    shell_print_heading("%s", text);
+}
+
+static void command_clock_print_field(const char *label, const char *value)
+{
+    shell_print_field(label, "%s", value);
+}
+
+static void command_clock_print_ok(const char *text)
+{
+    shell_print_ok("%s", text);
+}
+
+static void command_clock_print_error(const char *text)
+{
+    shell_print_error("%s", text);
+}
+
+static void command_clock_print_warning(const char *text)
+{
+    shell_print_warning("%s", text);
+}
+
+static void command_clock_print_muted(const char *text)
+{
+    shell_print_muted("%s", text);
+}
+
+static void command_clock_print_usage(const char *text)
+{
+    shell_print_usage("%s", text);
+}
+
+static void command_clock_record_error(const char *domain, esp_err_t error, const char *message)
+{
+    shell_record_errorf(domain, error, "%s", message);
+}
+
+static void command_clock_record_warning(const char *domain, const char *message)
+{
+    shell_record_warningf(domain, "%s", message);
+}
+
+/* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
 
@@ -2408,6 +2334,27 @@ void command_init(void)
     /* Publish this module's services to the shell core. Keeping the
      * dependency one-way (command -> shell) avoids a component cycle. */
     shell_register_command_ops(&shell_ops);
+
+    /* Publish the shell render helpers to the clock component. The clock
+     * commands (date/time/timezone/sntp) live in components/clock and stay a
+     * leaf; they print through this table. Each wrapper passes the text as a
+     * %s argument so a literal '%' or '@' in it is treated as data. */
+    {
+        static const clock_host_ops_t clock_ops = {
+            .emit_text          = shell_transcript_append_text,
+            .print_heading      = command_clock_print_heading,
+            .print_field        = command_clock_print_field,
+            .print_ok           = command_clock_print_ok,
+            .print_error        = command_clock_print_error,
+            .print_warning      = command_clock_print_warning,
+            .print_muted        = command_clock_print_muted,
+            .print_usage        = command_clock_print_usage,
+            .record_error       = command_clock_record_error,
+            .record_warning     = command_clock_record_warning,
+            .equals_ignore_case = shell_text_equals_ignore_case,
+        };
+        clock_register_host_ops(&clock_ops);
+    }
 
     s_initialized = true;
     ESP_LOGI(COMMAND_TAG, "Command module initialized");

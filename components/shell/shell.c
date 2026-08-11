@@ -707,6 +707,14 @@ void shell_history_transcript_scroll_to_end(void)
     windows_scroll_transcript_to_end();
 }
 
+void shell_force_transcript_scroll_to_end(void)
+{
+    /* Command submission: jump to the newest output even if the user was
+     * reading earlier history. Deferred to the LVGL task by the window
+     * manager's coalesced repaint. */
+    windows_force_scroll_transcript_to_end();
+}
+
 size_t shell_transcript_get_length(void)
 {
     return strlen(s_transcript);
@@ -1699,7 +1707,9 @@ void shell_uart_console_submit_command(const char *command)
         s_command_ops.execute_command(command_copy);
     }
 
-    shell_history_transcript_scroll_to_end();
+    /* Jump to the output of the submitted command even when the user was
+     * reading earlier history. */
+    shell_force_transcript_scroll_to_end();
     lvgl_port_unlock();
 
     if (s_shell_command_lock != NULL) {
@@ -1829,6 +1839,20 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
                 break;
             case 0x4C: /* Delete: remove char at cursor */
                 lv_textarea_delete_char(input_line);
+                break;
+            case 0x4B: /* PageUp: scroll the transcript up one page */
+                {
+                    lv_obj_t *transcript = windows_get_transcript();
+                    int32_t page = transcript != NULL ? lv_obj_get_height(transcript) : 0;
+                    windows_scroll_transcript_by(-page);
+                }
+                break;
+            case 0x4E: /* PageDown: scroll the transcript down one page */
+                {
+                    lv_obj_t *transcript = windows_get_transcript();
+                    int32_t page = transcript != NULL ? lv_obj_get_height(transcript) : 0;
+                    windows_scroll_transcript_by(page);
+                }
                 break;
             case 0x4A: /* Home: move to beginning */
                 {
@@ -2315,16 +2339,6 @@ void shell_header_status_refresh(void)
 int64_t shell_get_boot_timestamp_us(void)
 {
     return s_boot_timestamp_us;
-}
-
-const char *shell_get_time_string(void)
-{
-    return time_get_formatted();
-}
-
-bool shell_time_is_synced(void)
-{
-    return time_is_synchronized();
 }
 
 /* ========================================================================

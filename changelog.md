@@ -7,6 +7,195 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.17] - 2026-08-11
+
+Persistent known Wi-Fi networks. The firmware now stores a list of previously-
+used networks (SSID + password + metadata) on the SD card and automatically
+connects to the best known network on every boot, while preserving the classic
+single-credential CONFIG.SYS path when the SD card is absent.
+
+### Added - known-network storage (sd:/WIFI.KNOWN)
+
+- `components/networking/wifi_known.c` + `wifi_known.h`: an in-memory cache and
+  a persistent, hand-editable text list on SD. File format
+  `SSID|PASSWORD|AUTH|PRIORITY|PREFERRED|LAST_CONNECTED|CONNECT_COUNT`, one
+  network per line. The file is written atomically (temp + rename) with the
+  storage free-space pre-check and partial-file cleanup; entries are capped at
+  `P4_CONFIG_WIFI_KNOWN_MAX` (16), evicting the least preferred / lowest-
+  priority / oldest entry when full. Duplicate SSIDs are deduplicated
+  case-insensitively.
+- New commands (each sets ERRORLEVEL, is redirectable, and never prints a
+  password): `wifi known` / `wifi list known`, `wifi save [ssid]`,
+  `wifi forget <ssid>` / `wifi delete <ssid>`, `wifi forget all` /
+  `wifi clear known`, and `wifi preferred <ssid>`.
+- Boot-time auto-connect: after the STA runtime is up, when
+  `WIFI_AUTOCONNECT=ON` (the CONFIG.SYS master switch) the firmware loads the
+  known list, scans, and connects to the best visible known network (preferred
+  / highest priority / strongest RSSI), then falls back to the classic
+  single-credential path when the list is empty or no known network is in
+  range. The existing watchdog / exponential-backoff machinery retries the
+  chosen target.
+- Successful connections (interactive `wifi connect`, CONFIG.SYS
+  WIFI_SSID/WIFI_PASSWORD, or known-network auto-connect) auto-update the list
+  when `P4_CONFIG_WIFI_KNOWN_AUTOSAVE` is enabled and the card is present.
+
+### Changed
+
+- `networking_wifi_set_boot_credentials()` now preserves the other field when
+  called with a single credential, so `WIFI_SSID=x` + `WIFI_PASSWORD=y` in
+  CONFIG.SYS assemble the pair (and seed the known list) correctly.
+- `networking_handle_wifi_command()` returns `esp_err_t`; the command module
+  maps it onto ERRORLEVEL (0 success, 1 failure) for the known-list commands.
+
+### Safety (verified on hardware)
+
+- No SD card / eject / missing or corrupt file / read-only or full disk: the
+  known-list commands report a clear "unavailable" message, boot and normal
+  operation continue, and the single-credential path is used. No crash, no
+  freeze, no infinite retry.
+
+### Config
+
+- New tunables in `p4minishell_config.h` / `p4minishell_config.yaml`:
+  `P4_CONFIG_WIFI_KNOWN_MAX` (16), `P4_CONFIG_WIFI_KNOWN_FILE` ("WIFI.KNOWN"),
+  `P4_CONFIG_WIFI_KNOWN_AUTOSAVE` (1), `P4_CONFIG_WIFI_KNOWN_LINE_BYTES` (256).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11): `wifi connect 4G-CPE_5542` auto-saves the network; `wifi
+  known` lists it (SSID + preferred/last-used markers, never the password);
+  `wifi preferred` / `wifi forget` / `wifi forget all` update the file. With
+  CONFIG.SYS `WIFI_AUTOCONNECT=ON`, a reboot automatically reconnects to the
+  known network (auto-connect -> associated -> got IP) and refreshes the list.
+  Ejecting the SD card makes every known-list command fail gracefully and the
+  shell stays responsive. A 400-command soak completed with no stall, no
+  watchdog trip, and no panic.
+- Note: a pre-existing, unrelated stack-overflow in the `copy` command (three
+  path buffers + vfprintf on the 8192-byte worker stack) reproduces on this
+  build; it is not introduced by this change and is tracked separately.
+
+---
+
+## [0.24.16] - 2026-08-11
+
+Time / SNTP control release. All time, date, timezone, and NTP behaviour now
+lives in the clock component, surfaced by `date`, `time`, `timezone`, and
+`sntp`/`ntpsync` shell commands. The clock can be synchronized against an NTP
+server, the timezone is settable, and the date/time show is a fuller clock
+panel.
+
+### Added - timezone and SNTP control
+
+- `timezone [TZ]` — show the current POSIX timezone string, or set one (e.g.
+  `timezone UTC`, `timezone CET-1CEST,M3.5.0,M10.5.0/3`). The local time
+  re-renders immediately through the C library.
+- `sntp` / `ntpsync` — show NTP sync status (server, synced or not, local
+  time). `sntp sync` (alias `ntpsync sync`) forces a fresh NTP exchange against
+  the configured server; once Wi-Fi is connected the clock jumps to the network
+  time. The NTP server hostname is configurable via `P4_CONFIG_NTP_SERVER`.
+
+### Changed - fuller date/time and clock-component ownership
+
+- `date` and `time` with no argument now show the full clock panel: local time,
+  UTC, Unix timestamp, timezone, uptime, and NTP sync status. Their set forms
+  (`date MM-DD-YYYY`, `time HH:MM[:SS]`) are unchanged.
+- The `date`, `time`, `timezone`, and `sntp`/`ntpsync` command bodies moved
+  from `components/command/command.c` into `components/clock/clock_commands.c`
+  so every time/SNTP behaviour is owned by the clock component. The clock
+  component stays a leaf: the commands render through a `clock_host_ops_t`
+  table registered by `command_init()`, whose wrappers map one-to-one onto the
+  shell print helpers (output is byte-for-byte identical).
+- Removed the now-unused `shell_get_time_string()` and `shell_time_is_synced()`
+  wrappers from `components/shell/` (the clock commands call the clock API
+  directly).
+- `components/clock/clock.h` adds `time_force_resync()`,
+  `time_get_ntp_server()`, `time_get_uptime_formatted()`, the
+  `clock_host_ops_t` table + `clock_register_host_ops()`, and the
+  `clock_command_*()` surface. `clock.c` now reads the NTP server from config.
+
+### Config
+
+- New tunables in `p4minishell_config.h` / `p4minishell_config.yaml`:
+  `P4_CONFIG_NTP_SERVER` ("pool.ntp.org") and `P4_CONFIG_TIMEZONE_BYTES` (64).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11, Wi-Fi SSID `4G-CPE_5542`): `date`/`time` show the fuller
+  panel; `date 08-11-2026`, `time 12:34:56`, and `timezone CET-1CEST,...`
+  (UTC+2 in August) apply correctly; `timezone UTC` restores UTC. `sntp sync`
+  over Wi-Fi synchronizes the clock to real NTP time (`Local: 2026-08-11
+  07:59:36`, `NTP sync: synced (pool.ntp.org)`). A 400-command soak completed
+  with no stall, no watchdog trip, and no panic.
+- Note: an intermittent, pre-existing crash in the LVGL transcript apply path
+  (`lv_font_get_line_height` on a corrupt span font, seen once across ~13 Wi-Fi
+  connect attempts) is unrelated to this change; it reproduces only rarely and
+  is not triggered by the clock commands.
+
+---
+
+## [0.24.15] - 2026-08-11
+
+Transcript navigation release. The scrollable transcript now always jumps to the
+output of the command you just submitted, and it can be scrolled up and down
+from every input surface: dedicated on-screen scroll buttons, USB keyboard
+PageUp/PageDown, and the USB mouse wheel.
+
+### Added - transcript scrolling from all input surfaces
+
+- **Auto-follow on submit**: submitting a command (touch keyboard, USB keyboard,
+  or the serial console) now forces the transcript to jump to the newest output
+  even when the user was reading earlier history. A one-shot force-follow flag
+  is consumed by the first repaint of that command's output; background output
+  (async Wi-Fi status, etc.) afterwards reverts to the terminal-style
+  near-bottom follow, so reading history is never yanked away by background
+  messages.
+- **On-screen scroll buttons**: the input row now has `Up` / `Dn` buttons next
+  to the `Prev` / `Next` history buttons. They page the transcript by
+  `P4_CONFIG_TRANSCRIPT_SCROLL_STEP` pixels per press and are always visible,
+  independent of the on-screen keyboard.
+- **USB keyboard scrolling**: `PageUp` / `PageDown` scroll the transcript by one
+  viewport height. Cursor keys keep their existing editing/history roles.
+- **USB mouse wheel scrolling**: each wheel notch scrolls the transcript by
+  `P4_CONFIG_TRANSCRIPT_SCROLL_STEP` pixels (up notches scroll toward older
+  output). The wheel is processed regardless of `usb mouse` echo mode and is
+  routed to the LVGL task through the app bridge exactly like the USB keyboard
+  injection path.
+- Touch drag on the transcript continues to pan it through the container's
+  built-in LVGL scroll handling.
+
+### Changed - window manager and shell bridges
+
+- `components/windows/windows.h` adds `windows_force_scroll_transcript_to_end()`,
+  `windows_scroll_transcript_by(int32_t)`, `windows_scroll_transcript_to_top()`,
+  `windows_get_scroll_up_button()`, and `windows_get_scroll_down_button()`.
+  `windows_transcript_apply()` honours the one-shot force-follow flag.
+- `components/shell/shell.h` adds `shell_force_transcript_scroll_to_end()`; the
+  UART console submit path and the LVGL input-line READY handler (main.c) call it
+  instead of the near-bottom follow. `shell_usb_keyboard_input()` handles
+  PageUp/PageDown for transcript scrolling.
+- `components/usb/usb.c` reads the boot-protocol mouse wheel byte and calls the
+  new `usb_host_scroll_transcript()` bridge; `main.c` implements the bridge with
+  an `lv_async_call` onto the LVGL task.
+
+### Config
+
+- New tunables in `p4minishell_config.h` / `p4minishell_config.yaml`:
+  `P4_CONFIG_TRANSCRIPT_SCROLL_STEP` (60 px per button press / wheel notch),
+  `P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX` (32 px near-bottom follow threshold),
+  and `P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH` (64 px input-row scroll button).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11): 400-command soak with no stall, no task watchdog trip, no
+  panic, and a responsive shell afterward. Screenshot confirms the input row
+  now renders the four buttons (Prev / Next / Up / Dn) with the transcript and
+  keyboard unchanged.
+
+---
+
 ## [0.24.14] - 2026-08-10
 
 Full printable-ASCII keyboard support. The on-screen LVGL keyboard can now type

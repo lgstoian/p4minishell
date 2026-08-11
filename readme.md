@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.24.14 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.24.17 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -30,14 +30,14 @@ p4minishell_config.yaml     Configuration documentation (YAML source of truth)
 components/ansi/            ANSI/VT escape sequence module (SGR colors, attributes, formatting) + semantic palette
 components/display/         Display manager (rotation, resolution, refresh, brightness, power)
 components/windows/         Window manager (LVGL screen layout, dynamic scaling, styling)
-components/clock/           Clock manager (SNTP time sync, timezone, local/UTC formatting)
+components/clock/           Clock manager + clock commands (SNTP time sync, timezone, local/UTC formatting, date/time/timezone/sntp)
 components/keyboard/        Keyboard manager (LVGL keyboard, visibility, modes)
 components/shell/           Shell core (transcript, history, debug log, UART console, input line, sysinfo)
 components/storage/         SD sessions, path resolution, FATFS conversion, cwd, DOS file commands
 components/batch/           Batch engine, labels, for loops, pipes, environment variables, PATH
 components/command/         Command module (parser, dispatcher, worker task, execution pipeline, hardware and system commands)
 components/header/          Fixed top status bar (Wi-Fi, battery, Bluetooth, USB, SD)
-components/networking/      Sole owner of ESP-Hosted + esp_wifi_remote: Wi-Fi station lifecycle, hosted NimBLE, status accessors
+components/networking/      Sole owner of ESP-Hosted + esp_wifi_remote: Wi-Fi station lifecycle, hosted NimBLE, status accessors, known-network storage (wifi_known.c)
 components/usb/             USB Host MSC storage (/usb0) + HID keyboard/mouse
 components/c6ota/           ESP32-C6 firmware OTA via ESP-Hosted SDIO
 coprocessor/esp32c6_slave/  ESP32-C6 hosted slave firmware project
@@ -90,6 +90,7 @@ the YAML to match.
 ## Key Features
 
 - **Touch-first shell UI**: Transcript span group, prompt input line, on-screen keyboard, 10-command recall. The symbols keyboard covers every printable ASCII character, including the shell-critical pipe `|`, caret `^`, tilde `~`, and backtick.
+- **Scrollable transcript**: A scrollable transcript that holds a multi-screenful history and always jumps to the output of the command you just submitted. Scroll with the input-row `Up`/`Dn` buttons, touch drag, USB keyboard `PageUp`/`PageDown`, or the USB mouse wheel.
 - **ANSI/VT color support**: PowerShell-inspired 16-color palette with SGR escape sequences (ESC[...m) for colored command output on both LVGL transcript (per-span colours) and UART console
 - **Serial console bridge**: `idf.py monitor` acts as interactive shell endpoint over UART/USB-Serial-JTAG
 - **Worker-task execution**: Heavy commands run off LVGL event stack to prevent overflow
@@ -111,12 +112,14 @@ the YAML to match.
 - **Command chaining**: `a & b` (both), `a && b` (on success), `a || b` (on failure)
 - **DOS quoting and escaping**: `"text"` groups with expansion, `'text'` groups literally, `^c` escapes any character
 - **Hosted Wi-Fi**: ESP-Hosted + esp_wifi_remote on C6 with version compatibility gate. Station-only, enforced in code and by compiling SoftAP out. Every Hosted and wifi_remote call is confined to `components/networking/`. `wifi status` reports SSID/BSSID/channel/RSSI/PHY/IP/DNS/uptime, `wifi scan` is RSSI-sorted with a bare `/b` form, and classic `ping` + `dns`/`nslookup` connectivity commands set ERRORLEVEL for batch use.
+- **Known Wi-Fi networks**: A persistent list of previously-used networks lives on the SD card (`sd:/WIFI.KNOWN`, hand-editable plain text). On boot with `WIFI_AUTOCONNECT=ON`, the firmware scans and connects to the best known network in range (preferred / highest priority / strongest RSSI), falling back to the classic single-credential path when the SD card is absent. Manage it with `wifi known`, `wifi save`, `wifi forget`, and `wifi preferred` — passwords are never printed.
 - **Basic HTTPS**: `httpget <url> [localfile]` (alias `wget`) performs a simple HTTPS/HTTP GET over the same `esp_http_client` stack c6ota uses, printing the body or saving it to SD with free-space guardrails, setting ERRORLEVEL, and supporting redirection/pipes. All HTTP/TLS code lives in `components/networking/`.
 - **Hosted Bluetooth**: NimBLE VHCI on C6 for BLE scan and advertising, with a sorted bounded scan report and session-scoped `advertise on [name]`
 - **USB Host**: MSC mass storage at `/usb0`, HID keyboard/mouse with opt-in echo
 - **USB Keyboard Auto-Detect**: Plug in a USB keyboard to type commands; on-screen keyboard hides automatically. Full US keyboard layout supported including symbols, keypad, navigation keys, and function keys.
 - **C6 OTA updates**: Validated firmware updates from SD or HTTP/S over ESP-Hosted SDIO
 - **Hardware controls**: Brightness, rotation, battery telemetry, volume, GPIO inspection
+- **Time / SNTP control**: `date`, `time`, `timezone`, and `sntp`/`ntpsync` commands (all owned by `components/clock/`). `sntp sync` synchronizes the clock over Wi-Fi, `timezone <TZ>` sets a POSIX timezone string, and `date`/`time` show a fuller clock panel (local/UTC/unix/timezone/uptime/sync) while still supporting the DOS-style set forms.
 - **Fixed header bar**: Wi-Fi, battery, Bluetooth, USB, SD status with transient notifications
 - **Real-time system panel**: Memory (MEM), CPU usage (CPU bar + %), and Battery (BAT) all dynamically linked to FreeRTOS runtime statistics on the far right of the header
 - **Debug history**: 5-entry error/warning buffer surfaced via `debug` command
@@ -133,12 +136,13 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` |
 | **Disk / partitions** | `disk list`, `disk detail`, `disk clean`, `disk create partition primary [size=N]`, `disk delete partition N`, `disk format` |
 | **SD Tools** | `sd info`, `sd ls`, `sd stat`, `sd cat` |
-| **Wi-Fi** | `wifi status|scan [/b]|diag|connect|disconnect` |
+| **Wi-Fi** | `wifi status|scan [/b]|diag|connect|disconnect`, `wifi known|save|forget|clear known|preferred` |
 | **Connectivity** | `ping <host-or-ip> [count]`, `dns <hostname>` (alias `nslookup`), `httpget <url> [localfile]` (alias `wget`) |
 | **Bluetooth** | `bluetooth status|scan [limit]|advertise <on [name]|off>`, `bt` (alias) |
 | **USB** | `usb status|ls|keyboard on|off|mouse on|off` |
 | **Batch** | `set`, `set /a`, `set /p`, `path`, `echo on|off`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]` |
-| **Text tools** | `find`, `more`, `tree`, `fc`, `sort`, `prompt`, `date`, `time` |
+| **Text tools** | `find`, `more`, `tree`, `fc`, `sort`, `prompt` |
+| **Time / SNTP** | `date` `[MM-DD-YYYY]`, `time` `[HH:MM[:SS]]`, `timezone` `[TZ]`, `sntp`/`ntpsync` `[sync]` |
 | **Redirection** | `>`, `>>`, and `<` to and from SD files |
 | **Pipes** | `cmd1 | cmd2 | cmd3` (up to 4 stages) |
 | **Chaining** | `a & b`, `a && b`, `a || b` (up to 8 commands) |

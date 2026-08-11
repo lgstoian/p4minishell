@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             14
+#define P4_CONFIG_VERSION_PATCH             17
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -90,6 +90,20 @@
  * escapes directly instead of recolor markup).
  */
 #define P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES   P4_CONFIG_TRANSCRIPT_BYTES
+
+/**
+ * Transcript scroll step in pixels applied by one on-screen scroll button
+ * press (input-row Up/Dn buttons) and by one USB mouse wheel notch.
+ */
+#define P4_CONFIG_TRANSCRIPT_SCROLL_STEP      60
+
+/**
+ * Transcript auto-follow threshold in pixels. When the scroll position is
+ * within this distance of the bottom, new output keeps the view pinned to the
+ * newest lines (a terminal-style follow). Scrolling up past this threshold
+ * stops the follow until the user returns to the bottom or submits a command.
+ */
+#define P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX 32
 
 /** Maximum bytes in the async (background task) transcript staging buffer. */
 #define P4_CONFIG_ASYNC_TRANSCRIPT_BYTES     2048
@@ -179,6 +193,9 @@
  *  (header, transcript, input row, keyboard) ever touches the display edges. */
 #define P4_CONFIG_WINDOW_SCREEN_PAD_HOR       8
 
+/** Width of the transcript scroll buttons (input-row Up/Dn) in pixels. */
+#define P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH  64
+
 /* ========================================================================
  * KEYBOARD PARAMETERS
  * ======================================================================== */
@@ -243,6 +260,34 @@
  *  flood the transcript. */
 #define P4_CONFIG_WIFI_SCAN_LIMIT           32
 
+/**
+ * Maximum number of previously-used Wi-Fi networks kept in the persistent
+ * known-network list (sd:/WIFI.KNOWN). When the list is full, the least
+ * preferred / lowest-priority / oldest entry is dropped to make room.
+ */
+#define P4_CONFIG_WIFI_KNOWN_MAX            16
+
+/**
+ * SD-card relative filename of the persistent known-network list. Resolved
+ * against the SD root via shell_sd_resolve_path() (accepts sd:/..., /sdcard/...,
+ * or an SD-root-relative name). The file is plain text and hand-editable.
+ */
+#define P4_CONFIG_WIFI_KNOWN_FILE           "WIFI.KNOWN"
+
+/**
+ * When 1, a successful Wi-Fi connection (interactive `wifi connect`, CONFIG.SYS
+ * WIFI_SSID/WIFI_PASSWORD, or known-network auto-connect) automatically updates
+ * the known-network list on the SD card when the card is mounted. When 0, only
+ * the explicit `wifi save` command persists to the list.
+ */
+#define P4_CONFIG_WIFI_KNOWN_AUTOSAVE       1
+
+/**
+ * Maximum bytes for a single line in the known-network file (one entry plus
+ * delimiters and a trailing newline).
+ */
+#define P4_CONFIG_WIFI_KNOWN_LINE_BYTES     256
+
 /* ========================================================================
  * PING AND DNS
  * ========================================================================
@@ -269,6 +314,20 @@
 
 /** Maximum A records `dns` / `nslookup` prints for one hostname. */
 #define P4_CONFIG_DNS_RESULT_LIMIT          8
+
+/* ========================================================================
+ * CLOCK AND SNTP (date / time / timezone / sntp)
+ * ========================================================================
+ * The clock component owns the C-library system clock, timezone, and the SNTP
+ * client. `date`, `time`, `timezone`, and `sntp`/`ntpsync` surface it from the
+ * shell. */
+
+/** NTP server hostname the SNTP client polls. */
+#define P4_CONFIG_NTP_SERVER                "pool.ntp.org"
+
+/** Maximum timezone string length (POSIX TZ string, e.g. "UTC" or
+ *  "CET-1CEST,M3.5.0,M10.5.0/3"). */
+#define P4_CONFIG_TIMEZONE_BYTES             64
 
 /* ========================================================================
  * HTTP CLIENT (httpget / wget)

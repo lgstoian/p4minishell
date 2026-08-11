@@ -36,6 +36,7 @@
 
 #include "bluetooth.h"
 #include "networking.h"
+#include "wifi_known.h"
 #include "p4minishell_config.h"
 
 /* ---- Backward-compatibility aliases ---- */
@@ -65,6 +66,7 @@ static networking_wifi_state_t s_wifi_state = NETWORKING_WIFI_STATE_NOT_ATTEMPTE
 static esp_err_t s_wifi_last_error = ESP_OK;
 static bool s_wifi_connected;
 static bool s_wifi_connect_requested;
+static bool s_wifi_boot_autoconnect = true;
 static char s_wifi_target_ssid[NETWORKING_WIFI_SSID_BYTES];
 static char s_wifi_target_password[NETWORKING_WIFI_PASSWORD_BYTES];
 static char s_wifi_last_detail[NETWORKING_WIFI_DETAIL_BYTES];
@@ -383,13 +385,23 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP && event_data != NULL) {
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)event_data;
+        char ssid_copy[NETWORKING_WIFI_SSID_BYTES];
+        char pass_copy[NETWORKING_WIFI_PASSWORD_BYTES];
 
         wifi_lock();
         s_wifi_connected = true;
         s_wifi_connect_requested = false;
+        snprintf(ssid_copy, sizeof(ssid_copy), "%s", s_wifi_target_ssid);
+        snprintf(pass_copy, sizeof(pass_copy), "%s", s_wifi_target_password);
         wifi_unlock();
         networking_schedulef("[wifi] event: got IP " IPSTR "\n", IP2STR(&event->ip_info.ip));
         networking_notify_headerf(4000, "WiFi connected: " IPSTR, IP2STR(&event->ip_info.ip));
+
+        /* Remember this network on the SD known-list when autosave is on and
+         * the card is present. Fully safe (and silent) without a card. */
+        if (ssid_copy[0] != '\0' && P4_CONFIG_WIFI_KNOWN_AUTOSAVE) {
+            networking_wifi_known_record_connect(ssid_copy, pass_copy);
+        }
     }
 }
 
@@ -808,6 +820,89 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
 #endif
 }
 
+/**
+ * Boot-time auto-connect to a previously-used (known) network.
+ *
+ * Called from the background task once the STA runtime is up and only when the
+ * boot autoconnect policy (WIFI_AUTOCONNECT=ON) is in force. Loads the
+ * known-network list from the SD card (safe, empty on any failure), scans for
+ * visible networks, and connects to the best one (preferred / highest priority
+ * / strongest RSSI). The chosen network becomes the watchdog target, so the
+ * existing exponential-backoff machinery retries it.
+ *
+ * @return true when a connect to a visible known network was initiated, false
+ *         when the list is empty / SD is unavailable / no known network is
+ *         visible (caller falls back to the single-credential path).
+ */
+static bool networking_wifi_auto_connect_known(void)
+{
+#if NETWORKING_WIFI_RUNTIME_ENABLED
+    esp_err_t error;
+    wifi_ap_record_t *records = NULL;
+    uint16_t requested = P4_CONFIG_WIFI_SCAN_LIMIT;
+    uint16_t record_count;
+    int best_index;
+
+    if (!s_wifi_boot_autoconnect) {
+        return false;
+    }
+
+    /* Load the known list (safe; any failure means "no known networks"). */
+    if (networking_wifi_known_load() != ESP_OK) {
+        return false;
+    }
+    if (networking_wifi_known_count() == 0) {
+        return false;
+    }
+
+    records = (wifi_ap_record_t *)calloc(requested, sizeof(wifi_ap_record_t));
+    if (records == NULL) {
+        networking_record_warningf("Auto-connect scan allocation failed");
+        return false;
+    }
+    record_count = requested;
+
+    error = esp_wifi_scan_start(NULL, true);
+    if (error != ESP_OK) {
+        networking_record_warningf("Auto-connect scan failed: %s", esp_err_to_name(error));
+        free(records);
+        return false;
+    }
+    error = esp_wifi_scan_get_ap_records(&record_count, records);
+    if (error != ESP_OK) {
+        networking_record_warningf("Auto-connect scan result read failed: %s", esp_err_to_name(error));
+        free(records);
+        return false;
+    }
+
+    best_index = networking_wifi_known_pick_visible(records, record_count);
+    free(records);
+    if (best_index < 0) {
+        networking_schedulef_ansi("@C[wifi]@R @Yauto-connect:@R no known network in range\n");
+        return false;
+    }
+
+    {
+        networking_wifi_known_entry_t entry;
+        esp_err_t connect_error;
+
+        if (!networking_wifi_known_get(best_index, &entry)) {
+            return false;
+        }
+        networking_schedulef_ansi("@C[wifi]@R @Yauto-connect:@R connecting to known network @W%s@R\n",
+                                  entry.ssid);
+        connect_error = networking_wifi_connect_with_credentials(entry.ssid, entry.password);
+        if (connect_error != ESP_OK) {
+            networking_record_warningf("Auto-connect to known network %s failed: %s",
+                                       entry.ssid, esp_err_to_name(connect_error));
+        }
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
 static void networking_wifi_background_task(void *arg)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
@@ -818,30 +913,40 @@ static void networking_wifi_background_task(void *arg)
     }
 
     if (s_wifi_state == NETWORKING_WIFI_STATE_STARTED) {
-        if (request->connect_with_defaults) {
-            if (networking_wifi_defaults_available()) {
-                esp_err_t connect_error = networking_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
-                                                                                   CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
+        /* Boot auto-connect to a known network takes precedence when enabled;
+         * fall back to the classic single-credential path otherwise. */
+        bool connected_known = false;
+
+        if (s_wifi_boot_autoconnect && !s_wifi_connect_requested) {
+            connected_known = networking_wifi_auto_connect_known();
+        }
+
+        if (!connected_known) {
+            if (request->connect_with_defaults) {
+                if (networking_wifi_defaults_available()) {
+                    esp_err_t connect_error = networking_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
+                                                                                       CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
+                    if (connect_error != ESP_OK) {
+                        networking_schedulef("[wifi] %s default connect failed: %s (0x%x)\n",
+                                             request->origin,
+                                             esp_err_to_name(connect_error),
+                                             (unsigned int)connect_error);
+                        networking_record_warningf("%s default connect failed", request->origin);
+                    }
+                } else {
+                    networking_schedulef("[wifi] %s: sdkconfig default credentials are not configured\n", request->origin);
+                    networking_record_warningf("%s requested default connect without configured credentials", request->origin);
+                }
+            } else if (request->ssid[0] != '\0') {
+                esp_err_t connect_error = networking_wifi_connect_with_credentials(request->ssid, request->password);
                 if (connect_error != ESP_OK) {
-                    networking_schedulef("[wifi] %s default connect failed: %s (0x%x)\n",
+                    networking_schedulef("[wifi] %s connect failed for %s: %s (0x%x)\n",
                                          request->origin,
+                                         request->ssid,
                                          esp_err_to_name(connect_error),
                                          (unsigned int)connect_error);
-                    networking_record_warningf("%s default connect failed", request->origin);
+                    networking_record_warningf("%s connect failed for %s", request->origin, request->ssid);
                 }
-            } else {
-                networking_schedulef("[wifi] %s: sdkconfig default credentials are not configured\n", request->origin);
-                networking_record_warningf("%s requested default connect without configured credentials", request->origin);
-            }
-        } else if (request->ssid[0] != '\0') {
-            esp_err_t connect_error = networking_wifi_connect_with_credentials(request->ssid, request->password);
-            if (connect_error != ESP_OK) {
-                networking_schedulef("[wifi] %s connect failed for %s: %s (0x%x)\n",
-                                     request->origin,
-                                     request->ssid,
-                                     esp_err_to_name(connect_error),
-                                     (unsigned int)connect_error);
-                networking_record_warningf("%s connect failed for %s", request->origin, request->ssid);
             }
         }
 
@@ -1827,14 +1932,12 @@ cleanup:
     return error;
 }
 
-#if NETWORKING_WIFI_RUNTIME_ENABLED
-static bool s_wifi_boot_autoconnect = true;
-#endif
-
 void networking_wifi_set_boot_credentials(const char *ssid, const char *password)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
-    char masked[NETWORKING_WIFI_SSID_BYTES];
+    char masked[NETWORKING_WIFI_SSID_BYTES + 16];
+    char ssid_copy[NETWORKING_WIFI_SSID_BYTES];
+    char pass_copy[NETWORKING_WIFI_PASSWORD_BYTES];
 
     if (ssid == NULL) {
         ssid = "";
@@ -1843,19 +1946,39 @@ void networking_wifi_set_boot_credentials(const char *ssid, const char *password
         password = "";
     }
 
+    /* The CONFIG.SYS parser calls this once for WIFI_SSID= and once for
+     * WIFI_PASSWORD=. Update the field that was actually provided and keep the
+     * other, so the pair is assembled across the two directives. An empty ssid
+     * with an empty password clears the whole target. */
     wifi_lock();
-    snprintf(s_wifi_target_ssid, sizeof(s_wifi_target_ssid), "%s", ssid);
-    snprintf(s_wifi_target_password, sizeof(s_wifi_target_password), "%s", password);
     if (ssid[0] != '\0') {
+        snprintf(s_wifi_target_ssid, sizeof(s_wifi_target_ssid), "%s", ssid);
+    }
+    if (password[0] != '\0') {
+        snprintf(s_wifi_target_password, sizeof(s_wifi_target_password), "%s", password);
+    }
+    if (ssid[0] == '\0' && password[0] == '\0') {
+        s_wifi_target_ssid[0] = '\0';
+        s_wifi_target_password[0] = '\0';
+    }
+    snprintf(ssid_copy, sizeof(ssid_copy), "%s", s_wifi_target_ssid);
+    snprintf(pass_copy, sizeof(pass_copy), "%s", s_wifi_target_password);
+    if (ssid_copy[0] != '\0') {
         s_wifi_connect_requested = true;
         s_wifi_connected = false;
-        snprintf(masked, sizeof(masked), "%s ********", ssid);
+        snprintf(masked, sizeof(masked), "%s ********", ssid_copy);
         networking_schedulef_ansi("@C[wifi]@R @Gboot credentials set@R for @W%s@R\n", masked);
     } else {
         s_wifi_connect_requested = false;
         networking_schedulef_ansi("@C[wifi]@R @Kboot target cleared@R\n");
     }
     wifi_unlock();
+
+    /* Seed the persistent known-network list from CONFIG.SYS when a target
+     * SSID is configured and the SD card is present. Fully safe if absent. */
+    if (ssid_copy[0] != '\0' && P4_CONFIG_WIFI_KNOWN_AUTOSAVE) {
+        (void)networking_wifi_known_upsert(ssid_copy, pass_copy, -1, false);
+    }
 #endif
 }
 
@@ -1883,10 +2006,10 @@ void networking_wifi_diag(void)
 #endif
 }
 
-void networking_handle_wifi_command(char *command)
+esp_err_t networking_handle_wifi_command(char *command)
 {
-    char *argv[5];
-    int argc = networking_split_args(command, argv, 5);
+    char *argv[6];
+    int argc = networking_split_args(command, argv, 6);
 
     if (argc <= 1 || networking_text_equals_ignore_case(argv[1], "help")) {
         networking_appendf("@Y@BWi-Fi Commands:@R\n");
@@ -1897,17 +2020,20 @@ void networking_handle_wifi_command(char *command)
         networking_appendf("  @Gwifi connect@R                Connect using sdkconfig default credentials\n");
         networking_appendf("  @Gwifi connect@R @T<ssid>@R @T<pass>@R  Connect using runtime credentials\n");
         networking_appendf("  @Gwifi disconnect@R             Disconnect the current station session\n");
+        networking_appendf("  @Gwifi known@R                  Show saved networks (SSIDs only; SD known-list)\n");
+        networking_appendf("  @Gwifi save@R [@T<ssid>@R]      Save the connected (or given) network to the known-list\n");
+        networking_appendf("  @Gwifi forget@R @T<ssid>@R      Forget one saved network (@Gforget all@R clears)\n");
+        networking_appendf("  @Gwifi preferred@R @T<ssid>@R  Mark a saved network as preferred for auto-connect\n");
         networking_appendf("  @Gping@R @T<host>@R [@T<count>@R]         Classic ICMP ping (sets ERRORLEVEL)\n");
         networking_appendf("  @Gdns@R @T<hostname>@R            Resolve A records (alias: nslookup)\n");
         networking_appendf("  @KWi-Fi now starts in the background on normal boot and after successful c6ota restore@R\n");
-        networking_appendf("  @Kwifi connect still probes ESP-Hosted in a background task so the shell remains responsive@R\n");
         networking_appendf("  @Kwifi connect passwords are masked in transcript history and not stored in command recall@R\n");
-        return;
+        return ESP_OK;
     }
 
     if (networking_text_equals_ignore_case(argv[1], "status")) {
         networking_wifi_status();
-        return;
+        return ESP_OK;
     }
 
     if (networking_text_equals_ignore_case(argv[1], "scan")) {
@@ -1923,28 +2049,28 @@ void networking_handle_wifi_command(char *command)
                 bare = true;
             } else {
                 networking_appendf("@yUsage: wifi scan [/b]@R\n");
-                return;
+                return ESP_ERR_INVALID_ARG;
             }
         }
         networking_wifi_scan(bare);
-        return;
+        return ESP_OK;
     }
 
     if (networking_text_equals_ignore_case(argv[1], "diag")) {
         networking_wifi_diag();
-        return;
+        return ESP_OK;
     }
 
     if (networking_text_equals_ignore_case(argv[1], "disconnect")) {
         networking_wifi_disconnect();
-        return;
+        return ESP_OK;
     }
 
     if (networking_text_equals_ignore_case(argv[1], "connect")) {
         if (argc == 2) {
             if (!networking_wifi_defaults_available()) {
                 networking_appendf("@Cwifi:@R @ysdkconfig default credentials are not configured@R\n");
-                return;
+                return ESP_ERR_INVALID_STATE;
             }
 
             if (s_wifi_state == NETWORKING_WIFI_STATE_STARTED) {
@@ -1954,7 +2080,7 @@ void networking_handle_wifi_command(char *command)
                 networking_appendf("@Cwifi:@R @Nstarting stack on demand@R\n");
                 (void)networking_wifi_begin_connect_request(NULL, NULL, true);
             }
-            return;
+            return ESP_OK;
         }
 
         if (argc == 4) {
@@ -1964,14 +2090,148 @@ void networking_handle_wifi_command(char *command)
                 networking_appendf("@Cwifi:@R @Nstarting stack on demand@R\n");
                 (void)networking_wifi_begin_connect_request(argv[2], argv[3], false);
             }
-            return;
+            return ESP_OK;
         }
 
         networking_appendf("@yUsage: wifi connect or wifi connect <ssid> <pass>@R\n");
-        return;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* ---- Persistent known-network list management ----
+     * `wifi known`, `wifi save [ssid]`, `wifi forget <ssid>|all`,
+     * `wifi clear known`, `wifi preferred <ssid>`. Each sets ERRORLEVEL via
+     * the returned esp_err_t: ESP_OK = success, ESP_ERR_NOT_FOUND = SD
+     * known-list unavailable, ESP_ERR_INVALID_ARG = usage, other = I/O error. */
+
+    if (networking_text_equals_ignore_case(argv[1], "known") ||
+        (networking_text_equals_ignore_case(argv[1], "list") &&
+         argc >= 3 && networking_text_equals_ignore_case(argv[2], "known"))) {
+        return networking_wifi_known_list();
+    }
+
+    if (networking_text_equals_ignore_case(argv[1], "save")) {
+        char ssid[NETWORKING_WIFI_SSID_BYTES];
+        char password[NETWORKING_WIFI_PASSWORD_BYTES];
+        int authmode = -1;
+        esp_err_t save_error;
+        wifi_ap_record_t ap_info;
+
+        ssid[0] = '\0';
+        password[0] = '\0';
+
+        if (argc >= 3) {
+            snprintf(ssid, sizeof(ssid), "%s", argv[2]);
+        } else {
+            /* No argument: use the current connect target / connected SSID. */
+            wifi_lock();
+            if (s_wifi_target_ssid[0] != '\0') {
+                snprintf(ssid, sizeof(ssid), "%s", s_wifi_target_ssid);
+                snprintf(password, sizeof(password), "%s", s_wifi_target_password);
+            }
+            wifi_unlock();
+        }
+
+        if (ssid[0] == '\0') {
+            networking_appendf("@Cwifi:@R @yUsage: wifi save [ssid]@R (no active target to save)\n");
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        /* Password: current target password if the SSID matches, else the
+         * existing known entry's password, else empty (open network). */
+        if (password[0] == '\0') {
+            wifi_lock();
+            if (networking_text_equals_ignore_case(ssid, s_wifi_target_ssid)) {
+                snprintf(password, sizeof(password), "%s", s_wifi_target_password);
+            }
+            wifi_unlock();
+        }
+        if (password[0] == '\0') {
+            networking_wifi_known_entry_t entry;
+            int index;
+            /* Load so existing entries are visible (and preserved on save). */
+            (void)networking_wifi_known_load();
+            for (index = 0; index < networking_wifi_known_count(); index++) {
+                if (networking_wifi_known_get(index, &entry) &&
+                    networking_text_equals_ignore_case(entry.ssid, ssid)) {
+                    snprintf(password, sizeof(password), "%s", entry.password);
+                    break;
+                }
+            }
+        }
+
+        memset(&ap_info, 0, sizeof(ap_info));
+        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+            authmode = (int)ap_info.authmode;
+        }
+
+        save_error = networking_wifi_known_upsert(ssid, password, authmode, false);
+        if (save_error != ESP_OK) {
+            networking_appendf("@Cwifi:@R @yknown-list unavailable@R (no SD card or write failed)\n");
+            return ESP_ERR_NOT_FOUND;
+        }
+        networking_appendf("@Cwifi:@R @Gsaved@R @W%s@R to the known-list\n", ssid);
+        return ESP_OK;
+    }
+
+    if (networking_text_equals_ignore_case(argv[1], "forget") ||
+        networking_text_equals_ignore_case(argv[1], "delete")) {
+        if (argc < 3) {
+            networking_appendf("@yUsage: wifi forget <ssid> | wifi forget all@R\n");
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (networking_text_equals_ignore_case(argv[2], "all")) {
+            esp_err_t clear_error = networking_wifi_known_clear();
+            if (clear_error != ESP_OK) {
+                networking_appendf("@Cwifi:@R @yknown-list unavailable@R (no SD card or write failed)\n");
+                return ESP_ERR_NOT_FOUND;
+            }
+            networking_appendf("@Cwifi:@R @Gknown-list cleared@R\n");
+            return ESP_OK;
+        }
+        {
+            esp_err_t remove_error = networking_wifi_known_remove(argv[2]);
+            if (remove_error != ESP_OK) {
+                networking_appendf("@Cwifi:@R @yknown-list unavailable@R (no SD card or write failed)\n");
+                return ESP_ERR_NOT_FOUND;
+            }
+            networking_appendf("@Cwifi:@R @Gforgot@R @W%s@R\n", argv[2]);
+            return ESP_OK;
+        }
+    }
+
+    if (networking_text_equals_ignore_case(argv[1], "clear") &&
+        argc >= 3 && networking_text_equals_ignore_case(argv[2], "known")) {
+        esp_err_t clear_error = networking_wifi_known_clear();
+        if (clear_error != ESP_OK) {
+            networking_appendf("@Cwifi:@R @yknown-list unavailable@R (no SD card or write failed)\n");
+            return ESP_ERR_NOT_FOUND;
+        }
+        networking_appendf("@Cwifi:@R @Gknown-list cleared@R\n");
+        return ESP_OK;
+    }
+
+    if (networking_text_equals_ignore_case(argv[1], "preferred")) {
+        if (argc < 3) {
+            networking_appendf("@yUsage: wifi preferred <ssid>@R\n");
+            return ESP_ERR_INVALID_ARG;
+        }
+        {
+            esp_err_t pref_error = networking_wifi_known_set_preferred(argv[2], true);
+            if (pref_error == ESP_ERR_NOT_FOUND) {
+                networking_appendf("@Cwifi:@R @y%s is not in the known-list; use wifi save first@R\n", argv[2]);
+                return ESP_ERR_NOT_FOUND;
+            }
+            if (pref_error != ESP_OK) {
+                networking_appendf("@Cwifi:@R @yknown-list unavailable@R (no SD card or write failed)\n");
+                return ESP_ERR_NOT_FOUND;
+            }
+            networking_appendf("@Cwifi:@R @Gmarked@R @W%s@R @Gpreferred@R\n", argv[2]);
+            return ESP_OK;
+        }
     }
 
     networking_appendf("@rUnknown wifi subcommand:@R %s\n", argv[1]);
+    return ESP_ERR_INVALID_ARG;
 }
 
 void networking_append_sysinfo_summary(void)
@@ -2234,6 +2494,7 @@ void networking_init(const networking_host_ops_t *ops)
     }
 
     bluetooth_init(&s_host_ops);
+    networking_wifi_known_init(&s_host_ops);
     if (!s_networking_initialized) {
         s_networking_initialized = true;
         networking_wifi_request_boot_restore();

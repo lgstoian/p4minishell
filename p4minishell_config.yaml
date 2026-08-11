@@ -10,12 +10,13 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.14
-# Last updated: 2026-08-10 (Full printable-ASCII keyboard: the on-screen
-#                           symbols keyboard now includes the shell-critical
-#                           pipe |, caret ^, tilde ~ and backtick characters
-#                           via a custom LVGL keyboard map)
-config_version: "0.24.14"
+# Version: 0.24.17
+# Last updated: 2026-08-11 (Known Wi-Fi networks: persistent multi-network list
+#                           on SD (sd:/WIFI.KNOWN) with boot-time auto-connect,
+#                           wifi known/save/forget/preferred commands, and a
+#                           clean fallback to the single-credential path when
+#                           the SD card is absent)
+config_version: "0.24.17"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -43,20 +44,37 @@ shell_identity:
 # ---- Transcript and Command Buffers ----
 buffers:
   transcript_bytes:
-    value: 8192
+    value: 16384
     type: size_t
-    description: "Maximum bytes in on-screen transcript buffer"
-    range: "1024..65536"
+    description: >-
+      Maximum bytes stored in the on-screen transcript buffer (scrollback).
+      Kept modest because the buffer lives in internal RAM: growing it past
+      this starves the internal/DMA heap and the heap init aborts at boot.
+    range: "1024..32768"
   transcript_recolor_bytes:
     value: 16384
     type: size_t
     description: >-
-      Maximum bytes of LVGL recolor markup staged for the on-screen transcript
-      label. The recolor form (#RRGGBB text #) inflates the raw ANSI text by
-      roughly 1.5-2x because every colour change carries an open/close marker,
-      so a full 8 KiB transcript needs ~16 KiB of recolor markup. Sized at 2x
-      the plain transcript so the entire scrollback fits on the label.
-    range: "2048..131072"
+      Maximum bytes staged for the on-screen transcript span group. The staged
+      copy is the raw ANSI transcript, so it only needs to hold the same size
+      as the transcript itself (the span group renders SGR escapes directly,
+      no recolor inflation).
+    range: "1024..32768"
+  transcript_scroll_step:
+    value: 60
+    type: int
+    description: >-
+      Pixels the transcript scrolls per input-row Up/Dn button press and per
+      USB mouse wheel notch.
+    range: "16..300"
+  transcript_scroll_follow_px:
+    value: 32
+    type: int
+    description: >-
+      Near-bottom follow threshold in pixels. When the view is within this
+      distance of the bottom, new output keeps it pinned to the newest lines.
+      Submitting a command always forces a jump to the bottom regardless.
+    range: "0..200"
   async_transcript_bytes:
     value: 2048
     type: size_t
@@ -82,6 +100,24 @@ buffers:
     type: size_t
     description: "Maximum bytes per debug log entry"
     range: "32..512"
+
+# ---- Clock and SNTP ----
+# Managed by: components/clock/clock.c + clock_commands.c
+# The clock component owns the C-library system clock, timezone, and the SNTP
+# client. `date`, `time`, `timezone`, and `sntp`/`ntpsync` surface it from the
+# shell (the command bodies live in the clock component and render through the
+# clock_host_ops_t table registered by the command module).
+clock:
+  ntp_server:
+    value: "pool.ntp.org"
+    type: string
+    description: "NTP server hostname the SNTP client polls"
+    range: "any resolvable hostname"
+  timezone_bytes:
+    value: 64
+    type: size_t
+    description: "Maximum timezone string length (POSIX TZ string)"
+    range: "16..128"
 
 # ---- UI Layout ----
 ui_layout:
@@ -169,6 +205,11 @@ windows:
     type: int
     description: "Input row height maximum clamp in pixels"
     range: "40..80"
+  scroll_button_width:
+    value: 64
+    type: int
+    description: "Width of the transcript scroll buttons (input-row Up/Dn) in pixels"
+    range: "40..120"
   keyboard_height_pct:
     value: 35
     type: int
@@ -240,6 +281,34 @@ wifi:
       (strongest first) and capped at this value so a busy channel cannot flood
       the transcript.
     range: "1..128"
+  known_max:
+    value: 16
+    type: size_t
+    description: >-
+      Maximum number of previously-used Wi-Fi networks kept in the persistent
+      known-network list (sd:/WIFI.KNOWN). When full, the least preferred /
+      lowest-priority / oldest entry is dropped.
+    range: "4..64"
+  known_file:
+    value: "WIFI.KNOWN"
+    type: string
+    description: >-
+      SD-card relative filename of the persistent known-network list. Resolved
+      against the SD root via shell_sd_resolve_path(). Plain, hand-editable text.
+    range: "any valid SD filename"
+  known_autosave:
+    value: 1
+    type: bool
+    description: >-
+      When 1, a successful Wi-Fi connection (interactive wifi connect, CONFIG.SYS
+      WIFI_SSID/WIFI_PASSWORD, or known-network auto-connect) automatically updates
+      the known-network list on the SD card when the card is mounted. When 0, only
+      the explicit wifi save command persists to the list.
+  known_line_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum bytes for a single line in the known-network file"
+    range: "64..512"
 
 # ---- Ping and DNS ----
 # `ping` and `dns` (alias `nslookup`) are classic DOS-style connectivity

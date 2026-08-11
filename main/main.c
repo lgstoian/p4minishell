@@ -112,6 +112,20 @@ void usb_host_schedule_transcript_append_text(const char *text)
     shell_schedule_transcript_appendf("%s", text);
 }
 
+/* Runs the transcript scroll on the LVGL task. user_data carries the signed
+ * pixel delta as an intptr_t. */
+static void shell_mouse_scroll_cb(void *user_data)
+{
+    windows_scroll_transcript_by((int32_t)(intptr_t)user_data);
+}
+
+void usb_host_scroll_transcript(int32_t pixels)
+{
+    /* The USB module task is not the LVGL task; queue the scroll onto the LVGL
+     * task exactly like the USB keyboard injection path does. */
+    lv_async_call(shell_mouse_scroll_cb, (void *)(intptr_t)pixels);
+}
+
 void usb_host_record_error(esp_err_t error, const char *message)
 {
     shell_record_errorf("usb", error, "%s", message != NULL ? message : "");
@@ -216,6 +230,26 @@ static void shell_history_button_event_cb(lv_event_t *event)
         shell_recall_history(-1);
     } else if (next_btn != NULL && lv_event_get_target(event) == next_btn) {
         shell_recall_history(1);
+    }
+}
+
+/* Input-row transcript scroll buttons: page the transcript up and down on
+ * touch. The event runs on the LVGL task, so the scroll calls are direct. */
+static void shell_scroll_button_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+
+    if (code != LV_EVENT_CLICKED) {
+        return;
+    }
+
+    lv_obj_t *up_btn = windows_get_scroll_up_button();
+    lv_obj_t *down_btn = windows_get_scroll_down_button();
+
+    if (up_btn != NULL && lv_event_get_target(event) == up_btn) {
+        windows_scroll_transcript_by(-P4_CONFIG_TRANSCRIPT_SCROLL_STEP);
+    } else if (down_btn != NULL && lv_event_get_target(event) == down_btn) {
+        windows_scroll_transcript_by(P4_CONFIG_TRANSCRIPT_SCROLL_STEP);
     }
 }
 
@@ -325,7 +359,9 @@ static void shell_input_line_event_cb(lv_event_t *event)
         /* Dispatch on the worker task so heavy commands never run on the
          * LVGL event-callback stack. */
         shell_execute_command_async(command);
-        shell_history_transcript_scroll_to_end();
+        /* Jump to the output of the submitted command even if the user was
+         * reading earlier history. */
+        shell_force_transcript_scroll_to_end();
         return;
     }
 
@@ -404,6 +440,15 @@ static void shell_build_ui(void)
     }
     if (next_btn != NULL) {
         lv_obj_add_event_cb(next_btn, shell_history_button_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+
+    lv_obj_t *scroll_up_btn = windows_get_scroll_up_button();
+    if (scroll_up_btn != NULL) {
+        lv_obj_add_event_cb(scroll_up_btn, shell_scroll_button_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+    lv_obj_t *scroll_down_btn = windows_get_scroll_down_button();
+    if (scroll_down_btn != NULL) {
+        lv_obj_add_event_cb(scroll_down_btn, shell_scroll_button_event_cb, LV_EVENT_CLICKED, NULL);
     }
 
     /* Keyboard callback receives LV_EVENT_VALUE_CHANGED for mode and button

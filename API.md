@@ -96,10 +96,14 @@ void        shell_transcript_appendf_ansi(const char *format, ...);
 void        shell_schedule_transcript_appendf(const char *format, ...);
 void        shell_transcript_reset(void);
 void        shell_history_transcript_scroll_to_end(void);
+void        shell_force_transcript_scroll_to_end(void);
 size_t      shell_transcript_get_length(void);
 const char *shell_transcript_get_text_from(size_t offset);
 ```
 - `shell_schedule_transcript_appendf()` is the safe entry point from non-LVGL tasks.
+- `shell_history_transcript_scroll_to_end()` follows only when the view is near the bottom
+  (used after background/async output). `shell_force_transcript_scroll_to_end()` pins the
+  view to the newest output regardless of position and is the command-submission path.
 - `shell_transcript_get_length()` / `shell_transcript_get_text_from()` let the command
   module capture the output delta produced by a single command for `>` / `>>` redirection.
 
@@ -642,10 +646,19 @@ The window manager (`components/windows/`) is the central layout controller for 
 - `lv_obj_t *windows_get_transcript(void)` — Scrollable command output (LVGL span group)
 - `void windows_set_transcript_text(const char *text)` — Set transcript from ANSI text
   (parses it into per-colour spans; the rebuild is deferred to the LVGL task)
+- `void windows_apply_transcript_height(void)` — Rebound the transcript to its computed slot
+- `void windows_scroll_transcript_to_end(void)` — Follow to the bottom only when near it
+- `void windows_force_scroll_transcript_to_end(void)` — Jump to the bottom unconditionally
+  (command submission); the next repaint consumes the one-shot force-follow flag
+- `void windows_scroll_transcript_by(int32_t pixels)` — Scroll by a pixel delta (positive =
+  toward newer output). Must run on the LVGL task.
+- `void windows_scroll_transcript_to_top(void)` — Jump to the oldest retained output
 - `lv_obj_t *windows_get_input_line(void)` — Single-line command entry textarea
 - `lv_obj_t *windows_get_keyboard(void)` — On-screen LVGL keyboard
 - `lv_obj_t *windows_get_prev_button(void)` — Previous history button
 - `lv_obj_t *windows_get_next_button(void)` — Next history button
+- `lv_obj_t *windows_get_scroll_up_button(void)` — Transcript scroll-up button (input row)
+- `lv_obj_t *windows_get_scroll_down_button(void)` — Transcript scroll-down button (input row)
 - `lv_obj_t *windows_get_input_row(void)` — Input row container
 - `lv_obj_t *windows_get_screen(void)` — Active LVGL screen
 
@@ -760,6 +773,65 @@ The display manager (`components/display/`) is the central controller for all di
 
 All display manager state is protected by a `portMUX_TYPE` spinlock. Public API functions use `portENTER_CRITICAL`/`portEXIT_CRITICAL` for atomic access. LVGL operations are dispatched via `lv_async_call` when called from non-LVGL task contexts.
 
+## Clock API
+
+The clock component (`components/clock/`) owns the C-library system clock, the
+timezone, the SNTP client, and the `date`/`time`/`timezone`/`sntp` command
+bodies. It is a leaf (shell -> clock).
+
+### Clock core (`clock.c`)
+```c
+void        time_init(void);
+void        time_start_sntp(void);
+void        time_force_resync(void);
+bool        time_is_initialized(void);
+bool        time_is_synchronized(void);
+struct tm   time_get_local(void);
+struct tm   time_get_utc(void);
+time_t      time_get_unix(void);
+uint32_t    time_get_uptime_sec(void);
+void        time_get_uptime_formatted(char *buf, size_t buflen);
+const char *time_get_formatted(void);
+const char *time_get_formatted_utc(void);
+void        time_set_timezone(const char *tz_string);
+const char *time_get_timezone(void);
+const char *time_get_ntp_server(void);
+```
+- `time_get_formatted()` / `time_get_formatted_utc()` return `YYYY-MM-DD
+  HH:MM:SS` in local / UTC time. `time_get_uptime_formatted()` renders
+  `Xd HH:MM:SS` (days omitted when zero).
+- `time_set_timezone()` accepts a POSIX TZ string; the local time re-renders
+  immediately. `time_force_resync()` stops and restarts the SNTP client for an
+  immediate exchange against `P4_CONFIG_NTP_SERVER`.
+
+### Clock command surface (`clock_commands.c`)
+```c
+void clock_command_date(int argc, char **argv);
+void clock_command_time(int argc, char **argv);
+void clock_command_sntp(int argc, char **argv);
+void clock_command_timezone(int argc, char **argv);
+```
+Dispatched from `command.c`. The bodies live in the clock component and render
+through `clock_host_ops_t`, registered by `command_init()`:
+```c
+typedef struct {
+    void (*emit_text)(const char *text);
+    void (*print_heading)(const char *text);
+    void (*print_field)(const char *label, const char *value);
+    void (*print_ok)(const char *text);
+    void (*print_error)(const char *text);
+    void (*print_warning)(const char *text);
+    void (*print_muted)(const char *text);
+    void (*print_usage)(const char *text);
+    void (*record_error)(const char *domain, esp_err_t error, const char *message);
+    void (*record_warning)(const char *domain, const char *message);
+    bool (*equals_ignore_case)(const char *left, const char *right);
+} clock_host_ops_t;
+void clock_register_host_ops(const clock_host_ops_t *ops);
+```
+- `clock_register_host_ops(NULL)` clears the table; every entry is NULL-checked,
+  so the command surface degrades gracefully before registration.
+
 ## Header API
 
 All `header_update_*()` functions are **safe to call from any task context** (LVGL task, shell worker, timer callback, interrupt handler). They:
@@ -843,8 +915,11 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
   - Initializes hosted Bluetooth through `bluetooth_init(...)`.
   - Starts the normal boot-time Wi-Fi restore flow once.
 
-- `void networking_handle_wifi_command(char *command)`
-  - Entry point for shell-level `wifi ...` command dispatch.
+- `esp_err_t networking_handle_wifi_command(char *command)`
+  - Entry point for shell-level `wifi ...` command dispatch. Returns `esp_err_t`
+    so the command layer maps it onto ERRORLEVEL: ESP_OK = success,
+    ESP_ERR_NOT_FOUND = known-list unavailable (no SD card or file),
+    ESP_ERR_INVALID_ARG = usage, other = I/O error.
 
 - `void networking_wifi_status(void)`
   - Prints the colour-coded association + IP report (SSID, BSSID, channel, RSSI,
@@ -855,6 +930,32 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 - `void networking_wifi_diag(void)`
 - `void networking_wifi_disconnect(void)`
   - Shell-facing Wi-Fi helpers used when the parser wants explicit subcommand entry points.
+
+### Persistent known networks (`wifi_known.h`)
+```c
+void networking_wifi_known_init(const networking_host_ops_t *ops);
+esp_err_t networking_wifi_known_load(void);
+esp_err_t networking_wifi_known_save(void);
+int networking_wifi_known_count(void);
+bool networking_wifi_known_get(int index, networking_wifi_known_entry_t *out);
+esp_err_t networking_wifi_known_upsert(const char *ssid, const char *password,
+                                       int authmode, bool mark_connected);
+esp_err_t networking_wifi_known_remove(const char *ssid);
+esp_err_t networking_wifi_known_clear(void);
+esp_err_t networking_wifi_known_set_preferred(const char *ssid, bool preferred);
+int networking_wifi_known_pick_visible(const wifi_ap_record_t *records, uint16_t count);
+esp_err_t networking_wifi_known_list(void);
+void networking_wifi_known_record_connect(const char *ssid, const char *password);
+```
+- Loads / saves the known-network list on the SD card (`P4_CONFIG_WIFI_KNOWN_FILE`)
+  through the guarded storage session API. Every operation is failure-tolerant:
+  no card / mount failure / missing or corrupt file / read-only or full disk
+  degrades to an empty list or a non-OK return, never a crash, freeze, or hang.
+  The file is written atomically (temp + rename, with remove-and-retry for the
+  FATFS overwrite case) with the storage free-space pre-check and partial-file
+  cleanup. Passwords are stored in the file but never printed.
+- `networking_wifi_known_pick_visible()` selects the best visible known network
+  (preferred / highest priority / strongest RSSI) for boot auto-connect.
 
 - `esp_err_t networking_wifi_ping(const char *host, int count)`
   - Classic ICMP echo over the lwIP `esp_ping` session. `count <= 0` selects the

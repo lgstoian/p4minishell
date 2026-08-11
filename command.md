@@ -90,7 +90,11 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 ## UI Model
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
-- Scrollable transcript (LVGL span group) for coloured command output (read-only)
+- Scrollable transcript (LVGL span group) for coloured command output (read-only). It keeps
+  a multi-screenful history and jumps to the output of the command you just submitted.
+  Scrolling: drag on the transcript, the input-row `Up`/`Dn` buttons, USB keyboard
+  `PageUp`/`PageDown` (one viewport per press), or the USB mouse wheel
+  (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` pixels per notch).
 - Single-line input textarea with prompt for command entry
 - On-screen LVGL keyboard attached to input line
 - Prev/Next buttons for 10-command recall history
@@ -111,7 +115,8 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
 | `brightness`, `rotate`, `battery`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
-| `reboot`, `clear`/`cls`, `prompt`, `date`, `time` | `components/command/command.c` |
+| `reboot`, `clear`/`cls`, `prompt` | `components/command/command.c` |
+| `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota` (family routing) | `components/command/command.c` → owning module |
 | `ping`, `dns`/`nslookup`, `httpget`/`wget` (dispatched here, implemented in networking) | `components/command/command.c` → `components/networking/` |
 
@@ -184,6 +189,33 @@ Request or inspect light sleep. Only available when CONFIG_PM_ENABLE is enabled 
 
 ### volume <0-100>
 Set speaker volume through ES8311 codec path.
+
+### date [MM-DD-YYYY]
+Show the full clock panel or set the system date. With no argument, prints the
+local time, UTC time, Unix timestamp, timezone, uptime, and NTP sync status.
+`date 08-11-2026` (also accepts `/` separators) sets the date; the C library
+clock is updated and a later SNTP sync overrides it. Implemented in
+`components/clock/clock_commands.c`.
+
+### time [HH:MM[:SS]]
+Show the full clock panel or set the system time. With no argument, prints the
+same panel as `date`. `time 14:30:00` (or `14:30`) sets the time. Implemented
+in `components/clock/clock_commands.c`.
+
+### timezone [TZ]
+Show the current POSIX timezone string, or set a new one. `timezone` prints the
+active TZ and the local time; `timezone UTC` restores UTC, and `timezone
+CET-1CEST,M3.5.0,M10.5.0/3` selects Central European Time with DST rules. The
+local date/time re-renders immediately. Implemented in
+`components/clock/clock_commands.c`.
+
+### sntp / ntpsync [sync]
+Show the NTP synchronization state or force a fresh exchange. `sntp` prints the
+configured server, whether the clock is synced, and the local time. `sntp sync`
+(alias `ntpsync sync`) restarts the SNTP client against
+`P4_CONFIG_NTP_SERVER` (default `pool.ntp.org`); once Wi-Fi is connected the
+clock jumps to the network time. Implemented in
+`components/clock/clock_commands.c`.
 
 ### gpio list
 Show exposed board GPIO table with pin numbers, current levels, write policy, and role descriptions.
@@ -844,6 +876,11 @@ Example: `sort names.txt /I /U > unique.txt`
 | wifi connect | Connect using sdkconfig default credentials |
 | wifi connect <ssid> <pass> | Connect with runtime credentials (password masked) |
 | wifi disconnect | Disconnect current station session |
+| wifi known | Show saved networks (SSIDs only — never passwords) with preferred / priority / last-used markers |
+| wifi save [ssid] | Save the connected (or given) network to the SD known-list |
+| wifi forget <ssid> / wifi delete <ssid> | Remove one saved network |
+| wifi forget all / wifi clear known | Clear the entire known-list |
+| wifi preferred <ssid> | Mark a saved network as preferred for auto-connect |
 
 ### Wi-Fi Behavior
 - Boot-time startup in background task (does not block shell UI)
@@ -851,6 +888,21 @@ Example: `sort names.txt /I /U > unique.txt`
 - Recovery guidance points to coprocessor/esp32c6_slave or c6ota default
 - Restores automatically after successful c6ota
 - Transcript-facing diagnostics on boot and post-OTA restore
+
+### Persistent Known Wi-Fi Networks
+- The known-list is a plain, hand-editable file at `sd:/WIFI.KNOWN` (see
+  `P4_CONFIG_WIFI_KNOWN_FILE`), one network per line:
+  `SSID|PASSWORD|AUTH|PRIORITY|PREFERRED|LAST_CONNECTED|CONNECT_COUNT`.
+- On boot with `WIFI_AUTOCONNECT=ON`, the firmware scans and connects to the best
+  visible known network (preferred / highest priority / strongest RSSI), then
+  falls back to the classic single-credential path when the list is empty or no
+  known network is in range. `WIFI_AUTOCONNECT` remains the master switch.
+- Successful connections (`wifi connect`, CONFIG.SYS `WIFI_SSID=`/`WIFI_PASSWORD=`,
+  or auto-connect) update the list automatically when the SD card is present.
+- When the SD card is absent, ejected, read-only, full, or the file is missing or
+  corrupt, every known-list command reports a clear message and sets
+  ERRORLEVEL 1; boot and normal operation continue unchanged. Passwords are
+  stored in the file but never echoed to the transcript, history, or debug log.
 
 ## Connectivity Commands
 

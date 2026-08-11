@@ -97,8 +97,11 @@ local functions.
 
 Owns the shell's runtime surface and output plumbing:
 
-- **Transcript system**: Scrollable textarea backed by an 8 KB buffer with overflow protection.
-  When full, the oldest half is dropped and a `[history truncated]` marker is inserted.
+- **Transcript system**: Scrollable LVGL span group backed by a 16 KB ANSI buffer with overflow
+  protection. When full, the oldest half is dropped and a `[history truncated]` marker is
+  inserted. New output auto-follows the view only while it is near the bottom
+  (`P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX`); submitting a command forces a jump to the newest
+  output so the user always sees the result of what they ran.
 - **Async transcript buffer**: Thread-safe 2 KB staging buffer for background-task output,
   flushed via `lv_async_call`. Oldest bytes are dropped first when full, so the newest module
   output always reaches the user. The buffer is drained into a heap copy (never a line-sized
@@ -385,6 +388,14 @@ Central layout manager owning the LVGL screen region partitioning and dynamic sc
 - **Public accessors**: Individual window objects accessible via getter functions for event callback registration
 - **Works with display.c**: Queries `display_get_width()`/`display_get_height()` for current resolution
 - **Delegates to header.c**: Header region creation delegated to `header_init()`/`header_deinit()`
+- **Scrollable transcript**: The TRANSCRIPT region is a scrollable container holding a span
+  group sized to its exact content height. New output follows the view only when it is near
+  the bottom (`P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX`); `windows_force_scroll_transcript_to_end()`
+  pins the next repaint to the bottom (used on command submission), and
+  `windows_scroll_transcript_by()` / `windows_scroll_transcript_to_top()` page it from the
+  input-row `Up`/`Dn` buttons, the USB keyboard PageUp/PageDown, and the USB mouse wheel.
+  The incremental span append keeps the render cost bounded, and an explicit-content-height
+  child avoids the LVGL scrollable-container-with-LV_SIZE_CONTENT layout loop.
 
 ### Header Module (components/header)
 
@@ -400,6 +411,34 @@ Passive, display-only module that owns the fixed top bar:
 - Notification area in center for transient module events
 - All public functions use LVGL async dispatch (safe from any task context)
 - SD icon shows persistent state (NO/INS/ON/ERR)
+
+### Clock Module (components/clock)
+
+Leaf component that owns the C-library system clock, the timezone, the SNTP
+client, and the time/date shell commands:
+
+- **Clock API** (`clock.c`): `time_init()`, `time_start_sntp()`,
+  `time_force_resync()`, `time_is_initialized()`, `time_is_synchronized()`,
+  `time_get_local()`, `time_get_utc()`, `time_get_unix()`,
+  `time_get_uptime_sec()`, `time_get_uptime_formatted()`,
+  `time_get_formatted()`, `time_get_formatted_utc()`,
+  `time_set_timezone()`, `time_get_timezone()`, `time_get_ntp_server()`.
+  SNTP uses `P4_CONFIG_NTP_SERVER`; the timezone is a POSIX TZ string
+  (`P4_CONFIG_TIMEZONE_BYTES` max). `time_start_sntp()` is designed to run once
+  lwIP is ready; `time_force_resync()` (used by `sntp sync`) restarts the
+  client for an immediate exchange.
+- **Command surface** (`clock_commands.c`): the `date`, `time`, `timezone`, and
+  `sntp`/`ntpsync` command bodies live here. The clock component stays a leaf
+  (shell -> clock), so the commands render through a `clock_host_ops_t` table
+  registered by `command_init()`; each entry maps one-to-one onto the shell
+  print/record helpers, keeping the on-screen output identical to a command in
+  `command.c`. The table is NULL-checked, so the surface degrades gracefully
+  before registration.
+- **`date` / `time`** with no argument print the full clock panel (local, UTC,
+  Unix timestamp, timezone, uptime, NTP sync status); the DOS-style set forms
+  (`date MM-DD-YYYY`, `time HH:MM[:SS]`) update the C-library clock via
+  `settimeofday`. `timezone [TZ]` shows or sets the POSIX TZ string.
+  `sntp|ntpsync [sync]` shows NTP status or forces a re-sync.
 
 ### ANSI/VT Module (components/ansi)
 
@@ -470,11 +509,24 @@ Wi-Fi Kconfig under its own `WIFI_RMT_` prefix.
 - **Event handling**: WIFI_EVENT and IP_EVENT handlers for connection state tracking; the
   STA_CONNECTED handler also records `s_wifi_associated_at_us` so `wifi status` can report
   association uptime
-- **Command dispatch**: `wifi status|scan [/b]|diag|connect|disconnect` with password masking.
+- **Command dispatch**: `wifi status|scan [/b]|diag|connect|disconnect` with password masking,
+  plus the persistent known-network commands `wifi known|save|forget|clear known|preferred`
+  (all set ERRORLEVEL via the `esp_err_t` returned by `networking_handle_wifi_command()`).
   `wifi status` prints a multi-line colour-coded report (SSID, BSSID, channel, RSSI, PHY mode
   + bandwidth, IPv4, netmask, gateway, DNS, uptime); `wifi scan` returns results sorted by RSSI
   in aligned columns capped at `P4_CONFIG_WIFI_SCAN_LIMIT`, and `wifi scan /b` emits bare SSID
   lines that stay uncoloured so redirected output is machine-parsable.
+- **Known Wi-Fi networks** (`wifi_known.c`): a persistent list of previously-used networks on
+  the SD card (`sd:/WIFI.KNOWN`, plain text, hand-editable). The in-memory cache is loaded and
+  saved through the guarded storage session API (`shell_sd_begin`/`shell_sd_end`) and tolerates
+  failure at every step — no SD card, mount failure, missing/corrupt file, read-only or full
+  disk all degrade to an empty list / non-OK return without crashing or blocking boot. The file
+  is rewritten atomically (temp + rename) with the storage free-space pre-check and
+  partial-file cleanup. On boot with `WIFI_AUTOCONNECT=ON`, the background task scans and
+  connects to the best visible known network (preferred / highest priority / strongest RSSI),
+  falling back to the classic single-credential path when the list is empty. Successful
+  connections auto-update the list when `P4_CONFIG_WIFI_KNOWN_AUTOSAVE` is set. Passwords are
+  stored in the file but never printed to the transcript, history, or debug log.
 - **Ping**: `networking_wifi_ping()` runs a classic ICMP echo over the lwIP `esp_ping` session
   (this module is the sole owner of the lwIP surface). Resolves the target with `getaddrinfo`,
   prints reply lines and a DOS-style statistics summary, and returns an `esp_err_t` the

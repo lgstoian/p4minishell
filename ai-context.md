@@ -114,6 +114,19 @@
   is DEFERRED to an `lv_async_call` to avoid a use-after-free when the rebuild is triggered from
   an LVGL event or during a redraw pass. Never call LVGL textarea APIs on the transcript, and
   never rebuild the span group synchronously from an LVGL event context.
+- The transcript is a scrollable CONTAINER holding the span group. The span group is sized to
+  its exact wrapped content height (`windows_transcript_update_content_size()`), never
+  `LV_SIZE_CONTENT`: a content-sized child inside a scrollable container makes
+  `lv_obj_update_layout()` loop forever (the `scr->scr_layout_inv` while-loop), freezing the
+  LVGL task. An explicit pixel height keeps the widget in `LV_SPAN_MODE_FIXED` so layout
+  converges in one pass while the container still scrolls.
+- Transcript follow policy: new output pins the view to the bottom only when the view is within
+  `P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX` of the bottom. Submitting a command
+  (`shell_force_transcript_scroll_to_end()`) sets a one-shot force-follow flag so the command's
+  output is always visible; the flag is consumed by the next apply so later background output
+  reverts to near-bottom following. Scrolling is available from the input-row `Up`/`Dn` buttons,
+  USB keyboard PageUp/PageDown (`windows_scroll_transcript_by()`), and the USB mouse wheel
+  (routed to the LVGL task through the `usb_host_scroll_transcript()` bridge in main.c).
 - ALL debug logging MUST use `shell_record_errorf()` / `shell_record_warningf()` / `shell_record_infof()`
 - Command history MUST use `shell_store_command_history()` / `shell_recall_history()`
 - UART console MUST use `shell_uart_console_start()` / `shell_uart_console_write_text()`
@@ -162,9 +175,10 @@
     `sort`, `sd`) -> `components/storage/storage_commands.c`
   - Batch language verbs (`set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`,
     `choice`, `setlocal`, `endlocal`, `exit`) -> `components/batch/batch.c`
-  - System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c`
-  - Hardware, UI-query, and remaining system verbs -> `components/command/command.c`
-  - Screenshot/capture/scr (LVGL screen capture as BMP) -> `components/command/command.c`
+- System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c`
+- Time / SNTP verbs (`date`, `time`, `timezone`, `sntp`/`ntpsync`) -> `components/clock/clock_commands.c`
+- Hardware, UI-query, and remaining system verbs -> `components/command/command.c`
+- Screenshot/capture/scr (LVGL screen capture as BMP) -> `components/command/command.c`
 - ALL command dispatch MUST go through `shell_execute_command()` (full pipeline) or
   `shell_execute_command_core()` (dispatch only) from `components/command/`
 - Variable expansion (`%VAR%`, `%0`, `%1`..`%9`, `%*`) is implemented in `components/batch/` and
@@ -218,6 +232,21 @@
   `storage_init()`); environment, PATH, batch frame, and errorlevel belong to `components/batch/`
   (reset by `batch_init()`). `command_init()` calls both before registering the ops tables.
 
+### Clock Rules
+- The clock component (`components/clock/`) owns ALL time/SNTP behaviour: the
+  C-library clock, timezone, SNTP client, AND the `date`, `time`, `timezone`,
+  and `sntp`/`ntpsync` command bodies (`clock_commands.c`). Never implement a
+  time command in `command.c` — dispatch there only.
+- The clock component is a LEAF (shell -> clock). Its commands must NOT call
+  shell helpers directly; they render through `clock_host_ops_t`
+  (`clock_register_host_ops()`), registered by `command_init()` with wrappers
+  that map onto `shell_print_*` / `shell_record_*` / `shell_text_equals_ignore_case`.
+  Pass clock-supplied text to the wrappers as a `%s` argument so a literal
+  `%`/`@` stays data. NULL-check every op before use.
+- SNTP server hostname is `P4_CONFIG_NTP_SERVER`; the timezone buffer size is
+  `P4_CONFIG_TIMEZONE_BYTES`. `time_start_sntp()` is intended to run once lwIP
+  is ready; `sntp sync` calls `time_force_resync()` for an immediate exchange.
+
 ### Keyboard Manager Rules
 - ALL keyboard operations MUST go through `components/keyboard/` — never call LVGL keyboard APIs directly from main.c
 - `keyboard_init()` MUST be called after `display_init()` and from the LVGL task context
@@ -256,6 +285,24 @@
   esp_http_client/mbedTLS/TLS calls MUST live inside `components/networking/`. The only
   sanctioned exceptions are `components/c6ota/`, which drives `esp_hosted_slave_ota_*` and its
   own esp_http_client download because co-processor update is its purpose.
+- The persistent known-network list (`wifi_known.c` / `wifi_known.h`) belongs to
+  `components/networking/`. ALL its SD I/O goes through the guarded storage session API
+  (`shell_sd_begin` / `shell_sd_end`) and must tolerate failure at every step: no card,
+  missing/corrupt file, read-only or full disk → empty list, no crash, no freeze, no infinite
+  retry. The file (`P4_CONFIG_WIFI_KNOWN_FILE`, default `sd:/WIFI.KNOWN`) is written
+  atomically (temp + rename) with the storage free-space pre-check and partial-file cleanup;
+  FATFS `f_rename` refuses to overwrite, so remove the target and retry before giving up.
+  Passwords are stored in the file but NEVER printed to transcript, history, debug log, or
+  UART. Keep large buffers off the command-worker / event-task stacks (a ~2 KB array in the
+  loader overflowed the 8192-byte worker stack).
+- Boot auto-connect runs in the background task after the STA runtime is up, only when
+  `WIFI_AUTOCONNECT=ON` (the CONFIG.SYS master switch): load the known list, scan, connect to
+  the best visible known network (preferred / highest priority / strongest RSSI), then fall
+  back to the classic single-credential path (sdkconfig default or CONFIG.SYS target). The
+  chosen target feeds the existing watchdog so retries stay bounded.
+- `WIFI_SSID=` + `WIFI_PASSWORD=` in CONFIG.SYS must assemble the pair: the boot-credential
+  setter preserves the other field when one argument is empty and seeds the known list when a
+  target is configured. Do not break the existing directives.
 - `ping` and `dns`/`nslookup` are implemented in `components/networking/networking.c` over the
   lwIP `esp_ping` session and `getaddrinfo`; `components/command/command.c` only dispatches
   them and maps the returned `esp_err_t` onto ERRORLEVEL (0 success, 1 failure, 2 usage). They

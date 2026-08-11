@@ -47,6 +47,8 @@ static struct {
     lv_obj_t *input_line;
     lv_obj_t *prev_button;
     lv_obj_t *next_button;
+    lv_obj_t *scroll_up_button;
+    lv_obj_t *scroll_down_button;
 } s_windows = {
     .initialized = false,
     .screen = NULL,
@@ -56,6 +58,8 @@ static struct {
     .input_line = NULL,
     .prev_button = NULL,
     .next_button = NULL,
+    .scroll_up_button = NULL,
+    .scroll_down_button = NULL,
 };
 
 /* ========================================================================
@@ -325,6 +329,24 @@ static void windows_create_input_row(void)
     lv_label_set_text(next_label, "Next");
     lv_obj_center(next_label);
 
+    /* Transcript scroll buttons. These are always visible (independent of the
+     * on-screen keyboard), so the transcript can be paged up and down from the
+     * touch interface. LV_SYMBOL_UP / LV_SYMBOL_DOWN are used when the default
+     * font has the glyphs; the labels are ASCII "Up"/"Dn" otherwise. */
+    s_windows.scroll_up_button = lv_button_create(s_windows.input_row);
+    lv_obj_set_size(s_windows.scroll_up_button,
+                    P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
+    lv_obj_t *up_label = lv_label_create(s_windows.scroll_up_button);
+    lv_label_set_text(up_label, "Up");
+    lv_obj_center(up_label);
+
+    s_windows.scroll_down_button = lv_button_create(s_windows.input_row);
+    lv_obj_set_size(s_windows.scroll_down_button,
+                    P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
+    lv_obj_t *down_label = lv_label_create(s_windows.scroll_down_button);
+    lv_label_set_text(down_label, "Dn");
+    lv_obj_center(down_label);
+
     /* Input line textarea */
     s_windows.input_line = lv_textarea_create(s_windows.input_row);
     lv_obj_set_flex_grow(s_windows.input_line, 1);
@@ -381,6 +403,14 @@ lv_obj_t *windows_get_transcript(void)
  */
 
 static bool s_transcript_apply_pending = false;
+/* When set, the next transcript repaint pins the view to the bottom
+ * unconditionally (used when a command is submitted), instead of only
+ * following when the view is already near the bottom. Cleared after the first
+ * apply consumes it, so background output later reverts to near-bottom
+ * following. Simple bool: atomic on this platform, written by the submit paths
+ * (LVGL event or UART console task) and read on the LVGL task, both of which
+ * serialize through the LVGL port lock. */
+static bool s_transcript_force_follow = false;
 static char s_transcript_staged[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
 
 /* Incremental-render bookkeeping. s_transcript_rendered_len is the byte count
@@ -509,9 +539,14 @@ static void windows_transcript_apply(void)
         return;
     }
 
-    /* Auto-follow the newest output only when already at/near the bottom, so
-     * reading earlier history is not yanked down by new output. */
-    bool follow_bottom = lv_obj_get_scroll_bottom(container) < 32;
+    /* Follow the newest output when already at/near the bottom (so reading
+     * earlier history is not yanked down by new output), or when a submitted
+     * command requested a forced jump to its output. The force flag is
+     * consumed here so it affects only the output of the just-submitted
+     * command. */
+    bool follow_bottom = s_transcript_force_follow ||
+                         lv_obj_get_scroll_bottom(container) < P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX;
+    s_transcript_force_follow = false;
 
     new_len = strlen(s_transcript_staged);
 
@@ -631,6 +666,43 @@ void windows_scroll_transcript_to_end(void)
     windows_transcript_schedule_apply();
 }
 
+void windows_force_scroll_transcript_to_end(void)
+{
+    if (s_windows.transcript == NULL) {
+        return;
+    }
+
+    /* The next apply pins the view to the bottom regardless of the current
+     * position, so the output of a just-submitted command is always visible.
+     * The flag is cleared when that apply runs. */
+    s_transcript_force_follow = true;
+    windows_transcript_schedule_apply();
+}
+
+void windows_scroll_transcript_by(int32_t pixels)
+{
+    lv_obj_t *container = s_windows.transcript;
+
+    if (container == NULL) {
+        return;
+    }
+
+    /* Positive pixels scroll toward newer output (scroll.y increases), negative
+     * toward older output. The bounded variant clamps to the scroll range. */
+    lv_obj_scroll_by_bounded(container, 0, pixels, LV_ANIM_OFF);
+}
+
+void windows_scroll_transcript_to_top(void)
+{
+    lv_obj_t *container = s_windows.transcript;
+
+    if (container == NULL) {
+        return;
+    }
+
+    lv_obj_scroll_to_y(container, 0, LV_ANIM_OFF);
+}
+
 /**
  * Apply the transcript's computed region height.
  *
@@ -676,6 +748,16 @@ lv_obj_t *windows_get_prev_button(void)
 lv_obj_t *windows_get_next_button(void)
 {
     return s_windows.next_button;
+}
+
+lv_obj_t *windows_get_scroll_up_button(void)
+{
+    return s_windows.scroll_up_button;
+}
+
+lv_obj_t *windows_get_scroll_down_button(void)
+{
+    return s_windows.scroll_down_button;
 }
 
 lv_obj_t *windows_get_input_row(void)
@@ -782,6 +864,8 @@ void windows_deinit(void)
     s_windows.input_line = NULL;
     s_windows.prev_button = NULL;
     s_windows.next_button = NULL;
+    s_windows.scroll_up_button = NULL;
+    s_windows.scroll_down_button = NULL;
     s_windows.initialized = false;
 }
 

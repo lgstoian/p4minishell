@@ -150,6 +150,7 @@ typedef struct {
 
 extern void usb_host_transcript_append_text(const char *text);
 extern void usb_host_schedule_transcript_append_text(const char *text);
+extern void usb_host_scroll_transcript(int32_t pixels);
 extern void usb_host_record_error(esp_err_t error, const char *message);
 extern void usb_host_record_warning(const char *message);
 extern void usb_host_record_info(const char *message);
@@ -780,12 +781,33 @@ static void usb_handle_keyboard_input_locked(const usb_module_event_t *event)
 static void usb_handle_mouse_input_locked(const usb_module_event_t *event)
 {
     hid_mouse_input_report_boot_t report = { 0 };
+    int8_t wheel = 0;
 
-    if (event->data.hid_input.length < sizeof(report) || !s_usb_mouse.echo_enabled) {
+    if (event->data.hid_input.length < sizeof(report)) {
         return;
     }
 
     memcpy(&report, event->data.hid_input.data, sizeof(report));
+
+    /* Boot-protocol mouse report is buttons(1) + x(1) + y(1) + wheel(1); the
+     * ESP-IDF struct omits the wheel byte, so read it from the raw report when
+     * the device sends it. Positive wheel = scroll up (toward older output). */
+    if (event->data.hid_input.length >= sizeof(report) + 1) {
+        wheel = (int8_t)event->data.hid_input.data[sizeof(report)];
+    }
+
+    /* Scroll the transcript regardless of echo mode: one wheel notch moves the
+     * view by the configured step, positive wheel scrolling up (negative delta
+     * in the transcript convention). Routed through the app bridge so the LVGL
+     * scroll runs on the LVGL task. */
+    if (wheel != 0) {
+        usb_host_scroll_transcript(-(int32_t)wheel * P4_CONFIG_TRANSCRIPT_SCROLL_STEP);
+    }
+
+    if (!s_usb_mouse.echo_enabled) {
+        return;
+    }
+
     s_mouse_x += report.x_displacement;
     s_mouse_y += report.y_displacement;
     usb_emit_asyncf("usb mouse: X=%06d Y=%06d |%c|%c|\n",

@@ -12,7 +12,10 @@ This guide describes how `main/main.c` integrates the runtime modules in this wo
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar LVGL widgets for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status.
-- `components/networking` owns hosted Wi-Fi runtime state, boot restore, diagnostics, and OTA restore hooks.
+- `components/networking` owns hosted Wi-Fi runtime state, boot restore, diagnostics, OTA
+  restore hooks, and the persistent known-network list (`wifi_known.c`, `sd:/WIFI.KNOWN`).
+  The known-list module performs all SD I/O through the guarded storage session API
+  (`shell_sd_begin` / `shell_sd_end`) and degrades to an empty list on any SD failure.
 - `components/networking/bluetooth.c` owns the hosted NimBLE control path for Bluetooth commands.
 - `components/usb` owns ESP-IDF USB Host Library bring-up, MSC VFS registration at `/usb0`, and HID keyboard or mouse debug echo.
 - `components/c6ota` owns the ESP32-C6 OTA workflow and uses `components/networking` when it needs Wi-Fi readiness or restore behavior.
@@ -44,7 +47,11 @@ See "Inverting an upward dependency" below.
 8. Call `c6ota_init()` once after the transcript path is ready, then register the OTA progress callback with `c6ota_register_progress_callback(...)`.
 9. Build a single `networking_host_ops_t` callback table backed by the shell transcript and debug-history functions, then call `networking_init(&host_ops)`.
 10. Call `usb_init()` after `networking_init(&host_ops)`, then `usb_register_keyboard_input_callback(...)`.
-11. Call `time_init()` for timezone setup (SNTP starts later, when Wi-Fi connects).
+11. Call `time_init()` for timezone setup. Start SNTP once lwIP is up with
+    `time_start_sntp()`, or let the user force it with `sntp sync`
+    (`time_force_resync()`). The `date`/`time`/`timezone`/`sntp` commands live in
+    the clock component and render through `clock_host_ops_t` — register it with
+    `clock_register_host_ops()` from `command_init()`.
 12. Start a periodic LVGL timer that calls `shell_header_status_refresh()`.
 
 ## Inverting an upward dependency
@@ -523,7 +530,12 @@ static void shell_input_line_event_cb(lv_event_t *event)
 
         /* Async so heavy commands never run on the LVGL callback stack. */
         shell_execute_command_async(command);
-        shell_history_transcript_scroll_to_end();
+
+        /* Jump to the output of the submitted command even when the user was
+         * reading earlier history. Use shell_history_transcript_scroll_to_end()
+         * instead for background/async output, which only follows when the view
+         * is already near the bottom. */
+        shell_force_transcript_scroll_to_end();
     }
 }
 ```

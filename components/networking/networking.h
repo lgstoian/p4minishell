@@ -96,7 +96,16 @@ typedef struct {
 void networking_init(const networking_host_ops_t *ops);
 
 // ---- Shell-facing Wi-Fi commands ----
-void networking_handle_wifi_command(char *command);
+
+/**
+ * Dispatch a `wifi ...` command line (family-routed from the command module).
+ * Returns ESP_OK on success and a non-OK error for the known-network
+ * management subcommands (known/save/forget/clear/preferred) when they fail or
+ * the SD known-network list is unavailable, so the command layer can map the
+ * result onto ERRORLEVEL. Existing subcommands (status/scan/connect/...) return
+ * ESP_OK and leave the previous ERRORLEVEL semantics unchanged.
+ */
+esp_err_t networking_handle_wifi_command(char *command);
 void networking_wifi_status(void);
 
 /**

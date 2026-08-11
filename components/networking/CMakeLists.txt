@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "networking.c"
         "bluetooth.c"
+        "wifi_known.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
@@ -14,4 +15,5 @@ idf_component_register(
         esp_wifi
         lwip
         nvs_flash
+        storage
 )

@@ -125,6 +125,31 @@ void windows_apply_transcript_height(void);
  */
 void windows_scroll_transcript_to_end(void);
 
+/**
+ * Force the transcript to jump to the newest output. Unlike
+ * windows_scroll_transcript_to_end(), which only follows when the view is
+ * already near the bottom, this unconditionally pins the next repaint to the
+ * bottom. Used when a command is submitted so the user always sees the output
+ * of the command they just ran.
+ */
+void windows_force_scroll_transcript_to_end(void);
+
+/**
+ * Scroll the transcript vertically by the given pixel delta. A positive value
+ * scrolls toward newer output (the bottom), a negative value toward older
+ * output (the top). The scroll is clamped to the transcript's range. Must run
+ * on the LVGL task.
+ *
+ * @param pixels  Signed pixel delta to scroll by.
+ */
+void windows_scroll_transcript_by(int32_t pixels);
+
+/**
+ * Jump the transcript to the top (the oldest retained output). Must run on
+ * the LVGL task.
+ */
+void windows_scroll_transcript_to_top(void);
+
 /** Get the input line textarea (single-line command entry). */
 lv_obj_t *windows_get_input_line(void);
 
@@ -137,7 +162,13 @@ lv_obj_t *windows_get_prev_button(void);
 /** Get the Next history button. */
 lv_obj_t *windows_get_next_button(void);
 
-/** Get the input row container (holds input line + prev/next buttons). */
+/** Get the transcript scroll-up button (input row). */
+lv_obj_t *windows_get_scroll_up_button(void);
+
+/** Get the transcript scroll-down button (input row). */
+lv_obj_t *windows_get_scroll_down_button(void);
+
+/** Get the input row container (holds input line + prev/next/scroll buttons). */
 lv_obj_t *windows_get_input_row(void);
 
 /** Get the active screen object. */

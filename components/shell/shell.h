@@ -193,6 +193,11 @@ void shell_transcript_reset(void);
 /** Scroll the transcript to the end. */
 void shell_history_transcript_scroll_to_end(void);
 
+/** Force the transcript to jump to the newest output (command submission).
+ *  Unlike shell_history_transcript_scroll_to_end(), this pins the view to the
+ *  bottom even when the user was reading earlier history. */
+void shell_force_transcript_scroll_to_end(void);
+
 /** Get the current transcript length in bytes (used by output redirection). */
 size_t shell_transcript_get_length(void);
 
@@ -387,12 +392,6 @@ void shell_header_status_refresh(void);
 
 /** Get the boot timestamp in microseconds for uptime calculation. */
 int64_t shell_get_boot_timestamp_us(void);
-
-/** Get the formatted current time string. */
-const char *shell_get_time_string(void);
-
-/** Check if time is NTP-synchronized. */
-bool shell_time_is_synced(void);
 
 /* ========================================================================
  * SHELL UTILITIES

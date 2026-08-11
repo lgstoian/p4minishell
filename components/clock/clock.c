@@ -11,7 +11,7 @@
 
 static bool s_initialized = false;
 static bool s_synchronized = false;
-static char s_tz_string[64] = "UTC";
+static char s_tz_string[P4_CONFIG_TIMEZONE_BYTES] = "UTC";
 static char s_time_buf[64];
 static char s_time_utc_buf[64];
 static int64_t s_boot_timestamp_us;
@@ -38,16 +38,37 @@ void time_init(void)
     ESP_LOGI(CLOCK_TAG, "Clock module initialized (SNTP deferred)");
 }
 
+/** (Re)start the SNTP client against the configured server. */
+static void clock_sntp_start_client(void)
+{
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, P4_CONFIG_NTP_SERVER);
+    esp_sntp_set_time_sync_notification_cb(clock_sntp_cb);
+    esp_sntp_init();
+}
+
 /** Start SNTP client — called when lwIP is confirmed ready. */
 void time_start_sntp(void)
 {
     if (s_synchronized) return;
 
-    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "pool.ntp.org");
-    esp_sntp_set_time_sync_notification_cb(clock_sntp_cb);
-    esp_sntp_init();
-    ESP_LOGI(CLOCK_TAG, "SNTP client started");
+    clock_sntp_start_client();
+    ESP_LOGI(CLOCK_TAG, "SNTP client started (server %s)", P4_CONFIG_NTP_SERVER);
+}
+
+void time_force_resync(void)
+{
+    /* Stop any running client, clear the sync flag, and restart so a fresh
+     * NTP exchange is issued immediately. Safe when not yet initialized. */
+    esp_sntp_stop();
+    s_synchronized = false;
+    clock_sntp_start_client();
+    ESP_LOGI(CLOCK_TAG, "SNTP re-synchronization requested (server %s)", P4_CONFIG_NTP_SERVER);
+}
+
+const char *time_get_ntp_server(void)
+{
+    return P4_CONFIG_NTP_SERVER;
 }
 
 bool time_is_initialized(void) { return s_initialized; }
@@ -108,3 +129,24 @@ void time_set_timezone(const char *tz)
 }
 
 const char *time_get_timezone(void) { return s_tz_string; }
+
+void time_get_uptime_formatted(char *buf, size_t buflen)
+{
+    uint32_t sec = time_get_uptime_sec();
+    uint32_t days = sec / 86400;
+    uint32_t hours = (sec % 86400) / 3600;
+    uint32_t mins = (sec % 3600) / 60;
+    uint32_t secs = sec % 60;
+
+    if (buf == NULL || buflen == 0) {
+        return;
+    }
+    if (days > 0) {
+        snprintf(buf, buflen, "%lu d %02lu:%02lu:%02lu",
+                 (unsigned long)days, (unsigned long)hours,
+                 (unsigned long)mins, (unsigned long)secs);
+    } else {
+        snprintf(buf, buflen, "%02lu:%02lu:%02lu",
+                 (unsigned long)hours, (unsigned long)mins, (unsigned long)secs);
+    }
+}

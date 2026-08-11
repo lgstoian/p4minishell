@@ -14,6 +14,8 @@ Implemented today in the checked-in firmware:
 - ✅ 16 standard + 16 bright ANSI colors (configurable via P4_CONFIG_ANSI_*)
 - ✅ ANSI/VT escape sequence module (`components/ansi/`) with SGR state machine, format builder with full printf flag support, plain-text stripping
 - ✅ Touch-first LVGL shell UI with transcript, prompt, on-screen keyboard, 10-command recall
+- ✅ Scrollable transcript that jumps to a submitted command's output and pages via the
+      input-row Up/Dn buttons, USB keyboard PageUp/PageDown, and the USB mouse wheel
 - ✅ Fixed top header bar with Wi-Fi, battery, Bluetooth, USB, SD status + MEM/CPU/BAT system panel
 - ✅ Worker-task command execution to protect the LVGL event stack
 - ✅ Interactive UART console bridge (stdin/stdout routed through same shell path)
@@ -71,7 +73,11 @@ Implemented today in the checked-in firmware:
 ### USB
 - ✅ USB MSC mass storage at `/usb0`
 - ✅ USB HID keyboard auto-detect with CLI injection
-- ✅ USB HID mouse with opt-in echo
+- ✅ USB HID mouse with opt-in echo and wheel scrolling of the transcript
+- ✅ Persistent known Wi-Fi networks: `sd:/WIFI.KNOWN` list with boot-time
+      auto-connect (preferred / highest priority / strongest RSSI), managed via
+      `wifi known|save|forget|preferred`, falling back to the single-credential
+      path when the SD card is absent
 - ✅ Full US keyboard layout (60+ HID key codes, modifier-aware)
 - ✅ On-screen keyboard auto-hide when USB keyboard attached
 
@@ -439,8 +445,12 @@ Implemented today in the checked-in firmware:
       rendered form
 
 ### Clock Commands
-- ✅ `date [MM-DD-YYYY]` and `time [HH:MM[:SS]]` now set the system clock in addition to
-      reporting it, with range validation and an honest note when the clock is not NTP-synced
+- ✅ `date [MM-DD-YYYY]` and `time [HH:MM[:SS]]` set the system clock, and with no argument
+      show a fuller clock panel (local, UTC, Unix timestamp, timezone, uptime, NTP sync status)
+- ✅ `timezone [TZ]` shows or sets the POSIX timezone string
+- ✅ `sntp` / `ntpsync [sync]` shows NTP sync status and forces a fresh exchange against
+      `P4_CONFIG_NTP_SERVER` (verified syncing the clock over Wi-Fi)
+- ✅ All time/date/SNTP command bodies live in `components/clock/clock_commands.c`
 
 ### File Utility Commands — now complete
 - ✅ `tree` is fully recursive with DOS box-drawing connectors, `/F` (include files) and `/A`
