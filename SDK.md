@@ -121,9 +121,20 @@ static void batch_run_nested(char *command)
 
 ## Networking ownership
 
-Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, and NimBLE call belongs in
+Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, NimBLE, and HTTP call belongs in
 `components/networking/`. The one sanctioned exception is `components/c6ota/`, which
 drives `esp_hosted_slave_ota_*` because co-processor firmware update is its purpose.
+
+Two more modules extend the same ownership boundary:
+- `components/networking/http_server.c` owns the `esp_http_server` surface (the `httpd`
+  SD file server). It serves files through guarded storage sessions
+  (`shell_sd_begin`/`shell_sd_end`) and VFS `opendir`/`fopen`/`fread`, and its lifecycle
+  is driven by the Wi-Fi event hooks `networking_httpd_maybe_autostart()` /
+  `networking_httpd_maybe_stop()`.
+- `components/networking/netdiag.c` owns the lwIP diagnostics (`netstat` / `ipconfig`).
+  It walks `netif_list`, the DNS servers, and the TCP/UDP PCB lists read-only under
+  `LOCK_TCPIP_CORE()` when core locking is enabled. Never iterate or modify PCBs from
+  another context without the lock.
 
 When another layer needs networking state, add an accessor rather than reaching into the
 driver:

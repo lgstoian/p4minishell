@@ -3,6 +3,8 @@ idf_component_register(
         "networking.c"
         "bluetooth.c"
         "wifi_known.c"
+        "http_server.c"
+        "netdiag.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
@@ -10,6 +12,7 @@ idf_component_register(
         esp_event
         esp_hosted
         esp_http_client
+        esp_http_server
         esp_netif
         esp-tls
         esp_wifi

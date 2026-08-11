@@ -364,6 +364,14 @@ filesystem or the batch language:
 - **Hardware controls**: Backlight PWM, display rotation with touch remapping, battery ADC
   with calibration, ES8311 codec volume, and light-sleep requests — display operations are
   routed through `components/display/`
+- **Peripheral toolkit** (`pwm`, `freq`, `adc`, `i2c`, `spi`): LEDC PWM/square waves on
+  timers 0/2/3 sharing the backlight's XTAL clock; one-shot ADC reads with SOC channel-map
+  enumeration; an I2C scanner/peek-poke that reuses the BSP shared bus handle (or a temporary
+  bus on custom pins) via normal device transactions; and `spi status` reporting the SPI
+  configuration. SPI transactions are refused with an honest error because SPI host init on
+  this P4 with the ESP-Hosted SDIO link active stalls the chip. Every command gates its pins
+  through `shell_pin_is_reserved()` (the critical entries of the board GPIO table), so active
+  I2C/I2S/SDIO/display/SD lines can never be repurposed.
 - **UI query commands**: `display info|resolution|refresh|power`, `keyboard show|hide|toggle|status`,
   `windows info` — implemented in `command_ui.c` to keep `keyboard.h` and `windows.h` out of
   `command.c`
@@ -556,7 +564,22 @@ Wi-Fi Kconfig under its own `WIFI_RMT_` prefix.
   `P4_CONFIG_HTTP_FOLLOW_REDIRECTS`, the User-Agent from `P4_CONFIG_HTTP_USER_AGENT`, and the
   body buffered in PSRAM up to `P4_CONFIG_HTTP_MAX_BODY_BYTES`. It prints the response header
   (status / content-type / size) with semantic colours and returns the body for the command
-  layer to print or save to SD; the return value maps onto ERRORLEVEL (0 = HTTP 2xx).
+  layer to print or save to SD; the return value maps onto ERRORLEVEL (0 = HTTP 2xx). A
+  `user:pass@` URL prefix enables HTTP Basic auth (`networking_http_url_has_userinfo()`).
+- **HTTP file server (`httpd`)**: `components/networking/http_server.c` is the sole owner of
+  the `esp_http_server` surface. It serves the SD card (`BSP_SD_MOUNT_POINT`) with HTML
+  directory listings, file streaming through a heap read buffer, optional Basic auth
+  (`P4_CONFIG_HTTPD_AUTH_*`, constant-time compare of the decoded `Authorization` header),
+  and `..` path-traversal rejection. Lifecycle is tied to Wi-Fi events: the
+  `networking_httpd_maybe_autostart()` hook fires on `IP_EVENT_STA_GOT_IP` and
+  `networking_httpd_maybe_stop()` on `WIFI_EVENT_STA_DISCONNECTED`. Resource limits
+  (`P4_CONFIG_HTTPD_*`) bound sockets, backlog, task stack, timeouts, block size, and the
+  listing cap. Output goes through the networking host ops like every other module file.
+- **Network diagnostics (`netstat` / `ipconfig`)**: `components/networking/netdiag.c` walks
+  the lwIP `netif_list`, the DNS servers (`dns_getserver`), and the TCP/UDP PCB lists
+  (`tcp_active_pcbs`, `tcp_tw_pcbs`, `tcp_listen_pcbs`, `udp_pcbs`) read-only under the
+  TCP/IP core lock (`LOCK_TCPIP_CORE()` when `LWIP_TCPIP_CORE_LOCKING`, no-op otherwise),
+  capped by `P4_CONFIG_NETSTAT_ROW_MAX`.
 - **OTA hooks**: `networking_wifi_wait_for_ota()`, `networking_wifi_shutdown()`, capture/restore state
 - **Boot restore**: Automatic Wi-Fi restore after normal boot and after successful `c6ota`
 - **Diagnostics**: Transcript-facing status + scan output via `wifi diag`
@@ -727,7 +750,8 @@ small and free of private-state access.
   Modern: ROTATE=, BRIGHTNESS=, DISPLAY_POWER=, VOLUME=, WIFI_SSID=,
   WIFI_PASSWORD=, WIFI_AUTOCONNECT=, WIFI=ON|OFF, BLUETOOTH=ON|OFF,
   BT_ADVERTISE=ON|OFF, USB_KEYBOARD=ON|OFF, USB_MOUSE=ON|OFF,
-  GPIO <n> = OUT [HIGH|LOW]. Unknown directives warn once and are skipped.
+  GPIO <n> = OUT [HIGH|LOW]. Unknown KEY=VALUE lines set a batch environment
+  variable; unknown keywords without a value warn once and are skipped.
 - **Application:** hardware directives execute their command-line equivalent
   through the batch pipeline (atch_boot_execute_command()), reusing existing
   validation. State-only directives use module accessors

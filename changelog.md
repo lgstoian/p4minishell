@@ -54,6 +54,153 @@ that boot.c auto-loads after CONFIG.SYS.
 
 ---
 
+## [0.24.24] - 2026-08-11
+
+Lightweight network services: an HTTP file server that shares the SD card
+over Wi-Fi (`httpd`), plus `netstat` and `ipconfig` diagnostics. All of it
+lives in `components/networking/` (the sole owner of the esp_http_server and
+lwIP surfaces).
+
+### Added - HTTP file server (`httpd start|stop|status`)
+
+- Serves the SD card (`BSP_SD_MOUNT_POINT`) over the Wi-Fi link with the
+  `esp_http_server` driver. URL paths map onto files; directories get an
+  HTML listing bounded by `P4_CONFIG_HTTPD_LISTING_MAX`.
+- Optional HTTP Basic auth: `P4_CONFIG_HTTPD_AUTH_USERNAME` /
+  `_PASSWORD`. Empty username disables auth; credentials are decoded from
+  the `Authorization` header and compared constant-time. Unauthenticated
+  requests get a `401` with `WWW-Authenticate`.
+- Lifecycle tied to Wi-Fi events: the server auto-starts on
+  `IP_EVENT_STA_GOT_IP` and stops on `WIFI_EVENT_STA_DISCONNECTED` (start
+  side gated by `P4_CONFIG_HTTPD_AUTOSTART`), and `httpd start` refuses when
+  the station is not connected. `httpd status` reports state, port, auth,
+  docroot, open sockets, and the request count.
+- Path traversal is rejected (`..` segments return 400), file streaming uses
+  a heap read buffer with send timeouts, and the server is fully bounded by
+  resource limits (`P4_CONFIG_HTTPD_*`): port, open sockets, backlog, task
+  stack/priority, recv/send timeouts, block size, listing cap, autostart.
+- `httpget` now sends HTTP Basic auth when the URL carries a `user:pass@`
+  prefix, so authenticated endpoints (including the file server itself) work
+  from the shell.
+
+### Added - netstat / ipconfig
+
+- `netstat` lists the network interfaces (state, IPv4, netmask, gateway, MTU,
+  MAC), the active TCP connections (local/remote `ip:port`, state), TCP
+  listeners, and UDP endpoints by walking the lwIP PCB lists read-only under
+  the TCP/IP core lock (no-op when core locking is disabled), capped at
+  `P4_CONFIG_NETSTAT_ROW_MAX`.
+- `ipconfig` reports the full per-interface configuration (state, MAC, IPv4,
+  netmask, gateway, MTU, default-route marker) plus the configured DNS
+  servers from lwIP.
+- Both are redirectable/pipable like every other command.
+
+### Configuration
+
+- `P4_CONFIG_HTTPD_PORT`, `P4_CONFIG_HTTPD_MAX_OPEN_SOCKETS`,
+  `P4_CONFIG_HTTPD_BACKLOG`, `P4_CONFIG_HTTPD_STACK_BYTES`,
+  `P4_CONFIG_HTTPD_TASK_PRIORITY`, `P4_CONFIG_HTTPD_RECV_TIMEOUT_S`,
+  `P4_CONFIG_HTTPD_SEND_TIMEOUT_S`, `P4_CONFIG_HTTPD_BLOCK_BYTES`,
+  `P4_CONFIG_HTTPD_LISTING_MAX`, `P4_CONFIG_HTTPD_AUTOSTART`,
+  `P4_CONFIG_HTTPD_AUTH_USERNAME`, `P4_CONFIG_HTTPD_AUTH_PASSWORD`,
+  `P4_CONFIG_NETSTAT_ROW_MAX` (all documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings.
+- Hardware (COM11): with Wi-Fi connected to `4G-CPE_5542`, the server
+  auto-starts on DHCP (`192.168.199.225`); `httpget http://127.0.0.1/`
+  returns the SD root HTML listing, `/CONFIG.SYS` serves the file, a missing
+  file returns 404, and `..%2f..` traversal returns 400. With auth on,
+  `httpget http://127.0.0.1/` returns 401 and
+  `httpget http://admin:p4mini@127.0.0.1/CONFIG.SYS` returns 200.
+  `wifi disconnect` stops the server. `netstat` and `ipconfig` report the
+  interface and connection state correctly.
+
+---
+
+## [0.24.23] - 2026-08-11
+
+Richer GPIO/peripheral toolkit: `pwm`, `freq`, `adc`, `i2c`, and `spi`
+commands built on the LEDC, ADC one-shot, I2C master, and SPI master drivers,
+with a shared pin-safety gate and all tunables in `p4minishell_config.h`.
+
+### Added - pwm / freq / adc / i2c / spi
+
+- `pwm <pin> <freq_hz> <duty_pct>` / `pwm stop <pin>` / `pwm status` — LEDC PWM
+  on a non-reserved GPIO. Uses timers 0/2/3 and channels excluding the
+  backlight's, shares the backlight's XTAL global clock (so no LEDC "timer
+  clock conflict"), and caps at `P4_CONFIG_PWM_CHANNEL_MAX` concurrent outputs.
+- `freq <pin> <hz>` / `freq stop <pin>` / `freq status` — square wave at 50%
+  duty via the same LEDC engine (`pwm` at the default duty).
+- `adc <pin> [samples]` / `adc status` — one-shot ADC reads on any non-reserved
+  ADC pin (ADC1 GPIO16-23, ADC2 GPIO49-54) with calibration; `adc status`
+  live-samples the SOC channel map and only lists pins that currently read
+  back, and a busy ADC unit reports "in use".
+- `i2c status | i2c scan [sda=.. scl=..] | i2c peek <addr> <reg> [sda=.. scl=..]
+  | i2c poke <addr> <reg> <value> [sda=.. scl=..]` — the scanner reuses the
+  board's shared BSP bus handle and probes with normal device transactions
+  (fast, does not disrupt the GT911 touch); custom pin pairs get a temporary
+  bus on a free port.
+- `spi status` — reports the SPI toolkit configuration. The `loopback` /
+  `peek` / `poke` verbs are recognized but return an honest "unavailable on
+  this board" error: SPI host init on this P4 with the ESP-Hosted SDIO link
+  active stalls the chip and drops USB-Serial-JTAG off the bus (verified on
+  both SPI2 and SPI3, with DMA on and off), so they are not wired to the SPI
+  driver. This follows the explicit-failure policy used by `rgb`/`camera`.
+- Pin safety: every command routes its pins through `shell_pin_is_reserved()`
+  (the critical entries of the board GPIO table), so the active I2C/I2S/SDIO/
+  display/SD lines can never be repurposed.
+- Config: `P4_CONFIG_PWM_FREQ_MAX_HZ`, `P4_CONFIG_PWM_SRC_CLK_HZ`,
+  `P4_CONFIG_PWM_CLK_SOURCE`, `P4_CONFIG_PWM_CHANNEL_MAX`,
+  `P4_CONFIG_PWM_DUTY_DEFAULT_PCT`, `P4_CONFIG_ADC_DEFAULT_SAMPLES`,
+  `P4_CONFIG_ADC_MAX_SAMPLES`, `P4_CONFIG_ADC_ATTEN`,
+  `P4_CONFIG_I2C_TOOL_TIMEOUT_MS`, `P4_CONFIG_I2C_SCAN_PROBE_TIMEOUT_MS`,
+  `P4_CONFIG_I2C_SCAN_FIRST_ADDR`, `P4_CONFIG_I2C_SCAN_LAST_ADDR`,
+  `P4_CONFIG_I2C_TOOL_CLK_HZ`, `P4_CONFIG_SPI_TOOL_CLK_HZ`,
+  `P4_CONFIG_SPI_TOOL_TIMEOUT_MS`, `P4_CONFIG_SPI_TOOL_BUFFER_BYTES`,
+  `P4_CONFIG_SPI_TOOL_HOST` (all documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings.
+- Hardware (COM11): `i2c scan` finds the ES8311 (0x18) and GT911 (0x5D)
+  quickly without disrupting touch; `i2c peek`/`poke` read/write registers;
+  `freq 21 1000` and `pwm 21 1000 25` produce the expected output and
+  `pwm status`/`stop` work; `adc 22` reports a live calibrated reading;
+  reserved pins (e.g. GPIO7, GPIO53) are refused by every command; `spi
+  status` reports the configuration. SPI transactions are intentionally
+  refused (host init stalls this board), so no SPI command can freeze the
+  shell.
+
+---
+
+## [0.24.22] - 2026-08-11
+
+CONFIG.SYS: unrecognized `KEY=VALUE` directives are now applied as batch
+environment variables instead of being skipped with a warning.
+
+### Changed - CONFIG.SYS generic KEY=VALUE
+
+- Any unknown `NAME=VALUE` line in CONFIG.SYS is applied with
+  `shell_env_set()` (identical effect to `SET`), so project variables can be
+  defined directly in CONFIG.SYS and consumed by AUTOEXEC.BAT via `%NAME%`.
+- Unknown keywords *without* a value still produce the single muted
+  `config: unknown directive "...", skipped` warning, so malformed lines and
+  genuine typos remain visible. Known-but-unsupported DOS directives
+  (`FILES`, `BUFFERS`, `LASTDRIVE`, `DEVICE`, `DOS`, `SHELL`) still warn.
+- Default CONFIG.SYS template and docs (command.md, documentation.md,
+  readme.md, ai-context.md) updated to describe the fallback.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings.
+- Hardware (COM11): boot log no longer shows `config: unknown directive
+  "UNKNOWN_DIRECTIVE", skipped` after the `gpio set` line; `echo
+  %UNKNOWN_DIRECTIVE%` returns `xyz` and `set` lists `UNKNOWN_DIRECTIVE=xyz`.
+
+---
+
 ## [0.24.21] - 2026-08-11
 
 Power-management commands: `power` (status), `sleep` (light sleep), and

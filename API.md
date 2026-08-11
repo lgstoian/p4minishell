@@ -988,7 +988,26 @@ void networking_wifi_known_record_connect(const char *ssid, const char *password
     `P4_CONFIG_HTTP_MAX_BODY_BYTES`, follows redirects per config, prints the
     response header with semantic colours, and returns the body for the
     command layer to print or save to SD. Returns ESP_OK on an HTTP 2xx;
-    the caller maps the return value onto ERRORLEVEL.
+    the caller maps the return value onto ERRORLEVEL. A `user:pass@` URL
+    prefix enables HTTP Basic auth.
+
+- `esp_err_t networking_httpd_start(void)`
+- `esp_err_t networking_httpd_stop(void)`
+- `void networking_httpd_status(void)`
+- `bool networking_httpd_is_running(void)`
+- `void networking_httpd_maybe_autostart(void)`
+- `void networking_httpd_maybe_stop(void)`
+  - The `httpd` file server: serves the SD card over the Wi-Fi link with the
+    `esp_http_server` driver (directory listings, file streaming, optional
+    Basic auth, path-traversal rejection). Lifecycle is tied to Wi-Fi events
+    via `maybe_autostart()` / `maybe_stop()`; `start` refuses without a
+    connection. All limits come from `P4_CONFIG_HTTPD_*`.
+
+- `void networking_netstat(void)`
+- `void networking_ipconfig(void)`
+  - The `netstat` / `ipconfig` diagnostics: read lwIP state (interfaces, DNS
+    servers, TCP/UDP PCBs) read-only under the TCP/IP core lock and print the
+    report to the transcript. Redirectable and pipable like every command.
 
 - `const char *networking_wifi_state_string(void)`
 - `networking_wifi_state_t networking_wifi_state(void)`
@@ -1004,8 +1023,9 @@ void networking_wifi_known_record_connect(const char *ssid, const char *password
 ### Ownership rule
 
 Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, NimBLE, lwIP-connectivity (ping / DNS),
-and esp_http_client / mbedTLS / TLS call in the firmware lives inside
-`components/networking/`. The sanctioned exceptions are `components/c6ota/`, which drives
+and esp_http_client / esp_http_server / mbedTLS / TLS call in the firmware lives inside
+`components/networking/` (`http_server.c` owns the server, `netdiag.c` owns the lwIP
+diagnostics). The sanctioned exceptions are `components/c6ota/`, which drives
 `esp_hosted_slave_ota_*` and its own esp_http_client download because co-processor firmware
 update is its entire purpose. Anything else that needs networking state uses the accessors
 above; if a needed value is missing, add an accessor rather than reaching into the driver.

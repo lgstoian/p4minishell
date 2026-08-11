@@ -35,6 +35,8 @@
 #include "soc/soc_caps.h"
 
 #include "bluetooth.h"
+#include "http_server.h"
+#include "netdiag.h"
 #include "networking.h"
 #include "wifi_known.h"
 #include "p4minishell_config.h"
@@ -374,6 +376,8 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
             wifi_unlock();
             networking_schedulef_ansi("@C[wifi]@R event: @ydisconnected@R\n");
             networking_notify_headerf(4000, "WiFi disconnected");
+            /* The HTTP file server needs a reachable link; tear it down. */
+            networking_httpd_maybe_stop();
             /* Start the persistent watchdog to attempt reconnection */
             networking_wifi_start_watchdog();
             break;
@@ -396,6 +400,9 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
         wifi_unlock();
         networking_schedulef("[wifi] event: got IP " IPSTR "\n", IP2STR(&event->ip_info.ip));
         networking_notify_headerf(4000, "WiFi connected: " IPSTR, IP2STR(&event->ip_info.ip));
+
+        /* The HTTP file server rides the station link: auto-start it here. */
+        networking_httpd_maybe_autostart();
 
         /* Remember this network on the SD known-list when autosave is on and
          * the card is present. Fully safe (and silent) without a card. */
@@ -1777,6 +1784,35 @@ static bool networking_http_url_is_supported(const char *url)
            (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
 }
 
+/**
+ * Report whether a URL carries a `user:pass@` prefix before the path.
+ *
+ * The credentials are consumed by esp_http_client's userinfo parsing; this
+ * gate decides whether the client should advertise Basic auth so the header
+ * is actually sent.
+ */
+static bool networking_http_url_has_userinfo(const char *url)
+{
+    const char *authority;
+    const char *slash;
+    const char *at;
+
+    if (url == NULL) {
+        return false;
+    }
+    authority = strstr(url, "://");
+    if (authority == NULL) {
+        return false;
+    }
+    authority += 3;
+    at = strchr(authority, '@');
+    if (at == NULL) {
+        return false;
+    }
+    slash = strchr(authority, '/');
+    return slash == NULL || at < slash;
+}
+
 void networking_http_result_free(networking_http_result_t *result)
 {
     if (result != NULL && result->body != NULL) {
@@ -1819,6 +1855,12 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
     }
 
     http_config.url = url;
+    /* A `user:pass@` prefix in the URL enables HTTP Basic auth; esp_http_client
+     * parses the credentials from the userinfo and sends the header only when
+     * auth_type selects it. */
+    if (networking_http_url_has_userinfo(url)) {
+        http_config.auth_type = HTTP_AUTH_TYPE_BASIC;
+    }
     http_config.timeout_ms = P4_CONFIG_HTTP_TIMEOUT_MS;
     http_config.buffer_size = HTTP_READ_CHUNK_BYTES;
     http_config.buffer_size_tx = 1024;
@@ -2499,6 +2541,11 @@ void networking_init(const networking_host_ops_t *ops)
         s_networking_initialized = true;
         networking_wifi_request_boot_restore();
     }
+}
+
+const networking_host_ops_t *networking_get_host_ops(void)
+{
+    return &s_host_ops;
 }
 
 /* ========================================================================

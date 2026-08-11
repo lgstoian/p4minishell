@@ -382,6 +382,79 @@ http_client:
       is given. The full body is always available via httpget <url> <localfile>.
     range: "256..65536"
 
+# ---- HTTP File Server (httpd) ----
+# A lightweight read-only HTTP file server that shares the SD card over the
+# Wi-Fi link. It starts automatically when the station gets an IP (unless
+# disabled) and stops on disconnect. All HTTP server code lives inside
+# components/networking (the sole owner of the esp_http_server surface).
+http_server:
+  port:
+    value: 80
+    type: uint16_t
+    description: "Port the httpd file server listens on"
+    range: "1..65535"
+  max_open_sockets:
+    value: 4
+    type: uint16_t
+    description: "Maximum simultaneous client sockets (3 reserved internally)"
+    range: "1..16"
+  backlog:
+    value: 4
+    type: uint16_t
+    description: "TCP accept backlog for the server"
+    range: "1..16"
+  stack_bytes:
+    value: 8192
+    type: size_t
+    description: "Stack bytes for the dedicated HTTP server task (handler builds path-sized scratch)"
+    range: "2048..32768"
+  task_priority:
+    value: 5
+    type: int
+    description: "Priority of the HTTP server task"
+    range: "1..25"
+  recv_timeout_s:
+    value: 5
+    type: int
+    description: "Receive timeout in seconds for an idle client socket"
+    range: "1..120"
+  send_timeout_s:
+    value: 5
+    type: int
+    description: "Send timeout in seconds for a slow client socket"
+    range: "1..120"
+  block_bytes:
+    value: 2048
+    type: size_t
+    description: "Bytes read per chunk when streaming a file (heap-allocated per request)"
+    range: "256..65536"
+  listing_max:
+    value: 128
+    type: int
+    description: "Maximum directory-listing entries returned by the server"
+    range: "16..1024"
+  autostart:
+    value: 1
+    type: bool
+    description: "Auto-start the server when the station gets an IP and stop it on disconnect; when 0 only the manual httpd start command starts it"
+  auth_username:
+    value: "admin"
+    type: string
+    description: "Basic-auth username; an empty string disables authentication"
+  auth_password:
+    value: "p4mini"
+    type: string
+    description: "Basic-auth password; used only when auth_username is set"
+
+# ---- Network Diagnostics (netstat / ipconfig) ----
+network_diag:
+  netstat_row_max:
+    value: 64
+    type: int
+    description: "Maximum rows printed by netstat per TCP/UDP list"
+    range: "8..256"
+
+
 # ---- Bluetooth ----
 bluetooth:
   log_tag:
@@ -790,6 +863,93 @@ gpio_hardware:
     type: int
     description: "Default speaker volume percentage applied at boot"
     range: "0..100"
+
+# ---- Peripheral Toolkit (pwm / freq / adc / i2c / spi) ----
+peripheral_toolkit:
+  pwm_freq_max_hz:
+    value: 100000
+    type: uint32_t
+    description: "PWM maximum frequency in Hz accepted by pwm/freq"
+    range: "1..1000000"
+  pwm_src_clk_hz:
+    value: 40000000
+    type: uint32_t
+    description: "PWM assumed timer source clock in Hz used to pick duty resolution (matches the shared LEDC XTAL clock)"
+    range: "1000000..200000000"
+  pwm_clk_source:
+    value: 18
+    type: ledc_clk_cfg_t
+    description: "LEDC clock source for toolkit timers (SOC_MOD_CLK_XTAL = LEDC_USE_XTAL_CLK, 40 MHz). Must match the backlight's auto-selected global LEDC clock."
+    range: "9..18"
+  pwm_channel_max:
+    value: 3
+    type: int
+    description: "PWM maximum concurrent outputs (free LEDC timers on the P4)"
+    range: "1..3"
+  pwm_duty_default_pct:
+    value: 50
+    type: int
+    description: "PWM default duty in percent applied by the freq command"
+    range: "0..100"
+  adc_default_samples:
+    value: 1
+    type: int
+    description: "ADC default number of samples averaged by the adc command"
+    range: "1..64"
+  adc_max_samples:
+    value: 64
+    type: int
+    description: "ADC maximum number of samples accepted by the adc command"
+    range: "1..1024"
+  adc_atten:
+    value: "ADC_ATTEN_DB_12"
+    type: adc_atten_t
+    description: "ADC attenuation used by the adc command"
+  i2c_tool_timeout_ms:
+    value: 100
+    type: int
+    description: "I2C timeout for scan/peek/poke transactions in ms"
+    range: "10..1000"
+  i2c_scan_probe_timeout_ms:
+    value: 10
+    type: int
+    description: "I2C per-address probe timeout for i2c scan in ms"
+    range: "1..100"
+  i2c_scan_first_addr:
+    value: "0x03"
+    type: int
+    description: "I2C first 7-bit address probed by i2c scan"
+    range: "0x03..0x77"
+  i2c_scan_last_addr:
+    value: "0x77"
+    type: int
+    description: "I2C last 7-bit address probed by i2c scan"
+    range: "0x03..0x77"
+  i2c_tool_clk_hz:
+    value: 100000
+    type: uint32_t
+    description: "I2C clock speed in Hz for user-supplied sda/scl buses"
+    range: "1000..1000000"
+  spi_tool_clk_hz:
+    value: 1000000
+    type: uint32_t
+    description: "SPI default clock speed in Hz for tool transactions"
+    range: "1000..40000000"
+  spi_tool_timeout_ms:
+    value: 100
+    type: int
+    description: "SPI timeout for a single transaction in ms"
+    range: "10..1000"
+  spi_tool_buffer_bytes:
+    value: 16
+    type: size_t
+    description: "SPI maximum transaction buffer size in bytes"
+    range: "4..64"
+  spi_tool_host:
+    value: 2
+    type: spi_host_device_t
+    description: "SPI host controller used by the toolkit (2 = SPI3_HOST; SPI3 routes through the GPIO matrix, avoiding SPI2's IOMUX pins that overlap the board I2C/I2S lines)"
+    range: "1..2"
 
 # ---- Header Bar Visuals ----
 header_visuals:

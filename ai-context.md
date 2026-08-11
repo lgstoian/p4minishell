@@ -359,6 +359,27 @@
 - Persistent watchdog (networking_wifi_watchdog_task) retries disconnected Wi-Fi with exponential backoff (1s→30s cap, 120s total timeout)
 - Watchdog starts automatically on WIFI_EVENT_STA_DISCONNECTED; stops on successful connection or timeout
 
+### Network Services Rules (httpd / netstat / ipconfig)
+- The HTTP file server (`components/networking/http_server.c`) is the sole owner of the
+  `esp_http_server` surface, exactly as `networking.c` owns `esp_http_client`. It serves the
+  SD card via guarded sessions (`shell_sd_begin`/`shell_sd_end`) and VFS `opendir`/`fopen`/
+  `fread` chunk streaming (the same SD pattern c6ota uses), never touching FATFS internals
+  directly.
+- Server lifecycle is tied to Wi-Fi events: auto-start on `IP_EVENT_STA_GOT_IP` (gated by
+  `P4_CONFIG_HTTPD_AUTOSTART`) and stop on `WIFI_EVENT_STA_DISCONNECTED`. Every request is
+  bounded: auth check first (optional Basic auth, constant-time compare), `..` path segments
+  rejected with 400, directory listings capped at `P4_CONFIG_HTTPD_LISTING_MAX`, file reads
+  through a heap buffer with `recv`/`send` timeouts. All limits come from `P4_CONFIG_HTTPD_*`.
+- `httpget` sends HTTP Basic auth when the URL carries a `user:pass@` prefix
+  (`networking_http_url_has_userinfo()` sets `HTTP_AUTH_TYPE_BASIC`), so authenticated
+  endpoints can be fetched from the shell.
+- `netstat`/`ipconfig` (`components/networking/netdiag.c`) read lwIP state only: `netif_list`,
+  `dns_getserver`, and the TCP/UDP PCB lists. The PCB globals are declared locally (not via
+  `lwip/priv/*` headers) and traversed read-only under `LOCK_TCPIP_CORE()` when
+  `LWIP_TCPIP_CORE_LOCKING` is enabled (no-op otherwise), capped by
+  `P4_CONFIG_NETSTAT_ROW_MAX`. Never iterate PCBs without the core lock in a context that
+  could deadlock, and never modify them.
+
 ### Bluetooth Rules
 - Hosted NimBLE on C6 over ESP-Hosted VHCI (not Bluedroid)
 - Stateful lifecycle: enable once, reuse for scan/advertise
@@ -490,6 +511,8 @@
   `PATH=`, `PROMPT=`, `ECHO ON|OFF`, `ROTATE=`, `BRIGHTNESS=`, `DISPLAY_POWER=`, `VOLUME=`,
   `WIFI_SSID=`, `WIFI_PASSWORD=`, `WIFI_AUTOCONNECT=`, `WIFI=ON|OFF`, `BLUETOOTH=ON|OFF`,
   `BT_ADVERTISE=ON|OFF`, `USB_KEYBOARD=ON|OFF`, `USB_MOUSE=ON|OFF`, `GPIO <n> = OUT [HIGH|LOW]`.
+- Any unrecognized `NAME=VALUE` line is applied as a batch environment variable (same effect as
+  `SET`), so CONFIG.SYS can carry project variables. Only unknown keywords *without* a value warn.
 - Hardware directives are applied by executing their command-line equivalent through the batch
   pipeline (`batch_boot_execute_command()`), reusing existing validation. State-only directives
   (Wi-Fi credentials, autoconnect policy, echo default) use accessors exposed by the owning modules.
@@ -554,6 +577,33 @@ When bumping the version, update all three: `p4minishell_config.h` version macro
 - RGB LED: no authoritative wiring in JC1060 reference
 - Camera: no local camera stack in workspace
 - Both should fail explicitly with honest messages
+
+### Peripheral Toolkit Rules (pwm / freq / adc / i2c / spi)
+- The `pwm`, `freq`, `adc`, `i2c`, and `spi` commands live in `components/command/command.c`
+  (hardware verbs belong to the command module). All of them gate every pin through
+  `shell_pin_is_reserved()` (the `critical` entries of `s_gpio_pins`), so the board's active
+  I2C/I2S/SDIO/display/SD lines can never be repurposed.
+- PWM/square waves use the legacy LEDC API (`driver/ledc.h`). The toolkit must use LEDC
+  timers 0/2/3 and channels excluding `BOARD_CFG_DISPLAY_BRIGHTNESS_LEDC_CH` (the backlight
+  owns channel 1 / timer 1). It MUST use the same global LEDC clock the backlight
+  auto-selects (`P4_CONFIG_PWM_CLK_SOURCE` = SOC_MOD_CLK_XTAL, 40 MHz) and pick the duty
+  resolution from `P4_CONFIG_PWM_SRC_CLK_HZ` (40 MHz); a mismatch or an 80 MHz assumption
+  fails with "timer clock conflict" / `div_param=0`.
+- `adc <pin>` opens a fresh one-shot unit per read and deletes it (plus calibration) on every
+  path. `adc status` enumerates pins from the SOC channel map (`soc/adc_channel.h`), never by
+  probing arbitrary GPIOs with `adc_oneshot_io_to_channel` (that logs spurious errors), and
+  live-samples each candidate so a busy ADC unit is reported unavailable.
+- `i2c` reuses the board's shared bus handle (`bsp_i2c_get_handle()`) when pins match the BSP
+  I2C pair, otherwise it creates a temporary `i2c_master` bus on a free port. Scans probe via
+  normal device transactions (add device + one-byte transmit), NEVER `i2c_master_probe()`,
+  which reprograms the shared controller's timing/interrupts and disrupts the GT911 touch.
+- SPI is a reported hardware gap on this board: `spi status` reports the toolkit
+  configuration, but the `loopback`/`peek`/`poke` verbs return an honest
+  "unavailable on this board" error and MUST NOT call the SPI driver — initializing
+  the SPI host on this P4 with the ESP-Hosted SDIO link active stalls the chip and
+  drops USB-Serial-JTAG off the bus (verified with both SPI2 and SPI3, DMA on and
+  off). Do not re-wire SPI transactions without first proving the host init does
+  not stall the chip.
 
 ### Error Handling
 - Friendly transcript messages for all failures

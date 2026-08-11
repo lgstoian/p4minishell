@@ -47,7 +47,8 @@
     ";   SET name=value            Set an environment variable\n" \
     ";   PATH=dir1;dir2;...        Set the command search PATH\n" \
     ";   PROMPT=template           Set the prompt template ($p $g etc.)\n" \
-    ";   ECHO ON|OFF               Set the batch echo default\n"
+    ";   ECHO ON|OFF               Set the batch echo default\n" \
+    ";   NAME=VALUE                Any other KEY=VALUE sets an environment variable\n"
 
 #define BOOT_CFG_DISPLAY \
     "\n; Display & audio:\n" \
@@ -71,7 +72,8 @@
     ";   USB_MOUSE=ON|OFF           Enable/disable HID mouse echo\n" \
     "\n; GPIO (output-only, safe pins only):\n" \
     ";   GPIO <n> = OUT [HIGH|LOW]   Set initial level at a safe pin\n" \
-    "; Unknown directives produce a single muted warning and are skipped.\n"
+    "; Unknown KEY=VALUE lines set an environment variable; unknown keywords\n" \
+    "; without a value produce a single muted warning and are skipped.\n"
 
 #define BOOT_CFG_DEFAULT BOOT_CFG_HEADER BOOT_CFG_DISPLAY BOOT_CFG_NETWORK \
     BOOT_CFG_USB_GPIO
@@ -636,6 +638,11 @@ void boot_run_startup(void)
                            boot_starts_with_ci(keyword, "DOS") ||
                            boot_starts_with_ci(keyword, "SHELL")) {
                     boot_warn_unknown(keyword);
+                } else if (equals != NULL) {
+                    /* Generic KEY=VALUE fallback: any unrecognized setting is
+                     * applied as an environment variable, so CONFIG.SYS can
+                     * carry project variables without a separate SET line. */
+                    shell_env_set(keyword, value);
                 } else {
                     boot_warn_unknown(keyword);
                 }

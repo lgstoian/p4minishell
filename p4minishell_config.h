@@ -351,6 +351,57 @@
 /** User-Agent string sent by `httpget`; keep it short and identifiable. */
 #define P4_CONFIG_HTTP_USER_AGENT           "P4MiniShell/0.24.11 httpget"
 
+/* ========================================================================
+ * HTTP FILE SERVER (httpd) AND NETWORK DIAGNOSTICS
+ * ========================================================================
+ * A lightweight read-only HTTP file server that shares the SD card over the
+ * Wi-Fi link, plus `netstat` and `ipconfig` companions. All of it lives in
+ * components/networking (the sole owner of the esp_http_server / lwIP
+ * surface). The server starts automatically when the station gets an IP and
+ * stops on disconnect.
+ */
+
+/** Port the `httpd` file server listens on. */
+#define P4_CONFIG_HTTPD_PORT                80
+
+/** Maximum simultaneous client sockets (3 are reserved by the server). */
+#define P4_CONFIG_HTTPD_MAX_OPEN_SOCKETS    4
+
+/** TCP accept backlog for the server. */
+#define P4_CONFIG_HTTPD_BACKLOG             4
+
+/** Stack bytes for the dedicated HTTP server task. The handler builds
+ *  path-sized scratch (URL + LFN) so it needs headroom over the default. */
+#define P4_CONFIG_HTTPD_STACK_BYTES         8192
+
+/** Priority of the HTTP server task. */
+#define P4_CONFIG_HTTPD_TASK_PRIORITY       5
+
+/** Receive timeout in seconds for an idle client socket. */
+#define P4_CONFIG_HTTPD_RECV_TIMEOUT_S      5
+
+/** Send timeout in seconds for a slow client socket. */
+#define P4_CONFIG_HTTPD_SEND_TIMEOUT_S      5
+
+/** Bytes read per chunk when streaming a file (heap-allocated per request). */
+#define P4_CONFIG_HTTPD_BLOCK_BYTES         2048
+
+/** Maximum directory-listing entries returned by the server. */
+#define P4_CONFIG_HTTPD_LISTING_MAX         128
+
+/** Auto-start the server when the station gets an IP and stop it on
+ *  disconnect. When 0, only the manual `httpd start` starts it. */
+#define P4_CONFIG_HTTPD_AUTOSTART           1
+
+/** Basic-auth username; an empty string disables authentication. */
+#define P4_CONFIG_HTTPD_AUTH_USERNAME       "admin"
+
+/** Basic-auth password; used only when P4_CONFIG_HTTPD_AUTH_USERNAME is set. */
+#define P4_CONFIG_HTTPD_AUTH_PASSWORD       "p4mini"
+
+/** Maximum rows printed by `netstat` per TCP/UDP list. */
+#define P4_CONFIG_NETSTAT_ROW_MAX           64
+
 /** Maximum response body bytes printed to the transcript when no localfile is
  *  given. The full body is always available via `httpget <url> <localfile>`. */
 #define P4_CONFIG_HTTP_PRINT_BODY_BYTES     4096
@@ -681,6 +732,75 @@
 
 /** Minimum CPU frequency in MHz for light sleep entry. */
 #define P4_CONFIG_BATTERY_MIN_SLEEP_FREQ_MHZ 40
+
+/* ========================================================================
+ * PERIPHERAL TOOLKIT (pwm, freq, adc, i2c, spi)
+ * ========================================================================
+ * The `pwm`/`freq`/`adc`/`i2c`/`spi` shell commands drive the LEDC, ADC,
+ * I2C master, and SPI master drivers on non-reserved GPIOs. All values here
+ * are tunable; the pin-safety table lives in command.c (board reserved
+ * lines are refused by every peripheral command).
+ */
+
+/** PWM: maximum frequency in Hz accepted by `pwm`/`freq`. */
+#define P4_CONFIG_PWM_FREQ_MAX_HZ             100000
+
+/** PWM: assumed timer source clock in Hz used to pick the duty resolution.
+ *  Matches the shared LEDC global clock (XTAL, 40 MHz) that the display
+ *  backlight auto-selects. */
+#define P4_CONFIG_PWM_SRC_CLK_HZ              40000000
+
+/** PWM: LEDC clock source for toolkit timers. Must match the global LEDC
+ *  clock the display backlight auto-selects (SOC_MOD_CLK_XTAL, the value
+ *  behind LEDC_USE_XTAL_CLK), because all LEDC timers share one global
+ *  clock and a mismatch fails with "timer clock conflict". */
+#define P4_CONFIG_PWM_CLK_SOURCE              18
+
+/** PWM: maximum concurrent outputs (limited by free LEDC timers on the P4). */
+#define P4_CONFIG_PWM_CHANNEL_MAX             3
+
+/** PWM: default duty in percent applied by `freq` (50 % square wave). */
+#define P4_CONFIG_PWM_DUTY_DEFAULT_PCT        50
+
+/** ADC: default number of samples averaged by `adc <pin> [samples]`. */
+#define P4_CONFIG_ADC_DEFAULT_SAMPLES         1
+
+/** ADC: maximum number of samples accepted by the `adc` command. */
+#define P4_CONFIG_ADC_MAX_SAMPLES             64
+
+/** ADC: attenuation used by the `adc` command (ADC_ATTEN_DB_12 = 0..3.3 V). */
+#define P4_CONFIG_ADC_ATTEN                   3
+
+/** I2C: timeout for scan/peek/poke transactions in milliseconds. */
+#define P4_CONFIG_I2C_TOOL_TIMEOUT_MS         100
+
+/** I2C: per-address probe timeout for `i2c scan` in milliseconds. A scan
+ *  only needs a quick ACK check, so this stays small to keep the bus
+ *  busy time bounded (117 addresses * probe timeout). */
+#define P4_CONFIG_I2C_SCAN_PROBE_TIMEOUT_MS   10
+
+/** I2C: first 7-bit address probed by `i2c scan`. */
+#define P4_CONFIG_I2C_SCAN_FIRST_ADDR         0x03
+
+/** I2C: last 7-bit address probed by `i2c scan`. */
+#define P4_CONFIG_I2C_SCAN_LAST_ADDR          0x77
+
+/** I2C: clock speed in Hz for user-supplied sda/scl buses. */
+#define P4_CONFIG_I2C_TOOL_CLK_HZ             100000
+
+/** SPI: default clock speed in Hz for tool transactions. */
+#define P4_CONFIG_SPI_TOOL_CLK_HZ             1000000
+
+/** SPI: timeout for a single transaction in milliseconds. */
+#define P4_CONFIG_SPI_TOOL_TIMEOUT_MS         100
+
+/** SPI: maximum transaction buffer size in bytes (loopback pattern). */
+#define P4_CONFIG_SPI_TOOL_BUFFER_BYTES       16
+
+/** SPI: host controller used by the toolkit (SPI3_HOST = 2). SPI3 is chosen
+ *  because SPI2's direct IOMUX pins overlap the board's I2C/I2S lines; SPI3
+ *  routes through the GPIO matrix only. */
+#define P4_CONFIG_SPI_TOOL_HOST               2
 
 /* ========================================================================
  * HEADER BAR VISUAL STYLING

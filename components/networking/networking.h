@@ -95,6 +95,15 @@ typedef struct {
 /** Initialize networking: stores host callbacks, starts boot-time Wi-Fi restore, bootstraps Bluetooth. */
 void networking_init(const networking_host_ops_t *ops);
 
+/**
+ * Get the host callback table registered by networking_init().
+ *
+ * Internal helper for the networking component's own translation units
+ * (http_server.c, netdiag.c, bluetooth.c) so they share one transcript and
+ * debug-history surface. Returns NULL before networking_init() runs.
+ */
+const networking_host_ops_t *networking_get_host_ops(void);
+
 // ---- Shell-facing Wi-Fi commands ----
 
 /**

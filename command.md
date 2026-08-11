@@ -114,10 +114,10 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit` | `components/batch/batch.c` |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
-| `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
+| `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
 | `reboot`, `clear`/`cls`, `prompt` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
-| `wifi`, `bluetooth`/`bt`, `usb`, `c6ota` (family routing) | `components/command/command.c` → owning module |
+| `wifi`, `bluetooth`/`bt`, `usb`, `c6ota`, `httpd`, `netstat`, `ipconfig` (family routing) | `components/command/command.c` → owning module |
 | `ping`, `dns`/`nslookup`, `httpget`/`wget` (dispatched here, implemented in networking) | `components/command/command.c` → `components/networking/` |
 
 Every command is reached through the single dispatcher `shell_execute_command_core()` in
@@ -229,6 +229,48 @@ requires an external wake source. Battery level is reported before sleeping.
 
 ### volume <0-100>
 Set speaker volume through ES8311 codec path.
+
+### pwm <pin> <freq_hz> <duty_pct> | pwm stop <pin> | pwm status
+Drive a non-reserved GPIO with an LEDC PWM signal. `pwm <pin> <freq_hz>
+<duty_pct>` configures or updates the output (freq 1..`P4_CONFIG_PWM_FREQ_MAX_HZ`,
+duty 0..100); `pwm stop <pin>` releases the channel and returns the pin to its
+default; `pwm status` lists active outputs. The toolkit uses LEDC timers 0/2/3
+and channels excluding the backlight's channel 1, with the same XTAL clock the
+backlight auto-selects, so it never disturbs the display. Max concurrent
+outputs: `P4_CONFIG_PWM_CHANNEL_MAX` (3). Reserved board lines are refused.
+
+### freq <pin> <hz> | freq stop <pin> | freq status
+Square-wave generator at 50% duty — the same LEDC engine as `pwm` at
+`P4_CONFIG_PWM_DUTY_DEFAULT_PCT` (50). `freq stop <pin>` and `freq status`
+share the `pwm` stop/status paths.
+
+### adc <pin> [samples] | adc status
+Read any ADC-capable, non-reserved GPIO with a fresh one-shot unit. `adc
+<pin> [samples]` averages 1..`P4_CONFIG_ADC_MAX_SAMPLES` reads and reports the
+raw code plus the calibrated voltage (0..~3.3 V at `P4_CONFIG_ADC_ATTEN`). `adc
+status` live-samples every SOC ADC pin and lists only the ones that currently
+read back, so a busy ADC unit is reported as unavailable. ADC1: GPIO16-23,
+ADC2: GPIO49-54 (reserved lines skipped); pins whose ADC unit is held by
+another driver get a clear "in use" error.
+
+### i2c status | i2c scan [sda=.. scl=..] | i2c peek <addr> <reg> [sda=.. scl=..] | i2c poke <addr> <reg> <value> [sda=.. scl=..]
+I2C bus tool over the `i2c_master` driver. With no pins, `i2c scan` / `peek` /
+`poke` reuse the board's shared bus (SDA 7 / SCL 8, 400 kHz) through the BSP
+handle, so a scan never conflicts with the GT911 touch; any other `sda=`/`scl=`
+pin pair gets a temporary bus on a free port (clock
+`P4_CONFIG_I2C_TOOL_CLK_HZ`). Addresses and registers accept hex (`0x68`).
+`i2c scan` probes `P4_CONFIG_I2C_SCAN_FIRST_ADDR`..`_LAST_ADDR` using normal
+device transactions (a short per-address timeout), so it is fast and does not
+reprogram the shared controller. `peek` reads one byte, `poke` writes one byte.
+Reserved pin pairs other than the board bus are refused.
+
+### spi status
+Reports the toolkit's SPI configuration (host, mode, clock, timeout). The
+`loopback` / `peek` / `poke` verbs are recognized but return an honest
+"unavailable on this board" error: initializing the SPI host on this P4 with
+the ESP-Hosted SDIO link active stalls the chip and drops USB-Serial-JTAG off
+the bus, so SPI transactions are deliberately not wired to the SPI master
+driver. This follows the same explicit-failure policy as `rgb` and `camera`.
 
 ### date [MM-DD-YYYY]
 Show the full clock panel or set the system date. With no argument, prints the
@@ -823,8 +865,9 @@ skipped; keywords are case-insensitive. Directives:
 | BLUETOOTH=ON\|OFF BT_ADVERTISE=ON\|OFF | Hosted BLE policy |
 | USB_KEYBOARD=ON\|OFF USB_MOUSE=ON\|OFF | USB HID policy |
 | GPIO <n> = OUT [HIGH\|LOW] | Initial level at a safe output pin (reserved pins refused) |
+| *any* NAME=VALUE | Any unrecognized KEY=VALUE sets a batch environment variable |
 
-Unknown directives print a single muted warning and are skipped. AUTOEXEC.BAT
+Unknown keywords without a value print a single muted warning and are skipped. AUTOEXEC.BAT
 then runs through the normal batch pipeline with full batch power
 (if/or/goto/call, pipes, redirection, chaining).
 
@@ -1097,6 +1140,44 @@ httpget https://example.com/page.html downloaded.html
   unreachable host or timeout, body over the size cap, SD write failure, or
   Wi-Fi not connected.
 - **2** — usage error (missing URL or unsupported URL scheme).
+
+A URL with a `user:pass@` prefix (e.g. `httpget http://user:pass@host/page`)
+sends HTTP Basic authentication, so password-protected endpoints (including
+this firmware's own `httpd` file server) can be fetched.
+
+### httpd start | httpd stop | httpd status
+
+Drives the HTTP file server that shares the SD card over the Wi-Fi link.
+
+- `httpd start` — starts the server on `P4_CONFIG_HTTPD_PORT` (80). Refuses
+  (ERRORLEVEL 1) when Wi-Fi is not connected.
+- `httpd stop` — stops the server.
+- `httpd status` — reports state (stopped/running/failed), port, auth on/off,
+  docroot, open/max sockets, request count, and SD mount state.
+
+The server maps URL paths onto files under the SD mount point; directories
+return an HTML listing (bounded by `P4_CONFIG_HTTPD_LISTING_MAX`), files are
+streamed with a Content-Type chosen from the extension, and unknown paths
+return 404. `..` path traversal is refused with 400. When
+`P4_CONFIG_HTTPD_AUTH_USERNAME` is non-empty, requests must send HTTP Basic
+credentials (401 + `WWW-Authenticate` otherwise). The server auto-starts when
+the station receives an IP and stops on disconnect
+(`P4_CONFIG_HTTPD_AUTOSTART`).
+
+**ERRORLEVEL:** 0 on success, 1 on failure (e.g. `httpd start` without a
+connection), 2 on usage.
+
+### netstat
+
+Reports the network state by walking lwIP: the interface list (state, IPv4,
+netmask, gateway, MTU, MAC), active TCP connections (local/remote `ip:port`
+and state), TCP listeners, and UDP endpoints. Read-only, bounded by
+`P4_CONFIG_NETSTAT_ROW_MAX`.
+
+### ipconfig
+
+Reports the full per-interface IP configuration: state, MAC, IPv4, netmask,
+gateway, MTU, the default-route marker, and the configured DNS servers.
 
 Examples in a batch file:
 
