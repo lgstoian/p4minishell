@@ -138,6 +138,26 @@ worker task.
 | debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count |
 | mem | Show free heap, total heap, minimum heap, internal heap, task count, PSRAM state |
 
+### ps | tasks | top [/b]
+
+Read-only FreeRTOS task introspection. `ps` and `tasks` print a colour-coded
+table; `top` prints the same table plus a summary line with the live task
+count, free heap, and uptime. Each row shows:
+
+- **Name** — FreeRTOS task name
+- **Sta** — state (`RUN` running, `RDY` ready, `BLK` blocked, `SUS` suspended, `DEL` deleted)
+- **Prio** — current priority
+- **Core** — pinned core, or `-1` when the task has no core affinity (unpinned)
+- **HeadB** — stack high-water mark: the minimum free stack bytes remaining
+  since the task was created (lower = closer to a stack overflow)
+- **CPU%** — the task's CPU share since the previous `ps`/`top`/`tasks` call,
+  computed by diffing FreeRTOS run-time counters
+
+`/b` emits uncoloured machine-parsable rows (`name state prio core headb cpu`)
+suitable for redirection and pipes, e.g. `ps /b > tasks.txt`.
+
+The command is read-only — it never suspends, deletes, or reprioritises tasks.
+
 ## Hardware Commands
 
 ### brightness <0-100>

@@ -4,7 +4,10 @@ This guide describes how `main/main.c` integrates the runtime modules in this wo
 
 ## Architecture
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It contains no command implementations and no shell state.
-- `components/shell` owns the transcript and async buffer, command history, debug log, UART console, the input-line prompt contract, the interactive keypress queue, the DOS prompt template engine, the boot banner, and the system info commands.
+- `components/shell` owns the transcript and async buffer, command history, debug log, UART 
+console, the input-line prompt contract, the interactive keypress queue, the DOS prompt template engine, the boot 
+banner, the system info commands, and the read-only FreeRTOS task introspection (`ps` / `tasks` / `top` via
+  `shell_command_ps()`).
 - `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, and every DOS file command.
 - `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, `for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, and the batch language commands.
 - `components/command` owns the single dispatcher, the execution pipeline, output-redirection parsing, the worker task, the hardware commands, and the remaining system commands. The display/keyboard/windows UI query handlers live in `components/command/command_ui.c`.

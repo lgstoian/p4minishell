@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.24.17 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.24.18 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -122,6 +122,7 @@ the YAML to match.
 - **Time / SNTP control**: `date`, `time`, `timezone`, and `sntp`/`ntpsync` commands (all owned by `components/clock/`). `sntp sync` synchronizes the clock over Wi-Fi, `timezone <TZ>` sets a POSIX timezone string, and `date`/`time` show a fuller clock panel (local/UTC/unix/timezone/uptime/sync) while still supporting the DOS-style set forms.
 - **Fixed header bar**: Wi-Fi, battery, Bluetooth, USB, SD status with transient notifications
 - **Real-time system panel**: Memory (MEM), CPU usage (CPU bar + %), and Battery (BAT) all dynamically linked to FreeRTOS runtime statistics on the far right of the header
+- **FreeRTOS task introspection**: `ps` / `tasks` / `top` list every task (name, state, priority, core, stack high-water mark) with per-task CPU% since the last sample; `/b` emits machine-parsable rows for pipes. Read-only.
 - **Debug history**: 5-entry error/warning buffer surfaced via `debug` command
 
 ## Command Set
@@ -130,7 +131,7 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 
 | Category | Commands |
 |----------|----------|
-| **System** | `help`, `sysinfo`, `clear`/`cls`, `reboot`, `version`/`ver`, `about`, `debug`, `mem`, `screenshot`/`scr`/`capture` |
+| **System** | `help`, `sysinfo`, `clear`/`cls`, `reboot`, `version`/`ver`, `about`, `debug`, `mem`, `ps`/`tasks`/`top`, `screenshot`/`scr`/`capture` |
 | **Hardware** | `brightness`, `rotate`, `battery`, `volume`, `gpio list|status|read|set` |
 | **Storage** | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` |
 | **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` |

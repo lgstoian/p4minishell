@@ -1449,6 +1449,15 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* FreeRTOS task introspection: `ps`, `tasks`, and `top` are the same
+     * read-only listing (top adds a summary header). */
+    if (shell_text_equals_ignore_case(argv[0], "ps") ||
+        shell_text_equals_ignore_case(argv[0], "tasks") ||
+        shell_text_equals_ignore_case(argv[0], "top")) {
+        shell_command_ps(argc, argv);
+        return true;
+    }
+
     /* ---- Hardware commands ---- */
     if (shell_text_equals_ignore_case(argv[0], "brightness")) {
         shell_command_brightness(argc, argv);

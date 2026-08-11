@@ -10,13 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.17
-# Last updated: 2026-08-11 (Known Wi-Fi networks: persistent multi-network list
-#                           on SD (sd:/WIFI.KNOWN) with boot-time auto-connect,
-#                           wifi known/save/forget/preferred commands, and a
-#                           clean fallback to the single-credential path when
-#                           the SD card is absent)
-config_version: "0.24.17"
+# Version: 0.24.18
+# Last updated: 2026-08-11 (FreeRTOS task introspection: read-only ps/tasks/top
+#                           commands listing name, state, priority, core, stack
+#                           high-water mark, and per-task CPU%)
+config_version: "0.24.18"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -981,6 +979,17 @@ task_stacks:
       and networking_notify_headerf(), which invoke vsnprintf on the handler's stack.
       8192 gives the handler path real headroom. Pinned in sdkconfig.defaults.
     range: "4096..32768"
+
+# ---- Task introspection (ps / tasks / top) ----
+task_introspection:
+  snapshot_max:
+    value: 64
+    type: size_t
+    description: >-
+      Maximum number of tasks shown by ps / tasks / top. The snapshot array is
+      heap-allocated and capped so a burst of task creation cannot blow the
+      allocation or flood the transcript.
+    range: "8..256"
 
 # ---- Networking ----
 networking:

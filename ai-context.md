@@ -176,6 +176,7 @@
   - Batch language verbs (`set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`,
     `choice`, `setlocal`, `endlocal`, `exit`) -> `components/batch/batch.c`
 - System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c`
+- Task introspection verbs (`ps`, `tasks`, `top`) -> `components/shell/shell.c` (`shell_command_ps`)
 - Time / SNTP verbs (`date`, `time`, `timezone`, `sntp`/`ntpsync`) -> `components/clock/clock_commands.c`
 - Hardware, UI-query, and remaining system verbs -> `components/command/command.c`
 - Screenshot/capture/scr (LVGL screen capture as BMP) -> `components/command/command.c`
@@ -428,6 +429,19 @@
 - Preserve original unsplit command text for family handlers (wifi, sd, c6ota)
 - LV_EVENT_READY on input line is the confirmed submission path
 - Serial console reuses same shell path (stdin to submit, stdout from transcript)
+
+### Task Introspection (ps / tasks / top)
+- `ps`, `tasks`, and `top` are READ-ONLY: they only read `uxTaskGetSystemState()`
+  snapshots and must never call `vTaskSuspend` / `vTaskDelete` / priority changes.
+  Do not add kill/suspend verbs.
+- The `TaskStatus_t` snapshot array MUST be heap-allocated (an entry is ~40 bytes;
+  `P4_CONFIG_TASK_SNAPSHOT_MAX` entries can exceed the 8 KB worker stack) and freed on
+  every path. Cap the count with `P4_CONFIG_TASK_SNAPSHOT_MAX` so a task-creation burst
+  cannot blow the allocation or flood the transcript.
+- Per-task CPU% comes from diffing `ulRunTimeCounter` against the previous sample keyed by
+  `xTaskNumber` (unsigned arithmetic handles counter wrap; a new/deleted task starts fresh).
+  Unpinned tasks report `tskNO_AFFINITY`; display that as `-1`. Guard `xCoreID` access with
+  `#if configTASKLIST_INCLUDE_COREID`.
 
 ### Shell State
 - RAM-only: current working directory, environment variables, PATH, batch args

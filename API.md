@@ -176,7 +176,13 @@ void   shell_record_warningf(const char *tag, const char *format, ...);
 void   shell_record_infof(const char *tag, const char *format, ...);
 size_t shell_get_warning_count(void);
 void   shell_command_debug(void);
+void   shell_command_ps(int argc, char **argv);
 ```
+- `shell_command_ps()` implements `ps` / `tasks` / `top`: a read-only FreeRTOS
+  task table (name, state, priority, core, stack high-water mark, per-task
+  CPU% since the previous sample). It reads a heap-allocated
+  `uxTaskGetSystemState()` snapshot capped by `P4_CONFIG_TASK_SNAPSHOT_MAX` and
+  never mutates tasks. `/b` emits uncoloured machine-parsable rows.
 
 ### Quoting and escaping
 ```c

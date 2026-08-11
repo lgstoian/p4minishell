@@ -1937,6 +1937,7 @@ void shell_command_help(void)
 {
     shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell Commands:" SH_RST "\n");
     shell_transcript_appendf_ansi("  " SH_EXE "help" SH_RST " | sysinfo | clear/cls | reboot | version/ver | about | debug | mem\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "ps" SH_RST " | " SH_EXE "tasks" SH_RST " | " SH_EXE "top" SH_RST " [/b] - FreeRTOS task list (name, state, priority, core, stack, CPU%)\n");
     shell_transcript_appendf_ansi("  " SH_EXE "brightness" SH_RST " <0-100> | " SH_EXE "rotate" SH_RST " <0|90|180|270> | " SH_EXE "battery" SH_RST " | " SH_EXE "volume" SH_RST " <0-100>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "gpio" SH_RST " list | status | read <pin> | set <pin> <0|1>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "cd" SH_RST " [path] | " SH_EXE "copy" SH_RST " <src> <dst> | " SH_EXE "move" SH_RST " <src> <dst>\n");
@@ -2193,6 +2194,205 @@ void shell_command_mem(void)
                              (unsigned int)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
 #else
     shell_transcript_appendf_ansi("  " SH_LBL "mem.psram:" SH_RST " " SH_MUTE "disabled" SH_RST "\n");
+#endif
+}
+
+/* ========================================================================
+ * TASK INTROSPECTION (ps / tasks / top)
+ * ========================================================================
+ * Read-only FreeRTOS task listing surfaced by `ps`, `tasks`, and `top`. It
+ * reads a uxTaskGetSystemState() snapshot (heap-allocated, capped by
+ * P4_CONFIG_TASK_SNAPSHOT_MAX) and prints each task's name, state, priority,
+ * core, stack high-water mark (minimum free stack since creation) and, for
+ * `top`, the CPU share since the previous sample. No task is modified, so the
+ * feature is inherently read-only and safe from the command worker task.
+ */
+
+/** One entry of the previous-runtime bookkeeping used to compute per-task CPU
+ *  share between two `ps`/`top` samples. Keyed by the task's unique
+ *  xTaskNumber so a deleted-and-recreated task is treated as a fresh sample. */
+typedef struct {
+    UBaseType_t task_number;   /**< xTaskNumber at the last sample. */
+    uint32_t runtime;          /**< ulRunTimeCounter at the last sample. */
+} shell_task_runtime_sample_t;
+
+static shell_task_runtime_sample_t s_task_runtime_samples[P4_CONFIG_TASK_SNAPSHOT_MAX];
+static int s_task_runtime_sample_count;
+static uint32_t s_task_runtime_total;
+static bool s_task_runtime_sample_valid;
+
+/** Map a FreeRTOS eTaskState to a short three-letter label for the table. */
+static const char *shell_task_state_label(eTaskState state)
+{
+    switch (state) {
+    case eRunning:    return "RUN";
+    case eReady:      return "RDY";
+    case eBlocked:    return "BLK";
+    case eSuspended:  return "SUS";
+    case eDeleted:    return "DEL";
+    default:          return "?";
+    }
+}
+
+/**
+ * Compute the CPU share (%) of one task since the previous `ps`/`top` sample
+ * by diffing its run-time counter against the stored value (both are monotonic
+ * unsigned counters, so wrapping deltas are still correct). Returns 0 when
+ * there is no previous sample, the total runtime did not advance, or the task
+ * is new.
+ */
+static int shell_task_cpu_percent(UBaseType_t task_number, uint32_t runtime,
+                                  uint32_t total_runtime)
+{
+    int index;
+
+    if (!s_task_runtime_sample_valid || total_runtime <= s_task_runtime_total) {
+        return 0;
+    }
+    for (index = 0; index < s_task_runtime_sample_count; index++) {
+        if (s_task_runtime_samples[index].task_number == task_number) {
+            uint32_t task_delta = runtime - s_task_runtime_samples[index].runtime;
+            uint32_t total_delta = total_runtime - s_task_runtime_total;
+            if (total_delta == 0) {
+                return 0;
+            }
+            return (int)((task_delta * 100) / total_delta);
+        }
+    }
+    return 0;
+}
+
+/**
+ * `ps` / `tasks` / `top` — list FreeRTOS tasks and their CPU usage.
+ *
+ * Usage: ps|tasks|top [/b]
+ *   - no argument: colour-coded table (name, state, priority, core, stack
+ *     high-water bytes, CPU% since the previous sample). `top` also prints a
+ *     summary line with the task count, free heap, and uptime.
+ *   - `/b`: uncoloured machine-parsable rows ("name state prio core headb cpu")
+ *     suitable for redirection / pipes.
+ */
+void shell_command_ps(int argc, char **argv)
+{
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+    uint32_t task_count = uxTaskGetNumberOfTasks();
+    TaskStatus_t *task_status_array;
+    uint32_t total_runtime = 0;
+    uint32_t obtained;
+    bool bare = false;
+    bool is_top = false;
+    uint32_t i;
+
+    for (i = 1; i < (uint32_t)argc; i++) {
+        if (argv[i][0] == '/' && (argv[i][1] == 'b' || argv[i][1] == 'B') && argv[i][2] == '\0') {
+            bare = true;
+            break;
+        }
+    }
+    if (argc > 0) {
+        is_top = shell_text_equals_ignore_case(argv[0], "top");
+    }
+
+    if (task_count == 0) {
+        task_count = 1;
+    }
+    if (task_count > P4_CONFIG_TASK_SNAPSHOT_MAX) {
+        task_count = P4_CONFIG_TASK_SNAPSHOT_MAX;
+    }
+
+    /* The TaskStatus_t array can exceed the 8 KB worker stack (one entry is
+     * ~40 bytes), so it is always heap-allocated. */
+    task_status_array = calloc(task_count, sizeof(TaskStatus_t));
+    if (task_status_array == NULL) {
+        shell_print_error("ps: out of memory for the task snapshot");
+        return;
+    }
+
+    obtained = uxTaskGetSystemState(task_status_array, task_count, &total_runtime);
+    if (obtained == 0) {
+        free(task_status_array);
+        shell_print_error("ps: uxTaskGetSystemState returned no tasks");
+        return;
+    }
+
+    if (is_top && !bare) {
+        size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        uint32_t uptime_sec = (uint32_t)((esp_timer_get_time() - s_boot_timestamp_us) / 1000000);
+        shell_transcript_appendf_ansi(SH_HEAD "Tasks (%u)" SH_RST " | "
+                                      SH_LBL "heap free=" SH_RST SH_NUM "%u" SH_RST " | "
+                                      SH_LBL "uptime=" SH_RST SH_NUM "%us" SH_RST "\n",
+                                      (unsigned int)obtained,
+                                      (unsigned int)free_heap,
+                                      (unsigned int)uptime_sec);
+    }
+
+    if (!bare) {
+        shell_transcript_appendf_ansi("  " SH_HEAD "%-16s" SH_RST " " SH_HEAD "%-3s" SH_RST " "
+                                      SH_HEAD "Prio" SH_RST " " SH_HEAD "Core" SH_RST " "
+                                      SH_HEAD "HeadB" SH_RST " " SH_HEAD "CPU%%" SH_RST "\n",
+                                      "Name", "Sta");
+    }
+
+    for (i = 0; i < obtained; i++) {
+        const TaskStatus_t *task = &task_status_array[i];
+        int cpu = shell_task_cpu_percent(task->xTaskNumber,
+                                         (uint32_t)task->ulRunTimeCounter,
+                                         total_runtime);
+        uint32_t highwater_bytes = task->usStackHighWaterMark * (uint32_t)sizeof(StackType_t);
+        char core_label[16];
+#if configTASKLIST_INCLUDE_COREID
+        int core = (int)task->xCoreID;
+#else
+        int core = -1;
+#endif
+        /* Unpinned tasks report tskNO_AFFINITY (0x7FFFFFFF); show that as "-"
+         * in the table and -1 in the machine-readable form. */
+        if (core == (int)tskNO_AFFINITY) {
+            core = -1;
+        }
+        snprintf(core_label, sizeof(core_label), "%d", core);
+
+        if (bare) {
+            shell_transcript_appendf("%s %s %u %s %u %d\n",
+                                     task->pcTaskName,
+                                     shell_task_state_label(task->eCurrentState),
+                                     (unsigned int)task->uxCurrentPriority,
+                                     core_label,
+                                     (unsigned int)highwater_bytes,
+                                     cpu);
+        } else {
+            shell_transcript_appendf_ansi("  " SH_VAL "%-16s" SH_RST " " SH_CMD "%-3s" SH_RST " "
+                                          SH_NUM "%4u" SH_RST " " SH_VAL "%4s" SH_RST " "
+                                          SH_NUM "%6u" SH_RST " " SH_NUM "%3d%%" SH_RST "\n",
+                                          task->pcTaskName,
+                                          shell_task_state_label(task->eCurrentState),
+                                          (unsigned int)task->uxCurrentPriority,
+                                          core_label,
+                                          (unsigned int)highwater_bytes,
+                                          cpu);
+        }
+    }
+
+    /* Store the runtime bookkeeping for the next sample. */
+    {
+        int store = (int)obtained;
+        if (store > P4_CONFIG_TASK_SNAPSHOT_MAX) {
+            store = P4_CONFIG_TASK_SNAPSHOT_MAX;
+        }
+        for (i = 0; i < (uint32_t)store; i++) {
+            s_task_runtime_samples[i].task_number = task_status_array[i].xTaskNumber;
+            s_task_runtime_samples[i].runtime = (uint32_t)task_status_array[i].ulRunTimeCounter;
+        }
+        s_task_runtime_sample_count = store;
+        s_task_runtime_total = total_runtime;
+        s_task_runtime_sample_valid = true;
+    }
+
+    free(task_status_array);
+#else
+    (void)argc;
+    (void)argv;
+    shell_print_muted("ps: FreeRTOS trace facility is disabled (CONFIG_FREERTOS_USE_TRACE_FACILITY)");
 #endif
 }
 

@@ -17,6 +17,8 @@ Implemented today in the checked-in firmware:
 - ✅ Scrollable transcript that jumps to a submitted command's output and pages via the
       input-row Up/Dn buttons, USB keyboard PageUp/PageDown, and the USB mouse wheel
 - ✅ Fixed top header bar with Wi-Fi, battery, Bluetooth, USB, SD status + MEM/CPU/BAT system panel
+- ✅ FreeRTOS task introspection: `ps` / `tasks` / `top` (read-only: name, state,
+      priority, core, stack high-water mark, per-task CPU%) with a `/b` bare form
 - ✅ Worker-task command execution to protect the LVGL event stack
 - ✅ Interactive UART console bridge (stdin/stdout routed through same shell path)
 - ✅ Touch-to-show-keyboard: tapping input line brings up OSK (Windows 11 behavior)

@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             17
+#define P4_CONFIG_VERSION_PATCH             18
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -912,6 +912,17 @@
 
 /** Log tag for networking/Wi-Fi module. */
 #define P4_CONFIG_NETWORKING_TAG             "wifi"
+
+/* ========================================================================
+ * TASK INTROSPECTION (ps / tasks / top)
+ * ========================================================================
+ * Read-only FreeRTOS task introspection surfaced by the `ps`, `tasks`, and
+ * `top` commands. The snapshot array is heap-allocated (never on the worker
+ * stack); this value caps how many tasks are shown so a burst of task
+ * creation cannot blow the allocation or flood the transcript. */
+
+/** Maximum number of tasks shown by `ps` / `tasks` / `top`. */
+#define P4_CONFIG_TASK_SNAPSHOT_MAX          64
 
 /* ========================================================================
  * SCREENSHOT (screenshot / scr / capture)

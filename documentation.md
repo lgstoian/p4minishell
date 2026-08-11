@@ -149,6 +149,11 @@ Owns the shell's runtime surface and output plumbing:
   and the LVGL input line. The input line snapshots the prefix it painted so a template or path
   change between two LVGL events cannot corrupt command extraction.
 - **System info commands**: `help`, `sysinfo`, `version`, `about`, `mem`, `debug`
+- **Task introspection** (`ps` / `tasks` / `top`): read-only FreeRTOS task listing from a
+  heap-allocated `uxTaskGetSystemState()` snapshot (capped by `P4_CONFIG_TASK_SNAPSHOT_MAX`).
+  Prints name, state, priority, core, stack high-water mark, and per-task CPU% (diffed from the
+  previous sample via `ulRunTimeCounter`). The snapshot array lives on the heap so the 8 KB
+  command-worker stack is never at risk; `/b` emits uncoloured rows for pipes.
 - **Header status refresh**: Batches every header field into one async render to avoid
   flicker; also drives USB keyboard auto-detect and SD insert/remove notifications
 - **Quote and escape scanner**: `shell_find_unquoted_char()`, `shell_find_unquoted_any()`,

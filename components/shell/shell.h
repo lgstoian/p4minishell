@@ -383,6 +383,13 @@ void shell_command_about(void);
 /** Print memory statistics. */
 void shell_command_mem(void);
 
+/**
+ * List FreeRTOS tasks (`ps` / `tasks` / `top`). Read-only: name, state,
+ * priority, core, stack high-water mark, and (for `top`) CPU% since the last
+ * sample. `/b` emits uncoloured machine-parsable rows.
+ */
+void shell_command_ps(int argc, char **argv);
+
 /* ========================================================================
  * HEADER STATUS
  * ======================================================================== */

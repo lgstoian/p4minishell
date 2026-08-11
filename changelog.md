@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.18] - 2026-08-11
+
+FreeRTOS task introspection. New `ps`, `tasks`, and `top` commands list every
+running task (name, state, priority, core, stack high-water mark) with the CPU
+share since the previous sample — read-only, no task is modified.
+
+### Added - ps / tasks / top
+
+- `ps` / `tasks` — print a colour-coded FreeRTOS task table: task name, state
+  (RUN/RDY/BLK/SUS/DEL), priority, core (`-1` = unpinned / no affinity), stack
+  high-water mark (minimum free stack bytes since creation), and CPU% since the
+  previous sample.
+- `top` — same table plus a summary line with the live task count, free heap,
+  and uptime. Per-task CPU% is computed by diffing `ulRunTimeCounter` against
+  the previous `ps`/`top`/`tasks` call (keyed by `xTaskNumber`, so a
+  deleted-and-recreated task starts fresh; unsigned arithmetic handles the
+  run-time counter wrapping). First call shows 0% (no previous sample).
+- `/b` bare form on any of the three emits uncoloured machine-parsable rows
+  (`name state prio core headb cpu`) for redirection / pipes.
+- The snapshot array is heap-allocated and capped by `P4_CONFIG_TASK_SNAPSHOT_MAX`
+  (64), so a busy task list cannot overflow the 8 KB command-worker stack or
+  flood the transcript.
+- Implemented in `components/shell/shell.c` (`shell_command_ps`), dispatched
+  from `components/command/command.c`, and listed in `help`.
+
+### Safety
+
+- Read-only: the commands only read `uxTaskGetSystemState()` snapshots and never
+  call `vTaskSuspend`, `vTaskDelete`, priority changes, or any other task
+  mutation. No kill/suspend verbs are offered.
+- Graceful degradation: if the FreeRTOS trace facility is compiled out
+  (`CONFIG_FREERTOS_USE_TRACE_FACILITY` off), `ps` prints a single muted note;
+  an empty snapshot prints a clear error instead of crashing.
+
+### Config
+
+- New tunable in `p4minishell_config.h` / `p4minishell_config.yaml`:
+  `P4_CONFIG_TASK_SNAPSHOT_MAX` (64).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11): `ps` lists shell_cmd, shell_uart, IDLE0/IDLE1, taskLVGL, and
+  the hosted SDIO/rpc tasks with correct states, priorities, cores (`-1` for
+  unpinned), and stack headroom; `top` shows the summary and real CPU%
+  (IDLE0/IDLE1 near 100%, taskLVGL ~5% between samples); `tasks /b` emits clean
+  bare rows. A 400-command soak including repeated ps/top completed with no
+  stall, no watchdog trip, and no panic.
+
+---
+
 ## [0.24.17] - 2026-08-11
 
 Persistent known Wi-Fi networks. The firmware now stores a list of previously-
