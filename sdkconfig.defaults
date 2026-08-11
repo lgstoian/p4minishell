@@ -114,3 +114,14 @@ CONFIG_LV_THEME_DEFAULT_TRANSITION_TIME=0
 # Required by the `screenshot` / `scr` / `capture` command to capture
 # the current screen as a BMP image.
 CONFIG_LV_USE_SNAPSHOT=y
+
+# LVGL must use the standard C heap (CLIB malloc) instead of its built-in 64KB static pool.
+# The transcript span group grows with every command; the 64KB built-in pool fills up and
+# lv_malloc() returns NULL, which LV_ASSERT_MALLOC turns into an infinite loop that freezes the UI.
+# With CLIB malloc, LVGL allocations use the system heap (ESP32-P4: PSRAM), so memory is effectively unbounded.
+CONFIG_LV_USE_CLIB_MALLOC=y
+
+# If an allocation ever fails, degrade gracefully (skip the span) instead of LVGL's
+# LV_ASSERT_MALLOC infinite loop that freezes the UI. lv_span_set_text() already
+# returns when the allocation is NULL.
+# CONFIG_LV_USE_ASSERT_MALLOC is not set

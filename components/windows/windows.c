@@ -232,16 +232,17 @@ static void windows_create_transcript(void)
      * lv_timer_handler on the LVGL task, freezing the whole UI. The apply is
      * coalesced so bursty output paints once per handler pass.
      */
-    /* The transcript is a scrollable CONTAINER holding a content-sized span
-     * group. The spangroup must not be bounded itself: a spangroup clips its
+    /* The transcript is a scrollable CONTAINER holding a span group. The
+     * spangroup must not be the scrollable object itself: a spangroup clips its
      * own spans to its widget height (LV_SPAN_OVERFLOW_CLIP), so a bounded
      * spangroup reports no overflow and can never scroll. Instead the container
-     * owns the fixed height, background and padding, and the spangroup grows
-     * to its full wrapped content height (LV_SIZE_CONTENT). The container then
-     * sees a taller-than-itself child and scrolls through it.
+     * owns the fixed height, background and padding, and the span group child
+     * is sized to exactly its wrapped content height by
+     * windows_transcript_update_content_size() on every change. The container
+     * then sees a taller-than-itself child and scrolls through it.
      *
-     * The actual widget update (rebuild spans, force layout, scroll to end)
-     * is DEFERRED to the LVGL task via lv_async_call (see
+     * The actual widget update (rebuild spans, size the child, force layout,
+     * scroll to end) is DEFERRED to the LVGL task via lv_async_call (see
      * windows_set_transcript_text): rebuilding spans synchronously from a
      * non-LVGL task races with the LVGL render cycle and hangs
      * lv_timer_handler on the LVGL task, freezing the whole UI. The apply is
@@ -270,7 +271,18 @@ static void windows_create_transcript(void)
 
     s_windows.transcript_spans = lv_spangroup_create(s_windows.transcript);
     lv_obj_set_width(s_windows.transcript_spans, LV_PCT(100));
-    lv_obj_set_height(s_windows.transcript_spans, LV_SIZE_CONTENT);
+    /* The span group's height is set explicitly to its wrapped content height
+     * (windows_transcript_update_content_size) - never LV_SIZE_CONTENT. A
+     * content-sized child inside a scrollable container is a known LVGL hazard:
+     * every layout pass recomputes the self size, and the spangroup's
+     * SIZE_CHANGED -> lv_spangroup_refresh() -> refresh_self_size() chain keeps
+     * marking the screen layout dirty, so lv_obj_update_layout() never exits
+     * its scr->scr_layout_inv loop and the LVGL task spins forever, freezing
+     * the whole UI. An explicit height keeps the widget in LV_SPAN_MODE_FIXED
+     * where the self size always equals the widget size, so layout converges
+     * in one pass while the container still scrolls through the taller
+     * child. */
+    lv_obj_set_height(s_windows.transcript_spans, 0);
     lv_obj_clear_flag(s_windows.transcript_spans, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_opa(s_windows.transcript_spans, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_windows.transcript_spans, 0, 0);
@@ -450,6 +462,29 @@ static int windows_ansi_sgr_for_color(uint32_t color)
 }
 
 /**
+ * Size the transcript span group to exactly its wrapped content height.
+ *
+ * The child of the scrollable transcript container must have an explicit pixel
+ * height (never LV_SIZE_CONTENT): see windows_create_transcript() for why a
+ * content-sized child makes the LVGL layout pass loop forever. The span group
+ * stays in LV_SPAN_MODE_FIXED, where GET_SELF_SIZE returns the widget's own
+ * size, so growing the content invalidates nothing by itself and layout
+ * converges in a single pass.
+ *
+ * lv_spangroup_get_expand_height() returns the exact height that the span
+ * draw code fills (sum of line heights minus one line-space), so a widget
+ * sized to it draws every line without clipping or trailing blank space.
+ */
+static void windows_transcript_update_content_size(lv_obj_t *spans)
+{
+    int32_t width = lv_obj_get_content_width(spans);
+    if (width <= 0 && s_windows.transcript != NULL) {
+        width = lv_obj_get_content_width(s_windows.transcript);
+    }
+    lv_obj_set_height(spans, lv_spangroup_get_expand_height(spans, width));
+}
+
+/**
  * Paint the staged raw ANSI text onto the transcript span group and scroll to
  * the end. Runs on the LVGL task (from the async apply callback) or, in the
  * lv_async_call failure fallback, on the caller's task while holding the LVGL
@@ -473,6 +508,10 @@ static void windows_transcript_apply(void)
     if (container == NULL || spans == NULL) {
         return;
     }
+
+    /* Auto-follow the newest output only when already at/near the bottom, so
+     * reading earlier history is not yanked down by new output. */
+    bool follow_bottom = lv_obj_get_scroll_bottom(container) < 32;
 
     new_len = strlen(s_transcript_staged);
 
@@ -525,11 +564,15 @@ static void windows_transcript_apply(void)
     snprintf(s_transcript_rendered_prefix, sizeof(s_transcript_rendered_prefix),
              "%s", s_transcript_staged);
 
-    /* Force a layout pass so the scroll-to-end targets the real content
-     * height, then pin the container to the bottom. lv_obj_update_layout on
-     * the container also lays out its children (the span group). */
+    /* Size the child to its new content height, then force one layout pass so
+     * the container's scroll range matches, and pin to the bottom if the user
+     * was already following. lv_obj_update_layout on the container also lays
+     * out its children (the span group). */
+    windows_transcript_update_content_size(spans);
     lv_obj_update_layout(container);
-    lv_obj_scroll_to_y(container, LV_COORD_MAX, LV_ANIM_OFF);
+    if (follow_bottom) {
+        lv_obj_scroll_to_y(container, LV_COORD_MAX, LV_ANIM_OFF);
+    }
 }
 
 static void windows_transcript_apply_cb(void *user_data)
@@ -591,19 +634,28 @@ void windows_scroll_transcript_to_end(void)
 /**
  * Apply the transcript's computed region height.
  *
- * The transcript must have an explicit, bounded height (not LV_SIZE_CONTENT)
- * so its span content overflows the widget and becomes vertically scrollable.
- * Re-applied whenever the layout changes (keyboard visibility, rotation
- * rebuild). Runs on the LVGL task.
+ * The transcript container must have an explicit, bounded height (not
+ * LV_SIZE_CONTENT) so its span content overflows the container and becomes
+ * vertically scrollable. When the slot changes (keyboard visibility, rotation
+ * rebuild) the child's wrap width may change too, so the span group is re-sized
+ * to its content height and one layout pass is forced. Runs on the LVGL task.
  */
 void windows_apply_transcript_height(void)
 {
-    if (s_windows.transcript == NULL) {
+    lv_obj_t *container = s_windows.transcript;
+
+    if (container == NULL) {
         return;
     }
 
-    lv_obj_set_height(s_windows.transcript,
-                      windows_get_rect(WINDOW_REGION_TRANSCRIPT).height);
+    lv_obj_set_height(container, windows_get_rect(WINDOW_REGION_TRANSCRIPT).height);
+    /* Lay out first so the span group's wrap width is current, then re-size it
+     * to the new content height and lay out again to refresh the scroll range. */
+    lv_obj_update_layout(container);
+    if (s_windows.transcript_spans != NULL) {
+        windows_transcript_update_content_size(s_windows.transcript_spans);
+    }
+    lv_obj_update_layout(container);
 }
 
 lv_obj_t *windows_get_input_line(void)
