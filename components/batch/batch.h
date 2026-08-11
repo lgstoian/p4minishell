@@ -81,6 +81,62 @@ esp_err_t shell_env_set(const char *name, const char *value);
 void shell_expand_variables(const char *input, char *output, size_t output_size);
 
 /* ========================================================================
+ * ALIASES (alias / unalias, DOSKEY-style macros)
+ * ======================================================================== */
+
+/**
+ * Look up an alias by name (case-insensitive).
+ * @return Pointer to the stored value, or NULL when the name is not defined.
+ */
+const char *shell_alias_get(const char *name);
+
+/**
+ * Create, update, or clear an alias. Passing an empty or NULL value clears the
+ * slot.
+ *
+ * @return ESP_OK, ESP_ERR_INVALID_ARG for a malformed name, or
+ *         ESP_ERR_NO_MEM when all slots are in use.
+ */
+esp_err_t shell_alias_set(const char *name, const char *value);
+
+/** Number of aliases currently defined. */
+int shell_alias_count(void);
+
+/**
+ * Copy an alias by table index.
+ * @return true when the index is valid and the output pointers were filled.
+ */
+bool shell_alias_get_by_index(int index, char *name_out, size_t name_size,
+                              char *value_out, size_t value_size);
+
+/**
+ * Expand the leading command word as a DOSKEY-style macro, writing the result
+ * to @p out. Expansion happens only at the interactive prompt — never inside
+ * a batch file — so an alias cannot shadow a batch verb.
+ *
+ * @return true when the command was rewritten, false when the first word is
+ *         not an alias, the result would not fit, or a batch file is active.
+ */
+bool batch_alias_expand_command(const char *command, char *out, size_t out_size);
+
+/**
+ * `alias` — list, query, set, or clear aliases, and persist them.
+ *
+ *   alias                 list every alias
+ *   alias name            show one alias
+ *   alias name=value      set an alias
+ *   alias name=           clear one alias
+ *   alias /clear          clear all aliases
+ *   alias /save [file]    write the table to the SD profile (default
+ *                         P4_CONFIG_ALIAS_PROFILE)
+ *   alias /load [file]    run the SD profile (batch of `alias` lines)
+ */
+void shell_command_alias(int argc, char **argv);
+
+/** `unalias name` — remove one alias (shorthand for `alias name=`). */
+void shell_command_unalias(int argc, char **argv);
+
+/* ========================================================================
  * ERRORLEVEL
  * ======================================================================== */
 

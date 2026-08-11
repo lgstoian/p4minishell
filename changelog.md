@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.20] - 2026-08-11
+
+DOSKEY-style aliases / macros with SD persistence. New `alias` and `unalias`
+commands define a RAM-only macro table whose leading word is expanded when a
+command is typed at the prompt, and the table persists to a batch-style profile
+that boot.c auto-loads after CONFIG.SYS.
+
+### Added - alias / unalias
+
+- `alias` — list every alias; `alias name` — show one; `alias name=value` —
+  set; `alias name=` — clear; `alias /clear` — clear all;
+  `alias /save [file]` / `alias /load [file]` — persist to / reload from the SD
+  profile (default `P4_CONFIG_ALIAS_PROFILE` = `ALIASES.BAT`).
+- `unalias <name>` — remove one alias.
+- DOSKEY-style expansion: when a command is typed at the interactive prompt,
+  the leading word is replaced by its alias value before parsing, so
+  `alias ll=dir /s` then typing `ll` runs `dir /s`, and `ll *.txt` becomes
+  `dir /s *.txt`. Expansion is deliberately disabled inside batch files, so an
+  alias can never shadow a batch verb (`call`, `set`, `echo`, ...).
+- Aliases are case-insensitive names (alphanumeric + underscore) with values up
+  to `P4_CONFIG_ALIAS_VALUE_BYTES` (256) and a table capped at
+  `P4_CONFIG_ALIAS_MAX` (32).
+
+### Persistence (reuses storage + boot scripting)
+
+- `alias /save` writes `alias name="value"` lines to the SD profile using the
+  guarded storage session API, the free-space pre-check, and an atomic
+  temp + rename (with remove-and-retry for FATFS overwrite). Values containing
+  a double quote are skipped with a warning so the profile always round-trips.
+- boot.c auto-runs the profile through the batch pipeline after CONFIG.SYS and
+  before AUTOEXEC.BAT when the file is present, so saved aliases are restored
+  every boot with no AUTOEXEC.BAT edits. `alias /load` reloads manually.
+- Safe when the SD card is absent or the profile is missing: boot and operation
+  continue unchanged.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11): `alias ll=dir`, `alias ls="dir /b"`, `alias cls=clear`
+  define and list correctly; `ls` expands to `dir /b`; `unalias cls` removes;
+  `alias /save` writes `ALIASES.BAT`; a reboot auto-loads `LL`/`LS` from the
+  profile and `ls` works. A batch file using `set`/`echo` runs correctly,
+  confirming aliases do not expand in batch files. A 400-command soak completed
+  with no stall, no watchdog trip, no panic.
+
+---
+
+## [0.24.19] - 2026-08-11
+
+Better file discovery. The `find` command now has a recursive file-discovery
+mode in addition to its classic text search, filtering by filename wildcard,
+size, and modification date — one adaptable command, no new verbs.
+
+### Added - find file-discovery mode
+
+- Entered automatically whenever a discovery switch is present (`/NAME:`,
+  `/SIZE:`, `/NEWER:`, `/OLDER:`, `/DIRS`, `/B`, `/S`); with the classic
+  switches only, `find` remains the original text-search command unchanged.
+- `find [path] [/NAME:pattern] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]`
+  - `/NAME:pattern` — filename wildcard (e.g. `*.log`, `*config*`). A wildcard
+    in the path argument also splits into directory + pattern, like `dir`.
+  - `/SIZE:spec` — size filter in bytes with an optional K/M/G suffix. The
+    redirection-safe range syntax `N-M` (range), `N-` (at least), `-M` (at
+    most), or `N` (exact) is primary because `>`/`<` are the shell's
+    input/output operators; the comparison forms `>N`/`>=N`/`<N`/`<=N` are also
+    accepted when quoted.
+  - `/NEWER:date` / `/OLDER:date` — modified on/after or on/before `YYYY-MM-DD`.
+  - `/DIRS` — include directories as well as files.
+  - `/B` — bare: full paths only, no colour (redirectable / pipable).
+- Recursion is depth-bounded by `P4_CONFIG_DIR_RECURSE_DEPTH_MAX` and matches
+  are capped by `P4_CONFIG_FIND_MATCH_MAX` (256) with a clear truncation note.
+  The walker reuses the `dir /s` FATFS primitives and keeps each recursion
+  level's state in one heap block, so the 8 KB worker stack is never at risk.
+
+### Safety
+
+- The classic text search (`find <text> [file] [/I] [/N] [/C] [/V]`) is
+  untouched: discovery only activates when a discovery switch is present, so no
+  existing usage or batch file changes behaviour.
+- Invalid filters and paths print a clear error and a usage hint; a missing SD
+  card reports the usual "not present" message. No crash, no hang.
+
+### Config
+
+- New tunable in `p4minishell_config.h` / `p4minishell_config.yaml`:
+  `P4_CONFIG_FIND_MATCH_MAX` (256).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings for the firmware and the test project.
+- Hardware (COM11): text search still works (`find hello t.txt` -> 1 match);
+  `find /NAME:*.txt /B` lists `.txt` files recursively into subdirectories;
+  `/SIZE:5-` and `/SIZE:1-10` filter by byte range; `/DIRS /B` includes
+  directories; `/NEWER:`/`/OLDER:` filter by date. A 400-command soak including
+  repeated discovery runs completed with no stall, no watchdog trip, no panic.
+
+---
+
 ## [0.24.18] - 2026-08-11
 
 FreeRTOS task introspection. New `ps`, `tasks`, and `top` commands list every

@@ -9,7 +9,10 @@ console, the input-line prompt contract, the interactive keypress queue, the DOS
 banner, the system info commands, and the read-only FreeRTOS task introspection (`ps` / `tasks` / `top` via
   `shell_command_ps()`).
 - `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, and every DOS file command.
-- `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, `for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, and the batch language commands.
+- `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, 
+`for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, the
+batch language commands, and the DOSKEY-style alias table (`alias` / `unalias`, prompt-only
+expansion, SD persistence via `alias /save`).
 - `components/command` owns the single dispatcher, the execution pipeline, output-redirection parsing, the worker task, the hardware commands, and the remaining system commands. The display/keyboard/windows UI query handlers live in `components/command/command_ui.c`.
 - `components/ansi` owns ANSI/VT SGR escape sequence processing, 16-color palette, and format string builder.
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.

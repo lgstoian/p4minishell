@@ -649,6 +649,19 @@ void boot_run_startup(void)
     ESP_LOGI(BOOT_TAG, "CONFIG.SYS processed (%u directives)", directive_count);
 
 run_autoexec:
+    /* ---- Run the alias profile (if present) ----
+     * `alias /save` writes the alias table to this batch file, so persisting
+     * the current macros and having them restored every boot needs no
+     * AUTOEXEC.BAT edit. Safe when the file is absent. */
+    snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_ALIAS_PROFILE);
+    file = fopen(path, "r");
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+        ESP_LOGI(BOOT_TAG, "Loading alias profile: %s", path);
+        (void)shell_execute_batch_file(path, 0, NULL);
+    }
+
     /* ---- Run AUTOEXEC.BAT ---- */
     snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_BOOT_AUTOEXEC_BAT_NAME);
     file = fopen(path, "r");

@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.24.18 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.24.20 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -103,10 +103,11 @@ the YAML to match.
 - **Storage guardrails**: free-space prechecks, self-copy protection, partial-destination cleanup, copy progress
 - **RAM-only shell state**: Environment variables, PATH, current working directory, batch arguments
 - **Batch file engine**: `.bat` execution with `%0`/`%1`..`%9`/`%*` expansion, `:label` targets, `goto` (including the implicit `:eof` label), `call` (with argument forwarding and errorlevel propagation), `for %%var in (set) do ...` loops (literal tokens or a wildcard pattern), `rem` comments, `echo on/off`
+- **Aliases / macros**: DOSKEY-style `alias` / `unalias` commands define a RAM-only macro table; typing an alias at the prompt expands its leading word (`alias ll=dir /s`, then `ll` runs `dir /s`). Persist with `alias /save` to `sd:/ALIASES.BAT`, which boot.c auto-loads after CONFIG.SYS. Aliases never expand inside batch files.
 - **Real batch control flow**: `pause` and `choice` block on an actual keypress, `setlocal`/`endlocal` scope the environment, `exit /b` leaves one batch file, `if` with `errorlevel N` (≥), `exist <path>`, case-insensitive `/i` string tests, and `not`
 - **Batch expressions**: `set /a` integer arithmetic with the full DOS operator set plus comparison (`== != < > <= >=`) and logical (`&& ||`) operators that yield 1/0, `set /p` prompted input, trailing `^` line continuation
 - **DOS prompt engine**: `prompt` template with `$p $g $t $d $v $n` and more, driving both the UART console and the on-screen input line
-- **Text utilities**: `find` (`/I /N /C /V`), `more` (keypress paging), `tree` (recursive, `/F /A`), `fc`, `sort` (`/R /I /U`)
+- **Text utilities**: `find` (text search `/I /N /C /V`, plus a recursive file-discovery mode by name/size/date via `/NAME:` `/SIZE:` `/NEWER:` `/OLDER:` `/DIRS` `/B`), `more` (keypress paging), `tree` (recursive, `/F /A`), `fc`, `sort` (`/R /I /U`)
 - **Redirection**: `>`, `>>`, and `<` in any order on one line
 - **Multi-stage pipes**: `cmd1 | cmd2 | cmd3` with quote-aware splitting
 - **Command chaining**: `a & b` (both), `a && b` (on success), `a || b` (on failure)
@@ -141,7 +142,7 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | **Connectivity** | `ping <host-or-ip> [count]`, `dns <hostname>` (alias `nslookup`), `httpget <url> [localfile]` (alias `wget`) |
 | **Bluetooth** | `bluetooth status|scan [limit]|advertise <on [name]|off>`, `bt` (alias) |
 | **USB** | `usb status|ls|keyboard on|off|mouse on|off` |
-| **Batch** | `set`, `set /a`, `set /p`, `path`, `echo on|off`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]` |
+| **Batch** | `set`, `set /a`, `set /p`, `path`, `echo on|off`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]`, `alias`, `unalias` |
 | **Text tools** | `find`, `more`, `tree`, `fc`, `sort`, `prompt` |
 | **Time / SNTP** | `date` `[MM-DD-YYYY]`, `time` `[HH:MM[:SS]]`, `timezone` `[TZ]`, `sntp`/`ntpsync` `[sync]` |
 | **Redirection** | `>`, `>>`, and `<` to and from SD files |

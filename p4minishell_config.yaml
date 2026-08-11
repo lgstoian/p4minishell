@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.18
-# Last updated: 2026-08-11 (FreeRTOS task introspection: read-only ps/tasks/top
-#                           commands listing name, state, priority, core, stack
-#                           high-water mark, and per-task CPU%)
-config_version: "0.24.18"
+# Version: 0.24.20
+# Last updated: 2026-08-11 (Aliases / macros: DOSKEY-style alias and unalias
+#                           commands with RAM-only macro table and persistence
+#                           to an SD profile auto-loaded after CONFIG.SYS)
+config_version: "0.24.20"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -477,8 +477,15 @@ sd_card:
   dir_recurse_depth_max:
     value: 8
     type: int
-    description: "Maximum directory recursion depth for dir /s"
+    description: "Maximum directory recursion depth for dir /s and find file discovery"
     range: "1..32"
+  find_match_max:
+    value: 256
+    type: int
+    description: >-
+      Maximum matches printed by find in file-discovery mode before it stops
+      and reports truncation, so a huge tree cannot flood the transcript.
+    range: "16..4096"
   storage_free_margin_bytes:
     value: 65536
     type: uint64_t
@@ -588,6 +595,28 @@ batch_env:
     type: size_t
     description: "Maximum environment variable value length"
     range: "16..1024"
+  alias_max:
+    value: 32
+    type: size_t
+    description: "Maximum RAM-only aliases (DOSKEY-style macros)"
+    range: "1..128"
+  alias_name_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum alias name length"
+    range: "8..64"
+  alias_value_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum alias value (expanded command text) length"
+    range: "16..1024"
+  alias_profile:
+    value: "ALIASES.BAT"
+    type: string
+    description: >-
+      SD-root-relative profile filename that alias /save writes and boot.c
+      auto-loads after CONFIG.SYS (a batch file of alias name=value lines).
+    range: "any valid SD filename"
   batch_line_bytes:
     value: 384
     type: size_t

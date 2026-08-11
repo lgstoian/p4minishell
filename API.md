@@ -398,7 +398,7 @@ void shell_command_touch(int argc, char **argv);
 void shell_command_attrib(int argc, char **argv);
 void shell_command_label(int argc, char **argv);
 void shell_command_xcopy(int argc, char **argv);
-void shell_command_find(int argc, char **argv);    /* /I /N /C /V */
+void shell_command_find(int argc, char **argv);    /* text search /I /N /C /V + recursive file discovery /NAME: /SIZE: /NEWER: /OLDER: /DIRS /B */
 void shell_command_more(int argc, char **argv);    /* keypress paging, Q quits */
 void shell_command_fc(int argc, char **argv);
 void shell_command_sort(int argc, char **argv);    /* /R /I /U */
@@ -486,6 +486,16 @@ void        shell_expand_variables(const char *input, char *output, size_t outpu
 ### Arithmetic expressions
 ```c
 bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char **error_out);
+
+/* --- Aliases (DOSKEY-style macros) --- */
+const char *shell_alias_get(const char *name);
+esp_err_t shell_alias_set(const char *name, const char *value);
+int shell_alias_count(void);
+bool shell_alias_get_by_index(int index, char *name_out, size_t name_size,
+                              char *value_out, size_t value_size);
+bool batch_alias_expand_command(const char *command, char *out, size_t out_size);
+void shell_command_alias(int argc, char **argv);
+void shell_command_unalias(int argc, char **argv);
 ```
 - Recursive-descent evaluator over 32-bit signed integers with cmd.exe precedence:
   `||`, `&&`, comparisons `== != < > <= >=` (each yielding 1/0), then `|`, `^`, `&`,

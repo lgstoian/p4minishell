@@ -62,6 +62,8 @@ Implemented today in the checked-in firmware:
 - ✅ Command history with password masking for `wifi connect`
 - ✅ `set /a` integer arithmetic with the full DOS operator set and compound assignment
 - ✅ `set /p` prompted input via the key-wait facility
+- ✅ DOSKEY-style `alias` / `unalias` with SD persistence (`alias /save` writes
+      `sd:/ALIASES.BAT`, auto-loaded after CONFIG.SYS) and prompt-only expansion
 - ✅ Trailing `^` line continuation, honored by both the executor and the label scanner
 
 ### Wi-Fi & Bluetooth
@@ -461,7 +463,8 @@ Implemented today in the checked-in firmware:
 - ✅ `sort` replaced the bubble sort with `qsort()`, raised the capacity from 128 to 1024 lines,
       added `/R`, `/I`, and `/U`, and now has a single leak-free release path that frees every
       successful allocation even when a mid-read `strdup()` fails
-- ✅ `find` added `/I`, `/N`, `/C`, and `/V`
+- ✅ `find` added `/I`, `/N`, `/C`, and `/V`, and gained a recursive file-discovery mode
+      (`/NAME:` `/SIZE:` `/NEWER:` `/OLDER:` `/DIRS` `/B`) filtering by name, size, and date
 - ✅ `more` waits for Enter or Space between pages and accepts `Q` to quit
 - ✅ `fc` reports differing lines in DOS style and detects trailing length differences
 - ✅ All five now resolve paths through `shell_fs_resolve_path()` and run inside a guarded SD

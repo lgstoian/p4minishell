@@ -381,6 +381,37 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | endlocal | Pop the most recent setlocal scope |
 | exit [code] | Leave every nested batch file, setting errorlevel |
 | exit /b [code] | Leave only the current batch file |
+| alias | List every alias |
+| alias name | Show one alias |
+| alias name=value | Define (or update) an alias; `name=` clears it |
+| alias /clear | Clear every alias |
+| alias /save [file] | Write the alias table to the SD profile (default `ALIASES.BAT`) |
+| alias /load [file] | Reload the alias profile from SD |
+| unalias name | Remove one alias |
+
+### alias / unalias — DOSKEY-style macros
+
+Typing an alias at the prompt expands its leading word to the stored value
+before the line is parsed, exactly like DOSKEY macros:
+
+```
+alias ll=dir /s
+ll            ->  dir /s
+ll *.txt      ->  dir /s *.txt
+alias ls="dir /b"
+ls            ->  dir /b
+```
+
+- Alias names are case-insensitive (stored uppercase), alphanumeric plus
+  `_`, up to `P4_CONFIG_ALIAS_NAME_BYTES`; values up to
+  `P4_CONFIG_ALIAS_VALUE_BYTES`; at most `P4_CONFIG_ALIAS_MAX` aliases.
+- Expansion happens only at the interactive prompt — **never inside a batch
+  file** — so an alias cannot shadow a batch verb (`set`, `call`, `echo`, ...).
+- `alias /save` persists the table as `alias name="value"` lines to
+  `sd:/ALIASES.BAT` (a batch file). boot.c auto-runs that profile after
+  CONFIG.SYS, so saved aliases are restored every boot without editing
+  AUTOEXEC.BAT. `alias /load` reloads manually. Values containing a double
+  quote are skipped on save so the profile always round-trips.
 
 ### set /a — integer arithmetic
 
@@ -816,12 +847,18 @@ guarded SD session.
 | Command | Description |
 |---------|-------------|
 | find <text> [file] [/I] [/N] [/C] [/V] | Search a file for a literal substring |
+| find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B] | Recursively list files by name / size / date |
 | more [file] | Page a text file, waiting for a key between pages |
 | tree [path] [/F] [/A] | Draw a recursive directory outline |
 | fc <file1> <file2> | Compare two text files line by line |
 | sort [file] [/R] [/I] [/U] | Print a file with its lines sorted |
 
 ### find
+
+`find` has two modes. The presence of any discovery switch selects file
+discovery; with the classic switches only it is the original text search.
+
+**Text search:** `find <text> [file]`
 
 | Switch | Meaning |
 |--------|---------|
@@ -833,6 +870,30 @@ guarded SD session.
 With no file argument, `find` reads the pending `<` or pipe input source.
 
 Example: `find "timeout" boot.log /I /N`
+
+**File discovery:** `find [path] [/NAME:pattern] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]`
+
+Recursively walks the starting directory (default: current directory) and
+prints entries that pass every supplied filter.
+
+| Switch | Meaning |
+|--------|---------|
+| /NAME:pattern | Filename wildcard (e.g. `*.log`, `*config*`). A wildcard in the path argument also splits into directory + pattern, like `dir`. |
+| /SIZE:spec | Byte size filter with an optional K/M/G suffix. Use the redirection-safe range syntax `N-M` (range), `N-` (at least), `-M` (at most), or `N` (exact). The comparison forms `>N` / `>=N` / `<N` / `<=N` are also accepted when quoted (bare `>`/`<` are the shell's input/output operators). |
+| /NEWER:date | Only entries modified on/after `YYYY-MM-DD` |
+| /OLDER:date | Only entries modified on/before `YYYY-MM-DD` |
+| /DIRS | Include directories as well as files |
+| /B | Bare: full paths only, no colour — redirectable / pipable |
+
+Examples:
+```
+find /NAME:*.log
+find /sdcard /NAME:*config* /SIZE:1K-64K
+find /logs /NAME:*.txt /NEWER:2026-01-01 /B
+find /DIRS /B
+```
+Recursion is depth-bounded by `P4_CONFIG_DIR_RECURSE_DEPTH_MAX` and matches are
+capped by `P4_CONFIG_FIND_MATCH_MAX` (256), with a clear truncation note.
 
 ### more
 

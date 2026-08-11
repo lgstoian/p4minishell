@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -2517,14 +2518,462 @@ static const char *shell_text_find_ci(const char *haystack, const char *needle)
     return NULL;
 }
 
+/* ========================================================================
+ * FIND FILE DISCOVERY MODE
+ * ========================================================================
+ * `find` in file-discovery mode recursively walks a directory tree and
+ * reports entries filtered by filename wildcard, size, and modification date.
+ * It is entered automatically when any discovery switch is present
+ * (`/NAME:`, `/SIZE:`, `/NEWER:`, `/OLDER:`, `/DIRS`, `/B`, `/S`); with the
+ * classic switches only it stays the original text-search command. The
+ * walker reuses the same FATFS primitives as `dir /s` and keeps each
+ * recursion level's state in a single heap block.
+ */
+
+/** Filters and running totals for the file-discovery walk. */
+typedef struct {
+    char name_pattern[SHELL_LFN_BYTES];
+    bool have_name;
+    bool have_size;
+    uint64_t size_min;          /* inclusive */
+    uint64_t size_max;          /* inclusive; UINT64_MAX = unbounded */
+    bool have_newer;
+    uint16_t newer_fdate;       /* FAT date word, inclusive */
+    bool have_older;
+    uint16_t older_fdate;       /* FAT date word, inclusive */
+    bool include_dirs;
+    bool bare;
+    unsigned int matches;
+    unsigned int total_files;
+    unsigned int total_dirs;
+    uint64_t total_bytes;
+    bool truncated;
+} shell_find_ctx_t;
+
+/** Parse a size token ("123", "10K", "2M", "1G") into bytes. */
+static bool shell_find_parse_size_value(const char *text, uint64_t *out)
+{
+    uint64_t value;
+    char *end = NULL;
+
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+    value = strtoull(text, &end, 10);
+    if (end == text) {
+        return false;
+    }
+    if (*end == 'K' || *end == 'k') {
+        value *= 1024ULL;
+        end++;
+    } else if (*end == 'M' || *end == 'm') {
+        value *= 1024ULL * 1024ULL;
+        end++;
+    } else if (*end == 'G' || *end == 'g') {
+        value *= 1024ULL * 1024ULL * 1024ULL;
+        end++;
+    }
+    if (*end != '\0') {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
 /**
- * `find` — search a text file for a literal substring.
+ * Parse a `/SIZE:` filter into an inclusive byte range.
  *
- * Usage: find "text" [file] [/I] [/N] [/C] [/V]
+ * The primary syntax is redirection-safe (no `>`/`<`, which the shell treats
+ * as output/input operators): `N-M` (range), `N-` (at least N), `-M` (at most
+ * M), or `N` (exact), each with an optional K/M/G suffix. The comparison
+ * forms `>N`, `>=N`, `<N`, `<=N` are also accepted when quoted.
+ */
+static bool shell_find_parse_size(const char *spec, uint64_t *min_out, uint64_t *max_out)
+{
+    uint64_t a;
+    uint64_t b;
+
+    if (spec[0] == '<') {
+        if (spec[1] == '=') {
+            if (!shell_find_parse_size_value(spec + 2, &b)) {
+                return false;
+            }
+            *min_out = 0;
+            *max_out = b;
+        } else {
+            if (!shell_find_parse_size_value(spec + 1, &b)) {
+                return false;
+            }
+            *min_out = 0;
+            *max_out = (b > 0) ? (b - 1) : 0;
+        }
+        return true;
+    }
+    if (spec[0] == '>') {
+        if (spec[1] == '=') {
+            if (!shell_find_parse_size_value(spec + 2, &a)) {
+                return false;
+            }
+            *min_out = a;
+            *max_out = UINT64_MAX;
+        } else {
+            if (!shell_find_parse_size_value(spec + 1, &a)) {
+                return false;
+            }
+            *min_out = (a < UINT64_MAX) ? (a + 1) : a;
+            *max_out = UINT64_MAX;
+        }
+        return true;
+    }
+
+    /* Leading '-' is the "at most M" form: -M */
+    if (spec[0] == '-') {
+        if (!shell_find_parse_size_value(spec + 1, &b)) {
+            return false;
+        }
+        *min_out = 0;
+        *max_out = b;
+        return true;
+    }
+
+    {
+        const char *dash = strchr(spec, '-');
+        if (dash != NULL) {
+            char left[32];
+            size_t n = (size_t)(dash - spec);
+
+            if (n == 0 || n >= sizeof(left)) {
+                return false;
+            }
+            memcpy(left, spec, n);
+            left[n] = '\0';
+            if (!shell_find_parse_size_value(left, &a)) {
+                return false;
+            }
+            if (dash[1] == '\0') {
+                /* Trailing '-' is the "at least N" form: N- */
+                *min_out = a;
+                *max_out = UINT64_MAX;
+                return true;
+            }
+            if (!shell_find_parse_size_value(dash + 1, &b)) {
+                return false;
+            }
+            if (a > b) {
+                return false;
+            }
+            *min_out = a;
+            *max_out = b;
+            return true;
+        }
+        if (!shell_find_parse_size_value(spec, &a)) {
+            return false;
+        }
+        *min_out = a;
+        *max_out = a;
+        return true;
+    }
+}
+
+/** Parse "YYYY-MM-DD" into a FAT date word. */
+static bool shell_find_parse_date(const char *text, uint16_t *fdate_out)
+{
+    unsigned int year;
+    unsigned int month;
+    unsigned int day;
+
+    if (text == NULL || sscanf(text, "%u-%u-%u", &year, &month, &day) != 3) {
+        return false;
+    }
+    if (year < 1980 || year > 2107 || month < 1 || month > 12 || day < 1 || day > 31) {
+        return false;
+    }
+    *fdate_out = (uint16_t)(((year - 1980) << 9) | (month << 5) | day);
+    return true;
+}
+
+/** Print one matched entry. */
+static void shell_find_emit(const char *vfs_dir, const FILINFO *info, bool is_dir,
+                            shell_find_ctx_t *ctx)
+{
+    char stamp[24];
+    char size_text[24];
+    char full[SHELL_SD_PATH_BYTES + SHELL_LFN_BYTES];
+
+    if (ctx->bare) {
+        snprintf(full, sizeof(full), "%s/%s", vfs_dir, info->fname);
+        shell_transcript_appendf("%s\n", full);
+    } else {
+        shell_dir_format_stamp(info->fdate, info->ftime, stamp, sizeof(stamp));
+        snprintf(full, sizeof(full), "%s/%s", vfs_dir, info->fname);
+        if (is_dir) {
+            shell_transcript_appendf_ansi("  " SH_DIR "%-36s" SH_RST " " SH_LBL "<DIR>" SH_RST " "
+                                          SH_TIME "%s" SH_RST "\n", full, stamp);
+        } else {
+            shell_sd_format_size((uint64_t)info->fsize, size_text, sizeof(size_text));
+            shell_transcript_appendf_ansi("  " SH_DIR "%-36s" SH_RST " " SH_SIZE "%10s" SH_RST " "
+                                          SH_TIME "%s" SH_RST "\n", full, size_text, stamp);
+        }
+    }
+    ctx->matches++;
+}
+
+/**
+ * Recursively walk one directory, printing entries that pass every filter.
+ * Each recursion level keeps its own heap block (FATFS handle + path scratch),
+ * matching the `dir /s` walker so the 8 KB worker stack is never at risk.
+ */
+static void shell_find_walk(const char *vfs_dir, int depth, shell_find_ctx_t *ctx)
+{
+    struct find_level_scratch {
+        char fatfs_path[SHELL_SD_PATH_BYTES];
+        char child_vfs[SHELL_SD_PATH_BYTES];
+        FF_DIR dir;
+        FILINFO info;
+    } *scratch = NULL;
+    FRESULT result;
+
+    if (depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX || ctx->truncated) {
+        return;
+    }
+
+    scratch = calloc(1, sizeof(*scratch));
+    if (scratch == NULL) {
+        shell_record_errorf("find", ESP_ERR_NO_MEM, "Out of memory during recursive find");
+        ctx->truncated = true;
+        return;
+    }
+
+    if (shell_sd_vfs_to_fatfs_path(vfs_dir, scratch->fatfs_path, sizeof(scratch->fatfs_path)) != ESP_OK) {
+        free(scratch);
+        return;
+    }
+
+    result = f_opendir(&scratch->dir, scratch->fatfs_path);
+    if (result != FR_OK) {
+        free(scratch);
+        return;
+    }
+
+    while (ctx->matches < P4_CONFIG_FIND_MATCH_MAX) {
+        bool is_dir;
+        bool name_ok;
+        bool size_ok;
+        bool date_ok;
+        bool dir_ok;
+
+        result = f_readdir(&scratch->dir, &scratch->info);
+        if (result != FR_OK || scratch->info.fname[0] == '\0') {
+            break;
+        }
+        if (strcmp(scratch->info.fname, ".") == 0 || strcmp(scratch->info.fname, "..") == 0) {
+            continue;
+        }
+
+        is_dir = (scratch->info.fattrib & AM_DIR) != 0;
+        name_ok = !ctx->have_name ||
+                  shell_wildcard_match(ctx->name_pattern, scratch->info.fname);
+        size_ok = is_dir || !ctx->have_size ||
+                  ((uint64_t)scratch->info.fsize >= ctx->size_min &&
+                   (uint64_t)scratch->info.fsize <= ctx->size_max);
+        date_ok = (!ctx->have_newer || scratch->info.fdate >= ctx->newer_fdate) &&
+                  (!ctx->have_older || scratch->info.fdate <= ctx->older_fdate);
+        dir_ok = !is_dir || ctx->include_dirs;
+
+        if (name_ok && size_ok && date_ok && dir_ok) {
+            shell_find_emit(vfs_dir, &scratch->info, is_dir, ctx);
+            if (is_dir) {
+                ctx->total_dirs++;
+            } else {
+                ctx->total_files++;
+                ctx->total_bytes += (uint64_t)scratch->info.fsize;
+            }
+        }
+
+        /* Recurse into every subdirectory regardless of the filters. */
+        if (is_dir) {
+            int written = snprintf(scratch->child_vfs, sizeof(scratch->child_vfs),
+                                   "%s/%s", vfs_dir, scratch->info.fname);
+            if (written > 0 && (size_t)written < sizeof(scratch->child_vfs)) {
+                shell_find_walk(scratch->child_vfs, depth + 1, ctx);
+            }
+        }
+    }
+
+    if (ctx->matches >= P4_CONFIG_FIND_MATCH_MAX) {
+        ctx->truncated = true;
+    }
+
+    (void)f_closedir(&scratch->dir);
+    free(scratch);
+}
+
+/** Return true when a `/`-token selects the file-discovery mode of `find`. */
+static bool shell_find_is_discovery_token(const char *token)
+{
+    if (token[0] != '/') {
+        return false;
+    }
+    if (strncasecmp(token, "/NAME:", 6) == 0 ||
+        strncasecmp(token, "/SIZE:", 6) == 0 ||
+        strncasecmp(token, "/NEWER:", 7) == 0 ||
+        strncasecmp(token, "/OLDER:", 7) == 0 ||
+        shell_text_equals_ignore_case(token, "/DIRS") ||
+        shell_text_equals_ignore_case(token, "/B") ||
+        shell_text_equals_ignore_case(token, "/S")) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * File-discovery mode of `find`: recursively list entries matching the
+ * filename wildcard, size, and date filters.
+ */
+static void shell_find_files(int argc, char **argv)
+{
+    shell_find_ctx_t ctx;
+    char resolved_path[SHELL_SD_PATH_BYTES];
+    char dir_part[SHELL_SD_PATH_BYTES];
+    char total_text[24];
+    shell_sd_session_t session;
+    struct stat path_stat;
+    const char *path_arg = NULL;
+    esp_err_t error;
+    int index;
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.size_max = UINT64_MAX;
+
+    for (index = 1; index < argc; index++) {
+        const char *token = argv[index];
+
+        if (token[0] != '/') {
+            if (path_arg == NULL) {
+                path_arg = token;
+                continue;
+            }
+            shell_print_usage("Usage: find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]");
+            return;
+        }
+
+        if (strncasecmp(token, "/NAME:", 6) == 0) {
+            snprintf(ctx.name_pattern, sizeof(ctx.name_pattern), "%s", token + 6);
+            ctx.have_name = true;
+        } else if (strncasecmp(token, "/SIZE:", 6) == 0) {
+            if (!shell_find_parse_size(token + 6, &ctx.size_min, &ctx.size_max)) {
+                shell_print_error("find: invalid /SIZE filter '%s'", token + 6);
+                shell_print_muted("  Use N-M (range), N- (at least), -M (at most), or N (exact), with an optional K/M/G suffix");
+                return;
+            }
+            ctx.have_size = true;
+        } else if (strncasecmp(token, "/NEWER:", 7) == 0) {
+            if (!shell_find_parse_date(token + 7, &ctx.newer_fdate)) {
+                shell_print_error("find: invalid /NEWER date '%s' (expected YYYY-MM-DD)", token + 7);
+                return;
+            }
+            ctx.have_newer = true;
+        } else if (strncasecmp(token, "/OLDER:", 7) == 0) {
+            if (!shell_find_parse_date(token + 7, &ctx.older_fdate)) {
+                shell_print_error("find: invalid /OLDER date '%s' (expected YYYY-MM-DD)", token + 7);
+                return;
+            }
+            ctx.have_older = true;
+        } else if (shell_text_equals_ignore_case(token, "/DIRS")) {
+            ctx.include_dirs = true;
+        } else if (shell_text_equals_ignore_case(token, "/B")) {
+            ctx.bare = true;
+        } else if (shell_text_equals_ignore_case(token, "/S")) {
+            /* Discovery recurses by default; /S is accepted for clarity. */
+        } else {
+            shell_print_error("find: unknown option %s", token);
+            shell_print_usage("Usage: find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]");
+            return;
+        }
+    }
+
+    /* A wildcard in the path splits into a directory plus a name pattern,
+     * exactly like `dir`. */
+    if (path_arg != NULL && (strchr(path_arg, '*') != NULL || strchr(path_arg, '?') != NULL)) {
+        const char *last_sep = strrchr(path_arg, '/');
+
+        if (last_sep == NULL) {
+            last_sep = strrchr(path_arg, '\\');
+        }
+        if (last_sep != NULL) {
+            size_t dir_len = (size_t)(last_sep - path_arg);
+
+            if (dir_len >= sizeof(dir_part)) {
+                dir_len = sizeof(dir_part) - 1;
+            }
+            memcpy(dir_part, path_arg, dir_len);
+            dir_part[dir_len] = '\0';
+            if (!ctx.have_name) {
+                snprintf(ctx.name_pattern, sizeof(ctx.name_pattern), "%s", last_sep + 1);
+                ctx.have_name = true;
+            }
+            error = shell_fs_resolve_path(dir_part, resolved_path, sizeof(resolved_path));
+        } else {
+            if (!ctx.have_name) {
+                snprintf(ctx.name_pattern, sizeof(ctx.name_pattern), "%s", path_arg);
+                ctx.have_name = true;
+            }
+            error = shell_fs_resolve_path(".", resolved_path, sizeof(resolved_path));
+        }
+    } else {
+        error = shell_fs_resolve_path(path_arg, resolved_path, sizeof(resolved_path));
+    }
+    if (error != ESP_OK) {
+        shell_print_error("find: invalid path");
+        return;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_print_error("find: SD card not present - insert and retry");
+        return;
+    }
+
+    if (shell_sd_stat_path(resolved_path, &path_stat) != ESP_OK || !S_ISDIR(path_stat.st_mode)) {
+        shell_transcript_appendf("find: path not found or not a directory %s\n", resolved_path);
+        shell_sd_end(&session, "find");
+        return;
+    }
+
+    shell_find_walk(resolved_path, 0, &ctx);
+    shell_sd_end(&session, "find");
+
+    shell_sd_format_size(ctx.total_bytes, total_text, sizeof(total_text));
+    shell_transcript_appendf_ansi(SH_MUTE "find:" SH_RST " %u file(s), %u dir(s), %s total%s\n",
+                                  ctx.total_files,
+                                  ctx.total_dirs,
+                                  total_text,
+                                  ctx.truncated ? " (truncated)" : "");
+    if (ctx.truncated) {
+        shell_transcript_appendf_ansi(SH_MUTE "find:" SH_RST " result cap " SH_NUM "%u" SH_RST
+                                      " reached; narrow the filters\n",
+                                      (unsigned int)P4_CONFIG_FIND_MATCH_MAX);
+    }
+}
+
+/**
+ * `find` — search a text file for a literal substring, or recursively list
+ * files by name / size / date.
+ *
+ * Text search (unchanged): find "text" [file] [/I] [/N] [/C] [/V]
  *   /I  Case-insensitive match
  *   /N  Prefix each match with its line number
  *   /C  Print only the match count
  *   /V  Print the lines that do NOT match
+ *
+ * File discovery (automatic when a discovery switch is present):
+ *   find [path] [/NAME:pattern] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]
+ *   /NAME:pattern  filename wildcard (e.g. *.log, *config*)
+ *   /SIZE:spec     >N >=N <N <=N N-M or N (bytes, optional K/M/G suffix)
+ *   /NEWER:date    only entries modified on/after YYYY-MM-DD
+ *   /OLDER:date    only entries modified on/before YYYY-MM-DD
+ *   /DIRS          include directories as well as files
+ *   /B             bare: full paths only, no colour (redirectable / pipable)
  *
  * With no file argument the pending `<` or pipe input source is used, so
  * `type notes.txt | find "error"` works the way DOS users expect.
@@ -2545,6 +2994,15 @@ void shell_command_find(int argc, char **argv)
     int lineno = 0;
     int matches = 0;
     int index;
+
+    /* The presence of any discovery switch selects file-discovery mode;
+     * otherwise `find` keeps its classic text-search behaviour. */
+    for (index = 1; index < argc; index++) {
+        if (shell_find_is_discovery_token(argv[index])) {
+            shell_find_files(argc, argv);
+            return;
+        }
+    }
 
     for (index = 1; index < argc; index++) {
         if (argv[index][0] == '/' && argv[index][1] != '\0' && argv[index][2] == '\0') {

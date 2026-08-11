@@ -1670,6 +1670,16 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "alias")) {
+        shell_command_alias(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "unalias")) {
+        shell_command_unalias(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "call")) {
         shell_command_call(argc, argv);
         return true;
@@ -2089,7 +2099,12 @@ void shell_execute_command(char *command)
         return;
     }
 
-    snprintf(chain_buffer, chain_size, "%s", command);
+    /* DOSKEY-style macro expansion: replace a leading alias with its value
+     * before parsing, so `alias ll=dir /s` then typing `ll` runs `dir /s`.
+     * Only expands at the interactive prompt, never inside a batch file. */
+    if (!batch_alias_expand_command(command, chain_buffer, chain_size)) {
+        snprintf(chain_buffer, chain_size, "%s", command);
+    }
 
     segment_count = shell_split_chain(chain_buffer,
                                       segments,

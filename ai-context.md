@@ -173,8 +173,24 @@
   - Filesystem verbs (`cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`,
     `write`, `append`, `touch`, `attrib`, `label`, `xcopy`, `find`, `more`, `tree`, `fc`,
     `sort`, `sd`) -> `components/storage/storage_commands.c`
+  - `find` is ONE command with two modes: the classic text search (`/I /N /C /V`) and a
+    recursive file-discovery mode selected automatically by any discovery switch
+    (`/NAME:`, `/SIZE:`, `/NEWER:`, `/OLDER:`, `/DIRS`, `/B`, `/S`). Never split it into
+    separate commands. The `/SIZE:` primary syntax MUST use `N-M`/`N-`/`-M`/`N` ranges
+    (redirection-safe) because bare `>`/`<` are the shell's input/output operators. The
+    discovery walker reuses the `dir /s` FATFS primitives, keeps each recursion level's state
+    in one heap block, respects `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, and caps output at
+    `P4_CONFIG_FIND_MATCH_MAX`.
   - Batch language verbs (`set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`,
     `choice`, `setlocal`, `endlocal`, `exit`) -> `components/batch/batch.c`
+  - Alias verbs (`alias`, `unalias`) -> `components/batch/batch.c` (the alias table, the
+    `alias`/`unalias` commands, `shell_alias_get`/`set`, and
+    `batch_alias_expand_command()` all live here; the command module only dispatches and
+    calls the expander at the top of `shell_execute_command()`). Aliases expand ONLY at the
+    interactive prompt (`s_active_batch_frame == NULL`), never in batch files. `alias /save`
+    writes the profile via the guarded storage session; boot.c auto-runs it after CONFIG.SYS.
+    The profile path is `P4_CONFIG_ALIAS_PROFILE` (`ALIASES.BAT`), values are quoted on save,
+    and values containing `"` are skipped.
 - System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c`
 - Task introspection verbs (`ps`, `tasks`, `top`) -> `components/shell/shell.c` (`shell_command_ps`)
 - Time / SNTP verbs (`date`, `time`, `timezone`, `sntp`/`ntpsync`) -> `components/clock/clock_commands.c`

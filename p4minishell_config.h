@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             18
+#define P4_CONFIG_VERSION_PATCH             20
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -430,6 +430,10 @@
 /** Maximum directory recursion depth for `dir /s`. */
 #define P4_CONFIG_DIR_RECURSE_DEPTH_MAX      8
 
+/** Maximum matches printed by `find` in file-discovery mode before it stops
+ *  and reports truncation, so a huge tree cannot flood the transcript. */
+#define P4_CONFIG_FIND_MATCH_MAX             256
+
 /**
  * Free-space safety margin in bytes. A write that would leave less than this
  * free is refused, so the volume never fills to the point where FAT metadata
@@ -503,6 +507,28 @@
 
 /** Maximum number of RAM-only environment variables. */
 #define P4_CONFIG_ENV_VAR_MAX                24
+
+/* ========================================================================
+ * ALIASES (alias / unalias, DOSKEY-style)
+ * ========================================================================
+ * RAM-only macro table. An alias's first word is expanded to its value when a
+ * command is typed at the prompt (never inside batch files, matching DOSKEY),
+ * so `alias ll=dir /s` then typing `ll` runs `dir /s`. The table persists to a
+ * batch-style profile file on the SD card (`alias name=value` lines), which
+ * boot.c auto-loads after CONFIG.SYS. */
+
+/** Maximum number of RAM-only aliases. */
+#define P4_CONFIG_ALIAS_MAX                  32
+
+/** Maximum bytes for an alias name (including the null terminator). */
+#define P4_CONFIG_ALIAS_NAME_BYTES           32
+
+/** Maximum bytes for an alias value (including the null terminator). */
+#define P4_CONFIG_ALIAS_VALUE_BYTES          256
+
+/** SD-root-relative profile filename that `alias /save` writes and boot.c
+ *  auto-loads after CONFIG.SYS (a batch file of `alias name=value` lines). */
+#define P4_CONFIG_ALIAS_PROFILE              "ALIASES.BAT"
 
 /** Maximum bytes for an environment variable name. */
 #define P4_CONFIG_ENV_NAME_BYTES             32

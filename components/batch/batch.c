@@ -43,6 +43,10 @@
 #define SHELL_ENV_VAR_MAX               P4_CONFIG_ENV_VAR_MAX
 #define SHELL_ENV_NAME_BYTES            P4_CONFIG_ENV_NAME_BYTES
 #define SHELL_ENV_VALUE_BYTES           P4_CONFIG_ENV_VALUE_BYTES
+#define SHELL_ALIAS_MAX                 P4_CONFIG_ALIAS_MAX
+#define SHELL_ALIAS_NAME_BYTES          P4_CONFIG_ALIAS_NAME_BYTES
+#define SHELL_ALIAS_VALUE_BYTES         P4_CONFIG_ALIAS_VALUE_BYTES
+#define SHELL_ALIAS_PROFILE             P4_CONFIG_ALIAS_PROFILE
 #define SHELL_BATCH_LINE_BYTES          P4_CONFIG_BATCH_LINE_BYTES
 #define SHELL_BATCH_ARGS_MAX            P4_CONFIG_BATCH_ARGS_MAX
 #define SHELL_BATCH_DEPTH_MAX           P4_CONFIG_BATCH_DEPTH_MAX
@@ -115,6 +119,17 @@ static batch_command_ops_t s_command_ops;
 
 /* Environment variables (RAM-only, not persisted across boots) */
 static shell_env_var_t s_shell_env_vars[SHELL_ENV_VAR_MAX];
+
+/* ---- Aliases (DOSKEY-style macros, RAM-only until /save) ---- */
+
+/** One RAM-only alias slot. */
+typedef struct {
+    bool used;
+    char name[SHELL_ALIAS_NAME_BYTES];
+    char value[SHELL_ALIAS_VALUE_BYTES];
+} shell_alias_t;
+
+static shell_alias_t s_aliases[SHELL_ALIAS_MAX];
 
 /* Batch execution state */
 static shell_batch_frame_t *s_active_batch_frame;
@@ -313,6 +328,408 @@ static void shell_env_print_all(void)
     if (!any) {
         shell_print_muted("No environment variables defined");
     }
+}
+
+/* ========================================================================
+ * ALIASES (alias / unalias, DOSKEY-style macros)
+ * ========================================================================
+ * A small RAM-only macro table. When a command is typed at the prompt, the
+ * leading word is expanded to the alias value before parsing (DOSKEY
+ * behaviour), so `alias ll=dir /s` makes `ll` run `dir /s`. Aliases are NOT
+ * expanded inside batch files, so an alias can never shadow a batch verb.
+ *
+ * Persistence: `alias /save` writes `alias name="value"` lines to the SD
+ * profile (P4_CONFIG_ALIAS_PROFILE); boot.c auto-runs that batch file after
+ * CONFIG.SYS, and `alias /load` reloads it manually.
+ */
+
+static void shell_alias_normalize_name(const char *name, char *output, size_t output_size)
+{
+    size_t index = 0;
+
+    if (output == NULL || output_size == 0) {
+        return;
+    }
+    output[0] = '\0';
+    if (name == NULL) {
+        return;
+    }
+    while (name[index] != '\0' && index + 1 < output_size) {
+        output[index] = (char)toupper((unsigned char)name[index]);
+        index++;
+    }
+    output[index] = '\0';
+}
+
+static bool shell_alias_name_is_valid(const char *name)
+{
+    size_t index;
+
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+    for (index = 0; name[index] != '\0'; index++) {
+        if (!(isalnum((unsigned char)name[index]) || name[index] == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static shell_alias_t *shell_alias_find_slot(const char *name)
+{
+    char normalized[SHELL_ALIAS_NAME_BYTES];
+    size_t index;
+
+    shell_alias_normalize_name(name, normalized, sizeof(normalized));
+    for (index = 0; index < SHELL_ALIAS_MAX; index++) {
+        if (s_aliases[index].used && strcmp(s_aliases[index].name, normalized) == 0) {
+            return &s_aliases[index];
+        }
+    }
+    return NULL;
+}
+
+const char *shell_alias_get(const char *name)
+{
+    shell_alias_t *slot = shell_alias_find_slot(name);
+
+    return slot != NULL ? slot->value : NULL;
+}
+
+esp_err_t shell_alias_set(const char *name, const char *value)
+{
+    char normalized[SHELL_ALIAS_NAME_BYTES];
+    shell_alias_t *slot;
+
+    shell_alias_normalize_name(name, normalized, sizeof(normalized));
+    if (!shell_alias_name_is_valid(normalized)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    slot = shell_alias_find_slot(normalized);
+    if (value == NULL || value[0] == '\0') {
+        if (slot != NULL) {
+            memset(slot, 0, sizeof(*slot));
+        }
+        return ESP_OK;
+    }
+
+    if (slot == NULL) {
+        size_t index;
+
+        for (index = 0; index < SHELL_ALIAS_MAX; index++) {
+            if (!s_aliases[index].used) {
+                slot = &s_aliases[index];
+                break;
+            }
+        }
+        if (slot == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    slot->used = true;
+    snprintf(slot->name, sizeof(slot->name), "%s", normalized);
+    snprintf(slot->value, sizeof(slot->value), "%s", value);
+    return ESP_OK;
+}
+
+int shell_alias_count(void)
+{
+    size_t index;
+    int count = 0;
+
+    for (index = 0; index < SHELL_ALIAS_MAX; index++) {
+        if (s_aliases[index].used) {
+            count++;
+        }
+    }
+    return count;
+}
+
+bool shell_alias_get_by_index(int index, char *name_out, size_t name_size,
+                              char *value_out, size_t value_size)
+{
+    size_t cursor = 0;
+    int seen = 0;
+
+    if (name_out == NULL || value_out == NULL) {
+        return false;
+    }
+    for (cursor = 0; cursor < SHELL_ALIAS_MAX; cursor++) {
+        if (!s_aliases[cursor].used) {
+            continue;
+        }
+        if (seen == index) {
+            snprintf(name_out, name_size, "%s", s_aliases[cursor].name);
+            snprintf(value_out, value_size, "%s", s_aliases[cursor].value);
+            return true;
+        }
+        seen++;
+    }
+    return false;
+}
+
+bool batch_alias_expand_command(const char *command, char *out, size_t out_size)
+{
+    char first_word[SHELL_ALIAS_NAME_BYTES];
+    const char *cursor;
+    const char *rest;
+    size_t first_len = 0;
+    size_t value_len;
+    size_t rest_len;
+    const char *value;
+    size_t pos = 0;
+
+    if (command == NULL || out == NULL || out_size == 0) {
+        return false;
+    }
+    /* DOSKEY macros expand only at the interactive prompt, never inside a
+     * batch file, so an alias cannot shadow a batch verb. */
+    if (s_active_batch_frame != NULL) {
+        return false;
+    }
+
+    cursor = command;
+    while (*cursor == ' ' || *cursor == '\t') {
+        cursor++;
+    }
+    while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t' &&
+           first_len + 1 < sizeof(first_word)) {
+        first_word[first_len++] = *cursor;
+        cursor++;
+    }
+    first_word[first_len] = '\0';
+    if (first_len == 0) {
+        return false;
+    }
+
+    value = shell_alias_get(first_word);
+    if (value == NULL) {
+        return false;
+    }
+
+    rest = cursor;
+    while (*rest == ' ' || *rest == '\t') {
+        rest++;
+    }
+    value_len = strlen(value);
+    rest_len = strlen(rest);
+
+    if (value_len + (rest_len > 0 ? rest_len + 1 : 0) + 1 > out_size) {
+        return false;
+    }
+
+    memcpy(out, value, value_len);
+    pos = value_len;
+    if (rest_len > 0) {
+        out[pos++] = ' ';
+        memcpy(out + pos, rest, rest_len);
+        pos += rest_len;
+    }
+    out[pos] = '\0';
+    return true;
+}
+
+/** Write the alias table to the given resolved SD path as `alias` lines. */
+static esp_err_t shell_alias_save_to(const char *resolved_path)
+{
+    shell_sd_session_t session;
+    char tmp[SHELL_SD_PATH_BYTES + 8];
+    FILE *file = NULL;
+    int index;
+
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    snprintf(tmp, sizeof(tmp), "%s.tmp", resolved_path);
+
+    {
+        uint64_t needed = (uint64_t)SHELL_ALIAS_MAX *
+                          (SHELL_ALIAS_NAME_BYTES + SHELL_ALIAS_VALUE_BYTES + 16) + 256;
+        uint64_t reclaim = storage_get_file_size(resolved_path);
+        if (!storage_check_free_space(needed, reclaim, "alias save")) {
+            shell_sd_end(&session, "alias");
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    file = fopen(tmp, "w");
+    if (file == NULL) {
+        shell_sd_end(&session, "alias");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    for (index = 0; index < SHELL_ALIAS_MAX; index++) {
+        if (!s_aliases[index].used) {
+            continue;
+        }
+        /* Values containing a double quote cannot round-trip through the
+         * batch quoting used by the profile; skip them rather than write a
+         * line that would load wrong. */
+        if (strchr(s_aliases[index].value, '"') != NULL) {
+            shell_print_warning("alias: skipped %s (value contains a double quote)",
+                                s_aliases[index].name);
+            continue;
+        }
+        fprintf(file, "alias %s=\"%s\"\n", s_aliases[index].name, s_aliases[index].value);
+    }
+
+    if (fflush(file) != 0 || fclose(file) != 0) {
+        remove(tmp);
+        shell_sd_end(&session, "alias");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    /* FATFS f_rename refuses to overwrite an existing target: remove it first. */
+    if (rename(tmp, resolved_path) != 0) {
+        remove(resolved_path);
+        if (rename(tmp, resolved_path) != 0) {
+            remove(tmp);
+            shell_sd_end(&session, "alias");
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+    }
+
+    shell_sd_end(&session, "alias");
+    return ESP_OK;
+}
+
+/** Resolve an alias-profile path (argument or the configured default). */
+static esp_err_t shell_alias_resolve_profile(const char *arg, char *out, size_t out_size)
+{
+    if (arg != NULL && arg[0] != '\0') {
+        return shell_fs_resolve_path(arg, out, out_size);
+    }
+    return shell_fs_resolve_path(SHELL_ALIAS_PROFILE, out, out_size);
+}
+
+void shell_command_alias(int argc, char **argv)
+{
+    int index;
+
+    if (argc == 1) {
+        int slot;
+        bool any = false;
+
+        if (shell_alias_count() == 0) {
+            shell_print_muted("No aliases defined");
+            return;
+        }
+        for (slot = 0; slot < SHELL_ALIAS_MAX; slot++) {
+            if (!s_aliases[slot].used) {
+                continue;
+            }
+            shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                          s_aliases[slot].name, s_aliases[slot].value);
+            any = true;
+        }
+        if (!any) {
+            shell_print_muted("No aliases defined");
+        }
+        return;
+    }
+
+    /* Flags. */
+    if (argv[1][0] == '/') {
+        if (shell_text_equals_ignore_case(argv[1], "/save")) {
+            char resolved[SHELL_SD_PATH_BYTES];
+            const char *file_arg = (argc >= 3) ? argv[2] : NULL;
+            esp_err_t error;
+
+            if (argc > 3) {
+                shell_print_usage("Usage: alias /save [file]");
+                return;
+            }
+            if (shell_alias_resolve_profile(file_arg, resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("alias: invalid profile path");
+                return;
+            }
+            error = shell_alias_save_to(resolved);
+            if (error != ESP_OK) {
+                shell_print_error("alias: could not save the profile (%s)", esp_err_to_name(error));
+                return;
+            }
+            shell_print_ok("alias: saved %d alias(es) to %s", shell_alias_count(), resolved);
+            return;
+        }
+
+        if (shell_text_equals_ignore_case(argv[1], "/load")) {
+            char resolved[SHELL_SD_PATH_BYTES];
+            const char *file_arg = (argc >= 3) ? argv[2] : NULL;
+            esp_err_t error;
+
+            if (argc > 3) {
+                shell_print_usage("Usage: alias /load [file]");
+                return;
+            }
+            if (shell_alias_resolve_profile(file_arg, resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("alias: invalid profile path");
+                return;
+            }
+            /* The profile is a batch file of `alias` lines; run it through the
+             * batch pipeline. Alias expansion is suppressed inside it, so the
+             * `alias` commands define the table. */
+            error = shell_execute_batch_file(resolved, 0, NULL);
+            if (error != ESP_OK) {
+                shell_print_error("alias: could not load the profile (%s)", esp_err_to_name(error));
+                return;
+            }
+            shell_print_ok("alias: loaded %d alias(es) from %s", shell_alias_count(), resolved);
+            return;
+        }
+
+        if (shell_text_equals_ignore_case(argv[1], "/clear")) {
+            if (argc != 2) {
+                shell_print_usage("Usage: alias /clear");
+                return;
+            }
+            for (index = 0; index < SHELL_ALIAS_MAX; index++) {
+                memset(&s_aliases[index], 0, sizeof(s_aliases[index]));
+            }
+            shell_print_ok("alias: all aliases cleared");
+            return;
+        }
+
+        shell_print_error("alias: unknown option %s", argv[1]);
+        shell_print_usage("Usage: alias [name[=value]] | alias /save [/load] [file] | alias /clear");
+        return;
+    }
+
+    /* `alias name` or `alias name=value`. The value may be quoted with spaces. */
+    {
+        char *equals = strchr(argv[1], '=');
+
+        if (equals == NULL) {
+            const char *value = shell_alias_get(argv[1]);
+            if (value == NULL) {
+                shell_print_error("alias: %s is not defined", argv[1]);
+                return;
+            }
+            shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                          argv[1], value);
+            return;
+        }
+
+        *equals = '\0';
+        if (shell_alias_set(argv[1], equals + 1) != ESP_OK) {
+            shell_print_error("alias: invalid alias name or the table is full");
+            return;
+        }
+        shell_print_ok("alias: %s set", argv[1]);
+    }
+}
+
+void shell_command_unalias(int argc, char **argv)
+{
+    if (argc != 2) {
+        shell_print_usage("Usage: unalias <name>");
+        return;
+    }
+    (void)shell_alias_set(argv[1], "");
+    shell_print_ok("unalias: %s removed", argv[1]);
 }
 
 /* ========================================================================
@@ -2651,6 +3068,7 @@ void batch_init(void)
 
     memset(s_shell_env_vars, 0, sizeof(s_shell_env_vars));
     (void)shell_env_set("PATH", "sd:/");
+    memset(s_aliases, 0, sizeof(s_aliases));
 
     s_active_batch_frame = NULL;
     s_errorlevel = 0;

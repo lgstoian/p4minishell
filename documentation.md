@@ -243,10 +243,15 @@ Owns everything that sits between the shell commands and the SD card. Split into
   `type`, `write`, `append`, `touch`
 - Extended DOS tools: `attrib` (R/H/S/A via `f_stat`/`f_chmod`), `label` (via
   `f_getlabel`/`f_setlabel`), `xcopy` (recursive with `/S`)
-- Text utilities: `find` (`/I /N /C /V`), `more` (keypress paging with `Q` to quit),
-  `fc` (DOS-style differing-line report), `sort` (qsort-based, `/R /I /U`, 1024-line capacity
-  with a single leak-free release path). All resolve relative paths and run inside a guarded SD
-  session, and all read the pending input-redirection source when no filename is supplied.
+- Text utilities: `find` (classic text search `/I /N /C /V` plus a recursive
+  file-discovery mode `/NAME:`, `/SIZE:`, `/NEWER:`, `/OLDER:`, `/DIRS`, `/B` — mode is
+  selected automatically by the presence of a discovery switch), `more` (keypress paging with
+  `Q` to quit), `fc` (DOS-style differing-line report), `sort` (qsort-based, `/R /I /U`,
+  1024-line capacity with a single leak-free release path). All resolve relative paths and run
+  inside a guarded SD session, and all read the pending input-redirection source when no
+  filename is supplied. The discovery walker reuses the `dir /s` FATFS primitives, keeps each
+  recursion level in one heap block, is depth-bounded by `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, and
+  caps matches at `P4_CONFIG_FIND_MATCH_MAX` (256).
 - SD command family: `sd info|ls|stat|cat|eject`, bounded to 128 listing entries and an 8192-byte
   `sd cat` preview
 
@@ -289,6 +294,12 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   variables into its caller and no snapshot allocation is ever lost.
 - **Variable expansion**: `shell_expand_variables()` handles `%VAR%`, `%0` (script name),
   `%1`..`%9` (the caller's arguments), `%*` (every argument from `%1` onward), and `%%` → `%`
+- **Aliases (DOSKEY-style macros)**: `shell_alias_get`/`shell_alias_set` drive a RAM-only table
+  (`P4_CONFIG_ALIAS_MAX` slots, case-insensitive names). `batch_alias_expand_command()` replaces
+  the leading word of an interactive command line with the alias value before parsing; it is
+  suppressed inside batch files so an alias cannot shadow a batch verb. `alias`/`unalias`
+  manage the table, and `alias /save` persists it as `alias name="value"` lines to
+  `sd:/ALIASES.BAT`, which boot.c auto-runs after CONFIG.SYS (`alias /load` reloads manually).
 - **Errorlevel**: `batch_get_errorlevel()` / `batch_set_errorlevel()`, consumed by `if errorlevel N`
   and set by `choice` to the 1-based index of the chosen key. `call` propagates the called
   script's final errorlevel back to the caller, matching DOS.

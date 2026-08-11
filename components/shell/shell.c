@@ -1945,6 +1945,7 @@ void shell_command_help(void)
     shell_transcript_appendf_ansi("  " SH_EXE "del" SH_RST " <path> | " SH_EXE "ren" SH_RST " <src> <dst> | " SH_EXE "md" SH_RST " <path> | " SH_EXE "rd" SH_RST " <path>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "type" SH_RST " <path> | " SH_EXE "write" SH_RST " <path> <text> | " SH_EXE "append" SH_RST " <path> <text> | " SH_EXE "touch" SH_RST " <path>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "set" SH_RST " [NAME=VALUE] | " SH_EXE "set /a" SH_RST " NAME=<expr> | " SH_EXE "set /p" SH_RST " NAME=<prompt>\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "alias" SH_RST " [name[=value]] | " SH_EXE "alias /save" SH_RST " [/load] [file] | " SH_EXE "unalias" SH_RST " <name>  (DOSKEY-style macros)\n");
     shell_transcript_appendf_ansi("  " SH_EXE "path" SH_RST " [dirs] | " SH_EXE "echo" SH_RST " <text> | " SH_EXE "echo" SH_RST " on|off | " SH_EXE "call" SH_RST " <file.bat>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "attrib" SH_RST " [+-RHSA] <path> | " SH_EXE "label" SH_RST " [name] | " SH_EXE "xcopy" SH_RST " <src> <dst> [/S]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "chkdsk" SH_RST " [path] [/F] | " SH_EXE "format" SH_RST " [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]\n");
@@ -1952,6 +1953,7 @@ void shell_command_help(void)
     shell_transcript_appendf_ansi("  " SH_EXE "pause" SH_RST " | " SH_EXE "choice" SH_RST " [/C:keys] [/N] [/T:c,secs] [/S] [text] | " SH_EXE "setlocal" SH_RST " | " SH_EXE "endlocal" SH_RST "\n");
     shell_transcript_appendf_ansi("  " SH_EXE "prompt" SH_RST " [template] | " SH_EXE "date" SH_RST " [MM-DD-YYYY] | " SH_EXE "time" SH_RST " [HH:MM[:SS]]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "find" SH_RST " <text> [file] [/I] [/N] [/C] [/V] | " SH_EXE "more" SH_RST " [file] | " SH_EXE "fc" SH_RST " <f1> <f2>\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "find" SH_RST " [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B] - recursive file discovery\n");
     shell_transcript_appendf_ansi("  " SH_EXE "tree" SH_RST " [path] [/F] [/A] | " SH_EXE "sort" SH_RST " [file] [/R] [/I] [/U]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "sd" SH_RST " info | ls [path] | stat <path> | cat <path> [bytes] | " SH_EXE "sdeject" SH_RST "\n");
     shell_transcript_appendf_ansi("  " SH_EXE "disk" SH_RST " list | detail | clean | create partition primary [size=N] | delete partition N | format\n");
