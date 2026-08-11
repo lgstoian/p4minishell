@@ -54,6 +54,46 @@ that boot.c auto-loads after CONFIG.SYS.
 
 ---
 
+## [0.24.21] - 2026-08-11
+
+Power-management commands: `power` (status), `sleep` (light sleep), and
+`deepsleep` (deep sleep), built on the ESP-IDF sleep APIs with clean shutdown
+of Wi-Fi/hosted state and battery-aware reporting.
+
+### Added - power / sleep / deepsleep
+
+- `power` — reports power state: PM enabled status, automatic light sleep
+  request (`battery sleep on|off`), display power state, Wi-Fi link state,
+  battery level/voltage (shared `command_battery_read()` ADC path), and the
+  last wake-up cause from `esp_sleep_get_wakeup_cause()`.
+- `sleep [seconds]` — enters light sleep. RAM is retained, so the shell
+  resumes with all state (env, aliases, cwd, variables) intact. With no
+  argument the duration is `P4_CONFIG_POWER_SLEEP_DEFAULT_SECS` (60 s);
+  `sleep 0` clears the timer and wakes only from an external source. On wake
+  the wake cause is reported and the display is restored.
+- `deepsleep [seconds]` — enters deep sleep. RAM is lost, so on wake the
+  device boots fresh (same path as `reboot`). Warns that RAM-only state is
+  lost and that omitting the timer requires an external wake source.
+- Clean shutdown before either sleep: `networking_wifi_shutdown()` (the same
+  teardown C6 OTA uses) plus `display_set_power_state(DISPLAY_POWER_OFF)`.
+  Light-sleep Wi-Fi teardown is optional via
+  `P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI` (default on); after a light
+  sleep the shell notes that `wifi connect` is needed to reconnect.
+- Safety checks: duration is validated and clamped to
+  `P4_CONFIG_POWER_SLEEP_MAX_SECS` so a typo cannot sleep for days; the
+  transcript is given `P4_CONFIG_POWER_SLEEP_PRE_DELAY_MS` to paint before
+  sleep (and `P4_CONFIG_REBOOT_DELAY_MS` before the deep-sleep reset).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings.
+- Hardware: `power` shows battery %, display, Wi-Fi, and wake cause; `sleep 2`
+  blanks the display, tears down Wi-Fi, wakes after ~2 s on the timer, restores
+  the display, and reports `cause=timer`; Wi-Fi reconnect with `wifi connect`
+  succeeds afterward.
+
+---
+
 ## [0.24.19] - 2026-08-11
 
 Better file discovery. The `find` command now has a recursive file-discovery

@@ -114,7 +114,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit` | `components/batch/batch.c` |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
-| `brightness`, `rotate`, `battery`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
+| `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
 | `reboot`, `clear`/`cls`, `prompt` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota` (family routing) | `components/command/command.c` → owning module |
@@ -206,6 +206,26 @@ Read battery ADC pin (GPIO53, 2:1 divider), show scaled voltage, estimated perce
 
 ### battery sleep <on|off|status>
 Request or inspect light sleep. Only available when CONFIG_PM_ENABLE is enabled in sdkconfig.
+
+### power [status]
+Report power-management state: PM enabled status, the automatic light sleep
+request (`battery sleep on|off`), display power state, Wi-Fi link state,
+battery level/voltage, and the last sleep wake-up cause.
+
+### sleep [seconds]
+Enter light sleep. RAM is retained, so the shell resumes with all state
+(env, aliases, cwd, variables) intact. With no argument the duration is
+`P4_CONFIG_POWER_SLEEP_DEFAULT_SECS` (60 s); `sleep 0` clears the timer and
+wakes only from an external source. Before sleeping, the display is blanked
+and Wi-Fi/hosted state is torn down through `networking_wifi_shutdown()`.
+On wake the wake cause is reported and the display is restored. Light-sleep
+Wi-Fi teardown can be disabled with
+`P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI=0`.
+
+### deepsleep [seconds]
+Enter deep sleep. RAM is lost, so on wake the device boots fresh (same path
+as `reboot`). With `seconds` the chip wakes on a timer; without it, wake
+requires an external wake source. Battery level is reported before sleeping.
 
 ### volume <0-100>
 Set speaker volume through ES8311 codec path.

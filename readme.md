@@ -133,7 +133,7 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | Category | Commands |
 |----------|----------|
 | **System** | `help`, `sysinfo`, `clear`/`cls`, `reboot`, `version`/`ver`, `about`, `debug`, `mem`, `ps`/`tasks`/`top`, `screenshot`/`scr`/`capture` |
-| **Hardware** | `brightness`, `rotate`, `battery`, `volume`, `gpio list|status|read|set` |
+| **Hardware** | `brightness`, `rotate`, `battery`, `volume`, `gpio list|status|read|set`, `power`, `sleep`, `deepsleep` |
 | **Storage** | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` |
 | **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` |
 | **Disk / partitions** | `disk list`, `disk detail`, `disk clean`, `disk create partition primary [size=N]`, `disk delete partition N`, `disk format` |

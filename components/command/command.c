@@ -41,6 +41,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_sleep.h"
 #include "esp_timer.h"
 #include "esp_pm.h"
 #include "esp_codec_dev.h"
@@ -73,6 +74,10 @@
 #define SHELL_BATTERY_MIN_SLEEP_FREQ_MHZ P4_CONFIG_BATTERY_MIN_SLEEP_FREQ_MHZ
 #define SHELL_ARGV_MAX                  P4_CONFIG_COMMAND_ARGV_MAX
 #define SHELL_REBOOT_DELAY_MS           P4_CONFIG_REBOOT_DELAY_MS
+#define SHELL_POWER_SLEEP_DEFAULT_SECS  P4_CONFIG_POWER_SLEEP_DEFAULT_SECS
+#define SHELL_POWER_SLEEP_MAX_SECS      P4_CONFIG_POWER_SLEEP_MAX_SECS
+#define SHELL_POWER_SLEEP_PRE_DELAY_MS  P4_CONFIG_POWER_SLEEP_PRE_DELAY_MS
+#define SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
 
 /** Maximum redirection operators parsed from one command line. */
 #define SHELL_REDIRECT_TOKEN_MAX        4
@@ -143,6 +148,9 @@ static void shell_command_brightness(int argc, char **argv);
 static void shell_command_rotate(int argc, char **argv);
 static void shell_command_battery(int argc, char **argv);
 static void shell_command_volume(int argc, char **argv);
+static void shell_command_power(int argc, char **argv);
+static void shell_command_sleep(int argc, char **argv);
+static void shell_command_deepsleep(int argc, char **argv);
 static void shell_command_reboot(void);
 static void shell_command_clear(void);
 static void shell_command_gpio_status(void);
@@ -611,6 +619,227 @@ static void shell_command_battery(int argc, char **argv)
 
     shell_battery_print_usage();
     shell_record_warningf("battery", "Usage error for battery command");
+}
+
+/* ========================================================================
+ * POWER COMMANDS: power, sleep, deepsleep
+ *
+ * `power`     reports power-management state (PM, light sleep request,
+ *             display, Wi-Fi, battery, last wake cause).
+ * `sleep`     enters light sleep: RAM is retained and the shell resumes
+ *             on wake with all state intact.
+ * `deepsleep` enters deep sleep: RAM is lost and the device reboots on
+ *             wake (same path as `reboot`).
+ *
+ * Battery telemetry goes through command_battery_read() (the same ADC path
+ * the `battery` command and header use), and Wi-Fi/hosted state is torn down
+ * through networking_wifi_shutdown() (the same path C6 OTA uses).
+ * ======================================================================== */
+
+static const char *shell_power_wake_cause_string(esp_sleep_wakeup_cause_t cause)
+{
+    switch (cause) {
+        case ESP_SLEEP_WAKEUP_EXT0:             return "ext0";
+        case ESP_SLEEP_WAKEUP_EXT1:             return "ext1";
+        case ESP_SLEEP_WAKEUP_TIMER:            return "timer";
+        case ESP_SLEEP_WAKEUP_TOUCHPAD:         return "touchpad";
+        case ESP_SLEEP_WAKEUP_ULP:              return "ulp";
+        case ESP_SLEEP_WAKEUP_GPIO:             return "gpio";
+        case ESP_SLEEP_WAKEUP_UART:             return "uart";
+        case ESP_SLEEP_WAKEUP_UART1:            return "uart1";
+        case ESP_SLEEP_WAKEUP_UART2:            return "uart2";
+        case ESP_SLEEP_WAKEUP_WIFI:             return "wifi";
+        case ESP_SLEEP_WAKEUP_COCPU:            return "cocpu";
+        case ESP_SLEEP_WAKEUP_COCPU_TRAP_TRIG:  return "cocpu-trap";
+        case ESP_SLEEP_WAKEUP_BT:               return "bluetooth";
+        case ESP_SLEEP_WAKEUP_USB:              return "usb";
+        default:                                return "none";
+    }
+}
+
+/** Read and print the battery through the shared ADC path. */
+static bool shell_power_report_battery(const char *label)
+{
+    int battery_mv;
+    int percent;
+    int raw;
+    int gpio_mv;
+    esp_err_t error;
+
+    error = command_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
+    if (error != ESP_OK) {
+        shell_transcript_appendf_ansi(SH_LBL "%s:" SH_RST " " SH_LBL "battery" SH_RST " " SH_MUTE "unavailable" SH_RST
+                                 " (" SH_WARN "%s" SH_RST ")\n",
+                                 label, esp_err_to_name(error));
+        return false;
+    }
+    shell_transcript_appendf_ansi(SH_LBL "%s:" SH_RST " " SH_LBL "battery" SH_RST " " SH_NUM "%d%%" SH_RST
+                             " (" SH_NUM "%d.%03d V" SH_RST ")\n",
+                             label, percent, battery_mv / 1000, battery_mv % 1000);
+    return true;
+}
+
+/**
+ * Parse an optional duration argument in seconds. With no argument the
+ * configured default is used; out-of-range values are clamped so a typo
+ * cannot put the board to sleep for days.
+ */
+static bool shell_power_parse_seconds(int argc, char **argv, uint32_t *seconds_out)
+{
+    char *end;
+    long value;
+
+    if (argc < 2) {
+        *seconds_out = SHELL_POWER_SLEEP_DEFAULT_SECS;
+        return true;
+    }
+    value = strtol(argv[1], &end, 10);
+    if (*end != '\0' || value < 0) {
+        return false;
+    }
+    if (value > SHELL_POWER_SLEEP_MAX_SECS) {
+        value = SHELL_POWER_SLEEP_MAX_SECS;
+    }
+    *seconds_out = (uint32_t)value;
+    return true;
+}
+
+/** Tear down Wi-Fi/hosted state so the radio cannot keep the SoC awake. */
+static esp_err_t shell_power_shutdown_wifi(void)
+{
+    esp_err_t error = networking_wifi_shutdown();
+
+    if (error != ESP_OK) {
+        shell_transcript_appendf_ansi(SH_LBL "power:" SH_RST " " SH_LBL "wifi shutdown failed" SH_RST
+                                 " (" SH_WARN "%s" SH_RST ")\n",
+                                 esp_err_to_name(error));
+    }
+    return error;
+}
+
+static void shell_command_power(int argc, char **argv)
+{
+    esp_sleep_wakeup_cause_t wake_cause;
+    display_power_state_t display_state;
+
+    if (argc >= 2 && !shell_text_equals_ignore_case(argv[1], "status")) {
+        shell_print_usage("Usage: power [status]");
+        shell_record_warningf("power", "Usage error for power command");
+        return;
+    }
+
+    shell_power_report_battery("power");
+
+    shell_transcript_appendf_ansi(SH_LBL "power.pm:" SH_RST " ");
+#if CONFIG_PM_ENABLE
+    shell_transcript_appendf_ansi(SH_OK "enabled" SH_RST " ");
+    if (s_light_sleep_requested) {
+        shell_transcript_appendf_ansi(SH_LBL "light sleep" SH_RST " " SH_OK "requested" SH_RST "\n");
+    } else {
+        shell_transcript_appendf_ansi(SH_LBL "light sleep" SH_RST " " SH_MUTE "off" SH_RST "\n");
+    }
+#else
+    shell_transcript_appendf_ansi(SH_MUTE "disabled" SH_RST " (light sleep needs CONFIG_PM_ENABLE)\n");
+#endif
+
+    display_state = display_get_power_state();
+    shell_transcript_appendf_ansi(SH_LBL "power.display:" SH_RST " ");
+    if (display_state == DISPLAY_POWER_ON) {
+        shell_transcript_appendf_ansi(SH_OK "on" SH_RST "\n");
+    } else if (display_state == DISPLAY_POWER_SLEEP) {
+        shell_transcript_appendf_ansi(SH_WARN "sleep" SH_RST "\n");
+    } else {
+        shell_transcript_appendf_ansi(SH_ERR "off" SH_RST "\n");
+    }
+
+    shell_transcript_appendf_ansi(SH_LBL "power.wifi:" SH_RST " " SH_NUM "%s" SH_RST "\n",
+                             networking_wifi_is_connected() ? "connected" : "down");
+
+    wake_cause = esp_sleep_get_wakeup_cause();
+    shell_transcript_appendf_ansi(SH_LBL "power.wake:" SH_RST " " SH_NUM "%s" SH_RST "\n",
+                             shell_power_wake_cause_string(wake_cause));
+    shell_transcript_appendf_ansi(SH_MUTE "Tip: `battery sleep on` enables automatic light sleep when idle.\n");
+}
+
+static void shell_command_sleep(int argc, char **argv)
+{
+    uint32_t seconds;
+    esp_err_t error;
+
+    if (!shell_power_parse_seconds(argc, argv, &seconds)) {
+        shell_print_usage("Usage: sleep [seconds]");
+        shell_record_warningf("sleep", "Usage error for sleep command");
+        return;
+    }
+
+    shell_power_report_battery("sleep");
+
+    if (seconds == 0) {
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+        shell_transcript_appendf_ansi(SH_WARN "sleep: no timer set; wake only from an external wake source" SH_RST "\n");
+    } else {
+        esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
+        shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " timer wake in " SH_NUM "%u" SH_RST " s\n",
+                                 (unsigned)seconds);
+    }
+
+#if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
+    shell_power_shutdown_wifi();
+#else
+    shell_transcript_appendf_ansi(SH_MUTE "sleep: keeping Wi-Fi state (light sleep wifi shutdown disabled)\n");
+#endif
+
+    display_set_power_state(DISPLAY_POWER_OFF);
+
+    /* Give the transcript and LVGL task time to paint before sleeping. */
+    vTaskDelay(pdMS_TO_TICKS(SHELL_POWER_SLEEP_PRE_DELAY_MS));
+
+    error = esp_light_sleep_start();
+    if (error != ESP_OK) {
+        shell_transcript_appendf_ansi(SH_ERR "sleep: light sleep failed" SH_RST " (" SH_WARN "%s" SH_RST ")\n",
+                                 esp_err_to_name(error));
+    } else {
+        shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " woke up (" SH_LBL "cause" SH_RST "=" SH_NUM "%s" SH_RST ")\n",
+                                 shell_power_wake_cause_string(esp_sleep_get_wakeup_cause()));
+    }
+
+    display_set_power_state(DISPLAY_POWER_ON);
+
+#if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
+    shell_transcript_appendf_ansi(SH_MUTE "sleep: Wi-Fi was shut down; use `wifi connect` to reconnect.\n");
+#endif
+}
+
+static void shell_command_deepsleep(int argc, char **argv)
+{
+    uint32_t seconds;
+
+    if (!shell_power_parse_seconds(argc, argv, &seconds)) {
+        shell_print_usage("Usage: deepsleep [seconds]");
+        shell_record_warningf("deepsleep", "Usage error for deepsleep command");
+        return;
+    }
+
+    shell_power_report_battery("deepsleep");
+
+    shell_transcript_appendf_ansi(SH_WARN "deepsleep: RAM state (env, aliases, cwd, variables) is lost on wake" SH_RST "\n");
+    if (seconds == 0) {
+        shell_transcript_appendf_ansi(SH_WARN "deepsleep: no timer set; wake requires an external wake source" SH_RST "\n");
+    } else {
+        esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
+        shell_transcript_appendf_ansi(SH_LBL "deepsleep:" SH_RST " timer wake in " SH_NUM "%u" SH_RST " s\n",
+                                 (unsigned)seconds);
+    }
+
+    shell_power_shutdown_wifi();
+    display_set_power_state(DISPLAY_POWER_OFF);
+
+    /* Let the transcript and LVGL task paint before the chip resets. */
+    vTaskDelay(pdMS_TO_TICKS(SHELL_POWER_SLEEP_PRE_DELAY_MS));
+    shell_transcript_appendf_ansi(SH_LBL "deepsleep:" SH_RST " entering deep sleep\n");
+    vTaskDelay(pdMS_TO_TICKS(SHELL_REBOOT_DELAY_MS));
+
+    esp_deep_sleep_start();
 }
 
 static void shell_command_volume(int argc, char **argv)
@@ -1471,6 +1700,21 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "battery")) {
         shell_command_battery(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "power")) {
+        shell_command_power(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "sleep")) {
+        shell_command_sleep(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "deepsleep")) {
+        shell_command_deepsleep(argc, argv);
         return true;
     }
 

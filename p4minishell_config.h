@@ -642,6 +642,18 @@
 /** Delay before esp_restart() so the reboot message reaches the transcript. */
 #define P4_CONFIG_REBOOT_DELAY_MS            500
 
+/** Default duration in seconds for `sleep` when no duration is given. */
+#define P4_CONFIG_POWER_SLEEP_DEFAULT_SECS   60
+
+/** Maximum duration in seconds accepted by `sleep`/`deepsleep`. */
+#define P4_CONFIG_POWER_SLEEP_MAX_SECS       86400
+
+/** Delay in ms after printing before entering sleep so the transcript paints. */
+#define P4_CONFIG_POWER_SLEEP_PRE_DELAY_MS   150
+
+/** Tear down Wi-Fi/hosted state when entering light sleep (`sleep`). */
+#define P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI 1
+
 /** Line buffer size for text-processing commands (find, more, fc, sort). */
 #define P4_CONFIG_TEXT_LINE_BYTES            512
 
