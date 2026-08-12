@@ -11,6 +11,7 @@ idf_component_register(
         display
         header
         keyboard
+        led
         networking
         p4_usb
         shell

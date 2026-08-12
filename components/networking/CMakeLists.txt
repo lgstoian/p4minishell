@@ -16,6 +16,7 @@ idf_component_register(
         esp_netif
         esp-tls
         esp_wifi
+        led
         lwip
         nvs_flash
         storage

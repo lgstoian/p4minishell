@@ -48,6 +48,22 @@ extern void test_storage_wildcard_match(void);
 extern void test_storage_paths_are_same(void);
 extern void test_storage_path_helpers(void);
 
+extern void test_findstr_regex_literal(void);
+extern void test_findstr_regex_case(void);
+extern void test_findstr_regex_anchors(void);
+extern void test_findstr_regex_dot_and_star(void);
+extern void test_findstr_regex_class(void);
+extern void test_findstr_regex_escapes(void);
+extern void test_findstr_match_literal(void);
+extern void test_findstr_match_switches(void);
+extern void test_findstr_match_regex(void);
+
+extern void test_comp_identical(void);
+extern void test_comp_byte_difference(void);
+extern void test_comp_length_difference(void);
+extern void test_comp_case(void);
+extern void test_comp_mid_buffer_difference(void);
+
 extern void test_batch_expr_literals(void);
 extern void test_batch_expr_arithmetic(void);
 extern void test_batch_expr_bitwise(void);
@@ -147,6 +163,28 @@ void app_main(void)
     RUN_TEST(test_storage_wildcard_match);
     RUN_TEST(test_storage_paths_are_same);
     RUN_TEST(test_storage_path_helpers);
+    UNITY_END();
+
+    /* findstr regex / literal matcher tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_findstr_regex_literal);
+    RUN_TEST(test_findstr_regex_case);
+    RUN_TEST(test_findstr_regex_anchors);
+    RUN_TEST(test_findstr_regex_dot_and_star);
+    RUN_TEST(test_findstr_regex_class);
+    RUN_TEST(test_findstr_regex_escapes);
+    RUN_TEST(test_findstr_match_literal);
+    RUN_TEST(test_findstr_match_switches);
+    RUN_TEST(test_findstr_match_regex);
+    UNITY_END();
+
+    /* comp byte-comparison helper tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_comp_identical);
+    RUN_TEST(test_comp_byte_difference);
+    RUN_TEST(test_comp_length_difference);
+    RUN_TEST(test_comp_case);
+    RUN_TEST(test_comp_mid_buffer_difference);
     UNITY_END();
 
     /* Batch arithmetic expression tests */

@@ -22,6 +22,7 @@ components/boot/boot.c            DOS-style boot scripting (CONFIG.SYS parser, A
 components/command/command.c    Command module (dispatcher, worker task, execution pipeline, hardware and system commands)
 components/command/command_ui.c  UI query commands (display, keyboard, windows subcommands)
 components/header/header.c      Fixed top status bar (LVGL widgets)
+components/led/led.c            WS2812 RGB status LED driver + auto status / event notification engine (GPIO26)
 components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
 components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
 components/usb/usb.c            USB Host (MSC storage + HID keyboard/mouse)
@@ -231,6 +232,16 @@ Owns everything that sits between the shell commands and the SD card. Split into
   `format` reformats through `esp_vfs_fat_sdcard_format_cfg()` (honouring `/FS:FAT|FAT32`,
   `/A:size` cluster size, `/V:label`, and `/Q`) behind the exact confirmation word, collected
   through the shell key queue, and refuses when no interactive source is attached.
+- Recycle bin: `del`/`erase` and `rd /s` move matching files and whole directory trees into a
+  hidden `.trash` folder (with a `.meta` side-car recording the original path) instead of
+  deleting them; `undelete`/`restore` and `trash restore` rename entries back to their
+  original location (recreating parent directories, never overwriting), and
+  `trash list|info|purge|empty` manage the bin. `/p`/`/f`/`/permanent` bypass the bin and
+  delete outright. Byte/age/entry-count limits purge the oldest entries first, and
+  `del /s`/`rd /s`/`trash purge`/`trash empty` are gated by the exact confirmation word.
+  `dir` hides hidden/system entries by default, so `.trash` stays out of listings unless a
+  bare `dir /A` asks for everything. `del`, `rd`, `format`, `disk`, `undelete`, and `trash`
+  return a real ERRORLEVEL (0/1/2).
 - Disk and partitions: the `disk` family (`list`, `detail`, `clean`, `create partition
   primary [size=N]`, `delete partition N`, `format`) manages the MBR partition table through
   `sdmmc_read_sectors`/`sdmmc_write_sectors` on the BSP card handle, unmounting the FATFS
@@ -240,18 +251,28 @@ Owns everything that sits between the shell commands and the SD card. Split into
   `P4_CONFIG_TREE_DEPTH_MAX` and the 128-entry listing cap. Each directory level is buffered on
   the heap rather than the worker-task stack, so a wide directory cannot overflow it.
 - File manipulation: `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`,
-  `type`, `write`, `append`, `touch`
+  `type`, `write`, `append`, `touch`, `undelete`/`restore`, `trash`/`recycle`
 - Extended DOS tools: `attrib` (R/H/S/A via `f_stat`/`f_chmod`), `label` (via
   `f_getlabel`/`f_setlabel`), `xcopy` (recursive with `/S`)
 - Text utilities: `find` (classic text search `/I /N /C /V` plus a recursive
   file-discovery mode `/NAME:`, `/SIZE:`, `/NEWER:`, `/OLDER:`, `/DIRS`, `/B` — mode is
-  selected automatically by the presence of a discovery switch), `more` (keypress paging with
-  `Q` to quit), `fc` (DOS-style differing-line report), `sort` (qsort-based, `/R /I /U`,
+  selected automatically by the presence of a discovery switch), `findstr`
+  (literal or DOS-subset regex search, case-sensitive by default,
+  `/R /C /I /N /V /X /E /B /L /S /M /F /G`), `more` (keypress paging with
+  `Q` to quit), `fc` (DOS-style differing-line report), `comp` (byte compare
+  with `/D /A /L /N /C`), `sort` (qsort-based, `/R /I /U`,
   1024-line capacity with a single leak-free release path). All resolve relative paths and run
   inside a guarded SD session, and all read the pending input-redirection source when no
   filename is supplied. The discovery walker reuses the `dir /s` FATFS primitives, keeps each
   recursion level in one heap block, is depth-bounded by `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, and
-  caps matches at `P4_CONFIG_FIND_MATCH_MAX` (256).
+  caps matches at `P4_CONFIG_FIND_MATCH_MAX` (256). `find`, `findstr`, and `comp` return a DOS
+  ERRORLEVEL (0 found / identical, 1 not found / different, 2 usage), and `more`, `fc`, and
+  `sort` return 0/1/2 too, so `if errorlevel` and `&&`/`||` work with every text command.
+- Recursive copy: `xcopy` supports the full DOS 6.x / WinXP switch set
+  (`/S /E /I /Y /-Y /D[:date] /H /R /K /C /Q /T /F /L /A /M /U /P /W /N /V`)
+  and walks trees with one heap block per recursion level, never re-entering
+  the command, so the 8 KB worker stack is safe. Overwriting asks at the
+  prompt when interactive and falls back to `/Y` (silent) when headless.
 - SD command family: `sd info|ls|stat|cat|eject`, bounded to 128 listing entries and an 8192-byte
   `sd cat` preview
 
@@ -372,6 +393,13 @@ filesystem or the batch language:
   this P4 with the ESP-Hosted SDIO link active stalls the chip. Every command gates its pins
   through `shell_pin_is_reserved()` (the critical entries of the board GPIO table), so active
   I2C/I2S/SDIO/display/SD lines can never be repurposed.
+- **RGB status LED** (`rgb`): `components/led/led.c` owns the WS2812 strip on GPIO26
+  (espressif/led_strip over RMT), a small animation task, and a mutex-protected state engine.
+  It renders solid colours, effects (`rainbow`/`breath`/`pulse`/`blink`/`solid`), and transient
+  event notifications on top of a persistent status colour. The `rgb` command lives in
+  `components/command/command.c` (hardware verbs), the Wi-Fi/HTTP event hooks are pushed from
+  `components/networking`, and `main.c` fires the boot confirmation flash. GPIO26 is a reserved
+  critical line in the board pin table.
 - **UI query commands**: `display info|resolution|refresh|power`, `keyboard show|hide|toggle|status`,
   `windows info` — implemented in `command_ui.c` to keep `keyboard.h` and `windows.h` out of
   `command.c`

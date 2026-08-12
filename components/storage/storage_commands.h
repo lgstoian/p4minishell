@@ -19,6 +19,8 @@
 #define P4MINISHELL_STORAGE_COMMANDS_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,8 +62,17 @@ void shell_command_copy(int argc, char **argv);
 /** `move` — rename across directories, falling back to copy-then-delete. */
 void shell_command_move(int argc, char **argv);
 
-/** `del` / `erase` — delete one file or every wildcard match. */
-void shell_command_del(int argc, char **argv);
+/**
+ * `del` / `erase` — move a file or every wildcard match to the recycle bin,
+ * or delete permanently.
+ *
+ * Usage: del [/s] [/p|/f|/permanent] <path|pattern>
+ *   /s           Recurse into subdirectories (requires exact confirmation)
+ *   /p|/f|/permanent   True delete, bypassing the recycle bin
+ *
+ * Returns an ERRORLEVEL: 0 success, 1 failure / cancelled, 2 usage.
+ */
+int shell_command_del(int argc, char **argv);
 
 /**
  * `ren` / `rename` — rename a file within its own directory.
@@ -72,8 +83,15 @@ void shell_command_rename(int argc, char **argv, const char *verb);
 /** `md` / `mkdir` — create a directory. */
 void shell_command_mkdir(int argc, char **argv);
 
-/** `rd` / `rmdir` — remove an empty directory. */
-void shell_command_rmdir(int argc, char **argv);
+/**
+ * `rd` / `rmdir` — remove a directory.
+ *
+ * Usage: rd [/s] [/p|/f|/permanent] <path>
+ *   /s           Remove a directory tree (moves it to the recycle bin, or
+ *                deletes permanently with /p|/f; requires exact confirmation)
+ * Returns an ERRORLEVEL: 0 success, 1 failure / cancelled, 2 usage.
+ */
+int shell_command_rmdir(int argc, char **argv);
 
 /** `type` — print the contents of a text file. */
 void shell_command_type_file(int argc, char **argv);
@@ -97,8 +115,14 @@ void shell_command_attrib(int argc, char **argv);
 /** `label` — read or set the FATFS volume label. */
 void shell_command_label(int argc, char **argv);
 
-/** `xcopy` — copy a file, or a directory tree with `/S`. */
-void shell_command_xcopy(int argc, char **argv);
+/**
+ * `xcopy` — copy a file, or a directory tree with the full DOS 6.x switch set.
+ *
+ * Usage: xcopy <source> <destination> [/S] [/E] [/I] [/Y|/-Y] [/D[:mm-dd-yyyy]]
+ *        [/H] [/R] [/K] [/C] [/Q] [/T] [/F] [/L] [/A] [/M] [/U] [/P] [/W] [/N]
+ * Returns an ERRORLEVEL: 0 success, 1 nothing copied / copy failed, 2 usage.
+ */
+int shell_command_xcopy(int argc, char **argv);
 
 /* ========================================================================
  * VOLUME MANAGEMENT
@@ -126,7 +150,24 @@ void shell_command_chkdsk(int argc, char **argv);
  * through the standard IDF format helper; exFAT is not available in this
  * firmware build and is reported honestly.
  */
-void shell_command_format(int argc, char **argv);
+int shell_command_format(int argc, char **argv);
+
+/**
+ * `undelete` / `restore` — restore a file or directory from the recycle bin.
+ *
+ * Usage: undelete <name|index> | restore <name|index>
+ * Returns an ERRORLEVEL: 0 success, 1 failure, 2 usage.
+ */
+int shell_command_undelete(int argc, char **argv);
+
+/**
+ * `trash` / `recycle` — manage the recycle bin.
+ *
+ * Usage: trash [list] | trash info | trash restore <name|index> |
+ *        trash purge <name|index> | trash empty
+ * Returns an ERRORLEVEL: 0 success, 1 failure / cancelled, 2 usage.
+ */
+int shell_command_trash(int argc, char **argv);
 
 /**
  * `disk` — diskpart-style physical-disk and partition management.
@@ -137,23 +178,92 @@ void shell_command_format(int argc, char **argv);
  * Receives the original unsplit command text because the subcommands
  * re-tokenize it, mirroring the `sd` family.
  */
-void shell_command_disk(char *command);
+int shell_command_disk(char *command);
 
 /* ========================================================================
  * TEXT UTILITIES
  * ======================================================================== */
 
-/** `find` — search a file for a literal substring. */
-void shell_command_find(int argc, char **argv);
+/**
+ * `find` — search a file for a literal substring.
+ *
+ * Usage: find <text> [file] [/I] [/N] [/C] [/V] — or the recursive
+ * file-discovery mode. Returns an ERRORLEVEL: 0 match found, 1 none, 2 usage.
+ */
+int shell_command_find(int argc, char **argv);
 
-/** `more` — page a text file with a timed advance between pages. */
-void shell_command_more(int argc, char **argv);
+/**
+ * `more` — page a text file with a timed advance between pages.
+ *
+ * Returns an ERRORLEVEL: 0 completed, 1 error, 2 usage.
+ */
+int shell_command_more(int argc, char **argv);
 
-/** `fc` — compare two text files line by line. */
-void shell_command_fc(int argc, char **argv);
+/**
+ * `fc` — compare two text files line by line.
+ *
+ * Returns an ERRORLEVEL: 0 identical, 1 differences, 2 usage.
+ */
+int shell_command_fc(int argc, char **argv);
 
-/** `sort` — print a bounded text file with its lines sorted. */
-void shell_command_sort(int argc, char **argv);
+/**
+ * `sort` — print a bounded text file with its lines sorted.
+ *
+ * Usage: sort [file] [/R] [/I] [/U]. Returns an ERRORLEVEL: 0 ok, 1 error,
+ * 2 usage.
+ */
+int shell_command_sort(int argc, char **argv);
+
+/**
+ * `findstr` — classic DOS text search with optional limited regular
+ * expressions, case-sensitive by default.
+ *
+ * Usage: findstr [switches] <search...> [file...]
+ * Switches: /R /C:"string" /I /N /V /X /E /B /L /S /M /F:file /G:file
+ * Returns an ERRORLEVEL: 0 match found, 1 no match, 2 usage.
+ */
+int shell_command_findstr(int argc, char **argv);
+
+/**
+ * `comp` — classic DOS byte-for-byte file comparison.
+ *
+ * Usage: comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]
+ * Returns an ERRORLEVEL: 0 identical, 1 different, 2 usage.
+ */
+int shell_command_comp(int argc, char **argv);
+
+/* ========================================================================
+ * PURE HELPERS EXPOSED FOR UNIT TESTS
+ * ========================================================================
+ * These are implementation details of findstr / comp with no I/O, exposed so
+ * test/ can exercise the matching and comparison logic directly.
+ */
+
+/**
+ * Search for the limited DOS findstr regex pattern anywhere in text (unless
+ * anchored with `^`). Returns the match start index, or -1; @p end_out
+ * receives the index just past the match.
+ */
+int shell_fsre_search(const char *pattern, const char *text, bool icase,
+                      int *end_out);
+
+/**
+ * Match one line against one findstr search string. @p is_regex selects the
+ * regex engine; otherwise the string is literal. @p beg / @p end / @p whole
+ * implement the /B /E /X switches.
+ */
+bool shell_findstr_match_line(const char *pattern, bool is_regex,
+                              const char *line, bool icase,
+                              bool beg, bool end, bool whole);
+
+/**
+ * Find the first differing byte between two buffers. Returns true and fills
+ * @p pos, @p va, @p vb when a difference exists (including a length
+ * difference, where the missing byte reads as 0x00).
+ */
+bool shell_comp_first_diff(const uint8_t *a, size_t an,
+                           const uint8_t *b, size_t bn,
+                           bool icase, size_t *pos, uint8_t *va, uint8_t *vb);
 
 /* ========================================================================
  * SD COMMAND FAMILY

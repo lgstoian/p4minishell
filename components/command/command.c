@@ -36,6 +36,7 @@
 #include "networking.h"
 #include "http_server.h"
 #include "netdiag.h"
+#include "led.h"
 #include "bluetooth.h"
 #include "c6ota.h"
 #include "clock.h"
@@ -219,6 +220,7 @@ static const shell_gpio_pin_desc_t s_gpio_pins[] = {
     {"sd_d3", BSP_SD_D3, "MicroSD data lane D3", false, true},
     {"sd_clk", BSP_SD_CLK, "MicroSD clock", false, true},
     {"sd_cmd", BSP_SD_CMD, "MicroSD command", false, true},
+    {"led_status", (gpio_num_t)BOARD_CFG_RGB_LED_GPIO, "WS2812 RGB status LED (LED1, back panel)", false, true},
 };
 
 static const shell_gpio_pin_desc_t *shell_find_gpio_pin(int gpio_num)
@@ -2141,21 +2143,219 @@ static void shell_execute_spi_command(int argc, char **argv)
 
 
 /* ========================================================================
- * UNSUPPORTED HARDWARE COMMANDS (rgb, camera)
+ * UNSUPPORTED HARDWARE COMMAND (camera)
  * ======================================================================== */
 
+/** Parse a hex colour "#RRGGBB" or "RRGGBB" into 0xRRGGBB. */
+static bool shell_rgb_parse_hex(const char *text, uint32_t *rgb_out)
+{
+    const char *cursor = text;
+    uint32_t value = 0;
+    size_t digits = 0;
+
+    if (text == NULL || rgb_out == NULL) {
+        return false;
+    }
+    if (*cursor == '#') {
+        cursor++;
+    }
+    while (digits < 6 && cursor[digits] != '\0') {
+        char c = cursor[digits];
+        int nibble;
+        if (c >= '0' && c <= '9') {
+            nibble = c - '0';
+        } else if (c >= 'a' && c <= 'f') {
+            nibble = c - 'a' + 10;
+        } else if (c >= 'A' && c <= 'F') {
+            nibble = c - 'A' + 10;
+        } else {
+            return false;
+        }
+        value = (value << 4) | (uint32_t)nibble;
+        digits++;
+    }
+    if (digits != 6 || cursor[digits] != '\0') {
+        return false;
+    }
+    *rgb_out = value;
+    return true;
+}
+
+/**
+ * `rgb` — control the WS2812 status LED (LED1, GPIO26).
+ *
+ * Usage:
+ *   rgb status                  Show state (mode, colour, effect, brightness)
+ *   rgb off                     Turn the LED off
+ *   rgb <r> <g> <b>             Solid colour, each channel 0-255
+ *   rgb #RRGGBB                 Solid colour from a hex value
+ *   rgb <effect> [speed]        rainbow | breath | pulse | blink (speed 1..10)
+ *   rgb auto <on|off>           Enable/disable the status-driven colour layer
+ *
+ * ERRORLEVEL: 0 success, 1 failure, 2 usage. Works in batch files and is
+ * redirectable/pipable like every other command.
+ */
 static void shell_execute_rgb_command(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    esp_err_t error = ESP_OK;
 
-    if (BOARD_CFG_RGB_LED_GPIO == GPIO_NUM_NC) {
-        shell_print_error("rgb: unsupported because the JC1060 reference repo does not expose authoritative onboard RGB LED wiring and this workspace still has no declared RGB driver");
-        shell_record_warningf("rgb", "RGB LED command requested without a configured RGB LED pin");
+    /* rgb / rgb status */
+    if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "status"))) {
+        led_state_t state;
+
+        if (!led_is_initialized()) {
+            shell_print_error("rgb: WS2812 LED driver is not initialized (check GPIO%d)",
+                              (int)BOARD_CFG_RGB_LED_GPIO);
+            shell_record_warningf("rgb", "RGB LED driver not initialized");
+            batch_set_errorlevel(1);
+            return;
+        }
+        led_get_state(&state);
+        shell_transcript_appendf_ansi(SH_HEAD "RGB LED" SH_RST "\n");
+        shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " WS2812 on " SH_NUM "GPIO%d" SH_RST "\n",
+                                      (int)BOARD_CFG_RGB_LED_GPIO);
+        shell_transcript_appendf_ansi("  " SH_LBL "mode:" SH_RST " %s\n",
+                                      state.auto_status ? SH_OK "auto status" SH_RST : SH_VAL "manual" SH_RST);
+        shell_transcript_appendf_ansi("  " SH_LBL "effect:" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                                      led_effect_name(state.effect));
+        shell_transcript_appendf_ansi("  " SH_LBL "colour:" SH_RST " " SH_NUM "#%02X%02X%02X" SH_RST "\n",
+                                      state.red, state.green, state.blue);
+        shell_transcript_appendf_ansi("  " SH_LBL "speed:" SH_RST " " SH_NUM "%u" SH_RST " " SH_MUTE "(1..10)" SH_RST "\n",
+                                      (unsigned int)state.speed);
+        shell_transcript_appendf_ansi("  " SH_LBL "brightness:" SH_RST " " SH_NUM "%u%%" SH_RST "\n",
+                                      (unsigned int)state.brightness_pct);
+        batch_set_errorlevel(0);
         return;
     }
 
-    shell_transcript_append_text("rgb: RGB LED control is reserved until the board metadata declares the exact driver mode\n");
+    /* rgb off */
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "off")) {
+        error = led_off();
+        if (error == ESP_OK) {
+            shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " LED " SH_ERR "off" SH_RST "\n");
+        }
+        goto done;
+    }
+
+    /* rgb auto <on|off> */
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "auto")) {
+        if (shell_text_equals_ignore_case(argv[2], "on")) {
+            error = led_set_auto_status(true);
+            if (error == ESP_OK) {
+                shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " auto status " SH_OK "enabled" SH_RST "\n");
+            }
+            goto done;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "off")) {
+            error = led_set_auto_status(false);
+            if (error == ESP_OK) {
+                shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " auto status " SH_MUTE "disabled" SH_RST "\n");
+            }
+            goto done;
+        }
+        shell_print_usage("Usage: rgb auto <on|off>");
+        shell_record_warningf("rgb", "Invalid rgb auto argument");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    /* rgb #RRGGBB */
+    if (argc == 2 && argv[1][0] == '#') {
+        uint32_t rgb;
+
+        if (!shell_rgb_parse_hex(argv[1], &rgb)) {
+            shell_print_usage("Usage: rgb #RRGGBB");
+            shell_record_warningf("rgb", "Invalid rgb hex colour");
+            batch_set_errorlevel(2);
+            return;
+        }
+        error = led_set_hex(rgb);
+        if (error == ESP_OK) {
+            shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " colour set to " SH_NUM "#%06lX" SH_RST "\n",
+                                          (unsigned long)rgb);
+        }
+        goto done;
+    }
+
+    /* rgb <r> <g> <b> */
+    if (argc == 4) {
+        char *end = NULL;
+        long red = strtol(argv[1], &end, 10);
+        if (end == NULL || *end != '\0' || red < 0 || red > 255) {
+            shell_print_usage("Usage: rgb <r> <g> <b>  (0-255 each)");
+            shell_record_warningf("rgb", "Invalid rgb red argument");
+            batch_set_errorlevel(2);
+            return;
+        }
+        end = NULL;
+        long green = strtol(argv[2], &end, 10);
+        if (end == NULL || *end != '\0' || green < 0 || green > 255) {
+            shell_print_usage("Usage: rgb <r> <g> <b>  (0-255 each)");
+            shell_record_warningf("rgb", "Invalid rgb green argument");
+            batch_set_errorlevel(2);
+            return;
+        }
+        end = NULL;
+        long blue = strtol(argv[3], &end, 10);
+        if (end == NULL || *end != '\0' || blue < 0 || blue > 255) {
+            shell_print_usage("Usage: rgb <r> <g> <b>  (0-255 each)");
+            shell_record_warningf("rgb", "Invalid rgb blue argument");
+            batch_set_errorlevel(2);
+            return;
+        }
+        error = led_set_color((uint8_t)red, (uint8_t)green, (uint8_t)blue);
+        if (error == ESP_OK) {
+            shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " colour set to " SH_NUM "r=%ld g=%ld b=%ld" SH_RST "\n",
+                                          red, green, blue);
+        }
+        goto done;
+    }
+
+    /* rgb <effect> [speed] */
+    if (argc == 2 || argc == 3) {
+        led_effect_t effect = led_effect_from_name(argv[1]);
+        uint8_t speed = 0;
+
+        if (effect == LED_EFFECT_SOLID && !shell_text_equals_ignore_case(argv[1], "solid")) {
+            shell_print_usage("Usage: rgb <effect> [speed]  (rainbow|breath|pulse|blink|solid)");
+            shell_record_warningf("rgb", "Unknown rgb effect %s", argv[1]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (argc == 3) {
+            char *end = NULL;
+            long parsed = strtol(argv[2], &end, 10);
+            if (end == NULL || *end != '\0' || parsed < 1 || parsed > 10) {
+                shell_print_usage("Usage: rgb <effect> [speed]  (speed 1..10)");
+                shell_record_warningf("rgb", "Invalid rgb speed argument");
+                batch_set_errorlevel(2);
+                return;
+            }
+            speed = (uint8_t)parsed;
+        }
+        error = led_set_effect(effect, speed);
+        if (error == ESP_OK) {
+            shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " effect " SH_NUM "%s" SH_RST
+                                          " at speed " SH_NUM "%u" SH_RST "\n",
+                                          led_effect_name(effect),
+                                          (unsigned int)(speed ? speed : P4_CONFIG_LED_EFFECT_SPEED_DEFAULT));
+        }
+        goto done;
+    }
+
+    shell_print_usage("Usage: rgb status | rgb off | rgb <r> <g> <b> | rgb #RRGGBB | rgb <effect> [speed] | rgb auto <on|off>");
+    shell_record_warningf("rgb", "Usage error for rgb command");
+    batch_set_errorlevel(2);
+    return;
+
+done:
+    if (error != ESP_OK) {
+        shell_print_error("rgb: LED control failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("rgb", error, "RGB LED control failed");
+        batch_set_errorlevel(1);
+        return;
+    }
+    batch_set_errorlevel(0);
 }
 
 static void shell_execute_camera_command(int argc, char **argv)
@@ -2863,7 +3063,7 @@ bool shell_execute_command_core(char *command)
 
     /* ---- Disk and partition tools (diskpart style) ---- */
     if (shell_text_equals_ignore_case(argv[0], "disk")) {
-        shell_command_disk(family_command);
+        batch_set_errorlevel(shell_command_disk(family_command));
         free(family_command);
         return true;
     }
@@ -2896,7 +3096,7 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "del") || shell_text_equals_ignore_case(argv[0], "erase")) {
-        shell_command_del(argc, argv);
+        batch_set_errorlevel(shell_command_del(argc, argv));
         return true;
     }
 
@@ -2911,7 +3111,18 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "rd") || shell_text_equals_ignore_case(argv[0], "rmdir")) {
-        shell_command_rmdir(argc, argv);
+        batch_set_errorlevel(shell_command_rmdir(argc, argv));
+        return true;
+    }
+
+    /* ---- Recycle bin ---- */
+    if (shell_text_equals_ignore_case(argv[0], "undelete") || shell_text_equals_ignore_case(argv[0], "restore")) {
+        batch_set_errorlevel(shell_command_undelete(argc, argv));
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "trash") || shell_text_equals_ignore_case(argv[0], "recycle")) {
+        batch_set_errorlevel(shell_command_trash(argc, argv));
         return true;
     }
 
@@ -2947,7 +3158,7 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "xcopy")) {
-        shell_command_xcopy(argc, argv);
+        batch_set_errorlevel(shell_command_xcopy(argc, argv));
         return true;
     }
 
@@ -2959,7 +3170,7 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "format")) {
-        shell_command_format(argc, argv);
+        batch_set_errorlevel(shell_command_format(argc, argv));
         return true;
     }
 
@@ -3070,12 +3281,17 @@ bool shell_execute_command_core(char *command)
 
     /* ---- File utility commands ---- */
     if (shell_text_equals_ignore_case(argv[0], "find")) {
-        shell_command_find(argc, argv);
+        batch_set_errorlevel(shell_command_find(argc, argv));
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "findstr")) {
+        batch_set_errorlevel(shell_command_findstr(argc, argv));
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "more")) {
-        shell_command_more(argc, argv);
+        batch_set_errorlevel(shell_command_more(argc, argv));
         return true;
     }
 
@@ -3085,12 +3301,17 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "fc")) {
-        shell_command_fc(argc, argv);
+        batch_set_errorlevel(shell_command_fc(argc, argv));
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "comp")) {
+        batch_set_errorlevel(shell_command_comp(argc, argv));
         return true;
     }
 
     if (shell_text_equals_ignore_case(argv[0], "sort")) {
-        shell_command_sort(argc, argv);
+        batch_set_errorlevel(shell_command_sort(argc, argv));
         return true;
     }
 

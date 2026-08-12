@@ -1,6 +1,6 @@
 # Hosted Module SDK Guide
 
-This guide describes how `main/main.c` integrates the runtime modules in this workspace: `components/shell`, `components/storage`, `components/batch`, `components/command`, `components/display`, `components/windows`, `components/header`, `components/networking`, `components/usb`, and `components/c6ota`.
+This guide describes how `main/main.c` integrates the runtime modules in this workspace: `components/shell`, `components/storage`, `components/batch`, `components/command`, `components/display`, `components/windows`, `components/header`, `components/led`, `components/networking`, `components/usb`, and `components/c6ota`.
 
 ## Architecture
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It contains no command implementations and no shell state.
@@ -8,7 +8,7 @@ This guide describes how `main/main.c` integrates the runtime modules in this wo
 console, the input-line prompt contract, the interactive keypress queue, the DOS prompt template engine, the boot 
 banner, the system info commands, and the read-only FreeRTOS task introspection (`ps` / `tasks` / `top` via
   `shell_command_ps()`).
-- `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, and every DOS file command.
+- `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, every DOS file command, and the hidden `.trash` recycle bin (`trash.c`) that `del`/`rd /s` move entries into and `undelete`/`trash` manage.
 - `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, 
 `for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, the
 batch language commands, and the DOSKEY-style alias table (`alias` / `unalias`, prompt-only
@@ -135,6 +135,10 @@ Two more modules extend the same ownership boundary:
   It walks `netif_list`, the DNS servers, and the TCP/UDP PCB lists read-only under
   `LOCK_TCPIP_CORE()` when core locking is enabled. Never iterate or modify PCBs from
   another context without the lock.
+- `components/led/led.c` owns the WS2812 RGB status LED on GPIO26 (espressif/led_strip over
+  RMT) and the animation task. `networking` pushes Wi-Fi/HTTP events with `led_notify()`;
+  the `rgb` command (in `components/command`) and the CONFIG.SYS `RGB=` directive drive it.
+  It is a leaf, so `command`, `networking`, and `main` can all depend on it.
 
 When another layer needs networking state, add an accessor rather than reaching into the
 driver:
@@ -264,14 +268,14 @@ Prefer `shell_fs_copy_file()` over rolling your own loop: it already does all fo
 Anything that can lose user data must be unattended-proof:
 
 ```c
-/* Shared helper in storage_commands.c used by format, disk clean, and
- * disk delete partition. Collects the exact confirmation word through the
- * key queue and refuses when nobody can answer. */
+/* Shared helper in storage_commands.c used by format, disk clean/delete,
+ * recursive del/rd, and trash empty/purge. Collects the exact confirmation
+ * word through the key queue and refuses when nobody can answer. */
 if (!shell_confirm_destructive("mycmd", "WARNING: ...", detail_lines)) {
-    return;
+    return;   /* return 1: cancelled counts as a non-zero ERRORLEVEL */
 }
 
-shell_transcript_appendf("Type %s to continue: ", P4_CONFIG_FORMAT_CONFIRM_WORD);
+shell_transcript_appendf("Type %s to continue: ", P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD);
 /* Collect the word through the key queue so the reply never reaches the
  * command dispatcher. See shell_confirm_destructive() for the loop. */
 ```
@@ -310,6 +314,19 @@ for (i = 0; i < subdir_count; i++) {
 ```
 
 `shell_dir_list_one()`, `shell_tree_walk()`, and `shell_chkdsk_walk()` all follow this shape.
+
+The `xcopy` walker (`shell_xcopy_walk`) and the `findstr /S` walker
+(`shell_findstr_walk`) follow the same rule; `xcopy` must never re-enter the
+`xcopy` command for subdirectories — that is how the old recursive copy
+stacked frames.
+
+### Pure, unit-testable text logic
+
+The findstr regex engine and the comp byte-comparison core have no I/O and
+are declared in `storage_commands.h` so `test/` can exercise them directly:
+`shell_fsre_search()`, `shell_findstr_match_line()`, and
+`shell_comp_first_diff()`. When adding a text filter, keep the matcher pure
+and expose it the same way instead of burying the logic behind the transcript.
 
 ### Colouring command output
 

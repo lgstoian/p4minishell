@@ -2618,6 +2618,7 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
     setlocal_depth_on_entry = s_setlocal_depth;
 
     s_active_batch_frame = frame;
+    shell_set_batch_active(true);
 
     while (fgets(line, SHELL_BATCH_LINE_BYTES, file) != NULL) {
         char *trimmed = shell_trim(line);
@@ -2750,6 +2751,7 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
     }
 
     s_active_batch_frame = frame->parent;
+    shell_set_batch_active(frame->parent != NULL);
 
     /* Discard any setlocal scope this file left open, restoring the caller's
      * environment and releasing the snapshots. */
@@ -3071,6 +3073,7 @@ void batch_init(void)
     memset(s_aliases, 0, sizeof(s_aliases));
 
     s_active_batch_frame = NULL;
+    shell_set_batch_active(false);
     s_errorlevel = 0;
     s_goto_label[0] = '\0';
     s_goto_pending = false;

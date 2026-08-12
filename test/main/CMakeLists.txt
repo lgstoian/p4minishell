@@ -12,6 +12,8 @@ idf_component_register(
         test_ansi_format.c
         test_shell_variables.c
         test_shell_debug_log.c
+        test_findstr.c
+        test_comp.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"

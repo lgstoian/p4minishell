@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.24.20 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.24.27 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -37,6 +37,7 @@ components/storage/         SD sessions, path resolution, FATFS conversion, cwd,
 components/batch/           Batch engine, labels, for loops, pipes, environment variables, PATH
 components/command/         Command module (parser, dispatcher, worker task, execution pipeline, hardware and system commands)
 components/header/          Fixed top status bar (Wi-Fi, battery, Bluetooth, USB, SD)
+components/led/             WS2812 RGB status LED driver + auto status / event notification engine (GPIO26)
 components/networking/      Sole owner of ESP-Hosted + esp_wifi_remote: Wi-Fi station lifecycle, hosted NimBLE, status accessors, known-network storage (wifi_known.c)
 components/usb/             USB Host MSC storage (/usb0) + HID keyboard/mouse
 components/c6ota/           ESP32-C6 firmware OTA via ESP-Hosted SDIO
@@ -82,6 +83,7 @@ the YAML to match.
 | **Storage** | FATFS on SD with LFN support (255 chars) |
 | **Audio** | ES8311 codec via I2S |
 | **Battery** | ADC on GPIO53 with 2:1 divider (3.3V-4.2V range) |
+| **RGB LED** | WS2812 (NeoPixel) status LED on GPIO26 (back panel) |
 | **Hosted SDIO** | CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 |
 | **USB Host** | MSC storage at /usb0 + HID keyboard/mouse |
 | **ESP-IDF** | v5.5.5 |
@@ -107,7 +109,7 @@ the YAML to match.
 - **Real batch control flow**: `pause` and `choice` block on an actual keypress, `setlocal`/`endlocal` scope the environment, `exit /b` leaves one batch file, `if` with `errorlevel N` (≥), `exist <path>`, case-insensitive `/i` string tests, and `not`
 - **Batch expressions**: `set /a` integer arithmetic with the full DOS operator set plus comparison (`== != < > <= >=`) and logical (`&& ||`) operators that yield 1/0, `set /p` prompted input, trailing `^` line continuation
 - **DOS prompt engine**: `prompt` template with `$p $g $t $d $v $n` and more, driving both the UART console and the on-screen input line
-- **Text utilities**: `find` (text search `/I /N /C /V`, plus a recursive file-discovery mode by name/size/date via `/NAME:` `/SIZE:` `/NEWER:` `/OLDER:` `/DIRS` `/B`), `more` (keypress paging), `tree` (recursive, `/F /A`), `fc`, `sort` (`/R /I /U`)
+- **Text utilities**: `find` (text search `/I /N /C /V`, plus a recursive file-discovery mode by name/size/date via `/NAME:` `/SIZE:` `/NEWER:` `/OLDER:` `/DIRS` `/B`), `findstr` (literal or regex-lite search, case-sensitive by default, `/R /C /I /N /V /X /E /B /L /S /M /F /G`), `more` (keypress paging), `tree` (recursive, `/F /A`), `fc`, `comp` (byte compare `/D /A /L /N /C`), `sort` (`/R /I /U`). All text tools set a DOS ERRORLEVEL (0 ok / found, 1 not found / different, 2 usage) for `if errorlevel` and `&&`/`||`.
 - **Redirection**: `>`, `>>`, and `<` in any order on one line
 - **Multi-stage pipes**: `cmd1 | cmd2 | cmd3` with quote-aware splitting
 - **Command chaining**: `a & b` (both), `a && b` (on success), `a || b` (on failure)
@@ -122,6 +124,7 @@ the YAML to match.
 - **C6 OTA updates**: Validated firmware updates from SD or HTTP/S over ESP-Hosted SDIO
 - **Hardware controls**: Brightness, rotation, battery telemetry, volume, GPIO inspection
 - **Peripheral toolkit**: LEDC PWM (`pwm`) and square waves (`freq`), one-shot ADC reads on any non-reserved pin (`adc`), and an I2C scanner with peek/poke on the shared bus or custom pins (`i2c`). `spi status` reports the SPI configuration; the SPI transaction verbs fail with an honest error because SPI host init on this P4 with the ESP-Hosted SDIO link active stalls the chip. All toolkit commands share one pin-safety gate that refuses the board's active I2C/I2S/SDIO/display/SD lines.
+- **RGB status LED**: the WS2812 (NeoPixel) LED on the back panel (`rgb` command) doubles as a glanceable status light — amber pulse while Wi-Fi connects, green when connected, red blink when disconnected, red pulse on Wi-Fi failure, blue flash when the HTTP server starts, and a green confirmation flash at boot. Solid colours, `#RRGGBB`, and `rainbow`/`breath`/`pulse`/`blink` effects are available; `rgb auto <on|off>` toggles the status layer. Works in batch files and via the CONFIG.SYS `RGB=` directive. Owned by `components/led` (espressif/led_strip over RMT).
 - **Time / SNTP control**: `date`, `time`, `timezone`, and `sntp`/`ntpsync` commands (all owned by `components/clock/`). `sntp sync` synchronizes the clock over Wi-Fi, `timezone <TZ>` sets a POSIX timezone string, and `date`/`time` show a fuller clock panel (local/UTC/unix/timezone/uptime/sync) while still supporting the DOS-style set forms.
 - **Fixed header bar**: Wi-Fi, battery, Bluetooth, USB, SD status with transient notifications
 - **Real-time system panel**: Memory (MEM), CPU usage (CPU bar + %), and Battery (BAT) all dynamically linked to FreeRTOS runtime statistics on the far right of the header
@@ -135,9 +138,9 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | Category | Commands |
 |----------|----------|
 | **System** | `help`, `sysinfo`, `clear`/`cls`, `reboot`, `version`/`ver`, `about`, `debug`, `mem`, `ps`/`tasks`/`top`, `screenshot`/`scr`/`capture` |
-| **Hardware** | `brightness`, `rotate`, `battery`, `volume`, `gpio list|status|read|set`, `power`, `sleep`, `deepsleep`, `pwm <pin> <freq> <duty>`, `freq <pin> <hz>`, `adc <pin> [samples]`, `i2c scan|peek|poke`, `spi status` |
+| **Hardware** | `brightness`, `rotate`, `battery`, `volume`, `gpio list|status|read|set`, `power`, `sleep`, `deepsleep`, `pwm <pin> <freq> <duty>`, `freq <pin> <hz>`, `adc <pin> [samples]`, `i2c scan|peek|poke`, `spi status`, `rgb <r> <g> <b>` / `#RRGGBB` / `<effect>` / `auto` |
 | **Storage** | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` |
-| **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` |
+| **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` (full `/S /E /I /Y /-Y /D /H /R /K /C /Q /T /F /L /A /M /U /P /W /N /V` switch set) |
 | **Disk / partitions** | `disk list`, `disk detail`, `disk clean`, `disk create partition primary [size=N]`, `disk delete partition N`, `disk format` |
 | **SD Tools** | `sd info`, `sd ls`, `sd stat`, `sd cat` |
 | **Wi-Fi** | `wifi status|scan [/b]|diag|connect|disconnect`, `wifi known|save|forget|clear known|preferred` |
@@ -146,7 +149,7 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | **Bluetooth** | `bluetooth status|scan [limit]|advertise <on [name]|off>`, `bt` (alias) |
 | **USB** | `usb status|ls|keyboard on|off|mouse on|off` |
 | **Batch** | `set`, `set /a`, `set /p`, `path`, `echo on|off`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]`, `alias`, `unalias` |
-| **Text tools** | `find`, `more`, `tree`, `fc`, `sort`, `prompt` |
+| **Text tools** | `find`, `findstr`, `more`, `tree`, `fc`, `comp`, `sort`, `prompt` |
 | **Time / SNTP** | `date` `[MM-DD-YYYY]`, `time` `[HH:MM[:SS]]`, `timezone` `[TZ]`, `sntp`/`ntpsync` `[sync]` |
 | **Redirection** | `>`, `>>`, and `<` to and from SD files |
 | **Pipes** | `cmd1 | cmd2 | cmd3` (up to 4 stages) |

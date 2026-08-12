@@ -303,6 +303,19 @@ bool shell_wait_for_key(uint32_t timeout_ms, char *key_out);
 bool shell_key_input_available(void);
 
 /**
+ * Track whether a batch file is currently executing.
+ *
+ * Owned by the shell module (a plain flag) and maintained by the batch engine
+ * when it pushes or pops a batch frame. Destructive-command confirmation gates
+ * use this to refuse outright from inside a batch file, so an unattended
+ * script can never drive a wipe even when a serial console is attached.
+ */
+void shell_set_batch_active(bool active);
+
+/** Report whether a batch file is currently executing. */
+bool shell_is_batch_active(void);
+
+/**
  * Push a key into the wait queue. Called by the input sources.
  * Ignored when no keypress wait is active.
  *

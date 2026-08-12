@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.20
+# Version: 0.24.27
 # Last updated: 2026-08-11 (Aliases / macros: DOSKEY-style alias and unalias
 #                           commands with RAM-only macro table and persistence
 #                           to an SD profile auto-loaded after CONFIG.SYS)
-config_version: "0.24.20"
+config_version: "0.24.27"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -454,6 +454,86 @@ network_diag:
     description: "Maximum rows printed by netstat per TCP/UDP list"
     range: "8..256"
 
+# ---- RGB Status LED (WS2812 on GPIO26) ----
+# The Guition JC1060P470 board has a WS2812 (NeoPixel) RGB LED on the back
+# panel on GPIO26. components/led owns the driver (espressif/led_strip over
+# RMT), the auto status layer (Wi-Fi state colours), and transient event
+# notifications. The `rgb` shell command and the CONFIG.SYS `RGB=` directive
+# drive it.
+rgb_led:
+  gpio:
+    value: 26
+    type: gpio_num_t
+    description: "WS2812 data GPIO (LED1 on the JC1060P470 back panel)"
+  rmt_resolution_hz:
+    value: 10000000
+    type: uint32_t
+    description: "RMT tick resolution used by the WS2812 driver, in Hz"
+    range: "1000000..80000000"
+  rmt_symbols:
+    value: 64
+    type: size_t
+    description: "RMT symbol blocks allocated for the one-LED strip"
+    range: "48..256"
+  max_brightness_pct:
+    value: 50
+    type: int
+    description: "Maximum colour intensity as a percentage (scales every colour)"
+    range: "1..100"
+  task_stack_bytes:
+    value: 2048
+    type: size_t
+    description: "Stack bytes for the LED animation/notification task"
+    range: "1024..8192"
+  tick_ms:
+    value: 10
+    type: int
+    description: "Animation tick period in ms (frame rate of effects)"
+    range: "5..100"
+  notify_ms:
+    value: 1500
+    type: int
+    description: "Duration in ms of a transient event notification colour"
+    range: "100..10000"
+  boot_flash_ms:
+    value: 600
+    type: int
+    description: "Duration in ms of the boot-OK confirmation flash"
+    range: "100..5000"
+  effect_speed_default:
+    value: 5
+    type: int
+    description: "Default effect speed for rgb <effect> [speed]"
+    range: "1..10"
+  auto_status:
+    value: 1
+    type: bool
+    description: "Start with the auto status layer enabled (Wi-Fi state colours)"
+  color_boot_ok:
+    value: "0x00FF00"
+    type: int
+    description: "Boot confirmation colour as 0xRRGGBB"
+  color_wifi_connecting:
+    value: "0xFF9900"
+    type: int
+    description: "Wi-Fi connecting colour as 0xRRGGBB"
+  color_wifi_connected:
+    value: "0x00FF00"
+    type: int
+    description: "Wi-Fi connected colour as 0xRRGGBB"
+  color_wifi_disconnected:
+    value: "0xFF0000"
+    type: int
+    description: "Wi-Fi disconnected colour as 0xRRGGBB"
+  color_wifi_error:
+    value: "0xFF4040"
+    type: int
+    description: "Wi-Fi error colour as 0xRRGGBB"
+  color_httpd:
+    value: "0x0080FF"
+    type: int
+    description: "HTTP server started colour as 0xRRGGBB"
+
 
 # ---- Bluetooth ----
 bluetooth:
@@ -578,6 +658,10 @@ sd_card:
     value: "YES"
     type: string
     description: "Exact confirmation word required by the destructive format command"
+  destructive_confirm_word:
+    value: "YES"
+    type: string
+    description: "Exact confirmation word required by any destructive operation (format, disk clean/delete, recursive delete, trash empty/purge)"
   format_alloc_unit_bytes:
     value: 0
     type: uint32_t
@@ -607,6 +691,44 @@ sd_card:
     type: uint32_t
     description: "Number of supported storage volumes (SD only today; USB OTG MSC is a future target)"
     range: "1..4"
+
+# ---- Recycle Bin (trash) ----
+# `del`/`erase` move matching files and directories into a hidden .trash
+# folder; `undelete`/`trash restore` bring them back. Limits are enforced on
+# every trash operation (oldest entries purged first).
+recycle_bin:
+  enable:
+    value: 1
+    type: bool
+    description: "Enable the recycle bin; when 0, del/erase delete permanently again"
+  path:
+    value: "sd:/.trash"
+    type: string
+    description: "Trash folder path (hidden from plain dir)"
+  max_bytes:
+    value: 33554432
+    type: uint64_t
+    description: "Maximum total bytes kept in the trash before the oldest entries are purged"
+    range: "0..2147483648"
+  max_age_sec:
+    value: 604800
+    type: uint32_t
+    description: "Maximum age in seconds of a trash entry before it is auto-purged"
+    range: "0..31536000"
+  max_entries:
+    value: 256
+    type: int
+    description: "Maximum number of trash entries before the oldest are purged"
+    range: "8..4096"
+  operation_max:
+    value: 256
+    type: int
+    description: "Maximum file matches collected by one recursive del /s operation"
+    range: "8..4096"
+  confirm_word:
+    value: "YES"
+    type: string
+    description: "Exact confirmation word required by trash empty and trash purge"
 
 # ---- Boot Scripting (CONFIG.SYS / AUTOEXEC.BAT) ----
 boot_scripting:
@@ -740,6 +862,26 @@ batch_env:
     type: uint32_t
     description: "Fallback delay between more pages in milliseconds, used only when no interactive key source is attached"
     range: "100..10000"
+  findstr_pattern_bytes:
+    value: 256
+    type: int
+    description: "Maximum length of a single findstr search string or regex pattern"
+    range: "16..512"
+  findstr_max_strings:
+    value: 8
+    type: int
+    description: "Maximum number of findstr search strings accepted on one command line"
+    range: "1..16"
+  findstr_match_max:
+    value: 256
+    type: int
+    description: "Maximum matches findstr /S prints before it stops and reports truncation"
+    range: "16..1024"
+  comp_mismatch_max:
+    value: 10
+    type: int
+    description: "Mismatches comp reports before ending the comparison (DOS prints the first 10 and stops)"
+    range: "1..64"
   pause_delay_ms:
     value: 2000
     type: uint32_t

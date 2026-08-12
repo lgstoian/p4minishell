@@ -171,8 +171,23 @@
   Never add a second dispatch table.
 - Command implementations live with the module that owns their domain:
   - Filesystem verbs (`cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`,
-    `write`, `append`, `touch`, `attrib`, `label`, `xcopy`, `find`, `more`, `tree`, `fc`,
-    `sort`, `sd`) -> `components/storage/storage_commands.c`
+    `write`, `append`, `touch`, `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`,
+    `fc`, `comp`, `sort`, `sd`, `undelete`, `restore`, `trash`, `recycle`) -> `components/storage/storage_commands.c`
+  - `xcopy` implements the full DOS 6.x switch set (`/S /E /I /Y /-Y /D[:date] /H /R /K /C /Q
+    /T /F /L /A /M /U /P /W /N /V`); its recursive walker keeps each level's state in ONE heap
+    block and must never re-enter the command. `findstr` and `comp` are separate commands
+    (never split `find`); their pure matcher helpers (`shell_fsre_search`,
+    `shell_findstr_match_line`, `shell_comp_first_diff`) are exposed in `storage_commands.h`
+    for the unit tests. All of `find`, `findstr`, `more`, `fc`, `comp`, `sort`, and `xcopy`
+    return an int ERRORLEVEL (0 ok/found, 1 not found/different, 2 usage) that the dispatcher
+    records with `batch_set_errorlevel()`.
+  - `del`/`erase` and `rd /s` move entries into the hidden `.trash` recycle bin
+    (`components/storage/trash.c`) by default; `/p`/`/f` delete permanently. All of
+    `del`, `rd`, `format`, `disk`, `undelete`, `trash` return an int ERRORLEVEL (0/1/2)
+    that the dispatcher records with `batch_set_errorlevel()`. Recursive and
+    volume-destructive operations are gated by `shell_confirm_destructive()`
+    (`P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD`, default `YES`); the gate refuses when
+    `shell_key_input_available()` is false so batch files can never trigger it.
   - `find` is ONE command with two modes: the classic text search (`/I /N /C /V`) and a
     recursive file-discovery mode selected automatically by any discovery switch
     (`/NAME:`, `/SIZE:`, `/NEWER:`, `/OLDER:`, `/DIRS`, `/B`, `/S`). Never split it into
@@ -509,6 +524,7 @@
 - When either file is missing and `P4_CONFIG_BOOT_GENERATE_DEFAULTS` is set, default files are written once.
 - `CONFIG.SYS` directives are parsed line-by-line by `components/boot/boot.c`. Supported: `SET`,
   `PATH=`, `PROMPT=`, `ECHO ON|OFF`, `ROTATE=`, `BRIGHTNESS=`, `DISPLAY_POWER=`, `VOLUME=`,
+  `RGB=` (WS2812 LED: `<r>,<g>,<b>` / `#RRGGBB` / `<effect>[,speed]` / `OFF` / `AUTO,<ON|OFF>`),
   `WIFI_SSID=`, `WIFI_PASSWORD=`, `WIFI_AUTOCONNECT=`, `WIFI=ON|OFF`, `BLUETOOTH=ON|OFF`,
   `BT_ADVERTISE=ON|OFF`, `USB_KEYBOARD=ON|OFF`, `USB_MOUSE=ON|OFF`, `GPIO <n> = OUT [HIGH|LOW]`.
 - Any unrecognized `NAME=VALUE` line is applied as a batch environment variable (same effect as
@@ -574,9 +590,24 @@ When bumping the version, update all three: `p4minishell_config.h` version macro
 `p4minishell_config.yaml` `config_version`, and the `readme.md` version badge
 
 ### Hardware Gaps (Do NOT implement)
-- RGB LED: no authoritative wiring in JC1060 reference
 - Camera: no local camera stack in workspace
-- Both should fail explicitly with honest messages
+- Should fail explicitly with honest messages
+
+### LED Rules (components/led + `rgb`)
+- `components/led/led.c` is the single owner of the WS2812 status LED on GPIO26
+  (`BOARD_CFG_RGB_LED_GPIO`, `BOARD_CFG_RGB_LED_IS_WS2812`). It creates the strip via the
+  `espressif/led_strip` managed component over RMT and drives ALL strip I/O from one small
+  animation task; public API calls only mutate a mutex-protected state snapshot, so the
+  command worker and the Wi-Fi event handler never block on RMT.
+- Consumers push state/events; the module never queries other subsystems, so it is a leaf
+  that `command`, `networking`, and `main` can all depend on (no layering cycle). The `rgb`
+  command body stays in `components/command/command.c` (hardware verbs); `networking` pushes
+  Wi-Fi/HTTP events via `led_notify()`; `main` fires the boot confirmation flash.
+- Auto status follows Wi-Fi state (connecting=amber pulse, connected=green, disconnected=red
+  blink, watchdog timeout=red pulse); HTTP server start flashes blue. In manual mode events
+  are transient (`P4_CONFIG_LED_NOTIFY_MS`). GPIO26 is a reserved critical line in the board
+  pin table, so `pwm`/`freq`/`adc`/`i2c`/`spi` refuse it.
+- All tunables live in `P4_CONFIG_LED_*` (documented in `p4minishell_config.yaml`).
 
 ### Peripheral Toolkit Rules (pwm / freq / adc / i2c / spi)
 - The `pwm`, `freq`, `adc`, `i2c`, and `spi` commands live in `components/command/command.c`

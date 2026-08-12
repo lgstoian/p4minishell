@@ -50,8 +50,16 @@ Implemented today in the checked-in firmware:
 - ✅ Short/long filename display in `dir` (shows `[SFN]` when different from LFN)
 - ✅ Volume management: `chkdsk`/`scandisk` capacity report and read-only integrity walk,
       `format` behind an exact confirmation word
+- ✅ Recycle bin (v0.24.26): `del`/`erase` and `rd /s` move files and whole trees into a
+      hidden `.trash` folder; `undelete`/`restore` and `trash restore` bring entries back to
+      their original location; `trash list|info|purge|empty` manage the bin with byte/age/
+      count limits. `/p`/`/f`/`/permanent` bypass the bin. Recursive deletes, `trash
+      purge`/`empty`, `format`, and `disk clean`/`delete` all require the exact
+      `P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD` typed at the prompt, and `del`/`rd`/`format`/
+      `disk`/`undelete`/`trash` return a real ERRORLEVEL.
 - ✅ Full `dir` option set: `/W` `/P` `/S` `/B` `/L` `/A:attrs` `/O:order` with timestamps,
-      per-directory counts, grand totals, and free-space reporting
+      per-directory counts, grand totals, and free-space reporting; hidden/system entries are
+      suppressed by default (DOS behaviour) and a bare `/A` shows everything
 - ✅ Free-space guardrails on `copy`, `move`, `write`, and `append`, with self-copy detection
       and partial-destination cleanup on failure
 
@@ -94,7 +102,7 @@ Implemented today in the checked-in firmware:
 ### Extended DOS Commands (v0.14.2+)
 - ✅ `attrib` — FATFS file attributes (R/H/S/A) with +R/-R/+H/-H/+S/-S/+A/-A
 - ✅ `label` — FATFS volume label read/set (max 11 chars, FAT 8.3 convention)
-- ✅ `xcopy` — Recursive directory copy with `/S` flag
+- ✅ `xcopy` — Full DOS 6.x / WinXP switch set (`/S /E /I /Y /-Y /D[:date] /H /R /K /C /Q /T /F /L /A /M /U /P /W /N /V`), heap-scratch recursive walker, 0/1/2 ERRORLEVEL (v0.24.27)
 - ✅ `shell_wildcard_match()` — DOS-style `*` and `?` pattern matching
 - ✅ Wildcard integration in `dir`, `del`, `copy` commands
 
@@ -114,10 +122,13 @@ Implemented today in the checked-in firmware:
 
 ### File Utility Commands (v0.18.0) — COMPLETE
 - ✅ `find` — Search text in files with `/I` (case-insensitive), `/N` (line numbers), `/C` (count only), `/V` (invert); reads a `<` or pipe source when no file is given
+- ✅ `findstr` — Classic DOS text search, case-sensitive by default, literal or regex-lite (`/R /C /I /N /V /X /E /B /L /S /M /F /G`); 0 found / 1 none / 2 usage ERRORLEVEL (v0.24.27)
 - ✅ `more` — Paginated file viewing (20 lines/page) that waits for Enter/Space, or `Q` to quit; bounded fallback delay when headless
 - ✅ `tree` — Fully recursive with DOS box-drawing connectors, `/F` (include files) and `/A` (ASCII connectors), depth- and entry-bounded
 - ✅ `fc` — File comparison with DOS-style differing-line reporting and trailing length differences
+- ✅ `comp` — Byte-for-byte comparison with `/D /A /L /N /C`; 0 identical / 1 different / 2 usage ERRORLEVEL (v0.24.27)
 - ✅ `sort` — qsort-based with `/R` (reverse), `/I` (case-insensitive), `/U` (unique); 1024-line capacity and a single leak-free release path
+- ✅ `xcopy` — Full DOS 6.x / WinXP switch set with a heap-scratch recursive walker and 0/1/2 ERRORLEVEL (v0.24.27)
 
 ### Pipe Support
 - ✅ `|` pipe operator — Multi-stage `cmd1 | cmd2 | cmd3` (up to 4 stages) with quote-aware splitting, per-stage spool files, and guaranteed cleanup
@@ -164,8 +175,13 @@ Implemented today in the checked-in firmware:
 - ✅ Clean build: 0 errors, 0 warnings for firmware and tests on ESP-IDF v5.5.5 / esp32p4
 
 ### Hardware Gaps (intentionally blocked)
-- ❌ RGB LED: no authoritative wiring in JC1060 reference
 - ❌ Camera: no local camera stack in workspace
+
+### RGB LED (resolved)
+- ✅ RGB LED: WS2812 on GPIO26 (JC1060P470 back panel), driven by
+  `components/led` (espressif/led_strip over RMT) with the `rgb` command, an
+  auto status layer tied to Wi-Fi/HTTP events, a boot confirmation flash, and
+  a CONFIG.SYS `RGB=` directive (see changelog v0.24.25).
 
 ---
 
@@ -731,6 +747,8 @@ To support third-party apps written in C, the project needs a minimal stable run
    `components/command/command.c` commands, but `shell_execute_rgb_command()` and
    `shell_execute_camera_command()` only print error messages. Fixed in v0.24.1:
    removed from the hardware table and clarified the "Unsupported Commands" table.
+   `rgb` was later implemented in full (v0.24.25): WS2812 status LED with auto
+   status, effects, and a CONFIG.SYS `RGB=` directive.
 
 4. ✅ **`p4minishell_config.yaml` may not reflect all v0.23.0 changes**
    The v0.23.0 changelog mentions pinning `CONFIG_SPIRAM_XIP_FROM_PSRAM=n`,

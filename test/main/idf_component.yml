@@ -18,3 +18,4 @@ dependencies:
   espressif/usb: "*"
   espressif/usb_host_msc: "*"
   espressif/usb_host_hid: "*"
+  espressif/led_strip: "^3.0.0"

@@ -107,6 +107,16 @@ dependencies:
       path: D:\p4minishell\managed_components\espressif__esp_wifi_remote
       type: local
     version: 1.4.1
+  espressif/led_strip:
+    component_hash: 28621486f77229aaf81c71f5e15d6fbf36c2949cf11094e07090593e659e7639
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 3.0.3
   espressif/usb:
     component_hash: 6c2cff118141dbbca181d0d27d71801fdddfc78f7ac03ae43f6e5a8cbd89cb99
     dependencies:
@@ -171,12 +181,13 @@ direct_dependencies:
 - espressif/esp_lcd_touch_gt911
 - espressif/esp_lvgl_port
 - espressif/esp_wifi_remote
+- espressif/led_strip
 - espressif/usb
 - espressif/usb_host_hid
 - espressif/usb_host_msc
 - espressif/wifi_remote_over_eppp
 - idf
 - lvgl/lvgl
-manifest_hash: ff62cd8a400b9b37e7b3270bd391225b34f79242c10864ef584e02abb2f58c44
+manifest_hash: 312c208fd245fce5c68cf0848b1706d346000e7e163e4dd641e0ec6b833278ae
 target: esp32p4
 version: 2.0.0

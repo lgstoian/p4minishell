@@ -44,6 +44,7 @@
 #include "header.h"
 #include "keyboard.h"
 #include "networking.h"
+#include "led.h"
 #include "ansi_palette.h"
 #include "shell.h"
 #include "boot.h"
@@ -513,6 +514,10 @@ void app_main(void)
     c6ota_init();
     c6ota_register_progress_callback(shell_c6ota_progress_callback);
 
+    /* RGB status LED (WS2812 on GPIO26). Initialised before boot scripting so
+     * a CONFIG.SYS `RGB=` directive can drive it during startup. */
+    led_init();
+
     networking_init(&(networking_host_ops_t){
         .transcript_append_text = shell_transcript_append_text,
         .schedule_transcript_append_text = shell_networking_schedule_text,
@@ -536,6 +541,9 @@ void app_main(void)
      * (generating defaults once), apply CONFIG.SYS directives, then run
      * AUTOEXEC.BAT through the batch pipeline. Safe with no SD card. */
     boot_run_startup();
+
+    /* Boot confirmation light: a short green flash once the shell is ready. */
+    led_notify(LED_EVENT_BOOT_OK);
 
     /* Start the periodic header status refresh. main only feeds passive
      * header updates; the header module owns all rendering. */

@@ -55,7 +55,8 @@
     ";   ROTATE=0|90|180|270       Set display rotation\n" \
     ";   BRIGHTNESS=0-100          Set backlight brightness\n" \
     ";   DISPLAY_POWER=ON|OFF|SLEEP  Set display power state\n" \
-    ";   VOLUME=0-100              Set speaker volume\n"
+    ";   VOLUME=0-100              Set speaker volume\n" \
+    ";   RGB=<r>,<g>,<b>|#RRGGBB|<effect>[,speed]|OFF|AUTO,<ON|OFF>  Set the WS2812 status LED\n"
 
 #define BOOT_CFG_NETWORK \
     "\n; Wi-Fi (station only):\n" \
@@ -284,6 +285,37 @@ static bool boot_handle_rotate(const char *value)
         return false;
     }
     snprintf(cmd, sizeof(cmd), "rotate %s", value);
+    boot_exec(cmd);
+    return true;
+}
+
+/**
+ * Apply the `RGB=` directive: set the WS2812 status LED at boot.
+ *
+ * The value is passed through to the `rgb` command with commas mapped to
+ * argument separators, so all of these work:
+ *   RGB=OFF
+ *   RGB=255,0,0          (r,g,b)
+ *   RGB=#00FF00
+ *   RGB=rainbow,5        (effect[,speed])
+ *   RGB=AUTO,ON|OFF
+ */
+static bool boot_handle_rgb(const char *value)
+{
+    char cmd[BOOT_CMD_LEN];
+    char normalized[BOOT_CMD_LEN - 4];
+    size_t i;
+
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("RGB");
+        return false;
+    }
+    for (i = 0; value[i] != '\0' && i < sizeof(normalized) - 1; i++) {
+        normalized[i] = (value[i] == ',') ? ' ' : value[i];
+    }
+    normalized[i] = '\0';
+
+    snprintf(cmd, sizeof(cmd), "rgb %s", normalized);
     boot_exec(cmd);
     return true;
 }
@@ -609,6 +641,8 @@ void boot_run_startup(void)
                     (void)boot_handle_display_power(value);
                 } else if (boot_starts_with_ci(keyword, "VOLUME")) {
                     (void)boot_handle_volume(value);
+                } else if (boot_starts_with_ci(keyword, "RGB")) {
+                    (void)boot_handle_rgb(value);
                 } else if (boot_starts_with_ci(keyword, "WIFI_SSID")) {
                     networking_wifi_set_boot_credentials(value != NULL ? value : "", "");
                 } else if (boot_starts_with_ci(keyword, "WIFI_PASSWORD")) {

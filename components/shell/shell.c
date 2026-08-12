@@ -109,7 +109,8 @@ static SemaphoreHandle_t s_shell_command_lock;
 /* Interactive keypress wait: queue fed by every input source */
 static QueueHandle_t s_key_queue;
 static volatile bool s_key_wait_active;
-
+/* Batch-file execution flag, maintained by the batch engine (see shell.h). */
+static bool s_batch_active;
 /* Runtime prompt template set by the `prompt` command */
 static char s_prompt_template[SHELL_PROMPT_TEMPLATE_BYTES] = P4_CONFIG_PROMPT_DEFAULT_TEMPLATE;
 
@@ -1278,6 +1279,16 @@ bool shell_key_input_available(void)
      * on-screen-only session still falls back to the timed path. */
     return s_uart_console_running ||
            (s_command_ops.usb_is_keyboard_attached != NULL && s_command_ops.usb_is_keyboard_attached());
+}
+
+void shell_set_batch_active(bool active)
+{
+    s_batch_active = active;
+}
+
+bool shell_is_batch_active(void)
+{
+    return s_batch_active;
 }
 
 /* ========================================================================

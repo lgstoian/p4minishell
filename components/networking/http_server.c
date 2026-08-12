@@ -37,6 +37,7 @@
 #include "ansi_palette.h"
 #include "bsp/esp-bsp.h"
 #include "http_server.h"
+#include "led.h"
 #include "networking.h"
 #include "p4minishell_config.h"
 #include "storage.h"
@@ -615,6 +616,7 @@ esp_err_t networking_httpd_start(void)
 
     s_state = NETWORKING_HTTPD_STATE_RUNNING;
     s_last_error = ESP_OK;
+    led_notify(LED_EVENT_HTTPD_STARTED);
     httpd_appendf(SH_LBL "httpd:" SH_RST " listening on port " SH_NUM "%u" SH_RST
                   " (auth %s, docroot " SH_PATH "%s" SH_RST ")\n",
                   (unsigned int)HTTPD_PORT,
@@ -633,6 +635,7 @@ esp_err_t networking_httpd_stop(void)
     s_server = NULL;
     s_state = NETWORKING_HTTPD_STATE_STOPPED;
     s_last_error = ESP_OK;
+    led_notify(LED_EVENT_HTTPD_STOPPED);
     httpd_appendf(SH_LBL "httpd:" SH_RST " server stopped\n");
     return ESP_OK;
 }

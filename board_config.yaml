@@ -116,11 +116,16 @@ board:
     empty_mv: 3300
     full_mv: 4200
 
-  # ---- RGB LED (NOT AVAILABLE on current baseline) ----
+  # ---- RGB LED (WS2812 on GPIO26, back panel) ----
+  # LED1 on the JC1060P470 back panel is a WS2812 (NeoPixel) addressable RGB
+  # LED on GPIO26. Driven by components/led via the espressif/led_strip
+  # component over RMT. The `rgb` shell command and the CONFIG.SYS `RGB=`
+  # directive control it, and it doubles as a status LED (Wi-Fi state + boot
+  # confirmation + event notifications).
   rgb_led:
-    gpio: NC
-    is_ws2812: false
-    status: unsupported
+    gpio: 26
+    is_ws2812: true
+    status: "ws2812 on GPIO26"
 
   # ---- Camera (NOT AVAILABLE on current baseline) ----
   camera:

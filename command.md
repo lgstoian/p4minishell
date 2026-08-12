@@ -108,13 +108,13 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 |---------------|----------------|
 | `help`, `sysinfo`, `version`/`ver`, `about`, `mem`, `debug` | `components/shell/shell.c` |
 | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` | `components/storage/storage_commands.c` |
-| `attrib`, `label`, `xcopy`, `find`, `more`, `tree`, `fc`, `sort` | `components/storage/storage_commands.c` |
+| `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`, `fc`, `comp`, `sort` | `components/storage/storage_commands.c` |
 | `chkdsk`/`scandisk`, `format` | `components/storage/storage_commands.c` |
 | `sd info|ls|stat|cat|eject`, `sdeject` | `components/storage/storage_commands.c` + `storage.c` |
 | `set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit` | `components/batch/batch.c` |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
-| `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
+| `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
 | `reboot`, `clear`/`cls`, `prompt` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota`, `httpd`, `netstat`, `ipconfig` (family routing) | `components/command/command.c` → owning module |
@@ -270,7 +270,33 @@ Reports the toolkit's SPI configuration (host, mode, clock, timeout). The
 "unavailable on this board" error: initializing the SPI host on this P4 with
 the ESP-Hosted SDIO link active stalls the chip and drops USB-Serial-JTAG off
 the bus, so SPI transactions are deliberately not wired to the SPI master
-driver. This follows the same explicit-failure policy as `rgb` and `camera`.
+driver. This follows the same explicit-failure policy as `camera`.
+
+### rgb status | rgb off | rgb <r> <g> <b> | rgb #RRGGBB | rgb <effect> [speed] | rgb auto <on|off>
+Controls the WS2812 (NeoPixel) RGB status LED on the JC1060P470 back panel,
+wired to GPIO26. `components/led` owns the driver (espressif/led_strip over
+RMT), a small animation task, and the auto status layer.
+
+- `rgb status` — report driver pin, mode (auto/manual), effect, colour, speed,
+  and brightness.
+- `rgb off` — turn the LED off.
+- `rgb <r> <g> <b>` — solid colour, each channel 0-255 (switches to manual).
+- `rgb #RRGGBB` — solid colour from a hex value.
+- `rgb <effect> [speed]` — `rainbow`, `breath`, `pulse`, `blink`, or `solid`;
+  speed 1 (slow) .. 10 (fast).
+- `rgb auto <on|off>` — enable/disable the status-driven colour layer. In auto
+  mode the LED follows Wi-Fi state (amber while connecting, green when
+  connected, red blink when disconnected, red pulse on watchdog timeout) and
+  flashes blue when the HTTP server starts. A green flash confirms boot.
+
+**ERRORLEVEL:** 0 success, 1 failure (LED driver unavailable), 2 usage.
+Works in batch files (`rgb 255 0 0 && echo led-red`, `if errorlevel 1 ...`) and
+is redirectable/pipable. GPIO26 is reserved, so `pwm`/`freq`/`adc`/`i2c`/`spi`
+refuse it.
+
+CONFIG.SYS supports an `RGB=` directive: `RGB=<r>,<g>,<b> | #RRGGBB |
+<effect>[,speed] | OFF | AUTO,<ON|OFF>` (commas separate arguments), applied at
+boot through the `rgb` command.
 
 ### date [MM-DD-YYYY]
 Show the full clock panel or set the system date. With no argument, prints the
@@ -356,14 +382,42 @@ All file commands operate on SD card through guarded mount/unmount. Working dire
 | dir [path] [options] | List directory entries (see the option table below) |
 | copy <src> <dst> | Copy file on SD, with free-space and self-copy guards |
 | move <src> <dst> | Move or rename file/directory |
-| del / erase <path> | Delete file from SD |
+| del / erase [opts] <path> | Delete or move to the recycle bin (see below) |
 | ren / rename <src> <dst> | Rename file or directory |
 | md / mkdir <path> | Create directory |
-| rd / rmdir <path> | Remove empty directory |
+| rd / rmdir [opts] <path> | Remove directory; `/s` moves to the recycle bin |
+| undelete <name\|index> | Restore a recycle-bin entry (alias: `restore`) |
+| trash [subcommand] | Manage the recycle bin (alias: `recycle`) |
 | type <path> | Print text-safe file preview (no raw binary) |
 | write <path> <text> | Create or overwrite text file |
 | append <path> <text> | Append text to file |
 | touch <path> | Create empty file or refresh timestamp |
+
+### Recycle bin (`del`, `rd`, `undelete`, `trash`)
+
+`del`/`erase` and `rd /s` no longer delete outright. They move files and whole
+directory trees into a hidden `.trash` folder (created with the hidden FAT
+attribute and suppressed by default in `dir`, like DOS does), and record the
+original path in a `.meta` side-car so entries can be restored exactly where
+they came from.
+
+- `del <path>` — move the file to the recycle bin.
+- `del <pattern> [/s]` — move every matching file, optionally recursing.
+- `rd /s <path>` — move the whole directory tree to the recycle bin.
+- `/p` / `/f` / `/permanent` — bypass the bin and delete permanently.
+- `undelete <name|index>` (or `restore`) — restore one entry to its original
+  location; missing parent directories are recreated and an occupied
+  destination is refused rather than overwritten.
+- `trash list` / `trash info` — list entries or report count/size/oldest age.
+- `trash restore <name|index>` — same as `undelete`.
+- `trash purge <name|index>` — permanently delete one entry (requires `YES`).
+- `trash empty` — permanently delete every entry (requires `YES`).
+
+`del /s` and `rd /s` require the exact confirmation word typed at the prompt
+before anything happens, and `del *.* /s` never recurses into `.trash` itself.
+Limits (bytes / age / entry count) are enforced on every operation, purging
+the oldest entries first. All of `del`, `rd`, `format`, `disk`, `undelete`,
+and `trash` set an ERRORLEVEL: 0 success, 1 failure/cancelled, 2 usage.
 
 ### dir options
 
@@ -376,11 +430,13 @@ Options may appear before or after the path, and the `:` separator is optional.
 | /S | Recurse into subdirectories, with a grand total at the end |
 | /B | Bare listing, names only. Under `/S` prints full paths so it can be piped |
 | /L | Lowercase names |
-| /A:attrs | Filter by attribute (see below) |
+| /A:attrs | Filter by attribute (see below); bare `/A` shows everything |
 | /O:order | Sort order (see below) |
 
 **Attribute filters** for `/A`. Combine letters freely; prefix any letter with `-`
-to exclude instead of require.
+to exclude instead of require. With no `/A` at all, hidden and system entries
+are suppressed (DOS behaviour) — this keeps the `.trash` recycle bin out of
+ordinary listings; a bare `/A` shows every entry including hidden ones.
 
 | Letter | Matches |
 |--------|---------|
@@ -737,7 +793,7 @@ whenever no filename argument is supplied.
 | attrib +A\|-A <file> | Set or clear archive attribute |
 | label | Show current FAT volume label |
 | label <name> | Set volume label (max 11 chars) |
-| xcopy <src> <dst> [/S] | Copy files and directories recursively |
+| xcopy <src> <dst> [/S] [/E] [/I] [/Y\|/-Y] [/D[:date]] [/H] [/R] [/K] [/C] [/Q] [/T] [/F] [/L] [/A] [/M] [/U] [/P] [/W] [/N] [/V] | Copy files and directory trees with the full DOS 6.x switch set |
 
 ### Wildcard Support
 - `*` matches any sequence of characters
@@ -792,15 +848,18 @@ Reformats the SD card. **All data is destroyed.**
 | /V:label | Volume label to apply afterwards, 11 characters or fewer |
 | /Q | Accepted for DOS familiarity; the underlying operation is always quick |
 
-The command prints a warning and requires the exact word `YES` typed at the
-prompt before anything is written. The confirmation is read one key at a time
+The command prints a warning and requires the exact confirmation word
+(`P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD`, default `YES`) typed at the prompt
+before anything is written. The confirmation is read one key at a time
 through the shell's key queue, so the reply never reaches the command
 dispatcher. (Over serial each key must be sent on its own line; the on-screen
 keyboard types it naturally.)
 
 If no interactive input source is attached (no UART console and no USB
 keyboard) the command **refuses outright** rather than proceeding, so a batch
-file can never silently wipe a card.
+file can never silently wipe a card. The same exact-word gate protects `disk
+clean`, `disk delete partition`, recursive `del /s`, recursive `rd /s`,
+`trash empty`, and `trash purge`.
 
 After formatting, the FAT type, label, capacity and allocation unit size are
 reported. The card must be initialized (mounted, or left initialized by a prior
@@ -860,6 +919,7 @@ skipped; keywords are case-insensitive. Directives:
 | BRIGHTNESS=0-100 | Set backlight brightness |
 | DISPLAY_POWER=ON\|OFF\|SLEEP | Set display power state |
 | VOLUME=0-100 | Set speaker volume |
+| RGB=r,g,b \| #RRGGBB \| <effect>[,speed] \| OFF \| AUTO,<ON\|OFF> | Set the WS2812 status LED (commas separate arguments) |
 | WIFI_SSID=... WIFI_PASSWORD=... | Store auto-connect target (password never echoed) |
 | WIFI=ON\|OFF WIFI_AUTOCONNECT=ON\|OFF | Wi-Fi runtime policy |
 | BLUETOOTH=ON\|OFF BT_ADVERTISE=ON\|OFF | Hosted BLE policy |
@@ -911,10 +971,18 @@ guarded SD session.
 |---------|-------------|
 | find <text> [file] [/I] [/N] [/C] [/V] | Search a file for a literal substring |
 | find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B] | Recursively list files by name / size / date |
+| findstr [switches] <search> [file...] | Classic DOS text search, literal or regex-lite |
 | more [file] | Page a text file, waiting for a key between pages |
 | tree [path] [/F] [/A] | Draw a recursive directory outline |
 | fc <file1> <file2> | Compare two text files line by line |
+| comp <file1> <file2> [/D] [/A] [/L] [/N=n] [/C] | Classic DOS byte-for-byte comparison |
 | sort [file] [/R] [/I] [/U] | Print a file with its lines sorted |
+
+All text tools set a DOS ERRORLEVEL: `find`, `findstr`, and `comp` return 0
+when something is found / identical, 1 when not found / different, and 2 on
+usage or an error; `more`, `fc`, and `sort` return 0 on success, 1 on
+differences / failure, and 2 on usage. This makes `if errorlevel`, `&&`, and
+`||` work with every text command.
 
 ### find
 
@@ -1008,6 +1076,74 @@ Holds up to 1024 lines (`P4_CONFIG_SORT_LINE_MAX`) and reports when the input is
 truncated. With no file argument it reads the pending `<` or pipe input source.
 
 Example: `sort names.txt /I /U > unique.txt`
+
+### findstr
+
+Classic DOS text search. Case-sensitive by default (the opposite of `find`),
+with optional limited regular expressions. Reads the pending `<` or pipe input
+source when no file is given.
+
+Usage: `findstr [switches] <search> [file...]`
+
+| Switch | Meaning |
+|--------|---------|
+| /R | Treat the search as a regular expression |
+| /C:"string" | A literal search string (space-safe; always literal even with /R) |
+| /I | Case-insensitive match |
+| /N | Prefix each match with its line number |
+| /V | Print the lines that do NOT match |
+| /X | Match only whole lines |
+| /E | Match only lines that end with the string |
+| /B | Match only lines that begin with the string |
+| /L | Treat the search literally (default) |
+| /S | Recurse into subdirectories |
+| /M | Print only the names of files that contain a match |
+| /F:file | Read the file list to search from `file` (one path per line) |
+| /G:file | Read additional search strings from `file` (one per line) |
+
+Multiple search strings (from `/C:`, `/G:file`, and one bare string) OR
+together. The first bare argument is the single search string; any further
+bare arguments are files, matching DOS findstr.
+
+**Regex subset** (the engine implements only what DOS findstr supports):
+`.` matches any character, `*` matches zero or more of the preceding atom,
+`^` / `$` anchor the start / end of the line, `[class]` / `[^class]` /
+`[a-z]` are character classes, `\<` / `\>` match word boundaries, and `\c`
+escapes a metacharacter as a literal.
+
+When more than one file is searched, each matching line is prefixed with the
+filename (plus its line number under `/N`).
+
+Examples:
+```
+findstr timeout boot.log /I /N
+findstr /R "b[0-9]+" config.txt      (the engine's subset has no +; use b[0-9][0-9])
+findstr /C:"timeout exceeded" *.log
+findstr /S /M error src
+findstr /G:patterns.txt file.txt
+```
+
+ERRORLEVEL: 0 = at least one match, 1 = no match, 2 = usage / error.
+
+### comp
+
+Classic DOS byte-for-byte file comparison.
+
+Usage: `comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]`
+
+| Switch | Meaning |
+|--------|---------|
+| /D | Show byte offsets in decimal |
+| /A | Show the differing bytes as ASCII characters |
+| /L | Show line numbers instead of byte offsets |
+| /N=number | Compare only the first `number` lines |
+| /C | Ignore case when comparing |
+
+Reports each mismatch with its offset and both byte values, stopping after
+`P4_CONFIG_COMP_MISMATCH_MAX` (10) mismatches with `N mismatches - ending
+compare`. Identical files print `Files compare OK`.
+
+ERRORLEVEL: 0 = identical, 1 = different, 2 = usage / error.
 
 ## Wi-Fi Commands
 

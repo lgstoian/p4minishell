@@ -63,6 +63,8 @@ static void shell_command_sd_info(void);
 static void shell_command_sd_ls(char *command);
 static void shell_command_sd_stat(char *command);
 static void shell_command_sd_cat(char *command);
+static bool shell_confirm_destructive(const char *operation, const char *warning, const char *detail);
+static bool shell_find_parse_date(const char *text, uint16_t *fdate_out);
 
 /* ========================================================================
  * NAVIGATION AND LISTING
@@ -155,6 +157,9 @@ typedef struct {
     uint8_t require_mask;
     uint8_t exclude_mask;
     bool have_attr_filter;
+    /* Bare `/A` (show everything, including hidden and system). Without any
+     * `/A`, hidden and system entries are suppressed like DOS does. */
+    bool show_all;
     dir_sort_key_t sort_key;
     bool sort_reverse;
     bool group_dirs_first;
@@ -313,7 +318,13 @@ static int shell_dir_compare(const void *left, const void *right)
 static bool shell_dir_attr_matches(const dir_ctx_t *ctx, uint8_t attrib)
 {
     if (!ctx->have_attr_filter) {
-        return true;
+        /* DOS default: hidden and system entries are suppressed unless a bare
+         * `/A` was given, which shows everything. This keeps the hidden
+         * `.trash` recycle bin out of ordinary listings. */
+        if (ctx->show_all) {
+            return true;
+        }
+        return (attrib & (AM_HID | AM_SYS)) == 0;
     }
 
     if ((ctx->require_mask != 0) && ((attrib & ctx->require_mask) != ctx->require_mask)) {
@@ -736,6 +747,7 @@ void shell_command_dir(int argc, char **argv)
             /* /A with no value means "show everything including hidden". */
             if (*value == '\0') {
                 ctx.have_attr_filter = false;
+                ctx.show_all = true;
                 continue;
             }
 
@@ -1249,92 +1261,183 @@ void shell_command_copy(int argc, char **argv)
     shell_print_ok("1 file(s) copied to %s", dest_path);
 }
 
-void shell_command_del(int argc, char **argv)
+int shell_command_del(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     char dir_part[SHELL_SD_PATH_BYTES];
+    char pattern_buf[P4_CONFIG_LFN_BYTES];
     const char *pattern = NULL;
+    bool recursive = false;
+    bool permanent = false;
+    int path_index = -1;
+    int index;
     shell_sd_session_t session;
     esp_err_t error;
+    int deleted = 0;
 
-    if (argc != 2) {
-        shell_print_usage("Usage: del <path|pattern>");
-        return;
+    /* Parse switches and the path argument. */
+    for (index = 1; index < argc; index++) {
+        if (argv[index][0] == '/') {
+            switch (toupper((unsigned char)argv[index][1])) {
+            case 'S': recursive = true; break;
+            case 'P':
+            case 'F': permanent = true; break;
+            default:
+                shell_print_usage("Usage: del [/s] [/p|/f|/permanent] <path|pattern>");
+                return 2;
+            }
+        } else if (path_index < 0) {
+            path_index = index;
+        } else {
+            shell_print_usage("Usage: del [/s] [/p|/f|/permanent] <path|pattern>");
+            return 2;
+        }
+    }
+    if (path_index < 0) {
+        shell_print_usage("Usage: del [/s] [/p|/f|/permanent] <path|pattern>");
+        return 2;
     }
 
-    /* Check for wildcard pattern */
-    if (strchr(argv[1], '*') != NULL || strchr(argv[1], '?') != NULL) {
-        const char *last_sep = strrchr(argv[1], '/');
-        if (last_sep == NULL) last_sep = strrchr(argv[1], '\\');
+    /* Recursive delete destroys data across a tree: require confirmation. */
+    if (recursive) {
+        char warning[392];
+        snprintf(warning, sizeof(warning),
+                 "WARNING: Recursive delete of \"%s\"%s.",
+                 argv[path_index],
+                 permanent ? " (permanent, bypasses .trash)" : " (moves matches to .trash)");
+        if (!shell_confirm_destructive("del", warning, "")) {
+            shell_print_warning("del: cancelled, nothing was deleted");
+            return 1;
+        }
+    }
+
+    if (!storage_trash_enabled() && !permanent) {
+        shell_print_warning("del: recycle bin is disabled; use /p or /permanent to delete");
+        return 1;
+    }
+
+    /* Resolve a wildcard argument into its directory and filename pattern. */
+    if (strchr(argv[path_index], '*') != NULL || strchr(argv[path_index], '?') != NULL) {
+        const char *last_sep = strrchr(argv[path_index], '/');
+
+        if (last_sep == NULL) {
+            last_sep = strrchr(argv[path_index], '\\');
+        }
         if (last_sep != NULL) {
-            size_t dir_len = (size_t)(last_sep - argv[1]);
-            if (dir_len >= sizeof(dir_part)) dir_len = sizeof(dir_part) - 1;
-            memcpy(dir_part, argv[1], dir_len);
+            size_t dir_len = (size_t)(last_sep - argv[path_index]);
+
+            if (dir_len >= sizeof(dir_part)) {
+                dir_len = sizeof(dir_part) - 1;
+            }
+            memcpy(dir_part, argv[path_index], dir_len);
             dir_part[dir_len] = '\0';
             pattern = last_sep + 1;
         } else {
             snprintf(dir_part, sizeof(dir_part), ".");
-            pattern = argv[1];
+            pattern = argv[path_index];
         }
         error = shell_fs_resolve_path(dir_part, resolved_path, sizeof(resolved_path));
         if (error != ESP_OK) {
             shell_print_error("del: invalid path");
-            return;
+            return 1;
         }
+        snprintf(pattern_buf, sizeof(pattern_buf), "%s", pattern);
 
-        error = shell_sd_begin(&session);
-        if (error != ESP_OK) {
-            shell_print_error("del: SD card not present");
-            return;
+        error = storage_trash_delete_pattern(resolved_path, pattern_buf,
+                                             recursive, permanent, &deleted);
+        if (error != ESP_OK && error != ESP_ERR_NOT_SUPPORTED) {
+            shell_print_error("del: failed (%s)", esp_err_to_name(error));
+            shell_record_errorf("del", error, "del pattern failed");
+            return 1;
         }
-
-        DIR *d = opendir(resolved_path);
-        if (d == NULL) {
-            shell_print_error("del: cannot open %s", resolved_path);
-            shell_sd_end(&session, "del");
-            return;
+        if (storage_trash_enabled()) {
+            storage_trash_enforce_limits();
         }
-        struct dirent *entry;
-        int deleted = 0;
-        while ((entry = readdir(d)) != NULL) {
-            if (!shell_wildcard_match(pattern, entry->d_name))
-                continue;
-            char fp[SHELL_SD_PATH_BYTES + 256];
-            snprintf(fp, sizeof(fp), "%s/%s", resolved_path, entry->d_name);
-            if (unlink(fp) == 0) {
-                shell_transcript_appendf("  Deleted %s\n", entry->d_name);
-                deleted++;
-            } else {
-                shell_transcript_appendf("  Failed: %s (%s)\n", entry->d_name, strerror(errno));
-            }
+        if (permanent) {
+            shell_print_ok("del: %d file(s) deleted permanently", deleted);
+        } else {
+            shell_print_ok("del: %d file(s) moved to %s", deleted, storage_trash_path());
         }
-        closedir(d);
-        shell_transcript_appendf("del: %d file(s) deleted\n", deleted);
-        shell_sd_end(&session, "del");
-        return;
+        return 0;
     }
 
-    /* Single file deletion (original behavior) */
-    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    /* Single path. */
+    error = shell_fs_resolve_path(argv[path_index], resolved_path, sizeof(resolved_path));
     if (error != ESP_OK) {
         shell_print_error("del: invalid path");
-        return;
+        return 1;
     }
-
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
         shell_print_error("del: SD card not present - insert and retry");
-        return;
+        return 1;
     }
+    {
+        struct stat st;
 
-    if (unlink(resolved_path) != 0) {
-        shell_print_error("del: failed to delete %s (%s)", resolved_path, strerror(errno));
-        shell_sd_end(&session, "del");
-        return;
+        if (stat(resolved_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            shell_sd_end(&session, "del");
+            shell_print_error("del: %s is a directory (use rd)", resolved_path);
+            return 1;
+        }
     }
-
     shell_sd_end(&session, "del");
-    shell_print_ok("Deleted %s", resolved_path);
+
+    if (recursive && !permanent) {
+        /* A plain file with /s deletes same-named files in subdirectories. */
+        const char *base = strrchr(resolved_path, '/');
+        char parent[SHELL_SD_PATH_BYTES];
+
+        base = (base != NULL) ? base + 1 : resolved_path;
+        if (base == resolved_path) {
+            snprintf(parent, sizeof(parent), ".");
+        } else {
+            size_t len = (size_t)((strrchr(resolved_path, '/')) - resolved_path);
+            memcpy(parent, resolved_path, len);
+            parent[len] = '\0';
+        }
+        error = storage_trash_delete_pattern(parent, base, true, permanent, &deleted);
+        if (storage_trash_enabled()) {
+            storage_trash_enforce_limits();
+        }
+        if (error != ESP_OK) {
+            shell_print_error("del: failed (%s)", esp_err_to_name(error));
+            return 1;
+        }
+        shell_print_ok("del: %d file(s) %s", deleted, permanent ? "deleted permanently" : "moved to .trash");
+        return 0;
+    }
+
+    error = storage_trash_delete_file(resolved_path, permanent);
+    if (error == ESP_ERR_NOT_SUPPORTED) {
+        /* Trash disabled: fall back to a plain unlink. */
+        error = shell_sd_begin(&session);
+        if (error != ESP_OK) {
+            return 1;
+        }
+        if (unlink(resolved_path) != 0) {
+            shell_print_error("del: failed to delete %s (%s)", resolved_path, strerror(errno));
+            shell_sd_end(&session, "del");
+            return 1;
+        }
+        shell_sd_end(&session, "del");
+        shell_print_ok("Deleted %s", resolved_path);
+        return 0;
+    }
+    if (error != ESP_OK) {
+        shell_print_error("del: failed to delete %s (%s)", resolved_path, esp_err_to_name(error));
+        shell_record_errorf("del", error, "del failed for %s", resolved_path);
+        return 1;
+    }
+    if (storage_trash_enabled()) {
+        storage_trash_enforce_limits();
+    }
+    if (permanent) {
+        shell_print_ok("del: deleted %s permanently", resolved_path);
+    } else {
+        shell_print_ok("del: %s moved to %s", resolved_path, storage_trash_path());
+    }
+    return 0;
 }
 
 void shell_command_rename(int argc, char **argv, const char *verb)
@@ -1410,37 +1513,207 @@ void shell_command_mkdir(int argc, char **argv)
     shell_print_ok("Created directory %s", resolved_path);
 }
 
-void shell_command_rmdir(int argc, char **argv)
+int shell_command_rmdir(int argc, char **argv)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
     shell_sd_session_t session;
     esp_err_t error;
+    bool recursive = false;
+    bool permanent = false;
+    int path_index = -1;
+    int index;
 
-    if (argc != 2) {
-        shell_print_usage("Usage: rmdir <path>");
-        return;
+    for (index = 1; index < argc; index++) {
+        if (argv[index][0] == '/') {
+            switch (toupper((unsigned char)argv[index][1])) {
+            case 'S': recursive = true; break;
+            case 'P':
+            case 'F': permanent = true; break;
+            default:
+                shell_print_usage("Usage: rd [/s] [/p|/f|/permanent] <path>");
+                return 2;
+            }
+        } else if (path_index < 0) {
+            path_index = index;
+        } else {
+            shell_print_usage("Usage: rd [/s] [/p|/f|/permanent] <path>");
+            return 2;
+        }
+    }
+    if (path_index < 0) {
+        shell_print_usage("Usage: rd [/s] [/p|/f|/permanent] <path>");
+        return 2;
     }
 
-    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+    error = shell_fs_resolve_path(argv[path_index], resolved_path, sizeof(resolved_path));
     if (error != ESP_OK) {
-        shell_print_error("rmdir: invalid path");
-        return;
+        shell_print_error("rd: invalid path");
+        return 1;
+    }
+
+    if (recursive) {
+        char warning[392];
+
+        snprintf(warning, sizeof(warning),
+                 "WARNING: Recursive removal of directory \"%s\"%s.",
+                 resolved_path,
+                 permanent ? " (permanent, bypasses .trash)" : " (moves to .trash)");
+        if (!shell_confirm_destructive("rd", warning, "")) {
+            shell_print_warning("rd: cancelled, nothing was removed");
+            return 1;
+        }
+        if (!storage_trash_enabled() && !permanent) {
+            shell_print_warning("rd: recycle bin is disabled; use /p or /permanent to delete");
+            return 1;
+        }
+        error = storage_trash_remove_tree(resolved_path, permanent);
+        if (error != ESP_OK) {
+            shell_print_error("rd: failed (%s)", esp_err_to_name(error));
+            shell_record_errorf("rd", error, "rd /s failed for %s", resolved_path);
+            return 1;
+        }
+        if (storage_trash_enabled()) {
+            storage_trash_enforce_limits();
+        }
+        if (permanent) {
+            shell_print_ok("rd: removed %s permanently", resolved_path);
+        } else {
+            shell_print_ok("rd: %s moved to %s", resolved_path, storage_trash_path());
+        }
+        return 0;
     }
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
-        shell_print_error("rmdir: SD card not present - insert and retry");
-        return;
+        shell_print_error("rd: SD card not present - insert and retry");
+        return 1;
     }
 
     if (rmdir(resolved_path) != 0) {
-        shell_print_error("rmdir: failed to remove %s (%s)", resolved_path, strerror(errno));
-        shell_sd_end(&session, "rmdir");
-        return;
+        shell_print_error("rd: failed to remove %s (%s)", resolved_path, strerror(errno));
+        shell_sd_end(&session, "rd");
+        return 1;
     }
 
-    shell_sd_end(&session, "rmdir");
+    shell_sd_end(&session, "rd");
     shell_print_ok("Removed directory %s", resolved_path);
+    return 0;
+}
+
+int shell_command_undelete(int argc, char **argv)
+{
+    esp_err_t error;
+
+    if (argc != 2) {
+        shell_print_usage("Usage: undelete <name|index>");
+        return 2;
+    }
+    if (!storage_trash_enabled()) {
+        shell_print_error("undelete: recycle bin is disabled");
+        return 1;
+    }
+    error = storage_trash_restore(argv[1]);
+    if (error == ESP_ERR_NOT_FOUND) {
+        shell_print_error("undelete: no trash entry \"%s\"", argv[1]);
+        shell_record_warningf("undelete", "Unknown trash entry %s", argv[1]);
+        return 1;
+    }
+    if (error == ESP_ERR_INVALID_STATE) {
+        shell_print_error("undelete: the original location of \"%s\" is occupied", argv[1]);
+        return 1;
+    }
+    if (error != ESP_OK) {
+        shell_print_error("undelete: restore failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("undelete", error, "Restore failed for %s", argv[1]);
+        return 1;
+    }
+    shell_print_ok("undelete: restored %s", argv[1]);
+    storage_trash_enforce_limits();
+    return 0;
+}
+
+int shell_command_trash(int argc, char **argv)
+{
+    esp_err_t error;
+
+    if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "list"))) {
+        return (storage_trash_list() == ESP_OK) ? 0 : 1;
+    }
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "info")) {
+        return (storage_trash_info() == ESP_OK) ? 0 : 1;
+    }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "restore")) {
+        if (!storage_trash_enabled()) {
+            shell_print_error("trash: recycle bin is disabled");
+            return 1;
+        }
+        error = storage_trash_restore(argv[2]);
+        if (error == ESP_ERR_NOT_FOUND) {
+            shell_print_error("trash: no entry \"%s\"", argv[2]);
+            return 1;
+        }
+        if (error == ESP_ERR_INVALID_STATE) {
+            shell_print_error("trash: the original location of \"%s\" is occupied", argv[2]);
+            return 1;
+        }
+        if (error != ESP_OK) {
+            shell_print_error("trash: restore failed (%s)", esp_err_to_name(error));
+            return 1;
+        }
+        shell_print_ok("trash: restored %s", argv[2]);
+        storage_trash_enforce_limits();
+        return 0;
+    }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "purge")) {
+        char warning[160];
+
+        if (!storage_trash_enabled()) {
+            shell_print_error("trash: recycle bin is disabled");
+            return 1;
+        }
+        snprintf(warning, sizeof(warning),
+                 "WARNING: This will permanently delete trash entry \"%s\".",
+                 argv[2]);
+        if (!shell_confirm_destructive("trash", warning, "")) {
+            shell_print_warning("trash: purge cancelled");
+            return 1;
+        }
+        error = storage_trash_purge(argv[2]);
+        if (error == ESP_ERR_NOT_FOUND) {
+            shell_print_error("trash: no entry \"%s\"", argv[2]);
+            return 1;
+        }
+        if (error != ESP_OK) {
+            shell_print_error("trash: purge failed (%s)", esp_err_to_name(error));
+            return 1;
+        }
+        shell_print_ok("trash: purged %s", argv[2]);
+        storage_trash_enforce_limits();
+        return 0;
+    }
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "empty")) {
+        if (!storage_trash_enabled()) {
+            shell_print_error("trash: recycle bin is disabled");
+            return 1;
+        }
+        if (!shell_confirm_destructive("trash",
+                                       "WARNING: This will permanently delete ALL items in the recycle bin.", "")) {
+            shell_print_warning("trash: empty cancelled");
+            return 1;
+        }
+        error = storage_trash_empty();
+        if (error != ESP_OK) {
+            shell_print_error("trash: empty failed (%s)", esp_err_to_name(error));
+            return 1;
+        }
+        shell_print_ok("trash: emptied");
+        storage_trash_enforce_limits();
+        return 0;
+    }
+
+    shell_print_usage("Usage: trash [list] | trash info | trash restore <name|index> | trash purge <name|index> | trash empty");
+    shell_record_warningf("trash", "Usage error for trash command");
+    return 2;
 }
 
 void shell_command_type_file(int argc, char **argv)
@@ -1837,109 +2110,699 @@ void shell_command_label(int argc, char **argv)
  *   /S  Copy directories and subdirectories (except empty ones)
  */
 
-void shell_command_xcopy(int argc, char **argv)
+/* ========================================================================
+ * XCOPY: recursive directory copy with the classic DOS 6.x / WinXP switch set
+ * ========================================================================
+ * `xcopy` copies files and (with /S /E) whole directory trees. The walker
+ * keeps each recursion level's state in one heap block (the shared command
+ * worker stack must never hold a path-sized or FATFS buffer while recursing,
+ * exactly like `dir /s` and the `find` discovery walker).
+ *
+ * Switches (DOS 6.x / WinXP semantics):
+ *   /S  copy directories and subdirectories (empty ones only with /E)
+ *   /E  copy subdirectories including empty ones (implies /S)
+ *   /I  assume the destination is a directory (create it if needed)
+ *   /Y  suppress the overwrite prompt; /-Y force it
+ *   /P  prompt before copying each file
+ *   /W  wait for a key before copying begins
+ *   /V  verify each copied file (size post-check)
+ *   /C  continue copying after an error
+ *   /Q  quiet: no per-file listing
+ *   /T  create the directory tree only, do not copy files
+ *   /F  display full source and destination names while copying
+ *   /L  list the files that would be copied, do not copy
+ *   /H  include hidden and system files (skipped by default)
+ *   /R  overwrite a read-only destination
+ *   /K  keep attributes (this shell always carries attributes, so /K is the
+ *       effective default; accepted for DOS compatibility)
+ *   /D[:mm-dd-yyyy]  copy only files newer than the date, or (no date) newer
+ *                    than the same-named destination file
+ *   /A  copy only files with the archive attribute set
+ *   /M  copy only archive files and clear the archive attribute on the source
+ *   /U  copy only files that already exist at the destination
+ *   /N  generate short (8.3) names for the destination
+ *   /V  verify (accepted; each copy is already written and closed by the
+ *       shared copy path)
+ *
+ * ERRORLEVEL: 0 success, 1 nothing copied / a copy failed, 2 usage.
+ */
+
+/** Parsed `xcopy` options. */
+typedef struct {
+    bool recursive;
+    bool include_empty;
+    bool assume_dir;
+    bool overwrite_silent;   /* /Y */
+    bool overwrite_prompt;   /* /-Y */
+    bool prompt_each;        /* /P */
+    bool wait_key;           /* /W */
+    bool verify;             /* /V */
+    bool continue_on_error;  /* /C */
+    bool quiet;              /* /Q */
+    bool tree_only;          /* /T */
+    bool full_names;         /* /F */
+    bool list_only;          /* /L */
+    bool include_hidden;     /* /H */
+    bool overwrite_readonly; /* /R */
+    bool keep_attrs;         /* /K */
+    bool have_date;          /* /D[:date] */
+    bool compare_dest;       /* /D with no date: newer than the destination */
+    uint16_t date_fdate;     /* FAT date word from /D:mm-dd-yyyy */
+    bool archive_only;       /* /A */
+    bool archive_clear;      /* /M */
+    bool update_only;        /* /U */
+    bool short_names;        /* /N */
+} xcopy_opts_t;
+
+/** Running totals for a copy run. */
+typedef struct {
+    int copied;
+    int errors;
+    bool stopped;
+} xcopy_stats_t;
+
+/** Read the FAT attribute byte for a VFS path via f_stat. */
+static bool shell_xcopy_get_attrib(const char *vfs_path, uint8_t *attrib_out)
+{    char fatfs_path[SHELL_SD_PATH_BYTES];
+    FILINFO info;
+
+    memset(&info, 0, sizeof(info));
+    if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
+        return false;
+    }
+    if (f_stat(fatfs_path, &info) != FR_OK) {
+        return false;
+    }
+    *attrib_out = info.fattrib;
+    return true;
+}
+
+/** Read the FAT date word for a VFS path (used by /D with no date). */
+static bool shell_xcopy_get_fat_date(const char *vfs_path, uint16_t *fdate_out)
 {
+    char fatfs_path[SHELL_SD_PATH_BYTES];
+    FILINFO info;
+
+    memset(&info, 0, sizeof(info));
+    if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
+        return false;
+    }
+    if (f_stat(fatfs_path, &info) != FR_OK) {
+        return false;
+    }
+    *fdate_out = info.fdate;
+    return true;
+}
+
+/** Set or clear the archive attribute on a VFS path (used by /M). */
+static void shell_xcopy_set_archive(const char *vfs_path, bool set)
+{
+    char fatfs_path[SHELL_SD_PATH_BYTES];
+    FILINFO info;
+    uint8_t new_attrib;
+
+    if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
+        return;
+    }
+    memset(&info, 0, sizeof(info));
+    if (f_stat(fatfs_path, &info) != FR_OK) {
+        return;
+    }
+    new_attrib = set ? (uint8_t)(info.fattrib | AM_ARC) : (uint8_t)(info.fattrib & ~AM_ARC);
+    (void)f_chmod(fatfs_path, new_attrib, AM_ARC);
+}
+
+/** Clear the read-only attribute on a destination so /R can overwrite it. */
+static void shell_xcopy_clear_readonly(const char *vfs_path)
+{
+    char fatfs_path[SHELL_SD_PATH_BYTES];
+    FILINFO info;
+
+    if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
+        return;
+    }
+    memset(&info, 0, sizeof(info));
+    if (f_stat(fatfs_path, &info) != FR_OK) {
+        return;
+    }
+    (void)f_chmod(fatfs_path, (uint8_t)(info.fattrib & ~AM_RDO), AM_RDO);
+}
+
+/**
+ * Decide whether to overwrite an existing destination file.
+ *
+ * /Y overwrites silently. /-Y always asks. With neither switch the command
+ * asks when an interactive key source is attached and otherwise overwrites
+ * silently, so a headless or batch run never stalls and never regresses the
+ * previous always-copy behaviour. The key wait is bounded; on timeout the
+ * file is skipped (the conservative choice).
+ */
+static bool shell_xcopy_allow_overwrite(const char *dst_vfs, const xcopy_opts_t *opts)
+{
+    bool want_prompt;
+
+    if (opts->overwrite_silent) {
+        return true;
+    }
+    want_prompt = opts->overwrite_prompt || shell_key_input_available();
+    if (!want_prompt) {
+        return true;
+    }
+
+    shell_transcript_appendf_ansi(SH_WARN "Overwrite " SH_RST "%s? (Y/N) ",
+                                  dst_vfs);
+    shell_key_wait_begin();
+    {
+        char key = '\0';
+
+        if (shell_wait_for_key(P4_CONFIG_KEY_WAIT_TIMEOUT_MS, &key)) {
+            shell_key_wait_end();
+            shell_transcript_append_text("\n");
+            return (key == 'y' || key == 'Y');
+        }
+        shell_key_wait_end();
+        shell_transcript_append_text("xcopy: overwrite prompt timed out, skipping\n");
+    }
+    return false;
+}
+
+/** Ask once before copying begins when /W is given (interactive only). */
+static void shell_xcopy_wait_key(const xcopy_opts_t *opts)
+{
+    char key = '\0';
+
+    if (!opts->wait_key || !shell_key_input_available()) {
+        return;
+    }
+    shell_transcript_append_text("Press any key to begin copying...\n");
+    shell_key_wait_begin();
+    (void)shell_wait_for_key(P4_CONFIG_KEY_WAIT_TIMEOUT_MS, &key);
+    shell_key_wait_end();
+}
+
+/** Ask before copying one file when /P is given. */
+static bool shell_xcopy_confirm_file(const char *name, const xcopy_opts_t *opts)
+{
+    char key = '\0';
+
+    if (!opts->prompt_each || !shell_key_input_available()) {
+        return true;
+    }
+    shell_transcript_appendf("Copy %s? (Y/N) ", name);
+    shell_key_wait_begin();
+    if (shell_wait_for_key(P4_CONFIG_KEY_WAIT_TIMEOUT_MS, &key)) {
+        shell_key_wait_end();
+        shell_transcript_append_text("\n");
+        return (key == 'y' || key == 'Y');
+    }
+    shell_key_wait_end();
+    shell_transcript_append_text("xcopy: prompt timed out, skipping\n");
+    return false;
+}
+
+/** Copy one file through the shared copy path and apply the /M /V switches. */
+static void shell_xcopy_copy_file(const char *src_vfs, const char *dst_vfs,
+                                  const xcopy_opts_t *opts, xcopy_stats_t *stats)
+{
+    esp_err_t error;
+
+    error = shell_fs_copy_file(src_vfs, dst_vfs);
+    if (error != ESP_OK) {
+        shell_print_error("xcopy: copy failed %s -> %s (%s)",
+                          src_vfs, dst_vfs, esp_err_to_name(error));
+        stats->errors++;
+        if (!opts->continue_on_error) {
+            stats->stopped = true;
+        }
+        return;
+    }
+
+    if (opts->archive_clear) {
+        shell_xcopy_set_archive(src_vfs, false);
+    }
+    if (opts->verify) {
+        uint64_t src_size = storage_get_file_size(src_vfs);
+        uint64_t dst_size = storage_get_file_size(dst_vfs);
+
+        if (src_size != dst_size) {
+            shell_print_warning("xcopy: size mismatch after copying %s", dst_vfs);
+            stats->errors++;
+        }
+    }
+    stats->copied++;
+}
+
+/**
+ * Recursively walk one source directory copying into the matching destination.
+ * Each recursion level keeps its own heap block, matching the `dir /s` and
+ * `find` walkers so the 8 KB command-worker stack is never at risk.
+ */
+static void shell_xcopy_walk(const char *src_vfs, const char *dst_vfs, int depth,
+                             const xcopy_opts_t *opts, xcopy_stats_t *stats)
+{
+    struct xcopy_level_scratch {
+        char src_fatfs[SHELL_SD_PATH_BYTES];
+        char child_src[SHELL_SD_PATH_BYTES];
+        char child_dst[SHELL_SD_PATH_BYTES];
+        FF_DIR dir;
+        FILINFO info;
+    } *scratch = NULL;
+    FRESULT result;
+
+    if (depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX || stats->stopped) {
+        return;
+    }
+
+    scratch = calloc(1, sizeof(*scratch));
+    if (scratch == NULL) {
+        shell_record_errorf("xcopy", ESP_ERR_NO_MEM, "Out of memory during recursive xcopy");
+        stats->stopped = true;
+        return;
+    }
+    if (shell_sd_vfs_to_fatfs_path(src_vfs, scratch->src_fatfs, sizeof(scratch->src_fatfs)) != ESP_OK) {
+        free(scratch);
+        return;
+    }
+    result = f_opendir(&scratch->dir, scratch->src_fatfs);
+    if (result != FR_OK) {
+        free(scratch);
+        return;
+    }
+
+    while (!stats->stopped) {
+        bool is_dir;
+        const char *dest_name;
+
+        result = f_readdir(&scratch->dir, &scratch->info);
+        if (result != FR_OK || scratch->info.fname[0] == '\0') {
+            break;
+        }
+        if (strcmp(scratch->info.fname, ".") == 0 || strcmp(scratch->info.fname, "..") == 0) {
+            continue;
+        }
+        /* Hidden and system entries are skipped unless /H is given. */
+        if ((scratch->info.fattrib & (AM_HID | AM_SYS)) != 0 && !opts->include_hidden) {
+            continue;
+        }
+
+        is_dir = (scratch->info.fattrib & AM_DIR) != 0;
+        dest_name = (opts->short_names && scratch->info.altname[0] != '\0')
+                        ? scratch->info.altname
+                        : scratch->info.fname;
+
+        if (snprintf(scratch->child_src, sizeof(scratch->child_src), "%s/%s",
+                     src_vfs, scratch->info.fname) < 0 ||
+            snprintf(scratch->child_dst, sizeof(scratch->child_dst), "%s/%s",
+                     dst_vfs, dest_name) < 0) {
+            continue;
+        }
+
+        if (is_dir) {
+            if (opts->recursive) {
+                /* Create the matching destination directory before descending.
+                 * Without /E an empty directory is removed again afterwards. */
+                (void)mkdir(scratch->child_dst, 0775);
+                (void)storage_copy_attributes(scratch->child_src, scratch->child_dst);
+                shell_xcopy_walk(scratch->child_src, scratch->child_dst, depth + 1,
+                                 opts, stats);
+                if (!opts->include_empty) {
+                    (void)rmdir(scratch->child_dst);
+                }
+            }
+            continue;
+        }
+
+        /* File entry. */
+        if (opts->tree_only) {
+            continue;
+        }
+        if ((opts->archive_only || opts->archive_clear) &&
+            (scratch->info.fattrib & AM_ARC) == 0) {
+            continue;
+        }
+        if (opts->have_date && scratch->info.fdate < opts->date_fdate) {
+            continue;
+        }
+        if (opts->compare_dest || opts->update_only) {
+            struct stat dst_st;
+            uint16_t dst_fdate;
+
+            if (stat(scratch->child_dst, &dst_st) != 0) {
+                if (opts->update_only) {
+                    continue;   /* /U: only files already at the destination */
+                }
+            } else {
+                if (opts->update_only && opts->have_date) {
+                    if (scratch->info.fdate < opts->date_fdate) {
+                        continue;
+                    }
+                }
+                if (opts->compare_dest &&
+                    shell_xcopy_get_fat_date(scratch->child_dst, &dst_fdate) &&
+                    scratch->info.fdate <= dst_fdate) {
+                    continue;   /* /D (no date): only newer than the destination */
+                }
+            }
+        }
+
+        if (!shell_xcopy_confirm_file(scratch->info.fname, opts)) {
+            continue;
+        }
+
+        if (opts->list_only) {
+            if (opts->full_names) {
+                shell_transcript_appendf("%s -> %s\n", scratch->child_src, scratch->child_dst);
+            } else {
+                shell_transcript_appendf("  %s\n", scratch->info.fname);
+            }
+            stats->copied++;
+            continue;
+        }
+
+        /* Destination exists: decide whether to overwrite. */
+        {
+            struct stat dst_st;
+            uint8_t dst_attrib;
+
+            if (stat(scratch->child_dst, &dst_st) == 0) {
+                if (!shell_xcopy_allow_overwrite(scratch->child_dst, opts)) {
+                    continue;
+                }
+                if ((dst_st.st_mode & S_IWUSR) == 0 &&
+                    shell_xcopy_get_attrib(scratch->child_dst, &dst_attrib) &&
+                    (dst_attrib & AM_RDO) != 0) {
+                    if (!opts->overwrite_readonly) {
+                        shell_print_error("xcopy: %s is read-only (use attrib -R or /R)",
+                                          scratch->child_dst);
+                        stats->errors++;
+                        if (!opts->continue_on_error) {
+                            stats->stopped = true;
+                        }
+                        continue;
+                    }
+                    shell_xcopy_clear_readonly(scratch->child_dst);
+                }
+            }
+        }
+
+        shell_xcopy_copy_file(scratch->child_src, scratch->child_dst, opts, stats);
+        if (opts->quiet) {
+            continue;
+        }
+        if (opts->full_names) {
+            shell_transcript_appendf("  %s -> %s\n", scratch->child_src, scratch->child_dst);
+        } else {
+            shell_transcript_appendf("  %s\n", scratch->info.fname);
+        }
+    }
+
+    (void)f_closedir(&scratch->dir);
+    free(scratch);
+}
+
+/**
+ * Basename of a resolved path, accepting both '/' and '\' separators (the
+ * resolver keeps DOS-style backslashes in the filename part).
+ */
+static const char *shell_xcopy_basename(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    const char *bslash = strrchr(path, '\\');
+
+    if (bslash != NULL && (slash == NULL || bslash > slash)) {
+        slash = bslash;
+    }
+    return (slash != NULL) ? slash + 1 : path;
+}
+
+/**
+ * `xcopy` command entry point.
+ *
+ * Usage: xcopy <source> <destination> [switches]
+ * Returns an ERRORLEVEL: 0 success, 1 nothing copied / copy failed, 2 usage.
+ */
+int shell_command_xcopy(int argc, char **argv)
+{
+    xcopy_opts_t opts;
+    xcopy_stats_t stats;
     shell_sd_session_t session;
     esp_err_t error;
     char src_resolved[SHELL_SD_PATH_BYTES];
     char dst_resolved[SHELL_SD_PATH_BYTES];
-    bool recursive = false;
+    /* A directory destination plus a source basename can exceed one path
+     * buffer; size this for the joined form so -Werror=format-truncation
+     * cannot fire. */
+    char dst_file[SHELL_SD_PATH_BYTES * 2 + 16];
     const char *src_arg = NULL;
     const char *dst_arg = NULL;
+    struct stat src_st;
+    int index;
 
-    for (int i = 1; i < argc; i++) {
-        if (argv[i][0] == '/' && toupper((unsigned char)argv[i][1]) == 'S')
-            recursive = true;
-        else if (src_arg == NULL) src_arg = argv[i];
-        else if (dst_arg == NULL) dst_arg = argv[i];
+    memset(&opts, 0, sizeof(opts));
+    memset(&stats, 0, sizeof(stats));
+
+    for (index = 1; index < argc; index++) {
+        const char *token = argv[index];
+
+        if (token[0] != '/') {
+            if (src_arg == NULL) {
+                src_arg = token;
+            } else if (dst_arg == NULL) {
+                dst_arg = token;
+            } else {
+                shell_print_usage("Usage: xcopy <source> <destination> [/S] [/E] [/I] [/Y|/-Y] [/D[:date]] [/H] [/R] [/K] [/C] [/Q] [/T] [/F] [/L] [/A] [/M] [/U] [/P] [/W] [/N]");
+                return 2;
+            }
+            continue;
+        }
+
+        if (token[1] == '-' && token[2] == 'Y' && token[3] == '\0') {
+            opts.overwrite_prompt = true;
+        } else if (toupper((unsigned char)token[1]) == 'Y' && token[2] == '\0') {
+            opts.overwrite_silent = true;
+        } else if (toupper((unsigned char)token[1]) == 'D') {
+            opts.have_date = true;
+            if (token[2] == ':' && token[3] != '\0') {
+                if (!shell_find_parse_date(token + 3, &opts.date_fdate)) {
+                    shell_print_error("xcopy: invalid /D date %s (use mm-dd-yyyy)", token + 3);
+                    return 2;
+                }
+            } else {
+                opts.compare_dest = true;
+            }
+        } else {
+            switch (toupper((unsigned char)token[1])) {
+            case 'S': opts.recursive = true;          break;
+            case 'E': opts.recursive = true; opts.include_empty = true; break;
+            case 'I': opts.assume_dir = true;         break;
+            case 'P': opts.prompt_each = true;        break;
+            case 'W': opts.wait_key = true;           break;
+            case 'V': opts.verify = true;             break;
+            case 'C': opts.continue_on_error = true;  break;
+            case 'Q': opts.quiet = true;              break;
+            case 'T': opts.tree_only = true;          break;
+            case 'F': opts.full_names = true;         break;
+            case 'L': opts.list_only = true;          break;
+            case 'H': opts.include_hidden = true;     break;
+            case 'R': opts.overwrite_readonly = true; break;
+            case 'K': opts.keep_attrs = true;         break;
+            case 'A': opts.archive_only = true;       break;
+            case 'M': opts.archive_clear = true;      break;
+            case 'U': opts.update_only = true;        break;
+            case 'N': opts.short_names = true;        break;
+            default:
+                shell_print_error("xcopy: unknown option %s", token);
+                shell_print_usage("Usage: xcopy <source> <destination> [/S] [/E] [/I] [/Y|/-Y] [/D[:date]] [/H] [/R] [/K] [/C] [/Q] [/T] [/F] [/L] [/A] [/M] [/U] [/P] [/W] [/N]");
+                return 2;
+            }
+        }
     }
+
     if (src_arg == NULL || dst_arg == NULL) {
-        shell_print_usage("Usage: xcopy <source> <destination> [/S]");
-        shell_transcript_append_text("  /S  Copy directories and subdirectories\n");
-        return;
+        shell_print_usage("Usage: xcopy <source> <destination> [/S] [/E] [/I] [/Y|/-Y] [/D[:date]] [/H] [/R] [/K] [/C] [/Q] [/T] [/F] [/L] [/A] [/M] [/U] [/P] [/W] [/N]");
+        return 2;
+    }
+    /* /A and /M are mutually exclusive in DOS. */
+    if (opts.archive_only && opts.archive_clear) {
+        shell_print_error("xcopy: /A and /M are mutually exclusive");
+        return 2;
     }
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
         shell_print_error("xcopy: SD card not present");
-        return;
+        return 1;
     }
 
     error = shell_sd_resolve_path(src_arg, src_resolved, sizeof(src_resolved));
     if (error != ESP_OK) {
         shell_print_error("xcopy: invalid source path");
         shell_sd_end(&session, "xcopy");
-        return;
+        return 1;
     }
     error = shell_sd_resolve_path(dst_arg, dst_resolved, sizeof(dst_resolved));
     if (error != ESP_OK) {
         shell_print_error("xcopy: invalid destination path");
         shell_sd_end(&session, "xcopy");
-        return;
+        return 1;
     }
 
-    struct stat src_st;
     if (stat(src_resolved, &src_st) != 0) {
         shell_transcript_appendf("xcopy: source not found: %s\n", src_arg);
         shell_sd_end(&session, "xcopy");
-        return;
+        return 1;
     }
 
-    if (S_ISDIR(src_st.st_mode)) {
-        if (!recursive) {
-            shell_transcript_append_text("xcopy: use /S to copy directories\n");
-            shell_sd_end(&session, "xcopy");
-            return;
-        }
-        struct stat dst_st;
-        if (stat(dst_resolved, &dst_st) != 0) {
-            mkdir(dst_resolved, 0755);
+    shell_xcopy_wait_key(&opts);
 
+    if (S_ISDIR(src_st.st_mode)) {
+        struct stat dst_st;
+
+        if (!opts.recursive) {
+            shell_transcript_append_text("xcopy: use /S (or /E) to copy directories\n");
+            shell_sd_end(&session, "xcopy");
+            return 1;
+        }
+        if (stat(dst_resolved, &dst_st) == 0 && !S_ISDIR(dst_st.st_mode)) {
+            shell_print_error("xcopy: destination %s exists and is not a directory", dst_resolved);
+            shell_sd_end(&session, "xcopy");
+            return 1;
+        }
+        if (stat(dst_resolved, &dst_st) != 0) {
+            if (mkdir(dst_resolved, 0775) != 0) {
+                shell_print_error("xcopy: cannot create destination directory %s", dst_resolved);
+                shell_sd_end(&session, "xcopy");
+                return 1;
+            }
             /* Carry the source directory's attributes onto the one just
-             * created, so a hidden or system folder stays that way. Done
-             * before descending, because a read-only directory still accepts
-             * new children on FAT. */
+             * created, so a hidden or system folder stays that way. */
             (void)storage_copy_attributes(src_resolved, dst_resolved);
         }
 
-        DIR *d = opendir(src_resolved);
-        if (d == NULL) {
-            shell_print_error("xcopy: cannot open source directory");
+        shell_xcopy_walk(src_resolved, dst_resolved, 0, &opts, &stats);
+    } else {
+        /* Single-file source. */
+        struct stat dst_st;
+
+        if (opts.tree_only) {
+            shell_transcript_append_text("xcopy: /T copies directories only, nothing to do\n");
             shell_sd_end(&session, "xcopy");
-            return;
+            return 0;
         }
-        struct dirent *entry;
-        int copied = 0;
-        while ((entry = readdir(d)) != NULL) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-                continue;
-            char sc[SHELL_SD_PATH_BYTES + 256], dc[SHELL_SD_PATH_BYTES + 256];
-            snprintf(sc, sizeof(sc), "%s/%s", src_resolved, entry->d_name);
-            snprintf(dc, sizeof(dc), "%s/%s", dst_resolved, entry->d_name);
-            struct stat cs;
-            if (stat(sc, &cs) != 0) continue;
-            if (S_ISDIR(cs.st_mode)) {
-                char *xa[4] = { "xcopy", sc, dc, "/S" };
-                shell_command_xcopy(4, xa);
-            } else {
-                if (shell_fs_copy_file(sc, dc) == ESP_OK) {
-                    shell_transcript_appendf("  %s\n", entry->d_name);
-                    copied++;
-                } else {
-                    shell_transcript_appendf("  %s (failed)\n", entry->d_name);
+        if ((opts.archive_only || opts.archive_clear) && (src_st.st_mode & S_IFREG) != 0) {
+            uint8_t attrib;
+
+            if (shell_xcopy_get_attrib(src_resolved, &attrib) && (attrib & AM_ARC) == 0) {
+                shell_transcript_append_text("xcopy: 0 file(s) copied (source has no archive attribute)\n");
+                shell_sd_end(&session, "xcopy");
+                return 1;
+            }
+        }
+
+        /* Destination path: a directory, or /I makes it one. */
+        if (stat(dst_resolved, &dst_st) == 0 && S_ISDIR(dst_st.st_mode)) {
+            snprintf(dst_file, sizeof(dst_file), "%s/%s",
+                     dst_resolved, shell_xcopy_basename(src_resolved));
+        } else if (opts.assume_dir) {
+            if (mkdir(dst_resolved, 0775) != 0 && errno != EEXIST) {
+                shell_print_error("xcopy: cannot create destination directory %s", dst_resolved);
+                shell_sd_end(&session, "xcopy");
+                return 1;
+            }
+            snprintf(dst_file, sizeof(dst_file), "%s/%s",
+                     dst_resolved, shell_xcopy_basename(src_resolved));
+        } else {
+            snprintf(dst_file, sizeof(dst_file), "%s", dst_resolved);
+        }
+
+        /* /D and /U filters for a single-file source (the walker applies the
+         * same rules to every file it enumerates). */
+        if (opts.have_date || opts.compare_dest || opts.update_only) {
+            uint16_t src_fdate;
+
+            if (opts.have_date &&
+                shell_xcopy_get_fat_date(src_resolved, &src_fdate) &&
+                src_fdate < opts.date_fdate) {
+                shell_transcript_append_text("xcopy: 0 file(s) copied (source older than /D date)\n");
+                shell_sd_end(&session, "xcopy");
+                return 1;
+            }
+            if (opts.compare_dest || opts.update_only) {
+                if (stat(dst_file, &dst_st) != 0) {
+                    if (opts.update_only) {
+                        shell_transcript_append_text("xcopy: 0 file(s) copied (/U: destination does not exist)\n");
+                        shell_sd_end(&session, "xcopy");
+                        return 1;
+                    }
+                } else if (opts.compare_dest &&
+                           shell_xcopy_get_fat_date(src_resolved, &src_fdate)) {
+                    uint16_t dst_fdate;
+
+                    if (shell_xcopy_get_fat_date(dst_file, &dst_fdate) &&
+                        src_fdate <= dst_fdate) {
+                        shell_transcript_append_text("xcopy: 0 file(s) copied (source not newer than destination)\n");
+                        shell_sd_end(&session, "xcopy");
+                        return 1;
+                    }
                 }
             }
         }
-        closedir(d);
-        shell_transcript_appendf("xcopy: %d file(s) copied\n", copied);
-    } else {
-        error = shell_fs_copy_file(src_resolved, dst_resolved);
-        if (error == ESP_OK)
-            shell_transcript_append_text("xcopy: 1 file copied\n");
-        else
-            shell_transcript_appendf("xcopy: copy failed (%s)\n", esp_err_to_name(error));
+
+        if (opts.list_only) {
+            if (opts.full_names) {
+                shell_transcript_appendf("%s -> %s\n", src_resolved, dst_file);
+            } else {
+                shell_transcript_appendf("  %s\n", shell_xcopy_basename(src_resolved));
+            }
+            stats.copied++;
+        } else {
+            if (stat(dst_file, &dst_st) == 0) {
+                uint8_t dst_attrib;
+
+                if (!shell_xcopy_allow_overwrite(dst_file, &opts)) {
+                    shell_sd_end(&session, "xcopy");
+                    shell_transcript_append_text("xcopy: 0 file(s) copied\n");
+                    return 1;
+                }
+                if ((dst_st.st_mode & S_IWUSR) == 0 &&
+                    shell_xcopy_get_attrib(dst_file, &dst_attrib) &&
+                    (dst_attrib & AM_RDO) != 0) {
+                    if (!opts.overwrite_readonly) {
+                        shell_print_error("xcopy: %s is read-only (use attrib -R or /R)", dst_file);
+                        shell_sd_end(&session, "xcopy");
+                        return 1;
+                    }
+                    shell_xcopy_clear_readonly(dst_file);
+                }
+            }
+            if (!shell_xcopy_confirm_file(dst_file, &opts)) {
+                shell_sd_end(&session, "xcopy");
+                shell_transcript_append_text("xcopy: 0 file(s) copied\n");
+                return 1;
+            }
+            shell_xcopy_copy_file(src_resolved, dst_file, &opts, &stats);
+            if (!opts.quiet) {
+                if (opts.full_names) {
+                    shell_transcript_appendf("  %s -> %s\n", src_resolved, dst_file);
+                } else {
+                    shell_transcript_appendf("  %s\n", shell_xcopy_basename(dst_file));
+                }
+            }
+        }
     }
+
     shell_sd_end(&session, "xcopy");
+
+    if (opts.list_only) {
+        shell_transcript_appendf("xcopy: %d file(s) would be copied\n", stats.copied);
+    } else if (stats.errors > 0) {
+        shell_transcript_appendf("xcopy: %d file(s) copied, %d error(s)\n",
+                                 stats.copied, stats.errors);
+    } else {
+        shell_transcript_appendf("xcopy: %d file(s) copied\n", stats.copied);
+    }
+
+    return (stats.copied > 0 && stats.errors == 0) ? 0 : 1;
 }
 
 /* ========================================================================
@@ -2193,7 +3056,17 @@ static bool shell_confirm_destructive(const char *operation, const char *warning
     if (detail != NULL && detail[0] != '\0') {
         shell_transcript_append_text(detail);
     }
-    shell_transcript_appendf("Type %s to continue: ", P4_CONFIG_FORMAT_CONFIRM_WORD);
+
+    /* A batch file must never be able to drive a destructive operation, even
+     * when a serial console is attached that could answer the prompt. Refuse
+     * outright so an unattended script cannot wipe the card. */
+    if (shell_is_batch_active()) {
+        shell_transcript_appendf("\n%s: refused, cannot be confirmed from a batch file\n", operation);
+        shell_record_warningf(operation, "Refused destructive operation requested by a batch file");
+        return false;
+    }
+
+    shell_transcript_appendf("Type %s to continue: ", P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD);
 
     if (!shell_key_input_available()) {
         shell_transcript_appendf("\n%s: refused, no interactive input is available to confirm\n", operation);
@@ -2228,7 +3101,7 @@ static bool shell_confirm_destructive(const char *operation, const char *warning
     }
 
     shell_transcript_appendf("%s\n", confirm);
-    return strcmp(confirm, P4_CONFIG_FORMAT_CONFIRM_WORD) == 0;
+    return strcmp(confirm, P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD) == 0;
 }
 
 /**
@@ -2277,11 +3150,11 @@ static bool shell_parse_alloc_unit(const char *text, uint32_t *bytes_out)
  * @param alloc_unit  Allocation-unit size in bytes (ignored unless @p alloc_set).
  * @param alloc_set   True when the user supplied /A: or au=.
  */
-static void shell_format_execute(const char *operation,
-                                 const char *fs_type,
-                                 const char *new_label,
-                                 uint32_t alloc_unit,
-                                 bool alloc_set)
+static int shell_format_execute(const char *operation,
+                                const char *fs_type,
+                                const char *new_label,
+                                uint32_t alloc_unit,
+                                bool alloc_set)
 {
     storage_format_opts_t opts;
     esp_err_t error;
@@ -2294,7 +3167,7 @@ static void shell_format_execute(const char *operation,
 
         if (shell_sd_begin(&session) != ESP_OK) {
             shell_print_error("%s: SD card not present - insert and retry", operation);
-            return;
+            return 1;
         }
         shell_sd_end(&session, operation);
     }
@@ -2302,7 +3175,7 @@ static void shell_format_execute(const char *operation,
     if (bsp_sdcard == NULL) {
         shell_print_error("%s: no SD card handle is available", operation);
         shell_record_errorf(operation, ESP_ERR_INVALID_STATE, "bsp_sdcard is NULL");
-        return;
+        return 1;
     }
 
     /* Destructive operation: require the exact confirmation word. */
@@ -2327,7 +3200,7 @@ static void shell_format_execute(const char *operation,
                                        detail)) {
             shell_print_warning("%s: cancelled, the card was not modified", operation);
             shell_record_warningf(operation, "Cancelled %s by user", operation);
-            return;
+            return 1;
         }
     }
 
@@ -2344,7 +3217,7 @@ static void shell_format_execute(const char *operation,
     if (error != ESP_OK) {
         shell_print_error("%s: failed (%s)", operation, esp_err_to_name(error));
         shell_record_errorf(operation, error, "SD card format failed");
-        return;
+        return 1;
     }
 
     shell_print_ok("%s: complete", operation);
@@ -2371,9 +3244,11 @@ static void shell_format_execute(const char *operation,
                                           (unsigned int)space.cluster_bytes);
         }
     }
+
+    return 0;
 }
 
-void shell_command_format(int argc, char **argv)
+int shell_command_format(int argc, char **argv)
 {
     const char *fs_type = NULL;
     const char *new_label = NULL;
@@ -2389,7 +3264,7 @@ void shell_command_format(int argc, char **argv)
         if (token[0] != '/') {
             shell_print_error("format: unexpected argument %s", token);
             shell_print_usage("Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]");
-            return;
+            return 2;
         }
 
         /* /FS: needs two letters to disambiguate from a future /F. */
@@ -2400,7 +3275,7 @@ void shell_command_format(int argc, char **argv)
             }
             if (*value == '\0') {
                 shell_print_error("format: /FS needs a type, for example /FS:FAT32");
-                return;
+                return 2;
             }
             fs_type = value;
             continue;
@@ -2416,25 +3291,25 @@ void shell_command_format(int argc, char **argv)
         case 'V':
             if (*value == '\0') {
                 shell_print_error("format: /V needs a label, for example /V:DATA");
-                return;
+                return 2;
             }
             if (strlen(value) > 11) {
                 shell_print_error("format: volume label must be 11 characters or fewer");
-                return;
+                return 2;
             }
             new_label = value;
             continue;
         case 'A':
             if (*value == '\0') {
                 shell_print_error("format: /A needs a size, for example /A:32K");
-                return;
+                return 2;
             }
             if (!shell_parse_alloc_unit(value, &alloc_unit) ||
                 alloc_unit < P4_CONFIG_FORMAT_ALLOC_UNIT_MIN ||
                 alloc_unit > P4_CONFIG_FORMAT_ALLOC_UNIT_MAX) {
                 shell_print_error("format: invalid /A allocation unit size %s", value);
                 shell_print_usage("Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]");
-                return;
+                return 2;
             }
             alloc_set = true;
             continue;
@@ -2446,7 +3321,7 @@ void shell_command_format(int argc, char **argv)
         default:
             shell_print_error("format: unknown option %s", token);
             shell_print_usage("Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]");
-            return;
+            return 2;
         }
     }
 
@@ -2464,11 +3339,11 @@ void shell_command_format(int argc, char **argv)
                    !shell_text_equals_ignore_case(fs_type, "FAT32")) {
             shell_print_error("format: unsupported filesystem type %s", fs_type);
             shell_transcript_append_text("  Supported: FAT, FAT32\n");
-            return;
+            return 2;
         }
     }
 
-    shell_format_execute("format", fs_type, new_label, alloc_unit, alloc_set);
+    return shell_format_execute("format", fs_type, new_label, alloc_unit, alloc_set);
 }
 
 /* ========================================================================
@@ -2828,9 +3703,9 @@ static bool shell_find_is_discovery_token(const char *token)
 
 /**
  * File-discovery mode of `find`: recursively list entries matching the
- * filename wildcard, size, and date filters.
+ * filename wildcard, size, and date filters. Returns an ERRORLEVEL.
  */
-static void shell_find_files(int argc, char **argv)
+static int shell_find_files(int argc, char **argv)
 {
     shell_find_ctx_t ctx;
     char resolved_path[SHELL_SD_PATH_BYTES];
@@ -2854,7 +3729,7 @@ static void shell_find_files(int argc, char **argv)
                 continue;
             }
             shell_print_usage("Usage: find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]");
-            return;
+            return 2;
         }
 
         if (strncasecmp(token, "/NAME:", 6) == 0) {
@@ -2864,19 +3739,19 @@ static void shell_find_files(int argc, char **argv)
             if (!shell_find_parse_size(token + 6, &ctx.size_min, &ctx.size_max)) {
                 shell_print_error("find: invalid /SIZE filter '%s'", token + 6);
                 shell_print_muted("  Use N-M (range), N- (at least), -M (at most), or N (exact), with an optional K/M/G suffix");
-                return;
+                return 2;
             }
             ctx.have_size = true;
         } else if (strncasecmp(token, "/NEWER:", 7) == 0) {
             if (!shell_find_parse_date(token + 7, &ctx.newer_fdate)) {
                 shell_print_error("find: invalid /NEWER date '%s' (expected YYYY-MM-DD)", token + 7);
-                return;
+                return 2;
             }
             ctx.have_newer = true;
         } else if (strncasecmp(token, "/OLDER:", 7) == 0) {
             if (!shell_find_parse_date(token + 7, &ctx.older_fdate)) {
                 shell_print_error("find: invalid /OLDER date '%s' (expected YYYY-MM-DD)", token + 7);
-                return;
+                return 2;
             }
             ctx.have_older = true;
         } else if (shell_text_equals_ignore_case(token, "/DIRS")) {
@@ -2888,7 +3763,7 @@ static void shell_find_files(int argc, char **argv)
         } else {
             shell_print_error("find: unknown option %s", token);
             shell_print_usage("Usage: find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]");
-            return;
+            return 2;
         }
     }
 
@@ -2925,19 +3800,19 @@ static void shell_find_files(int argc, char **argv)
     }
     if (error != ESP_OK) {
         shell_print_error("find: invalid path");
-        return;
+        return 2;
     }
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
         shell_print_error("find: SD card not present - insert and retry");
-        return;
+        return 2;
     }
 
     if (shell_sd_stat_path(resolved_path, &path_stat) != ESP_OK || !S_ISDIR(path_stat.st_mode)) {
         shell_transcript_appendf("find: path not found or not a directory %s\n", resolved_path);
         shell_sd_end(&session, "find");
-        return;
+        return 2;
     }
 
     shell_find_walk(resolved_path, 0, &ctx);
@@ -2954,6 +3829,7 @@ static void shell_find_files(int argc, char **argv)
                                       " reached; narrow the filters\n",
                                       (unsigned int)P4_CONFIG_FIND_MATCH_MAX);
     }
+    return (ctx.matches > 0) ? 0 : 1;
 }
 
 /**
@@ -2978,7 +3854,7 @@ static void shell_find_files(int argc, char **argv)
  * With no file argument the pending `<` or pipe input source is used, so
  * `type notes.txt | find "error"` works the way DOS users expect.
  */
-void shell_command_find(int argc, char **argv)
+int shell_command_find(int argc, char **argv)
 {
     char resolved[SHELL_SD_PATH_BYTES];
     char line[SHELL_TEXT_LINE_BYTES];
@@ -2999,8 +3875,7 @@ void shell_command_find(int argc, char **argv)
      * otherwise `find` keeps its classic text-search behaviour. */
     for (index = 1; index < argc; index++) {
         if (shell_find_is_discovery_token(argv[index])) {
-            shell_find_files(argc, argv);
-            return;
+            return shell_find_files(argc, argv);
         }
     }
 
@@ -3014,7 +3889,7 @@ void shell_command_find(int argc, char **argv)
             default:
                 shell_print_error("find: unknown option %s", argv[index]);
                 shell_print_usage("Usage: find <text> [file] [/I] [/N] [/C] [/V]");
-                return;
+                return 2;
             }
         }
 
@@ -3024,37 +3899,37 @@ void shell_command_find(int argc, char **argv)
             file_arg = argv[index];
         } else {
             shell_print_usage("Usage: find <text> [file] [/I] [/N] [/C] [/V]");
-            return;
+            return 2;
         }
     }
 
     if (search == NULL) {
         shell_print_usage("Usage: find <text> [file] [/I] [/N] [/C] [/V]");
-        return;
+        return 2;
     }
 
     error = storage_resolve_input_source(file_arg, resolved, sizeof(resolved));
     if (error == ESP_ERR_NOT_FOUND) {
         shell_transcript_append_text("find: no input file given and no input redirection active\n");
         shell_print_usage("Usage: find <text> [file] [/I] [/N] [/C] [/V]");
-        return;
+        return 2;
     }
     if (error != ESP_OK) {
         shell_print_error("find: invalid path");
-        return;
+        return 2;
     }
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
         shell_print_error("find: SD card not present - insert and retry");
-        return;
+        return 2;
     }
 
     file = fopen(resolved, "r");
     if (file == NULL) {
         shell_print_error("find: cannot open %s (%s)", resolved, strerror(errno));
         shell_sd_end(&session, "find");
-        return;
+        return 2;
     }
 
     shell_transcript_appendf("---------- %s\n", resolved);
@@ -3094,6 +3969,8 @@ void shell_command_find(int argc, char **argv)
     } else {
         shell_transcript_appendf("find: %d match(es)\n", matches);
     }
+
+    return (matches > 0) ? 0 : 1;
 }
 
 /**
@@ -3103,7 +3980,7 @@ void shell_command_find(int argc, char **argv)
  * When no interactive key source is attached the command falls back to the
  * configured page delay so a headless batch run still completes.
  */
-void shell_command_more(int argc, char **argv)
+int shell_command_more(int argc, char **argv)
 {
     char resolved[SHELL_SD_PATH_BYTES];
     char line[SHELL_TEXT_LINE_BYTES];
@@ -3116,31 +3993,31 @@ void shell_command_more(int argc, char **argv)
 
     if (argc > 2) {
         shell_print_usage("Usage: more [file]");
-        return;
+        return 2;
     }
 
     error = storage_resolve_input_source(argc >= 2 ? argv[1] : NULL, resolved, sizeof(resolved));
     if (error == ESP_ERR_NOT_FOUND) {
         shell_transcript_append_text("more: no input file given and no input redirection active\n");
         shell_print_usage("Usage: more [file]");
-        return;
+        return 2;
     }
     if (error != ESP_OK) {
         shell_print_error("more: invalid path");
-        return;
+        return 2;
     }
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
         shell_print_error("more: SD card not present - insert and retry");
-        return;
+        return 2;
     }
 
     file = fopen(resolved, "r");
     if (file == NULL) {
         shell_print_error("more: cannot open %s (%s)", resolved, strerror(errno));
         shell_sd_end(&session, "more");
-        return;
+        return 2;
     }
 
     interactive = shell_key_input_available();
@@ -3183,6 +4060,7 @@ void shell_command_more(int argc, char **argv)
     if (quit) {
         shell_transcript_appendf("more: stopped after %d line(s)\n", count);
     }
+    return 0;
 }
 
 /**
@@ -3192,7 +4070,7 @@ void shell_command_more(int argc, char **argv)
  * trailing length difference is also reported. Output is bounded by the
  * transcript itself; the comparison is not.
  */
-void shell_command_fc(int argc, char **argv)
+int shell_command_fc(int argc, char **argv)
 {
     char resolved1[SHELL_SD_PATH_BYTES];
     char resolved2[SHELL_SD_PATH_BYTES];
@@ -3207,25 +4085,25 @@ void shell_command_fc(int argc, char **argv)
 
     if (argc != 3) {
         shell_print_usage("Usage: fc <file1> <file2>");
-        return;
+        return 2;
     }
 
     error = shell_fs_resolve_path(argv[1], resolved1, sizeof(resolved1));
     if (error != ESP_OK) {
         shell_print_error("fc: invalid path for the first file");
-        return;
+        return 2;
     }
 
     error = shell_fs_resolve_path(argv[2], resolved2, sizeof(resolved2));
     if (error != ESP_OK) {
         shell_print_error("fc: invalid path for the second file");
-        return;
+        return 2;
     }
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
         shell_print_error("fc: SD card not present - insert and retry");
-        return;
+        return 2;
     }
 
     file1 = fopen(resolved1, "r");
@@ -3235,7 +4113,7 @@ void shell_command_fc(int argc, char **argv)
         if (file1 != NULL) fclose(file1);
         if (file2 != NULL) fclose(file2);
         shell_sd_end(&session, "fc");
-        return;
+        return 2;
     }
 
     shell_print_heading("Comparing files %s and %s", resolved1, resolved2);
@@ -3285,9 +4163,10 @@ void shell_command_fc(int argc, char **argv)
 
     if (diffs == 0) {
         shell_print_ok("FC: no differences encountered");
-    } else {
-        shell_transcript_appendf("fc: %d difference(s)\n", diffs);
+        return 0;
     }
+    shell_transcript_appendf("fc: %d difference(s)\n", diffs);
+    return 1;
 }
 
 /** qsort comparator for ascending case-sensitive line order. */
@@ -3333,7 +4212,7 @@ static int shell_sort_cmp_desc_ci(const void *left, const void *right)
  * including a mid-read allocation failure. With no file argument the pending
  * `<` or pipe input source is used.
  */
-void shell_command_sort(int argc, char **argv)
+int shell_command_sort(int argc, char **argv)
 {
     char resolved[SHELL_SD_PATH_BYTES];
     char buffer[SHELL_TEXT_LINE_BYTES];
@@ -3358,7 +4237,7 @@ void shell_command_sort(int argc, char **argv)
             default:
                 shell_print_error("sort: unknown option %s", argv[index]);
                 shell_print_usage("Usage: sort [file] [/R] [/I] [/U]");
-                return;
+                return 2;
             }
         }
 
@@ -3366,7 +4245,7 @@ void shell_command_sort(int argc, char **argv)
             file_arg = argv[index];
         } else {
             shell_print_usage("Usage: sort [file] [/R] [/I] [/U]");
-            return;
+            return 2;
         }
     }
 
@@ -3374,25 +4253,25 @@ void shell_command_sort(int argc, char **argv)
     if (error == ESP_ERR_NOT_FOUND) {
         shell_transcript_append_text("sort: no input file given and no input redirection active\n");
         shell_print_usage("Usage: sort [file] [/R] [/I] [/U]");
-        return;
+        return 2;
     }
     if (error != ESP_OK) {
         shell_print_error("sort: invalid path");
-        return;
+        return 2;
     }
 
     lines = calloc(SHELL_SORT_LINE_MAX, sizeof(*lines));
     if (lines == NULL) {
         shell_transcript_append_text("sort: out of memory\n");
         shell_record_errorf("sort", ESP_ERR_NO_MEM, "Out of memory allocating the line table");
-        return;
+        return 1;
     }
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
         free(lines);
         shell_print_error("sort: SD card not present - insert and retry");
-        return;
+        return 2;
     }
 
     file = fopen(resolved, "r");
@@ -3400,7 +4279,7 @@ void shell_command_sort(int argc, char **argv)
         shell_print_error("sort: cannot open %s (%s)", resolved, strerror(errno));
         shell_sd_end(&session, "sort");
         free(lines);
-        return;
+        return 2;
     }
 
     while (count < SHELL_SORT_LINE_MAX && fgets(buffer, sizeof(buffer), file) != NULL) {
@@ -3463,6 +4342,921 @@ void shell_command_sort(int argc, char **argv)
     if (unique && printed != count) {
         shell_transcript_appendf("sort: %d line(s), %d unique\n", count, printed);
     }
+    return 0;
+}
+
+/* ========================================================================
+ * FINDSTR: classic DOS text search (regex-lite)
+ * ========================================================================
+ * `findstr` searches files for one or more literal strings or small regular
+ * expressions, case-sensitive by default (unlike `find`, which matches
+ * case-insensitively and only literally). The regex engine deliberately
+ * implements only the DOS findstr subset: `.` (any char), `*` (zero or more
+ * of the preceding atom), `^` / `$` anchors, `[class]` / `[^class]` / `[a-z]`,
+ * `\<` / `\>` word boundaries, and `\c` escapes.
+ *
+ * The engine is pure (no transcript or file I/O), so the unit tests can
+ * exercise it directly.
+ */
+
+/** Is a character a "word" character for the `\<` / `\>` boundaries? */
+static bool shell_fsre_is_word(unsigned char ch)
+{
+    return ch == '_' || isalnum(ch);
+}
+
+/** Does the bracket class starting at pat[p] (pat[p] == '[') match ch? */
+static bool shell_fsre_class_match(const char *pat, int p, char ch, bool icase)
+{
+    int i = p + 1;
+    bool negate = false;
+    bool matched = false;
+
+    if (pat[i] == '^') {
+        negate = true;
+        i++;
+    }
+    if (pat[i] == ']') {
+        /* A ']' right after '[' or '[^' is a literal member. */
+        if (ch == ']') {
+            matched = true;
+        }
+        i++;
+    }
+    while (pat[i] != '\0' && pat[i] != ']') {
+        char lo = pat[i];
+
+        i++;
+        if (pat[i] == '-' && pat[i + 1] != '\0' && pat[i + 1] != ']') {
+            char hi = pat[i + 1];
+
+            i += 2;
+            if (icase) {
+                int cl = tolower((unsigned char)ch);
+                int ll = tolower((unsigned char)lo);
+                int hl = tolower((unsigned char)hi);
+
+                if (cl >= ll && cl <= hl) {
+                    matched = true;
+                }
+            } else if (ch >= lo && ch <= hi) {
+                matched = true;
+            }
+        } else if (icase ? (tolower((unsigned char)ch) == tolower((unsigned char)lo))
+                         : (ch == lo)) {
+            matched = true;
+        }
+    }
+    return negate ? !matched : matched;
+}
+
+/** Does the regex atom at pattern index pi match the single char ch? */
+static bool shell_fsre_atom_matches(const char *pat, int pi, char ch, bool icase)
+{
+    char c = pat[pi];
+
+    if (c == '.') {
+        return true;
+    }
+    if (c == '\\') {
+        char e = pat[pi + 1];
+
+        return icase ? (tolower((unsigned char)ch) == tolower((unsigned char)e))
+                     : (ch == e);
+    }
+    if (c == '[') {
+        return shell_fsre_class_match(pat, pi, ch, icase);
+    }
+    return icase ? (tolower((unsigned char)ch) == tolower((unsigned char)c))
+                 : (ch == c);
+}
+
+/**
+ * Recursive backtracking matcher: match pat[pi..] against text starting at
+ * ti. Returns the text index just past the match, or -1.
+ *
+ * @p at_start is true only while ti still points at the beginning of the
+ * line, which is what the `^` anchor requires.
+ */
+static int shell_fsre_match_here(const char *pat, int pi, const char *text, int ti,
+                                 int tlen, bool icase, bool at_start)
+{
+    int n;
+
+    if (pat[pi] == '\0') {
+        return ti;
+    }
+    if (pat[pi] == '^' && pi == 0) {
+        if (!at_start) {
+            return -1;
+        }
+        return shell_fsre_match_here(pat, pi + 1, text, ti, tlen, icase, at_start);
+    }
+    if (pat[pi] == '$' && pat[pi + 1] == '\0') {
+        return (ti == tlen) ? ti : -1;
+    }
+    if (pat[pi] == '\\' && pat[pi + 1] == '<') {
+        /* Word start: the previous character (if any) is not a word char and
+         * the current one is. Zero-width. */
+        if (ti >= tlen || (ti > 0 && shell_fsre_is_word((unsigned char)text[ti - 1])) ||
+            !shell_fsre_is_word((unsigned char)text[ti])) {
+            return -1;
+        }
+        return shell_fsre_match_here(pat, pi + 2, text, ti, tlen, icase, at_start);
+    }
+    if (pat[pi] == '\\' && pat[pi + 1] == '>') {
+        /* Word end: the previous character is a word char and the current one
+         * (if any) is not. Zero-width. */
+        if (ti == 0 || !shell_fsre_is_word((unsigned char)text[ti - 1]) ||
+            (ti < tlen && shell_fsre_is_word((unsigned char)text[ti]))) {
+            return -1;
+        }
+        return shell_fsre_match_here(pat, pi + 2, text, ti, tlen, icase, at_start);
+    }
+
+    /* Starred atom: pat[pi] followed by '*'. Greedy with backtracking. */
+    if (pat[pi + 1] == '*') {
+        n = 0;
+        while (ti + n <= tlen) {
+            int r = shell_fsre_match_here(pat, pi + 2, text, ti + n, tlen,
+                                          icase, at_start && (ti + n == 0));
+
+            if (r >= 0) {
+                return r;
+            }
+            if (ti + n == tlen || !shell_fsre_atom_matches(pat, pi, text[ti + n], icase)) {
+                break;
+            }
+            n++;
+        }
+        return -1;
+    }
+
+    if (ti >= tlen || !shell_fsre_atom_matches(pat, pi, text[ti], icase)) {
+        return -1;
+    }
+    return shell_fsre_match_here(pat, pi + 1, text, ti + 1, tlen, icase, false);
+}
+
+/**
+ * Search for the regex pattern anywhere in text (unless anchored with `^`).
+ * Returns the match start index, or -1; @p end_out receives the index just
+ * past the match. Exposed (non-static) so the unit tests can drive it.
+ */
+int shell_fsre_search(const char *pattern, const char *text, bool icase,
+                      int *end_out)
+{
+    int tlen = (int)strlen(text);
+    bool anchor_beg = (pattern[0] == '^');
+    int ti;
+
+    for (ti = 0; ti <= tlen; ti++) {
+        int end;
+
+        if (anchor_beg && ti != 0) {
+            break;
+        }
+        end = shell_fsre_match_here(pattern, 0, text, ti, tlen, icase, ti == 0);
+        if (end >= 0) {
+            *end_out = end;
+            return ti;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Match one line against one search string, honouring the /X /E /B switches.
+ * @p is_regex selects the regex engine; otherwise the string is literal.
+ * Exposed (non-static) so the unit tests can drive it.
+ */
+bool shell_findstr_match_line(const char *pattern, bool is_regex,
+                              const char *line, bool icase,
+                              bool beg, bool end, bool whole)
+{
+    int line_len = (int)strlen(line);
+
+    if (is_regex) {
+        int start;
+        int match_end;
+
+        start = shell_fsre_search(pattern, line, icase, &match_end);
+        if (start < 0) {
+            return false;
+        }
+        if (whole) {
+            return start == 0 && match_end == line_len;
+        }
+        if (beg && start != 0) {
+            return false;
+        }
+        if (end && match_end != line_len) {
+            return false;
+        }
+        return true;
+    }
+
+    if (whole) {
+        return icase ? (strcasecmp(line, pattern) == 0)
+                     : (strcmp(line, pattern) == 0);
+    }
+    if (beg) {
+        return icase ? (strncasecmp(line, pattern, strlen(pattern)) == 0)
+                     : (strncmp(line, pattern, strlen(pattern)) == 0);
+    }
+    if (end) {
+        size_t plen = strlen(pattern);
+        size_t llen = strlen(line);
+
+        if (plen > llen) {
+            return false;
+        }
+        return icase ? (strncasecmp(line + llen - plen, pattern, plen) == 0)
+                     : (strcmp(line + llen - plen, pattern) == 0);
+    }
+    return icase ? (shell_text_find_ci(line, pattern) != NULL)
+                 : (strstr(line, pattern) != NULL);
+}
+
+/** Parsed `findstr` options and collected search strings. */
+typedef struct {
+    bool use_regex;
+    bool icase;
+    bool numbers;
+    bool invert;
+    bool whole;
+    bool beg;
+    bool end;
+    bool recursive;
+    bool files_only;
+    const char *filelist_arg;
+    const char *strings_arg;
+    char strings[P4_CONFIG_FINDSTR_MAX_STRINGS][P4_CONFIG_FINDSTR_PATTERN_BYTES];
+    bool regex_strings[P4_CONFIG_FINDSTR_MAX_STRINGS];
+    int nstrings;
+} findstr_opts_t;
+
+/** Add one search string; /C: strings are literal regardless of /R. */
+static bool shell_findstr_add_string(findstr_opts_t *opts, const char *text, bool is_regex)
+{
+    if (opts->nstrings >= P4_CONFIG_FINDSTR_MAX_STRINGS) {
+        shell_print_error("findstr: too many search strings (max %d)",
+                          P4_CONFIG_FINDSTR_MAX_STRINGS);
+        return false;
+    }
+    snprintf(opts->strings[opts->nstrings], sizeof(opts->strings[0]), "%s", text);
+    opts->regex_strings[opts->nstrings] = is_regex;
+    opts->nstrings++;
+    return true;
+}
+
+/**
+ * Search one file, printing matching lines. When @p prefix_file is set (more
+ * than one source) each line is prefixed with the filename. Stops once the
+ * global match cap is reached.
+ */
+static void shell_findstr_search_file(const char *path, const findstr_opts_t *opts,
+                                      bool prefix_file, int *total_matches)
+{
+    char line[SHELL_TEXT_LINE_BYTES];
+    FILE *file;
+    int lineno = 0;
+    int matched_lines = 0;
+
+    file = fopen(path, "r");
+    if (file == NULL) {
+        shell_print_error("findstr: cannot open %s (%s)", path, strerror(errno));
+        return;
+    }
+
+    while (fgets(line, sizeof(line), file) != NULL &&
+           *total_matches < P4_CONFIG_FINDSTR_MATCH_MAX) {
+        bool hit = false;
+        int index;
+
+        lineno++;
+        shell_text_strip_eol(line);
+
+        for (index = 0; index < opts->nstrings; index++) {
+            if (shell_findstr_match_line(opts->strings[index], opts->regex_strings[index],
+                                         line, opts->icase, opts->beg, opts->end,
+                                         opts->whole)) {
+                hit = true;
+                break;
+            }
+        }
+        if (opts->invert) {
+            hit = !hit;
+        }
+        if (!hit) {
+            continue;
+        }
+
+        matched_lines++;
+        (*total_matches)++;
+
+        if (opts->files_only) {
+            continue;   /* the filename is printed once at the end */
+        }
+        if (prefix_file) {
+            shell_transcript_appendf("%s:", path);
+        }
+        if (opts->numbers) {
+            shell_transcript_appendf("%d:", lineno);
+        }
+        shell_transcript_appendf("%s\n", line);
+    }
+
+    fclose(file);
+
+    if (opts->files_only && matched_lines > 0) {
+        shell_transcript_appendf("%s\n", path);
+    }
+}
+
+/**
+ * Recursively search every file under @p vfs_dir (`findstr /S`). Each level
+ * keeps its state in one heap block, matching the `find` discovery walker.
+ */
+static void shell_findstr_walk(const char *vfs_dir, int depth, const findstr_opts_t *opts,
+                               int *total_matches)
+{
+    struct findstr_level_scratch {
+        char fatfs_path[SHELL_SD_PATH_BYTES];
+        char child[SHELL_SD_PATH_BYTES];
+        FF_DIR dir;
+        FILINFO info;
+    } *scratch = NULL;
+    FRESULT result;
+
+    if (depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX ||
+        *total_matches >= P4_CONFIG_FINDSTR_MATCH_MAX) {
+        return;
+    }
+
+    scratch = calloc(1, sizeof(*scratch));
+    if (scratch == NULL) {
+        shell_record_errorf("findstr", ESP_ERR_NO_MEM, "Out of memory during findstr /S");
+        return;
+    }
+    if (shell_sd_vfs_to_fatfs_path(vfs_dir, scratch->fatfs_path, sizeof(scratch->fatfs_path)) != ESP_OK) {
+        free(scratch);
+        return;
+    }
+    result = f_opendir(&scratch->dir, scratch->fatfs_path);
+    if (result != FR_OK) {
+        free(scratch);
+        return;
+    }
+
+    while (true) {
+        result = f_readdir(&scratch->dir, &scratch->info);
+        if (result != FR_OK || scratch->info.fname[0] == '\0' ||
+            *total_matches >= P4_CONFIG_FINDSTR_MATCH_MAX) {
+            break;
+        }
+        if (strcmp(scratch->info.fname, ".") == 0 || strcmp(scratch->info.fname, "..") == 0) {
+            continue;
+        }
+        if (snprintf(scratch->child, sizeof(scratch->child), "%s/%s",
+                     vfs_dir, scratch->info.fname) < 0) {
+            continue;
+        }
+        if ((scratch->info.fattrib & AM_DIR) != 0) {
+            shell_findstr_walk(scratch->child, depth + 1, opts, total_matches);
+        } else {
+            shell_findstr_search_file(scratch->child, opts, true, total_matches);
+        }
+    }
+
+    (void)f_closedir(&scratch->dir);
+    free(scratch);
+}
+
+/**
+ * `findstr` command entry point.
+ *
+ * Usage: findstr [/R] [/C:"string"] [/I] [/N] [/V] [/X] [/E] [/B] [/L]
+ *        [/S] [/M] [/F:file] [/G:file] <search> [file...]
+ * Reads the pending `<` or pipe source when no file is given.
+ * Returns an ERRORLEVEL: 0 match found, 1 no match, 2 usage.
+ */
+int shell_command_findstr(int argc, char **argv)
+{
+    findstr_opts_t opts;
+    shell_sd_session_t session;
+    const char *files[P4_CONFIG_SD_LIST_LIMIT];
+    const char *bare_string = NULL;
+    int nfiles = 0;
+    bool have_filelist = false;   /* /F: entries are strdup'd and owned */
+    int total_matches = 0;
+    int index;
+    int rc = 1;
+    esp_err_t error;
+
+    memset(&opts, 0, sizeof(opts));
+
+    for (index = 1; index < argc; index++) {
+        const char *token = argv[index];
+
+        if (token[0] == '/') {
+            if (strncasecmp(token, "/C:", 3) == 0) {
+                if (!shell_findstr_add_string(&opts, token + 3, false)) {
+                    return 2;
+                }
+                continue;
+            }
+            if (strncasecmp(token, "/F:", 3) == 0) {
+                opts.filelist_arg = token + 3;
+                continue;
+            }
+            if (strncasecmp(token, "/G:", 3) == 0) {
+                opts.strings_arg = token + 3;
+                continue;
+            }
+            if (token[1] != '\0' && token[2] == '\0') {
+                switch (toupper((unsigned char)token[1])) {
+                case 'R': opts.use_regex = true;  continue;
+                case 'L': opts.use_regex = false; continue;
+                case 'S': opts.recursive = true;  continue;
+                case 'I': opts.icase = true;      continue;
+                case 'N': opts.numbers = true;    continue;
+                case 'V': opts.invert = true;     continue;
+                case 'X': opts.whole = true;      continue;
+                case 'E': opts.end = true;        continue;
+                case 'B': opts.beg = true;        continue;
+                case 'M': opts.files_only = true; continue;
+                default:
+                    shell_print_error("findstr: unknown option %s", token);
+                    shell_print_usage("Usage: findstr [/R] [/C:string] [/I] [/N] [/V] [/X] [/E] [/B] [/L] [/S] [/M] [/F:file] [/G:file] <search> [file...]");
+                    return 2;
+                }
+            }
+            shell_print_error("findstr: unknown option %s", token);
+            shell_print_usage("Usage: findstr [/R] [/C:string] [/I] [/N] [/V] [/X] [/E] [/B] [/L] [/S] [/M] [/F:file] [/G:file] <search> [file...]");
+            return 2;
+        }
+
+        /* The first bare token is the single search string; any further bare
+         * tokens are files, matching DOS findstr. */
+        if (bare_string == NULL) {
+            bare_string = token;
+        } else if (nfiles < (int)(sizeof(files) / sizeof(files[0]))) {
+            files[nfiles++] = token;
+        } else {
+            shell_print_error("findstr: too many files (max %d)",
+                              (int)(sizeof(files) / sizeof(files[0])));
+            return 2;
+        }
+    }
+
+    if (bare_string != NULL) {
+        if (!shell_findstr_add_string(&opts, bare_string, opts.use_regex)) {
+            return 2;
+        }
+    }
+
+    /* /G:file supplies additional search strings, one per line. */
+    if (opts.strings_arg != NULL) {
+        char resolved[SHELL_SD_PATH_BYTES];
+        char line[SHELL_TEXT_LINE_BYTES];
+        FILE *file;
+
+        if (shell_fs_resolve_path(opts.strings_arg, resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("findstr: invalid /G file path");
+            return 2;
+        }
+        file = fopen(resolved, "r");
+        if (file == NULL) {
+            shell_print_error("findstr: cannot open /G file %s", resolved);
+            return 1;
+        }
+        while (fgets(line, sizeof(line), file) != NULL) {
+            shell_text_strip_eol(line);
+            if (line[0] == '\0') {
+                continue;
+            }
+            if (!shell_findstr_add_string(&opts, line, opts.use_regex)) {
+                fclose(file);
+                return 2;
+            }
+        }
+        fclose(file);
+    }
+
+    if (opts.nstrings == 0) {
+        shell_print_usage("Usage: findstr [/R] [/C:string] [/I] [/N] [/V] [/X] [/E] [/B] [/L] [/S] [/M] [/F:file] [/G:file] <search> [file...]");
+        return 2;
+    }
+
+    /* /F:file supplies the file list, one path per line. */
+    if (opts.filelist_arg != NULL) {
+        char resolved[SHELL_SD_PATH_BYTES];
+        char line[SHELL_SD_PATH_BYTES];
+        FILE *file;
+
+        if (shell_fs_resolve_path(opts.filelist_arg, resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("findstr: invalid /F file path");
+            return 2;
+        }
+        file = fopen(resolved, "r");
+        if (file == NULL) {
+            shell_print_error("findstr: cannot open /F file %s", resolved);
+            return 1;
+        }
+        have_filelist = true;
+        while (fgets(line, sizeof(line), file) != NULL) {
+            char *copy;
+
+            shell_text_strip_eol(line);
+            if (line[0] == '\0') {
+                continue;
+            }
+            if (nfiles >= (int)(sizeof(files) / sizeof(files[0]))) {
+                break;
+            }
+            copy = strdup(line);
+            if (copy == NULL) {
+                break;
+            }
+            files[nfiles++] = copy;
+        }
+        fclose(file);
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_print_error("findstr: SD card not present - insert and retry");
+        if (have_filelist) {
+            for (index = 0; index < nfiles; index++) {
+                free((void *)files[index]);
+            }
+        }
+        return 1;
+    }
+
+    if (nfiles == 0) {
+        char resolved[SHELL_SD_PATH_BYTES];
+
+        /* Read the pending `<` or pipe source. */
+        error = storage_resolve_input_source(NULL, resolved, sizeof(resolved));
+        if (error == ESP_ERR_NOT_FOUND) {
+            shell_transcript_append_text("findstr: no input file given and no input redirection active\n");
+            shell_sd_end(&session, "findstr");
+            return 1;
+        }
+        if (error != ESP_OK) {
+            shell_print_error("findstr: invalid path");
+            shell_sd_end(&session, "findstr");
+            return 1;
+        }
+        shell_findstr_search_file(resolved, &opts, false, &total_matches);
+    } else if (opts.recursive) {
+        for (index = 0; index < nfiles; index++) {
+            char resolved[SHELL_SD_PATH_BYTES];
+            struct stat st;
+
+            if (shell_sd_resolve_path(files[index], resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("findstr: invalid path %s", files[index]);
+                continue;
+            }
+            if (stat(resolved, &st) != 0) {
+                shell_print_error("findstr: path not found %s", files[index]);
+                continue;
+            }
+            if (S_ISDIR(st.st_mode)) {
+                shell_findstr_walk(resolved, 0, &opts, &total_matches);
+            } else {
+                shell_findstr_search_file(resolved, &opts, nfiles > 1, &total_matches);
+            }
+        }
+    } else {
+        bool prefix_file = (nfiles > 1);
+
+        for (index = 0; index < nfiles; index++) {
+            char resolved[SHELL_SD_PATH_BYTES];
+            struct stat st;
+
+            if (shell_sd_resolve_path(files[index], resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("findstr: invalid path %s", files[index]);
+                continue;
+            }
+            if (stat(resolved, &st) != 0) {
+                shell_print_error("findstr: path not found %s", files[index]);
+                continue;
+            }
+            if (S_ISDIR(st.st_mode) && !opts.recursive) {
+                shell_print_error("findstr: %s is a directory (use /S)", files[index]);
+                continue;
+            }
+            shell_findstr_search_file(resolved, &opts, prefix_file, &total_matches);
+        }
+    }
+
+    shell_sd_end(&session, "findstr");
+
+    if (have_filelist) {
+        for (index = 0; index < nfiles; index++) {
+            free((void *)files[index]);
+        }
+    }
+
+    if (total_matches >= P4_CONFIG_FINDSTR_MATCH_MAX) {
+        shell_transcript_appendf("findstr: output truncated at %d match(es)\n",
+                                 P4_CONFIG_FINDSTR_MATCH_MAX);
+    }
+    if (total_matches > 0) {
+        rc = 0;
+    }
+    return rc;
+}
+
+/* ========================================================================
+ * COMP: classic DOS byte-for-byte file comparison
+ * ======================================================================== */
+
+/** Parsed `comp` options. */
+typedef struct {
+    bool decimal;      /* /D */
+    bool ascii;        /* /A */
+    bool lines;        /* /L */
+    bool icase;        /* /C */
+    bool have_n;       /* /N=number */
+    int n_lines;
+} comp_opts_t;
+
+/**
+ * Find the first differing byte between two buffers. Returns true and fills
+ * @p pos (0-based), @p va, @p vb when a difference exists, including a length
+ * difference (the missing byte reads as 0x00). Case-insensitive when
+ * @p icase. Exposed (non-static) so the unit tests can drive it.
+ */
+bool shell_comp_first_diff(const uint8_t *a, size_t an,
+                           const uint8_t *b, size_t bn,
+                           bool icase, size_t *pos, uint8_t *va, uint8_t *vb)
+{
+    size_t i;
+    size_t n = (an < bn) ? an : bn;
+
+    for (i = 0; i < n; i++) {
+        unsigned char ca = a[i];
+        unsigned char cb = b[i];
+
+        if (icase) {
+            ca = (unsigned char)tolower(ca);
+            cb = (unsigned char)tolower(cb);
+        }
+        if (ca != cb) {
+            *pos = i;
+            *va = a[i];
+            *vb = b[i];
+            return true;
+        }
+    }
+    if (an != bn) {
+        *pos = n;
+        *va = (n < an) ? a[n] : 0;
+        *vb = (n < bn) ? b[n] : 0;
+        return true;
+    }
+    return false;
+}
+
+/** Print one `comp` mismatch line honouring /D /A /L. */
+static void shell_comp_report(const comp_opts_t *opts, size_t offset, int line,
+                              uint8_t va, uint8_t vb)
+{
+    if (opts->lines) {
+        shell_transcript_appendf("Compare error at LINE %d\n", line);
+    } else if (opts->decimal) {
+        shell_transcript_appendf("Compare error at OFFSET %u\n", (unsigned)offset);
+    } else {
+        shell_transcript_appendf("Compare error at OFFSET %X\n", (unsigned)offset);
+    }
+    if (opts->ascii) {
+        shell_transcript_appendf("file1 = %c\n", isprint(va) ? (int)va : '.');
+        shell_transcript_appendf("file2 = %c\n", isprint(vb) ? (int)vb : '.');
+    } else {
+        shell_transcript_appendf("file1 = %02X\n", (unsigned)va);
+        shell_transcript_appendf("file2 = %02X\n", (unsigned)vb);
+    }
+}
+
+/**
+ * Compare two open files line by line (used by /L and /N=number), reporting
+ * up to P4_CONFIG_COMP_MISMATCH_MAX mismatches. Returns the mismatch count.
+ */
+static int shell_comp_compare_lines(FILE *file1, FILE *file2, const comp_opts_t *opts)
+{
+    char line1[SHELL_TEXT_LINE_BYTES];
+    char line2[SHELL_TEXT_LINE_BYTES];
+    int line = 0;
+    int mismatches = 0;
+
+    while (mismatches < P4_CONFIG_COMP_MISMATCH_MAX &&
+           (opts->have_n ? line < opts->n_lines : true)) {
+        char *got1 = fgets(line1, sizeof(line1), file1);
+        char *got2 = fgets(line2, sizeof(line2), file2);
+        size_t len1;
+        size_t len2;
+        size_t pos;
+        uint8_t va;
+        uint8_t vb;
+
+        line++;
+        if (got1 == NULL && got2 == NULL) {
+            break;
+        }
+        len1 = got1 != NULL ? strlen(line1) : 0;
+        len2 = got2 != NULL ? strlen(line2) : 0;
+
+        if (shell_comp_first_diff((const uint8_t *)line1, len1,
+                                  (const uint8_t *)line2, len2,
+                                  opts->icase, &pos, &va, &vb)) {
+            shell_comp_report(opts, opts->lines ? 0 : pos, line, va, vb);
+            mismatches++;
+            if (got1 == NULL || got2 == NULL) {
+                break;
+            }
+        }
+    }
+    return mismatches;
+}
+
+/**
+ * Compare two open files byte by byte (the default mode), reporting up to
+ * P4_CONFIG_COMP_MISMATCH_MAX mismatches. Returns the mismatch count.
+ */
+static int shell_comp_compare_bytes(FILE *file1, FILE *file2, const comp_opts_t *opts)
+{
+    uint8_t buf1[SHELL_SD_IO_BUFFER_BYTES];
+    uint8_t buf2[SHELL_SD_IO_BUFFER_BYTES];
+    size_t base = 0;
+    int mismatches = 0;
+
+    while (mismatches < P4_CONFIG_COMP_MISMATCH_MAX) {
+        size_t n1 = fread(buf1, 1, sizeof(buf1), file1);
+        size_t n2 = fread(buf2, 1, sizeof(buf2), file2);
+        size_t pos;
+        uint8_t va;
+        uint8_t vb;
+
+        if (n1 == 0 && n2 == 0) {
+            break;
+        }
+        if (shell_comp_first_diff(buf1, n1, buf2, n2, opts->icase, &pos, &va, &vb)) {
+            /* Report at the absolute offset, then resume just past the byte. */
+            shell_comp_report(opts, base + pos, 0, va, vb);
+            mismatches++;
+
+            if (mismatches >= P4_CONFIG_COMP_MISMATCH_MAX) {
+                break;
+            }
+            if (fseek(file1, (long)(base + pos + 1), SEEK_SET) != 0 ||
+                fseek(file2, (long)(base + pos + 1), SEEK_SET) != 0) {
+                break;
+            }
+            base = base + pos + 1;
+            continue;
+        }
+        if (n1 != n2) {
+            /* Lengths differ: report the extra length and stop. */
+            shell_comp_report(opts, base + (n1 < n2 ? n1 : n2), 0, 0, 0);
+            mismatches++;
+            break;
+        }
+        if (n1 == 0) {
+            break;
+        }
+        base += n1;
+    }
+    return mismatches;
+}
+
+/**
+ * `comp` command entry point.
+ *
+ * Usage: comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]
+ *   /D  decimal offsets      /A  ASCII display
+ *   /L  line numbers         /N=n  compare only the first n lines
+ *   /C  case-insensitive
+ * Returns an ERRORLEVEL: 0 identical, 1 different, 2 usage.
+ */
+int shell_command_comp(int argc, char **argv)
+{
+    comp_opts_t opts;
+    shell_sd_session_t session;
+    char resolved1[SHELL_SD_PATH_BYTES];
+    char resolved2[SHELL_SD_PATH_BYTES];
+    FILE *file1 = NULL;
+    FILE *file2 = NULL;
+    esp_err_t error;
+    const char *arg1 = NULL;
+    const char *arg2 = NULL;
+    int mismatches;
+    int index;
+
+    memset(&opts, 0, sizeof(opts));
+
+    for (index = 1; index < argc; index++) {
+        const char *token = argv[index];
+
+        if (token[0] == '/') {
+            if (strncasecmp(token, "/N=", 3) == 0) {
+                char *end = NULL;
+                long parsed;
+
+                parsed = strtol(token + 3, &end, 10);
+                if (end == token + 3 || *end != '\0' || parsed < 1) {
+                    shell_print_error("comp: invalid /N value %s (use /N=number)", token + 3);
+                    return 2;
+                }
+                opts.have_n = true;
+                opts.n_lines = (int)parsed;
+                continue;
+            }
+            if (token[1] != '\0' && token[2] == '\0') {
+                switch (toupper((unsigned char)token[1])) {
+                case 'D': opts.decimal = true; continue;
+                case 'A': opts.ascii = true;   continue;
+                case 'L': opts.lines = true;   continue;
+                case 'C': opts.icase = true;   continue;
+                default:
+                    shell_print_error("comp: unknown option %s", token);
+                    shell_print_usage("Usage: comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]");
+                    return 2;
+                }
+            }
+            shell_print_error("comp: unknown option %s", token);
+            shell_print_usage("Usage: comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]");
+            return 2;
+        }
+
+        if (arg1 == NULL) {
+            arg1 = token;
+        } else if (arg2 == NULL) {
+            arg2 = token;
+        } else {
+            shell_print_usage("Usage: comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]");
+            return 2;
+        }
+    }
+
+    if (arg1 == NULL || arg2 == NULL) {
+        shell_print_usage("Usage: comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]");
+        return 2;
+    }
+
+    error = shell_fs_resolve_path(arg1, resolved1, sizeof(resolved1));
+    if (error != ESP_OK) {
+        shell_print_error("comp: invalid path for the first file");
+        return 2;
+    }
+    error = shell_fs_resolve_path(arg2, resolved2, sizeof(resolved2));
+    if (error != ESP_OK) {
+        shell_print_error("comp: invalid path for the second file");
+        return 2;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_print_error("comp: SD card not present - insert and retry");
+        return 1;
+    }
+
+    file1 = fopen(resolved1, "rb");
+    file2 = fopen(resolved2, "rb");
+    if (file1 == NULL || file2 == NULL) {
+        shell_print_error("comp: cannot open %s", file1 == NULL ? resolved1 : resolved2);
+        if (file1 != NULL) {
+            fclose(file1);
+        }
+        if (file2 != NULL) {
+            fclose(file2);
+        }
+        shell_sd_end(&session, "comp");
+        return 1;
+    }
+
+    shell_print_heading("Comparing %s and %s", resolved1, resolved2);
+
+    if (opts.lines || opts.have_n) {
+        mismatches = shell_comp_compare_lines(file1, file2, &opts);
+    } else {
+        mismatches = shell_comp_compare_bytes(file1, file2, &opts);
+    }
+
+    fclose(file1);
+    fclose(file2);
+    shell_sd_end(&session, "comp");
+
+    if (mismatches == 0) {
+        shell_print_ok("Files compare OK");
+        return 0;
+    }
+    shell_transcript_appendf("%d mismatch%s - ending compare\n", mismatches,
+                             mismatches == 1 ? "" : "es");
+    return 1;
 }
 
 /* ========================================================================
@@ -3981,7 +5775,7 @@ static void shell_command_disk_detail(void)
     }
 }
 
-static void shell_command_disk_clean(void)
+static int shell_command_disk_clean(void)
 {
     esp_err_t error;
 
@@ -3990,18 +5784,19 @@ static void shell_command_disk_clean(void)
                                    "  Run 'disk create partition primary' then 'format' to recreate a filesystem.\n")) {
         shell_print_warning("disk: clean cancelled, the card was not modified");
         shell_record_warningf("disk", "Cancelled disk clean by user");
-        return;
+        return 1;
     }
 
     error = storage_disk_clean(STORAGE_VOLUME_SD);
     if (error != ESP_OK) {
         shell_print_error("disk: clean failed (%s)", esp_err_to_name(error));
         shell_record_errorf("disk", error, "Disk clean failed");
-        return;
+        return 1;
     }
 
     shell_print_ok("disk: partition table removed");
     shell_transcript_append_text("  Run 'disk create partition primary' then 'format' to recreate a filesystem.\n");
+    return 0;
 }
 
 /**
@@ -4042,7 +5837,7 @@ static bool shell_disk_parse_partition_size(const char *text, uint64_t *bytes_ou
     return true;
 }
 
-static void shell_command_disk_create(int argc, char **argv)
+static int shell_command_disk_create(int argc, char **argv)
 {
     uint64_t size_bytes = 0;
     esp_err_t error;
@@ -4052,43 +5847,44 @@ static void shell_command_disk_create(int argc, char **argv)
     if (argc < 4 || strcmp(argv[2], "partition") != 0) {
         shell_disk_print_usage();
         shell_record_warningf("disk", "Usage error for disk create command");
-        return;
+        return 2;
     }
     if (strcmp(argv[3], "primary") != 0) {
         shell_print_error("disk: only 'primary' partitions are supported");
         shell_record_warningf("disk", "Unsupported partition type: %s", argv[3]);
-        return;
+        return 2;
     }
 
     for (index = 4; index < argc; index++) {
         if (strncmp(argv[index], "size=", 5) == 0) {
             if (!shell_disk_parse_partition_size(argv[index] + 5, &size_bytes)) {
                 shell_print_error("disk: invalid partition size %s", argv[index] + 5);
-                return;
+                return 2;
             }
         } else {
             shell_print_error("disk: unexpected argument %s", argv[index]);
             shell_disk_print_usage();
-            return;
+            return 2;
         }
     }
 
     error = storage_disk_create_primary_partition(STORAGE_VOLUME_SD, size_bytes);
     if (error == ESP_ERR_INVALID_STATE) {
         shell_print_error("disk: no free partition slot (all 4 MBR entries are used)");
-        return;
+        return 1;
     }
     if (error != ESP_OK) {
         shell_print_error("disk: create partition failed (%s)", esp_err_to_name(error));
         shell_record_errorf("disk", error, "Disk create partition failed");
-        return;
+        return 1;
     }
 
     shell_print_ok("disk: primary partition created");
     shell_transcript_append_text("  Run 'format' (or 'disk format') to create the filesystem.\n");
+    return 0;
 }
 
-static void shell_command_disk_delete(int argc, char **argv)
+static int shell_command_disk_delete(int argc, char **argv)
 {
     char *end;
     unsigned long partition_index;
@@ -4098,13 +5894,13 @@ static void shell_command_disk_delete(int argc, char **argv)
     if (argc < 4 || strcmp(argv[2], "partition") != 0) {
         shell_disk_print_usage();
         shell_record_warningf("disk", "Usage error for disk delete command");
-        return;
+        return 2;
     }
 
     partition_index = strtoul(argv[3], &end, 10);
     if (end == argv[3] || *end != '\0' || partition_index < 1 || partition_index > 4) {
         shell_print_error("disk: partition number must be 1-4");
-        return;
+        return 2;
     }
 
     if (!shell_confirm_destructive("disk delete",
@@ -4112,21 +5908,22 @@ static void shell_command_disk_delete(int argc, char **argv)
                                    "")) {
         shell_print_warning("disk: delete cancelled, the card was not modified");
         shell_record_warningf("disk", "Cancelled disk delete by user");
-        return;
+        return 1;
     }
 
     error = storage_disk_delete_partition(STORAGE_VOLUME_SD, (unsigned)(partition_index - 1));
     if (error != ESP_OK) {
         shell_print_error("disk: delete partition failed (%s)", esp_err_to_name(error));
         shell_record_errorf("disk", error, "Disk delete partition failed");
-        return;
+        return 1;
     }
 
     shell_print_ok("disk: partition %lu removed", partition_index);
     shell_transcript_append_text("  Run 'format' (or 'disk format') to recreate a filesystem.\n");
+    return 0;
 }
 
-static void shell_command_disk_format(int argc, char **argv)
+static int shell_command_disk_format(int argc, char **argv)
 {
     const char *fs_type = NULL;
     const char *label = NULL;
@@ -4144,14 +5941,14 @@ static void shell_command_disk_format(int argc, char **argv)
             label = token + 6;
             if (strlen(label) > 11) {
                 shell_print_error("disk format: volume label must be 11 characters or fewer");
-                return;
+                return 2;
             }
         } else if (strncmp(token, "au=", 3) == 0) {
             if (!shell_parse_alloc_unit(token + 3, &alloc_unit) ||
                 alloc_unit < P4_CONFIG_FORMAT_ALLOC_UNIT_MIN ||
                 alloc_unit > P4_CONFIG_FORMAT_ALLOC_UNIT_MAX) {
                 shell_print_error("disk format: invalid allocation unit size %s", token + 3);
-                return;
+                return 2;
             }
             alloc_set = true;
         } else if (strcmp(token, "quick") == 0) {
@@ -4159,7 +5956,7 @@ static void shell_command_disk_format(int argc, char **argv)
         } else {
             shell_print_error("disk format: unexpected argument %s", token);
             shell_disk_print_usage();
-            return;
+            return 2;
         }
     }
 
@@ -4172,42 +5969,50 @@ static void shell_command_disk_format(int argc, char **argv)
                    !shell_text_equals_ignore_case(fs_type, "FAT32")) {
             shell_print_error("disk format: unsupported filesystem type %s", fs_type);
             shell_transcript_append_text("  Supported: FAT, FAT32\n");
-            return;
+            return 2;
         }
     }
 
-    shell_format_execute("disk format", fs_type, label, alloc_unit, alloc_set);
+    return shell_format_execute("disk format", fs_type, label, alloc_unit, alloc_set);
 }
 
 /**
  * `disk` command family entry point.
  */
-void shell_command_disk(char *command)
+int shell_command_disk(char *command)
 {
     char *argv[8];
     int argc;
+    int rc = 2;
 
     argc = shell_split_args(command, argv, 8);
 
     if (argc <= 1) {
         shell_command_disk_list();
         shell_disk_print_usage();
+        rc = 2;
     } else if (strcmp(argv[1], "help") == 0) {
         shell_disk_print_usage();
+        rc = 0;
     } else if (strcmp(argv[1], "list") == 0) {
         shell_command_disk_list();
+        rc = 0;
     } else if (strcmp(argv[1], "detail") == 0) {
         shell_command_disk_detail();
+        rc = 0;
     } else if (strcmp(argv[1], "clean") == 0) {
-        shell_command_disk_clean();
+        rc = shell_command_disk_clean();
     } else if (strcmp(argv[1], "create") == 0) {
-        shell_command_disk_create(argc, argv);
+        rc = shell_command_disk_create(argc, argv);
     } else if (strcmp(argv[1], "delete") == 0) {
-        shell_command_disk_delete(argc, argv);
+        rc = shell_command_disk_delete(argc, argv);
     } else if (strcmp(argv[1], "format") == 0) {
-        shell_command_disk_format(argc, argv);
+        rc = shell_command_disk_format(argc, argv);
     } else {
         shell_disk_print_usage();
         shell_record_warningf("disk", "Unknown disk subcommand: %s", argv[1]);
+        rc = 2;
     }
+
+    return rc;
 }

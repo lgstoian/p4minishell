@@ -12,6 +12,8 @@ This document describes the public integration surface exposed by the hosted run
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar UI for notifications and passive status display.
+- `components/led` owns the WS2812 RGB status LED on GPIO26 (espressif/led_strip over RMT), the
+  animation task, and the auto status / event notification engine.
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
 - `components/usb` owns USB Host Library state, USB MSC storage, and USB HID keyboard or mouse debug behavior.
 - `components/c6ota` owns the shell-visible ESP32-C6 OTA workflow and depends on `components/networking` for Wi-Fi wait and restore hooks.
@@ -388,32 +390,46 @@ void shell_command_dir(int argc, char **argv);
 void shell_command_tree(int argc, char **argv);
 void shell_command_copy(int argc, char **argv);
 void shell_command_move(int argc, char **argv);
-void shell_command_del(int argc, char **argv);
+int  shell_command_del(int argc, char **argv);   /* 0 ok, 1 fail/cancelled, 2 usage */
 void shell_command_rename(int argc, char **argv, const char *verb);
 void shell_command_mkdir(int argc, char **argv);
-void shell_command_rmdir(int argc, char **argv);
+int  shell_command_rmdir(int argc, char **argv); /* 0 ok, 1 fail/cancelled, 2 usage */
 void shell_command_type_file(int argc, char **argv);
 void shell_command_write_file(int argc, char **argv, bool append_mode);
 void shell_command_touch(int argc, char **argv);
 void shell_command_attrib(int argc, char **argv);
 void shell_command_label(int argc, char **argv);
-void shell_command_xcopy(int argc, char **argv);
-void shell_command_find(int argc, char **argv);    /* text search /I /N /C /V + recursive file discovery /NAME: /SIZE: /NEWER: /OLDER: /DIRS /B */
-void shell_command_more(int argc, char **argv);    /* keypress paging, Q quits */
-void shell_command_fc(int argc, char **argv);
-void shell_command_sort(int argc, char **argv);    /* /R /I /U */
+int  shell_command_xcopy(int argc, char **argv);  /* full DOS 6.x switch set; 0/1/2 */
+int  shell_command_find(int argc, char **argv);    /* text search /I /N /C /V + recursive file discovery /NAME: /SIZE: /NEWER: /OLDER: /DIRS /B; 0/1/2 */
+int  shell_command_findstr(int argc, char **argv); /* literal + regex-lite, /R /C /I /N /V /X /E /B /L /S /M /F /G; 0 found / 1 none / 2 usage */
+int  shell_command_more(int argc, char **argv);    /* keypress paging, Q quits; 0/1/2 */
+int  shell_command_fc(int argc, char **argv);      /* 0 identical, 1 differences, 2 usage */
+int  shell_command_comp(int argc, char **argv);    /* byte compare /D /A /L /N /C; 0 identical, 1 different, 2 usage */
+int  shell_command_sort(int argc, char **argv);    /* /R /I /U; 0/1/2 */
 void shell_command_sd(char *command);   /* receives the original unsplit line */
 
 void shell_command_chkdsk(int argc, char **argv);  /* [path] [/F] */
-void shell_command_format(int argc, char **argv);  /* [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q] */
-void shell_command_disk(char *command);  /* diskpart-style; receives the original unsplit line */
+int  shell_command_format(int argc, char **argv);  /* [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]; 0/1/2 */
+int  shell_command_disk(char *command);            /* diskpart-style; 0/1/2 */
+
+/* Recycle bin. `undelete` is aliased to `restore`; `trash` to `recycle`. */
+int  shell_command_undelete(int argc, char **argv);   /* restore <name|index> */
+int  shell_command_trash(int argc, char **argv);      /* list|info|restore|purge|empty */
+
+/* Pure helpers exposed for the unit tests (findstr regex engine and comp
+ * byte comparison). No I/O; declared in storage_commands.h. */
+int  shell_fsre_search(const char *pattern, const char *text, bool icase, int *end_out);
+bool shell_findstr_match_line(const char *pattern, bool is_regex, const char *line,
+                              bool icase, bool beg, bool end, bool whole);
+bool shell_comp_first_diff(const uint8_t *a, size_t an, const uint8_t *b, size_t bn,
+                           bool icase, size_t *pos, uint8_t *va, uint8_t *vb);
 ```
 - `shell_command_dir()` accepts `/W` `/P` `/S` `/B` `/L` `/A:attrs` `/O:order`, buffers each
   level on the heap for sorting, and closes with per-directory counts, a `/S` grand total, and
   free space.
 - `shell_command_chkdsk()` is read-only: it reports capacity and, with `/F`, verifies every
   directory is readable. It never rewrites FAT structures.
-- `shell_command_format()` requires the exact `P4_CONFIG_FORMAT_CONFIRM_WORD` through the
+- `shell_command_format()` requires the exact `P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD` through the
   shell key queue and refuses when `shell_key_input_available()` is false. `/FS:` accepts
   `FAT`/`FAT32` (size-appropriate auto-selection via `esp_vfs_fat_sdcard_format_cfg`; `EXFAT`
   is not available in this build and warns, falling back to FAT32), `/A:` sets the cluster
@@ -422,6 +438,22 @@ void shell_command_disk(char *command);  /* diskpart-style; receives the origina
   `create partition primary [size=N]`, `delete partition N`, `format`. It routes to the
   volume services in `storage.c`, which are parameterized by `storage_volume_t` so a future
   USB OTG MSC volume can be added without changing the command surface.
+- `shell_command_xcopy()` implements the full DOS 6.x switch set and walks directory trees
+  with one heap block per recursion level (`P4_CONFIG_DIR_RECURSE_DEPTH_MAX` bound), never
+  re-entering itself. Overwriting prompts when interactive and falls back to silent `/Y`
+  behaviour when headless, so batch files are unaffected.
+- `shell_command_findstr()` and `shell_command_comp()` are the classic DOS text tools; their
+  pure matcher helpers (`shell_fsre_search`, `shell_findstr_match_line`, `shell_comp_first_diff`)
+  are exposed for the unit tests.
+- All text tools (`find`, `findstr`, `more`, `fc`, `comp`, `sort`) and `xcopy` return an int
+  ERRORLEVEL (0 ok / found / identical, 1 not found / differences, 2 usage) that the batch
+  dispatcher records, so `if errorlevel` and `&&` / `||` work uniformly.
+- `shell_command_del()` / `shell_command_rmdir()` move entries into the recycle bin by
+  default (`/p`/`/f` delete permanently); `/s` recursion is gated by the exact confirmation
+  word. `shell_command_undelete()` restores one entry; `shell_command_trash()` runs the
+  `list`/`info`/`restore`/`purge`/`empty` subcommands. `del`, `rd`, `format`, `disk`,
+  `undelete`, and `trash` return 0/1/2 (success/failure-cancelled/usage) that the batch
+  dispatcher records as ERRORLEVEL.
 - `shell_command_tree()` accepts `/F` (include files) and `/A` (ASCII connectors), recurses to
   `P4_CONFIG_TREE_DEPTH_MAX`, and buffers each directory level on the heap.
 - `find`, `more`, and `sort` read the pending input-redirection source when no filename
@@ -446,6 +478,36 @@ const char *storage_get_fat_type(void);
   `sdmmc_write_sectors` on the BSP card handle, unmounting the FATFS volume
   (`f_mount(NULL, "0:", 0)`) first so no stale partition cache survives.
 - Every function opens its own guarded SD session; callers do not need one.
+
+### Recycle bin (storage.c + trash.c)
+Declared in `storage.h`; the `trash_*` implementations live in `components/storage/trash.c`.
+```c
+bool storage_trash_enabled(void);
+const char *storage_trash_path(void);
+esp_err_t storage_trash_delete_file(const char *resolved_path, bool permanent);
+esp_err_t storage_trash_delete_pattern(const char *resolved_dir, const char *pattern,
+                                       bool recursive, bool permanent, int *deleted_out);
+esp_err_t storage_trash_remove_tree(const char *resolved_path, bool permanent);
+esp_err_t storage_trash_restore(const char *name_or_index);
+esp_err_t storage_trash_purge(const char *name_or_index);
+esp_err_t storage_trash_empty(void);
+esp_err_t storage_trash_list(void);
+esp_err_t storage_trash_info(void);
+void storage_trash_enforce_limits(void);
+```
+- `storage_trash_delete_file()` / `storage_trash_remove_tree()` move a file or whole tree into
+  the hidden `.trash` folder (renaming to a unique `<epoch>_<name>` and writing a `.meta`
+  side-car first, so a failed rename leaves the original intact). `permanent` unlinks
+  instead. `storage_trash_delete_pattern()` matches a DOS wildcard, optionally recursing
+  (never into `.trash` itself).
+- `storage_trash_restore()` renames an entry back to the original path, recreating missing
+  parent directories and returning `ESP_ERR_INVALID_STATE` rather than overwriting an
+  occupied destination. Entries resolve by unique name, original path, basename, or 1-based
+  index.
+- `storage_trash_enforce_limits()` purges the oldest entries first when the byte / age /
+  entry-count caps (`P4_CONFIG_TRASH_MAX_*`) are exceeded; every public operation calls it.
+- All I/O runs inside guarded SD sessions; `ESP_ERR_NOT_SUPPORTED` is returned when the
+  recycle bin is disabled and `ESP_ERR_INVALID_ARG` when a path is inside `.trash`.
 
 ### Lifecycle
 ```c
@@ -1083,6 +1145,26 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
 - `bool bluetooth_is_enabled(void)`
 - `bool bluetooth_is_connected(void)`
   - Read-only state helpers used by the header status refresh in `components/shell/` to show hosted BLE readiness without moving Bluetooth ownership out of this module.
+
+## LED API
+- `void led_init(void)`
+  - Creates the WS2812 strip on `P4_CONFIG_LED_GPIO` (espressif/led_strip over RMT) and
+    starts the animation task. Idempotent; on failure every API returns
+    `ESP_ERR_INVALID_STATE`. Called early from `main.c` (before boot scripting so a
+    CONFIG.SYS `RGB=` directive can drive the LED).
+- `bool led_is_initialized(void)`
+- `esp_err_t led_set_color(uint8_t red, uint8_t green, uint8_t blue)`
+- `esp_err_t led_set_hex(uint32_t rgb)` — packed `0xRRGGBB`.
+- `esp_err_t led_off(void)`
+- `esp_err_t led_set_effect(led_effect_t effect, uint8_t speed)` — rainbow/breath/pulse/blink.
+- `esp_err_t led_set_auto_status(bool enable)`
+- `void led_get_state(led_state_t *out)`
+- `void led_notify(led_event_t event)` — push a transient event colour; Wi-Fi state events
+  become the persistent status colour in auto mode.
+- `led_effect_t led_effect_from_name(const char *name)` / `const char *led_effect_name(...)`
+  - The `rgb` shell command (in `components/command/command.c`) and the CONFIG.SYS `RGB=`
+    directive drive the LED through this API. `networking` pushes Wi-Fi/HTTP events via
+    `led_notify()`; `main.c` fires the boot confirmation flash.
 
 ## USB API
 - `void usb_init(void)`

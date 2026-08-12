@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             20
+#define P4_CONFIG_VERSION_PATCH             27
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -501,8 +501,12 @@
 /** Percent step between `copy` progress updates for large files. */
 #define P4_CONFIG_COPY_PROGRESS_STEP_PCT     10
 
-/** Exact confirmation word required by the destructive `format` command. */
-#define P4_CONFIG_FORMAT_CONFIRM_WORD        "YES"
+/** Exact confirmation word required by any destructive operation (format,
+ *  disk clean/delete, recursive delete, trash empty/purge). */
+#define P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD   "YES"
+
+/** Backward-compatible alias: `format` uses the shared destructive word. */
+#define P4_CONFIG_FORMAT_CONFIRM_WORD        P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD
 
 /** Default allocation unit size in bytes requested when formatting. 0 = let
  *  FATFS (via esp_vfs_fat_sdcard_format_cfg) choose a size-appropriate value. */
@@ -521,6 +525,36 @@
 /** Maximum number of `disk` / `format` volume targets. The firmware currently
  *  supports the SD card only; USB OTG MSC is a future target. */
 #define P4_CONFIG_STORAGE_VOLUME_MAX         1
+
+/* ========================================================================
+ * RECYCLE BIN (TRASH)
+ * ========================================================================
+ * `del`/`erase` move matching files and directories into a hidden `.trash`
+ * folder instead of deleting them, and `undelete` / `trash restore` bring
+ * them back. `trash`/`recycle` manage the bin. All limits are enforced on
+ * every trash operation (oldest entries are purged first).
+ */
+
+/** Enable the recycle bin. When 0, `del`/`erase` delete permanently again. */
+#define P4_CONFIG_TRASH_ENABLE               1
+
+/** Trash folder path (hidden from plain `dir`). */
+#define P4_CONFIG_TRASH_PATH                 "sd:/.trash"
+
+/** Maximum total bytes kept in the trash before the oldest entries are purged. */
+#define P4_CONFIG_TRASH_MAX_BYTES            (32 * 1024 * 1024)
+
+/** Maximum age in seconds of a trash entry before it is auto-purged. */
+#define P4_CONFIG_TRASH_MAX_AGE_SEC          (7 * 24 * 3600)
+
+/** Maximum number of trash entries before the oldest are purged. */
+#define P4_CONFIG_TRASH_MAX_ENTRIES          256
+
+/** Maximum file matches collected by one recursive `del /s` operation. */
+#define P4_CONFIG_TRASH_OPERATION_MAX        256
+
+/** Exact confirmation word required by `trash empty` and `trash purge`. */
+#define P4_CONFIG_TRASH_CONFIRM_WORD         P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD
 
 /* ========================================================================
  * BOOT CONFIGURATION (CONFIG.SYS / AUTOEXEC.BAT)
@@ -624,6 +658,24 @@
  * interactive key source is attached; otherwise `more` waits for a keypress.
  */
 #define P4_CONFIG_MORE_PAGE_DELAY_MS         1500
+
+/** Maximum length of a single `findstr` search string or regex pattern. */
+#define P4_CONFIG_FINDSTR_PATTERN_BYTES      256
+
+/** Maximum number of `findstr` search strings accepted on one command line. */
+#define P4_CONFIG_FINDSTR_MAX_STRINGS        8
+
+/**
+ * Maximum matches `findstr /S` prints before it stops and reports truncation,
+ * so a huge tree cannot flood the transcript.
+ */
+#define P4_CONFIG_FINDSTR_MATCH_MAX          256
+
+/**
+ * Mismatches `comp` reports before ending the comparison (DOS prints the
+ * first 10 and stops).
+ */
+#define P4_CONFIG_COMP_MISMATCH_MAX          10
 
 /**
  * Fallback delay used by `pause` in milliseconds. Used only when no
@@ -801,6 +853,56 @@
  *  because SPI2's direct IOMUX pins overlap the board's I2C/I2S lines; SPI3
  *  routes through the GPIO matrix only. */
 #define P4_CONFIG_SPI_TOOL_HOST               2
+
+/* ========================================================================
+ * RGB STATUS LED (WS2812 on GPIO26)
+ * ========================================================================
+ * The Guition JC1060P470 board has a WS2812 (NeoPixel-style) RGB LED on the
+ * back panel, wired to GPIO26. components/led owns the driver (via the
+ * espressif/led_strip component over RMT) plus an auto status layer and
+ * transient event notifications. The `rgb` shell command and the CONFIG.SYS
+ * `RGB=` directive drive it.
+ */
+
+/** WS2812 data GPIO (LED1 on the JC1060P470 back panel). */
+#define P4_CONFIG_LED_GPIO                    26
+
+/** RMT tick resolution used by the WS2812 driver, in Hz. */
+#define P4_CONFIG_LED_RMT_RESOLUTION_HZ       (10 * 1000 * 1000)
+
+/** RMT symbol blocks allocated for the one-LED strip. */
+#define P4_CONFIG_LED_RMT_SYMBOLS             64
+
+/** Maximum colour intensity as a percentage (scales every colour so the
+ *  back-panel LED is never blindingly bright). */
+#define P4_CONFIG_LED_MAX_BRIGHTNESS_PCT      50
+
+/** Stack bytes for the LED animation/notification task. */
+#define P4_CONFIG_LED_TASK_STACK_BYTES        2048
+
+/** Animation tick period in milliseconds (the frame rate of effects). */
+#define P4_CONFIG_LED_TICK_MS                 10
+
+/** Duration in milliseconds of a transient event notification colour before
+ *  the LED returns to its persistent status colour. */
+#define P4_CONFIG_LED_NOTIFY_MS               1500
+
+/** Duration in milliseconds of the boot-OK confirmation flash. */
+#define P4_CONFIG_LED_BOOT_FLASH_MS           600
+
+/** Default effect speed for `rgb <effect> [speed]` (1..10). */
+#define P4_CONFIG_LED_EFFECT_SPEED_DEFAULT    5
+
+/** Start with the auto status layer enabled (Wi-Fi state colours). */
+#define P4_CONFIG_LED_AUTO_STATUS             1
+
+/** Event colours as 0xRRGGBB. */
+#define P4_CONFIG_LED_COLOR_BOOT_OK           0x00FF00
+#define P4_CONFIG_LED_COLOR_WIFI_CONNECTING   0xFF9900
+#define P4_CONFIG_LED_COLOR_WIFI_CONNECTED    0x00FF00
+#define P4_CONFIG_LED_COLOR_WIFI_DISCONNECTED 0xFF0000
+#define P4_CONFIG_LED_COLOR_WIFI_ERROR        0xFF4040
+#define P4_CONFIG_LED_COLOR_HTTPD             0x0080FF
 
 /* ========================================================================
  * HEADER BAR VISUAL STYLING
@@ -1063,7 +1165,7 @@
 #define P4_CONFIG_WIFI_INIT_TASK_STACK       6144
 
 /** Stack size for the shell command worker task. */
-#define P4_CONFIG_COMMAND_TASK_STACK         8192
+#define P4_CONFIG_COMMAND_TASK_STACK         12288
 
 /** Stack size for the UART/serial console reader task. */
 #define P4_CONFIG_UART_CONSOLE_TASK_STACK    12288

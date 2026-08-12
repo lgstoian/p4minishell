@@ -443,6 +443,81 @@ void storage_clear_input_redirect(void);
 esp_err_t storage_resolve_input_source(const char *argument, char *output, size_t output_size);
 
 /* ========================================================================
+ * RECYCLE BIN (TRASH)
+ * ========================================================================
+ * `del`/`erase` move matching files and `rd /s` moves whole directory trees
+ * into a hidden `.trash` folder; `undelete` / `trash restore` bring them
+ * back, and `trash`/`recycle` manage the bin. A side-car `.meta` file next to
+ * each entry records its original path so a restore can reconstruct the
+ * original location. Limits (size / age / count) are enforced on every trash
+ * operation, purging the oldest entries first.
+ *
+ * Every function opens its own guarded SD session, so callers do not need
+ * one. A failed move or restore always leaves the source intact.
+ */
+
+/** Report whether the recycle bin is enabled by configuration. */
+bool storage_trash_enabled(void);
+
+/** Resolve the trash folder path (absolute, under the SD mount point). */
+const char *storage_trash_path(void);
+
+/**
+ * Delete a single regular file: move it into the trash, or unlink it when
+ * @p permanent is true.
+ * @param resolved_path  Resolved absolute path of the file (not a directory).
+ * @param permanent      true for a true delete (bypasses the trash).
+ * @return ESP_OK, or the mount / rename error.
+ */
+esp_err_t storage_trash_delete_file(const char *resolved_path, bool permanent);
+
+/**
+ * Delete every wildcard match in a directory: move each matching file into
+ * the trash, or unlink it when @p permanent is true.
+ * @param resolved_dir  Resolved absolute directory path.
+ * @param pattern       DOS wildcard filename pattern (files only).
+ * @param recursive     When true, walk the whole subtree collecting matches.
+ * @param permanent     true for a true delete (bypasses the trash).
+ * @param deleted_out   Receives the number of entries removed.
+ */
+esp_err_t storage_trash_delete_pattern(const char *resolved_dir, const char *pattern,
+                                       bool recursive, bool permanent, int *deleted_out);
+
+/**
+ * Remove a whole directory tree: move it into the trash (one atomic rename),
+ * or delete it permanently when @p permanent is true (bounded recursive
+ * delete). Used by `rd /s`.
+ * @param resolved_path  Resolved absolute directory path.
+ * @param permanent      true for a true delete.
+ */
+esp_err_t storage_trash_remove_tree(const char *resolved_path, bool permanent);
+
+/**
+ * Restore a trash entry to its original location.
+ * @param name_or_index  Entry name (as shown by `trash list`) or its 1-based
+ *                       index in the listing order.
+ * @return ESP_OK, ESP_ERR_NOT_FOUND for an unknown entry, or the move error.
+ */
+esp_err_t storage_trash_restore(const char *name_or_index);
+
+/** Permanently purge a single trash entry (caller has already confirmed). */
+esp_err_t storage_trash_purge(const char *name_or_index);
+
+/** Permanently purge every trash entry (caller has already confirmed). */
+esp_err_t storage_trash_empty(void);
+
+/** Print the trash contents (name, original path, size, age) with 1-based
+ *  indexes usable by restore/purge. */
+esp_err_t storage_trash_list(void);
+
+/** Print trash usage: entry count, total bytes, oldest entry age. */
+esp_err_t storage_trash_info(void);
+
+/** Enforce the size/age/count limits, purging the oldest entries first.
+ *  Called automatically after every trash operation. */
+void storage_trash_enforce_limits(void);
+
+/* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
 

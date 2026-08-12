@@ -30,6 +30,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/boot
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/command
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/networking
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/led
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/keyboard
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/display
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/windows

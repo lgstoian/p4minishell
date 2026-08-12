@@ -7,6 +7,171 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.27] - 2026-08-12
+
+Complete `xcopy` and two more classic DOS text tools. `xcopy` now supports
+the full DOS 6.x / WinXP switch set behind a proper heap-scratch recursive
+walker, `findstr` adds literal + regex-lite text search with DOS semantics
+(case-sensitive by default, DOS errorlevel 0 found / 1 not found / 2 usage),
+and `comp` does classic byte-for-byte comparison. Every text utility now
+sets a real ERRORLEVEL, so `if errorlevel` and `&&` / `||` work uniformly.
+
+### Added - xcopy completeness
+
+- `xcopy` rewritten with the full classic switch set: `/S` (subdirectories,
+  empty ones only with `/E`), `/I` (assume destination is a directory),
+  `/Y` / `/-Y` (overwrite silently / prompt), `/D[:mm-dd-yyyy]` (only newer
+  than the date, or than the same-named destination), `/H` (include hidden and
+  system, skipped by default), `/R` (overwrite a read-only destination),
+  `/K` (keep attributes; always the effective default), `/C` (continue past
+  errors), `/Q` (quiet), `/T` (create the directory tree only), `/F` (full
+  source/destination names), `/L` (list only), `/A` (archive attribute only),
+  `/M` (archive only and clear it on the source), `/U` (only files already at
+  the destination), `/P` (prompt per file), `/W` (wait for a key), `/N` (short
+  8.3 destination names), `/V` (verify with a size post-check).
+- The recursive walker now keeps each level's state in one heap block (like
+  `dir /s` and `find` discovery) instead of re-entering the command, so the
+  8 KB command-worker stack is never at risk; depth is bounded by
+  `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`.
+- Overwrite default: interactive prompt when a key source is attached and
+  neither `/Y` nor `/-Y` is given; headless / batch behaves as `/Y` (the
+  previous always-copy behaviour), so nothing regresses in batch files.
+- ERRORLEVEL: 0 success, 1 nothing copied / copy failed, 2 usage. `xcopy`
+  copies a single file into an existing directory correctly (destination is
+  treated as a directory when it is one), and `xcopy file newdir /I` creates
+  the directory.
+
+### Added - findstr
+
+- `findstr` searches files for literal strings or small regular expressions,
+  case-sensitive by default (unlike `find`). Switches: `/R` (regex), `/C:"s"`
+  (literal search string, space-safe), `/I` (case-insensitive), `/N` (line
+  numbers), `/V` (non-matching lines), `/X` (whole-line), `/E` (line ends
+  with), `/B` (line begins with), `/L` (literal), `/S` (recurse the tree),
+  `/M` (filenames with a match only), `/F:file` (file list), `/G:file` (search
+  strings from a file). Multiple search strings OR together.
+- The regex engine implements the DOS findstr subset: `.`, `*` (zero or more
+  of the preceding atom), `^` / `$` anchors, `[class]` / `[^class]` / `[a-z]`,
+  `\<` / `\>` word boundaries, and `\c` escapes. It is a pure, unit-tested
+  matcher (`shell_fsre_search`, `shell_findstr_match_line`).
+- Reads the pending `<` or pipe source when no file is given, and `/S`
+  recursion is depth- and match-capped (`P4_CONFIG_FINDSTR_MATCH_MAX`).
+- ERRORLEVEL: 0 match found, 1 no match, 2 usage.
+
+### Added - comp
+
+- `comp <file1> <file2> [/D] [/A] [/L] [/N=number] [/C]` compares two files
+  byte for byte and reports up to `P4_CONFIG_COMP_MISMATCH_MAX` mismatches
+  with offset and byte values. `/D` decimal offsets, `/A` ASCII display,
+  `/L` line numbers, `/N=n` compares only the first n lines, `/C` ignores
+  case. Prints `Files compare OK` for identical files.
+- The byte-comparison core (`shell_comp_first_diff`) is pure and unit-tested.
+- ERRORLEVEL: 0 identical, 1 different, 2 usage.
+
+### Changed - ERRORLEVEL for existing text tools
+
+- `find` (both the text-search and file-discovery modes), `more`, `fc`, and
+  `sort` now return an ERRORLEVEL that the dispatcher records (0 ok / found,
+  1 not found / differences, 2 usage), so `if errorlevel` and `&&` / `||`
+  work with every text command. No output or behaviour changed.
+
+### Configuration
+
+- `P4_CONFIG_FINDSTR_PATTERN_BYTES`, `P4_CONFIG_FINDSTR_MAX_STRINGS`,
+  `P4_CONFIG_FINDSTR_MATCH_MAX`, `P4_CONFIG_COMP_MISMATCH_MAX`
+  (documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- New unit tests: `test_findstr.c` (regex/literal matcher) and `test_comp.c`
+  (byte compare helper) registered in the Unity runner.
+- Hardware (COM11): xcopy `/S` copies a nested tree without empty dirs,
+  `/S /E` includes empty dirs, `/T` builds the tree only, `/L` lists only,
+  `xcopy file dir /I` creates the directory, `/Y` overwrites silently,
+  `/D:2026-01-01` skips older files, `/A` skips non-archive files, and
+  `&&` / `||` errorlevel chains work. findstr literal, `/I`, `/N`, `/V`,
+  `/X`, `/E`, `/C:"..."`, `/R` (`b.n`, `^c`, `e$`), `/S`, `/M`, and multi-file
+  prefixing all match DOS expectations with correct errorlevel. comp reports
+  identical vs differing files (and `/N /L`) with errorlevel. Existing
+  copy/move/del (recycle bin)/tree/find discovery and the errorlevel wiring of
+  find/fc/sort are unchanged. A 400-command soak ran with no stall, no
+  watchdog trip, no panic.
+
+---
+
+## [0.24.26] - 2026-08-12
+
+Recycle bin + safer destructive commands. `del`/`erase` and `rd`/`rmdir /s`
+now move files and whole directory trees into a hidden `.trash` folder by
+default instead of deleting them, `undelete` / `trash restore` bring them
+back, and `trash` / `recycle` manage the bin. Every destructive command
+gates on the exact confirmation word typed at the prompt and reports a real
+ERRORLEVEL, so batch files can never wipe the card unattended.
+
+### Added - recycle bin
+
+- `del`/`erase` move matching files into the hidden `.trash` folder (with a
+  `.meta` side-car recording the original path, type, size, and move time) and
+  report how many were moved. `/p` / `/f` / `/permanent` bypass the bin and
+  unlink permanently; `/s` deletes recursively and requires the exact
+  confirmation word typed at the prompt before anything happens.
+- `rd`/`rmdir` still refuse to remove a non-empty directory without `/s`;
+  `/s` moves the whole tree into the trash (permanent with `/p`/`/f`) and is
+  gated by the same exact-word confirmation.
+- `undelete <name|index>` / `trash restore <name|index>` rename an entry back
+  to its original location, recreating missing parent directories and refusing
+  to overwrite anything that now occupies the spot.
+- `trash` / `recycle` family: `trash list`, `trash info`, `trash restore`,
+  `trash purge <name|index>` (gated), `trash empty` (gated).
+- Limits enforced on every operation (oldest purged first, FIFO):
+  `P4_CONFIG_TRASH_MAX_BYTES` (32 MiB), `P4_CONFIG_TRASH_MAX_AGE_SEC` (7 d),
+  `P4_CONFIG_TRASH_MAX_ENTRIES` (256), `P4_CONFIG_TRASH_OPERATION_MAX` (256).
+  The trash folder is created hidden (`AM_HID`) and `dir` suppresses
+  hidden/system entries by default (DOS behaviour), so `.trash` stays out of
+  ordinary listings; bare `dir /A` shows everything.
+
+### Added - exact-word gates for every destructive command
+
+- `format`, `disk clean`, `disk delete partition`, recursive `del /s`,
+  recursive `rd /s`, `trash empty`, and `trash purge` all require
+  `P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD` (default `YES`) typed exactly at the
+  prompt through the interactive key queue; without an interactive input
+  source they refuse to run, so a batch file can never trigger them.
+  `P4_CONFIG_FORMAT_CONFIRM_WORD` is now an alias of the shared word.
+- `del`, `rd`, `format`, `disk`, `undelete`, and `trash` now return an
+  ERRORLEVEL (0 success, 1 failure/cancelled, 2 usage) that the batch
+  dispatcher records, so `del *.* /s && ...` and `if errorlevel` work.
+- `del *.* /s` never recurses into the `.trash` folder itself.
+
+### Configuration
+
+- `P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD`, `P4_CONFIG_TRASH_ENABLE`,
+  `P4_CONFIG_TRASH_PATH`, `P4_CONFIG_TRASH_MAX_BYTES`,
+  `P4_CONFIG_TRASH_MAX_AGE_SEC`, `P4_CONFIG_TRASH_MAX_ENTRIES`,
+  `P4_CONFIG_TRASH_OPERATION_MAX`, `P4_CONFIG_TRASH_CONFIRM_WORD`
+  (all documented in p4minishell_config.yaml).
+- `P4_CONFIG_COMMAND_TASK_STACK` raised 8192 -> 12288: the batch + recursive
+  `del /s` confirmation path was ~100 bytes over the 8 KiB worker-task stack,
+  which the new batch refusal exposed as a stack-protection fault.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Hardware (COM11): `del vtest.txt` moves the file to `.trash` and a plain
+  `dir` hides both the file and the `.trash` folder; `trash list` shows the
+  entry and `undelete` restores it to its original path. `del /p` deletes
+  permanently. `del *.txt /s` refuses a wrong word (files intact) and moves
+  every match to the bin after the exact `YES`; `rd /s sub2` moves a whole
+  tree and `undelete sub2` restores it with contents. `trash empty` cancels on
+  a wrong word and clears the bin on `YES`. A batch file running `del *.txt
+  /s` is refused outright ("refused, cannot be confirmed from a batch file")
+  with no data loss. `del missing /p || echo FAILED` reports a non-zero
+  ERRORLEVEL and `del present && echo OK` succeeds. A 400-command soak ran
+  with no stall, no watchdog trip, no panic.
+
+---
+
 ## [0.24.20] - 2026-08-11
 
 DOSKEY-style aliases / macros with SD persistence. New `alias` and `unalias`
@@ -51,6 +216,75 @@ that boot.c auto-loads after CONFIG.SYS.
   profile and `ls` works. A batch file using `set`/`echo` runs correctly,
   confirming aliases do not expand in batch files. A 400-command soak completed
   with no stall, no watchdog trip, no panic.
+
+---
+
+## [0.24.25] - 2026-08-11
+
+RGB status LED: the WS2812 (NeoPixel) LED on the JC1060P470 back panel
+(GPIO26) is now driven by a dedicated `components/led` leaf, exposed as the
+`rgb` shell command and a CONFIG.SYS `RGB=` directive, with an auto status
+layer tied to Wi-Fi/HTTP events and a boot confirmation flash.
+
+### Added - components/led + `rgb` command
+
+- New leaf component `components/led` owns the WS2812 strip (created with the
+  `espressif/led_strip` managed component over RMT) and a small animation task
+  that renders the current colour, effect, or transient notification. All
+  strip I/O happens on that task; callers only touch a mutex-protected state
+  snapshot, so the command worker and the Wi-Fi event handler never block.
+- `rgb status` — driver pin, mode (auto/manual), effect, colour, speed,
+  brightness.
+- `rgb <r> <g> <b>` (0-255), `rgb #RRGGBB`, `rgb off` — solid colour.
+- `rgb <effect> [speed]` — `rainbow`, `breath`, `pulse`, `blink`, `solid`
+  (speed 1..10).
+- `rgb auto <on|off>` — toggle the status-driven colour layer.
+- ERRORLEVEL 0/1/2, redirectable/pipable, so `rgb ... && echo ok` works in
+  batch files. GPIO26 is added to the board pin table as a reserved critical
+  line, so the peripheral toolkit (`pwm`/`freq`/`adc`/`i2c`/`spi`) refuses it.
+
+### Added - auto status + event notifications + boot light
+
+- Auto status colours follow Wi-Fi state: amber pulse while connecting, green
+  when connected, red blink when disconnected, red pulse on watchdog timeout.
+  The HTTP file server flashes blue on start. In manual mode all events are
+  transient (`P4_CONFIG_LED_NOTIFY_MS`) and return to the manual colour.
+- A short green confirmation flash (`P4_CONFIG_LED_BOOT_FLASH_MS`) fires once
+  boot scripting completes.
+- Wi-Fi hooks live in `components/networking` (event handler + connect request
+  + watchdog), HTTP hooks in `http_server.c`, and the boot flash in `main.c`.
+  All colours and limits are tunable in `p4minishell_config.h`
+  (`P4_CONFIG_LED_*`, documented in `p4minishell_config.yaml`).
+
+### Added - CONFIG.SYS `RGB=` directive
+
+- `RGB=<r>,<g>,<b> | #RRGGBB | <effect>[,speed] | OFF | AUTO,<ON|OFF>` is
+  parsed by `components/boot/boot.c` and executed through the existing
+  `rgb ...` command path at boot (commas map to argument separators).
+  Documented in the default CONFIG.SYS template.
+
+### Configuration
+
+- `P4_CONFIG_LED_GPIO`, `P4_CONFIG_LED_RMT_RESOLUTION_HZ`,
+  `P4_CONFIG_LED_RMT_SYMBOLS`, `P4_CONFIG_LED_MAX_BRIGHTNESS_PCT`,
+  `P4_CONFIG_LED_TASK_STACK_BYTES`, `P4_CONFIG_LED_TICK_MS`,
+  `P4_CONFIG_LED_NOTIFY_MS`, `P4_CONFIG_LED_BOOT_FLASH_MS`,
+  `P4_CONFIG_LED_EFFECT_SPEED_DEFAULT`, `P4_CONFIG_LED_AUTO_STATUS`, and the
+  `P4_CONFIG_LED_COLOR_*` event colours (all documented in
+  p4minishell_config.yaml).
+- `board_config.h`: `BOARD_CFG_RGB_LED_GPIO 26`, `BOARD_CFG_RGB_LED_IS_WS2812 1`
+  (board_config.yaml updated to match).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Hardware (COM11): `rgb status` reports WS2812 on GPIO26; `rgb 255 0 0`,
+  `rgb #00FF00`, and `rgb 0 0 255` set solid colours; `rainbow`/`breath`/
+  `blink`/`pulse` effects and speeds apply; `rgb off` clears; `rgb 300 0 0`
+  is a usage error; `rgb 255 0 0 && echo chain-ok` chains in a batch line;
+  `rgb auto on|off` toggles the status layer. Adding `RGB=0,0,255` to
+  CONFIG.SYS and rebooting leaves `rgb status` showing a manual blue, proving
+  the boot directive runs.
 
 ---
 

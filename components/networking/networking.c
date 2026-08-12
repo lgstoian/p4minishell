@@ -36,6 +36,7 @@
 
 #include "bluetooth.h"
 #include "http_server.h"
+#include "led.h"
 #include "netdiag.h"
 #include "networking.h"
 #include "wifi_known.h"
@@ -366,6 +367,9 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
                                      (unsigned int)event->channel);
             }
             wifi_unlock();
+            /* Associated but not yet assigned an IP; keep the status LED on
+             * the connecting colour until DHCP completes. */
+            led_notify(LED_EVENT_WIFI_CONNECTING);
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED:
@@ -376,6 +380,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
             wifi_unlock();
             networking_schedulef_ansi("@C[wifi]@R event: @ydisconnected@R\n");
             networking_notify_headerf(4000, "WiFi disconnected");
+            led_notify(LED_EVENT_WIFI_DISCONNECTED);
             /* The HTTP file server needs a reachable link; tear it down. */
             networking_httpd_maybe_stop();
             /* Start the persistent watchdog to attempt reconnection */
@@ -400,6 +405,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
         wifi_unlock();
         networking_schedulef("[wifi] event: got IP " IPSTR "\n", IP2STR(&event->ip_info.ip));
         networking_notify_headerf(4000, "WiFi connected: " IPSTR, IP2STR(&event->ip_info.ip));
+        led_notify(LED_EVENT_WIFI_CONNECTED);
 
         /* The HTTP file server rides the station link: auto-start it here. */
         networking_httpd_maybe_autostart();
@@ -552,6 +558,8 @@ static esp_err_t networking_wifi_connect_with_credentials(const char *ssid, cons
     s_wifi_connected = false;
     networking_schedulef_ansi("@C[wifi]@R @Gconnect requested@R for @W%s@R\n", s_wifi_target_ssid);
     wifi_unlock();
+
+    led_notify(LED_EVENT_WIFI_CONNECTING);
 
     networking_wifi_append_step("esp_wifi_connect()");
     error = esp_wifi_connect();
@@ -2635,6 +2643,7 @@ static void networking_wifi_watchdog_task(void *arg)
         if (total_elapsed_ms >= WIFI_WATCHDOG_TOTAL_TIMEOUT_MS) {
             networking_schedulef_ansi("@C[wifi]@R @Ywatchdog:@R @rgiving up@R after @Z%d@R seconds\n",
                                 (int)(total_elapsed_ms / 1000));
+            led_notify(LED_EVENT_WIFI_ERROR);
             break;
         }
 
