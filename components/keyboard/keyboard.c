@@ -21,7 +21,9 @@
 #include "p4minishell_config.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <string.h>
+#include <inttypes.h>
 
 /* Backward-compatibility aliases */
 #define KEYBOARD_TAG                    P4_CONFIG_SHELL_TAG
@@ -76,7 +78,7 @@ static const char * const keyboard_special_map[] = {
     "abc", "+", "&", "/", "*", "=", "%", "!", "?", "#", "<", ">", "\n",
     "\\", "@", "$", "(", ")", "{", "}", "[", "]", ";", "\"", "'", "\n",
     "^", "|", "~", "`", "-", "_", ",", ".", ":", LV_SYMBOL_NEW_LINE, "\n",
-    LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""
+    LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, "Nav", LV_SYMBOL_OK, ""
 };
 
 static const lv_buttonmatrix_ctrl_t keyboard_special_ctrl_map[] = {
@@ -97,11 +99,62 @@ static const lv_buttonmatrix_ctrl_t keyboard_special_ctrl_map[] = {
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
     LV_BUTTONMATRIX_CTRL_CHECKED | 2,
-    /* Row 5: hide, left, space, right, ok. */
+    /* Row 5: hide, left, space, right, nav, ok. */
     LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
     6,
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
+};
+
+/* ========================================================================
+ * EDITOR NAVIGATION MAPS (USER_1 = nav, USER_2 = edit nav)
+ * ========================================================================
+ * The editor is fully usable from the touch keyboard. Two navigation pages
+ * carry every editing command:
+ *
+ *   Nav  (USER_1): Tab, arrows, Home/End, Del, Ins, Find, PgUp/PgDn,
+ *                  Undo, Redo, Rep, Goto, Save, SaveAs, Quit, Next (find
+ *                  repeat), Nav2 (-> edit page), abc (-> letters).
+ *   Edit (USER_2): Copy, Cut, Paste, SelAll, WdL/WdR (word left/right),
+ *                  DocH/DocE (document home/end), DelLn (delete line),
+ *                  DelE (delete to end of line), Nav1 (-> nav), abc.
+ *
+ * These labels are routed to the editor by main.c's keyboard event callback
+ * when the editor is open; the default LVGL handler leaves them alone. */
+
+static const char * const keyboard_nav_map[] = {
+    "Tab", LV_SYMBOL_UP, "Home", "Del", "Ins", "Find", "\n",
+    LV_SYMBOL_LEFT, LV_SYMBOL_DOWN, LV_SYMBOL_RIGHT, "End", "PgUp", "PgDn", "\n",
+    "Undo", "Redo", "Rep", "Goto", "Save", "SaveAs", "\n",
+    "Quit", "Next", "Nav2", "abc", "\n",
+    ""
+};
+
+static const lv_buttonmatrix_ctrl_t keyboard_nav_ctrl_map[] = {
+    /* Row 1: Tab, Up, Home, Del, Ins, Find. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 2: Left, Down, Right, End, PgUp, PgDn. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 3: Undo, Redo, Rep, Goto, Save, SaveAs. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 4: Quit, Next, Nav2, abc. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
+};
+
+static const char * const keyboard_edit_map[] = {
+    "Copy", "Cut", "Paste", "SelAll", "WdL", "WdR", "\n",
+    "DocH", "DocE", "DelLn", "DelE", "Nav1", "abc", "\n",
+    ""
+};
+
+static const lv_buttonmatrix_ctrl_t keyboard_edit_ctrl_map[] = {
+    /* Row 1: Copy, Cut, Paste, SelAll, WdL, WdR. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 2: DocH, DocE, DelLn, DelE, Nav1, abc. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
     LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
 };
 
@@ -116,6 +169,12 @@ static void keyboard_install_custom_maps(void)
      * "1#"/"abc" mode buttons switch to it correctly. */
     lv_keyboard_set_map(s_keyboard.widget, LV_KEYBOARD_MODE_SPECIAL,
                         keyboard_special_map, keyboard_special_ctrl_map);
+
+    /* Editor navigation pages (USER_1 / USER_2). */
+    lv_keyboard_set_map(s_keyboard.widget, LV_KEYBOARD_MODE_USER_1,
+                        keyboard_nav_map, keyboard_nav_ctrl_map);
+    lv_keyboard_set_map(s_keyboard.widget, LV_KEYBOARD_MODE_USER_2,
+                        keyboard_edit_map, keyboard_edit_ctrl_map);
 }
 
 /* ========================================================================
@@ -136,6 +195,8 @@ static lv_keyboard_mode_t keyboard_mode_to_lvgl(keyboard_mode_t mode)
     case KEYBOARD_MODE_TEXT_UPPER: return LV_KEYBOARD_MODE_TEXT_UPPER;
     case KEYBOARD_MODE_NUMBER:     return LV_KEYBOARD_MODE_NUMBER;
     case KEYBOARD_MODE_SYMBOLS:    return LV_KEYBOARD_MODE_SPECIAL;
+    case KEYBOARD_MODE_NAV:        return LV_KEYBOARD_MODE_USER_1;
+    case KEYBOARD_MODE_NAV2:       return LV_KEYBOARD_MODE_USER_2;
     default:                       return LV_KEYBOARD_MODE_TEXT_LOWER;
     }
 }
@@ -322,14 +383,51 @@ void keyboard_bind_textarea(lv_obj_t *textarea)
 {
     s_keyboard.textarea = textarea;
 
-    if (s_keyboard.widget != NULL && textarea != NULL && s_keyboard.visible) {
+    if (s_keyboard.widget == NULL) {
+        return;
+    }
+
+    if (textarea != NULL && s_keyboard.visible) {
         lv_keyboard_set_textarea(s_keyboard.widget, textarea);
+    } else if (textarea == NULL) {
+        /* Truly unbind: clear the LVGL widget's textarea too, so a stray
+         * handler can never type into a hidden line (the modal editor clears
+         * the binding when it takes over the OSK). */
+        lv_keyboard_set_textarea(s_keyboard.widget, NULL);
     }
 }
 
 lv_obj_t *keyboard_get_textarea(void)
 {
     return s_keyboard.textarea;
+}
+
+bool keyboard_is_textarea_bound(void)
+{
+    return s_keyboard.textarea != NULL;
+}
+
+/* ========================================================================
+ * OSK INPUT DEDUPLICATION
+ * ======================================================================== */
+
+bool keyboard_osk_accept_at(uint32_t btn_id, int64_t now_ms)
+{
+    static uint32_t s_last_id = (uint32_t)-1;
+    static int64_t s_last_ms = 0;
+
+    if (btn_id == s_last_id &&
+        now_ms - s_last_ms < P4_CONFIG_OSK_DEBOUNCE_MS) {
+        return false;
+    }
+    s_last_id = btn_id;
+    s_last_ms = now_ms;
+    return true;
+}
+
+bool keyboard_osk_accept(uint32_t btn_id)
+{
+    return keyboard_osk_accept_at(btn_id, esp_timer_get_time() / 1000);
 }
 
 /* ========================================================================
@@ -452,6 +550,33 @@ lv_obj_t *keyboard_get_widget(void)
  * LVGL EVENT CALLBACK
  * ======================================================================== */
 
+/**
+ * Remove every LVGL event callback from the keyboard widget.
+ *
+ * lv_obj_remove_event_cb(obj, NULL) is a NO-OP in LVGL (it only removes
+ * callbacks whose cb pointer equals NULL), so it cannot strip the LVGL
+ * default keyboard handler. Removing descriptors explicitly guarantees the
+ * widget ends up with exactly the callbacks this module registers.
+ */
+static void keyboard_remove_all_callbacks(void)
+{
+    if (s_keyboard.widget == NULL) {
+        return;
+    }
+    while (lv_obj_get_event_count(s_keyboard.widget) > 0) {
+        lv_event_dsc_t *dsc = lv_obj_get_event_dsc(s_keyboard.widget, 0);
+        if (dsc == NULL) {
+            break;
+        }
+        lv_obj_remove_event_dsc(s_keyboard.widget, dsc);
+    }
+}
+
+uint32_t keyboard_event_callback_count(void)
+{
+    return s_keyboard.widget != NULL ? lv_obj_get_event_count(s_keyboard.widget) : 0;
+}
+
 void keyboard_register_event_callback(lv_event_cb_t cb, void *user_data)
 {
     if (s_keyboard.widget == NULL) {
@@ -459,11 +584,25 @@ void keyboard_register_event_callback(lv_event_cb_t cb, void *user_data)
         return;
     }
 
-    /* Remove any previously registered callback to avoid duplicates */
-    lv_obj_remove_event_cb(s_keyboard.widget, NULL);
+    /* Remove the LVGL default handler AND any previously registered callback
+     * so this callback is the widget's sole LV_EVENT_VALUE_CHANGED handler
+     * (a surviving default handler was the cause of double OSK input). */
+    keyboard_remove_all_callbacks();
 
     if (cb != NULL) {
         lv_obj_add_event_cb(s_keyboard.widget, cb, LV_EVENT_ALL, user_data);
         ESP_LOGI(KEYBOARD_TAG, "Keyboard event callback registered");
+    }
+
+    /* Audit: exactly one handler should remain. Any other count means a
+     * duplicate was (re)registered and double input would follow. Always
+     * logged (warn level is the firmware's default floor) so the healthy
+     * single-handler state is verifiable on the serial console. */
+    {
+        uint32_t count = keyboard_event_callback_count();
+        ESP_LOGW(KEYBOARD_TAG,
+                 "Keyboard callback audit: %" PRIu32 " handler(s) registered "
+                 "(expected 1)%s",
+                 count, count == 1 ? "" : " - DOUBLE INPUT RISK");
     }
 }

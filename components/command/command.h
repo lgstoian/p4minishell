@@ -107,6 +107,33 @@ void command_set_volume(int percent);
 esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out);
 
 /* ========================================================================
+ * POWER / IDLE
+ * ======================================================================== */
+
+/**
+ * Configure the idle display-off timeout (seconds; 0 disables). The display
+ * backlight turns off after this long without user input and wakes on the
+ * next touch, USB keyboard/mouse, or serial command.
+ */
+void shell_power_set_idle_timeout(int seconds);
+
+/** Current idle display-off timeout in seconds (0 = disabled). */
+int shell_power_get_idle_timeout(void);
+
+/**
+ * Report user input: resets the idle clock and wakes the display if the idle
+ * timer had switched it off. Safe from any task.
+ */
+void shell_power_notify_activity(void);
+
+/**
+ * Idle timer tick, called on the LVGL task by the periodic header refresh.
+ * Switches the display off once the idle timeout elapses and wakes it on a
+ * touch press while it is off.
+ */
+void shell_power_idle_tick(void);
+
+/* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
 

@@ -10,11 +10,10 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.27
-# Last updated: 2026-08-11 (Aliases / macros: DOSKEY-style alias and unalias
-#                           commands with RAM-only macro table and persistence
-#                           to an SD profile auto-loaded after CONFIG.SYS)
-config_version: "0.24.27"
+# Version: 0.24.33
+# Last updated: 2026-08-13 (Full touch-keyboard compatibility for the edit
+#                           editor: two nav pages cover every feature)
+config_version: "0.24.39"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -79,15 +78,100 @@ buffers:
     description: "Maximum bytes in async transcript staging buffer"
     range: "256..8192"
   command_bytes:
-    value: 256
+    value: 4096
     type: size_t
-    description: "Maximum bytes for a single command line"
-    range: "64..1024"
+    description: "Maximum bytes for a single command line (extremely long; transient buffers are heap-allocated)"
+    range: "256..8192"
   command_history_depth:
-    value: 10
+    value: 32
     type: size_t
-    description: "Number of commands in recall history"
+    description: "Number of commands in recall history (heap-backed)"
     range: "1..100"
+  history_total_bytes:
+    value: 65536
+    type: size_t
+    description: "Total bytes the heap-backed recall history may hold"
+    range: "1024..262144"
+  history_profile:
+    value: "HISTORY.TXT"
+    type: string
+    description: "Default SD profile for history /save and /load"
+  completion_max_matches:
+    value: 32
+    type: int
+    description: "Maximum matches reported by Tab completion before truncation"
+    range: "4..256"
+  editor_max_bytes:
+    value: 65536
+    type: size_t
+    description: "Maximum bytes of a file the edit editor loads into RAM"
+    range: "1024..262144"
+  editor_max_lines:
+    value: 2048
+    type: size_t
+    description: "Maximum lines the edit editor loads into RAM"
+    range: "16..16384"
+  editor_undo_depth:
+    value: 64
+    type: int
+    description: "Undo/redo depth (edit operations) kept by the editor"
+    range: "1..256"
+  editor_tab_width:
+    value: 4
+    type: int
+    description: "Tab stop width (columns) used by the editor"
+    range: "1..16"
+  editor_line_height:
+    value: 20
+    type: int
+    description: "Line height reserved per editor row, in pixels"
+    range: "12..40"
+  editor_syntax_batch:
+    value: 1
+    type: bool
+    description: "True when the edit editor applies batch syntax highlighting"
+  editor_find_bytes:
+    value: 128
+    type: size_t
+    description: "Maximum length of the edit editor's search / replace string (bytes)"
+    range: "16..512"
+  editor_prompt_bytes:
+    value: 320
+    type: size_t
+    description: "Capacity of the edit editor's prompt buffer (Save-As path, Go-to-Line number, Find/Replace string)"
+    range: "64..1024"
+  editor_cursor_blink_ms:
+    value: 500
+    type: int
+    description: "Blink period for the edit editor's block cursor, in milliseconds"
+    range: "200..2000"
+  editor_selection_color:
+    value: 0x335577
+    type: int
+    description: "RGB colour of the edit editor's selection background overlay"
+    range: "0x000000..0xFFFFFF"
+  editor_find_case_sensitive:
+    value: 0
+    type: bool
+    description: "Default case sensitivity for the edit editor's Find (0 = case-folded)"
+  editor_line_numbers:
+    value: 1
+    type: bool
+    description: "True when the edit editor renders a line-number gutter"
+  editor_line_number_width_chars:
+    value: 4
+    type: int
+    description: "Width of the edit editor's line-number gutter in characters (digits); line numbers are right-aligned in this width followed by one space"
+    range: "2..8"
+  editor_current_line:
+    value: 1
+    type: bool
+    description: "True when the edit editor highlights the cursor's current line"
+  editor_current_line_color:
+    value: 0x16222A
+    type: int
+    description: "RGB colour of the edit editor's current-line highlight background"
+    range: "0x000000..0xFFFFFF"
   debug_log_depth:
     value: 5
     type: size_t
@@ -223,6 +307,11 @@ windows:
     type: int
     description: "Keyboard height maximum clamp in pixels"
     range: "200..400"
+  osk_debounce_ms:
+    value: 30
+    type: int
+    description: "On-screen keyboard duplicate-press debounce window in milliseconds; the shell drops a re-fire of the same button id within this window so a stray second LVGL handler can never cause double input"
+    range: "1..200"
   transcript_height_min:
     value: 40
     type: int
@@ -931,6 +1020,16 @@ batch_env:
     type: int
     description: "Maximum batch lines joined by trailing ^ continuations"
     range: "1..32"
+  choice_key_max:
+    value: 64
+    type: int
+    description: "Maximum length of the choice /C: key list in characters (single-char keys only)"
+    range: "2..128"
+  redirect_capture_max_bytes:
+    value: 262144
+    type: size_t
+    description: "Maximum bytes captured for a command's > / >> redirection (dedicated buffer, independent of the 16 KB transcript)"
+    range: "4096..1048576"
   tree_depth_max:
     value: 8
     type: int
@@ -1000,11 +1099,95 @@ gpio_hardware:
     type: int
     description: "Minimum CPU frequency in MHz for light sleep entry"
     range: "10..240"
+  power_idle_display_off_secs:
+    value: 0
+    type: int
+    description: "Turn the display off (backlight) after this many idle seconds; 0 disables. Runtime: power idle <seconds|off>; boot: CONFIG.SYS DISPLAY_TIMEOUT="
+    range: "0..86400"
+  power_idle_display_max_secs:
+    value: 86400
+    type: int
+    description: "Maximum idle timeout accepted by power idle (seconds)"
+    range: "1..86400"
+  power_wake_gpio:
+    value: "GPIO_NUM_NC"
+    type: gpio_num_t
+    description: "GPIO that wakes light/deep sleep when pulled to its active level; GPIO_NUM_NC disables (GT911 INT is not wired on this board)"
+  power_wake_level:
+    value: 1
+    type: int
+    description: "Wake level for power_wake_gpio (0 = low, 1 = high)"
+    range: "0..1"
   volume_default_pct:
     value: 60
     type: int
     description: "Default speaker volume percentage applied at boot"
     range: "0..100"
+  beep_freq_hz:
+    value: 880
+    type: int
+    description: "Default frequency (Hz) of the beep command"
+    range: "20..20000"
+  beep_duration_ms:
+    value: 100
+    type: int
+    description: "Default duration (ms) of the beep command"
+    range: "10..5000"
+  tone_freq_min:
+    value: 20
+    type: int
+    description: "Minimum frequency (Hz) accepted by tone"
+    range: "1..100"
+  tone_freq_max:
+    value: 20000
+    type: int
+    description: "Maximum frequency (Hz) accepted by tone"
+    range: "1000..48000"
+  tone_duration_max_ms:
+    value: 5000
+    type: int
+    description: "Maximum tone/wavplay duration in ms (keeps playback bounded)"
+    range: "100..60000"
+  tone_duration_default_ms:
+    value: 200
+    type: int
+    description: "Default tone duration in ms when tone <freq> has no duration"
+    range: "10..5000"
+  tone_amplitude_pct:
+    value: 40
+    type: int
+    description: "Peak tone amplitude as a percentage of full scale"
+    range: "1..100"
+  tone_chunk_samples:
+    value: 1024
+    type: int
+    description: "Samples generated per chunk while playing a tone"
+    range: "64..8192"
+  wav_max_bytes:
+    value: 1048576
+    type: int
+    description: "Maximum WAV file size in bytes accepted by wavplay"
+    range: "1024..8388608"
+  audio_task_stack:
+    value: 8192
+    type: int
+    description: "Stack size for the background audio playback task"
+    range: "2048..16384"
+  audio_task_priority:
+    value: 2
+    type: int
+    description: "Priority of the background audio playback task"
+    range: "1..24"
+  clipboard_bytes:
+    value: 2048
+    type: int
+    description: "Size of the RAM clipboard used by clip / paste (transcript lines, file contents, or a file reference)"
+    range: "256..8192"
+  clip_copy_lines_max:
+    value: 64
+    type: int
+    description: "Maximum lines clip copy [N] accepts from the transcript"
+    range: "1..256"
 
 # ---- Peripheral Toolkit (pwm / freq / adc / i2c / spi) ----
 peripheral_toolkit:
@@ -1129,6 +1312,21 @@ header_visuals:
     type: int
     description: "CPU usage percentage threshold for warning color in header"
     range: "50..100"
+  cpu_graph:
+    value: 1
+    type: bool
+    description: "Show a small CPU history sparkline in the header system panel instead of the single-value CPU bar"
+    range: "0..1"
+  cpu_graph_points:
+    value: 12
+    type: int
+    description: "Number of CPU samples held by the header sparkline ring"
+    range: "4..64"
+  cpu_graph_width_px:
+    value: 26
+    type: int
+    description: "Width of the header CPU sparkline chart in pixels"
+    range: "8..128"
   mem_low_pct:
     value: 30
     type: int
@@ -1292,6 +1490,16 @@ task_stacks:
     type: size_t
     description: "UART/serial console reader task stack"
     range: "4096..16384"
+  lvgl:
+    value: 12288
+    type: size_t
+    description: >-
+      LVGL task stack (P4_CONFIG_LVGL_TASK_STACK), created by the BSP display
+      driver. Raised above the 7168-byte esp_lvgl_port default because a
+      full-screen redraw (transcript span group, input line, on-screen
+      keyboard, header) recurses deep enough to overflow the stock stack
+      into a boot-loop panic.
+    range: "8192..32768"
   main_task:
     value: 8192
     type: size_t

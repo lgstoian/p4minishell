@@ -3,8 +3,10 @@ idf_component_register(
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
+        audio
         batch
         display
+        editor
         header
         keyboard
         storage

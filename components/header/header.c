@@ -40,6 +40,9 @@
 #define HEADER_WARN_COLOR           P4_CONFIG_HEADER_WARN_COLOR
 #define HEADER_BG_COLOR             P4_CONFIG_HEADER_BG_COLOR
 #define HEADER_PANEL_COLOR          P4_CONFIG_HEADER_PANEL_COLOR
+#define HEADER_CPU_GRAPH            P4_CONFIG_HEADER_CPU_GRAPH
+#define HEADER_CPU_GRAPH_POINTS     P4_CONFIG_HEADER_CPU_GRAPH_POINTS
+#define HEADER_CPU_GRAPH_WIDTH_PX   P4_CONFIG_HEADER_CPU_GRAPH_WIDTH_PX
 
 /* ---- Panel background tint (slightly lighter than main BG for depth) ---- */
 #define HEADER_PANEL_BG             0x1A2A22
@@ -128,6 +131,8 @@ static lv_obj_t *s_battery_value_label;
 static lv_obj_t *s_mem_label;
 static lv_obj_t *s_cpu_label;
 static lv_obj_t *s_cpu_bar;
+static lv_obj_t *s_cpu_graph;
+static lv_chart_series_t *s_cpu_graph_series;
 static lv_obj_t *s_cpu_value_label;
 static lv_timer_t *s_notification_timer;
 __attribute__((unused)) static lv_coord_t s_header_height = HEADER_HEIGHT;
@@ -368,12 +373,22 @@ static void header_render(void)
     /* Render CPU info */
     header_format_cpu(cpu_buf, sizeof(cpu_buf));
     lv_label_set_text(s_cpu_label, cpu_buf);
-    cpu_color = s_header_state.cpu_percent >= 85
+    cpu_color = s_header_state.cpu_percent >= P4_CONFIG_HEADER_CPU_WARN_PCT
                     ? lv_color_hex(HEADER_WARN_COLOR)
                     : lv_color_hex(HEADER_ACCENT_COLOR);
     lv_obj_set_style_text_color(s_cpu_label, cpu_color, 0);
-    lv_bar_set_value(s_cpu_bar, s_header_state.cpu_percent, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s_cpu_bar, cpu_color, LV_PART_INDICATOR);
+
+    if (HEADER_CPU_GRAPH && s_cpu_graph != NULL) {
+        /* Push the fresh sample onto the sparkline; SHIFT mode scrolls the
+         * history left automatically. */
+        lv_chart_set_next_value(s_cpu_graph, s_cpu_graph_series, s_header_state.cpu_percent);
+        if (s_cpu_graph_series != NULL) {
+            lv_chart_set_series_color(s_cpu_graph, s_cpu_graph_series, cpu_color);
+        }
+    } else if (s_cpu_bar != NULL) {
+        lv_bar_set_value(s_cpu_bar, s_header_state.cpu_percent, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(s_cpu_bar, cpu_color, LV_PART_INDICATOR);
+    }
 
     char cpu_pct[16];
     snprintf(cpu_pct, sizeof(cpu_pct), "%d%%", s_header_state.cpu_percent);
@@ -619,17 +634,38 @@ void header_init(void)
     lv_obj_set_style_text_font(s_cpu_label, status_font, 0);
     lv_obj_set_style_text_letter_space(s_cpu_label, -1, 0);
 
-    /* CPU bar — compact */
-    s_cpu_bar = lv_bar_create(s_sys_panel);
-    lv_obj_set_size(s_cpu_bar, 24, s_header_height >= 48 ? 10 : 8);
-    lv_bar_set_range(s_cpu_bar, 0, 100);
-    lv_obj_set_style_bg_color(s_cpu_bar, lv_color_hex(0x253229), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_cpu_bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s_cpu_bar, lv_color_hex(HEADER_ACCENT_COLOR), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(s_cpu_bar, LV_OPA_COVER, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(s_cpu_bar, 2, LV_PART_MAIN);
-    lv_obj_set_style_radius(s_cpu_bar, 2, LV_PART_INDICATOR);
-    lv_obj_set_style_pad_all(s_cpu_bar, 1, LV_PART_MAIN);
+    /* CPU indicator: a compact sparkline of recent samples when the graph is
+     * enabled, otherwise the classic single-value bar. */
+    if (HEADER_CPU_GRAPH) {
+        lv_coord_t graph_h = s_header_height >= 48 ? 12 : 10;
+
+        s_cpu_graph = lv_chart_create(s_sys_panel);
+        lv_obj_set_size(s_cpu_graph, HEADER_CPU_GRAPH_WIDTH_PX, graph_h);
+        lv_chart_set_type(s_cpu_graph, LV_CHART_TYPE_BAR);
+        lv_chart_set_update_mode(s_cpu_graph, LV_CHART_UPDATE_MODE_SHIFT);
+        lv_chart_set_point_count(s_cpu_graph, HEADER_CPU_GRAPH_POINTS);
+        lv_chart_set_axis_range(s_cpu_graph, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+        lv_obj_set_style_bg_color(s_cpu_graph, lv_color_hex(0x253229), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(s_cpu_graph, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(s_cpu_graph, 2, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(s_cpu_graph, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_width(s_cpu_graph, 0, LV_PART_ITEMS);
+        lv_obj_set_style_pad_all(s_cpu_graph, 0, LV_PART_ITEMS);
+        s_cpu_graph_series = lv_chart_add_series(s_cpu_graph,
+                                                 lv_color_hex(HEADER_ACCENT_COLOR),
+                                                 LV_CHART_AXIS_PRIMARY_Y);
+    } else {
+        s_cpu_bar = lv_bar_create(s_sys_panel);
+        lv_obj_set_size(s_cpu_bar, 24, s_header_height >= 48 ? 10 : 8);
+        lv_bar_set_range(s_cpu_bar, 0, 100);
+        lv_obj_set_style_bg_color(s_cpu_bar, lv_color_hex(0x253229), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(s_cpu_bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(s_cpu_bar, lv_color_hex(HEADER_ACCENT_COLOR), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(s_cpu_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(s_cpu_bar, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(s_cpu_bar, 2, LV_PART_INDICATOR);
+        lv_obj_set_style_pad_all(s_cpu_bar, 1, LV_PART_MAIN);
+    }
 
     /* CPU percentage label */
     s_cpu_value_label = lv_label_create(s_sys_panel);
@@ -829,6 +865,8 @@ void header_deinit(void)
     s_mem_label = NULL;
     s_cpu_label = NULL;
     s_cpu_bar = NULL;
+    s_cpu_graph = NULL;
+    s_cpu_graph_series = NULL;
     s_cpu_value_label = NULL;
     for (int i = 0; i < HEADER_ICON_COUNT; i++) {
         s_status_icons[i] = NULL;

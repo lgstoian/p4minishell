@@ -24,6 +24,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # p4_usb, which in turn depends on usb.
 set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ansi
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/audio
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/shell
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/storage
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/batch
@@ -33,6 +34,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/led
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/keyboard
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/display
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/editor
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/windows
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/header
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/clock

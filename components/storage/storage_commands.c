@@ -48,6 +48,7 @@
 #define SHELL_SD_CAT_MAX_BYTES          P4_CONFIG_SD_CAT_MAX_BYTES
 #define SHELL_SD_IO_BUFFER_BYTES        P4_CONFIG_SD_IO_BUFFER_BYTES
 #define SHELL_BATCH_LINE_BYTES          P4_CONFIG_BATCH_LINE_BYTES
+#define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
 #define SHELL_LFN_BYTES                 P4_CONFIG_LFN_BYTES
 #define SHELL_TEXT_LINE_BYTES           P4_CONFIG_TEXT_LINE_BYTES
 #define SHELL_SORT_LINE_MAX             P4_CONFIG_SORT_LINE_MAX
@@ -1743,7 +1744,11 @@ void shell_command_type_file(int argc, char **argv)
 void shell_command_write_file(int argc, char **argv, bool append_mode)
 {
     char resolved_path[SHELL_SD_PATH_BYTES];
-    char text[SHELL_BATCH_LINE_BYTES];
+    /* The joined text can be a full interactive command line (up to
+     * P4_CONFIG_COMMAND_BYTES); a batch-line-sized stack buffer would both
+     * overflow the worker path if it ran from a batch file and silently
+     * truncate long `write`/`append` text. Heap-allocated, freed on every path. */
+    char *text = NULL;
     shell_sd_session_t session;
     FILE *file = NULL;
     esp_err_t error;
@@ -1759,9 +1764,16 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
         return;
     }
 
-    shell_join_args(argv, 2, argc, text, sizeof(text));
+    text = malloc(SHELL_COMMAND_BYTES);
+    if (text == NULL) {
+        shell_transcript_appendf("%s: out of memory\n", append_mode ? "append" : "write");
+        return;
+    }
+    shell_join_args(argv, 2, argc, text, SHELL_COMMAND_BYTES);
+
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
+        free(text);
         shell_transcript_appendf("%s: SD card not present - insert and retry\n", append_mode ? "append" : "write");
         return;
     }
@@ -1774,6 +1786,7 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
         uint64_t reclaim = append_mode ? 0u : storage_get_file_size(resolved_path);
 
         if (!storage_check_free_space(needed, reclaim, append_mode ? "append" : "write")) {
+            free(text);
             shell_sd_end(&session, append_mode ? "append" : "write");
             return;
         }
@@ -1781,6 +1794,7 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
 
     file = fopen(resolved_path, append_mode ? "ab" : "wb");
     if (file == NULL) {
+        free(text);
         shell_transcript_appendf("%s: failed to open %s (%s)\n",
                                  append_mode ? "append" : "write",
                                  resolved_path,
@@ -1792,11 +1806,13 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
     if (fwrite(text, 1, strlen(text), file) != strlen(text) || fwrite("\n", 1, 1, file) != 1) {
         shell_transcript_appendf("%s: failed while writing %s\n", append_mode ? "append" : "write", resolved_path);
         fclose(file);
+        free(text);
         shell_sd_end(&session, append_mode ? "append" : "write");
         return;
     }
 
     fclose(file);
+    free(text);
     shell_sd_end(&session, append_mode ? "append" : "write");
     shell_transcript_appendf("%s: %s\n", append_mode ? "Appended" : "Wrote", resolved_path);
 }
@@ -4431,6 +4447,35 @@ static bool shell_fsre_atom_matches(const char *pat, int pi, char ch, bool icase
                  : (ch == c);
 }
 
+/** Pattern width of the atom at pat[pi]: 1 for a literal or '.', 2 for an
+ *  escape `\x`, and the full bracket-class width for `[...]`. The matcher
+ *  must advance past the whole atom, otherwise a class like `[ab]` or an
+ *  escape like `\.` would consume only its first character. */
+static int shell_fsre_atom_len(const char *pat, int pi)
+{
+    if (pat[pi] == '\\' && pat[pi + 1] != '\0') {
+        return 2;
+    }
+    if (pat[pi] == '[') {
+        int i = pi + 1;
+
+        if (pat[i] == '^') {
+            i++;
+        }
+        if (pat[i] == ']') {
+            i++;
+        }
+        while (pat[i] != '\0' && pat[i] != ']') {
+            i++;
+        }
+        if (pat[i] == ']') {
+            i++;
+        }
+        return i - pi;
+    }
+    return 1;
+}
+
 /**
  * Recursive backtracking matcher: match pat[pi..] against text starting at
  * ti. Returns the text index just past the match, or -1.
@@ -4442,6 +4487,7 @@ static int shell_fsre_match_here(const char *pat, int pi, const char *text, int 
                                  int tlen, bool icase, bool at_start)
 {
     int n;
+    int atom_len;
 
     if (pat[pi] == '\0') {
         return ti;
@@ -4474,11 +4520,15 @@ static int shell_fsre_match_here(const char *pat, int pi, const char *text, int 
         return shell_fsre_match_here(pat, pi + 2, text, ti, tlen, icase, at_start);
     }
 
-    /* Starred atom: pat[pi] followed by '*'. Greedy with backtracking. */
-    if (pat[pi + 1] == '*') {
+    /* Starred atom: pat[pi .. pi+atom_len-1] followed by '*'. Greedy with
+     * backtracking. The quantifier applies to a complete atom, so an escaped
+     * `\*` (the star sits inside the 2-char escape) is a literal star, not a
+     * quantifier. */
+    atom_len = shell_fsre_atom_len(pat, pi);
+    if (pat[pi + atom_len] == '*') {
         n = 0;
         while (ti + n <= tlen) {
-            int r = shell_fsre_match_here(pat, pi + 2, text, ti + n, tlen,
+            int r = shell_fsre_match_here(pat, pi + atom_len + 1, text, ti + n, tlen,
                                           icase, at_start && (ti + n == 0));
 
             if (r >= 0) {
@@ -4495,7 +4545,9 @@ static int shell_fsre_match_here(const char *pat, int pi, const char *text, int 
     if (ti >= tlen || !shell_fsre_atom_matches(pat, pi, text[ti], icase)) {
         return -1;
     }
-    return shell_fsre_match_here(pat, pi + 1, text, ti + 1, tlen, icase, false);
+    /* Classes and escapes span several pattern characters; advance by the
+     * atom's full width so a `[ab]c` match consumes the whole class. */
+    return shell_fsre_match_here(pat, pi + atom_len, text, ti + 1, tlen, icase, false);
 }
 
 /**

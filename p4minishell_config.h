@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             27
+#define P4_CONFIG_VERSION_PATCH             39
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -109,10 +109,74 @@
 #define P4_CONFIG_ASYNC_TRANSCRIPT_BYTES     2048
 
 /** Maximum bytes for a single command line (input + null terminator). */
-#define P4_CONFIG_COMMAND_BYTES              256
+#define P4_CONFIG_COMMAND_BYTES              4096
 
 /** Number of commands retained in the recall history. */
-#define P4_CONFIG_COMMAND_HISTORY_DEPTH      10
+#define P4_CONFIG_COMMAND_HISTORY_DEPTH      32
+
+/**
+ * Total bytes the heap-backed recall history may hold. A cap keeps very long
+ * (up to P4_CONFIG_COMMAND_BYTES) commands from exhausting RAM.
+ */
+#define P4_CONFIG_HISTORY_TOTAL_BYTES        65536
+
+/** Default SD profile for `history /save` / `history /load`. */
+#define P4_CONFIG_HISTORY_PROFILE            "HISTORY.TXT"
+
+/** Maximum matches reported by Tab completion before truncation. */
+#define P4_CONFIG_COMPLETION_MAX_MATCHES     32
+
+/** Maximum bytes of a file the `edit` editor will load into RAM. */
+#define P4_CONFIG_EDITOR_MAX_BYTES           (64 * 1024)
+
+/** Maximum lines the `edit` editor will load into RAM. */
+#define P4_CONFIG_EDITOR_MAX_LINES           2048
+
+/** Undo/redo depth kept by the `edit` editor (edit operations). */
+#define P4_CONFIG_EDITOR_UNDO_DEPTH          64
+
+/** Tab stop width (columns) used by the `edit` editor. */
+#define P4_CONFIG_EDITOR_TAB_WIDTH           4
+
+/** Line height reserved per editor row, in pixels. */
+#define P4_CONFIG_EDITOR_LINE_HEIGHT         20
+
+/** True when the `edit` editor applies batch syntax highlighting. */
+#define P4_CONFIG_EDITOR_SYNTAX_BATCH        1
+
+/** Maximum length of the `edit` editor's search / replace string (bytes). */
+#define P4_CONFIG_EDITOR_FIND_BYTES          128
+
+/**
+ * Capacity of the `edit` editor's prompt buffer (bytes). Large enough to
+ * hold a Save-As path, a Go-to-Line number, or a Find / Replace string.
+ */
+#define P4_CONFIG_EDITOR_PROMPT_BYTES        P4_CONFIG_SD_PATH_BYTES
+
+/** Blink period for the `edit` editor's block cursor, in milliseconds. */
+#define P4_CONFIG_EDITOR_CURSOR_BLINK_MS     500
+
+/** RGB colour of the `edit` editor's selection background overlay. */
+#define P4_CONFIG_EDITOR_SELECTION_COLOR     0x335577
+
+/** Default case sensitivity for the `edit` editor's Find (0 = case-folded). */
+#define P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE 0
+
+/** True when the `edit` editor renders a line-number gutter. */
+#define P4_CONFIG_EDITOR_LINE_NUMBERS         1
+
+/**
+ * Width of the `edit` editor's line-number gutter in characters (digits).
+ * Line numbers are right-aligned in this width followed by one space, so the
+ * text column starts just past the gutter.
+ */
+#define P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS 4
+
+/** True when the `edit` editor highlights the cursor's current line. */
+#define P4_CONFIG_EDITOR_CURRENT_LINE         1
+
+/** RGB colour of the `edit` editor's current-line highlight background. */
+#define P4_CONFIG_EDITOR_CURRENT_LINE_COLOR   0x16222A
 
 /** Number of entries in the debug/error log ring buffer. */
 #define P4_CONFIG_DEBUG_LOG_DEPTH            5
@@ -214,6 +278,15 @@
 
 /** Keyboard log tag. */
 #define P4_CONFIG_KEYBOARD_TAG                "keyboard"
+
+/**
+ * On-screen keyboard duplicate-press debounce window in milliseconds. The
+ * shell drops a re-fire of the same button id within this window, which is
+ * the same LVGL event reaching a second, stray handler (the root cause of
+ * double OSK input). Deliberate fast repeats (auto-repeat, quick double-taps)
+ * are far slower than this window and are never merged.
+ */
+#define P4_CONFIG_OSK_DEBOUNCE_MS             30
 
 /* ========================================================================
  * WI-FI PARAMETERS
@@ -724,6 +797,18 @@
  */
 #define P4_CONFIG_LINE_CONTINUATION_MAX      8
 
+/** Maximum length of the `choice` /C: key list (characters). Single-char
+ *  keys only; DOS caps this list at 26, Windows at 99. */
+#define P4_CONFIG_CHOICE_KEY_MAX              64
+
+/**
+ * Maximum bytes captured for a command's `>` / `>>` redirection. The capture
+ * is a dedicated buffer (independent of the 16 KB transcript), so a command
+ * producing more than the transcript size is still redirected correctly up to
+ * this cap. When the cap is exceeded the excess is dropped and the shell warns.
+ */
+#define P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES  (256 * 1024)
+
 /** Maximum directory recursion depth for the `tree` command. */
 #define P4_CONFIG_TREE_DEPTH_MAX             8
 
@@ -757,6 +842,28 @@
 /** Tear down Wi-Fi/hosted state when entering light sleep (`sleep`). */
 #define P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI 1
 
+/**
+ * Turn the display off (backlight) after this many seconds without user input
+ * (touch, USB keyboard/mouse, or a serial command). 0 disables the idle
+ * timeout. Managed at runtime with `power idle <seconds|off>` and at boot with
+ * the CONFIG.SYS `DISPLAY_TIMEOUT=` directive.
+ */
+#define P4_CONFIG_POWER_IDLE_DISPLAY_OFF_SECS   0
+
+/** Maximum idle timeout accepted by `power idle` (seconds). */
+#define P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS   86400
+
+/**
+ * GPIO that wakes light/deep sleep when pulled to its active level. Defaults
+ * to GPIO_NUM_NC (no GPIO wake); set it to a user-wired button/switch pin.
+ * The GT911 touch interrupt line (BOARD_CFG_LCD_TOUCH_INT_GPIO) is not wired
+ * on this board, so touch cannot wake sleep directly.
+ */
+#define P4_CONFIG_POWER_WAKE_GPIO               GPIO_NUM_NC
+
+/** Wake level for P4_CONFIG_POWER_WAKE_GPIO (0 = low, 1 = high). */
+#define P4_CONFIG_POWER_WAKE_LEVEL              1
+
 /** Line buffer size for text-processing commands (find, more, fc, sort). */
 #define P4_CONFIG_TEXT_LINE_BYTES            512
 
@@ -765,6 +872,47 @@
 
 /** Default speaker volume percentage applied at boot. */
 #define P4_CONFIG_VOLUME_DEFAULT_PCT         60
+
+/** Default frequency (Hz) and duration (ms) of the `beep` command. */
+#define P4_CONFIG_BEEP_FREQ_HZ               880
+#define P4_CONFIG_BEEP_DURATION_MS           100
+
+/** Accepted frequency range for `tone <freq> [ms]`. */
+#define P4_CONFIG_TONE_FREQ_MIN              20
+#define P4_CONFIG_TONE_FREQ_MAX              20000
+
+/** Maximum duration in ms accepted by `tone`/`wavplay` (bounded so the audio
+ *  playback task always terminates). */
+#define P4_CONFIG_TONE_DURATION_MAX_MS       5000
+
+/** Default duration in ms of `tone <freq>` when no duration is given. */
+#define P4_CONFIG_TONE_DURATION_DEFAULT_MS   200
+
+/** Peak amplitude of a generated tone as a percentage of full scale (kept
+ *  below 100 so a loud codec volume does not clip). */
+#define P4_CONFIG_TONE_AMPLITUDE_PCT         40
+
+/** Samples generated per chunk while playing a tone (16-bit mono). */
+#define P4_CONFIG_TONE_CHUNK_SAMPLES         1024
+
+/** Maximum WAV file size in bytes accepted by `wavplay`. */
+#define P4_CONFIG_WAV_MAX_BYTES              (1024 * 1024)
+
+/** Stack size for the background audio playback task. */
+#define P4_CONFIG_AUDIO_TASK_STACK           8192
+
+/** Priority of the background audio playback task. */
+#define P4_CONFIG_AUDIO_TASK_PRIORITY        2
+
+/**
+ * Size of the RAM clipboard used by `clip` / `paste`. It holds either copied
+ * transcript text, a text file's contents (`clip read`), or a file reference
+ * (`clip file`).
+ */
+#define P4_CONFIG_CLIPBOARD_BYTES            2048
+
+/** Maximum lines `clip copy [N]` accepts from the transcript. */
+#define P4_CONFIG_CLIP_COPY_LINES_MAX        64
 
 /* ========================================================================
  * GPIO AND HARDWARE CONTROL
@@ -931,6 +1079,18 @@
 
 /** Header CPU bar warning threshold (percent). */
 #define P4_CONFIG_HEADER_CPU_WARN_PCT        85
+
+/**
+ * Show a small CPU history sparkline in the header system panel instead of
+ * the single-value CPU bar. 1 = sparkline, 0 = the plain bar.
+ */
+#define P4_CONFIG_HEADER_CPU_GRAPH           1
+
+/** Number of CPU samples held by the header sparkline ring. */
+#define P4_CONFIG_HEADER_CPU_GRAPH_POINTS    12
+
+/** Width of the header CPU sparkline canvas in pixels. */
+#define P4_CONFIG_HEADER_CPU_GRAPH_WIDTH_PX  26
 
 /** Header memory low threshold (percent). */
 #define P4_CONFIG_HEADER_MEM_LOW_PCT         30
@@ -1169,6 +1329,14 @@
 
 /** Stack size for the UART/serial console reader task. */
 #define P4_CONFIG_UART_CONSOLE_TASK_STACK    12288
+
+/** Stack bytes for the LVGL task (created by the BSP display driver).
+ *  Raised above the 7168-byte esp_lvgl_port default: a full-screen redraw
+ *  (transcript span group, input line, on-screen keyboard, header) recurses
+ *  deep enough that the stock stack overflowed into a boot-loop panic. The
+ *  modal editor adds row rendering on this same task, so the budget stays a
+ *  generous 12 KB. */
+#define P4_CONFIG_LVGL_TASK_STACK            12288
 
 /** Log tag for networking/Wi-Fi module. */
 #define P4_CONFIG_NETWORKING_TAG             "wifi"

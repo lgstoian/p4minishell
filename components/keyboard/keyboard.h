@@ -52,6 +52,8 @@ typedef enum {
     KEYBOARD_MODE_TEXT_UPPER,       /**< Uppercase text */
     KEYBOARD_MODE_NUMBER,           /**< Numbers only */
     KEYBOARD_MODE_SYMBOLS,          /**< Symbols only */
+    KEYBOARD_MODE_NAV,              /**< Editor navigation page (page 1) */
+    KEYBOARD_MODE_NAV2,             /**< Editor navigation page (page 2: edit/clipboard) */
     KEYBOARD_MODE_COUNT             /**< Sentinel */
 } keyboard_mode_t;
 
@@ -157,7 +159,9 @@ void keyboard_clear_force_visible(void);
 
 /**
  * Bind the keyboard to a textarea for input routing.
- * @param textarea  LVGL textarea object to receive keyboard input.
+ * Passing NULL unbinds the keyboard (its LVGL widget binding is cleared too,
+ * so a stray default handler can never type into a hidden textarea).
+ * @param textarea  LVGL textarea object to receive keyboard input, or NULL.
  */
 void keyboard_bind_textarea(lv_obj_t *textarea);
 
@@ -166,6 +170,41 @@ void keyboard_bind_textarea(lv_obj_t *textarea);
  * @return The bound textarea, or NULL if none.
  */
 lv_obj_t *keyboard_get_textarea(void);
+
+/**
+ * Report whether a textarea is currently bound to the keyboard.
+ * Lets callers assert the intended binding state (e.g. the editor asserts it
+ * is unbound while it owns the on-screen keyboard).
+ * @return true when a textarea is bound.
+ */
+bool keyboard_is_textarea_bound(void);
+
+/* ========================================================================
+ * OSK INPUT DEDUPLICATION
+ * ======================================================================== */
+
+/**
+ * Decide whether an on-screen keyboard button press should be processed.
+ *
+ * The shell routes every OSK button through this guard before acting on it:
+ * a re-fire of the same button id within P4_CONFIG_OSK_DEBOUNCE_MS (the same
+ * LVGL event reaching a second, stray handler) is dropped, so double input is
+ * impossible even if a duplicate handler is ever re-registered. Deliberate
+ * fast repeats (auto-repeat, quick double-taps) are far slower than the
+ * debounce window and are not merged.
+ *
+ * @param btn_id  The LVGL button id of the pressed key.
+ * @return true when the press should be processed.
+ */
+bool keyboard_osk_accept(uint32_t btn_id);
+
+/**
+ * Pure, injectable-clock variant of keyboard_osk_accept() for unit tests.
+ * @param btn_id  The LVGL button id of the pressed key.
+ * @param now_ms  Current time in milliseconds (injected).
+ * @return true when the press should be processed.
+ */
+bool keyboard_osk_accept_at(uint32_t btn_id, int64_t now_ms);
 
 /* ========================================================================
  * MODE CONTROL
@@ -238,6 +277,15 @@ lv_obj_t *keyboard_get_widget(void);
  * @param user_data Opaque user data passed to the callback.
  */
 void keyboard_register_event_callback(lv_event_cb_t cb, void *user_data);
+
+/**
+ * Report how many LVGL event callbacks are currently registered on the
+ * keyboard widget. The shell expects exactly one (its own). A value other
+ * than 1 means the LVGL default handler survived or a callback was registered
+ * twice — the root cause of double OSK input.
+ * @return The number of registered LVGL event callbacks (0 when no widget).
+ */
+uint32_t keyboard_event_callback_count(void);
 
 #ifdef __cplusplus
 }

@@ -7,6 +7,733 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.39] - 2026-08-13
+
+### Fixed - shell hardening: redirection capture, long write/append, pipe stack, long echo
+
+- **`> file` / `>> file` no longer truncate at the 16 KB transcript.** A
+  redirected command's output is now mirrored into a dedicated heap capture
+  (up to `P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES`, 256 KB) as every transcript
+  append happens, so `type <large> > out.txt` writes the command's FULL output
+  even when the on-screen transcript drops the oldest half. The write reports
+  truncation if the capture cap itself is exceeded. Verified on board: a
+  19.5 KB `type > out` round-trips to exactly the source size.
+- **`write` and `append` no longer silently truncate long text.** The joined
+  value is heap-allocated at the full command-line size (`P4_CONFIG_COMMAND_BYTES`)
+  instead of a fixed stack buffer, so multi-kilobyte values survive
+  (verified ~3.9 KB per write/append, and a 19.5 KB file built from five of them).
+- **Long pipelines no longer overflow the command worker task.** The pipe
+  executor's stage redirection buffer was a 2x command-sized stack local;
+  it is heap-allocated now, so a pipe appearing inside a nested batch file
+  cannot blow the 8 KB worker stack.
+- **`echo` prints the whole remainder of a long line.** The echo branch
+  snapshots the raw, unsplit command line before the argv cap applies, so a
+  full 4096-byte echo (verified 40 tokens) prints everything. Non-echo commands
+  with more arguments than the argv capacity now report a warning instead of a
+  hard error.
+- **Transcript overflow is bounded, not a boot crash.** Every append path is
+  clamped to the buffer size and, when output exceeds capacity, the oldest half
+  is dropped and a `[history truncated]` marker is appended — removing the
+  overflow that aborted at boot.
+- **`findstr` regex engine fixes.** The matcher now advances past a complete
+  atom, so bracket classes (`[ab]c`) and escapes (`a\*b`, `a\.b`) match
+  correctly, and an escaped `\*` is a literal star rather than a quantifier.
+  (The `^abc` end-position assertion in `test_findstr.c` was also corrected to
+  the true match extent.)
+
+### Added
+
+- `P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES` (256 KB) — redirect capture cap,
+  documented in p4minishell_config.yaml.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board (COM11): full unit suite passes (120 tests, 0 failures); boot
+  banner clean; `ver` reports v0.24.39; 40-token echo, `echo hello |
+  findstr hello`, and `write`/`append` of 3.9 KB values all pass; `type
+  <19.5 KB> > out` writes the full file.
+
+---
+
+## [0.24.38] - 2026-08-13
+
+### Added - full touch-keyboard compatibility for `edit`
+
+Every editor feature is now reachable from the on-screen touch keyboard alone,
+with no USB keyboard required. The single navigation page becomes two:
+
+- **Nav page** (`Nav` on the symbols page): `Tab`, `Ins`, `Del`, arrows,
+  `Home`/`End`, `PgUp`/`PgDn`, `Find`, `Next` (repeat find), `Rep`, `Goto`,
+  `Undo`, `Redo`, `Save`, `SaveAs`, `Quit`, `Nav2` (-> Edit page), `abc`.
+- **Edit page** (`Nav2` on the Nav page): `Copy`, `Cut`, `Paste`, `SelAll`,
+  `WdL`/`WdR` (word left/right), `DocH`/`DocE` (document home/end),
+  `DelLn` (delete line), `DelE` (delete to end of line), `Nav1` (-> Nav page),
+  `abc`.
+
+`Next` maps to repeat-find (the OSK equivalent of `F3`); `Nav1`/`Nav2` switch
+the two pages and are routed by the shell keyboard callback
+(`KEYBOARD_MODE_NAV2` -> LVGL `USER_2`). All of these were previously
+USB/serial-only: undo, redo, copy, cut, paste, select-all, word navigation,
+document home/end, delete line, delete-to-end-of-line, and repeat-find.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board (COM11): full unit suite passes; every `edit` feature is covered by
+  a Nav/Edit-page button, and the earlier serial smoke tests (create/type/
+  save, round-trip, LF/CRLF, undo/redo, select-all+replace, find, goto,
+  save-as, quit-confirm, tabs, multi-line, `.bat`) still pass with no
+  regressions.
+
+---
+
+## [0.24.37] - 2026-08-13
+
+### Added
+
+- **Line-number gutter** in the `edit` editor: every row is prefixed with its
+  1-based line number, right-aligned in a fixed-width muted gutter
+  (`P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS`, default 4) followed by a space.
+  The gutter is render-only (never part of the document); the cursor,
+  selection overlay, and touch mapping are offset past it so caret/tap/select
+  stay byte-aligned. Toggle with `P4_CONFIG_EDITOR_LINE_NUMBERS`.
+- **Current-line highlight**: the cursor's row gets a subtle full-width
+  background bar behind the text (`P4_CONFIG_EDITOR_CURRENT_LINE`,
+  `P4_CONFIG_EDITOR_CURRENT_LINE_COLOR`).
+- **Serial verbs `\g` (Go to Line) and `\o` (Save As)** now complement the
+  existing `\q \s \f \u \r \a`, so every prompt-driven feature is reachable
+  from the serial console.
+- **Pure line-number formatter** `editor_format_line_number()` (right-aligns a
+  1-based number into a fixed digit width plus a space), unit-tested.
+- **Complete editor tutorial**: new `tutorial_edit.md` covers every feature
+  with edge cases and full touch/USB/serial cheat sheets; linked from
+  `readme.md` and `command.md`, cross-referenced from `editor.md`.
+
+### Configuration
+
+- `P4_CONFIG_EDITOR_LINE_NUMBERS`, `P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS`,
+  `P4_CONFIG_EDITOR_CURRENT_LINE`, `P4_CONFIG_EDITOR_CURRENT_LINE_COLOR`
+  (documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board (COM11): full unit suite passes (24 editor + keyboard dedup + new
+  `test_editor_format_line_number`); serial smoke tests cover create/type/
+  save/read-back, byte-identical round-trip, LF and CRLF preservation,
+  undo/redo, select-all+replace, find, go-to-line, save-as, quit-confirmation,
+  tabs, blank-line handling, a 100-line file, and a `.bat` file — all pass
+  with no hangs or crashes.
+
+---
+
+## [0.24.36] - 2026-08-13
+
+### Fixed
+
+- **On-screen keyboard doubled every letter/symbol** (pressing `A` produced
+  `AA`). `keyboard_register_event_callback` used `lv_obj_remove_event_cb(widget,
+  NULL)`, which is a NO-OP in LVGL (it only removes callbacks whose cb pointer
+  equals NULL), so the LVGL default keyboard handler stayed registered next to
+  the shell's callback and BOTH processed each button. Registration now removes
+  every callback descriptor explicitly, leaving exactly one handler.
+- **The `edit` surface collapsed to ~one line and dragged the touch keyboard up
+  under it.** `windows_enter_editor_mode` hid the transcript container, which is
+  the editor surface; LVGL flex skips hidden children, so the editor area
+  collapsed and the keyboard jumped up. The transcript container now stays
+  visible as the editor surface at the transcript-region height — the editor
+  area is exactly as large as the normal shell area and the keyboard stays at
+  the bottom. The editor already hides the shell span group, so no shell output
+  leaks through.
+- `keyboard_bind_textarea(NULL)` never cleared the LVGL widget's binding, so a
+  stray handler could type into the hidden shell input line while the editor
+  was open; it now truly unbinds.
+- The shell's transcript/input-line LVGL callbacks re-bound the keyboard textarea
+  and summoned the OSK on taps; they now no-op while the editor owns the surface.
+
+### Added - preventative features
+
+- **OSK input deduplication** (`keyboard_osk_accept` / pure
+  `keyboard_osk_accept_at`): the shell drops a re-fire of the same button id
+  within `P4_CONFIG_OSK_DEBOUNCE_MS` (30 ms) before routing it, so double input
+  is impossible even if a duplicate handler is ever re-registered. Fast typing
+  and auto-repeat are far slower than the window and are never merged.
+- **Keyboard callback audit** (`keyboard_event_callback_count`): registration
+  logs how many handlers are on the widget and flags any value other than one
+  (`DOUBLE INPUT RISK`), so a future duplicate-handler regression is visible in
+  the serial log instead of as silent doubled characters.
+- **Idempotent, self-cleaning registration**: every registration removes all
+  prior callbacks (default handler included) by descriptor, so duplicates can
+  never accumulate across boot or rotation rebuilds.
+- **Textarea binding diagnostic** (`keyboard_is_textarea_bound`): the editor can
+  assert the OSK is unbound from the shell input line while it owns it.
+- **Editor-surface reflow helper** (`windows_refresh_editor_surface`) + entry
+  self-check (`windows_editor_surface_height_ok`) + layout diagnostic
+  (`windows_debug_editor_layout`, `windows_get_editor_surface`): the editor
+  surface is always sized to the transcript region (on entry and on keyboard
+  show/hide) and a collapsed surface logs a warning immediately.
+
+### Configuration
+
+- `P4_CONFIG_OSK_DEBOUNCE_MS` (30) — documented in p4minishell_config.yaml.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board (COM11): `Keyboard callback audit: 1 handler(s) registered` in the
+  boot log; `editor layout diagnostic: surface h=300 px, transcript region
+  h=300 px` on `edit` — the editor area matches the shell transcript exactly and
+  the keyboard sits at its normal height at the bottom.
+- New `test_keyboard_osk_dedup` unit suite (debounce window, boundary, fast
+  repeat) passes on the board alongside the full editor suite (24/24).
+- Edit create/type/save/read-back and quit smoke tests still pass with the
+  surface visible.
+
+---
+
+## [0.24.35] - 2026-08-13
+
+Editor hardening, DOS-EDIT search parity, and a reusable modal-surface pattern.
+
+### Added - `edit` DOS-EDIT parity features
+
+- **Find / Repeat / Replace / Go-to-Line**: `Ctrl+F` (or the nav-page `Find`)
+  searches forward from the caret and wraps; `F3` / `Enter` repeats the last
+  search; `Ctrl+H` (`Rep`) replaces one match at a time with `Enter` repeating;
+  `Ctrl+G` (`Goto`) jumps to a line number. Search strings are typed into the
+  status bar and cancelled with `Esc`.
+- **Save As**: `Ctrl+O` / `SaveAs` prompts for a new path (pre-filled with the
+  current one); after a successful save the editor retitles to the new path.
+  Unnamed buffers now prompt for a name instead of silently saving to
+  `EDIT.NEW`.
+- **Overwrite toggle**: `Insert` / `Ins` flips insert/overwrite; the status bar
+  shows `INS` / `OVR`.
+- **Word navigation** (`Ctrl+Left` / `Ctrl+Right`), **document start/end**
+  (`Ctrl+Home` / `Ctrl+End`), **delete line** (`Ctrl+Y`), and USB shift-arrow
+  selection with an on-screen selection overlay.
+- **Quit confirmation**: Esc quits immediately only when the file is clean;
+  with unsaved changes it asks `Quit without saving? (Y/N)`.
+- **Touch keyboard**: the symbols page now carries a `Nav` button that opens an
+  editor navigation page (Tab, Ins, Del, arrows, Home/End, PgUp/PgDn, Find,
+  Rep, Goto, Save, SaveAs, Quit). Mode switching (abc / ABC / 1# / Nav) is now
+  handled by the shell keyboard callback — the on-screen keyboard's text pages
+  and symbols page are reachable again.
+- **Visible cursor + syntax colours**: the editor renders through a dedicated
+  span group with a blinking block cursor, a selection background overlay, and
+  the batch lexer actually applied (commands, comments, labels, `%VAR%`,
+  strings, operators). Content no longer routes through the shell transcript
+  staging buffer, so large files no longer get clipped at 16 KB.
+
+### Fixed
+
+- **Data-loss guard**: an existing file that cannot be loaded (over the
+  byte/line limits or an I/O error) now refuses to open instead of silently
+  creating an empty buffer that could be saved over the original file.
+- **LF multi-line selection copy** wrote a lone `\r` for LF files, so pasting
+  a multi-line selection joined the lines; it now uses the file's own EOL.
+- **Trailing-newline round-trip**: pressing Enter no longer forces a phantom
+  trailing newline on save; a file's EOL tail is preserved exactly.
+- **Paste no longer pollutes undo** with one entry per pasted line.
+- **Partial-destination cleanup** on a failed editor save (the shell's
+  storage guardrail), matching `copy`/`write` behaviour.
+- **Serial `\r` redo** now maps to `Ctrl+Shift+Z` (DOS `Ctrl+Y` is delete
+  line).
+- **Rotation while editing**: a display rotation closes the editor view and
+  wakes the worker cleanly instead of leaving dangling LVGL widgets.
+- **Status bar format-safety**: a file path containing `%` can no longer be
+  interpreted as a format string.
+- **OSK shell typing restored**: the keyboard's only event handler now routes
+  every button into the command input line (letters, backspace, arrows,
+  Enter/OK, hide), which the replaced LVGL default handler previously did.
+- **Crash: pressing Enter on an empty buffer** dereferenced a NULL line-text
+  pointer (`editor_doc_split_line`); the tail write is now NULL-guarded.
+- **Crash: deleting a selection that starts on an empty line** wrote through a
+  NULL line-text pointer (`editor_doc_selection_delete`).
+- **Buffer overflow: a >127-char Find/Replace string** overflowed the
+  128-byte search buffers (`P4_CONFIG_EDITOR_FIND_BYTES`); the find/replace
+  prompt input is now capped at that size.
+- **Memory leak: undo/redo snapshots were never freed** when a document was
+  released — every session leaked up to `EDITOR_UNDO_DEPTH` full-document
+  copies (up to ~4 MB); `editor_doc_free` now releases them.
+- **Undo/redo corruption on low memory**: `editor_doc_deserialize` freed the
+  old lines before allocating the new ones, so an allocation failure mid-undo
+  left the document half-freed; it now builds-then-swaps atomically.
+- **Multi-row selection delete kept the wrong text** (kept the selected head
+  of the last line instead of its un-selected tail) and used a stale line
+  index after the intermediate removals, so the merge could be skipped
+  entirely (found by the on-board test suite).
+- **Worker hang when the LVGL view failed to open**: the session stayed
+  blocked forever waiting for a quit; it now wakes the worker and returns an
+  error.
+- **`s_session_active` leaked** on the `lv_async_call` failure path, routing
+  serial input to a dead editor.
+- **Display-rotation deadlock**: `editor_view_close` now wakes the worker
+  session, so a rotation mid-edit releases the document instead of blocking
+  the `edit` command forever.
+- **A save requested in the same instant as a quit was dropped** (the worker
+  processed QUIT first); saves are now serviced before quit handling.
+- **Use-after-free window on close**: the worker could free the document
+  while a slow LVGL task was still closing the view; the close wait now polls
+  `editor_view_is_open()` instead of a blind timeout.
+- **Paste beyond the line cap silently dropped lines**; a failed line split
+  now stops the paste.
+- **Unbounded line growth during editing** (`Enter`/paste could exceed
+  `P4_CONFIG_EDITOR_MAX_LINES`); the line insert is now capped.
+- **Word navigation on an empty line** dereferenced a NULL line-text pointer.
+- **Partial widget-creation failures in `editor_view_open`** now clean up and
+  fail instead of leaving a half-built surface, and a failed deferred rebuild
+  falls back to a synchronous render.
+
+### Configuration
+
+- `P4_CONFIG_EDITOR_FIND_BYTES`, `P4_CONFIG_EDITOR_PROMPT_BYTES`,
+  `P4_CONFIG_EDITOR_CURSOR_BLINK_MS`, `P4_CONFIG_EDITOR_SELECTION_COLOR`,
+  `P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE`
+  (documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- New `test/main/test_editor.c` unit suites cover the document model:
+  insert/cursor, newline split/join, delete forward, overwrite toggle, delete
+  line/EOL, document home/end, find/replace (case + wrap), undo/redo,
+  selection (LF and CRLF copy, multi-row tail merge, empty-start delete),
+  paste multi-line, word navigation on empty lines, Enter-on-empty-doc,
+  undo-ring wraparound/cleanup, line-cap bounds, and the batch lexer.
+- On-board run (COM11, `test/` project): all 24 editor suites PASS.
+- Hardware smoke tests: create+type+save+read-back, load round-trip
+  (byte-identical), quit-confirmation discard, find over serial, and
+  modify+save of an existing file all pass with no hangs or crashes.
+
+---
+
+## [0.24.34] - 2026-08-12
+
+### Added - DOS-style `edit` text editor
+
+- `edit <path>` opens a modal, touch-first text editor for any byte-preserving
+  file (batch, txt, sys, or any other extension). Full inline editing: insert,
+  backspace, forward Delete, Enter, Tab-to-next-stop, Home/End, Up/Down,
+  PageUp/PageDown; text selection (Shift+arrows / Ctrl+A via USB,
+  long-press-and-drag via touch) with copy/cut/paste through the RAM clipboard;
+  snapshot-based undo/redo.
+- Files round-trip unchanged: CRLF vs LF is preserved, tabs and 8-bit bytes
+  kept exactly. Batch `.bat`/`.cmd` files get syntax highlighting.
+- The editor is fully usable from the on-screen touch keyboard (a nav page adds
+  Tab, arrows, Home/End, Del, Ins, Save, Quit) and from the UART console
+  (`\q`/`\s`/`\u`/`\r`/`\a` verbs, or typed lines). A USB keyboard/mouse expand
+  it automatically (Ctrl+S/X/C/V/Z/Y/A, mouse-wheel scroll).
+- New `components/editor/` with a byte-preserving document model, batch lexer,
+  LVGL surface, and a worker-task session (file I/O stays off the LVGL task).
+
+### Fixed
+
+- **Editor quit now actually wakes the worker.** `editor_view_handle_usb_key`
+  handled `EDITOR_KEY_QUIT` with an early return that set only a flag and never
+  signalled the session event group, so the modal editor session stayed blocked
+  after Esc / `\q` (appearing as a frozen UI or, under load, a watchdog reset).
+  Quit and Save now route through the event-group helpers.
+- **LF files round-trip correctly.** `editor_doc_save` wrote the first byte of
+  the `"\r\n"` literal when `crlf` was false — emitting a lone `\r` instead of
+  a `\n`, so every LF-only file saved by the editor lost its line breaks.
+  The EOL is now selected explicitly.
+- **On-screen keyboard visibility no longer breaks the flex layout.** The
+  (previously dead) visibility callback wired into the window manager set a
+  manual y-coordinate on the flex-column input row, throwing the keyboard to
+  the top of the screen with a black void below. It now only re-applies the
+  transcript height; flex positions the regions.
+- **The shell display returns after `edit`.** `windows_enter_editor_mode`
+  hides the transcript container for the editor session but the exit path
+  never un-hid it, so the first edit left the shell's main display blank (the
+  keyboard appeared against a black void) until a reboot. Exiting now restores
+  the transcript, and repeated edit sessions leave the shell intact.
+- USB Delete now deletes forward; USB Up/Down history recall no longer inverted.
+- `audio_play` task stack raised 4096 -> 8192: tone generation overflowed the
+  small stack (surfaced once heap poisoning was enabled), causing a watchdog
+  reboot on `tone`.
+- LVGL task stack returned to 12288 (was temporarily 32768 during debugging);
+  the oversized stack was eating internal RAM and starving SD DMA buffers under
+  load, causing intermittent `allocate_dma_buf: not enough mem` on `xcopy`.
+- Diagnostic defaults in `sdkconfig.defaults`: panic hold 5 s, comprehensive
+  heap poisoning, and task-watchdog-panics so any future fault is attributable.
+
+### Configuration
+
+- `P4_CONFIG_EDITOR_MAX_BYTES`, `P4_CONFIG_EDITOR_MAX_LINES`,
+  `P4_CONFIG_EDITOR_UNDO_DEPTH`, `P4_CONFIG_EDITOR_TAB_WIDTH`,
+  `P4_CONFIG_EDITOR_LINE_HEIGHT`, `P4_CONFIG_EDITOR_SYNTAX_BATCH`
+  (documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Hardware (COM11): `edit` opens, typed text is saved and read back with line
+  breaks intact, and `\s`/`\q` work reliably across repeated sessions; audio,
+  long commands, history, dir, chains/redirection, clipboard, top/ps, and
+  xcopy/findstr/comp/find all pass the regression suite with no reboots.
+
+---
+
+## [0.24.33] - 2026-08-12
+
+Tab completion, a heap-backed history with SD save/restore, and extremely
+long command lines (4096 bytes, 16x DOS's 127-char limit). The command
+pipeline's transient buffers moved to the heap so long commands never
+overflow the worker/UART stacks.
+
+### Added - Tab completion (USB keyboard)
+
+- Tab completes the current word: the first token completes command names,
+  aliases, and `.bat` files; any later token completes SD file/directory
+  paths (directories get a trailing `/` so completion keeps going). A unique
+  match fills in, repeated Tab cycles the matches, and the first Tab with
+  several matches lists them (muted) in the transcript. Wired through a new
+  `shell_command_ops_t.complete_word` hook registered by `command_init`.
+
+### Added - heap-backed history + SD save/restore
+
+- History is now heap-backed (`strdup`'d lines) with depth
+  `P4_CONFIG_COMMAND_HISTORY_DEPTH` (32) and a total-byte cap
+  `P4_CONFIG_HISTORY_TOTAL_BYTES` (64 KB), so very long commands are kept
+  without a fixed RAM grid. Up/Down recall and password masking are unchanged.
+- `history` lists the numbered recall buffer (redirectable/pipable);
+  `history /save [file]` writes it to SD (default `P4_CONFIG_HISTORY_PROFILE`,
+  atomic write with partial-file cleanup); `history /load [file]` restores it
+  (append, dedupe); `history /clear` clears RAM history.
+
+### Changed - extremely long command lines
+
+- `P4_CONFIG_COMMAND_BYTES` raised 256 -> 4096. All command-sized stack
+  buffers in the pipeline moved to the heap: the UART console line + submit
+  copies, `shell_input_line_set_text`/repair, the history mask/recall buffers,
+  and the worker-queue `command_request_t` (plus a chain buffer sized to the
+  full command). Batch-line length is unchanged.
+- The command worker queue now stores pointers to heap requests instead of
+  four 4096-byte copies, so the internal heap is not pinned by a 16 KB queue.
+
+### Fixed - long-line truncation found during verification
+
+- `shell_uart_console_task` read into a heap line buffer but used
+  `sizeof(line)` (the pointer size) as its capacity, so long serial commands
+  were split into 3-char fragments. It now uses `SHELL_COMMAND_BYTES`.
+- `shell_execute_command_segment` expanded commands into `SHELL_BATCH_LINE_BYTES*2`
+  (768-byte) buffers, truncating interactive lines. Now command-sized.
+- `shell_command_echo` joined its arguments into a 384-byte batch-line buffer;
+  an interactive `echo ... > file` was cut at 384 bytes. Now command-sized.
+- `shell_transcript_appendf` used a fixed 512-byte stack buffer, so long
+  command output (and the redirected file) was cut at 511 bytes. Now
+  command-sized and heap-allocated.
+
+### Fixed - boot-loop and grey-screen regressions
+
+- The first v0.24.33 build boot-looped with a stack-protection fault in
+  `taskLVGL`: the 7168-byte default LVGL task stack was overflowed by the
+  deep redraw recursion. The LVGL task stack is now `P4_CONFIG_LVGL_TASK_STACK`
+  (12288 bytes), confirmed healthy via `top` (taskLVGL high-water ~9.8 KB).
+- Rebooting the LVGL port config from the defaults dropped `timer_period_ms`
+  (and `task_max_sleep_ms`), which stopped the LVGL tick timer: the device
+  booted with a uniform grey panel while the framebuffer still held the UI.
+  `display.c` now starts from `ESP_LVGL_PORT_INIT_CONFIG()` (all defaults) and
+  only overrides the task stack.
+- The input-line `VALUE_CHANGED` handler ran a 4096-byte `typed` local on the
+  LVGL task; it is heap-allocated now, as are the `LV_EVENT_READY` command and
+  transcript copies.
+
+### Configuration
+
+- `P4_CONFIG_COMMAND_BYTES`, `P4_CONFIG_COMMAND_HISTORY_DEPTH`,
+  `P4_CONFIG_HISTORY_TOTAL_BYTES`, `P4_CONFIG_HISTORY_PROFILE`,
+  `P4_CONFIG_COMPLETION_MAX_MATCHES`, `P4_CONFIG_LVGL_TASK_STACK` (documented
+  in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Hardware (COM11): boots clean, no boot loop, no panics; a ~3900-char
+  `echo ... > file` command runs end to end and the file reads back at full
+  size; `history` lists, `/save`, `/clear`, `/load`, and a bad-path `/save`
+  rejection all behave; Tab-completion hooks and the input line are intact;
+  regressions pass across serial console, clipboard, dir, chains +
+  redirection, top/ps sorting, audio, and xcopy/findstr/comp/find.
+
+---
+
+## [0.24.32] - 2026-08-12
+
+Clipboard / copy-paste for the transcript and the SD filesystem — a RAM
+clipboard in the shell core (`clip` / `paste`), batch-safe and DOS-flavoured.
+On a touch + USB-keyboard device this makes copying the last lines of output
+or a file and reusing them trivial.
+
+### Added - `clip` / `paste`
+
+- `clip` prints the clipboard (`clipboard: <text>` / `(file: <path>)` /
+  `(empty)`); redirectable, so `clip > note.txt` saves it.
+- `clip <text>` sets the clipboard to text (`clip hello world`).
+- `clip copy [N]` copies the last N transcript lines (default 1, cap
+  `P4_CONFIG_CLIP_COPY_LINES_MAX`) into the clipboard — the same read the `>`
+  redirection path uses.
+- `clip file <path>` stores a file reference in the clipboard;
+  `paste <dest>` copies that file to a destination (or into a directory,
+  keeping its name) — Windows-style file copy-paste.
+- `clip read <file>` loads a text file's contents into the clipboard (bounded
+  by `P4_CONFIG_CLIPBOARD_BYTES`), so `clip read x.txt` then `clip > y.txt`
+  round-trips text.
+- `paste` injects the clipboard into the input line at the cursor
+  (`lv_textarea_add_text`), so a copied path or line can be edited and
+  submitted immediately. All verbs set an ERRORLEVEL (0 ok / 1 empty|missing /
+  2 usage) and are redirectable/pipable for batch use.
+
+### Configuration
+
+- `P4_CONFIG_CLIPBOARD_BYTES` (2048), `P4_CONFIG_CLIP_COPY_LINES_MAX` (64)
+  (documented in p4minishell_config.yaml).
+
+### Fixed - on-screen keyboard recoverability
+
+- Tapping the transcript now summons the on-screen keyboard when it is hidden
+  and no USB keyboard is driving the input line (previously only tapping the
+  input line did), so the OSK cannot get "stuck" hidden on a touch device.
+- `keyboard status` now reports the external-input state (`external=on|off`)
+  so the auto-hide behavior is diagnosable.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Hardware (COM11): `clip` / `clip hello` set and show; `clip copy 3` grabs
+  the transcript tail and `paste` injects it into the input line (submitting
+  it runs the copied text); `clip file CONFIG.SYS` then `paste backup\` copies
+  the file; `clip read CONFIG.SYS` then `clip > out.txt` round-trips the text;
+  `clip > file` redirects the clipboard; batch `clip copy 1 && echo ok` and
+  `if errorlevel` work; `copy`/`move`/`type`/input line show no regressions.
+  `keyboard status` reports `external=off`, `keyboard show`/`toggle`/`hide`
+  work, and the OSK is left visible.
+
+---
+
+## [0.24.31] - 2026-08-12
+
+Basic audio surface: the ES8311 speaker now actually makes sound. `beep` and
+`tone <freq> [ms]` play tones, `wavplay` streams a short 16-bit PCM WAV from
+SD, `volume` gained a query form, and all of it is batch-friendly — playback
+runs on a small background task so nothing blocks a batch file, and every
+command sets a real ERRORLEVEL.
+
+All audio logic lives in a dedicated **`components/audio`** component (codec
+init, speaker volume, and the background playback engine in `audio.h` /
+`audio.c`); the `beep`/`tone`/`wavplay`/`audio`/`volume` commands in
+`components/command/` only parse arguments and call the `audio.h` API.
+
+### Added - beep / tone
+
+- `beep` plays a short default tone (`P4_CONFIG_BEEP_FREQ_HZ` 880 Hz,
+  `P4_CONFIG_BEEP_DURATION_MS` 100 ms).
+- `tone <freq> [ms]` plays a sine wave (freq 20..20000 Hz, duration
+  10..`P4_CONFIG_TONE_DURATION_MAX_MS`, default 200 ms) at
+  `P4_CONFIG_TONE_AMPLITUDE_PCT` peak amplitude with a short fade in/out so it
+  does not click. PCM is generated in heap chunks and streamed through the
+  ES8311 codec (mono 16-bit 22050 Hz, the BSP default).
+- Playback is **background**: a small `audio_play` task consumes play requests
+  so `beep && echo ok` fires immediately and a batch file never blocks.
+  One sound plays at a time; a new request while one is active is refused with
+  `audio busy`.
+
+### Added - wavplay + audio family
+
+- `wavplay <file>` streams a short 16-bit PCM WAV from the SD card. Stereo is
+  mixed to mono and 44100 Hz is decimated to 22050, so mono/stereo WAVs at
+  22050 or 44100 play; other formats are rejected with an honest message.
+  Files are bounded by `P4_CONFIG_WAV_MAX_BYTES` (1 MiB).
+- `audio status` reports `playing`/`idle`; `audio stop` cuts the current
+  playback short (a long tone or WAV can be cancelled).
+
+### Changed - volume
+
+- `volume` with no argument now prints the current codec volume
+  (`volume: <pct>%`); `volume <0-100>` keeps setting it. All audio output
+  rides on this volume. ERRORLEVEL 0/2.
+
+### Configuration
+
+- `P4_CONFIG_BEEP_FREQ_HZ`, `P4_CONFIG_BEEP_DURATION_MS`,
+  `P4_CONFIG_TONE_FREQ_MIN`, `P4_CONFIG_TONE_FREQ_MAX`,
+  `P4_CONFIG_TONE_DURATION_DEFAULT_MS`, `P4_CONFIG_TONE_DURATION_MAX_MS`,
+  `P4_CONFIG_TONE_AMPLITUDE_PCT`, `P4_CONFIG_TONE_CHUNK_SAMPLES`,
+  `P4_CONFIG_WAV_MAX_BYTES`, `P4_CONFIG_AUDIO_TASK_STACK`,
+  `P4_CONFIG_AUDIO_TASK_PRIORITY` (documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Hardware (COM11): `volume` queries the current level; `tone 1000 200` and
+  `beep` start and play to completion (audible); `tone 440` uses the default
+  duration; out-of-range frequencies/durations are usage errors (errorlevel
+  2); `audio status` flips to `playing` then `idle`; a second `tone` while one
+  plays is refused with `audio busy` (errorlevel 1); `audio stop` cuts a long
+  tone and status returns to `idle`; `wavplay` rejects a missing file
+  (errorlevel 1) and a non-WAV file honestly; `beep && echo ok` chains in a
+  batch line without blocking; raising `volume` audibly increases the tone.
+  `volume`/`power`/`sleep`/`deepsleep` show no regressions (audio is stopped
+  before entering sleep). Actual WAV playback requires a 16-bit PCM WAV on the
+  SD card (mono/stereo, 22050/44100 Hz); the streaming path was validated by
+  review plus the header/parse rejection checks.
+
+---
+
+## [0.24.30] - 2026-08-12
+
+Power-management polish: an idle display-off timer with a clean wake path, done
+the DOS way. `power idle` sets it, CONFIG.SYS `DISPLAY_TIMEOUT=` sets it at
+boot, and touch / USB keyboard / USB mouse / a serial command all wake the
+display back to the live shell.
+
+### Added - idle display-off (`power idle`)
+
+- `power idle <seconds>` turns the display backlight off after that many
+  seconds without user input; `power idle 0` / `power idle off` disables;
+  `power idle` prints the current setting. Capped by
+  `P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS`.
+- `power` status reports `power.idle_off=<secs|off>` and `power.wake_gpio=`.
+- **Activity sources** that reset the idle clock and wake a dimmed display:
+  touch (LVGL indev), USB keyboard, USB mouse wheel, and any serial command;
+  a running command also counts as activity, so a long batch step never looks
+  idle.
+- Idle-off only drops the backlight (`display_set_power_state`), so the panel,
+  GT911, and USB host keep running and the shell state is untouched — waking
+  is a clean backlight-on plus a header notification. Disabled by default
+  (`P4_CONFIG_POWER_IDLE_DISPLAY_OFF_SECS = 0`); no regression.
+
+### Added - CONFIG.SYS `DISPLAY_TIMEOUT=` directive
+
+- `DISPLAY_TIMEOUT=<seconds|OFF>` in CONFIG.SYS applies the idle timeout at
+  boot through the shared `power idle` command, alongside the existing
+  `DISPLAY_POWER=` directive; the default template documents it.
+
+### Added - sleep wake options (honest touch-wake reporting)
+
+- The GT911 interrupt line is not wired on this board
+  (`BOARD_CFG_LCD_TOUCH_INT_GPIO = GPIO_NUM_NC`), so touch cannot wake light
+  sleep. `sleep` now reports that honestly and offers the alternatives:
+  `P4_CONFIG_POWER_WAKE_GPIO` (a user-wired button/switch GPIO that wakes
+  light sleep via `gpio_wakeup_enable` + `esp_sleep_enable_gpio_wakeup`,
+  disabled after wake) and `power idle` for the always-on shell.
+
+### Configuration
+
+- `P4_CONFIG_POWER_IDLE_DISPLAY_OFF_SECS`, `P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS`,
+  `P4_CONFIG_POWER_WAKE_GPIO`, `P4_CONFIG_POWER_WAKE_LEVEL`
+  (documented in p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Hardware (COM11): `power idle 5` turns the display off after ~5 s idle and
+  `power` reports `power.idle_off=5`; touch, a USB keypress, and a serial
+  command each wake the display and reset the clock; `power idle 0` disables
+  (no auto-off); `power idle 99` is a usage error (errorlevel 2);
+  `DISPLAY_TIMEOUT=` survives a reboot; `power`/`display power`/`battery sleep`
+  show no regressions. Repeated idle-off/wake cycles run with no panic.
+- Note: `sleep` (light sleep) prints the honest touch-wake message, but on this
+  board entering light sleep leaves USB-Serial-JTAG unresponsive afterwards
+  (the serial console stops answering; a physical power cycle restores it).
+  This is a pre-existing light-sleep/hardware quirk, not introduced here —
+  the `sleep` changes in this release are inert on the default configuration
+  (no wake GPIO set). Use `power idle` for the always-on touch/USB-wake screen.
+
+---
+
+## [0.24.29] - 2026-08-12
+
+Serial Monitor polish: destructive confirmations and `set /p` are now typable
+on a single serial line. The firmware already ran fully over `idf.py monitor`
+(USB-Serial-JTAG); this makes the interactive key waits behave like a real
+terminal.
+
+### Changed - whole-line key forwarding over serial
+
+- The UART console reader now forwards the entire freshly-read line into the
+  interactive keypress queue instead of only its first character. A
+  destructive confirmation word such as `YES` is typed as a whole word and
+  Enter submits it (`format`, `del /s`, `rd /s`, `trash empty`/`purge`,
+  `disk clean`/`delete`, xcopy overwrite prompts), and `set /p` accepts a full
+  value line over serial. (The old workaround of sending each letter on its
+  own line no longer applies — type the word, then Enter.)
+- The queue is flushed at every key-wait begin/end, so stray characters from a
+  one-key wait (`pause`, `choice`, `more`) never leak into the next prompt;
+  those single-key waits behave exactly as before.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Verified over the serial console — the USB-Serial-JTAG endpoint `idf.py
+  monitor` attaches to (same bytes, same port): full boot log into the prompt
+  (`P4MiniShell v0.24.29 ready`, `UART console ready`), `version`, `dir`,
+  `type`, `top /O:-C`, `findstr`, `xcopy`, a pipe (`top /b | findstr IDLE`),
+  and redirection all work. `del /s` confirms with a single `YES` line,
+  `trash empty` likewise, `set /p` captures a full typed line, and
+  `pause` / `choice` / `more` one-key waits behave unchanged. The recycle-bin
+  and errorlevel chains show no regression.
+
+---
+
+## [0.24.28] - 2026-08-12
+
+Richer task view and an optional CPU sparkline in the header, both done the
+DOS way: `top`/`ps`/`tasks` sort with the familiar `dir /O:` switch syntax
+and set a real ERRORLEVEL, and the header CPU panel can show a small history
+graph instead of a single-value bar.
+
+### Added - `top` / `ps` / `tasks` sorting
+
+- `/O:` ordering switches mirror `dir`: sort by `N` (name), `C` (CPU), `S`
+  (stack high-water), `P` (priority), or `T` (state); a `-` prefix reverses
+  (`top /O:-C`); bare `/O` sorts by name; name is the deterministic
+  tie-breaker.
+- `top` defaults to CPU-descending (real `top` behaviour); `ps`/`tasks` keep
+  the FreeRTOS order unless `/O:` is given. An explicit `/O:` always wins.
+- The snapshot is normalized into lightweight heap rows and sorted with
+  `qsort` using the same comparator pattern as `dir /O:`; the pure
+  `shell_task_row_compare()` helper is unit-tested.
+- `/b` bare output stays uncoloured and machine-parsable (now simply sorted),
+  so `top /b /O:-C | findstr /V IDLE` works in a pipe.
+- `ps`/`tasks`/`top` now return an ERRORLEVEL (0 ok, 2 usage) that the
+  dispatcher records, so `top && echo ok`, `if errorlevel 2`, and
+  `top /O:Q || echo bad` work in batch files. Still strictly read-only.
+
+### Added - optional header CPU graph
+
+- `P4_CONFIG_HEADER_CPU_GRAPH` (default 1) replaces the header's single-value
+  CPU bar with a small LVGL chart sparkline of the recent CPU samples
+  (`P4_CONFIG_HEADER_CPU_GRAPH_POINTS`, default 12; width
+  `P4_CONFIG_HEADER_CPU_GRAPH_WIDTH_PX`, 26). Bars are bright green, amber
+  above `P4_CONFIG_HEADER_CPU_WARN_PCT`. Set the toggle to 0 to restore the
+  plain bar exactly.
+- The history ring advances on the existing header refresh
+  (`P4_CONFIG_HEADER_REFRESH_PERIOD_MS`); no new sampling path.
+
+### Configuration
+
+- `P4_CONFIG_HEADER_CPU_GRAPH`, `P4_CONFIG_HEADER_CPU_GRAPH_POINTS`,
+  `P4_CONFIG_HEADER_CPU_GRAPH_WIDTH_PX` (documented in
+  p4minishell_config.yaml).
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- New unit tests: `test_task_sort.c` (name / CPU / stack / priority / state
+  ordering, reverse, name tie-break, NULL safety) registered in the Unity
+  runner.
+- Hardware (COM11): `top /O:C`, `/O:-C`, `/O:N`, `/O:S`, `/O:P`, `/O:T`,
+  bare `/O`, and a bad key (usage errorlevel 2) all behave as expected; `/b`
+  rows keep the exact `name state prio core headb cpu` format when sorted;
+  `top /b /O:-C | findstr /V IDLE` pipes cleanly; `top && echo ok` chains.
+  `ps`/`tasks`/`dir /O:` and batch `if errorlevel` are unchanged. The header
+  shows the CPU sparkline with the toggle on and the plain bar with the
+  toggle off.
+
+---
+
 ## [0.24.27] - 2026-08-12
 
 Complete `xcopy` and two more classic DOS text tools. `xcopy` now supports

@@ -23,10 +23,14 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # app_main builds the full LVGL UI (windows_init -> transcript/input/keyboard
-# creation + transcript mirror printf) on the main task. The 3584-byte default
-# overflows with a stack protection fault in vfprintf during shell_build_ui;
-# 8192 matches the command worker task budget and gives the boot path headroom.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# creation + transcript mirror printf) on the main task AND runs the DOS boot
+# scripting (CONFIG.SYS / AUTOEXEC.BAT) through the recursive batch pipeline,
+# which dispatches every line through shell_execute_command -> segment -> core.
+# The 3584-byte default overflowed in vfprintf during shell_build_ui, and 8192
+# overflowed in the same machinery once boot scripting plus the shell's
+# argument-cap and echo hardening added frames on that path. 16384 gives the
+# boot path comfortable headroom for nested batch files.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # Wi-Fi/IP event handlers call the shell transcript (vsnprintf formatting) and
 # header notify hooks directly on the esp_event `sys_evt` task. The 2304-byte
@@ -99,6 +103,20 @@ CONFIG_SPIRAM_XIP_FROM_PSRAM=n
 # stack on a panic. Enable unwinding so crash reports include a real
 # backtrace for triage on hardware.
 CONFIG_ESP_SYSTEM_USE_EH_FRAME=y
+
+# Hold panics on screen for a few seconds instead of resetting instantly.
+# The console is USB-Serial-JTAG, which drops the link during a reset; an
+# instant reset would discard the backtrace before the host can read it.
+CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=5
+
+# Comprehensive heap poisoning turns silent heap corruption into a loud,
+# attributed abort at free time. This board has shown intermittent LVGL/UI
+# faults; keep the check on so a corrupting call site is named, not guessed.
+CONFIG_HEAP_POISONING_COMPREHENSIVE=y
+
+# Treat a task-watchdog timeout as a panic (with a decoded backtrace) instead
+# of a silent reset, so a wedged task is attributable to the blocked frame.
+CONFIG_ESP_TASK_WDT_PANIC=y
 
 # Disable the LVGL default theme's style-transition animations. The theme
 # starts an 80 ms transition animation on every style change; widgets that are

@@ -102,6 +102,10 @@ lv_coord_t windows_scale_width_percent(int percent, lv_coord_t min_w, lv_coord_t
 /** Get the transcript (LVGL label showing coloured command output). */
 lv_obj_t *windows_get_transcript(void);
 
+/** Get the transcript's span group (the child holding the coloured spans).
+ *  The editor hides it while its own surface owns the container. */
+lv_obj_t *windows_get_transcript_spans(void);
+
 /**
  * Set the transcript text, converting ANSI SGR escape sequences to LVGL
  * recolor markup for coloured rendering on the label.
@@ -244,6 +248,58 @@ void windows_reset_input_line(const char *prompt);
  * @param visible  true if keyboard is now visible, false if hidden.
  */
 void windows_notify_keyboard_visibility(bool visible);
+
+/* ========================================================================
+ * EDITOR MODE
+ * ======================================================================== */
+
+/**
+ * Enter modal editor mode: hide the shell input widgets (prev/next/scroll
+ * buttons, input line) and hand the transcript container to the editor as a
+ * full-height surface in the transcript region. The transcript container is
+ * kept visible (its own span group is hidden by the editor) so the editor
+ * area is exactly as large as the normal shell transcript and the on-screen
+ * keyboard stays at the bottom. The input row becomes a status bar. Must run
+ * on the LVGL task.
+ * @return The editor surface container, or NULL on failure.
+ */
+lv_obj_t *windows_enter_editor_mode(void);
+
+/** Leave modal editor mode and restore the shell input surface. LVGL task. */
+void windows_exit_editor_mode(void);
+
+/** Get the status-bar label created by windows_enter_editor_mode(). */
+lv_obj_t *windows_get_editor_status(void);
+
+/** Get the editor surface container (the transcript region). */
+lv_obj_t *windows_get_editor_surface(void);
+
+/** Report whether the editor modal surface is currently active. */
+bool windows_editor_mode_active(void);
+
+/**
+ * Re-apply the transcript-region height to the editor surface and force a
+ * layout pass. The single source of truth for the editor surface size — it
+ * mirrors windows_apply_transcript_height() so the editor always fills the
+ * same slot as the shell transcript. Call on editor entry, on keyboard
+ * visibility changes, and whenever the layout may have shifted.
+ */
+void windows_refresh_editor_surface(void);
+
+/**
+ * Check whether the editor surface is at least as tall as the transcript
+ * region (i.e. it did not collapse). Used to catch a "collapsed editor"
+ * layout regression early.
+ * @return true when the surface height is sane, false otherwise.
+ */
+bool windows_editor_surface_height_ok(void);
+
+/**
+ * Log the editor surface, transcript-region, and keyboard rectangles. A
+ * diagnostic for on-board layout inspection (the editor entry path logs it
+ * automatically; call it from a debug command to inspect live state).
+ */
+void windows_debug_editor_layout(void);
 
 #ifdef __cplusplus
 }

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file command.c
  * @brief Command parser and dispatcher implementation for P4MiniShell.
  *
@@ -27,8 +27,11 @@
 #include "storage.h"
 #include "storage_commands.h"
 #include "shell.h"
+#include "editor.h"
+#include "editor_view.h"
 #include "ansi_palette.h"
 #include "ansi.h"
+#include "audio.h"
 #include "display.h"
 #include "header.h"
 #include "p4minishell_config.h"
@@ -47,7 +50,6 @@
 #include "esp_sleep.h"
 #include "esp_timer.h"
 #include "esp_pm.h"
-#include "esp_codec_dev.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -72,6 +74,9 @@
 #include <ctype.h>
 #include <sys/time.h>
 #include <time.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* Backward-compatibility aliases */
 #define COMMAND_TAG                     P4_CONFIG_SHELL_TAG
@@ -88,6 +93,10 @@
 #define SHELL_POWER_SLEEP_MAX_SECS      P4_CONFIG_POWER_SLEEP_MAX_SECS
 #define SHELL_POWER_SLEEP_PRE_DELAY_MS  P4_CONFIG_POWER_SLEEP_PRE_DELAY_MS
 #define SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
+#define SHELL_POWER_IDLE_DISPLAY_OFF_SECS  P4_CONFIG_POWER_IDLE_DISPLAY_OFF_SECS
+#define SHELL_POWER_IDLE_DISPLAY_MAX_SECS  P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS
+#define SHELL_POWER_WAKE_GPIO              P4_CONFIG_POWER_WAKE_GPIO
+#define SHELL_POWER_WAKE_LEVEL             P4_CONFIG_POWER_WAKE_LEVEL
 #define SHELL_PWM_FREQ_MAX_HZ           P4_CONFIG_PWM_FREQ_MAX_HZ
 #define SHELL_PWM_SRC_CLK_HZ            P4_CONFIG_PWM_SRC_CLK_HZ
 #define SHELL_PWM_CLK_SOURCE            P4_CONFIG_PWM_CLK_SOURCE
@@ -143,8 +152,6 @@ static QueueHandle_t s_command_queue = NULL;
 static TaskHandle_t s_command_worker_handle = NULL;
 
 /* Hardware handles */
-static esp_codec_dev_handle_t s_speaker_dev;
-static int s_volume_percent = P4_CONFIG_VOLUME_DEFAULT_PCT;
 static bool s_light_sleep_requested;
 static adc_oneshot_unit_handle_t s_battery_adc_unit;
 static adc_channel_t s_battery_adc_channel;
@@ -157,7 +164,6 @@ static bool s_battery_cali_ready;
  * ======================================================================== */
 
 /* Hardware helpers */
-static esp_err_t shell_audio_ensure_speaker(void);
 static esp_err_t shell_battery_ensure_adc(void);
 static const shell_gpio_pin_desc_t *shell_find_gpio_pin(int gpio_num);
 static void shell_battery_print_usage(void);
@@ -175,6 +181,13 @@ static void shell_command_brightness(int argc, char **argv);
 static void shell_command_rotate(int argc, char **argv);
 static void shell_command_battery(int argc, char **argv);
 static void shell_command_volume(int argc, char **argv);
+static void shell_command_beep(int argc, char **argv);
+static void shell_command_tone(int argc, char **argv);
+static void shell_command_wavplay(int argc, char **argv);
+static void shell_command_audio(int argc, char **argv);
+static void shell_command_clip(int argc, char **argv);
+static void shell_command_paste(int argc, char **argv);
+static void shell_command_history(int argc, char **argv);
 static void shell_command_power(int argc, char **argv);
 static void shell_command_sleep(int argc, char **argv);
 static void shell_command_deepsleep(int argc, char **argv);
@@ -190,6 +203,11 @@ static void shell_execute_spi_command(int argc, char **argv);
 static void shell_execute_rgb_command(int argc, char **argv);
 static void shell_execute_camera_command(int argc, char **argv);
 static void shell_command_prompt_cmd(int argc, char **argv);
+
+/* Editor command + ops-table hooks. */
+static void shell_command_edit(int argc, char **argv);
+static bool editor_is_active(void);
+static bool editor_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii);
 
 /* ========================================================================
  * BOARD GPIO TABLE
@@ -257,22 +275,8 @@ static bool shell_pin_is_reserved(int gpio_num)
 }
 
 /* ========================================================================
- * AUDIO AND BATTERY HARDWARE
+ * BATTERY HARDWARE
  * ======================================================================== */
-
-static esp_err_t shell_audio_ensure_speaker(void)
-{
-    if (s_speaker_dev != NULL) {
-        return ESP_OK;
-    }
-
-    s_speaker_dev = bsp_audio_codec_speaker_init();
-    if (s_speaker_dev == NULL) {
-        return ESP_FAIL;
-    }
-
-    return ESP_OK;
-}
 
 static esp_err_t shell_battery_ensure_adc(void)
 {
@@ -770,16 +774,200 @@ static esp_err_t shell_power_shutdown_wifi(void)
     return error;
 }
 
+/* ========================================================================
+ * IDLE DISPLAY-OFF (`power idle`) + ACTIVITY WAKE
+ * ========================================================================
+ * After the configured idle timeout without user input the display backlight
+ * is switched off; the next touch, USB keyboard/mouse, or serial command wakes
+ * it again. Idle-off only drops the backlight (`display_set_power_state`), so
+ * the panel, GT911, and USB host keep running and the shell state is
+ * untouched - waking is a clean backlight-on plus a header notification.
+ */
+
+static portMUX_TYPE s_power_idle_lock = portMUX_INITIALIZER_UNLOCKED;
+static int s_power_idle_off_secs;         /* 0 = disabled */
+static int64_t s_power_last_activity_us;  /* esp_timer_get_time() */
+static bool s_power_display_off_by_idle;
+
+void shell_power_set_idle_timeout(int seconds)
+{
+    if (seconds < 0) {
+        seconds = 0;
+    }
+    if (seconds > SHELL_POWER_IDLE_DISPLAY_MAX_SECS) {
+        seconds = SHELL_POWER_IDLE_DISPLAY_MAX_SECS;
+    }
+    portENTER_CRITICAL(&s_power_idle_lock);
+    s_power_idle_off_secs = seconds;
+    portEXIT_CRITICAL(&s_power_idle_lock);
+}
+
+int shell_power_get_idle_timeout(void)
+{
+    int seconds;
+
+    portENTER_CRITICAL(&s_power_idle_lock);
+    seconds = s_power_idle_off_secs;
+    portEXIT_CRITICAL(&s_power_idle_lock);
+    return seconds;
+}
+
+void shell_power_notify_activity(void)
+{
+    bool wake = false;
+
+    portENTER_CRITICAL(&s_power_idle_lock);
+    s_power_last_activity_us = esp_timer_get_time();
+    if (s_power_display_off_by_idle) {
+        s_power_display_off_by_idle = false;
+        wake = true;
+    }
+    portEXIT_CRITICAL(&s_power_idle_lock);
+
+    if (wake) {
+        /* Route through the transcript (the normal, safe output path) rather
+         * than an async header render, so waking never perturbs LVGL layout. */
+        display_set_power_state(DISPLAY_POWER_ON);
+        shell_transcript_appendf_ansi(SH_MUTE "power: display on\n" SH_RST);
+    }
+}
+
+void shell_power_idle_tick(void)
+{
+    int seconds;
+    int64_t now_us = esp_timer_get_time();
+    int64_t last_us;
+    bool off_by_idle;
+    bool do_off = false;
+
+    portENTER_CRITICAL(&s_power_idle_lock);
+    seconds = s_power_idle_off_secs;
+    last_us = s_power_last_activity_us;
+    off_by_idle = s_power_display_off_by_idle;
+    portEXIT_CRITICAL(&s_power_idle_lock);
+
+    if (display_get_power_state() == DISPLAY_POWER_ON && !off_by_idle) {
+        if (seconds > 0 && (now_us - last_us) >= (int64_t)seconds * 1000000LL) {
+            do_off = true;
+        }
+    } else if (off_by_idle) {
+        /* The display is off because of idle: a fresh touch press is activity.
+         * This runs on the LVGL task, so indev access is safe. */
+        lv_indev_t *indev = NULL;
+
+        while ((indev = lv_indev_get_next(indev)) != NULL) {
+            if (lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
+                shell_power_notify_activity();
+                break;
+            }
+        }
+    }
+
+    if (do_off) {
+        portENTER_CRITICAL(&s_power_idle_lock);
+        s_power_display_off_by_idle = true;
+        portEXIT_CRITICAL(&s_power_idle_lock);
+        display_set_power_state(DISPLAY_POWER_SLEEP);
+        shell_transcript_appendf_ansi(SH_MUTE "power: display off (idle)\n" SH_RST);
+    }
+}
+
+/** Configure a user-wired GPIO to wake light/deep sleep, if one is set. */
+static void shell_power_enable_gpio_wake(void)
+{
+    int wake_gpio = (int)SHELL_POWER_WAKE_GPIO;
+
+    if (wake_gpio < 0) {
+        return;
+    }
+
+    {
+        gpio_config_t wake_io;
+
+        memset(&wake_io, 0, sizeof(wake_io));
+        wake_io.pin_bit_mask = 1ULL << wake_gpio;
+        wake_io.mode = GPIO_MODE_INPUT;
+        wake_io.pull_up_en = (SHELL_POWER_WAKE_LEVEL == 0) ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE;
+        wake_io.pull_down_en = (SHELL_POWER_WAKE_LEVEL == 1) ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE;
+        wake_io.intr_type = GPIO_INTR_DISABLE;
+
+        gpio_config(&wake_io);
+        if (gpio_wakeup_enable((gpio_num_t)wake_gpio,
+                               SHELL_POWER_WAKE_LEVEL ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL) == ESP_OK) {
+            (void)esp_sleep_enable_gpio_wakeup();
+            shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " GPIO wake on " SH_NUM "GPIO%d" SH_RST
+                                     " (" SH_VAL "%s" SH_RST ")\n",
+                                     wake_gpio,
+                                     SHELL_POWER_WAKE_LEVEL ? "high" : "low");
+        } else {
+            shell_print_warning("sleep: failed to enable GPIO wake on GPIO%d", wake_gpio);
+        }
+    }
+}
+
+/** Report the touch-wake situation honestly before entering light sleep. */
+static void shell_power_report_wake_capability(void)
+{
+#if BOARD_CFG_LCD_TOUCH_INT_GPIO == GPIO_NUM_NC
+    shell_transcript_appendf_ansi(SH_MUTE "sleep: touch wake unavailable (GT911 INT is not wired on this board)\n");
+    shell_transcript_appendf_ansi(SH_MUTE "       set P4_CONFIG_POWER_WAKE_GPIO for a button/switch, or use `power idle`\n");
+#else
+    shell_transcript_appendf_ansi(SH_MUTE "sleep: touch wake available (GT911 INT on GPIO%d)\n",
+                             (int)BOARD_CFG_LCD_TOUCH_INT_GPIO);
+#endif
+}
+
 static void shell_command_power(int argc, char **argv)
 {
     esp_sleep_wakeup_cause_t wake_cause;
     display_power_state_t display_state;
 
-    if (argc >= 2 && !shell_text_equals_ignore_case(argv[1], "status")) {
-        shell_print_usage("Usage: power [status]");
-        shell_record_warningf("power", "Usage error for power command");
+    /* `power idle <seconds|off>` configures the idle display-off timeout;
+     * `power idle` prints it. */
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "idle")) {
+        if (argc >= 3) {
+            if (shell_text_equals_ignore_case(argv[2], "off")) {
+                shell_power_set_idle_timeout(0);
+            } else {
+                char *end = NULL;
+                long parsed = strtol(argv[2], &end, 10);
+
+                if (*end != '\0' || parsed < 0 || parsed > SHELL_POWER_IDLE_DISPLAY_MAX_SECS) {
+                    shell_print_error("power: invalid idle timeout %s (0..%d, or `off`)",
+                                      argv[2], SHELL_POWER_IDLE_DISPLAY_MAX_SECS);
+                    shell_record_warningf("power", "Invalid power idle argument: %s", argv[2]);
+                    batch_set_errorlevel(2);
+                    return;
+                }
+                shell_power_set_idle_timeout((int)parsed);
+            }
+            shell_power_notify_activity();
+            if (shell_power_get_idle_timeout() > 0) {
+                shell_transcript_appendf_ansi(SH_LBL "power.idle:" SH_RST " display off after " SH_NUM "%d" SH_RST " s\n",
+                                         shell_power_get_idle_timeout());
+            } else {
+                shell_transcript_appendf_ansi(SH_LBL "power.idle:" SH_RST " " SH_MUTE "display idle-off disabled" SH_RST "\n");
+            }
+            batch_set_errorlevel(0);
+            return;
+        }
+        if (shell_power_get_idle_timeout() > 0) {
+            shell_transcript_appendf_ansi(SH_LBL "power.idle:" SH_RST " display off after " SH_NUM "%d" SH_RST " s\n",
+                                     shell_power_get_idle_timeout());
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "power.idle:" SH_RST " " SH_MUTE "display idle-off disabled" SH_RST "\n");
+        }
+        batch_set_errorlevel(0);
         return;
     }
+
+    if (argc >= 2 && !shell_text_equals_ignore_case(argv[1], "status")) {
+        shell_print_usage("Usage: power [status] | power idle [seconds|off]");
+        shell_record_warningf("power", "Usage error for power command");
+        batch_set_errorlevel(2);
+        return;
+    }
+    batch_set_errorlevel(0);
 
     shell_power_report_battery("power");
 
@@ -805,6 +993,17 @@ static void shell_command_power(int argc, char **argv)
         shell_transcript_appendf_ansi(SH_ERR "off" SH_RST "\n");
     }
 
+    if (shell_power_get_idle_timeout() > 0) {
+        shell_transcript_appendf_ansi(SH_LBL "power.idle_off:" SH_RST " " SH_NUM "%d" SH_RST " s\n",
+                                 shell_power_get_idle_timeout());
+    } else {
+        shell_transcript_appendf_ansi(SH_LBL "power.idle_off:" SH_RST " " SH_MUTE "off" SH_RST "\n");
+    }
+    if (SHELL_POWER_WAKE_GPIO != GPIO_NUM_NC) {
+        shell_transcript_appendf_ansi(SH_LBL "power.wake_gpio:" SH_RST " " SH_NUM "GPIO%d" SH_RST "\n",
+                                 (int)SHELL_POWER_WAKE_GPIO);
+    }
+
     shell_transcript_appendf_ansi(SH_LBL "power.wifi:" SH_RST " " SH_NUM "%s" SH_RST "\n",
                              networking_wifi_is_connected() ? "connected" : "down");
 
@@ -812,6 +1011,17 @@ static void shell_command_power(int argc, char **argv)
     shell_transcript_appendf_ansi(SH_LBL "power.wake:" SH_RST " " SH_NUM "%s" SH_RST "\n",
                              shell_power_wake_cause_string(wake_cause));
     shell_transcript_appendf_ansi(SH_MUTE "Tip: `battery sleep on` enables automatic light sleep when idle.\n");
+    shell_transcript_appendf_ansi(SH_MUTE "Tip: `power idle 60` turns the display off after 60 s of inactivity.\n");
+}
+
+/** Clear the configured GPIO wake so a still-active level cannot re-trigger. */
+static void shell_power_disable_gpio_wake(void)
+{
+    int wake_gpio = (int)SHELL_POWER_WAKE_GPIO;
+
+    if (wake_gpio >= 0) {
+        (void)gpio_wakeup_disable((gpio_num_t)wake_gpio);
+    }
 }
 
 static void shell_command_sleep(int argc, char **argv)
@@ -836,6 +1046,12 @@ static void shell_command_sleep(int argc, char **argv)
                                  (unsigned)seconds);
     }
 
+    /* Wake capability: the GT911 INT line is not wired on this board, so
+     * report that honestly and offer the configured GPIO wake as the
+     * external alternative. */
+    shell_power_report_wake_capability();
+    shell_power_enable_gpio_wake();
+
 #if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
     shell_power_shutdown_wifi();
 #else
@@ -843,11 +1059,13 @@ static void shell_command_sleep(int argc, char **argv)
 #endif
 
     display_set_power_state(DISPLAY_POWER_OFF);
+    audio_stop();
 
     /* Give the transcript and LVGL task time to paint before sleeping. */
     vTaskDelay(pdMS_TO_TICKS(SHELL_POWER_SLEEP_PRE_DELAY_MS));
 
     error = esp_light_sleep_start();
+    shell_power_disable_gpio_wake();
     if (error != ESP_OK) {
         shell_transcript_appendf_ansi(SH_ERR "sleep: light sleep failed" SH_RST " (" SH_WARN "%s" SH_RST ")\n",
                                  esp_err_to_name(error));
@@ -857,6 +1075,7 @@ static void shell_command_sleep(int argc, char **argv)
     }
 
     display_set_power_state(DISPLAY_POWER_ON);
+    shell_power_notify_activity();
 
 #if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
     shell_transcript_appendf_ansi(SH_MUTE "sleep: Wi-Fi was shut down; use `wifi connect` to reconnect.\n");
@@ -886,6 +1105,7 @@ static void shell_command_deepsleep(int argc, char **argv)
 
     shell_power_shutdown_wifi();
     display_set_power_state(DISPLAY_POWER_OFF);
+    audio_stop();
 
     /* Let the transcript and LVGL task paint before the chip resets. */
     vTaskDelay(pdMS_TO_TICKS(SHELL_POWER_SLEEP_PRE_DELAY_MS));
@@ -898,31 +1118,845 @@ static void shell_command_deepsleep(int argc, char **argv)
 static void shell_command_volume(int argc, char **argv)
 {
     int percent;
-    int result;
     esp_err_t error;
 
-    if (argc != 2 || !shell_parse_percentage_arg(argv[1], &percent)) {
-        shell_print_usage("Usage: volume <0-100>");
-        shell_record_warningf("volume", "Usage error for volume command");
+    /* Bare `volume` prints the current codec volume (a query form). */
+    if (argc == 1) {
+        shell_transcript_appendf_ansi(SH_LBL "volume:" SH_RST " " SH_NUM "%d%%" SH_RST "\n",
+                                 audio_get_volume());
+        batch_set_errorlevel(0);
         return;
     }
 
-    error = shell_audio_ensure_speaker();
+    if (argc != 2 || !shell_parse_percentage_arg(argv[1], &percent)) {
+        shell_print_usage("Usage: volume [<0-100>]");
+        shell_record_warningf("volume", "Usage error for volume command");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    error = audio_set_volume(percent);
     if (error != ESP_OK) {
         shell_print_error("volume: failed to initialize the ES8311 speaker path (%s)", esp_err_to_name(error));
         shell_record_errorf("volume", error, "Failed to initialize speaker device");
+        batch_set_errorlevel(1);
         return;
     }
 
-    result = esp_codec_dev_set_out_vol(s_speaker_dev, percent);
-    if (result != ESP_CODEC_DEV_OK) {
-        shell_print_error("volume: failed to set speaker volume (codec=%d)", result);
-        shell_record_warningf("volume", "Failed to set speaker volume to %d%% (codec=%d)", percent, result);
-        return;
-    }
-
-    s_volume_percent = percent;
     shell_transcript_appendf_ansi(SH_LBL "volume set to" SH_RST " " SH_NUM "%d%%" SH_RST "\n", percent);
+    batch_set_errorlevel(0);
+}
+
+/* ========================================================================
+ * AUDIO PLAYBACK COMMANDS: beep, tone, wavplay, audio
+ * ======================================================================== */
+
+static void shell_command_beep(int argc, char **argv)
+{
+    if (argc != 1) {
+        shell_print_usage("Usage: beep");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (!audio_play_tone(P4_CONFIG_BEEP_FREQ_HZ, P4_CONFIG_BEEP_DURATION_MS)) {
+        shell_print_error("beep: audio busy - wait for the current sound to finish");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_transcript_appendf_ansi(SH_LBL "beep:" SH_RST " " SH_NUM "%d" SH_RST " Hz, " SH_NUM "%u" SH_RST " ms\n",
+                             P4_CONFIG_BEEP_FREQ_HZ, (unsigned)P4_CONFIG_BEEP_DURATION_MS);
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_tone(int argc, char **argv)
+{
+    char *end;
+    long freq;
+    uint32_t duration_ms = P4_CONFIG_TONE_DURATION_DEFAULT_MS;
+
+    if (argc < 2 || argc > 3) {
+        shell_print_usage("Usage: tone <freq> [ms]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    freq = strtol(argv[1], &end, 10);
+    if (*end != '\0' || freq < P4_CONFIG_TONE_FREQ_MIN || freq > P4_CONFIG_TONE_FREQ_MAX) {
+        shell_print_error("tone: frequency must be %d..%d Hz",
+                          P4_CONFIG_TONE_FREQ_MIN, P4_CONFIG_TONE_FREQ_MAX);
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    if (argc == 3) {
+        long ms = strtol(argv[2], &end, 10);
+
+        if (*end != '\0' || ms < 10 || ms > P4_CONFIG_TONE_DURATION_MAX_MS) {
+            shell_print_error("tone: duration must be 10..%d ms", P4_CONFIG_TONE_DURATION_MAX_MS);
+            batch_set_errorlevel(2);
+            return;
+        }
+        duration_ms = (uint32_t)ms;
+    }
+
+    if (!audio_play_tone((int)freq, duration_ms)) {
+        shell_print_error("tone: audio busy - wait for the current sound to finish");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_transcript_appendf_ansi(SH_LBL "tone:" SH_RST " " SH_NUM "%d" SH_RST " Hz for " SH_NUM "%u" SH_RST " ms\n",
+                             (int)freq, (unsigned)duration_ms);
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_wavplay(int argc, char **argv)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    uint64_t file_size;
+
+    if (argc != 2) {
+        shell_print_usage("Usage: wavplay <file.wav>");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    if (shell_fs_resolve_path(argv[1], resolved, sizeof(resolved)) != ESP_OK) {
+        shell_print_error("wavplay: invalid path %s", argv[1]);
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    file_size = storage_get_file_size(resolved);
+    if (file_size == 0) {
+        shell_print_error("wavplay: file not found %s", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (file_size > P4_CONFIG_WAV_MAX_BYTES) {
+        shell_print_error("wavplay: file is too large (max %d bytes)", (int)P4_CONFIG_WAV_MAX_BYTES);
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    if (!audio_play_wav(resolved)) {
+        shell_print_error("wavplay: audio busy - wait for the current sound to finish");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_transcript_appendf_ansi(SH_LBL "wavplay:" SH_RST " " SH_PATH "%s" SH_RST "\n", resolved);
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_audio(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: audio status | audio stop");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "status")) {
+        if (audio_busy()) {
+            shell_transcript_appendf_ansi(SH_LBL "audio:" SH_RST " " SH_WARN "playing" SH_RST "\n");
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "audio:" SH_RST " " SH_MUTE "idle" SH_RST "\n");
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "stop")) {
+        audio_stop();
+        shell_transcript_appendf_ansi(SH_LBL "audio:" SH_RST " stop requested\n");
+        batch_set_errorlevel(0);
+        return;
+    }
+    shell_print_usage("Usage: audio status | audio stop");
+    batch_set_errorlevel(2);
+}
+
+/* ========================================================================
+ * CLIPBOARD COMMANDS: clip, paste
+ * ========================================================================
+ * `clip` reads/writes the RAM clipboard (text, transcript lines, or a file
+ * reference); `paste` injects it into the input line or copies a clipped file
+ * to a destination. All verbs are batch-safe and redirectable.
+ */
+
+/** Basename of a path, accepting both '/' and '\' separators. */
+static const char *shell_clip_basename(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    const char *bslash = strrchr(path, '\\');
+
+    if (bslash != NULL && (slash == NULL || bslash > slash)) {
+        slash = bslash;
+    }
+    return (slash != NULL) ? slash + 1 : path;
+}
+
+static void shell_command_clip(int argc, char **argv)
+{
+    /* `clip` with no argument prints the clipboard. */
+    if (argc == 1) {
+        const char *clip = shell_clipboard_get();
+
+        if (clip[0] == '\0') {
+            shell_transcript_appendf_ansi(SH_LBL "clipboard:" SH_RST " " SH_MUTE "(empty)" SH_RST "\n");
+        } else if (shell_clipboard_is_file()) {
+            shell_transcript_appendf_ansi(SH_LBL "clipboard:" SH_RST " " SH_PATH "%s" SH_RST
+                                     " " SH_MUTE "(file)" SH_RST "\n", clip);
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "clipboard:" SH_RST " " SH_VAL "%s" SH_RST "\n", clip);
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "copy")) {
+        int lines = 1;
+
+        if (argc == 3) {
+            char *end = NULL;
+            long parsed = strtol(argv[2], &end, 10);
+
+            if (*end != '\0' || parsed < 1 || parsed > P4_CONFIG_CLIP_COPY_LINES_MAX) {
+                shell_print_error("clip: line count must be 1..%d", P4_CONFIG_CLIP_COPY_LINES_MAX);
+                batch_set_errorlevel(2);
+                return;
+            }
+            lines = (int)parsed;
+        } else if (argc > 3) {
+            shell_print_usage("Usage: clip copy [N]");
+            batch_set_errorlevel(2);
+            return;
+        }
+
+        if (!shell_clipboard_copy_transcript(lines)) {
+            shell_print_error("clip: the transcript is empty");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf_ansi(SH_LBL "clip:" SH_RST " copied " SH_NUM "%d" SH_RST " line%s to the clipboard\n",
+                                 lines, lines == 1 ? "" : "s");
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "file")) {
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+
+        if (argc != 3) {
+            shell_print_usage("Usage: clip file <path>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("clip: invalid path %s", argv[2]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        shell_clipboard_set_file(resolved);
+        shell_transcript_appendf_ansi(SH_LBL "clip:" SH_RST " file " SH_PATH "%s" SH_RST "\n", resolved);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "read")) {
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        char *buf;
+        uint64_t file_size;
+        size_t got;
+
+        if (argc != 3) {
+            shell_print_usage("Usage: clip read <file>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("clip: invalid path %s", argv[2]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        file_size = storage_get_file_size(resolved);
+        if (file_size == 0) {
+            shell_print_error("clip: file not found %s", argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (file_size >= P4_CONFIG_CLIPBOARD_BYTES) {
+            shell_print_error("clip: file is too large for the clipboard (%d bytes)",
+                              (int)P4_CONFIG_CLIPBOARD_BYTES);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        buf = malloc(P4_CONFIG_CLIPBOARD_BYTES);
+        if (buf == NULL) {
+            shell_print_error("clip: out of memory reading the file");
+            batch_set_errorlevel(1);
+            return;
+        }
+        {
+            FILE *file = fopen(resolved, "rb");
+
+            if (file == NULL) {
+                free(buf);
+                shell_print_error("clip: cannot open %s", resolved);
+                batch_set_errorlevel(1);
+                return;
+            }
+            got = fread(buf, 1, P4_CONFIG_CLIPBOARD_BYTES - 1, file);
+            fclose(file);
+        }
+        buf[got] = '\0';
+        shell_clipboard_set(buf);
+        free(buf);
+        shell_transcript_appendf_ansi(SH_LBL "clip:" SH_RST " read " SH_PATH "%s" SH_RST " (" SH_NUM "%d" SH_RST " B)\n",
+                                 resolved, (int)got);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    /* Anything else is literal clipboard text: `clip hello world`. */
+    {
+        char text[P4_CONFIG_CLIPBOARD_BYTES];
+
+        shell_join_args(argv, 1, argc, text, sizeof(text));
+        shell_clipboard_set(text);
+        shell_transcript_appendf_ansi(SH_LBL "clip:" SH_RST " clipboard set (" SH_NUM "%d" SH_RST " B)\n",
+                                 (int)strlen(text));
+        batch_set_errorlevel(0);
+    }
+}
+
+static void shell_command_paste(int argc, char **argv)
+{
+    const char *clip = shell_clipboard_get();
+
+    /* `paste <dest>` copies a clipped file reference to a destination. */
+    if (argc == 2) {
+        char resolved_dest[P4_CONFIG_SD_PATH_BYTES];
+        char dest_file[P4_CONFIG_SD_PATH_BYTES * 2 + 16];
+        struct stat dst_st;
+        esp_err_t error;
+
+        if (!shell_clipboard_is_file()) {
+            shell_print_error("paste: the clipboard is not a file (use `clip file <path>`)");
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (shell_fs_resolve_path(argv[1], resolved_dest, sizeof(resolved_dest)) != ESP_OK) {
+            shell_print_error("paste: invalid destination path");
+            batch_set_errorlevel(2);
+            return;
+        }
+
+        if (stat(resolved_dest, &dst_st) == 0 && S_ISDIR(dst_st.st_mode)) {
+            snprintf(dest_file, sizeof(dest_file), "%s/%s",
+                     resolved_dest, shell_clip_basename(clip));
+        } else {
+            snprintf(dest_file, sizeof(dest_file), "%s", resolved_dest);
+        }
+
+        error = shell_fs_copy_file(clip, dest_file);
+        if (error != ESP_OK) {
+            shell_print_error("paste: failed to copy %s -> %s (%s)",
+                              clip, dest_file, esp_err_to_name(error));
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf_ansi(SH_LBL "paste:" SH_RST " " SH_PATH "%s" SH_RST " -> " SH_PATH "%s" SH_RST "\n",
+                                 clip, dest_file);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (argc != 1) {
+        shell_print_usage("Usage: paste [<destination>]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    /* `paste` injects the clipboard into the input line at the cursor. */
+    if (clip[0] == '\0') {
+        shell_print_error("paste: the clipboard is empty");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_input_line_paste(clip);
+    batch_set_errorlevel(0);
+}
+
+/* ========================================================================
+ * TAB COMPLETION PROVIDER
+ * ======================================================================== */
+
+/** Built-in command names offered by Tab completion for the first token. */
+static const char *const shell_builtin_commands[] = {
+    "about", "adc", "alias", "append", "attrib", "audio", "battery", "beep",
+    "bluetooth", "brightness", "bt", "c6ota", "call", "capture", "cd", "chdir",
+    "chkdsk", "choice", "clear", "clip", "cls", "comp", "copy", "date", "debug",
+    "deepsleep", "del", "dir", "disk", "display", "dns", "echo", "edit",
+    "endlocal",
+    "erase", "exit", "fc", "find", "findstr", "format", "freq", "goto", "gpio",
+    "help", "history", "httpd", "httpget", "i2c", "if", "ipconfig", "keyboard",
+    "label", "md", "mem", "mkdir", "more", "move", "netstat", "nslookup",
+    "ntpsync", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
+    "rd", "reboot", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
+    "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "set", "setlocal",
+    "shift", "sleep", "sntp", "sort", "spi", "sysinfo", "tasks", "time", "timezone",
+    "tone", "top", "touch", "trash", "tree", "type", "unalias", "undelete", "usb",
+    "ver", "version", "volume", "wavplay", "wget", "wifi", "windows", "write", "xcopy",
+};
+
+/** Completion collector: a bounded list of heap-copied matches. */
+typedef struct {
+    const char *word;
+    size_t word_len;
+    char **matches;
+    int max;
+    int count;
+} shell_complete_ctx_t;
+
+static void shell_complete_add(shell_complete_ctx_t *ctx, const char *candidate)
+{
+    if (candidate == NULL || ctx->count >= ctx->max) {
+        return;
+    }
+    if (strncasecmp(candidate, ctx->word, ctx->word_len) != 0) {
+        return;
+    }
+    ctx->matches[ctx->count] = strdup(candidate);
+    if (ctx->matches[ctx->count] != NULL) {
+        ctx->count++;
+    }
+}
+
+/** Add SD file/directory matches for the word (directories get a trailing /). */
+static void shell_complete_add_paths(shell_complete_ctx_t *ctx)
+{
+    const char *slash = strrchr(ctx->word, '/');
+    const char *bslash = strrchr(ctx->word, '\\');
+    const char *base;
+    char dir_vfs[P4_CONFIG_SD_PATH_BYTES];
+    char dir_resolved[P4_CONFIG_SD_PATH_BYTES];
+    char *candidate = malloc(P4_CONFIG_SD_PATH_BYTES + 8);
+    char *full = malloc(P4_CONFIG_SD_PATH_BYTES + 256);
+    DIR *dir;
+    struct dirent *entry;
+    struct stat st;
+
+    if (candidate == NULL || full == NULL) {
+        free(candidate);
+        free(full);
+        return;
+    }
+
+    if (bslash != NULL && (slash == NULL || bslash > slash)) {
+        slash = bslash;
+    }
+
+    if (slash != NULL) {
+        size_t dir_len = (size_t)(slash - ctx->word);
+
+        if (dir_len >= sizeof(dir_vfs)) {
+            dir_len = sizeof(dir_vfs) - 1;
+        }
+        memcpy(dir_vfs, ctx->word, dir_len);
+        dir_vfs[dir_len] = '\0';
+        base = slash + 1;
+    } else {
+        snprintf(dir_vfs, sizeof(dir_vfs), "%s",
+                 shell_get_cwd() != NULL ? shell_get_cwd() : ".");
+        base = ctx->word;
+    }
+    if (dir_vfs[0] == '\0') {
+        snprintf(dir_vfs, sizeof(dir_vfs), ".");
+    }
+    if (shell_fs_resolve_path(dir_vfs, dir_resolved, sizeof(dir_resolved)) != ESP_OK) {
+        free(candidate);
+        free(full);
+        return;
+    }
+
+    dir = opendir(dir_resolved);
+    if (dir == NULL) {
+        free(candidate);
+        free(full);
+        return;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        size_t dir_prefix_len;
+        size_t candidate_len;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (strncasecmp(entry->d_name, base, strlen(base)) != 0) {
+            continue;
+        }
+
+        /* Candidate = the typed directory prefix (if any) + the entry name. */
+        dir_prefix_len = slash != NULL ? (size_t)(slash - ctx->word) + 1 : 0;
+        if (dir_prefix_len + strlen(entry->d_name) + 2 >= P4_CONFIG_SD_PATH_BYTES + 8) {
+            continue;
+        }
+        memcpy(candidate, ctx->word, dir_prefix_len);
+        snprintf(candidate + dir_prefix_len, P4_CONFIG_SD_PATH_BYTES + 8 - dir_prefix_len,
+                 "%s", entry->d_name);
+        candidate_len = strlen(candidate);
+
+        /* Append '/' to directories so completion can keep going. */
+        snprintf(full, P4_CONFIG_SD_PATH_BYTES + 256, "%s/%s", dir_resolved, entry->d_name);
+        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode) &&
+            candidate_len + 1 < P4_CONFIG_SD_PATH_BYTES + 8) {
+            candidate[candidate_len] = '/';
+            candidate[candidate_len + 1] = '\0';
+        }
+
+        shell_complete_add(ctx, candidate);
+    }
+
+    closedir(dir);
+    free(candidate);
+    free(full);
+}
+
+/**
+ * Tab-completion provider: fills @p out with the @p match_index-th completion
+ * of @p word (commands/aliases for the first token, plus SD file/dir paths)
+ * and returns the total number of matches.
+ */
+static int shell_complete_word(const char *word, bool first_token, int match_index,
+                               char *out, size_t out_size)
+{
+    shell_complete_ctx_t ctx;
+    size_t index;
+    int total;
+
+    if (word == NULL || out == NULL || out_size == 0) {
+        return 0;
+    }
+
+    ctx.word = word;
+    ctx.word_len = strlen(word);
+    ctx.max = P4_CONFIG_COMPLETION_MAX_MATCHES;
+    ctx.count = 0;
+    ctx.matches = calloc((size_t)ctx.max, sizeof(char *));
+    if (ctx.matches == NULL) {
+        return 0;
+    }
+
+    if (first_token) {
+        for (index = 0; index < sizeof(shell_builtin_commands) / sizeof(shell_builtin_commands[0]); index++) {
+            shell_complete_add(&ctx, shell_builtin_commands[index]);
+        }
+        for (index = 0; index < (size_t)P4_CONFIG_ALIAS_MAX; index++) {
+            char name[P4_CONFIG_ALIAS_NAME_BYTES];
+
+            if (shell_alias_get_by_index((int)index, name, sizeof(name), NULL, 0)) {
+                shell_complete_add(&ctx, name);
+            }
+        }
+    }
+
+    /* Paths always complete; for the first token this also covers .bat files. */
+    shell_complete_add_paths(&ctx);
+
+    total = ctx.count;
+    if (match_index >= 0 && match_index < total) {
+        snprintf(out, out_size, "%s", ctx.matches[match_index]);
+    }
+
+    for (index = 0; index < (size_t)ctx.count; index++) {
+        free(ctx.matches[index]);
+    }
+    free(ctx.matches);
+    return total;
+}
+
+/* ========================================================================
+ * EDITOR COMMAND AND OPS-TABLE HOOKS
+ * ======================================================================== */
+
+/** `edit <path>` � open a DOS-style inline text editor. */
+static void shell_command_edit(int argc, char **argv)
+{
+    const char *path = NULL;
+    int errorlevel = 0;
+
+    if (argc > 2) {
+        shell_print_usage("Usage: edit <path>");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    if (argc == 2) {
+        path = argv[1];
+    }
+
+    /* The editor runs on the command worker task; it blocks until quit. */
+    esp_err_t err = editor_session_run(path, &errorlevel);
+    if (err != ESP_OK && errorlevel == 0) {
+        errorlevel = 1;
+    }
+    batch_set_errorlevel(errorlevel);
+}
+
+bool editor_is_active(void)
+{
+    return editor_session_is_active() || editor_view_is_open();
+}
+
+bool editor_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii)
+{
+    if (!editor_view_is_open()) {
+        return false;
+    }
+    return editor_view_handle_usb_key(key_code, modifiers, ascii);
+}
+
+/* Serial console control verbs accepted while the editor is open. */
+static bool editor_serial_is_verb(const char *line, const char *verb)
+{
+    return line[0] == '\\' && strcasecmp(line + 1, verb) == 0;
+}
+
+/* Per-call context for async serial-line dispatch to the LVGL task. */
+typedef struct {
+    char *line;
+} editor_serial_line_ctx_t;
+
+/* Runs on the LVGL task: feeds one serial line's characters into the editor. */
+static void editor_serial_line_cb(void *user_data)
+{
+    editor_serial_line_ctx_t *ctx = (editor_serial_line_ctx_t *)user_data;
+    const char *line;
+    size_t i;
+    size_t len;
+
+    if (ctx == NULL || ctx->line == NULL) {
+        free(ctx);
+        return;
+    }
+
+
+    line = ctx->line;
+    len = strlen(line);
+
+    if (editor_serial_is_verb(line, "q") || editor_serial_is_verb(line, "quit")) {
+        if (editor_view_is_open()) {
+            editor_view_handle_usb_key(0x29, 0, 0); /* Esc -> quit */
+        } else {
+            editor_view_set_quit_requested();
+        }
+    } else if (editor_serial_is_verb(line, "s") || editor_serial_is_verb(line, "save")) {
+        if (editor_view_is_open()) {
+            editor_view_handle_usb_key(0, 0x01, 's'); /* Ctrl+S */
+        } else {
+            editor_view_set_save_requested();
+        }
+    } else if (editor_serial_is_verb(line, "u") || editor_serial_is_verb(line, "undo")) {
+        editor_view_handle_usb_key(0, 0x01, 'z');
+    } else if (editor_serial_is_verb(line, "f") || editor_serial_is_verb(line, "find")) {
+        editor_view_handle_usb_key(0, 0x01, 'f'); /* Ctrl+F */
+    } else if (editor_serial_is_verb(line, "g") || editor_serial_is_verb(line, "goto")) {
+        editor_view_handle_usb_key(0, 0x01, 'g'); /* Ctrl+G -> Go to line */
+    } else if (editor_serial_is_verb(line, "o") || editor_serial_is_verb(line, "saveas")) {
+        editor_view_handle_usb_key(0, 0x01, 'o'); /* Ctrl+O -> Save As */
+    } else if (editor_serial_is_verb(line, "r") || editor_serial_is_verb(line, "redo")) {
+        editor_view_handle_usb_key(0, 0x03, 'z'); /* Ctrl+Shift+Z */
+    } else if (editor_serial_is_verb(line, "a") || editor_serial_is_verb(line, "selectall")) {
+        editor_view_handle_usb_key(0, 0x01, 'a');
+    } else {
+        if (!editor_view_is_open()) {
+            free(ctx->line);
+            free(ctx);
+            return;
+        }
+        /* A line of typed text: insert each character, then a newline. */
+        for (i = 0; i < len; i++) {
+            char ch = line[i];
+            if (ch == '\\' && i == 0 && len > 1) {
+                /* "\foo" that was not a known verb inserts a literal backslash
+                 * and the rest of the line as text. */
+                editor_view_handle_usb_key(0, 0, '\\');
+                continue;
+            }
+            if (ch >= 0x20) {
+                editor_view_handle_usb_key(0, 0, ch);
+            }
+        }
+        editor_view_handle_usb_key(0x28, 0, '\n'); /* Enter -> newline */
+    }
+
+    free(ctx->line);
+    free(ctx);
+}
+
+bool editor_handle_serial_line(const char *line)
+{
+    editor_serial_line_ctx_t *ctx;
+
+    /* Accept lines whenever a session is active (even while the view is
+     * still opening), so a quick '\q' after 'edit' is never misrouted as a
+     * shell command and lost behind the blocked worker. */
+    if ((!editor_session_is_active() && !editor_view_is_open()) || line == NULL) {
+        return false;
+    }
+
+    /* Defer the whole line to the LVGL task: the editor's document and widget
+     * state live there, and rebuilding rows on the UART console task would
+     * block it past the watchdog and race the render cycle. */
+    ctx = malloc(sizeof(*ctx));
+    if (ctx == NULL) {
+        return true; /* Consumed (drop) rather than misrouted. */
+    }
+    ctx->line = strdup(line);
+    if (ctx->line == NULL) {
+        free(ctx);
+        return true;
+    }
+
+    if (lv_async_call(editor_serial_line_cb, ctx) != LV_RESULT_OK) {
+        free(ctx->line);
+        free(ctx);
+    }
+    return true;
+}
+
+/* ========================================================================
+ * HISTORY COMMAND: history [list] / /save [file] / /load [file] / /clear
+ * ======================================================================== */
+
+static void shell_command_history(int argc, char **argv)
+{
+    if (argc == 1) {
+        size_t index;
+
+        shell_print_heading("Command history");
+        for (index = 0; index < shell_history_get_count(); index++) {
+            const char *line = shell_history_get(index);
+
+            if (line != NULL) {
+                shell_transcript_appendf_ansi(SH_NUM "%3u" SH_RST "  %s\n",
+                                         (unsigned)(index + 1), line);
+            }
+        }
+        if (shell_history_get_count() == 0) {
+            shell_transcript_appendf_ansi(SH_MUTE "history: empty\n" SH_RST);
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "/clear")) {
+        shell_history_clear();
+        shell_transcript_appendf_ansi(SH_OK "history cleared\n" SH_RST);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (argc >= 2 && (shell_text_equals_ignore_case(argv[1], "/save") ||
+                      shell_text_equals_ignore_case(argv[1], "/load"))) {
+        bool saving = shell_text_equals_ignore_case(argv[1], "/save");
+        const char *file = (argc >= 3) ? argv[2] : P4_CONFIG_HISTORY_PROFILE;
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        shell_sd_session_t session;
+        FILE *fp;
+
+        if (shell_fs_resolve_path(file, resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("history: invalid path %s", file);
+            batch_set_errorlevel(2);
+            return;
+        }
+
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_print_error("history: SD card not present - insert and retry");
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        if (saving) {
+            size_t index;
+            size_t bytes = shell_history_get_count() * 2;   /* rough free-space need */
+
+            if (!storage_check_free_space((uint64_t)bytes + 4096, 0, "history")) {
+                shell_sd_end(&session, "history");
+                shell_print_error("history: not enough free space on the SD card");
+                batch_set_errorlevel(1);
+                return;
+            }
+            fp = fopen(resolved, "w");
+            if (fp == NULL) {
+                shell_sd_end(&session, "history");
+                shell_print_error("history: cannot open %s for writing", resolved);
+                batch_set_errorlevel(1);
+                return;
+            }
+            for (index = 0; index < shell_history_get_count(); index++) {
+                const char *line = shell_history_get(index);
+
+                if (line != NULL) {
+                    if (fprintf(fp, "%s\n", line) < 0) {
+                        fclose(fp);
+                        (void)unlink(resolved);
+                        shell_sd_end(&session, "history");
+                        shell_print_error("history: write failed, removed the partial file");
+                        batch_set_errorlevel(1);
+                        return;
+                    }
+                }
+            }
+            fclose(fp);
+            shell_sd_end(&session, "history");
+            shell_transcript_appendf_ansi(SH_LBL "history:" SH_RST " saved " SH_NUM "%u" SH_RST
+                                     " command%s to " SH_PATH "%s" SH_RST "\n",
+                                     (unsigned)shell_history_get_count(),
+                                     shell_history_get_count() == 1 ? "" : "s", resolved);
+        } else {
+            /* The read line is command-sized and `history` can run from a
+             * nested batch line, so it is heap-allocated (a 4096-byte stack
+             * local here would eat into the worker task's stack budget). */
+            char *line = malloc(P4_CONFIG_COMMAND_BYTES);
+            size_t loaded = 0;
+
+            if (line == NULL) {
+                shell_sd_end(&session, "history");
+                shell_print_error("history: out of memory reading %s", resolved);
+                batch_set_errorlevel(1);
+                return;
+            }
+
+            fp = fopen(resolved, "r");
+            if (fp == NULL) {
+                free(line);
+                shell_sd_end(&session, "history");
+                shell_print_error("history: cannot open %s for reading", resolved);
+                batch_set_errorlevel(1);
+                return;
+            }
+            while (fgets(line, P4_CONFIG_COMMAND_BYTES, fp) != NULL) {
+                shell_trim(line);
+                if (line[0] == '\0') {
+                    continue;
+                }
+                shell_store_command_history(line);
+                loaded++;
+            }
+            free(line);
+            fclose(fp);
+            shell_sd_end(&session, "history");
+            shell_transcript_appendf_ansi(SH_LBL "history:" SH_RST " loaded " SH_NUM "%u" SH_RST
+                                     " command%s from " SH_PATH "%s" SH_RST "\n",
+                                     (unsigned)loaded, loaded == 1 ? "" : "s", resolved);
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    shell_print_usage("Usage: history | history /save [file] | history /load [file] | history /clear");
+    batch_set_errorlevel(2);
 }
 
 /* ========================================================================
@@ -946,7 +1980,7 @@ static void shell_command_clear(void)
 }
 
 /**
- * `prompt` â€” show or set the DOS prompt template.
+ * `prompt` — show or set the DOS prompt template.
  *
  * Usage:
  *   prompt              Show the active template and its rendered form
@@ -2182,7 +3216,7 @@ static bool shell_rgb_parse_hex(const char *text, uint32_t *rgb_out)
 }
 
 /**
- * `rgb` — control the WS2812 status LED (LED1, GPIO26).
+ * `rgb` � control the WS2812 status LED (LED1, GPIO26).
  *
  * Usage:
  *   rgb status                  Show state (mode, colour, effect, brightness)
@@ -2380,7 +3414,7 @@ static void shell_execute_camera_command(int argc, char **argv)
 /* ========================================================================
  * HTTPGET / WGET
  * ========================================================================
- * `httpget <url> [localfile]` â€” the HTTP engine lives in
+ * `httpget <url> [localfile]` — the HTTP engine lives in
  * components/networking (the sole owner of the esp_http_client surface); this
  * file only dispatches, renders the body, and saves it to SD through the
  * storage write path with the usual free-space guardrails. ERRORLEVEL is 0 on
@@ -2519,13 +3553,13 @@ static inline void rgb565_to_bmp_row(uint8_t *dst, const uint16_t *src, uint32_t
 }
 
 /**
- * `screenshot` / `scr` / `capture` â€” capture the LVGL screen as a BMP image.
+ * `screenshot` / `scr` / `capture` — capture the LVGL screen as a BMP image.
  *
  * Usage:
- *   screenshot              â†’ stream BMP over UART with magic markers
- *   screenshot file.bmp     â†’ save BMP to SD card (current directory)
+ *   screenshot              → stream BMP over UART with magic markers
+ *   screenshot file.bmp     → save BMP to SD card (current directory)
  *
- * Captures via lv_snapshot_take_to_draw_buf(), converts RGB565 â†’ RGB888 for the BMP,
+ * Captures via lv_snapshot_take_to_draw_buf(), converts RGB565 → RGB888 for the BMP,
  * and outputs either to the serial console (with begin/end markers for
  * host-side extraction) or to an SD card file with free-space precheck.
  */
@@ -2794,7 +3828,6 @@ static void shell_command_screenshot(int argc, char **argv)
         fwrite(size_bytes, 1, 4, stdout);
         /* Send raw BMP data */
         size_t written = fwrite(bmp_data, 1, total_size, stdout);
-        fflush(stdout);
 
         free(bmp_data);
 
@@ -2822,10 +3855,15 @@ bool shell_execute_command_core(char *command)
     int argc;
     char *trimmed;
     char *family_command = NULL;
+    char *echo_line = NULL;
 
     if (command == NULL) {
         return false;
     }
+
+    /* Executing any command is user activity: keep the power idle clock from
+     * turning the display off while a command (possibly a long one) runs. */
+    shell_power_notify_activity();
 
     trimmed = shell_trim(command);
     if (trimmed[0] == '\0') {
@@ -2847,7 +3885,7 @@ bool shell_execute_command_core(char *command)
     /* Module-routed family handlers (wifi, bluetooth/bt, usb, sd, disk) parse
      * the full command line themselves, so they need the original text. The
      * shell_split_args() call below writes token terminators into the buffer
-     * in place â€” after it runs, `command` would be truncated to the first
+     * in place — after it runs, `command` would be truncated to the first
      * token ("wifi status" -> "wifi"). Preserve a heap copy of the trimmed
      * line for those branches. The copy is only made for family prefixes, and
      * every family branch frees it, so normal commands never allocate. */
@@ -2871,9 +3909,31 @@ bool shell_execute_command_core(char *command)
         family_command = strdup(trimmed);
     }
 
+    /* Echo must print the whole remainder of a long line: a 4096-byte `echo`
+     * with more tokens than the argv capacity would be truncated by the split
+     * below. Snapshot the raw (unsplit) line so the echo branch can fall back
+     * to it. Only allocated when the command is `echo`; the echo branch (and
+     * the argc==0 guard above) is the only path that frees it. */
+    if (strncasecmp(trimmed, "echo", 4) == 0 &&
+        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+        echo_line = strdup(trimmed);
+    }
+
+    /* A command with more arguments than the argv capacity would be silently
+     * truncated; surface that so it is never invisible. Echo is exempt: it
+     * prints the whole remainder via the raw-line snapshot, so no truncation.
+     * Counted on the raw line BEFORE shell_split_args() mutates it. */
+    if (echo_line == NULL && shell_count_args(trimmed) > SHELL_ARGV_MAX) {
+        shell_transcript_appendf_ansi(SH_WARN "command: more than %d arguments "
+                                     "were supplied; extra arguments are ignored" SH_RST "\n",
+                                     SHELL_ARGV_MAX);
+        shell_record_warningf("shell", "Command argument list truncated at %d", SHELL_ARGV_MAX);
+    }
+
     argc = shell_split_args(trimmed, argv, SHELL_ARGV_MAX);
     if (argc == 0) {
         free(family_command);
+        free(echo_line);
         return false;
     }
 
@@ -2919,11 +3979,11 @@ bool shell_execute_command_core(char *command)
     }
 
     /* FreeRTOS task introspection: `ps`, `tasks`, and `top` are the same
-     * read-only listing (top adds a summary header). */
+     * read-only listing (top adds a summary header and sorts by CPU). */
     if (shell_text_equals_ignore_case(argv[0], "ps") ||
         shell_text_equals_ignore_case(argv[0], "tasks") ||
         shell_text_equals_ignore_case(argv[0], "top")) {
-        shell_command_ps(argc, argv);
+        batch_set_errorlevel(shell_command_ps(argc, argv));
         return true;
     }
 
@@ -2960,6 +4020,41 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "volume")) {
         shell_command_volume(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "beep")) {
+        shell_command_beep(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "tone")) {
+        shell_command_tone(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "wavplay")) {
+        shell_command_wavplay(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "audio")) {
+        shell_command_audio(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "clip")) {
+        shell_command_clip(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "paste")) {
+        shell_command_paste(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "history")) {
+        shell_command_history(argc, argv);
         return true;
     }
 
@@ -3146,6 +4241,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "edit")) {
+        shell_command_edit(argc, argv);
+        return true;
+    }
+
     /* ---- Extended DOS commands ---- */
     if (shell_text_equals_ignore_case(argv[0], "attrib")) {
         shell_command_attrib(argc, argv);
@@ -3186,7 +4286,14 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "echo")) {
-        shell_command_echo(argc, argv);
+        if (echo_line != NULL) {
+            /* A raw-line snapshot exists when the command started with "echo";
+             * use it so a long echo line is never truncated by the argv cap. */
+            shell_command_echo_text(echo_line);
+            free(echo_line);
+        } else {
+            shell_command_echo(argc, argv);
+        }
         return true;
     }
 
@@ -3505,8 +4612,8 @@ bool shell_execute_command_core(char *command)
  * COMMAND EXECUTION PIPELINE
  * ========================================================================
  * A command line goes through five stages before dispatch:
- *   1. Chain splitting on unquoted &, &&, and || â€” one segment at a time
- *   2. Variable expansion (%VAR%, %0..%9, %*) â€” owned by components/batch
+ *   1. Chain splitting on unquoted &, &&, and || — one segment at a time
+ *   2. Variable expansion (%VAR%, %0..%9, %*) — owned by components/batch
  *   3. Redirection parsing (>, >>, and <)
  *   4. Input redirection published to components/storage for the stage
  *   5. Dispatch, then capture of the transcript delta for output redirection.
@@ -3529,9 +4636,11 @@ static bool shell_execute_command_segment(char *command)
 {
     /* Expansion needs two line-sized buffers. They live on the heap because
      * this function sits on the batch recursion path: a batch file calls back
-     * into the pipeline for every line, and four nested levels of two 768-byte
-     * stack buffers would overflow the command worker task's stack. */
-    const size_t work_size = SHELL_BATCH_LINE_BYTES * 2;
+     * into the pipeline for every line, and four nested levels of two large
+     * stack buffers would overflow the command worker task's stack. The
+     * buffers are command-sized because an interactive command line can be up
+     * to P4_CONFIG_COMMAND_BYTES (batch lines are the smaller surface). */
+    const size_t work_size = SHELL_COMMAND_BYTES;
     char *expanded = NULL;
     char *command_buffer = NULL;
     char *command_part = NULL;
@@ -3541,7 +4650,6 @@ static bool shell_execute_command_segment(char *command)
     bool input_redirect_set = false;
     bool recognized;
     int errorlevel_before;
-    size_t transcript_len_before;
 
     if (command == NULL) {
         return false;
@@ -3582,9 +4690,12 @@ static bool shell_execute_command_segment(char *command)
         input_redirect_set = true;
     }
 
-    /* Remember where the transcript ends so the redirection layer can copy
-     * exactly the output this command produced. */
-    transcript_len_before = shell_transcript_get_length();
+    /* A redirected command's output is captured into a dedicated heap buffer
+     * (independent of the transcript), so a large output survives the 16 KB
+     * transcript truncation. Open the capture window before dispatch. */
+    if (redirect_target != NULL && redirect_target[0] != '\0') {
+        shell_redirect_capture_begin();
+    }
 
     /* draw_buf errorlevel rather than clearing it. Clearing would destroy the
      * value that the very next `if errorlevel N` is meant to read, and DOS
@@ -3607,10 +4718,19 @@ static bool shell_execute_command_segment(char *command)
     }
 
     if (redirect_target != NULL && redirect_target[0] != '\0') {
-        const char *captured = shell_transcript_get_text_from(transcript_len_before);
-        esp_err_t error = shell_write_redirect_output(redirect_target,
-                                                      captured != NULL ? captured : "",
-                                                      append_mode);
+        size_t captured_len = 0;
+        const char *captured = shell_redirect_capture_get(&captured_len);
+        esp_err_t error;
+
+        shell_redirect_capture_end();
+
+        error = shell_write_redirect_output(redirect_target, captured, append_mode);
+        if (shell_redirect_capture_was_truncated()) {
+            shell_print_warning("redirection: output exceeded %d bytes and was truncated",
+                                P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES);
+            shell_record_warningf("shell", "Redirected output truncated at %d bytes",
+                                  P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES);
+        }
         if (error != ESP_OK) {
             shell_print_error("redirection: failed to write %s (%s)",
                                      redirect_target,
@@ -3618,6 +4738,7 @@ static bool shell_execute_command_segment(char *command)
             shell_record_warningf("shell", "Failed to redirect command output to %s", redirect_target);
             batch_set_errorlevel(1);
         }
+        shell_redirect_capture_reset();
     }
 
     free(expanded);
@@ -3640,7 +4761,9 @@ static bool shell_execute_command_segment(char *command)
 void shell_execute_command(char *command)
 {
     shell_chain_segment_t segments[SHELL_CHAIN_SEGMENT_MAX];
-    const size_t chain_size = SHELL_BATCH_LINE_BYTES * 2;
+    /* The chain buffer must hold a full command line (up to
+     * P4_CONFIG_COMMAND_BYTES); batch lines are a separate, smaller surface. */
+    const size_t chain_size = SHELL_COMMAND_BYTES;
     char *chain_buffer;
     bool truncated = false;
     bool previous_succeeded;
@@ -3726,39 +4849,51 @@ void shell_execute_command(char *command)
 }
 
 /** Persistent worker task: waits on the command queue and executes commands
- *  sequentially. This replaces the per-command task creation pattern. */
+ *  sequentially. Each queued item is a heap-allocated, command-sized request
+ *  owned by this task; the queue itself stores only pointers so a 4096-byte
+ *  command does not reserve 16 KB of internal RAM inside the queue. */
 static void command_worker_task(void *arg)
 {
-    command_request_t request;
-
     (void)arg;
 
     while (true) {
-        if (xQueueReceive(s_command_queue, &request, portMAX_DELAY) == pdTRUE) {
-            shell_execute_command(request.command);
+        command_request_t *request = NULL;
+
+        if (xQueueReceive(s_command_queue, &request, portMAX_DELAY) == pdTRUE && request != NULL) {
+            shell_execute_command(request->command);
+            free(request);
         }
     }
 }
 
 void shell_execute_command_async(char *command)
 {
-    command_request_t request;
+    command_request_t *request = malloc(sizeof(*request));
 
     if (command == NULL || command[0] == '\0') {
+        free(request);
         return;
     }
 
     if (s_command_queue == NULL) {
+        free(request);
         shell_print_error("shell: command worker not initialized");
         shell_record_errorf("shell", ESP_FAIL, "Command worker not initialized");
         return;
     }
+    if (request == NULL) {
+        shell_print_error("shell: out of memory queuing the command");
+        return;
+    }
 
-    snprintf(request.command, sizeof(request.command), "%s", command);
+    snprintf(request->command, sizeof(request->command), "%s", command);
 
+    /* The queue stores the pointer only; the worker task owns and frees the
+     * request after executing it. On a full queue the request is dropped. */
     if (xQueueSend(s_command_queue, &request, 0) != pdTRUE) {
         shell_print_error("shell: command queue full, command dropped");
         shell_record_warningf("shell", "Command queue full, dropped: %s", command);
+        free(request);
     }
 }
 
@@ -3773,28 +4908,14 @@ bool shell_command_ota_is_pending(void)
 
 int command_get_volume_percent(void)
 {
-    return s_volume_percent;
+    return audio_get_volume();
 }
 
 void command_set_volume(int percent)
 {
-    esp_err_t error;
-
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
-
-    error = shell_audio_ensure_speaker();
-    if (error != ESP_OK) {
-        ESP_LOGW(COMMAND_TAG, "command_set_volume: speaker init failed (%s)", esp_err_to_name(error));
-        return;
+    if (audio_set_volume(percent) != ESP_OK) {
+        ESP_LOGW(COMMAND_TAG, "command_set_volume: speaker init or codec set failed");
     }
-
-    if (esp_codec_dev_set_out_vol(s_speaker_dev, percent) != ESP_CODEC_DEV_OK) {
-        ESP_LOGW(COMMAND_TAG, "command_set_volume: codec set failed");
-        return;
-    }
-
-    s_volume_percent = percent;
 }
 
 /* ========================================================================
@@ -3880,6 +5001,11 @@ void command_init(void)
         .usb_key_to_ascii       = usb_key_to_ascii_full,
         .c6ota_is_pending       = c6ota_is_confirmation_pending,
         .c6ota_is_busy          = c6ota_is_busy,
+        .pm_notify_activity     = shell_power_notify_activity,
+        .complete_word          = shell_complete_word,
+        .editor_is_active       = editor_is_active,
+        .editor_handle_usb_key  = editor_handle_usb_key,
+        .editor_handle_serial_line = editor_handle_serial_line,
     };
     static const batch_command_ops_t batch_ops = {
         .execute_command = shell_execute_command,
@@ -3899,7 +5025,7 @@ void command_init(void)
      * replaces per-command task creation: commands are posted to the
      * queue and processed sequentially by one long-lived task, eliminating
      * task-creation overhead and heap fragmentation. */
-    s_command_queue = xQueueCreate(SHELL_COMMAND_QUEUE_DEPTH, sizeof(command_request_t));
+    s_command_queue = xQueueCreate(SHELL_COMMAND_QUEUE_DEPTH, sizeof(command_request_t *));
     if (s_command_queue == NULL) {
         ESP_LOGE(COMMAND_TAG, "Failed to create command queue");
     } else if (xTaskCreate(command_worker_task,
@@ -3921,6 +5047,11 @@ void command_init(void)
     /* Publish this module's services to the shell core. Keeping the
      * dependency one-way (command -> shell) avoids a component cycle. */
     shell_register_command_ops(&shell_ops);
+
+    /* Initialize the idle display-off state: the clock starts "active" and
+     * the configured default timeout applies immediately. */
+    shell_power_notify_activity();
+    shell_power_set_idle_timeout(SHELL_POWER_IDLE_DISPLAY_OFF_SECS);
 
     /* Publish the shell render helpers to the clock component. The clock
      * commands (date/time/timezone/sntp) live in components/clock and stay a

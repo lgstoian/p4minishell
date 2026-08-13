@@ -138,7 +138,7 @@ worker task.
 | debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count |
 | mem | Show free heap, total heap, minimum heap, internal heap, task count, PSRAM state |
 
-### ps | tasks | top [/b]
+### ps | tasks | top [/b] [/O:key]
 
 Read-only FreeRTOS task introspection. `ps` and `tasks` print a colour-coded
 table; `top` prints the same table plus a summary line with the live task
@@ -155,6 +155,24 @@ count, free heap, and uptime. Each row shows:
 
 `/b` emits uncoloured machine-parsable rows (`name state prio core headb cpu`)
 suitable for redirection and pipes, e.g. `ps /b > tasks.txt`.
+
+**Sorting** — `/O:` uses the same switch syntax as `dir`:
+
+| Key | Sorts by |
+|-----|----------|
+| N | Name (default tie-breaker) |
+| C | CPU % |
+| S | Stack high-water |
+| P | Priority |
+| T | State |
+
+Prefix with `-` to reverse, e.g. `/O:-C`. Bare `/O` sorts by name. `top`
+defaults to CPU descending (real `top` behaviour); `ps`/`tasks` keep the
+FreeRTOS order unless `/O:` is given.
+
+All three verbs set an ERRORLEVEL: 0 ok, 2 usage (e.g. an unknown `/O:` key),
+so `top && echo ok`, `if errorlevel 2`, and `top /b /O:-C | findstr /V IDLE`
+work in batch files and pipes.
 
 The command is read-only — it never suspends, deletes, or reprioritises tasks.
 
@@ -193,7 +211,10 @@ header, transcript, input row, and keyboard. Uses `windows_get_rect()` and
 ### keyboard show|hide|toggle|status
 Control the on-screen keyboard visibility. `hide` removes the keyboard and
 expands the transcript area; `show` restores it. `toggle` switches between
-visible and hidden. `status` reports current visibility, mode, and height.
+visible and hidden. `status` reports current visibility, mode, height, and the
+external-input state (`external=on` while a USB keyboard is attached and the
+OSK is auto-hidden). Tapping the input line — or the transcript, when the OSK
+is hidden and no USB keyboard is attached — summons the on-screen keyboard.
 
 The on-screen symbols keyboard covers every printable ASCII character
 (0x20-0x7E), including the shell-critical pipe `|`, caret `^` (the shell
@@ -207,10 +228,19 @@ Read battery ADC pin (GPIO53, 2:1 divider), show scaled voltage, estimated perce
 ### battery sleep <on|off|status>
 Request or inspect light sleep. Only available when CONFIG_PM_ENABLE is enabled in sdkconfig.
 
-### power [status]
+### power [status] | power idle [seconds|off]
 Report power-management state: PM enabled status, the automatic light sleep
-request (`battery sleep on|off`), display power state, Wi-Fi link state,
-battery level/voltage, and the last sleep wake-up cause.
+request (`battery sleep on|off`), display power state, the idle display-off
+timeout, Wi-Fi link state, battery level/voltage, the configured wake GPIO,
+and the last sleep wake-up cause.
+
+`power idle <seconds>` turns the display backlight off after that many seconds
+without user input (touch, USB keyboard/mouse, or a serial command); `power
+idle 0` / `power idle off` disables; `power idle` prints the setting. A fresh
+touch, keypress, mouse wheel, or serial command wakes the display back to the
+live shell. The timeout is capped at `P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS`
+and can be set at boot with the CONFIG.SYS `DISPLAY_TIMEOUT=` directive.
+Returns an ERRORLEVEL (0 ok / 2 usage).
 
 ### sleep [seconds]
 Enter light sleep. RAM is retained, so the shell resumes with all state
@@ -222,13 +252,97 @@ On wake the wake cause is reported and the display is restored. Light-sleep
 Wi-Fi teardown can be disabled with
 `P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI=0`.
 
+Wake sources: the timer is always available; a user-wired button on
+`P4_CONFIG_POWER_WAKE_GPIO` wakes via GPIO. Touch wake is not available on
+this board because the GT911 interrupt line is not wired
+(`BOARD_CFG_LCD_TOUCH_INT_GPIO = GPIO_NUM_NC`) — `sleep` reports this
+honestly. For an always-on touch/USB-wake screen use `power idle` instead.
+
 ### deepsleep [seconds]
 Enter deep sleep. RAM is lost, so on wake the device boots fresh (same path
 as `reboot`). With `seconds` the chip wakes on a timer; without it, wake
 requires an external wake source. Battery level is reported before sleeping.
 
-### volume <0-100>
-Set speaker volume through ES8311 codec path.
+### volume [<0-100>]
+Set speaker volume through the ES8311 codec path. `volume` with no argument
+prints the current level (`volume: <pct>%`); `volume <0-100>` sets it. All
+audio output (`beep`, `tone`, `wavplay`) rides on this volume. Returns an
+ERRORLEVEL (0 ok / 2 usage).
+
+### beep
+Play a short default tone (`P4_CONFIG_BEEP_FREQ_HZ` 880 Hz for
+`P4_CONFIG_BEEP_DURATION_MS` 100 ms). Returns immediately (background
+playback). ERRORLEVEL: 0 started, 1 busy, 2 usage.
+
+### tone <freq> [ms]
+Play a sine wave at `freq` (20..`P4_CONFIG_TONE_FREQ_MAX` Hz) for `ms`
+(10..`P4_CONFIG_TONE_DURATION_MAX_MS`, default
+`P4_CONFIG_TONE_DURATION_DEFAULT_MS`). Background playback with a short
+fade-in/out. ERRORLEVEL: 0 started, 1 busy, 2 usage.
+
+### wavplay <file>
+Stream a short 16-bit PCM WAV from the SD card through the speaker. Mono or
+stereo at 22050 or 44100 Hz are accepted (stereo is mixed to mono, 44100 is
+decimated to 22050); other formats are rejected. Files are bounded by
+`P4_CONFIG_WAV_MAX_BYTES`. Background playback. ERRORLEVEL: 0 started,
+1 busy / file not found, 2 usage.
+
+### audio status | audio stop
+`audio status` reports `playing` or `idle`; `audio stop` cuts the current
+background playback short (useful for a long tone or WAV). ERRORLEVEL 0/2.
+
+### clip [text] | clip copy [N] | clip file <path> | clip read <file>
+RAM clipboard for text, transcript lines, and files.
+
+| Form | Effect |
+|------|--------|
+| clip | Print the clipboard (`clipboard: <text>` / `(file: <path>)` / `(empty)`). Redirectable: `clip > note.txt` saves it. |
+| clip <text> | Set the clipboard to the text (`clip hello world`). |
+| clip copy [N] | Copy the last N transcript lines (default 1, cap `P4_CONFIG_CLIP_COPY_LINES_MAX`) into the clipboard. |
+| clip file <path> | Store a file reference in the clipboard (for `paste <dest>`). |
+| clip read <file> | Load a text file's contents into the clipboard (bounded by `P4_CONFIG_CLIPBOARD_BYTES`). |
+
+ERRORLEVEL: 0 ok / 1 empty, missing, or too-large / 2 usage.
+
+### paste [<destination>]
+`paste` inserts the clipboard into the input line at the cursor, so a copied
+path or line can be edited and submitted immediately. With a destination
+argument and a file-reference clipboard (`clip file`), `paste <dest>` copies
+that file to the destination (a directory keeps the file's name) — file
+copy-paste on the SD card. ERRORLEVEL: 0 ok / 1 empty or copy failure /
+2 usage.
+
+Examples:
+```
+clip copy 3          copy the last three transcript lines
+paste                insert them into the input line
+clip file CONFIG.SYS
+paste backup\        copy CONFIG.SYS into backup\
+clip read CONFIG.SYS
+clip > out.txt       save the file text
+```
+
+### history | history /save [file] | history /load [file] | history /clear
+The recall history is heap-backed (up to `P4_CONFIG_COMMAND_HISTORY_DEPTH`
+commands, capped at `P4_CONFIG_HISTORY_TOTAL_BYTES`) and Up/Down arrows recall
+it.
+
+| Form | Effect |
+|------|--------|
+| history | List the numbered recall buffer (redirectable: `history > hist.txt`). |
+| history /save [file] | Write the history to SD (default `P4_CONFIG_HISTORY_PROFILE`), atomic with partial-file cleanup. |
+| history /load [file] | Restore history from SD (append, dedupe). |
+| history /clear | Clear the RAM history. |
+
+ERRORLEVEL: 0 ok / 1 missing card or file / 2 usage.
+
+### Tab completion (USB keyboard)
+Pressing **Tab** completes the current word at the end of the input line. The
+first token completes command names, aliases, and `.bat` files; any later
+token completes SD file/directory paths (directories get a trailing `/`). A
+unique match fills in, repeated Tab cycles the matches, and the first Tab with
+several matches lists them in the transcript. Command lines accept up to
+`P4_CONFIG_COMMAND_BYTES` (4096) characters.
 
 ### pwm <pin> <freq_hz> <duty_pct> | pwm stop <pin> | pwm status
 Drive a non-reserved GPIO with an LEDC PWM signal. `pwm <pin> <freq_hz>
@@ -635,7 +749,8 @@ set /p answer=Continue?
 Backspace edits, ESC cancels, Enter submits. **An empty line leaves the
 variable unchanged**, matching DOS. Errorlevel is set to 1 when the input was
 cancelled, timed out, or no interactive key source is attached, so a batch file
-can branch on it.
+can branch on it. Over serial the full line is typed naturally and submitted
+with Enter.
 
 ### Line continuation
 
@@ -852,8 +967,8 @@ The command prints a warning and requires the exact confirmation word
 (`P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD`, default `YES`) typed at the prompt
 before anything is written. The confirmation is read one key at a time
 through the shell's key queue, so the reply never reaches the command
-dispatcher. (Over serial each key must be sent on its own line; the on-screen
-keyboard types it naturally.)
+dispatcher. (Over serial, type the whole word — `YES` — and press Enter on
+one line; the on-screen keyboard types it naturally.)
 
 If no interactive input source is attached (no UART console and no USB
 keyboard) the command **refuses outright** rather than proceeding, so a batch
@@ -969,11 +1084,71 @@ guarded SD session.
 
 | Command | Description |
 |---------|-------------|
+| edit <path> | Open a DOS-style inline text editor (see below) |
 | find <text> [file] [/I] [/N] [/C] [/V] | Search a file for a literal substring |
 | find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B] | Recursively list files by name / size / date |
 | findstr [switches] <search> [file...] | Classic DOS text search, literal or regex-lite |
 | more [file] | Page a text file, waiting for a key between pages |
 | tree [path] [/F] [/A] | Draw a recursive directory outline |
+
+### edit
+
+Opens a modal, touch-first text editor for any byte-preserving file: batch
+scripts, `.txt`, `.sys`, or any other extension (`*.*`). `edit <path>` loads the
+file (or starts a new buffer when it does not exist); `edit` with no path opens
+an unnamed buffer. The editor surface is exactly the size of the shell
+transcript (the keyboard stays at the bottom of the screen), and it is fully
+usable from the touch keyboard, a USB keyboard, or the serial console. See
+[tutorial_edit.md](tutorial_edit.md) for the complete tutorial and
+[editor.md](editor.md) for the quick reference.
+
+- **Line numbers**: a right-aligned gutter shows each line's 1-based number
+  (`P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS` digits, muted), and the cursor's
+  current line is softly highlighted (`P4_CONFIG_EDITOR_CURRENT_LINE`).
+  `Go to line` (`Ctrl+G` / `\g` / nav-page `Goto`) jumps straight to any
+  numbered line.
+
+- **Editing**: insert, backspace, Delete (forward), Enter (new line), Tab
+  (spaces to the next tab stop, width `P4_CONFIG_EDITOR_TAB_WIDTH`), Home / End,
+  Up / Down, PageUp / PageDown, word navigation (`Ctrl+Left` / `Ctrl+Right`),
+  document start/end (`Ctrl+Home` / `Ctrl+End`), delete line (`Ctrl+Y`), and an
+  Insert/overwrite toggle (`Insert` / `Ins`). Cursor movement is byte-precise
+  over tabs and 8-bit characters; files round-trip unchanged (CRLF vs LF is
+  preserved, and a trailing newline is only written when the original file had
+  one).
+- **Selection**: Shift+arrows / Ctrl+A (USB) or long-press-and-drag (touch)
+  selects text; Ctrl+C / Ctrl+X / Ctrl+V copy, cut, and paste through the RAM
+  clipboard. A background overlay highlights the selection, and a blinking
+  block cursor marks the caret.
+- **Find / Replace / Go to**: Ctrl+F (or `Find`) searches forward from the
+  cursor, wrapping; F3 / Enter repeats the last search; Ctrl+H (or `Rep`)
+  replaces one match at a time (Enter repeats); Ctrl+G (or `Goto`) jumps to a
+  line number. The search strings are typed into the status bar and cancelled
+  with Esc.
+- **Undo / Redo**: Ctrl+Z / Ctrl+Shift+Z (USB) or `\u` / `\r` (serial).
+- **Save / Quit**: Ctrl+S / F2 saves to the source path; Ctrl+O / `SaveAs`
+  saves to a new path (unnamed buffers are prompted for a name); Esc / `\q`
+  (serial) quits, with a `Y/N` confirmation whenever there are unsaved
+  changes. A failed save removes the partial destination and keeps your edits
+  in memory.
+- **Touch keyboard**: the symbol page (reachable via `1#`) adds a `Nav`
+  button that opens a navigation page (Tab, Ins, Del, arrows, Home/End,
+  PgUp/PgDn, Find, Next, Rep, Goto, Undo, Redo, Save, SaveAs, Quit), and a
+  second `Nav2` page adds the clipboard and advanced editing (Copy, Cut,
+  Paste, SelAll, WdL/WdR word nav, DocH/DocE, DelLn, DelE). Every editor
+  feature is reachable from the touch keyboard alone. Mode switching
+  (abc / ABC / 1# / Nav / Nav1 / Nav2) is handled by the shell keyboard
+  callback.
+- **Serial console**: while the editor is open, UART lines are fed to the
+  editor (`\q` quit, `\s` save, `\f` find, `\g` go-to-line, `\o` save-as,
+  `\u` undo, `\r` redo, `\a` select-all; any other line is typed).
+- **Syntax**: batch `.bat`/`.cmd` files are syntax-highlighted by the batch
+  lexer (commands, comments, labels, `%VAR%`, strings, operators).
+
+Editor limits are `P4_CONFIG_EDITOR_MAX_BYTES` (64 KB) and
+`P4_CONFIG_EDITOR_MAX_LINES` (2048); files beyond these are refused with an
+error instead of being truncated. The editor is safe against data loss: an
+existing file that cannot be loaded never silently opens as an empty buffer.
 | fc <file1> <file2> | Compare two text files line by line |
 | comp <file1> <file2> [/D] [/A] [/L] [/N=n] [/C] | Classic DOS byte-for-byte comparison |
 | sort [file] [/R] [/I] [/U] | Print a file with its lines sorted |

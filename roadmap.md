@@ -19,6 +19,10 @@ Implemented today in the checked-in firmware:
 - ✅ Fixed top header bar with Wi-Fi, battery, Bluetooth, USB, SD status + MEM/CPU/BAT system panel
 - ✅ FreeRTOS task introspection: `ps` / `tasks` / `top` (read-only: name, state,
       priority, core, stack high-water mark, per-task CPU%) with a `/b` bare form
+- ✅ `top`/`ps`/`tasks` sorting: `dir /O:`-style `/O:N|C|S|P|T` (with `-` reverse; `top`
+      defaults to CPU descending) and a 0/2 ERRORLEVEL for batch use (v0.24.28)
+- ✅ Header CPU sparkline: the system panel shows a short history graph of CPU samples
+      (amber above the warn threshold) when `P4_CONFIG_HEADER_CPU_GRAPH` is set (v0.24.28)
 - ✅ Worker-task command execution to protect the LVGL event stack
 - ✅ Interactive UART console bridge (stdin/stdout routed through same shell path)
 - ✅ Touch-to-show-keyboard: tapping input line brings up OSK (Windows 11 behavior)
@@ -97,7 +101,14 @@ Implemented today in the checked-in firmware:
 - ✅ `c6ota` for validated C6 firmware updates from SD or HTTP/S
 - ✅ C6 slave firmware built (v2.12.1, matching host) in `coprocessor/esp32c6_slave/`
 - ✅ Hardware controls: `brightness`, `rotate`, `battery`, `volume`, `gpio`
+- ✅ Basic audio: `beep` / `tone <freq> [ms]` / `wavplay <file>` (16-bit PCM from SD) through the
+      ES8311 speaker, `audio status|stop`, `volume [<0-100>]` query/set — background playback,
+      batch-safe, ERRORLEVEL (v0.24.31)
 - ✅ Display power management: `display power on|sleep|off`
+- ✅ Idle display-off + wake: `power idle <seconds|off>` and CONFIG.SYS `DISPLAY_TIMEOUT=`
+      turn the backlight off after N idle seconds; touch / USB keyboard / USB mouse / serial
+      command wake it cleanly. `sleep`/`deepsleep` support a user-wired `P4_CONFIG_POWER_WAKE_GPIO`
+      wake; touch wake is honestly reported unavailable (GT911 INT not wired) (v0.24.30)
 
 ### Extended DOS Commands (v0.14.2+)
 - ✅ `attrib` — FATFS file attributes (R/H/S/A) with +R/-R/+H/-H/+S/-S/+A/-A
@@ -128,6 +139,12 @@ Implemented today in the checked-in firmware:
 - ✅ `fc` — File comparison with DOS-style differing-line reporting and trailing length differences
 - ✅ `comp` — Byte-for-byte comparison with `/D /A /L /N /C`; 0 identical / 1 different / 2 usage ERRORLEVEL (v0.24.27)
 - ✅ `sort` — qsort-based with `/R` (reverse), `/I` (case-insensitive), `/U` (unique); 1024-line capacity and a single leak-free release path
+- ✅ `history` — heap-backed recall (32, Up/Down) with `history /save` / `history /load` /
+      `/clear` on the SD profile; Tab completion for commands/aliases/paths; 4096-byte command
+      lines (heap transient buffers) (v0.24.33)
+- ✅ `clip` / `paste` — RAM clipboard for the transcript (copy last N lines) and SD files
+      (`clip file`/`paste <dest>` file copy, `clip read` text round-trip), paste into the input
+      line, batch-safe + ERRORLEVEL (v0.24.32)
 - ✅ `xcopy` — Full DOS 6.x / WinXP switch set with a heap-scratch recursive walker and 0/1/2 ERRORLEVEL (v0.24.27)
 
 ### Pipe Support
@@ -665,16 +682,38 @@ This needs an explicit design decision before implementation starts:
 ## SDK and API work required
 To support third-party apps written in C, the project needs a minimal stable runtime API.
 
+The `edit` editor (v0.24.35) is the reference implementation of the **modal
+app surface** pattern — the first native app on top of the shell core. It
+settles several of the open design questions below and the full contract is
+documented in `SDK.md` ("Modal app surfaces"):
+
+- ✅ App owns a worker session + LVGL surface split, with file I/O off the
+  LVGL task and a graceful close handoff through a session event group.
+- ✅ Input capture: OSK buttons (through the single keyboard event handler in
+  `main.c`), USB keys, and serial lines (through `shell_command_ops_t` hooks)
+  all reach the app; nothing leaks to the shell dispatcher while it is open.
+- ✅ A status-bar prompt system (Find/Replace/Go-to/Save-As/confirmation)
+  instead of modal dialogs.
+- ✅ Pure app logic is LVGL-free and unit-tested (`test/main/test_editor.c`).
+
 ### Runtime services to define
 - ❌ Console output API mapped to the transcript and redirection layer
-- ❌ Input API for keyboard, buttons, and optional touch events
-- ❌ Filesystem API rooted at the shell current directory and SD mount conventions
+  (partially answered by the editor: apps render through
+  `windows_set_transcript_text`-style span surfaces, but a formal app
+  `printf`/stdout contract is still open)
+- ✅ Input API for keyboard, buttons, and optional touch events — the editor's
+  `editor_view_handle_usb_key` / `editor_view_handle_osk` / serial hooks are
+  the working shape; formalize as `app_input_t` for Phase 4
+- ✅ Filesystem API rooted at the shell current directory and SD mount
+  conventions — the editor uses `shell_fs_resolve_path` + guarded
+  `shell_sd_begin`/`shell_sd_end`; formalize for Phase 4
 - ❌ Memory allocation policy and error reporting contract
 - ❌ Time, timers, sleep, and system information helpers
 - ❌ Networking helpers for apps that need Wi-Fi state without owning the full stack
 
 ### Tooling to add
-- ❌ Header files for the shell SDK
+- ❌ Header files for the shell SDK (the editor's `editor.h`/`editor_view.h`
+  split — public doc API + LVGL surface API — is the template)
 - ❌ Example apps written in C
 - ❌ Build templates for app targets
 - ❌ Packaging rules for SD deployment
@@ -714,11 +753,18 @@ To support third-party apps written in C, the project needs a minimal stable run
 - ❌ Define a native app ABI for ESP32-P4 programs
 - ❌ Decide whether apps are loaded dynamically, linked as plugins, or executed through an interpreted wrapper
 - ❌ Define stdout, stderr, stdin, argv, cwd, PATH, and environment propagation
-- ❌ Define how apps yield control back to the shell cleanly
+- ✅ Define how apps yield control back to the shell cleanly — answered by the
+  `edit` modal-surface pattern: a worker session + LVGL view pair with a
+  session event group, the window-manager editor-mode handoff, and
+  `shell_command_ops_t` input hooks (see SDK.md, "Modal app surfaces").
 
 ### Phase 4: SDK and samples
-- ❌ Publish a stable shell SDK in C
-- ❌ Add sample apps such as `edit`, `view`, `netinfo`, or `hexview`
+- ✅ Publish a stable shell SDK in C (in progress — see "SDK and API work
+  required": the modal app-surface contract is defined by the editor)
+- ✅ `edit` — DOS-style inline text editor with DOS-EDIT search parity
+  (Find / Repeat / Replace / Go-to-Line, Save As, overwrite, word nav,
+  delete line, quit confirm; v0.24.35); ❌ `view`, `netinfo`, `hexview`
+  still open
 - ❌ Provide host-side build instructions and packaging rules for SD deployment
 
 ### Phase 5: SD app launcher

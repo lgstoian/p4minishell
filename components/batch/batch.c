@@ -1783,9 +1783,11 @@ void shell_command_path(int argc, char **argv)
 
 void shell_command_echo(int argc, char **argv)
 {
-    /* The joined text is line-sized and `echo` runs on the recursive batch
-     * path (every batch line dispatches through it), so the buffer is
-     * heap-allocated and freed on the single exit. */
+    /* The joined text can be a full interactive command line (up to
+     * P4_CONFIG_COMMAND_BYTES), so the buffer is command-sized and
+     * heap-allocated — `echo` runs on the recursive batch path (every batch
+     * line dispatches through it), and a fixed stack buffer of this size
+     * would overflow the worker task's stack when nested. */
     char *text = NULL;
 
     if (argc == 1) {
@@ -1805,13 +1807,56 @@ void shell_command_echo(int argc, char **argv)
         }
     }
 
-    text = malloc(SHELL_BATCH_LINE_BYTES);
+    text = malloc(SHELL_COMMAND_BYTES);
     if (text == NULL) {
         shell_transcript_append_text("echo: out of memory\n");
         return;
     }
 
-    shell_join_args(argv, 1, argc, text, SHELL_BATCH_LINE_BYTES);
+    shell_join_args(argv, 1, argc, text, SHELL_COMMAND_BYTES);
+    shell_transcript_appendf("%s\n", text);
+    free(text);
+}
+
+void shell_command_echo_text(char *line)
+{
+    char *p;
+    char *text;
+
+    if (line == NULL) {
+        return;
+    }
+
+    /* Skip the leading "echo" word (case-insensitive) and the space after it. */
+    p = line + 4;
+    if (*p != '\0' && isspace((unsigned char)*p)) {
+        p++;
+    }
+    p = shell_trim(p);
+
+    /* Bare `echo` reports the current batch-echo state. */
+    if (*p == '\0') {
+        shell_transcript_appendf_ansi(SH_LBL "ECHO is" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                 (s_active_batch_frame != NULL && !s_active_batch_frame->echo_enabled) ? "off" : "on");
+        return;
+    }
+
+    /* `echo on` / `echo off` toggle the batch echo state. */
+    if (s_active_batch_frame != NULL &&
+        (shell_text_equals_ignore_case(p, "on") || shell_text_equals_ignore_case(p, "off"))) {
+        s_active_batch_frame->echo_enabled = shell_text_equals_ignore_case(p, "on");
+        return;
+    }
+
+    /* The remainder is printed verbatim. It can be a full interactive command
+     * line (up to P4_CONFIG_COMMAND_BYTES), and `echo` runs on the recursive
+     * batch path, so the copy is heap-allocated. */
+    text = malloc(SHELL_COMMAND_BYTES);
+    if (text == NULL) {
+        shell_transcript_append_text("echo: out of memory\n");
+        return;
+    }
+    snprintf(text, SHELL_COMMAND_BYTES, "%s", p);
     shell_transcript_appendf("%s\n", text);
     free(text);
 }
@@ -2164,7 +2209,9 @@ void shell_command_pause(int argc, char **argv)
 
 void shell_command_choice(int argc, char **argv)
 {
-    char options[SHELL_COMMAND_BYTES];
+    /* The key list holds only single-char keys (/C:YNC), so it is a small
+     * stack buffer — never command-sized. */
+    char options[P4_CONFIG_CHOICE_KEY_MAX];
     char *message = NULL;
     const char *default_key = NULL;
     bool show_list = true;
@@ -2439,6 +2486,12 @@ void shell_execute_pipe(char *command)
 {
     char *stages[SHELL_PIPE_STAGE_MAX];
     char spool[SHELL_PIPE_STAGE_MAX][64];
+    /* A redirected stage can carry a full 4096-byte command plus " > " and
+     * the spool path. The buffer is command-sized, and shell_execute_pipe
+     * sits on the recursive batch path, so it is heap-allocated and freed at
+     * the single exit (a 2x command-sized stack local here would overflow the
+     * worker task when a pipe appears in a nested batch file). */
+    char *redirected = NULL;
     int stage_count = 0;
     char *cursor;
     char *segment_start;
@@ -2492,6 +2545,13 @@ void shell_execute_pipe(char *command)
         }
     }
 
+    redirected = malloc(SHELL_COMMAND_BYTES + 128);
+    if (redirected == NULL) {
+        shell_transcript_append_text("pipe: out of memory redirecting a stage\n");
+        shell_record_errorf("pipe", ESP_ERR_NO_MEM, "Out of memory buffering a pipeline stage");
+        return;
+    }
+
     /* Every stage but the last spools its output for the next one. */
     for (index = 0; index < stage_count; index++) {
         bool is_last = (index + 1 == stage_count);
@@ -2508,10 +2568,8 @@ void shell_execute_pipe(char *command)
         if (is_last) {
             batch_run_nested(stages[index]);
         } else {
-            char redirected[SHELL_COMMAND_BYTES * 2];
-
             shell_pipe_spool_path(index, spool[index], sizeof(spool[index]));
-            snprintf(redirected, sizeof(redirected), "%s > %s", stages[index], spool[index]);
+            snprintf(redirected, SHELL_COMMAND_BYTES + 128, "%s > %s", stages[index], spool[index]);
             batch_run_nested(redirected);
 
             /* Give the FATFS write cache a moment to settle before the next
@@ -2533,6 +2591,8 @@ void shell_execute_pipe(char *command)
             (void)unlink(spool[index]);
         }
     }
+
+    free(redirected);
 }
 
 /* ========================================================================

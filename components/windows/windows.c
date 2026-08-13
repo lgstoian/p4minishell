@@ -49,6 +49,10 @@ static struct {
     lv_obj_t *next_button;
     lv_obj_t *scroll_up_button;
     lv_obj_t *scroll_down_button;
+    /* Editor mode: the transcript region hosts a modal editor surface. */
+    bool editor_mode;
+    lv_obj_t *editor_surface;
+    lv_obj_t *editor_status;
 } s_windows = {
     .initialized = false,
     .screen = NULL,
@@ -60,6 +64,9 @@ static struct {
     .next_button = NULL,
     .scroll_up_button = NULL,
     .scroll_down_button = NULL,
+    .editor_mode = false,
+    .editor_surface = NULL,
+    .editor_status = NULL,
 };
 
 /* ========================================================================
@@ -385,6 +392,11 @@ lv_obj_t *windows_get_transcript(void)
     return s_windows.transcript;
 }
 
+lv_obj_t *windows_get_transcript_spans(void)
+{
+    return s_windows.transcript_spans;
+}
+
 /* ---- LVGL span-group transcript implementation --------------------------
  * The transcript renders coloured shell output on the display. Raw ANSI SGR
  * escape sequences (as produced by the shell's semantic helpers) are parsed
@@ -534,6 +546,7 @@ static void windows_transcript_apply(void)
     size_t new_len;
     const char *append_start;
     uint32_t default_fg;
+
 
     if (container == NULL || spans == NULL) {
         return;
@@ -800,6 +813,11 @@ esp_err_t windows_init(void)
     windows_create_input_row();
     windows_create_keyboard();
 
+    /* Reflow the transcript when the on-screen keyboard is shown/hidden, so
+     * hiding the OSK expands the transcript into the freed space. This wires
+     * the otherwise-dead visibility callback. */
+    keyboard_register_visibility_callback(windows_notify_keyboard_visibility);
+
     /* Bound the transcript to its computed slot so its content overflows and
      * becomes scrollable. Must run after the keyboard exists (its height
      * factors into the slot). */
@@ -848,6 +866,9 @@ void windows_deinit(void)
      * support. */
     header_deinit();
     keyboard_deinit();
+
+    /* Detach the visibility callback (the keyboard is being torn down). */
+    keyboard_register_visibility_callback(NULL);
 
     if (s_windows.screen != NULL) {
         /* Kill every pending animation on the screen and its descendants
@@ -899,23 +920,194 @@ void windows_reset_input_line(const char *prompt)
 
 void windows_notify_keyboard_visibility(bool visible)
 {
-    lv_coord_t disp_h = windows_get_display_height();
-    lv_coord_t input_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
-                                                       P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN,
-                                                       P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MAX);
-    lv_coord_t kb_h = visible ? keyboard_get_height() : 0;
+    (void)visible;
 
-    if (s_windows.input_row != NULL) {
-        lv_obj_set_y(s_windows.input_row, disp_h - input_h - kb_h);
-    }
-
+    /* The screen is a flex column; the header, transcript, input row and
+     * keyboard are already positioned by flex in creation order. Do NOT set
+     * manual y coordinates on any flex child — that fights the flex layout
+     * and throws the keyboard to the top with a black void below. The only
+     * region that needs re-bounding when the keyboard shows/hides is the
+     * transcript, whose height is explicit (not flex-grow), so it must be
+     * re-applied to fill the space the keyboard just used or freed. */
     if (s_windows.transcript != NULL) {
-        /* Re-bind the transcript to its (now resized) slot so it keeps
-         * scrolling within the space freed/used by the keyboard. */
         windows_apply_transcript_height();
         lv_obj_update_layout(s_windows.transcript);
     }
 
-    ESP_LOGI(WINDOWS_TAG, "Keyboard visibility changed: %s (kb_h=%" PRIu32 ")",
-             visible ? "visible" : "hidden", (uint32_t)kb_h);
+    if (s_windows.editor_mode) {
+        /* The editor surface tracks the transcript slot explicitly; resize it
+         * so it fills the space freed/used by the keyboard, using the same
+         * rect computation as the shell transcript. */
+        windows_refresh_editor_surface();
+        if (!windows_editor_surface_height_ok()) {
+            ESP_LOGW(WINDOWS_TAG, "editor surface collapsed to %d px",
+                     (int)lv_obj_get_height(s_windows.editor_surface));
+        }
+    }
+}
+
+/* ========================================================================
+ * EDITOR MODE
+ * ======================================================================== */
+
+lv_obj_t *windows_get_editor_surface(void)
+{
+    return s_windows.editor_surface;
+}
+
+/** Re-apply the transcript-region height to the editor surface. */
+void windows_refresh_editor_surface(void)
+{
+    if (!s_windows.editor_mode || s_windows.editor_surface == NULL) {
+        return;
+    }
+    lv_obj_set_height(s_windows.editor_surface,
+                      windows_get_rect(WINDOW_REGION_TRANSCRIPT).height);
+    lv_obj_update_layout(s_windows.editor_surface);
+}
+
+/** Report whether the editor surface is at least as tall as its region. */
+bool windows_editor_surface_height_ok(void)
+{
+    if (!s_windows.editor_mode || s_windows.editor_surface == NULL) {
+        return false;
+    }
+    return lv_obj_get_height(s_windows.editor_surface) >=
+           windows_get_rect(WINDOW_REGION_TRANSCRIPT).height;
+}
+
+/** Log the editor surface, transcript-region, and keyboard rectangles. */
+void windows_debug_editor_layout(void)
+{
+    window_rect_t region = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
+    lv_coord_t surface_h = s_windows.editor_surface != NULL
+                               ? lv_obj_get_height(s_windows.editor_surface)
+                               : 0;
+    lv_coord_t kb_h = keyboard_is_visible() ? keyboard_get_height() : 0;
+
+    /* Logged at warn level (the firmware's default log floor) so the editor
+     * surface geometry is verifiable on the serial console during an edit
+     * session. */
+    ESP_LOGW(WINDOWS_TAG,
+             "editor layout diagnostic: surface h=%d px, transcript region "
+             "h=%d px (y=%d), keyboard h=%d px",
+             (int)surface_h, (int)region.height, (int)region.y, (int)kb_h);
+}
+
+/**
+ * Enter modal editor mode. Hides the shell input surface (transcript, input
+ * row buttons and line) and creates a full-height editor surface in the
+ * transcript region. The input row becomes a status bar.
+ *
+ * @return The editor surface container, or NULL on failure. LVGL task.
+ */
+lv_obj_t *windows_enter_editor_mode(void)
+{
+    if (s_windows.editor_mode) {
+        return s_windows.editor_surface;
+    }
+    if (s_windows.screen == NULL) {
+        return NULL;
+    }
+
+    /* Hide the shell input widgets. The transcript container is NOT hidden:
+     * it becomes the editor surface, so it must stay visible and keep the
+     * transcript-region height (hiding it makes LVGL flex skip it, collapsing
+     * the editor area to ~one line and dragging the keyboard up under it). */
+    if (s_windows.prev_button != NULL) {
+        lv_obj_add_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.next_button != NULL) {
+        lv_obj_add_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_up_button != NULL) {
+        lv_obj_add_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_down_button != NULL) {
+        lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.input_line != NULL) {
+        lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* The editor renders into the EXISTING transcript widget (proven,
+     * working scrollable ANSI spangroup). The transcript container becomes
+     * the editor surface; the input row becomes a status bar. */
+    s_windows.editor_surface = s_windows.transcript;
+
+    /* Status bar: a label in the (now content-free) input row. */
+    if (s_windows.input_row != NULL) {
+        s_windows.editor_status = lv_label_create(s_windows.input_row);
+        lv_obj_set_width(s_windows.editor_status, LV_PCT(100));
+        lv_obj_set_style_text_font(s_windows.editor_status,
+                                   windows_get_terminal_font(), 0);
+        lv_obj_set_style_text_color(s_windows.editor_status,
+                                    windows_get_color(WINDOWS_COLOR_TEXT_MUTED), 0);
+    }
+
+    s_windows.editor_mode = true;
+
+    /* Size the editor surface to exactly the transcript slot and verify it
+     * did not collapse (a regression guard for the "1-line editor" bug). */
+    windows_refresh_editor_surface();
+    if (!windows_editor_surface_height_ok()) {
+        ESP_LOGW(WINDOWS_TAG, "editor surface collapsed to %d px",
+                 (int)lv_obj_get_height(s_windows.editor_surface));
+    }
+    windows_debug_editor_layout();
+
+    return s_windows.editor_surface;
+}
+
+/** Leave modal editor mode and restore the shell input surface. LVGL task. */
+void windows_exit_editor_mode(void)
+{
+    if (!s_windows.editor_mode) {
+        return;
+    }
+
+    /* The editor surface aliases the transcript container; do not delete it.
+     * The transcript was kept visible for the session; re-apply the region
+     * height and re-show the shell output on the way out. */
+    s_windows.editor_surface = NULL;
+
+    if (s_windows.transcript != NULL) {
+        lv_obj_remove_flag(s_windows.transcript, LV_OBJ_FLAG_HIDDEN);
+        windows_apply_transcript_height();
+    }
+
+    if (s_windows.editor_status != NULL) {
+        lv_obj_delete(s_windows.editor_status);
+        s_windows.editor_status = NULL;
+    }
+
+    if (s_windows.prev_button != NULL) {
+        lv_obj_remove_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.next_button != NULL) {
+        lv_obj_remove_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_up_button != NULL) {
+        lv_obj_remove_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_down_button != NULL) {
+        lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.input_line != NULL) {
+        lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    s_windows.editor_mode = false;
+}
+
+/** Get the status-bar label created by windows_enter_editor_mode(). */
+lv_obj_t *windows_get_editor_status(void)
+{
+    return s_windows.editor_status;
+}
+
+/** Report whether the editor modal surface is currently active. */
+bool windows_editor_mode_active(void)
+{
+    return s_windows.editor_mode;
 }

@@ -12,6 +12,7 @@ This document describes the public integration surface exposed by the hosted run
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar UI for notifications and passive status display.
+- `components/editor` owns the DOS-style `edit` text editor: the byte-preserving document model, the modal LVGL surface (syntax-coloured spans, block cursor, selection overlay, status-bar prompts), and the worker-task session.
 - `components/led` owns the WS2812 RGB status LED on GPIO26 (espressif/led_strip over RMT), the
   animation task, and the auto status / event notification engine.
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
@@ -59,6 +60,9 @@ typedef struct {
     bool        (*usb_key_to_ascii)(uint8_t key_code, uint8_t modifiers, char *out);
     bool        (*c6ota_is_pending)(void);
     bool        (*c6ota_is_busy)(void);
+    void        (*pm_notify_activity)(void);
+    int         (*complete_word)(const char *word, bool first_token, int match_index,
+                                 char *out, size_t out_size);
 } shell_command_ops_t;
 
 void shell_register_command_ops(const shell_command_ops_t *ops);
@@ -69,6 +73,10 @@ void shell_register_command_ops(const shell_command_ops_t *ops);
 - The external-module accessors let `shell.c` read state from the networking, Bluetooth,
   USB, and C6 OTA modules without including their headers, keeping the dependency
   direction one-way.
+- `complete_word` backs USB Tab completion: it fills `out` with the `match_index`-th match of
+  `word` (commands/aliases when `first_token`, SD paths otherwise) and returns the total match
+  count (capped by `P4_CONFIG_COMPLETION_MAX_MATCHES`). Implemented by `command_init`'s
+  `shell_complete_word`.
 
 ### Semantic output helpers
 ```c
@@ -117,10 +125,15 @@ const char *shell_get_history_draft(void);
 void        shell_reset_history_cursor(void);
 bool        shell_command_should_store_history(const char *command);
 void        shell_format_command_for_transcript(const char *command, char *output, size_t output_size);
+size_t      shell_history_get_count(void);
+const char *shell_history_get(size_t index);       /* 0 = oldest */
+void        shell_history_clear(void);
 ```
 - `shell_command_should_store_history()` returns false for `wifi connect <ssid> <password>`
   and while a C6 OTA confirmation is pending.
 - `shell_format_command_for_transcript()` masks the password argument.
+- The history is heap-backed (`strdup`'d lines, depth + total-byte cap); the accessors feed
+  the `history` command's SD save/load.
 
 ### Input line
 ```c
@@ -128,9 +141,25 @@ void shell_input_line_set_text(const char *command_text);
 void shell_input_line_reset(void);
 void shell_extract_input_text(char *output, size_t output_size);
 void shell_input_line_repair_prompt(const char *text);
+void shell_input_line_paste(const char *text);
 ```
 - The input line always renders the shell prompt as a literal prefix. These helpers are the
   only place that knows about that contract.
+- `shell_input_line_paste()` inserts text at the cursor via `lv_textarea_add_text` (LVGL-locked,
+  safe from any task); it is what `paste` calls.
+
+### RAM clipboard
+```c
+void        shell_clipboard_set(const char *text);
+void        shell_clipboard_set_file(const char *path);
+const char *shell_clipboard_get(void);
+bool        shell_clipboard_is_file(void);
+bool        shell_clipboard_copy_transcript(int n_lines);
+```
+- Shell-core clipboard backing `clip` / `paste`. `shell_clipboard_copy_transcript(n)` copies
+  the last n lines of the plain transcript (the same read the `>` redirection path uses).
+  The `clip`/`paste` commands in `components/command/` call these and do the file-side work
+  (`clip read`, `paste <dest>` copy) with storage helpers.
 
 ### Interactive keypress wait
 ```c
@@ -178,13 +207,19 @@ void   shell_record_warningf(const char *tag, const char *format, ...);
 void   shell_record_infof(const char *tag, const char *format, ...);
 size_t shell_get_warning_count(void);
 void   shell_command_debug(void);
-void   shell_command_ps(int argc, char **argv);
+int    shell_command_ps(int argc, char **argv);   /* 0 ok, 2 usage; /O: sort */
 ```
 - `shell_command_ps()` implements `ps` / `tasks` / `top`: a read-only FreeRTOS
   task table (name, state, priority, core, stack high-water mark, per-task
   CPU% since the previous sample). It reads a heap-allocated
   `uxTaskGetSystemState()` snapshot capped by `P4_CONFIG_TASK_SNAPSHOT_MAX` and
-  never mutates tasks. `/b` emits uncoloured machine-parsable rows.
+  never mutates tasks. `/b` emits uncoloured machine-parsable rows; `/O:` sorts
+  by `N` name / `C` CPU / `S` stack / `P` priority / `T` state (`-` reverses,
+  name tie-break) with `top` defaulting to CPU-descending. Returns an
+  ERRORLEVEL the dispatcher records (0 ok / 2 usage).
+- Sorting uses `shell_task_row_compare()` (pure, unit-tested): the normalized
+  row type is `shell_task_row_t` with the `shell_task_sort_key_t` enum, both in
+  shell.h.
 
 ### Quoting and escaping
 ```c
@@ -267,11 +302,20 @@ bool shell_command_ota_is_pending(void);
 ```c
 int         command_get_volume_percent(void);
 esp_err_t   command_battery_read(int *battery_mv, int *percent, int *raw, int *gpio_mv);
+
+/* Power / idle display-off (components/command) */
+void        shell_power_set_idle_timeout(int seconds);
+int         shell_power_get_idle_timeout(void);
+void        shell_power_notify_activity(void);
+void        shell_power_idle_tick(void);
 ```
 - These are the concrete implementations behind two of the `shell_command_ops_t` hooks. The
   `get_cwd` and `sd_is_mounted` hooks are satisfied by `shell_get_cwd()` and
   `storage_sd_is_mounted()` from `components/storage/`. Any output pointer passed to
   `command_battery_read()` may be `NULL`.
+- `shell_power_notify_activity()` is also the implementation of the
+  `shell_command_ops_t.pm_notify_activity` hook (used by the UART console submit path);
+  `shell_power_idle_tick()` runs on the LVGL task from the header-refresh timer.
 
 ### Lifecycle
 ```c
@@ -280,6 +324,26 @@ bool command_is_initialized(void);
 ```
 - `command_init()` brings up `components/storage/` and `components/batch/` before registering
   `batch_command_ops_t` and `shell_command_ops_t`, so no dispatch can observe uninitialized state.
+
+## Audio Module API
+
+Declared in `components/audio/audio.h`. All audio logic lives in `components/audio/audio.c`
+(codec init, speaker volume, and the background playback task); the `beep`/`tone`/`wavplay`/
+`audio`/`volume` commands in `components/command/` only parse arguments and call these.
+```c
+esp_err_t audio_init(void);
+bool audio_play_tone(int freq_hz, uint32_t duration_ms);   /* false = audio busy */
+bool audio_play_wav(const char *resolved_path);            /* false = audio busy */
+void audio_stop(void);
+bool audio_busy(void);
+esp_err_t audio_set_volume(int percent);
+int  audio_get_volume(void);
+```
+- The codec is mono 16-bit at 22050 Hz (BSP default). Tones are generated in heap chunks with
+  a short fade; WAVs (16-bit PCM mono/stereo at 22050/44100 Hz) stream from SD, stereo mixed to
+  mono and 44100 decimated. Playback is background and single-slot; `audio_stop()` is also
+  called by `sleep`/`deepsleep`. `command_set_volume()` / `command_get_volume_percent()` in
+  command.c are thin wrappers over `audio_set_volume()` / `audio_get_volume()`.
 
 ## Storage Module API
 
@@ -1221,6 +1285,137 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
 
 - `void keyboard_clear_force_visible(void)`
   - Clear force-visible override; re-evaluate auto-hide based on external input state.
+
+## Editor API (components/editor)
+
+The `edit` command is a modal surface: the LVGL view owns the transcript
+region while open, and the worker task owns file I/O. All `editor_doc_*`
+mutators run on the LVGL task; only load/save touch the filesystem.
+
+### Document lifecycle
+```c
+editor_doc_t *editor_doc_new(const char *path);   /* "" = unnamed */
+editor_doc_t *editor_doc_load(const char *path);   /* NULL on failure */
+void          editor_doc_free(editor_doc_t *doc);
+void          editor_doc_pick_syntax(editor_doc_t *doc);
+bool          editor_file_missing(const char *resolved_path);
+esp_err_t     editor_doc_save(editor_doc_t *doc, const char *path);
+void          editor_doc_set_path(editor_doc_t *doc, const char *path);
+```
+- `editor_doc_load` refuses (returns NULL) files over
+  `P4_CONFIG_EDITOR_MAX_BYTES` / `P4_CONFIG_EDITOR_MAX_LINES`; callers must
+  treat a NULL on an *existing* file as a hard error (see `editor_file_missing`)
+  rather than opening an empty buffer.
+- `editor_doc_save` writes through a guarded SD session and removes its
+  partial destination on failure; CRLF/LF and a trailing newline round-trip
+  exactly.
+
+### Accessors and cursor
+```c
+size_t  editor_doc_line_count(const editor_doc_t *doc);
+size_t  editor_doc_line_length(const editor_doc_t *doc, size_t row);
+const char *editor_doc_line_text(const editor_doc_t *doc, size_t row);
+size_t  editor_doc_cursor_row(const editor_doc_t *doc);
+size_t  editor_doc_cursor_col(const editor_doc_t *doc);
+bool    editor_doc_is_modified(const editor_doc_t *doc);
+```
+Cursor movement: `editor_doc_cursor_left/right/up/down/home/end`,
+`editor_doc_cursor_word_left/right`, `editor_doc_cursor_doc_home/end`,
+`editor_doc_toggle_overwrite`.
+
+### Editing
+```c
+void editor_doc_insert_char(editor_doc_t *doc, char ch);
+void editor_doc_insert_bytes(editor_doc_t *doc, const char *bytes, size_t len);
+void editor_doc_newline(editor_doc_t *doc);
+void editor_doc_backspace(editor_doc_t *doc);
+void editor_doc_delete(editor_doc_t *doc);
+void editor_doc_tab(editor_doc_t *doc);
+void editor_doc_delete_line(editor_doc_t *doc);
+void editor_doc_delete_to_eol(editor_doc_t *doc);
+```
+- `editor_doc_insert_bytes` is the raw, no-undo, never-overwrite path (paste);
+  mutators that want undo call `editor_doc_undo_mark()` first or record their
+  own snapshot internally.
+
+### Selection
+```c
+void editor_doc_selection_begin(editor_doc_t *doc);
+void editor_doc_selection_extend(editor_doc_t *doc);
+bool editor_doc_has_selection(const editor_doc_t *doc);
+void editor_doc_selection_clear(editor_doc_t *doc);
+void editor_doc_selection_bounds(const editor_doc_t *doc, ...);
+bool editor_doc_selection_copy(const editor_doc_t *doc);
+void editor_doc_selection_delete(editor_doc_t *doc);
+bool editor_doc_selection_cut(editor_doc_t *doc);
+void editor_doc_select_all(editor_doc_t *doc);
+void editor_doc_paste(editor_doc_t *doc);
+```
+- Copy/cut use the shell's RAM clipboard (`shell_clipboard_*`), so editor and
+  shell share one clipboard. Multi-line selections copy with the file's own
+  EOL style.
+
+### Undo / Redo
+```c
+void editor_doc_undo_mark(editor_doc_t *doc);  /* snapshot before an edit */
+void editor_doc_undo(editor_doc_t *doc);
+void editor_doc_redo(editor_doc_t *doc);
+```
+
+### Find / Replace (pure)
+```c
+bool editor_doc_find_next(const editor_doc_t *doc, const char *needle,
+                          size_t needle_len, size_t start_row, size_t start_col,
+                          bool case_sensitive, bool wrap, size_t *out_row, size_t *out_col);
+bool editor_doc_replace_next(editor_doc_t *doc, const char *needle,
+                             size_t needle_len, const char *replacement,
+                             size_t repl_len, bool case_sensitive,
+                             size_t *out_row, size_t *out_col);
+```
+- `find_next` never mutates the document; `replace_next` replaces one match
+  per call from the cursor and leaves the caret past the replacement so a
+  repeated call walks the file.
+
+### Batch lexer
+```c
+size_t editor_lex_batch(const char *text, size_t len,
+                        editor_syntax_run_t *runs, size_t capacity);
+```
+
+### Session (worker task)
+```c
+esp_err_t editor_session_run(const char *path, int *errorlevel);
+bool      editor_session_is_active(void);
+```
+- `editor_session_run` blocks the worker until the user quits; the view
+  signals saves/quits through the `editor_control_t` event group.
+- `editor_control_t.save_as_path` carries a Save-As target: when non-empty the
+  worker saves there and re-titles the document.
+
+### View (LVGL task)
+```c
+bool editor_view_open(editor_doc_t *doc, editor_control_t *control);
+void editor_view_close(void);
+bool editor_view_is_open(void);
+bool editor_view_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii);
+bool editor_view_handle_osk(const char *label);
+void editor_view_notify_saved(bool ok);
+void editor_view_scroll_by(int32_t pixels);
+void editor_view_set_quit_requested(void);
+void editor_view_set_save_requested(void);
+```
+
+### Shell bridge hooks (in `shell_command_ops_t`)
+The shell core and UART reader reach the editor through three NULL-checked
+hooks registered by `command_init()`:
+```c
+bool (*editor_is_active)(void);
+bool (*editor_handle_usb_key)(uint8_t key_code, uint8_t modifiers, char ascii);
+bool (*editor_handle_serial_line)(const char *line);
+```
+- `editor_handle_serial_line` returns true when the line was consumed (any
+  line while a session is active) so serial text is never misrouted to the
+  command dispatcher during an edit.
 
 ## Shell USB Keyboard Bridge
 

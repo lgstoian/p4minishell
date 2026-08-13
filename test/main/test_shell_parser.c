@@ -100,6 +100,35 @@ void test_shell_parser_split_args(void)
 }
 
 /* ========================================================================
+ * SHELL COUNT ARGS TESTS (argument-truncation detection)
+ * ======================================================================== */
+
+void test_shell_parser_count_args(void)
+{
+    /* Matches shell_split_args() counting without mutating the input. */
+    TEST_ASSERT_EQUAL(0, shell_count_args(""));
+    TEST_ASSERT_EQUAL(0, shell_count_args("   "));
+    TEST_ASSERT_EQUAL(0, shell_count_args(NULL));
+
+    TEST_ASSERT_EQUAL(1, shell_count_args("help"));
+    TEST_ASSERT_EQUAL(1, shell_count_args("   help   "));
+    TEST_ASSERT_EQUAL(4, shell_count_args("wifi connect myssid mypass"));
+    TEST_ASSERT_EQUAL(2, shell_count_args("echo \"hello world\""));
+    TEST_ASSERT_EQUAL(4, shell_count_args("echo a 'b c' d"));
+
+    /* Far beyond the dispatcher argv capacity (a full 4096-byte echo). */
+    TEST_ASSERT(shell_count_args("echo a b c d e f g h i j k l m n o p q r s t u v w x y z 1 2 3 4 5 6 7 8 9") > 32);
+
+    /* The input is never mutated by counting. */
+    {
+        char buf[64];
+        strcpy(buf, "echo a   b");
+        TEST_ASSERT_EQUAL(3, shell_count_args(buf));
+        TEST_ASSERT_EQUAL_STRING("echo a   b", buf);
+    }
+}
+
+/* ========================================================================
  * SHELL TEXT EQUALS TESTS
  * ======================================================================== */
 

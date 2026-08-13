@@ -92,13 +92,17 @@ bool shell_command_keyboard(int argc, char **argv)
         /* Colours must be literal in the format string for ansi_vformat to
          * convert them — @-specifiers in a %s argument are not converted. */
         if (keyboard_is_visible()) {
-            shell_transcript_appendf_ansi(SH_LBL "keyboard:" SH_RST " " SH_OK "visible" SH_RST ", mode=%d, height=%" PRId32 "\n",
+            shell_transcript_appendf_ansi(SH_LBL "keyboard:" SH_RST " " SH_OK "visible" SH_RST
+                                     ", mode=%d, height=%" PRId32 ", external=%s\n",
                                      (int)keyboard_get_mode(),
-                                     (int32_t)keyboard_get_height());
+                                     (int32_t)keyboard_get_height(),
+                                     keyboard_is_external_input_enabled() ? "on" : "off");
         } else {
-            shell_transcript_appendf_ansi(SH_LBL "keyboard:" SH_RST " " SH_MUTE "hidden" SH_RST ", mode=%d, height=%" PRId32 "\n",
+            shell_transcript_appendf_ansi(SH_LBL "keyboard:" SH_RST " " SH_MUTE "hidden" SH_RST
+                                     ", mode=%d, height=%" PRId32 ", external=%s\n",
                                      (int)keyboard_get_mode(),
-                                     (int32_t)keyboard_get_height());
+                                     (int32_t)keyboard_get_height(),
+                                     keyboard_is_external_input_enabled() ? "on" : "off");
         }
     } else {
         shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status>" SH_RST "\n");

@@ -552,7 +552,12 @@ esp_err_t display_init(void)
         return ESP_OK;
     }
 
-    /* Build the BSP display configuration from board_config.h values */
+    /* Build the BSP display configuration from board_config.h values.
+     * Start from the port defaults (task_priority, task_affinity,
+     * task_max_sleep_ms, timer_period_ms, task_stack_caps all included) and
+     * only raise the LVGL task stack above the 7168-byte default: a
+     * full-screen redraw (transcript span group, input line, keyboard,
+     * header) recurses deep enough to overflow the stock stack. */
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
@@ -563,6 +568,7 @@ esp_err_t display_init(void)
             .sw_rotate = BOARD_CFG_APP_SW_ROTATE,
         }
     };
+    cfg.lvgl_port_cfg.task_stack = P4_CONFIG_LVGL_TASK_STACK;
 
     display = bsp_display_start_with_config(&cfg);
     if (display == NULL) {

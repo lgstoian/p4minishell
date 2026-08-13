@@ -18,6 +18,12 @@ expansion, SD persistence via `alias /save`).
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar LVGL widgets for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status.
+- `components/editor` owns the DOS-style `edit` text editor: a byte-preserving
+  document model (`editor.c`), a modal LVGL surface with syntax-coloured
+  spans, a block cursor, a selection overlay, and status-bar prompts
+  (`editor_view.c`), and a worker-task session that keeps file I/O off the
+  LVGL task. It is the reference implementation of the "modal app surface"
+  pattern below.
 - `components/networking` owns hosted Wi-Fi runtime state, boot restore, diagnostics, OTA
   restore hooks, and the persistent known-network list (`wifi_known.c`, `sd:/WIFI.KNOWN`).
   The known-list module performs all SD I/O through the guarded storage session API
@@ -118,6 +124,51 @@ static void batch_run_nested(char *command)
     s_command_ops.execute_command(command);
 }
 ```
+
+## Modal app surfaces (the `edit` pattern)
+
+`edit` is the first native "app" that runs on top of the shell core, and it
+establishes the integration contract for future native apps (roadmap Phase 4).
+A modal app surface takes over the transcript region and the input row,
+captures every input source, and yields the shell back cleanly when it
+closes. The pieces an app needs:
+
+1. **A worker/LVGL split.** The app's session runs on the command worker
+   task (`editor_session_run`): it does file I/O, waits on an event group,
+   and services save requests. The LVGL surface (`editor_view_open`) is
+   opened with `lv_async_call` and every widget operation stays on the LVGL
+   task. A `lv_async_call` failure path frees everything and returns an
+   error, so a dead LVGL heap can never be touched.
+2. **The window-manager handoff.** `windows_enter_editor_mode()` hides the
+   shell input widgets and aliases the transcript container as the app
+   surface; `windows_exit_editor_mode()` restores them. The app hides the
+   shell's span group (`windows_get_transcript_spans()`), mounts its own
+   content, and re-shows the shell output on close.
+3. **Ops-table input routing.** The shell core and UART reader reach the app
+   through `shell_command_ops_t` hooks (the editor registers
+   `editor_is_active`, `editor_handle_usb_key`, `editor_handle_serial_line`).
+   The single keyboard `LV_EVENT_VALUE_CHANGED` handler in `main.c` owns mode
+   switching and routes every OSK button either to the shell input line or to
+   the active app. Serial lines are forwarded to the app verbatim so text
+   typed on UART is never misrouted to the dispatcher.
+4. **Guarded SD I/O.** All file access goes through
+   `shell_sd_begin`/`shell_sd_end`, prechecking free space and removing a
+   partial destination on a failed write (the same guardrails as `copy`).
+5. **A stateful status bar.** The input row becomes the app's status line; an
+   inline prompt system (Find/Replace/Go-to/Save-As/confirm) reuses that bar
+   instead of popping dialogs.
+6. **Graceful close.** Quit signals the worker through the session event
+   group; the worker tears the view down and waits for the LVGL callback
+   before freeing the document. A rotation rebuild closes the view and wakes
+   the worker instead of leaving dangling widgets.
+7. **Pure logic, unit tested.** The document model (lines, cursor, selection,
+   undo, find/replace) is LVGL-free and covered by `test/main/test_editor.c` —
+   the same "pure logic in the module, hardware on the board" split the text
+   tools use.
+
+A future `view`, `hexview`, or third-party `.app` can reuse this shape: a
+worker session + `windows_enter_editor_mode()` surface + `shell_command_ops_t`
+input hooks + guarded SD + a status-bar prompt, with the pure model unit-tested.
 
 ## Networking ownership
 
@@ -327,6 +378,52 @@ are declared in `storage_commands.h` so `test/` can exercise them directly:
 `shell_fsre_search()`, `shell_findstr_match_line()`, and
 `shell_comp_first_diff()`. When adding a text filter, keep the matcher pure
 and expose it the same way instead of burying the logic behind the transcript.
+
+The `ps`/`tasks`/`top` `/O:` sort comparator follows the same rule:
+`shell_task_row_compare()` (declared in `shell.h`) is a pure function over
+the normalized `shell_task_row_t` rows and is unit-tested. New sort keys are
+one enum value plus one `case` in the comparator and the `/O:` parser.
+
+### Power idle integration
+
+To treat a new input source as shell activity (so it resets the `power idle`
+clock and wakes a dimmed display), call `shell_power_notify_activity()` from
+the input-injection point. The UART path routes through the
+`shell_command_ops_t.pm_notify_activity` hook, so keep the dependency one-way;
+USB and touch wake through main.c and the LVGL indev scan in
+`shell_power_idle_tick()`. Idle-off must only toggle the backlight via
+`display_set_power_state()` — never halt the panel or touch shell state.
+
+### Audio playback
+
+All audio lives in `components/audio/` (`audio.h`). To play a tone or WAV,
+call `audio_play_tone()` / `audio_play_wav()` — they post a request to the
+component's background task and return immediately; check `audio_busy()` to
+avoid the single-slot refusal, and `audio_stop()` to cancel. The command layer
+(`components/command/command.c`) only parses `beep`/`tone`/`wavplay`/`audio`/
+`volume` and calls these — do not reimplement codec or playback logic there.
+Chunk buffers stay on the heap, never on the audio task's stack.
+
+### Clipboard
+
+The RAM clipboard is shell-core state (`components/shell/`): use
+`shell_clipboard_set()` / `shell_clipboard_set_file()` to store text or a file
+reference, `shell_clipboard_get()` / `shell_clipboard_is_file()` to read it,
+`shell_clipboard_copy_transcript(n)` to grab the last n transcript lines, and
+`shell_input_line_paste()` to insert into the input line. New clipboard verbs
+should dispatch from `components/command/` and call the `shell.h` API, keeping
+file work in the command layer — never add clipboard state to command.c.
+
+### Long command lines, completion, and history
+
+Command lines are up to `P4_CONFIG_COMMAND_BYTES` (4096); any new function on
+the worker/UART/LVGL path must heap-allocate command-sized locals (never a
+`SHELL_COMMAND_BYTES` array on the stack). Tab completion routes through
+`shell_command_ops_t.complete_word` — the provider stays in command.c and
+touches the SD via storage. History is heap-backed with
+`shell_history_get_count/get/clear`; the `history /save`/`/load` verbs write
+`P4_CONFIG_HISTORY_PROFILE` through the guarded storage session (atomic temp +
+rename).
 
 ### Colouring command output
 

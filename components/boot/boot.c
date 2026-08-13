@@ -55,6 +55,7 @@
     ";   ROTATE=0|90|180|270       Set display rotation\n" \
     ";   BRIGHTNESS=0-100          Set backlight brightness\n" \
     ";   DISPLAY_POWER=ON|OFF|SLEEP  Set display power state\n" \
+    ";   DISPLAY_TIMEOUT=<secs|OFF>  Auto display-off after N idle seconds\n" \
     ";   VOLUME=0-100              Set speaker volume\n" \
     ";   RGB=<r>,<g>,<b>|#RRGGBB|<effect>[,speed]|OFF|AUTO,<ON|OFF>  Set the WS2812 status LED\n"
 
@@ -357,6 +358,35 @@ static bool boot_handle_display_power(const char *value)
     return true;
 }
 
+/**
+ * `DISPLAY_TIMEOUT=<seconds>` — turn the display off (backlight) after this
+ * many seconds without user input; `0`/`OFF` disables. Applied through the
+ * `power idle` command so validation is shared.
+ */
+static bool boot_handle_display_timeout(const char *value)
+{
+    char cmd[BOOT_CMD_LEN];
+    char *end;
+    long parsed;
+
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("DISPLAY_TIMEOUT");
+        return false;
+    }
+    if (shell_text_equals_ignore_case(value, "OFF")) {
+        parsed = 0;
+    } else {
+        parsed = strtol(value, &end, 10);
+        if (*end != '\0' || parsed < 0) {
+            boot_warn_unknown("DISPLAY_TIMEOUT");
+            return false;
+        }
+    }
+    snprintf(cmd, sizeof(cmd), "power idle %ld", parsed);
+    boot_exec(cmd);
+    return true;
+}
+
 static bool boot_handle_volume(const char *value)
 {
     char cmd[BOOT_CMD_LEN];
@@ -636,6 +666,8 @@ void boot_run_startup(void)
                     (void)boot_handle_rotate(value);
                 } else if (boot_starts_with_ci(keyword, "BRIGHTNESS")) {
                     (void)boot_handle_brightness(value);
+                } else if (boot_starts_with_ci(keyword, "DISPLAY_TIMEOUT")) {
+                    (void)boot_handle_display_timeout(value);
                 } else if (boot_starts_with_ci(keyword, "DISPLAY_POWER") ||
                            (equals != NULL && strncasecmp(keyword, "DISPLAY", 7) == 0)) {
                     (void)boot_handle_display_power(value);

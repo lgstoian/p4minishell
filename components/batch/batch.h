@@ -212,6 +212,16 @@ void shell_command_path(int argc, char **argv);
 /** `echo` — print text, or toggle batch echo with `on`/`off`. */
 void shell_command_echo(int argc, char **argv);
 
+/**
+ * Echo the remainder of a raw command line after the leading `echo` word.
+ * Used by the dispatcher when an `echo` line has more arguments than the argv
+ * capacity (so a full 4096-byte echo line is never truncated). Handles the
+ * bare `echo` state report and batch `echo on`/`echo off` like
+ * shell_command_echo(), then prints the remainder verbatim.
+ * @param line  The raw line, starting with `echo` (mutated by trimming).
+ */
+void shell_command_echo_text(char *line);
+
 /** `call` — run another batch file with its own argument frame. */
 void shell_command_call(int argc, char **argv);
 

@@ -44,8 +44,10 @@
 #define SHELL_PROMPT                    P4_CONFIG_SHELL_PROMPT
 #define SHELL_TRANSCRIPT_BYTES          P4_CONFIG_TRANSCRIPT_BYTES
 #define SHELL_ASYNC_TRANSCRIPT_BYTES    P4_CONFIG_ASYNC_TRANSCRIPT_BYTES
+#define SHELL_CLIPBOARD_BYTES           P4_CONFIG_CLIPBOARD_BYTES
 #define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
 #define SHELL_COMMAND_HISTORY_DEPTH     P4_CONFIG_COMMAND_HISTORY_DEPTH
+#define SHELL_HISTORY_TOTAL_BYTES       P4_CONFIG_HISTORY_TOTAL_BYTES
 #define SHELL_HEADER_REFRESH_PERIOD_MS  P4_CONFIG_HEADER_REFRESH_PERIOD_MS
 #define SHELL_DEBUG_LOG_DEPTH           P4_CONFIG_DEBUG_LOG_DEPTH
 #define SHELL_DEBUG_ENTRY_BYTES         P4_CONFIG_DEBUG_ENTRY_BYTES
@@ -78,14 +80,36 @@ static char s_transcript[SHELL_TRANSCRIPT_BYTES];
  * spans so on-screen colours match the UART console, while history/
  * redirection keep using the plain form. */
 static char s_transcript_ansi[SHELL_TRANSCRIPT_BYTES];
+
+/* RAM clipboard backing the `clip` / `paste` commands. */
+static char s_clipboard[SHELL_CLIPBOARD_BYTES];
+static bool s_clipboard_is_file;
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static size_t s_async_transcript_len;
 static bool s_async_transcript_flush_queued;
 static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
 
-/* Command history */
-static char s_command_history[SHELL_COMMAND_HISTORY_DEPTH][SHELL_COMMAND_BYTES];
+/* Output-redirection capture. When a command is being redirected, its output
+ * is mirrored into this dedicated heap buffer (bounded by
+ * P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES) so the redirected file holds the
+ * command's FULL output even when the 16 KB transcript truncates. Owned by
+ * the shell; the command module opens/closes the window around dispatch. */
+static char *s_redirect_capture = NULL;
+static size_t s_redirect_capture_len = 0;
+static size_t s_redirect_capture_cap = 0;
+static bool s_redirect_capturing = false;
+static bool s_redirect_capture_truncated = false;
+
+/* Used by shell_transcript_append_to_buffer() before its definition below. */
+static void shell_redirect_capture_add(const char *text, size_t len);
+
+/* Command history, heap-backed so very long (up to P4_CONFIG_COMMAND_BYTES)
+ * commands do not reserve a fixed grid of RAM. Each entry is a strdup'd line;
+ * the pointer table and total byte usage are bounded by
+ * SHELL_COMMAND_HISTORY_DEPTH and SHELL_HISTORY_TOTAL_BYTES. */
+static char **s_command_history;
 static size_t s_command_history_count;
+static size_t s_command_history_bytes;
 static int s_command_history_cursor = -1;
 static char s_history_draft[SHELL_COMMAND_BYTES];
 
@@ -253,6 +277,11 @@ static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
     memcpy(plain + plain_len, plain_text, plain_text_len);
     plain[plain_len + plain_text_len] = '\0';
 
+    /* Mirror the newly-appended plain text into an active output-redirection
+     * capture, so a redirected file holds the command's full output even when
+     * the transcript itself truncates. */
+    shell_redirect_capture_add(plain_text, plain_text_len);
+
     if (ansi_len + ansi_text_len + 1 >= ansi_size) {
         ansi_text_len = ansi_size - ansi_len - 1;
     }
@@ -339,18 +368,28 @@ void shell_transcript_append_text(const char *text)
 
 void shell_transcript_appendf(const char *format, ...)
 {
-    char buffer[512];
+    /* Command-sized because callers (notably `echo`) format an entire
+     * interactive command line, which can be up to P4_CONFIG_COMMAND_BYTES.
+     * Heap-allocated: this runs on the command worker task, and a fixed
+     * 512-byte stack buffer silently truncates long output. */
+    char *buffer = malloc(P4_CONFIG_COMMAND_BYTES);
     va_list args;
 
     if (format == NULL) {
+        free(buffer);
+        return;
+    }
+
+    if (buffer == NULL) {
         return;
     }
 
     va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    vsnprintf(buffer, P4_CONFIG_COMMAND_BYTES, format, args);
     va_end(args);
 
     shell_transcript_append_text(buffer);
+    free(buffer);
 }
 
 void shell_transcript_append_ansi(const char *text)
@@ -733,6 +772,97 @@ const char *shell_transcript_get_text_from(size_t offset)
 }
 
 /* ========================================================================
+ * OUTPUT-REDIRECTION CAPTURE
+ * ======================================================================== */
+
+/** Append @p len bytes of @p text to the active redirection capture. */
+static void shell_redirect_capture_add(const char *text, size_t len)
+{
+    size_t new_len;
+
+    if (!s_redirect_capturing || text == NULL || len == 0) {
+        return;
+    }
+
+    /* Bound the capture: drop anything past the cap and remember it so the
+     * caller can warn. */
+    if (s_redirect_capture_len + len > P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES) {
+        len = P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES - s_redirect_capture_len;
+        s_redirect_capture_truncated = true;
+        if (len == 0) {
+            return;
+        }
+    }
+
+    new_len = s_redirect_capture_len + len;
+    if (new_len + 1 > s_redirect_capture_cap) {
+        size_t new_cap = s_redirect_capture_cap == 0 ? 1024 : s_redirect_capture_cap;
+        char *nb;
+
+        while (new_cap < new_len + 1) {
+            new_cap *= 2;
+        }
+        nb = realloc(s_redirect_capture, new_cap);
+        if (nb == NULL) {
+            /* Out of memory: stop capturing so the command keeps working. */
+            s_redirect_capturing = false;
+            return;
+        }
+        s_redirect_capture = nb;
+        s_redirect_capture_cap = new_cap;
+    }
+
+    memcpy(s_redirect_capture + s_redirect_capture_len, text, len);
+    s_redirect_capture_len = new_len;
+    s_redirect_capture[s_redirect_capture_len] = '\0';
+}
+
+/** Open the redirection-capture window (call before dispatching a redirected
+ *  command). Any previous capture is released. */
+void shell_redirect_capture_begin(void)
+{
+    free(s_redirect_capture);
+    s_redirect_capture = NULL;
+    s_redirect_capture_len = 0;
+    s_redirect_capture_cap = 0;
+    s_redirect_capture_truncated = false;
+    s_redirect_capturing = true;
+}
+
+/** Close the redirection-capture window. */
+void shell_redirect_capture_end(void)
+{
+    s_redirect_capturing = false;
+}
+
+/** Return the captured output (NUL-terminated) and its length. The buffer
+ *  stays valid until the next shell_redirect_capture_begin()/reset(). */
+const char *shell_redirect_capture_get(size_t *out_len)
+{
+    if (out_len != NULL) {
+        *out_len = s_redirect_capture_len;
+    }
+    return s_redirect_capture != NULL ? s_redirect_capture : "";
+}
+
+/** Release the capture buffer (call after the redirected file is written). */
+void shell_redirect_capture_reset(void)
+{
+    s_redirect_capturing = false;
+    free(s_redirect_capture);
+    s_redirect_capture = NULL;
+    s_redirect_capture_len = 0;
+    s_redirect_capture_cap = 0;
+    s_redirect_capture_truncated = false;
+}
+
+/** Report whether the capture hit its size cap (output dropped). */
+bool shell_redirect_capture_was_truncated(void)
+{
+    return s_redirect_capture_truncated;
+}
+
+/* ========================================================================
  * COMMAND HISTORY
  * ======================================================================== */
 
@@ -742,14 +872,20 @@ const char *shell_transcript_get_text_from(size_t offset)
  */
 static bool shell_command_is_sensitive(const char *command)
 {
-    char buffer[SHELL_COMMAND_BYTES];
+    char *buffer = malloc(SHELL_COMMAND_BYTES);
     char *argv[4];
     int argc;
+    bool sensitive = false;
 
-    snprintf(buffer, sizeof(buffer), "%s", command != NULL ? command : "");
+    if (buffer == NULL) {
+        return false;
+    }
+
+    snprintf(buffer, SHELL_COMMAND_BYTES, "%s", command != NULL ? command : "");
     argc = shell_split_args(buffer, argv, 4);
-
-    return argc >= 4 && strcmp(argv[0], "wifi") == 0 && strcmp(argv[1], "connect") == 0;
+    sensitive = argc >= 4 && strcmp(argv[0], "wifi") == 0 && strcmp(argv[1], "connect") == 0;
+    free(buffer);
+    return sensitive;
 }
 
 bool shell_command_should_store_history(const char *command)
@@ -764,30 +900,53 @@ bool shell_command_should_store_history(const char *command)
 
 void shell_format_command_for_transcript(const char *command, char *output, size_t output_size)
 {
-    char buffer[SHELL_COMMAND_BYTES];
+    char *buffer = malloc(SHELL_COMMAND_BYTES);
     char *argv[4];
     int argc;
 
     if (output == NULL || output_size == 0) {
+        free(buffer);
+        return;
+    }
+    if (buffer == NULL) {
+        snprintf(output, output_size, "%s", command != NULL ? command : "");
         return;
     }
 
-    snprintf(buffer, sizeof(buffer), "%s", command != NULL ? command : "");
+    snprintf(buffer, SHELL_COMMAND_BYTES, "%s", command != NULL ? command : "");
     argc = shell_split_args(buffer, argv, 4);
 
     if (argc >= 4 && strcmp(argv[0], "wifi") == 0 && strcmp(argv[1], "connect") == 0) {
         snprintf(output, output_size, "wifi connect %s ********", argv[2]);
+        free(buffer);
         return;
     }
 
     snprintf(output, output_size, "%s", command != NULL ? command : "");
+    free(buffer);
+}
+
+/** Drop the oldest history entry and slide the rest down (pointer array). */
+static void shell_history_drop_oldest(void)
+{
+    size_t index;
+
+    if (s_command_history_count == 0) {
+        return;
+    }
+    s_command_history_bytes -= strlen(s_command_history[0]) + 1;
+    free(s_command_history[0]);
+    for (index = 1; index < s_command_history_count; index++) {
+        s_command_history[index - 1] = s_command_history[index];
+    }
+    s_command_history_count--;
 }
 
 void shell_store_command_history(const char *command)
 {
-    char masked[SHELL_COMMAND_BYTES];
+    char *masked = NULL;
     const char *entry;
-    size_t index;
+    size_t entry_bytes;
 
     if (command == NULL || command[0] == '\0') {
         return;
@@ -797,42 +956,62 @@ void shell_store_command_history(const char *command)
      * via shell_command_should_store_history(), but mask here as well so no
      * code path can ever persist a Wi-Fi password in the recall buffer. */
     if (shell_command_is_sensitive(command)) {
-        shell_format_command_for_transcript(command, masked, sizeof(masked));
+        masked = malloc(SHELL_COMMAND_BYTES);
+        if (masked == NULL) {
+            return;
+        }
+        shell_format_command_for_transcript(command, masked, SHELL_COMMAND_BYTES);
         entry = masked;
     } else {
         entry = command;
     }
 
-    /* Skip consecutive duplicates so repeated Enter presses do not flood
-     * the 10-entry recall buffer. */
+    /* Skip consecutive duplicates so repeated Enter presses do not flood the
+     * recall buffer. */
     if (s_command_history_count > 0 &&
         strcmp(s_command_history[s_command_history_count - 1], entry) == 0) {
+        free(masked);
         return;
     }
 
-    /* Buffer full: drop the oldest entry and slide the rest down. memmove is
-     * required here because source and destination are slots of the same
-     * array and therefore overlap. */
-    if (s_command_history_count == SHELL_COMMAND_HISTORY_DEPTH) {
-        for (index = 1; index < SHELL_COMMAND_HISTORY_DEPTH; index++) {
-            memmove(s_command_history[index - 1], s_command_history[index], SHELL_COMMAND_BYTES);
+    /* Make sure the pointer table exists. */
+    if (s_command_history == NULL) {
+        s_command_history = calloc(SHELL_COMMAND_HISTORY_DEPTH, sizeof(char *));
+        if (s_command_history == NULL) {
+            free(masked);
+            return;
         }
-        s_command_history_count--;
     }
 
-    snprintf(s_command_history[s_command_history_count], SHELL_COMMAND_BYTES, "%s", entry);
-    s_command_history_count++;
+    /* Make room for the new entry: depth cap first, then the byte cap. */
+    while (s_command_history_count >= SHELL_COMMAND_HISTORY_DEPTH) {
+        shell_history_drop_oldest();
+    }
+    entry_bytes = strlen(entry) + 1;
+    while (s_command_history_count > 0 &&
+           s_command_history_bytes + entry_bytes > SHELL_HISTORY_TOTAL_BYTES) {
+        shell_history_drop_oldest();
+    }
+
+    s_command_history[s_command_history_count] = strdup(entry);
+    if (s_command_history[s_command_history_count] != NULL) {
+        s_command_history_bytes += entry_bytes;
+        s_command_history_count++;
+    }
+
+    free(masked);
 }
 
 void shell_recall_history(int direction)
 {
-    char current_input[SHELL_COMMAND_BYTES];
+    char *current_input = malloc(SHELL_COMMAND_BYTES);
 
-    if (s_command_history_count == 0) {
+    if (s_command_history_count == 0 || current_input == NULL) {
+        free(current_input);
         return;
     }
 
-    shell_extract_input_text(current_input, sizeof(current_input));
+    shell_extract_input_text(current_input, SHELL_COMMAND_BYTES);
 
     if (s_command_history_cursor < 0) {
         /* Entering recall: remember what the user was typing. */
@@ -840,6 +1019,7 @@ void shell_recall_history(int direction)
         if (direction < 0) {
             s_command_history_cursor = (int)s_command_history_count - 1;
         } else {
+            free(current_input);
             return;
         }
     } else {
@@ -849,11 +1029,13 @@ void shell_recall_history(int direction)
             /* Walked off either end: restore the saved draft. */
             s_command_history_cursor = -1;
             shell_input_line_set_text(s_history_draft);
+            free(current_input);
             return;
         }
     }
 
     shell_input_line_set_text(s_command_history[s_command_history_cursor]);
+    free(current_input);
 }
 
 const char *shell_get_history_draft(void)
@@ -863,6 +1045,34 @@ const char *shell_get_history_draft(void)
 
 void shell_reset_history_cursor(void)
 {
+    s_command_history_cursor = -1;
+    s_history_draft[0] = '\0';
+}
+
+size_t shell_history_get_count(void)
+{
+    return s_command_history_count;
+}
+
+const char *shell_history_get(size_t index)
+{
+    if (index >= s_command_history_count || s_command_history == NULL) {
+        return NULL;
+    }
+    return s_command_history[index];
+}
+
+void shell_history_clear(void)
+{
+    size_t index;
+
+    for (index = 0; index < s_command_history_count; index++) {
+        free(s_command_history[index]);
+    }
+    free(s_command_history);
+    s_command_history = NULL;
+    s_command_history_count = 0;
+    s_command_history_bytes = 0;
     s_command_history_cursor = -1;
     s_history_draft[0] = '\0';
 }
@@ -912,11 +1122,15 @@ static void shell_input_line_render_prompt(char *output, size_t output_size)
 
 void shell_input_line_set_text(const char *command_text)
 {
-    char buffer[SHELL_PROMPT_RENDER_BYTES + SHELL_COMMAND_BYTES];
+    char *buffer = malloc(SHELL_PROMPT_RENDER_BYTES + SHELL_COMMAND_BYTES);
     const char *safe_command = command_text != NULL ? command_text : "";
     lv_obj_t *input_line = windows_get_input_line();
 
     if (input_line == NULL) {
+        free(buffer);
+        return;
+    }
+    if (buffer == NULL) {
         return;
     }
 
@@ -928,10 +1142,12 @@ void shell_input_line_set_text(const char *command_text)
     /* Snapshot the prefix actually painted so extraction stays exact. */
     shell_input_line_render_prompt(s_input_line_prompt, sizeof(s_input_line_prompt));
 
-    snprintf(buffer, sizeof(buffer), "%s%s", s_input_line_prompt, safe_command);
+    snprintf(buffer, SHELL_PROMPT_RENDER_BYTES + SHELL_COMMAND_BYTES,
+             "%s%s", s_input_line_prompt, safe_command);
     lv_textarea_set_text(input_line, buffer);
     lv_textarea_set_cursor_pos(input_line, LV_TEXTAREA_CURSOR_LAST);
     lvgl_port_unlock();
+    free(buffer);
 }
 
 void shell_input_line_reset(void)
@@ -973,18 +1189,23 @@ void shell_extract_input_text(char *output, size_t output_size)
 
 void shell_input_line_repair_prompt(const char *text)
 {
-    char repaired[SHELL_COMMAND_BYTES];
+    char *repaired = malloc(SHELL_COMMAND_BYTES);
     const char *user_text;
     size_t prompt_len;
     size_t text_len;
     size_t common = 0;
 
     if (text == NULL) {
+        free(repaired);
+        return;
+    }
+    if (repaired == NULL) {
         return;
     }
 
     /* Nothing to repair while the prompt prefix is intact. */
     if (strncmp(text, s_input_line_prompt, strlen(s_input_line_prompt)) == 0) {
+        free(repaired);
         return;
     }
 
@@ -1005,9 +1226,93 @@ void shell_input_line_repair_prompt(const char *text)
         user_text = text;
     }
 
-    snprintf(repaired, sizeof(repaired), "%s", user_text);
+    snprintf(repaired, SHELL_COMMAND_BYTES, "%s", user_text);
     shell_trim(repaired);
     shell_input_line_set_text(repaired);
+    free(repaired);
+}
+
+void shell_input_line_paste(const char *text)
+{
+    lv_obj_t *input_line = windows_get_input_line();
+
+    if (input_line == NULL || text == NULL) {
+        return;
+    }
+
+    /* The input line is LVGL-backed state; serialize with the render cycle
+     * the same way the transcript appends and input-line setters do. The
+     * mutex is recursive, so the LVGL event path nests without deadlock.
+     * add_text inserts at the cursor (DOS-style paste). */
+    lvgl_port_lock(0);
+    lv_textarea_add_text(input_line, text);
+    lvgl_port_unlock();
+}
+
+/* ========================================================================
+ * RAM CLIPBOARD (clip / paste)
+ * ======================================================================== */
+
+void shell_clipboard_set(const char *text)
+{
+    if (text == NULL) {
+        s_clipboard[0] = '\0';
+    } else {
+        snprintf(s_clipboard, sizeof(s_clipboard), "%s", text);
+    }
+    s_clipboard_is_file = false;
+}
+
+void shell_clipboard_set_file(const char *path)
+{
+    if (path != NULL) {
+        snprintf(s_clipboard, sizeof(s_clipboard), "%s", path);
+    }
+    s_clipboard_is_file = true;
+}
+
+const char *shell_clipboard_get(void)
+{
+    return s_clipboard;
+}
+
+bool shell_clipboard_is_file(void)
+{
+    return s_clipboard_is_file;
+}
+
+bool shell_clipboard_copy_transcript(int n_lines)
+{
+    const char *text;
+    size_t length;
+    size_t pos;
+    int lines = 0;
+
+    if (n_lines < 1) {
+        n_lines = 1;
+    }
+
+    length = shell_transcript_get_length();
+    text = shell_transcript_get_text_from(0);
+    if (text == NULL) {
+        return false;
+    }
+
+    /* Walk backwards counting newlines to find the start of the last
+     * n_lines; cap n_lines by the actual line count. */
+    pos = length;
+    while (pos > 0 && lines < n_lines) {
+        pos--;
+        if (text[pos] == '\n') {
+            lines++;
+        }
+    }
+    if (pos > 0 && text[pos] == '\n') {
+        pos++;   /* start just after the newline of the previous line */
+    }
+
+    shell_clipboard_set(text + pos);
+    return s_clipboard[0] != '\0';
 }
 
 /* ========================================================================
@@ -1495,11 +1800,20 @@ const char *shell_prompt_render_plain(void)
  */
 static void shell_uart_console_task(void *arg)
 {
-    char line[SHELL_COMMAND_BYTES];
+    /* The line buffer is command-sized (up to P4_CONFIG_COMMAND_BYTES) and
+     * would dominate the 12 KB console task stack, so it lives on the heap
+     * for the life of the task. */
+    char *line = malloc(SHELL_COMMAND_BYTES);
     size_t length = 0;
     bool prompt_visible = false;
 
     (void)arg;
+
+    if (line == NULL) {
+        shell_record_errorf("uart", ESP_ERR_NO_MEM, "Failed to allocate the UART console line buffer");
+        vTaskDelete(NULL);
+        return;
+    }
 
     shell_uart_console_write_text("\nUART console ready. Type help for commands.\n");
 
@@ -1512,8 +1826,10 @@ static void shell_uart_console_task(void *arg)
             prompt_visible = true;
         }
 
-        /* Read into the space after any partial line already buffered. */
-        if (fgets(line + length, sizeof(line) - length, stdin) == NULL) {
+        /* Read into the space after any partial line already buffered. The
+         * line buffer is heap-allocated, so the size must be the allocation
+         * size (not sizeof(line), which would be the pointer size). */
+        if (fgets(line + length, SHELL_COMMAND_BYTES - length, stdin) == NULL) {
             vTaskDelay(pdMS_TO_TICKS(20));
             clearerr(stdin);
             continue;
@@ -1524,16 +1840,29 @@ static void shell_uart_console_task(void *arg)
 
         /* A pending keypress wait swallows input before any command lookup,
          * so answering `pause` or `choice` never dispatches a command. The
-         * key is the first character of whatever arrived; a bare Enter
-         * reports as '\r'. This must not wait for a line terminator - a key
-         * wait is answered as soon as the key is readable. */
+         * whole freshly-read chunk is forwarded into the key queue (not just
+         * its first character), so a confirmation word such as "YES" or a
+         * `set /p` value can be typed on one serial line. The queue is reset
+         * by shell_key_wait_begin()/shell_key_wait_end(), so stray characters
+         * from a one-key wait (pause/choice/more) never leak into the next
+         * prompt. This must not wait for a line terminator - a key wait is
+         * answered as soon as a key is readable. */
         if (s_key_wait_active) {
-            char key = line[length - got];
+            size_t key_index;
+            size_t chunk_start = length - got;
+            size_t forwarded = 0;
 
-            if (key == '\n' || key == '\0') {
-                key = '\r';
+            for (key_index = chunk_start;
+                 key_index < length && forwarded < (size_t)P4_CONFIG_KEY_QUEUE_DEPTH;
+                 key_index++) {
+                char key = line[key_index];
+
+                if (key == '\n' || key == '\0') {
+                    key = '\r';
+                }
+                shell_key_wait_submit(key);
+                forwarded++;
             }
-            shell_key_wait_submit(key);
             prompt_visible = false;
             length = 0;
             continue;
@@ -1548,7 +1877,7 @@ static void shell_uart_console_task(void *arg)
             if (length > 0 && line[length - 1] == '\r') {
                 /* CR-terminated line (no LF); treat as complete. */
                 newline = line + length;
-            } else if (length >= sizeof(line) - 1) {
+            } else if (length >= SHELL_COMMAND_BYTES - 1) {
                 /* No terminator and the buffer is full: flush what we have. */
                 newline = line + length;
             } else {
@@ -1565,9 +1894,22 @@ static void shell_uart_console_task(void *arg)
             }
 
             if (line_len > 0) {
-                shell_uart_console_submit_command(shell_trim(line));
-            }
-        }
+                const char *trimmed = shell_trim(line);
+
+                /* While the modal editor is open, serial lines drive the
+                 * editor instead of being dispatched as shell commands. */
+                if (s_command_ops.editor_is_active != NULL &&
+                    s_command_ops.editor_is_active() &&
+                    s_command_ops.editor_handle_serial_line != NULL) {
+                    if (s_command_ops.editor_handle_serial_line(trimmed)) {
+                        length = 0;
+                        prompt_visible = false;
+                        continue;
+                    }
+                }
+
+                shell_uart_console_submit_command(trimmed);
+            }        }
 
         length = 0;
         prompt_visible = false;
@@ -1672,15 +2014,25 @@ void shell_uart_console_print_prompt(void)
 
 void shell_uart_console_submit_command(const char *command)
 {
-    char command_copy[SHELL_COMMAND_BYTES];
-    char transcript_command[SHELL_COMMAND_BYTES];
+    /* Both copies are command-sized and would dominate the UART console
+     * task's 12 KB stack, so they are heap-allocated here. */
+    char *command_copy = malloc(SHELL_COMMAND_BYTES);
+    char *transcript_command = malloc(SHELL_COMMAND_BYTES);
 
-    if (command == NULL || command[0] == '\0') {
+    if (command == NULL || command[0] == '\0' || command_copy == NULL || transcript_command == NULL) {
+        free(command_copy);
+        free(transcript_command);
         return;
     }
 
-    snprintf(command_copy, sizeof(command_copy), "%s", command);
-    shell_format_command_for_transcript(command_copy, transcript_command, sizeof(transcript_command));
+    /* A serial command is user activity: reset the power idle clock and wake
+     * the display if the idle timer had switched it off. */
+    if (s_command_ops.pm_notify_activity != NULL) {
+        s_command_ops.pm_notify_activity();
+    }
+
+    snprintf(command_copy, SHELL_COMMAND_BYTES, "%s", command);
+    shell_format_command_for_transcript(command_copy, transcript_command, SHELL_COMMAND_BYTES);
 
     /* Serialize UART submissions so two console lines can never interleave
      * their transcript writes. */
@@ -1696,6 +2048,8 @@ void shell_uart_console_submit_command(const char *command)
         if (s_shell_command_lock != NULL) {
             xSemaphoreGive(s_shell_command_lock);
         }
+        free(command_copy);
+        free(transcript_command);
         return;
     }
 
@@ -1705,27 +2059,30 @@ void shell_uart_console_submit_command(const char *command)
     }
     shell_reset_history_cursor();
 
-    /* Run the command on the worker task when possible. Executing it here
-     * synchronously would block this (UART console) task inside the command,
-     * so a blocking key wait - pause, choice, more, the format/disk clean
-     * confirmation, set /p - could never be answered from the serial input.
-     * The worker path frees this task to read stdin and route keystrokes into
-     * the key queue while the command runs. Falls back to the synchronous
-     * path when the hook is unavailable. */
+    /* Jump to the output of the submitted command even when the user was
+     * reading earlier history. */
+    shell_force_transcript_scroll_to_end();
+
+    /* Release the LVGL lock BEFORE dispatching to the worker. A command such
+     * as `edit` opens the modal editor with an lv_async_call, which the LVGL
+     * task services by taking the same lock; if we still held it here, the
+     * LVGL task would block on it while this (console) task waits for the
+     * worker, deadlocking the LVGL task into a watchdog reboot. */
+    lvgl_port_unlock();
+
+    /* Run the command on the worker task when possible. */
     if (s_command_ops.execute_command_async != NULL) {
         s_command_ops.execute_command_async(command_copy);
     } else if (s_command_ops.execute_command != NULL) {
         s_command_ops.execute_command(command_copy);
     }
 
-    /* Jump to the output of the submitted command even when the user was
-     * reading earlier history. */
-    shell_force_transcript_scroll_to_end();
-    lvgl_port_unlock();
-
     if (s_shell_command_lock != NULL) {
         xSemaphoreGive(s_shell_command_lock);
     }
+
+    free(command_copy);
+    free(transcript_command);
 }
 
 /* ========================================================================
@@ -1797,12 +2154,125 @@ typedef struct {
     uint8_t modifiers;
 } usb_key_inject_ctx_t;
 
+/* Tab-completion cycle state: remembers the word being completed and how many
+ * times Tab was pressed for it, so repeated Tab cycles the matches. */
+static char s_tab_last_word[128];
+static int s_tab_match_index;
+
+/**
+ * Tab completion: complete the last whitespace-delimited word of the input
+ * line through the command module's `complete_word` provider (command names,
+ * aliases, and SD file/dir paths). A unique match fills it in; repeated Tab
+ * cycles through the matches, and the first Tab with several matches lists
+ * them. Runs on the LVGL task, so the command-sized buffers are heap-allocated.
+ */
+static void shell_tab_complete(void)
+{
+    char *input = malloc(SHELL_COMMAND_BYTES);
+    char *completion = malloc(384);
+    char *rebuilt = malloc(SHELL_COMMAND_BYTES);
+    const char *word;
+    size_t prefix_len = 0;
+    int total;
+
+    if (input == NULL || completion == NULL || rebuilt == NULL) {
+        free(input);
+        free(completion);
+        free(rebuilt);
+        return;
+    }
+
+    if (s_command_ops.complete_word == NULL) {
+        free(input);
+        free(completion);
+        free(rebuilt);
+        return;
+    }
+
+    shell_extract_input_text(input, SHELL_COMMAND_BYTES);
+    if (input[0] == '\0') {
+        free(input);
+        free(completion);
+        free(rebuilt);
+        return;
+    }
+
+    /* The word is the last whitespace-delimited token; it is the first token
+     * when there is no preceding text. */
+    {
+        const char *last_space = strrchr(input, ' ');
+
+        word = last_space != NULL ? last_space + 1 : input;
+        prefix_len = (size_t)(word - input);
+    }
+
+    /* Reset the cycle when the word changes. */
+    if (strcmp(word, s_tab_last_word) != 0) {
+        snprintf(s_tab_last_word, sizeof(s_tab_last_word), "%s", word);
+        s_tab_match_index = 0;
+    }
+
+    total = s_command_ops.complete_word(word, prefix_len == 0, s_tab_match_index,
+                                        completion, 384);
+    if (total <= 0) {
+        free(input);
+        free(completion);
+        free(rebuilt);
+        return;
+    }
+
+    /* First Tab with several matches: list them, then fill the first. */
+    if (s_tab_match_index == 0 && total > 1) {
+        int index;
+
+        shell_transcript_append_text("  ");
+        for (index = 0; index < total && index < P4_CONFIG_COMPLETION_MAX_MATCHES; index++) {
+            char match[384];
+
+            if (s_command_ops.complete_word(word, prefix_len == 0, index, match, sizeof(match)) <= 0) {
+                break;
+            }
+            shell_transcript_appendf_ansi(SH_MUTE "%s  " SH_RST, match);
+        }
+        shell_transcript_append_text("\n");
+    }
+
+    /* Fill prefix + completion. */
+    if (prefix_len > 0) {
+        snprintf(rebuilt, SHELL_COMMAND_BYTES, "%.*s%s", (int)prefix_len, input, completion);
+    } else {
+        snprintf(rebuilt, SHELL_COMMAND_BYTES, "%s", completion);
+    }
+    shell_input_line_set_text(rebuilt);
+
+    s_tab_match_index = (s_tab_match_index + 1) % total;
+
+    free(input);
+    free(completion);
+    free(rebuilt);
+}
+
 static void shell_usb_keyboard_inject_cb(void *user_data)
 {
     usb_key_inject_ctx_t *ctx = (usb_key_inject_ctx_t *)user_data;
     lv_obj_t *input_line;
-
     if (ctx == NULL) {
+        return;
+    }
+
+    /* While the modal editor is open, every USB key goes to the editor. */
+    if (s_command_ops.editor_is_active != NULL && s_command_ops.editor_is_active()) {
+        char ch = '\0';
+        if (s_command_ops.usb_key_to_ascii != NULL &&
+            s_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &ch)) {
+            /* fall through with the ascii char */
+        } else {
+            ch = '\0';
+        }
+        if (s_command_ops.editor_handle_usb_key != NULL) {
+            s_command_ops.editor_handle_usb_key(ctx->key_code, ctx->modifiers, ch);
+        }
+        free(ctx);
         return;
     }
 
@@ -1827,8 +2297,8 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
                 /* ESC: clear the input line */
                 lv_textarea_set_text(input_line, "");
             } else if (ch == '\t') {
-                /* Tab: insert spaces */
-                lv_textarea_add_text(input_line, "    ");
+                /* Tab: complete the current word (commands, aliases, paths). */
+                shell_tab_complete();
             } else if (ch >= 0x20 && ch <= 0x7E) {
                 /* Printable ASCII character */
                 lv_textarea_add_char(input_line, (uint8_t)ch);
@@ -1842,14 +2312,14 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
             case 0x50: /* Left arrow: move cursor left */
                 lv_textarea_cursor_left(input_line);
                 break;
-            case 0x51: /* Down arrow: recall older history */
-                shell_recall_history(-1);
-                break;
-            case 0x52: /* Up arrow: recall newer history */
+            case 0x51: /* Down arrow: recall newer history */
                 shell_recall_history(1);
                 break;
-            case 0x4C: /* Delete: remove char at cursor */
-                lv_textarea_delete_char(input_line);
+            case 0x52: /* Up arrow: recall older history */
+                shell_recall_history(-1);
+                break;
+            case 0x4C: /* Delete: remove char at cursor (forward) */
+                lv_textarea_delete_char_forward(input_line);
                 break;
             case 0x4B: /* PageUp: scroll the transcript up one page */
                 {
@@ -2276,34 +2746,152 @@ static int shell_task_cpu_percent(UBaseType_t task_number, uint32_t runtime,
 }
 
 /**
+ * Compare two task rows for `/O:` sorting. Numeric keys compare numerically,
+ * state compares the three-letter label; the name is the deterministic
+ * tie-breaker for every key. Exposed (non-static) for the unit tests.
+ */
+int shell_task_row_compare(const shell_task_row_t *a, const shell_task_row_t *b,
+                           shell_task_sort_key_t key, bool reverse)
+{
+    int result = 0;
+
+    if (a == NULL || b == NULL) {
+        return 0;
+    }
+
+    switch (key) {
+    case SHELL_TASK_SORT_CPU:
+        if (a->cpu_percent < b->cpu_percent) result = -1;
+        else if (a->cpu_percent > b->cpu_percent) result = 1;
+        break;
+    case SHELL_TASK_SORT_STACK:
+        if (a->highwater_bytes < b->highwater_bytes) result = -1;
+        else if (a->highwater_bytes > b->highwater_bytes) result = 1;
+        break;
+    case SHELL_TASK_SORT_PRIORITY:
+        if (a->priority < b->priority) result = -1;
+        else if (a->priority > b->priority) result = 1;
+        break;
+    case SHELL_TASK_SORT_STATE:
+        result = strcmp(a->state, b->state);
+        break;
+    case SHELL_TASK_SORT_NAME:
+    default:
+        result = 0;
+        break;
+    }
+
+    /* Name is the tie-breaker so the order is deterministic. */
+    if (result == 0) {
+        result = strcmp(a->name, b->name);
+    }
+
+    return reverse ? -result : result;
+}
+
+/* qsort() takes no user pointer; the active sort settings live here on the
+ * single command worker task, exactly like the `dir /O:` comparator. */
+static shell_task_sort_key_t s_task_sort_key;
+static bool s_task_sort_reverse;
+
+static int shell_task_row_qsort_cmp(const void *left, const void *right)
+{
+    return shell_task_row_compare((const shell_task_row_t *)left,
+                                  (const shell_task_row_t *)right,
+                                  s_task_sort_key, s_task_sort_reverse);
+}
+
+/**
+ * Parse a `/O:` value the same way `dir` does: each sort letter overwrites the
+ * active key (last wins), a `-` prefix selects descending order. Returns false
+ * on an unknown letter.
+ */
+static bool shell_task_parse_sort(const char *value, shell_task_sort_key_t *key,
+                                  bool *reverse)
+{
+    while (*value != '\0') {
+        if (*value == '-') {
+            *reverse = true;
+            value++;
+            continue;
+        }
+        switch (toupper((unsigned char)*value)) {
+        case 'N': *key = SHELL_TASK_SORT_NAME;     break;
+        case 'C': *key = SHELL_TASK_SORT_CPU;      break;
+        case 'S': *key = SHELL_TASK_SORT_STACK;    break;
+        case 'P': *key = SHELL_TASK_SORT_PRIORITY; break;
+        case 'T': *key = SHELL_TASK_SORT_STATE;    break;
+        default:
+            return false;
+        }
+        value++;
+    }
+    return true;
+}
+
+/**
  * `ps` / `tasks` / `top` — list FreeRTOS tasks and their CPU usage.
  *
- * Usage: ps|tasks|top [/b]
+ * Usage: ps|tasks|top [/b] [/O:key]
  *   - no argument: colour-coded table (name, state, priority, core, stack
  *     high-water bytes, CPU% since the previous sample). `top` also prints a
  *     summary line with the task count, free heap, and uptime.
  *   - `/b`: uncoloured machine-parsable rows ("name state prio core headb cpu")
  *     suitable for redirection / pipes.
+ *   - `/O:key`: sort by N (name), C (CPU), S (stack), P (priority), or T
+ *     (state); a `-` prefix reverses. `top` defaults to CPU descending, while
+ *     `ps`/`tasks` keep the FreeRTOS order unless `/O:` is given.
+ *
+ * Returns an ERRORLEVEL: 0 ok, 1 snapshot failure, 2 usage.
  */
-void shell_command_ps(int argc, char **argv)
+int shell_command_ps(int argc, char **argv)
 {
 #if CONFIG_FREERTOS_USE_TRACE_FACILITY
     uint32_t task_count = uxTaskGetNumberOfTasks();
     TaskStatus_t *task_status_array;
+    shell_task_row_t *rows;
     uint32_t total_runtime = 0;
     uint32_t obtained;
     bool bare = false;
     bool is_top = false;
+    bool have_sort = false;
+    shell_task_sort_key_t sort_key = SHELL_TASK_SORT_NAME;
+    bool sort_reverse = false;
     uint32_t i;
 
     for (i = 1; i < (uint32_t)argc; i++) {
         if (argv[i][0] == '/' && (argv[i][1] == 'b' || argv[i][1] == 'B') && argv[i][2] == '\0') {
             bare = true;
-            break;
+            continue;
         }
+        if (argv[i][0] == '/' && (argv[i][1] == 'o' || argv[i][1] == 'O')) {
+            const char *value = argv[i] + 2;
+
+            if (*value == ':' || *value == '=') {
+                value++;
+            }
+            if (*value == '\0') {
+                sort_key = SHELL_TASK_SORT_NAME;
+            } else if (!shell_task_parse_sort(value, &sort_key, &sort_reverse)) {
+                shell_print_error("ps: unknown /O key in %s", argv[i]);
+                shell_print_usage("Usage: ps|tasks|top [/b] [/O:N|C|S|P|T]  (- prefix reverses)");
+                return 2;
+            }
+            have_sort = true;
+            continue;
+        }
+        shell_print_error("ps: unknown option %s", argv[i]);
+        shell_print_usage("Usage: ps|tasks|top [/b] [/O:N|C|S|P|T]  (- prefix reverses)");
+        return 2;
     }
     if (argc > 0) {
         is_top = shell_text_equals_ignore_case(argv[0], "top");
+    }
+
+    /* `top` behaves like real `top`: CPU-descending unless overridden. */
+    if (!have_sort && is_top) {
+        sort_key = SHELL_TASK_SORT_CPU;
+        sort_reverse = true;
     }
 
     if (task_count == 0) {
@@ -2318,14 +2906,55 @@ void shell_command_ps(int argc, char **argv)
     task_status_array = calloc(task_count, sizeof(TaskStatus_t));
     if (task_status_array == NULL) {
         shell_print_error("ps: out of memory for the task snapshot");
-        return;
+        return 1;
     }
 
     obtained = uxTaskGetSystemState(task_status_array, task_count, &total_runtime);
     if (obtained == 0) {
         free(task_status_array);
         shell_print_error("ps: uxTaskGetSystemState returned no tasks");
-        return;
+        return 1;
+    }
+
+    /* Normalize the snapshot into lightweight rows so /O: can sort them with
+     * a simple qsort (the CPU% is computed once per task here). */
+    rows = calloc(obtained, sizeof(*rows));
+    if (rows == NULL) {
+        free(task_status_array);
+        shell_print_error("ps: out of memory for the task rows");
+        return 1;
+    }
+
+    for (i = 0; i < obtained; i++) {
+        const TaskStatus_t *task = &task_status_array[i];
+        int cpu = shell_task_cpu_percent(task->xTaskNumber,
+                                         (uint32_t)task->ulRunTimeCounter,
+                                         total_runtime);
+        uint32_t highwater_bytes = task->usStackHighWaterMark * (uint32_t)sizeof(StackType_t);
+        int core = -1;
+
+#if configTASKLIST_INCLUDE_COREID
+        core = (int)task->xCoreID;
+#endif
+        /* Unpinned tasks report tskNO_AFFINITY (0x7FFFFFFF); show that as "-"
+         * in the table and -1 in the machine-readable form. */
+        if (core == (int)tskNO_AFFINITY) {
+            core = -1;
+        }
+
+        snprintf(rows[i].name, sizeof(rows[i].name), "%s", task->pcTaskName);
+        snprintf(rows[i].state, sizeof(rows[i].state), "%s",
+                 shell_task_state_label(task->eCurrentState));
+        rows[i].priority = (unsigned int)task->uxCurrentPriority;
+        rows[i].core = core;
+        rows[i].highwater_bytes = highwater_bytes;
+        rows[i].cpu_percent = cpu;
+    }
+
+    if (have_sort || is_top) {
+        s_task_sort_key = sort_key;
+        s_task_sort_reverse = sort_reverse;
+        qsort(rows, (size_t)obtained, sizeof(rows[0]), shell_task_row_qsort_cmp);
     }
 
     if (is_top && !bare) {
@@ -2347,42 +2976,29 @@ void shell_command_ps(int argc, char **argv)
     }
 
     for (i = 0; i < obtained; i++) {
-        const TaskStatus_t *task = &task_status_array[i];
-        int cpu = shell_task_cpu_percent(task->xTaskNumber,
-                                         (uint32_t)task->ulRunTimeCounter,
-                                         total_runtime);
-        uint32_t highwater_bytes = task->usStackHighWaterMark * (uint32_t)sizeof(StackType_t);
+        const shell_task_row_t *row = &rows[i];
         char core_label[16];
-#if configTASKLIST_INCLUDE_COREID
-        int core = (int)task->xCoreID;
-#else
-        int core = -1;
-#endif
-        /* Unpinned tasks report tskNO_AFFINITY (0x7FFFFFFF); show that as "-"
-         * in the table and -1 in the machine-readable form. */
-        if (core == (int)tskNO_AFFINITY) {
-            core = -1;
-        }
-        snprintf(core_label, sizeof(core_label), "%d", core);
+
+        snprintf(core_label, sizeof(core_label), "%d", row->core);
 
         if (bare) {
             shell_transcript_appendf("%s %s %u %s %u %d\n",
-                                     task->pcTaskName,
-                                     shell_task_state_label(task->eCurrentState),
-                                     (unsigned int)task->uxCurrentPriority,
+                                     row->name,
+                                     row->state,
+                                     row->priority,
                                      core_label,
-                                     (unsigned int)highwater_bytes,
-                                     cpu);
+                                     (unsigned int)row->highwater_bytes,
+                                     row->cpu_percent);
         } else {
             shell_transcript_appendf_ansi("  " SH_VAL "%-16s" SH_RST " " SH_CMD "%-3s" SH_RST " "
                                           SH_NUM "%4u" SH_RST " " SH_VAL "%4s" SH_RST " "
                                           SH_NUM "%6u" SH_RST " " SH_NUM "%3d%%" SH_RST "\n",
-                                          task->pcTaskName,
-                                          shell_task_state_label(task->eCurrentState),
-                                          (unsigned int)task->uxCurrentPriority,
+                                          row->name,
+                                          row->state,
+                                          row->priority,
                                           core_label,
-                                          (unsigned int)highwater_bytes,
-                                          cpu);
+                                          (unsigned int)row->highwater_bytes,
+                                          row->cpu_percent);
         }
     }
 
@@ -2401,11 +3017,14 @@ void shell_command_ps(int argc, char **argv)
         s_task_runtime_sample_valid = true;
     }
 
+    free(rows);
     free(task_status_array);
+    return 0;
 #else
     (void)argc;
     (void)argv;
     shell_print_muted("ps: FreeRTOS trace facility is disabled (CONFIG_FREERTOS_USE_TRACE_FACILITY)");
+    return 0;
 #endif
 }
 
@@ -2791,6 +3410,53 @@ int shell_split_args(char *text, char **argv, int max_args)
     }
 
     return argc;
+}
+
+/**
+ * Count the arguments in a command line without mutating it, using the same
+ * quote/escape rules as shell_split_args(). Used to detect when a command has
+ * more arguments than the dispatcher's argv capacity, so truncation is never
+ * silent.
+ */
+int shell_count_args(const char *text)
+{
+    int count = 0;
+    const char *p = text;
+
+    if (text == NULL) {
+        return 0;
+    }
+
+    while (*p != '\0') {
+        shell_quote_state_t state = SHELL_QUOTE_NONE;
+
+        /* Skip leading whitespace between arguments. */
+        while (*p != '\0' && isspace((unsigned char)*p)) {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+
+        count++;
+
+        /* Advance over the token with the same quote/escape rules. */
+        while (*p != '\0') {
+            bool escaped = false;
+            const char *next = shell_quote_advance(p, &state, &escaped);
+
+            if (!escaped && state == SHELL_QUOTE_NONE && next == p + 1 &&
+                isspace((unsigned char)*p)) {
+                break;
+            }
+            p = next;
+        }
+        if (*p != '\0') {
+            p++;
+        }
+    }
+
+    return count;
 }
 
 /* ========================================================================

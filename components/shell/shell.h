@@ -108,6 +108,29 @@ typedef struct {
 
     /** Report whether a C6 OTA transfer is in progress. */
     bool (*c6ota_is_busy)(void);
+
+    /** Report shell user activity (power idle clock + display wake). */
+    void (*pm_notify_activity)(void);
+
+    /**
+     * Tab-completion provider. Fills @p out (up to @p out_size) with the
+     * @p match_index-th completion of @p word (0-based) and returns the total
+     * number of matches, or 0 when there are none. @p first_token is true when
+     * the word is the first (command) token of the line.
+     */
+    int (*complete_word)(const char *word, bool first_token, int match_index,
+                         char *out, size_t out_size);
+
+    /** Report whether the modal editor is currently open. */
+    bool (*editor_is_active)(void);
+
+    /** Handle a USB key press while the editor is open (LVGL task).
+     *  @return true when the key was consumed by the editor. */
+    bool (*editor_handle_usb_key)(uint8_t key_code, uint8_t modifiers, char ascii);
+
+    /** Feed a line of serial console input to the modal editor while it is
+     *  open. Returns true when the line was consumed by the editor. */
+    bool (*editor_handle_serial_line)(const char *line);
 } shell_command_ops_t;
 
 /**
@@ -209,6 +232,33 @@ size_t shell_transcript_get_length(void);
 const char *shell_transcript_get_text_from(size_t offset);
 
 /* ========================================================================
+ * OUTPUT-REDIRECTION CAPTURE
+ * ======================================================================== */
+
+/**
+ * Open the output-redirection capture window. While open, every plain-text
+ * transcript append is mirrored into a dedicated heap buffer so a redirected
+ * command's output is captured in full (independent of the transcript size).
+ * Call before dispatching a redirected command.
+ */
+void shell_redirect_capture_begin(void);
+
+/** Close the output-redirection capture window (after dispatch). */
+void shell_redirect_capture_end(void);
+
+/**
+ * Return the captured output (NUL-terminated) and its length. The pointer
+ * stays valid until the next shell_redirect_capture_begin()/reset().
+ */
+const char *shell_redirect_capture_get(size_t *out_len);
+
+/** Release the capture buffer. Call after the redirected file is written. */
+void shell_redirect_capture_reset(void);
+
+/** Report whether the capture hit its size cap (some output was dropped). */
+bool shell_redirect_capture_was_truncated(void);
+
+/* ========================================================================
  * COMMAND HISTORY
  * ======================================================================== */
 
@@ -223,6 +273,15 @@ const char *shell_get_history_draft(void);
 
 /** Reset the history recall cursor and clear the saved draft. */
 void shell_reset_history_cursor(void);
+
+/** Number of commands currently in the recall history. */
+size_t shell_history_get_count(void);
+
+/** Get a recall-history entry by index (0 = oldest). NULL when out of range. */
+const char *shell_history_get(size_t index);
+
+/** Clear the recall history (frees all heap entries). */
+void shell_history_clear(void);
 
 /**
  * Decide whether a submitted command should be stored in recall history.
@@ -255,6 +314,39 @@ void shell_extract_input_text(char *output, size_t output_size);
  * Does nothing when the prompt prefix is intact.
  */
 void shell_input_line_repair_prompt(const char *text);
+
+/**
+ * Insert @p text into the LVGL input line at the cursor position (DOS-style
+ * paste). Safe from any task; no-op when the input line does not exist.
+ */
+void shell_input_line_paste(const char *text);
+
+/* ========================================================================
+ * RAM CLIPBOARD
+ * ========================================================================
+ * A single RAM clipboard backed by the `clip` / `paste` commands. It holds
+ * either text (copied transcript lines, `clip <text>`, or a text file read by
+ * `clip read`) or a file reference (`clip file <path>`, which `paste <dest>`
+ * copies to a destination).
+ */
+
+/** Set the clipboard to @p text (text mode). Bounded by P4_CONFIG_CLIPBOARD_BYTES. */
+void shell_clipboard_set(const char *text);
+
+/** Set the clipboard to a file reference (file mode). */
+void shell_clipboard_set_file(const char *path);
+
+/** Get the clipboard text (the file path when in file mode). */
+const char *shell_clipboard_get(void);
+
+/** Report whether the clipboard currently holds a file reference. */
+bool shell_clipboard_is_file(void);
+
+/**
+ * Copy the last @p n_lines lines of the transcript into the clipboard (text
+ * mode). Returns false when the transcript is empty.
+ */
+bool shell_clipboard_copy_transcript(int n_lines);
 
 /* ========================================================================
  * INTERACTIVE KEYPRESS WAIT
@@ -399,9 +491,41 @@ void shell_command_mem(void);
 /**
  * List FreeRTOS tasks (`ps` / `tasks` / `top`). Read-only: name, state,
  * priority, core, stack high-water mark, and (for `top`) CPU% since the last
- * sample. `/b` emits uncoloured machine-parsable rows.
+ * sample. `/b` emits uncoloured machine-parsable rows; `/O:` sorts by a key.
+ *
+ * Usage: ps|tasks|top [/b] [/O:key]
+ *   /O:  sort by N (name), C (CPU), S (stack high-water), P (priority), or
+ *        T (state); prefix `-` to reverse; bare `/O` sorts by name. `top`
+ *        defaults to CPU descending; `ps`/`tasks` keep FreeRTOS order unless
+ *        `/O:` is given. Returns an ERRORLEVEL: 0 ok, 2 usage.
  */
-void shell_command_ps(int argc, char **argv);
+int shell_command_ps(int argc, char **argv);
+
+/** One normalized task row used by the `/O:` sort. */
+typedef struct {
+    char name[32];
+    char state[4];          /* "RUN", "RDY", "BLK", "SUS", "DEL", "?" */
+    unsigned int priority;
+    int core;               /* -1 when unpinned or unavailable */
+    uint32_t highwater_bytes;
+    int cpu_percent;
+} shell_task_row_t;
+
+/** Sort keys accepted by `ps`/`tasks`/`top` `/O:`. */
+typedef enum {
+    SHELL_TASK_SORT_NAME = 0,
+    SHELL_TASK_SORT_CPU,
+    SHELL_TASK_SORT_STACK,
+    SHELL_TASK_SORT_PRIORITY,
+    SHELL_TASK_SORT_STATE
+} shell_task_sort_key_t;
+
+/**
+ * Compare two task rows for `qsort`. Returns <0, 0, >0 like strcmp; name is
+ * the deterministic tie-breaker. Pure and exposed for the unit tests.
+ */
+int shell_task_row_compare(const shell_task_row_t *a, const shell_task_row_t *b,
+                           shell_task_sort_key_t key, bool reverse);
 
 /* ========================================================================
  * HEADER STATUS
@@ -437,6 +561,16 @@ char *shell_trim(char *text);
  * @return Argument count.
  */
 int shell_split_args(char *text, char **argv, int max_args);
+
+/**
+ * Count the arguments in a command line without mutating it, using the same
+ * quote/escape rules as shell_split_args(). Lets the dispatcher detect when a
+ * command has more arguments than the argv capacity so truncation is never
+ * silent.
+ * @param text  Command line (not modified).
+ * @return The total number of arguments.
+ */
+int shell_count_args(const char *text);
 
 /* ========================================================================
  * QUOTING AND ESCAPING

@@ -43,6 +43,7 @@
 #include "display.h"
 #include "header.h"
 #include "keyboard.h"
+#include "editor_view.h"
 #include "networking.h"
 #include "led.h"
 #include "ansi_palette.h"
@@ -117,6 +118,10 @@ void usb_host_schedule_transcript_append_text(const char *text)
  * pixel delta as an intptr_t. */
 static void shell_mouse_scroll_cb(void *user_data)
 {
+    if (editor_view_is_open()) {
+        editor_view_scroll_by((int32_t)(intptr_t)user_data);
+        return;
+    }
     windows_scroll_transcript_by((int32_t)(intptr_t)user_data);
 }
 
@@ -125,6 +130,8 @@ void usb_host_scroll_transcript(int32_t pixels)
     /* The USB module task is not the LVGL task; queue the scroll onto the LVGL
      * task exactly like the USB keyboard injection path does. */
     lv_async_call(shell_mouse_scroll_cb, (void *)(intptr_t)pixels);
+    /* A USB mouse scroll is user activity for the power idle clock. */
+    shell_power_notify_activity();
 }
 
 void usb_host_record_error(esp_err_t error, const char *message)
@@ -203,6 +210,9 @@ static void shell_c6ota_progress_callback(int percent, const char *msg)
 static void shell_usb_keyboard_cb(uint8_t key_code, uint8_t modifiers, usb_key_event_t event)
 {
     shell_usb_keyboard_input(key_code, modifiers, (event == USB_KEY_EVENT_PRESS));
+    /* USB typing is user activity: reset the power idle clock and wake the
+     * display if the idle timer had switched it off. */
+    shell_power_notify_activity();
 }
 
 /** LVGL timer callback driving the periodic header status refresh. */
@@ -210,6 +220,7 @@ static void shell_header_status_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
     shell_header_status_refresh();
+    shell_power_idle_tick();
 }
 
 /* ========================================================================
@@ -260,6 +271,13 @@ static void shell_transcript_event_cb(lv_event_t *event)
 {
     lv_event_code_t code = lv_event_get_code(event);
 
+    /* While the modal editor owns the transcript surface, the shell-level
+     * transcript behaviour (keyboard re-binding, tap-to-show) is disabled so
+     * the editor's own touch handling is never overridden. */
+    if (windows_editor_mode_active()) {
+        return;
+    }
+
     if (code == LV_EVENT_CLICKED || code == LV_EVENT_FOCUSED) {
         lv_obj_t *kb = windows_get_keyboard();
         lv_obj_t *il = windows_get_input_line();
@@ -271,12 +289,27 @@ static void shell_transcript_event_cb(lv_event_t *event)
             lv_obj_add_state(il, LV_STATE_FOCUSED);
             lv_textarea_set_cursor_pos(il, LV_TEXTAREA_CURSOR_LAST);
         }
+
+        /* Tapping the transcript summons the on-screen keyboard when it is
+         * hidden and no USB keyboard is driving the input line. This keeps
+         * the OSK recoverable on a touch device after it was auto-hidden or
+         * dismissed, without disturbing scrolling (which only happens while
+         * the keyboard is already visible). */
+        if (!keyboard_is_visible() && !keyboard_is_external_input_enabled()) {
+            keyboard_show();
+        }
     }
 }
 
 static void shell_input_line_event_cb(lv_event_t *event)
 {
     lv_event_code_t code = lv_event_get_code(event);
+
+    /* The input line is hidden while the modal editor owns the OSK; nothing
+     * shell-level should react to it. */
+    if (windows_editor_mode_active()) {
+        return;
+    }
 
     if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED) {
         lv_obj_t *kb = windows_get_keyboard();
@@ -318,11 +351,16 @@ static void shell_input_line_event_cb(lv_event_t *event)
          * line. The typed character is consumed and the line is restored so
          * the answer never lingers at the prompt. */
         if (shell_key_wait_is_active()) {
-            char typed[SHELL_COMMAND_BYTES];
+            /* Command-sized buffer is heap-allocated: this callback runs on
+             * the LVGL task, whose stack is far smaller than 4096 bytes. */
+            char *typed = malloc(SHELL_COMMAND_BYTES);
 
-            shell_extract_input_text(typed, sizeof(typed));
-            if (typed[0] != '\0') {
-                shell_key_wait_submit(typed[0]);
+            if (typed != NULL) {
+                shell_extract_input_text(typed, SHELL_COMMAND_BYTES);
+                if (typed[0] != '\0') {
+                    shell_key_wait_submit(typed[0]);
+                }
+                free(typed);
             }
             shell_input_line_reset();
             return;
@@ -334,21 +372,31 @@ static void shell_input_line_event_cb(lv_event_t *event)
     }
 
     if (code == LV_EVENT_READY) {
-        char command[SHELL_COMMAND_BYTES];
-        char transcript_command[SHELL_COMMAND_BYTES];
+        /* Command-sized buffers are heap-allocated: this callback runs on the
+         * LVGL task, whose stack is far smaller than two 4096-byte locals. */
+        char *command = malloc(SHELL_COMMAND_BYTES);
+        char *transcript_command = malloc(SHELL_COMMAND_BYTES);
+
+        if (command == NULL || transcript_command == NULL) {
+            free(command);
+            free(transcript_command);
+            return;
+        }
 
         /* A pending keypress wait swallows the submission: Enter answers the
          * prompt rather than dispatching a command. */
         if (shell_key_wait_is_active()) {
             shell_key_wait_submit('\r');
             shell_input_line_reset();
+            free(command);
+            free(transcript_command);
             return;
         }
 
         /* LV_EVENT_READY is the confirmed submission path, including
          * YES/NO replies to the C6 OTA confirmation prompt. */
-        shell_extract_input_text(command, sizeof(command));
-        shell_format_command_for_transcript(command, transcript_command, sizeof(transcript_command));
+        shell_extract_input_text(command, SHELL_COMMAND_BYTES);
+        shell_format_command_for_transcript(command, transcript_command, SHELL_COMMAND_BYTES);
         shell_transcript_appendf("%s%s\n", SHELL_PROMPT, transcript_command);
 
         if (shell_command_should_store_history(command)) {
@@ -360,6 +408,8 @@ static void shell_input_line_event_cb(lv_event_t *event)
         /* Dispatch on the worker task so heavy commands never run on the
          * LVGL event-callback stack. */
         shell_execute_command_async(command);
+        free(command);
+        free(transcript_command);
         /* Jump to the output of the submitted command even if the user was
          * reading earlier history. */
         shell_force_transcript_scroll_to_end();
@@ -377,22 +427,122 @@ static void shell_input_line_event_cb(lv_event_t *event)
     }
 }
 
-/* Logs on-screen keyboard mode changes and special button presses. */
+/* Route an on-screen keyboard button into the shell's command input line.
+ * Runs on the LVGL task from the keyboard event callback. */
+static void shell_osk_into_input(const char *txt)
+{
+    lv_obj_t *input_line = windows_get_input_line();
+
+    if (input_line == NULL || txt == NULL) {
+        return;
+    }
+
+    if (strcmp(txt, LV_SYMBOL_BACKSPACE) == 0) {
+        lv_textarea_delete_char(input_line);
+    } else if (strcmp(txt, LV_SYMBOL_NEW_LINE) == 0 || strcmp(txt, "Enter") == 0) {
+        lv_obj_send_event(input_line, LV_EVENT_READY, NULL);
+    } else if (strcmp(txt, LV_SYMBOL_OK) == 0) {
+        lv_obj_send_event(input_line, LV_EVENT_READY, NULL);
+    } else if (strcmp(txt, LV_SYMBOL_LEFT) == 0) {
+        lv_textarea_cursor_left(input_line);
+    } else if (strcmp(txt, LV_SYMBOL_RIGHT) == 0) {
+        lv_textarea_cursor_right(input_line);
+    } else if (strcmp(txt, "+/-") == 0) {
+        /* Numeric-mode sign toggle. */
+        const char *ta = lv_textarea_get_text(input_line);
+        if (ta != NULL && ta[0] == '-') {
+            lv_textarea_set_cursor_pos(input_line, 0);
+            lv_textarea_delete_char(input_line);
+            lv_textarea_add_char(input_line, '+');
+        } else {
+            lv_textarea_set_cursor_pos(input_line, 0);
+            lv_textarea_add_char(input_line, '-');
+        }
+    } else if (strcmp(txt, LV_SYMBOL_CLOSE) == 0 ||
+               strcmp(txt, LV_SYMBOL_KEYBOARD) == 0) {
+        keyboard_hide();
+    } else if (txt[0] != '\0' && txt[1] == '\0') {
+        lv_textarea_add_char(input_line, (uint32_t)(uint8_t)txt[0]);
+    }
+}
+
+/* Logs on-screen keyboard mode changes and special button presses, and routes
+ * every button to the shell input line or the modal editor. This callback is
+ * the keyboard's only LV_EVENT_VALUE_CHANGED handler (keyboard_register_event_callback
+ * replaces LVGL's default handler), so mode switching and typing are owned
+ * here. */
 static void shell_keyboard_event_cb(lv_event_t *event)
 {
     lv_event_code_t code = lv_event_get_code(event);
 
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *target = lv_event_get_current_target(event);
-        uint32_t btn_id = lv_buttonmatrix_get_selected_button(target);
-
-        if (btn_id != LV_BUTTONMATRIX_BUTTON_NONE) {
-            const char *txt = lv_buttonmatrix_get_button_text(target, btn_id);
-            if (txt != NULL) {
-                ESP_LOGI(SHELL_TAG, "Keyboard button: %s (id=%" PRIu32 ")", txt, btn_id);
-            }
-        }
+    if (code != LV_EVENT_VALUE_CHANGED) {
+        return;
     }
+
+    lv_obj_t *target = lv_event_get_current_target(event);
+    uint32_t btn_id = lv_buttonmatrix_get_selected_button(target);
+
+    if (btn_id == LV_BUTTONMATRIX_BUTTON_NONE) {
+        return;
+    }
+
+    /* Deduplicate OSK button events: a re-fire of the same button within the
+     * debounce window is the same LVGL event reaching a second handler.
+     * Dropping it here makes double input impossible even if a stray handler
+     * is ever (re)registered. */
+    if (!keyboard_osk_accept(btn_id)) {
+        return;
+    }
+
+    const char *txt = lv_buttonmatrix_get_button_text(target, btn_id);
+    if (txt == NULL) {
+        return;
+    }
+
+    ESP_LOGI(SHELL_TAG, "Keyboard button: %s (id=%" PRIu32 ")", txt, btn_id);
+
+    /* Mode-switch buttons are handled here (the LVGL default handler was
+     * replaced by this callback): abc / ABC / 1# cycle the text maps, and
+     * Nav enters the editor navigation page (only while the editor is open,
+     * so the label never reaches the shell input line). */
+    if (strcmp(txt, "abc") == 0) {
+        keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
+        return;
+    }
+    if (strcmp(txt, "ABC") == 0) {
+        keyboard_set_mode(KEYBOARD_MODE_TEXT_UPPER);
+        return;
+    }
+    if (strcmp(txt, "1#") == 0) {
+        keyboard_set_mode(KEYBOARD_MODE_SYMBOLS);
+        return;
+    }
+    if (strcmp(txt, "Nav") == 0) {
+        if (editor_view_is_open()) {
+            keyboard_set_mode(KEYBOARD_MODE_NAV);
+        }
+        return;
+    }
+    if (strcmp(txt, "Nav1") == 0) {
+        if (editor_view_is_open()) {
+            keyboard_set_mode(KEYBOARD_MODE_NAV);
+        }
+        return;
+    }
+    if (strcmp(txt, "Nav2") == 0) {
+        if (editor_view_is_open()) {
+            keyboard_set_mode(KEYBOARD_MODE_NAV2);
+        }
+        return;
+    }
+
+    /* While the modal editor is open every OSK button drives the editor. */
+    if (editor_view_is_open()) {
+        editor_view_handle_osk(txt);
+        return;
+    }
+
+    shell_osk_into_input(txt);
 }
 
 /* ========================================================================
@@ -411,6 +561,14 @@ static void shell_rebuild_ui_callback(void)
 static void shell_build_ui(void)
 {
     esp_err_t err;
+
+    /* A rotation change tears the whole LVGL surface down. If the modal
+     * editor is open its widgets would be destroyed underneath it, so close
+     * the view first; editor_view_close() wakes the worker session so it
+     * releases the document cleanly. */
+    if (editor_view_is_open()) {
+        editor_view_close();
+    }
 
     /* Tear the window manager down first so every widget from the previous
      * layout is released cleanly. Required for display rotation support. */

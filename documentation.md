@@ -23,6 +23,8 @@ components/command/command.c    Command module (dispatcher, worker task, executi
 components/command/command_ui.c  UI query commands (display, keyboard, windows subcommands)
 components/header/header.c      Fixed top status bar (LVGL widgets)
 components/led/led.c            WS2812 RGB status LED driver + auto status / event notification engine (GPIO26)
+components/editor/editor.c      DOS-style `edit` editor: byte-preserving document model, undo/redo, find/replace, worker session
+components/editor/editor_view.c `edit` editor LVGL surface (syntax spans, block cursor, selection overlay, status-bar prompts)
 components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
 components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
 components/usb/usb.c            USB Host (MSC storage + HID keyboard/mouse)
@@ -118,24 +120,36 @@ Owns the shell's runtime surface and output plumbing:
   append with the palette from `components/ansi/ansi_palette.h`. Each emits its own reset and
   newline, so a command never has to think about colour. They render the caller's text with
   real `vsnprintf` before wrapping, so a value containing '@' cannot be misread as a specifier.
-- **Command history**: 10-entry recall buffer with password masking for `wifi connect`.
+- **Command history**: heap-backed recall buffer (`P4_CONFIG_COMMAND_HISTORY_DEPTH`, capped at
+  `P4_CONFIG_HISTORY_TOTAL_BYTES`) with password masking for `wifi connect`, Up/Down recall, and
+  the `history` command for SD save/load (`P4_CONFIG_HISTORY_PROFILE`).
   Masking is applied both at the caller (`shell_command_should_store_history()`) and inside
   `shell_store_command_history()` so no path can persist a password.
 - **Serial console bridge**: stdin/stdout routed through the same shell path as the touch UI,
   with LVGL locking and a submission mutex
 - **Input line**: Owns the prompt-prefix contract — `shell_input_line_set_text()`,
-  `shell_input_line_reset()`, `shell_extract_input_text()`, and
+  `shell_input_line_reset()`, `shell_extract_input_text()`,
   `shell_input_line_repair_prompt()` (which restores the prompt after a keyboard backspace
-  deletes into it)
+  deletes into it), and `shell_input_line_paste()`. The line and the whole command pipeline
+  accept up to `P4_CONFIG_COMMAND_BYTES` (4096); every command-sized transient buffer is
+  heap-allocated so the worker/UART/LVGL stacks stay small. USB Tab runs completion through the
+  `shell_command_ops_t.complete_word` hook (commands/aliases for the first token, SD paths for
+  any token, `P4_CONFIG_COMPLETION_MAX_MATCHES` cap).
 - **Debug log**: 5-entry circular buffer surfaced via the `debug` command. Errors are also
   echoed to the transcript so on-screen users see failures without running `debug`.
+- **RAM clipboard** (`clip` / `paste`): a shell-core clipboard (`P4_CONFIG_CLIPBOARD_BYTES`)
+  holding text (copied transcript lines via `shell_clipboard_copy_transcript`, literal text via
+  `clip <text>`, or a text file via `clip read`), or a file reference (`clip file`) that
+  `paste <dest>` copies. `paste` injects the clipboard into the input line at the cursor via
+  `shell_input_line_paste()` (`lv_textarea_add_text`). The commands live in
+  `components/command/` and call the `shell.h` clipboard API; all are batch-safe,
+  redirectable, and set an ERRORLEVEL.
 - **Interactive keypress queue**: `shell_key_wait_begin()` / `shell_wait_for_key()` /
   `shell_key_wait_end()` let `pause`, `choice`, and `more` block on a real keystroke. All three
   input sources (UART console reader, USB HID bridge, LVGL on-screen keyboard) feed the queue
   through `shell_key_wait_submit()`, and every source suppresses command-line handling while a
   wait is active so an answer is never dispatched as a command. Waits are bounded by
-  `P4_CONFIG_KEY_WAIT_TIMEOUT_MS`, and `shell_key_input_available()` lets commands fall back to
-  a timed delay on a headless board.
+  `P4_CONFIG_KEY_WAIT_TIMEOUT_MS`, and `shell_key_input_available()` lets commands fall back to  a timed delay on a headless board.
 - **Line input**: `shell_read_line()` collects a typed line through the key queue, echoing as
   it goes. Backspace edits, ESC cancels, Enter submits. Backs `set /p`.
 - **UART console line assembly**: the console reader (`shell_uart_console_task`) uses
@@ -154,7 +168,13 @@ Owns the shell's runtime surface and output plumbing:
   heap-allocated `uxTaskGetSystemState()` snapshot (capped by `P4_CONFIG_TASK_SNAPSHOT_MAX`).
   Prints name, state, priority, core, stack high-water mark, and per-task CPU% (diffed from the
   previous sample via `ulRunTimeCounter`). The snapshot array lives on the heap so the 8 KB
-  command-worker stack is never at risk; `/b` emits uncoloured rows for pipes.
+  command-worker stack is never at risk; `/b` emits uncoloured rows for pipes. `dir /O:`-style
+  sorting (`/O:N|C|S|P|T`, `-` reverses; `top` defaults to CPU descending) sorts normalized
+  heap rows with the same qsort comparator pattern, and the pure `shell_task_row_compare()`
+  helper is unit-tested. All three verbs set an ERRORLEVEL (0 ok / 2 usage).
+- **Header CPU sparkline**: the header system panel shows a small LVGL chart of the recent CPU
+  samples (bars amber above `P4_CONFIG_HEADER_CPU_WARN_PCT`), replacing the single-value bar
+  when `P4_CONFIG_HEADER_CPU_GRAPH` is set; the ring advances on the periodic header refresh.
 - **Header status refresh**: Batches every header field into one async render to avoid
   flicker; also drives USB keyboard auto-detect and SD insert/remove notifications
 - **Quote and escape scanner**: `shell_find_unquoted_char()`, `shell_find_unquoted_any()`,
@@ -385,6 +405,15 @@ filesystem or the batch language:
 - **Hardware controls**: Backlight PWM, display rotation with touch remapping, battery ADC
   with calibration, ES8311 codec volume, and light-sleep requests — display operations are
   routed through `components/display/`
+- **Basic audio** (`beep`, `tone <freq> [ms]`, `wavplay <file>`, `audio status|stop`,
+  `volume [<0-100>]`): tones are generated in heap chunks and WAVs (16-bit PCM mono/stereo at
+  22050/44100 Hz, stereo mixed to mono and 44100 decimated) stream from SD, both through the
+  ES8311 codec (mono 16-bit 22050 Hz). All audio logic — codec init, speaker volume, and the
+  background `audio_play` task — lives in `components/audio/` (`audio.h`/`audio.c`); the
+  commands only dispatch from `components/command/` and call the `audio.h` API. One sound plays
+  at a time (`audio stop` cuts it short) so batch files never block, and every audio command
+  sets an ERRORLEVEL. `volume` and the boot `VOLUME=` directive drive the codec output level,
+  which all playback rides on.
 - **Peripheral toolkit** (`pwm`, `freq`, `adc`, `i2c`, `spi`): LEDC PWM/square waves on
   timers 0/2/3 sharing the backlight's XTAL clock; one-shot ADC reads with SOC channel-map
   enumeration; an I2C scanner/peek-poke that reuses the BSP shared bus handle (or a temporary
@@ -421,6 +450,15 @@ Central display controller owning all display hardware state and operations:
 - **Refresh rate**: Query current refresh rate (~60 Hz from panel timing); dynamic rate change API exists but is noted as not supported on JD9165 panel
 - **Backlight brightness**: 0-100% PWM brightness control through BSP LEDC path
 - **Power management**: Display on/sleep/off power state transitions with backlight control
+- **Idle display-off** (`power idle` + CONFIG.SYS `DISPLAY_TIMEOUT=`): the backlight turns
+  off after N idle seconds and wakes on touch, USB keyboard/mouse, or a serial command.
+  Because idle-off only drops the backlight, the shell state is untouched and wake is a clean
+  backlight-on. Tracked in the power module (`shell_power_notify_activity` /
+  `shell_power_idle_tick`, fed by the header-refresh LVGL timer and the input injection
+  points), with `P4_CONFIG_POWER_IDLE_DISPLAY_OFF_SECS` (0 = disabled) as the default.
+- **Sleep wake sources**: `sleep`/`deepsleep` keep the timer wake; a user-wired
+  `P4_CONFIG_POWER_WAKE_GPIO` wakes light sleep via GPIO. Touch wake is honestly reported
+  unavailable because the GT911 INT line is not wired on this board.
 - **Display diagnostics**: Comprehensive `display_info_t` struct with all timing, buffer, and config data
 - **Thread safety**: State variables protected by critical sections; LVGL operations dispatched via `lv_async_call`
 - **UI rebuild callback**: Registered callback invoked after rotation changes to trigger full UI rebuild
@@ -448,6 +486,14 @@ Central layout manager owning the LVGL screen region partitioning and dynamic sc
   input-row `Up`/`Dn` buttons, the USB keyboard PageUp/PageDown, and the USB mouse wheel.
   The incremental span append keeps the render cost bounded, and an explicit-content-height
   child avoids the LVGL scrollable-container-with-LV_SIZE_CONTENT layout loop.
+- **Editor surface**: the modal `edit` editor renders into the SAME transcript
+  container, which stays visible at the transcript-region height while the
+  editor hides the shell span group inside it. This keeps the editor area
+  exactly as large as the shell transcript and the keyboard at the bottom (LVGL
+  flex skips hidden children, so hiding the container would collapse it).
+  `windows_refresh_editor_surface()` re-applies the region height on entry and
+  keyboard show/hide; `windows_debug_editor_layout()` and
+  `windows_editor_surface_height_ok()` make the geometry visible/verifiable.
 
 ### Header Module (components/header)
 
@@ -665,6 +711,47 @@ Owns the full ESP32-C6 firmware update workflow:
 - **Progress**: `C6 OTA: XX% (YYYY KB / ZZZZ KB)` every 5%
 - **Wi-Fi management**: Stop before transfer, restore on failure, request post-OTA restore on success
 - **Hosted transport**: Kept alive during transfer (no `esp_hosted_deinit()` to avoid assert)
+
+### Editor Module (components/editor)
+
+Implements the DOS-style `edit` command as a reusable modal surface — the
+reference pattern for future native apps (see SDK.md, "Modal app surfaces").
+
+- **`editor.c`** owns the byte-preserving document model: heap lines with
+  exact lengths, CRLF/LF EOL tracking, cursor/selection state, snapshot
+  undo/redo (`P4_CONFIG_EDITOR_UNDO_DEPTH`), word navigation, delete
+  line/EOL, pure find/replace helpers, and the guarded SD load/save
+  (a failed save removes its partial destination). It also runs the modal
+  session on the command worker: it loads the file, opens the view via
+  `lv_async_call`, then services save requests and waits for quit — file I/O
+  never runs on the LVGL task.
+- **`editor_view.c`** owns the LVGL surface. It renders one row per document
+  line into a dedicated span group (with batch syntax colours applied through
+  `editor_lex_batch` and a right-aligned line-number gutter via the pure
+  `editor_format_line_number` helper), draws a blinking block cursor, a
+  current-line highlight bar, and a selection background overlay, and
+  implements an inline status-bar prompt system for Find / Replace /
+  Go-to-Line / Save-As / quit-confirmation. The cursor, selection, and touch
+  mapping are offset by the gutter width so the caret stays byte-aligned with
+  the document. A per-row cumulative width table (built with
+  `lv_font_get_glyph_width`) maps byte columns to pixels and back in O(log n),
+  keeping the caret and touch mapping aligned with the rendered rows.
+- **Layout integration**: `windows_enter_editor_mode()` aliases the transcript
+  container as the editor surface and the input row becomes a status bar.
+  The view hides the shell's own span group
+  (`windows_get_transcript_spans()`) while open and restores it on close.
+- **Input routing**: USB keys and OSK buttons reach the editor through the
+  `shell_command_ops_t` hooks (`editor_is_active`, `editor_handle_usb_key`,
+  `editor_handle_serial_line`); serial lines are forwarded verbatim with the
+  verbs `\q \s \f \g \o \u \r \a`. The
+  keyboard's single `LV_EVENT_VALUE_CHANGED` handler in `main.c` owns mode
+  switching (`abc`/`ABC`/`1#`/`Nav`) and routes every button to the shell
+  input line or the editor.
+- **Safety**: an existing file that cannot be loaded is refused with an error
+  (never opened as an empty buffer); Esc confirms before discarding unsaved
+  changes; rotation during a session closes the view cleanly.
+- **Tests**: `test/main/test_editor.c` exercises the document model and the
+  batch lexer without hardware.
 
 ## Hardware Configuration
 

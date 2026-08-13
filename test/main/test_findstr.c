@@ -51,7 +51,7 @@ void test_findstr_regex_anchors(void)
 
     /* ^ only matches at the start of the line. */
     TEST_ASSERT_EQUAL_INT(0, shell_fsre_search("^abc", "abcd", false, &end));
-    TEST_ASSERT_EQUAL_INT(4, end);
+    TEST_ASSERT_EQUAL_INT(3, end);
     TEST_ASSERT_EQUAL_INT(-1, shell_fsre_search("^abc", "xabcd", false, &end));
 
     /* $ only matches at the end of the line. */

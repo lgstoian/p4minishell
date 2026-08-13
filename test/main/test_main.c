@@ -15,6 +15,7 @@
 /* Forward declarations for all test suites */
 extern void test_shell_parser_split_args(void);
 extern void test_shell_parser_trim(void);
+extern void test_shell_parser_count_args(void);
 extern void test_shell_parser_text_equals(void);
 extern void test_shell_parser_percentage_parse(void);
 
@@ -64,6 +65,14 @@ extern void test_comp_length_difference(void);
 extern void test_comp_case(void);
 extern void test_comp_mid_buffer_difference(void);
 
+extern void test_task_sort_by_name(void);
+extern void test_task_sort_by_cpu(void);
+extern void test_task_sort_by_stack(void);
+extern void test_task_sort_by_priority(void);
+extern void test_task_sort_by_state(void);
+extern void test_task_sort_name_tie_break(void);
+extern void test_task_sort_null_safe(void);
+
 extern void test_batch_expr_literals(void);
 extern void test_batch_expr_arithmetic(void);
 extern void test_batch_expr_bitwise(void);
@@ -98,6 +107,34 @@ extern void test_ansi_strip_to_plain(void);
 extern void test_ansi_format_width_flags(void);
 extern void test_ansi_to_lvgl_recolor(void);
 
+extern void test_editor_new_doc(void);
+extern void test_editor_insert_and_cursor(void);
+extern void test_editor_newline_split_and_join(void);
+extern void test_editor_delete_forward(void);
+extern void test_editor_overwrite_toggle(void);
+extern void test_editor_delete_line_and_eol(void);
+extern void test_editor_doc_home_end(void);
+extern void test_editor_find_next(void);
+extern void test_editor_replace_next(void);
+extern void test_editor_undo_redo(void);
+extern void test_editor_selection(void);
+extern void test_editor_selection_copy_lf(void);
+extern void test_editor_selection_copy_crlf(void);
+extern void test_editor_set_path(void);
+extern void test_editor_paste_multiline(void);
+extern void test_editor_lex_batch(void);
+extern void test_editor_newline_on_empty_doc(void);
+extern void test_editor_selection_delete_empty_start(void);
+extern void test_editor_word_nav_empty_line(void);
+extern void test_editor_line_cap_bounded(void);
+extern void test_editor_undo_redo_empty_last_line(void);
+extern void test_editor_find_wrap_boundary(void);
+extern void test_editor_undo_ring_wrap_free(void);
+extern void test_editor_selection_delete_multirow_tail(void);
+extern void test_editor_format_line_number(void);
+
+extern void test_keyboard_osk_dedup(void);
+
 void app_main(void)
 {
     printf("\n=== P4MiniShell Unit Tests ===\n\n");
@@ -116,6 +153,7 @@ void app_main(void)
     UNITY_BEGIN();
     RUN_TEST(test_shell_parser_split_args);
     RUN_TEST(test_shell_parser_trim);
+    RUN_TEST(test_shell_parser_count_args);
     RUN_TEST(test_shell_parser_text_equals);
     RUN_TEST(test_shell_parser_percentage_parse);
     UNITY_END();
@@ -187,6 +225,17 @@ void app_main(void)
     RUN_TEST(test_comp_mid_buffer_difference);
     UNITY_END();
 
+    /* ps/top /O: row comparator tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_task_sort_by_name);
+    RUN_TEST(test_task_sort_by_cpu);
+    RUN_TEST(test_task_sort_by_stack);
+    RUN_TEST(test_task_sort_by_priority);
+    RUN_TEST(test_task_sort_by_state);
+    RUN_TEST(test_task_sort_name_tie_break);
+    RUN_TEST(test_task_sort_null_safe);
+    UNITY_END();
+
     /* Batch arithmetic expression tests */
     UNITY_BEGIN();
     RUN_TEST(test_batch_expr_literals);
@@ -234,6 +283,40 @@ void app_main(void)
     RUN_TEST(test_ansi_strip_to_plain);
     RUN_TEST(test_ansi_format_width_flags);
     RUN_TEST(test_ansi_to_lvgl_recolor);
+    UNITY_END();
+
+    /* Editor document-model tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_editor_new_doc);
+    RUN_TEST(test_editor_insert_and_cursor);
+    RUN_TEST(test_editor_newline_split_and_join);
+    RUN_TEST(test_editor_delete_forward);
+    RUN_TEST(test_editor_overwrite_toggle);
+    RUN_TEST(test_editor_delete_line_and_eol);
+    RUN_TEST(test_editor_doc_home_end);
+    RUN_TEST(test_editor_find_next);
+    RUN_TEST(test_editor_replace_next);
+    RUN_TEST(test_editor_undo_redo);
+    RUN_TEST(test_editor_selection);
+    RUN_TEST(test_editor_selection_copy_lf);
+    RUN_TEST(test_editor_selection_copy_crlf);
+    RUN_TEST(test_editor_set_path);
+    RUN_TEST(test_editor_paste_multiline);
+    RUN_TEST(test_editor_lex_batch);
+    RUN_TEST(test_editor_newline_on_empty_doc);
+    RUN_TEST(test_editor_selection_delete_empty_start);
+    RUN_TEST(test_editor_word_nav_empty_line);
+    RUN_TEST(test_editor_line_cap_bounded);
+    RUN_TEST(test_editor_undo_redo_empty_last_line);
+    RUN_TEST(test_editor_find_wrap_boundary);
+    RUN_TEST(test_editor_undo_ring_wrap_free);
+    RUN_TEST(test_editor_selection_delete_multirow_tail);
+    RUN_TEST(test_editor_format_line_number);
+    UNITY_END();
+
+    /* On-screen keyboard input deduplication tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_keyboard_osk_dedup);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

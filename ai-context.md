@@ -145,6 +145,11 @@
 - Input sources (UART reader, USB HID bridge, LVGL input line) MUST check
   `shell_key_wait_is_active()` and route to `shell_key_wait_submit()` instead of the command
   line while a wait is running
+- The UART console reader forwards the WHOLE freshly-read line into the key queue during a
+  wait (not just its first character), so confirmation words (`YES`) and `set /p` values can
+  be typed on one serial line. This is safe because `shell_key_wait_begin()`/`end()` reset the
+  queue, so strays from one-key waits (`pause`/`choice`/`more`) are flushed before the next
+  prompt. Keep the forwarding bounded by `P4_CONFIG_KEY_QUEUE_DEPTH`.
 - The prompt is a runtime template owned by `components/shell/`. Never hardcode the prompt
   string in a new surface; call `shell_prompt_render_plain()` (plain) or let
   `shell_uart_console_print_prompt()` handle the colored form.
@@ -169,6 +174,20 @@
 - `main.c` must contain NO command implementations
 - There is exactly ONE dispatcher: `shell_execute_command_core()` in `components/command/command.c`.
   Never add a second dispatch table.
+- The command line is up to `P4_CONFIG_COMMAND_BYTES` (4096). NEVER declare a
+  `SHELL_COMMAND_BYTES`-sized local in a function on the worker/UART/LVGL tasks — heap-allocate
+  transient command-sized buffers (see the UART console line, submit copies,
+  `shell_input_line_set_text`/repair, the mask/recall buffers, and the worker-queue
+  `command_request_t`). The batch-line buffer (`P4_CONFIG_BATCH_LINE_BYTES`) is a separate,
+  smaller surface.
+- Tab completion routes through `shell_command_ops_t.complete_word` (registered by
+  `command_init`): command names/aliases for the first token and SD paths for any token, capped
+  by `P4_CONFIG_COMPLETION_MAX_MATCHES`. Keep the completion provider in `components/command/`
+  (it touches the SD via storage); the shell only calls the hook.
+- Recall history is heap-backed (`char **` of `strdup`'d lines) with depth
+  `P4_CONFIG_COMMAND_HISTORY_DEPTH` and a total-byte cap `P4_CONFIG_HISTORY_TOTAL_BYTES`; never
+  revert to a fixed `[depth][COMMAND_BYTES]` grid. `history /save`/`/load` write the
+  `P4_CONFIG_HISTORY_PROFILE` through the guarded storage session.
 - Command implementations live with the module that owns their domain:
   - Filesystem verbs (`cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`,
     `write`, `append`, `touch`, `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`,
@@ -207,9 +226,17 @@
     The profile path is `P4_CONFIG_ALIAS_PROFILE` (`ALIASES.BAT`), values are quoted on save,
     and values containing `"` are skipped.
 - System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c`
-- Task introspection verbs (`ps`, `tasks`, `top`) -> `components/shell/shell.c` (`shell_command_ps`)
+- Task introspection verbs (`ps`, `tasks`, `top`) -> `components/shell/shell.c` (`shell_command_ps`).
+  They support `dir /O:`-style sorting (`/O:N|C|S|P|T`, `-` reverses; `top` defaults to CPU
+  descending), return an int ERRORLEVEL (0 ok / 2 usage) the dispatcher records, and must stay
+  strictly read-only. The pure `shell_task_row_compare()` comparator is exposed in shell.h for
+  the unit tests.
 - Time / SNTP verbs (`date`, `time`, `timezone`, `sntp`/`ntpsync`) -> `components/clock/clock_commands.c`
 - Hardware, UI-query, and remaining system verbs -> `components/command/command.c`
+- Audio verbs (`beep`, `tone`, `wavplay`, `audio`, `volume`) dispatch from
+  `components/command/command.c` but ALL audio implementation lives in the `audio` component
+  (`components/audio/audio.c`): codec, volume, and the background playback engine. The command
+  layer only parses arguments and calls `audio.h`.
 - Screenshot/capture/scr (LVGL screen capture as BMP) -> `components/command/command.c`
 - ALL command dispatch MUST go through `shell_execute_command()` (full pipeline) or
   `shell_execute_command_core()` (dispatch only) from `components/command/`
@@ -264,6 +291,26 @@
   `storage_init()`); environment, PATH, batch frame, and errorlevel belong to `components/batch/`
   (reset by `batch_init()`). `command_init()` calls both before registering the ops tables.
 
+### Power / Idle Rules
+- The power module lives in `components/command/command.c` (`power`, `sleep`, `deepsleep`,
+  `power idle`). `power idle <seconds|off>` and the CONFIG.SYS `DISPLAY_TIMEOUT=` directive
+  configure the idle display-off timeout; the shared accessors are
+  `shell_power_set_idle_timeout()` / `shell_power_get_idle_timeout()`.
+- Idle-off MUST only drop the backlight (`display_set_power_state(DISPLAY_POWER_SLEEP)`), never
+  halt the panel/touch/USB or touch shell state — wake is a clean
+  `DISPLAY_POWER_ON` + header notification. `shell_power_idle_tick()` runs on the LVGL task
+  (the header-refresh timer) and scans `lv_indev_get_next()` for a pressed touch to wake.
+- Every user input MUST reset the idle clock via `shell_power_notify_activity()`: the UART
+  reader routes through the `shell_command_ops_t.pm_notify_activity` hook (NULL-checked), USB
+  keyboard/mouse through main.c, and command dispatch through the top of
+  `shell_execute_command_core()`. Guard the idle state (timeout, last-activity timestamp,
+  off-by-idle flag) with a `portMUX` critical section; it is touched from several tasks.
+- Sleep wake: timer always; `P4_CONFIG_POWER_WAKE_GPIO` (default `GPIO_NUM_NC`) enables
+  `gpio_wakeup_enable()` + `esp_sleep_enable_gpio_wakeup()` and is disabled after wake. The
+  GT911 INT line is NOT wired on this board (`BOARD_CFG_LCD_TOUCH_INT_GPIO = GPIO_NUM_NC`), so
+  touch cannot wake light sleep — report that honestly in `sleep`/`power` and point at the
+  alternatives instead of pretending touch wake works.
+
 ### Clock Rules
 - The clock component (`components/clock/`) owns ALL time/SNTP behaviour: the
   C-library clock, timezone, SNTP client, AND the `date`, `time`, `timezone`,
@@ -286,6 +333,71 @@
 - When keyboard is hidden, the transcript area expands to fill the freed space
 - Keyboard height is configurable via `P4_CONFIG_KEYBOARD_*` macros
 - Keyboard modes (text_lower, text_upper, number, symbols) are managed by the keyboard component
+- `keyboard_register_event_callback()` MUST leave exactly ONE handler on the
+  widget: `lv_obj_remove_event_cb(widget, NULL)` is a NO-OP in LVGL (it only
+  removes callbacks whose cb pointer equals NULL), so the LVGL default keyboard
+  handler survives and double-processes every button. Registration removes every
+  callback descriptor explicitly (see `keyboard_remove_all_callbacks`) and logs
+  the post-registration count via `keyboard_event_callback_count()`; a count
+  other than one is a double-input bug.
+- The shell routes every OSK button through `keyboard_osk_accept(btn_id)` before
+  acting on it; the dedup guard drops a re-fire of the same button within
+  `P4_CONFIG_OSK_DEBOUNCE_MS`. Never bypass it.
+- `keyboard_bind_textarea(NULL)` must be called to hand the OSK to a modal
+  surface; it clears the LVGL widget binding so no stray handler can type into a
+  hidden textarea. `keyboard_is_textarea_bound()` lets callers assert the state.
+- Shell transcript/input-line LVGL callbacks MUST no-op while the editor is open
+  (`windows_editor_mode_active()`), so the shared surface is never re-bound or
+  keyboard-summoned underneath the editor.
+- The editor MUST be fully usable from the touch keyboard: two navigation pages
+  (KEYBOARD_MODE_NAV -> LVGL USER_1, KEYBOARD_MODE_NAV2 -> LVGL USER_2) cover
+  every editor command (nav: arrows, Tab, Ins, Del, Home/End, PgUp/PgDn, Find,
+  Next, Rep, Goto, Undo, Redo, Save, SaveAs, Quit; edit: Copy, Cut, Paste,
+  SelAll, WdL/WdR, DocH/DocE, DelLn, DelE). Mode buttons `Nav`/`Nav1`/`Nav2`
+  switch pages in main.c's keyboard callback; `abc` returns to letters. When
+  adding a new editor feature, a touch button MUST be added to one of these
+  pages (or a new one), and `editor_view_handle_osk()` must map it.
+
+### Editor Rules (components/editor)
+- The `edit` command lives in `components/editor/`: the byte-preserving document
+  model plus the LVGL surface and the worker-task session. `command.c` only
+  dispatches and maps the errorlevel.
+- Document mutators run on the LVGL task; SD load/save runs on the command
+  worker inside a guarded `shell_sd_begin`/`shell_sd_end` session. A failed
+  save MUST remove its partial destination.
+- The editor renders through a DEDICATED span group inside the transcript
+  container (not the shell's span group, which is hidden for the session and
+  restored on close). Long lines are clipped in FIXED span mode, never
+  wrapped; the per-row width table keeps the cursor and touch mapping aligned
+  with the rendered rows.
+- The line-number gutter is a render-only prefix run (via the pure
+  `editor_format_line_number()` helper) — NEVER part of the document. The
+  cursor x, selection overlay x, and touch x-mapping MUST all be offset by the
+  same `editor_gutter_width()`, or the caret/tap/select will drift from the
+  text. The current-line highlight is a background bar moved behind the text
+  (`lv_obj_move_to_index(..., 0)`).
+- Serial console verbs: `\q` quit, `\s` save, `\f` find, `\g` go-to-line,
+  `\o` save-as, `\u` undo, `\r` redo, `\a` select-all; any other serial line
+  is typed text + Enter. Keep this set documented in command.md/editor.md.
+- All editor tunables live in `P4_CONFIG_EDITOR_*` (documented in
+  p4minishell_config.yaml). New syntax modes extend `editor_syntax_t`,
+  `editor_doc_pick_syntax()`, and the lexer — never special-case file
+  extensions in the view.
+- The status-bar prompt system (Find / Replace / Go-to-Line / Save-As /
+  quit confirmation) is the DOS EDIT search surface. Keep prompt strings in
+  the status bar, never in the document.
+- Editing an existing file that cannot be loaded is a hard error (refuse with
+  a message) — never open an empty buffer over an existing file.
+- Rotation while a session is open MUST close the editor view and wake the
+  worker (main.c `shell_build_ui()` does this) rather than leaving dangling
+  LVGL widgets.
+- Keyboard mode switching (`abc`/`ABC`/`1#`/`Nav`) is owned by the single
+  keyboard `LV_EVENT_VALUE_CHANGED` handler in main.c; the LVGL default
+  handler is replaced by that callback, so all button routing (shell input
+  line or editor) lives there.
+- The editor unit tests (`test/main/test_editor.c`) cover the pure document
+  model and the batch lexer only; the LVGL surface and session are
+  hardware-bound and are verified on the board.
 
 ### Window Manager Rules
 - ALL LVGL screen layout MUST go through `components/windows/` — never create screen-level widgets directly in main.c
@@ -296,6 +408,14 @@
 - Colors MUST be accessed through `windows_get_color()` with semantic names, never raw hex values
 - The window manager delegates header rendering to `components/header/` via `header_init()`/`header_deinit()`
 - The window manager queries display resolution from `components/display/` via `display_get_width()`/`display_get_height()`
+- The modal editor surface IS the transcript container and MUST stay VISIBLE in
+  editor mode: LVGL flex skips `LV_OBJ_FLAG_HIDDEN` children, so hiding it
+  collapses the editor area to ~one line and drags the keyboard up under it.
+  The editor hides the shell span group inside the container instead.
+- The editor surface height MUST always equal `windows_get_rect(WINDOW_REGION_TRANSCRIPT).height`
+  via `windows_refresh_editor_surface()` (called on entry and keyboard
+  show/hide); `windows_editor_surface_height_ok()` and
+  `windows_debug_editor_layout()` guard against a collapse.
 
 ### Display and Touch
 - Display init MUST use `display_init()` (which wraps `bsp_display_start_with_config()` with BOARD_CFG_* values)
@@ -494,9 +614,18 @@
   `xTaskNumber` (unsigned arithmetic handles counter wrap; a new/deleted task starts fresh).
   Unpinned tasks report `tskNO_AFFINITY`; display that as `-1`. Guard `xCoreID` access with
   `#if configTASKLIST_INCLUDE_COREID`.
+- `/O:` sorting normalizes the snapshot into lightweight heap `shell_task_row_t` rows and
+  `qsort`s them with `shell_task_row_compare()` (pure; keep it in shell.h for the unit tests).
+  `top` defaults to CPU-descending; `ps`/`tasks` keep FreeRTOS order unless `/O:` is given.
 
 ### Shell State
 - RAM-only: current working directory, environment variables, PATH, batch args
+- The RAM clipboard is shell-core state owned by `components/shell/` (`s_clipboard`,
+  `shell_clipboard_*`, `shell_input_line_paste`). The `clip`/`paste` COMMANDS live in
+  `components/command/command.c` and only call the `shell.h` clipboard API; the file-side work
+  (`clip read`, `paste <dest>` copy, `clip file` resolution) uses storage helpers there. Keep
+  clipboard state out of command.c; add it to `components/shell/` and keep the verbs
+  batch-safe, redirectable, and ERRORLEVEL-setting.
 - Current working directory owned by `components/storage/storage.c`; exposed read-only via
   `shell_get_cwd()` and mutated only through `storage_set_cwd()`
 - Environment variables, PATH, batch frame stack, and errorlevel owned by
@@ -608,6 +737,24 @@ When bumping the version, update all three: `p4minishell_config.h` version macro
   are transient (`P4_CONFIG_LED_NOTIFY_MS`). GPIO26 is a reserved critical line in the board
   pin table, so `pwm`/`freq`/`adc`/`i2c`/`spi` refuse it.
 - All tunables live in `P4_CONFIG_LED_*` (documented in `p4minishell_config.yaml`).
+
+### Audio Rules (beep / tone / wavplay / volume)
+- ALL audio logic lives in `components/audio/` (`audio.h` / `audio.c`): the ES8311 codec handle,
+  speaker volume (`audio_set_volume` / `audio_get_volume`), and the background playback engine.
+  The codec is mono 16-bit at 22050 Hz (the BSP default) — `esp_codec_dev_open({22050,1,16})` /
+  `write` / `close` is the whole output path, driven through `bsp_audio_codec_speaker_init()`.
+- The command layer (`components/command/command.c`) only dispatches `beep` / `tone` /
+  `wavplay` / `audio` / `volume`, parses arguments, and calls the `audio.h` API. Keep audio
+  logic out of command.c; add it to the `audio` component instead.
+- `beep`, `tone`, and `wavplay` MUST play in the background: they post a request to the
+  component's `audio_play` task and return immediately, so batch files never block. One sound
+  at a time (a second request is refused with `audio busy`); `audio stop` sets a stop flag the
+  play loop checks; all audio commands return an ERRORLEVEL (0 started / 1 busy|io / 2 usage).
+- Tone PCM is generated in heap chunks (`P4_CONFIG_TONE_CHUNK_SAMPLES`) with a short
+  fade-in/out; WAVs (16-bit PCM mono/stereo at 22050/44100 Hz) are streamed from SD, stereo
+  mixed to mono and 44100 decimated to 22050, bounded by `P4_CONFIG_WAV_MAX_BYTES`. Keep all
+  chunk buffers on the heap, never on the audio task's stack. Call `audio_stop()` before
+  `sleep`/`deepsleep` so playback cannot continue into sleep.
 
 ### Peripheral Toolkit Rules (pwm / freq / adc / i2c / spi)
 - The `pwm`, `freq`, `adc`, `i2c`, and `spi` commands live in `components/command/command.c`

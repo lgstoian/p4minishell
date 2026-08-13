@@ -9,6 +9,7 @@ idf_component_register(
         c6ota
         command
         display
+        editor
         header
         keyboard
         led

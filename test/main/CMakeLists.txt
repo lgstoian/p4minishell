@@ -14,6 +14,9 @@ idf_component_register(
         test_shell_debug_log.c
         test_findstr.c
         test_comp.c
+        test_task_sort.c
+        test_editor.c
+        test_keyboard.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -22,6 +25,8 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/storage"
         "${CMAKE_SOURCE_DIR}/../components/batch"
         "${CMAKE_SOURCE_DIR}/../components/networking"
+        "${CMAKE_SOURCE_DIR}/../components/editor"
+        "${CMAKE_SOURCE_DIR}/../components/keyboard"
     REQUIRES
         unity
         shell
@@ -29,5 +34,7 @@ idf_component_register(
         storage
         batch
         networking
+        editor
+        keyboard
         esp_timer
 )
