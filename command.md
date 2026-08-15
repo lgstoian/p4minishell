@@ -164,7 +164,7 @@ directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v0.31.0 | built <date> <time> | git
+with the build identity: `P4MiniShell v0.32.7 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### ps | tasks | top [/b] [/O:key]
@@ -739,6 +739,8 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | set NAME=VALUE | Create or update environment variable |
 | set /a NAME=<expr> | Evaluate integer arithmetic and store the result |
 | set /p NAME=<prompt> | Prompt the user and store the typed line |
+| set /p NAME=<prompt> /T:secs | Prompt with a timeout; on timeout the variable is unchanged and errorlevel is 1 |
+| set /p NAME=<prompt> /P | Password mode: the typed line is stored without being echoed |
 | set /p NAME=< file | Read one line from the `< file` redirection / pipe source into NAME (cmd.exe behavior) |
 | calc [NAME=] <expr> | Evaluate a floating-point expression with the BASIC math/string functions and print it (or store it in NAME) |
 | calc /deg \| /rad \| /angle | Set or query the `calc` trig angle mode |
@@ -748,6 +750,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | echo <text> | Print text after variable expansion |
 | echo on / echo off | Enable/disable batch command echoing |
 | call <file.bat> [args] | Execute batch file; `%0` is the script name, `%1..%9`/`%*` are the forwarded arguments, and the caller's errorlevel becomes the script's final errorlevel |
+| call <file.bat>::<routine> [args] | Call one routine from a shared library of batch routines: execution starts at `:routine` in the external file, isolated from the caller's variables, and returns on `exit /b` / `goto :eof` / EOF |
 | if [not] errorlevel N cmd | Run cmd when errorlevel is at least N |
 | if [not] exist <file> cmd | Run cmd when the file or directory exists |
 | if [/i] [not] "a"=="b" cmd | Run cmd when the strings match; `/i` makes the comparison case-insensitive |
@@ -763,6 +766,23 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | endlocal | Pop the most recent setlocal scope |
 | exit [code] | Leave every nested batch file, setting errorlevel |
 | exit /b [code] | Leave only the current batch file |
+| proc | List every active batch process (script, depth, args, echo state) |
+| proc /args \| /name \| /depth \| /errorlevel \| /echo \| /stdin | Report the current batch process's arguments, name (%0), depth, exit code, echo state, or active pipe/`<` input source |
+| ini list <file> | List every `KEY=VALUE` line in an INI file on the SD card |
+| ini get <file> <key> | Print the value of `<key>` in an INI file |
+| ini set <file> <key> <value> | Create or update `<key>` in an INI file |
+| ini del <file> <key> | Remove `<key>` from an INI file (alias `delete`) |
+| ini load <file> | Import every `KEY=VALUE` into the environment |
+| ini save <file> | Export the whole environment to an INI file |
+| appconfig <app> [path\|list\|get\|set\|del] [key] [value] | Per-app settings file `sd:/APPS/<APP>.INI` without hand-rolling parsing |
+| ansi <sgr-codes> [text...] | Emit text styled with ANSI SGR codes (reverse video, bold, color) into the transcript |
+| menu <item> [item...] | Render a numbered menu and read a numeric choice; ERRORLEVEL = chosen index (0 = cancel) |
+| appmode on [/full] [/clear] | Enter app mode: save the screen, optionally full-screen + clear; restored automatically on exit /b |
+| appmode off | Restore the saved screen and leave full-screen |
+| appmode status | Show whether app mode is active |
+| temp | Print the SD temp directory (`sd:/tmp`) |
+| temp new [ext] | Create a unique SD-backed temporary file and print its path |
+| temp clean | Delete every SD temporary file |
 | alias | List every alias |
 | alias name | Show one alias |
 | alias name=value | Define (or update) an alias; `name=` clears it |
@@ -915,6 +935,156 @@ echo hello | set /p v=      ->  v = "hello"
 The source belongs to exactly this command and is consumed once. An empty line
 from the source leaves the variable unchanged, matching the interactive form.
 
+**Timeout.** `set /p NAME=<prompt> /T:secs` prompts with a wait bound: after
+`secs` seconds with no input the variable is left unchanged, `set` reports
+"no input received" and errorlevel is 1. Without `/T` the default is
+`P4_CONFIG_KEY_WAIT_TIMEOUT_MS`. The `/T:secs` token is stripped from the
+displayed prompt.
+
+**Password mode.** `set /p NAME=<prompt> /P` collects the line without
+echoing it (for passwords and secrets) — Backspace erases silently, ESC
+cancels, Enter completes. It combines with `/T:secs`:
+
+```
+set /p pass=Password: /P
+set /p pin=PIN: /P /T:2
+```
+
+### Shared library of batch routines
+
+An external `.bat` can act as a library of callable routines. Each routine is
+a `:label` block; `call <file.bat>::<routine> [args]` starts execution at
+that label and returns to the caller on `exit /b`, `goto :eof`, or end of
+file. The routine receives the arguments as `%1`..`%9`/`%*` and its final
+errorlevel propagates to the caller.
+
+```
+:add
+set /a result = %1 + %2
+echo ADD result=%result%
+goto :eof
+
+:shout
+echo SHOUT %*
+goto :eof
+```
+
+```
+call lib.bat::add 3 4      ->  ADD result=7
+call lib.bat::shout hello  ->  SHOUT hello
+if errorlevel 2 echo failed
+```
+
+Routine calls are **isolated automatically** (variable isolation beyond
+`setlocal`): the callee runs in its own environment scope, so a routine's
+temporary variables (`result`, `tmp`, ...) never leak into the caller, and the
+caller does not have to write `setlocal`/`endlocal`. `call <file.bat>` (whole
+file) keeps the shared-environment behavior, matching DOS.
+
+### Persistent state (`ini`, `appconfig`, `temp`)
+
+DOS-like apps kept state in environment variables, temporary files, and simple
+`KEY=VALUE` INI files. All of it lives on the SD card here.
+
+**`ini`** reads and updates any `KEY=VALUE` file (comment lines starting with
+`;`/`#`/`REM` and blank lines are skipped; writes are atomic):
+
+```
+ini set settings.ini theme dark
+ini set settings.ini volume 70
+ini get settings.ini theme        ->  dark
+ini list settings.ini             ->  theme=dark / volume=70
+ini del settings.ini volume
+ini save state.ini                export the whole environment
+set MYSTATE=hello
+ini save state.ini                save it
+set MYSTATE=
+ini load state.ini                restore it
+```
+
+ERRORLEVEL: 0 ok, 1 missing file/key or I/O error, 2 usage.
+
+**`appconfig`** gives each batch app its own namespaced settings file without
+hand-rolling parsing — `sd:/APPS/<APP>.INI` (the `APPS` directory is created
+on demand):
+
+```
+appconfig myapp set theme ocean
+appconfig myapp get theme         ->  ocean
+appconfig myapp set sound on
+appconfig myapp                   ->  theme=ocean / sound=on
+appconfig myapp path              ->  /sdcard/APPS/myapp.INI
+appconfig myapp del sound
+```
+
+App names must be plain identifiers (no `/`, `\`, `.` or `..`). ERRORLEVEL
+0/1/2.
+
+**`temp`** manages SD-backed temporary files under `sd:/tmp`:
+
+```
+temp                ->  temp.dir=/sdcard/tmp
+temp new csv        ->  temp.path=/sdcard/tmp/_app0.csv
+temp new            ->  temp.path=/sdcard/tmp/_app1.tmp
+temp clean          ->  temp: cleaned the SD temp directory
+```
+
+### Menu / form primitives (`ansi` + `menu`, with `choice`)
+
+DOS-style interactive apps were built from `choice` (single-key selection)
+plus ANSI escape codes (colors, bold, reverse video). The primitives are
+rendered in the shell transcript (the display area) and readable from touch,
+USB keyboard, or serial.
+
+**`ansi <sgr-codes> [text...]`** wraps the text in `ESC[<codes>m ... ESC[0m`
+(the DOS `7m` and bare `7` spellings both work). Codes are the SGR
+parameters: `7` reverse video, `1` bold, `31` red, `36` cyan, `90` muted,
+`0` reset, or combinations like `1;36`:
+
+```
+ansi 1;36m **************************
+ansi 1;36m *  P4 APP MENU           *
+ansi 7m > SELECTED                  reverse-video highlight
+ansi 0m
+```
+
+**`menu <item> [item...]`** renders a numbered form and reads a numeric
+choice; ERRORLEVEL is the chosen item's 1-based index (0 on cancel / timeout
+/ an invalid entry), so a batch app branches with `if errorlevel`:
+
+```
+menu "Start game" "Load save" "Settings" "Quit"
+2
+if errorlevel 2 echo Load save selected
+```
+
+`echo.` (the DOS blank-line idiom) is also recognized. A complete menu app
+combines the primitives: an `ansi` banner, `echo.` spacing, `echo` items,
+and a `choice /C:123` selection — see the `appmenu.bat` example in the
+simulation.
+
+### App mode (`appmode`)
+
+A clean way for a batch app to take over the shell and hand it back:
+
+```
+appmode on /full /clear      save the screen, hide the shell input widgets,
+                             and clear the transcript for a full-screen app
+... print the app's full-screen UI (ansi, echo, menu, choice, ...) ...
+appmode off                  restore the saved screen
+```
+
+`appmode on [/full] [/clear]` saves the current transcript (colours
+preserved), optionally hides the input line and scroll buttons (`/full`) and
+clears the screen (`/clear`). The on-screen keyboard can still be shown for
+app input. `appmode off` restores the saved screen; `appmode status` reports
+the state.
+
+**Cleanup on `exit /b`** — if the batch file that entered app mode returns
+via `exit /b`, `goto :eof`, or end of file, the saved screen is restored
+automatically, so an app can never leave the shell stuck in app mode. Native
+apps get the same through `app_mode_enter` / `app_mode_exit` (applib).
+
 ### calc — floating-point calculator
 
 `calc` evaluates a floating-point expression and either prints the result or
@@ -1030,6 +1200,54 @@ set /p v=< data.txt
 Each line is read through the same pipeline as a batch line, so variables,
 pipes, and redirection work per iteration. This is the mechanism behind the
 BASIC `READ`/`DATA`/`INPUT#` verbs.
+
+### Batch process model
+
+A batch file is a command stream, not a separate process, but its I/O and
+state model is fully defined so scripts behave predictably:
+
+- **stdout** — every command's transcript output, captured by `>` / `>>`
+  redirection (the whole delta the command prints, including `echo`,
+  `calc`, `type`, and the text tools). A batch line inherits the redirect a
+  caller set up, exactly like DOS.
+- **stderr** — not a separate stream: errors are interleaved on the
+  transcript (and therefore the redirect). A batch file distinguishes
+  failure with ERRORLEVEL, never by parsing stderr.
+- **stdin** — the input-redirection slot (a `< file`, a pipe stage, or an
+  explicit filename resolved through `storage_resolve_input_source`).
+  Consumed by the text tools (`sort`, `find`, `findstr`, `more`, `fc`,
+  `comp`), by `for /f` over an empty set, and by `set /p NAME=< file`, which
+  reads exactly one line. A batch file is a first-class pipe stage: `echo
+  hello | filter.bat` feeds the spool file into the batch's `for /f ... in
+  ()` / `set /p` lines, and its own output flows to the next stage or the
+  transcript. The interactive key queue is the fallback source for `set /p`,
+  `pause`, and `choice` when no redirect is active.
+- **argv** — `%0` is the script name, `%1`..`%9` are the caller's
+  arguments, and `%*` is everything from `%1` onward. `call` and `call
+  :label` push a fresh argument frame; `shift` slides it left.
+- **exit code** — `errorlevel`, read by `if errorlevel N` / `&&` / `||` and
+  expandable as `%ERRORLEVEL%` (a decimal string, so `set code=%errorlevel%`
+  and `if %errorlevel%==5 ...` work). `exit /b [code]` sets it for the
+  current process; `call` propagates the callee's final value.
+- **process introspection** — `proc` lists every nested batch process and its
+  `/args` `/name` `/depth` `/errorlevel` `/echo` `/stdin` forms report the
+  current one, so a batch file can branch on its own depth or arguments and a
+  user can see what a pipe stage is reading.
+- **cwd** — the RAM-only current working directory owned by
+  `components/storage/`; `cd`/`chdir` change it, and every relative path in
+  the file resolves against it at run time.
+- **PATH** — the RAM-only `PATH` environment variable (default `sd:/`),
+  used by `shell_resolve_batch_path` to find `.bat` files: the literal
+  name, then `name.bat`, then each `;`-separated PATH entry with both forms.
+- **environment propagation** — the 24-slot RAM table is shared across the
+  whole session. `set NAME=value`, `set /a`, `set /p`, and `calc` mutate it;
+  `call` hands the full table to the callee; `setlocal`/`endlocal` push and
+  pop snapshots (a scope left open is unwound when its frame returns); a
+  bare `exit` unwinds every nested frame.
+- **errorlevel** — set by `set`/`set /a`/`set /p`/`calc`, `choice`,
+  `del`/`rd`/`format`/`disk`, `find`/`findstr`/`fc`/`comp`/`sort`/`more`,
+  `ping`/`dns`/`httpget`/`httpd`, `receive`/`send`, and `exit`; read by
+  `if errorlevel N`, `&&`, and `||`.
 - PATH-based .bat lookup
 - Nested calls up to 4 levels deep; `call` forwards arguments and propagates the callee's errorlevel
 - setlocal/endlocal scoping up to 8 levels deep, auto-unwound when a file returns

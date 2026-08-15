@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "storage.c" "storage_commands.c" "trash.c"
+    SRCS "storage.c" "storage_commands.c" "storage_ini.c" "trash.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         shell

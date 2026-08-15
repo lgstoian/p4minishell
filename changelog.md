@@ -7,6 +7,372 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.32.8] - 2026-08-15
+
+### Fixed - memory-hardening sweep: SD card reliability + transcript scrollback memory
+
+A post-release sweep re-ran every command twice, every batch verb and batch
+file on the SD twice, the applib/appconfig/appmode paths, and the full unit
+suite. Three medium bugs and one thread-safety hazard were found and fixed:
+
+- **SDMMC DMA buffer allocation failures** (`sdmmc_cmd: allocate_dma_buf:
+  not enough mem`). The IDF sdmmc driver allocates a temporary DMA buffer for
+  every card transaction unless the host carries a cached buffer; on the P4
+  that allocation comes from the internal DMA-capable heap (PSRAM does not
+  carry `MALLOC_CAP_DMA` here) and fails once the heap fragments under load,
+  taking every SD command down. Fix: `storage_sd_ensure_dma_buffer()`
+  pre-allocates a cached `card->host.dma_aligned_buffer` at mount (new
+  `P4_CONFIG_SD_DMA_BUFFER_BYTES`, 8192 B = 16 × 512 B sectors) and derives
+  the SDMMC chunk size from it; released on `sdeject`. 50+ SD operations run
+  with zero DMA errors (previously every op failed after ~40 s).
+- **`abort()` in newlib `lock_init_generic`** (stdio FILE-lock OOM) under
+  long sessions. The transcript's LVGL span objects consume internal RAM;
+  once the accumulated history exhausts it, a tiny stdio lock allocation
+  (`xQueueCreateMutex`) fails and the board aborts mid-command. Fix:
+  `shell_transcript_guard_internal()` auto-trims the scrollback (oldest half
+  dropped, spans freed synchronously under the LVGL lock) whenever free
+  internal RAM drops below `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES`
+  (49152), checked at command start and before every append; and
+  `P4_CONFIG_TRANSCRIPT_BYTES` reduced 16384 → 8192 to halve the span-group
+  ceiling. The full sweep (previously 6 abort crashes) now completes with
+  zero crashes.
+- **`display_set_rotation()` LVGL thread-safety.** The rotate command now
+  runs the LVGL rotation call plus the synchronous resolution-changed
+  callback and the async UI-rebuild scheduling under `lvgl_port_lock`, like
+  every other shell-path LVGL caller. (An earlier "reboot on rotate" report
+  was a false alarm: the `P4MiniShell ready` banner and keyboard audit are
+  legitimately re-printed by the UI rebuild.)
+- **SD card cleanup**: removed all accumulated test artifacts, leaving only
+  `CONFIG.SYS`, `AUTOEXEC.BAT`, `WIFI.KNOWN`, and the C6 slave image.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **158 tests, 0 failures** (20 groups).
+- Full command sweep (105 commands × 2 passes): **0 crashes, 0 errors**.
+- Batch sweep (18 verbs + 27 batch files × 2 passes): **0 crashes**.
+- appmode/appconfig/applib round-trips, rotate 90/180/270, and the previously
+  crashing `volume`/`move`/`ren` commands verified clean on board.
+
+---
+
+## [0.32.7] - 2026-08-15
+
+### Added - app mode: clean enter/exit with save/restore screen, full-screen, cleanup on `exit /b`
+
+A clean way for a batch file (or a native app) to take over the shell and
+hand it back, so interactive apps get a full-screen surface:
+
+- **`appmode` command** (`components/batch/batch.c`): `appmode on [/full]
+  [/clear]` saves the current transcript (colours preserved) and optionally
+  hides the shell input widgets for a full-screen app surface and clears the
+  transcript; `appmode off` restores the saved screen; `appmode status`
+  reports the state.
+- **Cleanup on `exit /b`**: each batch frame tracks whether it entered app
+  mode; when the file returns via `exit /b` / `goto :eof` / EOF, the saved
+  screen is restored automatically, so an app can never leave the shell in
+  app mode.
+- **Shared shell-core primitives** (`components/shell/shell.c`):
+  `shell_screen_save/restore/discard` capture and restore the transcript
+  (ANSI form, colours preserved) and `shell_app_mode_enter/exit/active`
+  toggle the full-screen surface via new `windows_enter_app_mode` /
+  `windows_exit_app_mode` (hide/restore the input-line and scroll buttons;
+  the on-screen keyboard can still be shown for app input). Implemented once
+  here, below both batch and applib.
+- **applib** (`applib_ui.h`): `app_mode_enter(full_screen)` /
+  `app_mode_exit()` wrap the same shell primitives for native apps.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **158 tests, 0 failures** (new `test_applib_app_mode`,
+  which also guards the no-LVGL headless path).
+- On-board simulation (UART console, mirrored to the transcript display):
+  `appmode status` → `off`; a batch app that runs `appmode on /full /clear`,
+  prints a styled full-screen banner, `choice`, then `exit /b 0` — after the
+  exit the prior screen (`SCREEN_MARKER_123` and history) is restored and
+  `appmode status` reports `off`; a manual `appmode on /clear` /
+  `appmode off` round-trip restores the screen.
+
+---
+
+## [0.32.6] - 2026-08-15
+
+### Added - `set /p /P` password mode + `app_read_password` (no echo)
+
+Prompted input can now be collected without echoing, for passwords and other
+secrets:
+
+- **`set /p NAME=<prompt> /P`** (`components/batch/batch.c`): the typed line
+  is stored in `NAME` but never echoed — Backspace erases silently, ESC
+  cancels, Enter completes and prints a newline. Combines with `/T:secs` for a
+  bounded password prompt (`set /p pin=PIN: /P /T:2`).
+- **`shell_read_line_hidden()`** (`components/shell/shell.c`): the shared
+  no-echo line reader behind it, so the batch command and applib use one
+  implementation (`shell_read_line` is now a thin wrapper over the shared
+  mode with echo on; behavior unchanged).
+- **`app_read_password(buf, size, timeout_ms)`** (`applib_input.h`): the
+  app-side equivalent for native apps, wrapping `shell_read_line_hidden`.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **157 tests, 0 failures** (new
+  `test_applib_read_password`).
+- On-board simulation (UART console): `set /p user=User:` echoes `alice` →
+  `user=alice`; `set /p pass=Password: /P` accepts `s3cret` with **no echo**
+  and stores `pass=s3cret`; `set /p pin=PIN: /P /T:2` stores `pin=1234`
+  without echo.
+
+---
+
+## [0.32.5] - 2026-08-15
+
+### Added - menu / form primitives (`ansi` + `menu`; CHOICE + ANSI was the DOS way)
+
+Interactive apps were built from CHOICE (single-key selection) plus ANSI
+escape codes (colors, bold, reverse video). Those primitives now exist for
+both batch and applib, rendered in the shell transcript (the display area)
+and readable from touch, USB keyboard, or serial:
+
+- **`ansi <sgr-codes> [text...]`** (`components/batch/batch.c`): emit text
+  styled with the given ANSI SGR codes — `7` reverse video, `1` bold, `31`
+  red, `90` muted, `0` reset, etc. — wrapped as `ESC[<codes>m text ESC[0m`
+  into the transcript. The DOS `7m` spelling (with the trailing `m`) and the
+  bare `7` spelling are both accepted; invalid codes are rejected (ERRORLEVEL
+  2).
+- **`menu <item> [item...]`**: a numbered form primitive — renders `1. item`
+  lines in the transcript, reads a numeric choice, and sets ERRORLEVEL to the
+  chosen item's 1-based index (0 on cancel / timeout / an invalid entry), so a
+  batch app branches with `if errorlevel`.
+- **`echo.` idiom**: the DOS blank-line `echo.` is now recognized (was an
+  unknown command), so DOS-style menu scripts port cleanly.
+- **applib menu/form primitives**: `app_print_styled(sgr_codes, ...)` (wrap
+  text in SGR codes) and `app_menu(title, items, count, timeout_ms)` (render
+  a numbered form and return the chosen index, 0 on cancel), the app-side
+  equivalents of the batch commands.
+- CHOICE is unchanged and re-verified composing with `ansi` in a batch menu.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **156 tests, 0 failures** (new
+  `test_applib_menu_primitives`).
+- On-board simulation (UART console, mirrored to the transcript display):
+  `ansi 1;36m Title line` renders bold-cyan; `ansi bad;7m` → errorlevel 2;
+  `menu "Start game" "Load save" "Settings" "Quit"` + `2` → errorlevel 2,
+  invalid `9` → errorlevel 0; `choice /C:YN /N` + `Y` → `CHOSE_Y`; and
+  `appmenu.bat` (an `ansi` banner + `echo.` blank line + `choice`) selects
+  `picked wifi` by key 3.
+
+---
+
+## [0.32.4] - 2026-08-15
+
+### Added - easy persistent state: `ini`, `appconfig`, `temp` + applib state group
+
+DOS-like apps kept state in environment variables, temporary files, and
+simple `KEY=VALUE` INI files. That surface now exists for both batch and
+applib, with **all storage on the SD card** and a single shared core
+(`components/storage/storage_ini.c`):
+
+- **`ini` command** (`components/batch/batch.c`): `ini list|get|set|del
+  <file> [key] [value]` reads/updates any `KEY=VALUE` file on the SD card
+  (comment- and blank-line aware, atomic temp+rename writes), and
+  `ini load|save <file>` imports/exports the environment — easy persistent
+  state without hand-rolling file parsing.
+- **`appconfig` command**: per-app settings without hand-rolling parsing.
+  `appconfig <app> [path|list|get|set|del]` reads/writes a namespaced
+  `sd:/APPS/<APP>.INI` file (the `APPS` directory is created on demand), so
+  batch apps get a settings file of their own.
+- **`temp` command**: `temp` shows the SD temp directory (`sd:/tmp`),
+  `temp new [ext]` creates a unique SD-backed temporary file and prints its
+  path, `temp clean` deletes every temp file.
+- **applib state group** (`applib_state.h`): `app_ini_get` / `app_ini_set` /
+  `app_ini_delete` and `app_temp_path` / `app_temp_cleanup` give native apps
+  the same INI + temp-file primitives, wrapping the shared storage core.
+- The pure INI line editors were moved from the `config` command
+  (`config_directive_*`) into `components/storage` (`storage_ini_*`) so the
+  `config`, `ini`, and `appconfig` commands and applib all share one
+  implementation; `config_directive_*` remain as thin wrappers.
+- New config: `P4_CONFIG_INI_MAX_BYTES` (16 KB) and
+  `P4_CONFIG_TEMP_DIR_NAME` ("tmp"), documented in p4minishell_config.yaml.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **155 tests, 0 failures** (new `test_applib_state`;
+  the existing `config_directive_*` tests pass unchanged over the storage
+  wrappers).
+- On-board simulation (UART console): `ini set/get/list/del` round-trips
+  (`theme=dark`, delete + errorlevel 1 on missing); `ini save` →
+  `set MYSTATE=` → `ini load` restores `MYSTATE=hello SCORE=42`;
+  `appconfig myapp set/get/path/del` auto-creates `/sdcard/APPS/myapp.INI`
+  and rejects `bad/name` with errorlevel 2; `temp new csv` →
+  `/sdcard/tmp/_app0.csv`, `temp clean` empties the temp directory; `dir
+  APPS` and `dir tmp` show the state files on the SD card.
+
+---
+
+## [0.32.3] - 2026-08-15
+
+### Added - batch shared-library CALL + input timeouts; applib lean headers + input
+
+Better modularity for both surfaces, without duplicating any existing verb:
+
+- **`call <file.bat>::<routine> [args]`** — shared libraries of batch
+  routines. An external `.bat` becomes a callable library: `call lib.bat::add
+  3 4` loads `lib.bat`, starts execution at its `:add` routine, and returns
+  to the caller on `exit /b` / `goto :eof` / end of file. The routine's
+  arguments arrive as `%1`..`%9`/`%*` and its final errorlevel propagates.
+- **Variable isolation beyond `setlocal`** — a library-routine call
+  automatically pushes an environment scope for the callee, so a routine's
+  temporary variables never leak into the caller (verified: `result`/`tmp`
+  set inside `lib.bat::add`/`:probe` are undefined back in the caller, with
+  no `setlocal` written by the caller). `call <file.bat>` (whole file) keeps
+  the shared-environment behavior, matching DOS.
+- **`set /p NAME=<prompt> /T:secs`** — prompted input now takes a timeout
+  (`/T:secs`, default `P4_CONFIG_KEY_WAIT_TIMEOUT_MS`), giving input the same
+  timeout control `choice /T` has. On timeout the variable is left unchanged
+  and errorlevel is 1. `choice /T` is unchanged and re-verified on board.
+- **applib lean include mechanism** — `applib.h` is now an umbrella over
+  focused headers (`applib_console.h`, `applib_mem.h`, `applib_time.h`,
+  `applib_net.h`, `applib_input.h`), so a native app includes only the groups
+  it uses. Each function is declared in exactly one header; the umbrella
+  keeps the existing `#include "applib.h"` working.
+- **applib input with timeout** — `app_wait_key(timeout_ms, &key)` and
+  `app_read_line(buf, size, timeout_ms)` give native apps bounded keypress /
+  line reads (the primitive behind `pause` / `choice /T` / `set /p /T`),
+  backed by the shell's key queue and returning false on a headless board.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **154 tests, 0 failures** (new
+  `test_applib_input_timeout`; `app_wait_key`/`app_read_line` are bounded and
+  headless-safe in the runner).
+- On-board simulation: `call lib.bat::add 3 4` → `ADD result=7`;
+  `call lib.bat::shout alpha beta` → `SHOUT alpha beta`;
+  `call lib.bat::nope` → `call: library routine not found`; a caller that
+  invokes `:add`/`:probe` sees no leaked `result`/`tmp` (isolation);
+  `set /p ans=Enter something /T:2` times out with "no input received" and
+  errorlevel 1; `choice /C:YN /T:N,2 Continue?` defaults to `N (timed out)`
+  and errorlevel 2.
+
+---
+
+## [0.32.2] - 2026-08-15
+
+### Added - batch process abstraction (`proc` + `%ERRORLEVEL%`)
+
+The batch "process" model is now explicit and introspectable, on top of the
+existing pipe-spool mechanism (each stage spools through an SD temp file and
+the next stage reads it through the input-redirection slot — a single worker
+task runs one command at a time, so there is no second process to stream
+into):
+
+- **`proc` command** (`components/batch/batch.c`): lists the active batch
+  process stack — every nested `.bat` (script path, depth, arguments, echo
+  state) — and reports the current process with `/args` (all arguments),
+  `/name` (%0), `/depth`, `/errorlevel`, `/echo`, and `/stdin` (the active
+  pipe spool / `< file` source). A batch file can therefore branch on its own
+  depth, arguments, or exit code, and a shell user can see which scripts are
+  nested and what a pipe stage is reading. ERRORLEVEL 0 ok / 2 usage.
+- **`%ERRORLEVEL%` expansion**: `shell_expand_variables()` now expands
+  `%ERRORLEVEL%` (case-insensitive) to the current errorlevel as a decimal
+  string, giving a batch process access to its own exit code (cmd.exe
+  parity): `set code=%errorlevel%`, `if %errorlevel%==5 ...`.
+- **Batch files as pipe processes**: a `.bat` is now a first-class pipe
+  stage — `echo hello | filter.bat` (reads stdin via `for /f ... in ()` /
+  `set /p NAME=<`) and `echo x | filter.bat | findstr LINE` (batch in the
+  middle of a pipeline) are verified on board, with `proc /stdin` showing the
+  spool file the stage is consuming.
+
+### Fixed - redirection capture was not re-entrant
+
+- **`cmd1 | cmd2 > out.txt` (and `>>`) wrote an empty file.** The output
+  redirection capture was a single global buffer; a pipeline stage's own
+  `> _pipeN.tmp` spool redirect nested inside the outer `>` and its reset
+  freed the buffer the outer capture depended on. `shell_redirect_capture_*`
+  now keep a stack of captures (`P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH`, 8):
+  the inner stage's capture is written and popped, and the outer capture
+  resumes so the outer file receives the whole pipeline output.
+- `%ERRORLEVEL%` initially did not expand (the token buffer was read before
+  it was filled) — fixed and covered by a unit test.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **153 tests, 0 failures** (new
+  `test_variable_expansion_errorlevel` and `test_redirect_capture_nested`).
+- On-board batch stress suite (UART console): multi-stage pipes, pipes inside
+  batch files, batch-as-pipe-filter (stdin via `for /f in ()`),
+  `echo hello | sort > out.txt` round-trips, `>>` append nesting, pipe error
+  cases (stage cap, empty stage), `%ERRORLEVEL%` after `findstr` hit/miss,
+  and nested `call` + `proc` stack introspection with `exit /b` errorlevel
+  propagation (`P1 code=5`).
+
+---
+
+## [0.32.1] - 2026-08-15
+
+### Added - applib: the native-app runtime library (shell SDK)
+
+The four "Runtime services to define" from the roadmap are now implemented as a
+single leaf component, `components/applib` (`applib.h`), which native apps link
+against instead of reaching into shell/clock/networking internals:
+
+- **Console output API** (`app_printf` / `app_vprintf`, ANSI variants, and the
+  semantic `app_print_heading`/`app_print_field`/`app_print_ok`/`app_print_error`/
+  `app_print_warning`/`app_print_muted`/`app_print_usage`). Output lands on the
+  transcript — which is the redirection layer — so an app invoked inside a
+  command dispatch is captured by `>` / `>>` exactly like a built-in command.
+- **Memory allocation policy + error reporting** (`app_alloc`/`app_calloc`/
+  `app_realloc`/`app_strdup`/`app_strndup`/`app_free`, and
+  `app_report_error`/`app_report_warning`/`app_report_info`). Blocks of
+  `P4_CONFIG_APPLIB_PSRAM_THRESHOLD_BYTES` (512) or more prefer PSRAM with an
+  internal-heap fallback; diagnostics route into the shell debug log.
+- **Time / timers / sleep / system information** (`app_time`,
+  `app_time_local`/`app_time_utc`, `app_uptime_sec`, `app_now_ms`,
+  `app_delay_ms`, `app_time_synced`, `app_uptime_formatted`, `app_sysinfo`).
+- **Networking helpers** (`app_wifi_is_connected`, `app_wifi_get_rssi`,
+  `app_wifi_state_string`) read Wi-Fi state through the registered
+  `applib_net_ops_t` table (wired in `command_init()`), so applib never includes
+  `networking.h` — the same one-way ops-table pattern as `shell_command_ops_t`.
+
+Layering: `applib` depends only on `shell`, `clock`, and the FreeRTOS/heap/
+esp_timer IDF components. Registered in the root and test `CMakeLists.txt`;
+`components/command` requires it to register the networking hooks. 11 new unit
+suites in `test/main/test_applib.c` cover the memory policy, the time/sysinfo
+helpers, the console entry points, and the Wi-Fi accessors through a fake ops
+table.
+
+### Fixed - two batch integration bugs found by the on-board batch-file check
+
+- **`calc NAME=<expr>` failed from a batch file (and at the prompt).**
+  `shell_command_calc_line()` copied the *whole* `NAME = expr` text into the
+  variable name and passed it to `shell_env_set()`, which rejects names
+  containing spaces — so `calc y = 6 * 7` reported "invalid variable name or
+  environment is full". It now extracts only the text before the `=`.
+  Regression test: `test_calc_command_assignment`.
+- **`for /f` silently did nothing** (interactive and in batch files). After
+  parsing the `/f` options the parser never advanced past them, so the
+  loop-variable check `if (*for_ptr != '%')` always failed and the loop
+  returned without iterating. `shell_execute_for_loop()` now advances
+  `for_ptr` to the loop variable after the options region.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board unit suite: **151 tests, 0 failures** (16 `calc`, 11 `applib`).
+- On-board batch-file checks (UART console): `for /f "delims=," %%a in
+  (data.txt) do echo ITEM=%%a` prints `ITEM=apple`; `calc y = 6 * 7` sets
+  `y=42`; `set /p v=< data.txt` sets `v=apple,banana,cherry`; interactive
+  `for /f` `tokens=2` / `tokens=1,*` / `skip=1` behave per DOS; `calc pi2 =
+  pi * 2` and `calc x = len("hello")` store and recall env values.
+
+---
+
 ## [0.32.0] - 2026-08-15
 
 ### Added - `calc` float calculator + batch file input (FX-870P/VX-4 port)

@@ -255,153 +255,20 @@ static const config_setting_t *config_find(const char *key)
 
 int config_directive_get(const char *text, const char *key, char *out, size_t out_size)
 {
-    const char *cursor;
-
-    if (text == NULL || key == NULL) {
-        return -1;
-    }
-
-    cursor = text;
-    while (*cursor != '\0') {
-        const char *line = cursor;
-        const char *nl = strchr(cursor, '\n');
-        const char *end = nl != NULL ? nl : cursor + strlen(cursor);
-        const char *q = line;
-        const char *eq;
-
-        while (q < end && isspace((unsigned char)*q)) {
-            q++;
-        }
-        if (q < end && (*q == ';' || *q == '#')) {
-            cursor = nl != NULL ? nl + 1 : end;
-            continue;
-        }
-        if ((size_t)(end - q) >= 3 && strncasecmp(q, "REM", 3) == 0 &&
-            (q + 3 == end || isspace((unsigned char)q[3]))) {
-            cursor = nl != NULL ? nl + 1 : end;
-            continue;
-        }
-        if (q == end) {
-            cursor = nl != NULL ? nl + 1 : end;
-            continue;
-        }
-
-        eq = memchr(q, '=', (size_t)(end - q));
-        if (eq != NULL) {
-            size_t key_len = (size_t)(eq - q);
-            const char *v = eq + 1;
-            size_t value_len = (size_t)(end - v);
-
-            while (key_len > 0 && isspace((unsigned char)q[key_len - 1])) {
-                key_len--;
-            }
-            if (key_len == strlen(key) && strncasecmp(q, key, key_len) == 0) {
-                while (value_len > 0 && isspace((unsigned char)v[value_len - 1])) {
-                    value_len--;
-                }
-                while (value_len > 0 && isspace((unsigned char)*v)) {
-                    v++;
-                    value_len--;
-                }
-                if (out != NULL && out_size > 0) {
-                    size_t copy = value_len < out_size - 1 ? value_len : out_size - 1;
-
-                    memcpy(out, v, copy);
-                    out[copy] = '\0';
-                }
-                return (int)value_len;
-            }
-        }
-
-        cursor = nl != NULL ? nl + 1 : end;
-    }
-
-    return -1;
-}
-
-/** Append a single "KEY=VALUE\n" line, returning true on success. */
-static bool config_append_directive(char *text, size_t cap,
-                                    const char *key, const char *value)
-{
-    size_t text_len = strlen(text);
-    size_t key_len = strlen(key);
-    size_t value_len = strlen(value);
-
-    if (text_len > 0 && text[text_len - 1] != '\n') {
-        if (text_len + 1 + key_len + 1 + value_len + 1 + 1 > cap) {
-            return false;
-        }
-        text[text_len++] = '\n';
-    }
-    if (text_len + key_len + 1 + value_len + 1 + 1 > cap) {
-        return false;
-    }
-    memcpy(text + text_len, key, key_len);
-    text_len += key_len;
-    text[text_len++] = '=';
-    memcpy(text + text_len, value, value_len);
-    text_len += value_len;
-    text[text_len++] = '\n';
-    text[text_len] = '\0';
-    return true;
+    /* The pure INI line editor lives in components/storage (storage_ini.c) so
+     * the batch `ini` command and the applib state group share it; the config
+     * command keeps its public name as a thin wrapper. */
+    return storage_ini_get_value(text, key, out, out_size);
 }
 
 bool config_directive_remove(char *text, size_t cap, const char *key)
 {
-    size_t key_len;
-    bool removed = false;
-
-    (void)cap;
-    if (text == NULL || key == NULL) {
-        return false;
-    }
-    key_len = strlen(key);
-
-    while (*text != '\0') {
-        const char *line = text;
-        const char *nl = strchr(text, '\n');
-        const char *end = nl != NULL ? nl : text + strlen(text);
-        const char *span_end = nl != NULL ? nl + 1 : end;
-        const char *q = line;
-        const char *eq;
-
-        while (q < end && isspace((unsigned char)*q)) {
-            q++;
-        }
-        if (q < end && (*q == ';' || *q == '#')) {
-            text = (char *)span_end;
-            continue;
-        }
-        if ((size_t)(end - q) >= 3 && strncasecmp(q, "REM", 3) == 0 &&
-            (q + 3 == end || isspace((unsigned char)q[3]))) {
-            text = (char *)span_end;
-            continue;
-        }
-        eq = memchr(q, '=', (size_t)(end - q));
-        if (eq != NULL) {
-            size_t kw_len = (size_t)(eq - q);
-
-            while (kw_len > 0 && isspace((unsigned char)q[kw_len - 1])) {
-                kw_len--;
-            }
-            if (kw_len == key_len && strncasecmp(q, key, kw_len) == 0) {
-                size_t removed_len = (size_t)(span_end - text);
-
-                memmove(text, text + removed_len, strlen(text + removed_len) + 1);
-                removed = true;
-                continue;
-            }
-        }
-        text = (char *)span_end;
-    }
-
-    return removed;
+    return storage_ini_remove(text, cap, key);
 }
 
 bool config_directive_upsert(char *text, size_t cap, const char *key, const char *value)
 {
-    (void)config_directive_remove(text, cap, key);
-    return config_append_directive(text, cap, key, value);
+    return storage_ini_upsert(text, cap, key, value);
 }
 
 /* ========================================================================

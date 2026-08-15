@@ -10,8 +10,8 @@ banner, the system info commands, and the read-only FreeRTOS task introspection 
   `shell_command_ps()`).
 - `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, every DOS file command, and the hidden `.trash` recycle bin (`trash.c`) that `del`/`rd /s` move entries into and `undelete`/`trash` manage.
 - `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, 
-`for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, the
-batch language commands, and the DOSKEY-style alias table (`alias` / `unalias`, prompt-only
+`for` loops incl. `for /f` file-line iteration, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, the
+batch language commands, the `calc` float calculator (`calc.c`), and the DOSKEY-style alias table (`alias` / `unalias`, prompt-only
 expansion, SD persistence via `alias /save`).
 - `components/command` owns the single dispatcher, the execution pipeline, output-redirection parsing, the worker task, the hardware commands, and the remaining system commands. The display/keyboard/windows UI query handlers live in `components/command/command_ui.c`.
 - `components/ansi` owns ANSI/VT SGR escape sequence processing, 16-color palette, and format string builder.
@@ -24,6 +24,13 @@ expansion, SD persistence via `alias /save`).
   (`editor_view.c`), and a worker-task session that keeps file I/O off the
   LVGL task. It is the reference implementation of the "modal app surface"
   pattern below.
+- `components/applib` owns the native-app runtime library (`applib.h`): the
+  formal app `printf`/stdout contract mapped onto the transcript (the
+  redirection layer), the shared memory-allocation policy and debug-log error
+  reporting, time/timer/sleep/system-info helpers, and Wi-Fi state accessors
+  that route through the registered `applib_net_ops_t` table. It is a leaf
+  (depends only on `shell`, `clock`, and the FreeRTOS/heap/esp_timer IDF
+  components) and never includes `networking.h`.
 - `components/networking` owns hosted Wi-Fi runtime state, boot restore, diagnostics, OTA
   restore hooks, and the persistent known-network list (`wifi_known.c`, `sd:/WIFI.KNOWN`).
   The known-list module performs all SD I/O through the guarded storage session API
@@ -170,6 +177,62 @@ A future `view`, `hexview`, or third-party `.app` can reuse this shape: a
 worker session + `windows_enter_editor_mode()` surface + `shell_command_ops_t`
 input hooks + guarded SD + a status-bar prompt, with the pure model unit-tested.
 
+## applib — the native-app runtime
+
+`components/applib` is the stable runtime surface a native app links against.
+It is organized as **lean, focused headers** — an app includes only the groups
+it uses (the umbrella `applib.h` pulls all of them in):
+`applib_console.h`, `applib_mem.h`, `applib_time.h`, `applib_net.h`,
+`applib_input.h`. It depends only on `shell`, `clock`, and the FreeRTOS/heap/
+esp_timer IDF components, so apps never reach into shell/clock/networking
+internals. The service groups:
+
+1. **Console output** (`applib_console.h`) — `app_printf` / `app_vprintf` /
+   `app_printf_ansi` / `app_vprintf_ansi`, the semantic helpers
+   (`app_print_heading`, `app_print_field`, `app_print_ok`,
+   `app_print_error`, `app_print_warning`, `app_print_muted`,
+   `app_print_usage`), and `app_print_styled(sgr_codes, ...)` (menu/form
+   primitive: text wrapped in ANSI SGR codes such as reverse video, bold, or
+   colour). An app's stdout is the transcript, which is the redirection layer:
+   an app invoked inside a command dispatch is captured by `>` / `>>` exactly
+   like a built-in command.
+2. **Memory + error reporting** (`applib_mem.h`) — `app_alloc`/`app_calloc`/
+   `app_realloc`/`app_strdup`/`app_strndup`/`app_free` implement the shared
+   policy: blocks of `P4_CONFIG_APPLIB_PSRAM_THRESHOLD_BYTES` (512) or more
+   prefer PSRAM with an internal-heap fallback; smaller blocks use the
+   internal heap. Every call returns NULL on failure — check it.
+   `app_report_error`/`app_report_warning`/`app_report_info` route
+   diagnostics into the shell debug log.
+3. **Time, timers, sleep, sysinfo** (`applib_time.h`) — `app_time`,
+   `app_time_local`/`app_time_utc`, `app_uptime_sec`, `app_now_ms`,
+   `app_delay_ms`, `app_time_synced`, `app_uptime_formatted`, `app_sysinfo`.
+4. **Networking state** (`applib_net.h`) — `app_wifi_is_connected`,
+   `app_wifi_get_rssi`, `app_wifi_state_string` read through the registered
+   `applib_net_ops_t` table. `command_init()` registers the hooks; every hook
+   is NULL-checked, so the helpers degrade to safe defaults before
+   registration.
+5. **Input with timeout** (`applib_input.h`) — `app_wait_key(timeout_ms,
+   &key)`, `app_read_line(buf, size, timeout_ms)`, and
+   `app_read_password(buf, size, timeout_ms)` give apps bounded keypress /
+   line / password reads (the primitives behind `pause` / `choice /T` / `set
+   /p /T` / `set /p /P`), returning false on a headless board instead of
+   stalling, and `app_menu(title, items, count, timeout_ms)` renders a
+   numbered form and returns the chosen index (0 on cancel).
+6. **Persistent state** (`applib_state.h`) — `app_ini_get` / `app_ini_set` /
+   `app_ini_delete` read and update `KEY=VALUE` INI files on the SD card and
+   `app_temp_path` / `app_temp_cleanup` manage SD-backed temporary files
+   (under `sd:/tmp`), all wrapping the shared `storage_ini.c` core.
+7. **App mode** (`applib_ui.h`) — `app_mode_enter(full_screen)` /
+   `app_mode_exit()` save and restore the screen (and optionally hide the
+   shell input widgets for a full-screen app surface), the same primitives
+   the batch `appmode` command uses.
+
+When another layer needs a service an app should see, extend the matching
+`applib_*.h` header (declare it once, in exactly one header) and implement it
+in `components/applib` (or route it through an ops table when the owner lives
+higher in the stack), then add the component to the root and test
+`CMakeLists.txt` `EXTRA_COMPONENT_DIRS`.
+
 ## Networking ownership
 
 Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, NimBLE, and HTTP call belongs in
@@ -254,7 +317,7 @@ work the integrator has to perform.
    | Command kind | File | Visibility |
    |--------------|------|------------|
    | Filesystem / SD | `components/storage/storage_commands.c` | declare in `storage_commands.h` |
-   | Batch language | `components/batch/batch.c` | declare in `batch.h` |
+   | Batch language | `components/batch/batch.c` (+ `components/batch/calc.c` for `calc`) | declare in `batch.h` / `calc.h` |
    | System info | `components/shell/shell.c` | declare in `shell.h` |
    | Hardware, UI query, other system | `components/command/command.c` | keep `static` |
 
@@ -556,6 +619,97 @@ shell_key_wait_end();   /* Required on every return path. */
 
 Never call `shell_wait_for_key()` with an unbounded timeout, and never leave a wait open: while
 one is active every input source stops accepting commands.
+
+## Batch process model
+
+A batch file runs as a command stream on the single command worker task, but
+its I/O and state contract is fully defined (see also `command.md`, "Batch
+process model"):
+
+| Concern | Definition |
+|---------|------------|
+| stdout | Every command's transcript output, captured by `>` / `>>`. A batch line inherits the caller's redirect. |
+| stderr | Not a separate stream. Errors interleave on the transcript (and the redirect); failure is signalled by ERRORLEVEL. |
+| stdin | The storage input-redirection slot (a `< file`, a pipe stage, or an explicit filename). Consumed by the text tools via `storage_resolve_input_source()`, by `for /f` over an empty set, and by `set /p NAME=< file` (one line). The interactive key queue backs `set /p`/`pause`/`choice` when no redirect is active. |
+| argv | `%0` = script name, `%1`..`%9` = caller arguments, `%*` = everything from `%1`. `call`/`call :label` push a fresh frame; `shift` slides it. |
+| cwd | RAM-only current working directory owned by `components/storage/` (`storage_set_cwd()` / `shell_get_cwd()`); relative paths resolve against it at run time. |
+| PATH | RAM-only `PATH` environment variable (default `sd:/`); `shell_resolve_batch_path()` tries the literal name, `name.bat`, then each `;`-separated PATH entry with both forms. |
+| environment | The 24-slot RAM table is session-global; `set`/`set /a`/`set /p`/`calc` mutate it, `call` hands it to the callee, `setlocal`/`endlocal` snapshot/restore it (a scope left open is unwound when its frame returns). |
+| errorlevel | `batch_get_errorlevel()` / `batch_set_errorlevel()`, read by `if errorlevel N` and `&&`/`||`. |
+
+There is no process isolation: the file shares the worker task, the
+environment table, and the transcript with the whole shell. Batch files are
+therefore a scripting surface, not an app ABI — native apps use the modal
+app-surface pattern above.
+
+Batch files are first-class **pipe processes**: a stage's output is spooled
+through an SD temp file and the next stage reads it via
+`storage_resolve_input_source()` / `storage_get_input_redirect()`, so a `.bat`
+can sit in the middle of a pipeline (`echo x | filter.bat | findstr ...`)
+reading its stdin with `for /f ... in ()` or `set /p NAME=<` and writing its
+stdout through `echo`/`>`/`>>`. The redirection capture is re-entrant, so an
+outer `>`/`>>` on a pipeline still receives the whole output. The process
+itself is introspectable with `proc` (`/args` `/name` `/depth`
+`/errorlevel` `/echo` `/stdin`) and the current exit code expands as
+`%ERRORLEVEL%`.
+
+**Shared libraries of batch routines** give scripts the same modularity
+applib gives native apps: `call <file.bat>::<routine> [args]` loads an
+external `.bat` and starts it at `:routine`, returning on `exit /b` /
+`goto :eof` / EOF. Routine calls run in an automatically-pushed environment
+scope (variable isolation beyond `setlocal`), so a library routine's
+temporary variables never leak into the caller; its arguments arrive as
+`%1`..`%9`/`%*` and its final errorlevel propagates. See `command.md`
+("Shared library of batch routines") for the authoring pattern.
+
+**Persistent state** for batch apps is provided by the `ini`, `appconfig`,
+and `temp` commands (all storage on the SD card), backed by the same
+`storage_ini.c` core applib wraps. `ini` reads/updates any `KEY=VALUE` file
+and imports/exports the environment; `appconfig <app>` gives an app its own
+`sd:/APPS/<APP>.INI` settings file without hand-rolling parsing; `temp`
+creates and cleans SD-backed temporary files (`sd:/tmp`). A batch app keeps
+state exactly the way DOS apps did: environment variables, temp files, and a
+simple INI settings file.
+
+## Authoring and deploying batch files
+
+Batch files are plain text stored on the SD card; there is no compilation
+step. Host-side rules that make a file behave correctly on the firmware:
+
+- **Encoding and line endings.** UTF-8 text (FATFS is configured for UTF-8
+  long file names). Both CRLF and LF line endings are accepted by the batch
+  reader; files round-trip through `edit` byte-preserving.
+- **Extension and placement.** A file must be named `*.bat` (any folder).
+  Invoke it by name at the prompt (`myscript.bat` or `myscript`), or by
+  PATH (`path sd:/scripts;...`). `AUTOEXEC.BAT` on the SD root runs at boot.
+- **Line and size limits.** Each line is capped at
+  `P4_CONFIG_BATCH_LINE_BYTES` (384); a trailing `^` joins up to
+  `P4_CONFIG_LINE_CONTINUATION_MAX` (8) physical lines into one logical
+  line. Up to `P4_CONFIG_BATCH_LABEL_MAX` (32) `:label` targets per file,
+  labels capped at `P4_CONFIG_BATCH_LABEL_BYTES` (48) bytes.
+- **Arguments.** `%0`..`%9` and `%*`; `shift` slides them. At most
+  `P4_CONFIG_BATCH_ARGS_MAX` (9) arguments are captured.
+- **Quoting and escaping.** `"text"` groups with expansion, `'text'` groups
+  literally, `^c` escapes one character, `%%` is a literal `%` inside a
+  batch file. Any line using `&`/`|`/`<`/`>` as *shell* syntax must be
+  written carefully — a lone `&`/`|` splits the chain/pipeline before the
+  command runs, so arithmetic `set /a` and `calc` expressions using those
+  operators must be quoted.
+- **Environment hygiene.** Variables are capped at `P4_CONFIG_ENV_VAR_MAX`
+  (24) with names `[A-Za-z0-9_]` (upper-cased); a `setlocal` block that
+  creates variables should close with `endlocal` so the 24-slot table is
+  not exhausted by long scripts.
+- **Validation before deploying.** Run the file once under `echo on` (or
+  `tron`-style line-by-line) from the UART console, check the ERRORLEVEL of
+  each step with `if errorlevel`, and keep a copy on the host — the shell
+  is a runtime, not an editor for recovery (though `edit` can fix a broken
+  file in place).
+
+There is no binary packaging step for batch files: writing the `.bat` to the
+card (via the shell's `write`/`append`, `edit`, or copying from a host) is
+the whole deployment flow. `alias /save` and `history /save` write the same
+kind of plain-text batch-compatible profiles (`ALIASES.BAT`, `HISTORY.TXT`)
+through the guarded storage session.
 
 ## Example boot integration
 ```c

@@ -139,6 +139,25 @@ static bool s_redirect_capture_truncated = false;
 /* Used by shell_transcript_append_to_buffer() before its definition below. */
 static void shell_redirect_capture_add(const char *text, size_t len);
 
+/**
+ * One saved redirection-capture level. When a redirected command runs another
+ * redirected command (a pipeline whose stages spool to their own files inside
+ * an outer `>` / `>>`), `shell_redirect_capture_begin()` pushes the current
+ * capture onto this stack and starts a fresh one; the inner `_reset()` pops
+ * the outer state back so the outer file still receives the command's full
+ * output. Without the stack, the inner stage's reset freed the buffer the
+ * outer capture depended on, so `cmd1 | cmd2 > out.txt` wrote an empty file.
+ */
+typedef struct {
+    char *buffer;
+    size_t len;
+    size_t cap;
+    bool truncated;
+} shell_redirect_capture_level_t;
+
+static shell_redirect_capture_level_t s_redirect_capture_stack[P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH];
+static int s_capture_depth = 0;
+
 /* Command history, heap-backed so very long (up to P4_CONFIG_COMMAND_BYTES)
  * commands do not reserve a fixed grid of RAM. Each entry is a strdup'd line;
  * the pointer table and total byte usage are bounded by
@@ -377,6 +396,13 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
     if (text == NULL || text[0] == '\0') {
         return;
     }
+
+    /* A single command with a large output can grow the span group fast
+     * enough to exhaust the internal heap mid-command. Reclaim the oldest
+     * half of the scrollback before every append once the internal heap
+     * drops below the threshold, so a tiny stdio allocation never aborts the
+     * board while output is still being emitted. Cheap when memory is fine. */
+    shell_transcript_guard_internal();
 
     transcript = windows_get_transcript();
 
@@ -790,6 +816,67 @@ void shell_transcript_reset(void)
     }
 }
 
+/**
+ * Reclaim internal heap from the transcript scrollback when the DMA-capable
+ * heap runs low.
+ *
+ * The on-screen span group holds its coloured history as LVGL span objects
+ * whose per-span overhead lives in the internal heap. Over a long session
+ * that accumulation can starve the heap until a tiny stdio allocation (a
+ * newlib FILE lock mutex created by printf) fails and aborts the board. When
+ * free internal RAM drops below P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES,
+ * drop the oldest half of the text buffers and free the corresponding spans
+ * synchronously, keeping the heap above the failure floor.
+ *
+ * Called at the start of command execution (before any printf of that
+ * command) so the reclaimed memory is available before output is emitted.
+ */
+void shell_transcript_guard_internal(void)
+{
+    static const char truncation_marker[] = "\n[history trimmed under memory pressure]\n";
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t plain_len;
+    size_t ansi_len;
+    size_t keep;
+
+    if (free_internal >= P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES) {
+        return;
+    }
+
+    plain_len = strlen(s_transcript);
+    ansi_len = strlen(s_transcript_ansi);
+
+    keep = P4_CONFIG_TRANSCRIPT_BYTES / 2;
+    if (plain_len > keep) {
+        memmove(s_transcript, s_transcript + plain_len - keep, keep);
+        plain_len = keep;
+        s_transcript[plain_len] = '\0';
+    }
+    if (ansi_len > keep) {
+        memmove(s_transcript_ansi, s_transcript_ansi + ansi_len - keep, keep);
+        ansi_len = keep;
+        s_transcript_ansi[ansi_len] = '\0';
+    }
+
+    if (plain_len + sizeof(truncation_marker) < P4_CONFIG_TRANSCRIPT_BYTES) {
+        size_t marker_len = sizeof(truncation_marker) - 1;
+        memcpy(s_transcript + plain_len, truncation_marker, marker_len);
+        s_transcript[plain_len + marker_len] = '\0';
+        if (ansi_len + marker_len < P4_CONFIG_TRANSCRIPT_BYTES) {
+            memcpy(s_transcript_ansi + ansi_len, truncation_marker, marker_len);
+            s_transcript_ansi[ansi_len + marker_len] = '\0';
+        }
+    }
+
+    if (lvgl_port_lock(0)) {
+        windows_transcript_trim();
+        lvgl_port_unlock();
+    }
+
+    ESP_LOGW(SHELL_TAG, "Transcript trimmed under memory pressure "
+             "(internal free %u B)", (unsigned int)free_internal);
+}
+
 void shell_history_transcript_scroll_to_end(void)
 {
     /* The transcript label is owned by the LVGL task; the window manager
@@ -819,6 +906,110 @@ const char *shell_transcript_get_text_from(size_t offset)
     }
 
     return s_transcript + offset;
+}
+
+size_t shell_transcript_get_ansi_length(void)
+{
+    return strlen(s_transcript_ansi);
+}
+
+const char *shell_transcript_get_ansi_from(size_t offset)
+{
+    size_t length = strlen(s_transcript_ansi);
+
+    if (offset > length) {
+        return NULL;
+    }
+    return s_transcript_ansi + offset;
+}
+
+/* ========================================================================
+ * APP MODE (screen save/restore + full-screen surface)
+ * ========================================================================
+ * A clean way for batch files (the `appmode` command) and native apps (the
+ * applib `app_mode_enter`/`app_mode_exit`) to take over the shell: the current
+ * transcript is saved, the shell input widgets can be hidden for a full-screen
+ * app surface, and on exit the saved screen is restored. The implementation
+ * lives here (below both batch and applib) so nothing is duplicated.
+ */
+
+static bool s_app_mode_full_screen = false;
+
+/** Save the current transcript (ANSI form, colours preserved) into a heap
+ *  buffer. Returns NULL when the transcript is empty or on allocation failure. */
+char *shell_screen_save(void)
+{
+    size_t length = shell_transcript_get_ansi_length();
+    char *copy;
+
+    if (length == 0) {
+        return NULL;
+    }
+    copy = malloc(length + 1);
+    if (copy == NULL) {
+        return NULL;
+    }
+    memcpy(copy, shell_transcript_get_ansi_from(0), length + 1);
+    return copy;
+}
+
+/** Clear the transcript and re-append the saved screen (no-op on NULL). */
+void shell_screen_restore(const char *saved)
+{
+    shell_transcript_reset();
+    if (saved != NULL && saved[0] != '\0') {
+        shell_transcript_append_ansi(saved);
+    }
+}
+
+/** Release a screen copy from `shell_screen_save`. */
+void shell_screen_discard(char *saved)
+{
+    free(saved);
+}
+
+/**
+ * Enter app mode. With @p full_screen the shell input widgets (input line and
+ * the prev/next/scroll buttons) are hidden so the transcript becomes a clean
+ * app surface; the on-screen keyboard can still be shown for app input. The
+ * caller saves the screen first with `shell_screen_save`.
+ */
+void shell_app_mode_enter(bool full_screen)
+{
+    if (s_app_mode_full_screen) {
+        return;
+    }
+    if (full_screen) {
+        /* Only touch LVGL when the window manager is up (transcript is
+         * created during windows_init); before that the flag just tracks
+         * that app mode was entered. */
+        if (windows_get_transcript() != NULL) {
+            lvgl_port_lock(0);
+            windows_enter_app_mode();
+            lvgl_port_unlock();
+        }
+    }
+    s_app_mode_full_screen = true;
+}
+
+/** Leave app mode and restore the shell input widgets. */
+void shell_app_mode_exit(void)
+{
+    if (!s_app_mode_full_screen) {
+        return;
+    }
+    if (windows_get_transcript() != NULL) {
+        lvgl_port_lock(0);
+        windows_exit_app_mode();
+        lvgl_port_unlock();
+    }
+    s_app_mode_full_screen = false;
+}
+
+/** Whether the shell is currently in (full-screen) app mode. */
+bool shell_app_mode_active(void)
+{
+    return s_app_mode_full_screen;
 }
 
 /* ========================================================================
@@ -868,10 +1059,29 @@ static void shell_redirect_capture_add(const char *text, size_t len)
 }
 
 /** Open the redirection-capture window (call before dispatching a redirected
- *  command). Any previous capture is released. */
+ *  command). When a capture is already active (nested redirect), the current
+ *  capture is pushed onto the stack so the outer file still gets the whole
+ *  output after the inner captures finish. */
 void shell_redirect_capture_begin(void)
 {
-    free(s_redirect_capture);
+    if (s_redirect_capturing) {
+        if (s_capture_depth < P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH) {
+            s_redirect_capture_stack[s_capture_depth].buffer = s_redirect_capture;
+            s_redirect_capture_stack[s_capture_depth].len = s_redirect_capture_len;
+            s_redirect_capture_stack[s_capture_depth].cap = s_redirect_capture_cap;
+            s_redirect_capture_stack[s_capture_depth].truncated = s_redirect_capture_truncated;
+            s_capture_depth++;
+        } else {
+            /* Depth exhausted: drop the current capture so the command keeps
+             * working; the outer file loses its content but nothing breaks. */
+            free(s_redirect_capture);
+        }
+    } else {
+        free(s_redirect_capture);
+    }
+
+    /* Start a fresh capture for this (possibly nested) command. The pushed
+     * outer state is restored by the matching shell_redirect_capture_reset(). */
     s_redirect_capture = NULL;
     s_redirect_capture_len = 0;
     s_redirect_capture_cap = 0;
@@ -895,15 +1105,30 @@ const char *shell_redirect_capture_get(size_t *out_len)
     return s_redirect_capture != NULL ? s_redirect_capture : "";
 }
 
-/** Release the capture buffer (call after the redirected file is written). */
+/** Release the capture buffer (call after the redirected file is written).
+ *  If a nested capture is being closed, the saved outer capture is restored
+ *  and recording resumes for it. */
 void shell_redirect_capture_reset(void)
 {
-    s_redirect_capturing = false;
-    free(s_redirect_capture);
-    s_redirect_capture = NULL;
-    s_redirect_capture_len = 0;
-    s_redirect_capture_cap = 0;
-    s_redirect_capture_truncated = false;
+    if (s_capture_depth > 0) {
+        /* Pop the saved outer capture back into place and resume recording
+         * for it; the inner capture's buffer has already been written out. */
+        s_capture_depth--;
+        free(s_redirect_capture);
+        s_redirect_capture = s_redirect_capture_stack[s_capture_depth].buffer;
+        s_redirect_capture_len = s_redirect_capture_stack[s_capture_depth].len;
+        s_redirect_capture_cap = s_redirect_capture_stack[s_capture_depth].cap;
+        s_redirect_capture_truncated = s_redirect_capture_stack[s_capture_depth].truncated;
+        s_redirect_capture_stack[s_capture_depth].buffer = NULL;
+        s_redirect_capturing = true;
+    } else {
+        s_redirect_capturing = false;
+        free(s_redirect_capture);
+        s_redirect_capture = NULL;
+        s_redirect_capture_len = 0;
+        s_redirect_capture_cap = 0;
+        s_redirect_capture_truncated = false;
+    }
 }
 
 /** Report whether the capture hit its size cap (output dropped). */
@@ -1554,7 +1779,17 @@ bool shell_wait_for_key(uint32_t timeout_ms, char *key_out)
     return true;
 }
 
-bool shell_read_line(char *output, size_t output_size, uint32_t timeout_ms)
+/**
+ * Shared line reader used by `shell_read_line` (echoed) and
+ * `shell_read_line_hidden` (password mode, no echo). Collects a line through
+ * the key queue with Backspace editing and ESC cancellation.
+ *
+ * @param echo  When true, each typed key (and the erase) is echoed so the
+ *              user sees what they enter; when false nothing is echoed (the
+ *              caller still gets the line, e.g. a password).
+ */
+static bool shell_read_line_mode(char *output, size_t output_size,
+                                 uint32_t timeout_ms, bool echo)
 {
     size_t length = 0;
     bool completed = false;
@@ -1596,7 +1831,9 @@ bool shell_read_line(char *output, size_t output_size, uint32_t timeout_ms)
             if (length > 0) {
                 output[--length] = '\0';
                 /* Echo the erase so the transcript matches what is stored. */
-                shell_transcript_append_text("\b");
+                if (echo) {
+                    shell_transcript_append_text("\b");
+                }
             }
             continue;
         }
@@ -1613,11 +1850,12 @@ bool shell_read_line(char *output, size_t output_size, uint32_t timeout_ms)
         output[length++] = key;
         output[length] = '\0';
 
-        /* Echo as typed so the user can see what they are entering. */
-        {
-            char echo[2] = {key, '\0'};
+        /* Echo as typed so the user can see what they are entering, unless
+         * the caller requested hidden (password) input. */
+        if (echo) {
+            char echo_char[2] = {key, '\0'};
 
-            shell_transcript_append_text(echo);
+            shell_transcript_append_text(echo_char);
         }
     }
 
@@ -1625,6 +1863,16 @@ bool shell_read_line(char *output, size_t output_size, uint32_t timeout_ms)
     shell_transcript_append_text("\n");
 
     return completed;
+}
+
+bool shell_read_line(char *output, size_t output_size, uint32_t timeout_ms)
+{
+    return shell_read_line_mode(output, output_size, timeout_ms, true);
+}
+
+bool shell_read_line_hidden(char *output, size_t output_size, uint32_t timeout_ms)
+{
+    return shell_read_line_mode(output, output_size, timeout_ms, false);
 }
 
 bool shell_key_input_available(void)
@@ -2595,6 +2843,13 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "setlocal", "setlocal - begin a local environment scope" },
     { "endlocal", "endlocal - end a local environment scope" },
     { "exit",     "exit [/b] [code] - leave a batch file or the shell" },
+    { "proc",     "proc [/args | /name | /depth | /errorlevel | /echo | /stdin] - introspect the batch process stack" },
+    { "ini",      "ini <list|get|set|del|load|save> <file> [key] [value] - persistent state in KEY=VALUE files on the SD card" },
+    { "appconfig", "appconfig <app> [path|list|get|set|del] [key] [value] - per-app settings (sd:/APPS/<APP>.INI)" },
+    { "temp",     "temp [new [ext] | clean] - SD-backed temporary files" },
+    { "ansi",     "ansi <sgr-codes> [text...] - emit ANSI-styled text (reverse, bold, color) into the transcript" },
+    { "menu",     "menu <item> [item...] - numbered menu; ERRORLEVEL = chosen index (0 = cancel)" },
+    { "appmode",  "appmode on [/full] [/clear] | appmode off | appmode status - enter/exit app mode (save/restore screen)" },
     { "rem",      "rem <text> - batch comment" },
     { "alias",    "alias [name[=value]] | alias /save [/load] [file] - DOSKEY-style macros" },
     { "unalias",  "unalias <name> - remove a macro alias" },

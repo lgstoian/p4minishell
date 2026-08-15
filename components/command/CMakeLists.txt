@@ -3,6 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
+        applib
         audio
         batch
         display

@@ -228,6 +228,27 @@ void test_calc_env_variables(void)
     (void)shell_env_set("CALCTST", "");
 }
 
+void test_calc_command_assignment(void)
+{
+    const char *value;
+    int level;
+
+    /* `calc NAME = <expr>` must store only the part before '=' in NAME (the
+     * expression contains spaces, which shell_env_set rejects). Regression
+     * for the bug where the whole "NAME = expr" text was passed as the name. */
+    (void)shell_env_set("CALCCMD", "");
+    level = shell_command_calc_line("calc calccmd = 2^3");
+    TEST_ASSERT_EQUAL(0, level);
+    value = shell_env_get("CALCCMD");
+    TEST_ASSERT_NOT_NULL(value);
+    TEST_ASSERT_EQUAL_STRING("8", value);
+
+    /* A malformed name is still rejected. */
+    level = shell_command_calc_line("calc 3bad name = 1");
+    TEST_ASSERT_EQUAL(1, level);
+    (void)shell_env_set("CALCCMD", "");
+}
+
 void test_calc_pol_rec_side_effects(void)
 {
     const char *xval;

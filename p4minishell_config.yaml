@@ -10,10 +10,9 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.32.0
-# Last updated: 2026-08-15 (calc float calculator + set /p < file + for /f file-line loops,
-#                           BASIC-to-DOS batch command mapping)
-config_version: "0.32.0"
+# Version: 0.32.8
+# Last updated: 2026-08-15 (memory-hardening: cached SDMMC DMA buffer, transcript scrollback auto-trim, rotate thread-safety lock)
+config_version: "0.32.8"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -49,16 +48,19 @@ shell_identity:
 # ---- Transcript and Command Buffers ----
 buffers:
   transcript_bytes:
-    value: 16384
+    value: 8192
     type: size_t
     description: >-
       Maximum bytes stored in the on-screen transcript buffer (scrollback).
       The buffer is allocated from PSRAM (with an internal-RAM fallback) so
       it does not compete with the DMA-capable heap used by the WiFi/SDIO
-      transport mempool and the USB-Serial/JTAG ring buffers.
+      transport mempool and the USB-Serial/JTAG ring buffers. Reduced from
+      16384 in v0.32.8 to halve the internal-RAM footprint of the LVGL span
+      group that renders the scrollback (each span carries per-span overhead
+      in the internal heap; 8192 bytes is still ~80 lines of history).
     range: "1024..32768"
   transcript_recolor_bytes:
-    value: 16384
+    value: 8192
     type: size_t
     description: >-
       Maximum bytes staged for the on-screen transcript span group. The staged
@@ -870,11 +872,31 @@ boot_scripting:
     type: size_t
     description: "I/O buffer size for SD file operations"
     range: "32..1024"
+  sd_dma_buffer_bytes:
+    value: 8192
+    type: size_t
+    description: "Pre-allocated SDMMC DMA scratch buffer cached on the host at mount; prevents per-transaction DMA allocation failures (allocate_dma_buf: not enough mem) when the internal DMA-capable heap fragments under load. Must be a multiple of the 512 B card sector; larger values speed multi-block transfers but reserve internal RAM permanently."
+    range: "512..65536"
   config_max_bytes:
     value: 16384
     type: size_t
-    description: "Maximum bytes the `config` command reads/writes for the CONFIG.SYS settings file"
+    description: "Maximum bytes the config command reads/writes for the CONFIG.SYS settings file"
     range: "4096..65536"
+  ini_max_bytes:
+    value: 16384
+    type: size_t
+    description: "Maximum bytes the generic INI (ini command, applib state) reads/writes for a KEY=VALUE config file on the SD card"
+    range: "4096..65536"
+  transcript_internal_trim_bytes:
+    value: 49152
+    type: size_t
+    description: "Internal (DMA-capable) heap free threshold in bytes that triggers an automatic transcript scrollback trim. The LVGL span group rendering the coloured transcript owns per-span overhead in the internal heap; when free internal RAM drops below this value the shell drops the oldest half of the scrollback and frees the spans so a tiny stdio allocation (newlib FILE lock) never aborts the board."
+    range: "16384..1048576"
+  temp_dir_name:
+    value: "tmp"
+    type: string
+    description: "Name of the directory (under the SD mount point) where temporary files live; all temp files live on the SD card"
+    range: "any valid SD directory name"
 
 # ---- Batch Engine and Environment ----
 batch_env:
@@ -1064,6 +1086,11 @@ batch_env:
     type: size_t
     description: "Maximum length of the `for /f` `delims=` character set"
     range: "1..64"
+  applib_psram_threshold_bytes:
+    value: 512
+    type: size_t
+    description: "Blocks of this size or larger are allocated from PSRAM (when available) by the applib memory helpers; smaller blocks use the internal heap"
+    range: "64..65536"
   line_continuation_max:
     value: 8
     type: int
@@ -1079,6 +1106,11 @@ batch_env:
     type: size_t
     description: "Maximum bytes captured for a command's > / >> redirection (dedicated buffer, independent of the 16 KB transcript)"
     range: "4096..1048576"
+  redirect_capture_max_depth:
+    value: 8
+    type: int
+    description: "Maximum nesting depth of redirection captures (a pipeline whose stages spool to their own files inside an outer > / >> nests one capture per stage)"
+    range: "2..32"
   tree_depth_max:
     value: 8
     type: int

@@ -38,6 +38,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/windows
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/header
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/clock
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/applib
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/usb
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/p4_usb
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/c6ota

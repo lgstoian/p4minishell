@@ -74,6 +74,21 @@ typedef struct {
 esp_err_t shell_sd_begin(shell_sd_session_t *session);
 
 /**
+ * Cache the SDMMC DMA scratch buffer on the host after a mount.
+ *
+ * The IDF sdmmc driver allocates a temporary DMA-capable buffer per card
+ * transaction unless the host carries a cached `dma_aligned_buffer`. On the
+ * P4 the internal DMA-capable heap is shared with the WiFi/SDIO transport
+ * and LVGL, so that per-op allocation can fail once the heap fragments,
+ * taking every SD command down. Allocating the cache at mount time (when
+ * internal RAM is abundant) makes all later transactions reuse it.
+ *
+ * Safe to call any number of times; the buffer is only allocated once and
+ * the chunk size derived from P4_CONFIG_SD_DMA_BUFFER_BYTES is applied.
+ */
+void storage_sd_ensure_dma_buffer(void);
+
+/**
  * End a guarded SD access session.
  *
  * Kept as an explicit call so every command has a symmetric cleanup point
@@ -543,6 +558,54 @@ esp_err_t storage_trash_info(void);
 /** Enforce the size/age/count limits, purging the oldest entries first.
  *  Called automatically after every trash operation. */
 void storage_trash_enforce_limits(void);
+
+/* ========================================================================
+ * INI-STYLE PERSISTENT STATE + TEMP FILES (storage_ini.c)
+ * ========================================================================
+ * Simple `KEY=VALUE` config files (DOS-style INI) and SD-backed temporary
+ * files, shared by the batch `ini`/`temp` commands and the applib state
+ * group. All file access goes through the guarded SD session and is written
+ * atomically (temp file + rename).
+ */
+
+/** Read a `KEY=value` directive from a text buffer (comment/blank-aware).
+ *  @return the value length (>= 0) when found, or -1 when the key is absent. */
+int storage_ini_get_value(const char *text, const char *key,
+                          char *out, size_t out_size);
+
+/** Set a `KEY=value` directive in a text buffer (replaces existing, appends).
+ *  @return true when the buffer now holds the updated text. */
+bool storage_ini_upsert(char *text, size_t cap,
+                        const char *key, const char *value);
+
+/** Remove every `KEY=value` directive line from a text buffer.
+ *  @return true when at least one matching line was removed. */
+bool storage_ini_remove(char *text, size_t cap, const char *key);
+
+/** Read the value of @p key from an INI file on the SD card. */
+esp_err_t storage_ini_file_get(const char *path, const char *key,
+                               char *value, size_t value_size);
+
+/** Create or update @p key in an INI file on the SD card (atomic write). */
+esp_err_t storage_ini_file_set(const char *path, const char *key, const char *value);
+
+/** Remove @p key from an INI file on the SD card (atomic write). */
+esp_err_t storage_ini_file_delete(const char *path, const char *key);
+
+/** Iterate every `KEY=VALUE` line of an INI file; @p cb returns false to stop. */
+esp_err_t storage_ini_file_foreach(const char *path,
+                                   bool (*cb)(const char *key, const char *value, void *ctx),
+                                   void *ctx);
+
+/** Write a whole text file on the SD card atomically (free-space guardrail). */
+esp_err_t storage_write_text_file(const char *path, const char *text);
+
+/** Create a unique temporary file under the SD temp directory and return its
+ *  resolved path in @p buf (the file is created so the path is reserved). */
+esp_err_t storage_temp_path(char *buf, size_t size, const char *ext);
+
+/** Delete every file under the SD temp directory. */
+esp_err_t storage_temp_cleanup(void);
 
 /* ========================================================================
  * LIFECYCLE

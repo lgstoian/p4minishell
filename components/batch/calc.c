@@ -1323,8 +1323,16 @@ int shell_command_calc_line(const char *line)
     if (equals != NULL) {
         char name[CALC_STR_BYTES];
         char text[P4_CONFIG_ENV_VALUE_BYTES];
+        size_t name_len = (size_t)(equals - expression);
 
-        snprintf(name, sizeof(name), "%s", expression);
+        /* Extract only the variable name before the '=': the expression itself
+         * (`y = 6 * 7`) must not be passed to shell_env_set, which rejects
+         * names containing spaces. */
+        if (name_len >= sizeof(name)) {
+            name_len = sizeof(name) - 1;
+        }
+        memcpy(name, expression, name_len);
+        name[name_len] = '\0';
         shell_trim(name);
         if (name[0] == '\0') {
             shell_print_error("calc: no variable name before '='");

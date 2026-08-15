@@ -603,6 +603,31 @@ void storage_init(void);          /* resets cwd to the SD mount point and clears
 bool storage_is_initialized(void);
 ```
 
+### INI-style persistent state + temp files (storage_ini.c)
+```c
+int  storage_ini_get_value(const char *text, const char *key, char *out, size_t out_size);
+bool storage_ini_upsert(char *text, size_t cap, const char *key, const char *value);
+bool storage_ini_remove(char *text, size_t cap, const char *key);
+
+esp_err_t storage_ini_file_get(const char *path, const char *key, char *value, size_t value_size);
+esp_err_t storage_ini_file_set(const char *path, const char *key, const char *value);
+esp_err_t storage_ini_file_delete(const char *path, const char *key);
+esp_err_t storage_ini_file_foreach(const char *path,
+                                   bool (*cb)(const char *key, const char *value, void *ctx),
+                                   void *ctx);
+esp_err_t storage_write_text_file(const char *path, const char *text);
+esp_err_t storage_temp_path(char *buf, size_t size, const char *ext);
+esp_err_t storage_temp_cleanup(void);
+```
+- Pure `KEY=VALUE` line editors on a text buffer (comment/blank aware) and
+  file-level INI operations on the SD card through guarded sessions (atomic
+  temp+rename writes, parent-directory creation, free-space guardrail).
+- `storage_temp_path` creates a unique temp file under `sd:/tmp`;
+  `storage_temp_cleanup` empties the temp directory. All storage lives on the
+  SD card. The batch `ini` / `appconfig` / `temp` commands and the applib
+  state group share this core; the `config` command's `config_directive_*`
+  helpers are thin wrappers over `storage_ini_get_value/upsert/remove`.
+
 ## Batch Module API
 
 Declared in `components/batch/batch.h`.
@@ -727,6 +752,7 @@ void shell_command_path(int argc, char **argv);
 void shell_command_echo(int argc, char **argv);
 void shell_command_call(int argc, char **argv);
 void shell_command_if(int argc, char **argv);
+void shell_command_for(int argc, char **argv);    /* classic tokens/wildcards + for /f */
 void shell_command_goto(int argc, char **argv);
 void shell_command_shift(int argc, char **argv);
 void shell_command_pause(int argc, char **argv);      /* blocks on a real keypress */
@@ -734,6 +760,7 @@ void shell_command_choice(int argc, char **argv);     /* /C:list /N /T:c,secs /S
 void shell_command_setlocal(int argc, char **argv);   /* pushes an environment snapshot */
 void shell_command_endlocal(int argc, char **argv);   /* pops the snapshot */
 void shell_command_exit(int argc, char **argv);       /* exit [/b] [code] */
+int  shell_command_calc_line(const char *line);       /* `calc` (see "Calculator" above) */
 ```
 - `pause` and `choice` use the shell core's key queue and fall back to a timed path when
   `shell_key_input_available()` is false.
@@ -747,12 +774,128 @@ void shell_command_exit(int argc, char **argv);       /* exit [/b] [code] */
   non-numeric reads as 0), and `not` for each form. `goto :eof` jumps to the end of the
   current batch file, unwinding its open setlocal scopes. `call` propagates the called
   script's final errorlevel to the caller.
+- `set /p NAME=< file` (and a pipe stage) reads one line from the active input-redirection
+  source instead of the interactive key queue; `for /f` iterates file lines with the
+  `eol=`/`skip=`/`delims=`/`tokens=` options (see "`for /f` helpers" above).
 
 ### Lifecycle
 ```c
 void batch_init(void);          /* clears the environment, sets PATH=sd:/, resets errorlevel */
 bool batch_is_initialized(void);
 ```
+
+## Applib Module API (components/applib, native-app runtime)
+
+The stable runtime surface native apps link against. Depends only on `shell`,
+`clock`, and the FreeRTOS/heap/esp_timer IDF components; it never includes
+`networking.h` (Wi-Fi state routes through `applib_net_ops_t`). The headers
+are lean: each service group declares its functions in its own
+`applib_*.h`, and the umbrella `applib.h` includes all of them.
+
+### Console output (applib_console.h) (stdout = transcript = the redirection layer)
+```c
+int  app_printf(const char *format, ...);
+int  app_vprintf(const char *format, va_list args);
+int  app_printf_ansi(const char *format, ...);
+int  app_vprintf_ansi(const char *format, va_list args);
+void app_print_heading(const char *format, ...);
+void app_print_field(const char *label, const char *format, ...);
+void app_print_ok(const char *format, ...);
+void app_print_error(const char *format, ...);
+void app_print_warning(const char *format, ...);
+void app_print_muted(const char *format, ...);
+void app_print_usage(const char *format, ...);
+
+/* Menu/form primitive: text wrapped in ANSI SGR codes (reverse, bold, color). */
+int  app_print_styled(const char *sgr_codes, const char *format, ...);
+```
+- Output lands on the transcript, which `>`/`>>` capture around a command
+  dispatch, so an app's stdout participates in redirection and pipes.
+
+### Memory allocation policy + error reporting (applib_mem.h)
+```c
+void  *app_alloc(size_t size);
+void  *app_calloc(size_t count, size_t size);
+void  *app_realloc(void *ptr, size_t size);
+char  *app_strdup(const char *s);
+char  *app_strndup(const char *s, size_t n);
+void   app_free(void *ptr);
+void   app_report_error(const char *tag, int error, const char *format, ...);
+void   app_report_warning(const char *tag, const char *format, ...);
+void   app_report_info(const char *tag, const char *format, ...);
+```
+- Blocks of `P4_CONFIG_APPLIB_PSRAM_THRESHOLD_BYTES` or more prefer PSRAM
+  (`heap_caps` SPIRAM) with an internal-heap fallback; smaller blocks use the
+  internal heap. All calls return NULL on failure; `app_free` matches any
+  `app_*` allocation.
+
+### Time / timers / sleep / system information (applib_time.h)
+```c
+time_t    app_time(void);
+struct tm app_time_local(void);
+struct tm app_time_utc(void);
+uint32_t  app_uptime_sec(void);
+int64_t   app_now_ms(void);
+void      app_delay_ms(uint32_t ms);
+bool      app_time_synced(void);
+void      app_uptime_formatted(char *buf, size_t buflen);
+void      app_sysinfo(char *buf, size_t buflen);
+```
+
+### Networking helpers (applib_net.h) (Wi-Fi state via the registered ops table)
+```c
+typedef struct {
+    bool (*wifi_is_connected)(void);
+    bool (*wifi_get_rssi)(int *rssi_out);
+    const char *(*wifi_state_string)(void);
+} applib_net_ops_t;
+void        applib_register_net_ops(const applib_net_ops_t *ops);
+bool        app_wifi_is_connected(void);
+int         app_wifi_get_rssi(void);
+const char *app_wifi_state_string(void);
+```
+- `command_init()` registers the table with `networking_*` wrappers; every
+  hook is NULL-checked, so the helpers degrade gracefully before registration.
+
+### Input with timeout (applib_input.h)
+```c
+bool app_wait_key(uint32_t timeout_ms, char *key_out);
+bool app_read_line(char *buf, size_t size, uint32_t timeout_ms);
+bool app_read_password(char *buf, size_t size, uint32_t timeout_ms);
+int  app_menu(const char *title, const char **items, int count, uint32_t timeout_ms);
+```
+- Bounded keypress / line reads for native apps, backed by the shell key
+  queue (the primitive behind `pause` / `choice /T` / `set /p /T`). Both
+  return false immediately on a headless board (no interactive key source)
+  instead of stalling.
+- `app_read_password` reads a line without echoing (password mode, the app
+  equivalent of `set /p /P`).
+- `app_menu` renders a numbered form in the transcript and returns the chosen
+  1-based index (0 on cancel / timeout / invalid entry), the app-side
+  equivalent of the batch `menu` command.
+
+### Persistent state (applib_state.h)
+```c
+bool app_ini_get(const char *path, const char *key, char *value, size_t value_size);
+bool app_ini_set(const char *path, const char *key, const char *value);
+bool app_ini_delete(const char *path, const char *key);
+bool app_temp_path(char *buf, size_t size, const char *ext);
+bool app_temp_cleanup(void);
+```
+- INI-style `KEY=VALUE` config files on the SD card (`app_ini_*`) and
+  SD-backed temporary files (`app_temp_*`, under `sd:/tmp`), wrapping the
+  shared `storage_ini.c` core (the same mechanics the batch `ini` /
+  `appconfig` / `temp` commands use). All storage lives on the SD card.
+
+### App mode (applib_ui.h)
+```c
+bool app_mode_enter(bool full_screen);
+bool app_mode_exit(void);
+```
+- Save the current screen, optionally hide the shell input widgets for a
+  full-screen app surface, and restore the saved screen on exit. Wraps the
+  shared shell app-mode primitives (the batch `appmode` command is its
+  batch-side equivalent; the batch variant also auto-restores on `exit /b`).
 
 ## ANSI/VT Module API
 

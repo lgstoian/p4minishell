@@ -182,3 +182,38 @@ void test_shell_parser_percentage_parse(void)
     TEST_ASSERT_FALSE(shell_parse_percentage_arg(NULL, &result));
     TEST_ASSERT_FALSE(shell_parse_percentage_arg("50", NULL));
 }
+
+/* ========================================================================
+ * OUTPUT-REDIRECTION CAPTURE (nested / re-entrant)
+ * ======================================================================== */
+
+void test_redirect_capture_nested(void)
+{
+    size_t len = 0;
+    const char *cap;
+
+    /* Outer capture: transcript appends feed it while recording. */
+    shell_redirect_capture_begin();
+    shell_transcript_append_text("outer1\n");
+
+    /* Nested capture (a pipeline stage's own `> file`): the outer capture is
+     * pushed aside; the inner buffer holds only the inner appends. */
+    shell_redirect_capture_begin();
+    shell_transcript_append_text("inner\n");
+    cap = shell_redirect_capture_get(&len);
+    TEST_ASSERT_EQUAL_STRING("inner\n", cap);
+    shell_redirect_capture_end();
+    shell_redirect_capture_reset();
+
+    /* The outer capture resumes and still holds its earlier content. */
+    shell_transcript_append_text("outer2\n");
+    cap = shell_redirect_capture_get(&len);
+    TEST_ASSERT_EQUAL_STRING("outer1\nouter2\n", cap);
+    shell_redirect_capture_end();
+    shell_redirect_capture_reset();
+
+    /* After the final reset the capture is empty and recording is off. */
+    shell_transcript_append_text("not captured\n");
+    cap = shell_redirect_capture_get(&len);
+    TEST_ASSERT_EQUAL_STRING("", cap);
+}

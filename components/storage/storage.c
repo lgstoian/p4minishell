@@ -113,6 +113,7 @@ esp_err_t shell_sd_begin(shell_sd_session_t *session)
 
     /* If already mounted, just return success (persistent mount) */
     if (s_sd_persistent_mounted) {
+        storage_sd_ensure_dma_buffer();
         return ESP_OK;
     }
 
@@ -125,16 +126,53 @@ esp_err_t shell_sd_begin(shell_sd_session_t *session)
     if (error == ESP_OK) {
         session->mounted_here = true;
         storage_sd_mark_mounted();
+        storage_sd_ensure_dma_buffer();
         return ESP_OK;
     }
 
     if (error == ESP_ERR_INVALID_STATE) {
         /* Already mounted (BSP internal state) */
         storage_sd_mark_mounted();
+        storage_sd_ensure_dma_buffer();
         return ESP_OK;
     }
 
     return error;
+}
+
+/**
+ * Cache a DMA-capable scratch buffer on the SDMMC host so every card
+ * transaction reuses it instead of allocating (and risking failure) from
+ * the tight internal heap per operation. Called right after a mount.
+ */
+void storage_sd_ensure_dma_buffer(void)
+{
+    if (bsp_sdcard == NULL) {
+        return;
+    }
+    if (bsp_sdcard->host.dma_aligned_buffer != NULL) {
+        return;
+    }
+
+    size_t sector_size = (bsp_sdcard->csd.sector_size > 0) ? bsp_sdcard->csd.sector_size : 512;
+    size_t buffer_size = P4_CONFIG_SD_DMA_BUFFER_BYTES;
+    size_t chunk = buffer_size / sector_size;
+    if (chunk < 1) {
+        chunk = 1;
+        buffer_size = sector_size;
+    }
+
+    void *buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (buffer == NULL) {
+        ESP_LOGW(STORAGE_TAG, "SD DMA buffer pre-allocation failed (%u B); falling back to per-op allocation",
+                 (unsigned int)buffer_size);
+        return;
+    }
+
+    bsp_sdcard->host.dma_aligned_buffer = buffer;
+    bsp_sdcard->host.unaligned_multi_block_rw_max_chunk_size = chunk;
+    ESP_LOGI(STORAGE_TAG, "SD card DMA scratch buffer cached (%u B, %u block(s) per op)",
+             (unsigned int)buffer_size, (unsigned int)chunk);
 }
 
 /** Mark the card as mounted, update the header icon, and fire the one-shot
@@ -201,6 +239,16 @@ void shell_command_sd_eject(void)
     if (error == ESP_OK) {
         s_sd_persistent_mounted = false;
         s_sd_ejected = true;
+        /* The cached DMA scratch buffer belongs to the (now gone) card
+         * handle; release it so the internal DMA-capable heap is reclaimed
+         * and a re-inserted card gets a fresh buffer on next mount. */
+        if (bsp_sdcard != NULL) {
+            if (bsp_sdcard->host.dma_aligned_buffer != NULL) {
+                free(bsp_sdcard->host.dma_aligned_buffer);
+                bsp_sdcard->host.dma_aligned_buffer = NULL;
+                bsp_sdcard->host.unaligned_multi_block_rw_max_chunk_size = 0;
+            }
+        }
         shell_print_ok("SD card unmounted safely. You may now remove the card.");
         shell_header_notify("SD card ejected", P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
         header_update_sd(HEADER_SD_NONE);

@@ -213,6 +213,38 @@ void shell_print_usage(const char *format, ...);
 /** Reset the transcript to empty. */
 void shell_transcript_reset(void);
 
+/**
+ * Reclaim internal heap from the transcript scrollback when the DMA-capable
+ * heap runs low (see implementation). Call at the start of command execution,
+ * before any printf of that command, so the reclaimed memory is available
+ * before output is emitted.
+ */
+void shell_transcript_guard_internal(void);
+
+/* ========================================================================
+ * APP MODE (screen save/restore + full-screen surface)
+ * ======================================================================== */
+
+/** Save the current transcript (ANSI, colours preserved) into a heap buffer.
+ *  Returns NULL when the transcript is empty or on allocation failure. */
+char *shell_screen_save(void);
+
+/** Clear the transcript and re-append the saved screen (no-op on NULL). */
+void shell_screen_restore(const char *saved);
+
+/** Release a screen copy from `shell_screen_save`. */
+void shell_screen_discard(char *saved);
+
+/** Enter app mode; with full_screen the shell input widgets are hidden so the
+ *  transcript becomes a clean app surface. Save the screen first. */
+void shell_app_mode_enter(bool full_screen);
+
+/** Leave app mode and restore the shell input widgets. */
+void shell_app_mode_exit(void);
+
+/** Whether the shell is currently in (full-screen) app mode. */
+bool shell_app_mode_active(void);
+
 /** Scroll the transcript to the end. */
 void shell_history_transcript_scroll_to_end(void);
 
@@ -430,6 +462,17 @@ bool shell_key_wait_submit(char key);
  *         timeout, or when no interactive key source is attached.
  */
 bool shell_read_line(char *output, size_t output_size, uint32_t timeout_ms);
+
+/**
+ * Read a line exactly like `shell_read_line` but WITHOUT echoing the typed
+ * keys (password mode: backspace erases silently, ESC cancels, Enter completes
+ * and prints a newline). Used by `set /p NAME=<prompt> /P` and the applib
+ * password reader.
+ *
+ * @return true when a line was completed with Enter, false on cancel,
+ *         timeout, or when no interactive key source is attached.
+ */
+bool shell_read_line_hidden(char *output, size_t output_size, uint32_t timeout_ms);
 
 /* ========================================================================
  * DEBUG LOG

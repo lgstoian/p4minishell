@@ -98,6 +98,9 @@ typedef struct shell_batch_frame {
     long call_resume_pos;
     /** True while executing inside a called `:label` block. */
     bool in_label_call;
+    /** True when this frame entered app mode (`appmode on`); the saved screen
+     *  is restored automatically when the frame returns. */
+    bool app_mode;
 } shell_batch_frame_t;
 
 /**
@@ -171,6 +174,8 @@ static long shell_find_label_pos(shell_batch_frame_t *frame, const char *label_n
 static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file);
 static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_line);
 static void batch_run_nested(char *command);
+static esp_err_t shell_batch_run_internal(const char *path, const char *start_label,
+                                          int argc, char **argv);
 
 /* ========================================================================
  * COMMAND MODULE HOOKS
@@ -860,6 +865,7 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
 {
     size_t out_index = 0;
     shell_quote_state_t quote = SHELL_QUOTE_NONE;
+    char errorlevel_buf[16];   /* %ERRORLEVEL% renders here; copied immediately */
 
     if (output == NULL || output_size == 0) {
         return;
@@ -932,7 +938,9 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                 after = input + 2;
             } else {
                 /* Environment variable `%VAR%` or a literal `%%`: needs the
-                 * closing `%`. An unknown name is left untouched. */
+                 * closing `%`. An unknown name is left untouched. `%ERRORLEVEL%`
+                 * expands to the current errorlevel as a decimal string, giving
+                 * a batch process access to its own exit code (cmd.exe parity). */
                 const char *end = strchr(input + 1, '%');
                 if (end != NULL) {
                     size_t token_len = (size_t)(end - (input + 1));
@@ -943,7 +951,12 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                     } else if (token_len < sizeof(token)) {
                         memcpy(token, input + 1, token_len);
                         token[token_len] = '\0';
-                        replacement = shell_env_get(token);
+                        if (shell_text_equals_ignore_case(token, "ERRORLEVEL")) {
+                            snprintf(errorlevel_buf, sizeof(errorlevel_buf), "%d", s_errorlevel);
+                            replacement = errorlevel_buf;
+                        } else {
+                            replacement = shell_env_get(token);
+                        }
                     }
                     after = end + 1;
                 }
@@ -1637,7 +1650,9 @@ static void shell_command_set_prompt(int argc, char **argv)
     char name[SHELL_ENV_NAME_BYTES];
     char input[P4_CONFIG_SET_PROMPT_INPUT_BYTES];
     char *equals;
-    const char *prompt;
+    char *prompt;
+    uint32_t timeout_ms = SHELL_KEY_WAIT_TIMEOUT_MS;
+    bool hidden = false;
 
     if (argc < 3) {
         shell_print_usage("Usage: set /p NAME=<prompt text>");
@@ -1716,16 +1731,64 @@ static void shell_command_set_prompt(int argc, char **argv)
     }
 
     if (prompt[0] != '\0') {
+        /* Optional switches stripped from the displayed prompt:
+         *   /T:secs  wait timeout (like `choice /T`)
+         *   /P       password mode — the typed line is not echoed */
+        char *slash_t = strstr(prompt, "/T:");
+
+        if (slash_t != NULL && (slash_t == prompt || isspace((unsigned char)slash_t[-1]))) {
+            long seconds = strtol(slash_t + 3, NULL, 10);
+            char *token_end = slash_t;
+
+            while (*token_end != '\0' && !isspace((unsigned char)*token_end)) {
+                token_end++;
+            }
+            if (slash_t > prompt && isspace((unsigned char)slash_t[-1])) {
+                slash_t[-1] = '\0';
+                /* Collapse the gap left between the prompt and the tail. */
+                memmove(slash_t - 1, token_end, strlen(token_end) + 1);
+            } else {
+                memmove(slash_t, token_end, strlen(token_end) + 1);
+            }
+            if (seconds > 0) {
+                timeout_ms = (uint32_t)seconds * 1000U;
+            }
+        }
+
+        {
+            char *slash_p = strstr(prompt, "/P");
+
+            if (slash_p != NULL && (slash_p == prompt || isspace((unsigned char)slash_p[-1]))) {
+                char *token_end = slash_p;
+
+                while (*token_end != '\0' && !isspace((unsigned char)*token_end)) {
+                    token_end++;
+                }
+                if (slash_p > prompt && isspace((unsigned char)slash_p[-1])) {
+                    slash_p[-1] = '\0';
+                    memmove(slash_p - 1, token_end, strlen(token_end) + 1);
+                } else {
+                    memmove(slash_p, token_end, strlen(token_end) + 1);
+                }
+                hidden = true;
+            }
+        }
+
         shell_transcript_appendf("%s", prompt);
     }
 
-    if (!shell_read_line(input, sizeof(input), SHELL_KEY_WAIT_TIMEOUT_MS)) {
-        /* Cancelled, timed out, or no key source. DOS leaves the variable
-         * untouched in this case, so errorlevel reports the failure without
-         * destroying an existing value. */
-        shell_transcript_append_text("set: no input received, the variable is unchanged\n");
-        s_errorlevel = 1;
-        return;
+    {
+        bool got = hidden ? shell_read_line_hidden(input, sizeof(input), timeout_ms)
+                          : shell_read_line(input, sizeof(input), timeout_ms);
+
+        if (!got) {
+            /* Cancelled, timed out, or no key source. DOS leaves the variable
+             * untouched in this case, so errorlevel reports the failure
+             * without destroying an existing value. */
+            shell_transcript_append_text("set: no input received, the variable is unchanged\n");
+            s_errorlevel = 1;
+            return;
+        }
     }
 
     if (input[0] == '\0') {
@@ -2030,8 +2093,41 @@ void shell_command_call(int argc, char **argv)
     char batch_path[SHELL_SD_PATH_BYTES];
 
     if (argc < 2) {
-        shell_print_usage("Usage: call <file.bat> [args]");
+        shell_print_usage("Usage: call <file.bat> [args] | call <file.bat>::<routine> [args]");
         return;
+    }
+
+    /* `call <file.bat>::<routine> [args]` invokes a labelled routine from a
+     * shared library of batch routines: the external file is loaded and
+     * execution starts at `:routine`, isolated from the caller's variables
+     * (the routine's scope is unwound when it returns). */
+    {
+        const char *double_colon = strstr(argv[1], "::");
+
+        if (double_colon != NULL) {
+            char lib_path[SHELL_SD_PATH_BYTES];
+            char routine[SHELL_BATCH_LABEL_BYTES];
+            size_t path_len = (size_t)(double_colon - argv[1]);
+
+            if (path_len == 0 || path_len >= sizeof(lib_path)) {
+                shell_print_usage("Usage: call <file.bat>::<routine> [args]");
+                return;
+            }
+            memcpy(lib_path, argv[1], path_len);
+            lib_path[path_len] = '\0';
+            snprintf(routine, sizeof(routine), "%s", double_colon + 2);
+            if (routine[0] == '\0') {
+                shell_print_usage("Usage: call <file.bat>::<routine> [args]");
+                return;
+            }
+
+            if (!shell_resolve_batch_path(lib_path, batch_path, sizeof(batch_path))) {
+                shell_transcript_appendf("call: library not found %s\n", lib_path);
+                return;
+            }
+            shell_batch_run_internal(batch_path, routine, argc - 2, &argv[2]);
+            return;
+        }
     }
 
     /* `call :label` runs a labelled block in the current batch file as a
@@ -2629,6 +2725,675 @@ void shell_command_exit(int argc, char **argv)
 }
 
 /* ========================================================================
+ * PROCESS ABSTRACTION (proc)
+ * ========================================================================
+ * A batch file runs as a "process" on the single worker task: it has an
+ * argument frame (%0..%9 / %*), its own environment scope (setlocal), the
+ * caller's cwd, an exit code (errorlevel, expandable as %ERRORLEVEL%), and
+ * stdin/stdout through the pipe and redirection layer. `proc` is the
+ * introspection view of that process stack, so a batch file can report (or
+ * branch on) its own depth, name, arguments, echo state, and exit code, and
+ * a shell user can see which scripts are nested and what the pipe input
+ * source is.
+ */
+
+/** Render a frame's caller arguments (args[1]..) joined with spaces. */
+static const char *shell_frame_args_string(const shell_batch_frame_t *frame)
+{
+    static char all_args[SHELL_BATCH_LINE_BYTES];
+    int index;
+
+    all_args[0] = '\0';
+    if (frame == NULL || frame->argc <= 1) {
+        return all_args;
+    }
+    for (index = 1; index < frame->argc; index++) {
+        if (index > 1) {
+            strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
+        }
+        strncat(all_args, frame->args[index], sizeof(all_args) - strlen(all_args) - 1);
+    }
+    return all_args;
+}
+
+/**
+ * `proc` — introspect the active batch process stack.
+ *
+ *   proc               list every nested batch process (script, depth, args, echo)
+ *   proc /args         print the current process's %* (all arguments from %1)
+ *   proc /name         print the current script name (%0)
+ *   proc /depth        print the current nesting depth
+ *   proc /errorlevel   print the current exit code
+ *   proc /echo         print the current batch echo state
+ *   proc /stdin        print the active input source (a pipe stage's spool file
+ *                      or a `< file`), or "none"
+ */
+void shell_command_proc(int argc, char **argv)
+{
+    shell_batch_frame_t *frame = s_active_batch_frame;
+
+    if (frame == NULL) {
+        shell_print_muted("proc: no batch process is running");
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (argc >= 2) {
+        if (shell_text_equals_ignore_case(argv[1], "/args")) {
+            shell_transcript_appendf_ansi(SH_LBL "proc.args" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                          shell_frame_args_string(frame));
+        } else if (shell_text_equals_ignore_case(argv[1], "/name")) {
+            shell_transcript_appendf_ansi(SH_LBL "proc.name" SH_RST "=" SH_PATH "%s" SH_RST "\n",
+                                          frame->args[0]);
+        } else if (shell_text_equals_ignore_case(argv[1], "/depth")) {
+            shell_print_field_num("proc.depth", frame->depth);
+        } else if (shell_text_equals_ignore_case(argv[1], "/errorlevel")) {
+            shell_print_field_num("proc.errorlevel", s_errorlevel);
+        } else if (shell_text_equals_ignore_case(argv[1], "/echo")) {
+            shell_transcript_appendf_ansi(SH_LBL "proc.echo" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                          frame->echo_enabled ? "on" : "off");
+        } else if (shell_text_equals_ignore_case(argv[1], "/stdin")) {
+            const char *source = storage_get_input_redirect();
+
+            if (source != NULL && source[0] != '\0') {
+                shell_transcript_appendf_ansi(SH_LBL "proc.stdin" SH_RST "=" SH_PATH "%s" SH_RST "\n",
+                                              source);
+            } else {
+                shell_transcript_appendf_ansi(SH_LBL "proc.stdin" SH_RST "=" SH_MUTE "none" SH_RST "\n");
+            }
+        } else {
+            shell_print_usage("Usage: proc [/args | /name | /depth | /errorlevel | /echo | /stdin]");
+            batch_set_errorlevel(2);
+            return;
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    /* Full process-stack view, caller first. */
+    {
+        shell_batch_frame_t *stack[SHELL_BATCH_DEPTH_MAX];
+        int count = 0;
+        int index;
+
+        for (shell_batch_frame_t *walk = frame; walk != NULL && count < SHELL_BATCH_DEPTH_MAX; walk = walk->parent) {
+            stack[count++] = walk;
+        }
+
+        shell_print_heading("Batch process stack");
+        shell_print_field_num("proc.depth", frame->depth);
+        shell_transcript_appendf_ansi(SH_LBL "proc.echo" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                      frame->echo_enabled ? "on" : "off");
+
+        for (index = count - 1; index >= 0; index--) {
+            shell_batch_frame_t *entry = stack[index];
+
+            shell_transcript_appendf_ansi("  " SH_NUM "[%d]" SH_RST " " SH_PATH "%s" SH_RST,
+                                          entry->depth, entry->args[0]);
+            if (entry->argc > 1) {
+                shell_transcript_appendf_ansi("  args=" SH_VAL "%s" SH_RST,
+                                              shell_frame_args_string(entry));
+            }
+            shell_transcript_append_text("\n");
+        }
+        batch_set_errorlevel(0);
+    }
+}
+
+/* ========================================================================
+ * PERSISTENT STATE: ini + temp (all storage on the SD card)
+ * ========================================================================
+ * DOS-like apps kept state in environment variables, temporary files, and
+ * simple `KEY=VALUE` INI files. `ini` reads/writes those files (and imports/
+ * exports the environment), `temp` manages SD-backed temporary files. The
+ * file mechanics live once in components/storage (storage_ini.c) and are
+ * shared with applib, so nothing is duplicated.
+ */
+
+static bool shell_ini_list_cb(const char *key, const char *value, void *ctx)
+{
+    (void)ctx;
+    shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n", key, value);
+    return true;
+}
+
+static bool shell_ini_load_cb(const char *key, const char *value, void *ctx)
+{
+    (void)ctx;
+    (void)shell_env_set(key, value);
+    return true;
+}
+
+/** Export the whole environment table into @p buf as KEY=VALUE lines. */
+static bool shell_ini_export_env(char *buf, size_t cap)
+{
+    buf[0] = '\0';
+    for (size_t index = 0; index < SHELL_ENV_VAR_MAX; index++) {
+        if (s_shell_env_vars[index].used &&
+            !storage_ini_upsert(buf, cap, s_shell_env_vars[index].name,
+                                s_shell_env_vars[index].value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* ---- Shared file helpers used by both `ini` and `appconfig` ---- */
+/* Each prints its own error and returns 0 on success, 1 on an I/O error. */
+
+static int shell_ini_cmd_list(const char *path)
+{
+    esp_err_t error = storage_ini_file_foreach(path, shell_ini_list_cb, NULL);
+
+    if (error != ESP_OK) {
+        shell_print_error("ini: cannot read %s (%s)", path, esp_err_to_name(error));
+        return 1;
+    }
+    return 0;
+}
+
+static int shell_ini_cmd_get(const char *path, const char *key)
+{
+    char value[SHELL_ENV_VALUE_BYTES];
+    esp_err_t error = storage_ini_file_get(path, key, value, sizeof(value));
+
+    if (error != ESP_OK) {
+        shell_print_error("ini: %s not found in %s", key, path);
+        return 1;
+    }
+    shell_transcript_appendf_ansi(SH_VAL "%s" SH_RST "\n", value);
+    return 0;
+}
+
+static int shell_ini_cmd_set(const char *path, const char *key, const char *value)
+{
+    esp_err_t error = storage_ini_file_set(path, key, value);
+
+    if (error != ESP_OK) {
+        shell_print_error("ini: could not write %s (%s)", path, esp_err_to_name(error));
+        return 1;
+    }
+    return 0;
+}
+
+static int shell_ini_cmd_del(const char *path, const char *key)
+{
+    esp_err_t error = storage_ini_file_delete(path, key);
+
+    if (error != ESP_OK) {
+        shell_print_error("ini: %s not found in %s", key, path);
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * `ini` — persistent state in simple KEY=VALUE files on the SD card.
+ *
+ *   ini list <file>           list every KEY=VALUE line
+ *   ini get <file> <key>      print the value of <key>
+ *   ini set <file> <key> <value>  create or update <key>
+ *   ini del <file> <key>      remove <key> (alias: delete)
+ *   ini load <file>           import every KEY=VALUE into the environment
+ *   ini save <file>           export the whole environment to <file>
+ */
+void shell_command_ini(int argc, char **argv)
+{
+    int result = 0;
+
+    if (argc < 3) {
+        shell_print_usage("Usage: ini <list|get|set|del|load|save> <file> [key] [value]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "list")) {
+        if (argc != 3) {
+            shell_print_usage("Usage: ini list <file>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        result = shell_ini_cmd_list(argv[2]);
+    } else if (shell_text_equals_ignore_case(argv[1], "get")) {
+        if (argc != 4) {
+            shell_print_usage("Usage: ini get <file> <key>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        result = shell_ini_cmd_get(argv[2], argv[3]);
+    } else if (shell_text_equals_ignore_case(argv[1], "set")) {
+        char *value;
+
+        if (argc < 5) {
+            shell_print_usage("Usage: ini set <file> <key> <value>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        value = malloc(SHELL_ENV_VALUE_BYTES);
+        if (value == NULL) {
+            shell_print_error("ini: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_join_args(argv, 4, argc, value, SHELL_ENV_VALUE_BYTES);
+        result = shell_ini_cmd_set(argv[2], argv[3], value);
+        free(value);
+    } else if (shell_text_equals_ignore_case(argv[1], "del") ||
+               shell_text_equals_ignore_case(argv[1], "delete")) {
+        if (argc != 4) {
+            shell_print_usage("Usage: ini del <file> <key>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        result = shell_ini_cmd_del(argv[2], argv[3]);
+    } else if (shell_text_equals_ignore_case(argv[1], "load")) {
+        esp_err_t error;
+
+        if (argc != 3) {
+            shell_print_usage("Usage: ini load <file>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        error = storage_ini_file_foreach(argv[2], shell_ini_load_cb, NULL);
+        if (error != ESP_OK) {
+            shell_print_error("ini: cannot load %s (%s)", argv[2], esp_err_to_name(error));
+            batch_set_errorlevel(1);
+            return;
+        }
+    } else if (shell_text_equals_ignore_case(argv[1], "save")) {
+        char *text;
+        esp_err_t error;
+
+        if (argc != 3) {
+            shell_print_usage("Usage: ini save <file>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        text = malloc(P4_CONFIG_INI_MAX_BYTES + 1);
+        if (text == NULL) {
+            shell_print_error("ini: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (!shell_ini_export_env(text, P4_CONFIG_INI_MAX_BYTES + 1)) {
+            shell_print_error("ini: environment too large to export");
+            free(text);
+            batch_set_errorlevel(1);
+            return;
+        }
+        error = storage_write_text_file(argv[2], text);
+        free(text);
+        if (error != ESP_OK) {
+            shell_print_error("ini: could not save %s (%s)", argv[2], esp_err_to_name(error));
+            batch_set_errorlevel(1);
+            return;
+        }
+    } else {
+        shell_print_usage("Usage: ini <list|get|set|del|load|save> <file> [key] [value]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    batch_set_errorlevel(result);
+}
+
+/**
+ * `appconfig` — per-app settings without hand-rolling file parsing.
+ *
+ * Batch apps get a namespaced `KEY=VALUE` settings file on the SD card
+ * (`sd:/APPS/<APP>.INI`) that they read and write through this command; the
+ * file mechanics are the shared `ini`/storage core, so no app parses files.
+ *
+ *   appconfig <app>                list every setting in <APP>.INI
+ *   appconfig <app> path           print the settings file path
+ *   appconfig <app> get <key>      print the value of <key>
+ *   appconfig <app> set <key> <value>  create or update <key>
+ *   appconfig <app> del <key>      remove <key> (alias: delete)
+ */
+void shell_command_appconfig(int argc, char **argv)
+{
+    char path[P4_CONFIG_SD_PATH_BYTES];
+    const char *app;
+    int result = 0;
+
+    if (argc < 2) {
+        shell_print_usage("Usage: appconfig <app> [path|list|get|set|del] [key] [value]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    app = argv[1];
+
+    /* The app name becomes part of a filename: reject separators and dots
+     * that could escape the APPS directory. */
+    if (app[0] == '\0' || strchr(app, '/') != NULL || strchr(app, '\\') != NULL ||
+        strcmp(app, ".") == 0 || strcmp(app, "..") == 0) {
+        shell_print_error("appconfig: invalid app name %s", app);
+        batch_set_errorlevel(2);
+        return;
+    }
+    snprintf(path, sizeof(path), "%s/APPS/%s.INI", BSP_SD_MOUNT_POINT, app);
+
+    if (argc == 2) {
+        result = shell_ini_cmd_list(path);
+    } else if (shell_text_equals_ignore_case(argv[2], "path")) {
+        if (argc != 3) {
+            shell_print_usage("Usage: appconfig <app> path");
+            batch_set_errorlevel(2);
+            return;
+        }
+        shell_transcript_appendf_ansi(SH_LBL "appconfig.path" SH_RST "=" SH_PATH "%s" SH_RST "\n", path);
+    } else if (shell_text_equals_ignore_case(argv[2], "get")) {
+        if (argc != 4) {
+            shell_print_usage("Usage: appconfig <app> get <key>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        result = shell_ini_cmd_get(path, argv[3]);
+    } else if (shell_text_equals_ignore_case(argv[2], "set")) {
+        char *value;
+
+        if (argc < 5) {
+            shell_print_usage("Usage: appconfig <app> set <key> <value>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        value = malloc(SHELL_ENV_VALUE_BYTES);
+        if (value == NULL) {
+            shell_print_error("appconfig: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_join_args(argv, 4, argc, value, SHELL_ENV_VALUE_BYTES);
+        result = shell_ini_cmd_set(path, argv[3], value);
+        free(value);
+    } else if (shell_text_equals_ignore_case(argv[2], "del") ||
+               shell_text_equals_ignore_case(argv[2], "delete")) {
+        if (argc != 4) {
+            shell_print_usage("Usage: appconfig <app> del <key>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        result = shell_ini_cmd_del(path, argv[3]);
+    } else {
+        shell_print_usage("Usage: appconfig <app> [path|list|get|set|del] [key] [value]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    batch_set_errorlevel(result);
+}
+
+/**
+ * `temp` — SD-backed temporary files.
+ *
+ *   temp             print the temp directory (sd:/tmp)
+ *   temp new [ext]   create a unique temp file and print its path
+ *   temp clean       delete every temp file
+ */
+void shell_command_temp(int argc, char **argv)
+{
+    if (argc == 1) {
+        char dir[P4_CONFIG_SD_PATH_BYTES];
+
+        snprintf(dir, sizeof(dir), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_TEMP_DIR_NAME);
+        shell_transcript_appendf_ansi(SH_LBL "temp.dir" SH_RST "=" SH_PATH "%s" SH_RST "\n", dir);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "new")) {
+        char path[P4_CONFIG_SD_PATH_BYTES];
+        const char *ext = (argc >= 3) ? argv[2] : NULL;
+        esp_err_t error = storage_temp_path(path, sizeof(path), ext);
+
+        if (error != ESP_OK) {
+            shell_print_error("temp: could not create a temp file (%s)", esp_err_to_name(error));
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf_ansi(SH_LBL "temp.path" SH_RST "=" SH_PATH "%s" SH_RST "\n", path);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "clean")) {
+        esp_err_t error = storage_temp_cleanup();
+
+        if (error != ESP_OK) {
+            shell_print_error("temp: could not clean %s (%s)",
+                              P4_CONFIG_TEMP_DIR_NAME, esp_err_to_name(error));
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_print_ok("temp: cleaned the SD temp directory");
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    shell_print_usage("Usage: temp [new [ext] | clean]");
+    batch_set_errorlevel(2);
+}
+
+/* ========================================================================
+ * MENU / FORM PRIMITIVES (ansi + menu; CHOICE + ANSI was the DOS way)
+ * ========================================================================
+ * Interactive apps were built from CHOICE (single-key selection) plus ANSI
+ * escape codes (colors, bold, reverse video). `ansi` lets a batch script emit
+ * arbitrary SGR codes for the text that follows, and `menu` renders a numbered
+ * form and reads a numeric choice — both rendered in the shell transcript
+ * (the display area) and readable from touch, USB keyboard, or serial.
+ */
+
+/**
+ * `ansi <sgr-codes> [text...]` — emit text styled with the given SGR codes.
+ *
+ * The codes are the `ESC[<codes>m` parameters (digits and semicolons): `7`
+ * reverse video, `1` bold, `31` red, `90` muted, `0` reset, etc. With text the
+ * text is wrapped in `ESC[<codes>m text ESC[0m` and rendered in the transcript
+ * (and UART); without text only the codes are emitted (for terminal effects).
+ */
+void shell_command_ansi(int argc, char **argv)
+{
+    const char *codes_arg;
+    char codes[64];
+    const char *p;
+    char *styled;
+    size_t styled_size;
+    size_t codes_len;
+
+    if (argc < 2) {
+        shell_print_usage("Usage: ansi <sgr-codes> [text...]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    codes_arg = argv[1];
+
+    /* Accept the DOS spelling with a trailing 'm' (`ansi 7m` for ESC[7m) as
+     * well as the bare parameters (`ansi 7`). */
+    codes_len = strlen(codes_arg);
+    if (codes_len >= sizeof(codes)) {
+        shell_print_error("ansi: SGR codes too long");
+        batch_set_errorlevel(2);
+        return;
+    }
+    snprintf(codes, sizeof(codes), "%s", codes_arg);
+    if (codes_len > 0 && codes[codes_len - 1] == 'm') {
+        codes[--codes_len] = '\0';
+    }
+    for (p = codes; *p != '\0'; p++) {
+        if (!isdigit((unsigned char)*p) && *p != ';') {
+            shell_print_error("ansi: invalid SGR codes '%s'", argv[1]);
+            batch_set_errorlevel(2);
+            return;
+        }
+    }
+    if (codes[0] == '\0') {
+        shell_print_error("ansi: invalid SGR codes '%s'", argv[1]);
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    /* The styled line is command-sized and this runs on the recursive batch
+     * path, so it is heap-allocated and freed on every exit. */
+    styled_size = (argc >= 3 ? SHELL_COMMAND_BYTES : 0) + 32;
+    styled = malloc(styled_size);
+    if (styled == NULL) {
+        shell_print_error("ansi: out of memory");
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    if (argc >= 3) {
+        char *text = malloc(SHELL_COMMAND_BYTES);
+
+        if (text == NULL) {
+            free(styled);
+            shell_print_error("ansi: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_join_args(argv, 2, argc, text, SHELL_COMMAND_BYTES);
+        snprintf(styled, styled_size, "\x1b[%sm%s\x1b[0m", codes, text);
+        free(text);
+    } else {
+        snprintf(styled, styled_size, "\x1b[%sm", codes);
+    }
+
+    shell_transcript_append_ansi(styled);
+    free(styled);
+    batch_set_errorlevel(0);
+}
+
+/**
+ * `menu <item> [item...]` — render a numbered menu in the transcript and read
+ * a numeric choice. ERRORLEVEL becomes the 1-based index of the chosen item
+ * (0 on cancel, timeout, or an invalid entry), so a batch app branches on it.
+ */
+void shell_command_menu(int argc, char **argv)
+{
+    char input[P4_CONFIG_SET_PROMPT_INPUT_BYTES];
+    int count = argc - 1;
+    int choice;
+    int index;
+
+    if (argc < 2) {
+        shell_print_usage("Usage: menu <item> [item...]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    shell_transcript_appendf_ansi(SH_SUBHEAD "Menu" SH_RST "\n");
+    for (index = 0; index < count; index++) {
+        shell_transcript_appendf_ansi("  " SH_NUM "%d." SH_RST " %s\n", index + 1, argv[index + 1]);
+    }
+    shell_transcript_appendf_ansi(SH_LBL "Enter choice (1-%d): " SH_RST, count);
+
+    if (!shell_read_line(input, sizeof(input), SHELL_KEY_WAIT_TIMEOUT_MS)) {
+        shell_transcript_append_text("menu: cancelled or timed out\n");
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    choice = atoi(input);
+    if (choice < 1 || choice > count) {
+        shell_transcript_append_text("menu: invalid choice\n");
+        batch_set_errorlevel(0);
+        return;
+    }
+    batch_set_errorlevel(choice);
+}
+
+/* ========================================================================
+ * APP MODE (appmode)
+ * ========================================================================
+ * A clean way for a batch app to take over the shell: the current screen
+ * (transcript) is saved, optionally the shell input widgets are hidden for a
+ * full-screen app surface, and on exit — including an automatic cleanup when
+ * the batch file that entered app mode returns via `exit /b` / `goto :eof` /
+ * EOF — the saved screen is restored. The mechanics live once in the shell
+ * core (shell_screen_* / shell_app_mode_*), shared with the applib
+ * `app_mode_enter`/`app_mode_exit`.
+ */
+
+static char *s_appmode_saved = NULL;
+static bool s_appmode_active = false;
+
+/** Restore the screen and leave full-screen (idempotent). */
+static void shell_appmode_restore(void)
+{
+    if (!s_appmode_active) {
+        return;
+    }
+    shell_app_mode_exit();
+    shell_screen_restore(s_appmode_saved);
+    shell_screen_discard(s_appmode_saved);
+    s_appmode_saved = NULL;
+    s_appmode_active = false;
+}
+
+/**
+ * `appmode` — enter/exit app mode (save/restore screen, optional full-screen).
+ *
+ *   appmode            show whether app mode is active
+ *   appmode status     show whether app mode is active
+ *   appmode on [/full] [/clear]  save the screen; hide the shell input widgets
+ *                          for a full-screen surface; optionally clear it
+ *   appmode off        restore the saved screen and leave full-screen
+ */
+void shell_command_appmode(int argc, char **argv)
+{
+    bool full = false;
+    bool clear = false;
+
+    if (argc == 1 || (argc == 2 && shell_text_equals_ignore_case(argv[1], "status"))) {
+        shell_transcript_appendf_ansi(SH_LBL "appmode" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                      s_appmode_active ? "on" : "off");
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "on")) {
+        if (s_appmode_active) {
+            shell_print_error("appmode: already active");
+            batch_set_errorlevel(1);
+            return;
+        }
+        for (int index = 2; index < argc; index++) {
+            if (shell_text_equals_ignore_case(argv[index], "/full")) {
+                full = true;
+            } else if (shell_text_equals_ignore_case(argv[index], "/clear")) {
+                clear = true;
+            } else {
+                shell_print_usage("Usage: appmode on [/full] [/clear] | appmode off | appmode status");
+                batch_set_errorlevel(2);
+                return;
+            }
+        }
+
+        s_appmode_saved = shell_screen_save();
+        shell_app_mode_enter(full);
+        if (clear) {
+            shell_transcript_reset();
+        }
+        s_appmode_active = true;
+        if (s_active_batch_frame != NULL) {
+            s_active_batch_frame->app_mode = true;
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "off")) {
+        shell_appmode_restore();
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    shell_print_usage("Usage: appmode on [/full] [/clear] | appmode off | appmode status");
+    batch_set_errorlevel(2);
+}
+
+/* ========================================================================
  * PIPE SUPPORT
  * ========================================================================
  * DOS-style pipeline: cmd1 | cmd2 | cmd3
@@ -2767,7 +3532,16 @@ void shell_execute_pipe(char *command)
  * BATCH ENGINE: FILE EXECUTION, LABELS, FOR LOOPS
  * ======================================================================== */
 
-esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
+/**
+ * Run one batch frame from @p path. When @p start_label is non-NULL the frame
+ * begins at that `:routine` in the file (a shared-library call made by
+ * `call <file.bat>::<routine>`), with an automatic environment scope so the
+ * routine's temporary variables are isolated from the caller (variable
+ * isolation beyond `setlocal`). The frame ends at `exit /b`, `goto :eof`, or
+ * end of file and returns to the caller like any nested call.
+ */
+static esp_err_t shell_batch_run_internal(const char *path, const char *start_label,
+                                          int argc, char **argv)
 {
     /* The frame carries the argument copies and the label table, which
      * together are far larger than the command worker task's stack can hold
@@ -2844,6 +3618,28 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
     /* Remember the caller's setlocal depth so any scope this file opens and
      * forgets to close is unwound when the frame returns. */
     setlocal_depth_on_entry = s_setlocal_depth;
+
+    /* A library call (`call file.bat::routine`) starts at a labelled routine
+     * in an external file. Seek to the label so the frame loop begins there;
+     * the routine ends at `exit /b` / `goto :eof` / EOF and returns to the
+     * caller like any nested call. The pushed environment scope isolates the
+     * routine's temporary variables from the caller ("beyond setlocal": the
+     * caller does not have to write setlocal/endlocal); the frame-return
+     * unwinding below restores the caller's environment. */
+    if (start_label != NULL && start_label[0] != '\0') {
+        long label_pos = shell_find_label_pos(frame, start_label);
+
+        if (label_pos < 0) {
+            shell_transcript_appendf("call: library routine not found: %s\n", start_label);
+            fclose(file);
+            shell_sd_end(&session, "call");
+            free(frame);
+            free(line);
+            return ESP_ERR_NOT_FOUND;
+        }
+        fseek(file, label_pos, SEEK_SET);
+        (void)shell_setlocal_push();
+    }
 
     s_active_batch_frame = frame;
     shell_set_batch_active(true);
@@ -3031,11 +3827,26 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
         s_stop_mode = BATCH_STOP_NONE;
     }
 
+    /* Cleanup on exit: if this frame entered app mode (`appmode on`) and did
+     * not already restore it, restore the saved screen and leave full-screen,
+     * so a batch app that ends via `exit /b` / `goto :eof` / EOF never leaves
+     * the shell in app mode. */
+    if (frame->app_mode) {
+        shell_appmode_restore();
+        frame->app_mode = false;
+    }
+
     fclose(file);
     shell_sd_end(&session, "call");
     free(frame);
     free(line);
     return ESP_OK;
+}
+
+/* Public entry point: run a batch file from its first line. */
+esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
+{
+    return shell_batch_run_internal(path, NULL, argc, argv);
 }
 
 /* Helper: check if a line is a label (starts with :) */
@@ -3672,6 +4483,12 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
                                       &forf_opts)) {
             shell_transcript_append_text("for /f: malformed options\n");
             return;
+        }
+
+        /* Advance past the options to the loop variable; the check below
+         * rejects a missing `%var` (pct == NULL leaves for_ptr where it is). */
+        if (pct != NULL) {
+            for_ptr = pct;
         }
     }
 

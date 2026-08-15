@@ -19,6 +19,7 @@ idf_component_register(
         test_keyboard.c
         test_config.c
         test_calc.c
+        test_applib.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -30,6 +31,7 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/networking"
         "${CMAKE_SOURCE_DIR}/../components/editor"
         "${CMAKE_SOURCE_DIR}/../components/keyboard"
+        "${CMAKE_SOURCE_DIR}/../components/applib"
     REQUIRES
         unity
         shell
@@ -40,5 +42,6 @@ idf_component_register(
         networking
         editor
         keyboard
+        applib
         esp_timer
 )

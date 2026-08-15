@@ -68,6 +68,25 @@
 
 ### Module Layering Rules
 - Component dependencies flow ONE WAY: `main` -> `command` -> `batch` -> `storage` -> `shell` -> (`ansi`, `display`, `windows`, `header`, `keyboard`, `clock`)
+- `components/applib/` is the native-app runtime library (the shell SDK
+  surface). It is a leaf: REQUIRES only `shell`, `clock`, `storage` (for the
+  shared INI / temp-file state mechanics, the same guarded-SD pattern the
+  `edit` app uses), and the FreeRTOS/heap/esp_timer IDF components. It MUST
+  NOT include `networking.h`, `command.h`, or `batch.h`. Its public API is
+  split into lean headers (`applib.h` is an umbrella over `applib_console.h`,
+  `applib_mem.h`, `applib_time.h`, `applib_net.h`, `applib_input.h`,
+  `applib_state.h`) so an app includes only the groups it uses; declare each
+  function in exactly one header. Wi-Fi state is read through the registered
+  `applib_net_ops_t` table, which `command_init()` populates with
+  `networking_*` wrappers; every hook is NULL-checked so the helpers degrade
+  gracefully before registration. Input helpers (`app_wait_key`,
+  `app_read_line`) wrap the shell key queue with a caller timeout and MUST
+  return false on a headless board rather than stalling. The persistent-state
+  helpers (`app_ini_*`, `app_temp_*`) wrap the storage core and keep ALL
+  storage on the SD card. New runtime services for native apps belong in the
+  matching `applib_*.h` (or an ops table when the owner lives higher in the
+  stack). A new component under `components/` must be added to BOTH the root
+  `CMakeLists.txt` `EXTRA_COMPONENT_DIRS` and `test/CMakeLists.txt`.
 - `components/shell/` MUST NOT depend on `components/command/`. When the shell core needs a
   command-owned service, add it to `shell_command_ops_t` in `shell.h` and register it from
   `command_init()` via `shell_register_command_ops()`
@@ -114,6 +133,16 @@
   is DEFERRED to an `lv_async_call` to avoid a use-after-free when the rebuild is triggered from
   an LVGL event or during a redraw pass. Never call LVGL textarea APIs on the transcript, and
   never rebuild the span group synchronously from an LVGL event context.
+- The transcript span group's per-span overhead lives in the internal DMA-capable heap. If the
+  internal heap runs low (`P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES`), the shell auto-trims the
+  oldest half of the scrollback (frees the spans) via `shell_transcript_guard_internal()` at
+  every command start and before every append — this is REQUIRED to prevent stdio-lock OOM
+  aborts on long sessions. Do not bypass the trim; if you add a large internal-heap consumer,
+  keep it out of the internal heap (PSRAM) or the sweep will abort.
+- The SDMMC SD-card host MUST carry a cached DMA buffer: `storage_sd_ensure_dma_buffer()` sets
+  `bsp_sdcard->host.dma_aligned_buffer` at mount (from `P4_CONFIG_SD_DMA_BUFFER_BYTES`). Without
+  it, per-transaction DMA allocation fails (`allocate_dma_buf: not enough mem`) once the internal
+  heap fragments — every SD command goes down. Keep `shell_sd_begin()` calling it on every path.
 - The transcript is a scrollable CONTAINER holding the span group. The span group is sized to
   its exact wrapped content height (`windows_transcript_update_content_size()`), never
   `LV_SIZE_CONTENT`: a content-sized child inside a scrollable container makes
@@ -217,8 +246,10 @@
     `P4_CONFIG_FIND_MATCH_MAX`.
   - Batch language verbs (`set`, `calc`, `path`, `echo`, `call`, `if`, `for`
     including `for /f`, `goto`, `shift`, `pause`, `choice`, `setlocal`,
-    `endlocal`, `exit`) -> `components/batch/batch.c` (+ `components/batch/calc.c`
-    for the `calc` float evaluator).
+    `endlocal`, `exit`, `proc`, `ini`, `appconfig`, `temp`, `ansi`, `menu`,
+    `appmode`) ->
+    `components/batch/batch.c` (+ `components/batch/calc.c` for the `calc`
+    float evaluator).
   - Alias verbs (`alias`, `unalias`) -> `components/batch/batch.c` (the alias table, the
     `alias`/`unalias` commands, `shell_alias_get`/`set`, and
     `batch_alias_expand_command()` all live here; the command module only dispatches and
@@ -299,6 +330,61 @@
   side effect; an expression using shell syntax (`^ & | < >`) must be quoted at the prompt, and
   the dispatcher feeds `shell_command_calc_line()` the raw unsplit line so quoted string
   arguments survive the tokenizer.
+- The batch process model is defined once in `command.md` / `documentation.md` / `SDK.md`
+  ("Batch process model"): stdout = transcript delta captured by `>`/`>>`; stderr = interleaved
+  (no separate stream); stdin = the storage input-redirection slot, consumed by the text tools,
+  `for /f` over an empty set, and `set /p NAME=< file` (the interactive key queue is the
+  fallback); argv = `%0`..`%9`/`%*`; cwd = storage-owned; PATH = batch-owned; environment =
+  the shared 24-slot RAM table, scoped by `setlocal`/`endlocal`. `%ERRORLEVEL%` expands to
+  the current errorlevel, and `proc` introspects the active batch process stack (`/args`
+  `/name` `/depth` `/errorlevel` `/echo` `/stdin`). Batch files are first-class pipe
+  processes: a `.bat` stage reads the pipe spool via `for /f in ()` / `set /p <` and its
+  output flows to the next stage. Shared libraries of batch routines use
+  `call <file.bat>::<routine> [args]`, which starts an external `.bat` at `:routine` and
+  MUST push an automatic environment scope for the callee (variable isolation beyond
+  `setlocal` — the caller does not write setlocal) that the frame-return unwinding restores;
+  a whole-file `call <file.bat>` keeps the shared-environment behavior. `set /p` accepts an
+  optional `/T:secs` timeout (default `P4_CONFIG_KEY_WAIT_TIMEOUT_MS`), stripped from the
+  displayed prompt. Keep new batch verbs and file-input forms consistent with this model,
+  and document authoring/deployment rules in `SDK.md` ("Authoring and deploying batch
+  files") when adding a limit that affects script authors.
+- The output-redirection capture (`shell_redirect_capture_begin/end/get/reset`) is
+  RE-ENTRANT: a redirected command that internally runs another redirected command (a
+  pipeline whose stages spool to their own files inside an outer `>` / `>>`) nests one
+  capture per level up to `P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH`. The inner stage's capture
+  is written and popped, and the outer capture resumes so the outer file still receives the
+  whole pipeline output. Never flatten it back to a single buffer: `cmd1 | cmd2 > out.txt`
+  would silently write an empty file.
+- Persistent state (DOS-style env + temp files + simple INI files) MUST live on the SD card.
+  The shared core is `components/storage/storage_ini.c`: the pure line editors
+  (`storage_ini_get_value` / `storage_ini_upsert` / `storage_ini_remove`) are the single
+  implementation of `KEY=VALUE` editing (the `config` command's `config_directive_*` are
+  thin wrappers), the file-level operations go through guarded SD sessions with atomic
+  temp+rename writes, and `storage_temp_*` keep temporary files under `sd:/tmp`. The batch
+  `ini`/`appconfig`/`temp` commands and the applib state group (`app_ini_*`, `app_temp_*`)
+  call this core — never re-implement file parsing or temp-file management in another
+  layer. `appconfig <app>` writes `sd:/APPS/<APP>.INI` (the APPS dir is created on demand);
+  app names MUST be validated (no `/`, `\`, `.` or `..`) before they become part of a path.
+- Menu/form primitives follow the DOS pattern (CHOICE + ANSI). The `ansi` batch command and
+  `app_print_styled` wrap text in SGR codes (`ESC[<codes>m text ESC[0m`); both MUST accept
+  the DOS `7m` spelling and the bare `7` spelling and MUST validate the codes (digits and
+  semicolons only) to avoid emitting arbitrary escape sequences. The `menu` batch command
+  and `app_menu` render a numbered form and read a numeric choice, returning the 1-based
+  index (0 on cancel); `choice` remains the single-key primitive. All menu/form output is
+  rendered in the transcript (the shell display area), never on a hidden surface.
+- Password (no-echo) input shares ONE reader: `shell_read_line_hidden()` in the shell core
+  (with `shell_read_line` a thin wrapper over the shared mode with echo on). The batch
+  `set /p NAME=<prompt> /P` command and `app_read_password` MUST call it — never re-implement
+  hidden line reading. `/P` and `/T:secs` are stripped from the displayed prompt.
+- App mode (save/restore screen + optional full-screen) shares ONE implementation in the
+  shell core: `shell_screen_save/restore/discard` (transcript, ANSI colours preserved) and
+  `shell_app_mode_enter/exit/active` (full-screen via `windows_enter_app_mode` /
+  `windows_exit_app_mode`). The batch `appmode` command and `applib` `app_mode_enter`/
+  `app_mode_exit` MUST call these — never re-implement screen capture or widget hiding.
+  The shell app-mode LVGL calls MUST be guarded by a `windows_get_transcript() != NULL`
+  check (the window manager may not be up in unit tests / early boot). Each batch frame
+  tracks whether IT entered app mode (`frame->app_mode`) and the frame-return cleanup MUST
+  restore the screen automatically so `exit /b` never leaves the shell in app mode.
 - The batch executor and the label scanner MUST agree on where a logical line ends. Both apply
   the same odd-trailing-caret continuation rule; changing one without the other lets a
   continued line register a phantom `:label` and silently corrupt `goto` targets.
@@ -660,7 +746,11 @@
 - Batch depth: max 4 nested calls
 - Batch labels: max 32 per file (`P4_CONFIG_BATCH_LABEL_MAX`)
 - `set /a` parenthesis nesting: max 16 (`P4_CONFIG_SET_EXPR_DEPTH_MAX`)
-- `set /p` input: max 128 bytes (`P4_CONFIG_SET_PROMPT_INPUT_BYTES`)
+- `set /p` input: max 128 bytes (`P4_CONFIG_SET_PROMPT_INPUT_BYTES`); the same cap bounds a
+  line read from a `< file`/pipe source (`set /p NAME=< file`)
+- `calc` string results/arguments: max `P4_CONFIG_CALC_STR_BYTES`; nesting max
+  `P4_CONFIG_CALC_MAX_DEPTH`; `for /f` `tokens=` list max `P4_CONFIG_FORF_TOKEN_MAX`, source
+  lines max `P4_CONFIG_FORF_LINE_MAX`, `delims=` set max `P4_CONFIG_FORF_DELIMS_BYTES`
 - Line continuations: max 8 joined lines (`P4_CONFIG_LINE_CONTINUATION_MAX`)
 - setlocal scopes: max 8 nested (`P4_CONFIG_SETLOCAL_DEPTH_MAX`). Every scope a batch frame
   leaves open MUST be unwound when that frame returns, or the snapshot allocation leaks and the

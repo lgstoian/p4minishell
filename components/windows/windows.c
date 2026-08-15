@@ -54,6 +54,9 @@ static struct {
     bool editor_mode;
     lv_obj_t *editor_surface;
     lv_obj_t *editor_status;
+    /* App mode: the shell input widgets are hidden for a full-screen app
+     * surface (kept separate from editor mode; both hide the input row). */
+    bool app_mode;
 } s_windows = {
     .initialized = false,
     .screen = NULL,
@@ -68,6 +71,7 @@ static struct {
     .editor_mode = false,
     .editor_surface = NULL,
     .editor_status = NULL,
+    .app_mode = false,
 };
 
 /* ========================================================================
@@ -636,6 +640,51 @@ static void windows_transcript_apply_cb(void *user_data)
 }
 
 /**
+ * Drop the oldest half of the rendered scrollback and free its spans.
+ *
+ * Runs under memory pressure (see shell_transcript_guard_internal): the
+ * accumulated span objects live in the internal heap, so this reclaims them
+ * synchronously before a command prints. The caller must hold the LVGL port
+ * lock. The staged buffer keeps the newest half plus the truncation marker,
+ * so the next append re-renders only a small tail.
+ */
+void windows_transcript_trim(void)
+{
+    static const char marker[] = "\n[history trimmed under memory pressure]\n";
+    lv_obj_t *spans = s_windows.transcript_spans;
+    size_t len = strlen(s_transcript_staged);
+    size_t keep;
+
+    if (spans == NULL || len == 0) {
+        return;
+    }
+
+    keep = len / 2;
+    if (keep < sizeof(marker)) {
+        keep = len > 0 ? 1 : 0;
+    }
+
+    windows_transcript_clear_spans(spans);
+
+    if (len > keep) {
+        size_t copy_len = len - keep;
+        memmove(s_transcript_staged, s_transcript_staged + keep, copy_len);
+        s_transcript_staged[copy_len] = '\0';
+        size_t marker_space = sizeof(s_transcript_staged) - copy_len;
+        if (marker_space > sizeof(marker)) {
+            memcpy(s_transcript_staged + copy_len, marker, sizeof(marker) - 1);
+            s_transcript_staged[copy_len + sizeof(marker) - 1] = '\0';
+        }
+    }
+
+    s_transcript_rendered_len = 0;
+    s_transcript_last_fg = 0;
+    s_transcript_seen_fg = 0;
+    s_transcript_rendered_prefix[0] = '\0';
+    windows_transcript_update_content_size(spans);
+}
+
+/**
  * Schedule a transcript repaint on the LVGL task. Coalesces: if an apply is
  * already queued, the staging buffer already holds the newest text and the
  * queued callback paints it; no second async call is needed.
@@ -1115,4 +1164,58 @@ lv_obj_t *windows_get_editor_status(void)
 bool windows_editor_mode_active(void)
 {
     return s_windows.editor_mode;
+}
+
+/**
+ * Enter app mode: hide the shell input widgets (input line and the
+ * prev/next/scroll buttons) so the transcript becomes a clean full-screen app
+ * surface. The on-screen keyboard can still be shown for app input. The
+ * transcript container is NOT hidden (LVGL flex skips hidden children, which
+ * would collapse the area). LVGL task.
+ */
+void windows_enter_app_mode(void)
+{
+    if (s_windows.app_mode || s_windows.screen == NULL) {
+        return;
+    }
+    if (s_windows.prev_button != NULL) {
+        lv_obj_add_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.next_button != NULL) {
+        lv_obj_add_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_up_button != NULL) {
+        lv_obj_add_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_down_button != NULL) {
+        lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.input_line != NULL) {
+        lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+    }
+    s_windows.app_mode = true;
+}
+
+/** Leave app mode and restore the shell input widgets. LVGL task. */
+void windows_exit_app_mode(void)
+{
+    if (!s_windows.app_mode) {
+        return;
+    }
+    if (s_windows.prev_button != NULL) {
+        lv_obj_remove_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.next_button != NULL) {
+        lv_obj_remove_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_up_button != NULL) {
+        lv_obj_remove_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.scroll_down_button != NULL) {
+        lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.input_line != NULL) {
+        lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+    }
+    s_windows.app_mode = false;
 }

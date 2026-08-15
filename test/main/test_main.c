@@ -18,6 +18,7 @@ extern void test_shell_parser_trim(void);
 extern void test_shell_parser_count_args(void);
 extern void test_shell_parser_text_equals(void);
 extern void test_shell_parser_percentage_parse(void);
+extern void test_redirect_capture_nested(void);
 
 extern void test_shell_history_store(void);
 extern void test_shell_history_recall(void);
@@ -86,6 +87,7 @@ extern void test_variable_expansion_empty_name(void);
 extern void test_variable_expansion_single_quotes(void);
 extern void test_variable_expansion_caret_escape(void);
 extern void test_variable_expansion_multiple(void);
+extern void test_variable_expansion_errorlevel(void);
 extern void test_variable_expansion_output_truncated(void);
 extern void test_variable_expansion_null_input(void);
 extern void test_variable_expansion_null_output(void);
@@ -160,6 +162,7 @@ extern void test_calc_string_functions(void);
 extern void test_calc_string_numbers(void);
 extern void test_calc_string_errors(void);
 extern void test_calc_env_variables(void);
+extern void test_calc_command_assignment(void);
 extern void test_calc_pol_rec_side_effects(void);
 extern void test_calc_random(void);
 extern void test_calc_format_number(void);
@@ -169,6 +172,23 @@ extern void test_forf_parse_options(void);
 extern void test_forf_parse_star(void);
 extern void test_forf_parse_errors(void);
 extern void test_forf_split_line(void);
+
+extern void test_applib_alloc_free(void);
+extern void test_applib_calloc_zeroes(void);
+extern void test_applib_realloc(void);
+extern void test_applib_strdup(void);
+extern void test_applib_strndup(void);
+extern void test_applib_free_null(void);
+extern void test_applib_time_helpers(void);
+extern void test_applib_uptime_formatted(void);
+extern void test_applib_sysinfo(void);
+extern void test_applib_printf(void);
+extern void test_applib_wifi_ops(void);
+extern void test_applib_input_timeout(void);
+extern void test_applib_state(void);
+extern void test_applib_menu_primitives(void);
+extern void test_applib_read_password(void);
+extern void test_applib_app_mode(void);
 
 void app_main(void)
 {
@@ -191,6 +211,7 @@ void app_main(void)
     RUN_TEST(test_shell_parser_count_args);
     RUN_TEST(test_shell_parser_text_equals);
     RUN_TEST(test_shell_parser_percentage_parse);
+    RUN_TEST(test_redirect_capture_nested);
     UNITY_END();
 
     /* Shell history tests */
@@ -289,6 +310,7 @@ void app_main(void)
     RUN_TEST(test_variable_expansion_single_quotes);
     RUN_TEST(test_variable_expansion_caret_escape);
     RUN_TEST(test_variable_expansion_multiple);
+    RUN_TEST(test_variable_expansion_errorlevel);
     RUN_TEST(test_variable_expansion_output_truncated);
     RUN_TEST(test_variable_expansion_null_input);
     RUN_TEST(test_variable_expansion_null_output);
@@ -384,6 +406,7 @@ void app_main(void)
     RUN_TEST(test_calc_string_numbers);
     RUN_TEST(test_calc_string_errors);
     RUN_TEST(test_calc_env_variables);
+    RUN_TEST(test_calc_command_assignment);
     RUN_TEST(test_calc_pol_rec_side_effects);
     RUN_TEST(test_calc_random);
     RUN_TEST(test_calc_format_number);
@@ -397,6 +420,26 @@ void app_main(void)
     RUN_TEST(test_forf_parse_star);
     RUN_TEST(test_forf_parse_errors);
     RUN_TEST(test_forf_split_line);
+    UNITY_END();
+
+    /* applib native-app runtime library tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_applib_alloc_free);
+    RUN_TEST(test_applib_calloc_zeroes);
+    RUN_TEST(test_applib_realloc);
+    RUN_TEST(test_applib_strdup);
+    RUN_TEST(test_applib_strndup);
+    RUN_TEST(test_applib_free_null);
+    RUN_TEST(test_applib_time_helpers);
+    RUN_TEST(test_applib_uptime_formatted);
+    RUN_TEST(test_applib_sysinfo);
+    RUN_TEST(test_applib_printf);
+    RUN_TEST(test_applib_wifi_ops);
+    RUN_TEST(test_applib_input_timeout);
+    RUN_TEST(test_applib_state);
+    RUN_TEST(test_applib_menu_primitives);
+    RUN_TEST(test_applib_read_password);
+    RUN_TEST(test_applib_app_mode);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

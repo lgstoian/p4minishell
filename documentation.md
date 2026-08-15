@@ -17,6 +17,7 @@ components/keyboard/keyboard.c  Keyboard manager (LVGL keyboard, visibility, mod
 components/shell/shell.c        Shell core (transcript, history, debug log, UART console, input line, sysinfo)
 components/storage/storage.c    SD sessions, path resolution, FATFS conversion, size formatting, cwd
 components/storage/storage_commands.c  DOS file commands, extended DOS tools, text utilities, sd family
+components/storage/storage_ini.c INI-style persistent state + SD temp files (shared by the config/ini/appconfig/temp commands and applib)
 components/batch/batch.c        Batch engine, labels, for loops, pipes, environment variables, PATH
 components/boot/boot.c            DOS-style boot scripting (CONFIG.SYS parser, AUTOEXEC.BAT runner)
 components/command/command.c    Command module (dispatcher, worker task, execution pipeline, hardware and system commands)
@@ -25,6 +26,7 @@ components/header/header.c      Fixed top status bar (LVGL widgets)
 components/led/led.c            WS2812 RGB status LED driver + auto status / event notification engine (GPIO26)
 components/editor/editor.c      DOS-style `edit` editor: byte-preserving document model, undo/redo, find/replace, worker session
 components/editor/editor_view.c `edit` editor LVGL surface (syntax spans, block cursor, selection overlay, status-bar prompts)
+components/applib/applib.c      Native-app runtime library: app stdout/printf onto the transcript (the redirection layer), shared memory policy, time/sleep/sysinfo helpers, Wi-Fi state via an ops table
 components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
 components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
 components/usb/usb.c            USB Host (MSC storage + HID keyboard/mouse)
@@ -100,11 +102,19 @@ local functions.
 
 Owns the shell's runtime surface and output plumbing:
 
-- **Transcript system**: Scrollable LVGL span group backed by a 16 KB ANSI buffer with overflow
-  protection. When full, the oldest half is dropped and a `[history truncated]` marker is
-  inserted. New output auto-follows the view only while it is near the bottom
-  (`P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX`); submitting a command forces a jump to the newest
-  output so the user always sees the result of what they ran.
+- **Transcript system**: Scrollable LVGL span group backed by an 8 KB ANSI buffer with overflow
+  protection (reduced from 16 KB in v0.32.8 to halve the internal-RAM footprint of the span
+  group; still ~80 lines of history). When full, the oldest half is dropped and a
+  `[history truncated]` marker is inserted. New output auto-follows the view only while it is
+  near the bottom (`P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX`); submitting a command forces a
+  jump to the newest output so the user always sees the result of what they ran.
+- **Memory-pressure auto-trim**: the LVGL span objects that render the scrollback carry
+  per-span overhead in the internal (DMA-capable) heap, which is shared with the WiFi/SDIO
+  transport. When free internal RAM drops below
+  `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES`, `shell_transcript_guard_internal()` (called at
+  every command start and before every append, under the LVGL port lock) drops the oldest
+  half of the scrollback and frees its spans synchronously, so a tiny stdio allocation can
+  never abort the board mid-command (see bugs.md M6).
 - **Async transcript buffer**: Thread-safe 2 KB staging buffer for background-task output,
   flushed via `lv_async_call`. Oldest bytes are dropped first when full, so the newest module
   output always reaches the user. The buffer is drained into a heap copy (never a line-sized
@@ -295,6 +305,14 @@ Owns everything that sits between the shell commands and the SD card. Split into
   prompt when interactive and falls back to `/Y` (silent) when headless.
 - SD command family: `sd info|ls|stat|cat|eject`, bounded to 128 listing entries and an 8192-byte
   `sd cat` preview
+- **Persistent state + temp files** (`storage_ini.c`): the pure INI line editors
+  (`storage_ini_get_value` / `storage_ini_upsert` / `storage_ini_remove`) are the single
+  `KEY=VALUE` text editor (the `config` command's `config_directive_*` are thin wrappers);
+  `storage_ini_file_*` read/update/iterate INI files through guarded SD sessions with atomic
+  temp+rename writes and on-demand parent-directory creation; `storage_write_text_file`
+  writes any text file atomically; `storage_temp_path` / `storage_temp_cleanup` keep temp
+  files under `sd:/tmp`. All storage lives on the SD card. Shared by the `config`/`ini`/
+  `appconfig`/`temp` commands and the applib state group — never re-implemented elsewhere.
 
 ### Batch Module (components/batch)
 
@@ -386,20 +404,77 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   an escaped `^^`. The label scanner applies the same rule, so a continued line cannot
   register a phantom `:label`.
 - **Batch language commands**: `set` (with `/a` and `/p`, including the `< file` source
-  form), `calc`, `path`, `echo`, `call`, `if`
+  form and an optional `/T:secs` prompt timeout), `calc`, `path`, `echo` (including the
+  `echo.` blank-line idiom), `call`
+  (including `call <file.bat>::<routine>` shared-library calls with automatic
+  variable isolation), `if`
   (with `errorlevel N` — true when errorlevel ≥ N, `exist <path>`, `/i` case-insensitive
   string comparison, and `not` for all three), `for` (classic and `for /f`), `goto`
-  (including `goto :eof`), `shift`,
+  (including `goto :eof`), `shift`, `proc` (process-stack introspection), `ini`
+  (persistent `KEY=VALUE` files, import/export the environment), `appconfig` (per-app
+  settings file `sd:/APPS/<APP>.INI`), `temp` (SD-backed temporary files), `ansi`
+  (menu/form primitive: emit text styled with SGR codes), `menu` (numbered form returning
+  the chosen index as ERRORLEVEL),
   `pause`, `choice`, `setlocal`, `endlocal`, `exit`. `pause` and `choice`
   block on a real keystroke through the shell core's key queue.
 - **Nested execution**: every nested line goes back through the full command pipeline via
   `batch_command_ops_t`, so it inherits variable expansion and redirection
+- **Batch process model**: a batch file runs as a command stream on the single worker task
+  (no process isolation). Its contract is fully defined: **stdout** is the transcript delta
+  captured by `>`/`>>`; **stderr** is not a separate stream (errors interleave and failure is
+  signalled by ERRORLEVEL); **stdin** is the storage input-redirection slot consumed by the
+  text tools, `for /f` over an empty set, and `set /p NAME=< file` (the interactive key
+  queue backs `set /p`/`pause`/`choice` when no redirect is active); **argv** is `%0`..`%9`/
+  `%*` with `call`/`shift`; **cwd** is the storage-owned current directory; **PATH** is the
+  batch-owned environment slot used by `shell_resolve_batch_path()`; and **environment
+  propagation** is the shared 24-slot RAM table mutated by `set`/`set /a`/`set /p`/`calc`
+  and scoped by `setlocal`/`endlocal` (auto-unwound on frame return). See `command.md`
+  "Batch process model" and `SDK.md` "Batch process model" / "Authoring and deploying batch
+  files" for the full authoring and deployment rules.
+
+### Applib Module (components/applib)
+
+A leaf component that formalizes the native-app runtime contract (the four
+"Runtime services to define" from the roadmap). Its public API is organized
+as lean headers — an app includes only the groups it uses; the umbrella
+`applib.h` includes all of them:
+
+- **Console output API** (`applib_console.h`): `app_printf`/`app_printf_ansi`
+  and the semantic `app_print_*` helpers map an app's stdout onto the shell
+  transcript, which is the redirection layer — an app invoked inside a command
+  dispatch is captured by `>`/`>>` exactly like a built-in command.
+- **Memory allocation policy + error reporting** (`applib_mem.h`):
+  `app_alloc`/`app_calloc`/`app_realloc`/`app_strdup`/`app_strndup`/`app_free`
+  implement the shared policy (blocks of
+  `P4_CONFIG_APPLIB_PSRAM_THRESHOLD_BYTES` or more prefer PSRAM with an
+  internal-heap fallback); `app_report_error`/`app_report_warning`/
+  `app_report_info` route into the shell debug log.
+- **Time / timers / sleep / sysinfo** (`applib_time.h`): `app_time`,
+  `app_time_local`/`app_time_utc`, `app_uptime_sec`, `app_now_ms`,
+  `app_delay_ms`, `app_time_synced`, `app_uptime_formatted`, `app_sysinfo`
+  over the clock component.
+- **Networking helpers** (`applib_net.h`): `app_wifi_is_connected`/
+  `app_wifi_get_rssi`/`app_wifi_state_string` read Wi-Fi state through the
+  registered `applib_net_ops_t` table (registered by `command_init()`), so
+  applib never includes `networking.h`.
+- **Input with timeout** (`applib_input.h`): `app_wait_key(timeout_ms, &key)`
+  and `app_read_line(buf, size, timeout_ms)` give native apps bounded
+  keypress/line reads (the primitive behind `pause` / `choice /T` / `set /p
+  /T`), returning false on a headless board instead of stalling.
+- **Persistent state** (`applib_state.h`): `app_ini_get`/`app_ini_set`/
+  `app_ini_delete` read and update `KEY=VALUE` INI files on the SD card and
+  `app_temp_path`/`app_temp_cleanup` manage SD-backed temporary files, all
+  wrapping the shared `storage_ini.c` core (no duplicated file parsing).
+
+The module depends only on `shell`, `clock`, `storage`, and the FreeRTOS/
+heap/esp_timer IDF components. `components/command` requires it to register
+the networking hooks; native apps link `applib` instead of reaching into
+module internals.
 
 ### Command Module (components/command)
 
 Owns the dispatcher, the execution pipeline, and the commands that are not tied to the
 filesystem or the batch language:
-
 - **Execution pipeline**: `shell_execute_command()` splits the line into chain segments, then
   for each segment expands variables (through `components/batch/`), parses redirection,
   publishes any `<` source to `components/storage/`, dispatches, and captures the transcript
@@ -412,7 +487,7 @@ filesystem or the batch language:
 - **Heap-backed line buffers**: the expansion and chain buffers are heap-allocated because this
   function sits on the batch recursion path — a batch file re-enters the pipeline for every
   line, and stack buffers here would overflow the worker task at nesting depth.
-- **Dispatcher**: `shell_execute_command_core()` — 65 verbs with family routing
+- **Dispatcher**: `shell_execute_command_core()` — 66 verbs with family routing
   (wifi, bluetooth, usb, c6ota, sd) that receive the original unsplit command text
 - **Serial file transfer** (`receive` / `send`, plus the `screenshot` stream):
   binary host<->device transfer over the USB-Serial/JTAG console. Both directions

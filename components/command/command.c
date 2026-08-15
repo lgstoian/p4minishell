@@ -26,6 +26,7 @@
 #include "config_cmd.h"
 #include "batch.h"
 #include "calc.h"
+#include "applib.h"
 #include "storage.h"
 #include "storage_commands.h"
 #include "shell.h"
@@ -1523,20 +1524,20 @@ static void shell_command_paste(int argc, char **argv)
 
 /** Built-in command names offered by Tab completion for the first token. */
 static const char *const shell_builtin_commands[] = {
-    "about", "adc", "alias", "append", "attrib", "audio", "battery", "beep",
-    "bluetooth", "brightness", "bt", "c6ota", "calc", "call", "capture", "cd", "chdir",
-    "chkdsk", "choice", "clear", "clip", "cls", "comp", "config", "copy", "date", "debug",
+    "about", "adc", "alias", "ansi", "append", "appconfig", "appmode", "attrib", "audio", "battery", "beep",
+    "bluetooth", "brightness", "bt", "c6ota", "calc", "call", "capture", "cd", "chdir",    "chkdsk", "choice", "clear", "clip", "cls", "comp", "config", "copy", "date", "debug",
     "deepsleep", "del", "dir", "disk", "display", "dns", "echo", "edit",
     "endlocal",
     "erase", "exit", "fc", "find", "findstr", "for", "format", "freq", "goto", "gpio",
-    "help", "history", "httpd", "httpget", "i2c", "if", "ipconfig", "keyboard",
-    "label", "md", "mem", "mkdir", "more", "move", "netstat", "nslookup",
+    "help", "history", "httpd", "httpget", "i2c", "if", "ini", "ipconfig", "keyboard",
+    "label", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "nslookup",
     "ntpsync", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
     "rd", "reboot", "receive", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
     "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "send", "set", "setlocal",
     "shift", "sleep", "sntp", "sort", "spi", "sysinfo", "tasks", "time", "timezone",
     "tone", "top", "touch", "trash", "tree", "type", "unalias", "undelete", "usb",
     "ver", "version", "volume", "wavplay", "wget", "wifi", "windows", "write", "xcopy",
+    "proc", "temp",
 };
 
 /** Completion collector: a bounded list of heap-copied matches. */
@@ -4978,8 +4979,15 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
-    if (shell_text_equals_ignore_case(argv[0], "echo")) {
-        if (echo_line != NULL) {
+    if (shell_text_equals_ignore_case(argv[0], "echo") ||
+        (strncasecmp(argv[0], "echo.", 5) == 0 && argv[0][5] == '\0')) {
+        if (strncasecmp(argv[0], "echo.", 5) == 0) {
+            /* The DOS `echo.` idiom prints a blank line. */
+            if (echo_line != NULL) {
+                free(echo_line);
+            }
+            shell_transcript_append_text("\n");
+        } else if (echo_line != NULL) {
             /* A raw-line snapshot exists when the command started with "echo";
              * use it so a long echo line is never truncated by the argv cap. */
             shell_command_echo_text(echo_line);
@@ -5086,6 +5094,54 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "exit")) {
         shell_command_exit(argc, argv);
+        return true;
+    }
+
+    /* `proc` — batch process-stack introspection (the batch process
+     * abstraction): list the active batch files, or report the current
+     * process's args/name/depth/errorlevel/echo/stdin source. */
+    if (shell_text_equals_ignore_case(argv[0], "proc")) {
+        shell_command_proc(argc, argv);
+        return true;
+    }
+
+    /* `ini` — persistent state in KEY=VALUE files on the SD card (get/set/
+     * del/list/load/save). */
+    if (shell_text_equals_ignore_case(argv[0], "ini")) {
+        shell_command_ini(argc, argv);
+        return true;
+    }
+
+    /* `appconfig` — per-app settings file (sd:/APPS/<APP>.INI) without
+     * hand-rolling file parsing. */
+    if (shell_text_equals_ignore_case(argv[0], "appconfig")) {
+        shell_command_appconfig(argc, argv);
+        return true;
+    }
+
+    /* `temp` — SD-backed temporary files (new/clean/path). */
+    if (shell_text_equals_ignore_case(argv[0], "temp")) {
+        shell_command_temp(argc, argv);
+        return true;
+    }
+
+    /* `ansi` / `menu` — menu/form primitives (CHOICE + ANSI was the DOS
+     * way): styled text output and a numbered form, both rendered in the
+     * transcript display. */
+    if (shell_text_equals_ignore_case(argv[0], "ansi")) {
+        shell_command_ansi(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "menu")) {
+        shell_command_menu(argc, argv);
+        return true;
+    }
+
+    /* `appmode` — enter/exit app mode (save/restore screen, full-screen,
+     * auto-cleanup on batch exit). */
+    if (shell_text_equals_ignore_case(argv[0], "appmode")) {
+        shell_command_appmode(argc, argv);
         return true;
     }
 
@@ -5477,6 +5533,12 @@ void shell_execute_command(char *command)
         return;
     }
 
+    /* Reclaim internal heap from the transcript scrollback when the internal
+     * heap runs low, before this command prints anything. Without this the
+     * accumulated LVGL span overhead can starve the heap until a tiny stdio
+     * allocation (newlib FILE lock) aborts the board mid-command. */
+    shell_transcript_guard_internal();
+
     /* Chain splitting works on a private copy: shell_split_chain() writes
      * terminators in place, and the caller's buffer may be a batch line that
      * the executor still needs intact. Heap-allocated because this function
@@ -5775,6 +5837,19 @@ void command_init(void)
             .equals_ignore_case = shell_text_equals_ignore_case,
         };
         clock_register_host_ops(&clock_ops);
+    }
+
+    /* Publish the networking state accessors to the applib runtime. Native
+     * apps read Wi-Fi state through applib (app_wifi_*) without including
+     * networking.h; the table keeps the dependency one-way (command owns
+     * networking) and every hook is NULL-checked inside applib. */
+    {
+        static const applib_net_ops_t applib_net_ops = {
+            .wifi_is_connected  = networking_wifi_is_connected,
+            .wifi_get_rssi      = networking_wifi_get_rssi,
+            .wifi_state_string  = networking_wifi_state_string,
+        };
+        applib_register_net_ops(&applib_net_ops);
     }
 
     s_initialized = true;

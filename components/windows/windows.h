@@ -115,6 +115,16 @@ lv_obj_t *windows_get_transcript_spans(void);
 void windows_set_transcript_text(const char *text);
 
 /**
+ * Drop the oldest half of the rendered scrollback and free its spans.
+ *
+ * Invoked under memory pressure from the shell (which holds the LVGL port
+ * lock) to reclaim the internal-heap memory owned by the accumulated span
+ * objects. The staged buffer keeps the newest half plus a truncation marker
+ * so the next append re-renders only a small tail.
+ */
+void windows_transcript_trim(void);
+
+/**
  * Apply the transcript's computed region height.
  *
  * The transcript must have an explicit, bounded height (not LV_SIZE_CONTENT)
@@ -276,6 +286,17 @@ lv_obj_t *windows_get_editor_surface(void);
 
 /** Report whether the editor modal surface is currently active. */
 bool windows_editor_mode_active(void);
+
+/**
+ * Enter app mode: hide the shell input widgets (input line and the
+ * prev/next/scroll buttons) so the transcript becomes a clean full-screen app
+ * surface; the on-screen keyboard can still be shown for app input. Must run
+ * on the LVGL task. Paired with `windows_exit_app_mode`.
+ */
+void windows_enter_app_mode(void);
+
+/** Leave app mode and restore the shell input widgets. Must run on LVGL task. */
+void windows_exit_app_mode(void);
 
 /**
  * Re-apply the transcript-region height to the editor surface and force a

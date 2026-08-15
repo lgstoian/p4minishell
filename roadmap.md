@@ -6,7 +6,7 @@ The long-term goal is to turn P4MiniShell into a practical embedded shell enviro
 On this hardware, that goal needs to be interpreted carefully:
 - Practical target: PowerShell-like shell behavior on UART console, DOS-style file commands on SD, native ESP32-P4 applications stored on SD, and a small C SDK/API for those apps.
 
-## Current baseline (v0.23.0 — August 2026)
+## Current baseline (v0.32.0 — August 2026)
 Implemented today in the checked-in firmware:
 
 ### Shell Core & UI
@@ -73,7 +73,15 @@ Implemented today in the checked-in firmware:
 - ✅ Output redirection `>` and `>>` to SD files
 - ✅ Command history with password masking for `wifi connect`
 - ✅ `set /a` integer arithmetic with the full DOS operator set and compound assignment
-- ✅ `set /p` prompted input via the key-wait facility
+- ✅ `set /p` prompted input via the key-wait facility, plus `set /p NAME=< file` to read one
+      line from a `< file`/pipe source (the BASIC `INPUT#`/`LINE INPUT#` surface)
+- ✅ `calc` float calculator (`components/batch/calc.c`): `calc [NAME=] <expr>` with the
+      FX-870P/VX-4 math/string functions, `&H`/`0x` hex, `PI`, seeded `RAN#`, DEG/RAD angle
+      mode (`calc /deg|/rad|/angle`), `&H` hex output (`calc /hex`), and POL/REC X/Y side
+      effects (v0.32.0)
+- ✅ `for /f` file-line loops: `for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in
+      (file-set) do cmd` over an explicit file, a wildcard, or the active `<`/pipe input;
+      `tokens=` binds consecutive letters and `*` captures the rest (v0.32.0)
 - ✅ DOSKEY-style `alias` / `unalias` with SD persistence (`alias /save` writes
       `sd:/ALIASES.BAT`, auto-loaded after CONFIG.SYS) and prompt-only expansion
 - ✅ Trailing `^` line continuation, honored by both the executor and the label scanner
@@ -205,6 +213,36 @@ Implemented today in the checked-in firmware:
   `components/led` (espressif/led_strip over RMT) with the `rgb` command, an
   auto status layer tied to Wi-Fi/HTTP events, a boot confirmation flash, and
   a CONFIG.SYS `RGB=` directive (see changelog v0.24.25).
+
+---
+
+## Recently Completed (v0.32.0 - August 2026)
+
+### FX-870P/VX-4 BASIC port into the batch language
+- ✅ `calc` float calculator (`components/batch/calc.c`): `calc [NAME=] <expr>` evaluates a
+  floating-point expression over double/fixed-string values and stores the result in an
+  environment variable when `NAME=` is given. Functions: `ABS SGN INT FIX FRAC ROUND SQR
+  EXP LN LOG SIN COS TAN SINH COSH TANH ASN/ASIN ACS/ACOS ATN/ATAN FACT NCR NPR DMS DMS$
+  VAL VALF STR$ HEX$ ASC CHR$ LEN LEFT$ MID$ RIGHT$ MOD POL REC`. Grammar: `+ - * / ^`
+  (right-assoc power), the `MOD` keyword, unary `- +`, parentheses, `&H`/`0x` hex, `PI`, a
+  seeded `RAN#`, string literals with `+` concatenation, and env-var references. `calc
+  /deg|/rad|/angle` set/query the trig angle mode; `calc /hex` prints `&H` hex. `POL`/`REC`
+  store their two results in the X/Y variables (calculator BASIC parity). ERRORLEVEL 0/1/2.
+- ✅ `set /p NAME=< file` — reads one line from a `< file` redirection or pipe stage instead
+  of the interactive key queue, covering the BASIC `INPUT#`/`LINE INPUT#` verbs.
+- ✅ `for /f` — file-line loops with `eol=c skip=n delims=xyz tokens=a,b,m-n,*` over an
+  explicit file, a wildcard, or the active `<`/pipe input, covering the BASIC
+  `READ`/`DATA`/`RESTORE`/`EOF` verbs. Pure option parser / line splitter unit-tested.
+- ✅ The rest of the BASIC surface is documented as DOS mappings or not-applicable in
+  `command.md` ("BASIC-to-DOS Batch Mapping"): no stubs, no duplicated verbs.
+- ✅ Batch process model defined: `command.md` and `SDK.md` ("Batch process model")
+  document stdout/stderr/stdin/argv/cwd/PATH/environment propagation and errorlevel.
+- ✅ Host-side batch authoring/deployment documented in `SDK.md` ("Authoring and deploying
+  batch files"): UTF-8/CRLF, `*.bat` naming and PATH placement, line/label/continuation
+  limits, quoting, environment hygiene, and validation.
+- ✅ New config: `P4_CONFIG_CALC_*` and `P4_CONFIG_FORF_*` (documented in
+  `p4minishell_config.yaml`); test project main-task stack raised to 16 KB.
+- ✅ On-board: 139 unit tests, 0 failures (15 `calc` + 5 `for /f` new cases).
 
 ---
 
@@ -659,6 +697,25 @@ Implemented today in the checked-in firmware:
 - ✅ Line continuation (`^`) in batch files — implemented in v0.21.0
 - ✅ `set /a` for arithmetic expressions — implemented in v0.21.0
 - ✅ `set /p` for user input prompts — implemented in v0.21.0
+- ✅ `set /p NAME=< file` file-line input — implemented in v0.32.0 (reads one line from a
+      `< file`/pipe source)
+- ✅ `calc` float calculator — implemented in v0.32.0 (BASIC math/string functions,
+      `&H`/`0x` hex, `PI`, `RAN#`, DEG/RAD mode, POL/REC X/Y side effects)
+- ✅ `for /f` file-line loops — implemented in v0.32.0 (`eol= skip= delims= tokens=,*`
+      over files, wildcards, or `<`/pipe input)
+- ✅ Shared libraries of batch routines — implemented in v0.32.3:
+      `call <file.bat>::<routine> [args]` starts an external `.bat` at a
+      `:routine` and returns on `exit /b` / `goto :eof` / EOF, with automatic
+      variable isolation (beyond `setlocal`) and errorlevel propagation
+- ✅ Easy persistent state — implemented in v0.32.4: `ini` (KEY=VALUE files +
+      env import/export), `appconfig <app>` (per-app settings at
+      `sd:/APPS/<APP>.INI` without hand-rolling parsing), and `temp`
+      (SD-backed temporary files), all on the SD card and sharing one
+      `storage_ini.c` core with the applib state group (`app_ini_*`,
+      `app_temp_*`)
+- ✅ Input timeouts — implemented/verified in v0.32.3: `choice /T:c,secs` (existing),
+      `set /p NAME=<prompt> /T:secs` (new), and bounded waits throughout the shell
+      key queue
 
 ### 4. Extended command completeness
 - ✅ `tree` is recursive with `/F` and `/A` — implemented in v0.18.0
@@ -667,17 +724,37 @@ Implemented today in the checked-in firmware:
 - ✅ `more` waits for a keypress with `Q` to quit — implemented in v0.18.0
 - ✅ Pipe operator `|` supports multiple stages — implemented in v0.18.0
 - ✅ Input redirection `<` — implemented in v0.18.0
-- ❌ Pipe stages spool through SD rather than streaming (a single worker task
-      runs one command at a time, so there is no second process to stream into)
+- ✅ Pipe stages spool through SD rather than streaming — implemented since
+      v0.18.0 (each stage spools to an SD temp file read through the
+      input-redirection slot; the single worker task runs one command at a
+      time, so there is no second process to stream into) and fully
+      stress-tested in v0.32.2: multi-stage pipes, pipes inside batch files,
+      batch files as pipe stages (stdin via `for /f in ()` / `set /p NAME=<`),
+      and pipe + outer `>`/`>>` redirection (the redirection capture is now
+      re-entrant, so `cmd1 | cmd2 > out.txt` round-trips).
 
 ### 5. Native application model
-This is the biggest missing layer for SD-card app support:
+This is the biggest missing layer for SD-card app support. The **batch**
+process model is now explicit (v0.32.2: `proc` process-stack introspection,
+`%ERRORLEVEL%` exit-code expansion, and batch files as first-class pipe
+processes with stdin/stdout through the redirection layer); a loader-driven
+native-app process model remains open:
 - ❌ No executable loader
-- ❌ No process abstraction
-- ❌ No per-app lifecycle hooks, startup contract, or exit-code model
-- ❌ No isolated stdin, stdout, stderr abstraction beyond the shared transcript
-- ❌ No ABI for passing argv, environment variables, or current directory into apps
-- ❌ No memory or task ownership rules for third-party programs
+- ✅ Batch process abstraction — implemented in v0.32.2: `proc` lists every
+      nested batch process (script, depth, args, echo state) and reports the
+      current one (`/args` `/name` `/depth` `/errorlevel` `/echo` `/stdin`);
+      `%ERRORLEVEL%` expands to the current exit code. A loader-driven native
+      app process model (per-app task/lifecycle) remains open.
+- ❌ No per-app lifecycle hooks, startup contract, or exit-code model (the
+      batch `exit /b [code]` + errorlevel contract is the working shape)
+- ✅ No isolated stdin, stdout, stderr abstraction beyond the shared
+      transcript — answered for batch: a batch process's stdin is the
+      input-redirection slot (a `< file` or pipe spool), its stdout is the
+      transcript/`>`/`>>` capture, and it can be a pipe stage
+      (`echo x | filter.bat | findstr ...`). Native apps use the applib
+      console API (v0.32.1).
+- ❌ No ABI for passing argv, environment variables, or current directory into apps (batch: `%0`..`%9`/`%*`, env table, storage cwd)
+- ❌ No memory or task ownership rules for third-party programs (batch runs on the shared worker task; the applib allocation policy is defined)
 
 ### 6. `.exe` support strategy
 This needs an explicit design decision before implementation starts:
@@ -703,27 +780,47 @@ documented in `SDK.md` ("Modal app surfaces"):
 - ✅ Pure app logic is LVGL-free and unit-tested (`test/main/test_editor.c`).
 
 ### Runtime services to define
-- ❌ Console output API mapped to the transcript and redirection layer
-  (partially answered by the editor: apps render through
-  `windows_set_transcript_text`-style span surfaces, but a formal app
-  `printf`/stdout contract is still open)
+- ✅ Console output API mapped to the transcript and redirection layer —
+  implemented in v0.32.1 as `components/applib` (`app_printf`/`app_printf_ansi`
+  and the semantic print helpers). An app's stdout is the transcript, so an app
+  run inside a command dispatch is captured by `>`/`>>` exactly like a built-in
+  command. The editor remains the reference for the LVGL span-surface rendering
+  of richer apps.
 - ✅ Input API for keyboard, buttons, and optional touch events — the editor's
   `editor_view_handle_usb_key` / `editor_view_handle_osk` / serial hooks are
   the working shape; formalize as `app_input_t` for Phase 4
 - ✅ Filesystem API rooted at the shell current directory and SD mount
   conventions — the editor uses `shell_fs_resolve_path` + guarded
   `shell_sd_begin`/`shell_sd_end`; formalize for Phase 4
-- ❌ Memory allocation policy and error reporting contract
-- ❌ Time, timers, sleep, and system information helpers
-- ❌ Networking helpers for apps that need Wi-Fi state without owning the full stack
+- ✅ Memory allocation policy and error reporting contract — implemented in
+  v0.32.1 (`app_alloc`/`app_calloc`/`app_realloc`/`app_strdup`/`app_strndup`/
+  `app_free` with the PSRAM-threshold policy, plus `app_report_error`/
+  `app_report_warning`/`app_report_info` routed to the shell debug log)
+- ✅ Time, timers, sleep, and system information helpers — implemented in
+  v0.32.1 (`app_time`, `app_time_local`/`app_time_utc`, `app_uptime_sec`,
+  `app_now_ms`, `app_delay_ms`, `app_time_synced`, `app_uptime_formatted`,
+  `app_sysinfo`)
+- ✅ Networking helpers for apps that need Wi-Fi state without owning the full
+  stack — implemented in v0.32.1 (`app_wifi_is_connected`,
+  `app_wifi_get_rssi`, `app_wifi_state_string`) through the registered
+  `applib_net_ops_t` table, so applib never includes `networking.h`
 
 ### Tooling to add
-- ❌ Header files for the shell SDK (the editor's `editor.h`/`editor_view.h`
-  split — public doc API + LVGL surface API — is the template)
+- ✅ Header files for the shell SDK — `components/applib` ships the stable
+  runtime surface as **lean headers** (`applib.h` umbrella over
+  `applib_console.h` / `applib_mem.h` / `applib_time.h` / `applib_net.h` /
+  `applib_input.h`, v0.32.3) so an app includes only the groups it uses; the
+  editor's `editor.h`/`editor_view.h` split remains the template for
+  LVGL-surface apps
 - ❌ Example apps written in C
 - ❌ Build templates for app targets
-- ❌ Packaging rules for SD deployment
-- ❌ A documented ABI or loader manifest format
+- ✅ Packaging rules for SD deployment — done for batch files in v0.32.0 (`SDK.md`,
+  "Authoring and deploying batch files": UTF-8/CRLF, `*.bat` naming and PATH placement,
+  line/label limits, quoting, validation); native C app packaging remains open
+- ✅ A documented ABI or loader manifest format — partially answered: `applib.h`
+  (`components/applib`) is the stable runtime ABI for native apps (console,
+  memory, time/sysinfo, Wi-Fi state); a loader manifest for SD-deployed apps
+  remains open
 
 ## Suggested delivery phases
 
@@ -758,7 +855,13 @@ documented in `SDK.md` ("Modal app surfaces"):
 ### Phase 3: app runtime contract
 - ❌ Define a native app ABI for ESP32-P4 programs
 - ❌ Decide whether apps are loaded dynamically, linked as plugins, or executed through an interpreted wrapper
-- ❌ Define stdout, stderr, stdin, argv, cwd, PATH, and environment propagation
+- ✅ Define stdout, stderr, stdin, argv, cwd, PATH, and environment propagation — answered
+  for the **batch** surface in v0.32.0: `command.md` ("Batch process model") and `SDK.md`
+  ("Batch process model") define stdout (transcript + `>`/`>>`), stderr (interleaved, no
+  separate stream), stdin (the storage input-redirection slot, consumed by the text tools,
+  `for /f`, and `set /p < file`), argv (`%0`..`%9`/`%*`), cwd (storage-owned), PATH
+  (batch-owned), and environment propagation (`call` + `setlocal`/`endlocal`). A native app
+  ABI for standalone C programs remains open (see Phase 4/5).
 - ✅ Define how apps yield control back to the shell cleanly — answered by the
   `edit` modal-surface pattern: a worker session + LVGL view pair with a
   session event group, the window-manager editor-mode handoff, and
@@ -771,7 +874,11 @@ documented in `SDK.md` ("Modal app surfaces"):
   (Find / Repeat / Replace / Go-to-Line, Save As, overwrite, word nav,
   delete line, quit confirm; v0.24.35); ❌ `view`, `netinfo`, `hexview`
   still open
-- ❌ Provide host-side build instructions and packaging rules for SD deployment
+- ✅ Provide host-side build instructions and packaging rules for SD deployment — answered
+  for the **batch** surface in v0.32.0: `SDK.md` ("Authoring and deploying batch files")
+  documents UTF-8/CRLF, `*.bat` naming and PATH placement, line/label/continuation limits,
+  quoting rules, environment hygiene, and the validation flow. Build templates and
+  packaging rules for native C apps remain open.
 
 ### Phase 5: SD app launcher
 - ❌ Add `run` or direct executable invocation from the command line

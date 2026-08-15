@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             32
-#define P4_CONFIG_VERSION_PATCH             0
+#define P4_CONFIG_VERSION_PATCH             8
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -88,7 +88,7 @@
  *  PSRAM (with an internal-RAM fallback) so it does not compete with the
  *  DMA-capable heap used by the WiFi/SDIO transport mempool and the
  *  USB-Serial/JTAG ring buffers. */
-#define P4_CONFIG_TRANSCRIPT_BYTES           16384
+#define P4_CONFIG_TRANSCRIPT_BYTES           8192
 
 /**
  * Maximum bytes staged for the on-screen transcript span group. The staged
@@ -97,6 +97,21 @@
  * escapes directly instead of recolor markup).
  */
 #define P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES   P4_CONFIG_TRANSCRIPT_BYTES
+
+/**
+ * Internal (DMA-capable) heap free threshold in bytes that triggers an
+ * automatic transcript scrollback trim.
+ *
+ * The on-screen transcript renders the coloured scrollback as LVGL spans,
+ * and every span carries per-span struct/style/text overhead in the internal
+ * heap. Over a long session the accumulated spans can exhaust the internal
+ * heap to the point where a tiny stdio allocation (a newlib FILE lock mutex
+ * created by printf) fails and aborts the board. When free internal RAM
+ * drops below this threshold the shell drops the oldest half of the
+ * transcript and frees the corresponding spans, keeping the internal heap
+ * above the failure floor.
+ */
+#define P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES   49152
 
 /**
  * Transcript scroll step in pixels applied by one on-screen scroll button
@@ -542,6 +557,26 @@
  *  P4_CONFIG_FILE_IO_BUFFER_BYTES for consistency. */
 #define P4_CONFIG_SD_IO_BUFFER_BYTES         512
 
+/**
+ * Pre-allocated SDMMC DMA scratch buffer size in bytes.
+ *
+ * The IDF sdmmc driver allocates a temporary DMA-capable buffer for every
+ * multi-block SD card transaction when the host has no cached buffer
+ * (`card->host.dma_aligned_buffer == NULL`). That allocation comes from the
+ * internal (DMA-capable) heap, which is also shared with the WiFi/SDIO
+ * transport and LVGL, and it can fail with `sdmmc_cmd: allocate_dma_buf:
+ * not enough mem` once the internal heap fragments under load, taking every
+ * SD command down with it.
+ *
+ * Pre-allocating the buffer once at mount time (when internal RAM is
+ * abundant) and caching it in `card->host.dma_aligned_buffer` makes every
+ * later transaction reuse it, so SD operations can never fail on memory.
+ * The value must be an integer multiple of the card sector size (512 B);
+ * the SDMMC chunk size is derived from it. Larger values speed up multi-
+ * block transfers but reserve more internal RAM permanently.
+ */
+#define P4_CONFIG_SD_DMA_BUFFER_BYTES        8192
+
 /* ========================================================================
  * DIRECTORY LISTING AND STORAGE GUARDRAILS
  * ======================================================================== */
@@ -668,6 +703,18 @@
 
 /** Maximum bytes the `config` command reads/writes for the CONFIG.SYS file. */
 #define P4_CONFIG_CONFIG_MAX_BYTES           16384
+
+/**
+ * Maximum bytes the generic INI (`ini` command, applib state) reads/writes for
+ * a `KEY=VALUE` config file on the SD card.
+ */
+#define P4_CONFIG_INI_MAX_BYTES              16384
+
+/**
+ * Name of the directory (under the SD mount point) where temporary files
+ * live: `sd:/<P4_CONFIG_TEMP_DIR_NAME>/`. All temp files live on the SD card.
+ */
+#define P4_CONFIG_TEMP_DIR_NAME              "tmp"
 
 /* ========================================================================
  * BATCH ENGINE AND ENVIRONMENT VARIABLES
@@ -848,6 +895,22 @@
 /** Maximum length of the `for /f` `delims=` character set (bytes). */
 #define P4_CONFIG_FORF_DELIMS_BYTES          16
 
+/* ========================================================================
+ * APPLIB (native-app runtime library, components/applib)
+ * ========================================================================
+ * The shell SDK surface for native apps: console output through the transcript
+ * (the redirection layer), a shared memory-allocation policy, time/sleep/
+ * system-info helpers, and Wi-Fi state accessors via a registered ops table.
+ */
+
+/**
+ * Blocks of this size or larger are allocated from PSRAM (when available) by
+ * `app_alloc`/`app_calloc`/`app_realloc`; smaller blocks use the internal
+ * heap. The PSRAM path falls back to the internal heap when PSRAM is absent
+ * or exhausted, so callers only ever NULL-check the result.
+ */
+#define P4_CONFIG_APPLIB_PSRAM_THRESHOLD_BYTES  512
+
 /** Maximum length of the `choice` /C: key list (characters). Single-char
  *  keys only; DOS caps this list at 26, Windows at 99. */
 #define P4_CONFIG_CHOICE_KEY_MAX              64
@@ -859,6 +922,14 @@
  * this cap. When the cap is exceeded the excess is dropped and the shell warns.
  */
 #define P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES  (256 * 1024)
+
+/**
+ * Maximum nesting depth of redirection captures. A redirected command that
+ * internally runs another redirected command (a pipeline whose stages spool to
+ * their own files inside an outer `>` / `>>`) nests one capture per stage; the
+ * stack keeps the outer capture intact until the inner ones finish.
+ */
+#define P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH  8
 
 /** Maximum directory recursion depth for the `tree` command. */
 #define P4_CONFIG_TREE_DEPTH_MAX             8

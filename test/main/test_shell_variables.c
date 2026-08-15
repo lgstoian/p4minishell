@@ -79,6 +79,33 @@ void test_variable_expansion_multiple(void)
 }
 
 /* ========================================================================
+ * %ERRORLEVEL% (batch process exit code)
+ * ======================================================================== */
+
+void test_variable_expansion_errorlevel(void)
+{
+    char out[256];
+    int saved = batch_get_errorlevel();
+
+    batch_set_errorlevel(7);
+    shell_expand_variables("echo %ERRORLEVEL%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo 7", out);
+
+    /* Case-insensitive, and usable mid-line like any %VAR%. */
+    batch_set_errorlevel(42);
+    shell_expand_variables("code=%errorlevel% done", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("code=42 done", out);
+
+    /* %% still yields a literal %. */
+    batch_set_errorlevel(3);
+    shell_expand_variables("echo %% and %ERRORLEVEL%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo % and 3", out);
+
+    /* Restore so other suites are unaffected. */
+    batch_set_errorlevel(saved);
+}
+
+/* ========================================================================
  * BUFFER BOUNDS
  * ======================================================================== */
 

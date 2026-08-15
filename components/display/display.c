@@ -232,12 +232,21 @@ esp_err_t display_set_rotation(display_rotation_t rotation)
      *
      * The lv_display_set_rotation() call triggers a resolution change
      * event which causes the LVGL port to call lvgl_port_disp_rotation_update()
-     * to update its internal rotation tracking. */
-    lv_display_set_rotation(disp, display_rotation_to_lvgl(rotation));
+     * to update its internal rotation tracking.
+     *
+     * LVGL is not thread-safe: the shell/boot tasks call this routine
+     * while the LVGL render task may be mid-frame, so the whole LVGL
+     * access (set_rotation plus the synchronous RESOLUTION_CHANGED
+     * callback) must run under the LVGL port mutex. The port mutex is
+     * recursive, so a call made from the LVGL task itself stays safe. */
+    if (lvgl_port_lock(0)) {
+        lv_display_set_rotation(disp, display_rotation_to_lvgl(rotation));
 
-    /* Keep touch controller in native orientation — LVGL handles the
-     * coordinate transformation automatically when sw_rotate is enabled. */
-    display_update_touch_rotation(rotation);
+        /* Keep touch controller in native orientation — LVGL handles the
+         * coordinate transformation automatically when sw_rotate is enabled. */
+        display_update_touch_rotation(rotation);
+        lvgl_port_unlock();
+    }
 
     /* Track the current rotation atomically */
     portENTER_CRITICAL(&s_display.lock);
@@ -247,7 +256,10 @@ esp_err_t display_set_rotation(display_rotation_t rotation)
     /* Schedule UI rebuild via lv_async_call so it runs on the LVGL task
      * with adequate stack, avoiding stack overflow when called from
      * the UART console task or other small-stack contexts. */
-    lv_async_call(display_async_rebuild_ui, NULL);
+    if (lvgl_port_lock(0)) {
+        lv_async_call(display_async_rebuild_ui, NULL);
+        lvgl_port_unlock();
+    }
 
     return ESP_OK;
 }

@@ -323,6 +323,62 @@ void shell_command_endlocal(int argc, char **argv);
  */
 void shell_command_exit(int argc, char **argv);
 
+/**
+ * `proc` — introspect the active batch process stack (the batch "process"
+ * abstraction). Lists every nested batch file (script, depth, args, echo
+ * state), and the `/args` `/name` `/depth` `/errorlevel` `/echo` `/stdin`
+ * sub-forms report the current process's arguments, name, depth, exit code,
+ * echo state, and active pipe/`<` input source. ERRORLEVEL: 0 ok, 2 usage.
+ */
+void shell_command_proc(int argc, char **argv);
+
+/**
+ * `ini` — persistent state in simple `KEY=VALUE` INI files on the SD card:
+ * `ini list|get|set|del <file> [key] [value]` and `ini load|save <file>` to
+ * import/export the environment (easy persistent state: env + INI files).
+ * ERRORLEVEL: 0 ok, 1 io/missing, 2 usage.
+ */
+void shell_command_ini(int argc, char **argv);
+
+/**
+ * `appconfig` — per-app settings without hand-rolling file parsing: reads and
+ * writes `sd:/APPS/<APP>.INI` for a named app, so batch apps get a namespaced
+ * settings file through `appconfig <app> list|path|get|set|del`. ERRORLEVEL:
+ * 0 ok, 1 io/missing, 2 usage.
+ */
+void shell_command_appconfig(int argc, char **argv);
+
+/**
+ * `temp` — SD-backed temporary files: `temp` shows the temp directory,
+ * `temp new [ext]` creates a unique temp file and prints its path,
+ * `temp clean` deletes every temp file. ERRORLEVEL: 0 ok, 1 io, 2 usage.
+ */
+void shell_command_temp(int argc, char **argv);
+
+/**
+ * `ansi <sgr-codes> [text...]` — menu/form primitive: emit text styled with
+ * the given ANSI SGR codes (reverse video, bold, colors; `ESC[<codes>m text
+ * ESC[0m`) into the transcript display. With no text, only the codes are
+ * emitted. ERRORLEVEL: 0 ok, 1/2 error.
+ */
+void shell_command_ansi(int argc, char **argv);
+
+/**
+ * `menu <item> [item...]` — menu/form primitive: render a numbered menu in
+ * the transcript and read a numeric choice; ERRORLEVEL is the 1-based index
+ * of the chosen item (0 on cancel/timeout/invalid). Pairs with `choice`.
+ */
+void shell_command_menu(int argc, char **argv);
+
+/**
+ * `appmode` — enter/exit app mode (save/restore screen, optional full-screen).
+ * `appmode on [/full] [/clear]` saves the transcript (and hides the shell
+ * input widgets for a full-screen app surface); `appmode off` restores it;
+ * when the batch file that entered app mode returns (`exit /b` / `goto :eof` /
+ * EOF) the screen is restored automatically. ERRORLEVEL 0/1/2.
+ */
+void shell_command_appmode(int argc, char **argv);
+
 /* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
