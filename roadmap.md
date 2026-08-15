@@ -109,6 +109,12 @@ Implemented today in the checked-in firmware:
       turn the backlight off after N idle seconds; touch / USB keyboard / USB mouse / serial
       command wake it cleanly. `sleep`/`deepsleep` support a user-wired `P4_CONFIG_POWER_WAKE_GPIO`
       wake; touch wake is honestly reported unavailable (GT911 INT not wired) (v0.24.30)
+- ✅ Persistent settings: `config` reads/writes CONFIG.SYS (brightness, rotation, volume, prompt,
+      Wi-Fi auto-connect, display timeout, plus `OSK=`/`HEADER=` boot prefs) with a guarded atomic
+      rewrite and a confirmed `config factory` full reset (v0.24.40)
+- ✅ First-run / no-SD guidance: no-SD boot message + header notification, automatic minimal
+      CONFIG.SYS/AUTOEXEC.BAT generation on first card mount with an "SD card ready" welcome,
+      `sd mount` (re-mount after eject), and a Getting Started footer in `help` (v0.24.41)
 
 ### Extended DOS Commands (v0.14.2+)
 - ✅ `attrib` — FATFS file attributes (R/H/S/A) with +R/-R/+H/-H/+S/-S/+A/-A

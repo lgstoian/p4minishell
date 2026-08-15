@@ -39,6 +39,23 @@ extern "C" {
  */
 void boot_run_startup(void);
 
+/**
+ * Ensure CONFIG.SYS and AUTOEXEC.BAT exist on the SD card root, generating the
+ * documented defaults when either is missing. Idempotent: an existing file is
+ * never overwritten.
+ *
+ * @return true when at least one default file was generated.
+ */
+bool boot_ensure_default_files(void);
+
+/**
+ * First-mount callback registered by main: runs when the SD card mounts for
+ * the first time this boot (at startup or when a freshly-inserted card is
+ * mounted by the first SD command). Generates the default boot files when
+ * missing and prints a short "SD card ready" welcome.
+ */
+void boot_on_sd_first_mount(void);
+
 #ifdef __cplusplus
 }
 #endif

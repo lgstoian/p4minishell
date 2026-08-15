@@ -17,6 +17,7 @@
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_ldo_regulator.h"
 #include "esp_vfs_fat.h"
+#include "driver/sdmmc_host.h"
 #include "usb/usb_host.h"
 #include "sd_pwr_ctrl.h"
 #include "sd_pwr_ctrl_interface.h"
@@ -185,6 +186,17 @@ i2c_master_bus_handle_t bsp_i2c_get_handle(void)
     return i2c_handle;
 }
 
+/* Slot-0-scoped SDMMC host deinit. The SDMMC host is shared with the
+ * ESP-Hosted C6 transport on slot 1 (see bugs.md N1). The default
+ * SDMMC_HOST_DEFAULT() deinit (sdmmc_host_deinit) tears down the WHOLE host,
+ * so a failed SD mount (esp_vfs_fat_sdmmc_mount calls host_config->deinit())
+ * would also break the co-processor link. Releasing only slot 0 keeps the
+ * host alive while any other slot is still initialized. */
+static esp_err_t bsp_sdmmc_host_deinit_slot0(void)
+{
+    return sdmmc_host_deinit_slot(SDMMC_HOST_SLOT_0);
+}
+
 esp_err_t bsp_sdcard_mount(void)
 {
     esp_err_t ret;
@@ -201,6 +213,7 @@ esp_err_t bsp_sdcard_mount(void)
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.slot = SDMMC_HOST_SLOT_0;
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+    host.deinit = bsp_sdmmc_host_deinit_slot0;
 
     sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL;
     ret = bsp_sd_pwr_ctrl_new(&pwr_ctrl_handle);

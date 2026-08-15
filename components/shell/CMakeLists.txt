@@ -16,4 +16,5 @@ idf_component_register(
         lvgl__lvgl
         driver
         vfs
+        esp_app_format
 )

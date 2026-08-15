@@ -393,6 +393,17 @@ filesystem or the batch language:
   line, and stack buffers here would overflow the worker task at nesting depth.
 - **Dispatcher**: `shell_execute_command_core()` — 65 verbs with family routing
   (wifi, bluetooth, usb, c6ota, sd) that receive the original unsplit command text
+- **Serial file transfer** (`receive` / `send`, plus the `screenshot` stream):
+  binary host<->device transfer over the USB-Serial/JTAG console. Both directions
+  suspend the console reader (`shell_uart_console_rx_begin/end`) so the raw byte
+  stream is never mistaken for command lines. `receive` is ACK-paced against the
+  device's small RX ring and supports an optional CRC-32 trailer; `send` streams
+  SD files (or byte ranges, or a `send /diag` report) framed as a 4-byte magic +
+  4-byte little-endian size + payload. All three share
+  `serial_write_frame_header()` and write payloads through
+  `usb_serial_jtag_write_bytes()` in chunks, bypassing the console VFS's CRLF
+  translation so binary data is byte-exact. Both commands set ERRORLEVEL for
+  batch use. All tunables live in `P4_CONFIG_SERIAL_*`.
 - **Worker task**: `shell_execute_command_async()` creates a dedicated FreeRTOS task so heavy
   commands never run on the LVGL event-callback stack
 - **Redirection parsing**: a quote-aware two-pass scan handling `>`, `>>`, and `<` in any order

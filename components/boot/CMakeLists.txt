@@ -8,5 +8,7 @@ idf_component_register(
         display
         networking
         usb
+        keyboard
+        header
         ansi
 )

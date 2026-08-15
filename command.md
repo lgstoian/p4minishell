@@ -110,11 +110,12 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` | `components/storage/storage_commands.c` |
 | `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`, `fc`, `comp`, `sort` | `components/storage/storage_commands.c` |
 | `chkdsk`/`scandisk`, `format` | `components/storage/storage_commands.c` |
-| `sd info|ls|stat|cat|eject`, `sdeject` | `components/storage/storage_commands.c` + `storage.c` |
+| `sd info|ls|stat|cat|mount|eject`, `sdeject` | `components/storage/storage_commands.c` + `storage.c` |
 | `set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit` | `components/batch/batch.c` |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
 | `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
+| `config` (persistent settings / CONFIG.SYS + factory reset) | `components/command/config_cmd.c` |
 | `reboot`, `clear`/`cls`, `prompt` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota`, `httpd`, `netstat`, `ipconfig` (family routing) | `components/command/command.c` → owning module |
@@ -129,14 +130,42 @@ worker task.
 
 | Command | Description |
 |---------|-------------|
-| help | Show built-in command list |
-| sysinfo | Show board, display, storage, heap, FreeRTOS tasks, uptime, Wi-Fi, and OTA state |
+| help | Show built-in command list; `help /all` prints the full offline reference; `help <command>` prints one entry |
+| sysinfo | Show board, display, storage, heap, FreeRTOS tasks, uptime, Wi-Fi, and OTA state (includes build date/time and Git hash) |
 | clear / cls | Clear transcript history and redraw prompt |
 | reboot | Restart the board |
-| version / ver | Show app banner, ESP-IDF version, chip info, uptime, heap, and task count |
-| about | Show shell and board summary with header description, uptime, and task count |
+| version / ver | Show app banner, version, build date/time, Git hash, IDF version, chip info, uptime, heap, and task count |
+| about | Show shell and board summary with build metadata, header description, uptime, task count, the proprietary notice, and a third-party license summary |
 | debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count |
 | mem | Show free heap, total heap, minimum heap, internal heap, task count, PSRAM state |
+
+### help [command | /all]
+
+`help` prints a quick command summary. It is also a full offline command
+reference:
+
+- `help /all` (or `help /?`) — prints every built-in command with a one-line
+  usage/description, so the reference is always available without a network or
+  a host doc.
+- `help <command>` — prints a single entry, e.g. `help wifi`; an unknown name
+  prints an error and points at `help /all`.
+
+The entries mirror the authoritative `command.md` reference in this repository.
+
+### about — license and third-party notice
+
+`about` adds a **License** section that surfaces the proprietary notice
+(`P4_CONFIG_COPYRIGHT_NOTICE`) and a **Third-party components** summary naming
+the principal open-source components and their SPDX identifiers (ESP-IDF,
+LVGL, esp_hosted, esp_wifi_remote, FreeRTOS, lwIP, FatFs, protobuf-c, USB host
+stack). Full license texts ship in the project's `managed_components/`
+directories.
+
+### Header long-press
+
+Pressing and holding anywhere on the top status bar shows a transient banner
+with the build identity: `P4MiniShell v0.31.0 | built <date> <time> | git
+<hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### ps | tasks | top [/b] [/O:key]
 
@@ -221,6 +250,45 @@ The on-screen symbols keyboard covers every printable ASCII character
 escape character), tilde `~`, and backtick, so DOS operators and escaped
 characters can be typed directly. Use the `1#` / `abc` mode buttons to switch
 between text and symbols.
+
+### config [KEY=VALUE | KEY value | save | reset [key] | factory]
+Read and write the persistent settings stored in `sd:/CONFIG.SYS` — the same
+file the boot component parses at startup, so a saved setting is re-applied on
+every boot with no extra boot code.
+
+- `config` — show every tracked setting: current value, factory default, and
+  whether it is saved in CONFIG.SYS.
+- `config BRIGHTNESS` — show one setting.
+- `config BRIGHTNESS=40` (or `config BRIGHTNESS 40`) — apply the setting now
+  and write `BRIGHTNESS=40` into CONFIG.SYS. A value may span several tokens
+  (e.g. `config PROMPT PS $p$g`).
+- `config save` — persist the current value of every tracked setting.
+- `config reset` — restore every tracked default in RAM and remove all
+  tracked directive lines. `config reset <key>` does the same for one key.
+- `config factory` — full factory reset: restores every default, clears
+  history/aliases/known-networks, and deletes CONFIG.SYS, AUTOEXEC.BAT,
+  WIFI.KNOWN, ALIASES.BAT, and HISTORY.TXT (the default boot files are
+  regenerated at the next boot). Gated by the same interactive "YES"
+  confirmation as `format` and is refused from batch files.
+
+Tracked settings and their CONFIG.SYS directive:
+
+| Key | Directive | Default | Applies to |
+|-----|-----------|---------|------------|
+| `BRIGHTNESS` | `BRIGHTNESS=0-100` | `P4_CONFIG_DISPLAY_DEFAULT_BRIGHTNESS` | backlight |
+| `ROTATE` | `ROTATE=0\|90\|180\|270` | `0` | display rotation |
+| `VOLUME` | `VOLUME=0-100` | `P4_CONFIG_VOLUME_DEFAULT_PCT` | speaker |
+| `PROMPT` | `PROMPT=template` | `P4_CONFIG_PROMPT_DEFAULT_TEMPLATE` | prompt line |
+| `WIFI_AUTOCONNECT` | `WIFI_AUTOCONNECT=ON\|OFF` | `ON` | watchdog auto-retry |
+| `DISPLAY_TIMEOUT` | `DISPLAY_TIMEOUT=<secs\|OFF>` | `0` | idle display-off |
+| `OSK` | `OSK=ON\|OFF` | `ON` | on-screen keyboard at boot |
+| `HEADER` | `HEADER=ON\|OFF` | `ON` | header status bar at boot |
+
+CONFIG.SYS is edited in place with a guarded, atomic temp-file+rename write;
+comments, blank lines, and unknown directives (e.g. `WIFI_SSID=`,
+`GPIO ...`, `SET ...`) are preserved. `P4_CONFIG_CONFIG_MAX_BYTES` (16 KB)
+bounds the file size the command handles. Errors set ERRORLEVEL 1, usage
+errors 2; output is transcript-based, so `config > file` and pipes work.
 
 ### battery
 Read battery ADC pin (GPIO53, 2:1 divider), show scaled voltage, estimated percentage (3.3V-4.2V range), raw ADC data, and light-sleep state.
@@ -468,9 +536,12 @@ scr shot.bmp                Alias form
 capture shot.bmp            Alias form
 ```
 
-**Serial streaming:** The BMP is preceded by `=== SCREENSHOT BMP BEGIN ===` and
-followed by `=== SCREENSHOT BMP END ===`. Hex-encoded rows are printed for easy
-extraction by host tools or a simple Python script.
+**Serial streaming:** Without a filename the BMP is framed for host-side
+extraction exactly like `send`: a 4-byte `BMPX` magic (`P4_CONFIG_SCREENSHOT_BMP_MAGIC`),
+a 4-byte little-endian payload size, then the raw BMP bytes. The host reads the
+magic, then the size, then exactly that many bytes. The console reader is
+suspended for the duration and the bytes are written straight to the
+USB-Serial/JTAG driver (no CRLF translation), so the frame is byte-exact.
 
 **SD card save:** Uses the same storage path as `copy`, `write`, etc. Free-space
 is prechecked, the session is guarded, and a partial destination is removed on
@@ -478,6 +549,79 @@ write failure.
 
 **ERRORLEVEL:** 0 on success, 1 on failure (snapshot error, PSRAM exhaustion, SD
 write error, invalid path), 2 on usage error (too many arguments).
+
+### receive <path> <size> [/crc]
+Push a binary from the host into an SD file over the USB-Serial/JTAG console.
+The transfer is ACK-paced so the device's small USB RX ring never drops bytes:
+the device prints `=== RX READY ===`, reads the payload in chunks, writes it to
+the SD card, and echoes `RX <cumulative>` after each chunk; the host sends the
+remaining delta based on those counts. `=== RX DONE ===` closes a successful
+transfer. The console reader is suspended for the duration so the binary is
+never mistaken for command lines.
+
+**Usage:**
+```
+receive /sdcard/ota.bin 1203888          Push 1,203,888 bytes into ota.bin
+receive /sdcard/file.bin 4096 /crc       Same, plus a CRC-32 trailer check
+```
+
+**`/crc`:** with this flag the host appends a 4-byte little-endian CRC-32
+(IEEE 802.3, matching zlib's `crc32`) after the last data byte. The device
+computes the CRC over what it received and compares; a mismatch removes the
+partial file, prints a clear error, and sets ERRORLEVEL 1. Use it to guarantee a
+byte-exact transfer.
+
+The final size is bounded by `P4_CONFIG_SERIAL_RX_MAX_BYTES` (8 MiB). A host
+that stops sending for `P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS` (4 s) aborts the
+transfer and removes the partial file.
+
+**ERRORLEVEL:** 0 success, 1 transfer/IO error or CRC mismatch, 2 usage.
+
+### send <path> [offset] [count]  (and: send /diag)
+Stream an SD file (or a byte range of it) back to the host over the
+USB-Serial/JTAG console, framed for host-side extraction:
+`SDFX` magic + 4-byte little-endian payload size + raw bytes + a 4-byte
+little-endian CRC-32 trailer (IEEE 802.3, matching zlib's `crc32` over the
+payload) + `=== TX DONE ===`. The host reads the magic, then the size, then
+that many bytes, then the CRC, and verifies the CRC to confirm the frame was
+not corrupted or interleaved (empty payload => CRC `0x00000000`).
+
+**Usage:**
+```
+send /sdcard/log.txt                   Stream the whole file
+send /sdcard/fw.bin 0 65536            Stream the first 64 KiB
+send /sdcard/data.bin 1024 4096        Stream bytes 1024..5119
+send /diag                             Stream a diagnostic report
+```
+
+`<offset>` and `<count>` are clamped to the file size and to
+`P4_CONFIG_SERIAL_SEND_MAX_BYTES` (16 MiB). `send /diag` streams a compact text
+report (version, board, IDF, chip, heap free/internal/PSRAM, uptime, task count,
+cwd, Wi-Fi state) so a host script can poll device health. The console reader is
+suspended during the stream and the bytes go straight to the USB-Serial/JTAG
+driver (no CRLF translation). Each raw write is time-bounded by
+`P4_CONFIG_SERIAL_SEND_TIMEOUT_MS` (10 s), so a host that stops reading can
+never hang the command worker — the send aborts with ERRORLEVEL 1.
+
+**ERRORLEVEL:** 0 success, 1 IO error (SD absent, path invalid, open/size/read
+failure), 2 usage.
+
+**Host round-trip example (push a file with CRC, pull it back, verify):**
+```batch
+rem on the device
+receive /sdcard/ota.bin 1203888 /crc
+send /sdcard/ota.bin
+```
+The host sends the 1,203,888 bytes plus the 4-byte CRC trailer, then reads the
+`SDFX` frame and compares it to the local copy; a match at both steps proves
+the link and the SD card are byte-exact.
+
+**Batch file example:**
+```batch
+receive /sdcard/fw.bin 4096 /crc
+if errorlevel 1 echo FIRMWARE TRANSFER FAILED
+if not errorlevel 1 echo FIRMWARE TRANSFER OK
+```
 
 **Batch file example:**
 ```batch
@@ -773,6 +917,20 @@ literal caret, not a continuation.
 - echo on/off flow control
 - `:label` targets for `goto` and `call :label`, including the implicit `:eof` end-of-file label
 - `for %%var in (set) do command` loops over literal tokens or a single wildcard pattern (for example `for %%F in (*.txt) do echo %%F`)
+
+### for — loops (interactive and batch)
+`for %var in (set) do command` runs `command` once per element of `set`, with
+`%var` substituted. `set` is a whitespace-separated token list or a single
+wildcard pattern expanded against the current directory:
+
+- `for %i in (a b c) do echo ITEM %i` — prints `ITEM a`, `ITEM b`, `ITEM c`
+- `for %f in (*.txt) do echo F %f` — runs once per matching `.txt` file
+- `for %i in (1 2 3) do set /a total=total+%i` — nested commands re-enter the
+  pipeline, so pipes/redirection/variables work per-iteration
+
+At the interactive prompt the variable is written `%var`; inside batch files it
+is `%%var` (the batch-file escape for a literal `%`). The body may not contain
+the chain/pipe operators that the shell splits on before `for` runs.
 - PATH-based .bat lookup
 - Nested calls up to 4 levels deep; `call` forwards arguments and propagates the callee's errorlevel
 - setlocal/endlocal scoping up to 8 levels deep, auto-unwound when a file returns
@@ -1018,8 +1176,16 @@ disk format fs=fat32 label=DATA au=32K quick
 
 At every boot the firmware looks for CONFIG.SYS and AUTOEXEC.BAT on the SD
 card root (components/boot). Missing files are generated once from built-in
-templates when P4_CONFIG_BOOT_GENERATE_DEFAULTS is set; with no SD card the
-whole sequence is a silent no-op, identical to the previous boot behaviour.
+templates when P4_CONFIG_BOOT_GENERATE_DEFAULTS is set. With no SD card the
+boot path prints a muted "No SD card detected" line on the display and serial
+console plus a header notification, instead of being a silent no-op.
+
+The SD card is mounted lazily by the first SD command (`shell_sd_begin()`).
+The first mount of each boot fires a one-shot hook
+(`storage_register_sd_first_mount_callback`, wired in main to
+`boot_on_sd_first_mount`) that generates the default boot files when they are
+missing and prints an "SD card ready" welcome. Existing user files are never
+touched.
 
 CONFIG.SYS is parsed line-by-line. Blank lines and REM/; comments are
 skipped; keywords are case-insensitive. Directives:
@@ -1559,6 +1725,8 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | sd ls [path] | List directory with full long filenames, entry types, sizes |
 | sd stat <path> | Show resolved path, type, size, mode for file/directory |
 | sd cat <path> [max_bytes] | Text-safe file preview (1-8192 bytes, non-printable sanitized) |
+| sd mount | Mount the SD card, clearing the eject latch so a re-inserted card works without rebooting |
+| sd eject / sdeject | Safe unmount before card removal |
 
 ## C6 OTA Commands
 

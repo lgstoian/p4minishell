@@ -23,6 +23,7 @@
 
 #include "command.h"
 #include "command_ui.h"
+#include "config_cmd.h"
 #include "batch.h"
 #include "storage.h"
 #include "storage_commands.h"
@@ -37,6 +38,9 @@
 #include "p4minishell_config.h"
 #include "board_config.h"
 #include "networking.h"
+#include "driver/usb_serial_jtag.h"
+#include <errno.h>
+#include <stdarg.h>
 #include "http_server.h"
 #include "netdiag.h"
 #include "led.h"
@@ -47,6 +51,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_chip_info.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
 #include "esp_pm.h"
@@ -1416,7 +1421,32 @@ static void shell_command_clip(int argc, char **argv)
         return;
     }
 
-    /* Anything else is literal clipboard text: `clip hello world`. */
+    /* Anything else is literal clipboard text: `clip hello world`. A first
+     * argument that looks like a subcommand (a typo or a query such as
+     * `clip status`) must not silently clobber the current clipboard with the
+     * word itself — report a usage error instead. */
+    {
+        static const char *const reserved[] = {
+            "copy", "file", "read",
+            "status", "list", "show", "clear", "help", "?", "view", "print", "info",
+        };
+        size_t reserved_index;
+        bool looks_like_subcommand = false;
+
+        for (reserved_index = 0;
+             reserved_index < sizeof(reserved) / sizeof(reserved[0]);
+             reserved_index++) {
+            if (shell_text_equals_ignore_case(argv[1], reserved[reserved_index])) {
+                looks_like_subcommand = true;
+                break;
+            }
+        }
+        if (looks_like_subcommand) {
+            shell_print_usage("Usage: clip [text] | clip copy [N] | clip file <path> | clip read <file>");
+            batch_set_errorlevel(2);
+            return;
+        }
+    }
     {
         char text[P4_CONFIG_CLIPBOARD_BYTES];
 
@@ -1494,15 +1524,15 @@ static void shell_command_paste(int argc, char **argv)
 static const char *const shell_builtin_commands[] = {
     "about", "adc", "alias", "append", "attrib", "audio", "battery", "beep",
     "bluetooth", "brightness", "bt", "c6ota", "call", "capture", "cd", "chdir",
-    "chkdsk", "choice", "clear", "clip", "cls", "comp", "copy", "date", "debug",
+    "chkdsk", "choice", "clear", "clip", "cls", "comp", "config", "copy", "date", "debug",
     "deepsleep", "del", "dir", "disk", "display", "dns", "echo", "edit",
     "endlocal",
-    "erase", "exit", "fc", "find", "findstr", "format", "freq", "goto", "gpio",
+    "erase", "exit", "fc", "find", "findstr", "for", "format", "freq", "goto", "gpio",
     "help", "history", "httpd", "httpget", "i2c", "if", "ipconfig", "keyboard",
     "label", "md", "mem", "mkdir", "more", "move", "netstat", "nslookup",
     "ntpsync", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
-    "rd", "reboot", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
-    "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "set", "setlocal",
+    "rd", "reboot", "receive", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
+    "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "send", "set", "setlocal",
     "shift", "sleep", "sntp", "sort", "spi", "sysinfo", "tasks", "time", "timezone",
     "tone", "top", "touch", "trash", "tree", "type", "unalias", "undelete", "usb",
     "ver", "version", "volume", "wavplay", "wget", "wifi", "windows", "write", "xcopy",
@@ -3248,8 +3278,11 @@ static void shell_execute_rgb_command(int argc, char **argv)
         shell_transcript_appendf_ansi(SH_HEAD "RGB LED" SH_RST "\n");
         shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " WS2812 on " SH_NUM "GPIO%d" SH_RST "\n",
                                       (int)BOARD_CFG_RGB_LED_GPIO);
-        shell_transcript_appendf_ansi("  " SH_LBL "mode:" SH_RST " %s\n",
-                                      state.auto_status ? SH_OK "auto status" SH_RST : SH_VAL "manual" SH_RST);
+        if (state.auto_status) {
+            shell_transcript_appendf_ansi("  " SH_LBL "mode:" SH_RST " " SH_OK "auto status" SH_RST "\n");
+        } else {
+            shell_transcript_appendf_ansi("  " SH_LBL "mode:" SH_RST " " SH_VAL "manual" SH_RST "\n");
+        }
         shell_transcript_appendf_ansi("  " SH_LBL "effect:" SH_RST " " SH_VAL "%s" SH_RST "\n",
                                       led_effect_name(state.effect));
         shell_transcript_appendf_ansi("  " SH_LBL "colour:" SH_RST " " SH_NUM "#%02X%02X%02X" SH_RST "\n",
@@ -3563,6 +3596,50 @@ static inline void rgb565_to_bmp_row(uint8_t *dst, const uint16_t *src, uint32_t
  * and outputs either to the serial console (with begin/end markers for
  * host-side extraction) or to an SD card file with free-space precheck.
  */
+
+/* Raw byte write straight to the USB-Serial/JTAG TX ring. Unlike fwrite to
+ * stdout, this bypasses the console VFS's CRLF newline translation, so binary
+ * payloads (send/screenshot frames, receive ACKs) are never corrupted by an
+ * inserted \r before every \n byte. The writes are chunked: the driver's
+ * xRingbufferSend rejects a single buffer larger than the TX ring (4 KB), so
+ * a big payload (e.g. a full screenshot) must be broken into small pieces.
+ * Each chunk is time-bounded (P4_CONFIG_SERIAL_SEND_TIMEOUT_MS) so a host that
+ * stops reading can never wedge the command worker. */
+static bool serial_write_raw(const void *data, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    size_t remaining = len;
+
+    while (remaining > 0) {
+        size_t chunk = remaining > 1024 ? 1024 : remaining;
+
+        if (usb_serial_jtag_write_bytes(p, chunk,
+                                        pdMS_TO_TICKS(P4_CONFIG_SERIAL_SEND_TIMEOUT_MS)) != (int)chunk) {
+            return false;
+        }
+        p += chunk;
+        remaining -= chunk;
+    }
+    return true;
+}
+
+/* Serial binary-stream framing shared by `screenshot`, `send`, and the
+ * `receive` protocol: a 4-byte magic + 4-byte little-endian payload size,
+ * then the raw bytes. The magic/size lets a host reader frame exactly one
+ * payload off the USB-Serial/JTAG console stream without depending on the
+ * surrounding transcript text. */
+static void serial_write_frame_header(const char *magic4, uint32_t payload_size)
+{
+    uint8_t hdr[8];
+
+    memcpy(hdr, magic4, 4);
+    hdr[4] = (uint8_t)(payload_size & 0xFFu);
+    hdr[5] = (uint8_t)((payload_size >> 8) & 0xFFu);
+    hdr[6] = (uint8_t)((payload_size >> 16) & 0xFFu);
+    hdr[7] = (uint8_t)((payload_size >> 24) & 0xFFu);
+    (void)serial_write_raw(hdr, sizeof(hdr));
+}
+
 static void shell_command_screenshot(int argc, char **argv)
 {
     lv_draw_buf_t *draw_buf = NULL;
@@ -3658,7 +3735,8 @@ static void shell_command_screenshot(int argc, char **argv)
 
     if (result != LV_RESULT_OK) {
         shell_print_error("screenshot: snapshot capture failed");
-        lv_draw_buf_destroy(draw_buf);
+        free(pixel_data);
+        free(draw_buf);
         batch_set_errorlevel(1);
         return;
     }
@@ -3674,14 +3752,16 @@ static void shell_command_screenshot(int argc, char **argv)
 
         if (shell_fs_resolve_path(argv[1], resolved, sizeof(resolved)) != ESP_OK) {
             shell_print_error("screenshot: invalid path %s", argv[1]);
-            lv_draw_buf_destroy(draw_buf);
+            free(pixel_data);
+        free(draw_buf);
             batch_set_errorlevel(1);
             return;
         }
 
         if (shell_sd_begin(&session) != ESP_OK) {
             shell_print_error("screenshot: SD card not present");
-            lv_draw_buf_destroy(draw_buf);
+            free(pixel_data);
+        free(draw_buf);
             batch_set_errorlevel(1);
             return;
         }
@@ -3692,7 +3772,8 @@ static void shell_command_screenshot(int argc, char **argv)
             uint64_t reclaim = storage_get_file_size(resolved);
             if (!storage_check_free_space(needed, reclaim, "screenshot")) {
                 shell_sd_end(&session, "screenshot");
-                lv_draw_buf_destroy(draw_buf);
+                free(pixel_data);
+        free(draw_buf);
                 batch_set_errorlevel(1);
                 return;
             }
@@ -3702,7 +3783,8 @@ static void shell_command_screenshot(int argc, char **argv)
         if (f == NULL) {
             shell_print_error("screenshot: cannot create %s", resolved);
             shell_sd_end(&session, "screenshot");
-            lv_draw_buf_destroy(draw_buf);
+            free(pixel_data);
+        free(draw_buf);
             batch_set_errorlevel(1);
             return;
         }
@@ -3716,7 +3798,8 @@ static void shell_command_screenshot(int argc, char **argv)
             fclose(f);
             remove(resolved);
             shell_sd_end(&session, "screenshot");
-            lv_draw_buf_destroy(draw_buf);
+            free(pixel_data);
+        free(draw_buf);
             batch_set_errorlevel(1);
             return;
         }
@@ -3733,7 +3816,8 @@ static void shell_command_screenshot(int argc, char **argv)
             fclose(f);
             remove(resolved);
             shell_sd_end(&session, "screenshot");
-            lv_draw_buf_destroy(draw_buf);
+            free(pixel_data);
+        free(draw_buf);
             batch_set_errorlevel(1);
             return;
         }
@@ -3757,14 +3841,16 @@ static void shell_command_screenshot(int argc, char **argv)
         if (!write_ok) {
             shell_print_error("screenshot: write failed at row, removing partial file");
             remove(resolved);
-            lv_draw_buf_destroy(draw_buf);
+            free(pixel_data);
+        free(draw_buf);
             batch_set_errorlevel(1);
             return;
         }
 
         shell_print_ok("screenshot: saved %s (%lu bytes)", resolved,
                        (unsigned long)(54 + (uint64_t)width * height * 3));
-        lv_draw_buf_destroy(draw_buf);
+        free(pixel_data);
+        free(draw_buf);
         batch_set_errorlevel(0);
         return;
     }
@@ -3816,18 +3902,14 @@ static void shell_command_screenshot(int argc, char **argv)
         }
         free(row_buf);
 
-        /* Send magic header */
-        const char magic[4] = {'B', 'M', 'P', 'X'};
-        fwrite(magic, 1, 4, stdout);
-        /* Send size as 4-byte little-endian */
-        uint8_t size_bytes[4];
-        size_bytes[0] = (uint8_t)(total_size);
-        size_bytes[1] = (uint8_t)(total_size >> 8);
-        size_bytes[2] = (uint8_t)(total_size >> 16);
-        size_bytes[3] = (uint8_t)(total_size >> 24);
-        fwrite(size_bytes, 1, 4, stdout);
-        /* Send raw BMP data */
-        size_t written = fwrite(bmp_data, 1, total_size, stdout);
+        /* The raw stream owns the console byte stream: suspend the console
+         * reader (as `send`/`receive` do) so no host input is misread and no
+         * console echo interleaves with the BMP payload. */
+        shell_uart_console_rx_begin();
+        serial_write_frame_header(P4_CONFIG_SCREENSHOT_BMP_MAGIC, (uint32_t)total_size);
+        /* Send raw BMP data (raw driver write: no CRLF translation). */
+        size_t written = serial_write_raw(bmp_data, total_size) ? total_size : 0;
+        shell_uart_console_rx_end();
 
         free(bmp_data);
 
@@ -3843,6 +3925,562 @@ static void shell_command_screenshot(int argc, char **argv)
         free(draw_buf);
     }
     batch_set_errorlevel(0);
+}
+
+/* ========================================================================
+ * SERIAL FILE TRANSFER (receive / send)
+ * ========================================================================
+ * `receive` pushes a binary from the host into an SD file; `send` streams an
+ * SD file (or a compact diagnostic report) back to the host. Both run over the
+ * USB-Serial/JTAG console and both suspend the console reader for the
+ * duration, so the raw byte stream is never mistaken for command lines and no
+ * console echo interleaves with the payload. Both set ERRORLEVEL: 0 success,
+ * 1 transfer/IO error (or CRC mismatch), 2 usage.
+ *
+ * receive protocol (ACK-paced: the device's USB RX ring drops bytes under a
+ * burst, so the host only sends what the ACK count confirms was accepted):
+ *   host   -> "receive <path> <size> [/crc]\n"
+ *   device -> "\n" P4_CONFIG_SERIAL_RX_READY_MARKER "\n"
+ *   loop: device reads up to P4_CONFIG_SERIAL_XFER_CHUNK_BYTES, writes SD,
+ *         device -> "RX <cumulative>\n", host sends the remaining delta
+ *   until cumulative == size
+ *   optional (only with /crc): host -> 4-byte little-endian CRC-32 trailer
+ *   device -> P4_CONFIG_SERIAL_RX_DONE_MARKER (or an error, then the partial
+ *   file is removed)
+ *
+ * send protocol (framed payload; the size in the header tells the host how
+ * many bytes to read):
+ *   host   -> "send <path> [offset] [count]\n"   or   "send /diag\n"
+ *   device -> "SDFX" + 4-byte little-endian payload size + raw bytes
+ *   device -> "\n" P4_CONFIG_SERIAL_TX_DONE_MARKER "\n"
+ *
+ * `send <path> [offset] [count]` streams a byte range of a file (defaults:
+ * whole file), bounded by P4_CONFIG_SERIAL_SEND_MAX_BYTES. `send /diag`
+ * streams a bounded text report of version/heap/uptime/tasks/wifi for host
+ * side scripting.
+ */
+
+/* Incremental CRC-32 (IEEE 802.3, reflected poly 0xEDB88320). Matches the
+ * value zlib's crc32() reports for the same bytes: start the accumulator at
+ * 0xFFFFFFFF and invert the result when the transfer completes. */
+static uint32_t serial_crc32_update(uint32_t crc, const uint8_t *data, size_t len)
+{
+    while (len-- > 0) {
+        crc ^= *data++;
+        for (int bit = 0; bit < 8; bit++) {
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+    }
+    return crc;
+}
+
+/* Write the 8-byte `send` frame header: 4-byte magic + 4-byte little-endian
+ * payload size. (The generic serial_write_frame_header() above is shared with
+ * `screenshot`.) */
+static void serial_send_frame_header(uint32_t payload_size)
+{
+    serial_write_frame_header(P4_CONFIG_SERIAL_SEND_MAGIC, payload_size);
+}
+
+/* Bounded append helper for the `send /diag` report. */
+static void serial_diag_line(char *buf, size_t cap, size_t *pos, const char *fmt, ...)
+{
+    int n;
+    va_list args;
+
+    if (buf == NULL || *pos >= cap) {
+        return;
+    }
+    va_start(args, fmt);
+    n = vsnprintf(buf + *pos, cap - *pos, fmt, args);
+    va_end(args);
+    if (n > 0) {
+        *pos += (size_t)n;
+    }
+}
+
+static void shell_command_receive(int argc, char **argv)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    char tmp_path[P4_CONFIG_SD_PATH_BYTES + 8];
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    unsigned long size = 0;
+    unsigned long cumulative = 0;
+    bool verify_crc = false;
+    char *end = NULL;
+    esp_err_t error;
+    int64_t start_us;
+    uint32_t crc = 0xFFFFFFFFu;
+
+    if (argc != 3 && argc != 4) {
+        shell_print_usage("Usage: receive <path> <size> [/crc]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (argc == 4) {
+        if (shell_text_equals_ignore_case(argv[3], "/crc")) {
+            verify_crc = true;
+        } else {
+            shell_print_usage("Usage: receive <path> <size> [/crc]");
+            batch_set_errorlevel(2);
+            return;
+        }
+    }
+
+    size = strtoul(argv[2], &end, 10);
+    if (*end != '\0' || size == 0 || size > P4_CONFIG_SERIAL_RX_MAX_BYTES) {
+        shell_print_error("receive: size must be 1..%lu bytes",
+                          (unsigned long)P4_CONFIG_SERIAL_RX_MAX_BYTES);
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    error = shell_fs_resolve_path(argv[1], resolved, sizeof(resolved));
+    if (error != ESP_OK) {
+        shell_print_error("receive: invalid path %s", argv[1]);
+        batch_set_errorlevel(2);
+        return;
+    }
+    snprintf(tmp_path, sizeof(tmp_path), "%s.rx", resolved);
+
+    if (shell_sd_begin(&session) != ESP_OK) {
+        shell_print_error("receive: SD card not present - insert and retry");
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    {
+        uint64_t reclaim = storage_get_file_size(resolved);
+
+        if (!storage_check_free_space(size + 64, reclaim, "receive")) {
+            shell_sd_end(&session, "receive");
+            batch_set_errorlevel(1);
+            return;
+        }
+    }
+
+    file = fopen(tmp_path, "wb");
+    if (file == NULL) {
+        shell_print_error("receive: cannot create %s", tmp_path);
+        shell_sd_end(&session, "receive");
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    /* Suspend the console reader BEFORE signalling READY so that bytes the
+     * host sends the instant it sees the marker cannot be consumed as command
+     * lines by the (not yet suspended) console task. */
+    start_us = esp_timer_get_time();
+    shell_uart_console_rx_begin();
+
+    /* Ready marker: the host now streams `size` raw bytes, ACK-paced. */
+    shell_uart_console_write_text("\n" P4_CONFIG_SERIAL_RX_READY_MARKER "\n");
+
+    {
+        uint8_t *buf = malloc(P4_CONFIG_SERIAL_XFER_CHUNK_BYTES);
+        bool ok = (buf != NULL);
+        unsigned long idle_ms = 0;
+
+        if (buf == NULL) {
+            shell_print_error("receive: out of memory");
+        } else {
+            while (cumulative < size && ok) {
+                size_t want = size - cumulative;
+                size_t got;
+
+                if (want > P4_CONFIG_SERIAL_XFER_CHUNK_BYTES) {
+                    want = P4_CONFIG_SERIAL_XFER_CHUNK_BYTES;
+                }
+
+                /* Read until the chunk is full, or the host goes idle. Reads
+                 * go through the USB-Serial/JTAG driver ring (installed with a
+                 * large RX buffer in shell_uart_console_start) so bursts do
+                 * not overflow; the 100 ms window gives a bounded idle check. */
+                got = 0;
+                while (got < want && ok) {
+                    int r = usb_serial_jtag_read_bytes(buf + got, want - got,
+                                                       pdMS_TO_TICKS(100));
+
+                    if (r < 0 || r == 0) {
+                        idle_ms += 100;
+                        if (idle_ms >= P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS) {
+                            shell_print_error("receive: timed out waiting for data");
+                            ok = false;
+                            break;
+                        }
+                        continue;
+                    }
+                    idle_ms = 0;
+                    got += (size_t)r;
+                }
+
+                if (ok && got > 0) {
+                    if (fwrite(buf, 1, got, file) != got) {
+                        shell_print_error("receive: SD write failed");
+                        ok = false;
+                        break;
+                    }
+                    crc = serial_crc32_update(crc, buf, got);
+                    cumulative += got;
+
+                    /* ACK: report cumulative bytes so the host knows how much
+                     * of this chunk was accepted and sends the right delta
+                     * next. */
+                    {
+                        char ack[48];
+                        int ack_len = snprintf(ack, sizeof(ack), "RX %lu\n", cumulative);
+
+                        (void)serial_write_raw(ack, (size_t)ack_len);
+                    }
+                }
+            }
+
+            if (ok && verify_crc) {
+                /* The host appended a 4-byte little-endian CRC-32 trailer. */
+                uint8_t crc_bytes[4];
+                size_t got_crc = 0;
+                unsigned long crc_idle_ms = 0;
+
+                while (got_crc < sizeof(crc_bytes) && ok) {
+                    int r = usb_serial_jtag_read_bytes(crc_bytes + got_crc,
+                                                       sizeof(crc_bytes) - got_crc,
+                                                       pdMS_TO_TICKS(100));
+
+                    if (r < 0 || r == 0) {
+                        crc_idle_ms += 100;
+                        if (crc_idle_ms >= P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS) {
+                            shell_print_error("receive: timed out waiting for CRC trailer");
+                            ok = false;
+                            break;
+                        }
+                        continue;
+                    }
+                    crc_idle_ms = 0;
+                    got_crc += (size_t)r;
+                }
+                if (ok) {
+                    uint32_t expected = (uint32_t)crc_bytes[0]
+                        | ((uint32_t)crc_bytes[1] << 8)
+                        | ((uint32_t)crc_bytes[2] << 16)
+                        | ((uint32_t)crc_bytes[3] << 24);
+                    uint32_t computed = ~crc;
+
+                    if (computed != expected) {
+                        shell_print_error("receive: CRC mismatch (expected %08lx, computed %08lx)",
+                                          (unsigned long)expected, (unsigned long)computed);
+                        ok = false;
+                    }
+                }
+            }
+            free(buf);
+        }
+
+        /* Drain any bytes still buffered in the USB ring so the resumed
+         * console task never sees leftover binary as a command line. */
+        {
+            uint8_t drain_buf[64];
+
+            while (usb_serial_jtag_read_bytes(drain_buf, sizeof(drain_buf), 0) > 0) {
+            }
+        }
+
+        shell_uart_console_rx_end();
+
+        fclose(file);
+        file = NULL;
+
+        if (!ok || cumulative < size) {
+            if (verify_crc && cumulative == size) {
+                shell_print_error("receive: transfer failed - CRC mismatch or missing trailer (%lu bytes received)",
+                                  size);
+            } else {
+                shell_print_error("receive: transfer incomplete (%lu/%lu bytes)",
+                                  cumulative, size);
+            }
+            remove(tmp_path);
+            shell_sd_end(&session, "receive");
+            batch_set_errorlevel(1);
+            return;
+        }
+    }
+
+    /* Atomic replace: FATFS f_rename refuses to overwrite, so remove first. */
+    remove(resolved);
+    if (rename(tmp_path, resolved) != 0) {
+        int err = errno;
+
+        remove(tmp_path);
+        shell_print_error("receive: failed to finalize %s (errno %d: %s)",
+                          resolved, err, strerror(err));
+        shell_sd_end(&session, "receive");
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    shell_sd_end(&session, "receive");
+    shell_uart_console_write_text(P4_CONFIG_SERIAL_RX_DONE_MARKER "\n");
+    {
+        uint32_t ms = (uint32_t)((esp_timer_get_time() - start_us) / 1000);
+        uint32_t rate = ms > 0 ? (uint32_t)((size * 1000u) / ms) : 0u;
+
+        shell_print_ok("receive: wrote %lu bytes to %s in %u ms (%lu KB/s)",
+                       size, resolved, ms, (unsigned long)(rate / 1024u));
+    }
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_send(int argc, char **argv)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    bool diag = false;
+    bool stream_ok = false;
+    uint32_t payload_size = 0;
+    int64_t start_us;
+
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "/diag")) {
+        diag = true;
+    } else if (argc < 2 || argc > 4) {
+        shell_print_usage("Usage: send <path> [offset] [count]  |  send /diag");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    start_us = esp_timer_get_time();
+
+    /* The transfer owns the raw console byte stream: suspend the console
+     * reader so no host input is misread and no console echo interleaves with
+     * the framed payload. */
+    shell_uart_console_rx_begin();
+
+    if (diag) {
+        char *report = malloc(P4_CONFIG_SERIAL_DIAG_BYTES);
+        size_t pos = 0;
+
+        if (report == NULL) {
+            shell_uart_console_rx_end();
+            shell_print_error("send: out of memory for diagnostic report");
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "P4MiniShell %s\n", P4_CONFIG_VERSION_STRING);
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "board %s\n", P4_CONFIG_BOARD_REQUESTED);
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "idf %s\n", esp_get_idf_version());
+        {
+            esp_chip_info_t chip_info;
+
+            esp_chip_info(&chip_info);
+            serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                             "chip %s rev %u, %u cores\n",
+                             CONFIG_IDF_TARGET, chip_info.revision,
+                             (unsigned int)chip_info.cores);
+        }
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "heap_free %lu\n",
+                         (unsigned long)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "heap_internal %lu\n",
+                         (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "heap_psram %lu\n",
+                         (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "uptime_s %llu\n",
+                         (unsigned long long)(esp_timer_get_time() / 1000000));
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "tasks %u\n", (unsigned int)uxTaskGetNumberOfTasks());
+        {
+            char cwd_buf[P4_CONFIG_SD_PATH_BYTES];
+
+            shell_get_cwd_for_prompt(cwd_buf, sizeof(cwd_buf));
+            serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                             "cwd %s\n", cwd_buf);
+        }
+        serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
+                         "wifi %s\n", networking_wifi_state_string());
+
+        payload_size = (uint32_t)pos;
+        serial_send_frame_header(payload_size);
+        if (payload_size > 0) {
+            (void)serial_write_raw(report, payload_size);
+        }
+        /* CRC-32 trailer over the report (frame protocol parity with send). */
+        {
+            uint32_t final_crc = ~serial_crc32_update(0xFFFFFFFFu,
+                                                      (const uint8_t *)report,
+                                                      (size_t)pos);
+            uint8_t trailer[4];
+
+            trailer[0] = (uint8_t)(final_crc & 0xFFu);
+            trailer[1] = (uint8_t)((final_crc >> 8) & 0xFFu);
+            trailer[2] = (uint8_t)((final_crc >> 16) & 0xFFu);
+            trailer[3] = (uint8_t)((final_crc >> 24) & 0xFFu);
+            (void)serial_write_raw(trailer, sizeof(trailer));
+        }
+        free(report);
+        stream_ok = true;
+    } else {
+        size_t offset = 0;
+        size_t count = P4_CONFIG_SERIAL_SEND_MAX_BYTES;
+        long file_size_long = -1;
+        char *end = NULL;
+
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_uart_console_rx_end();
+            shell_print_error("send: SD card not present - insert and retry");
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        if (shell_fs_resolve_path(argv[1], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_uart_console_rx_end();
+            shell_sd_end(&session, "send");
+            shell_print_error("send: invalid path %s", argv[1]);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        if (argc >= 3) {
+            offset = strtoul(argv[2], &end, 10);
+            if (*end != '\0') {
+                shell_uart_console_rx_end();
+                shell_sd_end(&session, "send");
+                shell_print_error("send: invalid offset %s", argv[2]);
+                batch_set_errorlevel(1);
+                return;
+            }
+        }
+        if (argc >= 4) {
+            count = strtoul(argv[3], &end, 10);
+            if (*end != '\0') {
+                shell_uart_console_rx_end();
+                shell_sd_end(&session, "send");
+                shell_print_error("send: invalid count %s", argv[3]);
+                batch_set_errorlevel(1);
+                return;
+            }
+        }
+
+        file = fopen(resolved, "rb");
+        if (file == NULL) {
+            shell_uart_console_rx_end();
+            shell_sd_end(&session, "send");
+            shell_print_error("send: cannot open %s", resolved);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        if (fseek(file, 0, SEEK_END) == 0) {
+            file_size_long = ftell(file);
+        }
+        if (fseek(file, 0, SEEK_SET) != 0 || file_size_long < 0) {
+            fclose(file);
+            shell_uart_console_rx_end();
+            shell_sd_end(&session, "send");
+            shell_print_error("send: cannot size %s", resolved);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        /* Clamp the requested byte range to the file and the hard bound. */
+        if (offset >= (size_t)file_size_long) {
+            count = 0;
+        } else {
+            size_t available = (size_t)file_size_long - offset;
+
+            if (count > available) {
+                count = available;
+            }
+            if (count > P4_CONFIG_SERIAL_SEND_MAX_BYTES) {
+                count = P4_CONFIG_SERIAL_SEND_MAX_BYTES;
+            }
+        }
+
+        payload_size = (uint32_t)count;
+        serial_send_frame_header(payload_size);
+
+        {
+            uint32_t crc = 0xFFFFFFFFu;
+
+            if (count > 0) {
+                uint8_t *buf = malloc(P4_CONFIG_SERIAL_XFER_CHUNK_BYTES);
+                size_t remaining = count;
+
+                if (buf == NULL) {
+                    stream_ok = false;
+                } else {
+                    stream_ok = true;
+                    if (fseek(file, (long)offset, SEEK_SET) != 0) {
+                        stream_ok = false;
+                    }
+                    while (stream_ok && remaining > 0) {
+                        size_t want = remaining > P4_CONFIG_SERIAL_XFER_CHUNK_BYTES
+                                          ? P4_CONFIG_SERIAL_XFER_CHUNK_BYTES
+                                          : remaining;
+                        size_t got = fread(buf, 1, want, file);
+
+                        if (got == 0) {
+                            stream_ok = false;
+                            break;
+                        }
+                        if (!serial_write_raw(buf, got)) {
+                            stream_ok = false;
+                            break;
+                        }
+                        crc = serial_crc32_update(crc, buf, got);
+                        remaining -= got;
+                    }
+                    free(buf);
+                }
+            } else {
+                stream_ok = true;
+            }
+
+            /* Append the 4-byte little-endian CRC-32 trailer over the payload
+             * (empty payload => CRC of nothing = 0x00000000) so the host can
+             * verify the frame was not corrupted or interleaved. */
+            if (stream_ok) {
+                uint32_t final_crc = ~crc;
+                uint8_t trailer[4];
+
+                trailer[0] = (uint8_t)(final_crc & 0xFFu);
+                trailer[1] = (uint8_t)((final_crc >> 8) & 0xFFu);
+                trailer[2] = (uint8_t)((final_crc >> 16) & 0xFFu);
+                trailer[3] = (uint8_t)((final_crc >> 24) & 0xFFu);
+                if (!serial_write_raw(trailer, sizeof(trailer))) {
+                    stream_ok = false;
+                }
+            }
+        }
+
+        fclose(file);
+        file = NULL;
+        shell_sd_end(&session, "send");
+    }
+
+    if (stream_ok) {
+        shell_uart_console_write_text("\n" P4_CONFIG_SERIAL_TX_DONE_MARKER "\n");
+        shell_uart_console_rx_end();
+        {
+            uint32_t ms = (uint32_t)((esp_timer_get_time() - start_us) / 1000);
+            uint32_t rate = ms > 0 ? (uint32_t)(((uint32_t)payload_size * 1000u) / ms) : 0u;
+
+            shell_print_ok("send: streamed %lu bytes in %u ms (%lu KB/s)",
+                           (unsigned long)payload_size, ms,
+                           (unsigned long)(rate / 1024u));
+        }
+        batch_set_errorlevel(0);
+    } else {
+        shell_uart_console_rx_end();
+        shell_print_error("send: transfer failed");
+        batch_set_errorlevel(1);
+    }
 }
 
 /* ========================================================================
@@ -3939,7 +4577,7 @@ bool shell_execute_command_core(char *command)
 
     /* ---- System commands ---- */
     if (shell_text_equals_ignore_case(argv[0], "help")) {
-        shell_command_help();
+        shell_command_help(argc, argv);
         return true;
     }
 
@@ -4118,6 +4756,18 @@ bool shell_execute_command_core(char *command)
         shell_text_equals_ignore_case(argv[0], "scr") ||
         shell_text_equals_ignore_case(argv[0], "capture")) {
         shell_command_screenshot(argc, argv);
+        return true;
+    }
+
+    /* ---- Receive (serial binary transfer to SD) ---- */
+    if (shell_text_equals_ignore_case(argv[0], "receive")) {
+        shell_command_receive(argc, argv);
+        return true;
+    }
+
+    /* ---- Send (serial binary transfer from SD / diagnostic report) ---- */
+    if (shell_text_equals_ignore_case(argv[0], "send")) {
+        shell_command_send(argc, argv);
         return true;
     }
 
@@ -4356,6 +5006,16 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "prompt")) {
         shell_command_prompt_cmd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "config")) {
+        shell_command_config(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "for")) {
+        shell_command_for(argc, argv);
         return true;
     }
 

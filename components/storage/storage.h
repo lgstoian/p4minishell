@@ -34,6 +34,19 @@ extern "C" {
 #endif
 
 /* ========================================================================
+ * SDMMC HOST PRE-INIT
+ * ======================================================================== */
+
+/**
+ * Pre-initialize the shared SDMMC host driver once at boot so the SD card
+ * mount (slot 0) and the ESP-Hosted C6 transport (slot 1) never call
+ * sdmmc_host_init() concurrently (it is not thread-safe; a concurrent
+ * double-call corrupts the shared host state and fails both slots, N1).
+ * Call once from app_main before networking_init(). See storage.c.
+ */
+esp_err_t storage_sdmmc_host_preinit(void);
+
+/* ========================================================================
  * SD SESSION
  * ======================================================================== */
 
@@ -75,10 +88,24 @@ void shell_sd_end(shell_sd_session_t *session, const char *operation);
 bool storage_sd_is_mounted(void);
 
 /**
+ * Register a callback invoked once per boot when the SD card mounts for the
+ * first time (at startup or when a freshly-inserted card is mounted by the
+ * first SD command). Used by main to generate default boot files and show a
+ * first-run welcome. Pass NULL to clear.
+ */
+void storage_register_sd_first_mount_callback(void (*callback)(void));
+
+/**
  * Unmount the SD card for safe removal and report the result to the user.
  * Implements the `sd eject` / `sdeject` command.
  */
 void shell_command_sd_eject(void);
+
+/**
+ * Mount (or re-mount) the SD card, clearing the eject latch so a re-inserted
+ * card can be used without rebooting. Implements the `sd mount` command.
+ */
+void shell_command_sd_mount(void);
 
 /* ========================================================================
  * PATH RESOLUTION AND CONVERSION

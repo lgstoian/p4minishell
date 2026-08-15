@@ -34,15 +34,27 @@ dependencies:
       type: service
     version: 1.2.0
   espressif/esp_hosted:
-    component_hash: f6710d923349a721cf0eb79af890fc941d3b9178d482202d56f1d2a4b1213cda
+    component_hash: 1b1c2aa8f82e0826950ec92ff16fd8f327abd2de6c8a3899301ad8cfb4747879
     dependencies:
     - name: idf
       require: private
-      version: '>=5.3'
+      version: '>=5.5'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.12.1
+    targets:
+    - esp32
+    - esp32c2
+    - esp32s2
+    - esp32s3
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32h2
+    - esp32h4
+    - esp32p4
+    version: 3.0.6
   espressif/esp_lcd_ek79007:
     component_hash: 8005700b7f10c7136b6e2a3f19a48f972aa1d13ed107ed298574e8d24d17ea83
     dependencies:
@@ -110,7 +122,7 @@ dependencies:
       type: service
     version: 1.1.2
   espressif/esp_wifi_remote:
-    component_hash: ce04a94a92323bf28609c94519ee3173d140b20abc49b1daceb23eb262e1e8e0
+    component_hash: 50d3beaf95c0bc47d0fcf56752beaf3cbaae981fd8c3b74d6890b45d8be689fe
     dependencies:
     - name: espressif/esp_hosted
       registry_url: https://components.espressif.com
@@ -128,7 +140,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.4.1
+    version: 1.6.4
   espressif/led_strip:
     component_hash: 28621486f77229aaf81c71f5e15d6fbf36c2949cf11094e07090593e659e7639
     dependencies:
@@ -245,6 +257,6 @@ direct_dependencies:
 - espressif/usb_host_msc
 - idf
 - lvgl/lvgl
-manifest_hash: 9c354f0ac11fa0e4c36c10b335fc7346a4a8e3bdf7ec0bf265bf7c89a8f31ef9
+manifest_hash: 82ff5962d5b9d42276ea67640f1a37652a5b35d1a66749b58d45293d7a7f9fff
 target: esp32p4
 version: 2.0.0

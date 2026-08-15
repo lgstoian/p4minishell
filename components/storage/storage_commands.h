@@ -153,6 +153,16 @@ void shell_command_chkdsk(int argc, char **argv);
 int shell_command_format(int argc, char **argv);
 
 /**
+ * Collect the destructive-operation confirmation word from the interactive key
+ * queue. Shared by `format`, `disk clean`, `trash purge`, and `config factory`.
+ *
+ * Refused outright when a batch file is active or no interactive key source is
+ * available. Prints the warning + "Type YES to continue: " prompt and returns
+ * true only when the exact word P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD is typed.
+ */
+bool shell_confirm_destructive(const char *operation, const char *warning, const char *detail);
+
+/**
  * `undelete` / `restore` — restore a file or directory from the recycle bin.
  *
  * Usage: undelete <name|index> | restore <name|index>

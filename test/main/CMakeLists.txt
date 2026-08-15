@@ -17,6 +17,7 @@ idf_component_register(
         test_task_sort.c
         test_editor.c
         test_keyboard.c
+        test_config.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -24,6 +25,7 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/ansi"
         "${CMAKE_SOURCE_DIR}/../components/storage"
         "${CMAKE_SOURCE_DIR}/../components/batch"
+        "${CMAKE_SOURCE_DIR}/../components/command"
         "${CMAKE_SOURCE_DIR}/../components/networking"
         "${CMAKE_SOURCE_DIR}/../components/editor"
         "${CMAKE_SOURCE_DIR}/../components/keyboard"
@@ -33,6 +35,7 @@ idf_component_register(
         ansi
         storage
         batch
+        command
         networking
         editor
         keyboard

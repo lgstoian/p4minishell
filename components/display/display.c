@@ -650,3 +650,10 @@ void display_register_ui_rebuild_callback(void (*rebuild_fn)(void))
     s_display.ui_rebuild_callback = rebuild_fn;
     portEXIT_CRITICAL(&s_display.lock);
 }
+
+void display_schedule_ui_rebuild(void)
+{
+    if (s_display.lvgl_display != NULL) {
+        lv_async_call(display_async_rebuild_ui, NULL);
+    }
+}

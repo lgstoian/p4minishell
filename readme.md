@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.24.39 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.31.0 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -154,6 +154,7 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | Category | Commands |
 |----------|----------|
 | **System** | `help`, `sysinfo`, `clear`/`cls`, `reboot`, `version`/`ver`, `about`, `debug`, `mem`, `ps`/`tasks`/`top`, `screenshot`/`scr`/`capture` |
+| **Serial transfer** | `receive <path> <size> [/crc]` (host→device, ACK-paced, optional CRC-32), `send <path> [offset] [count]` (device→host framed stream), `send /diag` (diagnostic report) |
 | **Hardware** | `brightness`, `rotate`, `battery`, `volume [<0-100>]`, `beep`, `tone <freq> [ms]`, `wavplay <file>`, `audio status|stop`, `gpio list|status|read|set`, `power`, `sleep`, `deepsleep`, `pwm <pin> <freq> <duty>`, `freq <pin> <hz>`, `adc <pin> [samples]`, `i2c scan|peek|poke`, `spi status`, `rgb <r> <g> <b>` / `#RRGGBB` / `<effect>` / `auto` |
 | **Storage** | `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` |
 | **Volume** | `chkdsk`/`scandisk`, `format`, `label`, `attrib`, `xcopy` (full `/S /E /I /Y /-Y /D /H /R /K /C /Q /T /F /L /A /M /U /P /W /N /V` switch set) |

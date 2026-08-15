@@ -20,6 +20,7 @@
 #include "keyboard.h"
 #include "ansi.h"
 #include "esp_lvgl_port.h"
+#include "esp_heap_caps.h"
 #include "board_config.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
@@ -113,9 +114,13 @@ window_rect_t windows_get_rect(window_region_t region)
     window_rect_t rect = {0};
     lv_coord_t disp_w = windows_get_display_width();
     lv_coord_t disp_h = windows_get_display_height();
-    lv_coord_t header_h = windows_scale_height_percent(P4_CONFIG_WINDOW_HEADER_HEIGHT_PCT,
-                                                        P4_CONFIG_WINDOW_HEADER_HEIGHT_MIN,
-                                                        P4_CONFIG_WINDOW_HEADER_HEIGHT_MAX);
+    lv_coord_t header_h = 0;
+
+    if (header_get_visible()) {
+        header_h = windows_scale_height_percent(P4_CONFIG_WINDOW_HEADER_HEIGHT_PCT,
+                                                P4_CONFIG_WINDOW_HEADER_HEIGHT_MIN,
+                                                P4_CONFIG_WINDOW_HEADER_HEIGHT_MAX);
+    }
     lv_coord_t input_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
                                                        P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN,
                                                        P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MAX);

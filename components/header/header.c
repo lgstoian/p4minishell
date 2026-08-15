@@ -28,6 +28,7 @@
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
+#include "esp_app_desc.h"
 
 #include "header.h"
 #include "p4minishell_config.h"
@@ -47,6 +48,10 @@
 /* ---- Panel background tint (slightly lighter than main BG for depth) ---- */
 #define HEADER_PANEL_BG             0x1A2A22
 #define HEADER_SYS_PANEL_BG         0x16241E
+
+/* ---- Header visibility (survives deinit so a hidden bar stays hidden
+ * across a UI rebuild, e.g. when `config HEADER=OFF` is applied). ---- */
+static bool s_header_visible = true;
 
 /* ---- Icon type enum ---- */
 typedef enum {
@@ -206,9 +211,17 @@ static void header_notification_timeout_cb(lv_timer_t *timer)
 {
     (void)timer;
     s_header_state.notification[0] = '\0';
-    if (s_notification_timer != NULL) {
-        lv_timer_pause(s_notification_timer);
-    }
+
+    /* The notification timer is armed as a ONE-SHOT (repeat_count = 1). After
+     * this callback returns, lv_timer_exec() auto-deletes it (lv_timer_delete
+     * frees the timer node) because auto_delete defaults to true. If we do not
+     * clear the pointer here, the next header_async_notification() sees a
+     * non-NULL s_notification_timer and calls lv_timer_set_period/reset/resume
+     * on the FREED node — a use-after-free that writes {period, last_run,
+     * paused} into reclaimed heap memory and corrupts the heap (observed as
+     * "CORRUPT HEAP" and LVGL blue-screen failures after WiFi connect). */
+    s_notification_timer = NULL;
+
     if (s_notification_label != NULL) {
         lv_label_set_text(s_notification_label, "");
     }
@@ -481,6 +494,51 @@ __attribute__((unused)) static void header_async_batch(void *user_data)
     header_render();
 }
 /* ========================================================================
+ * HEADER TOUCH (long-press shows build identity)
+ * ======================================================================== */
+
+/** Recursively make every header widget bubble events to the header root, so a
+ *  long-press anywhere in the status bar reaches the root handler (LVGL does
+ *  not bubble by default). */
+static void header_enable_event_bubble(lv_obj_t *obj)
+{
+    uint32_t i;
+    uint32_t count;
+
+    if (obj == NULL) {
+        return;
+    }
+    count = lv_obj_get_child_count(obj);
+    for (i = 0; i < count; i++) {
+        lv_obj_t *child = lv_obj_get_child(obj, i);
+        lv_obj_add_flag(child, LV_OBJ_FLAG_EVENT_BUBBLE);
+        header_enable_event_bubble(child);
+    }
+}
+
+/** Long-press on the status bar surfaces the build identity banner. */
+static void header_touch_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    if (code != LV_EVENT_LONG_PRESSED) {
+        return;
+    }
+
+    const esp_app_desc_t *d = esp_app_get_description();
+    const char *git  = (d != NULL) ? d->version : "n/a";
+    const char *date = (d != NULL) ? d->date : "n/a";
+    const char *time = (d != NULL) ? d->time : "n/a";
+    char identity[P4_CONFIG_HEADER_NOTIFICATION_BYTES];
+
+    snprintf(identity, sizeof(identity), "%s %s | built %s %s | git %s",
+             P4_CONFIG_PRODUCT_NAME,
+             P4_CONFIG_VERSION_STRING,
+             date, time, git);
+
+    header_set_notification(identity, P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS * 2);
+}
+
+/* ========================================================================
  * PUBLIC API
  * ======================================================================== */
 
@@ -523,6 +581,13 @@ void header_init(void)
     lv_obj_set_style_border_width(s_header_root, 0, 0);
     lv_obj_set_scrollbar_mode(s_header_root, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(s_header_root, LV_OBJ_FLAG_SCROLLABLE);
+    if (!s_header_visible) {
+        lv_obj_add_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* Long-press the status bar to show the build identity banner. */
+    lv_obj_add_flag(s_header_root, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_header_root, header_touch_event_cb, LV_EVENT_LONG_PRESSED, NULL);
 
     /* ====================================================================
      * LEFT: STATUS PANEL — Wi-Fi, BT, USB, SD icons
@@ -699,6 +764,9 @@ void header_init(void)
     lv_obj_set_style_text_font(s_battery_value_label, status_font, 0);
     lv_obj_set_style_text_letter_space(s_battery_value_label, -1, 0);
 
+    /* Any long-press anywhere on the status bar bubbles to the root handler. */
+    header_enable_event_bubble(s_header_root);
+
     /* Initial render */
     header_render();
 }
@@ -840,6 +908,23 @@ void header_update_batch(
 
     /* Schedule a single async render (no payload needed) */
     (void)lv_async_call(header_async_refresh, NULL);
+}
+
+void header_set_visible(bool visible)
+{
+    s_header_visible = visible;
+    if (s_header_root != NULL) {
+        if (visible) {
+            lv_obj_clear_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+bool header_get_visible(void)
+{
+    return s_header_visible;
 }
 
 void header_deinit(void)

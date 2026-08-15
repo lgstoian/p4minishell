@@ -238,6 +238,18 @@
   (`components/audio/audio.c`): codec, volume, and the background playback engine. The command
   layer only parses arguments and calls `audio.h`.
 - Screenshot/capture/scr (LVGL screen capture as BMP) -> `components/command/command.c`
+- Serial file transfer (`receive` / `send`) -> `components/command/command.c`
+- Binary serial output MUST use `serial_write_raw()` (a chunked
+  `usb_serial_jtag_write_bytes`) — NEVER `fwrite(stdout)`, whose CRLF
+  translation corrupts payloads (every `0x0A` becomes `0x0D 0x0A`).
+  `screenshot`, `send`, and the `receive` ACKs share this path and the
+  `serial_write_frame_header()` framing (4-byte magic + 4-byte LE size).
+- Every binary stream (`receive`, `send`, `screenshot`) MUST suspend the
+  console reader (`shell_uart_console_rx_begin` / `_rx_end`) so the raw bytes
+  are never read as command lines and no echo interleaves. `rx_end` MUST be
+  reached on every return path after `rx_begin`.
+- `receive` and `send` MUST set ERRORLEVEL (0 ok / 1 IO|CRC / 2 usage) and stay
+  usable from batch files. Tunables live in `P4_CONFIG_SERIAL_*`.
 - ALL command dispatch MUST go through `shell_execute_command()` (full pipeline) or
   `shell_execute_command_core()` (dispatch only) from `components/command/`
 - Variable expansion (`%VAR%`, `%0`, `%1`..`%9`, `%*`) is implemented in `components/batch/` and
@@ -654,6 +666,7 @@
 - `CONFIG.SYS` directives are parsed line-by-line by `components/boot/boot.c`. Supported: `SET`,
   `PATH=`, `PROMPT=`, `ECHO ON|OFF`, `ROTATE=`, `BRIGHTNESS=`, `DISPLAY_POWER=`, `VOLUME=`,
   `RGB=` (WS2812 LED: `<r>,<g>,<b>` / `#RRGGBB` / `<effect>[,speed]` / `OFF` / `AUTO,<ON|OFF>`),
+  `OSK=ON|OFF`, `HEADER=ON|OFF`,
   `WIFI_SSID=`, `WIFI_PASSWORD=`, `WIFI_AUTOCONNECT=`, `WIFI=ON|OFF`, `BLUETOOTH=ON|OFF`,
   `BT_ADVERTISE=ON|OFF`, `USB_KEYBOARD=ON|OFF`, `USB_MOUSE=ON|OFF`, `GPIO <n> = OUT [HIGH|LOW]`.
 - Any unrecognized `NAME=VALUE` line is applied as a batch environment variable (same effect as
@@ -661,10 +674,26 @@
 - Hardware directives are applied by executing their command-line equivalent through the batch
   pipeline (`batch_boot_execute_command()`), reusing existing validation. State-only directives
   (Wi-Fi credentials, autoconnect policy, echo default) use accessors exposed by the owning modules.
+- `OSK=` maps to `keyboard_show()` / `keyboard_hide()`; `HEADER=` maps to
+  `header_set_visible()` + `display_schedule_ui_rebuild()` (the UI is already built when
+  CONFIG.SYS runs). The header visibility flag survives deinit/init, so a hidden bar stays hidden
+  across the rebuild.
+- The `config` command (`components/command/config_cmd.c`) is the ONLY runtime writer of
+  CONFIG.SYS. It tracks BRIGHTNESS/ROTATE/VOLUME/PROMPT/WIFI_AUTOCONNECT/DISPLAY_TIMEOUT/OSK/
+  HEADER and rewrites CONFIG.SYS with a guarded atomic temp+rename write, preserving comments and
+  unknown directives. `config factory` is the only destructive reset; it MUST use
+  `shell_confirm_destructive()` and delete CONFIG.SYS, AUTOEXEC.BAT, WIFI.KNOWN, ALIASES.BAT, and
+  HISTORY.TXT. New persistent settings MUST be added to the `config_settings[]` table with a
+  getter/render + apply pair, never by adding a second CONFIG.SYS writer.
 - `AUTOEXEC.BAT` runs through the normal batch pipeline (`shell_execute_batch_file()`), with cwd =
   SD root. Non-zero errorlevel is a warning only; the shell continues.
 - Unknown or malformed directives produce a single muted warning and are never fatal.
-- Safe with no SD card (silent skip), empty files, or read-only/full media.
+- With no SD card the boot path prints a muted "No SD card detected" transcript line + header
+  notification instead of being silent (the old `ESP_LOGI` is compiled out at WARN level).
+- First mount of each boot fires the one-shot hook `storage_register_sd_first_mount_callback`
+  (wired in main to `boot_on_sd_first_mount`), which generates default CONFIG.SYS/AUTOEXEC.BAT
+  when missing and prints the "SD card ready" welcome. New default-file generation MUST go
+  through `boot_ensure_default_files()` (idempotent, never overwrites an existing user file).
 - Wi-Fi password from `WIFI_PASSWORD=` is never echoed to transcript, history, or debug log.
 - GPIO directives are delegated to the existing `gpio set` safety check; reserved pins are refused.
 - All tunable values live in `p4minishell_config.h` and are documented in `p4minishell_config.yaml`

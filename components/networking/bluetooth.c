@@ -12,6 +12,10 @@
 #include "esp_hosted_misc.h"
 #include "sdkconfig.h"
 
+#if CONFIG_ESP_HOSTED_HOST_FEAT_BT
+#include "esp_hosted_bt_host_stack.h"
+#endif
+
 #if CONFIG_BT_NIMBLE_ENABLED
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
@@ -527,7 +531,7 @@ static esp_err_t bluetooth_refresh_fw_version(void)
 
 static esp_err_t bluetooth_ensure_ready(void)
 {
-#if CONFIG_BT_NIMBLE_ENABLED && CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE && CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI
+#if CONFIG_BT_NIMBLE_ENABLED && CONFIG_ESP_HOSTED_HOST_FEAT_BT
     esp_err_t error;
     int rc;
 
@@ -556,13 +560,8 @@ static esp_err_t bluetooth_ensure_ready(void)
     }
 
     if (!s_bluetooth_state.controller_enabled) {
-        error = esp_hosted_bt_controller_init();
-        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
-            s_bluetooth_state.last_error = error;
-            return error;
-        }
-
-        error = esp_hosted_bt_controller_enable();
+        esp_hosted_bt_host_stack_cfg_t cfg = ESP_HOSTED_BT_HOST_STACK_CONFIG_DEFAULT();
+        error = esp_hosted_bt_host_stack_setup(&cfg);
         if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
             s_bluetooth_state.last_error = error;
             return error;
@@ -628,19 +627,35 @@ void bluetooth_init(const networking_host_ops_t *ops)
     }
 }
 
+/** Append a "label: coloured value" line. The colour is placed into the
+ *  format string (not a %s argument) so ansi_vformat converts it to a real
+ *  SGR escape instead of leaving a literal @-marker on the transcript. */
+static void bluetooth_append_coloured(const char *label, const char *colour, const char *value)
+{
+    char fmt[128];
+
+    snprintf(fmt, sizeof(fmt), "  " SH_LBL "%%s:" SH_RST " %s%%s%s\n", colour, SH_RST);
+    bluetooth_appendf(fmt, label, value);
+}
+
 void bluetooth_status(void)
 {
     bluetooth_appendf(SH_HEAD "Bluetooth Status" SH_RST "\n");
-    bluetooth_appendf("  " SH_LBL "hosted ready:" SH_RST " %s\n",
-                      s_bluetooth_state.hosted_ready ? SH_OK "yes" SH_RST : SH_MUTE "no" SH_RST);
-    bluetooth_appendf("  " SH_LBL "controller:" SH_RST " %s\n",
-                      s_bluetooth_state.controller_enabled ? SH_OK "enabled" SH_RST : SH_MUTE "disabled" SH_RST);
-    bluetooth_appendf("  " SH_LBL "NimBLE host:" SH_RST " %s\n",
-                      s_bluetooth_state.nimble_initialized ? SH_OK "initialized" SH_RST : SH_MUTE "off" SH_RST);
-    bluetooth_appendf("  " SH_LBL "synced:" SH_RST " %s\n",
-                      s_bluetooth_state.synced ? SH_OK "yes" SH_RST : SH_MUTE "no" SH_RST);
-    bluetooth_appendf("  " SH_LBL "scan:" SH_RST " %s\n",
-                      s_bluetooth_state.scan_active ? SH_WARN "active" SH_RST : SH_MUTE "idle" SH_RST);
+    bluetooth_append_coloured("hosted ready",
+                              s_bluetooth_state.hosted_ready ? SH_OK : SH_MUTE,
+                              s_bluetooth_state.hosted_ready ? "yes" : "no");
+    bluetooth_append_coloured("controller",
+                              s_bluetooth_state.controller_enabled ? SH_OK : SH_MUTE,
+                              s_bluetooth_state.controller_enabled ? "enabled" : "disabled");
+    bluetooth_append_coloured("NimBLE host",
+                              s_bluetooth_state.nimble_initialized ? SH_OK : SH_MUTE,
+                              s_bluetooth_state.nimble_initialized ? "initialized" : "off");
+    bluetooth_append_coloured("synced",
+                              s_bluetooth_state.synced ? SH_OK : SH_MUTE,
+                              s_bluetooth_state.synced ? "yes" : "no");
+    bluetooth_append_coloured("scan",
+                              s_bluetooth_state.scan_active ? SH_WARN : SH_MUTE,
+                              s_bluetooth_state.scan_active ? "active" : "idle");
     if (s_bluetooth_state.advertising_active) {
         bluetooth_appendf("  " SH_LBL "advertising:" SH_RST " " SH_BT "on" SH_RST
                           " (name " SH_VAL "%s" SH_RST ")\n",

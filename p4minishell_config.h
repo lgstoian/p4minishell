@@ -52,8 +52,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             24
-#define P4_CONFIG_VERSION_PATCH             39
+#define P4_CONFIG_VERSION_MINOR             31
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -62,8 +62,14 @@
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
 
+/** Product display name. */
+#define P4_CONFIG_PRODUCT_NAME               "P4MiniShell"
+
+/** Proprietary copyright/notice surfaced by `about` and the license notice. */
+#define P4_CONFIG_COPYRIGHT_NOTICE           "Copyright (c) 2026 P4MiniShell. Proprietary - all rights reserved."
+
 /** Boot banner displayed in the transcript on startup. */
-#define P4_CONFIG_BOOT_MESSAGE               "P4MiniShell " P4_CONFIG_VERSION_STRING " ready | " P4_CONFIG_BOARD_REQUESTED " | type help"
+#define P4_CONFIG_BOOT_MESSAGE               P4_CONFIG_PRODUCT_NAME " " P4_CONFIG_VERSION_STRING " ready | " P4_CONFIG_BOARD_REQUESTED " | type help"
 
 /** Shell prompt string shown on the input line and serial console.
  *  The LVGL input line uses a plain-text version; the UART console
@@ -78,9 +84,10 @@
 /** Maximum bytes stored in the on-screen transcript buffer.
  *  Sized so the scrollable transcript holds a useful history (~30 lines of
  *  coloured output) instead of only the last screenful; the LVGL span group
- *  shows ~15 lines and scrolls through the rest. Kept modest because the
- *  buffer lives in internal RAM: growing it past this starves the internal/
- *  DMA heap and the heap init aborts at boot. */
+ *  shows ~15 lines and scrolls through the rest. The buffer is allocated from
+ *  PSRAM (with an internal-RAM fallback) so it does not compete with the
+ *  DMA-capable heap used by the WiFi/SDIO transport mempool and the
+ *  USB-Serial/JTAG ring buffers. */
 #define P4_CONFIG_TRANSCRIPT_BYTES           16384
 
 /**
@@ -320,7 +327,7 @@
 
 /** Runtime guard: true when any Wi-Fi path is enabled in sdkconfig. */
 #define P4_CONFIG_WIFI_RUNTIME_ENABLED \
-    (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED)
+     (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED)
 
 /** Skip ESP-Hosted version compatibility gate. When 1, the Wi-Fi init path
  *  does not reject C6 firmware version mismatches. Useful for development
@@ -422,7 +429,7 @@
 #define P4_CONFIG_HTTP_FOLLOW_REDIRECTS     1
 
 /** User-Agent string sent by `httpget`; keep it short and identifiable. */
-#define P4_CONFIG_HTTP_USER_AGENT           "P4MiniShell/0.24.11 httpget"
+#define P4_CONFIG_HTTP_USER_AGENT           "P4MiniShell/" P4_CONFIG_VERSION_STRING " httpget"
 
 /* ========================================================================
  * HTTP FILE SERVER (httpd) AND NETWORK DIAGNOSTICS
@@ -445,7 +452,7 @@
 
 /** Stack bytes for the dedicated HTTP server task. The handler builds
  *  path-sized scratch (URL + LFN) so it needs headroom over the default. */
-#define P4_CONFIG_HTTPD_STACK_BYTES         8192
+#define P4_CONFIG_HTTPD_STACK_BYTES         16384
 
 /** Priority of the HTTP server task. */
 #define P4_CONFIG_HTTPD_TASK_PRIORITY       5
@@ -658,6 +665,9 @@
 
 /** Maximum number of GPIO directives CONFIG.SYS may contain. */
 #define P4_CONFIG_BOOT_MAX_GPIO_LINES        16
+
+/** Maximum bytes the `config` command reads/writes for the CONFIG.SYS file. */
+#define P4_CONFIG_CONFIG_MAX_BYTES           16384
 
 /* ========================================================================
  * BATCH ENGINE AND ENVIRONMENT VARIABLES
@@ -1322,7 +1332,7 @@
  * ======================================================================== */
 
 /** Stack size for the Wi-Fi initialization background task. */
-#define P4_CONFIG_WIFI_INIT_TASK_STACK       6144
+#define P4_CONFIG_WIFI_INIT_TASK_STACK       12288
 
 /** Stack size for the shell command worker task. */
 #define P4_CONFIG_COMMAND_TASK_STACK         12288
@@ -1336,7 +1346,7 @@
  *  deep enough that the stock stack overflowed into a boot-loop panic. The
  *  modal editor adds row rendering on this same task, so the budget stays a
  *  generous 12 KB. */
-#define P4_CONFIG_LVGL_TASK_STACK            12288
+#define P4_CONFIG_LVGL_TASK_STACK            24576
 
 /** Log tag for networking/Wi-Fi module. */
 #define P4_CONFIG_NETWORKING_TAG             "wifi"
@@ -1374,7 +1384,47 @@
 /** Magic marker sent after the BMP binary data on serial output. */
 #define P4_CONFIG_SCREENSHOT_BMP_END         "=== SCREENSHOT BMP END ==="
 
+/** Four-byte magic prefix of the screenshot BMP frame ("BMPX"). */
+#define P4_CONFIG_SCREENSHOT_BMP_MAGIC       "BMPX"
+
 /** Maximum bytes per write chunk when streaming BMP to UART. */
 #define P4_CONFIG_SCREENSHOT_UART_CHUNK      512
+
+/*
+ * SERIAL FILE TRANSFER (receive / send)
+ * Host<->device binary transfer over the USB-Serial/JTAG console.
+ */
+
+/** Bytes read/written per chunk during a `receive`/`send` transfer. */
+#define P4_CONFIG_SERIAL_XFER_CHUNK_BYTES    4096
+
+/** Milliseconds of no incoming data before a `receive` transfer aborts. */
+#define P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS 4000
+
+/** Milliseconds a raw `send`/screenshot write may wait for TX ring space
+ * before the transfer is aborted, so a host that stops reading can never
+ * hang the command worker. */
+#define P4_CONFIG_SERIAL_SEND_TIMEOUT_MS     10000
+
+/** Hard upper bound (bytes) for a single `send` stream, including `send /diag`. */
+#define P4_CONFIG_SERIAL_SEND_MAX_BYTES      16777216
+
+/** Hard upper bound (bytes) for a single `receive` payload. */
+#define P4_CONFIG_SERIAL_RX_MAX_BYTES        8388608
+
+/** Magic marker printed before a `receive` starts streaming. */
+#define P4_CONFIG_SERIAL_RX_READY_MARKER     "=== RX READY ==="
+
+/** Magic marker printed after a `receive` completes successfully. */
+#define P4_CONFIG_SERIAL_RX_DONE_MARKER      "=== RX DONE ==="
+
+/** Magic marker printed after a `send` completes successfully. */
+#define P4_CONFIG_SERIAL_TX_DONE_MARKER      "=== TX DONE ==="
+
+/** Four-byte magic prefix of the `send` framed payload ("SDFX" little-endian). */
+#define P4_CONFIG_SERIAL_SEND_MAGIC          "SDFX"
+
+/** Maximum size in bytes of the `send /diag` diagnostic report payload. */
+#define P4_CONFIG_SERIAL_DIAG_BYTES          1024
 
 #endif /* P4MINISHELL_CONFIG_H */

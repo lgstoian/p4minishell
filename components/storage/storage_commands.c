@@ -64,7 +64,6 @@ static void shell_command_sd_info(void);
 static void shell_command_sd_ls(char *command);
 static void shell_command_sd_stat(char *command);
 static void shell_command_sd_cat(char *command);
-static bool shell_confirm_destructive(const char *operation, const char *warning, const char *detail);
 static bool shell_find_parse_date(const char *text, uint16_t *fdate_out);
 
 /* ========================================================================
@@ -1167,6 +1166,32 @@ void shell_command_tree(int argc, char **argv)
  * FILE MANIPULATION
  * ======================================================================== */
 
+/**
+ * If @p dest_path is an existing directory, append @p source_path's basename
+ * so `copy file dir` / `move file dir` copy INTO the directory, matching DOS.
+ * Otherwise leaves @p dest_path untouched (a plain file destination).
+ */
+static void shell_join_dest_into_dir(char *dest_path, size_t dest_size,
+                                     const char *source_path)
+{
+    struct stat dst_st;
+    char joined[SHELL_SD_PATH_BYTES];
+    const char *base;
+    size_t len = strlen(dest_path);
+
+    while (len > 1 && dest_path[len - 1] == '/') {
+        dest_path[--len] = '\0';
+    }
+    if (stat(dest_path, &dst_st) != 0 || !S_ISDIR(dst_st.st_mode)) {
+        return;
+    }
+    base = strrchr(source_path, '/');
+    base = (base != NULL) ? base + 1 : source_path;
+    if (snprintf(joined, sizeof(joined), "%s/%s", dest_path, base) < (int)sizeof(joined)) {
+        snprintf(dest_path, dest_size, "%s", joined);
+    }
+}
+
 void shell_command_copy(int argc, char **argv)
 {
     char source_path[SHELL_SD_PATH_BYTES];
@@ -1174,7 +1199,6 @@ void shell_command_copy(int argc, char **argv)
     char src_dir[SHELL_SD_PATH_BYTES];
     const char *pattern = NULL;
     esp_err_t error;
-
     if (argc != 3) {
         shell_print_usage("Usage: copy <source|pattern> <destination>");
         return;
@@ -1252,6 +1276,8 @@ void shell_command_copy(int argc, char **argv)
         shell_print_error("copy: invalid destination path");
         return;
     }
+
+    shell_join_dest_into_dir(dest_path, sizeof(dest_path), source_path);
 
     error = shell_fs_copy_file(source_path, dest_path);
     if (error != ESP_OK) {
@@ -1872,11 +1898,17 @@ void shell_command_move(int argc, char **argv)
         return;
     }
 
-    error = shell_resolve_target_from_source(source_path, argv[2], target_path, sizeof(target_path));
+    /* The destination is resolved against the current directory (like copy),
+     * not the source's directory: DOS `move dir\file.txt name.txt` lands in
+     * the cwd. `ren` keeps the source-relative resolution. */
+    error = shell_fs_resolve_path(argv[2], target_path, sizeof(target_path));
     if (error != ESP_OK) {
         shell_print_error("move: invalid destination path");
         return;
     }
+
+    /* A directory destination keeps the source basename (DOS move file dir). */
+    shell_join_dest_into_dir(target_path, sizeof(target_path), source_path);
 
     /* Moving a file onto itself is a no-op in DOS, and the copy fallback
      * below would otherwise truncate the source. */
@@ -3064,7 +3096,7 @@ void shell_command_chkdsk(int argc, char **argv)
  * @param detail       Optional detail lines (filesystem, label, size), or "".
  * @return true when the user typed the exact confirmation word.
  */
-static bool shell_confirm_destructive(const char *operation, const char *warning, const char *detail)
+bool shell_confirm_destructive(const char *operation, const char *warning, const char *detail)
 {
     char confirm[32];
 
@@ -5322,6 +5354,7 @@ static void shell_sd_print_usage(void)
     shell_transcript_append_text("  sd ls [path]\n");
     shell_transcript_append_text("  sd stat <path>\n");
     shell_transcript_append_text("  sd cat <path> [max_bytes]\n");
+    shell_transcript_append_text("  sd mount          (mount / re-mount after eject)\n");
     shell_transcript_append_text("  sd eject          (safe unmount before card removal)\n");
     shell_transcript_append_text("  sdeject           (alias for sd eject)\n");
     shell_transcript_append_text("Paths: sd:/file.txt, /sdcard/file.txt, or relative-to-sd-root\n");
@@ -5691,6 +5724,8 @@ void shell_command_sd(char *command)
         shell_command_sd_stat(cmd_copy);
     } else if (strcmp(argv[1], "cat") == 0) {
         shell_command_sd_cat(cmd_copy);
+    } else if (strcmp(argv[1], "mount") == 0) {
+        shell_command_sd_mount();
     } else if (strcmp(argv[1], "eject") == 0) {
         shell_command_sd_eject();
     } else {

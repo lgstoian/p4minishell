@@ -47,6 +47,19 @@ typedef enum {
 /** Initialize the header bar. Call once after LVGL is ready, before transcript. */
 void header_init(void);
 
+/**
+ * Show or hide the entire header bar. When hidden, the window manager reports
+ * a zero-height header region so the transcript expands to fill the space.
+ * The caller is responsible for scheduling a UI rebuild via
+ * display_schedule_ui_rebuild() after the first toggle so the layout updates.
+ *
+ * @param visible  true to show, false to hide.
+ */
+void header_set_visible(bool visible);
+
+/** @return true when the header bar is visible, false when hidden. */
+bool header_get_visible(void);
+
 /** Request a header re-render from cached state via async dispatch. */
 void header_update_status(void);
 

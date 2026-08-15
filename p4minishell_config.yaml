@@ -1,4 +1,4 @@
-# P4MiniShell Configuration � Single Source of Truth
+# P4MiniShell Configuration - Single Source of Truth
 #
 # Every tunable value in the firmware is documented here with:
 #   - value: the current setting
@@ -10,10 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.24.33
-# Last updated: 2026-08-13 (Full touch-keyboard compatibility for the edit
-#                           editor: two nav pages cover every feature)
-config_version: "0.24.39"
+# Version: 0.31.0
+# Last updated: 2026-08-15 (help /all offline reference, about license + third-party
+#                           summary, build date/time + Git hash in version/about/sysinfo,
+#                           header long-press build identity)
+config_version: "0.31.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -29,14 +30,22 @@ shell_identity:
     value: "ESP32-P4-Function-EV-Board"
     type: string
     description: "Board name detected from BSP component"
+  product_name:
+    value: "P4MiniShell"
+    type: string
+    description: "Product display name used by the boot banner, version, about, and header long-press identity"
+  copyright_notice:
+    value: "Copyright (c) 2026 P4MiniShell. Proprietary - all rights reserved."
+    type: string
+    description: "Proprietary notice surfaced by the `about` command and its license section"
   boot_message:
-    value: "P4MiniShell v0.2 ready | JC1060P470C | type help"
+    value: "P4MiniShell v0.31.0 ready | JC1060P470C | type help"
     type: string
-    description: "Startup banner shown in transcript"
+    description: "Startup banner shown in transcript (assembled from P4_CONFIG_VERSION_STRING and P4_CONFIG_BOARD_REQUESTED in the C header)"
   shell_prompt:
-    value: "P4Shell> "
+    value: "PS \\> "
     type: string
-    description: "Prompt string on input line and serial console"
+    description: "Prompt string on input line and serial console (assembled from P4_CONFIG_PS_PREFIX, P4_CONFIG_PS_PATH_SEPARATOR, and P4_CONFIG_PS_SUFFIX in the C header)"
 
 # ---- Transcript and Command Buffers ----
 buffers:
@@ -45,8 +54,9 @@ buffers:
     type: size_t
     description: >-
       Maximum bytes stored in the on-screen transcript buffer (scrollback).
-      Kept modest because the buffer lives in internal RAM: growing it past
-      this starves the internal/DMA heap and the heap init aborts at boot.
+      The buffer is allocated from PSRAM (with an internal-RAM fallback) so
+      it does not compete with the DMA-capable heap used by the WiFi/SDIO
+      transport mempool and the USB-Serial/JTAG ring buffers.
     range: "1024..32768"
   transcript_recolor_bytes:
     value: 16384
@@ -349,7 +359,7 @@ wifi:
     type: string
     description: "Default password from sdkconfig (empty if not set)"
   runtime_enabled_guard:
-    value: "CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED_ENABLED"
+    value: "CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED || CONFIG_ESP_HOSTED"
     type: macro
     description: "Compile-time guard for Wi-Fi runtime code"
   hosted_skip_version_gate:
@@ -460,9 +470,9 @@ http_client:
     type: bool
     description: "Follow HTTP redirects (1) or treat a 3xx status as an error (0)"
   user_agent:
-    value: "P4MiniShell/0.24.11 httpget"
+    value: "P4MiniShell/v0.31.0 httpget"
     type: string
-    description: "User-Agent string sent by httpget; kept short and identifiable"
+    description: "User-Agent string sent by httpget; the C header assembles it from P4_CONFIG_VERSION_STRING so it tracks the firmware version"
   print_body_bytes:
     value: 4096
     type: size_t
@@ -861,6 +871,11 @@ boot_scripting:
     type: size_t
     description: "I/O buffer size for SD file operations"
     range: "32..1024"
+  config_max_bytes:
+    value: 16384
+    type: size_t
+    description: "Maximum bytes the `config` command reads/writes for the CONFIG.SYS settings file"
+    range: "4096..65536"
 
 # ---- Batch Engine and Environment ----
 batch_env:
@@ -1554,67 +1569,67 @@ ansi_colors:
     black:
       value: "0x000000"
       type: uint32_t
-      description: "ANSI color 0/30/40 � Black"
+      description: "ANSI color 0/30/40 - Black"
     red:
       value: "0xC50F1F"
       type: uint32_t
-      description: "ANSI color 1/31/41 � Red"
+      description: "ANSI color 1/31/41 - Red"
     green:
       value: "0x13A10E"
       type: uint32_t
-      description: "ANSI color 2/32/42 � Green"
+      description: "ANSI color 2/32/42 - Green"
     yellow:
       value: "0xC19C00"
       type: uint32_t
-      description: "ANSI color 3/33/43 � Yellow"
+      description: "ANSI color 3/33/43 - Yellow"
     blue:
       value: "0x0037DA"
       type: uint32_t
-      description: "ANSI color 4/34/44 � Blue"
+      description: "ANSI color 4/34/44 - Blue"
     magenta:
       value: "0x881798"
       type: uint32_t
-      description: "ANSI color 5/35/45 � Magenta"
+      description: "ANSI color 5/35/45 - Magenta"
     cyan:
       value: "0x3A96DD"
       type: uint32_t
-      description: "ANSI color 6/36/46 � Cyan"
+      description: "ANSI color 6/36/46 - Cyan"
     white:
       value: "0xCCCCCC"
       type: uint32_t
-      description: "ANSI color 7/37/47 � White"
+      description: "ANSI color 7/37/47 - White"
     bright_black:
       value: "0x767676"
       type: uint32_t
-      description: "ANSI color 8/90/100 � Bright Black (Gray)"
+      description: "ANSI color 8/90/100 - Bright Black (Gray)"
     bright_red:
       value: "0xE74856"
       type: uint32_t
-      description: "ANSI color 9/91/101 � Bright Red"
+      description: "ANSI color 9/91/101 - Bright Red"
     bright_green:
       value: "0x16C60C"
       type: uint32_t
-      description: "ANSI color 10/92/102 � Bright Green"
+      description: "ANSI color 10/92/102 - Bright Green"
     bright_yellow:
       value: "0xF9F1A5"
       type: uint32_t
-      description: "ANSI color 11/93/103 � Bright Yellow"
+      description: "ANSI color 11/93/103 - Bright Yellow"
     bright_blue:
       value: "0x3B78FF"
       type: uint32_t
-      description: "ANSI color 12/94/104 � Bright Blue"
+      description: "ANSI color 12/94/104 - Bright Blue"
     bright_magenta:
       value: "0xB4009E"
       type: uint32_t
-      description: "ANSI color 13/95/105 � Bright Magenta"
+      description: "ANSI color 13/95/105 - Bright Magenta"
     bright_cyan:
       value: "0x61D6D6"
       type: uint32_t
-      description: "ANSI color 14/96/106 � Bright Cyan"
+      description: "ANSI color 14/96/106 - Bright Cyan"
     bright_white:
       value: "0xF2F2F2"
       type: uint32_t
-      description: "ANSI color 15/97/107 � Bright White"
+      description: "ANSI color 15/97/107 - Bright White"
   buffer_bytes:
     value: 512
     type: size_t
@@ -1645,11 +1660,67 @@ screenshot:
     value: "=== SCREENSHOT BMP END ==="
     type: string
     description: "Magic marker sent after BMP binary data on serial output"
+  bmp_magic:
+    value: "BMPX"
+    type: string
+    description: "Four-byte magic prefix of the screenshot BMP frame"
   uart_chunk_bytes:
     value: 512
     type: size_t
     description: "Maximum bytes per write chunk when streaming BMP to UART"
     range: "128..4096"
+
+# =============================================================================
+# SERIAL FILE TRANSFER (receive / send)
+# =============================================================================
+
+serial_transfer:
+  chunk_bytes:
+    value: 4096
+    type: size_t
+    description: "Bytes read/written per chunk during a receive/send transfer"
+    range: "256..8192"
+  idle_timeout_ms:
+    value: 4000
+    type: uint32_t
+    description: "Milliseconds of no incoming data before a receive transfer aborts"
+    range: "100..60000"
+  send_timeout_ms:
+    value: 10000
+    type: uint32_t
+    description: "Milliseconds a raw send/screenshot write may wait for TX ring space before aborting, so a host that stops reading never hangs the worker"
+    range: "100..60000"
+  send_max_bytes:
+    value: 16777216
+    type: uint32_t
+    description: "Hard upper bound (bytes) for a single send stream, including send /diag"
+    range: "1024..67108864"
+  rx_max_bytes:
+    value: 8388608
+    type: uint32_t
+    description: "Hard upper bound (bytes) for a single receive payload"
+    range: "1024..67108864"
+  rx_ready_marker:
+    value: "=== RX READY ==="
+    type: string
+    description: "Magic marker printed before a receive starts streaming"
+  rx_done_marker:
+    value: "=== RX DONE ==="
+    type: string
+    description: "Magic marker printed after a receive completes successfully"
+  tx_done_marker:
+    value: "=== TX DONE ==="
+    type: string
+    description: "Magic marker printed after a send completes successfully"
+  send_magic:
+    value: "SDFX"
+    type: string
+    description: "Four-byte magic prefix of the send framed payload"
+  diag_bytes:
+    value: 1024
+    type: size_t
+    description: "Maximum size in bytes of the send /diag diagnostic report payload"
+    range: "256..4096"
 
 # =============================================================================
 # BUILD-AFFECTING KCONFIG OPTIONS

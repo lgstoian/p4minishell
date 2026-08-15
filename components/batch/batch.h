@@ -228,6 +228,9 @@ void shell_command_call(int argc, char **argv);
 /** `if` — conditional execution on errorlevel, file existence, or strings. */
 void shell_command_if(int argc, char **argv);
 
+/** `for` — loop over a token set or wildcard pattern: `for %v in (set) do cmd`. */
+void shell_command_for(int argc, char **argv);
+
 /** `goto` — jump to a `:label` in the running batch file. */
 void shell_command_goto(int argc, char **argv);
 

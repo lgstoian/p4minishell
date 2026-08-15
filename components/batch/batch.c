@@ -94,6 +94,10 @@ typedef struct shell_batch_frame {
     FILE *batch_file;
     /** setlocal scopes opened by this frame, unwound when it returns. */
     int setlocal_depth;
+    /** Resume position after a `call :label`, valid while in_label_call. */
+    long call_resume_pos;
+    /** True while executing inside a called `:label` block. */
+    bool in_label_call;
 } shell_batch_frame_t;
 
 /**
@@ -1841,16 +1845,20 @@ void shell_command_echo_text(char *line)
         return;
     }
 
-    /* `echo on` / `echo off` toggle the batch echo state. */
+    /* `echo on` / `echo off` toggle the batch echo state. Checked on the raw
+     * value (before caret-unescaping) so `echo ^on` prints "on" literally
+     * instead of toggling the flag. */
     if (s_active_batch_frame != NULL &&
         (shell_text_equals_ignore_case(p, "on") || shell_text_equals_ignore_case(p, "off"))) {
         s_active_batch_frame->echo_enabled = shell_text_equals_ignore_case(p, "on");
         return;
     }
 
-    /* The remainder is printed verbatim. It can be a full interactive command
-     * line (up to P4_CONFIG_COMMAND_BYTES), and `echo` runs on the recursive
-     * batch path, so the copy is heap-allocated. */
+    /* The remainder is printed verbatim, but caret escapes are consumed
+     * (`echo a^&b` -> `a&b`), matching DOS. Quotes are preserved. It can be a
+     * full interactive command line (up to P4_CONFIG_COMMAND_BYTES), and
+     * `echo` runs on the recursive batch path, so the copy is heap-allocated. */
+    shell_unescape_carets_in_place(p);
     text = malloc(SHELL_COMMAND_BYTES);
     if (text == NULL) {
         shell_transcript_append_text("echo: out of memory\n");
@@ -1975,6 +1983,27 @@ void shell_command_call(int argc, char **argv)
         return;
     }
 
+    /* `call :label` runs a labelled block in the current batch file as a
+     * subroutine: the block runs until `exit /b` (or end of file) and then
+     * execution resumes at the line after the call. */
+    if (argv[1][0] == ':') {
+        const char *label = argv[1] + 1;
+
+        if (s_active_batch_frame == NULL) {
+            shell_transcript_append_text("call: :label is only valid inside batch files\n");
+            return;
+        }
+        if (shell_find_label_pos(s_active_batch_frame, label) < 0) {
+            shell_transcript_appendf("call: label not found: %s\n", label);
+            return;
+        }
+        s_active_batch_frame->call_resume_pos = ftell(s_active_batch_frame->batch_file);
+        s_active_batch_frame->in_label_call = true;
+        snprintf(s_goto_label, sizeof(s_goto_label), "%s", label);
+        s_goto_pending = true;
+        return;
+    }
+
     if (!shell_resolve_batch_path(argv[1], batch_path, sizeof(batch_path))) {
         shell_transcript_appendf("call: batch file not found %s\n", argv[1]);
         return;
@@ -2003,7 +2032,17 @@ void shell_command_goto(int argc, char **argv)
         s_goto_label[0] = '\0';
         return;
     }
-    snprintf(s_goto_label, sizeof(s_goto_label), ":%s", argv[1]);
+    /* Normalize the label: accept both `goto skip` and `goto :skip` (the
+     * documented form). The stored name has no leading colon, matching the
+     * label table built by shell_extract_label_name(). */
+    {
+        const char *label = argv[1];
+
+        if (label[0] == ':') {
+            label++;
+        }
+        snprintf(s_goto_label, sizeof(s_goto_label), "%s", label);
+    }
     s_goto_pending = true;
 }
 
@@ -2163,18 +2202,96 @@ void shell_command_if(int argc, char **argv)
 
     if (not_flag) condition = !condition;
 
-    if (condition && arg_idx < argc) {
-        /* Execute the rest of the line as a command. The joined command is
-         * line-width and `if` re-enters the pipeline (recursive batch path),
-         * so the buffer is heap-allocated and freed after the nested run. */
+    if (arg_idx < argc) {
+        /* Execute the command part. This may be a bare command (the whole
+         * remainder) or the parenthesized block form
+         * `(true-cmd) else (false-cmd)`. The joined text is line-width and
+         * `if` re-enters the pipeline (recursive batch path), so the buffer is
+         * heap-allocated and freed after the nested run. */
         char *cmd = malloc(SHELL_COMMAND_BYTES);
+        char *true_cmd = NULL;
+        char *false_cmd = NULL;
+        bool paren_form = false;
+        char *run = NULL;
 
         if (cmd == NULL) {
             shell_transcript_append_text("if: out of memory\n");
             return;
         }
         shell_join_args(argv, arg_idx, argc, cmd, SHELL_COMMAND_BYTES);
-        batch_run_nested(cmd);
+
+        {
+            char *p = cmd;
+
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            if (*p == '(') {
+                /* Balanced-paren scan: extract (true-cmd), then an optional
+                 * `else (false-cmd)`. */
+                int depth = 0;
+                char *q;
+                char *close_true = NULL;
+
+                paren_form = true;
+                true_cmd = p + 1;
+                for (q = true_cmd; *q != '\0'; q++) {
+                    if (*q == '(') {
+                        depth++;
+                    } else if (*q == ')') {
+                        if (depth == 0) {
+                            close_true = q;
+                            break;
+                        }
+                        depth--;
+                    }
+                }
+                if (close_true != NULL) {
+                    *close_true = '\0';
+                    q = close_true + 1;
+                    while (*q == ' ' || *q == '\t') {
+                        q++;
+                    }
+                    if (strncmp(q, "else", 4) == 0 &&
+                        (q[4] == '\0' || isspace((unsigned char)q[4]))) {
+                        char *s2;
+
+                        q += 4;
+                        while (*q == ' ' || *q == '\t') {
+                            q++;
+                        }
+                        if (*q == '(') {
+                            char *scan = q + 1;
+
+                            s2 = scan;
+                            depth = 0;
+                            for (; *scan != '\0'; scan++) {
+                                if (*scan == '(') {
+                                    depth++;
+                                } else if (*scan == ')') {
+                                    if (depth == 0) {
+                                        *scan = '\0';
+                                        break;
+                                    }
+                                    depth--;
+                                }
+                            }
+                            false_cmd = s2;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (paren_form) {
+            run = condition ? true_cmd : false_cmd;
+        } else if (condition) {
+            run = cmd;
+        }
+
+        if (run != NULL && run[0] != '\0') {
+            batch_run_nested(run);
+        }
         free(cmd);
     }
 }
@@ -2680,11 +2797,24 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
     s_active_batch_frame = frame;
     shell_set_batch_active(true);
 
-    while (fgets(line, SHELL_BATCH_LINE_BYTES, file) != NULL) {
-        char *trimmed = shell_trim(line);
+    while (true) {
+        char *trimmed;
         bool suppress_echo = false;
         size_t line_len;
         int continuations = 0;
+
+        if (fgets(line, SHELL_BATCH_LINE_BYTES, file) == NULL) {
+            /* End of file. Inside a called `:label` block this returns to the
+             * caller; otherwise the batch frame ends here. */
+            if (frame->in_label_call) {
+                frame->in_label_call = false;
+                fseek(file, frame->call_resume_pos, SEEK_SET);
+                continue;
+            }
+            break;
+        }
+
+        trimmed = shell_trim(line);
 
         line_len = strlen(trimmed);
         while (line_len > 0 && (trimmed[line_len - 1] == '\n' || trimmed[line_len - 1] == '\r')) {
@@ -2781,21 +2911,36 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
 
         batch_run_nested(trimmed);
 
-        /* `exit` or `exit /b` asked this file to stop. */
+        /* `exit` or `exit /b` asked this file to stop. A frame-stop inside a
+         * called `:label` block returns to the caller instead. */
+        if (s_stop_mode == BATCH_STOP_FRAME && frame->in_label_call) {
+            s_stop_mode = BATCH_STOP_NONE;
+            s_goto_pending = false;
+            s_goto_eof = false;
+            fseek(file, frame->call_resume_pos, SEEK_SET);
+            frame->in_label_call = false;
+            continue;
+        }
         if (s_stop_mode != BATCH_STOP_NONE) {
             break;
         }
 
-        /* `goto :eof` jumps to the end of the current batch frame. */
+        /* `goto :eof` jumps to the end of the current batch frame. Inside a
+         * called `:label` block it returns to the caller instead. */
         if (s_goto_eof) {
             s_goto_eof = false;
             s_goto_pending = false;
+            if (frame->in_label_call) {
+                frame->in_label_call = false;
+                fseek(file, frame->call_resume_pos, SEEK_SET);
+                continue;
+            }
             break;
         }
 
         /* Check for goto or call :label that may have changed execution flow */
         if (s_goto_pending) {
-            long label_pos = shell_find_label_pos(frame, s_goto_label + 1);
+            long label_pos = shell_find_label_pos(frame, s_goto_label);
             if (label_pos >= 0) {
                 fseek(file, label_pos, SEEK_SET);
                 s_goto_pending = false;
@@ -2803,7 +2948,7 @@ esp_err_t shell_execute_batch_file(const char *path, int argc, char **argv)
                 /* Continue from the label position - the label line will be skipped */
                 continue;
             } else {
-                shell_transcript_appendf("goto: label not found: %s\n", s_goto_label + 1);
+                shell_transcript_appendf("goto: label not found: %s\n", s_goto_label);
                 s_goto_pending = false;
                 s_goto_label[0] = '\0';
             }
@@ -2901,38 +3046,44 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
      * of the command above it, so a ':' at its start is data, not a label. */
     while (fgets(line, SHELL_BATCH_LINE_BYTES, file) != NULL) {
         line_pos = ftell(file);
-        char *trimmed = shell_trim(line);
-        bool this_continues;
-        size_t length;
-
-        /* Determine whether THIS line continues, using the same odd-caret
-         * rule the executor applies, so both agree on line boundaries. */
-        length = strlen(trimmed);
-        while (length > 0 && (trimmed[length - 1] == '\n' || trimmed[length - 1] == '\r')) {
-            trimmed[--length] = '\0';
-        }
-
         {
-            size_t carets = 0;
-            size_t scan = length;
+            /* Raw byte count read by fgets (including the trailing newline),
+             * captured before shell_trim() shortens the buffer so the label
+             * file position points at the line START, not a byte into it. */
+            size_t raw_len = strlen(line);
+            char *trimmed = shell_trim(line);
+            bool this_continues;
+            size_t length;
 
-            while (scan > 0 && trimmed[scan - 1] == P4_CONFIG_ESCAPE_CHAR) {
-                carets++;
-                scan--;
+            /* Determine whether THIS line continues, using the same odd-caret
+             * rule the executor applies, so both agree on line boundaries. */
+            length = strlen(trimmed);
+            while (length > 0 && (trimmed[length - 1] == '\n' || trimmed[length - 1] == '\r')) {
+                trimmed[--length] = '\0';
             }
-            this_continues = ((carets % 2) == 1);
-        }
 
-        if (!previous_continues && shell_is_label(trimmed)) {
-            if (frame->label_count < SHELL_BATCH_LABEL_MAX) {
-                shell_extract_label_name(trimmed, frame->labels[frame->label_count].name,
-                                         sizeof(frame->labels[frame->label_count].name));
-                frame->labels[frame->label_count].file_pos = line_pos - strlen(line);
-                frame->label_count++;
+            {
+                size_t carets = 0;
+                size_t scan = length;
+
+                while (scan > 0 && trimmed[scan - 1] == P4_CONFIG_ESCAPE_CHAR) {
+                    carets++;
+                    scan--;
+                }
+                this_continues = ((carets % 2) == 1);
             }
-        }
 
-        previous_continues = this_continues;
+            if (!previous_continues && shell_is_label(trimmed)) {
+                if (frame->label_count < SHELL_BATCH_LABEL_MAX) {
+                    shell_extract_label_name(trimmed, frame->labels[frame->label_count].name,
+                                             sizeof(frame->labels[frame->label_count].name));
+                    frame->labels[frame->label_count].file_pos = line_pos - (long)raw_len;
+                    frame->label_count++;
+                }
+            }
+
+            previous_continues = this_continues;
+        }
     }
 
     fseek(file, current_pos, SEEK_SET);
@@ -3009,9 +3160,14 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
     for_ptr += 4;
     while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
 
-    /* Check for %%var */
-    if (*for_ptr != '%' || *(for_ptr + 1) != '%') return;
-    for_ptr += 2;
+    /* Loop variable. Batch files write `%%var` (the doubled percent is the
+     * batch-file escape for a literal `%`); the interactive prompt writes
+     * `%var`. Accept both. */
+    if (*for_ptr != '%') return;
+    for_ptr++;
+    if (*for_ptr == '%') {
+        for_ptr++;
+    }
 
     var_name = *for_ptr;
     if (!isalpha((unsigned char)var_name)) return;
@@ -3116,6 +3272,24 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
     }
 
     free(set_str);
+}
+
+/**
+ * Interactive `for` entry point: `for %var in (set) do command` at the shell
+ * prompt. Runs outside a batch frame; the loop body re-enters the pipeline via
+ * batch_run_nested, so variables, pipes, and redirection all work per-iteration.
+ */
+void shell_command_for(int argc, char **argv)
+{
+    char *command_line = malloc(SHELL_COMMAND_BYTES);
+
+    if (command_line == NULL) {
+        shell_transcript_append_text("for: out of memory\n");
+        return;
+    }
+    shell_join_args(argv, 0, argc, command_line, SHELL_COMMAND_BYTES);
+    shell_execute_for_loop(NULL, command_line);
+    free(command_line);
 }
 
 /* ========================================================================

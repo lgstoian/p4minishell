@@ -463,6 +463,17 @@ void shell_uart_console_start(void);
 /** Write text to the UART console output. */
 void shell_uart_console_write_text(const char *text);
 
+/**
+ * Claim the console's raw byte stream so the caller can read binary input from
+ * stdin (e.g. the `receive` command transferring a file). While held, the
+ * console reader task does not consume stdin. Must be paired with
+ * shell_uart_console_rx_end() on every exit path.
+ */
+void shell_uart_console_rx_begin(void);
+
+/** Release the console's raw byte stream (paired with rx_begin). */
+void shell_uart_console_rx_end(void);
+
 /** Print the shell prompt on the UART console. */
 void shell_uart_console_print_prompt(void);
 
@@ -473,8 +484,19 @@ void shell_uart_console_submit_command(const char *command);
  * SYSTEM INFO COMMANDS
  * ======================================================================== */
 
-/** Print the help text listing all available commands. */
-void shell_command_help(void);
+/**
+ * Print help text. `help` prints a quick summary; `help /all` (or `help /?`)
+ * prints the full offline command reference; `help <command>` prints one entry.
+ */
+void shell_command_help(int argc, char **argv);
+
+/**
+ * Format a one-line build identity:
+ * "P4MiniShell v0.31.0 | built <date> <time> | git <hash>".
+ * Used by the header long-press notification and available to callers that
+ * want the build identity without pulling in the full version command.
+ */
+void shell_get_build_identity(char *buf, size_t size);
 
 /** Print comprehensive system information. */
 void shell_command_sysinfo(void);
@@ -626,6 +648,16 @@ bool shell_has_unquoted_char(const char *text, char target);
  * @return @p text, for call chaining.
  */
 char *shell_unescape_in_place(char *text);
+
+/**
+ * Strip caret escapes (`^c` -> `c`) from @p text in place WITHOUT removing quote
+ * delimiters. Used by `echo`, which prints the raw remainder of the command line
+ * and must keep `"..."` visible while still consuming a caret. A caret inside
+ * single quotes or trailing at the end of the string is left literal.
+ *
+ * @return @p text, for call chaining.
+ */
+char *shell_unescape_carets_in_place(char *text);
 
 /* ========================================================================
  * COMMAND CHAINING

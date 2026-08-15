@@ -20,14 +20,18 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <time.h>
-#include "driver/gpio.h"
-#include "esp_lvgl_port.h"
+#include <driver/gpio.h>
+#include <driver/usb_serial_jtag.h>
+#include <esp_vfs_dev.h>
+#include <fcntl.h>
+#include <esp_lvgl_port.h>
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
 #include <stdio.h>
@@ -68,21 +72,53 @@
 #define SHELL_SEMANTIC_BODY_BYTES       (P4_CONFIG_ANSI_BUFFER_BYTES - 64)
 
 /* ========================================================================
+ * BUILD IDENTITY
+ * ======================================================================== */
+
+/** One-line build identity: "P4MiniShell v0.31.0 | built <date> <time> | git <hash>". */
+void shell_get_build_identity(char *buf, size_t size)
+{
+    const esp_app_desc_t *d = esp_app_get_description();
+    const char *git = (d != NULL) ? d->version : "n/a";
+    const char *date = (d != NULL) ? d->date : "n/a";
+    const char *time = (d != NULL) ? d->time : "n/a";
+
+    if (buf == NULL || size == 0) {
+        return;
+    }
+    snprintf(buf, size, "%s %s | built %s %s | git %s",
+             P4_CONFIG_PRODUCT_NAME,
+             P4_CONFIG_VERSION_STRING,
+             date, time, git);
+}
+
+/** Full (multi-line) build identity for `version` / `about`. */
+void shell_get_build_details(const esp_app_desc_t **desc_out)
+{
+    if (desc_out != NULL) {
+        *desc_out = esp_app_get_description();
+    }
+}
+
+/* ========================================================================
  * INTERNAL STATE
  * ======================================================================== */
 
 static bool s_initialized = false;
 
-/* Transcript */
-static char s_transcript[SHELL_TRANSCRIPT_BYTES];
+/* Transcript. Held in PSRAM (not internal SRAM) because the pair of 16 KB
+ * buffers plus the clipboard dominate the small internal heap; keeping them
+ * out of internal RAM preserves headroom for the WiFi/SDIO transport mempool
+ * and the USB-Serial/JTAG ring buffers, which need DMA-capable memory. */
+static char *s_transcript = NULL;
 /* ANSI form of the transcript (real SGR escapes). Kept in parallel with the
  * plain s_transcript: the span-group transcript parses this into coloured
  * spans so on-screen colours match the UART console, while history/
  * redirection keep using the plain form. */
-static char s_transcript_ansi[SHELL_TRANSCRIPT_BYTES];
+static char *s_transcript_ansi = NULL;
 
 /* RAM clipboard backing the `clip` / `paste` commands. */
-static char s_clipboard[SHELL_CLIPBOARD_BYTES];
+static char *s_clipboard = NULL;
 static bool s_clipboard_is_file;
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static size_t s_async_transcript_len;
@@ -126,6 +162,15 @@ static size_t s_runtime_warning_count;
 /* UART console */
 static SemaphoreHandle_t s_uart_console_lock;
 static bool s_uart_console_running;
+static TaskHandle_t s_uart_console_task_handle;
+
+/* USB-Serial/JTAG driver ring sizes. The default console ring is tiny
+ * (256 bytes) and silently drops input whenever a host bursts faster than the
+ * reader drains it; these larger rings make serial input (including the
+ * `receive` binary transfer) lossless. Sizes are kept modest because the rings
+ * live in internal RAM, which the WiFi/SDIO transport mempool also needs. */
+#define SHELL_USJ_RX_BUFFER_BYTES 8192
+#define SHELL_USJ_TX_BUFFER_BYTES 4096
 
 /* Serializes command submissions coming from the serial console */
 static SemaphoreHandle_t s_shell_command_lock;
@@ -217,19 +262,24 @@ static const char *shell_colour_value(char *buf, size_t buf_size, const char *co
  * aligned for the label render.
  */
 static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
-                                              char *ansi, size_t ansi_size,
-                                              const char *plain_text,
-                                              const char *ansi_text,
-                                              const char *truncation_marker)
+                                               char *ansi, size_t ansi_size,
+                                               const char *plain_text,
+                                               const char *ansi_text,
+                                               const char *truncation_marker)
 {
-    size_t plain_len = strlen(plain);
-    size_t ansi_len = strlen(ansi);
-    size_t plain_text_len = strlen(plain_text);
-    size_t ansi_text_len = strlen(ansi_text);
+    size_t plain_len;
+    size_t ansi_len;
+    size_t plain_text_len;
+    size_t ansi_text_len;
 
-    if (plain_text == NULL || plain_text[0] == '\0') {
+    if (plain_text == NULL || plain_text[0] == '\0' || ansi_text == NULL) {
         return;
     }
+
+    plain_len = strlen(plain);
+    ansi_len = strlen(ansi);
+    plain_text_len = strlen(plain_text);
+    ansi_text_len = strlen(ansi_text);
 
     /* A single append larger than the whole buffer keeps only its tail. */
     if (plain_text_len >= plain_size) {
@@ -259,7 +309,7 @@ static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
         }
 
         if (plain_len + strlen(truncation_marker) < plain_size) {
-            size_t marker_len = strlen(truncation_marker) - 1;
+            size_t marker_len = strlen(truncation_marker);
             memcpy(plain + plain_len, truncation_marker, marker_len);
             plain_len += marker_len;
             plain[plain_len] = '\0';
@@ -344,8 +394,8 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
     /* Append to both the plain transcript (history/redirection) and the ANSI
      * transcript (on-screen label rendering). Plain input is identical in both
      * forms. */
-    shell_transcript_append_to_buffer(s_transcript, sizeof(s_transcript),
-                                      s_transcript_ansi, sizeof(s_transcript_ansi),
+    shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
+                                      s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
                                       text, text, truncation_marker);
 
     /* Mirror plain transcript output to the serial console so idf.py monitor
@@ -412,8 +462,8 @@ void shell_transcript_append_ansi(const char *text)
         lvgl_port_lock(0);
     }
 
-    shell_transcript_append_to_buffer(s_transcript, sizeof(s_transcript),
-                                      s_transcript_ansi, sizeof(s_transcript_ansi),
+    shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
+                                      s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
                                       plain, text, "\n[history truncated]\n");
 
     shell_transcript_update_label();
@@ -1258,7 +1308,7 @@ void shell_clipboard_set(const char *text)
     if (text == NULL) {
         s_clipboard[0] = '\0';
     } else {
-        snprintf(s_clipboard, sizeof(s_clipboard), "%s", text);
+        snprintf(s_clipboard, SHELL_CLIPBOARD_BYTES, "%s", text);
     }
     s_clipboard_is_file = false;
 }
@@ -1266,7 +1316,7 @@ void shell_clipboard_set(const char *text)
 void shell_clipboard_set_file(const char *path)
 {
     if (path != NULL) {
-        snprintf(s_clipboard, sizeof(s_clipboard), "%s", path);
+        snprintf(s_clipboard, SHELL_CLIPBOARD_BYTES, "%s", path);
     }
     s_clipboard_is_file = true;
 }
@@ -1921,6 +1971,31 @@ void shell_uart_console_start(void)
     setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stdout, NULL, _IONBF, 0);
 
+    /* On USB-Serial/JTAG boards the console VFS normally runs in polled mode
+     * against the 64-byte hardware FIFO, which drops bytes whenever a host
+     * bursts faster than the reader polls. Install the interrupt-driven
+     * driver with a large RX ring (and put the VFS in driver mode) so serial
+     * input - especially the `receive` binary transfer - is buffered reliably
+     * instead of silently losing bytes. */
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    if (!usb_serial_jtag_is_driver_installed()) {
+        usb_serial_jtag_driver_config_t usj_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+
+        usj_cfg.rx_buffer_size = SHELL_USJ_RX_BUFFER_BYTES;
+        usj_cfg.tx_buffer_size = SHELL_USJ_TX_BUFFER_BYTES;
+        if (usb_serial_jtag_driver_install(&usj_cfg) == ESP_OK) {
+            /* The non-deprecated spelling lives in a private IDF header; the
+             * public alias is deprecated but still the supported call. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            esp_vfs_usb_serial_jtag_use_driver();
+#pragma GCC diagnostic pop
+        }
+    }
+    fcntl(fileno(stdin), F_SETFL, 0);
+    fcntl(fileno(stdout), F_SETFL, 0);
+#endif
+
     if (s_uart_console_lock == NULL) {
         s_uart_console_lock = xSemaphoreCreateMutex();
     }
@@ -1934,7 +2009,7 @@ void shell_uart_console_start(void)
                     SHELL_UART_CONSOLE_TASK_STACK_BYTES,
                     NULL,
                     tskIDLE_PRIORITY + 1,
-                    NULL) != pdPASS) {
+                    &s_uart_console_task_handle) != pdPASS) {
         shell_record_errorf("uart", ESP_FAIL, "Failed to start UART console task");
         return;
     }
@@ -1958,6 +2033,23 @@ void shell_uart_console_write_text(const char *text)
 
     if (s_uart_console_lock != NULL) {
         xSemaphoreGive(s_uart_console_lock);
+    }
+}
+
+void shell_uart_console_rx_begin(void)
+{
+    /* Suspend the console reader so it cannot consume stdin while this caller
+     * reads raw binary bytes. The console task is normally blocked in fgets or
+     * about to read; freezing it keeps the raw stream for the caller. */
+    if (s_uart_console_task_handle != NULL) {
+        vTaskSuspend(s_uart_console_task_handle);
+    }
+}
+
+void shell_uart_console_rx_end(void)
+{
+    if (s_uart_console_task_handle != NULL) {
+        vTaskResume(s_uart_console_task_handle);
     }
 }
 
@@ -2414,12 +2506,176 @@ void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed)
  * SYSTEM INFO COMMANDS
  * ======================================================================== */
 
-void shell_command_help(void)
+/* One-line entry in the offline command reference (`help /all`, `help <cmd>`). */
+typedef struct {
+    const char *name;      /* primary command name (aliases listed in summary) */
+    const char *summary;   /* one-line usage + description */
+} shell_help_entry_t;
+
+static const shell_help_entry_t s_shell_help_entries[] = {
+    { "help",     "help [cmd | /all] - this summary; help /all lists every command; help <cmd> shows one" },
+    { "about",    "about - project identity, build date/time, Git hash, license, third-party summary" },
+    { "version",  "version | ver - banner, version, build date/time, Git hash, IDF, board, heap, uptime" },
+    { "sysinfo",  "sysinfo - board, display, storage, heap, FreeRTOS tasks, uptime, Wi-Fi, OTA state" },
+    { "mem",      "mem - free heap, total, minimum, internal, task count, PSRAM state" },
+    { "debug",    "debug - last error/warning entries, Wi-Fi state, heap, warning count" },
+    { "clear",    "clear | cls - clear transcript history and redraw the prompt" },
+    { "reboot",   "reboot - restart the board" },
+    { "ps",       "ps | tasks | top [/b] [/O:key] - FreeRTOS task list (name, state, prio, core, stack, CPU%)" },
+    { "tasks",    "tasks - alias of ps (FreeRTOS task list)" },
+    { "top",      "top [/b] [/O:key] - task list sorted by CPU with a live summary header" },
+    { "brightness", "brightness <0-100> - set display backlight" },
+    { "rotate",   "rotate <0|90|180|270> - rotate the display (touch coordinates follow)" },
+    { "battery",  "battery - read battery voltage/percent from the ADC divider" },
+    { "power",    "power <on|sleep|off> - display power state; power status shows it" },
+    { "sleep",    "sleep - idle the display (see power)" },
+    { "deepsleep", "deepsleep - enter ESP deep sleep (wake on configured source)" },
+    { "pwm",      "pwm <pin> <freq> <duty%> - LEDC PWM tone on a pin" },
+    { "freq",     "freq <pin> <hz> - square wave generator on a pin" },
+    { "tone",     "tone <freq> [duration_ms] - play a tone through the speaker" },
+    { "wavplay",  "wavplay <file.wav> - play a WAV file from SD" },
+    { "audio",    "audio status|volume <0-100>|stop - speaker/volume state" },
+    { "adc",      "adc <pin> - one-shot ADC read on a pin" },
+    { "i2c",      "i2c scan | peek <addr> <reg> | poke <addr> <reg> <val> - I2C bus tools" },
+    { "spi",      "spi status - SPI configuration (transactions unsupported with hosted SDIO)" },
+    { "rgb",      "rgb status | rgb <r> <g> <b> - RGB LED colour (stub when unwired)" },
+    { "gpio",     "gpio list | status | read <pin> | set <pin> <0|1> - digital IO" },
+    { "volume",   "volume <0-100> - set speaker volume" },
+    { "display",  "display info | resolution | refresh | power <on|sleep|off>" },
+    { "keyboard", "keyboard show | hide | toggle | status - on-screen keyboard" },
+    { "windows",  "windows info - window layout state" },
+    { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },
+    { "prompt",   "prompt [template] - set the command prompt template" },
+    { "cd",       "cd | chdir [path] - show or change the working directory" },
+    { "dir",      "dir [path] [/W] [/P] [/S] [/B] [/L] [/A:attrs] [/O:order] - list directory" },
+    { "copy",     "copy <src> <dst> - copy a file (dir target keeps basename)" },
+    { "move",     "move <src> <dst> - move a file (cwd-relative destination)" },
+    { "del",      "del [/s] [/p|/f|/permanent] <path> - delete file(s); aliases erase" },
+    { "ren",      "ren | rename <src> <dst> - rename a file" },
+    { "md",       "md | mkdir <path> - create a directory" },
+    { "rd",       "rd | rmdir <path> - remove a directory" },
+    { "type",     "type <path> - print a file to the transcript" },
+    { "write",    "write <path> <text> - write (overwrite) a file" },
+    { "append",   "append <path> <text> - append text to a file" },
+    { "touch",    "touch <path> - create/update a file timestamp" },
+    { "attrib",   "attrib [+-RHSA] <path> - show/set file attributes" },
+    { "label",    "label [name] - show/set the volume label" },
+    { "xcopy",    "xcopy <src> <dst> [/S] [/E] [/I] [/Y] - recursive copy" },
+    { "chkdsk",   "chkdsk | scandisk [path] [/F] - read-only filesystem check" },
+    { "format",   "format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q] - format the SD volume (interactive)" },
+    { "find",     "find <text> [file] [/I] [/N] [/C] [/V] - search text in files or input" },
+    { "findstr",  "findstr [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B] - file discovery" },
+    { "more",     "more [file] - paginated output (keypress- or timer-bounded)" },
+    { "tree",     "tree [path] [/F] [/A] - directory tree" },
+    { "fc",       "fc <f1> <f2> - compare two files" },
+    { "comp",     "comp <f1> <f2> - compare two files byte-by-byte" },
+    { "sort",     "sort [file] [/R] [/I] [/U] - sort lines (pipes: sort < f | sort)" },
+    { "clip",     "clip [text | copy [N] | file <path> | read <file> | paste <dest>] - clipboard" },
+    { "history",  "history [ /save [file] | /load [file] | /clear ] - command recall buffer" },
+    { "edit",     "edit <file> - modal text editor (byte-preserving document model)" },
+    { "trash",    "trash - show trash | trash <path> - move to trash | trash empty - empty it" },
+    { "undelete", "undelete <path> - restore a file from trash" },
+    { "receive",  "receive <path> <size> [/crc] - host-to-device binary transfer (USB serial)" },
+    { "send",     "send <path> [offset] [count] | send /diag - device-to-host binary transfer" },
+    { "screenshot", "screenshot | scr | capture [file.bmp] - capture the screen to a BMP" },
+    { "sd",       "sd info | ls [path] | stat <path> | cat <path> [bytes] | mount | eject" },
+    { "sdeject",  "sdeject - safe SD unmount before card removal" },
+    { "disk",     "disk list | detail | clean | create partition primary [size=N] | delete partition N | format" },
+    { "set",      "set [NAME=VALUE] | set /a NAME=<expr> | set /p NAME=<prompt> - environment variables" },
+    { "path",     "path [dirs] - show/set the executable search path" },
+    { "echo",     "echo <text> | echo on|off - print text or toggle command echo" },
+    { "call",     "call <file.bat> [args] - run a batch file from another" },
+    { "if",       "if [not] errorlevel|exist|\"a\"==\"b\" <cmd> - conditional execution" },
+    { "goto",     "goto :label - jump to a label in a batch file" },
+    { "shift",    "shift - shift batch arguments" },
+    { "pause",    "pause [message] - wait for a key (30 s timeout)" },
+    { "choice",   "choice [/C:keys] [/N] [/T:c,secs] [/S] [text] - interactive selection" },
+    { "for",      "for %v in (set) do <cmd> - batch/command-loop iteration" },
+    { "setlocal", "setlocal - begin a local environment scope" },
+    { "endlocal", "endlocal - end a local environment scope" },
+    { "exit",     "exit [/b] [code] - leave a batch file or the shell" },
+    { "rem",      "rem <text> - batch comment" },
+    { "alias",    "alias [name[=value]] | alias /save [/load] [file] - DOSKEY-style macros" },
+    { "unalias",  "unalias <name> - remove a macro alias" },
+    { "date",     "date [MM-DD-YYYY] - show/set the date" },
+    { "time",     "time [HH:MM[:SS]] - show/set the time" },
+    { "timezone", "timezone - show/set the timezone" },
+    { "sntp",     "sntp | ntpsync [server] - sync the clock via SNTP" },
+    { "wifi",     "wifi status | scan [/b] | diag | connect [ssid pass] | disconnect" },
+    { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off>" },
+    { "usb",      "usb status | ls [path] | keyboard <on|off> | mouse <on|off>" },
+    { "httpd",    "httpd status | start | stop - HTTP file server on port 80" },
+    { "netstat",  "netstat - active TCP/UDP connections and listeners" },
+    { "ipconfig", "ipconfig [/all] - IP configuration" },
+    { "ping",     "ping <host-or-ip> [count] - ICMP echo" },
+    { "dns",      "dns | nslookup <hostname> - resolve a hostname" },
+    { "httpget",  "httpget | wget <url> [localfile] - download over HTTP(S)" },
+    { "c6ota",    "c6ota <sd:/path | http[s]://url | default> - OTA the ESP32-C6 firmware" },
+    { "camera",   "camera init | snap <filename> - camera stack (stub: not wired)" },
+};
+
+#define SHELL_HELP_ENTRY_COUNT \
+    ((int)(sizeof(s_shell_help_entries) / sizeof(s_shell_help_entries[0])))
+
+/** Print one help entry with the given label prefix. */
+static void shell_help_print_entry(const shell_help_entry_t *e)
 {
+    if (e == NULL) {
+        return;
+    }
+    shell_transcript_appendf_ansi("  " SH_EXE "%-12s" SH_RST " %s\n", e->name, e->summary);
+}
+
+void shell_command_help(int argc, char **argv)
+{
+    /* help <cmd> - print one entry */
+    if (argc >= 2 && argv[1] != NULL &&
+        argv[1][0] != '\0' && argv[1][0] != '/') {
+        int i;
+        for (i = 0; i < SHELL_HELP_ENTRY_COUNT; i++) {
+            if (shell_text_equals_ignore_case(argv[1], s_shell_help_entries[i].name)) {
+                shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell: %s" SH_RST "\n",
+                                              s_shell_help_entries[i].name);
+                shell_help_print_entry(&s_shell_help_entries[i]);
+                shell_transcript_appendf_ansi(SH_MUTE "Run " SH_EXE "help /all" SH_RST
+                                              SH_MUTE " to list every command.\n" SH_RST);
+                return;
+            }
+        }
+        shell_transcript_appendf_ansi(SH_ERR "help: unknown command '%s'\n" SH_RST,
+                                      argv[1]);
+        shell_transcript_appendf_ansi(SH_MUTE "Try " SH_EXE "help /all" SH_RST
+                                      SH_MUTE " for the full command list.\n" SH_RST);
+        return;
+    }
+
+    /* help /all - full offline command reference */
+    if (argc >= 2 && argv[1] != NULL &&
+        (shell_text_equals_ignore_case(argv[1], "/all") ||
+         shell_text_equals_ignore_case(argv[1], "/?"))) {
+        int i;
+        shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell Command Reference (" SH_RST
+                                      SH_NUM "%d" SH_RST SH_SUBHEAD " commands)" SH_RST "\n",
+                                      SHELL_HELP_ENTRY_COUNT);
+        for (i = 0; i < SHELL_HELP_ENTRY_COUNT; i++) {
+            shell_help_print_entry(&s_shell_help_entries[i]);
+        }
+        shell_transcript_appendf_ansi(SH_MUTE "Offline reference: every command above is runnable. "
+                                      "Run " SH_EXE "help <command>" SH_RST SH_MUTE
+                                      " for a single line.\n" SH_RST);
+        return;
+    }
+
+    /* help - quick summary (existing curated list) */
     shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell Commands:" SH_RST "\n");
+    if (s_command_ops.sd_is_mounted != NULL && !s_command_ops.sd_is_mounted()) {
+        shell_transcript_appendf_ansi(SH_MUTE "No SD card detected - insert a microSD card to use files, "
+                                      "config, and scripts.\n" SH_RST);
+    }
     shell_transcript_appendf_ansi("  " SH_EXE "help" SH_RST " | sysinfo | clear/cls | reboot | version/ver | about | debug | mem\n");
     shell_transcript_appendf_ansi("  " SH_EXE "ps" SH_RST " | " SH_EXE "tasks" SH_RST " | " SH_EXE "top" SH_RST " [/b] - FreeRTOS task list (name, state, priority, core, stack, CPU%)\n");
     shell_transcript_appendf_ansi("  " SH_EXE "brightness" SH_RST " <0-100> | " SH_EXE "rotate" SH_RST " <0|90|180|270> | " SH_EXE "battery" SH_RST " | " SH_EXE "volume" SH_RST " <0-100>\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "config" SH_RST " [KEY=VALUE|save|reset [key]|factory] - persistent settings (CONFIG.SYS)\n");
     shell_transcript_appendf_ansi("  " SH_EXE "gpio" SH_RST " list | status | read <pin> | set <pin> <0|1>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "cd" SH_RST " [path] | " SH_EXE "copy" SH_RST " <src> <dst> | " SH_EXE "move" SH_RST " <src> <dst>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "dir" SH_RST " [path] [/W] [/P] [/S] [/B] [/L] [/A:attrs] [/O:order]\n");
@@ -2452,6 +2708,12 @@ void shell_command_help(void)
     shell_transcript_appendf_ansi(SH_MUTE "Pipes:" SH_RST " cmd1 | cmd2 | cmd3 (up to %d stages)\n", P4_CONFIG_PIPE_STAGE_MAX);
     shell_transcript_appendf_ansi(SH_MUTE "Chaining:" SH_RST " a & b (both) | a && b (if a works) | a || b (if a fails)\n");
     shell_transcript_appendf_ansi(SH_MUTE "Quoting:" SH_RST " \"text\" groups, 'text' is literal, ^c escapes one character\n");
+    shell_transcript_appendf_ansi(SH_SUBHEAD "Getting started:" SH_RST " " SH_EXE "dir" SH_RST " | " SH_EXE "cd" SH_RST " <path> | "
+                                  SH_EXE "write" SH_RST " <file> <text> | " SH_EXE "type" SH_RST " <file> | "
+                                  SH_EXE "edit" SH_RST " <file> | " SH_EXE "config" SH_RST " | "
+                                  SH_EXE "wifi connect" SH_RST " <ssid> <pass>\n");
+    shell_transcript_appendf_ansi(SH_MUTE "Full offline reference: " SH_EXE "help /all" SH_RST
+                                  SH_MUTE " | one command: " SH_EXE "help <command>" SH_RST "\n");
 }
 
 void shell_command_sysinfo(void)
@@ -2474,6 +2736,14 @@ void shell_command_sysinfo(void)
                              P4_CONFIG_VERSION_MAJOR,
                              P4_CONFIG_VERSION_MINOR,
                              P4_CONFIG_VERSION_PATCH);
+    {
+        const esp_app_desc_t *d = esp_app_get_description();
+        const char *date = (d != NULL) ? d->date : "n/a";
+        const char *time = (d != NULL) ? d->time : "n/a";
+        const char *git  = (d != NULL) ? d->version : "n/a";
+        shell_transcript_appendf_ansi("  " SH_LBL "build:" SH_RST " %s %s\n", date, time);
+        shell_transcript_appendf_ansi("  " SH_LBL "git:" SH_RST " %s\n", git);
+    }
     if (time_is_synchronized()) {
         shell_transcript_appendf_ansi("  " SH_LBL "time:" SH_RST " %s %s " SH_OK "(synced)" SH_RST "\n",
                                  time_get_formatted(),
@@ -2595,6 +2865,14 @@ void shell_command_version(void)
                              P4_CONFIG_VERSION_MAJOR,
                              P4_CONFIG_VERSION_MINOR,
                              P4_CONFIG_VERSION_PATCH);
+    {
+        const esp_app_desc_t *d = esp_app_get_description();
+        const char *date = (d != NULL) ? d->date : "n/a";
+        const char *time = (d != NULL) ? d->time : "n/a";
+        const char *git  = (d != NULL) ? d->version : "n/a";
+        shell_transcript_appendf_ansi("  " SH_LBL "build:" SH_RST " %s %s\n", date, time);
+        shell_transcript_appendf_ansi("  " SH_LBL "git:" SH_RST " %s\n", git);
+    }
     if (idf_ver != NULL) {
         shell_transcript_appendf_ansi("  " SH_LBL "idf:" SH_RST " %s\n", idf_ver);
     } else {
@@ -2629,11 +2907,19 @@ void shell_command_about(void)
     uint32_t uptime_sec = (uint32_t)(uptime_us / 1000000ULL);
     const char *idf_ver = esp_get_idf_version();
 
-    shell_transcript_appendf_ansi(SH_HEAD SH_BOLD "P4MiniShell" SH_RST " - Embedded DOS-style command shell\n");
+    shell_transcript_appendf_ansi(SH_HEAD SH_BOLD "%s" SH_RST " - Embedded DOS-style command shell\n", P4_CONFIG_PRODUCT_NAME);
     shell_transcript_appendf_ansi("  " SH_LBL "about.version:" SH_RST " %d.%d.%d\n",
                              P4_CONFIG_VERSION_MAJOR,
                              P4_CONFIG_VERSION_MINOR,
                              P4_CONFIG_VERSION_PATCH);
+    {
+        const esp_app_desc_t *d = esp_app_get_description();
+        const char *date = (d != NULL) ? d->date : "n/a";
+        const char *time = (d != NULL) ? d->time : "n/a";
+        const char *git  = (d != NULL) ? d->version : "n/a";
+        shell_transcript_appendf_ansi("  " SH_LBL "about.build:" SH_RST " %s %s\n", date, time);
+        shell_transcript_appendf_ansi("  " SH_LBL "about.git:" SH_RST " %s\n", git);
+    }
     shell_transcript_appendf_ansi("  " SH_LBL "about.board:" SH_RST " %s (%s)\n", SHELL_BOARD_REQUESTED, SHELL_BOARD_DETECTED);
     if (idf_ver != NULL) {
         shell_transcript_appendf_ansi("  " SH_LBL "about.idf:" SH_RST " %s\n", idf_ver);
@@ -2649,6 +2935,20 @@ void shell_command_about(void)
                              (uptime_sec % 3600) / 60,
                              uptime_sec % 60);
     shell_transcript_appendf_ansi("  " SH_LBL "about.tasks:" SH_RST " %" PRIu32 "\n", task_count);
+
+    /* License: proprietary notice + third-party summary (always surfaced). */
+    shell_transcript_appendf_ansi(SH_SUBHEAD "License" SH_RST "\n");
+    shell_transcript_appendf_ansi("  " SH_LBL "license:" SH_RST " %s\n", P4_CONFIG_COPYRIGHT_NOTICE);
+    shell_transcript_appendf_ansi("  " SH_MUTE "This firmware is proprietary software. Redistribution or "
+                                  "modification without written permission is not permitted.\n" SH_RST);
+    shell_transcript_appendf_ansi(SH_SUBHEAD "Third-party components" SH_RST "\n");
+    shell_transcript_appendf_ansi("  ESP-IDF / esp_app_format (Espressif) - Apache-2.0\n");
+    shell_transcript_appendf_ansi("  LVGL (LVGL Kft) - MIT\n");
+    shell_transcript_appendf_ansi("  esp_lvgl_port, esp_hosted, esp_wifi_remote, led_strip, board BSP (Espressif) - Apache-2.0\n");
+    shell_transcript_appendf_ansi("  FreeRTOS kernel - MIT | lwIP - BSD-3-Clause | FatFs - BSD-1-Clause\n");
+    shell_transcript_appendf_ansi("  protobuf-c - BSD-2-Clause | usb host stack (Espressif) - Apache-2.0\n");
+    shell_transcript_appendf_ansi("  " SH_MUTE "Full license texts ship in the project's managed_components/ "
+                                  "directories.\n" SH_RST);
 }
 
 void shell_command_mem(void)
@@ -3360,6 +3660,46 @@ char *shell_unescape_in_place(char *text)
     return text;
 }
 
+/**
+ * Strip caret escapes (`^c` -> `c`) from a string in place WITHOUT removing
+ * quote delimiters. Used by `echo`, which prints the raw remainder of the
+ * command line and must keep `"..."` visible (matching DOS) while still
+ * consuming a caret that escapes the following character (`echo a^&b` -> `a&b`).
+ *
+ * A caret inside single quotes is literal (the same rule the operator scanner
+ * uses); a trailing caret with nothing after it is kept.
+ */
+char *shell_unescape_carets_in_place(char *text)
+{
+    shell_quote_state_t state = SHELL_QUOTE_NONE;
+    char *read;
+    char *write;
+
+    if (text == NULL) {
+        return NULL;
+    }
+
+    read = text;
+    write = text;
+
+    while (*read != '\0') {
+        if (*read == P4_CONFIG_ESCAPE_CHAR && state != SHELL_QUOTE_SINGLE && read[1] != '\0') {
+            *write++ = read[1];
+            read += 2;
+            continue;
+        }
+        if (*read == '"' && state != SHELL_QUOTE_SINGLE) {
+            state = (state == SHELL_QUOTE_DOUBLE) ? SHELL_QUOTE_NONE : SHELL_QUOTE_DOUBLE;
+        } else if (*read == '\'' && state != SHELL_QUOTE_DOUBLE) {
+            state = (state == SHELL_QUOTE_SINGLE) ? SHELL_QUOTE_NONE : SHELL_QUOTE_SINGLE;
+        }
+        *write++ = *read++;
+    }
+
+    *write = '\0';
+    return text;
+}
+
 int shell_split_args(char *text, char **argv, int max_args)
 {
     int argc = 0;
@@ -3635,6 +3975,35 @@ void shell_init(void)
     /* Initialize UART console lock */
     if (s_uart_console_lock == NULL) {
         s_uart_console_lock = xSemaphoreCreateMutex();
+    }
+
+    /* Allocate the large transcript and clipboard buffers from PSRAM so the
+     * tight internal heap stays available for DMA-capable users (WiFi/SDIO
+     * transport mempool, USB-Serial/JTAG rings). */
+    if (s_transcript == NULL) {
+        s_transcript = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_transcript == NULL) {
+            s_transcript = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES, MALLOC_CAP_8BIT);
+        }
+    }
+    if (s_transcript_ansi == NULL) {
+        s_transcript_ansi = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_transcript_ansi == NULL) {
+            s_transcript_ansi = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES, MALLOC_CAP_8BIT);
+        }
+    }
+    if (s_clipboard == NULL) {
+        s_clipboard = heap_caps_malloc(SHELL_CLIPBOARD_BYTES,
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_clipboard == NULL) {
+            s_clipboard = heap_caps_malloc(SHELL_CLIPBOARD_BYTES, MALLOC_CAP_8BIT);
+        }
+    }
+    if (s_transcript == NULL || s_transcript_ansi == NULL || s_clipboard == NULL) {
+        shell_record_errorf("shell", ESP_ERR_NO_MEM,
+                            "Failed to allocate transcript/clipboard buffers");
     }
 
     /* Interactive keypress queue used by pause, choice, and more. Created

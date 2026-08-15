@@ -231,6 +231,14 @@ void networking_wifi_set_boot_credentials(const char *ssid, const char *password
  */
 void networking_wifi_set_boot_autoconnect(bool enabled);
 
+/**
+ * Read whether the Wi-Fi watchdog retries a connection to the stored target
+ * SSID (the CONFIG.SYS `WIFI_AUTOCONNECT=` policy).
+ *
+ * @return true when watchdog retry is allowed, false when suppressed.
+ */
+bool networking_wifi_get_boot_autoconnect(void);
+
 // ---- Status helpers ----
 const char *networking_wifi_state_string(void);
 networking_wifi_state_t networking_wifi_state(void);

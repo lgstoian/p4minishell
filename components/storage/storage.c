@@ -19,6 +19,7 @@
 #include "p4minishell_config.h"
 #include "bsp/esp-bsp.h"
 #include "sdmmc_cmd.h"
+#include "driver/sdmmc_host.h"
 #include "esp_log.h"
 #include <ctype.h>
 #include <errno.h>
@@ -49,6 +50,11 @@ static char s_shell_cwd[SHELL_SD_PATH_BYTES];
 static bool s_sd_persistent_mounted;  /* true while the card is mounted */
 static bool s_sd_ejected;             /* set by sdeject to block auto-remount */
 
+/* First-mount hook: fires once per boot when the card mounts for the first
+ * time, so main can generate default boot files and show a welcome. */
+static void (*s_sd_first_mount_callback)(void) = NULL;
+static bool s_sd_first_mount_fired = false;
+
 /* Pending `<` or pipe input source for the text-processing commands */
 static char s_input_redirect[SHELL_SD_PATH_BYTES];
 static bool s_input_redirect_active;
@@ -56,6 +62,33 @@ static bool s_input_redirect_active;
 /* ========================================================================
  * SD SESSION
  * ======================================================================== */
+
+static void storage_sd_mark_mounted(void);
+
+/**
+ * Pre-initialize the shared SDMMC host driver once, synchronously, before any
+ * other boot component touches it.
+ *
+ * The SD card (slot 0, via bsp_sdcard_mount -> esp_vfs_fat_sdmmc_mount) and
+ * the ESP-Hosted C6 transport (slot 1, via esp_hosted_init ->
+ * eh_host_port_sdio_init) both call sdmmc_host_init() at boot from different
+ * tasks. sdmmc_host_init() is NOT thread-safe (it checks/sets the global
+ * s_host_ctx.intr_handle without a lock), so a concurrent double-call corrupts
+ * the host driver state and makes sdmmc_host_wait_for_event time out, failing
+ * BOTH slots (N1). Initializing the host here first makes every later call hit
+ * the driver's idempotent "already initialized, skip" branch, so the race can
+ * never occur. Call once from app_main before networking_init().
+ */
+esp_err_t storage_sdmmc_host_preinit(void)
+{
+    esp_err_t error = sdmmc_host_init();
+
+    if (error != ESP_OK) {
+        ESP_LOGW(STORAGE_TAG, "SDMMC host pre-init failed (0x%x); boot components will retry it",
+                 (unsigned int)error);
+    }
+    return error;
+}
 
 /**
  * Begin a guarded SD access session.
@@ -91,19 +124,55 @@ esp_err_t shell_sd_begin(shell_sd_session_t *session)
     error = bsp_sdcard_mount();
     if (error == ESP_OK) {
         session->mounted_here = true;
-        s_sd_persistent_mounted = true;
-        header_update_sd(HEADER_SD_MOUNTED);
+        storage_sd_mark_mounted();
         return ESP_OK;
     }
 
     if (error == ESP_ERR_INVALID_STATE) {
         /* Already mounted (BSP internal state) */
-        s_sd_persistent_mounted = true;
-        header_update_sd(HEADER_SD_MOUNTED);
+        storage_sd_mark_mounted();
         return ESP_OK;
     }
 
     return error;
+}
+
+/** Mark the card as mounted, update the header icon, and fire the one-shot
+ *  first-mount callback so main can generate defaults + show a welcome. */
+static void storage_sd_mark_mounted(void)
+{
+    bool first = !s_sd_persistent_mounted && !s_sd_first_mount_fired;
+
+    s_sd_persistent_mounted = true;
+    header_update_sd(HEADER_SD_MOUNTED);
+    if (first) {
+        s_sd_first_mount_fired = true;
+        if (s_sd_first_mount_callback != NULL) {
+            s_sd_first_mount_callback();
+        }
+    }
+}
+
+void storage_register_sd_first_mount_callback(void (*callback)(void))
+{
+    s_sd_first_mount_callback = callback;
+}
+
+void shell_command_sd_mount(void)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    /* Clear the eject latch so a re-inserted card can be mounted again
+     * without rebooting, then try the normal mount path. */
+    s_sd_ejected = false;
+    error = shell_sd_begin(&session);
+    if (error == ESP_OK) {
+        shell_print_ok("SD card mounted");
+    } else {
+        shell_print_error("sd: SD card not present - insert and retry");
+    }
+    shell_sd_end(&session, "sd");
 }
 
 void shell_sd_end(shell_sd_session_t *session, const char *operation)
@@ -1596,6 +1665,7 @@ void storage_init(void)
     snprintf(s_shell_cwd, sizeof(s_shell_cwd), "%s", BSP_SD_MOUNT_POINT);
     s_sd_persistent_mounted = false;
     s_sd_ejected = false;
+    s_sd_first_mount_fired = false;
     storage_clear_input_redirect();
 
     s_initialized = true;

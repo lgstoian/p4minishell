@@ -27,6 +27,7 @@
 #include "bsp/esp-bsp.h"
 
 #include "c6ota.h"
+#include "storage.h"
 #include "p4minishell_config.h"
 
 /* ---- Backward-compatibility aliases ---- */
@@ -269,7 +270,7 @@ static esp_err_t c6ota_vfs_to_fatfs_path(const char *vfs_path, char *fatfs_path,
     return ESP_OK;
 }
 
-#if CONFIG_ESP_HOSTED_ENABLED
+#if CONFIG_ESP_HOSTED
 static esp_err_t c6ota_parse_header(const uint8_t *buffer,
                                     size_t buffer_size,
                                     char *version,
@@ -889,7 +890,7 @@ static esp_err_t c6ota_run_sd_source(const char *source, char *failure_hint, siz
     networking_wifi_restore_state_t restore_state = { 0 };
     uint8_t *payload = NULL;
     char incoming_version[32] = "unknown";
-    bool mounted_here = false;
+    shell_sd_session_t sd_session;
     bool used_default = false;
     bool ota_started = false;
     bool activate_supported = false;
@@ -904,11 +905,13 @@ static esp_err_t c6ota_run_sd_source(const char *source, char *failure_hint, siz
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Use the shell's persistent SD mount rather than mounting directly: a
+     * second bsp_sdcard_mount() while the shell holds the card trips the BSP
+     * SD power LDO (already in use) and fails the mount. shell_sd_begin()
+     * returns success when the card is already mounted. */
     c6ota_emit_asyncf("c6ota: mounting SD card for %s\n", source);
-    error = bsp_sdcard_mount();
-    if (error == ESP_OK) {
-        mounted_here = true;
-    } else if (error != ESP_ERR_INVALID_STATE) {
+    error = shell_sd_begin(&sd_session);
+    if (error != ESP_OK) {
         snprintf(failure_hint, failure_hint_size, "SD mount failed - insert the card and retry");
         return error;
     }
@@ -1052,15 +1055,7 @@ cleanup:
     if (firmware != NULL) {
         fclose(firmware);
     }
-    if (mounted_here) {
-        esp_err_t unmount_error = bsp_sdcard_unmount();
-
-        if (unmount_error != ESP_OK) {
-            c6ota_emit_asyncf("c6ota: SD unmount warning: %s (0x%x)\n",
-                              esp_err_to_name(unmount_error),
-                              (unsigned int)unmount_error);
-        }
-    }
+    shell_sd_end(&sd_session, "c6ota");
     c6ota_free_transfer_buffer(payload);
     return error;
 }
@@ -1080,7 +1075,7 @@ static void c6ota_task(void *arg)
         return;
     }
 
-#if CONFIG_ESP_HOSTED_ENABLED
+#if CONFIG_ESP_HOSTED
     c6ota_emit_asyncf("c6ota: preparing %s\n", request->source);
     if (request->mode == C6OTA_MODE_SD) {
         error = c6ota_run_sd_source(request->source, failure_hint, sizeof(failure_hint));
@@ -1172,7 +1167,7 @@ bool c6ota_try_handle_input(const char *input)
 
 void c6ota_perform(const char *source)
 {
-#if !CONFIG_ESP_HOSTED_ENABLED
+#if !CONFIG_ESP_HOSTED
     (void)source;
     c6ota_emit_syncf("%s", "c6ota: unavailable because ESP-Hosted is disabled in sdkconfig\n");
     c6ota_record_warningf("Rejected because ESP-Hosted is disabled");

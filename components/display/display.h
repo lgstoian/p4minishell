@@ -256,6 +256,13 @@ void *display_get_touch_handle(void);
  */
 void display_register_ui_rebuild_callback(void (*rebuild_fn)(void));
 
+/**
+ * Schedule a full UI rebuild (deinit + init) on the LVGL task via
+ * lv_async_call. Safe from any task context. Used when a runtime setting that
+ * changes the screen layout (e.g. hiding the header bar) takes effect.
+ */
+void display_schedule_ui_rebuild(void);
+
 #ifdef __cplusplus
 }
 #endif

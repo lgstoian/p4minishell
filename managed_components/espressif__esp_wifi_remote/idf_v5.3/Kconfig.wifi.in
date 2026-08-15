@@ -412,7 +412,8 @@ config WIFI_RMT_SLP_BEACON_LOST_OPT # ignore: multiple-definition
 config WIFI_RMT_SLP_BEACON_LOST_TIMEOUT # ignore: multiple-definition
     int "Beacon loss timeout"
     range 5 100
-    default 10
+    default 25 if ESP_COEX_SW_COEXIST_ENABLE
+    default 10 if (!ESP_COEX_SW_COEXIST_ENABLE)
     depends on WIFI_RMT_SLP_BEACON_LOST_OPT
     help
         Timeout time for close rf phy when beacon loss occurs, Unit: 1024 microsecond.
@@ -585,11 +586,16 @@ config WIFI_RMT_MBO_SUPPORT # ignore: multiple-definition
 config WIFI_RMT_ENABLE_ROAMING_APP # ignore: multiple-definition
     bool "Advanced support for Wi-Fi Roaming (Experimental)"
     depends on IDF_EXPERIMENTAL_FEATURES
+    select WIFI_RMT_11KV_SUPPORT
     default n
     help
         Enable Espressif's roaming app to allow for efficient Wi-Fi roaming.
         This includes configurable periodic environment scans, maintaining a cache of the
         best APs, handling low rssi events etc.
+
+        802.11k/v is selected so roaming-app scans can deliver beacon/probe frames to
+        the supplicant BSS table used by candidate_security_match() for RSN IE checks.
+        Without it, PMF/SAE-PK/H2E validation can fall back to coarse authmode heuristics.
 
         Risk Warning
         Please note that this feature is still experimental and enabling this potentially can
@@ -607,6 +613,18 @@ config WIFI_RMT_DPP_SUPPORT # ignore: multiple-definition
     select WIFI_RMT_MBEDTLS_CRYPTO
     help
         Select this option to enable WiFi Easy Connect Support.
+
+config WIFI_RMT_P256_ACCEL # ignore: multiple-definition
+    bool "Enable P-256 crypto acceleration"
+    depends on WIFI_RMT_MBEDTLS_CRYPTO
+    default n
+    help
+        Enable Espressif-specific P-256 acceleration in the WPA supplicant
+        crypto layer. This reduces SAE and DPP latency on supported targets
+        at the cost of additional code size.
+
+        If disabled, the supplicant falls back to the generic Mbed TLS
+        implementation.
 
 config WIFI_RMT_11R_SUPPORT # ignore: multiple-definition
     bool "Enable 802.11R (Fast Transition) Support"
@@ -715,12 +733,6 @@ config WIFI_RMT_DEBUG_PRINT # ignore: multiple-definition
         Enabling this could increase the build size ~60kb
         depending on the project logging level.
 
-config WIFI_RMT_TESTING_OPTIONS # ignore: multiple-definition
-    bool "Add DPP testing code"
-    default n
-    help
-        Select this to enable unity test for DPP.
-
 config WIFI_RMT_ENTERPRISE_SUPPORT # ignore: multiple-definition
     bool "Enable enterprise option"
     default y
@@ -743,6 +755,22 @@ config WIFI_RMT_ENT_FREE_DYNAMIC_BUFFER # ignore: multiple-definition
     help
         Select this configuration to free dynamic buffers during WiFi enterprise connection.
         This will enable chip to reduce heap consumption during WiFi enterprise connection.
+
+config WIFI_RMT_MODEM_RF_FLAG_UPDATE_DEBUG # ignore: multiple-definition
+    bool "Enable debug assertions for modem RF flag update"
+    depends on WIFI_RMT_ENHANCED_LIGHT_SLEEP
+    default n
+    help
+        Enable debug assertions to verify modem RF flag update operations.
+        This option enables assert checks to verify that modem RF power state
+        is correctly cleared before pmu sleep.
+
+config WIFI_RMT_PASSIVE_HIDDEN_AP_SUPPORT # ignore: multiple-definition
+    bool "Support station connection to hidden APs using passive scan when country policy is auto"
+    default n
+    help
+        Select this option to enable/disable support for station connections
+        to hidden APs using passive scan when the country policy is set to auto.
 
 if !ESP_WIFI_ENABLED
     config ESP_WIFI_STATIC_RX_BUFFER_NUM # ignore: multiple-definition
@@ -1062,6 +1090,13 @@ if WIFI_RMT_DPP_SUPPORT
         default WIFI_RMT_DPP_SUPPORT
 endif
 
+if WIFI_RMT_P256_ACCEL
+    config ESP_WIFI_P256_ACCEL # ignore: multiple-definition
+        bool
+        depends on WIFI_RMT_MBEDTLS_CRYPTO
+        default WIFI_RMT_P256_ACCEL
+endif
+
 if WIFI_RMT_11R_SUPPORT
     config ESP_WIFI_11R_SUPPORT # ignore: multiple-definition
         bool
@@ -1147,12 +1182,6 @@ if WIFI_RMT_DEBUG_PRINT
         default WIFI_RMT_DEBUG_PRINT
 endif
 
-if WIFI_RMT_TESTING_OPTIONS
-    config ESP_WIFI_TESTING_OPTIONS # ignore: multiple-definition
-        bool
-        default WIFI_RMT_TESTING_OPTIONS
-endif
-
 if WIFI_RMT_ENTERPRISE_SUPPORT
     config ESP_WIFI_ENTERPRISE_SUPPORT # ignore: multiple-definition
         bool
@@ -1164,6 +1193,19 @@ if WIFI_RMT_ENT_FREE_DYNAMIC_BUFFER
         bool
         depends on WIFI_RMT_ENTERPRISE_SUPPORT
         default WIFI_RMT_ENT_FREE_DYNAMIC_BUFFER
+endif
+
+if WIFI_RMT_MODEM_RF_FLAG_UPDATE_DEBUG
+    config ESP_WIFI_MODEM_RF_FLAG_UPDATE_DEBUG # ignore: multiple-definition
+        bool
+        depends on WIFI_RMT_ENHANCED_LIGHT_SLEEP
+        default WIFI_RMT_MODEM_RF_FLAG_UPDATE_DEBUG
+endif
+
+if WIFI_RMT_PASSIVE_HIDDEN_AP_SUPPORT
+    config ESP_WIFI_PASSIVE_HIDDEN_AP_SUPPORT # ignore: multiple-definition
+        bool
+        default WIFI_RMT_PASSIVE_HIDDEN_AP_SUPPORT
 endif
 
 endif # ESP_WIFI_ENABLED

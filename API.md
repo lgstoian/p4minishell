@@ -317,6 +317,22 @@ void        shell_power_idle_tick(void);
   `shell_command_ops_t.pm_notify_activity` hook (used by the UART console submit path);
   `shell_power_idle_tick()` runs on the LVGL task from the header-refresh timer.
 
+### Persistent settings (`config` command)
+`components/command/config_cmd.c` implements `config` (declared in `config_cmd.h`):
+```c
+void shell_command_config(int argc, char **argv);
+int  config_directive_get(const char *text, const char *key, char *out, size_t out_size);
+bool config_directive_upsert(char *text, size_t cap, const char *key, const char *value);
+bool config_directive_remove(char *text, size_t cap, const char *key);
+```
+- The directive helpers are pure text functions (unit-tested, no I/O): they read, upsert
+  (replace-all + append), and remove `KEY=value` lines in a CONFIG.SYS text buffer while
+  preserving comments, blank lines, and unknown directives.
+- `config` is the ONLY runtime writer of CONFIG.SYS. It persists brightness/rotation/volume/
+  prompt/wifi-autoconnect/display-timeout plus the `OSK` and `HEADER` boot prefs through the
+  owning modules' public APIs, and `config factory` deletes CONFIG.SYS, AUTOEXEC.BAT,
+  WIFI.KNOWN, ALIASES.BAT, and HISTORY.TXT after a destructive confirmation.
+
 ### Lifecycle
 ```c
 void command_init(void);           /* storage_init() + batch_init(), then registers both ops tables */
@@ -356,13 +372,21 @@ typedef struct { bool mounted_here; } shell_sd_session_t;
 esp_err_t shell_sd_begin(shell_sd_session_t *session);
 void      shell_sd_end(shell_sd_session_t *session, const char *operation);
 bool      storage_sd_is_mounted(void);
+void      storage_register_sd_first_mount_callback(void (*callback)(void));
 void      shell_command_sd_eject(void);
+void      shell_command_sd_mount(void);
 ```
 - `shell_sd_begin()` is the only mount path in the firmware. It returns `ESP_OK` when the card is
   usable, `ESP_ERR_INVALID_STATE` when the card was explicitly ejected, or the BSP mount error.
 - The mount is persistent: `shell_sd_end()` deliberately does not unmount. It exists so every
   command has a symmetric cleanup point. Only `shell_command_sd_eject()` tears the mount down.
 - Every `shell_sd_begin()` must have a matching `shell_sd_end()` on every return path.
+- `storage_register_sd_first_mount_callback()` installs a one-shot callback invoked once per boot
+  the first time the card mounts (startup, or a freshly-inserted card mounted by the first SD
+  command). `main.c` wires it to `boot_on_sd_first_mount()`, which generates default boot files
+  and prints the first-run welcome.
+- `shell_command_sd_mount()` clears the eject latch and mounts, so a card re-inserted after
+  `sdeject` works without rebooting.
 
 ### Path resolution and conversion
 ```c
@@ -850,6 +874,11 @@ The display manager (`components/display/`) is the central controller for all di
   - Register a callback invoked via `lv_async_call` after rotation changes.
   - The shell registers `shell_build_ui()` here so the display manager can trigger full UI rebuilds.
 
+- `void display_schedule_ui_rebuild(void)`
+  - Schedule the registered UI rebuild on the LVGL task via `lv_async_call`. Safe from any task
+    context; used when a runtime setting that changes the layout (e.g. `config HEADER=OFF`) takes
+    effect.
+
 ### Rotation Control
 
 - `display_rotation_t display_get_rotation(void)`
@@ -986,6 +1015,12 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
   - Builds the fixed non-scrollable top bar, scales its height from the active display resolution, and places status icons left-to-right with the notification area in the center.
   - System panel (MEM | CPU | BAT) is on the far right, all dynamically linked to FreeRTOS runtime stats.
 
+- `void header_set_visible(bool visible)` / `bool header_get_visible(void)`
+  - Show or hide the whole header bar. The flag survives `header_deinit()`/`header_init()`,
+    so a bar hidden by `config HEADER=OFF` stays hidden across a UI rebuild. The window manager
+    reports a zero-height header region while hidden (transcript expands). The caller schedules
+    the relayout via `display_schedule_ui_rebuild()` after a runtime toggle.
+
 - `void header_update_status(void)`
   - Request a header re-render from the currently cached state.
   - Useful after a batch of `header_update_*` calls when the caller wants one final refresh point.
@@ -1073,7 +1108,12 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
 - `void networking_wifi_disconnect(void)`
   - Shell-facing Wi-Fi helpers used when the parser wants explicit subcommand entry points.
 
-### Persistent known networks (`wifi_known.h`)
+#- `void networking_wifi_set_boot_autoconnect(bool enabled)` /
+  `bool networking_wifi_get_boot_autoconnect(void)`
+  - Set/read whether the Wi-Fi watchdog retries the stored target SSID (the CONFIG.SYS
+    `WIFI_AUTOCONNECT=` policy and the `config WIFI_AUTOCONNECT` setting).
+
+## Persistent known networks (`wifi_known.h`)
 ```c
 void networking_wifi_known_init(const networking_host_ops_t *ops);
 esp_err_t networking_wifi_known_load(void);

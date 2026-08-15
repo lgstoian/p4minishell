@@ -4,4 +4,5 @@ idf_component_register(
     REQUIRES
         lvgl__lvgl
         espressif__esp_lvgl_port
+        esp_app_format
 )

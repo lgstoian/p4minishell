@@ -49,6 +49,7 @@
 #include "ansi_palette.h"
 #include "shell.h"
 #include "boot.h"
+#include "storage.h"
 #include "usb.h"
 #include "windows.h"
 
@@ -643,6 +644,11 @@ void app_main(void)
     shell_init();
     command_init();
 
+    /* When the SD card first mounts (startup, or a card inserted later and
+     * mounted by the first SD command), generate the default boot files and
+     * print a short "SD card ready" welcome. */
+    storage_register_sd_first_mount_callback(boot_on_sd_first_mount);
+
     /* Let the display manager trigger a full UI rebuild after rotation. */
     display_register_ui_rebuild_callback(shell_rebuild_ui_callback);
 
@@ -675,6 +681,15 @@ void app_main(void)
     /* RGB status LED (WS2812 on GPIO26). Initialised before boot scripting so
      * a CONFIG.SYS `RGB=` directive can drive it during startup. */
     led_init();
+
+    /* Serialize the shared SDMMC host bring-up (N1). The SD card (slot 0) and
+     * the ESP-Hosted C6 transport (slot 1) both initialize the SDMMC host at
+     * boot from different tasks; sdmmc_host_init() is not thread-safe, so a
+     * concurrent double-call corrupts the host and fails both slots. Pre-initing
+     * the host here makes every later call hit the driver's idempotent-skip
+     * branch and eliminates the race. Must run before networking_init() (which
+     * spawns the wifi_bg task) and before any SD access. */
+    storage_sdmmc_host_preinit();
 
     networking_init(&(networking_host_ops_t){
         .transcript_append_text = shell_transcript_append_text,

@@ -107,6 +107,20 @@ extern void test_ansi_strip_to_plain(void);
 extern void test_ansi_format_width_flags(void);
 extern void test_ansi_to_lvgl_recolor(void);
 
+extern void test_config_get_simple(void);
+extern void test_config_get_case_and_spacing(void);
+extern void test_config_get_comments_and_absent(void);
+extern void test_config_get_prefix_does_not_match(void);
+extern void test_config_upsert_replaces_existing(void);
+extern void test_config_upsert_appends_when_absent(void);
+extern void test_config_upsert_dedupes_multiple_lines(void);
+extern void test_config_upsert_into_empty(void);
+extern void test_config_upsert_overflow_refused(void);
+extern void test_config_remove_existing(void);
+extern void test_config_remove_absent(void);
+extern void test_config_remove_multiple(void);
+extern void test_config_remove_last_line_no_newline(void);
+
 extern void test_editor_new_doc(void);
 extern void test_editor_insert_and_cursor(void);
 extern void test_editor_newline_split_and_join(void);
@@ -283,6 +297,23 @@ void app_main(void)
     RUN_TEST(test_ansi_strip_to_plain);
     RUN_TEST(test_ansi_format_width_flags);
     RUN_TEST(test_ansi_to_lvgl_recolor);
+    UNITY_END();
+
+    /* CONFIG.SYS directive line-editing tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_config_get_simple);
+    RUN_TEST(test_config_get_case_and_spacing);
+    RUN_TEST(test_config_get_comments_and_absent);
+    RUN_TEST(test_config_get_prefix_does_not_match);
+    RUN_TEST(test_config_upsert_replaces_existing);
+    RUN_TEST(test_config_upsert_appends_when_absent);
+    RUN_TEST(test_config_upsert_dedupes_multiple_lines);
+    RUN_TEST(test_config_upsert_into_empty);
+    RUN_TEST(test_config_upsert_overflow_refused);
+    RUN_TEST(test_config_remove_existing);
+    RUN_TEST(test_config_remove_absent);
+    RUN_TEST(test_config_remove_multiple);
+    RUN_TEST(test_config_remove_last_line_no_newline);
     UNITY_END();
 
     /* Editor document-model tests */

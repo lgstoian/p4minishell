@@ -620,8 +620,11 @@ static bool editor_doc_split_line(editor_doc_t *doc)
     if (next == NULL) {
         return false;
     }
-    /* The source may be an empty line whose text pointer is NULL; pass a
-     * safe pointer and NUL-guard the tail write below. */
+    /* Re-fetch the line: insert_line may have reallocated doc->lines, which
+     * would make the pre-insert `line` pointer stale (use-after-free). The
+     * original line stays at index `row` — the insert shifts only from
+     * row+1 upwards. */
+    line = &doc->lines[row];
     if (!editor_line_set(next, line->text != NULL ? line->text + col : "", tail_len)) {
         editor_doc_remove_line(doc, row + 1);
         return false;

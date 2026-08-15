@@ -9,6 +9,7 @@
 
 #include "esp_crt_bundle.h"
 #include "esp_err.h"
+#include "esp_log.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_hosted.h"
@@ -87,7 +88,7 @@ static int64_t s_wifi_associated_at_us;
  * with exponential backoff. This is more reliable than spawning per-disconnect
  * tasks because it handles the C6's typical boot behavior: associate then
  * immediately disconnect during 4-way handshake or DHCP. */
-#define WIFI_WATCHDOG_STACK_BYTES    4096
+#define WIFI_WATCHDOG_STACK_BYTES    8192
 #define WIFI_WATCHDOG_DELAY_MS       1000      /* initial delay before first retry */
 #define WIFI_WATCHDOG_MAX_DELAY_MS   30000     /* maximum backoff delay */
 #define WIFI_WATCHDOG_TOTAL_TIMEOUT_MS 120000  /* stop retrying after this long */
@@ -466,6 +467,14 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
         networking_record_warningf("Failed to read hosted firmware version: %s", esp_err_to_name(error));
         return error;
     }
+
+    /* Definitive co-processor firmware check: log the exact version fields the
+     * C6 reported so the running firmware can be identified (vs the corrupted
+     * reads c6ota sometimes sees). */
+    networking_schedulef("[wifi] C6 hosted firmware version: %u.%u.%u\n",
+                         (unsigned int)version.major1,
+                         (unsigned int)version.minor1,
+                         (unsigned int)version.patch1);
 
     if (version.major1 != ESP_HOSTED_VERSION_MAJOR_1 || version.minor1 != ESP_HOSTED_VERSION_MINOR_1) {
 #if P4_CONFIG_HOSTED_SKIP_VERSION_GATE
@@ -995,7 +1004,11 @@ static void networking_wifi_request_boot_restore(void)
     networking_wifi_background_request_t request = {
         .start_runtime = true,
         .connect_with_defaults = networking_wifi_defaults_available(),
+#if CONFIG_P4MINISHELL_WIFI_BOOT_DIAGNOSTIC
         .run_diagnostic = true,
+#else
+        .run_diagnostic = false,
+#endif
     };
 
     snprintf(request.origin, sizeof(request.origin), "%s", "boot");
@@ -1661,6 +1674,11 @@ esp_err_t networking_wifi_ping(const char *host, int count)
     config.timeout_ms = P4_CONFIG_PING_TIMEOUT_MS;
     config.data_size = P4_CONFIG_PING_DATA_BYTES;
     config.target_addr = ctx.target;
+    /* The default ping task stack is small and overflows once the ping
+     * callbacks printf() (which recurses through newlib lock/malloc) and run
+     * the transcript/ANSI formatting path. Give it real headroom so `ping`
+     * works reliably on this build. */
+    config.task_stack_size = 8192;
 
     callbacks.cb_args = &ctx;
     callbacks.on_ping_success = networking_ping_success_cb;
@@ -2042,6 +2060,20 @@ void networking_wifi_set_boot_autoconnect(bool enabled)
 #endif
 }
 
+bool networking_wifi_get_boot_autoconnect(void)
+{
+#if NETWORKING_WIFI_RUNTIME_ENABLED
+    bool enabled;
+
+    wifi_lock();
+    enabled = s_wifi_boot_autoconnect;
+    wifi_unlock();
+    return enabled;
+#else
+    return true;
+#endif
+}
+
 void networking_wifi_diag(void)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
@@ -2406,8 +2438,30 @@ static void networking_wifi_runtime_init(void)
     networking_wifi_append_step("esp_hosted_connect_to_slave()");
     error = esp_hosted_connect_to_slave();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
-        networking_wifi_append_error("esp_hosted_connect_to_slave()", error);
-        return;
+        /* First bring-up attempt failed. Tear the hosted transport down and
+         * retry once: a shared-SDMMC-bus glitch (N1) can leave the link wedged
+         * on the first probe, and the second attempt recovers cleanly. */
+        networking_wifi_append_step("retrying esp_hosted transport");
+        esp_err_t deinit_error = esp_hosted_deinit();
+        if (deinit_error != ESP_OK) {
+            ESP_LOGW(NETWORKING_TAG, "hosted deinit before retry: %s (0x%x)",
+                     esp_err_to_name(deinit_error), (unsigned int)deinit_error);
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        networking_wifi_append_step("esp_hosted_init() (retry)");
+        error = esp_hosted_init();
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            networking_wifi_append_error("esp_hosted_init() retry", error);
+            return;
+        }
+
+        networking_wifi_append_step("esp_hosted_connect_to_slave() (retry)");
+        error = esp_hosted_connect_to_slave();
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            networking_wifi_append_error("esp_hosted_connect_to_slave() retry", error);
+            return;
+        }
     }
 
     /* ---- Step 2: version compatibility gate ----
@@ -2523,7 +2577,7 @@ static void networking_wifi_runtime_init(void)
 #elif SOC_WIRELESS_HOST_SUPPORTED
     s_wifi_state = NETWORKING_WIFI_STATE_SKIPPED_DISABLED;
     networking_wifi_append_step("skipped: sdkconfig does not enable native Wi-Fi or ESP-Hosted Wi-Fi");
-    networking_wifi_append_step("expected CONFIG_ESP_WIFI_ENABLED, CONFIG_ESP_HOST_WIFI_ENABLED, or CONFIG_ESP_HOSTED_ENABLED from sdkconfig");
+    networking_wifi_append_step("expected CONFIG_ESP_WIFI_ENABLED, CONFIG_ESP_HOST_WIFI_ENABLED, or CONFIG_ESP_HOSTED from sdkconfig");
 #else
     s_wifi_state = NETWORKING_WIFI_STATE_SKIPPED_UNSUPPORTED;
     networking_wifi_append_step("skipped: current target does not expose Wi-Fi support");

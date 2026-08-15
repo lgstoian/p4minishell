@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "command.c" "command_ui.c"
+    SRCS "command.c" "command_ui.c" "config_cmd.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi

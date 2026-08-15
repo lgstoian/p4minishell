@@ -7,6 +7,311 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.31.0] - 2026-08-14
+
+### Added - serial file transfer (`receive` / `send`) + screenshot framing
+
+The USB-Serial/JTAG binary-transfer surface is expanded into a coherent,
+batch-friendly file-transfer and diagnostics toolset, sharing one framing
+scheme with `screenshot`:
+
+- **`receive <path> <size> [/crc]`** - host-to-device binary transfer into an
+  SD file, ACK-paced so the device's USB RX ring never drops bytes. Fully
+  backward-compatible with the previous two-argument form; the new `/crc` flag
+  has the host append a 4-byte little-endian CRC-32 trailer which the device
+  verifies (a mismatch removes the partial file and sets ERRORLEVEL 1).
+  Reports bytes, elapsed time, and KB/s on success. ERRORLEVEL: 0 ok, 1
+  transfer/IO/CRC error, 2 usage.
+- **`send <path> [offset] [count]`** - device-to-host binary transfer of an SD
+  file (or a byte range), streamed in a framed payload: 4-byte `SDFX` magic +
+  4-byte little-endian size + raw bytes + `=== TX DONE ===` marker. Bounded by
+  `P4_CONFIG_SERIAL_SEND_MAX_BYTES`. ERRORLEVEL: 0 ok, 1 IO error, 2 usage.
+- **`send /diag`** - streams a compact diagnostic report (version, board, IDF,
+  chip, heap free/internal/PSRAM, uptime, task count, cwd, Wi-Fi state) with the
+  same framing, for host-side scripting and health checks.
+- **Screenshot framing shared + hardened** - `screenshot`/`scr`/`capture` and
+  `send` now share one frame-header writer, and all binary streams go through
+  the USB-Serial/JTAG driver's raw TX (chunked) instead of `fwrite(stdout)`.
+  This removes the console VFS's CRLF translation that silently corrupted binary
+  payloads (every `0x0A` byte became `0x0D 0x0A`), and suspends the console
+  reader during the stream so no echo/input interleaves. The `BMPX` magic is
+  now the config value `P4_CONFIG_SCREENSHOT_BMP_MAGIC`; the on-the-wire
+  protocol is unchanged (a valid 1024x600x24 BMP is verified).
+- New tunables in `p4minishell_config.h` under `serial_transfer`
+  (`P4_CONFIG_SERIAL_*`) and `P4_CONFIG_SCREENSHOT_BMP_MAGIC`, all documented in
+  `p4minishell_config.yaml`.
+
+### Hardened (0.31.0 follow-up)
+- `send` frames now always end with a 4-byte little-endian CRC-32 trailer over
+  the payload (matching zlib's `crc32`), so a host can verify a frame was not
+  corrupted or interleaved with concurrent log output; empty payloads carry
+  `0x00000000`.
+- Raw serial writes are time-bounded (`P4_CONFIG_SERIAL_SEND_TIMEOUT_MS`,
+  default 10 s) so a host that stops reading can never wedge the command
+  worker — `send` aborts with ERRORLEVEL 1 instead of hanging. This matters for
+  batch files run from the on-screen UI with no serial peer.
+- `receive` error reporting now distinguishes a CRC/trailer failure from a
+  short transfer ("transfer failed - CRC mismatch or missing trailer" vs
+  "transfer incomplete").
+- Extensively verified on hardware: 25-case hardening suite covering full
+  round-trips with CRC on both directions, empty files, zero/overflow offsets
+  and counts, oversized/invalid sizes, directory targets, interrupted receives
+  (console stays responsive, no binary-poisoning), batch-file receive/send with
+  `if errorlevel` branching, repeated stress round-trips, and usage errorlevels.
+
+### Fixed
+- Binary serial output no longer inserts `\r` before every `\n` byte (the
+  console VFS CRLF translation was corrupting `send`/`screenshot` payloads).
+- `serial_write_raw` chunks writes to fit the USB-Serial/JTAG TX ring, so a
+  large single payload (e.g. a full screenshot) is never rejected by the ring.
+
+### Changed — esp_hosted 3.0.6 upgrade + header notification-timer UAF fix
+
+- Upgraded `espressif/esp_hosted` to `^3.0.6` (`esp_wifi_remote` stays
+  `^1.6.4`); the ESP32-C6 co-processor was OTA-upgraded to 3.0.6 first, then the
+  P4 host was rebuilt and flashed. This is the unified-release (RPC-V2) line.
+- P4 host Kconfig migrated to the 3.x names (`ESP_HOSTED_HOST_*`, SDIO bus
+  width/slot/pins/reset, `ESP_HOSTED_HOST_FEAT_BT`); `components/networking/
+  bluetooth.c` now calls `esp_hosted_bt_host_stack_setup()`; `c6ota.c` and
+  `networking.c` use the new `CONFIG_ESP_HOSTED` symbol.
+- Patched the managed component's `esp_hosted_host_fw_ver.h` (reported `2.12.6`
+  instead of `3.0.6`, which tripped the host/C6 version gate).
+- **Fixed a heap-corruption / LVGL blue-screen bug exposed by the upgrade:** the
+  header notification one-shot timer was a use-after-free —
+  `header_notification_timeout_cb()` never cleared `s_notification_timer`, so
+  the next notification called `lv_timer_set_period/reset/resume` on the
+  auto-deleted timer node, writing `{period, last_run, paused}` into reclaimed
+  heap memory. Cleared in `components/header/header.c`. Verified 10/10
+  fresh-boot `wifi connect` cycles with no corruption, no panic, no blue screen.
+- Hardened `lv_async_call()`/`lv_async_call_cancel()` in LVGL's `lv_async.c` to
+  take the recursive `lv_lock()` (timers were created/deleted from foreign tasks
+  while the LVGL task iterated the timer list).
+- Transport buffers prefer PSRAM on this P4 (`CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM`,
+  plus `eh_host_port_dma_alloc` / RPC ctrl-cmd / RX frame copies) to preserve
+  internal RAM. See `bugs.md` W2.
+
+### Added — offline help, license/about, and build identity
+
+Documentation and packaging polish that ships in the binary:
+
+- **`help /all` and `help <command>`** - the help command is now a full offline
+  command reference backed by a data table. `help` keeps the quick summary (with
+  a pointer to `help /all`); `help /all` (or `help /?`) lists all 99 commands
+  with one-line usage; `help <command>` prints a single entry and reports unknown
+  names. The table mirrors `command.md`, so the on-device reference stays in sync
+  with the docs.
+- **`about` now surfaces the license and third-party summary** - a `License`
+  section prints the proprietary notice (`P4_CONFIG_COPYRIGHT_NOTICE`) and a
+  `Third-party components` list naming the principal open-source components with
+  their SPDX identifiers (Apache-2.0, MIT, BSD-2/3-Clause).
+- **Version string, build date, and Git hash visible everywhere** - `version`,
+  `about`, and `sysinfo` now report the compile date/time and the Git hash (from
+  `esp_app_get_description()`, e.g. `07b9812-dirty`) alongside the semantic
+  version. A **long-press on the top status bar** shows the same build identity
+  as a transient header banner (`P4MiniShell v0.31.0 | built <date> <time> |
+  git <hash>`).
+- New config knobs `P4_CONFIG_PRODUCT_NAME` and `P4_CONFIG_COPYRIGHT_NOTICE`
+  (documented in `p4minishell_config.yaml`).
+
+### Fixed (0.31.0 debug sweep)
+- **Stale Kconfig symbol in `sdkconfig.defaults`** - `CONFIG_ESP_HOSTED_TRANSPORT_RESTART_ON_FAILURE`
+  is a 2.x name that no longer exists in esp_hosted 3.x, so the build warned
+  "unknown kconfig symbol" and the intended `=n` was silently dropped. The
+  3.x default for `CONFIG_ESP_HOSTED_HOST_TRANSPORT_RESTART_ON_FAILURE` is `y`
+  (restart the host on a runtime transport failure); the stale line meant the
+  board would auto-restart instead of leaving the failure to the app. Renamed
+  to the 3.x symbol so `=n` (handle in-app, no auto-restart) actually applies.
+  Verified 0 errors / 0 warnings on both firmware and test builds.
+- 0.31.0 sweep results: 119 unit tests pass; 68-command stress sweep with no
+  crashes; functional checks (file ops, batch, `for`, `if`, `set /a`, clipboard,
+  `fc`, `chkdsk`) pass; 5/5 WiFi connect cycles.
+
+### Fixed — N1: shared-SDMMC host bring-up race (boot-time)
+
+The SD card (SDMMC slot 0) and the ESP-Hosted C6 transport (slot 1) both
+call the **non-thread-safe** `sdmmc_host_init()` at boot from different tasks;
+a concurrent double-call corrupted the shared host driver and failed BOTH
+devices ~1 in 15 boots. Fixes:
+
+- **`storage_sdmmc_host_preinit()`** — initializes the SDMMC host once,
+  synchronously, in `app_main` before `networking_init()`, so every later call
+  from fatfs and esp_hosted hits the driver's idempotent skip and the race
+  cannot occur.
+- **Slot-scoped SD deinit** — `bsp_sdcard_mount()` (managed BSP) now deinits
+  only slot 0 on failure/unmount (`sdmmc_host_deinit_slot(0)`) instead of the
+  whole host, so a failed SD mount or `sdeject` never tears down the
+  co-processor link.
+- **Hosted bring-up retry** — `networking_wifi_runtime_init()` retries
+  `esp_hosted_connect_to_slave()` once (deinit → 50 ms → init → connect) as
+  defense-in-depth.
+
+Verified: 30/30 reboot + `wifi connect` cycles with zero bring-up failures,
+SD enumerated every boot, and `sdeject` no longer drops the hosted link
+(`wifi status` stays "started", `sd mount` re-mounts). See `bugs.md` N1.
+
+---
+
+## [0.30.0] - 2026-08-13
+
+### Milestone — version renumbering + first full test-and-debug campaign
+
+Version numbering moves from 0.24.x to 0.3X.X. This release is the result of a
+full command-surface, unit, and stress-test campaign on the board (see the new
+`bugs.md`, which replaces the old one). Eight firmware bugs were found and fixed:
+
+- **Critical — intermittent `abort()` crash (internal-DRAM heap exhaustion).**
+  The 48 KB transcript scrollback buffers lived in internal DRAM; combined with
+  newlib's per-`snprintf` lock allocation this drove internal free to ~1.7 KB and
+  caused random `abort()` reboots on any output-heavy command. The three 16 KB
+  transcript buffers (`s_transcript`, `s_transcript_ansi`, `s_transcript_staged`)
+  now live in PSRAM. Internal free is stable at ~132-179 KB and the
+  previously-100%-crashing 22-command sweep runs clean.
+- **Critical — `edit` crashed (Store access fault) when typing text + Enter.**
+  `editor_doc_split_line()` used a `&doc->lines[row]` pointer across
+  `editor_doc_insert_line()`, which can realloc/shift the array (use-after-free).
+  The line pointer is now re-fetched after the insert.
+- **High — `goto :label` broken.** `goto` prepended an extra `:` (so `goto :skip`
+  became `::skip`) and the label file position was computed with the trimmed line
+  length, jumping a byte into the line. Both fixed.
+- **Medium — literal `@`-palette markers** in `rgb status`, `bluetooth status`, and
+  `config` (palette macros passed as `%s` arguments). Markers moved into the format
+  strings.
+- **Medium — `copy`/`move` to a directory destination failed.** A destination that
+  is an existing directory now keeps the source basename (`copy f.txt dir/`).
+- **Medium — `move dir\f.txt name.txt` resolved `name.txt` in the source's
+  directory** (like `ren`) instead of the cwd. `move` now resolves cwd-relative.
+- **Medium — `if cond (cmd) else (cmd)` parenthesized blocks failed.**
+  `if` now parses balanced `(…)` blocks and the `else` branch.
+- **Medium — `call :label` unimplemented.** Implemented label subroutines with
+  `exit /b` / `goto :eof` / EOF return to the caller.
+- **Low — interactive `for` was unknown at the prompt.** `for` only ran inside
+  batch files. It is now dispatched at the prompt (`for %i in (set) do cmd`),
+  accepting the single-`%` prompt form and the `%%` batch form, with token sets,
+  wildcard sets, and per-iteration nested commands (e.g. `set /a` and pipes)
+  verified on board. The batch `for` path is unchanged.
+- **Low — caret escape `^c` was not stripped from `echo` output.** `echo a^&b`
+  printed `a^&b` (the caret was kept). `echo` now consumes caret escapes when
+  printing (`a^&b` → `a&b`, `a^^b` → `a^b`, `a^|b` → `a|b`), preserves quotes
+  (`echo "a^&b"` → `"a&b"`), keeps a caret inside single quotes literal, and
+  `echo ^on` prints `on` instead of toggling the batch echo flag.
+- **Low — `clip` subcommand typos silently clobbered the clipboard.**
+  `clip status` (or any unknown first word that looks like a subcommand) is now
+  reported as a usage error with errorlevel 2 instead of overwriting the current
+  clipboard with the word itself; literal clipboard text (`clip hello world`)
+  is unchanged.
+
+### Verification
+
+- Both firmware and test project build with 0 errors / 0 warnings.
+- On-board unit suite passes: 119 tests, 0 failures (before and after the fixes).
+- Full on-board command sweeps (system, hardware, filesystem, SD, batch, pipes,
+  chains, redirection, time, network-status, history, clipboard, editor, stress)
+  run clean: no crashes, no unknown commands, no literal `@` markers.
+- Network sweep against live AP `4G-CPE_5542` (password `1234567890`):
+  `wifi scan`/`diag` find the AP, and `wifi status`, `ipconfig`, `netstat`,
+  `httpd status`, `bluetooth status`, `ping`, `dns`, `httpget` all work or
+  degrade gracefully. **`wifi connect` has a pre-existing CRITICAL bug** (W1 in
+  `bugs.md`): it corrupts the lwIP internal heap and panics on the netif
+  IP-lost/DHCP timer a few seconds after connecting. It is not caused by this
+  campaign's code (confirmed by reverting the memory-layout changes) and needs
+  component-level work on the `esp_wifi_remote`/`esp_hosted`/lwIP integration on
+  IDF 5.5.5 — the `edit` save/quit round-trip is verified working with the
+  documented `\s`/`\q` verbs.
+
+---
+
+## [0.24.41] - 2026-08-13
+
+### Added - first-run / no-SD guidance
+
+The shell now feels intentional the first time it boots, with or without an SD
+card:
+
+- **No-SD boot is no longer silent.** When no card is present, the boot path
+  prints a muted line on the display and serial console ("No SD card detected -
+  insert a microSD card to use files, config, and scripts; type help"), shows a
+  header notification, and records a debug-log entry. Previously the only
+  message was an `ESP_LOGI` that is compiled out at the WARN log level.
+- **Minimal CONFIG.SYS + AUTOEXEC.BAT on first card mount.** The SD card is
+  already mounted lazily by the first SD command; a new one-shot first-mount
+  hook (`storage_register_sd_first_mount_callback`) now generates the
+  documented default boot files when they are missing and prints a short
+  "SD card ready" welcome (mentioning first-run file creation when it happens).
+  Existing user files are never touched.
+- **`sd mount`** clears the eject latch so a card re-inserted after `sdeject`
+  can be used again without rebooting (previously the latch blocked re-mount
+  until restart).
+- **Richer `help`**: shows a "No SD card detected" note when the card is
+  absent, and a compact **Getting Started** footer
+  (`dir | cd <path> | write <file> <text> | type <file> | edit <file> |
+  config | wifi connect <ssid> <pass>`).
+
+### Added - new public API
+
+- `storage_register_sd_first_mount_callback(cb)` — one-shot per-boot first-mount hook.
+- `shell_command_sd_mount()` — the `sd mount` subcommand.
+- `boot_ensure_default_files()` — idempotent CONFIG.SYS/AUTOEXEC.BAT generation.
+- `boot_on_sd_first_mount()` — the welcome callback registered by `main.c`.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board (COM11): full unit suite passes; boot with no SD shows the guidance
+  line + header notification; inserting a card and running the first SD
+  command prints "SD card ready" and generates missing CONFIG.SYS/AUTOEXEC.BAT;
+  `sdeject` then `sd mount` re-mounts; `help` shows the SD note and the
+  Getting Started footer.
+
+---
+
+## [0.24.40] - 2026-08-13
+
+### Added - `config` command: persistent settings in CONFIG.SYS + factory reset
+
+Shell settings that previously lived only in RAM (or a one-shot CONFIG.SYS
+edit) can now be persisted and restored from the shell:
+
+- **`config`** — show every tracked setting (current value, default, and
+  whether it is saved in CONFIG.SYS).
+- **`config <key>=<value>`** (or `config <key> <value>`) — apply a setting now
+  and write it into `sd:/CONFIG.SYS`, so the boot component re-applies it on
+  the next boot with zero new boot code. Tracked keys: `BRIGHTNESS`, `ROTATE`,
+  `VOLUME`, `PROMPT`, `WIFI_AUTOCONNECT`, `DISPLAY_TIMEOUT`, `OSK`, `HEADER`.
+- **`config save`** — persist the current value of every tracked setting into
+  CONFIG.SYS. **`config reset [key]`** — restore the default(s) in RAM and
+  remove the directive line(s). **`config <key>`** — show one setting.
+- **`config factory`** — destructive-confirmation-gated full reset: restores
+  every tracked default, clears history/aliases/known-networks, and deletes
+  CONFIG.SYS, AUTOEXEC.BAT, WIFI.KNOWN, ALIASES.BAT, and HISTORY.TXT. The
+  default boot files are regenerated at the next boot.
+
+CONFIG.SYS is edited in place with a guarded, atomic temp-file+rename write
+(the same pattern as `WIFI.KNOWN`/`alias /save`); unknown directives, comments,
+and line order are preserved. Two new boot directives make the remaining
+RAM-only UI settings persistable:
+
+- **`OSK=ON|OFF`** — show/hide the on-screen keyboard at boot.
+- **`HEADER=ON|OFF`** — show/hide the header status bar at boot (the window
+  manager reports a zero-height header region when hidden, so the transcript
+  expands to fill the space).
+
+Supporting additions: `header_set_visible()`/`header_get_visible()` (header
+visibility survives UI rebuilds), `display_schedule_ui_rebuild()`,
+`networking_wifi_get_boot_autoconnect()`, and `shell_confirm_destructive()`
+was made public so `config factory` shares the exact same "YES" gate as
+`format`/`disk clean`/`trash purge`. `P4_CONFIG_CONFIG_MAX_BYTES` (16 KB)
+bounds the CONFIG.SYS file size the command reads/writes.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board (COM11): full unit suite passes (13 new `config` directive
+  round-trip tests, 0 failures); `config` show/set/reset/save verified; a
+  persisted `BRIGHTNESS=40` survives `reboot`; `config factory` confirms with
+  "YES", restores defaults, and deletes all five persistence files.
+
+---
+
 ## [0.24.39] - 2026-08-13
 
 ### Fixed - shell hardening: redirection capture, long write/append, pipe stack, long echo

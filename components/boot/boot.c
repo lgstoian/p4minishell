@@ -33,6 +33,8 @@
 #include "display.h"
 #include "networking.h"
 #include "usb.h"
+#include "keyboard.h"
+#include "header.h"
 #include "shell.h"
 #include "ansi_palette.h"
 
@@ -57,7 +59,9 @@
     ";   DISPLAY_POWER=ON|OFF|SLEEP  Set display power state\n" \
     ";   DISPLAY_TIMEOUT=<secs|OFF>  Auto display-off after N idle seconds\n" \
     ";   VOLUME=0-100              Set speaker volume\n" \
-    ";   RGB=<r>,<g>,<b>|#RRGGBB|<effect>[,speed]|OFF|AUTO,<ON|OFF>  Set the WS2812 status LED\n"
+    ";   RGB=<r>,<g>,<b>|#RRGGBB|<effect>[,speed]|OFF|AUTO,<ON|OFF>  Set the WS2812 status LED\n" \
+    ";   OSK=ON|OFF                Show/hide the on-screen keyboard at boot\n" \
+    ";   HEADER=ON|OFF             Show/hide the header status bar at boot\n"
 
 #define BOOT_CFG_NETWORK \
     "\n; Wi-Fi (station only):\n" \
@@ -504,6 +508,41 @@ static bool boot_handle_usb_mouse(const char *value)
     return false;
 }
 
+static bool boot_handle_osk(const char *value)
+{
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("OSK");
+        return false;
+    }
+    if (shell_text_equals_ignore_case(value, "ON")) {
+        keyboard_show();
+        return true;
+    }
+    if (shell_text_equals_ignore_case(value, "OFF")) {
+        keyboard_hide();
+        return true;
+    }
+    boot_warn_unknown("OSK");
+    return false;
+}
+
+static bool boot_handle_header(const char *value)
+{
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("HEADER");
+        return false;
+    }
+    if (shell_text_equals_ignore_case(value, "ON") ||
+        shell_text_equals_ignore_case(value, "OFF")) {
+        header_set_visible(shell_text_equals_ignore_case(value, "ON"));
+        /* The UI is already built when CONFIG.SYS runs, so relayout now. */
+        display_schedule_ui_rebuild();
+        return true;
+    }
+    boot_warn_unknown("HEADER");
+    return false;
+}
+
 static bool boot_handle_wifi_autoconnect(const char *value)
 {
     if (value == NULL || *value == '\0') {
@@ -568,18 +607,18 @@ void boot_run_startup(void)
 
     if (shell_sd_begin(&session) != ESP_OK) {
         ESP_LOGI(BOOT_TAG, "Boot scripting skipped: no SD card");
+        shell_transcript_appendf_ansi(SH_MUTE "No SD card detected - insert a microSD card to use files, "
+                                      "config, and scripts (type " SH_EXE "help" SH_RST SH_MUTE ")" SH_RST "\n");
+        shell_header_notify("Insert SD card", P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
+        shell_record_warningf("boot", "No SD card detected at boot");
         return;
     }
 
     ESP_LOGI(BOOT_TAG, "Boot scripting: checking for CONFIG.SYS / AUTOEXEC.BAT");
 
-    snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_BOOT_CONFIG_SYS_NAME);
-    boot_ensure_file(path, BOOT_CFG_DEFAULT);
+    (void)boot_ensure_default_files();
 
-    snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_BOOT_AUTOEXEC_BAT_NAME);
-    boot_ensure_file(path, BOOT_BAT_DEFAULT);
-
-        /* ---- Parse and apply CONFIG.SYS ---- */
+    /* ---- Parse and apply CONFIG.SYS ---- */
     snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_BOOT_CONFIG_SYS_NAME);
     file = fopen(path, "r");
     if (file == NULL) {
@@ -697,6 +736,10 @@ void boot_run_startup(void)
                     (void)boot_handle_usb_keyboard(value);
                 } else if (boot_starts_with_ci(keyword, "USB_MOUSE")) {
                     (void)boot_handle_usb_mouse(value);
+                } else if (boot_starts_with_ci(keyword, "OSK")) {
+                    (void)boot_handle_osk(value);
+                } else if (boot_starts_with_ci(keyword, "HEADER")) {
+                    (void)boot_handle_header(value);
                 } else if (boot_starts_with_ci(keyword, "FILES") ||
                            boot_starts_with_ci(keyword, "BUFFERS") ||
                            boot_starts_with_ci(keyword, "LASTDRIVE") ||
@@ -769,4 +812,71 @@ run_autoexec:
 
     shell_sd_end(&session, "boot");
     ESP_LOGI(BOOT_TAG, "Boot scripting complete");
+}
+
+/** True when a file does not exist (so the defaults should be generated). */
+static bool boot_file_missing(const char *path)
+{
+    FILE *file = fopen(path, "r");
+
+    if (file != NULL) {
+        fclose(file);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Ensure CONFIG.SYS and AUTOEXEC.BAT exist on the SD card root, generating the
+ * documented defaults when either is missing. Idempotent: an existing file is
+ * never touched, so a user's own CONFIG.SYS is always preserved.
+ *
+ * Safe to call whenever the card is mounted (boot startup or after a runtime
+ * first mount). Returns true when at least one file was generated.
+ */
+bool boot_ensure_default_files(void)
+{
+    char path[64];
+    shell_sd_session_t session;
+    bool generated = false;
+
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return false;
+    }
+
+    snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_BOOT_CONFIG_SYS_NAME);
+    if (boot_file_missing(path)) {
+        generated |= boot_ensure_file(path, BOOT_CFG_DEFAULT);
+    }
+
+    snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_BOOT_AUTOEXEC_BAT_NAME);
+    if (boot_file_missing(path)) {
+        generated |= boot_ensure_file(path, BOOT_BAT_DEFAULT);
+    }
+
+    shell_sd_end(&session, "boot");
+    return generated;
+}
+
+/**
+ * First-mount callback registered by main: runs when the SD card mounts for
+ * the first time this boot (at startup or when the user inserts a card and the
+ * first SD command mounts it). Generates the default boot files when missing
+ * and prints a short "SD card ready" welcome so the device feels intentional.
+ */
+void boot_on_sd_first_mount(void)
+{
+    bool generated = boot_ensure_default_files();
+
+    if (generated) {
+        shell_transcript_appendf_ansi(SH_OK "SD card ready (first run)" SH_RST " - created "
+                                      SH_PATH "CONFIG.SYS" SH_RST " and " SH_PATH "AUTOEXEC.BAT" SH_RST ". "
+                                      "Try: " SH_EXE "dir" SH_RST " | " SH_EXE "write" SH_RST " <file> <text> | "
+                                      SH_EXE "type" SH_RST " <file> | " SH_EXE "edit" SH_RST " <file> | "
+                                      SH_EXE "config" SH_RST "\n");
+    } else {
+        shell_transcript_appendf_ansi(SH_OK "SD card ready" SH_RST "\n");
+    }
+    shell_header_notify("SD card ready", P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
+    shell_record_infof("boot", "SD card mounted for the first time this boot");
 }
