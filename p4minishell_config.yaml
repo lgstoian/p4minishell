@@ -10,11 +10,10 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.31.0
-# Last updated: 2026-08-15 (help /all offline reference, about license + third-party
-#                           summary, build date/time + Git hash in version/about/sysinfo,
-#                           header long-press build identity)
-config_version: "0.31.0"
+# Version: 0.32.0
+# Last updated: 2026-08-15 (calc float calculator + set /p < file + for /f file-line loops,
+#                           BASIC-to-DOS batch command mapping)
+config_version: "0.32.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -1028,8 +1027,43 @@ batch_env:
   set_prompt_input_bytes:
     value: 128
     type: size_t
-    description: "Maximum bytes of user input accepted by set /p"
+    description: "Maximum bytes of user input accepted by set /p (also the line size read from a < file / pipe source)"
     range: "16..512"
+  calc_str_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum bytes of a string result or string argument in a `calc` expression"
+    range: "16..256"
+  calc_max_depth:
+    value: 16
+    type: int
+    description: "Maximum parenthesis/function nesting depth in a `calc` expression"
+    range: "4..64"
+  calc_angle_default_deg:
+    value: 1
+    type: int
+    description: "`calc` trig angle mode at boot: 1 = degrees (calculator default), 0 = radians"
+    range: "0..1"
+  calc_print_precision:
+    value: 12
+    type: int
+    description: "Significant digits used when printing a `calc` numeric result"
+    range: "4..17"
+  forf_token_max:
+    value: 8
+    type: int
+    description: "Maximum tokens a `for /f` `tokens=` spec may request per line"
+    range: "1..26"
+  forf_line_max:
+    value: 4096
+    type: int
+    description: "Maximum lines one `for /f` iteration pass reads from a source"
+    range: "64..65535"
+  forf_delims_bytes:
+    value: 16
+    type: size_t
+    description: "Maximum length of the `for /f` `delims=` character set"
+    range: "1..64"
   line_continuation_max:
     value: 8
     type: int

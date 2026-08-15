@@ -28,6 +28,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "esp_err.h"
+#include "p4minishell_config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -230,6 +231,56 @@ void shell_command_if(int argc, char **argv);
 
 /** `for` — loop over a token set or wildcard pattern: `for %v in (set) do cmd`. */
 void shell_command_for(int argc, char **argv);
+
+/* ========================================================================
+ * `for /f` FILE-LINE LOOPS (pure helpers, unit-tested in test/main)
+ * ========================================================================
+ * `for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd`
+ * iterates over the lines of a file (or the active `< file` / pipe input).
+ * The option parser and line splitter are pure so the test project can drive
+ * them without SD hardware.
+ */
+
+/** One space-delimited token inside a `for /f` source line (non-mutating). */
+typedef struct {
+    const char *start;  /**< Points into the source line (not NUL-terminated). */
+    size_t len;         /**< Token length in bytes. */
+} shell_forf_tok_t;
+
+/** Parsed `for /f` options. */
+typedef struct {
+    char delims[P4_CONFIG_FORF_DELIMS_BYTES];  /**< Delimiter set (default " \t"). */
+    int token_list[P4_CONFIG_FORF_TOKEN_MAX];  /**< 1-based token indices to bind. */
+    int token_count;                           /**< Entries in @p token_list. */
+    int skip;                                  /**< Leading lines to skip. */
+    char eol;                                  /**< Comment-line marker (0 = none). */
+    bool star;                                 /**< `tokens=...*` captures the rest. */
+    bool usebackq;                             /**< Accepted for DOS parity (command form unsupported). */
+} shell_forf_options_t;
+
+/** Fill @p opts with the DOS defaults: " \t" delims, tokens=1. */
+void shell_forf_options_default(shell_forf_options_t *opts);
+
+/**
+ * Parse the space-separated `for /f` options text (`delims=, tokens=1,2`).
+ * The shell tokenizer has already stripped the DOS quoting layer.
+ *
+ * @return true when every word is a known option; false leaves @p opts
+ *         partially filled but stops at the first malformed word.
+ */
+bool shell_forf_parse_options(const char *text, size_t len, shell_forf_options_t *opts);
+
+/**
+ * Split a line into non-mutating tokens on any character of @p delims.
+ * An empty @p delims string means "no delimiters" (the whole line is one
+ * token, matching DOS `delims=`).
+ *
+ * @return The number of tokens found (may exceed @p max_tokens; extra tokens
+ *         are not recorded, but a trailing `*` still captures them because the
+ *         split keeps offsets into the original line).
+ */
+int shell_forf_split_line(const char *line, const char *delims,
+                          shell_forf_tok_t *tokens, int max_tokens);
 
 /** `goto` — jump to a `:label` in the running batch file. */
 void shell_command_goto(int argc, char **argv);

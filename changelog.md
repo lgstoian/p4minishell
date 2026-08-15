@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.32.0] - 2026-08-15
+
+### Added - `calc` float calculator + batch file input (FX-870P/VX-4 port)
+
+The CASIO FX-870P/VX-4 BASIC command surface is mapped onto the DOS-style
+batch language, without duplicating any existing verb. Three new capabilities:
+
+- **`calc` command** (`components/batch/calc.c`): a batch-native float
+  calculator. `calc <expr>` prints the result, `calc NAME=<expr>` stores it in
+  an environment variable, `calc /deg|/rad|/angle` set/query the trig angle
+  mode, and `calc /hex <expr>` prints an integral result as `&H` hex.
+  Grammar: `+ - * / ^` (right-assoc power), the BASIC `MOD` keyword, unary
+  `- +`, parentheses, `&H`/`0x` hex literals, `PI`, `RAN#[(seed)]`, string
+  literals (`'` or `"`) with `+` concatenation, and env-var references
+  (undefined reads as 0, matching `set /a`). Functions: `ABS SGN INT FIX FRAC
+  ROUND SQR EXP LN LOG SIN COS TAN SINH COSH TANH ASN/ASIN ACS/ACOS ATN/ATAN
+  FACT NCR NPR DMS DMS$ VAL VALF STR$ HEX$ ASC CHR$ LEN LEFT$ MID$ RIGHT$
+  MOD POL REC`. `POL`/`REC` store their two results in the X/Y environment
+  variables (the calculator's documented side effect). ERRORLEVEL 0/1/2.
+- **`set /p NAME=< file`** (`shell_command_set_prompt`): with an active `<
+  file` redirection or a pipe stage, `set /p` reads one line from that source
+  instead of the interactive key queue, exactly like cmd.exe. Covers the
+  BASIC `INPUT#` / `LINE INPUT#` verbs (`echo x | set /p var=` works).
+- **`for /f`** (`shell_execute_for_loop`): file-line loops in the classic
+  form `for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do
+  cmd`. Sources: an explicit file, a wildcard, or `()` with the active `<
+  file` / pipe input. Per line: skip/eol filters, delimiter split, token
+  indices bound to consecutive loop-variable letters (`%%a %%b ...`), and a
+  `*` capture of the rest of the line. Covers the BASIC `READ`/`DATA`/
+  `RESTORE`/`EOF` verbs. The pure option parser and line splitter
+  (`shell_forf_parse_options` / `shell_forf_split_line`) are unit-tested.
+
+New config tunables under `calculator` / `for /f`:
+`P4_CONFIG_CALC_STR_BYTES`, `P4_CONFIG_CALC_MAX_DEPTH`,
+`P4_CONFIG_CALC_ANGLE_DEFAULT_DEG`, `P4_CONFIG_CALC_PRINT_PRECISION`,
+`P4_CONFIG_FORF_TOKEN_MAX`, `P4_CONFIG_FORF_LINE_MAX`,
+`P4_CONFIG_FORF_DELIMS_BYTES` (documented in p4minishell_config.yaml).
+
+The remaining BASIC verbs map onto existing commands and are documented in
+`command.md` ("BASIC-to-DOS batch mapping"): `BEEP`→`beep`, `CLS`→`cls`,
+`GOTO`→`goto`, `IF/THEN/ELSE`→`if (…) else (…)`, `FOR/NEXT`→`for %%v in (…) do`,
+`LET`→`set`, `REM`→`rem`, `FILES`→`dir`, `KILL`→`del`, `NAME`→`ren`,
+`DELETE`→`del`, `EDIT`→`edit`, `CHAIN`→`call`, `GOSUB`→`call :label`,
+`RETURN`→`goto :eof`, `INPUT`→`set /p`, `PRINT`→`echo`, `LIST`→`type`/
+`findstr /n`, `PRINT#`/`WRITE#`→`write`/`append`/`>`/`>>`, `RUN`→invoke the
+`.bat` by name, `LOAD`→`call`, `SAVE`→`write`/`edit`, `MERGE`→`copy`/`append`,
+`NEW`→new shell session, `VARLIST`→`set`, `DSKF`→`chkdsk`, `STOP`→`pause`,
+`END`→`exit /b`, `ON ERROR`/`RESUME`→`if errorlevel`/`||`, `TRON/TROFF`→
+`echo on`. Hardware/no-sense items (`PEEK`/`POKE`/`DEFSEG`/`DEFM`,
+`DEFCHR$`, `LPRINT`/`LLIST`, `LOCATE`, `MODE`, `PASS`, `PBLOAD`/`PBGET`,
+`CALC$`/`CALCJMP`, `RENUM`, `CONT`, `VERIFY`, `OPEN`/`CLOSE`, `EOF`) are
+documented as not applicable rather than stubbed.
+
+### Changed
+
+- `set /p` with no interactive key source and an active `<`/pipe source now
+  reads the file line instead of timing out (DOS parity).
+- `for` now also accepts the `for /f` file-line form; the classic token /
+  wildcard forms are unchanged.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- On-board (COM11): full unit suite passes — 139 tests, 0 failures,
+  including 15 new `test_calc` cases (arithmetic/precedence/`^`/MOD, every
+  math and string function, DEG/RAD, `&H`/`0x` hex, PI, seeded RAN#, env
+  assignment, POL/REC X/Y side effects, error paths) and 5 new `for /f`
+  cases (options parser, star capture, splitter, malformed options).
+- Test main task stack raised to 16 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`)
+  so the recursive calc/editor suites run on the board.
+- Hardware spot checks: `calc 2^10`→1024, `calc x = sin(30)`→0.5,
+  `echo a b | for /f "tokens=1" %%i in () do echo %%i`→a,
+  `set /p v=< file`, `if errorlevel` interaction, redirection/pipes of
+  `calc` output. Boot banner reports v0.32.0.
+
+---
+
 ## [0.31.0] - 2026-08-14
 
 ### Added - serial file transfer (`receive` / `send`) + screenshot framing

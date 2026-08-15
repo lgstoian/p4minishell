@@ -111,7 +111,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`, `fc`, `comp`, `sort` | `components/storage/storage_commands.c` |
 | `chkdsk`/`scandisk`, `format` | `components/storage/storage_commands.c` |
 | `sd info|ls|stat|cat|mount|eject`, `sdeject` | `components/storage/storage_commands.c` + `storage.c` |
-| `set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit` | `components/batch/batch.c` |
+| `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit` | `components/batch/batch.c` + `components/batch/calc.c` |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
 | `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
@@ -739,6 +739,10 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | set NAME=VALUE | Create or update environment variable |
 | set /a NAME=<expr> | Evaluate integer arithmetic and store the result |
 | set /p NAME=<prompt> | Prompt the user and store the typed line |
+| set /p NAME=< file | Read one line from the `< file` redirection / pipe source into NAME (cmd.exe behavior) |
+| calc [NAME=] <expr> | Evaluate a floating-point expression with the BASIC math/string functions and print it (or store it in NAME) |
+| calc /deg \| /rad \| /angle | Set or query the `calc` trig angle mode |
+| calc /hex <expr> | Print an integral result as `&H` hex |
 | path | Show current batch PATH |
 | path <dir1>;<dir2>;... | Replace PATH for .bat lookup |
 | echo <text> | Print text after variable expansion |
@@ -750,6 +754,8 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | if [not] a EQU\|NEQ\|LSS\|LEQ\|GTR\|GEQ b cmd | Run cmd on a numeric comparison of `a` and `b` (parsed as decimal; non-numeric reads as 0) |
 | goto <label> | Jump to a `:label` in the running batch file |
 | goto :eof | Jump to the end of the current batch file, unwinding its open setlocal scopes |
+| for %%v in (set) do cmd | Loop over literal tokens or a wildcard pattern |
+| for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c`, `skip=n`, `delims=xyz`, `tokens=a,b,m-n,*` |
 | shift | Shift batch arguments left by one position |
 | pause | Wait for a keypress |
 | choice [/C:keys] [/N] [/T:c,secs] [/S] [text] | Wait for one of the listed keys |
@@ -896,6 +902,67 @@ cancelled, timed out, or no interactive key source is attached, so a batch file
 can branch on it. Over serial the full line is typed naturally and submitted
 with Enter.
 
+**Reading a file line (cmd.exe behavior).** When a `< file` redirection or a
+pipe stage is active, `set /p` reads one line from that source instead of
+prompting:
+
+```
+set /p line=< data.txt
+echo line %line%
+echo hello | set /p v=      ->  v = "hello"
+```
+
+The source belongs to exactly this command and is consumed once. An empty line
+from the source leaves the variable unchanged, matching the interactive form.
+
+### calc — floating-point calculator
+
+`calc` evaluates a floating-point expression and either prints the result or
+stores it in an environment variable, giving batch files real math:
+
+```
+calc 2^10                  ->  1024
+calc 7 MOD 3               ->  1
+calc x = sin(30)           ->  x = 0.5        (DEG mode is the default)
+calc &HFF + 1              ->  256
+calc len('hello')          ->  5
+calc hex$(255)             ->  FF
+calc /hex 255              ->  &HFF
+calc /angle                ->  calc.angle=degrees
+calc /rad                  ->  calc.angle=radians
+```
+
+Grammar: `+ - * / ^` (right-associative power), the BASIC `MOD` keyword, unary
+`- +`, parentheses, `&H`/`0x` hex literals, `PI`, `RAN#[(seed)]`, string
+literals (`'` or `"`) with `+` concatenation, and environment-variable
+references (an undefined variable reads as 0, matching `set /a`).
+
+Functions (BASIC names; `ASIN`/`ACOS`/`ATAN` are accepted for `ASN`/`ACS`/
+`ATN`):
+
+| Function | Meaning |
+|----------|---------|
+| `ABS` `SGN` | Absolute value; sign (-1/0/1) |
+| `INT` `FIX` `FRAC` `ROUND` | Floor; truncate; fractional part; round to N decimals |
+| `SQR` `EXP` `LN` `LOG` | Square root; e^x; natural log; base-10 log |
+| `SIN` `COS` `TAN` `SINH` `COSH` `TANH` | Trig and hyperbolic trig (current angle mode) |
+| `ASN`/`ASIN` `ACS`/`ACOS` `ATN`/`ATAN` | Inverse trig (result in current angle mode) |
+| `FACT` `NCR` `NPR` | Factorial; combinations; permutations |
+| `MOD(a,b)` | Floor-modulo, result sign follows the divisor |
+| `POL` `REC` | Polar↔rectangular; stores both results in the X/Y variables |
+| `DMS` `DMS$` | Decimal degrees → D.MMSS number / formatted `Dd MM' SS"` string |
+| `VAL` `VALF` `STR$` `HEX$` | String→number (leading parse); number→string; integer→hex string |
+| `ASC` `CHR$` `LEN` | Char→code; code→char; string length |
+| `LEFT$` `MID$` `RIGHT$` | 1-based string slices |
+
+A `NAME=<expr>` assignment stores the result (numbers as a trimmed decimal
+string, strings verbatim); `calc /hex` prints an integral result as `&H` hex.
+`POL`/`REC` overwrite the X and Y environment variables exactly like the
+calculator's BASIC. ERRORLEVEL: 0 ok, 1 domain/syntax/store error, 2 usage.
+
+As with `set /a`, an expression that uses shell syntax (`^ & | < >`) must be
+quoted at the prompt so the chain/pipe/redirect splitter does not consume it.
+
 ### Line continuation
 
 A trailing `^` joins the next physical line, letting a long command be split
@@ -931,6 +998,38 @@ wildcard pattern expanded against the current directory:
 At the interactive prompt the variable is written `%var`; inside batch files it
 is `%%var` (the batch-file escape for a literal `%`). The body may not contain
 the chain/pipe operators that the shell splits on before `for` runs.
+
+### for /f — file-line loops
+
+`for /f` iterates over the lines of a file, binding the requested token indices
+to consecutive loop-variable letters:
+
+```
+for /f "delims=, tokens=1,2" %%a in (data.csv) do echo A=%%a B=%%b
+for /f "skip=1 eol=;" %%l in (notes.txt) do echo %%l
+for /f "tokens=1,* delims= " %%k in (pairs.txt) do echo KEY=%%k VAL=%%l
+```
+
+The file-set may be an explicit filename, a wildcard (`(*.txt)` processes every
+matching file's lines), or empty `()` when a `< file` redirection / pipe stage
+is active:
+
+```
+type data.txt | for /f "tokens=2" %%t in () do echo %%t
+set /p v=< data.txt
+```
+
+| Option | Meaning |
+|--------|---------|
+| `eol=c` | Lines starting with `c` are ignored (comment marker) |
+| `skip=n` | Skip the first `n` lines |
+| `delims=xyz` | Delimiter characters used to split each line (default space+tab) |
+| `tokens=a,b,m-n,*` | 1-based token indices to bind to `%%a`, `%%b`, ...; `*` binds the rest of the line |
+| `usebackq` | Accepted for DOS parity (the quoted-command form is unsupported) |
+
+Each line is read through the same pipeline as a batch line, so variables,
+pipes, and redirection work per iteration. This is the mechanism behind the
+BASIC `READ`/`DATA`/`INPUT#` verbs.
 - PATH-based .bat lookup
 - Nested calls up to 4 levels deep; `call` forwards arguments and propagates the callee's errorlevel
 - setlocal/endlocal scoping up to 8 levels deep, auto-unwound when a file returns
@@ -1748,6 +1847,59 @@ Sources:
 7. Progress: C6 OTA: XX% (YYYY KB / ZZZZ KB) every 5%
 8. Success: C6 OTA completed successfully! Type reboot to activate new firmware.
 9. Restore Wi-Fi on failure, request post-OTA restore on success
+
+## BASIC-to-DOS Batch Mapping (FX-870P / VX-4)
+
+The CASIO FX-870P/VX-4 BASIC command surface is provided through the existing
+DOS-style batch language. Each verb maps to a DOS command (`calc`, `for /f`,
+and `set /p < file` are the new additions that carry the math, file-input, and
+string functionality):
+
+| BASIC | DOS mapping |
+|-------|-------------|
+| ABS, ACS, ASN, ATN, COS, SIN, TAN, HYP, SQR, EXP, LN, LOG, FACT, NCR, NPR, INT, FIX, FRAC, ROUND, SGN, MOD, PI, RAN#, POL, REC, DMS/DMS$, VAL/VALF, STR$, HEX$, ASC, CHR$, LEN, LEFT$/MID$/RIGHT$ | `calc` functions |
+| AMP_H (`&H` hex) | `calc &H..` / `0x..` literals |
+| ANGLE | `calc /deg` / `calc /rad` / `calc /angle` |
+| BEEP | `beep` |
+| CHAIN, GOSUB, RETURN | `call`, `call :label`, `goto :eof` |
+| CLEAR | `setlocal`/`endlocal` (scope restore) |
+| CLS | `cls` / `clear` |
+| DATA, READ, RESTORE | `for /f` over a data file; `set /p v=< file` |
+| DELETE, KILL | `del` / `erase` |
+| EDIT | `edit` |
+| END | `exit /b` (end of the current batch file) |
+| FILES | `dir` |
+| FOR/NEXT | `for %%v in (…) do` (NEXT is the closing `)`) |
+| GOTO | `goto` |
+| IF/THEN/ELSE | `if cond (cmd) else (cmd)` |
+| INPUT | `set /p` |
+| INPUT#, LINE INPUT# | `set /p v=< file` / a pipe stage |
+| LET | `set NAME=value` |
+| LIST | `type file` / `findstr /n "^" file` |
+| LOAD | `call file.bat` |
+| MERGE | `copy` / `append` / `>>` |
+| NAME | `ren` / `rename` |
+| ON ERROR, RESUME | `if errorlevel N`, `\|\|`, `if not exist` |
+| PRINT | `echo` |
+| PRINT#, WRITE# | `write` / `append` / `>` / `>>` |
+| REM | `rem` / `::` |
+| RUN | invoke the `.bat` by name at the prompt |
+| SAVE | `write` / `edit` (persist to SD) |
+| STOP | `pause` |
+| SYSTEM | `reboot` |
+| VARLIST | `set` |
+| TRON/TROFF | `echo on` / `echo off` |
+
+Not applicable to this firmware (no stub, no equivalent): `LLIST`/`LPRINT`
+(no printer), `LOCATE` (no transcript cursor positioning), `MODE` (covered by
+`display`/`keyboard`/`power`), `PASS` (no program lock), `DEFCHR$` (LVGL
+fonts, not a character LCD), `DEFSEG`/`DEFM`/`PEEK`/`POKE`/`PBLOAD`/`PBGET`
+(no memory pokes; hardware access is `gpio read`/`set`), `CALC$`/`CALCJMP`
+(internal calculator ROM), `RENUM` (batch has no line numbers), `CONT` (no
+program suspension), `VERIFY` (FATFS write verification is not exposed),
+`OPEN`/`CLOSE`/`EOF` (batch files auto-open/close; `for /f` handles end of
+file), `NEW` (no in-memory program; a fresh shell session), `DSKF` (reported
+by `chkdsk`).
 
 ## Unsupported Commands
 

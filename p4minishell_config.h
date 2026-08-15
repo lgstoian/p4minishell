@@ -52,7 +52,7 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             31
+#define P4_CONFIG_VERSION_MINOR             32
 #define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
@@ -801,11 +801,52 @@
 /** Maximum bytes of user input accepted by `set /p`. */
 #define P4_CONFIG_SET_PROMPT_INPUT_BYTES     128
 
+/* ========================================================================
+ * CALCULATOR (`calc` command + floating-point expression evaluator)
+ * ========================================================================
+ * `calc` evaluates a floating-point expression with the FX-870P/VX-4 BASIC
+ * math and string functions (ABS, SIN, COS, TAN, ASN, ACS, ATN, HYP, SQR,
+ * EXP, LN, LOG, FACT, NCR, NPR, INT, FIX, FRAC, ROUND, SGN, MOD, PI, RAN#,
+ * POL, REC, DMS/DMS$, VAL/VALF, STR$, HEX$, ASC, CHR$, LEN, LEFT$, MID$,
+ * RIGHT$, `&H`/`0x` hex literals) and an ANGLE degree/radian mode. It lives
+ * in components/batch (calc.c) and is a batch language verb like `set`.
+ */
+
+/** Maximum bytes of a string result or string argument in a `calc` expression. */
+#define P4_CONFIG_CALC_STR_BYTES             32
+
+/** Maximum parenthesis / function nesting depth in a `calc` expression. */
+#define P4_CONFIG_CALC_MAX_DEPTH             16
+
+/** Trig angle mode at boot: 1 = degrees (calculator default), 0 = radians. */
+#define P4_CONFIG_CALC_ANGLE_DEFAULT_DEG     1
+
+/** Significant digits used when printing a `calc` numeric result. */
+#define P4_CONFIG_CALC_PRINT_PRECISION       12
+
 /**
  * Maximum batch lines joined by trailing `^` continuations.
  * Bounds a runaway continuation chain so a malformed file cannot loop.
  */
 #define P4_CONFIG_LINE_CONTINUATION_MAX      8
+
+/* ========================================================================
+ * `for /f` FILE-LINE LOOPS
+ * ========================================================================
+ * `for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd`
+ * iterates over the lines of a file (or the active `< file` / pipe input).
+ * These bounds keep one line's worth of state small enough for the recursive
+ * batch path's heap budget.
+ */
+
+/** Maximum tokens a `for /f` line may be split into (tokens=a,b,c). */
+#define P4_CONFIG_FORF_TOKEN_MAX             8
+
+/** Maximum lines one `for /f` iteration pass reads from a source. */
+#define P4_CONFIG_FORF_LINE_MAX              4096
+
+/** Maximum length of the `for /f` `delims=` character set (bytes). */
+#define P4_CONFIG_FORF_DELIMS_BYTES          16
 
 /** Maximum length of the `choice` /C: key list (characters). Single-char
  *  keys only; DOS caps this list at 26, Windows at 99. */

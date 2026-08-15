@@ -320,7 +320,12 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   or a single wildcard pattern (`for %%F in (*.txt) do echo %%F`), which is expanded through
   the storage layer's `storage_expand_wildcard()`. The loop body is expanded into a
   heap-allocated buffer because the loop re-enters the command pipeline on the recursive
-  batch path.
+  batch path. `for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd`
+  iterates over a file's lines (or the active `< file`/pipe source when the set is empty):
+  the pure `shell_forf_parse_options` / `shell_forf_split_line` helpers parse the DOS
+  options and split each line without mutating it, token indices bind to consecutive
+  loop-variable letters (`%%a %%b ...`), and a `*` captures the rest of the line. This is
+  the mechanism behind the BASIC `READ`/`DATA`/`INPUT#` verbs.
 - **Multi-stage pipes**: `shell_execute_pipe()` splits on unquoted `|` into up to
   `P4_CONFIG_PIPE_STAGE_MAX` stages. Each stage but the last spools to its own file, and the
   next stage reads it through the storage input-redirection slot. Spooling rather than streaming
@@ -361,14 +366,30 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   parsed as decimal with non-numeric operands reading as 0. This is a separate branch from the
   `==` string comparison.
 - **Prompted input**: `set /p` reads a line through the shell core's `shell_read_line()`. An
-  empty line leaves the variable unchanged, as in DOS.
+  empty line leaves the variable unchanged, as in DOS. When a `< file` redirection or a pipe
+  stage is active (`storage_resolve_input_source`), `set /p NAME=< file` reads one line from
+  that source instead of the interactive key queue, matching cmd.exe — the BASIC
+  `INPUT#`/`LINE INPUT#` surface.
+- **`calc` calculator**: `calc [NAME=] <expr>` (components/batch/calc.c) evaluates a
+  floating-point expression over `double` / fixed-string values with a recursive-descent
+  parser, stores the result in an environment variable when `NAME=` is given, and sets
+  ERRORLEVEL (0 ok / 1 domain|syntax / 2 usage). The grammar adds the FX-870P/VX-4 math and
+  string functions (`ABS SGN INT FIX FRAC ROUND SQR EXP LN LOG SIN COS TAN SINH COSH TANH
+  ASN/ASIN ACS/ACOS ATN/ATAN FACT NCR NPR DMS DMS$ VAL VALF STR$ HEX$ ASC CHR$ LEN LEFT$
+  MID$ RIGHT$ MOD POL REC`), `&H`/`0x` hex literals, the `PI` constant, a seeded `RAN#`
+  generator, string literals (`'`/`"`) with `+` concatenation, and env-var references
+  (undefined reads as 0). `calc /deg|/rad|/angle` set/query the trig angle mode;
+  `calc /hex` prints an integral result as `&H` hex. `POL`/`REC` store their two results in
+  the X/Y environment variables, the calculator's documented side effect.
 - **Line continuation**: a trailing `^` joins the next physical line, bounded by
   `P4_CONFIG_LINE_CONTINUATION_MAX`. An odd-caret-count rule distinguishes a continuation from
   an escaped `^^`. The label scanner applies the same rule, so a continued line cannot
   register a phantom `:label`.
-- **Batch language commands**: `set` (with `/a` and `/p`), `path`, `echo`, `call`, `if`
+- **Batch language commands**: `set` (with `/a` and `/p`, including the `< file` source
+  form), `calc`, `path`, `echo`, `call`, `if`
   (with `errorlevel N` — true when errorlevel ≥ N, `exist <path>`, `/i` case-insensitive
-  string comparison, and `not` for all three), `goto` (including `goto :eof`), `shift`,
+  string comparison, and `not` for all three), `for` (classic and `for /f`), `goto`
+  (including `goto :eof`), `shift`,
   `pause`, `choice`, `setlocal`, `endlocal`, `exit`. `pause` and `choice`
   block on a real keystroke through the shell core's key queue.
 - **Nested execution**: every nested line goes back through the full command pipeline via

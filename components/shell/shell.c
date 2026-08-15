@@ -2582,6 +2582,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "sdeject",  "sdeject - safe SD unmount before card removal" },
     { "disk",     "disk list | detail | clean | create partition primary [size=N] | delete partition N | format" },
     { "set",      "set [NAME=VALUE] | set /a NAME=<expr> | set /p NAME=<prompt> - environment variables" },
+    { "calc",     "calc [NAME=] <expr> | calc /deg | /rad | /angle | /hex - float calculator (BASIC math/string funcs, PI, RAN#, &H hex)" },
     { "path",     "path [dirs] - show/set the executable search path" },
     { "echo",     "echo <text> | echo on|off - print text or toggle command echo" },
     { "call",     "call <file.bat> [args] - run a batch file from another" },
@@ -2590,7 +2591,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "shift",    "shift - shift batch arguments" },
     { "pause",    "pause [message] - wait for a key (30 s timeout)" },
     { "choice",   "choice [/C:keys] [/N] [/T:c,secs] [/S] [text] - interactive selection" },
-    { "for",      "for %v in (set) do <cmd> - batch/command-loop iteration" },
+    { "for",      "for %v in (set) do <cmd> | for /f \"delims= tokens=\\n\" %%v in (file) do <cmd> - loops" },
     { "setlocal", "setlocal - begin a local environment scope" },
     { "endlocal", "endlocal - end a local environment scope" },
     { "exit",     "exit [/b] [code] - leave a batch file or the shell" },
@@ -2682,6 +2683,7 @@ void shell_command_help(int argc, char **argv)
     shell_transcript_appendf_ansi("  " SH_EXE "del" SH_RST " <path> | " SH_EXE "ren" SH_RST " <src> <dst> | " SH_EXE "md" SH_RST " <path> | " SH_EXE "rd" SH_RST " <path>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "type" SH_RST " <path> | " SH_EXE "write" SH_RST " <path> <text> | " SH_EXE "append" SH_RST " <path> <text> | " SH_EXE "touch" SH_RST " <path>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "set" SH_RST " [NAME=VALUE] | " SH_EXE "set /a" SH_RST " NAME=<expr> | " SH_EXE "set /p" SH_RST " NAME=<prompt>\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "calc" SH_RST " [NAME=] <expr> | " SH_EXE "calc" SH_RST " /deg | /rad | /angle | /hex - float calculator (ABS SIN COS TAN PI RAN# LEN HEX$ ...)\n");
     shell_transcript_appendf_ansi("  " SH_EXE "alias" SH_RST " [name[=value]] | " SH_EXE "alias /save" SH_RST " [/load] [file] | " SH_EXE "unalias" SH_RST " <name>  (DOSKEY-style macros)\n");
     shell_transcript_appendf_ansi("  " SH_EXE "path" SH_RST " [dirs] | " SH_EXE "echo" SH_RST " <text> | " SH_EXE "echo" SH_RST " on|off | " SH_EXE "call" SH_RST " <file.bat>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "attrib" SH_RST " [+-RHSA] <path> | " SH_EXE "label" SH_RST " [name] | " SH_EXE "xcopy" SH_RST " <src> <dst> [/S]\n");

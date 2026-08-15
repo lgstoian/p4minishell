@@ -14,6 +14,10 @@ CONFIG_SPIRAM=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 
+# The whole unit suite runs on the app main task; the calc evaluator and the
+# editor document tests are recursive, so give it a comfortable stack.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_PM_ENABLE=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

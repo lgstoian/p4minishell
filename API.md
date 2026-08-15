@@ -658,6 +658,45 @@ void shell_command_unalias(int argc, char **argv);
   never swallow a shell chain separator; an expression using `&&`/`||`/`&`/`|`/`<`/`>` must be
   quoted at the shell level.
 
+### Calculator (`calc` command, components/batch/calc.c)
+```c
+typedef struct { bool is_string; double num; char str[P4_CONFIG_CALC_STR_BYTES]; } calc_value_t;
+bool calc_evaluate(const char *expression, calc_value_t *result_out, const char **error_out);
+bool calc_angle_is_degrees(void);
+void calc_set_angle_mode(bool degrees);
+void calc_format_number(double value, char *out, size_t size);
+int shell_command_calc_line(const char *line);
+```
+- `calc_evaluate` is a pure recursive-descent evaluator over double/fixed-string values with
+  the FX-870P/VX-4 functions (ABS, SIN/COS/TAN, SINH/COSH/TANH, ASN/ACS/ATN, SQR, EXP, LN,
+  LOG, FACT, NCR, NPR, INT, FIX, FRAC, ROUND, MOD, PI, RAN#, POL, REC, DMS/DMS$, VAL/VALF,
+  STR$, HEX$, ASC, CHR$, LEN, LEFT$/MID$/RIGHT$), `&H`/`0x` hex literals, string
+  concatenation with `+`, and env-var references (undefined reads as 0). `POL`/`REC` store
+  their two results in the X/Y environment variables.
+- `shell_command_calc_line` is the batch verb (ERRORLEVEL 0/1/2); the dispatcher feeds it the
+  raw unsplit line so quoted string arguments survive the shell tokenizer.
+
+### `for /f` helpers
+```c
+typedef struct { const char *start; size_t len; } shell_forf_tok_t;
+typedef struct {
+    char delims[P4_CONFIG_FORF_DELIMS_BYTES];
+    int  token_list[P4_CONFIG_FORF_TOKEN_MAX];
+    int  token_count;
+    int  skip;
+    char eol;
+    bool star;
+    bool usebackq;
+} shell_forf_options_t;
+void shell_forf_options_default(shell_forf_options_t *opts);
+bool shell_forf_parse_options(const char *text, size_t len, shell_forf_options_t *opts);
+int  shell_forf_split_line(const char *line, const char *delims,
+                           shell_forf_tok_t *tokens, int max_tokens);
+```
+- Pure option parser / line splitter behind `for /f "eol=c skip=n delims=xyz tokens=a,b,m-n"
+  %%v in (file-set) do cmd`; `tokens=` replaces the default token 1, `*` binds the rest of the
+  line. Unit-tested in test/main/test_calc.c.
+
 ### Errorlevel
 ```c
 int  batch_get_errorlevel(void);

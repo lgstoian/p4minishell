@@ -25,6 +25,7 @@
 #include "command_ui.h"
 #include "config_cmd.h"
 #include "batch.h"
+#include "calc.h"
 #include "storage.h"
 #include "storage_commands.h"
 #include "shell.h"
@@ -1523,7 +1524,7 @@ static void shell_command_paste(int argc, char **argv)
 /** Built-in command names offered by Tab completion for the first token. */
 static const char *const shell_builtin_commands[] = {
     "about", "adc", "alias", "append", "attrib", "audio", "battery", "beep",
-    "bluetooth", "brightness", "bt", "c6ota", "call", "capture", "cd", "chdir",
+    "bluetooth", "brightness", "bt", "c6ota", "calc", "call", "capture", "cd", "chdir",
     "chkdsk", "choice", "clear", "clip", "cls", "comp", "config", "copy", "date", "debug",
     "deepsleep", "del", "dir", "disk", "display", "dns", "echo", "edit",
     "endlocal",
@@ -4557,6 +4558,14 @@ bool shell_execute_command_core(char *command)
         echo_line = strdup(trimmed);
     }
 
+    /* `calc` needs the raw (unsplit) line too: quoted string arguments inside
+     * the expression (`calc len('hello world')`) would lose their quotes to
+     * the tokenizer, so the calculator parses the original text itself. */
+    if (strncasecmp(trimmed, "calc", 4) == 0 &&
+        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+        echo_line = strdup(trimmed);
+    }
+
     /* A command with more arguments than the argv capacity would be silently
      * truncated; surface that so it is never invisible. Echo is exempt: it
      * prints the whole remainder via the raw-line snapshot, so no truncation.
@@ -4927,6 +4936,40 @@ bool shell_execute_command_core(char *command)
     /* ---- Environment and batch commands ---- */
     if (shell_text_equals_ignore_case(argv[0], "set")) {
         shell_command_set(argc, argv);
+        return true;
+    }
+
+    /* `calc` — batch-native calculator (float expression evaluator in
+     * components/batch/calc.c). The raw-line snapshot (taken before the
+     * tokenizer) carries quoted string arguments intact, so this is the one
+     * batch verb that parses the original text itself. */
+    if (shell_text_equals_ignore_case(argv[0], "calc")) {
+        int calc_level = 0;
+
+        if (echo_line != NULL) {
+            calc_level = shell_command_calc_line(echo_line);
+            free(echo_line);
+        } else {
+            /* Defensive fallback (never expected: the snapshot is taken under
+             * the same "calc" prefix rule as this dispatch). Rejoin the tokens
+             * with a synthetic "calc" prefix so the parser still works. */
+            char *joined = malloc(SHELL_COMMAND_BYTES);
+            char *line = malloc(SHELL_COMMAND_BYTES + 8);
+
+            if (joined == NULL || line == NULL) {
+                free(joined);
+                free(line);
+                shell_print_error("calc: out of memory");
+                calc_level = 1;
+            } else {
+                shell_join_args(argv, 1, argc, joined, SHELL_COMMAND_BYTES);
+                snprintf(line, SHELL_COMMAND_BYTES + 8, "calc %s", joined);
+                calc_level = shell_command_calc_line(line);
+                free(joined);
+                free(line);
+            }
+        }
+        batch_set_errorlevel(calc_level);
         return true;
     }
 

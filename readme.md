@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.31.0 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.32.0 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -110,6 +110,9 @@ the YAML to match.
 - **Aliases / macros**: DOSKEY-style `alias` / `unalias` commands define a RAM-only macro table; typing an alias at the prompt expands its leading word (`alias ll=dir /s`, then `ll` runs `dir /s`). Persist with `alias /save` to `sd:/ALIASES.BAT`, which boot.c auto-loads after CONFIG.SYS. Aliases never expand inside batch files.
 - **Real batch control flow**: `pause` and `choice` block on an actual keypress, `setlocal`/`endlocal` scope the environment, `exit /b` leaves one batch file, `if` with `errorlevel N` (≥), `exist <path>`, case-insensitive `/i` string tests, and `not`
 - **Batch expressions**: `set /a` integer arithmetic with the full DOS operator set plus comparison (`== != < > <= >=`) and logical (`&& ||`) operators that yield 1/0, `set /p` prompted input, trailing `^` line continuation
+- **`calc` calculator**: `calc [NAME=] <expr>` evaluates a floating-point expression with the FX-870P/VX-4 math and string functions (ABS, SIN, COS, TAN, SINH/COSH/TANH, ASN/ACS/ATN, SQR, EXP, LN, LOG, FACT, NCR, NPR, INT, FIX, FRAC, ROUND, SGN, MOD, PI, RAN#, POL/REC, DMS/DMS$, VAL/VALF, STR$, HEX$, ASC, CHR$, LEN, LEFT$/MID$/RIGHT$, `&H`/`0x` hex, string concatenation with `+`) and stores results into environment variables for batch use. `calc /deg|/rad|/angle` set the trig angle mode; `calc /hex` prints an integral result as `&H` hex. POL/REC store their two results in the X/Y variables (calculator BASIC parity). Sets ERRORLEVEL.
+- **Batch file input**: `set /p NAME=< file` (and `echo x | set /p var=`) reads one line from the input source instead of prompting, and `for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd` iterates over a file's lines — the cmd.exe mechanisms behind the BASIC `INPUT#` / `LINE INPUT#` / `READ` / `DATA` verbs.
+- **BASIC-to-DOS batch mapping**: the FX-870P/VX-4 command surface maps onto existing DOS verbs (`GOSUB`→`call :label`, `RETURN`→`goto :eof`, `CHAIN`→`call`, `FILES`→`dir`, `KILL`→`del`, `NAME`→`ren`, `PRINT`→`echo`, `INPUT`→`set /p`, `LIST`→`type`/`findstr /n`, `VARLIST`→`set`, `DSKF`→`chkdsk`, `STOP`→`pause`, `END`→`exit /b`, `ON ERROR`→`if errorlevel`/`||`). See `command.md` for the full table.
 - **DOS prompt engine**: `prompt` template with `$p $g $t $d $v $n` and more, driving both the UART console and the on-screen input line
 - **Text utilities**: `find` (text search `/I /N /C /V`, plus a recursive file-discovery mode by name/size/date via `/NAME:` `/SIZE:` `/NEWER:` `/OLDER:` `/DIRS` `/B`), `findstr` (literal or regex-lite search, case-sensitive by default, `/R /C /I /N /V /X /E /B /L /S /M /F /G`), `more` (keypress paging), `tree` (recursive, `/F /A`), `fc`, `comp` (byte compare `/D /A /L /N /C`), `sort` (`/R /I /U`). All text tools set a DOS ERRORLEVEL (0 ok / found, 1 not found / different, 2 usage) for `if errorlevel` and `&&`/`||`.
 - **Redirection**: `>`, `>>`, and `<` in any order on one line
@@ -165,7 +168,7 @@ See [command.md](command.md) for the complete command reference. Quick overview:
 | **Network services** | `httpd start|stop|status` (SD HTTP file server), `netstat`, `ipconfig` |
 | **Bluetooth** | `bluetooth status|scan [limit]|advertise <on [name]|off>`, `bt` (alias) |
 | **USB** | `usb status|ls|keyboard on|off|mouse on|off` |
-| **Batch** | `set`, `set /a`, `set /p`, `path`, `echo on|off`, `call`, `if`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]`, `alias`, `unalias` |
+| **Batch** | `set`, `set /a`, `set /p` (incl. `set /p NAME=< file`), `calc`, `path`, `echo on|off`, `call`, `if`, `for` / `for /f`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit [/b]`, `alias`, `unalias` |
 | **Text tools** | `find`, `findstr`, `more`, `tree`, `fc`, `comp`, `sort`, `prompt`, `clip`, `paste`, `history` |
 | **Time / SNTP** | `date` `[MM-DD-YYYY]`, `time` `[HH:MM[:SS]]`, `timezone` `[TZ]`, `sntp`/`ntpsync` `[sync]` |
 | **Redirection** | `>`, `>>`, and `<` to and from SD files |

@@ -1664,6 +1664,57 @@ static void shell_command_set_prompt(int argc, char **argv)
         return;
     }
 
+    /* `set /p NAME=< file` and pipe stages (`echo x | set /p var=`) read one
+     * line from the active input-redirection source instead of prompting,
+     * matching cmd.exe. The slot belongs to exactly one command and is cleared
+     * after dispatch, so the line is consumed exactly once. */
+    {
+        char *resolved = malloc(SHELL_SD_PATH_BYTES);
+        shell_sd_session_t session;
+
+        if (resolved == NULL) {
+            shell_print_error("set: out of memory reading the input source");
+            s_errorlevel = 1;
+            return;
+        }
+
+        if (storage_resolve_input_source(NULL, resolved, SHELL_SD_PATH_BYTES) == ESP_OK) {
+            FILE *file = NULL;
+            bool stored = false;
+
+            if (shell_sd_begin(&session) == ESP_OK) {
+                file = fopen(resolved, "r");
+                if (file != NULL) {
+                    if (fgets(input, sizeof(input), file) != NULL) {
+                        size_t len = strlen(input);
+
+                        while (len > 0 && (input[len - 1] == '\n' || input[len - 1] == '\r')) {
+                            input[--len] = '\0';
+                        }
+                        if (len > 0 && shell_env_set(name, input) == ESP_OK) {
+                            stored = true;
+                        }
+                    }
+                    fclose(file);
+                }
+                shell_sd_end(&session, "set");
+            }
+
+            if (!stored) {
+                /* An empty line leaves the variable unchanged (DOS parity); a
+                 * missing/unreadable source is a real error. */
+                shell_print_error("set: no data read from %s, the variable is unchanged", resolved);
+                free(resolved);
+                s_errorlevel = 1;
+                return;
+            }
+            free(resolved);
+            s_errorlevel = 0;
+            return;
+        }
+        free(resolved);
+    }
+
     if (prompt[0] != '\0') {
         shell_transcript_appendf("%s", prompt);
     }
@@ -3090,13 +3141,34 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
     free(line);
 }
 
-/* Helper: substitute a `for` variable with a value in the body and run it. */
-static void shell_for_substitute_and_run(const char *do_command, char var_name, const char *value)
+/* ========================================================================
+ * FOR LOOP EXECUTION
+ * ======================================================================== */
+
+/**
+ * Internal token-split cap for `for /f` source lines. The `tokens=` spec is
+ * bounded separately by P4_CONFIG_FORF_TOKEN_MAX; this only bounds how many
+ * leading tokens are recorded, so a `*` capture (which slices the original
+ * line from an offset) is still correct for longer lines.
+ */
+#define SHELL_FORF_SPLIT_MAX 32
+
+/** One `for` variable binding substituted into a loop body. */
+typedef struct {
+    char var;             /**< Loop-variable letter (a..z). */
+    const char *text;     /**< Replacement text (may be "", never NULL). */
+    size_t len;           /**< Bytes of @p text to copy. */
+} shell_for_binding_t;
+
+/**
+ * Substitute every `%%var` / `%var` occurrence in the body with its binding
+ * and run the result through the command pipeline. Runs from the recursive
+ * batch path, so the expanded body is heap-allocated.
+ */
+static void shell_for_substitute_and_run_bindings(const char *do_command,
+                                                  const shell_for_binding_t *bindings,
+                                                  int binding_count)
 {
-    /* The expanded body is line-sized and this helper runs from the
-     * recursive batch path (for-loop body re-enters the command pipeline),
-     * so the buffer is heap-allocated and freed after the nested command
-     * returns. */
     const size_t cmd_size = SHELL_BATCH_LINE_BYTES * 2;
     char *expanded_cmd = malloc(cmd_size);
     const char *src;
@@ -3113,25 +3185,34 @@ static void shell_for_substitute_and_run(const char *do_command, char var_name, 
     remaining = cmd_size - 1;
 
     while (*src != '\0' && remaining > 0) {
-        /* In a batch file the loop variable is written `%%var` (the doubled
-         * percent is the batch-file escape for a literal `%`). Accept that
-         * form first, then the single `%var` for tolerance, and substitute
-         * the current value for either. */
-        if (*src == '%' && *(src + 1) == '%' && *(src + 2) == var_name) {
-            const char *replacement = value;
-            while (*replacement != '\0' && remaining > 0) {
-                *dst++ = *replacement++;
-                remaining--;
+        bool replaced = false;
+
+        for (int b = 0; b < binding_count; b++) {
+            char var = bindings[b].var;
+
+            /* Batch files write `%%var` (the doubled percent is the batch-file
+             * escape for a literal `%`); the prompt writes `%var`. */
+            if (*src == '%' && *(src + 1) == '%' && *(src + 2) == var) {
+                for (size_t i = 0; i < bindings[b].len && remaining > 0; i++) {
+                    *dst++ = bindings[b].text[i];
+                    remaining--;
+                }
+                src += 3;
+                replaced = true;
+                break;
             }
-            src += 3;
-        } else if (*src == '%' && *(src + 1) == var_name) {
-            const char *replacement = value;
-            while (*replacement != '\0' && remaining > 0) {
-                *dst++ = *replacement++;
-                remaining--;
+            if (*src == '%' && *(src + 1) == var) {
+                for (size_t i = 0; i < bindings[b].len && remaining > 0; i++) {
+                    *dst++ = bindings[b].text[i];
+                    remaining--;
+                }
+                src += 2;
+                replaced = true;
+                break;
             }
-            src += 2;
-        } else {
+        }
+
+        if (!replaced) {
             *dst++ = *src++;
             remaining--;
         }
@@ -3142,6 +3223,418 @@ static void shell_for_substitute_and_run(const char *do_command, char var_name, 
     free(expanded_cmd);
 }
 
+/** Single-binding wrapper used by the classic token / wildcard `for`. */
+static void shell_for_substitute_and_run(const char *do_command, char var_name, const char *value)
+{
+    shell_for_binding_t binding;
+
+    binding.var = var_name;
+    binding.text = value != NULL ? value : "";
+    binding.len = value != NULL ? strlen(value) : 0;
+    shell_for_substitute_and_run_bindings(do_command, &binding, 1);
+}
+
+/* ========================================================================
+ * `for /f` — FILE-LINE LOOPS
+ * ======================================================================== */
+
+void shell_forf_options_default(shell_forf_options_t *opts)
+{
+    if (opts == NULL) {
+        return;
+    }
+    snprintf(opts->delims, sizeof(opts->delims), " \t");
+    opts->token_list[0] = 1;
+    opts->token_count = 1;
+    opts->skip = 0;
+    opts->eol = '\0';
+    opts->star = false;
+    opts->usebackq = false;
+}
+
+/** Parse a bounded decimal integer (digits only). */
+static bool shell_forf_parse_num(const char *text, size_t len, int *out)
+{
+    int value = 0;
+
+    if (len == 0 || len > 6) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (!isdigit((unsigned char)text[i])) {
+            return false;
+        }
+        value = value * 10 + (text[i] - '0');
+    }
+    *out = value;
+    return true;
+}
+
+/** Parse a `tokens=` list: `N`, `N-M`, and `*` items separated by commas. */
+static bool shell_forf_parse_tokens(const char *value, size_t vlen, shell_forf_options_t *opts)
+{
+    size_t pos = 0;
+
+    if (vlen == 0) {
+        return true;   /* empty `tokens=` falls back to the default below */
+    }
+
+    while (pos < vlen) {
+        size_t start = pos;
+
+        while (pos < vlen && value[pos] != ',') {
+            pos++;
+        }
+        {
+            size_t ilen = pos - start;
+
+            if (ilen == 0) {
+                return false;   /* empty item such as `tokens=1,,2` */
+            }
+            if (ilen == 1 && value[start] == '*') {
+                opts->star = true;
+            } else {
+                int lo;
+                int hi;
+                const char *dash = memchr(value + start, '-', ilen);
+
+                if (dash != NULL) {
+                    size_t lo_len = (size_t)(dash - (value + start));
+
+                    if (!shell_forf_parse_num(value + start, lo_len, &lo) ||
+                        !shell_forf_parse_num(dash + 1, ilen - lo_len - 1, &hi)) {
+                        return false;
+                    }
+                } else {
+                    if (!shell_forf_parse_num(value + start, ilen, &lo)) {
+                        return false;
+                    }
+                    hi = lo;
+                }
+                if (lo < 1 || hi < lo) {
+                    return false;
+                }
+                for (int i = lo; i <= hi; i++) {
+                    if (opts->token_count >= P4_CONFIG_FORF_TOKEN_MAX) {
+                        return false;   /* too many requested tokens */
+                    }
+                    opts->token_list[opts->token_count++] = i;
+                }
+            }
+        }
+        if (pos < vlen) {
+            pos++;   /* consume ',' */
+        }
+    }
+    return true;
+}
+
+bool shell_forf_parse_options(const char *text, size_t len, shell_forf_options_t *opts)
+{
+    size_t pos = 0;
+
+    if (text == NULL || opts == NULL) {
+        return false;
+    }
+    shell_forf_options_default(opts);
+
+    while (pos < len) {
+        size_t start;
+        size_t wlen;
+        const char *eq;
+        size_t klen;
+        const char *value;
+        size_t vlen;
+
+        while (pos < len && (text[pos] == ' ' || text[pos] == '\t')) {
+            pos++;
+        }
+        if (pos >= len) {
+            break;
+        }
+
+        start = pos;
+        while (pos < len && text[pos] != ' ' && text[pos] != '\t') {
+            pos++;
+        }
+        wlen = pos - start;
+
+        /* `usebackq` is accepted for DOS parity; the quoted-command source is
+         * not supported on this shell, so it is a no-op. */
+        if (wlen == 8 && strncasecmp(text + start, "usebackq", 8) == 0) {
+            opts->usebackq = true;
+            continue;
+        }
+
+        eq = memchr(text + start, '=', wlen);
+        if (eq == NULL) {
+            return false;   /* bare word that is not an option */
+        }
+        klen = (size_t)(eq - (text + start));
+        value = eq + 1;
+        vlen = wlen - klen - 1;
+
+        if (klen == 6 && strncasecmp(text + start, "delims", 6) == 0) {
+            size_t n = vlen < sizeof(opts->delims) - 1 ? vlen : sizeof(opts->delims) - 1;
+
+            memcpy(opts->delims, value, n);
+            opts->delims[n] = '\0';
+        } else if (klen == 6 && strncasecmp(text + start, "tokens", 6) == 0) {
+            /* A `tokens=` option replaces the default token 1 rather than
+             * appending to it. */
+            opts->token_count = 0;
+            opts->star = false;
+            if (!shell_forf_parse_tokens(value, vlen, opts)) {
+                return false;
+            }
+        } else if (klen == 4 && strncasecmp(text + start, "skip", 4) == 0) {
+            if (!shell_forf_parse_num(value, vlen, &opts->skip)) {
+                return false;
+            }
+        } else if (klen == 3 && strncasecmp(text + start, "eol", 3) == 0) {
+            opts->eol = (vlen > 0) ? *value : '\0';
+        } else {
+            return false;   /* unknown option */
+        }
+    }
+
+    /* `tokens=` with no usable entry (or no `tokens=` at all) defaults to 1. */
+    if (opts->token_count == 0 && !opts->star) {
+        opts->token_list[0] = 1;
+        opts->token_count = 1;
+    }
+    return true;
+}
+
+int shell_forf_split_line(const char *line, const char *delims,
+                          shell_forf_tok_t *tokens, int max_tokens)
+{
+    const char *p = line;
+    int count = 0;
+
+    if (line == NULL || tokens == NULL || max_tokens <= 0) {
+        return 0;
+    }
+
+    /* An empty delims set means "no delimiters": the whole line is one token,
+     * matching DOS `delims=` with no characters. */
+    if (delims == NULL || delims[0] == '\0') {
+        if (line[0] != '\0') {
+            tokens[0].start = line;
+            tokens[0].len = strlen(line);
+            return 1;
+        }
+        return 0;
+    }
+
+    while (*p != '\0') {
+        while (*p != '\0' && strchr(delims, *p) != NULL) {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        {
+            const char *start = p;
+
+            while (*p != '\0' && strchr(delims, *p) == NULL) {
+                p++;
+            }
+            if (count < max_tokens) {
+                tokens[count].start = start;
+                tokens[count].len = (size_t)(p - start);
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+/**
+ * Process one `for /f` source line: apply eol/skip filters, split on delims,
+ * bind the requested token indices to consecutive loop-variable letters (with
+ * `*` capturing the rest of the line), and run the substituted body.
+ */
+static void shell_forf_process_line(char *line, const char *do_command, char var_name,
+                                    const shell_forf_options_t *opts)
+{
+    shell_forf_tok_t tokens[SHELL_FORF_SPLIT_MAX];
+    shell_for_binding_t bindings[P4_CONFIG_FORF_TOKEN_MAX + 1];
+    int count;
+    int binding_count = 0;
+    size_t len = strlen(line);
+
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = '\0';
+    }
+
+    if (opts->eol != 0 && line[0] == opts->eol) {
+        return;
+    }
+
+    count = shell_forf_split_line(line, opts->delims, tokens, SHELL_FORF_SPLIT_MAX);
+    if (count == 0) {
+        return;
+    }
+
+    for (int i = 0; i < opts->token_count &&
+                    binding_count < (int)(sizeof(bindings) / sizeof(bindings[0])); i++) {
+        int idx = opts->token_list[i];
+        shell_for_binding_t *b = &bindings[binding_count++];
+
+        b->var = (char)(var_name + i);
+        if (idx >= 1 && idx <= count) {
+            b->text = tokens[idx - 1].start;
+            b->len = tokens[idx - 1].len;
+        } else {
+            b->text = "";
+            b->len = 0;
+        }
+    }
+
+    /* `tokens=...*` binds the remainder after the last explicit index. The
+     * split keeps offsets into the line, so the slice is correct even when
+     * the line holds more tokens than the split cap recorded. */
+    if (opts->star && binding_count < (int)(sizeof(bindings) / sizeof(bindings[0]))) {
+        int rest0 = (opts->token_count > 0) ? opts->token_list[opts->token_count - 1] : 0;
+        shell_for_binding_t *b = &bindings[binding_count];
+
+        b->var = (char)(var_name + binding_count);
+        if (rest0 >= 0 && rest0 < count) {
+            const char *rest = tokens[rest0].start;
+            size_t rlen = strlen(rest);
+
+            while (rlen > 0 && strchr(opts->delims, rest[rlen - 1]) != NULL) {
+                rlen--;
+            }
+            b->text = rest;
+            b->len = rlen;
+        } else {
+            b->text = "";
+            b->len = 0;
+        }
+        binding_count++;
+    }
+
+    shell_for_substitute_and_run_bindings(do_command, bindings, binding_count);
+}
+
+/**
+ * Iterate the lines of one `for /f` source file, honoring the skip/eol options
+ * and breaking on goto/exit conditions exactly like the token loop.
+ */
+static void shell_forf_run_source(const char *spec, const char *do_command,
+                                  char var_name, const shell_forf_options_t *opts)
+{
+    char *resolved = malloc(SHELL_SD_PATH_BYTES);
+    char *line = malloc(SHELL_BATCH_LINE_BYTES);
+    FILE *file = NULL;
+    int line_count = 0;
+
+    if (resolved == NULL || line == NULL) {
+        free(resolved);
+        free(line);
+        shell_transcript_append_text("for /f: out of memory\n");
+        return;
+    }
+
+    if (shell_fs_resolve_path(spec, resolved, SHELL_SD_PATH_BYTES) != ESP_OK) {
+        free(resolved);
+        free(line);
+        shell_print_warning("for /f: invalid path %s", spec);
+        return;
+    }
+
+    file = fopen(resolved, "r");
+    free(resolved);
+    if (file == NULL) {
+        free(line);
+        shell_print_warning("for /f: cannot open %s", spec);
+        return;
+    }
+
+    while (fgets(line, SHELL_BATCH_LINE_BYTES, file) != NULL) {
+        line_count++;
+        if (line_count <= opts->skip) {
+            continue;
+        }
+        if (line_count > P4_CONFIG_FORF_LINE_MAX) {
+            break;
+        }
+        shell_forf_process_line(line, do_command, var_name, opts);
+        if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            break;
+        }
+    }
+
+    fclose(file);
+    free(line);
+}
+
+/** Drive a `for /f` loop over its file-set (wildcards, names, or `<>` input). */
+static void shell_execute_for_f_loop(const char *set_str, const char *do_command,
+                                     char var_name, const shell_forf_options_t *opts)
+{
+    if (set_str[0] == '\0') {
+        /* `for /f %%v in () do ...` (or `< file` / a pipe stage): read the
+         * active input-redirection source. The slot belongs to this command
+         * and is cleared after dispatch. */
+        char *resolved = malloc(SHELL_SD_PATH_BYTES);
+
+        if (resolved == NULL) {
+            shell_transcript_append_text("for /f: out of memory\n");
+            return;
+        }
+        if (storage_resolve_input_source(NULL, resolved, SHELL_SD_PATH_BYTES) == ESP_OK) {
+            shell_forf_run_source(resolved, do_command, var_name, opts);
+        } else {
+            shell_print_warning("for /f: no input file and no input redirection active");
+        }
+        free(resolved);
+        return;
+    }
+
+    {
+        char *set_copy = strdup(set_str);
+        char *save_ptr = NULL;
+        char *token;
+
+        if (set_copy == NULL) {
+            shell_transcript_append_text("for /f: out of memory\n");
+            return;
+        }
+
+        token = strtok_r(set_copy, " \t", &save_ptr);
+        while (token != NULL) {
+            if (strchr(token, '*') != NULL || strchr(token, '?') != NULL) {
+                char **files = NULL;
+                int count = 0;
+                esp_err_t error = storage_expand_wildcard(token, &files, &count);
+
+                if (error != ESP_OK) {
+                    shell_print_warning("for /f: could not expand %s (%s)", token, esp_err_to_name(error));
+                } else {
+                    for (int i = 0; i < count; i++) {
+                        shell_forf_run_source(files[i], do_command, var_name, opts);
+                        if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                            break;
+                        }
+                    }
+                    storage_free_wildcard_expansion(files, count);
+                }
+            } else {
+                shell_forf_run_source(token, do_command, var_name, opts);
+            }
+
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+            token = strtok_r(NULL, " \t", &save_ptr);
+        }
+        free(set_copy);
+    }
+}
+
 /* Helper: execute a for loop command */
 static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_line)
 {
@@ -3149,16 +3642,38 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
     char *for_ptr;
     char *do_command;
     char var_name;
+    shell_forf_options_t forf_opts;
+    bool for_f = false;
 
     (void)frame;
 
-    /* Parse: for %%var in (set) do command */
+    /* Parse: for [/f "options"] %%var in (set) do command */
     for_ptr = strstr(command_line, "for ");
     if (for_ptr == NULL) return;
 
     /* Skip "for " */
     for_ptr += 4;
     while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+
+    /* `for /f` — file-line loops. The DOS options are one quoted string
+     * ("delims=, tokens=1,2"); the shell tokenizer has stripped the quotes and
+     * the rejoin has left them as space-separated words, so the options region
+     * runs from here up to the loop variable. */
+    if (*for_ptr == '/' && (for_ptr[1] == 'f' || for_ptr[1] == 'F') &&
+        (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
+        char *pct;
+
+        for_f = true;
+        for_ptr += 2;
+        while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+
+        pct = strchr(for_ptr, '%');
+        if (!shell_forf_parse_options(for_ptr, pct != NULL ? (size_t)(pct - for_ptr) : strlen(for_ptr),
+                                      &forf_opts)) {
+            shell_transcript_append_text("for /f: malformed options\n");
+            return;
+        }
+    }
 
     /* Loop variable. Batch files write `%%var` (the doubled percent is the
      * batch-file escape for a literal `%`); the interactive prompt writes
@@ -3223,6 +3738,14 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
 
     do_command = shell_trim(for_ptr);
     if (*do_command == '\0') {
+        free(set_str);
+        return;
+    }
+
+    /* `for /f` iterates file lines; the classic form iterates tokens or
+     * wildcard paths. */
+    if (for_f) {
+        shell_execute_for_f_loop(set_str, do_command, var_name, &forf_opts);
         free(set_str);
         return;
     }

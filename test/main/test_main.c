@@ -149,6 +149,27 @@ extern void test_editor_format_line_number(void);
 
 extern void test_keyboard_osk_dedup(void);
 
+extern void test_calc_arithmetic(void);
+extern void test_calc_power_and_mod(void);
+extern void test_calc_hex_literals(void);
+extern void test_calc_math_functions(void);
+extern void test_calc_trig_degrees(void);
+extern void test_calc_trig_radians(void);
+extern void test_calc_math_errors(void);
+extern void test_calc_string_functions(void);
+extern void test_calc_string_numbers(void);
+extern void test_calc_string_errors(void);
+extern void test_calc_env_variables(void);
+extern void test_calc_pol_rec_side_effects(void);
+extern void test_calc_random(void);
+extern void test_calc_format_number(void);
+extern void test_calc_syntax_errors(void);
+extern void test_forf_options_defaults(void);
+extern void test_forf_parse_options(void);
+extern void test_forf_parse_star(void);
+extern void test_forf_parse_errors(void);
+extern void test_forf_split_line(void);
+
 void app_main(void)
 {
     printf("\n=== P4MiniShell Unit Tests ===\n\n");
@@ -348,6 +369,34 @@ void app_main(void)
     /* On-screen keyboard input deduplication tests */
     UNITY_BEGIN();
     RUN_TEST(test_keyboard_osk_dedup);
+    UNITY_END();
+
+    /* `calc` float evaluator tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_calc_arithmetic);
+    RUN_TEST(test_calc_power_and_mod);
+    RUN_TEST(test_calc_hex_literals);
+    RUN_TEST(test_calc_math_functions);
+    RUN_TEST(test_calc_trig_degrees);
+    RUN_TEST(test_calc_trig_radians);
+    RUN_TEST(test_calc_math_errors);
+    RUN_TEST(test_calc_string_functions);
+    RUN_TEST(test_calc_string_numbers);
+    RUN_TEST(test_calc_string_errors);
+    RUN_TEST(test_calc_env_variables);
+    RUN_TEST(test_calc_pol_rec_side_effects);
+    RUN_TEST(test_calc_random);
+    RUN_TEST(test_calc_format_number);
+    RUN_TEST(test_calc_syntax_errors);
+    UNITY_END();
+
+    /* `for /f` option parser / line splitter tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_forf_options_defaults);
+    RUN_TEST(test_forf_parse_options);
+    RUN_TEST(test_forf_parse_star);
+    RUN_TEST(test_forf_parse_errors);
+    RUN_TEST(test_forf_split_line);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

@@ -18,6 +18,7 @@ idf_component_register(
         test_editor.c
         test_keyboard.c
         test_config.c
+        test_calc.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"

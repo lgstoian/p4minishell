@@ -215,8 +215,10 @@
     discovery walker reuses the `dir /s` FATFS primitives, keeps each recursion level's state
     in one heap block, respects `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, and caps output at
     `P4_CONFIG_FIND_MATCH_MAX`.
-  - Batch language verbs (`set`, `path`, `echo`, `call`, `if`, `goto`, `shift`, `pause`,
-    `choice`, `setlocal`, `endlocal`, `exit`) -> `components/batch/batch.c`
+  - Batch language verbs (`set`, `calc`, `path`, `echo`, `call`, `if`, `for`
+    including `for /f`, `goto`, `shift`, `pause`, `choice`, `setlocal`,
+    `endlocal`, `exit`) -> `components/batch/batch.c` (+ `components/batch/calc.c`
+    for the `calc` float evaluator).
   - Alias verbs (`alias`, `unalias`) -> `components/batch/batch.c` (the alias table, the
     `alias`/`unalias` commands, `shell_alias_get`/`set`, and
     `batch_alias_expand_command()` all live here; the command module only dispatches and
@@ -283,9 +285,20 @@
 - `goto :eof` is the implicit end-of-file label and ends only the current batch frame. A pending
   `goto`/`goto :eof` MUST be cleared when a frame returns so it cannot leak into the caller's
   line loop when issued from inside a `for` or `if` body.
-- `for` loop sets support literal token lists and a single wildcard pattern; both re-enter the
-  pipeline per iteration, so the substituted body buffer MUST be heap-allocated (the loop is on
-  the recursive batch path).
+- `for` loop sets support literal token lists, a single wildcard pattern, and the `for /f`
+  file-line form (`for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd`).
+  All three re-enter the pipeline per iteration, so the substituted body buffer MUST be
+  heap-allocated (the loop is on the recursive batch path). `for /f` sources are an explicit
+  file, a wildcard, or the active `< file`/pipe input when the set is empty; `tokens=` replaces
+  the default token 1 rather than appending, and a trailing `*` binds the rest of the line.
+- The `calc` command (`components/batch/calc.c`) is a batch language verb and MUST keep its
+  evaluator frames small: `calc_value_t` (double + fixed string) lives in parser locals across
+  the additive/multiplicative/unary/power/primary/function-call recursion, so a deeply nested
+  expression on the 8 KB worker stack must not blow the budget. Keep string payloads at
+  `P4_CONFIG_CALC_STR_BYTES`; `POL`/`REC` set the X/Y environment variables as their documented
+  side effect; an expression using shell syntax (`^ & | < >`) must be quoted at the prompt, and
+  the dispatcher feeds `shell_command_calc_line()` the raw unsplit line so quoted string
+  arguments survive the tokenizer.
 - The batch executor and the label scanner MUST agree on where a logical line ends. Both apply
   the same odd-trailing-caret continuation rule; changing one without the other lets a
   continued line register a phantom `:label` and silently corrupt `goto` targets.
