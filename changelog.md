@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.4] - 2026-09-05 — Split patch (periph/power/serial out of `command.c`)
+
+### Changed — `command.c` 5808→2467 lines (verbatim moves, no behavior change)
+
+- **New `components/command/periph_commands.c`** (1527 lines): peripheral toolkit `gpio`/`pwm`/`freq`/`adc`/`i2c`/`spi`/`rgb`/`camera` with the board GPIO table, pin-safety gate, and toolkit-exclusive `SHELL_*` compat defines, declared in `command.h` (new PERIPH section). The `SHELL_PWM/ADC/I2C/SPI_*` defines in `command.c` were orphaned (zero remaining users) and moved along.
+- **New `components/command/power_commands.c`** (897 lines): `brightness`/`rotate`/`battery`/`power`/`sleep`/`deepsleep` with the battery ADC state, idle display-off state, and power-exclusive defines, declared in `command.h` (new POWER section). The ops-table backings (`command_battery_read`, `shell_power_*` API) live there too; `command_init()` registers them unchanged.
+- **New `components/command/serial_commands.c`** (1015 lines): `screenshot`/`receive`/`send` with the BMP/frame/diag helpers, declared in `command.h` (new SERIAL section). `shell_print_http_body` + HTTPGET section stay in `command.c` — the httpget arm is inline code inside `shell_execute_command_core()` and cannot move.
+- **Line endings preserved** (`command.c` LF); diff shows only the moves (function inventory HEAD vs work: zero lost, zero new).
+
+### Verification
+
+- Static checks only in this patch: each moved verb defined exactly once, call sites resolve via `command.h`, no new layering (power needs `networking.h` for the Wi-Fi teardown hook, as before). Full `idf.py build` + COM11 pass deferred to the hardware session.
+
+---
+
 ## [0.35.3] - 2026-09-05 — Split patch (audio/tui commands out of the god files, reconcile, managed shim)
 
 ### Changed — `command.c` 6394→5808 lines, `batch.c` 5195→4881 lines (verbatim moves, no behavior change)

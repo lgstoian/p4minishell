@@ -87,7 +87,7 @@ new code; these are listed for reference and for the rare case that needs a raw 
 Standard printf specifiers work alongside these, including flags, width, and
 precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 
-## UI Model (v0.35.3 split on v0.35.2 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 32768 `p4minishell_config.h:1522`)
+## UI Model (v0.35.4 split, 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 32768 `p4minishell_config.h:1522`)
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
 - Scrollable transcript (LVGL span group) for coloured command output (read-only). It keeps
@@ -122,7 +122,10 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `beep`, `tone`, `wavplay`, `audio`, `volume` | `components/command/audio_commands.c` + `components/audio/audio.c` (parsing here, codec/playback in `audio`) |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
-| `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
+| `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep` | `components/command/power_commands.c` |
+| `gpio`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`, `camera` | `components/command/periph_commands.c` (+ board GPIO table/gate) |
+| `screenshot`, `receive`, `send` | `components/command/serial_commands.c` |
+| `display`, `keyboard`, `windows` (UI query) | `components/command/command_ui.c` (dispatched from `components/command/command.c`) |
 | `config` (persistent settings / CONFIG.SYS + factory reset) | `components/command/config_cmd.c` |
 | `reboot`, `clear`/`cls`, `prompt`, `launch`, `apps` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |

@@ -200,6 +200,55 @@ void shell_command_locate(int argc, char **argv);
 void shell_command_tui(int argc, char **argv);
 
 /* ========================================================================
+ * POWER / DISPLAY / BATTERY (`brightness`, `rotate`, `battery`, `power`,
+ * `sleep`, `deepsleep`)
+ * ======================================================================== */
+
+/**
+ * Power verbs, implemented in power_commands.c (moved out of command.c in
+ * v0.35.4). Owns the battery ADC state and the idle display-off state. The
+ * ops-table backings (command_battery_read, shell_power_* API) live there too.
+ */
+void shell_command_brightness(int argc, char **argv);
+void shell_command_rotate(int argc, char **argv);
+void shell_command_battery(int argc, char **argv);
+void shell_command_power(int argc, char **argv);
+void shell_command_sleep(int argc, char **argv);
+void shell_command_deepsleep(int argc, char **argv);
+
+/* ========================================================================
+ * PERIPHERAL TOOLKIT (`gpio`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`,
+ * `camera`)
+ * ======================================================================== */
+
+/**
+ * Peripheral toolkit verbs, implemented in periph_commands.c (moved out of
+ * command.c in v0.35.4). Every verb gates its pins through the board GPIO
+ * table, so active I2C/I2S/SDIO/display/SD lines can never be repurposed.
+ */
+void shell_execute_gpio_command(int argc, char **argv);
+void shell_execute_pwm_command(int argc, char **argv);
+void shell_execute_freq_command(int argc, char **argv);
+void shell_execute_adc_command(int argc, char **argv);
+void shell_execute_i2c_command(int argc, char **argv);
+void shell_execute_spi_command(int argc, char **argv);
+void shell_execute_rgb_command(int argc, char **argv);
+void shell_execute_camera_command(int argc, char **argv);
+
+/* ========================================================================
+ * SERIAL TRANSFER AND SCREENSHOT (`screenshot`, `receive`, `send`)
+ * ======================================================================== */
+
+/**
+ * Serial verbs, implemented in serial_commands.c (moved out of command.c in
+ * v0.35.4). Binary host<->device transfer over USB-Serial-JTAG plus LVGL
+ * screen capture as BMP. Each sets ERRORLEVEL 0 (ok) / 1 (I/O) / 2 (usage).
+ */
+void shell_command_screenshot(int argc, char **argv);
+void shell_command_receive(int argc, char **argv);
+void shell_command_send(int argc, char **argv);
+
+/* ========================================================================
  * DATABASE (`db`)
  * ======================================================================== */
 

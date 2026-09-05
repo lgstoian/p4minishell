@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.35.3 split, 80×25 `utf8[4]` TUI, `command.c` 6394→5808, `batch.c` 5195→4881)
+# P4MiniShell Roadmap (v0.35.4 split, `command.c` 5808→2467, periph/power/serial out)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -229,6 +229,16 @@ Implemented today in the checked-in firmware (final TUI hardware-verified on COM
   `components/led` (espressif/led_strip over RMT) with the `rgb` command, an
   auto status layer tied to Wi-Fi/HTTP events, a boot confirmation flash, and
   a CONFIG.SYS `RGB=` directive (see changelog v0.24.25).
+
+---
+
+## Recently Completed (v0.35.4 - September 2026)
+
+### God-file remainder — periph/power/serial out of `command.c`
+- ✅ New `components/command/periph_commands.c` (1527 lines): toolkit + GPIO table/gate/toolkit defines, declared in `command.h`
+- ✅ New `components/command/power_commands.c` (897 lines): power verbs + ADC/idle state + ops backings, declared in `command.h`
+- ✅ New `components/command/serial_commands.c` (1015 lines): screenshot/receive/send + helpers, declared in `command.h` (`http_body` stays with the inline httpget arm)
+- ✅ `command.c` 5808→2467 lines; function inventory HEAD vs work: zero lost, zero new (see changelog `## [0.35.4]`)
 
 ---
 

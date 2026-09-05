@@ -10,9 +10,9 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.35.3
-# Last updated: 2026-09-05 (splits: audio_commands.c + tui_commands.c out of command.c/batch.c; reconcile: memory baseline M33, codec ref fix; shim: tools/reapply_managed_patches.ps1)
-config_version: "0.35.3"
+# Version: 0.35.4
+# Last updated: 2026-09-05 (splits: periph/power/serial_commands.c out of command.c, command.c 5808->2467; http_body stays with inline httpget arm)
+config_version: "0.35.4"
 
 # ---- Shell Identity ----
 shell_identity:
