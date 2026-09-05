@@ -10,9 +10,9 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.35.2
-# Last updated: 2026-09-05 (cleanup: root one-shot scripts quarantined to tools/harness, browse verb unified on P4_CONFIG_TUI_BROWSE_PATH_BYTES, shell layering fix, root CMake 23 dirs, yaml/sdkconfig drift fixed, gfind bounds via P4_CONFIG_*)
-config_version: "0.35.2"
+# Version: 0.35.3
+# Last updated: 2026-09-05 (splits: audio_commands.c + tui_commands.c out of command.c/batch.c; reconcile: memory baseline M33, codec ref fix; shim: tools/reapply_managed_patches.ps1)
+config_version: "0.35.3"
 
 # ---- Shell Identity ----
 shell_identity:

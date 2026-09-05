@@ -7,5 +7,6 @@
 - `managed_patches.patch` — backup of the working-tree patches inside
   `managed_components/` (BSP graceful-degrade + `unscii_16` 384-glyph font).
   Re-apply after `idf.py update-dependencies` with
-  `git apply tools/managed_patches.patch`. See `bugs.md` M20/M28 and
+  `powershell -File tools/reapply_managed_patches.ps1`
+  (`-Check` for a dry run). See `bugs.md` M20/M28 and
   `changelog.md` 0.35.1/0.35.2.

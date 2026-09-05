@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.3] - 2026-09-05 — Split patch (audio/tui commands out of the god files, reconcile, managed shim)
+
+### Changed — `command.c` 6394→5808 lines, `batch.c` 5195→4881 lines (verbatim moves, no behavior change)
+
+- **New `components/command/audio_commands.c`** (181 lines): `volume`/`beep`/`tone`/`wavplay`/`audio` moved out of `command.c` (`command.c:1137-1293`), declared in `command.h` (new AUDIO section), following the `db_commands.c` / `alarm_commands.c` split. The dispatcher calls them; it never implements them.
+- **New `components/command/tui_commands.c`** (756 lines, 12 verbs): `draw`/`anchor`/`browse` moved out of `command.c`, `dialog`/`list`/`ask`/`browse_batch`/`view`/`hexview`/`color`/`locate`/`tui` moved out of the batch engine (`batch.c:3476-3785`), declared in `command.h` (new TUI section). `appmode` stays in `batch.c` (batch-frame cleanup); `temp`/`ansi`/`menu`/`notify` stay (batch language). `batch.c` drops its `modal_surf.h`/`tui.h`/`windows.h` includes.
+- **Line endings preserved per file** (`batch.c` stays CRLF like the repo, `command/` stays LF) so the diffs show only the moves.
+
+### Fixed — reconcile (docs follow code)
+
+- **Memory baseline M33** (`bugs.md`): current tree runs transcript 65536 (`p4minishell_config.h:93`, PSRAM), recolor == transcript (`p4minishell_config.h:101`), trim 4096 (`p4minishell_config.h:120`), async 512 (`p4minishell_config.h:137`), SD DMA 4096 (`p4minishell_config.h:634`), worker stack 32768 (`p4minishell_config.h:1522`); M19/M31 kept as the 0.35.1 history.
+- **Stale codec ref fixed** (`bugs.md` M20, `changelog.md` 0.35.1 audio entry): guards are `esp32_p4_function_ev_board.c:305-380` + `audio_ensure_speaker()` `audio.c:72-93`, not `esp_codec_dev.c:269`.
+
+### Added — managed re-apply shim
+
+- **`tools/reapply_managed_patches.ps1`** (+ `tools/managed_patches.patch` backup): `--check` dry-run / apply after `idf.py update-dependencies`; `tools/README.md` documents it.
+
+### Verification
+
+- Static checks only in this patch: each moved verb defined exactly once (`draw`/`anchor`/`browse`/`dialog`/`volume`/`tui`), call sites resolve via `command.h`, no new layering (command→batch include pre-exists), `EXTRA_COMPONENT_DIRS` unchanged (new files ride the existing `command` entry). Full `idf.py build` + COM11 pass deferred to the hardware session.
+
+---
+
 ## [0.35.2] - 2026-09-05 — Cleanup patch (root quarantine, browse dedup, layering, build/config drift)
 
 ### Removed — root one-shot scripts quarantined
@@ -73,7 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — audio abort in managed BSP
 
-- **Managed BSP `esp_codec_dev` abort fixed** (`managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269` `audio_codec_new` null `card_handle` guard + `bsp_audio_init` `components/audio/audio.c:42`) — `tone`/`wavplay` no longer `abort()` when the BSP card handle is null; verified `tone 440 200` / `wavplay` no longer hits `lock_init_generic` abort. `components/audio/audio.c` background task unchanged, `audio status|stop` remains batch-safe.
+- **Managed BSP audio abort fixed** (ref corrected in v0.35.3: guards are `managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_function_ev_board.c:305-380` + `audio_ensure_speaker()` `components/audio/audio.c:72-93`, backed up in `tools/managed_patches.patch`) — `tone`/`wavplay` no longer `abort()` when the BSP card handle is null; verified `tone 440 200` / `wavplay` no longer hits `lock_init_generic` abort. `components/audio/audio.c` background task unchanged, `audio status|stop` remains batch-safe.
 
 ### Fixed — modal EventGroup PSRAM
 

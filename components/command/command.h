@@ -161,6 +161,45 @@ bool command_is_initialized(void);
 bool shell_launch_app(const char *name);
 
 /* ========================================================================
+ * AUDIO (`volume`, `beep`, `tone`, `wavplay`, `audio`)
+ * ======================================================================== */
+
+/**
+ * Audio verbs: argument parsing and transcript output only. All codec,
+ * volume, and background-playback logic lives in components/audio
+ * (`audio.h`). Each sets ERRORLEVEL 0 (ok/started) / 1 (busy/failure) /
+ * 2 (usage).
+ */
+void shell_command_volume(int argc, char **argv);
+void shell_command_beep(int argc, char **argv);
+void shell_command_tone(int argc, char **argv);
+void shell_command_wavplay(int argc, char **argv);
+void shell_command_audio(int argc, char **argv);
+
+/* ========================================================================
+ * TUI AND MODAL-SURFACE VERBS (`draw`, `anchor`, `browse`, `dialog`,
+ * `list`, `ask`, `view`, `hexview`, `color`, `locate`, `tui`)
+ * ======================================================================== */
+
+/**
+ * TUI/modal verbs, implemented in tui_commands.c (moved out of command.c
+ * and batch.c in v0.35.3). `browse_batch` is the `/t:`/`/v:` form of
+ * `browse` used by batch files. Each sets ERRORLEVEL per command.md.
+ */
+bool shell_command_draw(int argc, char **argv);
+bool shell_command_anchor(int argc, char **argv);
+void shell_command_browse(int argc, char **argv);
+void shell_command_dialog(int argc, char **argv);
+void shell_command_list(int argc, char **argv);
+void shell_command_ask(int argc, char **argv);
+void shell_command_browse_batch(int argc, char **argv);
+void shell_command_view(int argc, char **argv);
+void shell_command_hexview(int argc, char **argv);
+void shell_command_color(int argc, char **argv);
+void shell_command_locate(int argc, char **argv);
+void shell_command_tui(int argc, char **argv);
+
+/* ========================================================================
  * DATABASE (`db`)
  * ======================================================================== */
 

@@ -379,65 +379,11 @@ void shell_command_menu(int argc, char **argv);
  */
 void shell_command_notify(int argc, char **argv);
 
-/**
- * `dialog [/t:secs] "title" "message" [button1] [button2]` — native modal
- * dialog. `/t:secs` auto-cancels after `secs` seconds.
- * ERRORLEVEL: 0 button1, 1 button2, 255 cancel/timeout.
+/* NOTE: the TUI/modal verbs (`draw`, `anchor`, `browse`, `dialog`, `list`,
+ * `ask`, `browse_batch`, `view`, `hexview`, `color`, `locate`, `tui`) live in
+ * components/command/tui_commands.c since v0.35.3 and are declared in
+ * command.h. Only `appmode` below stays in the batch engine (frame cleanup).
  */
-void shell_command_dialog(int argc, char **argv);
-
-/**
- * `list [/t:secs] [/v:NAME] "title" item1 [item2...]` — native modal list
- * selector. `/t:secs` auto-cancels after `secs` seconds. With `/v:NAME`, the
- * selected item's label is stored in the NAME environment variable.
- * ERRORLEVEL: 0-based selected index, 255 cancel/timeout.
- */
-void shell_command_list(int argc, char **argv);
-
-/**
- * `ask [/t:secs] [/v:NAME] [/p] "prompt" [default]` — native modal text
- * prompt. `/t:secs` auto-cancels after `secs` seconds. The answer is stored
- * in the `ASK_RESULT` environment variable (or in NAME when `/v:NAME` is
- * given). `/p` masks the input (password mode).
- * ERRORLEVEL: 0 ok, 1 cancel/timeout, 2 usage.
- */
-void shell_command_ask(int argc, char **argv);
-
-/**
- * `browse [/t:secs] [/v:NAME] [path]` — file browser modal.
- * ERRORLEVEL: 0 ok, 1 cancel/timeout, 2 usage.
- */
-void shell_command_browse_batch(int argc, char **argv);
-
-/**
- * `view [/t:secs] <file>` — text viewer/pager modal.
- * ERRORLEVEL: 0 ok, 1 error, 2 usage.
- */
-void shell_command_view(int argc, char **argv);
-
-/**
- * `hexview [/t:secs] <file>` — hex viewer modal.
- * ERRORLEVEL: 0 ok, 1 error, 2 usage.
- */
-void shell_command_hexview(int argc, char **argv);
-
-/**
- * `color [fg] [bg]` — set default TUI colours (DOS COLOR 0A style).
- * With no args shows current colours. ERRORLEVEL 0/2.
- */
-void shell_command_color(int argc, char **argv);
-
-/**
- * `locate <row> <col>` — move TUI cursor (DOS LOCATE style).
- * ERRORLEVEL 0/2.
- */
-void shell_command_locate(int argc, char **argv);
-
-/**
- * `tui fullscreen <on|off> | tui status | tui clear` — TUI control (per-app).
- * ERRORLEVEL 0/2.
- */
-void shell_command_tui(int argc, char **argv);
 
 /**
  * `appmode` — enter/exit app mode (save/restore screen, optional full-screen).

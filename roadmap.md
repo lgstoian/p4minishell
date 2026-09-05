@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.35.2 cleanup, 80×25 `utf8[4]` TUI, stack 24576 `p4minishell_config.h:1514` at `0x4012b75a`, companion 7 BATs TUI-expanded COM11 PASS)
+# P4MiniShell Roadmap (v0.35.3 split, 80×25 `utf8[4]` TUI, `command.c` 6394→5808, `batch.c` 5195→4881)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -229,6 +229,16 @@ Implemented today in the checked-in firmware (final TUI hardware-verified on COM
   `components/led` (espressif/led_strip over RMT) with the `rgb` command, an
   auto status layer tied to Wi-Fi/HTTP events, a boot confirmation flash, and
   a CONFIG.SYS `RGB=` directive (see changelog v0.24.25).
+
+---
+
+## Recently Completed (v0.35.3 - September 2026)
+
+### God-file splits — audio/tui commands out of `command.c`/`batch.c`
+- ✅ New `components/command/audio_commands.c` (181 lines): `volume`/`beep`/`tone`/`wavplay`/`audio` out of `command.c`, declared in `command.h`
+- ✅ New `components/command/tui_commands.c` (756 lines, 12 verbs): `draw`/`anchor`/`browse` out of `command.c`, `dialog`/`list`/`ask`/`browse_batch`/`view`/`hexview`/`color`/`locate`/`tui` out of `batch.c`, declared in `command.h`
+- ✅ `command.c` 6394→5808 lines, `batch.c` 5195→4881 lines; verbatim moves, single dispatcher unchanged, each verb defined once
+- ✅ Reconcile: memory baseline M33, codec-ref fix; shim: `tools/reapply_managed_patches.ps1` (see changelog `## [0.35.3]`)
 
 ---
 
