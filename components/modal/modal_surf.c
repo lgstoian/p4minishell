@@ -31,6 +31,33 @@
 
 /* ---- Shared helpers ---- */
 
+bool modal_parse_timeout_arg(const char *arg, uint32_t *timeout_ms_out)
+{
+    int secs;
+
+    if (arg == NULL || timeout_ms_out == NULL) {
+        return false;
+    }
+    if (strncasecmp(arg, "/t:", 3) != 0 || strlen(arg) <= 3) {
+        return false;
+    }
+    secs = atoi(arg + 3);
+    *timeout_ms_out = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+    return true;
+}
+
+bool modal_parse_var_arg(const char *arg, const char **name_out)
+{
+    if (arg == NULL || name_out == NULL) {
+        return false;
+    }
+    if (strncasecmp(arg, "/v:", 3) != 0 || strlen(arg) <= 3) {
+        return false;
+    }
+    *name_out = arg + 3;
+    return true;
+}
+
 static void surf_request_close(EventGroupHandle_t eg)
 {
     if (eg) xEventGroupSetBits(eg, MODAL_EVENT_CLOSE_REQUEST);
@@ -907,15 +934,20 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
                 for (size_t off=0; off<r; off+=16) {
                     int n = snprintf(ctx->content+pos, cap-pos, "%08X  ", (unsigned)off);
                     if (n<0) break;
+                    if ((size_t)n >= cap-pos) { pos = cap-1; break; } // truncated: stop, keep NUL room
                     pos += (size_t)n;
                     for (int i=0;i<16;i++) {
                         if (off+i < r) n = snprintf(ctx->content+pos, cap-pos, "%02X ", buf[off+i]);
                         else n = snprintf(ctx->content+pos, cap-pos, "   ");
                         if (n<0) break;
+                        if ((size_t)n >= cap-pos) { pos = cap-1; break; }
                         pos += (size_t)n;
                     }
+                    if (pos >= cap-1) break;
                     n = snprintf(ctx->content+pos, cap-pos, " |");
-                    if (n>0) pos += (size_t)n;
+                    if (n<0) break;
+                    if ((size_t)n >= cap-pos) { pos = cap-1; break; }
+                    pos += (size_t)n;
                     for (int i=0;i<16 && off+i<r;i++) {
                         char c = (char)buf[off+i];
                         if (c < 32 || c > 126) c='.';

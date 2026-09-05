@@ -98,4 +98,28 @@ int modal_viewer_run(const char *title, const char *file_path, uint32_t timeout_
  */
 int modal_hexview_run(const char *title, const char *file_path, uint32_t timeout_ms);
 
+/**
+ * @brief Parse one `/t:secs` option argument (shared by dialog/list/ask/
+ * browse/view/hexview).
+ *
+ * Accepts exactly the historical spelling: a `/t:` prefix (case-insensitive)
+ * with at least one trailing character. `secs` parses via atoi(); zero,
+ * negative, and non-numeric values all yield timeout 0 (wait forever),
+ * matching the inline parsers this replaces.
+ *
+ * @param arg            Candidate argv element (may be NULL).
+ * @param timeout_ms_out Receives secs*1000 on true, untouched on false.
+ * @return true when @p arg is a `/t:` option (even a zero one).
+ */
+bool modal_parse_timeout_arg(const char *arg, uint32_t *timeout_ms_out);
+
+/**
+ * @brief Parse one `/v:NAME` option argument (shared by list/ask/browse).
+ *
+ * @param arg      Candidate argv element (may be NULL).
+ * @param name_out Receives the pointer past `/v:` on true, untouched on false.
+ * @return true when @p arg is a `/v:` option with a non-empty name.
+ */
+bool modal_parse_var_arg(const char *arg, const char **name_out);
+
 #endif /* P4MINISHELL_MODAL_SURF_H */

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.5] - 2026-09-05 — Hardening patch (truncation/OOB, OOM immediacy, tests, LVGL locks)
+
+### Fixed — truncation / OOB (fail closed, fitting inputs unchanged)
+
+- **`tui_flush` recolor buffer** (`components/tui/tui.c:382,401`): clamp `pos` on `snprintf` truncation + final NUL guard (was `size_t` underflow → OOB write past `cap`).
+- **Hexview pager** (`components/modal/modal_surf.c:908-917`): same clamp at all three `snprintf` sites.
+- **`tree` child paths** (`components/storage/storage_commands.c:1029,1086`): explicit truncation checks — skip the entry / mark truncated instead of stating or descending into a cut path.
+- **`trash` unique names** (`components/storage/trash.c:180-184`): skip truncated candidates (never test a cut name for uniqueness).
+- **`db` path builders** (`components/db/db.c:62-79`): fail-closed empty string + `ESP_LOGE` on truncation (existing `DB_TAG` pattern, no new includes).
+- **Verified safe, no change:** `tree names[]` (equal 256B cells), db fixed-field copies (equal-size/`%.*s`), UART submit (assembler caps at 4095), windows fragment (use already NULL-guarded), dir display cells (deliberate clipping).
+
+### Fixed — OOM immediacy (NULL checked before use, success paths unchanged)
+
+- **Dispatch snapshots** (`components/command/command.c:1064-1117`): `want_family`/`want_echo` restructure with a single OOM guard (was 8 unchecked `strdup`s flowing into family handlers).
+- **Async submit** (`components/command/command.c:2244`): validate args/queue before allocating (was allocate-then-check).
+- **`sd` dispatcher** (`components/storage/storage_commands.c:5730`), **`chkdsk` subdirs** (warns instead of silently skipping levels), **shell repair order** + **shell init early-return** (`components/shell/shell.c:1548,4475` — was NULL-deref at `s_transcript[0]`; `s_initialized` stays false), **clipboard text** (`components/command/command.c:329` — 2048B stack local → heap, the last ≥1KB stack local on the dispatch path).
+
+### Added — 22 unit tests (pure logic; HW stays on board)
+
+- **`test_modal.c`** (5): new shared `modal_parse_timeout_arg`/`modal_parse_var_arg` (`components/modal/modal_surf.h`) replacing 9 copy-pasted `/t:`/`/v:` parses in `tui_commands.c` — dedup + tests in one move.
+- **`test_power.c`** (4): `shell_power_parse_seconds` + `shell_power_wake_cause_string` promoted to `command.h`.
+- **`test_serial.c`** (2): `screenshot_write_bmp_headers` promoted to `command.h` (magic/size/dims/bpp/DPI).
+- **`test_tui.c`** (4): default-colour round-trip, cursor save/restore, inactive defaults (draw/flush need LVGL — stay board-verified).
+- **`test_clipboard.c`** (4): set/get/file-flag/copy-transcript (RAM buffer works headless).
+- **`test_history_file.c`** (3): new `shell_history_save_lines`/`shell_history_load_lines` (`components/shell/shell.h`, extracted from `history /save|/load`; `tmpfile`, skipped loudly if unavailable).
+- Wired in `test/main/CMakeLists.txt` (+ `modal`/`tui` includes/deps) and `test_main.c`.
+
+### Fixed — LVGL task affinity (narrow, no blanket locking)
+
+- **Transcript-apply fallback** (`components/windows/windows.c:779`): takes `lvgl_port_lock(0)` — the doc comment always claimed the fallback held it, the code did not (recursive mutex nests safely).
+- **`shell_extract_input_text`** (`components/shell/shell.c:1554`): recursive-lock the textarea read (both callers are LVGL-task today; now safe from any task).
+- **Audited, no change:** header timer/init calls (LVGL-task context), USB inject path (async-dispatched), ops tables (NULL-checked throughout per prior audit).
+
+### Verification
+
+- Static checks only in this patch: single definitions, `command.h`/`shell.h` call sites, LF endings and BOM preserved, new tests reviewed against implementation (incl. `ESP_SLEEP_WAKEUP_UNDEFINED` default arm, `TEST_ASSERT_EQUAL_size_t` precedent, `TEST_IGNORE` on missing `tmpfile`). `idf.py build` + host test run + COM11 pass deferred to the hardware session.
+
+---
+
 ## [0.35.4] - 2026-09-05 — Split patch (periph/power/serial out of `command.c`)
 
 ### Changed — `command.c` 5808→2467 lines (verbatim moves, no behavior change)

@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.35.4 split, `command.c` 5808→2467, periph/power/serial out)
+# P4MiniShell Roadmap (v0.35.5 hardening, fail-closed truncations, OOM immediacy, 22 new tests)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -229,6 +229,16 @@ Implemented today in the checked-in firmware (final TUI hardware-verified on COM
   `components/led` (espressif/led_strip over RMT) with the `rgb` command, an
   auto status layer tied to Wi-Fi/HTTP events, a boot confirmation flash, and
   a CONFIG.SYS `RGB=` directive (see changelog v0.24.25).
+
+---
+
+## Recently Completed (v0.35.5 - September 2026)
+
+### Hardening — fail-closed truncations, OOM immediacy, tests, LVGL locks
+- ✅ Truncation/OOB guards (`tui_flush`, hexview pager, tree paths, trash names, db paths; verified-safe sites recorded)
+- ✅ OOM immediacy (dispatch snapshots, async submit, sd copy, repair/init order, chkdsk warning, clip heap — last ≥1KB stack local gone)
+- ✅ 22 new unit tests (`test_modal/power/serial/tui/clipboard/history_file`; shared `modal_parse_*` dedup, promoted pure helpers, extracted history format)
+- ✅ LVGL affinity: locked transcript-apply fallback + input extract; header/inject audited-clean (see changelog `## [0.35.5]`)
 
 ---
 

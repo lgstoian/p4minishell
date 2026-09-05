@@ -380,7 +380,9 @@ void tui_flush(void)
                 uint32_t col = ansi_get_palette_color((ansi_color_index_t)fg);
                 if (col == 0 && fg != 0) col = ansi_get_palette_color(ANSI_COLOR_WHITE);
                 int n = snprintf(buf + pos, cap - pos, "#%06X ", (unsigned)(col & 0xFFFFFF));
-                if (n > 0) pos += (size_t)n;
+                if (n < 0) break;
+                if ((size_t)n >= cap - pos) { pos = cap - 1; break; } // truncated: stop, keep NUL room
+                pos += (size_t)n;
             }
             for (int k = 0; k < run; k++) {
                 tui_cell_t *cc = cell_at(r, c + k);
@@ -398,6 +400,7 @@ void tui_flush(void)
         }
         if (r < s_rows && pos + 1 < cap) buf[pos++] = '\n';
     }
+    if (pos >= cap) pos = cap - 1;
     buf[pos] = '\0';
     lvgl_port_lock(0);
     lv_label_set_text(s_tui_label, buf);

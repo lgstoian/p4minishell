@@ -474,7 +474,8 @@ void shell_command_battery(int argc, char **argv)
  * through networking_wifi_shutdown() (the same path C6 OTA uses).
  * ======================================================================== */
 
-static const char *shell_power_wake_cause_string(esp_sleep_wakeup_cause_t cause)
+/** Pure wake-cause enum->string (unit-tested). */
+const char *shell_power_wake_cause_string(esp_sleep_wakeup_cause_t cause)
 {
     switch (cause) {
         case ESP_SLEEP_WAKEUP_EXT0:             return "ext0";
@@ -522,7 +523,8 @@ static bool shell_power_report_battery(const char *label)
  * configured default is used; out-of-range values are clamped so a typo
  * cannot put the board to sleep for days.
  */
-static bool shell_power_parse_seconds(int argc, char **argv, uint32_t *seconds_out)
+/** Pure argv->seconds parser (unit-tested): default, clamp, reject. */
+bool shell_power_parse_seconds(int argc, char **argv, uint32_t *seconds_out)
 {
     char *end;
     long value;

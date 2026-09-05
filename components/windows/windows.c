@@ -778,7 +778,13 @@ static void windows_transcript_schedule_apply(void)
     s_transcript_apply_pending = true;
     if (lv_async_call(windows_transcript_apply_cb, NULL) != LV_RESULT_OK) {
         s_transcript_apply_pending = false;
+        // Async dispatch failed: run the apply synchronously on the caller's
+        // task. Callers hold the LVGL port lock here and the port mutex is
+        // recursive, so take it explicitly to match the documented contract
+        // ("on the caller's task while holding the LVGL port lock").
+        lvgl_port_lock(0);
         windows_transcript_apply();
+        lvgl_port_unlock();
     }
 }
 

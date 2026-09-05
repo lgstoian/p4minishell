@@ -175,13 +175,22 @@ static esp_err_t trash_unique_name(const char *basename, char *out, size_t out_s
 
     for (attempt = 0; attempt < 1000; attempt++) {
         char full[TRASH_FULL_PATH_BYTES];
+        int n;
 
         if (attempt == 0) {
-            snprintf(out, out_size, "%lu_%s", stamp, basename);
+            n = snprintf(out, out_size, "%lu_%s", stamp, basename);
         } else {
-            snprintf(out, out_size, "%lu_%s_%d", stamp, basename, attempt);
+            n = snprintf(out, out_size, "%lu_%s_%d", stamp, basename, attempt);
         }
-        snprintf(full, sizeof(full), "%s/%s", trash_root_path(), out);
+        // A truncated candidate must never be tested for uniqueness:
+        // it could collide with a live entry. Try the next attempt.
+        if (n < 0 || (size_t)n >= out_size) {
+            continue;
+        }
+        n = snprintf(full, sizeof(full), "%s/%s", trash_root_path(), out);
+        if (n < 0 || (size_t)n >= sizeof(full)) {
+            continue;
+        }
         if (access(full, F_OK) != 0) {
             return ESP_OK;
         }

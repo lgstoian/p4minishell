@@ -207,6 +207,34 @@ extern void test_alarm_advance_weekly_single_day(void);
 extern void test_alarm_parse_valid(void);
 extern void test_alarm_parse_invalid(void);
 
+extern void test_modal_timeout_basic(void);
+extern void test_modal_timeout_case_and_zero(void);
+extern void test_modal_timeout_rejects(void);
+extern void test_modal_var_basic(void);
+extern void test_modal_var_rejects(void);
+
+extern void test_power_parse_default(void);
+extern void test_power_parse_valid(void);
+extern void test_power_parse_clamp_and_reject(void);
+extern void test_power_wake_cause_strings(void);
+
+extern void test_serial_bmp_headers(void);
+extern void test_serial_bmp_headers_small(void);
+
+extern void test_tui_default_color_roundtrip(void);
+extern void test_tui_default_color_null_safe(void);
+extern void test_tui_cursor_save_restore(void);
+extern void test_tui_inactive_by_default(void);
+
+extern void test_clipboard_set_get(void);
+extern void test_clipboard_empty_and_null(void);
+extern void test_clipboard_file_flag(void);
+extern void test_clipboard_copy_transcript(void);
+
+extern void test_history_file_roundtrip(void);
+extern void test_history_file_skips_blanks(void);
+extern void test_history_file_null_stream(void);
+
 void app_main(void)
 {
     printf("\n=== P4MiniShell Unit Tests ===\n\n");
@@ -481,6 +509,52 @@ void app_main(void)
     RUN_TEST(test_alarm_advance_weekly_single_day);
     RUN_TEST(test_alarm_parse_valid);
     RUN_TEST(test_alarm_parse_invalid);
+    UNITY_END();
+
+    /* Modal option parsers (components/modal shared by all TUI verbs). */
+    UNITY_BEGIN();
+    RUN_TEST(test_modal_timeout_basic);
+    RUN_TEST(test_modal_timeout_case_and_zero);
+    RUN_TEST(test_modal_timeout_rejects);
+    RUN_TEST(test_modal_var_basic);
+    RUN_TEST(test_modal_var_rejects);
+    UNITY_END();
+
+    /* Power helpers (components/command/power_commands.c). */
+    UNITY_BEGIN();
+    RUN_TEST(test_power_parse_default);
+    RUN_TEST(test_power_parse_valid);
+    RUN_TEST(test_power_parse_clamp_and_reject);
+    RUN_TEST(test_power_wake_cause_strings);
+    UNITY_END();
+
+    /* BMP header writer (components/command/serial_commands.c). */
+    UNITY_BEGIN();
+    RUN_TEST(test_serial_bmp_headers);
+    RUN_TEST(test_serial_bmp_headers_small);
+    UNITY_END();
+
+    /* Headless-safe TUI state (components/tui). */
+    UNITY_BEGIN();
+    RUN_TEST(test_tui_default_color_roundtrip);
+    RUN_TEST(test_tui_default_color_null_safe);
+    RUN_TEST(test_tui_cursor_save_restore);
+    RUN_TEST(test_tui_inactive_by_default);
+    UNITY_END();
+
+    /* RAM clipboard (components/shell). */
+    UNITY_BEGIN();
+    RUN_TEST(test_clipboard_set_get);
+    RUN_TEST(test_clipboard_empty_and_null);
+    RUN_TEST(test_clipboard_file_flag);
+    RUN_TEST(test_clipboard_copy_transcript);
+    UNITY_END();
+
+    /* History file format (components/shell helpers). */
+    UNITY_BEGIN();
+    RUN_TEST(test_history_file_roundtrip);
+    RUN_TEST(test_history_file_skips_blanks);
+    RUN_TEST(test_history_file_null_stream);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

@@ -59,23 +59,38 @@ bool db_name_valid(const char *name)
     return true;
 }
 
-/** Build the resolved directory path for a database into @p out. */
+/** Build the resolved directory path for a database into @p out.
+ * On truncation writes an empty string (fail closed: downstream stat/open
+ * on "" fails cleanly) instead of a silently-cut path. Names are already
+ * length-bounded by db_name_valid(), so this is defense in depth. */
 static void db_dir_path(const char *name, char *out, size_t out_size)
 {
-    snprintf(out, out_size, "%s/%s/%s.DB", BSP_SD_MOUNT_POINT, DB_DIR_NAME, name);
+    int n = snprintf(out, out_size, "%s/%s/%s.DB", BSP_SD_MOUNT_POINT, DB_DIR_NAME, name);
+    if (n < 0 || (size_t)n >= out_size) {
+        ESP_LOGE(DB_TAG, "database path does not fit");
+        if (out_size > 0) out[0] = '\0';
+    }
 }
 
-/** Build a resolved file path inside a database. */
+/** Build a resolved file path inside a database (fail-closed, see above). */
 static void db_file_path(const char *name, const char *file, char *out, size_t out_size)
 {
-    snprintf(out, out_size, "%s/%s/%s.DB/%s", BSP_SD_MOUNT_POINT, DB_DIR_NAME, name, file);
+    int n = snprintf(out, out_size, "%s/%s/%s.DB/%s", BSP_SD_MOUNT_POINT, DB_DIR_NAME, name, file);
+    if (n < 0 || (size_t)n >= out_size) {
+        ESP_LOGE(DB_TAG, "database path does not fit");
+        if (out_size > 0) out[0] = '\0';
+    }
 }
 
-/** Build the resolved path of a record's .DAT file. */
+/** Build the resolved path of a record's .DAT file (fail-closed, see above). */
 static void db_record_path(const char *name, uint32_t id, char *out, size_t out_size)
 {
-    snprintf(out, out_size, "%s/%s/%s.DB/%s/R%08lX.DAT",
-             BSP_SD_MOUNT_POINT, DB_DIR_NAME, name, DB_RECORDS_DIR, (unsigned long)id);
+    int n = snprintf(out, out_size, "%s/%s/%s.DB/%s/R%08lX.DAT",
+                     BSP_SD_MOUNT_POINT, DB_DIR_NAME, name, DB_RECORDS_DIR, (unsigned long)id);
+    if (n < 0 || (size_t)n >= out_size) {
+        ESP_LOGE(DB_TAG, "database record path does not fit");
+        if (out_size > 0) out[0] = '\0';
+    }
 }
 
 /** Current unix-ish timestamp (seconds since boot epoch is fine for stamps). */

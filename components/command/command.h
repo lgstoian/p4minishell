@@ -32,7 +32,9 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
+#include "esp_sleep.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -216,6 +218,17 @@ void shell_command_power(int argc, char **argv);
 void shell_command_sleep(int argc, char **argv);
 void shell_command_deepsleep(int argc, char **argv);
 
+/**
+ * Parse `sleep`/`deepsleep` seconds (pure, unit-tested): no argument yields
+ * the default, values clamp to the max, negatives and garbage fail.
+ */
+bool shell_power_parse_seconds(int argc, char **argv, uint32_t *seconds_out);
+
+/**
+ * Wake-cause enum to short string (pure, unit-tested, "none" by default).
+ */
+const char *shell_power_wake_cause_string(esp_sleep_wakeup_cause_t cause);
+
 /* ========================================================================
  * PERIPHERAL TOOLKIT (`gpio`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`,
  * `camera`)
@@ -247,6 +260,11 @@ void shell_execute_camera_command(int argc, char **argv);
 void shell_command_screenshot(int argc, char **argv);
 void shell_command_receive(int argc, char **argv);
 void shell_command_send(int argc, char **argv);
+
+/**
+ * Fill 54 BMP header bytes for a WxH 24-bit image (pure, unit-tested).
+ */
+int screenshot_write_bmp_headers(uint8_t *buf, uint32_t width, uint32_t height);
 
 /* ========================================================================
  * DATABASE (`db`)

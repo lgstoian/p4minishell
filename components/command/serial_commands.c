@@ -47,7 +47,8 @@
  *   - Info header: header size (40), width, height, planes (1), bpp (24),
  *     compression (0=BI_RGB), image size, resolution, color count
  */
-static int screenshot_write_bmp_headers(uint8_t *buf, uint32_t width, uint32_t height)
+/** Pure BMP header writer (unit-tested): fills 54 header bytes, no I/O. */
+int screenshot_write_bmp_headers(uint8_t *buf, uint32_t width, uint32_t height)
 {
     uint32_t row_bytes = width * 3;  /* 24-bit RGB */
     uint32_t img_size = row_bytes * height;

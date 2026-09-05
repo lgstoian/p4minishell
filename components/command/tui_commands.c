@@ -464,9 +464,8 @@ void shell_command_dialog(int argc, char **argv)
     int i;
 
     for (i = 1; i < argc; i++) {
-        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
-            int secs = atoi(argv[i] + 3);
-            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
         } else if (title == NULL) {
             title = argv[i];
         } else if (message == NULL) {
@@ -499,11 +498,10 @@ void shell_command_list(int argc, char **argv)
     int i;
 
     for (i = 1; i < argc; i++) {
-        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
-            int secs = atoi(argv[i] + 3);
-            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
-        } else if (strncasecmp(argv[i], "/v:", 3) == 0 && strlen(argv[i]) > 3) {
-            varname = argv[i] + 3;
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
+        } else if (modal_parse_var_arg(argv[i], &varname)) {
+            continue;
         } else if (title == NULL) {
             title = argv[i];
         } else if (items == NULL) {
@@ -543,11 +541,10 @@ void shell_command_ask(int argc, char **argv)
     int i;
 
     for (i = 1; i < argc; i++) {
-        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
-            int secs = atoi(argv[i] + 3);
-            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
-        } else if (strncasecmp(argv[i], "/v:", 3) == 0 && strlen(argv[i]) > 3) {
-            varname = argv[i] + 3;
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
+        } else if (modal_parse_var_arg(argv[i], &varname)) {
+            continue;
         } else if (strcasecmp(argv[i], "/p") == 0) {
             password = true;
         } else if (prompt == NULL) {
@@ -587,11 +584,10 @@ void shell_command_browse_batch(int argc, char **argv)
     int rc;
 
     for (int i = 1; i < argc; i++) {
-        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
-            int secs = atoi(argv[i] + 3);
-            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
-        } else if (strncasecmp(argv[i], "/v:", 3) == 0 && strlen(argv[i]) > 3) {
-            varname = argv[i] + 3;
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
+        } else if (modal_parse_var_arg(argv[i], &varname)) {
+            continue;
         } else if (start_path == NULL) {
             start_path = argv[i];
         }
@@ -618,9 +614,8 @@ void shell_command_view(int argc, char **argv)
     uint32_t timeout_ms = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
-            int secs = atoi(argv[i] + 3);
-            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
         } else if (path == NULL) {
             path = argv[i];
         }
@@ -642,9 +637,8 @@ void shell_command_hexview(int argc, char **argv)
     uint32_t timeout_ms = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
-            int secs = atoi(argv[i] + 3);
-            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
         } else if (path == NULL) {
             path = argv[i];
         }

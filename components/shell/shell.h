@@ -29,6 +29,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -321,6 +322,21 @@ const char *shell_history_get(size_t index);
 
 /** Clear the recall history (frees all heap entries). */
 void shell_history_clear(void);
+
+/**
+ * Write every recall-history entry as one line to an open stream (unit-
+ * tested; the `history /save` command opens the SD file and calls this).
+ * Skips NULL entries; a short write removes nothing here — the caller owns
+ * the partial-file policy. Returns true when every line was written.
+ */
+bool shell_history_save_lines(FILE *fp);
+
+/**
+ * Read newline-terminated lines from an open stream into recall history
+ * (unit-tested; the `history /load` command opens the SD file and calls
+ * this). Trims each line, skips blanks. Returns the number of lines loaded.
+ */
+size_t shell_history_load_lines(FILE *fp);
 
 /**
  * Decide whether a submitted command should be stored in recall history.

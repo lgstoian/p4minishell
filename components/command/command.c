@@ -327,13 +327,22 @@ static void shell_command_clip(int argc, char **argv)
         }
     }
     {
-        char text[P4_CONFIG_CLIPBOARD_BYTES];
+        // Heap-allocated: a clipboard-sized stack local would eat 2 KB of
+        // the shared command worker task stack on the recursive batch path.
+        char *text = malloc(P4_CONFIG_CLIPBOARD_BYTES);
+        if (text == NULL) {
+            shell_print_error("clip: out of memory");
+            shell_record_errorf("clip", ESP_ERR_NO_MEM, "Out of memory for clipboard text");
+            batch_set_errorlevel(1);
+            return;
+        }
 
-        shell_join_args(argv, 1, argc, text, sizeof(text));
+        shell_join_args(argv, 1, argc, text, P4_CONFIG_CLIPBOARD_BYTES);
         shell_clipboard_set(text);
         shell_transcript_appendf_ansi(SH_LBL "clip:" SH_RST " clipboard set (" SH_NUM "%d" SH_RST " B)\n",
                                  (int)strlen(text));
         batch_set_errorlevel(0);
+        free(text);
     }
 }
 
@@ -795,7 +804,6 @@ static void shell_command_history(int argc, char **argv)
         }
 
         if (saving) {
-            size_t index;
             size_t bytes = shell_history_get_count() * 2;   /* rough free-space need */
 
             if (!storage_check_free_space((uint64_t)bytes + 4096, 0, "history")) {
@@ -811,19 +819,13 @@ static void shell_command_history(int argc, char **argv)
                 batch_set_errorlevel(1);
                 return;
             }
-            for (index = 0; index < shell_history_get_count(); index++) {
-                const char *line = shell_history_get(index);
-
-                if (line != NULL) {
-                    if (fprintf(fp, "%s\n", line) < 0) {
-                        fclose(fp);
-                        (void)unlink(resolved);
-                        shell_sd_end(&session, "history");
-                        shell_print_error("history: write failed, removed the partial file");
-                        batch_set_errorlevel(1);
-                        return;
-                    }
-                }
+            if (!shell_history_save_lines(fp)) {
+                fclose(fp);
+                (void)unlink(resolved);
+                shell_sd_end(&session, "history");
+                shell_print_error("history: write failed, removed the partial file");
+                batch_set_errorlevel(1);
+                return;
             }
             fclose(fp);
             shell_sd_end(&session, "history");
@@ -832,36 +834,16 @@ static void shell_command_history(int argc, char **argv)
                                      (unsigned)shell_history_get_count(),
                                      shell_history_get_count() == 1 ? "" : "s", resolved);
         } else {
-            /* The read line is command-sized and `history` can run from a
-             * nested batch line, so it is heap-allocated (a 4096-byte stack
-             * local here would eat into the worker task's stack budget). */
-            char *line = malloc(P4_CONFIG_COMMAND_BYTES);
-            size_t loaded = 0;
-
-            if (line == NULL) {
-                shell_sd_end(&session, "history");
-                shell_print_error("history: out of memory reading %s", resolved);
-                batch_set_errorlevel(1);
-                return;
-            }
+            size_t loaded;
 
             fp = fopen(resolved, "r");
             if (fp == NULL) {
-                free(line);
                 shell_sd_end(&session, "history");
                 shell_print_error("history: cannot open %s for reading", resolved);
                 batch_set_errorlevel(1);
                 return;
             }
-            while (fgets(line, P4_CONFIG_COMMAND_BYTES, fp) != NULL) {
-                shell_trim(line);
-                if (line[0] == '\0') {
-                    continue;
-                }
-                shell_store_command_history(line);
-                loaded++;
-            }
-            free(line);
+            loaded = shell_history_load_lines(fp);
             fclose(fp);
             shell_sd_end(&session, "history");
             shell_transcript_appendf_ansi(SH_LBL "history:" SH_RST " loaded " SH_NUM "%u" SH_RST
@@ -1061,42 +1043,45 @@ bool shell_execute_command_core(char *command)
      * token ("wifi status" -> "wifi"). Preserve a heap copy of the trimmed
      * line for those branches. The copy is only made for family prefixes, and
      * every family branch frees it, so normal commands never allocate. */
-    if (strncmp(trimmed, "wifi", 4) == 0 &&
-        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-        family_command = strdup(trimmed);
-    } else if (strncmp(trimmed, "bluetooth", 9) == 0 &&
-               (trimmed[9] == '\0' || isspace((unsigned char)trimmed[9]))) {
-        family_command = strdup(trimmed);
-    } else if (strncmp(trimmed, "bt", 2) == 0 &&
-               (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
-        family_command = strdup(trimmed);
-    } else if (strncmp(trimmed, "usb", 3) == 0 &&
-               (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]))) {
-        family_command = strdup(trimmed);
-    } else if (strncmp(trimmed, "sd", 2) == 0 &&
-               (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) {
-        family_command = strdup(trimmed);
-    } else if (strncmp(trimmed, "disk", 4) == 0 &&
-               (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+    bool want_family = (strncmp(trimmed, "wifi", 4) == 0 &&
+                        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) ||
+                       (strncmp(trimmed, "bluetooth", 9) == 0 &&
+                        (trimmed[9] == '\0' || isspace((unsigned char)trimmed[9]))) ||
+                       (strncmp(trimmed, "bt", 2) == 0 &&
+                        (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) ||
+                       (strncmp(trimmed, "usb", 3) == 0 &&
+                        (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]))) ||
+                       (strncmp(trimmed, "sd", 2) == 0 &&
+                        (trimmed[2] == '\0' || isspace((unsigned char)trimmed[2]))) ||
+                       (strncmp(trimmed, "disk", 4) == 0 &&
+                        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4])));
+    if (want_family) {
         family_command = strdup(trimmed);
     }
 
     /* Echo must print the whole remainder of a long line: a 4096-byte `echo`
      * with more tokens than the argv capacity would be truncated by the split
      * below. Snapshot the raw (unsplit) line so the echo branch can fall back
-     * to it. Only allocated when the command is `echo`; the echo branch (and
-     * the argc==0 guard above) is the only path that frees it. */
-    if (strncasecmp(trimmed, "echo", 4) == 0 &&
-        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+     * to it. Only allocated when the command is `echo` or `calc` (which needs
+     * the raw line for quoted string arguments); the echo/calc branches (and
+     * the argc==0 guard below) are the only paths that free it. */
+    bool want_echo = (strncasecmp(trimmed, "echo", 4) == 0 &&
+                      (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) ||
+                     (strncasecmp(trimmed, "calc", 4) == 0 &&
+                      (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4])));
+    if (want_echo) {
         echo_line = strdup(trimmed);
     }
 
-    /* `calc` needs the raw (unsplit) line too: quoted string arguments inside
-     * the expression (`calc len('hello world')`) would lose their quotes to
-     * the tokenizer, so the calculator parses the original text itself. */
-    if (strncasecmp(trimmed, "calc", 4) == 0 &&
-        (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-        echo_line = strdup(trimmed);
+    /* Snapshot OOM guard: a NULL copy must never reach a family handler or
+     * the echo/calc branches. Fail the command with an errorlevel instead. */
+    if ((want_family && family_command == NULL) || (want_echo && echo_line == NULL)) {
+        shell_print_error("command: out of memory");
+        shell_record_errorf("command", ESP_ERR_NO_MEM, "Out of memory snapshotting command line");
+        batch_set_errorlevel(1);
+        free(family_command);
+        free(echo_line);
+        return true;
     }
 
     /* A command with more arguments than the argv capacity would be silently
@@ -2238,21 +2223,21 @@ static void command_worker_task(void *arg)
 
 void shell_execute_command_async(char *command)
 {
-    command_request_t *request = malloc(sizeof(*request));
+    command_request_t *request;
 
     if (command == NULL || command[0] == '\0') {
-        free(request);
         return;
     }
 
     if (s_command_queue == NULL) {
-        free(request);
         shell_print_error("shell: command worker not initialized");
         shell_record_errorf("shell", ESP_FAIL, "Command worker not initialized");
         return;
     }
+    request = malloc(sizeof(*request));
     if (request == NULL) {
         shell_print_error("shell: out of memory queuing the command");
+        shell_record_errorf("shell", ESP_ERR_NO_MEM, "Out of memory queuing async command");
         return;
     }
 

@@ -1433,6 +1433,46 @@ void shell_history_clear(void)
     s_history_draft[0] = '\0';
 }
 
+bool shell_history_save_lines(FILE *fp)
+{
+    size_t index;
+
+    if (fp == NULL) {
+        return false;
+    }
+    for (index = 0; index < shell_history_get_count(); index++) {
+        const char *line = shell_history_get(index);
+
+        if (line != NULL && fprintf(fp, "%s\n", line) < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+size_t shell_history_load_lines(FILE *fp)
+{
+    // Command-sized and heap-allocated: `history /load` can run from a
+    // nested batch line, so a stack buffer would eat into the worker stack.
+    char *line = malloc(SHELL_COMMAND_BYTES);
+    size_t loaded = 0;
+
+    if (fp == NULL || line == NULL) {
+        free(line);
+        return 0;
+    }
+    while (fgets(line, SHELL_COMMAND_BYTES, fp) != NULL) {
+        shell_trim(line);
+        if (line[0] == '\0') {
+            continue;
+        }
+        shell_store_command_history(line);
+        loaded++;
+    }
+    free(line);
+    return loaded;
+}
+
 /* ========================================================================
  * INPUT LINE
  * ========================================================================
@@ -1513,15 +1553,23 @@ void shell_input_line_reset(void)
 
 void shell_extract_input_text(char *output, size_t output_size)
 {
-    lv_obj_t *input_line = windows_get_input_line();
-    const char *text = input_line != NULL ? lv_textarea_get_text(input_line) : NULL;
+    lv_obj_t *input_line;
+    const char *text;
 
     if (output == NULL || output_size == 0) {
         return;
     }
 
+    /* The textarea is LVGL-backed state; serialize with the render cycle.
+     * The mutex is recursive, so the LVGL event path nests without deadlock.
+     * The pointer below stays valid for the whole locked region. */
+    lvgl_port_lock(0);
+    input_line = windows_get_input_line();
+    text = input_line != NULL ? lv_textarea_get_text(input_line) : NULL;
+
     if (text == NULL) {
         output[0] = '\0';
+        lvgl_port_unlock();
         return;
     }
 
@@ -1539,6 +1587,7 @@ void shell_extract_input_text(char *output, size_t output_size)
     } else {
         snprintf(output, output_size, "%s", text);
     }
+    lvgl_port_unlock();
 
     shell_trim(output);
 }
@@ -1551,11 +1600,11 @@ void shell_input_line_repair_prompt(const char *text)
     size_t text_len;
     size_t common = 0;
 
-    if (text == NULL) {
-        free(repaired);
+    if (repaired == NULL) {
         return;
     }
-    if (repaired == NULL) {
+    if (text == NULL) {
+        free(repaired);
         return;
     }
 
@@ -4475,6 +4524,9 @@ void shell_init(void)
     if (s_transcript == NULL || s_transcript_ansi == NULL || s_clipboard == NULL) {
         shell_record_errorf("shell", ESP_ERR_NO_MEM,
                             "Failed to allocate transcript/clipboard buffers");
+        // Continuing would dereference NULL below; boot cannot proceed
+        // without the transcript buffers.
+        return;
     }
 
     /* Interactive keypress queue used by pause, choice, and more. Created

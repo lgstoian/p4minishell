@@ -22,6 +22,12 @@ idf_component_register(
         test_applib.c
         test_db.c
         test_alarm.c
+        test_modal.c
+        test_power.c
+        test_serial.c
+        test_tui.c
+        test_clipboard.c
+        test_history_file.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -36,6 +42,8 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/applib"
         "${CMAKE_SOURCE_DIR}/../components/db"
         "${CMAKE_SOURCE_DIR}/../components/alarm"
+        "${CMAKE_SOURCE_DIR}/../components/modal"
+        "${CMAKE_SOURCE_DIR}/../components/tui"
     REQUIRES
         unity
         shell
@@ -49,5 +57,7 @@ idf_component_register(
         applib
         db
         alarm
+        modal
+        tui
         esp_timer
 )

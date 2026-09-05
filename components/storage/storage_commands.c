@@ -1026,7 +1026,12 @@ static void shell_tree_walk(const char *dir_path,
             continue;
         }
 
-        snprintf(child, sizeof(child), "%s/%s", dir_path, entry->d_name);
+        // A truncated child path must never reach stat(): skip the entry
+        // deterministically instead of stating a silently-cut path.
+        int child_n = snprintf(child, sizeof(child), "%s/%s", dir_path, entry->d_name);
+        if (child_n < 0 || (size_t)child_n >= sizeof(child)) {
+            continue;
+        }
         if (stat(child, &st) != 0) {
             continue;
         }
@@ -1083,7 +1088,12 @@ static void shell_tree_walk(const char *dir_path,
             /* Children of a last entry get blank spacing; otherwise the
              * vertical bar continues so the outline stays connected. */
             snprintf(child_prefix, SHELL_SD_PATH_BYTES, "%s%s", prefix, is_last ? "    " : "|   ");
-            snprintf(child_path, SHELL_SD_PATH_BYTES + SHELL_LFN_BYTES, "%s/%s", dir_path, names[index]);
+            // Never descend into a truncated path: mark truncated and stop.
+            int child_n = snprintf(child_path, SHELL_SD_PATH_BYTES + SHELL_LFN_BYTES, "%s/%s", dir_path, names[index]);
+            if (child_n < 0 || (size_t)child_n >= SHELL_SD_PATH_BYTES + SHELL_LFN_BYTES) {
+                ctx->truncated = true;
+                break;
+            }
             shell_tree_walk(child_path, child_prefix, depth + 1, ctx);
 
             if (ctx->truncated) {
@@ -2931,6 +2941,12 @@ static void shell_chkdsk_walk(const char *dir_path, int depth, chkdsk_scan_t *sc
     }
 
     subdirs = calloc(SHELL_SD_LIST_LIMIT, sizeof(*subdirs));
+    if (subdirs == NULL) {
+        // Directories are still counted below, but without the buffer this
+        // level cannot be descended: say so instead of silently skipping.
+        shell_record_warningf("chkdsk", "Out of memory buffering subdirectories at %s", dir_path);
+        scan->unreadable++;
+    }
 
     while (true) {
         result = f_readdir(&scratch->dir, &scratch->info);
@@ -5718,6 +5734,14 @@ void shell_command_sd(char *command)
     char *argv[5];
     int argc;
     char *cmd_copy = (command != NULL) ? strdup(command) : NULL;
+
+    /* The sub-handlers below re-tokenize the preserved copy; a NULL copy
+     * must never reach them. */
+    if (command != NULL && cmd_copy == NULL) {
+        shell_print_error("sd: out of memory");
+        shell_record_errorf("sd", ESP_ERR_NO_MEM, "Out of memory copying sd command");
+        return;
+    }
 
     /* shell_split_args() writes token terminators into the buffer in place,
      * so `command` would be truncated to just "sd" for the sub-handlers.
