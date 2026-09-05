@@ -1,10 +1,11 @@
 idf_component_register(
-    SRCS "main.c" "p4minishell.c"
+    SRCS "main.c" "p4minishell.c" "native_apps.c"
     INCLUDE_DIRS "."
     REQUIRES
         espressif__esp32_p4_function_ev_board
         espressif__esp_lcd_touch
         espressif__esp_lvgl_port
+        applib
         bootloader_support
         c6ota
         command

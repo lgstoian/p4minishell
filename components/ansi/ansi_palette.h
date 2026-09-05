@@ -173,4 +173,44 @@
 /** A complete "label: number" pair. */
 #define SH_KN_FMT           SH_LBL "%s:" SH_RST " " SH_NUM "%d" SH_RST "\n"
 
+/* ========================================================================
+ * BOX-DRAWING CHARACTERS (Unicode/CP437)
+ * ========================================================================
+ * Single-line (light) box drawing characters
+ */
+#define SH_BOX_H      "\xE2\x94\x80"  /* U+2500 ━ horizontal */
+#define SH_BOX_V      "\xE2\x94\x82"  /* U+2502 ┃ vertical */
+#define SH_BOX_TL     "\xE2\x94\x8C"  /* U+250C ┌ top-left */
+#define SH_BOX_TR     "\xE2\x94\x90"  /* U+2510 ┐ top-right */
+#define SH_BOX_BL     "\xE2\x94\x94"  /* U+2514 └ bottom-left */
+#define SH_BOX_BR     "\xE2\x94\x98"  /* U+2518 ┘ bottom-right */
+#define SH_BOX_T      "\xE2\x94\xAC"  /* U+252C ┬ T-down */
+#define SH_BOX_B      "\xE2\x94\xB4"  /* U+2534 ┴ T-up */
+#define SH_BOX_L      "\xE2\x94\x9C"  /* U+251C ├ T-right */
+#define SH_BOX_R      "\xE2\x94\xA4"  /* U+2524 ┤ T-left */
+#define SH_BOX_X      "\xE2\x94\xBC"  /* U+253C ┼ cross */
+
+/* Double-line (heavy) box drawing characters */
+#define SH_BOX_H2     "\xE2\x95\x90"  /* U+2550 ═ horizontal double */
+#define SH_BOX_V2     "\xE2\x95\x91"  /* U+2551 ║ vertical double */
+#define SH_BOX_TL2    "\xE2\x95\x92"  /* U+2552 ╒ top-left double */
+#define SH_BOX_TR2    "\xE2\x95\x93"  /* U+2553 ╓ top-right double */
+#define SH_BOX_BL2    "\xE2\x95\x94"  /* U+2554 ╔ bottom-left double */
+#define SH_BOX_BR2    "\xE2\x95\x97"  /* U+2557 ╗ bottom-right double */
+#define SH_BOX_T2     "\xE2\x95\x9C"  /* U+255C ╜ T-down double */
+#define SH_BOX_B2     "\xE2\x95\x9D"  /* U+255D ╝ T-up double */
+#define SH_BOX_L2     "\xE2\x95\x9A"  /* U+255A ╚ T-right double */
+#define SH_BOX_R2     "\xE2\x95\x9B"  /* U+255B ╛ T-left double */
+#define SH_BOX_X2     "\xE2\x95\x9C"  /* U+255C ╜ cross double */
+
+/* Rounded corners */
+#define SH_BOX_TLR    "\xE2\x94\x8F"  /* U+250F ┏ rounded top-left */
+#define SH_BOX_TRR    "\xE2\x94\x93"  /* U+2513 ┓ rounded top-right */
+#define SH_BOX_BLR    "\xE2\x94\x97"  /* U+2517 ┗ rounded bottom-left */
+#define SH_BOX_BRR    "\xE2\x94\x9B"  /* U+251B ┛ rounded bottom-right */
+
+/* Light/heavy variants for mixed styles */
+#define SH_BOX_HL     "\xE2\x94\x81"  /* U+2501 ━ heavy horizontal */
+#define SH_BOX_VL     "\xE2\x94\x83"  /* U+2503 ┃ heavy vertical */
+
 #endif /* P4MINISHELL_ANSI_PALETTE_H */

@@ -398,10 +398,11 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
     }
 
     /* A single command with a large output can grow the span group fast
-     * enough to exhaust the internal heap mid-command. Reclaim the oldest
-     * half of the scrollback before every append once the internal heap
-     * drops below the threshold, so a tiny stdio allocation never aborts the
-     * board while output is still being emitted. Cheap when memory is fine. */
+     * enough to exhaust the internal heap mid-command. Reclaim scrollback
+     * when the internal heap drops below the threshold (rate-limited, keeps
+     * the newest three quarters), so a tiny stdio allocation never aborts
+     * the board while output is still being emitted. Cheap when memory is
+     * fine (a single free-size query plus a timestamp check). */
     shell_transcript_guard_internal();
 
     transcript = windows_get_transcript();
@@ -435,6 +436,10 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
     if (transcript != NULL) {
         lvgl_port_unlock();
     }
+
+    /* Update anchor position tracking for click regions */
+    extern void shell_transcript_update_anchor_position(const char *text);
+    shell_transcript_update_anchor_position(text);
 }
 
 void shell_transcript_append_text(const char *text)
@@ -741,6 +746,40 @@ void shell_schedule_transcript_appendf(const char *format, ...)
     }
 }
 
+void shell_schedule_transcript_appendf_ansi(const char *format, ...)
+{
+    char buffer[512];
+    va_list args;
+    bool queue_flush = false;
+
+    if (format == NULL) {
+        return;
+    }
+
+    va_start(args, format);
+    ansi_vformat(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    portENTER_CRITICAL(&s_async_transcript_lock);
+    shell_async_transcript_append_pending(buffer);
+    if (!s_async_transcript_flush_queued && s_async_transcript_len > 0) {
+        s_async_transcript_flush_queued = true;
+        queue_flush = true;
+    }
+    portEXIT_CRITICAL(&s_async_transcript_lock);
+
+    if (queue_flush) {
+        if (windows_get_transcript() == NULL) {
+            shell_async_transcript_flush_cb(NULL);
+        } else if (lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
+            portENTER_CRITICAL(&s_async_transcript_lock);
+            s_async_transcript_flush_queued = false;
+            portEXIT_CRITICAL(&s_async_transcript_lock);
+            ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+        }
+    }
+}
+
 static void shell_async_transcript_flush_cb(void *user_data)
 {
     char *pending = NULL;
@@ -775,7 +814,11 @@ static void shell_async_transcript_flush_cb(void *user_data)
     s_async_transcript_flush_queued = false;
     portEXIT_CRITICAL(&s_async_transcript_lock);
 
-    shell_transcript_append_text(pending);
+    if (ansi_contains_escapes(pending)) {
+        shell_transcript_append_ansi(pending);
+    } else {
+        shell_transcript_append_text(pending);
+    }
     free(pending);
     shell_history_transcript_scroll_to_end();
 
@@ -831,10 +874,26 @@ void shell_transcript_reset(void)
  * Called at the start of command execution (before any printf of that
  * command) so the reclaimed memory is available before output is emitted.
  */
+/* Consecutive-trim rate limit: at most one trim per window, so a burst of
+ * appends cannot trim on every line (each trim forces a span rebuild, which
+ * is the visible flicker). */
+#define SHELL_TRIM_MIN_INTERVAL_US   (2000000LL)
+/* Severe-pressure floor: below this, trim harder to guarantee progress. */
+#define SHELL_TRIM_SEVERE_BYTES      (8192)
+
+static size_t s_transcript_trim_count = 0;
+static int64_t s_transcript_last_trim_us = 0;
+
+size_t shell_transcript_trim_count(void)
+{
+    return s_transcript_trim_count;
+}
+
 void shell_transcript_guard_internal(void)
 {
     static const char truncation_marker[] = "\n[history trimmed under memory pressure]\n";
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int64_t now_us = esp_timer_get_time();
     size_t plain_len;
     size_t ansi_len;
     size_t keep;
@@ -843,10 +902,25 @@ void shell_transcript_guard_internal(void)
         return;
     }
 
+    /* Rate-limit: one trim per window is enough; the freed spans cover the
+     * burst that follows. Without this, every append in a long listing
+     * re-trims, re-logs, and re-rebuilds spans (the flicker + log spam). */
+    if (now_us - s_transcript_last_trim_us < SHELL_TRIM_MIN_INTERVAL_US) {
+        return;
+    }
+    s_transcript_last_trim_us = now_us;
+
     plain_len = strlen(s_transcript);
     ansi_len = strlen(s_transcript_ansi);
 
-    keep = P4_CONFIG_TRANSCRIPT_BYTES / 2;
+    /* Gentle trim: keep the newest three quarters so a single trim rarely
+     * repeats; only under severe pressure fall back to keeping half. */
+    if (free_internal < SHELL_TRIM_SEVERE_BYTES) {
+        keep = P4_CONFIG_TRANSCRIPT_BYTES / 2;
+    } else {
+        keep = (P4_CONFIG_TRANSCRIPT_BYTES * 3) / 4;
+    }
+    if (keep < 512) keep = 512;
     if (plain_len > keep) {
         memmove(s_transcript, s_transcript + plain_len - keep, keep);
         plain_len = keep;
@@ -868,13 +942,20 @@ void shell_transcript_guard_internal(void)
         }
     }
 
+    /* Sync the staging buffer to the newly-trimmed ANSI transcript BEFORE
+     * trimming spans. Otherwise windows_transcript_trim() works on stale
+     * content, and the subsequent shell_transcript_update_label() overwrites
+     * it again, causing a full span rebuild (blue flash). */
     if (lvgl_port_lock(0)) {
+        windows_set_transcript_text(s_transcript_ansi);
         windows_transcript_trim();
         lvgl_port_unlock();
     }
 
+    s_transcript_trim_count++;
     ESP_LOGW(SHELL_TAG, "Transcript trimmed under memory pressure "
-             "(internal free %u B)", (unsigned int)free_internal);
+             "(internal free %u B, trims %u)", (unsigned int)free_internal,
+             (unsigned int)s_transcript_trim_count);
 }
 
 void shell_history_transcript_scroll_to_end(void)
@@ -1591,6 +1672,98 @@ bool shell_clipboard_copy_transcript(int n_lines)
 }
 
 /* ========================================================================
+ * TRANSCRIPT CLICK REGIONS (for anchor command)
+ * ======================================================================== */
+
+#define SHELL_CLICK_REGION_MAX 32
+
+typedef struct {
+    char text[64];
+    char command[P4_CONFIG_COMMAND_BYTES];
+    bool continue_line;
+    int x, y;        /* Approximate position in transcript (line, col) */
+    int len;         /* Text length */
+    bool active;
+} shell_click_region_t;
+
+static shell_click_region_t s_click_regions[SHELL_CLICK_REGION_MAX];
+static int s_click_region_count = 0;
+
+/* Track approximate cursor position for anchor placement */
+static int s_anchor_line = 0;
+static int s_anchor_col = 0;
+static bool s_anchor_continue_line = false;
+
+void shell_transcript_add_anchor_region(const char *text, const char *command, bool continue_line)
+{
+    if (text == NULL || command == NULL || s_click_region_count >= SHELL_CLICK_REGION_MAX) {
+        return;
+    }
+
+    shell_click_region_t *r = &s_click_regions[s_click_region_count++];
+    strncpy(r->text, text, sizeof(r->text) - 1);
+    r->text[sizeof(r->text) - 1] = '\0';
+    strncpy(r->command, command, sizeof(r->command) - 1);
+    r->command[sizeof(r->command) - 1] = '\0';
+    r->continue_line = continue_line;
+    r->x = s_anchor_col;
+    r->y = s_anchor_line;
+    r->len = (int)strlen(text);
+    r->active = true;
+
+    if (continue_line) {
+        s_anchor_col += (int)strlen(text);
+    } else {
+        s_anchor_line++;
+        s_anchor_col = 0;
+    }
+}
+
+void shell_transcript_clear_click_regions(void)
+{
+    s_click_region_count = 0;
+    s_anchor_line = 0;
+    s_anchor_col = 0;
+    s_anchor_continue_line = false;
+}
+
+bool shell_transcript_hit_test(int x, int y, const char **action_out)
+{
+    if (x < 0 || y < 0 || action_out == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < s_click_region_count; i++) {
+        shell_click_region_t *r = &s_click_regions[i];
+        if (!r->active) continue;
+
+        /* Simple hit-test: check if click falls within the anchor text region */
+        if (y == r->y && x >= r->x && x < r->x + r->len) {
+            *action_out = r->command;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Update anchor position tracking - called when transcript text is appended */
+void shell_transcript_update_anchor_position(const char *text)
+{
+    if (text == NULL) return;
+
+    const char *p = text;
+    while (*p) {
+        if (*p == '\n') {
+            s_anchor_line++;
+            s_anchor_col = 0;
+        } else {
+            s_anchor_col++;
+        }
+        p++;
+    }
+}
+
+/* ========================================================================
  * DEBUG LOG
  * ======================================================================== */
 
@@ -1681,6 +1854,8 @@ void shell_command_debug(void)
     shell_transcript_appendf_ansi(SH_LBL "debug.log:" SH_RST " %u entries, " SH_WARN "%u warnings" SH_RST "\n",
                              (unsigned int)s_debug_log.count,
                              (unsigned int)s_runtime_warning_count);
+    shell_transcript_appendf_ansi(SH_LBL "transcript trims:" SH_RST " " SH_NUM "%u" SH_RST " (internal guard)\n",
+                             (unsigned int)s_transcript_trim_count);
 
     if (s_debug_log.count == 0) {
         shell_transcript_appendf_ansi(SH_MUTE "debug.log: (empty)" SH_RST "\n");
@@ -2194,12 +2369,14 @@ static void shell_uart_console_task(void *arg)
             if (line_len > 0) {
                 const char *trimmed = shell_trim(line);
 
-                /* While the modal editor is open, serial lines drive the
-                 * editor instead of being dispatched as shell commands. */
-                if (s_command_ops.editor_is_active != NULL &&
-                    s_command_ops.editor_is_active() &&
-                    s_command_ops.editor_handle_serial_line != NULL) {
-                    if (s_command_ops.editor_handle_serial_line(trimmed)) {
+                /* While a native modal surface is open, serial lines are
+                 * routed to that surface instead of being dispatched as shell
+                 * commands. */
+                ESP_LOGI("shell", "serial line '%s' modal_active=%d", trimmed, s_command_ops.modal_is_active ? s_command_ops.modal_is_active() : 0);
+                if (s_command_ops.modal_is_active != NULL &&
+                    s_command_ops.modal_is_active() &&
+                    s_command_ops.modal_handle_serial_line != NULL) {
+                    if (s_command_ops.modal_handle_serial_line(trimmed)) {
                         length = 0;
                         prompt_visible = false;
                         continue;
@@ -2600,8 +2777,8 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
         return;
     }
 
-    /* While the modal editor is open, every USB key goes to the editor. */
-    if (s_command_ops.editor_is_active != NULL && s_command_ops.editor_is_active()) {
+    /* While a native modal surface is open, every USB key goes to it. */
+    if (s_command_ops.modal_is_active != NULL && s_command_ops.modal_is_active()) {
         char ch = '\0';
         if (s_command_ops.usb_key_to_ascii != NULL &&
             s_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &ch)) {
@@ -2609,8 +2786,8 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
         } else {
             ch = '\0';
         }
-        if (s_command_ops.editor_handle_usb_key != NULL) {
-            s_command_ops.editor_handle_usb_key(ctx->key_code, ctx->modifiers, ch);
+        if (s_command_ops.modal_handle_usb_key != NULL) {
+            s_command_ops.modal_handle_usb_key(ctx->key_code, ctx->modifiers, ch);
         }
         free(ctx);
         return;
@@ -2854,6 +3031,10 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "alias",    "alias [name[=value]] | alias /save [/load] [file] - DOSKEY-style macros" },
     { "unalias",  "unalias <name> - remove a macro alias" },
     { "date",     "date [MM-DD-YYYY] - show/set the date" },
+    { "db",       "db <create|list|info|drop|open|close|categories|add|get|set|del|purge|count|find|export|import> [...] - Palm-OS-style SD record store" },
+    { "alarm",    "alarm <add|list|del|enable|disable|status|purge> [...] - SD-persisted alarms (header notify / beep / LED / optional run)" },
+    { "cal",      "cal [today|next|YYYY-MM] - thin calendar view over the alarm store" },
+    { "gfind",    "gfind <text> [/b] [/i] [/db:name] [/noalarms] [/nodb] - search db records + alarms (Palm-style global find)" },
     { "time",     "time [HH:MM[:SS]] - show/set the time" },
     { "timezone", "timezone - show/set the timezone" },
     { "sntp",     "sntp | ntpsync [server] - sync the clock via SNTP" },
@@ -4006,6 +4187,13 @@ int shell_split_args(char *text, char **argv, int max_args)
         argc++;
     }
 
+    /* NULL-terminate the vector when there is room, matching the standard C
+     * argv contract (native apps registered through the applib ABI rely on
+     * it; built-ins only ever use argc). */
+    if (argc < max_args) {
+        argv[argc] = NULL;
+    }
+
     return argc;
 }
 
@@ -4076,6 +4264,32 @@ int shell_split_chain(char *text,
 
     if (text == NULL || segments == NULL || max_segments <= 0) {
         return 0;
+    }
+
+    /* `if` and `for` consume the rest of the line as their command body
+     * (cmd.exe semantics: `if cond a & b` runs a and b only when cond is
+     * true). Splitting here would turn a `&` inside an if/for body into an
+     * unconditional chain link that runs even when the condition is false,
+     * so a guarded `... & goto label` would jump regardless of the test. */
+    {
+        char first_word[8];
+        size_t word_len = 0;
+        const char *word = text;
+
+        while (*word == ' ' || *word == '\t') {
+            word++;
+        }
+        while (word_len + 1 < sizeof(first_word) && *word != '\0' &&
+               *word != ' ' && *word != '\t' && *word != '(') {
+            first_word[word_len++] = (char)tolower((unsigned char)*word);
+            word++;
+        }
+        first_word[word_len] = '\0';
+        if (strcmp(first_word, "if") == 0 || strcmp(first_word, "for") == 0) {
+            segments[0].command = shell_trim(text);
+            segments[0].op = SHELL_CHAIN_FIRST;
+            return 1;
+        }
     }
 
     segment_start = text;

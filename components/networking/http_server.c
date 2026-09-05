@@ -29,6 +29,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -61,6 +62,11 @@ static httpd_handle_t s_server;
 static networking_httpd_state_t s_state;
 static esp_err_t s_last_error;
 static uint32_t s_request_count;
+/* Cooldown for failed auto-starts: a failed `httpd_start()` (e.g. task
+ * creation returning ESP_ERR_HTTPD_TASK while the heap is tight) must not
+ * retry on every Wi-Fi event. Each attempt prints transcript lines and grows
+ * spans, which is exactly the wrong thing to do under memory pressure. */
+static int64_t s_autostart_cooldown_until_us;
 
 /* ---- Transcript output through the networking host ops ---- */
 
@@ -681,9 +687,18 @@ void networking_httpd_maybe_autostart(void)
 {
 #if HTTPD_AUTOSTART
     if (s_server == NULL && networking_wifi_is_connected()) {
+        /* Respect the post-failure cooldown so a tight heap (the usual cause
+         * of ESP_ERR_HTTPD_TASK from httpd_start's task creation) is not
+         * hammered with a retry — and a transcript error line — on every
+         * Wi-Fi event. Manual `httpd start` bypasses the cooldown. */
+        if (esp_timer_get_time() < s_autostart_cooldown_until_us) {
+            return;
+        }
         esp_err_t error = networking_httpd_start();
 
         if (error != ESP_OK) {
+            s_autostart_cooldown_until_us =
+                esp_timer_get_time() + (int64_t)P4_CONFIG_HTTPD_AUTOSTART_RETRY_SECS * 1000000LL;
             httpd_record_warningf("HTTP server auto-start failed: %s", esp_err_to_name(error));
         }
     }

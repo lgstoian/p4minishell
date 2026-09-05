@@ -322,6 +322,45 @@ bool windows_editor_surface_height_ok(void);
  */
 void windows_debug_editor_layout(void);
 
+/* ========================================================================
+ * TUI MODE
+ * ======================================================================== */
+
+/**
+ * Enter TUI mode: hide shell input widgets and hand the transcript container
+ * to the TUI as a full-height surface (like editor mode). The transcript
+ * spangroup is hidden while TUI owns the container.
+ * @return Transcript container, or NULL on failure. LVGL task.
+ */
+lv_obj_t *windows_enter_tui_mode(void);
+
+/** Leave TUI mode and restore shell widgets. LVGL task. */
+void windows_exit_tui_mode(void);
+
+/** Report whether TUI mode is active. */
+bool windows_tui_mode_active(void);
+
+/** Get TUI surface container (transcript region when TUI active). */
+lv_obj_t *windows_get_tui_surface(void);
+
+/**
+ * Re-apply transcript-region height to TUI surface (call on entry and on
+ * keyboard visibility changes, like windows_refresh_editor_surface).
+ */
+void windows_refresh_tui_surface(void);
+
+/** Check TUI surface height sane (mirrors editor check). */
+bool windows_tui_surface_height_ok(void);
+
+/**
+ * Set fullscreen TUI mode: hide header and input row for full display.
+ * Call after tui_init or when already in TUI mode.
+ */
+void windows_set_fullscreen(bool fullscreen);
+
+/** Report whether fullscreen TUI is active. */
+bool windows_is_fullscreen(void);
+
 #ifdef __cplusplus
 }
 #endif

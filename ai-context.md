@@ -6,6 +6,7 @@
 - **Target**: ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO)
 - **Framework**: ESP-IDF v5.5.5
 - **UI**: LVGL 9.4.0 with JD9165 1024x600 display + GT911 touch
+- **Version**: v0.35.2 (cleanup patch 0.35.1→0.35.2 on top of hardware testing patch 0.35.0→0.35.1: transcript 1024 `p4minishell_config.h:93`, async 512 `p4minishell_config.h:134`, SD DMA 4096 `p4minishell_config.h:626`, internal trim 60000 `p4minishell_config.h:117`, command stack 24576 `p4minishell_config.h:1514` increased from 16384 due to TUI companion overflow at `0x4012b75a`; TUI 80×25 cell buffer `utf8[4]` `components/tui/tui.h:35` box glyphs single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` via `tui_cell_set` `components/tui/tui.c:116`, color `spangroup` recolor `#RRGGBB` per fg run via `ansi_get_palette_color` PowerShell palette no duplicate, font `unscii_16` in-place 384 glyphs U+2500-U+257F/U+2600-U+26FF cmaps 3 `CONFIG_LV_FONT_UNSCII_16=y`; TUI mode `windows_enter_tui_mode` keeps header visible by default, header hidden only on `draw fullscreen on`/`tui fullscreen on` via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` / `tui_enter_fullscreen` `components/tui/tui.c:417`, dynamic keyboard scaling `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, TUI does not overlap shell text (hides `transcript_spans`, `tui_hide_for_modal`); `draw` auto-enters for box/text/line/fill/clear/window/title+style + `tui status`/`color`/`locate` TUI-aware, prompt `shell_prompt_render_plain()` `main.c:112`/`components/shell/shell.c:412` + `modal_surf.c:412` `ask` placeholder `keyboard_bind_textarea` situational `SH_PROMPT`, screenshot `grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py` rect `1024x510` 80×25; flash COM11 extensive serial tests draw box single/double/rounded line fill text clear window fullscreen color locate dialog/list/ask/browse/view/hexview with timeout+serial input all pass without abort/watchdog/overlap; companion 7 BATs fully TUI-expanded `LIB.BAT` `:tui_banner`/`:tui_header` `COMPANION.BAT` draw fullscreen double `SYS.BAT` tui fullscreen draw boxes `FILES.BAT` browse/view/hexview + draw + tui fullscreen `NET.BAT` draw boxes `FUN.BAT` tui demo `SET.BAT` tui demo pushed via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109) stack overflow at `0x4012b75a` fixed by 16384→24576 queue full handling improved modal serial routing fixed `dialog y` `list 2` `ask myname` via `shell.c` `modal_handle_serial_line`; bugs M19 memory M20 audio M21 EventGroup M22-M30 TUI M31 stack overflow all fixed no regressions)
 
 ## Mandatory Reading Before Any Change
 1. changelog.md - version history and recent changes
@@ -67,7 +68,7 @@
 - Touch init failure must not prevent header rendering (BSP touch is optional)
 
 ### Module Layering Rules
-- Component dependencies flow ONE WAY: `main` -> `command` -> `batch` -> `storage` -> `shell` -> (`ansi`, `display`, `windows`, `header`, `keyboard`, `clock`)
+- Component dependencies flow ONE WAY: `main` -> `command` -> `batch` -> `storage` -> `shell` -> (`ansi`, `display`, `windows`, `header`, `keyboard`, `clock`). `components/modal/` is a shared runtime used by `editor` and by the batch `dialog`/`list`/`ask` commands; it is reached through `command`/`batch`, never from `shell`.
 - `components/applib/` is the native-app runtime library (the shell SDK
   surface). It is a leaf: REQUIRES only `shell`, `clock`, `storage` (for the
   shared INI / temp-file state mechanics, the same guarded-SD pattern the
@@ -75,18 +76,70 @@
   NOT include `networking.h`, `command.h`, or `batch.h`. Its public API is
   split into lean headers (`applib.h` is an umbrella over `applib_console.h`,
   `applib_mem.h`, `applib_time.h`, `applib_net.h`, `applib_input.h`,
-  `applib_state.h`) so an app includes only the groups it uses; declare each
+  `applib_state.h`, `applib_ui.h`, `applib_app.h`, `applib_env.h`) so an app
+  includes only the groups it uses; declare each
   function in exactly one header. Wi-Fi state is read through the registered
   `applib_net_ops_t` table, which `command_init()` populates with
   `networking_*` wrappers; every hook is NULL-checked so the helpers degrade
-  gracefully before registration. Input helpers (`app_wait_key`,
+  gracefully before registration. The environment table and cwd are read
+  through the registered `applib_env_ops_t` table (`command_init()` registers
+  `shell_env_get`/`shell_env_set`/`shell_get_cwd`) — applib never includes
+  `batch.h` and never reaches into storage internals. The native-app ABI
+  (`applib_app.h`) is the entry/registration contract: an `app_main_t` app is
+  `app_register`ed, the shell dispatcher runs it via `app_dispatch` (after
+  built-ins and `.bat` lookup), and its return value becomes ERRORLEVEL. New
+  apps MUST go through `app_register`, never a private dispatcher branch.
+- `.bat` app discovery (`launch`, `components/command/command.c`) scans the
+  command PATH + `sd:/APPS` for `*.bat` and reads optional APPINFO metadata
+  from `sd:/APPS/<name>.APPINFO`. The discovery table MUST be heap-allocated —
+  a stack-resident table overflows the command-worker stack once the launched
+  batch re-enters the dispatcher per line (a real crash found in bring-up). A
+  batch app is made discoverable by placing it in a PATH dir or `sd:/APPS` and
+  (optionally) adding an APPINFO file; `launch` never shadows a built-in or a
+  PATH-resolved `.bat`.
+  Input helpers (`app_wait_key`,
   `app_read_line`) wrap the shell key queue with a caller timeout and MUST
   return false on a headless board rather than stalling. The persistent-state
   helpers (`app_ini_*`, `app_temp_*`) wrap the storage core and keep ALL
-  storage on the SD card. New runtime services for native apps belong in the
-  matching `applib_*.h` (or an ops table when the owner lives higher in the
-  stack). A new component under `components/` must be added to BOTH the root
+  storage on the SD card. UI helpers (`app_mode_enter`, `app_mode_exit`,
+  `app_notify`) live in `applib_ui.h` and route through the shell-core
+  primitives. New runtime services for native apps belong in the matching
+  `applib_*.h` (or an ops table when the owner lives higher in the stack). A new component under `components/` must be added to BOTH the root
   `CMakeLists.txt` `EXTRA_COMPONENT_DIRS` and `test/CMakeLists.txt`.
+- `components/db/` is the Palm-OS-style SD record store (`db.{h,c}`). It is a
+  LEAF below `storage`: it REQUIRES only `storage`, `esp_timer`, `freertos`
+  (plus the board header for `BSP_SD_MOUNT_POINT`), never includes
+  `batch.h`/`command.h`, and never prints or parses commands — the `db`
+  command lives in `components/command/db_commands.c`. ALL database data lives
+  on the SD card (`sd:/DBS/<name>.DB/`: HEADER.INI, CATEGORIES.INI,
+  INDEX.TXT, RECORDS/R<id>.DAT). Every operation MUST: open its own guarded
+  SD session; pre-check free space (reclaiming the old file's size on
+  overwrite); write atomically (temp + rename, removing the partial on
+  failure); and heap-allocate every record/command-sized buffer — never a
+  large stack local (the batch path re-enters the dispatcher per line). Read
+  payload sizes from `stat`, NOT `fseek(SEEK_END)+ftell` (the FATFS VFS does
+  not report a correct size that way). Index lines use a `-` sentinel for an
+  empty key so the parser is unambiguous. The `db` command prints `/b` output
+  without ANSI colour and sets ERRORLEVEL 0/1/2 so `for /f` and `if errorlevel`
+  work. The applib surface (`applib_db.h`) wraps the core with NULL-checked
+  `app_db_*` bool wrappers.
+- `components/alarm/` is the SD-persisted alarm/event store + one background
+  checker task. It is a LEAF: REQUIRES only `shell`, `clock`, `storage`,
+  `led`, `audio`, `freertos`, `esp_timer` (plus the board header). It NEVER
+  includes `command.h`/`batch.h`; the `/run:` batch action is queued onto the
+  command worker through `alarm_host_ops_t.execute_async` (registered by
+  `command_init()`), and the `alarm`/`cal` commands live in
+  `components/command/alarm_commands.c`. ALL event data lives on the SD card
+  (`sd:/ALARMS/`), every write is atomic behind a free-space pre-check, and
+  the checker posts ONLY to the existing surfaces (`shell_header_notify`,
+  `led_notify`, `audio_play_tone`, the queued `call`). There is no private
+  notification loop. The checker task stack MUST stay generous
+  (P4_CONFIG_ALARM_TASK_STACK 8192): newlib's `snprintf` frame used to render
+  event files/notifications is ~1.5 KB and combined with the tick's
+  event/path locals a smaller stack overflows (a real crash found in
+  bring-up). Event-file names are `E<6 digits>.INI` (11 chars — the directory
+  scan checks this exactly). `alarm del all` wipes the store and resets the
+  id space; individual deletes never reuse ids.
 - `components/shell/` MUST NOT depend on `components/command/`. When the shell core needs a
   command-owned service, add it to `shell_command_ops_t` in `shell.h` and register it from
   `command_init()` via `shell_register_command_ops()`
@@ -372,6 +425,24 @@
   and `app_menu` render a numbered form and read a numeric choice, returning the 1-based
   index (0 on cancel); `choice` remains the single-key primitive. All menu/form output is
   rendered in the transcript (the shell display area), never on a hidden surface.
+- Variable expansion (`shell_expand_variables`) is the SINGLE place `%VAR%` is resolved.
+  It handles `%0`..`%9`/`%*`, `%%` (literal `%`), the dynamic pseudo-variables `%DATE%`
+  (`MM-DD-YYYY`), `%TIME%` (`HH:MM:SS`), `%RANDOM%` (`0..32767`, `esp_random() & 0x7FFF`),
+  `%CD%` (cwd) and `%ERRORLEVEL%` (decimal string), and — cmd.exe parity — an **undefined
+  `%VAR%` expands to the empty string** so `if "%var%"==""` works. Single-quoted text stays
+  literal; `^%` is an escaped literal percent. Do not add variable resolution anywhere else.
+- `if` supports `errorlevel N` (>=), `exist <path>`, `defined <name>` (cmd.exe parity),
+  the numeric keywords (`EQU NEQ LSS LEQ GTR GEQ`), and `==` string tests, with optional
+  `[not] [/i]`. An undefined variable in a numeric operand reads as 0 (DOS parity).
+- The `delay <ms>` command (`components/command/command.c`) is a PURE deterministic wait
+  clamped to `P4_CONFIG_DELAY_MAX_MS`; `sleep` remains light-sleep (blanks display, tears
+  down Wi-Fi). Use `delay` for melodies/animations, never `sleep`.
+- Native modal surfaces (the `edit` editor, `dialog`, `list`, `ask`) run on the shared
+  runtime in `components/modal/` — ONE session loop + event group + USB/serial input
+  routing. New full-screen surfaces MUST be `modal_surface_t` descriptors on that runtime,
+  never a private loop, and MUST reach the shell core only through the generic
+  `shell_command_ops_t.modal_*` hooks. Ready-made surfaces take `/t:secs` (auto-cancel via
+  a FreeRTOS timer), `/v:NAME` (store a result variable), and `/p` (password mask) options.
 - Password (no-echo) input shares ONE reader: `shell_read_line_hidden()` in the shell core
   (with `shell_read_line` a thin wrapper over the shared mode with echo on). The batch
   `set /p NAME=<prompt> /P` command and `app_read_password` MUST call it — never re-implement
@@ -471,8 +542,9 @@
 
 ### Editor Rules (components/editor)
 - The `edit` command lives in `components/editor/`: the byte-preserving document
-  model plus the LVGL surface and the worker-task session. `command.c` only
-  dispatches and maps the errorlevel.
+  model plus the LVGL surface and the worker-task session. Since v0.33.0 it runs
+  on the shared modal runtime in `components/modal/`; `command.c` only dispatches
+  and maps the errorlevel.
 - Document mutators run on the LVGL task; SD load/save runs on the command
   worker inside a guarded `shell_sd_begin`/`shell_sd_end` session. A failed
   save MUST remove its partial destination.
@@ -527,6 +599,17 @@
   via `windows_refresh_editor_surface()` (called on entry and keyboard
   show/hide); `windows_editor_surface_height_ok()` and
   `windows_debug_editor_layout()` guard against a collapse.
+
+### TUI Rules (v0.35.1 hardware testing patch 0.35.0→0.35.1 — COM11, `1024x510` transcript rect, `80×25`, font 384 glyphs, fullscreen, prompt, screenshot, stack 24576 at 0x4012b75a, companion 7 BATs TUI-expanded)
+
+- The TUI logical grid is `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:298`, DOS parity) — a heap cell buffer (`tui_cell_t utf8[4]` `components/tui/tui.h:35`, `tui_cell_set` `components/tui/tui.c:116`) with fg/bg/attribute per cell. It is CLAMPED to the logical grid, never to pixels; the pixel rect is the live transcript region `1024x510` (`tui status`) via `windows_enter_tui_mode()` / `windows_refresh_tui_surface()` / `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). That rect follows rotation and on-screen-keyboard visibility — `P4_CONFIG_TUI_*` maps to it, not to a fixed screen size. `utf8[4]` is REQUIRED (3-byte box UTF-8 `SH_BOX_*` + NUL); `utf8[2]` truncated box draws.
+- Font: extended `unscii_16` in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F + U+2600-U+26FF, cmaps 3, no duplication, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`) via `windows_get_terminal_font()` for `s_tui_label` (`lv_label_set_recolor true`). `SH_BOX_*` UTF-8 sequences are the ONLY box source.
+- Drawing primitives MUST honor style and title via `tui_cell_set`: `tui_draw_box` (`components/tui/tui.c:228`) selects `SH_BOX_TL`/`H`/`V` vs `TL2`/`H2`/`V2` vs `TLR`/`TRR`/`BLR`/`BRR` per `single`/`double`/`rounded` and centers title with spaces; `tui_draw_line` (`components/tui/tui.c:283`) selects `SH_BOX_H`/`V` vs `H2`/`V2` vs `HL`/`VL` per `single`/`double`/`heavy`; `tui_flush` (`components/tui/tui.c:356`) coalesces by fg and emits `#RRGGBB ` per run via `ansi_get_palette_color` PowerShell palette (no duplicate palette) into `s_tui_label`. Default fg 16 emits no tag.
+- Fullscreen: `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app) both route to `tui_enter_fullscreen`/`tui_exit_fullscreen` (`components/tui/tui.c:417`) which call `windows_set_fullscreen`/`header_set_visible` (`components/windows/windows.c:418`) — header hidden completely when fullscreen, kept visible by default. Dynamic keyboard scaling via `windows_notify_keyboard_visibility` MUST be kept; `tui_refresh_surface` (`components/tui/tui.c:408`) on rotation/keyboard. `tui status` reports `rect 1024x510 cols 80 rows 25` + fullscreen + font.
+- Prompt: all inputs MUST honor `shell_prompt_render_plain()` (`components/shell/shell.c:412`): `main.c:112` input line echo `SHELL_PROMPT` → `shell_prompt_render_plain()`, `modal_surf.c:412` `ask` placeholder `shell_prompt_render_plain()` + `keyboard_bind_textarea`, shell echo situational `SH_PROMPT` color.
+- Screenshot debug loop (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`) crops to transcript rect for pixel-perfect verification; use it during hardware bug hunting.
+- The cell buffer is heap-allocated (PSRAM `MALLOC_CAP_SPIRAM`); every `draw`/`locate`/`color` call clamps to `80×25` and `tui_flush` diffs into LVGL recolor runs. CSI sequences are handled by `components/ansi/ansi.c` (`ansi_process_text` / `ansi_vformat`), so SGR codes in batch `draw`/`color`/`ansi` share one parser. Alt-screen `ESC[?1049h/l` save/restore is honoured when `P4_CONFIG_TUI_ALT_SCREEN` is set (`components/tui/tui.c:327`). `draw` auto-enters TUI (`tui_init` `components/tui/tui.c:56`) when no TUI/modal surface is active.
+- New full-screen TUI surfaces MUST be `modal_surface_t` descriptors on the shared modal runtime (`components/modal/modal_surf.c`), never a private loop. They MUST accept `/t:secs` (auto-cancel via FreeRTOS one-shot timer firing `MODAL_EVENT_CLOSE_REQUEST`) and `/v:NAME` (store result variable; dialog/list/ask/browse all do), and MUST be routed through the generic `shell_command_ops_t.modal_*` hooks. `dialog`/`list`/`ask` dispatcher was missing from `command.c` — now wired; `browse`/`view`/`hexview` were `return -1` stubs — now restored on the same runtime. Companion testing is deferred to next phase (do not add companion test results). Window stack via nested `tui_draw_box` with title is the essential feature — not a second window manager.
 
 ### Display and Touch
 - Display init MUST use `display_init()` (which wraps `bsp_display_start_with_config()` with BOARD_CFG_* values)
@@ -683,7 +766,7 @@
 - Factory v2.3.0 needs one-time standalone tool first
 
 ### Stack Discipline
-- The command worker task stack is `P4_CONFIG_COMMAND_TASK_STACK` (8192 bytes) and is shared by
+- The command worker task stack is `P4_CONFIG_COMMAND_TASK_STACK` (16384 bytes) and is shared by
   the whole dispatch path
 - `shell_execute_batch_file()`, `shell_execute_command()`, and `shell_execute_command_core()`
   form a RECURSIVE cycle: a batch file re-enters the pipeline for every line it runs. Their
@@ -848,7 +931,8 @@
 After every task, update: changelog.md, readme.md, documentation.md, ai-context.md, board_config.yaml, command.md
 For roadmap work, also update: roadmap.md, API.md, SDK.md
 When bumping the version, update all three: `p4minishell_config.h` version macros,
-`p4minishell_config.yaml` `config_version`, and the `readme.md` version badge
+`p4minishell_config.yaml` `config_version`, and the `readme.md` version badge, then add
+a new section to `changelog.md`.
 
 ### Hardware Gaps (Do NOT implement)
 - Camera: no local camera stack in workspace

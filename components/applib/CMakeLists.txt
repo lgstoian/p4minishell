@@ -1,10 +1,12 @@
 idf_component_register(
-    SRCS "applib.c"
+    SRCS "applib.c" "applib_tui.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         shell
         clock
         storage
+        db
+        tui
         heap
         esp_timer
         freertos

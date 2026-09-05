@@ -30,6 +30,7 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # overflowed in the same machinery once boot scripting plus the shell's
 # argument-cap and echo hardening added frames on that path. 16384 gives the
 # boot path comfortable headroom for nested batch files.
+CONFIG_LV_FONT_UNSCII_16=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # Wi-Fi/IP event handlers call the shell transcript (vsnprintf formatting) and
@@ -100,10 +101,27 @@ CONFIG_WIFI_RMT_SOFTAP_SUPPORT=n
 # and grew the image. Pinning them here makes them durable.
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+# LVGL demos/examples must stay off: the esp32p4 image budget has no room
+# for them (see ai-context.md build constraints).
+# CONFIG_LV_USE_DEMO_MUSIC is not set
+# CONFIG_LV_USE_DEMO_KEYPAD_AND_ENCODER is not set
+# CONFIG_LV_USE_DEMO_BENCHMARK is not set
+# CONFIG_LV_USE_DEMO_STRESS is not set
+# CONFIG_LV_USE_DEMO_WIDGETS is not set
 
 # PSRAM XIP instruction/rodata mapping must stay disabled: enabling it
 # overflows the flash/PSRAM budget at link time on this board.
 CONFIG_SPIRAM_XIP_FROM_PSRAM=n
+
+# Reduce internal heap pressure: with the default 16384, even 100-byte LVGL
+# spans prefer internal first and exhaust it under load (spans accumulate one
+# per colour run per transcript line, so a single `dir /S` can need tens of
+# KB; newlib then aborts in lock_init_generic when a snprintf needs a mutex).
+# 0 sends plain malloc() to PSRAM first (DMA users request explicit caps and
+# are unaffected; malloc falls back to internal when PSRAM is full), while the
+# 32 KB RESERVE pool stays dedicated to DMA/internal-required allocations.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 
 # On RISC-V the IDF default backtrace method is "None", which hides the call
 # stack on a panic. Enable unwinding so crash reports include a real
@@ -150,6 +168,10 @@ CONFIG_LV_USE_CLIB_MALLOC=y
 # returns when the allocation is NULL.
 # CONFIG_LV_USE_ASSERT_MALLOC is not set
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# The on-board flash is a BOYA chip; enable its driver so the boot log does not
+# warn about falling back to the generic driver.
+CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
 
 # Boot-time Wi-Fi diagnostic scan is disabled by default. On earlier esp_hosted
 # releases the scan path frequently corrupted heap metadata when it ran

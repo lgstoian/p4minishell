@@ -24,6 +24,7 @@
 #include "p4minishell_config.h"
 #include "bsp/esp-bsp.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -397,6 +398,13 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
         FF_DIR dir;
         FILINFO info;
         dir_entry_t entries[P4_CONFIG_DIR_SORT_ENTRY_MAX];
+        /* Per-level working buffers live here, not on the task stack: /S
+         * recurses once per level, so stack copies would multiply by the
+         * depth limit on the shared command-worker stack. */
+        char display_name[SHELL_LFN_BYTES];
+        char cell[SHELL_LFN_BYTES + 4];
+        char upper[SHELL_LFN_BYTES];
+        char coloured_name[SHELL_LFN_BYTES + 8];
     } *scratch = NULL;
     FRESULT result;
     size_t count = 0;
@@ -412,7 +420,13 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
         return !ctx->aborted;
     }
 
-    scratch = calloc(1, sizeof(*scratch));
+    /* ~40 KB per level: prefer PSRAM so the DMA-capable internal heap (which
+     * backs LVGL spans, WiFi/SDIO pools and the USB ring buffers) is left
+     * alone. Fall back to internal RAM when PSRAM is unavailable. */
+    scratch = heap_caps_calloc(1, sizeof(*scratch), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (scratch == NULL) {
+        scratch = calloc(1, sizeof(*scratch));
+    }
     if (scratch == NULL) {
         shell_transcript_append_text("dir: out of memory buffering the directory\n");
         shell_record_errorf("dir", ESP_ERR_NO_MEM, "Out of memory buffering a directory level");
@@ -485,10 +499,9 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
 
     for (index = 0; index < count && keep_going; index++) {
         dir_entry_t *entry = &scratch->entries[index];
-        char display_name[SHELL_LFN_BYTES];
 
-        snprintf(display_name, sizeof(display_name), "%s", entry->name);
-        shell_dir_apply_case(ctx, display_name);
+        snprintf(scratch->display_name, sizeof(scratch->display_name), "%s", entry->name);
+        shell_dir_apply_case(ctx, scratch->display_name);
 
         if (entry->is_dir) {
             local_dirs++;
@@ -503,9 +516,9 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
              * uncoloured: the transcript strips escapes, but a redirected
              * copy must be plain text for the next stage to parse. */
             if (ctx->recursive) {
-                keep_going = shell_dir_emitf(ctx, "%s/%s\n", dir_path, display_name);
+                keep_going = shell_dir_emitf(ctx, "%s/%s\n", dir_path, scratch->display_name);
             } else {
-                keep_going = shell_dir_emitf(ctx, "%s\n", display_name);
+                keep_going = shell_dir_emitf(ctx, "%s\n", scratch->display_name);
             }
             continue;
         }
@@ -521,24 +534,23 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
             /* Sized for a full long file name plus the directory brackets, so
              * a long name is clipped deliberately below rather than by an
              * accidental snprintf() truncation. */
-            char cell[SHELL_LFN_BYTES + 4];
             size_t cell_len;
 
             /* DOS brackets directory names in wide mode. The colour is added
              * after padding is computed, so the escape bytes do not disturb
              * the column arithmetic. */
             if (entry->is_dir) {
-                snprintf(cell, sizeof(cell), "[%s]", display_name);
+                snprintf(scratch->cell, sizeof(scratch->cell), "[%s]", scratch->display_name);
             } else {
-                snprintf(cell, sizeof(cell), "%s", display_name);
+                snprintf(scratch->cell, sizeof(scratch->cell), "%s", scratch->display_name);
             }
 
             /* Clip anything that will not fit the column so the grid stays
              * aligned, marking the cut with a trailing '~' like DOS does. */
-            cell_len = strlen(cell);
+            cell_len = strlen(scratch->cell);
             if (cell_len > P4_CONFIG_DIR_WIDE_COLUMN_WIDTH - 1) {
-                cell[P4_CONFIG_DIR_WIDE_COLUMN_WIDTH - 2] = '~';
-                cell[P4_CONFIG_DIR_WIDE_COLUMN_WIDTH - 1] = '\0';
+                scratch->cell[P4_CONFIG_DIR_WIDE_COLUMN_WIDTH - 2] = '~';
+                scratch->cell[P4_CONFIG_DIR_WIDE_COLUMN_WIDTH - 1] = '\0';
             }
 
             /* Append the cell and its padding by index rather than with
@@ -548,9 +560,9 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
                 size_t row_len = strlen(scratch->wide_row);
                 size_t copy_index = 0;
 
-                cell_len = strlen(cell);
+                cell_len = strlen(scratch->cell);
                 while (copy_index < cell_len && row_len + 1 < sizeof(scratch->wide_row)) {
-                    scratch->wide_row[row_len++] = cell[copy_index++];
+                    scratch->wide_row[row_len++] = scratch->cell[copy_index++];
                 }
 
                 wide_column++;
@@ -594,14 +606,13 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
             /* Show the 8.3 alternate name only when it differs from the LFN,
              * which is the existing behavior and stays unchanged. */
             if (entry->altname[0] != '\0') {
-                char upper[SHELL_LFN_BYTES];
                 char *cursor;
 
-                snprintf(upper, sizeof(upper), "%s", entry->name);
-                for (cursor = upper; *cursor != '\0'; cursor++) {
+                snprintf(scratch->upper, sizeof(scratch->upper), "%s", entry->name);
+                for (cursor = scratch->upper; *cursor != '\0'; cursor++) {
                     *cursor = (char)toupper((unsigned char)*cursor);
                 }
-                if (strcmp(entry->altname, upper) != 0) {
+                if (strcmp(entry->altname, scratch->upper) != 0) {
                     snprintf(sfn, sizeof(sfn), " [%s]", entry->altname);
                 }
             }
@@ -610,19 +621,18 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
              * escape bytes never affect the column alignment computed above:
              * muted timestamp, magenta size, and an entry colour chosen by
              * kind (directory, runnable .bat, or ordinary file). */
-            char coloured_name[SHELL_LFN_BYTES + 8];
             /* entry_colour holds @-specifiers (e.g. SH_FILE = @w). Build a
-             * format string with the colour literal so ansi_vformat converts
+             * format string with the colour literal so ansi_format converts
              * it to real SGR escapes; the entry name is substituted as %s. */
             char colour_fmt[16];
             snprintf(colour_fmt, sizeof(colour_fmt), "%s%%s", entry_colour);
-            ansi_format(coloured_name, sizeof(coloured_name), colour_fmt, display_name);
+            ansi_format(scratch->coloured_name, sizeof(scratch->coloured_name), colour_fmt, scratch->display_name);
             keep_going = shell_dir_emitf(ctx,
                                          SH_TIME "%s" SH_RST "  "
                                          SH_SIZE "%s" SH_RST "  "
                                          "%s" SH_RST
                                          SH_MUTE "%s" SH_RST "\n",
-                                         stamp, size_text, coloured_name, sfn);
+                                         stamp, size_text, scratch->coloured_name, sfn);
         }
     }
 
@@ -658,7 +668,12 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
         char (*subdirs)[SHELL_LFN_BYTES] = NULL;
         size_t subdir_count = 0;
 
-        subdirs = calloc(count > 0 ? count : 1, sizeof(*subdirs));
+        /* Up to 128 x 256 B: prefer PSRAM to protect the internal heap. */
+        subdirs = heap_caps_calloc(count > 0 ? count : 1, sizeof(*subdirs),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (subdirs == NULL) {
+            subdirs = calloc(count > 0 ? count : 1, sizeof(*subdirs));
+        }
         if (subdirs != NULL) {
             for (index = 0; index < count; index++) {
                 if (scratch->entries[index].is_dir) {
@@ -677,10 +692,13 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
              * P4_CONFIG_DIR_RECURSE_DEPTH_MAX would overflow the 8 KB command
              * worker task stack (a stack overflow corrupts memory and shows up
              * as an intermittent crash). */
-            char *child_path = malloc(SHELL_SD_PATH_BYTES);
+            char *child_path = heap_caps_malloc(SHELL_SD_PATH_BYTES,
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (child_path == NULL) {
+                child_path = malloc(SHELL_SD_PATH_BYTES);
+            }
             if (child_path == NULL) {
                 free(subdirs);
-                free(scratch);
                 return false;
             }
             for (index = 0; index < subdir_count && keep_going && !ctx->aborted; index++) {

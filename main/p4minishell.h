@@ -44,4 +44,12 @@ void shell_networking_schedule_text(const char *text);
 void shell_networking_record_warning(const char *tag, const char *message);
 void shell_networking_record_info(const char *tag, const char *message);
 
+/* ========================================================================
+ * NATIVE APP REGISTRATION
+ * ======================================================================== */
+
+/* Registered native apps (the applib ABI sample) — implemented in
+ * main/native_apps.c, called once after command_init(). */
+void native_apps_register(void);
+
 #endif /* P4MINISHELL_H */

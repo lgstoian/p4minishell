@@ -52,8 +52,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             32
-#define P4_CONFIG_VERSION_PATCH             8
+#define P4_CONFIG_VERSION_MINOR             35
+#define P4_CONFIG_VERSION_PATCH             2
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -82,13 +82,15 @@
  * ======================================================================== */
 
 /** Maximum bytes stored in the on-screen transcript buffer.
- *  Sized so the scrollable transcript holds a useful history (~30 lines of
+ *  Sized so the scrollable transcript holds a long history (~150 lines of
  *  coloured output) instead of only the last screenful; the LVGL span group
  *  shows ~15 lines and scrolls through the rest. The buffer is allocated from
  *  PSRAM (with an internal-RAM fallback) so it does not compete with the
  *  DMA-capable heap used by the WiFi/SDIO transport mempool and the
- *  USB-Serial/JTAG ring buffers. */
-#define P4_CONFIG_TRANSCRIPT_BYTES           8192
+ *  USB-Serial/JTAG ring buffers. Raised to 24576 in v0.35.2: PSRAM is
+ *  plentiful, and the render staging copies moved to PSRAM as well, so long
+ *  scrollback no longer costs internal RAM. */
+#define P4_CONFIG_TRANSCRIPT_BYTES           65536
 
 /**
  * Maximum bytes staged for the on-screen transcript span group. The staged
@@ -109,9 +111,13 @@
  * created by printf) fails and aborts the board. When free internal RAM
  * drops below this threshold the shell drops the oldest half of the
  * transcript and frees the corresponding spans, keeping the internal heap
- * above the failure floor.
+ * above the failure floor. Set to 12288 in v0.35.2 (was 20000): the render
+ * staging copies moved to PSRAM, so normal free sits well above this floor
+ * and trims fire only under genuine pressure. The trim itself keeps the
+ * newest three quarters and is rate-limited to one per 2 s, so scrollback
+ * survives long sessions.
  */
-#define P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES   49152
+#define P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES   4096
 
 /**
  * Transcript scroll step in pixels applied by one on-screen scroll button
@@ -128,7 +134,7 @@
 #define P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX 32
 
 /** Maximum bytes in the async (background task) transcript staging buffer. */
-#define P4_CONFIG_ASYNC_TRANSCRIPT_BYTES     2048
+#define P4_CONFIG_ASYNC_TRANSCRIPT_BYTES     512
 
 /** Maximum bytes for a single command line (input + null terminator). */
 #define P4_CONFIG_COMMAND_BYTES              4096
@@ -281,6 +287,51 @@
 
 /** Width of the transcript scroll buttons (input-row Up/Dn) in pixels. */
 #define P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH  64
+
+/* ========================================================================
+ * TUI / MODAL SURFACE PARAMETERS
+ * ========================================================================
+ * The TUI (text-mode) layer renders inside the shell's transcript container,
+ * so its pixel size follows the transcript region dynamically (rotation,
+ * on-screen keyboard). The logical grid size below is the DOS-like coordinate
+ * system batch files address with `draw`/`locate` (1-based rows/cols).
+ */
+
+ /** Logical TUI grid columns (DOS 80 is the default). */
+#define P4_CONFIG_TUI_COLS                      80
+
+ /** Logical TUI grid rows (DOS 25 is the default). */
+#define P4_CONFIG_TUI_ROWS                      25
+
+ /** Maximum layered TUI windows a batch app may compose. */
+#define P4_CONFIG_TUI_WINDOW_MAX                4
+
+ /** Dialog width as percentage of the current transcript region width. */
+#define P4_CONFIG_TUI_DIALOG_WIDTH_PCT          60
+
+ /** Visible rows in a `list` / file-browser modal. */
+#define P4_CONFIG_TUI_LIST_VISIBLE              8
+
+ /** Maximum items `list` will show (truncates with a warning). */
+#define P4_CONFIG_TUI_LIST_MAX_ITEMS            64
+
+ /** Maximum entries the file browser lists per directory. */
+#define P4_CONFIG_TUI_BROWSE_LIST_LIMIT         128
+
+ /** Maximum bytes for a file-browser selected path. */
+#define P4_CONFIG_TUI_BROWSE_PATH_BYTES         P4_CONFIG_SD_PATH_BYTES
+
+ /** Maximum file bytes the text viewer / hex viewer will load. */
+#define P4_CONFIG_TUI_VIEW_MAX_BYTES            (64 * 1024)
+
+ /** Lines per page in the viewer pager. */
+#define P4_CONFIG_TUI_VIEW_PAGE_LINES           20
+
+ /** Default auto-cancel timeout for modal surfaces in ms (0 = no timeout). */
+#define P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS        0
+
+ /** When 1, alt-screen save/restore (ESC[?1049h/l) is honoured. */
+#define P4_CONFIG_TUI_ALT_SCREEN                1
 
 /* ========================================================================
  * KEYBOARD PARAMETERS
@@ -488,6 +539,11 @@
  *  disconnect. When 0, only the manual `httpd start` starts it. */
 #define P4_CONFIG_HTTPD_AUTOSTART           1
 
+/** Cooldown in seconds before the auto-start retries after a failed start
+ *  (e.g. task creation returning ESP_ERR_HTTPD_TASK while the heap is
+ *  tight). Manual `httpd start` bypasses the cooldown. */
+#define P4_CONFIG_HTTPD_AUTOSTART_RETRY_SECS  60
+
 /** Basic-auth username; an empty string disables authentication. */
 #define P4_CONFIG_HTTPD_AUTH_USERNAME       "admin"
 
@@ -575,7 +631,7 @@
  * the SDMMC chunk size is derived from it. Larger values speed up multi-
  * block transfers but reserve more internal RAM permanently.
  */
-#define P4_CONFIG_SD_DMA_BUFFER_BYTES        8192
+#define P4_CONFIG_SD_DMA_BUFFER_BYTES        4096
 
 /* ========================================================================
  * DIRECTORY LISTING AND STORAGE GUARDRAILS
@@ -852,11 +908,12 @@
  * CALCULATOR (`calc` command + floating-point expression evaluator)
  * ========================================================================
  * `calc` evaluates a floating-point expression with the FX-870P/VX-4 BASIC
- * math and string functions (ABS, SIN, COS, TAN, ASN, ACS, ATN, HYP, SQR,
- * EXP, LN, LOG, FACT, NCR, NPR, INT, FIX, FRAC, ROUND, SGN, MOD, PI, RAN#,
- * POL, REC, DMS/DMS$, VAL/VALF, STR$, HEX$, ASC, CHR$, LEN, LEFT$, MID$,
- * RIGHT$, `&H`/`0x` hex literals) and an ANGLE degree/radian mode. It lives
- * in components/batch (calc.c) and is a batch language verb like `set`.
+ * math and string functions (ABS, SIN, COS, TAN, SINH, COSH, TANH, ASINH,
+ * ACOSH, ATANH, ASN, ACS, ATN, HYP, SQR, EXP, LN, LOG, FACT, NCR, NPR, INT,
+ * FIX, FRAC, ROUND, SGN, MOD, PI, RAN#, POL, REC, DMS/DMS$, DEG, CUR,
+ * VAL/VALF, STR$, HEX$, ASC, CHR$, LEN, LEFT$, MID$, RIGHT$, `&H`/`0x` hex
+ * literals) and an ANGLE degree/radian mode. It lives in components/batch
+ * (calc.c) and is a batch language verb like `set`.
  */
 
 /** Maximum bytes of a string result or string argument in a `calc` expression. */
@@ -911,6 +968,18 @@
  */
 #define P4_CONFIG_APPLIB_PSRAM_THRESHOLD_BYTES  512
 
+/** Maximum number of native apps registered in the applib app table. */
+#define P4_CONFIG_APP_MAX                       8
+
+/** Maximum length of a registered native app's command name. */
+#define P4_CONFIG_APP_NAME_BYTES                32
+
+/** Maximum length of a registered native app's one-line description. */
+#define P4_CONFIG_APP_DESC_BYTES                64
+
+/** Maximum number of `.bat` apps surfaced by the `launch` command / menu. */
+#define P4_CONFIG_LAUNCH_MAX                    16
+
 /** Maximum length of the `choice` /C: key list (characters). Single-char
  *  keys only; DOS caps this list at 26, Windows at 99. */
 #define P4_CONFIG_CHOICE_KEY_MAX              64
@@ -961,6 +1030,9 @@
 /** Delay in ms after printing before entering sleep so the transcript paints. */
 #define P4_CONFIG_POWER_SLEEP_PRE_DELAY_MS   150
 
+/** Maximum milliseconds accepted by the `delay` command (pure wait). */
+#define P4_CONFIG_DELAY_MAX_MS               10000
+
 /** Tear down Wi-Fi/hosted state when entering light sleep (`sleep`). */
 #define P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI 1
 
@@ -1006,7 +1078,6 @@
 /** Maximum duration in ms accepted by `tone`/`wavplay` (bounded so the audio
  *  playback task always terminates). */
 #define P4_CONFIG_TONE_DURATION_MAX_MS       5000
-
 /** Default duration in ms of `tone <freq>` when no duration is given. */
 #define P4_CONFIG_TONE_DURATION_DEFAULT_MS   200
 
@@ -1173,6 +1244,7 @@
 #define P4_CONFIG_LED_COLOR_WIFI_DISCONNECTED 0xFF0000
 #define P4_CONFIG_LED_COLOR_WIFI_ERROR        0xFF4040
 #define P4_CONFIG_LED_COLOR_HTTPD             0x0080FF
+#define P4_CONFIG_LED_COLOR_ALARM             0x00FFFF
 
 /* ========================================================================
  * HEADER BAR VISUAL STYLING
@@ -1447,7 +1519,7 @@
 #define P4_CONFIG_WIFI_INIT_TASK_STACK       12288
 
 /** Stack size for the shell command worker task. */
-#define P4_CONFIG_COMMAND_TASK_STACK         12288
+#define P4_CONFIG_COMMAND_TASK_STACK         32768
 
 /** Stack size for the UART/serial console reader task. */
 #define P4_CONFIG_UART_CONSOLE_TASK_STACK    12288
@@ -1538,5 +1610,99 @@
 
 /** Maximum size in bytes of the `send /diag` diagnostic report payload. */
 #define P4_CONFIG_SERIAL_DIAG_BYTES          1024
+
+/* ========================================================================
+ * DATABASE (`db`) — Palm-OS-style SD-backed record store
+ * All database data lives on the SD card under sd:/DBS/<name>.DB/:
+ *   HEADER.INI, CATEGORIES.INI, INDEX.TXT, RECORDS/R<id>.DAT
+ * Every operation uses a guarded SD session, a free-space pre-check, and an
+ * atomic temp+rename write. Buffers on the batch path are heap-allocated.
+ */
+
+/** Maximum number of named databases that can exist on the card. */
+#define P4_CONFIG_DB_MAX_DATABASES            64
+
+/** Maximum records (soft-deleted included) in a single database. */
+#define P4_CONFIG_DB_MAX_RECORDS              256
+
+/** Maximum payload bytes for a single record (text or binary). */
+#define P4_CONFIG_DB_RECORD_MAX_BYTES         4096
+
+/** Maximum results returned by a `db find` scan (bounded, linear). */
+#define P4_CONFIG_DB_FIND_MAX                 64
+
+/** Maximum characters in a database name (the directory part of the path). */
+#define P4_CONFIG_DB_NAME_BYTES               32
+
+/** Maximum characters in a record key. */
+#define P4_CONFIG_DB_KEY_BYTES                32
+
+/** Maximum length of one `INDEX.TXT` line ("id cat flags key size"). */
+#define P4_CONFIG_DB_INDEX_LINE_BYTES         128
+
+/** Maximum length of a category label (CATEGORIES.INI). */
+#define P4_CONFIG_DB_CATEGORY_LABEL_BYTES     24
+
+/** Number of categories (0..P4_CONFIG_DB_CATEGORY_COUNT-1). */
+#define P4_CONFIG_DB_CATEGORY_COUNT           16
+
+/** Maximum characters in the stored creator/type id strings. */
+#define P4_CONFIG_DB_ID_BYTES                 8
+
+/** Maximum lines in one `db export` / `db import` text file. */
+#define P4_CONFIG_DB_EXPORT_MAX_RECORDS       256
+
+/** Maximum bytes in one `db export` / `db import` text file. */
+#define P4_CONFIG_DB_EXPORT_MAX_BYTES         (256 * 1024)
+
+/** Flag bit: the record's payload is secret and redacted in list/transcript
+ *  output unless an explicit reveal is requested. */
+#define P4_CONFIG_DB_FLAG_SECRET              0x01
+
+/** Flag bit: the record is soft-deleted (kept until `purge`). */
+#define P4_CONFIG_DB_FLAG_DELETED             0x02
+
+/* ========================================================================
+ * ALARM / CALENDAR (`alarm`, `cal`)
+ * A small SD-persisted event store + a single background checker task. All
+ * event data lives on the SD card under P4_CONFIG_ALARM_PATH (default
+ * sd:/ALARMS): INDEX.INI + one E<id>.INI per event. The checker posts to the
+ * existing header notification, LED, and audio surfaces (never a private
+ * loop) and optionally queues a `/run:` batch file onto the command worker
+ * via a registered host-ops hook.
+ */
+
+/** Maximum events stored at once (also bounds the checker's per-poll scan). */
+#define P4_CONFIG_ALARM_MAX_EVENTS            64
+
+/** Maximum characters in an alarm title. */
+#define P4_CONFIG_ALARM_TITLE_BYTES           48
+
+/** Maximum characters in an alarm message (header notification width). */
+#define P4_CONFIG_ALARM_MSG_BYTES             160
+
+/** Checker poll interval in milliseconds (fires within this granularity). */
+#define P4_CONFIG_ALARM_POLL_MS               30000
+
+/** Stack size for the background alarm checker task. Sized generously: the
+ *  fire pass carries a per-event struct + path locals and newlib's snprintf
+ *  (used to render the event files and notifications) alone needs ~1.5 KB of
+ *  stack frame. 8192 matches the audio playback task. */
+#define P4_CONFIG_ALARM_TASK_STACK            8192
+
+/** Priority of the alarm checker task. */
+#define P4_CONFIG_ALARM_TASK_PRIORITY         1
+
+/** Base directory for the alarm store (resolved at init). */
+#define P4_CONFIG_ALARM_PATH                  "sd:/ALARMS"
+
+/** Fire once on boot for alarms that became due while powered off. */
+#define P4_CONFIG_ALARM_CATCHUP_ON_BOOT       1
+
+/** Default header-notification timeout in seconds when an alarm fires. */
+#define P4_CONFIG_ALARM_DEFAULT_NOTIFY_SECS   5
+
+/** Compile out the `/run:` batch action entirely for size (0 = keep it). */
+#define P4_CONFIG_ALARM_ENABLE_RUN_ACTION     1
 
 #endif /* P4MINISHELL_CONFIG_H */

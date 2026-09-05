@@ -137,6 +137,48 @@ typedef enum {
     ANSI_COLOR_COUNT
 } ansi_color_index_t;
 
+/** ANSI color mode for extended colors. */
+typedef enum {
+    ANSI_COLOR_MODE_16 = 0,      /**< Standard 16-color mode. */
+    ANSI_COLOR_MODE_256 = 1,     /**< 256-color mode (index 0-255). */
+    ANSI_COLOR_MODE_TRUECOLOR = 2 /**< 24-bit truecolor mode (RGB). */
+} ansi_color_mode_t;
+
+/** Extended ANSI SGR codes for 256-color and truecolor. */
+#define ANSI_FG_256_PREFIX       38
+#define ANSI_BG_256_PREFIX       48
+
+/* ========================================================================
+ * ANSI EXTENDED SGR CODES (CSI sequences beyond basic SGR)
+ * ======================================================================== */
+
+/** Cursor position (CUP): ESC [ <row> ; <col> H */
+#define ANSI_CUP                'H'
+/** Cursor forward (CUF): ESC [ <n> C */
+#define ANSI_CUF                'C'
+/** Cursor backward (CUB): ESC [ <n> D */
+#define ANSI_CUB                'D'
+/** Cursor up (CUU): ESC [ <n> A */
+#define ANSI_CUU                'A'
+/** Cursor down (CUD): ESC [ <n> B */
+#define ANSI_CUD                'B'
+/** Save cursor position (SCP): ESC [ s */
+#define ANSI_SCP                's'
+/** Restore cursor position (RCP): ESC [ u */
+#define ANSI_RCP                'u'
+/** Erase in display (ED): ESC [ <n> J */
+#define ANSI_ED                 'J'
+/** Erase in line (EL): ESC [ <n> K */
+#define ANSI_EL                 'K'
+/** Set scroll region (DECSTBM): ESC [ <top> ; <bottom> r */
+#define ANSI_DECSTBM            'r'
+/** Show cursor (DECTCEM): ESC [ ? 25 h */
+#define ANSI_DECTCEM_SHOW       'h'
+/** Hide cursor (DECTCEM): ESC [ ? 25 l */
+#define ANSI_DECTCEM_HIDE       'l'
+/** Alternate screen buffer (SM/RM): ESC [ ? 1049 h/l */
+#define ANSI_ALT_SCREEN         'h'
+
 /** ANSI text style attributes (bitmask). */
 typedef enum {
     ANSI_ATTR_NONE      = 0,
@@ -150,15 +192,19 @@ typedef enum {
     ANSI_ATTR_STRIKE    = (1 << 7),
 } ansi_attr_t;
 
-/** Current ANSI rendering state. */
+/** Current ANSI rendering state (supports 16-color, 256-color, and truecolor). */
 typedef struct {
-    int fg_index;           /**< Current foreground color index (-1 = default). */
-    int bg_index;           /**< Current background color index (-1 = default). */
-    ansi_attr_t attrs;      /**< Current active attributes bitmask. */
-    uint32_t fg_color;      /**< Resolved foreground LVGL color (hex). */
-    uint32_t bg_color;      /**< Resolved background LVGL color (hex). */
-    bool bold;              /**< Bold attribute active. */
-    bool underline;         /**< Underline attribute active. */
+    ansi_color_mode_t fg_mode;   /**< Foreground color mode. */
+    ansi_color_mode_t bg_mode;   /**< Background color mode. */
+    int fg_index;                /**< 16-color/256-color index (-1 = default). */
+    int bg_index;                /**< 16-color/256-color index (-1 = default). */
+    uint8_t fg_r, fg_g, fg_b;    /**< Truecolor foreground RGB. */
+    uint8_t bg_r, bg_g, bg_b;    /**< Truecolor background RGB. */
+    uint32_t fg_color;           /**< Resolved foreground LVGL color (hex). */
+    uint32_t bg_color;           /**< Resolved background LVGL color (hex). */
+    ansi_attr_t attrs;           /**< Current active attributes bitmask. */
+    bool bold;                   /**< Bold attribute active. */
+    bool underline;              /**< Underline attribute active. */
 } ansi_state_t;
 
 /** Callback for ANSI-stripped text segments. */
@@ -335,6 +381,48 @@ int ansi_strip_to_plain(char *dst, size_t dst_size, const char *src);
  * @return true if the text contains ANSI escape sequences.
  */
 bool ansi_contains_escapes(const char *text);
+
+/* ========================================================================
+ * EXTENDED ANSI PROCESSING (256-color, truecolor, cursor/screen control)
+ * ======================================================================== */
+
+/**
+ * Extended ANSI segment callback with full color state.
+ * @param text        Plain-text segment.
+ * @param state       Extended rendering state (includes truecolor/256-color).
+ * @param user_data   Opaque pointer.
+ */
+typedef void (*ansi_segment_ex_fn_t)(const char *text, const ansi_state_t *state, void *user_data);
+
+/**
+ * Process ANSI text with extended color support (256-color, truecolor).
+ * Also handles cursor/screen control sequences (CUP, ED, EL, DECSTBM, etc.).
+ * @param text        Input text potentially containing ANSI escape sequences.
+ * @param segment_fn  Extended callback for each plain-text segment.
+ * @param user_data   Opaque pointer passed to segment_fn.
+ */
+void ansi_process_text_ex(const char *text, ansi_segment_ex_fn_t segment_fn, void *user_data);
+
+/**
+ * Convert RGB values to 24-bit LVGL color.
+ * @param r  Red (0-255)
+ * @param g  Green (0-255)
+ * @param b  Blue (0-255)
+ * @return  24-bit RGB color (0xRRGGBB).
+ */
+static inline uint32_t ansi_rgb_to_color(uint8_t r, uint8_t g, uint8_t b)
+{
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+/**
+ * Get 256-color palette RGB value.
+ * @param index  Color index (0-255).
+ * @param r      Output red component.
+ * @param g      Output green component.
+ * @param b      Output blue component.
+ */
+void ansi_256_color_rgb(int index, uint8_t *r, uint8_t *g, uint8_t *b);
 
 /* ========================================================================
  * QUICK COLOR FORMATTERS (inline helpers)

@@ -174,7 +174,7 @@ static void networking_appendf(const char *format, ...)
     s_host_ops.transcript_append_ansi(buffer);
 }
 
-static void networking_schedulef(const char *format, ...)
+static void __attribute__((unused)) networking_schedulef(const char *format, ...)
 {
     char buffer[512];
     va_list args;
@@ -404,7 +404,7 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
         snprintf(ssid_copy, sizeof(ssid_copy), "%s", s_wifi_target_ssid);
         snprintf(pass_copy, sizeof(pass_copy), "%s", s_wifi_target_password);
         wifi_unlock();
-        networking_schedulef("[wifi] event: got IP " IPSTR "\n", IP2STR(&event->ip_info.ip));
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " event: got IP " SH_VAL IPSTR SH_RST "\n", IP2STR(&event->ip_info.ip));
         networking_notify_headerf(4000, "WiFi connected: " IPSTR, IP2STR(&event->ip_info.ip));
         led_notify(LED_EVENT_WIFI_CONNECTED);
 
@@ -458,10 +458,10 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
     error = esp_hosted_get_coprocessor_fwversion(&version);
     if (error != ESP_OK) {
         networking_wifi_set_detail("ESP-Hosted connected but the shell could not read the ESP32-C6 firmware version. Wi-Fi stays off because the hosted link is not trustworthy for remote Wi-Fi init. Rebuild or externally refresh coprocessor/esp32c6_slave and retry.");
-        networking_schedulef("[wifi] failed to read C6 hosted firmware version: %s (0x%x)\n",
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "failed to read C6 hosted firmware version:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
                              esp_err_to_name(error),
                              (unsigned int)error);
-        networking_schedulef("[wifi] Recovery: flash a matching %u.%u.x ESP32-C6 image from coprocessor/esp32c6_slave or use c6ota default with esp32c6_hosted_slave.bin\n",
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
                              ESP_HOSTED_VERSION_MAJOR_1,
                              ESP_HOSTED_VERSION_MINOR_1);
         networking_record_warningf("Failed to read hosted firmware version: %s", esp_err_to_name(error));
@@ -471,14 +471,14 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
     /* Definitive co-processor firmware check: log the exact version fields the
      * C6 reported so the running firmware can be identified (vs the corrupted
      * reads c6ota sometimes sees). */
-    networking_schedulef("[wifi] C6 hosted firmware version: %u.%u.%u\n",
+    networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " C6 hosted firmware version: " SH_VAL "%u.%u.%u" SH_RST "\n",
                          (unsigned int)version.major1,
                          (unsigned int)version.minor1,
                          (unsigned int)version.patch1);
 
     if (version.major1 != ESP_HOSTED_VERSION_MAJOR_1 || version.minor1 != ESP_HOSTED_VERSION_MINOR_1) {
 #if P4_CONFIG_HOSTED_SKIP_VERSION_GATE
-        networking_schedulef("[wifi] hosted version mismatch (gate skipped): host %u.%u.%u, C6 %u.%u.%u\n",
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "hosted version mismatch (gate skipped):" SH_RST " host " SH_VAL "%u.%u.%u" SH_RST ", C6 " SH_VAL "%u.%u.%u" SH_RST "\n",
                              ESP_HOSTED_VERSION_MAJOR_1,
                              ESP_HOSTED_VERSION_MINOR_1,
                              ESP_HOSTED_VERSION_PATCH_1,
@@ -500,14 +500,14 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
                                    ESP_HOSTED_VERSION_MAJOR_1,
                                    ESP_HOSTED_VERSION_MINOR_1,
                                    version.patch1);
-        networking_schedulef("[wifi] hosted version mismatch: host %u.%u.%u, C6 %u.%u.%u\n",
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "hosted version mismatch:" SH_RST " host " SH_VAL "%u.%u.%u" SH_RST ", C6 " SH_VAL "%u.%u.%u" SH_RST "\n",
                              ESP_HOSTED_VERSION_MAJOR_1,
                              ESP_HOSTED_VERSION_MINOR_1,
                              ESP_HOSTED_VERSION_PATCH_1,
                              version.major1,
                              version.minor1,
                              version.patch1);
-        networking_schedulef("[wifi] Recovery: flash a matching %u.%u.x ESP32-C6 image from coprocessor/esp32c6_slave or use c6ota default with esp32c6_hosted_slave.bin\n",
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
                              ESP_HOSTED_VERSION_MAJOR_1,
                              ESP_HOSTED_VERSION_MINOR_1);
         networking_record_warningf("Hosted version mismatch: host %u.%u.%u vs C6 %u.%u.%u",
@@ -951,20 +951,20 @@ static void networking_wifi_background_task(void *arg)
                     esp_err_t connect_error = networking_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
                                                                                        CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD);
                     if (connect_error != ESP_OK) {
-                        networking_schedulef("[wifi] %s default connect failed: %s (0x%x)\n",
+                        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "%s default connect failed:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
                                              request->origin,
                                              esp_err_to_name(connect_error),
                                              (unsigned int)connect_error);
                         networking_record_warningf("%s default connect failed", request->origin);
                     }
                 } else {
-                    networking_schedulef("[wifi] %s: sdkconfig default credentials are not configured\n", request->origin);
+                    networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "%s: sdkconfig default credentials are not configured" SH_RST "\n", request->origin);
                     networking_record_warningf("%s requested default connect without configured credentials", request->origin);
                 }
             } else if (request->ssid[0] != '\0') {
                 esp_err_t connect_error = networking_wifi_connect_with_credentials(request->ssid, request->password);
                 if (connect_error != ESP_OK) {
-                    networking_schedulef("[wifi] %s connect failed for %s: %s (0x%x)\n",
+                    networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "%s connect failed for " SH_VAL "%s" SH_RST ":" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
                                          request->origin,
                                          request->ssid,
                                          esp_err_to_name(connect_error),
@@ -977,14 +977,14 @@ static void networking_wifi_background_task(void *arg)
         if (request->run_diagnostic) {
             esp_err_t diagnostic_error = networking_wifi_run_diagnostic(request->origin);
             if (diagnostic_error != ESP_OK && diagnostic_error != ESP_ERR_INVALID_STATE) {
-                networking_schedulef("[wifi] %s diagnostic finished with %s (0x%x)\n",
+                networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " %s diagnostic finished with " SH_ERR "%s" SH_RST " (0x%x)\n",
                                      request->origin,
                                      esp_err_to_name(diagnostic_error),
                                      (unsigned int)diagnostic_error);
             }
         }
     } else {
-        networking_schedulef("[wifi] %s could not start the Wi-Fi runtime cleanly\n",
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "%s could not start the Wi-Fi runtime cleanly" SH_RST "\n",
                              request->origin[0] != '\0' ? request->origin : "runtime");
         networking_record_warningf("%s failed to start Wi-Fi runtime",
                                    request->origin[0] != '\0' ? request->origin : "runtime");
@@ -1040,7 +1040,7 @@ void networking_wifi_request_post_ota_restore(const networking_wifi_restore_stat
     }
 
     if (!networking_wifi_begin_background_request(&request)) {
-        networking_schedulef("[wifi] %s: failed to queue post-OTA Wi-Fi restore\n", request.origin);
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "%s: failed to queue post-OTA Wi-Fi restore" SH_RST "\n", request.origin);
     }
 #else
     (void)restore_state;
@@ -1077,7 +1077,7 @@ esp_err_t networking_wifi_restore_after_ota_failure(const networking_wifi_restor
         return ESP_OK;
     }
 
-    networking_schedulef("%s", "c6ota: restoring Wi-Fi after OTA failure\n");
+    networking_schedulef_ansi(SH_OTA "[c6ota]" SH_RST " restoring Wi-Fi after OTA failure\n");
     networking_wifi_runtime_init();
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
         return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_FAIL;
@@ -1106,16 +1106,16 @@ esp_err_t networking_wifi_wait_for_ota(void)
     TickType_t next_log = xTaskGetTickCount();
 
     if (s_wifi_state == NETWORKING_WIFI_STATE_STARTING) {
-        networking_schedulef("%s", "c6ota: waiting for Wi-Fi startup already in progress\n");
+        networking_schedulef_ansi(SH_OTA "[c6ota]" SH_RST " waiting for Wi-Fi startup already in progress\n");
     }
 
     if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
         if (!networking_wifi_defaults_available()) {
-            networking_schedulef("%s", "c6ota: OTA requires Wi-Fi. Run wifi connect first or configure sdkconfig defaults.\n");
+            networking_schedulef_ansi(SH_OTA "[c6ota]" SH_RST " OTA requires Wi-Fi. Run wifi connect first or configure sdkconfig defaults.\n");
             return ESP_ERR_INVALID_STATE;
         }
 
-        networking_schedulef("%s", "c6ota: starting Wi-Fi with sdkconfig default credentials for OTA\n");
+        networking_schedulef_ansi(SH_OTA "[c6ota]" SH_RST " starting Wi-Fi with sdkconfig default credentials for OTA\n");
         networking_wifi_runtime_init();
         if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
             return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_ERR_INVALID_STATE;
@@ -1124,11 +1124,11 @@ esp_err_t networking_wifi_wait_for_ota(void)
 
     if (!s_wifi_connected && !s_wifi_connect_requested) {
         if (!networking_wifi_defaults_available()) {
-            networking_schedulef("%s", "c6ota: OTA requires an active network link. Run wifi connect <ssid> <pass> first.\n");
+            networking_schedulef_ansi(SH_OTA "[c6ota]" SH_RST " OTA requires an active network link. Run wifi connect <ssid> <pass> first.\n");
             return ESP_ERR_INVALID_STATE;
         }
 
-        networking_schedulef("[wifi] ota: connecting to default SSID %s\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " ota: connecting to default SSID " SH_VAL "%s" SH_RST "\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);
         if (networking_wifi_connect_with_credentials(CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID,
                                                      CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD) != ESP_OK) {
             return s_wifi_last_error != ESP_OK ? s_wifi_last_error : ESP_FAIL;
@@ -1139,12 +1139,12 @@ esp_err_t networking_wifi_wait_for_ota(void)
         TickType_t now = xTaskGetTickCount();
 
         if ((int32_t)(now - deadline) >= 0) {
-            networking_schedulef("%s", "c6ota: Wi-Fi connection timeout before OTA download\n");
+            networking_schedulef_ansi(SH_OTA "[c6ota]" SH_RST " Wi-Fi connection timeout before OTA download\n");
             return ESP_ERR_TIMEOUT;
         }
 
         if ((int32_t)(now - next_log) >= 0) {
-            networking_schedulef("%s", "c6ota: waiting for Wi-Fi IP before OTA download\n");
+            networking_schedulef_ansi(SH_OTA "[c6ota]" SH_RST " waiting for Wi-Fi IP before OTA download\n");
             next_log = now + pdMS_TO_TICKS(5000);
         }
 

@@ -8,9 +8,6 @@ idf_component_register(
         keyboard
         clock
         windows
-        networking
-        c6ota
-        p4_usb
         espressif__esp32_p4_function_ev_board
         espressif__esp_lvgl_port
         lvgl__lvgl

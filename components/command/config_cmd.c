@@ -164,6 +164,26 @@ static void config_render_wifi_autoconnect(char *out, size_t out_size)
     snprintf(out, out_size, "%s", networking_wifi_get_boot_autoconnect() ? "ON" : "OFF");
 }
 
+/* `LAUNCH_APP` is a boot-only directive: `config` tracks it so the value can
+ * be set/reset and shown, but applying it has no runtime effect (boot.c reads
+ * the directive from CONFIG.SYS and offers to launch the app after AUTOEXEC). */
+static char s_config_launch_app[P4_CONFIG_APP_NAME_BYTES];
+
+static bool config_apply_launch_app(const char *value)
+{
+    if (value == NULL || value[0] == '\0') {
+        s_config_launch_app[0] = '\0';
+        return true;   /* empty clears the offer */
+    }
+    snprintf(s_config_launch_app, sizeof(s_config_launch_app), "%s", value);
+    return true;
+}
+
+static void config_render_launch_app(char *out, size_t out_size)
+{
+    snprintf(out, out_size, "%s", s_config_launch_app);
+}
+
 static bool config_apply_display_timeout(const char *value)
 {
     char *end = NULL;
@@ -233,6 +253,7 @@ static const config_setting_t config_settings[] = {
     { "DISPLAY_TIMEOUT",  "0",                                       config_apply_display_timeout,  config_render_display_timeout },
     { "OSK",              "ON",                                      config_apply_osk,              config_render_osk },
     { "HEADER",           "ON",                                      config_apply_header,           config_render_header },
+    { "LAUNCH_APP",       "",                                        config_apply_launch_app,       config_render_launch_app },
 };
 
 #define CONFIG_SETTING_COUNT (sizeof(config_settings) / sizeof(config_settings[0]))

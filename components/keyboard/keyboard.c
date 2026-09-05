@@ -595,14 +595,17 @@ void keyboard_register_event_callback(lv_event_cb_t cb, void *user_data)
     }
 
     /* Audit: exactly one handler should remain. Any other count means a
-     * duplicate was (re)registered and double input would follow. Always
-     * logged (warn level is the firmware's default floor) so the healthy
-     * single-handler state is verifiable on the serial console. */
+     * duplicate was (re)registered and double input would follow. A mismatch
+     * is a real problem (warn); the healthy state stays quiet (info). */
     {
         uint32_t count = keyboard_event_callback_count();
-        ESP_LOGW(KEYBOARD_TAG,
-                 "Keyboard callback audit: %" PRIu32 " handler(s) registered "
-                 "(expected 1)%s",
-                 count, count == 1 ? "" : " - DOUBLE INPUT RISK");
+        if (count == 1) {
+            ESP_LOGI(KEYBOARD_TAG, "Keyboard callback audit: 1 handler registered");
+        } else {
+            ESP_LOGW(KEYBOARD_TAG,
+                     "Keyboard callback audit: %" PRIu32 " handler(s) registered "
+                     "(expected 1) - DOUBLE INPUT RISK",
+                     count);
+        }
     }
 }

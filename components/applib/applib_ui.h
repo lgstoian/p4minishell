@@ -38,6 +38,13 @@ bool app_mode_enter(bool full_screen);
  */
 bool app_mode_exit(void);
 
+/**
+ * Show a short message in the header notification area. The notification
+ * persists for the configured notify timeout. Passing an empty string or a
+ * NULL pointer clears the current notification immediately.
+ */
+void app_notify(const char *text);
+
 #ifdef __cplusplus
 }
 #endif

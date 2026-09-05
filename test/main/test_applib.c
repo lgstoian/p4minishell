@@ -286,3 +286,127 @@ void test_applib_app_mode(void)
     shell_screen_restore(NULL);
     shell_screen_discard(NULL);
 }
+
+/* ========================================================================
+ * PROCESS ENVIRONMENT (applib_env.h, fake ops table)
+ * ======================================================================== */
+
+static const char *s_fake_env_name;
+static const char *s_fake_env_value;
+static const char *s_fake_cwd;
+
+static const char *fake_get_env(const char *name)
+{
+    s_fake_env_name = name;
+    return s_fake_env_value;
+}
+
+static esp_err_t fake_set_env(const char *name, const char *value)
+{
+    s_fake_env_name = name;
+    s_fake_env_value = value;
+    return ESP_OK;
+}
+
+static const char *fake_get_cwd(void)
+{
+    return s_fake_cwd;
+}
+
+void test_applib_env_ops(void)
+{
+    applib_env_ops_t ops = {
+        .get_env = fake_get_env,
+        .set_env = fake_set_env,
+        .get_cwd = fake_get_cwd,
+    };
+
+    /* Unregistered / NULL args: every helper degrades to a safe default. */
+    applib_register_env_ops(NULL);
+    TEST_ASSERT_NULL(app_env_get("X"));
+    TEST_ASSERT_NULL(app_env_get(NULL));
+    TEST_ASSERT_FALSE(app_env_set("X", "v"));
+    TEST_ASSERT_FALSE(app_env_set(NULL, "v"));
+    TEST_ASSERT_NULL(app_get_cwd());
+
+    /* Registered: helpers route through the table. */
+    applib_register_env_ops(&ops);
+    s_fake_env_value = "hello";
+    s_fake_cwd = "/sdcard";
+    TEST_ASSERT_EQUAL_STRING("hello", app_env_get("X"));
+    TEST_ASSERT_TRUE(app_env_set("Y", "z"));
+    TEST_ASSERT_EQUAL_STRING("Y", s_fake_env_name);
+    TEST_ASSERT_EQUAL_STRING("/sdcard", app_get_cwd());
+
+    /* Clearing the table restores the safe defaults. */
+    applib_register_env_ops(NULL);
+    TEST_ASSERT_NULL(app_env_get("X"));
+    TEST_ASSERT_FALSE(app_env_set("X", "v"));
+    TEST_ASSERT_NULL(app_get_cwd());
+}
+
+/* ========================================================================
+ * NATIVE-APP ABI (applib_app.h: registry + dispatch)
+ * ======================================================================== */
+
+static int s_app_dispatch_count;
+
+static int fake_app_main(int argc, char **argv)
+{
+    s_app_dispatch_count++;
+    if (argc >= 2 && argv[1] != NULL && strcmp(argv[1], "fail") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+void test_applib_app_registry(void)
+{
+    char name[P4_CONFIG_APP_NAME_BYTES];
+    char desc[P4_CONFIG_APP_DESC_BYTES];
+    int errorlevel = 99;
+
+    /* Invalid registrations are rejected. */
+    TEST_ASSERT_FALSE(app_register(NULL, "d", fake_app_main));
+    TEST_ASSERT_FALSE(app_register("x", "d", NULL));
+    TEST_ASSERT_FALSE(app_register("x", "d", NULL));
+
+    /* Register and find (case-insensitive). */
+    TEST_ASSERT_TRUE(app_register("testapp", "a test app", fake_app_main));
+    TEST_ASSERT_TRUE(app_find("testapp"));
+    TEST_ASSERT_TRUE(app_find("TESTAPP"));
+    TEST_ASSERT_FALSE(app_find("missing"));
+
+    /* Dispatch argv[0]="testapp": entry runs, return value becomes errorlevel. */
+    {
+        char *argv[] = { "testapp", "ok", NULL };
+        s_app_dispatch_count = 0;
+        TEST_ASSERT_TRUE(app_dispatch(2, argv, &errorlevel));
+        TEST_ASSERT_EQUAL(1, s_app_dispatch_count);
+        TEST_ASSERT_EQUAL(0, errorlevel);
+    }
+    /* "fail" -> entry returns 1. */
+    {
+        char *argv[] = { "testapp", "fail", NULL };
+        TEST_ASSERT_TRUE(app_dispatch(2, argv, &errorlevel));
+        TEST_ASSERT_EQUAL(1, errorlevel);
+    }
+    /* Unknown name -> not dispatched. */
+    {
+        char *argv[] = { "nope", NULL };
+        errorlevel = 99;
+        TEST_ASSERT_FALSE(app_dispatch(1, argv, &errorlevel));
+        TEST_ASSERT_EQUAL(99, errorlevel);
+    }
+    /* NULL errorlevel_out still runs the app. */
+    {
+        char *argv[] = { "testapp", "ok", NULL };
+        TEST_ASSERT_TRUE(app_dispatch(2, argv, NULL));
+    }
+
+    /* Listing: slot 0 is the registered app; out-of-range is skipped. */
+    TEST_ASSERT_TRUE(app_get(0, name, sizeof(name), desc, sizeof(desc)));
+    TEST_ASSERT_EQUAL_STRING("testapp", name);
+    TEST_ASSERT_EQUAL_STRING("a test app", desc);
+    TEST_ASSERT_FALSE(app_get(P4_CONFIG_APP_MAX, name, sizeof(name), desc, sizeof(desc)));
+}

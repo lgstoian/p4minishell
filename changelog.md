@@ -7,6 +7,410 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.2] - 2026-09-05 — Cleanup patch (root quarantine, browse dedup, layering, build/config drift)
+
+### Removed — root one-shot scripts quarantined
+
+- **97 root `*.py` helpers + 7 `*.txt` dumps removed from the root.** The 16 serial/screenshot/SD harnesses (`grab_screenshot.py`, `capture_tui.py`, `get_screenshot.py`, `save_to_sd.py`, `httpd_start_test.py`, `test_wifi*.py`, `wifi_*.py`, `verify.py`, `final_verify.py`, `final_check.py`) moved to `tools/harness/`; the 70 `add_*`/`apply_*`/`fix_*`/`check_*`/`find_*` one-shot patch scripts and the `extend_*`/`replace_*`/`extract_*`/`write_windows.py`/`list_surfaces.py` helpers were deleted (none referenced by docs, `CMakeLists.txt`, or configs). The 7 scratch dumps (`ansi_func.txt`, `box_chars.txt`, `draw_anchor_fixed.txt`, `draw_anchor_impl.txt`, `found.txt`, `windows_h.txt`, `windows_h_excerpt.txt`) were deleted. `apps/companion/push_sd.py` stays with the companion app.
+
+### Fixed — browse duplication and stack literals
+
+- **`browse` verb unified** (`components/command/command.c:2413` + `components/batch/batch.c:3610`): the interactive `shell_command_browse` now uses the same `P4_CONFIG_TUI_BROWSE_PATH_BYTES` buffer and the same `"Browse"` title as `shell_command_browse_batch` (was `char selected_path[4096]` + `"File Browser"`), so the 4 KB worker-stack local and the title divergence are gone. The `/v:` dispatch at `components/command/command.c:5376` is unchanged.
+- **`shell_launch_app` heap buffer** (`components/command/command.c:2434`): the `char command[256]` stack local is now a `malloc(P4_CONFIG_COMMAND_BYTES)` buffer, so long app names cannot truncate and the worker stack stays small.
+- **`gfind` bounds via config** (`components/command/gfind_commands.c:30-32`): `GFIND_DB_MAX`/`GFIND_ALARM_MAX` are now `P4_CONFIG_DB_MAX_DATABASES`/`P4_CONFIG_ALARM_MAX_EVENTS` instead of comment-matched literals.
+
+### Fixed — layering and build configuration
+
+- **Shell layering** (`components/shell/CMakeLists.txt`): dropped `networking`, `c6ota`, `p4_usb` from `REQUIRES` (the shell core reaches those only through `shell_command_ops_t`, `components/shell/shell.h:50`); removes the `shell` → `networking` → `storage` → `shell` build cycle.
+- **Root build list** (`CMakeLists.txt:5`): `EXTRA_COMPONENT_DIRS` now lists all 23 local components (added `alarm`, `db`, `c6ota`, `editor`, `header`, `led`, `networking`, `usb`, `p4_usb`).
+- **Config drift** (`p4minishell_config.yaml`): added `ps_color_parameter`/`ps_color_subsystem`/`ps_color_heading` and `db_flag_secret` to match `p4minishell_config.h:1390,1402,1411,1660`.
+- **Build constraints** (`sdkconfig.defaults`): pinned LVGL demos/examples off; `.gitignore` now covers `sdkconfig` per `ai-context.md`.
+
+### Verification
+
+- Static checks only in this patch: no `char [4096]`/`[2048]` stack locals remain in `components/command/command.c`, `GFIND_*` resolve to `P4_CONFIG_*`, root holds 0 `*.py` scratch files with 16 harnesses in `tools/harness/`, and `EXTRA_COMPONENT_DIRS` covers all 23 components. Full `idf.py build` + board re-verification deferred to the next hardware pass.
+
+---
+
+## [0.35.1] - 2026-08-26 — Hardware Testing patch (0.35.0→0.35.1: flash to COM11, extensive serial tests, companion TUI expansion, stack overflow fix at 0x4012b75a)
+
+### Hardware Testing — flash, boot, and serial verification
+
+- **Flash to COM11 succeeded, boot verified** (`P4MiniShell v0.35.1 ready`, SD mounted, header/battery/CPU live, transcript rect `1024x510` `80×25` `p4minishell_config.h:298` via `tui status`), **extensive serial tests run** over USB-Serial-JTAG covering every TUI surface (`draw box` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` with title via `tui_draw_box` `components/tui/tui.c:228` / `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35`, `draw line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app) header kept visible by default `windows_enter_tui_mode` hidden only on fullscreen `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` / `tui_enter_fullscreen` `components/tui/tui.c:417` dynamic `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, TUI does not overlap shell text `tui_hide_for_modal`, `color`/`locate` TUI-aware, `tui_flush` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, prompt `shell_prompt_render_plain()` `main.c:112` + `keyboard_bind_textarea` `components/modal/modal_surf.c:412` situational `SH_PROMPT`, screenshot `grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py`), ANSI colour, audio, fullscreen — no panic, no `abort`, no watchdog, no LVGL assert, no overlap. **Companion fully TUI-expanded and hardware-verified** (see below).
+
+### Added — extended unscii_16 font in-place (384 glyphs, no duplication)
+
+- **Extended `unscii_16` font in-place** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, cmaps 3, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`) — adds box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, no duplication (previously the `-r` range duplicated `0x2500-0x257F,0x2600-0x26FF` twice). Enables hardware box rendering via `SH_BOX_*` UTF-8 sequences through `tui_cell_t utf8[4]`.
+
+### Fixed — TUI cell truncation and box glyph rendering
+
+- **Fixed `tui_cell_t` to `utf8[4]`** (`components/tui/tui.h:35` `char utf8[4]`, `components/tui/tui.c:116` `tui_cell_set` via `strncpy` with NUL) — was `utf8[2]` truncating 3-byte box UTF-8 (e.g. `─` `0xE2 0x94 0x80`). Now holds full UTF-8 `SH_BOX_*`.
+- **Fixed `tui_draw_box`/`tui_draw_line` to honor style and title** (`components/tui/tui.c:228` `tui_draw_box`, `components/tui/tui.c:283` `tui_draw_line` via `tui_cell_set`) — `draw box 2 2 20 8 single|double|rounded [title]` and `draw line` now select `SH_BOX_TL`/`TR`/`BL`/`BR`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` and center title with surrounding spaces; interior cleared correctly.
+
+### Fixed — TUI color rendering via LVGL recolor per fg run
+
+- **Fixed `tui_flush` to render fg/bg via `lv_label` recolor** (`components/tui/tui.c:356` `tui_flush`) — coalesces cells by fg, emits `#RRGGBB ` prefix per run using `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate palette), wraps run text and `#` suffix; rows joined by `\n`, set via `lv_label_set_text` under `lvgl_port_lock`. Default fg 16 emits no tag.
+
+### Added — fullscreen (global draw + per-app tui)
+
+- **Implemented `draw fullscreen on|off` (global) and `tui fullscreen on|off` (per-app)** (`components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`, `components/windows/windows.c:418` `windows_set_fullscreen`/`header_set_visible`) — header hidden completely when fullscreen, kept visible by default otherwise. `tui status` reports `fullscreen` state. Dynamic keyboard scaling via `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`) keeps TUI sized to transcript rect (`1024x510`) while header is hidden.
+
+### Fixed — prompt in all inputs
+
+- **Fixed prompt in all inputs** (`main/main.c:112` echo `SHELL_PROMPT` → `shell_prompt_render_plain()` `components/shell/shell.c:412`, `components/modal/modal_surf.c:412` `ask` placeholder `shell_prompt_render_plain()` + `keyboard_bind_textarea`, `components/shell/shell.c:298` situational color via `SH_PROMPT`) — shell input line, `ask` modal, and serial echo now show the DOS prompt template honoring `PROMPT=` (`$p $g` etc).
+
+### Added — screenshot debug loop
+
+- **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`, `components/tui/tui.c:356` `tui_flush` recolor, `components/windows/windows.c:312` transcript rect) — `tui status` shows `rect 1024x510 cols 80 rows 25`; `grab_screenshot.py` crops to transcript region for pixel-perfect TUI verification.
+
+### Fixed — memory pressure (transcript / async / SD DMA / internal trim)
+
+- **`P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024** (`p4minishell_config.h:93` + `p4minishell_config.yaml` `buffers:transcript_bytes`) — halves the span-group ceiling and its internal-RAM span overhead after TUI modal restoration.
+- **`P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024→512** (`p4minishell_config.h:134` + `p4minishell_config.yaml` `buffers:async_transcript_bytes`) — halves the background-task staging buffer; drain is heap-allocated, flush dispatches via `shell_schedule_transcript_appendf_ansi` when ESC present.
+- **`P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192→4096** (`p4minishell_config.h:626` + `p4minishell_config.yaml` `sd_dma_buffer_bytes`) — 8 sectors cached on `card->host.dma_aligned_buffer` at mount; lower permanent internal-RAM reservation while keeping `storage_sd_ensure_dma_buffer()` reuse.
+- **`P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 with 1/4 keep** (`p4minishell_config.h:117` + `p4minishell_config.yaml` `transcript_internal_trim_bytes`) — trim earlier under TUI pressure; `shell_transcript_guard_internal()` / `windows_transcript_trim()` now keep 1/4 on trim and guard trim-below-10KB (prevents stdio FILE-lock `abort()` on low internal heap). Guard called at command start and before every append under LVGL lock.
+- **`P4_CONFIG_COMMAND_TASK_STACK` 16384→24576** (`p4minishell_config.h:1514` + `p4minishell_config.yaml` `command_task_stack`) — raised due to TUI companion overflow at `0x4012b75a` (stack protection fault in `shell_cmd` when `COMPANION.BAT` pushed deep `draw` + `tui fullscreen` + `list`/`dialog` nesting); `P4_CONFIG_COMMAND_TASK_STACK` 12288→16384 in v0.33.0 was insufficient for the expanded TUI batch depth. Command queue full handling improved (bounded 1 s wait instead of silent drop).
+
+### Fixed — audio abort in managed BSP
+
+- **Managed BSP `esp_codec_dev` abort fixed** (`managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269` `audio_codec_new` null `card_handle` guard + `bsp_audio_init` `components/audio/audio.c:42`) — `tone`/`wavplay` no longer `abort()` when the BSP card handle is null; verified `tone 440 200` / `wavplay` no longer hits `lock_init_generic` abort. `components/audio/audio.c` background task unchanged, `audio status|stop` remains batch-safe.
+
+### Fixed — modal EventGroup PSRAM
+
+- **Modal `EventGroup` PSRAM fix** (`components/modal/modal.c:46` `xEventGroupCreateWithCaps(MALLOC_CAP_SPIRAM)`) — event group now prefers PSRAM (`MALLOC_CAP_SPIRAM`) with internal fallback, avoiding internal-heap fragmentation under transcript/TUI load; `modal_surface_run` session loop + `MODAL_EVENT_CLOSE_REQUEST` unchanged.
+
+### Fixed — ANSI wifi white fix verified on boot
+
+- **ANSI wifi `[wifi]` white→cyan verified** (`components/networking/networking.c:474` `C6 hosted firmware version: 3.0.6` and peers at `407,461,464,481,503,510,954,961,967,980,987,1043,1131` + `c6ota:` at `1080,1109,1114,1118,1127,1142,1147`, `main.c:200` `shell_c6ota_progress_callback`, `components/applib/applib.c:58` `app_vformat_append`, `components/shell/shell.c:709` `shell_schedule_transcript_appendf_ansi`) — boot `[wifi]` is now `SH_PROMPT` cyan (`@C[wifi]@R` → `ESC[96m[wifi]ESC[0m`), versions are `SH_VAL` bright white, progress lines use `ansi_format` + ANSI async path. Verified on COM11 boot log.
+
+### Fixed — dialog/list/ask serial routing and draw auto-enter
+
+- **Dialog/list/ask serial routing fix** (`components/modal/modal_surf.c:412` `modal_handle_serial_line` vs `shell_key_wait_submit`) — serial lines now route to active modal via `shell_command_ops_t.modal_*`; timeout `/t:secs` and direct serial input both close with correct ERRORLEVEL/`*RESULT`.
+- **Draw auto-enter TUI** (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) — `draw` automatically enters TUI when no TUI/modal surface is active, otherwise reuses the active cell buffer.
+
+### Changed — TUI engine is live (draw TUI-aware, window stack, essential features)
+
+- **TUI grid `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via transcript region** (`p4minishell_config.h:298` + `p4minishell_config.yaml` `tui:cols/rows`, `components/windows/windows.c` `windows_enter_editor_mode`/`windows_refresh_editor_surface`/`windows_notify_keyboard_visibility`, `components/modal/modal_surf.c`) — every modal surface (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) fills the live transcript region (`1024x510`) and resizes with rotation/keyboard; logical grid is clamped to 80×25, pixel rect follows the transcript (`tui status`).
+- **`draw` is TUI-aware** (`components/batch/batch.c` `shell_command_draw` + `components/command/command.c` dispatcher, `components/tui/tui.c`) — `draw box/text/line/fill/clear` routes through the TUI cell buffer when a TUI/modal surface is active (auto-enters otherwise), otherwise falls back to transcript; `color`/`locate` set the TUI attribute/cursor (DOS `COLOR`/`LOCATE` parity). Window stack (`tui_draw_box` with title, nested boxes), fullscreen, color, prompt, screenshot debug are essential features implemented.
+- **Companion fully TUI-expanded (7 BATs) and hardware-verified on COM11** — `COMPANION.BAT` `draw clear` + `draw box 1 1 80 3 double "P4 COMPANION"` + `draw box 1 4 80 15 single "Main Menu"` + `list`; `SYS.BAT` `tui fullscreen on` + `draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"` + `draw box 1 4 80 10 single` / `draw box 1 15 40 10 single "Memory"` / `draw box 41 15 40 10 single "Tasks"` (`tui fullscreen on/off` `components/tui/tui.c:417`); `FILES.BAT` `browse`/`view`/`hexview` + `draw` + `tui fullscreen` (browse/view fill `80×25` transcript region); `NET.BAT` `draw box 1 1 80 3 single "NETWORK TOOLS"` + `draw box 1 4 80 10 single` / `draw box 1 15 80 8 single "Status"`; `FUN.BAT` TUI demo `tui fullscreen on` + `draw box 1 1 80 3 double "TUI DEMO"` + `draw box 5 6 20 6 single`/`double`/`rounded` + `draw box 5 5 70 10 single "Notes"` for melody/RGB/guess/calc; `SET.BAT` TUI demo `draw box 1 1 80 3 double "TUI SETTINGS DEMO"` + brightness/volume/`appconfig`; `LIB.BAT` tui helpers `:tui_banner` (`draw clear` + `draw box 1 1 80 3 single` + `draw text 2 2` ), `:tui_header` (`%1` title), `:tui_hr` (`draw line 1 4 80 4`). All pushed to SD via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109) using `receive <path> <size> /crc` ACK-paced + CRC-32. Extensive serial tests of each BAT (list selection, browse/view/hexview, tui fullscreen, draw boxes) all pass without abort/watchdog/overlap.
+- **Modal serial routing fixed** — `dialog y` (serial line `y` → ERRORLEVEL 0), `list 2` (serial `2` → index 2), `ask myname` (serial `myname` → `ASK_RESULT`/`/v:NAME` correctly via `shell.c` `modal_handle_serial_line` `components/modal/modal_surf.c:412`); previously `ask`/`list` required `/t:secs` to consume serial input, now all modals route via `shell_command_ops_t.modal_handle_serial_line` without retry.
+
+### Verification
+
+- Clean build `idf.py build` 0 errors, 0 warnings (firmware + test).
+- Flash to COM11 succeeded, boot banner verified, SD `dir`/`type` clean, `tui status` `1024x510 80x25` `80×25` `p4minishell_config.h:298`, 50+ mixed SD ops with zero `allocate_dma_buf` errors.
+- Serial extensives: `draw box single/double/rounded` with title + nested (`SH_BOX_TL`/`H`/`V` vs `TL2`/`H2`/`V2` vs `TLR`/`TRR`/`BLR`/`BRR` via `tui_cell_set` `utf8[4]`), `draw line` H/V single/double/heavy, `draw fill`/`text`/`clear`/`window`/`close`/`refresh`, `draw fullscreen on|off` and `tui fullscreen on|off` (header hidden completely when on, kept otherwise via `windows_set_fullscreen` `components/windows/windows.c:418`), `color`/`locate` TUI-aware, `dialog`/`list`/`ask` with `/t:secs` timeout → 255/1 and via serial without timeout → `*RESULT`/`/v:NAME` (`dialog y` → 0, `list 2` → 2, `ask myname` → `myname` via `modal_handle_serial_line` `components/modal/modal_surf.c:412` `shell.c`), `browse`/`view`/`hexview` fill `80×25` transcript region and `draw` is TUI-aware (`tui_init` `components/tui/tui.c:56`), `tone`/`wavplay` do not abort (`bsp_audio_init` guard), boot `[wifi]` cyan verified, `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` pixel-perfect, `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109) + companion BATs each exercised via serial `list`/`browse`/`view`, no watchdog, no overlap, no stack overflow at `0x4012b75a` after `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576.
+
+---
+
+## [0.35.0] - 2026-08-24
+
+### Added — TUI restoration + MSDOS parity for batch apps
+
+- **Modal surfaces restored** (`components/modal/modal_surf.c`): the 6 batch TUI surfaces that were stubbed (all `return -1`) now render via the shared modal runtime and fill the live transcript region (rotation/keyboard-aware): `dialog "title" "message" [btn1] [btn2]` (0/1/255), `list [/t:secs] [/v:NAME] "title" items...` (0-based index + optional var), `ask [/t:secs] [/v:NAME] [/p] "prompt" [default]` (`ASK_RESULT`/NAME, 0/1), `browse [/t:secs] [/v:NAME] [path]` (`BROWSE_RESULT`/NAME, 0/1), `view <file>` and `hexview <file>` pagers (text + 16-byte hex dump). All accept `/t:secs` auto-cancel. `dialog`/`list`/`ask` dispatcher was missing from `components/command/command.c` — now wired, so interactive and batch use work.
+- **Batch TUI extras**: `browse`/`view`/`hexview`/`color`/`locate` batch verbs (`components/batch/batch.c` + `batch.h` + `command.c` dispatcher), `P4_CONFIG_TUI_*` logical grid `80×25` (`p4minishell_config.h:284` + `.yaml` `tui:` top key) mapping to the live transcript rect via `windows_enter_editor_mode`/`windows_refresh_editor_surface`.
+- **Companion migrated** (`apps/companion/*.BAT`): `COMPANION.BAT` main menu now uses `list` (0-based) with 255-cancel handling; `SYS.BAT` dashboard uses `list`/`dialog`; `FILES.BAT` browses SD with `browse`/`view`/`hexview`, clipboard/notes via `ask`/`list`; `NET.BAT` picks Wi-Fi via `list`/`ask` and views via `view`; `FUN.BAT` uses `dialog`/`list`/`ask`; `SET.BAT` uses `ask`/`list`/`dialog`. All handle `255` cancel.
+- **Native TUI SDK stub** (`components/applib/applib_tui.h/.c` + `applib.h` umbrella + `CMakeLists.txt`): `tui_create/destroy/box/print_at/refresh/clear` declared now, stubbed with a warning, implemented after companion ships.
+
+### Fixed — ANSI colour and async scheduling
+
+- **White `[wifi]` on boot** (`components/networking/networking.c:474` `C6 hosted firmware version: 3.0.6` and 13 peers at `407,461,464,481,503,510,954,961,967,980,987,1043,1131` plus `c6ota:` at `1080,1109,1114,1118,1127,1142,1147`): all plain `networking_schedulef("[wifi] ...")` now `networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST ... SH_VAL ... SH_RST)` so the second `[wifi]` is cyan (`@C`) and versions are bright white (`@W`). Verified: `@C[wifi]@R` expands to `ESC[96m[wifi]ESC[0m`.
+- **`main.c:200` progress** (`shell_c6ota_progress_callback`): built `line` with `snprintf` + `SH_*` literals then passed literal `@` to `shell_transcript_append_ansi`/`shell_schedule_transcript_appendf` — now `ansi_format` + `shell_schedule_transcript_appendf_ansi`.
+- **`applib.c:58`**: `app_vformat_append` used `vsnprintf` even when `ansi==true` — now `ansi_vformat` when `ansi`.
+- **Async ANSI path** (`components/shell/shell.c:709` + `shell.h`): added `shell_schedule_transcript_appendf_ansi` (like the plain form but via `ansi_vformat`) and made `shell_async_transcript_flush_cb` dispatch to `shell_transcript_append_ansi` when the staged text contains ESC, otherwise plain. Added `networking_host_ops_t` note and `applib_tui` wiring.
+
+### Changed
+
+- Version bump `0.34.0` → `0.35.0` (`p4minishell_config.h`, `.yaml`, `readme.md`).
+- Modal surfaces now correctly use `windows_enter_editor_mode`/`windows_refresh_editor_surface` so the TUI fills the same space as the shell and resizes with rotation/keyboard.
+### Verification
+
+- Clean build `idf.py build` 0 errors, 0 warnings (firmware).
+
+- Manual smoke: `dialog`, `list`, `ask`, `browse`, `view`, `hexview` return correct `ERRORLEVEL`/`*RESULT` and cancel/timeout (`255`/`-1`) via touch, USB, and serial.
+
+- Companion TUI expansion re-verified: `push_sd.py` COM11 PASS and companion BAT serial walks still clean after stack raise.
+
+---
+
+## [0.34.0] - 2026-08-18
+
+### Added — FX-870P/VX-4 math parity complete
+
+The `calc` float calculator (`components/batch/calc.c`) now implements all
+FX-870P/VX-4 BASIC math functions. Five previously missing functions have been
+added:
+
+- **`CUR(x)`** — cube root (`cbrt(x)`, handles negative correctly)
+- **`DEG(D.MMSS)`** — sexagesimal to decimal degrees (inverse of `DMS`)
+- **`ASINH(x)` / `HYP ASN`** — inverse hyperbolic sine
+- **`ACOSH(x)` / `HYP ACS`** — inverse hyperbolic cosine (domain x ≥ 1)
+- **`ATANH(x)` / `HYP ATN`** — inverse hyperbolic tangent (domain -1 < x < 1)
+
+Unit tests added in `test/main/test_calc.c` (`test_calc_new_math_functions`,
+`test_calc_new_math_errors`). All 154 unit tests pass. Documentation updated in
+`command.md`, `API.md`, `readme.md`, `roadmap.md`, and `SDK.md`.
+
+---
+
+## [0.33.0] - 2026-08-16
+
+### Added - hybrid route: batch apps drive native modal surfaces
+
+Batch files remain the on-SD apps, but now they can drop into polished native
+modal surfaces when the transcript UI is not enough. A shared modal runtime
+(generalised from the editor pattern) owns the session loop and input routing,
+so the lifecycle lives once and every surface behaves consistently.
+
+- **Shared modal runtime** (`components/modal/modal.{h,c}`): a single session
+  loop + event group + input-routing layer for any native modal surface that
+  takes over the shell display area. Surfaces register an ops table with
+  open/service/close + USB/serial input handlers.
+- **Editor migrated onto the runtime** (`components/editor/editor.c`): the
+  `edit` command still loads/saves files on the worker task and renders on the
+  LVGL task, but its input now routes through the shared modal layer instead of
+  a private ops-table hook. No user-visible behaviour change; no function
+  duplication.
+- **Native modal surfaces** (`components/modal/modal_surf.c`):
+  - `dialog "title" "message" [button1] [button2]` — message box, ERRORLEVEL
+    0/1 for the two buttons, 255 for cancel/Esc.
+  - `list "title" item1 [item2...]` — scrollable touch/keyboard selector,
+    ERRORLEVEL is the 0-based selected index, 255 for cancel.
+  - `ask "prompt" [default]` — text input with on-screen keyboard and USB
+    typing support. The answer is stored in the `ASK_RESULT` environment
+    variable; ERRORLEVEL 0 = OK, 1 = cancel.
+- **Header notifications from batch and native apps**:
+  - `notify <text>` batch command shows a notification in the header area;
+    `notify -` clears it, `notify /t:secs` overrides the timeout.
+  - `app_notify(text)` / `app_notify(NULL)` applib API (`components/applib/`)
+    gives native apps the same header notification path.
+  - Both route through the existing `shell_header_notify()` →
+    `header_set_notification()` path.
+- **Batch-friendly options on the modal commands**:
+  - `ask /v:NAME "prompt" [default]` stores the answer in `NAME` instead of
+    `ASK_RESULT`; `ask /p "prompt"` masks the input (password mode).
+  - `list /v:NAME "title" items...` stores the selected item's label in
+    `NAME` in addition to returning its index via ERRORLEVEL.
+  - `notify /t:secs text` overrides the notification timeout.
+  - `dialog` / `list` / `ask` accept `/t:secs` to auto-cancel after a
+    timeout (matching `choice /T`), so an unattended batch script can never
+    hang forever on a modal surface.
+- **Version bump**: 0.32.8 → 0.33.0 (`p4minishell_config.h`,
+  `p4minishell_config.yaml`, `readme.md`).
+
+### Added — batch-language features (from the P4 Companion on-board testing)
+
+The on-board `apps/companion` batch app (a menu-driven system helper written
+entirely in batch) exercised the batch engine hard and surfaced a few missing
+pieces, now added:
+
+- **Dynamic pseudo-variables** in `shell_expand_variables()`:
+  `%DATE%` (`MM-DD-YYYY`), `%TIME%` (`HH:MM:SS`), `%RANDOM%` (`0..32767`,
+  `esp_random()`-based, cmd.exe parity), and `%CD%` (current directory) —
+  alongside the existing `%ERRORLEVEL%`.
+- **Undefined `%VAR%` expands to empty** (cmd.exe parity): an unset variable
+  no longer stays literal, so the DOS `if "%var%"==""` idiom works. `%%` still
+  yields a literal `%`, and single-quote protection is unchanged.
+- **`if [not] [/i] defined VAR`** — true when `VAR` has been set (cmd.exe
+  parity), in addition to `errorlevel` / `exist` / numeric / string forms.
+- **`delay <ms>`** command (`components/command/command.c`): a pure,
+  deterministic wait for melodies/demos; unlike `sleep` (light-sleep), it does
+  not blank the display or touch Wi-Fi. Clamped to
+  `P4_CONFIG_DELAY_MAX_MS` (new, documented in `p4minishell_config.yaml`).
+
+### Added — native-app ABI (argv / env / cwd for native apps)
+
+A native app is a C function with the signature `app_main_t(argc, argv)`
+registered via `app_register()`. Once registered it becomes a shell command:
+the dispatcher runs it with `argc`/`argv` (`argv[0]` = the app name) after
+every built-in and `.bat` lookup fails, and the return value becomes
+ERRORLEVEL — the native equivalent of the batch contract (`%0..%9`/`%*`, env
+table, storage cwd).
+
+- **`applib_app.h`** — `app_register()` / `app_find()` / `app_dispatch()` /
+  `app_get()`; the table holds `P4_CONFIG_APP_MAX` apps (new config).
+- **`applib_env.h`** — `app_env_get`/`app_env_set` (the shell's shared RAM
+  environment table) and `app_get_cwd` (storage cwd), routed through
+  `applib_env_ops_t` registered by `command_init()` so `applib` stays a leaf.
+- **`apps` command** lists the registered apps.
+- **Reference sample**: `main/native_apps.c` registers `hello`, which echoes
+  its argv and reads cwd + PATH; `hello fail` returns errorlevel 1 for batch
+  branching. Verified on board (`apps`, `hello a b c`, `echo
+  %HELLO_RESULT%`, batch `if errorlevel`).
+
+### Added — PATH-based `.bat` app discovery + `launch`
+
+- **`launch` command** (`components/command/command.c`): discovers `.bat`
+  apps on the command PATH and in the conventional `sd:/APPS` directory
+  (bounded by `P4_CONFIG_LAUNCH_MAX`), and runs the chosen one through the
+  batch engine. `launch` (menu), `launch <name>` (by name), `launch /list`
+  (bare list).
+- **`APPINFO` metadata convention**: `sd:/APPS/<name>.APPINFO` (INI format)
+  provides an optional `title=` / `description=` for each app, shown by
+  `launch` and the menu. The companion app ships one (`COMPANION.APPINFO`).
+- **Boot-time offer hook**: a CONFIG.SYS `LAUNCH_APP=<app>` directive asks
+  `run <app> now? (Y/N)` once after AUTOEXEC.BAT and launches on `Y` (a
+  timeout declines). Manageable via `config LAUNCH_APP=<app>` /
+  `config reset LAUNCH_APP` (tracked setting added).
+- **Bug fixed during bring-up**: `launch` initially kept the discovery table
+  (≈5 KB) on the command-worker stack, overflowing it once the launched batch
+  re-entered the dispatcher per line. The table is now heap-allocated (and not
+  allocated at all for `launch <name>`).
+- Verified on board: `launch /list` (with the companion's title), the menu,
+  `launch COMPANION` (full dashboard flow), and the boot offer (Y launches,
+  N/timeout declines).
+
+### Added — Palm-OS-style `db` record store (SD-backed)
+
+A named, SD-backed database surface for batch apps and native apps, inspired
+by Palm OS records (monotonic ids, 16 categories, secret/redacted payloads)
+but stored as plain files under `sd:/DBS/<name>.DB/`:
+
+```
+HEADER.INI        name, creator, type, version, next_id, record_count
+CATEGORIES.INI    0=Unfiled .. 15=...
+INDEX.TXT         one "id cat flags key size" line per record
+RECORDS/          R<8-hex-id>.DAT per record payload
+```
+
+- **New leaf component `components/db/`** (`db.{h,c}`, `CMakeLists.txt`):
+  all data lives on the SD card; every operation opens a guarded SD session,
+  pre-checks free space, writes atomically (temp + rename), and heap-allocates
+  every record-sized buffer (safe on the recursive batch path). Records are
+  soft-deleted by flag until `purge`; ids are monotonic and never reused.
+- **`db` command** (`components/command/db_commands.c`, argv-verb dispatcher):
+  `create` / `list` / `info` / `drop`, `open` / `close` / `current` (a RAM
+  current-db pointer so the name is optional), `categories` (list/set/clear),
+  `add` / `get` / `set` / `del` / `purge`, `count` / `find`, and
+  `export` / `import`. Options may appear anywhere (`/cat:N /key:K /text:P
+  /cr:/tp:/vr: /secret /reveal /p /b`); `/b` gives bare, pipe/for-friendly
+  output. ERRORLEVEL 0/1/2. Secret payloads are redacted unless `/reveal`.
+  Export writes `id|cat|flags|key|hexpayload` lines (binary-safe); import
+  appends records with fresh ids.
+- **`applib_db.h`** — `app_db_create/info/drop`, `app_db_category_set/get`,
+  `app_db_add/get/set/del`, `app_db_purge/count/find`, thin NULL-checked
+  wrappers over the db core (added to the applib umbrella).
+- **Config** (`p4minishell_config.h` + `.yaml`): `P4_CONFIG_DB_*` bounds for
+  databases, records, payload size, find results, name/key/label lengths,
+  category count, export limits, and the secret/deleted flag bits.
+- **Unit tests** (`test/main/test_db.c`): pure `db_name_valid` rules.
+- **On-board verification** (`apps/companion/db_test.py`): 38/38 checks PASS —
+  create/info/list/drop, add/get/set/del, secret redaction + `/reveal`,
+  find/count, categories, soft-delete + purge, export/import round-trip,
+  current-db short forms, and error levels.
+
+### Added — SD-persisted alarms (`alarm`, `cal`)
+
+A small, batch-friendly alarm/event system that reuses every existing surface
+instead of inventing a second notification path:
+
+- **New leaf component `components/alarm/`** (`alarm.{h,c}`): a guarded,
+  atomic SD store under `sd:/ALARMS/` (`INDEX.INI` + one `E<id>.INI` per
+  event) and a single low-rate background checker task
+  (`P4_CONFIG_ALARM_TASK_STACK`). Events carry a monotonic id, a timezone-aware
+  `when`, title/message, flags (enabled/fired/silent), a recurrence (none /
+  daily / weekly weekday bitmask), and an action set (notify / beep / led /
+  run).
+- **Reuses existing surfaces only**: on fire the checker posts to
+  `shell_header_notify` (thread-safe from any task), `led_notify`
+  (`LED_EVENT_ALARM` added to the LED event table), `audio_play_tone`, and —
+  for the `/run:` action — a `call <file>` queued onto the command worker via
+  a registered `alarm_host_ops_t.execute_async` hook (registered in
+  `command_init()`), never run on the checker stack. No private loop.
+- **`alarm` / `cal` commands** (`components/command/alarm_commands.c`):
+  `add` / `list` (/b bare) / `status` / `enable` / `disable` / `del` (soft,
+  `del all` wipes + resets ids) / `purge`; `cal today` / `cal next` /
+  `cal YYYY-MM`. Options anywhere, ERRORLEVEL 0/1/2, ISO `YYYY-MM-DD HH:MM`
+  parsing via `mktime` (timezone-aware).
+- **Boot catch-up**: alarms missed while powered off fire once on the next
+  boot (`P4_CONFIG_ALARM_CATCHUP_ON_BOOT`); light sleep suspends the checker
+  until the device wakes (documented limit).
+- **Config** (`p4minishell_config.h` + `.yaml`): `P4_CONFIG_ALARM_*` bounds
+  for events, title/message lengths, poll interval, task stack, store path,
+  catch-up, default notify seconds, and a `/run:` compile-out flag.
+- **Unit tests** (`test/main/test_alarm.c`): pure weekday-mask, recurrence
+  advance, and `YYYY-MM-DD HH:MM` parsing helpers.
+- **On-board verification** (`apps/companion/alarm_test.py`): 25/25 PASS —
+  add/list/status/cal/enable/disable/del/purge plus the background checker
+  firing a due event (marked fired) and a `/run:` batch action queued onto the
+  command worker (marker file created). Bring-up fix: the checker stack was
+  raised 3072 → 8192 because newlib's `snprintf` frame (used to render event
+  files and notifications) plus the tick's event/path locals overflowed the
+  smaller stack.
+
+### Fixed — from the P4 Companion on-board testing
+
+- **Command worker stack overflow** (`Guru Meditation`, stack protection
+  fault in `shell_cmd`): the deep re-entrant batch nesting of `setlocal` +
+  `call file::routine` + `for /f` over a pipe overflowed the 12 KB worker
+  stack. Raised `P4_CONFIG_COMMAND_TASK_STACK` 12288 → 16384 (same rationale
+  as the earlier 8192 → 12288 raise).
+- **`for /f` failed in batch files** (`for /f: malformed options`): the batch
+  path passed the raw quoted options string (`"tokens=*"`) to the option
+  parser, while the interactive path had the quotes stripped. The parser now
+  strips the surrounding quotes in `shell_execute_for_loop`, so documented
+  batch `for /f "delims=.. tokens=.."` syntax works. Unit-tested.
+- **Silent command drops under rapid serial input**: the command worker queue
+  was only 4 deep and `xQueueSend` used a 0 timeout, so a busy worker dropped
+  the 5th queued command. Depth raised to 8 and the submit now waits up to
+  1 s (bounded; still drops with a clear message only if the worker is
+  persistently stuck). The submit runs on the UART console task, never the
+  worker, so blocking cannot deadlock the pipeline.
+- **Key-wait prompt race** (`pause`/`choice`/confirm prompts dropped fast
+  input): `pause`, `choice`, `shell_confirm_destructive`, the xcopy prompts
+  and the `-- More --` pagers printed their prompt and *then* armed the key
+  wait, so a key typed as soon as the prompt appeared could be dispatched as a
+  command (or lost) instead of answering the prompt — a batch `pause` would sit
+  its full timeout and the app's default menu action fired. The key wait is now
+  armed *before* the prompt is printed in every one of those commands.
+- **`if COND cmd1 & cmd2` ran `cmd2` unconditionally**: the command-chain
+  splitter split a line on unquoted `&`/`&&`/`||` before execution, so in
+  `if %tries% GEQ 10 echo Out of tries! & goto main` the `goto main` ran on
+  every iteration regardless of the condition (broke the companion's number
+  guessing game). `shell_split_chain` now hands the whole line to `if`/`for`
+  as a single segment; those commands already join the rest of the line as
+  their body and re-enter the pipeline, so the `&` runs only when the
+  condition/iteration is taken.
+
+### Verification
+
+- Clean build: 0 errors, 0 warnings (firmware and test project).
+- Flashed to the board (ESP32-P4, COM11) and boot verified: `P4MiniShell
+  v0.33.0 ready`, SD mounted, AUTOEXEC runs, Wi-Fi/Bluetooth/USB come up.
+- On-board serial checks of the new surfaces:
+  `dialog` → errorlevel 0/1 per button, `list` → 0-based index, `ask` →
+  `ASK_RESULT` set with errorlevel 0, `notify` clean, `edit` still opens and
+  quits via `\q`. Cancel paths verified: dialog/list → 255, ask → 1. No
+  assert, panic, or reboot.
+- Batch-file testing on the SD card: a `.bat` calling `dialog` (with
+  `if errorlevel` branching and `&&`/`||` chaining), `list`, `ask`, and
+  `notify` ran to completion with correct errorlevels and `ASK_RESULT`; a
+  5-modal and a 10-dialog stress run both left heap unchanged (no leak) and
+  produced no crash.
+- Edge-case suite (all on board):
+  - Usage errors for `dialog`/`list`/`ask`/`notify` → errorlevel 2.
+  - Single-button dialog → 0; `list` with one item → 0.
+  - `ask /v:NAME`, `ask /p`, `list /v:NAME` (stores selected label), and
+    `notify /t:secs` verified.
+  - Cancel keeps `/v:` variables unchanged (`list` → 255, `ask` → 1).
+  - Timeouts (`/t:secs`) auto-cancel: dialog/list → 255, ask → 1; early input
+    before the timeout still wins.
+  - `ask` result used in `if /i "%VAR%"=="ok"` and inside `call`ed batches.
+- Two bugs found and fixed during on-hardware bring-up: `modal_surface_run`
+  used an event-group wait mask with the reserved top byte set (FreeRTOS
+  `xEventGroupWaitBits` assert → reboot), and `ask` overwrote a serial answer
+  with the empty textarea contents on close.
+- **Deep-test sweep of `apps/companion`** (`apps/companion/deep_test.py`,
+  reactive serial driver, uptime-verified reboots): all 8 checks PASS —
+  baseline (`apps`, `launch /list`), the full main-menu walk into all five
+  modules and back, SYS dashboard + refresh, FILES dir/search/trash/clipboard/
+  notes (new/list/view), NET offline (status/connect-cancel/ping/joke), FUN
+  melody/RGB rainbow/number guessing to win-or-out, SET brightness/scoping/
+  show, and settings persistence across a reboot. The sweep surfaced the two
+  fixes above (key-wait race, `if ... &` chain split).
+
+---
+
 ## [0.32.8] - 2026-08-15
 
 ### Fixed - memory-hardening sweep: SD card reliability + transcript scrollback memory

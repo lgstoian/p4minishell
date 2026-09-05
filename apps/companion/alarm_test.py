@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""alarm_test.py - on-board verification of the `alarm`/`cal` commands.
+
+Runs a clean sequence through the alarm surface and verifies the background
+checker actually fires an alarm (marks it fired in the store). Output is
+written to stdout; run with output redirection to a file for stable results.
+
+Usage: python alarm_test.py [COMx]
+"""
+import re
+import serial
+import sys
+import time
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def read_all(ser, seconds):
+    end = time.time() + seconds
+    out = []
+    while time.time() < end:
+        data = ser.read(ser.in_waiting or 1)
+        if data:
+            out.append(ANSI.sub("", data.decode(errors="replace")))
+    return "".join(out)
+
+
+def wait(ser, needle, timeout=8):
+    buf = ""
+    end = time.time() + timeout
+    while time.time() < end:
+        d = read_all(ser, 0.25)
+        if d:
+            buf += d
+            if needle in buf:
+                return buf
+    return buf
+
+
+def shell_up(ser):
+    for _ in range(60):
+        ser.write(b"echo ready\n")
+        b = read_all(ser, 3.0)
+        if "ready" in b and "PS " in b and "> " in b:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def main():
+    port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
+    ser = serial.Serial(port, 115200, timeout=1)
+    time.sleep(1.0)
+    ser.reset_input_buffer()
+    if not shell_up(ser):
+        print("FAIL: shell not responding")
+        ser.close()
+        return 1
+
+    results = []
+
+    def act(name, cmdline, expect, to=5):
+        ser.write((cmdline + "\n").encode())
+        b = wait(ser, expect, to)
+        ok = expect in b
+        results.append((name, ok))
+        print("%-42s %s" % (cmdline, "PASS" if ok else "FAIL(%s)" % expect))
+        if not ok:
+            print("      ", repr(b[-150:]))
+        return b
+
+    def cmdline(cmd, to=3):
+        ser.write((cmd + "\n").encode())
+        return read_all(ser, to)
+
+    # clean slate
+    act("del all", "alarm del all", "deleted")
+    act("purge", "alarm purge", "purged")
+    act("status empty", "alarm status", "alarm.count")
+
+    # add future events (far future, so the checker leaves them alone)
+    act("add standup", 'alarm add 2030-06-01 07:15 Standup /msg:Team call /beep /led', "scheduled")
+    act("add weekly", "alarm add 2030-06-02 08:00 Weekly /weekly:0x7F", "scheduled")
+    act("add silent", "alarm add 2030-06-03 09:00 Quiet /silent", "scheduled")
+
+    # list
+    act("list standup", "alarm list", "Standup")
+    act("list weekly", "alarm list", "Weekly")
+    act("list quiet", "alarm list", "Quiet")
+    act("list bare", "alarm list /b", "2030-06-01 07:15")
+    act("list bare id", "alarm list /b", "|1|")
+
+    # status / cal
+    act("status next", "alarm status", "alarm.next")
+    act("cal next", "cal next", "Standup")
+    act("cal month", "cal 2030-06", "cal.events")
+
+    # enable / disable
+    act("disable 1", "alarm disable 1", "disabled")
+    act("enable 1", "alarm enable 1", "enabled")
+
+    # soft delete + purge
+    act("del 2", "alarm del 2", "soft-deleted")
+    act("del all", "alarm del all", "deleted")
+    act("purge", "alarm purge", "purged")
+    act("status after", "alarm status", "alarm.count")
+
+    # --- fire test: a due alarm (in the past) is fired by the background
+    # checker on its next poll (boot catch-up already ran).
+    act("add due", "alarm add 1970-01-01 00:00:01 DueNow /beep", "scheduled")
+    print("      waiting for the checker to fire it (up to 40s)...")
+    wait(ser, "fired", 40)
+    b = act("list after fire", "alarm list", "DueNow")
+    results.append(("fire-marks-fired", "fired" in b))
+    if "fired" in b:
+        print("      checker fired the due event (marked fired)")
+
+    # cleanup
+    act("del all final", "alarm del all", "deleted")
+    act("purge final", "alarm purge", "purged")
+
+    ser.close()
+    print("\n===== RESULTS =====")
+    fails = [n for n, o in results if not o]
+    for n in fails:
+        print("  FAIL: %s" % n)
+    print("ALARM", "PASS (%d/%d)" % (len(results) - len(fails), len(results)) if not fails else "FAIL")
+    return 0 if not fails else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

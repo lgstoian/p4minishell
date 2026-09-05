@@ -87,7 +87,7 @@ new code; these are listed for reference and for the rare case that needs a raw 
 Standard printf specifiers work alongside these, including flags, width, and
 precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 
-## UI Model
+## UI Model (v0.35.2 cleanup on v0.35.1 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 24576 at `0x4012b75a`)
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
 - Scrollable transcript (LVGL span group) for coloured command output (read-only). It keeps
@@ -101,6 +101,9 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 - Serial console: idf.py monitor accepts same commands via UART/USB-Serial-JTAG
 - Command submission: LV_EVENT_READY on input line (touch) or Enter (serial)
 - Heavy commands run on dedicated worker task (not LVGL input callback stack)
+- Native modal surfaces (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) take over the transcript area
+  using the shared modal runtime in `components/modal/`. All 6 modals fill the live transcript region (resizes with rotation and keyboard visibility), accept `/t:secs`, and work both interactively and in batch — the `dialog`/`list`/`ask` dispatcher was fixed to handle both paths. Batch files remain the
+  apps; these commands are the polished UI layer a batch app can drop into.
 
 ## Where Commands Live
 
@@ -111,12 +114,15 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`, `fc`, `comp`, `sort` | `components/storage/storage_commands.c` |
 | `chkdsk`/`scandisk`, `format` | `components/storage/storage_commands.c` |
 | `sd info|ls|stat|cat|mount|eject`, `sdeject` | `components/storage/storage_commands.c` + `storage.c` |
-| `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit` | `components/batch/batch.c` + `components/batch/calc.c` |
+| `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`, `delay`, `notify`, `dialog`, `list`, `ask`, `browse`, `view`, `hexview` | `components/batch/batch.c` + `components/batch/calc.c` + `components/modal/modal_surf.c` (commands dispatch from `components/command/`) |
+| `draw` (`box`/`line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`) | `components/tui/tui.c` (`tui_draw_box` `components/tui/tui.c:228` title+style via `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, `tui_draw_line` `components/tui/tui.c:283` single/double/heavy, `tui_fill` `tui_print_at`, `tui_flush` `components/tui/tui.c:356` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, `tui_enter_fullscreen` `components/tui/tui.c:417` / `windows_set_fullscreen` `components/windows/windows.c:418`, `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, `tui_hide_for_modal`) + `components/command/command.c` dispatcher (auto-enters TUI for box/text/line/fill/clear/window `tui_init` `components/tui/tui.c:56`) |
+| `tui` (`status`/`clear`/`fullscreen`/`refresh`) | `components/tui/tui.c` (`tui_status` rect `1024x510` cols `80` rows `25` `p4minishell_config.h:298`, `tui_enter_fullscreen`/`tui_exit_fullscreen` `components/tui/tui.c:417`, `tui_refresh_surface` `components/tui/tui.c:408`, `tui_flush` `components/tui/tui.c:356`) + `components/windows/windows.c` (`windows_enter_tui_mode` keeps header visible by default, `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` hides header only on fullscreen, `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` `components/windows/windows.c:312`, `tui_hide_for_modal`) |
+| `color`, `locate` | `components/command/command.c` + `components/tui/tui.c` (`tui_set_default_color` `color` DOS parity, `tui_set_cursor` `locate` DOS parity, both TUI-aware via `tui_cell_set` `utf8[4]` and `tui_flush` recolor `#RRGGBB` per fg run) |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
 | `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`, `volume`, `gpio`, `display`, `keyboard`, `windows` | `components/command/command.c` |
 | `config` (persistent settings / CONFIG.SYS + factory reset) | `components/command/config_cmd.c` |
-| `reboot`, `clear`/`cls`, `prompt` | `components/command/command.c` |
+| `reboot`, `clear`/`cls`, `prompt`, `launch`, `apps` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota`, `httpd`, `netstat`, `ipconfig` (family routing) | `components/command/command.c` → owning module |
 | `ping`, `dns`/`nslookup`, `httpget`/`wget` (dispatched here, implemented in networking) | `components/command/command.c` → `components/networking/` |
@@ -138,6 +144,37 @@ worker task.
 | about | Show shell and board summary with build metadata, header description, uptime, task count, the proprietary notice, and a third-party license summary |
 | debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count |
 | mem | Show free heap, total heap, minimum heap, internal heap, task count, PSRAM state |
+
+### apps
+
+List the registered native apps (the applib ABI table). Each row shows the
+command name and its one-line description. Native apps are C functions linked
+into the firmware and registered via `app_register()`; invoking one dispatches
+to it with `argc`/`argv` (see `SDK.md`, "Native-app ABI"). ERRORLEVEL: 0.
+
+### launch
+
+Discover, list, and run the `.bat` apps installed on the shell. An app is any
+`*.bat` file in a PATH directory or in the conventional `sd:/APPS` directory;
+its optional metadata lives in `sd:/APPS/<name>.APPINFO` (INI format:
+`title=`, `description=`), shown when present.
+
+- `launch` — list the installed apps as a numbered menu and run the chosen one.
+- `launch <name>` — run an app by name (PATH resolution, then `sd:/APPS`).
+- `launch /list` — bare list (`name  -  title`), for scripting.
+
+ERRORLEVEL: 0 ok, 1 not found, 2 usage.
+
+Example (the companion app carries an APPINFO file):
+```
+launch /list        ->  COMPANION  -  P4 Companion
+launch COMPANION    ->  runs COMPANION.BAT
+```
+
+The boot flow can offer an app automatically: a CONFIG.SYS `LAUNCH_APP=<app>`
+directive asks `run <app> now? (Y/N)` once after AUTOEXEC.BAT and launches it
+on `Y` (a timeout declines). Manage it with `config LAUNCH_APP=<app>` /
+`config reset LAUNCH_APP`.
 
 ### help [command | /all]
 
@@ -283,6 +320,7 @@ Tracked settings and their CONFIG.SYS directive:
 | `DISPLAY_TIMEOUT` | `DISPLAY_TIMEOUT=<secs\|OFF>` | `0` | idle display-off |
 | `OSK` | `OSK=ON\|OFF` | `ON` | on-screen keyboard at boot |
 | `HEADER` | `HEADER=ON\|OFF` | `ON` | header status bar at boot |
+| `LAUNCH_APP` | `LAUNCH_APP=<app>` | *(none)* | offer to run a `.bat` app after boot |
 
 CONFIG.SYS is edited in place with a guarded, atomic temp-file+rename write;
 comments, blank lines, and unknown directives (e.g. `WIFI_SSID=`,
@@ -309,6 +347,17 @@ touch, keypress, mouse wheel, or serial command wakes the display back to the
 live shell. The timeout is capped at `P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS`
 and can be set at boot with the CONFIG.SYS `DISPLAY_TIMEOUT=` directive.
 Returns an ERRORLEVEL (0 ok / 2 usage).
+
+### delay <ms>
+A pure, deterministic wait of `<ms>` milliseconds. Unlike `sleep` (light
+sleep: blanks the display, tears down Wi-Fi), `delay` simply blocks the
+command worker — the right tool for melodies, animations, and pacing in batch
+files. Clamped to `P4_CONFIG_DELAY_MAX_MS`. ERRORLEVEL: 0 ok / 2 usage.
+
+```
+delay 250
+tone 523 180 & delay 450   (spaces notes out so they don't overlap)
+```
 
 ### sleep [seconds]
 Enter light sleep. RAM is retained, so the shell resumes with all state
@@ -783,6 +832,26 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | temp | Print the SD temp directory (`sd:/tmp`) |
 | temp new [ext] | Create a unique SD-backed temporary file and print its path |
 | temp clean | Delete every SD temporary file |
+| db create <name> [/cr:XXXX] [/tp:XXXX] [/vr:N] | Create an SD-backed database (Palm-OS style) |
+| db list \| db info <name> | List databases / show one database's header |
+| db drop <name> | Delete an entire database |
+| db open <name> / db close / db current | Set / clear / show the current database |
+| db categories <name> list\|set <n> <label>\|clear <n> | Manage the 16 category labels |
+| db add [<name>] [/cat:N] [/key:K] [/secret] [text...] | Add a record (or a file's contents); prints the id |
+| db get [<name>] <id> [/b] [/reveal] | Read a record; secret payload redacted unless `/reveal` |
+| db set [<name>] <id> [/cat:N] [/key:K] [text...] | Update a record (id unchanged) |
+| db del [<name>] <id> [/p] | Soft-delete a record (`/p` = permanent) |
+| db purge <name> | Physically remove soft-deleted records |
+| db count [<name>] [/cat:N] | Count live records |
+| db find [<name>] [/cat:N] [/key:K] [/text:P] [/b] | Linear scan; `/b` = bare `id\|cat\|key` |
+| db export [<name>] [file] / db import [<name>] [file] | Dump / restore records as text |
+| alarm add <YYYY-MM-DD> <HH:MM> [title] [/msg:..] [/daily\|/weekly:mask] [/beep] [/led] [/run:file.bat] [/silent] | Add an SD-persisted alarm |
+| alarm list [/b] | List events (bare `id\|datetime\|title\|flags\|recur\|action` with `/b`) |
+| alarm status | Store summary: count, enabled, next due, checker running |
+| alarm enable <id> \| alarm disable <id> | Arm / disarm one event |
+| alarm del <id\|all> | Soft-delete one event; `all` wipes the store |
+| alarm purge | Physically remove soft-deleted events |
+| cal today \| cal next \| cal YYYY-MM | Thin calendar view / next event / month count |
 | alias | List every alias |
 | alias name | Show one alias |
 | alias name=value | Define (or update) an alias; `name=` clears it |
@@ -907,6 +976,12 @@ if abc EQU 0 echo non_numeric_reads_as_zero
 is separate from the `==` string comparison, so `if a==b` stays a string test
 while `if a EQU b` compares numerically.
 
+**All `if` forms.** `if [not] [/i]` combines with any of these conditions:
+`errorlevel N` (true when errorlevel ≥ N), `exist <path>` (file/dir exists),
+`defined <name>` (variable is set, cmd.exe parity), the numeric keywords above,
+and `"a"=="b"` string tests. An undefined variable in a numeric operand reads
+as 0, matching DOS.
+
 ### set /p — prompted input
 
 Prints the prompt and reads a line from the user.
@@ -1029,6 +1104,107 @@ temp new            ->  temp.path=/sdcard/tmp/_app1.tmp
 temp clean          ->  temp: cleaned the SD temp directory
 ```
 
+### Database (`db`) — Palm-OS-style SD record store
+
+`db` is a named, SD-backed record store under `sd:/DBS/<name>.DB/`. Each
+database has a header (`HEADER.INI`: name, creator, type, version), 16
+categories (`CATEGORIES.INI`), a text index (`INDEX.TXT`), and one
+`RECORDS/R<id>.DAT` file per record payload. Records carry a monotonic 32-bit
+id (never reused), a 0..15 category, a flags byte, an optional key, and a
+text/binary payload. Soft-deleted records stay in the index until `purge`.
+All database data lives on the SD card; every write is atomic (temp+rename)
+behind a free-space pre-check.
+
+```
+db create contacts /cr:APP /tp:CNTC /vr:7   create a database
+db list                                     list every database
+db info contacts                            header/statistics for one database
+db drop contacts                            delete an entire database
+db open contacts / db close                 set/clear the current database (RAM)
+db current                                  show the current database
+db categories contacts list                 list the 16 category labels
+db categories contacts set 7 Family         set a category label (empty clears)
+db categories contacts clear 7              clear a category label
+```
+
+Records:
+
+```
+db add contacts /cat:1 /key:alice Alice Smith    add a record; prints its id
+db add contacts /cat:2 /secret p4ssw0rd          add a secret (redacted) record
+db add contacts notes.txt                        payload from a file's contents
+db get contacts 1                                read a record (secret payload
+                                                 is redacted unless /reveal)
+db get contacts 3 /reveal                        reveal a secret payload
+db set contacts 2 /key:robert Robert Brown       update a record (id unchanged)
+db del contacts 2                                soft-delete
+db del contacts 2 /p                             permanent delete
+db purge contacts                                physically remove soft-deleted
+db count contacts [/cat:N]                       count live records
+db find contacts [/cat:N] [/key:K] [/text:P]     linear scan; prints matches
+db find contacts /b                              bare "id|cat|key" for /f
+```
+
+When a current database is set (`db open`), the `<name>` argument is optional
+and a bare numeric id is treated as a record id: `db get 5`, `db count`,
+`db find /key:x` all use the current database.
+
+Portability:
+
+```
+db export contacts [file]    dump live records to a text file
+                             (default sd:/DBS/<name>.EXPORT), one per line
+db import contacts [file]    append records from an export file (fresh ids)
+```
+
+Options can appear anywhere on the line: `/cat:N`, `/key:K`, `/text:P`,
+`/cr:XXXX`, `/tp:XXXX`, `/vr:N`, `/secret`, `/reveal`, `/p`, `/b` (bare,
+uncoloured, pipe/for-friendly output). ERRORLEVEL: 0 ok/found, 1 not-found /
+empty, 2 usage / I/O error, so `db find ... && if not errorlevel 1 (...)` and
+`for /f "tokens=1-3 delims=|" %%r in ('db find contacts /b') do ...` both work.
+Every `db` operation opens its own guarded SD session and heap-allocates its
+buffers (the batch path never gets a large stack local).
+
+### Alarm / calendar (`alarm`, `cal`) — SD-persisted events
+
+`alarm` is a small, batch-friendly event store backed by the SD card
+(`sd:/ALARMS/`): `INDEX.INI` plus one `E<id>.INI` per event (when, title, msg,
+flags, recurrence, actions). A single background checker task polls the store
+every `P4_CONFIG_ALARM_POLL_MS` (30 s by default) and, when an event is due,
+reuses the EXISTING surfaces: the header notification area, the RGB LED, the
+speaker, and — for the `/run:` action — the command worker (never the checker
+stack). There is no private notification loop. Recurrence is one-shot, daily,
+or a weekly weekday bitmask.
+
+```
+alarm add 2030-01-01 09:00 Standup /msg:Team call /beep /led
+alarm add 2030-06-02 08:00 Weekly /weekly:0x7F
+alarm add 1970-01-01 00:00:01 Now /beep /run:sd:/APPS/NOTIFY.BAT
+alarm list                     list events (enabled/fired + actions)
+alarm list /b                  bare "id|YYYY-MM-DD HH:MM|title|flags|recur|action"
+alarm status                   count, enabled, next due, checker running
+alarm enable <id> | alarm disable <id>
+alarm del <id>                 soft-delete (kept until purge)
+alarm del all                  wipe the whole store (fresh id space)
+alarm purge                    physically remove soft-deleted events
+cal today | cal next | cal YYYY-MM    thin calendar view / count
+```
+
+Options may appear anywhere: `/msg:text`, `/daily`, `/weekly:mask` (7-bit
+weekday bitmask, bit 0 = Sunday), `/beep`, `/led`, `/run:file.bat`, `/silent`
+(suppress sound/LED, header notify only), `/b`. Titles/messages use normal
+quoting (`"..."`, `^`). Times are parsed as local `YYYY-MM-DD HH:MM`
+(timezone-aware via `mktime`, matching the `date`/`time` commands). ERRORLEVEL:
+0 ok, 1 not found / none due, 2 usage / I/O.
+
+Firing behaviour: when an event becomes due, the checker marks it fired (one-shot)
+or advances it to the next occurrence (recurring), persists, then notifies /
+beeps / pulses the LED, and optionally queues `call <file>` onto the command
+worker for the `/run:` action. Alarms that become due while the device is
+powered off are fired once on the next boot (catch-up, `P4_CONFIG_ALARM_CATCHUP_ON_BOOT`);
+light sleep suspends the checker until the device wakes. Accuracy is bounded
+by the poll interval plus clock quality (SNTP helps).
+
 ### Menu / form primitives (`ansi` + `menu`, with `choice`)
 
 DOS-style interactive apps were built from `choice` (single-key selection)
@@ -1100,6 +1276,12 @@ calc hex$(255)             ->  FF
 calc /hex 255              ->  &HFF
 calc /angle                ->  calc.angle=degrees
 calc /rad                  ->  calc.angle=radians
+calc cur(27)               ->  3
+calc cur(-8)               ->  -2
+calc deg(30.1530)          ->  30.258333...    (30°15'30" = 30 + 15/60 + 30/3600)
+calc asinh(1)              ->  0.881373587...
+calc acosh(2)              ->  1.316957896...
+calc atanh(0.5)            ->  0.549306144...
 ```
 
 Grammar: `+ - * / ^` (right-associative power), the BASIC `MOD` keyword, unary
@@ -1108,7 +1290,7 @@ literals (`'` or `"`) with `+` concatenation, and environment-variable
 references (an undefined variable reads as 0, matching `set /a`).
 
 Functions (BASIC names; `ASIN`/`ACOS`/`ATAN` are accepted for `ASN`/`ACS`/
-`ATN`):
+`ATN`; `ASINH`/`ACOSH`/`ATANH` for `HYP ASN`/`HYP ACS`/`HYP ATN`):
 
 | Function | Meaning |
 |----------|---------|
@@ -1117,10 +1299,13 @@ Functions (BASIC names; `ASIN`/`ACOS`/`ATAN` are accepted for `ASN`/`ACS`/
 | `SQR` `EXP` `LN` `LOG` | Square root; e^x; natural log; base-10 log |
 | `SIN` `COS` `TAN` `SINH` `COSH` `TANH` | Trig and hyperbolic trig (current angle mode) |
 | `ASN`/`ASIN` `ACS`/`ACOS` `ATN`/`ATAN` | Inverse trig (result in current angle mode) |
+| `ASINH` `ACOSH` `ATANH` | Inverse hyperbolic trig (radians) |
 | `FACT` `NCR` `NPR` | Factorial; combinations; permutations |
 | `MOD(a,b)` | Floor-modulo, result sign follows the divisor |
 | `POL` `REC` | Polar↔rectangular; stores both results in the X/Y variables |
 | `DMS` `DMS$` | Decimal degrees → D.MMSS number / formatted `Dd MM' SS"` string |
+| `DEG` | Sexagesimal `D.MMSS` → decimal degrees (inverse of `DMS`) |
+| `CUR` | Cube root |
 | `VAL` `VALF` `STR$` `HEX$` | String→number (leading parse); number→string; integer→hex string |
 | `ASC` `CHR$` `LEN` | Char→code; code→char; string length |
 | `LEFT$` `MID$` `RIGHT$` | 1-based string slices |
@@ -1149,6 +1334,16 @@ literal caret, not a continuation.
 ### Batch File Features
 - %0 (script name), %1 through %9, and %* (all arguments, from %1 onward) expansion
 - %VAR% environment variable expansion
+- Dynamic pseudo-variables (always win over a user variable of the same name):
+  - `%ERRORLEVEL%` — current errorlevel as a decimal string
+  - `%DATE%` — current date as `MM-DD-YYYY`
+  - `%TIME%` — current time as `HH:MM:SS`
+  - `%RANDOM%` — a random integer `0..32767` (cmd.exe parity)
+  - `%CD%` — the current working directory
+- An undefined `%VAR%` expands to the empty string (cmd.exe parity), so
+  `if "%var%"==""` detects an unset variable, and `if defined VAR` checks
+  whether a variable has been set.
+- `if [not] [/i] defined VAR` — true when `VAR` is set (cmd.exe parity).
 - rem and :: comment lines
 - @ line prefix to suppress echo for one line
 - echo on/off flow control
@@ -1268,6 +1463,101 @@ Unmatched keys are ignored.
 
 Example: `choice /C:YNC /T:N,10 Overwrite the file` prints
 `Overwrite the file [Y,N,C]?` and defaults to `N` after ten seconds.
+
+### notify
+
+`notify [/t:secs] <text>` shows `<text>` in the header notification area for
+the duration configured by `P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS` (or
+`/t:secs` seconds when given). `notify -` clears the current notification
+immediately.
+
+### dialog
+
+`dialog [/t:secs] "title" "message" [button1] [button2]` opens a native modal
+dialog that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`/`windows_refresh_editor_surface`; hardware-tested via serial on COM11). With one button the dialog is an OK dialog;
+with two buttons the caller gets a binary choice. `/t:secs` auto-cancels the
+dialog after `secs` seconds if nobody interacts (like `choice /T`, hardware-tested: `dialog /t:2` → 255 after timeout), so an
+unattended batch script cannot hang on a dialog. ERRORLEVEL is `0` for the
+first button, `1` for the second button, or `255` for cancel/Esc/timeout. Draw is TUI-aware when a dialog is active.
+
+### list
+
+`list [/t:secs] [/v:NAME] "title" item1 [item2...]` opens a scrollable
+native list selector that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11, including `/t:secs` timeout). Tap an item (or use Up/Down + Enter on a USB keyboard,
+or type the 1-based number on the serial console) to select it. `/t:secs`
+auto-cancels after `secs` seconds (hardware-tested: `list /t:2` → 255). ERRORLEVEL is the 0-based index of the
+selected item, or `255` for cancel/Esc/timeout. With `/v:NAME` the selected
+item's label is stored in the `NAME` environment variable. Fills the transcript region and resizes with rotation/keyboard.
+
+### ask
+
+`ask [/t:secs] [/v:NAME] [/p] "prompt" [default]` opens a native text prompt
+that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25; hardware-tested via serial on COM11 — serial line is consumed as the answer). With the on-screen keyboard. `/t:secs` auto-cancels after `secs` seconds (hardware-tested: `ask /t:2` → 1 with `ASK_RESULT`/NAME unchanged on timeout).
+The answer is stored in the `ASK_RESULT` environment variable, or in `NAME`
+when `/v:NAME` is given. `/p` masks the input (password mode; the mask covers
+the on-screen keyboard — serial input still echos). ERRORLEVEL is `0` on OK,
+`1` on cancel/Esc/timeout, or `2` for usage errors. Fills transcript region via `windows_enter_editor_mode`.
+
+> **TUI restoration:** the `dialog`/`list`/`ask` dispatcher was fixed (now works interactively at the prompt and in batch files — previously batch-only), and `browse`/`view`/`hexview` restore the remaining modals. All 6 modals use the shared modal runtime in `components/modal/`, fill the live transcript region (resizes with display rotation and keyboard visibility), and accept `/t:secs` for unattended timeout.
+
+### browse
+
+`browse [/t:secs] [/v:NAME] [path]` opens a native file browser modal that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`/`windows_refresh_editor_surface`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/` (resizes with rotation and keyboard visibility). The browser starts at `[path]` (default: current directory) and shows directories and files with the shell colour scheme. Touch: tap a file to select, tap a directory to enter, Back to go up; USB keyboard: Up/Down + Enter, Backspace to go up, Esc to cancel; serial console: type the 1-based number or `..` / `q` (hardware-tested). With `/v:NAME` the selected path is stored in the `NAME` environment variable (default `BROWSE_RESULT`). `/t:secs` auto-cancels after `secs` seconds if nobody interacts. ERRORLEVEL is `0` on selection, `1` on cancel/Esc/timeout, or `2` for usage errors.
+
+### view
+
+`view [/t:secs] <file>` opens a native text viewer pager that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. Paginated, read-only file preview with scrolling: drag on the transcript, Up/Dn buttons, USB keyboard PageUp/PageDown or arrows, mouse wheel (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` per notch). Shows the file with line numbers and shell colours; keyboard/serial controls match `browse`. `/t:secs` auto-cancels after `secs` seconds. ERRORLEVEL is `0` on close (OK), `1` on cancel/Esc/timeout, or `2` for usage or missing file. `draw` is TUI-aware when `view` is active.
+
+### hexview
+
+`hexview [/t:secs] <file>` opens a native hex dump viewer that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. Shows the file as 16-byte rows with hex and ASCII columns (e.g. `00000000  48 65 6C 6C 6F ...  |Hello...|`), scrollable with the same drag/keyboard/wheel controls as `view`. `/t:secs` auto-cancels after `secs` seconds. Keyboard/serial controls match `view`/`browse`. ERRORLEVEL is `0` on close, `1` on cancel/Esc/timeout, or `2` for usage or missing file.
+
+### draw — TUI drawing primitives (hardware-verified on COM11)
+
+`draw` composes on the `80×25` TUI cell buffer (`components/tui/tui.c` `tui_draw_box`/`tui_draw_line`/`tui_fill`/`tui_print_at` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35`, `tui_flush` recolor `#RRGGBB` per fg run via `ansi_get_palette_color`). It auto-enters TUI (`tui_init` `components/tui/tui.c:56` → `windows_enter_tui_mode`) when no TUI/modal surface is active; inside a TUI/modal surface it reuses the active buffer. Every primitive clamps to `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`p4minishell_config.h:298`), coordinates are 1-based DOS style.
+
+| Form | Meaning |
+|------|---------|
+| `draw box <x> <y> <w> <h> [single\|double\|rounded] [title]` | Draw box border at x,y,w,h with style (default `single`) and optional centered title. Honors style via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) through `tui_cell_set`; nested boxes form the window stack. |
+| `draw line <x1> <y1> <x2> <y2> [single\|double\|heavy]` | Draw H/V line (only horizontal `y1==y2` or vertical `x1==x2`) with style (`SH_BOX_H`/`V` vs `H2`/`V2` vs `HL`/`VL`). |
+| `draw fill <x> <y> <w> <h> [char]` | Fill rect at x,y,w,h with char (default space) using current fg/bg. |
+| `draw text <x> <y> <text>` | Print text at x,y (UTF-8 aware, respects cell `utf8[4]`). |
+| `draw clear` | Clear entire grid (`tui_clear`). |
+| `draw window <x> <y> <w> <h> [title]` | Alias for `draw box` with window stack semantics (nested titled boxes). |
+| `draw fullscreen on\|off` | Global fullscreen: `on` hides header completely via `windows_set_fullscreen(true)`/`header_set_visible(false)` `components/windows/windows.c:418`; `off` restores header. Header kept visible by default; dynamic keyboard scaling via `windows_notify_keyboard_visibility`. |
+
+Examples (all pass on COM11 serial without abort/watchdog/overlap, header kept unless fullscreen):
+```
+draw box 2 2 20 8 single MyBox
+draw box 4 4 12 4 double Inner
+draw box 1 1 80 25 rounded Full
+draw line 1 5 80 5 single
+draw fill 10 10 5 3 X
+draw text 5 5 Hello
+draw window 10 6 30 10 Nested
+draw fullscreen on
+draw clear
+```
+ERRORLEVEL: `0` ok, `2` usage.
+
+### tui — TUI control
+
+| Form | Meaning |
+|------|---------|
+| `tui status` | Show transcript rect (`1024x510`), cols/rows (`80x25`), fullscreen state, font (`unscii_16` box U+2500-U+257F + symbols U+2600-U+26FF, 384 glyphs, cmaps 3), header visibility. |
+| `tui clear` | Clear TUI grid (same as `draw clear`). |
+| `tui fullscreen on\|off` | Per-app fullscreen: `on` hides header (`windows_set_fullscreen`), `off` restores; kept visible by default. |
+| `tui refresh` | Re-apply transcript rect via `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` (call after rotation/keyboard). |
+
+`tui` and `draw fullscreen` both route to `components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`; `tui` is the per-app alias, `draw fullscreen` is the global batch verb. Screenshot debug: `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
+
+### color
+
+`color [fg] [bg]` — DOS `COLOR` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:324` `tui_set_default_color` and `tui_flush` per-fg recolor). With no arguments prints the current default colours (`color: fg=X bg=Y`). With one or two hex digits (`0`-`F`, case-insensitive) sets the default transcript/TUI colours used for subsequent output, matching DOS `COLOR` semantics (e.g. `color 0A` bright green on black, `color 07` light grey on black, `color 1E` yellow on blue). Values are validated; a missing or invalid colour sets ERRORLEVEL `2`, success sets `0`. The palette itself remains the compiled-in `SH_*` scheme in `components/ansi/ansi_palette.h` via `ansi_get_palette_color` — `color` only selects the default foreground/background pair. TUI grid `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25.
+
+### locate
+
+`locate <row> <col>` — DOS `LOCATE` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:160` `tui_set_cursor`/`tui_get_cursor`). Emits the ANSI cursor-position sequence `ESC[<row>;<col>H` to move the cursor, with `row` clamped to `1..25` and `col` to `1..80` bounded by `P4_CONFIG_TUI_ROWS` / `P4_CONFIG_TUI_COLS` (`p4minishell_config.h:298`). Used with `echo` and `ansi` to position text in TUI batch apps (e.g. `locate 5 10 && echo Hello`). Row and column must both be present; missing or non-numeric arguments set ERRORLEVEL `2`, success sets `0`. Coordinates are 1-based on the `80×25` transcript region (`1024x510`).
 
 ### pause, choice, and more without a keyboard
 

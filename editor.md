@@ -1,9 +1,11 @@
-# P4MiniShell Editor Guide
+# P4MiniShell Editor Guide (v0.35.2 cleanup, 80×25 `utf8[4]` TUI, stack 24576 `p4minishell_config.h:1514` at `0x4012b75a`)
 
 > **Looking for the full reference?** See
 > [tutorial_edit.md](tutorial_edit.md) — the complete tutorial covering every
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
+
+> **v0.35.2 cleanup on the v0.35.1 hardware-verified final TUI state:** flashed to COM11, boot verified (`P4MiniShell v0.35.1 ready`, transcript rect `1024x510` `80×25`), extensive serial tests run without abort/watchdog/overlap. TUI engine is live (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_tui_mode`/`windows_refresh_tui_surface`, `draw` TUI-aware with auto-enter `tui_init`, `tui_draw_box` `utf8[4]` `tui_cell_set` `SH_BOX_*`, `tui_flush` recolor `#RRGGBB` per fg run via `ansi_get_palette_color`, `draw`/`tui fullscreen` header hidden via `windows_set_fullscreen`, prompt `shell_prompt_render_plain()`); modal surfaces `dialog`/`list`/`ask`/`browse`/`view`/`hexview` fill the live transcript region. Font extended in-place `managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c` 384 glyphs U+2500-U+257F/U+2600-U+26FF cmaps 3 no duplication `CONFIG_LV_FONT_UNSCII_16=y`. Memory fixes (`P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024 `p4minishell_config.h:93`, `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024→512, `P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192→4096, `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 with 1/4 keep), audio `bsp_audio_init` abort guard, modal `EventGroup` PSRAM (`MALLOC_CAP_SPIRAM`), dialog/list/ask serial routing, screenshot debug `grab_screenshot.py --crop-transcript`. Companion fully TUI-expanded and hardware-verified (7 BATs: `COMPANION.BAT` `draw fullscreen` double, `SYS.BAT` `tui fullscreen` with `draw` boxes, `FILES.BAT` `browse`/`view`/`hexview` + `draw` + `tui fullscreen`, `NET.BAT` `draw` boxes, `FUN.BAT` TUI demo, `SET.BAT` TUI demo, `LIB.BAT` tui helpers `:tui_banner`/`:tui_header`) pushed via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109), stack overflow at `0x4012b75a` fixed by `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514`, no deferred items.
 
 The `edit` command opens a modal, touch-first text editor that can create and
 modify any text file on the SD card — batch scripts, `.txt`, `.sys`, config
@@ -227,6 +229,11 @@ The editor lives in `components/editor/`:
 
 The editor reuses the transcript container as its surface
 (`windows_enter_editor_mode`), hides the shell's span group while it is open,
-and restores it on close. Input routes through `shell_command_ops_t`
-(`editor_is_active`, `editor_handle_usb_key`, `editor_handle_serial_line`),
-the same ops-table pattern the roadmap uses for future native apps.
+and restores it on close. Since v0.33.0 the editor is a surface on the shared
+modal runtime in `components/modal/`; input routes through the generic
+`shell_command_ops_t.modal_*` hooks (`modal_is_active`,
+`modal_handle_usb_key`, `modal_handle_serial_line`), the same ops-table
+pattern used by `dialog`, `list`, and `ask`.
+
+> **Note:** `edit` is one `modal_surface_t` among **6** sharing the same runtime
+> — `dialog`, `list`, `ask`, `browse`/`filebrowser`, `view`, `hexview` — plus the TUI cell buffer (`components/tui/tui.h:35` `utf8[4]`, `tui_draw_box`/`line` via `tui_cell_set`, `tui_flush` recolor) — all via `windows_enter_tui_mode`/`windows_refresh_tui_surface`/`windows_notify_keyboard_visibility` onto the live transcript region (`1024x510` `80×25` `tui status`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y` 384 glyphs U+2500-U+257F/U+2600-U+26FF, `draw fullscreen`/`tui fullscreen` header hidden via `windows_set_fullscreen`, prompt `shell_prompt_render_plain()`), hardware-verified on COM11 (`draw box single/double/rounded` with title + nested window stack, `draw line`/`fill`/`text`, `dialog`/`list` timeout + serial input, `ask` serial, `browse`/`view`/`hexview` fill transcript region, `color`/`locate` per-fg recolor, screenshot `grab_screenshot.py --crop-transcript`). See `documentation.md` “TUI Module” and `SDK.md` “TUI Integration”. Companion fully TUI-expanded and hardware-verified (7 BATs: `COMPANION.BAT` `draw fullscreen` double, `SYS.BAT` `tui fullscreen` with `draw` boxes, `FILES.BAT` `browse`/`view`/`hexview` + `draw` + `tui fullscreen`, `NET.BAT` `draw` boxes, `FUN.BAT` TUI demo, `SET.BAT` TUI demo, `LIB.BAT` tui helpers `:tui_banner`/`:tui_header`) pushed via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109), stack overflow at `0x4012b75a` fixed by `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514`, no deferred items.

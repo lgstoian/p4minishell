@@ -4,5 +4,8 @@ idf_component_register(
     REQUIRES
         shell
         storage
+        modal
+        tui
+        clock
         espressif__esp32_p4_function_ev_board
 )

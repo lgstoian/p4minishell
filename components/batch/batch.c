@@ -19,8 +19,13 @@
 #include "batch.h"
 #include "storage.h"
 #include "shell.h"
+#include "modal_surf.h"
+#include "tui.h"
+#include "windows.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
+#include "clock.h"
+#include "esp_random.h"
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -938,9 +943,10 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                 after = input + 2;
             } else {
                 /* Environment variable `%VAR%` or a literal `%%`: needs the
-                 * closing `%`. An unknown name is left untouched. `%ERRORLEVEL%`
-                 * expands to the current errorlevel as a decimal string, giving
-                 * a batch process access to its own exit code (cmd.exe parity). */
+                 * closing `%`. An undefined name expands to the empty string
+                 * (cmd.exe parity), so the DOS `if "%var%"==""` idiom works.
+                 * `%ERRORLEVEL%` expands to the current errorlevel as a decimal
+                 * string, giving a batch process access to its own exit code. */
                 const char *end = strchr(input + 1, '%');
                 if (end != NULL) {
                     size_t token_len = (size_t)(end - (input + 1));
@@ -949,13 +955,46 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                     if (token_len == 0) {
                         replacement = "%";
                     } else if (token_len < sizeof(token)) {
+                        char pseudo_buf[40];
                         memcpy(token, input + 1, token_len);
                         token[token_len] = '\0';
                         if (shell_text_equals_ignore_case(token, "ERRORLEVEL")) {
                             snprintf(errorlevel_buf, sizeof(errorlevel_buf), "%d", s_errorlevel);
                             replacement = errorlevel_buf;
+                        } else if (shell_text_equals_ignore_case(token, "DATE") ||
+                                   shell_text_equals_ignore_case(token, "TIME") ||
+                                   shell_text_equals_ignore_case(token, "RANDOM") ||
+                                   shell_text_equals_ignore_case(token, "CD")) {
+                            /* DOS/cmd-style dynamic variables. They always win
+                             * over a user variable of the same name. */
+                            if (shell_text_equals_ignore_case(token, "RANDOM")) {
+                                /* cmd.exe %RANDOM% is 0..32767. */
+                                snprintf(pseudo_buf, sizeof(pseudo_buf), "%d",
+                                         (int)(esp_random() & 0x7FFF));
+                            } else if (shell_text_equals_ignore_case(token, "CD")) {
+                                const char *cwd = shell_get_cwd();
+                                replacement = (cwd != NULL) ? cwd : "";
+                            } else {
+                                struct tm lt = time_get_local();
+                                if (shell_text_equals_ignore_case(token, "DATE")) {
+                                    snprintf(pseudo_buf, sizeof(pseudo_buf), "%02d-%02d-%04d",
+                                             lt.tm_mon + 1, lt.tm_mday, lt.tm_year + 1900);
+                                } else {
+                                    snprintf(pseudo_buf, sizeof(pseudo_buf), "%02d:%02d:%02d",
+                                             lt.tm_hour, lt.tm_min, lt.tm_sec);
+                                }
+                            }
+                            if (replacement == NULL) {
+                                replacement = pseudo_buf;
+                            }
                         } else {
                             replacement = shell_env_get(token);
+                            if (replacement == NULL) {
+                                /* cmd.exe parity: an undefined variable
+                                 * expands to the empty string, so the DOS
+                                 * `if "%var%"==""` idiom works. */
+                                replacement = "";
+                            }
                         }
                     }
                     after = end + 1;
@@ -2281,6 +2320,14 @@ void shell_command_if(int argc, char **argv)
             free(resolved);
         }
         arg_idx++;
+    } else if (shell_text_equals_ignore_case(argv[arg_idx], "defined")) {
+        arg_idx++;
+        if (arg_idx >= argc) {
+            shell_transcript_append_text("if: expected variable name after defined\n");
+            return;
+        }
+        condition = (shell_env_get(argv[arg_idx]) != NULL);
+        arg_idx++;
     } else {
         /* Numeric comparison via the cmd.exe keywords, or a string
          * comparison with `==`. The numeric form is
@@ -2461,9 +2508,14 @@ void shell_command_pause(int argc, char **argv)
         return;
     }
 
+    /* Arm the key wait BEFORE the prompt is printed. The prompt text is queued
+     * for the UART console task, so a key typed as soon as the prompt appears
+     * can reach the console reader before shell_key_wait_begin() would have
+     * run if it came after the print - and would then be dispatched as a
+     * command instead of answering the wait. */
+    shell_key_wait_begin();
     shell_transcript_appendf_ansi(SH_MUTE "Press any key to continue . . . " SH_RST "\n");
 
-    shell_key_wait_begin();
     if (!shell_wait_for_key(SHELL_KEY_WAIT_TIMEOUT_MS, NULL)) {
         shell_transcript_append_text("pause: timed out waiting for a key\n");
         shell_record_warningf("pause", "Timed out waiting for a keypress");
@@ -2567,19 +2619,6 @@ void shell_command_choice(int argc, char **argv)
         goto done;
     }
 
-    /* Render the prompt in DOS form: "text [Y,N]?" */
-    if (message[0] != '\0') {
-        shell_transcript_appendf("%s ", message);
-    }
-
-    if (show_list) {
-        shell_transcript_append_text("[");
-        for (index = 0; index < option_count; index++) {
-            shell_transcript_appendf("%s%c", index > 0 ? "," : "", options[index]);
-        }
-        shell_transcript_append_text("]? ");
-    }
-
     if (!shell_key_input_available()) {
         /* No interactive source: honor an explicit /T default, otherwise
          * take the first key, and say so instead of pretending to wait. */
@@ -2602,7 +2641,24 @@ void shell_command_choice(int argc, char **argv)
         goto done;
     }
 
+    /* Arm the key wait BEFORE the prompt is rendered so a key typed as soon
+     * as the prompt appears answers the wait instead of being dispatched as a
+     * command (the prompt text reaches the console reader asynchronously). */
     shell_key_wait_begin();
+
+    /* Render the prompt in DOS form: "text [Y,N]?" */
+    if (message[0] != '\0') {
+        shell_transcript_appendf("%s ", message);
+    }
+
+    if (show_list) {
+        shell_transcript_append_text("[");
+        for (index = 0; index < option_count; index++) {
+            shell_transcript_appendf("%s%c", index > 0 ? "," : "", options[index]);
+        }
+        shell_transcript_append_text("]? ");
+    }
+
     while (chosen < 0) {
         char key = '\0';
 
@@ -3194,52 +3250,129 @@ void shell_command_temp(int argc, char **argv)
  */
 void shell_command_ansi(int argc, char **argv)
 {
-    const char *codes_arg;
-    char codes[64];
-    const char *p;
+    const char *arg;
     char *styled;
     size_t styled_size;
-    size_t codes_len;
 
     if (argc < 2) {
-        shell_print_usage("Usage: ansi <sgr-codes> [text...]");
+        shell_print_usage("Usage: ansi <sgr-codes|@spec> [text...]");
         batch_set_errorlevel(2);
         return;
     }
-    codes_arg = argv[1];
+    arg = argv[1];
 
-    /* Accept the DOS spelling with a trailing 'm' (`ansi 7m` for ESC[7m) as
-     * well as the bare parameters (`ansi 7`). */
+    /* The styled line is command-sized and this runs on the recursive batch
+     * path, so it is heap-allocated and freed on every exit. */
+    styled_size = (argc >= 3 ? SHELL_COMMAND_BYTES : 0) + 64;
+    styled = malloc(styled_size);
+    if (styled == NULL) {
+        shell_print_error("ansi: out of memory");
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    /* Handle @-specifiers (cursor/screen control) */
+    if (arg[0] == '@') {
+        const char *spec = arg + 1;
+
+        if (strncmp(spec, "POS:", 4) == 0) {
+            /* @POS:row;col */
+            snprintf(styled, styled_size, "[%sH", spec + 4);
+        } else if (strncmp(spec, "CLEAR", 5) == 0) {
+            /* @CLEAR[=mode] - default 2 (entire screen) */
+            if (spec[5] == '=') {
+                snprintf(styled, styled_size, "[%sJ", spec + 6);
+            } else {
+                snprintf(styled, styled_size, "[2J");
+            }
+        } else if (strcmp(spec, "SAVE") == 0) {
+            /* @SAVE - save cursor position */
+            snprintf(styled, styled_size, "[s");
+        } else if (strcmp(spec, "RESTORE") == 0) {
+            /* @RESTORE - restore cursor position */
+            snprintf(styled, styled_size, "[u");
+        } else if (strcmp(spec, "ALTON") == 0) {
+            /* @ALTON - enter alternate screen buffer */
+            snprintf(styled, styled_size, "[?1049h");
+        } else if (strcmp(spec, "ALTOFF") == 0) {
+            /* @ALTOFF - exit alternate screen buffer */
+            snprintf(styled, styled_size, "[?1049l");
+        } else if (strcmp(spec, "CURSON") == 0) {
+            /* @CURSON - show cursor */
+            snprintf(styled, styled_size, "[?25h");
+        } else if (strcmp(spec, "CURSOFF") == 0) {
+            /* @CURSOFF - hide cursor */
+            snprintf(styled, styled_size, "[?25l");
+        } else if (strncmp(spec, "SCROLL:", 7) == 0) {
+            /* @SCROLL:n - scroll up n lines */
+            snprintf(styled, styled_size, "[%sS", spec + 7);
+        } else if (strncmp(spec, "FG256:", 6) == 0) {
+            /* @FG256:n - 256-color foreground */
+            snprintf(styled, styled_size, "[38;5;%sm", spec + 6);
+        } else if (strncmp(spec, "BG256:", 6) == 0) {
+            /* @BG256:n - 256-color background */
+            snprintf(styled, styled_size, "[48;5;%sm", spec + 6);
+        } else if (strncmp(spec, "FGRGB:", 6) == 0) {
+            /* @FGRGB:r;g;b - 24-bit truecolor foreground */
+            snprintf(styled, styled_size, "[38;2;%sm", spec + 6);
+        } else if (strncmp(spec, "BGRGB:", 6) == 0) {
+            /* @BGRGB:r;g;b - 24-bit truecolor background */
+            snprintf(styled, styled_size, "[48;2;%sm", spec + 6);
+        } else {
+            shell_print_error("ansi: unknown @-specifier '%s'", arg);
+            free(styled);
+            batch_set_errorlevel(2);
+            return;
+        }
+
+        if (argc >= 3) {
+            char *text = malloc(SHELL_COMMAND_BYTES);
+            if (text == NULL) {
+                free(styled);
+                shell_print_error("ansi: out of memory");
+                batch_set_errorlevel(1);
+                return;
+            }
+            shell_join_args(argv, 2, argc, text, SHELL_COMMAND_BYTES);
+            strncat(styled, text, styled_size - strlen(styled) - 1);
+            free(text);
+        }
+
+        shell_transcript_append_ansi(styled);
+        free(styled);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    /* Original SGR code path */
+    const char *codes_arg = arg;
+    char codes[64];
+    const char *p;
+    size_t codes_len;
+
     codes_len = strlen(codes_arg);
     if (codes_len >= sizeof(codes)) {
         shell_print_error("ansi: SGR codes too long");
+        free(styled);
         batch_set_errorlevel(2);
         return;
     }
     snprintf(codes, sizeof(codes), "%s", codes_arg);
     if (codes_len > 0 && codes[codes_len - 1] == 'm') {
-        codes[--codes_len] = '\0';
+        codes[--codes_len] = ' ';
     }
-    for (p = codes; *p != '\0'; p++) {
+    for (p = codes; *p != ' '; p++) {
         if (!isdigit((unsigned char)*p) && *p != ';') {
             shell_print_error("ansi: invalid SGR codes '%s'", argv[1]);
+            free(styled);
             batch_set_errorlevel(2);
             return;
         }
     }
-    if (codes[0] == '\0') {
+    if (codes[0] == ' ') {
         shell_print_error("ansi: invalid SGR codes '%s'", argv[1]);
+        free(styled);
         batch_set_errorlevel(2);
-        return;
-    }
-
-    /* The styled line is command-sized and this runs on the recursive batch
-     * path, so it is heap-allocated and freed on every exit. */
-    styled_size = (argc >= 3 ? SHELL_COMMAND_BYTES : 0) + 32;
-    styled = malloc(styled_size);
-    if (styled == NULL) {
-        shell_print_error("ansi: out of memory");
-        batch_set_errorlevel(1);
         return;
     }
 
@@ -3253,10 +3386,10 @@ void shell_command_ansi(int argc, char **argv)
             return;
         }
         shell_join_args(argv, 2, argc, text, SHELL_COMMAND_BYTES);
-        snprintf(styled, styled_size, "\x1b[%sm%s\x1b[0m", codes, text);
+        snprintf(styled, styled_size, "[%sm%s[0m", codes, text);
         free(text);
     } else {
-        snprintf(styled, styled_size, "\x1b[%sm", codes);
+        snprintf(styled, styled_size, "[%sm", codes);
     }
 
     shell_transcript_append_ansi(styled);
@@ -3301,6 +3434,354 @@ void shell_command_menu(int argc, char **argv)
         return;
     }
     batch_set_errorlevel(choice);
+}
+
+/* ========================================================================
+ * NOTIFY (notify)
+ * ========================================================================
+ * Shows a short message in the header notification area. A dash as the only
+ * argument clears the current notification immediately.
+ */
+
+void shell_command_notify(int argc, char **argv)
+{
+    uint32_t timeout_ms = P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS;
+    int text_start = 1;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
+            int secs = atoi(argv[i] + 3);
+            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+            text_start++;
+        }
+    }
+
+    if (text_start >= argc) {
+        shell_print_usage("Usage: notify [/t:secs] <text>");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    if (text_start == argc - 1 && strcmp(argv[text_start], "-") == 0) {
+        shell_header_notify("", 0);
+    } else {
+        char text[P4_CONFIG_HEADER_NOTIFICATION_BYTES];
+        shell_join_args(argv, text_start, argc, text, sizeof(text));
+        shell_header_notify(text, timeout_ms);
+    }
+    batch_set_errorlevel(0);
+}
+
+/* ========================================================================
+ * NATIVE MODAL SURFACES (dialog, list, ask)
+ * ========================================================================
+ * Batch apps can launch small native modal surfaces when the transcript UI
+ * is not polished enough. These commands block the batch worker until the
+ * user dismisses the surface and return the choice through ERRORLEVEL (and
+ * ASK_RESULT for text input).
+ */
+
+void shell_command_dialog(int argc, char **argv)
+{
+    const char *title = NULL;
+    const char *message = NULL;
+    const char *button1 = NULL;
+    const char *button2 = NULL;
+    uint32_t timeout_ms = 0;
+    int result;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
+            int secs = atoi(argv[i] + 3);
+            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        } else if (title == NULL) {
+            title = argv[i];
+        } else if (message == NULL) {
+            message = argv[i];
+        } else if (button1 == NULL) {
+            button1 = argv[i];
+        } else if (button2 == NULL) {
+            button2 = argv[i];
+        }
+    }
+
+    if (title == NULL || message == NULL) {
+        shell_print_usage("Usage: dialog [/t:secs] \"title\" \"message\" [button1] [button2]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    result = modal_dialog_run(title, message, button1, button2, timeout_ms);
+    batch_set_errorlevel(result < 0 ? 255 : result);
+}
+
+void shell_command_list(int argc, char **argv)
+{
+    const char *varname = NULL;
+    const char *title = NULL;
+    const char **items = NULL;
+    uint32_t timeout_ms = 0;
+    int count = 0;
+    int result;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
+            int secs = atoi(argv[i] + 3);
+            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        } else if (strncasecmp(argv[i], "/v:", 3) == 0 && strlen(argv[i]) > 3) {
+            varname = argv[i] + 3;
+        } else if (title == NULL) {
+            title = argv[i];
+        } else if (items == NULL) {
+            items = (const char **)(argv + i);
+            count = argc - i;
+            break;
+        }
+    }
+
+    if (title == NULL || count < 1) {
+        shell_print_usage("Usage: list [/t:secs] [/v:NAME] \"title\" item1 [item2...]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    result = modal_list_run(title, items, count, timeout_ms);
+    if (result < 0) {
+        batch_set_errorlevel(255);
+        return;
+    }
+
+    if (varname != NULL) {
+        shell_env_set(varname, items[result]);
+    }
+    batch_set_errorlevel(result);
+}
+
+void shell_command_ask(int argc, char **argv)
+{
+    const char *varname = "ASK_RESULT";
+    const char *prompt = NULL;
+    const char *default_text = NULL;
+    bool password = false;
+    uint32_t timeout_ms = 0;
+    char result[P4_CONFIG_ENV_VALUE_BYTES];
+    int rc;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
+            int secs = atoi(argv[i] + 3);
+            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        } else if (strncasecmp(argv[i], "/v:", 3) == 0 && strlen(argv[i]) > 3) {
+            varname = argv[i] + 3;
+        } else if (strcasecmp(argv[i], "/p") == 0) {
+            password = true;
+        } else if (prompt == NULL) {
+            prompt = argv[i];
+        } else if (default_text == NULL) {
+            default_text = argv[i];
+        }
+    }
+
+    if (prompt == NULL) {
+        shell_print_usage("Usage: ask [/t:secs] [/v:NAME] [/p] \"prompt\" [default]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    rc = modal_ask_run(prompt, default_text, password, timeout_ms,
+                       result, sizeof(result));
+    if (rc != 0) {
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    if (shell_env_set(varname, result) != ESP_OK) {
+        shell_print_error("ask: cannot set %s", varname);
+        batch_set_errorlevel(1);
+        return;
+    }
+    batch_set_errorlevel(0);
+}
+
+void shell_command_browse_batch(int argc, char **argv)
+{
+    const char *varname = "BROWSE_RESULT";
+    const char *start_path = NULL;
+    uint32_t timeout_ms = 0;
+    char selected[P4_CONFIG_TUI_BROWSE_PATH_BYTES];
+    int rc;
+
+    for (int i = 1; i < argc; i++) {
+        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
+            int secs = atoi(argv[i] + 3);
+            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        } else if (strncasecmp(argv[i], "/v:", 3) == 0 && strlen(argv[i]) > 3) {
+            varname = argv[i] + 3;
+        } else if (start_path == NULL) {
+            start_path = argv[i];
+        }
+    }
+
+    rc = modal_filebrowser_run("Browse", start_path, selected, sizeof(selected), timeout_ms);
+    if (rc != 0) {
+        batch_set_errorlevel(1);
+        shell_env_set(varname, "");
+        return;
+    }
+    if (shell_env_set(varname, selected) != ESP_OK) {
+        shell_print_error("browse: cannot set %s", varname);
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_print_ok("selected: %s", selected);
+    batch_set_errorlevel(0);
+}
+
+void shell_command_view(int argc, char **argv)
+{
+    const char *path = NULL;
+    uint32_t timeout_ms = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
+            int secs = atoi(argv[i] + 3);
+            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        } else if (path == NULL) {
+            path = argv[i];
+        }
+    }
+
+    if (path == NULL) {
+        shell_print_usage("Usage: view [/t:secs] <file>");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    int rc = modal_viewer_run("View", path, timeout_ms);
+    batch_set_errorlevel(rc == 0 ? 0 : 1);
+}
+
+void shell_command_hexview(int argc, char **argv)
+{
+    const char *path = NULL;
+    uint32_t timeout_ms = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
+            int secs = atoi(argv[i] + 3);
+            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        } else if (path == NULL) {
+            path = argv[i];
+        }
+    }
+
+    if (path == NULL) {
+        shell_print_usage("Usage: hexview [/t:secs] <file>");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    int rc = modal_hexview_run("Hexview", path, timeout_ms);
+    batch_set_errorlevel(rc == 0 ? 0 : 1);
+}
+
+void shell_command_color(int argc, char **argv)
+{
+    if (argc == 1) {
+        uint8_t fg, bg;
+        tui_get_default_color(&fg, &bg);
+        if (tui_is_active()) {
+            shell_print_field("color", "fg=%u bg=%u", fg, bg);
+        } else {
+            shell_print_field("color", "default");
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc < 2 || argc > 3) {
+        shell_print_usage("Usage: color [fg] [bg]  (0-15 or palette name)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    int fg = atoi(argv[1]);
+    int bg = (argc > 2) ? atoi(argv[2]) : 16;
+    if (fg < 0) fg = 0;
+    if (fg > 15) fg = 15;
+    if (bg < 0) bg = 0;
+    if (bg > 15 && bg != 16) bg = 16;
+    if (tui_is_active()) {
+        tui_set_default_color((uint8_t)fg, (uint8_t)bg);
+        tui_flush();
+    }
+    shell_transcript_appendf_ansi(SH_MUTE "color: fg=%s bg=%s" SH_RST "\n",
+                                   argv[1], argc > 2 ? argv[2] : "default");
+    batch_set_errorlevel(0);
+}
+
+void shell_command_locate(int argc, char **argv)
+{
+    if (argc != 3) {
+        shell_print_usage("Usage: locate <row> <col>  (1-based, 1..25 1..80)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    int row = atoi(argv[1]);
+    int col = atoi(argv[2]);
+    if (row < 1) row = 1;
+    if (row > P4_CONFIG_TUI_ROWS) row = P4_CONFIG_TUI_ROWS;
+    if (col < 1) col = 1;
+    if (col > P4_CONFIG_TUI_COLS) col = P4_CONFIG_TUI_COLS;
+    if (tui_is_active()) {
+        tui_set_cursor(row, col);
+        tui_flush();
+    }
+    /* Emit ANSI CUP via raw escape so transcript and UART agree; TUI mode handles it via CSI if active */
+    shell_transcript_appendf_ansi("\x1b[%d;%dH", row, col);
+    batch_set_errorlevel(0);
+}
+
+void shell_command_tui(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui clear");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "fullscreen")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: tui fullscreen <on|off>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "on")) {
+            tui_enter_fullscreen();
+            batch_set_errorlevel(0);
+            return;
+        } else if (shell_text_equals_ignore_case(argv[2], "off")) {
+            tui_exit_fullscreen();
+            batch_set_errorlevel(0);
+            return;
+        }
+    } else if (shell_text_equals_ignore_case(argv[1], "status")) {
+        shell_print_field("tui", "%s", tui_is_active() ? "active" : "inactive");
+        shell_print_field("fullscreen", "%s", tui_is_fullscreen() ? "on" : "off");
+        window_rect_t r = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
+        shell_print_field("transcript rect", "%dx%d at %d,%d", r.width, r.height, r.x, r.y);
+        shell_print_field("cols/rows", "%d x %d", P4_CONFIG_TUI_COLS, P4_CONFIG_TUI_ROWS);
+        batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "clear")) {
+        if (tui_is_active()) tui_clear();
+        tui_flush();
+        batch_set_errorlevel(0);
+        return;
+    }
+    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui clear");
+    batch_set_errorlevel(2);
 }
 
 /* ========================================================================
@@ -4473,14 +4954,27 @@ static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_lin
     if (*for_ptr == '/' && (for_ptr[1] == 'f' || for_ptr[1] == 'F') &&
         (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
         char *pct;
+        size_t opt_len;
 
         for_f = true;
         for_ptr += 2;
         while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
 
+        /* The interactive tokenizer strips the quotes from the DOS options
+         * string and the rejoin leaves space-separated words; the batch path
+         * passes the raw line, so the surrounding double quotes survive here.
+         * Drop a leading quote and trim a trailing quote/space so both paths
+         * feed the parser identical text. */
+        if (*for_ptr == '"') {
+            for_ptr++;
+        }
         pct = strchr(for_ptr, '%');
-        if (!shell_forf_parse_options(for_ptr, pct != NULL ? (size_t)(pct - for_ptr) : strlen(for_ptr),
-                                      &forf_opts)) {
+        opt_len = pct != NULL ? (size_t)(pct - for_ptr) : strlen(for_ptr);
+        while (opt_len > 0 && (for_ptr[opt_len - 1] == '"' ||
+                               isspace((unsigned char)for_ptr[opt_len - 1]))) {
+            opt_len--;
+        }
+        if (!shell_forf_parse_options(for_ptr, opt_len, &forf_opts)) {
             shell_transcript_append_text("for /f: malformed options\n");
             return;
         }

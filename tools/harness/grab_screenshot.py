@@ -1,24 +1,26 @@
 """
 Grab screenshot from P4MiniShell via USB-Serial-JTAG.
 Protocol: 4-byte magic "BMPX" + 4-byte LE size + raw BMP data.
+Supports --port, --out, --crop-transcript for TUI debug.
 """
 import serial
 import time
 import os
 import struct
 import sys
+import argparse
 
 PORT = "COM11"
 BAUD_RATE = 115200
 OUTPUT_DIR = r"D:\p4minishell\screenshots"
 TIMEOUT = 30
 
-def grab_screenshot():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+def grab_screenshot(port=PORT, out_dir=OUTPUT_DIR, crop_transcript=False):
+    os.makedirs(out_dir, exist_ok=True)
 
     try:
-        ser = serial.Serial(PORT, BAUD_RATE, timeout=1)
-        print(f"Connected to {PORT}")
+        ser = serial.Serial(port, BAUD_RATE, timeout=1)
+        print(f"Connected to {port}")
 
         # Wait for boot
         time.sleep(2)
@@ -120,9 +122,37 @@ def grab_screenshot():
         return None
 
 if __name__ == "__main__":
-    result = grab_screenshot()
+    parser = argparse.ArgumentParser(description="Grab screenshot from P4MiniShell")
+    parser.add_argument("--port", default=PORT, help="Serial port (default COM11)")
+    parser.add_argument("--out", default=OUTPUT_DIR, help="Output directory")
+    parser.add_argument("--crop-transcript", action="store_true", help="Crop to transcript ROI via Pillow")
+    args = parser.parse_args()
+    result = grab_screenshot(port=args.port, out_dir=args.out, crop_transcript=args.crop_transcript)
     if result:
         print(f"\nDone! Screenshot saved to: {result}")
+        if args.crop_transcript:
+            try:
+                from PIL import Image
+                import json
+                # Transcript ROI: header ~56px, input ~56px, keyboard 0-280px
+                # Use full display 1024x600, crop to transcript region for TUI debug
+                img = Image.open(result)
+                w, h = img.size
+                # Estimate transcript rect: y=56, height= h -56 -56 - (kb if visible)
+                # For now, crop to middle 80% as transcript
+                header_h = 56
+                input_h = 56
+                transcript_h = h - header_h - input_h
+                cropped = img.crop((0, header_h, w, header_h + transcript_h))
+                crop_path = result.replace(".bmp", "_transcript.bmp")
+                cropped.save(crop_path)
+                print(f"Cropped transcript: {crop_path} ({cropped.size})")
+                # Save meta
+                meta = {"width": w, "height": h, "transcript": {"x": 0, "y": header_h, "w": w, "h": transcript_h}, "crop": crop_path}
+                with open(result.replace(".bmp", ".json"), "w") as f:
+                    json.dump(meta, f, indent=2)
+            except Exception as e:
+                print(f"Crop failed (Pillow not installed?): {e}")
         sys.exit(0)
     else:
         sys.exit(1)

@@ -146,6 +146,54 @@ void command_init(void);
 /** Check if the command module is initialized. */
 bool command_is_initialized(void);
 
+/* ========================================================================
+ * APP DISCOVERY / LAUNCH
+ * ======================================================================== */
+
+/**
+ * Resolve and run a `.bat` app by name (PATH resolution, then the conventional
+ * `sd:/APPS` directory). Used by the `launch` command and by the boot-time
+ * "offer to launch" hook. Runs synchronously on the calling task.
+ *
+ * @param name  App name, with or without the `.bat` extension.
+ * @return true when the app was found and launched.
+ */
+bool shell_launch_app(const char *name);
+
+/* ========================================================================
+ * DATABASE (`db`)
+ * ======================================================================== */
+
+/**
+ * `db` — Palm-OS-style SD-backed record store. argv-verb dispatcher over the
+ * `db` core (components/db). See command.md for the full verb surface.
+ * Sets ERRORLEVEL 0 (ok/found) / 1 (not found / empty) / 2 (usage / I/O).
+ */
+void shell_command_db(int argc, char **argv);
+
+/**
+ * `alarm` — SD-persisted alarms (components/alarm). argv-verb dispatcher:
+ * add / list / del / enable / disable / status / purge. Sets ERRORLEVEL
+ * 0 (ok) / 1 (not found / none due) / 2 (usage / I/O).
+ */
+void shell_command_alarm(int argc, char **argv);
+
+/**
+ * `cal` — thin calendar view over the alarm store: `today`, `next`, or
+ * `YYYY-MM`. Sets ERRORLEVEL 0/1/2.
+ */
+void shell_command_cal(int argc, char **argv);
+
+/**
+ * `gfind` — Global Find across the structured "apps" (Palm-style): db records
+ * and alarm/calendar events, searched through the existing db_find / alarm_list
+ * APIs (no parallel search logic). `/b` = bare machine-readable lines,
+ * `/i` = case-insensitive, `/db:name` restricts to one database,
+ * `/noalarms` / `/nodb` exclude a store. ERRORLEVEL 0 (matches) / 1 (none) /
+ * 2 (usage / I/O).
+ */
+void shell_command_gfind(int argc, char **argv);
+
 #ifdef __cplusplus
 }
 #endif

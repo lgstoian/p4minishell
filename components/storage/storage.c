@@ -162,11 +162,24 @@ void storage_sd_ensure_dma_buffer(void)
         buffer_size = sector_size;
     }
 
-    void *buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    /* At boot the DMA-capable heap is contended (Wi-Fi/SDIO, USB and audio
+     * all grab DMA blocks concurrently), so a 4 KB contiguous block may not
+     * be free even though smaller ones are. Halve down to one sector before
+     * giving up; any cached size beats per-op allocation. */
+    void *buffer = NULL;
+    while (buffer == NULL && buffer_size >= sector_size) {
+        buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+        if (buffer == NULL) {
+            buffer_size /= 2;
+        }
+    }
     if (buffer == NULL) {
-        ESP_LOGW(STORAGE_TAG, "SD DMA buffer pre-allocation failed (%u B); falling back to per-op allocation",
-                 (unsigned int)buffer_size);
+        ESP_LOGW(STORAGE_TAG, "SD DMA buffer pre-allocation failed; falling back to per-op allocation");
         return;
+    }
+    chunk = buffer_size / sector_size;
+    if (chunk < 1) {
+        chunk = 1;
     }
 
     bsp_sdcard->host.dma_aligned_buffer = buffer;
@@ -522,23 +535,37 @@ esp_err_t shell_resolve_target_from_source(const char *source_path,
 
 void shell_sd_format_size(uint64_t size_bytes, char *output, size_t output_size)
 {
+    /* Integer-only formatting: newlib float printf (%f/%g) pulls in _dtoa_r,
+     * which needs ~2 KB of stack and heap locks. Called once per `dir` line
+     * on the shared command-worker stack (already deep under /S recursion),
+     * it aborted the board (lock_init_generic). One decimal via integers. */
     static const char *units[] = {"B", "KiB", "MiB", "GiB"};
-    double value = (double)size_bytes;
+    static const uint64_t divisors[] = {1ULL, 1024ULL, 1024ULL * 1024ULL,
+                                        1024ULL * 1024ULL * 1024ULL};
     size_t unit_index = 0;
 
     if (output == NULL || output_size == 0) {
         return;
     }
 
-    while (value >= 1024.0 && unit_index < (sizeof(units) / sizeof(units[0])) - 1) {
-        value /= 1024.0;
+    while (unit_index + 1 < sizeof(units) / sizeof(units[0]) &&
+           size_bytes >= divisors[unit_index + 1]) {
         unit_index++;
     }
 
     if (unit_index == 0) {
         snprintf(output, output_size, "%llu %s", (unsigned long long)size_bytes, units[unit_index]);
     } else {
-        snprintf(output, output_size, "%.1f %s", value, units[unit_index]);
+        uint64_t divisor = divisors[unit_index];
+        uint64_t whole = size_bytes / divisor;
+        uint64_t tenth = ((size_bytes % divisor) * 10ULL + divisor / 2ULL) / divisor;
+        if (tenth >= 10ULL) {
+            whole += 1ULL;
+            tenth = 0ULL;
+        }
+        snprintf(output, output_size, "%llu.%llu %s",
+                 (unsigned long long)whole, (unsigned long long)tenth,
+                 units[unit_index]);
     }
 }
 

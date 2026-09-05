@@ -10,9 +10,9 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.32.8
-# Last updated: 2026-08-15 (memory-hardening: cached SDMMC DMA buffer, transcript scrollback auto-trim, rotate thread-safety lock)
-config_version: "0.32.8"
+# Version: 0.35.2
+# Last updated: 2026-09-05 (cleanup: root one-shot scripts quarantined to tools/harness, browse verb unified on P4_CONFIG_TUI_BROWSE_PATH_BYTES, shell layering fix, root CMake 23 dirs, yaml/sdkconfig drift fixed, gfind bounds via P4_CONFIG_*)
+config_version: "0.35.2"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -44,30 +44,43 @@ shell_identity:
     value: "PS \\> "
     type: string
     description: "Prompt string on input line and serial console (assembled from P4_CONFIG_PS_PREFIX, P4_CONFIG_PS_PATH_SEPARATOR, and P4_CONFIG_PS_SUFFIX in the C header)"
+  ps_color_parameter:
+    value: 37
+    type: int
+    description: "ANSI SGR for parameter/flag names in output (P4_CONFIG_PS_COLOR_PARAMETER)."
+  ps_color_subsystem:
+    value: 96
+    type: int
+    description: "ANSI SGR for subsystem/module labels such as [wifi] (P4_CONFIG_PS_COLOR_SUBSYSTEM)."
+  ps_color_heading:
+    value: 93
+    type: int
+    description: "ANSI SGR for heading/title text (P4_CONFIG_PS_COLOR_HEADING)."
 
 # ---- Transcript and Command Buffers ----
 buffers:
   transcript_bytes:
-    value: 8192
+    value: 65536
     type: size_t
     description: >-
       Maximum bytes stored in the on-screen transcript buffer (scrollback).
       The buffer is allocated from PSRAM (with an internal-RAM fallback) so
       it does not compete with the DMA-capable heap used by the WiFi/SDIO
-      transport mempool and the USB-Serial/JTAG ring buffers. Reduced from
-      16384 in v0.32.8 to halve the internal-RAM footprint of the LVGL span
-      group that renders the scrollback (each span carries per-span overhead
-      in the internal heap; 8192 bytes is still ~80 lines of history).
-    range: "1024..32768"
+      transport mempool and the USB-Serial/JTAG ring buffers. Raised to
+      65536 in v0.35.5: PSRAM is plentiful and the render staging copies
+      moved to PSRAM as well, so long scrollback no longer costs internal RAM.
+    range: "1024..65536"
   transcript_recolor_bytes:
-    value: 8192
+    value: 65536
     type: size_t
     description: >-
       Maximum bytes staged for the on-screen transcript span group. The staged
       copy is the raw ANSI transcript, so it only needs to hold the same size
-      as the transcript itself (the span group renders SGR escapes directly,
-      no recolor inflation).
-    range: "1024..32768"
+      as the transcript itself (recolor == transcript; the span group renders
+      SGR escapes directly, no recolor inflation). Staged in PSRAM since
+      v0.35.2 (was internal DRAM, which forced the very trims it existed to
+      survive).
+    range: "1024..65536"
   transcript_scroll_step:
     value: 60
     type: int
@@ -84,9 +97,9 @@ buffers:
       Submitting a command always forces a jump to the bottom regardless.
     range: "0..200"
   async_transcript_bytes:
-    value: 2048
+    value: 512
     type: size_t
-    description: "Maximum bytes in async transcript staging buffer"
+    description: "Maximum bytes in async transcript staging buffer (reduced to 512 in v0.35.3)"
     range: "256..8192"
   command_bytes:
     value: 4096
@@ -329,6 +342,72 @@ windows:
     description: "Minimum transcript height in pixels"
     range: "20..200"
 
+# ---- TUI / Modal Surfaces ----
+# Managed by: components/tui/tui.c + components/modal/modal_surf.c
+# Logical grid (COLS x ROWS) is the DOS-like coordinate system batch files address
+# with draw/locate (1-based). The pixel rect follows the transcript region
+# dynamically (rotation / keyboard visibility).
+tui:
+  cols:
+    value: 80
+    type: int
+    description: "Logical TUI grid columns (DOS 80 is the default; pixel width scales to the live transcript region)"
+    range: "40..120"
+  rows:
+    value: 25
+    type: int
+    description: "Logical TUI grid rows (DOS 25 is the default; pixel height scales to the live transcript region)"
+    range: "15..40"
+  window_max:
+    value: 4
+    type: int
+    description: "Maximum layered TUI windows a batch app may compose"
+    range: "1..8"
+  dialog_width_pct:
+    value: 60
+    type: int
+    description: "Dialog width as percentage of the current transcript region width"
+    range: "40..90"
+  list_visible:
+    value: 8
+    type: int
+    description: "Visible rows in a list / file-browser modal"
+    range: "4..16"
+  list_max_items:
+    value: 64
+    type: int
+    description: "Maximum items list will show (truncates with a warning)"
+    range: "16..128"
+  browse_list_limit:
+    value: 128
+    type: int
+    description: "Maximum entries the file browser lists per directory"
+    range: "32..256"
+  browse_path_bytes:
+    value: 320
+    type: size_t
+    description: "Maximum bytes for a file-browser selected path"
+    range: "128..512"
+  view_max_bytes:
+    value: 65536
+    type: size_t
+    description: "Maximum file bytes the text viewer / hex viewer will load"
+    range: "4096..262144"
+  view_page_lines:
+    value: 20
+    type: int
+    description: "Lines per page in the viewer pager"
+    range: "10..30"
+  timeout_default_ms:
+    value: 0
+    type: uint32_t
+    description: "Default auto-cancel timeout for modal surfaces in ms (0 = no timeout)"
+    range: "0..60000"
+  alt_screen:
+    value: 1
+    type: bool
+    description: "When 1, alt-screen save/restore (ESC[?1049h/l) is honoured"
+
 # ---- Wi-Fi ----
 wifi:
   ssid_bytes:
@@ -537,6 +616,11 @@ http_server:
     value: 1
     type: bool
     description: "Auto-start the server when the station gets an IP and stop it on disconnect; when 0 only the manual httpd start command starts it"
+  autostart_retry_secs:
+    value: 60
+    type: int
+    description: "Cooldown in seconds before auto-start retries after a failed start (e.g. ESP_ERR_HTTPD_TASK while the heap is tight); manual httpd start bypasses it"
+    range: "5..3600"
   auth_username:
     value: "admin"
     type: string
@@ -873,9 +957,9 @@ boot_scripting:
     description: "I/O buffer size for SD file operations"
     range: "32..1024"
   sd_dma_buffer_bytes:
-    value: 8192
+    value: 4096
     type: size_t
-    description: "Pre-allocated SDMMC DMA scratch buffer cached on the host at mount; prevents per-transaction DMA allocation failures (allocate_dma_buf: not enough mem) when the internal DMA-capable heap fragments under load. Must be a multiple of the 512 B card sector; larger values speed multi-block transfers but reserve internal RAM permanently."
+    description: "Pre-allocated SDMMC DMA scratch buffer cached on the host at mount (4096 in v0.35.1, 8 sectors); prevents per-transaction DMA allocation failures (allocate_dma_buf: not enough mem) when the internal DMA-capable heap fragments under load. Must be a multiple of the 512 B card sector; larger values speed multi-block transfers but reserve internal RAM permanently."
     range: "512..65536"
   config_max_bytes:
     value: 16384
@@ -888,10 +972,10 @@ boot_scripting:
     description: "Maximum bytes the generic INI (ini command, applib state) reads/writes for a KEY=VALUE config file on the SD card"
     range: "4096..65536"
   transcript_internal_trim_bytes:
-    value: 49152
+    value: 4096
     type: size_t
-    description: "Internal (DMA-capable) heap free threshold in bytes that triggers an automatic transcript scrollback trim. The LVGL span group rendering the coloured transcript owns per-span overhead in the internal heap; when free internal RAM drops below this value the shell drops the oldest half of the scrollback and frees the spans so a tiny stdio allocation (newlib FILE lock) never aborts the board."
-    range: "16384..1048576"
+    description: "Internal (DMA-capable) heap free threshold in bytes that triggers an automatic transcript scrollback trim. Lowered to 4096 in v0.35.4 (dir scratch buffers moved to PSRAM, so internal heap rarely drops below this); trim keeps newest 3/4 and is rate-limited to one per 2 s."
+    range: "2048..1048576"
   temp_dir_name:
     value: "tmp"
     type: string
@@ -1091,6 +1175,26 @@ batch_env:
     type: size_t
     description: "Blocks of this size or larger are allocated from PSRAM (when available) by the applib memory helpers; smaller blocks use the internal heap"
     range: "64..65536"
+  app_max:
+    value: 8
+    type: size_t
+    description: "Maximum number of native apps registered in the applib app table (native-app ABI: app_register)"
+    range: "1..32"
+  app_name_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum length of a registered native app's command name (native-app ABI)"
+    range: "8..64"
+  app_desc_bytes:
+    value: 64
+    type: size_t
+    description: "Maximum length of a registered native app's one-line description (native-app ABI)"
+    range: "16..128"
+  launch_max:
+    value: 16
+    type: size_t
+    description: "Maximum number of .bat apps surfaced by the launch command / menu (PATH + sd:/APPS discovery)"
+    range: "4..64"
   line_continuation_max:
     value: 8
     type: int
@@ -1144,6 +1248,11 @@ batch_env:
     type: uint32_t
     description: "Delay before esp_restart() so the reboot message reaches the transcript"
     range: "0..5000"
+  delay_max_ms:
+    value: 10000
+    type: uint32_t
+    description: "Maximum milliseconds accepted by the `delay` command (a pure wait for demos/melodies; `sleep` stays light-sleep)"
+    range: "100..600000"
   text_line_bytes:
     value: 512
     type: size_t
@@ -1562,10 +1671,13 @@ task_stacks:
     description: "Wi-Fi initialization background task stack"
     range: "4096..16384"
   command:
-    value: 8192
+    value: 32768
     type: size_t
-    description: "Shell command worker task stack"
-    range: "4096..32768"
+    description: >-
+      Shell command worker task stack (P4_CONFIG_COMMAND_TASK_STACK). Raised
+      24576 -> 32768 to accommodate recursive dir /S and deep batch+TUI
+      call stacks; 48 KB was too large for task creation on ESP32-P4.
+    range: "4096..65536"
   uart_console:
     value: 12288
     type: size_t
@@ -1830,3 +1942,100 @@ build_constraints:
     description: >-
       Mirror of CONFIG_ESP_WIFI_SOFTAP_SUPPORT for the esp_wifi_remote component.
       Both symbols must be disabled together. Pinned in sdkconfig.defaults.
+# ---- Database (db) ----
+database:
+  db_max_databases:
+    value: 64
+    type: int
+    description: "Maximum number of named databases on the card (sd:/DBS/<name>.DB/)."
+  db_max_records:
+    value: 256
+    type: int
+    description: "Maximum records (soft-deleted included) in a single database."
+  db_record_max_bytes:
+    value: 4096
+    type: int
+    description: "Maximum payload bytes for a single record (text or binary)."
+  db_find_max:
+    value: 64
+    type: int
+    description: "Maximum results returned by a db find scan (bounded, linear)."
+  db_name_bytes:
+    value: 32
+    type: int
+    description: "Maximum characters in a database name (the directory part of the path)."
+  db_key_bytes:
+    value: 32
+    type: int
+    description: "Maximum characters in a record key."
+  db_index_line_bytes:
+    value: 128
+    type: int
+    description: "Maximum length of one INDEX.TXT line (id cat flags key size)."
+  db_category_label_bytes:
+    value: 24
+    type: int
+    description: "Maximum length of a category label (CATEGORIES.INI)."
+  db_category_count:
+    value: 16
+    type: int
+    description: "Number of categories (0..15), Palm-OS style."
+  db_id_bytes:
+    value: 8
+    type: int
+    description: "Maximum characters in the stored creator/type id strings."
+  db_export_max_records:
+    value: 256
+    type: int
+    description: "Maximum lines in one db export / db import text file."
+  db_export_max_bytes:
+    value: 262144
+    type: int
+    description: "Maximum bytes in one db export / db import text file."
+  db_flag_secret:
+    value: 1
+    type: int
+    description: "Record flag bit for secret/redacted payloads (P4_CONFIG_DB_FLAG_SECRET)."
+
+# ---- Alarm / Calendar (alarm, cal) ----
+alarm:
+  alarm_max_events:
+    value: 64
+    type: int
+    description: "Maximum events stored at once (also bounds the checker's per-poll scan)."
+  alarm_title_bytes:
+    value: 48
+    type: int
+    description: "Maximum characters in an alarm title."
+  alarm_msg_bytes:
+    value: 160
+    type: int
+    description: "Maximum characters in an alarm message (header notification width)."
+  alarm_poll_ms:
+    value: 30000
+    type: int
+    description: "Checker poll interval in milliseconds (fires within this granularity)."
+  alarm_task_stack:
+    value: 8192
+    type: int
+    description: "Stack size for the background alarm checker task (snprintf + event/path locals need headroom)."
+  alarm_task_priority:
+    value: 1
+    type: int
+    description: "Priority of the alarm checker task."
+  alarm_path:
+    value: "sd:/ALARMS"
+    type: string
+    description: "Base directory for the alarm store (INDEX.INI + one E<id>.INI per event)."
+  alarm_catchup_on_boot:
+    value: 1
+    type: bool
+    description: "Fire once on boot for alarms that became due while powered off."
+  alarm_default_notify_secs:
+    value: 5
+    type: int
+    description: "Default header-notification timeout in seconds when an alarm fires."
+  alarm_enable_run_action:
+    value: 1
+    type: bool
+    description: "Compile out the /run: batch action entirely for size (0 = keep it)."

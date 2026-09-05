@@ -24,12 +24,10 @@ void test_variable_expansion_env_var(void)
     shell_expand_variables("echo %MYVAR%", out, sizeof(out));
     TEST_ASSERT_EQUAL_STRING("echo hello", out);
 
-    /* Undefined variable is left untouched (not expanded to empty) — the
-     * literal %UNDEFINED% passes through so the user can see it was not
-     * substituted. This matches the documented "unknown names left untouched"
-     * rule in batch.h. */
+    /* Undefined variable expands to the empty string (cmd.exe parity), so the
+     * DOS `if "%var%"==""` idiom works for unset variables. */
     shell_expand_variables("echo %UNDEFINED%", out, sizeof(out));
-    TEST_ASSERT_EQUAL_STRING("echo %UNDEFINED%", out);
+    TEST_ASSERT_EQUAL_STRING("echo ", out);
 }
 
 void test_variable_expansion_empty_name(void)
@@ -116,6 +114,39 @@ void test_variable_expansion_output_truncated(void)
     shell_expand_variables("%LONG%", out, sizeof(out));
     /* Should be truncated to fit the buffer. */
     TEST_ASSERT_LESS_THAN(8, strlen(out));
+}
+
+/* ========================================================================
+ * DYNAMIC PSEUDO-VARIABLES (%DATE% %TIME% %RANDOM% %CD%)
+ * ======================================================================== */
+
+void test_variable_expansion_pseudo_vars(void)
+{
+    char out[256];
+    size_t i;
+
+    /* %RANDOM% expands to a 0..32767 decimal integer, never the literal. */
+    shell_expand_variables("x%RANDOM%y", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "%RANDOM%") == NULL);
+    TEST_ASSERT_TRUE(strlen(out) >= 3);   /* "x" + at least one digit + "y" */
+    for (i = 1; i + 1 < strlen(out); i++) {
+        TEST_ASSERT_TRUE(out[i] >= '0' && out[i] <= '9');
+    }
+
+    /* %CD% expands to the working directory (possibly empty), never literal. */
+    shell_expand_variables("%CD%", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "%CD%") == NULL);
+
+    /* %DATE% -> MM-DD-YYYY, %TIME% -> HH:MM:SS, never literal. */
+    shell_expand_variables("%DATE%", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "%DATE%") == NULL);
+    TEST_ASSERT_TRUE(strlen(out) == 10);
+    TEST_ASSERT_TRUE(out[2] == '-' && out[5] == '-');
+
+    shell_expand_variables("%TIME%", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "%TIME%") == NULL);
+    TEST_ASSERT_TRUE(strlen(out) == 8);
+    TEST_ASSERT_TRUE(out[2] == ':' && out[5] == ':');
 }
 
 /* ========================================================================

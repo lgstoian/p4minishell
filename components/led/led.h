@@ -31,6 +31,7 @@ typedef enum {
     LED_EVENT_WIFI_ERROR,        /**< Red pulse (transient). */
     LED_EVENT_HTTPD_STARTED,     /**< Blue pulse when the HTTP server starts. */
     LED_EVENT_HTTPD_STOPPED,     /**< Transient cue back to the status colour. */
+    LED_EVENT_ALARM,             /**< Cyan pulse when an alarm fires. */
 } led_event_t;
 
 /** Persistent rendering modes. */

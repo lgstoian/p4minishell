@@ -13,6 +13,7 @@
 #include "p4minishell_config.h"
 #include "storage.h"
 #include "shell.h"
+#include "modal.h"
 #include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -1852,12 +1853,11 @@ size_t editor_format_line_number(size_t line, unsigned width,
 }
 
 /* ========================================================================
- * SESSION (worker task)
+ * MODAL SURFACE (worker task)
  * ======================================================================== */
 
-#define EDITOR_EVENT_SAVE   (1 << 0)
-#define EDITOR_EVENT_QUIT   (1 << 1)
-#define EDITOR_EVENT_CLOSED (1 << 2)
+/* Session event bits. MODAL_EVENT_CLOSE_REQUEST / MODAL_EVENT_CLOSED live in modal.h. */
+#define EDITOR_EVENT_SAVE   (1 << 2)
 
 struct editor_session {
     editor_control_t control;
@@ -1870,6 +1870,14 @@ struct editor_session {
  * view is torn down). Lets the console reader route serial input to the
  * editor even during the async view-open window. */
 static volatile bool s_session_active;
+
+/** Per-modal-run context handed to the shared modal runtime. */
+typedef struct {
+    const char *path_arg;
+    int *errorlevel_out;
+    esp_err_t result;
+    editor_session_t *session;
+} editor_modal_ctx_t;
 
 /** Report whether a modal editor session is running (view open or opening). */
 bool editor_session_is_active(void)
@@ -1891,7 +1899,7 @@ static void editor_session_open_cb(void *user_data)
         /* The view could not be created; wake the worker so the session does
          * not block forever waiting for a quit that will never come. */
         session->open_failed = true;
-        xEventGroupSetBits(session->event_group, EDITOR_EVENT_QUIT);
+        xEventGroupSetBits(session->event_group, MODAL_EVENT_CLOSE_REQUEST);
     }
 }
 
@@ -1900,162 +1908,302 @@ static void editor_session_close_cb(void *user_data)
     editor_session_t *session = (editor_session_t *)user_data;
     if (session != NULL) {
         editor_view_close();
-        xEventGroupSetBits(session->event_group, EDITOR_EVENT_CLOSED);
+        xEventGroupSetBits(session->event_group, MODAL_EVENT_CLOSED);
     }
 }
 
-esp_err_t editor_session_run(const char *path, int *errorlevel)
+static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
 {
-    editor_session_t *session = calloc(1, sizeof(editor_session_t));
+    editor_modal_ctx_t *mctx = (editor_modal_ctx_t *)ctx;
+    const char *path = mctx->path_arg;
     bool unnamed = (path == NULL || path[0] == '\0');
-    esp_err_t result = ESP_OK;
     char resolved[P4_CONFIG_SD_PATH_BYTES] = "";
+    editor_session_t *session = calloc(1, sizeof(*session));
 
-    if (errorlevel != NULL) {
-        *errorlevel = 0;
-    }
     if (session == NULL) {
-        return ESP_ERR_NO_MEM;
+        mctx->result = ESP_ERR_NO_MEM;
+        return false;
     }
 
     /* Resolve the save path now so save operations don't re-resolve. */
     if (!unnamed) {
         if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
             free(session);
-            return ESP_ERR_INVALID_ARG;
+            mctx->result = ESP_ERR_INVALID_ARG;
+            return false;
         }
     }
 
     if (unnamed) {
         session->control.doc = editor_doc_new(NULL);
-    } else {
-        if (!editor_file_missing(resolved)) {
-            /* The file exists (or SD is present): a load failure now is a
-             * real error. Never fall through to a fresh buffer here — the
-             * user would save an empty buffer over the original file. */
-            session->control.doc = editor_doc_load(resolved);
-            if (session->control.doc == NULL) {
-                free(session);
-                shell_print_error("edit: cannot load '%s' (over the %u KB / %u line "
-                                  "editor limit, or an I/O error)",
-                                  path,
-                                  (unsigned)(P4_CONFIG_EDITOR_MAX_BYTES / 1024),
-                                  (unsigned)P4_CONFIG_EDITOR_MAX_LINES);
-                return ESP_ERR_NOT_SUPPORTED;
-            }
-        } else {
-            /* Missing file: start a new buffer bound to the path. */
-            session->control.doc = editor_doc_new(resolved);
-            if (session->control.doc == NULL) {
-                free(session);
-                return ESP_ERR_NO_MEM;
-            }
+    } else if (!editor_file_missing(resolved)) {
+        /* The file exists (or SD is present): a load failure now is a
+         * real error. Never fall through to a fresh buffer here — the
+         * user would save an empty buffer over the original file. */
+        session->control.doc = editor_doc_load(resolved);
+        if (session->control.doc == NULL) {
+            free(session);
+            shell_print_error("edit: cannot load '%s' (over the %u KB / %u line "
+                              "editor limit, or an I/O error)",
+                              path,
+                              (unsigned)(P4_CONFIG_EDITOR_MAX_BYTES / 1024),
+                              (unsigned)P4_CONFIG_EDITOR_MAX_LINES);
+            mctx->result = ESP_ERR_NOT_SUPPORTED;
+            return false;
         }
+    } else {
+        /* Missing file: start a new buffer bound to the path. */
+        session->control.doc = editor_doc_new(resolved);
     }
 
     if (session->control.doc == NULL) {
         free(session);
-        return ESP_ERR_NO_MEM;
+        mctx->result = ESP_ERR_NO_MEM;
+        return false;
     }
 
-    session->event_group = xEventGroupCreate();
-    if (session->event_group == NULL) {
-        editor_doc_free(session->control.doc);
-        free(session);
-        return ESP_ERR_NO_MEM;
-    }
-    session->control.event_group = session->event_group;
+    session->event_group = event_group;
+    session->control.event_group = event_group;
 
     /* Mark the session active BEFORE the async view-open so serial input
      * arriving while the view is opening routes to the editor, not the shell. */
     s_session_active = true;
+    mctx->session = session;
 
     /* Open the view on the LVGL task via an async call. */
     if (lv_async_call(editor_session_open_cb, session) != LV_RESULT_OK) {
-        vEventGroupDelete(session->event_group);
-        editor_doc_free(session->control.doc);
         s_session_active = false;
+        editor_doc_free(session->control.doc);
         free(session);
-        return ESP_FAIL;
+        mctx->session = NULL;
+        mctx->result = ESP_FAIL;
+        return false;
     }
 
-    /* Service saves and wait for quit. SAVE is processed before QUIT so a
-     * save requested in the same instant as a quit is never dropped. */
-    while (!session->exited) {
-        EventBits_t bits = xEventGroupWaitBits(session->event_group,
-                                               EDITOR_EVENT_SAVE | EDITOR_EVENT_QUIT,
-                                               pdTRUE, pdFALSE, pdMS_TO_TICKS(100));
+    return true;
+}
 
-        if (bits & EDITOR_EVENT_SAVE) {
-            esp_err_t err = ESP_ERR_INVALID_ARG;
-            editor_control_t *control = &session->control;
+static void editor_surface_service(void *ctx, EventBits_t bits)
+{
+    editor_modal_ctx_t *mctx = (editor_modal_ctx_t *)ctx;
+    editor_session_t *session = mctx->session;
+    editor_control_t *control;
+    esp_err_t err;
 
-            /* A Save-As request carries an explicit target path; otherwise
-             * save to the document's source path, and fall back to a
-             * generated name only for an unnamed buffer. */
-            if (control->save_as_path[0] != '\0') {
-                char save_as_resolved[P4_CONFIG_SD_PATH_BYTES] = "";
-                if (shell_fs_resolve_path(control->save_as_path,
-                                          save_as_resolved,
-                                          sizeof(save_as_resolved)) == ESP_OK) {
-                    err = editor_doc_save(control->doc, save_as_resolved);
-                    if (err == ESP_OK) {
-                        editor_doc_set_path(control->doc, save_as_resolved);
-                    }
-                } else {
-                    err = ESP_ERR_INVALID_ARG;
-                }
-                control->save_as_path[0] = '\0';
-            } else if (control->doc != NULL && control->doc->path[0] != '\0') {
-                err = editor_doc_save(control->doc, control->doc->path);
-            } else if (control->doc != NULL) {
-                /* Unnamed buffer: fall back to a generated name. */
-                err = editor_doc_save(control->doc, "EDIT.NEW");
+    if (session == NULL || (bits & EDITOR_EVENT_SAVE) == 0) {
+        return;
+    }
+
+    control = &session->control;
+    err = ESP_ERR_INVALID_ARG;
+
+    /* A Save-As request carries an explicit target path; otherwise
+     * save to the document's source path, and fall back to a
+     * generated name only for an unnamed buffer. */
+    if (control->save_as_path[0] != '\0') {
+        char save_as_resolved[P4_CONFIG_SD_PATH_BYTES] = "";
+        if (shell_fs_resolve_path(control->save_as_path,
+                                  save_as_resolved,
+                                  sizeof(save_as_resolved)) == ESP_OK) {
+            err = editor_doc_save(control->doc, save_as_resolved);
+            if (err == ESP_OK) {
+                editor_doc_set_path(control->doc, save_as_resolved);
             }
-            control->save_ok = (err == ESP_OK);
-            if (err != ESP_OK) {
-                result = err;
+        } else {
+            err = ESP_ERR_INVALID_ARG;
+        }
+        control->save_as_path[0] = '\0';
+    } else if (control->doc != NULL && control->doc->path[0] != '\0') {
+        err = editor_doc_save(control->doc, control->doc->path);
+    } else if (control->doc != NULL) {
+        /* Unnamed buffer: fall back to a generated name. */
+        err = editor_doc_save(control->doc, "EDIT.NEW");
+    }
+    control->save_ok = (err == ESP_OK);
+    if (err != ESP_OK) {
+        mctx->result = err;
+    }
+
+    /* Refresh the status bar on the LVGL task. */
+    lv_async_call(editor_view_notify_saved_cb, (void *)(intptr_t)(err == ESP_OK));
+}
+
+static void editor_surface_close(void *ctx)
+{
+    editor_modal_ctx_t *mctx = (editor_modal_ctx_t *)ctx;
+    editor_session_t *session = mctx->session;
+
+    if (session != NULL) {
+        lv_async_call(editor_session_close_cb, session);
+    }
+}
+
+static bool editor_surface_handle_usb_key(void *ctx, uint8_t key_code, uint8_t modifiers, char ascii)
+{
+    (void)ctx;
+    if (!editor_view_is_open()) {
+        return false;
+    }
+    editor_view_handle_usb_key(key_code, modifiers, ascii);
+    return true;
+}
+
+/* Serial console control verbs accepted while the editor is open. */
+static bool editor_serial_is_verb(const char *line, const char *verb)
+{
+    return line[0] == '\\' && strcasecmp(line + 1, verb) == 0;
+}
+
+/* Per-call context for async serial-line dispatch to the LVGL task. */
+typedef struct {
+    char *line;
+    editor_session_t *session;
+} editor_serial_line_ctx_t;
+
+/* Runs on the LVGL task: feeds one serial line's characters into the editor. */
+static void editor_serial_line_cb(void *user_data)
+{
+    editor_serial_line_ctx_t *ctx = (editor_serial_line_ctx_t *)user_data;
+    const char *line;
+    size_t i;
+    size_t len;
+
+    if (ctx == NULL || ctx->line == NULL) {
+        free(ctx);
+        return;
+    }
+
+    line = ctx->line;
+    len = strlen(line);
+
+    if (editor_serial_is_verb(line, "q") || editor_serial_is_verb(line, "quit")) {
+        if (editor_view_is_open()) {
+            editor_view_handle_usb_key(0x29, 0, 0); /* Esc -> quit */
+        } else {
+            editor_view_set_quit_requested();
+        }
+    } else if (editor_serial_is_verb(line, "s") || editor_serial_is_verb(line, "save")) {
+        if (editor_view_is_open()) {
+            editor_view_handle_usb_key(0, 0x01, 's'); /* Ctrl+S */
+        } else {
+            editor_view_set_save_requested();
+        }
+    } else if (editor_serial_is_verb(line, "u") || editor_serial_is_verb(line, "undo")) {
+        editor_view_handle_usb_key(0, 0x01, 'z');
+    } else if (editor_serial_is_verb(line, "f") || editor_serial_is_verb(line, "find")) {
+        editor_view_handle_usb_key(0, 0x01, 'f'); /* Ctrl+F */
+    } else if (editor_serial_is_verb(line, "g") || editor_serial_is_verb(line, "goto")) {
+        editor_view_handle_usb_key(0, 0x01, 'g'); /* Ctrl+G -> Go to line */
+    } else if (editor_serial_is_verb(line, "o") || editor_serial_is_verb(line, "saveas")) {
+        editor_view_handle_usb_key(0, 0x01, 'o'); /* Ctrl+O -> Save As */
+    } else if (editor_serial_is_verb(line, "r") || editor_serial_is_verb(line, "redo")) {
+        editor_view_handle_usb_key(0, 0x03, 'z'); /* Ctrl+Shift+Z */
+    } else if (editor_serial_is_verb(line, "a") || editor_serial_is_verb(line, "selectall")) {
+        editor_view_handle_usb_key(0, 0x01, 'a');
+    } else {
+        if (!editor_view_is_open()) {
+            free(ctx->line);
+            free(ctx);
+            return;
+        }
+        /* A line of typed text: insert each character, then a newline. */
+        for (i = 0; i < len; i++) {
+            char ch = line[i];
+            if (ch == '\\' && i == 0 && len > 1) {
+                /* "\foo" that was not a known verb inserts a literal backslash
+                 * and the rest of the line as text. */
+                editor_view_handle_usb_key(0, 0, '\\');
+                continue;
             }
-
-            /* Refresh the status bar on the LVGL task. */
-            lv_async_call(editor_view_notify_saved_cb, (void *)(intptr_t)(err == ESP_OK));
+            if (ch >= 0x20) {
+                editor_view_handle_usb_key(0, 0, ch);
+            }
         }
-
-        if (bits & EDITOR_EVENT_QUIT) {
-            session->exited = true;
-            break;
-        }
+        editor_view_handle_usb_key(0x28, 0, '\n'); /* Enter -> newline */
     }
 
-    /* Close the view on the LVGL task and wait for it to release the doc.
-     * Poll the view state alongside the CLOSED event so a slow LVGL task can
-     * never make the worker free a document the view still references. */
-    lv_async_call(editor_session_close_cb, session);
-    {
-        TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
-        while (editor_view_is_open() &&
-               (xEventGroupGetBits(session->event_group) & EDITOR_EVENT_CLOSED) == 0 &&
-               xTaskGetTickCount() < deadline) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-    }
-    if (editor_view_is_open()) {
-        shell_record_warningf("edit", "editor view did not close in time");
+    free(ctx->line);
+    free(ctx);
+}
+
+static bool editor_surface_handle_serial_line(void *ctx, const char *line)
+{
+    editor_modal_ctx_t *mctx = (editor_modal_ctx_t *)ctx;
+    editor_serial_line_ctx_t *sl_ctx;
+
+    /* Accept lines whenever a session is active (even while the view is
+     * still opening), so a quick '\q' after 'edit' is never misrouted as a
+     * shell command and lost behind the blocked worker. */
+    if (mctx == NULL || mctx->session == NULL || line == NULL) {
+        return false;
     }
 
-    editor_doc_free(session->control.doc);
-    vEventGroupDelete(session->event_group);
+    /* Defer the whole line to the LVGL task: the editor's document and widget
+     * state live there, and rebuilding rows on the UART console task would
+     * block it past the watchdog and race the render cycle. */
+    sl_ctx = malloc(sizeof(*sl_ctx));
+    if (sl_ctx == NULL) {
+        return true; /* Consumed (drop) rather than misrouted. */
+    }
+    sl_ctx->line = strdup(line);
+    if (sl_ctx->line == NULL) {
+        free(sl_ctx);
+        return true;
+    }
+    sl_ctx->session = mctx->session;
+
+    if (lv_async_call(editor_serial_line_cb, sl_ctx) != LV_RESULT_OK) {
+        free(sl_ctx->line);
+        free(sl_ctx);
+    }
+    return true;
+}
+
+static const modal_surface_t editor_surface = {
+    .name = "edit",
+    .open = editor_surface_open,
+    .service = editor_surface_service,
+    .close = editor_surface_close,
+    .handle_usb_key = editor_surface_handle_usb_key,
+    .handle_serial_line = editor_surface_handle_serial_line,
+};
+
+esp_err_t editor_session_run(const char *path, int *errorlevel)
+{
+    editor_modal_ctx_t mctx = {0};
+    esp_err_t run_err;
+
+    mctx.path_arg = path;
+    mctx.errorlevel_out = errorlevel;
+    mctx.result = ESP_OK;
+
+    if (errorlevel != NULL) {
+        *errorlevel = 0;
+    }
+
+    run_err = modal_surface_run(&editor_surface, &mctx, errorlevel);
+    if (run_err != ESP_OK && mctx.result == ESP_OK) {
+        mctx.result = run_err;
+    }
+
+    /* Tear down the session now that the LVGL view is closed. */
+    if (mctx.session != NULL) {
+        if (mctx.session->open_failed && mctx.result == ESP_OK) {
+            mctx.result = ESP_FAIL;
+        }
+        if (mctx.session->control.doc != NULL) {
+            editor_doc_free(mctx.session->control.doc);
+        }
+        free(mctx.session);
+    }
+
     s_session_active = false;
-    if (session->open_failed && result == ESP_OK) {
-        result = ESP_FAIL;
-    }
-    free(session);
 
-    if (errorlevel != NULL && result != ESP_OK) {
+    if (errorlevel != NULL && mctx.result != ESP_OK) {
         *errorlevel = 1;
     }
 
-    return result;
+    return mctx.result;
 }
 
 /* ========================================================================

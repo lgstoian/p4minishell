@@ -38,6 +38,10 @@
 #include "shell.h"
 #include "ansi_palette.h"
 
+/* App requested by the CONFIG.SYS `LAUNCH_APP=` directive; offered to the
+ * user once after AUTOEXEC.BAT runs. */
+static char s_boot_launch_app[P4_CONFIG_APP_NAME_BYTES];
+
 /* ========================================================================
  * DEFAULT TEMPLATES
  * ======================================================================== */
@@ -76,6 +80,8 @@
     "\n; USB host:\n" \
     ";   USB_KEYBOARD=ON|OFF        Enable/disable HID keyboard\n" \
     ";   USB_MOUSE=ON|OFF           Enable/disable HID mouse echo\n" \
+    "\n; Apps:\n" \
+    ";   LAUNCH_APP=<app>           Offer to run an installed .bat app after boot\n" \
     "\n; GPIO (output-only, safe pins only):\n" \
     ";   GPIO <n> = OUT [HIGH|LOW]   Set initial level at a safe pin\n" \
     "; Unknown KEY=VALUE lines set an environment variable; unknown keywords\n" \
@@ -598,6 +604,23 @@ static bool boot_handle_bt_advertise(const char *value)
  * PUBLIC ENTRY POINT
  * ======================================================================== */
 
+/* CONFIG.SYS `LAUNCH_APP=` hook: ask once whether to run the app now. */
+static void boot_offer_launch(const char *app)
+{
+    char answer[8];
+
+    shell_transcript_appendf_ansi(SH_LBL "Boot:" SH_RST " run " SH_VAL "%s" SH_RST
+                                  " now? (Y/N) ", app);
+    if (shell_read_line(answer, sizeof(answer), P4_CONFIG_KEY_WAIT_TIMEOUT_MS) &&
+        (shell_text_equals_ignore_case(answer, "y") ||
+         shell_text_equals_ignore_case(answer, "yes"))) {
+        shell_transcript_appendf_ansi("\n");
+        (void)shell_launch_app(app);
+    } else {
+        shell_transcript_appendf_ansi("\n");
+    }
+}
+
 void boot_run_startup(void)
 {
     shell_sd_session_t session;
@@ -738,6 +761,10 @@ void boot_run_startup(void)
                     (void)boot_handle_usb_mouse(value);
                 } else if (boot_starts_with_ci(keyword, "OSK")) {
                     (void)boot_handle_osk(value);
+                } else if (boot_starts_with_ci(keyword, "LAUNCH_APP")) {
+                    if (value != NULL && value[0] != '\0') {
+                        snprintf(s_boot_launch_app, sizeof(s_boot_launch_app), "%s", value);
+                    }
                 } else if (boot_starts_with_ci(keyword, "HEADER")) {
                     (void)boot_handle_header(value);
                 } else if (boot_starts_with_ci(keyword, "FILES") ||
@@ -808,6 +835,13 @@ run_autoexec:
         } else if (batch_get_errorlevel() != 0) {
             shell_print_muted("boot: AUTOEXEC.BAT finished with errorlevel=%d\n", batch_get_errorlevel());
         }
+    }
+
+    /* Optional "offer to launch" hook: CONFIG.SYS `LAUNCH_APP=<app>` asks
+     * once whether to run that installed .bat app now. */
+    if (s_boot_launch_app[0] != '\0') {
+        boot_offer_launch(s_boot_launch_app);
+        s_boot_launch_app[0] = '\0';
     }
 
     shell_sd_end(&session, "boot");

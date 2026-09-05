@@ -301,7 +301,14 @@ static void header_format_mem(char *buf, size_t buf_size)
 
     const char *prefix = percent > 30 ? "MEM" : "LOW";
     if (free_heap >= 1048576) {
-        snprintf(buf, buf_size, "%s %.1fM", prefix, (double)free_heap / 1048576.0);
+        /* Integer-only: float printf pulls in _dtoa_r (see shell_sd_format_size). */
+        uint32_t whole = free_heap / 1048576u;
+        uint32_t tenth = ((free_heap % 1048576u) * 10u + 524288u) / 1048576u;
+        if (tenth >= 10u) {
+            whole += 1u;
+            tenth = 0u;
+        }
+        snprintf(buf, buf_size, "%s %u.%uM", prefix, (unsigned int)whole, (unsigned int)tenth);
     } else if (free_heap >= 1024) {
         snprintf(buf, buf_size, "%s %" PRIu32 "K", prefix, free_heap / 1024);
     } else {

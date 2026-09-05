@@ -307,23 +307,34 @@ static void usb_wide_to_ascii(const wchar_t *input, char *output, size_t output_
 
 static void usb_format_size(uint64_t size_bytes, char *output, size_t output_size)
 {
+    /* Integer-only: float printf pulls in _dtoa_r (see shell_sd_format_size). */
     static const char *units[] = {"B", "KiB", "MiB", "GiB"};
-    double value = (double)size_bytes;
+    static const uint64_t divisors[] = {1ULL, 1024ULL, 1024ULL * 1024ULL,
+                                        1024ULL * 1024ULL * 1024ULL};
     size_t unit_index = 0;
 
     if (output == NULL || output_size == 0) {
         return;
     }
 
-    while (value >= 1024.0 && unit_index + 1 < sizeof(units) / sizeof(units[0])) {
-        value /= 1024.0;
+    while (unit_index + 1 < sizeof(units) / sizeof(units[0]) &&
+           size_bytes >= divisors[unit_index + 1]) {
         unit_index++;
     }
 
     if (unit_index == 0) {
         snprintf(output, output_size, "%llu %s", (unsigned long long)size_bytes, units[unit_index]);
     } else {
-        snprintf(output, output_size, "%.1f %s", value, units[unit_index]);
+        uint64_t divisor = divisors[unit_index];
+        uint64_t whole = size_bytes / divisor;
+        uint64_t tenth = ((size_bytes % divisor) * 10ULL + divisor / 2ULL) / divisor;
+        if (tenth >= 10ULL) {
+            whole += 1ULL;
+            tenth = 0ULL;
+        }
+        snprintf(output, output_size, "%llu.%llu %s",
+                 (unsigned long long)whole, (unsigned long long)tenth,
+                 units[unit_index]);
     }
 }
 

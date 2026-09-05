@@ -2,6 +2,8 @@
 
 This document describes the public integration surface exposed by the hosted runtime modules under `components/`.
 
+> **v0.35.2 cleanup patch (0.35.1→0.35.2) on top of the v0.35.1 hardware testing patch (0.35.0→0.35.1):** flashed to COM11, boot verified (`P4MiniShell v0.35.1 ready`, `1024x510` `80×25` via `tui status` `80×25` `p4minishell_config.h:298`), extensive serial tests (draw box single/double/rounded with title+style correctly handled `tui_draw_box` `components/tui/tui.c:228` / `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, draw line/fill/text/clear/window/close/refresh/fullscreen, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app) header kept visible by default `windows_enter_tui_mode` hidden only on fullscreen `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` / `tui_enter_fullscreen` `components/tui/tui.c:417` dynamic `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, TUI does not overlap shell text `tui_hide_for_modal`, `tui_flush` `components/tui/tui.c:356` recolor `#RRGGBB` per fg run via `ansi_get_palette_color` PowerShell palette no duplicate, `color`/`locate` TUI-aware, prompt `shell_prompt_render_plain()` `main.c:112`/`components/shell/shell.c:412` + `modal_surf.c:412` `keyboard_bind_textarea` situational `SH_PROMPT`, screenshot `grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py` rect `1024x510`) without abort/watchdog/overlap. Font extended in-place `managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c` 384 glyphs U+2500-U+257F/U+2600-U+26FF cmaps 3 no duplication `CONFIG_LV_FONT_UNSCII_16=y`; `tui_cell_t utf8[4]` `SH_BOX_*` via `tui_cell_set`, `tui_flush` recolor `#RRGGBB` per fg run `ansi_get_palette_color`; `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`; memory `P4_CONFIG_TRANSCRIPT_BYTES` 1024 `p4minishell_config.h:93` `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 512 `p4minishell_config.h:134` `P4_CONFIG_SD_DMA_BUFFER_BYTES` 4096 `p4minishell_config.h:626` `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 60000 1/4 keep trim-below-10KB `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514` at `0x4012b75a`, audio `bsp_audio_init` `components/audio/audio.c:42` `managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269`, modal `EventGroup` PSRAM `MALLOC_CAP_SPIRAM` `components/modal/modal.c:46`, queue full handling improved, serial routing `modal_handle_serial_line` `components/modal/modal_surf.c:412` (`dialog y` `list 2` `ask myname` correctly routed via `shell.c`). Companion fully TUI-expanded and hardware-verified: 7 BATs (`COMPANION.BAT` draw fullscreen double, `SYS.BAT` tui fullscreen draw boxes, `FILES.BAT` browse/view/hexview + draw + tui fullscreen, `NET.BAT` draw boxes, `FUN.BAT` tui demo, `SET.BAT` tui demo, `LIB.BAT` tui helpers) pushed via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109), bugs M19-M31 all fixed.
+
 ## Shared integration pattern
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It holds no command implementations and no shell state.
 - `components/shell` owns the transcript and async buffer, command history, debug log, UART console, the input-line prompt contract, and the system info commands.
@@ -12,7 +14,8 @@ This document describes the public integration surface exposed by the hosted run
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
 - `components/header` owns the fixed top-bar UI for notifications and passive status display.
-- `components/editor` owns the DOS-style `edit` text editor: the byte-preserving document model, the modal LVGL surface (syntax-coloured spans, block cursor, selection overlay, status-bar prompts), and the worker-task session.
+- `components/editor` owns the DOS-style `edit` text editor: the byte-preserving document model, the modal LVGL surface (syntax-coloured spans, block cursor, selection overlay, status-bar prompts), and the worker-task session. It is a surface on the shared modal runtime.
+- `components/modal` owns the shared modal runtime (`modal.{h,c}`) and the ready-made batch surfaces `dialog`, `list`, and `ask` (`modal_surf.{h,c}`).
 - `components/led` owns the WS2812 RGB status LED on GPIO26 (espressif/led_strip over RMT), the
   animation task, and the auto status / event notification engine.
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
@@ -24,6 +27,7 @@ This document describes the public integration surface exposed by the hosted run
 
 ```
 main  ->  command  ->  batch  ->  storage  ->  shell  ->  ansi, display, windows, header, keyboard, clock
+                 modal <- editor
 ```
 
 No component declares `main` as a requirement. Two registered function tables invert the only
@@ -104,13 +108,19 @@ void        shell_transcript_appendf(const char *format, ...);
 void        shell_transcript_append_ansi(const char *text);
 void        shell_transcript_appendf_ansi(const char *format, ...);
 void        shell_schedule_transcript_appendf(const char *format, ...);
+void        shell_schedule_transcript_appendf_ansi(const char *format, ...);
 void        shell_transcript_reset(void);
 void        shell_history_transcript_scroll_to_end(void);
 void        shell_force_transcript_scroll_to_end(void);
 size_t      shell_transcript_get_length(void);
 const char *shell_transcript_get_text_from(size_t offset);
 ```
-- `shell_schedule_transcript_appendf()` is the safe entry point from non-LVGL tasks.
+- `shell_schedule_transcript_appendf()` is the safe entry point from non-LVGL tasks
+  (plain); `shell_schedule_transcript_appendf_ansi()` is the ANSI variant — it
+  formats via `ansi_vformat` and the async flush dispatches to
+  `shell_transcript_append_ansi` when the staged text contains `ESC` (`ansi_contains_escapes()`),
+  otherwise to the plain append. Use the `_ansi` form for any coloured output
+  from a non-LVGL task (e.g. networking, `main.c` progress).
 - `shell_history_transcript_scroll_to_end()` follows only when the view is near the bottom
   (used after background/async output). `shell_force_transcript_scroll_to_end()` pins the
   view to the newest output regardless of position and is the command-submission path.
@@ -628,6 +638,48 @@ esp_err_t storage_temp_cleanup(void);
   state group share this core; the `config` command's `config_directive_*`
   helpers are thin wrappers over `storage_ini_get_value/upsert/remove`.
 
+## TUI Module API (hardware testing patch 0.35.0→0.35.1 on COM11, stack 24576 at 0x4012b75a, companion 7 BATs TUI-expanded)
+
+Declared in `components/tui/tui.h` (leaf: `REQUIRES shell, windows, ansi, display`). Logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` `80×25` (`p4minishell_config.h:298`) heap cell buffer (`utf8[4]` `tui_cell_t`) mapped to the live transcript region `1024x510` via `windows_enter_tui_mode`/`windows_refresh_tui_surface`/`windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). Font: extended `unscii_16` in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F/U+2600-U+26FF, cmaps 3, `CONFIG_LV_FONT_UNSCII_16=y` `sdkconfig.defaults:33`).
+
+```c
+typedef struct {
+    char    utf8[4];   /**< UTF-8 sequence, NUL-terminated (box chars are 3 bytes). */
+    uint8_t fg;        /**< DOS 0-15 foreground (16 = default). */
+    uint8_t bg;        /**< DOS 0-15 background (16 = default). */
+    uint8_t attr;      /**< Bitmask: 1=bold,2=dim,4=italic,8=underline. */
+} tui_cell_t;  /* components/tui/tui.h:34 */
+
+bool tui_init(void);                          /* alloc PSRAM cells, enter windows TUI mode, clear+flush */
+void tui_deinit(void);                        /* delete label, exit TUI mode, free cells */
+bool tui_is_active(void);
+void tui_clear(void);                         /* ED 2J with default colors via tui_cell_set */
+void tui_clear_line(int mode);                /* EL 2K: 0 from cursor, 1 to cursor, 2 entire */
+void tui_set_cursor(int row, int col);        /* 1-based clamped to 80×25 */
+void tui_get_cursor(int *row_out, int *col_out);
+void tui_save_cursor(void); void tui_restore_cursor(void); /* SCP/RCP */
+void tui_set_cursor_visible(bool visible);    /* DECTCEM */
+void tui_putc(char ch);                       /* at cursor advancing with wrap, \\n/\\r honored */
+void tui_print_at(int col, int row, const char *text, uint8_t fg, uint8_t bg); /* UTF-8 codepoint loop */
+void tui_draw_box(int x, int y, int w, int h, const char *style, uint8_t fg, uint8_t bg, const char *title);
+                                             /* x,y,w,h 1-based clamped, style single/double/rounded via SH_BOX_* UTF-8 + tui_cell_set, title centered with spaces, interior cleared — window stack via nested boxes */
+void tui_draw_line(int x1, int y1, int x2, int y2, const char *style, uint8_t fg, uint8_t bg);
+                                             /* H/V only, style single/double/heavy via SH_BOX_H/V/H2/V2/HL/VL */
+void tui_fill(int x, int y, int w, int h, char ch, uint8_t fg, uint8_t bg);
+void tui_set_default_color(uint8_t fg, uint8_t bg); /* 16 = default, backs color */
+void tui_get_default_color(uint8_t *fg_out, uint8_t *bg_out);
+void tui_alt_enter(void); void tui_alt_leave(void); /* ESC[?1049h/l save/restore heap copy */
+void tui_flush(void);                         /* coalesce per fg run, emit #RRGGBB per run via ansi_get_palette_color (PowerShell palette, no duplicate), lv_label recolor on s_tui_label */
+void tui_refresh_surface(void);               /* windows_refresh_tui_surface + flush on rotation/keyboard */
+void tui_enter_fullscreen(void); void tui_exit_fullscreen(void); bool tui_is_fullscreen(void);
+                                             /* hide/restore header via windows_set_fullscreen/header_set_visible, keep header visible by default, dynamic keyboard scaling via windows_notify_keyboard_visibility */
+```
+
+- `tui_draw_box`/`tui_draw_line` honor style and title via `tui_cell_set` (`components/tui/tui.c:116`) with full UTF-8 `SH_BOX_*`; `tui_flush` (`components/tui/tui.c:356`) renders fg/bg via `lv_label` recolor `#RRGGBB` per fg run using `ansi_get_palette_color`.
+- `tui status` (command layer) reports `transcript rect 1024x510, cols 80 rows 25, fullscreen, font unscii_16 384 glyphs`, `tui clear`/`tui fullscreen on|off`/`tui refresh` dispatch here.
+- `draw` batch verb (`components/command/command.c`) auto-enters TUI via `tui_init` when no TUI/modal surface is active, otherwise reuses the active buffer; batch verbs `draw box`/`line`/`fill`/`text`/`clear`/`window`/`fullscreen` map directly to these primitives.
+- Prompt fixed: `main.c:112` input line and `modal_surf.c:412` `ask` placeholder use `shell_prompt_render_plain()` (`components/shell/shell.c:412`); screenshot debug loop `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
+
 ## Batch Module API
 
 Declared in `components/batch/batch.h`.
@@ -655,8 +707,12 @@ void        shell_expand_variables(const char *input, char *output, size_t outpu
   or `NULL` value clears the slot. `shell_env_set()` returns `ESP_ERR_NO_MEM` when all 24 slots
   are used.
 - `shell_expand_variables()` handles `%VAR%`, `%0` (script name), `%1`..`%9` (the caller's
-  arguments), `%*` (every argument from `%1` onward), and `%%` → `%`. Unknown names are left
-  untouched. With no active batch frame `%0`/`%1`..`%9`/`%*` expand to empty.
+  arguments), `%*` (every argument from `%1` onward), `%%` → `%`, and the dynamic
+  pseudo-variables `%DATE%` (`MM-DD-YYYY`), `%TIME%` (`HH:MM:SS`), `%RANDOM%`
+  (`0..32767`), `%CD%` (current directory), and `%ERRORLEVEL%`. An **undefined `%VAR%`
+  expands to the empty string** (cmd.exe parity), so `if "%var%"==""` works. Single-quoted
+  runs stay literal and `^%` is a literal percent. With no active batch frame
+  `%0`/`%1`..`%9`/`%*` expand to empty.
 
 ### Arithmetic expressions
 ```c
@@ -693,11 +749,12 @@ void calc_format_number(double value, char *out, size_t size);
 int shell_command_calc_line(const char *line);
 ```
 - `calc_evaluate` is a pure recursive-descent evaluator over double/fixed-string values with
-  the FX-870P/VX-4 functions (ABS, SIN/COS/TAN, SINH/COSH/TANH, ASN/ACS/ATN, SQR, EXP, LN,
-  LOG, FACT, NCR, NPR, INT, FIX, FRAC, ROUND, MOD, PI, RAN#, POL, REC, DMS/DMS$, VAL/VALF,
-  STR$, HEX$, ASC, CHR$, LEN, LEFT$/MID$/RIGHT$), `&H`/`0x` hex literals, string
-  concatenation with `+`, and env-var references (undefined reads as 0). `POL`/`REC` store
-  their two results in the X/Y environment variables.
+  the FX-870P/VX-4 functions (ABS, SIN/COS/TAN, SINH/COSH/TANH, ASINH/ACOSH/ATANH,
+  ASN/ACS/ATN, SQR, EXP, LN, LOG, FACT, NCR, NPR, INT, FIX, FRAC, ROUND, MOD, PI,
+  RAN#, POL, REC, DMS/DMS$, DEG, CUR, VAL/VALF, STR$, HEX$, ASC, CHR$, LEN,
+  LEFT$/MID$/RIGHT$), `&H`/`0x` hex literals, string concatenation with `+`, and
+  env-var references (undefined reads as 0). `POL`/`REC` store their two results
+  in the X/Y environment variables.
 - `shell_command_calc_line` is the batch verb (ERRORLEVEL 0/1/2); the dispatcher feeds it the
   raw unsplit line so quoted string arguments survive the shell tokenizer.
 
@@ -887,15 +944,66 @@ bool app_temp_cleanup(void);
   shared `storage_ini.c` core (the same mechanics the batch `ini` /
   `appconfig` / `temp` commands use). All storage lives on the SD card.
 
-### App mode (applib_ui.h)
+### App mode + notifications (applib_ui.h)
 ```c
 bool app_mode_enter(bool full_screen);
 bool app_mode_exit(void);
+void app_notify(const char *text);
 ```
-- Save the current screen, optionally hide the shell input widgets for a
-  full-screen app surface, and restore the saved screen on exit. Wraps the
-  shared shell app-mode primitives (the batch `appmode` command is its
-  batch-side equivalent; the batch variant also auto-restores on `exit /b`).
+- `app_mode_enter` / `app_mode_exit` save the current screen, optionally hide
+  the shell input widgets for a full-screen app surface, and restore the saved
+  screen on exit. Wraps the shared shell app-mode primitives (the batch
+  `appmode` command is its batch-side equivalent; the batch variant also
+  auto-restores on `exit /b`).
+- `app_notify(text)` shows `text` in the header notification area for the
+  configured notify timeout. Passing `NULL` or an empty string clears the
+  current notification.
+
+### Native-app ABI (applib_app.h + applib_env.h)
+
+A native app is a C function with the signature `app_main_t` registered via
+`app_register()`. Once registered it becomes a shell command: the dispatcher
+invokes it with `argc`/`argv` (`argv[0]` = the app name) after every built-in
+and `.bat` lookup fails, and the return value becomes ERRORLEVEL (branchable
+with `if errorlevel N` from batch). This is the native equivalent of the batch
+contract (`%0..%9`/`%*`, the env table, the storage cwd).
+
+```c
+/* applib_app.h — the app entry point + registry */
+typedef int (*app_main_t)(int argc, char **argv);
+bool app_register(const char *name, const char *description, app_main_t entry);
+bool app_find(const char *name);
+bool app_dispatch(int argc, char **argv, int *errorlevel_out);
+bool app_get(int index, char *name_out, size_t name_size,
+             char *desc_out, size_t desc_size);
+
+/* applib_env.h — the process environment (through a registered ops table) */
+typedef struct {
+    const char *(*get_env)(const char *name);
+    esp_err_t   (*set_env)(const char *name, const char *value);
+    const char *(*get_cwd)(void);
+} applib_env_ops_t;
+void applib_register_env_ops(const applib_env_ops_t *ops);
+
+const char *app_env_get(const char *name);
+bool        app_env_set(const char *name, const char *value);
+const char *app_get_cwd(void);
+```
+
+- `app_register()` caps the app name at `P4_CONFIG_APP_NAME_BYTES` and the
+  description at `P4_CONFIG_APP_DESC_BYTES`; the table holds up to
+  `P4_CONFIG_APP_MAX` apps. Returns `false` when the table is full or the
+  arguments are invalid.
+- `app_dispatch()` runs the matching app and reports its return value through
+  `errorlevel_out`; `command_init()` calls it from the shell dispatcher.
+- `app_env_get`/`app_env_set` read and write the shell's shared RAM
+  environment table (the same one `set`/`set /p`/`calc` use), and
+  `app_get_cwd` returns the storage-owned current directory. They are routed
+  through `applib_env_ops_t`, registered by `command_init()` with
+  `shell_env_get`/`shell_env_set`/`shell_get_cwd`, so `applib` stays a leaf.
+- The `apps` shell command lists the registered apps.
+- Sample: `main/native_apps.c` registers `hello`, which echoes its argv and
+  reads cwd + PATH.
 
 ## ANSI/VT Module API
 
@@ -1628,16 +1736,104 @@ void editor_view_set_save_requested(void);
 ```
 
 ### Shell bridge hooks (in `shell_command_ops_t`)
-The shell core and UART reader reach the editor through three NULL-checked
-hooks registered by `command_init()`:
+The shell core and UART reader reach any active native modal surface through
+three NULL-checked hooks registered by `command_init()`. The editor, `dialog`,
+`list`, and `ask` all route through this shared layer:
 ```c
-bool (*editor_is_active)(void);
-bool (*editor_handle_usb_key)(uint8_t key_code, uint8_t modifiers, char ascii);
-bool (*editor_handle_serial_line)(const char *line);
+bool (*modal_is_active)(void);
+bool (*modal_handle_usb_key)(uint8_t key_code, uint8_t modifiers, char ascii);
+bool (*modal_handle_serial_line)(const char *line);
 ```
-- `editor_handle_serial_line` returns true when the line was consumed (any
-  line while a session is active) so serial text is never misrouted to the
-  command dispatcher during an edit.
+- `modal_handle_serial_line` returns true when the line was consumed so serial
+  text is never misrouted to the command dispatcher while a modal surface is
+  open.
+
+## Modal runtime and native surfaces (`components/modal/`)
+
+Shared session loop + input routing for native modal surfaces that take over
+the shell display area.
+
+```c
+/* Runtime */
+esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *errorlevel);
+bool modal_runtime_is_active(void);
+const char *modal_runtime_active_name(void);
+bool modal_runtime_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii);
+bool modal_runtime_handle_serial_line(const char *line);
+
+/* Ready-made surfaces for batch apps */
+int modal_dialog_run(const char *title, const char *message,
+                     const char *button1, const char *button2,
+                     uint32_t timeout_ms);
+int modal_list_run(const char *title, const char **items, int count,
+                   uint32_t timeout_ms);
+int modal_ask_run(const char *prompt, const char *default_text, bool password,
+                  uint32_t timeout_ms, char *result, size_t result_size);
+```
+
+- `modal_dialog_run` — message box with up to two buttons. Returns `0` for
+  `button1`, `1` for `button2`, `-1` for cancel/Esc/timeout.
+- `modal_list_run` — scrollable list selector. Returns the 0-based selected
+  index or `-1` for cancel/timeout.
+- `modal_ask_run` — text prompt with on-screen-keyboard and USB-keyboard
+  support. `password` masks the input when true. Writes the answer into
+  `result` and returns `0` on OK, `-1` on cancel/timeout.
+- All three take a `timeout_ms` (0 = wait forever); on timeout they close as
+  a cancel.
+
+## TUI Module API (v0.35.0 — `components/modal/` + `components/ansi/` + `components/applib/`)
+
+Restored text-mode TUI for batch apps on the shared modal runtime:
+
+```c
+/* Batch TUI surfaces (modal_surf.c) — all modal_surface_t */
+int modal_dialog_run(const char *title, const char *message,
+                     const char *button1, const char *button2, uint32_t timeout_ms); /* 0/1/255 */
+int modal_list_run(const char *title, const char **items, int count, uint32_t timeout_ms); /* 0-based/-1 */
+int modal_ask_run(const char *prompt, const char *default_text, bool password,
+                  uint32_t timeout_ms, char *result, size_t result_size); /* 0/-1, ASK_RESULT */
+int modal_browse_run(const char *path, uint32_t timeout_ms, char *result, size_t result_size); /* 0/-1, BROWSE_RESULT */
+int modal_view_run(const char *path);   /* text pager, 20 lines/page */
+int modal_hexview_run(const char *path); /* 16-byte hex dump pager */
+
+/* Batch TUI drawing verbs (batch.c → TUI cell buffer) */
+void tui_draw_box(int x, int y, int w, int h);
+void tui_draw_text(int x, int y, const char *text);
+void tui_set_color(int fg, int bg);
+void tui_locate(int row, int col);
+
+/* Logical grid + live region */
+#define P4_CONFIG_TUI_COLS 80
+#define P4_CONFIG_TUI_ROWS 25
+void windows_enter_editor_mode(void);      /* alias transcript container as TUI surface */
+void windows_refresh_editor_surface(void); /* re-apply transcript rect after rotation/keyboard */
+void windows_exit_editor_mode(void);
+
+/* Async ANSI (shell.c) */
+void shell_schedule_transcript_appendf_ansi(const char *format, ...); /* ansi_vformat + ESC-aware flush */
+int  ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args);
+bool ansi_contains_escapes(const char *text);
+
+/* Native TUI SDK stub (applib_tui.h, included via applib.h) */
+void *tui_create(int cols, int rows);
+void  tui_destroy(void *tui);
+void  tui_box(void *tui, int x, int y, int w, int h);
+void  tui_print_at(void *tui, int x, int y, const char *text);
+void  tui_refresh(void *tui);
+void  tui_clear(void *tui);
+```
+
+- Logical grid `80×25` (`P4_CONFIG_TUI_COLS`×`ROWS`) is the DOS coordinate system
+  batch files address with `draw`/`locate`/`color`; `P4_CONFIG_TUI_*` maps to the
+  live transcript rect via `windows_enter_editor_mode`/`windows_refresh_editor_surface`
+  (rotation/keyboard-aware). Cell buffer is heap, clamped to the logical grid,
+  CSI handled by `components/ansi/ansi.c`.
+- `dialog`/`list`/`ask` dispatcher was missing from `command.c` — now wired; all
+  six (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) share one
+  `modal_surface_t` runtime, accept `/t:secs` (auto-cancel) and `/v:NAME`
+  (result variable), and are `modal_is_active` routed.
+- `applib_tui.h` is declared in v0.35.0 (`tui_create/destroy/box/print_at/refresh/clear`)
+  with a warning stub; full native TUI implemented after companion ships.
 
 ## Shell USB Keyboard Bridge
 

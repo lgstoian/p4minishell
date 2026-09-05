@@ -8,6 +8,7 @@ idf_component_register(
         windows
         keyboard
         display
+        modal
         espressif__esp_lvgl_port
         lvgl__lvgl
 )

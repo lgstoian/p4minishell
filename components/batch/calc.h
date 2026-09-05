@@ -13,11 +13,12 @@
  *   calc &HFF + 1        ->  256
  *
  * Supported functions: ABS SGN INT FIX FRAC ROUND MOD SQR EXP LN LOG SIN COS
- * TAN ASN ACS ATN SINH COSH TANH FACT NCR NPR PI RAN# POL REC DMS DMS$ VAL
- * VALF STR$ HEX$ ASC CHR$ LEN LEFT$ MID$ RIGHT$. Numbers accept `&H` and `0x`
- * hex literals; strings are delimited by `'` or `"` and concatenate with `+`.
- * POL/REC store their two results in the X and Y environment variables, the
- * same documented side effect the calculator's BASIC has.
+ * TAN ASN ACS ATN SINH COSH TANH ASINH ACOSH ATANH FACT NCR NPR PI RAN# POL REC
+ * DMS DMS$ DEG CUR VAL VALF STR$ HEX$ ASC CHR$ LEN LEFT$ MID$ RIGHT$. Numbers
+ * accept `&H` and `0x` hex literals; strings are delimited by `'` or `"` and
+ * concatenate with `+`. POL/REC store their two results in the X and Y
+ * environment variables, the same documented side effect the calculator's BASIC
+ * has.
  *
  * The evaluator is a pure recursive-descent parser over double / fixed-string
  * values (no transcript I/O), so `test/main/test_calc.c` can exercise it

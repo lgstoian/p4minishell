@@ -559,6 +559,50 @@ static void calc_parse_function_body(calc_parser_t *parser, const char *name,
         calc_set_number(out, tanh(x));
         return;
     }
+    /* ASINH/ACOSH/ATANH must be checked before ASN/ACS/ATN: the shorter names
+     * are prefixes of the longer ones. */
+    if (strncasecmp(name, "ASINH", 5) == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "ASINH takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, asinh(x));
+        return;
+    }
+    if (strncasecmp(name, "ACOSH", 5) == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "ACOSH takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        if (x < 1.0) { calc_expr_fail(parser, "ACOSH domain error"); return; }
+        calc_set_number(out, acosh(x));
+        return;
+    }
+    if (strncasecmp(name, "ATANH", 5) == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "ATANH takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        if (x <= -1.0 || x >= 1.0) { calc_expr_fail(parser, "ATANH domain error"); return; }
+        calc_set_number(out, atanh(x));
+        return;
+    }
+    /* CUR (cube root) and DEG (sexagesimal to decimal) */
+    if (strncasecmp(name, "CUR", 3) == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "CUR takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, cbrt(x));
+        return;
+    }
+    if (strncasecmp(name, "DEG", 3) == 0 && name[3] != '\0' && name[3] != '$') {
+        if (arg_count != 1) { calc_expr_fail(parser, "DEG takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        {
+            int sign = (x < 0.0) ? -1 : 1;
+            double a = fabs(x);
+            double d = floor(a);
+            double frac = a - d;
+            double m = floor(frac * 100.0);
+            double s = (frac * 10000.0) - m * 100.0;
+            double result = sign * (d + m / 60.0 + s / 3600.0);
+            calc_set_number(out, result);
+        }
+        return;
+    }
     if (strncasecmp(name, "SIN", 3) == 0) {
         if (arg_count != 1) { calc_expr_fail(parser, "SIN takes 1 argument"); return; }
         if (!calc_arg_number(parser, &args[0], &x)) { return; }

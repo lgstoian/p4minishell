@@ -8,18 +8,29 @@ set(EXTRA_COMPONENT_DIRS
 	managed_components/espressif__esp_lcd_jd9165
 	managed_components/espressif__esp_lcd_touch_gt911
 	managed_components/lvgl__lvgl
+  components/alarm
   components/ansi
   components/applib
   components/audio
   components/batch
   components/boot
+  components/c6ota
   components/command
-	components/display
-	components/keyboard
-	components/shell
-	components/storage
-	components/clock
-	components/windows
+  components/clock
+  components/db
+  components/display
+  components/editor
+  components/header
+  components/keyboard
+  components/led
+  components/modal
+  components/networking
+  components/p4_usb
+  components/shell
+  components/storage
+  components/tui
+  components/usb
+  components/windows
 )
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/config)

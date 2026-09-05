@@ -1,11 +1,13 @@
 idf_component_register(
-    SRCS "command.c" "command_ui.c" "config_cmd.c"
+    SRCS "command.c" "command_ui.c" "config_cmd.c" "db_commands.c" "alarm_commands.c" "gfind_commands.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
         applib
         audio
+        alarm
         batch
+        db
         display
         editor
         header
@@ -18,6 +20,8 @@ idf_component_register(
         c6ota
         p4_usb
         led
+        modal
+        tui
         espressif__esp32_p4_function_ev_board
         espressif__esp_lvgl_port
         lvgl__lvgl

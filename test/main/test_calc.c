@@ -170,6 +170,67 @@ void test_calc_math_errors(void)
 }
 
 /* ========================================================================
+ * NEW MATH FUNCTIONS (CUR, DEG, ASINH, ACOSH, ATANH)
+ * ======================================================================== */
+
+void test_calc_new_math_functions(void)
+{
+    /* CUR - cube root */
+    expect_num("cur(8)", 2);
+    expect_num("cur(27)", 3);
+    expect_num("cur(-27)", -3);
+    expect_num("cur(-8)", -2);
+    expect_num("cur(0)", 0);
+    expect_num("cur(1)", 1);
+    expect_num("cur(1000)", 10);
+
+    /* DEG - sexagesimal to decimal */
+    /* 30.1530 = 30° 15' 30" = 30 + 15/60 + 30/3600 = 30.258333... */
+    expect_num("deg(30.1530)", 30.0 + 15.0/60.0 + 30.0/3600.0);
+    /* 45.30 = 45° 30' 00" = 45 + 30/60 = 45.5 */
+    expect_num("deg(45.30)", 45.5);
+    /* 0.0001 = 0° 00' 01" = 1/3600 */
+    expect_num("deg(0.0001)", 1.0/3600.0);
+    /* Negative */
+    expect_num("deg(-30.1530)", -(30.0 + 15.0/60.0 + 30.0/3600.0));
+    /* Degrees only */
+    expect_num("deg(90)", 90);
+
+    /* ASINH - inverse hyperbolic sine */
+    expect_num("asinh(0)", 0);
+    expect_num("asinh(1)", asinh(1));
+    expect_num("asinh(-1)", asinh(-1));
+    expect_num("asinh(10)", asinh(10));
+    expect_num("asinh(-10)", asinh(-10));
+
+    /* ACOSH - inverse hyperbolic cosine */
+    expect_num("acosh(1)", 0);
+    expect_num("acosh(2)", acosh(2));
+    expect_num("acosh(10)", acosh(10));
+
+    /* ATANH - inverse hyperbolic tangent */
+    expect_num("atanh(0)", 0);
+    expect_num("atanh(0.5)", atanh(0.5));
+    expect_num("atanh(-0.5)", atanh(-0.5));
+    expect_num("atanh(0.999)", atanh(0.999));
+    expect_num("atanh(-0.999)", atanh(-0.999));
+}
+
+void test_calc_new_math_errors(void)
+{
+    /* ACOSH domain: x >= 1 */
+    expect_error("acosh(0.5)");
+    expect_error("acosh(0)");
+    expect_error("acosh(-1)");
+
+    /* ATANH domain: -1 < x < 1 */
+    expect_error("atanh(1)");
+    expect_error("atanh(-1)");
+    expect_error("atanh(1.5)");
+    expect_error("atanh(-1.5)");
+}
+
+/* ========================================================================
  * STRING FUNCTIONS
  * ======================================================================== */
 

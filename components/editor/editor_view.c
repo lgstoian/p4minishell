@@ -23,6 +23,7 @@
 #include "keyboard.h"
 #include "ansi.h"
 #include "shell.h"
+#include "modal.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include "p4minishell_config.h"
@@ -36,9 +37,8 @@
 
 #define EDITOR_VIEW_TAG  P4_CONFIG_SHELL_TAG
 
-/* Session event bits (must match editor.c). */
-#define EDITOR_EVENT_SAVE   (1 << 0)
-#define EDITOR_EVENT_QUIT   (1 << 1)
+/* Session event bits. MODAL_EVENT_* live in modal.h; editor keeps SAVE. */
+#define EDITOR_EVENT_SAVE   (1 << 2)
 
 /* ========================================================================
  * INTERNAL STATE
@@ -910,7 +910,7 @@ static void editor_quit_signal(void)
     if (ctl != NULL) {
         ctl->quit_requested = true;
         if (ctl->event_group != NULL) {
-            xEventGroupSetBits((EventGroupHandle_t)ctl->event_group, EDITOR_EVENT_QUIT);
+            xEventGroupSetBits((EventGroupHandle_t)ctl->event_group, MODAL_EVENT_CLOSE_REQUEST);
         }
     }
 }
@@ -1538,7 +1538,7 @@ void editor_view_close(void)
      * already-consumed quit bit, which is harmless. */
     if (s_editor_view.control != NULL && s_editor_view.control->event_group != NULL) {
         xEventGroupSetBits((EventGroupHandle_t)s_editor_view.control->event_group,
-                           EDITOR_EVENT_QUIT);
+                           MODAL_EVENT_CLOSE_REQUEST);
     }
 
     /* Detach the document first so any straggler async callback that runs

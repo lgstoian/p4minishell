@@ -72,15 +72,24 @@ static void audio_fill_sample_info(esp_codec_dev_sample_info_t *fs)
 /** Ensure the speaker codec device exists (lazy, one-time). */
 static esp_err_t audio_ensure_speaker(void)
 {
+    int attempt;
+
     if (s_speaker_dev != NULL) {
         return ESP_OK;
     }
 
-    s_speaker_dev = bsp_audio_codec_speaker_init();
-    if (s_speaker_dev == NULL) {
-        return ESP_FAIL;
+    /* The codec/I2S path needs DMA-capable heap, which can be contended
+     * while Wi-Fi, USB and the SD stack initialize (a boot pre-warm in
+     * app_main normally wins this race). Retry briefly instead of failing
+     * once; the pressure subsides within seconds as boot settles. */
+    for (attempt = 0; attempt < 3; attempt++) {
+        s_speaker_dev = bsp_audio_codec_speaker_init();
+        if (s_speaker_dev != NULL) {
+            return ESP_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    return ESP_OK;
+    return ESP_FAIL;
 }
 
 /** Ensure the playback task and its synchronization are created. */

@@ -18,6 +18,8 @@
 #include "shell.h"
 #include "clock.h"
 #include "storage.h"
+#include "db.h"
+#include "ansi.h"
 #include "p4minishell_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -54,7 +56,11 @@ static int app_vformat_append(bool ansi, const char *format, va_list args)
         return -1;
     }
 
-    written = vsnprintf(buffer, APPLIB_LINE_BYTES, format, args);
+    if (ansi) {
+        written = ansi_vformat(buffer, APPLIB_LINE_BYTES, format, args);
+    } else {
+        written = vsnprintf(buffer, APPLIB_LINE_BYTES, format, args);
+    }
     if (written < 0) {
         free(buffer);
         return -1;
@@ -617,6 +623,96 @@ bool app_temp_cleanup(void)
 }
 
 /* ========================================================================
+ * 6b. DATABASE (Palm-OS-style SD record store)
+ * ========================================================================
+ * Thin app-facing wrappers over components/db (db.h). All database data lives
+ * on the SD card under sd:/DBS/<name>.DB/. These mirror the `db` shell command
+ * and share the same guarded-SD / atomic-write core.
+ */
+
+bool app_db_create(const char *name, const char *creator, const char *type,
+                   uint32_t version)
+{
+    return db_create(name, creator, type, version) == ESP_OK;
+}
+
+bool app_db_info(const char *name, db_info_t *out)
+{
+    if (out == NULL) {
+        return false;
+    }
+    return db_info(name, out) == ESP_OK;
+}
+
+bool app_db_drop(const char *name)
+{
+    return db_drop(name) == ESP_OK;
+}
+
+bool app_db_category_set(const char *name, uint8_t cat, const char *label)
+{
+    return db_category_set(name, cat, label) == ESP_OK;
+}
+
+bool app_db_category_get(const char *name, uint8_t cat, char *label, size_t size)
+{
+    if (label == NULL || size == 0) {
+        return false;
+    }
+    return db_category_get(name, cat, label, size) == ESP_OK;
+}
+
+bool app_db_add(const char *name, uint8_t cat, const char *key, bool secret,
+                const void *data, size_t len, uint32_t *out_id)
+{
+    return db_add(name, cat, key, secret, data, len, out_id) == ESP_OK;
+}
+
+bool app_db_get(const char *name, uint32_t id, void *buf, size_t *inout_len,
+                bool reveal_secret, db_record_info_t *info)
+{
+    if (inout_len == NULL) {
+        return false;
+    }
+    return db_get(name, id, buf, inout_len, reveal_secret, info) == ESP_OK;
+}
+
+bool app_db_set(const char *name, uint32_t id, uint8_t cat, const char *key,
+                bool secret, const void *data, size_t len)
+{
+    return db_set(name, id, cat, key, secret, data, len) == ESP_OK;
+}
+
+bool app_db_del(const char *name, uint32_t id, bool permanent)
+{
+    return db_del(name, id, permanent) == ESP_OK;
+}
+
+bool app_db_purge(const char *name)
+{
+    return db_purge(name) == ESP_OK;
+}
+
+bool app_db_count(const char *name, uint8_t cat_filter, int *out_count)
+{
+    if (out_count == NULL) {
+        return false;
+    }
+    return db_count(name, cat_filter, out_count) == ESP_OK;
+}
+
+bool app_db_find(const char *name, uint8_t cat_filter, const char *key_filter,
+                 const char *text_filter, bool ignore_case, bool reveal_secret,
+                 app_db_find_cb cb, void *ctx, int *out_count)
+{
+    if (out_count == NULL) {
+        return false;
+    }
+    return db_find(name, cat_filter, key_filter, text_filter, ignore_case,
+                   reveal_secret, (db_find_cb_t)cb, ctx, out_count) == ESP_OK;
+}
+
+/* ========================================================================
  * 7. APP MODE (save/restore screen + optional full-screen surface)
  * ========================================================================
  * Wraps the shell-core app-mode primitives (shared with the batch `appmode`
@@ -639,5 +735,146 @@ bool app_mode_exit(void)
     shell_screen_restore(s_appmode_saved);
     shell_screen_discard(s_appmode_saved);
     s_appmode_saved = NULL;
+    return true;
+}
+
+/* ========================================================================
+ * 8. NOTIFICATIONS
+ * ========================================================================
+ * Routes native-app notifications through the same header path as the batch
+ * `notify` command.
+ */
+
+void app_notify(const char *text)
+{
+    if (text == NULL) {
+        text = "";
+    }
+    shell_header_notify(text, P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
+}
+
+/* ========================================================================
+ * 9. PROCESS ENVIRONMENT (env table + cwd, through the registered ops table)
+ * ========================================================================
+ * The env table is owned by components/batch and cwd by components/storage;
+ * applib reads both through applib_env_ops_t registered by command_init, so
+ * this leaf component never includes batch.h.
+ */
+
+static applib_env_ops_t s_env_ops;
+
+void applib_register_env_ops(const applib_env_ops_t *ops)
+{
+    if (ops != NULL) {
+        s_env_ops = *ops;
+    } else {
+        s_env_ops.get_env = NULL;
+        s_env_ops.set_env = NULL;
+        s_env_ops.get_cwd = NULL;
+    }
+}
+
+const char *app_env_get(const char *name)
+{
+    if (name == NULL || s_env_ops.get_env == NULL) {
+        return NULL;
+    }
+    return s_env_ops.get_env(name);
+}
+
+bool app_env_set(const char *name, const char *value)
+{
+    if (name == NULL || s_env_ops.set_env == NULL) {
+        return false;
+    }
+    return s_env_ops.set_env(name, value) == ESP_OK;
+}
+
+const char *app_get_cwd(void)
+{
+    if (s_env_ops.get_cwd == NULL) {
+        return NULL;
+    }
+    return s_env_ops.get_cwd();
+}
+
+/* ========================================================================
+ * 10. NATIVE-APP REGISTRY (the app ABI)
+ * ========================================================================
+ * A registered app becomes a shell command: typing its name dispatches to
+ * its app_main_t entry with argc/argv, and the return value becomes
+ * ERRORLEVEL. The registry lives here (the SDK); the shell dispatcher reaches
+ * it through app_dispatch().
+ */
+
+typedef struct {
+    bool used;
+    char name[P4_CONFIG_APP_NAME_BYTES];
+    char description[P4_CONFIG_APP_DESC_BYTES];
+    app_main_t entry;
+} applib_app_entry_t;
+
+static applib_app_entry_t s_apps[P4_CONFIG_APP_MAX];
+
+bool app_register(const char *name, const char *description, app_main_t entry)
+{
+    if (name == NULL || name[0] == '\0' || entry == NULL) {
+        return false;
+    }
+    for (int i = 0; i < P4_CONFIG_APP_MAX; i++) {
+        if (!s_apps[i].used) {
+            snprintf(s_apps[i].name, sizeof(s_apps[i].name), "%s", name);
+            snprintf(s_apps[i].description, sizeof(s_apps[i].description),
+                     description != NULL ? description : "");
+            s_apps[i].entry = entry;
+            s_apps[i].used = true;
+            return true;
+        }
+    }
+    return false; /* table full */
+}
+
+bool app_find(const char *name)
+{
+    if (name == NULL) {
+        return false;
+    }
+    for (int i = 0; i < P4_CONFIG_APP_MAX; i++) {
+        if (s_apps[i].used && strcasecmp(name, s_apps[i].name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool app_dispatch(int argc, char **argv, int *errorlevel_out)
+{
+    if (argc < 1 || argv == NULL || argv[0] == NULL) {
+        return false;
+    }
+    for (int i = 0; i < P4_CONFIG_APP_MAX; i++) {
+        if (s_apps[i].used && strcasecmp(argv[0], s_apps[i].name) == 0) {
+            int result = s_apps[i].entry(argc, argv);
+            if (errorlevel_out != NULL) {
+                *errorlevel_out = result;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool app_get(int index, char *name_out, size_t name_size,
+             char *desc_out, size_t desc_size)
+{
+    if (index < 0 || index >= P4_CONFIG_APP_MAX || !s_apps[index].used) {
+        return false;
+    }
+    if (name_out != NULL && name_size > 0) {
+        snprintf(name_out, name_size, "%s", s_apps[index].name);
+    }
+    if (desc_out != NULL && desc_size > 0) {
+        snprintf(desc_out, desc_size, "%s", s_apps[index].description);
+    }
     return true;
 }

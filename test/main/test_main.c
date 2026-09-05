@@ -87,6 +87,7 @@ extern void test_variable_expansion_empty_name(void);
 extern void test_variable_expansion_single_quotes(void);
 extern void test_variable_expansion_caret_escape(void);
 extern void test_variable_expansion_multiple(void);
+extern void test_variable_expansion_pseudo_vars(void);
 extern void test_variable_expansion_errorlevel(void);
 extern void test_variable_expansion_output_truncated(void);
 extern void test_variable_expansion_null_input(void);
@@ -158,6 +159,8 @@ extern void test_calc_math_functions(void);
 extern void test_calc_trig_degrees(void);
 extern void test_calc_trig_radians(void);
 extern void test_calc_math_errors(void);
+extern void test_calc_new_math_functions(void);
+extern void test_calc_new_math_errors(void);
 extern void test_calc_string_functions(void);
 extern void test_calc_string_numbers(void);
 extern void test_calc_string_errors(void);
@@ -189,6 +192,20 @@ extern void test_applib_state(void);
 extern void test_applib_menu_primitives(void);
 extern void test_applib_read_password(void);
 extern void test_applib_app_mode(void);
+extern void test_applib_env_ops(void);
+extern void test_applib_app_registry(void);
+
+extern void test_db_name_valid_basic(void);
+extern void test_db_name_valid_rejects_bad(void);
+extern void test_db_name_valid_length(void);
+
+extern void test_alarm_recur_weekday_matches(void);
+extern void test_alarm_advance_daily(void);
+extern void test_alarm_advance_none(void);
+extern void test_alarm_advance_weekly_all_days(void);
+extern void test_alarm_advance_weekly_single_day(void);
+extern void test_alarm_parse_valid(void);
+extern void test_alarm_parse_invalid(void);
 
 void app_main(void)
 {
@@ -311,6 +328,7 @@ void app_main(void)
     RUN_TEST(test_variable_expansion_caret_escape);
     RUN_TEST(test_variable_expansion_multiple);
     RUN_TEST(test_variable_expansion_errorlevel);
+    RUN_TEST(test_variable_expansion_pseudo_vars);
     RUN_TEST(test_variable_expansion_output_truncated);
     RUN_TEST(test_variable_expansion_null_input);
     RUN_TEST(test_variable_expansion_null_output);
@@ -402,6 +420,8 @@ void app_main(void)
     RUN_TEST(test_calc_trig_degrees);
     RUN_TEST(test_calc_trig_radians);
     RUN_TEST(test_calc_math_errors);
+    RUN_TEST(test_calc_new_math_functions);
+    RUN_TEST(test_calc_new_math_errors);
     RUN_TEST(test_calc_string_functions);
     RUN_TEST(test_calc_string_numbers);
     RUN_TEST(test_calc_string_errors);
@@ -440,6 +460,27 @@ void app_main(void)
     RUN_TEST(test_applib_menu_primitives);
     RUN_TEST(test_applib_read_password);
     RUN_TEST(test_applib_app_mode);
+    RUN_TEST(test_applib_env_ops);
+    RUN_TEST(test_applib_app_registry);
+    UNITY_END();
+
+    /* Palm-OS-style database (components/db) tests — pure logic only; the
+     * SD-backed operations are verified on hardware (see db_test.py). */
+    UNITY_BEGIN();
+    RUN_TEST(test_db_name_valid_basic);
+    RUN_TEST(test_db_name_valid_rejects_bad);
+    RUN_TEST(test_db_name_valid_length);
+    UNITY_END();
+
+    /* Alarm (components/alarm) pure time/recurrence helpers. */
+    UNITY_BEGIN();
+    RUN_TEST(test_alarm_recur_weekday_matches);
+    RUN_TEST(test_alarm_advance_daily);
+    RUN_TEST(test_alarm_advance_none);
+    RUN_TEST(test_alarm_advance_weekly_all_days);
+    RUN_TEST(test_alarm_advance_weekly_single_day);
+    RUN_TEST(test_alarm_parse_valid);
+    RUN_TEST(test_alarm_parse_invalid);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

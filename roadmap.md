@@ -1,13 +1,25 @@
-# P4MiniShell Roadmap
+# P4MiniShell Roadmap (v0.35.2 cleanup, 80×25 `utf8[4]` TUI, stack 24576 `p4minishell_config.h:1514` at `0x4012b75a`, companion 7 BATs TUI-expanded COM11 PASS)
 
 ## Goal
-The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong PowerShell-style usability, a stable SDK for native apps written in C, and app loading from the SD card.
+The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
 
-On this hardware, that goal needs to be interpreted carefully:
-- Practical target: PowerShell-like shell behavior on UART console, DOS-style file commands on SD, native ESP32-P4 applications stored on SD, and a small C SDK/API for those apps.
+On this hardware, that goal is interpreted as a **hybrid route** (established in
+v0.33.0): the on-SD **batch files are the apps** — they carry the program logic,
+state, and flow — while **native code supplies the polished surfaces** that batch
+cannot draw (dialogs, lists, text input, the `edit` editor) and the **applib**
+C SDK gives native programs the same transcript/input/state contract. There is
+no executable `.exe` loader and no `run` verb; an app is a `.bat` (or a small
+native program that uses applib) that lives in a PATH directory on the SD card.
 
-## Current baseline (v0.32.0 — August 2026)
-Implemented today in the checked-in firmware:
+Concretely:
+- Practical target: PowerShell-like shell behavior on the UART console, DOS-style
+  file commands on SD, a rich batch language, a library of native modal surfaces,
+  a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
+
+## Current baseline (v0.35.1 — August 2026, hardware-verified final TUI state)
+Implemented today in the checked-in firmware (final TUI hardware-verified on COM11, extensive bug hunting):
+
+**Hardware testing done:** flash to COM11 succeeded, boot verified (`P4MiniShell v0.35.1 ready`, transcript rect `1024x510` via `tui status`), extensive serial tests run without abort/watchdog/overlap — `draw box` single/double/rounded with title + nested window stack (`tui_draw_box` `components/tui/tui.c:228` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35`), `draw line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen` (single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35`, title+style correctly handled `tui_draw_box` `components/tui/tui.c:228`), `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app, header hidden completely via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`, kept visible by default, dynamic keyboard scaling via `windows_notify_keyboard_visibility`), `color`/`locate` verified, `tui_flush` `components/tui/tui.c:356` recolor `#RRGGBB` per fg run via `ansi_get_palette_color`; prompt fixed in all inputs (`main.c:112` `shell_prompt_render_plain()` `components/shell/shell.c:412`, `modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea`); screenshot debug loop (`grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py`, `tui status` `1024x510` `80x25`); font extended in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F/U+2600-U+26FF, cmaps 3, no duplication, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`); modal `dialog`/`list`/`ask` with timeout + serial input + `browse`/`view` all pass (`draw` auto-enters TUI `components/tui/tui.c:56`); memory-pressure fixes (`P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024 `p4minishell_config.h:93`, `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024→512 `p4minishell_config.h:134`, `P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192→4096 `p4minishell_config.h:626`, `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 `p4minishell_config.h:117`, `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514` at `0x4012b75a`ONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 with 1/4 keep + trim-below-10KB) applied. ANSI wifi `[wifi]` white→cyan verified, audio `bsp_audio_init` abort guard, modal `EventGroup` PSRAM (`MALLOC_CAP_SPIRAM` `components/modal/modal.c:46`), dialog/list/ask serial routing, draw auto-enter TUI — all fixed (bugs.md M22–M30). Essential features implemented: window stack (tui_draw_box with title, nested boxes), fullscreen, color, prompt, screenshot debug. Companion fully TUI-expanded and hardware-verified (7 BATs, push_sd.py COM11 PASS LIB 1896 COMPANION 1552 SYS 1486 FILES 3946 NET 2893 FUN 3968 SET 3109, M31 stack overflow at 0x4012b75a fixed by 16384→24576, M19–M31 all fixed) — see `changelog.md` 0.35.1 and `bugs.md` M19–M31.
 
 ### Shell Core & UI
 - ✅ PowerShell-style prompt: `PS \path> ` with ANSI-colored tokens (bright white PS, bright yellow path, bright white >)
@@ -39,6 +51,7 @@ Implemented today in the checked-in firmware:
 - ✅ `components/storage/` — SD session management, path resolution, FATFS conversion, current working directory, DOS file commands
 - ✅ `components/batch/` — Batch engine, `:label` handling, `for` loops, pipes, environment variables, PATH, errorlevel, batch language commands
 - ✅ `components/command/` — Command module (parser, dispatcher, worker task, execution pipeline, hardware and system commands)
+- ✅ `components/modal/` — Shared modal runtime and native modal surfaces (`dialog`, `list`, `ask`, `browse`/`filebrowser`, `view`, `hexview`) — 6 surfaces sharing one `modal_surface_t` runtime; TUI logical grid `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) maps to the live transcript region via `windows_enter_editor_mode`
 - ✅ `components/clock/` — Clock manager (SNTP time sync, timezone, local/UTC formatting)
 - ✅ `components/networking/` — Hosted Wi-Fi + NimBLE Bluetooth on C6
 - ✅ `components/usb/` — USB Host MSC storage + HID keyboard/mouse
@@ -84,6 +97,9 @@ Implemented today in the checked-in firmware:
       `tokens=` binds consecutive letters and `*` captures the rest (v0.32.0)
 - ✅ DOSKEY-style `alias` / `unalias` with SD persistence (`alias /save` writes
       `sd:/ALIASES.BAT`, auto-loaded after CONFIG.SYS) and prompt-only expansion
+- ✅ Native modal surfaces for batch apps: `dialog`, `list`, `ask`, `browse`/`filebrowser`, `view`, `hexview` (shared modal
+      runtime in `components/modal/`; logical `80×25` TUI grid via `windows_enter_editor_mode`/`windows_refresh_editor_surface`; CSI via `ansi.c`; `dialog`/`list`/`ask` dispatcher fix in `command.c`)
+- ✅ Header notifications from batch (`notify`) and native apps (`app_notify`)
 - ✅ Trailing `^` line continuation, honored by both the executor and the label scanner
 
 ### Wi-Fi & Bluetooth
@@ -216,14 +232,24 @@ Implemented today in the checked-in firmware:
 
 ---
 
+## Recently Completed (v0.35.2 - September 2026)
+
+### Cleanup — root quarantine, dedup, layering, build/config drift
+- ✅ Root one-shot scripts quarantined: 16 harnesses → `tools/harness/`, 70+ patch scripts + 7 `*.txt` dumps deleted; `apps/companion/push_sd.py` stays with the app
+- ✅ `browse` verb unified on `P4_CONFIG_TUI_BROWSE_PATH_BYTES` + `"Browse"` (`components/command/command.c:2413`, `components/batch/batch.c:3610`); `shell_launch_app` heap buffer; `gfind` bounds via `P4_CONFIG_*`
+- ✅ Shell `REQUIRES` trimmed (ops-table decoupling), root `EXTRA_COMPONENT_DIRS` = 23, yaml `ps_color_*`/`db_flag_secret` added, LVGL demos pinned off, `.gitignore` covers `sdkconfig`
+- ✅ Docs revised to v0.35.2 in exact per-file style (see changelog `## [0.35.2]`)
+
+---
+
 ## Recently Completed (v0.32.0 - August 2026)
 
 ### FX-870P/VX-4 BASIC port into the batch language
 - ✅ `calc` float calculator (`components/batch/calc.c`): `calc [NAME=] <expr>` evaluates a
   floating-point expression over double/fixed-string values and stores the result in an
   environment variable when `NAME=` is given. Functions: `ABS SGN INT FIX FRAC ROUND SQR
-  EXP LN LOG SIN COS TAN SINH COSH TANH ASN/ASIN ACS/ACOS ATN/ATAN FACT NCR NPR DMS DMS$
-  VAL VALF STR$ HEX$ ASC CHR$ LEN LEFT$ MID$ RIGHT$ MOD POL REC`. Grammar: `+ - * / ^`
+  EXP LN LOG SIN COS TAN SINH COSH TANH ASINH ACOSH ATANH ASN/ASIN ACS/ACOS ATN/ATAN FACT NCR NPR DMS DMS$
+  DEG CUR VAL VALF STR$ HEX$ ASC CHR$ LEN LEFT$ MID$ RIGHT$ MOD POL REC`. Grammar: `+ - * / ^`
   (right-assoc power), the `MOD` keyword, unary `- +`, parentheses, `&H`/`0x` hex, `PI`, a
   seeded `RAN#`, string literals with `+` concatenation, and env-var references. `calc
   /deg|/rad|/angle` set/query the trig angle mode; `calc /hex` prints `&H` hex. `POL`/`REC`
@@ -753,8 +779,14 @@ native-app process model remains open:
       transcript/`>`/`>>` capture, and it can be a pipe stage
       (`echo x | filter.bat | findstr ...`). Native apps use the applib
       console API (v0.32.1).
-- ❌ No ABI for passing argv, environment variables, or current directory into apps (batch: `%0`..`%9`/`%*`, env table, storage cwd)
-- ❌ No memory or task ownership rules for third-party programs (batch runs on the shared worker task; the applib allocation policy is defined)
+- ✅ ABI for passing argv, environment variables, and current directory into
+  apps — added in v0.33.0: the native-app ABI (`applib_app.h` + `applib_env.h`)
+  gives a registered C app `argc`/`argv` (`argv[0]` = app name), the shared env
+  table (`app_env_get`/`set`) and the storage cwd (`app_get_cwd`), with the
+  return value becoming ERRORLEVEL — the native equivalent of batch's
+  `%0..%9`/`%*` + env table + cwd. Sample app `hello` in `main/native_apps.c`.
+- ✅ Memory ownership rules for apps — the applib allocation policy is defined
+  (`app_alloc`/`app_free`, PSRAM-aware) and apps run on the shared worker task.
 
 ### 6. `.exe` support strategy
 This needs an explicit design decision before implementation starts:
@@ -817,10 +849,13 @@ documented in `SDK.md` ("Modal app surfaces"):
 - ✅ Packaging rules for SD deployment — done for batch files in v0.32.0 (`SDK.md`,
   "Authoring and deploying batch files": UTF-8/CRLF, `*.bat` naming and PATH placement,
   line/label limits, quoting, validation); native C app packaging remains open
-- ✅ A documented ABI or loader manifest format — partially answered: `applib.h`
-  (`components/applib`) is the stable runtime ABI for native apps (console,
-  memory, time/sysinfo, Wi-Fi state); a loader manifest for SD-deployed apps
-  remains open
+- ✅ A documented ABI for native apps — `applib.h` (`components/applib`) is the
+  stable runtime ABI: console output, memory, time/sysinfo, Wi-Fi state, app
+  mode/notifications, and — added in v0.33.0 — the **native-app ABI**
+  (`applib_app.h` + `applib_env.h`): an `app_main_t` entry that receives
+  `argc`/`argv`, plus `app_env_get`/`set` and `app_get_cwd`, with the return
+  value becoming ERRORLEVEL. A loader manifest for SD-deployed apps remains
+  open (SD-deployed apps are batch files in the hybrid route)
 
 ## Suggested delivery phases
 
@@ -852,44 +887,54 @@ documented in `SDK.md` ("Modal app surfaces"):
 - ✅ Recursive `tree` command — implemented in v0.18.0 with `/F` and `/A`
 - ✅ `choice` keypress wait, `setlocal`/`endlocal` scoping, `pause` key wait — implemented in v0.18.0
 
-### Phase 3: app runtime contract
-- ❌ Define a native app ABI for ESP32-P4 programs
-- ❌ Decide whether apps are loaded dynamically, linked as plugins, or executed through an interpreted wrapper
+### Phase 3: app runtime contract — ✅ COMPLETED (hybrid route, v0.33.0)
 - ✅ Define stdout, stderr, stdin, argv, cwd, PATH, and environment propagation — answered
-  for the **batch** surface in v0.32.0: `command.md` ("Batch process model") and `SDK.md`
+  for the **batch** surface: `command.md` ("Batch process model") and `SDK.md`
   ("Batch process model") define stdout (transcript + `>`/`>>`), stderr (interleaved, no
   separate stream), stdin (the storage input-redirection slot, consumed by the text tools,
   `for /f`, and `set /p < file`), argv (`%0`..`%9`/`%*`), cwd (storage-owned), PATH
-  (batch-owned), and environment propagation (`call` + `setlocal`/`endlocal`). A native app
-  ABI for standalone C programs remains open (see Phase 4/5).
-- ✅ Define how apps yield control back to the shell cleanly — answered by the
-  `edit` modal-surface pattern: a worker session + LVGL view pair with a
-  session event group, the window-manager editor-mode handoff, and
-  `shell_command_ops_t` input hooks (see SDK.md, "Modal app surfaces").
+  (batch-owned), and environment propagation (`call` + `setlocal`/`endlocal` + automatic
+  routine isolation for `call <file>::<routine>`).
+- ✅ Define how apps yield control back to the shell cleanly — answered by the shared
+  **modal runtime** (`components/modal/`): a worker session + LVGL view pair with an event
+  group, the window-manager handoff, and generic input routing (`shell_command_ops_t.modal_*`).
+  The `edit` editor, `dialog`, `list`, and `ask` all run on it.
+- ✅ Provide the on-SD batch-app model — no executable loader needed: a `.bat` in a PATH
+  directory **is** the app. The `apps/companion` sample proves it end-to-end.
 
-### Phase 4: SDK and samples
-- ✅ Publish a stable shell SDK in C (in progress — see "SDK and API work
-  required": the modal app-surface contract is defined by the editor)
-- ✅ `edit` — DOS-style inline text editor with DOS-EDIT search parity
-  (Find / Repeat / Replace / Go-to-Line, Save As, overwrite, word nav,
-  delete line, quit confirm; v0.24.35); ❌ `view`, `netinfo`, `hexview`
-  still open
-- ✅ Provide host-side build instructions and packaging rules for SD deployment — answered
-  for the **batch** surface in v0.32.0: `SDK.md` ("Authoring and deploying batch files")
-  documents UTF-8/CRLF, `*.bat` naming and PATH placement, line/label/continuation limits,
-  quoting rules, environment hygiene, and the validation flow. Build templates and
-  packaging rules for native C apps remain open.
+### Phase 4: SDK and samples — ✅ COMPLETED (v0.35.0)
+- ✅ `applib` native-app runtime: transcript stdout, shared memory, time/input/state helpers,
+  Wi-Fi accessors, and `app_mode_enter`/`app_notify`. See `SDK.md`.
+- ✅ Native modal surfaces for batch apps: `dialog`, `list`, `ask` (with `/t:` timeouts,
+  `/v:` result variables, `/p` password mode) and the `edit` editor — dispatcher now wired in `command.c` (dialog/list/ask fix).
+- ✅ Reference sample: `apps/companion` — a complete pure-batch system helper (dashboard,
+  file tools + note pad, network tools, games, persisted settings) and its host-side
+  `push_sd.py` / `run_companion.py` tools — migrated to `list`/`dialog`/`browse`/`view`/`hexview` with 255-cancel handling (v0.35.0).
+- ✅ Palm-OS-style SD record store: `db` command family + `components/db` core +
+  `applib_db.h` for native apps (named DBs under `sd:/DBS/<name>.DB/`, monotonic ids,
+  16 categories, secret/redacted payloads, soft-delete + purge, text export/import).
+- ✅ SD-persisted alarms + calendar: `components/alarm` (store + one background checker
+  that reuses header/LED/audio and queues `/run:` batches onto the command worker),
+  `alarm`/`cal` commands, boot catch-up, daily/weekly recurrence.
+- ✅ TUI restoration (v0.35.0): `browse`/`filebrowser`, `view`, `hexview` pagers + `draw`/`color`/`locate` batch TUI verbs on a logical `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) cell buffer via `windows_enter_editor_mode`/`windows_refresh_editor_surface`; CSI via `ansi.c`; native `applib_tui.h` stub declared (`tui_create/destroy/box/print_at/refresh/clear`).
+- ✅ App packaging conventions (standard app folder layout + `ALIASES.BAT`/`AUTOEXEC.BAT` hook to launch an app at boot) via `launch`/`APPINFO`.
 
-### Phase 5: SD app launcher
-- ❌ Add `run` or direct executable invocation from the command line
-- ❌ Support app discovery from PATH-like directories on SD
-- ❌ Add metadata, versioning, and validation for deployed apps
-- ❌ Decide whether `.exe` is a native shell-app extension or a compatibility layer
+### Phase 5: SD app discovery + ecosystem
+- ⏳ Add PATH-based app discovery ergonomics: a `launch`/menu of installed `.bat` apps, an
+  optional boot-time "offer to launch" hook, and an `APPINFO`-style metadata convention.
+- ⏳ Ship a few more reference apps (a text adventure, a note/Zettelkasten app, a live
+  dashboard with RGB/audio "mood") to keep pressure-testing the batch engine.
+- ⏳ Add a self-update path for `.bat` apps (`httpget` a newer file into place) — the
+  `httpget` + free-space guardrails already exist.
+- ❌ Not planned: a native `.exe`/`run` loader. Native programs use `applib` and are linked
+  into the firmware, not loaded from SD.
 
 ### Phase 6: optional DOS compatibility layer
 - ❌ Evaluate whether literal DOS `.exe` support is still required
 - ❌ If yes, design a VM or emulator boundary separate from the shell core
 - ❌ Keep it optional so the base shell remains usable without the compatibility cost
+- (Deprioritized: the hybrid route already delivers a DOS-like batch surface without an
+  emulator; DOS `.exe` support would only matter for running legacy binaries.)
 
 ## Full project review (2026-08-08)
 
@@ -1229,12 +1274,24 @@ real issues found in the codebase, not just new feature work.
     Stack impact is +384 bytes per function — well within the 8192-byte command
     worker task budget. Affects `storage_copy_file()` and `sd cat`.
 
-### Priority 5 — New subsystem work (Phases 3-6)
+### Priority 5 — New subsystem work (Phases 3-6, hybrid route)
 
-17. **App runtime**: Define the native app ABI and loader contract (Phase 3)
-18. **SDK**: Publish stable C SDK headers and sample apps (Phase 4)
-19. **SD app launcher**: `run` plus PATH-based app discovery (Phase 5)
-20. **DOS compatibility layer**: Decide whether literal `.exe` support is required (Phase 6)
+17. **More native modal surfaces** (Phase 4): a `view`/pager and `hexview`
+    surface on the shared modal runtime, plus a file-picker surface for batch
+    apps — each one pressure-tests the runtime and the batch engine.
+18. **Batch-language depth** (Phase 4): the `for /f "…" in ('command')` command
+    form, `%~1`-style argument modifiers, and a shared `BATCHLIB` of callable
+    routines; keep aligning oddities with cmd.exe (e.g. `set NAME=` defining an
+    empty variable).
+19. **App discovery + packaging** (Phase 5): ✅ installed-apps listing and
+    menu (`launch`), the `APPINFO` metadata convention
+    (`sd:/APPS/<name>.APPINFO`), and the boot-time offer hook (CONFIG.SYS
+    `LAUNCH_APP=`) — all added in v0.33.0. ⏳ remaining: a self-update flow
+    for `.bat` apps via `httpget` (the HTTP client + free-space guardrails
+    already exist).
+20. **DOS compatibility layer** (Phase 6): optional, only if running legacy
+    DOS `.exe` binaries ever matters — otherwise the batch surface is the
+    compatibility layer.
 
 ---
 

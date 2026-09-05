@@ -19,6 +19,9 @@
 #include "header.h"
 #include "keyboard.h"
 #include "ansi.h"
+
+extern void tui_hide_for_modal(void);
+extern void tui_show_after_modal(void);
 #include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
 #include "board_config.h"
@@ -57,6 +60,10 @@ static struct {
     /* App mode: the shell input widgets are hidden for a full-screen app
      * surface (kept separate from editor mode; both hide the input row). */
     bool app_mode;
+    /* TUI mode: like editor mode but for the TUI cell buffer. */
+    bool tui_mode;
+    lv_obj_t *tui_surface;
+    bool fullscreen;
 } s_windows = {
     .initialized = false,
     .screen = NULL,
@@ -72,6 +79,9 @@ static struct {
     .editor_surface = NULL,
     .editor_status = NULL,
     .app_mode = false,
+    .tui_mode = false,
+    .tui_surface = NULL,
+    .fullscreen = false,
 };
 
 /* ========================================================================
@@ -432,7 +442,14 @@ static bool s_transcript_apply_pending = false;
  * (LVGL event or UART console task) and read on the LVGL task, both of which
  * serialize through the LVGL port lock. */
 static bool s_transcript_force_follow = false;
-static char s_transcript_staged[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
+/* Staged ANSI text awaiting span conversion, plus the rendered-prefix
+ * snapshot used to detect scrollback truncation. Both live in PSRAM (not
+ * internal DRAM): at P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES each they would
+ * otherwise consume ~2x scrollback of internal heap and force the very
+ * memory-pressure trims they exist to survive. Allocated on first transcript
+ * creation with an internal-heap fallback; every use NULL-checks. */
+static char *s_transcript_staged = NULL;
+static char *s_transcript_rendered_prefix = NULL;
 
 /* Incremental-render bookkeeping. s_transcript_rendered_len is the byte count
  * of s_transcript_staged already converted into spans; the prefix snapshot lets
@@ -441,9 +458,60 @@ static char s_transcript_staged[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
  * across an append that splits a colour run, so the next fragment keeps its
  * hue instead of restarting at the default colour. */
 static size_t s_transcript_rendered_len = 0;
-static char s_transcript_rendered_prefix[P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES];
 static uint32_t s_transcript_last_fg = 0;
 static uint32_t s_transcript_seen_fg = 0;
+
+/**
+ * Ensure the PSRAM staging buffers exist. Called on every staging-buffer use
+ * (all callers hold the LVGL port lock or run on the LVGL task, and allocation
+ * happens once, so no race). Returns false when neither PSRAM nor the internal
+ * fallback could satisfy the request; callers then skip the render update
+ * rather than touching a NULL buffer.
+ */
+static bool windows_transcript_staging_ensure(void)
+{
+    if (s_transcript_staged != NULL && s_transcript_rendered_prefix != NULL) {
+        return true;
+    }
+    if (s_transcript_staged == NULL) {
+        s_transcript_staged = heap_caps_malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES,
+                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_transcript_staged == NULL) {
+            s_transcript_staged = malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES);
+        }
+        if (s_transcript_staged != NULL) {
+            s_transcript_staged[0] = '\0';
+        }
+    }
+    if (s_transcript_rendered_prefix == NULL) {
+        s_transcript_rendered_prefix = heap_caps_malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES,
+                                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_transcript_rendered_prefix == NULL) {
+            s_transcript_rendered_prefix = malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES);
+        }
+        if (s_transcript_rendered_prefix != NULL) {
+            s_transcript_rendered_prefix[0] = '\0';
+        }
+    }
+    return s_transcript_staged != NULL && s_transcript_rendered_prefix != NULL;
+}
+
+/** Release the PSRAM staging buffers (windows_deinit). */
+static void windows_transcript_staging_free(void)
+{
+    if (s_transcript_staged != NULL) {
+        heap_caps_free(s_transcript_staged);
+        s_transcript_staged = NULL;
+    }
+    if (s_transcript_rendered_prefix != NULL) {
+        heap_caps_free(s_transcript_rendered_prefix);
+        s_transcript_rendered_prefix = NULL;
+    }
+    s_transcript_rendered_len = 0;
+    s_transcript_last_fg = 0;
+    s_transcript_seen_fg = 0;
+    s_transcript_apply_pending = false;
+}
 
 /**
  * Segment callback for ansi_process_text(): append one coloured span holding
@@ -556,8 +624,13 @@ static void windows_transcript_apply(void)
     const char *append_start;
     uint32_t default_fg;
 
-
     if (container == NULL || spans == NULL) {
+        return;
+    }
+
+    /* Staging lives in PSRAM; if it could not be allocated, there is nothing
+     * to render (the UART console still received the text). */
+    if (!windows_transcript_staging_ensure()) {
         return;
     }
 
@@ -618,7 +691,7 @@ static void windows_transcript_apply(void)
 
     /* Record how much of the staged buffer is now rendered. */
     s_transcript_rendered_len = new_len;
-    snprintf(s_transcript_rendered_prefix, sizeof(s_transcript_rendered_prefix),
+    snprintf(s_transcript_rendered_prefix, P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES,
              "%s", s_transcript_staged);
 
     /* Size the child to its new content height, then force one layout pass so
@@ -640,41 +713,48 @@ static void windows_transcript_apply_cb(void *user_data)
 }
 
 /**
- * Drop the oldest half of the rendered scrollback and free its spans.
+ * Drop the oldest quarter of the rendered scrollback and free its spans.
  *
  * Runs under memory pressure (see shell_transcript_guard_internal): the
  * accumulated span objects live in the internal heap, so this reclaims them
  * synchronously before a command prints. The caller must hold the LVGL port
- * lock. The staged buffer keeps the newest half plus the truncation marker,
- * so the next append re-renders only a small tail.
+ * lock.
+ *
+ * Only the OLDEST quarter of spans is deleted, so the newest content stays
+ * on screen without an empty-frame flash. The staged buffer is NOT modified
+ * here - it will be synced from the main transcript buffers (which already
+ * contain the trim marker) on the next append via windows_set_transcript_text().
+ * The render bookkeeping is reset so the next apply reconciles spans against
+ * the new staged text in one pass.
  */
 void windows_transcript_trim(void)
 {
-    static const char marker[] = "\n[history trimmed under memory pressure]\n";
     lv_obj_t *spans = s_windows.transcript_spans;
-    size_t len = strlen(s_transcript_staged);
-    size_t keep;
+    uint32_t span_count;
+    uint32_t drop_spans;
+    uint32_t index;
 
-    if (spans == NULL || len == 0) {
+    if (!windows_transcript_staging_ensure()) {
         return;
     }
 
-    keep = len / 2;
-    if (keep < sizeof(marker)) {
-        keep = len > 0 ? 1 : 0;
+    if (spans == NULL) {
+        return;
     }
 
-    windows_transcript_clear_spans(spans);
+    span_count = lv_spangroup_get_span_count(spans);
 
-    if (len > keep) {
-        size_t copy_len = len - keep;
-        memmove(s_transcript_staged, s_transcript_staged + keep, copy_len);
-        s_transcript_staged[copy_len] = '\0';
-        size_t marker_space = sizeof(s_transcript_staged) - copy_len;
-        if (marker_space > sizeof(marker)) {
-            memcpy(s_transcript_staged + copy_len, marker, sizeof(marker) - 1);
-            s_transcript_staged[copy_len + sizeof(marker) - 1] = '\0';
+    /* Free roughly the oldest quarter of spans immediately (this is the
+     * internal-heap reclamation the guard needs), leaving the newest spans
+     * visible so the screen never flashes empty. */
+    drop_spans = span_count / 4;
+    for (index = 0; index < drop_spans; index++) {
+        lv_span_t *span = lv_spangroup_get_child(spans, 0);
+
+        if (span == NULL) {
+            break;
         }
+        lv_spangroup_delete_span(spans, span);
     }
 
     s_transcript_rendered_len = 0;
@@ -712,12 +792,15 @@ void windows_set_transcript_text(const char *text)
     if (text == NULL) {
         text = "";
     }
+    if (!windows_transcript_staging_ensure()) {
+        return;
+    }
 
     /* Stage the raw ANSI text for the deferred span render. Callers hold the
      * LVGL port lock, so the staging buffer is never written and read
      * concurrently. The staging buffer is twice the ANSI transcript size, so
      * the accumulated scrollback always fits. */
-    snprintf(s_transcript_staged, sizeof(s_transcript_staged), "%s", text);
+    snprintf(s_transcript_staged, P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES, "%s", text);
 
     windows_transcript_schedule_apply();
 }
@@ -942,6 +1025,10 @@ void windows_deinit(void)
     s_windows.scroll_up_button = NULL;
     s_windows.scroll_down_button = NULL;
     s_windows.initialized = false;
+
+    /* Release the PSRAM staging buffers so a rebuild starts clean. They are
+     * re-allocated on the next transcript creation. */
+    windows_transcript_staging_free();
 }
 
 bool windows_is_initialized(void)
@@ -996,6 +1083,14 @@ void windows_notify_keyboard_visibility(bool visible)
         if (!windows_editor_surface_height_ok()) {
             ESP_LOGW(WINDOWS_TAG, "editor surface collapsed to %d px",
                      (int)lv_obj_get_height(s_windows.editor_surface));
+        }
+    }
+
+    if (s_windows.tui_mode) {
+        windows_refresh_tui_surface();
+        if (!windows_tui_surface_height_ok()) {
+            ESP_LOGW(WINDOWS_TAG, "tui surface collapsed to %d px",
+                     (int)lv_obj_get_height(s_windows.tui_surface));
         }
     }
 }
@@ -1063,6 +1158,9 @@ lv_obj_t *windows_enter_editor_mode(void)
     if (s_windows.screen == NULL) {
         return NULL;
     }
+    if (s_windows.tui_mode) {
+        tui_hide_for_modal();
+    }
 
     /* Hide the shell input widgets. The transcript container is NOT hidden:
      * it becomes the editor surface, so it must stay visible and keep the
@@ -1118,6 +1216,9 @@ void windows_exit_editor_mode(void)
 {
     if (!s_windows.editor_mode) {
         return;
+    }
+    if (s_windows.tui_mode) {
+        tui_show_after_modal();
     }
 
     /* The editor surface aliases the transcript container; do not delete it.
@@ -1219,3 +1320,79 @@ void windows_exit_app_mode(void)
     }
     s_windows.app_mode = false;
 }
+
+/* ========================================================================
+ * TUI MODE
+ * ======================================================================== */
+
+lv_obj_t *windows_enter_tui_mode(void)
+{
+    if (s_windows.tui_mode) return s_windows.tui_surface;
+    if (s_windows.screen == NULL) return NULL;
+    if (s_windows.editor_mode) return NULL;
+    if (s_windows.prev_button) lv_obj_add_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.next_button) lv_obj_add_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.scroll_up_button) lv_obj_add_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.scroll_down_button) lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.input_line) lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.transcript_spans) lv_obj_add_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    s_windows.tui_surface = s_windows.transcript;
+    s_windows.tui_mode = true;
+    windows_refresh_tui_surface();
+    return s_windows.tui_surface;
+}
+
+void windows_exit_tui_mode(void)
+{
+    if (!s_windows.tui_mode) return;
+    s_windows.tui_surface = NULL;
+    if (s_windows.transcript) lv_obj_remove_flag(s_windows.transcript, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.transcript_spans) lv_obj_remove_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.transcript) windows_apply_transcript_height();
+    if (s_windows.prev_button) lv_obj_remove_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.next_button) lv_obj_remove_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.scroll_up_button) lv_obj_remove_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.scroll_down_button) lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.input_line) lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+    s_windows.tui_mode = false;
+}
+
+bool windows_tui_mode_active(void) { return s_windows.tui_mode; }
+lv_obj_t *windows_get_tui_surface(void) { return s_windows.tui_surface; }
+
+void windows_refresh_tui_surface(void)
+{
+    if (!s_windows.tui_mode || !s_windows.tui_surface) return;
+    lv_obj_set_height(s_windows.tui_surface, windows_get_rect(WINDOW_REGION_TRANSCRIPT).height);
+    lv_obj_update_layout(s_windows.tui_surface);
+}
+
+bool windows_tui_surface_height_ok(void)
+{
+    if (!s_windows.tui_mode || !s_windows.tui_surface) return false;
+    return lv_obj_get_height(s_windows.tui_surface) >= windows_get_rect(WINDOW_REGION_TRANSCRIPT).height;
+}
+
+void windows_set_fullscreen(bool fullscreen)
+{
+    if (s_windows.fullscreen == fullscreen) return;
+    s_windows.fullscreen = fullscreen;
+    header_set_visible(!fullscreen);
+    if (s_windows.input_row) {
+        if (fullscreen) lv_obj_add_flag(s_windows.input_row, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_remove_flag(s_windows.input_row, LV_OBJ_FLAG_HIDDEN);
+    }
+    // Keyboard auto-hidden in fullscreen; will be restored on exit if needed
+    if (fullscreen) {
+        extern void keyboard_hide(void);
+        keyboard_hide();
+    }
+    if (s_windows.transcript) {
+        windows_apply_transcript_height();
+        lv_obj_update_layout(s_windows.transcript);
+    }
+    if (s_windows.tui_mode) windows_refresh_tui_surface();
+    if (s_windows.editor_mode) windows_refresh_editor_surface();
+}
+
+bool windows_is_fullscreen(void) { return s_windows.fullscreen; }

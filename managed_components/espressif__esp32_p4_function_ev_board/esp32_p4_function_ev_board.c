@@ -305,7 +305,11 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     /* Setup I2S peripheral */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(BOARD_CFG_I2S_PORT, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true; // Auto clear the legacy data in the DMA buffer
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
+    esp_err_t _err = i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan);
+    if (_err != ESP_OK) {
+        ESP_LOGE("bsp_audio", "i2s_new_channel failed: %s", esp_err_to_name(_err));
+        return _err;
+    }
 
     /* Setup I2S channels */
     const i2s_std_config_t std_cfg_default = BSP_I2S_DUPLEX_MONO_CFG(22050);
@@ -315,13 +319,29 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     }
 
     if (i2s_tx_chan != NULL) {
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg));
-        ESP_ERROR_CHECK(i2s_channel_enable(i2s_tx_chan));
+        esp_err_t err = i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE("bsp_audio", "i2s tx init failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        err = i2s_channel_enable(i2s_tx_chan);
+        if (err != ESP_OK) {
+            ESP_LOGE("bsp_audio", "i2s tx enable failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     if (i2s_rx_chan != NULL) {
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg));
-        ESP_ERROR_CHECK(i2s_channel_enable(i2s_rx_chan));
+        esp_err_t err = i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE("bsp_audio", "i2s rx init failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        err = i2s_channel_enable(i2s_rx_chan);
+        if (err != ESP_OK) {
+            ESP_LOGE("bsp_audio", "i2s rx enable failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -338,11 +358,22 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
 {
     if (i2s_data_if == NULL) {
         /* Initilize I2C */
-        ESP_ERROR_CHECK(bsp_i2c_init());
+        esp_err_t err = bsp_i2c_init();
+        if (err != ESP_OK) {
+            ESP_LOGE("bsp_audio", "bsp_i2c_init failed: %s", esp_err_to_name(err));
+            return NULL;
+        }
         /* Configure I2S peripheral and Power Amplifier */
-        ESP_ERROR_CHECK(bsp_audio_init(NULL));
+        err = bsp_audio_init(NULL);
+        if (err != ESP_OK) {
+            ESP_LOGE("bsp_audio", "bsp_audio_init failed: %s", esp_err_to_name(err));
+            return NULL;
+        }
     }
-    assert(i2s_data_if);
+    if (i2s_data_if == NULL) {
+        ESP_LOGE("bsp_audio", "i2s_data_if is NULL after init");
+        return NULL;
+    }
 
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
 

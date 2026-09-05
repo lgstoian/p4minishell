@@ -121,16 +121,16 @@ typedef struct {
     int (*complete_word)(const char *word, bool first_token, int match_index,
                          char *out, size_t out_size);
 
-    /** Report whether the modal editor is currently open. */
-    bool (*editor_is_active)(void);
+    /** Report whether any native modal surface is currently open. */
+    bool (*modal_is_active)(void);
 
-    /** Handle a USB key press while the editor is open (LVGL task).
-     *  @return true when the key was consumed by the editor. */
-    bool (*editor_handle_usb_key)(uint8_t key_code, uint8_t modifiers, char ascii);
+    /** Handle a USB key press while a modal surface is open.
+     *  @return true when the key was consumed by the surface. */
+    bool (*modal_handle_usb_key)(uint8_t key_code, uint8_t modifiers, char ascii);
 
-    /** Feed a line of serial console input to the modal editor while it is
-     *  open. Returns true when the line was consumed by the editor. */
-    bool (*editor_handle_serial_line)(const char *line);
+    /** Feed a line of serial console input to the active modal surface.
+     *  Returns true when the line was consumed by the surface. */
+    bool (*modal_handle_serial_line)(const char *line);
 } shell_command_ops_t;
 
 /**
@@ -172,6 +172,10 @@ void shell_transcript_appendf_ansi(const char *format, ...);
 /** Schedule text to be appended from a non-LVGL task context.
  *  Uses a staging buffer flushed via LVGL async callback. */
 void shell_schedule_transcript_appendf(const char *format, ...);
+
+/** Schedule ANSI-coloured text from a non-LVGL task (like the plain form but
+ *  interprets @-specifiers via ansi_vformat and renders with colours). */
+void shell_schedule_transcript_appendf_ansi(const char *format, ...);
 
 /* ========================================================================
  * SEMANTIC OUTPUT HELPERS
@@ -220,6 +224,9 @@ void shell_transcript_reset(void);
  * before output is emitted.
  */
 void shell_transcript_guard_internal(void);
+
+/** Number of scrollback trims performed since boot (internal-heap guard). */
+size_t shell_transcript_trim_count(void);
 
 /* ========================================================================
  * APP MODE (screen save/restore + full-screen surface)
@@ -379,6 +386,39 @@ bool shell_clipboard_is_file(void);
  * mode). Returns false when the transcript is empty.
  */
 bool shell_clipboard_copy_transcript(int n_lines);
+
+/* ========================================================================
+ * TRANSCRIPT CLICK REGIONS (for anchor command)
+ * ========================================================================
+ * The transcript can have clickable regions defined by the `anchor` command.
+ * When the user clicks (mouse/touch) in the transcript area, the shell
+ * checks if the click falls within any region and executes the associated
+ * command. Regions are cleared on `cls`, `clear`, alt-screen enter/exit,
+ * and `anchor /clear`.
+ */
+
+/**
+ * Add a clickable region to the transcript.
+ * @param text     The anchor text (displayed in transcript).
+ * @param command  Command to execute when clicked.
+ * @param continue_line  If true, the anchor text continues on the same line (for /c).
+ */
+void shell_transcript_add_anchor_region(const char *text, const char *command, bool continue_line);
+
+/**
+ * Clear all transcript click regions.
+ * Called on `cls`, `clear`, alt-screen enter/exit, and `anchor /clear`.
+ */
+void shell_transcript_clear_click_regions(void);
+
+/**
+ * Hit-test a click position against all regions.
+ * @param x  X coordinate in transcript coordinates.
+ * @param y  Y coordinate in transcript coordinates.
+ * @param action_out  Receives the command to execute (if hit).
+ * @return true if a region was hit.
+ */
+bool shell_transcript_hit_test(int x, int y, const char **action_out);
 
 /* ========================================================================
  * INTERACTIVE KEYPRESS WAIT

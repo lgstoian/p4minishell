@@ -46,7 +46,9 @@
 #include "editor_view.h"
 #include "networking.h"
 #include "led.h"
+#include "ansi.h"
 #include "ansi_palette.h"
+#include "audio.h"
 #include "shell.h"
 #include "boot.h"
 #include "storage.h"
@@ -196,15 +198,16 @@ static void shell_c6ota_progress_callback(int percent, const char *msg)
     }
 
     /* The message already carries its own newline, so the colour wraps the
-     * text and the reset lands before that newline would matter. */
-    snprintf(line, sizeof(line), "%s%s" SH_RST, colour, msg);
+     * text and the reset lands before that newline would matter. Use
+     * ansi_format so the @-specifiers become real ESC sequences. */
+    ansi_format(line, sizeof(line), "%s%s" SH_RST, colour, msg);
 
     if (percent == -1) {
         shell_transcript_append_ansi(line);
         return;
     }
 
-    shell_schedule_transcript_appendf("%s", line);
+    shell_schedule_transcript_appendf_ansi("%s", line);
 }
 
 /** Adapter matching usb_keyboard_input_cb_t for the shell CLI injection path. */
@@ -398,7 +401,7 @@ static void shell_input_line_event_cb(lv_event_t *event)
          * YES/NO replies to the C6 OTA confirmation prompt. */
         shell_extract_input_text(command, SHELL_COMMAND_BYTES);
         shell_format_command_for_transcript(command, transcript_command, SHELL_COMMAND_BYTES);
-        shell_transcript_appendf("%s%s\n", SHELL_PROMPT, transcript_command);
+        shell_transcript_appendf("%s%s\n", shell_prompt_render_plain(), transcript_command);
 
         if (shell_command_should_store_history(command)) {
             shell_store_command_history(command);
@@ -644,6 +647,9 @@ void app_main(void)
     shell_init();
     command_init();
 
+    /* Register the native apps (the applib ABI sample) as shell commands. */
+    native_apps_register();
+
     /* When the SD card first mounts (startup, or a card inserted later and
      * mounted by the first SD command), generate the default boot files and
      * print a short "SD card ready" welcome. */
@@ -681,6 +687,18 @@ void app_main(void)
     /* RGB status LED (WS2812 on GPIO26). Initialised before boot scripting so
      * a CONFIG.SYS `RGB=` directive can drive it during startup. */
     led_init();
+
+    /* Pre-warm the speaker codec path while DMA-capable heap is still free.
+     * The codec/I2S init needs contiguous DMA blocks, which lose the race
+     * once Wi-Fi, USB and SD all initialize at boot (AUTOEXEC's `volume`
+     * would otherwise fail once and spam the boot log; a later manual
+     * `volume` always worked). Failures here are harmless: speaker init
+     * stays lazy and retries on next audio use. The I2S driver also logs
+     * two benign "dma frame num adjusted" notices on every successful init;
+     * keep that tag at error level so the boot log stays clean while real
+     * failures (and our own command-layer reports) remain visible. */
+    esp_log_level_set("i2s_common", ESP_LOG_ERROR);
+    (void)audio_init();
 
     /* Serialize the shared SDMMC host bring-up (N1). The SD card (slot 0) and
      * the ESP-Hosted C6 transport (slot 1) both initialize the SDMMC host at

@@ -43,6 +43,7 @@
 #define LED_COLOR_WIFI_DISCONNECTED P4_CONFIG_LED_COLOR_WIFI_DISCONNECTED
 #define LED_COLOR_WIFI_ERROR        P4_CONFIG_LED_COLOR_WIFI_ERROR
 #define LED_COLOR_HTTPD             P4_CONFIG_LED_COLOR_HTTPD
+#define LED_COLOR_ALARM             P4_CONFIG_LED_COLOR_ALARM
 
 /** One persistent frame: a base colour plus the effect applied to it. */
 typedef struct {
@@ -119,6 +120,10 @@ static void led_event_frame(led_event_t event, led_frame_t *frame)
         break;
     case LED_EVENT_HTTPD_STARTED:
         led_unpack(LED_COLOR_HTTPD, &frame->red, &frame->green, &frame->blue);
+        frame->effect = LED_EFFECT_PULSE;
+        break;
+    case LED_EVENT_ALARM:
+        led_unpack(LED_COLOR_ALARM, &frame->red, &frame->green, &frame->blue);
         frame->effect = LED_EFFECT_PULSE;
         break;
     default:

@@ -1,4 +1,6 @@
-# Hosted Module SDK Guide
+# Hosted Module SDK Guide (v0.35.2 cleanup, 80x25 utf8[4] TUI, stack 24576 p4minishell_config.h:1514 at 0x4012b75a, companion 7 BATs TUI-expanded)
+
+> **v0.35.2 cleanup patch (0.35.1->0.35.2) on top of the v0.35.1 hardware testing patch (0.35.0->0.35.1):** flashed to COM11, boot verified (`P4MiniShell v0.35.1 ready`, 1024x510 80x25 via `tui status` 80x25 p4minishell_config.h:298), extensive serial tests (draw box single SH_BOX_TL/H/V double SH_BOX_TL2/H2/V2 rounded SH_BOX_TLR/TRR/BLR/BRR with title+style correctly handled tui_draw_box components/tui/tui.c:228 / tui_cell_set components/tui/tui.c:116 utf8[4] components/tui/tui.h:35, draw line/fill/text/clear/window/close/refresh/fullscreen, draw fullscreen on|off (global) + tui fullscreen on|off (per-app) header kept visible by default windows_enter_tui_mode hidden only on fullscreen windows_set_fullscreen/header_set_visible components/windows/windows.c:418 / tui_enter_fullscreen components/tui/tui.c:417 dynamic windows_notify_keyboard_visibility -> windows_refresh_tui_surface, TUI does not overlap shell text tui_hide_for_modal, tui_flush components/tui/tui.c:356 recolor #RRGGBB per fg run via ansi_get_palette_color PowerShell palette no duplicate, color/locate TUI-aware, prompt shell_prompt_render_plain() main.c:112/components/shell/shell.c:412 + modal_surf.c:412 keyboard_bind_textarea situational SH_PROMPT, screenshot grab_screenshot.py --port/--out/--crop-transcript + capture_tui.py rect 1024x510) without abort/watchdog/overlap. Font extended in-place managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c 384 glyphs U+2500-U+257F/U+2600-U+26FF cmaps 3 no duplication CONFIG_LV_FONT_UNSCII_16=y; tui_cell_t utf8[4] SH_BOX_* via tui_cell_set, tui_flush recolor #RRGGBB per fg run ansi_get_palette_color; draw auto-enters TUI tui_init components/tui/tui.c:56; memory P4_CONFIG_TRANSCRIPT_BYTES 1024 p4minishell_config.h:93 P4_CONFIG_ASYNC_TRANSCRIPT_BYTES 512 p4minishell_config.h:134 P4_CONFIG_SD_DMA_BUFFER_BYTES 4096 p4minishell_config.h:626 P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES 60000 1/4 keep trim-below-10KB P4_CONFIG_COMMAND_TASK_STACK 16384->24576 p4minishell_config.h:1514 at 0x4012b75a, audio bsp_audio_init components/audio/audio.c:42 managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269, modal EventGroup PSRAM MALLOC_CAP_SPIRAM components/modal/modal.c:46, queue full handling improved, serial routing modal_handle_serial_line components/modal/modal_surf.c:412 (dialog y list 2 ask myname correctly routed via shell.c). Companion fully TUI-expanded and hardware-verified: 7 BATs (COMPANION.BAT draw fullscreen double, SYS.BAT tui fullscreen draw boxes, FILES.BAT browse/view/hexview + draw + tui fullscreen, NET.BAT draw boxes, FUN.BAT tui demo, SET.BAT tui demo, LIB.BAT tui helpers) pushed via push_sd.py COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109), bugs M19-M31 all fixed.
 
 This guide describes how `main/main.c` integrates the runtime modules in this workspace: `components/shell`, `components/storage`, `components/batch`, `components/command`, `components/display`, `components/windows`, `components/header`, `components/led`, `components/networking`, `components/usb`, and `components/c6ota`.
 
@@ -22,8 +24,12 @@ expansion, SD persistence via `alias /save`).
   document model (`editor.c`), a modal LVGL surface with syntax-coloured
   spans, a block cursor, a selection overlay, and status-bar prompts
   (`editor_view.c`), and a worker-task session that keeps file I/O off the
-  LVGL task. It is the reference implementation of the "modal app surface"
-  pattern below.
+  LVGL task. It is now a surface on the shared modal runtime in
+  `components/modal/`; file I/O still runs on the command worker task.
+- `components/modal` owns the shared modal runtime (`modal.c`) and the
+  ready-made batch surfaces `dialog`, `list`, and `ask` (`modal_surf.c`).
+  It generalises the editor pattern into one session loop + input-routing
+  layer used by every native modal surface.
 - `components/applib` owns the native-app runtime library (`applib.h`): the
   formal app `printf`/stdout contract mapped onto the transcript (the
   redirection layer), the shared memory-allocation policy and debug-log error
@@ -43,6 +49,7 @@ expansion, SD persistence via `alias /save`).
 
 ```
 main  ->  command  ->  batch  ->  storage  ->  shell  ->  ansi, display, windows, header, keyboard, clock
+                 modal <- editor
 ```
 
 No component may declare `main` as a requirement. When a lower layer needs something an upper
@@ -62,7 +69,7 @@ See "Inverting an upward dependency" below.
 4. Call `command_init()`. It brings up `storage_init()` (current working directory, SD mount tracking) and `batch_init()` (environment table, `PATH=sd:/`, errorlevel), then registers `batch_command_ops_t` with the batch engine and `shell_command_ops_t` with the shell core. This must follow `shell_init()`. Do not call `storage_init()` or `batch_init()` yourself; both are idempotent but `command_init()` owns the ordering.
 5. Register the UI rebuild callback with `display_register_ui_rebuild_callback(shell_build_ui)` so rotation changes trigger full UI rebuilds.
 6. Call `shell_uart_console_start()` to bring up the serial console task.
-7. Call `windows_init()` (from `shell_build_ui()`) to build the LVGL shell surface (header, transcript, input row, keyboard).
+7. Call `windows_init()` (from `shell_build_ui()`) to build the LVGL shell surface (header, transcript, input row, keyboard). TUI surfaces (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) need no separate init — they reuse the shared modal runtime and `windows_enter_editor_mode()` / `windows_refresh_editor_surface()` to map the logical `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) grid onto the live transcript region.
 8. Call `c6ota_init()` once after the transcript path is ready, then register the OTA progress callback with `c6ota_register_progress_callback(...)`.
 9. Build a single `networking_host_ops_t` callback table backed by the shell transcript and debug-history functions, then call `networking_init(&host_ops)`.
 10. Call `usb_init()` after `networking_init(&host_ops)`, then `usb_register_keyboard_input_callback(...)`.
@@ -134,19 +141,24 @@ static void batch_run_nested(char *command)
 
 ## Modal app surfaces (the `edit` pattern)
 
-`edit` is the first native "app" that runs on top of the shell core, and it
-establishes the integration contract for future native apps (roadmap Phase 4).
-A modal app surface takes over the transcript region and the input row,
+`edit` was the first native "app" that runs on top of the shell core. Since
+v0.33.0 the pattern is generalised in `components/modal/`: a single shared
+runtime owns the session loop and input routing, and surfaces only implement
+open/service/close + input handlers. A modal app surface takes over the
+transcript region and the input row,
 captures every input source, and yields the shell back cleanly when it
 closes. The pieces an app needs:
 
-1. **A worker/LVGL split.** The app's session runs on the command worker
-   task (`editor_session_run`): it does file I/O, waits on an event group,
-   and services save requests. The LVGL surface (`editor_view_open`) is
-   opened with `lv_async_call` and every widget operation stays on the LVGL
-   task. A `lv_async_call` failure path frees everything and returns an
-   error, so a dead LVGL heap can never be touched.
-2. **The window-manager handoff.** `windows_enter_editor_mode()` hides the
+1. **A `modal_surface_t` descriptor.** The surface provides `open`, `service`,
+   `close`, `handle_usb_key`, and `handle_serial_line` callbacks. The runtime
+   creates the event group, calls `open`, services custom bits, and tears the
+   surface down on `MODAL_EVENT_CLOSE_REQUEST`.
+2. **A worker/LVGL split.** The surface's session runs on the command worker
+   task inside `modal_surface_run()`. File I/O and waits happen there; the
+   LVGL surface is opened with `lv_async_call` and every widget operation
+   stays on the LVGL task. A `lv_async_call` failure path frees everything and
+   returns an error, so a dead LVGL heap can never be touched.
+3. **The window-manager handoff.** `windows_enter_editor_mode()` hides the
    shell input widgets and aliases the transcript container as the app
    surface; `windows_exit_editor_mode()` restores them. The app hides the
    shell's span group (`windows_get_transcript_spans()`), mounts its own
@@ -173,9 +185,22 @@ closes. The pieces an app needs:
    the same "pure logic in the module, hardware on the board" split the text
    tools use.
 
-A future `view`, `hexview`, or third-party `.app` can reuse this shape: a
-worker session + `windows_enter_editor_mode()` surface + `shell_command_ops_t`
-input hooks + guarded SD + a status-bar prompt, with the pure model unit-tested.
+Built-in surfaces in `components/modal/modal_surf.c` — `dialog`, `list`, `ask`,
+`browse`/`filebrowser`, `view`, and `hexview` (6 surfaces) — are exposed as
+batch commands and demonstrate the contract. A third-party `.app` can register
+its own `modal_surface_t` instead of duplicating the session/input plumbing.
+
+### TUI Integration (v0.35.1 — hardware-verified on COM11, final TUI state)
+
+The TUI layer is live and hardware-verified (flash to COM11, boot `1024x510` transcript rect, extensive serial verification of `draw box single/double/rounded` with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` + `tui fullscreen on|off`, `color`/`locate`, `dialog`/`list`/`ask` with timeout + serial input, `browse`/`view`; no abort/watchdog/overlap, header kept unless fullscreen) for batch apps:
+
+- **Logical grid** (`components/tui/tui.h:35` `tui_cell_t utf8[4]`, `components/tui/tui.c:116` `tui_cell_set`): `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:298`) heap cell buffer (PSRAM `MALLOC_CAP_SPIRAM`, `utf8[4]` holds full 3-byte box UTF-8 `SH_BOX_*` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) with fg/bg/attribute per cell, mapped to the *live* transcript region `1024x510` via `windows_enter_tui_mode()` / `windows_refresh_tui_surface()` / `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). The pixel rect follows rotation and on-screen-keyboard visibility; the logical grid is clamped to `80×25`, never to pixels. `P4_CONFIG_TUI_*` is the single source of truth. `tui status` shows `rect 1024x510 cols 80 rows 25`.
+- **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F and symbols U+2600-U+26FF (384 glyphs, cmaps 3, no duplication); `windows_get_terminal_font()` returns it for `s_tui_label` (`lv_label_set_recolor true`).
+- **Batch TUI verbs** (`components/tui/tui.c:228` `tui_draw_box` honors style+title, `components/tui/tui.c:283` `tui_draw_line`, `components/tui/tui.c:356` `tui_flush`): `draw box` single/double/rounded with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app, header hidden completely via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`, kept visible by default, dynamic keyboard scaling via `windows_notify_keyboard_visibility`); `color` (`tui_set_default_color`) / `locate` (`tui_set_cursor`) compose on the cell buffer; `ansi`/`menu` SGR codes share `components/ansi/ansi.c` (CSI parsing) and `tui_flush` coalesces per-fg-run `#RRGGBB ` recolor via `ansi_get_palette_color` PowerShell palette (no duplicate). `draw` auto-enters TUI (`tui_init` `components/tui/tui.c:56`) when no TUI/modal surface is active.
+- **Prompt** (`main/main.c:112` `shell_prompt_render_plain()` `components/shell/shell.c:412`, `components/modal/modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea`): all inputs honor the DOS prompt template (`PROMPT=` `$p $g` etc) with situational color (`SH_PROMPT`).
+- **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`, `tui status`): crops to transcript rect for pixel-perfect verification (used during hardware bug hunting).
+- **Modal surfaces for TUI**: `browse`/`view`/`hexview` are `modal_surface_t` surfaces on the same runtime — they hide the shell span group, mount their own content, and restore on close. New full-screen surfaces MUST be `modal_surface_t` descriptors (never a private loop) and MUST use the `windows_enter_tui_mode` handoff pattern (or `windows_set_fullscreen` for fullscreen) and MUST be routed through the generic `shell_command_ops_t.modal_*` hooks.
+- **Native TUI SDK stub**: `components/applib/applib_tui.h` declares `tui_create/destroy/box/print_at/refresh/clear` (heap cell buffer, same logical grid); stubbed with a warning in v0.35.1 and implemented after companion batch verification (fully TUI-expanded and hardware-verified on COM11 (7 BATs, push_sd.py PASS, no abort/watchdog/overlap, M31 stack overflow at 0x4012b75a fixed)). Included via `applib.h` umbrella.
 
 ## applib — the native-app runtime
 

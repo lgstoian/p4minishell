@@ -20,6 +20,8 @@ idf_component_register(
         test_config.c
         test_calc.c
         test_applib.c
+        test_db.c
+        test_alarm.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -32,6 +34,8 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/editor"
         "${CMAKE_SOURCE_DIR}/../components/keyboard"
         "${CMAKE_SOURCE_DIR}/../components/applib"
+        "${CMAKE_SOURCE_DIR}/../components/db"
+        "${CMAKE_SOURCE_DIR}/../components/alarm"
     REQUIRES
         unity
         shell
@@ -43,5 +47,7 @@ idf_component_register(
         editor
         keyboard
         applib
+        db
+        alarm
         esp_timer
 )
