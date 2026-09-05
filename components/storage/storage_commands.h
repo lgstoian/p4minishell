@@ -22,6 +22,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Shared SHELL_* compat aliases (moved here in v0.35.6). */
+/* Backward-compatibility aliases */
+#define SHELL_SD_FATFS_DRIVE            P4_CONFIG_SD_FATFS_DRIVE
+#define SHELL_SD_PATH_BYTES             P4_CONFIG_SD_PATH_BYTES
+#define SHELL_SD_LIST_LIMIT             P4_CONFIG_SD_LIST_LIMIT
+#define SHELL_SD_CAT_DEFAULT_BYTES      P4_CONFIG_SD_CAT_DEFAULT_BYTES
+#define SHELL_SD_CAT_MAX_BYTES          P4_CONFIG_SD_CAT_MAX_BYTES
+#define SHELL_SD_IO_BUFFER_BYTES        P4_CONFIG_SD_IO_BUFFER_BYTES
+#define SHELL_BATCH_LINE_BYTES          P4_CONFIG_BATCH_LINE_BYTES
+#define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
+#define SHELL_LFN_BYTES                 P4_CONFIG_LFN_BYTES
+#define SHELL_TEXT_LINE_BYTES           P4_CONFIG_TEXT_LINE_BYTES
+#define SHELL_SORT_LINE_MAX             P4_CONFIG_SORT_LINE_MAX
+#define SHELL_MORE_PAGE_LINES           P4_CONFIG_MORE_PAGE_LINES
+#define SHELL_MORE_PAGE_DELAY_MS        P4_CONFIG_MORE_PAGE_DELAY_MS
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -51,6 +67,12 @@ void shell_command_dir(int argc, char **argv);
 
 /** `tree` — single-level directory outline marking subdirectories with `+`. */
 void shell_command_tree(int argc, char **argv);
+
+/**
+ * Format a FAT date/time pair as `YYYY-MM-DD HH:MM` (shared by `dir` in
+ * storage_nav.c and find discovery output in storage_text.c).
+ */
+void shell_dir_format_stamp(uint16_t fdate, uint16_t ftime, char *output, size_t output_size);
 
 /* ========================================================================
  * FILE MANIPULATION
@@ -163,6 +185,21 @@ int shell_command_format(int argc, char **argv);
 bool shell_confirm_destructive(const char *operation, const char *warning, const char *detail);
 
 /**
+ * Parse a `/A:size` allocation-unit value (shared by `format` in
+ * storage_disk.c and `disk format` in storage_fam.c).
+ */
+bool shell_parse_alloc_unit(const char *text, uint32_t *bytes_out);
+
+/**
+ * Validated format run shared by `format` and `disk format`.
+ */
+int shell_format_execute(const char *operation,
+                         const char *fs_type,
+                         const char *new_label,
+                         uint32_t alloc_unit,
+                         bool alloc_set);
+
+/**
  * `undelete` / `restore` — restore a file or directory from the recycle bin.
  *
  * Usage: undelete <name|index> | restore <name|index>
@@ -248,6 +285,12 @@ int shell_command_comp(int argc, char **argv);
  * These are implementation details of findstr / comp with no I/O, exposed so
  * test/ can exercise the matching and comparison logic directly.
  */
+
+/**
+ * Parse a find `/NEWER:`/`/OLDER:` date (shared by `find` in storage_text.c
+ * and `xcopy /D` in storage_files.c).
+ */
+bool shell_find_parse_date(const char *text, uint16_t *fdate_out);
 
 /**
  * Search for the limited DOS findstr regex pattern anywhere in text (unless
