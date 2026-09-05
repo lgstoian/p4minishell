@@ -40,9 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`shell_extract_input_text`** (`components/shell/shell.c:1554`): recursive-lock the textarea read (both callers are LVGL-task today; now safe from any task).
 - **Audited, no change:** header timer/init calls (LVGL-task context), USB inject path (async-dispatched), ops tables (NULL-checked throughout per prior audit).
 
-### Verification
+### Verification (hardware session 2026-09-05, all green)
 
-- Static checks only in this patch: single definitions, `command.h`/`shell.h` call sites, LF endings and BOM preserved, new tests reviewed against implementation (incl. `ESP_SLEEP_WAKEUP_UNDEFINED` default arm, `TEST_ASSERT_EQUAL_size_t` precedent, `TEST_IGNORE` on missing `tmpfile`). `idf.py build` + host test run + COM11 pass deferred to the hardware session.
+- `idf.py build` 0 errors / 0 warnings (firmware + test projects).
+- Unit runner: **180 tests, 0 failures, 0 skips** (158 existing + 22 new).
+- COM11 board pass clean: boot banner, `tui status` rect, draw/modal/audio/peripheral/serial surfaces, companion BATs, mixed SD sweep with zero `allocate_dma_buf` errors.
 
 ---
 

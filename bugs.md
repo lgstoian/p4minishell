@@ -488,7 +488,7 @@ store (see readme.md / command.md / SDK.md).
 - **Symptom:** audit found two real OOB risks (`tui_flush` recolor `size_t` underflow `components/tui/tui.c:382`, hexview pager `components/modal/modal_surf.c:908-917`), silent-truncation paths (tree child paths, trash unique names, db path builders), 10 delayed-NULL alloc sites (dispatch snapshots, async submit, sd copy, repair, init, subdirs), one 2048B worker-stack local (`clip`), zero unit coverage for tui/modal/power/serial/clipboard/history-file, and an unlocked LVGL fallback (`windows.c:779` contradicting its own doc comment).
 - **Root cause:** incremental growth without a hardening pass; copy-pasted `/t:` parsing ×9; tests only covered pure helpers that happened to exist.
 - **Fix:** fail-closed clamps/guards (fitting inputs unchanged), immediate OOM checks with errorlevel, clip heap buffer, shared `modal_parse_*` helpers + promoted pure functions with 22 new suites, recursive-lock on the two proven cross-task LVGL paths. See `changelog.md` `## [0.35.5]` for the file:line list.
-- **Verified:** static checks only (single definitions, header call sites, endings/BOM preserved, tests reviewed). `idf.py build` + runner + COM11 deferred.
+- **Verified:** hardware session 2026-09-05 — `idf.py build` 0/0, runner **180 pass / 0 fail / 0 skip**, COM11 sweep clean (see `changelog.md` `## [0.35.5]`).
 
 ---
 
