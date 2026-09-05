@@ -200,6 +200,17 @@ void shell_execute_pipe(char *command);
 bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char **error_out);
 
 /**
+ * `set /a` helper (implemented in batch_expr.c): evaluate an arithmetic
+ * statement with optional `NAME=` / `NAME[OP]=` assignment.
+ */
+void shell_command_set_arithmetic(int argc, char **argv);
+
+/**
+ * `set /p` helper (implemented in batch_expr.c): prompt and store a line.
+ */
+void shell_command_set_prompt(int argc, char **argv);
+
+/**
  * `set` — show all variables, query one, or assign `NAME=value`.
  *
  * Also handles the two DOS sub-forms:

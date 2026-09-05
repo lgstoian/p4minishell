@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "batch.c" "calc.c"
+    SRCS "batch.c" "batch_expr.c" "calc.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         shell
