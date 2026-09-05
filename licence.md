@@ -1,4 +1,4 @@
-# Licence Notice (v0.35.5 hardening, fail-closed truncations, OOM immediacy, 22 new tests)
+# Licence Notice (v0.35.6 splits, storage 5 files + batch_expr, shell whole)
 
 ## Project code
 Unless a file or directory states otherwise, the original project-specific code in this repository is:

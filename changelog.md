@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.6] - 2026-09-05 — Split patch (storage + batch-expr out; shell stays whole)
+
+### Changed — `storage_commands.c` 6147→41 lines (residual header+includes), `batch.c` 4881→4072 lines (verbatim moves, no behavior change)
+
+- **New `components/storage/storage_nav.c`** (1122 lines): `cd`/`dir`/`tree`.
+- **New `components/storage/storage_files.c`** (1690 lines): manipulation + `attrib`/`label`/`xcopy`.
+- **New `components/storage/storage_disk.c`** (546 lines): `chkdsk`/`format` + destructive-confirm helper.
+- **New `components/storage/storage_text.c`** (1948 lines): `find`/`more`/`fc`/`sort`/`findstr`/`comp`.
+- **New `components/storage/storage_fam.c`** (768 lines): `sd` + `disk` families.
+- **Shared helpers promoted** (were file-static, used across the new files): `shell_parse_alloc_unit` + `shell_format_execute` (disk/fam), `shell_dir_format_stamp` (nav/text), `shell_find_parse_date` (text/files) — declared in `storage_commands.h`; shared `SHELL_*` aliases moved there too.
+- **New `components/batch/batch_expr.c`** (809 lines): integer-expr evaluator + `set /a`/`set /p` helpers out of `batch.c`. The 19 direct `s_errorlevel` writes became `batch_set_errorlevel()` calls (same state); the two helpers are exported for `shell_command_set()`. Wider batch split stopped per stop-rule (engine/verb statics porous: `shell_batch_run_internal`, setlocal stack, appmode state shared both ways).
+- **`shell.c` intentionally not split**: static-sharing audit shows the `s_command_ops` table hub + shared transcript pointers in 7+ sections; splitting would scatter state instead of containing it. Fully-private sections total ~420 lines — not worth the churn.
+
+### Verification
+
+- Static checks only in this patch: function inventories HEAD vs work (zero lost/zero new per file), cross-file static analysis clean after 4 promotions, per-file line endings preserved (`batch.c` CRLF restored), `SRCS` updated. Full `idf.py build` + runner + COM11 deferred to the hardware session.
+
+---
+
 ## [0.35.5] - 2026-09-05 — Hardening patch (truncation/OOB, OOM immediacy, tests, LVGL locks)
 
 ### Fixed — truncation / OOB (fail closed, fitting inputs unchanged)

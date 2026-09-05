@@ -87,7 +87,7 @@ new code; these are listed for reference and for the rare case that needs a raw 
 Standard printf specifiers work alongside these, including flags, width, and
 precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 
-## UI Model (v0.35.5 hardening, 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 32768 `p4minishell_config.h:1522`)
+## UI Model (v0.35.6 splits, 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 32768 `p4minishell_config.h:1522`)
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
 - Scrollable transcript (LVGL span group) for coloured command output (read-only). It keeps
@@ -110,11 +110,12 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | Command group | Implemented in |
 |---------------|----------------|
 | `help`, `sysinfo`, `version`/`ver`, `about`, `mem`, `debug` | `components/shell/shell.c` |
-| `cd`/`chdir`, `dir`, `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch` | `components/storage/storage_commands.c` |
-| `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`, `fc`, `comp`, `sort` | `components/storage/storage_commands.c` |
-| `chkdsk`/`scandisk`, `format` | `components/storage/storage_commands.c` |
-| `sd info|ls|stat|cat|mount|eject`, `sdeject` | `components/storage/storage_commands.c` + `storage.c` |
-| `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`, `delay`, `notify`, `appmode` | `components/batch/batch.c` + `components/batch/calc.c` (TUI/modal verbs dispatch from `components/command/`) |
+| `cd`/`chdir`, `dir`, `tree` | `components/storage/storage_nav.c` |
+| `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch`, `undelete`, `trash`, `attrib`, `label`, `xcopy` | `components/storage/storage_files.c` |
+| `find`, `findstr`, `more`, `fc`, `comp`, `sort` | `components/storage/storage_text.c` |
+| `chkdsk`/`scandisk`, `format` | `components/storage/storage_disk.c` |
+| `sd info|ls|stat|cat|mount|eject`, `sdeject`, `disk` family | `components/storage/storage_fam.c` + `storage.c` |
+| `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`, `delay`, `notify`, `appmode` | `components/batch/batch.c` + `components/batch/batch_expr.c` (`set /a` evaluator) + `components/batch/calc.c` (TUI/modal verbs dispatch from `components/command/`) |
 | `dialog`, `list`, `ask`, `browse`, `view`, `hexview` | `components/command/tui_commands.c` + `components/modal/modal_surf.c` (dispatched from `components/command/command.c`) |
 | `draw` (`box`/`line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`) | `components/tui/tui.c` (`tui_draw_box` `components/tui/tui.c:228` title+style via `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, `tui_draw_line` `components/tui/tui.c:283` single/double/heavy, `tui_fill` `tui_print_at`, `tui_flush` `components/tui/tui.c:356` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, `tui_enter_fullscreen` `components/tui/tui.c:417` / `windows_set_fullscreen` `components/windows/windows.c:418`, `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, `tui_hide_for_modal`) + `components/command/command.c` dispatcher (auto-enters TUI for box/text/line/fill/clear/window `tui_init` `components/tui/tui.c:56`) |
 | `tui` (`status`/`clear`/`fullscreen`/`refresh`) | `components/tui/tui.c` (`tui_status` rect `1024x510` cols `80` rows `25` `p4minishell_config.h:298`, `tui_enter_fullscreen`/`tui_exit_fullscreen` `components/tui/tui.c:417`, `tui_refresh_surface` `components/tui/tui.c:408`, `tui_flush` `components/tui/tui.c:356`) + `components/windows/windows.c` (`windows_enter_tui_mode` keeps header visible by default, `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` hides header only on fullscreen, `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` `components/windows/windows.c:312`, `tui_hide_for_modal`) |

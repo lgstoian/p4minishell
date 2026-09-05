@@ -10,9 +10,9 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.35.5
-# Last updated: 2026-09-05 (hardening: truncation/OOB guards, OOM immediacy, clip heap, 22 new unit tests, LVGL fallback lock + extract lock)
-config_version: "0.35.5"
+# Version: 0.35.6
+# Last updated: 2026-09-05 (splits: storage_nav/files/disk/text/fam + batch_expr out; shell.c stays whole per static-sharing audit)
+config_version: "0.35.6"
 
 # ---- Shell Identity ----
 shell_identity:

@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.35.5 hardening, fail-closed truncations, OOM immediacy, 22 new tests)
+# P4MiniShell Roadmap (v0.35.6 splits, storage_nav/files/disk/text/fam + batch_expr, shell whole by audit)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -229,6 +229,15 @@ Implemented today in the checked-in firmware (final TUI hardware-verified on COM
   `components/led` (espressif/led_strip over RMT) with the `rgb` command, an
   auto status layer tied to Wi-Fi/HTTP events, a boot confirmation flash, and
   a CONFIG.SYS `RGB=` directive (see changelog v0.24.25).
+
+---
+
+## Recently Completed (v0.35.6 - September 2026)
+
+### Remainder splits — storage + batch-expr out, shell whole by audit
+- ✅ Five storage files (nav/files/disk/text/fam) + 4 helper promotions + shared aliases to the header
+- ✅ `batch_expr.c` (evaluator + set helpers, `batch_set_errorlevel` reporting); wider split stopped (porous statics)
+- ✅ Shell split stopped: ops-table hub + shared transcript pointers; only ~420 lines fully private (see changelog `## [0.35.6]`)
 
 ---
 
