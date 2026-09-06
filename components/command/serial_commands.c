@@ -9,6 +9,7 @@
  * implements them.
  */
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +19,7 @@
 #include "shell.h"
 #include "batch.h"
 #include "storage.h"
+#include "networking.h"
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "command.h"
@@ -25,7 +27,10 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_chip_info.h"
+#include "esp_lvgl_port.h"
 #include "lvgl.h"
+#include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 

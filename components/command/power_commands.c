@@ -38,6 +38,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+/* Compat alias + light-sleep request flag (moved with the power verbs in
+ * v0.35.4; SHELL_REBOOT_DELAY_MS is duplicated from command.c, which still
+ * uses it for the reboot path). */
+#define SHELL_REBOOT_DELAY_MS           P4_CONFIG_REBOOT_DELAY_MS
+
+static bool s_light_sleep_requested;
+
 /* Compat aliases (moved with the power verbs in v0.35.4). */
 #define SHELL_BATTERY_ATTEN             P4_CONFIG_BATTERY_ATTEN
 #define SHELL_BATTERY_MIN_SLEEP_FREQ_MHZ P4_CONFIG_BATTERY_MIN_SLEEP_FREQ_MHZ
@@ -174,152 +181,6 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
 static void shell_battery_print_usage(void)
 {
     shell_print_usage("Usage: battery or battery sleep <on|off|status>");
-}
-
-/* ========================================================================
- * REDIRECTION PARSING
- * ========================================================================
- * Handles the three DOS redirection operators on one pass:
- *   >   truncate output to a file
- *   >>  append output to a file
- *   <   read input from a file
- *
- * Quote state is tracked so an operator inside a quoted argument is treated
- * as data. The scan walks the whole line rather than stopping at the first
- * operator, so `sort < in.txt > out.txt` works in either order.
- */
-
-/**
- * Remove quoting and escape markup from a redirection target.
- *
- * A target such as `"my file.txt"`, `'my file.txt'`, or `my^ file.txt` all
- * reach the filesystem layer as the literal path.
- */
-static char *shell_redirect_unquote(char *target)
-{
-    return shell_unescape_in_place(target);
-}
-
-/**
- * Split a command line into its command text and redirection targets.
- *
- * @param command        Line to parse, modified in place.
- * @param command_part   Receives the trimmed command text.
- * @param redirect_target Receives the `>` / `>>` target, or NULL.
- * @param append_mode    Receives true for `>>`.
- * @param input_source   Receives the `<` source, or NULL.
- * @return true when any redirection operator was found.
- */
-/**
- * Find the next redirection operator that is neither quoted nor escaped.
- *
- * Delegates to the shared shell-core scanner so redirection, pipes, and
- * chaining all agree on what counts as syntax.
- *
- * @return Pointer to the operator character, or NULL when none remains.
- */
-static char *shell_redirect_find_operator(char *cursor)
-{
-    return shell_find_unquoted_any(cursor, "><");
-}
-
-/** One redirection operator located during the scanning pass. */
-typedef struct {
-    char *position;   /**< The operator character within the line. */
-    char *target;     /**< First character of the target text. */
-    bool is_output;   /**< true for `>` / `>>`, false for `<`. */
-    bool is_append;   /**< true for `>>`. */
-} shell_redirect_token_t;
-
-/**
- * Parse `>`, `>>`, and `<` out of a command line.
- *
- * Works in two passes so the operator characters can be located before any
- * of them is overwritten. The first pass records every unquoted operator and
- * where its target begins; the second pass writes a terminator over each
- * operator, which simultaneously ends the text that preceded it. Because
- * every operator becomes a NUL, each target is naturally terminated by the
- * next operator without any byte having to be restored.
- *
- * The last occurrence of each direction wins, matching COMMAND.COM.
- */
-static bool shell_parse_redirection(char *command,
-                                    char **command_part,
-                                    char **redirect_target,
-                                    bool *append_mode,
-                                    char **input_source)
-{
-    shell_redirect_token_t tokens[SHELL_REDIRECT_TOKEN_MAX];
-    size_t token_count = 0;
-    char *cursor;
-    size_t index;
-
-    if (command_part == NULL || redirect_target == NULL ||
-        append_mode == NULL || input_source == NULL) {
-        return false;
-    }
-
-    *command_part = command;
-    *redirect_target = NULL;
-    *append_mode = false;
-    *input_source = NULL;
-
-    if (command == NULL) {
-        return false;
-    }
-
-    /* Pass 1: locate every unquoted operator. */
-    cursor = shell_redirect_find_operator(command);
-    while (cursor != NULL && token_count < SHELL_REDIRECT_TOKEN_MAX) {
-        shell_redirect_token_t *token = &tokens[token_count++];
-
-        token->position = cursor;
-        token->is_output = (*cursor == '>');
-        token->is_append = token->is_output && (cursor[1] == '>');
-        token->target = cursor + (token->is_append ? 2 : 1);
-
-        cursor = shell_redirect_find_operator(token->target);
-    }
-
-    if (token_count == 0) {
-        *command_part = shell_trim(command);
-        return false;
-    }
-
-    /* Pass 2: cut the line at every operator. A `>>` needs both characters
-     * blanked so the extra '>' cannot leak into the preceding text. */
-    for (index = 0; index < token_count; index++) {
-        tokens[index].position[0] = '\0';
-        if (tokens[index].is_append) {
-            tokens[index].position[1] = '\0';
-        }
-    }
-
-    /* Pass 3: publish the targets. */
-    for (index = 0; index < token_count; index++) {
-        char *target = shell_redirect_unquote(shell_trim(tokens[index].target));
-
-        if (tokens[index].is_output) {
-            *redirect_target = target;
-            *append_mode = tokens[index].is_append;
-        } else {
-            *input_source = target;
-        }
-    }
-
-    *command_part = shell_trim(command);
-    return true;
-}
-
-/**
- * Report whether a line contains a `|` pipe separator that is real syntax.
- *
- * Quote- and escape-aware, so `echo "a | b"`, `echo 'a | b'`, and `echo a^|b`
- * are not mistaken for pipelines.
- */
-static bool shell_command_has_pipe(const char *command)
-{
-    return shell_has_unquoted_char(command, '|');
 }
 
 /* ========================================================================

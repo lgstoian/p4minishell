@@ -10,6 +10,7 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,10 +18,22 @@
 
 #include "batch.h"
 #include "shell.h"
+#include "storage.h"
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
+
+/* Backward-compatibility aliases (same block as batch.c). */
+#define BATCH_TAG                       P4_CONFIG_SHELL_TAG
+#define SHELL_PROMPT                    P4_CONFIG_SHELL_PROMPT
+#define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
+#define SHELL_SD_PATH_BYTES             P4_CONFIG_SD_PATH_BYTES
+#define SHELL_ENV_VAR_MAX               P4_CONFIG_ENV_VAR_MAX
+#define SHELL_ENV_NAME_BYTES            P4_CONFIG_ENV_NAME_BYTES
+#define SHELL_ENV_VALUE_BYTES           P4_CONFIG_ENV_VALUE_BYTES
+#define SHELL_BATCH_LINE_BYTES          P4_CONFIG_BATCH_LINE_BYTES
+#define SHELL_KEY_WAIT_TIMEOUT_MS       P4_CONFIG_KEY_WAIT_TIMEOUT_MS
 
 /* ========================================================================
  * ARITHMETIC EXPRESSIONS (set /a)
