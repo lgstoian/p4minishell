@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.7] - 2026-09-06 — Hardware bring-up fixes (all verified on board unless noted)
+
+### Fixed — box-drawing tofu (M40)
+
+- **Symptom:** TUI boxes rendered as placeholder boxes on hardware (screenshot-verified), although the extended `unscii_16` font is in-tree.
+- **Root causes (three stacked):** (1) the generated `sdkconfig` had lost `CONFIG_LV_FONT_UNSCII_16` (stale generated file) so `windows_get_terminal_font()` fell back to ASCII Montserrat; (2) the Kconfig symbol exists, so the fix is regenerating config + using the font unconditionally; (3) once enabled, the in-place font extension failed to compile — two missing commas (bitmap line 475, glyph-dsc line 2115), latent since the file previously compiled to empty behind the disabled guard.
+- **Fix:** unconditional `lv_font_unscii_16` use with extern decl (`windows.c`), dead-symbol note in `sdkconfig.defaults`, two commas, regenerated `sdkconfig`. Box glyphs verified pixel-perfect via screenshot.
+
+### Fixed — httpd start failed ESP_ERR_HTTPD_TASK (needs Wi-Fi to fully verify)
+
+- **Symptom:** manual + auto `httpd start` failed with `ESP_ERR_HTTPD_TASK`.
+- **Root cause:** 16 KB server-task stack (4x IDF default, unjustified) cannot allocate from fragmented internal heap at Wi-Fi-up time.
+- **Fix:** `P4_CONFIG_HTTPD_STACK_BYTES` 16384→8192 (handler frame <1 KB; verify HeadB watermark via `ps` on hardware with Wi-Fi up). Yaml already said 8192 — header had drifted.
+
+### Fixed — command queue drops
+
+- **Symptom:** `shell: command queue full, command dropped` under bursts.
+- **Root cause:** depth had regressed to 4 with zero-timeout submit (v0.33.0 M10 fix lost).
+- **Fix:** new `P4_CONFIG_COMMAND_QUEUE_DEPTH` 16 + `P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS` 500 bounded wait (submit runs on LVGL/UART tasks only). Verified 20/20 burst, no drops.
+
+### Fixed — NUL bytes in source
+
+- **`batch.c` contained 3 literal NUL bytes** (`'\x00'` instead of `'\0'` escapes, ansi SGR parsing) from a past scripted edit — compiled with `-Wnull-character` warnings, now errors-or-clean. Replaced, repo-wide NUL sweep clean.
+
+### Fixed — alarm checker never started (M38)
+
+- **Symptom:** `alarm status` showed `checker stopped`, `catchup pending`; fire test failed; nothing ever fired.
+- **Root cause:** `alarm_init()` + `alarm_register_host_ops()` were never called (header claims `command_init()` does it; it didn't).
+- **Fix + lesson:** first wired into `command_init()`, which broke USB HCD bring-up on hardware (checker task fragments DMA heap before `usb_init()` — verified by A/B flash). Final fix: ops stay registered in `command_init()`, `alarm_init()` runs lazily on first `alarm`/`cal` command. Verified `checker running`, `catchup done`, alarm suite 25/25.
+
+### Fixed — ask serial answer clobbered (M37)
+
+- **Symptom:** `ask` via serial logged `ask serial line: 'blue'` but `ASK_RESULT` stayed empty.
+- **Root cause:** `ask_surface_close()` unconditionally copied the (empty) on-screen textarea over the serial-provided answer.
+- **Fix:** `serial_answered` flag; close only captures textarea when no serial answer arrived. Verified `RESULT=[blue]` on hardware. `dialog`/`list` handlers set results directly — unaffected.
+
+### Fixed — modal LVGL layout-loop watchdog (M39)
+
+- **Symptom:** running `COMPANION.BAT` → `list` modal hung `shell_cmd` in `lv_obj_update_layout` → task watchdog abort + backtrace (decoded via addr2line against the ELF).
+- **Root cause:** all six modal open functions called `windows_refresh_editor_surface()` AFTER `lvgl_port_unlock()` — layout raced the render task.
+- **Fix:** all six refreshes moved inside the locked region (`fb_refresh_list` takes the lock itself and stays outside). Companion `list` select verified working (dashboard geometry transition); editor paths ride LVGL-task affinity by design, untouched.
+
+### Fixed — test-suite findings (suite now 193 pass / 0 fail / 2 ignore)
+
+- **Extract-lock crash (mine):** v0.35.5 `lvgl_port_lock` in `shell_extract_input_text` fired before the NULL-widget guard → assert/abort in the LVGL-less test app. Fixed order (widget check first, matching project convention); suite runs to completion.
+- **Copy off-by-one:** `shell_clipboard_copy_transcript` counted a trailing newline as a line (`clip copy 2` returned 1 line). Skip-one-trailing-newline fix; new test covers it.
+- **DEG guard + float:** `DEG()` rejected bare 3-letter calls (`name[3] != '\0'` guard, no `DEG$` exists) and `deg(45.30)` hit the `floor(29.9999999)` pitfall → integer-centi-units math via `llround`.
+- **Stale caret test:** predated the v0.33.0 undefined→empty rule; updated to current semantics.
+- **64-bit asserts:** two alarm tests used `INT64` asserts without Unity 64-bit support → `INT32` (time_t is 32-bit here).
+- **2 ignores by design:** history-file format tests skip loudly when `tmpfile` is unavailable (ESP-IDF newlib).
+
+### Verification (hardware session 2026-09-06)
+
+- `idf.py build` 0 errors / 0 warnings (after fixes above).
+- Unit runner **193 pass / 0 fail / 2 ignore** (tmpfile guards), no panic.
+- Serial sweep 18/18 (calc/draw/modals/audio/periph/SD), SD read/write cycle, ask serial `RESULT=[blue]`, alarm 25/25, db 38/38, burst 20/20, screenshots pixel-verified (tofu→glyphs).
+- Open: httpd start needs a connected Wi-Fi to verify (AP visible, stored credentials rejected); `run_companion.py` text triggers are stale vs TUI BATs (firmware flow verified manually instead); BSOD watch 30 min clean, under investigation.
+
+---
+
 ## [0.35.6] - 2026-09-05 — Split patch (storage + batch-expr out; shell stays whole)
 
 ### Changed — `storage_commands.c` 6147→41 lines (residual header+includes), `batch.c` 4881→4072 lines (verbatim moves, no behavior change)

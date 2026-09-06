@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.35.6 splits, storage_nav/files/disk/text/fam + batch_expr, shell whole by audit)
+# P4MiniShell Roadmap (v0.35.7 hardware bring-up: font, httpd, queue, alarm, modal watchdog, suite 193/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -229,6 +229,18 @@ Implemented today in the checked-in firmware (final TUI hardware-verified on COM
   `components/led` (espressif/led_strip over RMT) with the `rgb` command, an
   auto status layer tied to Wi-Fi/HTTP events, a boot confirmation flash, and
   a CONFIG.SYS `RGB=` directive (see changelog v0.24.25).
+
+---
+
+## Recently Completed (v0.35.7 - September 2026)
+
+### Hardware bring-up fixes (all hardware-verified unless noted)
+- ✅ Box-glyph tofu: unconditional font + regenerated sdkconfig + 2 commas (pixel-verified)
+- ✅ httpd 8K stack (needs Wi-Fi to verify: AP visible, stored creds rejected)
+- ✅ Queue depth 16 + bounded submit (20/20 burst), NUL-byte source repair
+- ✅ Alarm lazy init (USB lesson), ask serial race, modal LVGL locks (watchdog gone)
+- ✅ Suite 193/0/2 (extract crash, copy off-by-one, DEG, caret, 64-bit fixes)
+- ⏳ BSOD watch clean 30 min; run_companion driver stale vs TUI BATs (see changelog `## [0.35.7]`)
 
 ---
 

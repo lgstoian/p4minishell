@@ -87,7 +87,7 @@ new code; these are listed for reference and for the rare case that needs a raw 
 Standard printf specifiers work alongside these, including flags, width, and
 precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 
-## UI Model (v0.35.6 splits, 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 32768 `p4minishell_config.h:1522`)
+## UI Model (v0.35.7 hardware bring-up, 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 32768 `p4minishell_config.h:1522`)
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
 - Scrollable transcript (LVGL span group) for coloured command output (read-only). It keeps

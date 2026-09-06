@@ -1560,12 +1560,18 @@ void shell_extract_input_text(char *output, size_t output_size)
         return;
     }
 
-    /* The textarea is LVGL-backed state; serialize with the render cycle.
-     * The mutex is recursive, so the LVGL event path nests without deadlock.
-     * The pointer below stays valid for the whole locked region. */
-    lvgl_port_lock(0);
+    /* The port lock asserts when LVGL is not up (unit tests, early boot),
+     * so only take it when the widget exists — a NULL widget also implies
+     * no port, matching the transcript/input-line convention. The mutex is
+     * recursive, so the LVGL event path nests without deadlock, and the
+     * textarea pointer stays valid for the whole locked region. */
     input_line = windows_get_input_line();
-    text = input_line != NULL ? lv_textarea_get_text(input_line) : NULL;
+    if (input_line == NULL) {
+        output[0] = '\0';
+        return;
+    }
+    lvgl_port_lock(0);
+    text = lv_textarea_get_text(input_line);
 
     if (text == NULL) {
         output[0] = '\0';
@@ -1704,8 +1710,13 @@ bool shell_clipboard_copy_transcript(int n_lines)
     }
 
     /* Walk backwards counting newlines to find the start of the last
-     * n_lines; cap n_lines by the actual line count. */
+     * n_lines; cap n_lines by the actual line count. A single trailing
+     * newline terminates the last line, it does not start a new (empty)
+     * one, so skip it before counting. */
     pos = length;
+    if (pos > 0 && text[pos - 1] == '\n') {
+        pos--;
+    }
     while (pos > 0 && lines < n_lines) {
         pos--;
         if (text[pos] == '\n') {

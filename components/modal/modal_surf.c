@@ -160,8 +160,10 @@ static bool dialog_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         lv_obj_t *b2 = surf_create_button(row, "Cancel");
         lv_obj_add_event_cb(b2, dialog_cancel_cb, LV_EVENT_CLICKED, NULL);
     }
-    lvgl_port_unlock();
+    // Refresh under the port lock: update_layout races the render task
+    // otherwise (watchdog in shell_cmd via layout loop, seen on hardware).
     windows_refresh_editor_surface();
+    lvgl_port_unlock();
     return true;
 }
 
@@ -293,8 +295,9 @@ static bool list_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_t *b = surf_create_button(row, "Cancel");
     lv_obj_add_event_cb(b, list_cancel_cb, LV_EVENT_CLICKED, NULL);
-    lvgl_port_unlock();
+    // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
+    lvgl_port_unlock();
     return true;
 }
 
@@ -374,6 +377,7 @@ typedef struct {
     bool password;
     char *out;
     size_t out_size;
+    bool serial_answered; /* serial line arrived first; close must not clobber it */
 } ask_ctx_t;
 
 static ask_ctx_t *s_ask_active = NULL;
@@ -418,8 +422,9 @@ static bool ask_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_add_event_cb(b1, ask_ok_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *b2 = surf_create_button(row, "Cancel");
     lv_obj_add_event_cb(b2, ask_cancel_cb, LV_EVENT_CLICKED, NULL);
-    lvgl_port_unlock();
+    // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
+    lvgl_port_unlock();
     return true;
 }
 
@@ -431,8 +436,10 @@ static void ask_surface_close(void *ctx_ptr)
     lvgl_port_lock(0);
     keyboard_bind_textarea(NULL);
     lvgl_port_unlock();
-    /* Capture textarea text before destroying */
-    if (ctx->ta && ctx->out && ctx->out_size) {
+    /* Capture textarea text before destroying, unless a serial answer
+     * already filled the output (the on-screen field is empty then and
+     * would clobber the serial answer). */
+    if (!ctx->serial_answered && ctx->ta && ctx->out && ctx->out_size) {
         lvgl_port_lock(0);
         const char *txt = lv_textarea_get_text(ctx->ta);
         if (txt) {
@@ -471,6 +478,7 @@ static bool ask_handle_serial_line(void *ctx_ptr, const char *line)
         ctx->out[ctx->out_size - 1] = '\0';
     }
     ctx->result = 0;
+    ctx->serial_answered = true;
     surf_request_close(ctx->eg);
     return true;
 }
@@ -680,9 +688,11 @@ static bool fb_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_add_event_cb(b2, fb_select_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *b3 = surf_create_button(row, "Cancel");
     lv_obj_add_event_cb(b3, fb_cancel_cb, LV_EVENT_CLICKED, NULL);
+    // Refresh under the port lock (see dialog open). fb_refresh_list takes
+    // the lock itself and stays outside so it cannot nest needlessly.
+    windows_refresh_editor_surface();
     lvgl_port_unlock();
     fb_refresh_list(ctx);
-    windows_refresh_editor_surface();
     return true;
 }
 
@@ -831,8 +841,9 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_t *btn = surf_create_button(row, "Close");
     lv_obj_add_event_cb(btn, viewer_close_btn_cb, LV_EVENT_CLICKED, NULL);
-    lvgl_port_unlock();
+    // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
+    lvgl_port_unlock();
     return true;
 }
 
@@ -981,8 +992,9 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_t *btn = surf_create_button(row, "Close");
     lv_obj_add_event_cb(btn, hex_close_btn_cb, LV_EVENT_CLICKED, NULL);
-    lvgl_port_unlock();
+    // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
+    lvgl_port_unlock();
     return true;
 }
 

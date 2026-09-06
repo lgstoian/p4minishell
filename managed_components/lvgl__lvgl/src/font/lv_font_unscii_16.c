@@ -472,7 +472,7 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     0xf0, 0x3, 0xc0, 0xc, 0xc0, 0x33, 0x0, 0xcc,
     0xff, 0x33, 0xfc, 0xc3, 0x33, 0xc, 0xf0, 0x33,
     0xc0, 0xc0, 0x3, 0x0, 0xc, 0x0, 0x30, 0x0,
-    0xc0
+    0xc0,
     /* U+2500 */
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     /* U+2501 */
@@ -2112,7 +2112,7 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 1667, .adv_w = 256, .box_w = 4, .box_h = 14, .ofs_x = 6, .ofs_y = 2},
     {.bitmap_index = 1674, .adv_w = 256, .box_w = 12, .box_h = 14, .ofs_x = 2, .ofs_y = 2},
     {.bitmap_index = 1695, .adv_w = 256, .box_w = 14, .box_h = 4, .ofs_x = 0, .ofs_y = 12},
-    {.bitmap_index = 1702, .adv_w = 256, .box_w = 14, .box_h = 14, .ofs_x = 0, .ofs_y = 2}
+    {.bitmap_index = 1702, .adv_w = 256, .box_w = 14, .box_h = 14, .ofs_x = 0, .ofs_y = 2} ,
     {.bitmap_index = 1727, .adv_w = 256, .box_w = 16, .box_h = 16, .ofs_x = 0, .ofs_y = 0},
     {.bitmap_index = 1759, .adv_w = 256, .box_w = 16, .box_h = 16, .ofs_x = 0, .ofs_y = 0},
     {.bitmap_index = 1791, .adv_w = 256, .box_w = 16, .box_h = 16, .ofs_x = 0, .ofs_y = 0},

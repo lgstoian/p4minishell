@@ -30,6 +30,11 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # overflowed in the same machinery once boot scripting plus the shell's
 # argument-cap and echo hardening added frames on that path. 16384 gives the
 # boot path comfortable headroom for nested batch files.
+# Box-drawing/symbol font for the TUI (managed_components in-tree extended
+# unscii_16, 384 glyphs). NOTE: if the generated sdkconfig ever shows this
+# as "not set", delete the generated sdkconfig and rebuild so defaults
+# re-apply — a stale generated file silently disables the font and the TUI
+# falls back to ASCII tofu (seen on hardware 2026-09-06).
 CONFIG_LV_FONT_UNSCII_16=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 

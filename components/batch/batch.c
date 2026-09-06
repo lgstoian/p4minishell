@@ -2546,9 +2546,9 @@ void shell_command_ansi(int argc, char **argv)
     }
     snprintf(codes, sizeof(codes), "%s", codes_arg);
     if (codes_len > 0 && codes[codes_len - 1] == 'm') {
-        codes[--codes_len] = ' ';
+        codes[--codes_len] = '\0';
     }
-    for (p = codes; *p != ' '; p++) {
+    for (p = codes; *p != '\0'; p++) {
         if (!isdigit((unsigned char)*p) && *p != ';') {
             shell_print_error("ansi: invalid SGR codes '%s'", argv[1]);
             free(styled);
@@ -2556,7 +2556,7 @@ void shell_command_ansi(int argc, char **argv)
             return;
         }
     }
-    if (codes[0] == ' ') {
+    if (codes[0] == '\0') {
         shell_print_error("ansi: invalid SGR codes '%s'", argv[1]);
         free(styled);
         batch_set_errorlevel(2);

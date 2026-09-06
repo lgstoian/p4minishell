@@ -61,9 +61,14 @@ void test_variable_expansion_caret_escape(void)
 {
     char out[256];
 
-    /* ^% → literal % (caret preserved in output, consumed by unescape later). */
+    /* ^% passes both characters through (caret preserved in output,
+     * consumed by unescape later); the following %VAR% still expands.
+     * Since v0.33.0 an undefined variable expands to empty (cmd.exe). */
+    shell_env_set("VAR", "vval");
     shell_expand_variables("echo ^%%VAR%", out, sizeof(out));
-    TEST_ASSERT_EQUAL_STRING("echo ^%%VAR%", out);
+    TEST_ASSERT_EQUAL_STRING("echo ^%vval", out);
+    shell_expand_variables("echo ^%%UNSET_XYZ%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo ^%", out);
 }
 
 void test_variable_expansion_multiple(void)

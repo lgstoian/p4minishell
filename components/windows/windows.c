@@ -205,13 +205,19 @@ lv_color_t windows_get_color(const char *name)
     return lv_color_hex(0x000000);
 }
 
+/** Extended in-tree unscii_16 (box-drawing + symbols), always compiled from
+ * managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c. */
+extern const lv_font_t lv_font_unscii_16;
+
 const lv_font_t *windows_get_terminal_font(void)
 {
-#if LV_FONT_UNSCII_16
+    /* Unconditional: the generated sdkconfig once lost
+     * CONFIG_LV_FONT_UNSCII_16 (stale generated file, see sdkconfig.defaults
+     * note), so the old #if guard silently fell back to the ASCII-only
+     * default font and every box glyph rendered as tofu (verified on
+     * hardware via screenshot). The in-tree extended font is always
+     * compiled, so use it directly instead of gating on config. */
     return &lv_font_unscii_16;
-#else
-    return LV_FONT_DEFAULT;
-#endif
 }
 
 /* ========================================================================

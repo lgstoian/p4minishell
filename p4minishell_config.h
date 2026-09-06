@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             35
-#define P4_CONFIG_VERSION_PATCH             6
+#define P4_CONFIG_VERSION_PATCH             7
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -517,8 +517,12 @@
 #define P4_CONFIG_HTTPD_BACKLOG             4
 
 /** Stack bytes for the dedicated HTTP server task. The handler builds
- *  path-sized scratch (URL + LFN) so it needs headroom over the default. */
-#define P4_CONFIG_HTTPD_STACK_BYTES         16384
+ *  path-sized scratch (URL + LFN) so it needs headroom over the IDF default
+ *  (4096), but the 16 KB this used to request could not be allocated from
+ *  the fragmented internal heap at Wi-Fi-up time and every start failed
+ *  with ESP_ERR_HTTPD_TASK (seen on hardware). 8 KB verified sufficient
+ *  via the httpd task's HeadB watermark in `ps`. */
+#define P4_CONFIG_HTTPD_STACK_BYTES         8192
 
 /** Priority of the HTTP server task. */
 #define P4_CONFIG_HTTPD_TASK_PRIORITY       5
@@ -1520,6 +1524,15 @@
 
 /** Stack size for the shell command worker task. */
 #define P4_CONFIG_COMMAND_TASK_STACK         32768
+
+/** Depth of the async command queue (pointers only; the worker owns them).
+ *  Raised from 4: bursts (pasted lines, scripted drivers, modal chains)
+ *  dropped the 5th command with a zero-timeout submit. */
+#define P4_CONFIG_COMMAND_QUEUE_DEPTH        16
+
+/** Bounded wait when the async queue is full (submit runs on the LVGL/UART
+ *  tasks, never the worker, so waiting cannot deadlock the pipeline). */
+#define P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS 500
 
 /** Stack size for the UART/serial console reader task. */
 #define P4_CONFIG_UART_CONSOLE_TASK_STACK    12288

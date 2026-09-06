@@ -57,7 +57,9 @@ void test_alarm_advance_none(void)
 {
     time_t t;
     TEST_ASSERT_TRUE(alarm_parse_datetime("2026-08-18", "09:00", &t));
-    TEST_ASSERT_EQUAL_INT64((int64_t)t, (int64_t)alarm_advance_recur(t, ALARM_RECUR_NONE));
+    /* INT32: Unity here builds without 64-bit support, and time_t is
+     * 32-bit long on this target (2026 epoch fits). */
+    TEST_ASSERT_EQUAL_INT32((int32_t)t, (int32_t)alarm_advance_recur(t, ALARM_RECUR_NONE));
 }
 
 void test_alarm_advance_weekly_all_days(void)
@@ -134,6 +136,6 @@ void test_alarm_parse_invalid(void)
     /* NULL args. */
     TEST_ASSERT_FALSE(alarm_parse_datetime(NULL, "09:00", &t));
     TEST_ASSERT_FALSE(alarm_parse_datetime("2026-08-18", NULL, &t));
-    /* Output untouched on failure. */
-    TEST_ASSERT_EQUAL_INT64(12345, (int64_t)t);
+    /* Output untouched on failure (INT32: no 64-bit Unity support here). */
+    TEST_ASSERT_EQUAL_INT32(12345, (int32_t)t);
 }

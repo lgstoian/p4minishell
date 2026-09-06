@@ -10,9 +10,9 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.35.6
-# Last updated: 2026-09-05 (splits: storage_nav/files/disk/text/fam + batch_expr out; shell.c stays whole per static-sharing audit)
-config_version: "0.35.6"
+# Version: 0.35.7
+# Last updated: 2026-09-06 (hardware bring-up: font/box-glyph fix, httpd 8K stack, queue restore, NUL bytes, alarm lazy init, modal LVGL locks, ask race, suite 193/0/2)
+config_version: "0.35.7"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -585,7 +585,7 @@ http_server:
   stack_bytes:
     value: 8192
     type: size_t
-    description: "Stack bytes for the dedicated HTTP server task (handler builds path-sized scratch)"
+    description: "Stack bytes for the dedicated HTTP server task (handler builds path-sized scratch; 16384 could not allocate from fragmented internal heap at Wi-Fi-up time -> every start failed ESP_ERR_HTTPD_TASK, fixed 2026-09-06)"
     range: "2048..32768"
   task_priority:
     value: 5
@@ -1678,6 +1678,16 @@ task_stacks:
       24576 -> 32768 to accommodate recursive dir /S and deep batch+TUI
       call stacks; 48 KB was too large for task creation on ESP32-P4.
     range: "4096..65536"
+  command_queue_depth:
+    value: 16
+    type: int
+    description: "Async command queue depth, pointers only (P4_CONFIG_COMMAND_QUEUE_DEPTH); depth 4 dropped bursts, restored to 16 in 2026-09-06"
+    range: "4..64"
+  command_queue_send_timeout_ms:
+    value: 500
+    type: int
+    description: "Bounded submit wait on a full queue (P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS); LVGL/UART tasks only, cannot deadlock the worker"
+    range: "0..5000"
   uart_console:
     value: 12288
     type: size_t

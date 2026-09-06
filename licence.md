@@ -1,4 +1,4 @@
-# Licence Notice (v0.35.6 splits, storage 5 files + batch_expr, shell whole)
+# Licence Notice (v0.35.7 hardware bring-up: suite 193/0/2, watchdog + alarm + font fixed)
 
 ## Project code
 Unless a file or directory states otherwise, the original project-specific code in this repository is:

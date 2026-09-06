@@ -46,6 +46,7 @@
 #include "http_server.h"
 #include "netdiag.h"
 #include "led.h"
+#include "alarm.h"
 #include "bluetooth.h"
 #include "c6ota.h"
 #include "tui.h"
@@ -118,7 +119,8 @@ static bool s_initialized = false;
  *  task creation pattern: commands are posted to the queue and processed
  *  sequentially by a single long-lived task, eliminating task-creation
  *  overhead (~1-2ms per command) and reducing heap fragmentation. */
-#define SHELL_COMMAND_QUEUE_DEPTH  4
+#define SHELL_COMMAND_QUEUE_DEPTH  P4_CONFIG_COMMAND_QUEUE_DEPTH
+#define SHELL_COMMAND_QUEUE_SEND_TIMEOUT_MS P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS
 static QueueHandle_t s_command_queue = NULL;
 static TaskHandle_t s_command_worker_handle = NULL;
 
@@ -2362,8 +2364,11 @@ void shell_execute_command_async(char *command)
     snprintf(request->command, sizeof(request->command), "%s", command);
 
     /* The queue stores the pointer only; the worker task owns and frees the
-     * request after executing it. On a full queue the request is dropped. */
-    if (xQueueSend(s_command_queue, &request, 0) != pdTRUE) {
+     * request after executing it. Wait boundedly for a slot (submit runs on
+     * the LVGL/UART tasks, never the worker, so this cannot deadlock); only
+     * a persistently-stuck worker still drops, loudly. */
+    if (xQueueSend(s_command_queue, &request,
+                   pdMS_TO_TICKS(SHELL_COMMAND_QUEUE_SEND_TIMEOUT_MS)) != pdTRUE) {
         shell_print_error("shell: command queue full, command dropped");
         shell_record_warningf("shell", "Command queue full, dropped: %s", command);
         free(request);
@@ -2558,6 +2563,18 @@ void command_init(void)
             .wifi_state_string  = networking_wifi_state_string,
         };
         applib_register_net_ops(&applib_net_ops);
+    }
+
+    /* Publish the worker-queue hook to the alarm store. The store itself
+     * starts lazily on the first `alarm`/`cal` command (see
+     * shell_alarm_ensure_init() in alarm_commands.c): creating the checker
+     * task here, before USB host init, fragments the internal DMA heap and
+     * breaks USB HCD bring-up (verified on hardware). */
+    {
+        static const alarm_host_ops_t alarm_ops = {
+            .execute_async = shell_execute_command_async,
+        };
+        alarm_register_host_ops(&alarm_ops);
     }
 
     s_initialized = true;

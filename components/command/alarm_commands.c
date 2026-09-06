@@ -523,6 +523,19 @@ static bool cal_month_dump_cb(const alarm_event_t *e, void *ctx)
  * Dispatchers
  * ---------------------------------------------------------------------- */
 
+/** Start the alarm store + checker on first use (see command_init: eager
+ * start fragments the DMA heap before USB host init and breaks USB HCD
+ * bring-up, verified on hardware). Idempotent; failure degrades to
+ * direct store access with no background firing. */
+static void shell_alarm_ensure_init(void)
+{
+    if (!alarm_is_initialized()) {
+        if (alarm_init() != ESP_OK) {
+            shell_print_warning("alarm: background checker unavailable");
+        }
+    }
+}
+
 void shell_command_alarm(int argc, char **argv)
 {
     const char *verb;
@@ -531,6 +544,7 @@ void shell_command_alarm(int argc, char **argv)
     int pcount;
     int result;
 
+    shell_alarm_ensure_init();
     if (argc < 2) {
         shell_print_usage("Usage: alarm <add|list|del|enable|disable|status|purge> [...]");
         batch_set_errorlevel(2);
@@ -567,6 +581,7 @@ void shell_command_cal(int argc, char **argv)
 {
     int result = 0;
 
+    shell_alarm_ensure_init();
     if (argc < 2) {
         result = cal_cmd_today();
     } else if (shell_text_equals_ignore_case(argv[1], "today")) {

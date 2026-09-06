@@ -588,16 +588,18 @@ static void calc_parse_function_body(calc_parser_t *parser, const char *name,
         calc_set_number(out, cbrt(x));
         return;
     }
-    if (strncasecmp(name, "DEG", 3) == 0 && name[3] != '\0' && name[3] != '$') {
+    if (strncasecmp(name, "DEG", 3) == 0) {
         if (arg_count != 1) { calc_expr_fail(parser, "DEG takes 1 argument"); return; }
         if (!calc_arg_number(parser, &args[0], &x)) { return; }
         {
+            // Integer DMMSS math: floor(frac * 100) misfires when the
+            // decimal fraction sits just below an integer in binary
+            // (45.30 -> 29.9999999 -> MM=29). Round to integer centi-units.
             int sign = (x < 0.0) ? -1 : 1;
-            double a = fabs(x);
-            double d = floor(a);
-            double frac = a - d;
-            double m = floor(frac * 100.0);
-            double s = (frac * 10000.0) - m * 100.0;
+            long long t = llround(fabs(x) * 10000.0);
+            double d = (double)(t / 10000);
+            double m = (double)((t % 10000) / 100);
+            double s = (double)(t % 100);
             double result = sign * (d + m / 60.0 + s / 3600.0);
             calc_set_number(out, result);
         }
