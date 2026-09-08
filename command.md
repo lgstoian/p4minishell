@@ -128,6 +128,9 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `screenshot`, `receive`, `send` | `components/command/serial_commands.c` |
 | `display`, `keyboard`, `windows` (UI query) | `components/command/command_ui.c` (dispatched from `components/command/command.c`) |
 | `config` (persistent settings / CONFIG.SYS + factory reset) | `components/command/config_cmd.c` |
+| `db` (record store verbs) | `components/command/db_commands.c` (dispatched from `components/command/command.c`) |
+| `alarm`/`cal` (alarm + calendar verbs) | `components/command/alarm_commands.c` (dispatched from `components/command/command.c`) |
+| `gfind` (Palm-style global find over db + alarms) | `components/command/gfind_commands.c` (dispatched from `components/command/command.c`) |
 | `reboot`, `clear`/`cls`, `prompt`, `launch`, `apps` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota`, `httpd`, `netstat`, `ipconfig` (family routing) | `components/command/command.c` → owning module |
@@ -813,7 +816,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | goto <label> | Jump to a `:label` in the running batch file |
 | goto :eof | Jump to the end of the current batch file, unwinding its open setlocal scopes |
 | for %%v in (set) do cmd | Loop over literal tokens or a wildcard pattern |
-| for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c`, `skip=n`, `delims=xyz`, `tokens=a,b,m-n,*` |
+| for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c`, `skip=n`, `delims=xyz`, `tokens=a,b,m-n,*`; a single-quoted set `in ('command')` iterates command output |
 | shift | Shift batch arguments left by one position |
 | pause | Wait for a keypress |
 | choice [/C:keys] [/N] [/T:c,secs] [/S] [text] | Wait for one of the listed keys |
@@ -1339,6 +1342,10 @@ literal caret, not a continuation.
 
 ### Batch File Features
 - %0 (script name), %1 through %9, and %* (all arguments, from %1 onward) expansion
+- `%~[fdpnx]N` argument modifiers: `%~1` strips surrounding quotes, `f` = full
+  path, `d` = drive (always empty on FATFS), `p` = directory with trailing
+  `/`, `n` = base name without extension, `x` = extension with dot
+  (`%~dpnx1` combines them; `s` is accepted and ignored — no short names)
 - %VAR% environment variable expansion
 - Dynamic pseudo-variables (always win over a user variable of the same name):
   - `%ERRORLEVEL%` — current errorlevel as a decimal string
@@ -1396,7 +1403,23 @@ set /p v=< data.txt
 | `skip=n` | Skip the first `n` lines |
 | `delims=xyz` | Delimiter characters used to split each line (default space+tab) |
 | `tokens=a,b,m-n,*` | 1-based token indices to bind to `%%a`, `%%b`, ...; `*` binds the rest of the line |
-| `usebackq` | Accepted for DOS parity (the quoted-command form is unsupported) |
+| `usebackq` | Selects the backquote command form (`` in (`cmd`) `` instead of `in ('cmd')`) |
+
+A single-quoted set runs the inner command and iterates its output — the
+cmd.exe mechanism for parsing command output (batch files; the interactive
+prompt strips single-quote markup before `for` runs, so prefer files):
+
+```
+for /f "tokens=*" %%v in ('echo hello') do echo GOT=%%v
+for /f "tokens=2 delims=," %%a in ('db find contacts /b') do echo %%a %%b
+```
+
+The inner command runs through the full pipeline with the re-entrant
+redirection capture, so its own `>`/`>>` nests correctly; like pipe stages,
+its output also remains visible on the transcript. `skip`/`eol`/`delims`/
+`tokens` apply exactly as in the file form, lines are capped at
+`P4_CONFIG_FORF_LINE_MAX`, and an over-long capture warns instead of
+silently truncating.
 
 Each line is read through the same pipeline as a batch line, so variables,
 pipes, and redirection work per iteration. This is the mechanism behind the
@@ -1528,8 +1551,13 @@ the on-screen keyboard — serial input still echos). ERRORLEVEL is `0` on OK,
 | `draw line <x1> <y1> <x2> <y2> [single\|double\|heavy]` | Draw H/V line (only horizontal `y1==y2` or vertical `x1==x2`) with style (`SH_BOX_H`/`V` vs `H2`/`V2` vs `HL`/`VL`). |
 | `draw fill <x> <y> <w> <h> [char]` | Fill rect at x,y,w,h with char (default space) using current fg/bg. |
 | `draw text <x> <y> <text>` | Print text at x,y (UTF-8 aware, respects cell `utf8[4]`). |
-| `draw clear` | Clear entire grid (`tui_clear`). |
-| `draw window <x> <y> <w> <h> [title]` | Alias for `draw box` with window stack semantics (nested titled boxes). |
+| `draw clear [screen\|line\|eol\|eos]` | Clear target (default `screen`): whole grid, cursor line, cursor-to-end-of-line, or cursor-to-end-of-screen. Outside TUI emits the matching ANSI sequence (`ESC[2J`/`ESC[2K`/`ESC[0K`/`ESC[0J`). |
+| `draw window <id> <x> <y> <w> <h> [title]` | Box with window-stack semantics; `<id>` is accepted and ignored. Requires an active TUI (error `1` otherwise). |
+| `draw save` / `draw restore` | Save / restore the TUI cursor (`ESC[s` / `ESC[u]` outside TUI). |
+| `draw cursor on\|off` | Show / hide the TUI cursor (`ESC[?25h` / `ESC[?25l` outside TUI). |
+| `draw alt-screen on\|off` | Enter / leave the TUI alternate screen (`ESC[?1049h` / `ESC[?1049l` outside TUI). |
+| `draw close` | Leave TUI mode (`tui_deinit`); error `1` when no TUI is active. |
+| `draw refresh` | Re-flush the TUI grid; always succeeds (`0`). |
 | `draw fullscreen on\|off` | Global fullscreen: `on` hides header completely via `windows_set_fullscreen(true)`/`header_set_visible(false)` `components/windows/windows.c:418`; `off` restores header. Header kept visible by default; dynamic keyboard scaling via `windows_notify_keyboard_visibility`. |
 
 Examples (all pass on COM11 serial without abort/watchdog/overlap, header kept unless fullscreen):
@@ -1540,11 +1568,14 @@ draw box 1 1 80 25 rounded Full
 draw line 1 5 80 5 single
 draw fill 10 10 5 3 X
 draw text 5 5 Hello
-draw window 10 6 30 10 Nested
+draw window 1 10 6 30 10 Nested
 draw fullscreen on
 draw clear
+draw clear line
+draw cursor off
+draw alt-screen on
 ```
-ERRORLEVEL: `0` ok, `2` usage.
+ERRORLEVEL: `0` ok, `1` TUI-only verb without an active TUI, `2` usage.
 
 ### tui — TUI control
 
@@ -1564,6 +1595,12 @@ ERRORLEVEL: `0` ok, `2` usage.
 ### locate
 
 `locate <row> <col>` — DOS `LOCATE` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:160` `tui_set_cursor`/`tui_get_cursor`). Emits the ANSI cursor-position sequence `ESC[<row>;<col>H` to move the cursor, with `row` clamped to `1..25` and `col` to `1..80` bounded by `P4_CONFIG_TUI_ROWS` / `P4_CONFIG_TUI_COLS` (`p4minishell_config.h:298`). Used with `echo` and `ansi` to position text in TUI batch apps (e.g. `locate 5 10 && echo Hello`). Row and column must both be present; missing or non-numeric arguments set ERRORLEVEL `2`, success sets `0`. Coordinates are 1-based on the `80×25` transcript region (`1024x510`).
+
+### anchor
+
+`anchor <label> <command> [continue_line]` — register a named transcript anchor region bound to a command (`continue_line` accepts `true`/non-zero). Prints `anchor registered: <label> -> <command>`.
+
+ERRORLEVEL: `0` ok, `2` usage.
 
 ### pause, choice, and more without a keyboard
 
@@ -2079,6 +2116,33 @@ findstr /G:patterns.txt file.txt
 
 ERRORLEVEL: 0 = at least one match, 1 = no match, 2 = usage / error.
 
+### gfind
+
+Palm-style global find across the structured stores: the `db` record databases
+and the `alarm`/calendar store.
+
+Usage: `gfind <text> [/b] [/i] [/db:name] [/noalarms] [/nodb]`
+
+| Switch | Meaning |
+|--------|---------|
+| `/b` | Bare output (pipe/`for /f` friendly) |
+| `/i` | Case-insensitive match |
+| `/db:name` | Search only the named database (default: all databases) |
+| `/noalarms` | Skip the alarm store |
+| `/nodb` | Skip the databases |
+
+The search text is a single positional argument — quote it when it contains
+spaces (`gfind "team call"`); more than one positional is a usage error.
+Prints `gfind.matches` with the number of stores that matched (unless `/b`).
+
+Examples:
+```
+gfind Standup
+gfind /i /b meeting /db:contacts
+```
+
+ERRORLEVEL: 0 = at least one match, 1 = no match, 2 = usage / error.
+
 ### comp
 
 Classic DOS byte-for-byte file comparison.
@@ -2302,7 +2366,7 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | bt ... | Alias for bluetooth command family |
 
 ### Bluetooth Lifecycle
-- bluetooth enable initializes hosted controller and NimBLE host once
+- The hosted controller and NimBLE host initialize once on first use
 - Subsequent scan/advertise commands reuse active session
 - Hosted NimBLE VHCI on ESP32-C6 over ESP-Hosted SDIO
 - `bluetooth scan` is always bounded by `P4_CONFIG_BT_SCAN_DURATION_MS`, so it
@@ -2405,7 +2469,7 @@ string functionality):
 | TRON/TROFF | `echo on` / `echo off` |
 
 Not applicable to this firmware (no stub, no equivalent): `LLIST`/`LPRINT`
-(no printer), `LOCATE` (no transcript cursor positioning), `MODE` (covered by
+(no printer), `MODE` (covered by
 `display`/`keyboard`/`power`), `PASS` (no program lock), `DEFCHR$` (LVGL
 fonts, not a character LCD), `DEFSEG`/`DEFM`/`PEEK`/`POKE`/`PBLOAD`/`PBGET`
 (no memory pokes; hardware access is `gpio read`/`set`), `CALC$`/`CALCJMP`
@@ -2417,13 +2481,13 @@ by `chkdsk`).
 
 ## Unsupported Commands
 
-These commands are registered in the dispatcher but only print an error message.
-They are listed here for reference and to prevent confusion if typed.
+Stubs registered in the dispatcher that only print an error message are listed
+here for reference and to prevent confusion if typed. (Implemented commands
+with their own sections, like rgb, are not stubs.)
 
 | Command | Reason |
 |---------|--------|
-| rgb led <color> | No RGB LED wiring declared in board metadata; stub prints an error |
-| rgb <r> <g> <b> | No RGB LED wiring declared in board metadata; stub prints an error |
+| rgb <#RRGGBB|r g b|effect|auto> | WS2812 status LED (GPIO26) with auto status layer -- see Hardware Commands |
 | camera init | No camera stack in current workspace; stub prints an error |
 | camera snap <filename> | No camera stack in current workspace; stub prints an error |
 

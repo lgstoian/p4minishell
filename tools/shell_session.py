@@ -1,6 +1,12 @@
-"""Minimal USB-Serial-JTAG session driver for P4MiniShell bring-up."""
+"""Minimal USB-Serial-JTAG session driver for P4MiniShell bring-up.
+
+Port selection (first match wins): explicit Shell(port=...), the P4_PORT
+environment variable, a trailing COMx argv token, else COM11.
+"""
+import os
 import re
 import serial
+import sys
 import time
 
 PROMPT_RE = re.compile(rb"PS .*>\s?$", re.M)
@@ -8,9 +14,16 @@ PANICS = [b"Guru Meditation", b"Stack protection", b"Backtrace",
           b"assert failed", b"abort()"]
 
 
+def default_port():
+    for arg in sys.argv[1:]:
+        if arg.upper().startswith("COM"):
+            return arg.upper()
+    return os.environ.get("P4_PORT", "COM11")
+
+
 class Shell:
-    def __init__(self, port="COM11", baud=115200):
-        self.s = serial.Serial(port, baud, timeout=10)
+    def __init__(self, port=None, baud=115200):
+        self.s = serial.Serial(port or default_port(), baud, timeout=10)
         self.s.dtr = False
         self.s.rts = False
         time.sleep(0.5)

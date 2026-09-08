@@ -6,6 +6,7 @@ rem  Enhanced TUI with draw boxes and status.
 rem =====================================================================
 
 :main
+echo [M-SET]
 draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "SETTINGS" 14
@@ -13,9 +14,9 @@ draw box 1 4 80 10 single "Options"
 draw text 5 6 "Brightness, volume, config, scoping"
 list "Settings" "Set brightness" "Set volume" "Show settings" "Scoping demo" "View config" "TUI Demo" "Reset" "Back"
 if errorlevel 255 goto :back
-if errorlevel 7 goto :tui_demo
-if errorlevel 6 goto :back
-if errorlevel 5 goto :reset
+if errorlevel 7 goto :back
+if errorlevel 6 goto :reset
+if errorlevel 5 goto :tui_demo
 if errorlevel 4 goto :view_cfg
 if errorlevel 3 goto :scoping
 if errorlevel 2 goto :show
@@ -104,12 +105,12 @@ draw box 1 1 80 3 single
 draw text 35 2 "RESET" 14
 dialog "Reset" "Clear saved settings?" "Yes" "No"
 if errorlevel 1 goto main
-if errorlevel 255 goto main
 appconfig companion del brightness
 appconfig companion del volume
 dialog "Reset" "Cleared saved settings." "OK"
 goto main
 
 :back
+echo [M-SET-BACK]
 draw clear screen
 goto :eof

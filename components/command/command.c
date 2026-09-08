@@ -543,19 +543,19 @@ static void shell_command_paste(int argc, char **argv)
 
 /** Built-in command names offered by Tab completion for the first token. */
 static const char *const shell_builtin_commands[] = {
-    "about", "adc", "alias", "ansi", "append", "appconfig", "appmode", "attrib", "audio", "battery", "beep",
-    "bluetooth", "brightness", "bt", "c6ota", "calc", "call", "capture", "cd", "chdir",    "chkdsk", "choice", "clear", "clip", "cls", "comp", "config", "copy", "date", "debug",
-    "deepsleep", "del", "dir", "disk", "display", "dns", "echo", "edit",
+    "about", "adc", "alarm", "alias", "anchor", "ansi", "append", "appconfig", "appmode", "apps", "ask", "attrib", "audio", "battery", "beep",
+    "bluetooth", "brightness", "browse", "bt", "c6ota", "cal", "calc", "call", "camera", "capture", "cd", "chdir", "chkdsk", "choice", "clear", "clip", "cls", "color", "comp", "config", "copy", "date", "db", "debug",
+    "deepsleep", "del", "delay", "dialog", "dir", "disk", "display", "dns", "draw", "echo", "edit",
     "endlocal",
-    "erase", "exit", "fc", "find", "findstr", "for", "format", "freq", "goto", "gpio",
-    "help", "history", "httpd", "httpget", "i2c", "if", "ini", "ipconfig", "keyboard",
-    "label", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "nslookup",
+    "erase", "exit", "fc", "find", "findstr", "for", "format", "freq", "gfind", "goto", "gpio",
+    "help", "hexview", "history", "httpd", "httpget", "i2c", "if", "ini", "ipconfig", "keyboard",
+    "label", "launch", "list", "locate", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "notify", "nslookup",
     "ntpsync", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
     "rd", "reboot", "receive", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
     "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "send", "set", "setlocal",
     "shift", "sleep", "sntp", "sort", "spi", "sysinfo", "tasks", "time", "timezone",
-    "tone", "top", "touch", "trash", "tree", "type", "unalias", "undelete", "usb",
-    "ver", "version", "volume", "wavplay", "wget", "wifi", "windows", "write", "xcopy",
+    "tone", "top", "touch", "trash", "tree", "tui", "type", "unalias", "undelete", "usb",
+    "ver", "version", "view", "volume", "wavplay", "wget", "wifi", "windows", "write", "xcopy",
     "proc", "temp",
 };
 
@@ -990,6 +990,374 @@ bool shell_launch_app(const char *app_name)
     shell_execute_command(command);
     free(command);
     return true;
+}
+
+/* ========================================================================
+ * APP DISCOVERY (`launch`) + NATIVE APP LISTING (`apps`)
+ * ========================================================================
+ * A `.bat` in a PATH directory or in the conventional `sd:/APPS` directory
+ * is the loadable app unit (batch-first route: no executable loader).
+ * Discovery scans PATH entries plus `sd:/APPS` for `*.bat` through the
+ * shared wildcard machinery, so no new filesystem code exists here; the
+ * table is heap-allocated because a launched batch re-enters the dispatcher
+ * per line and a stack table would overflow the worker task. Optional
+ * `sd:/APPS/<name>.APPINFO` metadata (`title=`) is read through the shared
+ * INI core. `apps` lists the linked-in native apps from the applib table.
+ */
+
+#define SHELL_LAUNCH_NAME_BYTES  96
+#define SHELL_LAUNCH_TITLE_BYTES 96
+
+typedef struct {
+    char name[SHELL_LAUNCH_NAME_BYTES];   /* Base name without extension */
+    char path[SHELL_SD_PATH_BYTES];       /* Full resolved .bat path */
+    char title[SHELL_LAUNCH_TITLE_BYTES]; /* APPINFO title, or "" */
+} shell_launch_entry_t;
+
+static int shell_launch_find(const shell_launch_entry_t *table, int count, const char *name)
+{
+    int i;
+
+    if (table == NULL || name == NULL) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        if (shell_text_equals_ignore_case(table[i].name, name)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool shell_launch_has_bat_ext(const char *base)
+{
+    size_t len;
+
+    if (base == NULL) {
+        return false;
+    }
+    len = strlen(base);
+    if (len < 5) { /* x.bat minimum */
+        return false;
+    }
+    return tolower((unsigned char)base[len - 4]) == '.' &&
+           tolower((unsigned char)base[len - 3]) == 'b' &&
+           tolower((unsigned char)base[len - 2]) == 'a' &&
+           tolower((unsigned char)base[len - 1]) == 't';
+}
+
+static void shell_launch_add(shell_launch_entry_t *table, int *count, const char *full_path)
+{
+    const char *slash;
+    const char *base;
+    size_t blen;
+    size_t n;
+    char appinfo[SHELL_SD_PATH_BYTES];
+    char title[SHELL_LAUNCH_TITLE_BYTES];
+
+    if (table == NULL || count == NULL || full_path == NULL) {
+        return;
+    }
+    if (*count >= P4_CONFIG_LAUNCH_MAX) {
+        return;
+    }
+    slash = strrchr(full_path, '/');
+    base = (slash != NULL) ? slash + 1 : full_path;
+    if (!shell_launch_has_bat_ext(base)) {
+        return;
+    }
+    blen = strlen(base) - 4;
+    if (blen == 0) {
+        return;
+    }
+    n = blen;
+    if (n >= SHELL_LAUNCH_NAME_BYTES) {
+        n = SHELL_LAUNCH_NAME_BYTES - 1;
+    }
+    memcpy(table[*count].name, base, n);
+    table[*count].name[n] = '\0';
+    if (shell_launch_find(table, *count, table[*count].name) >= 0) {
+        return; /* First location wins (PATH order, then APPS). */
+    }
+    snprintf(table[*count].path, sizeof(table[*count].path), "%s", full_path);
+    title[0] = '\0';
+    snprintf(appinfo, sizeof(appinfo), "sd:/APPS/%s.APPINFO", table[*count].name);
+    if (storage_ini_file_get(appinfo, "title", title, sizeof(title)) != ESP_OK) {
+        title[0] = '\0';
+    }
+    snprintf(table[*count].title, sizeof(table[*count].title), "%s", title);
+    (*count)++;
+}
+
+/**
+ * Fill @p table (P4_CONFIG_LAUNCH_MAX entries, caller-allocated) with the
+ * installed `.bat` apps: every `;`-separated PATH directory, then the
+ * conventional `sd:/APPS` directory. A missing/unreadable directory simply
+ * contributes nothing. @return The number of entries stored.
+ */
+static int shell_launch_discover(shell_launch_entry_t *table)
+{
+    const char *path_env;
+    char *dirs = NULL;
+    int count = 0;
+
+    if (table == NULL) {
+        return 0;
+    }
+    memset(table, 0, sizeof(*table) * (size_t)P4_CONFIG_LAUNCH_MAX);
+
+    path_env = shell_env_get("PATH");
+    dirs = strdup((path_env != NULL && path_env[0] != '\0') ? path_env : "sd:/");
+    if (dirs == NULL) {
+        shell_print_error("launch: out of memory");
+        return 0;
+    }
+    {
+        char *save = NULL;
+        char *dir = strtok_r(dirs, ";", &save);
+
+        while (dir != NULL && count < P4_CONFIG_LAUNCH_MAX) {
+            char pattern[SHELL_SD_PATH_BYTES];
+            char **files = NULL;
+            int nfiles = 0;
+            size_t dl;
+
+            while (*dir != '\0' && isspace((unsigned char)*dir)) {
+                dir++;
+            }
+            dl = strlen(dir);
+            while (dl > 0 && isspace((unsigned char)dir[dl - 1])) {
+                dir[dl - 1] = '\0';
+                dl--;
+            }
+            if (dir[0] != '\0') {
+                /* Trailing-slash tolerant join that keeps the resolver happy:
+                 * the default PATH is the drive root, whose directory part
+                 * must stay in root form for the wildcard splitter. Only the
+                 * logical length shrinks here — no bytes are written past the
+                 * token. */
+                while (dl > 0 && dir[dl - 1] == '/') {
+                    dl--;
+                }
+                if (dl == 0) {
+                    dir = strtok_r(NULL, ";", &save);
+                    continue;
+                }
+                if (dir[dl - 1] == ':') {
+                    snprintf(pattern, sizeof(pattern), "%.*s//*.bat", (int)dl, dir);
+                } else {
+                    snprintf(pattern, sizeof(pattern), "%.*s/*.bat", (int)dl, dir);
+                }
+                if (storage_expand_wildcard(pattern, &files, &nfiles) == ESP_OK) {
+                    for (int i = 0; i < nfiles && count < P4_CONFIG_LAUNCH_MAX; i++) {
+                        shell_launch_add(table, &count, files[i]);
+                    }
+                    storage_free_wildcard_expansion(files, nfiles);
+                } else {
+                    shell_record_warningf("launch", "Could not scan %s", dir);
+                }
+            }
+            dir = strtok_r(NULL, ";", &save);
+        }
+    }
+    free(dirs);
+
+    if (count < P4_CONFIG_LAUNCH_MAX) {
+        char **files = NULL;
+        int nfiles = 0;
+
+        if (storage_expand_wildcard("sd:/APPS/*.bat", &files, &nfiles) == ESP_OK) {
+            for (int i = 0; i < nfiles && count < P4_CONFIG_LAUNCH_MAX; i++) {
+                shell_launch_add(table, &count, files[i]);
+            }
+            storage_free_wildcard_expansion(files, nfiles);
+        }
+    }
+    return count;
+}
+
+static void shell_command_launch(int argc, char **argv)
+{
+    shell_launch_entry_t *table;
+    int count;
+    int i;
+
+    table = calloc((size_t)P4_CONFIG_LAUNCH_MAX, sizeof(*table));
+    if (table == NULL) {
+        shell_print_error("launch: out of memory");
+        batch_set_errorlevel(1);
+        return;
+    }
+    count = shell_launch_discover(table);
+
+    /* `launch /list` — bare machine-parsable list for scripting. */
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "/list")) {
+        for (i = 0; i < count; i++) {
+            if (table[i].title[0] != '\0') {
+                shell_transcript_appendf("%s  -  %s\n", table[i].name, table[i].title);
+            } else {
+                shell_transcript_appendf("%s\n", table[i].name);
+            }
+        }
+        batch_set_errorlevel(count > 0 ? 0 : 1);
+        free(table);
+        return;
+    }
+
+    /* `launch <name> [args...]` — run one app by name. */
+    if (argc >= 2 && argv[1][0] != '/') {
+        char batch_path[SHELL_SD_PATH_BYTES];
+        bool found = shell_resolve_batch_path(argv[1], batch_path, sizeof(batch_path));
+
+        if (!found) {
+            /* Fall back to the conventional APPS directory. The name becomes
+             * part of a path: reject separators and dot segments, mirroring
+             * the appconfig validator, so a name can never escape APPS. */
+            bool bad = (strchr(argv[1], '/') != NULL) || (strchr(argv[1], '\\') != NULL) ||
+                       (strcmp(argv[1], ".") == 0) || (strcmp(argv[1], "..") == 0) ||
+                       (argv[1][0] == '\0');
+            if (!bad) {
+                char cand[2][SHELL_SD_PATH_BYTES];
+
+                snprintf(cand[0], sizeof(cand[0]), "sd:/APPS/%s", argv[1]);
+                snprintf(cand[1], sizeof(cand[1]), "sd:/APPS/%s.BAT", argv[1]);
+                for (i = 0; i < 2 && !found; i++) {
+                    char resolved[SHELL_SD_PATH_BYTES];
+                    FILE *probe;
+
+                    if (shell_fs_resolve_path(cand[i], resolved, sizeof(resolved)) != ESP_OK) {
+                        continue;
+                    }
+                    probe = fopen(resolved, "rb");
+                    if (probe != NULL) {
+                        fclose(probe);
+                        snprintf(batch_path, sizeof(batch_path), "%s", resolved);
+                        found = true;
+                    }
+                }
+            }
+        }
+        if (found) {
+            shell_execute_batch_file(batch_path, argc - 2, &argv[2]);
+            free(table);
+            return;
+        }
+        shell_print_error("launch: app not found: %s", argv[1]);
+        batch_set_errorlevel(1);
+        free(table);
+        return;
+    }
+
+    if (argc >= 2) {
+        shell_print_usage("Usage: launch | launch <name> [args] | launch /list");
+        batch_set_errorlevel(2);
+        free(table);
+        return;
+    }
+
+    /* `launch` — numbered menu over the discovery table. Bounded input so a
+     * batch file or headless board can never stall here. */
+    if (count == 0) {
+        shell_print_warning("launch: no apps installed (place a .bat on PATH or in sd:/APPS)");
+        batch_set_errorlevel(1);
+        free(table);
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        if (table[i].title[0] != '\0') {
+            shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "  -  %s\n",
+                                          i + 1, table[i].name, table[i].title);
+        } else {
+            shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "\n",
+                                          i + 1, table[i].name);
+        }
+    }
+    {
+        char answer[16];
+        char *end = NULL;
+        long sel;
+
+        shell_transcript_appendf("Select app (1-%d, 0 cancels): ", count);
+        if (!shell_read_line(answer, sizeof(answer), P4_CONFIG_KEY_WAIT_TIMEOUT_MS)) {
+            shell_transcript_append_text("\n");
+            batch_set_errorlevel(1);
+            free(table);
+            return;
+        }
+        sel = strtol(answer, &end, 10);
+        if (end == answer || sel < 0 || sel > count) {
+            shell_print_error("launch: invalid selection");
+            batch_set_errorlevel(1);
+            free(table);
+            return;
+        }
+        if (sel == 0) {
+            batch_set_errorlevel(1);
+            free(table);
+            return;
+        }
+        {
+            char batch_path[SHELL_SD_PATH_BYTES];
+
+            snprintf(batch_path, sizeof(batch_path), "%s", table[sel - 1].path);
+            free(table);
+            shell_execute_batch_file(batch_path, 0, NULL);
+            return;
+        }
+    }
+}
+
+static void shell_command_apps(void)
+{
+    char name[P4_CONFIG_APP_NAME_BYTES];
+    char desc[P4_CONFIG_APP_DESC_BYTES];
+    int shown = 0;
+
+    for (int i = 0; i < P4_CONFIG_APP_MAX; i++) {
+        if (app_get(i, name, sizeof(name), desc, sizeof(desc))) {
+            shell_transcript_appendf_ansi(SH_EXE "%s" SH_RST "  -  %s\n", name, desc);
+            shown++;
+        }
+    }
+    if (shown == 0) {
+        shell_print_muted("No native apps registered");
+    }
+    batch_set_errorlevel(0);
+}
+
+/**
+ * `delay <ms>` — pure deterministic wait (unlike `sleep`, which is
+ * light-sleep and tears down Wi-Fi). Used for melodies and demos.
+ * Clamped to P4_CONFIG_DELAY_MAX_MS. ERRORLEVEL: 0 ok / 2 usage.
+ */
+static void shell_command_delay(int argc, char **argv)
+{
+    long ms = 0;
+
+    if (argc != 2 || argv[1][0] == '\0') {
+        shell_print_usage("Usage: delay <ms>");
+        batch_set_errorlevel(2);
+        return;
+    }
+    /* Plain non-negative integer only (no expression grammar); overflow-safe
+     * digit accumulation with an early clamp break. */
+    for (const char *p = argv[1]; *p != '\0'; p++) {
+        if (!isdigit((unsigned char)*p)) {
+            shell_print_usage("Usage: delay <ms>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (ms > P4_CONFIG_DELAY_MAX_MS / 10) {
+            ms = (long)P4_CONFIG_DELAY_MAX_MS + 1;
+            break;
+        }
+        ms = ms * 10 + (*p - '0');
+    }
+    if (ms > (long)P4_CONFIG_DELAY_MAX_MS) {
+        ms = (long)P4_CONFIG_DELAY_MAX_MS;
+    }
+    vTaskDelay(pdMS_TO_TICKS((uint32_t)ms));
+    batch_set_errorlevel(0);
 }
 
 
@@ -1715,6 +2083,16 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "notify")) {
+        shell_command_notify(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "gfind")) {
+        shell_command_gfind(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "setlocal")) {
         shell_command_setlocal(argc, argv);
         return true;
@@ -2063,12 +2441,50 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- App discovery (`launch`) and native app listing (`apps`) ----
+     * Builtins, so a stray `<name>.BAT` on the SD card can never shadow them;
+     * native applib apps dispatch after the .bat lookup below. */
+    if (shell_text_equals_ignore_case(argv[0], "launch")) {
+        shell_command_launch(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "apps")) {
+        shell_command_apps();
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "delay")) {
+        shell_command_delay(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
     /* ---- Batch file direct execution ---- */
     {
         char batch_path[SHELL_SD_PATH_BYTES];
 
         if (shell_resolve_batch_path(argv[0], batch_path, sizeof(batch_path))) {
             shell_execute_batch_file(batch_path, argc - 1, &argv[1]);
+            return true;
+        }
+    }
+
+    /* ---- Registered native apps (applib ABI) ----
+     * Dispatched after every built-in and .bat lookup fails, so an app name
+     * can never shadow either. The return value becomes ERRORLEVEL. */
+    {
+        int app_errorlevel = 0;
+
+        if (app_dispatch(argc, argv, &app_errorlevel)) {
+            batch_set_errorlevel(app_errorlevel);
+            free(family_command);
+            free(echo_line);
             return true;
         }
     }
@@ -2563,6 +2979,19 @@ void command_init(void)
             .wifi_state_string  = networking_wifi_state_string,
         };
         applib_register_net_ops(&applib_net_ops);
+    }
+
+    /* Publish the process-environment accessors to the applib runtime. The
+     * env table is owned by components/batch and cwd by components/storage;
+     * applib reaches both through this table (never those headers), and every
+     * hook is NULL-checked inside applib. */
+    {
+        static const applib_env_ops_t applib_env_ops = {
+            .get_env = shell_env_get,
+            .set_env = shell_env_set,
+            .get_cwd = shell_get_cwd,
+        };
+        applib_register_env_ops(&applib_env_ops);
     }
 
     /* Publish the worker-queue hook to the alarm store. The store itself

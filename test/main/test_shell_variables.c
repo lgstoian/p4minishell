@@ -189,3 +189,22 @@ void test_variable_expansion_no_batch_frame(void)
     shell_expand_variables("echo %*", out, sizeof(out));
     TEST_ASSERT_EQUAL_STRING("echo ", out);
 }
+
+void test_variable_expansion_tilde_modifiers(void)
+{
+    char out[256];
+
+    /* Without an active batch frame, %~N reads the same empty slot as %N. */
+    shell_expand_variables("echo %~1", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo ", out);
+    shell_expand_variables("echo %~nx1", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo ", out);
+
+    /* Unknown modifiers and a missing digit stay literal (never inject). */
+    shell_expand_variables("echo %~z1", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo %~z1", out);
+    shell_expand_variables("echo %~", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo %~", out);
+    shell_expand_variables("echo %~f", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo %~f", out);
+}

@@ -19,6 +19,7 @@ draw text 5 11 "Fun / Demos  - games, calc, RGB"
 draw text 5 12 "Settings     - brightness, volume"
 draw box 1 20 80 3 single
 draw text 5 22 "Use list to select, ESC to cancel"
+echo [C-MENU]
 list "P4 Companion" "Live System" "File Tools" "Network Tools" "Fun / Demos" "Settings" "Exit"
 if errorlevel 255 goto main_menu
 if errorlevel 5 goto :opt_exit
@@ -45,6 +46,7 @@ goto main_menu
 call SET.BAT::main
 goto main_menu
 :opt_exit
+echo [C-EXIT]
 draw clear screen
 draw box 1 8 80 5 double "Goodbye"
 draw text 27 10 "Thanks for using P4 Companion!" 14

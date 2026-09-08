@@ -240,7 +240,9 @@ Implemented today in the checked-in firmware (final TUI hardware-verified on COM
 - ✅ Queue depth 16 + bounded submit (20/20 burst), NUL-byte source repair
 - ✅ Alarm lazy init (USB lesson), ask serial race, modal LVGL locks (watchdog gone)
 - ✅ Suite 193/0/2 (extract crash, copy off-by-one, DEG, caret, 64-bit fixes)
-- ⏳ BSOD watch clean 30 min; run_companion driver stale vs TUI BATs (see changelog `## [0.35.7]`)
+- ⏳ BSOD watch clean 30 min; pre-TUI text driver retired — `run_companion.py`
+  (stale pre-TUI triggers) is superseded by marker-driven `deep_test.py`
+  (see `bugs.md` O3 for the remaining open stall watch; changelog `## [0.35.7]`)
 
 ---
 
@@ -811,19 +813,22 @@ Implemented today in the checked-in firmware (final TUI hardware-verified on COM
       re-entrant, so `cmd1 | cmd2 > out.txt` round-trips).
 
 ### 5. Native application model
-This is the biggest missing layer for SD-card app support. The **batch**
-process model is now explicit (v0.32.2: `proc` process-stack introspection,
-`%ERRORLEVEL%` exit-code expansion, and batch files as first-class pipe
-processes with stdin/stdout through the redirection layer); a loader-driven
-native-app process model remains open:
-- ❌ No executable loader
+The **batch** process model is explicit (v0.32.2: `proc` process-stack
+introspection, `%ERRORLEVEL%` exit-code expansion, and batch files as
+first-class pipe processes with stdin/stdout through the redirection layer).
+Per the batch-first decision (§6) there is deliberately no loader-driven
+native-app process model:
+- ✅ No executable loader — by design: a `.bat` in a PATH directory is the
+  loadable unit (`launch` + `call <file>::<routine>` for shared libraries)
 - ✅ Batch process abstraction — implemented in v0.32.2: `proc` lists every
       nested batch process (script, depth, args, echo state) and reports the
       current one (`/args` `/name` `/depth` `/errorlevel` `/echo` `/stdin`);
-      `%ERRORLEVEL%` expands to the current exit code. A loader-driven native
-      app process model (per-app task/lifecycle) remains open.
-- ❌ No per-app lifecycle hooks, startup contract, or exit-code model (the
-      batch `exit /b [code]` + errorlevel contract is the working shape)
+      `%ERRORLEVEL%` expands to the current exit code. Per-app task/lifecycle
+      beyond the batch frame stack is out of scope by design (see §6).
+- ✅ Per-app lifecycle hooks, startup contract, and exit-code model — answered
+  by the batch contract: `call` pushes an argument frame, `exit /b [code]` /
+  `goto :eof` / EOF returns with errorlevel, and a forgotten `appmode`/`setlocal`
+  scope unwinds automatically on frame return
 - ✅ No isolated stdin, stdout, stderr abstraction beyond the shared
       transcript — answered for batch: a batch process's stdin is the
       input-redirection slot (a `< file` or pipe spool), its stdout is the
@@ -839,14 +844,20 @@ native-app process model remains open:
 - ✅ Memory ownership rules for apps — the applib allocation policy is defined
   (`app_alloc`/`app_free`, PSRAM-aware) and apps run on the shared worker task.
 
-### 6. `.exe` support strategy
-This needs an explicit design decision before implementation starts:
-- Recommended path: support native ESP32-P4 applications compiled in C and stored on SD, using a project-defined executable format or extension.
-- Compatibility wrapper option: allow a `.exe` file extension for native P4 binaries plus metadata, even though they are not DOS/x86 binaries.
-- Full MS-DOS `.exe` compatibility option: add an x86 emulator or DOS-compatible virtual machine. This is a separate subsystem with much higher flash, RAM, performance, and testing cost.
+### 6. `.exe` support strategy — DECIDED: batch-first, no loader
+Decision (v0.36.0 direction): batch files **are** the apps — there is no
+executable loader, no `run` verb, and no DOS-binary compatibility layer. A
+`.bat` in a PATH directory (or `sd:/APPS`) is the loadable unit, `call
+<file>::<routine>` is the shared-library mechanism, and native code linked
+into the firmware (via `applib`) supplies modal surfaces. Rationale: an x86
+emulator/VM is a separate subsystem with much higher flash, RAM,
+performance, and testing cost, and the batch surface already delivers the
+DOS-like app story.
 
 ## SDK and API work required
-To support third-party apps written in C, the project needs a minimal stable runtime API.
+Third-party apps are batch files; native code linked into the firmware (via
+`applib`) supplies the modal surfaces and runtime services batch cannot draw.
+The stable runtime API below serves both sides.
 
 The `edit` editor (v0.24.35) is the reference implementation of the **modal
 app surface** pattern — the first native app on top of the shell core. It
@@ -895,8 +906,11 @@ documented in `SDK.md` ("Modal app surfaces"):
   `applib_input.h`, v0.32.3) so an app includes only the groups it uses; the
   editor's `editor.h`/`editor_view.h` split remains the template for
   LVGL-surface apps
-- ❌ Example apps written in C
-- ❌ Build templates for app targets
+- ✅ Example apps — the batch-first decision replaces C samples: `apps/companion`
+  (7 BATs + `LIB.BAT` shared routines + `selftest_*` contract checks) is the
+  reference app and the executable test suite
+- ✅ Build templates — not needed: batch apps deploy as plain `*.bat` files,
+  no compilation step; native code links into the firmware via `applib`
 - ✅ Packaging rules for SD deployment — done for batch files in v0.32.0 (`SDK.md`,
   "Authoring and deploying batch files": UTF-8/CRLF, `*.bat` naming and PATH placement,
   line/label limits, quoting, validation); native C app packaging remains open
@@ -971,21 +985,20 @@ documented in `SDK.md` ("Modal app surfaces"):
 - ✅ App packaging conventions (standard app folder layout + `ALIASES.BAT`/`AUTOEXEC.BAT` hook to launch an app at boot) via `launch`/`APPINFO`.
 
 ### Phase 5: SD app discovery + ecosystem
-- ⏳ Add PATH-based app discovery ergonomics: a `launch`/menu of installed `.bat` apps, an
-  optional boot-time "offer to launch" hook, and an `APPINFO`-style metadata convention.
+- ✅ PATH-based app discovery ergonomics: a `launch`/menu of installed `.bat` apps, an
+  optional boot-time "offer to launch" hook, and an `APPINFO`-style metadata convention
+  (all shipped in v0.33.0).
+- ✅ Batch loader depth: `for /f ... in ('command')` command-output iteration,
+  `%~[fdpnx]N` argument modifiers, and `LIB.BAT::selftest_*` contract checks that
+  double as the board test suite (no temp files, no modal interaction).
 - ⏳ Ship a few more reference apps (a text adventure, a note/Zettelkasten app, a live
   dashboard with RGB/audio "mood") to keep pressure-testing the batch engine.
-- ⏳ Add a self-update path for `.bat` apps (`httpget` a newer file into place) — the
-  `httpget` + free-space guardrails already exist.
-- ❌ Not planned: a native `.exe`/`run` loader. Native programs use `applib` and are linked
-  into the firmware, not loaded from SD.
+- Dropped: the `.bat` self-update path (deferred by direction — not worked on)
+  and any native `.exe`/`run` loader (decided: batch-first, §6).
 
-### Phase 6: optional DOS compatibility layer
-- ❌ Evaluate whether literal DOS `.exe` support is still required
-- ❌ If yes, design a VM or emulator boundary separate from the shell core
-- ❌ Keep it optional so the base shell remains usable without the compatibility cost
-- (Deprioritized: the hybrid route already delivers a DOS-like batch surface without an
-  emulator; DOS `.exe` support would only matter for running legacy binaries.)
+### Phase 6: closed — no DOS compatibility layer
+Decided (batch-first, §6): no literal DOS `.exe` support, no VM/emulator
+boundary. The batch surface **is** the compatibility layer.
 
 ## Full project review (2026-08-08)
 
@@ -1327,22 +1340,24 @@ real issues found in the codebase, not just new feature work.
 
 ### Priority 5 — New subsystem work (Phases 3-6, hybrid route)
 
-17. **More native modal surfaces** (Phase 4): a `view`/pager and `hexview`
-    surface on the shared modal runtime, plus a file-picker surface for batch
-    apps — each one pressure-tests the runtime and the batch engine.
-18. **Batch-language depth** (Phase 4): the `for /f "…" in ('command')` command
-    form, `%~1`-style argument modifiers, and a shared `BATCHLIB` of callable
-    routines; keep aligning oddities with cmd.exe (e.g. `set NAME=` defining an
-    empty variable).
+17. ✅ **Native modal surfaces** (Phase 4) — `view` pager, `hexview` dump, and
+    the `browse` file-picker surface all run on the shared modal runtime
+    (`components/modal/`) alongside `dialog`/`list`/`ask`; restored from stubs
+    and hardware-verified with serial input, timeouts, and companion flows
+    (see `bugs.md` M18).
+18. **Batch-language depth** (Phase 4): ✅ the `for /f "…" in ('command')` command
+    form and `%~[fdpnx]N`-style argument modifiers (both landed with pure-helper
+    unit tests); the shared routine library is `LIB.BAT` (`call
+    <file>::<routine>` + `selftest_*` checks). `set NAME=` keeps cmd.exe parity
+    (it clears the slot, so `if defined` is false afterwards — verified by
+    `selftest_defined`, not changed).
 19. **App discovery + packaging** (Phase 5): ✅ installed-apps listing and
     menu (`launch`), the `APPINFO` metadata convention
     (`sd:/APPS/<name>.APPINFO`), and the boot-time offer hook (CONFIG.SYS
-    `LAUNCH_APP=`) — all added in v0.33.0. ⏳ remaining: a self-update flow
-    for `.bat` apps via `httpget` (the HTTP client + free-space guardrails
-    already exist).
-20. **DOS compatibility layer** (Phase 6): optional, only if running legacy
-    DOS `.exe` binaries ever matters — otherwise the batch surface is the
-    compatibility layer.
+    `LAUNCH_APP=`) — all added in v0.33.0. Dropped: the `.bat` self-update
+    flow (deferred by direction).
+20. **DOS compatibility layer** (Phase 6): closed — no loader, no emulator
+    (see §6 decision).
 
 ---
 
@@ -1376,11 +1391,18 @@ builds a test foundation, then moves to new features:
 10. ✅ **Split command.c UI commands** — `command_ui.c` created.
 11. ✅ **Document coprocessor firmware** — README.md updated.
 
-### Milestone D: New features (ongoing)
-12. **Native app ABI** — define the contract for SD-card applications.
-13. **SDK** — publish stable C SDK headers and one sample app.
-14. **SD app launcher** — `run` plus PATH-based app discovery.
-15. **Packaging** — build templates and SD deployment rules.
+### Milestone D: New features — ✅ COMPLETED (batch-first route, v0.33.0–v0.35.x)
+12. ✅ **Native app ABI** — `applib_app.h` + `applib_env.h`: a registered C app
+    gets `argc`/`argv`, the shared env table, and storage cwd; its return
+    value becomes ERRORLEVEL. Sample app `hello` in `main/native_apps.c`.
+13. ✅ **SDK** — lean-header `applib.h` umbrella (console/mem/time/net/input/
+    state/ui/db/app/env/tui); batch apps are the reference app story
+    (`apps/companion`), native code links into the firmware (no C samples or
+    build templates per the §6 batch-first decision).
+14. ✅ **SD app launcher** — `launch` with PATH + `sd:/APPS` discovery,
+    `APPINFO` metadata, and the CONFIG.SYS `LAUNCH_APP=` boot offer hook.
+15. ✅ **Packaging** — batch packaging rules in `SDK.md` ("Authoring and
+    deploying batch files"); native code links via `applib`.
 
 This path fixes the real bugs first, builds a test foundation to prevent
 regressions, then moves to new subsystem work with confidence.

@@ -36,7 +36,7 @@ dependencies:
   espressif/esp_hosted:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__esp_hosted
+      path: D:\Code\new\p4minishell\managed_components\espressif__esp_hosted
       type: local
     version: 3.0.6
   espressif/esp_lcd_ek79007:
@@ -70,25 +70,25 @@ dependencies:
   espressif/esp_lcd_jd9165:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__esp_lcd_jd9165
+      path: D:\Code\new\p4minishell\managed_components\espressif__esp_lcd_jd9165
       type: local
     version: 1.0.2
   espressif/esp_lcd_touch:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__esp_lcd_touch
+      path: D:\Code\new\p4minishell\managed_components\espressif__esp_lcd_touch
       type: local
     version: 1.2.1
   espressif/esp_lcd_touch_gt911:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__esp_lcd_touch_gt911
+      path: D:\Code\new\p4minishell\managed_components\espressif__esp_lcd_touch_gt911
       type: local
     version: 1.2.0~1
   espressif/esp_lvgl_port:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__esp_lvgl_port
+      path: D:\Code\new\p4minishell\managed_components\espressif__esp_lvgl_port
       type: local
     version: 2.7.2
   espressif/esp_serial_slave_link:
@@ -104,7 +104,7 @@ dependencies:
   espressif/esp_wifi_remote:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__esp_wifi_remote
+      path: D:\Code\new\p4minishell\managed_components\espressif__esp_wifi_remote
       type: local
     version: 1.6.4
   espressif/led_strip:
@@ -137,13 +137,13 @@ dependencies:
   espressif/usb_host_hid:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__usb_host_hid
+      path: D:\Code\new\p4minishell\managed_components\espressif__usb_host_hid
       type: local
     version: 1.2.0
   espressif/usb_host_msc:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\espressif__usb_host_msc
+      path: D:\Code\new\p4minishell\managed_components\espressif__usb_host_msc
       type: local
     version: 1.2.0
   espressif/wifi_remote_over_eppp:
@@ -167,7 +167,7 @@ dependencies:
   lvgl/lvgl:
     dependencies: []
     source:
-      path: D:\p4minishell\managed_components\lvgl__lvgl
+      path: D:\Code\new\p4minishell\managed_components\lvgl__lvgl
       type: local
     version: 9.4.0
 direct_dependencies:

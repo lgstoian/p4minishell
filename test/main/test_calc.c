@@ -460,3 +460,75 @@ void test_forf_split_line(void)
     count = shell_forf_split_line("   ", " \t", tokens, 8);
     TEST_ASSERT_EQUAL(0, count);
 }
+
+void test_forf_command_set(void)
+{
+    char inner[256];
+
+    /* Single-quoted sets are the command form, whitespace-tolerant. */
+    TEST_ASSERT_TRUE(shell_forf_is_command_set("'dir /b'", false, inner, sizeof(inner)));
+    TEST_ASSERT_EQUAL_STRING("dir /b", inner);
+    TEST_ASSERT_TRUE(shell_forf_is_command_set("  'echo hi'  ", false, inner, sizeof(inner)));
+    TEST_ASSERT_EQUAL_STRING("echo hi", inner);
+
+    /* Backquotes select the command form only with usebackq. */
+    TEST_ASSERT_FALSE(shell_forf_is_command_set("`dir`", false, inner, sizeof(inner)));
+    TEST_ASSERT_TRUE(shell_forf_is_command_set("`dir`", true, inner, sizeof(inner)));
+    TEST_ASSERT_EQUAL_STRING("dir", inner);
+
+    /* Plain files, wildcards, and empty sets stay the file form. */
+    TEST_ASSERT_FALSE(shell_forf_is_command_set("data.txt", false, inner, sizeof(inner)));
+    TEST_ASSERT_FALSE(shell_forf_is_command_set("*.txt", true, inner, sizeof(inner)));
+    TEST_ASSERT_FALSE(shell_forf_is_command_set("", false, inner, sizeof(inner)));
+    TEST_ASSERT_FALSE(shell_forf_is_command_set("'unbalanced", false, inner, sizeof(inner)));
+    TEST_ASSERT_FALSE(shell_forf_is_command_set(NULL, false, inner, sizeof(inner)));
+
+    /* An empty quoted command still detects (warns when run). */
+    TEST_ASSERT_TRUE(shell_forf_is_command_set("''", false, inner, sizeof(inner)));
+    TEST_ASSERT_EQUAL_STRING("", inner);
+}
+
+void test_arg_apply_modifiers(void)
+{
+    char out[128];
+
+    /* Empty mods only strip one pair of double quotes. */
+    shell_arg_apply_modifiers("\"hello\"", "", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("hello", out);
+    shell_arg_apply_modifiers("plain", "", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("plain", out);
+    shell_arg_apply_modifiers("\"unbalanced", "", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("\"unbalanced", out);
+
+    /* Name / extension / directory surgery on FATFS paths. */
+    shell_arg_apply_modifiers("sd:/DIR/FILE.TXT", "n", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("FILE", out);
+    shell_arg_apply_modifiers("sd:/DIR/FILE.TXT", "x", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING(".TXT", out);
+    shell_arg_apply_modifiers("sd:/DIR/FILE.TXT", "nx", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("FILE.TXT", out);
+    shell_arg_apply_modifiers("sd:/DIR/FILE.TXT", "dp", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("sd:/DIR/", out);
+    shell_arg_apply_modifiers("sd:/DIR/FILE.TXT", "dpnx", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("sd:/DIR/FILE.TXT", out);
+
+    /* No drive letters on FATFS: `d` contributes nothing. */
+    shell_arg_apply_modifiers("sd:/DIR/FILE.TXT", "d", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+
+    /* A leading dot is not an extension. */
+    shell_arg_apply_modifiers(".profile", "x", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+    shell_arg_apply_modifiers(".profile", "n", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING(".profile", out);
+
+    /* `f` resolves against the shell cwd; the name always survives. */
+    shell_arg_apply_modifiers("sd:/DIR/FILE.TXT", "f", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "FILE.TXT") != NULL);
+
+    /* NULL-safe: NULL value reads empty, NULL mods only dequote. */
+    shell_arg_apply_modifiers(NULL, "nx", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+    shell_arg_apply_modifiers("\"q\"", NULL, out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("q", out);
+}

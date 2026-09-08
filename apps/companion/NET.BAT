@@ -5,6 +5,7 @@ rem  Uses TUI for Wi-Fi status, connect, ping, dns, fetch.
 rem =====================================================================
 
 :main
+echo [M-NET]
 draw clear screen
 draw box 1 1 80 3 single
 draw text 32 2 "NETWORK TOOLS" 14
@@ -18,8 +19,8 @@ if errorlevel 6 goto :back
 if errorlevel 5 goto :joke
 if errorlevel 4 goto :dns
 if errorlevel 3 goto :ping
-if errorlevel 2 goto :connect
-if errorlevel 1 goto :known
+if errorlevel 2 goto :known
+if errorlevel 1 goto :connect
 if errorlevel 0 goto :status
 goto main
 
@@ -101,11 +102,13 @@ draw box 1 1 80 3 single
 draw text 35 2 "FETCH JOKE" 14
 draw text 5 10 "Fetching: %funurl%" 14
 httpget %funurl% _joke.txt
+echo [M-NET-FETCHED]
 if errorlevel 1 dialog "Fetch" "Fetch failed - offline or endpoint down." "OK"
 if not errorlevel 1 view _joke.txt
 del /p _joke.txt
 goto main
 
 :back
+echo [M-NET-BACK]
 draw clear screen
 goto :eof

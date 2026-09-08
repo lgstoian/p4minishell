@@ -5,6 +5,7 @@ rem  and a calc playground. Enhanced TUI with draw and fullscreen.
 rem =====================================================================
 
 :main
+echo [M-FUN]
 draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "FUN / DEMOS" 14
@@ -12,12 +13,12 @@ draw box 1 4 80 10 single "Demos"
 draw text 5 6 "Melody, RGB, guessing game, calc, file browser"
 list "Fun / Demos" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Back"
 if errorlevel 255 goto :back
-if errorlevel 6 goto :tui_demo
-if errorlevel 5 goto :back
+if errorlevel 6 goto :back
+if errorlevel 5 goto :tui_demo
 if errorlevel 4 goto :browse_demo
 if errorlevel 3 goto :calc
-if errorlevel 2 goto :rgb
-if errorlevel 1 goto :guess
+if errorlevel 2 goto :guess
+if errorlevel 1 goto :rgb
 goto :melody
 
 :tui_demo
@@ -76,10 +77,10 @@ draw text 35 2 "RGB LED (WS2812)" 14
 list "RGB LED" "Rainbow" "Breath" "Solid red" "Solid blue" "Off" "Back"
 if errorlevel 255 goto main
 if errorlevel 5 goto main
-if errorlevel 4 goto main
-if errorlevel 3 goto rgb_off
-if errorlevel 2 goto rgb_blue
-if errorlevel 1 goto rgb_red
+if errorlevel 4 goto rgb_off
+if errorlevel 3 goto rgb_blue
+if errorlevel 2 goto rgb_red
+if errorlevel 1 goto rgb_breath
 if errorlevel 0 goto rgb_rainbow
 goto main
 :rgb_rainbow
@@ -154,5 +155,6 @@ view %demo%
 goto main
 
 :back
+echo [M-FUN-BACK]
 draw clear screen
 goto :eof

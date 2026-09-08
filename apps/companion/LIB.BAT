@@ -58,3 +58,43 @@ rem %1 = left, %2 = right
 draw text 1 25 "%~1" 7
 draw text 60 25 "%~2" 7
 goto :eof
+
+rem ---- selftest: %~ modifiers -------------------------------------------
+rem %1 = value to dissect. Exercises the `%~[fdpnx]N` expansion on the
+rem live engine: dequote, name, extension, dir, full. Callable headless:
+rem   call LIB.BAT::selftest_tilde "sd:/DIR/FILE.TXT"
+:selftest_tilde
+echo SELFTEST raw=[%1]
+echo SELFTEST stripped=[%~1]
+echo SELFTEST name=[%~n1] ext=[%~x1] dir=[%~p1] full=[%~f1]
+goto :eof
+
+rem ---- selftest: for /f command form ------------------------------------
+rem Iterates command output instead of a file (no temp file needed).
+rem Callable headless: call LIB.BAT::selftest_forf_cmd
+:selftest_forf_cmd
+for /f "tokens=*" %%v in ('echo hello-forf') do echo SELFTEST forf-cmd got=[%%v]
+goto :eof
+
+rem ---- selftest: defined/empty observation -------------------------------
+rem Reports (not judges) the `set NAME=` + `if defined` semantics so the
+rem board session can confirm cmd parity. Callable headless:
+rem   call LIB.BAT::selftest_defined
+:selftest_defined
+set SELFTEST_X=
+if defined SELFTEST_X echo SELFTEST defined-after-clear=1
+if not defined SELFTEST_X echo SELFTEST defined-after-clear=0
+set SELFTEST_X=1
+if defined SELFTEST_X echo SELFTEST defined-after-set=1
+set SELFTEST_X=
+goto :eof
+
+rem ---- selftest: all ------------------------------------------------------
+rem Runs every selftest routine above. Callable headless:
+rem   call LIB.BAT::selftest_all
+:selftest_all
+call LIB.BAT::selftest_tilde "sd:/DIR/FILE.TXT"
+call LIB.BAT::selftest_forf_cmd
+call LIB.BAT::selftest_defined
+echo SELFTEST done
+goto :eof

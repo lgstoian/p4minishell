@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - hardware session 2026-09-07 (COM3; ESP-IDF v5.5.5 fresh install)
+
+### Added — batch loader depth (batch-first route)
+- `for /f ... in ('command')` (and backquotes with `usebackq`): runs the inner command through the re-entrant redirection capture and iterates its output with the shared skip/eol/delims/tokens processor (`shell_forf_is_command_set` + `shell_forf_run_command`, pure-helper unit tests).
+- `%~[fdpnx]N` argument modifiers (`shell_arg_apply_modifiers`, pure-helper unit tests; `d` is empty on FATFS, `s` accepted/ignored); also fixes `LIB.BAT` `:tui_header`/`:status`, which already used `%~1`.
+- `LIB.BAT::selftest_*` on-board contract checks (`tilde`, `forf_cmd`, `defined`, `all`), driven by a new deterministic `run_companion.py selftest` scenario.
+
+### Fixed — verbs and wiring lost in the v0.35.3-v0.35.6 splits (all verified on board)
+- Restored `launch` (heap discovery over PATH + `sd:/APPS`, APPINFO titles, `/list`, `<name> [args]`, bounded menu, 0/1/2), `apps` (`app_get` loop), `delay` (clamped to `P4_CONFIG_DELAY_MAX_MS`, 0/2), `notify`/`gfind` dispatcher arms, the `app_dispatch` tail hook (never shadows built-ins/batch), and the `applib_env_ops` registration (`hello` shows real cwd/PATH again); completion table + both `help` surfaces updated.
+- Test project: pinned `CONFIG_LV_FONT_UNSCII_16` in `test/sdkconfig.defaults` and regenerated the stale committed `test/sdkconfig`; re-pointed both `dependencies.lock` files at this checkout.
+- Companion: corrected every submenu `list` errorlevel chain to 0-based indices; added serial-visible echo markers for the reactive driver.
+- Modal runtime: PSRAM event group restored via `xEventGroupCreateStatic` (`xEventGroupCreateWithCaps` does not exist in IDF 5.5.5), internal fallback.
+- Drivers: DTR-safe opens everywhere, SD-mount gate in `hw_reset`, quiesce + retry in `push_sd.py`, Stream tail-preserving waits, single-send + verify + retry selections, barrier-synced `db_test`/`alarm_test`.
+
+### Verification (this session)
+- `idf.py build` 0 errors / 0 warnings (firmware + test projects).
+- Unit runner **196 pass / 0 fail / 2 ignore** (tmpfile guards).
+- `deep_test.py` **8/8 PASS**, `db_test.py` 38/38, `alarm_test.py` 25/25, serial sweeps clean (see `bugs.md` M41-M46, O3-O5 for the full story incl. open items).
+
+---
+
 ## [0.35.7] - 2026-09-06 — Hardware bring-up fixes (all verified on board unless noted)
 
 ### Fixed — box-drawing tofu (M40)

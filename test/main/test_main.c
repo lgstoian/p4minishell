@@ -93,6 +93,7 @@ extern void test_variable_expansion_output_truncated(void);
 extern void test_variable_expansion_null_input(void);
 extern void test_variable_expansion_null_output(void);
 extern void test_variable_expansion_no_batch_frame(void);
+extern void test_variable_expansion_tilde_modifiers(void);
 
 extern void test_debug_log_push_and_read(void);
 extern void test_debug_log_warning_count(void);
@@ -175,6 +176,8 @@ extern void test_forf_parse_options(void);
 extern void test_forf_parse_star(void);
 extern void test_forf_parse_errors(void);
 extern void test_forf_split_line(void);
+extern void test_forf_command_set(void);
+extern void test_arg_apply_modifiers(void);
 
 extern void test_applib_alloc_free(void);
 extern void test_applib_calloc_zeroes(void);
@@ -361,6 +364,7 @@ void app_main(void)
     RUN_TEST(test_variable_expansion_null_input);
     RUN_TEST(test_variable_expansion_null_output);
     RUN_TEST(test_variable_expansion_no_batch_frame);
+    RUN_TEST(test_variable_expansion_tilde_modifiers);
     UNITY_END();
 
     /* Debug log tests */
@@ -468,6 +472,8 @@ void app_main(void)
     RUN_TEST(test_forf_parse_star);
     RUN_TEST(test_forf_parse_errors);
     RUN_TEST(test_forf_split_line);
+    RUN_TEST(test_forf_command_set);
+    RUN_TEST(test_arg_apply_modifiers);
     UNITY_END();
 
     /* applib native-app runtime library tests */

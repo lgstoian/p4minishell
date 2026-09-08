@@ -53,6 +53,7 @@ def shell_up(ser):
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
     ser = serial.Serial(port, 115200, timeout=1)
+    ser.setDTR(False); ser.setRTS(False)  # open must not reboot the P4
     time.sleep(0.5)
     ser.reset_input_buffer()
     if not shell_up(ser):
@@ -74,12 +75,38 @@ def main():
     time.sleep(0.5)
     read_all(ser, 1.0)
 
-    results = []
+    # Boot background work (Wi-Fi/SDIO bring-up) contends the shared SDMMC
+    # bus for ~15s after the shell first answers; early SD verbs would time
+    # out spuriously. Let it quiesce before the first measured command.
+    time.sleep(15.0)
+    read_all(ser, 1.0)
 
-    def act(name, cmdline, expect, to=4):
+    results = []
+    tag = [0]
+
+    def act(name, cmdline, expect, cap=60):
+        # Barrier-sync: an `echo DONE-n` queued right behind the command runs
+        # after it on the single worker task (FIFO), so the DONE marker frames
+        # this command's output no matter how slow the SD card is. Fixed
+        # windows and silence/idle heuristics both misattribute output when
+        # one command stalls (every later check then fails on shifted text).
+        tag[0] += 1
+        marker = "DONE-%d" % tag[0]
+        ser.reset_input_buffer()
         ser.write((cmdline + "\n").encode())
-        b = read_all(ser, to)
-        ok = expect in b
+        ser.write(("echo %s\n" % marker).encode())
+        buf = b""
+        end = time.time() + cap
+        while time.time() < end:
+            data = ser.read(ser.in_waiting or 1)
+            if data:
+                buf += data
+                if marker.encode() in buf:
+                    break
+            else:
+                time.sleep(0.05)
+        b = ANSI.sub("", buf.decode(errors="replace"))
+        ok = (expect in b) and (marker in b)
         results.append((name, ok))
         print("%-44s %s" % (cmdline, "PASS" if ok else "FAIL(%s)" % expect))
         if not ok:

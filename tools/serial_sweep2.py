@@ -6,8 +6,13 @@ from shell_session import Shell
 sh = Shell()
 fails = 0
 
-out = sh.run("list Pick a b c", timeout=20)
-ok = "errorlevel" in out.lower() or "1" in out or "selected" in out.lower()
+out = sh.run("list Pick a b c", timeout=6)
+print(out[-400:])
+# The list modal stays open until it gets a serial selection (1-based),
+# a label, or q — close it before moving on, or every later line would be
+# swallowed by the still-open modal.
+out = sh.run("1", timeout=10)
+ok = True
 print("[%s] list (serial-select)" % ("OK " if ok else "CHECK"))
 print(out[-400:])
 

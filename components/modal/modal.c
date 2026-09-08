@@ -128,7 +128,8 @@ bool modal_handle_serial_line(const char *line)
 
 esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *errorlevel)
 {
-    EventGroupHandle_t event_group;
+    EventGroupHandle_t event_group = NULL;
+    StaticEventGroup_t *eg_buf = NULL;
     bool opened = false;
     esp_err_t result = ESP_OK;
     EventBits_t bits;
@@ -140,7 +141,22 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
         *errorlevel = 0;
     }
 
-    event_group = xEventGroupCreate();
+    /* Prefer PSRAM for the session event group so modal sessions do not
+     * fragment the internal DMA-capable heap shared with LVGL spans and SD
+     * DMA (M21); fall back to the internal heap when PSRAM is unavailable.
+     * A statically-created group never frees its buffer on delete, so the
+     * PSRAM block is tracked here and released on both exit paths. */
+    eg_buf = heap_caps_malloc(sizeof(*eg_buf), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (eg_buf != NULL) {
+        event_group = xEventGroupCreateStatic(eg_buf);
+        if (event_group == NULL) {
+            heap_caps_free(eg_buf);
+            eg_buf = NULL;
+        }
+    }
+    if (event_group == NULL) {
+        event_group = xEventGroupCreate();
+    }
     if (event_group == NULL) {
         return ESP_ERR_NO_MEM;
     }
@@ -156,6 +172,7 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
     if (!opened) {
         modal_runtime_clear_active();
         vEventGroupDelete(event_group);
+        heap_caps_free(eg_buf);
         if (errorlevel != NULL) {
             *errorlevel = 1;
         }
@@ -195,6 +212,7 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
     }
 
     vEventGroupDelete(event_group);
+    heap_caps_free(eg_buf);
 
     if (result != ESP_OK && errorlevel != NULL && *errorlevel == 0) {
         *errorlevel = 1;

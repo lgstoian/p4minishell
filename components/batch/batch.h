@@ -267,7 +267,7 @@ typedef struct {
     int skip;                                  /**< Leading lines to skip. */
     char eol;                                  /**< Comment-line marker (0 = none). */
     bool star;                                 /**< `tokens=...*` captures the rest. */
-    bool usebackq;                             /**< Accepted for DOS parity (command form unsupported). */
+    bool usebackq;                             /**< Selects the backquote command form. */
 } shell_forf_options_t;
 
 /** Fill @p opts with the DOS defaults: " \t" delims, tokens=1. */
@@ -293,6 +293,33 @@ bool shell_forf_parse_options(const char *text, size_t len, shell_forf_options_t
  */
 int shell_forf_split_line(const char *line, const char *delims,
                           shell_forf_tok_t *tokens, int max_tokens);
+
+/**
+ * Apply cmd.exe `%~` argument modifiers to a raw batch argument value.
+ *
+ * Pure string surgery (unit-tested, no SD or frame access): strips one pair
+ * of surrounding double quotes, then applies `f` (resolve to a full path via
+ * the shell cwd, falling back to the input when resolution fails), `d`
+ * (drive — always empty on FATFS, there are no drive letters), `p`
+ * (directory part with trailing `/`), `n` (base name without extension),
+ * and `x` (extension with dot). Modifiers combine in canonical d/p/n/x
+ * order (`%~dpnx1`); `s` is accepted and ignored (no short names on FATFS).
+ * An empty @p mods string only dequotes. Always NUL-terminates @p out.
+ */
+void shell_arg_apply_modifiers(const char *value, const char *mods,
+                               char *out, size_t out_size);
+
+/**
+ * Detect the `for /f ... in ('command')` command form (pure, unit-tested).
+ *
+ * A single-quoted set is always the command form; with @p usebackq a
+ * backquoted set is too. Surrounding whitespace is ignored. On success the
+ * inner command text (without the quotes) is written to @p inner_out.
+ *
+ * @return true when @p set_str is the command form.
+ */
+bool shell_forf_is_command_set(const char *set_str, bool usebackq,
+                               char *inner_out, size_t inner_size);
 
 /** `goto` — jump to a `:label` in the running batch file. */
 void shell_command_goto(int argc, char **argv);

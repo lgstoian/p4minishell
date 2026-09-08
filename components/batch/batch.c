@@ -863,11 +863,124 @@ static const char *shell_batch_all_args_string(void)
  * strips it later. Removing it now would let an expanded value that happens
  * to contain a space or an operator be re-parsed as syntax.
  */
+/**
+ * Apply cmd.exe `%~` argument modifiers to a raw batch argument value.
+ *
+ * Pure string surgery: strips one pair of surrounding double quotes, then
+ * applies the `f`/`d`/`p`/`n`/`x` modifiers documented in batch.h. The two
+ * path-sized locals stay far below the worker-task stack budget (the command
+ * worker runs 32 KB; this helper's frame is under 1 KB).
+ */
+void shell_arg_apply_modifiers(const char *value, const char *mods,
+                               char *out, size_t out_size)
+{
+    char work[SHELL_SD_PATH_BYTES];
+    char full[SHELL_SD_PATH_BYTES];
+    bool want_f = false, want_d = false, want_p = false;
+    bool want_n = false, want_x = false;
+    const char *m;
+    const char *base;
+    const char *slash;
+    const char *name;
+    const char *dot;
+    size_t pos = 0;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (value == NULL) {
+        return;
+    }
+    if (mods == NULL) {
+        mods = "";
+    }
+
+    for (m = mods; *m != '\0'; m++) {
+        switch (tolower((unsigned char)*m)) {
+            case 'f': want_f = true; break;
+            case 'd': want_d = true; break;
+            case 'p': want_p = true; break;
+            case 'n': want_n = true; break;
+            case 'x': want_x = true; break;
+            case 's': break; /* No short names on FATFS; accept and ignore. */
+            default: break;  /* Validated by the caller; ignore here. */
+        }
+    }
+
+    /* Strip one pair of surrounding double quotes (cmd `%~` behavior). */
+    {
+        size_t vlen = strlen(value);
+        const char *src = value;
+        size_t slen = vlen;
+
+        if (vlen >= 2 && value[0] == '"' && value[vlen - 1] == '"') {
+            src = value + 1;
+            slen = vlen - 2;
+        }
+        if (slen >= sizeof(work)) {
+            slen = sizeof(work) - 1;
+        }
+        memcpy(work, src, slen);
+        work[slen] = '\0';
+    }
+
+    base = work;
+    if (want_f) {
+        if (shell_fs_resolve_path(work, full, sizeof(full)) == ESP_OK) {
+            base = full;
+        }
+    }
+
+    if (!want_d && !want_p && !want_n && !want_x) {
+        snprintf(out, out_size, "%s", base);
+        return;
+    }
+
+    slash = strrchr(base, '/');
+    name = (slash != NULL) ? slash + 1 : base;
+    dot = strrchr(name, '.');
+    if (dot == name) {
+        dot = NULL; /* A leading dot is not an extension. */
+    }
+
+    /* `d` (drive) contributes nothing: FATFS has no drive letters. */
+    if (want_p && slash != NULL) {
+        size_t dir_len = (size_t)(slash - base) + 1;
+
+        if (dir_len > out_size - pos - 1) {
+            dir_len = out_size - pos - 1;
+        }
+        memcpy(out + pos, base, dir_len);
+        pos += dir_len;
+    }
+    if (want_n) {
+        size_t nlen = (dot != NULL) ? (size_t)(dot - name) : strlen(name);
+
+        if (nlen > out_size - pos - 1) {
+            nlen = out_size - pos - 1;
+        }
+        memcpy(out + pos, name, nlen);
+        pos += nlen;
+    }
+    if (want_x && dot != NULL) {
+        size_t xlen = strlen(dot);
+
+        if (xlen > out_size - pos - 1) {
+            xlen = out_size - pos - 1;
+        }
+        memcpy(out + pos, dot, xlen);
+        pos += xlen;
+    }
+    out[pos] = '\0';
+}
+
 void shell_expand_variables(const char *input, char *output, size_t output_size)
 {
     size_t out_index = 0;
     shell_quote_state_t quote = SHELL_QUOTE_NONE;
     char errorlevel_buf[16];   /* %ERRORLEVEL% renders here; copied immediately */
+    char modbuf[SHELL_SD_PATH_BYTES]; /* %~ modifiers render here; copied immediately */
 
     if (output == NULL || output_size == 0) {
         return;
@@ -938,6 +1051,48 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                     replacement = "";
                 }
                 after = input + 2;
+            } else if (input[1] == '~') {
+                /* cmd.exe `%~[modifiers]N`: modifier letters f/d/p/n/x/s
+                 * followed by exactly one digit. Anything else stays literal,
+                 * so a stray `%~` can never inject an argument. The result is
+                 * rendered into modbuf (see shell_arg_apply_modifiers) and
+                 * copied immediately, like %ERRORLEVEL% above. */
+                const char *mp = input + 2;
+                char modstr[8];
+                size_t modlen = 0;
+                bool mods_ok = true;
+
+                while (*mp != '\0' && !isdigit((unsigned char)*mp)) {
+                    char c = (char)tolower((unsigned char)*mp);
+
+                    if (c == 'f' || c == 'd' || c == 'p' ||
+                        c == 'n' || c == 'x' || c == 's') {
+                        if (modlen + 1 < sizeof(modstr)) {
+                            modstr[modlen++] = c;
+                        } else {
+                            mods_ok = false;
+                            break;
+                        }
+                    } else {
+                        mods_ok = false;
+                        break;
+                    }
+                    mp++;
+                }
+                modstr[modlen] = '\0';
+                if (mods_ok && isdigit((unsigned char)*mp)) {
+                    int arg_index = *mp - '0';
+                    const char *raw = "";
+
+                    if (s_active_batch_frame != NULL && arg_index >= 0 &&
+                        arg_index < s_active_batch_frame->argc) {
+                        raw = s_active_batch_frame->args[arg_index];
+                    }
+                    shell_arg_apply_modifiers(raw, modstr, modbuf, sizeof(modbuf));
+                    replacement = modbuf;
+                    after = mp + 1;
+                }
+                /* else: no valid digit follows — the `%` is copied literally below. */
             } else {
                 /* Environment variable `%VAR%` or a literal `%%`: needs the
                  * closing `%`. An undefined name expands to the empty string
@@ -3739,10 +3894,183 @@ static void shell_forf_run_source(const char *spec, const char *do_command,
     free(line);
 }
 
+/**
+ * Detect the `for /f ... in ('command')` command form (pure, no SD or
+ * pipeline access). A single-quoted set is always the command form; with
+ * @p usebackq a backquoted set is too. Surrounding whitespace is ignored.
+ * On success the inner command text (without the quotes) is written to
+ * @p inner_out.
+ */
+bool shell_forf_is_command_set(const char *set_str, bool usebackq,
+                               char *inner_out, size_t inner_size)
+{
+    const char *s;
+    size_t slen;
+    char open;
+    char close;
+    size_t inner_len;
+
+    if (inner_out == NULL || inner_size == 0) {
+        return false;
+    }
+    inner_out[0] = '\0';
+    if (set_str == NULL) {
+        return false;
+    }
+
+    s = set_str;
+    while (*s != '\0' && isspace((unsigned char)*s)) {
+        s++;
+    }
+    slen = strlen(s);
+    while (slen > 0 && isspace((unsigned char)s[slen - 1])) {
+        slen--;
+    }
+    if (slen < 2) {
+        return false;
+    }
+
+    open = s[0];
+    close = s[slen - 1];
+    if (open == '\'' && close == '\'') {
+        /* Single-quoted command: always the command form. */
+    } else if (usebackq && open == '`' && close == '`') {
+        /* usebackq backquote command form. */
+    } else {
+        return false;
+    }
+
+    inner_len = slen - 2;
+    if (inner_len >= inner_size) {
+        inner_len = inner_size - 1;
+    }
+    memcpy(inner_out, s + 1, inner_len);
+    inner_out[inner_len] = '\0';
+    return true;
+}
+
+/**
+ * Run a `for /f` loop over the captured output of a command.
+ *
+ * `for /f ... %%v in ('command') do ...` runs the inner command through the
+ * full pipeline and iterates its stdout line by line — the cmd.exe mechanism
+ * for parsing command output. The capture is the same re-entrant
+ * output-redirection capture the `>`/`>>` layer uses, so an inner command
+ * with its own redirect nests correctly; like pipe stages, the inner output
+ * also remains visible on the transcript. Skip/eol/delims/tokens handling is
+ * the shared per-line processor, so file and command forms cannot disagree.
+ * Every buffer is heap-allocated: this runs on the recursive batch path.
+ */
+static void shell_forf_run_command(const char *inner, const char *do_command,
+                                   char var_name, const shell_forf_options_t *opts)
+{
+    char *cmd_copy = NULL;
+    const char *captured = NULL;
+    size_t cap_len = 0;
+    bool truncated = false;
+    char *text = NULL;
+    char *line = NULL;
+    int line_count = 0;
+
+    if (inner == NULL || inner[0] == '\0') {
+        shell_print_warning("for /f: empty command");
+        return;
+    }
+
+    cmd_copy = strdup(inner);
+    if (cmd_copy == NULL) {
+        shell_transcript_append_text("for /f: out of memory\n");
+        return;
+    }
+
+    shell_redirect_capture_begin();
+    batch_run_nested(cmd_copy);
+    free(cmd_copy);
+    shell_redirect_capture_end();
+
+    captured = shell_redirect_capture_get(&cap_len);
+    truncated = shell_redirect_capture_was_truncated();
+    if (captured == NULL || cap_len == 0) {
+        shell_redirect_capture_reset();
+        return;
+    }
+
+    text = malloc(cap_len + 1);
+    line = malloc(SHELL_BATCH_LINE_BYTES);
+    if (text == NULL || line == NULL) {
+        free(text);
+        free(line);
+        shell_redirect_capture_reset();
+        shell_transcript_append_text("for /f: out of memory\n");
+        return;
+    }
+    memcpy(text, captured, cap_len);
+    text[cap_len] = '\0';
+    shell_redirect_capture_reset();
+    if (truncated) {
+        shell_print_warning("for /f: command output exceeded %d bytes and was truncated",
+                            P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES);
+    }
+
+    /* Walk the captured output one raw line at a time. Skip counts raw lines
+     * (like the file form's fgets loop); eol/delims/tokens go through the
+     * shared processor. A final unterminated chunk still counts as a line. */
+    {
+        char *cursor = text;
+
+        while (*cursor != '\0') {
+            size_t chunk = strcspn(cursor, "\n");
+            size_t copy_len = chunk;
+
+            if (copy_len >= (size_t)SHELL_BATCH_LINE_BYTES) {
+                copy_len = (size_t)SHELL_BATCH_LINE_BYTES - 1;
+            }
+            memcpy(line, cursor, copy_len);
+            line[copy_len] = '\0';
+            cursor += chunk;
+            if (*cursor == '\n') {
+                cursor++;
+            }
+            line_count++;
+            if (line_count <= opts->skip) {
+                continue;
+            }
+            if (line_count > P4_CONFIG_FORF_LINE_MAX) {
+                break;
+            }
+            shell_forf_process_line(line, do_command, var_name, opts);
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+        }
+    }
+
+    free(text);
+    free(line);
+}
+
 /** Drive a `for /f` loop over its file-set (wildcards, names, or `<>` input). */
 static void shell_execute_for_f_loop(const char *set_str, const char *do_command,
                                      char var_name, const shell_forf_options_t *opts)
 {
+    /* Command form first: `for /f ... %%v in ('command') do ...` (or
+     * backquotes with `usebackq`) runs the inner command and iterates its
+     * output. File, wildcard, and `<`/pipe-input forms fall through below. */
+    {
+        char *inner = malloc(SHELL_COMMAND_BYTES);
+
+        if (inner == NULL) {
+            shell_transcript_append_text("for /f: out of memory\n");
+            return;
+        }
+        if (shell_forf_is_command_set(set_str, opts->usebackq, inner, SHELL_COMMAND_BYTES)) {
+            shell_forf_run_command(inner, do_command, var_name, opts);
+            free(inner);
+            return;
+        }
+        free(inner);
+    }
+
     if (set_str[0] == '\0') {
         /* `for /f %%v in () do ...` (or `< file` / a pipe stage): read the
          * active input-redirection source. The slot belongs to this command

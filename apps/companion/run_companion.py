@@ -48,7 +48,19 @@ def cmd(ser, text, read_after=2.0):
 # Menu choices wait for the actual "Enter choice" prompt; modal inputs (ask,
 # set /p) have no transcript prompt, so they wait the fixed delay after the
 # previous step. "press" steps send a bare Enter to dismiss a `pause`.
+# NOTE: the sys/files_notes/set/full/net_offline scenarios below still assert
+# pre-TUI prompts ("Enter choice (1-6):", "Refresh (R) or Back (B)") that the
+# current TUI BATs (list/dialog/ask modals) no longer print. They must be
+# re-triggered against board-observed modal transcript text in the hardware
+# session — do not guess the strings here. The selftest scenario is the
+# deterministic one: plain echo lines, no modal interaction.
 SCENARIOS = {
+    "selftest": {
+        "cmd": "call LIB.BAT::selftest_all",
+        "feeds": [],
+        "expect": ["SELFTEST stripped=", "SELFTEST forf-cmd got=[hello-forf]",
+                   "SELFTEST defined-after-set=1", "SELFTEST done"],
+    },
     "sys": {
         "cmd": "call SYS.BAT::main",
         "feeds": [
@@ -136,6 +148,7 @@ def main():
         return 1
 
     ser = serial.Serial(port, 115200, timeout=1)
+    ser.setDTR(False); ser.setRTS(False)  # open must not reboot the P4
     time.sleep(0.5)
     ser.reset_input_buffer()
     for _ in range(10):

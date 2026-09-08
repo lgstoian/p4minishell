@@ -73,3 +73,8 @@ CONFIG_USB_OTG_SUPPORTED=y
 # test project to link the shared components.
 CONFIG_LV_USE_SNAPSHOT=y
 CONFIG_LV_USE_SPAN=y
+
+# Box-drawing terminal font. windows.c uses lv_font_unscii_16 unconditionally
+# (see sdkconfig.defaults in the firmware root), so the test project must
+# compile it in too or the link fails on windows_get_terminal_font.
+CONFIG_LV_FONT_UNSCII_16=y

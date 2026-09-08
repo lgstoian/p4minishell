@@ -6,6 +6,7 @@ rem =====================================================================
 
 :main
 :files_menu
+echo [M-FILES]
 draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "FILE TOOLS" 14
@@ -16,8 +17,8 @@ draw box 1 17 80 8 single "Status"
 draw text 5 19 "Use Browse for full-screen file picker"
 list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Back"
 if errorlevel 255 goto :back
-if errorlevel 7 goto :hex_demo
-if errorlevel 6 goto :back
+if errorlevel 7 goto :back
+if errorlevel 6 goto :hex_demo
 if errorlevel 5 goto :notes
 if errorlevel 4 goto :clipboard
 if errorlevel 3 goto :trash
@@ -100,10 +101,10 @@ clip
 echo.
 list "Clipboard" "Copy last line" "Read a file" "View clipboard" "Back"
 if errorlevel 255 goto files_menu
-if errorlevel 3 goto :clip_view
-if errorlevel 2 goto clip_read
-if errorlevel 1 goto :clip_copy
-goto files_menu
+if errorlevel 3 goto files_menu
+if errorlevel 2 goto :clip_view
+if errorlevel 1 goto :clip_read
+goto :clip_copy
 :clip_copy
 clip copy
 dialog "Clipboard" "Copied the last transcript line." "OK"
@@ -121,6 +122,7 @@ del /p _clip.txt
 goto clipboard
 
 :notes
+echo [M-FILES-NOTES]
 draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "NOTE PAD" 14
@@ -128,11 +130,11 @@ draw text 5 5 "Notes stored in sd:/NOTES"
 if not exist NOTES md NOTES
 list "Notes" "New note" "List notes" "View note" "Browse notes" "Back"
 if errorlevel 255 goto :back
-if errorlevel 4 goto :browse_notes
-if errorlevel 3 goto view_note
-if errorlevel 2 goto list_notes
-if errorlevel 1 goto :new_note
-goto notes
+if errorlevel 4 goto :back
+if errorlevel 3 goto :browse_notes
+if errorlevel 2 goto :view_note
+if errorlevel 1 goto :list_notes
+goto :new_note
 
 :new_note
 ask /v:NNAME "Note name (no spaces)"
@@ -141,6 +143,7 @@ ask /v:NBODY "Body"
 if errorlevel 1 goto notes
 echo [%DATE% %TIME%] >> NOTES/%NNAME%.txt
 echo %NBODY% >> NOTES/%NNAME%.txt
+echo [M-FILES-NOTED]
 dialog "Notes" "Saved NOTES/%NNAME%.txt" "OK"
 goto notes
 
@@ -163,5 +166,6 @@ view %NNAME%
 goto notes
 
 :back
+echo [M-FILES-BACK]
 draw clear screen
 goto :eof

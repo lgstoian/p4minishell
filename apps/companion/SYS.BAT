@@ -6,6 +6,7 @@ rem  appmode if TUI not available. Shows sysinfo, mem, ps, battery, wifi.
 rem =====================================================================
 
 :main
+echo [M-SYS]
 tui fullscreen on
 draw clear screen
 draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"
@@ -18,8 +19,8 @@ draw text 5 8 "Use Save to keep snapshot"
 :refresh
 list "Dashboard" "Refresh" "View details" "Save snapshot" "Back"
 if errorlevel 255 goto :back
-if errorlevel 3 goto :save
-if errorlevel 2 goto :back
+if errorlevel 3 goto :back
+if errorlevel 2 goto :save
 if errorlevel 1 goto :view_details
 if errorlevel 0 goto :do_refresh
 goto refresh
@@ -38,9 +39,11 @@ goto refresh
 sysinfo > SYS_SNAP.TXT
 mem >> SYS_SNAP.TXT
 ps /O:C >> SYS_SNAP.TXT
+echo [M-SYS-SAVED]
 dialog "Saved" "Snapshot saved to SYS_SNAP.TXT" "OK"
 goto refresh
 :back
+echo [M-SYS-BACK]
 tui fullscreen off
 draw clear screen
 goto :eof

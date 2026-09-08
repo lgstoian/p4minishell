@@ -111,6 +111,7 @@ def push_file(ser, name, data):
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
     ser = serial.Serial(port, 115200, timeout=1)
+    ser.setDTR(False); ser.setRTS(False)  # open must not reboot the P4
     time.sleep(0.5)
     ser.reset_input_buffer()
 
@@ -118,6 +119,12 @@ def main():
         print("FAIL: shell not responding on %s" % port)
         ser.close()
         return 1
+
+    # The open above usually reboots the board (DTR transition), and boot
+    # background work (Wi-Fi init logs) corrupts the ACK-paced protocol if a
+    # transfer starts mid-boot. Let the boot quiesce first.
+    time.sleep(20.0)
+    ser.reset_input_buffer()
 
     # The APPINFO metadata belongs in the conventional sd:/APPS directory;
     # make sure it exists (ignore "already exists").
@@ -132,9 +139,15 @@ def main():
         target = ("APPS/" + name) if name.endswith(".APPINFO") else name
         with open(path, "rb") as f:
             data = f.read()
-        if push_file(ser, target, data):
-            print("PUSH ok   %s (%d bytes)" % (target, len(data)))
-        else:
+        pushed = False
+        for attempt in range(3):
+            if push_file(ser, target, data):
+                print("PUSH ok   %s (%d bytes)" % (target, len(data)))
+                pushed = True
+                break
+            print("  retry %s (%d/3)" % (target, attempt + 1))
+            time.sleep(2.0)
+        if not pushed:
             print("PUSH FAIL %s" % target)
             ok = False
 
