@@ -167,7 +167,7 @@ void shell_command_chkdsk(int argc, char **argv);
  *
  * Usage: format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q]
  *
- * Requires the exact confirmation word P4_CONFIG_FORMAT_CONFIRM_WORD typed
+ * Requires the exact confirmation word P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD typed
  * at the prompt before anything is written. FAT/FAT32 select size-appropriately
  * through the standard IDF format helper; exFAT is not available in this
  * firmware build and is reported honestly.

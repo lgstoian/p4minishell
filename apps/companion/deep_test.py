@@ -16,6 +16,21 @@ import sys
 import time
 
 PANIC_MARKERS = ("Guru Meditation", "assert failed", "Stack protection", "Backtrace", "Rebooting")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def worker_line(text, word):
+    """True only if the worker actually printed `word` as its own output
+    line. The submit-side echo (`PS \\> echo WORD`) contains the word too,
+    so substring matching false-passes on a wedged worker. One leading
+    `PS ...>` prompt prefix is stripped first: prompt-glue (trailing prompt
+    + output on one serial line, normal under load) must not false-negative."""
+    for ln in text.splitlines():
+        s = ANSI.sub("", ln).strip()
+        s = re.sub(r"^PS \S*> ", "", s).strip()
+        if s == word and ("echo %s" % word) not in ANSI.sub("", ln):
+            return True
+    return False
 UPTIME_RE = re.compile(r"uptime=(\d+)d (\d+)h (\d+)m (\d+)s")
 ESPTool = r"C:\esp\v5.5.5\esp-idf\components\esptool_py\esptool\esptool.py"
 
@@ -31,10 +46,12 @@ def read_all(ser, seconds):
 
 
 def shell_up(ser):
+    # Requires the worker's own `ready` output line, not the `echo ready`
+    # input echo (which the console task prints even while wedged).
     for _ in range(15):
         ser.reset_input_buffer()
         ser.write(b"echo ready\n")
-        if "ready" in read_all(ser, 2.0):
+        if worker_line(read_all(ser, 2.0), "ready"):
             return True
         time.sleep(1)
     return False
@@ -442,7 +459,7 @@ def main():
             time.sleep(5.0)                      # brightness set, Saved dialog opens
             send_after_settle(ser, b"ok\n", settle=3.0)  # dismiss dialog
             time.sleep(2.0)
-            set_ok = press(ser, st, b"8\n", "[M-SET-BACK]")  # Back
+            set_ok = press(ser, st, b"9\n", "[M-SET-BACK]")  # Back (Fonts is 8)
         if set_ok:
             # Real artifact check: persisted brightness survives the flow.
             ser.reset_input_buffer()

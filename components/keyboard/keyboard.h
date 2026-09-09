@@ -77,6 +77,9 @@ lv_obj_t *keyboard_init(lv_obj_t *parent);
  */
 void keyboard_deinit(void);
 
+/** Re-resolve the keyboard font after a font switch (see impl note). */
+void keyboard_refresh_fonts(void);
+
 /**
  * Check if the keyboard manager is initialized.
  * @return true if keyboard_init() completed successfully.

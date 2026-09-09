@@ -38,6 +38,14 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_LV_FONT_UNSCII_16=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
+# Phase-3 SD fonts: tiny_ttf (bundled stb rasterizer, no freetype dep) with
+# file support. The LVGL FATFS driver is NOT used (it would need a managed
+# CMakeLists edit for its ff.h dep); components/font registers its own tiny
+# "F:" lv_fs driver over stdio/VFS instead. Built-in bitmaps stay compiled
+# regardless; TTFs are strictly optional.
+CONFIG_LV_USE_TINY_TTF=y
+CONFIG_LV_TINY_TTF_FILE_SUPPORT=y
+
 # Wi-Fi/IP event handlers call the shell transcript (vsnprintf formatting) and
 # header notify hooks directly on the esp_event `sys_evt` task. The 2304-byte
 # default overflows with a stack protection fault in the vfprintf machinery

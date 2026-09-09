@@ -1,12 +1,15 @@
-﻿import serial
-import time
+﻿import time
 import sys
+import os
 
-port = 'COM11'
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shell_session import open_port, default_port
+
+port = default_port()
 baud = 115200
 
 print(f"Opening {port} at {baud} baud...")
-with serial.Serial(port, baud, timeout=1) as ser:
+with open_port(port, baud, timeout=1) as ser:
     ser.reset_input_buffer()
     ser.reset_output_buffer()
     

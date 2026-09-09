@@ -1,13 +1,14 @@
-import serial
 import sys
 import time
+import os
 
-PORT = 'COM11'
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shell_session import open_port, default_port
+
+PORT = default_port()
 BAUD = 115200
 
-ser = serial.Serial(PORT, BAUD, timeout=1)
-ser.dtr = False
-ser.rts = False
+ser = open_port(PORT, BAUD, timeout=1)
 ser.reset_input_buffer()
 
 print('Waiting 10 seconds for boot to complete...')

@@ -3402,6 +3402,9 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
     long current_pos = ftell(file);
     long line_pos = 0;
     bool previous_continues = false;
+    /* Set on the first label past the table so the overflow warns exactly
+     * once per file instead of once per extra label. */
+    bool warned = false;
 
     /* The read buffer is line-sized, so it lives on the heap: this function
      * runs from shell_execute_batch_file(), which is on the recursive batch
@@ -3453,6 +3456,15 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
                                              sizeof(frame->labels[frame->label_count].name));
                     frame->labels[frame->label_count].file_pos = line_pos - (long)raw_len;
                     frame->label_count++;
+                } else if (!warned) {
+                    /* The table is full: extra goto targets would vanish
+                     * silently (a 33-label game loses its quit path with no
+                     * hint), so warn loudly, once per file. */
+                    warned = true;
+                    shell_print_warning("batch: too many labels (max %d); extra labels ignored",
+                                        SHELL_BATCH_LABEL_MAX);
+                    shell_record_warningf("batch", "Label table full (%d); extra labels ignored",
+                                          SHELL_BATCH_LABEL_MAX);
                 }
             }
 

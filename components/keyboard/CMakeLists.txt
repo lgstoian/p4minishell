@@ -5,4 +5,5 @@ idf_component_register(
         display
         espressif__esp_lvgl_port
         lvgl__lvgl
+        font
 )

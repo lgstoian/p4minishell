@@ -10,4 +10,5 @@ idf_component_register(
         keyboard
         espressif__esp_lvgl_port
         lvgl__lvgl
+        font
 )

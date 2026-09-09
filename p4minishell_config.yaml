@@ -44,18 +44,6 @@ shell_identity:
     value: "PS \\> "
     type: string
     description: "Prompt string on input line and serial console (assembled from P4_CONFIG_PS_PREFIX, P4_CONFIG_PS_PATH_SEPARATOR, and P4_CONFIG_PS_SUFFIX in the C header)"
-  ps_color_parameter:
-    value: 37
-    type: int
-    description: "ANSI SGR for parameter/flag names in output (P4_CONFIG_PS_COLOR_PARAMETER)."
-  ps_color_subsystem:
-    value: 96
-    type: int
-    description: "ANSI SGR for subsystem/module labels such as [wifi] (P4_CONFIG_PS_COLOR_SUBSYSTEM)."
-  ps_color_heading:
-    value: 93
-    type: int
-    description: "ANSI SGR for heading/title text (P4_CONFIG_PS_COLOR_HEADING)."
 
 # ---- Transcript and Command Buffers ----
 buffers:
@@ -96,6 +84,16 @@ buffers:
       distance of the bottom, new output keeps it pinned to the newest lines.
       Submitting a command always forces a jump to the bottom regardless.
     range: "0..200"
+  transcript_flush_ms:
+    value: 200
+    type: int
+    description: >-
+      Maximum on-screen staleness of the transcript label in milliseconds
+      while a command streams output. Repainting the span group costs
+      O(buffer), so appends mark the label dirty and repaint at most this
+      often (plus once per command, before key waits, and before screenshots);
+      serial output stays live on every line.
+    range: "0..2000"
   async_transcript_bytes:
     value: 512
     type: size_t
@@ -164,11 +162,11 @@ buffers:
     type: size_t
     description: "Capacity of the edit editor's prompt buffer (Save-As path, Go-to-Line number, Find/Replace string)"
     range: "64..1024"
-  editor_cursor_blink_ms:
+  cursor_blink_ms:
     value: 500
     type: int
-    description: "Blink period for the edit editor's block cursor, in milliseconds"
-    range: "200..2000"
+    description: "Shared cursor blink period for shell input block cursor and editor (0 = steady, no blink)"
+    range: "0..2000"
   editor_selection_color:
     value: 0x335577
     type: int
@@ -253,20 +251,6 @@ display:
     type: int
     description: "Default backlight brightness on boot (0-100)"
     range: "0..100"
-  default_rotation:
-    value: 0
-    type: int
-    description: "Default display rotation on boot (0, 90, 180, or 270)"
-    range: "0|90|180|270"
-  default_power_state:
-    value: "on"
-    type: string
-    description: "Default display power state on boot (on, sleep, off)"
-    range: "on|sleep|off"
-  refresh_rate_dynamic_supported:
-    value: false
-    type: bool
-    description: "Whether dynamic refresh rate changes are supported by the panel"
   panel_driver:
     value: "JD9165"
     type: string
@@ -342,6 +326,45 @@ windows:
     description: "Minimum transcript height in pixels"
     range: "20..200"
 
+# ---- Fonts ----
+# Managed by: components/font/font.c
+# Roles: terminal (monospace surfaces) + ui (chrome, chained with fallback).
+# Phase 1: built-in bitmap names only; pixel sizes arrive with SD TTFs.
+fonts:
+  terminal_default:
+    value: "unscii_16"
+    type: string
+    description: "Default primary for the terminal role (must be monospace)"
+  ui_default:
+    value: "unscii_16"
+    type: string
+    description: "Default primary for the UI role (chained with Montserrat fallback)"
+  name_bytes:
+    value: 32
+    type: int
+    description: "Maximum bytes for a font name (registry + SHELL.INI values)"
+    range: "16..64"
+  default_px:
+    value: 16
+    type: int
+    description: "Nominal pixel size of built-in bitmap roles"
+    range: "8..32"
+  size_min:
+    value: 10
+    type: int
+    description: "Minimum selectable TTF pixel size"
+    range: "8..16"
+  size_max:
+    value: 28
+    type: int
+    description: "Maximum selectable TTF pixel size"
+    range: "16..48"
+  ttf_slots:
+    value: 6
+    type: int
+    description: "Registry slots for loaded SD TTF objects ((stem, size) keyed)"
+    range: "2..12"
+
 # ---- TUI / Modal Surfaces ----
 # Managed by: components/tui/tui.c + components/modal/modal_surf.c
 # Logical grid (COLS x ROWS) is the DOS-like coordinate system batch files address
@@ -358,31 +381,11 @@ tui:
     type: int
     description: "Logical TUI grid rows (DOS 25 is the default; pixel height scales to the live transcript region)"
     range: "15..40"
-  window_max:
-    value: 4
-    type: int
-    description: "Maximum layered TUI windows a batch app may compose"
-    range: "1..8"
-  dialog_width_pct:
-    value: 60
-    type: int
-    description: "Dialog width as percentage of the current transcript region width"
-    range: "40..90"
-  list_visible:
-    value: 8
-    type: int
-    description: "Visible rows in a list / file-browser modal"
-    range: "4..16"
   list_max_items:
     value: 64
     type: int
     description: "Maximum items list will show (truncates with a warning)"
     range: "16..128"
-  browse_list_limit:
-    value: 128
-    type: int
-    description: "Maximum entries the file browser lists per directory"
-    range: "32..256"
   browse_path_bytes:
     value: 320
     type: size_t
@@ -393,20 +396,11 @@ tui:
     type: size_t
     description: "Maximum file bytes the text viewer / hex viewer will load"
     range: "4096..262144"
-  view_page_lines:
-    value: 20
-    type: int
-    description: "Lines per page in the viewer pager"
-    range: "10..30"
   timeout_default_ms:
     value: 0
     type: uint32_t
     description: "Default auto-cancel timeout for modal surfaces in ms (0 = no timeout)"
     range: "0..60000"
-  alt_screen:
-    value: 1
-    type: bool
-    description: "When 1, alt-screen save/restore (ESC[?1049h/l) is honoured"
 
 # ---- Wi-Fi ----
 wifi:
@@ -744,10 +738,6 @@ bluetooth:
     type: size_t
     description: "Maximum Bluetooth address string length (XX:XX:XX:XX:XX:XX)"
     range: "18"
-  hosted_runtime_supported:
-    value: 0
-    type: bool
-    description: "Legacy Bluedroid compile gate (0=disabled, 1=enabled)"
   scan_limit:
     value: 8
     type: size_t
@@ -838,10 +828,6 @@ sd_card:
     type: int
     description: "Percent step between copy progress updates for large files"
     range: "1..50"
-  format_confirm_word:
-    value: "YES"
-    type: string
-    description: "Exact confirmation word required by the destructive format command"
   destructive_confirm_word:
     value: "YES"
     type: string
@@ -870,11 +856,6 @@ sd_card:
       MBR partition-table alignment for disk create partition, in 512-byte
       sectors. 2048 sectors = 1 MiB, the diskpart/SD standard alignment.
     range: "1..65536"
-  storage_volume_max:
-    value: 1
-    type: uint32_t
-    description: "Number of supported storage volumes (SD only today; USB OTG MSC is a future target)"
-    range: "1..4"
 
 # ---- Recycle Bin (trash) ----
 # `del`/`erase` move matching files and directories into a hidden .trash
@@ -909,10 +890,6 @@ recycle_bin:
     type: int
     description: "Maximum file matches collected by one recursive del /s operation"
     range: "8..4096"
-  confirm_word:
-    value: "YES"
-    type: string
-    description: "Exact confirmation word required by trash empty and trash purge"
 
 # ---- Boot Scripting (CONFIG.SYS / AUTOEXEC.BAT) ----
 boot_scripting:
@@ -946,11 +923,6 @@ boot_scripting:
     type: uint16_t
     description: "Maximum number of directives CONFIG.SYS may contain"
     range: "16..256"
-  max_gpio_lines:
-    value: 16
-    type: uint8_t
-    description: "Maximum number of GPIO directives CONFIG.SYS may contain"
-    range: "0..64"
   io_buffer_bytes:
     value: 128
     type: size_t
@@ -1266,16 +1238,6 @@ batch_env:
 
 # ---- GPIO and Hardware Control ----
 gpio_hardware:
-  gpio_name_bytes:
-    value: 32
-    type: size_t
-    description: "Maximum GPIO pin name string length"
-    range: "8..64"
-  gpio_pin_limit:
-    value: 24
-    type: size_t
-    description: "Maximum exposed GPIO pins in board pin table"
-    range: "8..64"
   c6_host_reset_gpio:
     value: 54
     type: gpio_num_t
@@ -1589,19 +1551,6 @@ usb_host:
     type: size_t
     description: "Simultaneous keys in USB keyboard report"
     range: "1..16"
-  keyboard_auto_detect:
-    value: 1
-    type: bool
-    description: "Auto-detect USB keyboard: hide on-screen keyboard when USB keyboard attached"
-  keyboard_cli_inject:
-    value: 1
-    type: bool
-    description: "Route USB keyboard keystrokes to shell CLI input line"
-  keyboard_notify_ms:
-    value: 3000
-    type: int
-    description: "USB keyboard notification timeout in milliseconds"
-    range: "1000..10000"
 
 # ---- C6 OTA ----
 c6ota:
@@ -1826,37 +1775,10 @@ ansi_colors:
 
 # ---- Screenshot ----
 screenshot:
-  width:
-    value: 1024
-    type: uint32_t
-    description: "Display width in pixels for BMP header"
-    range: "1..65535"
-  height:
-    value: 600
-    type: uint32_t
-    description: "Display height in pixels for BMP header"
-    range: "1..65535"
-  color_format:
-    value: "0x12"
-    type: hex
-    description: "LVGL color format for snapshot (0x12 = LV_COLOR_FORMAT_RGB565)"
-  bmp_begin_marker:
-    value: "=== SCREENSHOT BMP BEGIN ==="
-    type: string
-    description: "Magic marker sent before BMP binary data on serial output"
-  bmp_end_marker:
-    value: "=== SCREENSHOT BMP END ==="
-    type: string
-    description: "Magic marker sent after BMP binary data on serial output"
   bmp_magic:
     value: "BMPX"
     type: string
     description: "Four-byte magic prefix of the screenshot BMP frame"
-  uart_chunk_bytes:
-    value: 512
-    type: size_t
-    description: "Maximum bytes per write chunk when streaming BMP to UART"
-    range: "128..4096"
 
 # =============================================================================
 # SERIAL FILE TRANSFER (receive / send)
@@ -1884,9 +1806,9 @@ serial_transfer:
     description: "Hard upper bound (bytes) for a single send stream, including send /diag"
     range: "1024..67108864"
   rx_max_bytes:
-    value: 8388608
+    value: 25165824
     type: uint32_t
-    description: "Hard upper bound (bytes) for a single receive payload"
+    description: "Hard upper bound (bytes) for a single receive payload (sized for the 17 MB CJK board font; streams to SD)"
     range: "1024..67108864"
   rx_ready_marker:
     value: "=== RX READY ==="
@@ -1982,10 +1904,6 @@ database:
     value: 128
     type: int
     description: "Maximum length of one INDEX.TXT line (id cat flags key size)."
-  db_category_label_bytes:
-    value: 24
-    type: int
-    description: "Maximum length of a category label (CATEGORIES.INI)."
   db_category_count:
     value: 16
     type: int

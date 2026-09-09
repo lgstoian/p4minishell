@@ -25,6 +25,9 @@ bool shell_command_keyboard(int argc, char **argv);
 /** Handle `windows <info>` subcommands. */
 bool shell_command_windows(int argc, char **argv);
 
+/** Handle `cursor [block|bar] [blink <ms|off>]` (input-line cursor style). */
+bool shell_command_cursor(int argc, char **argv);
+
 #ifdef __cplusplus
 }
 #endif

@@ -133,6 +133,15 @@
  */
 #define P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX 32
 
+/**
+ * Maximum on-screen staleness of the transcript label in milliseconds while
+ * a command streams output. Repainting the LVGL span group costs O(buffer),
+ * so per-line repaints make big listings crawl; appends mark the label dirty
+ * and repaint at most this often (plus once per command, before key waits,
+ * and before screenshots). Serial output is unaffected and stays live.
+ */
+#define P4_CONFIG_TRANSCRIPT_FLUSH_MS          200
+
 /** Maximum bytes in the async (background task) transcript staging buffer. */
 #define P4_CONFIG_ASYNC_TRANSCRIPT_BYTES     512
 
@@ -181,8 +190,9 @@
  */
 #define P4_CONFIG_EDITOR_PROMPT_BYTES        P4_CONFIG_SD_PATH_BYTES
 
-/** Blink period for the `edit` editor's block cursor, in milliseconds. */
-#define P4_CONFIG_EDITOR_CURSOR_BLINK_MS     500
+/** Shared cursor blink period (shell input block cursor anim + editor
+ * cursor timer), in milliseconds. 0 = steady cursor (no blink). */
+#define P4_CONFIG_CURSOR_BLINK_MS            500
 
 /** RGB colour of the `edit` editor's selection background overlay. */
 #define P4_CONFIG_EDITOR_SELECTION_COLOR     0x335577
@@ -232,15 +242,6 @@
 /** Default backlight brightness percentage on boot (0-100). */
 #define P4_CONFIG_DISPLAY_DEFAULT_BRIGHTNESS 100
 
-/** Default display rotation on boot (0, 90, 180, or 270). */
-#define P4_CONFIG_DISPLAY_DEFAULT_ROTATION   0
-
-/** Default display power state on boot: 0=on, 1=sleep, 2=off. */
-#define P4_CONFIG_DISPLAY_DEFAULT_POWER      0
-
-/** Whether dynamic refresh rate changes are supported by the panel. */
-#define P4_CONFIG_DISPLAY_REFRESH_DYNAMIC    0
-
 /** Display panel driver name for diagnostics. */
 #define P4_CONFIG_DISPLAY_PANEL_DRIVER       "JD9165"
 
@@ -269,15 +270,6 @@
 /** Input row height clamp maximum in pixels. */
 #define P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MAX 56
 
-/** Keyboard height as percentage of display height. */
-#define P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_PCT 35
-
-/** Keyboard height clamp minimum in pixels. */
-#define P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MIN 180
-
-/** Keyboard height clamp maximum in pixels. */
-#define P4_CONFIG_WINDOW_KEYBOARD_HEIGHT_MAX 280
-
 /** Minimum transcript height in pixels. */
 #define P4_CONFIG_WINDOW_TRANSCRIPT_HEIGHT_MIN 40
 
@@ -287,6 +279,38 @@
 
 /** Width of the transcript scroll buttons (input-row Up/Dn) in pixels. */
 #define P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH  64
+
+/* ========================================================================
+ * FONT PARAMETERS
+ * ========================================================================
+ * Unified font registry (components/font): TERMINAL role for monospace
+ * surfaces (transcript, TUI, editor) and UI role for chrome (header, input,
+ * keyboard, dialogs). Phase 1: built-in bitmap names only ("unscii_16",
+ * "montserrat_14"); terminal refuses proportional fonts. Live changes via
+ * `font set <role> <name> [/save]` (saved to sd:/APPS/SHELL.INI, restored at
+ * boot); pixel sizes arrive with SD TTFs in Phase 2.
+ */
+
+/** Default primary for the terminal role (must be monospace). */
+#define P4_CONFIG_FONT_TERMINAL_DEFAULT       "unscii_16"
+
+/** Default primary for the UI role (chained with a Montserrat fallback). */
+#define P4_CONFIG_FONT_UI_DEFAULT             "unscii_16"
+
+/** Maximum bytes for a font name (registry + SHELL.INI values). */
+#define P4_CONFIG_FONT_NAME_BYTES             32
+
+/** Nominal pixel size of built-in bitmap roles (unscii_16/montserrat_14). */
+#define P4_CONFIG_FONT_DEFAULT_PX             16
+
+/** Minimum selectable TTF pixel size. */
+#define P4_CONFIG_FONT_SIZE_MIN               10
+
+/** Maximum selectable TTF pixel size. */
+#define P4_CONFIG_FONT_SIZE_MAX               28
+
+/** Registry slots for loaded SD TTF objects ((stem, size) keyed). */
+#define P4_CONFIG_FONT_TTF_SLOTS              6
 
 /* ========================================================================
  * TUI / MODAL SURFACE PARAMETERS
@@ -300,45 +324,24 @@
  /** Logical TUI grid columns (DOS 80 is the default). */
 #define P4_CONFIG_TUI_COLS                      80
 
- /** Logical TUI grid rows (DOS 25 is the default). */
+/** Logical TUI grid rows (DOS 25 is the default). */
 #define P4_CONFIG_TUI_ROWS                      25
 
- /** Maximum layered TUI windows a batch app may compose. */
-#define P4_CONFIG_TUI_WINDOW_MAX                4
-
- /** Dialog width as percentage of the current transcript region width. */
-#define P4_CONFIG_TUI_DIALOG_WIDTH_PCT          60
-
- /** Visible rows in a `list` / file-browser modal. */
-#define P4_CONFIG_TUI_LIST_VISIBLE              8
-
- /** Maximum items `list` will show (truncates with a warning). */
+/** Maximum items `list` will show (truncates with a warning). */
 #define P4_CONFIG_TUI_LIST_MAX_ITEMS            64
 
- /** Maximum entries the file browser lists per directory. */
-#define P4_CONFIG_TUI_BROWSE_LIST_LIMIT         128
-
- /** Maximum bytes for a file-browser selected path. */
+/** Maximum bytes for a file-browser selected path. */
 #define P4_CONFIG_TUI_BROWSE_PATH_BYTES         P4_CONFIG_SD_PATH_BYTES
 
- /** Maximum file bytes the text viewer / hex viewer will load. */
+/** Maximum file bytes the text viewer / hex viewer will load. */
 #define P4_CONFIG_TUI_VIEW_MAX_BYTES            (64 * 1024)
 
- /** Lines per page in the viewer pager. */
-#define P4_CONFIG_TUI_VIEW_PAGE_LINES           20
-
- /** Default auto-cancel timeout for modal surfaces in ms (0 = no timeout). */
+/** Default auto-cancel timeout for modal surfaces in ms (0 = no timeout). */
 #define P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS        0
-
- /** When 1, alt-screen save/restore (ESC[?1049h/l) is honoured. */
-#define P4_CONFIG_TUI_ALT_SCREEN                1
 
 /* ========================================================================
  * KEYBOARD PARAMETERS
  * ======================================================================== */
-
-/** Default keyboard visibility on boot: 0=hidden, 1=visible. */
-#define P4_CONFIG_KEYBOARD_DEFAULT_VISIBLE    1
 
 /** Keyboard height as percentage of display height. */
 #define P4_CONFIG_KEYBOARD_HEIGHT_PCT         35
@@ -348,9 +351,6 @@
 
 /** Keyboard height clamp maximum in pixels. */
 #define P4_CONFIG_KEYBOARD_HEIGHT_MAX         280
-
-/** Keyboard log tag. */
-#define P4_CONFIG_KEYBOARD_TAG                "keyboard"
 
 /**
  * On-screen keyboard duplicate-press debounce window in milliseconds. The
@@ -376,20 +376,6 @@
 
 /** Maximum bytes for a Wi-Fi origin/backend description string. */
 #define P4_CONFIG_WIFI_ORIGIN_BYTES          32
-
-/** Default SSID from sdkconfig (empty if not configured). */
-#ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID
-#define P4_CONFIG_WIFI_DEFAULT_SSID          ""
-#else
-#define P4_CONFIG_WIFI_DEFAULT_SSID          CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID
-#endif
-
-/** Default password from sdkconfig (empty if not configured). */
-#ifndef CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD
-#define P4_CONFIG_WIFI_DEFAULT_PASSWORD      ""
-#else
-#define P4_CONFIG_WIFI_DEFAULT_PASSWORD      CONFIG_P4MINISHELL_WIFI_DEFAULT_PASSWORD
-#endif
 
 /** Runtime guard: true when any Wi-Fi path is enabled in sdkconfig. */
 #define P4_CONFIG_WIFI_RUNTIME_ENABLED \
@@ -580,9 +566,6 @@
 /** Maximum bytes for a Bluetooth address string (XX:XX:XX:XX:XX:XX). */
 #define P4_CONFIG_BLUETOOTH_ADDR_BYTES       18
 
-/** Hard compile gate: 0 = disabled, 1 = enabled (legacy Bluedroid path). */
-#define P4_CONFIG_BT_HOSTED_RUNTIME_SUPPORTED 0
-
 /** Maximum BLE scan results surfaced through the shell bt/scan command. */
 #define P4_CONFIG_BT_SCAN_LIMIT              8
 
@@ -677,11 +660,9 @@
 #define P4_CONFIG_COPY_PROGRESS_STEP_PCT     10
 
 /** Exact confirmation word required by any destructive operation (format,
- *  disk clean/delete, recursive delete, trash empty/purge). */
+ *  disk clean/delete, recursive delete, trash empty/purge). The `format`
+ *  and `trash` commands share this one word (no per-command aliases). */
 #define P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD   "YES"
-
-/** Backward-compatible alias: `format` uses the shared destructive word. */
-#define P4_CONFIG_FORMAT_CONFIRM_WORD        P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD
 
 /** Default allocation unit size in bytes requested when formatting. 0 = let
  *  FATFS (via esp_vfs_fat_sdcard_format_cfg) choose a size-appropriate value. */
@@ -696,10 +677,6 @@
 /** MBR partition-table alignment for `disk create partition` (in 512-byte
  *  sectors). 2048 sectors = 1 MiB, the diskpart/SD standard alignment. */
 #define P4_CONFIG_DISK_PARTITION_ALIGN_SECTORS 2048
-
-/** Maximum number of `disk` / `format` volume targets. The firmware currently
- *  supports the SD card only; USB OTG MSC is a future target. */
-#define P4_CONFIG_STORAGE_VOLUME_MAX         1
 
 /* ========================================================================
  * RECYCLE BIN (TRASH)
@@ -728,9 +705,6 @@
 /** Maximum file matches collected by one recursive `del /s` operation. */
 #define P4_CONFIG_TRASH_OPERATION_MAX        256
 
-/** Exact confirmation word required by `trash empty` and `trash purge`. */
-#define P4_CONFIG_TRASH_CONFIRM_WORD         P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD
-
 /* ========================================================================
  * BOOT CONFIGURATION (CONFIG.SYS / AUTOEXEC.BAT)
  * ========================================================================
@@ -757,9 +731,6 @@
 
 /** Maximum number of directives CONFIG.SYS may contain. */
 #define P4_CONFIG_BOOT_MAX_DIRECTIVES        64
-
-/** Maximum number of GPIO directives CONFIG.SYS may contain. */
-#define P4_CONFIG_BOOT_MAX_GPIO_LINES        16
 
 /** Maximum bytes the `config` command reads/writes for the CONFIG.SYS file. */
 #define P4_CONFIG_CONFIG_MAX_BYTES           16384
@@ -1115,12 +1086,6 @@
  * GPIO AND HARDWARE CONTROL
  * ======================================================================== */
 
-/** Maximum bytes for a GPIO pin name string. */
-#define P4_CONFIG_GPIO_NAME_BYTES            32
-
-/** Maximum exposed GPIO pins in the board pin table. */
-#define P4_CONFIG_GPIO_PIN_LIMIT             24
-
 /** GPIO number for the ESP32-C6 hosted reset line. */
 #define P4_CONFIG_C6_HOST_RESET_GPIO         54
 
@@ -1387,12 +1352,6 @@
 /** ANSI SGR for info output prefix. */
 #define P4_CONFIG_PS_COLOR_INFO              96  /* Bright cyan */
 
-/** ANSI SGR for command names in output. */
-#define P4_CONFIG_PS_COLOR_COMMAND           97  /* Bright white */
-
-/** ANSI SGR for parameter/flag names. */
-#define P4_CONFIG_PS_COLOR_PARAMETER         37  /* White/gray */
-
 /** ANSI SGR for string values. */
 #define P4_CONFIG_PS_COLOR_STRING            33  /* Yellow */
 
@@ -1401,30 +1360,6 @@
 
 /** ANSI SGR for path values. */
 #define P4_CONFIG_PS_COLOR_PATH_VALUE        36  /* Cyan */
-
-/** ANSI SGR for subsystem/module labels (e.g., "[wifi]", "[usb]"). */
-#define P4_CONFIG_PS_COLOR_SUBSYSTEM         96  /* Bright cyan */
-
-/** ANSI SGR for key names / property labels. */
-#define P4_CONFIG_PS_COLOR_KEY               37  /* White */
-
-/** ANSI SGR for muted/secondary text. */
-#define P4_CONFIG_PS_COLOR_MUTED             90  /* Bright black (gray) */
-
-/** ANSI SGR for heading/title text. */
-#define P4_CONFIG_PS_COLOR_HEADING           93  /* Bright yellow */
-
-/** ANSI SGR for IP addresses. */
-#define P4_CONFIG_PS_COLOR_IP                95  /* Bright magenta */
-
-/** ANSI SGR for connected/active status. */
-#define P4_CONFIG_PS_COLOR_CONNECTED         92  /* Bright green */
-
-/** ANSI SGR for disconnected/inactive status. */
-#define P4_CONFIG_PS_COLOR_DISCONNECTED      90  /* Bright black (gray) */
-
-/** ANSI SGR for progress/step messages. */
-#define P4_CONFIG_PS_COLOR_PROGRESS          96  /* Bright cyan */
 
 /** ANSI SGR for prompt/input indicators. */
 #define P4_CONFIG_PS_COLOR_PROMPT            97  /* Bright white */
@@ -1462,15 +1397,6 @@
 
 /** Number of simultaneous keys in a USB keyboard report. */
 #define P4_CONFIG_USB_KEYBOARD_KEYS          6
-
-/** Auto-detect USB keyboard: automatically hide on-screen keyboard when USB keyboard is attached. */
-#define P4_CONFIG_USB_KEYBOARD_AUTO_DETECT   1
-
-/** USB keyboard input injection: route USB keystrokes to shell CLI input line. */
-#define P4_CONFIG_USB_KEYBOARD_CLI_INJECT    1
-
-/** USB keyboard notification timeout in milliseconds. */
-#define P4_CONFIG_USB_KEYBOARD_NOTIFY_MS     3000
 
 /* ========================================================================
  * C6 OTA PARAMETERS
@@ -1566,26 +1492,8 @@
  * serial console or writes it to the SD card. Uses LVGL's snapshot API to
  * grab a pixel-perfect copy of the active screen. */
 
-/** Display width for BMP header (1024 pixels). */
-#define P4_CONFIG_SCREENSHOT_WIDTH           1024
-
-/** Display height for BMP header (600 pixels). */
-#define P4_CONFIG_SCREENSHOT_HEIGHT          600
-
-/** Color format for LVGL snapshot (RGB565 = 16-bit, 2 bytes per pixel). */
-#define P4_CONFIG_SCREENSHOT_COLOR_FORMAT    0x12  /* LV_COLOR_FORMAT_RGB565 */
-
-/** Magic marker sent before the BMP binary data on serial output. */
-#define P4_CONFIG_SCREENSHOT_BMP_BEGIN       "=== SCREENSHOT BMP BEGIN ==="
-
-/** Magic marker sent after the BMP binary data on serial output. */
-#define P4_CONFIG_SCREENSHOT_BMP_END         "=== SCREENSHOT BMP END ==="
-
 /** Four-byte magic prefix of the screenshot BMP frame ("BMPX"). */
 #define P4_CONFIG_SCREENSHOT_BMP_MAGIC       "BMPX"
-
-/** Maximum bytes per write chunk when streaming BMP to UART. */
-#define P4_CONFIG_SCREENSHOT_UART_CHUNK      512
 
 /*
  * SERIAL FILE TRANSFER (receive / send)
@@ -1606,8 +1514,10 @@
 /** Hard upper bound (bytes) for a single `send` stream, including `send /diag`. */
 #define P4_CONFIG_SERIAL_SEND_MAX_BYTES      16777216
 
-/** Hard upper bound (bytes) for a single `receive` payload. */
-#define P4_CONFIG_SERIAL_RX_MAX_BYTES        8388608
+/** Hard upper bound (bytes) for a single `receive` payload. Sized for the
+ * 17 MB Noto Sans SC board font (streams to SD in 4 KB chunks; the free-
+ * space pre-check still guards the card). */
+#define P4_CONFIG_SERIAL_RX_MAX_BYTES        25165824
 
 /** Magic marker printed before a `receive` starts streaming. */
 #define P4_CONFIG_SERIAL_RX_READY_MARKER     "=== RX READY ==="
@@ -1652,9 +1562,6 @@
 
 /** Maximum length of one `INDEX.TXT` line ("id cat flags key size"). */
 #define P4_CONFIG_DB_INDEX_LINE_BYTES         128
-
-/** Maximum length of a category label (CATEGORIES.INI). */
-#define P4_CONFIG_DB_CATEGORY_LABEL_BYTES     24
 
 /** Number of categories (0..P4_CONFIG_DB_CATEGORY_COUNT-1). */
 #define P4_CONFIG_DB_CATEGORY_COUNT           16

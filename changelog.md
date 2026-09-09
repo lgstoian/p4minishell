@@ -9,6 +9,185 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - hardware session 2026-09-07 (COM3; ESP-IDF v5.5.5 fresh install)
 
+### Font follow-up — live refresh pass + shell block cursor (2026-09-09 session, COM3)
+- Root-fixed the real stale-font bug: LVGL styles snapshot the chain pointer
+  at creation and `font_set` flips to a new copy, so header/keyboard/input
+  rendered the orphaned font until recreated (transcript only worked by
+  accident — spans re-resolve per append). New narrow refresh pass instead
+  of a full rebuild: `windows/keyboard/header/tui_refresh_fonts()` plus
+  `editor_view_refresh_fonts()` (existing rebuild when open; open modals
+  refresh on reopen), wired into `font set/size` success. Screenshot-proven:
+  Montserrat keyboard live with no reopen.
+- Shell input gets the editor-like block cursor (`LV_PART_CURSOR` full-cell
+  fill + contrasting glyph, shared `P4_CONFIG_CURSOR_BLINK_MS` now driving
+  both it and the editor timer — unifying 400/500 ms; 0 = steady with the
+  editor timer correctly skipped). Cursor hides with its widget in
+  editor/app/TUI modes (no extra work — verified). Home/End go direct
+  (`set_cursor_pos`, dropping the N×left/right loops); USB Ctrl+Left/Right
+  word-jump over codepoints (heap offset table, tear-safe; Ctrl bits mirrored
+  locally since usb already requires shell — reverse edge would cycle).
+- New `cursor [block|bar] [blink <ms|off>]` command (session-only,
+  Tab-completion + help + `command.md`). USB HID stays ASCII-only
+  (keycode map — documented limit).
+- Regression: firmware+test 0/0, unit 196/0/2, deep 8/8 (one transient menu
+  flake, clean rerun), db 38/38, alarm 25/25, smoke 21/21.
+
+### Font milestone Phase 3 — SD TTFs, sizes, CJK fallback, theme prep (2026-09-09 session, COM3)
+- Vendored `assets/fonts/` (DejaVuSansMono 340 KB, NotoSans-Regular 569 KB,
+  NotoSansSC variable 17.7 MB + DejaVu/OFL licenses + SHA256SUMS) with
+  `push_fonts.py` uploader. `receive` cap bumped 8→24 MB (`streaming` transfer
+  with space pre-check; needed for the 17 MB SC).
+- Loader: `LV_USE_TINY_TTF` + file support (bundled stb, no freetype) and an
+  owned `F:` lv_fs driver over stdio/VFS (`font_fs.c`) — the in-tree FATFS
+  driver would have needed a managed CMakeLists edit for ff.h. Registry:
+  dynamic `sd:/FONTS/*` discovery, lazy load, (stem,size) slots with
+  measured monospace probing, sizes 10–28 px via `lv_tiny_ttf_set_size`
+  under the port lock, async-deferred destroy, SHELL.INI size keys.
+- Default-font protection matrix verified live: SD-absent/corrupt/missing all
+  keep current fonts with errorlevels; bitmap `size` cleanly refused;
+  terminal refuses proportional fonts AND sizes breaking 80x25 (clamp uses
+  keyboard-hidden height — the keyboard-shrunk rect wrongly vetoed the
+  default 16 px during testing). Two registry bugs caught by the matrix:
+  UI primary pointer not recorded (render right, names wrong) and refusal
+  reasons misordered (new `font_is_monospace` gate first).
+- CJK without selectable CJK: NotoSansSC auto-attaches as the tail of both
+  chains (primary → Montserrat-copy → SC) at first SD mount and on every
+  `font set`; sizes track roles; SD removal degrades to Montserrat tails.
+  Full CJK renders (screenshot), DejaVu covers all symbols. Known stb limit,
+  documented in `command.md`: it picks one cmap subtable, so U+2600/2601
+  miss via the SC tail (DejaVu has them); very long CJK rows can
+  wrap-mangle ~3 chars (short lines exact; coverage page split accordingly).
+- Batch control: `font` verbs were already batch-safe; companion `SET.BAT`
+  gains a Fonts submenu (terminal/UI/size/show/defaults + `[M-SET-FONT-SAVED]`;
+  `deep_test` Back updated 8→9). Theme prep light: `theme_t` table,
+  modal/keyboard literals centralized (zero visual change), `theme show`
+  stub, THEME.INI format documented.
+- Regression: firmware+test 0/0, unit 196/0/2, deep 8/8, db 38/38, alarm
+  25/25, smoke 21/21, SET fonts walk PASS. Harness lesson: never
+  `reset_input_buffer` right after a reset-adjacent open (ate the fast early
+  unit tests), and drain with 64 KB reads (400 B caps overflow host RX).
+
+### Font milestone Phase 1 — registry/roles, live switching, UTF-8 typing (2026-09-09 session, COM3)
+- New `components/font/` registry (leaf component, no dependency edges):
+  TERMINAL role (pure monospace) + UI role (RAM chain copy with Montserrat
+  fallback), `font_init/list/set/restore`, monospace enforcement for
+  terminal, double-buffered chain swap so LVGL never renders a torn struct.
+  `P4_CONFIG_FONT_*` knobs + `p4minishell_config.yaml` `fonts:` section.
+  All surfaces consume roles (others inherit via the existing windows
+  wrappers); modal titles moved to UI.
+- `font list|set <terminal|ui> <name> [/save]|size <px>`; `/save` persists to
+  `sd:/APPS/SHELL.INI`, restored in `boot_on_sd_first_mount` (command_init
+  time is too early — the SD mount is lazy). Live switch verified on HW
+  (ui 17→16 px line height + screenshot in Montserrat chrome) and restore
+  verified across reboot. `size` is an honest Phase-2 stub.
+- UTF-8 typing end to end: OSK inserts full codepoints into the input line
+  (`shell_utf8_decode` helper); key queue widened to 5-byte sequence items
+  with `shell_key_wait_submit_utf8()`; UART producer reassembles split
+  multibyte chunks (truncated tails preserved across reads); `set /p`
+  round-trips `café` intact via new `shell_wait_for_key_utf8()` with
+  codepoint-aware backspace. Legacy `char` API unchanged (lead byte for
+  multibyte, safe for y/n/ESC compares). Verified: unit 196/0/2, deep 8/8,
+  db 38/38 (one transient O6 SD-tail flake on import, clean on rerun),
+  alarm 25/25, smoke 21/21. `command.md` documents the font verbs plus the
+  `for /f` delims-space and `set /a` 32-bit gotchas found pressure-testing.
+
+### Font milestone Phase 0 — chained UI font + `font` command (2026-09-09 session, COM3)
+- Keyboard/header icon tofu fixed with a fallback chain, not a font swap:
+  `windows_get_ui_font()` (`components/windows/windows.c`) is a RAM copy of
+  unscii_16 with `.fallback = &lv_font_montserrat_14` (the only bundled font
+  with the FontAwesome PUA subset). Keyboard, header, input line, and
+  input-row buttons use it; transcript/TUI stay on the pure terminal font so
+  cell metrics are exact. Scroll buttons upgraded to LV_SYMBOL_UP/DOWN icons
+  per the original code comment's intent. Screenshot-verified (all icons
+  render, zero tofu), deep 8/8 green.
+- Crash lesson, caught pre-ship: a callback-delegating wrapper font
+  stack-overflowed taskLVGL — `lv_font_get_glyph_dsc()` records
+  `resolved_font` = the struct it was called on, so the wrapper was recorded
+  and its `get_glyph_bitmap` recursed into itself. Rule: chain via
+  `.fallback` on a RAM struct copy, never via resolving callbacks.
+- New `font` verb (`components/command/font_commands.c`): `font info`
+  (roles, line heights, fallback state) and `font coverage` (labeled glyph
+  page: `[have]` ASCII/box/U+2600, `[want:P2]` currency/arrows/CJK as
+  expected tofu until SD TTFs). Wired into dispatch, Tab completion, `help`,
+  and `command.md`. Cross-component font sharing uses `extern` decls, not
+  CMake edges (`windows` already REQUIRES keyboard+header — a cycle).
+
+### P4 reference apps + O3 verdict + driver hardening (2026-09-09 session, COM3)
+- Shipped the three Phase-5 reference apps (all pure batch, verified on board
+  via new `apps/smoke_apps.py`, **21/21 PASS**): `apps/adventure/ADVENT.BAT`
+  (7 rooms, inventory/score/save-load/win path), `apps/notes/NOTES.BAT`
+  (Zettelkasten on `db`: categories, `for /f` over `db find /b`, edit-file
+  bodies, export/import), `apps/mood/MOOD.BAT` (live heap→RGB/tone dashboard
+  parsing `mem` with `for /f`); each with `.APPINFO` + merged `ALIASES.BAT`
+  (all five app aliases in every copy — separate pushes used to clobber the
+  SD-root file) and one `apps/push_apps.py` uploader.
+- Batch engine: labels past the 32-per-file table were silently dropped, so a
+  33-label game lost its quit path with only `goto: label not found` as a
+  clue. `shell_scan_batch_labels()` now warns once per file
+  (`batch: too many labels (max 32)`, live-verified with a 33-label probe);
+  `command.md` documents the cap.
+- Test drivers: `shell_up` in deep/db/alarm required only a substring, so it
+  false-passed on the submit-side input echo while the worker was wedged; all
+  three plus both `act()` barriers now require the worker's own output line
+  (`worker_line`), and all matchers tolerate prompt-glue (trailing prompt +
+  output sharing one serial line — normal under load). `push_sd`/`push_apps`
+  note: `wait_shell` keeps the old substring check (failures there only cost
+  retries; CRC guards integrity).
+- `command.md` gotchas found pressure-testing: spaces terminate `for /f`
+  option values (no space in custom `delims=`; `apps/mood` parses with
+  `delims==,b`), and `set /a` is 32-bit (divide heap-byte values before
+  multiplying).
+- O3 verdict: P3 deferral holds (drain 19–29 KB/s both runs); 30-min
+  `stall_catch.py` (740 probes, echo-vs-output timing) shows zero queue-fulls,
+  zero heap warnings, db/sd at 0.0–0.2 s — the worker is exonerated, residual
+  is rare single-output loss under TX pressure plus an SD-op latency tail
+  (new O6: sync unlink/read occasionally >60 s under shared-bus contention;
+  hot-loop deletes removed from the reference apps). See `bugs.md` O3/O6.
+- Regression this session: `deep_test` 8/8, `db_test` 38/38, `alarm_test`
+  25/25, `smoke_apps` 21/21 (firmware: transcript deferral + buffer mutex +
+  label warning; unit suite still 196/0/2 from the pre-warning build — the
+  warning is 5 lines in the label scanner, verified live instead).
+
+### P2 config hygiene (2026-09-08 session, verified on board)
+- Pruned ~40 dead `P4_CONFIG_*` macros (all verified 0 references across
+  components/main/test): 10 `PS_COLOR_*` knobs (palette lives in
+  `ansi_palette.h`), `WINDOW_KEYBOARD_HEIGHT_*` trio (dup of `KEYBOARD_HEIGHT_*`),
+  6 dead TUI knobs, `KEYBOARD_DEFAULT_VISIBLE`/`KEYBOARD_TAG`,
+  `DISPLAY_DEFAULT_ROTATION`/`POWER`/`REFRESH_DYNAMIC`, 6 screenshot knobs
+  (live code uses `BMP_MAGIC` + snapshot geometry), 3 USB keyboard knobs
+  (behavior unconditional), `BOOT_MAX_GPIO_LINES`, `BT_HOSTED_RUNTIME_SUPPORTED`,
+  `STORAGE_VOLUME_MAX`, `TRASH`/`FORMAT_CONFIRM_WORD` aliases (single
+  `DESTRUCTIVE_CONFIRM_WORD` kept; fixed the `storage_commands.h` comment),
+  `DB_CATEGORY_LABEL_BYTES` (labels are caller-buffered), `GPIO_NAME_BYTES`/
+  `GPIO_PIN_LIMIT` (pointer-based pin table), and the `WIFI_DEFAULT_*` wrappers
+  (Kconfig options + direct `CONFIG_` use kept).
+- Wired two live knobs to their literals: `HEADER_BAT_LOW_PCT` (both 15s in
+  `header.c`) and kept `WIFI_DEFAULT` Kconfig surface intact.
+- Synced `p4minishell_config.yaml` (deleted mirrors of every pruned macro;
+  `bat_low_pct` kept; `default_ssid/password` kept as Kconfig surface).
+- Corrected `ai-context.md` alt-screen rule (unconditional, macro deleted).
+
+### P3 O3 investigation (2026-09-08 session, COM3)
+- CONFIRMED mechanism: per-append transcript span rebuilds go O(buffer).
+  `shell_transcript_append_internal()` re-parses the whole ANSI buffer and
+  rebuilds all spans + layout on every append (only the background async path
+  coalesces). `tools/transcript_drain_bench.py` measures it: 1.3 MB `type`
+  drains 10 KB @ 3.2 KB/s decaying to 100 KB @ 0.9 KB/s on first run, and a
+  back-to-back second run over the SAME file starts 3x slower (10 KB @
+  1.0 KB/s) — ruling out SD/fragmentation/USB-host causes. At a full 64 KB
+  buffer every printed line costs ~1 s, so sustained output occupies the
+  single worker and submissions pile 16-deep into `queue full` drops.
+- Eliminated along the way: LVGL-lock contention (queue-full errors print
+  through the transcript path, proving the lock free), modal/key-wait stuck
+  paths, heap pressure (93%/58 KB both states), Wi-Fi event storms (quiet
+  when measured), host-USB artifacts (controlled with DTR-safe opens).
+- Fix direction (needs its own LVGL-careful work item, M39 locks!): batch
+  worker-path label updates per command (dirty flag + flush at segment end /
+  prompt repaint, keeping per-line UART mirror + explicit progress flushes),
+  or incremental tail-span appends. Added `tools/stall_catch.py` (mixed
+  SD/non-SD output-anchored probes with queue-full + mount accounting) for
+  future episodes. See `bugs.md` O3.
+
 ### Added — batch loader depth (batch-first route)
 - `for /f ... in ('command')` (and backquotes with `usebackq`): runs the inner command through the re-entrant redirection capture and iterates its output with the shared skip/eol/delims/tokens processor (`shell_forf_is_command_set` + `shell_forf_run_command`, pure-helper unit tests).
 - `%~[fdpnx]N` argument modifiers (`shell_arg_apply_modifiers`, pure-helper unit tests; `d` is empty on FATFS, `s` accepted/ignored); also fixes `LIB.BAT` `:tui_header`/`:status`, which already used `%~1`.

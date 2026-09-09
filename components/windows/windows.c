@@ -16,6 +16,7 @@
 
 #include "windows.h"
 #include "display.h"
+#include "font.h"
 #include "header.h"
 #include "keyboard.h"
 #include "ansi.h"
@@ -50,9 +51,13 @@ static struct {
     lv_obj_t *input_row;
     lv_obj_t *input_line;
     lv_obj_t *prev_button;
+    lv_obj_t *prev_label;
     lv_obj_t *next_button;
+    lv_obj_t *next_label;
     lv_obj_t *scroll_up_button;
+    lv_obj_t *up_label;
     lv_obj_t *scroll_down_button;
+    lv_obj_t *down_label;
     /* Editor mode: the transcript region hosts a modal editor surface. */
     bool editor_mode;
     lv_obj_t *editor_surface;
@@ -72,9 +77,13 @@ static struct {
     .input_row = NULL,
     .input_line = NULL,
     .prev_button = NULL,
+    .prev_label = NULL,
     .next_button = NULL,
+    .next_label = NULL,
     .scroll_up_button = NULL,
+    .up_label = NULL,
     .scroll_down_button = NULL,
+    .down_label = NULL,
     .editor_mode = false,
     .editor_surface = NULL,
     .editor_status = NULL,
@@ -205,19 +214,59 @@ lv_color_t windows_get_color(const char *name)
     return lv_color_hex(0x000000);
 }
 
-/** Extended in-tree unscii_16 (box-drawing + symbols), always compiled from
- * managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c. */
-extern const lv_font_t lv_font_unscii_16;
-
 const lv_font_t *windows_get_terminal_font(void)
 {
-    /* Unconditional: the generated sdkconfig once lost
-     * CONFIG_LV_FONT_UNSCII_16 (stale generated file, see sdkconfig.defaults
-     * note), so the old #if guard silently fell back to the ASCII-only
-     * default font and every box glyph rendered as tofu (verified on
-     * hardware via screenshot). The in-tree extended font is always
-     * compiled, so use it directly instead of gating on config. */
-    return &lv_font_unscii_16;
+    /* Delegates to the font registry (Phase 1): `font set terminal <name>`
+     * takes effect through here. The registry default is the in-tree
+     * extended unscii_16, always compiled (see the stale-sdkconfig lesson
+     * in the original comment, kept in git history). */
+    return font_get(FONT_ROLE_TERMINAL);
+}
+
+const lv_font_t *windows_get_ui_font(void)
+{
+    return font_get(FONT_ROLE_UI);
+}
+
+/** Re-resolve owned widget fonts after a `font set/size` switch. Styles
+ * snapshot the chain pointer at creation, so without this everything
+ * created before the switch renders the orphaned copy. No-op before init.
+ * Takes the port lock (callers are the worker task). */
+void windows_refresh_fonts(void)
+{
+    const lv_font_t *term;
+    const lv_font_t *ui;
+
+    if (!s_windows.initialized) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    term = windows_get_terminal_font();
+    ui = windows_get_ui_font();
+    if (s_windows.transcript_spans != NULL) {
+        lv_obj_set_style_text_font(s_windows.transcript_spans, term, 0);
+    }
+    if (s_windows.input_line != NULL) {
+        lv_obj_set_style_text_font(s_windows.input_line, ui, 0);
+    }
+    if (s_windows.prev_label != NULL) {
+        lv_obj_set_style_text_font(s_windows.prev_label, ui, 0);
+    }
+    if (s_windows.next_label != NULL) {
+        lv_obj_set_style_text_font(s_windows.next_label, ui, 0);
+    }
+    if (s_windows.up_label != NULL) {
+        lv_obj_set_style_text_font(s_windows.up_label, ui, 0);
+    }
+    if (s_windows.down_label != NULL) {
+        lv_obj_set_style_text_font(s_windows.down_label, ui, 0);
+    }
+    if (s_windows.editor_status != NULL) {
+        lv_obj_set_style_text_font(s_windows.editor_status, term, 0);
+    }
+    lvgl_port_unlock();
 }
 
 /* ========================================================================
@@ -328,7 +377,6 @@ static void windows_create_transcript(void)
 
 static void windows_create_input_row(void)
 {
-    const lv_font_t *font = windows_get_terminal_font();
     lv_obj_t *screen = s_windows.screen;
     lv_coord_t row_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
                                                        P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN,
@@ -352,32 +400,39 @@ static void windows_create_input_row(void)
     lv_obj_set_size(s_windows.prev_button, 82, LV_PCT(100));
     lv_obj_t *prev_label = lv_label_create(s_windows.prev_button);
     lv_label_set_text(prev_label, "Prev");
+    lv_obj_set_style_text_font(prev_label, windows_get_ui_font(), 0);
     lv_obj_center(prev_label);
+    s_windows.prev_label = prev_label;
 
     /* Next history button */
     s_windows.next_button = lv_button_create(s_windows.input_row);
     lv_obj_set_size(s_windows.next_button, 82, LV_PCT(100));
     lv_obj_t *next_label = lv_label_create(s_windows.next_button);
     lv_label_set_text(next_label, "Next");
+    lv_obj_set_style_text_font(next_label, windows_get_ui_font(), 0);
     lv_obj_center(next_label);
+    s_windows.next_label = next_label;
 
-    /* Transcript scroll buttons. These are always visible (independent of the
-     * on-screen keyboard), so the transcript can be paged up and down from the
-     * touch interface. LV_SYMBOL_UP / LV_SYMBOL_DOWN are used when the default
-     * font has the glyphs; the labels are ASCII "Up"/"Dn" otherwise. */
+    /* Transcript scroll buttons. Always visible (independent of the
+     * on-screen keyboard) for touch paging. LV_SYMBOL_UP/DOWN resolve via
+     * the chained UI font's Montserrat fallback. */
     s_windows.scroll_up_button = lv_button_create(s_windows.input_row);
     lv_obj_set_size(s_windows.scroll_up_button,
                     P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
     lv_obj_t *up_label = lv_label_create(s_windows.scroll_up_button);
-    lv_label_set_text(up_label, "Up");
+    lv_label_set_text(up_label, LV_SYMBOL_UP);
+    lv_obj_set_style_text_font(up_label, windows_get_ui_font(), 0);
     lv_obj_center(up_label);
+    s_windows.up_label = up_label;
 
     s_windows.scroll_down_button = lv_button_create(s_windows.input_row);
     lv_obj_set_size(s_windows.scroll_down_button,
                     P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
     lv_obj_t *down_label = lv_label_create(s_windows.scroll_down_button);
-    lv_label_set_text(down_label, "Dn");
+    lv_label_set_text(down_label, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_font(down_label, windows_get_ui_font(), 0);
     lv_obj_center(down_label);
+    s_windows.down_label = down_label;
 
     /* Input line textarea */
     s_windows.input_line = lv_textarea_create(s_windows.input_row);
@@ -393,7 +448,68 @@ static void windows_create_input_row(void)
     lv_obj_set_style_pad_ver(s_windows.input_line, 10, 0);
     lv_obj_set_style_text_color(s_windows.input_line,
                                  windows_get_color(WINDOWS_COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_windows.input_line, font, 0);
+    /* Chained UI font (not pure terminal): typed symbols outside unscii's
+     * ranges still render via the fallback instead of tofu. */
+    lv_obj_set_style_text_font(s_windows.input_line, windows_get_ui_font(), 0);
+    /* Editor-like block cursor (see windows_input_cursor_style): full-cell
+     * rect via zero border/pad, filled with the text color; the glyph
+     * redraws in the input background color for contrast. */
+    windows_input_cursor_style(true);
+}
+
+/** Style the input-line cursor as a block (true, editor-like) or a thin
+ * bar (false). Takes the port lock; safe from any task. */
+void windows_input_cursor_style(bool block)
+{
+    lv_obj_t *input = s_windows.input_line;
+
+    if (input == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    if (block) {
+        lv_obj_set_style_border_width(input, 0, LV_PART_CURSOR);
+        lv_obj_set_style_pad_all(input, 0, LV_PART_CURSOR);
+        lv_obj_set_style_bg_color(input,
+                                  windows_get_color(WINDOWS_COLOR_TEXT),
+                                  LV_PART_CURSOR);
+        lv_obj_set_style_bg_opa(input, LV_OPA_COVER, LV_PART_CURSOR);
+        lv_obj_set_style_text_color(input,
+                                    windows_get_color(WINDOWS_COLOR_BG_TRANSCRIPT),
+                                    LV_PART_CURSOR);
+    } else {
+        lv_obj_set_style_border_width(input, 2, LV_PART_CURSOR);
+        lv_obj_set_style_border_side(input, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR);
+        lv_obj_set_style_border_color(input,
+                                      windows_get_color(WINDOWS_COLOR_TEXT),
+                                      LV_PART_CURSOR);
+        lv_obj_set_style_pad_all(input, 0, LV_PART_CURSOR);
+        lv_obj_set_style_bg_opa(input, LV_OPA_TRANSP, LV_PART_CURSOR);
+        lv_obj_set_style_text_color(input,
+                                    windows_get_color(WINDOWS_COLOR_TEXT),
+                                    LV_PART_CURSOR);
+    }
+    lv_obj_set_style_anim_duration(input, P4_CONFIG_CURSOR_BLINK_MS,
+                                   LV_PART_CURSOR);
+    lvgl_port_unlock();
+}
+
+/** Set the input-line cursor blink period live (0 = steady, no blink).
+ * Takes the port lock; safe from any task. No-op before the input exists. */
+void windows_input_cursor_blink(uint32_t blink_ms)
+{
+    lv_obj_t *input = s_windows.input_line;
+
+    if (input == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    lv_obj_set_style_anim_duration(input, blink_ms, LV_PART_CURSOR);
+    lvgl_port_unlock();
 }
 
 static void windows_create_keyboard(void)
@@ -951,6 +1067,9 @@ esp_err_t windows_init(void)
         return ESP_FAIL;
     }
 
+    /* Font registry first: every surface below resolves its role font here. */
+    font_init();
+
     /* Clean the screen and apply root layout */
     lv_obj_clean(screen);
     s_windows.screen = screen;
@@ -1033,9 +1152,13 @@ void windows_deinit(void)
     s_windows.input_row = NULL;
     s_windows.input_line = NULL;
     s_windows.prev_button = NULL;
+    s_windows.prev_label = NULL;
     s_windows.next_button = NULL;
+    s_windows.next_label = NULL;
     s_windows.scroll_up_button = NULL;
+    s_windows.up_label = NULL;
     s_windows.scroll_down_button = NULL;
+    s_windows.down_label = NULL;
     s_windows.initialized = false;
 
     /* Release the PSRAM staging buffers so a rebuild starts clean. They are

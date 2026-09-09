@@ -47,6 +47,10 @@ typedef enum {
 /** Initialize the header bar. Call once after LVGL is ready, before transcript. */
 void header_init(void);
 
+/** Re-resolve label fonts after a font switch (same stale-pointer reason as
+ * keyboard_refresh_fonts). No-op before header_init. */
+void header_refresh_fonts(void);
+
 /**
  * Show or hide the entire header bar. When hidden, the window manager reports
  * a zero-height header region so the transcript expands to fill the space.

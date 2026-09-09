@@ -5,6 +5,7 @@ idf_component_register(
         storage
         batch
         command
+        font
         display
         networking
         usb

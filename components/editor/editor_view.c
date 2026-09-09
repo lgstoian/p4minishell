@@ -482,6 +482,34 @@ static void editor_update_cursor(void)
     lv_obj_remove_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
 }
 
+/** Live-update the cursor blink period of an open editor (0 = steady:
+ * timer deleted, cursor forced visible). No-op unless open. */
+void editor_view_set_blink_ms(uint32_t blink_ms)
+{
+    if (!s_editor_view.open) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    if (blink_ms == 0) {
+        if (s_editor_view.cursor_timer != NULL) {
+            lv_timer_delete(s_editor_view.cursor_timer);
+            s_editor_view.cursor_timer = NULL;
+        }
+        s_editor_view.cursor_visible = true;
+        if (s_editor_view.cursor != NULL) {
+            lv_obj_remove_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else if (s_editor_view.cursor_timer != NULL) {
+        lv_timer_set_period(s_editor_view.cursor_timer, blink_ms);
+    } else {
+        s_editor_view.cursor_timer = lv_timer_create(editor_cursor_blink_cb,
+                                                     blink_ms, NULL);
+    }
+    lvgl_port_unlock();
+}
+
 /** Reposition the current-line highlight behind the cursor row. */
 static void editor_update_current_line(void)
 {
@@ -1468,9 +1496,14 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     lv_obj_set_size(s_editor_view.cursor, editor_cell_width(),
                     editor_line_height());
     s_editor_view.cursor_visible = true;
-    s_editor_view.cursor_timer = lv_timer_create(editor_cursor_blink_cb,
-                                                 P4_CONFIG_EDITOR_CURSOR_BLINK_MS,
-                                                 NULL);
+    /* Blink period 0 = steady cursor: no timer, stays visible. */
+    if (P4_CONFIG_CURSOR_BLINK_MS > 0) {
+        s_editor_view.cursor_timer = lv_timer_create(editor_cursor_blink_cb,
+                                                     P4_CONFIG_CURSOR_BLINK_MS,
+                                                     NULL);
+    } else {
+        s_editor_view.cursor_timer = NULL;
+    }
 
     /* Current-line highlight: a full-width bar behind the cursor row. It is
      * moved to the very back so the text, selection, and cursor draw above
@@ -1595,6 +1628,20 @@ void editor_view_close(void)
 bool editor_view_is_open(void)
 {
     return s_editor_view.open;
+}
+
+/** Rebuild open editor spans with current fonts after a font switch.
+ * No-op unless open. Takes the port lock (caller is the worker). */
+void editor_view_refresh_fonts(void)
+{
+    if (!s_editor_view.open) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    editor_rebuild();
+    lvgl_port_unlock();
 }
 
 void editor_view_notify_saved(bool ok)

@@ -33,6 +33,11 @@
 #include "header.h"
 #include "p4minishell_config.h"
 
+/* Chained UI font (windows component). Declared extern instead of including
+ * windows.h: windows already REQUIRES header, so a CMake edge back would be
+ * a dependency cycle (Phase 1 moves fonts into components/font/). */
+extern const lv_font_t *windows_get_ui_font(void);
+
 /* ---- Backward-compatibility aliases ---- */
 #define HEADER_NOTIFICATION_BYTES   P4_CONFIG_HEADER_NOTIFICATION_BYTES
 #define HEADER_TEXT_COLOR           P4_CONFIG_HEADER_TEXT_COLOR
@@ -187,7 +192,7 @@ static const char *header_battery_text_for_percent(int percent)
     if (percent >= 90) return "[####]";
     if (percent >= 65) return "[### ]";
     if (percent >= 40) return "[##  ]";
-    if (percent >= 15) return "[#   ]";
+    if (percent >= P4_CONFIG_HEADER_BAT_LOW_PCT) return "[#   ]";
     return "[    ]";
 }
 
@@ -364,7 +369,7 @@ static void header_render(void)
     if (s_header_state.battery_adc_ready) {
         lv_label_set_text(s_battery_icon_label,
                           header_battery_text_for_percent(s_header_state.battery_percent));
-        battery_color = s_header_state.battery_percent <= 15
+        battery_color = s_header_state.battery_percent <= P4_CONFIG_HEADER_BAT_LOW_PCT
                             ? lv_color_hex(HEADER_WARN_COLOR)
                             : lv_color_hex(HEADER_ACCENT_COLOR);
         lv_obj_set_style_text_color(s_battery_icon_label, battery_color, 0);
@@ -552,7 +557,9 @@ static void header_touch_event_cb(lv_event_t *event)
 void header_init(void)
 {
     lv_obj_t *screen = lv_screen_active();
-    const lv_font_t *status_font = LV_FONT_DEFAULT;
+    /* Chained UI font (terminal + icon fallback): status text and the
+     * battery/notify icons share one font. */
+    const lv_font_t *status_font = windows_get_ui_font();
     lv_coord_t vert_pad;
     lv_coord_t horz_pad;
     lv_coord_t panel_pad_v;
@@ -776,6 +783,51 @@ void header_init(void)
 
     /* Initial render */
     header_render();
+}
+
+/** Re-resolve label fonts after a `font set/size` switch. Styles snapshot
+ * the chain pointer at creation, so without this the header renders the
+ * orphaned copy until recreated. Port lock is recursive. */
+void header_refresh_fonts(void)
+{
+    int i;
+
+    if (s_header_root == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    {
+        const lv_font_t *font = windows_get_ui_font();
+        for (i = 0; i < HEADER_ICON_COUNT; i++) {
+            if (s_status_icons[i] != NULL) {
+                lv_obj_set_style_text_font(s_status_icons[i], font, 0);
+            }
+        }
+        if (s_notification_icon != NULL) {
+            lv_obj_set_style_text_font(s_notification_icon, font, 0);
+        }
+        if (s_notification_label != NULL) {
+            lv_obj_set_style_text_font(s_notification_label, font, 0);
+        }
+        if (s_mem_label != NULL) {
+            lv_obj_set_style_text_font(s_mem_label, font, 0);
+        }
+        if (s_cpu_label != NULL) {
+            lv_obj_set_style_text_font(s_cpu_label, font, 0);
+        }
+        if (s_cpu_value_label != NULL) {
+            lv_obj_set_style_text_font(s_cpu_value_label, font, 0);
+        }
+        if (s_battery_icon_label != NULL) {
+            lv_obj_set_style_text_font(s_battery_icon_label, font, 0);
+        }
+        if (s_battery_value_label != NULL) {
+            lv_obj_set_style_text_font(s_battery_value_label, font, 0);
+        }
+    }
+    lvgl_port_unlock();
 }
 
 void header_update_status(void)

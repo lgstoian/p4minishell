@@ -31,6 +31,14 @@ void editor_view_close(void);
 /** Whether the editor view is currently open. */
 bool editor_view_is_open(void);
 
+/** Live-update the cursor blink period of an open editor (0 = steady).
+ * No-op unless open. Takes the port lock. */
+void editor_view_set_blink_ms(uint32_t blink_ms);
+
+/** Rebuild open editor spans with current fonts after a font switch.
+ * No-op unless open (spans re-resolve per rebuild). */
+void editor_view_refresh_fonts(void);
+
 /**
  * Handle a USB key press routed to the editor. Runs on the LVGL task.
  * @return true when the key was consumed by the editor.

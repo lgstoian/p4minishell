@@ -30,6 +30,7 @@
 #include "storage.h"
 #include "batch.h"
 #include "command.h"
+#include "font.h"
 #include "display.h"
 #include "networking.h"
 #include "usb.h"
@@ -901,6 +902,14 @@ bool boot_ensure_default_files(void)
 void boot_on_sd_first_mount(void)
 {
     bool generated = boot_ensure_default_files();
+
+    /* The SD card is mounted here (unlike command_init time, when the mount
+     * is still lazy), so this is where the saved font choice restores. */
+    font_restore_saved();
+
+    /* Same moment: attach the CJK fallback tails (best-effort, silent when
+     * NotoSansSC is absent). */
+    font_attach_cjk();
 
     if (generated) {
         shell_transcript_appendf_ansi(SH_OK "SD card ready (first run)" SH_RST " - created "

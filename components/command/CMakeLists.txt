@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "command.c" "command_ui.c" "config_cmd.c" "db_commands.c" "alarm_commands.c" "gfind_commands.c" "audio_commands.c" "tui_commands.c" "periph_commands.c" "power_commands.c" "serial_commands.c"
+    SRCS "command.c" "command_ui.c" "config_cmd.c" "db_commands.c" "alarm_commands.c" "gfind_commands.c" "audio_commands.c" "tui_commands.c" "periph_commands.c" "power_commands.c" "serial_commands.c" "font_commands.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
@@ -10,6 +10,7 @@ idf_component_register(
         db
         display
         editor
+        font
         header
         keyboard
         storage

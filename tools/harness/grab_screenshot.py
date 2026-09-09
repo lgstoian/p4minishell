@@ -3,23 +3,27 @@ Grab screenshot from P4MiniShell via USB-Serial-JTAG.
 Protocol: 4-byte magic "BMPX" + 4-byte LE size + raw BMP data.
 Supports --port, --out, --crop-transcript for TUI debug.
 """
-import serial
 import time
 import os
 import struct
 import sys
 import argparse
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shell_session import open_port, default_port
+
 PORT = "COM11"
 BAUD_RATE = 115200
-OUTPUT_DIR = r"D:\p4minishell\screenshots"
+OUTPUT_DIR = os.path.join(os.getcwd(), "screenshots")
 TIMEOUT = 30
 
-def grab_screenshot(port=PORT, out_dir=OUTPUT_DIR, crop_transcript=False):
+def grab_screenshot(port=None, out_dir=None, crop_transcript=False):
+    port = port or default_port()
+    out_dir = out_dir or OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
 
     try:
-        ser = serial.Serial(port, BAUD_RATE, timeout=1)
+        ser = open_port(port, BAUD_RATE, timeout=1)
         print(f"Connected to {port}")
 
         # Wait for boot
@@ -99,7 +103,7 @@ def grab_screenshot(port=PORT, out_dir=OUTPUT_DIR, crop_transcript=False):
 
         # Save the file
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(OUTPUT_DIR, f"screenshot_{timestamp}.bmp")
+        filename = os.path.join(out_dir, f"screenshot_{timestamp}.bmp")
 
         with open(filename, 'wb') as f:
             f.write(bmp_data)
@@ -108,7 +112,7 @@ def grab_screenshot(port=PORT, out_dir=OUTPUT_DIR, crop_transcript=False):
         print(f"File size: {len(bmp_data)} bytes")
 
         # Also save as latest.bmp for easy access
-        latest = os.path.join(OUTPUT_DIR, "latest.bmp")
+        latest = os.path.join(out_dir, "latest.bmp")
         with open(latest, 'wb') as f:
             f.write(bmp_data)
         print(f"Also saved as: latest.bmp")
@@ -123,7 +127,7 @@ def grab_screenshot(port=PORT, out_dir=OUTPUT_DIR, crop_transcript=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Grab screenshot from P4MiniShell")
-    parser.add_argument("--port", default=PORT, help="Serial port (default COM11)")
+    parser.add_argument("--port", default=None, help="Serial port (argv COMx, P4_PORT env, else COM11)")
     parser.add_argument("--out", default=OUTPUT_DIR, help="Output directory")
     parser.add_argument("--crop-transcript", action="store_true", help="Crop to transcript ROI via Pillow")
     args = parser.parse_args()

@@ -2,18 +2,21 @@
 Get screenshot from P4MiniShell and save to project folder.
 Reads the BMP file from SD card via serial console.
 """
-import serial
 import time
 import os
 import struct
+import sys
 
-port = "COM11"
-OUTPUT_DIR = r"D:\p4minishell\screenshots"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shell_session import open_port, default_port
+
+port = default_port()
+OUTPUT_DIR = os.path.join(os.getcwd(), "screenshots")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def read_bmp_from_sd():
     """Read the BMP file from SD card using serial console."""
-    ser = serial.Serial(port, 115200, timeout=2)
+    ser = open_port(port, 115200, timeout=2)
     time.sleep(2)
     
     # Clear any pending data

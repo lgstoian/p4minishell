@@ -202,6 +202,23 @@ void shell_command_locate(int argc, char **argv);
 void shell_command_tui(int argc, char **argv);
 
 /* ========================================================================
+ * FONT VERBS (`font info|coverage|list|set|size`; TTF sizes in Phase 2)
+ * ======================================================================== */
+
+/**
+ * Font verbs, implemented in font_commands.c. `set` switches a role live
+ * (+/save to SHELL.INI). Each sets ERRORLEVEL per command.md.
+ */
+void shell_command_font(int argc, char **argv);
+
+/** Best-effort boot restore of the saved font choice (silent without SD).
+ * Called by boot_on_sd_first_mount(), where the mount is guaranteed. */
+void font_restore_saved(void);
+
+/** Theme stub (`theme show` prints the active table; switching later). */
+void shell_command_theme(int argc, char **argv);
+
+/* ========================================================================
  * POWER / DISPLAY / BATTERY (`brightness`, `rotate`, `battery`, `power`,
  * `sleep`, `deepsleep`)
  * ======================================================================== */

@@ -195,6 +195,24 @@ lv_obj_t *windows_get_screen(void);
 /** Get the terminal font selected for the shell UI. */
 const lv_font_t *windows_get_terminal_font(void);
 
+/** Get the chained UI font: terminal font primary, Montserrat 14 fallback
+ * for FontAwesome PUA icons (keyboard BACKSPACE/OK/arrows, header icons).
+ * Use for chrome (keyboard, header, buttons, input line); the transcript and
+ * TUI surfaces stay on the pure terminal font so cell metrics are exact.
+ * Both delegate to the components/font/ registry. */
+const lv_font_t *windows_get_ui_font(void);
+
+/** Re-resolve owned widget fonts after a font switch (see impl note). */
+void windows_refresh_fonts(void);
+
+/** Style the input-line cursor as a block (true, editor-like) or thin bar.
+ * No-op before the input row exists. Takes the port lock. */
+void windows_input_cursor_style(bool block);
+
+/** Set the input-line cursor blink period live (0 = steady, no blink).
+ * No-op before the input row exists. Takes the port lock. */
+void windows_input_cursor_blink(uint32_t blink_ms);
+
 /** Get a standard shell color by semantic name. */
 lv_color_t windows_get_color(const char *name);
 

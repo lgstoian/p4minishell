@@ -1,10 +1,12 @@
 """BSOD watcher: timestamped serial capture for 25 minutes."""
-import serial
 import time
+import sys
+import os
 
-s = serial.Serial("COM11", 115200, timeout=1)
-s.dtr = False
-s.rts = False
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from shell_session import open_port, default_port
+
+s = open_port(default_port(), 115200, timeout=1)
 t0 = time.time()
 with open("bsod_watch.log", "wb") as f:
     while time.time() - t0 < 25 * 60:

@@ -12,6 +12,21 @@ import time
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def worker_line(text, word):
+    """True only if the worker actually printed `word` as its own output
+    line. The submit-side echo (`PS \\> echo WORD`) contains the word too,
+    so substring matching false-passes on a wedged worker (or breaks a
+    barrier early on a slow one). One leading `PS ...>` prompt prefix is
+    stripped first: prompt-glue (trailing prompt + output on one serial
+    line, normal under load) must not false-negative."""
+    for ln in text.splitlines():
+        s = ANSI.sub("", ln).strip()
+        s = re.sub(r"^PS \S*> ", "", s).strip()
+        if s == word and ("echo %s" % word) not in ANSI.sub("", ln):
+            return True
+    return False
+
+
 def read_all(ser, seconds):
     end = time.time() + seconds
     out = []
@@ -35,12 +50,15 @@ def wait(ser, needle, timeout=8):
 
 
 def shell_up(ser):
-    """Wait until the shell responds with a settled prompt (not mid-boot)."""
+    """Wait until the shell responds with a settled prompt (not mid-boot).
+
+    Requires the worker's own `ready` output line, not the `echo ready`
+    input echo (which the console task prints even while wedged)."""
     stable = 0
     for _ in range(40):
         ser.write(b"echo ready\n")
         b = read_all(ser, 3.0)
-        if "ready" in b and "PS " in b and "> " in b:
+        if worker_line(b, "ready") and "PS " in b and "> " in b:
             stable += 1
             if stable >= 2:
                 return True
@@ -101,12 +119,17 @@ def main():
             data = ser.read(ser.in_waiting or 1)
             if data:
                 buf += data
-                if marker.encode() in buf:
+                # Break on the worker's marker OUTPUT line, not the
+                # submit-side `echo DONE-n` input echo: the echo is printed
+                # by the console task before the worker runs anything, so
+                # breaking on it truncates slow commands and misattributes
+                # their output to the next window.
+                if worker_line(buf.decode(errors="replace"), marker):
                     break
             else:
                 time.sleep(0.05)
         b = ANSI.sub("", buf.decode(errors="replace"))
-        ok = (expect in b) and (marker in b)
+        ok = (expect in b) and worker_line(b, marker)
         results.append((name, ok))
         print("%-44s %s" % (cmdline, "PASS" if ok else "FAIL(%s)" % expect))
         if not ok:

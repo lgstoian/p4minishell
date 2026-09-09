@@ -20,6 +20,7 @@ set(EXTRA_COMPONENT_DIRS
   components/db
   components/display
   components/editor
+  components/font
   components/header
   components/keyboard
   components/led

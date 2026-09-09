@@ -92,6 +92,19 @@ bool tui_init(void)
     return true;
 }
 
+/** Re-resolve the TUI label font after a `font set/size` switch. */
+void tui_refresh_fonts(void)
+{
+    if (!s_active || s_tui_label == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    lv_obj_set_style_text_font(s_tui_label, windows_get_terminal_font(), 0);
+    lvgl_port_unlock();
+}
+
 void tui_deinit(void)
 {
     if (!s_active) return;

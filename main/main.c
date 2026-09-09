@@ -362,7 +362,17 @@ static void shell_input_line_event_cb(lv_event_t *event)
             if (typed != NULL) {
                 shell_extract_input_text(typed, SHELL_COMMAND_BYTES);
                 if (typed[0] != '\0') {
-                    shell_key_wait_submit(typed[0]);
+                    /* First codepoint as one queue item (symbols answer
+                     * key waits unfragmented); raw first byte on invalid
+                     * bytes (legacy behavior). */
+                    uint32_t cp;
+                    size_t seq_len;
+
+                    if (shell_utf8_decode(typed, strlen(typed), &cp, &seq_len)) {
+                        shell_key_wait_submit_utf8(typed, seq_len);
+                    } else {
+                        shell_key_wait_submit(typed[0]);
+                    }
                 }
                 free(typed);
             }
@@ -465,8 +475,18 @@ static void shell_osk_into_input(const char *txt)
     } else if (strcmp(txt, LV_SYMBOL_CLOSE) == 0 ||
                strcmp(txt, LV_SYMBOL_KEYBOARD) == 0) {
         keyboard_hide();
-    } else if (txt[0] != '\0' && txt[1] == '\0') {
-        lv_textarea_add_char(input_line, (uint32_t)(uint8_t)txt[0]);
+    } else {
+        /* Any single-codepoint label is typed as-is (UTF-8 symbols included:
+         * decode the first codepoint and require it to span the whole label
+         * so multi-character action labels like "Tab" never leak a letter).
+         * The input line renders them via the chained UI font. */
+        uint32_t cp;
+        size_t seq_len;
+
+        if (shell_utf8_decode(txt, strlen(txt), &cp, &seq_len) &&
+            txt[seq_len] == '\0') {
+            lv_textarea_add_char(input_line, cp);
+        }
     }
 }
 

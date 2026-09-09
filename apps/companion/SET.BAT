@@ -12,9 +12,10 @@ draw box 1 1 80 3 single
 draw text 35 2 "SETTINGS" 14
 draw box 1 4 80 10 single "Options"
 draw text 5 6 "Brightness, volume, config, scoping"
-list "Settings" "Set brightness" "Set volume" "Show settings" "Scoping demo" "View config" "TUI Demo" "Reset" "Back"
+list "Settings" "Set brightness" "Set volume" "Show settings" "Scoping demo" "View config" "TUI Demo" "Reset" "Fonts" "Back"
 if errorlevel 255 goto :back
-if errorlevel 7 goto :back
+if errorlevel 8 goto :back
+if errorlevel 7 goto :fonts
 if errorlevel 6 goto :reset
 if errorlevel 5 goto :tui_demo
 if errorlevel 4 goto :view_cfg
@@ -109,6 +110,76 @@ appconfig companion del brightness
 appconfig companion del volume
 dialog "Reset" "Cleared saved settings." "OK"
 goto main
+
+:fonts
+echo [M-SET-FONT]
+draw clear screen
+draw box 1 1 80 3 single
+draw text 36 2 "FONTS" 14
+draw text 5 5 "Terminal is monospace-only; UI takes any font."
+list "Fonts" "Terminal font" "UI font" "Terminal size" "UI size" "Show fonts" "Defaults" "Back"
+if errorlevel 255 goto main
+if errorlevel 6 goto main
+if errorlevel 5 goto fonts_default
+if errorlevel 4 goto fonts_show
+if errorlevel 3 goto fonts_uisize
+if errorlevel 2 goto fonts_tsize
+if errorlevel 1 goto fonts_ui
+goto fonts_term
+
+:fonts_term
+list "Terminal font" "unscii_16" "DejaVuSansMono" "Back"
+if errorlevel 255 goto fonts
+if errorlevel 2 goto fonts
+if errorlevel 1 font set terminal DejaVuSansMono /save & goto fonts_saved
+font set terminal unscii_16 /save
+goto fonts_saved
+
+:fonts_ui
+list "UI font" "unscii_16" "montserrat_14" "DejaVuSansMono" "NotoSans-Regular" "Back"
+if errorlevel 255 goto fonts
+if errorlevel 4 goto fonts
+if errorlevel 3 font set ui NotoSans-Regular /save & goto fonts_saved
+if errorlevel 2 font set ui DejaVuSansMono /save & goto fonts_saved
+if errorlevel 1 font set ui montserrat_14 /save & goto fonts_saved
+font set ui unscii_16 /save
+goto fonts_saved
+
+:fonts_saved
+if errorlevel 1 dialog "Fonts" "Refused (unknown, not monospace, or 80x25 clamp)." "OK" & goto fonts
+echo [M-SET-FONT-SAVED]
+dialog "Fonts" "Saved." "OK"
+goto fonts
+
+:fonts_tsize
+ask /v:val "Terminal size px (10-20)"
+if errorlevel 1 goto fonts
+if "%val%"=="" goto fonts
+font size terminal %val% /save
+if errorlevel 1 dialog "Fonts" "Refused (range, bitmap, or 80x25 clamp)." "OK" & goto fonts
+dialog "Fonts" "Saved terminal size=%val%." "OK"
+goto fonts
+
+:fonts_uisize
+ask /v:val "UI size px (10-28)"
+if errorlevel 1 goto fonts
+if "%val%"=="" goto fonts
+font size ui %val% /save
+if errorlevel 1 dialog "Fonts" "Refused (range or bitmap)." "OK" & goto fonts
+dialog "Fonts" "Saved UI size=%val%." "OK"
+goto fonts
+
+:fonts_show
+font list > _font.txt
+view _font.txt
+del /p _font.txt
+goto fonts
+
+:fonts_default
+font set terminal unscii_16 /save
+font set ui unscii_16 /save
+dialog "Fonts" "Back to defaults." "OK"
+goto fonts
 
 :back
 echo [M-SET-BACK]

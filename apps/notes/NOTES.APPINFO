@@ -1,0 +1,4 @@
+; APPINFO metadata for the Zettelkasten notes app (INI format, read by `launch`).
+; Copied to sd:/APPS/NOTES.APPINFO by apps/push_apps.py.
+title=Zettelkasten Notes
+description=Linked notes on the db record store: categories, search, export/import

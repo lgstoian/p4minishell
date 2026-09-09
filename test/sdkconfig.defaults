@@ -78,3 +78,9 @@ CONFIG_LV_USE_SPAN=y
 # (see sdkconfig.defaults in the firmware root), so the test project must
 # compile it in too or the link fails on windows_get_terminal_font.
 CONFIG_LV_FONT_UNSCII_16=y
+
+# Phase-3 SD fonts (mirrors firmware sdkconfig.defaults): tiny_ttf file
+# support for components/font. The test build never loads TTFs, but the
+# prototypes must be visible.
+CONFIG_LV_USE_TINY_TTF=y
+CONFIG_LV_TINY_TTF_FILE_SUPPORT=y

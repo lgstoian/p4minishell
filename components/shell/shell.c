@@ -59,6 +59,8 @@
 #define SHELL_WIFI_PASSWORD_BYTES       P4_CONFIG_WIFI_PASSWORD_BYTES
 #define SHELL_UART_CONSOLE_TASK_STACK_BYTES P4_CONFIG_UART_CONSOLE_TASK_STACK
 #define SHELL_KEY_QUEUE_DEPTH           P4_CONFIG_KEY_QUEUE_DEPTH
+/** Queue item: one key as a NUL-terminated UTF-8 sequence (4 bytes max). */
+#define SHELL_KEY_SEQ_BYTES             5
 #define SHELL_PROMPT_TEMPLATE_BYTES     P4_CONFIG_PROMPT_TEMPLATE_BYTES
 #define SHELL_PROMPT_RENDER_BYTES       (P4_CONFIG_PROMPT_TEMPLATE_BYTES + P4_CONFIG_PS_PATH_MAX_DISPLAY + 64)
 
@@ -116,6 +118,50 @@ static char *s_transcript = NULL;
  * spans so on-screen colours match the UART console, while history/
  * redirection keep using the plain form. */
 static char *s_transcript_ansi = NULL;
+
+/* Deferred label repaint batching (see shell_transcript_defer_begin()).
+ * Repainting the LVGL span group costs O(buffer): each repaint re-parses the
+ * whole ANSI scrollback and rebuilds every span, so per-line repaints make
+ * big listings crawl (~1 KB/s at a full 64 KB buffer, measured). While the
+ * depth is nonzero, appends mark the label dirty instead of repainting; the
+ * serial mirror and the buffers stay live on every line. A time rule keeps
+ * slow-printing commands (ping, progress) live on screen. Read/written from
+ * the worker (segment begin/end) and the LVGL task (async flush); worst case
+ * of a race is one redundant or skipped coalesced repaint, never corruption
+ * (buffers are authoritative, the label is derived). */
+static int s_transcript_defer_depth;
+static bool s_transcript_defer_dirty;
+static int64_t s_transcript_last_flush_us;
+/* Async drain bypass: background tasks (Wi-Fi, OTA progress) drain through
+ * the same append entry points but must stay live even mid-command, so the
+ * flush callback sets this around its appends and the deferral stands down.
+ * Cross-task worst case is cosmetic (one coalesced repaint). */
+static bool s_transcript_defer_bypass;
+/* Guards the plain/ANSI scrollback buffers (NOT the LVGL widgets: those stay
+ * under the LVGL port lock). Lets worker appends proceed without serializing
+ * behind LVGL render passes, which hold the port lock O(buffer) at a full
+ * scrollback. Strict order everywhere: LVGL port lock outer, buffer lock
+ * inner; buffer-only paths never take the port lock. Recursive. */
+static SemaphoreHandle_t s_transcript_buf_lock = NULL;
+
+static bool shell_transcript_buf_lock(void)
+{
+    if (s_transcript_buf_lock == NULL) {
+        s_transcript_buf_lock = xSemaphoreCreateRecursiveMutex();
+    }
+    if (s_transcript_buf_lock == NULL) {
+        return false;
+    }
+    xSemaphoreTakeRecursive(s_transcript_buf_lock, portMAX_DELAY);
+    return true;
+}
+
+static void shell_transcript_buf_unlock(void)
+{
+    if (s_transcript_buf_lock != NULL) {
+        xSemaphoreGiveRecursive(s_transcript_buf_lock);
+    }
+}
 
 /* RAM clipboard backing the `clip` / `paste` commands. */
 static char *s_clipboard = NULL;
@@ -380,6 +426,73 @@ static void shell_transcript_update_label(void)
     windows_set_transcript_text(s_transcript_ansi);
 }
 
+void shell_transcript_defer_begin(void)
+{
+    s_transcript_defer_depth++;
+}
+
+void shell_transcript_flush_now(void)
+{
+    if (!s_transcript_defer_dirty) {
+        return;
+    }
+    s_transcript_defer_dirty = false;
+    s_transcript_last_flush_us = esp_timer_get_time();
+    /* update_label() requires the port lock; none of the explicit flush
+     * points (segment end, key waits, screenshots) holds it, and the mutex
+     * is recursive so the time-rule path (already locked) nests safely.
+     * Strict order PORT outer, buffer inner: the staging read below races
+     * worker appends otherwise. */
+    if (windows_get_transcript() != NULL) {
+        lvgl_port_lock(0);
+        shell_transcript_buf_lock();
+        shell_transcript_update_label();
+        shell_transcript_buf_unlock();
+        lvgl_port_unlock();
+    }
+}
+
+void shell_transcript_defer_end(void)
+{
+    if (s_transcript_defer_depth > 0) {
+        s_transcript_defer_depth--;
+    }
+    if (s_transcript_defer_depth == 0) {
+        shell_transcript_flush_now();
+    }
+}
+
+/**
+ * Label-update entry point for transcript appends. Outside a deferral window
+ * this repaints immediately (historical behavior); inside one it marks the
+ * label dirty and repaints at most every P4_CONFIG_TRANSCRIPT_FLUSH_MS, so a
+ * burst of lines costs O(1) span rebuilds instead of O(lines) while staying
+ * live for slow printers. Takes both locks itself (PORT outer, buffer inner:
+ * the staging read races worker appends otherwise); append paths hold none.
+ */
+static void shell_transcript_maybe_update_label(void)
+{
+    bool immediate = (s_transcript_defer_depth == 0 || s_transcript_defer_bypass);
+
+    if (!immediate) {
+        s_transcript_defer_dirty = true;
+        if (esp_timer_get_time() - s_transcript_last_flush_us <
+            (int64_t)P4_CONFIG_TRANSCRIPT_FLUSH_MS * 1000) {
+            return;
+        }
+        /* Time rule fired: repaint below; dirty stays set so the segment end
+         * still reconciles anything appended after this repaint. */
+    }
+    if (windows_get_transcript() != NULL) {
+        lvgl_port_lock(0);
+        shell_transcript_buf_lock();
+        shell_transcript_update_label();
+        shell_transcript_buf_unlock();
+        lvgl_port_unlock();
+    }
+    s_transcript_last_flush_us = esp_timer_get_time();
+}
+
 /**
  * Append text to the transcript buffer and repaint the LVGL label.
  *
@@ -391,7 +504,6 @@ static void shell_transcript_update_label(void)
 static void shell_transcript_append_internal(const char *text, bool mirror_to_uart)
 {
     static const char truncation_marker[] = "\n[history truncated]\n";
-    lv_obj_t *transcript;
 
     if (text == NULL || text[0] == '\0') {
         return;
@@ -402,40 +514,30 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
      * when the internal heap drops below the threshold (rate-limited, keeps
      * the newest three quarters), so a tiny stdio allocation never aborts
      * the board while output is still being emitted. Cheap when memory is
-     * fine (a single free-size query plus a timestamp check). */
+     * fine (a single free-size query plus a timestamp check). Takes its own
+     * locks (LVGL port outer, transcript buffer inner). */
     shell_transcript_guard_internal();
 
-    transcript = windows_get_transcript();
-
-    /* Once the UI is up, the transcript is LVGL-backed state. Serialize every
-     * appender (the LVGL task, UART console task, Wi-Fi background task, and
-     * command worker) against the render cycle with the recursive LVGL port
-     * lock, so the shared buffers and the label are never touched while the
-     * LVGL task is mid-render. The mutex is recursive, so call paths that
-     * already hold it (LVGL event callbacks, shell_uart_console_submit_command)
-     * nest without deadlock. */
-    if (transcript != NULL) {
-        lvgl_port_lock(0);
-    }
-
-    /* Append to both the plain transcript (history/redirection) and the ANSI
-     * transcript (on-screen label rendering). Plain input is identical in both
-     * forms. */
+    /* Serialize buffer appends (worker, LVGL task via the async drain,
+     * console task) against each other with the lightweight buffer mutex —
+     * deliberately NOT the LVGL port lock, which the render task can hold
+     * O(buffer) per frame at a full scrollback. Widget/label work happens
+     * below in the deferred label step, which takes the port lock itself. */
+    shell_transcript_buf_lock();
     shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
                                       s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
                                       text, text, truncation_marker);
+    shell_transcript_buf_unlock();
 
     /* Mirror plain transcript output to the serial console so idf.py monitor
-     * stays a first-class shell endpoint. */
+     * stays a first-class shell endpoint. Outside both locks: UART has its
+     * own lock, and pacing serial bytes on LVGL work is exactly the stall
+     * this discipline removes. */
     if (mirror_to_uart) {
         shell_uart_console_write_text(text);
     }
 
-    shell_transcript_update_label();
-
-    if (transcript != NULL) {
-        lvgl_port_unlock();
-    }
+    shell_transcript_maybe_update_label();
 
     /* Update anchor position tracking for click regions */
     extern void shell_transcript_update_anchor_position(const char *text);
@@ -476,7 +578,6 @@ void shell_transcript_appendf(const char *format, ...)
 void shell_transcript_append_ansi(const char *text)
 {
     char plain[P4_CONFIG_ANSI_BUFFER_BYTES];
-    lv_obj_t *transcript;
 
     if (text == NULL) {
         return;
@@ -488,20 +589,16 @@ void shell_transcript_append_ansi(const char *text)
      * while s_transcript_ansi keeps the real escape sequences for the label. */
     ansi_strip_to_plain(plain, sizeof(plain), text);
 
-    transcript = windows_get_transcript();
-    if (transcript != NULL) {
-        lvgl_port_lock(0);
-    }
-
+    /* Buffer appends serialize on the lightweight buffer mutex (see
+     * shell_transcript_append_internal); the label step takes the LVGL port
+     * lock itself only when it actually repaints. */
+    shell_transcript_buf_lock();
     shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
                                       s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
                                       plain, text, "\n[history truncated]\n");
+    shell_transcript_buf_unlock();
 
-    shell_transcript_update_label();
-
-    if (transcript != NULL) {
-        lvgl_port_unlock();
-    }
+    shell_transcript_maybe_update_label();
 
     /* Write the raw ANSI text to the UART console for
      * terminals that support ANSI rendering. */
@@ -814,11 +911,15 @@ static void shell_async_transcript_flush_cb(void *user_data)
     s_async_transcript_flush_queued = false;
     portEXIT_CRITICAL(&s_async_transcript_lock);
 
+    /* Background output stays live even while a worker command defers its
+     * own repaints (OTA progress, Wi-Fi events). */
+    s_transcript_defer_bypass = true;
     if (ansi_contains_escapes(pending)) {
         shell_transcript_append_ansi(pending);
     } else {
         shell_transcript_append_text(pending);
     }
+    s_transcript_defer_bypass = false;
     free(pending);
     shell_history_transcript_scroll_to_end();
 
@@ -849,11 +950,18 @@ void shell_transcript_reset(void)
 {
     lv_obj_t *transcript = windows_get_transcript();
 
-    s_transcript[0] = '\0';
-    s_transcript_ansi[0] = '\0';
-
+    /* Lock order PORT outer, buffer inner (strict everywhere). */
     if (transcript != NULL) {
         lvgl_port_lock(0);
+    }
+    shell_transcript_buf_lock();
+    s_transcript[0] = '\0';
+    s_transcript_ansi[0] = '\0';
+    /* Content was replaced, not appended: no pending repaint can be valid. */
+    s_transcript_defer_dirty = false;
+    shell_transcript_buf_unlock();
+
+    if (transcript != NULL) {
         windows_set_transcript_text("");
         lvgl_port_unlock();
     }
@@ -910,6 +1018,14 @@ void shell_transcript_guard_internal(void)
     }
     s_transcript_last_trim_us = now_us;
 
+    /* Lock order is LVGL-port outer, buffer inner (strict everywhere: flush,
+     * reset, and this guard). The widget tail below needs the port lock;
+     * buffer surgery needs the buffer lock. Callers hold no locks. */
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    shell_transcript_buf_lock();
+
     plain_len = strlen(s_transcript);
     ansi_len = strlen(s_transcript_ansi);
 
@@ -946,11 +1062,10 @@ void shell_transcript_guard_internal(void)
      * trimming spans. Otherwise windows_transcript_trim() works on stale
      * content, and the subsequent shell_transcript_update_label() overwrites
      * it again, causing a full span rebuild (blue flash). */
-    if (lvgl_port_lock(0)) {
-        windows_set_transcript_text(s_transcript_ansi);
-        windows_transcript_trim();
-        lvgl_port_unlock();
-    }
+    windows_set_transcript_text(s_transcript_ansi);
+    windows_transcript_trim();
+    shell_transcript_buf_unlock();
+    lvgl_port_unlock();
 
     s_transcript_trim_count++;
     ESP_LOGW(SHELL_TAG, "Transcript trimmed under memory pressure "
@@ -1020,17 +1135,23 @@ static bool s_app_mode_full_screen = false;
  *  buffer. Returns NULL when the transcript is empty or on allocation failure. */
 char *shell_screen_save(void)
 {
-    size_t length = shell_transcript_get_ansi_length();
+    size_t length;
     char *copy;
 
+    /* Snapshot atomically: an async append mid-copy would tear the text. */
+    shell_transcript_buf_lock();
+    length = shell_transcript_get_ansi_length();
     if (length == 0) {
+        shell_transcript_buf_unlock();
         return NULL;
     }
     copy = malloc(length + 1);
     if (copy == NULL) {
+        shell_transcript_buf_unlock();
         return NULL;
     }
     memcpy(copy, shell_transcript_get_ansi_from(0), length + 1);
+    shell_transcript_buf_unlock();
     return copy;
 }
 
@@ -1976,16 +2097,127 @@ bool shell_key_wait_is_active(void)
     return s_key_wait_active;
 }
 
+bool shell_utf8_decode(const char *s, size_t avail, uint32_t *cp_out, size_t *len_out)
+{
+    unsigned char lead;
+    size_t len;
+    uint32_t cp;
+    size_t i;
+
+    if (s == NULL || avail == 0 || s[0] == '\0') {
+        return false;
+    }
+    lead = (unsigned char)s[0];
+    if (lead < 0x80) {
+        len = 1;
+        cp = lead;
+    } else if ((lead & 0xE0) == 0xC0) {
+        len = 2;
+        cp = lead & 0x1F;
+    } else if ((lead & 0xF0) == 0xE0) {
+        len = 3;
+        cp = lead & 0x0F;
+    } else if ((lead & 0xF8) == 0xF0) {
+        len = 4;
+        cp = lead & 0x07;
+    } else {
+        return false;
+    }
+    if (len > avail) {
+        return false;
+    }
+    for (i = 1; i < len; i++) {
+        unsigned char cont = (unsigned char)s[i];
+        if ((cont & 0xC0) != 0x80) {
+            return false;
+        }
+        cp = (cp << 6) | (cont & 0x3F);
+    }
+    /* Reject overlongs and out-of-range values. */
+    if ((len == 2 && cp < 0x80) || (len == 3 && cp < 0x800) ||
+        (len == 4 && cp < 0x10000) || cp > 0x10FFFF ||
+        (cp >= 0xD800 && cp <= 0xDFFF)) {
+        return false;
+    }
+    if (cp_out != NULL) {
+        *cp_out = cp;
+    }
+    if (len_out != NULL) {
+        *len_out = len;
+    }
+    return true;
+}
+
 bool shell_key_wait_submit(char key)
 {
+    char seq[SHELL_KEY_SEQ_BYTES];
+
     if (!s_key_wait_active || s_key_queue == NULL) {
         return false;
     }
 
+    seq[0] = key;
+    seq[1] = '\0';
+
     /* Never block an input-source task on a full queue; a wait only ever
      * consumes one key, so dropping the overflow is the correct behavior. */
-    if (xQueueSend(s_key_queue, &key, 0) != pdTRUE) {
+    if (xQueueSend(s_key_queue, &seq, 0) != pdTRUE) {
         return true;
+    }
+
+    return true;
+}
+
+bool shell_key_wait_submit_utf8(const char *bytes, size_t len)
+{
+    char seq[SHELL_KEY_SEQ_BYTES];
+    uint32_t cp;
+    size_t seq_len;
+
+    if (!s_key_wait_active || s_key_queue == NULL) {
+        return false;
+    }
+    if (!shell_utf8_decode(bytes, len, &cp, &seq_len) || seq_len >= SHELL_KEY_SEQ_BYTES) {
+        return false;
+    }
+    memcpy(seq, bytes, seq_len);
+    seq[seq_len] = '\0';
+
+    if (xQueueSend(s_key_queue, &seq, 0) != pdTRUE) {
+        return true;
+    }
+
+    return true;
+}
+
+bool shell_wait_for_key_utf8(uint32_t timeout_ms, char *buf, size_t buf_size)
+{
+    char seq[SHELL_KEY_SEQ_BYTES];
+
+    if (buf != NULL && buf_size > 0) {
+        buf[0] = '\0';
+    }
+
+    if (s_key_queue == NULL || !s_key_wait_active) {
+        return false;
+    }
+
+    /* A key wait always presents a prompt first (pause/choice/more/pagers);
+     * repaint any deferred output so the user never answers a stale screen. */
+    shell_transcript_flush_now();
+
+    if (xQueueReceive(s_key_queue, &seq, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return false;
+    }
+    seq[SHELL_KEY_SEQ_BYTES - 1] = '\0';
+
+    if (buf != NULL && buf_size > 0) {
+        size_t copy = strlen(seq);
+        if (copy > buf_size - 1) {
+            copy = buf_size - 1;
+        }
+        memcpy(buf, seq, copy);
+        buf[copy] = '\0';
     }
 
     return true;
@@ -1993,7 +2225,7 @@ bool shell_key_wait_submit(char key)
 
 bool shell_wait_for_key(uint32_t timeout_ms, char *key_out)
 {
-    char key = '\0';
+    char seq[SHELL_KEY_SEQ_BYTES];
 
     if (key_out != NULL) {
         *key_out = '\0';
@@ -2003,12 +2235,19 @@ bool shell_wait_for_key(uint32_t timeout_ms, char *key_out)
         return false;
     }
 
-    if (xQueueReceive(s_key_queue, &key, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+    /* A key wait always presents a prompt first (pause/choice/more/pagers);
+     * repaint any deferred output so the user never answers a stale screen. */
+    shell_transcript_flush_now();
+
+    if (xQueueReceive(s_key_queue, &seq, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
         return false;
     }
+    seq[SHELL_KEY_SEQ_BYTES - 1] = '\0';
 
+    /* ASCII fast path: multibyte keys yield their lead byte, which never
+     * equals ASCII, so y/n/ESC compares stay correct. */
     if (key_out != NULL) {
-        *key_out = key;
+        *key_out = seq[0];
     }
 
     return true;
@@ -2044,11 +2283,15 @@ static bool shell_read_line_mode(char *output, size_t output_size,
     shell_key_wait_begin();
 
     while (true) {
-        char key = '\0';
+        /* One key as a UTF-8 sequence (ASCII keys are 1 byte + NUL, so the
+         * legacy single-char logic below is unchanged for them). */
+        char seq[SHELL_KEY_SEQ_BYTES];
+        char key;
 
-        if (!shell_wait_for_key(timeout_ms, &key)) {
+        if (!shell_wait_for_key_utf8(timeout_ms, seq, sizeof(seq))) {
             break;
         }
+        key = seq[0];
 
         if (key == '\r' || key == '\n') {
             completed = true;
@@ -2064,7 +2307,11 @@ static bool shell_read_line_mode(char *output, size_t output_size,
 
         if (key == '\b' || key == 0x7F) {
             if (length > 0) {
-                output[--length] = '\0';
+                /* Erase one full codepoint: walk back over continuation
+                 * bytes so a multibyte character never tears. */
+                do {
+                    output[--length] = '\0';
+                } while (length > 0 && ((unsigned char)output[length - 1] & 0xC0) == 0x80);
                 /* Echo the erase so the transcript matches what is stored. */
                 if (echo) {
                     shell_transcript_append_text("\b");
@@ -2078,19 +2325,18 @@ static bool shell_read_line_mode(char *output, size_t output_size,
             continue;
         }
 
-        if (length + 1 >= output_size) {
+        if (length + strlen(seq) + 1 >= output_size) {
             continue;
         }
 
-        output[length++] = key;
+        memcpy(output + length, seq, strlen(seq));
+        length += strlen(seq);
         output[length] = '\0';
 
         /* Echo as typed so the user can see what they are entering, unless
          * the caller requested hidden (password) input. */
         if (echo) {
-            char echo_char[2] = {key, '\0'};
-
-            shell_transcript_append_text(echo_char);
+            shell_transcript_append_text(seq);
         }
     }
 
@@ -2385,19 +2631,48 @@ static void shell_uart_console_task(void *arg)
             size_t chunk_start = length - got;
             size_t forwarded = 0;
 
+            /* Forward whole UTF-8 codepoints (not bytes): a multibyte key
+             * is one queue item, so key waits never see fragments. ASCII
+             * keeps the single-char fast path. */
+            bool truncated = false;
             for (key_index = chunk_start;
                  key_index < length && forwarded < (size_t)P4_CONFIG_KEY_QUEUE_DEPTH;
-                 key_index++) {
-                char key = line[key_index];
+                 ) {
+                uint32_t cp;
+                size_t seq_len;
 
-                if (key == '\n' || key == '\0') {
-                    key = '\r';
+                if (line[key_index] == '\n' || line[key_index] == '\0') {
+                    shell_key_wait_submit('\r');
+                    key_index++;
+                    forwarded++;
+                    continue;
                 }
-                shell_key_wait_submit(key);
+                if (!shell_utf8_decode(line + key_index, length - key_index,
+                                       &cp, &seq_len)) {
+                    /* Truncated tail (split USB-Serial-JTAG chunk): keep the
+                     * partial bytes at the front so the next read completes
+                     * the codepoint instead of dropping it. */
+                    truncated = true;
+                    break;
+                }
+                (void)cp;
+                if (seq_len == 1) {
+                    shell_key_wait_submit(line[key_index]);
+                } else {
+                    shell_key_wait_submit_utf8(line + key_index, seq_len);
+                }
+                key_index += seq_len;
                 forwarded++;
             }
+            if (truncated) {
+                size_t leftover = length - key_index;
+                memmove(line, line + key_index, leftover);
+                length = leftover;
+            } else {
+                /* Fully consumed (or dropped on the depth cap, as before). */
+                length = 0;
+            }
             prompt_visible = false;
-            length = 0;
             continue;
         }
 
@@ -2829,6 +3104,105 @@ static void shell_tab_complete(void)
     free(rebuilt);
 }
 
+/* USB HID Ctrl modifier bits (HID standard; see components/usb/usb.h
+ * USB_KEY_MOD_*. shell cannot include usb.h (usb already requires shell),
+ * so the two stable bit values are mirrored here). */
+#define SHELL_USB_MOD_LEFT_CTRL   0x01
+#define SHELL_USB_MOD_RIGHT_CTRL  0x10
+
+/** Move the input-line cursor one word in @p dir (-1 left, +1 right),
+ * emacs-style: skip spaces, then skip a word run. Walks codepoints (not
+ * bytes) so multibyte text never tears. Positions are letter indices. */
+static void shell_input_cursor_word(lv_obj_t *input_line, int dir)
+{
+    const char *text;
+    /* Offset table is heap-allocated: this runs on the LVGL task, whose
+     * stack is far smaller than a command-sized local. */
+    uint32_t *offs = NULL;
+    uint32_t letters = 0;
+    uint32_t pos;
+    uint32_t target;
+
+    if (input_line == NULL || (dir != -1 && dir != +1)) {
+        return;
+    }
+    text = lv_textarea_get_text(input_line);
+    if (text == NULL) {
+        return;
+    }
+    pos = lv_textarea_get_cursor_pos(input_line);
+
+    /* Pass 1: map every letter index to its byte offset. */
+    {
+        uint32_t count = 0;
+        uint32_t b = 0;
+        uint32_t cp;
+        size_t len;
+        while (text[b] != '\0') {
+            if (!shell_utf8_decode(text + b, strlen(text + b), &cp, &len)) {
+                len = 1;
+            }
+            count++;
+            b += (uint32_t)len;
+        }
+        offs = malloc((count + 1) * sizeof(uint32_t));
+        if (offs == NULL) {
+            return;
+        }
+        letters = count;
+        b = 0;
+        for (count = 0; count < letters; count++) {
+            uint32_t cp;
+            size_t len;
+            offs[count] = b;
+            if (!shell_utf8_decode(text + b, strlen(text + b), &cp, &len)) {
+                len = 1;
+            }
+            b += (uint32_t)len;
+        }
+        offs[letters] = b;
+    }
+    if (pos > letters) {
+        pos = letters;
+    }
+    target = pos;
+
+    /* A word character is anything but ASCII space/tab. */
+    if (dir < 0) {
+        while (target > 0) {
+            uint32_t cp = (unsigned char)text[offs[target - 1]];
+            if (cp != ' ' && cp != '\t') {
+                break;
+            }
+            target--;
+        }
+        while (target > 0) {
+            uint32_t cp = (unsigned char)text[offs[target - 1]];
+            if (cp == ' ' || cp == '\t') {
+                break;
+            }
+            target--;
+        }
+    } else {
+        while (target < letters) {
+            uint32_t cp = (unsigned char)text[offs[target]];
+            if (cp != ' ' && cp != '\t') {
+                break;
+            }
+            target++;
+        }
+        while (target < letters) {
+            uint32_t cp = (unsigned char)text[offs[target]];
+            if (cp == ' ' || cp == '\t') {
+                break;
+            }
+            target++;
+        }
+    }
+    free(offs);
+    lv_textarea_set_cursor_pos(input_line, (int32_t)target);
+}
+
 static void shell_usb_keyboard_inject_cb(void *user_data)
 {
     usb_key_inject_ctx_t *ctx = (usb_key_inject_ctx_t *)user_data;
@@ -2883,11 +3257,19 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
         } else {
             /* Non-printable key: handle navigation and editing */
             switch (ctx->key_code) {
-            case 0x4F: /* Right arrow: move cursor right */
-                lv_textarea_cursor_right(input_line);
+            case 0x4F: /* Right arrow: move cursor right (Ctrl: word jump) */
+                if ((ctx->modifiers & (SHELL_USB_MOD_LEFT_CTRL | SHELL_USB_MOD_RIGHT_CTRL)) != 0) {
+                    shell_input_cursor_word(input_line, +1);
+                } else {
+                    lv_textarea_cursor_right(input_line);
+                }
                 break;
-            case 0x50: /* Left arrow: move cursor left */
-                lv_textarea_cursor_left(input_line);
+            case 0x50: /* Left arrow: move cursor left (Ctrl: word jump) */
+                if ((ctx->modifiers & (SHELL_USB_MOD_LEFT_CTRL | SHELL_USB_MOD_RIGHT_CTRL)) != 0) {
+                    shell_input_cursor_word(input_line, -1);
+                } else {
+                    lv_textarea_cursor_left(input_line);
+                }
                 break;
             case 0x51: /* Down arrow: recall newer history */
                 shell_recall_history(1);
@@ -2913,26 +3295,10 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
                 }
                 break;
             case 0x4A: /* Home: move to beginning */
-                {
-                    const char *text = lv_textarea_get_text(input_line);
-                    if (text != NULL) {
-                        size_t len = strlen(text);
-                        for (size_t i = 0; i < len; i++) {
-                            lv_textarea_cursor_left(input_line);
-                        }
-                    }
-                }
+                lv_textarea_set_cursor_pos(input_line, 0);
                 break;
             case 0x4D: /* End: move to end */
-                {
-                    const char *text = lv_textarea_get_text(input_line);
-                    if (text != NULL) {
-                        size_t len = strlen(text);
-                        for (size_t i = 0; i < len; i++) {
-                            lv_textarea_cursor_right(input_line);
-                        }
-                    }
-                }
+                lv_textarea_set_cursor_pos(input_line, LV_TEXTAREA_CURSOR_LAST);
                 break;
             default:
                 break;
@@ -3047,6 +3413,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "cd",       "cd | chdir [path] - show or change the working directory" },
     { "dir",      "dir [path] [/W] [/P] [/S] [/B] [/L] [/A:attrs] [/O:order] - list directory" },
     { "copy",     "copy <src> <dst> - copy a file (dir target keeps basename)" },
+    { "cursor",   "cursor [block|bar] [blink <ms 0..2000|off>] - input-line cursor style (session-only)" },
     { "move",     "move <src> <dst> - move a file (cwd-relative destination)" },
     { "del",      "del [/s] [/p|/f|/permanent] <path> - delete file(s); aliases erase" },
     { "ren",      "ren | rename <src> <dst> - rename a file" },
@@ -3066,6 +3433,8 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "more",     "more [file] - paginated output (keypress- or timer-bounded)" },
     { "tree",     "tree [path] [/F] [/A] - directory tree" },
     { "fc",       "fc <f1> <f2> - compare two files" },
+    { "font",     "font info | font coverage | font list | font set <terminal|ui> <name> [/save] | font size <terminal|ui> <px> [/save] - roles, coverage, live TTF switching + sizes" },
+    { "theme",    "theme show - active theme table (switching arrives later)" },
     { "comp",     "comp <f1> <f2> - compare two files byte-by-byte" },
     { "sort",     "sort [file] [/R] [/I] [/U] - sort lines (pipes: sort < f | sort)" },
     { "clip",     "clip [text | copy [N] | file <path> | read <file> | paste <dest>] - clipboard" },
@@ -4526,6 +4895,14 @@ void shell_init(void)
         s_uart_console_lock = xSemaphoreCreateMutex();
     }
 
+    /* Transcript buffer mutex (see s_transcript_buf_lock): guards the plain
+     * and ANSI scrollback buffers against concurrent appends from the worker
+     * and the LVGL task. Recursive: some paths touch buffers under both this
+     * and the LVGL port lock (always port-outer/buffer-inner). */
+    if (s_transcript_buf_lock == NULL) {
+        s_transcript_buf_lock = xSemaphoreCreateRecursiveMutex();
+    }
+
     /* Allocate the large transcript and clipboard buffers from PSRAM so the
      * tight internal heap stays available for DMA-capable users (WiFi/SDIO
      * transport mempool, USB-Serial/JTAG rings). */
@@ -4561,7 +4938,7 @@ void shell_init(void)
     /* Interactive keypress queue used by pause, choice, and more. Created
      * before any input source starts so no keystroke can be lost. */
     if (s_key_queue == NULL) {
-        s_key_queue = xQueueCreate(SHELL_KEY_QUEUE_DEPTH, sizeof(char));
+        s_key_queue = xQueueCreate(SHELL_KEY_QUEUE_DEPTH, SHELL_KEY_SEQ_BYTES);
         if (s_key_queue == NULL) {
             shell_record_errorf("shell", ESP_ERR_NO_MEM, "Failed to create keypress queue");
         }

@@ -47,6 +47,10 @@ void tui_deinit(void);
 /** Report whether TUI mode is active. */
 bool tui_is_active(void);
 
+/** Re-resolve the TUI label font after a font switch (stale-pointer fix).
+ * No-op unless TUI mode is active. */
+void tui_refresh_fonts(void);
+
 /** Clear entire grid (ED 2J) with default colors. */
 void tui_clear(void);
 

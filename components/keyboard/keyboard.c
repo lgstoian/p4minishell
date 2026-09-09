@@ -18,6 +18,7 @@
 
 #include "keyboard.h"
 #include "display.h"
+#include "theme.h"
 #include "p4minishell_config.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
@@ -27,6 +28,11 @@
 
 /* Backward-compatibility aliases */
 #define KEYBOARD_TAG                    P4_CONFIG_SHELL_TAG
+
+/* Chained UI font (windows component). Declared extern instead of including
+ * windows.h: windows already REQUIRES keyboard, so a CMake edge back would
+ * be a dependency cycle (Phase 1 moves fonts into components/font/). */
+extern const lv_font_t *windows_get_ui_font(void);
 
 /* ========================================================================
  * INTERNAL STATE
@@ -229,12 +235,11 @@ lv_obj_t *keyboard_init(lv_obj_t *parent)
         return NULL;
     }
 
-    /* Select terminal font */
-#if LV_FONT_UNSCII_16
-    font = &lv_font_unscii_16;
-#else
-    font = LV_FONT_DEFAULT;
-#endif
+    /* Chained UI font: terminal primary + Montserrat fallback so the
+     * FontAwesome PUA icon keys (BACKSPACE/OK/arrows/...) render instead of
+     * tofu. Unconditional (same lesson as windows_get_terminal_font: never
+     * gate fonts on config). */
+    font = windows_get_ui_font();
 
     /* Calculate keyboard height from config */
     kb_h = (lv_coord_t)(display_get_height() *
@@ -259,7 +264,7 @@ lv_obj_t *keyboard_init(lv_obj_t *parent)
     lv_keyboard_set_mode(s_keyboard.widget, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_obj_set_style_text_font(s_keyboard.widget, font, 0);
     lv_obj_set_style_bg_color(s_keyboard.widget,
-                               lv_color_hex(0x1D2625), 0);
+                               lv_color_hex(theme_current()->bg_keyboard), 0);
     lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_keyboard.widget, 0, 0);
 
@@ -271,6 +276,21 @@ lv_obj_t *keyboard_init(lv_obj_t *parent)
              (int32_t)kb_h, s_keyboard.visible ? "yes" : "no");
 
     return s_keyboard.widget;
+}
+
+/** Re-resolve the keyboard font after a `font set/size` switch. Styles
+ * snapshot the chain pointer at creation, so without this the keyboard
+ * renders the orphaned copy until recreated. Port lock is recursive. */
+void keyboard_refresh_fonts(void)
+{
+    if (!s_keyboard.initialized || s_keyboard.widget == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    lv_obj_set_style_text_font(s_keyboard.widget, windows_get_ui_font(), 0);
+    lvgl_port_unlock();
 }
 
 void keyboard_deinit(void)

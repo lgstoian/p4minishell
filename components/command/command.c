@@ -544,10 +544,12 @@ static void shell_command_paste(int argc, char **argv)
 /** Built-in command names offered by Tab completion for the first token. */
 static const char *const shell_builtin_commands[] = {
     "about", "adc", "alarm", "alias", "anchor", "ansi", "append", "appconfig", "appmode", "apps", "ask", "attrib", "audio", "battery", "beep",
-    "bluetooth", "brightness", "browse", "bt", "c6ota", "cal", "calc", "call", "camera", "capture", "cd", "chdir", "chkdsk", "choice", "clear", "clip", "cls", "color", "comp", "config", "copy", "date", "db", "debug",
+    "bluetooth", "brightness", "browse", "bt", "c6ota", "cal", "calc", "call",
+    "camera", "capture", "cd", "chdir", "chkdsk", "choice", "clear", "clip", "cls", "color", "comp", "config", "copy", "cursor",
+    "date", "db", "debug",
     "deepsleep", "del", "delay", "dialog", "dir", "disk", "display", "dns", "draw", "echo", "edit",
     "endlocal",
-    "erase", "exit", "fc", "find", "findstr", "for", "format", "freq", "gfind", "goto", "gpio",
+    "erase", "exit", "fc", "find", "findstr", "font", "for", "format", "freq", "gfind", "goto", "gpio",
     "help", "hexview", "history", "httpd", "httpget", "i2c", "if", "ini", "ipconfig", "keyboard",
     "label", "launch", "list", "locate", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "notify", "nslookup",
     "ntpsync", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
@@ -556,7 +558,7 @@ static const char *const shell_builtin_commands[] = {
     "shift", "sleep", "sntp", "sort", "spi", "sysinfo", "tasks", "time", "timezone",
     "tone", "top", "touch", "trash", "tree", "tui", "type", "unalias", "undelete", "usb",
     "ver", "version", "view", "volume", "wavplay", "wget", "wifi", "windows", "write", "xcopy",
-    "proc", "temp",
+    "proc", "temp", "theme",
 };
 
 /** Completion collector: a bounded list of heap-copied matches. */
@@ -1766,6 +1768,22 @@ bool shell_execute_command_core(char *command)
         return shell_command_windows(argc, argv);
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "cursor")) {
+        return shell_command_cursor(argc, argv);
+    }
+
+    /* ---- Font roles + theme stub ---- */
+    if (shell_text_equals_ignore_case(argv[0], "font")) {
+        shell_command_font(argc, argv);
+        return true;
+    }
+
+    /* ---- Theme stub (show only; switching arrives later) ---- */
+    if (shell_text_equals_ignore_case(argv[0], "theme")) {
+        shell_command_theme(argc, argv);
+        return true;
+    }
+
     /* ---- Screenshot command ---- */
     if (shell_text_equals_ignore_case(argv[0], "screenshot") ||
         shell_text_equals_ignore_case(argv[0], "scr") ||
@@ -2589,6 +2607,10 @@ static bool shell_execute_command_segment(char *command)
      * non-zero errorlevel behind. */
     errorlevel_before = batch_get_errorlevel();
 
+    /* Batch label repaints across this segment's output: appends stay live in
+     * the buffers and on serial, but the O(buffer) LVGL span rebuild happens
+     * once per segment (plus a periodic live flush) instead of per line. */
+    shell_transcript_defer_begin();
     recognized = shell_execute_command_core(command_part);
     if (!recognized) {
         shell_transcript_appendf_ansi(SH_ERR "Unknown command:" SH_RST " %s\n", command_part);
@@ -2625,6 +2647,9 @@ static bool shell_execute_command_segment(char *command)
         }
         shell_redirect_capture_reset();
     }
+
+    /* End the repaint deferral: one span rebuild for the whole segment. */
+    shell_transcript_defer_end();
 
     free(expanded);
     free(command_buffer);

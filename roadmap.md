@@ -991,8 +991,10 @@ documented in `SDK.md` ("Modal app surfaces"):
 - ✅ Batch loader depth: `for /f ... in ('command')` command-output iteration,
   `%~[fdpnx]N` argument modifiers, and `LIB.BAT::selftest_*` contract checks that
   double as the board test suite (no temp files, no modal interaction).
-- ⏳ Ship a few more reference apps (a text adventure, a note/Zettelkasten app, a live
-  dashboard with RGB/audio "mood") to keep pressure-testing the batch engine.
+- ✅ Ship a few more reference apps (a text adventure, a note/Zettelkasten app, a live
+  dashboard with RGB/audio "mood") to keep pressure-testing the batch engine:
+  `apps/adventure/ADVENT.BAT`, `apps/notes/NOTES.BAT`, `apps/mood/MOOD.BAT`
+  (+ `.APPINFO` metadata, `apps/push_apps.py`), all pure batch.
 - Dropped: the `.bat` self-update path (deferred by direction — not worked on)
   and any native `.exe`/`run` loader (decided: batch-first, §6).
 

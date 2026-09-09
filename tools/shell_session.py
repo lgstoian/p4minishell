@@ -21,6 +21,20 @@ def default_port():
     return os.environ.get("P4_PORT", "COM11")
 
 
+def open_port(port=None, baud=115200, timeout=1):
+    """Open the USB-Serial/JTAG port WITHOUT rebooting the board: pyserial
+    asserts DTR on open and the P4 resets on the transition, so drop DTR/RTS
+    immediately (the shell needs ~8 s to come up after a real reset)."""
+    ser = serial.Serial(port or default_port(), baud, timeout=timeout)
+    try:
+        ser.setDTR(False)
+        ser.setRTS(False)
+    except Exception:
+        pass
+    time.sleep(0.5)
+    return ser
+
+
 class Shell:
     def __init__(self, port=None, baud=115200):
         self.s = serial.Serial(port or default_port(), baud, timeout=10)

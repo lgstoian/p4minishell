@@ -13,9 +13,11 @@
 #include "display.h"
 #include "keyboard.h"
 #include "windows.h"
+#include "editor_view.h"
 #include "p4minishell_config.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ========================================================================
  * DISPLAY COMMANDS
@@ -130,5 +132,62 @@ bool shell_command_windows(int argc, char **argv)
         return true;
     }
     shell_transcript_appendf_ansi(SH_WARN "Usage: windows <info>" SH_RST "\n");
+    return true;
+}
+
+/* ========================================================================
+ * CURSOR COMMAND
+ * ======================================================================== */
+
+/* Live input-cursor state (session-only; defaults from P4_CONFIG). */
+static bool s_cursor_block = true;
+static uint32_t s_cursor_blink_ms = P4_CONFIG_CURSOR_BLINK_MS;
+
+bool shell_command_cursor(int argc, char **argv)
+{
+    /* Session-only live state (defaults from P4_CONFIG). */
+    int i = 1;
+    bool changed = false;
+
+    if (argc < 2) {
+        shell_transcript_appendf_ansi(SH_LBL "cursor:" SH_RST " %s, blink %s\n",
+                                      s_cursor_block ? "block" : "bar",
+                                      s_cursor_blink_ms == 0 ? "off" : "on");
+        shell_transcript_appendf_ansi(SH_WARN "Usage: cursor [block|bar] [blink <ms 0..2000|off>]" SH_RST "\n");
+        return true;
+    }
+    while (i < argc) {
+        if (shell_text_equals_ignore_case(argv[i], "block") ||
+            shell_text_equals_ignore_case(argv[i], "bar")) {
+            s_cursor_block = shell_text_equals_ignore_case(argv[i], "block");
+            windows_input_cursor_style(s_cursor_block);
+            shell_transcript_appendf_ansi(SH_OK "cursor %s" SH_RST "\n",
+                                          s_cursor_block ? "block" : "bar");
+            changed = true;
+            i++;
+        } else if (shell_text_equals_ignore_case(argv[i], "blink") && i + 1 < argc) {
+            if (shell_text_equals_ignore_case(argv[i + 1], "off")) {
+                s_cursor_blink_ms = 0;
+            } else {
+                char *end = NULL;
+                long ms = strtol(argv[i + 1], &end, 10);
+                if (end == NULL || *end != '\0' || ms < 0 || ms > 2000) {
+                    shell_transcript_appendf_ansi(SH_WARN "Usage: cursor blink <ms 0..2000|off>" SH_RST "\n");
+                    return true;
+                }
+                s_cursor_blink_ms = (uint32_t)ms;
+            }
+            windows_input_cursor_blink(s_cursor_blink_ms);
+            editor_view_set_blink_ms(s_cursor_blink_ms);
+            shell_transcript_appendf_ansi(SH_OK "cursor blink %s" SH_RST "\n",
+                                          s_cursor_blink_ms == 0 ? "off" : argv[i + 1]);
+            changed = true;
+            i += 2;
+        } else {
+            shell_transcript_appendf_ansi(SH_WARN "Usage: cursor [block|bar] [blink <ms 0..2000|off>]" SH_RST "\n");
+            return true;
+        }
+    }
+    (void)changed;
     return true;
 }

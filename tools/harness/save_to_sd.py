@@ -1,13 +1,14 @@
-﻿import serial
-import time
+﻿import time
 import os
+import sys
 
-port = "COM11"
-OUTPUT_DIR = r"D:\p4minishell\screenshots"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shell_session import open_port, default_port
+
+port = default_port()
 
 try:
-    ser = serial.Serial(port, 115200, timeout=2)
+    ser = open_port(port, 115200, timeout=2)
     time.sleep(1)
     
     if ser.in_waiting:

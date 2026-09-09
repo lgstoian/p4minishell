@@ -297,6 +297,35 @@ escape character), tilde `~`, and backtick, so DOS operators and escaped
 characters can be typed directly. Use the `1#` / `abc` mode buttons to switch
 between text and symbols.
 
+### font info | font coverage | font list | font set | font size
+Font roles and live switching (`components/font/` registry: terminal role
+for monospace surfaces, UI role for chrome with a Montserrat icon fallback).
+`font info` shows roles, line heights, fallback state. `font coverage`
+prints labeled glyph rows whose serial bytes are exact. `font list` shows
+built-ins plus `sd:/FONTS/*.ttf|*.otf` with per-role `name@px`.
+`font set <terminal|ui> <name> [/save]` switches live (`/save` persists to
+`sd:/APPS/SHELL.INI`, restored at first SD mount; terminal refuses
+proportional fonts and sizes that break the 80x25 grid, naming the max that
+fits). `font size <terminal|ui> <px 10..28> [/save]` resizes TTF-backed
+roles (bitmaps refuse — they are fixed-size). Missing/corrupt TTFs fail with
+an errorlevel and never disturb the current fonts; without SD the built-ins
+carry the full UI. NotoSansSC auto-attaches as a CJK fallback tail whenever
+present (never a selectable terminal primary). Known limits: stb picks one
+cmap subtable, so U+2600/2601 miss via the SC tail (DejaVu covers them);
+very long CJK rows can wrap-mangle ~3 chars (short lines are exact).
+
+### theme show
+Theme table prep: prints the active theme (chrome colors, font roles+sizes).
+Switching arrives later; the future format is `sd:/APPS/THEME.INI`:
+`theme=<name>` plus `color.bg_screen=0B0F10`-style keys and
+`font.terminal=<name>` / `font.terminal.px=<n>` entries.
+
+### cursor [block|bar] [blink <ms 0..2000|off>]
+Input-line cursor style (session-only): block (editor-like full cell) or
+thin bar, plus blink period (`off`/0 = steady). Blink also retimes an open
+editor. Defaults from `P4_CONFIG_CURSOR_BLINK_MS` (shared with the editor
+timer). USB keyboard: arrows move, Ctrl+arrows word-jump, Home/End jump.
+
 ### config [KEY=VALUE | KEY value | save | reset [key] | factory]
 Read and write the persistent settings stored in `sd:/CONFIG.SYS` — the same
 file the boot component parses at startup, so a saved setting is re-applied on
@@ -898,6 +927,9 @@ ls            ->  dir /b
 Evaluates a 32-bit signed integer expression. With an assignment the result is
 stored; without one it is printed. Comparison and logical operators yield `1`
 when true and `0` when false, so a boolean can be stored and tested later.
+Intermediate overflow wraps (32-bit): scale heap-byte-sized values down
+before multiplying — e.g. `set /a unit=%total% / 100` then
+`set /a pct=%free% / %unit%` instead of `%free% * 100 / %total%`.
 
 | Precedence | Operators |
 |------------|-----------|
@@ -1360,7 +1392,9 @@ literal caret, not a continuation.
 - rem and :: comment lines
 - @ line prefix to suppress echo for one line
 - echo on/off flow control
-- `:label` targets for `goto` and `call :label`, including the implicit `:eof` end-of-file label
+- `:label` targets for `goto` and `call :label`, including the implicit `:eof` end-of-file label.
+  At most 32 labels per file (`P4_CONFIG_BATCH_LABEL_MAX`); extra labels are
+  ignored with a `batch: too many labels` warning, so keep big apps under the cap.
 - `for %%var in (set) do command` loops over literal tokens or a single wildcard pattern (for example `for %%F in (*.txt) do echo %%F`)
 
 ### for — loops (interactive and batch)
@@ -1385,8 +1419,13 @@ to consecutive loop-variable letters:
 ```
 for /f "delims=, tokens=1,2" %%a in (data.csv) do echo A=%%a B=%%b
 for /f "skip=1 eol=;" %%l in (notes.txt) do echo %%l
-for /f "tokens=1,* delims= " %%k in (pairs.txt) do echo KEY=%%k VAL=%%l
+for /f "tokens=1,*" %%k in (pairs.txt) do echo KEY=%%k VAL=%%l
 ```
+
+Option values are space-separated, so a space cannot appear inside a custom
+`delims=` list (it terminates the value — rely on the default space+tab by
+omitting `delims`, or split on other characters; e.g. `mem` output parses
+with `delims==,b` + a label compare, see `apps/mood/MOOD.BAT`).
 
 The file-set may be an explicit filename, a wildcard (`(*.txt)` processes every
 matching file's lines), or empty `()` when a `< file` redirection / pipe stage

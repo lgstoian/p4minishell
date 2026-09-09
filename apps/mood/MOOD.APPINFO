@@ -1,0 +1,4 @@
+; APPINFO metadata for the live mood dashboard (INI format, read by `launch`).
+; Copied to sd:/APPS/MOOD.APPINFO by apps/push_apps.py.
+title=Mood Dashboard
+description=Live board mood from free heap: RGB/audio bands plus mem/sysinfo snapshots

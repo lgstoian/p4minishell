@@ -229,6 +229,18 @@ void shell_transcript_guard_internal(void);
 /** Number of scrollback trims performed since boot (internal-heap guard). */
 size_t shell_transcript_trim_count(void);
 
+/**
+ * Defer on-screen transcript repaints across a burst of appends (one shell
+ * command's output). Buffers and the serial mirror stay live; only the LVGL
+ * label repaint (O(buffer) span rebuild) is deferred. Nesting-safe.
+ * Call shell_transcript_defer_end() on every exit path after begin().
+ */
+void shell_transcript_defer_begin(void);
+void shell_transcript_defer_end(void);
+
+/** Repaint now if a deferred update is pending (no-op otherwise). */
+void shell_transcript_flush_now(void);
+
 /* ========================================================================
  * APP MODE (screen save/restore + full-screen surface)
  * ======================================================================== */
@@ -466,12 +478,27 @@ bool shell_key_wait_is_active(void);
  * Block until a key arrives or @p timeout_ms elapses.
  *
  * Only valid between shell_key_wait_begin() and shell_key_wait_end().
+ * ASCII fast path: for a multibyte key this returns its lead byte (which
+ * never equals ASCII, so y/n/ESC compares stay correct; any-key waits only
+ * need the boolean). Use shell_wait_for_key_utf8() for the full sequence.
  *
  * @param timeout_ms  Maximum wait in milliseconds.
  * @param key_out     Receives the ASCII character. May be NULL.
  * @return true when a key was received, false on timeout.
  */
 bool shell_wait_for_key(uint32_t timeout_ms, char *key_out);
+
+/**
+ * Block until a key arrives or @p timeout_ms elapses, returning the full
+ * UTF-8 sequence (up to 4 bytes + NUL).
+ *
+ * @param timeout_ms  Maximum wait in milliseconds.
+ * @param buf         Receives the NUL-terminated byte sequence. May be NULL
+ *                    (wait satisfied, sequence discarded).
+ * @param buf_size    Size of @p buf; sequences are truncated to fit.
+ * @return true when a key was received, false on timeout.
+ */
+bool shell_wait_for_key_utf8(uint32_t timeout_ms, char *buf, size_t buf_size);
 
 /**
  * Report whether any interactive key source is currently attached.
@@ -503,6 +530,28 @@ bool shell_is_batch_active(void);
  * @return true when the key was consumed by an active wait.
  */
 bool shell_key_wait_submit(char key);
+
+/**
+ * Push a UTF-8 key sequence into the wait queue (on-screen keyboard
+ * symbols). The first codepoint (up to 4 bytes) is stored as one queue
+ * item so multibyte keys are never fragmented. Ignored when no wait is
+ * active or the sequence is empty/invalid.
+ *
+ * @param bytes  UTF-8 bytes; only the first codepoint is used.
+ * @param len    Available bytes (need not be NUL-terminated).
+ * @return true when the key was consumed by an active wait.
+ */
+bool shell_key_wait_submit_utf8(const char *bytes, size_t len);
+
+/**
+ * Decode the first UTF-8 codepoint of @p s.
+ *
+ * @param s        Input bytes (need not be NUL-terminated).
+ * @param cp_out   Receives the codepoint. May be NULL.
+ * @param len_out  Receives the consumed byte count (1-4). May be NULL.
+ * @return true on a valid complete codepoint, false on NUL/truncated/invalid.
+ */
+bool shell_utf8_decode(const char *s, size_t avail, uint32_t *cp_out, size_t *len_out);
 
 /**
  * Read a line of text from the user, echoing it as it is typed.

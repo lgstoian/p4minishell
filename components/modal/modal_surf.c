@@ -11,6 +11,7 @@
 #include "modal_surf.h"
 #include "modal.h"
 #include "windows.h"
+#include "theme.h"
 #include "shell.h"
 #include "keyboard.h"
 #include "p4minishell_config.h"
@@ -74,9 +75,9 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
     lv_obj_t *c = lv_obj_create(parent);
     lv_obj_set_size(c, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_pad_all(c, 8, 0);
-    lv_obj_set_style_bg_color(c, lv_color_hex(0x050806), 0);
+    lv_obj_set_style_bg_color(c, lv_color_hex(theme_current()->bg_transcript), 0);
     lv_obj_set_style_border_width(c, 1, 0);
-    lv_obj_set_style_border_color(c, lv_color_hex(0x335577), 0);
+    lv_obj_set_style_border_color(c, lv_color_hex(theme_current()->modal_panel_border), 0);
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_gap(c, 6, 0);
@@ -88,8 +89,9 @@ static lv_obj_t *surf_create_title(lv_obj_t *parent, const char *title)
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, title ? title : "");
     lv_obj_set_width(lbl, LV_PCT(100));
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0x8DFF96), 0);
-    lv_obj_set_style_text_font(lbl, windows_get_terminal_font(), 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(theme_current()->modal_title), 0);
+    /* UI role: titles are flex-laid-out, never cell-measured. */
+    lv_obj_set_style_text_font(lbl, windows_get_ui_font(), 0);
     return lbl;
 }
 
@@ -143,7 +145,7 @@ static bool dialog_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_label_set_text(msg, ctx->message ? ctx->message : "");
     lv_obj_set_width(msg, LV_PCT(100));
     lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(msg, lv_color_hex(0xC7FFD0), 0);
+    lv_obj_set_style_text_color(msg, lv_color_hex(theme_current()->modal_message), 0);
     lv_obj_t *row = lv_obj_create(ctx->panel);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);

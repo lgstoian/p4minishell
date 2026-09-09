@@ -214,6 +214,10 @@ void shell_command_screenshot(int argc, char **argv)
         return;
     }
 
+    /* Repaint any output deferred by the segment batching so the capture
+     * sees the current transcript, not a stale label. */
+    shell_transcript_flush_now();
+
     screen = lv_screen_active();
     if (screen == NULL) {
         lvgl_port_unlock();
