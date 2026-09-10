@@ -6,5 +6,7 @@ idf_component_register(
         header
         espressif__esp32_p4_function_ev_board
         fatfs
+        markdown
+        filetype
         esp_driver_sdmmc
 )

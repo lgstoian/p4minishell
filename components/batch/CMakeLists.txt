@@ -5,6 +5,8 @@ idf_component_register(
         shell
         storage
         modal
+        markdown
+        filetype
         tui
         clock
         espressif__esp32_p4_function_ev_board

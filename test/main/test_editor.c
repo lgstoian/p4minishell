@@ -700,3 +700,222 @@ void test_editor_lex_batch(void)
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_batch("abc", 3, NULL, 16));
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_batch("abc", 3, runs, 0));
 }
+
+void test_editor_replace_all(void)
+{
+    editor_doc_t *doc = editor_doc_new(NULL);
+    size_t n;
+
+    editor_doc_insert_bytes(doc, "foo bar foo\nsecond foo", 22);
+    n = editor_doc_replace_all(doc, "foo", 3, "qux", 3, true);
+    TEST_ASSERT_EQUAL_size_t(3, n);
+    {
+        char *s0 = line_str(doc, 0);
+        char *s1 = line_str(doc, 1);
+        TEST_ASSERT_EQUAL_STRING("qux bar qux", s0);
+        TEST_ASSERT_EQUAL_STRING("second qux", s1);
+        free(s0);
+        free(s1);
+    }
+    /* One undo restores everything (single snapshot). */
+    editor_doc_undo(doc);
+    {
+        char *s0 = line_str(doc, 0);
+        TEST_ASSERT_EQUAL_STRING("foo bar foo", s0);
+        free(s0);
+    }
+
+    /* Replacement containing the needle never re-matches. */
+    editor_doc_free(doc);
+    doc = editor_doc_new(NULL);
+    editor_doc_insert_bytes(doc, "aa", 2);
+    n = editor_doc_replace_all(doc, "a", 1, "aa", 2, true);
+    TEST_ASSERT_EQUAL_size_t(2, n);
+    {
+        char *s0 = line_str(doc, 0);
+        TEST_ASSERT_EQUAL_STRING("aaaa", s0);
+        free(s0);
+    }
+
+    /* Fruitless call: no snapshot, clean undo state. */
+    n = editor_doc_replace_all(doc, "zzz", 3, "q", 1, true);
+    TEST_ASSERT_EQUAL_size_t(0, n);
+
+    /* NULL safety. */
+    TEST_ASSERT_EQUAL_size_t(0, editor_doc_replace_all(NULL, "a", 1, "b", 1, true));
+    TEST_ASSERT_EQUAL_size_t(0, editor_doc_replace_all(doc, NULL, 0, "b", 1, true));
+    editor_doc_free(doc);
+}
+
+void test_editor_comment_toggle(void)
+{
+    editor_doc_t *doc = editor_doc_new("T.BAT");
+    size_t n;
+
+    editor_doc_insert_bytes(doc, "echo hi\nrem old\ndir", 19);
+    /* Mixed range: only the two unmarked lines change (no double-mark). */
+    doc->sel_row = 0;
+    doc->sel_col = 0;
+    doc->cursor_row = 2;
+    doc->cursor_col = 3;
+    doc->selection_active = true;
+    n = editor_doc_comment_toggle(doc);
+    TEST_ASSERT_EQUAL_size_t(2, n);
+    {
+        char *s0 = line_str(doc, 0);
+        char *s2 = line_str(doc, 2);
+        TEST_ASSERT_EQUAL_STRING("rem echo hi", s0);
+        TEST_ASSERT_EQUAL_STRING("rem dir", s2);
+        free(s0);
+        free(s2);
+    }
+    /* Toggling the same range again uncomments all three. */
+    n = editor_doc_comment_toggle(doc);
+    TEST_ASSERT_EQUAL_size_t(3, n);
+    {
+        char *s0 = line_str(doc, 0);
+        char *s1 = line_str(doc, 1);
+        TEST_ASSERT_EQUAL_STRING("echo hi", s0);
+        TEST_ASSERT_EQUAL_STRING("old", s1);
+        free(s0);
+        free(s1);
+    }
+    /* Plain syntax is a no-op. */
+    editor_doc_free(doc);
+    doc = editor_doc_new("T.TXT");
+    editor_doc_insert_bytes(doc, "hi", 2);
+    TEST_ASSERT_EQUAL_size_t(0, editor_doc_comment_toggle(doc));
+    editor_doc_free(doc);
+}
+
+void test_editor_match_jump(void)
+{
+    editor_doc_t *doc = editor_doc_new("T.BAT");
+    editor_doc_insert_bytes(doc, "if (a) (b)", 10);
+
+    /* On the opener: jumps forward to its match. */
+    doc->cursor_row = 0;
+    doc->cursor_col = 3;
+    TEST_ASSERT_TRUE(editor_doc_match_jump(doc));
+    TEST_ASSERT_EQUAL_size_t(5, editor_doc_cursor_col(doc));
+    /* On the closer: jumps back. */
+    TEST_ASSERT_TRUE(editor_doc_match_jump(doc));
+    TEST_ASSERT_EQUAL_size_t(3, editor_doc_cursor_col(doc));
+    /* %var% pair on one line. */
+    editor_doc_free(doc);
+    doc = editor_doc_new("T.BAT");
+    editor_doc_insert_bytes(doc, "echo %HOME%!", 12);
+    doc->cursor_row = 0;
+    doc->cursor_col = 5;
+    TEST_ASSERT_TRUE(editor_doc_match_jump(doc));
+    TEST_ASSERT_EQUAL_size_t(10, editor_doc_cursor_col(doc));
+    /* No bracket under cursor: no move. */
+    doc->cursor_col = 0;
+    TEST_ASSERT_FALSE(editor_doc_match_jump(doc));
+    editor_doc_free(doc);
+}
+
+void test_editor_undo_restores_clean(void)
+{
+    editor_doc_t *doc = editor_doc_new(NULL);
+
+    /* Mirror editor_apply_ascii: snapshot first, then mutate. */
+    editor_doc_undo_mark(doc);
+    editor_doc_insert_bytes(doc, "ab", 2);
+    TEST_ASSERT_TRUE(editor_doc_is_modified(doc));
+    /* Undo the insert: back to the pristine empty buffer, mark cleared. */
+    editor_doc_undo(doc);
+    TEST_ASSERT_FALSE(editor_doc_is_modified(doc));
+    /* Redo re-dirties. */
+    editor_doc_redo(doc);
+    TEST_ASSERT_TRUE(editor_doc_is_modified(doc));
+    editor_doc_free(doc);
+}
+
+void test_editor_newline_auto_indent(void)
+{
+    editor_doc_t *doc = editor_doc_new(NULL);
+
+    editor_doc_insert_bytes(doc, "  foo", 5);
+    editor_doc_newline(doc);
+    /* Split line keeps its text; the new line inherits the indent. */
+    TEST_ASSERT_EQUAL_size_t(2, editor_doc_line_count(doc));
+    {
+        char *s0 = line_str(doc, 0);
+        char *s1 = line_str(doc, 1);
+        TEST_ASSERT_EQUAL_STRING("  foo", s0);
+        TEST_ASSERT_EQUAL_STRING("  ", s1);
+        free(s0);
+        free(s1);
+    }
+    TEST_ASSERT_EQUAL_size_t(1, editor_doc_cursor_row(doc));
+    TEST_ASSERT_EQUAL_size_t(2, editor_doc_cursor_col(doc));
+    /* No indent: no padding. */
+    editor_doc_free(doc);
+    doc = editor_doc_new(NULL);
+    editor_doc_insert_bytes(doc, "x", 1);
+    editor_doc_newline(doc);
+    {
+        char *s1 = line_str(doc, 1);
+        TEST_ASSERT_EQUAL_STRING("", s1);
+        free(s1);
+    }
+    editor_doc_free(doc);
+}
+
+void test_editor_lex_json(void)
+{
+    editor_syntax_run_t runs[16];
+    size_t n;
+
+    n = editor_lex_json("{\"k\": 12, \"s\": \"v\"}", 19, runs, 16);
+    TEST_ASSERT(n >= 3);
+    /* The key run is cyan (runs[0] is the "{" punctuation). */
+    TEST_ASSERT_EQUAL(ANSI_COLOR_BRIGHT_CYAN, runs[1].color);
+    TEST_ASSERT_EQUAL_size_t(1, runs[1].start);
+    /* NULL safety. */
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_json(NULL, 4, runs, 16));
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_json("abc", 3, NULL, 16));
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_json("abc", 3, runs, 0));
+}
+
+void test_editor_lex_markdown(void)
+{
+    editor_syntax_run_t runs[16];
+    size_t n;
+
+    /* ATX heading: marker green, content bold white. */
+    n = editor_lex_markdown("## Hi", 5, runs, 16);
+    TEST_ASSERT(n >= 2);
+    TEST_ASSERT_EQUAL_size_t(0, runs[0].start);
+    TEST_ASSERT_EQUAL_size_t(2, runs[0].length);
+    TEST_ASSERT_EQUAL(ANSI_COLOR_BRIGHT_GREEN, runs[0].color);
+
+    /* Bold span carries the bold attr through inline scan. */
+    n = editor_lex_markdown("a **b** c", 9, runs, 16);
+    TEST_ASSERT(n >= 1);
+    {
+        bool found_bold = false;
+        size_t i;
+        for (i = 0; i < n; i++) {
+            if ((runs[i].attrs & ANSI_ATTR_BOLD) != 0) {
+                found_bold = true;
+            }
+        }
+        TEST_ASSERT_TRUE(found_bold);
+    }
+
+    /* Unterminated code span: no run, renderer folds to default. */
+    n = editor_lex_markdown("a `oops", 7, runs, 16);
+    TEST_ASSERT_EQUAL_size_t(0, n);
+
+    /* Fence line highlights whole as code. */
+    n = editor_lex_markdown("```c", 4, runs, 16);
+    TEST_ASSERT(n >= 1);
+    TEST_ASSERT_EQUAL(ANSI_COLOR_BRIGHT_YELLOW, runs[0].color);
+
+    /* NULL safety. */
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown(NULL, 4, runs, 16));
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown("abc", 3, NULL, 16));
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown("abc", 3, runs, 0));
+}

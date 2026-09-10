@@ -1,0 +1,4 @@
+; APPINFO metadata for the dual-pane file commander (INI format, read by `launch`).
+; Copied to sd:/APPS/TCMD.APPINFO by apps/push_apps.py.
+title=Commander
+description=Dual-pane file commander: browse selectors plus copy/move/delete/mkdir/rename/view/edit

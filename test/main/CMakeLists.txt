@@ -28,6 +28,11 @@ idf_component_register(
         test_tui.c
         test_clipboard.c
         test_history_file.c
+        test_markdown.c
+        test_filetype.c
+        test_json.c
+        test_gfx.c
+        test_asset.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -44,6 +49,9 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/alarm"
         "${CMAKE_SOURCE_DIR}/../components/modal"
         "${CMAKE_SOURCE_DIR}/../components/tui"
+        "${CMAKE_SOURCE_DIR}/../components/markdown"
+        "${CMAKE_SOURCE_DIR}/../components/filetype"
+        "${CMAKE_SOURCE_DIR}/../components/gfx"
     REQUIRES
         unity
         shell
@@ -59,5 +67,8 @@ idf_component_register(
         alarm
         modal
         tui
+        markdown
+        filetype
+        gfx
         esp_timer
 )

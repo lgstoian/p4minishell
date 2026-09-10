@@ -1008,6 +1008,11 @@ batch_env:
     type: size_t
     description: "Maximum nested batch file call depth"
     range: "1..16"
+  bg_tasks:
+    value: 1
+    type: size_t
+    description: "Background batch task slots for start (beyond the main worker)"
+    range: "0..4"
   file_io_buffer_bytes:
     value: 512
     type: size_t
@@ -1163,9 +1168,9 @@ batch_env:
     description: "Maximum length of a registered native app's one-line description (native-app ABI)"
     range: "16..128"
   launch_max:
-    value: 16
+    value: 24
     type: size_t
-    description: "Maximum number of .bat apps surfaced by the launch command / menu (PATH + sd:/APPS discovery)"
+    description: "Maximum number of script apps (.bat/.cmd) surfaced by the launch command / menu (PATH + sd:/APPS discovery)"
     range: "4..64"
   line_continuation_max:
     value: 8

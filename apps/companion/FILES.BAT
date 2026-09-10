@@ -15,9 +15,10 @@ draw text 5 6 "Browse SD with full TUI file browser"
 draw text 5 7 "Quick dir, search, trash, clipboard, notes"
 draw box 1 17 80 8 single "Status"
 draw text 5 19 "Use Browse for full-screen file picker"
-list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Back"
+list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
 if errorlevel 255 goto :back
-if errorlevel 7 goto :back
+if errorlevel 8 goto :back
+if errorlevel 7 goto :tcmd
 if errorlevel 6 goto :hex_demo
 if errorlevel 5 goto :notes
 if errorlevel 4 goto :clipboard
@@ -169,3 +170,7 @@ goto notes
 echo [M-FILES-BACK]
 draw clear screen
 goto :eof
+
+:tcmd
+call TCMD.BAT
+goto files_menu

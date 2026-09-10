@@ -1,0 +1,4 @@
+; APPINFO metadata for the turn-based space trader (INI format, read by `launch`).
+; Copied to sd:/APPS/ELITE.APPINFO by apps/push_apps.py.
+title=Elite Trader
+description=Turn-based space trading: markets, travel, pirates, saves

@@ -14,6 +14,7 @@
 
 #include "storage.h"
 #include "shell.h"
+#include "markdown.h"
 #include "ansi_palette.h"
 #include "header.h"
 #include "p4minishell_config.h"
@@ -34,6 +35,7 @@
 #define SHELL_SD_PATH_BYTES             P4_CONFIG_SD_PATH_BYTES
 #define SHELL_SD_LIST_LIMIT             P4_CONFIG_SD_LIST_LIMIT
 #define SHELL_SD_IO_BUFFER_BYTES        P4_CONFIG_SD_IO_BUFFER_BYTES
+#define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
 #define SHELL_FILE_IO_BUFFER_BYTES      P4_CONFIG_FILE_IO_BUFFER_BYTES
 #define SHELL_LFN_BYTES                 P4_CONFIG_LFN_BYTES
 
@@ -55,9 +57,42 @@ static bool s_sd_ejected;             /* set by sdeject to block auto-remount */
 static void (*s_sd_first_mount_callback)(void) = NULL;
 static bool s_sd_first_mount_fired = false;
 
-/* Pending `<` or pipe input source for the text-processing commands */
-static char s_input_redirect[SHELL_SD_PATH_BYTES];
-static bool s_input_redirect_active;
+/* Pending `<` or pipe input source for the text-processing commands.
+ * One slot per worker task (main + `start` pool): two workers piping at
+ * once must not clobber each other's spool path. Selected by task handle
+ * without involving the batch component; unknown tasks use slot 0. */
+typedef struct {
+    char path[SHELL_SD_PATH_BYTES];
+    bool active;
+} storage_redirect_slot_t;
+
+static storage_redirect_slot_t s_redirect_slots[1 + P4_CONFIG_BG_TASKS];
+/* Task handles for bg slots (slot 0 is the fallback). Set lazily: the
+ * shell registers bg handles, and storage learns them on first mismatch.
+ * Simpler robust rule: match by handle against the shell registry via a
+ * caller-supplied index is overkill — instead each task sticks to the slot
+ * whose index equals its position in first-use order. */
+/* First-use binding: task handle -> slot, learned once. */
+static void *s_redirect_tasks[1 + P4_CONFIG_BG_TASKS];
+
+static storage_redirect_slot_t *storage_redirect_current(void)
+{
+    void *me = (void *)xTaskGetCurrentTaskHandle();
+    int i;
+
+    if (me != NULL) {
+        for (i = 1; i < 1 + P4_CONFIG_BG_TASKS; i++) {
+            if (s_redirect_tasks[i] == me) {
+                return &s_redirect_slots[i];
+            }
+            if (s_redirect_tasks[i] == NULL) {
+                s_redirect_tasks[i] = me;
+                return &s_redirect_slots[i];
+            }
+        }
+    }
+    return &s_redirect_slots[0];
+}
 
 /* ========================================================================
  * SD SESSION
@@ -908,6 +943,47 @@ esp_err_t shell_list_directory_path(const char *normalized_path)
     return error;
 }
 
+/* Line accumulator for Markdown auto-render across fread chunks. */
+static char s_type_md_line[SHELL_COMMAND_BYTES];
+static size_t s_type_md_len = 0;
+
+/* Accumulate one char; false when an overlong line flushed verbatim. */
+static bool shell_type_md_accumulate(char ch)
+{
+    if (s_type_md_len + 1 < sizeof(s_type_md_line)) {
+        s_type_md_line[s_type_md_len++] = ch;
+        return true;
+    }
+    s_type_md_line[s_type_md_len] = '\0';
+    shell_transcript_appendf("%s", s_type_md_line);
+    s_type_md_len = 0;
+    return false;
+}
+
+/* Emit the accumulated line (no-op when empty). */
+static void shell_type_emit_md_line(void)
+{
+    char *rendered;
+
+    if (s_type_md_len == 0) {
+        return;
+    }
+    s_type_md_line[s_type_md_len] = '\0';
+    rendered = malloc(SHELL_COMMAND_BYTES * 2);
+    if (rendered != NULL) {
+        if (markdown_render_line(s_type_md_line, rendered,
+                                 SHELL_COMMAND_BYTES * 2)) {
+            shell_transcript_append_ansi(rendered);
+        } else {
+            shell_transcript_appendf("%s\n", s_type_md_line);
+        }
+        free(rendered);
+    } else {
+        shell_transcript_appendf("%s\n", s_type_md_line);
+    }
+    s_type_md_len = 0;
+}
+
 esp_err_t shell_print_file_text(const char *normalized_path)
 {
     shell_sd_session_t session;
@@ -938,6 +1014,10 @@ esp_err_t shell_print_file_text(const char *normalized_path)
         return ESP_FAIL;
     }
 
+    /* Fresh accumulator per file (a file without trailing newline must not
+     * leak its tail into the next one). */
+    s_type_md_len = 0;
+
     while (!feof(file)) {
         size_t bytes_read = fread(buffer, 1, sizeof(buffer) - 1, file);
         size_t index;
@@ -956,7 +1036,32 @@ esp_err_t shell_print_file_text(const char *normalized_path)
         }
 
         buffer[bytes_read] = '\0';
-        shell_transcript_appendf("%s", (char *)buffer);
+        if (markdown_get_auto()) {
+            /* Per-line auto-render (same rules as echo): split the chunk
+             * into lines; each Markdown block line renders, the rest pass
+             * through verbatim. */
+            size_t k = 0;
+            while (k < bytes_read) {
+                if (buffer[k] == '\n') {
+                    shell_type_emit_md_line();
+                } else if (!shell_type_md_accumulate((char)buffer[k])) {
+                    /* Overlong line: flushed verbatim inside; keep going. */
+                }
+                k++;
+            }
+        } else {
+            shell_transcript_appendf("%s", (char *)buffer);
+        }
+    }
+
+    /* Trailing partial line (file without trailing newline). Each emitted
+     * line already ends with \n, so no extra terminator is needed in auto
+     * mode (unlike the chunked verbatim path below). */
+    if (markdown_get_auto()) {
+        shell_type_emit_md_line();
+        fclose(file);
+        shell_sd_end(&session, "type");
+        return ESP_OK;
     }
 
     fclose(file);
@@ -1681,24 +1786,30 @@ bool storage_check_free_space(uint64_t needed_bytes, uint64_t reclaim_bytes, con
 
 void storage_set_input_redirect(const char *resolved_path)
 {
+    storage_redirect_slot_t *slot = storage_redirect_current();
+
     if (resolved_path == NULL || resolved_path[0] == '\0') {
         storage_clear_input_redirect();
         return;
     }
 
-    snprintf(s_input_redirect, sizeof(s_input_redirect), "%s", resolved_path);
-    s_input_redirect_active = true;
+    snprintf(slot->path, sizeof(slot->path), "%s", resolved_path);
+    slot->active = true;
 }
 
 const char *storage_get_input_redirect(void)
 {
-    return s_input_redirect_active ? s_input_redirect : NULL;
+    storage_redirect_slot_t *slot = storage_redirect_current();
+
+    return slot->active ? slot->path : NULL;
 }
 
 void storage_clear_input_redirect(void)
 {
-    s_input_redirect[0] = '\0';
-    s_input_redirect_active = false;
+    storage_redirect_slot_t *slot = storage_redirect_current();
+
+    slot->path[0] = '\0';
+    slot->active = false;
 }
 
 esp_err_t storage_resolve_input_source(const char *argument, char *output, size_t output_size)
@@ -1715,11 +1826,11 @@ esp_err_t storage_resolve_input_source(const char *argument, char *output, size_
         return shell_fs_resolve_path(argument, output, output_size);
     }
 
-    if (!s_input_redirect_active) {
+    if (!storage_redirect_current()->active) {
         return ESP_ERR_NOT_FOUND;
     }
 
-    if (snprintf(output, output_size, "%s", s_input_redirect) >= (int)output_size) {
+    if (snprintf(output, output_size, "%s", storage_redirect_current()->path) >= (int)output_size) {
         output[0] = '\0';
         return ESP_ERR_INVALID_SIZE;
     }

@@ -25,6 +25,7 @@
 #include "command_ui.h"
 #include "config_cmd.h"
 #include "batch.h"
+#include "filetype.h"
 #include "calc.h"
 #include "applib.h"
 #include "storage.h"
@@ -543,21 +544,24 @@ static void shell_command_paste(int argc, char **argv)
 
 /** Built-in command names offered by Tab completion for the first token. */
 static const char *const shell_builtin_commands[] = {
-    "about", "adc", "alarm", "alias", "anchor", "ansi", "append", "appconfig", "appmode", "apps", "ask", "attrib", "audio", "battery", "beep",
+    "about", "adc", "alarm", "alias", "anchor", "ansi", "append", "appconfig",
+    "appmode", "apps", "ask", "asset", "attrib", "audio", "battery", "beep",
     "bluetooth", "brightness", "browse", "bt", "c6ota", "cal", "calc", "call",
-    "camera", "capture", "cd", "chdir", "chkdsk", "choice", "clear", "clip", "cls", "color", "comp", "config", "copy", "cursor",
+    "camera", "capture", "cd", "chdir", "chkdsk", "choice", "clear", "clip", "cls",
+    "color", "comp", "config", "copy", "crc32", "cursor",
     "date", "db", "debug",
     "deepsleep", "del", "delay", "dialog", "dir", "disk", "display", "dns", "draw", "echo", "edit",
     "endlocal",
-    "erase", "exit", "fc", "find", "findstr", "font", "for", "format", "freq", "gfind", "goto", "gpio",
+    "erase", "exit", "fc", "find", "findstr", "font", "for", "format", "freq", "gfind", "gfx", "goto", "gpio",
     "help", "hexview", "history", "httpd", "httpget", "i2c", "if", "ini", "ipconfig", "keyboard",
-    "label", "launch", "list", "locate", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "notify", "nslookup",
-    "ntpsync", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
+    "label", "launch", "list", "locate", "json", "markdown", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "notify", "nslookup",
+    "ntpsync", "open", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
     "rd", "reboot", "receive", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
     "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "send", "set", "setlocal",
-    "shift", "sleep", "sntp", "sort", "spi", "sysinfo", "tasks", "time", "timezone",
+    "shift", "sleep", "sntp", "sort", "spi", "start", "sysinfo", "taskkill", "tasks", "time", "timezone",
     "tone", "top", "touch", "trash", "tree", "tui", "type", "unalias", "undelete", "usb",
-    "ver", "version", "view", "volume", "wavplay", "wget", "wifi", "windows", "write", "xcopy",
+    "ver", "version", "view", "volume", "wavplay", "wget", "wifi", "windows",
+    "write", "xcopy",
     "proc", "temp", "theme",
 };
 
@@ -1033,19 +1037,13 @@ static int shell_launch_find(const shell_launch_entry_t *table, int count, const
 
 static bool shell_launch_has_bat_ext(const char *base)
 {
-    size_t len;
-
+    /* Executable script types (.bat/.cmd) via the central registry
+     * (components/filetype); both suffixes are 4 chars so the strip math
+     * in shell_launch_add holds for either. */
     if (base == NULL) {
         return false;
     }
-    len = strlen(base);
-    if (len < 5) { /* x.bat minimum */
-        return false;
-    }
-    return tolower((unsigned char)base[len - 4]) == '.' &&
-           tolower((unsigned char)base[len - 3]) == 'b' &&
-           tolower((unsigned char)base[len - 2]) == 'a' &&
-           tolower((unsigned char)base[len - 1]) == 't';
+    return filetype_is_executable(filetype_of(base));
 }
 
 static void shell_launch_add(shell_launch_entry_t *table, int *count, const char *full_path)
@@ -1093,10 +1091,27 @@ static void shell_launch_add(shell_launch_entry_t *table, int *count, const char
 
 /**
  * Fill @p table (P4_CONFIG_LAUNCH_MAX entries, caller-allocated) with the
- * installed `.bat` apps: every `;`-separated PATH directory, then the
- * conventional `sd:/APPS` directory. A missing/unreadable directory simply
+ * installed script apps: every `;`-separated PATH directory, then the
+ * conventional `sd:/APPS` directory. Both executable types (.bat/.cmd,
+ * see components/filetype). A missing/unreadable directory simply
  * contributes nothing. @return The number of entries stored.
  */
+static bool shell_launch_scan_pattern(shell_launch_entry_t *table, int *count,
+                                      const char *pattern)
+{
+    char **files = NULL;
+    int nfiles = 0;
+
+    if (storage_expand_wildcard(pattern, &files, &nfiles) != ESP_OK) {
+        return false;
+    }
+    for (int i = 0; i < nfiles && *count < P4_CONFIG_LAUNCH_MAX; i++) {
+        shell_launch_add(table, count, files[i]);
+    }
+    storage_free_wildcard_expansion(files, nfiles);
+    return true;
+}
+
 static int shell_launch_discover(shell_launch_entry_t *table)
 {
     const char *path_env;
@@ -1120,8 +1135,6 @@ static int shell_launch_discover(shell_launch_entry_t *table)
 
         while (dir != NULL && count < P4_CONFIG_LAUNCH_MAX) {
             char pattern[SHELL_SD_PATH_BYTES];
-            char **files = NULL;
-            int nfiles = 0;
             size_t dl;
 
             while (*dir != '\0' && isspace((unsigned char)*dir)) {
@@ -1147,16 +1160,18 @@ static int shell_launch_discover(shell_launch_entry_t *table)
                 }
                 if (dir[dl - 1] == ':') {
                     snprintf(pattern, sizeof(pattern), "%.*s//*.bat", (int)dl, dir);
+                    if (!shell_launch_scan_pattern(table, &count, pattern)) {
+                        shell_record_warningf("launch", "Could not scan %s", dir);
+                    }
+                    snprintf(pattern, sizeof(pattern), "%.*s//*.cmd", (int)dl, dir);
+                    shell_launch_scan_pattern(table, &count, pattern);
                 } else {
                     snprintf(pattern, sizeof(pattern), "%.*s/*.bat", (int)dl, dir);
-                }
-                if (storage_expand_wildcard(pattern, &files, &nfiles) == ESP_OK) {
-                    for (int i = 0; i < nfiles && count < P4_CONFIG_LAUNCH_MAX; i++) {
-                        shell_launch_add(table, &count, files[i]);
+                    if (!shell_launch_scan_pattern(table, &count, pattern)) {
+                        shell_record_warningf("launch", "Could not scan %s", dir);
                     }
-                    storage_free_wildcard_expansion(files, nfiles);
-                } else {
-                    shell_record_warningf("launch", "Could not scan %s", dir);
+                    snprintf(pattern, sizeof(pattern), "%.*s/*.cmd", (int)dl, dir);
+                    shell_launch_scan_pattern(table, &count, pattern);
                 }
             }
             dir = strtok_r(NULL, ";", &save);
@@ -1165,15 +1180,10 @@ static int shell_launch_discover(shell_launch_entry_t *table)
     free(dirs);
 
     if (count < P4_CONFIG_LAUNCH_MAX) {
-        char **files = NULL;
-        int nfiles = 0;
-
-        if (storage_expand_wildcard("sd:/APPS/*.bat", &files, &nfiles) == ESP_OK) {
-            for (int i = 0; i < nfiles && count < P4_CONFIG_LAUNCH_MAX; i++) {
-                shell_launch_add(table, &count, files[i]);
-            }
-            storage_free_wildcard_expansion(files, nfiles);
-        }
+        shell_launch_scan_pattern(table, &count, "sd:/APPS/*.bat");
+    }
+    if (count < P4_CONFIG_LAUNCH_MAX) {
+        shell_launch_scan_pattern(table, &count, "sd:/APPS/*.cmd");
     }
     return count;
 }
@@ -1219,11 +1229,12 @@ static void shell_command_launch(int argc, char **argv)
                        (strcmp(argv[1], ".") == 0) || (strcmp(argv[1], "..") == 0) ||
                        (argv[1][0] == '\0');
             if (!bad) {
-                char cand[2][SHELL_SD_PATH_BYTES];
+                char cand[3][SHELL_SD_PATH_BYTES];
 
                 snprintf(cand[0], sizeof(cand[0]), "sd:/APPS/%s", argv[1]);
                 snprintf(cand[1], sizeof(cand[1]), "sd:/APPS/%s.BAT", argv[1]);
-                for (i = 0; i < 2 && !found; i++) {
+                snprintf(cand[2], sizeof(cand[2]), "sd:/APPS/%s.CMD", argv[1]);
+                for (i = 0; i < 3 && !found; i++) {
                     char resolved[SHELL_SD_PATH_BYTES];
                     FILE *probe;
 
@@ -1260,7 +1271,7 @@ static void shell_command_launch(int argc, char **argv)
     /* `launch` — numbered menu over the discovery table. Bounded input so a
      * batch file or headless board can never stall here. */
     if (count == 0) {
-        shell_print_warning("launch: no apps installed (place a .bat on PATH or in sd:/APPS)");
+        shell_print_warning("launch: no apps installed (place a .bat/.cmd on PATH or in sd:/APPS)");
         batch_set_errorlevel(1);
         free(table);
         return;
@@ -1358,7 +1369,235 @@ static void shell_command_delay(int argc, char **argv)
     if (ms > (long)P4_CONFIG_DELAY_MAX_MS) {
         ms = (long)P4_CONFIG_DELAY_MAX_MS;
     }
-    vTaskDelay(pdMS_TO_TICKS((uint32_t)ms));
+    /* Chunked so a background task (`start`) stays killable during long
+     * waits: `taskkill` is checked every 100 ms. On the main worker the
+     * check is always false, so foreground `delay` behaves as before. */
+    {
+        uint32_t remaining = (uint32_t)ms;
+
+        while (remaining > 0) {
+            uint32_t chunk = remaining > 100U ? 100U : remaining;
+
+            vTaskDelay(pdMS_TO_TICKS(chunk));
+            remaining -= chunk;
+            if (batch_bg_kill_requested()) {
+                shell_transcript_append_text("delay: stopped\n");
+                batch_set_errorlevel(1);
+                return;
+            }
+        }
+    }
+    batch_set_errorlevel(0);
+}
+
+/* ========================================================================
+ * BACKGROUND JOBS: start, taskkill
+ * ========================================================================
+ * `start <line>` resumes a pooled background worker (created suspended at
+ * init, while internal RAM still fits full command stacks) that runs the
+ * line through the normal command pipeline (so a batch file runs as a
+ * script, anything else as a command). The job owns a private batch ctx, env/alias snapshot
+ * discipline, transcript defer slot, and storage redirect slot (see
+ * batch.c/shell.c/storage.c); modal/key-wait/appmode verbs refuse
+ * headlessly instead of blocking the shared UI.
+ *
+ * Stops are cooperative: `taskkill <job>` sets the slot's kill flag, which
+ * the batch line loop and `delay` chunks poll. A job running a single
+ * long native command (not a batch file) runs it to completion. */
+
+typedef struct {
+    TaskHandle_t handle;
+    StaticTask_t tcb;      /* internal .bss: tiny, stays in fast RAM */
+    StackType_t *stack;    /* PSRAM: full command stack, see pool init */
+    char name[16];
+    bool available;  /* pool task created at boot */
+    bool active;     /* slot claimed by `start` (cleared when runner exits) */
+    bool running;    /* task executing a job (cleared by the runner on exit) */
+    char *pending;   /* PSRAM job line handed to the runner (pool i -> slot i+1) */
+} bg_job_t;
+
+static bg_job_t s_bg_jobs[P4_CONFIG_BG_TASKS];
+
+static void command_bg_worker_task(void *arg)
+{
+    /* Pool index doubles as the batch slot minus one; the slot is claimed
+     * by `start` before we are resumed, so bind it on every wake. */
+    int slot = (int)(intptr_t)arg + 1;
+
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (s_bg_jobs[slot - 1].pending == NULL) {
+            continue;
+        }
+
+        /* Bind the private per-task state before touching anything shared. */
+        batch_bg_bind(slot);
+        shell_register_bg_task(xTaskGetCurrentTaskHandle());
+
+        shell_execute_command(s_bg_jobs[slot - 1].pending);
+
+        free(s_bg_jobs[slot - 1].pending);
+        s_bg_jobs[slot - 1].pending = NULL;
+        s_bg_jobs[slot - 1].running = false;
+        s_bg_jobs[slot - 1].active = false;
+        batch_bg_release(slot);
+        shell_unregister_bg_task(xTaskGetCurrentTaskHandle());
+    }
+}
+
+/* Create the suspended bg pool. Task stacks must be internal RAM for
+ * xTaskCreate, but internal is long gone by the time the shell starts
+ * (measured: ~26 KB free, 12 KB largest block vs 32768 needed), so the pool
+ * uses PSRAM stacks via xTaskCreateStatic (needs
+ * CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM, pinned in sdkconfig.defaults).
+ * PSRAM goes inaccessible while flash cache is disabled (OTA flash writes),
+ * so `start` is refused while an OTA is pending and OTA is refused while a
+ * bg job runs (see the c6ota dispatch guard) — the two never overlap. */
+static void command_bg_pool_init(void)
+{
+    int index;
+
+    for (index = 0; index < P4_CONFIG_BG_TASKS; index++) {
+        s_bg_jobs[index].stack = heap_caps_malloc(SHELL_COMMAND_TASK_STACK_BYTES,
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+        snprintf(s_bg_jobs[index].name, sizeof(s_bg_jobs[index].name),
+                 "bg%d", index);
+        if (s_bg_jobs[index].stack == NULL) {
+            ESP_LOGE(COMMAND_TAG, "bg pool bg%d: no PSRAM for %u-byte stack",
+                     index, (unsigned)SHELL_COMMAND_TASK_STACK_BYTES);
+            s_bg_jobs[index].available = false;
+            continue;
+        }
+        s_bg_jobs[index].handle = xTaskCreateStatic(
+            command_bg_worker_task, s_bg_jobs[index].name,
+            SHELL_COMMAND_TASK_STACK_BYTES / sizeof(StackType_t),
+            (void *)(intptr_t)index, tskIDLE_PRIORITY + 2,
+            s_bg_jobs[index].stack, &s_bg_jobs[index].tcb);
+        if (s_bg_jobs[index].handle == NULL) {
+            ESP_LOGE(COMMAND_TAG, "bg pool bg%d: xTaskCreateStatic failed", index);
+            heap_caps_free(s_bg_jobs[index].stack);
+            s_bg_jobs[index].stack = NULL;
+            s_bg_jobs[index].available = false;
+            continue;
+        }
+        s_bg_jobs[index].available = true;
+        vTaskSuspend(s_bg_jobs[index].handle);
+    }
+}
+
+/** True when any bg job is currently running (OTA guard). */
+static bool command_bg_any_running(void)
+{
+    int index;
+
+    for (index = 0; index < P4_CONFIG_BG_TASKS; index++) {
+        if (s_bg_jobs[index].running) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static const bg_job_t *command_bg_find(const char *job, int *slot_out)
+{
+    /* Accept the job name (`bg0`) or the bare slot number (`0`). Slot
+     * numbers are 0-based in the job name, 1-based in the batch engine. */
+    char *end = NULL;
+    long number = strtol(job, &end, 10);
+    size_t index;
+
+    if (end != NULL && *end == '\0' && number >= 0 && number < P4_CONFIG_BG_TASKS) {
+        if (s_bg_jobs[number].active) {
+            if (slot_out != NULL) {
+                *slot_out = (int)number + 1;
+            }
+            return &s_bg_jobs[number];
+        }
+        return NULL;
+    }
+    for (index = 0; index < P4_CONFIG_BG_TASKS; index++) {
+        if (s_bg_jobs[index].active &&
+            shell_text_equals_ignore_case(job, s_bg_jobs[index].name)) {
+            if (slot_out != NULL) {
+                *slot_out = (int)index + 1;
+            }
+            return &s_bg_jobs[index];
+        }
+    }
+    return NULL;
+}
+
+static void shell_command_start(int argc, char **argv)
+{
+    char *line;
+    int slot;
+
+    if (argc < 2) {
+        shell_print_usage("Usage: start <command> [args...]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    /* PSRAM stacks go inaccessible during OTA flash writes: never overlap. */
+    if (c6ota_is_confirmation_pending()) {
+        shell_transcript_append_text("start: refused while a C6 OTA is pending (finish or cancel it first)\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    slot = batch_bg_alloc();
+    if (slot < 0) {
+        shell_transcript_appendf("start: no background slots free (max %d)\n",
+                                 P4_CONFIG_BG_TASKS);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (!s_bg_jobs[slot - 1].available) {
+        batch_bg_release(slot);
+        shell_transcript_append_text("start: background pool unavailable (boot task create failed, see boot log)\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    line = malloc(SHELL_COMMAND_BYTES);
+    if (line == NULL) {
+        batch_bg_release(slot);
+        shell_transcript_append_text("start: out of memory\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_join_args(argv, 1, argc, line, SHELL_COMMAND_BYTES);
+
+    s_bg_jobs[slot - 1].pending = line;
+    s_bg_jobs[slot - 1].active = true;
+    s_bg_jobs[slot - 1].running = true;
+    vTaskResume(s_bg_jobs[slot - 1].handle);
+    shell_transcript_appendf("[%s] started: %s\n", s_bg_jobs[slot - 1].name, line);
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_taskkill(int argc, char **argv)
+{
+    const bg_job_t *job;
+    int slot = 0;
+
+    if (argc != 2) {
+        shell_print_usage("Usage: taskkill <job>   (name like bg0, or slot number)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    job = command_bg_find(argv[1], &slot);
+    if (job == NULL) {
+        shell_transcript_appendf("taskkill: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (!job->running) {
+        shell_transcript_appendf("taskkill: [%s] already finished\n", job->name);
+        s_bg_jobs[slot - 1].active = false;
+        batch_set_errorlevel(1);
+        return;
+    }
+    batch_bg_request_kill(slot);
+    shell_transcript_appendf("taskkill: [%s] stop requested\n", job->name);
     batch_set_errorlevel(0);
 }
 
@@ -1784,6 +2023,18 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- Markdown rendering ---- */
+    if (shell_text_equals_ignore_case(argv[0], "markdown")) {
+        shell_command_markdown(argc, argv);
+        return true;
+    }
+
+    /* ---- JSON validate/pretty ---- */
+    if (shell_text_equals_ignore_case(argv[0], "json")) {
+        shell_command_json(argc, argv);
+        return true;
+    }
+
     /* ---- Screenshot command ---- */
     if (shell_text_equals_ignore_case(argv[0], "screenshot") ||
         shell_text_equals_ignore_case(argv[0], "scr") ||
@@ -1827,8 +2078,17 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "c6ota")) {
+        /* PSRAM bg stacks go inaccessible during OTA flash writes: the two
+         * must never overlap, so OTA waits for background jobs. */
+        if (command_bg_any_running()) {
+            shell_transcript_append_text("c6ota: stop background jobs first (taskkill bg0 ...)\n");
+            batch_set_errorlevel(1);
+        } else {
+            free(family_command);
+            c6ota_perform(argc >= 2 ? argv[1] : NULL);
+            return true;
+        }
         free(family_command);
-        c6ota_perform(argc >= 2 ? argv[1] : NULL);
         return true;
     }
 
@@ -1931,6 +2191,21 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "draw")) {
         shell_command_draw(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "gfx")) {
+        shell_command_gfx(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "crc32")) {
+        shell_command_crc32(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "asset")) {
+        shell_command_asset(argc, argv);
         return true;
     }
 
@@ -2231,6 +2506,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "open")) {
+        shell_command_open(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "hexview")) {
         shell_command_hexview(argc, argv);
         return true;
@@ -2478,6 +2758,20 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "delay")) {
         shell_command_delay(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "start")) {
+        shell_command_start(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "taskkill")) {
+        shell_command_taskkill(argc, argv);
         free(family_command);
         free(echo_line);
         return true;
@@ -2957,6 +3251,11 @@ void command_init(void)
         vQueueDelete(s_command_queue);
         s_command_queue = NULL;
     }
+
+    /* Suspended bg pool for `start`: same stack as the main worker (bg jobs
+     * run the identical pipeline, including deep batch+TUI), created now
+     * while internal RAM still fits. */
+    command_bg_pool_init();
 
     /* Publish the command pipeline to the batch engine so nested contexts
      * (if bodies, for bodies, pipe stages, batch lines) inherit variable

@@ -11,6 +11,8 @@
 #include "modal_surf.h"
 #include "modal.h"
 #include "windows.h"
+#include "markdown.h"
+#include "filetype.h"
 #include "theme.h"
 #include "shell.h"
 #include "keyboard.h"
@@ -781,6 +783,7 @@ typedef struct {
     const char *path;
     char *content;
     size_t content_size;
+    bool raw;
 } viewer_ctx_t;
 
 static viewer_ctx_t *s_viewer_active = NULL;
@@ -814,6 +817,23 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
                 for (size_t i=0;i<r;i++) if (ctx->content[i]=='\0') ctx->content[i]=' ';
             }
             fclose(f);
+        }
+        /* Markdown branch: render the document, then strip SGR for the
+         * plain textarea (it cannot render escapes). Rendered-plain reads
+         * cleanly (no markup noise, aligned tables). Type test is the
+         * central registry (components/filetype), not a local list. */
+        if (ctx->content != NULL && !ctx->raw &&
+            filetype_is_markdown(filetype_of(ctx->path))) {
+            size_t cap = ctx->content_size * 2 + 64;
+            char *rendered = malloc(cap);
+            if (rendered != NULL) {
+                markdown_render_doc(ctx->content, rendered, cap);
+                /* Strip in place (shrinks), then swap buffers. */
+                markdown_strip_ansi(rendered, rendered, cap);
+                free(ctx->content);
+                ctx->content = rendered;
+                ctx->content_size = strlen(rendered);
+            }
         }
         if (!ctx->content) {
             ctx->content = strdup("(cannot open file)");
@@ -892,6 +912,20 @@ int modal_viewer_run(const char *title, const char *file_path, uint32_t timeout_
     ctx.title = title;
     ctx.path = file_path;
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    ctx.raw = false;
+    if (modal_surface_run(&viewer_surface, &ctx, &el) != ESP_OK) return -1;
+    return 0;
+}
+
+/** Viewer with explicit raw control (view --raw bypasses Markdown). */
+int modal_viewer_run_raw(const char *title, const char *file_path, uint32_t timeout_ms, bool raw)
+{
+    viewer_ctx_t ctx = {0};
+    int el=0;
+    ctx.title = title;
+    ctx.path = file_path;
+    ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    ctx.raw = raw;
     if (modal_surface_run(&viewer_surface, &ctx, &el) != ESP_OK) return -1;
     return 0;
 }

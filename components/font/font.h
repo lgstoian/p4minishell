@@ -14,6 +14,7 @@
 
 #include "lvgl.h"
 #include "p4minishell_config.h"
+#include "ansi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -96,6 +97,27 @@ int font_terminal_max_px(const char *name, int rect_w, int rect_h);
 /** Best-effort attach of the CJK fallback for both roles (sizes track the
  * roles). Safe to call repeatedly; silent when the file is absent. */
 void font_attach_cjk(void);
+
+/* ========================================================================
+ * VARIANTS + SPAN STYLING (markdown bold/italic)
+ * ========================================================================
+ * Bold/italic need real font variants (LVGL has no faux styles). Only the
+ * DejaVuSansMono pair is vendored; everything else falls back to bright.
+ */
+
+#define FONT_VARIANT_BOLD   1
+#define FONT_VARIANT_ITALIC 2
+
+/** Variant object for (base stem, px, attr), or NULL when none exists.
+/// The slot takes a permanent ref (never freed); bounded by the slot table. */
+lv_font_t *font_variant_for(const char *base_stem, int px, int attr);
+
+/** Apply attrs + color to a span style for a role: variant font when
+ * available (bold preferred over italic), bright fallback for bold on
+ * stock colors, LVGL decor for underline/strike. Centralizes transcript,
+ * editor, and preview span styling. */
+void font_span_style(lv_style_t *style, font_role_t role, unsigned attrs,
+                     int fg_index, uint32_t fallback_rgb);
 
 #ifdef __cplusplus
 }

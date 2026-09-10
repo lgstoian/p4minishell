@@ -12,6 +12,7 @@
 #include "editor_view.h"
 #include "p4minishell_config.h"
 #include "storage.h"
+#include "filetype.h"
 #include "shell.h"
 #include "modal.h"
 #include "esp_lvgl_port.h"
@@ -112,6 +113,7 @@ static bool editor_line_set(editor_line_t *line, const char *bytes, size_t len)
 
 static void editor_undo_push(editor_doc_t *doc);
 static void editor_redo_clear(editor_doc_t *doc);
+static void editor_doc_undo_reset(editor_doc_t *doc);
 
 /** One undo/redo snapshot: serialized lines plus cursor/selection state. */
 typedef struct {
@@ -121,6 +123,7 @@ typedef struct {
     size_t sel_row;
     size_t sel_col;
     bool selection_active;
+    bool modified;             /**< Dirty flag at snapshot time */
 } editor_undo_snapshot_t;
 
 /** Undo/redo ring storage, kept on the document itself (undo_storage). */
@@ -218,26 +221,11 @@ editor_doc_t *editor_doc_new(const char *path)
 
 void editor_doc_free(editor_doc_t *doc)
 {
-    editor_undo_state_t *state;
-    size_t i;
-    size_t idx;
     if (doc == NULL) {
         return;
     }
-    /* Free the heap-backed undo/redo snapshots before the document itself:
-     * each snapshot's data is a serialized copy of the whole document. */
-    state = (editor_undo_state_t *)&doc->undo_storage;
-    for (i = 0; i < state->undo_count; i++) {
-        idx = (state->undo_head + i) % P4_CONFIG_EDITOR_UNDO_DEPTH;
-        free(state->undo[idx].data);
-        state->undo[idx].data = NULL;
-    }
-    for (i = 0; i < state->redo_count; i++) {
-        idx = (state->redo_head + i) % P4_CONFIG_EDITOR_UNDO_DEPTH;
-        free(state->redo[idx].data);
-        state->redo[idx].data = NULL;
-    }
-    for (i = 0; i < doc->line_count; i++) {
+    editor_doc_undo_reset(doc);
+    for (size_t i = 0; i < doc->line_count; i++) {
         editor_line_free(&doc->lines[i]);
     }
     free(doc->lines);
@@ -246,20 +234,24 @@ void editor_doc_free(editor_doc_t *doc)
 
 void editor_doc_pick_syntax(editor_doc_t *doc)
 {
-    const char *dot;
     if (doc == NULL || doc->path[0] == '\0') {
         doc->syntax = EDITOR_SYNTAX_PLAIN;
         return;
     }
-    dot = strrchr(doc->path, '.');
-    if (dot == NULL) {
-        doc->syntax = EDITOR_SYNTAX_PLAIN;
-        return;
-    }
-    if (strcasecmp(dot, ".bat") == 0 || strcasecmp(dot, ".cmd") == 0) {
+    /* Single source of truth for extension -> syntax (components/filetype). */
+    switch (filetype_of(doc->path)) {
+    case FILETYPE_BATCH:
         doc->syntax = EDITOR_SYNTAX_BATCH;
-    } else {
+        break;
+    case FILETYPE_MARKDOWN:
+        doc->syntax = EDITOR_SYNTAX_MARKDOWN;
+        break;
+    case FILETYPE_JSON:
+        doc->syntax = EDITOR_SYNTAX_JSON;
+        break;
+    default:
         doc->syntax = EDITOR_SYNTAX_PLAIN;
+        break;
     }
 }
 
@@ -395,6 +387,22 @@ editor_doc_t *editor_doc_load(const char *path)
         }
         editor_doc_pick_syntax(doc);
     }
+    /* Read-only detection while the SD session is still held: a probe open
+     * for update fails on FATFS read-only files without touching content. */
+    doc->readonly = false;
+    {
+        char probe_path[P4_CONFIG_SD_PATH_BYTES];
+        FILE *probe = NULL;
+        if (shell_fs_resolve_path(doc->path, probe_path,
+                                  sizeof(probe_path)) == ESP_OK) {
+            probe = fopen(probe_path, "r+b");
+            if (probe != NULL) {
+                fclose(probe);
+            } else {
+                doc->readonly = true;
+            }
+        }
+    }
     free(buf);
     shell_sd_end(&session, "edit");
 
@@ -461,6 +469,54 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
         return err;
     }
 
+    /* Backup: copy any existing destination to "<file>.bak" before the
+     * truncating write, so a power loss mid-save cannot lose both copies.
+     * Best-effort (heap chunked copy): a failed backup still saves, and the
+     * caller reports it. Over-long paths skip the backup rather than
+     * truncating into the wrong file. */
+    {
+        char bak[P4_CONFIG_SD_PATH_BYTES];
+        struct stat bak_st;
+        if (snprintf(bak, sizeof(bak), "%s.bak", resolved) < (int)sizeof(bak) &&
+            shell_sd_stat_path(resolved, &bak_st) == ESP_OK &&
+            S_ISREG(bak_st.st_mode)) {
+            FILE *src = fopen(resolved, "rb");
+            FILE *dst = NULL;
+            if (src != NULL) {
+                dst = fopen(bak, "wb");
+            }
+            if (src != NULL && dst != NULL) {
+                char *chunk = malloc(4096);
+                size_t got;
+                bool bak_ok = (chunk != NULL);
+                while (bak_ok &&
+                       (got = fread(chunk, 1, 4096, src)) > 0) {
+                    if (fwrite(chunk, 1, got, dst) != got) {
+                        bak_ok = false;
+                    }
+                }
+                free(chunk);
+                fclose(src);
+                if (fclose(dst) != 0) {
+                    bak_ok = false;
+                }
+                if (!bak_ok) {
+                    remove(bak);
+                }
+            } else {
+                if (src != NULL) {
+                    fclose(src);
+                }
+                if (dst != NULL) {
+                    fclose(dst);
+                    remove(bak);
+                }
+            }
+            /* Best-effort: save proceeds regardless (outcome unreported
+             * here; a full card fails the write below with its own error). */
+        }
+    }
+
     file = fopen(resolved, "wb");
     if (file == NULL) {
         shell_sd_end(&session, "edit");
@@ -512,6 +568,55 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
 
     fclose(file);
     shell_sd_end(&session, "edit");
+    return ESP_OK;
+}
+
+/* Re-read the document from its bound path, discarding unsaved changes.
+ * Cursor is preserved clamped into the reloaded text; undo history resets
+ * to the fresh baseline and modified clears. Unnamed buffers cannot reload.
+ */
+esp_err_t editor_doc_reload(editor_doc_t *doc)
+{
+    editor_doc_t *fresh;
+    size_t i;
+
+    if (doc == NULL || doc->path[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    fresh = editor_doc_load(doc->path);
+    if (fresh == NULL) {
+        return ESP_FAIL;
+    }
+    for (i = 0; i < doc->line_count; i++) {
+        editor_line_free(&doc->lines[i]);
+    }
+    free(doc->lines);
+    doc->lines = fresh->lines;
+    doc->line_count = fresh->line_count;
+    doc->line_capacity = fresh->line_capacity;
+    doc->crlf = fresh->crlf;
+    doc->trailing_newline = fresh->trailing_newline;
+    doc->syntax = fresh->syntax;
+    doc->readonly = fresh->readonly;
+    fresh->lines = NULL;
+    fresh->line_count = 0;
+    fresh->line_capacity = 0;
+    editor_doc_free(fresh);
+
+    if (doc->line_count == 0) {
+        doc->cursor_row = 0;
+        doc->cursor_col = 0;
+    } else {
+        if (doc->cursor_row >= doc->line_count) {
+            doc->cursor_row = doc->line_count - 1;
+        }
+        if (doc->cursor_col > doc->lines[doc->cursor_row].length) {
+            doc->cursor_col = doc->lines[doc->cursor_row].length;
+        }
+    }
+    doc->selection_active = false;
+    doc->modified = false;
+    editor_doc_undo_reset(doc);
     return ESP_OK;
 }
 
@@ -648,7 +753,32 @@ void editor_doc_newline(editor_doc_t *doc)
     }
     editor_undo_push(doc);
     editor_redo_clear(doc);
-    editor_doc_split_line(doc);
+    {
+        /* Auto-indent: copy the leading whitespace of the split line onto
+         * the new line below (same undo snapshot). Captured before the
+         * split truncates the source line. */
+        size_t row = doc->cursor_row;
+        char indent_buf[128];
+        size_t indent = 0;
+        if (row < doc->line_count && doc->lines[row].text != NULL) {
+            while (indent < doc->lines[row].length &&
+                   (doc->lines[row].text[indent] == ' ' ||
+                    doc->lines[row].text[indent] == '\t') &&
+                   indent < sizeof(indent_buf)) {
+                indent_buf[indent] = doc->lines[row].text[indent];
+                indent++;
+            }
+        }
+        if (!editor_doc_split_line(doc)) {
+            return;
+        }
+        if (indent > 0 && doc->cursor_row < doc->line_count) {
+            editor_line_t *next = &doc->lines[doc->cursor_row];
+            if (editor_line_insert_at(next, 0, indent_buf, indent)) {
+                doc->cursor_col = indent;
+            }
+        }
+    }
 }
 
 void editor_doc_insert_bytes(editor_doc_t *doc, const char *bytes, size_t len)
@@ -1364,6 +1494,444 @@ bool editor_doc_replace_next(editor_doc_t *doc,
     return true;
 }
 
+/* Replace-all iteration cap: a pathological needle (e.g. empty) can never
+ * loop forever; real documents finish orders of magnitude below this. */
+#define EDITOR_REPLACE_ALL_MAX 10000
+
+size_t editor_doc_replace_all(editor_doc_t *doc,
+                              const char *needle, size_t needle_len,
+                              const char *replacement, size_t repl_len,
+                              bool case_sensitive)
+{
+    size_t count = 0;
+    size_t row = 0;
+    size_t col = 0;
+
+    if (doc == NULL || needle == NULL || needle_len == 0) {
+        return 0;
+    }
+    if (replacement == NULL) {
+        repl_len = 0;
+    }
+
+    /* Pre-scan before touching the undo ring: no match means no snapshot,
+     * so a fruitless replace-all leaves undo/redo exactly as found. */
+    if (!editor_doc_find_next(doc, needle, needle_len, 0, 0,
+                              case_sensitive, false, &row, &col)) {
+        return 0;
+    }
+
+    /* One undo snapshot for the whole operation (not one per hit). */
+    editor_doc_undo_mark(doc);
+
+    /* Matches never span lines (find_next scans per line), so each hit is
+     * a direct single-line splice with no selection machinery. */
+    row = 0;
+    col = 0;
+    while (count < EDITOR_REPLACE_ALL_MAX &&
+           editor_doc_find_next(doc, needle, needle_len, row, col,
+                                case_sensitive, false, &row, &col)) {
+        editor_line_delete_at(&doc->lines[row], col, needle_len);
+        if (repl_len > 0 &&
+            !editor_line_insert_at(&doc->lines[row], col, replacement, repl_len)) {
+            break; /* OOM mid-operation: keep what replaced so far. */
+        }
+        count++;
+        /* Continue AFTER the inserted replacement so a needle inside the
+         * replacement text can never re-match (no infinite loop). */
+        col += repl_len;
+        /* If the replacement ran past EOL (cannot happen: same-line splice
+         * keeps col + repl_len <= length), the next find clamps anyway. */
+    }
+    if (count > 0) {
+        doc->cursor_row = row;
+        doc->cursor_col = col;
+        doc->selection_active = false;
+        editor_doc_mark_modified(doc);
+    }
+    return count;
+}
+
+/* ========================================================================
+ * COMMENT TOGGLE
+ * ========================================================================
+ * Prefix comments per syntax (batch "rem ", json "// ", markdown
+ * "<!--...-->"). Operates on the selection rows, or the cursor row when
+ * nothing is selected. Blank lines are skipped. All-commented ranges
+ * uncomment; otherwise every non-blank line is commented. One undo
+ * snapshot; returns lines changed (0 for unsupported syntax or no-op).
+ */
+
+size_t editor_doc_comment_toggle(editor_doc_t *doc)
+{
+    const char *prefix = NULL;
+    const char *suffix = NULL;
+    const char *alt = NULL; /* batch also accepts "::" when uncommenting */
+    size_t first_row;
+    size_t last_row;
+    size_t row;
+    bool all_commented = true;
+    size_t changed = 0;
+
+    if (doc == NULL || doc->line_count == 0) {
+        return 0;
+    }
+    switch (doc->syntax) {
+    case EDITOR_SYNTAX_BATCH:
+        prefix = "rem ";
+        alt = "::";
+        break;
+    case EDITOR_SYNTAX_JSON:
+        prefix = "// ";
+        break;
+    case EDITOR_SYNTAX_MARKDOWN:
+        prefix = "<!-- ";
+        suffix = " -->";
+        break;
+    default:
+        return 0;
+    }
+
+    if (doc->selection_active) {
+        size_t s_row, s_col, e_row, e_col;
+        editor_doc_selection_bounds(doc, &s_row, &s_col, &e_row, &e_col);
+        first_row = s_row;
+        last_row = e_row;
+        /* A selection ending at column 0 excludes its last row (the caret
+         * sits at the start of a line the user did not drag into). */
+        if (e_col == 0 && last_row > first_row) {
+            last_row--;
+        }
+    } else {
+        first_row = doc->cursor_row;
+        last_row = doc->cursor_row;
+    }
+    if (first_row >= doc->line_count) {
+        return 0;
+    }
+    if (last_row >= doc->line_count) {
+        last_row = doc->line_count - 1;
+    }
+
+    /* Pass 1: is every non-blank line already commented? Batch markers
+     * match case-insensitively (REM/Rem/rem). */
+    for (row = first_row; row <= last_row; row++) {
+        const editor_line_t *line = &doc->lines[row];
+        size_t col = 0;
+        size_t plen = strlen(prefix);
+        bool is_batch = (doc->syntax == EDITOR_SYNTAX_BATCH);
+        while (col < line->length &&
+               (line->text[col] == ' ' || line->text[col] == '\t')) {
+            col++;
+        }
+        if (col >= line->length) {
+            continue; /* blank */
+        }
+        if (line->length - col >= plen &&
+            (is_batch ? (strncasecmp(line->text + col, prefix, plen) == 0)
+                      : (strncmp(line->text + col, prefix, plen) == 0))) {
+            if (suffix == NULL) {
+                continue;
+            }
+        } else if (alt != NULL) {
+            size_t alen = strlen(alt);
+            if (line->length - col >= alen &&
+                strncmp(line->text + col, alt, alen) == 0) {
+                continue;
+            }
+        }
+        if (suffix != NULL) {
+            size_t slen = strlen(suffix);
+            size_t end = line->length;
+            while (end > col && (line->text[end - 1] == ' ' ||
+                                 line->text[end - 1] == '\t')) {
+                end--;
+            }
+            if (end - col >= plen + slen &&
+                strncmp(line->text + col, prefix, plen) == 0 &&
+                strncmp(line->text + end - slen, suffix, slen) == 0) {
+                continue;
+            }
+        }
+        all_commented = false;
+        break;
+    }
+
+    editor_doc_undo_mark(doc);
+
+    /* Pass 2: strip or add. Row-local edits only, so top-down is safe. */
+    for (row = first_row; row <= last_row; row++) {
+        editor_line_t *line = &doc->lines[row];
+        size_t col = 0;
+        size_t plen = strlen(prefix);
+        bool is_batch = (doc->syntax == EDITOR_SYNTAX_BATCH);
+        bool has_prefix;
+        while (col < line->length &&
+               (line->text[col] == ' ' || line->text[col] == '\t')) {
+            col++;
+        }
+        if (col >= line->length) {
+            continue; /* blank */
+        }
+        has_prefix = line->length - col >= plen &&
+            (is_batch ? (strncasecmp(line->text + col, prefix, plen) == 0)
+                      : (strncmp(line->text + col, prefix, plen) == 0));
+        if (all_commented) {
+            if (has_prefix) {
+                editor_line_delete_at(line, col, plen);
+                if (suffix != NULL) {
+                    size_t slen = strlen(suffix);
+                    size_t end = line->length;
+                    while (end > col && (line->text[end - 1] == ' ' ||
+                                         line->text[end - 1] == '\t')) {
+                        end--;
+                    }
+                    if (end >= col + slen &&
+                        strncmp(line->text + end - slen, suffix, slen) == 0) {
+                        editor_line_delete_at(line, end - slen, slen);
+                    }
+                }
+                changed++;
+            } else if (alt != NULL) {
+                size_t alen = strlen(alt);
+                if (line->length - col >= alen &&
+                    strncmp(line->text + col, alt, alen) == 0) {
+                    editor_line_delete_at(line, col, alen);
+                    changed++;
+                }
+            }
+        } else {
+            /* Comment branch: skip lines already carrying the marker (or,
+             * for markdown, the full wrap) so toggling never double-marks. */
+            bool already = has_prefix;
+            if (already && suffix != NULL) {
+                size_t slen = strlen(suffix);
+                size_t end = line->length;
+                while (end > col && (line->text[end - 1] == ' ' ||
+                                     line->text[end - 1] == '\t')) {
+                    end--;
+                }
+                already = end >= col + slen &&
+                    strncmp(line->text + end - slen, suffix, slen) == 0;
+            }
+            if (!already) {
+                if (!editor_line_insert_at(line, col, prefix, plen)) {
+                    break; /* OOM: keep what toggled so far. */
+                }
+                if (suffix != NULL) {
+                    size_t slen = strlen(suffix);
+                    if (!editor_line_insert_at(line, line->length, suffix, slen)) {
+                        break;
+                    }
+                }
+                changed++;
+            }
+        }
+    }
+    if (changed > 0) {
+        /* Selection stays active so a repeated toggle hits the same range. */
+        editor_doc_mark_modified(doc);
+    }
+    return changed;
+}
+
+/* ========================================================================
+ * MATCH JUMP (parens + %var%)
+ * ========================================================================
+ * From a paren or % sign, jump to its match. Parens nest across the whole
+ * document (double-quoted spans and whole-line rem/:: comments don't count);
+ * %var% pairs match within one line. Inspects the char under the cursor,
+ * else the char just before it. No-op returning false when nothing matches.
+ */
+
+static bool editor_doc_line_is_batch_comment(const editor_line_t *line)
+{
+    size_t i = 0;
+    if (line == NULL || line->text == NULL) {
+        return false;
+    }
+    while (i < line->length &&
+           (line->text[i] == ' ' || line->text[i] == '\t')) {
+        i++;
+    }
+    if (i + 3 <= line->length &&
+        (strncasecmp(line->text + i, "rem", 3) == 0)) {
+        return true;
+    }
+    return i + 2 <= line->length && line->text[i] == ':' && line->text[i + 1] == ':';
+}
+
+bool editor_doc_match_jump(editor_doc_t *doc)
+{
+    size_t row;
+    size_t col;
+    char ch = '\0';
+
+    if (doc == NULL || doc->line_count == 0) {
+        return false;
+    }
+    row = doc->cursor_row;
+    if (row >= doc->line_count) {
+        return false;
+    }
+    col = doc->cursor_col;
+    {
+        const editor_line_t *line = &doc->lines[row];
+        if (col < line->length) {
+            ch = line->text[col];
+        } else if (col > 0) {
+            ch = line->text[col - 1];
+            /* Cursor just past an opener/closer still counts: step back
+             * onto it so scans start on the right side. */
+            if (ch == '(' || ch == ')' || ch == '%') {
+                col--;
+            } else {
+                ch = '\0';
+            }
+        }
+    }
+
+    if (ch == '(' || ch == ')') {
+        int depth = 0;
+        bool fwd = (ch == '(');
+        size_t r = row;
+        size_t c = fwd ? col + 1 : col;
+        /* Backward scans start before the closer. */
+        if (!fwd && c > 0) {
+            c--;
+        } else if (!fwd) {
+            if (r == 0) {
+                return false;
+            }
+            r--;
+            c = doc->lines[r].length;
+            if (c > 0) {
+                c--;
+            }
+        }
+        while (true) {
+            const editor_line_t *line = &doc->lines[r];
+            bool in_str = false;
+            size_t start;
+            size_t end;
+            size_t k;
+            if (editor_doc_line_is_batch_comment(line)) {
+                goto next_line;
+            }
+            /* Rescan the quote state from line start (batch has no escapes;
+             * a " toggles string mode for the rest of the line). */
+            if (fwd) {
+                start = (r == row) ? c : 0;
+                /* Recompute in_str at start by scanning the prefix. */
+                in_str = false;
+                for (k = 0; k < start && k < line->length; k++) {
+                    if (line->text[k] == '"') {
+                        in_str = !in_str;
+                    }
+                }
+                for (k = start; k < line->length; k++) {
+                    if (line->text[k] == '"') {
+                        in_str = !in_str;
+                        continue;
+                    }
+                    if (in_str) {
+                        continue;
+                    }
+                    if (line->text[k] == '(') {
+                        depth++;
+                    } else if (line->text[k] == ')') {
+                        if (depth == 0) {
+                            doc->cursor_row = r;
+                            doc->cursor_col = k;
+                            doc->selection_active = false;
+                            return true;
+                        }
+                        depth--;
+                    }
+                }
+            } else {
+                end = (r == row) ? c + 1 : line->length;
+                in_str = false;
+                /* Suffix quote parity: count quotes in [end, length); an odd
+                 * count means position `end` sits inside a string. */
+                {
+                    size_t q = end;
+                    size_t quotes = 0;
+                    while (q < line->length) {
+                        if (line->text[q] == '"') {
+                            quotes++;
+                        }
+                        q++;
+                    }
+                    in_str = (quotes % 2) == 1;
+                }
+                k = end;
+                while (k > 0) {
+                    k--;
+                    if (line->text[k] == '"') {
+                        in_str = !in_str;
+                        continue;
+                    }
+                    if (in_str) {
+                        continue;
+                    }
+                    if (line->text[k] == ')') {
+                        depth++;
+                    } else if (line->text[k] == '(') {
+                        if (depth == 0) {
+                            doc->cursor_row = r;
+                            doc->cursor_col = k;
+                            doc->selection_active = false;
+                            return true;
+                        }
+                        depth--;
+                    }
+                }
+            }
+        next_line:
+            if (fwd) {
+                if (r + 1 >= doc->line_count) {
+                    return false;
+                }
+                r++;
+            } else {
+                if (r == 0) {
+                    return false;
+                }
+                r--;
+            }
+        }
+    }
+
+    if (ch == '%') {
+        const editor_line_t *line = &doc->lines[row];
+        size_t k = col + 1;
+        while (k < line->length) {
+            if (line->text[k] == '%') {
+                doc->cursor_row = row;
+                doc->cursor_col = k;
+                doc->selection_active = false;
+                return true;
+            }
+            k++;
+        }
+        /* No closer ahead: fall back to the opener behind. */
+        if (col > 0) {
+            k = col;
+            while (k > 0) {
+                k--;
+                if (line->text[k] == '%') {
+                    doc->cursor_row = row;
+                    doc->cursor_col = k;
+                    doc->selection_active = false;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 /* ========================================================================
  * UNDO / REDO
  * ========================================================================
@@ -1376,6 +1944,35 @@ bool editor_doc_replace_next(editor_doc_t *doc,
  * types are declared at the top of this file so editor_doc_free() can
  * release their heap buffers.)
  */
+
+/** Release all undo/redo snapshots and reset both rings (reload, free). */
+static void editor_doc_undo_reset(editor_doc_t *doc)
+{
+    editor_undo_state_t *state;
+    size_t i;
+    size_t idx;
+
+    if (doc == NULL) {
+        return;
+    }
+    /* Free the heap-backed undo/redo snapshots: each snapshot's data is a
+     * serialized copy of the whole document. */
+    state = (editor_undo_state_t *)&doc->undo_storage;
+    for (i = 0; i < state->undo_count; i++) {
+        idx = (state->undo_head + i) % P4_CONFIG_EDITOR_UNDO_DEPTH;
+        free(state->undo[idx].data);
+        state->undo[idx].data = NULL;
+    }
+    for (i = 0; i < state->redo_count; i++) {
+        idx = (state->redo_head + i) % P4_CONFIG_EDITOR_UNDO_DEPTH;
+        free(state->redo[idx].data);
+        state->redo[idx].data = NULL;
+    }
+    state->undo_count = 0;
+    state->undo_head = 0;
+    state->redo_count = 0;
+    state->redo_head = 0;
+}
 
 /** Serialize the whole document into one heap string joined with '\n'. */
 static char *editor_doc_serialize(const editor_doc_t *doc)
@@ -1516,6 +2113,7 @@ static void editor_undo_push(editor_doc_t *doc)
     slot->sel_row = doc->sel_row;
     slot->sel_col = doc->sel_col;
     slot->selection_active = doc->selection_active;
+    slot->modified = doc->modified;
 }
 
 static void editor_redo_clear(editor_doc_t *doc)
@@ -1568,6 +2166,7 @@ void editor_doc_undo(editor_doc_t *doc)
             state->redo[r_idx].sel_row = doc->sel_row;
             state->redo[r_idx].sel_col = doc->sel_col;
             state->redo[r_idx].selection_active = doc->selection_active;
+            state->redo[r_idx].modified = doc->modified;
             state->redo_count++;
         }
     }
@@ -1578,7 +2177,9 @@ void editor_doc_undo(editor_doc_t *doc)
     doc->sel_row = slot->sel_row;
     doc->sel_col = slot->sel_col;
     doc->selection_active = slot->selection_active;
-    doc->modified = true;
+    /* Restores the dirty flag from snapshot time: undoing back to a saved
+     * state clears the mark instead of forcing it dirty. */
+    doc->modified = slot->modified;
 
     /* Pop the undo entry. */
     free(slot->data);
@@ -1615,6 +2216,7 @@ void editor_doc_redo(editor_doc_t *doc)
             state->undo[u_idx].sel_row = doc->sel_row;
             state->undo[u_idx].sel_col = doc->sel_col;
             state->undo[u_idx].selection_active = doc->selection_active;
+            state->undo[u_idx].modified = doc->modified;
             state->undo_count++;
         } else {
             /* Ring full: replace the oldest without growing. */
@@ -1626,6 +2228,7 @@ void editor_doc_redo(editor_doc_t *doc)
             state->undo[old].sel_row = doc->sel_row;
             state->undo[old].sel_col = doc->sel_col;
             state->undo[old].selection_active = doc->selection_active;
+            state->undo[old].modified = doc->modified;
             state->undo_head = (state->undo_head + 1) % P4_CONFIG_EDITOR_UNDO_DEPTH;
         }
     }
@@ -1636,7 +2239,7 @@ void editor_doc_redo(editor_doc_t *doc)
     doc->sel_row = slot->sel_row;
     doc->sel_col = slot->sel_col;
     doc->selection_active = slot->selection_active;
-    doc->modified = true;
+    doc->modified = slot->modified;
 
     free(slot->data);
     slot->data = NULL;
@@ -1858,6 +2461,7 @@ size_t editor_format_line_number(size_t line, unsigned width,
 
 /* Session event bits. MODAL_EVENT_CLOSE_REQUEST / MODAL_EVENT_CLOSED live in modal.h. */
 #define EDITOR_EVENT_SAVE   (1 << 2)
+#define EDITOR_EVENT_RELOAD (1 << 3)
 
 struct editor_session {
     editor_control_t control;
@@ -1990,12 +2594,32 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
     editor_control_t *control;
     esp_err_t err;
 
-    if (session == NULL || (bits & EDITOR_EVENT_SAVE) == 0) {
+    if (session == NULL ||
+        ((bits & (EDITOR_EVENT_SAVE | EDITOR_EVENT_RELOAD)) == 0)) {
         return;
     }
 
     control = &session->control;
     err = ESP_ERR_INVALID_ARG;
+
+    /* Reload runs first when both bits arrive together: it replaces the
+     * document a concurrent save would write. */
+    if ((bits & EDITOR_EVENT_RELOAD) != 0) {
+        control->reload_requested = false;
+        if (control->doc != NULL) {
+            err = editor_doc_reload(control->doc);
+        }
+        control->reload_ok = (err == ESP_OK);
+        if (err != ESP_OK) {
+            mctx->result = err;
+        }
+        lv_async_call(editor_view_notify_reloaded_cb,
+                      (void *)(intptr_t)(err == ESP_OK));
+    }
+
+    if ((bits & EDITOR_EVENT_SAVE) == 0) {
+        return;
+    }
 
     /* A Save-As request carries an explicit target path; otherwise
      * save to the document's source path, and fall back to a
@@ -2096,12 +2720,34 @@ static void editor_serial_line_cb(void *user_data)
         editor_view_handle_usb_key(0, 0x01, 'g'); /* Ctrl+G -> Go to line */
     } else if (editor_serial_is_verb(line, "o") || editor_serial_is_verb(line, "saveas")) {
         editor_view_handle_usb_key(0, 0x01, 'o'); /* Ctrl+O -> Save As */
+    } else if (editor_serial_is_verb(line, "p") || editor_serial_is_verb(line, "preview")) {
+        editor_view_handle_usb_key(0, 0x01, 'p'); /* Ctrl+P -> preview toggle */
     } else if (editor_serial_is_verb(line, "r") || editor_serial_is_verb(line, "redo")) {
         editor_view_handle_usb_key(0, 0x03, 'z'); /* Ctrl+Shift+Z */
+    } else if (editor_serial_is_verb(line, "all") || editor_serial_is_verb(line, "replaceall")) {
+        editor_view_handle_usb_key(0, 0x01, 'r'); /* Ctrl+R -> replace all */
+    } else if (editor_serial_is_verb(line, "c") || editor_serial_is_verb(line, "case")) {
+        editor_view_handle_usb_key(0, 0x01, 't'); /* Ctrl+T -> case toggle */
+    } else if (editor_serial_is_verb(line, "b") || editor_serial_is_verb(line, "match")) {
+        editor_view_handle_usb_key(0, 0x01, 'b'); /* Ctrl+B -> match jump */
+    } else if (editor_serial_is_verb(line, "co") || editor_serial_is_verb(line, "comment")) {
+        editor_view_handle_usb_key(0x38, 0x01, '/'); /* Ctrl+/ -> comment */
+    } else if (editor_serial_is_verb(line, "w") || editor_serial_is_verb(line, "wrap")) {
+        editor_view_handle_usb_key(0, 0x01, 'w'); /* Ctrl+W -> wrap toggle */
+    } else if (editor_serial_is_verb(line, "l") || editor_serial_is_verb(line, "reload")) {
+        editor_view_handle_usb_key(0, 0x01, 'l'); /* Ctrl+L -> reload */
     } else if (editor_serial_is_verb(line, "a") || editor_serial_is_verb(line, "selectall")) {
         editor_view_handle_usb_key(0, 0x01, 'a');
     } else {
         if (!editor_view_is_open()) {
+            free(ctx->line);
+            free(ctx);
+            return;
+        }
+        /* Preview is read-only: verbs (quit/toggle) still work, but typed
+         * text is discarded so the document can never be dirtied behind
+         * the rendered view. */
+        if (editor_view_is_preview()) {
             free(ctx->line);
             free(ctx);
             return;
@@ -2236,6 +2882,7 @@ editor_key_t editor_key_from_usb(uint8_t key_code, uint8_t modifiers, char ascii
     case 0x49: return EDITOR_KEY_OVERWRITE;        /* Insert */
     case 0x3B: return EDITOR_KEY_SAVE;             /* F2 */
     case 0x3C: return EDITOR_KEY_FIND_NEXT;        /* F3 */
+    case 0x38: return ctrl ? EDITOR_KEY_COMMENT : EDITOR_KEY_NONE; /* Ctrl+/ */
     default:
         break;
     }
@@ -2261,6 +2908,16 @@ editor_key_t editor_key_from_usb(uint8_t key_code, uint8_t modifiers, char ascii
         case 'f': case 'F': return EDITOR_KEY_FIND;
         case 'h': case 'H': return EDITOR_KEY_REPLACE;
         case 'g': case 'G': return EDITOR_KEY_GOTO_LINE;
+        case 'p': case 'P': return EDITOR_KEY_PREVIEW;
+        case 'r': case 'R':
+            if (!shift) {
+                return EDITOR_KEY_REPLACE_ALL;
+            }
+            return EDITOR_KEY_REDO;
+        case 't': case 'T': return EDITOR_KEY_CASE_TOGGLE;
+        case 'b': case 'B': return EDITOR_KEY_MATCH_JUMP;
+        case 'w': case 'W': return EDITOR_KEY_WRAP_TOGGLE;
+        case 'l': case 'L': return EDITOR_KEY_RELOAD;
         case 'q': case 'Q': return EDITOR_KEY_QUIT;
         default:
             break;
@@ -2269,4 +2926,349 @@ editor_key_t editor_key_from_usb(uint8_t key_code, uint8_t modifiers, char ascii
 
     (void)shift;
     return EDITOR_KEY_NONE;
+}
+
+/* ========================================================================
+ * MARKDOWN LEXER (single line, no multi-line state)
+ * ======================================================================== */
+
+/* Emit one run if capacity allows. */
+static void md_lex_emit(editor_syntax_run_t *runs, size_t capacity,
+                        size_t *count, size_t start, size_t length,
+                        ansi_color_index_t color, unsigned attrs)
+{
+    if (*count >= capacity || length == 0) {
+        return;
+    }
+    runs[*count].start = start;
+    runs[*count].length = length;
+    runs[*count].color = color;
+    runs[*count].attrs = attrs;
+    (*count)++;
+}
+
+/* Inline emphasis/code/link scan over [start, len). Plain gaps fold into
+ * default runs by the caller loop. */
+static void md_lex_inline(const char *text, size_t len, size_t start,
+                          size_t ilen, editor_syntax_run_t *runs,
+                          size_t capacity, size_t *count)
+{
+    size_t i = start;
+    size_t iend = start + ilen;
+
+    while (i < iend) {
+        size_t j;
+        /* Code span: `...` (no nesting). Unterminated: skip the tick so
+         * later constructs on the line still highlight. */
+        if (text[i] == '`') {
+            j = i + 1;
+            while (j < iend && text[j] != '`') {
+                j++;
+            }
+            if (j < iend) {
+                md_lex_emit(runs, capacity, count, i, j - i + 1,
+                            ANSI_COLOR_BRIGHT_YELLOW, 0);
+                i = j + 1;
+                continue;
+            }
+            i++;
+            continue;
+        }
+        /* Bold: **...** with non-space adjacency. */
+        if (i + 1 < iend && text[i] == '*' && text[i + 1] == '*' &&
+            i + 2 < iend && text[i + 2] != ' ') {
+            j = i + 2;
+            while (j + 1 < iend && !(text[j] == '*' && text[j + 1] == '*')) {
+                j++;
+            }
+            if (j + 1 < iend && j > i + 2 && text[j - 1] != ' ') {
+                md_lex_emit(runs, capacity, count, i, j + 2 - i,
+                            ANSI_COLOR_BRIGHT_WHITE, ANSI_ATTR_BOLD);
+                i = j + 2;
+                continue;
+            }
+            i++;
+            continue;
+        }
+        /* Italic: *...* with non-space adjacency. */
+        if (text[i] == '*' && i + 1 < iend && text[i + 1] != ' ') {
+            j = i + 1;
+            while (j < iend && text[j] != '*') {
+                j++;
+            }
+            if (j < iend && j > i + 1 && text[j - 1] != ' ') {
+                md_lex_emit(runs, capacity, count, i, j - i + 1,
+                            ANSI_COLOR_BRIGHT_WHITE, ANSI_ATTR_ITALIC);
+                i = j + 1;
+                continue;
+            }
+            i++;
+            continue;
+        }
+        /* Link: [text](url) — text cyan+underline. */
+        if (text[i] == '[') {
+            size_t t = i + 1;
+            size_t u;
+            while (t < iend && text[t] != ']') {
+                t++;
+            }
+            if (t < iend && t + 1 < iend && text[t + 1] == '(') {
+                u = t + 2;
+                while (u < iend && text[u] != ')') {
+                    u++;
+                }
+                if (u < iend) {
+                    md_lex_emit(runs, capacity, count, i, t - i + 1,
+                                ANSI_COLOR_BRIGHT_CYAN, ANSI_ATTR_UNDERLINE);
+                    i = u + 1;
+                    continue;
+                }
+            }
+            /* Not a link: skip the bracket, keep scanning. */
+            i++;
+            continue;
+        }
+        /* Plain character: skip it (the renderer folds gaps to default). */
+        i++;
+    }
+    /* Caller folds the unstyled remainder/gaps into default runs. */
+    (void)ilen;
+}
+
+size_t editor_lex_markdown(const char *text, size_t len,
+                           editor_syntax_run_t *runs, size_t capacity)
+{
+    size_t run_count = 0;
+    size_t i = 0;
+
+    if (text == NULL || runs == NULL || capacity == 0) {
+        return 0;
+    }
+
+    /* Skip leading whitespace (kept in the default run). */
+    while (i < len && (text[i] == ' ' || text[i] == '\t')) {
+        i++;
+    }
+
+    /* ATX heading: marker green, content bold white. */
+    if (i < len && text[i] == '#') {
+        size_t h = i;
+        while (h < len && text[h] == '#') {
+            h++;
+        }
+        if (h - i <= 6 && h < len && (text[h] == ' ' || text[h] == '\t')) {
+            md_lex_emit(runs, capacity, &run_count, i, h - i,
+                        ANSI_COLOR_BRIGHT_GREEN, 0);
+            md_lex_emit(runs, capacity, &run_count, h, len - h,
+                        ANSI_COLOR_BRIGHT_WHITE, ANSI_ATTR_BOLD);
+            return run_count;
+        }
+    }
+
+    /* Quote marker. */
+    if (i < len && text[i] == '>') {
+        md_lex_emit(runs, capacity, &run_count, i, 1,
+                    ANSI_COLOR_BRIGHT_BLACK, 0);
+        i += 1;
+        if (i < len && text[i] == ' ') {
+            i++;
+        }
+        /* Quoted content gets inline spans too. */
+        md_lex_inline(text, len, i, len - i, runs, capacity, &run_count);
+        return run_count;
+    }
+
+    /* List marker: -, +, *, 1., 1) (+ task [ ]/[x] kept as text). */
+    {
+        size_t m = i;
+        bool is_list = false;
+        if (m < len && (text[m] == '-' || text[m] == '+' || text[m] == '*')) {
+            if (m + 1 < len && (text[m + 1] == ' ' || text[m + 1] == '\t')) {
+                is_list = true;
+                m += 1;
+            }
+        } else if (m < len && text[m] >= '0' && text[m] <= '9') {
+            while (m < len && text[m] >= '0' && text[m] <= '9') {
+                m++;
+            }
+            if (m < len && (text[m] == '.' || text[m] == ')') &&
+                m + 1 < len && (text[m + 1] == ' ' || text[m + 1] == '\t')) {
+                is_list = true;
+                m += 1;
+            }
+        }
+        if (is_list) {
+            md_lex_emit(runs, capacity, &run_count, i, m - i + 1,
+                        ANSI_COLOR_BRIGHT_GREEN, 0);
+            i = m + 1;
+            while (i < len && (text[i] == ' ' || text[i] == '\t')) {
+                i++;
+            }
+            md_lex_inline(text, len, i, len - i, runs, capacity, &run_count);
+            return run_count;
+        }
+    }
+
+    /* Fence line: whole line code-yellow. */
+    if (i + 2 < len && text[i] == '`' && text[i + 1] == '`' && text[i + 2] == '`') {
+        md_lex_emit(runs, capacity, &run_count, 0, len,
+                    ANSI_COLOR_BRIGHT_YELLOW, 0);
+        return run_count;
+    }
+
+    /* HR line: muted whole line. */
+    {
+        size_t h = i;
+        char mark = '\0';
+        int cnt = 0;
+        bool ok = true;
+        while (h < len) {
+            if (text[h] == '-' || text[h] == '*' || text[h] == '_') {
+                if (mark == '\0') {
+                    mark = text[h];
+                } else if (text[h] != mark) {
+                    ok = false;
+                    break;
+                }
+                cnt++;
+            } else if (text[h] != ' ' && text[h] != '\t') {
+                ok = false;
+                break;
+            }
+            h++;
+        }
+        if (ok && cnt >= 3) {
+            md_lex_emit(runs, capacity, &run_count, 0, len,
+                        ANSI_COLOR_BRIGHT_BLACK, 0);
+            return run_count;
+        }
+    }
+
+    /* Body: inline constructs; plain gaps fold to default in the renderer. */
+    md_lex_inline(text, len, i, len - i, runs, capacity, &run_count);
+    return run_count;
+}
+
+/* ========================================================================
+ * JSON LEXER (single line, no multi-line state)
+ * ========================================================================
+ * Keys (string followed by ':') cyan, string values green, numbers yellow,
+ * true/false/null magenta, structural punctuation white. Unterminated
+ * strings highlight to EOL (error-visible) rather than vanishing. Escapes
+ * inside strings are skipped so \" never ends the run early.
+ */
+
+size_t editor_lex_json(const char *text, size_t len,
+                       editor_syntax_run_t *runs, size_t capacity)
+{
+    size_t run_count = 0;
+    size_t i = 0;
+
+    if (text == NULL || runs == NULL || capacity == 0) {
+        return 0;
+    }
+
+    while (i < len) {
+        /* String: "..." with backslash escapes. */
+        if (text[i] == '"') {
+            size_t j = i + 1;
+            while (j < len && text[j] != '"') {
+                if (text[j] == '\\' && j + 1 < len) {
+                    j += 2;
+                } else {
+                    j++;
+                }
+            }
+            if (j < len) {
+                j++; /* include closing quote */
+            }
+            /* Key when followed (past spaces) by ':'. */
+            {
+                size_t k = j;
+                ansi_color_index_t color = ANSI_COLOR_BRIGHT_GREEN;
+                while (k < len && (text[k] == ' ' || text[k] == '\t')) {
+                    k++;
+                }
+                if (k < len && text[k] == ':') {
+                    color = ANSI_COLOR_BRIGHT_CYAN;
+                }
+                md_lex_emit(runs, capacity, &run_count, i, j - i, color, 0);
+            }
+            i = j;
+            continue;
+        }
+        /* Number: -?digits[.digits][eE+-digits]. */
+        if ((text[i] >= '0' && text[i] <= '9') || text[i] == '-') {
+            size_t j = i;
+            if (text[j] == '-') {
+                j++;
+            }
+            while (j < len && text[j] >= '0' && text[j] <= '9') {
+                j++;
+            }
+            if (j < len && text[j] == '.') {
+                size_t k = j + 1;
+                while (k < len && text[k] >= '0' && text[k] <= '9') {
+                    k++;
+                }
+                if (k > j + 1) {
+                    j = k;
+                }
+            }
+            if (j < len && (text[j] == 'e' || text[j] == 'E')) {
+                size_t k = j + 1;
+                if (k < len && (text[k] == '+' || text[k] == '-')) {
+                    k++;
+                }
+                {
+                    size_t d = k;
+                    while (d < len && text[d] >= '0' && text[d] <= '9') {
+                        d++;
+                    }
+                    if (d > k) {
+                        j = d;
+                    }
+                }
+            }
+            if (j > i + (text[i] == '-' ? 1 : 0)) {
+                md_lex_emit(runs, capacity, &run_count, i, j - i,
+                            ANSI_COLOR_BRIGHT_YELLOW, 0);
+                i = j;
+                continue;
+            }
+            /* Lone '-': fall through to plain skip. */
+            i++;
+            continue;
+        }
+        /* Literals true/false/null. */
+        if (i + 4 <= len && strncmp(text + i, "true", 4) == 0) {
+            md_lex_emit(runs, capacity, &run_count, i, 4,
+                        ANSI_COLOR_BRIGHT_MAGENTA, 0);
+            i += 4;
+            continue;
+        }
+        if (i + 5 <= len && strncmp(text + i, "false", 5) == 0) {
+            md_lex_emit(runs, capacity, &run_count, i, 5,
+                        ANSI_COLOR_BRIGHT_MAGENTA, 0);
+            i += 5;
+            continue;
+        }
+        if (i + 4 <= len && strncmp(text + i, "null", 4) == 0) {
+            md_lex_emit(runs, capacity, &run_count, i, 4,
+                        ANSI_COLOR_BRIGHT_MAGENTA, 0);
+            i += 4;
+            continue;
+        }
+        /* Structural punctuation. */
+        if (text[i] == '{' || text[i] == '}' || text[i] == '[' ||
+            text[i] == ']' || text[i] == ':' || text[i] == ',') {
+            md_lex_emit(runs, capacity, &run_count, i, 1,
+                        ANSI_COLOR_BRIGHT_WHITE, 0);
+            i++;
+            continue;
+        }
+        /* Plain character: renderer folds gaps to default. */
+        i++;
+    }
+    return run_count;
 }

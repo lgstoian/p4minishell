@@ -311,7 +311,7 @@ def main():
     print("SMOKE %d/%d %s" % (len(results) - len(fails), len(results),
                               "PASS" if not fails else "FAIL %s" % fails))
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "smoke_apps.log"), "w") as f:
+                           "smoke_apps.log"), "w", encoding="utf-8") as f:
         f.write("".join(st.log))
     return 0 if not fails else 1
 

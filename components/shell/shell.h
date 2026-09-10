@@ -242,6 +242,23 @@ void shell_transcript_defer_end(void);
 void shell_transcript_flush_now(void);
 
 /* ========================================================================
+ * BACKGROUND WORKERS (`start` pool)
+ * ========================================================================
+ * The deferral slots above are selected by task handle; these calls bind a
+ * spawned worker to a slot. Handles are opaque here (void *) so this header
+ * needs no FreeRTOS include; the task never blocks on another task.
+ */
+
+/** Register a background worker handle (idempotent while slots last). */
+void shell_register_bg_task(void *task);
+
+/** Unregister a background worker handle. */
+void shell_unregister_bg_task(void *task);
+
+/** True when the calling task is a registered background worker. */
+bool shell_is_background_task(void);
+
+/* ========================================================================
  * APP MODE (screen save/restore + full-screen surface)
  * ======================================================================== */
 

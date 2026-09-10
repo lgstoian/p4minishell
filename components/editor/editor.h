@@ -46,6 +46,8 @@ extern "C" {
 typedef enum {
     EDITOR_SYNTAX_PLAIN = 0,   /**< Single-colour text */
     EDITOR_SYNTAX_BATCH,       /**< DOS batch / .bat highlighting */
+    EDITOR_SYNTAX_MARKDOWN,    /**< Markdown / .md highlighting */
+    EDITOR_SYNTAX_JSON,        /**< JSON data highlighting */
     EDITOR_SYNTAX_COUNT
 } editor_syntax_t;
 
@@ -84,7 +86,14 @@ typedef enum {
     EDITOR_KEY_FIND,          /**< Find (search forward) */
     EDITOR_KEY_FIND_NEXT,     /**< Repeat the last find */
     EDITOR_KEY_REPLACE,       /**< Replace (search + replace) */
+    EDITOR_KEY_REPLACE_ALL,   /**< Replace every match (USB Ctrl+R) */
+    EDITOR_KEY_CASE_TOGGLE,   /**< Toggle find case sensitivity (USB Ctrl+T) */
+    EDITOR_KEY_COMMENT,       /**< Toggle line comments (USB Ctrl+/) */
+    EDITOR_KEY_MATCH_JUMP,    /**< Jump to matching paren/% (USB Ctrl+B) */
+    EDITOR_KEY_WRAP_TOGGLE,   /**< Toggle word wrap (USB Ctrl+W) */
+    EDITOR_KEY_RELOAD,        /**< Reload file from disk (USB Ctrl+L) */
     EDITOR_KEY_GOTO_LINE,     /**< Jump to a line number */
+    EDITOR_KEY_PREVIEW,       /**< Toggle rendered Markdown preview (USB Ctrl+P) */
 } editor_key_t;
 
 /** One line of the document: a byte buffer that never contains '\n' or '\r'. */
@@ -119,6 +128,8 @@ typedef struct {
 
     bool overwrite;           /**< Insert mode (false) or overwrite (true) */
     bool modified;            /**< Unsaved changes */
+
+    bool readonly;            /**< Source file is read-only (save refused) */
 
     char path[P4_CONFIG_SD_PATH_BYTES]; /**< Source path, "" when unnamed */
 
@@ -249,6 +260,37 @@ bool editor_doc_replace_next(editor_doc_t *doc,
                              bool case_sensitive,
                              size_t *out_row, size_t *out_col);
 
+/**
+ * Replace every match of @p needle with @p replacement (whole document,
+ * non-overlapping, replacements never re-match). One undo snapshot covers
+ * the whole operation; a fruitless call takes none. Cursor lands after the
+ * last replacement.
+ * @return the number of replacements performed.
+ */
+size_t editor_doc_replace_all(editor_doc_t *doc,
+                              const char *needle, size_t needle_len,
+                              const char *replacement, size_t repl_len,
+                              bool case_sensitive);
+
+/**
+ * Toggle line comments over the selection (or cursor row) using the
+ * document syntax: batch `rem ` (also strips `::`), json `// `,
+ * markdown `<!-- ... -->`. Blank lines skipped. All-commented ranges
+ * uncomment, otherwise everything comments. One undo snapshot.
+ * Plain/unknown syntax is a no-op (returns 0).
+ * @return lines changed.
+ */
+size_t editor_doc_comment_toggle(editor_doc_t *doc);
+
+/**
+ * Jump from a paren or % to its match (cursor on the bracket, or just
+ * past it at EOL). Parens nest across the document, skipping quoted spans
+ * and whole-line rem/:: comments; %var% pairs match within one line
+ * (forward first, then backward). Clears the selection on success.
+ * @return true when the cursor moved.
+ */
+bool editor_doc_match_jump(editor_doc_t *doc);
+
 /** Change the document's save path (Save As). "" unbinds the path. */
 void editor_doc_set_path(editor_doc_t *doc, const char *path);
 
@@ -311,9 +353,17 @@ void editor_doc_redo(editor_doc_t *doc);
 
 /**
  * Serialize the document to the file it was opened from (or the given path).
+ * A pre-existing destination is first copied to "<file>.bak" (best-effort).
  * Returns ESP_OK on success. Runs on the worker task.
  */
 esp_err_t editor_doc_save(editor_doc_t *doc, const char *path);
+
+/**
+ * Re-read the document from its bound path, discarding unsaved changes
+ * (cursor clamped, undo reset, modified cleared). Unnamed buffers and
+ * missing/unreadable files fail. Runs on the worker task.
+ */
+esp_err_t editor_doc_reload(editor_doc_t *doc);
 
 /* ========================================================================
  * KEY ROUTING
@@ -333,6 +383,7 @@ typedef struct {
     size_t start;              /**< Byte offset into the line */
     size_t length;             /**< Run length in bytes */
     ansi_color_index_t color;  /**< Palette colour for the run */
+    unsigned attrs;            /**< ANSI_ATTR_* bitmask (bold/italic/...), 0 plain */
 } editor_syntax_run_t;
 
 /** Lex @p text into colour runs for batch syntax.
@@ -340,6 +391,18 @@ typedef struct {
  *  @return the number of runs produced (<= capacity). */
 size_t editor_lex_batch(const char *text, size_t len,
                         editor_syntax_run_t *runs, size_t capacity);
+
+/** Lex one Markdown source line into runs (headings bold, code yellow,
+ * links cyan+underline, markers green). Fences are per-line only (no
+ * multi-line state): a ``` line highlights whole as code. */
+size_t editor_lex_markdown(const char *text, size_t len,
+                           editor_syntax_run_t *runs, size_t capacity);
+
+/** Lex one JSON source line into runs (keys cyan, strings green, numbers
+ * yellow, true/false/null magenta, punctuation white). Unterminated strings
+ * run to EOL so the error is visible. */
+size_t editor_lex_json(const char *text, size_t len,
+                       editor_syntax_run_t *runs, size_t capacity);
 
 /* ========================================================================
  * LINE-NUMBER GUTTER (pure)
@@ -399,6 +462,8 @@ typedef struct {
     bool save_requested;              /**< Set by view: worker should save */
     bool quit_requested;              /**< Set by view: worker should close */
     bool save_ok;                     /**< Set by worker: last save succeeded */
+    bool reload_requested;            /**< Set by view: worker should reload */
+    bool reload_ok;                   /**< Set by worker: last reload succeeded */
     char save_as_path[P4_CONFIG_EDITOR_PROMPT_BYTES]; /**< Save As target; "" = source path */
 } editor_control_t;
 

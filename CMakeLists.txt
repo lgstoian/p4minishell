@@ -21,9 +21,12 @@ set(EXTRA_COMPONENT_DIRS
   components/display
   components/editor
   components/font
+  components/filetype
+  components/gfx
   components/header
   components/keyboard
   components/led
+  components/markdown
   components/modal
   components/networking
   components/p4_usb

@@ -374,7 +374,7 @@ def main():
             time.sleep(2.0)
             send_after_settle(ser, b"5\n", settle=3.0)   # notes Back
             time.sleep(2.0)
-            files_ok = press(ser, st, b"8\n", "[M-FILES-BACK]")  # files Back
+            files_ok = press(ser, st, b"9\n", "[M-FILES-BACK]")  # files Back
         if files_ok:
             # Real artifact check: the note file must hold the body.
             ser.reset_input_buffer()
@@ -430,7 +430,7 @@ def main():
             time.sleep(4.0)                      # calc runs, Result viewer opens
             send_after_settle(ser, b"q\n", settle=3.0)  # close viewer
             time.sleep(2.0)
-            fun_ok = press(ser, st, b"7\n", "[M-FUN-BACK]")  # Back
+            fun_ok = press(ser, st, b"9\n", "[M-FUN-BACK]")  # Back
         if fun_ok:
             # Real computation check through the same engine.
             ser.reset_input_buffer()

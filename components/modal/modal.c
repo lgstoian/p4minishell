@@ -8,6 +8,8 @@
 
 #include "modal.h"
 
+#include "shell.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/semphr.h"
@@ -136,6 +138,15 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
 
     if (surface == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+    /* Background workers are headless: opening a modal (dialog/list/ask/
+     * editor/viewer) would fight the main task for the single screen and
+     * key queue, so refuse fast with an errorlevel the caller reports. */
+    if (shell_is_background_task()) {
+        if (errorlevel != NULL) {
+            *errorlevel = 1;
+        }
+        return ESP_ERR_NOT_FINISHED;
     }
     if (errorlevel != NULL) {
         *errorlevel = 0;

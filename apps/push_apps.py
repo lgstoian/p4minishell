@@ -33,6 +33,14 @@ FILES = [
     ("mood", "MOOD.BAT", False),
     ("mood", "MOOD.APPINFO", True),
     ("mood", "ALIASES.BAT", False),
+    ("gfxdemo", "BOUNCE.BAT", False),
+    ("gfxdemo", "BOUNCE.APPINFO", True),
+    ("snake", "SNAKE.BAT", False),
+    ("snake", "SNAKE.APPINFO", True),
+    ("tcmd", "TCMD.BAT", False),
+    ("tcmd", "TCMD.APPINFO", True),
+    ("elite", "ELITE.BAT", False),
+    ("elite", "ELITE.APPINFO", True),
 ]
 
 

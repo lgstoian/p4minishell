@@ -10,10 +10,12 @@ draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "FUN / DEMOS" 14
 draw box 1 4 80 10 single "Demos"
-draw text 5 6 "Melody, RGB, guessing game, calc, file browser"
-list "Fun / Demos" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Back"
+draw text 5 6 "Melody, RGB, guessing, calc, snake, elite trader"
+list "Fun / Demos" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Snake" "Elite Trader" "Back"
 if errorlevel 255 goto :back
-if errorlevel 6 goto :back
+if errorlevel 8 goto :back
+if errorlevel 7 goto :elite
+if errorlevel 6 goto :snake
 if errorlevel 5 goto :tui_demo
 if errorlevel 4 goto :browse_demo
 if errorlevel 3 goto :calc
@@ -158,3 +160,11 @@ goto main
 echo [M-FUN-BACK]
 draw clear screen
 goto :eof
+
+:snake
+call SNAKE.BAT
+goto main
+
+:elite
+call ELITE.BAT
+goto main

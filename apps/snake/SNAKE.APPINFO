@@ -1,0 +1,4 @@
+; APPINFO metadata for the TUI snake game (INI format, read by `launch`).
+; Copied to sd:/APPS/SNAKE.APPINFO by apps/push_apps.py.
+title=Snake
+description=TUI snake: fixed body slots, timeout steering, one flush per frame

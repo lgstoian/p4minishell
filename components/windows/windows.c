@@ -661,9 +661,14 @@ static void windows_span_segment(const char *text, const ansi_state_t *state, vo
     lv_span_set_text(span, text);
     style = lv_span_get_style(span);
     if (state != NULL) {
-        lv_style_set_text_color(style, lv_color_hex(state->fg_color));
+        /* Full attribute mapping (bold/italic via TTF variants with bright
+         * fallback, underline/strike decor). Serial terminals render the
+         * same SGR natively through the UART mirror. */
+        font_span_style(style, FONT_ROLE_TERMINAL, (unsigned)state->attrs,
+                        state->fg_index, state->fg_color);
+    } else {
+        lv_style_set_text_font(style, windows_get_terminal_font());
     }
-    lv_style_set_text_font(style, windows_get_terminal_font());
 }
 
 /** Delete every span currently held by the transcript span group. */

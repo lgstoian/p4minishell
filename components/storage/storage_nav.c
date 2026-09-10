@@ -9,6 +9,7 @@
 
 #include "storage_commands.h"
 #include "storage.h"
+#include "filetype.h"
 #include "shell.h"
 #include "ansi.h"
 #include "ansi_palette.h"
@@ -490,11 +491,11 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
         }
 
         /* Entry colour is chosen once here from the palette: directories,
-         * runnable .bat files, and ordinary files each get their own so a
-         * listing is scannable at a glance. */
+         * runnable scripts (.bat/.cmd via the registry), and ordinary files
+         * each get their own so a listing is scannable at a glance. */
         const char *entry_colour = entry->is_dir
                                        ? SH_DIR
-                                       : (shell_path_has_extension(entry->name, ".bat") ? SH_EXE : SH_FILE);
+                                       : (filetype_is_executable(filetype_of(entry->name)) ? SH_EXE : SH_FILE);
 
         if (ctx->wide) {
             /* Sized for a full long file name plus the directory brackets, so

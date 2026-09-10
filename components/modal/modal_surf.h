@@ -82,6 +82,14 @@ int modal_filebrowser_run(const char *title, const char *start_path,
  */
 int modal_viewer_run(const char *title, const char *file_path, uint32_t timeout_ms);
 
+/**
+ * @brief Run the viewer with explicit raw control.
+ *
+ * Same as modal_viewer_run, but @p raw bypasses the Markdown branch
+ * (.md files render rendered-plain by default).
+ */
+int modal_viewer_run_raw(const char *title, const char *file_path, uint32_t timeout_ms, bool raw);
+
 #ifdef __cplusplus
 }
 #endif

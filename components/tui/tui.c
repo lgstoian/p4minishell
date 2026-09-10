@@ -337,6 +337,202 @@ void tui_fill(int x, int y, int w, int h, char ch, uint8_t fg, uint8_t bg)
 void tui_set_default_color(uint8_t fg, uint8_t bg) { s_def_fg = fg; s_def_bg = bg; }
 void tui_get_default_color(uint8_t *fg_out, uint8_t *bg_out) { if (fg_out) *fg_out = s_def_fg; if (bg_out) *bg_out = s_def_bg; }
 
+/* Classic CGA/DOS 16-color RGB values (0-7 dim, 8-15 bright). */
+static const uint32_t s_dos_rgb[16] = {
+    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
+    0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
+    0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+};
+
+uint32_t tui_dos_color_rgb(uint8_t index)
+{
+    return s_dos_rgb[index & 15];
+}
+
+uint8_t tui_rgb_to_dos(uint32_t rgb)
+{
+    uint8_t best = 7;
+    uint32_t best_d = (uint32_t)-1;
+    int r = (int)((rgb >> 16) & 0xFF);
+    int g = (int)((rgb >> 8) & 0xFF);
+    int b = (int)(rgb & 0xFF);
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        int dr = r - (int)((s_dos_rgb[i] >> 16) & 0xFF);
+        int dg = g - (int)((s_dos_rgb[i] >> 8) & 0xFF);
+        int db = b - (int)(s_dos_rgb[i] & 0xFF);
+        uint32_t d = (uint32_t)(dr * dr + dg * dg + db * db);
+
+        if (d < best_d) {
+            best_d = d;
+            best = (uint8_t)i;
+        }
+    }
+    return best;
+}
+
+void tui_draw_bar(int x, int y, int w, int pct, char fill_ch, char empty_ch,
+                  uint8_t fg, uint8_t bg)
+{
+    char tmp[2];
+    int inner;
+    int filled;
+    int i;
+
+    if (!s_cells) return;
+    if (w < 3) w = 3;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    if (x < 1) x = 1;
+    if (y < 1) y = 1;
+    if (y > s_rows) return;
+    if (x + w - 1 > s_cols) w = s_cols - x + 1;
+    if (w < 3) return;
+
+    inner = w - 2;
+    filled = (inner * pct + 50) / 100;
+
+    tui_cell_set(cell_at(y, x), "[", fg, bg);
+    for (i = 0; i < inner; i++) {
+        tmp[0] = (i < filled) ? fill_ch : empty_ch;
+        tmp[1] = '\0';
+        tui_cell_set(cell_at(y, x + 1 + i), tmp, fg, bg);
+    }
+    tui_cell_set(cell_at(y, x + w - 1), "]", fg, bg);
+}
+
+int tui_table_total_width(int ncols, const int *widths)
+{
+    int total = 1; /* leading border */
+    int i;
+
+    if (ncols < 1 || widths == NULL) return 0;
+    for (i = 0; i < ncols; i++) {
+        int w = widths[i] < 1 ? 1 : widths[i];
+        total += w + 3; /* pad + content + pad + border */
+    }
+    return total;
+}
+
+/** Write one table border row: left/mid/right junctions joined by fills. */
+static void tui_table_border(int row, int x, int total_w, const int *stops,
+                             int nstops, const char *left, const char *mid,
+                             const char *right, const char *fill,
+                             uint8_t fg, uint8_t bg)
+{
+    int c;
+    int s = 0;
+
+    tui_cell_set(cell_at(row, x), left, fg, bg);
+    for (c = 1; c < total_w - 1; c++) {
+        if (s < nstops && x + c == stops[s]) {
+            tui_cell_set(cell_at(row, x + c), mid, fg, bg);
+            s++;
+        } else {
+            tui_cell_set(cell_at(row, x + c), fill, fg, bg);
+        }
+    }
+    tui_cell_set(cell_at(row, x + total_w - 1), right, fg, bg);
+}
+
+/** Copy at most max_bytes of src without splitting a UTF-8 sequence. */
+static size_t tui_utf8_trunc(const char *src, size_t max_bytes)
+{
+    size_t len = strlen(src);
+
+    if (len <= max_bytes) return len;
+    len = max_bytes;
+    while (len > 0 && ((unsigned char)src[len] & 0xC0) == 0x80) len--;
+    return len;
+}
+
+void tui_draw_table(int x, int y, int ncols, const int *widths, int nrows,
+                    const char *const *cells, bool header,
+                    uint8_t fg, uint8_t bg)
+{
+    /* Column border x-stops (absolute grid coords) for the T-junctions. */
+    int stops[P4_CONFIG_TUI_COLS];
+    int total_w;
+    int r;
+    int c;
+
+    if (!s_cells || cells == NULL) return;
+    if (ncols < 1 || nrows < 1 || widths == NULL) return;
+    if (ncols > P4_CONFIG_TUI_COLS) ncols = P4_CONFIG_TUI_COLS;
+    if (x < 1) x = 1;
+    if (y < 1) y = 1;
+    total_w = tui_table_total_width(ncols, widths);
+    if (x + total_w - 1 > s_cols) return; /* table either fits or it doesn't */
+
+    stops[0] = x;
+    for (c = 0; c < ncols; c++) {
+        int w = widths[c] < 1 ? 1 : widths[c];
+        stops[c + 1] = stops[c] + w + 3;
+    }
+
+    tui_table_border(y, x, total_w, &stops[1], ncols - 1,
+                     SH_BOX_TL, SH_BOX_T, SH_BOX_TR, SH_BOX_H, fg, bg);
+    for (r = 0; r < nrows; r++) {
+        int row = y + 1 + r * 2;
+        int sep_row = row + 1;
+
+        if (row > s_rows) break;
+        tui_cell_set(cell_at(row, x), SH_BOX_V, fg, bg);
+        for (c = 0; c < ncols; c++) {
+            int w = widths[c] < 1 ? 1 : widths[c];
+            const char *text = cells[r * ncols + c];
+            char buf[P4_CONFIG_TUI_COLS + 1];
+            size_t copy;
+
+            if (text == NULL) text = "";
+            copy = tui_utf8_trunc(text, (size_t)w);
+            if (copy > sizeof(buf) - 1) copy = sizeof(buf) - 1;
+            memcpy(buf, text, copy);
+            buf[copy] = '\0';
+            tui_cell_set(cell_at(row, stops[c] + 1), " ", fg, bg);
+            {
+                /* One cell per codepoint (never split UTF-8 across cells). */
+                const char *p = buf;
+                int col = stops[c] + 2;
+
+                while (*p != '\0' && col < stops[c] + 2 + w) {
+                    char tmp[5] = {0};
+                    int len = 1;
+                    unsigned char ch = (unsigned char)*p;
+                    tui_cell_t *cell;
+
+                    if ((ch & 0xE0) == 0xC0) len = 2;
+                    else if ((ch & 0xF0) == 0xE0) len = 3;
+                    else if ((ch & 0xF8) == 0xF0) len = 4;
+                    if ((int)strlen(p) < len) len = 1;
+                    memcpy(tmp, p, (size_t)len);
+                    cell = cell_at(row, col);
+                    tui_cell_set(cell, tmp, fg, bg);
+                    if (header && r == 0) cell->attr |= 1; /* bold header */
+                    p += len;
+                    col++;
+                }
+                for (; col < stops[c] + 2 + w; col++) {
+                    tui_cell_set(cell_at(row, col), " ", fg, bg);
+                }
+            }
+            tui_cell_set(cell_at(row, stops[c] + 2 + w), " ", fg, bg);
+            tui_cell_set(cell_at(row, stops[c] + 3 + w), SH_BOX_V, fg, bg);
+        }
+        /* Separator under every row: header gets the same single rule. */
+        if (sep_row > s_rows) break;
+        if (r == nrows - 1) {
+            tui_table_border(sep_row, x, total_w, &stops[1], ncols - 1,
+                             SH_BOX_BL, SH_BOX_B, SH_BOX_BR, SH_BOX_H, fg, bg);
+        } else {
+            tui_table_border(sep_row, x, total_w, &stops[1], ncols - 1,
+                             SH_BOX_L, SH_BOX_X, SH_BOX_R, SH_BOX_H, fg, bg);
+        }
+    }
+}
+
 void tui_alt_enter(void)
 {
     if (s_alt_saved) return;
@@ -369,9 +565,10 @@ void tui_alt_leave(void)
 void tui_flush(void)
 {
     if (!s_cells || !s_tui_label) return;
-    // Build recolor buffer: each fg run emits "#RRGGBB " + utf8 + "#" ; rows separated by "\n"
-    // Cap: rows*(cols* (7+3+1) +1) worst ~ rows*cols*12
-    size_t cap = (size_t)s_rows * (size_t)(s_cols * 12 + 1) + 1;
+    // Build recolor buffer: each fg run emits "#rrggbb " + utf8 + " #";
+    // `#` cells split colored runs (close/escape/reopen), so budget 16
+    // bytes per cell worst case. Rows separated by "\n".
+    size_t cap = (size_t)s_rows * (size_t)(s_cols * 16 + 1) + 1;
     char *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
     if (!buf) buf = malloc(cap);
     if (!buf) return;
@@ -380,34 +577,66 @@ void tui_flush(void)
         int c = 1;
         while (c <= s_cols) {
             tui_cell_t *cell = cell_at(r, c);
+            /* Effective fg: bold on a stock color renders bright (recolor
+             * markup has no bold/italic/underline; dim/italic/underline keep
+             * their base color). No cell writer sets attrs yet — forward-
+             * compatible for Markdown TUI targeting. */
             uint8_t fg = cell->fg;
-            // coalesce same fg
+            if ((cell->attr & 1) != 0 && fg < 8) {
+                fg += 8;
+            }
+            /* Coalesce same effective fg (attrs beyond bold ride along;
+             * only the lead cell's attr mattered above). */
             int run = 1;
             while (c + run <= s_cols) {
                 tui_cell_t *n = cell_at(r, c + run);
-                if (n->fg != fg) break;
+                uint8_t nfg = n->fg;
+                if (((n->attr & 1) != 0) && nfg < 8) {
+                    nfg += 8;
+                }
+                if (nfg != fg) break;
                 run++;
             }
-            // Emit color tag if not default
-            if (fg < 16) {
-                uint32_t col = ansi_get_palette_color((ansi_color_index_t)fg);
+            /* Emit one fg run. A `#` cell inside a COLORED run must split
+             * it: in TEXT_INPUT the first `#` always closes the color, so
+             * close, emit the cell untagged (`##` is the WAIT-state literal
+             * escape), and reopen. Untagged runs (fg 16) just double `#`. */
+            bool tagged = (fg < 16);
+            uint32_t col = 0;
+
+            if (tagged) {
+                col = ansi_get_palette_color((ansi_color_index_t)fg);
                 if (col == 0 && fg != 0) col = ansi_get_palette_color(ANSI_COLOR_WHITE);
-                int n = snprintf(buf + pos, cap - pos, "#%06X ", (unsigned)(col & 0xFFFFFF));
+                int n = snprintf(buf + pos, cap - pos, "#%06x ", (unsigned)(col & 0xFFFFFF));
                 if (n < 0) break;
-                if ((size_t)n >= cap - pos) { pos = cap - 1; break; } // truncated: stop, keep NUL room
+                if ((size_t)n >= cap - pos) { pos = cap - 1; break; }
                 pos += (size_t)n;
             }
             for (int k = 0; k < run; k++) {
                 tui_cell_t *cc = cell_at(r, c + k);
                 const char *utf8 = cc->utf8[0] ? cc->utf8 : " ";
-                size_t ulen = strlen(utf8);
-                if (pos + ulen < cap) {
-                    memcpy(buf + pos, utf8, ulen);
-                    pos += ulen;
+
+                if (tagged && strchr(utf8, '#') != NULL) {
+                    int n;
+
+                    if (pos + 1 < cap) buf[pos++] = '#'; /* close */
+                    for (const char *q = utf8; *q != '\0' && pos + 2 < cap; q++) {
+                        buf[pos++] = *q;
+                        if (*q == '#') buf[pos++] = '#'; /* WAIT escape */
+                    }
+                    n = snprintf(buf + pos, cap - pos, "#%06x ", (unsigned)(col & 0xFFFFFF));
+                    if (n < 0) break;
+                    if ((size_t)n >= cap - pos) { pos = cap - 1; break; }
+                    pos += (size_t)n;
+                    continue;
+                }
+                for (const char *q = utf8; *q != '\0' && pos + 2 < cap; q++) {
+                    buf[pos++] = *q;
+                    if (*q == '#') buf[pos++] = '#'; /* WAIT escape */
                 }
             }
-            if (fg < 16) {
-                if (pos + 1 < cap) buf[pos++] = '#';
+            if (tagged) {
+                if (pos + 2 < cap) { buf[pos++] = ' '; buf[pos++] = '#'; }
             }
             c += run;
         }

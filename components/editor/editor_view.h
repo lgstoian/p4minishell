@@ -31,6 +31,9 @@ void editor_view_close(void);
 /** Whether the editor view is currently open. */
 bool editor_view_is_open(void);
 
+/** Whether the rendered Markdown preview is showing (read-only). */
+bool editor_view_is_preview(void);
+
 /** Live-update the cursor blink period of an open editor (0 = steady).
  * No-op unless open. Takes the port lock. */
 void editor_view_set_blink_ms(uint32_t blink_ms);
@@ -58,6 +61,12 @@ void editor_view_notify_saved(bool ok);
 
 /** lv_async_call trampoline for editor_view_notify_saved(). */
 void editor_view_notify_saved_cb(void *user_data);
+
+/** Notify the editor that the document was reloaded (rebuild + status). */
+void editor_view_notify_reloaded(bool ok);
+
+/** lv_async_call trampoline for editor_view_notify_reloaded(). */
+void editor_view_notify_reloaded_cb(void *user_data);
 
 /** Scroll the editor surface vertically by @p pixels (mouse wheel). */
 void editor_view_scroll_by(int32_t pixels);

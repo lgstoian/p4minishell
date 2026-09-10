@@ -791,6 +791,11 @@
 /** Maximum nested batch file call depth. */
 #define P4_CONFIG_BATCH_DEPTH_MAX            4
 
+/** Maximum background batch tasks (`start` pool) beyond the main worker.
+ * Each extra slot is one ctx struct (BSS); tasks themselves are created on
+ * demand with the same stack as the main worker. */
+#define P4_CONFIG_BG_TASKS                   1
+
 /** I/O buffer size for general file operations. */
 #define P4_CONFIG_FILE_IO_BUFFER_BYTES       512
 
@@ -952,8 +957,10 @@
 /** Maximum length of a registered native app's one-line description. */
 #define P4_CONFIG_APP_DESC_BYTES                64
 
-/** Maximum number of `.bat` apps surfaced by the `launch` command / menu. */
-#define P4_CONFIG_LAUNCH_MAX                    16
+/** Maximum number of script apps (.bat/.cmd) surfaced by the `launch`
+ * command / menu. Sized past the bundled app count so neither extension
+ * starves the other during discovery. */
+#define P4_CONFIG_LAUNCH_MAX                    24
 
 /** Maximum length of the `choice` /C: key list (characters). Single-char
  *  keys only; DOS caps this list at 26, Windows at 99. */

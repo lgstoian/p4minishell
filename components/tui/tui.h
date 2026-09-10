@@ -87,6 +87,31 @@ void tui_draw_line(int x1, int y1, int x2, int y2, const char *style, uint8_t fg
 /** Fill rect at x,y,w,h with char ch. */
 void tui_fill(int x, int y, int w, int h, char ch, uint8_t fg, uint8_t bg);
 
+/** Map a 24-bit RGB color to the nearest DOS 0-15 index (pure, headless-safe).
+ * Used by `draw` verbs so hex colors survive the 80x25 TUI cell model. */
+uint8_t tui_rgb_to_dos(uint32_t rgb);
+
+/** Classic CGA/DOS 16-color RGB value for a 0-15 index (pure, headless-safe).
+ * Shared by `gfx` verbs so pixel colors match TUI cell colors. */
+uint32_t tui_dos_color_rgb(uint8_t index);
+
+/** Draw a `[fill...empty...]` progress bar at x,y (1-based) of width w.
+ * pct is clamped 0..100; the two border cells are `[`/`]`. */
+void tui_draw_bar(int x, int y, int w, int pct, char fill_ch, char empty_ch,
+                  uint8_t fg, uint8_t bg);
+
+/** Total grid width of a bordered table: sum(widths) + 3 per column + 1
+ * (pure, headless-safe; each column renders as `│<pad><cell><pad>`). */
+int tui_table_total_width(int ncols, const int *widths);
+
+/** Draw a bordered table at x,y (1-based): single-style border with
+ * T-junctions, `cells` is nrows*ncols row-major (NULL cell = empty),
+ * widths are per-column content widths. The first row renders bold when
+ * header is true. Rows that would overflow the grid are dropped. */
+void tui_draw_table(int x, int y, int ncols, const int *widths, int nrows,
+                    const char *const *cells, bool header,
+                    uint8_t fg, uint8_t bg);
+
 /** Set default fg/bg for next tui_putc/print (DOS COLOR). 16 = default. */
 void tui_set_default_color(uint8_t fg, uint8_t bg);
 

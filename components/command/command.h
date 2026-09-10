@@ -189,6 +189,11 @@ void shell_command_audio(int argc, char **argv);
  * `browse` used by batch files. Each sets ERRORLEVEL per command.md.
  */
 bool shell_command_draw(int argc, char **argv);
+bool shell_command_gfx(int argc, char **argv);
+
+/** Frame-coalescing flag for `draw hold on|off` (tui_commands.c). True
+ * while per-verb flushes are suppressed; headless-safe unit-test hook. */
+bool draw_hold_active(void);
 bool shell_command_anchor(int argc, char **argv);
 void shell_command_browse(int argc, char **argv);
 void shell_command_dialog(int argc, char **argv);
@@ -196,6 +201,7 @@ void shell_command_list(int argc, char **argv);
 void shell_command_ask(int argc, char **argv);
 void shell_command_browse_batch(int argc, char **argv);
 void shell_command_view(int argc, char **argv);
+void shell_command_open(int argc, char **argv);
 void shell_command_hexview(int argc, char **argv);
 void shell_command_color(int argc, char **argv);
 void shell_command_locate(int argc, char **argv);
@@ -217,6 +223,21 @@ void font_restore_saved(void);
 
 /** Theme stub (`theme show` prints the active table; switching later). */
 void shell_command_theme(int argc, char **argv);
+
+/** Markdown rendering (`markdown <file> | -e <text> | on | off`). */
+void shell_command_markdown(int argc, char **argv);
+
+/** JSON validate/pretty (`json validate|pretty <file>`). */
+void shell_command_json(int argc, char **argv);
+
+/** Validate JSON text (testable core): true when structurally valid.
+ * @p err receives "msg at line L col C" on failure (may be NULL). */
+bool json_validate_text(const char *text, size_t len, char *err, size_t err_size);
+
+/** Pretty-print JSON text with 2-space indent (testable core).
+ * @return bytes written excluding NUL (0 = invalid; @p err set). */
+size_t json_pretty_text(const char *text, size_t len, char *out, size_t out_size,
+                        char *err, size_t err_size);
 
 /* ========================================================================
  * POWER / DISPLAY / BATTERY (`brightness`, `rotate`, `battery`, `power`,
@@ -282,6 +303,40 @@ void shell_command_send(int argc, char **argv);
  * Fill 54 BMP header bytes for a WxH 24-bit image (pure, unit-tested).
  */
 int screenshot_write_bmp_headers(uint8_t *buf, uint32_t width, uint32_t height);
+
+/**
+ * Incremental CRC-32 update (IEEE 802.3, reflected poly 0xEDB88320;
+ * implemented in serial_commands.c). The firmware's single CRC primitive:
+ * `receive` transfer verification and the `crc32`/`asset` verbs share it.
+ * Start the accumulator at 0xFFFFFFFF and invert at the end (zlib parity).
+ */
+uint32_t shell_crc32_update(uint32_t crc, const uint8_t *data, size_t len);
+
+/* ========================================================================
+ * ASSET MANIFESTS (`crc32`, `asset`)
+ * ======================================================================== */
+
+/**
+ * One-shot CRC-32 over a memory buffer (pure, unit-tested).
+ */
+uint32_t asset_crc32_data(const uint8_t *data, size_t len);
+
+/**
+ * Parse one `APPS/<APP>.ASSETS` manifest line (`path=HEXCRC`, `#`/`;`
+ * comments and blanks skipped). Pure, unit-tested. @return true with the
+ * SD-relative path and expected CRC; false for comments/blanks/malformed
+ * lines (caller skips comments, fails malformed ones).
+ */
+bool asset_parse_line(const char *line, char *path_out, size_t path_size,
+                      uint32_t *crc_out);
+
+/**
+ * `crc32 <path>` — print the file's CRC-32. `asset check|list <app>` —
+ * verify/list an app's manifest. Implemented in asset_commands.c.
+ * Sets ERRORLEVEL 0 (ok/all match) / 1 (I/O or any mismatch) / 2 (usage).
+ */
+void shell_command_crc32(int argc, char **argv);
+void shell_command_asset(int argc, char **argv);
 
 /* ========================================================================
  * DATABASE (`db`)

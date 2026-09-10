@@ -18,7 +18,9 @@
 
 #include "batch.h"
 #include "storage.h"
+#include "filetype.h"
 #include "shell.h"
+#include "markdown.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "clock.h"
@@ -129,6 +131,36 @@ static batch_command_ops_t s_command_ops;
 /* Environment variables (RAM-only, not persisted across boots) */
 static shell_env_var_t s_shell_env_vars[SHELL_ENV_VAR_MAX];
 
+/* Shared tables (env vars, aliases) are DOS-global across workers: `set`
+ * on one task is visible to the other, which is exactly the cheap IPC games
+ * need. Mutations take this lock so two setters can never corrupt a slot;
+ * readers stay lock-free (a value changing mid-read is transient, and every
+ * consumer copies it out immediately). Snapshot copies (setlocal) and full
+ * iterations (print/save/clear) also take it. */
+static SemaphoreHandle_t s_shared_lock = NULL;
+
+static void batch_shared_lock_init(void)
+{
+    if (s_shared_lock == NULL) {
+        s_shared_lock = xSemaphoreCreateMutex();
+    }
+}
+
+static void batch_shared_take(void)
+{
+    batch_shared_lock_init();
+    if (s_shared_lock != NULL) {
+        xSemaphoreTake(s_shared_lock, portMAX_DELAY);
+    }
+}
+
+static void batch_shared_give(void)
+{
+    if (s_shared_lock != NULL) {
+        xSemaphoreGive(s_shared_lock);
+    }
+}
+
 /* ---- Aliases (DOSKEY-style macros, RAM-only until /save) ---- */
 
 /** One RAM-only alias slot. */
@@ -140,13 +172,57 @@ typedef struct {
 
 static shell_alias_t s_aliases[SHELL_ALIAS_MAX];
 
-/* Batch execution state */
-static shell_batch_frame_t *s_active_batch_frame;
-static int s_errorlevel;
-static char s_goto_label[SHELL_COMMAND_BYTES];
-static bool s_goto_pending;
-static bool s_goto_eof;            /* goto :eof — jump to end of current frame */
-static batch_stop_mode_t s_stop_mode;
+/* Batch execution state (per worker task).
+ *
+ * The main worker owns slot 0; `start` background tasks own the rest.
+ * Everything a batch run mutates while executing — frame stack, errorlevel,
+ * goto state, stop mode, setlocal scopes — lives here so two workers never
+ * share them. Shared DOS-style state (env table, aliases, cwd) stays global.
+ * Code below keeps using the historical `s_*` names: they are macros into
+ * the current task's slot, so the ~140 use sites needed no edits. Unknown
+ * tasks (unit tests, init) fall back to slot 0. */
+typedef struct {
+    shell_batch_frame_t *active_frame;
+    int errorlevel;
+    char goto_label[SHELL_COMMAND_BYTES];
+    bool goto_pending;
+    bool goto_eof;
+    batch_stop_mode_t stop_mode;
+    shell_env_var_t *setlocal_stack[SHELL_SETLOCAL_DEPTH_MAX];
+    int setlocal_depth;
+    TaskHandle_t task;      /* owning bg task, NULL for slot 0 */
+    bool in_use;            /* bg slot claimed by a live task */
+    bool kill_requested;    /* taskkill: unwind at the next batch line */
+    char all_args[SHELL_BATCH_LINE_BYTES]; /* `%*` scratch (per task) */
+} batch_task_ctx_t;
+
+static batch_task_ctx_t s_batch_ctx[1 + P4_CONFIG_BG_TASKS];
+
+static batch_task_ctx_t *batch_ctx_current(void)
+{
+    TaskHandle_t me;
+    int i;
+
+    /* xTaskGetCurrentTaskHandle is safe during init (returns NULL). */
+    me = xTaskGetCurrentTaskHandle();
+    if (me != NULL) {
+        for (i = 1; i < 1 + P4_CONFIG_BG_TASKS; i++) {
+            if (s_batch_ctx[i].in_use && s_batch_ctx[i].task == me) {
+                return &s_batch_ctx[i];
+            }
+        }
+    }
+    return &s_batch_ctx[0];
+}
+
+#define s_active_batch_frame (batch_ctx_current()->active_frame)
+#define s_errorlevel         (batch_ctx_current()->errorlevel)
+#define s_goto_label         (batch_ctx_current()->goto_label)
+#define s_goto_pending       (batch_ctx_current()->goto_pending)
+#define s_goto_eof           (batch_ctx_current()->goto_eof)
+#define s_stop_mode          (batch_ctx_current()->stop_mode)
+#define s_setlocal_stack     (batch_ctx_current()->setlocal_stack)
+#define s_setlocal_depth     (batch_ctx_current()->setlocal_depth)
 static bool s_default_echo = true;   /* CONFIG.SYS ECHO ON|OFF sets this; batch frames inherit it */
 
 /**
@@ -159,8 +235,6 @@ static bool s_default_echo = true;   /* CONFIG.SYS ECHO ON|OFF sets this; batch 
  * large enough that a static stack would waste RAM on a board that mostly
  * never uses setlocal.
  */
-static shell_env_var_t *s_setlocal_stack[SHELL_SETLOCAL_DEPTH_MAX];
-static int s_setlocal_depth;
 
 /* ========================================================================
  * FORWARD DECLARATIONS
@@ -287,6 +361,9 @@ static shell_env_var_t *shell_env_find_free_slot(void)
 
 const char *shell_env_get(const char *name)
 {
+    /* Shared table, two workers: a returned pointer stays valid only until
+     * the next set (callers copy it out immediately — established pattern).
+     * The lookup itself is lock-free; mutation takes the env lock. */
     shell_env_var_t *slot = shell_env_find_slot(name);
 
     return slot != NULL ? slot->value : NULL;
@@ -302,17 +379,20 @@ esp_err_t shell_env_set(const char *name, const char *value)
         return ESP_ERR_INVALID_ARG;
     }
 
+    batch_shared_take();
     slot = shell_env_find_slot(normalized);
     if (value == NULL || value[0] == '\0') {
         if (slot != NULL) {
             memset(slot, 0, sizeof(*slot));
         }
+        batch_shared_give();
         return ESP_OK;
     }
 
     if (slot == NULL) {
         slot = shell_env_find_free_slot();
         if (slot == NULL) {
+            batch_shared_give();
             return ESP_ERR_NO_MEM;
         }
     }
@@ -320,6 +400,7 @@ esp_err_t shell_env_set(const char *name, const char *value)
     slot->used = true;
     snprintf(slot->name, sizeof(slot->name), "%s", normalized);
     snprintf(slot->value, sizeof(slot->value), "%s", value);
+    batch_shared_give();
     return ESP_OK;
 }
 
@@ -329,10 +410,22 @@ static void shell_env_print_all(void)
     bool any = false;
 
     for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
-        if (!s_shell_env_vars[index].used) {
+        /* Copy out under lock, print after: never hold the shared lock
+         * across transcript calls. */
+        bool used = false;
+        char name[SHELL_ENV_NAME_BYTES];
+        char value[SHELL_ENV_VALUE_BYTES];
+        batch_shared_take();
+        used = s_shell_env_vars[index].used;
+        if (used) {
+            snprintf(name, sizeof(name), "%s", s_shell_env_vars[index].name);
+            snprintf(value, sizeof(value), "%s", s_shell_env_vars[index].value);
+        }
+        batch_shared_give();
+        if (!used) {
             continue;
         }
-        shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n", s_shell_env_vars[index].name, s_shell_env_vars[index].value);
+        shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n", name, value);
         any = true;
     }
 
@@ -412,17 +505,20 @@ esp_err_t shell_alias_set(const char *name, const char *value)
 {
     char normalized[SHELL_ALIAS_NAME_BYTES];
     shell_alias_t *slot;
+    esp_err_t result = ESP_OK;
 
     shell_alias_normalize_name(name, normalized, sizeof(normalized));
     if (!shell_alias_name_is_valid(normalized)) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    batch_shared_take();
     slot = shell_alias_find_slot(normalized);
     if (value == NULL || value[0] == '\0') {
         if (slot != NULL) {
             memset(slot, 0, sizeof(*slot));
         }
+        batch_shared_give();
         return ESP_OK;
     }
 
@@ -436,14 +532,17 @@ esp_err_t shell_alias_set(const char *name, const char *value)
             }
         }
         if (slot == NULL) {
-            return ESP_ERR_NO_MEM;
+            result = ESP_ERR_NO_MEM;
         }
     }
 
-    slot->used = true;
-    snprintf(slot->name, sizeof(slot->name), "%s", normalized);
-    snprintf(slot->value, sizeof(slot->value), "%s", value);
-    return ESP_OK;
+    if (result == ESP_OK) {
+        slot->used = true;
+        snprintf(slot->name, sizeof(slot->name), "%s", normalized);
+        snprintf(slot->value, sizeof(slot->value), "%s", value);
+    }
+    batch_shared_give();
+    return result;
 }
 
 int shell_alias_count(void)
@@ -574,18 +673,31 @@ static esp_err_t shell_alias_save_to(const char *resolved_path)
     }
 
     for (index = 0; index < SHELL_ALIAS_MAX; index++) {
-        if (!s_aliases[index].used) {
+        bool used;
+        char name[SHELL_ALIAS_NAME_BYTES];
+        char value[SHELL_ALIAS_VALUE_BYTES];
+
+        /* Copy out under lock, print/write after: never hold the shared
+         * lock across transcript or filesystem calls. */
+        batch_shared_take();
+        used = s_aliases[index].used;
+        if (used) {
+            snprintf(name, sizeof(name), "%s", s_aliases[index].name);
+            snprintf(value, sizeof(value), "%s", s_aliases[index].value);
+        }
+        batch_shared_give();
+        if (!used) {
             continue;
         }
         /* Values containing a double quote cannot round-trip through the
          * batch quoting used by the profile; skip them rather than write a
          * line that would load wrong. */
-        if (strchr(s_aliases[index].value, '"') != NULL) {
+        if (strchr(value, '"') != NULL) {
             shell_print_warning("alias: skipped %s (value contains a double quote)",
-                                s_aliases[index].name);
+                                name);
             continue;
         }
-        fprintf(file, "alias %s=\"%s\"\n", s_aliases[index].name, s_aliases[index].value);
+        fprintf(file, "alias %s=\"%s\"\n", name, value);
     }
 
     if (fflush(file) != 0 || fclose(file) != 0) {
@@ -630,11 +742,21 @@ void shell_command_alias(int argc, char **argv)
             return;
         }
         for (slot = 0; slot < SHELL_ALIAS_MAX; slot++) {
-            if (!s_aliases[slot].used) {
+            bool used = false;
+            char name[SHELL_ALIAS_NAME_BYTES];
+            char value[SHELL_ALIAS_VALUE_BYTES];
+            batch_shared_take();
+            used = s_aliases[slot].used;
+            if (used) {
+                snprintf(name, sizeof(name), "%s", s_aliases[slot].name);
+                snprintf(value, sizeof(value), "%s", s_aliases[slot].value);
+            }
+            batch_shared_give();
+            if (!used) {
                 continue;
             }
             shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n",
-                                          s_aliases[slot].name, s_aliases[slot].value);
+                                          name, value);
             any = true;
         }
         if (!any) {
@@ -697,9 +819,11 @@ void shell_command_alias(int argc, char **argv)
                 shell_print_usage("Usage: alias /clear");
                 return;
             }
+            batch_shared_take();
             for (index = 0; index < SHELL_ALIAS_MAX; index++) {
                 memset(&s_aliases[index], 0, sizeof(s_aliases[index]));
             }
+            batch_shared_give();
             shell_print_ok("alias: all aliases cleared");
             return;
         }
@@ -769,7 +893,9 @@ static bool shell_setlocal_push(void)
         return false;
     }
 
+    batch_shared_take();
     memcpy(snapshot, s_shell_env_vars, sizeof(s_shell_env_vars));
+    batch_shared_give();
     s_setlocal_stack[s_setlocal_depth++] = snapshot;
     return true;
 }
@@ -793,7 +919,9 @@ static bool shell_setlocal_pop(void)
         return false;
     }
 
+    batch_shared_take();
     memcpy(s_shell_env_vars, snapshot, sizeof(s_shell_env_vars));
+    batch_shared_give();
     free(snapshot);
     return true;
 }
@@ -820,13 +948,14 @@ static void shell_setlocal_unwind_to(int depth)
  * Build the `%*` expansion: every frame argument from `%1` onward, joined
  * with spaces. `%0` is the script name and is excluded, matching DOS.
  *
- * The scratch buffer is static because it is only ever consumed by the
- * caller of this helper before the next call can overwrite it, and the
- * command path is single-threaded. Sized by the existing batch line limit.
+ * The scratch buffer lives in the current task's ctx (not a file static)
+ * so two workers can expand `%*` concurrently without clobbering each
+ * other. Still only consumed by the caller before its next call.
  */
 static const char *shell_batch_all_args_string(void)
 {
-    static char all_args[SHELL_BATCH_LINE_BYTES];
+    batch_task_ctx_t *ctx = batch_ctx_current();
+    char *all_args = ctx->all_args;
     int index;
 
     all_args[0] = '\0';
@@ -837,10 +966,10 @@ static const char *shell_batch_all_args_string(void)
 
     for (index = 1; index < s_active_batch_frame->argc; index++) {
         if (index > 1) {
-            strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
+            strncat(all_args, " ", sizeof(ctx->all_args) - strlen(all_args) - 1);
         }
         strncat(all_args, s_active_batch_frame->args[index],
-                sizeof(all_args) - strlen(all_args) - 1);
+                sizeof(ctx->all_args) - strlen(all_args) - 1);
     }
 
     return all_args;
@@ -1184,6 +1313,105 @@ void batch_set_errorlevel(int level)
 }
 
 /* ========================================================================
+ * BACKGROUND TASK SLOTS (`start` pool)
+ * ======================================================================== */
+
+static SemaphoreHandle_t s_bg_lock = NULL;
+
+static void batch_bg_lock_init(void)
+{
+    if (s_bg_lock == NULL) {
+        s_bg_lock = xSemaphoreCreateMutex();
+    }
+}
+
+int batch_bg_alloc(void)
+{
+    int i;
+    int slot = -1;
+
+    batch_bg_lock_init();
+    if (s_bg_lock != NULL) {
+        xSemaphoreTake(s_bg_lock, portMAX_DELAY);
+    }
+    for (i = 1; i < 1 + P4_CONFIG_BG_TASKS; i++) {
+        if (!s_batch_ctx[i].in_use) {
+            s_batch_ctx[i].in_use = true;
+            s_batch_ctx[i].task = NULL;
+            s_batch_ctx[i].kill_requested = false;
+            /* Fresh execution state (BSS may hold a previous run). */
+            s_batch_ctx[i].active_frame = NULL;
+            s_batch_ctx[i].errorlevel = 0;
+            s_batch_ctx[i].goto_label[0] = '\0';
+            s_batch_ctx[i].goto_pending = false;
+            s_batch_ctx[i].goto_eof = false;
+            s_batch_ctx[i].stop_mode = BATCH_STOP_NONE;
+            s_batch_ctx[i].setlocal_depth = 0;
+            slot = i;
+            break;
+        }
+    }
+    if (s_bg_lock != NULL) {
+        xSemaphoreGive(s_bg_lock);
+    }
+    return slot;
+}
+
+void batch_bg_bind(int slot)
+{
+    if (slot < 1 || slot >= 1 + P4_CONFIG_BG_TASKS) {
+        return;
+    }
+    s_batch_ctx[slot].task = xTaskGetCurrentTaskHandle();
+}
+
+void batch_bg_release(int slot)
+{
+    if (slot < 1 || slot >= 1 + P4_CONFIG_BG_TASKS) {
+        return;
+    }
+    batch_bg_lock_init();
+    if (s_bg_lock != NULL) {
+        xSemaphoreTake(s_bg_lock, portMAX_DELAY);
+    }
+    s_batch_ctx[slot].in_use = false;
+    s_batch_ctx[slot].task = NULL;
+    s_batch_ctx[slot].kill_requested = false;
+    if (s_bg_lock != NULL) {
+        xSemaphoreGive(s_bg_lock);
+    }
+}
+
+void batch_bg_request_kill(int slot)
+{
+    if (slot < 1 || slot >= 1 + P4_CONFIG_BG_TASKS) {
+        return;
+    }
+    s_batch_ctx[slot].kill_requested = true;
+}
+
+bool batch_bg_kill_requested(void)
+{
+    return batch_ctx_current()->kill_requested;
+}
+
+bool batch_bg_is_background(void)
+{
+    TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    int i;
+
+    if (me == NULL) {
+        return false;
+    }
+    for (i = 1; i < 1 + P4_CONFIG_BG_TASKS; i++) {
+        if (s_batch_ctx[i].in_use && s_batch_ctx[i].task == me) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* ========================================================================
  * ENVIRONMENT COMMANDS: set, path, echo
  * ======================================================================== */
 
@@ -1280,6 +1508,9 @@ void shell_command_path(int argc, char **argv)
     free(value);
 }
 
+/* Forward declaration (defined below shell_command_echo). */
+static void shell_echo_emit_rendered(const char *text);
+
 void shell_command_echo(int argc, char **argv)
 {
     /* The joined text can be a full interactive command line (up to
@@ -1312,9 +1543,68 @@ void shell_command_echo(int argc, char **argv)
         return;
     }
 
+    /* `echo /raw ...` bypasses Markdown auto-render (documented). */
+    if (argc > 2 && shell_text_equals_ignore_case(argv[1], "/raw")) {
+        shell_join_args(argv, 2, argc, text, SHELL_COMMAND_BYTES);
+        shell_transcript_appendf("%s\n", text);
+        free(text);
+        return;
+    }
     shell_join_args(argv, 1, argc, text, SHELL_COMMAND_BYTES);
-    shell_transcript_appendf("%s\n", text);
+    shell_echo_emit_rendered(text);
     free(text);
+}
+
+/** Emit echo output with per-line Markdown auto-render (unless off or the
+ * line came from `echo /raw`). Rendered lines go through the ANSI path so
+ * spans and serial terminals style them; untouched lines stay verbatim. */
+static void shell_echo_emit_rendered(const char *text)
+{
+    if (text == NULL) {
+        return;
+    }
+    if (!markdown_get_auto()) {
+        shell_transcript_appendf("%s\n", text);
+        return;
+    }
+    {
+        char *rendered = malloc(SHELL_COMMAND_BYTES * 2);
+        const char *p = text;
+        if (rendered == NULL) {
+            shell_transcript_appendf("%s\n", text);
+            return;
+        }
+        /* Echo text is one logical line, but split defensively: any embedded
+         * newline renders per line so a block can never leak across. */
+        while (*p != '\0') {
+            const char *e = p;
+            while (*e != '\0' && *e != '\n' && *e != '\r') {
+                e++;
+            }
+            {
+                size_t linelen = (size_t)(e - p);
+                /* Line-sized copy: echo text itself is command-sized, so a
+                 * line never exceeds the buffer. */
+                char *line = malloc(linelen + 1);
+                if (line == NULL) {
+                    break;
+                }
+                memcpy(line, p, linelen);
+                line[linelen] = '\0';
+                if (markdown_render_line(line, rendered, SHELL_COMMAND_BYTES * 2)) {
+                    shell_transcript_append_ansi(rendered);
+                } else {
+                    shell_transcript_appendf("%s\n", line);
+                }
+                free(line);
+            }
+            while (*e == '\n' || *e == '\r') {
+                e++;
+            }
+            p = e;
+        }
+        free(rendered);
+    }
 }
 
 void shell_command_echo_text(char *line)
@@ -1354,13 +1644,30 @@ void shell_command_echo_text(char *line)
      * full interactive command line (up to P4_CONFIG_COMMAND_BYTES), and
      * `echo` runs on the recursive batch path, so the copy is heap-allocated. */
     shell_unescape_carets_in_place(p);
+    /* `echo /raw ...` bypasses Markdown auto-render (documented). */
+    if (shell_text_equals_ignore_case(p, "/raw") ||
+        strncasecmp(p, "/raw ", 5) == 0) {
+        const char *raw = p + 4;
+        if (*raw != '\0') {
+            raw++;
+        }
+        text = malloc(SHELL_COMMAND_BYTES);
+        if (text == NULL) {
+            shell_transcript_append_text("echo: out of memory\n");
+            return;
+        }
+        snprintf(text, SHELL_COMMAND_BYTES, "%s", raw);
+        shell_transcript_appendf("%s\n", text);
+        free(text);
+        return;
+    }
     text = malloc(SHELL_COMMAND_BYTES);
     if (text == NULL) {
         shell_transcript_append_text("echo: out of memory\n");
         return;
     }
     snprintf(text, SHELL_COMMAND_BYTES, "%s", p);
-    shell_transcript_appendf("%s\n", text);
+    shell_echo_emit_rendered(text);
     free(text);
 }
 
@@ -1418,13 +1725,20 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
         goto done;
     }
 
-    if (!shell_path_has_extension(command_name, ".bat")) {
-        snprintf(with_ext, SHELL_SD_PATH_BYTES, "%s.bat", command_name);
-        error = shell_fs_resolve_path(with_ext, candidate, SHELL_SD_PATH_BYTES);
-        if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
-            snprintf(resolved_path, resolved_path_size, "%s", candidate);
-            found = true;
-            goto done;
+    if (!filetype_is_executable(filetype_of(command_name))) {
+        static const char *const script_exts[] = { ".bat", ".cmd" };
+        size_t e;
+
+        /* DOS parity: an extensionless name also probes the sibling script
+         * type, so .cmd files run exactly like .bat ones. */
+        for (e = 0; e < 2 && !found; e++) {
+            snprintf(with_ext, SHELL_SD_PATH_BYTES, "%s%s", command_name, script_exts[e]);
+            error = shell_fs_resolve_path(with_ext, candidate, SHELL_SD_PATH_BYTES);
+            if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+                snprintf(resolved_path, resolved_path_size, "%s", candidate);
+                found = true;
+                goto done;
+            }
         }
     }
 
@@ -1441,13 +1755,18 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
                     goto done;
                 }
 
-                if (!shell_path_has_extension(command_name, ".bat")) {
-                    written = snprintf(candidate, SHELL_SD_PATH_BYTES, "%s/%s.bat", dir_path, command_name);
-                    if (written > 0 && (size_t)written < SHELL_SD_PATH_BYTES &&
-                        shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
-                        snprintf(resolved_path, resolved_path_size, "%s", candidate);
-                        found = true;
-                        goto done;
+                if (!filetype_is_executable(filetype_of(command_name))) {
+                    static const char *const script_exts[] = { ".bat", ".cmd" };
+                    size_t e;
+
+                    for (e = 0; e < 2 && !found; e++) {
+                        written = snprintf(candidate, SHELL_SD_PATH_BYTES, "%s/%s%s", dir_path, command_name, script_exts[e]);
+                        if (written > 0 && (size_t)written < SHELL_SD_PATH_BYTES &&
+                            shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+                            snprintf(resolved_path, resolved_path_size, "%s", candidate);
+                            found = true;
+                            goto done;
+                        }
                     }
                 }
             }
@@ -1872,6 +2191,8 @@ void shell_command_choice(int argc, char **argv)
     char options[P4_CONFIG_CHOICE_KEY_MAX];
     char *message = NULL;
     const char *default_key = NULL;
+    char timeout_key[2] = {'\0', '\0'}; /* /T default key (stack: two tasks
+                                         * may parse choice concurrently) */
     bool show_list = true;
     bool case_sensitive = false;
     uint32_t timeout_ms = SHELL_KEY_WAIT_TIMEOUT_MS;
@@ -1928,7 +2249,6 @@ void shell_command_choice(int argc, char **argv)
                 }
 
                 {
-                    static char timeout_key[2];
                     long seconds = strtol(comma + 1, NULL, 10);
 
                     timeout_key[0] = value[0];
@@ -2125,20 +2445,22 @@ void shell_command_exit(int argc, char **argv)
 /* ========================================================================
  * PROCESS ABSTRACTION (proc)
  * ========================================================================
- * A batch file runs as a "process" on the single worker task: it has an
+ * A batch file runs as a "process" on a worker task: it has an
  * argument frame (%0..%9 / %*), its own environment scope (setlocal), the
  * caller's cwd, an exit code (errorlevel, expandable as %ERRORLEVEL%), and
  * stdin/stdout through the pipe and redirection layer. `proc` is the
  * introspection view of that process stack, so a batch file can report (or
  * branch on) its own depth, name, arguments, echo state, and exit code, and
  * a shell user can see which scripts are nested and what the pipe input
- * source is.
+ * source is. Each worker task (`start` background tasks included) sees its
+ * own process stack.
  */
 
-/** Render a frame's caller arguments (args[1]..) joined with spaces. */
+/** Render a frame's caller arguments (args[1]..) joined with spaces. Uses
+ * the per-task `%*` scratch (same buffer, same lifetime rules). */
 static const char *shell_frame_args_string(const shell_batch_frame_t *frame)
 {
-    static char all_args[SHELL_BATCH_LINE_BYTES];
+    char *all_args = batch_ctx_current()->all_args;
     int index;
 
     all_args[0] = '\0';
@@ -2147,9 +2469,9 @@ static const char *shell_frame_args_string(const shell_batch_frame_t *frame)
     }
     for (index = 1; index < frame->argc; index++) {
         if (index > 1) {
-            strncat(all_args, " ", sizeof(all_args) - strlen(all_args) - 1);
+            strncat(all_args, " ", SHELL_BATCH_LINE_BYTES - strlen(all_args) - 1);
         }
-        strncat(all_args, frame->args[index], sizeof(all_args) - strlen(all_args) - 1);
+        strncat(all_args, frame->args[index], SHELL_BATCH_LINE_BYTES - strlen(all_args) - 1);
     }
     return all_args;
 }
@@ -2865,6 +3187,11 @@ void shell_command_appmode(int argc, char **argv)
     }
 
     if (shell_text_equals_ignore_case(argv[1], "on")) {
+        if (batch_bg_is_background()) {
+            shell_print_error("appmode: not available to background tasks");
+            batch_set_errorlevel(1);
+            return;
+        }
         if (s_appmode_active) {
             shell_print_error("appmode: already active");
             batch_set_errorlevel(1);
@@ -2896,6 +3223,11 @@ void shell_command_appmode(int argc, char **argv)
     }
 
     if (shell_text_equals_ignore_case(argv[1], "off")) {
+        if (batch_bg_is_background()) {
+            shell_print_error("appmode: not available to background tasks");
+            batch_set_errorlevel(1);
+            return;
+        }
         shell_appmode_restore();
         batch_set_errorlevel(0);
         return;
@@ -2921,10 +3253,12 @@ void shell_command_appmode(int argc, char **argv)
  * Every spool file is removed on every exit path, including a stage failure.
  */
 
-/** Build the spool path for pipeline stage @p stage. */
+/** Build the spool path for pipeline stage @p stage. Per-task names so two
+ * workers piping at once never share a spool file. */
 static void shell_pipe_spool_path(int stage, char *output, size_t output_size)
 {
-    snprintf(output, output_size, "%s/_pipe%d.tmp", BSP_SD_MOUNT_POINT, stage);
+    int slot = (int)(batch_ctx_current() - s_batch_ctx);
+    snprintf(output, output_size, "%s/_pipe%d_%d.tmp", BSP_SD_MOUNT_POINT, slot, stage);
 }
 
 void shell_execute_pipe(char *command)
@@ -3161,6 +3495,13 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         bool suppress_echo = false;
         size_t line_len;
         int continuations = 0;
+
+        /* Cooperative stop for `taskkill`: a background batch unwinds at
+         * the next line boundary (frames unwind normally below). */
+        if (batch_bg_kill_requested()) {
+            s_stop_mode = BATCH_STOP_ALL;
+            break;
+        }
 
         if (fgets(line, SHELL_BATCH_LINE_BYTES, file) == NULL) {
             /* End of file. Inside a called `:label` block this returns to the

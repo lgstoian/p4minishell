@@ -22,6 +22,8 @@
 #include "windows.h"
 #include "keyboard.h"
 #include "ansi.h"
+#include "font.h"
+#include "markdown.h"
 #include "shell.h"
 #include "modal.h"
 #include "esp_lvgl_port.h"
@@ -39,6 +41,7 @@
 
 /* Session event bits. MODAL_EVENT_* live in modal.h; editor keeps SAVE. */
 #define EDITOR_EVENT_SAVE   (1 << 2)
+#define EDITOR_EVENT_RELOAD (1 << 3)
 
 /* ========================================================================
  * INTERNAL STATE
@@ -79,6 +82,12 @@ static struct {
     char replace_str[P4_CONFIG_EDITOR_FIND_BYTES];
     size_t replace_len;
     bool replace_armed;         /* Enter repeats the last replace */
+    bool preview;               /* Rendered Markdown preview (read-only) */
+    bool find_case;             /* Find/replace case sensitivity (session) */
+    bool wrap;                  /* Word-wrap long rows (session) */
+    size_t *wrap_counts;        /* Visual chunks per doc row (wrap on) */
+    size_t wrap_count_rows;
+    lv_coord_t wrap_px_used;    /* Wrap width the cache was built for */
 
     /* Per-row display width cache (cumulative pixel offsets per column). */
     size_t width_row;
@@ -103,6 +112,12 @@ static struct {
     .find_len = 0,
     .replace_len = 0,
     .replace_armed = false,
+    .preview = false,
+    .find_case = P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE,
+    .wrap = false,
+    .wrap_counts = NULL,
+    .wrap_count_rows = 0,
+    .wrap_px_used = 0,
     .width_row = (size_t)-1,
     .widths = NULL,
     .width_count = 0,
@@ -114,6 +129,7 @@ static void editor_update_cursor(void);
 static void editor_update_current_line(void);
 static void editor_build_selection(void);
 static void editor_ensure_cursor_visible(void);
+static void editor_status(const char *format, ...);
 static void editor_status_default(void);
 static void editor_layout_update(void);
 static void editor_touch_event_cb(lv_event_t *event);
@@ -270,6 +286,306 @@ static size_t editor_column_from_x(const editor_doc_t *doc, size_t row, lv_coord
 }
 
 /* ========================================================================
+ * WORD WRAP (explicit chunking with \n separators)
+ * ========================================================================
+ * When wrap is on, long rows are split into visual chunks of wrap_px
+ * pixels, emitted with separator spans so the on-screen rows always match
+ * this math exactly (independent of LVGL's span layout). Mappings below
+ * translate between document (row, col) and absolute visual rows. The
+ * per-row chunk counts are cached at rebuild; mappings trigger a rebuild
+ * of the cache when the wrap width changed (e.g. keyboard show/hide).
+ */
+
+static lv_coord_t editor_wrap_px(void)
+{
+    lv_coord_t content;
+    lv_coord_t gutter;
+
+    if (!s_editor_view.wrap || s_editor_view.surface == NULL) {
+        return 0;
+    }
+    content = lv_obj_get_content_width(s_editor_view.surface);
+    gutter = editor_gutter_width();
+    if (content - gutter < 80) {
+        return 0;
+    }
+    return content - gutter;
+}
+
+/** First byte col past @p start that still fits in @p budget_px (widths
+ * must be cached for @p row). Always advances >= 1 col when text remains. */
+static size_t editor_fit_cols(size_t row, size_t start, lv_coord_t budget_px)
+{
+    size_t len;
+    size_t end;
+
+    if (s_editor_view.widths == NULL || s_editor_view.width_row != row) {
+        return start;
+    }
+    len = s_editor_view.width_count;
+    if (start >= len) {
+        return len;
+    }
+    end = start;
+    while (end < len &&
+           s_editor_view.widths[end + 1] - s_editor_view.widths[start] < budget_px) {
+        end++;
+    }
+    if (end == start) {
+        end++;
+    }
+    return end;
+}
+
+/** Byte columns [start, end) of chunk @p chunk within @p row. */
+static void editor_chunk_cols(const editor_doc_t *doc, size_t row, size_t chunk,
+                              size_t *start_out, size_t *end_out)
+{
+    lv_coord_t wrap_px = editor_wrap_px();
+    size_t len;
+    size_t start = 0;
+    size_t end;
+    size_t k;
+
+    if (start_out != NULL) {
+        *start_out = 0;
+    }
+    if (end_out != NULL) {
+        *end_out = 0;
+    }
+    if (doc == NULL || row >= editor_doc_line_count(doc) || wrap_px <= 0) {
+        if (doc != NULL && row < editor_doc_line_count(doc)) {
+            if (end_out != NULL) {
+                *end_out = editor_doc_line_length(doc, row);
+            }
+        }
+        return;
+    }
+    len = editor_doc_line_length(doc, row);
+    editor_width_cache(row);
+    if (s_editor_view.widths == NULL || s_editor_view.width_row != row) {
+        if (end_out != NULL) {
+            *end_out = len;
+        }
+        return;
+    }
+    /* Walk chunks greedily by pixel width; every chunk takes >= 1 col
+     * (shared fit rule with the render emitter). */
+    for (k = 0; k <= chunk; k++) {
+        end = editor_fit_cols(row, start, wrap_px);
+        if (end >= len) {
+            end = len;
+            if (k == chunk) {
+                if (start_out != NULL) {
+                    *start_out = start;
+                }
+                if (end_out != NULL) {
+                    *end_out = end;
+                }
+            }
+            return;
+        }
+        if (k == chunk) {
+            if (start_out != NULL) {
+                *start_out = start;
+            }
+            if (end_out != NULL) {
+                *end_out = end;
+            }
+            return;
+        }
+        start = end;
+    }
+    /* Past the last chunk: clamp to the tail. */
+    if (start_out != NULL) {
+        *start_out = start;
+    }
+    if (end_out != NULL) {
+        *end_out = len;
+    }
+}
+
+/** Number of visual chunks of @p row (>= 1). */
+static size_t editor_row_chunks(const editor_doc_t *doc, size_t row)
+{
+    lv_coord_t wrap_px = editor_wrap_px();
+    size_t len;
+    size_t start = 0;
+    size_t chunks = 0;
+
+    if (doc == NULL || row >= editor_doc_line_count(doc) || wrap_px <= 0) {
+        return 1;
+    }
+    len = editor_doc_line_length(doc, row);
+    if (len == 0) {
+        return 1;
+    }
+    editor_width_cache(row);
+    if (s_editor_view.widths == NULL || s_editor_view.width_row != row) {
+        return 1;
+    }
+    while (start < len) {
+        start = editor_fit_cols(row, start, wrap_px);
+        chunks++;
+    }
+    return chunks > 0 ? chunks : 1;
+}
+
+/** Rebuild the per-row chunk-count cache (call from editor_rebuild). */
+static void editor_wrap_rebuild(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    size_t count;
+    size_t row;
+
+    free(s_editor_view.wrap_counts);
+    s_editor_view.wrap_counts = NULL;
+    s_editor_view.wrap_count_rows = 0;
+    s_editor_view.wrap_px_used = s_editor_view.wrap ? editor_wrap_px() : 0;
+    if (doc == NULL || !s_editor_view.wrap || s_editor_view.wrap_px_used <= 0) {
+        return;
+    }
+    count = editor_doc_line_count(doc);
+    if (count == 0) {
+        return;
+    }
+    s_editor_view.wrap_counts = malloc(count * sizeof(size_t));
+    if (s_editor_view.wrap_counts == NULL) {
+        return;
+    }
+    s_editor_view.wrap_count_rows = count;
+    for (row = 0; row < count; row++) {
+        s_editor_view.wrap_counts[row] = editor_row_chunks(doc, row);
+    }
+}
+
+/** Chunk index holding byte @p col within @p row (0 when not wrapping). */
+static size_t editor_chunk_of(const editor_doc_t *doc, size_t row, size_t col)
+{
+    size_t len;
+    size_t start = 0;
+    size_t end = 0;
+    size_t k = 0;
+
+    if (doc == NULL || row >= editor_doc_line_count(doc) ||
+        !s_editor_view.wrap || editor_wrap_px() <= 0) {
+        return 0;
+    }
+    len = editor_doc_line_length(doc, row);
+    if (col > len) {
+        col = len;
+    }
+    while (true) {
+        editor_chunk_cols(doc, row, k, &start, &end);
+        if (col < end || end >= len) {
+            break;
+        }
+        k++;
+    }
+    return k;
+}
+
+/** Absolute visual row of document (row, col): chunk base + chunk index. */
+static size_t editor_visual_row(const editor_doc_t *doc, size_t row, size_t col)
+{
+    size_t v = 0;
+    size_t r;
+
+    if (doc == NULL) {
+        return 0;
+    }
+    if (row >= editor_doc_line_count(doc)) {
+        row = editor_doc_line_count(doc);
+    }
+    /* Prefix sums from the cache when it matches this document shape. */
+    if (s_editor_view.wrap && s_editor_view.wrap_counts != NULL &&
+        s_editor_view.wrap_count_rows == editor_doc_line_count(doc) &&
+        s_editor_view.wrap_px_used == editor_wrap_px()) {
+        for (r = 0; r < row; r++) {
+            v += s_editor_view.wrap_counts[r];
+        }
+    } else if (s_editor_view.wrap) {
+        for (r = 0; r < row; r++) {
+            size_t n = editor_row_chunks(doc, r);
+            v += n;
+        }
+    } else {
+        return row;
+    }
+    if (row >= editor_doc_line_count(doc)) {
+        return v;
+    }
+    /* Chunk index of col within the row. */
+    return v + editor_chunk_of(doc, row, col);
+}
+
+/** Inverse: absolute visual row -> (doc row, chunk). Clamps to the doc. */
+static void editor_visual_to_doc(size_t vrow, size_t *row_out, size_t *chunk_out)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    size_t count;
+    size_t row = 0;
+    size_t n;
+
+    if (row_out != NULL) {
+        *row_out = 0;
+    }
+    if (chunk_out != NULL) {
+        *chunk_out = 0;
+    }
+    if (doc == NULL) {
+        return;
+    }
+    count = editor_doc_line_count(doc);
+    if (count == 0) {
+        return;
+    }
+    if (!s_editor_view.wrap) {
+        if (vrow >= count) {
+            vrow = count - 1;
+        }
+        if (row_out != NULL) {
+            *row_out = vrow;
+        }
+        return;
+    }
+    for (row = 0; row < count; row++) {
+        if (s_editor_view.wrap_counts != NULL &&
+            s_editor_view.wrap_count_rows == count &&
+            s_editor_view.wrap_px_used == editor_wrap_px()) {
+            n = s_editor_view.wrap_counts[row];
+        } else {
+            n = editor_row_chunks(doc, row);
+        }
+        if (vrow < n) {
+            if (row_out != NULL) {
+                *row_out = row;
+            }
+            if (chunk_out != NULL) {
+                *chunk_out = vrow;
+            }
+            return;
+        }
+        vrow -= n;
+    }
+    if (row_out != NULL) {
+        *row_out = count - 1;
+    }
+    if (chunk_out != NULL) {
+        size_t last = count - 1;
+        size_t ln;
+        if (s_editor_view.wrap_counts != NULL &&
+            s_editor_view.wrap_count_rows == count &&
+            s_editor_view.wrap_px_used == editor_wrap_px()) {
+            ln = s_editor_view.wrap_counts[last];
+        } else {
+            ln = editor_row_chunks(doc, last);
+        }
+        *chunk_out = ln > 0 ? ln - 1 : 0;
+    }
+}
+
+/* ========================================================================
  * SPAN RENDERING (one row per document line, no wrapping)
  * ======================================================================== */
 
@@ -294,9 +610,9 @@ static void editor_clear_spans(lv_obj_t *group)
     }
 }
 
-/** Append one coloured run of @p row to the span group. */
+/** Append one styled run of @p row to the span group. */
 static void editor_add_run(const char *text, size_t len,
-                           lv_color_t color)
+                           ansi_color_index_t color, unsigned attrs)
 {
     lv_span_t *span;
     lv_style_t *style;
@@ -319,9 +635,71 @@ static void editor_add_run(const char *text, size_t len,
     }
     lv_span_set_text(span, buf);
     style = lv_span_get_style(span);
-    lv_style_set_text_color(style, color);
-    lv_style_set_text_font(style, windows_get_terminal_font());
+    /* Editor surfaces are terminal-role; attrs select TTF variants. */
+    font_span_style(style, FONT_ROLE_TERMINAL, attrs, (int)color,
+                    ansi_get_palette_color(color));
     free(buf);
+}
+
+/* Chunked span emission state (one editor_render_row at a time). When
+ * wrapping, content runs are split at chunk bounds with "\n" separators
+ * plus gutter pads, so visual rows always match editor_chunk_cols. */
+static bool s_emit_wrap;
+static size_t s_emit_row;
+static lv_coord_t s_emit_remain;
+static size_t s_emit_pad;
+
+static void editor_emit_break(void)
+{
+    char pad[32];
+    size_t n = s_emit_pad;
+
+    editor_add_run("\n", 1, ANSI_COLOR_BRIGHT_WHITE, 0);
+    if (n > sizeof(pad) - 1) {
+        n = sizeof(pad) - 1;
+    }
+    if (n > 0) {
+        memset(pad, ' ', n);
+        editor_add_run(pad, n, ANSI_COLOR_BRIGHT_BLACK, 0);
+    }
+}
+
+/** Emit [start, start+len) of @p text, splitting at wrap chunk bounds. */
+static void editor_emit_span(const char *text, size_t start, size_t len,
+                             ansi_color_index_t color, unsigned attrs)
+{
+    size_t off = 0;
+
+    if (!s_emit_wrap || len == 0) {
+        if (len > 0) {
+            editor_add_run(text + start, len, color, attrs);
+        }
+        return;
+    }
+    if (s_editor_view.widths == NULL ||
+        s_editor_view.width_row != s_emit_row) {
+        /* Widths lost (should not happen mid-render): emit whole. */
+        editor_add_run(text + start, len, color, attrs);
+        return;
+    }
+    while (off < len) {
+        size_t cur = start + off;
+        size_t fit_end = editor_fit_cols(s_emit_row, cur, s_emit_remain);
+        if (fit_end > start + len) {
+            fit_end = start + len;
+        }
+        if (fit_end <= cur) {
+            fit_end = cur + 1;
+        }
+        editor_add_run(text + cur, fit_end - cur, color, attrs);
+        s_emit_remain -=
+            (s_editor_view.widths[fit_end] - s_editor_view.widths[cur]);
+        off = fit_end - start;
+        if (off < len) {
+            editor_emit_break();
+            s_emit_remain = editor_wrap_px();
+        }
+    }
 }
 
 /** Render one document row as syntax-coloured spans plus a line break. */
@@ -333,6 +711,7 @@ static void editor_render_row(editor_doc_t *doc, size_t row)
     size_t run_count = 0;
     size_t covered = 0;
     size_t i;
+    bool wrapping = false;
 
 #if P4_CONFIG_EDITOR_LINE_NUMBERS
     /* Line-number gutter: a muted, right-aligned "N " prefix before the
@@ -341,8 +720,7 @@ static void editor_render_row(editor_doc_t *doc, size_t row)
         char gutter[P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS + 2];
         size_t g = editor_format_line_number(row, P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS,
                                              gutter, sizeof(gutter));
-        editor_add_run(gutter, g,
-                       lv_color_hex(ansi_get_palette_color(ANSI_COLOR_BRIGHT_BLACK)));
+        editor_add_run(gutter, g, ANSI_COLOR_BRIGHT_BLACK, 0);
     }
 #endif
 
@@ -350,20 +728,53 @@ static void editor_render_row(editor_doc_t *doc, size_t row)
         return; /* The '\n' separator still advances the row height. */
     }
 
+    /* Wrap setup: chunk emission state for this row (widths stay cached
+     * for the whole row since nothing else measures mid-render). The
+     * continuation gutter pad matches the number-run width above. */
+    wrapping = s_editor_view.wrap && editor_wrap_px() > 0 && len > 0;
+    if (wrapping) {
+        editor_width_cache(row);
+        wrapping = s_editor_view.widths != NULL && s_editor_view.width_row == row;
+    }
+    s_emit_wrap = wrapping;
+    if (wrapping) {
+        s_emit_row = row;
+        s_emit_remain = editor_wrap_px();
+#if P4_CONFIG_EDITOR_LINE_NUMBERS
+        {
+            char gutter[P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS + 2];
+            s_emit_pad = editor_format_line_number(
+                row, P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS,
+                gutter, sizeof(gutter));
+        }
+#else
+        s_emit_pad = 0;
+#endif
+    }
+
+    /* Lexers fill color only; attrs default plain (the MD lexer sets both). */
+    memset(runs, 0, sizeof(runs));
+
     if (doc->syntax == EDITOR_SYNTAX_BATCH && P4_CONFIG_EDITOR_SYNTAX_BATCH) {
         run_count = editor_lex_batch(text, len, runs, 64);
+    } else if (doc->syntax == EDITOR_SYNTAX_MARKDOWN) {
+        run_count = editor_lex_markdown(text, len, runs, 64);
+    } else if (doc->syntax == EDITOR_SYNTAX_JSON) {
+        run_count = editor_lex_json(text, len, runs, 64);
     }
     if (run_count == 0) {
         runs[0].start = 0;
         runs[0].length = len;
         runs[0].color = ANSI_COLOR_BRIGHT_WHITE;
+        runs[0].attrs = 0;
         run_count = 1;
     }
 
     for (i = 0; i < run_count; i++) {
         size_t start = runs[i].start;
         size_t rlen = runs[i].length;
-        lv_color_t color = lv_color_hex(ansi_get_palette_color(runs[i].color));
+        ansi_color_index_t color = runs[i].color;
+        unsigned attrs = runs[i].attrs;
 
         if (start > len) {
             start = len;
@@ -374,17 +785,17 @@ static void editor_render_row(editor_doc_t *doc, size_t row)
         /* Any gap before this run (e.g. a run buffer that filled early) is
          * rendered as plain text so no byte of the line is ever dropped. */
         if (covered < start) {
-            editor_add_run(text + covered, start - covered,
-                           lv_color_hex(ansi_get_palette_color(ANSI_COLOR_BRIGHT_WHITE)));
+            editor_emit_span(text, covered, start - covered,
+                             ANSI_COLOR_BRIGHT_WHITE, 0);
         }
         if (rlen > 0) {
-            editor_add_run(text + start, rlen, color);
+            editor_emit_span(text, start, rlen, color, attrs);
             covered = start + rlen;
         }
     }
     if (covered < len) {
-        editor_add_run(text + covered, len - covered,
-                       lv_color_hex(ansi_get_palette_color(ANSI_COLOR_BRIGHT_WHITE)));
+        editor_emit_span(text, covered, len - covered,
+                         ANSI_COLOR_BRIGHT_WHITE, 0);
     }
 }
 
@@ -402,6 +813,9 @@ static void editor_rebuild(void)
 
     editor_width_invalidate();
     editor_clear_spans(s_editor_view.spans);
+
+    /* Wrap chunk cache first: render_row and all mappings agree on it. */
+    editor_wrap_rebuild();
 
     count = editor_doc_line_count(doc);
     for (row = 0; row < count; row++) {
@@ -441,6 +855,141 @@ static void editor_rebuild(void)
 }
 
 /* ========================================================================
+ * MARKDOWN PREVIEW (read-only rendered view, same surface)
+ * ========================================================================
+ * Ctrl+P toggles between source spans and a rendered preview. Preview feeds
+ * the joined document through markdown_render_doc() and reuses the editor
+ * span machinery via an ANSI segment bridge (bold/italic/underline/strike
+ * + TTF variants, same as the transcript). Editing keys exit preview;
+ * navigation, toggle, and quit keep working. Gutter/cursor/selection hide
+ * in preview (positions belong to source rows).
+ */
+
+#define EDITOR_PREVIEW_MAX_BYTES (96 * 1024)
+
+/* ANSI segment bridge: SGR runs become editor spans. */
+static void editor_preview_segment(const char *text, const ansi_state_t *state,
+                                   void *user_data)
+{
+    lv_obj_t *group = (lv_obj_t *)user_data;
+    lv_span_t *span;
+    lv_style_t *style;
+    ansi_color_index_t color = ANSI_COLOR_BRIGHT_WHITE;
+    unsigned attrs = 0;
+
+    if (group == NULL || text == NULL || text[0] == '\0') {
+        return;
+    }
+    if (state != NULL) {
+        if (state->fg_index >= 0) {
+            color = (ansi_color_index_t)state->fg_index;
+        }
+        attrs = (unsigned)state->attrs;
+    }
+    span = lv_spangroup_add_span(group);
+    if (span == NULL) {
+        return;
+    }
+    lv_span_set_text(span, text);
+    style = lv_span_get_style(span);
+    font_span_style(style, FONT_ROLE_TERMINAL, attrs, (int)color,
+                    ansi_get_palette_color(color));
+}
+
+static void editor_preview_show(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    size_t count;
+    size_t total = 0;
+    size_t row;
+    char *joined = NULL;
+    char *rendered = NULL;
+    size_t off = 0;
+
+    if (doc == NULL || s_editor_view.spans == NULL) {
+        return;
+    }
+    count = editor_doc_line_count(doc);
+    for (row = 0; row < count; row++) {
+        total += editor_doc_line_length(doc, row) + 1;
+        if (total > EDITOR_PREVIEW_MAX_BYTES) {
+            editor_status("too large to preview");
+            return;
+        }
+    }
+    joined = malloc(total + 1);
+    rendered = malloc(total * 2 + 64);
+    if (joined == NULL || rendered == NULL) {
+        free(joined);
+        free(rendered);
+        editor_status("preview: out of memory");
+        return;
+    }
+    for (row = 0; row < count; row++) {
+        const char *text = editor_doc_line_text(doc, row);
+        size_t len = editor_doc_line_length(doc, row);
+        if (text != NULL && len > 0) {
+            memcpy(joined + off, text, len);
+            off += len;
+        }
+        joined[off++] = '\n';
+    }
+    joined[off] = '\0';
+    markdown_render_doc(joined, rendered, total * 2 + 64);
+    free(joined);
+
+    editor_clear_spans(s_editor_view.spans);
+    ansi_process_text(rendered, editor_preview_segment, s_editor_view.spans);
+    free(rendered);
+
+    /* Preview owns the surface: hide source chrome. */
+    if (s_editor_view.cursor != NULL) {
+        lv_obj_add_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_editor_view.current_line != NULL) {
+        lv_obj_add_flag(s_editor_view.current_line, LV_OBJ_FLAG_HIDDEN);
+    }
+    editor_doc_selection_clear(doc);
+    editor_build_selection();
+    s_editor_view.preview = true;
+    /* Scroll back to the top for the fresh render. */
+    lv_obj_scroll_to_y(s_editor_view.surface, 0, LV_ANIM_OFF);
+    editor_status("preview (Ctrl+P to edit)");
+}
+
+static void editor_preview_exit(void)
+{
+    if (!s_editor_view.preview) {
+        return;
+    }
+    s_editor_view.preview = false;
+    editor_rebuild();
+    editor_status_default();
+}
+
+static void editor_preview_toggle(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+
+    if (doc == NULL) {
+        return;
+    }
+    if (s_editor_view.preview) {
+        editor_preview_exit();
+        return;
+    }
+    /* Preview renders Markdown; other syntaxes stay in source view. */
+    if (doc->syntax != EDITOR_SYNTAX_MARKDOWN) {
+        editor_status("preview needs a Markdown file");
+        return;
+    }
+    /* Immediate feedback: the render (TTF variant load over SD) can take
+     * tens of seconds after heavy transcript use (O6 latency tail). */
+    editor_status("rendering preview...");
+    editor_preview_show();
+}
+
+/* ========================================================================
  * CURSOR + SELECTION OVERLAY
  * ======================================================================== */
 
@@ -469,10 +1018,24 @@ static void editor_update_cursor(void)
     }
 
     /* The text starts after the line-number gutter, so the caret sits on the
-     * document column, past the gutter. */
-    x = editor_gutter_width() + editor_measure_prefix(doc,
-                editor_doc_cursor_row(doc), editor_doc_cursor_col(doc));
-    y = (lv_coord_t)(editor_doc_cursor_row(doc) * (size_t)lh);
+     * document column, past the gutter. With wrap, the caret sits inside
+     * its visual chunk: x relative to the chunk start, y at the chunk. */
+    if (s_editor_view.wrap && editor_wrap_px() > 0) {
+        size_t row = editor_doc_cursor_row(doc);
+        size_t col = editor_doc_cursor_col(doc);
+        size_t vrow = editor_visual_row(doc, row, col);
+        size_t k = editor_chunk_of(doc, row, col);
+        size_t cs = 0;
+        size_t ce = 0;
+        editor_chunk_cols(doc, row, k, &cs, &ce);
+        x = editor_gutter_width() + editor_measure_prefix(doc, row, col) -
+            editor_measure_prefix(doc, row, cs);
+        y = (lv_coord_t)(vrow * (size_t)lh);
+    } else {
+        x = editor_gutter_width() + editor_measure_prefix(doc,
+                    editor_doc_cursor_row(doc), editor_doc_cursor_col(doc));
+        y = (lv_coord_t)(editor_doc_cursor_row(doc) * (size_t)lh);
+    }
     lv_obj_set_pos(s_editor_view.cursor, x, y);
 
     s_editor_view.cursor_visible = true;
@@ -519,8 +1082,19 @@ static void editor_update_current_line(void)
     if (s_editor_view.current_line == NULL || doc == NULL) {
         return;
     }
-    lv_obj_set_y(s_editor_view.current_line,
-                 (lv_coord_t)(editor_doc_cursor_row(doc) * (size_t)lh));
+    /* Preview hides this bar; every rebuild restores it. */
+    lv_obj_remove_flag(s_editor_view.current_line, LV_OBJ_FLAG_HIDDEN);
+    if (s_editor_view.wrap && editor_wrap_px() > 0) {
+        /* Single visual line under the caret (not the whole doc row). */
+        lv_obj_set_y(s_editor_view.current_line,
+                     (lv_coord_t)(editor_visual_row(
+                                      doc, editor_doc_cursor_row(doc),
+                                      editor_doc_cursor_col(doc)) *
+                                  (size_t)lh));
+    } else {
+        lv_obj_set_y(s_editor_view.current_line,
+                     (lv_coord_t)(editor_doc_cursor_row(doc) * (size_t)lh));
+    }
 }
 
 /** Rebuild the selection background overlay from the document selection. */
@@ -549,6 +1123,64 @@ static void editor_build_selection(void)
     lv_obj_remove_flag(s_editor_view.sel_layer, LV_OBJ_FLAG_HIDDEN);
 
     editor_doc_selection_bounds(doc, &s_row, &s_col, &e_row, &e_col);
+    if (s_editor_view.wrap && editor_wrap_px() > 0) {
+        /* Wrapped: one rect per visual segment overlapped by the range. */
+        size_t row;
+        for (row = s_row; row <= e_row; row++) {
+            size_t len = editor_doc_line_length(doc, row);
+            size_t c0 = (row == s_row) ? s_col : 0;
+            size_t c1 = (row == e_row) ? e_col : len;
+            size_t k = 0;
+            if (c0 > len) c0 = len;
+            if (c1 > len) c1 = len;
+            if (c1 < c0) c1 = c0;
+            if (c0 >= c1) {
+                continue;
+            }
+            while (true) {
+                size_t cs = 0;
+                size_t ce = 0;
+                size_t a;
+                size_t b;
+                lv_coord_t x0;
+                lv_coord_t x1;
+                lv_obj_t *rect;
+                editor_chunk_cols(doc, row, k, &cs, &ce);
+                if (cs >= c1) {
+                    break;
+                }
+                a = (c0 > cs) ? c0 : cs;
+                b = (c1 < ce) ? c1 : ce;
+                if (b > a) {
+                    x0 = editor_gutter_width() +
+                         editor_measure_prefix(doc, row, a) -
+                         editor_measure_prefix(doc, row, cs);
+                    x1 = editor_gutter_width() +
+                         editor_measure_prefix(doc, row, b) -
+                         editor_measure_prefix(doc, row, cs);
+                    rect = lv_obj_create(s_editor_view.sel_layer);
+                    lv_obj_remove_flag(rect, LV_OBJ_FLAG_SCROLLABLE |
+                                             LV_OBJ_FLAG_CLICKABLE |
+                                             LV_OBJ_FLAG_CLICK_FOCUSABLE);
+                    lv_obj_set_style_bg_color(rect,
+                        lv_color_hex(P4_CONFIG_EDITOR_SELECTION_COLOR), 0);
+                    lv_obj_set_style_bg_opa(rect, LV_OPA_COVER, 0);
+                    lv_obj_set_style_border_width(rect, 0, 0);
+                    lv_obj_set_style_radius(rect, 0, 0);
+                    {
+                        size_t vr = editor_visual_row(doc, row, a);
+                        lv_obj_set_pos(rect, x0, (lv_coord_t)(vr * (size_t)lh));
+                    }
+                    lv_obj_set_size(rect, x1 - x0, lh);
+                }
+                if (ce >= len) {
+                    break;
+                }
+                k++;
+            }
+        }
+        return;
+    }
     for (row = s_row; row <= e_row; row++) {
         size_t len = editor_doc_line_length(doc, row);
         size_t c0 = (row == s_row) ? s_col : 0;
@@ -595,12 +1227,34 @@ static void editor_ensure_cursor_visible(void)
     lv_obj_update_layout(surface);
     scroll_y = lv_obj_get_scroll_y(surface);
     view_h = lv_obj_get_height(surface);
-    cy = (lv_coord_t)(editor_doc_cursor_row(doc) * (size_t)lh);
+    if (s_editor_view.wrap && editor_wrap_px() > 0) {
+        cy = (lv_coord_t)(editor_visual_row(doc, editor_doc_cursor_row(doc),
+                                            editor_doc_cursor_col(doc)) *
+                          (size_t)lh);
+    } else {
+        cy = (lv_coord_t)(editor_doc_cursor_row(doc) * (size_t)lh);
+    }
 
     if (cy < scroll_y) {
         lv_obj_scroll_to_y(surface, cy, LV_ANIM_OFF);
     } else if (cy + lh > scroll_y + view_h) {
         lv_obj_scroll_to_y(surface, cy + lh - view_h, LV_ANIM_OFF);
+    }
+
+    /* Horizontal follow (wrap off, long rows): keep the caret's x in view
+     * so wrapped-off lines stay reachable without touch-dragging. */
+    if (!s_editor_view.wrap) {
+        lv_coord_t scroll_x = lv_obj_get_scroll_x(surface);
+        lv_coord_t view_w = lv_obj_get_width(surface);
+        lv_coord_t cx = editor_gutter_width() +
+                        editor_measure_prefix(doc, editor_doc_cursor_row(doc),
+                                              editor_doc_cursor_col(doc));
+        if (cx < scroll_x) {
+            lv_obj_scroll_to_x(surface, cx, LV_ANIM_OFF);
+        } else if (cx + editor_cell_width() > scroll_x + view_w) {
+            lv_obj_scroll_to_x(surface, cx + editor_cell_width() - view_w,
+                               LV_ANIM_OFF);
+        }
     }
 }
 
@@ -673,12 +1327,24 @@ static void editor_status_default(void)
 
     {
         const char *name = doc->path[0] != '\0' ? doc->path : "(unnamed)";
-        snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 96, "%s  %s  Ln %u, Col %u  %s",
+        const char *syntax = "txt";
+        switch (doc->syntax) {
+        case EDITOR_SYNTAX_BATCH: syntax = "bat"; break;
+        case EDITOR_SYNTAX_MARKDOWN: syntax = "md"; break;
+        case EDITOR_SYNTAX_JSON: syntax = "json"; break;
+        default: break;
+        }
+        snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 96, "%s  %s  Ln %u, Col %u  %s %s%s%s%s%s",
                  name,
                  doc->modified ? "*" : " ",
                  (unsigned)(editor_doc_cursor_row(doc) + 1),
                  (unsigned)(editor_doc_cursor_col(doc) + 1),
-                 doc->overwrite ? "OVR" : "INS");
+                 doc->overwrite ? "OVR" : "INS",
+                 syntax,
+                 doc->crlf ? " CRLF" : "",
+                 doc->readonly ? " RO" : "",
+                 s_editor_view.preview ? "  PREVIEW" : "",
+                 s_editor_view.wrap ? "  WRAP" : "");
         editor_status_raw(buf);
     }
     free(buf);
@@ -804,7 +1470,7 @@ static void editor_find_next(bool advance)
     }
 
     if (editor_doc_find_next(doc, s_editor_view.find_str, s_editor_view.find_len,
-                             row, col, P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE,
+                             row, col, s_editor_view.find_case,
                              true, &row, &col)) {
         doc->cursor_row = row;
         doc->cursor_col = col;
@@ -827,9 +1493,9 @@ static void editor_replace_next(void)
     }
 
     if (editor_doc_replace_next(doc, s_editor_view.find_str, s_editor_view.find_len,
-                                s_editor_view.replace_str, s_editor_view.replace_len,
-                                P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE,
-                                &row, &col)) {
+                                 s_editor_view.replace_str, s_editor_view.replace_len,
+                                 s_editor_view.find_case,
+                                 &row, &col)) {
         s_editor_view.replace_armed = true;
         editor_rebuild();
         editor_status("replaced at Ln %u, Col %u  (Enter: next)",
@@ -838,6 +1504,34 @@ static void editor_replace_next(void)
         s_editor_view.replace_armed = false;
         editor_status("no more matches");
     }
+}
+
+static void editor_replace_all(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    size_t count;
+
+    if (doc == NULL || s_editor_view.find_len == 0) {
+        editor_status("no search");
+        return;
+    }
+
+    count = editor_doc_replace_all(doc, s_editor_view.find_str, s_editor_view.find_len,
+                                   s_editor_view.replace_str, s_editor_view.replace_len,
+                                   s_editor_view.find_case);
+    if (count > 0) {
+        s_editor_view.replace_armed = false;
+        editor_rebuild();
+        editor_status("replaced %u match%s", (unsigned)count, count == 1 ? "" : "es");
+    } else {
+        editor_status("no matches");
+    }
+}
+
+static void editor_case_toggle(void)
+{
+    s_editor_view.find_case = !s_editor_view.find_case;
+    editor_status("case: %s", s_editor_view.find_case ? "sensitive" : "insensitive");
 }
 
 static void editor_goto_line(void)
@@ -972,6 +1666,41 @@ static void editor_page_move(int delta)
     if (lines < 1) {
         lines = 1;
     }
+    /* Wrapped: step visual rows (keeps the column); unwrapped: doc rows. */
+    if (s_editor_view.wrap && editor_wrap_px() > 0) {
+        size_t vrow = editor_visual_row(doc, editor_doc_cursor_row(doc),
+                                        editor_doc_cursor_col(doc));
+        size_t want_col = editor_doc_cursor_col(doc);
+        size_t nrow;
+        size_t nchunk;
+        if (delta > 0) {
+            vrow += lines;
+        } else if (vrow >= lines) {
+            vrow -= lines;
+        } else {
+            vrow = 0;
+        }
+        editor_visual_to_doc(vrow, &nrow, &nchunk);
+        doc->cursor_row = nrow;
+        {
+            /* Keep the column when landing inside a chunk. */
+            size_t cs = 0;
+            size_t ce = 0;
+            size_t len = editor_doc_line_length(doc, nrow);
+            editor_chunk_cols(doc, nrow, nchunk, &cs, &ce);
+            if (want_col < cs) {
+                doc->cursor_col = cs;
+            } else if (want_col > ce) {
+                doc->cursor_col = ce;
+            } else {
+                doc->cursor_col = want_col;
+            }
+            if (doc->cursor_col > len) {
+                doc->cursor_col = len;
+            }
+        }
+        return;
+    }
     for (i = 0; i < lines; i++) {
         if (delta > 0) {
             if (editor_doc_cursor_row(doc) + 1 < editor_doc_line_count(doc)) {
@@ -985,6 +1714,47 @@ static void editor_page_move(int delta)
             } else {
                 break;
             }
+        }
+    }
+}
+
+/** Step one visual row up/down keeping the column (wrap mode). */
+static void editor_visual_step(editor_doc_t *doc, int delta)
+{
+    size_t vrow;
+    size_t want_col;
+    size_t nrow;
+    size_t nchunk;
+
+    if (doc == NULL) {
+        return;
+    }
+    vrow = editor_visual_row(doc, editor_doc_cursor_row(doc),
+                             editor_doc_cursor_col(doc));
+    want_col = editor_doc_cursor_col(doc);
+    if (delta > 0) {
+        vrow++;
+    } else if (vrow > 0) {
+        vrow--;
+    } else {
+        return;
+    }
+    editor_visual_to_doc(vrow, &nrow, &nchunk);
+    {
+        size_t cs = 0;
+        size_t ce = 0;
+        size_t len = editor_doc_line_length(doc, nrow);
+        doc->cursor_row = nrow;
+        editor_chunk_cols(doc, nrow, nchunk, &cs, &ce);
+        if (want_col < cs) {
+            doc->cursor_col = cs;
+        } else if (want_col > ce) {
+            doc->cursor_col = ce;
+        } else {
+            doc->cursor_col = want_col;
+        }
+        if (doc->cursor_col > len) {
+            doc->cursor_col = len;
         }
     }
 }
@@ -1005,8 +1775,20 @@ static void editor_move_cursor(editor_key_t key)
     switch (key) {
     case EDITOR_KEY_LEFT:      editor_doc_cursor_left(doc); break;
     case EDITOR_KEY_RIGHT:     editor_doc_cursor_right(doc); break;
-    case EDITOR_KEY_UP:        editor_doc_cursor_up(doc); break;
-    case EDITOR_KEY_DOWN:      editor_doc_cursor_down(doc); break;
+    case EDITOR_KEY_UP:
+        if (s_editor_view.wrap && editor_wrap_px() > 0) {
+            editor_visual_step(doc, -1);
+        } else {
+            editor_doc_cursor_up(doc);
+        }
+        break;
+    case EDITOR_KEY_DOWN:
+        if (s_editor_view.wrap && editor_wrap_px() > 0) {
+            editor_visual_step(doc, +1);
+        } else {
+            editor_doc_cursor_down(doc);
+        }
+        break;
     case EDITOR_KEY_HOME:      editor_doc_cursor_home(doc); break;
     case EDITOR_KEY_END:       editor_doc_cursor_end(doc); break;
     case EDITOR_KEY_WORD_LEFT: editor_doc_cursor_word_left(doc); break;
@@ -1040,13 +1822,38 @@ static void editor_request_save(void)
         editor_prompt_begin(EDITOR_PROMPT_SAVE_AS);
         return;
     }
+    if (doc->readonly) {
+        editor_status("read-only: use Save As for a new path");
+        return;
+    }
     ctl->save_requested = true;
     if (ctl->event_group != NULL) {
-        xEventGroupSetBits((EventGroupHandle_t)ctl->event_group, EDITOR_EVENT_SAVE);
+        xEventGroupSetBits((EventGroupHandle_t)ctl->event_group,
+                           EDITOR_EVENT_SAVE);
     }
     editor_status("saving...");
 }
 
+/** Route a reload to the worker (re-reads the file, resets undo). */
+static void editor_request_reload(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    editor_control_t *ctl = s_editor_view.control;
+
+    if (doc == NULL || ctl == NULL) {
+        return;
+    }
+    if (doc->path[0] == '\0') {
+        editor_status("nothing to reload (unnamed buffer)");
+        return;
+    }
+    ctl->reload_requested = true;
+    if (ctl->event_group != NULL) {
+        xEventGroupSetBits((EventGroupHandle_t)ctl->event_group,
+                           EDITOR_EVENT_RELOAD);
+    }
+    editor_status("reloading...");
+}
 static void editor_apply_key(editor_key_t key, char ch)
 {
     editor_doc_t *doc = s_editor_view.doc;
@@ -1068,6 +1875,39 @@ static void editor_apply_key(editor_key_t key, char ch)
         }
         if (key == EDITOR_KEY_QUIT) {
             editor_prompt_cancel();
+            return;
+        }
+    }
+
+    if (key == EDITOR_KEY_PREVIEW) {
+        editor_preview_toggle();
+        return;
+    }
+
+    /* Preview is read-only: navigation scrolls the rendered view, edits are
+     * swallowed, quit flows through to its normal handler below. */
+    if (s_editor_view.preview && key != EDITOR_KEY_QUIT) {
+        lv_coord_t page;
+        switch (key) {
+        case EDITOR_KEY_PAGE_UP:
+            page = lv_obj_get_height(s_editor_view.surface);
+            lv_obj_scroll_by(s_editor_view.surface, 0, page > 0 ? page : 200,
+                             LV_ANIM_OFF);
+            return;
+        case EDITOR_KEY_PAGE_DOWN:
+            page = lv_obj_get_height(s_editor_view.surface);
+            lv_obj_scroll_by(s_editor_view.surface, 0, page > 0 ? -page : -200,
+                             LV_ANIM_OFF);
+            return;
+        case EDITOR_KEY_UP:
+            lv_obj_scroll_by(s_editor_view.surface, 0,
+                             editor_line_height(), LV_ANIM_OFF);
+            return;
+        case EDITOR_KEY_DOWN:
+            lv_obj_scroll_by(s_editor_view.surface, 0,
+                             -editor_line_height(), LV_ANIM_OFF);
+            return;
+        default:
             return;
         }
     }
@@ -1166,6 +2006,9 @@ static void editor_apply_key(editor_key_t key, char ch)
     case EDITOR_KEY_SAVE_AS:
         editor_prompt_begin(EDITOR_PROMPT_SAVE_AS);
         return;
+    case EDITOR_KEY_RELOAD:
+        editor_request_reload();
+        return;
     case EDITOR_KEY_FIND:
         editor_prompt_begin(EDITOR_PROMPT_FIND);
         return;
@@ -1174,6 +2017,39 @@ static void editor_apply_key(editor_key_t key, char ch)
         return;
     case EDITOR_KEY_REPLACE:
         editor_prompt_begin(EDITOR_PROMPT_REPLACE_FIND);
+        return;
+    case EDITOR_KEY_REPLACE_ALL:
+        editor_replace_all();
+        return;
+    case EDITOR_KEY_CASE_TOGGLE:
+        editor_case_toggle();
+        return;
+    case EDITOR_KEY_COMMENT: {
+        size_t changed = editor_doc_comment_toggle(doc);
+        if (changed > 0) {
+            editor_rebuild();
+            editor_status("commented %u line%s", (unsigned)changed,
+                          changed == 1 ? "" : "s");
+        } else if (doc->syntax != EDITOR_SYNTAX_BATCH &&
+                   doc->syntax != EDITOR_SYNTAX_JSON &&
+                   doc->syntax != EDITOR_SYNTAX_MARKDOWN) {
+            editor_status("comment toggle needs batch/json/md");
+        } else {
+            editor_status("nothing to comment");
+        }
+        return;
+    }
+    case EDITOR_KEY_MATCH_JUMP:
+        if (editor_doc_match_jump(doc)) {
+            editor_layout_update();
+        } else {
+            editor_status("no match");
+        }
+        return;
+    case EDITOR_KEY_WRAP_TOGGLE:
+        s_editor_view.wrap = !s_editor_view.wrap;
+        editor_rebuild();
+        editor_status("wrap %s", s_editor_view.wrap ? "on" : "off");
         return;
     case EDITOR_KEY_GOTO_LINE:
         editor_prompt_begin(EDITOR_PROMPT_GOTO);
@@ -1324,6 +2200,14 @@ bool editor_view_handle_osk(const char *label)
         editor_apply_key(EDITOR_KEY_REPLACE, 0);
         return true;
     }
+    if (strcmp(label, "All") == 0) {
+        editor_apply_key(EDITOR_KEY_REPLACE_ALL, 0);
+        return true;
+    }
+    if (strcmp(label, "Case") == 0) {
+        editor_apply_key(EDITOR_KEY_CASE_TOGGLE, 0);
+        return true;
+    }
     if (strcmp(label, "Goto") == 0) {
         editor_apply_key(EDITOR_KEY_GOTO_LINE, 0);
         return true;
@@ -1338,6 +2222,10 @@ bool editor_view_handle_osk(const char *label)
     }
     if (strcmp(label, "Next") == 0) {
         editor_apply_key(EDITOR_KEY_FIND_NEXT, 0);
+        return true;
+    }
+    if (strcmp(label, "Prev") == 0) {
+        editor_apply_key(EDITOR_KEY_PREVIEW, 0);
         return true;
     }
     if (strcmp(label, "Copy") == 0) {
@@ -1426,6 +2314,13 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     s_editor_view.doc = doc;
     s_editor_view.control = control;
     s_editor_view.surface = surface;
+    s_editor_view.preview = false;
+    s_editor_view.find_case = P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE;
+    s_editor_view.wrap = false;
+    free(s_editor_view.wrap_counts);
+    s_editor_view.wrap_counts = NULL;
+    s_editor_view.wrap_count_rows = 0;
+    s_editor_view.wrap_px_used = 0;
 
     /* Hide the shell's own transcript spans so the editor's span group owns
      * the container (its content is retained and re-shown on close). */
@@ -1612,6 +2507,11 @@ void editor_view_close(void)
     s_editor_view.width_count = 0;
     s_editor_view.width_row = (size_t)-1;
 
+    free(s_editor_view.wrap_counts);
+    s_editor_view.wrap_counts = NULL;
+    s_editor_view.wrap_count_rows = 0;
+    s_editor_view.wrap = false;
+
     /* Restore the shell input line as the OSK target. */
     keyboard_bind_textarea(windows_get_input_line());
 
@@ -1628,6 +2528,12 @@ void editor_view_close(void)
 bool editor_view_is_open(void)
 {
     return s_editor_view.open;
+}
+
+/** Whether the rendered Markdown preview is showing (read-only). */
+bool editor_view_is_preview(void)
+{
+    return s_editor_view.open && s_editor_view.preview;
 }
 
 /** Rebuild open editor spans with current fonts after a font switch.
@@ -1660,6 +2566,28 @@ void editor_view_notify_saved(bool ok)
 void editor_view_notify_saved_cb(void *user_data)
 {
     editor_view_notify_saved((intptr_t)user_data != 0);
+}
+
+void editor_view_notify_reloaded(bool ok)
+{
+    if (!s_editor_view.open) {
+        return;
+    }
+    if (ok) {
+        if (!lvgl_port_lock(0)) {
+            return;
+        }
+        editor_rebuild();
+        lvgl_port_unlock();
+        editor_status("reloaded");
+    } else {
+        editor_status("reload failed");
+    }
+}
+
+void editor_view_notify_reloaded_cb(void *user_data)
+{
+    editor_view_notify_reloaded((intptr_t)user_data != 0);
 }
 
 void editor_view_scroll_by(int32_t pixels)
@@ -1748,6 +2676,34 @@ static void editor_touch_to_cell(size_t *row_out, size_t *col_out)
     rel_x -= editor_gutter_width();
     if (rel_x < 0) rel_x = 0;
     if (rel_y < 0) rel_y = 0;
+
+    if (s_editor_view.wrap && editor_wrap_px() > 0 &&
+        s_editor_view.doc != NULL) {
+        /* Wrapped: y addresses a visual row; map to (doc row, chunk) and
+         * resolve x inside that chunk, clamped to its columns. */
+        size_t vrow = (size_t)(rel_y / lh);
+        size_t drow = 0;
+        size_t chunk = 0;
+        size_t cs = 0;
+        size_t ce = 0;
+        size_t col;
+        editor_visual_to_doc(vrow, &drow, &chunk);
+        editor_chunk_cols(s_editor_view.doc, drow, chunk, &cs, &ce);
+        col = editor_column_from_x(s_editor_view.doc, drow, rel_x);
+        if (col < cs) {
+            col = cs;
+        }
+        if (col > ce) {
+            col = ce;
+        }
+        if (row_out != NULL) {
+            *row_out = drow;
+        }
+        if (col_out != NULL) {
+            *col_out = col;
+        }
+        return;
+    }
 
     row = (size_t)(rel_y / lh);
     if (s_editor_view.doc != NULL && row >= editor_doc_line_count(s_editor_view.doc)) {

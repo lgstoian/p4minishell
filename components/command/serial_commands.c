@@ -503,8 +503,10 @@ void shell_command_screenshot(int argc, char **argv)
 
 /* Incremental CRC-32 (IEEE 802.3, reflected poly 0xEDB88320). Matches the
  * value zlib's crc32() reports for the same bytes: start the accumulator at
- * 0xFFFFFFFF and invert the result when the transfer completes. */
-static uint32_t serial_crc32_update(uint32_t crc, const uint8_t *data, size_t len)
+ * 0xFFFFFFFF and invert the result when the transfer completes. Shared with
+ * the `crc32`/`asset` verbs (asset_commands.c) so the firmware holds exactly
+ * one CRC implementation. */
+uint32_t shell_crc32_update(uint32_t crc, const uint8_t *data, size_t len)
 {
     while (len-- > 0) {
         crc ^= *data++;
@@ -662,7 +664,7 @@ void shell_command_receive(int argc, char **argv)
                         ok = false;
                         break;
                     }
-                    crc = serial_crc32_update(crc, buf, got);
+                    crc = shell_crc32_update(crc, buf, got);
                     cumulative += got;
 
                     /* ACK: report cumulative bytes so the host knows how much
@@ -853,7 +855,7 @@ void shell_command_send(int argc, char **argv)
         }
         /* CRC-32 trailer over the report (frame protocol parity with send). */
         {
-            uint32_t final_crc = ~serial_crc32_update(0xFFFFFFFFu,
+            uint32_t final_crc = ~shell_crc32_update(0xFFFFFFFFu,
                                                       (const uint8_t *)report,
                                                       (size_t)pos);
             uint8_t trailer[4];
@@ -974,7 +976,7 @@ void shell_command_send(int argc, char **argv)
                             stream_ok = false;
                             break;
                         }
-                        crc = serial_crc32_update(crc, buf, got);
+                        crc = shell_crc32_update(crc, buf, got);
                         remaining -= got;
                     }
                     free(buf);

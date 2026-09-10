@@ -141,6 +141,13 @@ extern void test_editor_selection_copy_crlf(void);
 extern void test_editor_set_path(void);
 extern void test_editor_paste_multiline(void);
 extern void test_editor_lex_batch(void);
+extern void test_editor_lex_markdown(void);
+extern void test_editor_lex_json(void);
+extern void test_editor_replace_all(void);
+extern void test_editor_comment_toggle(void);
+extern void test_editor_match_jump(void);
+extern void test_editor_undo_restores_clean(void);
+extern void test_editor_newline_auto_indent(void);
 extern void test_editor_newline_on_empty_doc(void);
 extern void test_editor_selection_delete_empty_start(void);
 extern void test_editor_word_nav_empty_line(void);
@@ -228,6 +235,10 @@ extern void test_tui_default_color_roundtrip(void);
 extern void test_tui_default_color_null_safe(void);
 extern void test_tui_cursor_save_restore(void);
 extern void test_tui_inactive_by_default(void);
+extern void test_tui_rgb_to_dos_exact(void);
+extern void test_tui_rgb_to_dos_nearest(void);
+extern void test_tui_table_total_width(void);
+extern void test_draw_hold_default_off(void);
 
 extern void test_clipboard_set_get(void);
 extern void test_clipboard_empty_and_null(void);
@@ -237,6 +248,36 @@ extern void test_clipboard_copy_transcript(void);
 extern void test_history_file_roundtrip(void);
 extern void test_history_file_skips_blanks(void);
 extern void test_history_file_null_stream(void);
+extern void test_markdown_plain_passthrough(void);
+extern void test_markdown_emphasis(void);
+extern void test_markdown_links(void);
+extern void test_markdown_blocks(void);
+extern void test_markdown_doc_tables(void);
+extern void test_markdown_doc_fences(void);
+extern void test_markdown_display_width(void);
+extern void test_filetype_batch(void);
+extern void test_filetype_markdown(void);
+extern void test_filetype_json_text(void);
+extern void test_filetype_unknown(void);
+extern void test_filetype_has_extension(void);
+extern void test_json_validate_ok(void);
+extern void test_json_validate_bad(void);
+extern void test_json_pretty(void);
+extern void test_gfx_rgb_to_565(void);
+extern void test_gfx_alloc_bounds(void);
+extern void test_gfx_pixel_clip(void);
+extern void test_gfx_line_endpoints(void);
+extern void test_gfx_rect_fill_and_border(void);
+extern void test_gfx_circle_outline_and_fill(void);
+extern void test_gfx_bmp_parse_ok(void);
+extern void test_gfx_bmp_parse_rejects(void);
+extern void test_gfx_bmp_decode_565(void);
+extern void test_gfx_blit_clip_transparent(void);
+extern void test_gfx_565_to_888_row(void);
+extern void test_asset_crc32_vectors(void);
+extern void test_asset_parse_ok(void);
+extern void test_asset_parse_skip(void);
+extern void test_asset_parse_bad(void);
 
 void app_main(void)
 {
@@ -427,6 +468,13 @@ void app_main(void)
     RUN_TEST(test_editor_set_path);
     RUN_TEST(test_editor_paste_multiline);
     RUN_TEST(test_editor_lex_batch);
+    RUN_TEST(test_editor_lex_json);
+    RUN_TEST(test_editor_replace_all);
+    RUN_TEST(test_editor_comment_toggle);
+    RUN_TEST(test_editor_match_jump);
+    RUN_TEST(test_editor_undo_restores_clean);
+    RUN_TEST(test_editor_newline_auto_indent);
+    RUN_TEST(test_editor_lex_markdown);
     RUN_TEST(test_editor_newline_on_empty_doc);
     RUN_TEST(test_editor_selection_delete_empty_start);
     RUN_TEST(test_editor_word_nav_empty_line);
@@ -546,6 +594,10 @@ void app_main(void)
     RUN_TEST(test_tui_default_color_null_safe);
     RUN_TEST(test_tui_cursor_save_restore);
     RUN_TEST(test_tui_inactive_by_default);
+    RUN_TEST(test_tui_rgb_to_dos_exact);
+    RUN_TEST(test_tui_rgb_to_dos_nearest);
+    RUN_TEST(test_tui_table_total_width);
+    RUN_TEST(test_draw_hold_default_off);
     UNITY_END();
 
     /* RAM clipboard (components/shell). */
@@ -561,6 +613,56 @@ void app_main(void)
     RUN_TEST(test_history_file_roundtrip);
     RUN_TEST(test_history_file_skips_blanks);
     RUN_TEST(test_history_file_null_stream);
+    UNITY_END();
+
+    /* Markdown rendering (components/markdown). */
+    UNITY_BEGIN();
+    RUN_TEST(test_markdown_plain_passthrough);
+    RUN_TEST(test_markdown_emphasis);
+    RUN_TEST(test_markdown_links);
+    RUN_TEST(test_markdown_blocks);
+    RUN_TEST(test_markdown_doc_tables);
+    RUN_TEST(test_markdown_doc_fences);
+    RUN_TEST(test_markdown_display_width);
+    UNITY_END();
+
+    /* File-type registry (components/filetype). */
+    UNITY_BEGIN();
+    RUN_TEST(test_filetype_batch);
+    RUN_TEST(test_filetype_markdown);
+    RUN_TEST(test_filetype_json_text);
+    RUN_TEST(test_filetype_unknown);
+    RUN_TEST(test_filetype_has_extension);
+    UNITY_END();
+
+    /* JSON validate/pretty core (command component). */
+    UNITY_BEGIN();
+    RUN_TEST(test_json_validate_ok);
+    RUN_TEST(test_json_validate_bad);
+    RUN_TEST(test_json_pretty);
+    UNITY_END();
+
+    /* RGB565 raster core (components/gfx). */
+    UNITY_BEGIN();
+    RUN_TEST(test_gfx_rgb_to_565);
+    RUN_TEST(test_gfx_alloc_bounds);
+    RUN_TEST(test_gfx_pixel_clip);
+    RUN_TEST(test_gfx_line_endpoints);
+    RUN_TEST(test_gfx_rect_fill_and_border);
+    RUN_TEST(test_gfx_circle_outline_and_fill);
+    RUN_TEST(test_gfx_bmp_parse_ok);
+    RUN_TEST(test_gfx_bmp_parse_rejects);
+    RUN_TEST(test_gfx_bmp_decode_565);
+    RUN_TEST(test_gfx_blit_clip_transparent);
+    RUN_TEST(test_gfx_565_to_888_row);
+    UNITY_END();
+
+    /* Asset manifest core (command component). */
+    UNITY_BEGIN();
+    RUN_TEST(test_asset_crc32_vectors);
+    RUN_TEST(test_asset_parse_ok);
+    RUN_TEST(test_asset_parse_skip);
+    RUN_TEST(test_asset_parse_bad);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

@@ -163,10 +163,13 @@ to it with `argc`/`argv` (see `SDK.md`, "Native-app ABI"). ERRORLEVEL: 0.
 
 ### launch
 
-Discover, list, and run the `.bat` apps installed on the shell. An app is any
-`*.bat` file in a PATH directory or in the conventional `sd:/APPS` directory;
+Discover, list, and run the script apps installed on the shell. An app is any
+`*.bat` or `*.cmd` file in a PATH directory or in the conventional `sd:/APPS`
+directory (up to `P4_CONFIG_LAUNCH_MAX` entries, `.bat` first per directory);
 its optional metadata lives in `sd:/APPS/<name>.APPINFO` (INI format:
-`title=`, `description=`), shown when present.
+`title=`, `description=`), shown when present. Typing an app name runs it
+directly (extensionless names probe `.bat` then `.cmd`); `launch` does the
+same by name.
 
 - `launch` — list the installed apps as a numbered menu and run the chosen one.
 - `launch <name>` — run an app by name (PATH resolution, then `sd:/APPS`).
@@ -326,6 +329,20 @@ thin bar, plus blink period (`off`/0 = steady). Blink also retimes an open
 editor. Defaults from `P4_CONFIG_CURSOR_BLINK_MS` (shared with the editor
 timer). USB keyboard: arrows move, Ctrl+arrows word-jump, Home/End jump.
 
+### markdown <file> | markdown -e <text> | markdown on | off
+Render Markdown (CommonMark-ish subset: headings, nested lists, quotes,
+fences, GFM tables with alignment, task lists, bold/italic/strike/code,
+links as `text (url)`) through the ANSI SGR pipeline, so spans style it on
+screen (bold/italic via DejaVu TTF variants with bright fallback,
+underline/strike decor) and serial terminals render it natively.
+`markdown on|off` toggles auto-render of `echo`/`type` output (default on).
+Auto-render is per-line and flanking-safe: `2 * 3`, `foo_bar`, and `*ptr`
+pass through untouched (no closer, no style); `echo /raw ...` bypasses per
+invocation. Batch scripts with literal `#`/`*` lines should use `/raw`.
+`type` renders `.md` per line (tables align only in document mode, i.e. the
+`markdown` command, which buffers full tables). Tables measure display width
+(ASCII 1, CJK 2) so CJK columns align.
+
 ### config [KEY=VALUE | KEY value | save | reset [key] | factory]
 Read and write the persistent settings stored in `sd:/CONFIG.SYS` — the same
 file the boot component parses at startup, so a saved setting is re-applied on
@@ -390,12 +407,39 @@ Returns an ERRORLEVEL (0 ok / 2 usage).
 A pure, deterministic wait of `<ms>` milliseconds. Unlike `sleep` (light
 sleep: blanks the display, tears down Wi-Fi), `delay` simply blocks the
 command worker — the right tool for melodies, animations, and pacing in batch
-files. Clamped to `P4_CONFIG_DELAY_MAX_MS`. ERRORLEVEL: 0 ok / 2 usage.
+files. Clamped to `P4_CONFIG_DELAY_MAX_MS`. In 100 ms chunks, so a
+background job (`start`) stays killable during long waits. ERRORLEVEL:
+0 ok / 1 stopped by `taskkill` / 2 usage.
 
 ```
 delay 250
 tone 523 180 & delay 450   (spaces notes out so they don't overlap)
 ```
+
+### start <command> [args] | taskkill <job>
+`start` runs a command line or batch file as a background job on a pooled
+worker task (`bg0`..`bgN`, pool size `P4_CONFIG_BG_TASKS`), then returns
+immediately — the shell stays interactive while the job runs. A resolvable
+batch file runs as a script, anything else through the normal pipeline:
+
+```
+start ADVENT          (adventure game in the background)
+start MOOD.BAT happy
+taskkill bg0          (cooperative stop: batch lines and `delay` exit early)
+```
+
+Each job owns a private batch context (frames, errorlevel, `%*`, goto),
+transcript defer slot, and storage redirect slot; env/alias writes stay
+shared and locked. Modal/key-wait/appmode verbs (`ask`, `dialog`, `choice`,
+`pause`, `view`, fullscreen TUI) refuse headlessly in a bg job instead of
+blocking the shared UI. Stops are cooperative: `taskkill` sets the slot's
+kill flag, checked per batch line and per 100 ms of `delay`; a job inside a
+single long native command runs it to completion. Pool stacks live in PSRAM
+(32 KB internal no longer fits at runtime), so `start` is refused while a
+C6 OTA is pending and `c6ota` is refused while a job runs — flash writes
+make PSRAM briefly inaccessible. ERRORLEVEL (`start`): 0 started /
+1 pool full|unavailable|OTA pending / 2 usage. ERRORLEVEL (`taskkill`):
+0 stop requested / 1 no such job|already finished / 2 usage.
 
 ### sleep [seconds]
 Enter light sleep. RAM is retained, so the shell resumes with all state
@@ -1574,11 +1618,27 @@ the on-screen keyboard — serial input still echos). ERRORLEVEL is `0` on OK,
 
 ### view
 
-`view [/t:secs] <file>` opens a native text viewer pager that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. Paginated, read-only file preview with scrolling: drag on the transcript, Up/Dn buttons, USB keyboard PageUp/PageDown or arrows, mouse wheel (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` per notch). Shows the file with line numbers and shell colours; keyboard/serial controls match `browse`. `/t:secs` auto-cancels after `secs` seconds. ERRORLEVEL is `0` on close (OK), `1` on cancel/Esc/timeout, or `2` for usage or missing file. `draw` is TUI-aware when `view` is active.
+`view [/t:secs] [--raw] <file>` opens a native text viewer pager that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. Paginated, read-only file preview with scrolling: drag on the transcript, Up/Dn buttons, USB keyboard PageUp/PageDown or arrows, mouse wheel (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` per notch). Shows the file with line numbers and shell colours; keyboard/serial controls match `browse`. `/t:secs` auto-cancels after `secs` seconds. `.md`/`.markdown`/`.mkd` files render rendered-plain (markup stripped, tables aligned) unless `--raw` is given. ERRORLEVEL is `0` on close (OK), `1` on cancel/Esc/timeout, or `2` for usage or missing file. `draw` is TUI-aware when `view` is active.
 
 ### hexview
 
 `hexview [/t:secs] <file>` opens a native hex dump viewer that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. Shows the file as 16-byte rows with hex and ASCII columns (e.g. `00000000  48 65 6C 6C 6F ...  |Hello...|`), scrollable with the same drag/keyboard/wheel controls as `view`. `/t:secs` auto-cancels after `secs` seconds. Keyboard/serial controls match `view`/`browse`. ERRORLEVEL is `0` on close, `1` on cancel/Esc/timeout, or `2` for usage or missing file.
+
+### open
+
+`open [/t:secs] [--raw] <file>` does the right thing per file type (central
+registry `components/filetype/`): scripts (`.bat`/`.cmd`) open in the editor
+as source (never execute — typing the name runs them), Markdown renders,
+everything else views as text. Batch-callable with the same ERRORLEVELs as
+`view`/`edit`. `open` is the batch-file-friendly way to present a file: `if
+exist README.MD open README.MD`.
+
+### json
+
+`json validate <file>` checks JSON structure and reports `invalid: <msg> at
+line L col C` (ERRORLEVEL 1) or `json: valid (N bytes)` (ERRORLEVEL 0).
+`json pretty <file>` prints 2-space-indented JSON. Limits: 64 KB files,
+nesting depth 64, single JSON value per file (trailing data is an error).
 
 ### draw — TUI drawing primitives (hardware-verified on COM11)
 
@@ -1586,17 +1646,20 @@ the on-screen keyboard — serial input still echos). ERRORLEVEL is `0` on OK,
 
 | Form | Meaning |
 |------|---------|
-| `draw box <x> <y> <w> <h> [single\|double\|rounded] [title]` | Draw box border at x,y,w,h with style (default `single`) and optional centered title. Honors style via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) through `tui_cell_set`; nested boxes form the window stack. |
-| `draw line <x1> <y1> <x2> <y2> [single\|double\|heavy]` | Draw H/V line (only horizontal `y1==y2` or vertical `x1==x2`) with style (`SH_BOX_H`/`V` vs `H2`/`V2` vs `HL`/`VL`). |
-| `draw fill <x> <y> <w> <h> [char]` | Fill rect at x,y,w,h with char (default space) using current fg/bg. |
-| `draw text <x> <y> <text>` | Print text at x,y (UTF-8 aware, respects cell `utf8[4]`). |
+| `draw box <x> <y> <w> <h> [single\|double\|rounded] [fg] [bg] [title]` | Draw box border at x,y,w,h with style (default `single`) and optional centered title. Honors style via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) through `tui_cell_set`; nested boxes form the window stack. |
+| `draw line <x1> <y1> <x2> <y2> [fg] [bg]` | Draw H/V line (only horizontal `y1==y2` or vertical `x1==x2`). |
+| `draw fill <x> <y> <w> <h> [char] [fg] [bg]` | Fill rect at x,y,w,h with char (default space) using current fg/bg. |
+| `draw text <x> <y> <text> [fg] [bg]` | Print text at x,y (UTF-8 aware, respects cell `utf8[4]`). |
+| `draw bar <x> <y> <w> <pct> [fillch] [emptych] [fg] [bg]` | Progress bar `[fill...empty...]` of width w at x,y, pct clamped 0..100 (defaults `#`/`-`). Redraw with a new pct for animations. |
+| `draw table <x> <y> <fg> <bg> "h1\|h2\|..." [row "c1\|c2\|..." ...]` | Bordered table with T-junctions; first row is the header (bold on TUI). Column widths auto-fit content (max 40 each, table must fit 80 cols, max 16 cols × 32 rows). Short rows pad with empty cells; extra cells glue to the last column. |
 | `draw clear [screen\|line\|eol\|eos]` | Clear target (default `screen`): whole grid, cursor line, cursor-to-end-of-line, or cursor-to-end-of-screen. Outside TUI emits the matching ANSI sequence (`ESC[2J`/`ESC[2K`/`ESC[0K`/`ESC[0J`). |
 | `draw window <id> <x> <y> <w> <h> [title]` | Box with window-stack semantics; `<id>` is accepted and ignored. Requires an active TUI (error `1` otherwise). |
 | `draw save` / `draw restore` | Save / restore the TUI cursor (`ESC[s` / `ESC[u]` outside TUI). |
 | `draw cursor on\|off` | Show / hide the TUI cursor (`ESC[?25h` / `ESC[?25l` outside TUI). |
 | `draw alt-screen on\|off` | Enter / leave the TUI alternate screen (`ESC[?1049h` / `ESC[?1049l` outside TUI). |
-| `draw close` | Leave TUI mode (`tui_deinit`); error `1` when no TUI is active. |
-| `draw refresh` | Re-flush the TUI grid; always succeeds (`0`). |
+| `draw close` | Leave TUI mode (`tui_deinit`); error `1` when no TUI is active. Resets `hold`. |
+| `draw refresh` | Re-flush the TUI grid; always succeeds (`0`). The frame-closing verb when `hold` is on. |
+| `draw hold on\|off` | Frame coalescing for batch animation loops: `on` suppresses the per-verb `tui_flush()` so N verbs cost one LVGL label rebuild; `off` resumes and flushes. `draw close` resets. Always pair with `draw refresh` per frame (`apps/snake/SNAKE.BAT` pattern). |
 | `draw fullscreen on\|off` | Global fullscreen: `on` hides header completely via `windows_set_fullscreen(true)`/`header_set_visible(false)` `components/windows/windows.c:418`; `off` restores header. Header kept visible by default; dynamic keyboard scaling via `windows_notify_keyboard_visibility`. |
 
 Examples (all pass on COM11 serial without abort/watchdog/overlap, header kept unless fullscreen):
@@ -1607,6 +1670,10 @@ draw box 1 1 80 25 rounded Full
 draw line 1 5 80 5 single
 draw fill 10 10 5 3 X
 draw text 5 5 Hello
+draw text 5 6 Hi 15 1
+draw bar 5 8 40 65
+draw bar 5 8 40 90 # . 10 1
+draw table 5 10 15 1 "Name|Score|Level" "Bob|1250|7" "Ada|980|5"
 draw window 1 10 6 30 10 Nested
 draw fullscreen on
 draw clear
@@ -1615,6 +1682,23 @@ draw cursor off
 draw alt-screen on
 ```
 ERRORLEVEL: `0` ok, `1` TUI-only verb without an active TUI, `2` usage.
+
+Shared-display rule: `draw`, `tui` (except read-only `tui status`), mutating
+`color`, `locate`, `anchor`, and `gfx` are refused inside `start` background
+jobs with `<verb>: not available in background jobs (shared display)` +
+ERRORLEVEL `1` (BOUNCE-style loud refusal, hardware-verified; bare `color`
+and `tui status` stay readable from bg). Modal verbs (`dialog`, `list`,
+`ask`, `browse`, `view`, `hexview`) refuse the same way via the modal
+runtime. Background jobs do compute/files/net; all display stays foreground.
+
+Colors on `draw` verbs are DOS 0-15 when the value is ≤ 16 (`16` = default),
+otherwise 24-bit RGB quantized to the nearest DOS color
+(`tui_rgb_to_dos` over the CGA table). So `draw text 1 1 Hi 14 1` is yellow
+on blue, and `draw box 2 2 20 8 double 0xFFAA00 0x000000 T` maps orange to
+the nearest cell color. Only fg renders on the TUI label today (LVGL recolor
+has no per-span background); bg is stored per cell and honored off-TUI.
+A literal `#` in cell text (e.g. bar `#` fills) is recolor-escaped by
+`tui_flush` — it splits colored runs so LVGL never misparses a tag.
 
 ### tui — TUI control
 
@@ -1627,19 +1711,79 @@ ERRORLEVEL: `0` ok, `1` TUI-only verb without an active TUI, `2` usage.
 
 `tui` and `draw fullscreen` both route to `components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`; `tui` is the per-app alias, `draw fullscreen` is the global batch verb. Screenshot debug: `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
 
+### gfx — pixel canvas for batch games (hardware-verified on COM3)
+
+`gfx` owns one RGB565 canvas (`components/gfx/gfx.c` pure raster, PSRAM
+buffer, max 320×240 = 150 KB) shown as an `lv_canvas` in the transcript
+region. Raster verbs mutate the buffer; nothing reaches the display until
+`gfx show`, so animations compose flicker-free. Every op clips (out-of-bounds
+pixels are ignored, never an error).
+
+| Form | Meaning |
+|------|---------|
+| `gfx init <w> <h>` | Allocate w×h canvas (1..320 × 1..240) and show it. Refused when TUI is active (`draw close` first) or inside a `start` background job (shared display, same rule as modal verbs). |
+| `gfx close` | Delete the canvas, restore the transcript. |
+| `gfx status` | Show canvas dims + PSRAM bytes, or "no canvas open". |
+| `gfx clear [color]` | Fill the canvas (default black). |
+| `gfx pixel <x> <y> <color>` | Plot one pixel. |
+| `gfx line <x1> <y1> <x2> <y2> <color>` | Bresenham line. |
+| `gfx rect <x> <y> <w> <h> <color> [fill]` | Rectangle outline, or filled with `fill`. |
+| `gfx circle <x> <y> <r> <color> [fill]` | Midpoint circle outline (`r=0` plots one pixel), or filled disc with `fill`. |
+| `gfx show` | Push the buffer to the display. |
+| `gfx load <slot 0..7> <path>` | Ingest a 24-bit uncompressed BMP (`BI_RGB`, the exact format `screenshot <file>` writes, at most 64×64) into a sprite slot (PSRAM). Rejects other bit depths, RLE, top-down, and oversize art with ERRORLEVEL `1`. |
+| `gfx blit <slot> <x> <y> [transparent]` | Stamp a sprite onto the canvas (clipped; needs `gfx show`). Optional transparent color skips matching pixels. ERRORLEVEL `1` when the slot is empty. |
+| `gfx free <slot>` | Release one sprite slot. |
+| `gfx slots` | List live slots as `gfx.slot: <n> <w>x<h>` (batch `for /f`-friendly). |
+| `gfx save <path>` | Write the canvas as a 24-bit BMP (same layout `screenshot <file>` produces: shared `screenshot_write_bmp_headers`, guarded SD session, free-space precheck, partial removed on failure). |
+
+Sprite bank: 8 slots × max 64×64 RGB565 (8 KB each, 64 KB worst case —
+SNES-class 16-bit assets; `GFX_SPR_SLOTS`/`GFX_SPR_MAX` in
+`components/gfx/gfx.h`). `gfx close` frees the canvas and all sprites, so
+sessions never leak PSRAM. Sample art: `apps/push_assets.py` generates
+`SHIP.BMP` (48×48) + `BALL.BMP` (16×16) with PIL (no binary blobs in the
+repo) and pushes them with CRC manifests.
+
+Colors are DOS 0-15 from the CGA table (`tui_dos_color_rgb`, so pixel colors
+match TUI cell colors), `16` = black, anything larger is 24-bit RGB hex used
+at full RGB565 precision (no quantization — unlike `draw`). Reference app:
+`apps/gfxdemo/BOUNCE.BAT` (batch `set /a` ball physics, 60-frame killable
+loop, in-app `screenshot BOUNCE.BMP` at frame 30; run `launch bounce`).
+ERRORLEVEL: `0` ok (clipped pixels included), `1` no canvas / already open /
+TUI active / background job / no memory / bad slot / empty slot / bad BMP,
+`2` usage.
+
+### crc32, asset — file checksums and asset manifests (hardware-verified on COM3)
+
+`crc32 <path>` streams a file through the firmware's single CRC-32 primitive
+(`shell_crc32_update`, shared with `receive` transfer verification) and prints
+`crc32: <resolved> <HEX>` (zlib parity, verified against host `zlib.crc32`).
+ERRORLEVEL `0` ok / `1` unreadable / `2` usage.
+
+`asset check|list <app>` verifies/lists `APPS/<APP>.ASSETS`, a text manifest of
+`path=HEXCRC` lines (`#`/`;` comments and blanks skipped, 16 KB cap). `list`
+prints `asset: <path> <HEX>` per entry; `check` prints `MISSING`/`MISMATCH`
+lines and ends `asset: OK n/m ok` (ERRORLEVEL `0`) or `asset: FAIL n/m ok`
+(ERRORLEVEL `1`). Manifests are generated host-side by `apps/push_assets.py`
+(PIL sprites + `zlib`, same receive/CRC push path as everything else) and
+verified on-device — the whole reference set (`SPR`, `BOUNCE`, `SNAKE`,
+`TCMD`, `ELITE`, `ADVENT`, `NOTES`, `MOOD`) checks `OK`. App names are
+`[A-Za-z0-9_-]+`; manifest paths must be SD-relative (no `..`, no leading
+`/`). ERRORLEVEL `2` on usage/bad name.
+
 ### color
 
-`color [fg] [bg]` — DOS `COLOR` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:324` `tui_set_default_color` and `tui_flush` per-fg recolor). With no arguments prints the current default colours (`color: fg=X bg=Y`). With one or two hex digits (`0`-`F`, case-insensitive) sets the default transcript/TUI colours used for subsequent output, matching DOS `COLOR` semantics (e.g. `color 0A` bright green on black, `color 07` light grey on black, `color 1E` yellow on blue). Values are validated; a missing or invalid colour sets ERRORLEVEL `2`, success sets `0`. The palette itself remains the compiled-in `SH_*` scheme in `components/ansi/ansi_palette.h` via `ansi_get_palette_color` — `color` only selects the default foreground/background pair. TUI grid `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25.
+`color [fg] [bg]` — DOS `COLOR` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:324` `tui_set_default_color` and `tui_flush` per-fg recolor). With no arguments prints the current default colours (`color: fg=X bg=Y`). With one or two hex digits (`0`-`F`, case-insensitive) sets the default transcript/TUI colours used for subsequent output, matching DOS `COLOR` semantics (e.g. `color 0A` bright green on black, `color 07` light grey on black, `color 1E` yellow on blue). Values are validated; a missing or invalid colour sets ERRORLEVEL `2`, success sets `0`. The mutating form is refused in background jobs (shared display, ERRORLEVEL `1`); bare `color` reads fine anywhere. The palette itself remains the compiled-in `SH_*` scheme in `components/ansi/ansi_palette.h` via `ansi_get_palette_color` — `color` only selects the default foreground/background pair. TUI grid `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25.
 
 ### locate
 
-`locate <row> <col>` — DOS `LOCATE` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:160` `tui_set_cursor`/`tui_get_cursor`). Emits the ANSI cursor-position sequence `ESC[<row>;<col>H` to move the cursor, with `row` clamped to `1..25` and `col` to `1..80` bounded by `P4_CONFIG_TUI_ROWS` / `P4_CONFIG_TUI_COLS` (`p4minishell_config.h:298`). Used with `echo` and `ansi` to position text in TUI batch apps (e.g. `locate 5 10 && echo Hello`). Row and column must both be present; missing or non-numeric arguments set ERRORLEVEL `2`, success sets `0`. Coordinates are 1-based on the `80×25` transcript region (`1024x510`).
+`locate <row> <col>` — DOS `LOCATE` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:160` `tui_set_cursor`/`tui_get_cursor`). Emits the ANSI cursor-position sequence `ESC[<row>;<col>H` to move the cursor, with `row` clamped to `1..25` and `col` to `1..80` bounded by `P4_CONFIG_TUI_ROWS` / `P4_CONFIG_TUI_COLS` (`p4minishell_config.h:298`). Used with `echo` and `ansi` to position text in TUI batch apps (e.g. `locate 5 10 && echo Hello`). Row and column must both be present; missing or non-numeric arguments set ERRORLEVEL `2`, success sets `0`. Refused in background jobs (shared display, ERRORLEVEL `1`). Coordinates are 1-based on the `80×25` transcript region (`1024x510`).
 
 ### anchor
 
 `anchor <label> <command> [continue_line]` — register a named transcript anchor region bound to a command (`continue_line` accepts `true`/non-zero). Prints `anchor registered: <label> -> <command>`.
+Refused in background jobs (shared display).
 
-ERRORLEVEL: `0` ok, `2` usage.
+ERRORLEVEL: `0` ok, `1` background job, `2` usage.
 
 ### pause, choice, and more without a keyboard
 
@@ -1647,6 +1791,38 @@ ERRORLEVEL: `0` ok, `2` usage.
 a USB keyboard, or the on-screen keyboard. When none of those is attached the commands
 fall back to their configured delay (or the first choice) and say so, so a headless
 board never stalls a batch file. Every wait is also bounded by a 30-second timeout.
+
+Serial input note: the UART console reader is line-buffered (`fgets`), so over
+serial a key must be followed by Enter to reach a key wait (USB/OSK keyboards
+deliver raw keys). `choice` is therefore steered as `key+Enter` per step from
+a terminal — see `apps/snake/SNAKE.BAT` (`choice /C:wasdq /N /T:%dc%,1` with a
+per-direction default so timeouts keep the game moving).
+
+### Writing batch games and TUI apps
+
+Proven patterns (all hardware-verified on COM3; reference apps:
+`apps/snake/SNAKE.BAT`, `apps/tcmd/TCMD.BAT`, `apps/elite/ELITE.BAT`,
+`apps/gfxdemo/BOUNCE.BAT`):
+
+- Foreground only: open with `draw hold on` / `gfx init` and branch to a
+  clean message on ERRORLEVEL `1` — `start`ed copies refuse loudly.
+- One flush per frame: `draw hold on` at entry, compose, `draw refresh`;
+  `draw hold off` + `draw close` at every exit (`:end`, `:quit`, death).
+- Batch has no arrays, indirection, substrings, or delayed expansion, and
+  env caps at 24 vars (`P4_CONFIG_ENV_VAR_MAX`, one ambient `PATH` at boot):
+  fixed literal slots (`s0`..) plus packed numbers (`y*64+x`, split only for
+  checks/draws with `set /a`) cover snake-class state in ~22 vars.
+- `list` serial numbers are 1-based while its ERRORLEVEL is 0-based; `q`
+  cancels (255). Count items twice when writing `if errorlevel` chains —
+  an off-by-one silently remaps every selection (caught live in TCMD).
+- Never put `>` (or backticks) in `rem` comments: redirect parsing runs
+  before `rem` sees the line and the "comment" becomes a failed redirect.
+- `dir` treats a leading-`/` path as switches (`dir /APPS` parses `/A`),
+  so absolute SD paths need the `sd:` prefix or a `cd` first.
+- Keep HUDs at rows ≤ 21: the on-screen keyboard covers rows 22+ unless
+  hidden; `draw fullscreen on` reclaims the header too.
+- Save games as executable `set` lines (`ELITE.SAV` pattern) and reload
+  with `call`; verify art/data with `asset check <app>`.
 
 ### prompt
 
@@ -1963,11 +2139,14 @@ usable from the touch keyboard, a USB keyboard, or the serial console. See
   `Go to line` (`Ctrl+G` / `\g` / nav-page `Goto`) jumps straight to any
   numbered line.
 
-- **Editing**: insert, backspace, Delete (forward), Enter (new line), Tab
+- **Editing**: insert, backspace, Delete (forward), Enter (new line, carrying
+  the current indent), Tab
   (spaces to the next tab stop, width `P4_CONFIG_EDITOR_TAB_WIDTH`), Home / End,
   Up / Down, PageUp / PageDown, word navigation (`Ctrl+Left` / `Ctrl+Right`),
   document start/end (`Ctrl+Home` / `Ctrl+End`), delete line (`Ctrl+Y`), and an
-  Insert/overwrite toggle (`Insert` / `Ins`). Cursor movement is byte-precise
+  Insert/overwrite toggle (`Insert` / `Ins`). Bracket jump (`Ctrl+B` / `\b`)
+  hops between matching parens (nesting-aware, skips strings/comments) and
+  `%var%` pairs. Cursor movement is byte-precise
   over tabs and 8-bit characters; files round-trip unchanged (CRLF vs LF is
   preserved, and a trailing newline is only written when the original file had
   one).
@@ -1977,18 +2156,40 @@ usable from the touch keyboard, a USB keyboard, or the serial console. See
   block cursor marks the caret.
 - **Find / Replace / Go to**: Ctrl+F (or `Find`) searches forward from the
   cursor, wrapping; F3 / Enter repeats the last search; Ctrl+H (or `Rep`)
-  replaces one match at a time (Enter repeats); Ctrl+G (or `Goto`) jumps to a
+  replaces one match at a time (Enter repeats); Ctrl+R (or `All`) replaces
+  every match in one undo step; Ctrl+T (or `Case`) toggles case sensitivity
+  (session, default insensitive); Ctrl+G (or `Goto`) jumps to a
   line number. The search strings are typed into the status bar and cancelled
   with Esc.
 - **Undo / Redo**: Ctrl+Z / Ctrl+Shift+Z (USB) or `\u` / `\r` (serial).
-- **Save / Quit**: Ctrl+S / F2 saves to the source path; Ctrl+O / `SaveAs`
-  saves to a new path (unnamed buffers are prompted for a name); Esc / `\q`
+  Undo restores the dirty flag too: undoing back to the opened state clears
+  the mark, so `\q` quits without a prompt.
+- **Save / Quit / Reload**: Ctrl+S / F2 saves to the source path (keeping a
+  `<file>.bak` copy of the previous version); Ctrl+O / `SaveAs`
+  saves to a new path (unnamed buffers are prompted for a name); Ctrl+L /
+  `\l` reloads from disk, discarding edits; Esc / `\q`
   (serial) quits, with a `Y/N` confirmation whenever there are unsaved
-  changes. A failed save removes the partial destination and keeps your edits
-  in memory.
+  changes. Read-only files (FATFS `+R`) refuse saves with a status message —
+  use Save As. A failed save removes the partial destination and keeps your
+  edits in memory.
+- **Wrap / comment**: Ctrl+W (or `\w`) toggles word wrap for long rows
+  (cursor, selection, scroll, and touch all follow visual rows); Ctrl+/
+  (or `\co`) toggles line comments over the selection or cursor row
+  (`rem ` for batch, `// ` for JSON, `<!-- ... -->` for Markdown).
+- **Status bar**: path, `*` modified flag, `Ln`/`Col`, `INS`/`OVR`, syntax
+  (`bat`/`md`/`json`/`txt`), `CRLF` when applicable, `RO` for read-only,
+  plus `PREVIEW`/`WRAP` modes.
+- **Markdown**: `.md`/`.markdown`/`.mkd` files get Markdown highlighting
+  (headings bold, code spans yellow, links cyan+underline, markers green).
+  `Ctrl+P` (USB), nav-page `Prev` (touch), or `\p` (serial) toggles a
+  read-only rendered preview on the same surface (status shows `PREVIEW`;
+  navigation scrolls, edits are discarded, `Ctrl+P`/`\p` returns to source,
+  Esc quits). The first render can take tens of seconds after heavy
+  transcript use (TTF variant load over the SD bus shares the O6 latency
+  tail); the status line shows `rendering preview...` meanwhile.
 - **Touch keyboard**: the symbol page (reachable via `1#`) adds a `Nav`
   button that opens a navigation page (Tab, Ins, Del, arrows, Home/End,
-  PgUp/PgDn, Find, Next, Rep, Goto, Undo, Redo, Save, SaveAs, Quit), and a
+  PgUp/PgDn, Find, Next, Rep, All, Case, Goto, Undo, Redo, Save, SaveAs, Quit), and a
   second `Nav2` page adds the clipboard and advanced editing (Copy, Cut,
   Paste, SelAll, WdL/WdR word nav, DocH/DocE, DelLn, DelE). Every editor
   feature is reachable from the touch keyboard alone. Mode switching
@@ -1996,9 +2197,15 @@ usable from the touch keyboard, a USB keyboard, or the serial console. See
   callback.
 - **Serial console**: while the editor is open, UART lines are fed to the
   editor (`\q` quit, `\s` save, `\f` find, `\g` go-to-line, `\o` save-as,
-  `\u` undo, `\r` redo, `\a` select-all; any other line is typed).
+  `\u` undo, `\r` redo, `\a` select-all, `\p` preview, `\all` replace-all,
+  `\c` case toggle, `\b` match jump, `\co` comment, `\w` wrap, `\l` reload;
+  any other line is typed).
 - **Syntax**: batch `.bat`/`.cmd` files are syntax-highlighted by the batch
-  lexer (commands, comments, labels, `%VAR%`, strings, operators).
+  lexer (commands, comments, labels, `%VAR%`, strings, operators); `.json`
+  files by the JSON lexer (keys, strings, numbers, literals); Markdown by
+  the Markdown lexer. The mapping lives in the central file-type registry
+  (`components/filetype/`), shared with the viewer, `launch`, `dir`
+  colours, and batch resolution.
 
 Editor limits are `P4_CONFIG_EDITOR_MAX_BYTES` (64 KB) and
 `P4_CONFIG_EDITOR_MAX_LINES` (2048); files beyond these are refused with an

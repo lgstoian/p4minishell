@@ -297,6 +297,51 @@ static void header_render_icon(header_icon_type_t type)
     lv_obj_set_style_text_color(label, color, 0);
 }
 
+/* ---- Notification **bold** subset -> LVGL recolor ----
+ * Converts `**text**` (non-space adjacent) to bright-white recolor spans.
+ * Also escapes literal `#` (recolor control char) so notifications
+ * containing it render instead of swallowing text. Output needs ~2x input;
+ * callers size accordingly. Plain text passes through byte-identical. */
+static void header_notification_style(const char *in, char *out, size_t out_size)
+{
+    size_t o = 0;
+
+    if (in == NULL || out == NULL || out_size == 0) {
+        return;
+    }
+    while (*in != '\0' && o + 1 < out_size) {
+        if (in[0] == '*' && in[1] == '*' && in[2] != '\0' && in[2] != ' ') {
+            const char *close = strstr(in + 2, "**");
+            if (close != NULL && close > in + 2 && close[-1] != ' ') {
+                static const char open[] = "#FFFFFF";
+                size_t inner = (size_t)(close - (in + 2));
+                size_t need = sizeof(open) - 1 + inner + 1;
+                if (o + need + 1 >= out_size) {
+                    break;
+                }
+                memcpy(out + o, open, sizeof(open) - 1);
+                o += sizeof(open) - 1;
+                memcpy(out + o, in + 2, inner);
+                o += inner;
+                out[o++] = '#';
+                in = close + 2;
+                continue;
+            }
+        }
+        if (*in == '#') {
+            if (o + 2 >= out_size) {
+                break;
+            }
+            out[o++] = '#';
+            out[o++] = '#';
+            in++;
+            continue;
+        }
+        out[o++] = *in++;
+    }
+    out[o < out_size ? o : out_size - 1] = '\0';
+}
+
 /* ---- Format free heap for display ---- */
 static void header_format_mem(char *buf, size_t buf_size)
 {
@@ -351,9 +396,20 @@ static void header_render(void)
         return;
     }
 
-    /* Render notification area */
+    /* Render notification area (`**bold**` subset -> bright recolor; the
+     * label has recolor enabled, so plain text passes through untouched). */
     if (s_header_state.notification[0] != '\0') {
-        lv_label_set_text(s_notification_label, s_header_state.notification);
+        /* Styled form can only grow (each ** pair becomes #FFFFFF + #):
+         * heap-sized, freed below (render paths already heap-allocate). */
+        char *styled = malloc(HEADER_NOTIFICATION_BYTES * 2);
+        if (styled != NULL) {
+            header_notification_style(s_header_state.notification,
+                                      styled, HEADER_NOTIFICATION_BYTES * 2);
+            lv_label_set_text(s_notification_label, styled);
+            free(styled);
+        } else {
+            lv_label_set_text(s_notification_label, s_header_state.notification);
+        }
         lv_obj_clear_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text(s_notification_label, "");
@@ -669,6 +725,8 @@ void header_init(void)
     lv_obj_set_style_text_align(s_notification_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_notification_label, lv_color_hex(HEADER_TEXT_COLOR), 0);
     lv_obj_set_style_text_font(s_notification_label, status_font, 0);
+    /* Recolor markup for the **bold** notification subset (see below). */
+    lv_label_set_recolor(s_notification_label, true);
     lv_obj_set_scrollbar_mode(s_notification_label, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(s_notification_label, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(s_notification_label, "");

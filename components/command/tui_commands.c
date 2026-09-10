@@ -17,6 +17,8 @@
 
 #include "shell.h"
 #include "batch.h"
+#include "editor.h"
+#include "filetype.h"
 #include "modal_surf.h"
 #include "tui.h"
 #include "windows.h"
@@ -30,22 +32,84 @@
  * TUI PRIMITIVES: draw, anchor
  * ================================================================ */
 
+/** Parse a draw color argument: 0..16 passes through as a DOS index
+ * (16 = default), anything larger is 24-bit RGB quantized to DOS 0-15.
+ * Keeps bare `7`-style DOS numbers working while hex like 0xFFAA00 maps
+ * to the nearest cell color. */
+/** Map a parsed color value to DOS: 0..16 passes through (16 = default),
+ * anything larger is 24-bit RGB quantized to DOS 0-15. */
+static uint8_t draw_dos_value(unsigned long v)
+{
+    if (v <= 16) return (uint8_t)v;
+    if (v > 0xFFFFFF) v = 0xFFFFFF;
+    return tui_rgb_to_dos((uint32_t)v);
+}
+
+/* Frame coalescing for batch animation loops: `draw hold on` suppresses the
+ * per-verb tui_flush() so N verbs cost one LVGL label rebuild, closed by an
+ * explicit `draw refresh` (which always flushes). `draw hold off` resumes
+ * and flushes; `draw close` resets. Foreground only (bg jobs are refused
+ * below before they can reach this). */
+static bool s_draw_hold = false;
+
+static void draw_maybe_flush(void)
+{
+    if (!s_draw_hold) {
+        tui_flush();
+    }
+}
+
+/** Headless-safe accessor for unit tests (hold flag round-trip). */
+bool draw_hold_active(void)
+{
+    return s_draw_hold;
+}
+
+/** Refuse shared-display verbs in `start` background jobs (BOUNCE-style
+ * loud message + ERRORLEVEL 1, same shape as the `gfx` refusal). Modal
+ * verbs already refuse in modal.c; this covers draw/tui/color/locate. */
+static bool draw_require_foreground(const char *verb)
+{
+    if (batch_bg_is_background()) {
+        shell_transcript_appendf_ansi(SH_ERR "%s: not available in background jobs (shared display)\n" SH_RST,
+                                      verb);
+        batch_set_errorlevel(1);
+        return false;
+    }
+    return true;
+}
+
+static uint8_t draw_color_arg(const char *s, uint8_t fallback)
+{
+    unsigned long v;
+    char *end = NULL;
+
+    if (s == NULL || *s == '\0') return fallback;
+    v = strtoul(s, &end, 0);
+    if (end == s) return fallback;
+    return draw_dos_value(v);
+}
+
 bool shell_command_draw(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "draw: missing subcommand\n" SH_RST);
-        shell_transcript_appendf_ansi("Usage: draw box|text|line|fill|clear|save|restore|cursor|alt-screen <args>\n");
+        shell_transcript_appendf_ansi("Usage: draw box|text|line|fill|clear|save|restore|cursor|bar|table|hold|alt-screen <args>\n");
         batch_set_errorlevel(2);
         return false;
     }
 
+    if (!draw_require_foreground("draw")) return false;
+
     bool use_tui = tui_is_active();
     // Auto-enter TUI for drawing commands that benefit from it (keep header visible)
     if (!use_tui && (shell_text_equals_ignore_case(argv[1], "box") ||
-                     shell_text_equals_ignore_case(argv[1], "text") ||
-                     shell_text_equals_ignore_case(argv[1], "line") ||
-                     shell_text_equals_ignore_case(argv[1], "fill") ||
-                     shell_text_equals_ignore_case(argv[1], "clear"))) {
+                      shell_text_equals_ignore_case(argv[1], "text") ||
+                      shell_text_equals_ignore_case(argv[1], "line") ||
+                      shell_text_equals_ignore_case(argv[1], "fill") ||
+                      shell_text_equals_ignore_case(argv[1], "bar") ||
+                      shell_text_equals_ignore_case(argv[1], "table") ||
+                      shell_text_equals_ignore_case(argv[1], "clear"))) {
         if (tui_init()) use_tui = true;
     }
 
@@ -78,8 +142,17 @@ bool shell_command_draw(int argc, char **argv)
             }
         }
         if (use_tui) {
-            tui_draw_box(x, y, w, h, style, 7, 16, title);
-            tui_flush();
+            /* TUI cells are DOS 0-15: quantize explicit hex, keep the
+             * historical 7/16 look when no colors were given. */
+            uint8_t tfg = 7;
+            uint8_t tbg = 16;
+
+            if (fg != 0xFFFFFF || bg != 0x000000 || argc > 8) {
+                tfg = draw_dos_value(fg);
+                tbg = draw_dos_value(bg);
+            }
+            tui_draw_box(x, y, w, h, style, tfg, tbg, title);
+            draw_maybe_flush();
             batch_set_errorlevel(0);
             return true;
         }
@@ -131,8 +204,10 @@ bool shell_command_draw(int argc, char **argv)
         if (argc > 5) fg = strtoul(argv[5], NULL, 0);
         if (argc > 6) bg = strtoul(argv[6], NULL, 0);
         if (use_tui) {
-            tui_print_at(x, y, text, 7, 16);
-            tui_flush();
+            tui_print_at(x, y, text,
+                         (argc > 5) ? draw_color_arg(argv[5], 7) : 7,
+                         (argc > 6) ? draw_color_arg(argv[6], 16) : 16);
+            draw_maybe_flush();
             batch_set_errorlevel(0);
             return true;
         }
@@ -161,8 +236,10 @@ bool shell_command_draw(int argc, char **argv)
         if (argc > 6) fg = strtoul(argv[6], NULL, 0);
         if (argc > 7) bg = strtoul(argv[7], NULL, 0);
         if (use_tui) {
-            tui_draw_line(x1, y1, x2, y2, "single", 7, 16);
-            tui_flush();
+            tui_draw_line(x1, y1, x2, y2, "single",
+                          (argc > 6) ? draw_color_arg(argv[6], 7) : 7,
+                          (argc > 7) ? draw_color_arg(argv[7], 16) : 16);
+            draw_maybe_flush();
             batch_set_errorlevel(0);
             return true;
         }
@@ -207,8 +284,10 @@ bool shell_command_draw(int argc, char **argv)
         if (argc > 7) fg = strtoul(argv[7], NULL, 0);
         if (argc > 8) bg = strtoul(argv[8], NULL, 0);
         if (use_tui) {
-            tui_fill(x, y, w, h, fill_char, 7, 16);
-            tui_flush();
+            tui_fill(x, y, w, h, fill_char,
+                     (argc > 7) ? draw_color_arg(argv[7], 7) : 7,
+                     (argc > 8) ? draw_color_arg(argv[8], 16) : 16);
+            draw_maybe_flush();
             batch_set_errorlevel(0);
             return true;
         }
@@ -221,6 +300,213 @@ bool shell_command_draw(int argc, char **argv)
         }
         shell_transcript_appendf_ansi("\033[u");
 
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    /* Max table columns (widths[] stack budget on the worker). */
+#define DRAW_TABLE_MAX_COLS 16
+#define DRAW_TABLE_MAX_ROWS 32
+#define DRAW_TABLE_ROW_BYTES 256
+#define DRAW_TABLE_COL_MAX 40
+
+    if (shell_text_equals_ignore_case(argv[1], "bar")) {
+        /* draw bar <x> <y> <w> <pct> [fillch] [emptych] [fg] [bg] */
+        if (argc < 6) {
+            shell_transcript_appendf_ansi(SH_ERR "draw bar: usage: draw bar <x> <y> <w> <pct 0..100> [fillch] [emptych] [fg] [bg]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        int x = atoi(argv[2]);
+        int y = atoi(argv[3]);
+        int w = atoi(argv[4]);
+        int pct = atoi(argv[5]);
+        char fillch = (argc > 6 && argv[6][0] != '\0') ? argv[6][0] : '#';
+        char emptych = (argc > 7 && argv[7][0] != '\0') ? argv[7][0] : '-';
+        uint8_t tfg = (argc > 8) ? draw_color_arg(argv[8], 7) : 7;
+        uint8_t tbg = (argc > 9) ? draw_color_arg(argv[9], 16) : 16;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        if (w < 3) w = 3;
+        if (use_tui) {
+            tui_draw_bar(x, y, w, pct, fillch, emptych, tfg, tbg);
+            draw_maybe_flush();
+            batch_set_errorlevel(0);
+            return true;
+        }
+
+        {
+            uint32_t fg = 0xFFFFFF;
+            uint32_t bg = 0x000000;
+            int inner = w - 2;
+            int filled = (inner * pct + 50) / 100;
+            int i;
+
+            if (argc > 8) fg = strtoul(argv[8], NULL, 0);
+            if (argc > 9) bg = strtoul(argv[9], NULL, 0);
+            shell_transcript_appendf_ansi("\033[s");
+            shell_transcript_appendf_ansi("\033[%d;%dH#%06X#%06X[", y, x,
+                                          (unsigned int)fg, (unsigned int)bg);
+            for (i = 0; i < inner; i++) {
+                shell_transcript_appendf_ansi("%c", (i < filled) ? fillch : emptych);
+            }
+            shell_transcript_appendf_ansi("]\n");
+            shell_transcript_appendf_ansi("\033[u");
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "table")) {
+        /* draw table <x> <y> <fg> <bg> <"h1|h2|..."> [row "c1|c2|..." ...]
+         * First quoted arg is the header (bold on TUI). Column widths are
+         * the max cell length + padding, capped so the table fits 80 cols. */
+        if (argc < 6) {
+            shell_transcript_appendf_ansi(SH_ERR "draw table: usage: draw table <x> <y> <fg> <bg> \"h1|h2|...\" [row \"c1|c2|...\" ...]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        int x = atoi(argv[2]);
+        int y = atoi(argv[3]);
+        uint8_t tfg = draw_color_arg(argv[4], 7);
+        uint8_t tbg = draw_color_arg(argv[5], 16);
+        /* Row storage is heap (PSRAM): a bg job and the main worker can
+         * draw tables concurrently, so neither static nor worker stack. */
+        char (*rows)[DRAW_TABLE_ROW_BYTES] = NULL;
+        const char **cells = NULL;
+        int widths[DRAW_TABLE_MAX_COLS];
+        int ncols = 0;
+        int nrows = 0;
+        int r;
+        int c;
+
+        /* Count header columns first (no mutation yet). */
+        {
+            const char *p = argv[6];
+
+            ncols = 1;
+            for (; *p != '\0'; p++) {
+                if (*p == '|') ncols++;
+            }
+        }
+        if (ncols > DRAW_TABLE_MAX_COLS) {
+            shell_transcript_appendf_ansi(SH_ERR "draw table: too many columns (max %d)\n" SH_RST,
+                                          DRAW_TABLE_MAX_COLS);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        nrows = argc - 6;
+        if (nrows > DRAW_TABLE_MAX_ROWS) nrows = DRAW_TABLE_MAX_ROWS;
+        rows = malloc((size_t)nrows * DRAW_TABLE_ROW_BYTES);
+        cells = malloc((size_t)nrows * (size_t)ncols * sizeof(*cells));
+        if (rows == NULL || cells == NULL) {
+            free(rows);
+            free(cells);
+            shell_transcript_appendf_ansi(SH_ERR "draw table: out of memory\n" SH_RST);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        for (c = 0; c < ncols; c++) widths[c] = 1;
+        for (r = 0; r < nrows; r++) {
+            char *dst = rows[r];
+            const char *src = argv[6 + r];
+            size_t n = strlen(src);
+
+            if (n > DRAW_TABLE_ROW_BYTES - 1) n = DRAW_TABLE_ROW_BYTES - 1;
+            memcpy(dst, src, n);
+            dst[n] = '\0';
+            /* Split on '|' but keep the tail glued to the last column when
+             * a row has more cells than the header. */
+            c = 0;
+            cells[r * ncols + c] = dst;
+            for (char *p = dst; *p != '\0'; p++) {
+                if (*p == '|' && c < ncols - 1) {
+                    *p = '\0';
+                    c++;
+                    cells[r * ncols + c] = p + 1;
+                }
+            }
+            /* Pad short rows with empty cells; measure widths. */
+            for (; c < ncols; c++) {
+                cells[r * ncols + c] = "";
+            }
+            for (c = 0; c < ncols; c++) {
+                int len = (int)strlen(cells[r * ncols + c]);
+
+                if (len > widths[c]) widths[c] = len;
+            }
+        }
+        for (c = 0; c < ncols; c++) {
+            if (widths[c] > DRAW_TABLE_COL_MAX) widths[c] = DRAW_TABLE_COL_MAX;
+        }
+        if (tui_table_total_width(ncols, widths) > P4_CONFIG_TUI_COLS) {
+            free(rows);
+            free(cells);
+            shell_transcript_appendf_ansi(SH_ERR "draw table: too wide (max %d columns of grid)\n" SH_RST,
+                                          P4_CONFIG_TUI_COLS);
+            batch_set_errorlevel(2);
+            return false;
+        }
+
+        if (use_tui) {
+            tui_draw_table(x, y, ncols, widths, nrows, cells, true, tfg, tbg);
+            draw_maybe_flush();
+            free(rows);
+            free(cells);
+            batch_set_errorlevel(0);
+            return true;
+        }
+
+        /* Off-TUI: plain bordered block, x-space indent (y ignored). */
+        {
+            uint32_t fg = strtoul(argv[4], NULL, 0);
+            uint32_t bg = strtoul(argv[5], NULL, 0);
+            char line[300];
+            int li;
+            int i;
+            int k;
+/* Append guarded: never let li run past the buffer. */
+#define TAPP(...) do { \
+        if (li < (int)sizeof(line) - 12) { \
+            li += snprintf(line + li, sizeof(line) - (size_t)li, __VA_ARGS__); \
+        } \
+    } while (0)
+
+            /* Top border */
+            li = 0;
+            for (i = 0; i < x - 1 && li < (int)sizeof(line) - 12; i++) line[li++] = ' ';
+            TAPP("#%06X#%06X%s", (unsigned int)fg, (unsigned int)bg, SH_BOX_TL);
+            for (c = 0; c < ncols; c++) {
+                for (k = 0; k < widths[c] + 2; k++) TAPP("%s", SH_BOX_H);
+                TAPP("%s", (c == ncols - 1) ? SH_BOX_TR : SH_BOX_T);
+            }
+            shell_transcript_appendf_ansi("%s\n", line);
+            for (r = 0; r < nrows; r++) {
+                bool last = (r == nrows - 1);
+
+                li = 0;
+                for (i = 0; i < x - 1 && li < (int)sizeof(line) - 12; i++) line[li++] = ' ';
+                TAPP("#%06X#%06X%s", (unsigned int)fg, (unsigned int)bg, SH_BOX_V);
+                for (c = 0; c < ncols; c++) {
+                    TAPP(" %-*.*s %s", widths[c], widths[c],
+                         cells[r * ncols + c], SH_BOX_V);
+                }
+                shell_transcript_appendf_ansi("%s\n", line);
+                li = 0;
+                for (i = 0; i < x - 1 && li < (int)sizeof(line) - 12; i++) line[li++] = ' ';
+                TAPP("#%06X#%06X%s", (unsigned int)fg, (unsigned int)bg,
+                     last ? SH_BOX_BL : SH_BOX_L);
+                for (c = 0; c < ncols; c++) {
+                    for (k = 0; k < widths[c] + 2; k++) TAPP("%s", SH_BOX_H);
+                    TAPP("%s", last ? ((c == ncols - 1) ? SH_BOX_BR : SH_BOX_B)
+                                    : ((c == ncols - 1) ? SH_BOX_R : SH_BOX_X));
+                }
+                shell_transcript_appendf_ansi("%s\n", line);
+            }
+#undef TAPP
+        }
+        free(rows);
+        free(cells);
         batch_set_errorlevel(0);
         return true;
     }
@@ -238,7 +524,7 @@ bool shell_command_draw(int argc, char **argv)
                 batch_set_errorlevel(2);
                 return false;
             }
-            tui_flush();
+            draw_maybe_flush();
             batch_set_errorlevel(0);
             return true;
         }
@@ -354,7 +640,7 @@ bool shell_command_draw(int argc, char **argv)
                 return false;
             }
             tui_draw_box(x, y, w, h, "single", 7, 16, title);
-            tui_flush();
+            draw_maybe_flush();
             batch_set_errorlevel(0);
             return true;
         }
@@ -364,10 +650,28 @@ bool shell_command_draw(int argc, char **argv)
     }
 
     if (shell_text_equals_ignore_case(argv[1], "close")) {
+        s_draw_hold = false; /* never leak a held frame into interactive use */
         if (use_tui) { tui_deinit(); batch_set_errorlevel(0); return true; }
         shell_transcript_appendf_ansi(SH_ERR "draw close: tui not active\n" SH_RST);
         batch_set_errorlevel(1);
         return false;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "hold")) {
+        /* draw hold <on|off>: coalesce a frame's verbs into one flush. */
+        if (argc != 3 ||
+            (!shell_text_equals_ignore_case(argv[2], "on") &&
+             !shell_text_equals_ignore_case(argv[2], "off"))) {
+            shell_transcript_appendf_ansi(SH_ERR "draw hold: usage: draw hold <on|off>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        s_draw_hold = shell_text_equals_ignore_case(argv[2], "on");
+        if (use_tui && !s_draw_hold) {
+            tui_flush();
+        }
+        batch_set_errorlevel(0);
+        return true;
     }
 
     if (shell_text_equals_ignore_case(argv[1], "fullscreen")) {
@@ -410,6 +714,8 @@ bool shell_command_anchor(int argc, char **argv)
         batch_set_errorlevel(2);
         return false;
     }
+
+    if (!draw_require_foreground("anchor")) return false;
 
     const char *label = argv[1];
     const char *command = argv[2];
@@ -612,23 +918,67 @@ void shell_command_view(int argc, char **argv)
 {
     const char *path = NULL;
     uint32_t timeout_ms = 0;
+    bool raw = false;
 
     for (int i = 1; i < argc; i++) {
         if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
             continue;
+        } else if (shell_text_equals_ignore_case(argv[i], "--raw")) {
+            raw = true;
         } else if (path == NULL) {
             path = argv[i];
         }
     }
 
     if (path == NULL) {
-        shell_print_usage("Usage: view [/t:secs] <file>");
+        shell_print_usage("Usage: view [/t:secs] [--raw] <file>");
         batch_set_errorlevel(2);
         return;
     }
 
-    int rc = modal_viewer_run("View", path, timeout_ms);
+    int rc = modal_viewer_run_raw("View", path, timeout_ms, raw);
     batch_set_errorlevel(rc == 0 ? 0 : 1);
+}
+
+void shell_command_open(int argc, char **argv)
+{
+    const char *path = NULL;
+    uint32_t timeout_ms = 0;
+    bool raw = false;
+
+    for (int i = 1; i < argc; i++) {
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
+        } else if (shell_text_equals_ignore_case(argv[i], "--raw")) {
+            raw = true;
+        } else if (path == NULL) {
+            path = argv[i];
+        }
+    }
+
+    if (path == NULL) {
+        shell_print_usage("Usage: open [/t:secs] [--raw] <file>");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    /* Dispatch by registry type. Scripts NEVER execute here: typing a
+     * .bat/.cmd name runs it, while `open` shows its source in the editor.
+     * Markdown renders (viewer branch); everything else views as text. */
+    if (filetype_is_executable(filetype_of(path))) {
+        int errorlevel = 0;
+        esp_err_t err = editor_session_run(path, &errorlevel);
+        if (err != ESP_OK && errorlevel == 0) {
+            errorlevel = 1;
+        }
+        batch_set_errorlevel(errorlevel);
+        return;
+    }
+
+    {
+        int rc = modal_viewer_run_raw("View", path, timeout_ms, raw);
+        batch_set_errorlevel(rc == 0 ? 0 : 1);
+    }
 }
 
 void shell_command_hexview(int argc, char **argv)
@@ -672,6 +1022,7 @@ void shell_command_color(int argc, char **argv)
         batch_set_errorlevel(2);
         return;
     }
+    if (!draw_require_foreground("color")) return;
     int fg = atoi(argv[1]);
     int bg = (argc > 2) ? atoi(argv[2]) : 16;
     if (fg < 0) fg = 0;
@@ -680,7 +1031,7 @@ void shell_command_color(int argc, char **argv)
     if (bg > 15 && bg != 16) bg = 16;
     if (tui_is_active()) {
         tui_set_default_color((uint8_t)fg, (uint8_t)bg);
-        tui_flush();
+        draw_maybe_flush();
     }
     shell_transcript_appendf_ansi(SH_MUTE "color: fg=%s bg=%s" SH_RST "\n",
                                    argv[1], argc > 2 ? argv[2] : "default");
@@ -694,6 +1045,7 @@ void shell_command_locate(int argc, char **argv)
         batch_set_errorlevel(2);
         return;
     }
+    if (!draw_require_foreground("locate")) return;
     int row = atoi(argv[1]);
     int col = atoi(argv[2]);
     if (row < 1) row = 1;
@@ -702,7 +1054,7 @@ void shell_command_locate(int argc, char **argv)
     if (col > P4_CONFIG_TUI_COLS) col = P4_CONFIG_TUI_COLS;
     if (tui_is_active()) {
         tui_set_cursor(row, col);
-        tui_flush();
+        draw_maybe_flush();
     }
     /* Emit ANSI CUP via raw escape so transcript and UART agree; TUI mode handles it via CSI if active */
     shell_transcript_appendf_ansi("\x1b[%d;%dH", row, col);
@@ -714,6 +1066,11 @@ void shell_command_tui(int argc, char **argv)
     if (argc < 2) {
         shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui clear");
         batch_set_errorlevel(2);
+        return;
+    }
+    /* `tui status` is a read-only query: safe (and useful) in bg jobs. */
+    if (!shell_text_equals_ignore_case(argv[1], "status") &&
+        !draw_require_foreground("tui")) {
         return;
     }
     if (shell_text_equals_ignore_case(argv[1], "fullscreen")) {
@@ -741,7 +1098,7 @@ void shell_command_tui(int argc, char **argv)
         return;
     } else if (shell_text_equals_ignore_case(argv[1], "clear")) {
         if (tui_is_active()) tui_clear();
-        tui_flush();
+        draw_maybe_flush();
         batch_set_errorlevel(0);
         return;
     }

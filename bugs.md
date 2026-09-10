@@ -598,6 +598,31 @@ store (see readme.md / command.md / SDK.md).
   in the internal heap; it grows with accumulated history, stabilises at the
   8 KB scrollback ceiling, and is reclaimed by `cls` (and automatically by
   the M6 trim). This is a design cost of coloured scrollback, not a leak.
+- **Boot prints "No SD card detected" yet the card works.** The early boot
+  probe can miss while the card still lazy-mounts on first access (batch
+  apps run fine on those boots). Cosmetic ordering confusion between the
+  eager probe message and the first-mount path, observed 2026-09-10; no
+  firmware change.
+- **Serial keys need Enter to reach key waits.** The UART console reader is
+  `fgets` line-buffered (`shell.c`), so a bare keypress without newline
+  never arrives at `choice`/`pause` waits (USB/OSK keyboards deliver raw
+  keys). Steering batch games over serial is therefore key+Enter per step
+  (proven with SNAKE: `dc=s` turn + `QUIT`); document, don't fix (changing
+  stdio buffering is C risk for zero functional gain).
+- **`list` serial selection is 1-based, its ERRORLEVEL 0-based.** `q`
+  cancels (255). Count items twice when writing `if errorlevel` chains —
+  TCMD shipped an 11-item list with a 12-item chain and Quit silently
+  refreshed (caught on HW, fixed).
+- **`dir` parses a leading-`/` path as switches** (`dir /APPS` reads `/A`
+  attributes). Absolute SD paths need the `sd:` prefix or a `cd` first.
+  Quirk, documented in `command.md`; TCMD dropped its per-refresh counts
+  over it (panes list via `browse`).
+- **APM-560 operational note (ESP32-P4 errata, this board rev v1.x).**
+  Unauthorized concurrent AHB access to PSRAM/flash wedges later traffic
+  until system reset — so one display writer at a time (bg display refusal),
+  no OTA overlapping PSRAM bg stacks, serialized SDMMC bring-up (N1 gate),
+  sequential host tools. I2C-308 (slave-only), RMT-176 (IDF-bypassed),
+  ECDSA-837 (unused flow) need no action.
 
 ---
 

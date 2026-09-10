@@ -81,7 +81,8 @@ goto prompt
 
 :prompt
 set /a moves+=1
-echo ---
+rem Literal dashes (not a Markdown rule): /raw keeps the bytes identical.
+echo /raw ---
 ask /v:cmd "What now? (help)"
 if errorlevel 1 goto prompt
 if "%cmd%"=="quit" goto do_quit

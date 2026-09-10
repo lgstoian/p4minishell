@@ -26,6 +26,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/task.h"
 #include <time.h>
 #include <driver/gpio.h>
 #include <driver/usb_serial_jtag.h>
@@ -129,14 +130,104 @@ static char *s_transcript_ansi = NULL;
  * the worker (segment begin/end) and the LVGL task (async flush); worst case
  * of a race is one redundant or skipped coalesced repaint, never corruption
  * (buffers are authoritative, the label is derived). */
-static int s_transcript_defer_depth;
-static bool s_transcript_defer_dirty;
+/* Deferred label repaint batching (see shell_transcript_defer_begin()).
+ * Repainting the LVGL span group costs O(buffer): each repaint re-parses the
+ * whole ANSI scrollback and rebuilds every span, so per-line repaints make
+ * big listings crawl (~1 KB/s at a full 64 KB buffer, measured). While the
+ * depth is nonzero, appends mark the label dirty instead of repainting; the
+ * serial mirror and the buffers stay live on every line. A time rule keeps
+ * slow-printing commands (ping, progress) live on screen.
+ *
+ * Depth/dirty/bypass are PER WORKER TASK (main + `start` background pool):
+ * two tasks interleaving segments must not consume each other's dirty flag,
+ * or one task's output would never repaint. Unknown tasks (unit tests, init)
+ * use slot 0. The flush timestamp stays global (one screen). */
+typedef struct {
+    int depth;
+    bool dirty;
+    /* Async drain bypass: background tasks (Wi-Fi, OTA progress) drain
+     * through the same append entry points but must stay live even
+     * mid-command, so the flush callback sets this around its appends and
+     * the deferral stands down. Cross-task worst case is cosmetic (one
+     * coalesced repaint). */
+    bool bypass;
+} shell_defer_slot_t;
+
+static shell_defer_slot_t s_defer_slots[1 + P4_CONFIG_BG_TASKS];
+/* Sized >= 1 even with the pool disabled (loop bounds still use the knob). */
+static void *s_bg_tasks[(P4_CONFIG_BG_TASKS > 0) ? P4_CONFIG_BG_TASKS : 1];
 static int64_t s_transcript_last_flush_us;
-/* Async drain bypass: background tasks (Wi-Fi, OTA progress) drain through
- * the same append entry points but must stay live even mid-command, so the
- * flush callback sets this around its appends and the deferral stands down.
- * Cross-task worst case is cosmetic (one coalesced repaint). */
-static bool s_transcript_defer_bypass;
+
+static shell_defer_slot_t *shell_defer_current(void)
+{
+    void *me = (void *)xTaskGetCurrentTaskHandle();
+    int i;
+
+    if (me != NULL) {
+        for (i = 0; i < P4_CONFIG_BG_TASKS; i++) {
+            if (s_bg_tasks[i] == me) {
+                return &s_defer_slots[1 + i];
+            }
+        }
+    }
+    return &s_defer_slots[0];
+}
+
+#define s_transcript_defer_depth  (shell_defer_current()->depth)
+#define s_transcript_defer_dirty  (shell_defer_current()->dirty)
+#define s_transcript_defer_bypass (shell_defer_current()->bypass)
+
+void shell_register_bg_task(void *task)
+{
+    int i;
+
+    if (task == NULL) {
+        return;
+    }
+    for (i = 0; i < P4_CONFIG_BG_TASKS; i++) {
+        if (s_bg_tasks[i] == NULL) {
+            s_bg_tasks[i] = task;
+            s_defer_slots[1 + i].depth = 0;
+            s_defer_slots[1 + i].dirty = false;
+            s_defer_slots[1 + i].bypass = false;
+            return;
+        }
+    }
+}
+
+void shell_unregister_bg_task(void *task)
+{
+    int i;
+
+    if (task == NULL) {
+        return;
+    }
+    for (i = 0; i < P4_CONFIG_BG_TASKS; i++) {
+        if (s_bg_tasks[i] == task) {
+            s_bg_tasks[i] = NULL;
+            s_defer_slots[1 + i].depth = 0;
+            s_defer_slots[1 + i].dirty = false;
+            s_defer_slots[1 + i].bypass = false;
+            return;
+        }
+    }
+}
+
+bool shell_is_background_task(void)
+{
+    void *me = (void *)xTaskGetCurrentTaskHandle();
+    int i;
+
+    if (me == NULL) {
+        return false;
+    }
+    for (i = 0; i < P4_CONFIG_BG_TASKS; i++) {
+        if (s_bg_tasks[i] == me) {
+            return true;
+        }
+    }
+    return false;
+}
 /* Guards the plain/ANSI scrollback buffers (NOT the LVGL widgets: those stay
  * under the LVGL port lock). Lets worker appends proceed without serializing
  * behind LVGL render passes, which hold the port lock O(buffer) at a full
@@ -1178,6 +1269,12 @@ void shell_screen_discard(char *saved)
  */
 void shell_app_mode_enter(bool full_screen)
 {
+    /* Background workers share the one screen: entering app mode here
+     * would hide the main task's widgets, so refuse silently (the batch
+     * `appmode` verb reports it; native applib apps just render inline). */
+    if (shell_is_background_task()) {
+        return;
+    }
     if (s_app_mode_full_screen) {
         return;
     }
@@ -2198,6 +2295,13 @@ bool shell_wait_for_key_utf8(uint32_t timeout_ms, char *buf, size_t buf_size)
         buf[0] = '\0';
     }
 
+    /* Background workers never steal console keys: they take the headless
+     * path immediately (pause/choice/more fall back to defaults/delays). */
+    if (shell_is_background_task()) {
+        (void)timeout_ms;
+        return false;
+    }
+
     if (s_key_queue == NULL || !s_key_wait_active) {
         return false;
     }
@@ -2229,6 +2333,12 @@ bool shell_wait_for_key(uint32_t timeout_ms, char *key_out)
 
     if (key_out != NULL) {
         *key_out = '\0';
+    }
+
+    /* Background workers never steal console keys (see utf8 variant). */
+    if (shell_is_background_task()) {
+        (void)timeout_ms;
+        return false;
     }
 
     if (s_key_queue == NULL || !s_key_wait_active) {
@@ -3372,7 +3482,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "debug",    "debug - last error/warning entries, Wi-Fi state, heap, warning count" },
     { "clear",    "clear | cls - clear transcript history and redraw the prompt" },
     { "reboot",   "reboot - restart the board" },
-    { "launch",   "launch | launch <name> [args] | launch /list - discover and run .bat apps (PATH + sd:/APPS)" },
+    { "launch",   "launch | launch <name> [args] | launch /list - discover and run script apps .bat/.cmd (PATH + sd:/APPS)" },
     { "apps",     "apps - list the registered native apps (applib ABI table)" },
     { "ps",       "ps | tasks | top [/b] [/O:key] - FreeRTOS task list (name, state, prio, core, stack, CPU%)" },
     { "tasks",    "tasks - alias of ps (FreeRTOS task list)" },
@@ -3401,9 +3511,11 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "list",     "list [/t:secs] [/v:NAME] \"title\" item... - scrollable selector (ERRORLEVEL = 0-based index)" },
     { "ask",      "ask [/t:secs] [/v:NAME] [/p] \"prompt\" [default] - text input to ASK_RESULT (ERRORLEVEL 0/1)" },
     { "browse",   "browse [/t:secs] [/v:NAME] [path] - fullscreen file picker (ERRORLEVEL 0/1)" },
-    { "view",     "view [/t:secs] <file> - text viewer pager (ERRORLEVEL 0/1)" },
+    { "view",     "view [/t:secs] [--raw] <file> - text viewer pager, .md renders (ERRORLEVEL 0/1)" },
+    { "open",     "open [/t:secs] [--raw] <file> - open by type: scripts in editor, md rendered, rest as text (never executes)" },
+    { "json",     "json validate|pretty <file> - check structure or print 2-space indented JSON (ERRORLEVEL 0/1)" },
     { "hexview",  "hexview [/t:secs] <file> - 16-byte hex dump pager (ERRORLEVEL 0/1)" },
-    { "draw",     "draw <box|line|fill|text|clear|window|save|restore|cursor|alt-screen|close|refresh|fullscreen> - TUI drawing" },
+    { "draw",     "draw <box|line|fill|text|bar|table|clear|window|save|restore|cursor|hold|alt-screen|close|refresh|fullscreen> - TUI drawing (foreground only)" },
     { "anchor",   "anchor <label> <command> [continue_line] - named transcript anchor region" },
     { "tui",      "tui status|clear|fullscreen|refresh - TUI control" },
     { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
@@ -3459,7 +3571,12 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "pause",    "pause [message] - wait for a key (30 s timeout)" },
     { "choice",   "choice [/C:keys] [/N] [/T:c,secs] [/S] [text] - interactive selection" },
     { "delay",    "delay <ms> - pure deterministic wait (melodies/demos), clamped to P4_CONFIG_DELAY_MAX_MS" },
-    { "launch",   "launch | launch <name> [args] | launch /list - discover and run .bat apps (PATH + sd:/APPS)" },
+    { "gfx",      "gfx init|close|status|clear|pixel|line|rect|circle|show|load|blit|free|slots|save - RGB565 pixel canvas for batch games (max 320x240, 8 sprite slots max 64x64)" },
+    { "crc32",    "crc32 <path> - print a file's CRC-32 checksum (ERRORLEVEL 0/1)" },
+    { "asset",    "asset check|list <app> - verify/list an app's APPS/<APP>.ASSETS manifest (ERRORLEVEL 0/1)" },
+    { "start",    "start <command> [args] - run a command or batch file as a background job (see taskkill)" },
+    { "taskkill", "taskkill <job> - cooperatively stop a background job (name like bg0, or slot number)" },
+    { "launch",   "launch | launch <name> [args] | launch /list - discover and run script apps .bat/.cmd (PATH + sd:/APPS)" },
     { "apps",     "apps - list the registered native apps (applib ABI table)" },
     { "for",      "for %v in (set) do <cmd> | for /f \"delims= tokens=\\n\" %%v in (file) do <cmd> - loops" },
     { "setlocal", "setlocal - begin a local environment scope" },
@@ -3471,6 +3588,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "temp",     "temp [new [ext] | clean] - SD-backed temporary files" },
     { "ansi",     "ansi <sgr-codes> [text...] - emit ANSI-styled text (reverse, bold, color) into the transcript" },
     { "menu",     "menu <item> [item...] - numbered menu; ERRORLEVEL = chosen index (0 = cancel)" },
+    { "markdown", "markdown <file> | markdown -e <text> | markdown on | off - render Markdown (echo/type auto-render; /raw bypasses)" },
     { "notify",   "notify [/t:secs] <text> | notify - - header notification (clear with -)" },
     { "appmode",  "appmode on [/full] [/clear] | appmode off | appmode status - enter/exit app mode (save/restore screen)" },
     { "rem",      "rem <text> - batch comment" },

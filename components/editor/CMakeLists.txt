@@ -8,6 +8,9 @@ idf_component_register(
         windows
         keyboard
         display
+        font
+        filetype
+        markdown
         modal
         espressif__esp_lvgl_port
         lvgl__lvgl

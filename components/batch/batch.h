@@ -149,6 +149,29 @@ int batch_get_errorlevel(void);
 void batch_set_errorlevel(int level);
 
 /* ========================================================================
+ * BACKGROUND TASK SLOTS (`start` pool)
+ * ======================================================================== */
+
+/** Claim a free background ctx slot (>= 0) or -1 when the pool is full.
+ * The caller stores its task handle via batch_bg_bind() once created. */
+int batch_bg_alloc(void);
+
+/** Bind a task handle to a claimed slot (called once by the new task). */
+void batch_bg_bind(int slot);
+
+/** Release a slot (called when the bg task exits). */
+void batch_bg_release(int slot);
+
+/** Request cooperative stop of a slot (checked per batch line). */
+void batch_bg_request_kill(int slot);
+
+/** True when the current task's slot has a pending kill request. */
+bool batch_bg_kill_requested(void);
+
+/** True when the current task runs on a background slot. */
+bool batch_bg_is_background(void);
+
+/* ========================================================================
  * BATCH ENGINE
  * ======================================================================== */
 

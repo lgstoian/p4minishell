@@ -121,8 +121,9 @@ static const lv_buttonmatrix_ctrl_t keyboard_special_ctrl_map[] = {
  * carry every editing command:
  *
  *   Nav  (USER_1): Tab, arrows, Home/End, Del, Ins, Find, PgUp/PgDn,
- *                  Undo, Redo, Rep, Goto, Save, SaveAs, Quit, Next (find
- *                  repeat), Nav2 (-> edit page), abc (-> letters).
+ *                  Undo, Redo, Rep, All (replace all), Case (case toggle),
+ *                  Goto, Save, SaveAs, Quit, Prev (preview toggle), Next
+ *                  (find repeat), Nav2 (-> edit page), abc (-> letters).
  *   Edit (USER_2): Copy, Cut, Paste, SelAll, WdL/WdR (word left/right),
  *                  DocH/DocE (document home/end), DelLn (delete line),
  *                  DelE (delete to end of line), Nav1 (-> nav), abc.
@@ -133,8 +134,8 @@ static const lv_buttonmatrix_ctrl_t keyboard_special_ctrl_map[] = {
 static const char * const keyboard_nav_map[] = {
     "Tab", LV_SYMBOL_UP, "Home", "Del", "Ins", "Find", "\n",
     LV_SYMBOL_LEFT, LV_SYMBOL_DOWN, LV_SYMBOL_RIGHT, "End", "PgUp", "PgDn", "\n",
-    "Undo", "Redo", "Rep", "Goto", "Save", "SaveAs", "\n",
-    "Quit", "Next", "Nav2", "abc", "\n",
+    "Undo", "Redo", "Rep", "All", "Case", "Goto", "Save", "SaveAs", "\n",
+    "Quit", "Prev", "Next", "Nav2", "abc", "\n",
     ""
 };
 
@@ -143,10 +144,10 @@ static const lv_buttonmatrix_ctrl_t keyboard_nav_ctrl_map[] = {
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
     /* Row 2: Left, Down, Right, End, PgUp, PgDn. */
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    /* Row 3: Undo, Redo, Rep, Goto, Save, SaveAs. */
-    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    /* Row 4: Quit, Next, Nav2, abc. */
-    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 3: Undo, Redo, Rep, All, Case, Goto, Save, SaveAs. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    /* Row 4: Quit, Prev, Next, Nav2, abc. */
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
     LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
 };
 

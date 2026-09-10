@@ -10,6 +10,7 @@
 
 #include "unity.h"
 #include "tui.h"
+#include "command.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -53,4 +54,45 @@ void test_tui_inactive_by_default(void)
 {
     TEST_ASSERT_FALSE(tui_is_active());
     TEST_ASSERT_FALSE(tui_is_fullscreen());
+}
+
+void test_tui_rgb_to_dos_exact(void)
+{
+    /* Primary CGA values map to themselves. */
+    TEST_ASSERT_EQUAL_UINT8(0, tui_rgb_to_dos(0x000000));
+    TEST_ASSERT_EQUAL_UINT8(4, tui_rgb_to_dos(0xAA0000));
+    TEST_ASSERT_EQUAL_UINT8(2, tui_rgb_to_dos(0x00AA00));
+    TEST_ASSERT_EQUAL_UINT8(1, tui_rgb_to_dos(0x0000AA));
+    TEST_ASSERT_EQUAL_UINT8(7, tui_rgb_to_dos(0xAAAAAA));
+    TEST_ASSERT_EQUAL_UINT8(15, tui_rgb_to_dos(0xFFFFFF));
+    TEST_ASSERT_EQUAL_UINT8(12, tui_rgb_to_dos(0xFF5555));
+    TEST_ASSERT_EQUAL_UINT8(14, tui_rgb_to_dos(0xFFFF55));
+}
+
+void test_tui_rgb_to_dos_nearest(void)
+{
+    /* Near-black / near-white snap to the right end of the palette. */
+    TEST_ASSERT_EQUAL_UINT8(0, tui_rgb_to_dos(0x010101));
+    TEST_ASSERT_EQUAL_UINT8(15, tui_rgb_to_dos(0xFEFEFE));
+    /* Pure green is closer to CGA green (0x00AA00) than bright green. */
+    TEST_ASSERT_EQUAL_UINT8(2, tui_rgb_to_dos(0x00FF00));
+    /* Golden 0xFFCC00 snaps to bright yellow, not brown. */
+    TEST_ASSERT_EQUAL_UINT8(14, tui_rgb_to_dos(0xFFCC00));
+}
+
+void test_tui_table_total_width(void)
+{
+    int widths2[] = {4, 6};
+
+    /* sum + 3 per column + leading border: 4+6 + 6 + 1 = 17. */
+    TEST_ASSERT_EQUAL_INT(17, tui_table_total_width(2, widths2));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_total_width(0, widths2));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_total_width(2, NULL));
+}
+
+void test_draw_hold_default_off(void)
+{
+    /* Verb behavior (on/off/usage/close-reset) is hardware-verified;
+     * headless units only pin the default + linkage. */
+    TEST_ASSERT_FALSE(draw_hold_active());
 }

@@ -20,12 +20,16 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 #include <dirent.h>
+#include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "libs/tiny_ttf/lv_tiny_ttf.h"
 #include "bsp/esp-bsp.h"
+
+#define FONT_TAG "font"
 
 /* Built-in bitmaps (always compiled: unscii via sdkconfig.defaults,
  * montserrat_14 as LVGL's default default-font). */
@@ -323,6 +327,7 @@ static void font_ttf_destroy_cb(void *font)
         xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
     }
     for (i = 0; i < FONT_TTF_SLOTS; i++) {
+        /* Stale check: the slot may have been reused since scheduling. */
         if (s_ttf_slots[i].used && s_ttf_slots[i].font == (lv_font_t *)font) {
             s_ttf_slots[i].used = false;
             s_ttf_slots[i].font = NULL;
@@ -407,6 +412,21 @@ static int font_ttf_load_locked(const char *stem, int px)
         }
     }
     if (slot < 0) {
+        /* Pressure: evict an unreferenced slot (probe leftovers). The old
+         * object frees async (in-flight renders may hold it); the slot is
+         * reused immediately and the destroy callback stale-checks. */
+        for (i = 0; i < FONT_TTF_SLOTS; i++) {
+            if (s_ttf_slots[i].used && s_ttf_slots[i].refs <= 0) {
+                ESP_LOGW(FONT_TAG, "slot pressure: evicting %s@%d",
+                         s_ttf_slots[i].stem, s_ttf_slots[i].px);
+                lv_async_call(font_ttf_destroy_cb, s_ttf_slots[i].font);
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0) {
+        ESP_LOGW(FONT_TAG, "load %s: slot table full", stem);
         return -1;
     }
     /* Probe host-side first (cheap existence check, no LVGL involvement). */
@@ -422,13 +442,18 @@ static int font_ttf_load_locked(const char *stem, int px)
         }
     }
     if (lv_path[0] == '\0') {
+        ESP_LOGW(FONT_TAG, "load %s: not found in FONTS (%s)", stem, strerror(errno));
         return -1;
     }
     /* Creation touches LVGL heaps: hold the port lock (worker context). */
     if (!lvgl_port_lock(0)) {
+        ESP_LOGW(FONT_TAG, "load %s: no port lock", stem);
         return -1;
     }
     font = lv_tiny_ttf_create_file(lv_path, px);
+    if (font == NULL) {
+        ESP_LOGW(FONT_TAG, "load %s: tiny_ttf create failed (%s)", stem, lv_path);
+    }
     if (font != NULL) {
         s_ttf_slots[slot].used = true;
         snprintf(s_ttf_slots[slot].stem, sizeof(s_ttf_slots[slot].stem), "%s", stem);
@@ -481,6 +506,93 @@ void font_attach_cjk(void)
     font_refresh_cjk_locked(FONT_ROLE_TERMINAL);
     font_refresh_cjk_locked(FONT_ROLE_UI);
     xSemaphoreGive(s_ttf_lock);
+}
+
+/* ========================================================================
+ * VARIANTS + SPAN STYLING
+ * ======================================================================== */
+
+/* (stem, attr) -> variant stem. Only the vendored DejaVuSansMono pair. */
+static const char *font_variant_stem(const char *base_stem, int attr)
+{
+    if (base_stem == NULL) {
+        return NULL;
+    }
+    if (strcasecmp(base_stem, "DejaVuSansMono") != 0) {
+        return NULL;
+    }
+    if (attr == FONT_VARIANT_BOLD) {
+        return "DejaVuSansMono-Bold";
+    }
+    if (attr == FONT_VARIANT_ITALIC) {
+        return "DejaVuSansMono-Oblique";
+    }
+    return NULL;
+}
+
+lv_font_t *font_variant_for(const char *base_stem, int px, int attr)
+{
+    const char *stem = font_variant_stem(base_stem, attr);
+    int slot;
+
+    if (stem == NULL) {
+        return NULL;
+    }
+    if (px < P4_CONFIG_FONT_SIZE_MIN || px > P4_CONFIG_FONT_SIZE_MAX) {
+        return NULL;
+    }
+    font_ttf_lock_init();
+    xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
+    slot = font_ttf_load_locked(stem, px);
+    if (slot >= 0) {
+        /* Permanent pin: spans hold the pointer across renders with no
+         * ref path, so the slot must never be freed. Bounded by the small
+         * variant set (Bold/Oblique x few sizes). */
+        s_ttf_slots[slot].refs++;
+    }
+    xSemaphoreGive(s_ttf_lock);
+    return slot >= 0 ? s_ttf_slots[slot].font : NULL;
+}
+
+void font_span_style(lv_style_t *style, font_role_t role, unsigned attrs,
+                     int fg_index, uint32_t fallback_rgb)
+{
+    const lv_font_t *font = font_get(role);
+    uint32_t rgb = fallback_rgb;
+
+    if (style == NULL) {
+        return;
+    }
+    if ((attrs & ANSI_ATTR_BOLD) != 0) {
+        lv_font_t *variant = font_variant_for(font_current_name(role),
+                                              font_current_size(role),
+                                              FONT_VARIANT_BOLD);
+        if (variant != NULL) {
+            font = variant;
+        } else if (fg_index >= 0 && fg_index < 8) {
+            /* No variant (stock bitmaps): bold shows as bright. */
+            rgb = ansi_get_palette_color((ansi_color_index_t)(fg_index + 8));
+        }
+    } else if ((attrs & ANSI_ATTR_ITALIC) != 0) {
+        lv_font_t *variant = font_variant_for(font_current_name(role),
+                                              font_current_size(role),
+                                              FONT_VARIANT_ITALIC);
+        if (variant != NULL) {
+            font = variant;
+        }
+    }
+    lv_style_set_text_font(style, font);
+    lv_style_set_text_color(style, lv_color_hex(rgb));
+    {
+        lv_text_decor_t decor = LV_TEXT_DECOR_NONE;
+        if ((attrs & ANSI_ATTR_UNDERLINE) != 0) {
+            decor |= LV_TEXT_DECOR_UNDERLINE;
+        }
+        if ((attrs & ANSI_ATTR_STRIKE) != 0) {
+            decor |= LV_TEXT_DECOR_STRIKETHROUGH;
+        }
+        lv_style_set_text_decor(style, decor);
+    }
 }
 
 int font_scan_ttf(char out[][P4_CONFIG_FONT_NAME_BYTES], int cap)
