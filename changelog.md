@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - hardware sessions 2026-09-07 .. 2026-09-11 (COM3; ESP-IDF v5.5.5)
 
+### LVGL 9.5.0 + esp_lvgl_port 2.9.0 vendored upgrade (2026-09-11 session, COM3)
+
+- **Pinned** `lvgl/lvgl: "9.5.0"` and `espressif/esp_lvgl_port: "2.9.0"` in
+  `main/idf_component.yml` and `test/main/idf_component.yml`; replaced only
+  those two vendored trees from the official registry archives. BSP stays
+  4.1.1 and unrelated components/pins are unchanged.
+- **Preserved project deltas**: the generated 384-glyph `lv_font_unscii_16`
+  extension, the LVGL `lv_async` PSRAM/lock hardening (adapted to 9.5), and
+  the port JD9165 `swap_xy` guard. `tools/managed_patches.patch` now backs up
+  the hand-authored LVGL/port diffs, and the reapply script restores the
+  tracked extended font when the vendored LVGL minor version matches.
+- **Locks/config**: the root `dependencies.lock` records only the LVGL/port
+  version changes plus its manifest hash; the test lock records the same plus
+  an `eppp_link` 1.1.5 → 1.1.6 registry float (required `>=0.1`, sources under
+  the ignored `test/managed_components/`). `test/sdkconfig` picked up the LVGL
+  9.5 Kconfig deltas (RGB565-swapped, RISC-V vector ASM, ext-data, WebP,
+  NanoVG; retired XML/OpenGL/scroll-demo symbols).
+- Verified: firmware + test builds clean, unit 262/0/2, deep 8/8, db 38/38,
+  alarm 25/25, smoke 21/21, pkg/theme/gfx/plot/header green, post-flash
+  screenshot captured.
+
 ### Responsive header: no-overlap layout, dynamic font, uptime (2026-09-11 session, COM3)
 
 - **Measurement-driven layout** (`components/header/header_layout.c`, pure +

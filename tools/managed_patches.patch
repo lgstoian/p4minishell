@@ -1,22 +1,211 @@
-diff --git a/managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c b/managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c
-index 36dd5e0..85965e4 100644
---- a/managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c
-+++ b/managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c
-@@ -472,7 +472,7 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
-     0xf0, 0x3, 0xc0, 0xc, 0xc0, 0x33, 0x0, 0xcc,
-     0xff, 0x33, 0xfc, 0xc3, 0x33, 0xc, 0xf0, 0x33,
-     0xc0, 0xc0, 0x3, 0x0, 0xc, 0x0, 0x30, 0x0,
--    0xc0
-+    0xc0,
-     /* U+2500 */
-     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-     /* U+2501 */
-@@ -2112,7 +2112,7 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
-     {.bitmap_index = 1667, .adv_w = 256, .box_w = 4, .box_h = 14, .ofs_x = 6, .ofs_y = 2},
-     {.bitmap_index = 1674, .adv_w = 256, .box_w = 12, .box_h = 14, .ofs_x = 2, .ofs_y = 2},
-     {.bitmap_index = 1695, .adv_w = 256, .box_w = 14, .box_h = 4, .ofs_x = 0, .ofs_y = 12},
--    {.bitmap_index = 1702, .adv_w = 256, .box_w = 14, .box_h = 14, .ofs_x = 0, .ofs_y = 2}
-+    {.bitmap_index = 1702, .adv_w = 256, .box_w = 14, .box_h = 14, .ofs_x = 0, .ofs_y = 2} ,
-     {.bitmap_index = 1727, .adv_w = 256, .box_w = 16, .box_h = 16, .ofs_x = 0, .ofs_y = 0},
-     {.bitmap_index = 1759, .adv_w = 256, .box_w = 16, .box_h = 16, .ofs_x = 0, .ofs_y = 0},
-     {.bitmap_index = 1791, .adv_w = 256, .box_w = 16, .box_h = 16, .ofs_x = 0, .ofs_y = 0},
+diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_components/lvgl__lvgl/src/misc/lv_async.c
+--- a/managed_components/lvgl__lvgl/src/misc/lv_async.c
++++ b/managed_components/lvgl__lvgl/src/misc/lv_async.c
+@@ -9,7 +9,12 @@
+ 
+ #include "lv_async.h"
+ #include "lv_timer_private.h"
++#include "../osal/lv_os.h"
+ #include "../stdlib/lv_mem.h"
++
++#if defined(ESP_PLATFORM)
++#include "esp_heap_caps.h"
++#endif
+ 
+ /*********************
+  *      DEFINES
+@@ -30,6 +35,11 @@
+ 
+ static void lv_async_timer_cb(lv_timer_t * timer);
+ 
++#if defined(ESP_PLATFORM)
++static lv_async_info_t * async_info_alloc(void);
++static void async_info_free(lv_async_info_t * info);
++#endif
++
+ /**********************
+  *  STATIC VARIABLES
+  **********************/
+@@ -44,32 +54,63 @@
+ 
+ lv_result_t lv_async_call(lv_async_cb_t async_xcb, void * user_data)
+ {
+-    /*Allocate an info structure*/
+-    lv_async_info_t * info = lv_malloc(sizeof(lv_async_info_t));
++    lv_result_t result = LV_RESULT_OK;
++    lv_async_info_t * info;
++    lv_timer_t * timer;
+ 
+-    if(info == NULL)
+-        return LV_RESULT_INVALID;
++    /*Allocate an info structure. On ESP32-P4 with esp_hosted 2.12.1 the Wi-Fi
++     * bring-up path corrupts internal-RAM heap metadata; keeping these small
++     * async descriptors in PSRAM isolates them from that corruption.*/
++
++    /* lv_async_call may be invoked from any task (Wi-Fi events, worker,
++     * USB). Creating/deleting timers mutates the global timer list, which the
++     * LVGL task iterates in lv_timer_handler() under lv_lock(). Take the
++     * recursive lock here so a foreign task cannot corrupt the list. */
++    lv_lock();
++
++#if defined(ESP_PLATFORM)
++    info = async_info_alloc();
++#else
++    info = (lv_async_info_t *)lv_malloc(sizeof(lv_async_info_t));
++#endif
++
++    if(info == NULL) {
++        result = LV_RESULT_INVALID;
++        goto done;
++    }
+ 
+     /*Create a new timer*/
+-    lv_timer_t * timer = lv_timer_create(lv_async_timer_cb, 0, info);
++    timer = lv_timer_create(lv_async_timer_cb, 0, info);
+ 
+     if(timer == NULL) {
++#if defined(ESP_PLATFORM)
++        async_info_free(info);
++#else
+         lv_free(info);
+-        return LV_RESULT_INVALID;
++#endif
++        result = LV_RESULT_INVALID;
++        goto done;
+     }
+ 
+     info->cb = async_xcb;
+     info->user_data = user_data;
+ 
+     lv_timer_set_repeat_count(timer, 1);
+-    return LV_RESULT_OK;
++
++done:
++    lv_unlock();
++    return result;
+ }
+ 
+ lv_result_t lv_async_call_cancel(lv_async_cb_t async_xcb, void * user_data)
+ {
+-    lv_timer_t * timer = lv_timer_get_next(NULL);
++    lv_timer_t * timer;
+     lv_result_t res = LV_RESULT_INVALID;
+ 
++    /* Serialise against lv_timer_handler()/lv_async_call() on other tasks. */
++    lv_lock();
++
++    timer = lv_timer_get_next(NULL);
+     while(timer != NULL) {
+         /*Find the next timer node*/
+         lv_timer_t * timer_next = lv_timer_get_next(timer);
+@@ -81,7 +122,11 @@
+             /*Match user function callback and user data*/
+             if(info->cb == async_xcb && info->user_data == user_data) {
+                 lv_timer_delete(timer);
++#if defined(ESP_PLATFORM)
++                async_info_free(info);
++#else
+                 lv_free(info);
++#endif
+                 res = LV_RESULT_OK;
+             }
+         }
+@@ -89,6 +134,7 @@
+         timer = timer_next;
+     }
+ 
++    lv_unlock();
+     return res;
+ }
+ 
+@@ -102,7 +148,29 @@
+     lv_async_info_t * info = (lv_async_info_t *)timer->user_data;
+     lv_async_info_t info_save = *info;
+     lv_timer_delete(timer);
++#if defined(ESP_PLATFORM)
++    async_info_free(info);
++#else
+     lv_free(info);
++#endif
+ 
+     info_save.cb(info_save.user_data);
+ }
++
++#if defined(ESP_PLATFORM)
++static lv_async_info_t * async_info_alloc(void)
++{
++    lv_async_info_t * info = (lv_async_info_t *)heap_caps_malloc(sizeof(lv_async_info_t),
++                                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++    if(info == NULL) {
++        info = (lv_async_info_t *)heap_caps_malloc(sizeof(lv_async_info_t),
++                                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
++    }
++    return info;
++}
++
++static void async_info_free(lv_async_info_t * info)
++{
++    heap_caps_free(info);
++}
++#endif
+diff --git a/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c b/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c
+--- a/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c
++++ b/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <string.h>
++#include "board_config.h"
+ #include "sdkconfig.h"
+ #include "esp_log.h"
+ #include "esp_err.h"
+@@ -774,16 +775,23 @@
+     }
+ 
+     esp_lcd_panel_handle_t control_handle = (disp_ctx->control_handle ? disp_ctx->control_handle : disp_ctx->panel_handle);
++#if BOARD_CFG_LCD_PANEL_SUPPORTS_HW_SWAP_XY
++#define LVGL_PORT_APPLY_SWAP_XY(_handle, _value) esp_lcd_panel_swap_xy((_handle), (_value))
++#else
++    /* board_config.yaml records that the active JD9165 path does not implement panel swap_xy. */
++#define LVGL_PORT_APPLY_SWAP_XY(_handle, _value) ((void)(_handle), (void)(_value))
++#endif
++
+     /* Solve rotation screen and touch */
+     switch (lv_display_get_rotation(disp_ctx->disp_drv)) {
+     case LV_DISPLAY_ROTATION_0:
+         /* Rotate LCD display */
+-        esp_lcd_panel_swap_xy(control_handle, disp_ctx->rotation.swap_xy);
++        LVGL_PORT_APPLY_SWAP_XY(control_handle, disp_ctx->rotation.swap_xy);
+         esp_lcd_panel_mirror(control_handle, disp_ctx->rotation.mirror_x, disp_ctx->rotation.mirror_y);
+         break;
+     case LV_DISPLAY_ROTATION_90:
+         /* Rotate LCD display */
+-        esp_lcd_panel_swap_xy(control_handle, !disp_ctx->rotation.swap_xy);
++        LVGL_PORT_APPLY_SWAP_XY(control_handle, !disp_ctx->rotation.swap_xy);
+         if (disp_ctx->rotation.swap_xy) {
+             esp_lcd_panel_mirror(control_handle, !disp_ctx->rotation.mirror_x, disp_ctx->rotation.mirror_y);
+         } else {
+@@ -792,12 +800,12 @@
+         break;
+     case LV_DISPLAY_ROTATION_180:
+         /* Rotate LCD display */
+-        esp_lcd_panel_swap_xy(control_handle, disp_ctx->rotation.swap_xy);
++        LVGL_PORT_APPLY_SWAP_XY(control_handle, disp_ctx->rotation.swap_xy);
+         esp_lcd_panel_mirror(control_handle, !disp_ctx->rotation.mirror_x, !disp_ctx->rotation.mirror_y);
+         break;
+     case LV_DISPLAY_ROTATION_270:
+         /* Rotate LCD display */
+-        esp_lcd_panel_swap_xy(control_handle, !disp_ctx->rotation.swap_xy);
++        LVGL_PORT_APPLY_SWAP_XY(control_handle, !disp_ctx->rotation.swap_xy);
+         if (disp_ctx->rotation.swap_xy) {
+             esp_lcd_panel_mirror(control_handle, disp_ctx->rotation.mirror_x, !disp_ctx->rotation.mirror_y);
+         } else {
+@@ -806,6 +814,8 @@
+         break;
+     }
+ 
++#undef LVGL_PORT_APPLY_SWAP_XY
++
+     /* Wake LVGL task, if needed */
+     lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, disp_ctx->disp_drv);
+ }

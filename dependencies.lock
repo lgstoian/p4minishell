@@ -110,7 +110,7 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\espressif__esp_lvgl_port
       type: local
-    version: 2.7.2
+    version: 2.9.0
   espressif/esp_serial_slave_link:
     component_hash: ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
     dependencies:
@@ -239,7 +239,7 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\lvgl__lvgl
       type: local
-    version: 9.4.0
+    version: 9.5.0
 direct_dependencies:
 - espressif/cmake_utilities
 - espressif/esp_codec_dev
@@ -257,6 +257,6 @@ direct_dependencies:
 - espressif/usb_host_msc
 - idf
 - lvgl/lvgl
-manifest_hash: 82ff5962d5b9d42276ea67640f1a37652a5b35d1a66749b58d45293d7a7f9fff
+manifest_hash: 8fe16e2c352f0d054e9be1bfc0d5648b5eae0d165a9a279b2599743594a43338
 target: esp32p4
 version: 2.0.0

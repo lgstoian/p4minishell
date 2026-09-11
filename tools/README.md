@@ -35,14 +35,15 @@ resets on the transition — every driver drops DTR/RTS on open via
   `db_test.py`, `alarm_test.py`, `push_sd.py`, `run_companion.py` (retired
   stub forwarding to `deep_test.py`; the pre-TUI triggers it asserted can no
   longer occur).
-- `managed_patches.patch` — backup of the working-tree patches inside
-  `managed_components/` (currently: `unscii_16` comma fixes; the BSP
-  graceful-degrade is committed in history).
+- `managed_patches.patch` — backup of the hand-authored `managed_components/`
+  deltas (currently: LVGL `lv_async` PSRAM/lock hardening and the port
+  JD9165 `swap_xy` guard). The generated 384-glyph `unscii_16` font is
+  tracked in git; the reapply script restores it from HEAD when the vendored
+  LVGL minor version matches.
   Re-apply after `idf.py update-dependencies` with
   `powershell -File tools/reapply_managed_patches.ps1`
-  (`-Check` for a dry run). Regenerate after any managed edit with the
-  `git diff -- managed_components` byte-pipe in `bugs.md` M40. See `bugs.md`
-  M20/M28 and `changelog.md` 0.35.1/0.35.2.
+  (`-Check` for a dry run). See `bugs.md` M20/M28/M40 and
+  `changelog.md` 0.35.1/0.35.2.
 
 ## Focused drivers (recent)
 

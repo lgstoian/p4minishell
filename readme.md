@@ -6,7 +6,7 @@ Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processo
 
 ## Overview
 
-P4MiniShell replaces the default LVGL demo UI with a persistent DOS-style shell surface built on LVGL 9.4.0. It provides a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi and Bluetooth on the C6, USB host support, and a real OTA maintenance path for the co-processor.
+P4MiniShell replaces the default LVGL demo UI with a persistent DOS-style shell surface built on LVGL 9.5.0 (esp_lvgl_port 2.9.0). It provides a locked transcript UI, RAM-only shell state, SD-backed file workflows, batch-file execution, ESP-Hosted Wi-Fi and Bluetooth on the C6, USB host support, and a real OTA maintenance path for the co-processor.
 
 **Color-coded output** - Every command uses the same built-in colour scheme by default, with
 nothing to configure. Colours are defined once in `components/ansi/ansi_palette.h` and applied
@@ -21,7 +21,7 @@ escape sequences natively:
 
 The current firmware is not a desktop DOS clone and is not yet an MS-DOS-compatible runtime. It provides the embedded foundation for that direction.
 
-**Current verified state:** the firmware is v0.35.7 plus the post-release work in `changelog.md` `[Unreleased]`. Hardware-verified on COM3 (ESP-IDF v5.5.5) with the full suite green: unit **262/0/2**, companion deep **8/8**, db **38/38**, alarm **25/25**, app smoke **21/21**, package round-trip **15/15**, gfx toolkit **17/17**, theme **11/11**, plot **25/25**. The TUI is an 80x25 cell grid (`components/tui/`) filling the transcript region; `draw` (box/line/fill/text/bar/table/list/clear/window/cursor/hold/alt-screen/fullscreen) and the exclusive `gfx` RGB565 canvas (`init/close/status/clear/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/fill/text/show/load/blit/free/slots/save`, 8 sprite slots to 64x64, built-in 8x8 text font) drive batch TUIs and games; `crc32`/`asset` verify SD bundles and `pkg` installs/removes them from `PKGS/<APP>/`; `start`/`taskkill` run background jobs; batch files execute from a 128 KB RAM image so `goto` loops stay off the SD card. Reference apps: companion (10 BATs incl. SVC/AGENDA), ADVENT, NOTES, MOOD, BOUNCE, GFXTOOL, PLOT, SNAKE, TCMD, ELITE.
+**Current verified state:** the firmware is v0.35.7 plus the post-release work in `changelog.md` `[Unreleased]`. Hardware-verified on COM3 (ESP-IDF v5.5.5) with the full suite green: unit **262/0/2**, companion deep **8/8**, db **38/38**, alarm **25/25**, app smoke **21/21**, package round-trip **15/15**, gfx toolkit **17/17**, theme **11/11**, plot **25/25**, header **OK**. The TUI is an 80x25 cell grid (`components/tui/`) filling the transcript region; `draw` (box/line/fill/text/bar/table/list/clear/window/cursor/hold/alt-screen/fullscreen) and the exclusive `gfx` RGB565 canvas (`init/close/status/clear/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/fill/text/show/load/blit/free/slots/save`, 8 sprite slots to 64x64, built-in 8x8 text font) drive batch TUIs and games; `crc32`/`asset` verify SD bundles and `pkg` installs/removes them from `PKGS/<APP>/`; `start`/`taskkill` run background jobs; batch files execute from a 128 KB RAM image so `goto` loops stay off the SD card. Reference apps: companion (10 BATs incl. SVC/AGENDA), ADVENT, NOTES, MOOD, BOUNCE, GFXTOOL, PLOT, SNAKE, TCMD, ELITE.
 
 ## Architecture
 
@@ -106,7 +106,7 @@ the YAML to match.
 |-----------|--------|
 | **Host MCU** | ESP32-P4 |
 | **Co-processor** | ESP32-C6 over ESP-Hosted SDIO |
-| **Display** | JD9165 1024x600 MIPI-DSI via LVGL 9.4.0 |
+| **Display** | JD9165 1024x600 MIPI-DSI via LVGL 9.5.0 (esp_lvgl_port 2.9.0) |
 | **Touch** | GT911 via I2C |
 | **Storage** | FATFS on SD with LFN support (255 chars) |
 | **Audio** | ES8311 codec via I2S |

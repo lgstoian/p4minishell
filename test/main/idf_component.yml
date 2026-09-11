@@ -4,7 +4,11 @@ dependencies:
   # dependency set. Without these pins the component manager resolves newer
   # majors (for example esp_hosted 3.x) whose Kconfig is incompatible.
   lvgl/lvgl:
-    version: "9.4.0"
+    version: "9.5.0"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_lvgl_port:
+    version: "2.9.0"
     rules:
       - if: "target in [esp32p4]"
   espressif/esp_hosted:

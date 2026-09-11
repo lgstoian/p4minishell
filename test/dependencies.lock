@@ -10,7 +10,7 @@ dependencies:
       type: service
     version: 0.5.3
   espressif/eppp_link:
-    component_hash: 04f7f31868b8ae6014c96132740a192d09611a6e46aaa7038c865ffc7e26b38f
+    component_hash: c1369b37f2b0b427b198ae14e07e7547d3da92b95fe4dc7f949e5de560b35f21
     dependencies:
     - name: espressif/esp_serial_slave_link
       registry_url: https://components.espressif.com
@@ -22,7 +22,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.5
+    version: 1.1.6
   espressif/esp_codec_dev:
     component_hash: 014948481bda426cd46714f297fe1891711246c62bea288863a8cc8cf13ef1f0
     dependencies:
@@ -90,7 +90,7 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\espressif__esp_lvgl_port
       type: local
-    version: 2.7.2
+    version: 2.9.0
   espressif/esp_serial_slave_link:
     component_hash: ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
     dependencies:
@@ -169,7 +169,7 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\lvgl__lvgl
       type: local
-    version: 9.4.0
+    version: 9.5.0
 direct_dependencies:
 - espressif/cmake_utilities
 - espressif/esp_codec_dev
@@ -188,6 +188,6 @@ direct_dependencies:
 - espressif/wifi_remote_over_eppp
 - idf
 - lvgl/lvgl
-manifest_hash: 68137f5e7ea3460f3ea171772d7d2aae618ac7a64fa7968857317806927fd7df
+manifest_hash: 7de844882b0389f5de1fd6ade4dfb9536754046324985fbe2fd87dec515c6bec
 target: esp32p4
 version: 2.0.0
