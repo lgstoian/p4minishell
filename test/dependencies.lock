@@ -139,7 +139,7 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\espressif__usb_host_hid
       type: local
-    version: 1.2.0
+    version: 1.2.1
   espressif/usb_host_msc:
     dependencies: []
     source:
@@ -188,6 +188,6 @@ direct_dependencies:
 - espressif/wifi_remote_over_eppp
 - idf
 - lvgl/lvgl
-manifest_hash: 7de844882b0389f5de1fd6ade4dfb9536754046324985fbe2fd87dec515c6bec
+manifest_hash: f5eb1b18dbb4acf3c2ad5e2a3faf18093a34a058761a5c3730f1b890e56aa0b5
 target: esp32p4
 version: 2.0.0

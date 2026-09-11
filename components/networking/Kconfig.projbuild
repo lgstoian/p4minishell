@@ -19,7 +19,7 @@ config P4MINISHELL_WIFI_BOOT_DIAGNOSTIC
     default n
     help
         When enabled, the boot-time Wi-Fi background task performs a scan and
-        prints a diagnostic report. On esp_hosted 2.12.1 with IDF 5.5.5 this
+        prints a diagnostic report. On the older esp_hosted 2.x line with IDF 5.5.5 this
         scan frequently corrupts heap metadata and crashes the board during a
         later station connect, so it is disabled by default. The `wifi diag`
         command can still be run manually.

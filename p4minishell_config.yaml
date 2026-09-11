@@ -446,6 +446,13 @@ wifi:
       Bluetooth init paths do not reject C6 firmware version mismatches.
       Useful for development and testing with mismatched host/co-processor
       firmware. Set to 0 in production to enforce the version gate.
+  hosted_compat_major:
+    value: 3
+    type: int
+    description: >-
+      ESP-Hosted wire-protocol major the host requires on the C6. esp_hosted
+      3.x froze its public compat version macros at the 2.12.6 baseline, so
+      the gate compares the C6-reported major against this instead.
   scan_limit:
     value: 32
     type: size_t

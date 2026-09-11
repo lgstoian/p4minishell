@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - hardware sessions 2026-09-07 .. 2026-09-11 (COM3; ESP-IDF v5.5.5)
 
+### Managed batch A: eppp_link 1.1.6 + usb_host_hid 1.2.1 (2026-09-11 session, COM3)
+
+- **Swapped** `espressif/eppp_link` 1.1.5 → 1.1.6 (retry-counter reset fix) and
+  `espressif/usb_host_hid` 1.2.0 → 1.2.1 (disconnect-cleanup rework, remote
+  wakeup) via `idf.py update-dependencies`; both old trees proven byte-clean
+  against pristine upstream archives before replacement. No local patches in
+  either tree; no manifest pin changes (both float inside existing ranges).
+- **Held**: `esp_lcd_touch_gt911` at 1.2.0~1 (1.2.1 drops the driver-level
+  800x480→1024x600 `touch_scale`, which would compress touch into the
+  top-left region — verified by source diff, no code touched) and
+  `esp_lcd_jd9165` at 1.0.2 (1.0.4 deletes the default gamma/init table and
+  retimes the DPI clock/porches our BSP relies on — verified by source diff).
+- **Held**: `esp_hosted` at 3.0.6 (pinned exact in both manifests after the
+  resolver floated it). 3.0.7 was attempted and rejected on hardware: its
+  public compat version macros froze at 2.12.6 (broke our C6 version gate —
+  fixed separately, see below), and without the tree's local W1
+  SPIRAM-hardening patches (which 3.0.7's refactored RPC/DMA regions no
+  longer fit) the SDIO RX mempool OOMs at boot and Wi-Fi never starts.
+  Reverting to 3.0.6 + local patches restores a clean boot and connect.
+- **Version-gate fix** (`networking.c`, `bluetooth.c`, `P4_CONFIG_HOSTED_COMPAT_MAJOR 3`):
+  the Wi-Fi/BLE C6-firmware gates compared against the frozen compat macros
+  and would false-fire on any 3.x host. Gates are now major-only against the
+  project constant; messages/recovery text updated (2.x → 3.x).
+- Verified: both builds clean, unit 262/0/2, deep 8/8, db 38/38, alarm 25/25,
+  smoke 21/21, pkg/theme/gfx/plot/header green, post-flash screenshot. (One
+  mid-session eppp/hid scare — theme-output loss + a single Backtrace — was
+  traced to transient board/UART state, not the firmware: full re-runs green
+  with no code changes.)
+
 ### LVGL 9.5.0 + esp_lvgl_port 2.9.0 vendored upgrade (2026-09-11 session, COM3)
 
 - **Pinned** `lvgl/lvgl: "9.5.0"` and `espressif/esp_lvgl_port: "2.9.0"` in

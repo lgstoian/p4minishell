@@ -10,7 +10,7 @@ dependencies:
       type: service
     version: 0.5.3
   espressif/eppp_link:
-    component_hash: 04f7f31868b8ae6014c96132740a192d09611a6e46aaa7038c865ffc7e26b38f
+    component_hash: c1369b37f2b0b427b198ae14e07e7547d3da92b95fe4dc7f949e5de560b35f21
     dependencies:
     - name: espressif/esp_serial_slave_link
       registry_url: https://components.espressif.com
@@ -22,7 +22,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.5
+    version: 1.1.6
   espressif/esp_codec_dev:
     component_hash: 014948481bda426cd46714f297fe1891711246c62bea288863a8cc8cf13ef1f0
     dependencies:
@@ -169,7 +169,7 @@ dependencies:
     - linux
     version: 1.5.0
   espressif/usb_host_hid:
-    component_hash: a6c5366f9b6d80b0d5f56d085d62941464512e0968b96c5877e76a80fcc23f13
+    component_hash: 74b9c84cd2921a5e987f504c1713ca7819f7e8be80565e5253e9e9c7e07ab881
     dependencies:
     - name: idf
       require: private
@@ -191,7 +191,7 @@ dependencies:
     - esp32h4
     - esp32s31
     - linux
-    version: 1.2.0
+    version: 1.2.1
   espressif/usb_host_msc:
     component_hash: a7330d2bc4f81c21fd335df073405085bbad5cdf084a1be79fb52383d0d0d6fd
     dependencies:
@@ -257,6 +257,6 @@ direct_dependencies:
 - espressif/usb_host_msc
 - idf
 - lvgl/lvgl
-manifest_hash: 8fe16e2c352f0d054e9be1bfc0d5648b5eae0d165a9a279b2599743594a43338
+manifest_hash: f4abeac1957ca45ab89335e3a76838b8780eb3dfe818c9d9194ceb2fd33f377c
 target: esp32p4
 version: 2.0.0

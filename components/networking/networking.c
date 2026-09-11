@@ -446,9 +446,8 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
         networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "failed to read C6 hosted firmware version:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
                              esp_err_to_name(error),
                              (unsigned int)error);
-        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
-                             ESP_HOSTED_VERSION_MAJOR_1,
-                             ESP_HOSTED_VERSION_MINOR_1);
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
+                             P4_CONFIG_HOSTED_COMPAT_MAJOR);
         networking_record_warningf("Failed to read hosted firmware version: %s", esp_err_to_name(error));
         return error;
     }
@@ -461,44 +460,39 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
                          (unsigned int)version.minor1,
                          (unsigned int)version.patch1);
 
-    if (version.major1 != ESP_HOSTED_VERSION_MAJOR_1 || version.minor1 != ESP_HOSTED_VERSION_MINOR_1) {
+    /* Major-only gate: esp_hosted 3.x froze its public compat version macros
+     * at the 2.12.6 baseline, so ESP_HOSTED_VERSION_MAJOR_1/MINOR_1 no longer
+     * track the real host version. Minor/patch float within a major (RPC-V2
+     * is wire-stable there); only the C6-reported major must match
+     * P4_CONFIG_HOSTED_COMPAT_MAJOR. */
+    if (version.major1 != P4_CONFIG_HOSTED_COMPAT_MAJOR) {
 #if P4_CONFIG_HOSTED_SKIP_VERSION_GATE
-        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "hosted version mismatch (gate skipped):" SH_RST " host " SH_VAL "%u.%u.%u" SH_RST ", C6 " SH_VAL "%u.%u.%u" SH_RST "\n",
-                             ESP_HOSTED_VERSION_MAJOR_1,
-                             ESP_HOSTED_VERSION_MINOR_1,
-                             ESP_HOSTED_VERSION_PATCH_1,
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "hosted version mismatch (gate skipped):" SH_RST " host " SH_VAL "%u.x" SH_RST ", C6 " SH_VAL "%u.%u.%u" SH_RST "\n",
+                             P4_CONFIG_HOSTED_COMPAT_MAJOR,
                              version.major1,
                              version.minor1,
                              version.patch1);
-        networking_record_warningf("Hosted version mismatch (gate skipped): host %u.%u.%u vs C6 %u.%u.%u",
-                                   ESP_HOSTED_VERSION_MAJOR_1,
-                                   ESP_HOSTED_VERSION_MINOR_1,
-                                   ESP_HOSTED_VERSION_PATCH_1,
+        networking_record_warningf("Hosted version mismatch (gate skipped): host %u.x vs C6 %u.%u.%u",
+                                   P4_CONFIG_HOSTED_COMPAT_MAJOR,
                                    version.major1,
                                    version.minor1,
                                    version.patch1);
 #else
-        networking_wifi_set_detail("ESP-Hosted host %u.%u.%u requires ESP32-C6 firmware %u.%u.x, but the co-processor reports %u.%u.%u. Flash the matching hosted slave build before retrying Wi-Fi.",
-                                   ESP_HOSTED_VERSION_MAJOR_1,
-                                   ESP_HOSTED_VERSION_MINOR_1,
-                                   ESP_HOSTED_VERSION_PATCH_1,
-                                   ESP_HOSTED_VERSION_MAJOR_1,
-                                   ESP_HOSTED_VERSION_MINOR_1,
+        networking_wifi_set_detail("ESP-Hosted host %u.x requires ESP32-C6 firmware %u.x, but the co-processor reports %u.%u.%u. Flash the matching hosted slave build before retrying Wi-Fi.",
+                                   P4_CONFIG_HOSTED_COMPAT_MAJOR,
+                                   P4_CONFIG_HOSTED_COMPAT_MAJOR,
+                                   version.major1,
+                                   version.minor1,
                                    version.patch1);
-        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "hosted version mismatch:" SH_RST " host " SH_VAL "%u.%u.%u" SH_RST ", C6 " SH_VAL "%u.%u.%u" SH_RST "\n",
-                             ESP_HOSTED_VERSION_MAJOR_1,
-                             ESP_HOSTED_VERSION_MINOR_1,
-                             ESP_HOSTED_VERSION_PATCH_1,
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "hosted version mismatch:" SH_RST " host " SH_VAL "%u.x" SH_RST ", C6 " SH_VAL "%u.%u.%u" SH_RST "\n",
+                             P4_CONFIG_HOSTED_COMPAT_MAJOR,
                              version.major1,
                              version.minor1,
                              version.patch1);
-        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
-                             ESP_HOSTED_VERSION_MAJOR_1,
-                             ESP_HOSTED_VERSION_MINOR_1);
-        networking_record_warningf("Hosted version mismatch: host %u.%u.%u vs C6 %u.%u.%u",
-                                   ESP_HOSTED_VERSION_MAJOR_1,
-                                   ESP_HOSTED_VERSION_MINOR_1,
-                                   ESP_HOSTED_VERSION_PATCH_1,
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
+                             P4_CONFIG_HOSTED_COMPAT_MAJOR);
+        networking_record_warningf("Hosted version mismatch: host %u.x vs C6 %u.%u.%u",
+                                   P4_CONFIG_HOSTED_COMPAT_MAJOR,
                                    version.major1,
                                    version.minor1,
                                    version.patch1);
@@ -506,10 +500,8 @@ static esp_err_t networking_wifi_validate_hosted_version(void)
 #endif
     }
 
-    networking_record_infof("Hosted firmware compatible: host %u.%u.%u, C6 %u.%u.%u",
-                            ESP_HOSTED_VERSION_MAJOR_1,
-                            ESP_HOSTED_VERSION_MINOR_1,
-                            ESP_HOSTED_VERSION_PATCH_1,
+    networking_record_infof("Hosted firmware compatible: host %u.x, C6 %u.%u.%u",
+                            P4_CONFIG_HOSTED_COMPAT_MAJOR,
                             version.major1,
                             version.minor1,
                             version.patch1);

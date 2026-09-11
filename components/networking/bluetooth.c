@@ -546,11 +546,13 @@ static esp_err_t bluetooth_ensure_ready(void)
         return error;
     }
 
-    if (s_bluetooth_state.fw_version.major1 != ESP_HOSTED_VERSION_MAJOR_1 ||
-        s_bluetooth_state.fw_version.minor1 != ESP_HOSTED_VERSION_MINOR_1) {
+    /* Major-only gate (see networking.c): esp_hosted 3.x froze its public
+     * compat version macros at 2.12.6, so compare the C6-reported major
+     * against P4_CONFIG_HOSTED_COMPAT_MAJOR. */
+    if (s_bluetooth_state.fw_version.major1 != P4_CONFIG_HOSTED_COMPAT_MAJOR) {
 #if P4_CONFIG_HOSTED_SKIP_VERSION_GATE
-        ESP_LOGW("bluetooth", "Hosted version mismatch (gate skipped): host %u.%u.%u, C6 %u.%u.%u",
-                 ESP_HOSTED_VERSION_MAJOR_1, ESP_HOSTED_VERSION_MINOR_1, ESP_HOSTED_VERSION_PATCH_1,
+        ESP_LOGW("bluetooth", "Hosted version mismatch (gate skipped): host %u.x, C6 %u.%u.%u",
+                 P4_CONFIG_HOSTED_COMPAT_MAJOR,
                  s_bluetooth_state.fw_version.major1, s_bluetooth_state.fw_version.minor1,
                  s_bluetooth_state.fw_version.patch1);
 #else
@@ -600,9 +602,8 @@ static esp_err_t bluetooth_ensure_ready(void)
 static void bluetooth_report_not_available(esp_err_t error)
 {
     if (error == ESP_ERR_INVALID_STATE && s_bluetooth_state.fw_version_valid) {
-        bluetooth_appendf("bluetooth: Bluetooth not available on C6 - check firmware version (host %u.%u.x, C6 %u.%u.%u)\n",
-                          ESP_HOSTED_VERSION_MAJOR_1,
-                          ESP_HOSTED_VERSION_MINOR_1,
+        bluetooth_appendf("bluetooth: Bluetooth not available on C6 - check firmware version (host %u.x, C6 %u.%u.%u)\n",
+                          P4_CONFIG_HOSTED_COMPAT_MAJOR,
                           s_bluetooth_state.fw_version.major1,
                           s_bluetooth_state.fw_version.minor1,
                           s_bluetooth_state.fw_version.patch1);

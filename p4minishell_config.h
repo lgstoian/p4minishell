@@ -387,6 +387,12 @@
  *  production to enforce the version gate. */
 #define P4_CONFIG_HOSTED_SKIP_VERSION_GATE  0
 
+/** ESP-Hosted wire-protocol major the host requires on the C6. esp_hosted 3.x
+ *  froze its public compat version macros (`ESP_HOSTED_VERSION_MAJOR_1` et
+ *  al.) at the 2.12.6 baseline, so the gate must not use them. Minor/patch
+ *  float within a major (RPC-V2 is wire-stable there); only the major gates. */
+#define P4_CONFIG_HOSTED_COMPAT_MAJOR       3
+
 /** Maximum access points surfaced by `wifi scan`. Scan results are sorted by
  *  RSSI (strongest first) and capped at this value, so a busy channel cannot
  *  flood the transcript. */
