@@ -35,6 +35,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "esp_sleep.h"
+#include "gfx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -190,6 +191,20 @@ void shell_command_audio(int argc, char **argv);
  */
 bool shell_command_draw(int argc, char **argv);
 bool shell_command_gfx(int argc, char **argv);
+bool shell_command_plot(int argc, char **argv);
+
+/** Shared `draw` helpers reused by the `plot` coordinate layer
+ * (implemented in tui_commands.c): background-job refusal, DOS color
+ * parse (0..16 passthrough, larger quantized), hold-aware TUI flush. */
+bool draw_require_foreground(const char *verb);
+uint8_t draw_color_arg(const char *s, uint8_t fallback);
+void draw_maybe_flush(void);
+
+/** Shared `gfx` canvas accessors reused by `plot` (gfx_commands.c).
+ * The `gfx` verbs keep owning allocation, display glue, and sprites. */
+uint16_t gfx_canvas_parse_color(const char *s, uint16_t fallback);
+bool gfx_canvas_is_open(void);
+gfx_surface_t *gfx_canvas_surface(void);
 
 /** Frame-coalescing flag for `draw hold on|off` (tui_commands.c). True
  * while per-verb flushes are suppressed; headless-safe unit-test hook. */
@@ -218,11 +233,19 @@ void shell_command_tui(int argc, char **argv);
 void shell_command_font(int argc, char **argv);
 
 /** Best-effort boot restore of the saved font choice (silent without SD).
- * Called by boot_on_sd_first_mount(), where the mount is guaranteed. */
-void font_restore_saved(void);
+ * Called by boot_on_sd_first_mount(), where the mount is guaranteed.
+ * @return true when the restore completed (or there was nothing saved);
+ *         false when the SD was not readable, so the caller retries on the
+ *         next mount instead of skipping the restore for the whole boot. */
+bool font_restore_saved(void);
 
 /** Theme stub (`theme show` prints the active table; switching later). */
 void shell_command_theme(int argc, char **argv);
+
+/** `header` verb: layout mode + visibility + status (header_commands.c). */
+void shell_command_header(int argc, char **argv);
+/** Best-effort boot restore of the saved header mode (SHELL.INI). */
+void header_restore_saved(void);
 
 /** Markdown rendering (`markdown <file> | -e <text> | on | off`). */
 void shell_command_markdown(int argc, char **argv);
@@ -337,6 +360,32 @@ bool asset_parse_line(const char *line, char *path_out, size_t path_size,
  */
 void shell_command_crc32(int argc, char **argv);
 void shell_command_asset(int argc, char **argv);
+
+/**
+ * Shared asset helpers (asset_commands.c), reused by `pkg` so there is exactly
+ * one manifest/CRC implementation:
+ *  - asset_app_ok(): validate an app name ([A-Za-z0-9_-]+).
+ *  - asset_crc_file(): CRC-32 of one resolved file.
+ *  - asset_verify_app(): verify/list `APPS/<app>.ASSETS`; sets + returns
+ *    ERRORLEVEL 0 ok / 1 missing|mismatch|empty / 2 usage|no SD.
+ */
+bool asset_app_ok(const char *app);
+bool asset_crc_file(const char *resolved, uint32_t *crc_out);
+int  asset_verify_app(const char *tag, const char *app, bool list_only);
+
+/**
+ * `pkg` — SD app packages over `APPS/<APP>.APPINFO` (title/description/version)
+ * + `APPS/<APP>.ASSETS` (contents manifest), installed from a `PKGS/<APP>/`
+ * bundle. Verbs: list, info, verify, check, install, remove. Implemented in
+ * pkg_commands.c; ERRORLEVEL 0 ok / 1 some failure / 2 usage.
+ */
+void shell_command_pkg(int argc, char **argv);
+
+/**
+ * Pure helper (pkg_commands.c, unit-tested): true when @p filename is a
+ * `NAME.APPINFO` file, writing the uppercased NAME to @p out.
+ */
+bool pkg_app_name_from_appinfo(const char *filename, char *out, size_t size);
 
 /* ========================================================================
  * DATABASE (`db`)

@@ -547,14 +547,6 @@ static void fb_free_entries(fb_ctx_t *ctx)
     ctx->entry_count = 0;
 }
 
-static int fb_entry_cmp(const void *a, const void *b) __attribute__((unused));
-static int fb_entry_cmp(const void *a, const void *b)
-{
-    const char *sa = *(const char * const *)a;
-    const char *sb = *(const char * const *)b;
-    return strcasecmp(sa, sb);
-}
-
 static void fb_refresh_list(fb_ctx_t *ctx);
 
 static void fb_entry_cb(lv_event_t *e)

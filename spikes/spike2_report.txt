@@ -1,0 +1,12 @@
+=== _spkd.txt raw bytes (first 600) ===
+PULL FAILED
+=== for/f tokens=1,2,3* on detailed capture ===
+b'PS \\> for /f "tokens=1,2,3*" %%a in (_spkd.txt) do echo A=[%%a] B=[%%b] C=[%%c]\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mfor /f: malformed options\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m'
+=== choice with space+tab in /C (timeout path) ===
+b'PS \\> choice /C:ab\\t /N /T:a,2 Pick?\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mPick? a (timed out)\r\n'
+=== choice live spacebar delivery ===
+b'PS \\> choice /C:ab /N Pick?\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mPick? '
+=== cleanup junk ===
+_spk.txt: b''
+_spkd.txt: b''
+_T.txt: b''

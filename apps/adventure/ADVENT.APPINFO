@@ -2,3 +2,4 @@
 ; Copied to sd:/APPS/ADVENT.APPINFO by apps/push_apps.py.
 title=Text Adventure
 description=A tiny pure-batch text adventure: rooms, inventory, score, save/load
+version=1.0

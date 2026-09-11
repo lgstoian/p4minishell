@@ -11,6 +11,7 @@
 #include "gfx.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 void test_gfx_rgb_to_565(void)
@@ -307,4 +308,306 @@ void test_gfx_565_to_888_row(void)
     TEST_ASSERT_EQUAL_UINT8(0, dst[8]);
     gfx_565_to_888_row(NULL, src, 3); /* NULL-safe */
     gfx_565_to_888_row(dst, NULL, 3);
+}
+
+void test_gfx_hline_vline_clip(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 8, 4));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_hline(&s, 2, 1, 4, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 2, 1));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 1));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 1, 1));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 6, 1));
+    /* Left/right clipping. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_hline(&s, -2, 2, 4, 0xFFFF);   /* covers x=0,1 */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 1, 2));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 2, 2));
+    gfx_surface_hline(&s, 6, 3, 5, 0xFFFF);    /* covers x=6,7 */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 6, 3));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 7, 3));
+    /* Vertical span + no-ops. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_vline(&s, 3, 0, 2, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 1));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 3, 2));
+    gfx_surface_hline(&s, 0, 0, 0, 0xFFFF);
+    gfx_surface_hline(&s, 0, 99, 4, 0xFFFF);
+    gfx_surface_vline(&s, 0, 0, -1, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));
+    gfx_surface_hline(NULL, 0, 0, 4, 0xFFFF); /* NULL-safe */
+    gfx_surface_free(&s);
+}
+
+void test_gfx_triangle_fill_outline(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 16, 16));
+    /* Right triangle (0,0)-(15,0)-(0,15): hypotenuse is x+y=15. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_triangle(&s, 0, 0, 15, 0, 0, 15, 0xFFFF, false);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 15, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 15));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 3, 3));   /* interior */
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 12, 12)); /* outside */
+    /* Filled: interior paints, outside stays clear. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_triangle(&s, 0, 0, 15, 0, 0, 15, 0xFFFF, true);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 3));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 12, 12));
+    /* Degenerate (collinear) falls back to the outline. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_triangle(&s, 0, 0, 10, 10, 20, 20, 0xFFFF, true);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 5));
+    gfx_surface_free(&s);
+}
+
+void test_gfx_polygon_fill_outline(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+    /* Concave "U": the notch center (5,6) must stay empty. */
+    const int u[16] = {0, 0, 10, 0, 10, 10, 7, 10, 7, 3, 3, 3, 3, 10, 0, 10};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 12, 12));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_polygon(&s, u, 8, 0xFFFF, true);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 1, 1));  /* top bar */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 1));  /* top bar */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 1, 6));  /* left arm */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 8, 6));  /* right arm */
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 5, 6));  /* notch */
+    /* Outline mode: interior empty, edge vertex set. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_polygon(&s, u, 8, 0xFFFF, false);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 1, 1));
+    /* NULL-safe. */
+    gfx_surface_polygon(&s, NULL, 8, 0xFFFF, true);
+    gfx_surface_polygon(NULL, u, 8, 0xFFFF, true);
+    gfx_surface_free(&s);
+}
+
+void test_gfx_ellipse(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 21, 21));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_ellipse(&s, 10, 10, 8, 4, 0xFFFF, true);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 10, 10)); /* center */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 18, 10)); /* +rx */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 10, 14)); /* +ry */
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 18, 14)); /* corner */
+    /* Outline: center empty, cardinal set. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_ellipse(&s, 10, 10, 8, 4, 0xFFFF, false);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 10, 10));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 18, 10));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 10, 14));
+    /* Degenerate radii. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_ellipse(&s, 5, 5, 0, 3, 0xFFFF, false);  /* vertical line */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 8));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_ellipse(&s, 5, 5, 3, 0, 0xFFFF, false);  /* horizontal line */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 2, 5));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 8, 5));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_ellipse(&s, 5, 5, 0, 0, 0xFFFF, false);  /* single pixel */
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 5));
+    gfx_surface_free(&s);
+}
+
+void test_gfx_flood_fill(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+    int n;
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 8, 8));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_rect(&s, 1, 1, 6, 6, 0xF800, false);  /* hollow box */
+    /* Interior is 4x4 = 16 pixels. */
+    n = gfx_surface_flood_fill(&s, 3, 3, 0xFFFF);
+    TEST_ASSERT_EQUAL_INT(16, n);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 2, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 5));
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&s, 1, 1));  /* border held */
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));  /* outside held */
+    /* Outer region is 64 - 36 = 28 pixels; the border keeps it out. */
+    n = gfx_surface_flood_fill(&s, 0, 0, 0x07E0);
+    TEST_ASSERT_EQUAL_INT(28, n);
+    TEST_ASSERT_EQUAL_UINT16(0x07E0, gfx_surface_get(&s, 7, 7));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 3));  /* interior held */
+    /* No-op on the target color and out-of-bounds / NULL. */
+    TEST_ASSERT_EQUAL_INT(0, gfx_surface_flood_fill(&s, 0, 0, 0x07E0));
+    TEST_ASSERT_EQUAL_INT(0, gfx_surface_flood_fill(&s, -1, 0, 0xFFFF));
+    TEST_ASSERT_EQUAL_INT(0, gfx_surface_flood_fill(NULL, 0, 0, 0xFFFF));
+    gfx_surface_free(&s);
+}
+
+void test_gfx_font_table(void)
+{
+    /* Glyph index = ch - 0x20; space is blank, 'A' matches the generator. */
+    const uint8_t *space = gfx_font8x8[' ' - GFX_FONT_FIRST];
+    const uint8_t *A = gfx_font8x8['A' - GFX_FONT_FIRST];
+
+    TEST_ASSERT_EQUAL_INT(8, GFX_FONT_W);
+    TEST_ASSERT_EQUAL_INT(8, GFX_FONT_H);
+    TEST_ASSERT_EQUAL_INT(0x5F, GFX_FONT_GLYPHS);
+    for (int i = 0; i < GFX_FONT_H; i++) {
+        TEST_ASSERT_EQUAL_UINT8(0, space[i]);
+    }
+    TEST_ASSERT_EQUAL_UINT8(0x18, A[0]);
+    TEST_ASSERT_EQUAL_UINT8(0x3C, A[1]);
+    TEST_ASSERT_EQUAL_UINT8(0x7E, A[4]);
+}
+
+void test_gfx_text_render(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 32, 16));
+    /* Width helper. */
+    TEST_ASSERT_EQUAL_INT(16, gfx_text_width("AB", 1));
+    TEST_ASSERT_EQUAL_INT(32, gfx_text_width("AB", 2));
+    TEST_ASSERT_EQUAL_INT(0, gfx_text_width("AB", 0) - 16); /* scale<1 -> 1 */
+    TEST_ASSERT_EQUAL_INT(0, gfx_text_width(NULL, 1));
+    /* Scale 1: 'A' row 0 sets glyph columns 3..4 -> x=3,4. */
+    gfx_surface_clear(&s, 0x0000);
+    TEST_ASSERT_EQUAL_INT(8, gfx_surface_text(&s, 0, 0, "A", 0xFFFF, 0, false, 1));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 4, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));
+    /* Scale 2: each glyph pixel becomes a 2x2 block. */
+    gfx_surface_clear(&s, 0x0000);
+    TEST_ASSERT_EQUAL_INT(16, gfx_surface_text(&s, 0, 0, "A", 0xFFFF, 0, false, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 6, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 7, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 8, 1));
+    /* Background fill covers the glyph cell; transparent leaves it. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_text(&s, 0, 0, " ", 0xFFFF, 0x001F, true, 1);
+    TEST_ASSERT_EQUAL_UINT16(0x001F, gfx_surface_get(&s, 0, 0));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_text(&s, 0, 0, " ", 0xFFFF, 0x001F, false, 1);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));
+    /* Newline returns to the start column and advances a row. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_text(&s, 2, 2, "A\nA", 0xFFFF, 0, false, 1);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 5, 10));
+    gfx_surface_text(NULL, 0, 0, "A", 0xFFFF, 0, false, 1); /* NULL-safe */
+    gfx_surface_text(&s, 0, 0, NULL, 0xFFFF, 0, false, 1);
+    gfx_surface_free(&s);
+}
+
+void test_gfx_view_map(void)
+{
+    gfx_view_t v;
+    int sx;
+    int sy;
+
+    /* World -10..10 over a 0-based 100x100 raster: edges land on borders. */
+    gfx_view_set(&v, -10.0, 10.0, -10.0, 10.0, 0, 0, 100, 100);
+    TEST_ASSERT_TRUE(gfx_view_map(&v, 0.0, 0.0, &sx, &sy));
+    TEST_ASSERT_EQUAL_INT(50, sx);
+    TEST_ASSERT_EQUAL_INT(49, sy);
+    TEST_ASSERT_TRUE(gfx_view_map(&v, -10.0, 10.0, &sx, &sy));
+    TEST_ASSERT_EQUAL_INT(0, sx);
+    TEST_ASSERT_EQUAL_INT(0, sy);
+    TEST_ASSERT_TRUE(gfx_view_map(&v, 10.0, -10.0, &sx, &sy));
+    TEST_ASSERT_EQUAL_INT(99, sx);
+    TEST_ASSERT_EQUAL_INT(99, sy);
+    /* Just outside rounds outside. */
+    TEST_ASSERT_FALSE(gfx_view_map(&v, 11.0, 0.0, &sx, &sy));
+    TEST_ASSERT_FALSE(gfx_view_map(&v, 0.0, -11.0, &sx, &sy));
+    /* TUI 1-based rect: (0,0) lands mid-grid and in range. */
+    gfx_view_set(&v, -10.0, 10.0, -10.0, 10.0, 1, 1, 80, 25);
+    TEST_ASSERT_TRUE(gfx_view_map(&v, 0.0, 0.0, &sx, &sy));
+    TEST_ASSERT_EQUAL_INT(41, sx);
+    TEST_ASSERT_EQUAL_INT(13, sy);
+    /* Degenerate windows, non-finite input, NULLs. */
+    gfx_view_set(&v, 5.0, 5.0, -10.0, 10.0, 0, 0, 100, 100);
+    TEST_ASSERT_FALSE(gfx_view_map(&v, 0.0, 0.0, &sx, &sy));
+    gfx_view_set(&v, -10.0, 10.0, -10.0, 10.0, 0, 0, 1, 100);
+    TEST_ASSERT_FALSE(gfx_view_map(&v, 0.0, 0.0, &sx, &sy));
+    gfx_view_set(&v, -10.0, 10.0, -10.0, 10.0, 0, 0, 100, 100);
+    TEST_ASSERT_FALSE(gfx_view_map(&v, strtod("nan", NULL), 0.0, &sx, &sy));
+    TEST_ASSERT_FALSE(gfx_view_map(NULL, 0.0, 0.0, &sx, &sy));
+    TEST_ASSERT_FALSE(gfx_view_map(&v, 0.0, 0.0, NULL, &sy));
+    gfx_view_set(NULL, 0.0, 1.0, 0.0, 1.0, 0, 0, 10, 10); /* NULL-safe */
+}
+
+void test_gfx_view_clip_line(void)
+{
+    gfx_view_t v;
+    int ax;
+    int ay;
+    int bx;
+    int by;
+
+    gfx_view_set(&v, -10.0, 10.0, -10.0, 10.0, 0, 0, 100, 100);
+    /* Fully inside: exact clipped endpoints. */
+    TEST_ASSERT_TRUE(gfx_view_clip_line(&v, -5.0, -5.0, 5.0, 5.0, &ax, &ay, &bx, &by));
+    TEST_ASSERT_EQUAL_INT(25, ax);
+    TEST_ASSERT_EQUAL_INT(74, ay);
+    TEST_ASSERT_EQUAL_INT(74, bx);
+    TEST_ASSERT_EQUAL_INT(25, by);
+    /* Crossing the left edge clips to column 0. */
+    TEST_ASSERT_TRUE(gfx_view_clip_line(&v, -20.0, 0.0, 0.0, 0.0, &ax, &ay, &bx, &by));
+    TEST_ASSERT_EQUAL_INT(0, ax);
+    TEST_ASSERT_EQUAL_INT(49, ay);
+    TEST_ASSERT_EQUAL_INT(50, bx);
+    TEST_ASSERT_EQUAL_INT(49, by);
+    /* Vertical span stays in column 50, rows 0..99. */
+    TEST_ASSERT_TRUE(gfx_view_clip_line(&v, 0.0, -20.0, 0.0, 20.0, &ax, &ay, &bx, &by));
+    TEST_ASSERT_EQUAL_INT(50, ax);
+    TEST_ASSERT_EQUAL_INT(99, ay);
+    TEST_ASSERT_EQUAL_INT(50, bx);
+    TEST_ASSERT_EQUAL_INT(0, by);
+    /* Fully outside, degenerate, non-finite, NULL. */
+    TEST_ASSERT_FALSE(gfx_view_clip_line(&v, -20.0, 0.0, -15.0, 0.0, &ax, &ay, &bx, &by));
+    gfx_view_set(&v, 1.0, 1.0, 0.0, 5.0, 0, 0, 100, 100);
+    TEST_ASSERT_FALSE(gfx_view_clip_line(&v, 0.0, 0.0, 2.0, 2.0, &ax, &ay, &bx, &by));
+    gfx_view_set(&v, -10.0, 10.0, -10.0, 10.0, 0, 0, 100, 100);
+    TEST_ASSERT_FALSE(gfx_view_clip_line(&v, strtod("inf", NULL), 0.0, 1.0, 1.0, &ax, &ay, &bx, &by));
+    TEST_ASSERT_FALSE(gfx_view_clip_line(NULL, 0.0, 0.0, 1.0, 1.0, &ax, &ay, &bx, &by));
+    TEST_ASSERT_FALSE(gfx_view_clip_line(&v, 0.0, 0.0, 1.0, 1.0, NULL, &ay, &bx, &by));
+}
+
+void test_gfx_view_line_draws(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+    gfx_view_t v;
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 20, 20));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_view_set(&v, -10.0, 10.0, -10.0, 10.0, 0, 0, 20, 20);
+    TEST_ASSERT_TRUE(gfx_view_line(&v, &s, -10.0, 0.0, 10.0, 0.0, 0xFFFF));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 9));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 19, 9));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));
+    /* A far-outside segment never yields giant coordinates. */
+    TEST_ASSERT_FALSE(gfx_view_line(&v, &s, -1e6, -1e6, -2e6, 5.0, 0xFFFF));
+    TEST_ASSERT_FALSE(gfx_view_line(&v, NULL, 0.0, 0.0, 1.0, 1.0, 0xFFFF));
+    gfx_surface_free(&s);
+}
+
+void test_gfx_view_nice_step(void)
+{
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, gfx_view_nice_step(10.0, 8));
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 10.0, gfx_view_nice_step(95.0, 8));
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.5, gfx_view_nice_step(3.0, 8));
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.1, gfx_view_nice_step(1.0, 8));
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, gfx_view_nice_step(0.0, 8));
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, gfx_view_nice_step(10.0, 0));
 }

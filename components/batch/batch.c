@@ -27,6 +27,7 @@
 #include "esp_random.h"
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <ctype.h>
@@ -96,6 +97,12 @@ typedef struct shell_batch_frame {
     shell_batch_label_t labels[SHELL_BATCH_LABEL_MAX];
     int label_count;
     FILE *batch_file;
+    /** Whole-file RAM image when the file fit P4_CONFIG_BATCH_FILE_MAX_BYTES
+     *  (NULL = stream from batch_file). Executing from RAM keeps `goto`-heavy
+     *  loops off the SD card entirely. */
+    char *ram;
+    size_t ram_len;
+    size_t ram_pos;
     /** setlocal scopes opened by this frame, unwound when it returns. */
     int setlocal_depth;
     /** Resume position after a `call :label`, valid while in_label_call. */
@@ -249,6 +256,11 @@ static void shell_extract_label_name(const char *line, char *name, size_t name_s
 static long shell_find_label_pos(shell_batch_frame_t *frame, const char *label_name);
 static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file);
 static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_line);
+static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *command_line);
+static char *shell_frame_fgets(shell_batch_frame_t *frame, char *buf, int size);
+static long shell_frame_tell(shell_batch_frame_t *frame);
+static void shell_frame_seek(shell_batch_frame_t *frame, long pos);
+static void shell_frame_load(shell_batch_frame_t *frame, FILE *file);
 static void batch_run_nested(char *command);
 static esp_err_t shell_batch_run_internal(const char *path, const char *start_label,
                                           int argc, char **argv);
@@ -1844,7 +1856,7 @@ void shell_command_call(int argc, char **argv)
             shell_transcript_appendf("call: label not found: %s\n", label);
             return;
         }
-        s_active_batch_frame->call_resume_pos = ftell(s_active_batch_frame->batch_file);
+        s_active_batch_frame->call_resume_pos = shell_frame_tell(s_active_batch_frame);
         s_active_batch_frame->in_label_call = true;
         snprintf(s_goto_label, sizeof(s_goto_label), "%s", label);
         s_goto_pending = true;
@@ -3435,6 +3447,9 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     frame->parent = s_active_batch_frame;
     frame->label_count = 0;
     frame->batch_file = NULL;
+    frame->ram = NULL;
+    frame->ram_len = 0;
+    frame->ram_pos = 0;
     frame->setlocal_depth = 0;
 
     error = shell_sd_begin(&session);
@@ -3454,6 +3469,16 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     }
 
     frame->batch_file = file;
+
+    /* Load the whole file into RAM when it fits, so the line loop and every
+     * `goto`/`call` seek run from memory rather than the SD card. Behavior is
+     * identical (the reader mirrors fgets); larger files stream as before. */
+    shell_frame_load(frame, file);
+    if (frame->ram != NULL) {
+        fclose(file);
+        file = NULL;
+        frame->batch_file = NULL;
+    }
 
     /* args[0] already holds the script path; the caller's arguments were
      * copied into args[1..] above, so no further copying is needed here. */
@@ -3477,13 +3502,14 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
 
         if (label_pos < 0) {
             shell_transcript_appendf("call: library routine not found: %s\n", start_label);
-            fclose(file);
+            if (file != NULL) fclose(file);
+            if (frame->ram != NULL) free(frame->ram);
             shell_sd_end(&session, "call");
             free(frame);
             free(line);
             return ESP_ERR_NOT_FOUND;
         }
-        fseek(file, label_pos, SEEK_SET);
+        shell_frame_seek(frame, label_pos);
         (void)shell_setlocal_push();
     }
 
@@ -3503,12 +3529,12 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             break;
         }
 
-        if (fgets(line, SHELL_BATCH_LINE_BYTES, file) == NULL) {
+        if (shell_frame_fgets(frame, line, SHELL_BATCH_LINE_BYTES) == NULL) {
             /* End of file. Inside a called `:label` block this returns to the
              * caller; otherwise the batch frame ends here. */
             if (frame->in_label_call) {
                 frame->in_label_call = false;
-                fseek(file, frame->call_resume_pos, SEEK_SET);
+                shell_frame_seek(frame, frame->call_resume_pos);
                 continue;
             }
             break;
@@ -3563,7 +3589,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
                 break;
             }
 
-            if (fgets(next_start, (int)available + 1, file) == NULL) {
+            if (shell_frame_fgets(frame, next_start, (int)available + 1) == NULL) {
                 /* A trailing caret on the final line has nothing to join. */
                 break;
             }
@@ -3617,7 +3643,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             s_stop_mode = BATCH_STOP_NONE;
             s_goto_pending = false;
             s_goto_eof = false;
-            fseek(file, frame->call_resume_pos, SEEK_SET);
+            shell_frame_seek(frame, frame->call_resume_pos);
             frame->in_label_call = false;
             continue;
         }
@@ -3632,7 +3658,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             s_goto_pending = false;
             if (frame->in_label_call) {
                 frame->in_label_call = false;
-                fseek(file, frame->call_resume_pos, SEEK_SET);
+                shell_frame_seek(frame, frame->call_resume_pos);
                 continue;
             }
             break;
@@ -3642,7 +3668,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         if (s_goto_pending) {
             long label_pos = shell_find_label_pos(frame, s_goto_label);
             if (label_pos >= 0) {
-                fseek(file, label_pos, SEEK_SET);
+                shell_frame_seek(frame, label_pos);
                 s_goto_pending = false;
                 s_goto_label[0] = '\0';
                 /* Continue from the label position - the label line will be skipped */
@@ -3689,7 +3715,8 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         frame->app_mode = false;
     }
 
-    fclose(file);
+    if (file != NULL) fclose(file);
+    if (frame->ram != NULL) free(frame->ram);
     shell_sd_end(&session, "call");
     free(frame);
     free(line);
@@ -3735,12 +3762,92 @@ static long shell_find_label_pos(shell_batch_frame_t *frame, const char *label_n
     return -1;
 }
 
+/* ---- Frame input: RAM image with a streaming fallback ----
+ * A batch file at or below P4_CONFIG_BATCH_FILE_MAX_BYTES is read once into a
+ * PSRAM buffer (shell_frame_load), so the line loop and every `goto`/`call`
+ * seek run from memory instead of hitting the SD card mid-loop. The reader
+ * mirrors fgets() byte-for-byte (stop after size-1 bytes, a newline, or EOF)
+ * and tell/seek are byte offsets, so behavior matches the streaming path. */
+static char *shell_frame_fgets(shell_batch_frame_t *frame, char *buf, int size)
+{
+    size_t i = 0;
+
+    if (frame == NULL || buf == NULL || size <= 0) return NULL;
+    if (frame->ram != NULL) {
+        while (i < (size_t)(size - 1) && frame->ram_pos < frame->ram_len) {
+            char c = frame->ram[frame->ram_pos++];
+            buf[i++] = c;
+            if (c == '\n') break;
+        }
+        buf[i] = '\0';
+        return (i > 0) ? buf : NULL;
+    }
+    return (frame->batch_file != NULL) ? fgets(buf, size, frame->batch_file) : NULL;
+}
+
+static long shell_frame_tell(shell_batch_frame_t *frame)
+{
+    if (frame == NULL) return 0;
+    if (frame->ram != NULL) return (long)frame->ram_pos;
+    return frame->batch_file != NULL ? ftell(frame->batch_file) : 0;
+}
+
+static void shell_frame_seek(shell_batch_frame_t *frame, long pos)
+{
+    if (frame == NULL) return;
+    if (frame->ram != NULL) {
+        if (pos < 0) pos = 0;
+        if ((size_t)pos > frame->ram_len) pos = (long)frame->ram_len;
+        frame->ram_pos = (size_t)pos;
+        return;
+    }
+    if (frame->batch_file != NULL) {
+        fseek(frame->batch_file, pos, SEEK_SET);
+    }
+}
+
+/** Read the whole file into frame->ram when it fits the cap; otherwise leave
+ *  frame->ram NULL so the caller streams from the FILE. */
+static void shell_frame_load(shell_batch_frame_t *frame, FILE *file)
+{
+    long size;
+
+    if (frame == NULL) return;
+    frame->ram = NULL;
+    frame->ram_len = 0;
+    frame->ram_pos = 0;
+    if (file == NULL) return;
+    if (fseek(file, 0, SEEK_END) != 0) return;
+    size = ftell(file);
+    if (size <= 0 || (unsigned long)size > (unsigned long)P4_CONFIG_BATCH_FILE_MAX_BYTES) {
+        fseek(file, 0, SEEK_SET);
+        return;
+    }
+    frame->ram = heap_caps_malloc((size_t)size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (frame->ram == NULL) {
+        frame->ram = malloc((size_t)size + 1);
+    }
+    if (frame->ram == NULL) {
+        fseek(file, 0, SEEK_SET);
+        return;
+    }
+    fseek(file, 0, SEEK_SET);
+    if (fread(frame->ram, 1, (size_t)size, file) != (size_t)size) {
+        free(frame->ram);
+        frame->ram = NULL;
+        fseek(file, 0, SEEK_SET);
+        return;
+    }
+    frame->ram[size] = '\0';
+    frame->ram_len = (size_t)size;
+    frame->ram_pos = 0;
+}
+
 /* Helper: scan batch file for labels and build label table */
 static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
 {
-    if (frame == NULL || file == NULL) return;
-
-    long current_pos = ftell(file);
+    if (frame == NULL) return;
+    long current_pos = shell_frame_tell(frame);
     long line_pos = 0;
     bool previous_continues = false;
     /* Set on the first label past the table so the overflow warns exactly
@@ -3756,14 +3863,14 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
         return;
     }
 
-    rewind(file);
+    shell_frame_seek(frame, 0);
     frame->label_count = 0;
 
     /* Tracks whether the previous physical line ended with an unescaped
      * continuation caret. A line that is the tail of a continuation is part
      * of the command above it, so a ':' at its start is data, not a label. */
-    while (fgets(line, SHELL_BATCH_LINE_BYTES, file) != NULL) {
-        line_pos = ftell(file);
+    while (shell_frame_fgets(frame, line, SHELL_BATCH_LINE_BYTES) != NULL) {
+        line_pos = shell_frame_tell(frame);
         {
             /* Raw byte count read by fgets (including the trailing newline),
              * captured before shell_trim() shortens the buffer so the label
@@ -3813,7 +3920,7 @@ static void shell_scan_batch_labels(shell_batch_frame_t *frame, FILE *file)
         }
     }
 
-    fseek(file, current_pos, SEEK_SET);
+    shell_frame_seek(frame, current_pos);
     free(line);
 }
 
@@ -4486,6 +4593,19 @@ static void shell_execute_for_f_loop(const char *set_str, const char *do_command
 
 /* Helper: execute a for loop command */
 static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_line)
+{
+    /* Defer transcript label repaints across the WHOLE loop. Each iteration
+     * re-enters the command pipeline, which runs its own defer window, so
+     * without this the O(buffer) LVGL span rebuild happened once per
+     * iteration. One rebuild per loop instead (nested windows are safe:
+     * shell_transcript_defer_begin/end are depth-counted and only the
+     * outermost end flushes). */
+    shell_transcript_defer_begin();
+    shell_execute_for_loop_body(frame, command_line);
+    shell_transcript_defer_end();
+}
+
+static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *command_line)
 {
     char *set_str = NULL;
     char *for_ptr;

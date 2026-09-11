@@ -1,0 +1,16 @@
+=== 1. echo caret-pipe ===
+b'PS \\> echo a^|b^|c\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0ma|b|c\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m'
+=== 2. for-body join ===
+b'PS \\> for /f %%a in (_j.txt) do echo %%a^|%%a >> _k.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mone\r\n\x1b[31mUnknown command:\x1b[0m one\r\nW (29738) shell: Unknown command: one\r\ntwo\r\n\x1b[31mUnknown command:\x1b[0m two\r\nW (29886) shell: Unknown command: two\r\n'
+b'PS \\> type _k.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mUnknown command: one\r\nUnknown command: two\r\n'
+=== 3. findstr /v ===
+b'PS \\> findstr /v file _k.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mUnknown command: one\r\nUnknown command: two\r\n'
+=== 4. dir | findstr > file ===
+b'BS\r\nALARMS\r\nSYS_SNAP.TXT\r\np3shot.bmp\r\nWIFI.KNOWN\r\nt_edit.txt\r\nFONTS\r\nBOUNCE.BMP\r\n_z.txt\r\n` overwrites each listing (see bugs.md O6)\r\n_mood.txt\r\n` overwrites each round, and a hot-loop delete risks the\r\n_j.txt\r\n_k.txt\r\nTUI x=3+gx (3..42), y=4+gy (4..21)\r\nSHIP.BMP\r\nBALL.BMP\r\nesp32c6_hosted_slave.bin\r\n'
+b'[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mCONFIG.SYS\r\nREADME.TXT\r\nAPPS\r\nNOTES\r\nreg_moved.txt\r\nTDIR\r\nDBS\r\nALARMS\r\nSYS_SNAP.TXT\r\np3shot.bmp\r\nWIFI.KNOWN\r\nt_edit.txt\r\nFONTS\r\nBOUNCE.BMP\r\n_z.txt\r\n` overwrites each listing (see bugs.md O6)\r\n_mood.txt\r\n` overwrites each round, and a hot-loop delete risks the\r\n_j.txt\r\n_k.txt\r\nTUI x=3+gx (3..42), y=4+gy (4..21)\r\nSHIP.BMP\r\nBALL.BMP\r\nesp32c6_hosted_slave.bin\r\n'
+=== 5. findstr help ===
+b'PS \\> findstr /?\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[31mfindstr: unknown option /?\x1b[0m\r\n\x1b[33mUsage: findstr [/R] [/C:string] [/I] [/N] [/V] [/X] [/E] [/B] [/L] [/S] [/M] [/F:file] [/G:file] <search> [file...]\x1b[0m\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m'
+=== cleanup ===
+b'_j.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[32mdel: deleted /sdcard/_j.txt permanently\x1b[0m\r\n'
+b'_k.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[32mdel: deleted /sdcard/_k.txt permanently\x1b[0m\r\n'
+b'PS \\> del /p _nb.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m'

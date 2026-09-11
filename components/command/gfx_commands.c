@@ -15,6 +15,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 
 #include "shell.h"
@@ -87,11 +88,29 @@ static bool gfx_require_foreground(void)
     return true;
 }
 
+/** Shared canvas accessors for the `plot` coordinate-layer verbs
+ * (plot_commands.c). Thin wrappers over this file's static canvas state;
+ * the `gfx` verbs keep owning allocation, display glue, and sprites. */
+uint16_t gfx_canvas_parse_color(const char *s, uint16_t fallback)
+{
+    return gfx_color_arg(s, fallback);
+}
+
+bool gfx_canvas_is_open(void)
+{
+    return s_gfx.px != NULL && s_gfx_canvas != NULL;
+}
+
+gfx_surface_t *gfx_canvas_surface(void)
+{
+    return gfx_canvas_is_open() ? &s_gfx : NULL;
+}
+
 bool shell_command_gfx(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "gfx: missing subcommand\n" SH_RST);
-        shell_transcript_appendf_ansi("Usage: gfx init|close|status|clear|pixel|line|rect|circle|show|load|blit|free|slots|save <args>\n");
+        shell_transcript_appendf_ansi("Usage: gfx init|close|status|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|load|blit|free|slots|save <args>\n");
         batch_set_errorlevel(2);
         return false;
     }
@@ -281,6 +300,166 @@ bool shell_command_gfx(int argc, char **argv)
         fill = (argc > 6) && shell_text_equals_ignore_case(argv[6], "fill");
         gfx_surface_circle(&s_gfx, atoi(argv[2]), atoi(argv[3]), atoi(argv[4]),
                            gfx_color_arg(argv[5], 0xFFFF), fill);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "hline")) {
+        /* gfx hline <x> <y> <w> <color> */
+        if (argc != 6) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx hline: usage: gfx hline <x> <y> <w> <color>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        gfx_surface_hline(&s_gfx, atoi(argv[2]), atoi(argv[3]), atoi(argv[4]),
+                          gfx_color_arg(argv[5], 0xFFFF));
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "vline")) {
+        /* gfx vline <x> <y> <h> <color> */
+        if (argc != 6) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx vline: usage: gfx vline <x> <y> <h> <color>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        gfx_surface_vline(&s_gfx, atoi(argv[2]), atoi(argv[3]), atoi(argv[4]),
+                          gfx_color_arg(argv[5], 0xFFFF));
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "triangle")) {
+        /* gfx triangle <x1> <y1> <x2> <y2> <x3> <y3> <color> [fill] */
+        bool fill;
+
+        if (argc != 9 && argc != 10) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx triangle: usage: gfx triangle <x1> <y1> <x2> <y2> <x3> <y3> <color> [fill]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        fill = (argc > 9) && shell_text_equals_ignore_case(argv[9], "fill");
+        gfx_surface_triangle(&s_gfx, atoi(argv[2]), atoi(argv[3]),
+                             atoi(argv[4]), atoi(argv[5]),
+                             atoi(argv[6]), atoi(argv[7]),
+                             gfx_color_arg(argv[8], 0xFFFF), fill);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "ellipse")) {
+        /* gfx ellipse <cx> <cy> <rx> <ry> <color> [fill] */
+        bool fill;
+
+        if (argc != 7 && argc != 8) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx ellipse: usage: gfx ellipse <cx> <cy> <rx> <ry> <color> [fill]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        fill = (argc > 7) && shell_text_equals_ignore_case(argv[7], "fill");
+        gfx_surface_ellipse(&s_gfx, atoi(argv[2]), atoi(argv[3]),
+                            atoi(argv[4]), atoi(argv[5]),
+                            gfx_color_arg(argv[6], 0xFFFF), fill);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "polygon")) {
+        /* gfx polygon <color> <fill|line> <x1> <y1> <x2> <y2> [<x3> <y3> ...] */
+        int pts[GFX_POLY_MAX_PTS * 2];
+        int npts;
+        int k;
+        bool fill;
+
+        if (argc < 10 || ((argc - 4) % 2) != 0) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx polygon: usage: gfx polygon <color> <fill|line> <x1> <y1> <x2> <y2> <x3> <y3> [more x y ...]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        npts = (argc - 4) / 2;
+        if (npts > GFX_POLY_MAX_PTS) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx polygon: too many vertices (%d, max %d)\n" SH_RST,
+                                          npts, GFX_POLY_MAX_PTS);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        for (k = 0; k < npts; k++) {
+            pts[k * 2] = atoi(argv[4 + k * 2]);
+            pts[k * 2 + 1] = atoi(argv[5 + k * 2]);
+        }
+        fill = shell_text_equals_ignore_case(argv[3], "fill");
+        gfx_surface_polygon(&s_gfx, pts, npts, gfx_color_arg(argv[2], 0xFFFF), fill);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "fill")) {
+        /* gfx fill <x> <y> <color>: 4-way flood fill of the seed's color. */
+        int changed;
+
+        if (argc != 5) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx fill: usage: gfx fill <x> <y> <color>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        changed = gfx_surface_flood_fill(&s_gfx, atoi(argv[2]), atoi(argv[3]),
+                                         gfx_color_arg(argv[4], 0xFFFF));
+        shell_transcript_appendf("gfx: filled %d pixel(s)\n", changed);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "text")) {
+        /* gfx text [/bg:<color>] [/scale:<n>] <x> <y> <color> <text...> */
+        int i = 2;
+        int scale = 1;
+        bool use_bg = false;
+        uint16_t bg = 0;
+        char joined[256];
+        size_t used = 0;
+
+        while (i < argc && argv[i][0] == '/') {
+            if (strncasecmp(argv[i], "/scale:", 7) == 0) {
+                scale = atoi(argv[i] + 7);
+                if (scale < 1) scale = 1;
+                if (scale > 16) scale = 16;
+            } else if (strncasecmp(argv[i], "/bg:", 4) == 0) {
+                bg = gfx_color_arg(argv[i] + 4, 0x0000);
+                use_bg = true;
+            } else {
+                shell_transcript_appendf_ansi(SH_ERR "gfx text: unknown option %s\n" SH_RST, argv[i]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            i++;
+        }
+        if (argc - i < 4) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx text: usage: gfx text [/bg:<color>] [/scale:<n>] <x> <y> <color> <text...>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        joined[0] = '\0';
+        {
+            int t;
+
+            for (t = i + 3; t < argc; t++) {
+                size_t len = strlen(argv[t]);
+
+                if (used != 0 && used < sizeof(joined) - 1) {
+                    joined[used++] = ' ';
+                }
+                if (used + len >= sizeof(joined)) {
+                    len = sizeof(joined) - 1 - used;
+                }
+                memcpy(joined + used, argv[t], len);
+                used += len;
+                joined[used] = '\0';
+            }
+        }
+        gfx_surface_text(&s_gfx, atoi(argv[i]), atoi(argv[i + 1]),
+                         joined, gfx_color_arg(argv[i + 2], 0xFFFF),
+                         bg, use_bg, scale);
         batch_set_errorlevel(0);
         return true;
     }

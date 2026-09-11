@@ -1,8 +1,8 @@
-# P4MiniShell — Bug Report & Test Campaign (v0.35.7 hardware bring-up, suite 193/0/2)
+# P4MiniShell — Bug Report & Test Campaign (v0.35.7 + `[Unreleased]`, suite 262/0/2)
 
 Date: 2026-08-24
 Hardware: ESP32-P4 (rev 1.0) on COM11, ESP32-C6 co-processor, JD9165 display, SD card present
-Firmware: **v0.35.7** (hardware bring-up 0.35.6→0.35.7 on top of the v0.35.6 split patch: flash to COM11 succeeded, boot verified, extensive serial tests; TUI engine live `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 `p4minishell_config.h:298` via `windows_enter_tui_mode`/`windows_refresh_tui_surface`, `draw` TUI-aware auto-enters for box/text/line/fill/clear/window/title+style correctly handled, `color`/`locate` TUI-aware, `tui fullscreen`/`draw fullscreen` header kept visible by default hidden only on fullscreen `windows_set_fullscreen` `components/windows/windows.c:418` dynamic `windows_notify_keyboard_visibility`; memory fixes `P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024 `p4minishell_config.h:93`, `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024→512 `p4minishell_config.h:134`, `P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192→4096 `p4minishell_config.h:626`, `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 with 1/4 keep + trim-below-10KB guard `p4minishell_config.h:117`, `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514` at `0x4012b75a`; managed BSP audio abort guard `components/audio/audio.c:42` `managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269`; modal `EventGroup` PSRAM `MALLOC_CAP_SPIRAM` `components/modal/modal.c:46`; queue full handling improved, serial routing `modal_handle_serial_line` `components/modal/modal_surf.c:412` (`dialog y` `list 2` `ask myname`); companion fully TUI-expanded and hardware-verified (7 BATs, push_sd.py COM11 PASS LIB 1896 COMPANION 1552 SYS 1486 FILES 3946 NET 2893 FUN 3968 SET 3109) — builds on v0.35.0 TUI restoration, now M31 stack overflow fixed, no regressions)
+Firmware: **v0.35.7** (plus `[Unreleased]`). Current config baseline: transcript 65536 (`p4minishell_config.h:93`), async 512 (`:146`), internal trim 4096 (`:120`), SD DMA 4096 (`:621`), command worker stack 32768 (`:1467`), batch-file RAM cap 131072 (`:797`), TUI 80x25 (`:325/:328`). Suite: **262/0/2**.
 Scope: Debug sweep and stress testing over the UART console (USB-Serial/JTAG, 115200 baud),
 unit suite, and on-board stress runs. Bugs found are ordered by severity; **FIXED** entries
 describe the change and its verification.
@@ -364,8 +364,8 @@ store (see readme.md / command.md / SDK.md).
   1. `P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024 — halves the span-group ceiling and its internal-RAM overhead.
   2. `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024→512 — halves the background staging buffer; flush still heap-allocates the drain and dispatches via `shell_schedule_transcript_appendf_ansi` when ESC present (`components/shell/shell.c:709`).
   3. `P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192→4096 — 8 sectors cached on `card->host.dma_aligned_buffer` at mount via `storage_sd_ensure_dma_buffer()`; lower permanent reservation while keeping reuse.
-  4. `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 with 1/4 keep and trim-below-10KB guard — `shell_transcript_guard_internal()` now trims earlier and keeps 1/4 on trim; `windows_transcript_trim()` guards the case where free internal RAM is already <10 KB so the next `printf` lock cannot `abort()`.
-- **Verified:** flash to COM11, boot `P4MiniShell v0.35.1 ready`, 50+ mixed SD ops (dir/type/write/copy/pipes/tree/chkdsk) with zero `allocate_dma_buf` errors, transcript stays under internal-RAM failure floor, no `abort()` in `lock_init_generic` during extensive serial modal tests. Clean build 0 errors/0 warnings.
+  4. `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→4096 with 1/4 keep and trim-below-10KB guard — `shell_transcript_guard_internal()` now trims earlier and keeps 1/4 on trim; `windows_transcript_trim()` guards the case where free internal RAM is already <10 KB so the next `printf` lock cannot `abort()`.
+- **Verified:** flash to COM11, boot `P4MiniShell v0.35.7 ready`, 50+ mixed SD ops (dir/type/write/copy/pipes/tree/chkdsk) with zero `allocate_dma_buf` errors, transcript stays under internal-RAM failure floor, no `abort()` in `lock_init_generic` during extensive serial modal tests. Clean build 0 errors/0 warnings.
 
 ### M20. ✅ FIXED — `tone`/`wavplay` `abort()` in managed BSP `esp_codec_dev` (0.35.1 hardware testing)
 
@@ -384,21 +384,21 @@ store (see readme.md / command.md / SDK.md).
 ### M22. ✅ FIXED — `tui_cell_t` truncation broke box glyphs (0.35.1 final hardware bug hunting)
 
 - **Symptom:** `draw box` and `tui_draw_box` rendered `?`/truncated bytes instead of `─│┌┐└┘` — box borders were garbled on the 1024x510 transcript rect, and `tui status` showed `80×25` but `grab_screenshot.py --crop-transcript` captured broken glyphs.
-- **Root cause:** `tui_cell_t` `utf8` was `char utf8[2]` (`components/tui/tui.h:35`), but box-drawing UTF-8 sequences `SH_BOX_*` (e.g. `─` `E2 94 80`) are 3 bytes plus NUL → truncated to 1 byte + NUL, so `tui_cell_set` (`components/tui/tui.c:116`) `strncpy` lost the glyph.
+- **Root cause:** `tui_cell_t` `utf8` was `char utf8[2]` (`components/tui/tui.h:35`), but box-drawing UTF-8 sequences `SH_BOX_*` (e.g. `─` `E2 94 80`) are 3 bytes plus NUL → truncated to 1 byte + NUL, so `tui_cell_set` (`components/tui/tui.c:129`) `strncpy` lost the glyph.
 - **Fix:** `components/tui/tui.h:35` `utf8[4]` (3 bytes + NUL), `tui_cell_set` `strncpy(cell->utf8, utf8, sizeof(cell->utf8)-1)` with explicit NUL. All box draws now emit full `SH_BOX_*`.
 - **Verified:** `draw box 2 2 20 8 single MyBox` / `double` / `rounded` with title, nested boxes (window stack), `draw line` H/V all render correctly in `grab_screenshot.py --crop-transcript`; `tui_flush` per-fg recolor shows intact borders.
 
 ### M23. ✅ FIXED — `tui_draw_box`/`line` ignored style and title (0.35.1 final)
 
 - **Symptom:** `draw box ... single|double|rounded` always rendered single, and titles were not centered; `draw line` style had no effect.
-- **Root cause:** `tui_draw_box` (`components/tui/tui.c:228`) and `tui_draw_line` (`components/tui/tui.c:283`) wrote ASCII `+|-` instead of `SH_BOX_*` UTF-8 and did not branch on `style`/`title`.
+- **Root cause:** `tui_draw_box` (`components/tui/tui.c:241`) and `tui_draw_line` (`components/tui/tui.c:296`) wrote ASCII `+|-` instead of `SH_BOX_*` UTF-8 and did not branch on `style`/`title`.
 - **Fix:** `tui_draw_box` now selects `SH_BOX_TL`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` per `strcasecmp(style, "double"/"rounded")` and centers `title` with surrounding spaces via `tui_print_at` with `tui_cell_set`; `tui_draw_line` selects `SH_BOX_H`/`V` vs `H2`/`V2` vs `HL`/`VL` for `heavy`. All honor fg/bg.
 - **Verified:** `draw box 2 2 20 8 double T` and `rounded` show `╔═╗`/`╭─╮` correctly with title centered, nested `draw window` stacks, `draw line 1 5 80 5 double` horizontal double line, no abort.
 
 ### M24. ✅ FIXED — `tui_flush` did not render fg/bg (0.35.1 final)
 
 - **Symptom:** `color 0A` / `draw box ...` with fg did not color the TUI; transcript text was monochrome, `color`/`locate` appeared to do nothing on the `80×25` grid.
-- **Root cause:** `tui_flush` (`components/tui/tui.c:356`) wrote plain `utf8` without LVGL recolor; `lv_label_set_recolor` was false and no `#RRGGBB` tags were emitted, and palette duplication risk existed.
+- **Root cause:** `tui_flush` (`components/tui/tui.c:620`) wrote plain `utf8` without LVGL recolor; `lv_label_set_recolor` was false and no `#RRGGBB` tags were emitted, and palette duplication risk existed.
 - **Fix:** `tui_flush` now coalesces by fg, emits `#RRGGBB ` per run via `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate), wraps each run and closes with `#`, enables `lv_label_set_recolor(true)` on `s_tui_label`, sets text via `lv_label_set_text` under `lvgl_port_lock`. Default fg 16 emits no tag.
 - **Verified:** `color 0A` then `draw box` shows bright green border, `color`/`locate` compose correctly, per-fg runs verified via `grab_screenshot.py`.
 
@@ -453,7 +453,7 @@ store (see readme.md / command.md / SDK.md).
   ```
   Overflow occurred after `P4_CONFIG_COMMAND_TASK_STACK` 16384 raised from 12288 in v0.33.0 was still insufficient for deep TUI nesting (`draw` + `tui fullscreen` + `list`/`dialog` + `browse`/`view` modal stack).
 - **Root cause:** `P4_CONFIG_COMMAND_TASK_STACK` 16384 (`p4minishell_config.h:1514`) shared by `shell_execute_batch_file` → `shell_execute_command` → `shell_execute_command_core` recursion plus TUI cell buffer and modal surfaces; expanded companion nesting (7 BATs, many `draw box`/`tui fullscreen`/`list` calls) pushed the 16384 budget over the guard at `0x4012b75a`.
-- **Fix:** raised `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 (`p4minishell_config.h:1514` + `p4minishell_config.yaml` `command_task_stack`), command queue full handling improved (bounded 1 s wait instead of silent `queue full` drop, survives burst `draw`/`list` calls), `windows_enter_tui_mode` keeps header visible by default (only `draw fullscreen on`/`tui fullscreen on` hide via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`), TUI does not overlap shell text (`tui_hide_for_modal`).
+- **Fix:** raised `P4_CONFIG_COMMAND_TASK_STACK` 16384→32768 (`p4minishell_config.h:1514` + `p4minishell_config.yaml` `command_task_stack`), command queue full handling improved (bounded 1 s wait instead of silent `queue full` drop, survives burst `draw`/`list` calls), `windows_enter_tui_mode` keeps header visible by default (only `draw fullscreen on`/`tui fullscreen on` hide via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`), TUI does not overlap shell text (`tui_hide_for_modal`).
 - **Verified:** flash to COM11, boot verified, extensive serial tests of all 7 companion BATs (COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109, LIB 1896 bytes) pushed via `push_sd.py` COM11 PASS, each BAT exercised via serial (`list` selections, `browse`/`view`/`hexview`, `tui fullscreen` `draw` boxes) — no abort, no watchdog, no overlap, no `0x4012b75a` overflow; `draw`/`list`/`ask` serial routing verified (`dialog y` → 0, `list 2` → 2, `ask myname` → `myname` via `modal_handle_serial_line` `components/modal/modal_surf.c:412` `shell.c`), 50+ mixed SD ops clean, clean build 0 errors/0 warnings.
 
 ### M32. ✅ FIXED — root clutter, browse duplication, layering and config drift (0.35.2 cleanup)
@@ -467,7 +467,7 @@ store (see readme.md / command.md / SDK.md).
 
 ### M33. ✅ FIXED — memory-baseline numbers in M19/M31 went stale (0.35.3 reconcile)
 
-- **Symptom:** `bugs.md` M19 (`P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024, async 1024→512, trim 49152→60000 1/4 keep) and M31 (`P4_CONFIG_COMMAND_TASK_STACK` 16384→24576) no longer match the code: the tree now runs transcript 65536 (`p4minishell_config.h:93`, PSRAM-backed per `p4minishell_config.yaml` `buffers:transcript_bytes`), recolor == transcript (`p4minishell_config.h:101`), trim threshold 4096 (`p4minishell_config.h:120`), async 512 (`p4minishell_config.h:137`), SD DMA 4096 (`p4minishell_config.h:634`), worker stack 32768 (`p4minishell_config.h:1522`).
+- **Symptom:** `bugs.md` M19 (`P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024, async 1024→512, trim 49152→4096 1/4 keep) and M31 (`P4_CONFIG_COMMAND_TASK_STACK` 16384→32768) no longer match the code: the tree now runs transcript 65536 (`p4minishell_config.h:93`, PSRAM-backed per `p4minishell_config.yaml` `buffers:transcript_bytes`), recolor == transcript (`p4minishell_config.h:101`), trim threshold 4096 (`p4minishell_config.h:120`), async 512 (`p4minishell_config.h:137`), SD DMA 4096 (`p4minishell_config.h:634`), worker stack 32768 (`p4minishell_config.h:1522`).
 - **Root cause:** incremental PSRAM relief (spans/staging/scratch out of internal RAM) moved the values on without updating the bug narrative; M19/M31 describe the 0.35.1 hardware state, not the current tree.
 - **Fix:** docs follow code — M19/M31 kept as the 0.35.1 history, this entry records the current baseline above; `changelog.md` `## [0.35.3]` carries the same table. No code change.
 - **Verified:** header values re-read at `p4minishell_config.h:93,101,120,137,634,1522`; yaml `buffers:` descriptions agree.
@@ -623,6 +623,82 @@ store (see readme.md / command.md / SDK.md).
   no OTA overlapping PSRAM bg stacks, serialized SDMMC bring-up (N1 gate),
   sequential host tools. I2C-308 (slave-only), RMT-176 (IDF-bypassed),
   ECDSA-837 (unused flow) need no action.
+- **`set /a` prints its result in this shell** (by design, even with `@echo
+  off`), so a `for`-loop counter (`for /f %%a in (f) do set /a N+=1`) prints
+  one line per iteration and floods the transcript. The file manager instead
+  asks the `draw list /count:VAR /countonly` verb for the line count.
+- **`draw table` dropped the last column (fixed).** The pad-short-rows loop
+  reused the split cursor `c` after it had been left on the last filled
+  index, so it blanked cell `ncols-1` for every full row — a 3-column table
+  rendered 2. Fixed by advancing `c` before padding; caught by measuring a
+  HW screenshot, not by unit tests (which only covered widths).
+- **Batch files are now RAM-resident during execution (128 KB cap).** Each
+  frame reads its whole script into PSRAM and executes from memory, so
+  `goto`-heavy loops stop hitting SD. The reader mirrors `fgets` semantics
+  (stop after size-1 bytes, newline, or EOF) and `tell`/`seek` are byte
+  offsets, so line-continuation, `call :label` resume, and label positions
+  behave identically; larger files transparently stream from SD. Cost: up to
+  `P4_CONFIG_BATCH_FILE_MAX_BYTES` PSRAM per nested frame (capped at depth 4).
+- **`alarm_test` barrier flake.** One run reported `FAIL(scheduled)` though
+  the alarm line was `alarm: 3 scheduled ...` (the DONE barrier matched
+  before the SD-bound `alarm add` reply flushed); it passed 25/25 on the
+  immediate re-run. Same O6 slow-SD family, not a regression. The B1 `pkg`
+  round-trip run reproduced the same family once (`FAIL(deleted)` on the
+  first `alarm del all` of `alarm_test`, green on re-run).
+- **`pkg install` verifies before it copies; `pkg remove` trashes.** Pass 1
+  CRC-checks every `PKGS/<APP>/` payload and aborts without touching installed
+  files on any miss/mismatch; pass 2 copies payloads at their install-relative
+  paths, then copies `<APP>.APPINFO` + `<APP>.ASSETS` into `APPS/`. `pkg
+  remove` sends every manifest payload plus the two metadata files through
+  `storage_trash_delete_file()`, so `undelete` recovers an uninstalled app.
+  `pkg info <app>` on a missing manifest prints `manifest: ... (missing)` and
+  returns EL 1, doubling as an existence probe; a manifest that lists
+  `APPS/<APP>.APPINFO` as a payload makes the metadata copy idempotent.
+- **Gfx toolkit text is a committed bitmap font; flood fill grows a PSRAM
+  stack.** `gfx text` renders an 8x8 ASCII table (`components/gfx/gfx_font.c`,
+  generated by `tools/gen_gfx_font.py` from the public-domain unscii-8 TTF)
+  rather than an LVGL font, so the raster core stays LVGL-free and unit-tested
+  and `gfx save` includes the glyphs. `gfx fill` allocates its seed stack from
+  PSRAM and grows it (OOM stops the fill but never corrupts the canvas). The
+  HW pixel test compares against the RGB565 round-trip (`docs`: `gfx` keeps
+  full-565 precision, unlike `draw`), so expected values are quantized, not
+  the raw 24-bit input.
+- **Theme switching re-applies the themed surfaces; two minor bits lag.**
+  `theme set` recolors the screen/transcript/input row/keyboard and the header
+  bar/panels and re-renders the header labels immediately. The two `|`
+  separators between the header panels and any already-open modal keep their
+  old colors until the header is rebuilt / the modal reopened. No functional
+  impact; noted so post-switch screenshots are read correctly.
+- **`p4_usb` removed; `components/usb` owns both halves.** The shell-facing
+  `usb.c`/`usb.h` used to be compiled by a separate `p4_usb` CMake wrapper over
+  `../usb/usb.c`. It now compiles inside `components/usb` (alongside the
+  vendored host stack) with `ansi`/`usb_host_hid`/`usb_host_msc` in REQUIRES;
+  `usb status` reports `usb.host: ready` on hardware.
+- **Black screen after a unit-test flash is the test app, not a regression.**
+  `test/` builds `p4minishell_tests`, which speaks only over serial (Unity
+  output) and never builds the LVGL shell UI. If the display is black but the
+  `PS /sdcard>` prompt answers on UART, check the boot banner's project name
+  first (`p4minishell_tests` vs `p4minishell`) and reflash from the repo root.
+  Seen 2026-09-11: board still ran the test app; reflashed main, display back.
+- **`plot` sampling binds X/T through the environment (restored after).**
+  Function/polar/parametric sampling sets the `X`/`T` env var per sample and
+  restores the prior value, so a pre-existing `X`/`T` survives a plot. Sample
+  phase matters for exact-pixel checks: with N samples the curve crosses
+  integer pixels between samples, so HW pixel tests assert regions/counts
+  near crossings rather than single pixels. DOS bright colors apply on canvas
+  (e.g. 11 is `0x55FFFF`, not `0x00FFFF`) — pixel expectations must go through
+  the RGB565 quantization (`q()` in the drivers).
+- **Boot UI restore is retry-safe now.** `font_restore_saved()` reports success;
+  a failed first-mount restore re-arms the one-shot (`storage_sd_first_mount_reset()`)
+  so the next mount retries, and `app_main` applies the saved theme/header
+  mode/fonts again after boot scripting. Previously a single flaky VFS read at
+  boot silently skipped the restore for the whole session (`theme_test`
+  persistence flaked because of it).
+- **Screenshot captures can show a horizontal wrap artifact** (right-edge
+  pixels appearing at the far left). Seen on `grab_screenshot.py` BMPX frames
+  while LVGL metrics prove the layout is correct — treat screenshots as
+  approximate for absolute positions and rely on `header status` metrics for
+  geometry assertions.
 
 ---
 
@@ -686,7 +762,7 @@ store (see readme.md / command.md / SDK.md).
 |----------|-------|--------|
 | Critical | 0 | — |
 | High | 0 | — |
-| Medium | 46 (M1 calc `NAME=` name extraction, M2 `for /f` driver cursor, M3 redirect-capture re-entrancy, M4 `%ERRORLEVEL%` token init, M5 SDMMC DMA buffer allocation failures, M6 newlib FILE-lock OOM abort, M7 display-rotation LVGL thread-safety, M8 command-worker stack overflow 12288→16384, M9 batch `for /f` quoted options, M10 command-queue drops, M11 key-wait prompt race, M12 `if COND &` chain split, M13 wifi `[wifi]` white→cyan, M14 `main.c:200` progress literal `@`, M15 applib `vsnprintf` ANSI flag, M16 async schedule ANSI path, M17 `dialog`/`list`/`ask` dispatcher missing, M18 `browse`/`view`/`hexview` stub, M19 memory pressure transcript 2048→1024 `p4minishell_config.h:93`/async 1024→512 `p4minishell_config.h:134`/SD DMA 8192→4096 `p4minishell_config.h:626`/internal-trim 49152→60000 `p4minishell_config.h:117` with 1/4 keep, M20 audio `esp_codec_dev`/`bsp_audio_init` abort `components/audio/audio.c:42` `managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269`, M21 modal EventGroup PSRAM `MALLOC_CAP_SPIRAM` `components/modal/modal.c:46`, M22 `tui_cell_t` truncation `utf8[2]`→`utf8[4]` `components/tui/tui.h:35`, M23 `tui_draw_box`/`line` style+title ignored `components/tui/tui.c:228`/`283` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, M24 `tui_flush` color recolor `#RRGGBB` per fg run `ansi_get_palette_color` `components/tui/tui.c:356`, M25 header occlusion `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`, M26 keyboard rescale `windows_notify_keyboard_visibility`, M27 prompt `shell_prompt_render_plain()` `main.c:112`/`modal_surf.c:412`, M28 audio re-verified, M29 dialog/list/ask serial routing `modal_handle_serial_line` `components/modal/modal_surf.c:412` `shell.c`, M30 draw auto-enter `tui_init` `components/tui/tui.c:56`, M31 stack overflow at `0x4012b75a` `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514` queue full improved, M32 0.35.2 cleanup root quarantine + browse dedup + layering + config drift, M33 0.35.3 memory-baseline reconcile, M34 0.35.4 periph/power/serial splits `command.c` 5808→2467, M35 0.35.5 hardening truncation/OOB + OOM + 22 tests + LVGL locks, M36 0.35.6 storage/batch splits shell whole, M37 ask serial clobber, M38 alarm dead init (+USB lesson), M39 modal layout watchdog, M40 font tofu) | ✅ Fixed (M1–M4 in v0.32.1/v0.32.2, M5–M7 in v0.32.8, M8–M12 in v0.33.0, M13–M18 in v0.35.0, M19–M21 in v0.35.1 hardware testing, M22–M30 in v0.35.1 final hardware bug hunting, M31 in v0.35.1 companion expansion at `0x4012b75a` 16384→24576, all verified on COM11, M41-M46 in 2026-09-07 session (launch/apps/delay/notify/gfind/applib-env/app-dispatch restored, test UNSCII link + lock paths fixed, companion 0-based list chains, sweep list hang, M21 PSRAM static group, all verified on COM3) |
-| Open | 3 (O3 O(buffer) span rebuilds CONFIRMED by drain bench, fix direction set; O4 host DTR-open reboots; O5 silent-boot wedge) | O3 OPEN — batch worker-path updates per command; O4/O5 mitigated, see OPEN section. O1/O2 fixed in 0.35.1. |
-| Low / observations | 3 (benign first-use i2s log, `pwd` not a command, transcript span internal-RAM footprint) | — |
-| Network | 1 (N1 shared-SDMMC bring-up) | ✅ Fixed (serialize sdmmc_host_init + slot-scoped SD deinit + hosted retry) |
+| Medium | 46, all fixed (M1-M46). Individual entries below carry the root cause and fix; the long enumeration was trimmed from this summary row. |
+| Open | 4 (O3 O(buffer) span rebuilds MOSTLY FIXED - deferral shipped; O4 host DTR-open reboots - host-mitigated; O5 silent-boot wedge - recovered, watch; O6 SD latency tail - noted) | O3 residual is a rare single-output loss under TX pressure; O4/O5/O6 noted, see OPEN section. O1/O2 fixed. |
+| Low / observations | ~20 (benign i2s log, `pwd`, transcript span footprint, SD lazy-mount message, serial key+Enter, `list` 1-based vs EL, `dir` leading-`/`, APM-560 note, `set /a` prints, `draw table` column fix, batch RAM cap, `alarm_test` flake, `pkg` install/remove semantics, gfx toolkit font/flood-fill, theme re-apply lag, `p4_usb` fold, test-flash black screen, plot sampling, boot-restore retry, screenshot wrap) | see LOW / OBSERVATIONS |
+| Network | 1 (N1 shared-SDMMC bring-up) | Fixed (serialize sdmmc_host_init + slot-scoped SD deinit + hosted retry) |

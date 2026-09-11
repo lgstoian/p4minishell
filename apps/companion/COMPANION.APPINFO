@@ -2,3 +2,4 @@
 ; command). Copied to sd:/APPS/COMPANION.APPINFO by push_sd.py.
 title=P4 Companion
 description=A pure-batch system helper: dashboard, files, network, games, settings
+version=1.0

@@ -29,7 +29,6 @@ set(EXTRA_COMPONENT_DIRS
   components/markdown
   components/modal
   components/networking
-  components/p4_usb
   components/shell
   components/storage
   components/tui

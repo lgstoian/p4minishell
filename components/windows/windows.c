@@ -17,6 +17,7 @@
 #include "windows.h"
 #include "display.h"
 #include "font.h"
+#include "theme.h"
 #include "header.h"
 #include "keyboard.h"
 #include "ansi.h"
@@ -140,9 +141,10 @@ window_rect_t windows_get_rect(window_region_t region)
     lv_coord_t header_h = 0;
 
     if (header_get_visible()) {
-        header_h = windows_scale_height_percent(P4_CONFIG_WINDOW_HEADER_HEIGHT_PCT,
-                                                P4_CONFIG_WINDOW_HEADER_HEIGHT_MIN,
-                                                P4_CONFIG_WINDOW_HEADER_HEIGHT_MAX);
+        /* Single source of truth: the header owns its height for the live
+         * resolution/rotation, so the reserved region can never disagree
+         * (which previously caused a gap or an overlap on some boards). */
+        header_h = header_get_height();
     }
     lv_coord_t input_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
                                                        P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN,
@@ -193,22 +195,22 @@ lv_color_t windows_get_color(const char *name)
     }
 
     if (strcmp(name, WINDOWS_COLOR_BG_SCREEN) == 0) {
-        return lv_color_hex(0x0B0F10);
+        return lv_color_hex(theme_current()->bg_screen);
     }
     if (strcmp(name, WINDOWS_COLOR_BG_TRANSCRIPT) == 0) {
-        return lv_color_hex(0x050806);
+        return lv_color_hex(theme_current()->bg_transcript);
     }
     if (strcmp(name, WINDOWS_COLOR_BG_INPUT_ROW) == 0) {
-        return lv_color_hex(0x111816);
+        return lv_color_hex(theme_current()->bg_input_row);
     }
     if (strcmp(name, WINDOWS_COLOR_BG_KEYBOARD) == 0) {
-        return lv_color_hex(0x1D2625);
+        return lv_color_hex(theme_current()->bg_keyboard);
     }
     if (strcmp(name, WINDOWS_COLOR_TEXT) == 0) {
-        return lv_color_hex(P4_CONFIG_HEADER_ACCENT_COLOR);
+        return lv_color_hex(theme_current()->text);
     }
     if (strcmp(name, WINDOWS_COLOR_TEXT_MUTED) == 0) {
-        return lv_color_hex(P4_CONFIG_HEADER_MUTED_COLOR);
+        return lv_color_hex(theme_current()->text_muted);
     }
 
     return lv_color_hex(0x000000);
@@ -265,6 +267,32 @@ void windows_refresh_fonts(void)
     }
     if (s_windows.editor_status != NULL) {
         lv_obj_set_style_text_font(s_windows.editor_status, term, 0);
+    }
+    lvgl_port_unlock();
+}
+
+/** Re-apply the active theme's background colors to the screen, transcript
+ * and input row after `theme set`. Font-free; the header/keyboard/modal each
+ * have their own theme refresh. Port lock is recursive. */
+void windows_refresh_theme(void)
+{
+    if (!s_windows.initialized) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    if (s_windows.screen != NULL) {
+        lv_obj_set_style_bg_color(s_windows.screen,
+                                  windows_get_color(WINDOWS_COLOR_BG_SCREEN), 0);
+    }
+    if (s_windows.transcript != NULL) {
+        lv_obj_set_style_bg_color(s_windows.transcript,
+                                  windows_get_color(WINDOWS_COLOR_BG_TRANSCRIPT), 0);
+    }
+    if (s_windows.input_row != NULL) {
+        lv_obj_set_style_bg_color(s_windows.input_row,
+                                  windows_get_color(WINDOWS_COLOR_BG_INPUT_ROW), 0);
     }
     lvgl_port_unlock();
 }
@@ -917,6 +945,14 @@ static void windows_transcript_schedule_apply(void)
 
 void windows_set_transcript_text(const char *text)
 {
+    if (text == NULL) {
+        text = "";
+    }
+    windows_set_transcript_text_len(text, strlen(text));
+}
+
+void windows_set_transcript_text_len(const char *text, size_t len)
+{
     lv_obj_t *transcript = s_windows.transcript;
 
     if (transcript == NULL) {
@@ -924,6 +960,7 @@ void windows_set_transcript_text(const char *text)
     }
     if (text == NULL) {
         text = "";
+        len = 0;
     }
     if (!windows_transcript_staging_ensure()) {
         return;
@@ -932,8 +969,13 @@ void windows_set_transcript_text(const char *text)
     /* Stage the raw ANSI text for the deferred span render. Callers hold the
      * LVGL port lock, so the staging buffer is never written and read
      * concurrently. The staging buffer is twice the ANSI transcript size, so
-     * the accumulated scrollback always fits. */
-    snprintf(s_transcript_staged, P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES, "%s", text);
+     * the accumulated scrollback always fits. Copy by known length so no
+     * strlen scan of the (up to 64 KB) transcript is needed. */
+    if (len >= P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES) {
+        len = P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES - 1;
+    }
+    memcpy(s_transcript_staged, text, len);
+    s_transcript_staged[len] = '\0';
 
     windows_transcript_schedule_apply();
 }

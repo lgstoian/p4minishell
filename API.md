@@ -2,7 +2,7 @@
 
 This document describes the public integration surface exposed by the hosted runtime modules under `components/`.
 
-> **v0.35.7 hardware bring-up (0.35.6→0.35.7) on top of the v0.35.6 split patch:** flashed to COM11, boot verified (`P4MiniShell v0.35.1 ready`, `1024x510` `80×25` via `tui status` `80×25` `p4minishell_config.h:298`), extensive serial tests (draw box single/double/rounded with title+style correctly handled `tui_draw_box` `components/tui/tui.c:228` / `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, draw line/fill/text/clear/window/close/refresh/fullscreen, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app) header kept visible by default `windows_enter_tui_mode` hidden only on fullscreen `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` / `tui_enter_fullscreen` `components/tui/tui.c:417` dynamic `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, TUI does not overlap shell text `tui_hide_for_modal`, `tui_flush` `components/tui/tui.c:356` recolor `#RRGGBB` per fg run via `ansi_get_palette_color` PowerShell palette no duplicate, `color`/`locate` TUI-aware, prompt `shell_prompt_render_plain()` `main.c:112`/`components/shell/shell.c:412` + `modal_surf.c:412` `keyboard_bind_textarea` situational `SH_PROMPT`, screenshot `grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py` rect `1024x510`) without abort/watchdog/overlap. Font extended in-place `managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c` 384 glyphs U+2500-U+257F/U+2600-U+26FF cmaps 3 no duplication `CONFIG_LV_FONT_UNSCII_16=y`; `tui_cell_t utf8[4]` `SH_BOX_*` via `tui_cell_set`, `tui_flush` recolor `#RRGGBB` per fg run `ansi_get_palette_color`; `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`; memory `P4_CONFIG_TRANSCRIPT_BYTES` 1024 `p4minishell_config.h:93` `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 512 `p4minishell_config.h:134` `P4_CONFIG_SD_DMA_BUFFER_BYTES` 4096 `p4minishell_config.h:626` `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 60000 1/4 keep trim-below-10KB `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514` at `0x4012b75a`, audio `bsp_audio_init` `components/audio/audio.c:42` `managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269`, modal `EventGroup` PSRAM `MALLOC_CAP_SPIRAM` `components/modal/modal.c:46`, queue full handling improved, serial routing `modal_handle_serial_line` `components/modal/modal_surf.c:412` (`dialog y` `list 2` `ask myname` correctly routed via `shell.c`). Companion fully TUI-expanded and hardware-verified: 7 BATs (`COMPANION.BAT` draw fullscreen double, `SYS.BAT` tui fullscreen draw boxes, `FILES.BAT` browse/view/hexview + draw + tui fullscreen, `NET.BAT` draw boxes, `FUN.BAT` tui demo, `SET.BAT` tui demo, `LIB.BAT` tui helpers) pushed via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109), bugs M19-M31 all fixed.
+> **v0.35.7 public API reference (current).** Recent additions: `components/gfx/` raster + BMP API with the **B2 toolkit** (`gfx_surface_hline/vline/triangle/ellipse/polygon/flood_fill/text`, `gfx_text_width`, `gfx_font8x8`), `shell_command_gfx`/`shell_command_crc32`/`shell_command_asset`, packaged SD apps (`shell_command_pkg`, `pkg_app_name_from_appinfo`, and the shared `asset_app_ok`/`asset_crc_file`/`asset_verify_app`), the **B3 theme registry** (`theme_current`/`theme_get`/`theme_set`/`theme_builtin_at`, `windows_refresh_theme`, `keyboard_refresh_theme`, `header_refresh_theme`), the **plot coordinate layer** (`shell_command_plot`, `gfx_view_*`, shared `gfx_canvas_*`/`draw_*` accessors), background jobs (`shell_command_start`/`shell_command_taskkill`, `batch_bg_alloc/bind/release/request_kill/kill_requested/is_background`), TUI selectable grids (`tui_draw_table_ex`, `tui_table_parse_cursor`, `tui_table_parse_sel`), transcript length tracking (`shell_transcript_get_length`/`get_ansi_length` are O(1)), and `windows_set_transcript_text_len()`. Verified baseline: unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25 (COM3, ESP-IDF v5.5.5).
 
 ## Shared integration pattern
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It holds no command implementations and no shell state.
@@ -21,6 +21,17 @@ This document describes the public integration surface exposed by the hosted run
 - `components/networking` owns hosted Wi-Fi runtime state and also bootstraps the hosted Bluetooth module.
 - `components/usb` owns USB Host Library state, USB MSC storage, and USB HID keyboard or mouse debug behavior.
 - `components/c6ota` owns the shell-visible ESP32-C6 OTA workflow and depends on `components/networking` for Wi-Fi wait and restore hooks.
+- `components/tui` owns the 80x25 TUI cell buffer, the drawing primitives, and `tui_flush`; it is reached by the `draw`/`tui` verbs and by `components/windows`.
+- `components/gfx` owns the pure RGB565 raster core (surface/pixel/line/rect/circle/blit), BMP header parse + decode, and 565→888 row conversion. It has no LVGL dependency; the `gfx` command glue is `components/command/gfx_commands.c`.
+- `components/db` owns the Palm-OS-style SD record store (`sd:/DBS/<name>.DB`); the `db` command lives in `components/command/db_commands.c`.
+- `components/alarm` owns the SD alarm/event store and the single background checker; the `alarm`/`cal` commands live in `components/command/alarm_commands.c`.
+- `components/filetype` owns the one extension→kind registry (batch/markdown/json/text) used by the editor, viewer, `launch`, `dir`, and the batch resolver.
+- `components/markdown` owns the CommonMark-subset renderer used by the `markdown` verb and `view *.md`.
+- `components/font` owns the font registry (roles/sizes/fallbacks), the SD TTF loader, CJK auto-attach, and the theme table.
+- `components/boot` owns the `CONFIG.SYS` parser and `AUTOEXEC.BAT` runner (plus default-file generation).
+- `components/clock` owns time/SNTP/timezone services and the `date`/`time`/`timezone`/`sntp` verbs.
+- `components/audio` owns the ES8311 codec path, volume, and the background tone/WAV engine; the verbs parse in `components/command/audio_commands.c`.
+- `components/applib` is the native-app runtime/ABI library (umbrella `applib.h` over the lean `applib_*.h` headers).
 - All modules keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
 
 ### Dependency direction
@@ -326,6 +337,170 @@ void        shell_power_idle_tick(void);
 - `shell_power_notify_activity()` is also the implementation of the
   `shell_command_ops_t.pm_notify_activity` hook (used by the UART console submit path);
   `shell_power_idle_tick()` runs on the LVGL task from the header-refresh timer.
+
+#### TUI / GFX / asset verbs (split command files)
+```c
+/* components/command/tui_commands.c */
+bool shell_command_draw(int argc, char **argv);   /* box|line|fill|text|bar|table|list|clear|
+                                                     window|cursor|hold|alt-screen|save|restore|
+                                                     close|refresh|fullscreen */
+void shell_command_tui(int argc, char **argv);
+void shell_command_color(int argc, char **argv);
+void shell_command_locate(int argc, char **argv);
+bool shell_command_anchor(int argc, char **argv);
+bool draw_hold_active(void);                      /* `draw hold` state (unit-test hook) */
+
+/* components/command/gfx_commands.c  (raster core: components/gfx/) */
+bool shell_command_gfx(int argc, char **argv);    /* init|close|status|clear|pixel|line|rect|circle|
+                                                     hline|vline|triangle|ellipse|polygon|fill|text|
+                                                     show|load|blit|free|slots|save */
+
+/* components/command/asset_commands.c */
+void shell_command_crc32(int argc, char **argv);
+void shell_command_asset(int argc, char **argv);  /* check|list <app> */
+uint32_t shell_crc32_update(uint32_t crc, const uint8_t *data, size_t len);  /* one CRC-32 */
+uint32_t asset_crc32_data(const uint8_t *data, size_t len);
+bool     asset_parse_line(const char *line, char *path_out, size_t path_size, uint32_t *crc_out);
+bool     asset_app_ok(const char *app);            /* [A-Za-z0-9_-]+ name rule (shared) */
+bool     asset_crc_file(const char *resolved, uint32_t *crc_out);
+int      asset_verify_app(const char *tag, const char *app, bool list_only);  /* 0 ok, 1 fail */
+
+/* components/command/pkg_commands.c  (packaged SD apps: PKGS/<APP>/ -> APPS/) */
+void shell_command_pkg(int argc, char **argv);     /* list|info|verify|check|install|remove */
+bool pkg_app_name_from_appinfo(const char *filename, char *out, size_t size);  /* pure, unit-tested */
+
+/* components/command/plot_commands.c  (coordinate layer over gfx canvas / TUI) */
+bool shell_command_plot(int argc, char **argv);    /* tui|window|auto|axes|func|polar|para|
+                                                      data|bar|table|line|point|clear|status */
+```
+- `gfx`, `plot`, and the mutating `draw`/`tui`/`color`/`locate`/`anchor` verbs REFUSE inside a `start`
+  background job (shared display) with ERRORLEVEL `1` — except read-only
+  `plot status` and text-only `plot table`, which are background-safe.
+- `shell_crc32_update()` is the firmware's single CRC-32 (shared by `receive` and the `crc32`/`asset`
+  verbs); start the accumulator at `0xFFFFFFFF` and invert at the end (zlib parity).
+- `draw table`/`draw list` use `tui_draw_table_ex()` and `tui_table_parse_cursor()` /
+  `tui_table_parse_sel()` (see the TUI Module API).
+
+### Gfx raster core (`components/gfx/`)
+Pure, LVGL-free RGB565 buffer math (`gfx.c`, unit-tested headless) plus a committed
+8x8 ASCII font (`gfx_font.c`, generated by `tools/gen_gfx_font.py` from the
+public-domain unscii-8 TTF):
+```c
+uint16_t gfx_rgb_to_565(uint32_t rgb);
+bool gfx_surface_alloc(gfx_surface_t *s, int w, int h);
+void gfx_surface_free(gfx_surface_t *s);
+void gfx_surface_clear(gfx_surface_t *s, uint16_t color);
+void gfx_surface_pixel(gfx_surface_t *s, int x, int y, uint16_t color);
+uint16_t gfx_surface_get(const gfx_surface_t *s, int x, int y);
+void gfx_surface_line(gfx_surface_t *s, int x1, int y1, int x2, int y2, uint16_t color);
+void gfx_surface_rect(gfx_surface_t *s, int x, int y, int w, int h, uint16_t color, bool fill);
+void gfx_surface_circle(gfx_surface_t *s, int cx, int cy, int r, uint16_t color, bool fill);
+void gfx_surface_hline(gfx_surface_t *s, int x, int y, int w, uint16_t color);
+void gfx_surface_vline(gfx_surface_t *s, int x, int y, int h, uint16_t color);
+void gfx_surface_triangle(gfx_surface_t *s, int x1, int y1, int x2, int y2,
+                          int x3, int y3, uint16_t color, bool fill);
+void gfx_surface_polygon(gfx_surface_t *s, const int *xy, int n, uint16_t color, bool fill);
+void gfx_surface_ellipse(gfx_surface_t *s, int cx, int cy, int rx, int ry, uint16_t color, bool fill);
+int  gfx_surface_flood_fill(gfx_surface_t *s, int x, int y, uint16_t color);   /* pixels filled */
+int  gfx_surface_text(gfx_surface_t *s, int x, int y, const char *text,
+                      uint16_t color, uint16_t bg, bool use_bg, int scale);     /* advance width */
+int  gfx_text_width(const char *text, int scale);
+void gfx_surface_blit(gfx_surface_t *dst, const gfx_surface_t *src, int x, int y,
+                      bool use_transparent, uint16_t transparent);
+void gfx_565_to_888_row(uint8_t *dst, const uint16_t *src, int w);
+bool gfx_bmp_parse_header(const uint8_t *buf, size_t len, gfx_bmp_info_t *out);
+bool gfx_bmp_decode_565(const uint8_t *buf, size_t len, const gfx_bmp_info_t *info, gfx_surface_t *out);
+extern const uint8_t gfx_font8x8[GFX_FONT_GLYPHS][GFX_FONT_H];  /* index = ch - 0x20 */
+```
+- All raster ops clip (out-of-bounds writes are ignored, never an error); `gfx_surface_get`
+  returns 0 outside. `gfx_surface_flood_fill` grows a PSRAM seed stack and returns the pixel
+  count; `gfx_text_width` is `strlen(text) * GFX_FONT_W * scale`.
+
+### Plot viewport (`components/gfx/gfx_view.c`)
+World-coordinate mapping shared by the canvas and TUI plot targets (pure,
+headless-safe, unit-tested). The integer rect is origin-agnostic, so the same
+code drives 0-based canvas pixels and 1-based TUI cells:
+```c
+void gfx_view_set(gfx_view_t *v, double xmin, double xmax, double ymin,
+                  double ymax, int px, int py, int pw, int ph);
+bool gfx_view_map(const gfx_view_t *v, double x, double y, int *sx, int *sy);
+void gfx_view_point(const gfx_view_t *v, gfx_surface_t *s, double x, double y,
+                    uint16_t color);
+bool gfx_view_clip_line(const gfx_view_t *v, double x1, double y1, double x2,
+                        double y2, int *ax, int *ay, int *bx, int *by);
+bool gfx_view_line(const gfx_view_t *v, gfx_surface_t *s, double x1, double y1,
+                   double x2, double y2, uint16_t color);
+double gfx_view_nice_step(double range, int ticks);  /* 1/2/5x10^n */
+```
+- Window edges land exactly on the border indices (`(pw-1)`/`(ph-1)` scaling);
+  rasters narrower than 2 wide/tall are degenerate (map/clip return false).
+- Clipping is Cohen–Sutherland with trivial-reject first, so fully-outside
+  segments return false and no giant coordinates reach the rasterizer.
+
+### Shared canvas/draw accessors (`command.h`, for `plot`)
+```c
+uint16_t gfx_canvas_parse_color(const char *s, uint16_t fallback);  /* gfx_commands.c */
+bool     gfx_canvas_is_open(void);
+gfx_surface_t *gfx_canvas_surface(void);  /* NULL when closed */
+bool     draw_require_foreground(const char *verb);  /* tui_commands.c */
+uint8_t  draw_color_arg(const char *s, uint8_t fallback);
+void     draw_maybe_flush(void);  /* hold-aware TUI flush */
+```
+
+### Theme registry (`components/font/theme.c`)
+Pure data + selection (no LVGL/IO), unit-tested:
+```c
+const theme_t *theme_current(void);          /* active; never NULL */
+const theme_t *theme_get(const char *name);  /* case-insensitive; NULL if unknown */
+int  theme_builtin_count(void);
+const theme_t *theme_builtin_at(int index);  /* NULL out of range */
+bool theme_set(const char *name);            /* false leaves the active theme unchanged */
+int  theme_active_index(void);
+```
+- `theme_t` holds the chrome colors (screen/transcript/input-row/keyboard bg, accent/body/
+  muted/warn text, header panel tints, modal border/title/message) and the font roles.
+- The command layer (`shell_command_theme`) drives `theme list|show|set [/save]`; applying a
+  theme calls `windows_refresh_theme()`, `keyboard_refresh_theme()`, and
+  `header_refresh_theme()`. Modal surfaces read `theme_current()` when they open. Persistence
+  is the `theme` key in `sd:/APPS/SHELL.INI` (restored by `font_restore_saved()`).
+
+### Responsive header (`components/header/`)
+Measurement-driven layout with no overlap on any resolution or rotation:
+```c
+/* Pure policy, no LVGL/IO (header_layout.c), unit-tested: */
+void header_layout_compute(header_layout_t *out, int avail_w, int gap,
+                           const int status_w[HEADER_LEVEL_COUNT],
+                           const int sys_w[HEADER_LEVEL_COUNT],
+                           int center_min);
+/* Widgets + live policy (header.c): */
+int  header_get_height(void);            /* single height authority */
+void header_set_mode(header_mode_t mode);
+header_mode_t header_get_mode(void);
+const char *header_mode_name(header_mode_t mode);
+bool header_mode_parse(const char *text, header_mode_t *out);
+void header_relayout(void);              /* safe from any task */
+void header_get_metrics(header_metrics_t *out);  /* wanted vs actual widths */
+/* Shell surface (header_commands.c): */
+void shell_command_header(int argc, char **argv);  /* [status]|mode|show|hide */
+void header_restore_saved(void);                   /* SHELL.INI header_mode */
+```
+- Every render measures the live labels and fits the three panels into the
+  real content width (full → abbreviations → dynamic font step → notification
+  yields → panel dropped, in that order); panels get explicit absolute
+  geometry and the notification label is pinned to its container width.
+- `font_restore_saved()` reports success; a failed first-mount restore re-arms
+  via `storage_sd_first_mount_reset()` so the next mount retries instead of
+  skipping the boot restore.
+
+### Background jobs (`start` / `taskkill`)
+```c
+void shell_command_start(int argc, char **argv);      /* pooled worker, PSRAM stack */
+void shell_command_taskkill(int argc, char **argv);
+```
+- Lives in `components/command/command.c`. Pool size `P4_CONFIG_BG_TASKS`; workers are created
+  suspended at init with PSRAM stacks via `xTaskCreateStatic` and resumed per `start`.
+- Cooperative kill: `batch_bg_request_kill()` sets a flag polled per batch line and every 100 ms of
+  `delay`. `start` is refused while a C6 OTA is pending; `c6ota` is refused while a job runs.
 
 ### Persistent settings (`config` command)
 `components/command/config_cmd.c` implements `config` (declared in `config_cmd.h`):
@@ -638,9 +813,9 @@ esp_err_t storage_temp_cleanup(void);
   state group share this core; the `config` command's `config_directive_*`
   helpers are thin wrappers over `storage_ini_get_value/upsert/remove`.
 
-## TUI Module API (hardware testing patch 0.35.0→0.35.1 on COM11, stack 24576 at 0x4012b75a, companion 7 BATs TUI-expanded)
+## TUI Module API (hardware testing patch 0.35.0→0.35.1 on COM11, stack 32768 at 0x4012b75a, companion 10 BATs TUI-expanded)
 
-Declared in `components/tui/tui.h` (leaf: `REQUIRES shell, windows, ansi, display`). Logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` `80×25` (`p4minishell_config.h:298`) heap cell buffer (`utf8[4]` `tui_cell_t`) mapped to the live transcript region `1024x510` via `windows_enter_tui_mode`/`windows_refresh_tui_surface`/`windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). Font: extended `unscii_16` in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F/U+2600-U+26FF, cmaps 3, `CONFIG_LV_FONT_UNSCII_16=y` `sdkconfig.defaults:33`).
+Declared in `components/tui/tui.h` (leaf: `REQUIRES shell, windows, ansi, display`). Logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` `80×25` (`p4minishell_config.h:325`) heap cell buffer (`utf8[4]` `tui_cell_t`) mapped to the live transcript region `1024x510` via `windows_enter_tui_mode`/`windows_refresh_tui_surface`/`windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). Font: extended `unscii_16` in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F/U+2600-U+26FF, cmaps 3, `CONFIG_LV_FONT_UNSCII_16=y` `sdkconfig.defaults:33`).
 
 ```c
 typedef struct {
@@ -675,7 +850,7 @@ void tui_enter_fullscreen(void); void tui_exit_fullscreen(void); bool tui_is_ful
                                              /* hide/restore header via windows_set_fullscreen/header_set_visible, keep header visible by default, dynamic keyboard scaling via windows_notify_keyboard_visibility */
 ```
 
-- `tui_draw_box`/`tui_draw_line` honor style and title via `tui_cell_set` (`components/tui/tui.c:116`) with full UTF-8 `SH_BOX_*`; `tui_flush` (`components/tui/tui.c:356`) renders fg/bg via `lv_label` recolor `#RRGGBB` per fg run using `ansi_get_palette_color`.
+- `tui_draw_box`/`tui_draw_line` honor style and title via `tui_cell_set` (`components/tui/tui.c:129`) with full UTF-8 `SH_BOX_*`; `tui_flush` (`components/tui/tui.c:620`) renders fg/bg via `lv_label` recolor `#RRGGBB` per fg run using `ansi_get_palette_color`.
 - `tui status` (command layer) reports `transcript rect 1024x510, cols 80 rows 25, fullscreen, font unscii_16 384 glyphs`, `tui clear`/`tui fullscreen on|off`/`tui refresh` dispatch here.
 - `draw` batch verb (`components/command/command.c`) auto-enters TUI via `tui_init` when no TUI/modal surface is active, otherwise reuses the active buffer; batch verbs `draw box`/`line`/`fill`/`text`/`clear`/`window`/`fullscreen` map directly to these primitives.
 - Prompt fixed: `main.c:112` input line and `modal_surf.c:412` `ask` placeholder use `shell_prompt_render_plain()` (`components/shell/shell.c:412`); screenshot debug loop `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
@@ -797,10 +972,26 @@ void      shell_execute_pipe(char *command);
   `;`-separated PATH entry with both forms.
 - `shell_execute_batch_file()` returns `ESP_ERR_INVALID_STATE` past 4 nesting levels and
   `ESP_ERR_NOT_FOUND` when the file cannot be opened. On return it unwinds any `setlocal`
-  scope the file left open and resolves the pending `exit` stop mode.
+  scope the file left open and resolves the pending `exit` stop mode. A file at or below
+  `P4_CONFIG_BATCH_FILE_MAX_BYTES` (131072) is loaded into a PSRAM RAM image and executed via
+  `shell_frame_fgets`/`tell`/`seek` (byte-for-byte `fgets` semantics), keeping `goto` loops off
+  the SD card; larger files stream from the SD.
 - `shell_execute_pipe()` splits on unquoted `|` into up to `P4_CONFIG_PIPE_STAGE_MAX` stages,
   spools each stage but the last to its own file, hands it to the next stage through the
   storage input-redirection slot, and removes every spool file on every exit path.
+
+### Background task slots (`start` pool)
+```c
+int  batch_bg_alloc(void);                 /* claim a free slot (>= 1) or -1 */
+void batch_bg_bind(int slot);              /* the worker binds itself on entry */
+void batch_bg_release(int slot);           /* release when the worker exits */
+void batch_bg_request_kill(int slot);      /* cooperative stop request */
+bool batch_bg_kill_requested(void);        /* polled per batch line and per 100 ms of delay */
+bool batch_bg_is_background(void);         /* true on a pooled worker */
+```
+- The main worker owns slot 0; each `start`ed job owns one of the pool (size
+  `P4_CONFIG_BG_TASKS`). Each slot carries its own batch context, errorlevel, goto state,
+  `setlocal` depth, and `%*` scratch (`batch_task_ctx_t`).
 
 ### Batch language commands
 ```c
@@ -844,10 +1035,12 @@ bool batch_is_initialized(void);
 ## Applib Module API (components/applib, native-app runtime)
 
 The stable runtime surface native apps link against. Depends only on `shell`,
-`clock`, and the FreeRTOS/heap/esp_timer IDF components; it never includes
+`clock`, `storage`, `db`, `tui`, and the FreeRTOS/heap/esp_timer IDF components; it never includes
 `networking.h` (Wi-Fi state routes through `applib_net_ops_t`). The headers
 are lean: each service group declares its functions in its own
-`applib_*.h`, and the umbrella `applib.h` includes all of them.
+`applib_*.h` (`applib_console.h`, `applib_mem.h`, `applib_time.h`, `applib_net.h`,
+`applib_input.h`, `applib_state.h`, `applib_ui.h`, `applib_app.h`, `applib_env.h`,
+`applib_db.h`, `applib_tui.h`), and the umbrella `applib.h` includes all of them.
 
 ### Console output (applib_console.h) (stdout = transcript = the redirection layer)
 ```c
@@ -1102,6 +1295,8 @@ The window manager (`components/windows/`) is the central layout controller for 
 - `lv_obj_t *windows_get_transcript(void)` — Scrollable command output (LVGL span group)
 - `void windows_set_transcript_text(const char *text)` — Set transcript from ANSI text
   (parses it into per-colour spans; the rebuild is deferred to the LVGL task)
+- `void windows_set_transcript_text_len(const char *text, size_t len)` — Length-aware variant used
+  by the transcript append/trim paths so no `strlen`/`snprintf("%s")` scans the 64 KB buffer
 - `void windows_apply_transcript_height(void)` — Rebound the transcript to its computed slot
 - `void windows_scroll_transcript_to_end(void)` — Follow to the bottom only when near it
 - `void windows_force_scroll_transcript_to_end(void)` — Jump to the bottom unconditionally
@@ -1781,59 +1976,49 @@ int modal_ask_run(const char *prompt, const char *default_text, bool password,
 - All three take a `timeout_ms` (0 = wait forever); on timeout they close as
   a cancel.
 
-## TUI Module API (v0.35.0 — `components/modal/` + `components/ansi/` + `components/applib/`)
+## TUI Module API (`components/tui/` + `components/modal/`)
 
-Restored text-mode TUI for batch apps on the shared modal runtime:
+The TUI is an 80x25 heap cell buffer rendered into the live transcript region. Full
+primitive list appears in the earlier "TUI Module API" section; the current surface is:
 
 ```c
-/* Batch TUI surfaces (modal_surf.c) — all modal_surface_t */
+/* Cell buffer + primitives (components/tui/tui.h) */
+bool tui_init(void); void tui_deinit(void); bool tui_is_active(void);
+void tui_clear(void); void tui_clear_line(int mode);
+void tui_set_cursor(int row, int col); void tui_get_cursor(int *row, int *col);
+void tui_putc(char ch); void tui_print_at(int col, int row, const char *text, uint8_t fg, uint8_t bg);
+void tui_draw_box(int x,int y,int w,int h,const char *style,uint8_t fg,uint8_t bg,const char *title);
+void tui_draw_line(int x1,int y1,int x2,int y2,const char *style,uint8_t fg,uint8_t bg);
+void tui_fill(int x,int y,int w,int h,char ch,uint8_t fg,uint8_t bg);
+void tui_draw_bar(int x,int y,int w,int pct,char fill_ch,char empty_ch,uint8_t fg,uint8_t bg);
+void tui_draw_table(int x,int y,int ncols,const int *widths,int nrows,
+                    const char *const *cells,bool header,uint8_t fg,uint8_t bg);
+void tui_draw_table_ex(int x,int y,int ncols,const int *widths,int nrows,
+                       const char *const *cells,bool header,uint8_t fg,uint8_t bg,
+                       int cursor_data_row,uint32_t sel_mask);
+int  tui_table_total_width(int ncols, const int *widths);
+int  tui_table_parse_cursor(const char *s, int n_data_rows);
+uint32_t tui_table_parse_sel(const char *s, int n_data_rows);
+uint8_t tui_rgb_to_dos(uint32_t rgb); uint32_t tui_dos_color_rgb(uint8_t index);
+void tui_flush(void); void tui_refresh_surface(void);
+void tui_enter_fullscreen(void); void tui_exit_fullscreen(void); bool tui_is_fullscreen(void);
+
+/* Modal surfaces (components/modal/modal_surf.h) - six on one shared runtime */
 int modal_dialog_run(const char *title, const char *message,
-                     const char *button1, const char *button2, uint32_t timeout_ms); /* 0/1/255 */
-int modal_list_run(const char *title, const char **items, int count, uint32_t timeout_ms); /* 0-based/-1 */
+                     const char *button1, const char *button2, uint32_t timeout_ms);
+int modal_list_run(const char *title, const char **items, int count, uint32_t timeout_ms);
 int modal_ask_run(const char *prompt, const char *default_text, bool password,
-                  uint32_t timeout_ms, char *result, size_t result_size); /* 0/-1, ASK_RESULT */
-int modal_browse_run(const char *path, uint32_t timeout_ms, char *result, size_t result_size); /* 0/-1, BROWSE_RESULT */
-int modal_view_run(const char *path);   /* text pager, 20 lines/page */
-int modal_hexview_run(const char *path); /* 16-byte hex dump pager */
-
-/* Batch TUI drawing verbs (batch.c → TUI cell buffer) */
-void tui_draw_box(int x, int y, int w, int h);
-void tui_draw_text(int x, int y, const char *text);
-void tui_set_color(int fg, int bg);
-void tui_locate(int row, int col);
-
-/* Logical grid + live region */
-#define P4_CONFIG_TUI_COLS 80
-#define P4_CONFIG_TUI_ROWS 25
-void windows_enter_editor_mode(void);      /* alias transcript container as TUI surface */
-void windows_refresh_editor_surface(void); /* re-apply transcript rect after rotation/keyboard */
-void windows_exit_editor_mode(void);
-
-/* Async ANSI (shell.c) */
-void shell_schedule_transcript_appendf_ansi(const char *format, ...); /* ansi_vformat + ESC-aware flush */
-int  ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args);
-bool ansi_contains_escapes(const char *text);
-
-/* Native TUI SDK stub (applib_tui.h, included via applib.h) */
-void *tui_create(int cols, int rows);
-void  tui_destroy(void *tui);
-void  tui_box(void *tui, int x, int y, int w, int h);
-void  tui_print_at(void *tui, int x, int y, const char *text);
-void  tui_refresh(void *tui);
-void  tui_clear(void *tui);
+                  uint32_t timeout_ms, char *result, size_t result_size);
+int modal_filebrowser_run(const char *path, uint32_t timeout_ms, char *result, size_t result_size);
+int modal_viewer_run(const char *title, const char *path, uint32_t timeout_ms);
+int modal_hexview_run(const char *title, const char *path, uint32_t timeout_ms);
 ```
 
-- Logical grid `80×25` (`P4_CONFIG_TUI_COLS`×`ROWS`) is the DOS coordinate system
-  batch files address with `draw`/`locate`/`color`; `P4_CONFIG_TUI_*` maps to the
-  live transcript rect via `windows_enter_editor_mode`/`windows_refresh_editor_surface`
-  (rotation/keyboard-aware). Cell buffer is heap, clamped to the logical grid,
-  CSI handled by `components/ansi/ansi.c`.
-- `dialog`/`list`/`ask` dispatcher was missing from `command.c` — now wired; all
-  six (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) share one
-  `modal_surface_t` runtime, accept `/t:secs` (auto-cancel) and `/v:NAME`
-  (result variable), and are `modal_is_active` routed.
-- `applib_tui.h` is declared in v0.35.0 (`tui_create/destroy/box/print_at/refresh/clear`)
-  with a warning stub; full native TUI implemented after companion ships.
+- The `draw`/`tui` verbs live in `components/command/tui_commands.c`; the modal verbs in the same
+  file route through `components/modal/modal_surf.c`.
+- `draw table` and `draw list` map to `tui_draw_table_ex()` with the cursor/selection helpers.
+- `components/applib/applib_tui.h` is now only a thin re-export of `tui.h`; there is no separate
+  `tui_create` API.
 
 ## Shell USB Keyboard Bridge
 

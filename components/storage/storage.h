@@ -110,6 +110,12 @@ bool storage_sd_is_mounted(void);
  */
 void storage_register_sd_first_mount_callback(void (*callback)(void));
 
+/** Re-arm the one-shot first-mount callback so it fires on the next mount.
+ * Used when the callback ran but could not complete its work (e.g. the VFS
+ * was not readable yet); the next mount retries instead of silently
+ * skipping the boot restore for the rest of the session. */
+void storage_sd_first_mount_reset(void);
+
 /**
  * Unmount the SD card for safe removal and report the result to the user.
  * Implements the `sd eject` / `sdeject` command.

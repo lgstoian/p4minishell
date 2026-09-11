@@ -35,6 +35,20 @@ extern "C" {
  * the PSRAM staging buffer bounded). */
 #define GFX_BMP_MAX_BYTES 262144
 
+/** Built-in 8x8 ASCII font (`gfx_surface_text`): glyph index = ch-0x20,
+ * one byte per row, MSB = leftmost pixel. Data lives in gfx_font.c. */
+#define GFX_FONT_W 8
+#define GFX_FONT_H 8
+#define GFX_FONT_FIRST 0x20
+#define GFX_FONT_LAST 0x7E
+#define GFX_FONT_GLYPHS (GFX_FONT_LAST - GFX_FONT_FIRST + 1)
+
+/** Polygon vertex cap for `gfx_surface_polygon` (scanline intersection
+ * scratch). */
+#define GFX_POLY_MAX_PTS 64
+
+extern const uint8_t gfx_font8x8[GFX_FONT_GLYPHS][GFX_FONT_H];
+
 /** Raster surface: row-major RGB565 pixels. */
 typedef struct {
     uint16_t *px; /**< PSRAM pixel buffer (NULL when unallocated). */
@@ -70,10 +84,88 @@ void gfx_surface_rect(gfx_surface_t *s, int x, int y, int w, int h,
 void gfx_surface_circle(gfx_surface_t *s, int cx, int cy, int r,
                         uint16_t color, bool fill);
 
+/** Horizontal span (x..x+w-1) at row y, clipped. Faster than per-pixel. */
+void gfx_surface_hline(gfx_surface_t *s, int x, int y, int w, uint16_t color);
+
+/** Vertical span (y..y+h-1) at column x, clipped. */
+void gfx_surface_vline(gfx_surface_t *s, int x, int y, int h, uint16_t color);
+
+/** Triangle through three vertices. fill=true paints the interior
+ * (edge-function test over the bounding box), else the 3 edges. */
+void gfx_surface_triangle(gfx_surface_t *s, int x1, int y1, int x2, int y2,
+                          int x3, int y3, uint16_t color, bool fill);
+
+/** Polygon through @p n vertices; @p xy holds 2n ints (x0,y0,x1,y1,...).
+ * fill=true uses the even-odd scanline rule (convex or concave), else draws
+ * the closed outline. At most GFX_POLY_MAX_PTS vertices are used. */
+void gfx_surface_polygon(gfx_surface_t *s, const int *xy, int n,
+                         uint16_t color, bool fill);
+
+/** Axis-aligned ellipse at cx,cy radii rx,ry. fill=true paints the disc,
+ * else a 1px outline. rx==0 or ry==0 degenerates to a line. */
+void gfx_surface_ellipse(gfx_surface_t *s, int cx, int cy, int rx, int ry,
+                         uint16_t color, bool fill);
+
+/** 4-way flood fill starting at x,y. Fills the connected region whose color
+ * equals the seed pixel (no-op when the seed already holds @p color or is
+ * out of bounds). @return the number of pixels filled. */
+int gfx_surface_flood_fill(gfx_surface_t *s, int x, int y, uint16_t color);
+
+/** Draw 8x8 ASCII @p text at x,y. When @p use_bg is true, glyph cell
+ * backgrounds are filled with @p bg (else transparent). @p scale is an
+ * integer pixel multiplier (<=0 treated as 1). @return the advance width. */
+int gfx_surface_text(gfx_surface_t *s, int x, int y, const char *text,
+                     uint16_t color, uint16_t bg, bool use_bg, int scale);
+
+/** Advance width for @p text at @p scale (GFX_FONT_W per char). */
+int gfx_text_width(const char *text, int scale);
+
 /** Read one pixel (0 outside the surface). Headless test helper. */
 uint16_t gfx_surface_get(const gfx_surface_t *s, int x, int y);
 
-/** Copy src onto dst at x,y (clipped; out-of-bounds ignored, never an
+/** World-coordinate viewport (gfx_view.c): maps a math window
+ * (xmin..xmax, ymin..ymax, y up) onto an integer raster rect
+ * (px, py, pw, ph). The rect is plain integer coordinates, so the same code
+ * drives the 0-based `gfx` pixel canvas and the 1-based TUI cell grid —
+ * the caller picks the origin convention. Pure, headless-safe. */
+typedef struct {
+    double xmin; /**< World left. */
+    double xmax; /**< World right (must exceed xmin). */
+    double ymin; /**< World bottom. */
+    double ymax; /**< World top (must exceed ymin). */
+    int px;      /**< Raster rect origin x. */
+    int py;      /**< Raster rect origin y. */
+    int pw;      /**< Raster rect width (> 0). */
+    int ph;      /**< Raster rect height (> 0). */
+} gfx_view_t;
+
+/** Set a viewport (no validation beyond storing; map/clip reject
+ * degenerate windows). */
+void gfx_view_set(gfx_view_t *v, double xmin, double xmax, double ymin,
+                  double ymax, int px, int py, int pw, int ph);
+
+/** Map a world point to raster ints. @return true with @p sx/@p sy set when
+ * the rounded point lands strictly inside the rect (non-finite inputs
+ * and degenerate windows return false). */
+bool gfx_view_map(const gfx_view_t *v, double x, double y, int *sx, int *sy);
+
+/** Plot one world point (draws only when it lands inside the rect). */
+void gfx_view_point(const gfx_view_t *v, gfx_surface_t *s, double x, double y,
+                    uint16_t color);
+
+/** Clip a world segment to the view rect (Cohen-Sutherland on the integer
+ * rect, so no giant coordinates ever reach the rasterizer). @return true
+ * with clipped integer endpoints when any part is visible. */
+bool gfx_view_clip_line(const gfx_view_t *v, double x1, double y1, double x2,
+                        double y2, int *ax, int *ay, int *bx, int *by);
+
+/** Clip + draw a world segment on a surface. @return true when drawn. */
+bool gfx_view_line(const gfx_view_t *v, gfx_surface_t *s, double x1, double y1,
+                   double x2, double y2, uint16_t color);
+
+/** "Nice" axis tick spacing for @p range aiming at @p ticks (1/2/5x10^n).
+ * Returns 1.0 on a non-positive range or tick count. */
+double gfx_view_nice_step(double range, int ticks);/** Copy src onto dst at x,y (clipped; out-of-bounds ignored, never an
  * error). When use_transparent is true, pixels equal to transparent are
  * skipped (sprite transparency). */
 void gfx_surface_blit(gfx_surface_t *dst, const gfx_surface_t *src, int x,

@@ -137,7 +137,7 @@ bool asset_parse_line(const char *line, char *path_out, size_t path_size,
 }
 
 /** Stream a resolved file through CRC-32. @return true with @p crc_out set. */
-static bool asset_crc_file(const char *resolved, uint32_t *crc_out)
+bool asset_crc_file(const char *resolved, uint32_t *crc_out)
 {
     shell_sd_session_t session;
     FILE *file = NULL;
@@ -179,8 +179,8 @@ static bool asset_crc_file(const char *resolved, uint32_t *crc_out)
     return ok;
 }
 
-/** App names for `asset`: [A-Za-z0-9_-]+ (validated before path use). */
-static bool asset_app_ok(const char *app)
+/** App names for `asset`/`pkg`: [A-Za-z0-9_-]+ (validated before path use). */
+bool asset_app_ok(const char *app)
 {
     size_t i;
 
@@ -221,17 +221,7 @@ void shell_command_crc32(int argc, char **argv)
 
 void shell_command_asset(int argc, char **argv)
 {
-    char manifest_arg[P4_CONFIG_SD_PATH_BYTES];
-    char resolved[P4_CONFIG_SD_PATH_BYTES];
-    shell_sd_session_t session;
-    FILE *file = NULL;
-    char *text = NULL;
-    size_t got = 0;
-    int ok = 0;
-    int failed = 0;
     bool list_only;
-    char *save = NULL;
-    char *ln;
 
     if (argc != 3 ||
         (!shell_text_equals_ignore_case(argv[1], "check") &&
@@ -241,43 +231,66 @@ void shell_command_asset(int argc, char **argv)
         return;
     }
     list_only = shell_text_equals_ignore_case(argv[1], "list");
-    if (!asset_app_ok(argv[2])) {
-        shell_transcript_appendf_ansi(SH_ERR "asset: bad app name '%s'\n" SH_RST, argv[2]);
+    (void)asset_verify_app("asset", argv[2], list_only);
+}
+
+/**
+ * Verify (or list) an app's `APPS/<app>.ASSETS` manifest. Shared by the `asset`
+ * verb and `pkg verify` so there is exactly one CRC-checking implementation.
+ * Messages are prefixed with @p tag. Sets and returns ERRORLEVEL:
+ * 0 ok / 1 missing|mismatch|empty / 2 usage|no SD.
+ */
+int asset_verify_app(const char *tag, const char *app, bool list_only)
+{
+    char manifest_arg[P4_CONFIG_SD_PATH_BYTES];
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    char *text = NULL;
+    size_t got = 0;
+    int ok = 0;
+    int failed = 0;
+    char *save = NULL;
+    char *ln;
+    const char *pfx = (tag != NULL) ? tag : "asset";
+
+    if (!asset_app_ok(app)) {
+        shell_transcript_appendf_ansi(SH_ERR "%s: bad app name '%s'\n" SH_RST, pfx, app);
         batch_set_errorlevel(2);
-        return;
+        return 2;
     }
-    snprintf(manifest_arg, sizeof(manifest_arg), "APPS/%s.ASSETS", argv[2]);
+    snprintf(manifest_arg, sizeof(manifest_arg), "%s/%s.ASSETS", P4_CONFIG_PKG_APPS_DIR_NAME, app);
     if (shell_fs_resolve_path(manifest_arg, resolved, sizeof(resolved)) != ESP_OK) {
-        shell_transcript_appendf_ansi(SH_ERR "asset: invalid manifest %s\n" SH_RST, manifest_arg);
+        shell_transcript_appendf_ansi(SH_ERR "%s: invalid manifest %s\n" SH_RST, pfx, manifest_arg);
         batch_set_errorlevel(2);
-        return;
+        return 2;
     }
     if (shell_sd_begin(&session) != ESP_OK) {
-        shell_transcript_appendf_ansi(SH_ERR "asset: SD card not present\n" SH_RST);
+        shell_transcript_appendf_ansi(SH_ERR "%s: SD card not present\n" SH_RST, pfx);
         batch_set_errorlevel(1);
-        return;
+        return 1;
     }
     file = fopen(resolved, "rb");
     if (file == NULL) {
-        shell_transcript_appendf_ansi(SH_ERR "asset: no manifest %s (push one first)\n" SH_RST, resolved);
-        shell_sd_end(&session, "asset");
+        shell_transcript_appendf_ansi(SH_ERR "%s: no manifest %s (install or push one first)\n" SH_RST, pfx, resolved);
+        shell_sd_end(&session, pfx);
         batch_set_errorlevel(1);
-        return;
+        return 1;
     }
     text = heap_caps_malloc(ASSET_MANIFEST_MAX_BYTES + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (text == NULL) {
         text = malloc(ASSET_MANIFEST_MAX_BYTES + 1);
     }
     if (text == NULL) {
-        shell_transcript_appendf_ansi(SH_ERR "asset: out of memory\n" SH_RST);
+        shell_transcript_appendf_ansi(SH_ERR "%s: out of memory\n" SH_RST, pfx);
         fclose(file);
-        shell_sd_end(&session, "asset");
+        shell_sd_end(&session, pfx);
         batch_set_errorlevel(1);
-        return;
+        return 1;
     }
     got = fread(text, 1, ASSET_MANIFEST_MAX_BYTES, file);
     fclose(file);
-    shell_sd_end(&session, "asset");
+    shell_sd_end(&session, pfx);
     text[got] = '\0';
 
     /* Split in place; overlong lines fail the entry loudly. */
@@ -293,18 +306,18 @@ void shell_command_asset(int argc, char **argv)
             continue;
         }
         if (strlen(ln) > ASSET_LINE_MAX_BYTES) {
-            shell_transcript_appendf_ansi(SH_ERR "asset: overlong line (%u max)\n" SH_RST,
-                                          (unsigned)ASSET_LINE_MAX_BYTES);
+            shell_transcript_appendf_ansi(SH_ERR "%s: overlong line (%u max)\n" SH_RST,
+                                          pfx, (unsigned)ASSET_LINE_MAX_BYTES);
             failed++;
             continue;
         }
         if (!asset_parse_line(ln, path, sizeof(path), &expect)) {
-            shell_transcript_appendf_ansi(SH_ERR "asset: malformed line: %s\n" SH_RST, ln);
+            shell_transcript_appendf_ansi(SH_ERR "%s: malformed line: %s\n" SH_RST, pfx, ln);
             failed++;
             continue;
         }
         if (list_only) {
-            shell_transcript_appendf("asset: %s %08X\n", path, (unsigned)expect);
+            shell_transcript_appendf("%s: %s %08X\n", pfx, path, (unsigned)expect);
             ok++;
             continue;
         }
@@ -314,13 +327,13 @@ void shell_command_asset(int argc, char **argv)
 
             if (shell_fs_resolve_path(path, entry, sizeof(entry)) != ESP_OK ||
                 !asset_crc_file(entry, &actual)) {
-                shell_transcript_appendf_ansi(SH_ERR "asset: MISSING %s\n" SH_RST, path);
+                shell_transcript_appendf_ansi(SH_ERR "%s: MISSING %s\n" SH_RST, pfx, path);
                 failed++;
                 continue;
             }
             if (actual != expect) {
-                shell_transcript_appendf_ansi(SH_ERR "asset: MISMATCH %s (want %08X got %08X)\n" SH_RST,
-                                              path, (unsigned)expect, (unsigned)actual);
+                shell_transcript_appendf_ansi(SH_ERR "%s: MISMATCH %s (want %08X got %08X)\n" SH_RST,
+                                              pfx, path, (unsigned)expect, (unsigned)actual);
                 failed++;
                 continue;
             }
@@ -330,14 +343,15 @@ void shell_command_asset(int argc, char **argv)
     heap_caps_free(text);
     if (list_only) {
         batch_set_errorlevel(0);
-        return;
+        return 0;
     }
     if (failed == 0 && ok == 0) {
-        shell_transcript_append_text("asset: manifest empty (nothing to check)\n");
+        shell_transcript_appendf("%s: manifest empty (nothing to check)\n", pfx);
         batch_set_errorlevel(1);
-        return;
+        return 1;
     }
-    shell_transcript_appendf("asset: %s %d/%d ok\n", failed == 0 ? "OK" : "FAIL",
+    shell_transcript_appendf("%s: %s %d/%d ok\n", pfx, failed == 0 ? "OK" : "FAIL",
                              ok, ok + failed);
     batch_set_errorlevel(failed == 0 ? 0 : 1);
+    return failed == 0 ? 0 : 1;
 }

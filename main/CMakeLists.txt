@@ -15,7 +15,7 @@ idf_component_register(
         keyboard
         led
         networking
-        p4_usb
+        usb
         shell
         boot
         clock

@@ -174,21 +174,6 @@ static void networking_appendf(const char *format, ...)
     s_host_ops.transcript_append_ansi(buffer);
 }
 
-static void __attribute__((unused)) networking_schedulef(const char *format, ...)
-{
-    char buffer[512];
-    va_list args;
-
-    if (s_host_ops.schedule_transcript_append_text == NULL) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-    s_host_ops.schedule_transcript_append_text(buffer);
-}
-
 static void networking_schedulef_ansi(const char *format, ...)
 {
     if (s_host_ops.transcript_append_ansi == NULL) {

@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.35.7 hardware bring-up: font, httpd, queue, alarm, modal watchdog, suite 193/0/2)
+# P4MiniShell Roadmap (v0.35.7 + `[Unreleased]`, suite 262/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -16,10 +16,50 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (v0.35.1 — August 2026, hardware-verified final TUI state)
-Implemented today in the checked-in firmware (final TUI hardware-verified on COM11, extensive bug hunting):
+## Current baseline (v0.35.7 + `[Unreleased]`, hardware-verified on COM3)
+Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
-**Hardware testing done:** flash to COM11 succeeded, boot verified (`P4MiniShell v0.35.1 ready`, transcript rect `1024x510` via `tui status`), extensive serial tests run without abort/watchdog/overlap — `draw box` single/double/rounded with title + nested window stack (`tui_draw_box` `components/tui/tui.c:228` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35`), `draw line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen` (single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35`, title+style correctly handled `tui_draw_box` `components/tui/tui.c:228`), `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app, header hidden completely via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`, kept visible by default, dynamic keyboard scaling via `windows_notify_keyboard_visibility`), `color`/`locate` verified, `tui_flush` `components/tui/tui.c:356` recolor `#RRGGBB` per fg run via `ansi_get_palette_color`; prompt fixed in all inputs (`main.c:112` `shell_prompt_render_plain()` `components/shell/shell.c:412`, `modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea`); screenshot debug loop (`grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py`, `tui status` `1024x510` `80x25`); font extended in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F/U+2600-U+26FF, cmaps 3, no duplication, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`); modal `dialog`/`list`/`ask` with timeout + serial input + `browse`/`view` all pass (`draw` auto-enters TUI `components/tui/tui.c:56`); memory-pressure fixes (`P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024 `p4minishell_config.h:93`, `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024→512 `p4minishell_config.h:134`, `P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192→4096 `p4minishell_config.h:626`, `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 `p4minishell_config.h:117`, `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514` at `0x4012b75a`ONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 with 1/4 keep + trim-below-10KB) applied. ANSI wifi `[wifi]` white→cyan verified, audio `bsp_audio_init` abort guard, modal `EventGroup` PSRAM (`MALLOC_CAP_SPIRAM` `components/modal/modal.c:46`), dialog/list/ask serial routing, draw auto-enter TUI — all fixed (bugs.md M22–M30). Essential features implemented: window stack (tui_draw_box with title, nested boxes), fullscreen, color, prompt, screenshot debug. Companion fully TUI-expanded and hardware-verified (7 BATs, push_sd.py COM11 PASS LIB 1896 COMPANION 1552 SYS 1486 FILES 3946 NET 2893 FUN 3968 SET 3109, M31 stack overflow at 0x4012b75a fixed by 16384→24576, M19–M31 all fixed) — see `changelog.md` 0.35.1 and `bugs.md` M19–M31.
+**Current verified baseline:** v0.35.7 plus `[Unreleased]`. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[Unreleased]` for the newest milestones (gfx/assets, packaged SD apps, background jobs, draw table/list, RAM-loaded batch, transcript O(1), plot/graph).
+
+### Recently completed (post-0.35.7)
+- ✅ `components/gfx/` RGB565 raster + BMP parse/decode/blit; `gfx` verbs
+  (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`show`/`load`/`blit`/`free`/
+  `slots`/`save`), 8 sprite slots to 64x64, canvas `gfx save` as BMP.
+- ✅ `crc32` + `asset check|list` over `APPS/<APP>.ASSETS`; `apps/push_assets.py`.
+- ✅ Background jobs: `start`/`taskkill` on a PSRAM-stacked pool; `SVC.BAT`/`AGENDA.BAT` plus a
+  companion Live System > Services menu.
+- ✅ Selectable TUI grids: `draw table /cursor /sel`, `draw list`, `draw hold`.
+- ✅ Batch performance: RAM-loaded scripts (128 KB), one transcript repaint per `for`, O(1)
+  transcript appends + `windows_set_transcript_text_len()`, off-console mirror suppression,
+  one work buffer per command segment.
+- ✅ Reference apps: SNAKE, TCMD (dual-pane commander), ELITE, BOUNCE.
+- ✅ **Packaged SD applications (B1)**: `pkg list|info|verify|check|install|remove`
+  over `APPS/<APP>.APPINFO` + `APPS/<APP>.ASSETS`, installed from CRC-checked
+  `PKGS/<APP>/` bundles (`apps/push_pkgs.py`), a Companion Live System > Packages
+  menu, and a `pkg` install→run→remove HW round-trip (`tools/pkg_test.py`).
+- ✅ **Gfx toolkit (B2)**: `gfx_surface_hline/vline/triangle/ellipse/polygon/
+  flood_fill/text` + verbs (`gfx triangle|ellipse|polygon|fill|hline|vline|text`),
+  an 8x8 on-canvas ASCII font (`gfx_font.c`, generated from unscii-8), the
+  `GFXTOOL.BAT` reference app, 7 new unit cases, and a BMP-pixel HW check
+  (`tools/gfx_toolkit_test.py`).
+- ✅ **UI themes (B3)**: `theme list|show|set [/save]` over four built-in
+  palettes (`default`/`amber`/`ice`/`mono`), live re-apply to
+  screen/transcript/input row/keyboard/header, `SHELL.INI` persistence, the
+  Companion Settings ‣ Theme menu, 3 unit cases, and `tools/theme_test.py`.
+- ✅ **Dead-code cleanup (B4)**: deleted the `storage_commands.c` include-only
+  stub and the `p4_usb` CMake twin (folded into `components/usb`), removed the
+  dead `header_async_batch`/`networking_schedulef`/`fb_entry_cmp` statics, and
+  de-duplicated the `help /all` table.
+- ✅ **Plot/graph layer**: `plot tui|window|auto|axes|func|polar|para|data|bar|
+  table|line|point|clear|status` renders world-coordinate math onto the `gfx`
+  canvas or the TUI grid through one shared viewport (`gfx_view.c`), sampling
+  `calc` expressions; the `PLOT.BAT` reference app and `tools/plot_test.py`
+  verify pixels on both targets.
+- ✅ **Responsive header**: measurement-driven layout (`header_layout.c`)
+  fits status/notification/system panels with no overlap on any resolution or
+  rotation — abbreviations, dynamic font step, bounded scrolling notification,
+  uptime indicator; `header [status]|mode|show|hide` verb, `HEADER_MODE=`
+  boot directive, `SHELL.INI` persistence; single height authority.
 
 ### Shell Core & UI
 - ✅ PowerShell-style prompt: `PS \path> ` with ANSI-colored tokens (bright white PS, bright yellow path, bright white >)
@@ -907,7 +947,7 @@ documented in `SDK.md` ("Modal app surfaces"):
   editor's `editor.h`/`editor_view.h` split remains the template for
   LVGL-surface apps
 - ✅ Example apps — the batch-first decision replaces C samples: `apps/companion`
-  (7 BATs + `LIB.BAT` shared routines + `selftest_*` contract checks) is the
+  (10 BATs + `LIB.BAT` shared routines + `selftest_*` contract checks) is the
   reference app and the executable test suite
 - ✅ Build templates — not needed: batch apps deploy as plain `*.bat` files,
   no compilation step; native code links into the firmware via `applib`

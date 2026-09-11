@@ -79,6 +79,7 @@ void keyboard_deinit(void);
 
 /** Re-resolve the keyboard font after a font switch (see impl note). */
 void keyboard_refresh_fonts(void);
+void keyboard_refresh_theme(void);
 
 /**
  * Check if the keyboard manager is initialized.

@@ -96,3 +96,32 @@ void test_draw_hold_default_off(void)
      * headless units only pin the default + linkage. */
     TEST_ASSERT_FALSE(draw_hold_active());
 }
+
+void test_tui_table_parse_cursor(void)
+{
+    /* 1-based data rows; 0/unset/malformed/out-of-range all read as none. */
+    TEST_ASSERT_EQUAL_INT(3, tui_table_parse_cursor("3", 6));
+    TEST_ASSERT_EQUAL_INT(1, tui_table_parse_cursor(" 1 ", 6));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor("0", 6));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor("7", 6));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor("", 6));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor("x", 6));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor("2x", 6));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor("-1", 6));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor("1", 0));
+    TEST_ASSERT_EQUAL_INT(0, tui_table_parse_cursor(NULL, 6));
+}
+
+void test_tui_table_parse_sel(void)
+{
+    /* Bit i = data row i+1; bad tokens ignored, valid ones clipped. */
+    TEST_ASSERT_EQUAL_UINT32(0x05u, tui_table_parse_sel("1,3", 6));
+    TEST_ASSERT_EQUAL_UINT32(0x01u, tui_table_parse_sel("1", 6));
+    TEST_ASSERT_EQUAL_UINT32(0x00u, tui_table_parse_sel("", 6));
+    TEST_ASSERT_EQUAL_UINT32(0x00u, tui_table_parse_sel("x", 6));
+    TEST_ASSERT_EQUAL_UINT32(0x02u, tui_table_parse_sel("2,x,9", 6));
+    TEST_ASSERT_EQUAL_UINT32(0x20u, tui_table_parse_sel("6", 6));
+    TEST_ASSERT_EQUAL_UINT32(0x00u, tui_table_parse_sel("7", 6));
+    TEST_ASSERT_EQUAL_UINT32(0x00u, tui_table_parse_sel("1", 0));
+    TEST_ASSERT_EQUAL_UINT32(0x00u, tui_table_parse_sel(NULL, 6));
+}

@@ -294,6 +294,21 @@ void keyboard_refresh_fonts(void)
     lvgl_port_unlock();
 }
 
+/** Re-apply the active theme's keyboard background after `theme set`.
+ * Port lock is recursive. */
+void keyboard_refresh_theme(void)
+{
+    if (!s_keyboard.initialized || s_keyboard.widget == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    lv_obj_set_style_bg_color(s_keyboard.widget,
+                              lv_color_hex(theme_current()->bg_keyboard), 0);
+    lvgl_port_unlock();
+}
+
 void keyboard_deinit(void)
 {
     if (!s_keyboard.initialized) {

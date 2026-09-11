@@ -115,6 +115,13 @@ lv_obj_t *windows_get_transcript_spans(void);
 void windows_set_transcript_text(const char *text);
 
 /**
+ * Length-aware variant of windows_set_transcript_text(): copies exactly
+ * @p len bytes (no strlen scan of a potentially 64 KB buffer). Used by the
+ * transcript append/trim paths that already track the length.
+ */
+void windows_set_transcript_text_len(const char *text, size_t len);
+
+/**
  * Drop the oldest half of the rendered scrollback and free its spans.
  *
  * Invoked under memory pressure from the shell (which holds the LVGL port
@@ -204,6 +211,9 @@ const lv_font_t *windows_get_ui_font(void);
 
 /** Re-resolve owned widget fonts after a font switch (see impl note). */
 void windows_refresh_fonts(void);
+
+/** Re-apply the active theme backgrounds (screen/transcript/input row). */
+void windows_refresh_theme(void);
 
 /** Style the input-line cursor as a block (true, editor-like) or thin bar.
  * No-op before the input row exists. Takes the port lock. */

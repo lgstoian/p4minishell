@@ -1,0 +1,19 @@
+=== pull.py ===
+frame size=2193
+saved D:\Code\new\p4minishell\tools\..\spikes\_spkd_pulled.txt
+
+=== _spkd.txt size=2193 first 700 bytes repr ===
+b' Volume in drive A:\n\n Directory of /sdcard\n\n1980-01-01  22:08     3.5 KiB  LIB.BAT\n1980-01-01  11:26       168 B  CONFIG.SYS\n1980-01-01  08:47        87 B  AUTOEXEC.BAT\n1980-01-01  22:08     1.6 KiB  COMPANION.BAT [COMPAN~1.BAT]\n1980-01-01  22:08     4.2 KiB  FILES.BAT\n1980-01-01  22:08     3.0 KiB  NET.BAT\n1980-01-01  22:08     4.2 KiB  FUN.BAT\n1980-01-01  22:08     5.3 KiB  SET.BAT\n1980-01-01  22:08       215 B  ALIASES.BAT\n1980-01-01  22:08     1.5 KiB  README.TXT\n1980-01-01  22:08     1.5 KiB  SYS.BAT\n1980-01-01  04:05       <DIR>  APPS\n1980-01-01  04:06       <DIR>  NOTES\n1980-01-01  01:12        20 B  reg_moved.txt [REG_MO~1.TXT]\n1980-01-01  01:20       <DIR>  TDIR\n1980-01-01  03:32   '
+=== tokens=1,2,3,* ===
+b'[96m[wifi]\x1b[0m C6 hosted firmware version: \x1b[97m3.0.6\x1b[0m\r\n\x1b[96m[wifi]\x1b[0m nvs_flash_init()\r\n\x1b[96m[wifi]\x1b[0m esp_netif_init()\r\n\x1b[96m[wifi]\x1b[0m esp_event_loop_create_default()\r\n\x1b[96m[wifi]\x1b[0m esp_netif_create_default_wifi_sta()\r\n\x1b[96m[wifi]\x1b[0m esp_wifi_init()\r\n\x1b[96m[wifi]\x1b[0m esp_event_handler_instance_register(...)\r\n\x1b[96m[wifi]\x1b[0m esp_wifi_set_storage(WIFI_STORAGE_RAM)\r\n\x1b[96m[wifi]\x1b[0m esp_wifi_set_mode(WIFI_MODE_STA)\r\n\x1b[96m[wifi]\x1b[0m esp_wifi_start()\r\n\x1b[96m[wifi]\x1b[0m Wi-Fi runtime started in STA mode\r\n\x1b[96m[wifi]\x1b[0m no default sdkconfig credentials configured; use wifi connect <ssid> <pass>\r\n\x1b[96m[wifi]\x1b[0m event: station started\r\n\x1b[32mSD card ready\x1b[0m\r\n\x1b[96m[wifi]\x1b[0m \x1b[93mauto-connect:\x1b[0m connecting to known network \x1b[97mnova1\x1b[0m\r\n\x1b[96m[wifi]\x1b[0m esp_wifi_set_config(WIFI_IF_STA)\r\n\x1b[96m[wifi]\x1b[0m \x1b[92mconnect requested\x1b[0m for \x1b[97mnova1\x1b[0m\r\n\x1b[96m[wifi]\x1b[0m esp_wifi_connect()\r\n'
+=== real TAB in /C (timeout path) ===
+b'PS \\> choice /C:ab\t /N /T:a,2 Pick?\r\nPick? \x1b[96m[wifi]\x1b[0m event: \x1b[92massociated\x1b[0m with \x1b[97mnova1\x1b[0m on channel \x1b[95m1\x1b[0m\r\na (timed out)\r\n\x1b[96m[wifi]\x1b[0m event: got IP \x1b[97m192.168.5.213\x1b[0m\r\n\x1b[36mhttpd:\x1b[0m listening on port \x1b[95m80\x1b[0m (auth on, docroot \x1b[94m/sdcard\x1b[0m)\r\n'
+=== live TAB delivery ===
+b'PS \\> choice /C:ab /N Pick?\r\nPick? '
+=== live SPACE delivery (long wait) ===
+b'a\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m'
+=== cleanup verify ===
+b'PS \\> dir /b\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0mLIB.BAT\r\nCONFIG.SYS\r\nAUTOEXEC.BAT\r\nCOMPANION.BAT\r\nFILES.BAT\r\nNET.BAT\r\nFUN.BAT\r\nSET.BAT\r\nALIASES.BAT\r\nREADME.TXT\r\nSYS.BAT\r\nAPPS\r\nNOTES\r\nreg_moved.txt\r\nTDIR\r\nGOTOLOOP.BAT\r\nGOTOIN.BAT\r\nDBS\r\nALARMS\r\nSYS_SNAP.TXT\r\np3shot.bmp\r\nGOTOIN2.BAT\r\nWIFI.KNOWN\r\nAMPTEST.BAT\r\nt_edit.txt\r\nFONTS\r\nADVENT.BAT\r\nNOTES.BAT\r\nMOOD.BAT\r\nBOUNCE.BMP\r\n_z.txt\r\n` overwrites each listing (see bugs.md O6)\r\n_mood.txt\r\n` overwrites each round, and a hot-loop delete risks the\r\n_spk.txt\r\n_spkd.txt\r\nBOUNCE.BAT\r\nSNAKE.BAT\r\n_T.txt\r\nTCMD.BAT\r\nELITE.BAT\r\nC.BAT.bak\r\nTUI x=3+gx (3..42), y=4+gy (4..21)\r\nSHIP.BMP\r\nBALL.BMP\r\nesp32c6_hosted_slave.bin\r\n'
+del /p _spkd.txt -> b'PS \\> del /p _spkd.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[32mdel: deleted /sdcard/_spkd.txt permanently\x1b[0m\r\n'
+del /p _spk.txt -> b'PS \\> del /p _spk.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[32mdel: deleted /sdcard/_spk.txt permanently\x1b[0m\r\n'
+del /p _T.txt -> b'PS \\> del /p _T.txt\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m'

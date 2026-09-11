@@ -2,6 +2,8 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
+> **Applies to firmware v0.35.7 + `[Unreleased]`** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 262/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
+
 ## ANSI/VT Color Support
 
 Every command uses the same built-in colour scheme by default. There is nothing to
@@ -117,9 +119,11 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `sd info|ls|stat|cat|mount|eject`, `sdeject`, `disk` family | `components/storage/storage_fam.c` + `storage.c` |
 | `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`, `delay`, `notify`, `appmode` | `components/batch/batch.c` + `components/batch/batch_expr.c` (`set /a` evaluator) + `components/batch/calc.c` (TUI/modal verbs dispatch from `components/command/`) |
 | `dialog`, `list`, `ask`, `browse`, `view`, `hexview` | `components/command/tui_commands.c` + `components/modal/modal_surf.c` (dispatched from `components/command/command.c`) |
-| `draw` (`box`/`line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`) | `components/tui/tui.c` (`tui_draw_box` `components/tui/tui.c:228` title+style via `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, `tui_draw_line` `components/tui/tui.c:283` single/double/heavy, `tui_fill` `tui_print_at`, `tui_flush` `components/tui/tui.c:356` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, `tui_enter_fullscreen` `components/tui/tui.c:417` / `windows_set_fullscreen` `components/windows/windows.c:418`, `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, `tui_hide_for_modal`) + `components/command/command.c` dispatcher (auto-enters TUI for box/text/line/fill/clear/window `tui_init` `components/tui/tui.c:56`) |
-| `tui` (`status`/`clear`/`fullscreen`/`refresh`) | `components/tui/tui.c` (`tui_status` rect `1024x510` cols `80` rows `25` `p4minishell_config.h:298`, `tui_enter_fullscreen`/`tui_exit_fullscreen` `components/tui/tui.c:417`, `tui_refresh_surface` `components/tui/tui.c:408`, `tui_flush` `components/tui/tui.c:356`) + `components/windows/windows.c` (`windows_enter_tui_mode` keeps header visible by default, `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` hides header only on fullscreen, `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` `components/windows/windows.c:312`, `tui_hide_for_modal`) |
+| `draw` (`box`/`line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`) | `components/tui/tui.c` (`tui_draw_box` `components/tui/tui.c:241` title+style via `tui_cell_set` `components/tui/tui.c:129` `utf8[4]` `components/tui/tui.h:35` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, `tui_draw_line` `components/tui/tui.c:296` single/double/heavy, `tui_fill` `tui_print_at`, `tui_flush` `components/tui/tui.c:620` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, `tui_enter_fullscreen` `components/tui/tui.c:417` / `windows_set_fullscreen` `components/windows/windows.c:418`, `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, `tui_hide_for_modal`) + `components/command/command.c` dispatcher (auto-enters TUI for box/text/line/fill/clear/window `tui_init` `components/tui/tui.c:56`) |
+| `tui` (`status`/`clear`/`fullscreen`/`refresh`) | `components/tui/tui.c` (`tui_status` rect `1024x510` cols `80` rows `25` `p4minishell_config.h:325`, `tui_enter_fullscreen`/`tui_exit_fullscreen` `components/tui/tui.c:417`, `tui_refresh_surface` `components/tui/tui.c:408`, `tui_flush` `components/tui/tui.c:620`) + `components/windows/windows.c` (`windows_enter_tui_mode` keeps header visible by default, `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` hides header only on fullscreen, `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` `components/windows/windows.c:312`, `tui_hide_for_modal`) |
 | `color`, `locate`, `tui`, `draw`, `anchor` | `components/command/tui_commands.c` + `components/tui/tui.c` (`tui_set_default_color` `color` DOS parity, `tui_set_cursor` `locate` DOS parity, both TUI-aware via `tui_cell_set` `utf8[4]` and `tui_flush` recolor `#RRGGBB` per fg run) |
+| `gfx` (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`hline`/`vline`/`triangle`/`ellipse`/`polygon`/`fill`/`text`/`show`/`load`/`blit`/`free`/`slots`/`save`) | `components/command/gfx_commands.c` + `components/gfx/gfx.c` (pure RGB565 raster, `gfx_font.c` 8x8 ASCII font) |
+| `plot` (`tui`/`window`/`auto`/`axes`/`func`/`polar`/`para`/`data`/`bar`/`table`/`line`/`point`/`clear`/`status`) | `components/command/plot_commands.c` + `components/gfx/gfx_view.c` (pure viewport math) + `components/batch/calc.c` (expression sampling) |
 | `beep`, `tone`, `wavplay`, `audio`, `volume` | `components/command/audio_commands.c` + `components/audio/audio.c` (parsing here, codec/playback in `audio`) |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
@@ -128,6 +132,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `screenshot`, `receive`, `send` | `components/command/serial_commands.c` |
 | `display`, `keyboard`, `windows` (UI query) | `components/command/command_ui.c` (dispatched from `components/command/command.c`) |
 | `config` (persistent settings / CONFIG.SYS + factory reset) | `components/command/config_cmd.c` |
+| `crc32`, `asset check|list` + package install/verify (`pkg`) | `components/command/asset_commands.c` + `components/command/pkg_commands.c` |
 | `db` (record store verbs) | `components/command/db_commands.c` (dispatched from `components/command/command.c`) |
 | `alarm`/`cal` (alarm + calendar verbs) | `components/command/alarm_commands.c` (dispatched from `components/command/command.c`) |
 | `gfind` (Palm-style global find over db + alarms) | `components/command/gfind_commands.c` (dispatched from `components/command/command.c`) |
@@ -167,7 +172,7 @@ Discover, list, and run the script apps installed on the shell. An app is any
 `*.bat` or `*.cmd` file in a PATH directory or in the conventional `sd:/APPS`
 directory (up to `P4_CONFIG_LAUNCH_MAX` entries, `.bat` first per directory);
 its optional metadata lives in `sd:/APPS/<name>.APPINFO` (INI format:
-`title=`, `description=`), shown when present. Typing an app name runs it
+`title=`, `description=`, `version=`), shown when present. Typing an app name runs it
 directly (extensionless names probe `.bat` then `.cmd`); `launch` does the
 same by name.
 
@@ -215,6 +220,25 @@ directories.
 Pressing and holding anywhere on the top status bar shows a transient banner
 with the build identity: `P4MiniShell v0.32.7 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
+
+### header — responsive status bar
+
+The header (WiFi/BT/USB/SD status, notification center, MEM/CPU/BAT system
+panel, uptime) lays itself out responsively: every render measures the live
+content and fits the three panels into the display width with no overlap.
+When space runs out it abbreviates labels (`WiFi HI`→`W:HI`, `MEM 12.3M`→
+`M12.3M`), drops the CPU sparkline/bars and separators, may step the header
+text to a smaller font, and hides the notification center before
+dropping any indicator. Portrait rotations compact automatically.
+
+| Form | Meaning |
+|------|---------|
+| `header` / `header status` | Mode, height, visibility, font step, content levels, and wanted vs actual panel widths. |
+| `header mode [auto\|full\|compact] [/save]` | Layout density (`auto` = fit, `full` = prefer full labels, `compact` = abbreviated); `/save` persists to `SHELL.INI`, restored at boot. |
+| `header show\|hide` | Show/hide the bar (rebuilds the layout). |
+
+CONFIG.SYS accepts `HEADER=ON|OFF` and `HEADER_MODE=AUTO|FULL|COMPACT`.
+ERRORLEVEL: `0` ok, `2` usage.
 
 ### ps | tasks | top [/b] [/O:key]
 
@@ -316,12 +340,28 @@ carry the full UI. NotoSansSC auto-attaches as a CJK fallback tail whenever
 present (never a selectable terminal primary). Known limits: stb picks one
 cmap subtable, so U+2600/2601 miss via the SC tail (DejaVu covers them);
 very long CJK rows can wrap-mangle ~3 chars (short lines are exact).
+### theme list | show [name] | set <name> [/save]
 
-### theme show
-Theme table prep: prints the active theme (chrome colors, font roles+sizes).
-Switching arrives later; the future format is `sd:/APPS/THEME.INI`:
-`theme=<name>` plus `color.bg_screen=0B0F10`-style keys and
-`font.terminal=<name>` / `font.terminal.px=<n>` entries.
+Switch the UI color theme. Four built-ins ship: `default` (forest green CRT,
+pixel-identical to the compiled palette), `amber` (amber phosphor), `ice`
+(cool blue), and `mono` (neutral grey). Each table holds the chrome colors
+(screen/transcript/input-row/keyboard backgrounds, accent/body/muted/warn
+text, header panel tints, modal border/title/message) and the font roles.
+
+- `theme list` — one line per built-in (the active one marked `*`).
+- `theme show [name]` — print the active table (or a named one): colors as
+  `RRGGBB` and the font roles/sizes.
+- `theme set <name> [/save]` — swap the active table and re-apply it live to
+  the screen/transcript/input row, the keyboard, and the header. `/save`
+  writes the choice to `sd:/APPS/SHELL.INI` (`theme=<name>`) and it restores
+  at the next boot's first SD mount. Modal surfaces pick up the table when
+  they next open.
+
+Fonts stay under the `font` verb; `theme set` changes colors only. ERRORLEVEL:
+`0` ok, `1` unknown theme (the active theme is unchanged) or a `/save` that
+could not write, `2` usage. Companion UI: **Settings ‣ Theme**. The
+`sd:/APPS/THEME.INI` file format is reserved for a future per-key override;
+today the choice lives in `SHELL.INI`.
 
 ### cursor [block|bar] [blink <ms 0..2000|off>]
 Input-line cursor style (session-only): block (editor-like full cell) or
@@ -375,6 +415,7 @@ Tracked settings and their CONFIG.SYS directive:
 | `DISPLAY_TIMEOUT` | `DISPLAY_TIMEOUT=<secs\|OFF>` | `0` | idle display-off |
 | `OSK` | `OSK=ON\|OFF` | `ON` | on-screen keyboard at boot |
 | `HEADER` | `HEADER=ON\|OFF` | `ON` | header status bar at boot |
+| `HEADER_MODE` | `HEADER_MODE=AUTO\|FULL\|COMPACT` | `AUTO` | header layout density at boot |
 | `LAUNCH_APP` | `LAUNCH_APP=<app>` | *(none)* | offer to run a `.bat` app after boot |
 
 CONFIG.SYS is edited in place with a guarded, atomic temp-file+rename write;
@@ -440,6 +481,41 @@ C6 OTA is pending and `c6ota` is refused while a job runs — flash writes
 make PSRAM briefly inaccessible. ERRORLEVEL (`start`): 0 started /
 1 pool full|unavailable|OTA pending / 2 usage. ERRORLEVEL (`taskkill`):
 0 stop requested / 1 no such job|already finished / 2 usage.
+
+### Background apps: services, alarms, calendar
+
+A "background app" is an ordinary batch file started with `start` (or fired
+by the alarm scheduler), so it runs on the background worker while the shell
+stays live. The rules are the reverse of the display rule: background code
+uses only **headless-safe** verbs — file/DB/INI/calendar I/O, `notify`,
+`tone`/`beep`, `led`, `delay`, `if`/`for`/`goto` — and must never call
+`draw`, `gfx`, `dialog`/`list`/`ask`/`browse`/`view`/`hexview`, `choice`,
+`pause`, `anchor`, or `appmode` (they refuse in bg with ERRORLEVEL 1, or fall
+back to a delay for `pause`/`choice`). Use `delay` (killable in 100 ms
+slices) rather than `sleep`, which tears Wi-Fi down.
+
+Two schedulers exist, and they compose:
+
+- **`start`** — manual, immediate, one pooled slot (`bg0` here). Ideal for a
+  standing service loop that polls. Reference: `apps/companion/SVC.BAT`
+  (start with `start SVC`, stop with `taskkill bg0`); it ticks `cal next`
+  every 20 s and reports through the shared transcript. Companion exposes it
+  under **Live System ‣ Services** (Status / Start / Stop / List alarms /
+  Run agenda now).
+- **`alarm`** — time-based and persistent (`sd:/ALARMS`), polled every
+  `P4_CONFIG_ALARM_POLL_MS` (30 s) with boot catch-up. `alarm add DATE TIME
+  /run:APP.BAT [/daily|/weekly:mask] [/beep] [/led] [/silent]` queues
+  `call APP.BAT` on the command worker when the time arrives, so a batch
+  file can be the action. `cal [today|next|YYYY-MM]` reads the same store.
+  Reference job: `apps/companion/AGENDA.BAT` (`cal today` + `cal next` +
+  `notify`), runnable foreground or scheduled.
+
+`notify TEXT [/t:secs]` posts the header notification (bg-safe), and
+`notify -` clears it. Because background stdout is deferred into the shared
+transcript, a service can log with plain `echo`. One display writer at a
+time is still the rule, so a background app has no UI of its own — it reacts
+and logs; the UI belongs to the foreground shell and `draw list`/`draw
+table` apps such as TCMD.
 
 ### sleep [seconds]
 Enter light sleep. RAM is retained, so the shell resumes with all state
@@ -1400,6 +1476,10 @@ string, strings verbatim); `calc /hex` prints an integral result as `&H` hex.
 `POL`/`REC` overwrite the X and Y environment variables exactly like the
 calculator's BASIC. ERRORLEVEL: 0 ok, 1 domain/syntax/store error, 2 usage.
 
+Batch graphing over `calc` expressions lives in `plot`: world-coordinate
+windows, axes, function/polar/parametric curves, data/bar charts, and value
+tables rendered onto the `gfx` canvas or the TUI grid.
+
 As with `set /a`, an expression that uses shell syntax (`^ & | < >`) must be
 quoted at the prompt so the chain/pipe/redirect splitter does not consume it.
 
@@ -1642,16 +1722,17 @@ nesting depth 64, single JSON value per file (trailing data is an error).
 
 ### draw — TUI drawing primitives (hardware-verified on COM11)
 
-`draw` composes on the `80×25` TUI cell buffer (`components/tui/tui.c` `tui_draw_box`/`tui_draw_line`/`tui_fill`/`tui_print_at` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35`, `tui_flush` recolor `#RRGGBB` per fg run via `ansi_get_palette_color`). It auto-enters TUI (`tui_init` `components/tui/tui.c:56` → `windows_enter_tui_mode`) when no TUI/modal surface is active; inside a TUI/modal surface it reuses the active buffer. Every primitive clamps to `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`p4minishell_config.h:298`), coordinates are 1-based DOS style.
+`draw` composes on the `80×25` TUI cell buffer (`components/tui/tui.c` `tui_draw_box`/`tui_draw_line`/`tui_fill`/`tui_print_at` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35`, `tui_flush` recolor `#RRGGBB` per fg run via `ansi_get_palette_color`). It auto-enters TUI (`tui_init` `components/tui/tui.c:56` → `windows_enter_tui_mode`) when no TUI/modal surface is active; inside a TUI/modal surface it reuses the active buffer. Every primitive clamps to `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`p4minishell_config.h:325`), coordinates are 1-based DOS style.
 
 | Form | Meaning |
 |------|---------|
 | `draw box <x> <y> <w> <h> [single\|double\|rounded] [fg] [bg] [title]` | Draw box border at x,y,w,h with style (default `single`) and optional centered title. Honors style via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) through `tui_cell_set`; nested boxes form the window stack. |
 | `draw line <x1> <y1> <x2> <y2> [fg] [bg]` | Draw H/V line (only horizontal `y1==y2` or vertical `x1==x2`). |
-| `draw fill <x> <y> <w> <h> [char] [fg] [bg]` | Fill rect at x,y,w,h with char (default space) using current fg/bg. |
+| `draw fill <x> <y> <w> <h> <char> [fg] [bg]` | Fill rect at x,y,w,h with `<char>` (required) using current fg/bg. |
 | `draw text <x> <y> <text> [fg] [bg]` | Print text at x,y (UTF-8 aware, respects cell `utf8[4]`). |
 | `draw bar <x> <y> <w> <pct> [fillch] [emptych] [fg] [bg]` | Progress bar `[fill...empty...]` of width w at x,y, pct clamped 0..100 (defaults `#`/`-`). Redraw with a new pct for animations. |
-| `draw table <x> <y> <fg> <bg> "h1\|h2\|..." [row "c1\|c2\|..." ...]` | Bordered table with T-junctions; first row is the header (bold on TUI). Column widths auto-fit content (max 40 each, table must fit 80 cols, max 16 cols × 32 rows). Short rows pad with empty cells; extra cells glue to the last column. |
+| `draw table <x> <y> <fg> <bg> "h1\|h2\|..." [row "c1\|c2\|..." ...] [/cursor:N] [/sel:a,b,...]` | Bordered table with T-junctions; first row is the header (bold on TUI). Column widths auto-fit content (max 40 each, table must fit 80 cols, max 16 cols × 32 rows). Short rows pad with empty cells; extra cells glue to the last column. `/cursor:N` (1-based data row, header excluded) renders that row bright-white bold; `/sel:a,b` renders those data rows bold (both clip silently out of range). |
+| `draw list <x> <y> <w> <h> <file> [fg] [bg] [/top:N] [/cursor:N] [/sel:a,b] [/title:T] [/count:NAME] [/countonly]` | Renders a file's lines in a bordered, selectable panel — the file-manager primitive (`dir /b > file` + `draw list`). `/top` is the 1-based first line shown (scroll), `/cursor` the 1-based highlighted line (bright), `/sel` marks lines with `*`, `/title` sets the box title. `/count:NAME` publishes the total line count to env var `NAME`; `/countonly` does just that and skips drawing (batch's `set /a` echoes and floods, so this is the non-flooding counter). Off-TUI it prints `>`/`*`-marked plain lines. Caps: 256 lines, 96 bytes/line; an empty file returns ERRORLEVEL `1`. Hardware-verified (`apps/tcmd/TCMD.BAT`). |
 | `draw clear [screen\|line\|eol\|eos]` | Clear target (default `screen`): whole grid, cursor line, cursor-to-end-of-line, or cursor-to-end-of-screen. Outside TUI emits the matching ANSI sequence (`ESC[2J`/`ESC[2K`/`ESC[0K`/`ESC[0J`). |
 | `draw window <id> <x> <y> <w> <h> [title]` | Box with window-stack semantics; `<id>` is accepted and ignored. Requires an active TUI (error `1` otherwise). |
 | `draw save` / `draw restore` | Save / restore the TUI cursor (`ESC[s` / `ESC[u]` outside TUI). |
@@ -1674,6 +1755,9 @@ draw text 5 6 Hi 15 1
 draw bar 5 8 40 65
 draw bar 5 8 40 90 # . 10 1
 draw table 5 10 15 1 "Name|Score|Level" "Bob|1250|7" "Ada|980|5"
+draw table 2 4 7 0 "Name|Size" "A.BAT|2 KiB" /cursor:1 /sel:1
+dir /o:gn /b sd:/ > sd:/tmp/_L.txt
+draw list 1 4 39 17 sd:/tmp/_L.txt 15 16 /top:1 /cursor:2 /title:/
 draw window 1 10 6 30 10 Nested
 draw fullscreen on
 draw clear
@@ -1729,6 +1813,13 @@ pixels are ignored, never an error).
 | `gfx line <x1> <y1> <x2> <y2> <color>` | Bresenham line. |
 | `gfx rect <x> <y> <w> <h> <color> [fill]` | Rectangle outline, or filled with `fill`. |
 | `gfx circle <x> <y> <r> <color> [fill]` | Midpoint circle outline (`r=0` plots one pixel), or filled disc with `fill`. |
+| `gfx hline <x> <y> <w> <color>` | Filled horizontal span (clipped in one call). |
+| `gfx vline <x> <y> <h> <color>` | Filled vertical span (clipped). |
+| `gfx triangle <x1> <y1> <x2> <y2> <x3> <y3> <color> [fill]` | Triangle outline, or edge-function filled interior with `fill` (degenerate triangles fall back to the outline). |
+| `gfx ellipse <cx> <cy> <rx> <ry> <color> [fill]` | Axis-aligned ellipse outline, or filled disc with `fill` (`rx`/`ry` 0 degenerates to a line/pixel). |
+| `gfx polygon <color> <fill\|line> <x1> <y1> <x2> <y2> ...` | Closed polygon: `line` outline, or even-odd scanline `fill` (handles concave shapes); at least 3 vertices, at most `GFX_POLY_MAX_PTS` (64). |
+| `gfx fill <x> <y> <color>` | 4-way flood fill of the seed pixel's connected color (bounded by the canvas); prints `gfx: filled <n> pixel(s)`. |
+| `gfx text [/bg:<color>] [/scale:<n>] <x> <y> <color> <text...>` | Draw 8×8 ASCII text (all remaining words are joined with spaces); `/scale:1..16` integer pixel multiplier, `/bg:<color>` fills the glyph cells (else transparent). |
 | `gfx show` | Push the buffer to the display. |
 | `gfx load <slot 0..7> <path>` | Ingest a 24-bit uncompressed BMP (`BI_RGB`, the exact format `screenshot <file>` writes, at most 64×64) into a sprite slot (PSRAM). Rejects other bit depths, RLE, top-down, and oversize art with ERRORLEVEL `1`. |
 | `gfx blit <slot> <x> <y> [transparent]` | Stamp a sprite onto the canvas (clipped; needs `gfx show`). Optional transparent color skips matching pixels. ERRORLEVEL `1` when the slot is empty. |
@@ -1745,12 +1836,59 @@ repo) and pushes them with CRC manifests.
 
 Colors are DOS 0-15 from the CGA table (`tui_dos_color_rgb`, so pixel colors
 match TUI cell colors), `16` = black, anything larger is 24-bit RGB hex used
-at full RGB565 precision (no quantization — unlike `draw`). Reference app:
+at full RGB565 precision (no quantization — unlike `draw`). Reference apps:
 `apps/gfxdemo/BOUNCE.BAT` (batch `set /a` ball physics, 60-frame killable
-loop, in-app `screenshot BOUNCE.BMP` at frame 30; run `launch bounce`).
+loop, in-app `screenshot BOUNCE.BMP` at frame 30; run `launch bounce`) and
+`apps/gfxdemo/GFXTOOL.BAT` (all toolkit primitives + scaled text, saves
+`GFXTOOL.BMP`; run `launch gfxtool`).
+
+The toolkit's text verb uses the built-in 8×8 ASCII font in
+`components/gfx/gfx_font.c` (glyphs 0x20..0x7E, generated by
+`tools/gen_gfx_font.py` from the public-domain unscii-8 TTF bundled with
+LVGL; committed, no runtime font dependency). Advance is
+`strlen(text) * 8 * scale` (`gfx_text_width`). The raster primitives are pure
+buffer math (no LVGL) and unit-tested in `test/main/test_gfx.c`.
+
 ERRORLEVEL: `0` ok (clipped pixels included), `1` no canvas / already open /
-TUI active / background job / no memory / bad slot / empty slot / bad BMP,
-`2` usage.
+TUI active / background job / no memory / empty slot / unreadable or non-24-bit
+BMP, `2` usage / bad slot / invalid path.
+
+### plot — world-coordinate graphs, charts, drawings (hardware-verified on COM3)
+
+`plot` is the calculator's graph mode: a thin coordinate layer that renders
+math onto the `gfx` pixel canvas (default) or the TUI cell grid
+(`plot tui on`). One shared viewport (`xmin..xmax`, `ymin..ymax`, y up) maps
+to either target (`components/gfx/gfx_view.c`, pure + unit-tested). Function
+sampling evaluates `calc` expressions (`y=f(X)`, `r=f(T)`, `x/y=f(T)`), so the
+full `calc` function set, `PI`, and variables work; trig follows the current
+`calc` angle mode (`calc /rad` for radian plots). Canvas plots never
+auto-show — compose several verbs, then one `gfx show`. Foreground only
+(same shared-display refusal as `gfx`/`draw`), except `plot status` (read-only)
+and `plot table` (text output, background-safe).
+
+| Form | Meaning |
+|------|---------|
+| `plot tui on\|off` | Select the render target: TUI cells (`on`, auto-enters TUI like `draw`) or the `gfx` canvas (`off`, needs `gfx init`). |
+| `plot window <xmin> <xmax> <ymin> <ymax> [/rect:x:y:w:h]` | Set the world window (canvas rect is 0-based pixels, TUI rect 1-based cells; default is the full surface). |
+| `plot auto [func <expr> \| data <file> \| bar <src>] [<xmin> <xmax>]` | Fit the y-range to a source (bare form refits the last plotted source); prints the fitted window. |
+| `plot axes [color] [/grid] [/ticks:N]` | Axes at the origin (or window edges) with nice-step ticks + labels; `/grid` adds full grid lines. |
+| `plot func <expr> [color] [/samples:N] [/auto]` | Sample `y=f(X)` across the window as a clipped polyline (default samples = view width, cap `P4_CONFIG_PLOT_SAMPLES`); breaks across asymptotes/non-finite. |
+| `plot polar <expr> [color] [/samples:N] [/auto]` | `r=f(T)`, T in 0..360 degrees. |
+| `plot para <xexpr> <yexpr> [color] [/samples:N] [/auto]` | Parametric curve, T in 0..360 degrees. |
+| `plot data <file> [color] [/dots] [/auto]` | `x,y` (comma/space) per line (`#`/`;` comments skipped, cap `P4_CONFIG_PLOT_MAX_POINTS`): polyline, or scatter with `/dots`. |
+| `plot bar <file\|v1,v2,..> [color] [/auto]` | Bar chart from one value per line or an inline comma list (baseline at y=0 when in range). |
+| `plot table <expr> /from:<a> /to:<b> /step:<s>` | Calculator TABLE listing: `plot.table: <x> <y>` rows (cap `P4_CONFIG_PLOT_MAX_POINTS`). |
+| `plot line <x1> <y1> <x2> <y2> [color]` | World-coordinate segment (exact Cohen–Sutherland clip). |
+| `plot point <x> <y> [color]` | World-coordinate dot. |
+| `plot clear [color]` | Wipe the active surface (canvas fill / whole TUI grid). |
+| `plot status` | Target, window, canvas/TUI state, angle mode. |
+
+Sampling binds `X`/`T` through the environment and restores the prior value
+afterwards. Multi-word expressions must be quoted (`plot func "x^2 + 1"`;
+`^ & | < >` are shell operators). Reference app: `apps/gfxdemo/PLOT.BAT`
+(axes+grid, sin/cos, world line; run `launch plot`). ERRORLEVEL: `0` ok,
+`1` no canvas / background job / domain (no finite values) / unreadable file
+/ nothing to fit, `2` usage.
 
 ### crc32, asset — file checksums and asset manifests (hardware-verified on COM3)
 
@@ -1768,7 +1906,42 @@ lines and ends `asset: OK n/m ok` (ERRORLEVEL `0`) or `asset: FAIL n/m ok`
 verified on-device — the whole reference set (`SPR`, `BOUNCE`, `SNAKE`,
 `TCMD`, `ELITE`, `ADVENT`, `NOTES`, `MOOD`) checks `OK`. App names are
 `[A-Za-z0-9_-]+`; manifest paths must be SD-relative (no `..`, no leading
-`/`). ERRORLEVEL `2` on usage/bad name.
+`/`). ERRORLEVEL `2` on usage/bad name; an empty manifest prints
+`asset: manifest empty (nothing to check)` and returns ERRORLEVEL `1`.
+
+### pkg — packaged SD applications (B1, hardware-verified on COM3)
+
+A *package* is an app shipped as a self-contained, CRC-checked bundle.
+Installing it is a verify-then-copy; removing it is a trash (undelete-able)
+delete, so `undelete` can recover an uninstalled payload.
+
+- **Installed side** (`sd:/APPS/`): `<APP>.APPINFO` (metadata: `title=`,
+  `description=`, `version=`) and `<APP>.ASSETS` (the `path=HEXCRC` manifest —
+  the same format and checker as `asset`).
+- **Bundle side** (`sd:/PKGS/<APP>/`): `<APP>.ASSETS` (manifest),
+  `<APP>.APPINFO` (metadata), and payload files at their install-relative
+  paths. A root payload `FOO.BAT` installs to `sd:/FOO.BAT`; a payload
+  `sub/x` installs to `sd:/sub/x`. Bundles are built host-side by
+  `apps/push_pkgs.py` (same PIL/`zlib`/receive path as the other push tools).
+
+| Command | Description |
+|---------|-------------|
+| `pkg list` | One line per installed app: `APP  title  vVERSION  N file(s)` |
+| `pkg info <app>` | Title/description/version plus each manifest entry as `ok`/`MISSING`/`BAD` |
+| `pkg verify <app>` | CRC-check the installed manifest (`pkg: OK n/m ok` / `FAIL`) |
+| `pkg check` | Run the verify check over every installed app and summarise `pkg: n/m package(s) ok` |
+| `pkg install <app>` | Two-pass copy of `PKGS/<app>/`: pass 1 verifies every payload CRC, pass 2 copies payloads, then the APPINFO and manifest into `APPS/` |
+| `pkg remove <app>` | Trash every manifest payload plus `<APP>.APPINFO` and `<APP>.ASSETS` |
+
+`pkg install` aborts without touching installed files if any bundle payload is
+missing or corrupt (`pkg: install aborted (n bad file(s))`). `pkg` reuses the
+`asset` manifest parser/checker (`asset_parse_line`, `asset_crc_file`,
+`asset_verify_app`) and `shell_fs_copy_file`, so an app name is the same
+`[A-Za-z0-9_-]+` rule as `asset`. `pkg info` on a missing manifest prints
+`manifest: APPS/<APP>.ASSETS (missing)`. ERRORLEVEL: `0` ok, `1`
+missing/corrupt/empty-manifest, `2` usage or bad app name. Companion UI:
+**Live System ‣ Packages** in `apps/companion/SYS.BAT`; HW driver
+`tools/pkg_test.py`.
 
 ### color
 
@@ -1776,7 +1949,7 @@ verified on-device — the whole reference set (`SPR`, `BOUNCE`, `SNAKE`,
 
 ### locate
 
-`locate <row> <col>` — DOS `LOCATE` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:160` `tui_set_cursor`/`tui_get_cursor`). Emits the ANSI cursor-position sequence `ESC[<row>;<col>H` to move the cursor, with `row` clamped to `1..25` and `col` to `1..80` bounded by `P4_CONFIG_TUI_ROWS` / `P4_CONFIG_TUI_COLS` (`p4minishell_config.h:298`). Used with `echo` and `ansi` to position text in TUI batch apps (e.g. `locate 5 10 && echo Hello`). Row and column must both be present; missing or non-numeric arguments set ERRORLEVEL `2`, success sets `0`. Refused in background jobs (shared display, ERRORLEVEL `1`). Coordinates are 1-based on the `80×25` transcript region (`1024x510`).
+`locate <row> <col>` — DOS `LOCATE` parity (hardware-verified on COM11; TUI-aware via `components/tui/tui.c:160` `tui_set_cursor`/`tui_get_cursor`). Emits the ANSI cursor-position sequence `ESC[<row>;<col>H` to move the cursor, with `row` clamped to `1..25` and `col` to `1..80` bounded by `P4_CONFIG_TUI_ROWS` / `P4_CONFIG_TUI_COLS` (`p4minishell_config.h:325`). Used with `echo` and `ansi` to position text in TUI batch apps (e.g. `locate 5 10 && echo Hello`). Row and column must both be present; missing or non-numeric arguments set ERRORLEVEL `2`, success sets `0`. Refused in background jobs (shared display, ERRORLEVEL `1`). Coordinates are 1-based on the `80×25` transcript region (`1024x510`).
 
 ### anchor
 
@@ -1823,6 +1996,13 @@ Proven patterns (all hardware-verified on COM3; reference apps:
   hidden; `draw fullscreen on` reclaims the header too.
 - Save games as executable `set` lines (`ELITE.SAV` pattern) and reload
   with `call`; verify art/data with `asset check <app>`.
+- File managers: `dir /o:gn /b <sd:path> > sd:/tmp/_L.txt`, then
+  `draw list … /count:LN /countonly` to size the page (batch's `set /a`
+  echoes, so a `for`-loop counter floods) and `draw list … /top:T
+  /cursor:C` to draw it. `draw fullscreen on` reclaims the header/keyboard
+  rows for a full 80×25 layout; `draw fullscreen off` on exit. Reference:
+  `apps/tcmd/TCMD.BAT` (dual panes, j/k move, t pane, o open, x menu,
+  s swap, 1/2 root, p snapshot, q quit).
 
 ### prompt
 
@@ -2607,6 +2787,7 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 |---------|-------------|
 | bluetooth status | Colour-coded report: hosted readiness, controller, NimBLE, sync, scan, advertising (with active name), C6 firmware version, last error |
 | bluetooth scan [limit] | Bounded BLE scan (default 8 s) through hosted NimBLE on C6; prints name + address + RSSI sorted strongest-first, up to `limit` (default 8) |
+| bluetooth enable | Initialize the hosted controller + NimBLE host and report readiness (idempotent; scan/advertise also bring it up on demand) |
 | bluetooth advertise on [name] | Start non-connectable BLE advertising. `name` is session-only (RAM-only, never persisted); without it the configured default name is used |
 | bluetooth advertise off | Stop BLE advertising |
 | bt ... | Alias for bluetooth command family |

@@ -1,0 +1,5 @@
+; APPINFO metadata for the package-management demo app (INI, read by `launch`
+; and `pkg`). Copied to sd:/APPS/PKGTEST.APPINFO by the PKGS bundle.
+title=Package Test
+description=Minimal app installed from a PKGS bundle via pkg install
+version=1.0

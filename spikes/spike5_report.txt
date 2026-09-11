@@ -1,0 +1,8 @@
+=== plus (sent b'+') ===
+b'PS \\> choice /C:ab+c /N Pick?\r\nPick? '
+=== minus (sent b'-') ===
+b'+\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m'
+=== space (sent b' ') ===
+b'PS \\> -choice /C:ab c /N Pick?\r\n\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[97mPS \x1b[93m/sdcard\x1b[97m> \x1b[0m\x1b[31mUnknown command:\x1b[0m -choice\r\nW (22582) shell: Unknown command: -choice\r\n'
+=== enter (sent b'\r') ===
+b'PS \\> choice /C:ab /N Pick?\r\nPick? '

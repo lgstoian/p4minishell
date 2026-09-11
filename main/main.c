@@ -753,6 +753,11 @@ void app_main(void)
      * AUTOEXEC.BAT through the batch pipeline. Safe with no SD card. */
     boot_run_startup();
 
+    /* The SD is mounted and no boot session is held here, so this is the
+     * reliable point to apply the saved UI choices (theme / header mode /
+     * fonts). The first-mount callback can fire before the VFS is usable. */
+    (void)font_restore_saved();
+
     /* Boot confirmation light: a short green flash once the shell is ready. */
     led_notify(LED_EVENT_BOOT_OK);
 

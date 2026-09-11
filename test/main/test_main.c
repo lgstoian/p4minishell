@@ -239,6 +239,8 @@ extern void test_tui_rgb_to_dos_exact(void);
 extern void test_tui_rgb_to_dos_nearest(void);
 extern void test_tui_table_total_width(void);
 extern void test_draw_hold_default_off(void);
+extern void test_tui_table_parse_cursor(void);
+extern void test_tui_table_parse_sel(void);
 
 extern void test_clipboard_set_get(void);
 extern void test_clipboard_empty_and_null(void);
@@ -274,10 +276,31 @@ extern void test_gfx_bmp_parse_rejects(void);
 extern void test_gfx_bmp_decode_565(void);
 extern void test_gfx_blit_clip_transparent(void);
 extern void test_gfx_565_to_888_row(void);
+extern void test_gfx_hline_vline_clip(void);
+extern void test_gfx_triangle_fill_outline(void);
+extern void test_gfx_polygon_fill_outline(void);
+extern void test_gfx_ellipse(void);
+extern void test_gfx_flood_fill(void);
+extern void test_gfx_font_table(void);
+extern void test_gfx_text_render(void);
+extern void test_gfx_view_map(void);
+extern void test_gfx_view_clip_line(void);
+extern void test_gfx_view_line_draws(void);
+extern void test_gfx_view_nice_step(void);
 extern void test_asset_crc32_vectors(void);
 extern void test_asset_parse_ok(void);
 extern void test_asset_parse_skip(void);
 extern void test_asset_parse_bad(void);
+extern void test_pkg_app_name_from_appinfo_ok(void);
+extern void test_pkg_app_name_from_appinfo_bad(void);
+extern void test_theme_registry(void);
+extern void test_theme_lookup(void);
+extern void test_theme_set_and_active(void);
+extern void test_header_layout_all_full(void);
+extern void test_header_layout_compacts_sides(void);
+extern void test_header_layout_center_yields_first(void);
+extern void test_header_layout_requests_smaller_font(void);
+extern void test_header_layout_degenerate(void);
 
 void app_main(void)
 {
@@ -598,6 +621,8 @@ void app_main(void)
     RUN_TEST(test_tui_rgb_to_dos_nearest);
     RUN_TEST(test_tui_table_total_width);
     RUN_TEST(test_draw_hold_default_off);
+    RUN_TEST(test_tui_table_parse_cursor);
+    RUN_TEST(test_tui_table_parse_sel);
     UNITY_END();
 
     /* RAM clipboard (components/shell). */
@@ -655,6 +680,17 @@ void app_main(void)
     RUN_TEST(test_gfx_bmp_decode_565);
     RUN_TEST(test_gfx_blit_clip_transparent);
     RUN_TEST(test_gfx_565_to_888_row);
+    RUN_TEST(test_gfx_hline_vline_clip);
+    RUN_TEST(test_gfx_triangle_fill_outline);
+    RUN_TEST(test_gfx_polygon_fill_outline);
+    RUN_TEST(test_gfx_ellipse);
+    RUN_TEST(test_gfx_flood_fill);
+    RUN_TEST(test_gfx_font_table);
+    RUN_TEST(test_gfx_text_render);
+    RUN_TEST(test_gfx_view_map);
+    RUN_TEST(test_gfx_view_clip_line);
+    RUN_TEST(test_gfx_view_line_draws);
+    RUN_TEST(test_gfx_view_nice_step);
     UNITY_END();
 
     /* Asset manifest core (command component). */
@@ -663,6 +699,28 @@ void app_main(void)
     RUN_TEST(test_asset_parse_ok);
     RUN_TEST(test_asset_parse_skip);
     RUN_TEST(test_asset_parse_bad);
+    UNITY_END();
+
+    /* Package helpers (command component). */
+    UNITY_BEGIN();
+    RUN_TEST(test_pkg_app_name_from_appinfo_ok);
+    RUN_TEST(test_pkg_app_name_from_appinfo_bad);
+    UNITY_END();
+
+    /* Theme registry (font component). */
+    UNITY_BEGIN();
+    RUN_TEST(test_theme_registry);
+    RUN_TEST(test_theme_lookup);
+    RUN_TEST(test_theme_set_and_active);
+    UNITY_END();
+
+    /* Header layout policy (header component). */
+    UNITY_BEGIN();
+    RUN_TEST(test_header_layout_all_full);
+    RUN_TEST(test_header_layout_compacts_sides);
+    RUN_TEST(test_header_layout_center_yields_first);
+    RUN_TEST(test_header_layout_requests_smaller_font);
+    RUN_TEST(test_header_layout_degenerate);
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

@@ -33,6 +33,9 @@ idf_component_register(
         test_json.c
         test_gfx.c
         test_asset.c
+        test_pkg.c
+        test_theme.c
+        test_header.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"

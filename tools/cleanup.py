@@ -15,6 +15,7 @@ def main():
     for cmd in ["del VA.BAT", "del VB.BAT", "del VC.BAT", "del BGTEST.BAT",
                 "del BOUNCE.BMP", "del SPR32.BMP", "del SPR_OUT.BMP",
                 "del SNAKE.BMP", "del ELITE.BMP", "del ELITE.SAV",
+                "del TCMD.BMP", "del _LT.txt", "del _RT.txt",
                 "del APPS/TESTA.ASSETS", "dir"]:
         try:
             out = run_quiet(sh, cmd)

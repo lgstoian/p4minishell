@@ -112,6 +112,26 @@ void tui_draw_table(int x, int y, int ncols, const int *widths, int nrows,
                     const char *const *cells, bool header,
                     uint8_t fg, uint8_t bg);
 
+/** Table cursor/selection extension for file-manager grids (`draw table
+ * /cursor:N /sel:a,b`). cursor_data_row is 1-based over DATA rows
+ * (header excluded, 0 = none, out-of-range = none); sel_mask bit i
+ * selects data row i+1. Cursor rows render bright-white bold (per-span LVGL
+ * backgrounds don't exist, so inverse isn't expressible — documented in
+ * command.md); selected rows render bold. Borders keep the base colors. */
+void tui_draw_table_ex(int x, int y, int ncols, const int *widths, int nrows,
+                       const char *const *cells, bool header,
+                       uint8_t fg, uint8_t bg, int cursor_data_row,
+                       uint32_t sel_mask);
+
+/** Parse a `/cursor:N` value: 1-based data-row number, 0 when unset,
+ * malformed, or outside 1..n_data_rows. Pure, headless-safe. */
+int tui_table_parse_cursor(const char *s, int n_data_rows);
+
+/** Parse a `/sel:a,b,...` value into a bitmask (bit i = data row i+1).
+ * Malformed tokens are ignored, valid ones clipped to 1..n_data_rows.
+ * Pure, headless-safe. */
+uint32_t tui_table_parse_sel(const char *s, int n_data_rows);
+
 /** Set default fg/bg for next tui_putc/print (DOS COLOR). 16 = default. */
 void tui_set_default_color(uint8_t fg, uint8_t bg);
 

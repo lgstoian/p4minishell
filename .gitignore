@@ -14,3 +14,5 @@ screenshots/*.bmp
 assets_out/
 tools/*.log
 apps/*.log
+spikes/*.bmp
+spikes/_*.txt

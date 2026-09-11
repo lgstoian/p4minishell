@@ -2,3 +2,4 @@
 ; Copied to sd:/APPS/SNAKE.APPINFO by apps/push_apps.py.
 title=Snake
 description=TUI snake: fixed body slots, timeout steering, one flush per frame
+version=1.0

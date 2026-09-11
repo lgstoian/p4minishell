@@ -26,6 +26,8 @@ FILES = [
     "FUN.BAT",
     "SET.BAT",
     "ALIASES.BAT",
+    "SVC.BAT",
+    "AGENDA.BAT",
     "README.TXT",
     "COMPANION.APPINFO",
 ]

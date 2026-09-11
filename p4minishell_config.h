@@ -788,6 +788,25 @@
 /** Maximum batch script arguments (%1 through %9). */
 #define P4_CONFIG_BATCH_ARGS_MAX             9
 
+/**
+ * Maximum batch file size loaded into RAM for execution. A batch file at or
+ * below this size is read once into a PSRAM buffer and executed from memory,
+ * so `goto`-heavy loops never touch the SD card mid-loop. Larger files fall
+ * back to streaming reads (identical semantics, SD-bound).
+ */
+#define P4_CONFIG_BATCH_FILE_MAX_BYTES       131072
+
+/* ---- App packages (`pkg` verb) ----
+ * A package is metadata (`APPS/<APP>.APPINFO`: title/description/version)
+ * plus a contents manifest (`APPS/<APP>.ASSETS`: `path=HEXCRC` lines). The
+ * install source is a bundle directory `PKGS/<APP>/` holding the same manifest
+ * plus the payload files mirrored at their install-relative paths. */
+#define P4_CONFIG_PKG_BUNDLE_DIR_NAME        "PKGS"
+#define P4_CONFIG_PKG_APPS_DIR_NAME          "APPS"
+#define P4_CONFIG_PKG_MAX_ENTRIES            48
+#define P4_CONFIG_PKG_MANIFEST_BYTES         16384
+#define P4_CONFIG_PKG_LINE_BYTES             512
+
 /** Maximum nested batch file call depth. */
 #define P4_CONFIG_BATCH_DEPTH_MAX            4
 
@@ -907,6 +926,25 @@
 
 /** Significant digits used when printing a `calc` numeric result. */
 #define P4_CONFIG_CALC_PRINT_PRECISION       12
+
+/**
+ * `plot` coordinate-layer verbs (plot_commands.c): scientific graphs, charts
+ * and world-coordinate drawings over the `gfx` canvas or the TUI grid,
+ * sampling `calc` expressions. All bounds keep batch loops and data files
+ * from flooding the transcript or the heap.
+ */
+
+/** Default/max samples per `plot func|polar|para` curve. */
+#define P4_CONFIG_PLOT_SAMPLES               240
+
+/** Maximum data points (plot data), values (plot bar) or table rows. */
+#define P4_CONFIG_PLOT_MAX_POINTS            512
+
+/** Longest data/bar file line `plot` will read. */
+#define P4_CONFIG_PLOT_LINE_BYTES            128
+
+/** Target tick count for `plot axes` nice-step spacing. */
+#define P4_CONFIG_PLOT_TICK_TARGET           8
 
 /**
  * Maximum batch lines joined by trailing `^` continuations.
@@ -1270,6 +1308,21 @@
 
 /** Display duration for transient header notifications in milliseconds. */
 #define P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS   3000
+
+/**
+ * Minimum usable width (px) reserved for the center notification region.
+ * When the side panels plus this budget do not fit the screen, the
+ * notification yields first (see header_layout.c) before any indicator is
+ * abbreviated or dropped.
+ */
+#define P4_CONFIG_HEADER_CENTER_MIN_PX       56
+
+/**
+ * Allow the header to drop to a smaller chained font when even the most
+ * compact side-panel layout does not fit (dynamic font sizing). Only used in
+ * AUTO mode. 1 = enabled.
+ */
+#define P4_CONFIG_HEADER_DYNAMIC_FONT        1
 
 /** Sentinel RSSI reported when no Wi-Fi AP information is available (dBm). */
 #define P4_CONFIG_HEADER_RSSI_UNKNOWN        (-127)

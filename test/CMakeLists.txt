@@ -19,9 +19,8 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../p4minishell_config.h
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # Set test component directories.
-# Both components/usb (the vendored USB host stack) and components/p4_usb
-# (the shell-facing USB module) are required: shell and command depend on
-# p4_usb, which in turn depends on usb.
+# components/usb builds both the vendored USB host stack and the shell-facing
+# USB module (usb.c); shell and command depend on it directly.
 set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ansi
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/audio
@@ -39,7 +38,6 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/filetype
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/gfx
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/markdown
-    ${CMAKE_CURRENT_SOURCE_DIR}/../components/markdown
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/modal
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/windows
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/header
@@ -49,7 +47,6 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/db
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/alarm
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/usb
-    ${CMAKE_CURRENT_SOURCE_DIR}/../components/p4_usb
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/c6ota
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_hosted
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_wifi_remote

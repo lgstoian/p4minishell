@@ -244,6 +244,11 @@ void storage_register_sd_first_mount_callback(void (*callback)(void))
     s_sd_first_mount_callback = callback;
 }
 
+void storage_sd_first_mount_reset(void)
+{
+    s_sd_first_mount_fired = false;
+}
+
 void shell_command_sd_mount(void)
 {
     shell_sd_session_t session;

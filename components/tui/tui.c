@@ -452,6 +452,52 @@ void tui_draw_table(int x, int y, int ncols, const int *widths, int nrows,
                     const char *const *cells, bool header,
                     uint8_t fg, uint8_t bg)
 {
+    tui_draw_table_ex(x, y, ncols, widths, nrows, cells, header, fg, bg,
+                      0, 0u);
+}
+
+int tui_table_parse_cursor(const char *s, int n_data_rows)
+{
+    long v;
+    char *end = NULL;
+
+    if (s == NULL || n_data_rows < 1) return 0;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s == '\0') return 0;
+    v = strtol(s, &end, 10);
+    if (end == s) return 0;
+    while (*end == ' ' || *end == '\t') end++;
+    if (*end != '\0') return 0;
+    if (v < 1 || v > n_data_rows) return 0;
+    return (int)v;
+}
+
+uint32_t tui_table_parse_sel(const char *s, int n_data_rows)
+{
+    uint32_t mask = 0u;
+
+    if (s == NULL || n_data_rows < 1) return 0u;
+    while (*s != '\0') {
+        long v;
+        char *end = NULL;
+
+        while (*s == ' ' || *s == '\t' || *s == ',') s++;
+        if (*s == '\0') break;
+        v = strtol(s, &end, 10);
+        if (end == s) break; /* malformed tail: keep bits parsed so far */
+        if (v >= 1 && v <= n_data_rows && v <= 32) {
+            mask |= (1u << (v - 1));
+        }
+        s = end;
+    }
+    return mask;
+}
+
+void tui_draw_table_ex(int x, int y, int ncols, const int *widths, int nrows,
+                       const char *const *cells, bool header,
+                       uint8_t fg, uint8_t bg, int cursor_data_row,
+                       uint32_t sel_mask)
+{
     /* Column border x-stops (absolute grid coords) for the T-junctions. */
     int stops[P4_CONFIG_TUI_COLS];
     int total_w;
@@ -479,6 +525,15 @@ void tui_draw_table(int x, int y, int ncols, const int *widths, int nrows,
         int sep_row = row + 1;
 
         if (row > s_rows) break;
+        /* Cursor row renders bright-white bold content; selected rows
+         * render bold. Borders keep base colors so the grid stays
+         * readable. (Per-span LVGL backgrounds don't exist, so a true
+         * inverse bar isn't expressible — see command.md.) */
+        bool is_cursor = (cursor_data_row >= 1 && r == cursor_data_row);
+        bool is_sel = (r >= 1 && r <= 32 && (sel_mask & (1u << (r - 1))) != 0u);
+        uint8_t rfg = is_cursor ? 15 : fg;
+        uint8_t rbg = bg;
+        bool rbold = is_sel || is_cursor;
         tui_cell_set(cell_at(row, x), SH_BOX_V, fg, bg);
         for (c = 0; c < ncols; c++) {
             int w = widths[c] < 1 ? 1 : widths[c];
@@ -491,7 +546,7 @@ void tui_draw_table(int x, int y, int ncols, const int *widths, int nrows,
             if (copy > sizeof(buf) - 1) copy = sizeof(buf) - 1;
             memcpy(buf, text, copy);
             buf[copy] = '\0';
-            tui_cell_set(cell_at(row, stops[c] + 1), " ", fg, bg);
+            tui_cell_set(cell_at(row, stops[c] + 1), " ", rfg, rbg);
             {
                 /* One cell per codepoint (never split UTF-8 across cells). */
                 const char *p = buf;
@@ -509,16 +564,16 @@ void tui_draw_table(int x, int y, int ncols, const int *widths, int nrows,
                     if ((int)strlen(p) < len) len = 1;
                     memcpy(tmp, p, (size_t)len);
                     cell = cell_at(row, col);
-                    tui_cell_set(cell, tmp, fg, bg);
-                    if (header && r == 0) cell->attr |= 1; /* bold header */
+                    tui_cell_set(cell, tmp, rfg, rbg);
+                    if ((header && r == 0) || rbold) cell->attr |= 1; /* bold header/selection */
                     p += len;
                     col++;
                 }
                 for (; col < stops[c] + 2 + w; col++) {
-                    tui_cell_set(cell_at(row, col), " ", fg, bg);
+                    tui_cell_set(cell_at(row, col), " ", rfg, rbg);
                 }
             }
-            tui_cell_set(cell_at(row, stops[c] + 2 + w), " ", fg, bg);
+            tui_cell_set(cell_at(row, stops[c] + 2 + w), " ", rfg, rbg);
             tui_cell_set(cell_at(row, stops[c] + 3 + w), SH_BOX_V, fg, bg);
         }
         /* Separator under every row: header gets the same single rule. */

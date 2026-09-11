@@ -277,6 +277,12 @@ static bool shell_parse_redirection(char *command,
  */
 static bool shell_command_has_pipe(const char *command)
 {
+    /* Fast reject: most batch lines contain no '|' at all, so a plain
+     * strchr avoids running the quote/escape state machine over every line.
+     * Only a line that actually has a '|' pays the quote-aware pass. */
+    if (command == NULL || strchr(command, '|') == NULL) {
+        return false;
+    }
     return shell_has_unquoted_char(command, '|');
 }
 
@@ -553,9 +559,9 @@ static const char *const shell_builtin_commands[] = {
     "deepsleep", "del", "delay", "dialog", "dir", "disk", "display", "dns", "draw", "echo", "edit",
     "endlocal",
     "erase", "exit", "fc", "find", "findstr", "font", "for", "format", "freq", "gfind", "gfx", "goto", "gpio",
-    "help", "hexview", "history", "httpd", "httpget", "i2c", "if", "ini", "ipconfig", "keyboard",
+    "help", "hexview", "history", "httpd", "httpget", "header", "i2c", "if", "ini", "ipconfig", "keyboard",
     "label", "launch", "list", "locate", "json", "markdown", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "notify", "nslookup",
-    "ntpsync", "open", "paste", "path", "pause", "ping", "power", "prompt", "ps", "pwm",
+    "ntpsync", "open", "paste", "path", "pause", "ping", "pkg", "plot", "power", "prompt", "ps", "pwm",
     "rd", "reboot", "receive", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
     "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "send", "set", "setlocal",
     "shift", "sleep", "sntp", "sort", "spi", "start", "sysinfo", "taskkill", "tasks", "time", "timezone",
@@ -2023,6 +2029,12 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- Header layout mode / visibility ---- */
+    if (shell_text_equals_ignore_case(argv[0], "header")) {
+        shell_command_header(argc, argv);
+        return true;
+    }
+
     /* ---- Markdown rendering ---- */
     if (shell_text_equals_ignore_case(argv[0], "markdown")) {
         shell_command_markdown(argc, argv);
@@ -2199,6 +2211,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "plot")) {
+        shell_command_plot(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "crc32")) {
         shell_command_crc32(argc, argv);
         return true;
@@ -2206,6 +2223,11 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "asset")) {
         shell_command_asset(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "pkg")) {
+        shell_command_pkg(argc, argv);
         return true;
     }
 
@@ -2831,14 +2853,13 @@ bool shell_execute_command_core(char *command)
  */
 static bool shell_execute_command_segment(char *command)
 {
-    /* Expansion needs two line-sized buffers. They live on the heap because
+    /* Expansion needs one line-sized buffer. It lives on the heap because
      * this function sits on the batch recursion path: a batch file calls back
-     * into the pipeline for every line, and four nested levels of two large
-     * stack buffers would overflow the command worker task's stack. The
-     * buffers are command-sized because an interactive command line can be up
-     * to P4_CONFIG_COMMAND_BYTES (batch lines are the smaller surface). */
+     * into the pipeline for every line, and four nested levels of a large
+     * stack buffer would overflow the command worker task's stack. The buffer
+     * is command-sized because an interactive command line can be up to
+     * P4_CONFIG_COMMAND_BYTES (batch lines are the smaller surface). */
     const size_t work_size = SHELL_COMMAND_BYTES;
-    char *expanded = NULL;
     char *command_buffer = NULL;
     char *command_part = NULL;
     char *redirect_target = NULL;
@@ -2852,19 +2873,17 @@ static bool shell_execute_command_segment(char *command)
         return false;
     }
 
-    expanded = malloc(work_size);
     command_buffer = malloc(work_size);
-    if (expanded == NULL || command_buffer == NULL) {
-        free(expanded);
-        free(command_buffer);
+    if (command_buffer == NULL) {
         shell_transcript_append_text("shell: out of memory expanding the command line\n");
         shell_record_errorf("shell", ESP_ERR_NO_MEM, "Out of memory expanding a command line");
         batch_set_errorlevel(1);
         return false;
     }
 
-    shell_expand_variables(command, expanded, work_size);
-    snprintf(command_buffer, work_size, "%s", expanded);
+    /* Expand directly into the working buffer: no second allocation and no
+     * whole-line copy (this runs once per loop iteration). */
+    shell_expand_variables(command, command_buffer, work_size);
     shell_parse_redirection(command_buffer, &command_part, &redirect_target, &append_mode, &input_source);
 
     /* Publish the `<` source so the text-processing commands can pick it up
@@ -2878,7 +2897,6 @@ static bool shell_execute_command_segment(char *command)
             shell_print_error("redirection: invalid input path %s", input_source);
             shell_record_warningf("shell", "Invalid input redirection path %s", input_source);
             batch_set_errorlevel(1);
-            free(expanded);
             free(command_buffer);
             return false;
         }
@@ -2945,7 +2963,6 @@ static bool shell_execute_command_segment(char *command)
     /* End the repaint deferral: one span rebuild for the whole segment. */
     shell_transcript_defer_end();
 
-    free(expanded);
     free(command_buffer);
 
     /* A command "succeeded" when it was recognized and did not raise a new

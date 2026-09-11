@@ -1,0 +1,5 @@
+; APPINFO metadata for the plot demo app (INI format, read by `launch`).
+; Copied to sd:/APPS/PLOT.APPINFO by apps/push_apps.py.
+title=Plotter
+description=Scientific graphs: sin/cos on a world-coordinate window with axes and grid
+version=1.0

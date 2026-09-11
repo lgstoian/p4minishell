@@ -43,3 +43,35 @@ resets on the transition — every driver drops DTR/RTS on open via
   (`-Check` for a dry run). Regenerate after any managed edit with the
   `git diff -- managed_components` byte-pipe in `bugs.md` M40. See `bugs.md`
   M20/M28 and `changelog.md` 0.35.1/0.35.2.
+
+## Focused drivers (recent)
+
+- `bg_run.py` — shared marker-sync drain driver (`run_quiet`, `marker_done`,
+  `boot`) for background/loop tests; reuses `apps/companion/deep_test.py`
+  (`worker_line`) rather than reimplementing serial reading.
+- `perf_for_test.py`, `perf_transcript_test.py`, `clip_probe.py` — batch
+  performance/correctness probes (loop output, transcript slice path).
+- `bg_test.py`/`bg_test2.py`/`bg_kill*.py` — `start`/`taskkill` lifecycle.
+- `tcmd_test.py`/`tcmd_shot.py`/`tcmd_debug.py` — dual-pane commander.
+- `snake_test.py`/`snake_steer_test.py`/`snake_quit_test.py` — SNAKE.
+- `bounce_test.py`/`bounce_twice.py` — gfx BOUNCE demo (incl. re-init safety).
+- `elite_test.py`, `svc_test.py` — ELITE trader + background service/alarm.
+- `asset_test.py`/`asset_test2.py`/`assets_verify.py`, `draw_list_test.py`,
+  `table_cursor_shot.py`, `gfx_sprite_test.py` — asset/manifest + TUI/gfx verbs.
+- `pkg_test.py`/`pkg_smoke.py` — packaged SD apps (`pkg` list/info/verify +
+  install→run→remove round-trip; needs `apps/push_pkgs.py` first).
+- `gfx_toolkit_test.py` — runs `GFXTOOL.BAT`, pulls the saved BMP with
+  `pull.py`, and checks pixels for the B2 primitives + text.
+- `gen_gfx_font.py` — regenerate `components/gfx/gfx_font.c` from the
+  public-domain unscii-8 TTF (run only if the font/cell size changes).
+- `theme_test.py` — B3 theme CLI + reboot persistence (`theme list/show/set`).
+- `header_test.py` — responsive header: `header mode` switching, layout-fit
+  assertions across rotations, persistence (`header mode auto /save`).
+- `plot_test.py` — runs `PLOT.BAT`, pulls canvas BMPs with `pull.py` and checks
+  world-coordinate pixels (func/axes/data/bar/point/line), plus a TUI-mode
+  screenshot to `spikes/plot_tui.bmp`.
+- `unit_run.py` — build-independent capture of the unit-test summaries.
+- `pull.py` — pull an SD file over `send` (SDFX framing).
+- Deploy tools: `apps/push_apps.py` (reference apps), `apps/push_assets.py`
+  (PIL sprites + `.ASSETS` manifests), and `apps/push_pkgs.py` (build + push
+  `PKGS/<APP>/` install bundles).

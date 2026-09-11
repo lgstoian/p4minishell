@@ -120,6 +120,13 @@ static char *s_transcript = NULL;
  * redirection keep using the plain form. */
 static char *s_transcript_ansi = NULL;
 
+/* Cached lengths of the two transcript buffers. Recomputing them with
+ * strlen() on every append scanned the whole 64 KB buffer, making appends
+ * O(buffer) and long output loops quadratic. Every mutation site keeps these
+ * in sync, and all reads use them instead of strlen(). */
+static size_t s_transcript_len = 0;
+static size_t s_transcript_ansi_len = 0;
+
 /* Deferred label repaint batching (see shell_transcript_defer_begin()).
  * Repainting the LVGL span group costs O(buffer): each repaint re-parses the
  * whole ANSI scrollback and rebuilds every span, so per-line repaints make
@@ -418,7 +425,9 @@ static const char *shell_colour_value(char *buf, size_t buf_size, const char *co
  * aligned for the label render.
  */
 static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
+                                               size_t *plain_len_io,
                                                char *ansi, size_t ansi_size,
+                                               size_t *ansi_len_io,
                                                const char *plain_text,
                                                const char *ansi_text,
                                                const char *truncation_marker)
@@ -432,8 +441,10 @@ static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
         return;
     }
 
-    plain_len = strlen(plain);
-    ansi_len = strlen(ansi);
+    /* Lengths are tracked by the caller (see s_transcript_len), so appends no
+     * longer scan the whole buffer. Fall back to strlen for a NULL pointer. */
+    plain_len = (plain_len_io != NULL) ? *plain_len_io : strlen(plain);
+    ansi_len = (ansi_len_io != NULL) ? *ansi_len_io : strlen(ansi);
     plain_text_len = strlen(plain_text);
     ansi_text_len = strlen(ansi_text);
 
@@ -493,6 +504,14 @@ static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
     }
     memcpy(ansi + ansi_len, ansi_text, ansi_text_len);
     ansi[ansi_len + ansi_text_len] = '\0';
+
+    /* Publish the new lengths so the next append needs no strlen scan. */
+    if (plain_len_io != NULL) {
+        *plain_len_io = plain_len + plain_text_len;
+    }
+    if (ansi_len_io != NULL) {
+        *ansi_len_io = ansi_len + ansi_text_len;
+    }
 }
 
 /**
@@ -514,7 +533,7 @@ static void shell_transcript_update_label(void)
      * a coalesced lv_async_call, so no label work races the render cycle from
      * a non-LVGL task. Called under lvgl_port lock from
      * shell_transcript_append_internal. */
-    windows_set_transcript_text(s_transcript_ansi);
+    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len);
 }
 
 void shell_transcript_defer_begin(void)
@@ -616,7 +635,9 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
      * below in the deferred label step, which takes the port lock itself. */
     shell_transcript_buf_lock();
     shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
+                                      &s_transcript_len,
                                       s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
+                                      &s_transcript_ansi_len,
                                       text, text, truncation_marker);
     shell_transcript_buf_unlock();
 
@@ -685,7 +706,9 @@ void shell_transcript_append_ansi(const char *text)
      * lock itself only when it actually repaints. */
     shell_transcript_buf_lock();
     shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
+                                      &s_transcript_len,
                                       s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
+                                      &s_transcript_ansi_len,
                                       plain, text, "\n[history truncated]\n");
     shell_transcript_buf_unlock();
 
@@ -1048,6 +1071,8 @@ void shell_transcript_reset(void)
     shell_transcript_buf_lock();
     s_transcript[0] = '\0';
     s_transcript_ansi[0] = '\0';
+    s_transcript_len = 0;
+    s_transcript_ansi_len = 0;
     /* Content was replaced, not appended: no pending repaint can be valid. */
     s_transcript_defer_dirty = false;
     shell_transcript_buf_unlock();
@@ -1117,8 +1142,8 @@ void shell_transcript_guard_internal(void)
     }
     shell_transcript_buf_lock();
 
-    plain_len = strlen(s_transcript);
-    ansi_len = strlen(s_transcript_ansi);
+    plain_len = s_transcript_len;
+    ansi_len = s_transcript_ansi_len;
 
     /* Gentle trim: keep the newest three quarters so a single trim rarely
      * repeats; only under severe pressure fall back to keeping half. */
@@ -1142,18 +1167,22 @@ void shell_transcript_guard_internal(void)
     if (plain_len + sizeof(truncation_marker) < P4_CONFIG_TRANSCRIPT_BYTES) {
         size_t marker_len = sizeof(truncation_marker) - 1;
         memcpy(s_transcript + plain_len, truncation_marker, marker_len);
-        s_transcript[plain_len + marker_len] = '\0';
+        plain_len += marker_len;
+        s_transcript[plain_len] = '\0';
         if (ansi_len + marker_len < P4_CONFIG_TRANSCRIPT_BYTES) {
             memcpy(s_transcript_ansi + ansi_len, truncation_marker, marker_len);
-            s_transcript_ansi[ansi_len + marker_len] = '\0';
+            ansi_len += marker_len;
+            s_transcript_ansi[ansi_len] = '\0';
         }
     }
+    s_transcript_len = plain_len;
+    s_transcript_ansi_len = ansi_len;
 
     /* Sync the staging buffer to the newly-trimmed ANSI transcript BEFORE
      * trimming spans. Otherwise windows_transcript_trim() works on stale
      * content, and the subsequent shell_transcript_update_label() overwrites
      * it again, causing a full span rebuild (blue flash). */
-    windows_set_transcript_text(s_transcript_ansi);
+    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len);
     windows_transcript_trim();
     shell_transcript_buf_unlock();
     lvgl_port_unlock();
@@ -1181,12 +1210,12 @@ void shell_force_transcript_scroll_to_end(void)
 
 size_t shell_transcript_get_length(void)
 {
-    return strlen(s_transcript);
+    return s_transcript_len;
 }
 
 const char *shell_transcript_get_text_from(size_t offset)
 {
-    size_t length = strlen(s_transcript);
+    size_t length = s_transcript_len;
 
     if (offset > length) {
         return NULL;
@@ -1197,12 +1226,12 @@ const char *shell_transcript_get_text_from(size_t offset)
 
 size_t shell_transcript_get_ansi_length(void)
 {
-    return strlen(s_transcript_ansi);
+    return s_transcript_ansi_len;
 }
 
 const char *shell_transcript_get_ansi_from(size_t offset)
 {
-    size_t length = strlen(s_transcript_ansi);
+    size_t length = s_transcript_ansi_len;
 
     if (offset > length) {
         return NULL;
@@ -2895,6 +2924,16 @@ void shell_uart_console_write_text(const char *text)
         return;
     }
 
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    /* With no host attached there is no reader, and the USB-Serial-JTAG TX
+     * path can block on backpressure — stalling the command worker on every
+     * mirrored transcript line (the on-device slowness). Drop the mirror and
+     * the prompt when nothing is connected; the transcript is unaffected. */
+    if (!usb_serial_jtag_is_connected()) {
+        return;
+    }
+#endif
+
     if (s_uart_console_lock != NULL) {
         xSemaphoreTake(s_uart_console_lock, portMAX_DELAY);
     }
@@ -3515,7 +3554,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "open",     "open [/t:secs] [--raw] <file> - open by type: scripts in editor, md rendered, rest as text (never executes)" },
     { "json",     "json validate|pretty <file> - check structure or print 2-space indented JSON (ERRORLEVEL 0/1)" },
     { "hexview",  "hexview [/t:secs] <file> - 16-byte hex dump pager (ERRORLEVEL 0/1)" },
-    { "draw",     "draw <box|line|fill|text|bar|table|clear|window|save|restore|cursor|hold|alt-screen|close|refresh|fullscreen> - TUI drawing (foreground only)" },
+    { "draw",     "draw <box|line|fill|text|bar|table|list|clear|window|save|restore|cursor|hold|alt-screen|close|refresh|fullscreen> - TUI drawing (foreground only)" },
     { "anchor",   "anchor <label> <command> [continue_line] - named transcript anchor region" },
     { "tui",      "tui status|clear|fullscreen|refresh - TUI control" },
     { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
@@ -3546,7 +3585,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "tree",     "tree [path] [/F] [/A] - directory tree" },
     { "fc",       "fc <f1> <f2> - compare two files" },
     { "font",     "font info | font coverage | font list | font set <terminal|ui> <name> [/save] | font size <terminal|ui> <px> [/save] - roles, coverage, live TTF switching + sizes" },
-    { "theme",    "theme show - active theme table (switching arrives later)" },
+    { "theme",    "theme list | show [name] | set <name> [/save] - switch the UI color theme (persists in SHELL.INI)" },
     { "comp",     "comp <f1> <f2> - compare two files byte-by-byte" },
     { "sort",     "sort [file] [/R] [/I] [/U] - sort lines (pipes: sort < f | sort)" },
     { "clip",     "clip [text | copy [N] | file <path> | read <file> | paste <dest>] - clipboard" },
@@ -3571,13 +3610,14 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "pause",    "pause [message] - wait for a key (30 s timeout)" },
     { "choice",   "choice [/C:keys] [/N] [/T:c,secs] [/S] [text] - interactive selection" },
     { "delay",    "delay <ms> - pure deterministic wait (melodies/demos), clamped to P4_CONFIG_DELAY_MAX_MS" },
-    { "gfx",      "gfx init|close|status|clear|pixel|line|rect|circle|show|load|blit|free|slots|save - RGB565 pixel canvas for batch games (max 320x240, 8 sprite slots max 64x64)" },
+    { "gfx",      "gfx init|close|status|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|load|blit|free|slots|save - RGB565 pixel canvas + toolkit (max 320x240, 8 sprite slots max 64x64)" },
+    { "plot",     "plot tui|window|auto|axes|func|polar|para|data|bar|table|line|point|clear|status - world-coordinate graphs + charts on the gfx canvas or TUI (uses calc)" },
     { "crc32",    "crc32 <path> - print a file's CRC-32 checksum (ERRORLEVEL 0/1)" },
     { "asset",    "asset check|list <app> - verify/list an app's APPS/<APP>.ASSETS manifest (ERRORLEVEL 0/1)" },
+    { "pkg",      "pkg list|info <app>|verify <app>|check|install <app>|remove <app> - SD app packages (APPS/<APP>.APPINFO + .ASSETS, bundles under PKGS/)" },
+    { "header",   "header [status] | mode [auto|full|compact] [/save] | show|hide - responsive status-bar layout" },
     { "start",    "start <command> [args] - run a command or batch file as a background job (see taskkill)" },
     { "taskkill", "taskkill <job> - cooperatively stop a background job (name like bg0, or slot number)" },
-    { "launch",   "launch | launch <name> [args] | launch /list - discover and run script apps .bat/.cmd (PATH + sd:/APPS)" },
-    { "apps",     "apps - list the registered native apps (applib ABI table)" },
     { "for",      "for %v in (set) do <cmd> | for /f \"delims= tokens=\\n\" %%v in (file) do <cmd> - loops" },
     { "setlocal", "setlocal - begin a local environment scope" },
     { "endlocal", "endlocal - end a local environment scope" },
@@ -5068,6 +5108,9 @@ void shell_init(void)
 
     /* Clear state */
     s_transcript[0] = '\0';
+    s_transcript_ansi[0] = '\0';
+    s_transcript_len = 0;
+    s_transcript_ansi_len = 0;
     s_async_transcript[0] = '\0';
     s_async_transcript_len = 0;
     s_async_transcript_flush_queued = false;

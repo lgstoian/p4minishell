@@ -1,0 +1,5 @@
+; APPINFO metadata for the gfx toolkit demo (INI format, read by `launch`).
+; Copied to sd:/APPS/GFXTOOL.APPINFO by apps/push_apps.py.
+title=Gfx Toolkit
+description=Raster toolkit demo: triangle/ellipse/polygon/flood-fill/spans plus scaled on-canvas text
+version=1.0

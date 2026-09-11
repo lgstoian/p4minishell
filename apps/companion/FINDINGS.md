@@ -123,3 +123,21 @@ Key points learned while building the driver:
   strip escape sequences first (the persist check compares stripped output).
 - The trash accumulates quickly when tests run repeatedly (`trash empty`
   before a clean sweep keeps `trash list` fast and the transcript small).
+
+## Later additions (background services, gfx/assets, performance)
+
+- **Background services**: `SVC.BAT` (a headless service loop, started with
+  `start SVC`, stopped with `taskkill bg0`) and `AGENDA.BAT` (calendar +
+  `notify`) were added, with a **Live System > Services** submenu in `SYS.BAT`
+  (Status / Start background service / Stop / List alarms / Run agenda now).
+  The companion is now 10 pushed BATs (`push_sd.py`).
+- **`start`/`taskkill`** run on a pooled background worker with PSRAM stacks;
+  background jobs use headless-safe verbs only (draw/modal/key-wait refuse).
+- **`gfx` + assets**: the `BOUNCE.BAT` game (gfx sprites/BMP) and
+  `apps/push_assets.py` (PIL sprites + `APPS/<APP>.ASSETS` manifests) round
+  out the app story; `asset check` verifies every bundled manifest on device.
+- **Performance**: batch files now execute from a 128 KB RAM image (no SD
+  reads mid-`goto`-loop), transcript appends are O(1), a `for` loop repaints
+  the transcript once, and the serial mirror is skipped when no host is
+  attached. Regression after all of it: unit 262/0/2, deep 8/8, db 38/38,
+  alarm 25/25, smoke 21/21 (COM3).

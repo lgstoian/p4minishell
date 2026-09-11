@@ -35,6 +35,7 @@
 #define FONT_INI_KEY_UI            "font_ui"
 #define FONT_INI_KEY_TERMINAL_SIZE "font_terminal_size"
 #define FONT_INI_KEY_UI_SIZE       "font_ui_size"
+#define THEME_INI_KEY              "theme"
 
 static void font_shell_ini_path(char *out, size_t out_size)
 {
@@ -50,6 +51,15 @@ static void font_refresh_live(void)
     header_refresh_fonts();
     tui_refresh_fonts();
     editor_view_refresh_fonts();
+}
+
+/** Re-apply the active theme to every live chrome surface. Modal surfaces
+ * read the table when they open, so an open modal keeps its colors. */
+static void theme_refresh_live(void)
+{
+    windows_refresh_theme();
+    keyboard_refresh_theme();
+    header_refresh_theme();
 }
 
 /** Transcript rect with keyboard-hidden height (width is keyboard-invariant;
@@ -85,19 +95,62 @@ static bool font_save_current(void)
     return true;
 }
 
-/** Best-effort boot restore of the saved choice. Silent when the SD card
- * (or the file) is unavailable — defaults stand. Called by
- * boot_on_sd_first_mount(), where the mount is guaranteed. */
-void font_restore_saved(void)
+/** Persist the active theme name. False when the SD card is unavailable. */
+static bool theme_save_current(void)
 {
     char path[P4_CONFIG_SD_PATH_BYTES];
+
+    font_shell_ini_path(path, sizeof(path));
+    return storage_ini_file_set(path, THEME_INI_KEY, theme_current()->name) == ESP_OK;
+}
+
+/** Best-effort boot restore of the saved choice. Silent when the SD card
+ * (or the file) is unavailable — defaults stand. Called by
+ * boot_on_sd_first_mount(), where the mount is guaranteed.
+ * @return true when the restore completed (or there was nothing saved);
+ *         false when the SD was not readable, so the caller retries on the
+ *         next mount instead of skipping the restore for the whole boot. */
+bool font_restore_saved(void)
+{
+    char path[P4_CONFIG_SD_PATH_BYTES];
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
     char terminal[P4_CONFIG_FONT_NAME_BYTES];
     char ui[P4_CONFIG_FONT_NAME_BYTES];
     char size_buf[16];
+    char theme_name[32];
     bool have_terminal = false;
     bool have_ui = false;
+    FILE *probe = NULL;
 
     font_shell_ini_path(path, sizeof(path));
+
+    /* Probe readability first: a missing file with a mounted card means
+     * "nothing saved" (done), while an unreadable card means "try again
+     * later" instead of burning the one-shot first-mount callback. */
+    if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) == ESP_OK) {
+        probe = fopen(resolved, "r");
+        if (probe != NULL) {
+            fclose(probe);
+        }
+    }
+    if (probe == NULL) {
+        return storage_sd_is_mounted();
+    }
+
+    /* Theme restores first (color-only); the live refresh no-ops until the
+     * chrome exists. The probe above proved the file readable, so this uses
+     * the value directly instead of re-reading (a second read can fail on a
+     * flaky mount even when the first succeeded). */
+    if (storage_ini_file_get(path, THEME_INI_KEY,
+                             theme_name, sizeof(theme_name)) == ESP_OK) {
+        if (theme_set(theme_name)) {
+            theme_refresh_live();
+        }
+    }
+
+    /* Header layout mode (auto/full/compact) restores alongside the theme. */
+    header_restore_saved();
+
     if (storage_ini_file_get(path, FONT_INI_KEY_TERMINAL,
                              terminal, sizeof(terminal)) == ESP_OK) {
         have_terminal = true;
@@ -131,6 +184,7 @@ void font_restore_saved(void)
             font_set_size(FONT_ROLE_UI, px);
         }
     }
+    return true;
 }
 
 static void shell_command_font_usage(void)
@@ -353,26 +407,96 @@ void shell_command_font(int argc, char **argv)
     batch_set_errorlevel(2);
 }
 
-void shell_command_theme(int argc, char **argv)
+static void shell_command_theme_usage(void)
 {
-    const theme_t *theme = theme_current();
+    shell_transcript_appendf_ansi("Usage: theme list | theme show [name] | theme set <name> [/save]\n");
+}
 
-    if (argc >= 2 && !shell_text_equals_ignore_case(argv[1], "show")) {
-        shell_transcript_appendf_ansi(SH_ERR "theme: usage: theme show (switching arrives later)\n" SH_RST);
-        batch_set_errorlevel(2);
-        return;
+static void theme_print(const theme_t *theme, bool active)
+{
+    shell_transcript_appendf("theme: %s%s\n", theme->name, active ? " (active)" : "");
+    if (theme->description != NULL) {
+        shell_transcript_appendf("  %s\n", theme->description);
     }
-    shell_transcript_appendf("theme: %s\n", theme->name);
     shell_transcript_appendf("  bg: screen=%06X transcript=%06X input_row=%06X keyboard=%06X\n",
-                             theme->bg_screen, theme->bg_transcript,
-                             theme->bg_input_row, theme->bg_keyboard);
-    shell_transcript_appendf("  text=%06X muted=%06X modal_border=%06X title=%06X message=%06X\n",
-                             theme->text, theme->text_muted,
-                             theme->modal_panel_border, theme->modal_title,
-                             theme->modal_message);
+                             (unsigned)theme->bg_screen, (unsigned)theme->bg_transcript,
+                             (unsigned)theme->bg_input_row, (unsigned)theme->bg_keyboard);
+    shell_transcript_appendf("  header: panel=%06X sys=%06X\n",
+                             (unsigned)theme->header_panel_bg, (unsigned)theme->header_sys_bg);
+    shell_transcript_appendf("  text: accent=%06X body=%06X muted=%06X warn=%06X\n",
+                             (unsigned)theme->text, (unsigned)theme->text_body,
+                             (unsigned)theme->text_muted, (unsigned)theme->warn);
+    shell_transcript_appendf("  modal: border=%06X title=%06X message=%06X\n",
+                             (unsigned)theme->modal_panel_border,
+                             (unsigned)theme->modal_title, (unsigned)theme->modal_message);
     shell_transcript_appendf("  fonts: terminal=%s@%d ui=%s@%d\n",
                              theme->terminal_font, theme->terminal_px,
                              theme->ui_font, theme->ui_px);
-    shell_transcript_appendf("  future format: sd:/APPS/THEME.INI (see command.md)\n");
-    batch_set_errorlevel(0);
+}
+
+void shell_command_theme(int argc, char **argv)
+{
+    const theme_t *cur = theme_current();
+
+    if (argc < 2 || shell_text_equals_ignore_case(argv[1], "show")) {
+        const theme_t *theme = cur;
+
+        if (argc >= 3) {
+            theme = theme_get(argv[2]);
+            if (theme == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "theme show: unknown theme '%s'\n" SH_RST, argv[2]);
+                batch_set_errorlevel(2);
+                return;
+            }
+        }
+        theme_print(theme, theme == cur);
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "list")) {
+        int i;
+
+        for (i = 0; i < theme_builtin_count(); i++) {
+            const theme_t *theme = theme_builtin_at(i);
+
+            shell_transcript_appendf("  %s %-8s %s\n",
+                                     (i == theme_active_index()) ? "*" : " ",
+                                     theme->name,
+                                     (theme->description != NULL) ? theme->description : "");
+        }
+        shell_transcript_appendf("active: %s (theme set <name> [/save] to switch)\n", cur->name);
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "set")) {
+        bool save = false;
+        bool saved_ok = true;
+        int i;
+
+        if (argc < 3) {
+            shell_command_theme_usage();
+            batch_set_errorlevel(2);
+            return;
+        }
+        for (i = 3; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/save")) {
+                save = true;
+            }
+        }
+        if (!theme_set(argv[2])) {
+            shell_transcript_appendf_ansi(SH_ERR "theme set: unknown theme '%s' (theme list)\n" SH_RST, argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (save) {
+            saved_ok = theme_save_current();
+        }
+        theme_refresh_live();
+        shell_transcript_appendf("theme: -> %s%s\n", theme_current()->name,
+                                 save ? (saved_ok ? " (saved)" : " (save failed)") : "");
+        batch_set_errorlevel(saved_ok ? 0 : 1);
+        return;
+    }
+    shell_command_theme_usage();
+    batch_set_errorlevel(2);
 }

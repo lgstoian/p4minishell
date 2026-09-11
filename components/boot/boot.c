@@ -66,7 +66,8 @@ static char s_boot_launch_app[P4_CONFIG_APP_NAME_BYTES];
     ";   VOLUME=0-100              Set speaker volume\n" \
     ";   RGB=<r>,<g>,<b>|#RRGGBB|<effect>[,speed]|OFF|AUTO,<ON|OFF>  Set the WS2812 status LED\n" \
     ";   OSK=ON|OFF                Show/hide the on-screen keyboard at boot\n" \
-    ";   HEADER=ON|OFF             Show/hide the header status bar at boot\n"
+    ";   HEADER=ON|OFF             Show/hide the header status bar at boot\n" \
+    ";   HEADER_MODE=AUTO|FULL|COMPACT  Header layout density at boot\n" \
 
 #define BOOT_CFG_NETWORK \
     "\n; Wi-Fi (station only):\n" \
@@ -550,6 +551,18 @@ static bool boot_handle_header(const char *value)
     return false;
 }
 
+static bool boot_handle_header_mode(const char *value)
+{
+    header_mode_t mode;
+
+    if (!header_mode_parse(value, &mode)) {
+        boot_warn_unknown("HEADER_MODE");
+        return false;
+    }
+    header_set_mode(mode);
+    return true;
+}
+
 static bool boot_handle_wifi_autoconnect(const char *value)
 {
     if (value == NULL || *value == '\0') {
@@ -766,6 +779,8 @@ void boot_run_startup(void)
                     if (value != NULL && value[0] != '\0') {
                         snprintf(s_boot_launch_app, sizeof(s_boot_launch_app), "%s", value);
                     }
+                } else if (boot_starts_with_ci(keyword, "HEADER_MODE")) {
+                    (void)boot_handle_header_mode(value);
                 } else if (boot_starts_with_ci(keyword, "HEADER")) {
                     (void)boot_handle_header(value);
                 } else if (boot_starts_with_ci(keyword, "FILES") ||
@@ -904,8 +919,12 @@ void boot_on_sd_first_mount(void)
     bool generated = boot_ensure_default_files();
 
     /* The SD card is mounted here (unlike command_init time, when the mount
-     * is still lazy), so this is where the saved font choice restores. */
-    font_restore_saved();
+     * is lazy), so this is where the saved font choice restores. If the card
+     * is not readable yet, re-arm the one-shot so the next mount retries
+     * instead of skipping the restore for the whole boot. */
+    if (!font_restore_saved()) {
+        storage_sd_first_mount_reset();
+    }
 
     /* Same moment: attach the CJK fallback tails (best-effort, silent when
      * NotoSansSC is absent). */

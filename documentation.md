@@ -4,9 +4,9 @@
 
 P4MiniShell is a modular embedded shell application for ESP32-P4 with an ESP32-C6 co-processor. The codebase is organized into a shell orchestration layer and dedicated component modules.
 
-**Hardware testing (v0.35.1, COM11, hardware testing patch 0.35.0→0.35.1):** flash to COM11 succeeded, boot verified (`P4MiniShell v0.35.1 ready`, transcript rect `1024x510` `80×25` `p4minishell_config.h:298` via `tui status`), extensive serial tests run over USB-Serial-JTAG covering `draw box` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` with title + nested window stack (`tui_draw_box` `components/tui/tui.c:228` via `tui_cell_set` `utf8[4]` `components/tui/tui.h:35` now correctly handles title and style), `draw line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app, header kept visible by default `windows_enter_tui_mode` hidden only when fullscreen via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` / `tui_enter_fullscreen` `components/tui/tui.c:417`, dynamic keyboard scaling `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, TUI does not overlap shell text `tui_hide_for_modal`), `color`/`locate` TUI-aware via `tui_flush` recolor `#RRGGBB` per fg run (`ansi_get_palette_color` PowerShell palette no duplicate `components/tui/tui.c:356`), prompt (`shell_prompt_render_plain()` `main.c:112`/`components/shell/shell.c:412` + `modal_surf.c:412` `keyboard_bind_textarea` situational `SH_PROMPT`), screenshot debug (`grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py` rect `1024x510`), modal `dialog`/`list`/`ask` with timeout + serial input (`dialog y` `list 2` `ask myname` via `shell.c` `modal_handle_serial_line` `components/modal/modal_surf.c:412`) + `browse`/`view`/`hexview` — no abort/watchdog/overlap (header kept unless fullscreen, `draw` auto-enters `tui_init` `components/tui/tui.c:56`). Font extended in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F/U+2600-U+26FF, cmaps 3, no duplication, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`, `CONFIG_LV_FONT_UNSCII_16=y`). Memory-pressure fixes (`P4_CONFIG_TRANSCRIPT_BYTES` 2048→1024 `p4minishell_config.h:93`, `P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024→512 `p4minishell_config.h:134`, `P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192→4096 `p4minishell_config.h:626`, `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152→60000 with 1/4 keep + trim-below-10KB `p4minishell_config.h:117`, `P4_CONFIG_COMMAND_TASK_STACK` 16384→24576 `p4minishell_config.h:1514` at `0x4012b75a`), `bsp_audio_init` abort guard `components/audio/audio.c:42` `managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269`, modal `EventGroup` PSRAM (`MALLOC_CAP_SPIRAM` `components/modal/modal.c:46`), command queue full handling improved, dialog/list/ask serial routing fix, draw auto-enter TUI — all fixed (bugs.md M19-M21, M22–M30, M31 stack overflow at `0x4012b75a`). Companion fully TUI-expanded and hardware-verified: 7 BATs (`COMPANION.BAT` draw fullscreen double, `SYS.BAT` tui fullscreen draw boxes, `FILES.BAT` browse/view/hexview + draw + tui fullscreen, `NET.BAT` draw boxes, `FUN.BAT` tui demo, `SET.BAT` tui demo, `LIB.BAT` `:tui_banner`/`:tui_header`) pushed via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109), no abort/watchdog/overlap.
+**Current verified state:** v0.35.7 plus the `[Unreleased]` changes. Hardware-verified on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. Components added since the original layout: `gfx`, `filetype`, `markdown`, `db`, `alarm`, `audio`, `boot`, `font`; command bodies live in the split `components/command/*_commands.c` files.
 
-### Module Layout (v0.35.7 hardware bring-up, 80×25 `utf8[4]` `tui_cell_t` `components/tui/tui.h:35`, suite 193/0/2)
+### Module Layout (v0.35.7 + `[Unreleased]`, 80x25 `utf8[4]` `tui_cell_t` `components/tui/tui.h:35`, suite 262/0/2)
 
 ```
 main/main.c                     App entry point, LVGL event callbacks, UI construction, host bridges
@@ -18,7 +18,6 @@ components/windows/windows.c    Window manager (LVGL screen layout, dynamic scal
 components/keyboard/keyboard.c  Keyboard manager (LVGL keyboard, visibility, modes)
 components/shell/shell.c        Shell core (transcript, history, debug log, UART console, input line, sysinfo)
 components/storage/storage.c    SD sessions, path resolution, FATFS conversion, size formatting, cwd
-components/storage/storage_commands.c  Residual header + includes (verbs moved out in v0.35.6)
 components/storage/storage_nav.c  Navigation verbs (`cd`/`dir`/`tree`)
 components/storage/storage_files.c  File verbs + `attrib`/`label`/`xcopy`
 components/storage/storage_disk.c  Volume verbs (`chkdsk`/`format` + confirm helper)
@@ -35,13 +34,38 @@ components/command/tui_commands.c  TUI/modal verbs (`draw`/`anchor`/`browse`/`di
 components/command/periph_commands.c  Peripheral toolkit (`gpio`/`pwm`/`freq`/`adc`/`i2c`/`spi`/`rgb`/`camera` + GPIO table/gate)
 components/command/power_commands.c  Power verbs (`brightness`/`rotate`/`battery`/`power`/`sleep`/`deepsleep` + ADC/idle state)
 components/command/serial_commands.c  Screenshot/serial verbs (`screenshot`/`receive`/`send` + BMP/frame helpers)
+components/command/gfx_commands.c      `gfx` canvas verbs (raster core in `components/gfx/`)
+components/command/plot_commands.c     `plot` coordinate layer (viewport in `components/gfx/gfx_view.c`, sampling via `calc`)
+components/command/asset_commands.c    `crc32` + `asset check|list` (shared CRC-32)
+components/command/pkg_commands.c      `pkg` packaged SD apps (PKGS bundles -> APPS)
+components/command/db_commands.c       `db` record-store verbs (core in `components/db/`)
+components/command/alarm_commands.c    `alarm`/`cal` verbs (store + checker in `components/alarm/`)
+components/command/font_commands.c     `font`/`theme` verbs (registry in `components/font/`)
+components/command/md_commands.c       `markdown` verb (renderer in `components/markdown/`)
+components/command/json_commands.c     `json validate|pretty`
+components/command/config_cmd.c        `config` (CONFIG.SYS directive writer)
+components/command/gfind_commands.c    `gfind`
 components/header/header.c      Fixed top status bar (LVGL widgets)
+components/header/header_layout.c  Pure responsive layout policy (fit/compact/yield, unit-tested)
 components/led/led.c            WS2812 RGB status LED driver + auto status / event notification engine (GPIO26)
 components/editor/editor.c      DOS-style `edit` editor: byte-preserving document model, undo/redo, find/replace, worker session
 components/editor/editor_view.c `edit` editor LVGL surface (syntax spans, block cursor, selection overlay, status-bar prompts)
 components/modal/modal.c        Shared modal runtime: session loop + input routing for native modal surfaces
 components/modal/modal_surf.c   Ready-made batch surfaces: `dialog`, `list`, `ask`, `filebrowser` (`browse`), `viewer` (`view`), `hexview` — 6 modal surfaces (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) sharing the same runtime; TUI logical grid `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) maps to the live transcript region (rotation/keyboard-aware) via `windows_enter_editor_mode`/`windows_refresh_editor_surface`
 components/applib/applib.c      Native-app runtime library: app stdout/printf onto the transcript (the redirection layer), shared memory policy, time/sleep/sysinfo helpers, Wi-Fi state via an ops table
+components/tui/tui.c            TUI 80x25 cell buffer + draw primitives + `tui_flush` (reached by the `draw`/`tui` verbs)
+components/gfx/gfx.c            Pure RGB565 raster core (surface/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/flood-fill/text/blit, BMP parse/decode, row convert)
+components/gfx/gfx_font.c       Generated 8x8 ASCII font table for `gfx_surface_text` (unscii-8)
+components/gfx/gfx_view.c       World-coordinate viewport (map, Cohen-Sutherland clip, nice ticks) for `plot`
+components/filetype/filetype.c  Central extension->kind registry (batch/markdown/json/text)
+components/markdown/markdown.c  CommonMark-subset renderer (`markdown` verb, `view *.md`)
+components/font/font.c          Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, theme table
+components/font/theme.c         UI theme registry (default/amber/ice/mono) + active selection (pure)
+components/db/db.c              Palm-OS-style SD record store (`sd:/DBS/<name>.DB`)
+components/alarm/alarm.c        SD alarm store + single background checker (`sd:/ALARMS`)
+components/audio/audio.c        ES8311 codec path + background tone/WAV playback engine
+components/clock/clock.c        Time/SNTP/timezone services + `date`/`time`/`timezone`/`sntp`
+components/boot/boot.c          CONFIG.SYS parser + AUTOEXEC.BAT runner
 components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
 components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
 components/usb/usb.c            USB Host (MSC storage + HID keyboard/mouse)
@@ -117,15 +141,18 @@ local functions.
 
 Owns the shell's runtime surface and output plumbing:
 
-- **Transcript system**: Scrollable LVGL span group backed by a 1024-byte ANSI buffer with overflow
-  protection (reduced 16384→8192 in v0.32.8, 8192→2048 in v0.35.0, 2048→1024 in v0.35.1 to halve the internal-RAM span overhead after TUI modal restoration; still holds the visible history). When full, the oldest half is dropped and a
-  `[history truncated]` marker is inserted. New output auto-follows the view only while it is
+- **Transcript system**: Scrollable LVGL span group backed by a 65536-byte ANSI buffer
+  (`P4_CONFIG_TRANSCRIPT_BYTES`, PSRAM) with overflow protection. Appends track the buffer length
+  (`s_transcript_len`/`s_transcript_ansi_len`) so no `strlen` scan is needed per line; the
+  memory-pressure guard trims the oldest scrollback (keeping the newest three quarters) and a
+  `[history truncated]` / `[history trimmed under memory pressure]` marker is inserted. New output
+  auto-follows the view only while it is
   near the bottom (`P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX`); submitting a command forces a
   jump to the newest output so the user always sees the result of what they ran.
 - **Memory-pressure auto-trim**: the LVGL span objects that render the scrollback carry
   per-span overhead in the internal (DMA-capable) heap, which is shared with the WiFi/SDIO
   transport. When free internal RAM drops below
-  `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` (60000 in v0.35.1, trim keeps 1/4 and guards trim-below-10KB), `shell_transcript_guard_internal()` (called at
+  `P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` (4096 in v0.35.1, trim keeps 1/4 and guards trim-below-10KB), `shell_transcript_guard_internal()` (called at
   every command start and before every append, under the LVGL port lock) drops the oldest
   portion of the scrollback and frees its spans synchronously, so a tiny stdio allocation can
   never abort the board mid-command (see bugs.md M6, M19).
@@ -223,7 +250,7 @@ Owns the shell's runtime surface and output plumbing:
 
 ### Storage Module (components/storage)
 
-Owns everything that sits between the shell commands and the SD card. Split into two files:
+Owns everything that sits between the shell commands and the SD card. Split across several files:
 
 **`storage.c` — services and state**
 
@@ -269,7 +296,8 @@ Owns everything that sits between the shell commands and the SD card. Split into
   treated as non-fatal since the data is already correct. `xcopy /S` also applies it to the
   directories it creates.
 
-**`storage_commands.c` — the DOS file and text commands**
+**DOS file and text commands** (implemented in `storage_nav.c` / `storage_files.c` /
+`storage_text.c`; their shared declarations live in `storage_commands.h`)
 
 - Navigation and listing: `cd`/`chdir`, `dir`. The listing supports the full DOS option set —
   `/W` wide, `/P` paged, `/S` recursive, `/B` bare, `/L` lowercase, `/A` attribute filter, and
@@ -531,7 +559,7 @@ filesystem or the batch language:
 - **Heap-backed line buffers**: the expansion and chain buffers are heap-allocated because this
   function sits on the batch recursion path — a batch file re-enters the pipeline for every
   line, and stack buffers here would overflow the worker task at nesting depth.
-- **Dispatcher**: `shell_execute_command_core()` — 66 verbs with family routing
+- **Dispatcher**: `shell_execute_command_core()` — 155 distinct `argv[0]` spellings (aliases included) with family routing
   (wifi, bluetooth, usb, c6ota, sd) that receive the original unsplit command text
 - **Serial file transfer** (`receive` / `send`, plus the `screenshot` stream):
   binary host<->device transfer over the USB-Serial/JTAG console. Both directions
@@ -898,14 +926,14 @@ built on the same runtime (v0.35.0: 6 surfaces).
 
 Hardware-verified on COM11 (v0.35.1, final TUI state: flash, boot `1024x510` transcript rect, extensive serial `draw`/`color`/`locate`/`dialog`/`list`/`ask`/`browse`/`view` with no abort/watchdog/overlap):
 
-- **Cell buffer** (`components/tui/tui.h:35` `tui_cell_t { char utf8[4]; uint8_t fg/bg/attr; }`, `components/tui/tui.c:116` `tui_cell_set` via `strncpy`): logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:298`, DOS parity) heap cell buffer (PSRAM preferred, `heap_caps_malloc MALLOC_CAP_SPIRAM`) with fg/bg/attribute per cell. Clamped to the logical grid, never to pixels; each cell holds full UTF-8 (3-byte box glyphs). Previously `utf8[2]` truncated box draws — fixed to `utf8[4]`.
-- **Drawing primitives** (`components/tui/tui.c:228` `tui_draw_box`, `components/tui/tui.c:283` `tui_draw_line`, `components/tui/tui.c:312` `tui_fill`, `components/tui/tui.c:201` `tui_print_at`): `tui_draw_box` honors `single`/`double`/`rounded` via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`TR`/`BL`/`BR`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) and optional centered title; `tui_draw_line` honors `single`/`double`/`heavy`; interior cleared; all via `tui_cell_set`.
-- **Flush / color** (`components/tui/tui.c:356` `tui_flush`): coalesces cells by fg, emits `#RRGGBB ` prefix per fg run using `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate palette), wraps run UTF-8 and `#` suffix, rows joined by `\n`, set via `lv_label_set_text` on `s_tui_label` (`lv_label_set_recolor true`) under `lvgl_port_lock`. Default fg 16 emits no tag. `tui_set_default_color` (`components/tui/tui.c:324`) backs `color`; `tui_set_cursor` (`components/tui/tui.c:160`) backs `locate`.
+- **Cell buffer** (`components/tui/tui.h:35` `tui_cell_t { char utf8[4]; uint8_t fg/bg/attr; }`, `components/tui/tui.c:129` `tui_cell_set` via `strncpy`): logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:325`, DOS parity) heap cell buffer (PSRAM preferred, `heap_caps_malloc MALLOC_CAP_SPIRAM`) with fg/bg/attribute per cell. Clamped to the logical grid, never to pixels; each cell holds full UTF-8 (3-byte box glyphs). Previously `utf8[2]` truncated box draws — fixed to `utf8[4]`.
+- **Drawing primitives** (`components/tui/tui.c:241` `tui_draw_box`, `components/tui/tui.c:296` `tui_draw_line`, `components/tui/tui.c:312` `tui_fill`, `components/tui/tui.c:201` `tui_print_at`): `tui_draw_box` honors `single`/`double`/`rounded` via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`TR`/`BL`/`BR`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) and optional centered title; `tui_draw_line` honors `single`/`double`/`heavy`; interior cleared; all via `tui_cell_set`.
+- **Flush / color** (`components/tui/tui.c:620` `tui_flush`): coalesces cells by fg, emits `#RRGGBB ` prefix per fg run using `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate palette), wraps run UTF-8 and `#` suffix, rows joined by `\n`, set via `lv_label_set_text` on `s_tui_label` (`lv_label_set_recolor true`) under `lvgl_port_lock`. Default fg 16 emits no tag. `tui_set_default_color` (`components/tui/tui.c:324`) backs `color`; `tui_set_cursor` (`components/tui/tui.c:160`) backs `locate`.
 - **Live region mapping**: TUI uses its own `s_tui_container`/`s_tui_label` inside `windows_enter_tui_mode()`/`windows_exit_tui_mode()` (`components/windows/windows.c:298`) sized to the live transcript region `1024x510` (via `tui status`), resizes with rotation and on-screen-keyboard show/hide via `windows_refresh_tui_surface`/`windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). Logical grid `80×25` clamped; pixel rect follows the transcript (`P4_CONFIG_TUI_*` maps to it, not to a fixed screen size). Header kept visible by default; `tui_enter_fullscreen`/`tui_exit_fullscreen` (`components/tui/tui.c:417`) call `windows_set_fullscreen`/`header_set_visible` (`components/windows/windows.c:418`) to hide header completely when fullscreen. `tui status` reports rect `1024x510`, cols/rows `80x25`, fullscreen, font.
 - **Fullscreen**: global `draw fullscreen on|off` and per-app `tui fullscreen on|off` both route to `tui_enter_fullscreen`/`tui_exit_fullscreen`; `windows_is_fullscreen()` guards state. Keyboard scaling remains dynamic via `windows_notify_keyboard_visibility` even when header is hidden.
 - **Prompt**: all inputs honor `shell_prompt_render_plain()` (`components/shell/shell.c:412`): `main.c:112` input line echo `SHELL_PROMPT` → `shell_prompt_render_plain()`, `modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea` (`components/keyboard/keyboard.c:88`), shell echo situational color (`SH_PROMPT`). `PROMPT=` template (`$p $g` etc) renders everywhere.
 - **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, cmaps 3, no duplication (previously the `-r` range duplicated the two blocks). `windows_get_terminal_font()` returns this font for the TUI label.
-- **Batch TUI verbs**: `draw box`/`line`/`fill`/`text`/`clear`/`window`/`fullscreen`, `color`, `locate` compose on the cell buffer; `browse`/`view`/`hexview` are native pagers on the shared modal runtime (`components/modal/modal_surf.c`). `draw` auto-enters TUI (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) when no TUI/modal surface is active. Alt-screen `ESC[?1049h/l` save/restore is honoured when `P4_CONFIG_TUI_ALT_SCREEN` is set (`components/tui/tui.c:327`).
+- **Batch TUI verbs**: `draw box`/`line`/`fill`/`text`/`bar`/`table`/`list`/`clear`/`window`/`cursor`/`hold`/`alt-screen`/`fullscreen`, `color`, `locate` compose on the cell buffer; the exclusive `gfx` RGB565 canvas (`pixel`/`line`/`rect`/`circle`/`show`/`load`/`blit`/`save`) and `browse`/`view`/`hexview` round out the surfaces. `draw table`/`draw list` add cursor + selection rows. `browse`/`view`/`hexview` are native pagers on the shared modal runtime (`components/modal/modal_surf.c`). `draw` auto-enters TUI (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) when no TUI/modal surface is active. Alt-screen `ESC[?1049h/l` save/restore is honoured when `P4_CONFIG_TUI_ALT_SCREEN` is set (`components/tui/tui.c:327`).
 - **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`): `tui status` shows transcript rect, `grab_screenshot.py` crops to it for pixel-perfect TUI verification (used during hardware bug hunting alongside `windows_debug_editor_layout`).
 - **Essential features implemented**: window stack (nested `tui_draw_box` with title), fullscreen (global + per-app header hide), color (`tui_flush` per-fg recolor), prompt (unified `shell_prompt_render_plain`), screenshot debug; hardware tested without overlap (header kept unless fullscreen, TUI does not overlap shell text), no watchdog, no abort.
 - Surfaces render into the dedicated TUI container and restore on `tui_deinit`/`windows_exit_tui_mode`.

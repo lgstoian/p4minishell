@@ -11,7 +11,9 @@
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
 # Version: 0.35.7
-# Last updated: 2026-09-06 (hardware bring-up: font/box-glyph fix, httpd 8K stack, queue restore, NUL bytes, alarm lazy init, modal LVGL locks, ask race, suite 193/0/2)
+# Last updated: 2026-09-11 (post-0.35.7: gfx sprites + BMP, crc32/asset, start/taskkill bg jobs,
+#   draw table/list + cursor/selection, RAM-loaded batch, O(1) transcript appends, companion SVC/AGENDA;
+#   suite 241/0/2 on COM3)
 config_version: "0.35.7"
 
 # ---- Shell Identity ----
@@ -1003,6 +1005,24 @@ batch_env:
     type: size_t
     description: "Maximum batch arguments (%1 through %9)"
     range: "1..26"
+  batch_file_max_bytes:
+    value: 131072
+    type: size_t
+    description: "Maximum batch file size loaded into RAM for execution; larger files stream from SD (P4_CONFIG_BATCH_FILE_MAX_BYTES)"
+    range: "0..1048576"
+  pkg_bundle_dir_name:
+    value: "PKGS"
+    type: string
+    description: "Install-source bundle directory for the `pkg` verb (P4_CONFIG_PKG_BUNDLE_DIR_NAME)"
+  pkg_apps_dir_name:
+    value: "APPS"
+    type: string
+    description: "Installed package metadata/manifest directory for the `pkg` verb (P4_CONFIG_PKG_APPS_DIR_NAME)"
+  pkg_max_entries:
+    value: 48
+    type: size_t
+    description: "Maximum files listed in one package manifest (P4_CONFIG_PKG_MAX_ENTRIES)"
+    range: "1..256"
   batch_depth_max:
     value: 4
     type: size_t
@@ -1132,6 +1152,26 @@ batch_env:
     type: int
     description: "Significant digits used when printing a `calc` numeric result"
     range: "4..17"
+  plot_samples:
+    value: 240
+    type: int
+    description: "Default/max samples per `plot func|polar|para` curve"
+    range: "8..1024"
+  plot_max_points:
+    value: 512
+    type: int
+    description: "Maximum data points (`plot data`), values (`plot bar`) or table rows (`plot table`)"
+    range: "16..4096"
+  plot_line_bytes:
+    value: 128
+    type: size_t
+    description: "Longest data/bar file line `plot` will read"
+    range: "32..512"
+  plot_tick_target:
+    value: 8
+    type: int
+    description: "Target tick count for `plot axes` nice-step spacing"
+    range: "2..32"
   forf_token_max:
     value: 8
     type: int
@@ -1504,6 +1544,16 @@ header_visuals:
     type: int
     description: "Sentinel RSSI reported when no Wi-Fi AP information is available (dBm)"
     range: "-127..-1"
+  center_min_px:
+    value: 56
+    type: int
+    description: "Minimum usable width reserved for the header notification center; the notification yields first when space is tight"
+    range: "0..400"
+  dynamic_font:
+    value: 1
+    type: int
+    description: "Allow the header to drop to a smaller font when even the compact side-panel layout does not fit"
+    range: "0..1"
 
 # ---- USB Host ----
 usb_host:

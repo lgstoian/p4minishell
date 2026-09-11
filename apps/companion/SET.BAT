@@ -12,9 +12,10 @@ draw box 1 1 80 3 single
 draw text 35 2 "SETTINGS" 14
 draw box 1 4 80 10 single "Options"
 draw text 5 6 "Brightness, volume, config, scoping"
-list "Settings" "Set brightness" "Set volume" "Show settings" "Scoping demo" "View config" "TUI Demo" "Reset" "Fonts" "Back"
+list "Settings" "Set brightness" "Set volume" "Show settings" "Scoping demo" "View config" "TUI Demo" "Reset" "Fonts" "Theme" "Back"
 if errorlevel 255 goto :back
-if errorlevel 8 goto :back
+if errorlevel 9 goto :back
+if errorlevel 8 goto :theme
 if errorlevel 7 goto :fonts
 if errorlevel 6 goto :reset
 if errorlevel 5 goto :tui_demo
@@ -185,3 +186,31 @@ goto fonts
 echo [M-SET-BACK]
 draw clear screen
 goto :eof
+
+rem ---- Theme: switch the UI color theme live; persists in SHELL.INI ----
+:theme
+echo [M-SET-THEME]
+draw clear screen
+draw box 1 1 80 3 single
+draw text 36 2 "THEME" 14
+list "Theme" "default" "amber" "ice" "mono" "Show" "Back"
+if errorlevel 255 goto main
+if errorlevel 5 goto main
+if errorlevel 4 goto theme_show
+if errorlevel 3 theme set mono /save & goto theme_saved
+if errorlevel 2 theme set ice /save & goto theme_saved
+if errorlevel 1 theme set amber /save & goto theme_saved
+theme set default /save
+goto theme_saved
+
+:theme_saved
+echo [M-SET-THEME-SAVED]
+dialog "Theme" "Theme saved." "OK"
+goto :theme
+
+:theme_show
+echo [M-SET-THEME-SHOW]
+theme show > _theme.txt
+view _theme.txt
+del /p _theme.txt
+goto :theme

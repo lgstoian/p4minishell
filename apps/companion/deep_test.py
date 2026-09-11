@@ -339,7 +339,25 @@ def main():
         if sys_ok:
             send_after_settle(ser, b"ok\n")      # dismiss Saved dialog
             time.sleep(2.0)
-            sys_ok = press(ser, st, b"4\n", "[M-SYS-BACK]")   # Back
+            # Services submenu: status -> lists tasks + alarms.
+            sys_svc = press(ser, st, b"4\n", "[M-SYS-SVC]")
+            print("  sys services:", sys_svc, flush=True)
+            if sys_svc:
+                sys_svc = press(ser, st, b"1\n", "[M-SVC-STATUS]")
+                print("  sys svc status:", sys_svc, flush=True)
+            if sys_svc:
+                send_after_settle(ser, b"ok\n")  # dismiss Services dialog
+                time.sleep(2.0)
+                send_after_settle(ser, b"6\n")   # services Back -> dashboard
+                time.sleep(2.0)
+            if sys_ok:
+                # Packages submenu: entering it runs `pkg list` then its menu.
+                sys_ok = press(ser, st, b"5\n", "[M-SYS-PKG]")
+                print("  sys packages:", sys_ok, flush=True)
+                if sys_ok:
+                    send_after_settle(ser, b"5\n")  # Packages Back -> dashboard
+                    time.sleep(2.0)
+            sys_ok = press(ser, st, b"6\n", "[M-SYS-BACK]")   # Back
             print("  sys back:", sys_ok, flush=True)
         if sys_ok:
             # Real artifact check: the snapshot must hold mem output.
@@ -459,7 +477,14 @@ def main():
             time.sleep(5.0)                      # brightness set, Saved dialog opens
             send_after_settle(ser, b"ok\n", settle=3.0)  # dismiss dialog
             time.sleep(2.0)
-            set_ok = press(ser, st, b"9\n", "[M-SET-BACK]")  # Back (Fonts is 8)
+            # Theme submenu (SET item 9): enter, then Back to the menu.
+            set_theme = press(ser, st, b"9\n", "[M-SET-THEME]")
+            print("  set theme:", set_theme, flush=True)
+            if set_theme:
+                send_after_settle(ser, b"6\n")   # Theme Back -> settings
+                time.sleep(2.0)
+            set_ok = press(ser, st, b"10\n", "[M-SET-BACK]")  # Back (item 10)
+            print("  set back:", set_ok, flush=True)
         if set_ok:
             # Real artifact check: persisted brightness survives the flow.
             ser.reset_input_buffer()

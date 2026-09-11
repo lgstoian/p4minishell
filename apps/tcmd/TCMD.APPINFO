@@ -2,3 +2,4 @@
 ; Copied to sd:/APPS/TCMD.APPINFO by apps/push_apps.py.
 title=Commander
 description=Dual-pane file commander: browse selectors plus copy/move/delete/mkdir/rename/view/edit
+version=1.0

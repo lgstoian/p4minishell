@@ -7,7 +7,232 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - hardware session 2026-09-07 (COM3; ESP-IDF v5.5.5 fresh install)
+## [Unreleased] - hardware sessions 2026-09-07 .. 2026-09-11 (COM3; ESP-IDF v5.5.5)
+
+### Responsive header: no-overlap layout, dynamic font, uptime (2026-09-11 session, COM3)
+
+- **Measurement-driven layout** (`components/header/header_layout.c`, pure +
+  unit-tested): every render measures the live labels and fits the status,
+  notification, and system panels into the real content width — full labels,
+  then abbreviations, then dynamic font step-down, with the notification
+  yielding first and panels hidden only as a last resort. Panels get explicit
+  absolute geometry (no flex timing drift); the notification label is pinned
+  to its container width so `LONG_SCROLL_CIRCULAR` scrolls instead of
+  overflowing; a full invalidation clears stale pixels on every re-layout.
+- **Single height authority** (`header_get_height()`, used by both the header
+  and `windows_get_rect`), so the bar can never gap or overlap the transcript
+  on any resolution/rotation/board.
+- **`header` verb** (`status` with wanted-vs-actual widths, `mode
+  auto|full|compact [/save]`, `show|hide`), CONFIG.SYS `HEADER_MODE=`,
+  `SHELL.INI` persistence with boot restore, and the previously-fed but never
+  rendered **uptime** indicator.
+- **Boot-restore hardening**: saved UI choices now report success, and a
+  failed first-mount restore re-arms for the next mount instead of being
+  skipped for the whole boot (`storage_sd_first_mount_reset()`); `main` also
+  restores after boot scripting. `theme_test` persistence is green across
+  repeated runs.
+- Verified: unit 262/0/2 (5 layout cases), `tools/header_test.py` (modes,
+  rotations, persistence), screenshots of auto/compact/long-notification.
+
+### Plot/graph layer: world-coordinate graphs, charts, drawings (2026-09-11 session, COM3)
+
+- **New `plot` verb** (`components/command/plot_commands.c`): `plot
+  tui|window|auto|axes|func|polar|para|data|bar|table|line|point|clear|status`.
+  One shared viewport renders world-coordinate math onto the `gfx` pixel canvas
+  (default) or the TUI cell grid (`plot tui on`); function sampling reuses the
+  `calc` evaluator (`y=f(X)`, `r=f(T)`, `x/y=f(T)` with X/T env-bound and
+  restored), data/bar files reuse the guarded-SD `fopen`/`fgets` pattern, and
+  colors reuse the `gfx`/`draw` parsers. Canvas plots never auto-show (compose,
+  then one `gfx show`); TUI plots flush through `draw_maybe_flush` (so `draw
+  hold` coalesces them). Foreground-only like `gfx`, except read-only `plot
+  status` and text-only `plot table`.
+- **Pure viewport math** (`components/gfx/gfx_view.c`, headless unit-tested):
+  window-to-raster mapping with edges on the border indices, exact
+  Cohen–Sutherland segment clipping (trivial-reject first), and 1/2/5x10^n
+  nice-step ticks. Shared `gfx_canvas_*`/`draw_*` accessors via `command.h`
+  (no copied canvas/color logic).
+- **Config**: `P4_CONFIG_PLOT_SAMPLES` (240), `P4_CONFIG_PLOT_MAX_POINTS`
+  (512), `P4_CONFIG_PLOT_LINE_BYTES` (128), `P4_CONFIG_PLOT_TICK_TARGET` (8).
+- **Reference app** `apps/gfxdemo/PLOT.BAT` + `PLOT.APPINFO` (axes+grid,
+  sin/cos, world line; the 10th package) and the HW driver
+  `tools/plot_test.py` (canvas pixel checks incl. region-based curve checks,
+  plus a TUI-mode screenshot). Regression: unit 257/0/2, deep 8/8, db 38/38,
+  alarm 25/25, smoke 21/21, pkg 15/15, theme 11/11, gfx toolkit 17/17, plot
+  25/25.
+
+### Dead-code cleanup: storage stub, p4_usb fold, unused statics, help dedupe (B4, 2026-09-11 session, COM3)
+
+- Deleted `components/storage/storage_commands.c` (an include-only stub since
+  v0.35.6) and dropped it from the storage CMake SRCS; `storage_commands.h`
+  remains the shared declaration header for the split storage files.
+- Folded the `p4_usb` component into `components/usb`. `components/p4_usb`
+  was only a CMake wrapper that compiled `../usb/usb.c`; the `usb` component
+  now builds `usb.c` itself (adding `ansi`, `usb_host_hid`, `usb_host_msc` to
+  its REQUIRES). Deleted `components/p4_usb`, removed it from the root
+  `EXTRA_COMPONENT_DIRS`, switched the `command`/`main` REQUIRES to `usb`,
+  and dropped the test list's duplicate `markdown` entry.
+- Removed unused statics: `header_async_batch` and its `header_batch_update_t`
+  payload, `networking_schedulef` (dead; `networking_schedulef_ansi` is the
+  live formatter), and `fb_entry_cmp` in `modal_surf.c` (never called); dropped
+  stale `__attribute__((unused))` markers from `s_header_height` and
+  `header_scale_height` (both are used).
+- Fixed the `help /all` table: removed the duplicate `launch`/`apps` entries
+  and refreshed the `gfx` entry with the B2 verbs (added the `theme` entry).
+- `usb status` still reports `usb.host: ready` after the fold. Regression:
+  unit 253/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg/theme/gfx
+  green.
+
+### UI themes: registry, live switching, persistence, Companion menu (B3, 2026-09-11 session, COM3)
+
+- **Theme registry completed** (`components/font/theme.c`): four built-in
+  themes (`default`, `amber`, `ice`, `mono`) in a pure, unit-tested table;
+  `theme_get`/`theme_builtin_at`/`theme_set`/`theme_active_index` and a mutable
+  active selection. The struct gained `description`, `text_body`, `warn`,
+  `header_panel_bg`, and `header_sys_bg`; the `default` table is
+  pixel-identical to the compiled palette.
+- **`theme list | show [name] | set <name> [/save]`** (`font_commands.c`). A
+  successful `set` re-applies live: `windows_refresh_theme()` (screen/
+  transcript/input row), `keyboard_refresh_theme()`, `header_refresh_theme()`
+  (bar/panel bg + full re-render). Modal surfaces pick up the table at open.
+- **Live theme plumbing**: `windows_get_color` and the header's text/accent/
+  muted/warn macros now read `theme_current()` (header gains the `font`
+  dependency); `/save` writes `theme=<name>` to `sd:/APPS/SHELL.INI`, restored
+  by `font_restore_saved()` at the first SD mount.
+- **Companion Settings ‣ Theme** submenu in `apps/companion/SET.BAT`
+  (default/amber/ice/mono, Show, Back); `deep_test.py` SET walk updated for the
+  new item and Back index.
+- **Tests**: `test/main/test_theme.c` (3 registry cases) and the HW driver
+  `tools/theme_test.py` (CLI + reboot persistence, green). Regression: unit
+  253/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx
+  toolkit 17/17, theme 11/11.
+
+### Gfx toolkit: raster primitives + on-canvas text (B2, 2026-09-11 session, COM3)
+
+- **New raster primitives** (`components/gfx/gfx.c`, pure/headless, unit-tested):
+  `gfx_surface_hline`/`vline` (clipped spans), `gfx_surface_triangle`
+  (edge-function fill or outline), `gfx_surface_polygon` (even-odd scanline fill
+  for convex/concave shapes, `GFX_POLY_MAX_PTS` 64, or outline),
+  `gfx_surface_ellipse` (per-row span fill or outline; zero radius degenerates),
+  and `gfx_surface_flood_fill` (4-way, PSRAM-grown seed stack, returns the pixel
+  count). Filled `rect`/`circle` now flush through `hline`.
+- **On-canvas text**: `gfx_surface_text`/`gfx_text_width` render 8x8 ASCII from
+  a committed table `components/gfx/gfx_font.c` (glyphs 0x20..0x7E, MSB-first),
+  generated by `tools/gen_gfx_font.py` from the public-domain unscii-8 TTF
+  bundled with LVGL. Integer `/scale:1..16` and optional `/bg:` cell fill.
+- **New `gfx` verbs** (`components/command/gfx_commands.c`): `hline`, `vline`,
+  `triangle`, `ellipse`, `polygon <color> <fill|line> <x y ...>`, `fill <x> <y>
+  <color>` (prints `gfx: filled <n> pixel(s)`), and `text [/bg:<color>]
+  [/scale:<n>] <x> <y> <color> <text...>` (remaining words joined with spaces).
+- **Reference app** `apps/gfxdemo/GFXTOOL.BAT` + `GFXTOOL.APPINFO` (all
+  primitives + scaled text, saves `GFXTOOL.BMP`); added to `push_apps`,
+  `push_assets`, and `push_pkgs` (9 packages).
+- **Tests**: 7 new unit cases in `test/main/test_gfx.c` (spans/triangle/
+  polygon/ellipse/flood-fill/font/render) and the HW driver
+  `tools/gfx_toolkit_test.py` (runs GFXTOOL.BAT, pulls the BMP, checks 13
+  pixels/regions against the RGB565 quantization). Regression green: unit
+  250/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx
+  toolkit 17/17.
+
+### Packaged SD applications: `pkg` verb + bundle format + App Manager (2026-09-11 session, COM3)
+
+- **New `pkg` verb** (`components/command/pkg_commands.c`, dispatched from
+  `command.c`): `pkg list | info <app> | verify <app> | check | install <app> |
+  remove <app>`. Installed state lives in `sd:/APPS/<APP>.APPINFO`
+  (`title=`/`description=`/`version=`) + `sd:/APPS/<APP>.ASSETS` (the
+  `path=HEXCRC` manifest); the install source is the bundle `sd:/PKGS/<APP>/`
+  (`<APP>.ASSETS`, `<APP>.APPINFO`, and payloads at install-relative paths).
+- **`pkg install`** is two-pass: verify every bundle payload CRC first (abort
+  cleanly on any missing/corrupt file), then copy payloads and the APPINFO +
+  manifest into place. **`pkg remove`** trashes every payload plus the two
+  metadata files, so `undelete` can recover an uninstalled app.
+- Asset helpers `asset_app_ok`, `asset_crc_file`, `asset_verify_app(tag, app,
+  list_only)` exported from `asset_commands.c` (declared in `command.h`) and
+  reused by `pkg`; `asset check|list` now calls `asset_verify_app`. New pure
+  helper `pkg_app_name_from_appinfo` (uppercases/validates `NAME.APPINFO`,
+  unit-tested).
+- **Reference package app** `apps/pkgtest/PKGTEST.BAT` + `PKGTEST.APPINFO`,
+  bundled/pushed by `apps/push_pkgs.py` (payload + APPINFO + generated
+  manifest). Companion **Live System ‣ Packages** submenu in
+  `apps/companion/SYS.BAT` (list/verify/info/install/remove). `version=1.0`
+  added to every reference `*.APPINFO`.
+- New config: `P4_CONFIG_PKG_BUNDLE_DIR_NAME` (`PKGS`),
+  `P4_CONFIG_PKG_APPS_DIR_NAME` (`APPS`), `P4_CONFIG_PKG_MAX_ENTRIES` (48),
+  `P4_CONFIG_PKG_MANIFEST_BYTES` (16384), `P4_CONFIG_PKG_LINE_BYTES` (512).
+  `apps/push_assets.py` now also emits `APPS/COMPANION.ASSETS`, so `pkg check`
+  verifies all reference packages (`pkg: n/n package(s) ok`; 9 after the GFXTOOL
+  bundle).
+- New HW drivers: `tools/pkg_test.py` (full install→run→remove round-trip,
+  green), `tools/pkg_smoke.py`, plus `apps/push_pkgs.py`. Unit tests
+  `test/main/test_pkg.c` (`pkg_app_name_from_appinfo`). Companion **Live
+  System ‣ Packages** deep-walk added to `deep_test.py`. Regression green:
+  unit 243/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg round-trip
+  15/15 (deep/alarm show the usual first-run reset/barrier flake, green on
+  re-run).
+
+### Batch performance: loop deferral, O(1) transcript appends, off-console mirror, RAM-loaded scripts (2026-09-11 session, COM3)
+- **Batch files execute from RAM.** A script at or below
+  `P4_CONFIG_BATCH_FILE_MAX_BYTES` (128 KB) is read once into PSRAM at frame
+  entry and executed from memory via a byte-for-byte `fgets`-equivalent
+  reader (`shell_frame_fgets/tell/seek/load`), so `goto`-heavy loops
+  (Snake/TCMD/ADVENT) never touch the SD card mid-loop. Larger files stream
+  from SD exactly as before (identical semantics).
+- **Pipe scan fast path**: lines with no `|` skip the quote/escape state
+  machine (`strchr` pre-check).
+- **One work buffer per command segment** (was two 4 KB mallocs + a full
+  copy): expansion now writes straight into the working buffer.
+- **Transcript appends are O(1).** `shell_transcript_append_to_buffer` called
+  `strlen()` on both 64 KB buffers on every append, so a long output loop was
+  effectively quadratic. The buffers now carry tracked lengths
+  (`s_transcript_len`/`s_transcript_ansi_len`) updated at every mutation site
+  (append, reset, memory-pressure trim, init) and read by the getters; the
+  label staging path uses a new length-aware
+  `windows_set_transcript_text_len()` instead of `snprintf("%s")`. No output
+  or buffer-size change (`set /a` still prints; history/clipboard/screenshots
+  unchanged, hardware-verified via `clip copy`).
+- **One transcript repaint per `for` loop.** `for`/`for /f` now wrap all
+  iterations in a single `shell_transcript_defer_begin/end`, so the O(buffer)
+  LVGL span rebuild happens once per loop instead of once per iteration
+  (nested per-command defer windows are depth-counted).
+- **No console mirror when no host is attached.** `shell_uart_console_write_text`
+  drops output when `usb_serial_jtag_is_connected()` is false, so the
+  USB-Serial-JTAG TX path can no longer block the command worker on
+  backpressure when running untethered. The transcript is unaffected; over
+  USB the mirror still works (verified).
+- **TCMD capture reuse**: a pane's `dir` runs only when its directory
+  changed since the last frame, so j/k navigation does ~2 SD reads instead of
+  ~6; file ops and the Refresh menu force a relist.
+- New probes: `tools/perf_for_test.py`, `tools/perf_transcript_test.py`,
+  `tools/clip_probe.py`. Regression green: unit 241/0/2, deep 8/8, db 38/38,
+  alarm 25/25 (one barrier flake on first run, green on re-run), smoke 21/21.
+
+### TUI selectable tables/list + Total Commander TCMD + background services (2026-09-11 session, COM3)
+- `draw table /cursor:N /sel:a,b` — bright cursor row + bold selected rows
+  (`tui_draw_table_ex`, old signature a wrapper; pure parsers
+  `tui_table_parse_cursor`/`_sel`, 4 new unit tests). Fixed a latent
+  column-drop bug: the pad loop reused the split cursor and blanked the
+  last column, so 3-column tables rendered only 2 (found via screenshot,
+  fixed by advancing `c` first).
+- New `draw list <x> <y> <w> <h> <file> [fg] [bg] [/top /cursor /sel
+  /title /count:NAME /countonly]` — renders a file's lines as a bordered,
+  scrollable, selectable panel; `/count` reports the line count to an env
+  var (batch's `set /a` echoes, so a `for`-loop counter floods). Reuses the
+  box/print primitives; off-TUI falls back to marked plain lines.
+- `apps/tcmd/TCMD.BAT` rewritten into a real dual-pane commander: live panes
+  from `dir /o:gn /b` + `draw list`, bright cursor per pane, active-pane
+  accent, path titles, status line, F-key-style hint bar, `draw fullscreen
+  on` for a full 80×25 grid (restored on exit). Keys j/k/t/o/x/s/1/2/p/q;
+  all previous ops kept behind the `x` menu; `p` snapshots to TCMD.BMP.
+  Screenshot-verified (`spikes/tcmd_full.png`).
+- Background apps: `apps/companion/SVC.BAT` (headless service loop, `start
+  SVC` / `taskkill bg0`) and `AGENDA.BAT` (calendar + notify job); a new
+  **Live System ‣ Services** companion submenu (Status/Start/Stop/List
+  alarms/Run agenda). Documented the background rule (headless-safe verbs
+  only) and the two schedulers (`start`, `alarm … /run:`). `svc_test.py`
+  drives start/tick/taskkill/agenda green on HW.
+- Spike findings that shaped the design: `dir > file` captures clean bytes
+  (no ANSI); `for /f` supports `skip=`/`tokens=1-6` but not `usebackq`
+  string sets; serial keys need Enter (`fgets` line-buffering); `set /a`
+  always prints; `@echo off` + `draw fullscreen on` are the TUI-app staples.
 
 ### Sprites, display discipline, assets, Snake/TCMD/Elite (2026-09-10 session, COM3)
 - `gfx load/blt/free/slots/save` (`components/gfx` pure BMP parser/decoder/

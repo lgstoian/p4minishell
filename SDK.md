@@ -1,6 +1,6 @@
-# Hosted Module SDK Guide (v0.35.7 hardware bring-up: suite 193/0/2, watchdog + alarm + font fixed)
+# Hosted Module SDK Guide (v0.35.7 + `[Unreleased]`, suite 262/0/2)
 
-> **v0.35.7 hardware bring-up (0.35.6->0.35.7) on top of the v0.35.6 split patch:** flashed to COM11, boot verified (`P4MiniShell v0.35.1 ready`, 1024x510 80x25 via `tui status` 80x25 p4minishell_config.h:298), extensive serial tests (draw box single SH_BOX_TL/H/V double SH_BOX_TL2/H2/V2 rounded SH_BOX_TLR/TRR/BLR/BRR with title+style correctly handled tui_draw_box components/tui/tui.c:228 / tui_cell_set components/tui/tui.c:116 utf8[4] components/tui/tui.h:35, draw line/fill/text/clear/window/close/refresh/fullscreen, draw fullscreen on|off (global) + tui fullscreen on|off (per-app) header kept visible by default windows_enter_tui_mode hidden only on fullscreen windows_set_fullscreen/header_set_visible components/windows/windows.c:418 / tui_enter_fullscreen components/tui/tui.c:417 dynamic windows_notify_keyboard_visibility -> windows_refresh_tui_surface, TUI does not overlap shell text tui_hide_for_modal, tui_flush components/tui/tui.c:356 recolor #RRGGBB per fg run via ansi_get_palette_color PowerShell palette no duplicate, color/locate TUI-aware, prompt shell_prompt_render_plain() main.c:112/components/shell/shell.c:412 + modal_surf.c:412 keyboard_bind_textarea situational SH_PROMPT, screenshot grab_screenshot.py --port/--out/--crop-transcript + capture_tui.py rect 1024x510) without abort/watchdog/overlap. Font extended in-place managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c 384 glyphs U+2500-U+257F/U+2600-U+26FF cmaps 3 no duplication CONFIG_LV_FONT_UNSCII_16=y; tui_cell_t utf8[4] SH_BOX_* via tui_cell_set, tui_flush recolor #RRGGBB per fg run ansi_get_palette_color; draw auto-enters TUI tui_init components/tui/tui.c:56; memory P4_CONFIG_TRANSCRIPT_BYTES 1024 p4minishell_config.h:93 P4_CONFIG_ASYNC_TRANSCRIPT_BYTES 512 p4minishell_config.h:134 P4_CONFIG_SD_DMA_BUFFER_BYTES 4096 p4minishell_config.h:626 P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES 60000 1/4 keep trim-below-10KB P4_CONFIG_COMMAND_TASK_STACK 16384->24576 p4minishell_config.h:1514 at 0x4012b75a, audio bsp_audio_init components/audio/audio.c:42 managed_components/espressif__esp_codec_dev/i2s/esp_codec_dev.c:269, modal EventGroup PSRAM MALLOC_CAP_SPIRAM components/modal/modal.c:46, queue full handling improved, serial routing modal_handle_serial_line components/modal/modal_surf.c:412 (dialog y list 2 ask myname correctly routed via shell.c). Companion fully TUI-expanded and hardware-verified: 7 BATs (COMPANION.BAT draw fullscreen double, SYS.BAT tui fullscreen draw boxes, FILES.BAT browse/view/hexview + draw + tui fullscreen, NET.BAT draw boxes, FUN.BAT tui demo, SET.BAT tui demo, LIB.BAT tui helpers) pushed via push_sd.py COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109), bugs M19-M31 all fixed.
+**Current stack/memory baseline:** transcript `P4_CONFIG_TRANSCRIPT_BYTES` 65536 (PSRAM), async transcript 512, internal trim 4096, SD DMA buffer 4096, command worker stack `P4_CONFIG_COMMAND_TASK_STACK` 32768, batch-file RAM cap `P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072, TUI grid 80x25. Boot banner is `P4MiniShell v0.35.7 ready`. Verified baseline: unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, plot 25/25 (COM3).
 
 This guide describes how `main/main.c` integrates the runtime modules in this workspace: `components/shell`, `components/storage`, `components/batch`, `components/command`, `components/display`, `components/windows`, `components/header`, `components/led`, `components/networking`, `components/usb`, and `components/c6ota`.
 
@@ -50,6 +50,7 @@ expansion, SD persistence via `alias /save`).
 ```
 main  ->  command  ->  batch  ->  storage  ->  shell  ->  ansi, display, windows, header, keyboard, clock
                  modal <- editor
+        leaves:  tui, gfx, filetype, markdown, font, db, alarm, audio, boot, c6ota, networking, usb, led, applib
 ```
 
 No component may declare `main` as a requirement. When a lower layer needs something an upper
@@ -194,13 +195,19 @@ its own `modal_surface_t` instead of duplicating the session/input plumbing.
 
 The TUI layer is live and hardware-verified (flash to COM11, boot `1024x510` transcript rect, extensive serial verification of `draw box single/double/rounded` with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` + `tui fullscreen on|off`, `color`/`locate`, `dialog`/`list`/`ask` with timeout + serial input, `browse`/`view`; no abort/watchdog/overlap, header kept unless fullscreen) for batch apps:
 
-- **Logical grid** (`components/tui/tui.h:35` `tui_cell_t utf8[4]`, `components/tui/tui.c:116` `tui_cell_set`): `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:298`) heap cell buffer (PSRAM `MALLOC_CAP_SPIRAM`, `utf8[4]` holds full 3-byte box UTF-8 `SH_BOX_*` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) with fg/bg/attribute per cell, mapped to the *live* transcript region `1024x510` via `windows_enter_tui_mode()` / `windows_refresh_tui_surface()` / `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). The pixel rect follows rotation and on-screen-keyboard visibility; the logical grid is clamped to `80×25`, never to pixels. `P4_CONFIG_TUI_*` is the single source of truth. `tui status` shows `rect 1024x510 cols 80 rows 25`.
+- **Logical grid** (`components/tui/tui.h:35` `tui_cell_t utf8[4]`, `components/tui/tui.c:129` `tui_cell_set`): `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:325`) heap cell buffer (PSRAM `MALLOC_CAP_SPIRAM`, `utf8[4]` holds full 3-byte box UTF-8 `SH_BOX_*` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) with fg/bg/attribute per cell, mapped to the *live* transcript region `1024x510` via `windows_enter_tui_mode()` / `windows_refresh_tui_surface()` / `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). The pixel rect follows rotation and on-screen-keyboard visibility; the logical grid is clamped to `80×25`, never to pixels. `P4_CONFIG_TUI_*` is the single source of truth. `tui status` shows `rect 1024x510 cols 80 rows 25`.
 - **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F and symbols U+2600-U+26FF (384 glyphs, cmaps 3, no duplication); `windows_get_terminal_font()` returns it for `s_tui_label` (`lv_label_set_recolor true`).
-- **Batch TUI verbs** (`components/tui/tui.c:228` `tui_draw_box` honors style+title, `components/tui/tui.c:283` `tui_draw_line`, `components/tui/tui.c:356` `tui_flush`): `draw box` single/double/rounded with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app, header hidden completely via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`, kept visible by default, dynamic keyboard scaling via `windows_notify_keyboard_visibility`); `color` (`tui_set_default_color`) / `locate` (`tui_set_cursor`) compose on the cell buffer; `ansi`/`menu` SGR codes share `components/ansi/ansi.c` (CSI parsing) and `tui_flush` coalesces per-fg-run `#RRGGBB ` recolor via `ansi_get_palette_color` PowerShell palette (no duplicate). `draw` auto-enters TUI (`tui_init` `components/tui/tui.c:56`) when no TUI/modal surface is active.
+- **Batch TUI verbs** (`components/tui/tui.c:241` `tui_draw_box` honors style+title, `components/tui/tui.c:296` `tui_draw_line`, `components/tui/tui.c:620` `tui_flush`): `draw box` single/double/rounded with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app, header hidden completely via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`, kept visible by default, dynamic keyboard scaling via `windows_notify_keyboard_visibility`); `color` (`tui_set_default_color`) / `locate` (`tui_set_cursor`) compose on the cell buffer; `ansi`/`menu` SGR codes share `components/ansi/ansi.c` (CSI parsing) and `tui_flush` coalesces per-fg-run `#RRGGBB ` recolor via `ansi_get_palette_color` PowerShell palette (no duplicate). `draw` auto-enters TUI (`tui_init` `components/tui/tui.c:56`) when no TUI/modal surface is active.
+- **Gfx canvas + toolkit** (`components/gfx/gfx.c` pure RGB565 raster + `gfx_font.c` 8x8 ASCII font; glue in `components/command/gfx_commands.c`): the `gfx` verb (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`hline`/`vline`/`triangle`/`ellipse`/`polygon`/`fill`/`text`/`show`/`load`/`blit`/`free`/`slots`/`save`) drives an exclusive `lv_canvas`; the pure `gfx_surface_*` API (`components/gfx/gfx.h`, see `API.md`) is headless and unit-tested. Refused in `start` background jobs and while TUI is active.
+- **Plot coordinate layer** (`components/command/plot_commands.c` + `components/gfx/gfx_view.c`, pure viewport math): the `plot` verb (`tui`/`window`/`auto`/`axes`/`func`/`polar`/`para`/`data`/`bar`/`table`/`line`/`point`/`clear`/`status`) renders world-coordinate math onto the `gfx` canvas or the TUI grid through one shared `gfx_view_t`; function sampling reuses `calc_evaluate()` over the X/T env vars (restored afterwards), so `calc` itself stays display-free and the command layer keeps the layering (command requires `gfx` + `batch`). Canvas plots never auto-show (compose, then one `gfx show`); TUI plots flush through `draw_maybe_flush` (so `draw hold` coalesces them). Foreground-only like `gfx`, except read-only `plot status` and text-only `plot table`.
+- **UI themes** (`components/font/theme.c`, pure): `theme_t` + `theme_current`/`theme_get`/`theme_builtin_at`/`theme_set` over four built-ins (`default`/`amber`/`ice`/`mono`). The command layer applies a switch live via `windows_refresh_theme()`, `keyboard_refresh_theme()`, and `header_refresh_theme()`; `windows_get_color()` and the header macros read `theme_current()`. Persisted as the `theme` key in `sd:/APPS/SHELL.INI`.
+- **Responsive header** (`components/header/header_layout.c`, pure policy + `header.c` widgets): every render measures the live labels and fits status/notification/system panels with no overlap on any resolution or rotation — abbreviations, dynamic font step, bounded scrolling notification, uptime indicator; `header_get_height()` is the single height authority used by the header and the window manager. Driven by the `header` verb (`status`, `mode auto|full|compact [/save]`, `show|hide`), CONFIG.SYS `HEADER_MODE=`, and `SHELL.INI` persistence with boot restore.
 - **Prompt** (`main/main.c:112` `shell_prompt_render_plain()` `components/shell/shell.c:412`, `components/modal/modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea`): all inputs honor the DOS prompt template (`PROMPT=` `$p $g` etc) with situational color (`SH_PROMPT`).
 - **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`, `tui status`): crops to transcript rect for pixel-perfect verification (used during hardware bug hunting).
 - **Modal surfaces for TUI**: `browse`/`view`/`hexview` are `modal_surface_t` surfaces on the same runtime — they hide the shell span group, mount their own content, and restore on close. New full-screen surfaces MUST be `modal_surface_t` descriptors (never a private loop) and MUST use the `windows_enter_tui_mode` handoff pattern (or `windows_set_fullscreen` for fullscreen) and MUST be routed through the generic `shell_command_ops_t.modal_*` hooks.
-- **Native TUI SDK stub**: `components/applib/applib_tui.h` declares `tui_create/destroy/box/print_at/refresh/clear` (heap cell buffer, same logical grid); stubbed with a warning in v0.35.1 and implemented after companion batch verification (fully TUI-expanded and hardware-verified on COM11 (7 BATs, push_sd.py PASS, no abort/watchdog/overlap, M31 stack overflow at 0x4012b75a fixed)). Included via `applib.h` umbrella.
+- **TUI SDK**: `components/applib/applib_tui.h` is now a thin re-export of `components/tui/tui.h`
+  (there is no separate `tui_create` API). Native apps drive the same 80x25 cell buffer as the
+  batch `draw` verbs. Included via the `applib.h` umbrella.
 
 ## applib — the native-app runtime
 
@@ -208,7 +215,9 @@ The TUI layer is live and hardware-verified (flash to COM11, boot `1024x510` tra
 It is organized as **lean, focused headers** — an app includes only the groups
 it uses (the umbrella `applib.h` pulls all of them in):
 `applib_console.h`, `applib_mem.h`, `applib_time.h`, `applib_net.h`,
-`applib_input.h`. It depends only on `shell`, `clock`, and the FreeRTOS/heap/
+`applib_input.h`, `applib_state.h`, `applib_ui.h`, `applib_app.h`,
+`applib_env.h`, `applib_db.h`, `applib_tui.h`. It depends only on `shell`,
+`clock`, `storage`, `db`, `tui`, and the FreeRTOS/heap/
 esp_timer IDF components, so apps never reach into shell/clock/networking
 internals. The service groups:
 
@@ -341,7 +350,7 @@ work the integrator has to perform.
 
    | Command kind | File | Visibility |
    |--------------|------|------------|
-   | Filesystem / SD | `components/storage/storage_commands.c` | declare in `storage_commands.h` |
+   | Filesystem / SD | `components/storage/storage_nav.c` / `storage_files.c` | declare in `storage_commands.h` |
    | Batch language | `components/batch/batch.c` (+ `components/batch/batch_expr.c` for `set /a`, `components/batch/calc.c` for `calc`) | declare in `batch.h` / `calc.h` |
    | Storage verbs | `components/storage/storage_nav.c` / `storage_files.c` / `storage_disk.c` / `storage_text.c` / `storage_fam.c` | declare in `storage_commands.h` |
    | Audio verbs | `components/command/audio_commands.c` | declare in `command.h` |
@@ -413,7 +422,7 @@ Prefer `shell_fs_copy_file()` over rolling your own loop: it already does all fo
 Anything that can lose user data must be unattended-proof:
 
 ```c
-/* Shared helper in storage_commands.c used by format, disk clean/delete,
+/* Shared helper in storage_disk.c used by format, disk clean/delete,
  * recursive del/rd, and trash empty/purge. Collects the exact confirmation
  * word through the key queue and refuses when nobody can answer. */
 if (!shell_confirm_destructive("mycmd", "WARNING: ...", detail_lines)) {
@@ -585,7 +594,7 @@ Strip markup with `shell_unescape_in_place()` once an extent is known, never by 
 `shell_execute_batch_file()`, `shell_execute_command()`, and `shell_execute_command_core()`
 form a recursive cycle: a batch file re-enters the pipeline once per line, and nesting
 multiplies every frame by `P4_CONFIG_BATCH_DEPTH_MAX`. The whole cycle shares the
-`P4_CONFIG_COMMAND_TASK_STACK` (8 KB) worker task stack.
+`P4_CONFIG_COMMAND_TASK_STACK` (32768 bytes) worker task stack.
 
 Do not add a line-sized or larger local buffer to any function on that cycle:
 
@@ -866,15 +875,19 @@ static void shell_input_line_event_cb(lv_event_t *event)
 
 ## ANSI/VT color integration notes
 - The ANSI module (`components/ansi/`) is initialized automatically by `shell_init()`.
-- Use `shell_transcript_appendf_ansi()` for colored command output with `@`-prefixed format specifiers.
-- Color scheme: `@G` (bright green) for headers, `@C` (cyan) for field labels, `@g` (green) for success, `@r` (red) for errors, `@y` (yellow) for warnings.
-- The ANSI palette is configurable via `P4_CONFIG_ANSI_*` macros in `p4minishell_config.h`.
+- Command output MUST use the semantic palette in `components/ansi/ansi_palette.h` through
+  `shell_transcript_appendf_ansi()`: `SH_HEAD`, `SH_LBL`, `SH_OK`, `SH_ERR`, `SH_WARN`, `SH_MUTE`,
+  `SH_VAL`, `SH_NUM`, `SH_PATH`, etc. Never pick a raw `@`-specifier at a call site.
+- The palette maps onto the standard 16 colors: bright green headings, cyan labels, green success,
+  red errors, yellow warnings, bright magenta numbers, grey muted text.
+- The ANSI palette is configurable via `P4_CONFIG_ANSI_*` (and the `SH_*`) macros in
+  `p4minishell_config.h` / `ansi_palette.h`.
 - LVGL transcript is a span group (`lv_spangroup`) that renders the ANSI colours as per-span
   text colours; UART console receives the raw ANSI for native terminal rendering.
-- For new commands, always use `shell_transcript_appendf_ansi()` with appropriate color specifiers.
-- Never hardcode ANSI escape sequences in command output — use the `@`-prefixed format specifiers.
-- The `@R` specifier resets all attributes at the end of each output line.
-- Available format specifiers: `@R` (reset), `@B` (bold), `@D` (dim), `@I` (italic), `@U` (underline), `@k`-`@w` (standard FG colors), `@K`-`@W` (bright FG colors).
+- Never hardcode ANSI escape sequences in command output — use the `SH_*` palette macros.
+- Available low-level format specifiers (already wrapped by the `SH_*` macros): `@R` (reset),
+  `@B` (bold), `@D` (dim), `@I` (italic), `@U` (underline), `@k`-`@w` (standard FG colors),
+  `@K`-`@W` (bright FG colors).
 
 ## USB keyboard integration notes
 - USB keyboard auto-detection runs in the periodic header status refresh timer.
@@ -914,7 +927,8 @@ static void shell_input_line_event_cb(lv_event_t *event)
 - All `header_update_*()` functions are safe to call from any task context.
 - State is set immediately (atomic bool/int writes); render is scheduled via LVGL async dispatch.
 - If async dispatch fails, a synchronous `header_render()` fallback ensures the widget updates.
-- Poll Wi-Fi RSSI through `esp_wifi_sta_get_ap_info()`, battery through shell ADC helper.
+- Read Wi-Fi RSSI through `networking_wifi_get_rssi()` (never call `esp_wifi_sta_get_ap_info()`
+  outside `components/networking/`); battery through the shell ADC helper.
 - `header_set_notification(...)` is async-safe (uses LVGL async dispatch internally).
 - Header is non-scrollable, resolution-scaled, left-to-right status icons, notification on far right.
 - SD indicator shows persistent state (NO/INS/ON/ERR) with consistent styling.

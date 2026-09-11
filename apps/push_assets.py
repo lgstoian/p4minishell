@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 from push_sd import push_file, wait_shell  # noqa: E402
 
 import push_apps  # noqa: E402
+import push_sd  # noqa: E402
 
 APPS_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(os.getcwd(), "assets_out")
@@ -91,6 +92,13 @@ def main():
         manifests.setdefault(app, []).append((target, crc_hex(data)))
     manifests.setdefault("SPR", []).extend(
         (name, crc_hex(blobs[name])) for name, _ in SPRITES)
+    # Companion (pushed by apps/companion/push_sd.py): root BATs + README plus
+    # the APPS/COMPANION.APPINFO metadata.
+    for name in push_sd.FILES:
+        with open(os.path.join(APPS_DIR, "companion", name), "rb") as f:
+            data = f.read()
+        target = ("APPS/" + name) if name.endswith(".APPINFO") else name
+        manifests.setdefault("COMPANION", []).append((target, crc_hex(data)))
     # 3. Push sprites + manifests.
     ser = serial.Serial(port, 115200, timeout=1)
     ser.setDTR(False)

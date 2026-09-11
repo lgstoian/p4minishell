@@ -2,3 +2,4 @@
 ; Copied to sd:/APPS/MOOD.APPINFO by apps/push_apps.py.
 title=Mood Dashboard
 description=Live board mood from free heap: RGB/audio bands plus mem/sysinfo snapshots
+version=1.0

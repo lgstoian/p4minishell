@@ -44,12 +44,54 @@ typedef enum {
     HEADER_SD_ERROR,          /**< Card error or mount failure */
 } header_sd_state_t;
 
+/** Header layout mode. */
+typedef enum {
+    HEADER_MODE_AUTO = 0, /**< Fit to the live resolution (compact as needed). */
+    HEADER_MODE_FULL,     /**< Always full labels/graph; may clip if tiny. */
+    HEADER_MODE_COMPACT,  /**< Always abbreviated labels. */
+    HEADER_MODE_COUNT
+} header_mode_t;
+
+/** Current header height in pixels for the live resolution/rotation. Matches
+ * the window manager's reserved header region exactly. 0 when hidden by the
+ * caller's visibility state is handled by the caller. */
+int header_get_height(void);
+
+/** Select the layout mode (AUTO by default; re-lays out on next render). */
+void header_set_mode(header_mode_t mode);
+header_mode_t header_get_mode(void);
+const char *header_mode_name(header_mode_t mode);
+/** Parse "auto"/"full"/"compact" (case-insensitive); NULL when unknown. */
+bool header_mode_parse(const char *text, header_mode_t *out);
+
+/** Schedule a re-layout/re-render (safe from any task). */
+void header_relayout(void);
+
+/** Snapshot of the last resolved layout + actual widget geometry (debug). */
+typedef struct {
+    int status_level;   /**< 0 full, 1 short, 2 min. */
+    int sys_level;
+    bool show_center;
+    int font_step;      /**< 0 primary UI font, 1 compact fallback. */
+    int left_w;         /**< Requested left-panel width. */
+    int center_w;       /**< Requested center width. */
+    int right_w;        /**< Requested right-panel width. */
+    int actual_left;    /**< Live widget widths (0 when hidden/absent). */
+    int actual_center;
+    int actual_right;
+    int screen_w;
+} header_metrics_t;
+
+/** Fill @p out with the last layout snapshot (zeroed when not initialised). */
+void header_get_metrics(header_metrics_t *out);
+
 /** Initialize the header bar. Call once after LVGL is ready, before transcript. */
 void header_init(void);
 
 /** Re-resolve label fonts after a font switch (same stale-pointer reason as
  * keyboard_refresh_fonts). No-op before header_init. */
 void header_refresh_fonts(void);
+void header_refresh_theme(void);
 
 /**
  * Show or hide the entire header bar. When hidden, the window manager reports
