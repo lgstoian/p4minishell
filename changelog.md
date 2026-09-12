@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.37.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
+
+### Changed — boot-time internal-RAM relief + reliability hardening
+
+- **PSRAM task stacks for the boot-time tasks that never touch host flash.**
+  PSRAM is not `MALLOC_CAP_DMA` on this P4 build (`dma_spi=0`), so
+  `MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA` requests fall back to internal RAM and
+  the tightest boot point held only ~1 KB DMA free / 188 B largest block.
+  Moved the USB `usb_host_lib`/`usb_module`, `c6ota`, `audio`, `alarm`, `led`
+  and `shell_uart` task stacks to PSRAM via
+  `xTaskCreate*WithCaps(..., MALLOC_CAP_SPIRAM)` (with `vTaskDeleteWithCaps`
+  for their self-deletion). The command worker, Wi-Fi bring-up tasks and LVGL
+  stay internal (they run NVS/flash-writing commands or are timing-sensitive).
+  Measured tightest point: DMA free **1.0 KB → 10.7 KB**, largest DMA block
+  **188 B → 8.7 KB**, internal free **10 KB → 40 KB**. See `bugs.md` O8.
+- **Boot script off the Wi-Fi event task.** CONFIG.SYS/AUTOEXEC.BAT now run on
+  a short-lived dedicated `bootscript` task (`P4_CONFIG_BOOT_SCRIPT_TASK_STACK`,
+  internal stack since the script can run flash/NVS-touching commands) instead
+  of the ESP-Hosted/Wi-Fi event task, so a slow AUTOEXEC cannot delay Wi-Fi
+  event delivery. The DMA scratch buffer is cached by the time the first-mount
+  callback starts the task, so it is race-free.
+- **SD-timeout residual no longer reproducible.** With the internal-DMA
+  headroom restored, a 12-minute concurrent Wi-Fi+SD `tools/stall_catch.py`
+  soak produced 0 SD stalls (the earlier `sdmmc_read_sectors` 0x107 timeout is
+  below detection); the one logged failure was the known O3 single-output loss.
+
+### Added
+
+- **`tools/boot_regression.py`** — fresh-boot guard that reboots N times and
+  asserts no panic/assert, exactly one AUTOEXEC run, SD ready, and no
+  unexpected W/E log lines. 8/8 clean on COM3.
+
+### Documentation
+
+- Clarified **W1**: the crash was the header async double free (O7), not an
+  ESP-Hosted overrun. Recorded the esp_hosted findings: the SDIO fixes live
+  only in the legacy 2.12.x line, **3.0.7 (latest) does not contain them** and
+  the 3.x branch has no PSRAM transport-buffer Kconfig, so we stay on 3.0.6
+  with no vendor patches (app-side mitigation only).
+
 ## [0.36.1] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
 ### Fixed — heap corruption (LVGL timer-list panic) + boot reliability

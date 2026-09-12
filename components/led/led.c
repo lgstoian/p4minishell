@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/rmt_types.h"
@@ -312,7 +313,8 @@ void led_init(void)
     s_initialized = true;
     led_unlock();
 
-    if (xTaskCreate(led_task, "led", LED_TASK_STACK, NULL, tskIDLE_PRIORITY + 2, &s_task) != pdPASS) {
+    if (xTaskCreateWithCaps(led_task, "led", LED_TASK_STACK, NULL, tskIDLE_PRIORITY + 2, &s_task,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(LED_TAG, "failed to create LED animation task");
     }
 }

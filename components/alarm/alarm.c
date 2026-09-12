@@ -29,6 +29,7 @@
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -909,9 +910,10 @@ esp_err_t alarm_init(void)
     s_catchup_done = true;
 #endif
 
-    if (xTaskCreate(alarm_checker_task, "alarm",
+    if (xTaskCreateWithCaps(alarm_checker_task, "alarm",
                     P4_CONFIG_ALARM_TASK_STACK, NULL,
-                    P4_CONFIG_ALARM_TASK_PRIORITY, &s_checker_task) != pdPASS) {
+                    P4_CONFIG_ALARM_TASK_PRIORITY, &s_checker_task,
+                    MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(ALARM_TAG, "failed to create the checker task");
         s_checker_task = NULL;
         s_initialized = true;   /* store still works; no background firing */

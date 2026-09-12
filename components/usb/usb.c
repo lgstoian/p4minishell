@@ -14,6 +14,7 @@
 #include "esp_intr_alloc.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -1001,7 +1002,7 @@ static void usb_module_task(void *arg)
         }
     }
 
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 static void usb_host_lib_task(void *arg)
@@ -1021,7 +1022,7 @@ static void usb_host_lib_task(void *arg)
         }
     }
 
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 static esp_err_t usb_install_host_stack(void)
@@ -1117,25 +1118,29 @@ void usb_init(void)
         error = usb_install_host_stack();
 
         if (error == ESP_OK && s_usb_host_lib_task == NULL) {
-            if (xTaskCreatePinnedToCore(usb_host_lib_task,
-                                        "usb_host_lib",
-                                        USB_HOST_LIB_TASK_STACK_BYTES,
-                                        NULL,
-                                        4,
-                                        &s_usb_host_lib_task,
-                                        0) != pdPASS) {
+            /* PSRAM stack: keeps the boot-time internal-RAM peak lower (the USB
+             * tasks never run with the flash cache disabled). */
+            if (xTaskCreatePinnedToCoreWithCaps(usb_host_lib_task,
+                                                "usb_host_lib",
+                                                USB_HOST_LIB_TASK_STACK_BYTES,
+                                                NULL,
+                                                4,
+                                                &s_usb_host_lib_task,
+                                                0,
+                                                MALLOC_CAP_SPIRAM) != pdPASS) {
                 error = ESP_ERR_NO_MEM;
             }
         }
 
         if (error == ESP_OK && s_usb_module_task == NULL) {
-            if (xTaskCreatePinnedToCore(usb_module_task,
-                                        "usb_module",
-                                        USB_EVENT_TASK_STACK_BYTES,
-                                        NULL,
-                                        4,
-                                        &s_usb_module_task,
-                                        0) != pdPASS) {
+            if (xTaskCreatePinnedToCoreWithCaps(usb_module_task,
+                                                "usb_module",
+                                                USB_EVENT_TASK_STACK_BYTES,
+                                                NULL,
+                                                4,
+                                                &s_usb_module_task,
+                                                0,
+                                                MALLOC_CAP_SPIRAM) != pdPASS) {
                 error = ESP_ERR_NO_MEM;
             }
         }

@@ -52,8 +52,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             36
-#define P4_CONFIG_VERSION_PATCH             1
+#define P4_CONFIG_VERSION_MINOR             37
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -783,6 +783,11 @@
 
 /** Maximum number of directives CONFIG.SYS may contain. */
 #define P4_CONFIG_BOOT_MAX_DIRECTIVES        64
+
+/** Stack size for the dedicated task that applies CONFIG.SYS / AUTOEXEC.BAT
+ *  once the SD card first mounts. Internal RAM: the boot script can run
+ *  commands that touch flash/NVS, which cannot run from a PSRAM stack. */
+#define P4_CONFIG_BOOT_SCRIPT_TASK_STACK     16384
 
 /** Maximum bytes the `config` command reads/writes for the CONFIG.SYS file. */
 #define P4_CONFIG_CONFIG_MAX_BYTES           16384

@@ -75,6 +75,10 @@ resets on the transition — every driver drops DTR/RTS on open via
   world-coordinate pixels (func/axes/data/bar/point/line), plus a TUI-mode
   screenshot to `spikes/plot_tui.bmp`.
 - `unit_run.py` — build-independent capture of the unit-test summaries.
+- `boot_regression.py` — fresh-boot regression guard: reboots N times and
+  asserts no panic/assert, exactly one AUTOEXEC run, SD ready, and no
+  unexpected W/E log lines (guards the deferred boot-script, header async
+  ownership, and boot-warning suppression fixes).
 - `pull.py` — pull an SD file over `send` (SDFX framing).
 - Deploy tools: `apps/push_apps.py` (reference apps), `apps/push_assets.py`
   (PIL sprites + `.ASSETS` manifests), and `apps/push_pkgs.py` (build + push

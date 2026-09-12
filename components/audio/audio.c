@@ -21,6 +21,7 @@
 
 #include "esp_codec_dev.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -107,9 +108,10 @@ static esp_err_t audio_ensure_task(void)
         return ESP_ERR_NO_MEM;
     }
 
-    if (xTaskCreate(audio_play_task, "audio_play",
+    if (xTaskCreateWithCaps(audio_play_task, "audio_play",
                     P4_CONFIG_AUDIO_TASK_STACK, NULL,
-                    P4_CONFIG_AUDIO_TASK_PRIORITY, &s_audio_task) != pdPASS) {
+                    P4_CONFIG_AUDIO_TASK_PRIORITY, &s_audio_task,
+                    MALLOC_CAP_SPIRAM) != pdPASS) {
         return ESP_FAIL;
     }
     return ESP_OK;

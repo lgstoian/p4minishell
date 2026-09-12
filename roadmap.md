@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.36.1, suite 262/0/2)
+# P4MiniShell Roadmap (v0.37.0, suite 262/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -16,10 +16,26 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (v0.36.1, hardware-verified on COM3)
+## Current baseline (v0.37.0, hardware-verified on COM3)
 Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
-**Current verified baseline:** v0.36.1. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.36.1]` for the newest milestones (header async heap-corruption fix, boot SD-script + USB bring-up hardening, hosted boot-warning suppression).
+**Current verified baseline:** v0.37.0. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.37.0]` for the newest milestones (boot-time internal-RAM relief via PSRAM task stacks, dedicated boot-script task, 0 SD stalls in a concurrent Wi-Fi+SD soak).
+
+### Recently completed (v0.37.0)
+- ✅ **Boot-time internal-RAM relief (O8)**: moved the app-owned flash-safe task stacks
+  (USB `usb_host_lib`/`usb_module`, `c6ota`, `audio`, `alarm`, `led`, `shell_uart`) to
+  PSRAM (`xTaskCreate*WithCaps(..., MALLOC_CAP_SPIRAM)` + `vTaskDeleteWithCaps`). The
+  tightest boot point went from ~1 KB DMA free / 188 B largest block to ~10.7 KB / 8.7 KB;
+  internal free 10 KB → 40 KB. The command worker, Wi-Fi tasks and LVGL stay internal.
+- ✅ **Dedicated boot-script task**: CONFIG.SYS/AUTOEXEC now run on a short-lived
+  `bootscript` task (`P4_CONFIG_BOOT_SCRIPT_TASK_STACK`) instead of the Wi-Fi event task.
+- ✅ **O6 residual below detection**: 12-min concurrent Wi-Fi+SD `stall_catch` soak → 0 SD
+  stalls (one known O3 single-output loss).
+- ✅ **Regression guard**: `tools/boot_regression.py` asserts no panic, exactly one
+  AUTOEXEC run, SD ready, and clean W/E across fresh boots (8/8 on COM3).
+- ✅ **Docs**: W1 clarified (header async double free, not a hosted overrun); upstream
+  esp_hosted findings recorded (3.0.7 lacks the 2.12.x SDIO fixes; stay on 3.0.6).
+
 
 ### Recently completed (post-0.35.7)
 - ✅ `components/gfx/` RGB565 raster + BMP parse/decode/blit; `gfx` verbs

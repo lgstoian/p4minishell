@@ -25,6 +25,8 @@
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
 #include "bsp/esp-bsp.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "p4minishell_config.h"
 #include "storage.h"
@@ -870,6 +872,16 @@ run_autoexec:
     ESP_LOGI(BOOT_TAG, "Boot scripting complete");
 }
 
+/** Short-lived task that applies the boot script off the SD-mounting task (the
+ *  Wi-Fi event task), so a slow AUTOEXEC never blocks Wi-Fi event delivery. Its
+ *  stack is internal because the script can run commands that touch flash/NVS. */
+static void boot_script_task(void *arg)
+{
+    (void)arg;
+    boot_script_apply();
+    vTaskDelete(NULL);
+}
+
 /**
  * Boot-time entry point: apply CONFIG.SYS / AUTOEXEC.BAT.
  *
@@ -1000,9 +1012,19 @@ void boot_on_sd_first_mount(void)
 
     /* If the eager boot probe lost the SDMMC race with the C6 bring-up
      * (expected on this board), this is where CONFIG.SYS/AUTOEXEC.BAT finally
-     * run. The guard makes the eager-success path a no-op. */
+     * run. The guard makes the eager-success path a no-op. By now the mount is
+     * complete and the DMA scratch buffer is cached (boot_ensure_default_files
+     * opened a nested session above), so a task started here is race-free. */
     if (!s_boot_script_applied) {
         s_boot_script_applied = true;
-        boot_script_apply();
+        if (xTaskCreate(boot_script_task,
+                        "bootscript",
+                        P4_CONFIG_BOOT_SCRIPT_TASK_STACK,
+                        NULL,
+                        tskIDLE_PRIORITY + 2,
+                        NULL) != pdPASS) {
+            /* Fall back to inline execution on the mounting task. */
+            boot_script_apply();
+        }
     }
 }

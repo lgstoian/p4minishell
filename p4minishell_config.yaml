@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.36.1
-# Last updated: 2026-09-12 (0.36.1: fix header async heap-corruption panic, boot
-#   SD script no longer skipped, USB host bring-up retry, hosted boot warnings
-#   silenced; suite 262/0/2 on COM3)
-config_version: "0.36.1"
+# Version: 0.37.0
+# Last updated: 2026-09-12 (0.37.0: PSRAM task stacks relieve the boot-time
+#   internal/DMA heap cliff, dedicated boot-script task, 0 SD stalls in a
+#   concurrent Wi-Fi+SD soak; suite 262/0/2 on COM3)
+config_version: "0.37.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -932,6 +932,11 @@ boot_scripting:
     type: uint16_t
     description: "Maximum number of directives CONFIG.SYS may contain"
     range: "16..256"
+  script_task_stack:
+    value: 16384
+    type: size_t
+    description: "Stack size for the dedicated task that applies CONFIG.SYS/AUTOEXEC.BAT once the SD card first mounts. Runs off the Wi-Fi event task so a slow AUTOEXEC cannot block Wi-Fi event delivery. Internal RAM because the script can run commands that touch flash/NVS."
+    range: "8192..65536"
   io_buffer_bytes:
     value: 128
     type: size_t

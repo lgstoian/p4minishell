@@ -20,6 +20,7 @@
 #include "esp_vfs_fat.h"
 #include "ff.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
 #include "networking.h"
@@ -1071,7 +1072,7 @@ static void c6ota_task(void *arg)
     if (request == NULL) {
         s_update_in_progress = false;
         c6ota_record_errorf(ESP_ERR_INVALID_ARG, "Background OTA request was null");
-        vTaskDelete(NULL);
+        vTaskDeleteWithCaps(NULL);
         return;
     }
 
@@ -1102,7 +1103,7 @@ static void c6ota_task(void *arg)
 
     free(request);
     s_update_in_progress = false;
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 void c6ota_init(void)
@@ -1138,12 +1139,13 @@ bool c6ota_try_handle_input(const char *input)
         s_update_in_progress = true;
         c6ota_emit_syncf("%s", "c6ota: confirmation accepted - starting OTA task\n");
         c6ota_notify_headerf(3500, "C6 OTA starting");
-        if (xTaskCreate(c6ota_task,
+        if (xTaskCreateWithCaps(c6ota_task,
                         "c6ota_task",
                         C6OTA_TASK_STACK_BYTES,
                         request,
                         tskIDLE_PRIORITY + 2,
-                        NULL) != pdPASS) {
+                        NULL,
+                        MALLOC_CAP_SPIRAM) != pdPASS) {
             s_update_in_progress = false;
             free(request);
             c6ota_emit_syncf("%s", "c6ota: failed to start background OTA task\n");

@@ -23,9 +23,9 @@
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
 #include "freertos/task.h"
 #include <time.h>
 #include <driver/gpio.h>
@@ -2729,7 +2729,7 @@ static void shell_uart_console_task(void *arg)
 
     if (line == NULL) {
         shell_record_errorf("uart", ESP_ERR_NO_MEM, "Failed to allocate the UART console line buffer");
-        vTaskDelete(NULL);
+        vTaskDeleteWithCaps(NULL);
         return;
     }
 
@@ -2903,12 +2903,13 @@ void shell_uart_console_start(void)
         s_shell_command_lock = xSemaphoreCreateMutex();
     }
 
-    if (xTaskCreate(shell_uart_console_task,
+    if (xTaskCreateWithCaps(shell_uart_console_task,
                     "shell_uart",
                     SHELL_UART_CONSOLE_TASK_STACK_BYTES,
                     NULL,
                     tskIDLE_PRIORITY + 1,
-                    &s_uart_console_task_handle) != pdPASS) {
+                    &s_uart_console_task_handle,
+                    MALLOC_CAP_SPIRAM) != pdPASS) {
         shell_record_errorf("uart", ESP_FAIL, "Failed to start UART console task");
         return;
     }
