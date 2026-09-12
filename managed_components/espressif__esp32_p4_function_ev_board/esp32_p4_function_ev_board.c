@@ -1,12 +1,13 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <string.h>
+#include <stdlib.h>
 #include "board_config.h"
 #include "sdkconfig.h"
-#include <stdlib.h>
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
@@ -17,8 +18,8 @@
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_ldo_regulator.h"
 #include "esp_vfs_fat.h"
-#include "driver/sdmmc_host.h"
 #include "usb/usb_host.h"
+#include "driver/sdmmc_host.h"
 #include "sd_pwr_ctrl.h"
 #include "sd_pwr_ctrl_interface.h"
 
@@ -26,6 +27,8 @@
 #if BOARD_CFG_LCD_TYPE_1024_600
 #include "esp_lcd_ek79007.h"
 #include "esp_lcd_jd9165.h"
+#elif CONFIG_BSP_LCD_TYPE_HDMI
+#include "esp_lcd_lt8912b.h"
 #else
 #include "esp_lcd_ili9881c.h"
 #endif
@@ -39,15 +42,11 @@
 
 static const char *TAG = "ESP32_P4_EV";
 
-#define BSP_SD_IO_PWR_LDO_CHAN       (4)
-#define BSP_SD_IO_PWR_LDO_VOLTAGE_MV (3300)
-
 #if (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
 static lv_indev_t *disp_indev = NULL;
 #endif // (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
 
 sdmmc_card_t *bsp_sdcard = NULL;    // Global uSD card handler
-static sd_pwr_ctrl_handle_t bsp_sd_pwr_ctrl_handle = NULL;
 static bool i2c_initialized = false;
 static bool backlight_initialized = false;
 static TaskHandle_t usb_host_task;  // USB Host Library task
@@ -57,7 +56,85 @@ static i2c_master_bus_handle_t i2c_handle = NULL;  // I2C Handle
 static i2s_chan_handle_t i2s_tx_chan = NULL;
 static i2s_chan_handle_t i2s_rx_chan = NULL;
 static const audio_codec_data_if_t *i2s_data_if = NULL;  /* Codec data interface */
+static bsp_lcd_handles_t disp_handles;
+static esp_ldo_channel_handle_t disp_phy_pwr_chan = NULL;
+static esp_lcd_touch_handle_t tp = NULL;
+static esp_lcd_panel_io_handle_t tp_io_handle = NULL;
 
+/* Can be used for `i2s_std_gpio_config_t` and/or `i2s_std_config_t` initialization */
+#define BSP_I2S_GPIO_CFG       \
+    {                          \
+        .mclk = BSP_I2S_MCLK,  \
+        .bclk = BSP_I2S_SCLK,  \
+        .ws = BSP_I2S_LCLK,    \
+        .dout = BSP_I2S_DOUT,  \
+        .din = BSP_I2S_DSIN,   \
+        .invert_flags = {      \
+            .mclk_inv = false, \
+            .bclk_inv = false, \
+            .ws_inv = false,   \
+        },                     \
+    }
+
+/* This configuration is used by default in `bsp_extra_audio_init()` */
+#define BSP_I2S_DUPLEX_MONO_CFG(_sample_rate)                                                         \
+    {                                                                                                 \
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(_sample_rate),                                          \
+        .slot_cfg = I2S_STD_PHILIP_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO), \
+        .gpio_cfg = BSP_I2S_GPIO_CFG,                                                                 \
+    }
+
+esp_err_t bsp_i2c_init(void)
+{
+    /* I2C was initialized before */
+    if (i2c_initialized) {
+        return ESP_OK;
+    }
+
+    i2c_master_bus_config_t i2c_bus_conf = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .sda_io_num = BSP_I2C_SDA,
+        .scl_io_num = BSP_I2C_SCL,
+        .i2c_port = BSP_I2C_NUM,
+        /* board_config.yaml keeps the pull-up choice explicit for touch/audio stability. */
+        .flags.enable_internal_pullup = BOARD_CFG_I2C_ENABLE_INTERNAL_PULLUP,
+    };
+    BSP_ERROR_CHECK_RETURN_ERR(i2c_new_master_bus(&i2c_bus_conf, &i2c_handle));
+
+    i2c_initialized = true;
+
+    return ESP_OK;
+}
+
+esp_err_t bsp_i2c_deinit(void)
+{
+    if (i2c_initialized && i2c_handle) {
+        BSP_ERROR_CHECK_RETURN_ERR(i2c_del_master_bus(i2c_handle));
+        i2c_initialized = false;
+    }
+    return ESP_OK;
+}
+
+i2c_master_bus_handle_t bsp_i2c_get_handle(void)
+{
+    return i2c_handle;
+}
+
+/* Slot-0-scoped SDMMC host deinit. The SDMMC host is shared with the
+ * ESP-Hosted C6 transport on slot 1 (see bugs.md N1). The default
+ * SDMMC_HOST_DEFAULT() deinit (sdmmc_host_deinit) tears down the WHOLE host,
+ * so a failed SD mount (esp_vfs_fat_sdmmc_mount calls host_config->deinit())
+ * would also break the co-processor link. Releasing only slot 0 keeps the
+ * host alive while any other slot is still initialized. */
+static esp_err_t bsp_sdmmc_host_deinit_slot0(void)
+{
+    return sdmmc_host_deinit_slot(SDMMC_HOST_SLOT_0);
+}
+
+#define BSP_SD_IO_PWR_LDO_CHAN       (4)
+#define BSP_SD_IO_PWR_LDO_VOLTAGE_MV (3300)
+
+static sd_pwr_ctrl_handle_t bsp_sd_pwr_ctrl_handle = NULL;
 typedef struct {
     esp_ldo_channel_handle_t ldo_chan;
     int voltage_mv;
@@ -129,84 +206,15 @@ static esp_err_t bsp_sd_pwr_ctrl_del(sd_pwr_ctrl_handle_t handle)
     return ESP_OK;
 }
 
-/* Can be used for `i2s_std_gpio_config_t` and/or `i2s_std_config_t` initialization */
-#define BSP_I2S_GPIO_CFG       \
-    {                          \
-        .mclk = BSP_I2S_MCLK,  \
-        .bclk = BSP_I2S_SCLK,  \
-        .ws = BSP_I2S_LCLK,    \
-        .dout = BSP_I2S_DOUT,  \
-        .din = BSP_I2S_DSIN,   \
-        .invert_flags = {      \
-            .mclk_inv = false, \
-            .bclk_inv = false, \
-            .ws_inv = false,   \
-        },                     \
-    }
-
-/* This configuration is used by default in `bsp_extra_audio_init()` */
-#define BSP_I2S_DUPLEX_MONO_CFG(_sample_rate)                                                         \
-    {                                                                                                 \
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(_sample_rate),                                          \
-        .slot_cfg = I2S_STD_PHILIP_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO), \
-        .gpio_cfg = BSP_I2S_GPIO_CFG,                                                                 \
-    }
-
-esp_err_t bsp_i2c_init(void)
-{
-    /* I2C was initialized before */
-    if (i2c_initialized) {
-        return ESP_OK;
-    }
-
-    i2c_master_bus_config_t i2c_bus_conf = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .sda_io_num = BSP_I2C_SDA,
-        .scl_io_num = BSP_I2C_SCL,
-        .i2c_port = BSP_I2C_NUM,
-        /* board_config.yaml keeps the pull-up choice explicit for touch/audio stability. */
-        .flags.enable_internal_pullup = BOARD_CFG_I2C_ENABLE_INTERNAL_PULLUP,
-    };
-    BSP_ERROR_CHECK_RETURN_ERR(i2c_new_master_bus(&i2c_bus_conf, &i2c_handle));
-
-    i2c_initialized = true;
-
-    return ESP_OK;
-}
-
-esp_err_t bsp_i2c_deinit(void)
-{
-    BSP_ERROR_CHECK_RETURN_ERR(i2c_del_master_bus(i2c_handle));
-    i2c_initialized = false;
-    return ESP_OK;
-}
-
-i2c_master_bus_handle_t bsp_i2c_get_handle(void)
-{
-    return i2c_handle;
-}
-
-/* Slot-0-scoped SDMMC host deinit. The SDMMC host is shared with the
- * ESP-Hosted C6 transport on slot 1 (see bugs.md N1). The default
- * SDMMC_HOST_DEFAULT() deinit (sdmmc_host_deinit) tears down the WHOLE host,
- * so a failed SD mount (esp_vfs_fat_sdmmc_mount calls host_config->deinit())
- * would also break the co-processor link. Releasing only slot 0 keeps the
- * host alive while any other slot is still initialized. */
-static esp_err_t bsp_sdmmc_host_deinit_slot0(void)
-{
-    return sdmmc_host_deinit_slot(SDMMC_HOST_SLOT_0);
-}
-
 esp_err_t bsp_sdcard_mount(void)
 {
-    esp_err_t ret;
-    const esp_vfs_fat_mount_config_t mount_config = {
-    #if BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL
+    const esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+#if BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL
         .format_if_mount_failed = true,
 #else
         .format_if_mount_failed = false,
 #endif
-        .max_files = 8,
+        .max_files = 5,
         .allocation_unit_size = 64 * 1024
     };
 
@@ -216,7 +224,7 @@ esp_err_t bsp_sdcard_mount(void)
     host.deinit = bsp_sdmmc_host_deinit_slot0;
 
     sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL;
-    ret = bsp_sd_pwr_ctrl_new(&pwr_ctrl_handle);
+    esp_err_t ret = bsp_sd_pwr_ctrl_new(&pwr_ctrl_handle);
     if (ret == ESP_OK) {
         host.pwr_ctrl_handle = pwr_ctrl_handle;
         bsp_sd_pwr_ctrl_handle = pwr_ctrl_handle;
@@ -508,6 +516,18 @@ esp_err_t bsp_display_brightness_init(void)
     return ESP_OK;
 }
 
+esp_err_t bsp_display_brightness_deinit(void)
+{
+    const ledc_timer_config_t LCD_backlight_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = 1,
+        .deconfigure = 1
+    };
+    BSP_ERROR_CHECK_RETURN_ERR(ledc_timer_pause(LEDC_LOW_SPEED_MODE, 1));
+    BSP_ERROR_CHECK_RETURN_ERR(ledc_timer_config(&LCD_backlight_timer));
+    return ESP_OK;
+}
+
 esp_err_t bsp_display_brightness_set(int brightness_percent)
 {
     if (brightness_percent > 100) {
@@ -542,12 +562,11 @@ static esp_err_t bsp_enable_dsi_phy_power(void)
 {
 #if BSP_MIPI_DSI_PHY_PWR_LDO_CHAN > 0
     // Turn on the power for MIPI DSI PHY, so it can go from "No Power" state to "Shutdown" state
-    static esp_ldo_channel_handle_t phy_pwr_chan = NULL;
     esp_ldo_channel_config_t ldo_cfg = {
         .chan_id = BSP_MIPI_DSI_PHY_PWR_LDO_CHAN,
         .voltage_mv = BSP_MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV,
     };
-    ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_cfg, &phy_pwr_chan), TAG, "Acquire LDO channel for DPHY failed");
+    ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_cfg, &disp_phy_pwr_chan), TAG, "Acquire LDO channel for DPHY failed");
     ESP_LOGI(TAG, "MIPI DSI PHY Powered on");
 #endif // BSP_MIPI_DSI_PHY_PWR_LDO_CHAN > 0
 
@@ -569,31 +588,37 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
 esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_lcd_handles_t *ret_handles)
 {
     esp_err_t ret = ESP_OK;
+    esp_lcd_panel_io_handle_t io = NULL;
+    esp_lcd_panel_handle_t disp_panel = NULL;
 
     ESP_RETURN_ON_ERROR(bsp_display_brightness_init(), TAG, "Brightness init failed");
     ESP_RETURN_ON_ERROR(bsp_enable_dsi_phy_power(), TAG, "DSI PHY power failed");
 
     /* create MIPI DSI bus first, it will initialize the DSI PHY as well */
-    esp_lcd_dsi_bus_handle_t mipi_dsi_bus;
+    esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
     esp_lcd_dsi_bus_config_t bus_config = {
         .bus_id = 0,
         .num_data_lanes = BSP_LCD_MIPI_DSI_LANE_NUM,
-        .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
-        .lane_bit_rate_mbps = BOARD_CFG_LCD_DSI_BUS_LANE_BITRATE_MBPS_RUNTIME,
+        .phy_clk_src = config->dsi_bus.phy_clk_src,
+        .lane_bit_rate_mbps = config->dsi_bus.lane_bit_rate_mbps,
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus), TAG, "New DSI bus init failed");
 
+#if !CONFIG_BSP_LCD_TYPE_HDMI
+    if (config->hdmi_resolution != BSP_HDMI_RES_NONE) {
+        ESP_LOGW(TAG, "Please select HDMI in menuconfig, if you want to use it.");
+    }
+
     ESP_LOGI(TAG, "Install MIPI DSI LCD control panel");
     // we use DBI interface to send LCD commands and parameters
-    esp_lcd_panel_io_handle_t io;
     esp_lcd_dbi_io_config_t dbi_config = {
         .virtual_channel = 0,
-        .lcd_cmd_bits = 8,   // according to the LCD ILI9881C spec
-        .lcd_param_bits = 8, // according to the LCD ILI9881C spec
+        .lcd_cmd_bits = 8,   // according to the LCD spec
+        .lcd_param_bits = 8, // according to the LCD spec
     };
     ESP_GOTO_ON_ERROR(esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &io), err, TAG, "New panel IO failed");
+#endif
 
-    esp_lcd_panel_handle_t disp_panel = NULL;
 #if BOARD_CFG_LCD_TYPE_1024_600
     // create EK79007 control panel
     //ESP_LOGI(TAG, "Install EK79007 LCD control panel");
@@ -608,7 +633,7 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
 #endif
     dpi_config.num_fbs = BOARD_CFG_LCD_DPI_BUFFER_NUMS;
 
-    ek79007_vendor_config_t vendor_config = {
+    jd9165_vendor_config_t vendor_config = {
         .mipi_config = {
             .dsi_bus = mipi_dsi_bus,
             .dpi_config = &dpi_config,
@@ -624,7 +649,7 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
     ESP_GOTO_ON_ERROR(esp_lcd_new_panel_jd9165(io, &lcd_dev_config, &disp_panel), err, TAG, "New LCD panel JD9165 failed");
     ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(disp_panel), err, TAG, "LCD panel reset failed");
     ESP_GOTO_ON_ERROR(esp_lcd_panel_init(disp_panel), err, TAG, "LCD panel init failed");
-#else
+#elif CONFIG_BSP_LCD_TYPE_1280_800
     // create ILI9881C control panel
     ESP_LOGI(TAG, "Install ILI9881C LCD control panel");
 #if BOARD_CFG_LCD_COLOR_FORMAT_RGB888
@@ -651,31 +676,158 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
     ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(disp_panel), err, TAG, "LCD panel reset failed");
     ESP_GOTO_ON_ERROR(esp_lcd_panel_init(disp_panel), err, TAG, "LCD panel init failed");
     ESP_GOTO_ON_ERROR(esp_lcd_panel_disp_on_off(disp_panel, true), err, TAG, "LCD panel ON failed");
+
+#elif CONFIG_BSP_LCD_TYPE_HDMI
+
+#if !CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
+#error The color format must be RGB888 in HDMI display type!
 #endif
+    ESP_LOGI(TAG, "Install MIPI DSI HDMI control panel");
+    ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "I2C init failed");
+
+    /* Main IO */
+    esp_lcd_panel_io_i2c_config_t io_config = LT8912B_IO_CFG(CONFIG_BSP_I2C_CLK_SPEED_HZ, LT8912B_IO_I2C_MAIN_ADDRESS);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config, &io));
+
+    /* CEC DSI IO */
+    esp_lcd_panel_io_handle_t io_cec_dsi = NULL;
+    esp_lcd_panel_io_i2c_config_t io_config_cec = LT8912B_IO_CFG(CONFIG_BSP_I2C_CLK_SPEED_HZ, LT8912B_IO_I2C_CEC_ADDRESS);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config_cec, &io_cec_dsi));
+
+    /* AVI IO */
+    esp_lcd_panel_io_handle_t io_avi = NULL;
+    esp_lcd_panel_io_i2c_config_t io_config_avi = LT8912B_IO_CFG(CONFIG_BSP_I2C_CLK_SPEED_HZ, LT8912B_IO_I2C_AVI_ADDRESS);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config_avi, &io_avi));
+
+    const esp_lcd_dpi_panel_config_t dpi_configs[] = {
+        LT8912B_800x600_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
+        LT8912B_1024x768_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
+        LT8912B_1280x720_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
+        LT8912B_1280x800_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
+        LT8912B_1920x1080_PANEL_30HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS)
+    };
+
+    const esp_lcd_panel_lt8912b_video_timing_t video_timings[] = {
+        ESP_LCD_LT8912B_VIDEO_TIMING_800x600_60Hz(),
+        ESP_LCD_LT8912B_VIDEO_TIMING_1024x768_60Hz(),
+        ESP_LCD_LT8912B_VIDEO_TIMING_1280x720_60Hz(),
+        ESP_LCD_LT8912B_VIDEO_TIMING_1280x800_60Hz(),
+        ESP_LCD_LT8912B_VIDEO_TIMING_1920x1080_30Hz()
+    };
+    lt8912b_vendor_config_t vendor_config = {
+        .mipi_config = {
+            .dsi_bus = mipi_dsi_bus,
+            .lane_num = BSP_LCD_MIPI_DSI_LANE_NUM,
+        },
+    };
+
+    /* DPI config */
+    switch (config->hdmi_resolution) {
+    case BSP_HDMI_RES_800x600:
+        ESP_LOGI(TAG, "HDMI configuration for 800x600@60HZ");
+        vendor_config.mipi_config.dpi_config = &dpi_configs[0];
+        memcpy(&vendor_config.video_timing, &video_timings[0], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
+        break;
+    case BSP_HDMI_RES_1024x768:
+        ESP_LOGI(TAG, "HDMI configuration for 1024x768@60HZ");
+        vendor_config.mipi_config.dpi_config = &dpi_configs[1];
+        memcpy(&vendor_config.video_timing, &video_timings[1], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
+        break;
+    case BSP_HDMI_RES_1280x720:
+        ESP_LOGI(TAG, "HDMI configuration for 1280x720@60HZ");
+        vendor_config.mipi_config.dpi_config = &dpi_configs[2];
+        memcpy(&vendor_config.video_timing, &video_timings[2], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
+        break;
+    case BSP_HDMI_RES_1280x800:
+        ESP_LOGI(TAG, "HDMI configuration for 1280x800@60HZ");
+        vendor_config.mipi_config.dpi_config = &dpi_configs[3];
+        memcpy(&vendor_config.video_timing, &video_timings[3], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
+        break;
+    case BSP_HDMI_RES_1920x1080:
+        ESP_LOGI(TAG, "HDMI configuration for 1920x1080@30HZ");
+        vendor_config.mipi_config.dpi_config = &dpi_configs[4];
+        memcpy(&vendor_config.video_timing, &video_timings[4], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
+        break;
+    default:
+        ESP_LOGE(TAG, "Unsupported display type (%d)", config->hdmi_resolution);
+    }
+
+    const esp_lcd_panel_dev_config_t panel_config = {
+        .bits_per_pixel = 24,
+        .rgb_ele_order = BSP_LCD_COLOR_SPACE,
+        .reset_gpio_num = BSP_LCD_RST,
+        .vendor_config = &vendor_config,
+    };
+    const esp_lcd_panel_lt8912b_io_t io_all = {
+        .main = io,
+        .cec_dsi = io_cec_dsi,
+        .avi = io_avi,
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_panel_lt8912b(&io_all, &panel_config, &disp_panel));
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(disp_panel), err, TAG, "LCD panel reset failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(disp_panel), err, TAG, "LCD panel init failed");
+
+#endif //CONFIG_BSP_LCD_TYPE_
 
     /* Return all handles */
     ret_handles->io = io;
+    disp_handles.io = io;
+#if CONFIG_BSP_LCD_TYPE_HDMI
+    ret_handles->io_cec = io_cec_dsi;
+    disp_handles.io_cec = io_cec_dsi;
+    ret_handles->io_avi = io_avi;
+    disp_handles.io_avi = io_avi;
+#endif
     ret_handles->mipi_dsi_bus = mipi_dsi_bus;
+    disp_handles.mipi_dsi_bus = mipi_dsi_bus;
     ret_handles->panel = disp_panel;
+    disp_handles.panel = disp_panel;
     ret_handles->control = NULL;
+    disp_handles.control = NULL;
 
     ESP_LOGI(TAG, "Display initialized");
 
     return ret;
 
 err:
-    if (disp_panel) {
-        esp_lcd_panel_del(disp_panel);
-    }
-    if (io) {
-        esp_lcd_panel_io_del(io);
-    }
-    if (mipi_dsi_bus) {
-        esp_lcd_del_dsi_bus(mipi_dsi_bus);
-    }
+    bsp_display_delete();
     return ret;
 }
 
+void bsp_display_delete(void)
+{
+    if (disp_handles.panel) {
+        esp_lcd_panel_del(disp_handles.panel);
+        disp_handles.panel = NULL;
+    }
+    if (disp_handles.io) {
+        esp_lcd_panel_io_del(disp_handles.io);
+        disp_handles.io = NULL;
+    }
+#if CONFIG_BSP_LCD_TYPE_HDMI
+    if (disp_handles.io_cec) {
+        esp_lcd_panel_io_del(disp_handles.io_cec);
+        disp_handles.io_cec = NULL;
+    }
+    if (disp_handles.io_avi) {
+        esp_lcd_panel_io_del(disp_handles.io_avi);
+        disp_handles.io_avi = NULL;
+    }
+#endif
+    if (disp_handles.mipi_dsi_bus) {
+        esp_lcd_del_dsi_bus(disp_handles.mipi_dsi_bus);
+        disp_handles.mipi_dsi_bus = NULL;
+    }
+
+    if (disp_phy_pwr_chan) {
+        esp_ldo_release_channel(disp_phy_pwr_chan);
+        disp_phy_pwr_chan = NULL;
+    }
+
+    bsp_display_brightness_deinit();
+}
+
+#if !CONFIG_BSP_LCD_TYPE_HDMI
 esp_err_t bsp_touch_new(const bsp_touch_config_t *config, esp_lcd_touch_handle_t *ret_touch)
 {
     /* Initilize I2C */
@@ -697,30 +849,74 @@ esp_err_t bsp_touch_new(const bsp_touch_config_t *config, esp_lcd_touch_handle_t
             .mirror_y = BOARD_CFG_TOUCH_MIRROR_Y,
         },
     };
-    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
     esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
     tp_io_config.scl_speed_hz = BOARD_CFG_I2C_CLK_SPEED_HZ;
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(i2c_handle, &tp_io_config, &tp_io_handle), TAG, "");
     return esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, ret_touch);
 }
 
+void bsp_touch_delete(void)
+{
+    if (tp) {
+        esp_lcd_touch_del(tp);
+    }
+    if (tp_io_handle) {
+        esp_lcd_panel_io_del(tp_io_handle);
+        tp_io_handle = NULL;
+    }
+}
+#endif //!CONFIG_BSP_LCD_TYPE_HDMI
+
 #if (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
 static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
 {
     assert(cfg != NULL);
-    bsp_lcd_handles_t lcd_panels;
-    BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new_with_handles(NULL, &lcd_panels));
+    BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new_with_handles(&cfg->hw_cfg, &disp_handles));
+
+    uint32_t display_hres = 0;
+    uint32_t display_vres = 0;
+#if CONFIG_BSP_LCD_TYPE_HDMI
+    switch (cfg->hw_cfg.hdmi_resolution) {
+    case BSP_HDMI_RES_800x600:
+        display_hres = 800;
+        display_vres = 600;
+        break;
+    case BSP_HDMI_RES_1024x768:
+        display_hres = 1024;
+        display_vres = 768;
+        break;
+    case BSP_HDMI_RES_1280x720:
+        display_hres = 1280;
+        display_vres = 720;
+        break;
+    case BSP_HDMI_RES_1280x800:
+        display_hres = 1280;
+        display_vres = 800;
+        break;
+    case BSP_HDMI_RES_1920x1080:
+        display_hres = 1920;
+        display_vres = 1080;
+        break;
+    default:
+        ESP_LOGE(TAG, "Unsupported HDMI resolution");
+    }
+#else
+    display_hres = BSP_LCD_H_RES;
+    display_vres = BSP_LCD_V_RES;
+#endif
+
+    ESP_LOGI(TAG, "Display resolution %ldx%ld", display_hres, display_vres);
 
     /* Add LCD screen */
     ESP_LOGD(TAG, "Add LCD screen");
     const lvgl_port_display_cfg_t disp_cfg = {
-        .io_handle = lcd_panels.io,
-        .panel_handle = lcd_panels.panel,
-        .control_handle = lcd_panels.control,
+        .io_handle = disp_handles.io,
+        .panel_handle = disp_handles.panel,
+        .control_handle = disp_handles.control,
         .buffer_size = cfg->buffer_size,
         .double_buffer = cfg->double_buffer,
-        .hres = BSP_LCD_H_RES,
-        .vres = BSP_LCD_V_RES,
+        .hres = display_hres,
+        .vres = display_vres,
         .monochrome = false,
         /* Rotation values must be same as used in esp_lcd for initial settings of the screen */
         .rotation = {
@@ -744,7 +940,7 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
 #if BOARD_CFG_LVGL_AVOID_TEAR
             .sw_rotate = false,                /* Avoid tearing is not supported for SW rotation */
 #else
-            .sw_rotate = cfg->flags.sw_rotate, /* Only SW rotation is supported for 90deg and 270deg */
+            .sw_rotate = cfg->flags.sw_rotate, /* Only SW rotation is supported for 90° and 270° */
 #endif
 #if BOARD_CFG_LVGL_FULL_REFRESH
             .full_refresh = true,
@@ -767,6 +963,7 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
     return lvgl_port_add_disp_dsi(&disp_cfg, &dpi_cfg);
 }
 
+#if !CONFIG_BSP_LCD_TYPE_HDMI
 static lv_indev_t *bsp_display_indev_init(lv_display_t *disp)
 {
     esp_lcd_touch_handle_t tp = NULL;
@@ -784,6 +981,7 @@ static lv_indev_t *bsp_display_indev_init(lv_display_t *disp)
 
     return lvgl_port_add_touch(&touch_cfg);
 }
+#endif //!CONFIG_BSP_LCD_TYPE_HDMI
 
 lv_display_t *bsp_display_start(void)
 {
@@ -791,6 +989,25 @@ lv_display_t *bsp_display_start(void)
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BSP_LCD_DRAW_BUFF_SIZE,
         .double_buffer = BSP_LCD_DRAW_BUFF_DOUBLE,
+        .hw_cfg = {
+#if CONFIG_BSP_LCD_TYPE_HDMI
+#if CONFIG_BSP_LCD_HDMI_800x600_60HZ
+            .hdmi_resolution = BSP_HDMI_RES_800x600,
+#elif CONFIG_BSP_LCD_HDMI_1280x720_60HZ
+            .hdmi_resolution = BSP_HDMI_RES_1280x720,
+#elif CONFIG_BSP_LCD_HDMI_1280x800_60HZ
+            .hdmi_resolution = BSP_HDMI_RES_1280x800,
+#elif CONFIG_BSP_LCD_HDMI_1920x1080_30HZ
+            .hdmi_resolution = BSP_HDMI_RES_1920x1080,
+#endif
+#else
+            .hdmi_resolution = BSP_HDMI_RES_NONE,
+#endif
+            .dsi_bus = {
+                .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+                .lane_bit_rate_mbps = BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS,
+            }
+        },
         .flags = {
 #if BOARD_CFG_LCD_COLOR_FORMAT_RGB888
             .buff_dma = false,
@@ -814,14 +1031,35 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
     BSP_ERROR_CHECK_RETURN_NULL(bsp_display_brightness_init());
 
     BSP_NULL_CHECK(disp = bsp_display_lcd_init(cfg), NULL);
-
+#if !CONFIG_BSP_LCD_TYPE_HDMI
     /* Touch is optional - display still works without it */
     disp_indev = bsp_display_indev_init(disp);
     if (disp_indev == NULL) {
         ESP_LOGW("bsp", "Running without touch input - use serial console (idf.py monitor)");
     }
-
+#endif
     return disp;
+}
+
+void bsp_display_stop(lv_display_t *display)
+{
+    /* Deinit LVGL */
+#if !CONFIG_BSP_LCD_TYPE_HDMI
+    lvgl_port_remove_touch(disp_indev);
+#endif
+    lvgl_port_remove_disp(display);
+    lvgl_port_deinit();
+
+#if !CONFIG_BSP_LCD_TYPE_HDMI
+    /* Deinit touch */
+    bsp_touch_delete();
+#endif
+
+    /* Deinit display */
+    bsp_display_delete();
+
+    /* Deinit I2C if initialized */
+    bsp_i2c_deinit();
 }
 
 lv_indev_t *bsp_display_get_input_dev(void)

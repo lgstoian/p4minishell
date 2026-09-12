@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - hardware sessions 2026-09-07 .. 2026-09-11 (COM3; ESP-IDF v5.5.5)
 
+### Managed batch B: esp_codec_dev 1.6.2 + BSP 4.2.3 (2026-09-12 session, COM3)
+
+- **Swapped** `espressif/esp_codec_dev` 1.2.0 → 1.6.2 (checksum-verified
+  archive; old tree proven byte-clean vs pristine 1.2.0 first) and the board
+  support package 4.1.1 → 4.2.3. BSP 5.x stays excluded (drops JD9165 for
+  esp_video); codec 2.x stays excluded (prerelease + new `usb_host_uac` dep).
+- **Re-ported all four local BSP deltas onto 4.2.3** (inventoried by diffing
+  the worktree against pristine 4.1.1 first): `board_config.h` pin/timing
+  wiring in both BSP headers, JD9165 panel select (kept on the held jd9165
+  1.0.2 driver; upgraded to the proper `jd9165_vendor_config_t`), audio
+  fail-soft init, backlight config + init-once guard, touch tolerance/remap,
+  SD slot-0 deinit, and the explicit-voltage SD LDO driver with delete on
+  failure/unmount. Dropped as obsolete: the SD LDO workaround is partly
+  superseded by 4.2.3's on-chip LDO path, but the explicit driver is kept
+  because the on-chip path leaks the channel on mount failure. `display.c`
+  now passes `hw_cfg.dsi_bus` (550 Mbps + default PHY clock), which 4.2.3
+  requires instead of reading the bitrate macro itself.
+- **Proven on hardware**: the pristine-4.2.3 on-chip LDO path fails SD mounts
+  deterministically after one failure (`already in use` — the exact leak the
+  restored driver fixes); with the re-port, a DMA-OOM-flaked boot mount
+  self-recovers and `sd info` is full. `tone`/`audio status` clean on codec
+  1.6.2 with no codec errors.
+- Verified: both builds clean, unit 262/0/2, deep 8/8, db 38/38, alarm 25/25,
+  smoke 21/21 (one `advent:back` flake, green on re-run), pkg/theme/gfx/plot/
+  header green, post-flash screenshot. `tools/managed_patches.patch` now also
+  backs up the BSP 4.2.3 hand deltas (validated with `git apply --check`
+  against pristine 4.2.3).
+
 ### Managed batch A: eppp_link 1.1.6 + usb_host_hid 1.2.1 (2026-09-11 session, COM3)
 
 - **Swapped** `espressif/eppp_link` 1.1.5 → 1.1.6 (retry-counter reset fix) and

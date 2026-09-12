@@ -6,10 +6,27 @@ set(COMPONENT_ADD_INCLUDEDIRS include interface device/include)
 # set conversion sources
 set(COMPONENT_SRCS
   esp_codec_dev.c
+  codec_dev_mirror.c
   esp_codec_dev_vol.c
   esp_codec_dev_if.c
   audio_codec_sw_vol.c
 )
+
+set(priv_requires freertos esp_ringbuf esp_hw_support)
+if("${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_GREATER_EQUAL "5.3")
+  list(APPEND priv_requires esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_spi)
+else()
+  list(APPEND priv_requires driver)
+endif()
+
+if("${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_GREATER_EQUAL "5.0")
+  list(APPEND priv_requires esp_adc)
+endif()
+
+set(requires "")
+if("${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_GREATER_EQUAL "6.0")
+  list(APPEND requires esp_hal_ana_conv)
+endif()
 
 list(APPEND COMPONENT_SRCS
   platform/audio_codec_gpio.c
@@ -17,7 +34,12 @@ list(APPEND COMPONENT_SRCS
   platform/audio_codec_data_i2s.c
   platform/audio_codec_ctrl_spi.c
   platform/esp_codec_dev_os.c
+  device/common/codec_ref_mgr.c
 )
+
+if(CONFIG_CODEC_DATA_ADC_SUPPORT AND "${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_GREATER_EQUAL "5.0")
+  list(APPEND COMPONENT_SRCS platform/audio_codec_data_adc.c)
+endif()
 
 if (CONFIG_CODEC_ES8311_SUPPORT)
   list(APPEND COMPONENT_SRCS device/es8311/es8311.c)
@@ -55,6 +77,14 @@ if (CONFIG_CODEC_AW88298_SUPPORT)
   list(APPEND COMPONENT_SRCS device/aw88298/aw88298.c)
 endif()
 
+if (CONFIG_CODEC_ES8389_SUPPORT)
+  list(APPEND COMPONENT_SRCS device/es8389/es8389.c)
+endif()
+
+if (CONFIG_CODEC_DUMMY_SUPPORT)
+  list(APPEND COMPONENT_SRCS device/dummy/dummy_codec.c)
+endif()
+
 if (CONFIG_CODEC_ZL38063_SUPPORT)
   list(APPEND COMPONENT_SRCS device/zl38063/zl38063.c
     device/zl38063/api_lib/vprocTwolf_access.c
@@ -66,14 +96,18 @@ if (CONFIG_CODEC_ZL38063_SUPPORT)
     device/zl38063/example_apps/tw_spi_access.c)
 endif()
 
+if (CONFIG_CODEC_CJC8910_SUPPORT)
+  list(APPEND COMPONENT_SRCS device/cjc8910/cjc8910.c)
+endif()
+
 idf_component_register(SRCS "${COMPONENT_SRCS}"
                        INCLUDE_DIRS "${COMPONENT_ADD_INCLUDEDIRS}"
                        PRIV_INCLUDE_DIRS "${COMPONENT_PRIV_INCLUDEDIRS}"
-                       REQUIRES driver
-                       PRIV_REQUIRES freertos)
+                       PRIV_REQUIRES ${priv_requires}
+                       REQUIRES ${requires})
 # Library only support xtensa
 if (CONFIG_CODEC_ZL38063_SUPPORT)
-  if (NOT ((CONFIG_IDF_TARGET STREQUAL "esp32c6") OR (CONFIG_IDF_TARGET STREQUAL "esp32c3")))
+  if (NOT ((CONFIG_IDF_TARGET STREQUAL "esp32c6") OR (CONFIG_IDF_TARGET STREQUAL "esp32c3") OR (CONFIG_IDF_TARGET STREQUAL "esp32p4")))
     target_link_libraries(${COMPONENT_TARGET} INTERFACE "-L${CMAKE_CURRENT_LIST_DIR}/device/zl38063/firmware")
     target_link_libraries(${COMPONENT_TARGET} INTERFACE firmware)
   endif()

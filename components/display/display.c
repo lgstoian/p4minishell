@@ -574,6 +574,13 @@ esp_err_t display_init(void)
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
         .double_buffer = BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE,
+        .hw_cfg = {
+            .hdmi_resolution = BSP_HDMI_RES_NONE,
+            .dsi_bus = {
+                .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+                .lane_bit_rate_mbps = BOARD_CFG_LCD_DSI_BUS_LANE_BITRATE_MBPS_RUNTIME,
+            },
+        },
         .flags = {
             .buff_dma = BOARD_CFG_APP_BUFFER_DMA,
             .buff_spiram = BOARD_CFG_APP_BUFFER_SPIRAM,

@@ -36,8 +36,11 @@ resets on the transition — every driver drops DTR/RTS on open via
   stub forwarding to `deep_test.py`; the pre-TUI triggers it asserted can no
   longer occur).
 - `managed_patches.patch` — backup of the hand-authored `managed_components/`
-  deltas (currently: LVGL `lv_async` PSRAM/lock hardening and the port
-  JD9165 `swap_xy` guard). The generated 384-glyph `unscii_16` font is
+  deltas (currently: LVGL `lv_async` PSRAM/lock hardening, the port
+  JD9165 `swap_xy` guard, and the BSP 4.x board wiring: `board_config.h`
+  pin/timing defines, JD9165 panel select, audio fail-soft init, backlight
+  config, touch tolerance + remap, SD slot-0 deinit + explicit-V LDO power).
+  The generated 384-glyph `unscii_16` font is
   tracked in git; the reapply script restores it from HEAD when the vendored
   LVGL minor version matches.
   Re-apply after `idf.py update-dependencies` with

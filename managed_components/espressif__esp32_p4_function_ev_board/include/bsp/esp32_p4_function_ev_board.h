@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -56,10 +56,17 @@
 #define BSP_POWER_AMP_IO      (BOARD_CFG_POWER_AMP_GPIO)
 
 /* Display */
+#if CONFIG_BSP_LCD_TYPE_1024_600
 #define BSP_LCD_BACKLIGHT     (BOARD_CFG_LCD_BACKLIGHT_GPIO)
 #define BSP_LCD_RST           (BOARD_CFG_LCD_RST_GPIO)
 #define BSP_LCD_TOUCH_RST     (BOARD_CFG_LCD_TOUCH_RST_GPIO)
 #define BSP_LCD_TOUCH_INT     (BOARD_CFG_LCD_TOUCH_INT_GPIO)
+#else
+#define BSP_LCD_BACKLIGHT     (GPIO_NUM_23)
+#define BSP_LCD_RST           (GPIO_NUM_NC)
+#define BSP_LCD_TOUCH_RST     (GPIO_NUM_NC)
+#define BSP_LCD_TOUCH_INT     (GPIO_NUM_NC)
+#endif
 
 /* uSD card */
 #define BSP_SD_D0             (GPIO_NUM_39)
@@ -267,6 +274,7 @@ typedef struct {
     lvgl_port_cfg_t lvgl_port_cfg;  /*!< LVGL port configuration */
     uint32_t        buffer_size;    /*!< Size of the buffer for the screen in pixels */
     bool            double_buffer;  /*!< True, if should be allocated two buffers */
+    bsp_display_config_t hw_cfg;    /*!< Display HW configuration */
     struct {
         unsigned int buff_dma: 1;    /*!< Allocated LVGL buffer will be DMA capable */
         unsigned int buff_spiram: 1; /*!< Allocated LVGL buffer will be in PSRAM */
@@ -277,7 +285,7 @@ typedef struct {
 /**
  * @brief Initialize display
  *
- * This function initializes SPI, display controller and starts LVGL handling task.
+ * This function initializes MIPI-DSI, display controller and starts LVGL handling task.
  * LCD backlight must be enabled separately by calling bsp_display_brightness_set()
  *
  * @return Pointer to LVGL display or NULL when error occured
@@ -287,7 +295,7 @@ lv_display_t *bsp_display_start(void);
 /**
  * @brief Initialize display
  *
- * This function initializes SPI, display controller and starts LVGL handling task.
+ * This function initializes MIPI-DSI, display controller and starts LVGL handling task.
  * LCD backlight must be enabled separately by calling bsp_display_brightness_set()
  *
  * @param cfg display configuration
@@ -295,6 +303,15 @@ lv_display_t *bsp_display_start(void);
  * @return Pointer to LVGL display or NULL when error occured
  */
 lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg);
+
+/**
+ * @brief Deinitialize display
+ *
+ * This function deinitializes MIPI-DSI, display controller and stops LVGL.
+ *
+ * @param @param[in] disp Pointer to LVGL display
+ */
+void bsp_display_stop(lv_display_t *display);
 
 /**
  * @brief Get pointer to input device (touch, buttons, ...)

@@ -10,6 +10,8 @@
 * 提供统一的抽象化接口来操作编解码器设备
 * 支持客户定制化编解码器设备 (仅需实例化提供的接口)
 * 为播放和录音提供易用的上层 API
+* 支持通过内部 ADC 数据接口采集 ADC 麦克风 (`audio_codec_new_adc_data`)
+* 支持 PA-only 扬声器场景使用 dummy codec (`dummy_codec_new`)，并通过 `esp_codec_dev_open/close` 自动控制 PA
 * 支持软件音量调节 (硬件不支持音量调节时)
 * 支持定制化音量曲线以及音量控制实现
 * 兼容多平台仅需替换 [platform](./platform)
@@ -23,15 +25,17 @@
 |ZL38063  |Y|Y|
 |TAS6805M  |Y|N|
 |AW88298 |Y|N|
+|ES8389 |Y|Y|
 |ES7210 |N|Y|
 |ES7243 |N|Y|
 |ES7243E |N|Y|
-|ES8156 |N|Y|
+|ES8156 |Y|N|
+|CJC8910 |Y|Y|
 
 
 ## 架构预览
 
-以编解码器设备 (ES8311) 为例，下面分别介绍硬件框图和软件架构。  
+以编解码器设备 (ES8311) 为例，下面分别介绍硬件框图和软件架构。
 编解码器设备 (ES8311) 和主芯片(ESP32-S3) 之间的硬件连接简图如下:
 ```mermaid
 graph LR;
@@ -78,7 +82,7 @@ class audio_codec_ctrl_if_t {
 	open()
 	read_reg()
 	write_reg()
-	close()    
+	close()
 }
 
 class audio_codec_gpio_if_t {
@@ -133,19 +137,19 @@ audio_codec_if_t ..> esp_codec_dev
 audio_codec_data_if_t ..> esp_codec_dev
 ```
 
-通讯通道抽象为两种接口: 
+通讯通道抽象为两种接口:
 * `audio_codec_ctrl_if_t` 控制接口：
-	主要提供 `read_reg` 和 `write_reg` API 来配置编解码器设备  
+	主要提供 `read_reg` 和 `write_reg` API 来配置编解码器设备
 	常用控制通道包括 I2C， SPI 等
 * `audio_codec_data_if_t` 数据接口：
-	主要提供 `read` 和 `write` API 用来交换音频数据  
+	主要提供 `read` 和 `write` API 用来交换音频数据
 	常用数据通道包括 I2S， SPI 等
 
 `esp_codec_dev` 为用户提供便捷的上层 API 来实现播放和录音功能。它是由 `audio_codec_data_if_t` 和 `audio_codec_if_t` 组成。`audio_codec_if_t` 对编解码器控制操作进行抽象，通过编解码器特有的配置参数构建（由 `audio_codec_ctrl_if_t` 和`audio_codec_gpio_if_t` 通过 `es8311_codec_cfg_t` 进行配置）。`audio_codec_gpio_if_t ` 对 IO 控制进行抽象，以适配主控 IO 或者扩展芯片 IO， 在编解码器内部进行调用用以匹配特有的设定时序。
 
 ## 解码器音量设定
 
-音量统一通过 API `esp_codec_dev_set_out_vol` 进行设定。  
+音量统一通过 API `esp_codec_dev_set_out_vol` 进行设定。
 `esp_codec_dev` 支持以下音量设定实现:
 1. 通过调节音量寄存器实现
 2. 在硬件不支持音量调节下，可以使用内置的软件音量实现 `audio_codec_new_sw_vol`
@@ -158,13 +162,13 @@ audio_codec_data_if_t ..> esp_codec_dev
 ## 使用方法
 
 以 ES8311 为例，下面将演示播放和录音的具体步骤
-1. 为编解码器设备的控制和数据总线安装驱动，可参考[test_board.c](test_apps/codec_dev_test/main/test_board.c)   
+1. 为编解码器设备的控制和数据总线安装驱动，可参考[test_board.c](test_apps/codec_dev_test/main/test_board.c)
    	```c
 	ut_i2c_init(0);
 	ut_i2s_init(0);
    	```
- 
-2. 为编解码器设备实现控制接口，数据接口和 GPIO 接口 (使用默认提供的接口实现)   
+
+2. 为编解码器设备实现控制接口，数据接口和 GPIO 接口 (使用默认提供的接口实现)
    	```c
 	audio_codec_i2s_cfg_t i2s_cfg = {
 	#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
@@ -180,7 +184,7 @@ audio_codec_data_if_t ..> esp_codec_dev
 	const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
    	```
 
-3. 基于控制接口和 ES8311 特有的配置实现 `audio_codec_if_t` 接口  
+3. 基于控制接口和 ES8311 特有的配置实现 `audio_codec_if_t` 接口
    	```c
 	es8311_codec_cfg_t es8311_cfg = {
 	    .codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH,
@@ -192,7 +196,7 @@ audio_codec_data_if_t ..> esp_codec_dev
 	const audio_codec_if_t *out_codec_if = es8311_codec_new(&es8311_cfg);
    	```
 
-4. 通过 API `esp_codec_dev_new` 获取 `esp_codec_dev_handle_t` 句柄  
+4. 通过 API `esp_codec_dev_new` 获取 `esp_codec_dev_handle_t` 句柄
    参考下面代码用获取到的句柄来进行播放和录制操作:
 	```c
 	esp_codec_dev_cfg_t dev_cfg = {
@@ -218,10 +222,18 @@ audio_codec_data_if_t ..> esp_codec_dev
 	esp_codec_dev_close(codec_dev);
 	```
 
+### 使用 ADC mic 和 dummy codec（无外部 codec 芯片）
+
+对于使用内部 ADC 麦克风，且扬声器仅有 PA、没有外部 codec 芯片的板级设计：
+
+* 使用 `audio_codec_new_adc_data` 作为 ADC 录音数据接口。
+* 使用 `dummy_codec_new` 并配置 `pa_pin`，将 PA 电源控制绑定到 codec 生命周期。
+* 这样依然可以通过 `esp_codec_dev_open()` / `esp_codec_dev_close()` 自动开关 PA。
+
 ## 客制化编解码器设备
 
-1. 实现接口 `audio_codec_ctrl_if_t` 和 `audio_codec_data_if_t`  
-   如果使用 I2C 总线作控制，I2S 总线做数据传输，可以使用默认的接口实现：  
+1. 实现接口 `audio_codec_ctrl_if_t` 和 `audio_codec_data_if_t`
+   如果使用 I2C 总线作控制，I2S 总线做数据传输，可以使用默认的接口实现：
    `audio_codec_new_i2c_ctrl` 和 `audio_codec_new_i2s_data`
 
 2. 在第一步的基础上实现接口 `audio_codec_if_t`
