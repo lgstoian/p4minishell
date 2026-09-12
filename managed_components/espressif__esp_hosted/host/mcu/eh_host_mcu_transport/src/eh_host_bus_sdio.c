@@ -1835,11 +1835,13 @@ static void check_if_max_freq_used(void)
 {
 #ifdef CONFIG_IDF_TARGET
 	if (EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ < 40000) {
-		ESP_LOGW(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz", EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ);
+		/* A lower negotiated clock is a supported board-specific fallback, not a fault. */
+		ESP_LOGD(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz", EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ);
 	}
 #else
 	if (EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ < 50000) {
-		ESP_LOGW(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 50000KHz", EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ);
+		/* A lower negotiated clock is a supported board-specific fallback, not a fault. */
+		ESP_LOGD(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 50000KHz", EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ);
 	}
 #endif
 }
@@ -2041,7 +2043,8 @@ static int ensure_slave_bus_ready(void *bus_handle)
 	} else
 #endif /* EH_HOST_FEAT_POWER_SAVE_READY */
 	{
-		ESP_LOGW(TAG, "Reset co-processor using GPIO[%u]", reset_pin.pin);
+		/* GPIO reset on this board is required during normal boot. */
+		ESP_LOGD(TAG, "Reset co-processor using GPIO[%u]", reset_pin.pin);
 		transport_gpio_reset(bus_handle, reset_pin);
 
 		res = transport_card_init(bus_handle, CARD_INIT_TIMEOUT_MS);

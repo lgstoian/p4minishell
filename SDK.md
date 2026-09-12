@@ -1,6 +1,6 @@
-# Hosted Module SDK Guide (v0.36.0, suite 262/0/2)
+# Hosted Module SDK Guide (v0.36.1, suite 262/0/2)
 
-**Current stack/memory baseline:** transcript `P4_CONFIG_TRANSCRIPT_BYTES` 65536 (PSRAM), async transcript 512, internal trim 4096, SD DMA buffer 4096, command worker stack `P4_CONFIG_COMMAND_TASK_STACK` 32768, batch-file RAM cap `P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072, TUI grid 80x25. Boot banner is `P4MiniShell v0.36.0 ready`. Verified baseline: unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, plot 25/25 (COM3).
+**Current stack/memory baseline:** transcript `P4_CONFIG_TRANSCRIPT_BYTES` 65536 (PSRAM), async transcript 512, internal trim 4096, SD DMA buffer 4096, command worker stack `P4_CONFIG_COMMAND_TASK_STACK` 32768, batch-file RAM cap `P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072, TUI grid 80x25. Boot banner is `P4MiniShell v0.36.1 ready`. Verified baseline: unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, plot 25/25 (COM3).
 
 This guide describes how `main/main.c` integrates the runtime modules in this workspace: `components/shell`, `components/storage`, `components/batch`, `components/command`, `components/display`, `components/windows`, `components/header`, `components/led`, `components/networking`, `components/usb`, and `components/c6ota`.
 

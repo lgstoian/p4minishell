@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             36
-#define P4_CONFIG_VERSION_PATCH             0
+#define P4_CONFIG_VERSION_PATCH             1
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -1491,6 +1491,17 @@
 
 /** Depth of the USB event queue. */
 #define P4_CONFIG_USB_EVENT_QUEUE_DEPTH      16
+
+/**
+ * USB host bring-up retries. The HCD root-hub install and the driver task
+ * stacks need contiguous internal RAM that the boot-time Wi-Fi/ESP-Hosted
+ * burst can transiently exhaust; retrying after a short delay lets the
+ * subsystem come up instead of staying dead for the whole boot.
+ */
+#define P4_CONFIG_USB_INIT_RETRIES           4
+
+/** Delay in milliseconds between USB host bring-up attempts. */
+#define P4_CONFIG_USB_INIT_RETRY_DELAY_MS    500
 
 /** Maximum bytes for a USB status text message. */
 #define P4_CONFIG_USB_TEXT_BYTES             192

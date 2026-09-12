@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.36.1] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
+
+### Fixed — heap corruption (LVGL timer-list panic) + boot reliability
+
+- **LVGL timer-list panic root cause (heap double free).**
+  `header_schedule()` freed the async payload when `lv_async_call()` failed
+  (LVGL OOM under boot memory pressure), and all eight `header_update_*`
+  callers then freed the same pointer again. The second free scribbled on the
+  heap free list; the next LVGL timer allocation drew from the damaged region
+  and `lv_timer_handler -> lv_ll_get_next` jumped to garbage. `header_schedule()`
+  no longer frees — the caller owns the payload and frees it on failure (and
+  `header_set_notification()` now does too, restoring one consistent rule).
+  Verified 0 panics / 0 poisoning asserts in 20+ fresh boots under the same
+  boot load that previously panicked ~1/10.
+- **Orphaned header notification timer.** `header_deinit()` nulled
+  `s_notification_timer` without deleting it; LVGL timers are *not* reclaimed by
+  `lv_obj_clean()`. It now deletes the armed one-shot (runs on the LVGL task
+  under the port lock).
+- **`header_set_visible()` mutated LVGL unlocked.** Called from the command
+  worker (`config`/`header`) and the boot path; it now takes the recursive port
+  lock around the widget change.
+- **`editor_view_set_blink_ms()` TOCTOU.** The `open` check ran before the port
+  lock; a close in that window created an orphaned cursor timer. Moved inside
+  the lock.
+- **Boot SD script silently skipped every boot.** The eager mount races the
+  ESP-Hosted C6 bring-up for the shared SDMMC controller, DMA-capable internal
+  RAM and the SD-IO LDO, so it failed with `ESP_ERR_NO_MEM` and CONFIG.SYS /
+  AUTOEXEC were never applied. Boot scripting now runs from the SD first mount
+  (the same late mount that already fired "SD card ready"), guarded to run once;
+  the expected eager-mount failure logs are muted for that one attempt only.
+  AUTOEXEC now runs every boot.
+- **USB host could stay dead for the whole boot** (`HCD Port 0 init error:
+  ESP_ERR_NO_MEM`) while the C6 bring-up held the contiguous internal block.
+  USB bring-up now retries (each stage idempotent) with the expected transient
+  library errors muted for the retry window; USB comes up on every boot tested.
+- **Expected ESP-Hosted boot warnings silenced** (`ESP_LOGW` -> `ESP_LOGD`,
+  matching the suppression the pre-3.0.6 tree carried and the migration
+  dropped): the 10 MHz SDIO clock fallback notices and the co-processor GPIO
+  reset notice. 10 MHz remains the negotiated clock (a deliberate stability
+  choice); 40 MHz removes the notice but was not adopted.
+- Cleaned the stale hand-edited `CONFIG.SYS` on the test SD (reserved-pin
+  `GPIO 42` + `UNKNOWN_DIRECTIVE`) that produced the last `gpio` rejection
+  warning; the firmware correctly rejected the reserved pin either way.
+
+Verified: full boot log free of W/E; unit **262/0/2**, companion deep **8/8**,
+db **38/38**, alarm **25/25**, smoke **21/21**, pkg/theme/gfx/plot/header OK.
+(One transient `sdmmc_read_sectors` timeout appeared on an early db run and
+passed on rerun — the known O6 latency residual, unrelated to these fixes.)
+
 ## [0.36.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
 ### O6 SD-latency fix: session priority boost + read retry (2026-09-12 session, COM3)

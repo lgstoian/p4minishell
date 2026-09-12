@@ -879,14 +879,15 @@ static void header_render(void)
     lvgl_port_unlock();
 }
 
-/* ---- Async dispatch helper ---- */
+/* ---- Async dispatch helper ----
+ * Ownership: the caller allocates the payload and owns it on failure (it frees
+ * it and re-renders); on success the async callback owns and frees it. This
+ * helper must NOT free the payload on failure: doing so double-frees it at
+ * every caller and corrupts the heap free list (the corruption then surfaces
+ * as an LVGL timer-list crash). */
 static bool header_schedule(lv_async_cb_t cb, void *payload)
 {
-    if (lv_async_call(cb, payload) != LV_RESULT_OK) {
-        free(payload);
-        return false;
-    }
-    return true;
+    return lv_async_call(cb, payload) == LV_RESULT_OK;
 }
 
 /* ---- Async callbacks ---- */
@@ -1260,7 +1261,10 @@ void header_set_notification(const char *text, uint32_t timeout_ms)
     if (update == NULL) return;
     snprintf(update->text, sizeof(update->text), "%s", text != NULL ? text : "");
     update->timeout_ms = timeout_ms;
-    (void)header_schedule(header_async_notification, update);
+    if (!header_schedule(header_async_notification, update)) {
+        free(update);
+        header_render();
+    }
 }
 
 void header_update_wifi(bool connected, int rssi)
@@ -1464,6 +1468,15 @@ void header_update_batch(
 void header_set_visible(bool visible)
 {
     s_header_visible = visible;
+    if (s_header_root == NULL) {
+        return;
+    }
+    /* Called from the command worker (config/header verbs) and the boot path,
+     * not only the LVGL task; hold the recursive port lock while mutating the
+     * widget so the change serialises with the render cycle. */
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
     if (s_header_root != NULL) {
         if (visible) {
             lv_obj_clear_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
@@ -1471,6 +1484,7 @@ void header_set_visible(bool visible)
             lv_obj_add_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
         }
     }
+    lvgl_port_unlock();
 }
 
 bool header_get_visible(void)
@@ -1480,12 +1494,14 @@ bool header_get_visible(void)
 
 void header_deinit(void)
 {
-    /* Do NOT call lv_timer_delete here — the timer may have been invalidated
-     * by a previous cleanup or may be owned by a different LVGL context.
-     * lv_obj_clean() in shell_build_ui will destroy all widgets and the
-     * timer will be cleaned up by LVGL's internal timer management.
-     * Just NULL out the pointer so header_init() creates a fresh one. */
-    s_notification_timer = NULL;
+    /* The one-shot notification timer is an LVGL timer, not a widget: it is
+     * NOT reclaimed by lv_obj_clean(). Delete it here (this runs on the LVGL
+     * task under the port lock) so a pending notification cannot fire after
+     * teardown and clear a newer timer's handle. */
+    if (s_notification_timer != NULL) {
+        lv_timer_delete(s_notification_timer);
+        s_notification_timer = NULL;
+    }
 
     /* Clear all widget handles — the screen will be cleaned by shell_build_ui
      * via lv_obj_clean(), which deletes all children including our widgets.

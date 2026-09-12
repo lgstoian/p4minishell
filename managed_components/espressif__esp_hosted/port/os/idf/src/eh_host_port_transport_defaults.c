@@ -145,7 +145,8 @@ void eh_host_port_transport_check_max_freq(uint8_t chip_id)
     (void)chip_id;
     /* Read Kconfig freq, not SDMMC_FREQ_DEFAULT (would always alarm at 40MHz) */
     if ((unsigned)EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ < 40000u) {
-        ESP_LOGW(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz",
+        /* A lower negotiated clock is a supported board-specific fallback, not a fault. */
+        ESP_LOGD(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz",
                  (unsigned)EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ);
     }
 }

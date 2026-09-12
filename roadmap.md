@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.36.0, suite 262/0/2)
+# P4MiniShell Roadmap (v0.36.1, suite 262/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -16,10 +16,10 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (v0.36.0, hardware-verified on COM3)
+## Current baseline (v0.36.1, hardware-verified on COM3)
 Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
-**Current verified baseline:** v0.36.0. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `## [0.36.0]` for the newest milestones (O6 SD-session boost, hosted version-gate fix, managed LVGL 9.5 / eppp / hid / codec / BSP 4.2.3).
+**Current verified baseline:** v0.36.1. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.36.1]` for the newest milestones (header async heap-corruption fix, boot SD-script + USB bring-up hardening, hosted boot-warning suppression).
 
 ### Recently completed (post-0.35.7)
 - ✅ `components/gfx/` RGB565 raster + BMP parse/decode/blit; `gfx` verbs

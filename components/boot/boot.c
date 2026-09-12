@@ -43,6 +43,12 @@
  * user once after AUTOEXEC.BAT runs. */
 static char s_boot_launch_app[P4_CONFIG_APP_NAME_BYTES];
 
+/* True once CONFIG.SYS/AUTOEXEC.BAT have been applied this boot. The script
+ * runs from the eager boot probe or, if that probe loses the SDMMC race with
+ * the C6 bring-up, from the first SD mount; this guards against applying it
+ * twice. */
+static bool s_boot_script_applied;
+
 /* ========================================================================
  * DEFAULT TEMPLATES
  * ======================================================================== */
@@ -635,7 +641,12 @@ static void boot_offer_launch(const char *app)
     }
 }
 
-void boot_run_startup(void)
+/**
+ * Apply CONFIG.SYS and run AUTOEXEC.BAT (plus the saved alias profile) with the
+ * card mounted. Opens its own guarded session; the persistent mount makes the
+ * nested begin a no-op that only re-caches the DMA buffer.
+ */
+static void boot_script_apply(void)
 {
     shell_sd_session_t session;
     char path[64];
@@ -643,11 +654,6 @@ void boot_run_startup(void)
     unsigned int directive_count = 0;
 
     if (shell_sd_begin(&session) != ESP_OK) {
-        ESP_LOGI(BOOT_TAG, "Boot scripting skipped: no SD card");
-        shell_transcript_appendf_ansi(SH_MUTE "No SD card detected - insert a microSD card to use files, "
-                                      "config, and scripts (type " SH_EXE "help" SH_RST SH_MUTE ")" SH_RST "\n");
-        shell_header_notify("Insert SD card", P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
-        shell_record_warningf("boot", "No SD card detected at boot");
         return;
     }
 
@@ -864,6 +870,56 @@ run_autoexec:
     ESP_LOGI(BOOT_TAG, "Boot scripting complete");
 }
 
+/**
+ * Boot-time entry point: apply CONFIG.SYS / AUTOEXEC.BAT.
+ *
+ * The card and the ESP-Hosted C6 share the SDMMC controller, its DMA-capable
+ * internal buffers, and the on-chip SD-IO LDO. This eager mount usually loses
+ * while the C6 background bring-up is claiming them (ESP_ERR_NO_MEM), so the
+ * script is deferred to the first SD mount, which the bring-up itself triggers
+ * a moment later. Forcing the mount to win (retry/delay) starves the C6
+ * bring-up, so the probe is a single attempt.
+ */
+void boot_run_startup(void)
+{
+    shell_sd_session_t probe;
+
+    /* The eager mount is expected to lose the SDMMC/DMA/LDO race with the C6
+     * bring-up and the card mounts a moment later (boot_on_sd_first_mount).
+     * Silence the SDMMC/FATFS error logs for this one attempt and restore them
+     * immediately, so the boot log does not show a mount failure that recovers
+     * in the same breath. The hosted bring-up logs under different tags
+     * (eh_ and sdmmc_common), so its diagnostics stay visible. */
+    static const char *const probe_tags[] = {
+        "sdmmc_cmd", "sdmmc_sd", "diskio_sdmmc", "vfs_fat_sdmmc",
+    };
+    esp_log_level_t saved_levels[sizeof(probe_tags) / sizeof(probe_tags[0])];
+    size_t i;
+    esp_err_t probe_result;
+
+    for (i = 0; i < sizeof(probe_tags) / sizeof(probe_tags[0]); i++) {
+        saved_levels[i] = esp_log_level_get(probe_tags[i]);
+        esp_log_level_set(probe_tags[i], ESP_LOG_NONE);
+    }
+
+    probe_result = shell_sd_begin(&probe);
+
+    for (i = 0; i < sizeof(probe_tags) / sizeof(probe_tags[0]); i++) {
+        esp_log_level_set(probe_tags[i], saved_levels[i]);
+    }
+
+    if (probe_result == ESP_OK) {
+        shell_sd_end(&probe, "boot");
+        if (!s_boot_script_applied) {
+            s_boot_script_applied = true;
+            boot_script_apply();
+        }
+        return;
+    }
+
+    ESP_LOGI(BOOT_TAG, "Boot scripting deferred until the SD card first mounts");
+}
+
 /** True when a file does not exist (so the defaults should be generated). */
 static bool boot_file_missing(const char *path)
 {
@@ -941,4 +997,12 @@ void boot_on_sd_first_mount(void)
     }
     shell_header_notify("SD card ready", P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
     shell_record_infof("boot", "SD card mounted for the first time this boot");
+
+    /* If the eager boot probe lost the SDMMC race with the C6 bring-up
+     * (expected on this board), this is where CONFIG.SYS/AUTOEXEC.BAT finally
+     * run. The guard makes the eager-success path a no-op. */
+    if (!s_boot_script_applied) {
+        s_boot_script_applied = true;
+        boot_script_apply();
+    }
 }

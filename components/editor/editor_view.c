@@ -1049,10 +1049,14 @@ static void editor_update_cursor(void)
  * timer deleted, cursor forced visible). No-op unless open. */
 void editor_view_set_blink_ms(uint32_t blink_ms)
 {
-    if (!s_editor_view.open) {
+    /* Check `open` under the lock: testing it before taking the lock races a
+     * close on the LVGL task and can create a cursor timer after
+     * editor_view_close() already ran, orphaning it. */
+    if (!lvgl_port_lock(0)) {
         return;
     }
-    if (!lvgl_port_lock(0)) {
+    if (!s_editor_view.open) {
+        lvgl_port_unlock();
         return;
     }
     if (blink_ms == 0) {

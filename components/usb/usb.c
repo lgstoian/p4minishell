@@ -38,6 +38,11 @@
 #define USB_TEXT_BYTES                  P4_CONFIG_USB_TEXT_BYTES
 #define USB_PATH_BYTES                  P4_CONFIG_USB_PATH_BYTES
 #define USB_MSC_BASE_PATH               P4_CONFIG_USB_MSC_BASE_PATH
+/* Tags used by the USB host library (managed espressif__usb sources compiled
+ * into this component) for the HCD/hub bring-up errors silenced during the
+ * transient boot-time retry window. */
+#define USB_HCD_TAG                     "HUB"
+#define USB_HOSTLIB_TAG                 "USB HOST"
 #define USB_LIST_LIMIT                  P4_CONFIG_USB_LIST_LIMIT
 #define USB_HID_REPORT_MAX_BYTES        P4_CONFIG_USB_HID_REPORT_MAX_BYTES
 #define USB_KEYBOARD_KEYS               P4_CONFIG_USB_KEYBOARD_KEYS
@@ -162,6 +167,8 @@ static bool s_usb_initialized;
 static bool s_usb_host_installed;
 static bool s_usb_msc_driver_installed;
 static bool s_usb_hid_driver_installed;
+static TaskHandle_t s_usb_host_lib_task;
+static TaskHandle_t s_usb_module_task;
 static usb_msc_state_t s_usb_msc;
 static usb_hid_slot_t s_usb_keyboard;
 static usb_hid_slot_t s_usb_mouse;
@@ -1044,23 +1051,33 @@ static esp_err_t usb_install_host_stack(void)
     };
     esp_err_t error;
 
-    error = usb_host_install(&host_config);
-    if (error != ESP_OK) {
-        return error;
+    /* Idempotent per stage: a NO_MEM failure mid-way (the HCD root-hub install
+     * needs a contiguous internal block that the boot-time Wi-Fi/ESP-Hosted
+     * burst can transiently exhaust) leaves the earlier stages installed, so a
+     * retry must resume rather than re-install them. */
+    if (!s_usb_host_installed) {
+        error = usb_host_install(&host_config);
+        if (error != ESP_OK) {
+            return error;
+        }
+        s_usb_host_installed = true;
     }
-    s_usb_host_installed = true;
 
-    error = msc_host_install(&msc_config);
-    if (error != ESP_OK) {
-        return error;
+    if (!s_usb_msc_driver_installed) {
+        error = msc_host_install(&msc_config);
+        if (error != ESP_OK) {
+            return error;
+        }
+        s_usb_msc_driver_installed = true;
     }
-    s_usb_msc_driver_installed = true;
 
-    error = hid_host_install(&hid_config);
-    if (error != ESP_OK) {
-        return error;
+    if (!s_usb_hid_driver_installed) {
+        error = hid_host_install(&hid_config);
+        if (error != ESP_OK) {
+            return error;
+        }
+        s_usb_hid_driver_installed = true;
     }
-    s_usb_hid_driver_installed = true;
     return ESP_OK;
 #else
     return ESP_ERR_NOT_SUPPORTED;
@@ -1084,31 +1101,59 @@ void usb_init(void)
         return;
     }
 
-    error = usb_install_host_stack();
+    /* Bring the stack and both tasks up, retrying as a unit: the HCD root-hub
+     * install and the task stacks all need contiguous internal RAM that the
+     * boot-time Wi-Fi/ESP-Hosted burst can transiently exhaust. Each stage is
+     * idempotent, so a retry resumes where the previous attempt stopped. The
+     * expected first-attempt failure is silenced for the retry window only and
+     * the levels are restored afterwards, so a genuine HCD fault later still
+     * reaches the log (and our own "install failed" report). */
+    esp_log_level_t hub_level = esp_log_level_get(USB_HCD_TAG);
+    esp_log_level_t host_level = esp_log_level_get(USB_HOSTLIB_TAG);
+    esp_log_level_set(USB_HCD_TAG, ESP_LOG_NONE);
+    esp_log_level_set(USB_HOSTLIB_TAG, ESP_LOG_NONE);
+
+    for (int attempt = 0; ; attempt++) {
+        error = usb_install_host_stack();
+
+        if (error == ESP_OK && s_usb_host_lib_task == NULL) {
+            if (xTaskCreatePinnedToCore(usb_host_lib_task,
+                                        "usb_host_lib",
+                                        USB_HOST_LIB_TASK_STACK_BYTES,
+                                        NULL,
+                                        4,
+                                        &s_usb_host_lib_task,
+                                        0) != pdPASS) {
+                error = ESP_ERR_NO_MEM;
+            }
+        }
+
+        if (error == ESP_OK && s_usb_module_task == NULL) {
+            if (xTaskCreatePinnedToCore(usb_module_task,
+                                        "usb_module",
+                                        USB_EVENT_TASK_STACK_BYTES,
+                                        NULL,
+                                        4,
+                                        &s_usb_module_task,
+                                        0) != pdPASS) {
+                error = ESP_ERR_NO_MEM;
+            }
+        }
+
+        if (error == ESP_OK) {
+            break;
+        }
+        if (attempt >= P4_CONFIG_USB_INIT_RETRIES) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(P4_CONFIG_USB_INIT_RETRY_DELAY_MS));
+    }
+
+    esp_log_level_set(USB_HCD_TAG, hub_level);
+    esp_log_level_set(USB_HOSTLIB_TAG, host_level);
+
     if (error != ESP_OK) {
         usb_record_errorf(error, "USB host stack install failed");
-        return;
-    }
-
-    if (xTaskCreatePinnedToCore(usb_host_lib_task,
-                                "usb_host_lib",
-                                USB_HOST_LIB_TASK_STACK_BYTES,
-                                NULL,
-                                4,
-                                NULL,
-                                0) != pdPASS) {
-        usb_record_errorf(ESP_ERR_NO_MEM, "USB host library task creation failed");
-        return;
-    }
-
-    if (xTaskCreatePinnedToCore(usb_module_task,
-                                "usb_module",
-                                USB_EVENT_TASK_STACK_BYTES,
-                                NULL,
-                                4,
-                                NULL,
-                                0) != pdPASS) {
-        usb_record_errorf(ESP_ERR_NO_MEM, "USB module task creation failed");
         return;
     }
 

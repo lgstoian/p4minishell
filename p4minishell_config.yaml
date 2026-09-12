@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.36.0
-# Last updated: 2026-09-12 (0.36.0: O6 SD-session priority boost + read retry,
-#   hosted version-gate fix, managed LVGL 9.5 / eppp / hid / codec / BSP 4.2.3;
-#   suite 262/0/2 on COM3)
-config_version: "0.36.0"
+# Version: 0.36.1
+# Last updated: 2026-09-12 (0.36.1: fix header async heap-corruption panic, boot
+#   SD script no longer skipped, USB host bring-up retry, hosted boot warnings
+#   silenced; suite 262/0/2 on COM3)
+config_version: "0.36.1"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -1612,6 +1612,16 @@ usb_host:
     type: size_t
     description: "USB event queue depth"
     range: "4..64"
+  init_retries:
+    value: 4
+    type: int
+    description: "USB host bring-up retry attempts. The HCD root-hub install and driver task stacks need contiguous internal RAM that the boot-time Wi-Fi/ESP-Hosted burst can transiently exhaust; retrying after a short delay lets the subsystem come up instead of staying dead for the whole boot."
+    range: "0..20"
+  init_retry_delay_ms:
+    value: 500
+    type: int
+    description: "Delay in milliseconds between USB host bring-up attempts."
+    range: "50..5000"
   text_bytes:
     value: 192
     type: size_t
