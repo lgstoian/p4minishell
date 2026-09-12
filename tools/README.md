@@ -14,8 +14,10 @@ resets on the transition — every driver drops DTR/RTS on open via
 ## Files
 
 - `shell_session.py` — shared USB-Serial/JTAG session driver: `Shell`
-  (prompt regex, panic-marker raise), `open_port()` (DTR-safe open),
-  `default_port()` (port resolution). Import it, do not reimplement.
+  (prompt regex, panic-marker raise), `open_port()` (DTR-safe open that does
+  **not** reset the board — the line state is set before `open()`), `hard_reset()`
+  (explicit esptool reboot for tools that need a fresh boot), `default_port()`
+  (port resolution). Import it, do not reimplement.
 - `baseline_sweep.py`, `serial_sweep.py`, `serial_sweep2.py` — canned
   bring-up sweeps (versions, TUI/draw, modals, audio, periph, SD cycle).
 - `bsod_watch.py` — timestamped long serial capture for the recurrent
@@ -75,6 +77,9 @@ resets on the transition — every driver drops DTR/RTS on open via
   world-coordinate pixels (func/axes/data/bar/point/line), plus a TUI-mode
   screenshot to `spikes/plot_tui.bmp`.
 - `unit_run.py` — build-independent capture of the unit-test summaries.
+- `tx_stress_test.py` — TX-pressure output-integrity guard for bugs.md O3:
+  emits numbered lines while pausing reads to build backpressure and verifies
+  every line arrived (guards the driver-API transcript mirror).
 - `boot_regression.py` — fresh-boot regression guard: reboots N times and
   asserts no panic/assert, exactly one AUTOEXEC run, SD ready, and no
   unexpected W/E log lines (guards the deferred boot-script, header async

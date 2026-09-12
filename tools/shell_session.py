@@ -6,6 +6,7 @@ environment variable, a trailing COMx argv token, else COM11.
 import os
 import re
 import serial
+import subprocess
 import sys
 import time
 
@@ -22,25 +23,46 @@ def default_port():
 
 
 def open_port(port=None, baud=115200, timeout=1):
-    """Open the USB-Serial/JTAG port WITHOUT rebooting the board: pyserial
-    asserts DTR on open and the P4 resets on the transition, so drop DTR/RTS
-    immediately (the shell needs ~8 s to come up after a real reset)."""
-    ser = serial.Serial(port or default_port(), baud, timeout=timeout)
+    """Open the USB-Serial/JTAG port WITHOUT rebooting the board.
+
+    pyserial asserts DTR when a port is opened and the P4 resets on that
+    transition. Dropping DTR *after* open() is too late — the reset has already
+    fired. Pre-setting the line state on an unopened Serial object makes the
+    OS open the port with DTR/RTS low, so the board keeps running.
+    """
+    ser = serial.Serial()
+    ser.port = port or default_port()
+    ser.baudrate = baud
+    ser.timeout = timeout
     try:
-        ser.setDTR(False)
-        ser.setRTS(False)
+        ser.dtr = False
+        ser.rts = False
     except Exception:
         pass
-    time.sleep(0.5)
+    ser.open()
+    time.sleep(0.2)
     return ser
+
+
+def hard_reset(port=None, baud=460800, chip="esp32p4"):
+    """Reboot the board via esptool.
+
+    open_port() deliberately does NOT reset (it would otherwise reboot on
+    every host session), so callers that need a fresh boot - unit_run,
+    boot_regression - use this. The port must not be held open by the caller.
+    """
+    cmd = [sys.executable, "-m", "esptool", "--chip", chip,
+           "-p", port or default_port(), "-b", str(baud),
+           "--before", "default_reset", "--after", "hard_reset", "read_mac"]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=90).returncode == 0
+    except Exception:
+        return False
 
 
 class Shell:
     def __init__(self, port=None, baud=115200):
-        self.s = serial.Serial(port or default_port(), baud, timeout=10)
-        self.s.dtr = False
-        self.s.rts = False
-        time.sleep(0.5)
+        self.s = open_port(port, baud, timeout=10)
         self.s.reset_input_buffer()
 
     def run(self, cmd, timeout=15, settle=0.6):

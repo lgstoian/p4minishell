@@ -4,10 +4,14 @@
 Runs a single clean sequence through every db verb and asserts the results.
 Usage: python db_test.py [COMx]
 """
+import os
 import re
-import serial
 import sys
 import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "tools"))
+from shell_session import open_port  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -70,9 +74,7 @@ def shell_up(ser):
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
-    ser = serial.Serial(port, 115200, timeout=1)
-    ser.setDTR(False); ser.setRTS(False)  # open must not reboot the P4
-    time.sleep(0.5)
+    ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
     if not shell_up(ser):
         print("FAIL: shell not responding")

@@ -18,7 +18,6 @@ its path as argv[2]).
 """
 
 import re
-import serial
 import sys
 import time
 import os

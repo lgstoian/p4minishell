@@ -3,10 +3,10 @@ Capture TUI screenshots for regression testing.
 Sends TUI commands, captures screenshots, diffs vs golden.
 Usage: python capture_tui.py --port COM11
 """
-import serial, time, os, struct, sys, argparse, json
+import time, os, struct, sys, argparse, json
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from shell_session import default_port
+from shell_session import default_port, open_port
 try:
     from PIL import Image, ImageChops
     HAS_PIL = True
@@ -69,12 +69,7 @@ def main():
     parser.add_argument("--port", default=None, help="Serial port (argv COMx, P4_PORT env, else COM11)")
     args = parser.parse_args()
     port = args.port or default_port()
-    ser = serial.Serial(port, BAUD, timeout=1)
-    try:
-        ser.setDTR(False)
-        ser.setRTS(False)
-    except Exception:
-        pass
+    ser = open_port(port, BAUD, 1)
     time.sleep(3)
     ser.reset_input_buffer()
     # Wait for boot

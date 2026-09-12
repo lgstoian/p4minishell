@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.37.1] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
+
+### Fixed — O3 single-output loss, O4 host resets, O5 boot wedge
+
+- **O3 (single-output loss under TX pressure).** The IDF USB-Serial/JTAG
+  `usb_serial_jtag_is_connected()` SOF monitor can falsely report
+  "disconnected" for ~4 ms under host/load pressure, and both our mirror's
+  early-return and the IDF VFS write path (`usb_serial_jtag_vfs.c:185`) drop
+  the whole line when it flips. `shell_uart_console_write_text()` now mirrors
+  through the driver API (`usb_serial_jtag_write_bytes`, which ignores the
+  monitor), preserves the CRLF line ending the VFS would have applied, and
+  gates only on a *persistent* disconnect (`P4_CONFIG_UART_MIRROR_DISCONNECT_GRACE_MS`,
+  2 s) so transient flips never drop a line while a no-host session still
+  stops mirroring without blocking. `tools/tx_stress_test.py` (numbered lines
+  with deliberate read-pause backpressure) shows zero loss.
+- **O4 (host tooling reset the board on every open).** `setDTR(False)` after
+  `open()` ran too late — the reset already fired on the open transition.
+  `shell_session.open_port()` now pre-sets `dtr=False`/`rts=False` on the
+  unopened `Serial` object so the port opens with both lines low. Every host
+  driver (tools, harness, apps) routes through it; tools that need a fresh
+  boot use the new `shell_session.hard_reset()` (esptool), and `unit_run` /
+  `boot_regression` were updated to reset explicitly.
+- **O5 (silent-boot wedge).** The O4 fix removes the "hours of unclean DTR
+  resets" that induced it. `display_init()` additionally runs a standard I2C
+  bus recovery on the touch/codec bus (clock SCL up to 9 times, then a STOP)
+  before the BSP claims the pins, releasing a slave that holds SDA low across
+  resets; it is a no-op on a healthy bus. A PSRAM-init wedge in the bootloader
+  remains hardware-only.
+
+Verified on COM3: unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21,
+pkg/theme/gfx/plot/header OK; `boot_regression` clean; push_apps/pkgs/assets OK.
+
 ## [0.37.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
 ### Changed — boot-time internal-RAM relief + reliability hardening

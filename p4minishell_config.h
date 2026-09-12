@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             37
-#define P4_CONFIG_VERSION_PATCH             0
+#define P4_CONFIG_VERSION_PATCH             1
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -1590,6 +1590,23 @@
 
 /** Stack size for the UART/serial console reader task. */
 #define P4_CONFIG_UART_CONSOLE_TASK_STACK    12288
+
+/**
+ * Bounded wait, in milliseconds, for each segment of a UART transcript mirror
+ * write. The mirror bypasses the IDF VFS (whose write path drops the whole line
+ * when the SOF-based connection monitor reports a false disconnect under load);
+ * this bound stops a stalled TX ring from blocking the writer indefinitely.
+ */
+#define P4_CONFIG_UART_MIRROR_WRITE_TIMEOUT_MS   50
+
+/**
+ * Grace period, in milliseconds, after the connection monitor first reports
+ * "disconnected" before the mirror gives up. The SOF monitor can falsely report
+ * a disconnect for a few ms under load (the host missing a Start-Of-Frame);
+ * within this window lines are still written, so a transient flip never drops
+ * output. Only a persistent absence (no host attached) stops the mirror.
+ */
+#define P4_CONFIG_UART_MIRROR_DISCONNECT_GRACE_MS 2000
 
 /** Stack bytes for the LVGL task (created by the BSP display driver).
  *  Raised above the 7168-byte esp_lvgl_port default: a full-screen redraw

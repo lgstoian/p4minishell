@@ -10,11 +10,14 @@ Usage:
 """
 
 import os
-import serial
 import struct
 import sys
 import time
 import zlib
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "tools"))
+from shell_session import open_port  # noqa: E402
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 FILES = [
@@ -112,9 +115,7 @@ def push_file(ser, name, data):
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
-    ser = serial.Serial(port, 115200, timeout=1)
-    ser.setDTR(False); ser.setRTS(False)  # open must not reboot the P4
-    time.sleep(0.5)
+    ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
 
     if not wait_shell(ser):

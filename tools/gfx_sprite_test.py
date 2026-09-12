@@ -15,7 +15,7 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, os.path.join("apps", "companion"))
 from push_sd import push_file, wait_shell  # noqa: E402
 from bg_run import run_quiet, boot  # noqa: E402
-import serial  # noqa: E402
+from shell_session import open_port, hard_reset  # noqa: E402
 
 
 def make_bmp(path):
@@ -61,10 +61,8 @@ def main():
     os.makedirs("screenshots", exist_ok=True)
     print("host bmp bytes: %d" % make_bmp(bmp), flush=True)
 
-    ser = serial.Serial(port, 115200, timeout=1)
-    ser.setDTR(False)
-    ser.setRTS(False)
-    time.sleep(0.5)
+    hard_reset(port)  # open_port() no longer resets; start from a clean prompt
+    ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
     if not wait_shell(ser):
         print("FAIL: no shell", flush=True)

@@ -326,6 +326,10 @@ static size_t s_runtime_warning_count;
 static SemaphoreHandle_t s_uart_console_lock;
 static bool s_uart_console_running;
 static TaskHandle_t s_uart_console_task_handle;
+/* Timestamp (us) of the first "disconnected" observation in the current streak;
+ * 0 while the SOF monitor reports connected. Used to tolerate transient false
+ * disconnects without blocking on-device when no host is attached. */
+static int64_t s_mirror_disconnected_since_us;
 
 /* USB-Serial/JTAG driver ring sizes. The default console ring is tiny
  * (256 bytes) and silently drops input whenever a host bursts faster than the
@@ -2919,19 +2923,61 @@ void shell_uart_console_start(void)
     s_uart_console_running = true;
 }
 
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+/**
+ * Mirror text to the USB-Serial/JTAG TX ring through the driver API.
+ *
+ * The IDF VFS write path (used by printf) drops the whole line when its
+ * SOF-based connection monitor reports "disconnected", and that monitor can
+ * false-report a disconnect for a few ms under host/load pressure. Writing via
+ * usb_serial_jtag_write_bytes() bypasses that check. The VFS would expand LF to
+ * CRLF (CONFIG_NEWLIB_STDOUT_LINE_ENDING_CRLF); do it here so the wire format
+ * is unchanged. Each segment waits at most the configured bound, so a stalled
+ * ring delays but never wedges the writer.
+ */
+static void shell_uart_mirror_write(const char *text, size_t len)
+{
+    TickType_t ticks = pdMS_TO_TICKS(P4_CONFIG_UART_MIRROR_WRITE_TIMEOUT_MS);
+
+    while (len > 0) {
+        const char *nl = memchr(text, '\n', len);
+        size_t seg = (nl != NULL) ? (size_t)(nl - text) : len;
+
+        if (seg > 0) {
+            (void)usb_serial_jtag_write_bytes(text, seg, ticks);
+        }
+        if (nl == NULL) {
+            break;
+        }
+        (void)usb_serial_jtag_write_bytes("\r\n", 2, ticks);
+        len -= seg + 1;
+        text = nl + 1;
+    }
+}
+#endif /* CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG */
+
 void shell_uart_console_write_text(const char *text)
 {
-    if (text == NULL) {
+    if (text == NULL || text[0] == '\0') {
         return;
     }
 
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    /* With no host attached there is no reader, and the USB-Serial-JTAG TX
-     * path can block on backpressure — stalling the command worker on every
-     * mirrored transcript line (the on-device slowness). Drop the mirror and
-     * the prompt when nothing is connected; the transcript is unaffected. */
-    if (!usb_serial_jtag_is_connected()) {
-        return;
+    /* With no host attached there is no reader and the TX ring would block.
+     * The SOF monitor can also false-report a disconnect for a few ms under
+     * load, so only give up after the disconnect has persisted past the grace
+     * window; within it every line is still written (the O3 output loss was a
+     * transient flip dropping a single line). */
+    if (usb_serial_jtag_is_connected()) {
+        s_mirror_disconnected_since_us = 0;
+    } else {
+        int64_t now = esp_timer_get_time();
+        if (s_mirror_disconnected_since_us == 0) {
+            s_mirror_disconnected_since_us = now;
+        } else if (now - s_mirror_disconnected_since_us >
+                   (int64_t)P4_CONFIG_UART_MIRROR_DISCONNECT_GRACE_MS * 1000) {
+            return;
+        }
     }
 #endif
 
@@ -2939,7 +2985,15 @@ void shell_uart_console_write_text(const char *text)
         xSemaphoreTake(s_uart_console_lock, portMAX_DELAY);
     }
 
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    if (usb_serial_jtag_is_driver_installed()) {
+        shell_uart_mirror_write(text, strlen(text));
+    } else {
+        printf("%s", text);
+    }
+#else
     printf("%s", text);
+#endif
 
     if (s_uart_console_lock != NULL) {
         xSemaphoreGive(s_uart_console_lock);

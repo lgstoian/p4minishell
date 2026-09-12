@@ -9,7 +9,6 @@ Usage: python stall_catch.py [COMx] [minutes]
 """
 
 import re
-import serial
 import sys
 import time
 import os

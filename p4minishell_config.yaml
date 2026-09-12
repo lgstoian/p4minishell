@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.37.0
-# Last updated: 2026-09-12 (0.37.0: PSRAM task stacks relieve the boot-time
-#   internal/DMA heap cliff, dedicated boot-script task, 0 SD stalls in a
-#   concurrent Wi-Fi+SD soak; suite 262/0/2 on COM3)
-config_version: "0.37.0"
+# Version: 0.37.1
+# Last updated: 2026-09-12 (0.37.1: fixed O3 single-output loss (driver-API UART
+#   mirror), O4 host port-open resets, O5 boot wedge (I2C bus recovery); suite
+#   262/0/2 on COM3)
+config_version: "0.37.1"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -1747,6 +1747,16 @@ task_stacks:
     type: size_t
     description: "UART/serial console reader task stack"
     range: "4096..16384"
+  uart_mirror_write_timeout_ms:
+    value: 50
+    type: int
+    description: "Bounded wait per segment of a UART transcript mirror write. The mirror bypasses the IDF VFS (which drops the whole line on a false connection-monitor disconnect); this bound stops a stalled TX ring from wedging the writer."
+    range: "0..1000"
+  uart_mirror_disconnect_grace_ms:
+    value: 2000
+    type: int
+    description: "Grace period after the SOF connection monitor first reports disconnected before the mirror gives up. Tolerates the monitor's transient false disconnects (a few ms under load) so a single line is never dropped; only a persistent absence (no host) stops the mirror."
+    range: "0..10000"
   lvgl:
     value: 12288
     type: size_t

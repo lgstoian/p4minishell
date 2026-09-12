@@ -10,7 +10,6 @@ Usage:
 """
 
 import os
-import serial
 import sys
 import time
 
@@ -19,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 from push_sd import (  # noqa: E402
     push_file,
     wait_shell,
+    open_port,
     READY,
 )
 
@@ -50,10 +50,7 @@ FILES = [
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
-    ser = serial.Serial(port, 115200, timeout=1)
-    ser.setDTR(False)
-    ser.setRTS(False)  # open must not reboot the P4
-    time.sleep(0.5)
+    ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
 
     if not wait_shell(ser):

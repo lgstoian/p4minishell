@@ -9,11 +9,15 @@ modal values, which have no serial prompt.
 Usage: python deep_test.py [COMx]
 """
 
+import os
 import re
-import serial
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "tools"))
+from shell_session import open_port  # noqa: E402
 
 PANIC_MARKERS = ("Guru Meditation", "assert failed", "Stack protection", "Backtrace", "Rebooting")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -90,17 +94,10 @@ def esptool_hard_reset(port):
 
 
 def open_noreset(port, baud=115200, timeout=1):
-    """Open the USB-Serial/JTAG port WITHOUT rebooting the board: pyserial
-    asserts DTR on open and the P4 resets on the transition, so drop DTR/RTS
-    immediately (same reason shell_session.py does)."""
-    ser = serial.Serial(port, baud, timeout=timeout)
-    try:
-        ser.setDTR(False)
-        ser.setRTS(False)
-    except Exception:
-        pass
-    time.sleep(0.5)
-    return ser
+    """Open the USB-Serial/JTAG port WITHOUT rebooting the board (the shared
+    shell_session.open_port pre-sets DTR/RTS before open so the reset never
+    fires)."""
+    return open_port(port, baud, timeout)
 
 
 def hw_reset(ser, port):

@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.37.0, suite 262/0/2)
+# P4MiniShell Roadmap (v0.37.1, suite 262/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -16,10 +16,21 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (v0.37.0, hardware-verified on COM3)
+## Current baseline (v0.37.1, hardware-verified on COM3)
 Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
-**Current verified baseline:** v0.37.0. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.37.0]` for the newest milestones (boot-time internal-RAM relief via PSRAM task stacks, dedicated boot-script task, 0 SD stalls in a concurrent Wi-Fi+SD soak).
+**Current verified baseline:** v0.37.1. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.37.1]` for the newest milestones (O3/O4/O5: driver-API UART mirror, no-reset port open, I2C bus recovery).
+
+### Recently completed (v0.37.1)
+- ✅ **O3 single-output loss fixed**: the UART transcript mirror now writes
+  through the driver API (`usb_serial_jtag_write_bytes`), bypassing the IDF VFS
+  drop-on-false-disconnect, with a debounced no-host gate; `tools/tx_stress_test.py`
+  shows zero loss under deliberate backpressure.
+- ✅ **O4 host resets fixed**: `shell_session.open_port()` sets DTR/RTS before
+  `open()`, so host sessions no longer reboot the board; `hard_reset()` added for
+  tools that need a fresh boot, and `unit_run`/`boot_regression` reset explicitly.
+- ✅ **O5 boot wedge**: the O4 fix removes the trigger; `display_init()` runs a
+  standard I2C bus recovery on the touch/codec bus before the BSP claims it.
 
 ### Recently completed (v0.37.0)
 - ✅ **Boot-time internal-RAM relief (O8)**: moved the app-owned flash-safe task stacks
@@ -35,6 +46,7 @@ Implemented today in the checked-in firmware (hardware-verified on COM3, extensi
   AUTOEXEC run, SD ready, and clean W/E across fresh boots (8/8 on COM3).
 - ✅ **Docs**: W1 clarified (header async double free, not a hosted overrun); upstream
   esp_hosted findings recorded (3.0.7 lacks the 2.12.x SDIO fixes; stay on 3.0.6).
+
 
 
 ### Recently completed (post-0.35.7)

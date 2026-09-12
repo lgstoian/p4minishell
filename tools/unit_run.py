@@ -8,11 +8,14 @@ import sys
 import time
 
 sys.path.insert(0, "tools")
-from shell_session import open_port
+from shell_session import open_port, hard_reset
 
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM3"
+    # open_port() no longer reboots, so reset explicitly so the flashed test
+    # image runs from the start and Unity prints its summaries.
+    hard_reset(port)
     ser = open_port(port)
     ser.timeout = 0.5
     # Read continuously: the OS serial buffer is small, so sleeping through

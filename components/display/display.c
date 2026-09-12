@@ -19,6 +19,8 @@
 #include "p4minishell_config.h"
 #include "esp_lcd_touch.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
+#include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 #include "freertos/FreeRTOS.h"
@@ -555,6 +557,60 @@ void display_print_info(void (*print_fn)(const char *format, ...))
  * INITIALIZATION & LIFECYCLE
  * ======================================================================== */
 
+/**
+ * Recover a wedged I2C bus before the BSP claims it.
+ *
+ * bugs.md O5: after many unclean resets the board once hung past ROM entry
+ * with the console never coming up, suspected to be an external I2C slave
+ * (touch/codec) holding SDA low across resets. A stuck slave that is only
+ * released by a power cycle can be freed in firmware with the standard bus
+ * recovery: clock SCL up to nine times until SDA releases, then issue a STOP.
+ * No-op when the bus is idle (SDA already high), so the normal boot is
+ * unaffected.
+ */
+static void display_i2c_bus_recover(void)
+{
+    const gpio_num_t sda = (gpio_num_t)BOARD_CFG_I2C_SDA_GPIO;
+    const gpio_num_t scl = (gpio_num_t)BOARD_CFG_I2C_SCL_GPIO;
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << sda) | (1ULL << scl),
+        .mode = GPIO_MODE_INPUT_OUTPUT_OD,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    if (gpio_config(&cfg) != ESP_OK) {
+        return;
+    }
+
+    gpio_set_level(sda, 1);
+    gpio_set_level(scl, 1);
+    esp_rom_delay_us(10);
+
+    if (gpio_get_level(sda) == 0) {
+        int i;
+        for (i = 0; i < 9 && gpio_get_level(sda) == 0; i++) {
+            gpio_set_level(scl, 0);
+            esp_rom_delay_us(5);
+            gpio_set_level(scl, 1);
+            esp_rom_delay_us(5);
+        }
+        /* STOP: SDA rises while SCL is high. */
+        gpio_set_level(sda, 0);
+        esp_rom_delay_us(5);
+        gpio_set_level(scl, 1);
+        esp_rom_delay_us(5);
+        gpio_set_level(sda, 1);
+        esp_rom_delay_us(5);
+        ESP_LOGW(DISPLAY_TAG, "I2C bus recovery: SDA was held low (O5); released");
+    }
+
+    /* Release the pins; the BSP reconfigures them for I2C. */
+    gpio_reset_pin(sda);
+    gpio_reset_pin(scl);
+}
+
 esp_err_t display_init(void)
 {
     lv_display_t *display;
@@ -588,6 +644,10 @@ esp_err_t display_init(void)
         }
     };
     cfg.lvgl_port_cfg.task_stack = P4_CONFIG_LVGL_TASK_STACK;
+
+    /* Free a stuck touch/codec I2C slave before the BSP initializes the bus
+     * (bugs.md O5); no-op when the bus is healthy. */
+    display_i2c_bus_recover();
 
     display = bsp_display_start_with_config(&cfg);
     if (display == NULL) {

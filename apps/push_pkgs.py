@@ -14,11 +14,9 @@ import sys
 import time
 import zlib
 
-import serial
-
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "companion"))
-from push_sd import push_file, wait_shell  # noqa: E402
+from push_sd import push_file, wait_shell, open_port  # noqa: E402
 
 APPS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,10 +43,7 @@ def crc_hex(data):
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
-    ser = serial.Serial(port, 115200, timeout=1)
-    ser.setDTR(False)
-    ser.setRTS(False)
-    time.sleep(0.5)
+    ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
     if not wait_shell(ser):
         print("FAIL: shell not responding on %s" % port)

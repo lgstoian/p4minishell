@@ -2,7 +2,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.37.0 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.37.1 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -21,7 +21,7 @@ escape sequences natively:
 
 The current firmware is not a desktop DOS clone and is not yet an MS-DOS-compatible runtime. It provides the embedded foundation for that direction.
 
-**Current verified state:** v0.37.0. Hardware-verified on COM3 (ESP-IDF v5.5.5) with the full suite green: unit **262/0/2**, companion deep **8/8**, db **38/38**, alarm **25/25**, app smoke **21/21**, package round-trip **15/15**, gfx toolkit **17/17**, theme **11/11**, plot **25/25**, header **OK**. The TUI is an 80x25 cell grid (`components/tui/`) filling the transcript region; `draw` (box/line/fill/text/bar/table/list/clear/window/cursor/hold/alt-screen/fullscreen) and the exclusive `gfx` RGB565 canvas (`init/close/status/clear/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/fill/text/show/load/blit/free/slots/save`, 8 sprite slots to 64x64, built-in 8x8 text font) drive batch TUIs and games; `crc32`/`asset` verify SD bundles and `pkg` installs/removes them from `PKGS/<APP>/`; `start`/`taskkill` run background jobs; batch files execute from a 128 KB RAM image so `goto` loops stay off the SD card. Reference apps: companion (10 BATs incl. SVC/AGENDA), ADVENT, NOTES, MOOD, BOUNCE, GFXTOOL, PLOT, SNAKE, TCMD, ELITE.
+**Current verified state:** v0.37.1. Hardware-verified on COM3 (ESP-IDF v5.5.5) with the full suite green: unit **262/0/2**, companion deep **8/8**, db **38/38**, alarm **25/25**, app smoke **21/21**, package round-trip **15/15**, gfx toolkit **17/17**, theme **11/11**, plot **25/25**, header **OK**. The TUI is an 80x25 cell grid (`components/tui/`) filling the transcript region; `draw` (box/line/fill/text/bar/table/list/clear/window/cursor/hold/alt-screen/fullscreen) and the exclusive `gfx` RGB565 canvas (`init/close/status/clear/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/fill/text/show/load/blit/free/slots/save`, 8 sprite slots to 64x64, built-in 8x8 text font) drive batch TUIs and games; `crc32`/`asset` verify SD bundles and `pkg` installs/removes them from `PKGS/<APP>/`; `start`/`taskkill` run background jobs; batch files execute from a 128 KB RAM image so `goto` loops stay off the SD card. Reference apps: companion (10 BATs incl. SVC/AGENDA), ADVENT, NOTES, MOOD, BOUNCE, GFXTOOL, PLOT, SNAKE, TCMD, ELITE.
 
 ## Architecture
 

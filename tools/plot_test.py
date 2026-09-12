@@ -18,7 +18,7 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, os.path.join("apps", "companion"))
 from push_sd import push_file, wait_shell  # noqa: E402
 from bg_run import boot, run_quiet  # noqa: E402
-import serial  # noqa: E402
+from shell_session import open_port, hard_reset  # noqa: E402
 
 FAILS = []
 TMP = r"C:\Users\lgstoian\AppData\Local\Temp\opencode"
@@ -117,11 +117,12 @@ WHITE = (248, 252, 248)    # q(0xFFFFFF), DOS 15
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM3"
 
+    # Fresh boot: open_port() no longer resets, and a previous run can leave the
+    # board in a TUI/gfx mode without a shell prompt.
+    hard_reset(port)
+
     # Push the data file on a raw serial session first (proven pattern).
-    ser = serial.Serial(port, 115200, timeout=1)
-    ser.setDTR(False)
-    ser.setRTS(False)
-    time.sleep(0.5)
+    ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
     if not wait_shell(ser):
         print("FAIL: no shell")

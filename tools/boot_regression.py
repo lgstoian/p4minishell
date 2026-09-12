@@ -21,11 +21,11 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from shell_session import open_port, default_port
+from shell_session import open_port, default_port, hard_reset
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else default_port()
 BOOTS = int(sys.argv[2]) if len(sys.argv) > 2 else 10
-CAPTURE_S = 14.0
+CAPTURE_S = 18.0
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # ROM/bootloader banner and the memprobe diagnostic are not firmware warnings.
@@ -46,9 +46,9 @@ def capture_boot(ser):
 def main():
     failures = 0
     for i in range(1, BOOTS + 1):
-        # Reopening the port asserts DTR and reboots the P4 (open_port then
-        # drops DTR/RTS so the shell is not held in reset). A fresh handle per
-        # boot is the reliable way to capture from the ROM banner.
+        # open_port() does not reboot, so reset explicitly to capture each
+        # boot from the ROM banner.
+        hard_reset(PORT)
         ser = open_port(PORT)
         text = capture_boot(ser)
         ser.close()
