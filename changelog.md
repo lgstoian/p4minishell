@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - hardware sessions 2026-09-07 .. 2026-09-11 (COM3; ESP-IDF v5.5.5)
+## [0.36.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
+
+### O6 SD-latency fix: session priority boost + read retry (2026-09-12 session, COM3)
+
+- **Root cause (proven in code):** the SD card (slot 0) and the ESP-Hosted C6
+  transport (slot 1) share one SDMMC controller whose every transaction takes
+  a single global mutex with an unbounded wait
+  (`sdmmc_transaction.c:105`). The hosted transport tasks run at priority 22
+  while the shell worker runs at 2, so under sustained hosted traffic the
+  worker loses every arbitration and an SD op can stall for a minute or more
+  while the console still echoes. Separately, transient contention failures
+  (fast, not slow) could truncate `sd info` output, hanging host drivers on a
+  missing line.
+- **Fix:** `shell_sd_begin()` raises the caller to
+  `P4_CONFIG_SD_OP_BOOST_PRIORITY` (23, just above hosted) for the session
+  and `shell_sd_end()` restores it (LIFO-safe; a worker-loop backstop bounds
+  any leak to one command). `storage_get_space_info()` retries idempotent
+  reads (`P4_CONFIG_SD_OP_RETRIES` x `P4_CONFIG_SD_OP_RETRY_DELAY_MS`), and
+  `sd info` prints `unavailable` lines instead of omitting them on persistent
+  failure. Gated timing probe (`P4_CONFIG_SD_OP_TIMING`) logs overshoots.
+- Verified: 20-min `stall_catch` soak went from 1 SD timeout to 0 SD stalls
+  (12-min confirmation soak clean); all suites green with no regressions.
+  The 2 non-SD output absences in the soak are the known O3 host-side
+  residual, unchanged by this work.
 
 ### Managed batch B: esp_codec_dev 1.6.2 + BSP 4.2.3 (2026-09-12 session, COM3)
 

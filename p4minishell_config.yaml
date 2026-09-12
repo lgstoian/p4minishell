@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.35.7
-# Last updated: 2026-09-11 (post-0.35.7: gfx sprites + BMP, crc32/asset, start/taskkill bg jobs,
-#   draw table/list + cursor/selection, RAM-loaded batch, O(1) transcript appends, companion SVC/AGENDA;
-#   suite 241/0/2 on COM3)
-config_version: "0.35.7"
+# Version: 0.36.0
+# Last updated: 2026-09-12 (0.36.0: O6 SD-session priority boost + read retry,
+#   hosted version-gate fix, managed LVGL 9.5 / eppp / hid / codec / BSP 4.2.3;
+#   suite 262/0/2 on COM3)
+config_version: "0.36.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -942,6 +942,34 @@ boot_scripting:
     type: size_t
     description: "Pre-allocated SDMMC DMA scratch buffer cached on the host at mount (4096 in v0.35.1, 8 sectors); prevents per-transaction DMA allocation failures (allocate_dma_buf: not enough mem) when the internal DMA-capable heap fragments under load. Must be a multiple of the 512 B card sector; larger values speed multi-block transfers but reserve internal RAM permanently."
     range: "512..65536"
+  sd_op_boost:
+    value: 1
+    type: bool
+    description: "Raise the calling task priority for the duration of a guarded SD session (O6 fix). The shared SDMMC controller serializes slot 0 (SD) and slot 1 (hosted C6) on one unbounded mutex while hosted tasks run at 22 vs the worker at 2; the boost lets SD ops win arbitration instead of starving."
+  sd_op_boost_priority:
+    value: 23
+    type: int
+    description: "Priority used by the SD-session boost. Must outrank the hosted transport tasks (22); kept just above them. Restored on session exit with a worker-loop backstop."
+    range: "3..24"
+  sd_op_timing:
+    value: 0
+    type: bool
+    description: "Enable the SD-op timing probe. Guarded sessions timestamp entry and shell_sd_end() logs ops slower than sd_op_timing_ms to the serial log. Off by default; enable for soaks hunting the O6 tail."
+  sd_op_timing_ms:
+    value: 500
+    type: int
+    description: "SD-op overshoot threshold in milliseconds for the timing probe."
+    range: "50..60000"
+  sd_op_retries:
+    value: 3
+    type: int
+    description: "Attempts for idempotent read-only filesystem queries before reporting failure. Transient contention on the shared SDMMC controller can fail a query while the card is healthy; reads are side-effect free so retrying is safe. Writes are never retried implicitly."
+    range: "1..10"
+  sd_op_retry_delay_ms:
+    value: 50
+    type: int
+    description: "Delay in milliseconds between read-only query attempts."
+    range: "10..1000"
   config_max_bytes:
     value: 16384
     type: size_t

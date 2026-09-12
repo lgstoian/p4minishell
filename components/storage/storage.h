@@ -58,7 +58,14 @@ esp_err_t storage_sdmmc_host_preinit(void);
  */
 typedef struct {
     bool mounted_here;  /**< true when this session performed the mount. */
+    uint32_t magic;     /**< set by shell_sd_begin; shell_sd_end ignores handles that never began. */
+    unsigned int saved_priority; /**< calling task priority saved on boost, restored on end. */
+    bool boosted;       /**< true when this session raised the task priority. */
+    int64_t op_start_us; /**< esp_timer timestamp taken on begin (timing probe). */
 } shell_sd_session_t;
+
+/** Magic stamped into shell_sd_session_t by shell_sd_begin(). */
+#define SHELL_SD_SESSION_MAGIC  0x53445353u
 
 /**
  * Begin a guarded SD access session.

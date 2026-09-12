@@ -1424,6 +1424,21 @@ typedef struct {
 
 static bg_job_t s_bg_jobs[P4_CONFIG_BG_TASKS];
 
+#if P4_CONFIG_SD_OP_BOOST
+/**
+ * Restore a task's base priority if an SD session leaked its boost. Sessions
+ * restore on shell_sd_end, but an early return that skips end would leave the
+ * task elevated; forcing the base back after every command bounds any leak to
+ * one command. Pass the priority sampled before execution.
+ */
+static void command_task_priority_backstop(UBaseType_t base_priority)
+{
+    if (uxTaskPriorityGet(NULL) != base_priority) {
+        vTaskPrioritySet(NULL, base_priority);
+    }
+}
+#endif
+
 static void command_bg_worker_task(void *arg)
 {
     /* Pool index doubles as the batch slot minus one; the slot is claimed
@@ -1440,7 +1455,13 @@ static void command_bg_worker_task(void *arg)
         batch_bg_bind(slot);
         shell_register_bg_task(xTaskGetCurrentTaskHandle());
 
+#if P4_CONFIG_SD_OP_BOOST
+        UBaseType_t bg_base_priority = uxTaskPriorityGet(NULL);
+#endif
         shell_execute_command(s_bg_jobs[slot - 1].pending);
+#if P4_CONFIG_SD_OP_BOOST
+        command_task_priority_backstop(bg_base_priority);
+#endif
 
         free(s_bg_jobs[slot - 1].pending);
         s_bg_jobs[slot - 1].pending = NULL;
@@ -3087,7 +3108,13 @@ static void command_worker_task(void *arg)
         command_request_t *request = NULL;
 
         if (xQueueReceive(s_command_queue, &request, portMAX_DELAY) == pdTRUE && request != NULL) {
+#if P4_CONFIG_SD_OP_BOOST
+            UBaseType_t base_priority = uxTaskPriorityGet(NULL);
+#endif
             shell_execute_command(request->command);
+#if P4_CONFIG_SD_OP_BOOST
+            command_task_priority_backstop(base_priority);
+#endif
             free(request);
         }
     }

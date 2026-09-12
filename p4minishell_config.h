@@ -52,8 +52,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             35
-#define P4_CONFIG_VERSION_PATCH             7
+#define P4_CONFIG_VERSION_MINOR             36
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -625,6 +625,52 @@
  * block transfers but reserve more internal RAM permanently.
  */
 #define P4_CONFIG_SD_DMA_BUFFER_BYTES        4096
+
+/**
+ * Raise the calling task's priority for the duration of a guarded SD session.
+ *
+ * The SD card (slot 0) and the ESP-Hosted C6 transport (slot 1) share one
+ * SDMMC controller, and every transaction on either slot takes the same
+ * global driver mutex with an unbounded wait. The hosted transport tasks run
+ * at priority 22 while the shell worker runs at 2, so under sustained hosted
+ * traffic the worker loses every arbitration and an SD op can stall for a
+ * minute or more while the console still echoes (O6). Raising the worker to
+ * P4_CONFIG_SD_OP_BOOST_PRIORITY on session entry (restored on exit) lets it
+ * win the next arbitration, so SD ops complete instead of starving. The boost
+ * applies only inside SD sessions; a worker-loop backstop restores the base
+ * priority after every command even if a session leaks.
+ */
+#define P4_CONFIG_SD_OP_BOOST              1
+
+/** Priority used by the SD-session boost. Must outrank the hosted transport
+ *  tasks (22) to break the starvation; kept just above them to minimize the
+ *  time higher-priority work (hosted RX/TX, LVGL) waits behind an SD op. */
+#define P4_CONFIG_SD_OP_BOOST_PRIORITY     23
+
+/**
+ * Enable the SD-op timing probe. When 1, guarded sessions timestamp entry
+ * and `shell_sd_end()` logs any op slower than P4_CONFIG_SD_OP_TIMING_MS to
+ * the serial log (no transcript spam). Off by default; enable for soaks when
+ * hunting the O6 latency tail.
+ */
+#define P4_CONFIG_SD_OP_TIMING             0
+
+/** SD-op overshoot threshold in milliseconds for the timing probe. */
+#define P4_CONFIG_SD_OP_TIMING_MS          500
+
+/**
+ * Attempts for idempotent read-only filesystem queries (f_getfree and friends)
+ * before reporting failure. The shared SDMMC controller serializes the SD card
+ * and the hosted C6 link on one mutex, so a query can fail transiently under
+ * contention (DMA OOM, bus CRC/timeout) even though the card is healthy; the
+ * next attempt succeeds. Reads are side-effect free, so retrying is safe.
+ * Writes are never retried implicitly.
+ */
+#define P4_CONFIG_SD_OP_RETRIES            3
+
+/** Delay in milliseconds between read-only query attempts. Lets a burst of
+ *  hosted SDIO traffic or a DMA-pressure spike clear before retrying. */
+#define P4_CONFIG_SD_OP_RETRY_DELAY_MS     50
 
 /* ========================================================================
  * DIRECTORY LISTING AND STORAGE GUARDRAILS

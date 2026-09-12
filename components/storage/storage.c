@@ -22,6 +22,9 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -125,6 +128,41 @@ esp_err_t storage_sdmmc_host_preinit(void)
     return error;
 }
 
+#if P4_CONFIG_SD_OP_BOOST
+_Static_assert(P4_CONFIG_SD_OP_BOOST_PRIORITY > 0 &&
+               P4_CONFIG_SD_OP_BOOST_PRIORITY < configMAX_PRIORITIES,
+               "P4_CONFIG_SD_OP_BOOST_PRIORITY must be a valid FreeRTOS priority");
+#endif
+
+/**
+ * Arm a successfully-opened session: stamp the magic, raise the task priority
+ * past the hosted transport tasks so SD ops win the shared-controller mutex
+ * instead of starving behind hosted SDIO streaming (O6), and timestamp entry
+ * for the timing probe. Called on every success return of shell_sd_begin so
+ * all three mount paths behave identically. shell_sd_end() undoes it.
+ */
+static void storage_sd_session_arm(shell_sd_session_t *session)
+{
+    session->magic = SHELL_SD_SESSION_MAGIC;
+    session->boosted = false;
+    session->op_start_us = 0;
+#if P4_CONFIG_SD_OP_BOOST
+    {
+        UBaseType_t current = uxTaskPriorityGet(NULL);
+        session->saved_priority = (unsigned int)current;
+        if (current < (UBaseType_t)P4_CONFIG_SD_OP_BOOST_PRIORITY) {
+            vTaskPrioritySet(NULL, (UBaseType_t)P4_CONFIG_SD_OP_BOOST_PRIORITY);
+            session->boosted = true;
+        }
+    }
+#else
+    session->saved_priority = 0;
+#endif
+#if P4_CONFIG_SD_OP_TIMING
+    session->op_start_us = esp_timer_get_time();
+#endif
+}
+
 /**
  * Begin a guarded SD access session.
  *
@@ -145,10 +183,12 @@ esp_err_t shell_sd_begin(shell_sd_session_t *session)
     }
 
     session->mounted_here = false;
+    session->magic = 0;
 
     /* If already mounted, just return success (persistent mount) */
     if (s_sd_persistent_mounted) {
         storage_sd_ensure_dma_buffer();
+        storage_sd_session_arm(session);
         return ESP_OK;
     }
 
@@ -162,6 +202,7 @@ esp_err_t shell_sd_begin(shell_sd_session_t *session)
         session->mounted_here = true;
         storage_sd_mark_mounted();
         storage_sd_ensure_dma_buffer();
+        storage_sd_session_arm(session);
         return ESP_OK;
     }
 
@@ -169,6 +210,7 @@ esp_err_t shell_sd_begin(shell_sd_session_t *session)
         /* Already mounted (BSP internal state) */
         storage_sd_mark_mounted();
         storage_sd_ensure_dma_buffer();
+        storage_sd_session_arm(session);
         return ESP_OK;
     }
 
@@ -271,8 +313,28 @@ void shell_sd_end(shell_sd_session_t *session, const char *operation)
     /* Persistent mount: do NOT unmount after each command.
      * Only unmount on explicit sdeject command.
      * This keeps the SD card accessible and the header icon accurate. */
-    (void)session;
+    if (session == NULL || session->magic != SHELL_SD_SESSION_MAGIC) {
+        return;
+    }
+    session->magic = 0;
+#if P4_CONFIG_SD_OP_TIMING
+    if (session->op_start_us != 0) {
+        int64_t delta_us = esp_timer_get_time() - session->op_start_us;
+        if (delta_us > (int64_t)P4_CONFIG_SD_OP_TIMING_MS * 1000) {
+            ESP_LOGW(STORAGE_TAG, "slow SD op '%s': %lld ms",
+                     operation != NULL ? operation : "?",
+                     (long long)(delta_us / 1000));
+        }
+    }
+#else
     (void)operation;
+#endif
+#if P4_CONFIG_SD_OP_BOOST
+    if (session->boosted) {
+        session->boosted = false;
+        vTaskPrioritySet(NULL, (UBaseType_t)session->saved_priority);
+    }
+#endif
 }
 
 bool storage_sd_is_mounted(void)
@@ -1301,8 +1363,21 @@ esp_err_t storage_get_space_info(storage_space_info_t *info_out)
     }
 
     /* f_getfree() also hands back the FATFS object, which carries the
-     * cluster geometry needed to turn cluster counts into bytes. */
-    result = f_getfree(SHELL_SD_FATFS_DRIVE, &free_clusters, &fatfs);
+     * cluster geometry needed to turn cluster counts into bytes. The query is
+     * read-only, so retry it on transient contention failures (the shared
+     * controller can NAK under hosted SDIO bursts); a persistent failure
+     * still reports the last error. */
+    result = FR_INT_ERR;
+    for (int attempt = 0; attempt < P4_CONFIG_SD_OP_RETRIES; attempt++) {
+        if (attempt > 0) {
+            vTaskDelay(pdMS_TO_TICKS(P4_CONFIG_SD_OP_RETRY_DELAY_MS));
+        }
+        result = f_getfree(SHELL_SD_FATFS_DRIVE, &free_clusters, &fatfs);
+        if (result == FR_OK && fatfs != NULL) {
+            break;
+        }
+        fatfs = NULL;
+    }
     if (result != FR_OK || fatfs == NULL) {
         shell_sd_end(&session, "space");
         return shell_sd_fresult_to_esp_err(result);

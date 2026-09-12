@@ -90,7 +90,9 @@ static void shell_command_sd_info(void)
     }
 
     /* Filesystem capacity, which is what users actually want before a copy.
-     * The card capacity printed above is the raw device size. */
+     * The card capacity printed above is the raw device size. Always print
+     * the fs lines (unavailable on persistent failure) so callers waiting on
+     * this output never hang on a missing line. */
     {
         storage_space_info_t space;
 
@@ -104,6 +106,11 @@ static void shell_command_sd_info(void)
             shell_sd_format_size(space.free_bytes, text, sizeof(text));
             shell_print_field("sd.fs_free:", "%s", text);
             shell_print_field_num("sd.cluster_bytes:", (long)space.cluster_bytes);
+        } else {
+            shell_print_muted("sd.fs_total: unavailable");
+            shell_print_muted("sd.fs_used: unavailable");
+            shell_print_muted("sd.fs_free: unavailable");
+            shell_print_muted("sd.cluster_bytes: unavailable");
         }
     }
 
