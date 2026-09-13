@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.38.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
+
+### Changed — 40 MHz SDIO clock adopted after a soak gate
+
+- Raised `CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ` from 10000 to **40000** (the
+  board's maximum). The earlier 40 MHz trial was reverted after an LVGL
+  timer-list panic; that panic is now known to be the header async double free
+  (O7, fixed in 0.36.1), which the extra 40 MHz DMA pressure merely made more
+  likely — not a signal-integrity fault. Re-trialled and **adopted** on
+  evidence: `boot_regression` 20/20 clean boots, a 20-minute concurrent
+  Wi-Fi+SD `stall_catch` soak with **0 stalls**, and the full host suite green
+  (unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21,
+  pkg/theme/gfx/plot/header OK). `test/sdkconfig` already used 40 MHz.
+
+### Added — Wi-Fi throughput bench
+
+- **`wifi throughput tx <host> [port=N] [mb=N] [udp]`** /
+  **`wifi throughput rx [port=N] [mb=N] [udp]`** (`components/networking/netbench.c`
+  + command in `networking.c`): a plain lwIP TCP/UDP flood that reports
+  Mbit/s, used to measure the ESP-Hosted SDIO transport. Host endpoint:
+  **`tools/wifi_bench.py`** (drives the command and runs the matching peer, so
+  one invocation prints both host- and device-side numbers).
+  Caveat: a same-subnet host is required; the release session's lab had the
+  host and device on different subnets (and switching the host AP needs
+  elevation), so the bench shipped **hardware-unverified** and no throughput
+  number was captured — the 40 MHz adoption rests on the stability soak above.
+- **`tools/regression.py [COMx] [--quick]`**: one-command host regression that
+  resets the board, runs every suite/guard, prints a PASS/FAIL table, and exits
+  non-zero on failure (11/11 on COM3). The Unity suite remains a separate
+  step (needs the test image).
+
 ## [0.37.1] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
 ### Fixed — O3 single-output loss, O4 host resets, O5 boot wedge

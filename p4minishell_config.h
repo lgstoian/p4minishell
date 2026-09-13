@@ -52,8 +52,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             37
-#define P4_CONFIG_VERSION_PATCH             1
+#define P4_CONFIG_VERSION_MINOR             38
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -397,6 +397,22 @@
  *  RSSI (strongest first) and capped at this value, so a busy channel cannot
  *  flood the transcript. */
 #define P4_CONFIG_WIFI_SCAN_LIMIT           32
+
+/**
+ * Wi-Fi throughput bench (`wifi throughput`) parameters. The bench is a plain
+ * lwIP TCP/UDP flood used to measure the ESP-Hosted SDIO transport; the host
+ * endpoint is `tools/wifi_bench.py`.
+ */
+/** Payload bytes per send()/datagram (matches the Wi-Fi MTU). */
+#define P4_CONFIG_WIFI_BENCH_CHUNK_BYTES    1460
+/** Payload size used when `mb=` is not given. */
+#define P4_CONFIG_WIFI_BENCH_DEFAULT_MB     16
+/** Upper bound on `mb=` (guards against an accidental huge transfer). */
+#define P4_CONFIG_WIFI_BENCH_MAX_MB         1024
+/** Overall transfer budget before the bench aborts. */
+#define P4_CONFIG_WIFI_BENCH_TIMEOUT_MS     30000
+/** Default TCP/UDP port for the bench. */
+#define P4_CONFIG_WIFI_BENCH_PORT           5201
 
 /**
  * Maximum number of previously-used Wi-Fi networks kept in the persistent

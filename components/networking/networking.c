@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_crt_bundle.h"
 #include "esp_err.h"
@@ -38,6 +39,7 @@
 #include "bluetooth.h"
 #include "http_server.h"
 #include "led.h"
+#include "netbench.h"
 #include "netdiag.h"
 #include "networking.h"
 #include "wifi_known.h"
@@ -2065,6 +2067,107 @@ void networking_wifi_diag(void)
 #endif
 }
 
+/**
+ * `wifi throughput tx <host> [port=N] [mb=N] [udp]`
+ * `wifi throughput rx [port=N] [mb=N] [udp]`
+ *
+ * Runs the netbench probe on the command worker (blocking) and prints the
+ * measured rate. The host endpoint is `tools/wifi_bench.py`. Used to compare
+ * the ESP-Hosted SDIO transport at the negotiated clock (see the 40 MHz trial
+ * in changelog v0.38.0).
+ */
+static esp_err_t networking_wifi_throughput(int argc, char **argv)
+{
+    netbench_config_t cfg;
+    netbench_result_t result;
+    esp_err_t error;
+    int i;
+
+    if (argc < 3) {
+        goto usage;
+    }
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.port = P4_CONFIG_WIFI_BENCH_PORT;
+    cfg.megabytes = P4_CONFIG_WIFI_BENCH_DEFAULT_MB;
+    cfg.timeout_ms = P4_CONFIG_WIFI_BENCH_TIMEOUT_MS;
+
+    if (networking_text_equals_ignore_case(argv[2], "tx")) {
+        cfg.direction = NETBENCH_DIR_TX;
+        if (argc < 4) {
+            goto usage;
+        }
+        cfg.host = argv[3];
+        i = 4;
+    } else if (networking_text_equals_ignore_case(argv[2], "rx")) {
+        cfg.direction = NETBENCH_DIR_RX;
+        i = 3;
+    } else {
+        goto usage;
+    }
+
+    for (; i < argc; i++) {
+        const char *a = argv[i];
+
+        if (networking_text_equals_ignore_case(a, "udp")) {
+            cfg.udp = true;
+        } else if (strncasecmp(a, "port=", 5) == 0) {
+            long v = strtol(a + 5, NULL, 10);
+
+            if (v < 1 || v > 65535) {
+                goto usage;
+            }
+            cfg.port = (uint16_t)v;
+        } else if (strncasecmp(a, "mb=", 3) == 0) {
+            long v = strtol(a + 3, NULL, 10);
+
+            if (v < 1 || v > P4_CONFIG_WIFI_BENCH_MAX_MB) {
+                goto usage;
+            }
+            cfg.megabytes = (uint32_t)v;
+        } else {
+            goto usage;
+        }
+    }
+
+    if (!networking_wifi_is_connected()) {
+        networking_appendf("@Cwifi:@R @yconnect to a network before running the throughput bench@R\n");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    networking_appendf("@Cwifi throughput:@R %s%s %s%u MiB on port %u ...\n",
+                       cfg.direction == NETBENCH_DIR_TX ? "tx " : "rx ",
+                       cfg.udp ? "udp" : "tcp",
+                       cfg.direction == NETBENCH_DIR_TX ? cfg.host : "",
+                       (unsigned)cfg.megabytes, (unsigned)cfg.port);
+
+    error = netbench_run(&cfg, &result);
+    if (error == ESP_OK) {
+        if (cfg.udp) {
+            networking_appendf("@G  UDP: %.2f Mbit/s (%llu bytes, %u datagrams, %u ms)@R\n",
+                               result.mbps, (unsigned long long)result.bytes,
+                               (unsigned)result.datagrams, (unsigned)result.elapsed_ms);
+        } else {
+            networking_appendf("@G  TCP: %.2f Mbit/s (%llu bytes, %u ms)@R\n",
+                               result.mbps, (unsigned long long)result.bytes,
+                               (unsigned)result.elapsed_ms);
+        }
+    } else {
+        networking_appendf("@R  bench failed: %s (%llu/%llu bytes in %u ms)@R\n",
+                           esp_err_to_name(error),
+                           (unsigned long long)result.bytes,
+                           (unsigned long long)((uint64_t)cfg.megabytes * 1024u * 1024u),
+                           (unsigned)result.elapsed_ms);
+    }
+
+    return error;
+
+usage:
+    networking_appendf("@yUsage: wifi throughput tx <host> [port=N] [mb=N] [udp]@R\n");
+    networking_appendf("@y       wifi throughput rx [port=N] [mb=N] [udp]@R\n");
+    return ESP_ERR_INVALID_ARG;
+}
+
 esp_err_t networking_handle_wifi_command(char *command)
 {
     char *argv[6];
@@ -2076,6 +2179,8 @@ esp_err_t networking_handle_wifi_command(char *command)
         networking_appendf("  @Gwifi scan@R                   Scan for nearby SSIDs, sorted by RSSI\n");
         networking_appendf("  @Gwifi scan /b@R                Bare scan output (names only, redirectable)\n");
         networking_appendf("  @Gwifi diag@R                   Run a diagnostic status + scan report in the transcript\n");
+        networking_appendf("  @Gwifi throughput tx@R @T<host>@R [port=N] [mb=N] [udp]  Send bench, Mbit/s\n");
+        networking_appendf("  @Gwifi throughput rx@R [port=N] [mb=N] [udp]              Receive bench, Mbit/s\n");
         networking_appendf("  @Gwifi connect@R                Connect using sdkconfig default credentials\n");
         networking_appendf("  @Gwifi connect@R @T<ssid>@R @T<pass>@R  Connect using runtime credentials\n");
         networking_appendf("  @Gwifi disconnect@R             Disconnect the current station session\n");
@@ -2118,6 +2223,11 @@ esp_err_t networking_handle_wifi_command(char *command)
     if (networking_text_equals_ignore_case(argv[1], "diag")) {
         networking_wifi_diag();
         return ESP_OK;
+    }
+
+    if (networking_text_equals_ignore_case(argv[1], "throughput") ||
+        networking_text_equals_ignore_case(argv[1], "bench")) {
+        return networking_wifi_throughput(argc, argv);
     }
 
     if (networking_text_equals_ignore_case(argv[1], "disconnect")) {

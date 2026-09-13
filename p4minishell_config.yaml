@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.37.1
-# Last updated: 2026-09-12 (0.37.1: fixed O3 single-output loss (driver-API UART
-#   mirror), O4 host port-open resets, O5 boot wedge (I2C bus recovery); suite
-#   262/0/2 on COM3)
-config_version: "0.37.1"
+# Version: 0.38.0
+# Last updated: 2026-09-12 (0.38.0: 40 MHz SDIO clock adopted after soak gate,
+#   wifi throughput bench + tools/wifi_bench.py, tools/regression.py; suite
+#   262/0/2 + 11/11 host suites on COM3)
+config_version: "0.38.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -469,6 +469,31 @@ wifi:
       known-network list (sd:/WIFI.KNOWN). When full, the least preferred /
       lowest-priority / oldest entry is dropped.
     range: "4..64"
+  bench_chunk_bytes:
+    value: 1460
+    type: size_t
+    description: "Payload bytes per send()/datagram for the wifi throughput bench (matches the Wi-Fi MTU)."
+    range: "512..16384"
+  bench_default_mb:
+    value: 16
+    type: size_t
+    description: "Payload size (MiB) used by wifi throughput when mb=N is not given."
+    range: "1..1024"
+  bench_max_mb:
+    value: 1024
+    type: size_t
+    description: "Upper bound on wifi throughput mb=N (guards against an accidental huge transfer)."
+    range: "1..4096"
+  bench_timeout_ms:
+    value: 30000
+    type: int
+    description: "Overall transfer budget before the wifi throughput bench aborts."
+    range: "1000..120000"
+  bench_port:
+    value: 5201
+    type: int
+    description: "Default TCP/UDP port for the wifi throughput bench (host endpoint: tools/wifi_bench.py)."
+    range: "1..65535"
   known_file:
     value: "WIFI.KNOWN"
     type: string

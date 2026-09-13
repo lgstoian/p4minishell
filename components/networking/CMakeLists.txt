@@ -5,6 +5,7 @@ idf_component_register(
         "wifi_known.c"
         "http_server.c"
         "netdiag.c"
+        "netbench.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi

@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v0.37.1** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 262/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
+> **Applies to firmware v0.38.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 262/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
 
 ## ANSI/VT Color Support
 
@@ -2605,10 +2605,13 @@ ERRORLEVEL: 0 = identical, 1 = different, 2 = usage / error.
 | wifi forget <ssid> / wifi delete <ssid> | Remove one saved network |
 | wifi forget all / wifi clear known | Clear the entire known-list |
 | wifi preferred <ssid> | Mark a saved network as preferred for auto-connect |
+| wifi throughput tx <host> [port=N] [mb=N] [udp] | TCP/UDP send bench to `host`; prints Mbit/s (host peer: `tools/wifi_bench.py`) |
+| wifi throughput rx [port=N] [mb=N] [udp] | TCP/UDP receive bench; the host connects and sends (same-subnet host required) |
 
 ### Wi-Fi Behavior
 - Boot-time startup in background task (does not block shell UI)
-- ESP-Hosted version compatibility gate: refuses init if C6 firmware != host 2.12.x
+- ESP-Hosted version compatibility gate: compares the C6-reported major against `P4_CONFIG_HOSTED_COMPAT_MAJOR` (3.x froze its public compat macros at the 2.12.6 baseline)
+- Hosted SDIO link runs at `CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ` (40000 since v0.38.0; soak-verified)
 - Recovery guidance points to coprocessor/esp32c6_slave or c6ota default
 - Restores automatically after successful c6ota
 - Transcript-facing diagnostics on boot and post-OTA restore

@@ -5,7 +5,7 @@
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v0.37.1):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
+> **Current build (v0.38.0):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
 
 The `edit` command opens a modal, touch-first text editor that can create and
 modify any text file on the SD card — batch scripts, `.txt`, `.sys`, config

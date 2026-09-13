@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.37.1, suite 262/0/2)
+# P4MiniShell Roadmap (v0.38.0, suite 262/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -16,10 +16,20 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (v0.37.1, hardware-verified on COM3)
+## Current baseline (v0.38.0, hardware-verified on COM3)
 Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
-**Current verified baseline:** v0.37.1. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.37.1]` for the newest milestones (O3/O4/O5: driver-API UART mirror, no-reset port open, I2C bus recovery).
+**Current verified baseline:** v0.38.0. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.38.0]` for the newest milestones (40 MHz SDIO clock adopted after soak, `wifi throughput` bench, `tools/regression.py`).
+
+### Recently completed (v0.38.0)
+- ✅ **40 MHz SDIO clock adopted**: the earlier revert was traced to the O7
+  header double free (not signal integrity). Soak-gated adoption: 20/20 clean
+  boots, 20-minute concurrent Wi-Fi+SD soak with 0 stalls, full suite green.
+- ✅ **`wifi throughput` bench** (`components/networking/netbench.c` +
+  `tools/wifi_bench.py`): TCP/UDP Mbit/s probe of the hosted SDIO transport.
+  Same-subnet host required; the release session's lab could not run it.
+- ✅ **`tools/regression.py`**: one-command host regression (PASS/FAIL table,
+  non-zero exit on failure; 11/11 on COM3).
 
 ### Recently completed (v0.37.1)
 - ✅ **O3 single-output loss fixed**: the UART transcript mirror now writes

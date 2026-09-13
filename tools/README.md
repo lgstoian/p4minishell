@@ -77,6 +77,13 @@ resets on the transition — every driver drops DTR/RTS on open via
   world-coordinate pixels (func/axes/data/bar/point/line), plus a TUI-mode
   screenshot to `spikes/plot_tui.bmp`.
 - `unit_run.py` — build-independent capture of the unit-test summaries.
+- `regression.py` — one-command host regression: resets the board, runs every
+  suite/guard (`deep`/`db`/`alarm`/`smoke`/`pkg`/`theme`/`gfx`/`plot`/`header`/
+  `tx_stress`/`boot_regression`), prints a PASS/FAIL table, non-zero exit on
+  failure. `--quick` shortens the boot soak. Unit tests remain a separate step.
+- `wifi_bench.py` — host endpoint for the firmware `wifi throughput` command:
+  runs the matching TCP/UDP peer and prints host- and device-side Mbit/s.
+  Host and device must share a subnet.
 - `tx_stress_test.py` — TX-pressure output-integrity guard for bugs.md O3:
   emits numbered lines while pausing reads to build backpressure and verifies
   every line arrived (guards the driver-API transcript mirror).
