@@ -186,6 +186,16 @@ CONFIG_LV_USE_CLIB_MALLOC=y
 # CONFIG_LV_USE_ASSERT_MALLOC is not set
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
+# TCP throughput: the 5760-byte default window caps a single stream at
+# window/RTT over the ESP-Hosted link (~4-5 Mbit/s measured with the
+# `wifi throughput` bench). Raise the window/send buffers and the receive
+# mailbox so the SDIO/Wi-Fi transport, not the window, is the limit. lwIP
+# allocates these from PSRAM here (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP).
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
+
+
 # The on-board flash is a BOYA chip; enable its driver so the boot log does not
 # warn about falling back to the generic driver.
 CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y

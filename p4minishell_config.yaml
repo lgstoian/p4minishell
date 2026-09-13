@@ -10,11 +10,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.38.0
-# Last updated: 2026-09-12 (0.38.0: 40 MHz SDIO clock adopted after soak gate,
-#   wifi throughput bench + tools/wifi_bench.py, tools/regression.py; suite
-#   262/0/2 + 11/11 host suites on COM3)
-config_version: "0.38.0"
+# Version: 0.38.1
+# Last updated: 2026-09-13 (0.38.1: verified the wifi throughput bench and
+#   raised the lwIP TCP window 5760->32768; 40 MHz confirmed faster in both
+#   directions; suite 262/0/2 + 11/11)
+config_version: "0.38.1"
 
 # ---- Shell Identity ----
 shell_identity:

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.38.1] - 2026-09-13 (COM3; ESP-IDF v5.5.5)
+
+### Changed — Wi-Fi throughput bench verified; lwIP TCP window raised
+
+- Verified `wifi throughput` against a same-subnet host (AP `camera`, device
+  192.168.1.239, host 192.168.1.194) with `tools/wifi_bench.py`.
+- **Finding:** the 5760-byte lwIP TCP window, not the SDIO clock, capped a
+  single TCP stream (~2.4 Mbit/s). Raised `CONFIG_LWIP_TCP_WND_DEFAULT` and
+  `CONFIG_LWIP_TCP_SND_BUF_DEFAULT` 5760 → **32768**, and
+  `CONFIG_LWIP_TCP_RECVMBOX_SIZE` 6 → 32 (lwIP buffers take PSRAM here via
+  `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`).
+- Measured (16 MiB unless noted; median of samples):
+  - **host → device:** 2.45 → **~11 Mbit/s** at 40 MHz (8.7 / 11.2 / 11.7);
+    **7.9 Mbit/s** at 10 MHz.
+  - **device → host:** ~1.6 (timeout) at 10 MHz → **4.4 Mbit/s** (8 MiB) at
+    40 MHz.
+- The 40 MHz SDIO clock is faster in both directions, confirming the v0.38.0
+  adoption, and the larger TCP window is an end-to-end throughput win
+  (`httpget`/`httpd` benefit too).
+- Regression: `tools/regression.py` 11/11; unit 262/0/2.
+
 ## [0.38.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
 ### Changed — 40 MHz SDIO clock adopted after a soak gate

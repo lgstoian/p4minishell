@@ -1,8 +1,8 @@
-# P4MiniShell — Bug Report & Test Campaign (v0.38.0, suite 262/0/2)
+# P4MiniShell — Bug Report & Test Campaign (v0.38.1, suite 262/0/2)
 
 Date: 2026-08-24
 Hardware: ESP32-P4 (rev 1.0) on COM11, ESP32-C6 co-processor, JD9165 display, SD card present
-Firmware: **v0.38.0**. Current config baseline: transcript 65536 (`p4minishell_config.h:93`), async 512 (`:146`), internal trim 4096 (`:120`), SD DMA 4096 (`:621`), command worker stack 32768 (`:1467`), batch-file RAM cap 131072 (`:797`), TUI 80x25 (`:325/:328`). Suite: **262/0/2**.
+Firmware: **v0.38.1**. Current config baseline: transcript 65536 (`p4minishell_config.h:93`), async 512 (`:146`), internal trim 4096 (`:120`), SD DMA 4096 (`:621`), command worker stack 32768 (`:1467`), batch-file RAM cap 131072 (`:797`), TUI 80x25 (`:325/:328`). Suite: **262/0/2**.
 Scope: Debug sweep and stress testing over the UART console (USB-Serial/JTAG, 115200 baud),
 unit suite, and on-board stress runs. Bugs found are ordered by severity; **FIXED** entries
 describe the change and its verification.
