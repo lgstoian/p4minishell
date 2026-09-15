@@ -632,6 +632,16 @@ static void shell_keyboard_event_cb(lv_event_t *event)
     shell_osk_into_input(txt);
 }
 
+/* Context provider for the on-screen keyboard's situational capabilities.
+ * The editor is the shell-owned consumer of the Nav key; batch/modal apps
+ * request it explicitly through `keyboard nav on|off` /
+ * keyboard_request_capability(). Runs on the LVGL task with the port lock
+ * held, so it only reads editor state. */
+static uint32_t shell_keyboard_caps_cb(void)
+{
+    return editor_view_is_open() ? KEYBOARD_CAP_NAV : 0u;
+}
+
 /* ========================================================================
  * UI CONSTRUCTION
  * ======================================================================== */
@@ -710,6 +720,12 @@ static void shell_build_ui(void)
     /* Keyboard callback receives LV_EVENT_VALUE_CHANGED for mode and button
      * presses, LV_EVENT_READY for OK, and LV_EVENT_CANCEL for hide. */
     keyboard_register_event_callback(shell_keyboard_event_cb, NULL);
+
+    /* Situational capability context: while the editor is open the symbols
+     * page's Nav key is usable. Future modal/batch apps add their own request
+     * via keyboard_request_capability(), so this callback only supplies the
+     * shell-owned context. */
+    keyboard_register_capabilities_callback(shell_keyboard_caps_cb);
 
     /* Synthetic touch indev for `ui` automation/tests (idempotent). */
     ui_test_init();

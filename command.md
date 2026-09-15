@@ -348,6 +348,23 @@ is hidden and no USB keyboard is attached — summons the on-screen keyboard.
 `nav2` (`edit`). The two `nav` pages are the editor control pages; the editor
 selects `nav` itself when it opens (see [editor.md](editor.md)).
 
+`keyboard nav [on|off]` controls the symbols/edit page **`Nav` key
+availability**. The `Nav` key is only useful where the editor navigation page
+is reachable, so it is greyed out (disabled, and it never fires) in every other
+context — the shell prompt, batch apps, non-editor modals. The shell enables it
+automatically while the editor is open; batch apps request it explicitly:
+
+```
+keyboard nav on     rem enable the Nav key while my app drives the editor pages
+...                 rem use the navigation page
+keyboard nav off    rem release it
+```
+
+Requests are reference-counted and ORed with the shell context, so nested
+requesters are safe. `keyboard nav` (no argument) prints `keyboard.nav=on|off`.
+The `ui state` line also reports the current page's key as `nav=on` (usable),
+`nav=off` (greyed), or `nav=na` (page has no Nav key).
+
 The on-screen symbols keyboard covers every printable ASCII character
 (0x20-0x7E), including the shell-critical pipe `|`, caret `^` (the shell
 escape character), tilde `~`, and backtick, so DOS operators and escaped
@@ -372,7 +389,8 @@ same code a finger exercises.
 - `ui hit <x> <y> [/v:NAME]` — report the target id under a point.
 - `ui state [/b] [/v:NAME]` — active modal, keyboard visibility/mode, editor
   document state, the shell input-line text, the inline `ghost=` completion
-  suffix, and the active `search=` reverse-search query.
+  suffix, the active `search=` reverse-search query, and the current page's
+  `nav=on|off|na` capability-key state.
 
 Batch-friendly: `ERRORLEVEL` 0/1/2, `/b` bare output, `/v:NAME` result
 variables, redirection. While a modal blocks the command worker a `ui` line is

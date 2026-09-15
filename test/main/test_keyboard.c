@@ -39,6 +39,22 @@ void test_keyboard_mode_parse(void)
     TEST_ASSERT_FALSE(keyboard_mode_parse("nav", NULL));
 }
 
+void test_keyboard_capability_mapping(void)
+{
+    /* Only "Nav" is capability-governed; every other key is always enabled. */
+    TEST_ASSERT_EQUAL_UINT32(KEYBOARD_CAP_NAV, keyboard_button_required_capability("Nav"));
+    TEST_ASSERT_EQUAL_UINT32(0, keyboard_button_required_capability("abc"));
+    TEST_ASSERT_EQUAL_UINT32(0, keyboard_button_required_capability("1#"));
+    TEST_ASSERT_EQUAL_UINT32(0, keyboard_button_required_capability(NULL));
+
+    TEST_ASSERT_TRUE(keyboard_button_enabled_for_caps(0, "abc"));
+    TEST_ASSERT_TRUE(keyboard_button_enabled_for_caps(0, NULL));
+
+    TEST_ASSERT_FALSE(keyboard_button_enabled_for_caps(0, "Nav"));
+    TEST_ASSERT_TRUE(keyboard_button_enabled_for_caps(KEYBOARD_CAP_NAV, "Nav"));
+    TEST_ASSERT_TRUE(keyboard_button_enabled_for_caps(KEYBOARD_CAP_NAV | (1u << 7), "Nav"));
+}
+
 void test_keyboard_osk_dedup(void)
 {
     /* A large, distinct base id so this suite is independent of the shared

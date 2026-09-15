@@ -166,6 +166,7 @@ extern void test_editor_format_line_number(void);
 
 extern void test_keyboard_mode_names(void);
 extern void test_keyboard_mode_parse(void);
+extern void test_keyboard_capability_mapping(void);
 extern void test_keyboard_osk_dedup(void);
 
 extern void test_calc_arithmetic(void);
@@ -621,6 +622,7 @@ void app_main(void)
     UNITY_BEGIN();
     RUN_TEST(test_keyboard_mode_names);
     RUN_TEST(test_keyboard_mode_parse);
+    RUN_TEST(test_keyboard_capability_mapping);
     RUN_TEST(test_keyboard_osk_dedup);
     UNITY_END();
 

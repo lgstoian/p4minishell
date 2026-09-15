@@ -211,6 +211,64 @@ bool keyboard_osk_accept(uint32_t btn_id);
 bool keyboard_osk_accept_at(uint32_t btn_id, int64_t now_ms);
 
 /* ========================================================================
+ * SITUATIONAL CAPABILITIES
+ * ========================================================================
+ * Some OSK keys are only meaningful in certain contexts (the symbols page's
+ * "Nav" key opens the editor navigation page). A capability is enabled when
+ * EITHER the registered context callback reports it (the shell supplies the
+ * current context, e.g. an open editor) OR any component has explicitly
+ * requested it. Unavailable capability keys are disabled in place (greyed)
+ * and never fire.
+ */
+
+/** Capability bits. Add new context-specific keys here. */
+typedef enum {
+    KEYBOARD_CAP_NAV = 1u << 0,  /**< The editor navigation page is reachable. */
+} keyboard_capability_t;
+
+/**
+ * Context provider. Returns the capabilities available in the current context.
+ * Called from the LVGL task while the port lock is held: must be cheap and must
+ * not call back into LVGL or the keyboard module.
+ */
+typedef uint32_t (*keyboard_capabilities_cb_t)(void);
+
+/** Register (or clear, with NULL) the context capabilities provider. */
+void keyboard_register_capabilities_callback(keyboard_capabilities_cb_t cb);
+
+/**
+ * Request (on) or release (off) a capability bit as an explicit requester.
+ *
+ * Reference-counted: multiple requesters may hold the same bit and it stays
+ * enabled until the last one releases it. Batch apps use the `keyboard nav
+ * on|off` command; future modal apps call this on open/close. Balanced calls
+ * are the caller's responsibility (an unbalanced `on` keeps the bit until a
+ * reboot or a matching `off`).
+ */
+void keyboard_request_capability(uint32_t caps, bool on);
+
+/** Effective capabilities (context callback OR any active request). */
+uint32_t keyboard_effective_capabilities(void);
+
+/** Re-evaluate capability key availability for the current page (idempotent). */
+void keyboard_refresh_availability(void);
+
+/** Tri-state of the current page's "Nav" key, for diagnostics/tests. */
+typedef enum {
+    KEYBOARD_NAV_KEY_ABSENT = -1,   /**< Current page has no Nav key. */
+    KEYBOARD_NAV_KEY_ENABLED = 0,   /**< Nav key present and usable. */
+    KEYBOARD_NAV_KEY_DISABLED = 1,  /**< Nav key present but greyed out. */
+} keyboard_nav_key_state_t;
+
+/** Query the Nav key state on the current page. */
+keyboard_nav_key_state_t keyboard_nav_key_state(void);
+
+/* Pure helpers (no LVGL; unit-tested): the capability a key label requires
+ * (0 = always enabled) and whether that key is enabled for a capability set. */
+uint32_t keyboard_button_required_capability(const char *label);
+bool keyboard_button_enabled_for_caps(uint32_t effective_caps, const char *label);
+
+/* ========================================================================
  * MODE CONTROL
  * ======================================================================== */
 

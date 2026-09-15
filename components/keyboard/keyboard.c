@@ -23,6 +23,7 @@
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include <string.h>
 #include <strings.h>
 #include <inttypes.h>
@@ -59,6 +60,13 @@ static struct {
     .external_input = false,
     .force_visible = false,
 };
+
+/* Situational capability state (see keyboard.h). The context callback is
+ * supplied by the shell; explicit requests are reference-counted per bit. */
+#define KEYBOARD_CAP_BITS 8
+static keyboard_capabilities_cb_t s_caps_callback;
+static uint32_t s_caps_request_count[KEYBOARD_CAP_BITS];
+static portMUX_TYPE s_caps_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* ========================================================================
  * CUSTOM KEYBOARD MAPS - FULL PRINTABLE-ASCII (0x20-0x7E) COVERAGE
@@ -184,6 +192,7 @@ static void keyboard_install_custom_maps(void)
 
 static void keyboard_apply_mode(void);
 static lv_keyboard_mode_t keyboard_mode_to_lvgl(keyboard_mode_t mode);
+static void keyboard_apply_capabilities_locked(void);
 
 /* ========================================================================
  * MODE CONVERSION
@@ -209,6 +218,159 @@ static void keyboard_apply_mode(void)
     }
 
     lv_keyboard_set_mode(s_keyboard.widget, keyboard_mode_to_lvgl(s_keyboard.mode));
+    /* The mode change re-installs the page's ctrl map, so re-apply the
+     * capability-driven disabled state for the newly shown page. */
+    keyboard_apply_capabilities_locked();
+}
+
+/* ========================================================================
+ * SITUATIONAL CAPABILITIES
+ * ======================================================================== */
+
+uint32_t keyboard_button_required_capability(const char *label)
+{
+    if (label != NULL && strcmp(label, "Nav") == 0) {
+        return KEYBOARD_CAP_NAV;
+    }
+    return 0;
+}
+
+bool keyboard_button_enabled_for_caps(uint32_t effective_caps, const char *label)
+{
+    uint32_t required = keyboard_button_required_capability(label);
+
+    return required == 0 || (effective_caps & required) != 0;
+}
+
+uint32_t keyboard_effective_capabilities(void)
+{
+    uint32_t requested = 0;
+    uint32_t context = (s_caps_callback != NULL) ? s_caps_callback() : 0;
+    int i;
+
+    portENTER_CRITICAL(&s_caps_lock);
+    for (i = 0; i < KEYBOARD_CAP_BITS; i++) {
+        if (s_caps_request_count[i] > 0) {
+            requested |= (1u << i);
+        }
+    }
+    portEXIT_CRITICAL(&s_caps_lock);
+
+    return context | requested;
+}
+
+/** Find the index of the first button whose label equals @p label, or -1. */
+static int keyboard_find_button(const char *label)
+{
+    uint32_t id;
+
+    if (s_keyboard.widget == NULL || label == NULL) {
+        return -1;
+    }
+    for (id = 0; id < 128; id++) {
+        const char *text = lv_buttonmatrix_get_button_text(s_keyboard.widget, id);
+        if (text == NULL) {
+            break;
+        }
+        if (strcmp(text, label) == 0) {
+            return (int)id;
+        }
+    }
+    return -1;
+}
+
+/** Apply capability availability to every capability-governed key on the
+ *  current page. Assumes the caller holds the LVGL port lock. */
+static void keyboard_apply_capabilities_locked(void)
+{
+    uint32_t caps;
+    uint32_t id;
+
+    if (s_keyboard.widget == NULL) {
+        return;
+    }
+    caps = keyboard_effective_capabilities();
+
+    for (id = 0; id < 128; id++) {
+        const char *text = lv_buttonmatrix_get_button_text(s_keyboard.widget, id);
+
+        if (text == NULL) {
+            break;
+        }
+        if (keyboard_button_required_capability(text) == 0) {
+            continue;
+        }
+        if (keyboard_button_enabled_for_caps(caps, text)) {
+            lv_buttonmatrix_clear_button_ctrl(s_keyboard.widget, id,
+                                              LV_BUTTONMATRIX_CTRL_DISABLED);
+        } else {
+            lv_buttonmatrix_set_button_ctrl(s_keyboard.widget, id,
+                                            LV_BUTTONMATRIX_CTRL_DISABLED);
+        }
+    }
+}
+
+void keyboard_refresh_availability(void)
+{
+    if (s_keyboard.widget == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    keyboard_apply_capabilities_locked();
+    lvgl_port_unlock();
+}
+
+void keyboard_register_capabilities_callback(keyboard_capabilities_cb_t cb)
+{
+    s_caps_callback = cb;
+    keyboard_refresh_availability();
+}
+
+void keyboard_request_capability(uint32_t caps, bool on)
+{
+    int i;
+
+    portENTER_CRITICAL(&s_caps_lock);
+    for (i = 0; i < KEYBOARD_CAP_BITS; i++) {
+        uint32_t bit = (1u << i);
+
+        if ((caps & bit) == 0) {
+            continue;
+        }
+        if (on) {
+            s_caps_request_count[i]++;
+        } else if (s_caps_request_count[i] > 0) {
+            s_caps_request_count[i]--;
+        }
+    }
+    portEXIT_CRITICAL(&s_caps_lock);
+
+    keyboard_refresh_availability();
+}
+
+keyboard_nav_key_state_t keyboard_nav_key_state(void)
+{
+    int id;
+    bool disabled;
+
+    if (s_keyboard.widget == NULL) {
+        return KEYBOARD_NAV_KEY_ABSENT;
+    }
+    if (!lvgl_port_lock(0)) {
+        return KEYBOARD_NAV_KEY_ABSENT;
+    }
+    id = keyboard_find_button("Nav");
+    if (id < 0) {
+        lvgl_port_unlock();
+        return KEYBOARD_NAV_KEY_ABSENT;
+    }
+    disabled = lv_buttonmatrix_has_button_ctrl(s_keyboard.widget, (uint32_t)id,
+                                               LV_BUTTONMATRIX_CTRL_DISABLED);
+    lvgl_port_unlock();
+
+    return disabled ? KEYBOARD_NAV_KEY_DISABLED : KEYBOARD_NAV_KEY_ENABLED;
 }
 
 /* ========================================================================
@@ -263,6 +425,14 @@ lv_obj_t *keyboard_init(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_keyboard.widget, 0, 0);
 
+    /* Capability-governed keys that are unavailable are greyed out (muted
+     * text, dimmed background) so a context-less key never looks usable. */
+    lv_obj_set_style_text_color(s_keyboard.widget,
+                                lv_color_hex(theme_current()->text_muted),
+                                LV_PART_ITEMS | LV_STATE_DISABLED);
+    lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_30,
+                            LV_PART_ITEMS | LV_STATE_DISABLED);
+
     s_keyboard.initialized = true;
     s_keyboard.visible = true;
     s_keyboard.mode = KEYBOARD_MODE_TEXT_LOWER;
@@ -300,6 +470,12 @@ void keyboard_refresh_theme(void)
     }
     lv_obj_set_style_bg_color(s_keyboard.widget,
                               lv_color_hex(theme_current()->bg_keyboard), 0);
+    /* Re-resolve the greyed-out style for the new theme's muted colour. */
+    lv_obj_set_style_text_color(s_keyboard.widget,
+                                lv_color_hex(theme_current()->text_muted),
+                                LV_PART_ITEMS | LV_STATE_DISABLED);
+    lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_30,
+                            LV_PART_ITEMS | LV_STATE_DISABLED);
     lvgl_port_unlock();
 }
 
@@ -353,6 +529,9 @@ void keyboard_show(void)
     if (s_keyboard.textarea != NULL) {
         lv_keyboard_set_textarea(s_keyboard.widget, s_keyboard.textarea);
     }
+
+    /* Re-evaluate capability keys for the current context/page. */
+    keyboard_apply_capabilities_locked();
 
     lvgl_port_unlock();
 

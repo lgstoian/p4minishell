@@ -346,7 +346,9 @@ static int ui_cmd_state(bool bare, const char *var)
     char search[96] = "";
     const char *modal;
     const char *mode;
+    const char *nav_str;
     bool kb_visible;
+    keyboard_nav_key_state_t nav_key;
     editor_view_state_t ed;
     char line[896];
 
@@ -386,9 +388,15 @@ static int ui_cmd_state(bool bare, const char *var)
     }
     lvgl_port_unlock();
 
+    /* Takes its own recursive lock: report the symbols page's Nav key state so
+     * tests can assert situational greying in shell vs editor context. */
+    nav_key = keyboard_nav_key_state();
+    nav_str = (nav_key == KEYBOARD_NAV_KEY_DISABLED) ? "off" :
+              (nav_key == KEYBOARD_NAV_KEY_ENABLED) ? "on" : "na";
+
     snprintf(line, sizeof(line),
              "modal=%s keyboard=%s mode=%s editor=%s modified=%d row=%u col=%u "
-             "lines=%u readonly=%d preview=%d wrap=%d path=%.160s input=%s "
+             "lines=%u readonly=%d preview=%d wrap=%d nav=%s path=%.160s input=%s "
              "ghost=%s search=%s\n",
              (modal != NULL) ? modal : "none",
              kb_visible ? "visible" : "hidden",
@@ -397,7 +405,7 @@ static int ui_cmd_state(bool bare, const char *var)
              ed.modified ? 1 : 0,
              (unsigned)ed.cursor_row, (unsigned)ed.cursor_col,
              (unsigned)ed.line_count, ed.readonly ? 1 : 0,
-             ed.preview ? 1 : 0, ed.wrap ? 1 : 0,
+             ed.preview ? 1 : 0, ed.wrap ? 1 : 0, nav_str,
              (ed.path[0] != '\0') ? ed.path : "(unnamed)",
              input, ghost, search);
     if (!bare) {

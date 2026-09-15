@@ -31,6 +31,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   smoke (`ver`, `config /b`, `theme show`, `owner`, `security status`,
   `gfind /count`, `cursor /b`) and the expanded `SET.BAT` flows stay green.
 
+### Added — situational on-screen keyboard capabilities (greyed-out `Nav` key)
+
+- The symbols/edit page `Nav` key is only usable where the editor navigation
+  page is reachable. It is now **disabled and greyed out** in every other
+  context (shell prompt, batch apps, non-editor modals) instead of looking
+  active but doing nothing. LVGL ignores clicks on disabled buttons, so it also
+  cannot fire.
+- General capability model in `components/keyboard/`:
+  `keyboard_capability_t` (`KEYBOARD_CAP_NAV`), a registered context callback
+  (`keyboard_register_capabilities_callback`, main supplies
+  `editor_view_is_open()`), and a reference-counted explicit request API
+  (`keyboard_request_capability`). Effective availability is
+  `context OR requests`. `keyboard_apply_capabilities_locked()` re-runs on
+  every page change and keyboard show (a mode change reinstalls the page's ctrl
+  map) and toggles `LV_BUTTONMATRIX_CTRL_DISABLED`; the disabled look is the
+  `LV_PART_ITEMS|LV_STATE_DISABLED` style (muted text, dimmed background).
+- Batch apps request it with `keyboard nav on|off` (query with `keyboard nav`);
+  future modal apps call `keyboard_request_capability()`.
+- `ui state` reports `nav=on|off|na`; pure label→capability mapping is
+  unit-tested (`test_keyboard_capability_mapping`).
+- Hardware-verified on COM3: shell symbols page `nav=off`; `keyboard nav on`
+  → `nav=on`; editor open on the symbols page → `nav=on`; screenshot confirms
+  the greyed `Nav` key.
+
 ### Added — Preferences/security/form/global-find pass (single CONFIG.SYS store)
 
 Five additive features that keep the shell as the core and the GUI as an

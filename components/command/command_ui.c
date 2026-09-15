@@ -107,6 +107,25 @@ bool shell_command_keyboard(int argc, char **argv)
                                      (int32_t)keyboard_get_height(),
                                      keyboard_is_external_input_enabled() ? "on" : "off");
         }
+    } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "nav")) {
+        /* Batch apps request the symbols page's Nav key: `keyboard nav on`
+         * before using the editor navigation page, `keyboard nav off` after.
+         * The request is reference-counted and ORed with the shell context. */
+        if (argc == 2) {
+            uint32_t caps = keyboard_effective_capabilities();
+
+            shell_transcript_appendf("keyboard.nav=%s\n",
+                                     (caps & KEYBOARD_CAP_NAV) ? "on" : "off");
+        } else if (argc == 3 &&
+                   (shell_text_equals_ignore_case(argv[2], "on") ||
+                    shell_text_equals_ignore_case(argv[2], "off"))) {
+            bool on = shell_text_equals_ignore_case(argv[2], "on");
+
+            keyboard_request_capability(KEYBOARD_CAP_NAV, on);
+            shell_transcript_appendf("keyboard.nav=%s\n", on ? "on" : "off");
+        } else {
+            shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard nav [on|off]" SH_RST "\n");
+        }
     } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "mode")) {
         if (argc == 2) {
             shell_transcript_appendf("keyboard.page=%s\n",
@@ -123,10 +142,10 @@ bool shell_command_keyboard(int argc, char **argv)
                 shell_transcript_appendf("keyboard.page=%s\n", keyboard_mode_name(mode));
             }
         } else {
-            shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status|mode [page]>" SH_RST "\n");
+            shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status|mode [page]|nav [on|off]>" SH_RST "\n");
         }
     } else {
-        shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status|mode [page]>" SH_RST "\n");
+        shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status|mode [page]|nav [on|off]>" SH_RST "\n");
     }
     return true;
 }

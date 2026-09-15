@@ -728,6 +728,26 @@ the raster core + 8x8 font are `components/gfx/`
   button MUST be added to one of these pages (or a new one), and the label MUST
   go through the pure `editor_osk_key_from_label()` table in `editor_view.c`
   (the single mapping shared by the handler and the unit test).
+- **Situational capability keys.** Some OSK keys are only meaningful in certain
+  contexts; they MUST be greyed out (disabled) where useless, never left looking
+  active. `components/keyboard/` owns a capability bitmask
+  (`keyboard_capability_t`, currently `KEYBOARD_CAP_NAV` for the symbols/edit
+  page `Nav` key). Availability is `context callback OR reference-counted
+  requests`: `keyboard_register_capabilities_callback()` supplies the
+  shell-owned context (main returns `editor_view_is_open() ? KEYBOARD_CAP_NAV :
+  0`), and any modal/batch app requests one via
+  `keyboard_request_capability(KEYBOARD_CAP_NAV, on|off)` — exposed to batch as
+  `keyboard nav on|off` (command_ui.c). `keyboard_apply_capabilities_locked()`
+  re-runs on every `keyboard_apply_mode()`/`keyboard_show()` (a mode change
+  reinstalls the page's ctrl map, so per-button ctrl must be re-applied) and
+  sets/clears `LV_BUTTONMATRIX_CTRL_DISABLED` on every capability-governed key.
+  LVGL ignores clicks on disabled buttons; the disabled look is the
+  `LV_PART_ITEMS|LV_STATE_DISABLED` style (muted text, `LV_OPA_30` bg) set in
+  keyboard_init/refresh_theme. Never hardwire a capability to one consumer:
+  keep `keyboard_button_required_capability()` as the pure, unit-tested
+  label→capability map. `ui state` reports `nav=on|off|na` for tests.
+- Keep context predicates cheap and LVGL-free: the capabilities callback runs
+  with the LVGL lock held (from `keyboard_apply_mode`) and must only read state.
 
 ### Editor Rules (components/editor)
 - The `edit` command lives in `components/editor/`: the byte-preserving document
