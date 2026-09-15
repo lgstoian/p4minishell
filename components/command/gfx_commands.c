@@ -106,6 +106,38 @@ gfx_surface_t *gfx_canvas_surface(void)
     return gfx_canvas_is_open() ? &s_gfx : NULL;
 }
 
+/** Tear down the canvas and sprites and unhide the transcript. Idempotent. */
+static void gfx_teardown(void)
+{
+    if (lvgl_port_lock(0)) {
+        lv_obj_t *spans = windows_get_transcript_spans();
+
+        if (s_gfx_canvas != NULL) {
+            lv_obj_del(s_gfx_canvas);
+            s_gfx_canvas = NULL;
+        }
+        if (spans != NULL) {
+            lv_obj_remove_flag(spans, LV_OBJ_FLAG_HIDDEN);
+        }
+        lvgl_port_unlock();
+    } else if (s_gfx_canvas != NULL) {
+        /* Lock failed: drop the buffer now; the canvas object leaks one
+         * LVGL node rather than risking a use-after-free. Loud, rare. */
+        s_gfx_canvas = NULL;
+        shell_transcript_appendf_ansi(SH_WARN "gfx: LVGL lock failed, display object leaked\n" SH_RST);
+    }
+    gfx_surface_free(&s_gfx);
+    gfx_sprites_free_all();
+}
+
+void gfx_force_close(void)
+{
+    if (s_gfx.px == NULL && s_gfx_canvas == NULL) {
+        return;
+    }
+    gfx_teardown();
+}
+
 bool shell_command_gfx(int argc, char **argv)
 {
     if (argc < 2) {
@@ -180,23 +212,7 @@ bool shell_command_gfx(int argc, char **argv)
             batch_set_errorlevel(1);
             return false;
         }
-        if (lvgl_port_lock(0)) {
-            lv_obj_t *spans = windows_get_transcript_spans();
-
-            if (s_gfx_canvas != NULL) {
-                lv_obj_del(s_gfx_canvas);
-                s_gfx_canvas = NULL;
-            }
-            if (spans != NULL) lv_obj_remove_flag(spans, LV_OBJ_FLAG_HIDDEN);
-            lvgl_port_unlock();
-        } else if (s_gfx_canvas != NULL) {
-            /* Lock failed: drop the buffer now; the canvas object leaks one
-             * LVGL node rather than risking a use-after-free. Loud, rare. */
-            s_gfx_canvas = NULL;
-            shell_transcript_appendf_ansi(SH_WARN "gfx: LVGL lock failed, display object leaked\n" SH_RST);
-        }
-        gfx_surface_free(&s_gfx);
-        gfx_sprites_free_all();
+        gfx_teardown();
         batch_set_errorlevel(0);
         return true;
     }

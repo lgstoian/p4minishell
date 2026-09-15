@@ -4,7 +4,7 @@
 
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
-**Version:** 0.38.3 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
+**Version:** 0.38.4 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI
 
 ## Overview
 
@@ -23,7 +23,7 @@ escape sequences natively:
 
 The current firmware is not a desktop DOS clone and is not yet an MS-DOS-compatible runtime. It provides the embedded foundation for that direction.
 
-**Current verified state (v0.38.3):** unit **300/0/2** on COM3
+**Current verified state (v0.38.4):** unit **300/0/2** on COM3
 (ESP-IDF v5.5.5) with the host regression green: companion deep, db, alarm, app smoke, package,
 gfx toolkit, plot, header, keyboard, editor, ui touch, completion, tx stress, boot regression, and
 new HW drivers for `timer`/`csv`/`export`/`bind`/`crypt`/`tcpterm`/`usb userial`. Added: `timer`/

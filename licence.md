@@ -1,4 +1,4 @@
-# Licence Notice (v0.38.3, suite 300/0/2)
+# Licence Notice (v0.38.4, suite 300/0/2)
 
 ## Project code
 Unless a file or directory states otherwise, the original project-specific code in this repository is:
@@ -36,5 +36,5 @@ Any distribution of this repository or derivative work must preserve:
 ## Scope clarification
 This file is a project-level notice only. It is not legal advice, and it does not rewrite the license terms of third-party code already included in the repository.
 
-## Version note (v0.38.3)
-P4MiniShell v0.38.3 is hardware-verified on COM3 (ESP-IDF v5.5.5); the full suite is green (unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, plot 25/25). The TUI is an 80x25 cell buffer in the live transcript region. See `command.md` (commands), `API.md` (module APIs), `documentation.md` (architecture), and `SDK.md` (integration) for current details.
+## Version note (v0.38.4)
+P4MiniShell v0.38.4 is hardware-verified on COM3 (ESP-IDF v5.5.5); the full suite is green (unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, plot 25/25). The TUI is an 80x25 cell buffer in the live transcript region. See `command.md` (commands), `API.md` (module APIs), `documentation.md` (architecture), and `SDK.md` (integration) for current details.

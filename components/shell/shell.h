@@ -637,6 +637,16 @@ bool shell_abort_requested(void);
 /** Clear a pending foreground break (worker claims a command). */
 void shell_clear_abort(void);
 
+/** Record that a foreground break actually stopped a command (sticky until the
+ *  worker tears down the surfaces the aborted script left open). */
+void shell_mark_foreground_break(void);
+
+/** True while an aborted command's surface teardown is still owed. */
+bool shell_foreground_break_pending(void);
+
+/** Clear the sticky foreground-break flag (after teardown). */
+void shell_clear_foreground_break(void);
+
 /** Track whether the command worker is executing (drives the Stop button). */
 void shell_set_command_busy(bool busy);
 

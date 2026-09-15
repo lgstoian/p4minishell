@@ -4265,6 +4265,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         /* Foreground break (Ctrl+C / Stop button): the same unwind, with a
          * `^C` echo. Consume-on-fire so one press prints exactly once. */
         if (shell_abort_requested()) {
+            shell_mark_foreground_break();
             shell_clear_abort();
             shell_transcript_append_text("^C\n");
             s_stop_mode = BATCH_STOP_ALL;
@@ -4704,6 +4705,7 @@ static void shell_for_substitute_and_run_bindings(const char *do_command,
      * through here, so one check covers classic, wildcard, and /f loops;
      * the per-iteration callers break on the stop mode they already test. */
     if (shell_abort_requested()) {
+        shell_mark_foreground_break();
         shell_clear_abort();
         shell_transcript_append_text("^C\n");
         s_stop_mode = BATCH_STOP_ALL;

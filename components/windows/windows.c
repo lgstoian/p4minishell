@@ -1164,6 +1164,14 @@ lv_obj_t *windows_get_stop_button(void)
     return s_windows.stop_button;
 }
 
+bool windows_transcript_is_hidden(void)
+{
+    if (s_windows.transcript_spans == NULL) {
+        return true;
+    }
+    return lv_obj_has_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+}
+
 /** Re-apply the Stop visibility rule (must run on the LVGL task). */
 static void windows_apply_stop_visibility(void)
 {

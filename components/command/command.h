@@ -220,6 +220,11 @@ uint16_t gfx_canvas_parse_color(const char *s, uint16_t fallback);
 bool gfx_canvas_is_open(void);
 gfx_surface_t *gfx_canvas_surface(void);
 
+/** Force-close the gfx canvas and restore the transcript if open. Used to tear
+ *  down a foreground surface left behind by an aborted batch (Stop / Ctrl+C),
+ *  so the shell prompt becomes visible again. Safe to call when none is open. */
+void gfx_force_close(void);
+
 /** Frame-coalescing flag for `draw hold on|off` (tui_commands.c). True
  * while per-verb flushes are suppressed; headless-safe unit-test hook. */
 bool draw_hold_active(void);

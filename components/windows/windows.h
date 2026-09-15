@@ -196,6 +196,14 @@ lv_obj_t *windows_get_tab_button(void);
 lv_obj_t *windows_get_stop_button(void);
 
 /**
+ * True while the transcript span group is hidden (gfx canvas / TUI / app mode
+ * cover it). Callers that would repaint the transcript from their own text
+ * buffer can skip the O(transcript) staging + span rebuild entirely: nothing is
+ * visible. Must run under the LVGL port lock.
+ */
+bool windows_transcript_is_hidden(void);
+
+/**
  * Request Stop-button visibility (shows while a command runs, in shell
  * input-row mode only). Must run on the LVGL task.
  */

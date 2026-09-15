@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.38.4] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
+
+### Fixed — batch/canvas apps slow down over time; Stop (foreground break) did nothing
+
+- **Batch apps that open a gfx canvas (BOUNCE.BAT) slowed down massively after a
+  few seconds.** Every batch **line** runs `shell_execute_command()`, which
+  brackets the command with `shell_transcript_defer_begin/end()`; the end always
+  flushed the label, and `windows_set_transcript_text_len()` copies the *whole*
+  ANSI transcript (up to 64 KB) into the staging buffer and rebuilds the spans.
+  While a canvas/TUI/app covers the transcript those spans are hidden, so the
+  work was pure waste — and it grew with the transcript (fps 26 → 15 over ~35 s,
+  then a plateau). The per-line copy also churned the tiny internal heap.
+  Fix: `shell_transcript_update_label()` skips the staging copy + span rebuild
+  while `windows_transcript_is_hidden()`, and the header poll repaints once when
+  it becomes visible again. Fps is now steady (~27) for the whole run.
+- **The input-row Stop button (and Ctrl+C) did nothing.** `delay` consumed the
+  foreground-break request (`shell_clear_abort()`) to stop only the delay, so the
+  batch line loop never saw it and the script ran on. Fix: `delay` now marks the
+  break and leaves the request set; the batch line loop unwinds with `^C`.
+  Aborting also left the gfx canvas / TUI open, hiding the prompt ("doesn't
+  return me to shell"): the worker now tears those surfaces down
+  (`gfx_force_close()`, `tui_deinit()`, `shell_app_mode_exit()`) after an
+  aborted command. Verified: simulated Stop aborts BLOOP mid-run, `gfx status`
+  reports no canvas, and the prompt returns.
+
 ## [0.38.3] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
 ### Fixed — BOUNCE.BAT jerky / stuck animation (gfx canvas present latency + blocking in-loop screenshot)

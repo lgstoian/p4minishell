@@ -166,6 +166,11 @@ static shell_defer_slot_t s_defer_slots[1 + P4_CONFIG_BG_TASKS];
 static void *s_bg_tasks[(P4_CONFIG_BG_TASKS > 0) ? P4_CONFIG_BG_TASKS : 1];
 static int64_t s_transcript_last_flush_us;
 
+/* Set when a repaint was skipped because the transcript was hidden (gfx canvas
+ * / TUI / app mode). The header poll repaints once when it becomes visible
+ * again, so the skipped output is not lost. */
+static bool s_transcript_repaint_pending;
+
 static shell_defer_slot_t *shell_defer_current(void)
 {
     void *me = (void *)xTaskGetCurrentTaskHandle();
@@ -533,6 +538,17 @@ static void shell_transcript_update_label(void)
         return;
     }
 
+    /* While the transcript is hidden (a gfx canvas, TUI, or full-screen app
+     * covers it), skip the O(transcript) staging copy + span rebuild: nothing
+     * is visible, and doing it per batch line is what made batch/canvas apps
+     * slow down as the transcript grew (each line copied the whole up-to-64 KB
+     * buffer). Remember to repaint once when it becomes visible again. */
+    if (windows_transcript_is_hidden()) {
+        s_transcript_repaint_pending = true;
+        return;
+    }
+    s_transcript_repaint_pending = false;
+
     /* The transcript is an LVGL label with recolor enabled. windows_set_
      * transcript_text() converts the ANSI buffer to recolor markup and defers
      * the actual widget update (set text, layout, scroll) to the LVGL task via
@@ -540,6 +556,20 @@ static void shell_transcript_update_label(void)
      * a non-LVGL task. Called under lvgl_port lock from
      * shell_transcript_append_internal. */
     windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len);
+}
+
+/**
+ * Repaint the transcript once it is visible again after a hidden-skip. Called
+ * from the header poll (LVGL task) so an app that hides the transcript and
+ * prints nothing on exit still restores it.
+ */
+static void shell_transcript_repaint_if_pending(void)
+{
+    if (!s_transcript_repaint_pending || windows_transcript_is_hidden()) {
+        return;
+    }
+    s_transcript_defer_dirty = true;
+    shell_transcript_flush_now();
 }
 
 void shell_transcript_defer_begin(void)
@@ -2569,6 +2599,7 @@ bool shell_is_batch_active(void)
  * bools like the background kill flags. */
 static volatile bool s_foreground_abort;
 static volatile bool s_command_busy;
+static volatile bool s_foreground_break_seen;
 
 void shell_request_abort(void)
 {
@@ -2583,6 +2614,21 @@ bool shell_abort_requested(void)
 void shell_clear_abort(void)
 {
     s_foreground_abort = false;
+}
+
+void shell_mark_foreground_break(void)
+{
+    s_foreground_break_seen = true;
+}
+
+bool shell_foreground_break_pending(void)
+{
+    return s_foreground_break_seen;
+}
+
+void shell_clear_foreground_break(void)
+{
+    s_foreground_break_seen = false;
 }
 
 void shell_set_command_busy(bool busy)
@@ -5115,6 +5161,10 @@ void shell_header_status_refresh(void)
     if (s_command_ops.wifi_get_rssi != NULL) {
         (void)s_command_ops.wifi_get_rssi(&wifi_rssi);
     }
+
+    /* Restore the transcript if a hidden-skip (gfx canvas / TUI / app mode)
+     * left it stale and it is visible again. */
+    shell_transcript_repaint_if_pending();
 
     /* Idle center content: the local clock ("--:--" while unsynchronized). */
     (void)time_format_hm(clock_text, sizeof(clock_text));

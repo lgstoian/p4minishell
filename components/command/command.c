@@ -1638,8 +1638,12 @@ static void shell_command_delay(int argc, char **argv)
                 return;
             }
             if (shell_abort_requested()) {
-                shell_clear_abort();
-                shell_transcript_append_text("delay: stopped\n");
+                /* Foreground break: do NOT consume it here. Leave the request
+                 * set so the batch line loop unwinds the whole script with a
+                 * `^C`; consuming it (the old behavior) stopped only the delay
+                 * and let the rest of the script run, so the Stop button looked
+                 * dead. The worker tears the surfaces down after the command. */
+                shell_mark_foreground_break();
                 batch_set_errorlevel(1);
                 return;
             }
@@ -3555,6 +3559,20 @@ void shell_execute_command(char *command)
  *  sequentially. Each queued item is a heap-allocated, command-sized request
  *  owned by this task; the queue itself stores only pointers so a 4096-byte
  *  command does not reserve 16 KB of internal RAM inside the queue. */
+/** Tear down any foreground surface an aborted command left open (gfx canvas,
+ *  TUI, full-screen app mode) so the shell prompt becomes visible again after a
+ *  Stop / Ctrl+C. Idempotent; safe when nothing is open. */
+static void command_cleanup_foreground_surfaces(void)
+{
+    gfx_force_close();
+    if (tui_is_active()) {
+        tui_deinit();
+    }
+    if (shell_app_mode_active()) {
+        shell_app_mode_exit();
+    }
+}
+
 static void command_worker_task(void *arg)
 {
     (void)arg;
@@ -3572,6 +3590,12 @@ static void command_worker_task(void *arg)
             shell_clear_abort();
             shell_execute_command(request->command);
             shell_set_command_busy(false);
+            /* A foreground break that stopped the command may have left a gfx
+             * canvas / TUI / app mode open; close it so the prompt returns. */
+            if (shell_foreground_break_pending()) {
+                command_cleanup_foreground_surfaces();
+                shell_clear_foreground_break();
+            }
 #if P4_CONFIG_SD_OP_BOOST
             command_task_priority_backstop(base_priority);
 #endif
