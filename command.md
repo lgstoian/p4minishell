@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v0.38.4** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
+> **Applies to firmware v0.38.5** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
 
 ## ANSI/VT Color Support
 

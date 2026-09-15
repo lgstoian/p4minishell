@@ -422,9 +422,21 @@ void led_notify(led_event_t event)
         return;
     }
     led_lock();
-    if (s_auto_status && led_event_is_status(event)) {
+    if (led_event_is_status(event)) {
+        /* Keep the persistent status colour current even while the auto layer
+         * is off, so `rgb auto on` right after a connect shows the live state.
+         * Without this, status events arriving in manual mode were shown only
+         * as a transient and left the status colour stale (e.g. amber while
+         * connected). */
         led_event_frame(event, &s_status_frame);
-        s_notification.active = false;
+        if (s_auto_status) {
+            s_notification.active = false;
+        } else {
+            led_event_frame(event, &s_notification.frame);
+            s_notification.started_us = esp_timer_get_time();
+            s_notification.duration_ms = LED_NOTIFY_MS;
+            s_notification.active = true;
+        }
     } else {
         led_event_frame(event, &s_notification.frame);
         s_notification.started_us = esp_timer_get_time();

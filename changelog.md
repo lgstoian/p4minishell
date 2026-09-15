@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.38.5] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
+
+### Fixed — status LED showed a stale colour when `rgb auto on` was enabled
+
+- **Wi-Fi status events arriving while the auto-status layer was off did not
+  update the persistent status colour.** `led_notify()` only wrote
+  `s_status_frame` when `s_auto_status` was true; in manual mode a status event
+  (e.g. `WIFI_CONNECTED`) was shown as a transient and the status frame stayed
+  at its previous value (amber `#FF9900` from boot). Enabling auto afterwards
+  (`rgb auto on`) then showed the stale colour — amber while connected. Status
+  events now always refresh the status frame (and still flash transiently while
+  auto is off), so `rgb auto on` reflects the live Wi-Fi state.
+- Verified with the new `tools/led_watch.py` webcam tester (locates the LED,
+  calibrates an exposure-invariant colour table, then exercises solids, effects,
+  auto-status, the httpd transient pulse and the boot flash): 18/18 checks pass,
+  including "auto on while connected -> green".
+
 ## [0.38.4] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
 ### Fixed — batch/canvas apps slow down over time; Stop (foreground break) did nothing

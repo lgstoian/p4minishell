@@ -4,14 +4,14 @@
 
 P4MiniShell is a modular embedded shell application for ESP32-P4 with an ESP32-C6 co-processor. The codebase is organized into a shell orchestration layer and dedicated component modules.
 
-**Current verified state (v0.38.4):** unit **300/0/2** on COM3, plus
+**Current verified state (v0.38.5):** unit **300/0/2** on COM3, plus
 the host regression and `boot_regression` 10/10. Components added since the original layout: `gfx`,
 `filetype`, `markdown`, `db`, `alarm`, `audio`, `boot`, `font`; command bodies live in the split
 `components/command/*_commands.c` files. The palmtop-parity pass added `storage_csv.c`,
 `clock_timer.c`, `tcpterm.c`, `usb/userial.c`, and the `csv`/`export`/`crypt`/`userial` command
 files (see `changelog.md` `[0.38.2]`).
 
-### Module Layout (v0.38.4, 80x25 `utf8[4]` `tui_cell_t` `components/tui/tui.h:35`, suite 300/0/2)
+### Module Layout (v0.38.5, 80x25 `utf8[4]` `tui_cell_t` `components/tui/tui.h:35`, suite 300/0/2)
 
 ```
 main/main.c                     App entry point, LVGL event callbacks, UI construction, host bridges

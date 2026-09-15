@@ -28,6 +28,12 @@ resets on the transition — every driver drops DTR/RTS on open via
   `--calibrate`, `--preview`, `--roi`, `--index`, `--device`, `--reset`,
   `--stress` (drives `display stress on/off`). Runs on system Python (cv2).
   See `bugs.md` O9 and `changelog.md`.
+- `led_watch.py` — webcam verifier for the WS2812 status LED. Locates the LED by
+  cycling colours, calibrates an exposure-invariant (channel-ratio) colour table,
+  then checks the solids, the effects (rainbow/breath/pulse/blink), auto-status,
+  the `httpd start` transient blue pulse and the boot flash. Usage:
+  `python tools/led_watch.py [COMx] [--camera N]`. System Python (cv2). See
+  `bugs.md` O13.
 - `harness/` — one-shot host drivers, all on `shell_session` port handling:
   - Wi-Fi: `wifi_connect.py`, `wifi_connect2.py`, `wifi_connect3.py`,
     `wifi_test.py`, `test_wifi.py`, `test_wifi_cycles.py`, `wifi_dump.py`,
