@@ -86,7 +86,6 @@ static bool s_boot_script_applied;
     ";   FONT_TERMINAL_SIZE=<px> / FONT_UI_SIZE=<px>  TTF role sizes\n" \
     ";   CURSOR=BLOCK|BAR          Input cursor style\n" \
     ";   CURSOR_BLINK=<ms|OFF>     Input cursor blink period\n" \
-    ";   KEYBOARD_MODE=<page>      OSK page (text_lower|...|nav2)\n" \
     ";   TIMEZONE=<posix tz>       Override network timezone auto-detect\n" \
 
 #define BOOT_CFG_NETWORK \
@@ -623,18 +622,6 @@ static bool boot_handle_cursor_blink(const char *value)
     return true;
 }
 
-static bool boot_handle_keyboard_mode(const char *value)
-{
-    keyboard_mode_t mode;
-
-    if (!keyboard_mode_parse(value, &mode)) {
-        boot_warn_unknown("KEYBOARD_MODE");
-        return false;
-    }
-    keyboard_set_mode(mode);
-    return true;
-}
-
 static bool boot_handle_timezone(const char *value)
 {
     if (value == NULL || *value == '\0') {
@@ -868,8 +855,6 @@ static void boot_script_apply(void)
                     (void)boot_handle_cursor_blink(value);
                 } else if (boot_starts_with_ci(keyword, "CURSOR")) {
                     (void)boot_handle_cursor(value);
-                } else if (boot_starts_with_ci(keyword, "KEYBOARD_MODE")) {
-                    (void)boot_handle_keyboard_mode(value);
                 } else if (boot_starts_with_ci(keyword, "TIMEZONE")) {
                     (void)boot_handle_timezone(value);
                 } else if (boot_starts_with_ci(keyword, "FILES") ||

@@ -538,6 +538,30 @@ static bool calc_fin_rate(double nper, double pmt, double pv, double fv,
     if (nper <= 0.0) {
         return false;
     }
+
+    /* pmt == 0 reduces the annuity equation to pv*(1+r)^n + fv = 0, which has
+     * a closed-form root only when pv and fv are both non-zero and opposite in
+     * sign. Newton would otherwise walk toward r = -1 and accept a spurious
+     * root (the residual becomes denormal-small before the domain edge trips),
+     * e.g. RATE(12,0,100) must be a domain error. */
+    if (fabs(pmt) < 1e-12) {
+        double ratio;
+
+        if (pv == 0.0 || fv == 0.0) {
+            return false;
+        }
+        ratio = -fv / pv;
+        if (!(ratio > 0.0)) {
+            return false;
+        }
+        r = pow(ratio, 1.0 / nper) - 1.0;
+        if (!isfinite(r) || r <= -0.99999999) {
+            return false;
+        }
+        *out = r;
+        return true;
+    }
+
     for (int i = 0; i < 100; i++) {
         if (r <= -0.99999999) {
             return false;

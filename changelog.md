@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `calc` RATE zero-payment error; `csv` aggregate/range near-miss substitution
+
+- **`RATE(12,0,100)` returned a bogus rate instead of a domain error.**
+  `calc_fin_rate()` used Newton's method unconditionally; with `pmt == 0` the
+  residual `pv*(1+r)^n + fv` becomes denormal-small as `r -> -1`, so the
+  convergence test passed before the domain guard and accepted a spurious root.
+  It now handles `pmt == 0` in closed form (`(1+r)^n = -fv/pv`, requiring
+  `pv*fv < 0`) and errors otherwise; the `pmt != 0` Newton path and the valid
+  TVM round trip are unchanged. Fixes `test_calc_financial_errors`.
+- **`csv_substitute_refs` partially substituted aggregate/range near-misses.**
+  `SUM(R1C1)` became `SUM(10)` and `TOTAL(R1C1:R1C2)` became `TOTAL(10:20)`.
+  An aggregate name + `(` that is not a valid `R1C1:R2C2` range now passes
+  through verbatim (balanced `FN(...)`), and a corner that begins a range
+  (`:` + corner) passes through verbatim, so `calc` rejects what it should.
+  Scalar refs, supported range aggregates, and `SUMMARY`/`plain` are unchanged.
+  Fixes `test_csv_substitute_ranges`.
+- On-board unit suite is fully green after both fixes.
+
+### Added — boot splash + repository icon
+
+- `tools/make_icon.py` generates the committed `icon/icon-512.png` (referenced
+  by `readme.md`) and the firmware splash asset `main/assets/icon_splash.c/.h`
+  (256x256 RGB565 `lv_image_dsc_t`) from the author's git-ignored
+  `icon/icon.png` master.
+- The firmware shows the icon as an opaque boot splash overlay on
+  `lv_screen_active()` (visible to the streaming `screenshot`), auto-dismissed
+  after `P4_CONFIG_SPLASH_MS` (1500 ms) or dismissed early by a tap, and
+  re-created across UI rebuilds. `readme.md` now carries the icon.
+
 ### Fixed — serial console CRLF artifact broke `set /p`, `pause`, `choice`, hidden input
 
 - **Symptom:** `set /p`, `set /p NAME=<prompt> /P`, `shell_read_line_hidden`,
@@ -67,10 +96,12 @@ behaviour when unconfigured.
   written there by the owning commands via a new shared writer
   `config_persist_set()` (`config_cmd.c`), and read back by the first-mount
   restore (legacy `SHELL.INI` is read once as a fallback). New directives:
-  `CURSOR`, `CURSOR_BLINK`, `KEYBOARD_MODE`, `TIMEZONE`, `OWNER_*`,
-  `SECURITY_*`. `config /b` (and `config <KEY> /b`) print machine-readable
+  `CURSOR`, `CURSOR_BLINK`, `TIMEZONE`, `OWNER_*`, `SECURITY_*`.
+  `config /b` (and `config <KEY> /b`) print machine-readable
   values for `for /f`. `config factory` now also restores the theme/font/
-  header/cursor/keyboard defaults live and deletes the legacy `SHELL.INI`.
+  header/cursor defaults live and deletes the legacy `SHELL.INI`. (The OSK page
+  is intentionally not persisted: the touch keyboard always opens in the
+  letters page on boot and whenever a ready-made modal opens.)
 - **`form`** (`components/modal/modal_surf.c` + `tui_commands.c`): a
   multi-field modal surface for batch apps (text/password/check/select/range
   fields, `a|b|c` options, `min-max` ranges, `/t:secs` auto-cancel). Field

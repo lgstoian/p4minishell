@@ -71,6 +71,17 @@
 /** Boot banner displayed in the transcript on startup. */
 #define P4_CONFIG_BOOT_MESSAGE               P4_CONFIG_PRODUCT_NAME " " P4_CONFIG_VERSION_STRING " ready | " P4_CONFIG_BOARD_REQUESTED " | type help"
 
+/* ========================================================================
+ * BOOT SPLASH (generated icon overlay)
+ * ======================================================================== */
+
+/** Show the generated boot-splash icon over the shell on the first UI build. */
+#define P4_CONFIG_SPLASH_ENABLE              1
+
+/** How long the boot splash stays up before auto-dismissing (ms). A tap on it
+ *  dismisses it earlier. */
+#define P4_CONFIG_SPLASH_MS                  1500
+
 /** Shell prompt string shown on the input line and serial console.
  *  The LVGL input line uses a plain-text version; the UART console
  *  renders with ANSI color codes for PowerShell-style coloring.

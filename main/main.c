@@ -55,6 +55,7 @@
 #include "usb.h"
 #include "windows.h"
 #include "ui_test.h"
+#include "icon_splash.h"
 
 /* Backward-compatibility aliases */
 #define SHELL_TAG                       P4_CONFIG_SHELL_TAG
@@ -643,6 +644,64 @@ static uint32_t shell_keyboard_caps_cb(void)
 }
 
 /* ========================================================================
+ * BOOT SPLASH
+ * ======================================================================== */
+
+static lv_obj_t *s_splash_overlay;
+static bool s_splash_shown;
+
+static void shell_splash_dismiss(void)
+{
+    if (s_splash_overlay != NULL) {
+        lv_obj_del(s_splash_overlay);
+        s_splash_overlay = NULL;
+    }
+}
+
+static void shell_splash_timer_cb(lv_timer_t *timer)
+{
+    shell_splash_dismiss();
+    lv_timer_del(timer);
+}
+
+static void shell_splash_click_cb(lv_event_t *event)
+{
+    (void)event;
+    shell_splash_dismiss();
+}
+
+/** Show the generated icon over the shell for P4_CONFIG_SPLASH_MS. A tap
+ * dismisses it early. Runs on the LVGL task during the first UI build only.
+ * The overlay lives on lv_layer_top() so a later windows_deinit() (rotation or
+ * a boot-directive rebuild) cannot clean it away. */
+static void shell_splash_show(void)
+{
+    lv_obj_t *overlay = lv_obj_create(lv_layer_top());
+    lv_obj_t *img;
+
+    if (overlay == NULL) {
+        return;
+    }
+    s_splash_overlay = overlay;
+
+    lv_obj_remove_style_all(overlay);
+    lv_obj_set_size(overlay, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(overlay, windows_get_color(WINDOWS_COLOR_BG_SCREEN), 0);
+    lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(overlay, shell_splash_click_cb, LV_EVENT_CLICKED, NULL);
+
+    img = lv_image_create(overlay);
+    if (img != NULL) {
+        lv_image_set_src(img, &p4_icon_splash);
+        lv_obj_center(img);
+    }
+
+    lv_timer_create(shell_splash_timer_cb, P4_CONFIG_SPLASH_MS, NULL);
+}
+
+/* ========================================================================
  * UI CONSTRUCTION
  * ======================================================================== */
 
@@ -734,6 +793,13 @@ static void shell_build_ui(void)
     shell_transcript_appendf_ansi("@G%s@R\n", SHELL_BOOT_MESSAGE);
     shell_history_transcript_scroll_to_end();
     shell_input_line_reset();
+
+    /* One-shot boot splash: overlay the icon on the first UI build only, so a
+     * later rebuild never re-shows it. */
+    if (P4_CONFIG_SPLASH_ENABLE && !s_splash_shown) {
+        s_splash_shown = true;
+        shell_splash_show();
+    }
 }
 
 /* ========================================================================

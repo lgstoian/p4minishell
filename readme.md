@@ -1,5 +1,7 @@
 # P4MiniShell
 
+<img src="icon/icon-512.png" alt="P4MiniShell icon" width="256">
+
 Embedded DOS-style command shell for the ESP32-P4 host with ESP32-C6 co-processor over ESP-Hosted SDIO.
 
 **Version:** 0.38.1 | **Target:** ESP32-P4 + ESP32-C6 | **Display:** JD9165 1024x600 MIPI-DSI

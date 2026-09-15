@@ -75,7 +75,14 @@ static void surf_timeout_cb(TimerHandle_t timer)
 
 static lv_obj_t *surf_create_container(lv_obj_t *parent)
 {
-    lv_obj_t *c = lv_obj_create(parent);
+    lv_obj_t *c;
+
+    /* Every ready-made modal opens with the on-screen keyboard back in the
+     * letters page, regardless of what page the shell left it on. (The editor
+     * is deliberately not routed through this helper; it owns the Nav page.) */
+    keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
+
+    c = lv_obj_create(parent);
     lv_obj_set_size(c, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_pad_all(c, 8, 0);
     lv_obj_set_style_bg_color(c, lv_color_hex(theme_current()->bg_transcript), 0);

@@ -1,6 +1,6 @@
 idf_component_register(
-    SRCS "main.c" "p4minishell.c" "native_apps.c"
-    INCLUDE_DIRS "."
+    SRCS "main.c" "p4minishell.c" "native_apps.c" "assets/icon_splash.c"
+    INCLUDE_DIRS "." "assets"
     REQUIRES
         espressif__esp32_p4_function_ev_board
         espressif__esp_lcd_touch

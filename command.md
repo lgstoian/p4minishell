@@ -346,7 +346,10 @@ is hidden and no USB keyboard is attached — summons the on-screen keyboard.
 `keyboard mode <page>` switches it. Pages: `text_lower` (alias `letters`),
 `text_upper` (`caps`), `number` (`num`), `symbols` (`special`), `nav`, and
 `nav2` (`edit`). The two `nav` pages are the editor control pages; the editor
-selects `nav` itself when it opens (see [editor.md](editor.md)).
+selects `nav` itself when it opens (see [editor.md](editor.md)). The page is
+**not persisted**: the touch keyboard always starts on the letters page at boot,
+and every ready-made modal (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`/
+`image`/`form`) resets it to letters when it opens.
 
 `keyboard nav [on|off]` controls the symbols/edit page **`Nav` key
 availability**. The `Nav` key is only useful where the editor navigation page

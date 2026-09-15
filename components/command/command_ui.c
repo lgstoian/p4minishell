@@ -138,7 +138,6 @@ bool shell_command_keyboard(int argc, char **argv)
                                               argv[2]);
             } else {
                 keyboard_set_mode(mode);
-                config_persist_set("KEYBOARD_MODE", keyboard_mode_name(mode));
                 shell_transcript_appendf("keyboard.page=%s\n", keyboard_mode_name(mode));
             }
         } else {

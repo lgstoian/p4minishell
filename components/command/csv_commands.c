@@ -906,6 +906,33 @@ void csv_substitute_refs(const char *expr, char **cells, int rows, int cols,
                 p = agg_end;
                 continue;
             }
+
+            /* An aggregate name followed by '(' that is not a valid R:C range
+             * is a near-miss (SUM(R1C1), SUM(1), ...): copy FN(...) verbatim
+             * so calc rejects it rather than us partially substituting the
+             * refs inside it. */
+            {
+                size_t skip = 0;
+
+                if (csv_agg_name(p, &skip) != CSV_AGG_NONE) {
+                    const char *q = p + skip;   /* just past '(' */
+                    int depth = 1;
+
+                    while (*q != '\0' && depth > 0) {
+                        if (*q == '(') {
+                            depth++;
+                        } else if (*q == ')') {
+                            depth--;
+                        }
+                        q++;
+                    }
+                    while (p < q && used + 1 < out_size) {
+                        out[used++] = *p++;
+                    }
+                    out[used] = '\0';
+                    continue;
+                }
+            }
         }
         if ((*p == 'R' || *p == 'r') && isdigit((unsigned char)*(p + 1))) {
             char *end = NULL;
@@ -913,6 +940,30 @@ void csv_substitute_refs(const char *expr, char **cells, int rows, int cols,
             if ((*end == 'C' || *end == 'c') && isdigit((unsigned char)*(end + 1))) {
                 char *end2 = NULL;
                 long col = strtol(end + 1, &end2, 10);
+
+                /* A corner that begins a range (":" + corner) passes through
+                 * verbatim; substituting the endpoints alone would corrupt the
+                 * user's range into a malformed value for calc to reject. */
+                {
+                    const char *q = end2;
+
+                    while (*q == ' ' || *q == '\t') {
+                        q++;
+                    }
+                    if (*q == ':') {
+                        const char *r2 = q + 1;
+                        long rr, cc;
+
+                        if (csv_parse_corner(&r2, &rr, &cc)) {
+                            while (p < r2 && used + 1 < out_size) {
+                                out[used++] = *p++;
+                            }
+                            out[used] = '\0';
+                            continue;
+                        }
+                    }
+                }
+
                 char number[48];
                 double value = 0.0;
                 if (row >= 1 && row <= rows && col >= 1 && col <= cols &&
