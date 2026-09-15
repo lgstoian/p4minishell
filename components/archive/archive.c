@@ -83,11 +83,28 @@ uint32_t archive_crc32_update(uint32_t crc, const uint8_t *data, size_t len)
 
 void archive_octal(uint64_t value, char *out, size_t out_size)
 {
+    char tmp[24];   /* 64-bit octal is at most 22 digits + NUL */
+    size_t field;
+    size_t len;
+    size_t src = 0;
+
     if (out == NULL || out_size == 0) {
         return;
     }
-    snprintf(out, out_size, "%0*llo", (int)out_size - 1, (unsigned long long)value);
-    out[out_size - 1] = '\0';
+    snprintf(tmp, sizeof(tmp), "%llo", (unsigned long long)value);
+    len = strlen(tmp);
+    field = out_size - 1;
+
+    if (len > field) {
+        /* Value wider than the field: keep the least-significant digits. */
+        src = len - field;
+        len = field;
+    } else {
+        /* Left-pad with zeros to fill the fixed-width USTAR field. */
+        memset(out, '0', field - len);
+    }
+    memcpy(out + (field - len), tmp + src, len);
+    out[field] = '\0';
 }
 
 bool archive_unoctal(const char *in, size_t in_size, uint64_t *out)

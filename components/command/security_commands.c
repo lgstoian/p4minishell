@@ -18,6 +18,7 @@
 #include "batch.h"
 #include "command.h"
 #include "config_cmd.h"
+#include "storage.h"
 #include "modal_surf.h"
 #include "shell.h"
 #include "ansi_palette.h"
@@ -119,11 +120,25 @@ static void sec_touch_activity(void)
 
 void security_init(void)
 {
+    /* Defaults only. The saved CONFIG.SYS values are loaded by
+     * security_load_saved() once the boot script has a mounted card, so this
+     * init path never mounts the SD ahead of the shell's first-mount hook
+     * (which would skip the welcome/default-file/history/CJK boot work). */
+    sec_touch_activity();
+}
+
+void security_load_saved(void)
+{
+    static bool s_settings_loaded;
     char buf[P4_CONFIG_SECURITY_HASH_BYTES * 2 + 1];
     char salt_hex[P4_CONFIG_SECURITY_SALT_BYTES * 2 + 1];
     char hash_hex[P4_CONFIG_SECURITY_HASH_BYTES * 2 + 1];
     bool have_salt;
     bool have_hash;
+
+    if (s_settings_loaded) {
+        return;
+    }
 
     config_get_saved("OWNER_NAME", s_owner_name, sizeof(s_owner_name));
     config_get_saved("OWNER_COMPANY", s_owner_company, sizeof(s_owner_company));
@@ -151,6 +166,9 @@ void security_init(void)
                 sec_hex_decode(hash_hex, s_hash, sizeof(s_hash));
     s_has_pass = have_salt && have_hash;
 
+    /* Only latch as loaded once the card was readable, so a mount that was not
+     * ready retries on a later call (mirrors font_restore_saved). */
+    s_settings_loaded = storage_sd_is_mounted();
     sec_touch_activity();
 }
 

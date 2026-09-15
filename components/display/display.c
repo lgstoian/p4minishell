@@ -18,6 +18,7 @@
 #include "board_config.h"
 #include "p4minishell_config.h"
 #include "esp_lcd_touch.h"
+#include "hal/axi_icm_ll.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "driver/gpio.h"
@@ -611,6 +612,35 @@ static void display_i2c_bus_recover(void)
     gpio_reset_pin(scl);
 }
 
+/**
+ * Give the MIPI-DSI framebuffer fetch priority on the PSRAM AXI interconnect.
+ *
+ * The DSI bridge reads the current framebuffer from PSRAM through a DW-GDMA
+ * channel. IDF 5.5.5 never programs the AXI-ICM QoS arbiter, so every master
+ * (CPU, L2 cache, DMA2D, AXI-GDMA, DW-GDMA, hosted-Wi-Fi SDIO) defaults to
+ * priority 0. Under PSRAM load the DSI fetch then loses arbitration and the
+ * bridge FIFO underruns; the panel briefly flashes its default blue field
+ * (the IDF DSI ISR calls this out: "when an underrun happens, the LCD display
+ * may already becomes blue"). Raising the DW-GDMA read priority and its token
+ * bucket keeps the display fed during Wi-Fi/boot PSRAM bursts.
+ */
+static void display_apply_axi_icm_qos(void)
+{
+#if P4_CONFIG_DISPLAY_ICM_QOS_ENABLE
+    axi_icm_ll_set_qos_burstiness(AXI_ICM_MASTER_DW_GDMA_M0,
+                                  P4_CONFIG_DISPLAY_ICM_DW_GDMA_BURST,
+                                  AXI_ICM_ACCESS_READ);
+    axi_icm_ll_set_qos_burstiness(AXI_ICM_MASTER_DW_GDMA_M1,
+                                  P4_CONFIG_DISPLAY_ICM_DW_GDMA_BURST,
+                                  AXI_ICM_ACCESS_READ);
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 0, P4_CONFIG_DISPLAY_ICM_DW_GDMA_READ_PRIO);
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 0, P4_CONFIG_DISPLAY_ICM_DW_GDMA_READ_PRIO);
+    ESP_LOGI(DISPLAY_TAG, "AXI-ICM: DW-GDMA read priority=%d burst=%d (DSI fetch)",
+             P4_CONFIG_DISPLAY_ICM_DW_GDMA_READ_PRIO,
+             P4_CONFIG_DISPLAY_ICM_DW_GDMA_BURST);
+#endif
+}
+
 esp_err_t display_init(void)
 {
     lv_display_t *display;
@@ -654,6 +684,10 @@ esp_err_t display_init(void)
         ESP_LOGE(DISPLAY_TAG, "Display initialization failed");
         return ESP_FAIL;
     }
+
+    /* Prioritize the DSI framebuffer fetch against PSRAM contention (the
+     * "BSOD" underrun): the DSI DMA is live now, so the DW-GDMA master is up. */
+    display_apply_axi_icm_qos();
 
     portENTER_CRITICAL(&s_display.lock);
     s_display.lvgl_display = display;

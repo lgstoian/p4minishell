@@ -263,6 +263,11 @@ void shell_command_header(int argc, char **argv);
 /** Best-effort boot restore of the saved header mode (CONFIG.SYS). */
 void header_restore_saved(void);
 
+/** Load persisted security/owner state from CONFIG.SYS (security_commands.c).
+ *  Deferred to the boot script so security_init() never mounts the SD card
+ *  during init (which would beat the shell's first-mount hook). Idempotent. */
+void security_load_saved(void);
+
 /** Engage the boot passcode lock once the boot script has finished
  * (security_commands.c). Called by boot_script_apply(). */
 void security_engage_boot_lock(void);

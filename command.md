@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v0.38.1** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 262/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
+> **Applies to firmware v0.38.2** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
 
 ## ANSI/VT Color Support
 
@@ -328,6 +328,12 @@ Show current display refresh rate configuration. Uses `display_get_refresh_confi
 ### display power <on|sleep|off>
 Control display power state. Uses `display_set_power_state()`. Sleep/off turns off
 backlight; on restores it.
+
+### display stress <on|off>
+Force continuous full-screen LVGL redraws (invalidate `lv_screen_active()` every
+`P4_CONFIG_DISPLAY_STRESS_PERIOD_MS`) to reproduce DSI-underrun display glitches.
+Used with `tools/display_glitch_watch.py --stress` to verify the "BSOD" fix
+(see changelog). Off by default; not persisted.
 
 ### windows info
 Show window manager layout information: display dimensions, region rectangles for

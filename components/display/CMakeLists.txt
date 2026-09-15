@@ -6,4 +6,6 @@ idf_component_register(
         espressif__esp_lcd_touch
         espressif__esp_lvgl_port
         lvgl__lvgl
+        hal
+        soc
 )

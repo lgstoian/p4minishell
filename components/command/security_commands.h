@@ -32,8 +32,17 @@ enum {
     SECURITY_CONCEAL_HIDE = 2,  /**< Secret records skipped entirely. */
 };
 
-/** Load persisted security/owner state from CONFIG.SYS. Idempotent. */
+/** Initialise security state to defaults. Does NOT touch the SD card: the
+ *  saved CONFIG.SYS values load later in security_load_saved(), once the boot
+ *  script has a mounted card (so init never mounts the SD ahead of the shell's
+ *  first-mount hook). Idempotent. */
 void security_init(void);
+
+/** Load persisted security/owner state from CONFIG.SYS. Idempotent; safe to
+ *  call once the SD card is mounted (boot_script_apply calls it before
+ *  security_engage_boot_lock). Retries on a later call if the card was not
+ *  readable yet. */
+void security_load_saved(void);
 
 /** True when the device is locked (boot lock or auto-lock). */
 bool security_is_locked(void);

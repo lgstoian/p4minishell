@@ -16,6 +16,7 @@
 #include "editor_view.h"
 #include "config_cmd.h"
 #include "p4minishell_config.h"
+#include "esp_lvgl_port.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,8 +25,57 @@
  * DISPLAY COMMANDS
  * ======================================================================== */
 
+/* `display stress` - force continuous full-screen LVGL redraws to reproduce
+ * the MIPI-DSI underrun ("BSOD") quickly. A single lv_timer on the LVGL task
+ * invalidates the active screen every P4_CONFIG_DISPLAY_STRESS_PERIOD_MS, so
+ * the draw buffers, DMA2D copy, and DSI fetch all run at maximum PSRAM load. */
+static lv_timer_t *s_display_stress_timer;
+
+static void display_stress_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    lv_obj_invalidate(lv_screen_active());
+}
+
+static bool display_stress_set(bool on)
+{
+    bool ok = false;
+
+    if (!lvgl_port_lock(1000)) {
+        return false;
+    }
+    if (on && s_display_stress_timer == NULL) {
+        s_display_stress_timer = lv_timer_create(display_stress_cb,
+                                                 P4_CONFIG_DISPLAY_STRESS_PERIOD_MS, NULL);
+        ok = s_display_stress_timer != NULL;
+    } else if (!on && s_display_stress_timer != NULL) {
+        lv_timer_del(s_display_stress_timer);
+        s_display_stress_timer = NULL;
+        ok = true;
+    } else {
+        ok = true;   /* already in the requested state */
+    }
+    lvgl_port_unlock();
+    return ok;
+}
+
 bool shell_command_display(int argc, char **argv)
 {
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "stress")) {
+        bool on = (argc >= 3) && shell_text_equals_ignore_case(argv[2], "on");
+        bool off = (argc >= 3) && shell_text_equals_ignore_case(argv[2], "off");
+
+        if (!on && !off) {
+            shell_transcript_appendf_ansi(SH_WARN "Usage: display stress <on|off>" SH_RST "\n");
+            return true;
+        }
+        if (!display_stress_set(on)) {
+            shell_transcript_appendf_ansi(SH_ERR "display: could not change stress mode" SH_RST "\n");
+            return true;
+        }
+        shell_transcript_appendf_ansi(SH_OK "display stress %s" SH_RST "\n", on ? "on" : "off");
+        return true;
+    }
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "info")) {
         display_print_info(shell_transcript_appendf);
         return true;
@@ -72,7 +122,7 @@ bool shell_command_display(int argc, char **argv)
         }
         return true;
     }
-    shell_transcript_appendf_ansi(SH_WARN "Usage: display <info|resolution|refresh|power>" SH_RST "\n");
+    shell_transcript_appendf_ansi(SH_WARN "Usage: display <info|resolution|refresh|power|stress>" SH_RST "\n");
     return true;
 }
 

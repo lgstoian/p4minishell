@@ -7,7 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.38.2] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
+
+### Fixed — "BSOD" full-screen blue flash (MIPI-DSI underrun); boot first-mount work + SD/C6 bring-up order
+
+- **The recurring full-screen blue flash is a MIPI-DSI bridge underrun, not a
+  panel or camera artifact.** The header status bar sampled telemetry on the
+  LVGL render task every `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS` (5 s);
+  `uxTaskGetSystemState()` (the CPU snapshot) suspends scheduling long enough to
+  delay the DSI DMA refill ISR, so the bridge reads a starved framebuffer and
+  paints it blue (IDF's own ISR notes "the LCD display may already becomes
+  blue"; IDF 5.5.5 never programs the P4 AXI-ICM QoS).
+  - `shell_sample_cpu_percent()` now computes load from the idle task's
+    run-time counter (`ulTaskGetIdleRunTimeCounter()` + `esp_timer` deltas; the
+    stats clock is microseconds) instead of the full task-list walk.
+  - Heap/CPU/battery sampling moved off the LVGL task to a pinned (core 0)
+    background `sheltlm` task (`P4_CONFIG_TELEMETRY_TASK_STACK`); the header
+    refresh only reads cached statics. `ps`/`top` keep the on-demand snapshot.
+  - Optional AXI-ICM QoS hardening (`display_apply_axi_icm_qos()`,
+    `P4_CONFIG_DISPLAY_ICM_QOS_*`) and a `display stress on|off` reproducer.
+  - Measured with the new camera detector `tools/display_glitch_watch.py`
+    (mean blue minus red over the panel ROI): ~1–4 events/60 s and 12/90 s
+    before, **0 events in 120 s + 240 s idle and a full boot** after.
+
+- **Boot: first-mount work (welcome / default files / font / CJK / history) was
+  silently skipped, and the ESP-Hosted C6 transport could fail its SDIO
+  bring-up.** `security_init()` read the CONFIG.SYS single store at init,
+  mounting the SD card during `command_init()` before `main` registered the
+  first-mount hook, so the one-shot fired to a NULL handler
+  (`boot_regression.py` 0/10, `sd_ready=False`).
+  - `security_init()` now sets defaults only; the CONFIG.SYS reads moved to
+    `security_load_saved()`, called from `boot_script_apply()` before
+    `security_engage_boot_lock()`.
+  - `storage` re-arms the one-shot when no handler is registered yet and fires
+    the deferred work on registration.
+  - `networking_init()` now runs *after* the boot script, so the SD card mounts
+    before the C6 hosted transport claims the shared SDMMC host/DMA buffers
+    (otherwise its SDIO card init retries
+    `sdmmc_allocate_aligned_buf: not enough mem`).
+  - `tools/boot_regression.py` 10/10 clean; Wi-Fi associates and gets an IP;
+    on-board unit suite green.
 
 ### Fixed — `calc` RATE zero-payment error; `csv` aggregate/range near-miss substitution
 

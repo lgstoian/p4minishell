@@ -825,12 +825,18 @@ void app_main(void)
     shell_init();
     command_init();
 
+    /* Sample header telemetry on a background task (off the LVGL task) so the
+     * task snapshot/battery reads cannot stall the DSI framebuffer fetch. */
+    shell_start_telemetry();
+
     /* Register the native apps (the applib ABI sample) as shell commands. */
     native_apps_register();
 
     /* When the SD card first mounts (startup, or a card inserted later and
      * mounted by the first SD command), generate the default boot files and
-     * print a short "SD card ready" welcome. */
+     * print a short "SD card ready" welcome. Registered before anything can
+     * mount the card (security_init no longer reads CONFIG.SYS at init), so the
+     * first mount always runs this hook. */
     storage_register_sd_first_mount_callback(boot_on_sd_first_mount);
 
     /* Let the display manager trigger a full UI rebuild after rotation. */
@@ -887,16 +893,6 @@ void app_main(void)
      * spawns the wifi_bg task) and before any SD access. */
     storage_sdmmc_host_preinit();
 
-    networking_init(&(networking_host_ops_t){
-        .transcript_append_text = shell_transcript_append_text,
-        .schedule_transcript_append_text = shell_networking_schedule_text,
-        .transcript_append_ansi = shell_transcript_append_ansi,
-        .record_error = shell_networking_record_error,
-        .record_warning = shell_networking_record_warning,
-        .record_info = shell_networking_record_info,
-        .notify_header = shell_header_notify,
-    });
-
     usb_init();
 
     /* Route USB keyboard keystrokes into the shell input line. */
@@ -915,6 +911,23 @@ void app_main(void)
      * reliable point to apply the saved UI choices (theme / header mode /
      * fonts). The first-mount callback can fire before the VFS is usable. */
     (void)font_restore_saved();
+
+    /* Start the ESP-Hosted C6 transport only AFTER the boot script has mounted
+     * the SD card. The card (slot 0) and the C6 hosted transport (slot 1) share
+     * the SDMMC controller and its DMA-capable internal buffers; bringing the
+     * C6 up first races the card mount and makes its SDIO card init fail with
+     * "sdmmc_allocate_aligned_buf: not enough mem" on every retry. Mounting the
+     * card first (as the init-time CONFIG.SYS read used to do by accident) keeps
+     * the shared host and buffer layout deterministic. */
+    networking_init(&(networking_host_ops_t){
+        .transcript_append_text = shell_transcript_append_text,
+        .schedule_transcript_append_text = shell_networking_schedule_text,
+        .transcript_append_ansi = shell_transcript_append_ansi,
+        .record_error = shell_networking_record_error,
+        .record_warning = shell_networking_record_warning,
+        .record_info = shell_networking_record_info,
+        .notify_header = shell_header_notify,
+    });
 
     /* Boot confirmation light: a short green flash once the shell is ready. */
     led_notify(LED_EVENT_BOOT_OK);

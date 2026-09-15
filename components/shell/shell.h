@@ -837,6 +837,14 @@ int shell_task_row_compare(const shell_task_row_t *a, const shell_task_row_t *b,
 void shell_header_status_refresh(void);
 
 /**
+ * Start the background header-telemetry sampler (idempotent). It runs the
+ * expensive heap/task-snapshot/battery reads off the LVGL task so they cannot
+ * stall the MIPI-DSI framebuffer fetch. Call after command_init() so the shell
+ * ops table (battery/c6ota accessors) is registered.
+ */
+void shell_start_telemetry(void);
+
+/**
  * Next adaptive header poll interval in milliseconds, chosen from the current
  * situation (display idle-off, OTA/bg job, Wi-Fi connecting, startup, clock
  * minute boundary, pending idle-display-off). main reschedules its header

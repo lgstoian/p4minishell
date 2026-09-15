@@ -6,7 +6,7 @@
 - **Target**: ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO)
 - **Framework**: ESP-IDF v5.5.5
 - **UI**: LVGL 9.5.0 (esp_lvgl_port 2.9.0) with JD9165 1024x600 display + GT911 touch
-- **Version**: v0.38.1 (`p4minishell_config.h:54-59`). **0.38.1:** verified the `wifi throughput` bench (host↔device, same subnet) and raised the lwIP TCP window (`CONFIG_LWIP_TCP_WND_DEFAULT`/`SND_BUF_DEFAULT` 5760→32768, `RECVMBOX_SIZE` 6→32) — the window, not the SDIO clock, had capped a single stream (~2.4 Mbit/s); host→device rose 2.45→~11 Mbit/s and 40 MHz measured faster than 10 MHz in both directions. **0.38.0:** adopted the 40 MHz SDIO clock after a soak gate, added the `wifi throughput` bench (+ `tools/wifi_bench.py`) and `tools/regression.py`. **0.37.1:** fixed O3 (driver-API UART mirror), O4 (no-reset `open_port()`), O5 (I2C bus recovery). **0.37.0:** moved the app-owned flash-safe task stacks (USB, c6ota, audio, alarm, led, shell UART) to PSRAM, which lifted the tightest boot-time internal DMA headroom from ~1 KB to ~10 KB free / 8.7 KB largest block (see `bugs.md` O8); the boot script now runs on a dedicated short-lived `bootscript` task instead of the Wi-Fi event task. **0.36.1:** fixed an LVGL timer-list heap-corruption panic (a `header_schedule()` async payload double free; see changelog `[0.36.1]`), boot SD scripting now runs on the SD first mount so CONFIG.SYS/AUTOEXEC are no longer skipped, and USB host bring-up retries. Including: `components/gfx/` (RGB565 raster + BMP parser/decoder, plus the B2 toolkit: `hline`/`vline`/`triangle`/`ellipse`/`polygon`/`flood_fill`/`text` and the committed 8x8 ASCII font `gfx_font.c`), `gfx`/`crc32`/`asset` verbs, packaged SD apps (`pkg list|info|verify|check|install|remove` over `APPS/<APP>.APPINFO` + `APPS/<APP>.ASSETS`, installed from CRC-checked `PKGS/<APP>/` bundles), `start`/`taskkill` background jobs, `draw table`/`draw list` with cursor/selection, UI themes (B3: `theme list|show|set [/save]` over `default`/`amber`/`ice`/`mono` with live re-apply + `SHELL.INI` persistence), dead-code cleanup (B4: deleted the `storage_commands.c` stub and the `p4_usb` CMake twin, removed dead statics, de-duplicated `help /all`), plot/graph layer (`plot` world-coordinate verbs over the `gfx` canvas or TUI via `gfx_view.c`, sampling `calc`), RAM-loaded batch execution (`P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072), O(1) transcript appends + `windows_set_transcript_text_len()`, off-console mirror suppression, and the TCMD/SNAKE/ELITE/BOUNCE/GFXTOOL/PLOT reference apps. Verified baseline: unit 281/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25, header OK (COM3).
+- **Version**: v0.38.2 (`p4minishell_config.h:54-59`). **0.38.2:** fixed the recurrent "BSOD" full-screen blue flash (a MIPI-DSI bridge underrun caused by the header telemetry calling `uxTaskGetSystemState()` on the LVGL task; it now samples on a pinned `sheltlm` background task with an idle-counter CPU estimate) and the boot first-mount regression (`security_init()` mounted the SD during `command_init()` before the first-mount hook, so the welcome/defaults/font/CJK/history work was skipped; the CONFIG.SYS reads moved to `security_load_saved()` and `networking_init()` now runs after the SD mounts so the C6 hosted transport does not starve on the shared SDMMC/DMA buffers). Added `tools/display_glitch_watch.py` and `display stress on|off`. **0.38.1:** verified the `wifi throughput` bench (host↔device, same subnet) and raised the lwIP TCP window (`CONFIG_LWIP_TCP_WND_DEFAULT`/`SND_BUF_DEFAULT` 5760→32768, `RECVMBOX_SIZE` 6→32) — the window, not the SDIO clock, had capped a single stream (~2.4 Mbit/s); host→device rose 2.45→~11 Mbit/s and 40 MHz measured faster than 10 MHz in both directions. **0.38.0:** adopted the 40 MHz SDIO clock after a soak gate, added the `wifi throughput` bench (+ `tools/wifi_bench.py`) and `tools/regression.py`. **0.37.1:** fixed O3 (driver-API UART mirror), O4 (no-reset `open_port()`), O5 (I2C bus recovery). **0.37.0:** moved the app-owned flash-safe task stacks (USB, c6ota, audio, alarm, led, shell UART) to PSRAM, which lifted the tightest boot-time internal DMA headroom from ~1 KB to ~10 KB free / 8.7 KB largest block (see `bugs.md` O8); the boot script now runs on a dedicated short-lived `bootscript` task instead of the Wi-Fi event task. **0.36.1:** fixed an LVGL timer-list heap-corruption panic (a `header_schedule()` async payload double free; see changelog `[0.36.1]`), boot SD scripting now runs on the SD first mount so CONFIG.SYS/AUTOEXEC are no longer skipped, and USB host bring-up retries. Including: `components/gfx/` (RGB565 raster + BMP parser/decoder, plus the B2 toolkit: `hline`/`vline`/`triangle`/`ellipse`/`polygon`/`flood_fill`/`text` and the committed 8x8 ASCII font `gfx_font.c`), `gfx`/`crc32`/`asset` verbs, packaged SD apps (`pkg list|info|verify|check|install|remove` over `APPS/<APP>.APPINFO` + `APPS/<APP>.ASSETS`, installed from CRC-checked `PKGS/<APP>/` bundles), `start`/`taskkill` background jobs, `draw table`/`draw list` with cursor/selection, UI themes (B3: `theme list|show|set [/save]` over `default`/`amber`/`ice`/`mono` with live re-apply + `SHELL.INI` persistence), dead-code cleanup (B4: deleted the `storage_commands.c` stub and the `p4_usb` CMake twin, removed dead statics, de-duplicated `help /all`), plot/graph layer (`plot` world-coordinate verbs over the `gfx` canvas or TUI via `gfx_view.c`, sampling `calc`), RAM-loaded batch execution (`P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072), O(1) transcript appends + `windows_set_transcript_text_len()`, off-console mirror suppression, and the TCMD/SNAKE/ELITE/BOUNCE/GFXTOOL/PLOT reference apps. Verified baseline: unit 281/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25, header OK (COM3).
 
 ## Mandatory Reading Before Any Change
 1. changelog.md - version history and recent changes
@@ -98,10 +98,16 @@
 - The header poll cadence MUST come from the pure `header_refresh.c` policy
   (`header_refresh_interval_ms()`), assembled by the shell and applied by main's
   single timer. Expensive telemetry (heap/CPU task snapshot/battery) MUST stay
-  throttled to `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS` — never run
-  `uxTaskGetSystemState()` at the fast poll rate, especially during an OTA (PSRAM
-  is unavailable). The idle interval MUST be bounded by the idle-display-off
-  deadline (`shell_power_ms_until_idle_off()`) and may not skip the clock minute.
+  throttled to `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS` AND MUST run off the LVGL
+  task (the pinned `sheltlm` sampler) — never call `uxTaskGetSystemState()` on
+  the LVGL/render task at any rate. That full task-list walk suspends scheduling
+  long enough to delay the MIPI-DSI bridge DMA refill ISR, which underruns the
+  panel and paints the whole screen blue (the "BSOD"). `shell_sample_cpu_percent()`
+  uses `ulTaskGetIdleRunTimeCounter()` + `esp_timer` deltas instead; only the
+  on-demand `ps`/`top` commands use the full snapshot. `uxTaskGetSystemState()`
+  is also unsafe during an OTA (PSRAM unavailable). The idle interval MUST be
+  bounded by the idle-display-off deadline (`shell_power_ms_until_idle_off()`)
+  and may not skip the clock minute.
 - Battery is ALWAYS visible — shows "BAT N/C" with muted styling when ADC is not connected
 - System panel (MEM | CPU | BAT) is on the far right, all dynamically linked to FreeRTOS runtime stats
 - header_update_battery(int percent, bool adc_ready) — pass adc_ready=false for N/C display
@@ -1024,6 +1030,16 @@ the raster core + 8x8 font are `components/gfx/`
 - All SD commands use the shared guarded session: `shell_sd_begin()` / `shell_sd_end()`. Every
   `shell_sd_begin()` MUST have a matching `shell_sd_end()` on every return path.
 - The mount is persistent; only `sd eject` / `sdeject` unmounts
+- The one-shot first-mount hook (`storage_register_sd_first_mount_callback`) MUST be
+  registered before anything can mount the card. `storage_sd_mark_mounted()` leaves the
+  one-shot armed when no handler is set and fires the deferred work on registration, so a
+  mount that beats the registration is not lost. Do NOT add init-time SD reads that mount the
+  card ahead of the hook (a regression source: `security_init()` reading CONFIG.SYS at init —
+  now deferred to `security_load_saved()` from the boot script).
+- The SD card (slot 0) and the ESP-Hosted C6 transport (slot 1) share the SDMMC controller and
+  its DMA-capable internal buffers. The card MUST mount before `networking_init()` starts the
+  C6 bring-up (main runs `boot_run_startup()` first); bringing the C6 up first races the mount
+  and makes the C6 SDIO card init retry `sdmmc_allocate_aligned_buf: not enough mem`.
 - Any command that WRITES a file MUST precheck capacity with `storage_check_free_space()`
   before opening the destination, so a truncating overwrite cannot destroy the existing
   contents and then fail for lack of room
@@ -1196,6 +1212,12 @@ the raster core + 8x8 font are `components/gfx/`
   (wired in main to `boot_on_sd_first_mount`), which generates default CONFIG.SYS/AUTOEXEC.BAT
   when missing and prints the "SD card ready" welcome. New default-file generation MUST go
   through `boot_ensure_default_files()` (idempotent, never overwrites an existing user file).
+- The boot script also loads the persisted security/owner state: `boot_script_apply()` calls
+  `security_load_saved()` (the CONFIG.SYS reads) immediately before `security_engage_boot_lock()`,
+  so boot-lock / auto-lock / conceal take effect at boot. `security_init()` MUST NOT touch the SD
+  card at init — an init-time mount beats the first-mount hook and skips the boot work (O10).
+- `main` runs the boot script BEFORE `networking_init()`: the SD card must mount before the
+  ESP-Hosted C6 transport claims the shared SDMMC host/DMA buffers (see SD Card Rules).
 - Wi-Fi password from `WIFI_PASSWORD=` is never echoed to transcript, history, or debug log.
 - GPIO directives are delegated to the existing `gpio set` safety check; reserved pins are refused.
 - All tunable values live in `p4minishell_config.h` and are documented in `p4minishell_config.yaml`
@@ -1232,7 +1254,8 @@ the raster core + 8x8 font are `components/gfx/`
 - Center shows the local clock when idle; notifications queue FIFO with a
   severity color and take precedence over the clock
 - Poll cadence is adaptive (`header_refresh.c`), telemetry throttled to
-  `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS`
+  `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS` and sampled on the `sheltlm` background
+  task, never `uxTaskGetSystemState()` on the LVGL task (DSI-underrun "BSOD")
 
 ### Build Constraints
 - Every build constraint MUST be pinned in `sdkconfig.defaults`, not only in the

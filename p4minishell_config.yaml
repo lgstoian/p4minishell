@@ -325,6 +325,11 @@ ui_layout:
     type: int
     description: "Minimum interval between expensive header telemetry samples (heap/CPU/battery); the faster status poll never speeds this up"
     range: "1000..60000"
+  telemetry_task_stack:
+    value: 3072
+    type: int
+    description: "Stack for the background header-telemetry task (runs the heap/battery sampling off the LVGL task); internal RAM"
+    range: "2048..8192"
   header_startup_grace_s:
     value: 15
     type: int

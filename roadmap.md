@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.38.1, suite 262/0/2)
+# P4MiniShell Roadmap (v0.38.2, suite 300/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -16,14 +16,14 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (unreleased additions on top of v0.38.1)
+## Current baseline (v0.38.2)
 Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
-**Current verified baseline:** unit **317/0/2** on COM3 (ESP-IDF v5.5.5); companion deep / db /
+**Current verified baseline:** unit **300/0/2** on COM3 (ESP-IDF v5.5.5); companion deep / db /
 alarm / app smoke / package / gfx toolkit / plot / header / keyboard / editor / ui touch /
-completion / tx stress / boot regression **8/8** green, plus new HW drivers for
+completion / tx stress / boot regression **10/10** green, plus new HW drivers for
 `timer`/`csv`/`export`/`bind`/`crypt`/`tcpterm`/`usb userial`. See `changelog.md`
-`[Unreleased]` for the palmtop-parity primitives.
+`[0.38.2]` for the palmtop-parity primitives.
 
 ### Recently completed (unreleased — palmtop parity)
 

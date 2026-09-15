@@ -715,7 +715,7 @@ void shell_command_config(int argc, char **argv)
 {
     const config_setting_t *setting;
     bool bare = false;
-    char *args[64];
+    char *args[64] = { NULL };
     int nargc = 0;
     int ai;
 

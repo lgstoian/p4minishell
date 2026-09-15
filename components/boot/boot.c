@@ -947,6 +947,11 @@ run_autoexec:
         s_boot_launch_app[0] = '\0';
     }
 
+    /* Load the persisted security/owner state now that the card is mounted
+     * (security_init left it at defaults so init never mounts the SD ahead of
+     * the first-mount hook), then engage the boot lock it feeds. */
+    security_load_saved();
+
     /* The interactive session starts locked when a passcode + BOOTLOCK are
      * configured. Boot scripting already ran, so CONFIG.SYS/AUTOEXEC are not
      * affected; recovery is deleting the SECURITY_* lines on the SD card. */

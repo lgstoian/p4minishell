@@ -265,6 +265,19 @@ void storage_sd_ensure_dma_buffer(void)
              (unsigned int)buffer_size, (unsigned int)chunk);
 }
 
+/** Run the one-shot first-mount work exactly once, if a handler is registered.
+ *  Leaves the flag armed when no handler exists yet, so a mount that beats the
+ *  callback registration (e.g. an early task mounting the card during the C6
+ *  bring-up) still runs the work when the handler is registered. */
+static void storage_sd_fire_first_mount(void)
+{
+    if (s_sd_first_mount_fired || s_sd_first_mount_callback == NULL) {
+        return;
+    }
+    s_sd_first_mount_fired = true;
+    s_sd_first_mount_callback();
+}
+
 /** Mark the card as mounted, update the header icon, and fire the one-shot
  *  first-mount callback so main can generate defaults + show a welcome. */
 static void storage_sd_mark_mounted(void)
@@ -274,16 +287,20 @@ static void storage_sd_mark_mounted(void)
     s_sd_persistent_mounted = true;
     header_update_sd(HEADER_SD_MOUNTED);
     if (first) {
-        s_sd_first_mount_fired = true;
-        if (s_sd_first_mount_callback != NULL) {
-            s_sd_first_mount_callback();
-        }
+        storage_sd_fire_first_mount();
     }
 }
 
 void storage_register_sd_first_mount_callback(void (*callback)(void))
 {
     s_sd_first_mount_callback = callback;
+    /* The card may already be mounted: the first SD access at boot can occur
+     * before main registers this hook, which previously lost the first-mount
+     * work (default file generation, font/history restore, welcome). Fire the
+     * deferred work now instead. */
+    if (s_sd_persistent_mounted) {
+        storage_sd_fire_first_mount();
+    }
 }
 
 void storage_sd_first_mount_reset(void)

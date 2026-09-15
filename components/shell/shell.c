@@ -4845,7 +4845,8 @@ int shell_command_ps(int argc, char **argv)
 
     /* The TaskStatus_t array can exceed the 8 KB worker stack (one entry is
      * ~40 bytes), so it is always heap-allocated. */
-    task_status_array = calloc(task_count, sizeof(TaskStatus_t));
+    task_status_array = heap_caps_calloc(task_count, sizeof(TaskStatus_t),
+                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (task_status_array == NULL) {
         shell_print_error("ps: out of memory for the task snapshot");
         return 1;
@@ -4853,7 +4854,7 @@ int shell_command_ps(int argc, char **argv)
 
     obtained = uxTaskGetSystemState(task_status_array, task_count, &total_runtime);
     if (obtained == 0) {
-        free(task_status_array);
+        heap_caps_free(task_status_array);
         shell_print_error("ps: uxTaskGetSystemState returned no tasks");
         return 1;
     }
@@ -4862,7 +4863,7 @@ int shell_command_ps(int argc, char **argv)
      * a simple qsort (the CPU% is computed once per task here). */
     rows = calloc(obtained, sizeof(*rows));
     if (rows == NULL) {
-        free(task_status_array);
+        heap_caps_free(task_status_array);
         shell_print_error("ps: out of memory for the task rows");
         return 1;
     }
@@ -4960,7 +4961,7 @@ int shell_command_ps(int argc, char **argv)
     }
 
     free(rows);
-    free(task_status_array);
+    heap_caps_free(task_status_array);
     return 0;
 #else
     (void)argc;
@@ -4979,44 +4980,34 @@ int shell_command_ps(int argc, char **argv)
  * Returns 0 on the first call (no previous sample to diff against) and when
  * runtime stats are unavailable.
  */
-static int shell_sample_cpu_percent(uint32_t task_count)
+static int shell_sample_cpu_percent(void)
 {
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-    static uint32_t s_last_idle_count = 0;
-    static uint32_t s_last_total_runtime = 0;
-    TaskStatus_t *task_status_array;
-    uint32_t total_runtime = 0;
-    uint32_t idle_runtime = 0;
-    uint32_t obtained;
+    /* Lightweight load estimate: the run-time stats clock is esp_timer (us), so
+     * CPU% = 100 * (1 - idle_delta / wall_delta) using the idle counter of the
+     * calling core. This deliberately AVOIDS uxTaskGetSystemState(): that full
+     * task-list walk suspends scheduling long enough to delay the MIPI-DSI DMA
+     * refill ISR and flashes the panel blue (the "BSOD" underrun). The `ps` /
+     * `top` commands still use the full snapshot on demand. */
+    static uint32_t s_last_idle_us;
+    static int64_t s_last_total_us;
+    uint32_t idle_us = (uint32_t)ulTaskGetIdleRunTimeCounter();
+    int64_t total_us = esp_timer_get_time();
     int cpu_percent = 0;
 
-    task_status_array = calloc(task_count, sizeof(TaskStatus_t));
-    if (task_status_array == NULL) {
-        return 0;
-    }
-
-    obtained = uxTaskGetSystemState(task_status_array, task_count, &total_runtime);
-    for (uint32_t i = 0; i < obtained; i++) {
-        if (strncmp(task_status_array[i].pcTaskName, "IDLE", 4) == 0) {
-            idle_runtime = task_status_array[i].ulRunTimeCounter;
-            break;
-        }
-    }
-    free(task_status_array);
-
-    if (s_last_total_runtime > 0 && total_runtime > s_last_total_runtime) {
-        uint32_t total_delta = total_runtime - s_last_total_runtime;
-        uint32_t idle_delta = (idle_runtime >= s_last_idle_count)
-                              ? (idle_runtime - s_last_idle_count) : 0;
+    if (s_last_total_us != 0 && total_us > s_last_total_us) {
+        uint32_t total_delta = (uint32_t)(total_us - s_last_total_us);
+        uint32_t idle_delta = (idle_us >= s_last_idle_us)
+                              ? (idle_us - s_last_idle_us) : 0;
         if (total_delta > 0) {
-            cpu_percent = 100 - (int)((idle_delta * 100) / total_delta);
+            cpu_percent = 100 - (int)((int64_t)idle_delta * 100 / total_delta);
             if (cpu_percent < 0) cpu_percent = 0;
             if (cpu_percent > 100) cpu_percent = 100;
         }
     }
 
-    s_last_idle_count = idle_runtime;
-    s_last_total_runtime = total_runtime;
+    s_last_idle_us = idle_us;
+    s_last_total_us = total_us;
     return cpu_percent;
 #else
     /* Without runtime stats, approximate load from heap pressure. */
@@ -5025,34 +5016,84 @@ static int shell_sample_cpu_percent(uint32_t task_count)
     int heap_pct = (total_heap > 0) ? (int)((free_heap * 100) / total_heap) : 100;
     int cpu_percent = 100 - heap_pct;
 
-    (void)task_count;
     if (cpu_percent < 0) cpu_percent = 0;
     if (cpu_percent > 100) cpu_percent = 100;
     return cpu_percent;
 #endif
 }
 
+/* Telemetry cache: sampled by a dedicated low-priority task
+ * (shell_telemetry_task), NOT on the LVGL task. The expensive work in this
+ * block is uxTaskGetSystemState() (a full task-list walk) and the battery ADC
+ * read; running them on the LVGL task every telemetry period stalled the
+ * MIPI-DSI framebuffer fetch and flashed the panel blue (the "BSOD" DSI
+ * underrun). The render task now reads only these cached values. */
+static uint32_t s_tlm_free_heap;
+static uint32_t s_tlm_total_heap;
+static uint32_t s_tlm_task_count;
+static int s_tlm_cpu_percent;
+static int s_tlm_battery_percent;
+static bool s_tlm_battery_ok;
+static TaskHandle_t s_tlm_task;
+
+/** Sample the expensive telemetry once. Runs on the telemetry task. */
+static void shell_telemetry_sample(void)
+{
+    /* Skip during a C6 OTA: PSRAM is unavailable while the flash is written, so
+     * the snapshot would only add contention, and the header is not updated. */
+    if (s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy()) {
+        return;
+    }
+
+    s_tlm_free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    s_tlm_total_heap = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+    s_tlm_task_count = uxTaskGetNumberOfTasks();
+    s_tlm_cpu_percent = shell_sample_cpu_percent();
+
+    /* Battery: record failure too so the panel can show "BAT N/C" instead of a
+     * stale percentage. */
+    s_tlm_battery_ok = false;
+    if (s_command_ops.battery_read != NULL &&
+        s_command_ops.battery_read(NULL, &s_tlm_battery_percent, NULL, NULL) == ESP_OK) {
+        s_tlm_battery_ok = true;
+    }
+}
+
+static void shell_telemetry_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        shell_telemetry_sample();
+        vTaskDelay(pdMS_TO_TICKS(P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS));
+    }
+}
+
+/** Start the telemetry sampler. Idempotent; called after command_init() so the
+ *  shell ops table (heap/battery/c6ota accessors) is registered. The task stack
+ *  is internal because it must survive a C6 OTA (PSRAM unavailable) and it never
+ *  touches host flash. */
+void shell_start_telemetry(void)
+{
+    if (s_tlm_task != NULL) {
+        return;
+    }
+    /* Pinned to core 0: ulTaskGetIdleRunTimeCounter() reports the calling
+     * core's idle time, so pinning keeps the CPU% delta consistent (a migrating
+     * task would mix per-core counters). */
+    if (xTaskCreatePinnedToCore(shell_telemetry_task, "sheltlm",
+                                P4_CONFIG_TELEMETRY_TASK_STACK, NULL,
+                                tskIDLE_PRIORITY + 1, &s_tlm_task, 0) != pdPASS) {
+        s_tlm_task = NULL;
+        ESP_LOGW(SHELL_TAG, "telemetry task not started; header stats stay static");
+    }
+}
+
 void shell_header_status_refresh(void)
 {
-    /* Expensive telemetry (heap, CPU task snapshot, battery ADC) is sampled no
-     * faster than P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS, independent of the
-     * adaptive poll, so a busy/connecting poll never multiplies the task-snapshot
-     * allocation (critical during a C6 OTA, when PSRAM is unavailable). */
-    static uint32_t s_last_telemetry_ms;
-    static uint32_t s_free_heap;
-    static uint32_t s_total_heap;
-    static uint32_t s_task_count;
-    static int s_cpu_percent;
-    static int s_battery_percent;
-    static bool s_battery_ok;
-
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     bool wifi_connected = s_command_ops.wifi_is_connected != NULL && s_command_ops.wifi_is_connected();
     int wifi_rssi = P4_CONFIG_HEADER_RSSI_UNKNOWN;
     bool sd_mounted = s_command_ops.sd_is_mounted != NULL && s_command_ops.sd_is_mounted();
     uint32_t uptime_sec = (uint32_t)((esp_timer_get_time() - s_boot_timestamp_us) / 1000000);
-    bool telemetry_due = (s_last_telemetry_ms == 0) ||
-                         ((now_ms - s_last_telemetry_ms) >= P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS);
     char clock_text[16];
 
     /* Network clock bootstrap: once associated, detect the local timezone and
@@ -5075,22 +5116,6 @@ void shell_header_status_refresh(void)
         (void)s_command_ops.wifi_get_rssi(&wifi_rssi);
     }
 
-    if (telemetry_due) {
-        s_free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        s_total_heap = heap_caps_get_total_size(MALLOC_CAP_8BIT);
-        s_task_count = uxTaskGetNumberOfTasks();
-        s_cpu_percent = shell_sample_cpu_percent(s_task_count);
-
-        /* Battery: refresh even when the ADC read fails so the panel can show
-         * "BAT N/C" instead of a stale percentage. */
-        s_battery_ok = false;
-        if (s_command_ops.battery_read != NULL &&
-            s_command_ops.battery_read(NULL, &s_battery_percent, NULL, NULL) == ESP_OK) {
-            s_battery_ok = true;
-        }
-        s_last_telemetry_ms = now_ms;
-    }
-
     /* Idle center content: the local clock ("--:--" while unsynchronized). */
     (void)time_format_hm(clock_text, sizeof(clock_text));
 
@@ -5100,16 +5125,16 @@ void shell_header_status_refresh(void)
     header_batch_t batch = {
         .wifi_connected = wifi_connected,
         .wifi_rssi = wifi_rssi,
-        .battery_percent = s_battery_percent,
-        .battery_adc_ready = s_battery_ok,
+        .battery_percent = s_tlm_battery_percent,
+        .battery_adc_ready = s_tlm_battery_ok,
         .bt_enabled = s_command_ops.bluetooth_is_enabled != NULL && s_command_ops.bluetooth_is_enabled(),
         .bt_connected = s_command_ops.bluetooth_is_connected != NULL && s_command_ops.bluetooth_is_connected(),
         .usb_connected = s_command_ops.usb_is_connected != NULL && s_command_ops.usb_is_connected(),
         .sd_state = sd_mounted ? HEADER_SD_MOUNTED : HEADER_SD_NONE,
-        .free_heap = s_free_heap,
-        .total_heap = s_total_heap,
-        .cpu_percent = s_cpu_percent,
-        .task_count = s_task_count,
+        .free_heap = s_tlm_free_heap,
+        .total_heap = s_tlm_total_heap,
+        .cpu_percent = s_tlm_cpu_percent,
+        .task_count = s_tlm_task_count,
         .uptime_seconds = uptime_sec,
         .clock_text = clock_text,
         .c6ota_busy = s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy(),

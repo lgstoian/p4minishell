@@ -53,7 +53,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             0
 #define P4_CONFIG_VERSION_MINOR             38
-#define P4_CONFIG_VERSION_PATCH             1
+#define P4_CONFIG_VERSION_PATCH             2
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -292,6 +292,12 @@
  */
 #define P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS    5000
 
+/* Stack for the header telemetry sampler task. It runs the heap/task-snapshot/
+ * battery reads OFF the LVGL task (a uxTaskGetSystemState() on the LVGL task
+ * stalled the MIPI-DSI fetch and flashed the panel blue). Internal RAM: it must
+ * survive a C6 OTA and never touches host flash. */
+#define P4_CONFIG_TELEMETRY_TASK_STACK          3072
+
 /** Uptime (seconds) below which the header uses the faster STARTUP cadence. */
 #define P4_CONFIG_HEADER_STARTUP_GRACE_S        15
 
@@ -313,6 +319,22 @@
 
 /** Touch controller driver name for diagnostics. */
 #define P4_CONFIG_DISPLAY_TOUCH_DRIVER       "GT911"
+
+/** `display stress` full-screen invalidation period (ms). A small value forces
+ *  continuous redraws to reproduce a MIPI-DSI underrun (the "BSOD"). */
+#define P4_CONFIG_DISPLAY_STRESS_PERIOD_MS   5
+
+/**
+ * AXI-ICM QoS for the MIPI-DSI framebuffer fetch (fixes the DSI underrun
+ * "BSOD"). IDF never programs these; all masters default to priority 0, so the
+ * DSI DW-GDMA read loses PSRAM arbitration under Wi-Fi/boot load and the panel
+ * flashes blue. Raise the DW-GDMA read priority/burst so the display stays fed.
+ */
+#define P4_CONFIG_DISPLAY_ICM_QOS_ENABLE        1
+/** DW-GDMA read QoS priority (0-15, higher wins). */
+#define P4_CONFIG_DISPLAY_ICM_DW_GDMA_READ_PRIO 15
+/** DW-GDMA read token-bucket depth (1-256; deeper tolerates longer stalls). */
+#define P4_CONFIG_DISPLAY_ICM_DW_GDMA_BURST     256
 
 /* ========================================================================
  * WINDOW MANAGER PARAMETERS

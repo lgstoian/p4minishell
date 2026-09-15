@@ -22,6 +22,12 @@ resets on the transition — every driver drops DTR/RTS on open via
   bring-up sweeps (versions, TUI/draw, modals, audio, periph, SD cycle).
 - `bsod_watch.py` — timestamped long serial capture for the recurrent
   display-blink hunt (see `bugs.md` O3). One holder per port.
+- `display_glitch_watch.py` — camera + serial detector for the "BSOD" MIPI-DSI
+  underrun: mean(blue)−mean(red) over the panel ROI (Lorgar = DirectShow index
+  1, auto-scaled ROI on 1280x720), saves peak-frame JPEG proofs. Flags:
+  `--calibrate`, `--preview`, `--roi`, `--index`, `--device`, `--reset`,
+  `--stress` (drives `display stress on/off`). Runs on system Python (cv2).
+  See `bugs.md` O9 and `changelog.md`.
 - `harness/` — one-shot host drivers, all on `shell_session` port handling:
   - Wi-Fi: `wifi_connect.py`, `wifi_connect2.py`, `wifi_connect3.py`,
     `wifi_test.py`, `test_wifi.py`, `test_wifi_cycles.py`, `wifi_dump.py`,
