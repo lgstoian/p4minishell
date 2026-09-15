@@ -26,6 +26,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "gfx.h" /* gfx_surface_t for tui_draw_image */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -56,6 +58,12 @@ void tui_clear(void);
 
 /** Clear current line (EL 2K) at cursor row. */
 void tui_clear_line(int mode);
+
+/** Scroll the grid up one row (top row lost, bottom cleared, cursor kept in
+ * range). No-op unless the TUI buffer is allocated. Used by the VT100
+ * terminal pump (`usb userial term`) so remote output scrolls instead of
+ * clamping at the last row. */
+void tui_scroll_up(void);
 
 /** Set cursor (1-based, clamped to COLS/ROWS). */
 void tui_set_cursor(int row, int col);
@@ -99,6 +107,13 @@ uint32_t tui_dos_color_rgb(uint8_t index);
  * pct is clamped 0..100; the two border cells are `[`/`]`. */
 void tui_draw_bar(int x, int y, int w, int pct, char fill_ch, char empty_ch,
                   uint8_t fg, uint8_t bg);
+
+/** Render an RGB565 image into the cell grid at x,y (1-based) spanning w x h
+ * cells. Each cell is drawn as an ASCII glyph picked from a luminance ramp and
+ * coloured with the nearest DOS palette entry (foreground only — the TUI label
+ * has no per-cell background). Posterizes to 16 colors; the full-color viewer
+ * is `view <file.bmp>`. Clipped to the grid. */
+void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img);
 
 /** Total grid width of a bordered table: sum(widths) + 3 per column + 1
  * (pure, headless-safe; each column renders as `│<pad><cell><pad>`). */

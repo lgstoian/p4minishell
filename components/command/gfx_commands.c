@@ -110,7 +110,7 @@ bool shell_command_gfx(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "gfx: missing subcommand\n" SH_RST);
-        shell_transcript_appendf_ansi("Usage: gfx init|close|status|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|load|blit|free|slots|save <args>\n");
+        shell_transcript_appendf_ansi("Usage: gfx init|close|status|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|free|slots|save <args>\n");
         batch_set_errorlevel(2);
         return false;
     }
@@ -548,8 +548,8 @@ bool shell_command_gfx(int argc, char **argv)
             batch_set_errorlevel(1);
             return false;
         }
-        if (!gfx_bmp_parse_header(buf, got, &info)) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: not a 24-bit BI_RGB BMP <= %dx%d (%s)\n" SH_RST,
+        if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_SPR_MAX, GFX_SPR_MAX)) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx load: not a 24/32-bit BI_RGB BMP <= %dx%d (%s)\n" SH_RST,
                                           GFX_SPR_MAX, GFX_SPR_MAX, resolved);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
@@ -605,6 +605,113 @@ bool shell_command_gfx(int argc, char **argv)
         }
         gfx_surface_blit(&s_gfx, &s_gfx_spr[slot],
                          atoi(argv[3]), atoi(argv[4]), use_t, tcolor);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "image")) {
+        /* gfx image <path> [x y [w h]]: decode a BMP straight to the target
+         * rect and blit it onto the canvas. Defaults to the native size
+         * aspect-fit to the canvas at 0,0. Reuses the single BMP decoder. */
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        shell_sd_session_t session;
+        FILE *file = NULL;
+        long size = 0;
+        uint8_t *buf = NULL;
+        size_t got = 0;
+        gfx_bmp_info_t info;
+        gfx_surface_t img = {NULL, 0, 0};
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+
+        if (argc != 3 && argc != 5 && argc != 7) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: usage: gfx image <path> [x y [w h]]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: invalid path %s\n" SH_RST, argv[2]);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (argc >= 5) {
+            x = atoi(argv[3]);
+            y = atoi(argv[4]);
+            if (argc == 7) {
+                w = atoi(argv[5]);
+                h = atoi(argv[6]);
+                if (w < 1 || h < 1) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx image: bad size %dx%d\n" SH_RST, w, h);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+            }
+        }
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: SD card not present\n" SH_RST);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        file = fopen(resolved, "rb");
+        if (file == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: cannot open %s\n" SH_RST, resolved);
+            shell_sd_end(&session, "gfx image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: cannot size %s\n" SH_RST, resolved);
+            fclose(file);
+            shell_sd_end(&session, "gfx image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (size < 54 || (uint64_t)size > P4_CONFIG_IMAGE_MAX_BYTES) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: bad size %ld (max %u bytes)\n" SH_RST,
+                                          size, (unsigned)P4_CONFIG_IMAGE_MAX_BYTES);
+            fclose(file);
+            shell_sd_end(&session, "gfx image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        buf = heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (buf == NULL) buf = malloc((size_t)size);
+        if (buf == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: out of memory\n" SH_RST);
+            fclose(file);
+            shell_sd_end(&session, "gfx image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        got = fread(buf, 1, (size_t)size, file);
+        fclose(file);
+        shell_sd_end(&session, "gfx image");
+        if (got != (size_t)size) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: short read %s\n" SH_RST, resolved);
+            heap_caps_free(buf);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST, resolved);
+            heap_caps_free(buf);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (w < 1 || h < 1) {
+            gfx_bmp_fit(info.w, info.h, s_gfx.w, s_gfx.h, &w, &h);
+        }
+        if (!gfx_bmp_decode_scaled_565(buf, got, &info, w, h, &img)) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: decode failed (%s)\n" SH_RST, resolved);
+            heap_caps_free(buf);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        heap_caps_free(buf);
+        gfx_surface_blit(&s_gfx, &img, x, y, false, 0);
+        gfx_surface_free(&img);
         batch_set_errorlevel(0);
         return true;
     }

@@ -199,6 +199,16 @@ uint32_t lv_buttonmatrix_get_selected_button(const lv_obj_t * obj);
 const char * lv_buttonmatrix_get_button_text(const lv_obj_t * obj, uint32_t btn_id);
 
 /**
+ * Get the on-screen area of a button (P4MiniShell addition).
+ * @param obj       pointer to a button matrix object
+ * @param btn_id    the index of a button (not counting new line characters)
+ * @param area_out  filled with the button's absolute coordinates
+ * @return          true on success; false for an invalid index or no area
+ */
+bool lv_buttonmatrix_get_button_area(const lv_obj_t * obj, uint32_t btn_id,
+                                     lv_area_t * area_out);
+
+/**
  * Get the whether a control value is enabled or disabled for button of a button matrix
  * @param obj       pointer to a button matrix object
  * @param btn_id    the index of a button not counting new line characters.

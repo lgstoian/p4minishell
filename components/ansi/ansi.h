@@ -382,6 +382,27 @@ int ansi_strip_to_plain(char *dst, size_t dst_size, const char *src);
  */
 bool ansi_contains_escapes(const char *text);
 
+/**
+ * Count trailing bytes that form an incomplete CSI sequence.
+ *
+ * Streaming byte pumps (e.g. `usb userial term`) read arbitrary chunks, so a
+ * multi-byte `ESC [ ... <final>` sequence can straddle two reads. Feeding the
+ * first half to the parser would drop it. This pure helper reports how many
+ * bytes at the end of the buffer belong to such a dangling sequence so the
+ * caller can hold them back and prepend them to the next chunk.
+ *
+ * A trailing run counts as incomplete when it starts with ESC and, after an
+ * optional `[` plus parameter bytes (`0-9 ; ?`), no CSI final byte
+ * (`0x40-0x7E`) follows before the buffer ends. A lone trailing ESC also
+ * counts. Returns 0 when the buffer ends with complete text (or is empty).
+ * Headless-safe and allocation-free.
+ *
+ * @param data  Byte buffer (need not be NUL-terminated).
+ * @param len   Bytes available in data.
+ * @return Number of trailing bytes to hold back (0..len).
+ */
+size_t ansi_csi_trailing(const uint8_t *data, size_t len);
+
 /* ========================================================================
  * EXTENDED ANSI PROCESSING (256-color, truecolor, cursor/screen control)
  * ======================================================================== */

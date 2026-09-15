@@ -33,6 +33,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 #include "esp_err.h"
 #include "esp_sleep.h"
 #include "gfx.h"
@@ -136,6 +137,13 @@ void shell_power_notify_activity(void);
  */
 void shell_power_idle_tick(void);
 
+/**
+ * Milliseconds until the idle display-off deadline. Returns 0 when idle-off is
+ * disabled or the display is already off. Used by the adaptive header refresh
+ * scheduler so it never sleeps past the deadline.
+ */
+int shell_power_ms_until_idle_off(void);
+
 /* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
@@ -148,6 +156,12 @@ void command_init(void);
 
 /** Check if the command module is initialized. */
 bool command_is_initialized(void);
+
+/** Load the recall history profile from SD (boot, first SD mount). */
+void command_history_autoload(void);
+
+/** Write the recall history profile to SD now (reboot/shutdown flush). */
+void command_history_save_now(void);
 
 /* ========================================================================
  * APP DISCOVERY / LAUNCH
@@ -214,10 +228,12 @@ void shell_command_browse(int argc, char **argv);
 void shell_command_dialog(int argc, char **argv);
 void shell_command_list(int argc, char **argv);
 void shell_command_ask(int argc, char **argv);
+void shell_command_form(int argc, char **argv);
 void shell_command_browse_batch(int argc, char **argv);
 void shell_command_view(int argc, char **argv);
 void shell_command_open(int argc, char **argv);
 void shell_command_hexview(int argc, char **argv);
+void shell_command_image(int argc, char **argv);
 void shell_command_color(int argc, char **argv);
 void shell_command_locate(int argc, char **argv);
 void shell_command_tui(int argc, char **argv);
@@ -244,8 +260,12 @@ void shell_command_theme(int argc, char **argv);
 
 /** `header` verb: layout mode + visibility + status (header_commands.c). */
 void shell_command_header(int argc, char **argv);
-/** Best-effort boot restore of the saved header mode (SHELL.INI). */
+/** Best-effort boot restore of the saved header mode (CONFIG.SYS). */
 void header_restore_saved(void);
+
+/** Engage the boot passcode lock once the boot script has finished
+ * (security_commands.c). Called by boot_script_apply(). */
+void security_engage_boot_lock(void);
 
 /** Markdown rendering (`markdown <file> | -e <text> | on | off`). */
 void shell_command_markdown(int argc, char **argv);
@@ -253,6 +273,80 @@ void shell_command_markdown(int argc, char **argv);
 /** JSON validate/pretty (`json validate|pretty <file>`). */
 void shell_command_json(int argc, char **argv);
 
+/** CSV grid verbs (`csv rows|cols|cell|eval <file>`, csv_commands.c).
+ *  Parsing is the pure csv_split_line() core in components/storage;
+ *  =EXPR evaluation reuses the calc engine here in the command layer.
+ *  Returns an ERRORLEVEL: 0 ok, 1 none/error, 2 usage. */
+int shell_command_csv(int argc, char **argv);
+
+/** Portable interchange (`export <db NAME | alarms> <csv|json|txt> <file>`,
+ *  export_commands.c). Renders the structured stores through the existing
+ *  db/alarm APIs and writes atomically. Returns 0 exported, 1 empty,
+ *  2 usage/I-O. */
+int shell_command_export(int argc, char **argv);
+
+/** Portable interchange in (`import <db NAME | alarms> <file> <fmt>`,
+ *  import_commands.c). db takes csv|json|vcf, alarms takes csv|json|ics;
+ *  shapes match `export` output for round-trips, ids are always fresh.
+ *  Returns 0 imported, 1 empty, 2 usage/I-O. */
+int shell_command_import(int argc, char **argv);
+
+/** USTAR backup archives (`archive create|extract|list|verify` and the
+ *  `backup` alias; archive_commands.c over components/archive).
+ *  argv[0] selects the family. Returns 0 ok, 1 nothing/mismatch,
+ *  2 usage/I-O. */
+int shell_command_archive(int argc, char **argv);
+/** Split a vCard/iCalendar content line ("NAME;params:value") into the
+ *  property name (group prefix stripped, params dropped) and the raw value.
+ *  Pure, unit-tested. */
+bool import_vcf_prop_split(const char *line, char *name_out, size_t name_size,
+                           const char **value_out);
+
+/** Unescape a JSON string body (no quotes) into @p dst. Handles \" \\ \/
+ *  \b \f \n \r \t and \uXXXX (BMP as UTF-8, lone surrogates as '?').
+ *  Pure, unit-tested. @return bytes written excluding NUL. */
+size_t import_json_unescape(const char *src, size_t len, char *dst, size_t dst_size);
+
+/** Parse an iCalendar DATE-TIME ("YYYYMMDDTHHMMSS", date-only, trailing Z
+ *  accepted as device-local) into @p out with full range checks (no mktime,
+ *  so TZ-independent). Pure, unit-tested. */
+bool import_ics_datetime(const char *text, struct tm *out);
+
+/** Password file encryption (`crypt lock|unlock <src> <dst> [/p:pass|/ask]`,
+ *  crypt_commands.c). AES-256-GCM with a PBKDF2-SHA256 key; secrets never
+ *  print. Returns 0 ok, 1 crypto/IO failure, 2 usage. */
+int shell_command_crypt(int argc, char **argv);
+
+/** USB CDC-ACM serial verbs (`usb userial ...`, userial_commands.c) over the
+ *  byte API in components/usb. Expects argv[0]=="usb", argv[1]=="userial",
+ *  argv[2]=verb. Returns 0 ok, 1 state/IO failure, 2 usage. */
+int shell_command_userial(int argc, char **argv);
+
+/** Derive the 32-byte file key from @p pass and @p salt (PBKDF2-SHA256).
+ *  Pure, unit-tested. @return 0 on success. */
+int crypt_derive_key(const char *pass, const uint8_t *salt, uint8_t *key_out);
+
+/** One-shot whole-buffer envelope (`P4CRYPT1` magic + salt + nonce +
+ *  ciphertext + tag). Pure, unit-tested. @p out must hold the plaintext
+ *  length plus the 45-byte envelope overhead. */
+int crypt_encrypt_mem(const uint8_t *in, size_t len, const char *pass,
+                      uint8_t *out, size_t out_size, size_t *out_len);
+
+/** Inverse of crypt_encrypt_mem. @return 0 on success, 1 on a bad password,
+ *  corrupt input, or a short buffer (never distinguished). */
+int crypt_decrypt_mem(const uint8_t *in, size_t len, const char *pass,
+                      uint8_t *out, size_t out_size, size_t *out_len);
+
+/** Substitute `R<row>C<col>` references (case-insensitive) in @p expr with
+ *  the numeric values of @p cells (flat rows x cols grid of heap strings;
+ *  a non-numeric or out-of-range reference reads as 0). Pure, unit-tested. */
+void csv_substitute_refs(const char *expr, char **cells, int rows, int cols,
+                         char *out, size_t out_size);
+
+/** Format one CSV field with RFC-4180 quoting. Pure, unit-tested, shared
+ *  with `export` (single quoting implementation). With @p out NULL returns
+ *  the bytes needed including the terminator. */
+size_t csv_format_field(const char *text, char *out, size_t out_size);
 /** Validate JSON text (testable core): true when structurally valid.
  * @p err receives "msg at line L col C" on failure (may be NULL). */
 bool json_validate_text(const char *text, size_t len, char *err, size_t err_size);
@@ -386,6 +480,35 @@ void shell_command_pkg(int argc, char **argv);
  * `NAME.APPINFO` file, writing the uppercased NAME to @p out.
  */
 bool pkg_app_name_from_appinfo(const char *filename, char *out, size_t size);
+
+/** App-name buffers for the completion providers (pkg_commands.c). */
+#define COMMAND_APP_NAME_BYTES 32
+#define COMMAND_APP_MAX        48
+
+/**
+ * Completion sources (pkg_commands.c): installed app names from the
+ * APPS directory APPINFO files, and available bundle names from the
+ * PKGS bundle directories.
+ * @return the number written (0 when no SD / none).
+ */
+int pkg_list_installed(char names[][COMMAND_APP_NAME_BYTES], int max);
+int pkg_list_available(char names[][COMMAND_APP_NAME_BYTES], int max);
+
+/**
+ * Tab-completion provider bound to the shell `complete_line` op. Fills @p out
+ * with the @p match_index-th match for the last word of @p line and returns
+ * the total number of matches. The candidate set derives from the shell help
+ * table (command names + usage tokens), aliases, installed apps, and paths.
+ */
+int command_complete_line(const char *line, int match_index, char *out,
+                          size_t out_size);
+
+/**
+ * SD-free best-match provider bound to the shell `ghost_line` op. Fills @p out
+ * with the single best completion for @p line (no paths, no I/O) and returns
+ * the number of matches found.
+ */
+int command_ghost_line(const char *line, char *out, size_t out_size);
 
 /* ========================================================================
  * DATABASE (`db`)

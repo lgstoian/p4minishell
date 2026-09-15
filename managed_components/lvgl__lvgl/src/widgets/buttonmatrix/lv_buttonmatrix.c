@@ -280,6 +280,24 @@ const char * lv_buttonmatrix_get_button_text(const lv_obj_t * obj, uint32_t btn_
     return btnm->map_p[txt_i];
 }
 
+/* P4MiniShell addition (tracked in tools/managed_patches.patch): expose a
+ * button's on-screen area so the `ui` touch-automation verbs can tap a
+ * specific key's real center (hit-test faithful). */
+bool lv_buttonmatrix_get_button_area(const lv_obj_t * obj, uint32_t btn_id,
+                                     lv_area_t * area_out)
+{
+    if(area_out == NULL) return false;
+    LV_ASSERT_OBJ(obj, MY_CLASS);
+
+    const lv_buttonmatrix_t * btnm = (const lv_buttonmatrix_t *)obj;
+    if(btn_id == LV_BUTTONMATRIX_BUTTON_NONE) return false;
+    if(btn_id >= btnm->btn_cnt) return false;
+    if(btnm->button_areas == NULL) return false;
+
+    *area_out = btnm->button_areas[btn_id];
+    return true;
+}
+
 bool lv_buttonmatrix_has_button_ctrl(lv_obj_t * obj, uint32_t btn_id, lv_buttonmatrix_ctrl_t ctrl)
 {
     LV_ASSERT_OBJ(obj, MY_CLASS);

@@ -6,6 +6,7 @@ idf_component_register(
         windows
         ansi
         display
+        gfx
         espressif__esp_lvgl_port
         lvgl__lvgl
 )

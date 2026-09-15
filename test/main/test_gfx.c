@@ -254,6 +254,154 @@ void test_gfx_bmp_decode_565(void)
     TEST_ASSERT_FALSE(gfx_bmp_decode_565(buf, n, &info, NULL));
 }
 
+/** Build a BMP with selectable bpp/orientation (BGRA/BGR triples top-down). */
+static size_t test_bmp_build_ex(uint8_t *buf, int w, int h, int bpp, bool top_down,
+                                const uint8_t *pixels_top_down)
+{
+    int bytes = bpp / 8;
+    uint32_t stride = ((uint32_t)w * (uint32_t)bytes + 3u) & ~3u;
+    uint32_t img = stride * (uint32_t)h;
+    uint32_t total = 54 + img;
+    int32_t hh = top_down ? -h : h;
+    int y;
+
+    memset(buf, 0, total);
+    buf[0] = 'B';
+    buf[1] = 'M';
+    buf[2] = (uint8_t)total;
+    buf[3] = (uint8_t)(total >> 8);
+    buf[10] = 54;
+    buf[14] = 40;
+    buf[18] = (uint8_t)w;
+    buf[19] = (uint8_t)(w >> 8);
+    buf[22] = (uint8_t)(hh & 0xFF);
+    buf[23] = (uint8_t)((hh >> 8) & 0xFF);
+    buf[24] = (uint8_t)((hh >> 16) & 0xFF);
+    buf[25] = (uint8_t)((hh >> 24) & 0xFF);
+    buf[26] = 1;
+    buf[28] = (uint8_t)bpp;
+    buf[29] = (uint8_t)(bpp >> 8);
+    buf[34] = (uint8_t)img;
+    buf[35] = (uint8_t)(img >> 8);
+    for (y = 0; y < h; y++) {
+        const uint8_t *src = top_down
+                                 ? pixels_top_down + (uint32_t)y * (uint32_t)w * (uint32_t)bytes
+                                 : pixels_top_down + (uint32_t)(h - 1 - y) * (uint32_t)w * (uint32_t)bytes;
+        memcpy(buf + 54 + (uint32_t)y * stride, src, (uint32_t)w * (uint32_t)bytes);
+    }
+    return total;
+}
+
+void test_gfx_bmp_ex_32bit_top_down(void)
+{
+    /* 2x2 top-down BGRA: red, green / blue, white. */
+    uint8_t px[2 * 2 * 4] = {
+        0, 0, 255, 255, 0, 255, 0, 255,
+        255, 0, 0, 255, 255, 255, 255, 255,
+    };
+    uint8_t buf[54 + 2 * 8];
+    gfx_bmp_info_t info;
+    gfx_surface_t s = {NULL, 0, 0};
+    size_t n;
+
+    n = test_bmp_build_ex(buf, 2, 2, 32, true, px);
+    TEST_ASSERT_TRUE(gfx_bmp_parse_header_ex(buf, n, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H));
+    TEST_ASSERT_EQUAL_INT(2, info.w);
+    TEST_ASSERT_EQUAL_INT(2, info.h);
+    TEST_ASSERT_EQUAL_UINT16(32, info.bpp);
+    TEST_ASSERT_TRUE(info.top_down);
+    /* The strict sprite wrapper still rejects 32-bit / top-down (and zeroes
+     * info on rejection), so re-parse before decoding. */
+    TEST_ASSERT_FALSE(gfx_bmp_parse_header(buf, n, &info));
+    TEST_ASSERT_TRUE(gfx_bmp_parse_header_ex(buf, n, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H));
+
+    TEST_ASSERT_TRUE(gfx_bmp_decode_565(buf, n, &info, &s));
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x07E0, gfx_surface_get(&s, 1, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x001F, gfx_surface_get(&s, 0, 1));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 1, 1));
+    gfx_surface_free(&s);
+}
+
+void test_gfx_bmp_ex_large_and_scaled(void)
+{
+    /* 70x2 24-bit bottom-up (> GFX_SPR_MAX in width, tiny in bytes): the sprite
+     * wrapper rejects it by size, the general parser accepts it, and a scaled
+     * decode samples it to any target. */
+    uint8_t px[70 * 2 * 3];
+    uint8_t buf[54 + 2 * 212];
+    gfx_bmp_info_t info;
+    gfx_surface_t s = {NULL, 0, 0};
+    size_t n;
+
+    memset(px, 0, sizeof(px));
+    /* Left half red, right half blue (BGR). */
+    for (int y = 0; y < 2; y++) {
+        for (int x = 0; x < 70; x++) {
+            uint8_t *p = px + ((size_t)y * 70 + (size_t)x) * 3;
+            if (x < 35) { p[2] = 255; } else { p[0] = 255; }
+        }
+    }
+    n = test_bmp_build_ex(buf, 70, 2, 24, false, px);
+    TEST_ASSERT_TRUE(gfx_bmp_parse_header_ex(buf, n, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H));
+    TEST_ASSERT_FALSE(gfx_bmp_parse_header(buf, n, &info)); /* width > GFX_SPR_MAX (zeroes info) */
+    TEST_ASSERT_TRUE(gfx_bmp_parse_header_ex(buf, n, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H));
+
+    TEST_ASSERT_TRUE(gfx_bmp_decode_scaled_565(buf, n, &info, 10, 2, &s));
+    TEST_ASSERT_EQUAL_INT(10, s.w);
+    TEST_ASSERT_EQUAL_INT(2, s.h);
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&s, 0, 0));  /* red half */
+    TEST_ASSERT_EQUAL_UINT16(0x001F, gfx_surface_get(&s, 9, 1));  /* blue half */
+    gfx_surface_free(&s);
+}
+
+void test_gfx_bmp_fit(void)
+{
+    int w;
+    int h;
+
+    gfx_bmp_fit(100, 50, 40, 40, &w, &h);
+    TEST_ASSERT_EQUAL_INT(40, w);
+    TEST_ASSERT_EQUAL_INT(20, h);
+
+    gfx_bmp_fit(50, 100, 40, 40, &w, &h);
+    TEST_ASSERT_EQUAL_INT(20, w);
+    TEST_ASSERT_EQUAL_INT(40, h);
+
+    /* Never upscales a source that already fits. */
+    gfx_bmp_fit(10, 10, 40, 40, &w, &h);
+    TEST_ASSERT_EQUAL_INT(10, w);
+    TEST_ASSERT_EQUAL_INT(10, h);
+
+    /* Degenerate input is clamped, never zero. */
+    gfx_bmp_fit(0, 0, 40, 40, &w, &h);
+    TEST_ASSERT_TRUE(w >= 1 && h >= 1);
+}
+
+void test_gfx_blit_scaled(void)
+{
+    gfx_surface_t dst = {NULL, 0, 0};
+    gfx_surface_t src = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&dst, 4, 4));
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&src, 2, 2));
+    gfx_surface_clear(&dst, 0x0000);
+    gfx_surface_pixel(&src, 0, 0, 0xF800);
+    gfx_surface_pixel(&src, 1, 0, 0x07E0);
+    gfx_surface_pixel(&src, 0, 1, 0x001F);
+    gfx_surface_pixel(&src, 1, 1, 0xFFFF);
+
+    gfx_surface_blit_scaled(&dst, &src, 0, 0, 4, 4, false, 0);
+    /* Nearest: each source pixel fills a 2x2 quadrant. */
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x07E0, gfx_surface_get(&dst, 3, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x001F, gfx_surface_get(&dst, 0, 3));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&dst, 3, 3));
+
+    gfx_surface_free(&src);
+    gfx_surface_free(&dst);
+}
+
 void test_gfx_blit_clip_transparent(void)
 {
     gfx_surface_t dst = {NULL, 0, 0};

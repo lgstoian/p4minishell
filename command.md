@@ -133,13 +133,19 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `display`, `keyboard`, `windows` (UI query) | `components/command/command_ui.c` (dispatched from `components/command/command.c`) |
 | `config` (persistent settings / CONFIG.SYS + factory reset) | `components/command/config_cmd.c` |
 | `crc32`, `asset check|list` + package install/verify (`pkg`) | `components/command/asset_commands.c` + `components/command/pkg_commands.c` |
-| `db` (record store verbs) | `components/command/db_commands.c` (dispatched from `components/command/command.c`) |
+| `db` (record store verbs, incl. `/field:`/`/sort:`) | `components/command/db_commands.c` (dispatched from `components/command/command.c`; field parser in `components/db/db.c`) |
 | `alarm`/`cal` (alarm + calendar verbs) | `components/command/alarm_commands.c` (dispatched from `components/command/command.c`) |
 | `gfind` (Palm-style global find over db + alarms) | `components/command/gfind_commands.c` (dispatched from `components/command/command.c`) |
+| `export` (portable store interchange) | `components/command/export_commands.c` (dispatched from `components/command/command.c`) |
+| `csv` (grid substrate) | `components/command/csv_commands.c`; pure parser `components/storage/storage_csv.c` |
+| `crypt` (password file encryption) | `components/command/crypt_commands.c` (mbedTLS AES-256-GCM) |
+| `usb userial` (CDC-ACM serial) | `components/command/userial_commands.c` → byte API in `components/usb/userial.c` |
+| `timer`/`stopwatch` | `components/clock/clock_timer.c` + `clock_commands.c` (dispatched from command.c) |
+| `bind`/`unbind` (F-key bindings; shell hook) | `components/batch/batch.c` + `components/shell/shell.c` key path |
 | `reboot`, `clear`/`cls`, `prompt`, `launch`, `apps` | `components/command/command.c` |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota`, `httpd`, `netstat`, `ipconfig` (family routing) | `components/command/command.c` → owning module |
-| `ping`, `dns`/`nslookup`, `httpget`/`wget` (dispatched here, implemented in networking) | `components/command/command.c` → `components/networking/` |
+| `ping`, `dns`/`nslookup`, `httpget`/`wget`, `tcpterm` (dispatched here, implemented in networking) | `components/command/command.c` → `components/networking/` |
 
 Every command is reached through the single dispatcher `shell_execute_command_core()` in
 `components/command/command.c`. `main/main.c` contains no command implementations. It routes
@@ -231,6 +237,24 @@ When space runs out it abbreviates labels (`WiFi HI`→`W:HI`, `MEM 12.3M`→
 text to a smaller font, and hides the notification center before
 dropping any indicator. Portrait rotations compact automatically.
 
+Status indicators are **color-coded** in both styles. The default
+`P4_CONFIG_HEADER_STATUS_STYLE=glyph` shows one compact letter per indicator
+(`W BT U S` and `M C B`), colored by state — green healthy, amber degraded,
+red off/failed, muted absent (SD slot empty) — which returns the reclaimed
+width to the notification area. Set `status_style=0` to restore the verbose
+words (`WiFi HI`, `USB ON`). An `A` activity indicator appears only while a C6
+OTA or a background job is running. **Tap** an indicator to show a one-line
+detail in the notification area; **long-press** to run that subsystem's status
+command (`wifi status`, `bluetooth status`, `usb status`, `sd info`, `ps`,
+`mem`, `top`, `battery`).
+
+The center shows the local clock (`HH:MM`, `--:--` until SNTP syncs) when there
+is no active notification. Notifications queue FIFO and are colored by severity
+(info/warn/error), so an alarm or OTA alert is not lost behind a later trivial
+message. The header poll is adaptive (roughly 150 ms while the display is off,
+1 s while an OTA/job runs, 2 s idle), with expensive telemetry still sampled at
+5 s.
+
 | Form | Meaning |
 |------|---------|
 | `header` / `header status` | Mode, height, visibility, font step, content levels, and wanted vs actual panel widths. |
@@ -310,7 +334,7 @@ Show window manager layout information: display dimensions, region rectangles fo
 header, transcript, input row, and keyboard. Uses `windows_get_rect()` and
 `windows_get_display_width()`/`windows_get_display_height()`.
 
-### keyboard show|hide|toggle|status
+### keyboard show|hide|toggle|status|mode
 Control the on-screen keyboard visibility. `hide` removes the keyboard and
 expands the transcript area; `show` restores it. `toggle` switches between
 visible and hidden. `status` reports current visibility, mode, height, and the
@@ -318,11 +342,43 @@ external-input state (`external=on` while a USB keyboard is attached and the
 OSK is auto-hidden). Tapping the input line — or the transcript, when the OSK
 is hidden and no USB keyboard is attached — summons the on-screen keyboard.
 
+`keyboard mode` prints the current page (`keyboard.page=<name>`) and
+`keyboard mode <page>` switches it. Pages: `text_lower` (alias `letters`),
+`text_upper` (`caps`), `number` (`num`), `symbols` (`special`), `nav`, and
+`nav2` (`edit`). The two `nav` pages are the editor control pages; the editor
+selects `nav` itself when it opens (see [editor.md](editor.md)).
+
 The on-screen symbols keyboard covers every printable ASCII character
 (0x20-0x7E), including the shell-critical pipe `|`, caret `^` (the shell
 escape character), tilde `~`, and backtick, so DOS operators and escaped
 characters can be typed directly. Use the `1#` / `abc` mode buttons to switch
-between text and symbols.
+between text and symbols. The shell input row also has a `Tab` button that runs
+the same completion as the USB `Tab` key.
+
+### ui tap|longpress|swipe|press|move|release|key|target|targets|hit|state
+Synthetic touch automation and UI inspection (firmware `components/uitest/` +
+`components/command/ui_commands.c`). A second LVGL pointer indev is driven by
+the command, so `ui` taps go through the normal hit-testing/event path — the
+same code a finger exercises.
+
+- `ui tap <x> <y> [ms]` — press+release at a display pixel.
+- `ui longpress <x> <y> [ms]` — hold past the LVGL long-press time (default 800).
+- `ui swipe <x1> <y1> <x2> <y2> [ms] [steps]` — paced drag then release.
+- `ui press <x> <y>` / `ui move <x> <y>` / `ui release` — low-level hold/drag.
+- `ui key <label> [ms]` — tap an on-screen-keyboard key by its label.
+- `ui targets [/b] [/v:NAME]` — list every tappable widget as
+  `id x y w h name` (buttonmatrices expand to one row per key, `kbd:<label>`).
+- `ui target <id>` — activate a listed target (its own click/value event).
+- `ui hit <x> <y> [/v:NAME]` — report the target id under a point.
+- `ui state [/b] [/v:NAME]` — active modal, keyboard visibility/mode, editor
+  document state, the shell input-line text, the inline `ghost=` completion
+  suffix, and the active `search=` reverse-search query.
+
+Batch-friendly: `ERRORLEVEL` 0/1/2, `/b` bare output, `/v:NAME` result
+variables, redirection. While a modal blocks the command worker a `ui` line is
+handled by the console-reader task, so the editor/dialog/list UI can be driven
+over serial (this is what `tools/ui_touch_test.py` uses). Reference batch demo:
+`apps/uitest/UITEST.BAT`.
 
 ### font info | font coverage | font list | font set | font size
 Font roles and live switching (`components/font/` registry: terminal role
@@ -504,9 +560,10 @@ Two schedulers exist, and they compose:
   Run agenda now).
 - **`alarm`** — time-based and persistent (`sd:/ALARMS`), polled every
   `P4_CONFIG_ALARM_POLL_MS` (30 s) with boot catch-up. `alarm add DATE TIME
-  /run:APP.BAT [/daily|/weekly:mask] [/beep] [/led] [/silent]` queues
+  /run:APP.BAT [/daily|/weekly:mask|/monthly|/yearly] [/day:D] [/month:M]
+  [/byw:N|last] [/beep] [/led] [/silent]` queues
   `call APP.BAT` on the command worker when the time arrives, so a batch
-  file can be the action. `cal [today|next|YYYY-MM]` reads the same store.
+  file can be the action. `cal [today|week|next|YYYY-MM]` reads the same store.
   Reference job: `apps/companion/AGENDA.BAT` (`cal today` + `cal next` +
   `notify`), runnable foreground or scheduled.
 
@@ -523,9 +580,12 @@ Enter light sleep. RAM is retained, so the shell resumes with all state
 `P4_CONFIG_POWER_SLEEP_DEFAULT_SECS` (60 s); `sleep 0` clears the timer and
 wakes only from an external source. Before sleeping, the display is blanked
 and Wi-Fi/hosted state is torn down through `networking_wifi_shutdown()`.
-On wake the wake cause is reported and the display is restored. Light-sleep
-Wi-Fi teardown can be disabled with
-`P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI=0`.
+On wake the wake cause is reported and the display is restored. When Wi-Fi
+was connected before sleeping, the wake path re-establishes it automatically
+in the background (`networking_wifi_request_wake_restore()`, the same request
+shape as the post-OTA restore) instead of leaving a manual `wifi connect` —
+the line-current palmtop behaviour. Light-sleep Wi-Fi teardown can be
+disabled with `P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI=0`.
 
 Wake sources: the timer is always available; a user-wired button on
 `P4_CONFIG_POWER_WAKE_GPIO` wakes via GPIO. Touch wake is not available on
@@ -597,27 +657,51 @@ clip read CONFIG.SYS
 clip > out.txt       save the file text
 ```
 
-### history | history /save [file] | history /load [file] | history /clear
+### history | history /save [file] | history /load [file] | history /search <text> | history /clear
 The recall history is heap-backed (up to `P4_CONFIG_COMMAND_HISTORY_DEPTH`
 commands, capped at `P4_CONFIG_HISTORY_TOTAL_BYTES`) and Up/Down arrows recall
-it.
+it. With `P4_CONFIG_HISTORY_AUTOSAVE` the profile (`P4_CONFIG_HISTORY_PROFILE`,
+default `HISTORY.TXT`) is auto-loaded at the first SD mount and auto-saved 5 s
+after the ring last changed; `reboot` flushes it before reset.
 
 | Form | Effect |
 |------|--------|
 | history | List the numbered recall buffer (redirectable: `history > hist.txt`). |
 | history /save [file] | Write the history to SD (default `P4_CONFIG_HISTORY_PROFILE`), atomic with partial-file cleanup. |
 | history /load [file] | Restore history from SD (append, dedupe). |
+| history /search <text> | Print matching entries (newest first, case-insensitive substring). Its own command line is skipped so the query cannot self-match. |
 | history /clear | Clear the RAM history. |
 
-ERRORLEVEL: 0 ok / 1 missing card or file / 2 usage.
+ERRORLEVEL: 0 ok / 1 missing card or file or no match / 2 usage.
 
 ### Tab completion (USB keyboard)
 Pressing **Tab** completes the current word at the end of the input line. The
-first token completes command names, aliases, and `.bat` files; any later
-token completes SD file/directory paths (directories get a trailing `/`). A
-unique match fills in, repeated Tab cycles the matches, and the first Tab with
+candidate set comes from a **single source**: the shell help table. The first
+token completes every help-listed command name, aliases, installed
+`APPS/*.APPINFO` app names, and `.bat` files; any later token completes
+subcommands/flags tokenized from that command's usage string, plus the
+`launch`/`open`/`run` app names, `pkg` bundle names, and SD file/directory
+paths (directories get a trailing `/`). A unique match fills in, repeated Tab
+cycles up to `P4_CONFIG_COMPLETION_MAX_MATCHES` matches, and the first Tab with
 several matches lists them in the transcript. Command lines accept up to
 `P4_CONFIG_COMMAND_BYTES` (4096) characters.
+
+### Ghost completion (typing ahead)
+With `P4_CONFIG_COMPLETION_GHOST` the best completion's remaining suffix is
+drawn muted immediately after the caret as you type; pressing **Right** or
+**Tab** accepts it. The suggestion is SD-free (help table + aliases only, no
+I/O), and is hidden when the caret is not at the end of the line, a modal owns
+the screen, or the line already fills the visible width. It applies to the
+shell input line only (not modal prompts).
+
+### Ctrl+R reverse history search
+Inside the shell input line, **Ctrl+R** starts an incremental,
+case-insensitive search over the recall ring. Typed characters extend the
+query (shown in a small overlay in the input row), the best/newest match fills
+the line, **Ctrl+R** again cycles to older matches, **Enter** accepts the
+current match, and **Esc** cancels and restores the draft. The same
+substring test backs `history /search`.
+
 
 ### pwm <pin> <freq_hz> <duty_pct> | pwm stop <pin> | pwm status
 Drive a non-reserved GPIO with an LEDC PWM signal. `pwm <pin> <freq_hz>
@@ -714,6 +798,43 @@ configured server, whether the clock is synced, and the local time. `sntp sync`
 clock jumps to the network time. Implemented in
 `components/clock/clock_commands.c`.
 
+### rtc [anchor]
+RTC backup status: how wall time survives reboots without SNTP. The ESP32-P4
+keeps its microsecond RTC counter across resets (and across power loss with a
+VBAT coin cell); every anchor stores `{unix, rtc_us}` in NVS, replayed at
+boot as `unix + (rtc_now - rtc_anchor)/1e6`. Anchors land on SNTP sync,
+manual `date`/`time` set, `reboot`, and every `P4_CONFIG_RTC_ANCHOR_PERIOD_S`
+(1 h). `rtc` prints the source (`none|anchor|stale|manual|sntp|ext|preset`),
+validity (a counter reset without VBAT applies last-known time as *stale*,
+honestly `--:--`), the live counter, anchor age, ext-chip presence, and SNTP
+state; `rtc anchor` forces a write now. An optional external DS3231-class
+I2C chip (`P4_CONFIG_RTC_EXT_*`, default off) is read first at boot and
+rewritten on sync/set. Implemented in `components/clock/clock_rtc.c`.
+
+### timer | stopwatch start|stop|lap|status [name] [/b] [/v:NAME]
+Named stopwatch runs over `esp_timer_get_time()` (HP palmtop stopwatch parity),
+owned by `components/clock/clock_timer.c` and surfaced by
+`clock_commands.c`. Names default to `default`; up to
+`P4_CONFIG_TIMER_SLOTS` (8) runs are held, and starting an existing run
+restarts it from zero.
+
+- `timer start [name]` — start (or restart) a run.
+- `timer stop [name] [/v:NAME]` — freeze the run; `NAME` receives the elapsed
+  milliseconds.
+- `timer lap [name] [/v:NAME]` — record a split; `NAME` receives the running
+  total.
+- `timer status [name] [/b]` — print one run, or every run when no name is
+  given. `/b` emits `name state ms laps` rows for `for /f`.
+
+ERRORLEVEL: 0 ok, 1 no such slot / run / no timers, 2 usage. Headless-safe.
+
+```
+timer start build
+delay 2500
+timer stop build /v:MS      -> MS=2500
+timer status /b
+```
+
 ### gpio list
 Show exposed board GPIO table with pin numbers, current levels, write policy, and role descriptions.
 
@@ -749,6 +870,14 @@ a 4-byte little-endian payload size, then the raw BMP bytes. The host reads the
 magic, then the size, then exactly that many bytes. The console reader is
 suspended for the duration and the bytes are written straight to the
 USB-Serial/JTAG driver (no CRLF translation), so the frame is byte-exact.
+
+**Screenshot while a modal is open:** the bare `screenshot` command is handled
+by the console-reader task itself (via `shell_command_ops_t.modal_console_command`)
+when a modal surface is active, because the modal blocks the command worker.
+This lets the host capture `dialog`/`list`/`ask`/`browse`/`view`/`image show`/
+`hexview` and the `edit` editor while they are on screen. Only the streaming
+(no-argument) form is intercepted; `screenshot <file.bmp>` still runs on the
+worker, so while a modal is open it is queued and executes when the modal closes.
 
 **SD card save:** Uses the same storage path as `copy`, `write`, etc. Free-space
 is prechecked, the session is guarded, and a partial destination is removed on
@@ -952,6 +1081,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | calc [NAME=] <expr> | Evaluate a floating-point expression with the BASIC math/string functions and print it (or store it in NAME) |
 | calc /deg \| /rad \| /angle | Set or query the `calc` trig angle mode |
 | calc /hex <expr> | Print an integral result as `&H` hex |
+| calc /fin \| /date | Print the financial / date function cheatsheets |
 | path | Show current batch PATH |
 | path <dir1>;<dir2>;... | Replace PATH for .bat lookup |
 | echo <text> | Print text after variable expansion |
@@ -1003,7 +1133,8 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | db count [<name>] [/cat:N] | Count live records |
 | db find [<name>] [/cat:N] [/key:K] [/text:P] [/b] | Linear scan; `/b` = bare `id\|cat\|key` |
 | db export [<name>] [file] / db import [<name>] [file] | Dump / restore records as text |
-| alarm add <YYYY-MM-DD> <HH:MM> [title] [/msg:..] [/daily\|/weekly:mask] [/beep] [/led] [/run:file.bat] [/silent] | Add an SD-persisted alarm |
+| alarm add <YYYY-MM-DD> <HH:MM> [title] [/msg:..] [/daily\|/weekly:mask\|/monthly\|/yearly] [/day:D] [/month:M] [/byw:N\|last] [/beep] [/led] [/run:file.bat] [/silent] | Add an SD-persisted alarm |
+| alarm snooze <id> [minutes] | Push the next due time (default 10, max 1440) |
 | alarm list [/b] | List events (bare `id\|datetime\|title\|flags\|recur\|action` with `/b`) |
 | alarm status | Store summary: count, enabled, next due, checker running |
 | alarm enable <id> \| alarm disable <id> | Arm / disarm one event |
@@ -1041,6 +1172,60 @@ ls            ->  dir /b
   CONFIG.SYS, so saved aliases are restored every boot without editing
   AUTOEXEC.BAT. `alias /load` reloads manually. Values containing a double
   quote are skipped on save so the profile always round-trips.
+
+### bind — USB key bindings (F-keys + Ctrl chords)
+
+Binds a USB HID function key (F1..F12) or a Ctrl+letter chord (`^A`..`^Z`)
+to a command line. Pressing the key submits its line onto the command
+worker, exactly like typing it. Owned by `components/batch/batch.c` (the
+same module as aliases) with the key hook in the shell.
+
+```
+bind F5 sysinfo
+bind F6 launch tcmd
+bind ^G macro play build.bat
+bind                 list every bind
+bind unbind F6       clear one
+bind /clear          clear all
+bind /save           persist to sd:/BIND.BAT
+bind /load           reload the profile
+```
+
+- At most `P4_CONFIG_BIND_MAX` (12) keys shared between F-keys and chords;
+  command lines up to `P4_CONFIG_BIND_VALUE_BYTES`. `^C` is reserved for
+  the foreground break and can never be bound.
+- F-keys fire only while the prompt is idle; chords additionally fire while
+  a non-editor modal (dialog/list) owns the screen, so a macro hotkey works
+  from anywhere except the editor (which keeps its Ctrl vocabulary) and
+  key waits (`term`/`pause`/`choice` keep every key — a remote session
+  always receives `^C` and friends). Never inside a batch file.
+- `bind /save` writes `bind Fx <line>` / `bind ^X <line>` lines to
+  `sd:/BIND.BAT`; boot.c auto-runs it after the alias profile, so saved
+  binds restore every boot. Lines containing a double quote are skipped on
+  save.
+
+### macro — command macro recorder
+
+Captures submitted command lines for replay as a batch file (the 95LX macro
+story, DOSKEY-style recording with batch-file persistence):
+
+```
+macro record demo.bat
+dir /b
+calc 2^10
+macro stop             ->  2 line(s) -> sd:/demo.bat
+macro play demo.bat
+macro status
+```
+
+- `macro record [file]` (default `MACRO.BAT`) captures every submitted line
+  from both typed surfaces and touch-tap actions; `macro ...` control
+  lines are never recorded. The buffer holds `P4_CONFIG_MACRO_BYTES`
+  (4 KB); filling it auto-stops with an overflow mark.
+- `macro stop` writes the capture atomically; `macro play <file>` runs it
+  via `call`; `macro status` shows the state. Combine with chords:
+  `bind ^G macro play build.bat` replays on one keypress, from the prompt
+  or any non-editor modal.
 
 ### set /a — integer arithmetic
 
@@ -1304,6 +1489,26 @@ db purge contacts                                physically remove soft-deleted
 db count contacts [/cat:N]                       count live records
 db find contacts [/cat:N] [/key:K] [/text:P]     linear scan; prints matches
 db find contacts /b                              bare "id|cat|key" for /f
+db find contacts /field:city=Paris               field filter (payload k=v)
+db find contacts /sort:name                      sort by field (or key/id)
+db get contacts 1 /field:name                    read one field of a record
+```
+
+**Record fields.** A payload can hold `name=value;name=value` pairs. The
+`/field:` and `/sort:` options read them without a schema: `db add contacts
+/key:a name=Alice;city=Paris`, then `db find contacts /field:city=Paris
+/sort:name`. Names match case-insensitively, surrounding spaces are trimmed,
+a value may not contain `;`, and segments without `=` are ignored — so a
+fieldless payload (the default) still works and is searchable by `/text:`.
+`db get <id> /field:name` prints just that value (bare with `/b`) for a
+`for /f`/`set /p` pipeline, and sets ERRORLEVEL 1 when the record has no such
+field. Sorting preserves insertion order for equal keys and is capped at
+`P4_CONFIG_DB_FIND_MAX` matches.
+
+```
+db add contacts /key:b name=Amy /field-style payloads are just text
+db find contacts /field:city=Paris /sort:name /b
+db get 1 /field:name /b        -> Alice
 ```
 
 When a current database is set (`db open`), the `<name>` argument is optional
@@ -1326,6 +1531,137 @@ empty, 2 usage / I/O error, so `db find ... && if not errorlevel 1 (...)` and
 Every `db` operation opens its own guarded SD session and heap-allocates its
 buffers (the batch path never gets a large stack local).
 
+### export <db NAME | alarms> <csv|json|txt|vcf|ics> <file>
+
+Portable interchange out of the structured stores through their existing APIs
+(`db_find`/`db_get`, `alarm_list`) — no parallel readers. This is the ASCII
+counterpart of the native `db export`: the 95LX saved every app file in both a
+native and a text form. (`db` takes csv|json|txt|vcf; `alarms` takes
+csv|json|txt|ics.)
+
+```
+export db contacts csv contacts.csv
+export db contacts json contacts.json
+export db contacts vcf contacts.vcf
+export alarms csv alarms.csv
+export alarms txt alarms.txt
+export alarms ics alarms.ics
+```
+
+- `db` rows are `id,cat,key,payload` (CSV), `{id, cat, key, payload}` (JSON),
+  or `#id cat=N key=K` blocks (TXT). Secret payloads ARE included — a backup
+  is complete or it is useless. `vcf` writes one vCard 3.0 per record from
+  the `k=v` fields (name/tel/email/org/note; FN falls back to the record key,
+  NOTE to the whole payload).
+- `alarms` rows carry `id,when,title,msg,recur,flags` (CSV/JSON) or a header
+  line plus title/message (TXT). `ics` writes one VEVENT per event (floating
+  local DTSTART, `RRULE` for daily/weekly recurrences).
+- Files are written atomically (temp+rename) behind a free-space pre-check,
+  bounded by `P4_CONFIG_DB_EXPORT_MAX_BYTES` (256 KB). CSV uses the same
+  RFC-4180 quoting as the `csv` verb; binary payload bytes escape as `\u00XX`
+  in JSON and print as `.` in TXT (keep binary records in the native
+  `db export` form).
+
+ERRORLEVEL: 0 exported, 1 empty store / over the cap, 2 usage / I-O.
+
+### import db <name> <csv|json|vcf> <file> / import alarms <csv|json|ics> <file>
+
+Portable interchange back into the stores — argument order mirrors `export`,
+and the csv/json shapes match `export` output exactly, so an export
+round-trips. Records and events always get fresh ids (the exported id column
+is ignored); imported alarms arm notify-only and keep ENABLED (FIRED is
+cleared).
+
+```
+import db contacts csv contacts.csv
+import db contacts vcf contacts.vcf
+import alarms ics alarms.ics
+```
+
+- `csv` accepts the `export` header (`id,cat,key,payload` / `id,when,title,
+  msg,recur,flags`) or bare data rows, plus an optional 5th `secret` column
+  for `db`. A row must be single-line: payloads holding raw newlines
+  round-trip via `json` or the native `db export` form instead (such rows are
+  skipped and counted, never truncated).
+- `json` parses the `export` array shape (key order and extra keys tolerated;
+  `unix` wins over `when` for alarms).
+- `vcf` reads vCard 3.0 contacts (FN/N/TEL/EMAIL/ORG/TITLE/NOTE, continuation
+  lines unfolded) into `name=..;tel=..;email=..;org=..;note=..` records;
+  `;` in values becomes `,` (the `k=v` convention) and binary properties
+  (PHOTO/...) are skipped.
+- `ics` reads VEVENTs (`DTSTART`, `SUMMARY`, `DESCRIPTION`, `RRULE`
+  FREQ=DAILY/WEEKLY with BYDAY); a trailing `Z` (UTC) is read as
+  device-local time.
+- Rows are capped by `P4_CONFIG_DB_EXPORT_MAX_RECORDS` (db) and the alarm
+  store size (alarms); the summary reports `imported` vs `skipped`.
+
+ERRORLEVEL: 0 imported, 1 nothing imported, 2 usage / I-O.
+
+### archive create|extract|list|verify, backup
+
+USTAR (`.p4a`) backups with a CRC manifest trailer — the 95LX backup story:
+store-only POSIX tar (no compression, zero new dependencies, streamable,
+host-extractable) plus a trailing `P4CRC.MANIFEST` member with one
+`crc32 size path` line per file. Member paths stay relative under each
+source's basename; names beyond the USTAR 100+155 split are skipped and
+counted, never truncated; absolute or `..`-escaping members are refused on
+extract; directory mtimes are stored for host fidelity but not restored on
+the device.
+
+```
+archive create sys.p4a sd:/DBS sd:/ALARMS
+archive list sys.p4a
+archive verify sys.p4a
+archive extract sys.p4a sd:/RESTORE
+backup sys.p4a
+```
+
+- `archive create <file> <path> [paths...]` — streams to `<file>.tmp`,
+  then renames over; free space is pre-checked from a size pre-walk.
+- `archive extract <file> [dest]` (dest defaults to the cwd) — recreates
+  directories, writes each member through temp+rename with a per-file
+  space guard; the manifest is consumed, never materialized.
+- `archive list <file> [/b]` — members with sizes (`/b` bare names).
+- `archive verify <file>` — re-hashes every member against the manifest
+  (foreign tars without one fail honestly).
+- `backup <file> [paths...]` — `create` with a friendlier name; bare
+  `backup <file>` archives `sd:/DBS` + the alarm store (absent sources
+  skipped). (`restore` is NOT aliased — it already means trash-undelete.)
+- Transfers reuse the existing verbs: an archive on SD downloads over
+  Wi-Fi via `httpd`, pulls via `httpget`, moves over USB-serial via
+  `send`/`receive`. Implemented in `components/archive/` (leaf) +
+  `components/command/archive_commands.c`, capped by
+  `P4_CONFIG_ARCHIVE_MAX_ENTRIES` (512) / `P4_CONFIG_ARCHIVE_CHUNK_BYTES`.
+
+ERRORLEVEL: 0 ok, 1 nothing archived / CRC mismatch, 2 usage / I-O.
+
+### crypt lock|unlock <src> <dst> [/p:pass | /ask]
+
+Password file encryption — the memo-password analogue for the SD card.
+AES-256-GCM with a key derived from the password via PBKDF2-HMAC-SHA256
+(10 000 iterations, 16-byte salt, 12-byte nonce), implemented on top of the
+IDF mbedTLS port in `components/command/crypt_commands.c`.
+
+- `crypt lock secret.txt secret.lock /p:s3cr3t` — seal a file.
+- `crypt unlock secret.lock secret.out /p:s3cr3t` — open it.
+- `/ask` prompts for the password with no echo (refuses headless); an inline
+  `/p:` password is masked in the transcript echo and command history (the
+  `wifi connect` precedent).
+
+The envelope is `P4CRYPT1` + salt + nonce + ciphertext + 16-byte tag. Files
+stream in 4 KB chunks through internal (DMA-safe) buffers, so multi-megabyte
+files never hand PSRAM pointers to FATFS. Writes are atomic; a failed run (or
+a tag mismatch) removes the partial. A wrong password and a corrupt file are
+reported identically (`wrong password or corrupt file`). The password buffer
+and key are zeroed after every run.
+
+```
+crypt lock notes.txt notes.enc /ask
+crypt unlock notes.enc notes.txt /p:s3cr3t
+```
+
+ERRORLEVEL: 0 ok, 1 password/IO failure, 2 usage.
+
 ### Alarm / calendar (`alarm`, `cal`) — SD-persisted events
 
 `alarm` is a small, batch-friendly event store backed by the SD card
@@ -1335,30 +1671,43 @@ every `P4_CONFIG_ALARM_POLL_MS` (30 s by default) and, when an event is due,
 reuses the EXISTING surfaces: the header notification area, the RGB LED, the
 speaker, and — for the `/run:` action — the command worker (never the checker
 stack). There is no private notification loop. Recurrence is one-shot, daily,
-or a weekly weekday bitmask.
+a weekly weekday bitmask, monthly (by day-of-month or by nth weekday), or
+yearly.
 
 ```
 alarm add 2030-01-01 09:00 Standup /msg:Team call /beep /led
 alarm add 2030-06-02 08:00 Weekly /weekly:0x7F
+alarm add 2030-03-15 09:00 Payday /monthly
+alarm add 2030-03-01 09:00 Board /monthly /byw:2      2nd weekday of the month
+alarm add 2030-03-01 09:00 Retro /monthly /byw:last   last weekday of the month
+alarm add 2030-03-01 09:00 Renew /yearly /month:3 /day:1
 alarm add 1970-01-01 00:00:01 Now /beep /run:sd:/APPS/NOTIFY.BAT
-alarm list                     list events (enabled/fired + actions)
+alarm list                     list events (enabled/fired + actions + recur)
 alarm list /b                  bare "id|YYYY-MM-DD HH:MM|title|flags|recur|action"
 alarm status                   count, enabled, next due, checker running
 alarm enable <id> | alarm disable <id>
+alarm snooze <id> [minutes]    push the next due time (default 10, max 1440)
 alarm del <id>                 soft-delete (kept until purge)
 alarm del all                  wipe the whole store (fresh id space)
 alarm purge                    physically remove soft-deleted events
-cal today | cal next | cal YYYY-MM    thin calendar view / count
+cal today | cal week | cal next | cal YYYY-MM   calendar grid / week agenda
 ```
 
 Options may appear anywhere: `/msg:text`, `/daily`, `/weekly:mask` (7-bit
-weekday bitmask, bit 0 = Sunday), `/beep`, `/led`, `/run:file.bat`, `/silent`
-(suppress sound/LED, header notify only), `/b`. Titles/messages use normal
-quoting (`"..."`, `^`). Times are parsed as local `YYYY-MM-DD HH:MM`
-(timezone-aware via `mktime`, matching the `date`/`time` commands). ERRORLEVEL:
-0 ok, 1 not found / none due, 2 usage / I/O.
+weekday bitmask, bit 0 = Sunday), `/monthly`, `/yearly`, `/day:1..31`,
+`/month:1..12`, `/byw:1..5|last` (monthly nth weekday), `/beep`, `/led`,
+`/run:file.bat`, `/silent` (suppress sound/LED, header notify only), `/b`.
+`/day:`/`/month:`/`/byw:` require `/monthly` or `/yearly`; `/byw:` is
+monthly-only and snaps the start date forward to the matching nth weekday.
+Monthly by-day skips short months (`/day:31` fires only where a 31st exists);
+yearly Feb 29 fires only in leap years. Titles/messages use normal quoting
+(`"..."`, `^`). Times are parsed as local `YYYY-MM-DD HH:MM` (timezone-aware
+via `mktime`, matching the `date`/`time` commands). ERRORLEVEL: 0 ok,
+1 not found / none due, 2 usage / I/O.
 
-Firing behaviour: when an event becomes due, the checker marks it fired (one-shot)
+`cal YYYY-MM` prints a classic `Su Mo Tu We Th Fr Sa` grid (event days marked
+`*`) followed by the event list; `cal week` prints a 7-day agenda. Firing
+behaviour: when an event becomes due, the checker marks it fired (one-shot)
 or advances it to the next occurrence (recurring), persists, then notifies /
 beeps / pulses the LED, and optionally queues `call <file>` onto the command
 worker for the `/run:` action. Alarms that become due while the device is
@@ -1443,6 +1792,12 @@ calc deg(30.1530)          ->  30.258333...    (30°15'30" = 30 + 15/60 + 30/360
 calc asinh(1)              ->  0.881373587...
 calc acosh(2)              ->  1.316957896...
 calc atanh(0.5)            ->  0.549306144...
+calc bin$(255)             ->  11111111
+calc oct$(255)             ->  377
+calc valb('FF',16)         ->  255
+calc c2f(100)              ->  212
+calc in2mm(1)              ->  25.4
+calc kg2lb(1)              ->  2.20462262185
 ```
 
 Grammar: `+ - * / ^` (right-associative power), the BASIC `MOD` keyword, unary
@@ -1468,8 +1823,18 @@ Functions (BASIC names; `ASIN`/`ACOS`/`ATAN` are accepted for `ASN`/`ACS`/
 | `DEG` | Sexagesimal `D.MMSS` → decimal degrees (inverse of `DMS`) |
 | `CUR` | Cube root |
 | `VAL` `VALF` `STR$` `HEX$` | String→number (leading parse); number→string; integer→hex string |
+| `BIN$` `OCT$` `VALB` | Integer→binary/octal string; string→number in base 2..36 |
+| `C2F` `F2C` `IN2MM` `MM2IN` `LB2KG` `KG2LB` | Unit conversions (temperature, length, mass) |
 | `ASC` `CHR$` `LEN` | Char→code; code→char; string length |
 | `LEFT$` `MID$` `RIGHT$` | 1-based string slices |
+| `PV` `FV` `PMT` `NPER` `RATE` | Time value of money, HP-12C conventions (cash out is negative; optional `fv`/`pv`, `type` 0=end/1=beginning, `RATE` optional guess) |
+| `NPV(rate,v0,v1,...)` `IRR(v0,v1,...)` | Net present value; internal rate of return (up to `P4_CONFIG_CALC_ARG_MAX` args) |
+| `SLN` `SYD` `DB` | Straight-line / sum-of-years-digits / declining-balance depreciation (`DB` optional first-year `month`) |
+| `DATE` `YEAR` `MONTH` `DAY` `DOW` `TODAY` | Epoch-day serials (days since 1970-01-01); `DOW` 0=Sunday..6=Saturday; `TODAY` follows the device clock |
+| `DATEADD` `DAYS` `EOMONTH` | Add days; `b-a` in days; last day of the month `months` away |
+| `DATEVALUE` `DATESTR` | `'YYYY-MM-DD'`→serial; serial→`'YYYY-MM-DD'` |
+
+`calc /fin` and `calc /date` print the two cheatsheets above at the prompt.
 
 A `NAME=<expr>` assignment stores the result (numbers as a trimmed decimal
 string, strings verbatim); `calc /hex` prints an integral result as `&H` hex.
@@ -1658,9 +2023,11 @@ Example: `choice /C:YNC /T:N,10 Overwrite the file` prints
 
 ### notify
 
-`notify [/t:secs] <text>` shows `<text>` in the header notification area for
-the duration configured by `P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS` (or
-`/t:secs` seconds when given). `notify -` clears the current notification
+`notify [/t:secs] <text>` queues `<text>` in the header notification area for the
+duration configured by `P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS` (or `/t:secs`
+seconds when given). Notifications are shown FIFO (depth
+`P4_CONFIG_HEADER_NOTIFY_QUEUE`), so a busy center queues a new message rather
+than dropping it. `notify -` flushes the queue and clears the center
 immediately.
 
 ### dialog
@@ -1692,13 +2059,64 @@ the on-screen keyboard — serial input still echos). ERRORLEVEL is `0` on OK,
 
 > **TUI restoration:** the `dialog`/`list`/`ask` dispatcher was fixed (now works interactively at the prompt and in batch files — previously batch-only), and `browse`/`view`/`hexview` restore the remaining modals. All 6 modals use the shared modal runtime in `components/modal/`, fill the live transcript region (resizes with display rotation and keyboard visibility), and accept `/t:secs` for unattended timeout.
 
+### form
+
+`form [/t:secs] "title" "Label=type[:arg]:VAR" ...` opens a multi-field modal
+editor (the batch-app form primitive) on the shared modal runtime. A field
+spec is `Label=type[:arg]:VAR` where `type` is one of:
+
+| type | Meaning | arg |
+|------|---------|-----|
+| `text` | single-line text field | — |
+| `password` | masked text field | — |
+| `check` | checkbox (value `1`/`0`) | — |
+| `select` | roller list | `a\|b\|c` |
+| `range` | slider | `min-max` |
+
+`VAR` is prefilled from the environment when set and receives the accepted
+value on OK. OK sets ERRORLEVEL `0`; cancel/Esc/timeout sets `255`; a missing
+title or no fields is usage (`2`). Serial input is `ok`/`y` to accept or
+`cancel`/`q` to cancel. Example:
+
+```
+set theme=amber
+form "Preferences" "Theme=select:default|amber|ice|mono:theme" "Lock=check:lock"
+```
+
+### owner
+
+`owner [show]` prints the device owner identity; `owner name|company|phone
+<value>` sets one field. Values persist as `OWNER_*` directives in CONFIG.SYS.
+ERRORLEVEL 0 ok / 2 usage.
+
+### security
+
+`security [status]` reports lock state, passcode presence, conceal mode,
+auto-lock, and boot-lock. Subcommands:
+
+| Subcommand | Meaning |
+|------------|---------|
+| `conceal show\|mask\|hide` | private-record policy (`hide` skips them entirely) |
+| `setpass` | set/replace the passcode (password modal, confirmed twice) |
+| `clearpass` | clear the passcode (asks for the current one) |
+| `lock` / `unlock` | lock now / unlock with the passcode |
+| `autolock <secs\|off>` | auto-lock after idle |
+| `bootlock on\|off` | lock the dispatcher at boot |
+
+The passcode is a PBKDF2-SHA256 salted hash stored as hex in CONFIG.SYS
+(`SECURITY_PASS_SALT`/`SECURITY_PASS_HASH`); it is never stored or shown in
+cleartext. While locked, only `security`/`unlock`/`help`/`cls`/`clear`/
+`version`/`about` run; `db /reveal`, `gfind`, and `export` also honor the
+lock/conceal policy. Recovery is deleting the `SECURITY_*` lines on the SD card
+(or `config factory`).
+
 ### browse
 
 `browse [/t:secs] [/v:NAME] [path]` opens a native file browser modal that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`/`windows_refresh_editor_surface`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/` (resizes with rotation and keyboard visibility). The browser starts at `[path]` (default: current directory) and shows directories and files with the shell colour scheme. Touch: tap a file to select, tap a directory to enter, Back to go up; USB keyboard: Up/Down + Enter, Backspace to go up, Esc to cancel; serial console: type the 1-based number or `..` / `q` (hardware-tested). With `/v:NAME` the selected path is stored in the `NAME` environment variable (default `BROWSE_RESULT`). `/t:secs` auto-cancels after `secs` seconds if nobody interacts. ERRORLEVEL is `0` on selection, `1` on cancel/Esc/timeout, or `2` for usage errors.
 
 ### view
 
-`view [/t:secs] [--raw] <file>` opens a native text viewer pager that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. Paginated, read-only file preview with scrolling: drag on the transcript, Up/Dn buttons, USB keyboard PageUp/PageDown or arrows, mouse wheel (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` per notch). Shows the file with line numbers and shell colours; keyboard/serial controls match `browse`. `/t:secs` auto-cancels after `secs` seconds. `.md`/`.markdown`/`.mkd` files render rendered-plain (markup stripped, tables aligned) unless `--raw` is given. ERRORLEVEL is `0` on close (OK), `1` on cancel/Esc/timeout, or `2` for usage or missing file. `draw` is TUI-aware when `view` is active.
+`view [/t:secs] [--raw] <file>` opens a native pager that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. For text, a paginated read-only preview with scrolling: drag on the transcript, Up/Dn buttons, USB keyboard PageUp/PageDown or arrows, mouse wheel (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` per notch). Shows the file with line numbers and shell colours; keyboard/serial controls match `browse`. `/t:secs` auto-cancels after `secs` seconds. `.md`/`.markdown`/`.mkd` files render rendered-plain (markup stripped, tables aligned) unless `--raw` is given. **`.bmp`/`.dib` files open the image viewer** (fit-to-screen, `Esc`/`q`/Close) instead of the text pager — this is routed by the central `components/filetype/` registry. ERRORLEVEL is `0` on close (OK), `1` on cancel/Esc/timeout or a bad image, or `2` for usage or missing file. `draw` is TUI-aware when `view` is active.
 
 ### hexview
 
@@ -1709,9 +2127,22 @@ the on-screen keyboard — serial input still echos). ERRORLEVEL is `0` on OK,
 `open [/t:secs] [--raw] <file>` does the right thing per file type (central
 registry `components/filetype/`): scripts (`.bat`/`.cmd`) open in the editor
 as source (never execute — typing the name runs them), Markdown renders,
-everything else views as text. Batch-callable with the same ERRORLEVELs as
-`view`/`edit`. `open` is the batch-file-friendly way to present a file: `if
-exist README.MD open README.MD`.
+**BMP images (`.bmp`/`.dib`) open the image viewer**, everything else views as
+text. Batch-callable with the same ERRORLEVELs as `view`/`edit`. `open` is the
+batch-file-friendly way to present a file: `if exist README.MD open README.MD`.
+
+### image
+
+`image` is the scriptable BMP entry point; `view`/`open` route images to the
+same viewer through the filetype registry.
+
+| Form | Meaning |
+|------|---------|
+| `image info <file.bmp>` | Print `image: <path> <W>x<H> <bpp>bpp <top-down\|bottom-up> <bytes>` (single machine-parsable line for `for /f`). Accepts 24-bit and 32-bit `BI_RGB`, either orientation, up to `GFX_IMAGE_MAX_W`×`GFX_IMAGE_MAX_H` and `P4_CONFIG_IMAGE_MAX_BYTES`. |
+| `image show [/t:secs] <file.bmp>` | The fit-to-screen image viewer (same surface as `view`; `P4_CONFIG_IMAGE_VIEWER_FIT`, `Esc`/`q`/Close, `/t:secs` auto-close). |
+
+ERRORLEVEL: `0` ok, `1` missing/undecodable file, `2` usage. `image info` is
+batch-friendly: `for /f "tokens=2" %%a in ('image info PIC.BMP') do ...`.
 
 ### json
 
@@ -1734,6 +2165,7 @@ nesting depth 64, single JSON value per file (trailing data is an error).
 | `draw table <x> <y> <fg> <bg> "h1\|h2\|..." [row "c1\|c2\|..." ...] [/cursor:N] [/sel:a,b,...]` | Bordered table with T-junctions; first row is the header (bold on TUI). Column widths auto-fit content (max 40 each, table must fit 80 cols, max 16 cols × 32 rows). Short rows pad with empty cells; extra cells glue to the last column. `/cursor:N` (1-based data row, header excluded) renders that row bright-white bold; `/sel:a,b` renders those data rows bold (both clip silently out of range). |
 | `draw list <x> <y> <w> <h> <file> [fg] [bg] [/top:N] [/cursor:N] [/sel:a,b] [/title:T] [/count:NAME] [/countonly]` | Renders a file's lines in a bordered, selectable panel — the file-manager primitive (`dir /b > file` + `draw list`). `/top` is the 1-based first line shown (scroll), `/cursor` the 1-based highlighted line (bright), `/sel` marks lines with `*`, `/title` sets the box title. `/count:NAME` publishes the total line count to env var `NAME`; `/countonly` does just that and skips drawing (batch's `set /a` echoes and floods, so this is the non-flooding counter). Off-TUI it prints `>`/`*`-marked plain lines. Caps: 256 lines, 96 bytes/line; an empty file returns ERRORLEVEL `1`. Hardware-verified (`apps/tcmd/TCMD.BAT`). |
 | `draw clear [screen\|line\|eol\|eos]` | Clear target (default `screen`): whole grid, cursor line, cursor-to-end-of-line, or cursor-to-end-of-screen. Outside TUI emits the matching ANSI sequence (`ESC[2J`/`ESC[2K`/`ESC[0K`/`ESC[0J`). |
+| `draw image <file.bmp> <x> <y> <w> <h>` | Render a BMP into the cell grid at x,y spanning w×h cells (1-based). Each cell is an ASCII glyph from a luminance ramp coloured with the nearest DOS palette entry (foreground only — the TUI label has no per-cell background). Auto-enters TUI; reuses the single decoder in `components/gfx` (`gfx_bmp_decode_scaled_565`). The 80×25 16-color model posterizes the image; use `view` for full color. ERRORLEVEL `0`/`1`/`2`. |
 | `draw window <id> <x> <y> <w> <h> [title]` | Box with window-stack semantics; `<id>` is accepted and ignored. Requires an active TUI (error `1` otherwise). |
 | `draw save` / `draw restore` | Save / restore the TUI cursor (`ESC[s` / `ESC[u]` outside TUI). |
 | `draw cursor on\|off` | Show / hide the TUI cursor (`ESC[?25h` / `ESC[?25l` outside TUI). |
@@ -1821,7 +2253,8 @@ pixels are ignored, never an error).
 | `gfx fill <x> <y> <color>` | 4-way flood fill of the seed pixel's connected color (bounded by the canvas); prints `gfx: filled <n> pixel(s)`. |
 | `gfx text [/bg:<color>] [/scale:<n>] <x> <y> <color> <text...>` | Draw 8×8 ASCII text (all remaining words are joined with spaces); `/scale:1..16` integer pixel multiplier, `/bg:<color>` fills the glyph cells (else transparent). |
 | `gfx show` | Push the buffer to the display. |
-| `gfx load <slot 0..7> <path>` | Ingest a 24-bit uncompressed BMP (`BI_RGB`, the exact format `screenshot <file>` writes, at most 64×64) into a sprite slot (PSRAM). Rejects other bit depths, RLE, top-down, and oversize art with ERRORLEVEL `1`. |
+| `gfx image <path> [x y [w h]]` | Decode a 24/32-bit `BI_RGB` BMP (either orientation) straight to the target rect and blit it onto the canvas. Defaults to native size aspect-fit to the canvas at 0,0. Reuses the shared decoder; ERRORLEVEL `1` on a bad file, `2` usage. |
+| `gfx load <slot 0..7> <path>` | Ingest a 24/32-bit uncompressed BMP (`BI_RGB`, the exact format `screenshot <file>` writes, at most 64×64) into a sprite slot (PSRAM). Rejects other bit depths, RLE, and oversize art with ERRORLEVEL `1`. |
 | `gfx blit <slot> <x> <y> [transparent]` | Stamp a sprite onto the canvas (clipped; needs `gfx show`). Optional transparent color skips matching pixels. ERRORLEVEL `1` when the slot is empty. |
 | `gfx free <slot>` | Release one sprite slot. |
 | `gfx slots` | List live slots as `gfx.slot: <n> <w>x<h>` (batch `for /f`-friendly). |
@@ -1832,7 +2265,10 @@ SNES-class 16-bit assets; `GFX_SPR_SLOTS`/`GFX_SPR_MAX` in
 `components/gfx/gfx.h`). `gfx close` frees the canvas and all sprites, so
 sessions never leak PSRAM. Sample art: `apps/push_assets.py` generates
 `SHIP.BMP` (48×48) + `BALL.BMP` (16×16) with PIL (no binary blobs in the
-repo) and pushes them with CRC manifests.
+repo) and pushes them with CRC manifests, plus `PHOTO.BMP` (96×64) used by the
+`picture` reference app (`apps/pics/PICS.BAT`: `view`, `draw image`, `gfx
+image`, `image info`). Generic image caps: `GFX_IMAGE_MAX_W/H`
+(`components/gfx/gfx.h`) and `P4_CONFIG_IMAGE_MAX_BYTES`.
 
 Colors are DOS 0-15 from the CGA table (`tui_dos_color_rgb`, so pixel colors
 match TUI cell colors), `16` = black, anything larger is 24-bit RGB hex used
@@ -1850,7 +2286,7 @@ LVGL; committed, no runtime font dependency). Advance is
 buffer math (no LVGL) and unit-tested in `test/main/test_gfx.c`.
 
 ERRORLEVEL: `0` ok (clipped pixels included), `1` no canvas / already open /
-TUI active / background job / no memory / empty slot / unreadable or non-24-bit
+TUI active / background job / no memory / empty slot / unreadable or non-24/32-bit
 BMP, `2` usage / bad slot / invalid path.
 
 ### plot — world-coordinate graphs, charts, drawings (hardware-verified on COM3)
@@ -2542,24 +2978,73 @@ findstr /G:patterns.txt file.txt
 
 ERRORLEVEL: 0 = at least one match, 1 = no match, 2 = usage / error.
 
+### csv rows|cols|cell|get|set|eval <file> [row col] [/b] [/v:NAME]
+
+Minimal spreadsheet substrate for batch apps: RFC-4180-subset parsing (comma
+separators, `"quoted"` fields, `""` escapes) over a guarded SD read, plus
+`=EXPR` formula evaluation through the `calc` engine with `R<row>C<col>`
+references and range aggregates. The parser core lives in
+`components/storage/storage_csv.c`; the verbs are
+`components/command/csv_commands.c`.
+
+- `csv rows <file>` / `csv cols <file>` — the first row's field count.
+- `csv cell|get <file> <row> <col> [/v:NAME]` — one field (1-based row/col).
+- `csv set <file> <row> <col> <value...>` — replace one cell in place
+  (ragged rows extend, past-EOF rows append as counted fillers, untouched
+  rows stream through byte-for-byte, atomic temp+rename behind a space
+  estimate; multi-line or over-wide fields are refused, never corrupted).
+- `csv eval <file>` — resolve every `=EXPR` cell iteratively (up to
+  `P4_CONFIG_CSV_PASSES` passes, so forward and chained references work) and
+  print the grid aligned, or re-quoted CSV under `/b`.
+
+Range aggregates inside `=EXPR` (either corner order, spaces tolerated):
+`SUM`/`AVG`/`MIN`/`MAX` over `R1C1:R2C2` fold VAL-semantics numbers
+(blanks read as 0, out-of-grid clipped, empty folds to 0) and `COUNT`
+tallies non-empty cells.
+
+An explicit file wins; otherwise the active `< file` / pipe source is read
+(`set` needs an explicit file). References out of range or non-numeric read
+as 0. Cells that never resolve (bad expression or a reference cycle) are
+reported as warnings and left as their source text.
+
+```
+csv rows prices.csv
+csv cell prices.csv 2 3 /v:PRICE
+csv set prices.csv 2 3 19.95
+csv eval sheet.csv            # aligned
+csv eval sheet.csv /b         # machine CSV for another tool
+```
+
+A sheet is `a,b,c` newline `x,2,=R2C2*10` newline `p,q,=R2C3+R3C3`;
+`=SUM(R2C1:R3C3)` totals a block; `eval` turns the formula cells into their
+computed values.
+
+ERRORLEVEL: 0 ok, 1 empty/out-of-range/unresolved, 2 usage.
+
 ### gfind
 
 Palm-style global find across the structured stores: the `db` record databases
 and the `alarm`/calendar store.
 
-Usage: `gfind <text> [/b] [/i] [/db:name] [/noalarms] [/nodb]`
+Usage: `gfind <text> [/b] [/i] [/count] [/cat:N] [/field:k=v] [/db:name] [/noalarms] [/nodb]`
 
 | Switch | Meaning |
 |--------|---------|
 | `/b` | Bare output (pipe/`for /f` friendly) |
 | `/i` | Case-insensitive match |
+| `/count` | Print `gfind.db`/`gfind.alarms`/`gfind.total` counts instead of rows |
+| `/cat:N` | Restrict database matches to category `N` |
+| `/field:k=v` | Require a `k=v` payload field to match |
 | `/db:name` | Search only the named database (default: all databases) |
 | `/noalarms` | Skip the alarm store |
 | `/nodb` | Skip the databases |
 
 The search text is a single positional argument — quote it when it contains
 spaces (`gfind "team call"`); more than one positional is a usage error.
-Prints `gfind.matches` with the number of stores that matched (unless `/b`).
+Prints `gfind.matches` with the number of matches (unless `/b`). Secret records
+are only searched/revealed while the device is unlocked; `conceal hide` skips
+them entirely. Memory of the note app (`db` records) and the calendar are both
+covered, so `gfind` is the Palm-style global find.
 
 Examples:
 ```
@@ -2728,6 +3213,35 @@ A URL with a `user:pass@` prefix (e.g. `httpget http://user:pass@host/page`)
 sends HTTP Basic authentication, so password-protected endpoints (including
 this firmware's own `httpd` file server) can be fetched.
 
+### tcpterm <host> <port> [/t:secs] [text...]
+
+One-shot TCP request/response session (the modern Datacomm: the 95LX spoke
+RS-232/modem; this board has no RS-232 peer, so the wire endpoint is TCP). It
+resolves the host, connects with a bounded budget, sends one request, half-
+closes, and prints the reply. Owned by `components/networking/tcpterm.c`
+(the same module that owns `ping`/`dns`/`httpget`).
+
+- `text...` joins as the request payload with `\r` `\n` `\t` `\\` escapes, so
+  an HTTP probe reads naturally.
+- With no text, the active `< file` or pipe stage feeds the request instead
+  (assembled before the call), so `type req.txt | tcpterm host 80` works.
+- `/t:secs` sets the idle timeout (default `P4_CONFIG_TCP_IDLE_TIMEOUT_MS`,
+  5 s), refreshed per received byte; the connect budget is
+  `P4_CONFIG_TCP_CONNECT_TIMEOUT_MS`.
+- Replies print sanitized like `httpget` bodies **except** that ESC passes
+  through, so a remote terminal's SGR colours render on screen and over
+  serial; other control bytes become `.`.
+- The session ends with a `[tcpterm: host:port closed, N byte(s) in M out]`
+  summary. Requires an active Wi-Fi connection.
+
+```
+tcpterm 127.0.0.1 80 /t:10 GET / HTTP/1.0\r\n\r\n
+echo "PING" | tcpterm 192.168.1.50 5000
+tcpterm example.com 80 "HEAD / HTTP/1.0\r\n\r\n" > head.txt
+```
+
+ERRORLEVEL: 0 session completed, 1 resolve/connect/send/Wi-Fi failure, 2 usage.
+
 ### httpd start | httpd stop | httpd status
 
 Drives the HTTP file server that shares the SD card over the Wi-Fi link.
@@ -2812,6 +3326,41 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | usb keyboard off | Disable keyboard transcript echo |
 | usb mouse on | Enable transcript echo for HID boot mouse |
 | usb mouse off | Disable mouse transcript echo |
+| usb userial status | Report the open CDC-ACM serial device (or none) |
+| usb userial open <vid:pid> [baud=..] [data=..] [parity=..] [stop=..] | Open a CDC-ACM/virtual-COM device |
+| usb userial close | Close the open device |
+| usb userial send <text...> | Write to the device (or the `< file` / pipe source) |
+| usb userial recv [/n] | Drain the RX ring (up to `n` bytes) to the transcript |
+| usb userial term [/t:secs] [/raw] | VT100 terminal on the TUI grid (ESC exits, idle timeout; /raw = legacy transcript) |
+
+### usb userial - USB CDC-ACM serial
+
+Raw serial to external gear (GPS pucks, microcontrollers, scopes, serial
+consoles) that presents a CDC-ACM / virtual-COM interface. One open device at
+a time. The class driver and RX ring live in `components/usb/userial.c`; the
+verbs live in `components/command/userial_commands.c` and use only the byte
+API, so the `usb` component stays a leaf.
+
+- `usb userial open 303a:1001 baud=9600 parity=E` — the VID/PID is hex; the
+  open blocks up to `P4_CONFIG_USERIAL_OPEN_TIMEOUT_MS` for a matching device,
+  then applies the line coding (default 115200 8N1).
+- `usb userial send hello` or `type cmd.txt | usb userial send` — inline text
+  wins; otherwise the `< file` / pipe source feeds the write.
+- `usb userial recv` — drains up to `P4_CONFIG_USERIAL_RING_BYTES`; replies
+  print sanitized (ESC passes for remote SGR colours).
+- `usb userial term` — VT100 screen on the TUI grid (80x25): remote SGR
+  colours, cursor motion (CUP/CUU/CUD/CUF/CUB), erase (ED/EL), save/restore,
+  show/hide cursor, and the alt-screen buffer render into the grid, which
+  scrolls instead of clamping at the last row. Split escape sequences across
+  RX reads are reassembled (`P4_CONFIG_VT100_PENDING_BYTES`). Keys pump to
+  the device (Enter goes as CR, ESC exits); the idle timeout (`/t:secs`,
+  default `P4_CONFIG_USERIAL_TERM_IDLE_MS`) still applies. `/raw` keeps the
+  legacy sanitized-transcript passthrough; `P4_CONFIG_VT100_ENABLE=0` makes
+  `/raw` the default. Refuses headless (needs a key source). File transfer
+  stays on the existing verbs — `send`/`receive` (USB-serial console) and
+  `usb userial send`/`recv` (CDC-ACM device).
+
+ERRORLEVEL: 0 ok, 1 no device/open failure/SD or write error, 2 usage.
 
 ### USB Keyboard Auto-Detect
 - Plug in a USB HID keyboard to automatically type commands into the shell
@@ -2822,6 +3371,21 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 - Special keys: Enter (submit command), Backspace, ESC (clear line), Tab, arrows (cursor/history), Delete, Home, End
 - Use `keyboard show` to force the on-screen keyboard visible even with USB keyboard attached
 - Use `keyboard hide` to hide it again; auto-detect resumes on next plug/unplug event
+
+### Foreground break (Ctrl+C / Stop button)
+A runaway foreground job (`for` loop, `delay`, runaway batch) stops
+cooperatively with `^C`, exactly one message per press:
+
+- **USB Ctrl+C** with no key-wait active requests the break (a running
+  command unwinds at the next batch line, `for` body, or 100 ms `delay`
+  chunk); at an idle prompt it clears the input line, DOS-style.
+- **Input-row Stop button** (touch) shows only while a command runs and
+  requests the same break; it stays hidden in editor/app/TUI modes.
+- Key-wait sessions own their keys: a remote `term` session still receives
+  `^C` (ESC exits), `pause`/`choice`/`menu` answer normally, the editor
+  keeps Ctrl+C for copy, and reverse-search keeps its keys.
+- One break unwinds the whole foreground job (`delay: stopped` inside
+  `delay`, `^C` elsewhere); background jobs still stop via `taskkill`.
 
 ## SD Tools
 

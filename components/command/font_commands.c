@@ -26,6 +26,7 @@
 #include "storage.h"
 #include "ansi_palette.h"
 #include "command.h"
+#include "config_cmd.h"
 #include "p4minishell_config.h"
 #include "bsp/esp-bsp.h"
 #include "esp_err.h"
@@ -74,75 +75,65 @@ static window_rect_t font_clamp_rect(void)
     return rect;
 }
 
-/** Persist both roles (names + sizes). False when the SD card is unavailable. */
+/** Persist both roles (names + sizes) to CONFIG.SYS. The settings store is
+ * single-sourced there; SHELL.INI is only read as a legacy fallback. */
 static bool font_save_current(void)
 {
-    char path[P4_CONFIG_SD_PATH_BYTES];
     char size_buf[16];
 
-    font_shell_ini_path(path, sizeof(path));
-    if (storage_ini_file_set(path, FONT_INI_KEY_TERMINAL,
-                             font_current_name(FONT_ROLE_TERMINAL)) != ESP_OK ||
-        storage_ini_file_set(path, FONT_INI_KEY_UI,
-                             font_current_name(FONT_ROLE_UI)) != ESP_OK) {
+    if (!config_persist_set("FONT_TERMINAL", font_current_name(FONT_ROLE_TERMINAL)) ||
+        !config_persist_set("FONT_UI", font_current_name(FONT_ROLE_UI))) {
         return false;
     }
     /* Sizes are best-effort (names already saved); keep going on failure. */
     snprintf(size_buf, sizeof(size_buf), "%d", font_current_size(FONT_ROLE_TERMINAL));
-    storage_ini_file_set(path, FONT_INI_KEY_TERMINAL_SIZE, size_buf);
+    config_persist_set("FONT_TERMINAL_SIZE", size_buf);
     snprintf(size_buf, sizeof(size_buf), "%d", font_current_size(FONT_ROLE_UI));
-    storage_ini_file_set(path, FONT_INI_KEY_UI_SIZE, size_buf);
+    config_persist_set("FONT_UI_SIZE", size_buf);
     return true;
 }
 
-/** Persist the active theme name. False when the SD card is unavailable. */
+/** Persist the active theme name to CONFIG.SYS. */
 static bool theme_save_current(void)
 {
-    char path[P4_CONFIG_SD_PATH_BYTES];
-
-    font_shell_ini_path(path, sizeof(path));
-    return storage_ini_file_set(path, THEME_INI_KEY, theme_current()->name) == ESP_OK;
+    return config_persist_set("THEME", theme_current()->name);
 }
 
-/** Best-effort boot restore of the saved choice. Silent when the SD card
- * (or the file) is unavailable — defaults stand. Called by
- * boot_on_sd_first_mount(), where the mount is guaranteed.
+/** Read a saved preference: CONFIG.SYS first, then the legacy SHELL.INI file.
+ * @return true when @p out holds a value. */
+static bool font_pref_get(const char *path, const char *key,
+                          char *out, size_t out_size)
+{
+    if (out_size > 0) {
+        out[0] = '\0';
+    }
+    if (config_get_saved(key, out, out_size) >= 0) {
+        return true;
+    }
+    return storage_ini_file_get(path, key, out, out_size) == ESP_OK;
+}
+
+/** Best-effort boot restore of the saved choice. Silent when nothing is saved
+ * or the SD is unavailable — defaults stand. Called by boot_on_sd_first_mount(),
+ * where the mount is guaranteed.
  * @return true when the restore completed (or there was nothing saved);
  *         false when the SD was not readable, so the caller retries on the
  *         next mount instead of skipping the restore for the whole boot. */
 bool font_restore_saved(void)
 {
     char path[P4_CONFIG_SD_PATH_BYTES];
-    char resolved[P4_CONFIG_SD_PATH_BYTES];
     char terminal[P4_CONFIG_FONT_NAME_BYTES];
     char ui[P4_CONFIG_FONT_NAME_BYTES];
     char size_buf[16];
     char theme_name[32];
     bool have_terminal = false;
     bool have_ui = false;
-    FILE *probe = NULL;
 
     font_shell_ini_path(path, sizeof(path));
 
-    /* Probe readability first: a missing file with a mounted card means
-     * "nothing saved" (done), while an unreadable card means "try again
-     * later" instead of burning the one-shot first-mount callback. */
-    if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) == ESP_OK) {
-        probe = fopen(resolved, "r");
-        if (probe != NULL) {
-            fclose(probe);
-        }
-    }
-    if (probe == NULL) {
-        return storage_sd_is_mounted();
-    }
-
     /* Theme restores first (color-only); the live refresh no-ops until the
-     * chrome exists. The probe above proved the file readable, so this uses
-     * the value directly instead of re-reading (a second read can fail on a
-     * flaky mount even when the first succeeded). */
-    if (storage_ini_file_get(path, THEME_INI_KEY,
-                             theme_name, sizeof(theme_name)) == ESP_OK) {
+     * chrome exists. */
+    if (font_pref_get(path, THEME_INI_KEY, theme_name, sizeof(theme_name))) {
         if (theme_set(theme_name)) {
             theme_refresh_live();
         }
@@ -151,12 +142,10 @@ bool font_restore_saved(void)
     /* Header layout mode (auto/full/compact) restores alongside the theme. */
     header_restore_saved();
 
-    if (storage_ini_file_get(path, FONT_INI_KEY_TERMINAL,
-                             terminal, sizeof(terminal)) == ESP_OK) {
+    if (font_pref_get(path, FONT_INI_KEY_TERMINAL, terminal, sizeof(terminal))) {
         have_terminal = true;
     }
-    if (storage_ini_file_get(path, FONT_INI_KEY_UI,
-                             ui, sizeof(ui)) == ESP_OK) {
+    if (font_pref_get(path, FONT_INI_KEY_UI, ui, sizeof(ui))) {
         have_ui = true;
     }
     if (have_terminal || have_ui) {
@@ -165,8 +154,7 @@ bool font_restore_saved(void)
     /* Sizes restore after names (a size needs its TTF selected first).
      * Terminal sizes are clamp-checked (a saved size may postdate a
      * rotation); invalid values are ignored silently — defaults stand. */
-    if (storage_ini_file_get(path, FONT_INI_KEY_TERMINAL_SIZE,
-                             size_buf, sizeof(size_buf)) == ESP_OK) {
+    if (font_pref_get(path, FONT_INI_KEY_TERMINAL_SIZE, size_buf, sizeof(size_buf))) {
         int px = atoi(size_buf);
         if (px > 0) {
             window_rect_t rect = font_clamp_rect();
@@ -177,14 +165,15 @@ bool font_restore_saved(void)
             }
         }
     }
-    if (storage_ini_file_get(path, FONT_INI_KEY_UI_SIZE,
-                             size_buf, sizeof(size_buf)) == ESP_OK) {
+    if (font_pref_get(path, FONT_INI_KEY_UI_SIZE, size_buf, sizeof(size_buf))) {
         int px = atoi(size_buf);
         if (px > 0) {
             font_set_size(FONT_ROLE_UI, px);
         }
     }
-    return true;
+    /* Report the mount state (the original contract): an unreadable card makes
+     * the caller re-arm the one-shot so the next mount retries. */
+    return storage_sd_is_mounted();
 }
 
 static void shell_command_font_usage(void)

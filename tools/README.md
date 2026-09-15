@@ -67,20 +67,56 @@ resets on the transition — every driver drops DTR/RTS on open via
 - `pkg_test.py`/`pkg_smoke.py` — packaged SD apps (`pkg` list/info/verify +
   install→run→remove round-trip; needs `apps/push_pkgs.py` first).
 - `gfx_toolkit_test.py` — runs `GFXTOOL.BAT`, pulls the saved BMP with
-  `pull.py`, and checks pixels for the B2 primitives + text.
+  `pull.py`, and checks pixels for the B2 primitives + text, plus the scaled
+  `PHOTO.BMP` blit region (when `[M-GFXTOOL-IMG]` is emitted).
+- Image support: `apps/push_assets.py` generates/pushes `PHOTO.BMP` (96x64);
+  `apps/pics/PICS.BAT` demos `view`/`draw image`/`gfx image`/`image info`. Decode,
+  scaled decode, fit, and scaling are unit-tested in `test_gfx.c`.
+- **Screenshots capture modals too**: `grab_screenshot.py` works while a
+  `dialog`/`list`/`ask`/`browse`/`view`/`image show`/`hexview` modal or the
+  `edit` editor is open (the bare streaming `screenshot` is handled by the
+  console-reader task because a modal blocks the worker).
 - `gen_gfx_font.py` — regenerate `components/gfx/gfx_font.c` from the
   public-domain unscii-8 TTF (run only if the font/cell size changes).
 - `theme_test.py` — B3 theme CLI + reboot persistence (`theme list/show/set`).
 - `header_test.py` — responsive header: `header mode` switching, layout-fit
   assertions across rotations, persistence (`header mode auto /save`).
+- `keyboard_test.py` — OSK page registry + `keyboard mode` command: status,
+  the `keyboard.page=<name>` round-trip for every page and alias, an unknown
+  page rejection, and `show`/`hide`. Pure `keyboard_mode_name/parse` are unit
+  tested in `test/main/test_keyboard.c`.
+- `editor_test.py` — the `edit` surface over serial: File > Open round-trip
+  (unnamed buffer → `\open` → path → marker → save), the new Nav-page
+  Comment/Match/Wrap/Reload verbs, and shell restoration after quit. OSK
+  auto-Nav/page switching is unit-tested + screenshot-verified (the editor
+  owns serial input while open, so the page cannot be queried there).
+- `editor_large_test.py` — large-file `edit`: pushes a generated multi-line
+  file (`push_sd.push_file`), loads it, jumps to the end, appends a marker,
+  saves, and verifies the marker via `type`. Exercises the PSRAM document, the
+  virtualized render window (> `editor_render_rows`), and the internal DMA
+  bounce buffer used by save. `[lines]` defaults to 4000.
+- `ui_touch_test.py` — exhaustive touch suite built on the firmware `ui`
+  verbs (synthetic LVGL pointer indev): taps every shell keyboard key on every
+  page, header indicators, input-row buttons, every editor Nav/Edit action key,
+  and dialog/list buttons; `--sweep [px]` adds a full-screen coordinate sweep.
+  `ui target <id>` is a semantic activation (modal panels live in the
+  auto-scrolling transcript, so raw coordinate taps are racy there); `ui tap`
+  remains the raw-coordinate path.
+- `completion_test.py` — shell input-area verification: the `history /search`
+  filter (hit, miss, ERRORLEVEL), the debounced autosave profile in
+  `HISTORY.TXT`, and the inline ghost completion driven through the OSK
+  (`ui key` + the `ui state` `ghost=` field). Pure completion/search helpers
+  are unit-tested in `test/main/test_completion.c` and
+  `test/main/test_history_search.c`.
 - `plot_test.py` — runs `PLOT.BAT`, pulls canvas BMPs with `pull.py` and checks
   world-coordinate pixels (func/axes/data/bar/point/line), plus a TUI-mode
   screenshot to `spikes/plot_tui.bmp`.
 - `unit_run.py` — build-independent capture of the unit-test summaries.
 - `regression.py` — one-command host regression: resets the board, runs every
   suite/guard (`deep`/`db`/`alarm`/`smoke`/`pkg`/`theme`/`gfx`/`plot`/`header`/
-  `tx_stress`/`boot_regression`), prints a PASS/FAIL table, non-zero exit on
-  failure. `--quick` shortens the boot soak. Unit tests remain a separate step.
+  `keyboard`/`editor`/`editor large`/`ui touch`/`completion`/`tx_stress`/`boot_regression`), prints a
+  PASS/FAIL table, non-zero exit on failure. `--quick` shortens the boot soak.
+  Unit tests remain a separate step.
 - `wifi_bench.py` — host endpoint for the firmware `wifi throughput` command:
   runs the matching TCP/UDP peer and prints host- and device-side Mbit/s.
   Host and device must share a subnet.

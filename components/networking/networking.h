@@ -212,6 +212,61 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
 void networking_http_result_free(networking_http_result_t *result);
 
 /**
+ * One-shot TCP request/response terminal (`tcpterm`, tcpterm.c).
+ *
+ * Resolves @p host, connects with a hard budget, sends @p tx (may be NULL
+ * for a bare probe), half-closes, and prints the sanitized reply (remote
+ * SGR colours pass through; other control bytes become dots). The idle
+ * deadline refreshes per received byte; @p idle_timeout_ms <= 0 selects
+ * P4_CONFIG_TCP_IDLE_TIMEOUT_MS.
+ *
+ * @return ESP_OK after a complete session (caller maps to ERRORLEVEL 0),
+ *         ESP_ERR_INVALID_ARG/SIZE for bad arguments, ESP_ERR_INVALID_STATE
+ *         when Wi-Fi is not connected, ESP_ERR_NOT_FOUND when the host did
+ *         not resolve, ESP_ERR_TIMEOUT on connect timeout, ESP_FAIL or
+ *         ESP_ERR_NO_MEM otherwise.
+ */
+esp_err_t networking_tcp_term(const char *host, int port,
+                              const uint8_t *tx, size_t tx_len,
+                              int idle_timeout_ms);
+
+/**
+ * Validate a `tcpterm` target (pure, unit-tested): non-empty host and a
+ * decimal @p port_str in 1..65535. @return true with @p port_out filled.
+ */
+bool networking_tcp_parse_target(const char *host, const char *port_str, int *port_out);
+
+/**
+ * Expand `\r` `\n` `\t` `\\` escapes (pure, unit-tested). Unknown escapes
+ * pass through literally. @return bytes written excluding NUL.
+ */
+size_t networking_tcp_unescape(const char *in, char *out, size_t out_size);
+
+/**
+ * Sanitize a reply for the transcript (pure, unit-tested): printable ASCII
+ * plus newline/CR/tab plus ESC survive, every other byte becomes '.'.
+ * @return bytes written excluding NUL.
+ */
+size_t networking_tcp_sanitize(const uint8_t *in, size_t len, char *out, size_t out_size);
+
+/**
+ * Auto-detect the local timezone over the network (no hardcoded zone).
+ *
+ * Fetches P4_CONFIG_TIMEZONE_URL quietly (no transcript output) on the calling
+ * task and parses the timezone name + UTC offset. The caller must ensure Wi-Fi
+ * is connected and must NOT run this on the LVGL task (it blocks up to the HTTP
+ * timeout).
+ *
+ * @param offset_seconds_out  Receives the current UTC offset in seconds
+ *                            (positive = east of UTC). Must not be NULL.
+ * @param iana_out            Optional buffer for the IANA name (may be NULL).
+ * @param iana_size           Size of @p iana_out.
+ * @return ESP_OK on a parsed offset, ESP_ERR_NOT_FOUND when the response had no
+ *         usable offset, or another error from the HTTP fetch.
+ */
+esp_err_t networking_time_detect(int *offset_seconds_out, char *iana_out, size_t iana_size);
+
+/**
  * Store the target SSID/password for auto-connect and the boot policy.
  *
  * Used by the CONFIG.SYS `WIFI_SSID=` / `WIFI_PASSWORD=` directives. The
@@ -266,5 +321,14 @@ void networking_wifi_capture_restore_state(networking_wifi_restore_state_t *rest
 esp_err_t networking_wifi_shutdown(void);
 esp_err_t networking_wifi_restore_after_ota_failure(const networking_wifi_restore_state_t *restore_state);
 void networking_wifi_request_post_ota_restore(const networking_wifi_restore_state_t *restore_state);
+
+/**
+ * Re-establish Wi-Fi after light sleep shut it down (line-current palmtop
+ * behaviour: the radio comes back without a manual `wifi connect`). Captures
+ * the prior runtime/connection intent with `networking_wifi_capture_restore_state`
+ * before sleeping, then queues a background restore on wake. Reuses the same
+ * request shape as the post-OTA path.
+ */
+void networking_wifi_request_wake_restore(const networking_wifi_restore_state_t *restore_state);
 
 #endif

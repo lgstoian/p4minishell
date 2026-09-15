@@ -7,6 +7,617 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added — Preferences/security/form/global-find pass (single CONFIG.SYS store)
+
+Five additive features that keep the shell as the core and the GUI as an
+external batch app. Nothing removed; every new path defaults to the previous
+behaviour when unconfigured.
+
+- **CONFIG.SYS is the single settings store.** The UI presentation settings
+  that used to live in `sd:/APPS/SHELL.INI` — `THEME`, `FONT_TERMINAL`,
+  `FONT_UI`, `FONT_TERMINAL_SIZE`, `FONT_UI_SIZE`, `HEADER_MODE` — are now
+  written there by the owning commands via a new shared writer
+  `config_persist_set()` (`config_cmd.c`), and read back by the first-mount
+  restore (legacy `SHELL.INI` is read once as a fallback). New directives:
+  `CURSOR`, `CURSOR_BLINK`, `KEYBOARD_MODE`, `TIMEZONE`, `OWNER_*`,
+  `SECURITY_*`. `config /b` (and `config <KEY> /b`) print machine-readable
+  values for `for /f`. `config factory` now also restores the theme/font/
+  header/cursor/keyboard defaults live and deletes the legacy `SHELL.INI`.
+- **`form`** (`components/modal/modal_surf.c` + `tui_commands.c`): a
+  multi-field modal surface for batch apps (text/password/check/select/range
+  fields, `a|b|c` options, `min-max` ranges, `/t:secs` auto-cancel). Field
+  values prefill from and write back to environment variables. The Preferences
+  app uses it; no native GUI is added.
+- **Owner + device passcode/lock + private records**
+  (`components/command/security_commands.c/.h`): `owner` and `security`
+  (`status|conceal|setpass|clearpass|lock|unlock|autolock|bootlock`) verbs.
+  The passcode is a PBKDF2-SHA256 salted hash stored as hex in CONFIG.SYS (no
+  cleartext). A persisted passcode + `SECURITY_BOOTLOCK=on` locks the
+  dispatcher at boot and on auto-lock; while locked only
+  `security`/`unlock`/`help`/`cls`/`clear`/`version`/`about` run. Recovery is
+  deleting the `SECURITY_*` lines on the SD card (or `config factory`).
+  `db /reveal`, `gfind`, and `export` honor the lock/conceal policy.
+- **`gfind` completeness** (`components/command/gfind_commands.c`): `/cat:N`,
+  `/field:k=v`, and `/count` (per-source and total match counts) added; secret
+  records are only searched/revealed when the device is unlocked; the default
+  human output is unchanged.
+- **Companion `SET.BAT` is the Preferences GUI** (`apps/companion/`): expanded
+  to drive every setting through its owning shell command and persist via
+  CONFIG.SYS — brightness, volume, rotate, idle timeout, header, theme, fonts,
+  cursor, keyboard page, system (prompt/launch/Wi-Fi autoconnect), and
+  security. No settings file of its own; `LIB.BAT :load_settings` no longer
+  shadows brightness.
+
+Hardware-verified on COM3: `config /b`, `config BRIGHTNESS` persist across
+reboot, `theme set /save` persists, `owner`/`security` full lifecycle
+(setpass → lock → dispatcher refusal → unlock → clearpass), **boot lock**
+(bootlock on → reboot → locked → unlock), `gfind /count`, `form /t:1`, and the
+expanded `SET.BAT` brightness + theme flows with markers.
+
+### Added — palmtop-parity primitives (HP 95LX class)
+
+A batch of additive primitives that close the firmware gaps between
+P4MiniShell and an early-90s palmtop, without removing or duplicating
+anything. All are batch-friendly (ERRORLEVEL 0/1/2, `/b` bare output where
+useful), use the existing layering/ops-table patterns, and carry unit tests
+plus a hardware driver registered in `tools/regression.py`.
+
+- **`timer` / `stopwatch`** (`components/clock/clock_timer.c` +
+  `clock_commands.c`): named stopwatch runs over `esp_timer_get_time()`
+  (`start`/`stop`/`lap`/`status`, `[name]`, `/b` rows, `/v:NAME` ms results,
+  up to `P4_CONFIG_TIMER_SLOTS`). Hardware-verified: a 1500 ms `delay` reads
+  back as a ~1501 ms lap.
+- **`calc` base/unit functions** (`components/batch/calc.c`): `BIN$`, `OCT$`,
+  `VALB(str,base)`, `C2F`/`F2C`, `IN2MM`/`MM2IN`, `LB2KG`/`KG2LB`. The
+  `VAL`/`VALF` prefix guard was tightened to exact matching (fixes a real
+  bug where lowercase `valb` was captured by `VAL`; found by the unit suite).
+- **`db` fields** (`components/db/db.c` `db_field_get`, `db_commands.c`):
+  `k=v;k=v` payload convention with `db find /field:k=v`, `db sort
+  <field|key|id>`, and `db get <id> /field:name` — indexed-free fielded
+  queries that leave fieldless payloads and the index format untouched.
+- **`export <db|alarms> <csv|json|txt> <file>`**
+  (`components/command/export_commands.c`): portable interchange rendered
+  through the existing `db`/`alarm` APIs, written atomically, CSV via the one
+  RFC-4180 formatter.
+- **`csv rows|cols|cell|eval`** (`components/storage/storage_csv.c` +
+  `components/command/csv_commands.c`): RFC-4180-subset grid with `=EXPR`
+  evaluation through `calc` and `R<row>C<col>` references (iterative passes,
+  forward/chained refs).
+- **`crypt lock|unlock`** (`components/command/crypt_commands.c`):
+  AES-256-GCM under a PBKDF2-SHA256 key, streaming in 4 KB chunks, atomic
+  writes, zeroed key/password, `/p:` masked in history/transcript. Added the
+  IDF `mbedtls` dependency to the command component.
+- **`tcpterm <host> <port> [/t:secs] [text...]`**
+  (`components/networking/tcpterm.c`): one-shot TCP request/response with a
+  non-blocking connect budget, per-byte idle deadline, sanitized reply that
+  preserves remote SGR colours, and `< file`/pipe request sourcing. Verified
+  against the on-board `httpd` loopback (offline-aware driver).
+- **`usb userial`** (`components/usb/userial.c` +
+  `components/command/userial_commands.c`): raw CDC-ACM serial
+  (`status`/`open <vid:pid>`/`close`/`send`/`recv`/`term`) over the
+  `espressif/usb_host_cdc_acm` driver, byte API + mutex-guarded RX ring in the
+  `usb` component (leaf), verbs in `command` (key queue + SD input). The
+  class driver installs **lazily** on first use.
+- **`bind` F-key bindings** (`components/batch/batch.c` + the shell USB-key
+  path): `bind F5 <line>` fires a command from a USB HID function key at the
+  prompt, persisted to `sd:/BIND.BAT` and restored at boot after the alias
+  profile.
+- **`sleep` Wi-Fi auto-restore** (`components/command/power_commands.c`,
+  `networking.c`): after light sleep tore Wi-Fi down, the wake path re-queues
+  the connection through the shared restore request (`wake-restore` origin)
+  instead of a manual `wifi connect`.
+
+### Fixed — boot-time internal-RAM regression from the eager CDC-ACM install
+
+- The CDC-ACM class driver was first staged inside `usb_install_host_stack()`
+  alongside MSC/HID. On hardware this added a task stack plus internal
+  buffers early enough that the hosted-SDIO bring-up failed with
+  `sdmmc_allocate_aligned_buf: not enough mem` (`boot_regression` 2/8 clean).
+  The install is now **lazy** (`userial_install_driver()` from
+  `userial_open()`), so boot pays nothing; `boot_regression` is 8/8 clean
+  again. Same shape as the M38 alarm lesson and the O8 boot-RAM relief.
+
+### Added — `usb userial term` VT100 screen (no more raw-only passthrough)
+
+- `usb userial term` now renders remote output as a VT100 screen on the TUI
+  grid (80x25) instead of the legacy sanitized-transcript passthrough:
+  remote SGR colours (16/256/truecolor quantized via `tui_rgb_to_dos`),
+  cursor motion (CUP/CUU/CUD/CUF/CUB), erase (ED/EL), save/restore,
+  show/hide cursor, and the alt-screen buffer flow through the shared
+  `ansi_process_text_ex` parser, and output scrolls (`tui_scroll_up()`)
+  instead of clamping at the last row. Split escape sequences straddling RX
+  reads are reassembled (`ansi_csi_trailing()`, bounded by
+  `P4_CONFIG_VT100_PENDING_BYTES`); a never-terminating run is flushed
+  through so memory stays bounded.
+- Zero duplication, zero removal: no new components or protocols (file
+  transfer stays on the existing `send`/`receive` verbs), `/raw` keeps the
+  old transcript path, `P4_CONFIG_VT100_ENABLE=0` restores it as the
+  default, TUI teardown on exit is skipped when the grid was already active
+  (e.g. after `draw`), and SGR colour state is per-chunk (documented).
+  New keys `P4_CONFIG_VT100_ENABLE` / `P4_CONFIG_VT100_PENDING_BYTES`,
+  unit tests `test_ansi_csi_trailing_*` + `test_tui_scroll_up_inactive_safe`
+  (live rendering is hardware-verified on a real CDC-ACM device).
+
+### Added — `calc` financial + date functions (HP-12C class time value)
+
+- Financial arms in `components/batch/calc.c` (exact names, HP-12C cash-flow
+  signs, optional `fv`/`pv`/`type`/`guess` defaults): `PV FV PMT NPER RATE`
+  (Newton solve), `NPV`/`IRR` over up to `P4_CONFIG_CALC_ARG_MAX` (new key,
+  8) arguments, and `SLN`/`SYD`/`DB` depreciation. `calc /fin` prints the
+  cheatsheet.
+- Date arms over epoch-day serials (days since 1970-01-01, proleptic
+  Gregorian, pre-1970 supported): `DATE YEAR MONTH DAY DOW` (0=Sunday..6=
+  Saturday) `TODAY` (device clock) `DATEADD DAYS EOMONTH DATEVALUE DATESTR`.
+  `calc /date` prints the convention. Unit tests cover the 30-year mortgage
+  round trip, NPV/IRR reference values, depreciation schedules, leap years,
+  and every domain error; independently cross-checked values.
+
+### Added — `import` interchange in + vCard/iCalendar on both sides
+
+- New `import` verb (`components/command/import_commands.c`, dispatched from
+  `command.c`): `import db <name> <csv|json|vcf> <file>` and `import alarms
+  <csv|json|ics> <file>` (order mirrors `export`). csv/json shapes match
+  `export` output for round-trips (tolerant header, key order, extra keys;
+  `unix` wins over `when`); vcf reads vCard 3.0 contacts into `k=v` records;
+  ics reads VEVENTs (DTSTART/SUMMARY/DESCRIPTION/RRULE daily+weekly+BYDAY).
+  Fresh ids always; alarms arm notify-only with ENABLED kept and FIRED
+  cleared. Single-line CSV rows only for multi-line payloads (skipped and
+  counted, never truncated — use json/native instead); UTC `Z` stamps read
+  as device-local; binary vCard props skipped. Rows capped by
+  `P4_CONFIG_DB_EXPORT_MAX_RECORDS`, JSON slurp by `..._MAX_BYTES`.
+- `export` gains `vcf` (db contacts from `k=v` fields) and `ics` (alarm
+  VEVENTs with UID/DTSTAMP/floating DTSTART/RRULE). Pure parsers
+  (`import_vcf_prop_split`, `import_json_unescape`, `import_ics_datetime`)
+  are declared in `command.h` and unit-tested (`test_import.c`); store I/O
+  stays hardware-verified.
+
+### Added — RTC backup (NVS anchor + optional external chip)
+
+- `components/clock/clock_rtc.c`: every anchor stores `{unix, rtc_us}` in
+  the `p4rtc` NVS namespace, replayed at boot while the clock is unset
+  (`unix + (rtc_now - rtc_anchor)/1e6`). Anchors land on SNTP sync, manual
+  `date`/`time` set, `reboot` (new `clock_rtc_anchor_now()` hook in
+  `command.c`), and a periodic esp_timer (`P4_CONFIG_RTC_ANCHOR_PERIOD_S`,
+  1 h, 0 disables) — no new tasks. Counter continuity decides the outcome
+  (pure `clock_rtc_restore_math`, unit-tested): kept counting → RESTORED;
+  reset below the anchor (power loss without VBAT) → STALE last-known time
+  that honestly reports `--:--` until re-synced; implausible data →
+  INVALID. No VBAT API exists in IDF 5.5, so backup health is inferred.
+- Optional external DS3231-class I2C path (`P4_CONFIG_RTC_EXT_*`, default
+  off, transient bus like the `i2c` tool): read first at boot, rewritten on
+  sync/set; pure BCD helpers unit-tested.
+- New `rtc` verb (`rtc status` fields + `rtc anchor`), `time_is_set()`
+  honors stale, help/docs updated, `test_clock_rtc_*` suites added.
+
+### Added — USTAR backup archives (`archive` + `backup`)
+
+- New leaf `components/archive/` (store-only POSIX tar, zero new
+  dependencies, host-extractable) + `components/command/archive_commands.c`:
+  `archive create|extract|list|verify` and the `backup` alias
+  (`backup <file>` with no paths takes `sd:/DBS` + the alarm store).
+  A `P4CRC.MANIFEST` trailer carries per-file CRC-32; `verify` re-hashes
+  against it (manifest-less foreign tars fail honestly). Relative paths
+  under each source's basename, 100+155 split enforced by skipping (never
+  truncating), `/..` escapes refused, temp+rename writes, size pre-walk +
+  per-file space guards, heap-scratch directory walker (worker stack safe),
+  GNU longname/pax tolerant reader. (`restore` deliberately NOT aliased —
+  it already means trash-undelete.) Transfers reuse `httpd`/`httpget`/
+  `send`/`receive`.   Pure format core unit-tested (`test_archive.c`: CRC
+  reference vector, octal/header round-trips, fit + path-safety gates);
+  store I/O stays hardware-verified.
+
+### Added — foreground break (Ctrl+C / Stop button)
+
+- Cooperative abort for the foreground worker: a shell-level flag
+  (`shell_request_abort()` et al in `components/shell/`, the only layer
+  the USB keys, the worker, batch, and the Stop poller can all reach)
+  polled at the batch line loop, every `for` body (the single choke all
+  forms funnel through), and 100 ms `delay` chunks — each unwinding with
+  `^C` (or `delay: stopped`), consume-on-fire so one press prints once.
+  The worker marks busy around each item (drives Stop visibility) and
+  clears stale breaks on claim, so one tap never poisons the next line.
+- USB Ctrl+C (HID `c` + Ctrl) with no key-wait active aborts a running
+  command or clears the idle line DOS-style; key-wait sessions keep their
+  keys (remote `term` still receives `^C`, pause/choice/menu answer, the
+  editor keeps Ctrl+C for copy, reverse-search untouched — the intercept
+  sits after the modal branch).
+- Input-row Stop button (touch): created hidden, shown by a 150 ms main
+  poll while the worker is busy, suppressed in editor/app/TUI modes via a
+  central visibility rule hooked into all six mode transitions. OSK maps
+  deliberately untouched (touch-test layouts stay put).
+- State ops unit-tested (`test_shell_abort.c`); unwinding stays
+  hardware-verified. Background jobs still stop via `taskkill`.
+
+### Added — macro recorder + Ctrl+letter chord hotkeys
+
+- `macro record [file]` / `stop` / `play <file>` / `status`
+  (`components/batch/batch.c`): captures every async-submitted line (both
+  typed surfaces + touch taps; `macro ...` lines excluded) into a
+  `P4_CONFIG_MACRO_BYTES` (4 KB) heap buffer that auto-stops on overflow;
+  `stop` writes atomically, `play` replays via `call`. `bind ^G macro play
+  build.bat` is the one-keypress replay.
+- Chords (`^A`..`^Z`, codes `0x80|HID`) share the 12-slot bind table;
+  `^C` is reserved for break and rejected loudly. Firing: idle prompt as
+  before, plus non-editor modals (dialog/list consume-on-close, so the
+  line runs next); the editor keeps its Ctrl set and key waits keep every
+  key (remote `term` always receives chords). The ASCII mapper ignores
+  Ctrl, so chords are intercepted before the printable path; persistence
+  (`bind ^X ...` lines) falls out of the existing profile format.
+- Core unit-tested (`test_bind_chord_*`, `test_macro_*`; file I/O and
+  replay stay hardware-verified). OSK maps deliberately untouched.
+
+### Added — batch spreadsheet: `csv set/get` + range aggregates
+
+- `csv set <file> <row> <col> <value...>` mutates one cell in place:
+  untouched rows stream byte-for-byte, ragged rows extend, past-EOF rows
+  append as counted fillers, atomic temp+rename behind a space estimate;
+  multi-line, over-wide, and over-long rows are refused instead of
+  corrupted. `csv get` aliases `cell` to complete the pair.
+- `SUM`/`AVG`/`MIN`/`MAX`/`COUNT(R1C1:R2C2)` inside `=EXPR`, expanded in
+  the shared substitution step (either corner order, spaces tolerated,
+  grid-clipped, VAL semantics, COUNT tallies non-empty). Near-misses
+  (`SUMMARY`, `SUM(1)`) pass through untouched. Substitution core
+  unit-tested (`test_csv_substitute_ranges`); file mutation stays
+  hardware-verified.
+
+### Added — calendar recurrence (monthly/yearly/nth) + month grid
+
+- `alarm` recurrence widens from none/daily/weekly to monthly (by
+  day-of-month or nth weekday) and yearly: new
+  `ALARM_RECUR_MONTHLY`/`ALARM_RECUR_YEARLY` codes with optional
+  `recur_day`/`recur_month`/`recur_nth` INI keys (older files load
+  unchanged and derive params from `when`). Pure
+  `alarm_advance_monthly`/`alarm_advance_yearly`/`alarm_advance_event`
+  unit-tested (short months skipped, Feb 29 leap-only, nth/last weekday,
+  either corner rounding). `alarm add` gains `/monthly`/`/yearly`/
+  `/day:`/`/month:`/`/byw:N|last` (with validation and a forward snap to
+  the nth weekday); `alarm snooze <id> [minutes]` re-arms with a FIRED
+  clear.
+- `cal YYYY-MM` prints a real `Su Mo Tu We Th Fr Sa` grid with `*` event
+  marks plus the event list; `cal week` prints a 7-day agenda. vCard/iCal
+  round-trip extended (`FREQ=MONTHLY;BYMONTHDAY=`/`BYDAY=..;BYSETPOS=`,
+  `FREQ=YEARLY`) on both export and import. Checker advances via the new
+  dispatcher. `test_alarm_advance_*` suites added; store/checker stays
+  hardware-verified.
+
+### Added — shell input area: help-driven autocomplete, ghost text, persistent history
+
+- **Single-source completion.** The Tab provider now derives its candidate set
+  from the shell help table (`s_shell_help_entries[]`) plus aliases, so a new
+  command is completable the moment it has a help entry — no second list. The
+  old `shell_builtin_commands[]` duplicate was deleted. The `complete_word` op
+  hook was replaced by `complete_line(line, match_index, ...)` so the provider
+  parses the whole line: first token completes command names, later tokens
+  complete subcommands/flags tokenized from that command's usage string.
+- **Package-aware completion.** `launch`/`open`/`run` complete the installed
+  app names from `APPS/*.APPINFO`; `pkg` completes installed names (or
+  available `PKGS/<APP>/` bundles after `pkg install`). New public sources
+  `pkg_list_installed()` / `pkg_list_available()` in `pkg_commands.c`.
+- **Inline ghost text** (`P4_CONFIG_COMPLETION_GHOST`): the best completion's
+  remaining suffix is drawn muted right after the caret as you type (SD-free
+  `ghost_line` provider), hidden when the caret is not at the end, a modal owns
+  the screen, or the line is full. Applied to the shell input line only.
+- **Persistent recall history** (`P4_CONFIG_HISTORY_AUTOSAVE`): the profile
+  (`P4_CONFIG_HISTORY_PROFILE`, default `HISTORY.TXT`) is auto-loaded at the
+  first SD mount and auto-saved (5 s debounced, `shell_history_generation()`)
+  whenever the recall ring changes; `reboot` flushes before reset.
+- **Ctrl+R reverse search**: incremental case-insensitive search over the recall
+  ring with a query overlay in the input row (Enter accepts, Esc cancels,
+  Ctrl+R again cycles older matches). The matching helper is shared with the
+  batch-testable `history /search <text>` verb (skips its own command line so
+  the query cannot self-match); both report through `shell_history_search_matches()`.
+- **Diagnostics**: `ui state` now reports `ghost=` and `search=`. New
+  `tools/completion_test.py` (registered in `regression.py`) plus unit suites
+  `test_completion.c` / `test_history_search.c`.
+
+### Added — firmware `ui` touch-automation verbs + exhaustive touch suite
+
+- **Synthetic touch.** New `components/uitest/` owns a second LVGL pointer indev
+  whose read callback reports a scripted point/press state, played by a 5 ms
+  LVGL timer (press → moves → release). Because it is a real indev, a `ui tap`
+  runs the normal hit-testing/event path, and each verb blocks until its script
+  completes (deterministic, batch-friendly). The timer also forces
+  `lv_indev_read()` so short taps are never missed between the indev's own
+  samples.
+- **`ui` verbs** (`components/command/ui_commands.c`, registered in `command.c`
+  + completion + help): `tap <x> <y> [ms]`, `longpress`, `swipe`, `press`/`move`/
+  `release`, `key <label> [ms]`, `target <id>`, `targets [/b] [/v:NAME]`,
+  `hit <x> <y> [/v:NAME]`, `state [/b] [/v:NAME]`. Standard batch semantics
+  (ERRORLEVEL, `/b`, `/v:NAME`, redirection). While a modal blocks the worker
+  the console reader claims `ui …` via the `modal_console_command` hook so the
+  editor/dialog/list UI can be driven over serial too.
+- **Target enumeration**: walks the active screen for every visible `CLICKABLE`
+  widget and expands buttonmatrices into one target per key (`kbd:<label>`) with
+  absolute coordinates. The name is printed last so names may contain spaces
+  (e.g. list rows `1. No`). `ui target <id>` activates the widget directly
+  (modal panels live in the auto-scrolling transcript, where a raw coordinate
+  tap is racy); `ui tap` remains the raw-coordinate path.
+- **LVGL getter** `lv_buttonmatrix_get_button_area()` (tracked in
+  `tools/managed_patches.patch`) lets the suite tap a key's real center.
+- **Tests/tools**: `tools/ui_touch_test.py` (shell keyboard pages, header
+  indicators, input-row buttons, every editor Nav/Edit key, dialog/list buttons,
+  plus an opt-in `--sweep [px]` full-screen coordinate sweep); reference batch
+  app `apps/uitest/UITEST.BAT`; registered as the `ui touch` regression step.
+
+### Changed — editor Nav/Edit pages redesigned (uniform grids, no phantom row)
+
+- The editor opens on a **uniform 4×6 Nav grid** and a **3×6 Edit grid**:
+  Nav = `Tab ← ↑ ↓ → Home / End PgUp PgDn Del Ins Undo / Redo Find Next Replace
+  ReplAll Case / Goto Save SaveAs Open Edit abc`; Edit = `Copy Cut Paste SelAll
+  WordL WordR / DocTop DocBot DelLine DelEOL Reload Quit / Preview Comment Match
+  Wrap Nav abc`.
+- Removed the trailing `"\n"` that made LVGL allocate a phantom empty row after
+  both maps (the black bar at the bottom of the keyboard and the shrunken keys).
+- Clearer labels (`Rep`→`Replace`, `All`→`ReplAll`, `Prev`→`Preview`,
+  `WdL/WdR`→`WordL/WordR`, `DocH/DocE`→`DocTop/DocBot`, `DelLn/DelE`→
+  `DelLine/DelEOL`, page buttons `Nav2`→`Edit`, `Nav1`→`Nav`), with the pure
+  `editor_osk_key_from_label` table and its unit test updated; the legacy short
+  labels remain accepted as aliases.
+- Every on-screen key (typing and Nav/Edit actions) is now verified on hardware
+  by `tools/ui_touch_test.py` (the previous "touch compatible" claim was only
+  serial-verified).
+
+### Added — Large-file `edit`: PSRAM document, windowed rendering, bounded undo
+
+- **Bigger files, PSRAM-backed.** The document, its line array, the load
+  staging/undo buffers, and the view caches (per-row width table, wrap cache,
+  span scratch, preview) now use `editor_mem_alloc/realloc/free`
+  (`components/editor/editor.c`), which prefer the PSRAM heap and fall back to
+  the internal heap. `P4_CONFIG_EDITOR_MAX_BYTES` 64 KB → **1 MB** and
+  `P4_CONFIG_EDITOR_MAX_LINES` 2048 → **65536**; the line-number gutter widened
+  to 5 digits.
+- **Windowed rendering.** Only `P4_CONFIG_EDITOR_RENDER_ROWS` (**256**) rows are
+  materialized as LVGL spans at once. A full-height invisible spacer keeps the
+  scroll range equal to the whole document, and the window shifts with the
+  cursor (`editor_render_follow_cursor`) and with surface scrolling
+  (`editor_scroll_event_cb`). Cursor/selection overlays and touch mapping stay
+  in document coordinates, so they remain aligned. Rendering a whole large
+  document (and deleting all its spans) on every keystroke was quadratic and
+  tripped the LVGL task watchdog; 256 rows fixes that. Wrapping still renders
+  the full document (it changes the row pitch) and is a per-session toggle.
+- **Bounded undo.** Full-document snapshots are byte-budgeted
+  (`P4_CONFIG_EDITOR_UNDO_MAX_BYTES`, 4 MB): oldest steps are evicted past the
+  cap, so a multi-megabyte document cannot multiply memory by the undo depth.
+  Above `P4_CONFIG_EDITOR_UNDO_MAX_SNAPSHOT_BYTES` (256 KB) undo is disabled for
+  the session so every edit does not copy the whole file.
+- **SD/FATFS bounce buffers.** The document lives in PSRAM, and PSRAM is not
+  DMA-capable on this P4 build, so `editor_doc_load`/`editor_doc_save` stream
+  through a small internal `MALLOC_CAP_DMA` buffer instead of handing PSRAM
+  pointers to `fread`/`fwrite` (which aborted on large saves). Load carries a
+  trailing `\r` across chunk boundaries so CRLF detection is chunk-exact.
+- **Tests**: the line-cap test builds its cap-sized document with one
+  multi-line insert (the previous per-Enter loop took a full-document snapshot
+  per line, which is quadratic); unit **281/0/2**.
+- Verified on COM3: a 672 KB / 12 000-line file loads, Go-to-Line 12000 renders
+  the window, edits, saves, and reloads with the change present (`Find: found at
+  Ln 12000`); the small-file `editor_test.py` still passes.
+
+### Added — `edit` is truly touch-complete: opens on Nav, gains Open + 4 commands
+
+- **The editor now opens on its navigation page.** `editor_view_open()` binds
+  the OSK to the editor and selects `KEYBOARD_MODE_NAV`, so every editor button
+  is visible the instant `edit` starts (previously the default letters page
+  showed no editor controls and the Nav page had to be found by hand);
+  `editor_view_close()` restores the letters page. A leftover bug is gone: the
+  earlier "reachable from the touch keyboard alone" claim only held after
+  navigating from the symbols page, so a touch-only user could not find the
+  commands.
+- **Nav page grows a fifth row**: `Open`, `Comment`, `Match`, `Wrap`, `Reload`.
+  Comment (`Ctrl+/`), Match-jump (`Ctrl+B`), Wrap toggle (`Ctrl+W`), and Reload
+  (`Ctrl+L`) were USB/serial-only; they are now touch buttons too.
+- **New File > Open** (`EDITOR_KEY_OPEN`): `Open` opens an inline path prompt
+  (pre-filled with the current path, same shape as Save-As) guarded by an
+  "Open without saving? (Y/N)" confirm when the buffer is dirty. It is the only
+  new command added. USB `F4` and serial `\open` invoke it.
+- **Context-aware OSK pages**: text prompts (Find/Replace/Go-to/Save-As/Open)
+  switch to the letters page; commit or cancel returns to the Nav page, so the
+  touch keyboard follows the task without extra taps. A chained Replace
+  (find → with) stays on letters.
+- **OSK → key mapping is now a pure function.** New
+  `editor_osk_key_from_label()` (`editor_view.c`, declared in `editor_view.h`)
+  owns the single label→`editor_key_t` table; `editor_view_handle_osk()` and the
+  unit tests share it, so the Nav/Edit page labels and the editor keys cannot
+  drift apart.
+- **`keyboard mode [page]` command**: `keyboard mode` reports
+  `keyboard.page=<name>`; `keyboard mode <text_lower|text_upper|number|symbols|nav|nav2>`
+  switches the OSK page (aliases `letters`/`caps`/`num`/`special`/`edit`/…).
+  Backed by the stable `keyboard_mode_name()` / `keyboard_mode_parse()` registry
+  and a port-lock-guarded `keyboard_set_mode()` so it is safe from the worker
+  task.
+- **Input-row Tab button.** The shell input row gains a `Tab` button wired to the
+  shared `shell_input_line_tab_complete()` (the same path as the USB Tab key; the
+  function was made public in `shell.h`). `windows_get_tab_button()` exposes it
+  and it is hidden in editor/app/TUI modes where the input row is not a command
+  line.
+- **Tests**: `test_editor_osk_key_from_label`, `test_keyboard_mode_names`, and
+  `test_keyboard_mode_parse` (unit 278 → 281/0/2).
+- Verified on COM3: `keyboard mode nav` shows all five rows; `edit CONFIG.SYS`
+  opens on Nav; `Open` switches to the letters page with the path pre-filled and
+  reloads on commit; the input-row `Tab` button is present and completes.
+
+### Fixed — serial commands could be dropped while a modal blocked the worker
+
+- **A modal owns serial input, but unclaimed lines were still queued.** With the
+  worker blocked inside a modal (editor/dialog/list/ask), a line the surface did
+  not claim fell through to `shell_uart_console_submit_command()`, so it could
+  not run until the modal closed. A burst then overflowed
+  `P4_CONFIG_COMMAND_QUEUE_DEPTH` and the shell printed
+  `command queue full, command dropped` — including, in the worst case, the
+  modal's own quit line, wedging the UI. The console reader now routes every
+  `modal_active` line to the surface and never queues it (the streaming
+  `screenshot` console command is still claimed first).
+- **Command requests now live in PSRAM.** A `command_request_t` is one
+  `P4_CONFIG_COMMAND_BYTES` (4096) payload per queue slot; allocating them from
+  the internal DMA-capable heap fragmented it under a burst. `command.c` now
+  uses `heap_caps_malloc(MALLOC_CAP_SPIRAM)` with an internal fallback, and the
+  queue depth was raised 16 → 32 (pointers only), so a transiently-busy worker
+  no longer drops a normal burst or steals internal RAM from LVGL/SD DMA.
+- Verified on COM3: a 40-line burst typed while the editor is open is consumed
+  by the editor with zero drops and the shell restored (`editor_test.py`).
+
+### Changed — reference apps exercise the auto clock and BMP blit
+
+- **MOOD** now renders the auto-synced local clock (`%DATE%`/`%TIME%`) on the
+  live-heap dashboard and adds `timezone` + `date` views to Snapshot, showing
+  the network-detected timezone. Menu indices are unchanged (serial smoke tests
+  stay valid).
+- **GFXTOOL** blits `PHOTO.BMP` with `gfx image` into the free lower-right
+  region (outside every region `gfx_toolkit_test.py` checks) and emits
+  `[M-GFXTOOL-IMG]` / `[M-GFXTOOL-NOIMG]`; the test asserts the marker and that
+  the blit changed the region (skipped when `PHOTO.BMP` is absent).
+- Verified on COM3: companion smoke 21/21, gfx toolkit 18/18 (new blit check).
+
+### Added — Color-coded compact header status + tap/long-press detail
+
+- **Two must-have header features.** The WiFi/BT/USB/SD indicators (and now
+  MEM/CPU/BAT) render as one compact ASCII glyph colored by state instead of
+  words, returning the reclaimed width to the notification area; and each
+  indicator is tappable for detail.
+- **Compact colored glyphs** (`P4_CONFIG_HEADER_STATUS_STYLE=glyph`, the new
+  default): `W BT U S` and `M C B`, colored green healthy / amber degraded /
+  red off-failed / muted absent (SD slot empty). WiFi keeps its four bands
+  (strong/good = green, weak = amber, off/very weak = red). Set
+  `status_style=0` to restore the previous verbose words (`WiFi HI`, `USB ON`);
+  both styles share the same classification.
+- **Single source of truth** for status mapping: the new pure, LVGL-free
+  `components/header/header_status.c` owns the Wi-Fi HI/MID/LOW/WEAK label and
+  the memory/CPU/battery healthy-warn-critical thresholds; `header.c` maps the
+  semantic tone onto a theme color. This removes the old duplicated
+  state->text/state->color switches from `header.c`.
+- **Tap/long-press detail**: tap an indicator to show a one-line summary in the
+  notification area (built from the header's own cached state); long-press runs
+  the matching `wifi status` / `bluetooth status` / `usb status` / `sd info` /
+  `mem` / `top` / `battery` command through `header_register_status_action()`,
+  registered by `command_init()` — the header stays a command-free leaf.
+- **Theme**: added `theme.err` (red) to the theme table for the off/failed status
+  color (`theme.text` is the healthy green, `theme.warn` amber, `theme.text_muted`
+  absent); wired into `header_refresh_theme()`.
+- **Config**: added `P4_CONFIG_HEADER_STATUS_STYLE`, `P4_CONFIG_HEADER_DETAIL_ON_TAP`,
+  `P4_CONFIG_HEADER_RSSI_STRONG/GOOD/WEAK`, and
+  `P4_CONFIG_HEADER_{MEM,CPU,BAT}_CRIT_PCT` (`p4minishell_config.h` + `.yaml`).
+  `header status` now reports `header.status_style`.
+- **Tests**: new pure status-mapping cases in `test/main/test_header.c`
+  (glyphs, Wi-Fi label/tone bands, BT/USB/SD tones, MEM/CPU/BAT thresholds).
+
+### Added — Header notification queue, clock, activity indicator, adaptive poll
+
+- **Notification queue + severity.** A later trivial message can no longer
+  overwrite an alarm/OTA alert: the new pure `components/header/header_notify_queue.c`
+  (FIFO, depth `P4_CONFIG_HEADER_NOTIFY_QUEUE`, overflow drops the oldest queued)
+  is the single source of order/overflow/clear. `header_notify(level, text, timeout)`
+  colors info/warn/error; `header_set_notification()` is the INFO wrapper; blank
+  text flushes the queue (`notify -`). The display timer is now persistent and
+  paused (`repeat_count=-1`, never auto-freed), which removes the O7 freed-timer
+  hazard by construction. Severity wired: alarms → WARN (`alarm.c`), C6 OTA
+  failures → ERR and cancellation → WARN (`c6ota.c`, new
+  `c6ota_host_notify_header_level` host hook).
+- **Header clock.** The idle center shows the local time; `time_format_hm()` +
+  the pure, tested `clock_format_hm_snapshot()` (components/clock) are the single
+  formatter. `time_is_set()` treats a manual `date`/`time` set as valid too (not
+  only SNTP), and only then does the clock leave the `--:--` placeholder.
+  Notifications take precedence and the clock returns when the queue drains.
+- **Activity indicator.** A conditional `A` in the status panel appears while a C6
+  OTA or a background job runs (new `bg_jobs_running` shell accessor wrapping
+  `command_bg_any_running`; `c6ota_is_busy` already existed). Hidden when idle, so
+  it contributes zero width; tap names the work, long-press runs `ps`.
+- **Situation-aware refresh.** The fixed 5 s poll is replaced by an adaptive one:
+  the pure `components/header/header_refresh.c` chooses the next interval
+  (`WAKE 150 ms` while the display is idle-off for prompt touch wake, `BUSY 1 s`
+  OTA/bg job, `CONNECTING 750 ms` Wi-Fi bring-up, `STARTUP 500 ms`, `IDLE 2 s`
+  otherwise), aligned to the clock minute boundary and capped by the pending
+  idle-display-off deadline (`shell_power_ms_until_idle_off()`). The shell exposes
+  `shell_header_refresh_interval_ms()` and main reschedules its single timer. The
+  expensive telemetry (heap/CPU task snapshot/battery) is throttled to
+  `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS` (5 s) and the whole pass is skipped while
+  the display is off, so the faster poll never multiplies allocations (critical
+  during an OTA, when PSRAM is unavailable).
+- **Config**: `P4_CONFIG_HEADER_NOTIFY_QUEUE`, `P4_CONFIG_HEADER_CLOCK`,
+  `P4_CONFIG_HEADER_ACTIVITY`, `P4_CONFIG_HEADER_REFRESH_{IDLE,WAKE,BUSY,CONNECTING,STARTUP,MIN}_MS`,
+  `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS`, `P4_CONFIG_HEADER_STARTUP_GRACE_S`
+  (`p4minishell_config.h` + `.yaml`).
+- **Tests**: notification-queue FIFO/overflow/clear and adaptive-refresh
+  priority/clock/idle-off cases (`test_header.c`) plus the clock formatter
+  (`test_clock.c`).
+
+### Fixed — Clock never synced; timezone is now auto-detected from the network
+
+- **SNTP never started.** `time_start_sntp()` had no caller, so the clock only
+  ever changed via a manual `date`/`time` and the header showed `--:--` (or
+  drifted). It is now idempotent and started automatically once Wi-Fi associates.
+- **No automatic timezone (and a hardcoded `"UTC"`).** The zone is now resolved
+  from the network with no hardcoded default: `networking_time_detect()`
+  (components/networking, quiet mode of the existing HTTP fetch) queries
+  `P4_CONFIG_TIMEZONE_URL` for the location and UTC offset;
+  `time_set_utc_offset()` builds the POSIX TZ string ("UTC-2" for +2h,
+  "UTC-5:30" for +5:30) and keeps the IANA label for `timezone` display.
+- **Wiring.** A dedicated PSRAM-stack `timesync` task does the blocking HTTP
+  probe (never on the LVGL task), applies the zone, starts SNTP, then re-probes
+  every `P4_CONFIG_TIMEZONE_RESYNC_SECS` (6h) so DST transitions and travel stay
+  correct; it skips while `c6ota_is_busy()` and retries a few times on failure
+  (falling back to UTC time if the service is unreachable). `shell` kicks it off
+  once Wi-Fi associates through the new `shell_command_ops_t.time_auto_sync` hook.
+- Verified on COM3: after association the log shows the detected zone
+  (`Europe/Bucharest`, `UTC-3` POSIX = +3h) and the header clock reads the
+  correct local time (`16:37`, matching the host); `sntp` reports `synced`.
+
+### Added — BMP image support across shell, TUI, gfx and batch apps
+
+- **One decoder, three surfaces.** `components/gfx` gains a general BMP core —
+  `gfx_bmp_parse_header_ex` (24-bit and 32-bit BI_RGB, bottom-up or top-down,
+  explicit dims), `gfx_bmp_decode_scaled_565` (decode + nearest-sample straight
+  to the target size, so the native image is never materialized),
+  `gfx_surface_blit_scaled`, `gfx_bmp_fit` (single never-upscaling aspect-fit),
+  and `gfx_image_surface_alloc`. The strict `gfx_bmp_parse_header` remains the
+  24-bit bottom-up sprite wrapper, so `gfx load` behavior and `test_gfx.c`
+  rejections are unchanged.
+- **Viewer**: new `imageview` modal surface (`components/modal/modal_surf.c`,
+  `modal_image_run`) shows a BMP fit-to-screen in full color (`Esc`/`q`/Close,
+  `/t:secs`). `view` and `open` route `.bmp`/`.dib` to it via the central
+  `components/filetype/` registry (new `FILETYPE_IMAGE` / `filetype_is_image`).
+- **TUI**: `tui_draw_image()` renders an RGB565 image into the 80x25 cell grid
+  (nearest DOS color per cell) and the new `draw image <file> <x> <y> <w> <h>`
+  verb exposes it to batch apps. Documented 16-color posterization.
+- **Canvas**: `gfx image <path> [x y [w h]]` decodes and blits a scaled BMP onto
+  the pixel canvas; `gfx load` now also accepts 32-bit bitmap art.
+- **`image` verb**: `image info <file.bmp>` (scriptable WxH/bpp/orientation/
+  bytes) and `image show [/t:secs] <file.bmp>` (thin alias of the viewer),
+  dispatched from `command.c` with completion + help entries.
+- **Config/tests**: `P4_CONFIG_IMAGE_MAX_BYTES`,
+  `P4_CONFIG_IMAGE_VIEWER_FIT` (`p4minishell_config.h` + `.yaml`), image caps
+  `GFX_IMAGE_MAX_W/H`; new `test_gfx.c` cases (32-bit/top-down parse+decode,
+  large/scaled decode, fit, scaled blit) and `test_filetype.c` image case.
+- **Assets/apps**: `apps/push_assets.py` also generates/pushes `PHOTO.BMP`
+  (96x64); new reference app `apps/pics/PICS.BAT` (`view` / `draw image` /
+  `gfx image` / `image info`) registered in `apps/push_apps.py`.
+
+### Fixed — `screenshot` now captures open modals
+
+- **A modal blocked the command worker**, so the host's `screenshot` was queued
+  and only ran after the modal closed (the screenshot tool timed out on any
+  open `dialog`/`list`/`ask`/`browse`/`view`/`image show`/`hexview` or the
+  `edit` editor). The bare streaming `screenshot`/`scr`/`capture` is now handled
+  by the **console-reader task** via the new
+  `shell_command_ops_t.modal_console_command` hook (tried before the modal's
+  serial handler only while a modal is active), reusing the single
+  `shell_command_screenshot(1, ...)` implementation. `screenshot <file>` still
+  runs on the worker.
+- **The reader no longer self-suspends**: `shell_uart_console_rx_begin/end`
+  skip `vTaskSuspend/Resume` when the console task is the caller (the reader
+  running the capture); the worker-side `receive`/`send` suspend path is
+  unchanged. `P4_CONFIG_UART_CONSOLE_TASK_STACK` raised 12288 → 16384 (PSRAM) so
+  the LVGL snapshot has stack headroom on the reader, and the screenshot's
+  `lvgl_port_lock` is now a bounded 1 s wait instead of 0 so a modal's brief
+  redraw cannot drop the capture.
+- **Modal panels are scrolled into view**: surfaces alias the scrollable
+  transcript container, so a transcript scrolled to its newest output left the
+  panel off-screen above the viewport (invisible on screen and in captures).
+  `surf_create_container()` now `lv_obj_scroll_to_view()`s the new panel.
+- Verified on COM3: `grab_screenshot.py` captures `view PHOTO.BMP` (image
+  viewer), `dialog`, and `edit CONFIG.SYS`; normal (no-modal) screenshots and
+  the SD `screenshot <file>` form are unchanged.
+
 ## [0.38.1] - 2026-09-13 (COM3; ESP-IDF v5.5.5)
 
 ### Changed — Wi-Fi throughput bench verified; lwIP TCP window raised

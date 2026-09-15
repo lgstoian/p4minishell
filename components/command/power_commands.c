@@ -456,6 +456,40 @@ int shell_power_get_idle_timeout(void)
     return seconds;
 }
 
+int shell_power_ms_until_idle_off(void)
+{
+    int seconds;
+    int64_t last_us;
+    int64_t elapsed_ms;
+    int64_t remaining_ms;
+
+    portENTER_CRITICAL(&s_power_idle_lock);
+    seconds = s_power_idle_off_secs;
+    last_us = s_power_last_activity_us;
+    if (s_power_display_off_by_idle) {
+        seconds = 0;
+    }
+    portEXIT_CRITICAL(&s_power_idle_lock);
+
+    if (seconds <= 0) {
+        return 0;
+    }
+
+    elapsed_ms = (esp_timer_get_time() - last_us) / 1000;
+    remaining_ms = (int64_t)seconds * 1000 - elapsed_ms;
+    if (remaining_ms <= 0) {
+        /* Deadline already passed: return a tiny value so the caller polls
+         * promptly and runs the idle tick that switches the display off. */
+        return 1;
+    }
+    /* Clamp to the maximum configurable window so the return value (int) is
+     * always representable. */
+    if (remaining_ms > (int64_t)SHELL_POWER_IDLE_DISPLAY_MAX_SECS * 1000) {
+        remaining_ms = (int64_t)SHELL_POWER_IDLE_DISPLAY_MAX_SECS * 1000;
+    }
+    return (int)remaining_ms;
+}
+
 void shell_power_notify_activity(void)
 {
     bool wake = false;
@@ -672,7 +706,10 @@ void shell_command_sleep(int argc, char **argv)
 {
     uint32_t seconds;
     esp_err_t error;
+    networking_wifi_restore_state_t wifi_restore;
+    bool wifi_restore_needed = false;
 
+    memset(&wifi_restore, 0, sizeof(wifi_restore));
     if (!shell_power_parse_seconds(argc, argv, &seconds)) {
         shell_print_usage("Usage: sleep [seconds]");
         shell_record_warningf("sleep", "Usage error for sleep command");
@@ -697,6 +734,11 @@ void shell_command_sleep(int argc, char **argv)
     shell_power_enable_gpio_wake();
 
 #if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
+    /* Remember the runtime/connection intent so the wake path can bring the
+     * radio back without a manual `wifi connect` (capture must precede the
+     * shutdown, which clears the cached target credentials). */
+    networking_wifi_capture_restore_state(&wifi_restore);
+    wifi_restore_needed = wifi_restore.should_restore_runtime;
     shell_power_shutdown_wifi();
 #else
     shell_transcript_appendf_ansi(SH_MUTE "sleep: keeping Wi-Fi state (light sleep wifi shutdown disabled)\n");
@@ -722,7 +764,14 @@ void shell_command_sleep(int argc, char **argv)
     shell_power_notify_activity();
 
 #if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
-    shell_transcript_appendf_ansi(SH_MUTE "sleep: Wi-Fi was shut down; use `wifi connect` to reconnect.\n");
+    if (wifi_restore_needed) {
+        /* Bring the radio back automatically (line-current palmtop behaviour)
+         * instead of leaving the user to run `wifi connect` by hand. */
+        networking_wifi_request_wake_restore(&wifi_restore);
+        shell_transcript_appendf_ansi(SH_MUTE "sleep: restoring Wi-Fi in the background\n");
+    } else {
+        shell_transcript_appendf_ansi(SH_MUTE "sleep: Wi-Fi was shut down; use `wifi connect` to reconnect.\n");
+    }
 #endif
 }
 

@@ -997,7 +997,10 @@ static void networking_wifi_request_boot_restore(void)
 #endif
 }
 
-void networking_wifi_request_post_ota_restore(const networking_wifi_restore_state_t *restore_state)
+/** Queue a background Wi-Fi restore under @p origin (shared by the OTA and
+ *  wake paths so both keep one request shape). */
+static void networking_wifi_request_restore(const networking_wifi_restore_state_t *restore_state,
+                                            const char *origin)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
     networking_wifi_background_request_t request = {
@@ -1006,7 +1009,7 @@ void networking_wifi_request_post_ota_restore(const networking_wifi_restore_stat
         .run_diagnostic = true,
     };
 
-    snprintf(request.origin, sizeof(request.origin), "%s", "c6ota-restore");
+    snprintf(request.origin, sizeof(request.origin), "%s", origin);
     if (restore_state != NULL && restore_state->should_restore_runtime) {
         if (restore_state->should_restore_connection && restore_state->ssid[0] != '\0') {
             snprintf(request.ssid, sizeof(request.ssid), "%s", restore_state->ssid);
@@ -1019,11 +1022,22 @@ void networking_wifi_request_post_ota_restore(const networking_wifi_restore_stat
     }
 
     if (!networking_wifi_begin_background_request(&request)) {
-        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "%s: failed to queue post-OTA Wi-Fi restore" SH_RST "\n", request.origin);
+        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "%s: failed to queue Wi-Fi restore" SH_RST "\n", request.origin);
     }
 #else
     (void)restore_state;
+    (void)origin;
 #endif
+}
+
+void networking_wifi_request_post_ota_restore(const networking_wifi_restore_state_t *restore_state)
+{
+    networking_wifi_request_restore(restore_state, "c6ota-restore");
+}
+
+void networking_wifi_request_wake_restore(const networking_wifi_restore_state_t *restore_state)
+{
+    networking_wifi_request_restore(restore_state, "wake-restore");
 }
 
 void networking_wifi_capture_restore_state(networking_wifi_restore_state_t *restore_state)
@@ -1827,7 +1841,7 @@ void networking_http_result_free(networking_http_result_t *result)
     }
 }
 
-esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
+static esp_err_t networking_http_get_internal(const char *url, networking_http_result_t *result, bool quiet)
 {
     esp_http_client_config_t http_config = { 0 };
     esp_http_client_handle_t client = NULL;
@@ -1850,12 +1864,16 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
     memset(out, 0, sizeof(*out));
 
     if (!networking_http_url_is_supported(url)) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " unsupported URL scheme; use http:// or https://\n");
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " unsupported URL scheme; use http:// or https://\n");
+        }
         return ESP_ERR_INVALID_ARG;
     }
 
     if (!networking_wifi_is_connected()) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " no active connection; run " SH_CMD "wifi connect" SH_RST " first\n");
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " no active connection; run " SH_CMD "wifi connect" SH_RST " first\n");
+        }
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -1879,26 +1897,34 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
         http_config.crt_bundle_attach = esp_crt_bundle_attach;
     }
 
-    networking_appendf(SH_PROMPT "httpget:" SH_RST " downloading " SH_VAL "%s" SH_RST "\n", url);
+    if (!quiet) {
+        networking_appendf(SH_PROMPT "httpget:" SH_RST " downloading " SH_VAL "%s" SH_RST "\n", url);
+    }
 
     client = esp_http_client_init(&http_config);
     if (client == NULL) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " failed to allocate the HTTP client\n");
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " failed to allocate the HTTP client\n");
+        }
         return ESP_ERR_NO_MEM;
     }
 
     error = esp_http_client_open(client, 0);
     if (error != ESP_OK) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " connection failed (" SH_ERR "%s" SH_RST
-                           ") - check the URL or Wi-Fi routing\n", esp_err_to_name(error));
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " connection failed (" SH_ERR "%s" SH_RST
+                               ") - check the URL or Wi-Fi routing\n", esp_err_to_name(error));
+        }
         goto cleanup;
     }
 
     remote_length = esp_http_client_fetch_headers(client);
     http_status = esp_http_client_get_status_code(client);
     if (http_status < 200 || http_status >= 300) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " server returned HTTP status " SH_NUM "%d" SH_RST "\n",
-                           http_status);
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " server returned HTTP status " SH_NUM "%d" SH_RST "\n",
+                               http_status);
+        }
         error = ESP_ERR_NOT_FOUND;
         goto cleanup;
     }
@@ -1911,9 +1937,11 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
         out->content_length = (size_t)remote_length;
     }
     if (out->content_length > P4_CONFIG_HTTP_MAX_BODY_BYTES) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " response of " SH_NUM "%u" SH_RST
-                           " bytes exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
-                           (unsigned int)out->content_length, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " response of " SH_NUM "%u" SH_RST
+                               " bytes exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
+                               (unsigned int)out->content_length, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+        }
         error = ESP_ERR_INVALID_SIZE;
         goto cleanup;
     }
@@ -1924,7 +1952,9 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
         out->body = heap_caps_malloc(P4_CONFIG_HTTP_MAX_BODY_BYTES, MALLOC_CAP_8BIT);
     }
     if (out->body == NULL) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " out of memory buffering the response\n");
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " out of memory buffering the response\n");
+        }
         error = ESP_ERR_NO_MEM;
         goto cleanup;
     }
@@ -1937,7 +1967,9 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
         }
         chunk_read = esp_http_client_read(client, (char *)(out->body + total_read), (int)wanted);
         if (chunk_read < 0) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " read failed mid-response\n");
+            if (!quiet) {
+                networking_appendf(SH_ERR "httpget:" SH_RST " read failed mid-response\n");
+            }
             error = ESP_FAIL;
             goto cleanup;
         }
@@ -1952,18 +1984,22 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
      * from a body that ends right at the limit. */
     if (total_read == P4_CONFIG_HTTP_MAX_BODY_BYTES &&
         esp_http_client_read(client, (char *)&probe, 1) > 0) {
-        networking_appendf(SH_ERR "httpget:" SH_RST " response exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
-                           (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+        if (!quiet) {
+            networking_appendf(SH_ERR "httpget:" SH_RST " response exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
+                               (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+        }
         error = ESP_ERR_INVALID_SIZE;
         goto cleanup;
     }
 
-    networking_appendf(SH_OK "httpget:" SH_RST " " SH_LBL "status" SH_RST "=" SH_NUM "%d" SH_RST
-                       " " SH_LBL "type" SH_RST "=" SH_VAL "%s" SH_RST
-                       " " SH_LBL "bytes" SH_RST "=" SH_NUM "%u" SH_RST "\n",
-                       http_status,
-                       out->content_type[0] != '\0' ? out->content_type : "n/a",
-                       (unsigned int)total_read);
+    if (!quiet) {
+        networking_appendf(SH_OK "httpget:" SH_RST " " SH_LBL "status" SH_RST "=" SH_NUM "%d" SH_RST
+                           " " SH_LBL "type" SH_RST "=" SH_VAL "%s" SH_RST
+                           " " SH_LBL "bytes" SH_RST "=" SH_NUM "%u" SH_RST "\n",
+                           http_status,
+                           out->content_type[0] != '\0' ? out->content_type : "n/a",
+                           (unsigned int)total_read);
+    }
     error = ESP_OK;
 
 cleanup:
@@ -1977,6 +2013,91 @@ cleanup:
         out->body_size = 0;
     }
     return error;
+}
+
+esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
+{
+    return networking_http_get_internal(url, result, false);
+}
+
+/** Skip leading spaces/tabs and a UTF-8 BOM. */
+static const char *networking_skip_ws(const char *s)
+{
+    if (s == NULL) {
+        return NULL;
+    }
+    if ((unsigned char)s[0] == 0xEF && (unsigned char)s[1] == 0xBB && (unsigned char)s[2] == 0xBF) {
+        s += 3;
+    }
+    while (*s == ' ' || *s == '\t' || *s == '\r') {
+        s++;
+    }
+    return s;
+}
+
+esp_err_t networking_time_detect(int *offset_seconds_out, char *iana_out, size_t iana_size)
+{
+    static const char k_url[] = P4_CONFIG_TIMEZONE_URL;
+    networking_http_result_t res;
+    char *body;
+    char line[64];
+    size_t line_len = 0;
+    int parsed_offset = 0;
+    bool have_offset = false;
+    size_t i;
+
+    if (offset_seconds_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (networking_http_get_internal(k_url, &res, true) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    /* The /line/ endpoint emits one value per line (timezone name, then the
+     * UTC offset in seconds). Field order is not guaranteed, so classify each
+     * non-empty line: a leading sign/digit is the offset, otherwise the name. */
+    body = (char *)res.body;
+    for (i = 0; i <= res.body_size; i++) {
+        char c = (i < res.body_size) ? body[i] : '\n';
+
+        if (c != '\n' && c != '\r') {
+            if (line_len + 1 < sizeof(line)) {
+                line[line_len++] = c;
+            }
+            continue;
+        }
+        line[line_len] = '\0';
+        line_len = 0;
+
+        {
+            const char *v = networking_skip_ws(line);
+            if (v == NULL || v[0] == '\0') {
+                continue;
+            }
+            if ((v[0] == '-' || v[0] == '+' || (v[0] >= '0' && v[0] <= '9'))) {
+                char *end = NULL;
+                long seconds = strtol(v, &end, 10);
+                if (end != NULL && *networking_skip_ws(end) == '\0') {
+                    /* Plausible UTC offset: -12h .. +14h. */
+                    if (seconds >= -12 * 3600 && seconds <= 14 * 3600) {
+                        parsed_offset = (int)seconds;
+                        have_offset = true;
+                    }
+                }
+            } else if (iana_out != NULL && iana_size > 0) {
+                snprintf(iana_out, iana_size, "%s", v);
+            }
+        }
+    }
+
+    networking_http_result_free(&res);
+
+    if (!have_offset) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    *offset_seconds_out = parsed_offset;
+    return ESP_OK;
 }
 
 void networking_wifi_set_boot_credentials(const char *ssid, const char *password)

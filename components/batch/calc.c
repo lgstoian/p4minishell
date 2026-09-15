@@ -44,11 +44,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define CALC_STR_BYTES          P4_CONFIG_CALC_STR_BYTES
 #define CALC_MAX_DEPTH          P4_CONFIG_CALC_MAX_DEPTH
 #define CALC_PRINT_PRECISION    P4_CONFIG_CALC_PRINT_PRECISION
 #define CALC_PI                 3.14159265358979323846264338327950288
+
+#ifndef P4_CONFIG_CALC_ARG_MAX
+#define P4_CONFIG_CALC_ARG_MAX  8
+#endif
+#define CALC_ARG_MAX            P4_CONFIG_CALC_ARG_MAX
 
 /* ========================================================================
  * ANGLE MODE
@@ -421,15 +427,319 @@ static double calc_val_number(const char *text)
     return value;
 }
 
+/* ========================================================================
+ * FINANCIAL CORE (HP-12C sign conventions: cash out negative, in positive)
+ * ========================================================================
+ * All five TVM functions share one annuity equation. With rate r, periods n,
+ * payment pmt, present pv, future fv and type t (0 = end, 1 = beginning):
+ *
+ *   pv*(1+r)^n + pmt*(1+r*t)*(((1+r)^n - 1)/r) + fv = 0      (r != 0)
+ *   pv + pmt*n + fv = 0                                       (r == 0)
+ */
+
+/** Annuity residual: 0 when (rate, nper, pmt, pv, fv, type) is consistent. */
+static double calc_annuity_residual(double rate, double nper, double pmt,
+                                    double pv, double fv, double type)
+{
+    if (fabs(rate) < 1e-12) {
+        return pv + pmt * nper + fv;
+    }
+    double f = pow(1.0 + rate, nper);
+    return pv * f + pmt * (1.0 + rate * type) * (f - 1.0) / rate + fv;
+}
+
+static bool calc_fin_type_ok(double type)
+{
+    return type == 0.0 || type == 1.0;
+}
+
+static bool calc_fin_pv(double rate, double nper, double pmt, double fv,
+                        double type, double *out)
+{
+    if (fabs(rate) < 1e-12) {
+        *out = -(fv + pmt * nper);
+        return true;
+    }
+    if (rate <= -1.0) {
+        return false;
+    }
+    double f = pow(1.0 + rate, nper);
+    *out = -(fv + pmt * (1.0 + rate * type) * (f - 1.0) / rate) / f;
+    return true;
+}
+
+static bool calc_fin_fv(double rate, double nper, double pmt, double pv,
+                        double type, double *out)
+{
+    if (fabs(rate) < 1e-12) {
+        *out = -(pv + pmt * nper);
+        return true;
+    }
+    if (rate <= -1.0) {
+        return false;
+    }
+    double f = pow(1.0 + rate, nper);
+    *out = -(pv * f + pmt * (1.0 + rate * type) * (f - 1.0) / rate);
+    return true;
+}
+
+static bool calc_fin_pmt(double rate, double nper, double pv, double fv,
+                         double type, double *out)
+{
+    if (nper == 0.0) {
+        return false;
+    }
+    if (fabs(rate) < 1e-12) {
+        *out = -(fv + pv) / nper;
+        return true;
+    }
+    if (rate <= -1.0) {
+        return false;
+    }
+    double f = pow(1.0 + rate, nper);
+    double denom = (1.0 + rate * type) * (f - 1.0);
+    if (denom == 0.0) {
+        return false;
+    }
+    *out = -(fv + pv * f) * rate / denom;
+    return true;
+}
+
+static bool calc_fin_nper(double rate, double pmt, double pv, double fv,
+                          double type, double *out)
+{
+    if (fabs(rate) < 1e-12) {
+        if (pmt == 0.0) {
+            return false;
+        }
+        *out = -(fv + pv) / pmt;
+        return true;
+    }
+    if (rate <= -1.0) {
+        return false;
+    }
+    double a = pmt * (1.0 + rate * type);
+    double num = a - fv * rate;
+    double den = a + pv * rate;
+    if (den == 0.0 || num / den <= 0.0) {
+        return false;
+    }
+    *out = log(num / den) / log(1.0 + rate);
+    return true;
+}
+
+/** Solve the annuity equation for rate with Newton's method (numeric slope).
+ *  Returns false when the iteration leaves the valid domain or stalls. */
+static bool calc_fin_rate(double nper, double pmt, double pv, double fv,
+                          double type, double guess, double *out)
+{
+    double r = guess;
+
+    if (nper <= 0.0) {
+        return false;
+    }
+    for (int i = 0; i < 100; i++) {
+        if (r <= -0.99999999) {
+            return false;
+        }
+        double fr = calc_annuity_residual(r, nper, pmt, pv, fv, type);
+        if (fabs(fr) < 1e-12) {
+            *out = r;
+            return true;
+        }
+        double h = 1e-7 * (1.0 + fabs(r));
+        double slope = (calc_annuity_residual(r + h, nper, pmt, pv, fv, type) -
+                        calc_annuity_residual(r - h, nper, pmt, pv, fv, type)) / (2.0 * h);
+        if (slope == 0.0 || !isfinite(slope)) {
+            return false;
+        }
+        double step = fr / slope;
+        r -= step;
+        if (fabs(step) < 1e-12) {
+            if (r <= -0.99999999) {
+                return false;
+            }
+            *out = r;
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Net present value of values[0..count) discounted at rate. */
+static bool calc_fin_npv(double rate, const double *values, int count, double *out)
+{
+    double total = 0.0;
+    double df = 1.0;
+
+    if (rate <= -1.0) {
+        return false;
+    }
+    for (int i = 0; i < count; i++) {
+        total += values[i] / df;
+        df *= (1.0 + rate);
+    }
+    *out = total;
+    return true;
+}
+
+/** Internal rate of return: the rate with NPV == 0. Needs a sign change in
+ *  the cash flows, otherwise no solution exists. */
+static bool calc_fin_irr(const double *values, int count, double *out)
+{
+    bool positive = false;
+    bool negative = false;
+    double r = 0.1;
+
+    for (int i = 0; i < count; i++) {
+        if (values[i] > 0.0) {
+            positive = true;
+        } else if (values[i] < 0.0) {
+            negative = true;
+        }
+    }
+    if (!positive || !negative) {
+        return false;
+    }
+    for (int i = 0; i < 100; i++) {
+        double fr;
+        double h;
+        double slope;
+
+        if (r <= -0.99999999) {
+            return false;
+        }
+        if (!calc_fin_npv(r, values, count, &fr)) {
+            return false;
+        }
+        if (fabs(fr) < 1e-9) {
+            *out = r;
+            return true;
+        }
+        h = 1e-7 * (1.0 + fabs(r));
+        double up;
+        double down;
+        if (!calc_fin_npv(r + h, values, count, &up) ||
+            !calc_fin_npv(r - h, values, count, &down)) {
+            return false;
+        }
+        slope = (up - down) / (2.0 * h);
+        if (slope == 0.0 || !isfinite(slope)) {
+            return false;
+        }
+        double step = fr / slope;
+        r -= step;
+        if (fabs(step) < 1e-12) {
+            if (r <= -0.99999999) {
+                return false;
+            }
+            *out = r;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* ========================================================================
+ * DATE CORE (epoch-day serials: days since 1970-01-01, proleptic Gregorian)
+ * ========================================================================
+ * Civil algorithms after Howard Hinnant (public domain). Serials are whole
+ * days; pre-1970 dates are negative and fully supported.
+ */
+
+/** Days since 1970-01-01 for a civil date (pre-validated). */
+static int64_t calc_days_from_civil(int y, int m, int d)
+{
+    y -= m <= 2 ? 1 : 0;
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned mp = (unsigned)(m + (m > 2 ? -3 : 9));
+    unsigned doy = (153 * mp + 2) / 5 + (unsigned)(d - 1);
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+/** Civil date for an epoch-day serial. */
+static void calc_civil_from_days(int64_t z, int *yp, int *mp, int *dp)
+{
+    z += 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = (unsigned)(z - era * 146097);
+    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int y = (int)yoe + (int)(era * 400);
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    unsigned mp2 = (5 * doy + 2) / 153;
+    unsigned d = doy - (153 * mp2 + 2) / 5 + 1;
+    unsigned m = mp2 + (mp2 < 10 ? 3 : -9);
+    *yp = y + (m <= 2 ? 1 : 0);
+    *mp = (int)m;
+    *dp = (int)d;
+}
+
+static bool calc_is_leap(int y)
+{
+    return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+}
+
+static int calc_month_days(int y, int m)
+{
+    static const int table[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (m < 1 || m > 12) {
+        return 0;
+    }
+    if (m == 2 && calc_is_leap(y)) {
+        return 29;
+    }
+    return table[m - 1];
+}
+
+/** Validate a y/m/d triple and return its serial. */
+static bool calc_date_serial(int y, int m, int d, double *out)
+{
+    if (m < 1 || m > 12) {
+        return false;
+    }
+    if (d < 1 || d > calc_month_days(y, m)) {
+        return false;
+    }
+    *out = (double)calc_days_from_civil(y, m, d);
+    return true;
+}
+
+/** Split a serial into y/m/d (serials round to the nearest whole day). */
+static void calc_serial_parts(double serial, int *yp, int *mp, int *dp)
+{
+    calc_civil_from_days((int64_t)llround(serial), yp, mp, dp);
+}
+
+/** Parse an ISO 'YYYY-MM-DD' date (single-digit M/D tolerated). */
+static bool calc_parse_iso_date(const char *text, double *out)
+{
+    int y = 0;
+    int m = 0;
+    int d = 0;
+    int n = 0;
+
+    if (text == NULL || sscanf(text, "%d-%d-%d%n", &y, &m, &d, &n) != 3) {
+        return false;
+    }
+    if (text[n] != '\0') {
+        return false;
+    }
+    return calc_date_serial(y, m, d, out);
+}
+
 /**
  * Dispatch a function call. The opening `(` has been consumed and the closing
  * `)` is next. Arguments are parsed into @p args, with @p arg_count holding
- * how many were parsed (each function validates its own arity).
+ * how many were parsed (each function validates its own arity, up to
+ * CALC_ARG_MAX so financial list functions fit).
  */
 static void calc_parse_function_body(calc_parser_t *parser, const char *name,
                                      calc_value_t *out)
 {
-    calc_value_t args[3];
+    calc_value_t args[CALC_ARG_MAX];
     int arg_count = 0;
     double x, y, z;
 
@@ -685,14 +995,16 @@ static void calc_parse_function_body(calc_parser_t *parser, const char *name,
         calc_set_string(out, text);
         return;
     }
-    if (strncasecmp(name, "VAL", 3) == 0 && name[3] != 'F') {
+    /* VAL / VALF / VALB are exact names: prefix matching here mis-claimed
+     * VALB (failing its 2-argument form) now that it exists. */
+    if (strcasecmp(name, "VAL") == 0) {
         char text[CALC_STR_BYTES];
         if (arg_count != 1) { calc_expr_fail(parser, "VAL takes 1 argument"); return; }
         if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
         calc_set_number(out, calc_val_number(text));
         return;
     }
-    if (strncasecmp(name, "VALF", 4) == 0) {
+    if (strcasecmp(name, "VALF") == 0) {
         char text[CALC_STR_BYTES];
         if (arg_count != 1) { calc_expr_fail(parser, "VALF takes 1 argument"); return; }
         if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
@@ -836,6 +1148,345 @@ static void calc_parse_function_body(calc_parser_t *parser, const char *name,
         (void)shell_env_set("X", xbuf);
         (void)shell_env_set("Y", ybuf);
         calc_set_number(out, xx);
+        return;
+    }
+    /* Base conversions and unit conversions (palmtop calculator parity).
+     * Exact-match compares: several of these share a first letter with an
+     * older function, and the legacy arms match by prefix. */
+    if (strcasecmp(name, "BIN$") == 0) {
+        char text[CALC_STR_BYTES];
+        char *p;
+        long long v;
+        if (arg_count != 1) { calc_expr_fail(parser, "BIN$ takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        /* 31 bits is the most that fits the fixed string buffer (31 digits
+         * plus the terminator). */
+        if (x != floor(x) || x < 0.0 || x > 2147483647.0) {
+            calc_expr_fail(parser, "BIN$ needs an integer 0..2147483647");
+            return;
+        }
+        v = (long long)x;
+        p = text + sizeof(text) - 1;
+        *p = '\0';
+        if (v == 0) {
+            *--p = '0';
+        }
+        while (v > 0) {
+            *--p = (v & 1) ? '1' : '0';
+            v >>= 1;
+        }
+        calc_set_string(out, p);
+        return;
+    }
+    if (strcasecmp(name, "OCT$") == 0) {
+        char text[16];
+        if (arg_count != 1) { calc_expr_fail(parser, "OCT$ takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        if (x != floor(x) || x < 0.0 || x > 4294967295.0) {
+            calc_expr_fail(parser, "OCT$ needs an integer 0..4294967295");
+            return;
+        }
+        snprintf(text, sizeof(text), "%llo", (unsigned long long)(unsigned long)x);
+        calc_set_string(out, text);
+        return;
+    }
+    if (strcasecmp(name, "VALB") == 0) {
+        char text[CALC_STR_BYTES];
+        char *end;
+        long long v;
+        long base;
+        if (arg_count != 2) { calc_expr_fail(parser, "VALB takes 2 arguments"); return; }
+        if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
+        if (!calc_arg_number(parser, &args[1], &y)) { return; }
+        base = (long)y;
+        if (base < 2 || base > 36 || (double)base != y) {
+            calc_expr_fail(parser, "VALB base must be an integer 2..36");
+            return;
+        }
+        errno = 0;
+        v = strtoll(text, &end, (int)base);
+        while (*end != '\0' && isspace((unsigned char)*end)) {
+            end++;
+        }
+        if (end == text || *end != '\0' || errno == ERANGE) {
+            calc_expr_fail(parser, "VALB could not parse the string");
+            return;
+        }
+        calc_set_number(out, (double)v);
+        return;
+    }
+    if (strcasecmp(name, "C2F") == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "C2F takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, x * 9.0 / 5.0 + 32.0);
+        return;
+    }
+    if (strcasecmp(name, "F2C") == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "F2C takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, (x - 32.0) * 5.0 / 9.0);
+        return;
+    }
+    if (strcasecmp(name, "IN2MM") == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "IN2MM takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, x * 25.4);
+        return;
+    }
+    if (strcasecmp(name, "MM2IN") == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "MM2IN takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, x / 25.4);
+        return;
+    }
+    if (strcasecmp(name, "LB2KG") == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "LB2KG takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, x * 0.45359237);
+        return;
+    }
+    if (strcasecmp(name, "KG2LB") == 0) {
+        if (arg_count != 1) { calc_expr_fail(parser, "KG2LB takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_set_number(out, x / 0.45359237);
+        return;
+    }
+    /* Financial functions (HP-12C conventions; exact names, no prefix
+     * matching). Payments are negative when cash leaves. Optional trailing
+     * args default: fv/pv 0, type 0 (end-of-period), RATE guess 0.1. */
+    if (strcasecmp(name, "PV") == 0) {
+        double rate, nper, pmt, fv = 0.0, type = 0.0, result;
+        if (arg_count < 3 || arg_count > 5) { calc_expr_fail(parser, "PV takes 3 to 5 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &rate) ||
+            !calc_arg_number(parser, &args[1], &nper) ||
+            !calc_arg_number(parser, &args[2], &pmt)) { return; }
+        if (arg_count >= 4 && !calc_arg_number(parser, &args[3], &fv)) { return; }
+        if (arg_count >= 5 && !calc_arg_number(parser, &args[4], &type)) { return; }
+        if (!calc_fin_type_ok(type)) { calc_expr_fail(parser, "PV type must be 0 or 1"); return; }
+        if (!calc_fin_pv(rate, nper, pmt, fv, type, &result)) { calc_expr_fail(parser, "PV domain error"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "FV") == 0) {
+        double rate, nper, pmt, pv = 0.0, type = 0.0, result;
+        if (arg_count < 3 || arg_count > 5) { calc_expr_fail(parser, "FV takes 3 to 5 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &rate) ||
+            !calc_arg_number(parser, &args[1], &nper) ||
+            !calc_arg_number(parser, &args[2], &pmt)) { return; }
+        if (arg_count >= 4 && !calc_arg_number(parser, &args[3], &pv)) { return; }
+        if (arg_count >= 5 && !calc_arg_number(parser, &args[4], &type)) { return; }
+        if (!calc_fin_type_ok(type)) { calc_expr_fail(parser, "FV type must be 0 or 1"); return; }
+        if (!calc_fin_fv(rate, nper, pmt, pv, type, &result)) { calc_expr_fail(parser, "FV domain error"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "PMT") == 0) {
+        double rate, nper, pv, fv = 0.0, type = 0.0, result;
+        if (arg_count < 3 || arg_count > 5) { calc_expr_fail(parser, "PMT takes 3 to 5 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &rate) ||
+            !calc_arg_number(parser, &args[1], &nper) ||
+            !calc_arg_number(parser, &args[2], &pv)) { return; }
+        if (arg_count >= 4 && !calc_arg_number(parser, &args[3], &fv)) { return; }
+        if (arg_count >= 5 && !calc_arg_number(parser, &args[4], &type)) { return; }
+        if (!calc_fin_type_ok(type)) { calc_expr_fail(parser, "PMT type must be 0 or 1"); return; }
+        if (!calc_fin_pmt(rate, nper, pv, fv, type, &result)) { calc_expr_fail(parser, "PMT domain error"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "NPER") == 0) {
+        double rate, pmt, pv, fv = 0.0, type = 0.0, result;
+        if (arg_count < 3 || arg_count > 5) { calc_expr_fail(parser, "NPER takes 3 to 5 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &rate) ||
+            !calc_arg_number(parser, &args[1], &pmt) ||
+            !calc_arg_number(parser, &args[2], &pv)) { return; }
+        if (arg_count >= 4 && !calc_arg_number(parser, &args[3], &fv)) { return; }
+        if (arg_count >= 5 && !calc_arg_number(parser, &args[4], &type)) { return; }
+        if (!calc_fin_type_ok(type)) { calc_expr_fail(parser, "NPER type must be 0 or 1"); return; }
+        if (!calc_fin_nper(rate, pmt, pv, fv, type, &result)) { calc_expr_fail(parser, "NPER domain error"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "RATE") == 0) {
+        double nper, pmt, pv, fv = 0.0, type = 0.0, guess = 0.1, result;
+        if (arg_count < 3 || arg_count > 6) { calc_expr_fail(parser, "RATE takes 3 to 6 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &nper) ||
+            !calc_arg_number(parser, &args[1], &pmt) ||
+            !calc_arg_number(parser, &args[2], &pv)) { return; }
+        if (arg_count >= 4 && !calc_arg_number(parser, &args[3], &fv)) { return; }
+        if (arg_count >= 5 && !calc_arg_number(parser, &args[4], &type)) { return; }
+        if (arg_count >= 6 && !calc_arg_number(parser, &args[5], &guess)) { return; }
+        if (!calc_fin_type_ok(type)) { calc_expr_fail(parser, "RATE type must be 0 or 1"); return; }
+        if (!calc_fin_rate(nper, pmt, pv, fv, type, guess, &result)) { calc_expr_fail(parser, "RATE did not converge"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "NPV") == 0) {
+        double rate, result;
+        double values[CALC_ARG_MAX];
+        if (arg_count < 2 || arg_count > CALC_ARG_MAX) { calc_expr_fail(parser, "NPV takes 2 or more arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &rate)) { return; }
+        for (int i = 1; i < arg_count; i++) {
+            if (!calc_arg_number(parser, &args[i], &values[i - 1])) { return; }
+        }
+        if (!calc_fin_npv(rate, values, arg_count - 1, &result)) { calc_expr_fail(parser, "NPV domain error"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "IRR") == 0) {
+        double result;
+        double values[CALC_ARG_MAX];
+        if (arg_count < 2 || arg_count > CALC_ARG_MAX) { calc_expr_fail(parser, "IRR takes 2 or more arguments"); return; }
+        for (int i = 0; i < arg_count; i++) {
+            if (!calc_arg_number(parser, &args[i], &values[i])) { return; }
+        }
+        if (!calc_fin_irr(values, arg_count, &result)) { calc_expr_fail(parser, "IRR did not converge"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "SLN") == 0) {
+        double cost, salvage, life;
+        if (arg_count != 3) { calc_expr_fail(parser, "SLN takes 3 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &cost) ||
+            !calc_arg_number(parser, &args[1], &salvage) ||
+            !calc_arg_number(parser, &args[2], &life)) { return; }
+        if (life <= 0.0) { calc_expr_fail(parser, "SLN life must be > 0"); return; }
+        calc_set_number(out, (cost - salvage) / life);
+        return;
+    }
+    if (strcasecmp(name, "SYD") == 0) {
+        double cost, salvage, life, period;
+        if (arg_count != 4) { calc_expr_fail(parser, "SYD takes 4 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &cost) ||
+            !calc_arg_number(parser, &args[1], &salvage) ||
+            !calc_arg_number(parser, &args[2], &life) ||
+            !calc_arg_number(parser, &args[3], &period)) { return; }
+        if (life <= 0.0 || period < 1.0 || period > life) { calc_expr_fail(parser, "SYD domain error"); return; }
+        calc_set_number(out, (cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)));
+        return;
+    }
+    if (strcasecmp(name, "DB") == 0) {
+        double cost, salvage, life, period, month = 12.0;
+        double rate, book, dep = 0.0;
+        if (arg_count < 4 || arg_count > 5) { calc_expr_fail(parser, "DB takes 4 or 5 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &cost) ||
+            !calc_arg_number(parser, &args[1], &salvage) ||
+            !calc_arg_number(parser, &args[2], &life) ||
+            !calc_arg_number(parser, &args[3], &period)) { return; }
+        if (arg_count == 5 && !calc_arg_number(parser, &args[4], &month)) { return; }
+        if (cost <= 0.0 || salvage < 0.0 || salvage >= cost ||
+            life <= 0.0 || period < 1.0 || period > life ||
+            month < 1.0 || month > 12.0) { calc_expr_fail(parser, "DB domain error"); return; }
+        rate = 1.0 - pow(salvage / cost, 1.0 / life);
+        book = cost;
+        for (int i = 1; (double)i <= period; i++) {
+            double cap = (cost - salvage) - (cost - book);
+            dep = book * rate * ((i == 1) ? month / 12.0 : 1.0);
+            if (dep > cap) {
+                dep = cap;
+            }
+            if (dep < 0.0) {
+                dep = 0.0;
+            }
+            book -= dep;
+        }
+        calc_set_number(out, dep);
+        return;
+    }
+    /* Date functions over epoch-day serials (days since 1970-01-01).
+     * DOW counts 0=Sunday..6=Saturday; TODAY follows the device clock. */
+    if (strcasecmp(name, "DATE") == 0) {
+        double yd, md, dd, result;
+        if (arg_count != 3) { calc_expr_fail(parser, "DATE takes 3 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &yd) ||
+            !calc_arg_number(parser, &args[1], &md) ||
+            !calc_arg_number(parser, &args[2], &dd)) { return; }
+        if (yd != floor(yd) || md != floor(md) || dd != floor(dd)) { calc_expr_fail(parser, "DATE needs integers"); return; }
+        if (!calc_date_serial((int)yd, (int)md, (int)dd, &result)) { calc_expr_fail(parser, "DATE domain error"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "YEAR") == 0 || strcasecmp(name, "MONTH") == 0 ||
+        strcasecmp(name, "DAY") == 0 || strcasecmp(name, "DOW") == 0) {
+        int y, m, d;
+        if (arg_count != 1) { calc_expr_fail(parser, "YEAR/MONTH/DAY/DOW take 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_serial_parts(x, &y, &m, &d);
+        if (strcasecmp(name, "YEAR") == 0) {
+            calc_set_number(out, (double)y);
+        } else if (strcasecmp(name, "MONTH") == 0) {
+            calc_set_number(out, (double)m);
+        } else if (strcasecmp(name, "DAY") == 0) {
+            calc_set_number(out, (double)d);
+        } else {
+            long long s = llround(x);
+            calc_set_number(out, (double)(((s + 4) % 7 + 7) % 7));
+        }
+        return;
+    }
+    if (strcasecmp(name, "TODAY") == 0) {
+        time_t now = time(NULL);
+        struct tm tmv;
+        if (arg_count != 0) { calc_expr_fail(parser, "TODAY takes no arguments"); return; }
+        if (localtime_r(&now, &tmv) == NULL) { calc_expr_fail(parser, "TODAY clock error"); return; }
+        calc_set_number(out, (double)calc_days_from_civil(tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday));
+        return;
+    }
+    if (strcasecmp(name, "DATEADD") == 0) {
+        if (arg_count != 2) { calc_expr_fail(parser, "DATEADD takes 2 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &x) || !calc_arg_number(parser, &args[1], &y)) { return; }
+        calc_set_number(out, x + y);
+        return;
+    }
+    if (strcasecmp(name, "DAYS") == 0) {
+        if (arg_count != 2) { calc_expr_fail(parser, "DAYS takes 2 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &x) || !calc_arg_number(parser, &args[1], &y)) { return; }
+        calc_set_number(out, y - x);
+        return;
+    }
+    if (strcasecmp(name, "EOMONTH") == 0) {
+        double months, result;
+        int y, m, d, total;
+        if (arg_count != 2) { calc_expr_fail(parser, "EOMONTH takes 2 arguments"); return; }
+        if (!calc_arg_number(parser, &args[0], &x) || !calc_arg_number(parser, &args[1], &months)) { return; }
+        if (months != floor(months)) { calc_expr_fail(parser, "EOMONTH months must be an integer"); return; }
+        calc_serial_parts(x, &y, &m, &d);
+        total = (m - 1) + (int)months;
+        y += total / 12;
+        m = total % 12 + 1;
+        if (m <= 0) {
+            m += 12;
+            y -= 1;
+        }
+        /* C truncation (not floor) can still misplace negative totals. */
+        while (m < 1) {
+            m += 12;
+            y -= 1;
+        }
+        while (m > 12) {
+            m -= 12;
+            y += 1;
+        }
+        if (!calc_date_serial(y, m, calc_month_days(y, m), &result)) { calc_expr_fail(parser, "EOMONTH domain error"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "DATEVALUE") == 0) {
+        char text[CALC_STR_BYTES];
+        double result;
+        if (arg_count != 1) { calc_expr_fail(parser, "DATEVALUE takes 1 argument"); return; }
+        if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
+        if (!calc_parse_iso_date(text, &result)) { calc_expr_fail(parser, "DATEVALUE needs 'YYYY-MM-DD'"); return; }
+        calc_set_number(out, result);
+        return;
+    }
+    if (strcasecmp(name, "DATESTR") == 0) {
+        char text[CALC_STR_BYTES];
+        int y, m, d;
+        if (arg_count != 1) { calc_expr_fail(parser, "DATESTR takes 1 argument"); return; }
+        if (!calc_arg_number(parser, &args[0], &x)) { return; }
+        calc_serial_parts(x, &y, &m, &d);
+        snprintf(text, sizeof(text), "%04d-%02d-%02d", y, m, d);
+        calc_set_string(out, text);
         return;
     }
 
@@ -1299,7 +1950,7 @@ int shell_command_calc_line(const char *line)
     const char *error = NULL;
 
     if (line == NULL || line[0] == '\0') {
-        shell_print_usage("Usage: calc [NAME=] <expr> | calc /deg | calc /rad | calc /angle | calc /hex <expr>");
+        shell_print_usage("Usage: calc [NAME=] <expr> | calc /deg | calc /rad | calc /angle | calc /hex <expr> | calc /fin | calc /date");
         return 2;
     }
 
@@ -1340,6 +1991,23 @@ int shell_command_calc_line(const char *line)
             free(buffer);
             return 0;
         }
+        if (strncasecmp(p, "/fin", 4) == 0 && (p[4] == '\0' || isspace((unsigned char)p[4]))) {
+            shell_transcript_append_text("PV(rate,nper,pmt[,fv[,type]]) FV(rate,nper,pmt[,pv[,type]])\n");
+            shell_transcript_append_text("PMT(rate,nper,pv[,fv[,type]]) NPER(rate,pmt,pv[,fv[,type]])\n");
+            shell_transcript_append_text("RATE(nper,pmt,pv[,fv[,type[,guess]]]) NPV(rate,v0,v1,...) IRR(v0,v1,...)\n");
+            shell_transcript_append_text("SLN(cost,salvage,life) SYD(cost,salvage,life,period)\n");
+            shell_transcript_append_text("DB(cost,salvage,life,period[,month])\n");
+            free(buffer);
+            return 0;
+        }
+        if (strncasecmp(p, "/date", 5) == 0 && (p[5] == '\0' || isspace((unsigned char)p[5]))) {
+            shell_transcript_append_text("Serials are days since 1970-01-01. DOW: 0=Sunday..6=Saturday.\n");
+            shell_transcript_append_text("DATE(y,m,d) YEAR(s) MONTH(s) DAY(s) DOW(s) TODAY()\n");
+            shell_transcript_append_text("DATEADD(s,days) DAYS(a,b) EOMONTH(s,months)\n");
+            shell_transcript_append_text("DATEVALUE('YYYY-MM-DD') DATESTR(s)\n");
+            free(buffer);
+            return 0;
+        }
         if (strncasecmp(p, "/hex", 4) == 0 && (p[4] == '\0' || isspace((unsigned char)p[4]))) {
             hex_mode = 1;
             p += 4;
@@ -1352,7 +2020,7 @@ int shell_command_calc_line(const char *line)
         p++;
     }
     if (*p == '\0') {
-        shell_print_usage("Usage: calc [NAME=] <expr> | calc /deg | calc /rad | calc /angle | calc /hex <expr>");
+        shell_print_usage("Usage: calc [NAME=] <expr> | calc /deg | calc /rad | calc /angle | calc /hex <expr> | calc /fin | calc /date");
         free(buffer);
         return 2;
     }

@@ -33,6 +33,8 @@
 
 #include "header.h"
 #include "header_layout.h"
+#include "header_status.h"
+#include "header_notify_queue.h"
 #include "theme.h"
 #include "p4minishell_config.h"
 
@@ -54,6 +56,7 @@ extern const lv_font_t lv_font_montserrat_14;
 #define HEADER_MUTED_COLOR          (theme_current()->text_muted)
 #define HEADER_ACCENT_COLOR         (theme_current()->text)
 #define HEADER_WARN_COLOR           (theme_current()->warn)
+#define HEADER_ERROR_COLOR          (theme_current()->err)
 #define HEADER_BG_COLOR             (theme_current()->bg_input_row)
 #define HEADER_PANEL_COLOR          (theme_current()->bg_transcript)
 #define HEADER_CPU_GRAPH            P4_CONFIG_HEADER_CPU_GRAPH
@@ -68,14 +71,8 @@ extern const lv_font_t lv_font_montserrat_14;
  * across a UI rebuild, e.g. when `config HEADER=OFF` is applied). ---- */
 static bool s_header_visible = true;
 
-/* ---- Icon type enum ---- */
-typedef enum {
-    HEADER_ICON_WIFI = 0,
-    HEADER_ICON_BLUETOOTH,
-    HEADER_ICON_USB,
-    HEADER_ICON_SD,
-    HEADER_ICON_COUNT,
-} header_icon_type_t;
+/* The indicator identity enum (header_status_kind_t) and its panel count now
+ * live in header.h so the tap/long-press callback ABI is public. */
 
 /* ---- Cached state structure ---- */
 typedef struct {
@@ -87,7 +84,14 @@ typedef struct {
     bool bluetooth_connected;
     bool usb_connected;
     header_sd_state_t sd_state;
-    char notification[HEADER_NOTIFICATION_BYTES];
+    char notification[HEADER_NOTIFICATION_BYTES]; /* currently displayed */
+    header_notify_level_t notification_level;
+    uint32_t notification_timeout_ms;
+    bool notification_active;
+    header_notify_queue_t notify_queue;           /* waiting notifications */
+    char clock_text[16];                          /* idle "HH:MM" / "--:--" */
+    bool c6ota_busy;                              /* activity inputs */
+    bool bg_jobs_running;
     uint32_t free_heap_bytes;     /* real-time from FreeRTOS heap_caps */
     uint32_t total_heap_bytes;    /* real-time total heap */
     int cpu_percent;              /* real-time from FreeRTOS runtime stats */
@@ -99,6 +103,7 @@ typedef struct {
 typedef struct {
     char text[HEADER_NOTIFICATION_BYTES];
     uint32_t timeout_ms;
+    header_notify_level_t level;
 } header_notification_update_t;
 
 typedef struct {
@@ -143,7 +148,7 @@ static lv_obj_t *s_header_root;
 static lv_obj_t *s_notification_label;
 static lv_obj_t *s_notification_icon;
 static lv_obj_t *s_notif_container;
-static lv_obj_t *s_status_icons[HEADER_ICON_COUNT];
+static lv_obj_t *s_status_icons[HEADER_STATUS_PANEL_COUNT];
 static lv_obj_t *s_status_panel;
 static lv_obj_t *s_sys_panel;
 static lv_obj_t *s_sep1;
@@ -226,75 +231,166 @@ static const char *header_battery_text_for_percent(int percent)
     return "[    ]";
 }
 
-/* ---- Wi-Fi signal quality label ---- */
-static const char *header_wifi_quality_label(int rssi)
+/* ---- Presentation style + tone -> color ---------------------------------- */
+
+/** True when the compact colored-glyph style is configured. */
+static bool header_glyph_style(void)
 {
-    if (rssi >= -55) return "HI";
-    if (rssi >= -68) return "MID";
-    if (rssi >= -80) return "LOW";
-    return "WEAK";
+    return P4_CONFIG_HEADER_STATUS_STYLE == P4_CONFIG_HEADER_STATUS_GLYPH;
 }
 
-/* ---- Status color helper ---- */
-static lv_color_t header_status_color(bool active)
+/** Map a semantic tone from header_status.c onto the active theme color. */
+static lv_color_t header_tone_color(header_tone_t tone)
 {
-    return lv_color_hex(active ? HEADER_ACCENT_COLOR : HEADER_MUTED_COLOR);
+    switch (tone) {
+    case HEADER_TONE_OK:   return lv_color_hex(HEADER_ACCENT_COLOR);
+    case HEADER_TONE_WARN: return lv_color_hex(HEADER_WARN_COLOR);
+    case HEADER_TONE_ERR:  return lv_color_hex(HEADER_ERROR_COLOR);
+    case HEADER_TONE_MUTED:
+    default:               return lv_color_hex(HEADER_MUTED_COLOR);
+    }
+}
+
+/** Map a notification severity onto the active theme color. */
+static lv_color_t header_notify_color(header_notify_level_t level)
+{
+    switch (level) {
+    case HEADER_NOTIFY_WARN: return lv_color_hex(HEADER_WARN_COLOR);
+    case HEADER_NOTIFY_ERR:  return lv_color_hex(HEADER_ERROR_COLOR);
+    case HEADER_NOTIFY_INFO:
+    default:                 return lv_color_hex(HEADER_TEXT_COLOR);
+    }
+}
+
+/* ---- Notification queue + display timer ----
+ *
+ * The display timer is created once in header_init() and is PERSISTENT
+ * (repeat_count = -1), paused while idle. Because it is never auto-freed, the
+ * historical O7 hazard — calling lv_timer_set_* on a node that lv_timer_exec
+ * had already deleted — cannot occur. header_deinit() deletes it. */
+
+static void header_render(void);
+
+/** Arm (timeout_ms > 0) or pause (timeout_ms == 0, sticky) the display timer. */
+static void header_notify_arm(uint32_t timeout_ms)
+{
+    if (s_notification_timer == NULL) {
+        return;
+    }
+    if (timeout_ms > 0) {
+        lv_timer_set_period(s_notification_timer, timeout_ms);
+        lv_timer_set_repeat_count(s_notification_timer, -1);
+        lv_timer_reset(s_notification_timer);
+        lv_timer_resume(s_notification_timer);
+    } else {
+        lv_timer_pause(s_notification_timer);
+    }
+}
+
+/** Pop the next queued notification into the displayed slot. */
+static bool header_notify_show_next(void)
+{
+    header_notify_item_t item;
+
+    if (header_notify_queue_pop(&s_header_state.notify_queue, &item)) {
+        snprintf(s_header_state.notification, sizeof(s_header_state.notification),
+                 "%s", item.text);
+        s_header_state.notification_level = item.level;
+        s_header_state.notification_timeout_ms = item.timeout_ms;
+        s_header_state.notification_active = true;
+        header_notify_arm(item.timeout_ms);
+        return true;
+    }
+
+    s_header_state.notification_active = false;
+    s_header_state.notification[0] = '\0';
+    header_notify_arm(0);
+    return false;
+}
+
+/** Apply one notification update. Must run on the LVGL task / under the port lock. */
+static void header_notify_apply(const header_notification_update_t *update)
+{
+    if (update == NULL) {
+        return;
+    }
+    if (update->text[0] == '\0') {
+        /* Explicit clear (`notify -`): drop the queue and the displayed item. */
+        header_notify_queue_clear(&s_header_state.notify_queue);
+        s_header_state.notification_active = false;
+        s_header_state.notification[0] = '\0';
+        header_notify_arm(0);
+        return;
+    }
+    if (header_notify_queue_push(&s_header_state.notify_queue, update->text,
+                                 update->level, update->timeout_ms) &&
+        !s_header_state.notification_active) {
+        (void)header_notify_show_next();
+    }
 }
 
 /* ---- Notification timeout callback ---- */
 static void header_notification_timeout_cb(lv_timer_t *timer)
 {
     (void)timer;
-    s_header_state.notification[0] = '\0';
-
-    /* The notification timer is armed as a ONE-SHOT (repeat_count = 1). After
-     * this callback returns, lv_timer_exec() auto-deletes it (lv_timer_delete
-     * frees the timer node) because auto_delete defaults to true. If we do not
-     * clear the pointer here, the next header_async_notification() sees a
-     * non-NULL s_notification_timer and calls lv_timer_set_period/reset/resume
-     * on the FREED node — a use-after-free that writes {period, last_run,
-     * paused} into reclaimed heap memory and corrupts the heap (observed as
-     * "CORRUPT HEAP" and LVGL blue-screen failures after WiFi connect). */
-    s_notification_timer = NULL;
-
-    if (s_notification_label != NULL) {
-        lv_label_set_text(s_notification_label, "");
-    }
-    if (s_notification_icon != NULL) {
-        lv_obj_add_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
-    }
+    /* The displayed message expired: advance to the next queued one, or clear
+     * and fall back to the idle clock. The timer stays alive (persistent). */
+    (void)header_notify_show_next();
+    header_render();
 }
 
-/* ---- Status text + color, level-aware (FULL/SHORT/MIN) ---- */
+/* ---- Status text + tone, level-aware (FULL/SHORT/MIN) ---- */
 
-/** Build the status text for an icon at a compactness level. */
-static void header_status_text(header_icon_type_t type, header_level_t level,
+/** True when the activity indicator should be shown (allowed and something runs). */
+static bool header_activity_active(void)
+{
+    return P4_CONFIG_HEADER_ACTIVITY &&
+           (s_header_state.c6ota_busy || s_header_state.bg_jobs_running);
+}
+
+/** Build the status text for an indicator at a compactness level. */
+static void header_status_text(header_status_kind_t type, header_level_t level,
                                char *buffer, size_t buffer_size)
 {
     const char *state = "?";
     const char *prefix_full = "";
     const char *prefix_short = "";
 
+    /* The activity indicator is conditional: inactive contributes no text, so
+     * the measurement pass gives it zero width and hides the label. */
+    if (type == HEADER_STATUS_ACTIVITY && !header_activity_active()) {
+        buffer[0] = '\0';
+        return;
+    }
+
+    if (header_glyph_style()) {
+        /* One fixed token for every level, so the panel width no longer grows
+         * with the requested detail level; the reclaimed width goes to the
+         * center notification area. Classification stays in header_status.c. */
+        snprintf(buffer, buffer_size, "%s", header_status_glyph(type));
+        return;
+    }
+
     switch (type) {
-    case HEADER_ICON_WIFI:
+    case HEADER_STATUS_WIFI:
         state = s_header_state.wifi_connected
-                    ? header_wifi_quality_label(s_header_state.wifi_rssi)
+                    ? header_status_wifi_label(s_header_state.wifi_rssi)
                     : "OFF";
         prefix_full = "WiFi ";
         prefix_short = "W:";
         break;
-    case HEADER_ICON_BLUETOOTH:
+    case HEADER_STATUS_BLUETOOTH:
         state = s_header_state.bluetooth_connected ? "ON"
                 : s_header_state.bluetooth_enabled ? "IDLE" : "OFF";
         prefix_full = "BT ";
         prefix_short = "B:";
         break;
-    case HEADER_ICON_USB:
+    case HEADER_STATUS_USB:
         state = s_header_state.usb_connected ? "ON" : "OFF";
         prefix_full = "USB ";
         prefix_short = "U:";
         break;
-    case HEADER_ICON_SD:
+    case HEADER_STATUS_SD:
         switch (s_header_state.sd_state) {
         case HEADER_SD_INSERTED: state = "INS"; break;
         case HEADER_SD_MOUNTED:  state = "ON";  break;
@@ -304,6 +400,9 @@ static void header_status_text(header_icon_type_t type, header_level_t level,
         }
         prefix_full = "SD ";
         prefix_short = "SD:";
+        break;
+    case HEADER_STATUS_ACTIVITY:
+        state = "ACT";
         break;
     default:
         state = "?";
@@ -319,37 +418,34 @@ static void header_status_text(header_icon_type_t type, header_level_t level,
     }
 }
 
-/** Color for a status icon (state-driven, level-independent). */
-static lv_color_t header_status_color_for(header_icon_type_t type)
+/** Tone for a peripheral indicator (state-driven, level-independent). */
+static header_tone_t header_status_tone_for(header_status_kind_t type)
 {
     switch (type) {
-    case HEADER_ICON_WIFI:
-        return header_status_color(s_header_state.wifi_connected);
-    case HEADER_ICON_BLUETOOTH:
-        return header_status_color(s_header_state.bluetooth_enabled);
-    case HEADER_ICON_USB:
-        return header_status_color(s_header_state.usb_connected);
-    case HEADER_ICON_SD:
-        if (s_header_state.sd_state == HEADER_SD_MOUNTED) {
-            return header_status_color(true);
-        }
-        if (s_header_state.sd_state == HEADER_SD_INSERTED ||
-            s_header_state.sd_state == HEADER_SD_ERROR) {
-            return lv_color_hex(HEADER_WARN_COLOR);
-        }
-        return header_status_color(false);
+    case HEADER_STATUS_WIFI:
+        return header_status_wifi_tone(s_header_state.wifi_connected,
+                                       s_header_state.wifi_rssi);
+    case HEADER_STATUS_BLUETOOTH:
+        return header_status_bluetooth_tone(s_header_state.bluetooth_enabled,
+                                            s_header_state.bluetooth_connected);
+    case HEADER_STATUS_USB:
+        return header_status_usb_tone(s_header_state.usb_connected);
+    case HEADER_STATUS_SD:
+        return header_status_sd_tone(s_header_state.sd_state);
+    case HEADER_STATUS_ACTIVITY:
+        return header_activity_active() ? HEADER_TONE_WARN : HEADER_TONE_MUTED;
     default:
-        return header_status_color(false);
+        return HEADER_TONE_MUTED;
     }
 }
 
 /* ---- Render a single icon by type at the requested level ---- */
-static void header_render_icon(header_icon_type_t type, header_level_t level)
+static void header_render_icon(header_status_kind_t type, header_level_t level)
 {
     char buffer[64];
     lv_obj_t *label;
 
-    if (type < 0 || type >= HEADER_ICON_COUNT) {
+    if (type < 0 || type >= HEADER_STATUS_PANEL_COUNT) {
         return;
     }
     label = s_status_icons[type];
@@ -357,8 +453,128 @@ static void header_render_icon(header_icon_type_t type, header_level_t level)
         return;
     }
     header_status_text(type, level, buffer, sizeof(buffer));
+    if (buffer[0] == '\0') {
+        /* Conditional indicator (activity) with nothing to show. */
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(label, buffer);
-    lv_obj_set_style_text_color(label, header_status_color_for(type), 0);
+    lv_obj_set_style_text_color(label, header_tone_color(header_status_tone_for(type)), 0);
+}
+
+/* ---- Indicator tap / long-press detail ---------------------------------- */
+
+/* Registered by command_init(): long-press runs the matching status command. */
+static header_status_action_cb_t s_status_action_cb;
+
+/** Show a one-line summary for @p kind in the header's own notification area.
+ *  Everything comes from the state the header already caches, so no module is
+ *  re-queried and no second status text is duplicated. */
+static void header_show_status_detail(header_status_kind_t kind)
+{
+    char text[P4_CONFIG_HEADER_NOTIFICATION_BYTES];
+
+    switch (kind) {
+    case HEADER_STATUS_WIFI:
+        if (s_header_state.wifi_connected) {
+            snprintf(text, sizeof(text), "WiFi %s  %d dBm",
+                     header_status_wifi_label(s_header_state.wifi_rssi),
+                     s_header_state.wifi_rssi);
+        } else {
+            snprintf(text, sizeof(text), "WiFi off");
+        }
+        break;
+    case HEADER_STATUS_BLUETOOTH:
+        snprintf(text, sizeof(text), "Bluetooth %s",
+                 s_header_state.bluetooth_connected ? "connected"
+                 : s_header_state.bluetooth_enabled ? "ready (not connected)"
+                                                    : "off");
+        break;
+    case HEADER_STATUS_USB:
+        snprintf(text, sizeof(text), "USB %s",
+                 s_header_state.usb_connected ? "device connected" : "not connected");
+        break;
+    case HEADER_STATUS_SD:
+        switch (s_header_state.sd_state) {
+        case HEADER_SD_MOUNTED:  snprintf(text, sizeof(text), "SD mounted"); break;
+        case HEADER_SD_INSERTED: snprintf(text, sizeof(text), "SD inserted (not mounted)"); break;
+        case HEADER_SD_ERROR:    snprintf(text, sizeof(text), "SD error"); break;
+        case HEADER_SD_NONE:
+        default:                 snprintf(text, sizeof(text), "No SD card"); break;
+        }
+        break;
+    case HEADER_STATUS_ACTIVITY:
+        if (s_header_state.c6ota_busy && s_header_state.bg_jobs_running) {
+            snprintf(text, sizeof(text), "C6 OTA + background job running");
+        } else if (s_header_state.c6ota_busy) {
+            snprintf(text, sizeof(text), "C6 OTA update in progress");
+        } else {
+            snprintf(text, sizeof(text), "Background job running");
+        }
+        break;
+    case HEADER_STATUS_MEM: {
+        uint32_t total = s_header_state.total_heap_bytes;
+        int pct = (total > 0)
+                      ? (int)((s_header_state.free_heap_bytes * 100u) / total) : 0;
+        snprintf(text, sizeof(text), "MEM %d%% free", pct);
+        break;
+    }
+    case HEADER_STATUS_CPU:
+        snprintf(text, sizeof(text), "CPU %d%%  %" PRIu32 " tasks",
+                 s_header_state.cpu_percent, s_header_state.task_count);
+        break;
+    case HEADER_STATUS_BATTERY:
+        if (s_header_state.battery_adc_ready) {
+            snprintf(text, sizeof(text), "Battery %d%%", s_header_state.battery_percent);
+        } else {
+            snprintf(text, sizeof(text), "Battery N/C (ADC not connected)");
+        }
+        break;
+    default:
+        return;
+    }
+    header_set_notification(text, P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
+}
+
+static void header_status_click_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    lv_obj_t *target = lv_event_get_target(event);
+    header_status_kind_t kind =
+        (header_status_kind_t)(intptr_t)lv_obj_get_user_data(target);
+
+    /* Stop the long-press from also bubbling to the root build-identity
+     * banner: the per-indicator action takes precedence. */
+    lv_event_stop_bubbling(event);
+
+    if (code == LV_EVENT_LONG_PRESSED) {
+        if (s_status_action_cb != NULL) {
+            s_status_action_cb(kind);
+        }
+        return;
+    }
+    if (P4_CONFIG_HEADER_DETAIL_ON_TAP) {
+        header_show_status_detail(kind);
+    }
+}
+
+/** Make one indicator tappable/long-pressable. No-op when the feature is off. */
+static void header_bind_status_action(lv_obj_t *obj, header_status_kind_t kind)
+{
+    if (obj == NULL || !P4_CONFIG_HEADER_DETAIL_ON_TAP) {
+        return;
+    }
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_set_user_data(obj, (void *)(intptr_t)kind);
+    lv_obj_add_event_cb(obj, header_status_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(obj, header_status_click_cb, LV_EVENT_LONG_PRESSED, NULL);
+}
+
+void header_register_status_action(header_status_action_cb_t cb)
+{
+    s_status_action_cb = cb;
 }
 
 /* ---- Notification **bold** subset -> LVGL recolor ----
@@ -411,8 +627,10 @@ static void header_format_mem(header_level_t level, char *buf, size_t buf_size)
 {
     uint32_t free_heap = s_header_state.free_heap_bytes;
     uint32_t total_heap = s_header_state.total_heap_bytes;
-    int percent = (total_heap > 0) ? (int)((free_heap * 100) / total_heap) : 0;
-    const char *prefix = percent > P4_CONFIG_HEADER_MEM_LOW_PCT ? "MEM" : "LOW";
+    /* Derive the words-style prefix from the SAME classification the color
+     * uses, so the "LOW" label and the amber/red tone can never disagree. */
+    const char *prefix =
+        header_status_mem_tone(free_heap, total_heap) == HEADER_TONE_OK ? "MEM" : "LOW";
     char num[24];
 
     if (free_heap >= 1048576) {
@@ -430,7 +648,10 @@ static void header_format_mem(header_level_t level, char *buf, size_t buf_size)
         snprintf(num, sizeof(num), "%" PRIu32, free_heap);
     }
 
-    if (level == HEADER_LEVEL_FULL) {
+    if (header_glyph_style()) {
+        /* Compact: the glyph carries the identity, the value carries the size. */
+        snprintf(buf, buf_size, "%s%s", header_status_glyph(HEADER_STATUS_MEM), num);
+    } else if (level == HEADER_LEVEL_FULL) {
         snprintf(buf, buf_size, "%s %s", prefix, num);
     } else if (level == HEADER_LEVEL_SHORT) {
         snprintf(buf, buf_size, "%c%s", prefix[0], num);
@@ -458,7 +679,9 @@ static void header_format_uptime(char *buf, size_t buf_size)
 /* ---- Format CPU for display (label only; the % lives in the value label) ---- */
 static void header_format_cpu(header_level_t level, char *buf, size_t buf_size)
 {
-    if (level == HEADER_LEVEL_FULL) {
+    if (header_glyph_style()) {
+        snprintf(buf, buf_size, "%s", header_status_glyph(HEADER_STATUS_CPU));
+    } else if (level == HEADER_LEVEL_FULL) {
         snprintf(buf, buf_size, "CPU");
     } else if (level == HEADER_LEVEL_SHORT) {
         snprintf(buf, buf_size, "C");
@@ -509,7 +732,7 @@ static void header_set_font_step(int step)
     }
     s_header_font_step = step;
     font = header_font_for_step(step);
-    for (i = 0; i < HEADER_ICON_COUNT; i++) {
+    for (i = 0; i < HEADER_STATUS_PANEL_COUNT; i++) {
         if (s_status_icons[i] != NULL) lv_obj_set_style_text_font(s_status_icons[i], font, 0);
     }
     if (s_notification_icon != NULL) lv_obj_set_style_text_font(s_notification_icon, font, 0);
@@ -534,12 +757,19 @@ static void header_measure_sides(int status_w[HEADER_LEVEL_COUNT],
 
     for (level = 0; level < HEADER_LEVEL_COUNT; level++) {
         int w = 2 * HEADER_PANEL_PAD;
+        bool first_visible = true;
 
-        for (i = 0; i < HEADER_ICON_COUNT; i++) {
+        for (i = 0; i < HEADER_STATUS_PANEL_COUNT; i++) {
             char b[64];
-            header_status_text((header_icon_type_t)i, (header_level_t)level, b, sizeof(b));
-            if (i > 0) w += HEADER_STATUS_GAP;
+            header_status_text((header_status_kind_t)i, (header_level_t)level, b, sizeof(b));
+            if (b[0] == '\0') {
+                /* Hidden conditional indicator (activity): no width, no gap.
+                 * This mirrors LVGL flex, which skips hidden children. */
+                continue;
+            }
+            if (!first_visible) w += HEADER_STATUS_GAP;
             w += header_text_width(b, font);
+            first_visible = false;
         }
         status_w[level] = w;
     }
@@ -547,35 +777,42 @@ static void header_measure_sides(int status_w[HEADER_LEVEL_COUNT],
     for (level = 0; level < HEADER_LEVEL_COUNT; level++) {
         char mem[32];
         char cpu[8];
+        bool glyph = header_glyph_style();
         int w = 2 * HEADER_PANEL_PAD;
 
         header_format_mem((header_level_t)level, mem, sizeof(mem));
         header_format_cpu((header_level_t)level, cpu, sizeof(cpu));
         w += header_text_width(mem, font) + HEADER_SYS_GAP;
-        if (level == HEADER_LEVEL_FULL) {
+        if (!glyph && level == HEADER_LEVEL_FULL) {
             w += header_text_width("|", font) + HEADER_SYS_GAP;
         }
         w += header_text_width(cpu, font) + HEADER_SYS_GAP;
-        if (level == HEADER_LEVEL_FULL) {
-            w += HEADER_CPU_GRAPH_WIDTH_PX + HEADER_SYS_GAP;
-        } else if (level == HEADER_LEVEL_SHORT) {
-            w += HEADER_CPU_BAR_W + HEADER_SYS_GAP;
+        if (!glyph) {
+            if (level == HEADER_LEVEL_FULL) {
+                w += HEADER_CPU_GRAPH_WIDTH_PX + HEADER_SYS_GAP;
+            } else if (level == HEADER_LEVEL_SHORT) {
+                w += HEADER_CPU_BAR_W + HEADER_SYS_GAP;
+            }
         }
         w += header_text_width("100%", font) + HEADER_SYS_GAP;
-        if (level == HEADER_LEVEL_FULL) {
-            w += header_text_width("|", font) + HEADER_SYS_GAP;
-        }
-        if (level <= HEADER_LEVEL_SHORT) {
-            w += header_text_width(header_battery_text_for_percent(
-                                       s_header_state.battery_adc_ready
-                                           ? s_header_state.battery_percent : 0),
-                                   font) + HEADER_SYS_GAP;
-        }
-        if (level <= HEADER_LEVEL_SHORT) {
-            w += HEADER_BAT_BAR_W + HEADER_SYS_GAP;
+        if (glyph) {
+            /* Compact: a colored battery glyph, no bar or ASCII block. */
+            w += header_text_width(header_status_glyph(HEADER_STATUS_BATTERY), font) +
+                 HEADER_SYS_GAP;
+        } else {
+            if (level == HEADER_LEVEL_FULL) {
+                w += header_text_width("|", font) + HEADER_SYS_GAP;
+            }
+            if (level <= HEADER_LEVEL_SHORT) {
+                w += header_text_width(header_battery_text_for_percent(
+                                           s_header_state.battery_adc_ready
+                                               ? s_header_state.battery_percent : 0),
+                                       font) + HEADER_SYS_GAP;
+                w += HEADER_BAT_BAR_W + HEADER_SYS_GAP;
+            }
         }
         w += header_text_width("100%", font);
-        if (level == HEADER_LEVEL_FULL) {
+        if (!glyph && level == HEADER_LEVEL_FULL) {
             char up[24];
             header_format_uptime(up, sizeof(up));
             w += HEADER_SYS_GAP + header_text_width(up, font);
@@ -590,8 +827,8 @@ static void header_apply_levels(const header_layout_t *lay)
     char buf[32];
     int i;
 
-    for (i = 0; i < HEADER_ICON_COUNT; i++) {
-        header_render_icon((header_icon_type_t)i, lay->status_level);
+    for (i = 0; i < HEADER_STATUS_PANEL_COUNT; i++) {
+        header_render_icon((header_status_kind_t)i, lay->status_level);
     }
 
     /* MEM */
@@ -604,43 +841,48 @@ static void header_apply_levels(const header_layout_t *lay)
     snprintf(buf, sizeof(buf), "%d%%", s_header_state.cpu_percent);
     if (s_cpu_value_label != NULL) lv_label_set_text(s_cpu_value_label, buf);
 
+    /* The glyph style drops every decoration (separators, graph, bars) and
+     * keeps only the compact glyph + value, so the system panel also yields
+     * width back to the notification area. */
+    bool glyph = header_glyph_style();
+
     /* Separators */
     if (s_sep1 != NULL) {
-        if (lay->show_sep) lv_obj_clear_flag(s_sep1, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_sep) lv_obj_clear_flag(s_sep1, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_sep1, LV_OBJ_FLAG_HIDDEN);
     }
     if (s_sep2 != NULL) {
-        if (lay->show_sep) lv_obj_clear_flag(s_sep2, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_sep) lv_obj_clear_flag(s_sep2, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_sep2, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* CPU indicator: graph (FULL) / bar (SHORT) / none (MIN). */
+    /* CPU indicator: graph (FULL) / bar (SHORT) / none (MIN or glyph). */
     if (s_cpu_graph != NULL) {
-        if (lay->show_cpu_graph) lv_obj_clear_flag(s_cpu_graph, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_cpu_graph) lv_obj_clear_flag(s_cpu_graph, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_cpu_graph, LV_OBJ_FLAG_HIDDEN);
     }
     if (s_cpu_bar != NULL) {
-        bool show_bar = (lay->sys_level == HEADER_LEVEL_SHORT);
+        bool show_bar = (!glyph && lay->sys_level == HEADER_LEVEL_SHORT);
         if (show_bar) lv_obj_clear_flag(s_cpu_bar, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_cpu_bar, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* Battery icon (FULL/SHORT) + bar (FULL only). */
+    /* Battery icon (glyph always; words at FULL/SHORT) + bar (words FULL only). */
     if (s_battery_icon_label != NULL) {
-        if (lay->sys_level <= HEADER_LEVEL_SHORT) {
+        if (glyph || lay->sys_level <= HEADER_LEVEL_SHORT) {
             lv_obj_clear_flag(s_battery_icon_label, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s_battery_icon_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
     if (s_battery_bar != NULL) {
-        if (lay->show_battery_bar) lv_obj_clear_flag(s_battery_bar, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_battery_bar) lv_obj_clear_flag(s_battery_bar, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_battery_bar, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* Uptime: FULL level only (it is the first thing to yield). */
+    /* Uptime: words FULL level only (the first thing to yield; never in glyph). */
     if (s_uptime_label != NULL) {
-        if (lay->sys_level == HEADER_LEVEL_FULL) lv_obj_clear_flag(s_uptime_label, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->sys_level == HEADER_LEVEL_FULL) lv_obj_clear_flag(s_uptime_label, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_uptime_label, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -805,9 +1047,10 @@ static void header_render(void)
         return;
     }
 
-    /* Notification (`**bold**` subset -> bright recolor; the label has
-     * recolor enabled, so plain text passes through untouched). */
-    if (s_header_state.notification[0] != '\0') {
+    /* Notification (queue-driven). Severity sets the base color; the label
+     * keeps recolor enabled so the `**bold**` subset still renders bright.
+     * When nothing is displayed, the idle center shows the local clock. */
+    if (s_header_state.notification_active && s_header_state.notification[0] != '\0') {
         char *styled = malloc(HEADER_NOTIFICATION_BYTES * 2);
         if (styled != NULL) {
             header_notification_style(s_header_state.notification,
@@ -817,39 +1060,55 @@ static void header_render(void)
         } else {
             lv_label_set_text(s_notification_label, s_header_state.notification);
         }
+        lv_obj_set_style_text_color(
+            s_notification_label,
+            header_notify_color(s_header_state.notification_level), 0);
+        lv_obj_set_style_text_color(
+            s_notification_icon,
+            header_notify_color(s_header_state.notification_level), 0);
         lv_obj_clear_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
+    } else if (P4_CONFIG_HEADER_CLOCK && s_header_state.clock_text[0] != '\0') {
+        lv_label_set_text(s_notification_label, s_header_state.clock_text);
+        lv_obj_set_style_text_color(s_notification_label,
+                                    lv_color_hex(HEADER_MUTED_COLOR), 0);
+        lv_obj_add_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text(s_notification_label, "");
         lv_obj_add_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* Battery (always present; N/C when the ADC is unavailable). */
+    /* Battery (always present; N/C when the ADC is unavailable). The color
+     * comes from the shared tone classification, so the words and glyph
+     * styles can never disagree about low/critical. */
+    battery_color = header_tone_color(
+        header_status_battery_tone(s_header_state.battery_adc_ready
+                                       ? s_header_state.battery_percent : 0,
+                                   s_header_state.battery_adc_ready));
+    lv_label_set_text(s_battery_icon_label,
+                      header_glyph_style()
+                          ? header_status_glyph(HEADER_STATUS_BATTERY)
+                          : (s_header_state.battery_adc_ready
+                                 ? header_battery_text_for_percent(s_header_state.battery_percent)
+                                 : "[    ]"));
+    lv_obj_set_style_text_color(s_battery_icon_label, battery_color, 0);
+    lv_bar_set_value(s_battery_bar,
+                     s_header_state.battery_adc_ready ? s_header_state.battery_percent : 0,
+                     LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(s_battery_bar, battery_color, LV_PART_INDICATOR);
     if (s_header_state.battery_adc_ready) {
-        lv_label_set_text(s_battery_icon_label,
-                          header_battery_text_for_percent(s_header_state.battery_percent));
-        battery_color = s_header_state.battery_percent <= P4_CONFIG_HEADER_BAT_LOW_PCT
-                            ? lv_color_hex(HEADER_WARN_COLOR)
-                            : lv_color_hex(HEADER_ACCENT_COLOR);
-        lv_obj_set_style_text_color(s_battery_icon_label, battery_color, 0);
-        lv_bar_set_value(s_battery_bar, s_header_state.battery_percent, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(s_battery_bar, battery_color, LV_PART_INDICATOR);
         snprintf(buf, sizeof(buf), "%d%%", s_header_state.battery_percent);
-        lv_label_set_text(s_battery_value_label, buf);
-        lv_obj_set_style_text_color(s_battery_value_label, battery_color, 0);
     } else {
-        lv_label_set_text(s_battery_icon_label, "[    ]");
-        lv_obj_set_style_text_color(s_battery_icon_label, lv_color_hex(HEADER_MUTED_COLOR), 0);
-        lv_bar_set_value(s_battery_bar, 0, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(s_battery_bar, lv_color_hex(HEADER_MUTED_COLOR), LV_PART_INDICATOR);
-        lv_label_set_text(s_battery_value_label, "N/C");
-        lv_obj_set_style_text_color(s_battery_value_label, lv_color_hex(HEADER_MUTED_COLOR), 0);
+        snprintf(buf, sizeof(buf), "%s", "N/C");
     }
+    lv_label_set_text(s_battery_value_label, buf);
+    lv_obj_set_style_text_color(s_battery_value_label, battery_color, 0);
 
-    /* Memory / CPU label colors (text is set by the layout pass). */
-    lv_obj_set_style_text_color(s_mem_label, lv_color_hex(HEADER_TEXT_COLOR), 0);
-    cpu_color = s_header_state.cpu_percent >= P4_CONFIG_HEADER_CPU_WARN_PCT
-                    ? lv_color_hex(HEADER_WARN_COLOR)
-                    : lv_color_hex(HEADER_ACCENT_COLOR);
+    /* Memory / CPU label colors (text is set by the layout pass; color from
+     * the shared tone classification). */
+    lv_obj_set_style_text_color(s_mem_label,
+        header_tone_color(header_status_mem_tone(s_header_state.free_heap_bytes,
+                                                 s_header_state.total_heap_bytes)), 0);
+    cpu_color = header_tone_color(header_status_cpu_tone(s_header_state.cpu_percent));
     lv_obj_set_style_text_color(s_cpu_label, cpu_color, 0);
     lv_obj_set_style_text_color(s_cpu_value_label, cpu_color, 0);
 
@@ -894,24 +1153,11 @@ static bool header_schedule(lv_async_cb_t cb, void *payload)
 static void header_async_refresh(void *user_data)     { (void)user_data; header_render(); }
 static void header_async_notification(void *user_data) {
     header_notification_update_t *u = (header_notification_update_t *)user_data;
-    if (u == NULL) return;
-    snprintf(s_header_state.notification, sizeof(s_header_state.notification), "%s", u->text);
-    if (s_notification_timer == NULL) {
-        s_notification_timer = lv_timer_create(header_notification_timeout_cb, u->timeout_ms, NULL);
-        if (s_notification_timer != NULL) lv_timer_pause(s_notification_timer);
-    }
-    if (s_notification_timer != NULL) {
-        if (u->timeout_ms > 0) {
-            lv_timer_set_period(s_notification_timer, u->timeout_ms);
-            lv_timer_set_repeat_count(s_notification_timer, 1);
-            lv_timer_reset(s_notification_timer);
-            lv_timer_resume(s_notification_timer);
-        } else {
-            lv_timer_pause(s_notification_timer);
-        }
+    if (u != NULL) {
+        header_notify_apply(u);
+        free(u);
     }
     header_render();
-    free(u);
 }
 static void header_async_wifi(void *u_data)       { free(u_data); header_render(); }
 static void header_async_battery(void *u_data)    { free(u_data); header_render(); }
@@ -1045,11 +1291,12 @@ void header_init(void)
      * (header_apply_layout); no fixed min-width to clip against. */
 
     /* Create icon labels inside status panel — compact letter spacing */
-    for (i = 0; i < HEADER_ICON_COUNT; i++) {
+    for (i = 0; i < HEADER_STATUS_PANEL_COUNT; i++) {
         s_status_icons[i] = lv_label_create(s_status_panel);
         lv_obj_set_style_text_font(s_status_icons[i], status_font, 0);
         lv_obj_set_style_text_letter_space(s_status_icons[i], -1, 0);
         lv_obj_clear_flag(s_status_icons[i], LV_OBJ_FLAG_SCROLLABLE);
+        header_bind_status_action(s_status_icons[i], (header_status_kind_t)i);
     }
 
     /* ====================================================================
@@ -1120,6 +1367,7 @@ void header_init(void)
     lv_obj_set_style_text_font(s_mem_label, status_font, 0);
     lv_obj_set_style_text_letter_space(s_mem_label, -1, 0);
     lv_obj_set_style_text_color(s_mem_label, lv_color_hex(HEADER_TEXT_COLOR), 0);
+    header_bind_status_action(s_mem_label, HEADER_STATUS_MEM);
 
     /* Separator MEM|CPU */
     s_sep1 = lv_label_create(s_sys_panel);
@@ -1168,6 +1416,7 @@ void header_init(void)
     s_cpu_value_label = lv_label_create(s_sys_panel);
     lv_obj_set_style_text_font(s_cpu_value_label, status_font, 0);
     lv_obj_set_style_text_letter_space(s_cpu_value_label, -1, 0);
+    header_bind_status_action(s_cpu_value_label, HEADER_STATUS_CPU);
 
     /* Separator CPU|BAT */
     s_sep2 = lv_label_create(s_sys_panel);
@@ -1195,6 +1444,7 @@ void header_init(void)
     s_battery_value_label = lv_label_create(s_sys_panel);
     lv_obj_set_style_text_font(s_battery_value_label, status_font, 0);
     lv_obj_set_style_text_letter_space(s_battery_value_label, -1, 0);
+    header_bind_status_action(s_battery_value_label, HEADER_STATUS_BATTERY);
 
     /* Uptime label (shown only in the FULL layout level). */
     s_uptime_label = lv_label_create(s_sys_panel);
@@ -1204,6 +1454,20 @@ void header_init(void)
 
     /* Any long-press anywhere on the status bar bubbles to the root handler. */
     header_enable_event_bubble(s_header_root);
+
+    /* Persistent notification-display timer (paused until a message shows).
+     * Persistent by design: because it is never auto-freed, the O7 hazard of
+     * touching a timer node that lv_timer_exec already deleted cannot occur. */
+    s_notification_timer = lv_timer_create(header_notification_timeout_cb,
+                                           P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS, NULL);
+    if (s_notification_timer != NULL) {
+        lv_timer_set_repeat_count(s_notification_timer, -1);
+        lv_timer_pause(s_notification_timer);
+        /* A notification queued before the UI existed is already displayed. */
+        if (s_header_state.notification_active) {
+            header_notify_arm(s_header_state.notification_timeout_ms);
+        }
+    }
 
     /* Resolve the root's geometry BEFORE the first render so the responsive
      * layout never runs against a zero content width (which could place a
@@ -1255,16 +1519,27 @@ void header_update_status(void)
     (void)lv_async_call(header_async_refresh, NULL);
 }
 
-void header_set_notification(const char *text, uint32_t timeout_ms)
+void header_notify(header_notify_level_t level, const char *text, uint32_t timeout_ms)
 {
     header_notification_update_t *update = calloc(1, sizeof(*update));
     if (update == NULL) return;
     snprintf(update->text, sizeof(update->text), "%s", text != NULL ? text : "");
     update->timeout_ms = timeout_ms;
+    update->level = level;
     if (!header_schedule(header_async_notification, update)) {
+        /* Fall back to a synchronous apply under the LVGL lock, then render. */
+        if (lvgl_port_lock(0)) {
+            header_notify_apply(update);
+            lvgl_port_unlock();
+            header_render();
+        }
         free(update);
-        header_render();
     }
+}
+
+void header_set_notification(const char *text, uint32_t timeout_ms)
+{
+    header_notify(HEADER_NOTIFY_INFO, text, timeout_ms);
 }
 
 void header_update_wifi(bool connected, int rssi)
@@ -1398,6 +1673,7 @@ void header_get_metrics(header_metrics_t *out)
     out->actual_center = s_last_actual_center;
     out->actual_right = s_last_actual_right;
     out->screen_w = s_last_screen_w;
+    out->glyph_style = header_glyph_style();
 }
 
 void header_update_mem(uint32_t free_heap_bytes, uint32_t total_heap_bytes)
@@ -1435,31 +1711,35 @@ void header_update_uptime(uint32_t uptime_seconds)
     } else { header_render(); }
 }
 
-void header_update_batch(
-    bool wifi_connected, int wifi_rssi,
-    int battery_percent, bool battery_adc_ready,
-    bool bt_enabled, bool bt_connected,
-    bool usb_connected, header_sd_state_t sd_state,
-    uint32_t free_heap, uint32_t total_heap,
-    int cpu_percent, uint32_t task_count,
-    uint32_t uptime_seconds)
+void header_update_batch(const header_batch_t *in)
 {
+    if (in == NULL) {
+        return;
+    }
+
     /* Set all state directly (atomic on this platform) then schedule
      * a single async render. No dynamic allocation needed — avoids
-     * heap corruption from deferred async call payloads. */
-    s_header_state.wifi_connected = wifi_connected;
-    s_header_state.wifi_rssi = wifi_rssi;
-    s_header_state.battery_percent = (battery_percent < 0) ? 0 : (battery_percent > 100) ? 100 : battery_percent;
-    s_header_state.battery_adc_ready = battery_adc_ready;
-    s_header_state.bluetooth_enabled = bt_enabled;
-    s_header_state.bluetooth_connected = bt_connected;
-    s_header_state.usb_connected = usb_connected;
-    s_header_state.sd_state = sd_state;
-    s_header_state.free_heap_bytes = free_heap;
-    s_header_state.total_heap_bytes = total_heap;
-    s_header_state.cpu_percent = (cpu_percent < 0) ? 0 : (cpu_percent > 100) ? 100 : cpu_percent;
-    s_header_state.task_count = task_count;
-    s_header_state.uptime_seconds = uptime_seconds;
+     * heap corruption from deferred async call payloads. clock_text is
+     * copied; the caller's buffer may be transient. */
+    s_header_state.wifi_connected = in->wifi_connected;
+    s_header_state.wifi_rssi = in->wifi_rssi;
+    s_header_state.battery_percent =
+        (in->battery_percent < 0) ? 0 : (in->battery_percent > 100) ? 100 : in->battery_percent;
+    s_header_state.battery_adc_ready = in->battery_adc_ready;
+    s_header_state.bluetooth_enabled = in->bt_enabled;
+    s_header_state.bluetooth_connected = in->bt_connected;
+    s_header_state.usb_connected = in->usb_connected;
+    s_header_state.sd_state = in->sd_state;
+    s_header_state.free_heap_bytes = in->free_heap;
+    s_header_state.total_heap_bytes = in->total_heap;
+    s_header_state.cpu_percent =
+        (in->cpu_percent < 0) ? 0 : (in->cpu_percent > 100) ? 100 : in->cpu_percent;
+    s_header_state.task_count = in->task_count;
+    s_header_state.uptime_seconds = in->uptime_seconds;
+    snprintf(s_header_state.clock_text, sizeof(s_header_state.clock_text), "%s",
+             in->clock_text != NULL ? in->clock_text : "");
+    s_header_state.c6ota_busy = in->c6ota_busy;
+    s_header_state.bg_jobs_running = in->bg_jobs_running;
 
     /* Schedule a single async render (no payload needed) */
     (void)lv_async_call(header_async_refresh, NULL);
@@ -1494,10 +1774,10 @@ bool header_get_visible(void)
 
 void header_deinit(void)
 {
-    /* The one-shot notification timer is an LVGL timer, not a widget: it is
+    /* The notification-display timer is an LVGL timer, not a widget: it is
      * NOT reclaimed by lv_obj_clean(). Delete it here (this runs on the LVGL
-     * task under the port lock) so a pending notification cannot fire after
-     * teardown and clear a newer timer's handle. */
+     * task under the port lock) so it cannot fire after teardown; header_init()
+     * recreates it. */
     if (s_notification_timer != NULL) {
         lv_timer_delete(s_notification_timer);
         s_notification_timer = NULL;
@@ -1525,7 +1805,7 @@ void header_deinit(void)
     s_cpu_value_label = NULL;
     s_uptime_label = NULL;
     s_header_font_step = 0;
-    for (int i = 0; i < HEADER_ICON_COUNT; i++) {
+    for (int i = 0; i < HEADER_STATUS_PANEL_COUNT; i++) {
         s_status_icons[i] = NULL;
     }
 

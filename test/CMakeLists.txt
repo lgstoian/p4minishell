@@ -46,8 +46,10 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/tui
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/db
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/alarm
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/archive
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/usb
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/c6ota
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/uitest
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_hosted
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_wifi_remote
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_lvgl_port

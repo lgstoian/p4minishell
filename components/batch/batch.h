@@ -27,6 +27,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 #include "p4minishell_config.h"
 
@@ -137,6 +138,106 @@ void shell_command_alias(int argc, char **argv);
 
 /** `unalias name` — remove one alias (shorthand for `alias name=`). */
 void shell_command_unalias(int argc, char **argv);
+
+/* ========================================================================
+ * KEY BINDS (bind F1..F12 + Ctrl+letter chords, USB keys)
+ * ========================================================================
+ * Chord codes are 0x80 | HID letter (a=0x04..z=0x1D); ^C (0x86) is reserved
+ * for the foreground break and can never be bound.
+ */
+
+/**
+ * Bind, rebind, or clear a key. Codes are USB HID F1..F12 (0x3A..0x45) or
+ * chord codes (0x80 | HID letter). Passing an empty or NULL line clears
+ * the slot.
+ *
+ * @return ESP_OK, ESP_ERR_INVALID_ARG for a non-bindable code, or
+ *         ESP_ERR_NO_MEM when all slots are in use.
+ */
+esp_err_t shell_bind_set(uint8_t code, const char *line);
+
+/**
+ * Copy the bound line for an F-key code into @p out.
+ * @return true when the key is bound.
+ */
+bool shell_bind_lookup_fkey(uint8_t code, char *out, size_t out_size);
+
+/**
+ * Copy the bound line for a Ctrl+letter chord into @p out. Only fires for
+ * Ctrl held with a letter key (a..z); ^C never matches (reserved).
+ * @return true when the chord is bound.
+ */
+bool shell_bind_lookup_chord(uint8_t key_code, uint8_t modifiers,
+                             char *out, size_t out_size);
+
+/** Number of keys currently bound. */
+int shell_bind_count(void);
+
+/**
+ * Copy a bind by table index.
+ * @return true when the index is valid and the outputs were filled.
+ */
+bool shell_bind_get_by_index(int index, uint8_t *code_out, char *value_out,
+                             size_t value_size);
+
+/**
+ * `bind` — list, set, or clear key bindings, and persist them.
+ *
+ *   bind                        list every bind
+ *   bind F5 <line...>           bind a function key to a command line
+ *   bind ^G <line...>           bind a Ctrl+letter chord (^C is reserved)
+ *   bind unbind F5|^G           clear one bind
+ *   bind /clear                 clear all binds
+ *   bind /save [file]           write the table to the SD profile (default
+ *                               P4_CONFIG_BIND_PROFILE)
+ *   bind /load [file]           run the SD profile (batch of `bind` lines)
+ */
+void shell_command_bind(int argc, char **argv);
+
+/* ========================================================================
+ * MACRO RECORDER (95LX-style command capture)
+ * ========================================================================
+ * `macro record` captures every submitted command line into a RAM buffer;
+ * `macro stop` writes it as a .bat file; `macro play` runs such a file via
+ * the `call` machinery. The recorder hook lives in the async submit path,
+ * so both typed surfaces (LVGL input line, serial console) and touch-tap
+ * actions are captured; `macro ...` control lines are never recorded.
+ */
+
+/**
+ * Append a submitted line to the active recording (no-op when idle).
+ * Overlong input truncates the buffer and auto-stops with an overflow mark
+ * reported by `macro stop`/`status`.
+ */
+void batch_macro_record_line(const char *line);
+
+/** Recording state for `macro status` and the unit tests. */
+typedef struct {
+    bool active;                 /**< A recording is in progress. */
+    bool overflowed;             /**< The buffer filled and recording stopped. */
+    size_t used;                 /**< Bytes captured (excluding NUL). */
+    size_t capacity;             /**< Buffer capacity in bytes. */
+    char file[P4_CONFIG_SD_PATH_BYTES]; /**< Target .bat (resolved at record). */
+} batch_macro_status_t;
+
+/** Snapshot the recorder state (all out-pointers may be NULL). */
+void batch_macro_status(batch_macro_status_t *out);
+
+/** Read-only view of the captured text ("" when idle/empty). Unit tests. */
+const char *batch_macro_text(void);
+
+/** Stop and discard the recording without writing. Unit tests. */
+void batch_macro_discard(void);
+
+/**
+ * `macro` — record/stop/play/status command macros.
+ *
+ *   macro record [file]         capture submitted lines (default MACRO.BAT)
+ *   macro stop                  write the capture as a .bat file
+ *   macro play <file>           run a captured file via `call`
+ *   macro status                show recording state
+ */
+void shell_command_macro(int argc, char **argv);
 
 /* ========================================================================
  * ERRORLEVEL

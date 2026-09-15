@@ -1315,6 +1315,75 @@ esp_err_t db_find(const char *name, uint8_t cat_filter, const char *key_filter,
 }
 
 /* ------------------------------------------------------------------------
+ * Fields (`k=v;k=v` payload convention)
+ * ---------------------------------------------------------------------- */
+
+/** Trim leading/trailing spaces and tabs in place; returns the trimmed start. */
+static const char *db_field_trim(const char *text, size_t len, size_t *trimmed_len_out)
+{
+    size_t start = 0;
+    size_t end = len;
+
+    while (start < end && (text[start] == ' ' || text[start] == '\t')) {
+        start++;
+    }
+    while (end > start && (text[end - 1] == ' ' || text[end - 1] == '\t')) {
+        end--;
+    }
+    *trimmed_len_out = end - start;
+    return text + start;
+}
+
+bool db_field_get(const char *payload, const char *field,
+                  char *out, size_t out_size)
+{
+    size_t field_len;
+    const char *p;
+
+    if (payload == NULL || field == NULL || field[0] == '\0' ||
+        out == NULL || out_size == 0) {
+        return false;
+    }
+    field_len = strlen(field);
+    p = payload;
+    while (*p != '\0') {
+        const char *seg = p;
+        const char *eq;
+        const char *semi;
+        size_t name_len;
+        size_t trimmed_name_len;
+        const char *name;
+
+        semi = strchr(seg, ';');
+        if (semi == NULL) {
+            semi = seg + strlen(seg);
+        }
+        eq = memchr(seg, '=', (size_t)(semi - seg));
+        if (eq != NULL) {
+            name = db_field_trim(seg, (size_t)(eq - seg), &trimmed_name_len);
+            name_len = trimmed_name_len;
+            if (name_len == field_len && strncasecmp(name, field, field_len) == 0) {
+                const char *value = eq + 1;
+                size_t value_len = (size_t)(semi - value);
+                size_t trimmed_value_len;
+                const char *trimmed = db_field_trim(value, value_len, &trimmed_value_len);
+                if (trimmed_value_len >= out_size) {
+                    trimmed_value_len = out_size - 1;
+                }
+                memcpy(out, trimmed, trimmed_value_len);
+                out[trimmed_value_len] = '\0';
+                return true;
+            }
+        }
+        if (*semi == '\0') {
+            break;
+        }
+        p = semi + 1;
+    }
+    return false;
+}
+
+/* ------------------------------------------------------------------------
  * Export / import
  * ---------------------------------------------------------------------- */
 

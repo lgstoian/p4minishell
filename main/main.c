@@ -54,16 +54,20 @@
 #include "storage.h"
 #include "usb.h"
 #include "windows.h"
+#include "ui_test.h"
 
 /* Backward-compatibility aliases */
 #define SHELL_TAG                       P4_CONFIG_SHELL_TAG
 #define SHELL_BOOT_MESSAGE              P4_CONFIG_BOOT_MESSAGE
 #define SHELL_PROMPT                    P4_CONFIG_SHELL_PROMPT
 #define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
-#define SHELL_HEADER_REFRESH_PERIOD_MS  P4_CONFIG_HEADER_REFRESH_PERIOD_MS
 
 /* Periodic timer that drives the header status panel */
 static lv_timer_t *s_header_status_timer;
+
+/* Input-row Stop visibility polls the worker busy state (LVGL task). */
+#define SHELL_STOP_POLL_MS 150
+static lv_timer_t *s_stop_poll_timer;
 
 static void shell_build_ui(void);
 
@@ -103,6 +107,13 @@ void c6ota_host_record_info(const char *message)
 void c6ota_host_notify_header(const char *text, uint32_t timeout_ms)
 {
     shell_header_notify(text, timeout_ms);
+}
+
+/* Severity-aware variant: @p level matches header_notify_level_t
+ * (0 = info, 1 = warn, 2 = error). */
+void c6ota_host_notify_header_level(const char *text, uint32_t timeout_ms, int level)
+{
+    shell_header_notify_level(text, timeout_ms, (header_notify_level_t)level);
 }
 
 void usb_host_transcript_append_text(const char *text)
@@ -219,12 +230,19 @@ static void shell_usb_keyboard_cb(uint8_t key_code, uint8_t modifiers, usb_key_e
     shell_power_notify_activity();
 }
 
-/** LVGL timer callback driving the periodic header status refresh. */
+/** LVGL timer callback driving the adaptive header status refresh. */
 static void shell_header_status_timer_cb(lv_timer_t *timer)
 {
-    (void)timer;
+    uint32_t next_ms;
+
     shell_header_status_refresh();
     shell_power_idle_tick();
+
+    /* Reschedule from the current situation (idle-off wake, busy OTA/job,
+     * Wi-Fi bring-up, startup, clock minute boundary, idle-off deadline). */
+    next_ms = shell_header_refresh_interval_ms();
+    lv_timer_set_period(timer, next_ms);
+    lv_timer_reset(timer);
 }
 
 /* ========================================================================
@@ -247,6 +265,48 @@ static void shell_history_button_event_cb(lv_event_t *event)
     } else if (next_btn != NULL && lv_event_get_target(event) == next_btn) {
         shell_recall_history(1);
     }
+}
+
+/* Input-row Tab button: complete the current input-line word by touch, using
+ * the same provider as the USB Tab key. The event runs on the LVGL task, so
+ * the completion call is direct. */
+static void shell_tab_button_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+
+    if (code != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (windows_editor_mode_active()) {
+        return;
+    }
+    shell_input_line_tab_complete();
+}
+
+/* Input-row Stop button: the touch foreground break. Requests an abort when
+ * a command runs (the batch/delay checkpoints unwind with `^C`); idle taps
+ * are impossible because the button only shows while busy. LVGL task. */
+static void shell_stop_button_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+
+    if (code != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (windows_editor_mode_active()) {
+        return;
+    }
+    if (shell_is_command_busy() && !shell_key_wait_is_active()) {
+        shell_request_abort();
+    }
+}
+
+/* Stop-button visibility follows the worker busy state (editor and other
+ * input-row modes suppress it inside windows_set_stop_visible). */
+static void shell_stop_poll_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    windows_set_stop_visible(shell_is_command_busy());
 }
 
 /* Input-row transcript scroll buttons: page the transcript up and down on
@@ -382,6 +442,7 @@ static void shell_input_line_event_cb(lv_event_t *event)
 
         /* Guard against backspace deleting into the prompt prefix. */
         shell_input_line_repair_prompt(text);
+        shell_input_line_ghost_refresh();
         return;
     }
 
@@ -418,6 +479,7 @@ static void shell_input_line_event_cb(lv_event_t *event)
         }
         shell_reset_history_cursor();
         shell_input_line_reset();
+        shell_input_line_ghost_refresh();
 
         /* Dispatch on the worker task so heavy commands never run on the
          * LVGL event-callback stack. */
@@ -438,6 +500,7 @@ static void shell_input_line_event_cb(lv_event_t *event)
         } else if (key == LV_KEY_DOWN) {
             shell_recall_history(1);
         }
+        shell_input_line_ghost_refresh();
     }
 }
 
@@ -553,7 +616,7 @@ static void shell_keyboard_event_cb(lv_event_t *event)
         }
         return;
     }
-    if (strcmp(txt, "Nav2") == 0) {
+    if (strcmp(txt, "Nav2") == 0 || strcmp(txt, "Edit") == 0) {
         if (editor_view_is_open()) {
             keyboard_set_mode(KEYBOARD_MODE_NAV2);
         }
@@ -634,9 +697,22 @@ static void shell_build_ui(void)
         lv_obj_add_event_cb(scroll_down_btn, shell_scroll_button_event_cb, LV_EVENT_CLICKED, NULL);
     }
 
+    lv_obj_t *tab_btn = windows_get_tab_button();
+    if (tab_btn != NULL) {
+        lv_obj_add_event_cb(tab_btn, shell_tab_button_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+
+    lv_obj_t *stop_btn = windows_get_stop_button();
+    if (stop_btn != NULL) {
+        lv_obj_add_event_cb(stop_btn, shell_stop_button_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+
     /* Keyboard callback receives LV_EVENT_VALUE_CHANGED for mode and button
      * presses, LV_EVENT_READY for OK, and LV_EVENT_CANCEL for hide. */
     keyboard_register_event_callback(shell_keyboard_event_cb, NULL);
+
+    /* Synthetic touch indev for `ui` automation/tests (idempotent). */
+    ui_test_init();
 
     shell_transcript_reset();
     shell_transcript_appendf_ansi("@G%s@R\n", SHELL_BOOT_MESSAGE);
@@ -767,8 +843,14 @@ void app_main(void)
     shell_header_status_refresh();
     if (s_header_status_timer == NULL) {
         s_header_status_timer = lv_timer_create(shell_header_status_timer_cb,
-                                                SHELL_HEADER_REFRESH_PERIOD_MS,
+                                                shell_header_refresh_interval_ms(),
                                                 NULL);
+    }
+    /* Stop-button visibility poll (created once; the button itself is
+     * rebuilt with the input row on rotation). */
+    if (s_stop_poll_timer == NULL) {
+        s_stop_poll_timer = lv_timer_create(shell_stop_poll_timer_cb,
+                                            SHELL_STOP_POLL_MS, NULL);
     }
     bsp_display_unlock();
 }

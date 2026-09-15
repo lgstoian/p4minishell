@@ -23,7 +23,9 @@
 
 #include "command.h"
 #include "command_ui.h"
+#include "ui_commands.h"
 #include "config_cmd.h"
+#include "security_commands.h"
 #include "batch.h"
 #include "filetype.h"
 #include "calc.h"
@@ -73,6 +75,7 @@
 #include "driver/spi_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "lvgl.h"
 #include "esp_heap_caps.h"
@@ -546,30 +549,12 @@ static void shell_command_paste(int argc, char **argv)
 
 /* ========================================================================
  * TAB COMPLETION PROVIDER
- * ======================================================================== */
-
-/** Built-in command names offered by Tab completion for the first token. */
-static const char *const shell_builtin_commands[] = {
-    "about", "adc", "alarm", "alias", "anchor", "ansi", "append", "appconfig",
-    "appmode", "apps", "ask", "asset", "attrib", "audio", "battery", "beep",
-    "bluetooth", "brightness", "browse", "bt", "c6ota", "cal", "calc", "call",
-    "camera", "capture", "cd", "chdir", "chkdsk", "choice", "clear", "clip", "cls",
-    "color", "comp", "config", "copy", "crc32", "cursor",
-    "date", "db", "debug",
-    "deepsleep", "del", "delay", "dialog", "dir", "disk", "display", "dns", "draw", "echo", "edit",
-    "endlocal",
-    "erase", "exit", "fc", "find", "findstr", "font", "for", "format", "freq", "gfind", "gfx", "goto", "gpio",
-    "help", "hexview", "history", "httpd", "httpget", "header", "i2c", "if", "ini", "ipconfig", "keyboard",
-    "label", "launch", "list", "locate", "json", "markdown", "md", "mem", "menu", "mkdir", "more", "move", "netstat", "notify", "nslookup",
-    "ntpsync", "open", "paste", "path", "pause", "ping", "pkg", "plot", "power", "prompt", "ps", "pwm",
-    "rd", "reboot", "receive", "recycle", "rem", "ren", "rename", "restore", "rgb", "rmdir",
-    "rotate", "scandisk", "scr", "screenshot", "sd", "sdeject", "send", "set", "setlocal",
-    "shift", "sleep", "sntp", "sort", "spi", "start", "sysinfo", "taskkill", "tasks", "time", "timezone",
-    "tone", "top", "touch", "trash", "tree", "tui", "type", "unalias", "undelete", "usb",
-    "ver", "version", "view", "volume", "wavplay", "wget", "wifi", "windows",
-    "write", "xcopy",
-    "proc", "temp", "theme",
-};
+ * ========================================================================
+ * The help table is the single source of command names and usage text; there
+ * is no parallel command list. Argument/subcommand completion is derived from
+ * each command's help usage string, so expanding a help entry automatically
+ * expands completion. Installed apps and available bundles are scanned live.
+ */
 
 /** Completion collector: a bounded list of heap-copied matches. */
 typedef struct {
@@ -685,21 +670,177 @@ static void shell_complete_add_paths(shell_complete_ctx_t *ctx)
     free(full);
 }
 
+/** Split a mutable line into whitespace-delimited, NUL-terminated tokens. */
+static int command_split_tokens(char *line, char **tok, int max)
+{
+    int n = 0;
+    char *p = line;
+
+    while (*p != '\0' && n < max) {
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        tok[n++] = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') {
+            p++;
+        }
+        if (*p != '\0') {
+            *p = '\0';
+            p++;
+        }
+    }
+    return n;
+}
+
+/** True when a raw usage token contains a value placeholder or a form we do
+ *  not want as a completion (flags, subcommands, and enum values do). */
+static bool command_usage_token_skip(const char *raw)
+{
+    static const char *const bad = "#%=\"\\.`:"; /* value/format punctuation */
+    size_t len = strlen(raw);
+
+    if (len == 0) {
+        return true;
+    }
+    /* `<app>` (single placeholder) is skipped; `<on|sleep|off>` was already
+     * split on '|' before this call. */
+    if (raw[0] == '<' && raw[len - 1] == '>' && strchr(raw, '|') == NULL) {
+        return true;
+    }
+    for (const char *b = bad; *b != '\0'; b++) {
+        if (strchr(raw, *b) != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Add the completable tokens derived from one help usage string. */
+static void command_usage_tokens(const char *usage, const char *cmd,
+                                 shell_complete_ctx_t *ctx)
+{
+    char buf[256];
+    const char *dash;
+    size_t ulen;
+    char *p;
+
+    if (usage == NULL) {
+        return;
+    }
+    dash = strstr(usage, " - ");
+    ulen = dash != NULL ? (size_t)(dash - usage) : strlen(usage);
+    if (ulen >= sizeof(buf)) {
+        ulen = sizeof(buf) - 1;
+    }
+    memcpy(buf, usage, ulen);
+    buf[ulen] = '\0';
+
+    for (p = buf; *p != '\0';) {
+        char *start;
+        char save;
+        char token[64];
+        size_t t = 0;
+
+        while (*p == ' ' || *p == '\t' || *p == '|') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        start = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '|') {
+            p++;
+        }
+        save = *p;
+        *p = '\0';
+
+        if (!command_usage_token_skip(start)) {
+            /* Keep only completion-safe characters. */
+            for (const char *c = start; *c != '\0' && t < sizeof(token) - 1; c++) {
+                if ((*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') ||
+                    (*c >= '0' && *c <= '9') || *c == '_' || *c == '-' || *c == '/') {
+                    token[t++] = *c;
+                }
+            }
+            token[t] = '\0';
+            if (t > 0 && !(token[0] >= '0' && token[0] <= '9') &&
+                strcasecmp(token, cmd) != 0) {
+                shell_complete_add(ctx, token);
+            }
+        }
+
+        *p = save;
+        if (*p != '\0') {
+            p++;
+        }
+    }
+}
+
+/** Add installed-app / available-bundle names for `launch`/`open`/`pkg`. */
+static void command_complete_apps(shell_complete_ctx_t *ctx, const char *cmd,
+                                  const char *sub)
+{
+    static char names[COMMAND_APP_MAX][COMMAND_APP_NAME_BYTES];
+    int n;
+    int i;
+
+    if (strcasecmp(cmd, "launch") == 0 || strcasecmp(cmd, "open") == 0 ||
+        strcasecmp(cmd, "run") == 0) {
+        n = pkg_list_installed(names, COMMAND_APP_MAX);
+        for (i = 0; i < n; i++) {
+            shell_complete_add(ctx, names[i]);
+        }
+        return;
+    }
+    if (strcasecmp(cmd, "pkg") == 0) {
+        n = (sub != NULL && strcasecmp(sub, "install") == 0)
+                ? pkg_list_available(names, COMMAND_APP_MAX)
+                : pkg_list_installed(names, COMMAND_APP_MAX);
+        for (i = 0; i < n; i++) {
+            shell_complete_add(ctx, names[i]);
+        }
+    }
+}
+
 /**
  * Tab-completion provider: fills @p out with the @p match_index-th completion
- * of @p word (commands/aliases for the first token, plus SD file/dir paths)
- * and returns the total number of matches.
+ * for the last word of @p line and returns the total number of matches.
+ * First token: help-table command names, aliases, installed apps, paths.
+ * Later tokens: subcommands/flags from the command's help usage, installed
+ * apps / available bundles for launch/open/pkg, plus file/dir paths.
  */
-static int shell_complete_word(const char *word, bool first_token, int match_index,
-                               char *out, size_t out_size)
+int command_complete_line(const char *line, int match_index, char *out,
+                          size_t out_size)
 {
+    char work[SHELL_COMMAND_BYTES];
+    char *tok[32];
+    bool trailing_space;
+    int n;
+    int cur_index;
+    const char *word;
     shell_complete_ctx_t ctx;
     size_t index;
     int total;
 
-    if (word == NULL || out == NULL || out_size == 0) {
+    if (line == NULL || out == NULL || out_size == 0) {
         return 0;
     }
+    snprintf(work, sizeof(work), "%s", line);
+
+    {
+        size_t len = strlen(work);
+        trailing_space = (len > 0 && (work[len - 1] == ' ' || work[len - 1] == '\t'));
+    }
+
+    n = command_split_tokens(work, tok, 32);
+    if (n == 0) {
+        return 0;
+    }
+    cur_index = trailing_space ? n : n - 1;
+    word = trailing_space ? "" : tok[n - 1];
 
     ctx.word = word;
     ctx.word_len = strlen(word);
@@ -710,9 +851,15 @@ static int shell_complete_word(const char *word, bool first_token, int match_ind
         return 0;
     }
 
-    if (first_token) {
-        for (index = 0; index < sizeof(shell_builtin_commands) / sizeof(shell_builtin_commands[0]); index++) {
-            shell_complete_add(&ctx, shell_builtin_commands[index]);
+    if (cur_index == 0) {
+        size_t help_count = shell_help_entry_count();
+
+        for (index = 0; index < help_count; index++) {
+            const char *name = NULL;
+
+            if (shell_help_entry_get(index, &name, NULL) && name != NULL) {
+                shell_complete_add(&ctx, name);
+            }
         }
         for (index = 0; index < (size_t)P4_CONFIG_ALIAS_MAX; index++) {
             char name[P4_CONFIG_ALIAS_NAME_BYTES];
@@ -721,6 +868,22 @@ static int shell_complete_word(const char *word, bool first_token, int match_ind
                 shell_complete_add(&ctx, name);
             }
         }
+    } else {
+        const char *cmd = tok[0];
+        const char *sub = (n >= 2) ? tok[1] : NULL;
+        size_t help_count = shell_help_entry_count();
+
+        for (index = 0; index < help_count; index++) {
+            const char *name = NULL;
+            const char *usage = NULL;
+
+            if (shell_help_entry_get(index, &name, &usage) &&
+                name != NULL && strcasecmp(name, cmd) == 0) {
+                command_usage_tokens(usage, cmd, &ctx);
+                break;
+            }
+        }
+        command_complete_apps(&ctx, cmd, sub);
     }
 
     /* Paths always complete; for the first token this also covers .bat files. */
@@ -737,6 +900,87 @@ static int shell_complete_word(const char *word, bool first_token, int match_ind
     free(ctx.matches);
     return total;
 }
+
+/** SD-free best-match provider for the inline ghost suggestion. */
+int command_ghost_line(const char *line, char *out, size_t out_size)
+{
+    char work[SHELL_COMMAND_BYTES];
+    char *tok[32];
+    bool trailing_space;
+    int n;
+    int cur_index;
+    const char *word;
+    shell_complete_ctx_t ctx;
+    size_t index;
+    int total;
+
+    if (line == NULL || out == NULL || out_size == 0) {
+        return 0;
+    }
+    snprintf(work, sizeof(work), "%s", line);
+    {
+        size_t len = strlen(work);
+        trailing_space = (len > 0 && (work[len - 1] == ' ' || work[len - 1] == '\t'));
+    }
+    n = command_split_tokens(work, tok, 32);
+    if (n == 0) {
+        return 0;
+    }
+    cur_index = trailing_space ? n : n - 1;
+    word = trailing_space ? "" : tok[n - 1];
+
+    ctx.word = word;
+    ctx.word_len = strlen(word);
+    ctx.max = P4_CONFIG_COMPLETION_MAX_MATCHES;
+    ctx.count = 0;
+    ctx.matches = calloc((size_t)ctx.max, sizeof(char *));
+    if (ctx.matches == NULL) {
+        return 0;
+    }
+
+    if (cur_index == 0) {
+        size_t help_count = shell_help_entry_count();
+
+        for (index = 0; index < help_count; index++) {
+            const char *name = NULL;
+
+            if (shell_help_entry_get(index, &name, NULL) && name != NULL) {
+                shell_complete_add(&ctx, name);
+            }
+        }
+        for (index = 0; index < (size_t)P4_CONFIG_ALIAS_MAX; index++) {
+            char name[P4_CONFIG_ALIAS_NAME_BYTES];
+
+            if (shell_alias_get_by_index((int)index, name, sizeof(name), NULL, 0)) {
+                shell_complete_add(&ctx, name);
+            }
+        }
+    } else {
+        const char *cmd = tok[0];
+        const char *usage = NULL;
+        const char *name = NULL;
+        size_t help_count = shell_help_entry_count();
+
+        for (index = 0; index < help_count; index++) {
+            if (shell_help_entry_get(index, &name, &usage) &&
+                name != NULL && strcasecmp(name, cmd) == 0) {
+                command_usage_tokens(usage, cmd, &ctx);
+                break;
+            }
+        }
+    }
+
+    total = ctx.count;
+    if (total > 0) {
+        snprintf(out, out_size, "%s", ctx.matches[0]);
+    }
+    for (index = 0; index < (size_t)ctx.count; index++) {
+        free(ctx.matches[index]);
+    }
+    free(ctx.matches);
+    return total;
+}
+
 
 /* ========================================================================
  * EDITOR COMMAND AND OPS-TABLE HOOKS
@@ -766,84 +1010,6 @@ static void shell_command_edit(int argc, char **argv)
     batch_set_errorlevel(errorlevel);
 }
 
-/* Serial console control verbs accepted while the editor is open. */
-static bool editor_serial_is_verb(const char *line, const char *verb)
-{
-    return line[0] == '\\' && strcasecmp(line + 1, verb) == 0;
-}
-
-/* Per-call context for async serial-line dispatch to the LVGL task. */
-typedef struct {
-    char *line;
-} editor_serial_line_ctx_t;
-
-/* Runs on the LVGL task: feeds one serial line's characters into the editor. */
-static void editor_serial_line_cb(void *user_data)
-{
-    editor_serial_line_ctx_t *ctx = (editor_serial_line_ctx_t *)user_data;
-    const char *line;
-    size_t i;
-    size_t len;
-
-    if (ctx == NULL || ctx->line == NULL) {
-        free(ctx);
-        return;
-    }
-
-
-    line = ctx->line;
-    len = strlen(line);
-
-    if (editor_serial_is_verb(line, "q") || editor_serial_is_verb(line, "quit")) {
-        if (editor_view_is_open()) {
-            editor_view_handle_usb_key(0x29, 0, 0); /* Esc -> quit */
-        } else {
-            editor_view_set_quit_requested();
-        }
-    } else if (editor_serial_is_verb(line, "s") || editor_serial_is_verb(line, "save")) {
-        if (editor_view_is_open()) {
-            editor_view_handle_usb_key(0, 0x01, 's'); /* Ctrl+S */
-        } else {
-            editor_view_set_save_requested();
-        }
-    } else if (editor_serial_is_verb(line, "u") || editor_serial_is_verb(line, "undo")) {
-        editor_view_handle_usb_key(0, 0x01, 'z');
-    } else if (editor_serial_is_verb(line, "f") || editor_serial_is_verb(line, "find")) {
-        editor_view_handle_usb_key(0, 0x01, 'f'); /* Ctrl+F */
-    } else if (editor_serial_is_verb(line, "g") || editor_serial_is_verb(line, "goto")) {
-        editor_view_handle_usb_key(0, 0x01, 'g'); /* Ctrl+G -> Go to line */
-    } else if (editor_serial_is_verb(line, "o") || editor_serial_is_verb(line, "saveas")) {
-        editor_view_handle_usb_key(0, 0x01, 'o'); /* Ctrl+O -> Save As */
-    } else if (editor_serial_is_verb(line, "r") || editor_serial_is_verb(line, "redo")) {
-        editor_view_handle_usb_key(0, 0x03, 'z'); /* Ctrl+Shift+Z */
-    } else if (editor_serial_is_verb(line, "a") || editor_serial_is_verb(line, "selectall")) {
-        editor_view_handle_usb_key(0, 0x01, 'a');
-    } else {
-        if (!editor_view_is_open()) {
-            free(ctx->line);
-            free(ctx);
-            return;
-        }
-        /* A line of typed text: insert each character, then a newline. */
-        for (i = 0; i < len; i++) {
-            char ch = line[i];
-            if (ch == '\\' && i == 0 && len > 1) {
-                /* "\foo" that was not a known verb inserts a literal backslash
-                 * and the rest of the line as text. */
-                editor_view_handle_usb_key(0, 0, '\\');
-                continue;
-            }
-            if (ch >= 0x20) {
-                editor_view_handle_usb_key(0, 0, ch);
-            }
-        }
-        editor_view_handle_usb_key(0x28, 0, '\n'); /* Enter -> newline */
-    }
-
-    free(ctx->line);
-    free(ctx);
-}
-
 /* Forward declarations for modal functions */
 extern bool modal_is_active(void);
 extern bool modal_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii);
@@ -851,37 +1017,6 @@ extern bool modal_handle_serial_line(const char *line);
 extern int modal_filebrowser_run(const char *title, const char *start_path,
                                   char *selected_path, size_t path_size,
                                   uint32_t timeout_ms);
-
-bool editor_handle_serial_line(const char *line)
-{
-    editor_serial_line_ctx_t *ctx;
-
-    /* Accept lines whenever a session is active (even while the view is
-     * still opening), so a quick '\q' after 'edit' is never misrouted as a
-     * shell command and lost behind the blocked worker. */
-    if ((!editor_session_is_active() && !editor_view_is_open()) || line == NULL) {
-        return false;
-    }
-
-    /* Defer the whole line to the LVGL task: the editor's document and widget
-     * state live there, and rebuilding rows on the UART console task would
-     * block it past the watchdog and race the render cycle. */
-    ctx = malloc(sizeof(*ctx));
-    if (ctx == NULL) {
-        return true; /* Consumed (drop) rather than misrouted. */
-    }
-    ctx->line = strdup(line);
-    if (ctx->line == NULL) {
-        free(ctx);
-        return true;
-    }
-
-    if (lv_async_call(editor_serial_line_cb, ctx) != LV_RESULT_OK) {
-        free(ctx->line);
-        free(ctx);
-    }
-    return true;
-}
 
 /* ========================================================================
  * HISTORY COMMAND: history [list] / /save [file] / /load [file] / /clear
@@ -912,6 +1047,44 @@ static void shell_command_history(int argc, char **argv)
         shell_history_clear();
         shell_transcript_appendf_ansi(SH_OK "history cleared\n" SH_RST);
         batch_set_errorlevel(0);
+        return;
+    }
+
+    if (argc >= 3 && shell_text_equals_ignore_case(argv[1], "/search")) {
+        size_t count = shell_history_get_count();
+        size_t match_count = 0;
+
+        if (count == 0) {
+            shell_transcript_appendf_ansi(SH_MUTE "history: empty\n" SH_RST);
+            batch_set_errorlevel(1);
+            return;
+        }
+        for (size_t i = count; i > 0; i--) {
+            const char *line = shell_history_get(i - 1);
+
+            if (line == NULL) {
+                continue;
+            }
+            /* Skip the just-submitted `history /search` line: the query text
+             * appears in it, so it would always self-match (the interactive
+             * Ctrl+R search does not see the unsubmitted line either). */
+            if (i == count && strncasecmp(line, "history", 7) == 0 &&
+                shell_history_search_matches(line, "/search")) {
+                continue;
+            }
+            if (shell_history_search_matches(line, argv[2])) {
+                shell_transcript_appendf_ansi(SH_NUM "%3u" SH_RST "  %s\n",
+                                              (unsigned)i, line);
+                match_count++;
+            }
+        }
+        if (match_count == 0) {
+            shell_transcript_appendf_ansi(SH_MUTE "history: no match for '%s'\n" SH_RST,
+                                          argv[2]);
+            batch_set_errorlevel(1);
+        } else {
+            batch_set_errorlevel(0);
+        }
         return;
     }
 
@@ -986,8 +1159,80 @@ static void shell_command_history(int argc, char **argv)
         return;
     }
 
-    shell_print_usage("Usage: history | history /save [file] | history /load [file] | history /clear");
+    shell_print_usage("Usage: history | history /save [file] | history /load [file] | history /search <text> | history /clear");
     batch_set_errorlevel(2);
+}
+
+/* ========================================================================
+ * HISTORY PERSISTENCE (auto-load at boot, debounced auto-save)
+ * ======================================================================== */
+
+static size_t s_history_saved_generation;
+static esp_timer_handle_t s_history_persist_timer;
+
+void command_history_autoload(void)
+{
+#if P4_CONFIG_HISTORY_AUTOSAVE
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *fp;
+
+    if (shell_fs_resolve_path(P4_CONFIG_HISTORY_PROFILE, resolved,
+                              sizeof(resolved)) != ESP_OK) {
+        return;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return;
+    }
+    fp = fopen(resolved, "r");
+    if (fp != NULL) {
+        (void)shell_history_load_lines(fp);
+        fclose(fp);
+    }
+    shell_sd_end(&session, "history");
+    s_history_saved_generation = shell_history_generation();
+#endif
+}
+
+void command_history_save_now(void)
+{
+#if P4_CONFIG_HISTORY_AUTOSAVE
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *fp;
+
+    if (shell_history_get_count() == 0) {
+        s_history_saved_generation = shell_history_generation();
+        return;
+    }
+    if (shell_fs_resolve_path(P4_CONFIG_HISTORY_PROFILE, resolved,
+                              sizeof(resolved)) != ESP_OK) {
+        return;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return;
+    }
+    fp = fopen(resolved, "w");
+    if (fp != NULL) {
+        if (!shell_history_save_lines(fp)) {
+            fclose(fp);
+            (void)unlink(resolved);
+            shell_sd_end(&session, "history");
+            return;
+        }
+        fclose(fp);
+        s_history_saved_generation = shell_history_generation();
+    }
+    shell_sd_end(&session, "history");
+#endif
+}
+
+static void command_history_persist_cb(void *arg)
+{
+    (void)arg;
+    if (shell_history_generation() != s_history_saved_generation) {
+        command_history_save_now();
+    }
 }
 
 
@@ -1376,8 +1621,9 @@ static void shell_command_delay(int argc, char **argv)
         ms = (long)P4_CONFIG_DELAY_MAX_MS;
     }
     /* Chunked so a background task (`start`) stays killable during long
-     * waits: `taskkill` is checked every 100 ms. On the main worker the
-     * check is always false, so foreground `delay` behaves as before. */
+     * waits: `taskkill` is checked every 100 ms. The foreground break
+     * (Ctrl+C / Stop) shares the chunks. On the main worker the bg check
+     * is always false, so foreground `delay` behaves as before. */
     {
         uint32_t remaining = (uint32_t)ms;
 
@@ -1387,6 +1633,12 @@ static void shell_command_delay(int argc, char **argv)
             vTaskDelay(pdMS_TO_TICKS(chunk));
             remaining -= chunk;
             if (batch_bg_kill_requested()) {
+                shell_transcript_append_text("delay: stopped\n");
+                batch_set_errorlevel(1);
+                return;
+            }
+            if (shell_abort_requested()) {
+                shell_clear_abort();
                 shell_transcript_append_text("delay: stopped\n");
                 batch_set_errorlevel(1);
                 return;
@@ -1642,6 +1894,12 @@ static void shell_command_reboot(void)
 {
     shell_transcript_appendf_ansi(SH_ERR "Rebooting..." SH_RST "\n");
 
+    /* Flush recall history to SD before the reset (auto-save is debounced). */
+    command_history_save_now();
+
+    /* Anchor wall time so the RTC replay after the reset starts fresh. */
+    clock_rtc_anchor_now();
+
     /* Give the transcript and UART console time to flush the message
      * before the reset takes effect. */
     vTaskDelay(pdMS_TO_TICKS(SHELL_REBOOT_DELAY_MS));
@@ -1778,6 +2036,26 @@ bool shell_execute_command_core(char *command)
     trimmed = shell_trim(command);
     if (trimmed[0] == '\0') {
         return false;
+    }
+
+    /* A device passcode lock gates the dispatcher. The first token decides
+     * (the allowlist is security/unlock/help/cls/clear/version/about); boot
+     * scripting runs before the lock is engaged, so CONFIG.SYS/AUTOEXEC are
+     * never blocked. */
+    {
+        char gate_token[24];
+        size_t gi = 0;
+
+        while (trimmed[gi] != '\0' && !isspace((unsigned char)trimmed[gi]) &&
+               gi < sizeof(gate_token) - 1) {
+            gate_token[gi] = trimmed[gi];
+            gi++;
+        }
+        gate_token[gi] = '\0';
+        if (!security_command_allowed(gate_token)) {
+            batch_set_errorlevel(1);
+            return true;
+        }
     }
 
     /* A pending C6 OTA confirmation swallows the line before any command
@@ -2038,6 +2316,10 @@ bool shell_execute_command_core(char *command)
         return shell_command_cursor(argc, argv);
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "ui")) {
+        return shell_command_ui(argc, argv);
+    }
+
     /* ---- Font roles + theme stub ---- */
     if (shell_text_equals_ignore_case(argv[0], "font")) {
         shell_command_font(argc, argv);
@@ -2065,6 +2347,39 @@ bool shell_execute_command_core(char *command)
     /* ---- JSON validate/pretty ---- */
     if (shell_text_equals_ignore_case(argv[0], "json")) {
         shell_command_json(argc, argv);
+        return true;
+    }
+
+    /* ---- CSV grid (rows/cols/cell/eval); int return becomes ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "csv")) {
+        batch_set_errorlevel(shell_command_csv(argc, argv));
+        return true;
+    }
+
+    /* ---- Portable store export; int return becomes ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "export")) {
+        batch_set_errorlevel(shell_command_export(argc, argv));
+        return true;
+    }
+
+    /* ---- Portable store import; int return becomes ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "import")) {
+        batch_set_errorlevel(shell_command_import(argc, argv));
+        return true;
+    }
+
+    /* ---- USTAR backup archives; int return becomes ERRORLEVEL.
+     *  (`restore` stays the trash-undelete alias; extraction is
+     *  `archive extract`.) */
+    if (shell_text_equals_ignore_case(argv[0], "archive") ||
+        shell_text_equals_ignore_case(argv[0], "backup")) {
+        batch_set_errorlevel(shell_command_archive(argc, argv));
+        return true;
+    }
+
+    /* ---- Password file encryption; int return becomes ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "crypt")) {
+        batch_set_errorlevel(shell_command_crypt(argc, argv));
         return true;
     }
 
@@ -2105,7 +2420,14 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "usb")) {
-        usb_handle_command(family_command);
+        /* The CDC-ACM serial subfamily lives in the command layer (it needs
+         * the key queue and SD input sourcing), so route it here; every
+         * other `usb` verb stays in the usb module. */
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "userial")) {
+            batch_set_errorlevel(shell_command_userial(argc, argv));
+        } else {
+            usb_handle_command(family_command);
+        }
         free(family_command);
         return true;
     }
@@ -2382,6 +2704,16 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "bind")) {
+        shell_command_bind(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "macro")) {
+        shell_command_macro(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "call")) {
         shell_command_call(argc, argv);
         return true;
@@ -2429,6 +2761,17 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* Owner identity + device passcode/lock + private-record concealment. */
+    if (shell_text_equals_ignore_case(argv[0], "owner")) {
+        shell_command_owner(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "security")) {
+        shell_command_security(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "setlocal")) {
         shell_command_setlocal(argc, argv);
         return true;
@@ -2473,6 +2816,19 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "timezone")) {
         clock_command_timezone(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "rtc")) {
+        clock_command_rtc(argc, argv);
+        return true;
+    }
+
+    /* Stopwatch runs live in the clock component; the int return becomes
+     * ERRORLEVEL so batch files can branch on it. */
+    if (shell_text_equals_ignore_case(argv[0], "timer") ||
+        shell_text_equals_ignore_case(argv[0], "stopwatch")) {
+        batch_set_errorlevel(clock_command_timer(argc, argv));
         return true;
     }
 
@@ -2544,6 +2900,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "form")) {
+        shell_command_form(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "view")) {
         shell_command_view(argc, argv);
         return true;
@@ -2556,6 +2917,11 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "hexview")) {
         shell_command_hexview(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "image")) {
+        shell_command_image(argc, argv);
         return true;
     }
 
@@ -2657,6 +3023,95 @@ bool shell_execute_command_core(char *command)
         }
 
         error = networking_wifi_dns_lookup(argv[1]);
+        batch_set_errorlevel(error == ESP_OK ? 0 : 1);
+        return true;
+    }
+
+    /* ---- TCP terminal (one-shot request/response; networking owns sockets) */
+    if (shell_text_equals_ignore_case(argv[0], "tcpterm")) {
+        int port = 0;
+        int idle_ms = 0;
+        char *text = NULL;
+        size_t text_cap = 0;
+        size_t text_len = 0;
+        esp_err_t error;
+        int i;
+
+        if (argc < 3 || !networking_tcp_parse_target(argv[1], argv[2], &port)) {
+            shell_print_usage("Usage: tcpterm <host> <port> [/t:secs] [text...]");
+            batch_set_errorlevel(2);
+            return true;
+        }
+        text_cap = P4_CONFIG_TCP_TX_MAX_BYTES + 1;
+        text = heap_caps_malloc(text_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (text == NULL) {
+            text = malloc(text_cap);
+        }
+        if (text == NULL) {
+            shell_print_error("tcpterm: out of memory");
+            batch_set_errorlevel(1);
+            return true;
+        }
+        text[0] = '\0';
+        for (i = 3; i < argc; i++) {
+            const char *arg = argv[i];
+            if (arg[0] == '/' || arg[0] == '-') {
+                if (strncasecmp(arg + 1, "t:", 2) == 0 && arg[3] != '\0') {
+                    char *end = NULL;
+                    long secs = strtol(arg + 3, &end, 10);
+                    if (end == arg + 3 || *end != '\0' || secs < 1 || secs > 120) {
+                        shell_print_usage("Usage: tcpterm <host> <port> [/t:secs] [text...]");
+                        heap_caps_free(text);
+                        batch_set_errorlevel(2);
+                        return true;
+                    }
+                    idle_ms = (int)secs * 1000;
+                    continue;
+                }
+                /* Unknown /flag: treat as request text (ports/services talk
+                 * in slashes; refusing would break passthrough). */
+            }
+            {
+                char unesc[512];
+                size_t piece;
+                networking_tcp_unescape(arg, unesc, sizeof(unesc));
+                piece = strlen(unesc) + (text_len > 0 ? 1 : 0);
+                if (text_len + piece >= text_cap) {
+                    shell_print_error("tcpterm: request exceeds %d bytes",
+                                      P4_CONFIG_TCP_TX_MAX_BYTES);
+                    heap_caps_free(text);
+                    batch_set_errorlevel(1);
+                    return true;
+                }
+                if (text_len > 0) {
+                    text[text_len++] = ' ';
+                }
+                memcpy(text + text_len, unesc, strlen(unesc));
+                text_len += strlen(unesc);
+                text[text_len] = '\0';
+            }
+        }
+        if (text_len == 0) {
+            /* No inline text: feed the active < file / pipe source instead. */
+            char resolved[SHELL_SD_PATH_BYTES];
+            if (storage_resolve_input_source(NULL, resolved, sizeof(resolved)) == ESP_OK) {
+                shell_sd_session_t session;
+                FILE *file = NULL;
+                if (shell_sd_begin(&session) == ESP_OK) {
+                    file = fopen(resolved, "rb");
+                }
+                if (file != NULL) {
+                    size_t n = fread(text, 1, P4_CONFIG_TCP_TX_MAX_BYTES, file);
+                    text_len = n;
+                    text[text_len] = '\0';
+                    fclose(file);
+                }
+                shell_sd_end(&session, "tcpterm");
+            }
+        }
+        error = networking_tcp_term(argv[1], port,
+                                    (const uint8_t *)text, text_len, idle_ms);
+        heap_caps_free(text);
         batch_set_errorlevel(error == ESP_OK ? 0 : 1);
         return true;
     }
@@ -3111,11 +3566,16 @@ static void command_worker_task(void *arg)
 #if P4_CONFIG_SD_OP_BOOST
             UBaseType_t base_priority = uxTaskPriorityGet(NULL);
 #endif
+            /* Claim the worker: the Stop button shows, and any stale break
+             * from an earlier tap is dropped so it cannot poison this line. */
+            shell_set_command_busy(true);
+            shell_clear_abort();
             shell_execute_command(request->command);
+            shell_set_command_busy(false);
 #if P4_CONFIG_SD_OP_BOOST
             command_task_priority_backstop(base_priority);
 #endif
-            free(request);
+            heap_caps_free(request);
         }
     }
 }
@@ -3133,7 +3593,15 @@ void shell_execute_command_async(char *command)
         shell_record_errorf("shell", ESP_FAIL, "Command worker not initialized");
         return;
     }
-    request = malloc(sizeof(*request));
+    /* A command-sized request is ~4 KB; allocate it from PSRAM so a burst of
+     * queued commands (pasted lines, modal chains, scripted drivers) never
+     * fragments or exhausts the internal DMA-capable heap. Fall back to the
+     * internal heap only if PSRAM is unavailable. */
+    request = heap_caps_malloc(sizeof(*request),
+                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (request == NULL) {
+        request = malloc(sizeof(*request));
+    }
     if (request == NULL) {
         shell_print_error("shell: out of memory queuing the command");
         shell_record_errorf("shell", ESP_ERR_NO_MEM, "Out of memory queuing async command");
@@ -3141,6 +3609,11 @@ void shell_execute_command_async(char *command)
     }
 
     snprintf(request->command, sizeof(request->command), "%s", command);
+
+    /* Macro recorder hook: captures typed/tapped lines (never `macro`
+     * control lines) for `macro stop` replay. Runs on the submitter task;
+     * the recorder holds its lock only for the buffer append. */
+    batch_macro_record_line(command);
 
     /* The queue stores the pointer only; the worker task owns and frees the
      * request after executing it. Wait boundedly for a slot (submit runs on
@@ -3150,7 +3623,7 @@ void shell_execute_command_async(char *command)
                    pdMS_TO_TICKS(SHELL_COMMAND_QUEUE_SEND_TIMEOUT_MS)) != pdTRUE) {
         shell_print_error("shell: command queue full, command dropped");
         shell_record_warningf("shell", "Command queue full, dropped: %s", command);
-        free(request);
+        heap_caps_free(request);
     }
 }
 
@@ -3234,6 +3707,145 @@ static void command_clock_record_warning(const char *domain, const char *message
  * LIFECYCLE
  * ======================================================================== */
 
+/* ========================================================================
+ * NETWORK TIMEZONE AUTO-DETECT + SNTP BOOTSTRAP
+ * ========================================================================
+ * The user never sets a zone: on Wi-Fi association this looks the location up
+ * over the network (P4_CONFIG_TIMEZONE_URL), applies the detected UTC offset,
+ * and starts SNTP. It runs on a dedicated PSRAM-stack task because the HTTP
+ * fetch blocks and must never run on the LVGL task. After success it re-probes
+ * periodically so DST transitions and travel stay correct.
+ */
+
+static TaskHandle_t s_time_sync_task;
+static volatile bool s_time_synced;
+
+static void command_time_sync_task(void *arg)
+{
+    int attempts = 0;
+
+    (void)arg;
+
+    for (;;) {
+        int offset_seconds = 0;
+        char iana[64] = { 0 };
+
+        /* Never probe while an OTA holds flash/PSRAM. */
+        if (c6ota_is_busy()) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
+        if (networking_time_detect(&offset_seconds, iana, sizeof(iana)) == ESP_OK) {
+            char msg[96];
+            int abs_off = (offset_seconds < 0) ? -offset_seconds : offset_seconds;
+
+            time_set_utc_offset(offset_seconds, iana);
+            time_start_sntp();
+            s_time_synced = true;
+            attempts = 0;
+
+            snprintf(msg, sizeof(msg), "Time zone: %.40s UTC%c%d:%02d",
+                     iana[0] != '\0' ? iana : "local",
+                     (offset_seconds >= 0) ? '+' : '-',
+                     abs_off / 3600, (abs_off % 3600) / 60);
+            shell_header_notify(msg, P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
+
+            vTaskDelay(pdMS_TO_TICKS((uint32_t)P4_CONFIG_TIMEZONE_RESYNC_SECS * 1000u));
+            continue;
+        }
+
+        /* No zone yet: still start SNTP so at least UTC time is correct. */
+        time_start_sntp();
+        if (++attempts >= P4_CONFIG_TIMEZONE_MAX_ATTEMPTS) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(15000));
+    }
+
+    s_time_sync_task = NULL;
+    vTaskDeleteWithCaps(NULL);
+}
+
+/** Ensure the auto timezone/SNTP task is running. Cheap; safe from any task. */
+bool command_time_auto_sync(void)
+{
+    if (s_time_synced) {
+        return true;
+    }
+    if (s_time_sync_task != NULL) {
+        return false;
+    }
+    if (xTaskCreateWithCaps(command_time_sync_task, "timesync", 6144, NULL,
+                            tskIDLE_PRIORITY + 1, &s_time_sync_task,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
+        s_time_sync_task = NULL;
+        time_start_sntp(); /* fall back to UTC time */
+        return false;
+    }
+    return false;
+}
+
+/**
+ * Long-press on a header status indicator. The header is a passive leaf and
+ * knows nothing about commands, so the kind -> command mapping lives here and
+ * runs the matching full status command on the worker task.
+ */
+static void command_header_status_action(header_status_kind_t kind)
+{
+    const char *line;
+    char buffer[24];
+
+    switch (kind) {
+    case HEADER_STATUS_WIFI:      line = "wifi status";      break;
+    case HEADER_STATUS_BLUETOOTH: line = "bluetooth status"; break;
+    case HEADER_STATUS_USB:       line = "usb status";       break;
+    case HEADER_STATUS_SD:        line = "sd info";          break;
+    case HEADER_STATUS_ACTIVITY:  line = "ps";               break;
+    case HEADER_STATUS_MEM:       line = "mem";              break;
+    case HEADER_STATUS_CPU:       line = "top";              break;
+    case HEADER_STATUS_BATTERY:   line = "battery";          break;
+    default:                      return;
+    }
+    /* shell_execute_command_async() copies the text into its queue request
+     * before returning and never takes ownership, so a stack buffer is safe. */
+    snprintf(buffer, sizeof(buffer), "%s", line);
+    shell_execute_command_async(buffer);
+}
+
+/**
+ * Console-local command handler for the streaming `screenshot`, invoked by the
+ * shell console-reader task while a modal blocks the command worker. The reader
+ * is independent of the worker, so this is what lets the host capture a modal
+ * surface. Only the exact bare streaming tokens are claimed; `screenshot
+ * <file>`, captured forms, and everything else return false and keep their
+ * normal path (worker queue for commands, modal for surface input).
+ */
+static bool command_modal_console_command(const char *line)
+{
+    char *argv[1];
+
+    if (line == NULL) {
+        return false;
+    }
+    /* Touch automation must run while a modal blocks the worker: parse and
+     * drive it on this console-reader task (returns false when not a `ui`
+     * line). */
+    if (ui_commands_console(line)) {
+        return true;
+    }
+    if (!(shell_text_equals_ignore_case(line, "screenshot") ||
+          shell_text_equals_ignore_case(line, "scr") ||
+          shell_text_equals_ignore_case(line, "capture"))) {
+        return false;
+    }
+    /* argc == 1 selects the serial-streaming form (no SD write). The function
+     * keeps its own single implementation in serial_commands.c. */
+    argv[0] = (char *)line;
+    shell_command_screenshot(1, argv);
+    return true;
+}
+
 void command_init(void)
 {
     static const shell_command_ops_t shell_ops = {
@@ -3255,14 +3867,21 @@ void command_init(void)
         .bluetooth_is_connected = bluetooth_is_connected,
         .usb_is_connected       = usb_is_connected,
         .usb_is_keyboard_attached = usb_is_keyboard_attached,
+        .bg_jobs_running        = command_bg_any_running,
         .usb_key_to_ascii       = usb_key_to_ascii_full,
+        .bind_lookup_fkey       = shell_bind_lookup_fkey,
+        .bind_lookup_chord      = shell_bind_lookup_chord,
         .c6ota_is_pending       = c6ota_is_confirmation_pending,
         .c6ota_is_busy          = c6ota_is_busy,
         .pm_notify_activity     = shell_power_notify_activity,
-        .complete_word          = shell_complete_word,
+        .pm_ms_until_idle_off   = shell_power_ms_until_idle_off,
+        .time_auto_sync         = command_time_auto_sync,
+        .complete_line          = command_complete_line,
+        .ghost_line             = command_ghost_line,
         .modal_is_active        = modal_is_active,
         .modal_handle_usb_key   = modal_handle_usb_key,
         .modal_handle_serial_line = modal_handle_serial_line,
+        .modal_console_command  = command_modal_console_command,
     };
     static const batch_command_ops_t batch_ops = {
         .execute_command = shell_execute_command,
@@ -3277,6 +3896,7 @@ void command_init(void)
      * batch owns the environment table, PATH, and errorlevel. */
     storage_init();
     batch_init();
+    security_init();
 
     /* Create the persistent command queue and worker task. The queue
      * replaces per-command task creation: commands are posted to the
@@ -3310,15 +3930,22 @@ void command_init(void)
      * dependency one-way (command -> shell) avoids a component cycle. */
     shell_register_command_ops(&shell_ops);
 
+    /* Long-pressing a header indicator runs the matching status command. The
+     * header owns the tap/long-press gestures; this table gives it something
+     * to call without the header depending on command.c. */
+    header_register_status_action(command_header_status_action);
+
     /* Initialize the idle display-off state: the clock starts "active" and
      * the configured default timeout applies immediately. */
     shell_power_notify_activity();
     shell_power_set_idle_timeout(SHELL_POWER_IDLE_DISPLAY_OFF_SECS);
 
     /* Publish the shell render helpers to the clock component. The clock
-     * commands (date/time/timezone/sntp) live in components/clock and stay a
+     * commands (date/time/timezone/sntp/timer) live in components/clock and stay a
      * leaf; they print through this table. Each wrapper passes the text as a
-     * %s argument so a literal '%' or '@' in it is treated as data. */
+     * %s argument so a literal '%' or '@' in it is treated as data. The
+     * set_env hook lets `timer ... /v:NAME` store its result without the
+     * clock component including batch.h. */
     {
         static const clock_host_ops_t clock_ops = {
             .emit_text          = shell_transcript_append_text,
@@ -3332,6 +3959,7 @@ void command_init(void)
             .record_error       = command_clock_record_error,
             .record_warning     = command_clock_record_warning,
             .equals_ignore_case = shell_text_equals_ignore_case,
+            .set_env            = shell_env_set,
         };
         clock_register_host_ops(&clock_ops);
     }
@@ -3373,6 +4001,20 @@ void command_init(void)
         };
         alarm_register_host_ops(&alarm_ops);
     }
+
+    /* Debounced history persistence: save to SD only when the recall ring
+     * changed, so typing does not hammer the card. */
+#if P4_CONFIG_HISTORY_AUTOSAVE
+    {
+        const esp_timer_create_args_t hist_args = {
+            .callback = command_history_persist_cb,
+            .name = "hist_save",
+        };
+        if (esp_timer_create(&hist_args, &s_history_persist_timer) == ESP_OK) {
+            esp_timer_start_periodic(s_history_persist_timer, 5 * 1000 * 1000);
+        }
+    }
+#endif
 
     s_initialized = true;
     ESP_LOGI(COMMAND_TAG, "Command module initialized");

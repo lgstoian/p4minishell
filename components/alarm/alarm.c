@@ -159,6 +159,160 @@ time_t alarm_advance_recur(time_t when, uint8_t recur)
     return when;   /* non-recurring: no advance */
 }
 
+/** Days in a month (proleptic Gregorian; pure). */
+static int alarm_month_days(int year, int month)
+{
+    static const int table[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int days;
+
+    if (month < 1 || month > 12) {
+        return 0;
+    }
+    days = table[month - 1];
+    if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
+        days = 29;
+    }
+    return days;
+}
+
+/** Date of the nth weekday (1..5, -1 = last) in a month, 0 when absent. */
+static int alarm_nth_weekday(int year, int month, int wday, int nth)
+{
+    struct tm probe;
+    time_t stamp;
+    int first_wday;
+    int date;
+
+    if (wday < 0 || wday > 6 || nth == 0 || nth < -1 || nth > 5) {
+        return 0;
+    }
+    memset(&probe, 0, sizeof(probe));
+    probe.tm_year = year - 1900;
+    probe.tm_mon = month - 1;
+    probe.tm_mday = 1;
+    probe.tm_isdst = -1;
+    stamp = mktime(&probe);
+    if (stamp == (time_t)-1 || localtime_r(&stamp, &probe) == NULL) {
+        return 0;
+    }
+    first_wday = probe.tm_wday;
+    if (nth > 0) {
+        date = 1 + ((wday - first_wday + 7) % 7) + (nth - 1) * 7;
+        return (date <= alarm_month_days(year, month)) ? date : 0;
+    }
+    /* Last occurrence: walk back from month end. */
+    date = alarm_month_days(year, month);
+    memset(&probe, 0, sizeof(probe));
+    probe.tm_year = year - 1900;
+    probe.tm_mon = month - 1;
+    probe.tm_mday = date;
+    probe.tm_isdst = -1;
+    stamp = mktime(&probe);
+    if (stamp == (time_t)-1 || localtime_r(&stamp, &probe) == NULL) {
+        return 0;
+    }
+    date -= (probe.tm_wday - wday + 7) % 7;
+    return (date >= 1) ? date : 0;
+}
+
+time_t alarm_advance_monthly(time_t when, int day, int nth, int wday)
+{
+    struct tm base;
+    int k;
+
+    if (localtime_r(&when, &base) == NULL) {
+        return when + 30 * 86400;
+    }
+    if (nth == 0 && (day < 1 || day > 31)) {
+        day = base.tm_mday;
+    }
+    if (nth != 0 && (wday < 0 || wday > 6)) {
+        wday = base.tm_wday;
+    }
+    for (k = 1; k <= 24; k++) {
+        int total = base.tm_mon + k; /* tm_mon is 0-based */
+        int y = base.tm_year + 1900 + total / 12;
+        int m = total % 12 + 1;
+        int target = (nth != 0) ? alarm_nth_weekday(y, m, wday, nth)
+                                : ((day <= alarm_month_days(y, m)) ? day : 0);
+        if (target == 0) {
+            continue; /* short month: skipped, like wall calendars */
+        }
+        {
+            struct tm cand = base;
+            time_t t;
+            cand.tm_year = y - 1900;
+            cand.tm_mon = m - 1;
+            cand.tm_mday = target;
+            cand.tm_isdst = -1;
+            t = mktime(&cand);
+            if (t != (time_t)-1 && t > when) {
+                return t;
+            }
+        }
+    }
+    return when + 30 * 86400;
+}
+
+time_t alarm_advance_yearly(time_t when, int month, int day)
+{
+    struct tm base;
+    int k;
+
+    if (localtime_r(&when, &base) == NULL) {
+        return when + 365 * 86400;
+    }
+    if (month < 1 || month > 12) {
+        month = base.tm_mon + 1;
+    }
+    if (day < 1 || day > 31) {
+        day = base.tm_mday;
+    }
+    for (k = 1; k <= 10; k++) {
+        int y = base.tm_year + 1900 + k;
+        if (day > alarm_month_days(y, month)) {
+            continue; /* Feb 29 in a common year: skipped */
+        }
+        {
+            struct tm cand = base;
+            time_t t;
+            cand.tm_year = y - 1900;
+            cand.tm_mon = month - 1;
+            cand.tm_mday = day;
+            cand.tm_isdst = -1;
+            t = mktime(&cand);
+            if (t != (time_t)-1 && t > when) {
+                return t;
+            }
+        }
+    }
+    return when + 365 * 86400;
+}
+
+time_t alarm_advance_event(time_t when, const alarm_event_t *e)
+{
+    struct tm tmv;
+
+    if (e == NULL) {
+        return when;
+    }
+    if (e->recur == ALARM_RECUR_MONTHLY) {
+        int day = (e->recur_day >= 1 && e->recur_day <= 31) ? e->recur_day : 0;
+        int wday = 0;
+        if (e->recur_nth != 0) {
+            if (localtime_r(&when, &tmv) == NULL) {
+                return when + 30 * 86400;
+            }
+            wday = tmv.tm_wday;
+        }
+        return alarm_advance_monthly(when, day, e->recur_nth, wday);
+    }
+    if (e->recur == ALARM_RECUR_YEARLY) {
+        return alarm_advance_yearly(when, e->recur_month, e->recur_day);
+    }
+    return alarm_advance_recur(when, e->recur);
+}
+
 /**
  * Parse a local "YYYY-MM-DD" date and "HH:MM[:SS]" time into a Unix timestamp
  * (timezone-aware via mktime, matching the `date`/`time` commands). Returns
@@ -228,10 +382,15 @@ static esp_err_t alarm_event_save(const char *base, const alarm_event_t *e)
              "msg=%s\n"
              "flags=%u\n"
              "recur=%u\n"
+             "recur_day=%u\n"
+             "recur_month=%u\n"
+             "recur_nth=%d\n"
              "action=%u\n"
              "run=%s\n",
              (unsigned long)e->id, (long long)e->when, e->title, e->msg,
-             (unsigned)e->flags, (unsigned)e->recur, (unsigned)e->action, e->run);
+             (unsigned)e->flags, (unsigned)e->recur,
+             (unsigned)e->recur_day, (unsigned)e->recur_month, (int)e->recur_nth,
+             (unsigned)e->action, e->run);
 #else
     snprintf(text, cap,
              "id=%lu\n"
@@ -240,9 +399,14 @@ static esp_err_t alarm_event_save(const char *base, const alarm_event_t *e)
              "msg=%s\n"
              "flags=%u\n"
              "recur=%u\n"
+             "recur_day=%u\n"
+             "recur_month=%u\n"
+             "recur_nth=%d\n"
              "action=%u\n",
              (unsigned long)e->id, (long long)e->when, e->title, e->msg,
-             (unsigned)e->flags, (unsigned)e->recur, (unsigned)e->action);
+             (unsigned)e->flags, (unsigned)e->recur,
+             (unsigned)e->recur_day, (unsigned)e->recur_month, (int)e->recur_nth,
+             (unsigned)e->action);
 #endif
     error = storage_write_text_file(path, text);
     free(text);
@@ -279,6 +443,19 @@ static esp_err_t alarm_event_load(const char *base, uint32_t id, alarm_event_t *
     }
     if (storage_ini_file_get(path, "recur", value, sizeof(value)) == ESP_OK) {
         e->recur = (uint8_t)atoi(value);
+    }
+    /* Monthly/yearly params are optional: older files predate them. */
+    if (storage_ini_file_get(path, "recur_day", value, sizeof(value)) == ESP_OK) {
+        int day = atoi(value);
+        e->recur_day = (day >= 1 && day <= 31) ? (uint8_t)day : 0;
+    }
+    if (storage_ini_file_get(path, "recur_month", value, sizeof(value)) == ESP_OK) {
+        int month = atoi(value);
+        e->recur_month = (month >= 1 && month <= 12) ? (uint8_t)month : 0;
+    }
+    if (storage_ini_file_get(path, "recur_nth", value, sizeof(value)) == ESP_OK) {
+        int nth = atoi(value);
+        e->recur_nth = (nth >= -1 && nth <= 5 && nth != 0) ? (int8_t)nth : 0;
     }
     if (storage_ini_file_get(path, "action", value, sizeof(value)) == ESP_OK) {
         e->action = (uint8_t)atoi(value);
@@ -385,6 +562,13 @@ esp_err_t alarm_add(const char *title, const char *msg, time_t when,
                     uint8_t recur, uint8_t action, const char *run_path,
                     uint32_t *out_id)
 {
+    return alarm_add_ex(title, msg, when, recur, action, run_path, NULL, out_id);
+}
+
+esp_err_t alarm_add_ex(const char *title, const char *msg, time_t when,
+                       uint8_t recur, uint8_t action, const char *run_path,
+                       const alarm_recur_params_t *params, uint32_t *out_id)
+{
     char base[SHELL_SD_PATH_BYTES];
     alarm_event_t e;
     uint32_t next_id;
@@ -395,8 +579,16 @@ esp_err_t alarm_add(const char *title, const char *msg, time_t when,
         return ESP_ERR_INVALID_ARG;
     }
     if (recur != ALARM_RECUR_NONE && recur != ALARM_RECUR_DAILY &&
+        recur != ALARM_RECUR_MONTHLY && recur != ALARM_RECUR_YEARLY &&
         !(recur & ALARM_RECUR_WEEKLY)) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (params != NULL) {
+        if (params->day < 0 || params->day > 31 ||
+            params->month < 0 || params->month > 12 ||
+            params->nth < -1 || params->nth > 5) {
+            return ESP_ERR_INVALID_ARG;
+        }
     }
     if (action == 0) {
         action = ALARM_ACTION_NOTIFY;
@@ -431,6 +623,23 @@ esp_err_t alarm_add(const char *title, const char *msg, time_t when,
     e.flags = ALARM_FLAG_ENABLED;
     e.recur = recur;
     e.action = action;
+    /* Monthly/yearly params default from `when` (nth stays monthday mode). */
+    if (params != NULL) {
+        e.recur_day = (uint8_t)params->day;
+        e.recur_month = (uint8_t)params->month;
+        e.recur_nth = (int8_t)params->nth;
+    }
+    if (recur == ALARM_RECUR_MONTHLY || recur == ALARM_RECUR_YEARLY) {
+        struct tm tmv;
+        if (localtime_r(&when, &tmv) != NULL) {
+            if (e.recur_day == 0) {
+                e.recur_day = (uint8_t)tmv.tm_mday;
+            }
+            if (recur == ALARM_RECUR_YEARLY && e.recur_month == 0) {
+                e.recur_month = (uint8_t)(tmv.tm_mon + 1);
+            }
+        }
+    }
 #if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
     if (run_path != NULL) {
         snprintf(e.run, sizeof(e.run), "%s", run_path);
@@ -629,6 +838,32 @@ esp_err_t alarm_enable(uint32_t id, bool enable)
     return error;
 }
 
+esp_err_t alarm_snooze(uint32_t id, int minutes)
+{
+    char base[SHELL_SD_PATH_BYTES];
+    alarm_event_t e;
+    esp_err_t error;
+
+    if (minutes <= 0) {
+        minutes = 10;
+    } else if (minutes > 24 * 60) {
+        minutes = 24 * 60;
+    }
+    alarm_lock();
+    alarm_base_dir(base, sizeof(base));
+    error = alarm_event_load(base, id, &e);
+    if (error != ESP_OK) {
+        alarm_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    e.when = time(NULL) + (time_t)minutes * 60;
+    e.flags |= ALARM_FLAG_ENABLED;
+    e.flags &= (uint8_t)~ALARM_FLAG_FIRED;
+    error = alarm_event_save(base, &e);
+    alarm_unlock();
+    return error;
+}
+
 esp_err_t alarm_purge(void)
 {
     char base[SHELL_SD_PATH_BYTES];
@@ -744,7 +979,9 @@ static void alarm_fire_event(const alarm_event_t *e)
                                (int)(sizeof(notify) - used - 1), e->msg);
             }
         }
-        shell_header_notify(notify, (uint32_t)P4_CONFIG_ALARM_DEFAULT_NOTIFY_SECS * 1000u);
+        shell_header_notify_level(notify,
+                                  (uint32_t)P4_CONFIG_ALARM_DEFAULT_NOTIFY_SECS * 1000u,
+                                  HEADER_NOTIFY_WARN);
     }
 
     if (!(e->flags & ALARM_FLAG_SILENT)) {
@@ -829,10 +1066,10 @@ void alarm_tick(void)
             e.flags |= ALARM_FLAG_FIRED;
             e.flags &= (uint8_t)~ALARM_FLAG_ENABLED;
         } else {
-            time_t next = alarm_advance_recur(e.when, e.recur);
+            time_t next = alarm_advance_event(e.when, &e);
             int guard = 0;
             while (next <= now && guard < 40) {
-                next = alarm_advance_recur(next, e.recur);
+                next = alarm_advance_event(next, &e);
                 guard++;
             }
             e.when = next;

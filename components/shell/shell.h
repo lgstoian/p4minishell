@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include "esp_err.h"
+#include "header.h"   /* header_notify_level_t for shell_header_notify_level() */
 
 #ifdef __cplusplus
 extern "C" {
@@ -101,8 +102,22 @@ typedef struct {
     /** Report whether a USB HID keyboard is currently attached. */
     bool (*usb_is_keyboard_attached)(void);
 
+    /** Report whether at least one background job is currently running. */
+    bool (*bg_jobs_running)(void);
+
     /** Convert a USB HID key code + modifiers to an ASCII character. */
     bool (*usb_key_to_ascii)(uint8_t key_code, uint8_t modifiers, char *out);
+
+    /** Look up a bound USB function-key line (F1..F12, the `bind` table).
+     *  Fills @p out (up to @p out_size) and returns true when the key is
+     *  bound; the shell submits the line via execute_command_async. */
+    bool (*bind_lookup_fkey)(uint8_t key_code, char *out, size_t out_size);
+
+    /** Look up a bound Ctrl+letter chord line (the `bind ^X` table).
+     *  Fires only with Ctrl held on a letter key (^C never matches);
+     *  submission is identical to bind_lookup_fkey. */
+    bool (*bind_lookup_chord)(uint8_t key_code, uint8_t modifiers,
+                              char *out, size_t out_size);
 
     /** Report whether a C6 OTA confirmation is pending. */
     bool (*c6ota_is_pending)(void);
@@ -113,14 +128,31 @@ typedef struct {
     /** Report shell user activity (power idle clock + display wake). */
     void (*pm_notify_activity)(void);
 
+    /** Milliseconds until the idle display-off deadline; 0 when disabled or
+     *  already off. Used by the adaptive header refresh scheduler. */
+    int (*pm_ms_until_idle_off)(void);
+
+    /** Ensure the network timezone/SNTP bootstrap is running (idempotent).
+     *  Called once Wi-Fi is associated; returns true when fully configured. */
+    bool (*time_auto_sync)(void);
+
     /**
      * Tab-completion provider. Fills @p out (up to @p out_size) with the
-     * @p match_index-th completion of @p word (0-based) and returns the total
-     * number of matches, or 0 when there are none. @p first_token is true when
-     * the word is the first (command) token of the line.
+     * @p match_index-th completion (0-based) for the last whitespace-delimited
+     * word of @p line and returns the total number of matches, or 0 when there
+     * are none. The provider parses the whole line, so it can complete command
+     * names, subcommands/flags, installed apps, aliases, and paths.
      */
-    int (*complete_word)(const char *word, bool first_token, int match_index,
+    int (*complete_line)(const char *line, int match_index,
                          char *out, size_t out_size);
+
+    /**
+     * Inline ghost provider: fills @p out with the single best completion for
+     * the last word of @p line and returns the number of matches. Kept
+     * SD-free (command names + subcommands/flags only) so it is cheap enough
+     * to run on every keystroke.
+     */
+    int (*ghost_line)(const char *line, char *out, size_t out_size);
 
     /** Report whether any native modal surface is currently open. */
     bool (*modal_is_active)(void);
@@ -132,6 +164,13 @@ typedef struct {
     /** Feed a line of serial console input to the active modal surface.
      *  Returns true when the line was consumed by the surface. */
     bool (*modal_handle_serial_line)(const char *line);
+
+    /** Handle a host console line on the console-reader task itself while a
+     *  modal is active (the command worker is blocked in the modal session).
+     *  Used by the streaming `screenshot` so the host can capture modal
+     *  surfaces. Called before modal_handle_serial_line; return true when the
+     *  line was fully handled (the modal then never sees it). */
+    bool (*modal_console_command)(const char *line);
 } shell_command_ops_t;
 
 /**
@@ -349,6 +388,14 @@ size_t shell_history_get_count(void);
 /** Get a recall-history entry by index (0 = oldest). NULL when out of range. */
 const char *shell_history_get(size_t index);
 
+/**
+ * Monotonic counter bumped whenever a command is appended to recall history.
+ * The persistence layer compares it to its last-saved value to decide when a
+ * debounced auto-save is needed (a count comparison is not enough once the
+ * ring is full).
+ */
+size_t shell_history_generation(void);
+
 /** Clear the recall history (frees all heap entries). */
 void shell_history_clear(void);
 
@@ -392,6 +439,37 @@ void shell_input_line_reset(void);
 
 /** Extract the user-typed portion of the input line (prompt stripped, trimmed). */
 void shell_extract_input_text(char *output, size_t output_size);
+
+/**
+ * Complete the last whitespace-delimited word of the input line through the
+ * command module's `complete_line` provider (help-table commands, aliases,
+ * apps, usage tokens, SD paths). The same entry USB Tab and the input-row Tab
+ * button share; repeated presses cycle the matches. Runs on the LVGL task;
+ * safe to call from main.c button handlers (no-op without a registered
+ * provider or an empty line).
+ */
+void shell_input_line_tab_complete(void);
+
+/**
+ * Refresh the inline ghost suggestion for the input line: the best completion
+ * remainder is shown as muted text after the caret (accepted with Right at
+ * end-of-line or Tab). No-op when the line is empty, the caret is not at the
+ * end, a modal owns the screen, or ghost completion is disabled.
+ */
+void shell_input_line_ghost_refresh(void);
+
+/**
+ * True when the reverse-history search (Ctrl+R) is active. While active the
+ * input line shows the matched history entry and the search query is shown in
+ * the input-row search label.
+ */
+bool shell_history_search_active(void);
+
+/**
+ * Case-insensitive substring test used by the reverse-history search filter
+ * and by `history /search`. An empty @p query matches every entry.
+ */
+bool shell_history_search_matches(const char *entry, const char *query);
 
 /**
  * Repair the input line after an LVGL keyboard backspace ate into the prompt.
@@ -539,6 +617,32 @@ void shell_set_batch_active(bool active);
 /** Report whether a batch file is currently executing. */
 bool shell_is_batch_active(void);
 
+/* ========================================================================
+ * FOREGROUND BREAK (Ctrl+C / Stop button)
+ * ========================================================================
+ * Cooperative abort for the foreground command worker. Any input context
+ * (USB Ctrl+C with no key-wait active, the input-row Stop button) sets the
+ * flag; the batch line loop, `for` bodies, and `delay` chunks poll it and
+ * unwind with `^C`, consuming the request. The worker clears it when it
+ * claims each command, so one break never poisons the next line. Plain
+ * bools like the background kill flags (single-word access is atomic).
+ */
+
+/** Request a foreground break (sets the flag; idempotent). */
+void shell_request_abort(void);
+
+/** True when a foreground break was requested and not yet consumed. */
+bool shell_abort_requested(void);
+
+/** Clear a pending foreground break (worker claims a command). */
+void shell_clear_abort(void);
+
+/** Track whether the command worker is executing (drives the Stop button). */
+void shell_set_command_busy(bool busy);
+
+/** Report whether the command worker is executing. */
+bool shell_is_command_busy(void);
+
 /**
  * Push a key into the wait queue. Called by the input sources.
  * Ignored when no keypress wait is active.
@@ -656,6 +760,17 @@ void shell_uart_console_submit_command(const char *command);
 void shell_command_help(int argc, char **argv);
 
 /**
+ * Offline command-reference accessors. The help table is the single source of
+ * truth for command names and usage text; tab completion and argument
+ * completion read it rather than keeping a parallel list, so a new command
+ * only needs its help entry expanded.
+ *
+ * @return number of entries; shell_help_entry_get() is valid for 0..count-1.
+ */
+size_t shell_help_entry_count(void);
+bool shell_help_entry_get(size_t index, const char **name, const char **usage);
+
+/**
  * Format a one-line build identity:
  * "P4MiniShell v0.31.0 | built <date> <time> | git <hash>".
  * Used by the header long-press notification and available to callers that
@@ -720,6 +835,14 @@ int shell_task_row_compare(const shell_task_row_t *a, const shell_task_row_t *b,
 
 /** Refresh the header status bar with current system metrics. */
 void shell_header_status_refresh(void);
+
+/**
+ * Next adaptive header poll interval in milliseconds, chosen from the current
+ * situation (display idle-off, OTA/bg job, Wi-Fi connecting, startup, clock
+ * minute boundary, pending idle-display-off). main reschedules its header
+ * timer with this value. Must be called after shell_header_status_refresh().
+ */
+uint32_t shell_header_refresh_interval_ms(void);
 
 /** Get the boot timestamp in microseconds for uptime calculation. */
 int64_t shell_get_boot_timestamp_us(void);
@@ -874,8 +997,12 @@ bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_value, 
 /** Join arguments from start_index into a single output string. */
 void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size);
 
-/** Show a notification in the header bar. */
+/** Show an INFO notification in the header bar. */
 void shell_header_notify(const char *text, uint32_t timeout_ms);
+
+/** Show a notification with an explicit severity (info/warn/error color). */
+void shell_header_notify_level(const char *text, uint32_t timeout_ms,
+                               header_notify_level_t level);
 
 /* ========================================================================
  * LIFECYCLE

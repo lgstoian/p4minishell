@@ -1,0 +1,5 @@
+; APPINFO metadata for the touch-automation demo (INI format, read by `launch`).
+; Copied to sd:/APPS/UITEST.APPINFO by apps/push_apps.py.
+title=Touch Test
+description=Synthetic touch automation demo (ui verbs)
+version=1.0

@@ -38,13 +38,12 @@ rem ---- tui rule -------------------------------------------------------
 draw line 1 4 80 4
 goto :eof
 
-rem ---- apply saved settings that can be set at launch ------------------
+rem ---- settings restore ----------------------------------------------
+rem Firmware settings persist in CONFIG.SYS and are applied by boot
+rem (brightness/volume/theme/font/header/...). The companion keeps no
+rem shadow settings file, so there is nothing to re-apply here. The routine
+rem stays for COMPANION.BAT compatibility.
 :load_settings
-appconfig companion get brightness > comp_bright.txt
-if errorlevel 1 goto :done
-for /f "tokens=*" %%v in (comp_bright.txt) do brightness %%v
-:done
-del /p comp_bright.txt
 goto :eof
 
 rem ---- pause ----------------------------------------------------------

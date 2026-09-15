@@ -146,6 +146,23 @@ esp_err_t db_find(const char *name, uint8_t cat_filter, const char *key_filter,
                   db_find_cb_t cb, void *ctx, int *out_count);
 
 /* ------------------------------------------------------------------------
+ * Fields (`k=v;k=v` payload convention)
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Structured-record helper over free-form payloads. A payload holding
+ * `name=alice;phone=5551234` exposes two fields; segments without `=`
+ * are ignored, names match case-insensitively, and surrounding spaces
+ * around names and values are trimmed. Values may not contain `;`.
+ * Pure string logic (no SD), unit-tested.
+ *
+ * @return true and NUL-terminates @p out (truncated to @p out_size - 1)
+ *         when @p field is present; false otherwise.
+ */
+bool db_field_get(const char *payload, const char *field,
+                  char *out, size_t out_size);
+
+/* ------------------------------------------------------------------------
  * Export / import (portable text interchange)
  * ---------------------------------------------------------------------- */
 

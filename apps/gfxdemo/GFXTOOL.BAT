@@ -1,9 +1,10 @@
 @echo off
 rem =====================================================================
-rem  GFXTOOL.BAT - gfx toolkit demo: raster primitives + on-canvas text.
-rem  Draws filled/outlined shapes, flood fill, spans and scaled text into
-rem  one 320x200 RGB565 canvas, saves it as GFXTOOL.BMP, and exits.
-rem  Markers: [M-GFXTOOL] / [M-GFXTOOL-DONE].
+rem  GFXTOOL.BAT - gfx toolkit demo: raster primitives + on-canvas text,
+rem  plus a scaled BMP blit (`gfx image`) of PHOTO.BMP in the free
+rem  lower-right corner. Draws one 320x200 RGB565 canvas, saves it as
+rem  GFXTOOL.BMP, and exits. Needs PHOTO.BMP (apps/push_assets.py).
+rem  Markers: [M-GFXTOOL] / [M-GFXTOOL-IMG|NOIMG] / [M-GFXTOOL-DONE].
 rem =====================================================================
 echo [M-GFXTOOL]
 gfx init 320 200
@@ -19,6 +20,11 @@ gfx hline 8 190 304 0xFFFFFF
 gfx vline 158 20 120 0xFFFF00
 gfx text /scale:2 18 150 0xFFFFFF Gfx Toolkit
 gfx text 18 170 0x00FFFF tri ellipse poly fill text
+rem Scaled BMP blit below the text and above the hline: 232..312 x 154..186
+rem is outside every primitive/text region checked by gfx_toolkit_test.py.
+gfx image PHOTO.BMP 232 154 80 32
+if errorlevel 1 echo [M-GFXTOOL-NOIMG]
+if not errorlevel 1 echo [M-GFXTOOL-IMG]
 gfx save GFXTOOL.BMP
 gfx close
 echo [M-GFXTOOL-DONE]

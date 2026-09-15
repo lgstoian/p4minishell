@@ -198,13 +198,14 @@ The TUI layer is live and hardware-verified (flash to COM11, boot `1024x510` tra
 - **Logical grid** (`components/tui/tui.h:35` `tui_cell_t utf8[4]`, `components/tui/tui.c:129` `tui_cell_set`): `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:325`) heap cell buffer (PSRAM `MALLOC_CAP_SPIRAM`, `utf8[4]` holds full 3-byte box UTF-8 `SH_BOX_*` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) with fg/bg/attribute per cell, mapped to the *live* transcript region `1024x510` via `windows_enter_tui_mode()` / `windows_refresh_tui_surface()` / `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). The pixel rect follows rotation and on-screen-keyboard visibility; the logical grid is clamped to `80×25`, never to pixels. `P4_CONFIG_TUI_*` is the single source of truth. `tui status` shows `rect 1024x510 cols 80 rows 25`.
 - **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F and symbols U+2600-U+26FF (384 glyphs, cmaps 3, no duplication); `windows_get_terminal_font()` returns it for `s_tui_label` (`lv_label_set_recolor true`).
 - **Batch TUI verbs** (`components/tui/tui.c:241` `tui_draw_box` honors style+title, `components/tui/tui.c:296` `tui_draw_line`, `components/tui/tui.c:620` `tui_flush`): `draw box` single/double/rounded with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app, header hidden completely via `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418`, kept visible by default, dynamic keyboard scaling via `windows_notify_keyboard_visibility`); `color` (`tui_set_default_color`) / `locate` (`tui_set_cursor`) compose on the cell buffer; `ansi`/`menu` SGR codes share `components/ansi/ansi.c` (CSI parsing) and `tui_flush` coalesces per-fg-run `#RRGGBB ` recolor via `ansi_get_palette_color` PowerShell palette (no duplicate). `draw` auto-enters TUI (`tui_init` `components/tui/tui.c:56`) when no TUI/modal surface is active.
-- **Gfx canvas + toolkit** (`components/gfx/gfx.c` pure RGB565 raster + `gfx_font.c` 8x8 ASCII font; glue in `components/command/gfx_commands.c`): the `gfx` verb (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`hline`/`vline`/`triangle`/`ellipse`/`polygon`/`fill`/`text`/`show`/`load`/`blit`/`free`/`slots`/`save`) drives an exclusive `lv_canvas`; the pure `gfx_surface_*` API (`components/gfx/gfx.h`, see `API.md`) is headless and unit-tested. Refused in `start` background jobs and while TUI is active.
+- **Gfx canvas + toolkit** (`components/gfx/gfx.c` pure RGB565 raster + `gfx_font.c` 8x8 ASCII font; glue in `components/command/gfx_commands.c`): the `gfx` verb (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`hline`/`vline`/`triangle`/`ellipse`/`polygon`/`fill`/`text`/`show`/`image`/`load`/`blit`/`free`/`slots`/`save`) drives an exclusive `lv_canvas`; the pure `gfx_surface_*` API (`components/gfx/gfx.h`, see `API.md`) is headless and unit-tested. Refused in `start` background jobs and while TUI is active.
+- **BMP image support** (`components/gfx/gfx.c` single decoder; glue `components/command/image_commands.c`, `tui_commands.c`, `gfx_commands.c`; viewer `components/modal/modal_surf.c` `imageview`): one 24/32-bit BI_RGB decoder (either orientation) and one nearest scaler drive three surfaces — `view`/`open`/`image show` (fit-to-screen full-color modal viewer), `draw image <file> <x> <y> <w> <h>` (`tui_draw_image`, 16-color luminance-ramp glyphs), and `gfx image <path> [x y [w h]]` (canvas blit). `image info` gives scriptable WxH/bpp. The source is decoded straight to the target (`gfx_bmp_decode_scaled_565`), bounded by `P4_CONFIG_IMAGE_MAX_BYTES` and `GFX_IMAGE_MAX_W/H`; `.bmp`/`.dib` are routed by `components/filetype/`. `PHOTO.BMP` + `apps/pics/PICS.BAT` are the reference.
 - **Plot coordinate layer** (`components/command/plot_commands.c` + `components/gfx/gfx_view.c`, pure viewport math): the `plot` verb (`tui`/`window`/`auto`/`axes`/`func`/`polar`/`para`/`data`/`bar`/`table`/`line`/`point`/`clear`/`status`) renders world-coordinate math onto the `gfx` canvas or the TUI grid through one shared `gfx_view_t`; function sampling reuses `calc_evaluate()` over the X/T env vars (restored afterwards), so `calc` itself stays display-free and the command layer keeps the layering (command requires `gfx` + `batch`). Canvas plots never auto-show (compose, then one `gfx show`); TUI plots flush through `draw_maybe_flush` (so `draw hold` coalesces them). Foreground-only like `gfx`, except read-only `plot status` and text-only `plot table`.
 - **UI themes** (`components/font/theme.c`, pure): `theme_t` + `theme_current`/`theme_get`/`theme_builtin_at`/`theme_set` over four built-ins (`default`/`amber`/`ice`/`mono`). The command layer applies a switch live via `windows_refresh_theme()`, `keyboard_refresh_theme()`, and `header_refresh_theme()`; `windows_get_color()` and the header macros read `theme_current()`. Persisted as the `theme` key in `sd:/APPS/SHELL.INI`.
 - **Responsive header** (`components/header/header_layout.c`, pure policy + `header.c` widgets): every render measures the live labels and fits status/notification/system panels with no overlap on any resolution or rotation — abbreviations, dynamic font step, bounded scrolling notification, uptime indicator; `header_get_height()` is the single height authority used by the header and the window manager. Driven by the `header` verb (`status`, `mode auto|full|compact [/save]`, `show|hide`), CONFIG.SYS `HEADER_MODE=`, and `SHELL.INI` persistence with boot restore.
 - **Prompt** (`main/main.c:112` `shell_prompt_render_plain()` `components/shell/shell.c:412`, `components/modal/modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea`): all inputs honor the DOS prompt template (`PROMPT=` `$p $g` etc) with situational color (`SH_PROMPT`).
-- **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`, `tui status`): crops to transcript rect for pixel-perfect verification (used during hardware bug hunting).
-- **Modal surfaces for TUI**: `browse`/`view`/`hexview` are `modal_surface_t` surfaces on the same runtime — they hide the shell span group, mount their own content, and restore on close. New full-screen surfaces MUST be `modal_surface_t` descriptors (never a private loop) and MUST use the `windows_enter_tui_mode` handoff pattern (or `windows_set_fullscreen` for fullscreen) and MUST be routed through the generic `shell_command_ops_t.modal_*` hooks.
+- **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`, `tui status`): crops to transcript rect for pixel-perfect verification (used during hardware bug hunting). It also captures open modals: the bare streaming `screenshot` is handled by the console-reader task via `shell_command_ops_t.modal_console_command` because a modal blocks the command worker.
+- **Modal surfaces for TUI**: `browse`/`view`/`imageview`/`hexview` are `modal_surface_t` surfaces on the same runtime — they hide the shell span group, mount their own content, and restore on close. New full-screen surfaces MUST be `modal_surface_t` descriptors (never a private loop) and MUST use the `windows_enter_tui_mode` handoff pattern (or `windows_set_fullscreen` for fullscreen) and MUST be routed through the generic `shell_command_ops_t.modal_*` hooks. A new surface that mounts its own container should use `surf_create_container()` (which scrolls the panel into view over the scrollable transcript). The streaming `screenshot` MUST stay reachable while any surface is open: it is dispatched through `shell_command_ops_t.modal_console_command`, not the blocked worker.
 - **TUI SDK**: `components/applib/applib_tui.h` is now a thin re-export of `components/tui/tui.h`
   (there is no separate `tui_create` API). Native apps drive the same 80x25 cell buffer as the
   batch `draw` verbs. Included via the `applib.h` umbrella.
@@ -530,11 +531,13 @@ file work in the command layer — never add clipboard state to command.c.
 Command lines are up to `P4_CONFIG_COMMAND_BYTES` (4096); any new function on
 the worker/UART/LVGL path must heap-allocate command-sized locals (never a
 `SHELL_COMMAND_BYTES` array on the stack). Tab completion routes through
-`shell_command_ops_t.complete_word` — the provider stays in command.c and
-touches the SD via storage. History is heap-backed with
-`shell_history_get_count/get/clear`; the `history /save`/`/load` verbs write
-`P4_CONFIG_HISTORY_PROFILE` through the guarded storage session (atomic temp +
-rename).
+`shell_command_ops_t.complete_line` (the SD-free inline ghost uses `ghost_line`)
+— the providers stay in command.c and touch the SD via storage. The help table
+is the single source of command names. History is heap-backed with
+`shell_history_get_count/get/clear`; the `history /save`/`/load`/`/search`
+verbs and — with `P4_CONFIG_HISTORY_AUTOSAVE` — the boot load and debounced
+autosave write `P4_CONFIG_HISTORY_PROFILE` through the guarded storage session
+(atomic temp + rename).
 
 ### Colouring command output
 
@@ -718,6 +721,16 @@ and imports/exports the environment; `appconfig <app>` gives an app its own
 creates and cleans SD-backed temporary files (`sd:/tmp`). A batch app keeps
 state exactly the way DOS apps did: environment variables, temp files, and a
 simple INI settings file.
+
+**Palmtop-parity verbs** available to batch apps (see `command.md` for the
+full syntax): `timer`/`stopwatch` for timing with `/v:NAME`, `calc` unit/base
+functions (`BIN$`/`OCT$`/`VALB`/`C2F`/`IN2MM`/`LB2KG` and inverses), `csv
+rows|cols|cell|eval` for a spreadsheet-lite grid with `=EXPR`/`R1C1` formulas,
+`crypt lock|unlock` for AES-256-GCM file encryption, `export <db|alarms>
+<csv|json|txt>` for interchange, `tcpterm` for one-shot TCP, `usb userial` for
+external serial, `bind F1..F12` for function-key macros, and `db /field:`
+`/sort:` for fielded record queries. The reference app
+`apps/palmtop/PALMTOP.BAT` demonstrates them end to end.
 
 ## Authoring and deploying batch files
 
@@ -929,9 +942,34 @@ static void shell_input_line_event_cb(lv_event_t *event)
 - If async dispatch fails, a synchronous `header_render()` fallback ensures the widget updates.
 - Read Wi-Fi RSSI through `networking_wifi_get_rssi()` (never call `esp_wifi_sta_get_ap_info()`
   outside `components/networking/`); battery through the shell ADC helper.
-- `header_set_notification(...)` is async-safe (uses LVGL async dispatch internally).
-- Header is non-scrollable, resolution-scaled, left-to-right status icons, notification on far right.
-- SD indicator shows persistent state (NO/INS/ON/ERR) with consistent styling.
+- `header_notify(level, text, timeout)` is async-safe (uses LVGL async dispatch
+  internally) and queues into a fixed FIFO (`header_notify_queue.c`); a busy center
+  does not drop a new alert. `header_set_notification()` is the INFO wrapper.
+  An empty text flushes the queue (`notify -`). Use `shell_header_notify_level()`
+  to pass a severity (info/warn/error) from a leaf.
+- Header is non-scrollable, resolution-scaled, left-to-right status icons; the
+  center shows the clock when idle and the active notification otherwise.
+- Status indicators have two styles (`P4_CONFIG_HEADER_STATUS_STYLE`): verbose words
+  (`WiFi HI`, `USB ON`) or compact colored glyphs (`W BT U S` / `M C B`) that return
+  the reclaimed width to the notification area. Both styles color by state.
+- The `A` activity indicator appears only while a C6 OTA or a background job runs;
+  its inputs come through `shell_command_ops_t` (`c6ota_is_busy`, `bg_jobs_running`).
+- The header poll is adaptive (`P4_CONFIG_HEADER_REFRESH_*`): the pure
+  `components/header/header_refresh.c` chooses the next interval from the
+  situation, the shell assembles the inputs, and main reschedules its one timer.
+  Expensive telemetry is separately throttled by
+  `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS`; never call `uxTaskGetSystemState()` at
+  the fast poll rate.
+- State classification (glyph, tone, thresholds) lives once in the pure
+  `components/header/header_status.c`; `header.c` maps the tone onto a theme color
+  (`theme.text` = green, `theme.warn` = amber, `theme.err` = red, `theme.text_muted`
+  = absent). Never re-derive a threshold or pick a color at a call site.
+- Tap an indicator to show a one-line detail in the notification area. The shell
+  registers a long-press handler with `header_register_status_action()` (called by
+  `command_init()`) that runs the matching `wifi|bluetooth|usb|sd|mem|top|battery`
+  status command; the header itself never depends on the command module.
+- SD indicator shows persistent state (NO/INS/ON/ERR): green mounted, amber inserted,
+  red error, muted none.
 - Battery is ALWAYS visible — shows "BAT N/C" with muted styling when ADC is not connected.
 - Memory (MEM), CPU (CPU bar + %), and Battery (BAT bar + %) are in the system panel on the far right.
 - All system panel values (MEM, CPU, BAT) are dynamically linked to FreeRTOS runtime statistics.

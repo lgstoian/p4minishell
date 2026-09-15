@@ -1,5 +1,6 @@
 # Re-applies the hand-authored patches inside managed_components/
-# (LVGL lv_async PSRAM/lock hardening + port JD9165 swap_xy guard) after
+# (LVGL lv_async PSRAM/lock hardening + buttonmatrix button-area getter for the
+#  `ui` touch verbs + port JD9165 swap_xy guard) after
 # `idf.py update-dependencies` reinstalls them. The generated 384-glyph
 # unscii_16 font is tracked in git; restore it from HEAD when the vendored
 # LVGL minor version matches, then apply managed_patches.patch.

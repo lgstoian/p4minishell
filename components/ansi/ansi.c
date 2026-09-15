@@ -426,6 +426,45 @@ bool ansi_contains_escapes(const char *text)
     return strchr(text, '\x1B') != NULL;
 }
 
+size_t ansi_csi_trailing(const uint8_t *data, size_t len)
+{
+    size_t i;
+
+    if (data == NULL || len == 0) {
+        return 0;
+    }
+    /* Find the last ESC in the buffer. Anything before it is complete. */
+    i = len;
+    while (i > 0 && data[i - 1] != 0x1B) {
+        i--;
+    }
+    if (i == 0) {
+        return 0; /* no ESC at all */
+    }
+    i--; /* i now indexes the last ESC */
+    /* A lone trailing ESC is always incomplete. */
+    if (i + 1 >= len) {
+        return 1;
+    }
+    /* Only CSI (ESC [) sequences are multi-byte candidates here; a bare
+     * ESC followed by anything else is complete (single-char escape or the
+     * start of plain text the parser will handle on its own). */
+    if (data[i + 1] != '[') {
+        return 0;
+    }
+    /* Walk parameter bytes; a CSI final byte (0x40-0x7E) completes it. */
+    for (size_t j = i + 2; j < len; j++) {
+        uint8_t ch = data[j];
+        if (ch >= 0x40 && ch <= 0x7E) {
+            return 0; /* complete sequence in buffer */
+        }
+        if (!((ch >= '0' && ch <= '9') || ch == ';' || ch == '?')) {
+            return 0; /* not a CSI parameter run; leave it to the parser */
+        }
+    }
+    return len - i; /* dangling ESC [ params... — hold it back */
+}
+
 /* ========================================================================
  * ANSI FORMAT STRING BUILDER
  * ======================================================================== */

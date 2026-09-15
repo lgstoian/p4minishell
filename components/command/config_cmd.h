@@ -23,6 +23,26 @@ extern "C" {
 void shell_command_config(int argc, char **argv);
 
 /**
+ * Persist a single `KEY=value` directive into CONFIG.SYS, applying nothing.
+ *
+ * This is the ONE writer every owning command uses for `/save` (theme, font,
+ * header mode, cursor, keyboard mode, timezone, security, owner, ...), so the
+ * scalar-preference store stays single-sourced. Opens the file, upserts the
+ * directive preserving comments/other lines, and writes atomically.
+ *
+ * @return true when CONFIG.SYS now holds the directive.
+ */
+bool config_persist_set(const char *key, const char *value);
+
+/**
+ * Read a directive value from CONFIG.SYS (case-insensitive key).
+ *
+ * @return the value length (>= 0) when found, or -1 when the key/file is
+ *         absent or the SD card is unavailable.
+ */
+int config_get_saved(const char *key, char *out, size_t out_size);
+
+/**
  * Read the value of a `KEY=value` directive from a CONFIG.SYS text buffer.
  * The key is matched case-insensitively; comment lines, blank lines, and
  * lines without '=' are skipped.

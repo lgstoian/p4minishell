@@ -33,6 +33,7 @@ typedef struct {
     uint32_t text_body;    /**< primary body text (header/modal message) */
     uint32_t text_muted;   /**< secondary/dim text */
     uint32_t warn;         /**< warnings, low battery, hot CPU */
+    uint32_t err;          /**< off/failed status (header error color) */
     uint32_t header_panel_bg; /**< header status-panel tint */
     uint32_t header_sys_bg;   /**< header system-panel tint */
     uint32_t modal_panel_border;

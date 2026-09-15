@@ -69,6 +69,12 @@ extern void c6ota_host_record_error(esp_err_t error, const char *message);
 extern void c6ota_host_record_warning(const char *message);
 extern void c6ota_host_record_info(const char *message);
 extern void c6ota_host_notify_header(const char *text, uint32_t timeout_ms);
+extern void c6ota_host_notify_header_level(const char *text, uint32_t timeout_ms, int level);
+
+/* Severity values passed to c6ota_host_notify_header_level(); they match
+ * header_notify_level_t (INFO/WARN/ERR) without pulling that header in here. */
+#define C6OTA_NOTIFY_WARN 1
+#define C6OTA_NOTIFY_ERR  2
 
 static c6ota_progress_callback_t s_progress_callback;
 static bool s_update_in_progress;
@@ -170,6 +176,19 @@ static void c6ota_notify_headerf(uint32_t timeout_ms, const char *format, ...)
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     c6ota_host_notify_header(buffer, timeout_ms);
+}
+
+/** Severity-aware notification (used for OTA failures/cancellation). */
+static void c6ota_notify_headerf_level(int level, uint32_t timeout_ms,
+                                       const char *format, ...)
+{
+    char buffer[160];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    c6ota_host_notify_header_level(buffer, timeout_ms, level);
 }
 
 static bool c6ota_source_is_http(const char *source)
@@ -1098,7 +1117,7 @@ static void c6ota_task(void *arg)
     if (!update_succeeded) {
         c6ota_emit_asyncf("C6 OTA failed: %s - %s\n", esp_err_to_name(error), failure_hint);
         c6ota_record_warningf("C6 OTA failed: %s - %s", esp_err_to_name(error), failure_hint);
-        c6ota_notify_headerf(5000, "C6 OTA failed");
+        c6ota_notify_headerf_level(C6OTA_NOTIFY_ERR, 5000, "C6 OTA failed");
     }
 
     free(request);
@@ -1158,7 +1177,7 @@ bool c6ota_try_handle_input(const char *input)
         s_confirmation.active = false;
         c6ota_emit_syncf("%s", "c6ota: cancelled before rebooting the C6\n");
         c6ota_record_infof("User cancelled OTA confirmation");
-        c6ota_notify_headerf(3000, "C6 OTA cancelled");
+        c6ota_notify_headerf_level(C6OTA_NOTIFY_WARN, 3000, "C6 OTA cancelled");
         return true;
     }
 

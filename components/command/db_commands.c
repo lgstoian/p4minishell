@@ -24,6 +24,7 @@
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "command.h"
+#include "security_commands.h"
 
 #define SHELL_SD_PATH_BYTES     P4_CONFIG_SD_PATH_BYTES
 #define SHELL_COMMAND_BYTES     P4_CONFIG_COMMAND_BYTES
@@ -45,6 +46,8 @@ typedef struct {
     const char *creator;
     const char *type;
     uint32_t version;
+    const char *field;
+    const char *sort;
 } db_opts_t;
 
 static void db_opts_init(db_opts_t *o)
@@ -75,6 +78,8 @@ static bool db_apply_option(const char *a, db_opts_t *o)
         if (nlen == 3 && strncasecmp(opt, "cat", 3) == 0) { o->cat = atoi(val); return true; }
         if (nlen == 3 && strncasecmp(opt, "key", 3) == 0) { o->key = val; return true; }
         if (nlen == 4 && strncasecmp(opt, "text", 4) == 0) { o->text = val; return true; }
+        if (nlen == 5 && strncasecmp(opt, "field", 5) == 0) { o->field = val; return true; }
+        if (nlen == 4 && strncasecmp(opt, "sort", 4) == 0) { o->sort = val; return true; }
         if (nlen == 2 && strncasecmp(opt, "cr", 2) == 0) { o->creator = val; return true; }
         if (nlen == 2 && strncasecmp(opt, "tp", 2) == 0) { o->type = val; return true; }
         if (nlen == 2 && strncasecmp(opt, "vr", 2) == 0) { o->version = (uint32_t)strtoul(val, NULL, 10); return true; }
@@ -477,7 +482,7 @@ static int db_cmd_get(char **pos, int pcount, db_opts_t *o)
         return 2;
     }
     if (idx >= pcount) {
-        shell_print_usage("Usage: db get [<name>] <id> [/b] [/reveal]");
+        shell_print_usage("Usage: db get [<name>] <id> [/b] [/reveal] [/field:name]");
         return 2;
     }
     id = (uint32_t)strtoul(pos[idx], NULL, 10);
@@ -500,6 +505,30 @@ static int db_cmd_get(char **pos, int pcount, db_opts_t *o)
         free(payload);
         shell_print_error("db: could not read record (%s)", esp_err_to_name(error));
         return 2;
+    }
+
+    /* Single-field extraction for batch pipelines (`for /f`, `set /p`). */
+    if (o->field != NULL && o->field[0] != '\0' && strchr(o->field, '=') == NULL) {
+        char value[P4_CONFIG_DB_FIELD_VALUE_BYTES + 1];
+        if ((info.flags & DB_FLAG_SECRET) && !o->reveal) {
+            free(payload);
+            shell_print_error("db: record %lu is secret (use /reveal)", (unsigned long)id);
+            return 1;
+        }
+        if (!db_field_get(payload, o->field, value, sizeof(value))) {
+            free(payload);
+            if (!o->bare) {
+                shell_print_error("db: record %lu has no field '%s'", (unsigned long)id, o->field);
+            }
+            return 1;
+        }
+        if (o->bare) {
+            db_print_line_bare("%s", value);
+        } else {
+            shell_print_field(o->field, "%s", value);
+        }
+        free(payload);
+        return 0;
     }
 
     if (o->bare) {
@@ -644,6 +673,89 @@ static int db_cmd_count(char **pos, int pcount, db_opts_t *o)
 
 typedef struct { bool bare; } db_find_ctx_t;
 
+/** Collected candidate for field filtering / sorting (heap array). */
+typedef struct {
+    db_record_info_t info;
+    char sortkey[P4_CONFIG_DB_FIELD_VALUE_BYTES + 1];
+} db_candidate_t;
+
+static bool db_collect_cb(const db_record_info_t *info, void *ctx)
+{
+    db_candidate_t *list = ((db_candidate_t **)ctx)[0];
+    int *count = (int *)(((void **)ctx)[1]);
+
+    if (*count >= P4_CONFIG_DB_FIND_MAX) {
+        return false;
+    }
+    list[*count].info = *info;
+    list[*count].sortkey[0] = '\0';
+    (*count)++;
+    return true;
+}
+
+/** Split a `/field:k=v` filter into heap name/value (value may be empty).
+ *  @return true on a well-formed filter (both out-params set). */
+static bool db_split_field_filter(const char *filter, char *name_out, size_t name_size,
+                                  char *value_out, size_t value_size)
+{
+    const char *eq;
+    size_t name_len;
+
+    if (filter == NULL || name_out == NULL || value_out == NULL ||
+        name_size == 0 || value_size == 0) {
+        return false;
+    }
+    eq = strchr(filter, '=');
+    if (eq == NULL || eq == filter) {
+        return false;
+    }
+    name_len = (size_t)(eq - filter);
+    if (name_len >= name_size) {
+        name_len = name_size - 1;
+    }
+    memcpy(name_out, filter, name_len);
+    name_out[name_len] = '\0';
+    snprintf(value_out, value_size, "%s", eq + 1);
+    return true;
+}
+
+/** True when @p actual equals @p wanted (case per @p ignore_case). */
+static bool db_field_value_match(const char *actual, const char *wanted, bool ignore_case)
+{
+    if (wanted == NULL || wanted[0] == '\0') {
+        return actual[0] == '\0';
+    }
+    if (ignore_case) {
+        return strcasecmp(actual, wanted) == 0;
+    }
+    return strcmp(actual, wanted) == 0;
+}
+
+static int db_candidate_compare(const db_candidate_t *a, const db_candidate_t *b,
+                                bool ignore_case)
+{
+    if (ignore_case) {
+        return strcasecmp(a->sortkey, b->sortkey);
+    }
+    return strcmp(a->sortkey, b->sortkey);
+}
+
+/** Insertion sort over the candidate list (n is tiny; keeps the comparator
+ *  context explicit instead of sharing qsort-global state across workers). */
+static void db_candidate_sort(db_candidate_t *list, int n, bool ignore_case)
+{
+    int i;
+    for (i = 1; i < n; i++) {
+        db_candidate_t tmp = list[i];
+        int j = i - 1;
+        while (j >= 0 && db_candidate_compare(&tmp, &list[j], ignore_case) < 0) {
+            list[j + 1] = list[j];
+            j--;
+        }
+        list[j + 1] = tmp;
+    }
+}
+
 static int db_cmd_find(char **pos, int pcount, db_opts_t *o)
 {
     char name[P4_CONFIG_DB_NAME_BYTES];
@@ -655,22 +767,135 @@ static int db_cmd_find(char **pos, int pcount, db_opts_t *o)
     if (!db_resolve_db(pos, pcount, &idx, name, sizeof(name))) {
         return 2;
     }
-    ctx.bare = o->bare;
-    error = db_find(name, (uint8_t)(o->cat >= 0 ? o->cat : 0xFF),
-                    o->key, o->text, o->ignore_case, o->reveal,
-                    (db_find_cb_t)db_find_dump_cb, &ctx, &count);
-    if (error == ESP_ERR_NOT_FOUND) {
-        shell_print_error("db: %s not found", name);
-        return 1;
+    /* Fast path (unchanged streaming behaviour) when no field filter or
+     * explicit sort is requested. */
+    if ((o->field == NULL || o->field[0] == '\0') &&
+        (o->sort == NULL || o->sort[0] == '\0')) {
+        ctx.bare = o->bare;
+        error = db_find(name, (uint8_t)(o->cat >= 0 ? o->cat : 0xFF),
+                        o->key, o->text, o->ignore_case, o->reveal,
+                        (db_find_cb_t)db_find_dump_cb, &ctx, &count);
+        if (error == ESP_ERR_NOT_FOUND) {
+            shell_print_error("db: %s not found", name);
+            return 1;
+        }
+        if (error != ESP_OK) {
+            shell_print_error("db: find failed (%s)", esp_err_to_name(error));
+            return 2;
+        }
+        if (!o->bare) {
+            shell_print_field_num("db.matches", count);
+        }
+        return 0;
     }
-    if (error != ESP_OK) {
-        shell_print_error("db: find failed (%s)", esp_err_to_name(error));
-        return 2;
+    /* Collect path: gather candidates, filter on a payload field, sort. */
+    {
+        db_candidate_t *list;
+        void *cb_ctx[2];
+        int collected = 0;
+        int kept = 0;
+        int i;
+        char field_name[P4_CONFIG_DB_KEY_BYTES];
+        char field_want[P4_CONFIG_DB_FIELD_VALUE_BYTES + 1];
+        bool use_field = (o->field != NULL && o->field[0] != '\0');
+        bool sort_by_id = false;
+        bool sort_by_key = false;
+        const char *sort_field = NULL;
+
+        if (o->sort != NULL && o->sort[0] != '\0') {
+            if (strcasecmp(o->sort, "id") == 0) {
+                sort_by_id = true;
+            } else if (strcasecmp(o->sort, "key") == 0) {
+                sort_by_key = true;
+            } else {
+                sort_field = o->sort;
+            }
+        }
+        if (use_field && !db_split_field_filter(o->field, field_name, sizeof(field_name),
+                                                field_want, sizeof(field_want))) {
+            shell_print_usage("Usage: db find [<name>] [/field:k=v] [/sort:key|id|field] [...]");
+            return 2;
+        }
+        list = malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_candidate_t));
+        if (list == NULL) {
+            shell_print_error("db: out of memory");
+            return 2;
+        }
+        cb_ctx[0] = list;
+        cb_ctx[1] = &collected;
+        ctx.bare = o->bare;
+        error = db_find(name, (uint8_t)(o->cat >= 0 ? o->cat : 0xFF),
+                        o->key, o->text, o->ignore_case, o->reveal,
+                        (db_find_cb_t)db_collect_cb, cb_ctx, &count);
+        if (error == ESP_ERR_NOT_FOUND) {
+            free(list);
+            shell_print_error("db: %s not found", name);
+            return 1;
+        }
+        if (error != ESP_OK) {
+            free(list);
+            shell_print_error("db: find failed (%s)", esp_err_to_name(error));
+            return 2;
+        }
+        for (i = 0; i < collected; i++) {
+            char *payload = NULL;
+            size_t len = 0;
+            db_record_info_t info;
+
+            if (use_field || sort_field != NULL) {
+                payload = malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
+                if (payload == NULL) {
+                    free(list);
+                    shell_print_error("db: out of memory");
+                    return 2;
+                }
+                len = P4_CONFIG_DB_RECORD_MAX_BYTES;
+                error = db_get(name, list[i].info.id, payload, &len, o->reveal, &info);
+                if (error != ESP_OK) {
+                    free(payload);
+                    continue;
+                }
+                payload[len] = '\0';
+            }
+            if (use_field) {
+                char actual[P4_CONFIG_DB_FIELD_VALUE_BYTES + 1];
+                bool present = db_field_get(payload != NULL ? payload : "",
+                                            field_name, actual, sizeof(actual));
+                if (!present || !db_field_value_match(actual, field_want, o->ignore_case)) {
+                    free(payload);
+                    continue;
+                }
+            }
+            if (sort_by_id) {
+                snprintf(list[kept].sortkey, sizeof(list[kept].sortkey), "%010lu",
+                         (unsigned long)list[i].info.id);
+            } else if (sort_by_key) {
+                snprintf(list[kept].sortkey, sizeof(list[kept].sortkey), "%s",
+                         list[i].info.key);
+            } else if (sort_field != NULL && payload != NULL) {
+                if (!db_field_get(payload, sort_field, list[kept].sortkey,
+                                  sizeof(list[kept].sortkey))) {
+                    list[kept].sortkey[0] = '\0';
+                }
+            }
+            free(payload);
+            if (kept != i) {
+                list[kept].info = list[i].info;
+            }
+            kept++;
+        }
+        if (o->sort != NULL && o->sort[0] != '\0') {
+            db_candidate_sort(list, kept, o->ignore_case);
+        }
+        for (i = 0; i < kept; i++) {
+            db_find_dump_cb(&list[i].info, &ctx);
+        }
+        if (!o->bare) {
+            shell_print_field_num("db.matches", kept);
+        }
+        free(list);
+        return 0;
     }
-    if (!o->bare) {
-        shell_print_field_num("db.matches", count);
-    }
-    return 0;
 }
 
 static bool db_find_dump_cb(const db_record_info_t *info, void *ctx)
@@ -808,6 +1033,13 @@ void shell_command_db(int argc, char **argv)
 
     db_opts_init(&opts);
     pcount = db_collect(argc, argv, &opts, pos, DB_POS_MAX);
+
+    /* Private-record policy: when the device is locked, /reveal is refused so
+     * secret payloads stay hidden. Default (no passcode) is unchanged. */
+    if (opts.reveal && !security_can_reveal_private()) {
+        opts.reveal = false;
+        shell_print_warning("db: device locked - secret payloads stay hidden");
+    }
 
     if (shell_text_equals_ignore_case(verb, "create")) {
         result = db_cmd_create(pos, pcount, &opts);

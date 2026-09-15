@@ -63,11 +63,17 @@ def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM3"
     out = r"C:\Users\lgstoian\AppData\Local\Temp\opencode\GFXTOOL.BMP"
     sh = boot(port)
+    img = False
     try:
         run = run_quiet(sh, "GFXTOOL.BAT", timeout=45)
         check("marker start", "[M-GFXTOOL]" in run, True)
         check("marker done", "[M-GFXTOOL-DONE]" in run, True)
         check("saved", "gfx: saved" in run, True)
+        check("image marker", ("[M-GFXTOOL-IMG]" in run) or
+              ("[M-GFXTOOL-NOIMG]" in run), True)
+        img = "[M-GFXTOOL-IMG]" in run
+        if not img:
+            print("  note: PHOTO.BMP absent - BMP blit region not checked")
     finally:
         sh.close()
 
@@ -98,6 +104,10 @@ def main():
     check("vline", b.px(158, 100), q(0xFFFF00))
     check("text scale2 white", b.count(18, 150, 200, 166, q(0xFFFFFF)) > 0, True)
     check("text scale1 cyan", b.count(18, 170, 220, 178, q(0x00FFFF)) > 0, True)
+    if img:
+        # The scaled PHOTO.BMP blit lives in the lower-right free region; at
+        # least one pixel there must differ from the background.
+        check("bmp blit region", b.px(240, 160) != q(0x101820), True)
 
     print("\nRESULT %s (%d fail)" % ("OK" if not FAILS else "FAIL", len(FAILS)))
     return 0 if not FAILS else 1

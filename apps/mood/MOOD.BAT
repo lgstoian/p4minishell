@@ -13,6 +13,7 @@ goto menu
 draw clear screen
 draw box 1 1 80 3 double "MOOD"
 draw text 5 2 "board mood from live heap" 14
+draw text 45 2 "local %TIME%" 7
 list "Mood" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Back"
 if errorlevel 255 goto back
 if errorlevel 4 goto back
@@ -40,6 +41,8 @@ echo heap %heapf%/%heapt% pct %pct%
 draw clear screen
 draw box 1 1 80 3 double "MOOD SAMPLE"
 draw text 5 5 "heap free %heapf% / %heapt% bytes = %pct pct%" 14
+rem %DATE%/%TIME% are the auto-synced local clock (SNTP + detected timezone).
+draw text 5 6 "local %DATE% %TIME%" 7
 if %pct% GEQ 80 goto mood_calm
 if %pct% GEQ 50 goto mood_ok
 if %pct% GEQ 20 goto mood_tense
@@ -89,8 +92,13 @@ goto menu
 :snapshot
 mem > _m.txt
 sysinfo > _s.txt
+rem Show the auto-synced local clock (SNTP + network-detected timezone).
+timezone > _tz.txt
+date > _d.txt
 view _m.txt
 view _s.txt
+view _tz.txt
+view _d.txt
 goto menu
 
 :back

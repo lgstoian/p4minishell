@@ -34,6 +34,16 @@ void test_filetype_json_text(void)
     TEST_ASSERT_FALSE(filetype_is_executable(FILETYPE_JSON));
 }
 
+void test_filetype_image(void)
+{
+    TEST_ASSERT_EQUAL(FILETYPE_IMAGE, filetype_of("a.bmp"));
+    TEST_ASSERT_EQUAL(FILETYPE_IMAGE, filetype_of("PIC.BMP"));
+    TEST_ASSERT_EQUAL(FILETYPE_IMAGE, filetype_of("sd:/DIR.X/pic.dib"));
+    TEST_ASSERT_TRUE(filetype_is_image(FILETYPE_IMAGE));
+    TEST_ASSERT_FALSE(filetype_is_image(FILETYPE_TEXT));
+    TEST_ASSERT_EQUAL_STRING("image", filetype_name(FILETYPE_IMAGE));
+}
+
 void test_filetype_unknown(void)
 {
     TEST_ASSERT_EQUAL(FILETYPE_UNKNOWN, filetype_of(NULL));

@@ -4,9 +4,14 @@
 
 P4MiniShell is a modular embedded shell application for ESP32-P4 with an ESP32-C6 co-processor. The codebase is organized into a shell orchestration layer and dedicated component modules.
 
-**Current verified state:** v0.38.1. Hardware-verified on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. Components added since the original layout: `gfx`, `filetype`, `markdown`, `db`, `alarm`, `audio`, `boot`, `font`; command bodies live in the split `components/command/*_commands.c` files.
+**Current verified state (unreleased additions on top of v0.38.1):** unit **317/0/2** on COM3, plus
+the host regression and `boot_regression` 8/8. Components added since the original layout: `gfx`,
+`filetype`, `markdown`, `db`, `alarm`, `audio`, `boot`, `font`; command bodies live in the split
+`components/command/*_commands.c` files. The palmtop-parity pass added `storage_csv.c`,
+`clock_timer.c`, `tcpterm.c`, `usb/userial.c`, and the `csv`/`export`/`crypt`/`userial` command
+files (see `changelog.md` `[Unreleased]`).
 
-### Module Layout (v0.38.1, 80x25 `utf8[4]` `tui_cell_t` `components/tui/tui.h:35`, suite 262/0/2)
+### Module Layout (v0.38.1, 80x25 `utf8[4]` `tui_cell_t` `components/tui/tui.h:35`, suite 281/0/2)
 
 ```
 main/main.c                     App entry point, LVGL event callbacks, UI construction, host bridges
@@ -24,7 +29,8 @@ components/storage/storage_disk.c  Volume verbs (`chkdsk`/`format` + confirm hel
 components/storage/storage_text.c  Text utilities (`find`/`more`/`fc`/`sort`/`findstr`/`comp`)
 components/storage/storage_fam.c  `sd` + `disk` command families
 components/storage/storage_ini.c INI-style persistent state + SD temp files (shared by the config/ini/appconfig/temp commands and applib)
-components/batch/batch.c        Batch engine, labels, for loops, pipes, environment variables, PATH
+components/storage/storage_csv.c RFC-4180-subset CSV parser (`csv_split_line`; shared by `csv` and `export`)
+components/batch/batch.c        Batch engine, labels, for loops, pipes, environment variables, PATH, aliases, F-key binds
 components/batch/batch_expr.c     Integer-expr evaluator + `set /a`/`set /p` helpers
 components/boot/boot.c            DOS-style boot scripting (CONFIG.SYS parser, AUTOEXEC.BAT runner)
 components/command/command.c    Command module (dispatcher, worker task, execution pipeline, hardware and system commands)
@@ -35,7 +41,12 @@ components/command/periph_commands.c  Peripheral toolkit (`gpio`/`pwm`/`freq`/`a
 components/command/power_commands.c  Power verbs (`brightness`/`rotate`/`battery`/`power`/`sleep`/`deepsleep` + ADC/idle state)
 components/command/serial_commands.c  Screenshot/serial verbs (`screenshot`/`receive`/`send` + BMP/frame helpers)
 components/command/gfx_commands.c      `gfx` canvas verbs (raster core in `components/gfx/`)
+components/command/image_commands.c    `image info|show` verb (BMP metadata + shared image viewer)
 components/command/plot_commands.c     `plot` coordinate layer (viewport in `components/gfx/gfx_view.c`, sampling via `calc`)
+components/command/csv_commands.c      `csv rows|cols|cell|eval` (grid + `=EXPR` via `calc`; parser in `components/storage/storage_csv.c`)
+components/command/export_commands.c   `export <db|alarms> <csv|json|txt> <file>` (portable store interchange)
+components/command/crypt_commands.c    `crypt lock|unlock` (AES-256-GCM + PBKDF2, mbedTLS)
+components/command/userial_commands.c  `usb userial` verbs over the byte API in `components/usb/userial.c`
 components/command/asset_commands.c    `crc32` + `asset check|list` (shared CRC-32)
 components/command/pkg_commands.c      `pkg` packaged SD apps (PKGS bundles -> APPS)
 components/command/db_commands.c       `db` record-store verbs (core in `components/db/`)
@@ -47,14 +58,17 @@ components/command/config_cmd.c        `config` (CONFIG.SYS directive writer)
 components/command/gfind_commands.c    `gfind`
 components/header/header.c      Fixed top status bar (LVGL widgets)
 components/header/header_layout.c  Pure responsive layout policy (fit/compact/yield, unit-tested)
+components/header/header_status.c  Pure indicator mapping (glyph/tone/thresholds, unit-tested)
+components/header/header_notify_queue.c  Pure notification FIFO (order/overflow/clear, unit-tested)
+components/header/header_refresh.c  Pure adaptive-poll policy (situation -> interval, unit-tested)
 components/led/led.c            WS2812 RGB status LED driver + auto status / event notification engine (GPIO26)
 components/editor/editor.c      DOS-style `edit` editor: byte-preserving document model, undo/redo, find/replace, worker session
 components/editor/editor_view.c `edit` editor LVGL surface (syntax spans, block cursor, selection overlay, status-bar prompts)
 components/modal/modal.c        Shared modal runtime: session loop + input routing for native modal surfaces
-components/modal/modal_surf.c   Ready-made batch surfaces: `dialog`, `list`, `ask`, `filebrowser` (`browse`), `viewer` (`view`), `hexview` — 6 modal surfaces (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) sharing the same runtime; TUI logical grid `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) maps to the live transcript region (rotation/keyboard-aware) via `windows_enter_editor_mode`/`windows_refresh_editor_surface`
+components/modal/modal_surf.c   Ready-made batch surfaces: `dialog`, `list`, `ask`, `filebrowser` (`browse`), `viewer` (`view`), `imageview` (BMP), `hexview` — 7 modal surfaces sharing the same runtime; TUI logical grid `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) maps to the live transcript region (rotation/keyboard-aware) via `windows_enter_editor_mode`/`windows_refresh_editor_surface`
 components/applib/applib.c      Native-app runtime library: app stdout/printf onto the transcript (the redirection layer), shared memory policy, time/sleep/sysinfo helpers, Wi-Fi state via an ops table
 components/tui/tui.c            TUI 80x25 cell buffer + draw primitives + `tui_flush` (reached by the `draw`/`tui` verbs)
-components/gfx/gfx.c            Pure RGB565 raster core (surface/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/flood-fill/text/blit, BMP parse/decode, row convert)
+components/gfx/gfx.c            Pure RGB565 raster core (surface/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/flood-fill/text/blit, general 24/32-bit BMP parse/decode, scaled decode, nearest scaling, aspect-fit, row convert)
 components/gfx/gfx_font.c       Generated 8x8 ASCII font table for `gfx_surface_text` (unscii-8)
 components/gfx/gfx_view.c       World-coordinate viewport (map, Cohen-Sutherland clip, nice ticks) for `plot`
 components/filetype/filetype.c  Central extension->kind registry (batch/markdown/json/text)
@@ -65,10 +79,13 @@ components/db/db.c              Palm-OS-style SD record store (`sd:/DBS/<name>.D
 components/alarm/alarm.c        SD alarm store + single background checker (`sd:/ALARMS`)
 components/audio/audio.c        ES8311 codec path + background tone/WAV playback engine
 components/clock/clock.c        Time/SNTP/timezone services + `date`/`time`/`timezone`/`sntp`
+components/clock/clock_timer.c  Named stopwatch slots (`timer`/`stopwatch`) — pure, unit-tested
 components/boot/boot.c          CONFIG.SYS parser + AUTOEXEC.BAT runner
 components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
+components/networking/tcpterm.c     One-shot TCP terminal (`tcpterm`) + pure target/escape/sanitize helpers
 components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
 components/usb/usb.c            USB Host (MSC storage + HID keyboard/mouse)
+components/usb/userial.c        Lazy CDC-ACM serial driver + byte API + RX ring (leaf)
 components/c6ota/c6ota.c        ESP32-C6 OTA updates (ESP-Hosted SDIO)
 coprocessor/esp32c6_slave/      ESP32-C6 hosted slave firmware project
 ```
@@ -114,10 +131,11 @@ NULL-checked, so the shell and the batch engine degrade gracefully if used befor
 **External-module accessors.** `shell.c` also needs state from the networking, Bluetooth, USB,
 and C6 OTA modules (for the header status refresh and the `debug` command). Rather than including
 those modules' headers — which would make the shell core depend on every subsystem — the shell
-reads that state through function pointers in `shell_command_ops_t`. The 11 accessors
+reads that state through function pointers in `shell_command_ops_t`. The accessors
 (`wifi_is_connected`, `wifi_get_rssi`, `wifi_state_string`, `append_sysinfo_summary`,
 `bluetooth_is_enabled`, `bluetooth_is_connected`, `usb_is_connected`, `usb_is_keyboard_attached`,
-`usb_key_to_ascii`, `c6ota_is_pending`, `c6ota_is_busy`) are all registered by `command_init()`.
+`bg_jobs_running`, `usb_key_to_ascii`, `c6ota_is_pending`, `c6ota_is_busy`,
+`pm_notify_activity`, `pm_ms_until_idle_off`) are all registered by `command_init()`.
 Every hook is NULL-checked before use, so a missing module simply skips that status line.
 
 ### Application Layer (main/main.c)
@@ -184,8 +202,9 @@ Owns the shell's runtime surface and output plumbing:
   deletes into it), and `shell_input_line_paste()`. The line and the whole command pipeline
   accept up to `P4_CONFIG_COMMAND_BYTES` (4096); every command-sized transient buffer is
   heap-allocated so the worker/UART/LVGL stacks stay small. USB Tab runs completion through the
-  `shell_command_ops_t.complete_word` hook (commands/aliases for the first token, SD paths for
-  any token, `P4_CONFIG_COMPLETION_MAX_MATCHES` cap).
+  `shell_command_ops_t.complete_line` hook (help-table commands/aliases/apps, usage-derived
+  subcommands/flags, and SD paths, `P4_CONFIG_COMPLETION_MAX_MATCHES` cap); the inline ghost
+  suffix uses the SD-free `ghost_line` hook (`P4_CONFIG_COMPLETION_GHOST`).
 - **Debug log**: 5-entry circular buffer surfaced via the `debug` command. Errors are also
   echoed to the transcript so on-screen users see failures without running `debug`.
 - **RAM clipboard** (`clip` / `paste`): a shell-core clipboard (`P4_CONFIG_CLIPBOARD_BYTES`)
@@ -208,7 +227,13 @@ Owns the shell's runtime surface and output plumbing:
   across several reads (its RX FIFO is 64 bytes). The task assembles fragments until a line
   terminator (or the 256-byte command buffer fills) before submitting, so a long command is
   never split into two. During an active key wait the first newly-read character is still
-  answered immediately, without waiting for the terminator.
+  answered immediately, without waiting for the terminator. When a native modal surface is
+  active the worker is blocked, so the reader first offers the line to
+  `shell_command_ops_t.modal_console_command` (the streaming `screenshot` runs here), then to
+  the modal's own serial handler, and only then queues it to the worker. `shell_uart_console_rx_begin/end`
+  skip their `vTaskSuspend/Resume` when the console task is the caller (the reader running a
+  capture), so the task never suspends itself; a worker-side `receive`/`send` still freezes the
+  reader as before.
 - **DOS prompt template engine**: `shell_prompt_set_template()` stores the template the
   `prompt` command supplies; `shell_prompt_render_plain()` expands `$p $g $l $b $n $d $t $v $s
   $_ $q $$ $a $c $f $e $h` against live state. One template drives both the UART console prompt
@@ -226,8 +251,16 @@ Owns the shell's runtime surface and output plumbing:
 - **Header CPU sparkline**: the header system panel shows a small LVGL chart of the recent CPU
   samples (bars amber above `P4_CONFIG_HEADER_CPU_WARN_PCT`), replacing the single-value bar
   when `P4_CONFIG_HEADER_CPU_GRAPH` is set; the ring advances on the periodic header refresh.
-- **Header status refresh**: Batches every header field into one async render to avoid
-  flicker; also drives USB keyboard auto-detect and SD insert/remove notifications
+- **Header status refresh**: Batches every header field (including the clock text and
+  the OTA/bg-job activity flags) into one async render to avoid flicker; also drives
+  USB keyboard auto-detect and SD insert/remove notifications. Cheap status is read
+  every adaptive tick while heap/CPU/battery telemetry is throttled to
+  `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS`, and the whole pass is skipped while the
+  display is off by idle.
+- **Adaptive header poll**: `shell_header_refresh_interval_ms()` (shell) feeds
+  `header_refresh_interval_ms()` (pure, `components/header/header_refresh.c`) and
+  main reschedules its single header timer. `shell_power_ms_until_idle_off()`
+  bounds the idle interval so the display-off deadline is never missed.
 - **Quote and escape scanner**: `shell_find_unquoted_char()`, `shell_find_unquoted_any()`,
   `shell_has_unquoted_char()`, and `shell_unescape_in_place()`. One implementation backs five
   surfaces — the argument tokenizer, redirection parsing, pipe splitting, chain splitting, and
@@ -687,12 +720,33 @@ Passive, display-only module that owns the fixed top bar:
 
 - Non-scrollable LVGL flex-row container
 - Resolution-scaled height (display_height / 15, clamped 32-56px)
-- Status icons (left-to-right): Wi-Fi, Bluetooth, USB, SD
+- Status icons (left-to-right): Wi-Fi, Bluetooth, USB, SD, plus a conditional
+  activity indicator `A` (shown only while a C6 OTA or a background job runs)
 - System panel (far right): MEM (free heap), CPU (bar + percentage), BAT (bar + percentage)
-- Battery always visible � shows "BAT N/C" when ADC is not connected
+- Two status styles (`P4_CONFIG_HEADER_STATUS_STYLE`): verbose **words**
+  (`WiFi HI`, `USB ON`, `SD ON`) or compact colored **glyphs** (`W BT U S A` and
+  `M C B`) that hand the reclaimed width to the notification area. Both styles
+  color by state: green healthy, amber degraded, red off/failed, muted absent.
+- State classification is pure and centralized in `components/header/header_status.c`
+  (glyph + tone + thresholds; the Wi-Fi HI/MID/LOW/WEAK label, the memory/CPU/battery
+  healthy-warn-critical thresholds, and the on/off/error rules all live there once).
+  `header.c` owns the widgets and maps the tone to `theme.text`/`warn`/`err`/`text_muted`.
+- Center area shows the local clock (`time_format_hm()`, `"--:--"` until SNTP sync)
+  when idle, and the active notification otherwise.
+- Notifications are queued FIFO with a severity (`header_notify_queue.c`, pure and
+  unit-tested); `header_notify(level, text, timeout)` colors info/warn/error, and an
+  empty text flushes the queue. The queue reuses one persistent display timer.
+- The poll cadence is adaptive: the pure `components/header/header_refresh.c`
+  chooses the next interval from the situation (idle display-off wake, OTA/bg job,
+  Wi-Fi bring-up, startup, clock minute boundary, idle-off deadline); `shell`
+  assembles the inputs and `main` reschedules its single timer. Expensive
+  telemetry is separately throttled by `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS`.
+- Tap an indicator to show a one-line detail in the notification area; long-press
+  runs the full status command through `header_register_status_action()`, registered
+  by `command_init()` (the header stays a command-free leaf).
+- Battery always visible — shows "BAT N/C" when ADC is not connected
 - All system panel values dynamically linked to FreeRTOS runtime statistics
 - CPU usage calculated from FreeRTOS idle task runtime counter deltas
-- Notification area in center for transient module events
 - All public functions use LVGL async dispatch (safe from any task context)
 - SD icon shows persistent state (NO/INS/ON/ERR)
 
@@ -706,7 +760,19 @@ client, and the time/date shell commands:
   `time_get_local()`, `time_get_utc()`, `time_get_unix()`,
   `time_get_uptime_sec()`, `time_get_uptime_formatted()`,
   `time_get_formatted()`, `time_get_formatted_utc()`,
-  `time_set_timezone()`, `time_get_timezone()`, `time_get_ntp_server()`.
+  `time_format_hm()` + the pure `clock_format_hm_snapshot()`, `time_is_set()`,
+  `time_set_timezone()`, `time_get_timezone()`, `time_get_timezone_label()`,
+  `time_set_utc_offset()`, `time_get_ntp_server()`.
+  `time_is_set()` is true after an SNTP sync OR a manual `date`/`time` set
+  (unix time at or above `P4_CONFIG_CLOCK_VALID_EPOCH`), which is what the
+  header clock uses to choose between a real time and `--:--`.
+- **Automatic timezone** (no hardcoded zone): `time_set_utc_offset(seconds, label)`
+  builds the POSIX TZ string from a network-detected UTC offset ("UTC-2" for +2h,
+  "UTC-5:30" for +5:30) and keeps the IANA label for display. The lookup itself is
+  `networking_time_detect()` (components/networking, the sole HTTP owner) driven by
+  the command layer's `timesync` task (`command_time_auto_sync`), which is kicked
+  off once Wi-Fi associates and re-runs every `P4_CONFIG_TIMEZONE_RESYNC_SECS` so
+  DST and travel stay correct. It NEVER runs on the LVGL task.
   SNTP uses `P4_CONFIG_NTP_SERVER`; the timezone is a POSIX TZ string
   (`P4_CONFIG_TIMEZONE_BYTES` max). `time_start_sntp()` is designed to run once
   lwIP is ready; `time_force_resync()` (used by `sntp sync`) restarts the
@@ -826,6 +892,9 @@ Wi-Fi Kconfig under its own `WIFI_RMT_` prefix.
   (status / content-type / size) with semantic colours and returns the body for the command
   layer to print or save to SD; the return value maps onto ERRORLEVEL (0 = HTTP 2xx). A
   `user:pass@` URL prefix enables HTTP Basic auth (`networking_http_url_has_userinfo()`).
+  The same fetch core has a quiet (no-transcript) mode used by
+  `networking_time_detect()`, which resolves the local UTC offset + IANA zone for
+  the clock's automatic timezone detection (`P4_CONFIG_TIMEZONE_URL`).
 - **HTTP file server (`httpd`)**: `components/networking/http_server.c` is the sole owner of
   the `esp_http_server` surface. It serves the SD card (`BSP_SD_MOUNT_POINT`) with HTML
   directory listings, file streaming through a heap read buffer, optional Basic auth
@@ -916,11 +985,26 @@ built on the same runtime (v0.35.0: 6 surfaces).
   - `ask` — text prompt with on-screen and USB keyboard support; stores the
     answer in `ASK_RESULT` (or `/v:NAME`), with `/p` password masking.
   - `browse` (`filebrowser`) — SD file picker (`BROWSE_RESULT`/`/v:NAME`, 0/1).
-  - `view` — text viewer pager for SD files (20 lines/page).
+  - `view` — text viewer pager for SD files (20 lines/page); `.bmp`/`.dib`
+    route to the image viewer through the `components/filetype/` registry.
+  - `imageview` — fit-to-screen BMP viewer (`image show`/`view`/`open`): reuses
+    the pure decoder in `components/gfx`, decodes straight to a fit-to-screen
+    RGB565 `lv_canvas` (source never materialized), `Esc`/`q`/Close.
   - `hexview` — 16-byte hex dump pager for SD files.
-  - All six accept `/t:secs` to auto-cancel: each surface starts a FreeRTOS
+  - All accept `/t:secs` to auto-cancel: each surface starts a FreeRTOS
     one-shot timer in `open` that fires `MODAL_EVENT_CLOSE_REQUEST`, so an
     unattended batch script can never hang on a dialog.
+  - **Screen capture:** a modal blocks the command worker for its whole
+    lifetime, so the bare `screenshot` command is handled by the console-reader
+    task instead — `shell_command_ops_t.modal_console_command` (registered by
+    `command_init()`) is tried before the surface's serial handler, and runs the
+    streaming capture (`shell_command_screenshot`) on the reader task. This is
+    what lets the host capture an open modal. Only the no-argument form is
+    claimed; `screenshot <file>` still queues to the worker.
+  - `surf_create_container()` scrolls the new panel into view because the
+    surface aliases the scrollable transcript container; without it a transcript
+    scrolled to its newest output would leave the panel off-screen above the
+    viewport.
 
 ### TUI Module (`components/tui` + `windows` + `ansi` + font)
 
@@ -933,7 +1017,7 @@ Hardware-verified on COM11 (v0.35.1, final TUI state: flash, boot `1024x510` tra
 - **Fullscreen**: global `draw fullscreen on|off` and per-app `tui fullscreen on|off` both route to `tui_enter_fullscreen`/`tui_exit_fullscreen`; `windows_is_fullscreen()` guards state. Keyboard scaling remains dynamic via `windows_notify_keyboard_visibility` even when header is hidden.
 - **Prompt**: all inputs honor `shell_prompt_render_plain()` (`components/shell/shell.c:412`): `main.c:112` input line echo `SHELL_PROMPT` → `shell_prompt_render_plain()`, `modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea` (`components/keyboard/keyboard.c:88`), shell echo situational color (`SH_PROMPT`). `PROMPT=` template (`$p $g` etc) renders everywhere.
 - **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, cmaps 3, no duplication (previously the `-r` range duplicated the two blocks). `windows_get_terminal_font()` returns this font for the TUI label.
-- **Batch TUI verbs**: `draw box`/`line`/`fill`/`text`/`bar`/`table`/`list`/`clear`/`window`/`cursor`/`hold`/`alt-screen`/`fullscreen`, `color`, `locate` compose on the cell buffer; the exclusive `gfx` RGB565 canvas (`pixel`/`line`/`rect`/`circle`/`show`/`load`/`blit`/`save`) and `browse`/`view`/`hexview` round out the surfaces. `draw table`/`draw list` add cursor + selection rows. `browse`/`view`/`hexview` are native pagers on the shared modal runtime (`components/modal/modal_surf.c`). `draw` auto-enters TUI (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) when no TUI/modal surface is active. Alt-screen `ESC[?1049h/l` save/restore is honoured when `P4_CONFIG_TUI_ALT_SCREEN` is set (`components/tui/tui.c:327`).
+- **Batch TUI verbs**: `draw box`/`line`/`fill`/`text`/`bar`/`table`/`list`/`image`/`clear`/`window`/`cursor`/`hold`/`alt-screen`/`fullscreen`, `color`, `locate` compose on the cell buffer; the exclusive `gfx` RGB565 canvas (`pixel`/`line`/`rect`/`circle`/`show`/`image`/`load`/`blit`/`save`) and `browse`/`view`/`image`/`hexview` round out the surfaces. `draw table`/`draw list` add cursor + selection rows. `browse`/`view`/`hexview` are native pagers on the shared modal runtime (`components/modal/modal_surf.c`). `draw` auto-enters TUI (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) when no TUI/modal surface is active. Alt-screen `ESC[?1049h/l` save/restore is honoured when `P4_CONFIG_TUI_ALT_SCREEN` is set (`components/tui/tui.c:327`).
 - **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`): `tui status` shows transcript rect, `grab_screenshot.py` crops to it for pixel-perfect TUI verification (used during hardware bug hunting alongside `windows_debug_editor_layout`).
 - **Essential features implemented**: window stack (nested `tui_draw_box` with title), fullscreen (global + per-app header hide), color (`tui_flush` per-fg recolor), prompt (unified `shell_prompt_render_plain`), screenshot debug; hardware tested without overlap (header kept unless fullscreen, TUI does not overlap shell text), no watchdog, no abort.
 - Surfaces render into the dedicated TUI container and restore on `tui_deinit`/`windows_exit_tui_mode`.
@@ -957,11 +1041,15 @@ shared modal runtime (see SDK.md, "Modal app surfaces").
   `editor_format_line_number` helper), draws a blinking block cursor, a
   current-line highlight bar, and a selection background overlay, and
   implements an inline status-bar prompt system for Find / Replace /
-  Go-to-Line / Save-As / quit-confirmation. The cursor, selection, and touch
-  mapping are offset by the gutter width so the caret stays byte-aligned with
-  the document. A per-row cumulative width table (built with
+  Go-to-Line / Save-As / Open / quit-confirmation. The cursor, selection, and
+  touch mapping are offset by the gutter width so the caret stays byte-aligned
+  with the document. A per-row cumulative width table (built with
   `lv_font_get_glyph_width`) maps byte columns to pixels and back in O(log n),
-  keeping the caret and touch mapping aligned with the rendered rows.
+  keeping the caret and touch mapping aligned with the rendered rows. The pure
+  `editor_osk_key_from_label()` table is the single label→`editor_key_t` mapper
+  shared by the touch handler and `test_editor.c`, and the view selects the OSK
+  Nav page on open (`editor_view_open`) and the letters page for text prompts,
+  restoring Nav on commit/cancel.
 - **Layout integration**: `windows_enter_editor_mode()` aliases the transcript
   container as the editor surface and the input row becomes a status bar.
   The view hides the shell's own span group
@@ -970,15 +1058,22 @@ shared modal runtime (see SDK.md, "Modal app surfaces").
   `components/modal/`. USB keys and serial lines reach it through the generic
   `shell_command_ops_t.modal_is_active` / `modal_handle_usb_key` /
   `modal_handle_serial_line` hooks; serial lines are forwarded verbatim with the
-  verbs `\q \s \f \g \o \u \r \a`. The
+  verbs `\q \s \f \g \o \open \u \r \all \c \b \co \w \l \p \a`. The
   keyboard's single `LV_EVENT_VALUE_CHANGED` handler in `main.c` owns mode
   switching (`abc`/`ABC`/`1#`/`Nav`) and routes every button to the shell
   input line or the active modal surface.
 - **Safety**: an existing file that cannot be loaded is refused with an error
   (never opened as an empty buffer); Esc confirms before discarding unsaved
   changes; rotation during a session closes the view cleanly.
+- **Large files / PSRAM**: the document and its caches (line text, line array,
+  undo snapshots, width/wrap caches, span scratch, preview) go through
+  `editor_mem_alloc/realloc/free` (PSRAM first). Rendering is windowed to
+  `P4_CONFIG_EDITOR_RENDER_ROWS` rows with a full-height spacer holding the
+  scroll range; SD load/save stream through a small internal `MALLOC_CAP_DMA`
+  bounce buffer because PSRAM is not DMA-capable on this P4 build.
 - **Tests**: `test/main/test_editor.c` exercises the document model and the
-  batch lexer without hardware.
+  batch lexer without hardware (the line-cap test builds its document with one
+  multi-line insert so it stays linear).
 
 ## Hardware Configuration
 

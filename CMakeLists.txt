@@ -11,6 +11,7 @@ set(EXTRA_COMPONENT_DIRS
   components/alarm
   components/ansi
   components/applib
+  components/archive
   components/audio
   components/batch
   components/boot
@@ -32,6 +33,7 @@ set(EXTRA_COMPONENT_DIRS
   components/shell
   components/storage
   components/tui
+  components/uitest
   components/usb
   components/windows
 )

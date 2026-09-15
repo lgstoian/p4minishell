@@ -14,6 +14,7 @@
  *   - time [HH:MM[:SS]]      show the clock panel, or set the system time
  *   - timezone [TZ]          show the timezone, or set a POSIX TZ string
  *   - sntp|ntpsync [sync]    show NTP sync status, or force a re-sync
+ *   - timer|stopwatch ...    named stopwatch runs (start/stop/lap/status)
  *
  * Setting the date/time adjusts the C-library clock; a later SNTP sync
  * overrides it, matching how DOS-era boxes behaved against an authoritative
@@ -23,6 +24,7 @@
 #include "clock.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
+#include "esp_timer.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <strings.h>
@@ -261,6 +263,8 @@ void clock_command_date(int argc, char **argv)
         return;
     }
 
+    clock_rtc_note_synced("manual");
+    clock_rtc_ext_write(stamp);
     clock_emit_field("The current date is:", "%s", time_get_formatted());
 }
 
@@ -320,6 +324,8 @@ void clock_command_time(int argc, char **argv)
         return;
     }
 
+    clock_rtc_note_synced("manual");
+    clock_rtc_ext_write(stamp);
     clock_emit_field("The current time is:", "%s", time_get_formatted());
 }
 
@@ -344,10 +350,49 @@ void clock_command_sntp(int argc, char **argv)
     clock_emit_muted("sntp sync forces a fresh NTP exchange");
 }
 
+void clock_command_rtc(int argc, char **argv)
+{
+    int64_t age;
+
+    if (argc == 2 && clock_cmd_equals(argv[1], "anchor")) {
+        if (!time_is_set() && !clock_rtc_is_stale()) {
+            clock_emit_error("rtc: clock is unset (nothing to anchor)");
+            return;
+        }
+        clock_rtc_anchor_now();
+        clock_emit_ok("rtc: anchor written");
+        return;
+    }
+    if (argc != 1) {
+        clock_emit_usage("Usage: rtc [anchor]");
+        return;
+    }
+    clock_emit_heading("RTC Backup");
+    clock_emit_field("Source:", "%s", clock_rtc_source());
+    clock_emit_field("State:", "%s",
+                     clock_rtc_is_stale() ? "stale (last-known time)" :
+                     time_is_set() ? "valid" : "unset");
+    clock_emit_field("RTC counter:", "%llu us", (unsigned long long)clock_rtc_counter_us());
+    age = clock_rtc_anchor_age_sec();
+    if (age < 0) {
+        clock_emit_field("Anchor:", "never written");
+    } else {
+        clock_emit_field("Anchor:", "%lld s ago", (long long)age);
+    }
+    {
+        int ext = clock_rtc_ext_state();
+        clock_emit_field("Ext chip:", "%s",
+                         ext > 0 ? "present" : (ext == 0 ? "absent/unconfigured" : "not probed"));
+    }
+    clock_emit_field("SNTP:", "%s", time_is_synchronized() ? "synced" : "not synced");
+    clock_emit_muted("rtc anchor forces an NVS anchor write now");
+}
+
 void clock_command_timezone(int argc, char **argv)
 {
     if (argc == 1) {
-        clock_emit_field("Timezone:", "%s", time_get_timezone());
+        clock_emit_field("Timezone:", "%s", time_get_timezone_label());
+        clock_emit_field("TZ string:", "%s", time_get_timezone());
         clock_emit_field("Local time:", "%s", time_get_formatted());
         clock_emit_muted("timezone <TZ> sets a POSIX timezone string");
         return;
@@ -361,4 +406,228 @@ void clock_command_timezone(int argc, char **argv)
     time_set_timezone(argv[1]);
     clock_emit_ok("timezone: set to '%s'", time_get_timezone());
     clock_emit_field("Local time:", "%s", time_get_formatted());
+}
+
+/* ========================================================================
+ * TIMER / STOPWATCH
+ * ======================================================================== */
+
+/** Options accepted anywhere on the `timer` line. */
+typedef struct {
+    bool bare;
+    char var[P4_CONFIG_TIMER_NAME_BYTES + 64];
+    bool has_var;
+} clock_timer_opts_t;
+
+/** Split `start|stop|lap|status`, `[name]`, `/b`, `/v:NAME` out of argv.
+ *  @return 0 on success, 2 on a usage error (already reported). */
+static int clock_timer_parse_opts(int argc, char **argv, const char **verb_out,
+                                  const char **name_out, clock_timer_opts_t *opts_out)
+{
+    const char *verb = NULL;
+    const char *name = NULL;
+    int i;
+
+    memset(opts_out, 0, sizeof(*opts_out));
+    for (i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        if (arg == NULL || arg[0] == '\0') {
+            continue;
+        }
+        if (arg[0] == '/') {
+            if (clock_cmd_equals(arg, "/b")) {
+                opts_out->bare = true;
+            } else if (strncasecmp(arg, "/v:", 3) == 0 && strlen(arg) > 3 &&
+                       strlen(arg) <= sizeof(opts_out->var) - 1) {
+                snprintf(opts_out->var, sizeof(opts_out->var), "%s", arg + 3);
+                opts_out->has_var = true;
+            } else {
+                clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+                return 2;
+            }
+        } else if (verb == NULL) {
+            verb = arg;
+        } else if (name == NULL) {
+            name = arg;
+        } else {
+            clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+            return 2;
+        }
+    }
+    if (verb == NULL) {
+        clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+        return 2;
+    }
+    *verb_out = verb;
+    *name_out = name;
+    return 0;
+}
+
+/** Store the elapsed milliseconds into the `/v:NAME` variable.
+ *  @return 0 on success, 1 when storage is unavailable or rejects the name. */
+static int clock_timer_store_var(const clock_timer_opts_t *opts, int64_t elapsed_ms)
+{
+    char value[32];
+
+    if (!opts->has_var) {
+        return 0;
+    }
+    if (!(s_clock_ops_set && s_clock_ops.set_env != NULL)) {
+        clock_emit_error("timer: variable storage is unavailable");
+        return 1;
+    }
+    snprintf(value, sizeof(value), "%lld", (long long)elapsed_ms);
+    if (s_clock_ops.set_env(opts->var, value) != 0) {
+        clock_emit_error("timer: cannot store '%s' (bad name or table full)", opts->var);
+        return 1;
+    }
+    return 0;
+}
+
+/** Render one run line; bare mode prints `name state ms laps` for pipes. */
+static void clock_timer_print_run(const char *name, bool running, int64_t elapsed_ms,
+                                  uint32_t laps, bool bare)
+{
+    if (bare) {
+        char line[96];
+        snprintf(line, sizeof(line), "%s %s %lld %lu", name, running ? "running" : "stopped",
+                 (long long)elapsed_ms, (unsigned long)laps);
+        clock_emit_text(line);
+        clock_emit_text("\n");
+    } else {
+        clock_emit_field(name, "%s, %lld ms (%.2f s), %lu lap(s)", running ? "running" : "stopped",
+                         (long long)elapsed_ms, (double)elapsed_ms / 1000.0,
+                         (unsigned long)laps);
+    }
+}
+
+int clock_command_timer(int argc, char **argv)
+{
+    const char *verb;
+    const char *name;
+    clock_timer_opts_t opts;
+    int64_t elapsed_ms = 0;
+    int rc;
+
+    if (clock_timer_parse_opts(argc, argv, &verb, &name, &opts) != 0) {
+        return 2;
+    }
+
+    if (clock_cmd_equals(verb, "start")) {
+        rc = clock_timer_start(name);
+        if (rc == 2) {
+            clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+            return 2;
+        }
+        if (rc != 0) {
+            clock_emit_error("timer: no free stopwatch slots (max %d)", P4_CONFIG_TIMER_SLOTS);
+            return 1;
+        }
+        if (!opts.bare) {
+            clock_emit_ok("timer: '%s' started", (name != NULL && name[0] != '\0') ? name : "default");
+        }
+        return 0;
+    }
+
+    if (clock_cmd_equals(verb, "stop")) {
+        rc = clock_timer_stop(name, &elapsed_ms);
+        if (rc == 2) {
+            clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+            return 2;
+        }
+        if (rc != 0) {
+            clock_emit_error("timer: no running run named '%s'",
+                             (name != NULL && name[0] != '\0') ? name : "default");
+            return 1;
+        }
+        if (clock_timer_store_var(&opts, elapsed_ms) != 0) {
+            return 1;
+        }
+        if (!opts.bare) {
+            clock_emit_ok("timer: '%s' stopped at %lld ms",
+                          (name != NULL && name[0] != '\0') ? name : "default",
+                          (long long)elapsed_ms);
+        } else {
+            char line[32];
+            snprintf(line, sizeof(line), "%lld\n", (long long)elapsed_ms);
+            clock_emit_text(line);
+        }
+        return 0;
+    }
+
+    if (clock_cmd_equals(verb, "lap")) {
+        rc = clock_timer_lap(name, &elapsed_ms);
+        if (rc == 2) {
+            clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+            return 2;
+        }
+        if (rc != 0) {
+            clock_emit_error("timer: no running run named '%s'",
+                             (name != NULL && name[0] != '\0') ? name : "default");
+            return 1;
+        }
+        if (clock_timer_store_var(&opts, elapsed_ms) != 0) {
+            return 1;
+        }
+        if (!opts.bare) {
+            clock_emit_ok("timer: '%s' lap at %lld ms",
+                          (name != NULL && name[0] != '\0') ? name : "default",
+                          (long long)elapsed_ms);
+        } else {
+            char line[32];
+            snprintf(line, sizeof(line), "%lld\n", (long long)elapsed_ms);
+            clock_emit_text(line);
+        }
+        return 0;
+    }
+
+    if (clock_cmd_equals(verb, "status")) {
+        if (name != NULL) {
+            bool running = false;
+            uint32_t laps = 0;
+            rc = clock_timer_status_at(name, esp_timer_get_time(), &running, &elapsed_ms, &laps);
+            if (rc == 2) {
+                clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+                return 2;
+            }
+            if (rc != 0) {
+                clock_emit_error("timer: no run named '%s'", name);
+                return 1;
+            }
+            if (clock_timer_store_var(&opts, elapsed_ms) != 0) {
+                return 1;
+            }
+            if (!opts.bare) {
+                clock_emit_heading("Stopwatch");
+            }
+            clock_timer_print_run(name, running, elapsed_ms, laps, opts.bare);
+            return 0;
+        }
+        if (clock_timer_slot_count() == 0) {
+            if (!opts.bare) {
+                clock_emit_muted("(no timers)");
+            }
+            return 1;
+        }
+        if (!opts.bare) {
+            clock_emit_heading("Stopwatch");
+        }
+        {
+            int index = 0;
+            char slot_name[P4_CONFIG_TIMER_NAME_BYTES + 1];
+            bool running = false;
+            int64_t slot_ms = 0;
+            while (clock_timer_get_slot(index, slot_name, sizeof(slot_name),
+                                        &running, &slot_ms)) {
+                uint32_t laps = 0;
+                (void)clock_timer_status_at(slot_name, esp_timer_get_time(), NULL, NULL, &laps);
+                clock_timer_print_run(slot_name, running, slot_ms, laps, opts.bare);
+                index++;
+            }
+        }
+        return 0;
+    }
+
+    clock_emit_usage("Usage: timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME]");
+    return 2;
 }

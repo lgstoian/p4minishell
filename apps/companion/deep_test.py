@@ -474,18 +474,21 @@ def main():
             time.sleep(5.0)                      # brightness set, Saved dialog opens
             send_after_settle(ser, b"ok\n", settle=3.0)  # dismiss dialog
             time.sleep(2.0)
-            # Theme submenu (SET item 9): enter, then Back to the menu.
-            set_theme = press(ser, st, b"9\n", "[M-SET-THEME]")
+            # Theme submenu: serial selection is 1-based (list returns the
+            # 0-based index as ERRORLEVEL; serial input is index+1). Theme is
+            # menu item 5 -> "6", its Back is item 5 -> "6".
+            set_theme = press(ser, st, b"6\n", "[M-SET-THEME]")
             print("  set theme:", set_theme, flush=True)
             if set_theme:
                 send_after_settle(ser, b"6\n")   # Theme Back -> settings
                 time.sleep(2.0)
-            set_ok = press(ser, st, b"10\n", "[M-SET-BACK]")  # Back (item 10)
+            set_ok = press(ser, st, b"13\n", "[M-SET-BACK]")  # Back (0-based 12)
             print("  set back:", set_ok, flush=True)
         if set_ok:
             # Real artifact check: persisted brightness survives the flow.
+            # Settings persist in CONFIG.SYS (config /b), not companion.INI.
             ser.reset_input_buffer()
-            ser.write(b"appconfig companion get brightness\n")
+            ser.write(b"config BRIGHTNESS /b\n")
             got = ansi_strip(read_all(ser, 5.0))
             st.log.append(got)
             set_ok = "63" in got
@@ -499,9 +502,9 @@ def main():
             time.sleep(0.5)
             read_all(ser, 1.0)       # drain residual
             ser.reset_input_buffer()
-            ser.write(b"appconfig companion\n")
+            ser.write(b"config BRIGHTNESS /b\n")
             p = ansi_strip(read_all(ser, 4.0))
-            results["persist"] = "brightness=63" in p
+            results["persist"] = "63" in p
         else:
             results["persist"] = False
         print("  persist:", "PASS" if results["persist"] else "FAIL")

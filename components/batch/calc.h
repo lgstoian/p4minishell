@@ -14,7 +14,13 @@
  *
  * Supported functions: ABS SGN INT FIX FRAC ROUND MOD SQR EXP LN LOG SIN COS
  * TAN ASN ACS ATN SINH COSH TANH ASINH ACOSH ATANH FACT NCR NPR PI RAN# POL REC
- * DMS DMS$ DEG CUR VAL VALF STR$ HEX$ ASC CHR$ LEN LEFT$ MID$ RIGHT$. Numbers
+ * DMS DMS$ DEG CUR VAL VALF STR$ HEX$ BIN$ OCT$ VALB ASC CHR$ LEN LEFT$ MID$
+ * RIGHT$ C2F F2C IN2MM MM2IN LB2KG KG2LB,
+ * financial PV FV PMT NPER RATE NPV IRR SLN SYD DB (HP-12C conventions,
+ * up to P4_CONFIG_CALC_ARG_MAX arguments), and
+ * date DATE YEAR MONTH DAY DOW TODAY DATEADD DAYS EOMONTH DATEVALUE DATESTR
+ * over epoch-day serials (days since 1970-01-01, DOW 0=Sunday..6=Saturday).
+ * Numbers
  * accept `&H` and `0x` hex literals; strings are delimited by `'` or `"` and
  * concatenate with `+`. POL/REC store their two results in the X and Y
  * environment variables, the same documented side effect the calculator's BASIC
@@ -82,6 +88,8 @@ void calc_format_number(double value, char *out, size_t size);
  *   calc /hex <expr>         print an integral result as &H hex
  *   calc /deg | /rad         set the trig angle mode
  *   calc /angle              show the current angle mode
+ *   calc /fin                list the financial functions
+ *   calc /date               list the date functions and serial convention
  *
  * @return ERRORLEVEL: 0 ok, 1 evaluation/domain/store error, 2 usage.
  */

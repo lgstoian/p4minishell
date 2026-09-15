@@ -45,6 +45,12 @@ FILES = [
     ("tcmd", "TCMD.APPINFO", True),
     ("elite", "ELITE.BAT", False),
     ("elite", "ELITE.APPINFO", True),
+    ("pics", "PICS.BAT", False),
+    ("pics", "PICS.APPINFO", True),
+    ("uitest", "UITEST.BAT", False),
+    ("uitest", "UITEST.APPINFO", True),
+    ("palmtop", "PALMTOP.BAT", False),
+    ("palmtop", "PALMTOP.APPINFO", True),
 ]
 
 

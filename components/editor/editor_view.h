@@ -31,6 +31,22 @@ void editor_view_close(void);
 /** Whether the editor view is currently open. */
 bool editor_view_is_open(void);
 
+/** Snapshot of the open editor's document state (for `ui state` and tests). */
+typedef struct {
+    bool open;
+    bool modified;
+    bool preview;
+    bool wrap;
+    bool readonly;
+    size_t cursor_row;
+    size_t cursor_col;
+    size_t line_count;
+    char path[P4_CONFIG_SD_PATH_BYTES];
+} editor_view_state_t;
+
+/** Fill @p out with the current editor state (zeroed when closed). */
+void editor_view_get_state(editor_view_state_t *out);
+
 /** Whether the rendered Markdown preview is showing (read-only). */
 bool editor_view_is_preview(void);
 
@@ -56,6 +72,15 @@ bool editor_view_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii)
  */
 bool editor_view_handle_osk(const char *label);
 
+/**
+ * Map an editor OSK command label ("Save", "WdL", "Open", ...) to its
+ * editor_key_t. Pure string matching (no LVGL side effects), so unit tests
+ * and the surface share one table. Symbols, mode buttons, and single
+ * characters are handled elsewhere and return false here.
+ * @return true with @p out set when @p label names an editor command.
+ */
+bool editor_osk_key_from_label(const char *label, editor_key_t *out);
+
 /** Notify the editor that the document was saved (update the status bar). */
 void editor_view_notify_saved(bool ok);
 
@@ -67,6 +92,12 @@ void editor_view_notify_reloaded(bool ok);
 
 /** lv_async_call trampoline for editor_view_notify_reloaded(). */
 void editor_view_notify_reloaded_cb(void *user_data);
+
+/** Notify the editor that another file was opened (rebuild + status). */
+void editor_view_notify_opened(bool ok);
+
+/** lv_async_call trampoline for editor_view_notify_opened(). */
+void editor_view_notify_opened_cb(void *user_data);
 
 /** Scroll the editor surface vertically by @p pixels (mouse wheel). */
 void editor_view_scroll_by(int32_t pixels);

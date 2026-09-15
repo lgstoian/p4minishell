@@ -170,6 +170,19 @@ void tui_clear_line(int mode)
     }
 }
 
+void tui_scroll_up(void)
+{
+    if (!s_cells) return;
+    size_t row_bytes = (size_t)s_cols * sizeof(tui_cell_t);
+    memmove(s_cells, s_cells + s_cols, row_bytes * (size_t)(s_rows - 1));
+    for (int c = 1; c <= s_cols; c++) {
+        tui_cell_set(cell_at(s_rows, c), " ", s_def_fg, s_def_bg);
+    }
+    if (s_cur_row > 1) s_cur_row--;
+    if (s_cur_row < 1) s_cur_row = 1;
+    if (s_cur_row > s_rows) s_cur_row = s_rows;
+}
+
 void tui_set_cursor(int row, int col)
 {
     if (row < 1) row = 1;
@@ -371,6 +384,61 @@ uint8_t tui_rgb_to_dos(uint32_t rgb)
         }
     }
     return best;
+}
+
+void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img)
+{
+    /* The TUI label renders only the foreground colour (LVGL recolor has no
+     * per-span background), so a pixel is drawn as an ASCII glyph chosen from a
+     * luminance ramp, coloured with the nearest DOS palette entry as fg. */
+    static const char k_ramp[] = " .:-=+*#%@";
+    const int ramp_last = (int)(sizeof(k_ramp) - 2);
+    int cy;
+
+    if (s_cells == NULL || img == NULL || img->px == NULL) return;
+    if (w < 1 || h < 1) return;
+
+    for (cy = 0; cy < h; cy++) {
+        int row = y + cy;
+        int sy;
+        int cx;
+
+        if (row < 1) continue;
+        if (row > s_rows) break;
+        sy = (int)((int64_t)cy * img->h / h);
+        if (sy >= img->h) sy = img->h - 1;
+        for (cx = 0; cx < w; cx++) {
+            int col = x + cx;
+            int sx;
+            uint16_t px;
+            uint32_t rgb;
+            int r;
+            int g;
+            int b;
+            int lum;
+            int level;
+            char ch[2];
+
+            if (col < 1) continue;
+            if (col > s_cols) break;
+            sx = (int)((int64_t)cx * img->w / w);
+            if (sx >= img->w) sx = img->w - 1;
+            px = img->px[(size_t)sy * (size_t)img->w + (size_t)sx];
+            /* RGB565 -> RGB888. */
+            r = ((px >> 11) & 0x1F) << 3;
+            g = ((px >> 5) & 0x3F) << 2;
+            b = (px & 0x1F) << 3;
+            rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+
+            lum = (r * 30 + g * 59 + b * 11) / 100; /* 0..255 luma */
+            level = lum * ramp_last / 255;
+            if (level < 0) level = 0;
+            if (level > ramp_last) level = ramp_last;
+            ch[0] = k_ramp[level];
+            ch[1] = '\0';
+            tui_print_at(col, row, ch, tui_rgb_to_dos(rgb), 16);
+        }
+    }
 }
 
 void tui_draw_bar(int x, int y, int w, int pct, char fill_ch, char empty_ch,

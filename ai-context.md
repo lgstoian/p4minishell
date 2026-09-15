@@ -6,7 +6,7 @@
 - **Target**: ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO)
 - **Framework**: ESP-IDF v5.5.5
 - **UI**: LVGL 9.5.0 (esp_lvgl_port 2.9.0) with JD9165 1024x600 display + GT911 touch
-- **Version**: v0.38.1 (`p4minishell_config.h:54-59`). **0.38.1:** verified the `wifi throughput` bench (host↔device, same subnet) and raised the lwIP TCP window (`CONFIG_LWIP_TCP_WND_DEFAULT`/`SND_BUF_DEFAULT` 5760→32768, `RECVMBOX_SIZE` 6→32) — the window, not the SDIO clock, had capped a single stream (~2.4 Mbit/s); host→device rose 2.45→~11 Mbit/s and 40 MHz measured faster than 10 MHz in both directions. **0.38.0:** adopted the 40 MHz SDIO clock after a soak gate, added the `wifi throughput` bench (+ `tools/wifi_bench.py`) and `tools/regression.py`. **0.37.1:** fixed O3 (driver-API UART mirror), O4 (no-reset `open_port()`), O5 (I2C bus recovery). **0.37.0:** moved the app-owned flash-safe task stacks (USB, c6ota, audio, alarm, led, shell UART) to PSRAM, which lifted the tightest boot-time internal DMA headroom from ~1 KB to ~10 KB free / 8.7 KB largest block (see `bugs.md` O8); the boot script now runs on a dedicated short-lived `bootscript` task instead of the Wi-Fi event task. **0.36.1:** fixed an LVGL timer-list heap-corruption panic (a `header_schedule()` async payload double free; see changelog `[0.36.1]`), boot SD scripting now runs on the SD first mount so CONFIG.SYS/AUTOEXEC are no longer skipped, and USB host bring-up retries. Including: `components/gfx/` (RGB565 raster + BMP parser/decoder, plus the B2 toolkit: `hline`/`vline`/`triangle`/`ellipse`/`polygon`/`flood_fill`/`text` and the committed 8x8 ASCII font `gfx_font.c`), `gfx`/`crc32`/`asset` verbs, packaged SD apps (`pkg list|info|verify|check|install|remove` over `APPS/<APP>.APPINFO` + `APPS/<APP>.ASSETS`, installed from CRC-checked `PKGS/<APP>/` bundles), `start`/`taskkill` background jobs, `draw table`/`draw list` with cursor/selection, UI themes (B3: `theme list|show|set [/save]` over `default`/`amber`/`ice`/`mono` with live re-apply + `SHELL.INI` persistence), dead-code cleanup (B4: deleted the `storage_commands.c` stub and the `p4_usb` CMake twin, removed dead statics, de-duplicated `help /all`), plot/graph layer (`plot` world-coordinate verbs over the `gfx` canvas or TUI via `gfx_view.c`, sampling `calc`), RAM-loaded batch execution (`P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072), O(1) transcript appends + `windows_set_transcript_text_len()`, off-console mirror suppression, and the TCMD/SNAKE/ELITE/BOUNCE/GFXTOOL/PLOT reference apps. Verified baseline: unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25, header OK (COM3).
+- **Version**: v0.38.1 (`p4minishell_config.h:54-59`). **0.38.1:** verified the `wifi throughput` bench (host↔device, same subnet) and raised the lwIP TCP window (`CONFIG_LWIP_TCP_WND_DEFAULT`/`SND_BUF_DEFAULT` 5760→32768, `RECVMBOX_SIZE` 6→32) — the window, not the SDIO clock, had capped a single stream (~2.4 Mbit/s); host→device rose 2.45→~11 Mbit/s and 40 MHz measured faster than 10 MHz in both directions. **0.38.0:** adopted the 40 MHz SDIO clock after a soak gate, added the `wifi throughput` bench (+ `tools/wifi_bench.py`) and `tools/regression.py`. **0.37.1:** fixed O3 (driver-API UART mirror), O4 (no-reset `open_port()`), O5 (I2C bus recovery). **0.37.0:** moved the app-owned flash-safe task stacks (USB, c6ota, audio, alarm, led, shell UART) to PSRAM, which lifted the tightest boot-time internal DMA headroom from ~1 KB to ~10 KB free / 8.7 KB largest block (see `bugs.md` O8); the boot script now runs on a dedicated short-lived `bootscript` task instead of the Wi-Fi event task. **0.36.1:** fixed an LVGL timer-list heap-corruption panic (a `header_schedule()` async payload double free; see changelog `[0.36.1]`), boot SD scripting now runs on the SD first mount so CONFIG.SYS/AUTOEXEC are no longer skipped, and USB host bring-up retries. Including: `components/gfx/` (RGB565 raster + BMP parser/decoder, plus the B2 toolkit: `hline`/`vline`/`triangle`/`ellipse`/`polygon`/`flood_fill`/`text` and the committed 8x8 ASCII font `gfx_font.c`), `gfx`/`crc32`/`asset` verbs, packaged SD apps (`pkg list|info|verify|check|install|remove` over `APPS/<APP>.APPINFO` + `APPS/<APP>.ASSETS`, installed from CRC-checked `PKGS/<APP>/` bundles), `start`/`taskkill` background jobs, `draw table`/`draw list` with cursor/selection, UI themes (B3: `theme list|show|set [/save]` over `default`/`amber`/`ice`/`mono` with live re-apply + `SHELL.INI` persistence), dead-code cleanup (B4: deleted the `storage_commands.c` stub and the `p4_usb` CMake twin, removed dead statics, de-duplicated `help /all`), plot/graph layer (`plot` world-coordinate verbs over the `gfx` canvas or TUI via `gfx_view.c`, sampling `calc`), RAM-loaded batch execution (`P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072), O(1) transcript appends + `windows_set_transcript_text_len()`, off-console mirror suppression, and the TCMD/SNAKE/ELITE/BOUNCE/GFXTOOL/PLOT reference apps. Verified baseline: unit 281/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25, header OK (COM3).
 
 ## Mandatory Reading Before Any Change
 1. changelog.md - version history and recent changes
@@ -57,8 +57,37 @@
 - Header state writes (bool/int) are atomic on this platform and safe from any task context
 - If LVGL async dispatch fails (lv_async_call returns error), fall back to synchronous header_render()
 - If allocation fails for the async payload, fall back to synchronous header_render()
-- SD indicator uses consistent HEADER_SD_SYMBOL in both mounted and unmounted states
 - SD indicator shows persistent state (NO/INS/ON/ERR)
+- Status classification (glyph, tone, Wi-Fi label, and the memory/CPU/battery
+  healthy/warn/critical thresholds) MUST live ONLY in `header_status.c` (pure,
+  unit-tested). Never re-derive a threshold, re-classify a state, or pick a raw
+  color in `header.c` or any command file; `header.c` maps the tone to
+  `theme.text`/`warn`/`err`/`text_muted`. `P4_CONFIG_HEADER_STATUS_STYLE` selects
+  words vs the compact colored glyphs; both styles share the same classification.
+- Tap/long-press detail: the header owns the gestures and self-summarizes on tap
+  from its cached state; long-press calls the shell handler registered through
+  `header_register_status_action()` (registered by `command_init()`). The header
+  stays a command-free leaf — never include command/batch headers in it.
+- Notifications MUST go through the pure `header_notify_queue.c` FIFO (single
+  source of order/overflow/clear). `header_notify()` takes a severity
+  (info/warn/error) that colors the message; `header_set_notification()` is the
+  INFO wrapper. Never add a second notification slot or timer: the header owns
+  ONE persistent, paused display timer (`repeat_count=-1`, never auto-freed, so
+  the O7 freed-timer hazard cannot recur) that `header_init()` creates and
+  `header_deinit()` deletes. Blank text flushes the queue (`notify -`).
+- The idle center shows the local clock from `time_format_hm()`; a displayed
+  notification always takes precedence. Do not add a second clock widget.
+- The `A` activity indicator is conditional (hidden when nothing runs) and fed
+  by `c6ota_busy`/`bg_jobs_running` in `header_batch_t`; hidden items MUST
+  contribute zero width in `header_measure_sides()` (mirror LVGL flex, which
+  skips hidden children).
+- The header poll cadence MUST come from the pure `header_refresh.c` policy
+  (`header_refresh_interval_ms()`), assembled by the shell and applied by main's
+  single timer. Expensive telemetry (heap/CPU task snapshot/battery) MUST stay
+  throttled to `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS` — never run
+  `uxTaskGetSystemState()` at the fast poll rate, especially during an OTA (PSRAM
+  is unavailable). The idle interval MUST be bounded by the idle-display-off
+  deadline (`shell_power_ms_until_idle_off()`) and may not skip the clock minute.
 - Battery is ALWAYS visible — shows "BAT N/C" with muted styling when ADC is not connected
 - System panel (MEM | CPU | BAT) is on the far right, all dynamically linked to FreeRTOS runtime stats
 - header_update_battery(int percent, bool adc_ready) — pass adc_ready=false for N/C display
@@ -69,9 +98,30 @@
 - Header layout is responsive and measurement-driven (`header_layout.c` pure policy + `header.c` widgets): never hardcode panel widths — measure live label widths, run the policy, set explicit absolute panel geometry; the notification label must be pinned to its container width; prefer `header_get_height()` over local height math
 - `header_render()` must release the LVGL port lock on EVERY exit path
 
+### Image Support Rules
+- There is exactly ONE BMP implementation: `gfx_bmp_parse_header_ex` /
+  `gfx_bmp_decode_scaled_565` / `gfx_bmp_fit` / `gfx_surface_blit_scaled` in
+  `components/gfx/`. Never add a second BMP parser, decoder, or scaler, and
+  never re-derive aspect math at a call site. The strict sprite wrapper
+  `gfx_bmp_parse_header` (24-bit bottom-up, `GFX_SPR_MAX`) MUST keep its exact
+  behavior — `gfx load` and `test_gfx.c` depend on it.
+- Supported ingest: 24-bit and 32-bit BI_RGB, bottom-up or top-down. Reject
+  RLE, other bit depths, and dimensions beyond `GFX_IMAGE_MAX_W/H` or
+  `P4_CONFIG_IMAGE_MAX_BYTES`. Decode straight to the target size; never
+  materialize a large native surface.
+- Routing is by the `components/filetype/` registry (`.bmp`/`.dib` =
+  `FILETYPE_IMAGE`): `view`/`open` route images to the shared `imageview`
+  modal surface; do not hand-roll extension checks.
+- The viewer is a `modal_surface_t` on the shared runtime (`imageview` in
+  `modal_surf.c`), not a private loop. The TUI path is `tui_draw_image`
+  (single cell-map); the canvas path is `gfx image`. All three call the same
+  gfx decoder.
+- New image surfaces/verbs are additive; never remove `gfx load`/`blit`/`save`
+  or the screenshot BMP path.
+
 ### Module Layering Rules
 - Component dependencies flow ONE WAY: `main` -> `command` -> `batch` -> `storage` -> `shell` -> (`ansi`, `display`, `windows`, `header`, `keyboard`, `clock`). `components/modal/` is a shared runtime used by `editor` and by the batch `dialog`/`list`/`ask` commands; it is reached through `command`/`batch`, never from `shell`.
-- Leaf components below the shell: `components/tui/` (80x25 cell buffer + draw primitives, reached by `draw`/`tui` in `components/command/tui_commands.c` and by `windows`), `components/gfx/` (pure RGB565 raster + BMP parser/decoder + blit + B2 toolkit primitives + 8x8 font `gfx_font.c`, no LVGL; reached only by `components/command/gfx_commands.c`), `components/filetype/` (extension→kind registry), `components/markdown/`, `components/font/` (registry + SD TTF + CJK + theme registry `theme.c`), `components/db/`, `components/alarm/`, `components/audio/`, `components/boot/`, `components/clock/`.
+- Leaf components below the shell: `components/tui/` (80x25 cell buffer + draw primitives, reached by `draw`/`tui` in `components/command/tui_commands.c` and by `windows`), `components/gfx/` (pure RGB565 raster + general 24/32-bit BMP parser/decoder + scaled decode + nearest scaling + aspect-fit + blit + B2 toolkit primitives + 8x8 font `gfx_font.c`, no LVGL; reached by `components/command/gfx_commands.c`, `image_commands.c`, `components/tui/`, and `components/modal/`), `components/filetype/` (extension→kind registry), `components/markdown/`, `components/font/` (registry + SD TTF + CJK + theme registry `theme.c`), `components/db/`, `components/alarm/`, `components/audio/`, `components/boot/`, `components/clock/`.
 - `components/applib/` is the native-app runtime library (the shell SDK
   surface). It is a leaf: REQUIRES only `shell`, `clock`, `storage`, `db`, `tui` (for the
   shared INI / temp-file state mechanics, the same guarded-SD pattern the
@@ -257,6 +307,18 @@
   several reads (its RX FIFO is 64 bytes), so a read without a line terminator is NOT a complete
   command. Buffer the fragment and keep reading. During a key wait, forward the first newly-read
   character immediately (do not wait for the terminator).
+- A modal surface blocks the command worker, so the streaming `screenshot` MUST be handled by the
+  console-reader task via `shell_command_ops_t.modal_console_command` (tried BEFORE
+  `modal_handle_serial_line`, only when `modal_is_active()`), not dispatched to the worker. The
+  handler claims only the exact bare `screenshot`/`scr`/`capture` tokens and calls the ONE
+  `shell_command_screenshot` implementation with `argc == 1`; never add a second capture path.
+  Because the reader is the caller, `shell_uart_console_rx_begin/end` MUST skip `vTaskSuspend/Resume`
+  when called from the console task (`xTaskGetCurrentTaskHandle()`), or it self-suspends forever;
+  the worker-side `receive`/`send` suspend path is unchanged.
+- `surf_create_container()` (components/modal) MUST `lv_obj_scroll_to_view()` its panel: modal
+  surfaces alias the scrollable transcript container, so a transcript scrolled to its newest output
+  would otherwise leave the panel off-screen above the viewport (invisible on the device and in a
+  screenshot). The editor renders into the span group and does not use this helper.
 - Input line text MUST go through `shell_input_line_set_text()` / `shell_input_line_reset()` /
   `shell_extract_input_text()`; never manipulate the prompt prefix directly
 - System info commands (help, sysinfo, version, about, mem, debug) live in `components/shell/`
@@ -303,14 +365,23 @@
   `shell_input_line_set_text`/repair, the mask/recall buffers, and the worker-queue
   `command_request_t`). The batch-line buffer (`P4_CONFIG_BATCH_LINE_BYTES`) is a separate,
   smaller surface.
-- Tab completion routes through `shell_command_ops_t.complete_word` (registered by
-  `command_init`): command names/aliases for the first token and SD paths for any token, capped
-  by `P4_CONFIG_COMPLETION_MAX_MATCHES`. Keep the completion provider in `components/command/`
-  (it touches the SD via storage); the shell only calls the hook.
+- Tab completion routes through `shell_command_ops_t.complete_line` (registered by
+  `command_init`): the provider parses the whole line — first token completes help-table command
+  names, aliases, installed apps and `.bat` files; later tokens complete the command's usage
+  tokens, app/bundle names and SD paths, capped by `P4_CONFIG_COMPLETION_MAX_MATCHES`. The help
+  table is the single source of command names (there is no `shell_builtin_commands[]`); a new
+  command becomes completable as soon as it has a help entry. Keep the provider in
+  `components/command/` (it touches the SD via storage); the shell only calls the hook.
+- Inline ghost completion uses the separate SD-free `ghost_line` op (`P4_CONFIG_COMPLETION_GHOST`)
+  and draws the muted suffix after the caret on the shell input line only; Right/Tab accepts it.
 - Recall history is heap-backed (`char **` of `strdup`'d lines) with depth
   `P4_CONFIG_COMMAND_HISTORY_DEPTH` and a total-byte cap `P4_CONFIG_HISTORY_TOTAL_BYTES`; never
-  revert to a fixed `[depth][COMMAND_BYTES]` grid. `history /save`/`/load` write the
-  `P4_CONFIG_HISTORY_PROFILE` through the guarded storage session.
+  revert to a fixed `[depth][COMMAND_BYTES]` grid. `history /save`/`/load`/`/search` write/read the
+  `P4_CONFIG_HISTORY_PROFILE` through the guarded storage session; with
+  `P4_CONFIG_HISTORY_AUTOSAVE` it is auto-loaded at the first SD mount and auto-saved (5 s
+  debounced on `shell_history_generation()`) with a flush on `reboot`. The Ctrl+R reverse search
+  and `history /search` share `shell_history_search_matches()`; `history /search` skips its own
+  command line so the query cannot self-match.
 - Command implementations live with the module that owns their domain:
   - Filesystem verbs (`cd`, `dir`, `copy`, `move`, `del`, `ren`, `mkdir`, `rmdir`, `type`,
     `write`, `append`, `touch`, `attrib`, `label`, `xcopy`, `find`, `findstr`, `more`, `tree`,
@@ -384,6 +455,34 @@ the raster core + 8x8 font are `components/gfx/`
   - Screenshot/serial (`screenshot`/`scr`/`capture`, `receive`, `send`) ->
     `components/command/serial_commands.c`
   - Config (`config`) -> `components/command/config_cmd.c`; `gfind` -> `gfind_commands.c`
+  - CSV grid (`csv rows|cols|cell|eval`) -> `components/command/csv_commands.c`; the ONE
+    RFC-4180-subset parser is `csv_split_line` in `components/storage/storage_csv.c`, and the ONE
+    field formatter is `csv_format_field` in `csv_commands.c` (shared with `export`). `=EXPR`
+    evaluation reuses `calc_evaluate`; `R<row>C<col>` substitution is the pure `csv_substitute_refs`.
+  - Portable interchange (`export <db|alarms> <csv|json|txt> <file>`) ->
+    `components/command/export_commands.c`; it MUST render through the existing `db_find`/`db_get`
+    and `alarm_list` APIs (no parallel readers) and write via `storage_write_text_file` (atomic).
+  - Password encryption (`crypt lock|unlock`) -> `components/command/crypt_commands.c`; the ONE
+    AES-256-GCM/PBKDF2 core is the `crypt_*_mem`/`crypt_derive_key` set there (mbedTLS). The key and
+    password buffers MUST be zeroed after every run; `/p:` passwords are masked by the shell core.
+  - `db` field queries (`/field:`, `/sort:`, `db get /field:`) use the ONE pure parser
+    `db_field_get` in `components/db/db.c`; the payload `k=v;k=v` convention is documented in
+    command.md and never changes the index format.
+  - USB CDC-ACM serial (`usb userial ...`) -> `components/command/userial_commands.c` over the byte
+    API in `components/usb/userial.c`. `usb` stays a LEAF: it owns the class driver + RX ring only;
+    the verbs (key-queue pump, SD input sourcing) live in `command`, reached from command.c's `usb`
+    arm. The CDC driver installs LAZILY on first `userial_open` — NEVER in
+    `usb_install_host_stack()`, which would consume the boot internal RAM the hosted-SDIO bring-up
+    needs (M48; same class as M38/O8).
+  - TCP terminal (`tcpterm`) -> `components/networking/tcpterm.c` (owned with ping/dns/http;
+    `components/networking/` stays the sole owner of the lwIP socket surface).
+  - Stopwatch (`timer`/`stopwatch`) -> `components/clock/clock_timer.c` (pure slot core) + the
+    command surface in `clock_commands.c`; results reach the environment only through the
+    registered `clock_host_ops_t.set_env` hook (the clock component stays a leaf).
+  - F-key binds (`bind`/`unbind`) -> the table + commands in `components/batch/batch.c`; the shell
+    invokes it through `shell_command_ops_t.bind_lookup_fkey` at the non-printable USB-key path
+    (after the modal and key-wait guards). Persisted to `P4_CONFIG_BIND_PROFILE` (`BIND.BAT`),
+    auto-run by boot.c after the alias profile.
   - Background jobs (`start`, `taskkill`), the dispatcher/pipeline, and the worker task ->
     `components/command/command.c`
 - Background jobs: `start <line>` runs on a pooled worker (`bg0`; pool `P4_CONFIG_BG_TASKS`)
@@ -575,6 +674,19 @@ the raster core + 8x8 font are `components/gfx/`
 - SNTP server hostname is `P4_CONFIG_NTP_SERVER`; the timezone buffer size is
   `P4_CONFIG_TIMEZONE_BYTES`. `time_start_sntp()` is intended to run once lwIP
   is ready; `sntp sync` calls `time_force_resync()` for an immediate exchange.
+- The header-clock format is owned by the clock component too: use
+  `time_format_hm()` (writes `--:--` until the clock is set) and its pure,
+  unit-tested `clock_format_hm_snapshot()`. `time_is_set()` is the single
+  "clock is valid" test — true after SNTP OR a manual `date`/`time` set, not
+  only after SNTP. Never format a clock string or test the epoch at a call site.
+- The timezone is AUTO-DETECTED from the network, never hardcoded: the command
+  layer's `timesync` task calls `networking_time_detect()` (components/networking
+  owns ALL HTTP) then `time_set_utc_offset(seconds, label)`, and starts SNTP.
+  `command_time_auto_sync()` (a `shell_command_ops_t` hook) only kicks that task
+  off when Wi-Fi associates; it is cheap and idempotent. The blocking HTTP probe
+  MUST NOT run on the LVGL task. Detection re-runs every
+  `P4_CONFIG_TIMEZONE_RESYNC_SECS` so DST/travel stays correct, and never runs
+  while `c6ota_is_busy()`. Add new zones via the offset path, not a table.
 
 ### Keyboard Manager Rules
 - ALL keyboard operations MUST go through `components/keyboard/` — never call LVGL keyboard APIs directly from main.c
@@ -582,7 +694,11 @@ the raster core + 8x8 font are `components/gfx/`
 - Keyboard visibility changes trigger automatic UI reflow via the window manager callback
 - When keyboard is hidden, the transcript area expands to fill the freed space
 - Keyboard height is configurable via `P4_CONFIG_KEYBOARD_*` macros
-- Keyboard modes (text_lower, text_upper, number, symbols) are managed by the keyboard component
+- Keyboard modes (`text_lower`, `text_upper`, `number`, `symbols`, `nav`, `nav2`)
+  are managed by the keyboard component. `keyboard_mode_name()` /
+  `keyboard_mode_parse()` are the stable registry, and `keyboard_set_mode()`
+  takes the LVGL port lock itself so the worker task may call it. The
+  `keyboard mode [page]` command exposes both.
 - `keyboard_register_event_callback()` MUST leave exactly ONE handler on the
   widget: `lv_obj_remove_event_cb(widget, NULL)` is a NO-OP in LVGL (it only
   removes callbacks whose cb pointer equals NULL), so the LVGL default keyboard
@@ -599,20 +715,48 @@ the raster core + 8x8 font are `components/gfx/`
 - Shell transcript/input-line LVGL callbacks MUST no-op while the editor is open
   (`windows_editor_mode_active()`), so the shared surface is never re-bound or
   keyboard-summoned underneath the editor.
-- The editor MUST be fully usable from the touch keyboard: two navigation pages
-  (KEYBOARD_MODE_NAV -> LVGL USER_1, KEYBOARD_MODE_NAV2 -> LVGL USER_2) cover
-  every editor command (nav: arrows, Tab, Ins, Del, Home/End, PgUp/PgDn, Find,
-  Next, Rep, Goto, Undo, Redo, Save, SaveAs, Quit; edit: Copy, Cut, Paste,
-  SelAll, WdL/WdR, DocH/DocE, DelLn, DelE). Mode buttons `Nav`/`Nav1`/`Nav2`
-  switch pages in main.c's keyboard callback; `abc` returns to letters. When
-  adding a new editor feature, a touch button MUST be added to one of these
-  pages (or a new one), and `editor_view_handle_osk()` must map it.
+- The editor MUST be fully usable from the touch keyboard and MUST open on the
+  Nav page: two navigation pages (KEYBOARD_MODE_NAV -> LVGL USER_1,
+  KEYBOARD_MODE_NAV2 -> LVGL USER_2) cover every editor command (nav: arrows,
+  Tab, Ins, Del, Home/End, PgUp/PgDn, Find, Next, Rep, All, Case, Goto, Undo,
+  Redo, Save, SaveAs, Quit, Prev, Open, Comment, Match, Wrap, Reload; edit:
+  Copy, Cut, Paste, SelAll, WdL/WdR, DocH/DocE, DelLn, DelE). Mode buttons
+  `Nav`/`Nav1`/`Nav2` switch pages in main.c's keyboard callback; `abc` returns
+  to letters. Both `editor_view_open()` and `editor_view_close()` set the page
+  (Nav on open, letters on close), and text prompts switch to letters /
+  restore Nav on commit or cancel. When adding a new editor feature, a touch
+  button MUST be added to one of these pages (or a new one), and the label MUST
+  go through the pure `editor_osk_key_from_label()` table in `editor_view.c`
+  (the single mapping shared by the handler and the unit test).
 
 ### Editor Rules (components/editor)
 - The `edit` command lives in `components/editor/`: the byte-preserving document
   model plus the LVGL surface and the worker-task session. Since v0.33.0 it runs
   on the shared modal runtime in `components/modal/`; `command.c` only dispatches
   and maps the errorlevel.
+- **Everything large is PSRAM-backed.** Line text, the line array, undo
+  snapshots, the view's width/wrap caches, span scratch, and preview buffers go
+  through `editor_mem_alloc/realloc/free` (PSRAM first, internal fallback). Do
+  not use raw `malloc` for per-document buffers.
+- **Never hand a PSRAM pointer to `fread`/`fwrite`.** PSRAM is not
+  `MALLOC_CAP_DMA` on this P4 build, so `editor_doc_load`/`editor_doc_save`
+  stream through a small internal `MALLOC_CAP_DMA` bounce buffer
+  (`editor_dma_alloc`, `EDITOR_SD_CHUNK_BYTES`). Load carries a trailing `\r`
+  across chunk boundaries so CRLF detection is chunk-exact.
+- **Rendering is windowed.** Only `P4_CONFIG_EDITOR_RENDER_ROWS` (256) rows are
+  materialized as spans; a full-height invisible `spacer` child holds the scroll
+  range, and `editor_render_follow_cursor`/`editor_scroll_event_cb` move the
+  window. Overlays stay in document coordinates. Keep the window small: the span
+  group is rebuilt on every edit, and a whole-document rebuild is quadratic in
+  row count and trips the LVGL task watchdog (verified panic). Wrapping renders
+  the full document (row pitch changes) and is a per-session toggle.
+- **Undo is byte-budgeted.** `P4_CONFIG_EDITOR_UNDO_MAX_BYTES` evicts the oldest
+  snapshots; above `P4_CONFIG_EDITOR_UNDO_MAX_SNAPSHOT_BYTES` undo is disabled
+  for the session so each edit does not serialize the whole document. Snapshots
+  store the serialized document length for accounting.
+- `P4_CONFIG_EDITOR_MAX_BYTES` (1 MB) and `P4_CONFIG_EDITOR_MAX_LINES` (65536)
+  are the load caps; the unit test that exercises the line cap must build it
+  with one multi-line insert, not a per-Enter loop.
 - Document mutators run on the LVGL task; SD load/save runs on the command
   worker inside a guarded `shell_sd_begin`/`shell_sd_end` session. A failed
   save MUST remove its partial destination.
@@ -628,15 +772,23 @@ the raster core + 8x8 font are `components/gfx/`
   text. The current-line highlight is a background bar moved behind the text
   (`lv_obj_move_to_index(..., 0)`).
 - Serial console verbs: `\q` quit, `\s` save, `\f` find, `\g` go-to-line,
-  `\o` save-as, `\u` undo, `\r` redo, `\a` select-all; any other serial line
+  `\o` save-as, `\open` open another file, `\u` undo, `\r` redo,
+  `\all` replace-all, `\c` case, `\b` match-jump, `\co` comment, `\w` wrap,
+  `\l` reload, `\p` preview, `\a` select-all; any other serial line
   is typed text + Enter. Keep this set documented in command.md/editor.md.
 - All editor tunables live in `P4_CONFIG_EDITOR_*` (documented in
   p4minishell_config.yaml). New syntax modes extend `editor_syntax_t`,
   `editor_doc_pick_syntax()`, and the lexer — never special-case file
   extensions in the view.
-- The status-bar prompt system (Find / Replace / Go-to-Line / Save-As /
+- The status-bar prompt system (Find / Replace / Go-to-Line / Save-As / Open /
   quit confirmation) is the DOS EDIT search surface. Keep prompt strings in
   the status bar, never in the document.
+- File > Open swaps the document contents in place on the worker
+  (`editor_doc_replace_contents`) so the view only rebuilds; the open path is
+  resolved with `shell_fs_resolve_path` and a missing path opens an empty
+  buffer bound to it (`editor_file_missing`). A dirty buffer is guarded by the
+  `Open without saving? (Y/N)` confirm first. A stale Save-As target MUST NOT
+  follow into the newly opened file.
 - Editing an existing file that cannot be loaded is a hard error (refuse with
   a message) — never open an empty buffer over an existing file.
 - Rotation while a session is open MUST close the editor view and wake the
@@ -649,6 +801,30 @@ the raster core + 8x8 font are `components/gfx/`
 - The editor unit tests (`test/main/test_editor.c`) cover the pure document
   model and the batch lexer only; the LVGL surface and session are
   hardware-bound and are verified on the board.
+
+### Touch Automation Rules (components/uitest + command/ui_commands.c)
+- `components/uitest/` owns a second LVGL pointer indev (`ui_test.c`) whose
+  read callback reports a scripted point/press state. `ui tap/press/move/
+  release/longpress/swipe` block until the script finishes (EventGroup), so
+  they are deterministic and batch-safe. The 5 ms script timer also calls
+  `lv_indev_read()` so a short tap is not lost between the indev's own samples.
+- The `ui` verbs live in `components/command/ui_commands.c`; `command.c`
+  dispatches them, the help table (via the completion provider) completes them,
+  and `s_shell_help_entries[]` documents them. `command_modal_console_command()`
+  claims `ui …` on the console-reader task while a modal blocks the worker.
+- `ui targets` walks the active screen for visible `CLICKABLE` widgets and
+  expands buttonmatrices into `kbd:<label>` rows. The **name is printed last**
+  so names with spaces (list rows) parse. Button areas from
+  `lv_buttonmatrix_get_button_area()` are object-local: add the widget's
+  `lv_obj_get_coords()` origin for absolute coordinates.
+- Keep long `ui` output OFF the LVGL transcript (`ui_out_raw` → serial):
+  flooding the transcript starves the LVGL port lock and makes `ui targets`
+  return "not ready". `ui target <id>` activates a widget directly (modal
+  panels sit in the auto-scrolling transcript where coordinate taps are racy);
+  `ui tap` is the raw-coordinate path.
+- The LVGL button-area getter is a managed patch (tracked in
+  `tools/managed_patches.patch`); re-apply with the existing script after an
+  `idf.py update-dependencies`.
 
 ### Window Manager Rules
 - ALL LVGL screen layout MUST go through `components/windows/` — never create screen-level widgets directly in main.c
@@ -990,9 +1166,18 @@ the raster core + 8x8 font are `components/gfx/`
 ### Header Bar
 - Passive, display-only module in components/header
 - Non-scrollable, resolution-scaled height
-- Status icons: Wi-Fi, battery, Bluetooth, USB, SD
-- SD icon hidden when no card mounted
-- Notification area transient (blank when idle)
+- Status icons: Wi-Fi, Bluetooth, USB, SD (left panel); MEM, CPU, BAT (right)
+- Two styles via `P4_CONFIG_HEADER_STATUS_STYLE`: `words` (WiFi HI, USB ON) or
+  `glyph` (compact colored `W BT U S` / `M C B`); classification is shared and
+  lives once in the pure `header_status.c`
+- Status colors: green healthy, amber degraded, red off/failed, muted absent (SD none)
+- Conditional `A` activity indicator while a C6 OTA or background job runs
+- Tap shows a one-line detail in the notification area; long-press runs the
+  subsystem status command via the shell handler
+- Center shows the local clock when idle; notifications queue FIFO with a
+  severity color and take precedence over the clock
+- Poll cadence is adaptive (`header_refresh.c`), telemetry throttled to
+  `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS`
 
 ### Build Constraints
 - Every build constraint MUST be pinned in `sdkconfig.defaults`, not only in the
@@ -1095,11 +1280,45 @@ a new section to `changelog.md`.
 - **Two USB paths, different powers.** The shell console is USB-Serial-JTAG (native USB, ex-COM11). The CH340 port shows ONLY the ROM bootloader + 2nd-stage logs, never the shell (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y`). If the native device is absent from Device Manager, the app may be running fine with no visible console — check cables before assuming a boot failure.
 - **Opening the serial port resets the board** (`rst:0x17 CHIP_USB_UART_RESET`). Every fresh `serial.Serial()` open reboots; always settle 10-12 s, `reset_input_buffer()`, and never infer state across separate opens. Long sessions MUST hold one open handle (see `tools/shell_session.py`).
 - **Bootloader silence is config, not failure.** `CONFIG_ESP_CONSOLE_UART_NUM=-1` means no 2nd-stage logs on UART. ROM-only output after `entry` does NOT mean a dead flash — verify with `esptool read_flash` before tearing anything down.
-- **Screenshot framing is byte-exact.** `screenshot` (no args) suspends the console reader and streams `BMPX` + LE32 size + raw BMP via `usb_serial_jtag_write_bytes` (no CRLF translation). Host: wait for `streaming`, read magic, size, exactly size bytes. A modal on screen blocks the worker, so `screenshot` returns nothing until the modal closes. `tools/harness/grab_screenshot.py --port --out --crop-transcript` is the reference loop; convert BMP→PNG with Pillow to view.
+- **Screenshot framing is byte-exact.** `screenshot` (no args) suspends the console reader and streams `BMPX` + LE32 size + raw BMP via `usb_serial_jtag_write_bytes` (no CRLF translation). Host: wait for `streaming`, read magic, size, exactly size bytes. A modal on screen blocks the worker, so the bare streaming `screenshot` is handled by the console-reader task via `modal_console_command` and DOES capture an open modal (the `screenshot <file>` form still runs on the worker). `tools/harness/grab_screenshot.py --port --out --crop-transcript` is the reference loop; convert BMP→PNG with Pillow to view.
 - **`send`/`receive` protocol.** `receive <path> <size> [/crc]`: device prints `=== RX READY ===`, host streams chunks, device echoes `RX <cumulative>`, optional LE32 CRC-32 trailer, closes with `=== RX DONE ===`. `send`: `SDFX` + LE32 + raw + CRC-32 + `=== TX DONE ===`. `tools/harness` + `apps/companion/push_sd.py` implement the host side; do not reimplement it per task.
 - **Panic triage in order.** (1) Capture the full `Backtrace:` line. (2) Decode with `riscv32-esp-elf-addr2line -e build/p4minishell.elf -f -C <pcs>` (rebuild first — PCs are only valid for the flashed ELF). (3) The worker task (`shell_cmd`) in `lv_obj_update_layout` means an unlocked LVGL call from a non-LVGL task — see M39. Panic markers to scan logs for: `Guru Meditation`, `Backtrace`, `assert failed`, `abort()`, `Task watchdog`, `Stack protection`.
-- **Modal input routing over serial.** While a modal is open, serial lines go to `modal_handle_serial_line`, never the dispatcher: `dialog y`→0, `list 2`→index, `ask myname`→`ASK_RESULT`. `ask` needs the `serial_answered` guard (M37) so close does not clobber the answer with the empty textarea.
+- **Modal input routing over serial.** While a modal is open, serial lines go to `modal_handle_serial_line`, never the dispatcher: `dialog y`→0, `list 2`→index, `ask myname`→`ASK_RESULT`. `ask` needs the `serial_answered` guard (M37) so close does not clobber the answer with the empty textarea. The console reader (`shell.c`) MUST NOT queue a line while `modal_is_active()`: the worker is blocked in the modal, so a queued line cannot run until it closes, and a burst overflows the command queue and drops input (including the modal's own quit line) — route it to the surface and drop it there. The bare streaming `screenshot` is claimed first by `modal_console_command`.
+- **Command queue payloads live in PSRAM.** `command_request_t` is one `P4_CONFIG_COMMAND_BYTES` (4096) block per queue slot; `shell_execute_command_async` allocates it with `heap_caps_malloc(MALLOC_CAP_SPIRAM)` (internal fallback) and the worker frees it with `heap_caps_free`, so a burst never fragments the internal DMA-capable heap. Queue depth `P4_CONFIG_COMMAND_QUEUE_DEPTH` (32). A full queue still drops loudly after `P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS`; the modal rule above is what keeps that from happening in practice.
 - **Alarm checker is lazy.** `alarm_init()` runs on the first `alarm`/`cal` command, NOT in `command_init()` — eager start fragments the DMA heap before `usb_init()` and breaks USB HCD bring-up (M38, A/B-verified). Never move it earlier.
 - **Port discipline for agents.** One holder per port: check `Get-Process python*` + command lines before opening; never fight another session for COM11. Detached builds go via `Start-Process idf.py build` with log redirect + poll; never `idf.py monitor` (it grabs the port).
 - **Generated `sdkconfig` goes stale.** If a `sdkconfig.defaults` symbol shows "not set" in generated `sdkconfig` (e.g. `CONFIG_LV_FONT_UNSCII_16`), delete the generated file and rebuild — but back it up first; machine-local tweaks live only there. This repo sets `git config core.autocrlf false` (mixed LF/CRLF tree); do not re-enable it or every file churns.
 - **Managed-component patches evaporate** on `idf.py update-dependencies`. The BSP + font diffs live in `tools/managed_patches.patch`; re-apply with `tools/reapply_managed_patches.ps1` (`-Check` dry-runs). The font file previously hid syntax errors behind a disabled guard — a newly enabled managed file MUST get a clean full build before anything else.
+
+### Settings / Security / Form Rules (v0.38.x Preferences pass)
+- **CONFIG.SYS is the ONE scalar-preference store.** The only writer is the `config`
+  machinery (`config_directive_upsert` + `config_write_file`, exposed as
+  `config_persist_set()` in `config_cmd.h`). Every owning command's `/save`
+  (theme, font, header mode, cursor, keyboard mode, timezone, owner, security)
+  MUST persist through `config_persist_set`, never a private file. `sd:/APPS/SHELL.INI`
+  is legacy: read once as a fallback (`config_get_saved` first), never written.
+  `config /b` (and `config <KEY> /b`) is the machine-readable listing for the
+  Preferences app. Do NOT add a second settings registry or a native Preferences GUI.
+- **The Preferences GUI is a batch app.** `apps/companion/SET.BAT` drives the
+  owning shell commands only; it owns no settings file. `LIB.BAT :load_settings`
+  is a no-op (boot restores from CONFIG.SYS). Add settings by adding a directive
+  in `boot.c` + a `config_persist_set` call in the owning command, then a SET.BAT
+  page. Batch menu indices are 0-based (list ERRORLEVEL); modal **serial**
+  selection is 1-based (index+1) � a test-harness gotcha.
+- **`form`** (`modal_surf.c`) is a general multi-field modal primitive
+  (`text|password|check|select|range`, values bound to env vars, `/t:secs`).
+  It is a shell primitive, not a Preferences special case. New full-screen
+  surfaces stay `modal_surface_t` on the shared runtime.
+- **Device security** (`security_commands.c`): owner + PBKDF2-SHA256 salted
+  passcode hash + conceal policy all live in CONFIG.SYS (`OWNER_*`/`SECURITY_*`).
+  A passcode + `SECURITY_BOOTLOCK=on` locks the dispatcher; the gate
+  (`security_command_allowed`) is checked at the top of `shell_execute_command_core`
+  with a tiny allowlist. Boot scripting runs before the lock engages, so
+  CONFIG.SYS/AUTOEXEC are never blocked. `db /reveal`, `gfind`, and `export` must
+  consult `security_can_reveal_private()`/`security_conceal_mode()`. Recovery is
+  deleting the `SECURITY_*` lines on the SD card.
+- **Passcode/owner config hooks**: `security_init()` runs in `command_init()`;
+  `security_engage_boot_lock()` is called at the end of `boot_script_apply()`.
+  Password entry uses `modal_ask_run(..., password=true)` � `shell_read_line_hidden`
+  returns immediately in this build (as does `set /p /P`), so do not rely on it
+  for interactive password entry in new code without fixing that first.

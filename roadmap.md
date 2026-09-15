@@ -16,10 +16,36 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (v0.38.1, hardware-verified on COM3)
+## Current baseline (unreleased additions on top of v0.38.1)
 Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
-**Current verified baseline:** v0.38.1. Suite green on COM3 (ESP-IDF v5.5.5): unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25. See `changelog.md` `[0.38.1]` for the newest milestones (throughput bench verified; lwIP TCP window raised; 40 MHz confirmed faster).
+**Current verified baseline:** unit **317/0/2** on COM3 (ESP-IDF v5.5.5); companion deep / db /
+alarm / app smoke / package / gfx toolkit / plot / header / keyboard / editor / ui touch /
+completion / tx stress / boot regression **8/8** green, plus new HW drivers for
+`timer`/`csv`/`export`/`bind`/`crypt`/`tcpterm`/`usb userial`. See `changelog.md`
+`[Unreleased]` for the palmtop-parity primitives.
+
+### Recently completed (unreleased — palmtop parity)
+
+- ✅ **Stopwatch** `timer`/`stopwatch` (start/stop/lap/status, `/b`, `/v:NAME`).
+- ✅ **`calc` conversions** `BIN$` `OCT$` `VALB` `C2F`/`F2C` `IN2MM`/`MM2IN` `LB2KG`/`KG2LB`.
+- ✅ **`db` fields** `/field:k=v`, `/sort:field|key|id`, `db get /field:name`.
+- ✅ **`export`** `db|alarms` -> csv/json/txt/vcf/ics interchange.
+- ✅ **`import`** `db|alarms` <- csv/json/vcf/ics interchange (fresh ids).
+- ✅ **`archive`/`backup`** USTAR `.p4a` backups + CRC manifest + verify.
+- ✅ **`csv` ranges** `SUM/AVG/MIN/MAX/COUNT(R:C)` + `csv set/get`.
+- ✅ **`alarm`** monthly/yearly/nth recurrence + `snooze`; `cal` month grid + week.
+- ✅ **`macro`** record/play + `bind ^A..^Z` chord hotkeys.
+- ✅ **foreground break** Ctrl+C + input-row Stop (cooperative).
+- ✅ **`csv`** grid + iterative `=EXPR` eval with `R1C1` references.
+- ✅ **`crypt`** AES-256-GCM + PBKDF2 file encryption.
+- ✅ **`tcpterm`** one-shot TCP terminal (Wi-Fi Datacomm).
+- ✅ **`usb userial`** lazy CDC-ACM serial (open/close/send/recv/term, VT100 screen).
+- ✅ **`bind`** F-key bindings, persisted to `BIND.BAT`.
+- ✅ **`sleep`** re-establishes Wi-Fi on wake automatically.
+- ✅ **Boot regression fixed**: eager CDC install broke hosted SDIO; now lazy.
+- ❌ Still open (future): structured TVM/spreadsheet recalc engine beyond
+  `calc`/`csv` (apps may build it), IR (no hardware).
 
 ### Recently completed (v0.38.1)
 - ✅ **`wifi throughput` bench verified** on a same-subnet host; measured
@@ -106,6 +132,12 @@ Implemented today in the checked-in firmware (hardware-verified on COM3, extensi
   rotation — abbreviations, dynamic font step, bounded scrolling notification,
   uptime indicator; `header [status]|mode|show|hide` verb, `HEADER_MODE=`
   boot directive, `SHELL.INI` persistence; single height authority.
+- ✅ **BMP image support everywhere**: one general decoder in `components/gfx`
+  (24/32-bit BI_RGB, either orientation, scaled decode + aspect-fit) drives the
+  `imageview` modal viewer (`view`/`open`/`image show`), the 16-color TUI
+  renderer (`draw image`, `tui_draw_image`), and the canvas (`gfx image`);
+  `image info` is scriptable; `.bmp`/`.dib` route via `components/filetype/`;
+  the `apps/pics/PICS.BAT` reference app and `PHOTO.BMP` demo it end to end.
 
 ### Shell Core & UI
 - ✅ PowerShell-style prompt: `PS \path> ` with ANSI-colored tokens (bright white PS, bright yellow path, bright white >)

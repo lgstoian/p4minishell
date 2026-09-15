@@ -90,6 +90,24 @@ int modal_viewer_run(const char *title, const char *file_path, uint32_t timeout_
  */
 int modal_viewer_run_raw(const char *title, const char *file_path, uint32_t timeout_ms, bool raw);
 
+/**
+ * @brief Run a BMP image viewer modal surface.
+ *
+ * Decodes a 24/32-bit BI_RGB BMP (either orientation) straight to a
+ * fit-to-screen RGB565 image and shows it centered in the transcript region.
+ * Keys: Esc/q/Close (and `/t:secs` auto-close). Reuses the shared modal
+ * runtime and the single BMP decoder in components/gfx.
+ *
+ * @param title       Dialog title (may be NULL).
+ * @param file_path   Path to the .bmp file.
+ * @param timeout_ms  Auto-cancel after this many ms (0 = wait forever).
+ * @param fit         true to aspect-fit to the region (never upscales the
+ *                    source past its native size), false for native size.
+ * @return 0 on exit, -1 on error (bad file / decode / no surface).
+ */
+int modal_image_run(const char *title, const char *file_path,
+                    uint32_t timeout_ms, bool fit);
+
 #ifdef __cplusplus
 }
 #endif
@@ -105,6 +123,43 @@ int modal_viewer_run_raw(const char *title, const char *file_path, uint32_t time
  * @return 0 on exit, -1 on error.
  */
 int modal_hexview_run(const char *title, const char *file_path, uint32_t timeout_ms);
+
+/* -------------------------------------------------------------------------
+ * FORM: a multi-field modal editor for batch apps (the Palm-style form).
+ * ---------------------------------------------------------------------- */
+
+#define MODAL_FORM_MAX_FIELDS     12
+#define MODAL_FORM_OPTIONS_BYTES  256
+
+typedef enum {
+    MODAL_FORM_TEXT = 0,
+    MODAL_FORM_PASSWORD,
+    MODAL_FORM_CHECK,
+    MODAL_FORM_SELECT,
+    MODAL_FORM_RANGE,
+} modal_form_field_type_t;
+
+typedef struct {
+    modal_form_field_type_t type;
+    const char *label;       /**< Field label. */
+    char *value;             /**< In: prefill; out: the accepted value. */
+    size_t value_size;       /**< Capacity of @p value. */
+    const char *options;     /**< SELECT only: `a|b|c`. */
+    int min;                 /**< RANGE only. */
+    int max;                 /**< RANGE only. */
+} modal_form_field_t;
+
+/**
+ * @brief Show a multi-field form and return the accepted values.
+ *
+ * @param title       Form title (may be NULL).
+ * @param fields      Field descriptors (mutated with accepted values).
+ * @param count       1..MODAL_FORM_MAX_FIELDS.
+ * @param timeout_ms  Auto-cancel after this many ms (0 = wait forever).
+ * @return 0 when the user accepted, -1 on cancel/Esc/timeout.
+ */
+int modal_form_run(const char *title, modal_form_field_t *fields, int count,
+                   uint32_t timeout_ms);
 
 /**
  * @brief Parse one `/t:secs` option argument (shared by dialog/list/ask/

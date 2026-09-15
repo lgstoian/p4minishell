@@ -120,26 +120,46 @@ buffers:
     value: "HISTORY.TXT"
     type: string
     description: "Default SD profile for history /save and /load"
+  history_autosave:
+    value: 1
+    type: int
+    description: "Auto-load the history profile at boot and auto-save it (debounced) as it changes"
+    range: "0..1"
   completion_max_matches:
     value: 32
     type: int
     description: "Maximum matches reported by Tab completion before truncation"
     range: "4..256"
+  completion_ghost:
+    value: 1
+    type: int
+    description: "Show an inline ghost-text completion after the caret while typing"
+    range: "0..1"
   editor_max_bytes:
+    value: 1048576
+    type: size_t
+    description: "Maximum bytes of a file the edit editor loads into RAM (PSRAM-backed document and snapshots)"
+    range: "1024..4194304"
+  editor_max_lines:
     value: 65536
     type: size_t
-    description: "Maximum bytes of a file the edit editor loads into RAM"
-    range: "1024..262144"
-  editor_max_lines:
-    value: 2048
-    type: size_t
-    description: "Maximum lines the edit editor loads into RAM"
-    range: "16..16384"
+    description: "Maximum lines the edit editor loads into RAM (only editor_render_rows are materialized as spans)"
+    range: "16..262144"
   editor_undo_depth:
     value: 64
     type: int
-    description: "Undo/redo depth (edit operations) kept by the editor"
+    description: "Undo/redo depth (edit operations) kept by the editor; also byte-budgeted by editor_undo_max_bytes"
     range: "1..256"
+  editor_undo_max_bytes:
+    value: 4194304
+    type: size_t
+    description: "Total bytes of full-document undo/redo snapshots the editor keeps; oldest steps are evicted past this"
+    range: "65536..67108864"
+  editor_render_rows:
+    value: 256
+    type: size_t
+    description: "Maximum document rows materialized as LVGL spans at once; larger files render a window around the cursor/scroll (kept small: the span group is rebuilt per edit)"
+    range: "64..4096"
   editor_tab_width:
     value: 4
     type: int
@@ -183,7 +203,7 @@ buffers:
     type: bool
     description: "True when the edit editor renders a line-number gutter"
   editor_line_number_width_chars:
-    value: 4
+    value: 5
     type: int
     description: "Width of the edit editor's line-number gutter in characters (digits); line numbers are right-aligned in this width followed by one space"
     range: "2..8"
@@ -223,7 +243,35 @@ clock:
     value: 64
     type: size_t
     description: "Maximum timezone string length (POSIX TZ string)"
-    range: "16..128"
+  valid_epoch:
+    value: 1577836800
+    type: int
+    description: "Unix timestamp (2020-01-01 UTC) at or above which the clock is considered set; below it the header clock shows --:--"
+    range: "0..4102444800"
+  timezone_url:
+    value: "http://ip-api.com/line/?fields=timezone,offset"
+    type: string
+    description: "IP-geolocation endpoint for automatic timezone detection (plain-text line format: timezone name, then UTC offset in seconds). No hardcoded zone."
+  timezone_resync_secs:
+    value: 21600
+    type: int
+    description: "Re-detect the timezone this often so DST transitions and travel stay correct"
+    range: "3600..86400"
+  timezone_max_attempts:
+    value: 5
+    type: int
+    description: "Timezone probes before giving up (SNTP then runs in UTC)"
+    range: "1..20"
+  timer_slots:
+    value: 8
+    type: int
+    description: "Stopwatch slots for the timer command (each holds one named run)"
+    range: "1..32"
+  timer_name_bytes:
+    value: 16
+    type: int
+    description: "Maximum bytes for a timer slot name (plus the terminator)"
+    range: "4..64"
 
 # ---- UI Layout ----
 ui_layout:
@@ -233,10 +281,45 @@ ui_layout:
     description: "On-screen LVGL keyboard height in pixels"
     range: "100..600"
   header_refresh_period_ms:
+    value: 2000
+    type: int
+    description: "Idle header status refresh interval in milliseconds (adaptive; alias of header_refresh_idle_ms)"
+    range: "500..30000"
+  header_refresh_wake_ms:
+    value: 150
+    type: int
+    description: "Header poll interval while the display is off by idle, for prompt touch wake"
+    range: "50..1000"
+  header_refresh_busy_ms:
+    value: 1000
+    type: int
+    description: "Header poll interval while a C6 OTA or a background job is active"
+    range: "250..5000"
+  header_refresh_connecting_ms:
+    value: 750
+    type: int
+    description: "Header poll interval while Wi-Fi is starting but not yet associated"
+    range: "250..5000"
+  header_refresh_startup_ms:
+    value: 500
+    type: int
+    description: "Header poll interval during the early-boot grace window"
+    range: "250..5000"
+  header_refresh_min_ms:
+    value: 100
+    type: int
+    description: "Lower clamp for any computed header poll interval"
+    range: "50..1000"
+  header_telemetry_period_ms:
     value: 5000
     type: int
-    description: "Header status refresh timer period in milliseconds"
-    range: "1000..30000"
+    description: "Minimum interval between expensive header telemetry samples (heap/CPU/battery); the faster status poll never speeds this up"
+    range: "1000..60000"
+  header_startup_grace_s:
+    value: 15
+    type: int
+    description: "Uptime in seconds below which the header uses the faster startup cadence"
+    range: "0..120"
   input_row_height:
     value: 52
     type: int
@@ -404,6 +487,19 @@ tui:
     description: "Default auto-cancel timeout for modal surfaces in ms (0 = no timeout)"
     range: "0..60000"
 
+# ---- Image (BMP) ----
+image:
+  max_bytes:
+    value: 2097152
+    type: size_t
+    description: "Largest BMP the image path (viewer / draw image / gfx image) will ingest; the source is decoded straight to a fit-to-screen target so memory stays bounded"
+    range: "65536..8388608"
+  viewer_fit:
+    value: 1
+    type: int
+    description: "Show the image viewer fit-to-screen (1) or at native size only (0)"
+    range: "0..1"
+
 # ---- Wi-Fi ----
 wifi:
   ssid_bytes:
@@ -553,6 +649,27 @@ ping_dns:
     type: size_t
     description: "Maximum A records dns / nslookup prints for one hostname"
     range: "1..32"
+tcp_terminal:
+  connect_timeout_ms:
+    value: 10000
+    type: uint32_t
+    description: "Milliseconds a tcpterm connect may take before it is abandoned"
+    range: "1000..60000"
+  idle_timeout_ms:
+    value: 5000
+    type: uint32_t
+    description: "Default idle milliseconds with no reply data before tcpterm stops"
+    range: "1000..120000"
+  rx_max_bytes:
+    value: 65536
+    type: size_t
+    description: "Maximum reply bytes a tcpterm session buffers/prints"
+    range: "4096..262144"
+  tx_max_bytes:
+    value: 65536
+    type: size_t
+    description: "Maximum request bytes a tcpterm session sends"
+    range: "1024..262144"
 
 # ---- HTTP Client (httpget / wget) ----
 # `httpget <url> [localfile]` performs a simple HTTPS or HTTP GET through the
@@ -1060,6 +1177,23 @@ batch_env:
       SD-root-relative profile filename that alias /save writes and boot.c
       auto-loads after CONFIG.SYS (a batch file of alias name=value lines).
     range: "any valid SD filename"
+  bind_max:
+    value: 12
+    type: size_t
+    description: "Maximum bound USB function keys (F1..F12 command lines)"
+    range: "1..12"
+  bind_value_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum bind command line length"
+    range: "16..1024"
+  bind_profile:
+    value: "BIND.BAT"
+    type: string
+    description: >-
+      SD-root-relative profile filename that bind /save writes and boot.c
+      auto-loads after the alias profile (a batch file of bind Fx lines).
+    range: "any valid SD filename"
   batch_line_bytes:
     value: 384
     type: size_t
@@ -1252,6 +1386,26 @@ batch_env:
     type: size_t
     description: "Maximum length of the `for /f` `delims=` character set"
     range: "1..64"
+  csv_max_cols:
+    value: 32
+    type: int
+    description: "Maximum columns the csv verbs track per row (extras are ignored)"
+    range: "2..128"
+  csv_field_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum bytes of one dequoted CSV field"
+    range: "32..1024"
+  csv_rows_max:
+    value: 256
+    type: int
+    description: "Maximum rows the csv eval grid holds (extras are ignored)"
+    range: "16..1024"
+  csv_passes:
+    value: 8
+    type: int
+    description: "Formula-resolution passes for csv eval (R1C1-style references)"
+    range: "1..32"
   applib_psram_threshold_bytes:
     value: 512
     type: size_t
@@ -1574,6 +1728,11 @@ header_visuals:
     type: int
     description: "CPU usage percentage threshold for warning color in header"
     range: "50..100"
+  cpu_crit_pct:
+    value: 95
+    type: int
+    description: "CPU usage percentage threshold for the critical (red) header color"
+    range: "80..100"
   cpu_graph:
     value: 1
     type: bool
@@ -1594,16 +1753,56 @@ header_visuals:
     type: int
     description: "Memory free percentage threshold for LOW label in header"
     range: "10..50"
+  mem_crit_pct:
+    value: 15
+    type: int
+    description: "Memory free percentage threshold for the critical (red) header color"
+    range: "1..30"
   bat_low_pct:
     value: 15
     type: int
     description: "Battery percentage threshold for warning color in header"
     range: "5..30"
+  bat_crit_pct:
+    value: 5
+    type: int
+    description: "Battery percentage threshold for the critical (red) header color"
+    range: "0..15"
   notify_timeout_ms:
     value: 3000
     type: uint32_t
     description: "Display duration for transient header notifications in milliseconds"
     range: "500..15000"
+  notify_queue:
+    value: 4
+    type: int
+    description: "Header notification FIFO depth; overflow drops the oldest queued (never the displayed) entry"
+    range: "1..8"
+  clock:
+    value: 1
+    type: int
+    description: "Show the local time (HH:MM) in the idle notification area"
+    range: "0..1"
+  activity:
+    value: 1
+    type: int
+    description: "Show the activity indicator (A) while a C6 OTA or a background job runs"
+    range: "0..1"
+  rssi_strong:
+    value: -55
+    type: int
+    description: "RSSI at or above which Wi-Fi shows HI / green (dBm)"
+    range: "-90..-20"
+  rssi_good:
+    value: -68
+    type: int
+    description: "RSSI at or above which Wi-Fi shows MID / green (dBm)"
+    range: "-90..-20"
+  rssi_weak:
+    value: -80
+    type: int
+    description: "RSSI at or above which Wi-Fi shows LOW / amber; below it is WEAK / red (dBm)"
+    range: "-100..-20"
   rssi_unknown:
     value: -127
     type: int
@@ -1618,6 +1817,16 @@ header_visuals:
     value: 1
     type: int
     description: "Allow the header to drop to a smaller font when even the compact side-panel layout does not fit"
+    range: "0..1"
+  status_style:
+    value: 1
+    type: int
+    description: "Status-indicator style: 0 = verbose words (WiFi HI, USB ON), 1 = compact colored glyphs (W/U/S) that return width to the notification area"
+    range: "0..1"
+  detail_on_tap:
+    value: 1
+    type: int
+    description: "Tap a status indicator to show a one-line detail in the notification area; long-press runs the full status command"
     range: "0..1"
 
 # ---- USB Host ----
@@ -1681,6 +1890,31 @@ usb_host:
     type: size_t
     description: "Simultaneous keys in USB keyboard report"
     range: "1..16"
+  userial_ring_bytes:
+    value: 4096
+    type: size_t
+    description: "RX ring bytes for the open CDC-ACM serial device (usb userial)"
+    range: "512..32768"
+  userial_chunk_bytes:
+    value: 1024
+    type: size_t
+    description: "Bulk-transfer chunk / TX scratch bytes for the CDC-ACM serial device"
+    range: "64..8192"
+  userial_op_timeout_ms:
+    value: 4000
+    type: uint32_t
+    description: "Milliseconds a single CDC write may block before it is reported failed"
+    range: "100..60000"
+  userial_open_timeout_ms:
+    value: 5000
+    type: uint32_t
+    description: "Milliseconds usb userial open waits for a matching device to appear"
+    range: "100..60000"
+  userial_term_idle_ms:
+    value: 30000
+    type: uint32_t
+    description: "Default idle milliseconds for usb userial term before it closes itself"
+    range: "1000..600000"
 
 # ---- C6 OTA ----
 c6ota:
@@ -1758,9 +1992,9 @@ task_stacks:
       call stacks; 48 KB was too large for task creation on ESP32-P4.
     range: "4096..65536"
   command_queue_depth:
-    value: 16
+    value: 32
     type: int
-    description: "Async command queue depth, pointers only (P4_CONFIG_COMMAND_QUEUE_DEPTH); depth 4 dropped bursts, restored to 16 in 2026-09-06"
+    description: "Async command queue depth, pointers only (P4_CONFIG_COMMAND_QUEUE_DEPTH); depth 4 dropped bursts, 16 then 32 (PSRAM-backed request payloads) in 2026-09"
     range: "4..64"
   command_queue_send_timeout_ms:
     value: 500
@@ -1768,10 +2002,10 @@ task_stacks:
     description: "Bounded submit wait on a full queue (P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS); LVGL/UART tasks only, cannot deadlock the worker"
     range: "0..5000"
   uart_console:
-    value: 12288
+    value: 16384
     type: size_t
-    description: "UART/serial console reader task stack"
-    range: "4096..16384"
+    description: "UART/serial console reader task stack (PSRAM-backed). Sized above the old 12 KB because the task also runs the streaming screenshot capture (LVGL snapshot) while a modal blocks the worker."
+    range: "4096..32768"
   uart_mirror_write_timeout_ms:
     value: 50
     type: int
@@ -1971,6 +2205,27 @@ serial_transfer:
     type: size_t
     description: "Maximum size in bytes of the send /diag diagnostic report payload"
     range: "256..4096"
+crypt:
+  chunk_bytes:
+    value: 4096
+    type: size_t
+    description: "Bytes encrypted per chunk during a crypt file run"
+    range: "1024..16384"
+  pbkdf2_iters:
+    value: 10000
+    type: int
+    description: "PBKDF2 iterations for the crypt file key"
+    range: "1000..100000"
+  salt_bytes:
+    value: 16
+    type: int
+    description: "Salt bytes mixed into the crypt key derivation"
+    range: "8..32"
+  pass_bytes:
+    value: 128
+    type: int
+    description: "Maximum password characters accepted by crypt (plus the terminator)"
+    range: "16..256"
 
 # =============================================================================
 # BUILD-AFFECTING KCONFIG OPTIONS
@@ -2060,6 +2315,10 @@ database:
     value: 262144
     type: int
     description: "Maximum bytes in one db export / db import text file."
+  db_field_value_bytes:
+    value: 64
+    type: int
+    description: "Maximum bytes of one k=v field value read by db find /field: and db get /field:."
   db_flag_secret:
     value: 1
     type: int

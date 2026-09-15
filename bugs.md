@@ -568,6 +568,36 @@ store (see readme.md / command.md / SDK.md).
 - **Fix:** create the group statically in a PSRAM block (`xEventGroupCreateStatic` over `heap_caps_malloc(MALLOC_CAP_SPIRAM|8BIT)`), internal-heap fallback, buffer freed on both exit paths (static groups never self-free). No layering change.
 - **Verified:** both projects build 0/0, unit suite still 196/0/2, modal flows green in deep 8/8.
 
+### M47. ✅ FIXED — `calc VAL` prefix guard captured `VALB` (palmtop-parity session)
+
+- **Symptom:** `calc valb('FF',16)` failed with `VAL takes 1 argument`; the
+  same call worked only when it happened to render as a prefix-free name.
+- **Root cause:** the older `VAL` arm matched by prefix (`strncasecmp(name,
+  "VAL", 3) == 0 && name[3] != 'F'`). The added `VALB` shares the prefix, and
+  the guard compared `name[3]` against the uppercase `'B'` so lowercase
+  `valb` slipped into the `VAL` arm.
+- **Fix:** `VAL`, `VALF`, and `VALB` are now matched with exact `strcasecmp`.
+- **Verified:** on-board unit suite `test_calc_base_and_units` (317/0/2);
+  `calc BIN$(255)`/`OCT$(255)`/`VALB('FF',16)`/`C2F(100)` confirmed on COM3.
+
+### M48. ✅ FIXED — eager CDC-ACM install broke hosted-SDIO bring-up (M38/O8 pattern)
+
+- **Symptom:** with `usb userial` added, `boot_regression` fell to **2/8**
+  clean: the boot log repeated
+  `sdmmc_allocate_aligned_buf: not enough mem, err=0x101` /
+  `eh_host_port_sdio: sdmmc_card_init failed`, and `sd_ready` was false on
+  most boots.
+- **Root cause:** the CDC-ACM class driver was installed eagerly as a third
+  stage of `usb_install_host_stack()`. Its task stack plus internal buffers
+  consumed the boot-time internal RAM the ESP-Hosted SDIO transport needs —
+  the same failure class as M38 (eager alarm init) and O8 (boot internal-RAM
+  peak).
+- **Fix:** install the CDC driver **lazily** on first `usb userial open`
+  (`userial_install_driver()` from `userial_open()`); the boot path installs
+  only MSC and HID as before.
+- **Verified:** `boot_regression` **8/8** clean; `usb status` reports
+  `usb.host: ready`; `tools/userial_test.py` RESULT OK; unit suite 317/0/2.
+
 ---
 
 ## OPEN — BSOD under investigation + httpd-needs-WiFi (see below)
@@ -766,7 +796,7 @@ store (see readme.md / command.md / SDK.md).
 |----------|-------|--------|
 | Critical | 0 | — |
 | High | 0 | — |
-| Medium | 46, all fixed (M1-M46). Individual entries below carry the root cause and fix; the long enumeration was trimmed from this summary row. |
+| Medium | 48, all fixed (M1-M48). Individual entries below carry the root cause and fix; the long enumeration was trimmed from this summary row. |
 | Open | 0 (O3 O4 O5 all fixed in v0.37.1; see OPEN section) | O3 single-output loss fixed (driver-API mirror bypasses the SOF false-disconnect); O4 fixed (no-reset port open); O5 trigger removed (O4) + I2C bus recovery. O1/O2/O6/O7/O8 fixed; W1 clarified as the header double free, not a hosted overrun. |
 | Low / observations | ~20 (benign i2s log, `pwd`, transcript span footprint, SD lazy-mount message, serial key+Enter, `list` 1-based vs EL, `dir` leading-`/`, APM-560 note, `set /a` prints, `draw table` column fix, batch RAM cap, `alarm_test` flake, `pkg` install/remove semantics, gfx toolkit font/flood-fill, theme re-apply lag, `p4_usb` fold, test-flash black screen, plot sampling, boot-restore retry, screenshot wrap) | see LOW / OBSERVATIONS |
 | Network | 1 (N1 shared-SDMMC bring-up) | Fixed (serialize sdmmc_host_init + slot-scoped SD deinit + hosted retry) |

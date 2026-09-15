@@ -24,6 +24,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
+#include <strings.h>
 #include <inttypes.h>
 
 /* Backward-compatibility aliases */
@@ -117,52 +118,45 @@ static const lv_buttonmatrix_ctrl_t keyboard_special_ctrl_map[] = {
 /* ========================================================================
  * EDITOR NAVIGATION MAPS (USER_1 = nav, USER_2 = edit nav)
  * ========================================================================
- * The editor is fully usable from the touch keyboard. Two navigation pages
- * carry every editing command:
+ * The editor is fully usable from the touch keyboard. Two uniform grids carry
+ * every editing command:
  *
- *   Nav  (USER_1): Tab, arrows, Home/End, Del, Ins, Find, PgUp/PgDn,
- *                  Undo, Redo, Rep, All (replace all), Case (case toggle),
- *                  Goto, Save, SaveAs, Quit, Prev (preview toggle), Next
- *                  (find repeat), Nav2 (-> edit page), abc (-> letters).
- *   Edit (USER_2): Copy, Cut, Paste, SelAll, WdL/WdR (word left/right),
- *                  DocH/DocE (document home/end), DelLn (delete line),
- *                  DelE (delete to end of line), Nav1 (-> nav), abc.
+ *   Nav  (USER_1, 4x6): Tab, arrows, Home/End, PgUp/PgDn, Del/Ins, Undo/Redo,
+ *                  Find/Next/Replace/ReplAll/Case, Goto, Save/SaveAs/Open,
+ *                  Edit (-> edit page), abc (-> letters).
+ *   Edit (USER_2, 3x6): Copy/Cut/Paste/SelAll, WordL/WordR, DocTop/DocBot,
+ *                  DelLine/DelEOL, Reload/Quit, Preview/Comment/Match/Wrap,
+ *                  Nav (-> nav page), abc.
  *
  * These labels are routed to the editor by main.c's keyboard event callback
  * when the editor is open; the default LVGL handler leaves them alone. */
 
 static const char * const keyboard_nav_map[] = {
-    "Tab", LV_SYMBOL_UP, "Home", "Del", "Ins", "Find", "\n",
-    LV_SYMBOL_LEFT, LV_SYMBOL_DOWN, LV_SYMBOL_RIGHT, "End", "PgUp", "PgDn", "\n",
-    "Undo", "Redo", "Rep", "All", "Case", "Goto", "Save", "SaveAs", "\n",
-    "Quit", "Prev", "Next", "Nav2", "abc", "\n",
-    ""
+    "Tab", LV_SYMBOL_LEFT, LV_SYMBOL_UP, LV_SYMBOL_DOWN, LV_SYMBOL_RIGHT, "Home", "\n",
+    "End", "PgUp", "PgDn", "Del", "Ins", "Undo", "\n",
+    "Redo", "Find", "Next", "Replace", "ReplAll", "Case", "\n",
+    "Goto", "Save", "SaveAs", "Open", "Edit", "abc", ""
 };
 
 static const lv_buttonmatrix_ctrl_t keyboard_nav_ctrl_map[] = {
-    /* Row 1: Tab, Up, Home, Del, Ins, Find. */
+    /* Uniform 4x6 grid. POPOVER is stripped at runtime (popovers are off). */
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    /* Row 2: Left, Down, Right, End, PgUp, PgDn. */
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    /* Row 3: Undo, Redo, Rep, All, Case, Goto, Save, SaveAs. */
-    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    /* Row 4: Quit, Prev, Next, Nav2, abc. */
-    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
 };
 
 static const char * const keyboard_edit_map[] = {
-    "Copy", "Cut", "Paste", "SelAll", "WdL", "WdR", "\n",
-    "DocH", "DocE", "DelLn", "DelE", "Nav1", "abc", "\n",
-    ""
+    "Copy", "Cut", "Paste", "SelAll", "WordL", "WordR", "\n",
+    "DocTop", "DocBot", "DelLine", "DelEOL", "Reload", "Quit", "\n",
+    "Preview", "Comment", "Match", "Wrap", "Nav", "abc", ""
 };
 
 static const lv_buttonmatrix_ctrl_t keyboard_edit_ctrl_map[] = {
-    /* Row 1: Copy, Cut, Paste, SelAll, WdL, WdR. */
+    /* Uniform 3x6 grid. */
     (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    /* Row 2: DocH, DocE, DelLn, DelE, Nav1, abc. */
-    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
-    LV_KEYBOARD_CTRL_BUTTON_FLAGS | 2,
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
+    (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1), (LV_BUTTONMATRIX_CTRL_POPOVER | 1),
 };
 
 static void keyboard_install_custom_maps(void)
@@ -477,7 +471,54 @@ void keyboard_set_mode(keyboard_mode_t mode)
     }
 
     s_keyboard.mode = mode;
-    keyboard_apply_mode();
+    /* Commands run on the worker task; the recursive port lock also permits
+     * calls from the LVGL task. */
+    if (lvgl_port_lock(0)) {
+        keyboard_apply_mode();
+        lvgl_port_unlock();
+    }
+}
+
+const char *keyboard_mode_name(keyboard_mode_t mode)
+{
+    switch (mode) {
+    case KEYBOARD_MODE_TEXT_LOWER: return "text_lower";
+    case KEYBOARD_MODE_TEXT_UPPER: return "text_upper";
+    case KEYBOARD_MODE_NUMBER:      return "number";
+    case KEYBOARD_MODE_SYMBOLS:     return "symbols";
+    case KEYBOARD_MODE_NAV:         return "nav";
+    case KEYBOARD_MODE_NAV2:        return "nav2";
+    case KEYBOARD_MODE_COUNT:
+    default:                        return "text_lower";
+    }
+}
+
+bool keyboard_mode_parse(const char *text, keyboard_mode_t *out)
+{
+    if (text == NULL || out == NULL) {
+        return false;
+    }
+    if (strcasecmp(text, "text_lower") == 0 || strcasecmp(text, "text") == 0 ||
+        strcasecmp(text, "letters") == 0 || strcasecmp(text, "lower") == 0) {
+        *out = KEYBOARD_MODE_TEXT_LOWER;
+    } else if (strcasecmp(text, "text_upper") == 0 || strcasecmp(text, "upper") == 0 ||
+               strcasecmp(text, "caps") == 0) {
+        *out = KEYBOARD_MODE_TEXT_UPPER;
+    } else if (strcasecmp(text, "number") == 0 || strcasecmp(text, "numbers") == 0 ||
+               strcasecmp(text, "num") == 0) {
+        *out = KEYBOARD_MODE_NUMBER;
+    } else if (strcasecmp(text, "symbols") == 0 || strcasecmp(text, "special") == 0 ||
+               strcasecmp(text, "symb") == 0 || strcasecmp(text, "sym") == 0) {
+        *out = KEYBOARD_MODE_SYMBOLS;
+    } else if (strcasecmp(text, "nav") == 0 || strcasecmp(text, "navigate") == 0 ||
+               strcasecmp(text, "navigation") == 0 || strcasecmp(text, "nav1") == 0) {
+        *out = KEYBOARD_MODE_NAV;
+    } else if (strcasecmp(text, "nav2") == 0 || strcasecmp(text, "edit") == 0) {
+        *out = KEYBOARD_MODE_NAV2;
+    } else {
+        return false;
+    }
+    return true;
 }
 
 keyboard_mode_t keyboard_get_mode(void)

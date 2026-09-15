@@ -32,6 +32,8 @@
 #include "display.h"
 #include "header.h"
 #include "keyboard.h"
+#include "windows.h"
+#include "theme.h"
 #include "networking.h"
 #include "wifi_known.h"
 
@@ -401,7 +403,7 @@ static bool config_write_file(const char *text)
  * COMMAND IMPLEMENTATION
  * ======================================================================== */
 
-static void config_show_all(void)
+static void config_show_all(bool bare)
 {
     char *file_text = NULL;
     size_t file_len = 0;
@@ -409,7 +411,9 @@ static void config_show_all(void)
 
     file_text = config_read_file(&file_len);
 
-    shell_transcript_appendf_ansi(SH_SUBHEAD "CONFIG.SYS settings" SH_RST "\n");
+    if (!bare) {
+        shell_transcript_appendf_ansi(SH_SUBHEAD "CONFIG.SYS settings" SH_RST "\n");
+    }
     for (i = 0; i < CONFIG_SETTING_COUNT; i++) {
         const config_setting_t *setting = &config_settings[i];
         char current[128];
@@ -419,7 +423,9 @@ static void config_show_all(void)
         if (file_text != NULL) {
             persisted = config_directive_get(file_text, setting->key, NULL, 0);
         }
-        if (persisted >= 0) {
+        if (bare) {
+            shell_transcript_appendf("%s=%s\n", setting->key, current);
+        } else if (persisted >= 0) {
             shell_transcript_appendf_ansi("  " SH_EXE "%s" SH_RST "=%s  (default %s)" SH_MUTE " [saved]" SH_RST "\n",
                                           setting->key, current, setting->default_value);
         } else {
@@ -430,7 +436,7 @@ static void config_show_all(void)
     free(file_text);
 }
 
-static void config_show_one(const config_setting_t *setting)
+static void config_show_one(const config_setting_t *setting, bool bare)
 {
     char *file_text = NULL;
     size_t file_len = 0;
@@ -442,6 +448,12 @@ static void config_show_one(const config_setting_t *setting)
     setting->render(current, sizeof(current));
     if (file_text != NULL) {
         plen = config_directive_get(file_text, setting->key, persisted, sizeof(persisted));
+    }
+
+    if (bare) {
+        shell_transcript_appendf("%s\n", plen >= 0 ? persisted : current);
+        free(file_text);
+        return;
     }
 
     if (plen >= 0) {
@@ -466,6 +478,41 @@ static char *config_open_file_text(void)
         }
     }
     return file_text;
+}
+
+bool config_persist_set(const char *key, const char *value)
+{
+    char *file_text;
+    bool ok;
+
+    if (key == NULL || value == NULL) {
+        return false;
+    }
+    file_text = config_open_file_text();
+    if (file_text == NULL) {
+        return false;
+    }
+    ok = config_directive_upsert(file_text, P4_CONFIG_CONFIG_MAX_BYTES, key, value) &&
+         config_write_file(file_text);
+    free(file_text);
+    return ok;
+}
+
+int config_get_saved(const char *key, char *out, size_t out_size)
+{
+    char *file_text;
+    int len;
+
+    if (key == NULL) {
+        return -1;
+    }
+    file_text = config_read_file(NULL);
+    if (file_text == NULL) {
+        return -1;
+    }
+    len = config_directive_get(file_text, key, out, out_size);
+    free(file_text);
+    return len;
 }
 
 static void config_set(const config_setting_t *setting, const char *value)
@@ -597,6 +644,7 @@ static void config_factory(void)
         P4_CONFIG_WIFI_KNOWN_FILE,
         P4_CONFIG_ALIAS_PROFILE,
         P4_CONFIG_HISTORY_PROFILE,
+        "APPS/SHELL.INI",   /* legacy settings store (superseded by CONFIG.SYS) */
     };
     char path[128];
     shell_sd_session_t session;
@@ -613,6 +661,18 @@ static void config_factory(void)
     for (i = 0; i < CONFIG_SETTING_COUNT; i++) {
         (void)config_settings[i].apply(config_settings[i].default_value);
     }
+
+    /* UI presentation preferences now live in CONFIG.SYS too, so a factory
+     * reset restores their defaults live as well (the next boot re-applies
+     * the regenerated defaults regardless). */
+    (void)theme_set("default");
+    header_set_mode(HEADER_MODE_AUTO);
+    windows_input_cursor_style(true);
+    keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
+    windows_refresh_theme();
+    header_refresh_theme();
+    keyboard_refresh_theme();
+    display_schedule_ui_rebuild();
 
     shell_history_clear();
 
@@ -654,9 +714,28 @@ static void config_factory(void)
 void shell_command_config(int argc, char **argv)
 {
     const config_setting_t *setting;
+    bool bare = false;
+    char *args[64];
+    int nargc = 0;
+    int ai;
+
+    /* Filter `/b` anywhere on the line (machine-readable output for the
+     * Preferences batch app); it never becomes a key or a value. */
+    if (argc > 0) {
+        args[nargc++] = argv[0];
+    }
+    for (ai = 1; ai < argc && nargc < (int)(sizeof(args) / sizeof(args[0])); ai++) {
+        if (shell_text_equals_ignore_case(argv[ai], "/b")) {
+            bare = true;
+            continue;
+        }
+        args[nargc++] = argv[ai];
+    }
+    argc = nargc;
+    argv = args;
 
     if (argc == 1) {
-        config_show_all();
+        config_show_all(bare);
         return;
     }
 
@@ -740,7 +819,7 @@ void shell_command_config(int argc, char **argv)
         }
 
         if (argc == 2 && inline_value == NULL) {
-            config_show_one(setting);
+            config_show_one(setting, bare);
             return;
         }
 

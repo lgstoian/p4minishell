@@ -18,12 +18,14 @@ uint16_t gfx_rgb_to_565(uint32_t rgb)
     return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
 }
 
-bool gfx_surface_alloc(gfx_surface_t *s, int w, int h)
+/** Shared bounded allocator: one implementation behind every surface size. */
+static bool gfx_surface_alloc_bounded(gfx_surface_t *s, int w, int h,
+                                      int max_w, int max_h)
 {
     size_t n;
 
     if (s == NULL) return false;
-    if (w < 1 || w > GFX_MAX_W || h < 1 || h > GFX_MAX_H) return false;
+    if (w < 1 || w > max_w || h < 1 || h > max_h) return false;
     n = (size_t)w * (size_t)h;
     s->px = heap_caps_malloc(n * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (s->px == NULL) {
@@ -37,6 +39,16 @@ bool gfx_surface_alloc(gfx_surface_t *s, int w, int h)
     s->w = w;
     s->h = h;
     return true;
+}
+
+bool gfx_surface_alloc(gfx_surface_t *s, int w, int h)
+{
+    return gfx_surface_alloc_bounded(s, w, h, GFX_MAX_W, GFX_MAX_H);
+}
+
+bool gfx_image_surface_alloc(gfx_surface_t *s, int w, int h)
+{
+    return gfx_surface_alloc_bounded(s, w, h, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H);
 }
 
 void gfx_surface_free(gfx_surface_t *s)
@@ -155,8 +167,8 @@ static uint32_t gfx_le32(const uint8_t *p)
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-bool gfx_bmp_parse_header(const uint8_t *buf, size_t len,
-                          gfx_bmp_info_t *out)
+bool gfx_bmp_parse_header_ex(const uint8_t *buf, size_t len,
+                             gfx_bmp_info_t *out, int max_w, int max_h)
 {
     uint32_t data_offset;
     uint32_t info_size;
@@ -167,14 +179,13 @@ bool gfx_bmp_parse_header(const uint8_t *buf, size_t len,
     uint32_t compression;
     uint64_t row_stride;
     uint64_t need;
+    bool top_down;
 
     if (out != NULL) {
-        out->w = 0;
-        out->h = 0;
-        out->data_offset = 0;
-        out->row_stride = 0;
+        memset(out, 0, sizeof(*out));
     }
     if (buf == NULL || out == NULL) return false;
+    if (max_w < 1 || max_h < 1) return false;
     if (len < 54) return false;
     if (buf[0] != 'B' || buf[1] != 'M') return false;
 
@@ -188,13 +199,16 @@ bool gfx_bmp_parse_header(const uint8_t *buf, size_t len,
 
     if (info_size != 40) return false;
     if (planes != 1) return false;
-    if (bpp != 24) return false;
+    if (bpp != 24 && bpp != 32) return false;
     if (compression != 0) return false;
-    if (w < 1 || w > GFX_SPR_MAX) return false;
-    if (h < 1 || h > GFX_SPR_MAX) return false; /* negative = top-down */
+
+    top_down = (h < 0);
+    if (h < 0) h = -h; /* negative height = top-down */
+    if (w < 1 || w > max_w) return false;
+    if (h < 1 || h > max_h) return false;
     if (data_offset < 54 || data_offset >= len) return false;
 
-    row_stride = ((uint64_t)(uint32_t)w * 3u + 3u) & ~3u;
+    row_stride = ((uint64_t)(uint32_t)w * (uint64_t)(bpp / 8u) + 3u) & ~3u;
     need = (uint64_t)data_offset + row_stride * (uint64_t)(uint32_t)h;
     if (need > (uint64_t)len) return false;
 
@@ -202,15 +216,39 @@ bool gfx_bmp_parse_header(const uint8_t *buf, size_t len,
     out->h = h;
     out->data_offset = data_offset;
     out->row_stride = (uint32_t)row_stride;
+    out->bpp = bpp;
+    out->top_down = top_down;
     return true;
 }
 
-bool gfx_bmp_decode_565(const uint8_t *buf, size_t len,
-                        const gfx_bmp_info_t *info, gfx_surface_t *out)
+bool gfx_bmp_parse_header(const uint8_t *buf, size_t len,
+                          gfx_bmp_info_t *out)
+{
+    if (!gfx_bmp_parse_header_ex(buf, len, out, GFX_SPR_MAX, GFX_SPR_MAX)) {
+        return false;
+    }
+    /* Strict sprite format: 24-bit bottom-up only (the `screenshot` layout). */
+    if (out->bpp != 24 || out->top_down) {
+        memset(out, 0, sizeof(*out));
+        return false;
+    }
+    return true;
+}
+
+/** Read one stored BMP pixel (BGR[A]) as RGB565. */
+static uint16_t gfx_bmp_pixel(const uint8_t *row, int x, uint16_t bpp)
+{
+    const uint8_t *p = row + (size_t)x * (size_t)(bpp / 8u);
+
+    return gfx_rgb_to_565(((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | p[0]);
+}
+
+bool gfx_bmp_decode_scaled_565(const uint8_t *buf, size_t len,
+                               const gfx_bmp_info_t *info,
+                               int dst_w, int dst_h, gfx_surface_t *out)
 {
     gfx_surface_t tmp = {NULL, 0, 0};
-    int y;
-    int x;
+    size_t src_row_bytes;
 
     if (out != NULL) {
         out->px = NULL;
@@ -219,31 +257,96 @@ bool gfx_bmp_decode_565(const uint8_t *buf, size_t len,
     }
     if (buf == NULL || info == NULL || out == NULL) return false;
     if (info->w < 1 || info->h < 1) return false;
-    if (!gfx_surface_alloc(&tmp, info->w, info->h)) {
+    if (info->bpp != 24 && info->bpp != 32) return false;
+    if (dst_w < 1 || dst_h < 1) return false;
+    if (!gfx_image_surface_alloc(&tmp, dst_w, dst_h)) {
         return false;
     }
-    /* BMP rows are bottom-up: file row 0 is the image bottom. Bounds were
-     * validated by gfx_bmp_parse_header, re-checked here so decode stays
-     * safe on its own. */
-    for (y = 0; y < info->h; y++) {
-        const uint8_t *row = buf + info->data_offset +
-                             (uint32_t)(info->h - 1 - y) * info->row_stride;
+    src_row_bytes = (size_t)info->w * (size_t)(info->bpp / 8u);
 
-        if ((size_t)(row - buf) + (size_t)info->w * 3u > len) {
+    for (int y = 0; y < dst_h; y++) {
+        int sy = (int)((int64_t)y * info->h / dst_h);
+        int file_row;
+        const uint8_t *row;
+
+        if (sy >= info->h) sy = info->h - 1;
+        /* Stored rows are bottom-up unless the header height was negative. */
+        file_row = info->top_down ? sy : (info->h - 1 - sy);
+        row = buf + info->data_offset + (uint64_t)(uint32_t)file_row * info->row_stride;
+        if ((size_t)(row - buf) + src_row_bytes > len) {
             gfx_surface_free(&tmp);
             return false;
         }
-        for (x = 0; x < info->w; x++) {
-            uint8_t b = row[x * 3];
-            uint8_t g = row[x * 3 + 1];
-            uint8_t r = row[x * 3 + 2];
+        for (int x = 0; x < dst_w; x++) {
+            int sx = (int)((int64_t)x * info->w / dst_w);
 
+            if (sx >= info->w) sx = info->w - 1;
             tmp.px[(size_t)y * (size_t)tmp.w + (size_t)x] =
-                gfx_rgb_to_565(((uint32_t)r << 16) | ((uint32_t)g << 8) | b);
+                gfx_bmp_pixel(row, sx, info->bpp);
         }
     }
     *out = tmp;
     return true;
+}
+
+bool gfx_bmp_decode_565(const uint8_t *buf, size_t len,
+                        const gfx_bmp_info_t *info, gfx_surface_t *out)
+{
+    if (info == NULL) {
+        if (out != NULL) { out->px = NULL; out->w = 0; out->h = 0; }
+        return false;
+    }
+    return gfx_bmp_decode_scaled_565(buf, len, info, info->w, info->h, out);
+}
+
+void gfx_surface_blit_scaled(gfx_surface_t *dst, const gfx_surface_t *src,
+                             int x, int y, int dw, int dh,
+                             bool use_transparent, uint16_t transparent)
+{
+    if (dst == NULL || dst->px == NULL) return;
+    if (src == NULL || src->px == NULL) return;
+    if (dw < 1 || dh < 1) return;
+    for (int dy = 0; dy < dh; dy++) {
+        int sy = (int)((int64_t)dy * src->h / dh);
+
+        if (sy >= src->h) sy = src->h - 1;
+        for (int dx = 0; dx < dw; dx++) {
+            int sx = (int)((int64_t)dx * src->w / dw);
+            uint16_t px;
+
+            if (sx >= src->w) sx = src->w - 1;
+            px = src->px[(size_t)sy * (size_t)src->w + (size_t)sx];
+            if (use_transparent && px == transparent) continue;
+            gfx_surface_pixel(dst, x + dx, y + dy, px);
+        }
+    }
+}
+
+void gfx_bmp_fit(int src_w, int src_h, int max_w, int max_h,
+                 int *out_w, int *out_h)
+{
+    int w;
+    int h;
+
+    if (out_w != NULL) *out_w = 1;
+    if (out_h != NULL) *out_h = 1;
+    if (src_w < 1 || src_h < 1 || max_w < 1 || max_h < 1) return;
+
+    if (src_w <= max_w && src_h <= max_h) {
+        /* Already fits: show native (never upscale). */
+        w = src_w;
+        h = src_h;
+    } else if ((int64_t)src_w * max_h >= (int64_t)max_w * src_h) {
+        w = max_w;
+        h = (int)((int64_t)src_h * max_w / src_w);
+    } else {
+        h = max_h;
+        w = (int)((int64_t)src_w * max_h / src_h);
+    }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (out_w != NULL) *out_w = w;
+    if (out_h != NULL) *out_h = h;
 }
 
 void gfx_surface_line(gfx_surface_t *s, int x1, int y1, int x2, int y2,

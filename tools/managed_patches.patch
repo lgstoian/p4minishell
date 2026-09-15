@@ -900,3 +900,53 @@ diff --git a/managed_components/espressif__esp32_p4_function_ev_board/include/bs
  
  /**
   * @brief BSP display configuration structure
+diff --git a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c
+index 27befa3..da10da6 100644
+--- a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c
++++ b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c
+@@ -280,6 +280,24 @@ const char * lv_buttonmatrix_get_button_text(const lv_obj_t * obj, uint32_t btn_
+     return btnm->map_p[txt_i];
+ }
+ 
++/* P4MiniShell addition (tracked in tools/managed_patches.patch): expose a
++ * button's on-screen area so the `ui` touch-automation verbs can tap a
++ * specific key's real center (hit-test faithful). */
++bool lv_buttonmatrix_get_button_area(const lv_obj_t * obj, uint32_t btn_id,
++                                     lv_area_t * area_out)
++{
++    if(area_out == NULL) return false;
++    LV_ASSERT_OBJ(obj, MY_CLASS);
++
++    const lv_buttonmatrix_t * btnm = (const lv_buttonmatrix_t *)obj;
++    if(btn_id == LV_BUTTONMATRIX_BUTTON_NONE) return false;
++    if(btn_id >= btnm->btn_cnt) return false;
++    if(btnm->button_areas == NULL) return false;
++
++    *area_out = btnm->button_areas[btn_id];
++    return true;
++}
++
+ bool lv_buttonmatrix_has_button_ctrl(lv_obj_t * obj, uint32_t btn_id, lv_buttonmatrix_ctrl_t ctrl)
+ {
+     LV_ASSERT_OBJ(obj, MY_CLASS);
+diff --git a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h
+index 771be50..0ed77af 100644
+--- a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h
++++ b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h
+@@ -198,6 +198,16 @@ uint32_t lv_buttonmatrix_get_selected_button(const lv_obj_t * obj);
+  */
+ const char * lv_buttonmatrix_get_button_text(const lv_obj_t * obj, uint32_t btn_id);
+ 
++/**
++ * Get the on-screen area of a button (P4MiniShell addition).
++ * @param obj       pointer to a button matrix object
++ * @param btn_id    the index of a button (not counting new line characters)
++ * @param area_out  filled with the button's absolute coordinates
++ * @return          true on success; false for an invalid index or no area
++ */
++bool lv_buttonmatrix_get_button_area(const lv_obj_t * obj, uint32_t btn_id,
++                                     lv_area_t * area_out);
++
+ /**
+  * Get the whether a control value is enabled or disabled for button of a button matrix
+  * @param obj       pointer to a button matrix object

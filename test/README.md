@@ -3,7 +3,7 @@
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
 
-Current baseline: **262 tests, 0 failures, 2 ignored** (verify with
+Current baseline: **317 tests, 0 failures, 2 ignored** (verify with
 `tools/unit_run.py COM3`).
 
 ## Test Structure
@@ -42,12 +42,17 @@ test/
     test_markdown.c         # markdown renderer
     test_filetype.c         # filetype registry
     test_json.c             # json validate/pretty
-    test_gfx.c              # RGB565 raster + BMP + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step)
+    test_gfx.c              # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step)
     test_asset.c            # CRC-32 vectors + asset manifest parser
-test_pkg.c              # pkg APPINFO-name helper
-test_theme.c            # UI theme registry (lookup/selection)
+    test_pkg.c              # pkg APPINFO-name helper
+    test_theme.c            # UI theme registry (lookup/selection)
     test_header.c           # header layout policy (fit/compact/yield/smaller-font)
     test_wifi_state.c       # Wi-Fi state machine
+    test_csv.c              # CSV splitter + R1C1 ref substitution + field formatter
+    test_bind.c             # F-key bind table (set/lookup/count/index)
+    test_crypt.c            # PBKDF2 key derivation + AES-GCM envelope round-trip
+    test_tcpterm.c          # tcpterm target parse, escape expansion, reply sanitize
+    test_userial.c          # userial VID:PID + line-coding parsers
 ```
 
 ## Running Tests

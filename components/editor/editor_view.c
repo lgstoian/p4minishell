@@ -39,9 +39,7 @@
 
 #define EDITOR_VIEW_TAG  P4_CONFIG_SHELL_TAG
 
-/* Session event bits. MODAL_EVENT_* live in modal.h; editor keeps SAVE. */
-#define EDITOR_EVENT_SAVE   (1 << 2)
-#define EDITOR_EVENT_RELOAD (1 << 3)
+/* Session event bits live once in editor.h (shared by the worker and this view). */
 
 /* ========================================================================
  * INTERNAL STATE
@@ -55,6 +53,8 @@ typedef enum {
     EDITOR_PROMPT_REPLACE_WITH,      /**< "With: <replacement>" */
     EDITOR_PROMPT_GOTO,              /**< "Go to line: <n>" */
     EDITOR_PROMPT_SAVE_AS,           /**< "Save As: <path>" */
+    EDITOR_PROMPT_OPEN,              /**< "Open: <path>" */
+    EDITOR_PROMPT_OPEN_CONFIRM,      /**< "Open without saving? (Y/N)" */
     EDITOR_PROMPT_QUIT_CONFIRM,      /**< "Quit without saving? (Y/N)" */
 } editor_prompt_t;
 
@@ -63,6 +63,9 @@ static struct {
     editor_doc_t *doc;
     editor_control_t *control;
     lv_obj_t *surface;          /* Scrollable container (the transcript region) */
+    lv_obj_t *spacer;           /* Full-height invisible child: keeps the
+                                 * scroll range correct when only a window of
+                                 * rows is materialized as spans */
     lv_obj_t *spans;            /* Dedicated span group child of the surface */
     lv_obj_t *cursor;           /* Block cursor child of the surface */
     lv_timer_t *cursor_timer;   /* Cursor blink timer */
@@ -93,11 +96,18 @@ static struct {
     size_t width_row;
     lv_coord_t *widths;
     size_t width_count;
+
+    /* Virtualized rendering: the first document row currently materialized as
+     * spans. At most P4_CONFIG_EDITOR_RENDER_ROWS rows exist at once; a scroll
+     * or cursor jump shifts the window. */
+    size_t render_first;
+    bool render_busy;           /* Reentrancy guard for the scroll handler */
 } s_editor_view = {
     .open = false,
     .doc = NULL,
     .control = NULL,
     .surface = NULL,
+    .spacer = NULL,
     .spans = NULL,
     .cursor = NULL,
     .cursor_timer = NULL,
@@ -121,10 +131,13 @@ static struct {
     .width_row = (size_t)-1,
     .widths = NULL,
     .width_count = 0,
+    .render_first = 0,
+    .render_busy = false,
 };
 
 /* Forward declarations (mutual recursion between rendering and editing). */
 static void editor_rebuild(void);
+static void editor_render_spans(void);
 static void editor_update_cursor(void);
 static void editor_update_current_line(void);
 static void editor_build_selection(void);
@@ -133,6 +146,7 @@ static void editor_status(const char *format, ...);
 static void editor_status_default(void);
 static void editor_layout_update(void);
 static void editor_touch_event_cb(lv_event_t *event);
+static void editor_scroll_event_cb(lv_event_t *event);
 static void editor_quit_signal(void);
 
 /* ========================================================================
@@ -201,7 +215,7 @@ static void editor_width_cache(size_t row)
         return;
     }
     len = editor_doc_line_length(doc, row);
-    w = realloc(s_editor_view.widths, (len + 1) * sizeof(lv_coord_t));
+    w = editor_mem_realloc(s_editor_view.widths, (len + 1) * sizeof(lv_coord_t));
     if (w == NULL) {
         return;
     }
@@ -438,7 +452,7 @@ static void editor_wrap_rebuild(void)
     size_t count;
     size_t row;
 
-    free(s_editor_view.wrap_counts);
+    editor_mem_free(s_editor_view.wrap_counts);
     s_editor_view.wrap_counts = NULL;
     s_editor_view.wrap_count_rows = 0;
     s_editor_view.wrap_px_used = s_editor_view.wrap ? editor_wrap_px() : 0;
@@ -449,7 +463,7 @@ static void editor_wrap_rebuild(void)
     if (count == 0) {
         return;
     }
-    s_editor_view.wrap_counts = malloc(count * sizeof(size_t));
+    s_editor_view.wrap_counts = editor_mem_alloc(count * sizeof(size_t));
     if (s_editor_view.wrap_counts == NULL) {
         return;
     }
@@ -621,7 +635,7 @@ static void editor_add_run(const char *text, size_t len,
     if (len == 0) {
         return;
     }
-    buf = malloc(len + 1);
+    buf = editor_mem_alloc(len + 1);
     if (buf == NULL) {
         return;
     }
@@ -630,7 +644,7 @@ static void editor_add_run(const char *text, size_t len,
 
     span = lv_spangroup_add_span(s_editor_view.spans);
     if (span == NULL) {
-        free(buf);
+        editor_mem_free(buf);
         return;
     }
     lv_span_set_text(span, buf);
@@ -638,7 +652,7 @@ static void editor_add_run(const char *text, size_t len,
     /* Editor surfaces are terminal-role; attrs select TTF variants. */
     font_span_style(style, FONT_ROLE_TERMINAL, attrs, (int)color,
                     ansi_get_palette_color(color));
-    free(buf);
+    editor_mem_free(buf);
 }
 
 /* Chunked span emission state (one editor_render_row at a time). When
@@ -799,12 +813,101 @@ static void editor_render_row(editor_doc_t *doc, size_t row)
     }
 }
 
+/** True when the document is large enough to virtualize row rendering. */
+static bool editor_windowing_active(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+
+    /* Wrapping changes the row pitch (visual rows), so keep the simple
+     * full-render path while wrap is on; wrap is a per-session toggle and off
+     * by default. */
+    return doc != NULL && !s_editor_view.wrap &&
+           editor_doc_line_count(doc) > P4_CONFIG_EDITOR_RENDER_ROWS;
+}
+
+/** First row to materialize so @p focus_row sits inside with an overscan. */
+static size_t editor_render_first_for(size_t focus_row, size_t total)
+{
+    size_t win = P4_CONFIG_EDITOR_RENDER_ROWS;
+    size_t margin = win / 4;
+    size_t first;
+
+    if (total <= win) {
+        return 0;
+    }
+    first = focus_row > margin ? focus_row - margin : 0;
+    if (first + win > total) {
+        first = total - win;
+    }
+    return first;
+}
+
+/** Append a row separator span to the span group. */
+static void editor_add_separator(void)
+{
+    lv_span_t *sep = lv_spangroup_add_span(s_editor_view.spans);
+    if (sep != NULL) {
+        lv_style_t *style = lv_span_get_style(sep);
+        lv_span_set_text(sep, "\n");
+        lv_style_set_text_color(style, lv_color_hex(
+            ansi_get_palette_color(ANSI_COLOR_BRIGHT_WHITE)));
+        lv_style_set_text_font(style, windows_get_terminal_font());
+    }
+}
+
+/** Materialize the current row window as spans, positioned at its document
+ *  y offset so the cursor/selection overlays and touch mapping (which work in
+ *  document coordinates) stay aligned. */
+static void editor_render_spans(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    size_t total;
+    size_t first;
+    size_t last;
+    size_t row;
+    lv_coord_t lh = editor_line_height();
+
+    if (s_editor_view.spans == NULL || doc == NULL) {
+        return;
+    }
+    total = editor_doc_line_count(doc);
+    first = s_editor_view.render_first;
+    if (first > total) {
+        first = total;
+    }
+    s_editor_view.render_first = first;
+    last = first + P4_CONFIG_EDITOR_RENDER_ROWS;
+    if (last > total) {
+        last = total;
+    }
+
+    editor_clear_spans(s_editor_view.spans);
+    for (row = first; row < last; row++) {
+        editor_render_row(doc, row);
+        if (row + 1 < last) {
+            editor_add_separator();
+        }
+    }
+
+    /* When virtualized, the spans child covers only its window and is placed
+     * at the matching document row; the full-height spacer (not the spans)
+     * establishes the scroll range. A small document renders fully at 0. */
+    if (editor_windowing_active()) {
+        lv_obj_set_y(s_editor_view.spans, (lv_coord_t)(first * (size_t)lh));
+        lv_obj_set_height(s_editor_view.spans,
+                          (lv_coord_t)((last - first) * (size_t)lh));
+    } else {
+        lv_obj_set_y(s_editor_view.spans, 0);
+        lv_obj_set_height(s_editor_view.spans,
+                          (lv_coord_t)(total * (size_t)lh));
+    }
+}
+
 /** Rebuild the whole editor content (spans, selection, cursor). */
 static void editor_rebuild(void)
 {
     editor_doc_t *doc = s_editor_view.doc;
     size_t count;
-    size_t row;
     lv_coord_t lh = editor_line_height();
 
     if (s_editor_view.spans == NULL || doc == NULL) {
@@ -812,30 +915,24 @@ static void editor_rebuild(void)
     }
 
     editor_width_invalidate();
-    editor_clear_spans(s_editor_view.spans);
 
     /* Wrap chunk cache first: render_row and all mappings agree on it. */
     editor_wrap_rebuild();
 
     count = editor_doc_line_count(doc);
-    for (row = 0; row < count; row++) {
-        editor_render_row(doc, row);
-        if (row + 1 < count) {
-            lv_span_t *sep = lv_spangroup_add_span(s_editor_view.spans);
-            if (sep != NULL) {
-                lv_style_t *style = lv_span_get_style(sep);
-                lv_span_set_text(sep, "\n");
-                lv_style_set_text_color(style, lv_color_hex(
-                    ansi_get_palette_color(ANSI_COLOR_BRIGHT_WHITE)));
-                lv_style_set_text_font(style, windows_get_terminal_font());
-            }
-        }
-    }
+    s_editor_view.render_first = editor_windowing_active()
+        ? editor_render_first_for(editor_doc_cursor_row(doc), count)
+        : 0;
 
-    /* Size the span group to exactly its row height so the container sees a
-     * taller-than-itself child and scrolls through it (never LV_SIZE_CONTENT:
-     * see the transcript container notes in windows.c). */
-    lv_obj_set_height(s_editor_view.spans, (lv_coord_t)(count * (size_t)lh));
+    s_editor_view.render_busy = true;
+    editor_render_spans();
+
+    /* Full-height invisible spacer: keeps the scroll range equal to the whole
+     * document even though only a window of rows is materialized. */
+    if (s_editor_view.spacer != NULL) {
+        lv_obj_set_height(s_editor_view.spacer,
+                          (lv_coord_t)(count * (size_t)lh));
+    }
     if (s_editor_view.sel_layer != NULL) {
         lv_obj_set_size(s_editor_view.sel_layer,
                         lv_obj_get_width(s_editor_view.surface),
@@ -846,12 +943,89 @@ static void editor_rebuild(void)
                          lv_obj_get_width(s_editor_view.surface));
     }
     lv_obj_update_layout(s_editor_view.surface);
+    s_editor_view.render_busy = false;
 
     editor_update_cursor();
     editor_update_current_line();
     editor_build_selection();
     editor_ensure_cursor_visible();
     editor_status_default();
+}
+
+/** Shift the render window when the cursor moves outside it (Go-to-Line,
+ *  PageDown at a window edge, ...). Called from editor_layout_update. */
+static void editor_render_follow_cursor(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    size_t total;
+    size_t row;
+    size_t first;
+    size_t win;
+
+    if (s_editor_view.spans == NULL || doc == NULL || s_editor_view.preview ||
+        !editor_windowing_active()) {
+        return;
+    }
+    total = editor_doc_line_count(doc);
+    row = editor_doc_cursor_row(doc);
+    first = s_editor_view.render_first;
+    win = P4_CONFIG_EDITOR_RENDER_ROWS;
+    if (row >= first && row < first + win) {
+        return;
+    }
+    s_editor_view.render_first = editor_render_first_for(row, total);
+    s_editor_view.render_busy = true;
+    editor_render_spans();
+    s_editor_view.render_busy = false;
+}
+
+/** Surface scroll: shift the window when the visible top nears either edge of
+ *  the materialized window, so touch-drag scrolling keeps showing text. */
+static void editor_scroll_event_cb(lv_event_t *event)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    lv_obj_t *surface = s_editor_view.surface;
+    size_t total;
+    size_t visible_top;
+    size_t first;
+    size_t win;
+    size_t want;
+    lv_coord_t lh;
+    lv_coord_t scroll_y;
+
+    (void)event;
+    if (s_editor_view.render_busy || s_editor_view.preview ||
+        surface == NULL || doc == NULL || s_editor_view.spans == NULL ||
+        !editor_windowing_active()) {
+        return;
+    }
+    lh = editor_line_height();
+    if (lh <= 0) {
+        return;
+    }
+    total = editor_doc_line_count(doc);
+    scroll_y = lv_obj_get_scroll_y(surface);
+    if (scroll_y < 0) {
+        scroll_y = 0;
+    }
+    visible_top = (size_t)(scroll_y / lh);
+    first = s_editor_view.render_first;
+    win = P4_CONFIG_EDITOR_RENDER_ROWS;
+
+    /* Rebuild only when the visible top pushes into the first/last quarter. */
+    if (visible_top < first + win / 4 || visible_top + win / 4 > first + win) {
+        size_t focus = visible_top + win / 8;
+        if (focus > total) {
+            focus = total;
+        }
+        want = editor_render_first_for(focus, total);
+        if (want != first) {
+            s_editor_view.render_first = want;
+            s_editor_view.render_busy = true;
+            editor_render_spans();
+            s_editor_view.render_busy = false;
+        }
+    }
 }
 
 /* ========================================================================
@@ -917,12 +1091,12 @@ static void editor_preview_show(void)
             return;
         }
     }
-    joined = malloc(total + 1);
-    rendered = malloc(total * 2 + 64);
+    joined = editor_mem_alloc(total + 1);
+    rendered = editor_mem_alloc(total * 2 + 64);
     if (joined == NULL || rendered == NULL) {
-        free(joined);
-        free(rendered);
-        editor_status("preview: out of memory");
+        editor_mem_free(joined);
+        editor_mem_free(rendered);
+        editor_status("out of memory for preview");
         return;
     }
     for (row = 0; row < count; row++) {
@@ -936,11 +1110,17 @@ static void editor_preview_show(void)
     }
     joined[off] = '\0';
     markdown_render_doc(joined, rendered, total * 2 + 64);
-    free(joined);
+    editor_mem_free(joined);
 
+    /* Preview replaces the source spans; reset any virtualized window and
+     * give the group the full source height (preview is capped at 96 KB). */
+    s_editor_view.render_first = 0;
+    lv_obj_set_y(s_editor_view.spans, 0);
     editor_clear_spans(s_editor_view.spans);
     ansi_process_text(rendered, editor_preview_segment, s_editor_view.spans);
-    free(rendered);
+    editor_mem_free(rendered);
+    lv_obj_set_height(s_editor_view.spans,
+                      (lv_coord_t)(count * (size_t)editor_line_height()));
 
     /* Preview owns the surface: hide source chrome. */
     if (s_editor_view.cursor != NULL) {
@@ -1313,11 +1493,14 @@ static void editor_status_default(void)
         case EDITOR_PROMPT_REPLACE_WITH: label = "With"; break;
         case EDITOR_PROMPT_GOTO:         label = "Go to line"; break;
         case EDITOR_PROMPT_SAVE_AS:      label = "Save As"; break;
+        case EDITOR_PROMPT_OPEN:         label = "Open"; break;
+        case EDITOR_PROMPT_OPEN_CONFIRM: label = "Open without saving"; break;
         case EDITOR_PROMPT_QUIT_CONFIRM: label = "Quit without saving"; break;
         default: break;
         }
         s_editor_view.prompt_buf[s_editor_view.prompt_len] = '\0';
-        if (s_editor_view.prompt == EDITOR_PROMPT_QUIT_CONFIRM) {
+        if (s_editor_view.prompt == EDITOR_PROMPT_QUIT_CONFIRM ||
+            s_editor_view.prompt == EDITOR_PROMPT_OPEN_CONFIRM) {
             snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 96, "%s?  (Y/N)",
                      label);
         } else {
@@ -1361,7 +1544,8 @@ static void editor_prompt_begin(editor_prompt_t type)
     s_editor_view.prompt_len = 0;
     s_editor_view.prompt_buf[0] = '\0';
 
-    if (type == EDITOR_PROMPT_SAVE_AS && s_editor_view.doc != NULL) {
+    if ((type == EDITOR_PROMPT_SAVE_AS || type == EDITOR_PROMPT_OPEN) &&
+        s_editor_view.doc != NULL) {
         /* Pre-fill with the current path so it is easy to adjust. */
         const char *cur = s_editor_view.doc->path;
         size_t n = cur != NULL ? strlen(cur) : 0;
@@ -1374,6 +1558,12 @@ static void editor_prompt_begin(editor_prompt_t type)
             s_editor_view.prompt_buf[n] = '\0';
         }
     }
+    /* Text-entry prompts (and Y/N confirms) need the letters page even when the
+     * session was navigating; commit/cancel restore the nav page so the touch
+     * keyboard follows the context. No-op when the OSK is hidden (USB). */
+    if (type != EDITOR_PROMPT_NONE) {
+        keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
+    }
     editor_status_default();
 }
 
@@ -1382,6 +1572,7 @@ static void editor_prompt_cancel(void)
 {
     s_editor_view.prompt = EDITOR_PROMPT_NONE;
     s_editor_view.replace_armed = false;
+    keyboard_set_mode(KEYBOARD_MODE_NAV);
     editor_status_default();
 }
 
@@ -1401,6 +1592,17 @@ static bool editor_prompt_handle_char(char ch)
         } else if (ch == 'n' || ch == 'N') {
             s_editor_view.prompt = EDITOR_PROMPT_NONE;
             editor_status("quit cancelled");
+        }
+        return true;
+    }
+
+    if (p == EDITOR_PROMPT_OPEN_CONFIRM) {
+        if (ch == 'y' || ch == 'Y') {
+            /* Discard guard is accepted by the user: start the path prompt. */
+            editor_prompt_begin(EDITOR_PROMPT_OPEN);
+        } else if (ch == 'n' || ch == 'N') {
+            s_editor_view.prompt = EDITOR_PROMPT_NONE;
+            editor_status("open cancelled");
         }
         return true;
     }
@@ -1586,6 +1788,23 @@ static void editor_save_as(void)
     editor_status("saving to %s...", s_editor_view.prompt_buf);
 }
 
+/** Route a file switch to the worker (loads the file and swaps the view). */
+static void editor_request_open(void)
+{
+    editor_doc_t *doc = s_editor_view.doc;
+    editor_control_t *ctl = s_editor_view.control;
+
+    if (doc == NULL || ctl == NULL) {
+        return;
+    }
+    if (doc->modified) {
+        /* A discard guard (same shape as the quit confirm). */
+        editor_prompt_begin(EDITOR_PROMPT_OPEN_CONFIRM);
+        return;
+    }
+    editor_prompt_begin(EDITOR_PROMPT_OPEN);
+}
+
 /** Commit the active prompt (Enter). */
 static void editor_prompt_commit(void)
 {
@@ -1623,9 +1842,37 @@ static void editor_prompt_commit(void)
     case EDITOR_PROMPT_SAVE_AS:
         editor_save_as();
         break;
+    case EDITOR_PROMPT_OPEN:
+        if (s_editor_view.prompt_len == 0) {
+            s_editor_view.prompt = EDITOR_PROMPT_NONE;
+            editor_status("open: no path");
+            break;
+        }
+        if (s_editor_view.control == NULL) {
+            s_editor_view.prompt = EDITOR_PROMPT_NONE;
+            editor_status("open failed");
+            break;
+        }
+        snprintf(s_editor_view.control->open_path,
+                 sizeof(s_editor_view.control->open_path), "%s",
+                 s_editor_view.prompt_buf);
+        s_editor_view.control->open_requested = true;
+        if (s_editor_view.control->event_group != NULL) {
+            xEventGroupSetBits((EventGroupHandle_t)s_editor_view.control->event_group,
+                               EDITOR_EVENT_OPEN);
+        }
+        s_editor_view.prompt = EDITOR_PROMPT_NONE;
+        editor_status("opening %s...", s_editor_view.prompt_buf);
+        break;
     default:
         s_editor_view.prompt = EDITOR_PROMPT_NONE;
         break;
+    }
+
+    /* A finished prompt returns the touch keyboard to navigation; a prompt
+     * that chained (Replace find -> With) keeps the letters page. */
+    if (s_editor_view.prompt == EDITOR_PROMPT_NONE) {
+        keyboard_set_mode(KEYBOARD_MODE_NAV);
     }
 }
 
@@ -1648,6 +1895,9 @@ static void editor_quit_signal(void)
 /** Reposition the cursor and selection without rebuilding the text. */
 static void editor_layout_update(void)
 {
+    /* A cursor jump can leave the materialized window behind (Go-to-Line,
+     * page move, arrow at a window edge): shift it before scrolling. */
+    editor_render_follow_cursor();
     editor_update_cursor();
     editor_update_current_line();
     editor_build_selection();
@@ -2013,6 +2263,9 @@ static void editor_apply_key(editor_key_t key, char ch)
     case EDITOR_KEY_RELOAD:
         editor_request_reload();
         return;
+    case EDITOR_KEY_OPEN:
+        editor_request_open();
+        return;
     case EDITOR_KEY_FIND:
         editor_prompt_begin(EDITOR_PROMPT_FIND);
         return;
@@ -2108,6 +2361,71 @@ bool editor_view_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii)
     return true;
 }
 
+/** One row of the on-screen keyboard nav/edit command tables. */
+typedef struct {
+    const char *label;
+    editor_key_t key;
+} editor_osk_entry_t;
+
+/** Every named action label on the editor Nav/User pages. The single source
+ * for OSK buttons, the `keyboard_test.py` page screenshots, and unit tests. */
+static const editor_osk_entry_t k_editor_osk_actions[] = {
+    {"Tab", EDITOR_KEY_TAB},
+    {"Del", EDITOR_KEY_DELETE},
+    {"Ins", EDITOR_KEY_OVERWRITE},
+    {"Home", EDITOR_KEY_HOME},
+    {"End", EDITOR_KEY_END},
+    {"PgUp", EDITOR_KEY_PAGE_UP},
+    {"PgDn", EDITOR_KEY_PAGE_DOWN},
+    {"Save", EDITOR_KEY_SAVE},
+    {"SaveAs", EDITOR_KEY_SAVE_AS},
+    {"Open", EDITOR_KEY_OPEN},
+    {"Find", EDITOR_KEY_FIND},
+    {"Replace", EDITOR_KEY_REPLACE},
+    {"Rep", EDITOR_KEY_REPLACE},
+    {"ReplAll", EDITOR_KEY_REPLACE_ALL},
+    {"All", EDITOR_KEY_REPLACE_ALL},
+    {"Case", EDITOR_KEY_CASE_TOGGLE},
+    {"Goto", EDITOR_KEY_GOTO_LINE},
+    {"Undo", EDITOR_KEY_UNDO},
+    {"Redo", EDITOR_KEY_REDO},
+    {"Next", EDITOR_KEY_FIND_NEXT},
+    {"Preview", EDITOR_KEY_PREVIEW},
+    {"Prev", EDITOR_KEY_PREVIEW},
+    {"Copy", EDITOR_KEY_COPY},
+    {"Cut", EDITOR_KEY_CUT},
+    {"Paste", EDITOR_KEY_PASTE},
+    {"SelAll", EDITOR_KEY_SELECT_ALL},
+    {"WordL", EDITOR_KEY_WORD_LEFT},
+    {"WordR", EDITOR_KEY_WORD_RIGHT},
+    {"DocTop", EDITOR_KEY_DOC_HOME},
+    {"DocBot", EDITOR_KEY_DOC_END},
+    {"DelLine", EDITOR_KEY_DELETE_LINE},
+    {"DelEOL", EDITOR_KEY_DELETE_EOL},
+    {"Quit", EDITOR_KEY_QUIT},
+    {"Exit", EDITOR_KEY_QUIT},
+    {"Comment", EDITOR_KEY_COMMENT},
+    {"Match", EDITOR_KEY_MATCH_JUMP},
+    {"Wrap", EDITOR_KEY_WRAP_TOGGLE},
+    {"Reload", EDITOR_KEY_RELOAD},
+};
+
+bool editor_osk_key_from_label(const char *label, editor_key_t *out)
+{
+    size_t i;
+
+    if (label == NULL || out == NULL) {
+        return false;
+    }
+    for (i = 0; i < sizeof(k_editor_osk_actions) / sizeof(k_editor_osk_actions[0]); i++) {
+        if (strcmp(label, k_editor_osk_actions[i].label) == 0) {
+            *out = k_editor_osk_actions[i].key;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool editor_view_handle_osk(const char *label)
 {
     if (label == NULL) {
@@ -2159,126 +2477,21 @@ bool editor_view_handle_osk(const char *label)
         return true;
     }
 
-    /* Custom nav labels on the editor keyboard page. */
-    if (strcmp(label, "Tab") == 0) {
-        editor_apply_key(EDITOR_KEY_TAB, 0);
-        return true;
-    }
-    if (strcmp(label, "Del") == 0) {
-        editor_apply_key(EDITOR_KEY_DELETE, 0);
-        return true;
-    }
-    if (strcmp(label, "Ins") == 0) {
-        editor_apply_key(EDITOR_KEY_OVERWRITE, 0);
-        return true;
-    }
-    if (strcmp(label, "Home") == 0) {
-        editor_apply_key(EDITOR_KEY_HOME, 0);
-        return true;
-    }
-    if (strcmp(label, "End") == 0) {
-        editor_apply_key(EDITOR_KEY_END, 0);
-        return true;
-    }
-    if (strcmp(label, "PgUp") == 0) {
-        editor_apply_key(EDITOR_KEY_PAGE_UP, 0);
-        return true;
-    }
-    if (strcmp(label, "PgDn") == 0) {
-        editor_apply_key(EDITOR_KEY_PAGE_DOWN, 0);
-        return true;
-    }
-    if (strcmp(label, "Save") == 0) {
-        editor_apply_key(EDITOR_KEY_SAVE, 0);
-        return true;
-    }
-    if (strcmp(label, "SaveAs") == 0) {
-        editor_apply_key(EDITOR_KEY_SAVE_AS, 0);
-        return true;
-    }
-    if (strcmp(label, "Find") == 0) {
-        editor_apply_key(EDITOR_KEY_FIND, 0);
-        return true;
-    }
-    if (strcmp(label, "Rep") == 0) {
-        editor_apply_key(EDITOR_KEY_REPLACE, 0);
-        return true;
-    }
-    if (strcmp(label, "All") == 0) {
-        editor_apply_key(EDITOR_KEY_REPLACE_ALL, 0);
-        return true;
-    }
-    if (strcmp(label, "Case") == 0) {
-        editor_apply_key(EDITOR_KEY_CASE_TOGGLE, 0);
-        return true;
-    }
-    if (strcmp(label, "Goto") == 0) {
-        editor_apply_key(EDITOR_KEY_GOTO_LINE, 0);
-        return true;
-    }
-    if (strcmp(label, "Undo") == 0) {
-        editor_apply_key(EDITOR_KEY_UNDO, 0);
-        return true;
-    }
-    if (strcmp(label, "Redo") == 0) {
-        editor_apply_key(EDITOR_KEY_REDO, 0);
-        return true;
-    }
-    if (strcmp(label, "Next") == 0) {
-        editor_apply_key(EDITOR_KEY_FIND_NEXT, 0);
-        return true;
-    }
-    if (strcmp(label, "Prev") == 0) {
-        editor_apply_key(EDITOR_KEY_PREVIEW, 0);
-        return true;
-    }
-    if (strcmp(label, "Copy") == 0) {
-        editor_apply_key(EDITOR_KEY_COPY, 0);
-        return true;
-    }
-    if (strcmp(label, "Cut") == 0) {
-        editor_apply_key(EDITOR_KEY_CUT, 0);
-        return true;
-    }
-    if (strcmp(label, "Paste") == 0) {
-        editor_apply_key(EDITOR_KEY_PASTE, 0);
-        return true;
-    }
-    if (strcmp(label, "SelAll") == 0) {
-        editor_apply_key(EDITOR_KEY_SELECT_ALL, 0);
-        return true;
-    }
-    if (strcmp(label, "WdL") == 0) {
-        editor_apply_key(EDITOR_KEY_WORD_LEFT, 0);
-        return true;
-    }
-    if (strcmp(label, "WdR") == 0) {
-        editor_apply_key(EDITOR_KEY_WORD_RIGHT, 0);
-        return true;
-    }
-    if (strcmp(label, "DocH") == 0) {
-        editor_apply_key(EDITOR_KEY_DOC_HOME, 0);
-        return true;
-    }
-    if (strcmp(label, "DocE") == 0) {
-        editor_apply_key(EDITOR_KEY_DOC_END, 0);
-        return true;
-    }
-    if (strcmp(label, "DelLn") == 0) {
-        editor_apply_key(EDITOR_KEY_DELETE_LINE, 0);
-        return true;
-    }
-    if (strcmp(label, "DelE") == 0) {
-        editor_apply_key(EDITOR_KEY_DELETE_EOL, 0);
-        return true;
-    }
-    if (strcmp(label, "Quit") == 0 || strcmp(label, "Exit") == 0) {
-        editor_apply_key(EDITOR_KEY_QUIT, 0);
-        return true;
+    /* Named action labels from the editor Nav/Edit OSK pages (single table
+     * above). LVGL symbols and mode buttons are handled by their own branches;
+     * everything else here runs the mapped editor key. */
+    {
+        editor_key_t mapped = EDITOR_KEY_NONE;
+
+        if (editor_osk_key_from_label(label, &mapped) && mapped != EDITOR_KEY_NONE) {
+            editor_apply_key(mapped, 0);
+            return true;
+        }
     }
     if (strcmp(label, "abc") == 0 || strcmp(label, "ABC") == 0 ||
         strcmp(label, "1#") == 0 || strcmp(label, "Nav") == 0 ||
-        strcmp(label, "Nav1") == 0 || strcmp(label, "Nav2") == 0) {
+        strcmp(label, "Nav1") == 0 || strcmp(label, "Nav2") == 0 ||
+        strcmp(label, "Edit") == 0) {
         /* Mode-switch buttons: main.c's keyboard callback owns them. */
         return true;
     }
@@ -2321,7 +2534,7 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     s_editor_view.preview = false;
     s_editor_view.find_case = P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE;
     s_editor_view.wrap = false;
-    free(s_editor_view.wrap_counts);
+    editor_mem_free(s_editor_view.wrap_counts);
     s_editor_view.wrap_counts = NULL;
     s_editor_view.wrap_count_rows = 0;
     s_editor_view.wrap_px_used = 0;
@@ -2332,6 +2545,25 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     if (shell_spans != NULL) {
         lv_obj_add_flag(shell_spans, LV_OBJ_FLAG_HIDDEN);
     }
+
+    /* Full-height invisible spacer: establishes the scroll range for the whole
+     * document even when only a window of rows is rendered as spans. Created
+     * first so it stays behind every other child. */
+    s_editor_view.spacer = lv_obj_create(surface);
+    if (s_editor_view.spacer == NULL) {
+        editor_view_close();
+        return false;
+    }
+    lv_obj_set_pos(s_editor_view.spacer, 0, 0);
+    lv_obj_set_width(s_editor_view.spacer, LV_PCT(100));
+    lv_obj_set_height(s_editor_view.spacer, 0);
+    lv_obj_remove_flag(s_editor_view.spacer,
+                       LV_OBJ_FLAG_SCROLLABLE |
+                       LV_OBJ_FLAG_CLICKABLE |
+                       LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_set_style_bg_opa(s_editor_view.spacer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_editor_view.spacer, 0, 0);
+    lv_obj_set_style_pad_all(s_editor_view.spacer, 0, 0);
 
     /* Dedicated span group holding the document, one row per line. */
     s_editor_view.spans = lv_spangroup_create(surface);
@@ -2437,6 +2669,11 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     lv_obj_add_event_cb(surface, editor_touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(surface, editor_touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(surface, editor_touch_event_cb, LV_EVENT_LONG_PRESSED, NULL);
+    /* Scroll: shift the materialized row window so touch scrolling keeps text. */
+    lv_obj_add_event_cb(surface, editor_scroll_event_cb, LV_EVENT_SCROLL, NULL);
+
+    s_editor_view.render_first = 0;
+    s_editor_view.render_busy = false;
 
     /* Deferred content build on a later LVGL pass (synchronous fallback so
      * the surface is never left blank when the async queue is full). */
@@ -2446,8 +2683,11 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
 
     /* The on-screen keyboard stays visible and drives the editor. Unbind the
      * shell input line so LVGL's default keyboard handler does not type into
-     * the hidden textarea; every OSK button routes through our callback. */
+     * the hidden textarea; every OSK button routes through our callback. Open
+     * on the navigation page so the editor's buttons are reachable by touch
+     * immediately (abc returns to letters to type). */
     keyboard_bind_textarea(NULL);
+    keyboard_set_mode(KEYBOARD_MODE_NAV);
 
     return true;
 }
@@ -2495,6 +2735,10 @@ void editor_view_close(void)
         lv_obj_delete(s_editor_view.spans);
         s_editor_view.spans = NULL;
     }
+    if (s_editor_view.spacer != NULL) {
+        lv_obj_delete(s_editor_view.spacer);
+        s_editor_view.spacer = NULL;
+    }
 
     /* Restore the shell's own transcript spans so the shell output returns. */
     {
@@ -2506,18 +2750,20 @@ void editor_view_close(void)
     /* Re-paint the shell transcript and jump back to its newest output. */
     windows_scroll_transcript_to_end();
 
-    free(s_editor_view.widths);
+    editor_mem_free(s_editor_view.widths);
     s_editor_view.widths = NULL;
     s_editor_view.width_count = 0;
     s_editor_view.width_row = (size_t)-1;
 
-    free(s_editor_view.wrap_counts);
+    editor_mem_free(s_editor_view.wrap_counts);
     s_editor_view.wrap_counts = NULL;
     s_editor_view.wrap_count_rows = 0;
     s_editor_view.wrap = false;
 
-    /* Restore the shell input line as the OSK target. */
+    /* Restore the shell input line as the OSK target and return the touch
+     * keyboard to the letters page (it opened on the navigation page). */
     keyboard_bind_textarea(windows_get_input_line());
+    keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
 
     windows_exit_editor_mode();
 
@@ -2532,6 +2778,28 @@ void editor_view_close(void)
 bool editor_view_is_open(void)
 {
     return s_editor_view.open;
+}
+
+void editor_view_get_state(editor_view_state_t *out)
+{
+    editor_doc_t *doc;
+
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    out->open = s_editor_view.open;
+    out->preview = s_editor_view.preview;
+    out->wrap = s_editor_view.wrap;
+    doc = s_editor_view.doc;
+    if (doc != NULL) {
+        out->modified = doc->modified;
+        out->readonly = doc->readonly;
+        out->cursor_row = doc->cursor_row;
+        out->cursor_col = doc->cursor_col;
+        out->line_count = doc->line_count;
+        snprintf(out->path, sizeof(out->path), "%s", doc->path);
+    }
 }
 
 /** Whether the rendered Markdown preview is showing (read-only). */
@@ -2592,6 +2860,39 @@ void editor_view_notify_reloaded(bool ok)
 void editor_view_notify_reloaded_cb(void *user_data)
 {
     editor_view_notify_reloaded((intptr_t)user_data != 0);
+}
+
+void editor_view_notify_opened(bool ok)
+{
+    if (!s_editor_view.open) {
+        return;
+    }
+    if (!ok) {
+        editor_status("open failed");
+        return;
+    }
+    /* The worker swapped a new document into the same object. Drop caches
+     * that describe the old file (wrap, widths, preview) and rebuild; the
+     * status bar picks up the new path via editor_layout_update(). */
+    s_editor_view.prompt = EDITOR_PROMPT_NONE;
+    s_editor_view.replace_armed = false;
+    s_editor_view.preview = false;
+    s_editor_view.touch_selecting = false;
+    editor_mem_free(s_editor_view.wrap_counts);
+    s_editor_view.wrap_counts = NULL;
+    s_editor_view.wrap_count_rows = 0;
+    s_editor_view.wrap_px_used = 0;
+    editor_mem_free(s_editor_view.widths);
+    s_editor_view.widths = NULL;
+    s_editor_view.width_row = (size_t)-1;
+    s_editor_view.width_count = 0;
+    editor_rebuild();
+    editor_status("opened");
+}
+
+void editor_view_notify_opened_cb(void *user_data)
+{
+    editor_view_notify_opened((intptr_t)user_data != 0);
 }
 
 void editor_view_scroll_by(int32_t pixels)

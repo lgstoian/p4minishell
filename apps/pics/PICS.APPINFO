@@ -1,0 +1,5 @@
+; APPINFO metadata for the BMP image reference app (INI format, read by `launch`).
+; Copied to sd:/APPS/PICS.APPINFO by apps/push_apps.py.
+title=Pictures
+description=BMP image viewer, TUI draw, and gfx canvas blit (needs PHOTO.BMP)
+version=1.0

@@ -13,6 +13,7 @@
 #include "windows.h"
 #include "markdown.h"
 #include "filetype.h"
+#include "gfx.h"
 #include "theme.h"
 #include "shell.h"
 #include "keyboard.h"
@@ -83,6 +84,14 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_gap(c, 6, 0);
+    /* The modal surface is the (scrollable) transcript container. The panel is
+     * a child at the content origin, so when the shell transcript was scrolled
+     * to its newest output the panel sits off-screen above the viewport. Bring
+     * it into view so the modal is actually visible (and therefore capturable
+     * by `screenshot`). The editor does not use this helper; it renders into
+     * the span group itself. */
+    lv_obj_update_layout(parent);
+    lv_obj_scroll_to_view(c, LV_ANIM_OFF);
     return c;
 }
 
@@ -923,6 +932,243 @@ int modal_viewer_run_raw(const char *title, const char *file_path, uint32_t time
 }
 
 /* ========================================================================
+ * IMAGE VIEWER (BMP)
+ * ======================================================================== */
+
+typedef struct {
+    EventGroupHandle_t eg;
+    int result;
+    uint32_t timeout_ms;
+    TimerHandle_t timer;
+    lv_obj_t *panel;
+    const char *title;
+    const char *path;
+    bool fit;
+    gfx_surface_t surface;
+    uint8_t *file;
+} image_ctx_t;
+
+static image_ctx_t *s_image_active = NULL;
+
+static void image_close_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_image_active) {
+        s_image_active->result = 0;
+        surf_request_close(s_image_active->eg);
+    }
+}
+
+static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
+{
+    image_ctx_t *ctx = (image_ctx_t *)ctx_ptr;
+    gfx_bmp_info_t info;
+    window_rect_t rect;
+    FILE *f = NULL;
+    long sz = 0;
+    int tw;
+    int th;
+    lv_obj_t *surf;
+    lv_obj_t *holder;
+    lv_obj_t *canvas;
+    lv_obj_t *row;
+    lv_obj_t *btn;
+
+    ctx->eg = eg;
+    ctx->result = 0;
+    s_image_active = ctx;
+
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("img_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE,
+                                  (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
+
+    if (ctx->path == NULL || ctx->path[0] == '\0') {
+        s_image_active = NULL;
+        return false;
+    }
+
+    /* Read the file into one bounded buffer (the same stager the gfx verb
+     * uses); the pure decoder in components/gfx does the rest. */
+    f = fopen(ctx->path, "rb");
+    if (f == NULL) {
+        s_image_active = NULL;
+        return false;
+    }
+    if (fseek(f, 0, SEEK_END) != 0 || (sz = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        s_image_active = NULL;
+        return false;
+    }
+    if (sz < 54 || (uint64_t)sz > P4_CONFIG_IMAGE_MAX_BYTES) {
+        fclose(f);
+        s_image_active = NULL;
+        return false;
+    }
+    ctx->file = malloc((size_t)sz);
+    if (ctx->file == NULL) {
+        fclose(f);
+        s_image_active = NULL;
+        return false;
+    }
+    if (fread(ctx->file, 1, (size_t)sz, f) != (size_t)sz) {
+        fclose(f);
+        free(ctx->file);
+        ctx->file = NULL;
+        s_image_active = NULL;
+        return false;
+    }
+    fclose(f);
+
+    if (!gfx_bmp_parse_header_ex(ctx->file, (size_t)sz, &info,
+                                 GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
+        free(ctx->file);
+        ctx->file = NULL;
+        s_image_active = NULL;
+        return false;
+    }
+
+    /* Fit into the live transcript region, leaving room for the title and the
+     * Close row. The source is decoded straight to that target, so a large
+     * image never allocates its native buffer. */
+    rect = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
+    {
+        int avail_w = (rect.width > 32) ? (int)rect.width - 32 : (int)rect.width;
+        int avail_h = (rect.height > 80) ? (int)rect.height - 80 : (int)rect.height;
+
+        if (ctx->fit) {
+            gfx_bmp_fit(info.w, info.h, avail_w, avail_h, &tw, &th);
+        } else {
+            tw = info.w;
+            th = info.h;
+        }
+    }
+    if (!gfx_bmp_decode_scaled_565(ctx->file, (size_t)sz, &info, tw, th, &ctx->surface)) {
+        free(ctx->file);
+        ctx->file = NULL;
+        s_image_active = NULL;
+        return false;
+    }
+    free(ctx->file);
+    ctx->file = NULL;
+
+    lvgl_port_lock(0);
+    surf = windows_enter_editor_mode();
+    if (surf == NULL) {
+        lvgl_port_unlock();
+        gfx_surface_free(&ctx->surface);
+        s_image_active = NULL;
+        return false;
+    }
+    ctx->panel = surf_create_container(surf);
+    surf_create_title(ctx->panel, ctx->title ? ctx->title : (ctx->path ? ctx->path : "Image"));
+
+    holder = lv_obj_create(ctx->panel);
+    lv_obj_set_size(holder, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_grow(holder, 1);
+    lv_obj_set_style_bg_opa(holder, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(holder, 0, 0);
+    lv_obj_set_style_pad_all(holder, 0, 0);
+    lv_obj_clear_flag(holder, LV_OBJ_FLAG_SCROLLABLE);
+    canvas = lv_canvas_create(holder);
+    lv_canvas_set_buffer(canvas, ctx->surface.px, ctx->surface.w, ctx->surface.h,
+                         LV_COLOR_FORMAT_RGB565);
+    lv_obj_center(canvas);
+
+    row = lv_obj_create(ctx->panel);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    btn = surf_create_button(row, "Close");
+    lv_obj_add_event_cb(btn, image_close_btn_cb, LV_EVENT_CLICKED, NULL);
+    windows_refresh_editor_surface();
+    lvgl_port_unlock();
+    return true;
+}
+
+static void image_surface_close(void *ctx_ptr)
+{
+    image_ctx_t *ctx = (image_ctx_t *)ctx_ptr;
+
+    if (ctx->timer) {
+        xTimerStop(ctx->timer, 0);
+        xTimerDelete(ctx->timer, 0);
+        ctx->timer = NULL;
+    }
+    lvgl_port_lock(0);
+    if (ctx->panel) {
+        lv_obj_del(ctx->panel); /* deletes the canvas node first */
+        ctx->panel = NULL;
+    }
+    windows_exit_editor_mode();
+    lvgl_port_unlock();
+    gfx_surface_free(&ctx->surface); /* safe now the canvas is gone */
+    if (ctx->file) {
+        free(ctx->file);
+        ctx->file = NULL;
+    }
+    s_image_active = NULL;
+    if (ctx->eg) xEventGroupSetBits(ctx->eg, MODAL_EVENT_CLOSED);
+}
+
+static bool image_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers, char ascii)
+{
+    image_ctx_t *ctx = (image_ctx_t *)ctx_ptr;
+
+    (void)modifiers;
+    if (key_code == 0x29 || key_code == 0x28 || ascii == 'q' || ascii == 'Q') {
+        ctx->result = 0;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    return false;
+}
+
+static bool image_handle_serial_line(void *ctx_ptr, const char *line)
+{
+    image_ctx_t *ctx = (image_ctx_t *)ctx_ptr;
+
+    if (line == NULL) {
+        return false;
+    }
+    if (strcasecmp(line, "q") == 0 || strcasecmp(line, "quit") == 0 ||
+        strcasecmp(line, "close") == 0 || strcmp(line, "") == 0) {
+        ctx->result = 0;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    return false;
+}
+
+static const modal_surface_t image_surface = {
+    .name = "imageview",
+    .open = image_surface_open,
+    .close = image_surface_close,
+    .handle_usb_key = image_handle_usb_key,
+    .handle_serial_line = image_handle_serial_line,
+};
+
+int modal_image_run(const char *title, const char *file_path,
+                    uint32_t timeout_ms, bool fit)
+{
+    image_ctx_t ctx = {0};
+    int el = 0;
+
+    ctx.title = title;
+    ctx.path = file_path;
+    ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    ctx.fit = fit;
+    if (modal_surface_run(&image_surface, &ctx, &el) != ESP_OK) {
+        return -1;
+    }
+    return 0;
+}
+
+/* ========================================================================
  * HEXVIEW
  * ======================================================================== */
 
@@ -1071,4 +1317,251 @@ int modal_hexview_run(const char *title, const char *file_path, uint32_t timeout
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
     if (modal_surface_run(&hex_surface, &ctx, &el) != ESP_OK) return -1;
     return 0;
+}
+
+/* ========================================================================
+ * FORM (multi-field editor for batch apps)
+ * ======================================================================== */
+
+typedef struct {
+    EventGroupHandle_t eg;
+    int result;
+    uint32_t timeout_ms;
+    TimerHandle_t timer;
+    lv_obj_t *panel;
+    const char *title;
+    modal_form_field_t *fields;
+    int count;
+    lv_obj_t *widgets[MODAL_FORM_MAX_FIELDS];
+} form_ctx_t;
+
+static form_ctx_t *s_form_active = NULL;
+
+static void form_ok_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_form_active) { s_form_active->result = 0; surf_request_close(s_form_active->eg); }
+}
+
+static void form_cancel_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_form_active) { s_form_active->result = -1; surf_request_close(s_form_active->eg); }
+}
+
+/** Split a `a|b|c` option list into a newline-joined roller string. */
+static void form_options_to_roller(const char *options, char *out, size_t out_size)
+{
+    size_t used = 0;
+    const char *p = options ? options : "";
+
+    out[0] = '\0';
+    while (*p != '\0' && used + 2 < out_size) {
+        if (*p == '|') {
+            out[used++] = '\n';
+        } else {
+            out[used++] = *p;
+        }
+        p++;
+    }
+    out[used] = '\0';
+}
+
+static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
+{
+    form_ctx_t *ctx = (form_ctx_t *)ctx_ptr;
+    int i;
+
+    ctx->eg = eg;
+    ctx->result = -1;
+    s_form_active = ctx;
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("form_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE,
+                                  (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
+
+    lvgl_port_lock(0);
+    lv_obj_t *surf = windows_enter_editor_mode();
+    if (!surf) { lvgl_port_unlock(); s_form_active = NULL; return false; }
+    ctx->panel = surf_create_container(surf);
+    surf_create_title(ctx->panel, ctx->title ? ctx->title : "Form");
+
+    for (i = 0; i < ctx->count && i < MODAL_FORM_MAX_FIELDS; i++) {
+        modal_form_field_t *f = &ctx->fields[i];
+        lv_obj_t *label = lv_label_create(ctx->panel);
+        lv_label_set_text(label, f->label ? f->label : "");
+        lv_obj_set_width(label, LV_PCT(100));
+
+        switch (f->type) {
+        case MODAL_FORM_PASSWORD:
+        case MODAL_FORM_TEXT: {
+            lv_obj_t *ta = lv_textarea_create(ctx->panel);
+            lv_obj_set_width(ta, LV_PCT(100));
+            lv_textarea_set_one_line(ta, true);
+            lv_textarea_set_password_mode(ta, f->type == MODAL_FORM_PASSWORD);
+            if (f->value && f->value[0] != '\0') {
+                lv_textarea_set_text(ta, f->value);
+            }
+            ctx->widgets[i] = ta;
+            break;
+        }
+        case MODAL_FORM_CHECK: {
+            lv_obj_t *cb = lv_checkbox_create(ctx->panel);
+            lv_checkbox_set_text(cb, "");
+            if (f->value && (strcmp(f->value, "1") == 0 || strcasecmp(f->value, "on") == 0 ||
+                             strcasecmp(f->value, "true") == 0 || strcasecmp(f->value, "yes") == 0)) {
+                lv_obj_add_state(cb, LV_STATE_CHECKED);
+            }
+            ctx->widgets[i] = cb;
+            break;
+        }
+        case MODAL_FORM_SELECT: {
+            char opts[MODAL_FORM_OPTIONS_BYTES];
+            lv_obj_t *roller = lv_roller_create(ctx->panel);
+            lv_obj_set_width(roller, LV_PCT(100));
+            form_options_to_roller(f->options, opts, sizeof(opts));
+            lv_roller_set_options(roller, opts, LV_ROLLER_MODE_NORMAL);
+            if (f->value && f->value[0] != '\0') {
+                char needle[64];
+                snprintf(needle, sizeof(needle), "\n%s\n", f->value);
+                lv_roller_set_selected(roller, 0, LV_ANIM_OFF);
+            }
+            ctx->widgets[i] = roller;
+            break;
+        }
+        case MODAL_FORM_RANGE: {
+            lv_obj_t *slider = lv_slider_create(ctx->panel);
+            lv_obj_set_width(slider, LV_PCT(100));
+            lv_slider_set_range(slider, f->min, f->max > f->min ? f->max : f->min + 1);
+            if (f->value && f->value[0] != '\0') {
+                lv_slider_set_value(slider, atoi(f->value), LV_ANIM_OFF);
+            } else {
+                lv_slider_set_value(slider, f->min, LV_ANIM_OFF);
+            }
+            ctx->widgets[i] = slider;
+            break;
+        }
+        default:
+            ctx->widgets[i] = NULL;
+            break;
+        }
+    }
+
+    lv_obj_t *row = lv_obj_create(ctx->panel);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_t *b1 = surf_create_button(row, "OK");
+    lv_obj_add_event_cb(b1, form_ok_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *b2 = surf_create_button(row, "Cancel");
+    lv_obj_add_event_cb(b2, form_cancel_cb, LV_EVENT_CLICKED, NULL);
+
+    windows_refresh_editor_surface();
+    lvgl_port_unlock();
+    return true;
+}
+
+static void form_surface_close(void *ctx_ptr)
+{
+    form_ctx_t *ctx = (form_ctx_t *)ctx_ptr;
+    int i;
+
+    if (ctx->timer) { xTimerStop(ctx->timer, 0); xTimerDelete(ctx->timer, 0); ctx->timer = NULL; }
+    lvgl_port_lock(0);
+    keyboard_bind_textarea(NULL);
+    if (ctx->result == 0) {
+        for (i = 0; i < ctx->count && i < MODAL_FORM_MAX_FIELDS; i++) {
+            modal_form_field_t *f = &ctx->fields[i];
+            lv_obj_t *w = ctx->widgets[i];
+            if (w == NULL || f->value == NULL || f->value_size == 0) {
+                continue;
+            }
+            switch (f->type) {
+            case MODAL_FORM_TEXT:
+            case MODAL_FORM_PASSWORD: {
+                const char *txt = lv_textarea_get_text(w);
+                snprintf(f->value, f->value_size, "%s", txt ? txt : "");
+                break;
+            }
+            case MODAL_FORM_CHECK:
+                snprintf(f->value, f->value_size, "%d",
+                         lv_obj_has_state(w, LV_STATE_CHECKED) ? 1 : 0);
+                break;
+            case MODAL_FORM_SELECT: {
+                char sel[64];
+                lv_roller_get_selected_str(w, sel, sizeof(sel));
+                snprintf(f->value, f->value_size, "%s", sel);
+                break;
+            }
+            case MODAL_FORM_RANGE:
+                snprintf(f->value, f->value_size, "%d", (int)lv_slider_get_value(w));
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel = NULL; }
+    windows_exit_editor_mode();
+    lvgl_port_unlock();
+    s_form_active = NULL;
+    if (ctx->eg) xEventGroupSetBits(ctx->eg, MODAL_EVENT_CLOSED);
+}
+
+static bool form_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers, char ascii)
+{
+    form_ctx_t *ctx = (form_ctx_t *)ctx_ptr;
+    (void)modifiers; (void)ascii;
+    if (key_code == 0x29) { ctx->result = -1; surf_request_close(ctx->eg); return true; }  /* Esc */
+    if (key_code == 0x28) { ctx->result = 0; surf_request_close(ctx->eg); return true; }   /* Enter */
+    return false;
+}
+
+static bool form_handle_serial_line(void *ctx_ptr, const char *line)
+{
+    form_ctx_t *ctx = (form_ctx_t *)ctx_ptr;
+
+    if (line == NULL) return false;
+    if (strcasecmp(line, "ok") == 0 || strcasecmp(line, "y") == 0) {
+        ctx->result = 0;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    if (strcasecmp(line, "cancel") == 0 || strcasecmp(line, "q") == 0) {
+        ctx->result = -1;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    return true;   /* consume; form editing is on-screen / USB */
+}
+
+static const modal_surface_t form_surface = {
+    .name = "form",
+    .open = form_surface_open,
+    .close = form_surface_close,
+    .handle_usb_key = form_handle_usb_key,
+    .handle_serial_line = form_handle_serial_line,
+};
+
+int modal_form_run(const char *title, modal_form_field_t *fields, int count,
+                   uint32_t timeout_ms)
+{
+    form_ctx_t ctx = {0};
+    int errorlevel = 0;
+
+    if (fields == NULL || count <= 0 || count > MODAL_FORM_MAX_FIELDS) {
+        return -1;
+    }
+    ctx.title = title;
+    ctx.fields = fields;
+    ctx.count = count;
+    ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    if (modal_surface_run(&form_surface, &ctx, &errorlevel) != ESP_OK) {
+        return -1;
+    }
+    return (ctx.result == 0) ? 0 : -1;
 }

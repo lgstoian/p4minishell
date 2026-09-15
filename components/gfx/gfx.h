@@ -30,6 +30,12 @@ extern "C" {
 #define GFX_SPR_SLOTS 8
 #define GFX_SPR_MAX 64
 
+/** General image budget for `view` / `draw image` / `gfx image`: a
+ * fit-to-screen decode target stays within this (the native image is never
+ * materialized). 1024x640 RGB565 = 1.25 MB PSRAM worst case. */
+#define GFX_IMAGE_MAX_W 1024
+#define GFX_IMAGE_MAX_H 640
+
 /** Largest BMP file `gfx load` will ingest (256 KB: a 64x64 24-bit BMP is
  * ~12 KB; the budget covers headers + padding with headroom while keeping
  * the PSRAM staging buffer bounded). */
@@ -177,27 +183,65 @@ void gfx_surface_blit(gfx_surface_t *dst, const gfx_surface_t *src, int x,
  * here in the raster core). */
 void gfx_565_to_888_row(uint8_t *dst, const uint16_t *src, int w);
 
-/** Parsed 24-bit BMP geometry (the only ingest format: 24-bit BI_RGB
- * bottom-up, exactly what `screenshot <file>` writes). */
+/** Parsed BMP geometry for the supported ingest formats: 24-bit or 32-bit
+ * BI_RGB, bottom-up (positive height) or top-down (negative height). */
 typedef struct {
-    int w;               /**< Width in pixels (1..GFX_SPR_MAX). */
-    int h;               /**< Height in pixels (1..GFX_SPR_MAX). */
-    uint32_t data_offset; /**< Byte offset of the first (bottom) row. */
+    int w;               /**< Width in pixels. */
+    int h;               /**< Height in pixels (always positive here). */
+    uint32_t data_offset; /**< Byte offset of the first stored row. */
     uint32_t row_stride;  /**< Padded bytes per row (4-byte aligned). */
+    uint16_t bpp;         /**< Bits per pixel: 24 or 32. */
+    bool top_down;        /**< true when the stored height was negative. */
 } gfx_bmp_info_t;
 
-/** Validate a BMP header (needs only the first 54 bytes; len is the total
- * buffer size). Accepts signature 'BM', 40-byte info, planes 1, 24 bpp,
- * BI_RGB, positive height (bottom-up), dims within GFX_SPR_MAX, and pixel
- * data fully inside the buffer. @return true with geometry in @p out. */
+/**
+ * General BMP header validation (needs only the first 54 bytes; @p len is the
+ * total buffer size). Accepts signature 'BM', 40-byte info header, planes 1,
+ * 24- or 32-bit BI_RGB, positive (bottom-up) or negative (top-down) height,
+ * dimensions within @p max_w x @p max_h, and pixel data fully inside the
+ * buffer. @return true with geometry in @p out (zeroed on failure).
+ */
+bool gfx_bmp_parse_header_ex(const uint8_t *buf, size_t len,
+                             gfx_bmp_info_t *out, int max_w, int max_h);
+
+/**
+ * Strict sprite-format wrapper over gfx_bmp_parse_header_ex(): accepts only
+ * 24-bit BI_RGB bottom-up art within GFX_SPR_MAX x GFX_SPR_MAX — exactly the
+ * format `screenshot <file>` writes. Used by `gfx load`.
+ */
 bool gfx_bmp_parse_header(const uint8_t *buf, size_t len,
                           gfx_bmp_info_t *out);
 
-/** Decode validated BMP pixels to a freshly allocated RGB565 surface
- * (PSRAM, same allocator as gfx_surface_alloc). @return true on success
+/** Allocate an image-sized RGB565 PSRAM surface (1..GFX_IMAGE_MAX_W x
+ * 1..GFX_IMAGE_MAX_H). Same allocator/free as gfx_surface_alloc; used by the
+ * fit-to-screen image path. */
+bool gfx_image_surface_alloc(gfx_surface_t *s, int w, int h);
+
+/** Decode + nearest-sample a validated BMP straight to a dst_w x dst_h RGB565
+ * surface (never materializes the native image, so large art stays bounded).
+ * Handles 24/32-bit and both orientations. @return true on success (caller
+ * frees with gfx_surface_free), false leaving @p out cleared. */
+bool gfx_bmp_decode_scaled_565(const uint8_t *buf, size_t len,
+                               const gfx_bmp_info_t *info,
+                               int dst_w, int dst_h, gfx_surface_t *out);
+
+/** Decode validated BMP pixels at native size to a freshly allocated RGB565
+ * surface (same allocator as gfx_surface_alloc). @return true on success
  * (caller frees with gfx_surface_free), false leaving @p out cleared. */
 bool gfx_bmp_decode_565(const uint8_t *buf, size_t len,
                         const gfx_bmp_info_t *info, gfx_surface_t *out);
+
+/** Blit @p src scaled (nearest-neighbour) into @p dst at x,y with target size
+ * dw x dh (clipped; optional transparency skips matching source pixels). */
+void gfx_surface_blit_scaled(gfx_surface_t *dst, const gfx_surface_t *src,
+                             int x, int y, int dw, int dh,
+                             bool use_transparent, uint16_t transparent);
+
+/** Largest w,h that preserves @p src_w x @p src_h aspect within
+ * @p max_w x @p max_h. Never upscales (a source that already fits is
+ * returned unchanged); always yields >= 1. */
+void gfx_bmp_fit(int src_w, int src_h, int max_w, int max_h,
+                 int *out_w, int *out_h);
 
 #ifdef __cplusplus
 }

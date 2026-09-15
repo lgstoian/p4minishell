@@ -56,9 +56,14 @@ enum {
 };
 
 /** Recurrence: none / daily / weekly. Weekly stores a 7-bit weekday mask in
- *  the low bits of `recur` (bit 0 = Sunday .. bit 6 = Saturday). */
+ *  the low bits of `recur` (bit 0 = Sunday .. bit 6 = Saturday). Monthly
+ *  fires on `recur_day` of each month (short months skipped), or on the
+ *  nth weekday (`recur_nth` 1..5, -1 = last) when set; yearly fires on
+ *  `recur_month`/`recur_day`. Zero day/month/nth derives from `when`. */
 #define ALARM_RECUR_NONE   0
 #define ALARM_RECUR_DAILY  1
+#define ALARM_RECUR_MONTHLY 0x40
+#define ALARM_RECUR_YEARLY 0x20
 #define ALARM_RECUR_WEEKLY 0x80
 
 /** A single alarm event (mirrors one E<id>.INI file). */
@@ -70,6 +75,9 @@ typedef struct {
     uint8_t  flags;                       /**< ALARM_FLAG_* bits. */
     uint8_t  recur;                       /**< ALARM_RECUR_* / weekly mask. */
     uint8_t  action;                      /**< ALARM_ACTION_* bits. */
+    uint8_t  recur_day;                   /**< Monthly/yearly day 1..31 (0 = from `when`). */
+    uint8_t  recur_month;                 /**< Yearly month 1..12 (0 = from `when`). */
+    int8_t   recur_nth;                   /**< Monthly nth weekday 1..5, -1 = last, 0 = by monthday. */
 #if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
     char     run[P4_CONFIG_SD_PATH_BYTES]; /**< Batch file for ALARM_ACTION_RUN. */
 #endif
@@ -113,6 +121,22 @@ bool alarm_recur_weekday_matches(uint8_t recur, int wday);
 time_t alarm_advance_recur(time_t when, uint8_t recur);
 
 /**
+ * Next monthly occurrence strictly after @p when (same wall-clock time):
+ * on @p day of each month (short months skipped), or on the nth weekday
+ * (@p nth 1..5, -1 = last, weekday @p wday 0=Sun..6=Sat) when @p nth != 0.
+ * Zero/negative @p day falls back to `when`'s own day-of-month.
+ */
+time_t alarm_advance_monthly(time_t when, int day, int nth, int wday);
+
+/** Next yearly occurrence strictly after @p when (@p month 1..12, @p day
+ *  1..31; zeros fall back to `when`'s own month/day; Feb 29 skips). */
+time_t alarm_advance_yearly(time_t when, int month, int day);
+
+/** Advance any recurrence of @p e (monthly/yearly read the event params,
+ *  with zero fields derived from `when`; daily/weekly delegate). */
+time_t alarm_advance_event(time_t when, const alarm_event_t *e);
+
+/**
  * Parse a local "YYYY-MM-DD" date and "HH:MM[:SS]" time into a Unix timestamp
  * (timezone-aware via mktime, matching the `date`/`time` commands). Returns
  * false on malformed input or an out-of-range date.
@@ -145,6 +169,27 @@ bool alarm_checker_running(void);
 esp_err_t alarm_add(const char *title, const char *msg, time_t when,
                     uint8_t recur, uint8_t action, const char *run_path,
                     uint32_t *out_id);
+
+/** Monthly/yearly parameters for alarm_add_ex (0 = derive from `when`). */
+typedef struct {
+    int day;      /**< Day of month 1..31. */
+    int month;    /**< Month 1..12 (yearly). */
+    int nth;      /**< Nth weekday 1..5, -1 = last, 0 = by monthday. */
+} alarm_recur_params_t;
+
+/**
+ * Add an event with explicit monthly/yearly parameters (NULL = derive
+ * everything from `when`, identical to alarm_add).
+ */
+esp_err_t alarm_add_ex(const char *title, const char *msg, time_t when,
+                       uint8_t recur, uint8_t action, const char *run_path,
+                       const alarm_recur_params_t *params, uint32_t *out_id);
+
+/**
+ * Snooze an event: push `when` to now + @p minutes (default 10 when <= 0),
+ * clear a FIRED mark, keep recurrence and actions.
+ */
+esp_err_t alarm_snooze(uint32_t id, int minutes);
 
 /** Read one event into @p out. Returns ESP_ERR_NOT_FOUND when absent. */
 esp_err_t alarm_get(uint32_t id, alarm_event_t *out);

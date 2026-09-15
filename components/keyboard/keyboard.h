@@ -221,6 +221,15 @@ bool keyboard_osk_accept_at(uint32_t btn_id, int64_t now_ms);
 void keyboard_set_mode(keyboard_mode_t mode);
 
 /**
+ * Stable registry name for a mode ("text_lower", "text_upper", "number",
+ * "symbols", "nav", "nav2"). Used by the `keyboard mode` command and tests.
+ */
+const char *keyboard_mode_name(keyboard_mode_t mode);
+
+/** Parse a page/mode name or common alias into a keyboard mode. */
+bool keyboard_mode_parse(const char *text, keyboard_mode_t *out);
+
+/**
  * Get the current keyboard mode.
  * @return Current keyboard mode.
  */

@@ -61,6 +61,9 @@ typedef struct {
     bool beep;
     bool led;
     uint8_t recur;              /**< ALARM_RECUR_* / weekly mask. */
+    int recur_day;              /**< Monthly/yearly day 1..31 (0 = from `when`). */
+    int recur_month;            /**< Yearly month 1..12 (0 = from `when`). */
+    int recur_nth;              /**< Monthly nth weekday 1..5, -1 = last. */
     const char *run_path;
     const char *msg;
     const char *from;
@@ -98,6 +101,22 @@ static bool alarm_apply_option(const char *a, alarm_opts_t *o)
             o->recur = (uint8_t)(ALARM_RECUR_WEEKLY | (mask & 0x7F));
             return true;
         }
+        if (nlen == 3 && strncasecmp(opt, "day", 3) == 0) {
+            o->recur_day = atoi(val);
+            return true;
+        }
+        if (nlen == 5 && strncasecmp(opt, "month", 5) == 0) {
+            o->recur_month = atoi(val);
+            return true;
+        }
+        if (nlen == 3 && strncasecmp(opt, "byw", 3) == 0) {
+            if (strcasecmp(val, "last") == 0) {
+                o->recur_nth = -1;
+            } else {
+                o->recur_nth = atoi(val);
+            }
+            return true;
+        }
         return true;   /* unknown /opt:val ignored */
     }
     if (strcasecmp(opt, "b") == 0) { o->bare = true; return true; }
@@ -105,6 +124,8 @@ static bool alarm_apply_option(const char *a, alarm_opts_t *o)
     if (strcasecmp(opt, "beep") == 0) { o->beep = true; return true; }
     if (strcasecmp(opt, "led") == 0) { o->led = true; return true; }
     if (strcasecmp(opt, "daily") == 0) { o->recur = ALARM_RECUR_DAILY; return true; }
+    if (strcasecmp(opt, "monthly") == 0) { o->recur = ALARM_RECUR_MONTHLY; return true; }
+    if (strcasecmp(opt, "yearly") == 0) { o->recur = ALARM_RECUR_YEARLY; return true; }
     return true;
 }
 
@@ -185,6 +206,15 @@ static void alarm_fmt_state(const alarm_event_t *e, char *buf, size_t size)
     if (e->flags & ALARM_FLAG_SILENT) {
         used += (size_t)snprintf(buf + used, size - used, "silent ");
     }
+    if (e->recur == ALARM_RECUR_DAILY) {
+        used += (size_t)snprintf(buf + used, size - used, "daily ");
+    } else if (e->recur == ALARM_RECUR_MONTHLY) {
+        used += (size_t)snprintf(buf + used, size - used, "monthly ");
+    } else if (e->recur == ALARM_RECUR_YEARLY) {
+        used += (size_t)snprintf(buf + used, size - used, "yearly ");
+    } else if ((e->recur & ALARM_RECUR_WEEKLY) != 0) {
+        used += (size_t)snprintf(buf + used, size - used, "weekly ");
+    }
     if (e->action & ALARM_ACTION_NOTIFY) used += (size_t)snprintf(buf + used, size - used, "notify ");
     if (e->action & ALARM_ACTION_BEEP)   used += (size_t)snprintf(buf + used, size - used, "beep ");
     if (e->action & ALARM_ACTION_LED)    used += (size_t)snprintf(buf + used, size - used, "led ");
@@ -208,12 +238,76 @@ static int alarm_cmd_add(char **pos, int pcount, alarm_opts_t *o)
     esp_err_t error;
 
     if (pcount < 2) {
-        shell_print_usage("Usage: alarm add <YYYY-MM-DD> <HH:MM> [title] [/msg:..] [/daily|/weekly:mask] [/beep] [/led] [/run:file.bat] [/silent]");
+        shell_print_usage("Usage: alarm add <YYYY-MM-DD> <HH:MM> [title] [/msg:..] [/daily|/weekly:mask|/monthly|/yearly] [/day:D] [/month:M] [/byw:N|last] [/beep] [/led] [/run:file.bat] [/silent]");
         return 2;
     }
     if (!alarm_parse_datetime(pos[0], pos[1], &when)) {
         shell_print_error("alarm: invalid date/time (expected YYYY-MM-DD HH:MM)");
         return 2;
+    }
+    /* Monthly/yearly parameter checks (/day: /month: /byw: need a matching
+     * monthly/yearly base; /byw: snaps `when` to the next matching date). */
+    if ((o->recur_day != 0 || o->recur_month != 0 || o->recur_nth != 0) &&
+        o->recur != ALARM_RECUR_MONTHLY && o->recur != ALARM_RECUR_YEARLY) {
+        shell_print_error("alarm: /day: /month: /byw: need /monthly or /yearly");
+        return 2;
+    }
+    if (o->recur == ALARM_RECUR_YEARLY && o->recur_nth != 0) {
+        shell_print_error("alarm: /byw: is monthly-only");
+        return 2;
+    }
+    if (o->recur_day < 0 || o->recur_day > 31 ||
+        o->recur_month < 0 || o->recur_month > 12 ||
+        o->recur_nth < -1 || o->recur_nth > 5) {
+        shell_print_error("alarm: /day: 1..31, /month: 1..12, /byw: 1..5|last");
+        return 2;
+    }
+    if (o->recur == ALARM_RECUR_MONTHLY && o->recur_nth != 0) {
+        struct tm tmv;
+        int wday;
+        int guard = 0;
+        if (localtime_r(&when, &tmv) == NULL) {
+            shell_print_error("alarm: clock error");
+            return 2;
+        }
+        wday = tmv.tm_wday;
+        /* Snap forward to the next date matching nth+weekday (a full year
+         * always contains one; 400 days caps the scan far above the
+         * ~90-day worst case). The leaf then keeps that weekday across
+         * advances. */
+        while (guard++ < 400) {
+            int mday = tmv.tm_mday;
+            int n = (mday - 1) / 7 + 1;
+            bool last = false;
+            {
+                struct tm probe = tmv;
+                time_t pt;
+                probe.tm_mday = mday + 7;
+                probe.tm_isdst = -1;
+                pt = mktime(&probe);
+                if (pt != (time_t)-1) {
+                    struct tm back;
+                    if (localtime_r(&pt, &back) != NULL) {
+                        last = (back.tm_mon != tmv.tm_mon);
+                    }
+                }
+            }
+            if (tmv.tm_wday == wday &&
+                ((o->recur_nth > 0 && n == o->recur_nth) ||
+                 (o->recur_nth < 0 && last))) {
+                break;
+            }
+            tmv.tm_mday++;
+            tmv.tm_isdst = -1;
+            {
+                time_t t = mktime(&tmv);
+                if (t == (time_t)-1 || localtime_r(&t, &tmv) == NULL) {
+                    shell_print_error("alarm: clock error");
+                    return 2;
+                }
+                when = t;
+            }
+        }
     }
 
     title = alarm_join(pos, 2, pcount);
@@ -227,12 +321,17 @@ static int alarm_cmd_add(char **pos, int pcount, alarm_opts_t *o)
 
     {
         uint8_t action = ALARM_ACTION_NOTIFY;
+        alarm_recur_params_t params;
         if (o->beep) action |= ALARM_ACTION_BEEP;
         if (o->led) action |= ALARM_ACTION_LED;
 #if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
         if (o->run_path != NULL) action |= ALARM_ACTION_RUN;
 #endif
-        error = alarm_add(title, o->msg, when, o->recur, action, o->run_path, &id);
+        params.day = o->recur_day;
+        params.month = o->recur_month;
+        params.nth = o->recur_nth;
+        error = alarm_add_ex(title, o->msg, when, o->recur, action, o->run_path,
+                             &params, &id);
     }
     free(title);
     if (error == ESP_ERR_NO_MEM) {
@@ -327,8 +426,53 @@ static int alarm_cmd_del(char **pos, int pcount, alarm_opts_t *o)
     }
 }
 
-static int alarm_cmd_enable(char **pos, int pcount, alarm_opts_t *o, bool enable)
+static int alarm_cmd_snooze(char **pos, int pcount, alarm_opts_t *o)
 {
+    uint32_t id;
+    char *end = NULL;
+    long minutes = 10;
+    esp_err_t error;
+    char when_s[24];
+
+    (void)o;
+    if (pcount < 1 || pcount > 2) {
+        shell_print_usage("Usage: alarm snooze <id> [minutes]");
+        return 2;
+    }
+    id = (uint32_t)strtoul(pos[0], &end, 10);
+    if (end == pos[0] || *end != '\0') {
+        shell_print_usage("Usage: alarm snooze <id> [minutes]");
+        return 2;
+    }
+    if (pcount == 2) {
+        minutes = strtol(pos[1], &end, 10);
+        if (end == pos[1] || *end != '\0' || minutes < 1 || minutes > 24 * 60) {
+            shell_print_error("alarm: minutes must be 1..1440");
+            return 2;
+        }
+    }
+    error = alarm_snooze(id, (int)minutes);
+    if (error == ESP_ERR_NOT_FOUND) {
+        shell_print_error("alarm: event %lu not found", (unsigned long)id);
+        return 1;
+    }
+    if (error != ESP_OK) {
+        shell_print_error("alarm: could not snooze event (%s)", esp_err_to_name(error));
+        return 2;
+    }
+    {
+        alarm_event_t e;
+        if (alarm_get(id, &e) == ESP_OK) {
+            alarm_fmt_time(e.when, when_s, sizeof(when_s));
+            shell_print_ok("alarm: %lu snoozed to %s", (unsigned long)id, when_s);
+        } else {
+            shell_print_ok("alarm: %lu snoozed", (unsigned long)id);
+        }
+    }
+    return 0;
+}
+
+static int alarm_cmd_enable(char **pos, int pcount, alarm_opts_t *o, bool enable){
     (void)o;
     if (pcount < 1) {
         shell_print_usage(enable ? "Usage: alarm enable <id>" : "Usage: alarm disable <id>");
@@ -472,6 +616,132 @@ static bool cal_next_cb(const alarm_event_t *e, void *ctx)
     return true;
 }
 
+static int cal_cmd_week(void)
+{
+    time_t now = time(NULL);
+    struct tm tmv;
+    time_t midnight;
+    int d;
+
+    localtime_r(&now, &tmv);
+    tmv.tm_hour = 0;
+    tmv.tm_min = 0;
+    tmv.tm_sec = 0;
+    midnight = mktime(&tmv);
+    for (d = 0; d < 7; d++) {
+        alarm_range_ctx_t ctx;
+        char date_s[16];
+        char wday_s[8];
+        time_t day = midnight + (time_t)d * 86400;
+        if (localtime_r(&day, &tmv) == NULL) {
+            continue;
+        }
+        alarm_fmt_date(day, date_s, sizeof(date_s));
+        if (strftime(wday_s, sizeof(wday_s), "%a", &tmv) == 0) {
+            snprintf(wday_s, sizeof(wday_s), "?");
+        }
+        shell_transcript_appendf("%s %s:\n", wday_s, date_s);
+        ctx.lo = day;
+        ctx.hi = day + 86400;
+        ctx.n = 0;
+        alarm_list(cal_day_dump_cb, &ctx);
+        if (ctx.n == 0) {
+            shell_transcript_append_text("  -\n");
+        }
+    }
+    return 0;
+}
+
+/** Days in a month for the grid (proleptic Gregorian). */
+static int cal_month_days(int year, int month)
+{
+    static const int table[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int days;
+
+    if (month < 1 || month > 12) {
+        return 0;
+    }
+    days = table[month - 1];
+    if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
+        days = 29;
+    }
+    return days;
+}
+
+/** Collect event-day marks for [lo,hi) into a 31-bit mask. */
+typedef struct {
+    time_t lo;
+    time_t hi;
+    uint32_t marks;
+    int n;
+} cal_grid_ctx_t;
+
+static bool cal_grid_mark_cb(const alarm_event_t *e, void *ctx)
+{
+    cal_grid_ctx_t *c = (cal_grid_ctx_t *)ctx;
+    struct tm tmv;
+
+    if (e->when < c->lo || e->when >= c->hi) {
+        return true;
+    }
+    if (localtime_r(&e->when, &tmv) != NULL && tmv.tm_mday >= 1 && tmv.tm_mday <= 31) {
+        c->marks |= (uint32_t)(1u << (tmv.tm_mday - 1));
+    }
+    c->n++;
+    return true;
+}
+
+/** Print a classic month grid; event days carry a `*` marker. */
+static void cal_print_grid(int year, int mon)
+{
+    static const char *const names[12] = {"January", "February", "March",
+        "April", "May", "June", "July", "August", "September", "October",
+        "November", "December"};
+    struct tm tmv;
+    time_t start, end;
+    cal_grid_ctx_t ctx;
+    int first_wday;
+    int days;
+    int d;
+
+    if (mon < 1 || mon > 12) {
+        return;
+    }
+    memset(&tmv, 0, sizeof(tmv));
+    tmv.tm_year = year - 1900;
+    tmv.tm_mon = mon - 1;
+    tmv.tm_mday = 1;
+    tmv.tm_isdst = -1;
+    start = mktime(&tmv);
+    tmv.tm_mon = mon;
+    end = mktime(&tmv);
+    if (localtime_r(&start, &tmv) == NULL) {
+        return;
+    }
+    first_wday = tmv.tm_wday;
+    days = cal_month_days(year, mon);
+    ctx.lo = start;
+    ctx.hi = end;
+    ctx.marks = 0;
+    ctx.n = 0;
+    alarm_list(cal_grid_mark_cb, &ctx);
+
+    shell_transcript_appendf("   %s %d\n", names[mon - 1], year);
+    shell_transcript_append_text("Su Mo Tu We Th Fr Sa\n");
+    for (d = 0; d < first_wday; d++) {
+        shell_transcript_append_text("   ");
+    }
+    for (d = 1; d <= days; d++) {
+        bool mark = (ctx.marks & (uint32_t)(1u << (d - 1))) != 0;
+        shell_transcript_appendf("%2d%s", d, mark ? "*" : " ");
+        if ((first_wday + d) % 7 == 0 || d == days) {
+            shell_transcript_append_text("\n");
+        } else {
+            shell_transcript_append_text(" ");
+        }
+    }
+}
+
 static int cal_cmd_month(const char *ym)
 {
     int year = 0, mon = 0;
@@ -480,7 +750,7 @@ static int cal_cmd_month(const char *ym)
     alarm_range_ctx_t ctx;
 
     if (sscanf(ym, "%d-%d", &year, &mon) != 2 || mon < 1 || mon > 12) {
-        shell_print_usage("Usage: cal [YYYY-MM] | cal today | cal next");
+        shell_print_usage("Usage: cal [today|week|next|YYYY-MM]");
         return 2;
     }
     memset(&tmv, 0, sizeof(tmv));
@@ -492,6 +762,7 @@ static int cal_cmd_month(const char *ym)
     tmv.tm_mon = mon;   /* first day of the next month */
     end = mktime(&tmv);
 
+    cal_print_grid(year, mon);
     shell_transcript_appendf("Events in %04d-%02d:\n", year, mon);
     ctx.lo = start;
     ctx.hi = end;
@@ -546,7 +817,7 @@ void shell_command_alarm(int argc, char **argv)
 
     shell_alarm_ensure_init();
     if (argc < 2) {
-        shell_print_usage("Usage: alarm <add|list|del|enable|disable|status|purge> [...]");
+        shell_print_usage("Usage: alarm <add|list|del|enable|disable|snooze|status|purge> [...]");
         batch_set_errorlevel(2);
         return;
     }
@@ -563,6 +834,8 @@ void shell_command_alarm(int argc, char **argv)
         result = alarm_cmd_del(pos, pcount, &opts);
     } else if (shell_text_equals_ignore_case(verb, "enable")) {
         result = alarm_cmd_enable(pos, pcount, &opts, true);
+    } else if (shell_text_equals_ignore_case(verb, "snooze")) {
+        result = alarm_cmd_snooze(pos, pcount, &opts);
     } else if (shell_text_equals_ignore_case(verb, "disable")) {
         result = alarm_cmd_enable(pos, pcount, &opts, false);
     } else if (shell_text_equals_ignore_case(verb, "status")) {
@@ -571,7 +844,7 @@ void shell_command_alarm(int argc, char **argv)
         result = alarm_cmd_purge(pos, pcount, &opts);
     } else {
         shell_print_error("alarm: unknown verb %s", verb);
-        shell_print_usage("Usage: alarm <add|list|del|enable|disable|status|purge> [...]");
+        shell_print_usage("Usage: alarm <add|list|del|enable|disable|snooze|status|purge> [...]");
         result = 2;
     }
     batch_set_errorlevel(result);
@@ -586,6 +859,8 @@ void shell_command_cal(int argc, char **argv)
         result = cal_cmd_today();
     } else if (shell_text_equals_ignore_case(argv[1], "today")) {
         result = cal_cmd_today();
+    } else if (shell_text_equals_ignore_case(argv[1], "week")) {
+        result = cal_cmd_week();
     } else if (shell_text_equals_ignore_case(argv[1], "next")) {
         result = cal_cmd_next();
     } else {

@@ -3,7 +3,8 @@
  * @brief Unit tests for the `calc` float evaluator and the `for /f` helpers.
  *
  * Covers calc_evaluate() and calc_format_number() from components/batch/calc.c
- * (arithmetic and precedence, every math/string function, hex literals, PI,
+ * (arithmetic and precedence, every math/string function, financial TVM/NPV/
+ * IRR/depreciation, epoch-day date functions, hex literals, PI,
  * RAN#, angle modes, POL/REC X/Y side effects, assignment through the env
  * table, and error paths), plus the pure `for /f` option parser and line
  * splitter from components/batch/batch.c.
@@ -276,6 +277,38 @@ void test_calc_string_errors(void)
     expect_error("lbound('abc')");
 }
 
+void test_calc_base_and_units(void)
+{
+    expect_str("bin$(0)", "0");
+    expect_str("bin$(5)", "101");
+    expect_str("bin$(255)", "11111111");
+    expect_str("oct$(0)", "0");
+    expect_str("oct$(8)", "10");
+    expect_str("oct$(255)", "377");
+    expect_num("valb('FF',16)", 255);
+    expect_num("valb('101',2)", 5);
+    expect_num("valb('17',8)", 15);
+    expect_num("valb('Z',36)", 35);
+    expect_num("c2f(0)", 32);
+    expect_num("c2f(100)", 212);
+    expect_num("f2c(32)", 0);
+    expect_num("f2c(212)", 100);
+    expect_num("in2mm(1)", 25.4);
+    expect_num("mm2in(25.4)", 1);
+    expect_num("lb2kg(1)", 0.45359237);
+    expect_num("kg2lb(1)", 2.20462262185);
+    expect_error("bin$(3.5)");
+    expect_error("bin$(-1)");
+    expect_error("bin$(99999999999)");
+    expect_error("oct$(-1)");
+    expect_error("valb('FF',1)");
+    expect_error("valb('FF',37)");
+    expect_error("valb('GG',16)");
+    expect_error("valb('10')");
+    /* The VAL prefix guard must not swallow VALB. */
+    expect_num("val('42')", 42);
+}
+
 /* ========================================================================
  * VARIABLES, ASSIGNMENT, AND POL/REC SIDE EFFECTS
  * ======================================================================== */
@@ -531,4 +564,150 @@ void test_arg_apply_modifiers(void)
     TEST_ASSERT_EQUAL_STRING("", out);
     shell_arg_apply_modifiers("\"q\"", NULL, out, sizeof(out));
     TEST_ASSERT_EQUAL_STRING("q", out);
+}
+
+/* ========================================================================
+ * FINANCIAL FUNCTIONS (HP-12C conventions)
+ * ======================================================================== */
+
+/** Evaluate and assert a numeric result within an explicit tolerance. */
+static void expect_near(const char *expression, double expected, double tol)
+{
+    calc_value_t result;
+    const char *error = NULL;
+
+    TEST_ASSERT_TRUE_MESSAGE(calc_evaluate(expression, &result, &error), expression);
+    TEST_ASSERT_FALSE_MESSAGE(result.is_string, expression);
+    TEST_ASSERT_DOUBLE_WITHIN_MESSAGE(tol, expected, result.num, expression);
+}
+
+void test_calc_financial_tvm(void)
+{
+    /* 30-year mortgage: $200k at 5% nominal -> $1073.64/mo. */
+    expect_near("PMT(0.05/12,360,200000)", -1073.6432, 0.01);
+    /* Closed-form round trip: PV of that payment stream is the principal. */
+    expect_near("PV(0.05/12,360,PMT(0.05/12,360,200000))", 200000.0, 1e-6);
+    /* $100/mo saved 30 years at 5% -> ~$83k. */
+    expect_near("FV(0.05/12,360,-100)", 83225.86, 0.1);
+    /* Term recovery from the rounded payment. */
+    expect_near("NPER(0.05/12,-1073.6432,200000)", 360.0, 0.05);
+    /* Rate recovery is exact on the unrounded round trip. */
+    expect_num("RATE(360,PMT(0.05/12,360,200000),200000)", 0.05 / 12);
+    /* Zero-rate (linear) paths. */
+    expect_num("FV(0,12,-100,-1000)", 2200.0);
+    expect_num("PV(0,12,-100)", 1200.0);
+    expect_num("PMT(0,12,1200)", -100.0);
+    expect_num("NPER(0,-100,1200)", 12.0);
+    /* Beginning-of-period annuity-due. */
+    expect_near("PV(0.1,2,-100,0,1)", 190.909, 0.001);
+    expect_near("FV(0.1,2,-100,0,1)", 231.0, 0.001);
+}
+
+void test_calc_financial_npv_irr(void)
+{
+    expect_near("NPV(0.1,-1000,300,400,500)", -21.0368, 0.01);
+    expect_num("NPV(0,-1000,300,400,500)", 200.0);
+    expect_near("IRR(-1000,300,400,500)", 0.08896, 0.001);
+    /* Simple two-flow case: double your money in one period -> 100%. */
+    expect_near("IRR(-100,200)", 1.0, 1e-9);
+}
+
+void test_calc_financial_depreciation(void)
+{
+    expect_num("SLN(10000,1000,5)", 1800.0);
+    expect_num("SYD(10000,1000,5,1)", 3000.0);
+    expect_num("SYD(10000,1000,5,5)", 600.0);
+    expect_near("DB(10000,1000,5,1)", 3690.43, 0.05);
+    expect_near("DB(10000,1000,5,5)", 584.89, 0.5);
+    /* Partial first year halves the first charge. */
+    expect_near("DB(10000,1000,5,1,6)", 1845.21, 0.05);
+}
+
+void test_calc_financial_errors(void)
+{
+    expect_error("PV(0.05)");
+    expect_error("PV(0.05,12)");
+    expect_error("FV(0.05,12,100,0,2)");
+    expect_error("PMT(0.05,0,1000)");
+    expect_error("NPER(0.05,0,0)");
+    expect_error("NPER(0,0,100)");
+    expect_error("RATE(12,0,100)");
+    expect_error("RATE(0,100,1000)");
+    expect_error("NPV(0.1)");
+    expect_error("NPV(-1,100)");
+    expect_error("IRR(100)");
+    expect_error("IRR(100,200)");
+    expect_error("SLN(1,2,0)");
+    expect_error("SYD(1,2,0,1)");
+    expect_error("SYD(1,2,5,6)");
+    expect_error("DB(1000,1000,5,1)");
+    expect_error("DB(10000,1000,5,6)");
+    expect_error("DB(10000,1000,5,1,13)");
+    expect_error("PV()");
+    expect_error("IRR()");
+}
+
+/* ========================================================================
+ * DATE FUNCTIONS (epoch-day serials)
+ * ======================================================================== */
+
+void test_calc_dates(void)
+{
+    /* 2026-09-15 is a Tuesday (DOW 2); 1970-01-01 was a Thursday (4). */
+    expect_num("DOW(DATE(2026,9,15))", 2.0);
+    expect_num("DOW(DATE(1970,1,1))", 4.0);
+    expect_num("DATE(1970,1,1)", 0.0);
+    expect_num("YEAR(DATE(2026,9,15))", 2026.0);
+    expect_num("MONTH(DATE(2026,9,15))", 9.0);
+    expect_num("DAY(DATE(2026,9,15))", 15.0);
+    /* Jan 1 -> Sep 15 in a non-leap year is 257 days. */
+    expect_num("DAYS(DATE(2026,1,1),DATE(2026,9,15))", 257.0);
+    expect_num("DATEADD(DATE(2026,1,1),30)-DATE(2026,1,31)", 0.0);
+    expect_str("DATESTR(DATEADD(DATE(2026,1,1),30))", "2026-01-31");
+    /* Month ends, including leap February. */
+    expect_str("DATESTR(EOMONTH(DATE(2026,2,10),0))", "2026-02-28");
+    expect_str("DATESTR(EOMONTH(DATE(2026,1,15),1))", "2026-02-28");
+    expect_str("DATESTR(EOMONTH(DATE(2026,3,15),-1))", "2026-02-28");
+    expect_num("DAY(EOMONTH(DATE(2024,1,1),1))", 29.0);
+    expect_num("DAY(DATE(2024,2,29))", 29.0);
+    /* ISO round trip, and pre-1970 serials. */
+    expect_str("DATESTR(DATEVALUE('2026-09-15'))", "2026-09-15");
+    expect_num("DATEVALUE('2026-09-15')", 20711.0);
+    expect_num("DATEVALUE('2026-09-15')-DATE(2026,9,15)", 0.0);
+    expect_num("DATE(1969,12,31)", -1.0);
+    expect_str("DATESTR(DATE(1969,12,31))", "1969-12-31");
+}
+
+void test_calc_date_today_roundtrip(void)
+{
+    calc_value_t result;
+    const char *error = NULL;
+
+    /* TODAY() rebuilds from its own parts whatever the clock says. */
+    TEST_ASSERT_TRUE(calc_evaluate("TODAY()", &result, &error));
+    TEST_ASSERT_FALSE(result.is_string);
+    TEST_ASSERT_TRUE_MESSAGE(
+        calc_evaluate("TODAY()-DATE(YEAR(TODAY()),MONTH(TODAY()),DAY(TODAY()))",
+                      &result, &error),
+        "TODAY round trip");
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, result.num);
+}
+
+void test_calc_date_errors(void)
+{
+    expect_error("DATE(2026,13,1)");
+    expect_error("DATE(2026,0,1)");
+    expect_error("DATE(2026,2,29)");
+    expect_error("DATE(2026,1,0)");
+    expect_error("DATE(2026,1,1.5)");
+    expect_error("DATE(2026,1)");
+    expect_error("DATEVALUE('15/09/2026')");
+    expect_error("DATEVALUE('2026-09-15!')");
+    expect_error("DATEVALUE('2026-13-01')");
+    expect_error("DATEVALUE('nope')");
+    expect_error("DATESTR()");
+    expect_error("EOMONTH(DATE(2026,1,1),1.5)");
+    expect_error("DOW()");
+    expect_error("TODAY(1)");
+    expect_error("DAYS(DATE(2026,1,1))");
 }

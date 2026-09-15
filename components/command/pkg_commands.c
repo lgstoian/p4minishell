@@ -157,6 +157,59 @@ static int pkg_collect_apps(char names[][PKG_APP_NAME_BYTES], int max)
     return count;
 }
 
+/** Public: installed app names (APPS APPINFO files) for completion. */
+int pkg_list_installed(char names[][COMMAND_APP_NAME_BYTES], int max)
+{
+    return pkg_collect_apps(names, max);
+}
+
+/** Public: available bundle names (PKGS/<APP>/ dirs) for completion. */
+int pkg_list_available(char names[][COMMAND_APP_NAME_BYTES], int max)
+{
+    char dir_rel[P4_CONFIG_SD_PATH_BYTES];
+    char dir_resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    DIR *dir;
+    struct dirent *entry;
+    int count = 0;
+
+    snprintf(dir_rel, sizeof(dir_rel), "%s", P4_CONFIG_PKG_BUNDLE_DIR_NAME);
+    if (shell_fs_resolve_path(dir_rel, dir_resolved, sizeof(dir_resolved)) != ESP_OK) {
+        return 0;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return 0;
+    }
+    dir = opendir(dir_resolved);
+    if (dir == NULL) {
+        shell_sd_end(&session, "pkg");
+        return 0;
+    }
+    while (count < max && (entry = readdir(dir)) != NULL) {
+        char full[P4_CONFIG_SD_PATH_BYTES + 258];
+        struct stat st;
+        size_t len;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        snprintf(full, sizeof(full), "%s/%s", dir_resolved, entry->d_name);
+        if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+        len = strlen(entry->d_name);
+        if (len == 0 || len >= COMMAND_APP_NAME_BYTES) {
+            continue;
+        }
+        memcpy(names[count], entry->d_name, len);
+        names[count][len] = '\0';
+        count++;
+    }
+    closedir(dir);
+    shell_sd_end(&session, "pkg");
+    return count;
+}
+
 /** `pkg list`: every installed package with title/version + manifest entries. */
 static void pkg_list(void)
 {

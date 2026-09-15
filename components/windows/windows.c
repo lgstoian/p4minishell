@@ -59,6 +59,13 @@ static struct {
     lv_obj_t *up_label;
     lv_obj_t *scroll_down_button;
     lv_obj_t *down_label;
+    lv_obj_t *tab_button;
+    lv_obj_t *tab_label;
+    lv_obj_t *stop_button;
+    lv_obj_t *stop_label;
+    bool stop_wanted;         /* Last windows_set_stop_visible() request. */
+    lv_obj_t *input_ghost;      /* Inline completion ghost (child of input_line) */
+    lv_obj_t *search_label;     /* Reverse-history search query (screen child) */
     /* Editor mode: the transcript region hosts a modal editor surface. */
     bool editor_mode;
     lv_obj_t *editor_surface;
@@ -85,6 +92,13 @@ static struct {
     .up_label = NULL,
     .scroll_down_button = NULL,
     .down_label = NULL,
+    .tab_button = NULL,
+    .tab_label = NULL,
+    .stop_button = NULL,
+    .stop_label = NULL,
+    .stop_wanted = false,
+    .input_ghost = NULL,
+    .search_label = NULL,
     .editor_mode = false,
     .editor_surface = NULL,
     .editor_status = NULL,
@@ -264,6 +278,9 @@ void windows_refresh_fonts(void)
     }
     if (s_windows.down_label != NULL) {
         lv_obj_set_style_text_font(s_windows.down_label, ui, 0);
+    }
+    if (s_windows.tab_label != NULL) {
+        lv_obj_set_style_text_font(s_windows.tab_label, ui, 0);
     }
     if (s_windows.editor_status != NULL) {
         lv_obj_set_style_text_font(s_windows.editor_status, term, 0);
@@ -462,6 +479,32 @@ static void windows_create_input_row(void)
     lv_obj_center(down_label);
     s_windows.down_label = down_label;
 
+    /* Tab completion button. A touch affordance for the completion the USB
+     * keyboard reaches with Tab; shares shell_input_line_tab_complete(). */
+    s_windows.tab_button = lv_button_create(s_windows.input_row);
+    lv_obj_set_size(s_windows.tab_button,
+                    P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
+    lv_obj_t *tab_label = lv_label_create(s_windows.tab_button);
+    lv_label_set_text(tab_label, "Tab");
+    lv_obj_set_style_text_font(tab_label, windows_get_ui_font(), 0);
+    lv_obj_center(tab_label);
+    s_windows.tab_label = tab_label;
+
+    /* Input-row Stop button: the touch foreground-break affordance. Hidden
+     * until a command runs (driven by windows_set_stop_visible from the
+     * main poll timer); suppressed in editor/app/TUI modes like its
+     * siblings. Placed before the input line so it never steals typing
+     * width when hidden (flex skips hidden children). */
+    s_windows.stop_button = lv_button_create(s_windows.input_row);
+    lv_obj_set_size(s_windows.stop_button,
+                    P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
+    lv_obj_t *stop_label = lv_label_create(s_windows.stop_button);
+    lv_label_set_text(stop_label, "Stop");
+    lv_obj_set_style_text_font(stop_label, windows_get_ui_font(), 0);
+    lv_obj_center(stop_label);
+    s_windows.stop_label = stop_label;
+    lv_obj_add_flag(s_windows.stop_button, LV_OBJ_FLAG_HIDDEN);
+
     /* Input line textarea */
     s_windows.input_line = lv_textarea_create(s_windows.input_row);
     lv_obj_set_flex_grow(s_windows.input_line, 1);
@@ -483,6 +526,30 @@ static void windows_create_input_row(void)
      * rect via zero border/pad, filled with the text color; the glyph
      * redraws in the input background color for contrast. */
     windows_input_cursor_style(true);
+
+    /* Inline completion ghost: a muted label child of the input line, placed
+     * right after the typed text. Managed by shell_input_line_ghost_refresh(). */
+    s_windows.input_ghost = lv_label_create(s_windows.input_line);
+    lv_obj_set_style_text_font(s_windows.input_ghost, windows_get_ui_font(), 0);
+    lv_obj_set_style_text_color(s_windows.input_ghost,
+                                windows_get_color(WINDOWS_COLOR_TEXT_MUTED), 0);
+    lv_label_set_text(s_windows.input_ghost, "");
+    lv_obj_add_flag(s_windows.input_ghost, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_windows.input_ghost, LV_OBJ_FLAG_CLICKABLE);
+
+    /* Reverse-history search query: floats just above the input row while
+     * Ctrl+R search is active (positioned by the shell when shown). */
+    s_windows.search_label = lv_label_create(s_windows.screen);
+    lv_obj_set_style_text_font(s_windows.search_label, windows_get_ui_font(), 0);
+    lv_obj_set_style_text_color(s_windows.search_label,
+                                windows_get_color(WINDOWS_COLOR_TEXT_MUTED), 0);
+    lv_obj_set_style_bg_color(s_windows.search_label,
+                              windows_get_color(WINDOWS_COLOR_BG_INPUT_ROW), 0);
+    lv_obj_set_style_bg_opa(s_windows.search_label, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(s_windows.search_label, 6, 0);
+    lv_label_set_text(s_windows.search_label, "");
+    lv_obj_add_flag(s_windows.search_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_windows.search_label, LV_OBJ_FLAG_CLICKABLE);
 }
 
 /** Style the input-line cursor as a block (true, editor-like) or a thin
@@ -1085,6 +1152,58 @@ lv_obj_t *windows_get_scroll_down_button(void)
     return s_windows.scroll_down_button;
 }
 
+/** Get the input-row Tab completion button. */
+lv_obj_t *windows_get_tab_button(void)
+{
+    return s_windows.tab_button;
+}
+
+/** Get the input-row Stop (foreground-break) button. */
+lv_obj_t *windows_get_stop_button(void)
+{
+    return s_windows.stop_button;
+}
+
+/** Re-apply the Stop visibility rule (must run on the LVGL task). */
+static void windows_apply_stop_visibility(void)
+{
+    bool show;
+
+    if (s_windows.stop_button == NULL) {
+        return;
+    }
+    /* The shell input row hosts Stop; editor/app/TUI modes repurpose or
+     * hide the row's widgets, so Stop shows in shell mode only. */
+    show = s_windows.stop_wanted && !s_windows.editor_mode &&
+           !s_windows.app_mode && !s_windows.tui_mode;
+    if (show) {
+        lv_obj_remove_flag(s_windows.stop_button, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_windows.stop_button, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/**
+ * Request Stop-button visibility (the main poll timer drives this from the
+ * command-worker busy state). The mode rule above decides what shows.
+ * Must run on the LVGL task.
+ */
+void windows_set_stop_visible(bool visible)
+{
+    s_windows.stop_wanted = visible;
+    windows_apply_stop_visibility();
+}
+
+lv_obj_t *windows_get_input_ghost(void)
+{
+    return s_windows.input_ghost;
+}
+
+lv_obj_t *windows_get_search_label(void)
+{
+    return s_windows.search_label;
+}
+
 lv_obj_t *windows_get_input_row(void)
 {
     return s_windows.input_row;
@@ -1206,6 +1325,11 @@ void windows_deinit(void)
     s_windows.up_label = NULL;
     s_windows.scroll_down_button = NULL;
     s_windows.down_label = NULL;
+    s_windows.tab_button = NULL;
+    s_windows.tab_label = NULL;
+    s_windows.stop_button = NULL;
+    s_windows.stop_label = NULL;
+    s_windows.stop_wanted = false;
     s_windows.initialized = false;
 
     /* Release the PSRAM staging buffers so a rebuild starts clean. They are
@@ -1360,6 +1484,9 @@ lv_obj_t *windows_enter_editor_mode(void)
     if (s_windows.scroll_down_button != NULL) {
         lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_windows.tab_button != NULL) {
+        lv_obj_add_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+    }
     if (s_windows.input_line != NULL) {
         lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1380,6 +1507,7 @@ lv_obj_t *windows_enter_editor_mode(void)
     }
 
     s_windows.editor_mode = true;
+    windows_apply_stop_visibility();
 
     /* Size the editor surface to exactly the transcript slot and verify it
      * did not collapse (a regression guard for the "1-line editor" bug). */
@@ -1430,11 +1558,15 @@ void windows_exit_editor_mode(void)
     if (s_windows.scroll_down_button != NULL) {
         lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_windows.tab_button != NULL) {
+        lv_obj_remove_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+    }
     if (s_windows.input_line != NULL) {
         lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
     }
 
     s_windows.editor_mode = false;
+    windows_apply_stop_visibility();
 }
 
 /** Get the status-bar label created by windows_enter_editor_mode(). */
@@ -1473,10 +1605,14 @@ void windows_enter_app_mode(void)
     if (s_windows.scroll_down_button != NULL) {
         lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_windows.tab_button != NULL) {
+        lv_obj_add_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+    }
     if (s_windows.input_line != NULL) {
         lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
     }
     s_windows.app_mode = true;
+    windows_apply_stop_visibility();
 }
 
 /** Leave app mode and restore the shell input widgets. LVGL task. */
@@ -1497,10 +1633,14 @@ void windows_exit_app_mode(void)
     if (s_windows.scroll_down_button != NULL) {
         lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_windows.tab_button != NULL) {
+        lv_obj_remove_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+    }
     if (s_windows.input_line != NULL) {
         lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
     }
     s_windows.app_mode = false;
+    windows_apply_stop_visibility();
 }
 
 /* ========================================================================
@@ -1516,10 +1656,12 @@ lv_obj_t *windows_enter_tui_mode(void)
     if (s_windows.next_button) lv_obj_add_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
     if (s_windows.scroll_up_button) lv_obj_add_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
     if (s_windows.scroll_down_button) lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.tab_button) lv_obj_add_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
     if (s_windows.input_line) lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
     if (s_windows.transcript_spans) lv_obj_add_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
     s_windows.tui_surface = s_windows.transcript;
     s_windows.tui_mode = true;
+    windows_apply_stop_visibility();
     windows_refresh_tui_surface();
     return s_windows.tui_surface;
 }
@@ -1535,8 +1677,10 @@ void windows_exit_tui_mode(void)
     if (s_windows.next_button) lv_obj_remove_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
     if (s_windows.scroll_up_button) lv_obj_remove_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
     if (s_windows.scroll_down_button) lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.tab_button) lv_obj_remove_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
     if (s_windows.input_line) lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
     s_windows.tui_mode = false;
+    windows_apply_stop_visibility();
 }
 
 bool windows_tui_mode_active(void) { return s_windows.tui_mode; }

@@ -1079,6 +1079,13 @@ static esp_err_t usb_install_host_stack(void)
         }
         s_usb_hid_driver_installed = true;
     }
+
+    /* The CDC-ACM serial driver (`usb userial`) is installed LAZILY on first
+     * use, not here: a third class driver at boot adds a task stack plus
+     * internal buffers that pushed the boot-time hosted-SDIO bring-up into
+     * `sdmmc_allocate_aligned_buf: not enough mem` (the M38/O8 pattern).
+     * userial_install_driver() is idempotent and the host stack is already up
+     * by the time a `usb userial` command can run. */
     return ESP_OK;
 #else
     return ESP_ERR_NOT_SUPPORTED;

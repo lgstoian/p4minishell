@@ -319,6 +319,28 @@ bool shell_comp_first_diff(const uint8_t *a, size_t an,
                            bool icase, size_t *pos, uint8_t *va, uint8_t *vb);
 
 /* ========================================================================
+ * CSV GRID (storage_csv.c)
+ * ======================================================================== */
+
+/** One dequoted CSV field: offset/length into the caller's scratch buffer. */
+typedef struct {
+    size_t off;
+    size_t len;
+} csv_field_t;
+
+/**
+ * Split one CSV line (RFC-4180 subset: commas, `"quoted"` fields, `""`
+ * escapes) into dequoted fields packed back to back in @p scratch.
+ * A field that does not fit is dropped but still counted.
+ *
+ * @return The true field count of the row (may exceed @p max_fields;
+ *         only the first @p max_fields that fit are recorded). 0 for an
+ *         empty line or a bad argument.
+ */
+int csv_split_line(const char *line, char *scratch, size_t scratch_size,
+                   csv_field_t *fields, int max_fields);
+
+/* ========================================================================
  * SD COMMAND FAMILY
  * ======================================================================== */
 

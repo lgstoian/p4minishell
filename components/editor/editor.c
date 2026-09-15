@@ -16,6 +16,8 @@
 #include "shell.h"
 #include "modal.h"
 #include "esp_lvgl_port.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
@@ -24,6 +26,69 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+/* ========================================================================
+ * PSRAM-FIRST ALLOCATION
+ * ======================================================================== */
+
+void *editor_mem_alloc(size_t size)
+{
+    void *ptr;
+
+    if (size == 0) {
+        size = 1;
+    }
+    ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ptr == NULL) {
+        ptr = malloc(size); /* PSRAM absent (unit tests / early boot) */
+    }
+    return ptr;
+}
+
+void *editor_mem_realloc(void *ptr, size_t size)
+{
+    void *out;
+
+    if (ptr == NULL) {
+        return editor_mem_alloc(size);
+    }
+    if (size == 0) {
+        size = 1;
+    }
+    out = heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (out == NULL) {
+        /* PSRAM exhausted or the block is internal-cap: retry on the default
+         * heap. heap_caps_realloc leaves @p ptr valid on failure. */
+        out = realloc(ptr, size);
+    }
+    return out;
+}
+
+void editor_mem_free(void *ptr)
+{
+    if (ptr != NULL) {
+        heap_caps_free(ptr);
+    }
+}
+
+/* Bounce buffer size for SD/FATFS transfers. */
+#define EDITOR_SD_CHUNK_BYTES 4096
+
+/**
+ * Allocate a small internal, DMA-capable buffer for FATFS/SD I/O. The
+ * document lives in PSRAM, and on this P4 build PSRAM is not
+ * `MALLOC_CAP_DMA`, so PSRAM buffers must never be handed to `fread`/`fwrite`
+ * directly (the SDMMC DMA cannot reach them). Data is bounced through this
+ * buffer. Falls back to the default heap if no DMA-capable block is available.
+ */
+static void *editor_dma_alloc(size_t size)
+{
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (ptr == NULL) {
+        ptr = malloc(size);
+    }
+    return ptr;
+}
 
 /* ========================================================================
  * LINE HELPERS
@@ -50,7 +115,7 @@ static bool editor_line_reserve(editor_line_t *line, size_t needed)
         new_cap *= 2;
     }
 
-    new_text = realloc(line->text, new_cap);
+    new_text = editor_mem_realloc(line->text, new_cap);
     if (new_text == NULL) {
         return false;
     }
@@ -61,7 +126,7 @@ static bool editor_line_reserve(editor_line_t *line, size_t needed)
 
 static void editor_line_free(editor_line_t *line)
 {
-    free(line->text);
+    editor_mem_free(line->text);
     line->text = NULL;
     line->length = 0;
     line->capacity = 0;
@@ -118,6 +183,7 @@ static void editor_doc_undo_reset(editor_doc_t *doc);
 /** One undo/redo snapshot: serialized lines plus cursor/selection state. */
 typedef struct {
     char *data;                /**< Serialized lines joined with '\n' */
+    size_t len;                /**< Serialized byte length (budget accounting) */
     size_t cursor_row;
     size_t cursor_col;
     size_t sel_row;
@@ -134,6 +200,7 @@ typedef struct {
     editor_undo_snapshot_t redo[P4_CONFIG_EDITOR_UNDO_DEPTH];
     size_t redo_count;
     size_t redo_head;
+    size_t bytes;              /**< Total bytes held by undo[] + redo[] data */
 } editor_undo_state_t;
 
 /* ========================================================================
@@ -154,7 +221,7 @@ static bool editor_doc_reserve_lines(editor_doc_t *doc, size_t needed)
         new_cap *= 2;
     }
 
-    new_lines = realloc(doc->lines, new_cap * sizeof(editor_line_t));
+    new_lines = editor_mem_realloc(doc->lines, new_cap * sizeof(editor_line_t));
     if (new_lines == NULL) {
         return false;
     }
@@ -228,7 +295,7 @@ void editor_doc_free(editor_doc_t *doc)
     for (size_t i = 0; i < doc->line_count; i++) {
         editor_line_free(&doc->lines[i]);
     }
-    free(doc->lines);
+    editor_mem_free(doc->lines);
     free(doc);
 }
 
@@ -320,7 +387,7 @@ editor_doc_t *editor_doc_load(const char *path)
     shell_sd_session_t session;
     FILE *file;
     struct stat st;
-    char *buf = NULL;
+    char *chunk = NULL;
     size_t file_size;
     size_t read_total = 0;
     esp_err_t err;
@@ -351,48 +418,75 @@ editor_doc_t *editor_doc_load(const char *path)
         return NULL;
     }
 
-    buf = malloc(file_size > 0 ? file_size : 1);
-    if (buf == NULL) {
-        shell_sd_end(&session, "edit");
-        return NULL;
-    }
-
-    file = fopen(resolved, "rb");
-    if (file == NULL) {
-        free(buf);
-        shell_sd_end(&session, "edit");
-        return NULL;
-    }
-
-    while (read_total < file_size) {
-        size_t got = fread(buf + read_total, 1, file_size - read_total, file);
-        if (got == 0) {
-            break;
-        }
-        read_total += got;
-    }
-    fclose(file);
-
     doc = calloc(1, sizeof(editor_doc_t));
-    if (doc != NULL) {
-        snprintf(doc->path, sizeof(doc->path), "%s", path);
-        doc->crlf = false; /* default; CRLF only when a \r\n is observed */
-        doc->trailing_newline = false;
-        if (editor_doc_insert_line(doc, 0) != NULL) {
-            if (read_total > 0) {
-                ok = editor_doc_append_bytes(doc, buf, read_total);
-            } else {
-                ok = true;
+    file = fopen(resolved, "rb");
+    if (doc == NULL) {
+        if (file != NULL) {
+            fclose(file);
+        }
+        shell_sd_end(&session, "edit");
+        return NULL;
+    }
+    snprintf(doc->path, sizeof(doc->path), "%s", path);
+    doc->crlf = false; /* default; CRLF only when a \r\n is observed */
+    doc->trailing_newline = false;
+    if (editor_doc_insert_line(doc, 0) != NULL) {
+        /* Stream through an internal DMA-capable buffer: the document is
+         * PSRAM, which the SDMMC DMA cannot read into directly. A trailing
+         * '\r' is carried into the next chunk so a CRLF split across the
+         * boundary is still recognized. */
+        bool pending_cr = false;
+
+        chunk = editor_dma_alloc(EDITOR_SD_CHUNK_BYTES + 1);
+        ok = (file != NULL && chunk != NULL);
+        while (ok) {
+            size_t off = 0;
+            size_t got;
+            size_t total;
+
+            if (pending_cr) {
+                chunk[0] = '\r';
+                off = 1;
+                pending_cr = false;
+            }
+            got = fread(chunk + off, 1, EDITOR_SD_CHUNK_BYTES, file);
+            if (got == 0) {
+                if (off > 0) {
+                    if (!editor_doc_append_bytes(doc, chunk, 1)) {
+                        ok = false;
+                    } else {
+                        read_total += 1;
+                    }
+                }
+                break;
+            }
+            total = off + got;
+            if (chunk[total - 1] == '\r') {
+                total--;
+                pending_cr = true;
+            }
+            if (total > 0) {
+                if (!editor_doc_append_bytes(doc, chunk, total)) {
+                    ok = false;
+                    break;
+                }
+                read_total += total;
             }
         }
-        editor_doc_pick_syntax(doc);
     }
+    editor_mem_free(chunk);
+    chunk = NULL;
+    if (file != NULL) {
+        fclose(file);
+    }
+    editor_doc_pick_syntax(doc);
+    doc->content_bytes = read_total;
     /* Read-only detection while the SD session is still held: a probe open
      * for update fails on FATFS read-only files without touching content. */
-    doc->readonly = false;
-    {
+    if (doc != NULL) {
         char probe_path[P4_CONFIG_SD_PATH_BYTES];
         FILE *probe = NULL;
+        doc->readonly = false;
         if (shell_fs_resolve_path(doc->path, probe_path,
                                   sizeof(probe_path)) == ESP_OK) {
             probe = fopen(probe_path, "r+b");
@@ -403,7 +497,6 @@ editor_doc_t *editor_doc_load(const char *path)
             }
         }
     }
-    free(buf);
     shell_sd_end(&session, "edit");
 
     if (!ok || doc == NULL) {
@@ -448,9 +541,14 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
     shell_sd_session_t session;
-    FILE *file;
+    FILE *file = NULL;
+    char *chunk = NULL;
     size_t i;
     esp_err_t err;
+    const char crlf[] = "\r\n";
+    const char lf[] = "\n";
+    const char *eol;
+    size_t eol_len;
 
     if (doc == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -458,6 +556,8 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
     if (path == NULL || path[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
+    eol = doc->crlf ? crlf : lf;
+    eol_len = doc->crlf ? 2 : 1;
 
     err = shell_fs_resolve_path(path, resolved, sizeof(resolved));
     if (err != ESP_OK) {
@@ -469,9 +569,16 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
         return err;
     }
 
+    /* All FATFS transfers bounce through this internal DMA-capable buffer. */
+    chunk = editor_dma_alloc(EDITOR_SD_CHUNK_BYTES);
+    if (chunk == NULL) {
+        shell_sd_end(&session, "edit");
+        return ESP_ERR_NO_MEM;
+    }
+
     /* Backup: copy any existing destination to "<file>.bak" before the
      * truncating write, so a power loss mid-save cannot lose both copies.
-     * Best-effort (heap chunked copy): a failed backup still saves, and the
+     * Best-effort (chunked copy): a failed backup still saves, and the
      * caller reports it. Over-long paths skip the backup rather than
      * truncating into the wrong file. */
     {
@@ -486,16 +593,14 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
                 dst = fopen(bak, "wb");
             }
             if (src != NULL && dst != NULL) {
-                char *chunk = malloc(4096);
                 size_t got;
-                bool bak_ok = (chunk != NULL);
-                while (bak_ok &&
-                       (got = fread(chunk, 1, 4096, src)) > 0) {
+                bool bak_ok = true;
+                while ((got = fread(chunk, 1, EDITOR_SD_CHUNK_BYTES, src)) > 0) {
                     if (fwrite(chunk, 1, got, dst) != got) {
                         bak_ok = false;
+                        break;
                     }
                 }
-                free(chunk);
                 fclose(src);
                 if (fclose(dst) != 0) {
                     bak_ok = false;
@@ -519,8 +624,8 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
 
     file = fopen(resolved, "wb");
     if (file == NULL) {
-        shell_sd_end(&session, "edit");
-        return ESP_FAIL;
+        err = ESP_FAIL;
+        goto out;
     }
 
     /* A failed write removes the partial destination: a truncated file that
@@ -528,47 +633,50 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
     for (i = 0; i < doc->line_count; i++) {
         const char *text = doc->lines[i].text != NULL ? doc->lines[i].text : "";
         size_t len = doc->lines[i].length;
+        size_t off = 0;
 
-        if (len > 0 && fwrite(text, 1, len, file) != len) {
-            fclose(file);
-            remove(resolved);
-            shell_sd_end(&session, "edit");
-            return ESP_FAIL;
+        while (off < len) {
+            size_t n = len - off;
+            if (n > EDITOR_SD_CHUNK_BYTES) {
+                n = EDITOR_SD_CHUNK_BYTES;
+            }
+            memcpy(chunk, text + off, n);
+            if (fwrite(chunk, 1, n, file) != n) {
+                err = ESP_FAIL;
+                goto out;
+            }
+            off += n;
         }
         if (i + 1 < doc->line_count) {
             /* CRLF when the file uses CRLF, otherwise a bare LF. The EOL is
              * selected explicitly: writing only the first byte of "\r\n" when
              * crlf is false would emit a lone CR. */
-            const char crlf[] = "\r\n";
-            const char lf[] = "\n";
-            const char *eol = doc->crlf ? crlf : lf;
-            size_t eol_len = doc->crlf ? 2 : 1;
             if (fwrite(eol, 1, eol_len, file) != eol_len) {
-                fclose(file);
-                remove(resolved);
-                shell_sd_end(&session, "edit");
-                return ESP_FAIL;
+                err = ESP_FAIL;
+                goto out;
             }
         }
     }
 
     /* Preserve a trailing newline when the original file had one. */
     if (doc->trailing_newline && doc->line_count > 0) {
-        const char crlf[] = "\r\n";
-        const char lf[] = "\n";
-        const char *eol = doc->crlf ? crlf : lf;
-        size_t eol_len = doc->crlf ? 2 : 1;
         if (fwrite(eol, 1, eol_len, file) != eol_len) {
-            fclose(file);
-            remove(resolved);
-            shell_sd_end(&session, "edit");
-            return ESP_FAIL;
+            err = ESP_FAIL;
+            goto out;
         }
     }
+    err = ESP_OK;
 
-    fclose(file);
+out:
+    if (file != NULL && fclose(file) != 0 && err == ESP_OK) {
+        err = ESP_FAIL;
+    }
+    if (err != ESP_OK) {
+        remove(resolved);
+    }
+    editor_mem_free(chunk);
     shell_sd_end(&session, "edit");
-    return ESP_OK;
+    return err;
 }
 
 /* Re-read the document from its bound path, discarding unsaved changes.
@@ -590,7 +698,7 @@ esp_err_t editor_doc_reload(editor_doc_t *doc)
     for (i = 0; i < doc->line_count; i++) {
         editor_line_free(&doc->lines[i]);
     }
-    free(doc->lines);
+    editor_mem_free(doc->lines);
     doc->lines = fresh->lines;
     doc->line_count = fresh->line_count;
     doc->line_capacity = fresh->line_capacity;
@@ -598,6 +706,7 @@ esp_err_t editor_doc_reload(editor_doc_t *doc)
     doc->trailing_newline = fresh->trailing_newline;
     doc->syntax = fresh->syntax;
     doc->readonly = fresh->readonly;
+    doc->content_bytes = fresh->content_bytes;
     fresh->lines = NULL;
     fresh->line_count = 0;
     fresh->line_capacity = 0;
@@ -618,6 +727,43 @@ esp_err_t editor_doc_reload(editor_doc_t *doc)
     doc->modified = false;
     editor_doc_undo_reset(doc);
     return ESP_OK;
+}
+
+/* Replace the live document's contents with a freshly loaded one (File >
+ * Open). The document object identity is preserved so the view keeps pointing
+ * at it; only bytes/metadata change. Cursor returns to the origin, selection
+ * clears, the file is unmodified, and the undo ring resets — the post-load
+ * baseline, mirroring editor_doc_reload() plus a path change. */
+static void editor_doc_replace_contents(editor_doc_t *dst, editor_doc_t *src)
+{
+    size_t i;
+
+    if (dst == NULL || src == NULL) {
+        return;
+    }
+    for (i = 0; i < dst->line_count; i++) {
+        editor_line_free(&dst->lines[i]);
+    }
+    editor_mem_free(dst->lines);
+    dst->lines = src->lines;
+    dst->line_count = src->line_count;
+    dst->line_capacity = src->line_capacity;
+    dst->crlf = src->crlf;
+    dst->trailing_newline = src->trailing_newline;
+    dst->syntax = src->syntax;
+    dst->readonly = src->readonly;
+    dst->content_bytes = src->content_bytes;
+    src->lines = NULL;
+    src->line_count = 0;
+    src->line_capacity = 0;
+    dst->cursor_row = 0;
+    dst->cursor_col = 0;
+    dst->selection_active = false;
+    dst->sel_row = 0;
+    dst->sel_col = 0;
+    dst->overwrite = false;
+    dst->modified = false;
+    editor_doc_undo_reset(dst);
 }
 
 /* ========================================================================
@@ -1219,7 +1365,7 @@ static char *editor_doc_selection_to_string(const editor_doc_t *doc, size_t *out
         }
     }
 
-    result = malloc(total + 1);
+    result = editor_mem_alloc(total + 1);
     if (result == NULL) {
         return NULL;
     }
@@ -1267,7 +1413,7 @@ bool editor_doc_selection_copy(const editor_doc_t *doc)
         return false;
     }
     shell_clipboard_set(text);
-    free(text);
+    editor_mem_free(text);
     return true;
 }
 
@@ -1960,28 +2106,33 @@ static void editor_doc_undo_reset(editor_doc_t *doc)
     state = (editor_undo_state_t *)&doc->undo_storage;
     for (i = 0; i < state->undo_count; i++) {
         idx = (state->undo_head + i) % P4_CONFIG_EDITOR_UNDO_DEPTH;
-        free(state->undo[idx].data);
+        editor_mem_free(state->undo[idx].data);
         state->undo[idx].data = NULL;
     }
     for (i = 0; i < state->redo_count; i++) {
         idx = (state->redo_head + i) % P4_CONFIG_EDITOR_UNDO_DEPTH;
-        free(state->redo[idx].data);
+        editor_mem_free(state->redo[idx].data);
         state->redo[idx].data = NULL;
     }
     state->undo_count = 0;
     state->undo_head = 0;
     state->redo_count = 0;
     state->redo_head = 0;
+    state->bytes = 0;
 }
 
-/** Serialize the whole document into one heap string joined with '\n'. */
-static char *editor_doc_serialize(const editor_doc_t *doc)
+/** Serialize the whole document into one heap string joined with '\n'.
+ *  When @p len_out is non-NULL it receives the serialized byte length. */
+static char *editor_doc_serialize(const editor_doc_t *doc, size_t *len_out)
 {
     size_t total = 0;
     size_t i;
     size_t pos = 0;
     char *out;
 
+    if (len_out != NULL) {
+        *len_out = 0;
+    }
     if (doc == NULL) {
         return NULL;
     }
@@ -1991,7 +2142,7 @@ static char *editor_doc_serialize(const editor_doc_t *doc)
             total++; /* '\n' separator */
         }
     }
-    out = malloc(total + 1);
+    out = editor_mem_alloc(total + 1);
     if (out == NULL) {
         return NULL;
     }
@@ -2005,6 +2156,9 @@ static char *editor_doc_serialize(const editor_doc_t *doc)
         }
     }
     out[pos] = '\0';
+    if (len_out != NULL) {
+        *len_out = pos;
+    }
     return out;
 }
 
@@ -2032,7 +2186,7 @@ static bool editor_doc_deserialize(editor_doc_t *doc, const char *data)
     }
     count++; /* trailing line after the last '\n' */
 
-    new_lines = malloc(count * sizeof(editor_line_t));
+    new_lines = editor_mem_alloc(count * sizeof(editor_line_t));
     if (new_lines == NULL) {
         return false;
     }
@@ -2067,7 +2221,7 @@ static bool editor_doc_deserialize(editor_doc_t *doc, const char *data)
         for (i = 0; i < new_count; i++) {
             editor_line_free(&new_lines[i]);
         }
-        free(new_lines);
+        editor_mem_free(new_lines);
         return false;
     }
 
@@ -2075,7 +2229,7 @@ static bool editor_doc_deserialize(editor_doc_t *doc, const char *data)
     for (i = 0; i < doc->line_count; i++) {
         editor_line_free(&doc->lines[i]);
     }
-    free(doc->lines);
+    editor_mem_free(doc->lines);
     doc->lines = new_lines;
     doc->line_count = new_count;
     doc->line_capacity = count;
@@ -2087,15 +2241,27 @@ static void editor_undo_push(editor_doc_t *doc)
     editor_undo_state_t *state;
     editor_undo_snapshot_t *slot;
     char *snap;
+    size_t snap_len = 0;
 
     if (doc == NULL) {
         return;
     }
     state = (editor_undo_state_t *)&doc->undo_storage;
-    snap = editor_doc_serialize(doc);
+
+    /* Above the snapshot threshold a full-document copy per edit is too
+     * expensive, so undo is disabled for the session and any ring is dropped. */
+    if (doc->content_bytes > P4_CONFIG_EDITOR_UNDO_MAX_SNAPSHOT_BYTES) {
+        if (state->undo_count > 0 || state->redo_count > 0) {
+            editor_doc_undo_reset(doc);
+        }
+        return;
+    }
+
+    snap = editor_doc_serialize(doc, &snap_len);
     if (snap == NULL) {
         return;
     }
+    doc->content_bytes = snap_len;
 
     if (state->undo_count < P4_CONFIG_EDITOR_UNDO_DEPTH) {
         slot = &state->undo[state->undo_count];
@@ -2103,17 +2269,33 @@ static void editor_undo_push(editor_doc_t *doc)
     } else {
         /* Ring full: overwrite the oldest. */
         slot = &state->undo[state->undo_head];
-        free(slot->data);
+        state->bytes -= slot->len;
+        editor_mem_free(slot->data);
         state->undo_head = (state->undo_head + 1) % P4_CONFIG_EDITOR_UNDO_DEPTH;
     }
 
     slot->data = snap;
+    slot->len = snap_len;
     slot->cursor_row = doc->cursor_row;
     slot->cursor_col = doc->cursor_col;
     slot->sel_row = doc->sel_row;
     slot->sel_col = doc->sel_col;
     slot->selection_active = doc->selection_active;
     slot->modified = doc->modified;
+    state->bytes += snap_len;
+
+    /* Byte budget: a full-document snapshot per step would be
+     * depth x file-size; evict the oldest steps until the ring fits the cap,
+     * always keeping the newest so even a single huge document can undo once. */
+    while (state->bytes > P4_CONFIG_EDITOR_UNDO_MAX_BYTES && state->undo_count > 1) {
+        slot = &state->undo[state->undo_head];
+        state->bytes -= slot->len;
+        editor_mem_free(slot->data);
+        slot->data = NULL;
+        slot->len = 0;
+        state->undo_count--;
+        state->undo_head = (state->undo_head + 1) % P4_CONFIG_EDITOR_UNDO_DEPTH;
+    }
 }
 
 static void editor_redo_clear(editor_doc_t *doc)
@@ -2121,7 +2303,8 @@ static void editor_redo_clear(editor_doc_t *doc)
     editor_undo_state_t *state = (editor_undo_state_t *)&doc->undo_storage;
     size_t i;
     for (i = 0; i < state->redo_count; i++) {
-        free(state->redo[i].data);
+        state->bytes -= state->redo[i].len;
+        editor_mem_free(state->redo[i].data);
         state->redo[i].data = NULL;
     }
     state->redo_count = 0;
@@ -2142,6 +2325,7 @@ void editor_doc_undo(editor_doc_t *doc)
     editor_undo_state_t *state;
     editor_undo_snapshot_t *slot;
     char *snap;
+    size_t snap_len = 0;
     size_t idx;
 
     if (doc == NULL) {
@@ -2157,10 +2341,11 @@ void editor_doc_undo(editor_doc_t *doc)
 
     /* Push the current state onto the redo ring before restoring. */
     if (state->redo_count < P4_CONFIG_EDITOR_UNDO_DEPTH) {
-        snap = editor_doc_serialize(doc);
+        snap = editor_doc_serialize(doc, &snap_len);
         if (snap != NULL) {
             size_t r_idx = (state->redo_head + state->redo_count) % P4_CONFIG_EDITOR_UNDO_DEPTH;
             state->redo[r_idx].data = snap;
+            state->redo[r_idx].len = snap_len;
             state->redo[r_idx].cursor_row = doc->cursor_row;
             state->redo[r_idx].cursor_col = doc->cursor_col;
             state->redo[r_idx].sel_row = doc->sel_row;
@@ -2168,6 +2353,7 @@ void editor_doc_undo(editor_doc_t *doc)
             state->redo[r_idx].selection_active = doc->selection_active;
             state->redo[r_idx].modified = doc->modified;
             state->redo_count++;
+            state->bytes += snap_len;
         }
     }
 
@@ -2182,8 +2368,10 @@ void editor_doc_undo(editor_doc_t *doc)
     doc->modified = slot->modified;
 
     /* Pop the undo entry. */
-    free(slot->data);
+    state->bytes -= slot->len;
+    editor_mem_free(slot->data);
     slot->data = NULL;
+    slot->len = 0;
     state->undo_count--;
 }
 
@@ -2192,6 +2380,7 @@ void editor_doc_redo(editor_doc_t *doc)
     editor_undo_state_t *state;
     editor_undo_snapshot_t *slot;
     char *snap;
+    size_t snap_len = 0;
     size_t idx;
 
     if (doc == NULL) {
@@ -2206,11 +2395,12 @@ void editor_doc_redo(editor_doc_t *doc)
     slot = &state->redo[idx];
 
     /* Push the current state onto the undo ring. */
-    snap = editor_doc_serialize(doc);
+    snap = editor_doc_serialize(doc, &snap_len);
     if (snap != NULL) {
         size_t u_idx = (state->undo_head + state->undo_count) % P4_CONFIG_EDITOR_UNDO_DEPTH;
         if (state->undo_count < P4_CONFIG_EDITOR_UNDO_DEPTH) {
             state->undo[u_idx].data = snap;
+            state->undo[u_idx].len = snap_len;
             state->undo[u_idx].cursor_row = doc->cursor_row;
             state->undo[u_idx].cursor_col = doc->cursor_col;
             state->undo[u_idx].sel_row = doc->sel_row;
@@ -2218,11 +2408,14 @@ void editor_doc_redo(editor_doc_t *doc)
             state->undo[u_idx].selection_active = doc->selection_active;
             state->undo[u_idx].modified = doc->modified;
             state->undo_count++;
+            state->bytes += snap_len;
         } else {
             /* Ring full: replace the oldest without growing. */
             size_t old = state->undo_head;
-            free(state->undo[old].data);
+            state->bytes -= state->undo[old].len;
+            editor_mem_free(state->undo[old].data);
             state->undo[old].data = snap;
+            state->undo[old].len = snap_len;
             state->undo[old].cursor_row = doc->cursor_row;
             state->undo[old].cursor_col = doc->cursor_col;
             state->undo[old].sel_row = doc->sel_row;
@@ -2230,6 +2423,7 @@ void editor_doc_redo(editor_doc_t *doc)
             state->undo[old].selection_active = doc->selection_active;
             state->undo[old].modified = doc->modified;
             state->undo_head = (state->undo_head + 1) % P4_CONFIG_EDITOR_UNDO_DEPTH;
+            state->bytes += snap_len;
         }
     }
 
@@ -2241,8 +2435,10 @@ void editor_doc_redo(editor_doc_t *doc)
     doc->selection_active = slot->selection_active;
     doc->modified = slot->modified;
 
-    free(slot->data);
+    state->bytes -= slot->len;
+    editor_mem_free(slot->data);
     slot->data = NULL;
+    slot->len = 0;
     state->redo_count--;
 }
 
@@ -2459,9 +2655,7 @@ size_t editor_format_line_number(size_t line, unsigned width,
  * MODAL SURFACE (worker task)
  * ======================================================================== */
 
-/* Session event bits. MODAL_EVENT_CLOSE_REQUEST / MODAL_EVENT_CLOSED live in modal.h. */
-#define EDITOR_EVENT_SAVE   (1 << 2)
-#define EDITOR_EVENT_RELOAD (1 << 3)
+/* Session event bits live once in editor.h (shared with the LVGL view). */
 
 struct editor_session {
     editor_control_t control;
@@ -2595,7 +2789,7 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
     esp_err_t err;
 
     if (session == NULL ||
-        ((bits & (EDITOR_EVENT_SAVE | EDITOR_EVENT_RELOAD)) == 0)) {
+        ((bits & (EDITOR_EVENT_SAVE | EDITOR_EVENT_RELOAD | EDITOR_EVENT_OPEN)) == 0)) {
         return;
     }
 
@@ -2617,39 +2811,78 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
                       (void *)(intptr_t)(err == ESP_OK));
     }
 
-    if ((bits & EDITOR_EVENT_SAVE) == 0) {
+    /* Save and Open are independent: an Open alone must not be dropped by the
+     * save guard (and a Save+Open burst still lands the save first). */
+    if ((bits & EDITOR_EVENT_SAVE) != 0) {
+        /* A Save-As request carries an explicit target path; otherwise
+         * save to the document's source path, and fall back to a
+         * generated name only for an unnamed buffer. */
+        if (control->save_as_path[0] != '\0') {
+            char save_as_resolved[P4_CONFIG_SD_PATH_BYTES] = "";
+            if (shell_fs_resolve_path(control->save_as_path,
+                                      save_as_resolved,
+                                      sizeof(save_as_resolved)) == ESP_OK) {
+                err = editor_doc_save(control->doc, save_as_resolved);
+                if (err == ESP_OK) {
+                    editor_doc_set_path(control->doc, save_as_resolved);
+                }
+            } else {
+                err = ESP_ERR_INVALID_ARG;
+            }
+            control->save_as_path[0] = '\0';
+        } else if (control->doc != NULL && control->doc->path[0] != '\0') {
+            err = editor_doc_save(control->doc, control->doc->path);
+        } else if (control->doc != NULL) {
+            /* Unnamed buffer: fall back to a generated name. */
+            err = editor_doc_save(control->doc, "EDIT.NEW");
+        }
+        control->save_ok = (err == ESP_OK);
+        if (err != ESP_OK) {
+            mctx->result = err;
+        }
+
+        /* Refresh the status bar on the LVGL task. */
+        lv_async_call(editor_view_notify_saved_cb, (void *)(intptr_t)(err == ESP_OK));
+    }
+
+    if ((bits & EDITOR_EVENT_OPEN) == 0) {
         return;
     }
 
-    /* A Save-As request carries an explicit target path; otherwise
-     * save to the document's source path, and fall back to a
-     * generated name only for an unnamed buffer. */
-    if (control->save_as_path[0] != '\0') {
-        char save_as_resolved[P4_CONFIG_SD_PATH_BYTES] = "";
-        if (shell_fs_resolve_path(control->save_as_path,
-                                  save_as_resolved,
-                                  sizeof(save_as_resolved)) == ESP_OK) {
-            err = editor_doc_save(control->doc, save_as_resolved);
-            if (err == ESP_OK) {
-                editor_doc_set_path(control->doc, save_as_resolved);
+    /* An explicit save lands first (above) so a Save+Open burst never loses
+     * the saved target. Swapping the contents keeps the same document object,
+     * so the view only rebuilds; a stale Save-As target must not follow into
+     * the new file. */
+    control->open_requested = false;
+    if (control->doc != NULL && control->open_path[0] != '\0') {
+        char open_resolved[P4_CONFIG_SD_PATH_BYTES] = "";
+        editor_doc_t *fresh = NULL;
+
+        if (shell_fs_resolve_path(control->open_path, open_resolved,
+                                  sizeof(open_resolved)) == ESP_OK) {
+            if (editor_file_missing(open_resolved)) {
+                fresh = editor_doc_new(open_resolved);
+            } else {
+                fresh = editor_doc_load(open_resolved);
             }
-        } else {
-            err = ESP_ERR_INVALID_ARG;
         }
-        control->save_as_path[0] = '\0';
-    } else if (control->doc != NULL && control->doc->path[0] != '\0') {
-        err = editor_doc_save(control->doc, control->doc->path);
-    } else if (control->doc != NULL) {
-        /* Unnamed buffer: fall back to a generated name. */
-        err = editor_doc_save(control->doc, "EDIT.NEW");
+        if (fresh != NULL) {
+            editor_doc_replace_contents(control->doc, fresh);
+            editor_doc_set_path(control->doc, open_resolved);
+            editor_doc_free(fresh);
+            control->save_as_path[0] = '\0';
+            err = ESP_OK;
+        } else {
+            err = ESP_FAIL;
+        }
+    } else {
+        err = ESP_ERR_INVALID_ARG;
     }
-    control->save_ok = (err == ESP_OK);
+    control->open_ok = (err == ESP_OK);
     if (err != ESP_OK) {
         mctx->result = err;
     }
-
-    /* Refresh the status bar on the LVGL task. */
-    lv_async_call(editor_view_notify_saved_cb, (void *)(intptr_t)(err == ESP_OK));
+    lv_async_call(editor_view_notify_opened_cb, (void *)(intptr_t)(err == ESP_OK));
 }
 
 static void editor_surface_close(void *ctx)
@@ -2720,6 +2953,8 @@ static void editor_serial_line_cb(void *user_data)
         editor_view_handle_usb_key(0, 0x01, 'g'); /* Ctrl+G -> Go to line */
     } else if (editor_serial_is_verb(line, "o") || editor_serial_is_verb(line, "saveas")) {
         editor_view_handle_usb_key(0, 0x01, 'o'); /* Ctrl+O -> Save As */
+    } else if (editor_serial_is_verb(line, "open")) {
+        editor_view_handle_usb_key(0x3D, 0, 0); /* F4 -> open another file */
     } else if (editor_serial_is_verb(line, "p") || editor_serial_is_verb(line, "preview")) {
         editor_view_handle_usb_key(0, 0x01, 'p'); /* Ctrl+P -> preview toggle */
     } else if (editor_serial_is_verb(line, "r") || editor_serial_is_verb(line, "redo")) {
@@ -2882,6 +3117,7 @@ editor_key_t editor_key_from_usb(uint8_t key_code, uint8_t modifiers, char ascii
     case 0x49: return EDITOR_KEY_OVERWRITE;        /* Insert */
     case 0x3B: return EDITOR_KEY_SAVE;             /* F2 */
     case 0x3C: return EDITOR_KEY_FIND_NEXT;        /* F3 */
+    case 0x3D: return EDITOR_KEY_OPEN;             /* F4 */
     case 0x38: return ctrl ? EDITOR_KEY_COMMENT : EDITOR_KEY_NONE; /* Ctrl+/ */
     default:
         break;

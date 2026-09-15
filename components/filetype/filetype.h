@@ -24,6 +24,7 @@ typedef enum {
     FILETYPE_MARKDOWN,    /**< .md/.markdown/.mkd — rendered view + highlight */
     FILETYPE_JSON,        /**< .json — highlight + pretty/validate */
     FILETYPE_TEXT,        /**< .txt/.log/.sys/.ini — plain viewer */
+    FILETYPE_IMAGE,       /**< .bmp/.dib — BMP image viewer / canvas / TUI */
     FILETYPE_COUNT
 } filetype_t;
 
@@ -39,6 +40,9 @@ bool filetype_is_executable(filetype_t type);
 
 /** True for Markdown types (rendered view + preview). */
 bool filetype_is_markdown(filetype_t type);
+
+/** True for BMP image types (viewer / gfx canvas / TUI). */
+bool filetype_is_image(filetype_t type);
 
 /** True when @p path ends in @p ext (case-insensitive, ext with dot).
  * Used for one-off checks outside the registry (e.g. "%~x" parity). */

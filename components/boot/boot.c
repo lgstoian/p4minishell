@@ -38,6 +38,8 @@
 #include "usb.h"
 #include "keyboard.h"
 #include "header.h"
+#include "windows.h"
+#include "clock.h"
 #include "shell.h"
 #include "ansi_palette.h"
 
@@ -77,6 +79,16 @@ static bool s_boot_script_applied;
     ";   HEADER=ON|OFF             Show/hide the header status bar at boot\n" \
     ";   HEADER_MODE=AUTO|FULL|COMPACT  Header layout density at boot\n" \
 
+#define BOOT_CFG_UI \
+    "\n; UI presentation (single settings store: this file):\n" \
+    ";   THEME=<name>              UI theme (default|amber|ice|mono)\n" \
+    ";   FONT_TERMINAL=<name> / FONT_UI=<name>   Font roles\n" \
+    ";   FONT_TERMINAL_SIZE=<px> / FONT_UI_SIZE=<px>  TTF role sizes\n" \
+    ";   CURSOR=BLOCK|BAR          Input cursor style\n" \
+    ";   CURSOR_BLINK=<ms|OFF>     Input cursor blink period\n" \
+    ";   KEYBOARD_MODE=<page>      OSK page (text_lower|...|nav2)\n" \
+    ";   TIMEZONE=<posix tz>       Override network timezone auto-detect\n" \
+
 #define BOOT_CFG_NETWORK \
     "\n; Wi-Fi (station only):\n" \
     ";   WIFI_SSID=...              Target SSID for auto-connect\n" \
@@ -97,8 +109,8 @@ static bool s_boot_script_applied;
     "; Unknown KEY=VALUE lines set an environment variable; unknown keywords\n" \
     "; without a value produce a single muted warning and are skipped.\n"
 
-#define BOOT_CFG_DEFAULT BOOT_CFG_HEADER BOOT_CFG_DISPLAY BOOT_CFG_NETWORK \
-    BOOT_CFG_USB_GPIO
+#define BOOT_CFG_DEFAULT BOOT_CFG_HEADER BOOT_CFG_DISPLAY BOOT_CFG_UI \
+    BOOT_CFG_NETWORK BOOT_CFG_USB_GPIO
 
 #define BOOT_BAT_HEADER \
     "@echo off\n" \
@@ -571,6 +583,67 @@ static bool boot_handle_header_mode(const char *value)
     return true;
 }
 
+static bool boot_handle_cursor(const char *value)
+{
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("CURSOR");
+        return false;
+    }
+    if (shell_text_equals_ignore_case(value, "block")) {
+        windows_input_cursor_style(true);
+        return true;
+    }
+    if (shell_text_equals_ignore_case(value, "bar")) {
+        windows_input_cursor_style(false);
+        return true;
+    }
+    boot_warn_unknown("CURSOR");
+    return false;
+}
+
+static bool boot_handle_cursor_blink(const char *value)
+{
+    char *end = NULL;
+    long ms;
+
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("CURSOR_BLINK");
+        return false;
+    }
+    if (shell_text_equals_ignore_case(value, "off")) {
+        windows_input_cursor_blink(0);
+        return true;
+    }
+    ms = strtol(value, &end, 10);
+    if (end == NULL || *end != '\0' || ms < 0 || ms > 2000) {
+        boot_warn_unknown("CURSOR_BLINK");
+        return false;
+    }
+    windows_input_cursor_blink((uint32_t)ms);
+    return true;
+}
+
+static bool boot_handle_keyboard_mode(const char *value)
+{
+    keyboard_mode_t mode;
+
+    if (!keyboard_mode_parse(value, &mode)) {
+        boot_warn_unknown("KEYBOARD_MODE");
+        return false;
+    }
+    keyboard_set_mode(mode);
+    return true;
+}
+
+static bool boot_handle_timezone(const char *value)
+{
+    if (value == NULL || *value == '\0') {
+        return false;   /* empty = leave auto-detection in charge */
+    }
+    time_set_timezone(value);
+    return true;
+}
+
 static bool boot_handle_wifi_autoconnect(const char *value)
 {
     if (value == NULL || *value == '\0') {
@@ -791,6 +864,14 @@ static void boot_script_apply(void)
                     (void)boot_handle_header_mode(value);
                 } else if (boot_starts_with_ci(keyword, "HEADER")) {
                     (void)boot_handle_header(value);
+                } else if (boot_starts_with_ci(keyword, "CURSOR_BLINK")) {
+                    (void)boot_handle_cursor_blink(value);
+                } else if (boot_starts_with_ci(keyword, "CURSOR")) {
+                    (void)boot_handle_cursor(value);
+                } else if (boot_starts_with_ci(keyword, "KEYBOARD_MODE")) {
+                    (void)boot_handle_keyboard_mode(value);
+                } else if (boot_starts_with_ci(keyword, "TIMEZONE")) {
+                    (void)boot_handle_timezone(value);
                 } else if (boot_starts_with_ci(keyword, "FILES") ||
                            boot_starts_with_ci(keyword, "BUFFERS") ||
                            boot_starts_with_ci(keyword, "LASTDRIVE") ||
@@ -826,6 +907,19 @@ run_autoexec:
         fclose(file);
         file = NULL;
         ESP_LOGI(BOOT_TAG, "Loading alias profile: %s", path);
+        (void)shell_execute_batch_file(path, 0, NULL);
+    }
+
+    /* ---- Run the bind profile (if present) ----
+     * `bind /save` writes the F-key table to this batch file, so persisted
+     * bindings are restored every boot with no AUTOEXEC.BAT edit. Safe when
+     * the file is absent. */
+    snprintf(path, sizeof(path), "%s/%s", BSP_SD_MOUNT_POINT, P4_CONFIG_BIND_PROFILE);
+    file = fopen(path, "r");
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+        ESP_LOGI(BOOT_TAG, "Loading bind profile: %s", path);
         (void)shell_execute_batch_file(path, 0, NULL);
     }
 
@@ -867,6 +961,11 @@ run_autoexec:
         boot_offer_launch(s_boot_launch_app);
         s_boot_launch_app[0] = '\0';
     }
+
+    /* The interactive session starts locked when a passcode + BOOTLOCK are
+     * configured. Boot scripting already ran, so CONFIG.SYS/AUTOEXEC are not
+     * affected; recovery is deleting the SECURITY_* lines on the SD card. */
+    security_engage_boot_lock();
 
     shell_sd_end(&session, "boot");
     ESP_LOGI(BOOT_TAG, "Boot scripting complete");
@@ -997,6 +1096,10 @@ void boot_on_sd_first_mount(void)
     /* Same moment: attach the CJK fallback tails (best-effort, silent when
      * NotoSansSC is absent). */
     font_attach_cjk();
+
+    /* Restore the shell recall history (auto-save profile) now that the SD is
+     * mounted and readable. */
+    command_history_autoload();
 
     if (generated) {
         shell_transcript_appendf_ansi(SH_OK "SD card ready (first run)" SH_RST " - created "

@@ -52,6 +52,11 @@
 #define SHELL_ALIAS_NAME_BYTES          P4_CONFIG_ALIAS_NAME_BYTES
 #define SHELL_ALIAS_VALUE_BYTES         P4_CONFIG_ALIAS_VALUE_BYTES
 #define SHELL_ALIAS_PROFILE             P4_CONFIG_ALIAS_PROFILE
+#define SHELL_BIND_MAX                    P4_CONFIG_BIND_MAX
+#define SHELL_BIND_VALUE_BYTES            P4_CONFIG_BIND_VALUE_BYTES
+#define SHELL_BIND_PROFILE                P4_CONFIG_BIND_PROFILE
+#define SHELL_MACRO_BYTES                 P4_CONFIG_MACRO_BYTES
+#define SHELL_MACRO_DEFAULT_FILE          P4_CONFIG_MACRO_DEFAULT_FILE
 #define SHELL_BATCH_LINE_BYTES          P4_CONFIG_BATCH_LINE_BYTES
 #define SHELL_BATCH_ARGS_MAX            P4_CONFIG_BATCH_ARGS_MAX
 #define SHELL_BATCH_DEPTH_MAX           P4_CONFIG_BATCH_DEPTH_MAX
@@ -178,6 +183,47 @@ typedef struct {
 } shell_alias_t;
 
 static shell_alias_t s_aliases[SHELL_ALIAS_MAX];
+
+/* ---- Key binds (F1..F12 command lines, RAM-only until /save) ---- */
+
+/** USB HID codes for F1..F12 (standard HID usage table). */
+#define SHELL_BIND_F1_CODE 0x3A
+#define SHELL_BIND_F12_CODE 0x45
+
+/** Ctrl+letter chord codes: 0x80 | HID letter (a=0x04..z=0x1D). */
+#define SHELL_BIND_CHORD_FLAG 0x80
+#define SHELL_BIND_LETTER_MIN 0x04
+#define SHELL_BIND_LETTER_MAX 0x1D
+/** Reserved chord: ^C is the foreground break, never bindable. */
+#define SHELL_BIND_CHORD_C 0x06
+
+/** USB HID Ctrl modifier bits (mirrored from components/usb/usb.h;
+ *  batch cannot include usb.h, same as shell.c). */
+#define SHELL_BIND_MOD_LCTRL 0x01
+#define SHELL_BIND_MOD_RCTRL 0x10
+
+/** True for bindable F-key and chord codes (^C excluded). */
+static bool shell_bind_code_valid(uint8_t code)
+{
+    if (code >= SHELL_BIND_F1_CODE && code <= SHELL_BIND_F12_CODE) {
+        return true;
+    }
+    if ((code & SHELL_BIND_CHORD_FLAG) != 0) {
+        uint8_t hid = code & (uint8_t)~SHELL_BIND_CHORD_FLAG;
+        return hid >= SHELL_BIND_LETTER_MIN && hid <= SHELL_BIND_LETTER_MAX &&
+               hid != SHELL_BIND_CHORD_C;
+    }
+    return false;
+}
+
+/** One bound function key. */
+typedef struct {
+    bool used;
+    uint8_t key;
+    char value[SHELL_BIND_VALUE_BYTES];
+} shell_bind_t;
+
+static shell_bind_t s_binds[SHELL_BIND_MAX];
 
 /* Batch execution state (per worker task).
  *
@@ -877,6 +923,693 @@ void shell_command_unalias(int argc, char **argv)
     }
     (void)shell_alias_set(argv[1], "");
     shell_print_ok("unalias: %s removed", argv[1]);
+}
+
+/* ========================================================================
+ * KEY BINDS (bind F1..F12, USB function keys)
+ * ========================================================================
+ * A small RAM-only table mapping USB HID function keys to command lines.
+ * A bound key fires its line onto the command worker while the prompt is
+ * idle (the shell checks the table in the non-printable-key path, after
+ * the modal and key-wait guards, and submits via execute_command_async).
+ *
+ * Persistence mirrors aliases: `bind /save` writes `bind Fx <line>` lines
+ * to the SD profile (P4_CONFIG_BIND_PROFILE); boot.c auto-runs that batch
+ * file after the alias profile, and `bind /load` reloads it manually.
+ */
+
+/** Parse a key name (F1..F12 or ^<letter>, case-insensitive). */
+static bool shell_bind_parse_key(const char *name, uint8_t *code_out)
+{
+    long number;
+    char *end = NULL;
+
+    if (name == NULL || code_out == NULL) {
+        return false;
+    }
+    /* Chord form first: ^<letter>. ^C parses (so the verb can name the
+     * reservation); shell_bind_code_valid() still rejects it for storage. */
+    if (name[0] == '^' && name[1] != '\0' && name[2] == '\0' &&
+        isalpha((unsigned char)name[1])) {
+        uint8_t hid = (uint8_t)(SHELL_BIND_LETTER_MIN +
+                                (tolower((unsigned char)name[1]) - 'a'));
+        *code_out = (uint8_t)(SHELL_BIND_CHORD_FLAG | hid);
+        return true;
+    }
+    if ((name[0] != 'F' && name[0] != 'f') || name[1] == '\0' || strlen(name) > 3) {
+        return false;
+    }
+    number = strtol(name + 1, &end, 10);
+    if (end == name + 1 || *end != '\0' || number < 1 || number > 12) {
+        return false;
+    }
+    *code_out = (uint8_t)(SHELL_BIND_F1_CODE + number - 1);
+    return true;
+}
+
+/** Format a code back to its name (F1..F12, ^X for chords). */
+static void shell_bind_format_key(uint8_t code, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    if ((code & SHELL_BIND_CHORD_FLAG) != 0) {
+        uint8_t hid = code & (uint8_t)~SHELL_BIND_CHORD_FLAG;
+        if (hid >= SHELL_BIND_LETTER_MIN && hid <= SHELL_BIND_LETTER_MAX) {
+            snprintf(out, out_size, "^%c", (char)('A' + (hid - SHELL_BIND_LETTER_MIN)));
+            return;
+        }
+    }
+    if (code < SHELL_BIND_F1_CODE || code > SHELL_BIND_F12_CODE) {
+        snprintf(out, out_size, "0x%02X", code);
+        return;
+    }
+    snprintf(out, out_size, "F%u", (unsigned)(code - SHELL_BIND_F1_CODE + 1));
+}
+
+static shell_bind_t *shell_bind_find_slot(uint8_t code)
+{
+    size_t index;
+    for (index = 0; index < SHELL_BIND_MAX; index++) {
+        if (s_binds[index].used && s_binds[index].key == code) {
+            return &s_binds[index];
+        }
+    }
+    return NULL;
+}
+
+esp_err_t shell_bind_set(uint8_t code, const char *line)
+{
+    shell_bind_t *slot;
+
+    if (!shell_bind_code_valid(code)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    batch_shared_take();
+    slot = shell_bind_find_slot(code);
+    if (line == NULL || line[0] == '\0') {
+        if (slot != NULL) {
+            memset(slot, 0, sizeof(*slot));
+        }
+        batch_shared_give();
+        return ESP_OK;
+    }
+    if (slot == NULL) {
+        size_t index;
+        for (index = 0; index < SHELL_BIND_MAX; index++) {
+            if (!s_binds[index].used) {
+                slot = &s_binds[index];
+                break;
+            }
+        }
+        if (slot == NULL) {
+            batch_shared_give();
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    slot->used = true;
+    slot->key = code;
+    snprintf(slot->value, sizeof(slot->value), "%s", line);
+    batch_shared_give();
+    return ESP_OK;
+}
+
+bool shell_bind_lookup_fkey(uint8_t code, char *out, size_t out_size)
+{
+    shell_bind_t *slot;
+    bool found = false;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    if (!shell_bind_code_valid(code)) {
+        return false;
+    }
+    batch_shared_take();
+    slot = shell_bind_find_slot(code);
+    if (slot != NULL) {
+        snprintf(out, out_size, "%s", slot->value);
+        found = true;
+    }
+    batch_shared_give();
+    return found;
+}
+
+bool shell_bind_lookup_chord(uint8_t key_code, uint8_t modifiers,
+                             char *out, size_t out_size)
+{
+    shell_bind_t *slot;
+    uint8_t code;
+    bool found = false;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    /* Ctrl held with a letter key; ^C never matches (foreground break). */
+    if ((modifiers & (SHELL_BIND_MOD_LCTRL | SHELL_BIND_MOD_RCTRL)) == 0 ||
+        key_code < SHELL_BIND_LETTER_MIN || key_code > SHELL_BIND_LETTER_MAX ||
+        key_code == SHELL_BIND_CHORD_C) {
+        return false;
+    }
+    code = (uint8_t)(SHELL_BIND_CHORD_FLAG | key_code);
+    batch_shared_take();
+    slot = shell_bind_find_slot(code);
+    if (slot != NULL) {
+        snprintf(out, out_size, "%s", slot->value);
+        found = true;
+    }
+    batch_shared_give();
+    return found;
+}
+
+int shell_bind_count(void)
+{
+    size_t index;
+    int count = 0;
+
+    for (index = 0; index < SHELL_BIND_MAX; index++) {
+        if (s_binds[index].used) {
+            count++;
+        }
+    }
+    return count;
+}
+
+bool shell_bind_get_by_index(int index, uint8_t *code_out, char *value_out, size_t value_size)
+{
+    size_t cursor = 0;
+    int seen = 0;
+
+    if (code_out == NULL || value_out == NULL) {
+        return false;
+    }
+    for (cursor = 0; cursor < SHELL_BIND_MAX; cursor++) {
+        if (!s_binds[cursor].used) {
+            continue;
+        }
+        if (seen == index) {
+            *code_out = s_binds[cursor].key;
+            snprintf(value_out, value_size, "%s", s_binds[cursor].value);
+            return true;
+        }
+        seen++;
+    }
+    return false;
+}
+
+/** Write the bind table to the given resolved SD path as `bind` lines. */
+static esp_err_t shell_bind_save_to(const char *resolved_path)
+{
+    shell_sd_session_t session;
+    char tmp[SHELL_SD_PATH_BYTES + 8];
+    FILE *file = NULL;
+    int index;
+
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    snprintf(tmp, sizeof(tmp), "%s.tmp", resolved_path);
+    {
+        uint64_t needed = (uint64_t)SHELL_BIND_MAX *
+                          (SHELL_BIND_VALUE_BYTES + 16) + 256;
+        uint64_t reclaim = storage_get_file_size(resolved_path);
+        if (!storage_check_free_space(needed, reclaim, "bind save")) {
+            shell_sd_end(&session, "bind");
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+    file = fopen(tmp, "w");
+    if (file == NULL) {
+        shell_sd_end(&session, "bind");
+        return ESP_ERR_NOT_FOUND;
+    }
+    for (index = 0; index < SHELL_BIND_MAX; index++) {
+        bool used;
+        uint8_t code = 0;
+        char value[SHELL_BIND_VALUE_BYTES];
+        char keyname[8];
+
+        /* Copy out under lock, print/write after: never hold the shared
+         * lock across transcript or filesystem calls. */
+        batch_shared_take();
+        used = s_binds[index].used;
+        if (used) {
+            code = s_binds[index].key;
+            snprintf(value, sizeof(value), "%s", s_binds[index].value);
+        }
+        batch_shared_give();
+        if (!used) {
+            continue;
+        }
+        /* Values containing a double quote cannot round-trip through the
+         * batch quoting used by the profile; skip them rather than write a
+         * line that would load wrong (same policy as aliases). */
+        if (strchr(value, '"') != NULL) {
+            shell_bind_format_key(code, keyname, sizeof(keyname));
+            shell_print_warning("bind: skipped %s (line contains a double quote)",
+                                keyname);
+            continue;
+        }
+        shell_bind_format_key(code, keyname, sizeof(keyname));
+        fprintf(file, "bind %s %s\n", keyname, value);
+    }
+    if (fflush(file) != 0 || fclose(file) != 0) {
+        remove(tmp);
+        shell_sd_end(&session, "bind");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    /* FATFS f_rename refuses to overwrite an existing target: remove it first. */
+    if (rename(tmp, resolved_path) != 0) {
+        remove(resolved_path);
+        if (rename(tmp, resolved_path) != 0) {
+            remove(tmp);
+            shell_sd_end(&session, "bind");
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+    }
+    shell_sd_end(&session, "bind");
+    return ESP_OK;
+}
+
+/** Resolve a bind-profile path (argument or the configured default). */
+static esp_err_t shell_bind_resolve_profile(const char *arg, char *out, size_t out_size)
+{
+    if (arg != NULL && arg[0] != '\0') {
+        return shell_fs_resolve_path(arg, out, out_size);
+    }
+    return shell_fs_resolve_path(SHELL_BIND_PROFILE, out, out_size);
+}
+
+/** Join argv[from..argc) with single spaces into a heap line. */
+static char *shell_bind_join_line(int argc, char **argv, int from)
+{
+    size_t cap = SHELL_COMMAND_BYTES;
+    size_t used = 0;
+    char *buf;
+    int i;
+
+    buf = malloc(cap);
+    if (buf == NULL) {
+        return NULL;
+    }
+    buf[0] = '\0';
+    for (i = from; i < argc; i++) {
+        size_t len = strlen(argv[i]);
+        if (used > 0) {
+            if (used + 1 >= cap) {
+                break;
+            }
+            buf[used++] = ' ';
+        }
+        if (used + len >= cap) {
+            len = cap - used - 1;
+        }
+        memcpy(buf + used, argv[i], len);
+        used += len;
+        buf[used] = '\0';
+    }
+    return buf;
+}
+
+void shell_command_bind(int argc, char **argv)
+{
+    if (argc == 1) {
+        int slot;
+        bool any = false;
+
+        if (shell_bind_count() == 0) {
+            shell_print_muted("No keys bound (bind F1 <line> or bind ^G <line> to bind one)");
+            return;
+        }
+        for (slot = 0; slot < SHELL_BIND_MAX; slot++) {
+            bool used = false;
+            uint8_t code = 0;
+            char value[SHELL_BIND_VALUE_BYTES];
+            char keyname[8];
+            batch_shared_take();
+            used = s_binds[slot].used;
+            if (used) {
+                code = s_binds[slot].key;
+                snprintf(value, sizeof(value), "%s", s_binds[slot].value);
+            }
+            batch_shared_give();
+            if (!used) {
+                continue;
+            }
+            shell_bind_format_key(code, keyname, sizeof(keyname));
+            shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                          keyname, value);
+            any = true;
+        }
+        if (!any) {
+            shell_print_muted("No keys bound (bind F1 <line> or bind ^G <line> to bind one)");
+        }
+        return;
+    }
+
+    /* Flags. */
+    if (argv[1][0] == '/') {
+        if (shell_text_equals_ignore_case(argv[1], "/save")) {
+            char resolved[SHELL_SD_PATH_BYTES];
+            const char *file_arg = (argc >= 3) ? argv[2] : NULL;
+            esp_err_t error;
+
+            if (argc > 3) {
+                shell_print_usage("Usage: bind /save [file]");
+                return;
+            }
+            if (shell_bind_resolve_profile(file_arg, resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("bind: invalid profile path");
+                return;
+            }
+            error = shell_bind_save_to(resolved);
+            if (error != ESP_OK) {
+                shell_print_error("bind: could not save the profile (%s)", esp_err_to_name(error));
+                return;
+            }
+            shell_print_ok("bind: saved %d bind(s) to %s", shell_bind_count(), resolved);
+            return;
+        }
+        if (shell_text_equals_ignore_case(argv[1], "/load")) {
+            char resolved[SHELL_SD_PATH_BYTES];
+            const char *file_arg = (argc >= 3) ? argv[2] : NULL;
+            esp_err_t error;
+
+            if (argc > 3) {
+                shell_print_usage("Usage: bind /load [file]");
+                return;
+            }
+            if (shell_bind_resolve_profile(file_arg, resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("bind: invalid profile path");
+                return;
+            }
+            error = shell_execute_batch_file(resolved, 0, NULL);
+            if (error != ESP_OK) {
+                shell_print_error("bind: could not load the profile (%s)", esp_err_to_name(error));
+                return;
+            }
+            shell_print_ok("bind: loaded %d bind(s) from %s", shell_bind_count(), resolved);
+            return;
+        }
+        if (shell_text_equals_ignore_case(argv[1], "/clear")) {
+            int index;
+            if (argc != 2) {
+                shell_print_usage("Usage: bind /clear");
+                return;
+            }
+            batch_shared_take();
+            for (index = 0; index < SHELL_BIND_MAX; index++) {
+                memset(&s_binds[index], 0, sizeof(s_binds[index]));
+            }
+            batch_shared_give();
+            shell_print_ok("bind: all binds cleared");
+            return;
+        }
+        shell_print_error("bind: unknown option %s", argv[1]);
+        shell_print_usage("Usage: bind [F1..F12|^A..^Z <line>] | bind unbind <F1..F12|^A..^Z> | bind /save [/load] [file] | bind /clear");
+        return;
+    }
+
+    /* `bind unbind <key>` clears one slot (^C is never bound: reserved). */
+    if (shell_text_equals_ignore_case(argv[1], "unbind")) {
+        uint8_t code;
+        if (argc != 3 || !shell_bind_parse_key(argv[2], &code)) {
+            shell_print_usage("Usage: bind unbind <F1..F12|^A..^Z>");
+            return;
+        }
+        if (code == (uint8_t)(SHELL_BIND_CHORD_FLAG | SHELL_BIND_CHORD_C)) {
+            shell_print_error("bind: ^C is reserved for break and cannot be bound");
+            return;
+        }
+        (void)shell_bind_set(code, "");
+        shell_print_ok("bind: %s cleared", argv[2]);
+        return;
+    }
+
+    /* `bind <key> <line...>` binds the rest of the line. */
+    {
+        uint8_t code;
+        char *line;
+
+        if (argc < 3 || !shell_bind_parse_key(argv[1], &code)) {
+            shell_print_usage("Usage: bind [F1..F12|^A..^Z <line>] | bind unbind <F1..F12|^A..^Z> | bind /save [/load] [file] | bind /clear");
+            return;
+        }
+        if (code == (uint8_t)(SHELL_BIND_CHORD_FLAG | SHELL_BIND_CHORD_C)) {
+            shell_print_error("bind: ^C is reserved for break and cannot be bound");
+            return;
+        }
+        line = shell_bind_join_line(argc, argv, 2);
+        if (line == NULL) {
+            shell_print_error("bind: out of memory");
+            return;
+        }
+        if (shell_bind_set(code, line) != ESP_OK) {
+            free(line);
+            shell_print_error("bind: the table is full");
+            return;
+        }
+        free(line);
+        shell_print_ok("bind: %s set", argv[1]);
+    }
+}
+
+/* ========================================================================
+ * MACRO RECORDER (macro record/stop/play/status)
+ * ========================================================================
+ * Captures submitted command lines into a heap buffer for later replay as
+ * a batch file. The hook (batch_macro_record_line) runs in the async
+ * submit path, so both typed surfaces and touch-tap actions are captured
+ * while `macro ...` control lines are never recorded. Short lock holds
+ * only (never across transcript or filesystem calls).
+ */
+
+typedef struct {
+    bool active;
+    bool overflowed;
+    char file[SHELL_SD_PATH_BYTES];
+    char *buf;
+    size_t used;
+    size_t cap;
+} shell_macro_t;
+
+static shell_macro_t s_macro;
+
+void batch_macro_record_line(const char *line)
+{
+    const char *p;
+    size_t len;
+
+    if (line == NULL) {
+        return;
+    }
+    batch_shared_take();
+    if (!s_macro.active || s_macro.buf == NULL) {
+        batch_shared_give();
+        return;
+    }
+    p = line;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == '\0' ||
+        (strncasecmp(p, "macro", 5) == 0 &&
+         (p[5] == '\0' || isspace((unsigned char)p[5])))) {
+        batch_shared_give();
+        return;
+    }
+    len = strlen(line);
+    if (s_macro.used + len + 1 >= s_macro.cap) {
+        /* Buffer full: auto-stop with the overflow mark (reported by stop
+         * and status on the worker, where printing is safe). */
+        s_macro.active = false;
+        s_macro.overflowed = true;
+        batch_shared_give();
+        return;
+    }
+    memcpy(s_macro.buf + s_macro.used, line, len);
+    s_macro.used += len;
+    s_macro.buf[s_macro.used++] = '\n';
+    s_macro.buf[s_macro.used] = '\0';
+    batch_shared_give();
+}
+
+void batch_macro_status(batch_macro_status_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    batch_shared_take();
+    out->active = s_macro.active;
+    out->overflowed = s_macro.overflowed;
+    out->used = s_macro.used;
+    out->capacity = s_macro.cap;
+    snprintf(out->file, sizeof(out->file), "%s", s_macro.file);
+    batch_shared_give();
+}
+
+const char *batch_macro_text(void)
+{
+    /* Single-word read; the buffer is NUL-terminated under the lock at
+     * every mutation, so a lock-free peek is safe for tests and status. */
+    if (!s_macro.active && s_macro.buf == NULL) {
+        return "";
+    }
+    return (s_macro.buf != NULL) ? s_macro.buf : "";
+}
+
+void batch_macro_discard(void)
+{
+    batch_shared_take();
+    if (s_macro.buf != NULL) {
+        free(s_macro.buf);
+        s_macro.buf = NULL;
+    }
+    memset(&s_macro, 0, sizeof(s_macro));
+    batch_shared_give();
+}
+
+void shell_command_macro(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: macro record [file] | macro stop | macro play <file> | macro status");
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "record")) {
+        char resolved[SHELL_SD_PATH_BYTES];
+        char *buf;
+        const char *file_arg = (argc >= 3) ? argv[2] : SHELL_MACRO_DEFAULT_FILE;
+
+        if (argc > 3) {
+            shell_print_usage("Usage: macro record [file]");
+            return;
+        }
+        batch_shared_take();
+        if (s_macro.active) {
+            batch_shared_give();
+            shell_print_error("macro: already recording (macro stop first)");
+            return;
+        }
+        batch_shared_give();
+        if (shell_fs_resolve_path(file_arg, resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("macro: invalid path %s", file_arg);
+            return;
+        }
+        buf = malloc(SHELL_MACRO_BYTES);
+        if (buf == NULL) {
+            shell_print_error("macro: out of memory");
+            return;
+        }
+        batch_shared_take();
+        if (s_macro.active) {
+            /* Won a race with another recorder start; keep the first. */
+            batch_shared_give();
+            free(buf);
+            shell_print_error("macro: already recording (macro stop first)");
+            return;
+        }
+        memset(&s_macro, 0, sizeof(s_macro));
+        s_macro.active = true;
+        snprintf(s_macro.file, sizeof(s_macro.file), "%s", resolved);
+        s_macro.buf = buf;
+        s_macro.used = 0;
+        s_macro.cap = SHELL_MACRO_BYTES;
+        s_macro.buf[0] = '\0';
+        batch_shared_give();
+        shell_print_ok("macro: recording to %s", resolved);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "stop")) {
+        char file[SHELL_SD_PATH_BYTES];
+        char *buf;
+        size_t used;
+        bool overflowed;
+        int lines = 0;
+
+        if (argc != 2) {
+            shell_print_usage("Usage: macro stop");
+            return;
+        }
+        batch_shared_take();
+        if (!s_macro.active && s_macro.buf == NULL) {
+            batch_shared_give();
+            shell_print_error("macro: not recording");
+            return;
+        }
+        snprintf(file, sizeof(file), "%s", s_macro.file);
+        buf = s_macro.buf;
+        used = s_macro.used;
+        overflowed = s_macro.overflowed;
+        memset(&s_macro, 0, sizeof(s_macro));
+        batch_shared_give();
+        if (buf == NULL || used == 0) {
+            free(buf);
+            shell_print_muted("macro: nothing recorded");
+            return;
+        }
+        for (size_t i = 0; i < used; i++) {
+            if (buf[i] == '\n') {
+                lines++;
+            }
+        }
+        if (storage_write_text_file(file, buf) != ESP_OK) {
+            free(buf);
+            shell_print_error("macro: cannot write %s", file);
+            return;
+        }
+        free(buf);
+        if (overflowed) {
+            shell_print_warning("macro: buffer filled and recording auto-stopped; %d line(s) -> %s",
+                                lines, file);
+            return;
+        }
+        shell_print_ok("macro: %d line(s) -> %s", lines, file);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "play")) {
+        char resolved[SHELL_SD_PATH_BYTES];
+
+        if (argc != 3) {
+            shell_print_usage("Usage: macro play <file>");
+            return;
+        }
+        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("macro: invalid path %s", argv[2]);
+            return;
+        }
+        if (shell_execute_batch_file(resolved, 0, NULL) != ESP_OK) {
+            shell_print_error("macro: cannot play %s", resolved);
+            return;
+        }
+        shell_print_ok("macro: played %s", resolved);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "status")) {
+        batch_macro_status_t st;
+
+        if (argc != 2) {
+            shell_print_usage("Usage: macro status");
+            return;
+        }
+        batch_macro_status(&st);
+        if (st.active) {
+            shell_transcript_appendf_ansi(SH_LBL "macro" SH_RST "=" SH_VAL "recording" SH_RST "  "
+                                          SH_LBL "file" SH_RST "=" SH_VAL "%s" SH_RST "  "
+                                          SH_LBL "used" SH_RST "=" SH_NUM "%u/%u" SH_RST "%s\n",
+                                          st.file, (unsigned)st.used, (unsigned)st.capacity,
+                                          st.overflowed ? "  (overflowed)" : "");
+        } else if (st.overflowed) {
+            shell_transcript_appendf_ansi(SH_LBL "macro" SH_RST "=" SH_VAL "stopped (overflow)" SH_RST "  "
+                                          SH_LBL "file" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                          st.file);
+        } else {
+            shell_print_muted("macro: idle (macro record [file] to start)");
+        }
+        return;
+    }
+    shell_print_usage("Usage: macro record [file] | macro stop | macro play <file> | macro status");
 }
 
 /* ========================================================================
@@ -3529,6 +4262,15 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             break;
         }
 
+        /* Foreground break (Ctrl+C / Stop button): the same unwind, with a
+         * `^C` echo. Consume-on-fire so one press prints exactly once. */
+        if (shell_abort_requested()) {
+            shell_clear_abort();
+            shell_transcript_append_text("^C\n");
+            s_stop_mode = BATCH_STOP_ALL;
+            break;
+        }
+
         if (shell_frame_fgets(frame, line, SHELL_BATCH_LINE_BYTES) == NULL) {
             /* End of file. Inside a called `:label` block this returns to the
              * caller; otherwise the batch frame ends here. */
@@ -3957,6 +4699,16 @@ static void shell_for_substitute_and_run_bindings(const char *do_command,
     const char *src;
     char *dst;
     size_t remaining;
+
+    /* Foreground break: skip this body and unwind. Every `for` form funnels
+     * through here, so one check covers classic, wildcard, and /f loops;
+     * the per-iteration callers break on the stop mode they already test. */
+    if (shell_abort_requested()) {
+        shell_clear_abort();
+        shell_transcript_append_text("^C\n");
+        s_stop_mode = BATCH_STOP_ALL;
+        return;
+    }
 
     if (expanded_cmd == NULL) {
         shell_transcript_append_text("for: out of memory expanding the loop body\n");

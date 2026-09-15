@@ -6,6 +6,7 @@ idf_component_register(
         "http_server.c"
         "netdiag.c"
         "netbench.c"
+        "tcpterm.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi

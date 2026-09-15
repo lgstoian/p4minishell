@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         test_main.c
         test_shell_parser.c
+        test_shell_abort.c
         test_shell_history.c
         test_shell_prompt.c
         test_shell_quoting.c
@@ -28,14 +29,24 @@ idf_component_register(
         test_tui.c
         test_clipboard.c
         test_history_file.c
+        test_completion.c
+        test_history_search.c
         test_markdown.c
         test_filetype.c
         test_json.c
         test_gfx.c
-        test_asset.c
+        test_csv.c
+        test_import.c
+        test_archive.c
+        test_macro.c
+        test_bind.c
+        test_crypt.c
+        test_tcpterm.c
+        test_userial.c        test_asset.c
         test_pkg.c
         test_theme.c
         test_header.c
+        test_clock.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -50,6 +61,7 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/applib"
         "${CMAKE_SOURCE_DIR}/../components/db"
         "${CMAKE_SOURCE_DIR}/../components/alarm"
+        "${CMAKE_SOURCE_DIR}/../components/archive"
         "${CMAKE_SOURCE_DIR}/../components/modal"
         "${CMAKE_SOURCE_DIR}/../components/tui"
         "${CMAKE_SOURCE_DIR}/../components/markdown"
@@ -68,10 +80,13 @@ idf_component_register(
         applib
         db
         alarm
+        archive
         modal
         tui
         markdown
         filetype
         gfx
+        usb
         esp_timer
+        mbedtls
 )

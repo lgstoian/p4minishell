@@ -23,6 +23,7 @@
 #include "display.h"
 #include "storage.h"
 #include "command.h"
+#include "config_cmd.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "bsp/esp-bsp.h"
@@ -37,14 +38,11 @@ static void header_shell_ini_path(char *out, size_t out_size)
 
 static bool header_save_mode(void)
 {
-    char path[P4_CONFIG_SD_PATH_BYTES];
-
-    header_shell_ini_path(path, sizeof(path));
-    return storage_ini_file_set(path, HEADER_INI_KEY,
-                                header_mode_name(header_get_mode())) == ESP_OK;
+    return config_persist_set("HEADER_MODE", header_mode_name(header_get_mode()));
 }
 
-/** Best-effort boot restore of the saved header mode. Silent without SD. */
+/** Best-effort boot restore of the saved header mode. Silent without SD.
+ * CONFIG.SYS is the store; SHELL.INI is read only as a legacy fallback. */
 void header_restore_saved(void)
 {
     char path[P4_CONFIG_SD_PATH_BYTES];
@@ -52,8 +50,11 @@ void header_restore_saved(void)
     header_mode_t mode;
 
     header_shell_ini_path(path, sizeof(path));
-    if (storage_ini_file_get(path, HEADER_INI_KEY, value, sizeof(value)) == ESP_OK &&
-        header_mode_parse(value, &mode)) {
+    if (config_get_saved(HEADER_INI_KEY, value, sizeof(value)) < 0 &&
+        storage_ini_file_get(path, HEADER_INI_KEY, value, sizeof(value)) != ESP_OK) {
+        return;
+    }
+    if (header_mode_parse(value, &mode)) {
         header_set_mode(mode);
     }
 }
@@ -76,6 +77,8 @@ void shell_command_header(int argc, char **argv)
                                  header_get_visible() ? "ON" : "OFF");
         shell_transcript_appendf("header.dynamic_font=%s\n",
                                  P4_CONFIG_HEADER_DYNAMIC_FONT ? "on" : "off");
+        shell_transcript_appendf("header.status_style=%s\n",
+                                 m.glyph_style ? "glyph" : "words");
         shell_transcript_appendf("header.levels=status:%d sys:%d font:%d center:%s\n",
                                  m.status_level, m.sys_level, m.font_step,
                                  m.show_center ? "on" : "off");

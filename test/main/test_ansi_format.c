@@ -236,3 +236,34 @@ void test_ansi_to_lvgl_recolor(void)
     TEST_ASSERT_TRUE(strlen(out) < 8);
     TEST_ASSERT_TRUE(strchr(out, '#') == NULL || strrchr(out, '#') != strchr(out, '#'));
 }
+
+/* ========================================================================
+ * CSI SPLIT-SEQUENCE TESTS (ansi_csi_trailing, VT100 stream pump)
+ * ======================================================================== */
+
+void test_ansi_csi_trailing_complete(void)
+{
+    /* Plain text and terminated sequences hold nothing back. */
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing((const uint8_t *)"hello", 5));
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing((const uint8_t *)"\x1B[31mhi", 7));
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing((const uint8_t *)"\x1B[2J", 4));
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing((const uint8_t *)"\x1B[?25l", 6));
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing(NULL, 0));
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing((const uint8_t *)"", 0));
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing(NULL, 5));
+}
+
+void test_ansi_csi_trailing_split(void)
+{
+    /* A lone trailing ESC is always incomplete. */
+    TEST_ASSERT_EQUAL_UINT(1, ansi_csi_trailing((const uint8_t *)"hi\x1B", 3));
+    /* Dangling CSI openers and parameter runs are held back whole. */
+    TEST_ASSERT_EQUAL_UINT(2, ansi_csi_trailing((const uint8_t *)"hi\x1B[", 4));
+    TEST_ASSERT_EQUAL_UINT(3, ansi_csi_trailing((const uint8_t *)"hi\x1B[3", 5));
+    TEST_ASSERT_EQUAL_UINT(4, ansi_csi_trailing((const uint8_t *)"hi\x1B[31", 6));
+    TEST_ASSERT_EQUAL_UINT(3, ansi_csi_trailing((const uint8_t *)"\x1B[?", 3));
+    /* A completed sequence earlier in the buffer does not confuse it. */
+    TEST_ASSERT_EQUAL_UINT(3, ansi_csi_trailing((const uint8_t *)"\x1B[0m\x1B[3", 7));
+    /* Bare ESC + non-'[' is complete (single-char escape or plain text). */
+    TEST_ASSERT_EQUAL_UINT(0, ansi_csi_trailing((const uint8_t *)"hi\x1BM", 4));
+}

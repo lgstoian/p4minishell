@@ -50,9 +50,30 @@ def make_ball(path):
     im.save(path)
 
 
+def make_photo(path):
+    """96x64 PHOTO.BMP: a gradient sky + sun + hills, for the image viewer,
+    `draw image` TUI render, and `gfx image` canvas blit (PICS.BAT)."""
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", (96, 64))
+    px = im.load()
+    for y in range(64):
+        for x in range(96):
+            # Vertical gradient: deep blue -> warm horizon.
+            r = int(20 + (y / 63.0) * 200)
+            g = int(60 + (y / 63.0) * 120)
+            b = int(160 - (y / 63.0) * 120)
+            px[x, y] = (r, g, b)
+    d = ImageDraw.Draw(im)
+    d.ellipse([64, 8, 84, 28], fill=(255, 230, 120))          # sun
+    d.polygon([(0, 64), (30, 30), (60, 64)], fill=(30, 110, 45))   # hills
+    d.polygon([(40, 64), (72, 36), (96, 64)], fill=(20, 80, 35))
+    im.save(path)
+
+
 SPRITES = [
     ("SHIP.BMP", make_ship),
     ("BALL.BMP", make_ball),
+    ("PHOTO.BMP", make_photo),
 ]
 
 

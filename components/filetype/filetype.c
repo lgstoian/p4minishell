@@ -24,6 +24,8 @@ static const filetype_entry_t s_filetype_table[] = {
     { ".log", FILETYPE_TEXT },
     { ".sys", FILETYPE_TEXT },
     { ".ini", FILETYPE_TEXT },
+    { ".bmp", FILETYPE_IMAGE },
+    { ".dib", FILETYPE_IMAGE },
 };
 
 #define FILETYPE_TABLE_COUNT ((int)(sizeof(s_filetype_table) / sizeof(s_filetype_table[0])))
@@ -71,6 +73,7 @@ const char *filetype_name(filetype_t type)
     case FILETYPE_MARKDOWN: return "markdown";
     case FILETYPE_JSON: return "json";
     case FILETYPE_TEXT: return "text";
+    case FILETYPE_IMAGE: return "image";
     default: return "unknown";
     }
 }
@@ -83,6 +86,11 @@ bool filetype_is_executable(filetype_t type)
 bool filetype_is_markdown(filetype_t type)
 {
     return type == FILETYPE_MARKDOWN;
+}
+
+bool filetype_is_image(filetype_t type)
+{
+    return type == FILETYPE_IMAGE;
 }
 
 bool filetype_has_extension(const char *path, const char *ext)

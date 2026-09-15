@@ -125,3 +125,19 @@ void test_tui_table_parse_sel(void)
     TEST_ASSERT_EQUAL_UINT32(0x00u, tui_table_parse_sel("1", 0));
     TEST_ASSERT_EQUAL_UINT32(0x00u, tui_table_parse_sel(NULL, 6));
 }
+
+void test_tui_scroll_up_inactive_safe(void)
+{
+    int row = 0;
+    int col = 0;
+
+    /* Scrolling with no allocated grid (VT100 pump not running) must be a
+     * no-op: no crash, cursor and active state untouched. Live scrolling is
+     * hardware-verified via `usb userial term`. */
+    TEST_ASSERT_FALSE(tui_is_active());
+    tui_scroll_up();
+    TEST_ASSERT_FALSE(tui_is_active());
+    tui_get_cursor(&row, &col);
+    TEST_ASSERT_EQUAL_INT(1, row);
+    TEST_ASSERT_EQUAL_INT(1, col);
+}

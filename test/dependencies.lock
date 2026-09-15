@@ -144,6 +144,30 @@ dependencies:
     - esp32h4
     - linux
     version: 1.5.0
+  espressif/usb_host_cdc_acm:
+    component_hash: 5bc1372b46de79ccae1dd17de48e30dfa1e8ab75269c2ebf54da01370f9e42fb
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    - name: espressif/usb
+      registry_url: https://components.espressif.com
+      require: public
+      rules:
+      - if: idf_version >=6.0
+      - if: target not in ["linux"]
+      version: ^1.0.0
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    - esp32s31
+    - linux
+    version: 2.4.1
   espressif/usb_host_hid:
     dependencies: []
     source:
@@ -194,11 +218,12 @@ direct_dependencies:
 - espressif/esp_wifi_remote
 - espressif/led_strip
 - espressif/usb
+- espressif/usb_host_cdc_acm
 - espressif/usb_host_hid
 - espressif/usb_host_msc
 - espressif/wifi_remote_over_eppp
 - idf
 - lvgl/lvgl
-manifest_hash: b4a755547ce6a5a0aeba1b4d1ff4a3508fffcc8b1eb11a256ca11c07544b122f
+manifest_hash: 471bfcf1a2aaae1623b211119f10f12c6c203d94499489f9e0f86fde4616d6c7
 target: esp32p4
 version: 2.0.0

@@ -13,6 +13,32 @@
 #include "keyboard.h"
 #include "p4minishell_config.h"
 
+void test_keyboard_mode_names(void)
+{
+    TEST_ASSERT_EQUAL_STRING("text_lower", keyboard_mode_name(KEYBOARD_MODE_TEXT_LOWER));
+    TEST_ASSERT_EQUAL_STRING("text_upper", keyboard_mode_name(KEYBOARD_MODE_TEXT_UPPER));
+    TEST_ASSERT_EQUAL_STRING("number", keyboard_mode_name(KEYBOARD_MODE_NUMBER));
+    TEST_ASSERT_EQUAL_STRING("symbols", keyboard_mode_name(KEYBOARD_MODE_SYMBOLS));
+    TEST_ASSERT_EQUAL_STRING("nav", keyboard_mode_name(KEYBOARD_MODE_NAV));
+    TEST_ASSERT_EQUAL_STRING("nav2", keyboard_mode_name(KEYBOARD_MODE_NAV2));
+    TEST_ASSERT_EQUAL_STRING("text_lower", keyboard_mode_name(KEYBOARD_MODE_COUNT));
+}
+
+void test_keyboard_mode_parse(void)
+{
+    keyboard_mode_t mode = KEYBOARD_MODE_COUNT;
+
+    TEST_ASSERT_TRUE(keyboard_mode_parse("nav", &mode));
+    TEST_ASSERT_EQUAL_INT(KEYBOARD_MODE_NAV, mode);
+    TEST_ASSERT_TRUE(keyboard_mode_parse("NAV2", &mode));
+    TEST_ASSERT_EQUAL_INT(KEYBOARD_MODE_NAV2, mode);
+    TEST_ASSERT_TRUE(keyboard_mode_parse("symbols", &mode));
+    TEST_ASSERT_EQUAL_INT(KEYBOARD_MODE_SYMBOLS, mode);
+    TEST_ASSERT_FALSE(keyboard_mode_parse("bogus", &mode));
+    TEST_ASSERT_FALSE(keyboard_mode_parse(NULL, &mode));
+    TEST_ASSERT_FALSE(keyboard_mode_parse("nav", NULL));
+}
+
 void test_keyboard_osk_dedup(void)
 {
     /* A large, distinct base id so this suite is independent of the shared

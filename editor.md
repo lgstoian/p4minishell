@@ -5,7 +5,7 @@
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v0.38.1):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
+> **Current build (v0.38.1):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 281/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
 
 The `edit` command opens a modal, touch-first text editor that can create and
 modify any text file on the SD card — batch scripts, `.txt`, `.sys`, config
@@ -36,7 +36,9 @@ While the editor is open the shell is paused: the transcript region becomes
 the editor surface (exactly the same size as the normal shell transcript), the
 input row becomes a status bar, and every input source (USB, touch, serial)
 drives the editor. Quitting returns you to the shell. The on-screen keyboard
-stays at the bottom of the screen exactly as it does in the shell.
+stays at the bottom of the screen exactly as it does in the shell, and it opens
+directly on the **Nav** page so every editor button is reachable by touch from
+the first frame; `abc` returns to the letters page for typing.
 
 ## Editing basics
 
@@ -119,13 +121,19 @@ to that line. Invalid numbers clamp to the file's first/last line.
 | Action | Touch keyboard | USB keyboard | Serial console |
 |--------|----------------|--------------|----------------|
 | Save | `Save` | `Ctrl+S` or `F2` | `\s` |
-| Save As | `SaveAs` | `Ctrl+O` | — |
+| Save As | `SaveAs` | `Ctrl+O` | `\o` |
+| Open | `Open` | `F4` | `\open` |
 | Quit | `Quit` | `Esc` | `\q` |
 
 - **Save** writes the file back to its original path. An unnamed buffer opens
   the Save-As prompt instead.
 - **Save As** prompts for a path (pre-filled with the current one). After a
   successful Save-As the editor's title switches to the new path.
+- **Open** switches to another file. It prompts for a path (pre-filled with the
+  current one, exactly like Save As); if the buffer has unsaved changes it first
+  asks `Open without saving? (Y/N)`. A missing path opens a new empty buffer, so
+  `Open` also creates files. A stale Save-As target never follows into the new
+  file.
 - **Quit** discards the session. If you have unsaved changes the editor asks
   `Quit without saving? (Y/N)` first — press `Y` to discard or `N` to keep
   editing. This guards against losing work by accident.
@@ -146,23 +154,30 @@ cross-line edits. Note that DOS EDIT had no undo; this is a bonus.
 ## Touch keyboard layout
 
 The on-screen keyboard has **six pages** — every editor feature is reachable
-from the touch keyboard alone:
+from the touch keyboard alone. The editor **opens on the Nav page**:
 
 1. **Letters** (default) — lowercase.
 2. **Uppercase** — `ABC`.
 3. **Symbols** — every printable ASCII character including the shell-critical
-   `|`, `^`, `~`, and `` ` ``.
-4. **Nav** — enter it from the symbols page with the `Nav` button. Carries
-   `Tab`, `Ins`, `Del`, arrows, `Home`, `End`, `PgUp`, `PgDn`, `Find`, `Next`
-   (repeat find), `Rep`, `Goto`, `Undo`, `Redo`, `Save`, `SaveAs`, `Quit`,
-   and `Nav2` (-> the Edit page). `abc` returns to the letters page.
-5. **Edit** — enter it with `Nav2` on the Nav page. Carries `Copy`, `Cut`,
-   `Paste`, `SelAll`, `WdL`/`WdR` (word left/right), `DocH`/`DocE` (document
-   home/end), `DelLn` (delete line), `DelE` (delete to end of line), `Nav1`
-   (-> the Nav page), and `abc`.
+   `|`, `^`, `~`, and `` ` ``; its `Nav` button switches to the Nav page.
+4. **Nav** — the editor's control page, a uniform 4×6 grid: `Tab`, arrows,
+   `Home`/`End`, `PgUp`/`PgDn`, `Del`, `Ins`, `Undo`, `Redo`, `Find`, `Next`
+   (repeat find), `Replace`, `ReplAll`, `Case`, `Goto`, `Save`, `SaveAs`,
+   `Open`, `Edit` (→ the Edit page), and `abc` (→ letters).
+5. **Edit** — enter it with `Edit` on the Nav page, a 3×6 grid: `Copy`, `Cut`,
+   `Paste`, `SelAll`, `WordL`/`WordR` (word left/right), `DocTop`/`DocBot`
+   (document home/end), `DelLine` (delete line), `DelEOL` (delete to end of
+   line), `Reload`, `Quit`, `Preview`, `Comment`, `Match`, `Wrap`, `Nav`
+   (→ the Nav page), and `abc`.
+
+When a prompt asks for text (Find, Replace, Go to line, Save As, Open) the
+keyboard switches to the letters page automatically; committing or cancelling
+the prompt returns it to the Nav page.
 
 In the shell (editor closed) the same pages work for typing commands; the
-`Nav`/`Edit` pages are only available while the editor is open.
+`Nav`/`Edit` pages are only available while the editor is open. The shell input
+row also has a `Tab` button, which performs the same completion as the USB
+`Tab` key.
 
 ## Serial console
 
@@ -173,11 +188,19 @@ verb controls the editor; any other line is typed as text followed by Enter:
 |------|--------|
 | `\q` or `\quit` | Quit (confirms when there are unsaved changes) |
 | `\s` or `\save` | Save |
-| `\f` | Find (type text, then Enter) |
-| `\g` or `\goto` | Go to line (type the number, then Enter) |
 | `\o` or `\saveas` | Save As (type the path, then Enter) |
+| `\open` | Open another file (type the path, then Enter; F4) |
+| `\f` or `\find` | Find (type text, then Enter) |
+| `\g` or `\goto` | Go to line (type the number, then Enter) |
 | `\u` or `\undo` | Undo |
 | `\r` or `\redo` | Redo |
+| `\all` or `\replaceall` | Replace all |
+| `\c` or `\case` | Toggle case |
+| `\b` or `\match` | Jump to matching bracket |
+| `\co` or `\comment` | Toggle line comment |
+| `\w` or `\wrap` | Toggle word wrap |
+| `\l` or `\reload` | Reload from disk |
+| `\p` or `\preview` | Toggle preview |
 | `\a` or `\selectall` | Select all |
 
 ## Syntax highlighting
@@ -192,14 +215,23 @@ is plain white text. Toggle this with
 
 | Value | Default |
 |-------|---------|
-| Maximum file size | `P4_CONFIG_EDITOR_MAX_BYTES` (64 KB) |
-| Maximum lines | `P4_CONFIG_EDITOR_MAX_LINES` (2048) |
+| Maximum file size | `P4_CONFIG_EDITOR_MAX_BYTES` (1 MB) |
+| Maximum lines | `P4_CONFIG_EDITOR_MAX_LINES` (65536) |
 | Undo depth | `P4_CONFIG_EDITOR_UNDO_DEPTH` (64) |
+| Undo snapshot byte budget | `P4_CONFIG_EDITOR_UNDO_MAX_BYTES` (4 MB) |
+| Undo disabled above | `P4_CONFIG_EDITOR_UNDO_MAX_SNAPSHOT_BYTES` (256 KB) |
+| Rendered rows at once | `P4_CONFIG_EDITOR_RENDER_ROWS` (256) |
 | Tab width | `P4_CONFIG_EDITOR_TAB_WIDTH` (4) |
 | Find / Replace string length | `P4_CONFIG_EDITOR_FIND_BYTES` (128) |
 
 Files beyond the byte/line limits are refused with an error message rather
-than truncated, so a save can never silently corrupt them.
+than truncated, so a save can never silently corrupt them. The document and
+its caches are **PSRAM-backed** (the internal DMA heap is only used for a
+small SD bounce buffer), and only `P4_CONFIG_EDITOR_RENDER_ROWS` rows are
+materialized as LVGL spans at once — larger files scroll through a moving
+window, so opening a big file stays responsive. Above the snapshot threshold
+undo is unavailable for the session (editing a large file would otherwise copy
+the whole document per keystroke); the byte budget bounds undo memory.
 
 ## Troubleshooting
 

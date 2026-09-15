@@ -189,6 +189,24 @@ lv_obj_t *windows_get_scroll_up_button(void);
 /** Get the transcript scroll-down button (input row). */
 lv_obj_t *windows_get_scroll_down_button(void);
 
+/** Get the input-row Tab completion button. */
+lv_obj_t *windows_get_tab_button(void);
+
+/** Get the input-row Stop (foreground-break) button. */
+lv_obj_t *windows_get_stop_button(void);
+
+/**
+ * Request Stop-button visibility (shows while a command runs, in shell
+ * input-row mode only). Must run on the LVGL task.
+ */
+void windows_set_stop_visible(bool visible);
+
+/** Inline completion ghost label (child of the input line). */
+lv_obj_t *windows_get_input_ghost(void);
+
+/** Reverse-history search query label (floats above the input row). */
+lv_obj_t *windows_get_search_label(void);
+
 /** Get the input row container (holds input line + prev/next/scroll buttons). */
 lv_obj_t *windows_get_input_row(void);
 

@@ -6,8 +6,11 @@
  * hardware (see apps/companion/alarm_test.py and command.md). These tests
  * cover the pure, hardware-free logic in components/alarm:
  *   - weekday-mask matching for weekly recurrences
- *   - recurrence advance (none / daily / weekly)
+ *   - recurrence advance (none / daily / weekly / monthly / yearly)
  *   - local "YYYY-MM-DD HH:MM" parsing into a Unix timestamp
+ *
+ * Date assertions are TZ-relative (weekday, month, day, time-of-day via
+ * localtime_r) so they hold in any timezone, DST quirks aside.
  */
 
 #include "unity.h"
@@ -138,4 +141,119 @@ void test_alarm_parse_invalid(void)
     TEST_ASSERT_FALSE(alarm_parse_datetime("2026-08-18", NULL, &t));
     /* Output untouched on failure (INT32: no 64-bit Unity support here). */
     TEST_ASSERT_EQUAL_INT32(12345, (int32_t)t);
+}
+
+/* ========================================================================
+ * MONTHLY / YEARLY ADVANCE
+ * ======================================================================== */
+
+void test_alarm_advance_monthly_by_day(void)
+{
+    time_t t;
+    time_t next;
+    struct tm ntm;
+
+    TEST_ASSERT_TRUE(alarm_parse_datetime("2026-01-15", "09:00", &t));
+    next = alarm_advance_monthly(t, 15, 0, 0);
+    TEST_ASSERT_TRUE(next > t);
+    localtime_r(&next, &ntm);
+    TEST_ASSERT_EQUAL_INT(2, ntm.tm_mon + 1);
+    TEST_ASSERT_EQUAL_INT(15, ntm.tm_mday);
+    TEST_ASSERT_EQUAL_INT(9, ntm.tm_hour);
+
+    /* Day 31 skips short months: Jan 31 -> Mar 31. */
+    TEST_ASSERT_TRUE(alarm_parse_datetime("2026-01-31", "09:00", &t));
+    next = alarm_advance_monthly(t, 31, 0, 0);
+    TEST_ASSERT_TRUE(next > t);
+    localtime_r(&next, &ntm);
+    TEST_ASSERT_EQUAL_INT(3, ntm.tm_mon + 1);
+    TEST_ASSERT_EQUAL_INT(31, ntm.tm_mday);
+
+    /* Zero day derives from `when`. */
+    TEST_ASSERT_TRUE(alarm_parse_datetime("2026-01-20", "09:00", &t));
+    next = alarm_advance_monthly(t, 0, 0, 0);
+    localtime_r(&next, &ntm);
+    TEST_ASSERT_EQUAL_INT(2, ntm.tm_mon + 1);
+    TEST_ASSERT_EQUAL_INT(20, ntm.tm_mday);
+}
+
+void test_alarm_advance_monthly_nth(void)
+{
+    time_t t;
+    time_t next;
+    struct tm ntm;
+
+    /* 2026-09-15 is a Tuesday: 2nd Tuesday lands in October. */
+    TEST_ASSERT_TRUE(alarm_parse_datetime("2026-09-15", "09:00", &t));
+    next = alarm_advance_monthly(t, 0, 2, 2);
+    TEST_ASSERT_TRUE(next > t);
+    localtime_r(&next, &ntm);
+    TEST_ASSERT_EQUAL_INT(10, ntm.tm_mon + 1);
+    TEST_ASSERT_EQUAL_INT(2, ntm.tm_wday);
+    TEST_ASSERT_EQUAL_INT(2, (ntm.tm_mday - 1) / 7 + 1);
+    TEST_ASSERT_EQUAL_INT(9, ntm.tm_hour);
+
+    /* Last Tuesday of October 2026 is the 27th. */
+    next = alarm_advance_monthly(t, 0, -1, 2);
+    TEST_ASSERT_TRUE(next > t);
+    localtime_r(&next, &ntm);
+    TEST_ASSERT_EQUAL_INT(10, ntm.tm_mon + 1);
+    TEST_ASSERT_EQUAL_INT(27, ntm.tm_mday);
+}
+
+void test_alarm_advance_yearly(void)
+{
+    time_t t;
+    time_t next;
+    struct tm ntm;
+
+    TEST_ASSERT_TRUE(alarm_parse_datetime("2026-09-15", "09:00", &t));
+    next = alarm_advance_yearly(t, 0, 0);
+    TEST_ASSERT_TRUE(next > t);
+    localtime_r(&next, &ntm);
+    TEST_ASSERT_EQUAL_INT(2027, ntm.tm_year + 1900);
+    TEST_ASSERT_EQUAL_INT(9, ntm.tm_mon + 1);
+    TEST_ASSERT_EQUAL_INT(15, ntm.tm_mday);
+
+    /* Feb 29 skips common years: 2024 -> 2028. */
+    TEST_ASSERT_TRUE(alarm_parse_datetime("2024-02-29", "09:00", &t));
+    next = alarm_advance_yearly(t, 2, 29);
+    TEST_ASSERT_TRUE(next > t);
+    localtime_r(&next, &ntm);
+    TEST_ASSERT_EQUAL_INT(2028, ntm.tm_year + 1900);
+    TEST_ASSERT_EQUAL_INT(2, ntm.tm_mon + 1);
+    TEST_ASSERT_EQUAL_INT(29, ntm.tm_mday);
+}
+
+void test_alarm_advance_event_dispatch(void)
+{
+    time_t t;
+    alarm_event_t e;
+
+    TEST_ASSERT_TRUE(alarm_parse_datetime("2026-01-15", "09:00", &t));
+    memset(&e, 0, sizeof(e));
+    /* Monthly with zero params derives the day from `when`. */
+    e.recur = ALARM_RECUR_MONTHLY;
+    {
+        time_t next = alarm_advance_event(t, &e);
+        struct tm ntm;
+        TEST_ASSERT_TRUE(next > t);
+        localtime_r(&next, &ntm);
+        TEST_ASSERT_EQUAL_INT(2, ntm.tm_mon + 1);
+        TEST_ASSERT_EQUAL_INT(15, ntm.tm_mday);
+    }
+    /* Yearly derives month and day. */
+    e.recur = ALARM_RECUR_YEARLY;
+    {
+        time_t next = alarm_advance_event(t, &e);
+        struct tm ntm;
+        TEST_ASSERT_TRUE(next > t);
+        localtime_r(&next, &ntm);
+        TEST_ASSERT_EQUAL_INT(2027, ntm.tm_year + 1900);
+        TEST_ASSERT_EQUAL_INT(1, ntm.tm_mon + 1);
+    }
+    /* None and NULL pass through. */
+    e.recur = ALARM_RECUR_NONE;
+    TEST_ASSERT_TRUE(alarm_advance_event(t, &e) == t);
+    TEST_ASSERT_TRUE(alarm_advance_event(t, NULL) == t);
 }

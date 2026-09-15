@@ -160,17 +160,46 @@
 /** Default SD profile for `history /save` / `history /load`. */
 #define P4_CONFIG_HISTORY_PROFILE            "HISTORY.TXT"
 
+/** Auto-load the history profile at boot and auto-save it as it changes. */
+#define P4_CONFIG_HISTORY_AUTOSAVE           1
+
 /** Maximum matches reported by Tab completion before truncation. */
 #define P4_CONFIG_COMPLETION_MAX_MATCHES     32
 
-/** Maximum bytes of a file the `edit` editor will load into RAM. */
-#define P4_CONFIG_EDITOR_MAX_BYTES           (64 * 1024)
+/** Show an inline ghost-text completion after the caret as you type. */
+#define P4_CONFIG_COMPLETION_GHOST           1
 
-/** Maximum lines the `edit` editor will load into RAM. */
-#define P4_CONFIG_EDITOR_MAX_LINES           2048
+/** Maximum bytes of a file the `edit` editor will load into RAM. The
+ *  document, its undo snapshots, and the view caches are PSRAM-backed, so this
+ *  is bounded by the PSRAM budget rather than the internal DMA heap. */
+#define P4_CONFIG_EDITOR_MAX_BYTES          (1024 * 1024)
 
-/** Undo/redo depth kept by the `edit` editor (edit operations). */
+/** Maximum lines the `edit` editor will load into RAM. Only a bounded window
+ *  of rows is materialized as LVGL spans (P4_CONFIG_EDITOR_RENDER_ROWS). */
+#define P4_CONFIG_EDITOR_MAX_LINES           65536
+
+/** Undo/redo depth kept by the `edit` editor (edit operations). The ring is
+ *  also byte-budgeted by P4_CONFIG_EDITOR_UNDO_MAX_BYTES. */
 #define P4_CONFIG_EDITOR_UNDO_DEPTH          64
+
+/** Total bytes of full-document undo/redo snapshots the editor keeps. Older
+ *  steps are evicted once the ring exceeds this, so undo memory is bounded
+ *  even for a multi-megabyte document (at least the newest step is kept). */
+#define P4_CONFIG_EDITOR_UNDO_MAX_BYTES      (4 * 1024 * 1024)
+
+/** Largest document (approximate bytes) for which the editor takes a
+ *  full-document snapshot per edit. Above this, undo is disabled for the
+ *  session so editing a large file stays responsive (each edit would otherwise
+ *  copy the whole document). Smaller documents keep full undo. */
+#define P4_CONFIG_EDITOR_UNDO_MAX_SNAPSHOT_BYTES (256 * 1024)
+
+/** Maximum document rows materialized as LVGL spans at once. Larger documents
+ *  render a window around the cursor/scroll position (the overlays and touch
+ *  mapping use document coordinates, so they stay aligned). Kept near a
+ *  screenful plus a scroll margin: the span group is rebuilt on every edit, so
+ *  a large window would make typing and scrolling quadratic in the row count
+ *  and trip the task watchdog. */
+#define P4_CONFIG_EDITOR_RENDER_ROWS         256
 
 /** Tab stop width (columns) used by the `edit` editor. */
 #define P4_CONFIG_EDITOR_TAB_WIDTH           4
@@ -208,7 +237,7 @@
  * Line numbers are right-aligned in this width followed by one space, so the
  * text column starts just past the gutter.
  */
-#define P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS 4
+#define P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS 5
 
 /** True when the `edit` editor highlights the cursor's current line. */
 #define P4_CONFIG_EDITOR_CURRENT_LINE         1
@@ -229,8 +258,34 @@
 /** Height of the on-screen LVGL keyboard in pixels. */
 #define P4_CONFIG_KEYBOARD_HEIGHT            240
 
-/** Period for the header status refresh timer in milliseconds. */
-#define P4_CONFIG_HEADER_REFRESH_PERIOD_MS   5000
+/**
+ * Adaptive header status-refresh cadence (milliseconds). The header is polled
+ * at the FIRST matching interval below; see header_refresh.c:
+ *   display off by idle -> WAKE, OTA/bg job -> BUSY,
+ *   Wi-Fi starting -> CONNECTING, early boot -> STARTUP, else IDLE
+ * (IDLE is also clamped to the next minute boundary for an exact clock and to
+ * the pending idle-display-off deadline).
+ */
+#define P4_CONFIG_HEADER_REFRESH_IDLE_MS        2000
+#define P4_CONFIG_HEADER_REFRESH_WAKE_MS        150
+#define P4_CONFIG_HEADER_REFRESH_BUSY_MS        1000
+#define P4_CONFIG_HEADER_REFRESH_CONNECTING_MS  750
+#define P4_CONFIG_HEADER_REFRESH_STARTUP_MS     500
+#define P4_CONFIG_HEADER_REFRESH_MIN_MS         100
+
+/**
+ * Expensive telemetry (heap, CPU runtime-stats snapshot, battery ADC) is
+ * sampled no faster than this, independent of the faster status poll, so a
+ * busy/connecting poll never multiplies the task-snapshot allocation (critical
+ * during a C6 OTA, when PSRAM is unavailable).
+ */
+#define P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS    5000
+
+/** Uptime (seconds) below which the header uses the faster STARTUP cadence. */
+#define P4_CONFIG_HEADER_STARTUP_GRACE_S        15
+
+/** Backward-compatible alias for the old fixed refresh period. */
+#define P4_CONFIG_HEADER_REFRESH_PERIOD_MS      P4_CONFIG_HEADER_REFRESH_IDLE_MS
 
 /** Height of the input row (prompt line) in pixels. */
 #define P4_CONFIG_INPUT_ROW_HEIGHT           52
@@ -338,6 +393,23 @@
 
 /** Default auto-cancel timeout for modal surfaces in ms (0 = no timeout). */
 #define P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS        0
+
+/* ========================================================================
+ * IMAGE SUPPORT (BMP)
+ * ========================================================================
+ * One BMP decoder lives in components/gfx (24/32-bit BI_RGB, top-down or
+ * bottom-up). The viewer, `draw image`, and `gfx image` reuse it. A source
+ * image is never materialized at native size: it is decoded straight to a
+ * fit-to-screen RGB565 target (bounded by GFX_IMAGE_MAX_W/H), so these caps
+ * bound the file that can be opened while memory stays predictable. */
+
+/** Largest BMP file the image path will ingest (a 1024x640 24-bit BMP is
+ * ~1.9 MB; this covers it with headroom while keeping the staging buffer
+ * bounded). */
+#define P4_CONFIG_IMAGE_MAX_BYTES               (2 * 1024 * 1024)
+
+/** Show the viewer fit-to-screen (1) or at native size only (0). */
+#define P4_CONFIG_IMAGE_VIEWER_FIT              1
 
 /* ========================================================================
  * KEYBOARD PARAMETERS
@@ -453,6 +525,25 @@
 /** Default echo-request count for `ping` when no count is given. */
 #define P4_CONFIG_PING_COUNT_DEFAULT        4
 
+/* ========================================================================
+ * TCP TERMINAL (tcpterm)
+ * ========================================================================
+ * One-shot TCP request/response sessions in components/networking (the
+ * sole owner of the lwIP socket surface alongside ping/dns/http). Bounded
+ * connect/send/idle budgets; remote SGR colours pass the sanitizer. */
+
+/** Milliseconds a `tcpterm` connect may take before it is abandoned. */
+#define P4_CONFIG_TCP_CONNECT_TIMEOUT_MS    10000
+
+/** Default idle milliseconds with no reply data before `tcpterm` stops. */
+#define P4_CONFIG_TCP_IDLE_TIMEOUT_MS       5000
+
+/** Maximum reply bytes a `tcpterm` session buffers/prints. */
+#define P4_CONFIG_TCP_RX_MAX_BYTES          65536
+
+/** Maximum request bytes a `tcpterm` session sends. */
+#define P4_CONFIG_TCP_TX_MAX_BYTES          65536
+
 /** Hard upper bound for `ping <host> <count>`. A larger request is clamped. */
 #define P4_CONFIG_PING_COUNT_MAX            10
 
@@ -482,6 +573,62 @@
 /** Maximum timezone string length (POSIX TZ string, e.g. "UTC" or
  *  "CET-1CEST,M3.5.0,M10.5.0/3"). */
 #define P4_CONFIG_TIMEZONE_BYTES             64
+
+/**
+ * Unix timestamp (2020-01-01 UTC) at or above which the system clock is
+ * considered set. Below it the clock is still at the boot epoch and the header
+ * shows "--:--". Lets a manual `time`/`date` set count as valid, not only SNTP.
+ */
+#define P4_CONFIG_CLOCK_VALID_EPOCH          1577836800
+
+/**
+ * IP-geolocation endpoint used to auto-detect the local timezone from the
+ * network (no hardcoded zone). The `/line/` form returns plain text lines
+ * (timezone name, then UTC offset in seconds) so no JSON parser is needed.
+ */
+#define P4_CONFIG_TIMEZONE_URL               "http://ip-api.com/line/?fields=timezone,offset"
+
+/** Re-detect the timezone this often (seconds) so DST/travel stays correct. */
+#define P4_CONFIG_TIMEZONE_RESYNC_SECS       21600
+
+/** Max timezone probes before giving up (then SNTP still runs in UTC). */
+#define P4_CONFIG_TIMEZONE_MAX_ATTEMPTS      5
+
+/** Stopwatch slots for the `timer` command (each holds one named run). */
+#define P4_CONFIG_TIMER_SLOTS                8
+
+/** Maximum bytes for a `timer` slot name (plus the terminator). */
+#define P4_CONFIG_TIMER_NAME_BYTES            16
+
+/* ---- RTC backup (clock_rtc.c: NVS anchor + optional external chip) ---- */
+
+/** Refresh the NVS time anchor this often (seconds); 0 disables the timer
+ *  (anchors still land on SNTP sync, manual set, and reboot). */
+#define P4_CONFIG_RTC_ANCHOR_PERIOD_S        3600
+
+/** Enable the external I2C RTC driver path (0 = internal RTC only). */
+#define P4_CONFIG_RTC_EXT_ENABLE             0
+
+/** 7-bit I2C address of the external RTC (DS3231 register map). */
+#define P4_CONFIG_RTC_EXT_ADDR               0x68
+
+/** I2C GPIO numbers for the external RTC (-1 = unset, driver stays off). */
+#define P4_CONFIG_RTC_EXT_SDA                (-1)
+#define P4_CONFIG_RTC_EXT_SCL                (-1)
+
+/* ---- ARCHIVE (USTAR .p4a backups: archive create|extract|list|verify) ---- */
+
+/** Maximum members (files+dirs+skipped) per archive operation. */
+#define P4_CONFIG_ARCHIVE_MAX_ENTRIES        512
+
+/** Streaming chunk bytes for archive data (create/extract/verify). */
+#define P4_CONFIG_ARCHIVE_CHUNK_BYTES        4096
+
+/** I2C port number for the external RTC. */
+#define P4_CONFIG_RTC_EXT_PORT               0
+
+/** Milliseconds for one external-RTC I2C transaction. */
+#define P4_CONFIG_RTC_EXT_TIMEOUT_MS         50
 
 /* ========================================================================
  * HTTP CLIENT (httpget / wget)
@@ -849,6 +996,36 @@
  *  auto-loads after CONFIG.SYS (a batch file of `alias name=value` lines). */
 #define P4_CONFIG_ALIAS_PROFILE              "ALIASES.BAT"
 
+/* ========================================================================
+ * KEY BINDS (bind F1..F12 + Ctrl+letter chords, USB keys)
+ * ========================================================================
+ * A small RAM-only table mapping USB HID function keys (F1 = 0x3A ..
+ * F12 = 0x45) and Ctrl+letter chords (^A..^Z, ^C reserved for break) to
+ * command lines. A bound key fires its line onto the command worker while
+ * the prompt is idle, and chords additionally fire while a non-editor
+ * modal owns the screen (never inside a key wait or a batch file). The
+ * table persists to a batch-style profile file on the SD card
+ * (`bind F5 <line>` / `bind ^G <line>` lines), which boot.c auto-loads
+ * after the alias profile. */
+
+/** Maximum number of bound keys (F-keys and chords share the table). */
+#define P4_CONFIG_BIND_MAX                   12
+
+/** Maximum bytes for a bind command line (including the null terminator). */
+#define P4_CONFIG_BIND_VALUE_BYTES           256
+
+/** SD-root-relative profile filename that `bind /save` writes and boot.c
+ *  auto-loads after the alias profile (a batch file of `bind` lines). */
+#define P4_CONFIG_BIND_PROFILE               "BIND.BAT"
+
+/* ---- MACRO RECORDER (macro record/stop/play) ---- */
+
+/** Capture buffer bytes for `macro record` (lines + newlines + NUL). */
+#define P4_CONFIG_MACRO_BYTES                4096
+
+/** Default capture file for `macro record` with no path (cwd-relative). */
+#define P4_CONFIG_MACRO_DEFAULT_FILE         "MACRO.BAT"
+
 /** Maximum bytes for an environment variable name. */
 #define P4_CONFIG_ENV_NAME_BYTES             32
 
@@ -984,12 +1161,18 @@
  * ACOSH, ATANH, ASN, ACS, ATN, HYP, SQR, EXP, LN, LOG, FACT, NCR, NPR, INT,
  * FIX, FRAC, ROUND, SGN, MOD, PI, RAN#, POL, REC, DMS/DMS$, DEG, CUR,
  * VAL/VALF, STR$, HEX$, ASC, CHR$, LEN, LEFT$, MID$, RIGHT$, `&H`/`0x` hex
- * literals) and an ANGLE degree/radian mode. It lives in components/batch
+ * literals), financial functions (PV, FV, PMT, NPER, RATE, NPV, IRR, SLN,
+ * SYD, DB) and date functions (DATE, YEAR, MONTH, DAY, DOW, TODAY, DATEADD,
+ * DAYS, EOMONTH, DATEVALUE, DATESTR) and an ANGLE degree/radian mode. It lives in components/batch
  * (calc.c) and is a batch language verb like `set`.
  */
 
 /** Maximum bytes of a string result or string argument in a `calc` expression. */
 #define P4_CONFIG_CALC_STR_BYTES             32
+
+/** Maximum function arguments in a `calc` call (financial NPV/IRR lists,
+ *  RATE with guess). */
+#define P4_CONFIG_CALC_ARG_MAX               8
 
 /** Maximum parenthesis / function nesting depth in a `calc` expression. */
 #define P4_CONFIG_CALC_MAX_DEPTH             16
@@ -1042,6 +1225,26 @@
 
 /** Maximum length of the `for /f` `delims=` character set (bytes). */
 #define P4_CONFIG_FORF_DELIMS_BYTES          16
+
+/* ========================================================================
+ * CSV GRID VERBS (csv rows|cols|cell|eval)
+ * ========================================================================
+ * Minimal spreadsheet substrate for batch apps: RFC-4180-subset parsing
+ * (comma separators, `"quoted"` fields, `""` escapes) plus `=EXPR` formula
+ * evaluation through the `calc` engine with `R<row>C<col>` references.
+ * Bounds keep one sheet in the heap budget of the command worker path. */
+
+ /** Maximum columns the `csv` verbs track per row (extras are ignored). */
+#define P4_CONFIG_CSV_MAX_COLS               32
+
+/** Maximum bytes of one dequoted CSV field. */
+#define P4_CONFIG_CSV_FIELD_BYTES            256
+
+/** Maximum rows the `csv eval` grid holds (extras are ignored). */
+#define P4_CONFIG_CSV_ROWS_MAX               256
+
+/** Formula-resolution passes for `csv eval` (`R1C1`-style references). */
+#define P4_CONFIG_CSV_PASSES                 8
 
 /* ========================================================================
  * APPLIB (native-app runtime library, components/applib)
@@ -1361,6 +1564,9 @@
 /** Header CPU bar warning threshold (percent). */
 #define P4_CONFIG_HEADER_CPU_WARN_PCT        85
 
+/** Header CPU critical threshold (percent) — indicator turns red at or above. */
+#define P4_CONFIG_HEADER_CPU_CRIT_PCT        95
+
 /**
  * Show a small CPU history sparkline in the header system panel instead of
  * the single-value CPU bar. 1 = sparkline, 0 = the plain bar.
@@ -1376,11 +1582,30 @@
 /** Header memory low threshold (percent). */
 #define P4_CONFIG_HEADER_MEM_LOW_PCT         30
 
+/** Header memory critical threshold (percent free) — indicator turns red at or below. */
+#define P4_CONFIG_HEADER_MEM_CRIT_PCT        15
+
 /** Header battery low threshold (percent). */
 #define P4_CONFIG_HEADER_BAT_LOW_PCT         15
 
+/** Header battery critical threshold (percent) — indicator turns red at or below. */
+#define P4_CONFIG_HEADER_BAT_CRIT_PCT        5
+
 /** Display duration for transient header notifications in milliseconds. */
 #define P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS   3000
+
+/**
+ * Depth of the header notification queue. Notifications are shown FIFO; when
+ * the queue is full the oldest QUEUED entry is dropped (the one currently
+ * displayed is never dropped) so the newest alert always enters.
+ */
+#define P4_CONFIG_HEADER_NOTIFY_QUEUE        4
+
+/** Show the local time (HH:MM) in the idle notification area (1 = enabled). */
+#define P4_CONFIG_HEADER_CLOCK               1
+
+/** Show the activity indicator (`A`) while a C6 OTA or a bg job runs. */
+#define P4_CONFIG_HEADER_ACTIVITY            1
 
 /**
  * Minimum usable width (px) reserved for the center notification region.
@@ -1396,6 +1621,25 @@
  * AUTO mode. 1 = enabled.
  */
 #define P4_CONFIG_HEADER_DYNAMIC_FONT        1
+
+/**
+ * Status-indicator presentation style.
+ *   words  — verbose labels ("WiFi HI", "USB ON", "SD ON")
+ *   glyph  — one compact colored ASCII glyph per indicator ("W", "U", "S"),
+ *            which returns the reclaimed width to the notification area.
+ * Both styles color the glyph/label by state (see header_status.c).
+ */
+#define P4_CONFIG_HEADER_STATUS_WORDS        0
+#define P4_CONFIG_HEADER_STATUS_GLYPH        1
+#define P4_CONFIG_HEADER_STATUS_STYLE        P4_CONFIG_HEADER_STATUS_GLYPH
+
+/** Enable tap/long-press detail on a status indicator (1 = enabled). */
+#define P4_CONFIG_HEADER_DETAIL_ON_TAP       1
+
+/** Wi-Fi RSSI signal thresholds (dBm), strongest first. */
+#define P4_CONFIG_HEADER_RSSI_STRONG         (-55)
+#define P4_CONFIG_HEADER_RSSI_GOOD           (-68)
+#define P4_CONFIG_HEADER_RSSI_WEAK           (-80)
 
 /** Sentinel RSSI reported when no Wi-Fi AP information is available (dBm). */
 #define P4_CONFIG_HEADER_RSSI_UNKNOWN        (-127)
@@ -1542,6 +1786,32 @@
 /** Number of simultaneous keys in a USB keyboard report. */
 #define P4_CONFIG_USB_KEYBOARD_KEYS          6
 
+/* ---- USB CDC-ACM serial (`usb userial`, userial.c + command verbs) ---- */
+
+/** RX ring bytes for the open CDC-ACM serial device. */
+#define P4_CONFIG_USERIAL_RING_BYTES         4096
+
+/** Bulk-transfer chunk / TX scratch bytes for the serial device. */
+#define P4_CONFIG_USERIAL_CHUNK_BYTES        1024
+
+/** Milliseconds a single CDC write may block before it is reported failed. */
+#define P4_CONFIG_USERIAL_OP_TIMEOUT_MS      4000
+
+/** Milliseconds `userial open` waits for a matching device to appear. */
+#define P4_CONFIG_USERIAL_OPEN_TIMEOUT_MS    5000
+
+/** Default idle milliseconds for `userial term` before it closes itself. */
+#define P4_CONFIG_USERIAL_TERM_IDLE_MS       30000
+
+/* ---- VT100 terminal mode (`usb userial term`, userial_commands.c) ---- */
+
+/** Render `userial term` as a VT100 screen (TUI grid + SGR/cursor/erase)
+ *  instead of the legacy sanitized-transcript passthrough. 1 = enabled. */
+#define P4_CONFIG_VT100_ENABLE               1
+
+/** Bytes reserved for holding a split CSI sequence across RX reads. */
+#define P4_CONFIG_VT100_PENDING_BYTES        64
+
 /* ========================================================================
  * C6 OTA PARAMETERS
  * ======================================================================== */
@@ -1597,15 +1867,20 @@
 
 /** Depth of the async command queue (pointers only; the worker owns them).
  *  Raised from 4: bursts (pasted lines, scripted drivers, modal chains)
- *  dropped the 5th command with a zero-timeout submit. */
-#define P4_CONFIG_COMMAND_QUEUE_DEPTH        16
+ *  dropped the 5th command with a zero-timeout submit. Raised again to 32
+ *  alongside PSRAM-backed request payloads so a transiently-busy worker does
+ *  not drop a normal burst without costing internal DMA-capable RAM. */
+#define P4_CONFIG_COMMAND_QUEUE_DEPTH        32
 
 /** Bounded wait when the async queue is full (submit runs on the LVGL/UART
  *  tasks, never the worker, so waiting cannot deadlock the pipeline). */
 #define P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS 500
 
-/** Stack size for the UART/serial console reader task. */
-#define P4_CONFIG_UART_CONSOLE_TASK_STACK    12288
+/** Stack size for the UART/serial console reader task. Sized above the old
+ *  12 KB because the task now also runs the streaming `screenshot` capture
+ *  (LVGL snapshot) while a modal blocks the worker. The stack is PSRAM-backed,
+ *  so this costs no internal RAM. */
+#define P4_CONFIG_UART_CONSOLE_TASK_STACK    16384
 
 /**
  * Bounded wait, in milliseconds, for each segment of a UART transcript mirror
@@ -1696,6 +1971,27 @@
 #define P4_CONFIG_SERIAL_DIAG_BYTES          1024
 
 /* ========================================================================
+ * PASSWORD FILE ENCRYPTION (`crypt` lock/unlock)
+ * AES-256-GCM with a PBKDF2-HMAC-SHA256 key over the user password.
+ * Envelope: `P4CRYPT1` magic + salt + nonce + ciphertext + tag. Files
+ * stream in chunk-sized pieces through internal (DMA-safe) buffers; the
+ * password buffer is zeroed after every run.
+ * ======================================================================== */
+
+/** Bytes encrypted per chunk during a `crypt` file run. */
+#define P4_CONFIG_CRYPT_CHUNK_BYTES          4096
+
+/** PBKDF2 iterations for the `crypt` file key (costly enough to slow
+ *  guessing, cheap enough for one interactive run). */
+#define P4_CONFIG_CRYPT_PBKDF2_ITERS         10000
+
+/** Salt bytes mixed into the `crypt` key derivation. */
+#define P4_CONFIG_CRYPT_SALT_BYTES           16
+
+/** Maximum password characters accepted by `crypt` (plus the terminator). */
+#define P4_CONFIG_CRYPT_PASS_BYTES           128
+
+/* ========================================================================
  * DATABASE (`db`) — Palm-OS-style SD-backed record store
  * All database data lives on the SD card under sd:/DBS/<name>.DB/:
  *   HEADER.INI, CATEGORIES.INI, INDEX.TXT, RECORDS/R<id>.DAT
@@ -1735,6 +2031,10 @@
 
 /** Maximum bytes in one `db export` / `db import` text file. */
 #define P4_CONFIG_DB_EXPORT_MAX_BYTES         (256 * 1024)
+
+/** Maximum bytes of one `k=v` field value read by `db find /field:` and
+ *  `db get /field:` (values are truncated to this for compare/sort/print). */
+#define P4_CONFIG_DB_FIELD_VALUE_BYTES        64
 
 /** Flag bit: the record's payload is secret and redacted in list/transcript
  *  output unless an explicit reveal is requested. */

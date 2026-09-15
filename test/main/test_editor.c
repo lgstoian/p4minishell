@@ -10,6 +10,7 @@
 
 #include "unity.h"
 #include "editor.h"
+#include "editor_view.h"
 #include "shell.h"
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +33,83 @@ static char *line_str(editor_doc_t *doc, size_t row)
 }
 
 /* ------------------------------------------------------------------ */
+
+void test_editor_osk_key_from_label(void)
+{
+    editor_key_t key = EDITOR_KEY_NONE;
+
+    /* Every named button on the Nav/Edit OSK pages maps to its editor key. */
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Save", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SAVE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("SaveAs", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SAVE_AS, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Open", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_OPEN, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Comment", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_COMMENT, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Match", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_MATCH_JUMP, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Wrap", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_WRAP_TOGGLE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Reload", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_RELOAD, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Find", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_FIND, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Next", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_FIND_NEXT, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Rep", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_REPLACE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Replace", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_REPLACE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("All", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_REPLACE_ALL, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("ReplAll", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_REPLACE_ALL, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Case", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_CASE_TOGGLE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Goto", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_GOTO_LINE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Undo", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_UNDO, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Redo", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_REDO, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Prev", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_PREVIEW, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Preview", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_PREVIEW, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Copy", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_COPY, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Cut", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_CUT, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Paste", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_PASTE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("SelAll", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SELECT_ALL, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("WordL", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_WORD_LEFT, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("WordR", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_WORD_RIGHT, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("DocTop", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_DOC_HOME, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("DocBot", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_DOC_END, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("DelLine", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_DELETE_LINE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("DelEOL", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_DELETE_EOL, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Quit", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_QUIT, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Exit", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_QUIT, key);
+
+    /* LVGL symbols, mode buttons, single chars and garbage are NOT command
+     * labels (they are routed elsewhere in editor_view_handle_osk). */
+    TEST_ASSERT_FALSE(editor_osk_key_from_label(NULL, &key));
+    TEST_ASSERT_FALSE(editor_osk_key_from_label("Save", NULL));
+    TEST_ASSERT_FALSE(editor_osk_key_from_label("bogus", &key));
+    TEST_ASSERT_FALSE(editor_osk_key_from_label("abc", &key));
+    TEST_ASSERT_FALSE(editor_osk_key_from_label("a", &key));
+}
 
 void test_editor_new_doc(void)
 {
@@ -489,17 +567,29 @@ void test_editor_word_nav_empty_line(void)
 void test_editor_line_cap_bounded(void)
 {
     /* Repeated Enter must not grow the document past the configured line
-     * cap; the failed split leaves the document intact and usable. */
+     * cap; the failed split leaves the document intact and usable.
+     *
+     * The cap is reached with one multi-line insert: `editor_doc_split_line`
+     * enforces the limit inside `editor_doc_insert_bytes` (which does not take
+     * a full-document undo snapshot per line, unlike a per-Enter loop, so the
+     * test stays linear). */
     editor_doc_t *doc = editor_doc_new(NULL);
     size_t target = P4_CONFIG_EDITOR_MAX_LINES + 8;
+    char *blob;
     size_t i;
     char *s;
 
+    blob = malloc(target + 1);
+    TEST_ASSERT_NOT_NULL(blob);
     for (i = 0; i < target; i++) {
-        editor_doc_cursor_doc_end(doc);
-        editor_doc_newline(doc);
+        blob[i] = '\n';
     }
+    blob[target] = '\0';
+
+    editor_doc_insert_bytes(doc, blob, target);
+    free(blob);
     TEST_ASSERT(editor_doc_line_count(doc) <= P4_CONFIG_EDITOR_MAX_LINES);
+    TEST_ASSERT(editor_doc_line_count(doc) > 1);
 
     /* The document still edits normally after hitting the cap. */
     editor_doc_cursor_doc_home(doc);

@@ -44,6 +44,15 @@
  */
 
 /**
+ * Bounded wait for the LVGL port lock during a capture. The lock is normally
+ * free, but a modal's blinking cursor/redraw can hold it briefly; a bounded
+ * wait (rather than 0) keeps the host capture from intermittently failing
+ * while a modal is open. This also runs on the console-reader task during a
+ * modal, where a momentary busy lock is expected.
+ */
+#define SCREENSHOT_LVGL_LOCK_MS 1000
+
+/**
  * Write a standard 14-byte BMP file header + 40-byte info header for an
  * RGB888 image into the output buffer, then return the header size (54).
  *
@@ -206,8 +215,9 @@ void shell_command_screenshot(int argc, char **argv)
     }
     memset(draw_buf, 0, sizeof(lv_draw_buf_t));
 
-    /* Take the LVGL lock and do all LVGL operations inside it. */
-    if (!lvgl_port_lock(0)) {
+    /* Take the LVGL lock and do all LVGL operations inside it. Bounded so a
+     * modal's brief redraw cannot make the capture fail outright. */
+    if (!lvgl_port_lock(SCREENSHOT_LVGL_LOCK_MS)) {
         shell_print_error("screenshot: could not acquire LVGL lock");
         free(draw_buf);
         batch_set_errorlevel(1);

@@ -3,11 +3,13 @@
 
 /**
  * @file usb.h
- * @brief USB Host module for P4MiniShell (MSC storage + HID input).
+ * @brief USB Host module for P4MiniShell (MSC storage + HID input + CDC serial).
  *
- * Owns ESP-IDF USB Host Library bring-up with two class drivers:
+ * Owns ESP-IDF USB Host Library bring-up with three class drivers:
  *   - MSC (Mass Storage Class): mounts at /usb0 via VFS/FATFS
  *   - HID (Human Interface Device): keyboard and mouse with opt-in transcript echo
+ *   - CDC-ACM (serial): `usb userial` raw serial to external gear
+ *     (implemented in userial.c; one open device at a time)
  *
  * USB MSC commands mirror the SD command family style with bounded,
  * transcript-friendly output. HID echo is intentionally opt-in for debug use.
@@ -18,7 +20,9 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include "esp_err.h"
 
 /** USB keyboard input event passed to the registered input callback. */
 typedef enum {
@@ -50,6 +54,80 @@ void usb_init(void);
 
 /** Entry point for shell-level `usb ...` command dispatch. */
 void usb_handle_command(char *command);
+
+/* ========================================================================
+ * USB CDC-ACM SERIAL (userial.c): leaf driver + byte API
+ * ========================================================================
+ * The `usb userial` verbs live in components/command/userial_commands.c,
+ * which uses only this byte API (keeping the usb component a leaf). One open
+ * device at a time; RX lands in an internal ring drained by userial_read().
+ */
+
+/** Serial line settings (driver-type free so this header stays leaf-pure). */
+typedef struct {
+    uint32_t baud;       /**< Line speed (300..3000000). */
+    uint8_t data_bits;   /**< 5..8. */
+    uint8_t parity;      /**< 0 none, 1 odd, 2 even. */
+    uint8_t stop_bits;   /**< 1 or 2. */
+} userial_coding_t;
+
+/** Snapshot of the serial state for `usb userial status`. */
+typedef struct {
+    bool open;                 /**< A device handle is held. */
+    bool link_lost;            /**< The device disconnected. */
+    uint16_t vid;              /**< Open device vendor id. */
+    uint16_t pid;              /**< Open device product id. */
+    userial_coding_t coding;   /**< Active line settings. */
+    size_t waiting;            /**< Bytes buffered in the RX ring. */
+    uint32_t dropped;          /**< Bytes lost to a full ring. */
+} userial_status_t;
+
+/**
+ * Install the CDC-ACM host driver (idempotent stage of the USB bring-up;
+ * called from usb_install_host_stack, never directly).
+ */
+esp_err_t userial_install_driver(void);
+
+/**
+ * Open a CDC-ACM device by vendor/product id. Blocks up to
+ * P4_CONFIG_USERIAL_OPEN_TIMEOUT_MS for a matching device, then applies the
+ * line coding. Fails when a device is already open.
+ * @return 0 on success, 1 on no-match/IO failure or already-open.
+ */
+int userial_open(uint16_t vid, uint16_t pid, const userial_coding_t *coding);
+
+/** Close the open device (no-op when none). Clears the RX ring. */
+void userial_close(void);
+
+/** True when a device is open and still connected. */
+bool userial_is_open(void);
+
+/** True when the open device reported a disconnect. */
+bool userial_link_lost(void);
+
+/** Fill @p out with the current state. @return true when filled. */
+bool userial_get_status(userial_status_t *out);
+
+/** Blocking write of @p len bytes with the op timeout. @return 0 ok, 1 fail. */
+int userial_write(const uint8_t *data, size_t len);
+
+/** Drain up to @p max bytes from the RX ring. @return bytes read. */
+size_t userial_read(uint8_t *out, size_t max);
+
+/**
+ * Parse a `<vid:pid>` device id (hex, case-insensitive). Pure, unit-tested.
+ * @return true with both outputs filled.
+ */
+bool userial_parse_id(const char *text, uint16_t *vid_out, uint16_t *pid_out);
+
+/**
+ * Validate serial line options into a @ref userial_coding_t. NULL selects
+ * the default (115200 8N1). Pure, unit-tested.
+ * @return true with @p out filled.
+ */
+bool userial_parse_coding(const char *baud_str, const char *data_str,
+                          const char *parity_str, const char *stop_str,
+                          userial_coding_t *out);
 
 /** Print transcript-visible USB host, MSC, and HID state. */
 void usb_status(void);

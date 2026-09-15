@@ -14,6 +14,7 @@
 #include "keyboard.h"
 #include "windows.h"
 #include "editor_view.h"
+#include "config_cmd.h"
 #include "p4minishell_config.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -106,8 +107,26 @@ bool shell_command_keyboard(int argc, char **argv)
                                      (int32_t)keyboard_get_height(),
                                      keyboard_is_external_input_enabled() ? "on" : "off");
         }
+    } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "mode")) {
+        if (argc == 2) {
+            shell_transcript_appendf("keyboard.page=%s\n",
+                                     keyboard_mode_name(keyboard_get_mode()));
+        } else if (argc == 3) {
+            keyboard_mode_t mode;
+
+            if (!keyboard_mode_parse(argv[2], &mode)) {
+                shell_transcript_appendf_ansi(SH_ERR "keyboard mode: unknown page '%s' (text_lower|text_upper|number|symbols|nav|nav2)\n" SH_RST,
+                                              argv[2]);
+            } else {
+                keyboard_set_mode(mode);
+                config_persist_set("KEYBOARD_MODE", keyboard_mode_name(mode));
+                shell_transcript_appendf("keyboard.page=%s\n", keyboard_mode_name(mode));
+            }
+        } else {
+            shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status|mode [page]>" SH_RST "\n");
+        }
     } else {
-        shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status>" SH_RST "\n");
+        shell_transcript_appendf_ansi(SH_WARN "Usage: keyboard <show|hide|toggle|status|mode [page]>" SH_RST "\n");
     }
     return true;
 }
@@ -149,11 +168,18 @@ bool shell_command_cursor(int argc, char **argv)
     int i = 1;
     bool changed = false;
 
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "/b")) {
+        shell_transcript_appendf("CURSOR=%s\n", s_cursor_block ? "block" : "bar");
+        shell_transcript_appendf("CURSOR_BLINK=%lu\n",
+                                 s_cursor_blink_ms == 0 ? (unsigned long)0 : (unsigned long)s_cursor_blink_ms);
+        return true;
+    }
+
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_LBL "cursor:" SH_RST " %s, blink %s\n",
                                       s_cursor_block ? "block" : "bar",
                                       s_cursor_blink_ms == 0 ? "off" : "on");
-        shell_transcript_appendf_ansi(SH_WARN "Usage: cursor [block|bar] [blink <ms 0..2000|off>]" SH_RST "\n");
+        shell_transcript_appendf_ansi(SH_WARN "Usage: cursor [block|bar] [blink <ms 0..2000|off>] [status /b]" SH_RST "\n");
         return true;
     }
     while (i < argc) {
@@ -161,6 +187,7 @@ bool shell_command_cursor(int argc, char **argv)
             shell_text_equals_ignore_case(argv[i], "bar")) {
             s_cursor_block = shell_text_equals_ignore_case(argv[i], "block");
             windows_input_cursor_style(s_cursor_block);
+            config_persist_set("CURSOR", s_cursor_block ? "block" : "bar");
             shell_transcript_appendf_ansi(SH_OK "cursor %s" SH_RST "\n",
                                           s_cursor_block ? "block" : "bar");
             changed = true;
@@ -179,12 +206,18 @@ bool shell_command_cursor(int argc, char **argv)
             }
             windows_input_cursor_blink(s_cursor_blink_ms);
             editor_view_set_blink_ms(s_cursor_blink_ms);
+            config_persist_set("CURSOR_BLINK", s_cursor_blink_ms == 0 ? "off" : argv[i + 1]);
             shell_transcript_appendf_ansi(SH_OK "cursor blink %s" SH_RST "\n",
                                           s_cursor_blink_ms == 0 ? "off" : argv[i + 1]);
             changed = true;
             i += 2;
+        } else if (shell_text_equals_ignore_case(argv[i], "status")) {
+            shell_transcript_appendf_ansi(SH_LBL "cursor:" SH_RST " %s, blink %s\n",
+                                          s_cursor_block ? "block" : "bar",
+                                          s_cursor_blink_ms == 0 ? "off" : "on");
+            i++;
         } else {
-            shell_transcript_appendf_ansi(SH_WARN "Usage: cursor [block|bar] [blink <ms 0..2000|off>]" SH_RST "\n");
+            shell_transcript_appendf_ansi(SH_WARN "Usage: cursor [block|bar] [blink <ms 0..2000|off>] [status /b]" SH_RST "\n");
             return true;
         }
     }

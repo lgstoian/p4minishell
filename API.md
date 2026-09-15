@@ -72,12 +72,16 @@ typedef struct {
     bool        (*bluetooth_is_connected)(void);
     bool        (*usb_is_connected)(void);
     bool        (*usb_is_keyboard_attached)(void);
+    bool        (*bg_jobs_running)(void);
     bool        (*usb_key_to_ascii)(uint8_t key_code, uint8_t modifiers, char *out);
     bool        (*c6ota_is_pending)(void);
     bool        (*c6ota_is_busy)(void);
     void        (*pm_notify_activity)(void);
-    int         (*complete_word)(const char *word, bool first_token, int match_index,
+    int         (*pm_ms_until_idle_off)(void);
+    bool        (*time_auto_sync)(void);
+    int         (*complete_line)(const char *line, int match_index,
                                  char *out, size_t out_size);
+    int         (*ghost_line)(const char *line, char *out, size_t out_size);
 } shell_command_ops_t;
 
 void shell_register_command_ops(const shell_command_ops_t *ops);
@@ -88,10 +92,13 @@ void shell_register_command_ops(const shell_command_ops_t *ops);
 - The external-module accessors let `shell.c` read state from the networking, Bluetooth,
   USB, and C6 OTA modules without including their headers, keeping the dependency
   direction one-way.
-- `complete_word` backs USB Tab completion: it fills `out` with the `match_index`-th match of
-  `word` (commands/aliases when `first_token`, SD paths otherwise) and returns the total match
-  count (capped by `P4_CONFIG_COMPLETION_MAX_MATCHES`). Implemented by `command_init`'s
-  `shell_complete_word`.
+- `complete_line` backs USB Tab completion: it parses the whole `line` and fills `out` with the
+  `match_index`-th match (0-based) for its last word — help-table command names, aliases,
+  installed apps, usage-derived subcommands/flags, and SD paths — returning the total match
+  count (capped by `P4_CONFIG_COMPLETION_MAX_MATCHES`). Implemented by `command_complete_line()`.
+- `ghost_line` backs the inline ghost suggestion (`P4_CONFIG_COMPLETION_GHOST`): it is SD-free
+  (command names + usage tokens only) so it can run on every keystroke.
+  Implemented by `command_ghost_line()`.
 
 ### Semantic output helpers
 ```c
@@ -290,6 +297,7 @@ void        shell_init(void);
 bool        shell_is_initialized(void);
 void        shell_uart_console_start(void);
 void        shell_header_status_refresh(void);
+uint32_t    shell_header_refresh_interval_ms(void);
 bool        shell_text_equals_ignore_case(const char *left, const char *right);
 char       *shell_trim(char *text);
 int         shell_split_args(char *text, char **argv, int max_args);  /* quote/escape aware */
@@ -297,8 +305,17 @@ bool        shell_parse_percentage_arg(const char *text, int *percentage_out);
 bool        shell_parse_size_arg(const char *text, size_t min, size_t max, size_t *out);
 void        shell_join_args(char **argv, int start, int argc, char *out, size_t out_size);
 void        shell_header_notify(const char *text, uint32_t timeout_ms);
+void        shell_header_notify_level(const char *text, uint32_t timeout_ms,
+                                      header_notify_level_t level);
 void shell_get_cwd_for_prompt(char *buf, size_t buf_size);
 ```
+
+`shell_header_status_refresh()` samples cheap status every call but throttles the
+expensive telemetry (heap/CPU/battery) to `P4_CONFIG_HEADER_TELEMETRY_PERIOD_MS`,
+and does nothing while the display is off by idle. `shell_header_refresh_interval_ms()`
+returns the next adaptive poll interval (idle-off wake, busy OTA/bg job, Wi-Fi
+bring-up, startup, clock minute boundary, idle-off deadline) for main to apply
+with `lv_timer_set_period()`. The policy is the pure, unit-tested `header_refresh.c`.
 
 ## Command Module API
 
@@ -408,13 +425,26 @@ int  gfx_text_width(const char *text, int scale);
 void gfx_surface_blit(gfx_surface_t *dst, const gfx_surface_t *src, int x, int y,
                       bool use_transparent, uint16_t transparent);
 void gfx_565_to_888_row(uint8_t *dst, const uint16_t *src, int w);
-bool gfx_bmp_parse_header(const uint8_t *buf, size_t len, gfx_bmp_info_t *out);
+bool gfx_bmp_parse_header_ex(const uint8_t *buf, size_t len, gfx_bmp_info_t *out,
+                             int max_w, int max_h);   /* 24/32-bit, either orientation */
+bool gfx_bmp_parse_header(const uint8_t *buf, size_t len, gfx_bmp_info_t *out); /* strict 24-bit bottom-up */
+bool gfx_image_surface_alloc(gfx_surface_t *s, int w, int h);  /* up to GFX_IMAGE_MAX */
+bool gfx_bmp_decode_scaled_565(const uint8_t *buf, size_t len, const gfx_bmp_info_t *info,
+                               int dst_w, int dst_h, gfx_surface_t *out);
 bool gfx_bmp_decode_565(const uint8_t *buf, size_t len, const gfx_bmp_info_t *info, gfx_surface_t *out);
+void gfx_surface_blit_scaled(gfx_surface_t *dst, const gfx_surface_t *src, int x, int y,
+                             int dw, int dh, bool use_transparent, uint16_t transparent);
+void gfx_bmp_fit(int src_w, int src_h, int max_w, int max_h, int *out_w, int *out_h);
 extern const uint8_t gfx_font8x8[GFX_FONT_GLYPHS][GFX_FONT_H];  /* index = ch - 0x20 */
 ```
 - All raster ops clip (out-of-bounds writes are ignored, never an error); `gfx_surface_get`
   returns 0 outside. `gfx_surface_flood_fill` grows a PSRAM seed stack and returns the pixel
   count; `gfx_text_width` is `strlen(text) * GFX_FONT_W * scale`.
+- `gfx_bmp_parse_header_ex` accepts 24/32-bit BI_RGB with positive (bottom-up) or negative
+  (top-down) height within `max_w`x`max_h`; the strict `gfx_bmp_parse_header` is the sprite
+  wrapper (24-bit bottom-up, `GFX_SPR_MAX`). `gfx_bmp_decode_scaled_565` decodes straight to a
+  target size (the source is never materialized), and `gfx_bmp_fit` is the single
+  never-upscaling aspect-fit used by the viewer/TUI/canvas. All pure and unit-tested.
 
 ### Plot viewport (`components/gfx/gfx_view.c`)
 World-coordinate mapping shared by the canvas and TUI plot targets (pure,
@@ -1451,6 +1481,8 @@ const char *time_get_formatted(void);
 const char *time_get_formatted_utc(void);
 void        time_set_timezone(const char *tz_string);
 const char *time_get_timezone(void);
+const char *time_get_timezone_label(void);
+void        time_set_utc_offset(int offset_seconds, const char *label);
 const char *time_get_ntp_server(void);
 ```
 - `time_get_formatted()` / `time_get_formatted_utc()` return `YYYY-MM-DD
@@ -1459,6 +1491,11 @@ const char *time_get_ntp_server(void);
 - `time_set_timezone()` accepts a POSIX TZ string; the local time re-renders
   immediately. `time_force_resync()` stops and restarts the SNTP client for an
   immediate exchange against `P4_CONFIG_NTP_SERVER`.
+- `time_set_utc_offset(seconds, label)` is the automatic-timezone path: it
+  builds the POSIX TZ string from a network-detected UTC offset (positive =
+  east) and keeps `label` (an IANA name) for `time_get_timezone_label()`.
+  `time_is_set()` is true after SNTP or any manual set at/after
+  `P4_CONFIG_CLOCK_VALID_EPOCH`.
 
 ### Clock command surface (`clock_commands.c`)
 ```c
@@ -1510,30 +1547,67 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
   - Request a header re-render from the currently cached state.
   - Useful after a batch of `header_update_*` calls when the caller wants one final refresh point.
 
-- `void header_set_notification(const char *text, uint32_t timeout_ms)`
-  - Show a short notification in the center of the fixed header with "!" icon prefix.
+- `void header_notify(header_notify_level_t level, const char *text, uint32_t timeout_ms)`
+  - Queue a notification in the center of the fixed header with "!" icon prefix.
+  - Notifications are shown FIFO (depth `P4_CONFIG_HEADER_NOTIFY_QUEUE`); a busy
+    center queues a new alert instead of dropping it, and overflow drops the
+    oldest *queued* entry. An empty `text` flushes the queue and clears the center
+    (`notify -`); `timeout_ms == 0` shows the message until the next notification.
+  - `level` drives the color and icon: `HEADER_NOTIFY_INFO` (normal),
+    `WARN` (amber), `ERR` (red).
+  - The queue mechanics are pure and unit-tested in `header_notify_queue.c`.
   - Uses LVGL async dispatch so callers can invoke it from shell worker tasks or other non-LVGL contexts.
 
+- `void header_set_notification(const char *text, uint32_t timeout_ms)`
+  - Thin INFO wrapper over `header_notify()` kept for the original callers.
+
+- `void header_update_batch(const header_batch_t *in)`
+  - Set every header field at once (Wi-Fi, battery, BT, USB, SD, heap, CPU,
+    task count, uptime, `clock_text`, `c6ota_busy`, `bg_jobs_running`) and
+    schedule exactly one async render. `in` is copied (including `clock_text`),
+    so the caller's buffers may be transient.
+  - `clock_text` (e.g. `"14:05"` or `"--:--"`) is shown, muted, in the center
+    when no notification is displayed. `c6ota_busy`/`bg_jobs_running` drive the
+    conditional `A` activity indicator.
+
 - `void header_update_wifi(bool connected, int rssi)`
-  - Update the Wi-Fi status indicator (WiFi HI/MID/LOW/WEAK/OFF).
+  - Update the Wi-Fi status indicator. Words style: `WiFi HI/MID/LOW/WEAK/OFF`.
+    Glyph style: `W` colored by tone. Classification and thresholds live once in
+    `components/header/header_status.c`.
   - State set immediately; render happens via async dispatch or direct fallback.
 
 - `void header_update_battery(int percent, bool adc_ready)`
   - Update the battery icon, bar, and percentage label. Clamped to 0-100.
-  - When `adc_ready` is false, shows "BAT N/C" with muted styling (battery always visible).
+  - When `adc_ready` is false, shows a muted `B`/`BAT N/C` (battery always visible).
   - State set immediately; render happens via async dispatch or direct fallback.
 
 - `void header_update_bluetooth(bool enabled, bool connected)`
-  - Update the Bluetooth indicator (BT ON/BT IDLE/BT OFF).
+  - Update the Bluetooth indicator (words `BT ON/IDLE/OFF`; glyph `BT`:
+    green connected, amber ready/idle, red off).
   - State set immediately; render happens via async dispatch or direct fallback.
 
 - `void header_update_usb(bool connected)`
-  - Update the USB indicator (USB ON/USB OFF).
+  - Update the USB indicator (words `USB ON/OFF`; glyph `U` green/red).
   - State set immediately; render happens via async dispatch or direct fallback.
 
 - `void header_update_sd(header_sd_state_t state)`
-  - Update the SD indicator with persistent state (SD NO/SD INS/SD ON/SD ERR).
+  - Update the SD indicator with persistent state (words `SD NO/INS/ON/ERR`;
+    glyph `S`: green mounted, amber inserted, red error, muted none).
   - State set immediately; render happens via async dispatch or direct fallback.
+
+- `void header_register_status_action(header_status_action_cb_t cb)`
+  - Register the long-press handler for a status indicator. The callback receives
+    a `header_status_kind_t` and is expected to run the matching full status
+    command; the header stays a passive leaf with no command knowledge. Tapping
+    an indicator shows a one-line detail in the notification area without calling
+    this hook. Safe before `header_init()`; `NULL` clears it.
+
+- `const char *header_status_glyph(header_status_kind_t kind)` /
+  `header_tone_t header_status_*_tone(...)` (`components/header/header_status.h`)
+  - Pure, LVGL-free classification: the compact glyph and the semantic tone
+    (muted/ok/warn/err) for every indicator. `header.c` maps the tone onto the
+    active theme color. This is the single source of the Wi-Fi label and of the
+    memory/CPU/battery healthy-warn-critical thresholds, and it is unit-tested.
 
 - `void header_update_mem(uint32_t free_heap_bytes, uint32_t total_heap_bytes)`
   - Update the memory display (MEM/MEM LOW + formatted size) from real-time FreeRTOS heap stats.
@@ -1640,7 +1714,15 @@ void networking_wifi_known_record_connect(const char *ssid, const char *password
     response header with semantic colours, and returns the body for the
     command layer to print or save to SD. Returns ESP_OK on an HTTP 2xx;
     the caller maps the return value onto ERRORLEVEL. A `user:pass@` URL
-    prefix enables HTTP Basic auth.
+    prefix enables HTTP Basic auth. An internal quiet mode suppresses the
+    transcript output for background callers.
+
+- `esp_err_t networking_time_detect(int *offset_seconds_out, char *iana_out, size_t iana_size)`
+  - Auto-detects the local timezone over the network (no hardcoded zone) by
+    quietly fetching `P4_CONFIG_TIMEZONE_URL` and parsing the IANA name + UTC
+    offset (seconds, positive = east). Must run with Wi-Fi connected and must
+    NOT run on the LVGL task (it blocks up to the HTTP timeout). Drives the
+    clock's `time_set_utc_offset()` from the command layer's `timesync` task.
 
 - `esp_err_t networking_httpd_start(void)`
 - `esp_err_t networking_httpd_stop(void)`
@@ -1991,6 +2073,8 @@ void tui_draw_box(int x,int y,int w,int h,const char *style,uint8_t fg,uint8_t b
 void tui_draw_line(int x1,int y1,int x2,int y2,const char *style,uint8_t fg,uint8_t bg);
 void tui_fill(int x,int y,int w,int h,char ch,uint8_t fg,uint8_t bg);
 void tui_draw_bar(int x,int y,int w,int pct,char fill_ch,char empty_ch,uint8_t fg,uint8_t bg);
+void tui_draw_image(int x,int y,int w,int h,const gfx_surface_t *img);  /* nearest-DOS-color cells */
+
 void tui_draw_table(int x,int y,int ncols,const int *widths,int nrows,
                     const char *const *cells,bool header,uint8_t fg,uint8_t bg);
 void tui_draw_table_ex(int x,int y,int ncols,const int *widths,int nrows,
@@ -2003,7 +2087,7 @@ uint8_t tui_rgb_to_dos(uint32_t rgb); uint32_t tui_dos_color_rgb(uint8_t index);
 void tui_flush(void); void tui_refresh_surface(void);
 void tui_enter_fullscreen(void); void tui_exit_fullscreen(void); bool tui_is_fullscreen(void);
 
-/* Modal surfaces (components/modal/modal_surf.h) - six on one shared runtime */
+/* Modal surfaces (components/modal/modal_surf.h) - seven on one shared runtime */
 int modal_dialog_run(const char *title, const char *message,
                      const char *button1, const char *button2, uint32_t timeout_ms);
 int modal_list_run(const char *title, const char **items, int count, uint32_t timeout_ms);
@@ -2011,6 +2095,8 @@ int modal_ask_run(const char *prompt, const char *default_text, bool password,
                   uint32_t timeout_ms, char *result, size_t result_size);
 int modal_filebrowser_run(const char *path, uint32_t timeout_ms, char *result, size_t result_size);
 int modal_viewer_run(const char *title, const char *path, uint32_t timeout_ms);
+int modal_viewer_run_raw(const char *title, const char *path, uint32_t timeout_ms, bool raw);
+int modal_image_run(const char *title, const char *path, uint32_t timeout_ms, bool fit);
 int modal_hexview_run(const char *title, const char *path, uint32_t timeout_ms);
 ```
 

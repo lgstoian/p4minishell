@@ -39,6 +39,21 @@ extern "C" {
 #endif
 
 /* ========================================================================
+ * MEMORY (PSRAM-FIRST)
+ * ======================================================================== */
+
+/**
+ * Editor allocation helpers. Every large editor buffer - line text, the line
+ * array, load staging, undo snapshots, and the view's per-row caches - goes
+ * through these so a large file uses the PSRAM heap instead of the small,
+ * fragmented internal DMA-capable heap that LVGL spans and SD DMA share.
+ * Each falls back to the internal heap when PSRAM is unavailable.
+ */
+void *editor_mem_alloc(size_t size);
+void *editor_mem_realloc(void *ptr, size_t size);
+void editor_mem_free(void *ptr);
+
+/* ========================================================================
  * DOCUMENT MODEL
  * ======================================================================== */
 
@@ -92,6 +107,7 @@ typedef enum {
     EDITOR_KEY_MATCH_JUMP,    /**< Jump to matching paren/% (USB Ctrl+B) */
     EDITOR_KEY_WRAP_TOGGLE,   /**< Toggle word wrap (USB Ctrl+W) */
     EDITOR_KEY_RELOAD,        /**< Reload file from disk (USB Ctrl+L) */
+    EDITOR_KEY_OPEN,          /**< Open another file (touch `Open` / USB F4) */
     EDITOR_KEY_GOTO_LINE,     /**< Jump to a line number */
     EDITOR_KEY_PREVIEW,       /**< Toggle rendered Markdown preview (USB Ctrl+P) */
 } editor_key_t;
@@ -128,6 +144,13 @@ typedef struct {
 
     bool overwrite;           /**< Insert mode (false) or overwrite (true) */
     bool modified;            /**< Unsaved changes */
+
+    /**
+     * Approximate serialized size of the document (the last snapshot length or
+     * the loaded file size). Used to decide whether a full-document undo
+     * snapshot per edit is affordable; it is not a live byte count.
+     */
+    size_t content_bytes;
 
     bool readonly;            /**< Source file is read-only (save refused) */
 
@@ -455,7 +478,15 @@ bool editor_session_is_active(void);
  * Control block handed to the editor view. The worker task owns it for the
  * session; the view mutates only the flags and signals @p event_group. The
  * document pointer is owned by the worker and only touched by the view.
+ *
+ * Session event bits for the shared modal event group. MODAL_EVENT_* live in
+ * modal.h; the editor SAVE/RELOAD/OPEN bits live here so the worker and the
+ * LVGL view cannot disagree (one definition).
  */
+#define EDITOR_EVENT_SAVE   (1u << 2)
+#define EDITOR_EVENT_RELOAD (1u << 3)
+#define EDITOR_EVENT_OPEN   (1u << 4)
+
 typedef struct {
     editor_doc_t *doc;                /**< Document being edited */
     void *event_group;                /**< EventGroupHandle_t (worker -> view) */
@@ -464,7 +495,10 @@ typedef struct {
     bool save_ok;                     /**< Set by worker: last save succeeded */
     bool reload_requested;            /**< Set by view: worker should reload */
     bool reload_ok;                   /**< Set by worker: last reload succeeded */
+    bool open_requested;              /**< Set by view: worker should open another file */
+    bool open_ok;                     /**< Set by worker: last open succeeded */
     char save_as_path[P4_CONFIG_EDITOR_PROMPT_BYTES]; /**< Save As target; "" = source path */
+    char open_path[P4_CONFIG_EDITOR_PROMPT_BYTES];    /**< Open target path */
 } editor_control_t;
 
 #ifdef __cplusplus

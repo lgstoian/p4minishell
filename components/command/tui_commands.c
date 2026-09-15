@@ -29,6 +29,7 @@
 #include "command.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 
 /* ========================================================================
  * TUI PRIMITIVES: draw, anchor
@@ -113,6 +114,7 @@ bool shell_command_draw(int argc, char **argv)
                       shell_text_equals_ignore_case(argv[1], "bar") ||
                       shell_text_equals_ignore_case(argv[1], "table") ||
                       shell_text_equals_ignore_case(argv[1], "list") ||
+                      shell_text_equals_ignore_case(argv[1], "image") ||
                       shell_text_equals_ignore_case(argv[1], "clear"))) {
         if (tui_init()) use_tui = true;
     }
@@ -903,6 +905,112 @@ bool shell_command_draw(int argc, char **argv)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[1], "image")) {
+        /* draw image <file.bmp> <x> <y> <w> <h>  (cells, 1-based): render a BMP
+         * into the cell grid as nearest-DOS-color blocks. Reuses the single BMP
+         * decoder in components/gfx. */
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        shell_sd_session_t session;
+        FILE *file = NULL;
+        long size = 0;
+        uint8_t *buf = NULL;
+        size_t got = 0;
+        gfx_bmp_info_t info;
+        gfx_surface_t img = {NULL, 0, 0};
+        int x;
+        int y;
+        int w;
+        int h;
+
+        if (argc != 7) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: usage: draw image <file.bmp> <x> <y> <w> <h>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!use_tui) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: tui init failed\n" SH_RST);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        x = atoi(argv[3]);
+        y = atoi(argv[4]);
+        w = atoi(argv[5]);
+        h = atoi(argv[6]);
+        if (w < 1 || h < 1) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: bad cell size %dx%d\n" SH_RST, w, h);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: invalid path %s\n" SH_RST, argv[2]);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: SD card not present\n" SH_RST);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        file = fopen(resolved, "rb");
+        if (file == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: cannot open %s\n" SH_RST, resolved);
+            shell_sd_end(&session, "draw image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: cannot size %s\n" SH_RST, resolved);
+            fclose(file);
+            shell_sd_end(&session, "draw image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (size < 54 || (uint64_t)size > P4_CONFIG_IMAGE_MAX_BYTES) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: bad size %ld (max %u bytes)\n" SH_RST,
+                                          size, (unsigned)P4_CONFIG_IMAGE_MAX_BYTES);
+            fclose(file);
+            shell_sd_end(&session, "draw image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        buf = heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (buf == NULL) buf = malloc((size_t)size);
+        if (buf == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: out of memory\n" SH_RST);
+            fclose(file);
+            shell_sd_end(&session, "draw image");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        got = fread(buf, 1, (size_t)size, file);
+        fclose(file);
+        shell_sd_end(&session, "draw image");
+        if (got != (size_t)size) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: short read %s\n" SH_RST, resolved);
+            heap_caps_free(buf);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST, resolved);
+            heap_caps_free(buf);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (!gfx_bmp_decode_scaled_565(buf, got, &info, w, h, &img)) {
+            shell_transcript_appendf_ansi(SH_ERR "draw image: decode failed (%s)\n" SH_RST, resolved);
+            heap_caps_free(buf);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        heap_caps_free(buf);
+        tui_draw_image(x, y, w, h, &img);
+        gfx_surface_free(&img);
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
     shell_transcript_appendf_ansi(SH_ERR "draw: unknown subcommand %s\n" SH_RST, argv[1]);
     batch_set_errorlevel(2);
     return false;
@@ -1083,6 +1191,142 @@ void shell_command_ask(int argc, char **argv)
     batch_set_errorlevel(0);
 }
 
+/* `form` - a multi-field modal form for batch apps. Each field spec is
+ *   "Label=<type>[:<arg>]:VAR"
+ * with type in text|password|check|select|range. select's arg is `a|b|c`;
+ * range's arg is `min-max`. VAR is prefilled from the environment when set and
+ * receives the accepted value. OK sets ERRORLEVEL 0; cancel/skip/timeout 255. */
+void shell_command_form(int argc, char **argv)
+{
+    modal_form_field_t fields[MODAL_FORM_MAX_FIELDS];
+    char *values[MODAL_FORM_MAX_FIELDS];
+    const char *vars[MODAL_FORM_MAX_FIELDS];
+    const char *title = NULL;
+    uint32_t timeout_ms = 0;
+    int nf = 0;
+    int rc;
+    int i;
+
+    memset(fields, 0, sizeof(fields));
+    memset(values, 0, sizeof(values));
+    memset(vars, 0, sizeof(vars));
+
+    for (i = 1; i < argc; i++) {
+        char *spec, *eq, *colon, *arg, *var, *sep;
+        char label[80];
+        char type[24];
+        const char *argp = NULL;
+        modal_form_field_t *f;
+        size_t n;
+
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
+        }
+        if (title == NULL) {
+            title = argv[i];
+            continue;
+        }
+        if (nf >= MODAL_FORM_MAX_FIELDS) {
+            break;
+        }
+
+        spec = argv[i];
+        eq = strchr(spec, '=');
+        if (eq == NULL) {
+            continue;
+        }
+        n = (size_t)(eq - spec);
+        if (n >= sizeof(label)) n = sizeof(label) - 1;
+        memcpy(label, spec, n);
+        label[n] = '\0';
+
+        colon = strchr(eq + 1, ':');
+        if (colon == NULL) {
+            continue;
+        }
+        n = (size_t)(colon - (eq + 1));
+        if (n >= sizeof(type)) n = sizeof(type) - 1;
+        memcpy(type, eq + 1, n);
+        type[n] = '\0';
+
+        /* remainder: [arg:]VAR */
+        arg = colon + 1;
+        sep = strchr(arg, ':');
+        if (sep != NULL) {
+            argp = arg;
+            *sep = '\0';
+            var = sep + 1;
+        } else {
+            var = arg;
+        }
+        if (var == NULL || var[0] == '\0') {
+            continue;
+        }
+
+        f = &fields[nf];
+        f->label = label;
+        f->value = values[nf] = malloc(P4_CONFIG_ENV_VALUE_BYTES);
+        if (f->value == NULL) {
+            break;
+        }
+        f->value[0] = '\0';
+        f->value_size = P4_CONFIG_ENV_VALUE_BYTES;
+        vars[nf] = var;
+
+        if (strcasecmp(type, "password") == 0) {
+            f->type = MODAL_FORM_PASSWORD;
+        } else if (strcasecmp(type, "check") == 0) {
+            f->type = MODAL_FORM_CHECK;
+        } else if (strcasecmp(type, "select") == 0) {
+            f->type = MODAL_FORM_SELECT;
+            f->options = argp ? argp : "";
+        } else if (strcasecmp(type, "range") == 0) {
+            int lo = 0, hi = 100;
+            if (argp != NULL) {
+                sscanf(argp, "%d-%d", &lo, &hi);
+            }
+            f->type = MODAL_FORM_RANGE;
+            f->min = lo;
+            f->max = hi;
+        } else {
+            f->type = MODAL_FORM_TEXT;
+        }
+
+        {
+            const char *cur = shell_env_get(var);
+            if (cur != NULL && cur[0] != '\0') {
+                snprintf(f->value, f->value_size, "%s", cur);
+            }
+        }
+        /* The label/argp pointers are freed with argv after dispatch; the
+         * modal copies the label text when it builds the widget, but the
+         * surface runs synchronously here, so they stay valid. */
+        nf++;
+    }
+
+    if (nf == 0) {
+        shell_print_usage("Usage: form [/t:secs] \"title\" \"Label=type[:arg]:VAR\" ...");
+        for (i = 0; i < MODAL_FORM_MAX_FIELDS; i++) free(values[i]);
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    rc = modal_form_run(title, fields, nf, timeout_ms);
+    if (rc != 0) {
+        for (i = 0; i < nf; i++) free(values[i]);
+        batch_set_errorlevel(255);
+        return;
+    }
+
+    for (i = 0; i < nf; i++) {
+        if (shell_env_set(vars[i], values[i]) != ESP_OK) {
+            shell_print_error("form: cannot set %s", vars[i]);
+        }
+        free(values[i]);
+    }
+    batch_set_errorlevel(0);
+}
+
 void shell_command_browse_batch(int argc, char **argv)
 {
     const char *varname = "BROWSE_RESULT";
@@ -1116,6 +1360,25 @@ void shell_command_browse_batch(int argc, char **argv)
     batch_set_errorlevel(0);
 }
 
+/** Shared image-view entry (used by `view` and `open`): resolve, show in the
+ * image viewer, map to ERRORLEVEL. One implementation, no duplicated routing. */
+static void view_image_file(const char *path, uint32_t timeout_ms)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+
+    if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
+        shell_print_error("view: invalid path %s", path);
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (modal_image_run("Image", resolved, timeout_ms, P4_CONFIG_IMAGE_VIEWER_FIT != 0) != 0) {
+        shell_print_error("view: cannot open image %s", path);
+        batch_set_errorlevel(1);
+        return;
+    }
+    batch_set_errorlevel(0);
+}
+
 void shell_command_view(int argc, char **argv)
 {
     const char *path = NULL;
@@ -1135,6 +1398,13 @@ void shell_command_view(int argc, char **argv)
     if (path == NULL) {
         shell_print_usage("Usage: view [/t:secs] [--raw] <file>");
         batch_set_errorlevel(2);
+        return;
+    }
+
+    /* .bmp/.dib route to the image viewer; everything else is text (or
+     * rendered Markdown). The type test is the central registry. */
+    if (filetype_is_image(filetype_of(path))) {
+        view_image_file(path, timeout_ms);
         return;
     }
 
@@ -1174,6 +1444,11 @@ void shell_command_open(int argc, char **argv)
             errorlevel = 1;
         }
         batch_set_errorlevel(errorlevel);
+        return;
+    }
+
+    if (filetype_is_image(filetype_of(path))) {
+        view_image_file(path, timeout_ms);
         return;
     }
 

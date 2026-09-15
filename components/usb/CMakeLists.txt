@@ -50,13 +50,14 @@ if(CONFIG_USB_HOST_HUBS_SUPPORTED)
 endif()
 
 idf_component_register(
-    SRCS ${srcs} "${CMAKE_CURRENT_LIST_DIR}/usb.c"
+    SRCS ${srcs} "${CMAKE_CURRENT_LIST_DIR}/usb.c" "${CMAKE_CURRENT_LIST_DIR}/userial.c"
     INCLUDE_DIRS ${include} "${CMAKE_CURRENT_LIST_DIR}"
     PRIV_INCLUDE_DIRS ${priv_includes}
     REQUIRES
         ansi
         usb_host_hid
         usb_host_msc
+        usb_host_cdc_acm
     PRIV_REQUIRES ${priv_requires}
 )
 
