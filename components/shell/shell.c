@@ -2805,6 +2805,13 @@ static void shell_uart_console_task(void *arg)
     char *line = malloc(SHELL_COMMAND_BYTES);
     size_t length = 0;
     bool prompt_visible = false;
+    /* Timestamp of the last completed line. The USB-Serial-JTAG VFS maps CR to
+     * LF, so a host CRLF arrives as two LFs: the first ends the line, the
+     * second is an artifact. A leading LF that arrives within this grace
+     * window after a completed line is dropped so it can never satisfy the
+     * next key wait (set /p, pause, choice, crypt /ask) as an empty key. */
+    int64_t line_done_us = 0;
+    const int64_t line_artifact_grace_us = 100000;   /* 100 ms */
 
     (void)arg;
 
@@ -2836,6 +2843,18 @@ static void shell_uart_console_task(void *arg)
 
         got = strlen(line + length);
         length += got;
+
+        /* Drop the artifact LF of a CRLF whose first LF just completed a line
+         * (the CR->LF mapping makes the host's CRLF two LFs). Only LFs in the
+         * brief window right after a completed line are dropped, so a genuine
+         * blank line typed by the user is never swallowed. */
+        if (got > 0 && (esp_timer_get_time() - line_done_us) < line_artifact_grace_us) {
+            while (got > 0 && line[length - got] == '\n') {
+                memmove(line + length - got, line + length - got + 1, got);
+                length -= 1;
+                got -= 1;
+            }
+        }
 
         /* A pending keypress wait swallows input before any command lookup,
          * so answering `pause` or `choice` never dispatches a command. The
@@ -2891,6 +2910,7 @@ static void shell_uart_console_task(void *arg)
             } else {
                 /* Fully consumed (or dropped on the depth cap, as before). */
                 length = 0;
+                line_done_us = esp_timer_get_time();
             }
             prompt_visible = false;
             continue;
@@ -2939,6 +2959,7 @@ static void shell_uart_console_task(void *arg)
                     if (s_command_ops.modal_console_command != NULL &&
                         s_command_ops.modal_console_command(trimmed)) {
                         length = 0;
+                        line_done_us = esp_timer_get_time();
                         prompt_visible = false;
                         continue;
                     }
@@ -2952,6 +2973,7 @@ static void shell_uart_console_task(void *arg)
                         (void)s_command_ops.modal_handle_serial_line(trimmed);
                     }
                     length = 0;
+                    line_done_us = esp_timer_get_time();
                     prompt_visible = false;
                     continue;
                 }
@@ -2960,6 +2982,7 @@ static void shell_uart_console_task(void *arg)
             }        }
 
         length = 0;
+        line_done_us = esp_timer_get_time();
         prompt_visible = false;
     }
 }

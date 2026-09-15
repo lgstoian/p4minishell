@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — serial console CRLF artifact broke `set /p`, `pause`, `choice`, hidden input
+
+- **Symptom:** `set /p`, `set /p NAME=<prompt> /P`, `shell_read_line_hidden`,
+  `crypt ... /ask`, `app_read_password`, and the `security` passcode prompt
+  returned an empty line immediately instead of waiting for input. Driven over
+  serial the typed value was then dispatched as a command
+  (`Unknown command: ...`).
+- **Root cause:** the USB-Serial-JTAG console VFS maps CR to LF, so a host
+  `...\r\n` is delivered as **two** LFs. The first terminates the command line;
+  the second (`0x0A`) was read as a separate empty line and, when the command
+  worker had just armed a key wait, was forwarded into the key queue and
+  satisfied the wait as an empty key. Confirmed with raw console logs
+  (`got=17` command … then `got=1 first=0x0A` while `readline: begin`).
+- **Fix:** `shell_uart_console_task()` timestamps the last completed line and
+  drops any leading LF that arrives within a 100 ms grace window, in both the
+  command path and the key-wait forwarding path. A genuine blank line typed by
+  a user (well outside the window) is unaffected.
+- **Verified on COM3:** five echoed and five hidden `set /p` iterations capture
+  their values; `crypt lock`/`unlock /ask` round-trip; a full normal-command
+  smoke (`ver`, `config /b`, `theme show`, `owner`, `security status`,
+  `gfind /count`, `cursor /b`) and the expanded `SET.BAT` flows stay green.
+
 ### Added — Preferences/security/form/global-find pass (single CONFIG.SYS store)
 
 Five additive features that keep the shell as the core and the GUI as an

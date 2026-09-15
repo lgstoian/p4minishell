@@ -1304,7 +1304,7 @@ a new section to `changelog.md`.
   is a no-op (boot restores from CONFIG.SYS). Add settings by adding a directive
   in `boot.c` + a `config_persist_set` call in the owning command, then a SET.BAT
   page. Batch menu indices are 0-based (list ERRORLEVEL); modal **serial**
-  selection is 1-based (index+1) — a test-harness gotcha.
+  selection is 1-based (index+1) ï¿½ a test-harness gotcha.
 - **`form`** (`modal_surf.c`) is a general multi-field modal primitive
   (`text|password|check|select|range`, values bound to env vars, `/t:secs`).
   It is a shell primitive, not a Preferences special case. New full-screen
@@ -1319,6 +1319,17 @@ a new section to `changelog.md`.
   deleting the `SECURITY_*` lines on the SD card.
 - **Passcode/owner config hooks**: `security_init()` runs in `command_init()`;
   `security_engage_boot_lock()` is called at the end of `boot_script_apply()`.
-  Password entry uses `modal_ask_run(..., password=true)` — `shell_read_line_hidden`
-  returns immediately in this build (as does `set /p /P`), so do not rely on it
-  for interactive password entry in new code without fixing that first.
+  Passcode entry uses `modal_ask_run(..., password=true)` for the masked field +
+  on-screen keyboard (touch-first); `shell_read_line_hidden` also works (fixed,
+  see the console CRLF rule below).
+- **Console CRLF artifact (fixed).** The USB-Serial-JTAG console VFS maps CR to
+  LF, so a host `...\r\n` arrives as TWO LFs: the first ends the command line,
+  the second is a stray empty line. That stray LF used to be forwarded into the
+  next key wait and satisfy it immediately â€” `set /p`, `set /p /P`, `pause`,
+  `choice`, `crypt /ask`, and `shell_read_line_hidden` would all return an empty
+  line. The console reader now timestamps the last completed line
+  (`line_done_us`) and drops any leading LF that arrives within
+  `line_artifact_grace_us` (100 ms), in BOTH the command and key-wait paths.
+  Keep that guard when touching `shell_uart_console_task()`; do not "simplify"
+  it away. Verified on COM3: 5Ã— echoed and 5Ã— hidden `set /p` loops capture,
+  and `crypt lock|unlock /ask` (hidden) round-trips.
