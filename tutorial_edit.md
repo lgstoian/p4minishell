@@ -5,7 +5,7 @@ SD card. It is modelled on the classic MS-DOS `EDIT` program and adds modern
 extras: undo/redo, a line-number gutter, a current-line highlight, syntax
 highlighting for batch files, and touch support.
 
-> **Current build (v0.38.2):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 300/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
+> **Current build (v0.38.3):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 300/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
 
 Everything works from three input surfaces — the on-screen touch keyboard, a
 USB keyboard, and the serial console — and the editor surface is exactly as

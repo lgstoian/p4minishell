@@ -3,6 +3,8 @@ rem =====================================================================
 rem  BOUNCE.BAT - a gfx bouncing-ball demo: pixel canvas + batch math +
 rem  a killable frame loop. Reference app for `gfx` raster verbs.
 rem  Markers: [M-BOUNCE] / [M-BOUNCE-FRAME] / [M-BOUNCE-DONE].
+rem  The render loop never blocks on I/O (a `screenshot` in the loop froze
+rem  the animation for seconds): the BMP capture runs once at the end.
 rem  Foreground-only: the canvas is a shared display surface, so `gfx`
 rem  refuses inside `start` background jobs (like modal verbs).
 rem =====================================================================
@@ -42,11 +44,12 @@ gfx circle %x% %y% 12 14 fill
 gfx circle %x% %y% 5 15 fill
 gfx show
 echo [M-BOUNCE-FRAME] %n%
-if %n% EQU 30 screenshot BOUNCE.BMP
-delay 50
-if %n% GEQ 60 goto done
+delay 33
+if %n% GEQ 240 goto done
 goto loop
 :done
+rem Capture the final frame once, off the animation loop.
+screenshot BOUNCE.BMP
 gfx close
 echo [M-BOUNCE-DONE] frames=%n%
 goto end

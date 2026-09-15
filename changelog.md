@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.38.3] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
+
+### Fixed — BOUNCE.BAT jerky / stuck animation (gfx canvas present latency + blocking in-loop screenshot)
+
+- **The bouncing-ball demo looked sluggish and jerky because `gfx show` did
+  not present the frame promptly.** `gfx show` only calls `lv_obj_invalidate()`;
+  the ESP LVGL port task sleeps up to `task_max_sleep_ms` (500 ms) between
+  timers, so the invalidated canvas was often not redrawn until the next
+  unrelated timer fired. A 20 fps batch loop therefore presented only ~4–5
+  frames/s — the ball jumped ~3 frames at a time. `gfx show` now calls
+  `lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL)` after invalidating, so
+  the canvas presents each frame.
+  - Measured with the webcam ball tracker: **35% → 85%** of camera frames show
+    the ball moving; the animation is now smooth.
+- **`BOUNCE.BAT` froze for ~3 s mid-animation.** The loop ran
+  `if %n% EQU 30 screenshot BOUNCE.BMP`; `screenshot` re-renders the whole
+  1024x600 screen (`lv_snapshot_take`) and writes a 1.8 MB BMP, blocking the
+  animation for seconds (the "gets stuck"). The capture now runs once, after the
+  loop; the frame loop never does I/O. The run was extended from 60 to 240
+  frames so the demo is a proper continuous animation (and the harness
+  mid-flight screenshot at 5 s still lands during it). `bounce_test.py` and
+  `bounce_twice.py` pass; `pkg info BOUNCE` / `asset check BOUNCE` verify.
+
 ## [0.38.2] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
 ### Fixed — "BSOD" full-screen blue flash (MIPI-DSI underrun); boot first-mount work + SD/C6 bring-up order

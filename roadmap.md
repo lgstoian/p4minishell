@@ -1,4 +1,4 @@
-# P4MiniShell Roadmap (v0.38.2, suite 300/0/2)
+# P4MiniShell Roadmap (v0.38.3, suite 300/0/2)
 
 ## Goal
 The long-term goal is to turn P4MiniShell into a practical embedded shell environment with strong DOS/PowerShell-style usability and a real "app" story that runs off the SD card.
@@ -16,7 +16,7 @@ Concretely:
   file commands on SD, a rich batch language, a library of native modal surfaces,
   a stable C SDK (`applib`) for native programs, and on-SD apps (batch-first).
 
-## Current baseline (v0.38.2)
+## Current baseline (v0.38.3)
 Implemented today in the checked-in firmware (hardware-verified on COM3, extensive bug hunting):
 
 **Current verified baseline:** unit **300/0/2** on COM3 (ESP-IDF v5.5.5); companion deep / db /

@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v0.38.2** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
+> **Applies to firmware v0.38.3** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
 
 ## ANSI/VT Color Support
 
@@ -2300,8 +2300,9 @@ image`, `image info`). Generic image caps: `GFX_IMAGE_MAX_W/H`
 Colors are DOS 0-15 from the CGA table (`tui_dos_color_rgb`, so pixel colors
 match TUI cell colors), `16` = black, anything larger is 24-bit RGB hex used
 at full RGB565 precision (no quantization — unlike `draw`). Reference apps:
-`apps/gfxdemo/BOUNCE.BAT` (batch `set /a` ball physics, 60-frame killable
-loop, in-app `screenshot BOUNCE.BMP` at frame 30; run `launch bounce`) and
+`apps/gfxdemo/BOUNCE.BAT` (batch `set /a` ball physics, 240-frame killable
+loop at ~30 fps, final-frame `screenshot BOUNCE.BMP` after the loop — the
+render loop itself never blocks on I/O; run `launch bounce`) and
 `apps/gfxdemo/GFXTOOL.BAT` (all toolkit primitives + scaled text, saves
 `GFXTOOL.BMP`; run `launch gfxtool`).
 

@@ -227,6 +227,11 @@ bool shell_command_gfx(int argc, char **argv)
             return false;
         }
         lv_obj_invalidate(s_gfx_canvas);
+        /* Wake the LVGL port task so the frame presents now. An invalidation
+         * alone does not wake it: the port sleeps up to task_max_sleep_ms
+         * (500 ms) between timers, so a 20 fps animation loop would only be
+         * redrawn every few frames and the motion looks jerky. */
+        lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL);
         lvgl_port_unlock();
         batch_set_errorlevel(0);
         return true;
