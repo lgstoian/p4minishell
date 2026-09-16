@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """push_pkgs.py - build + push SD app packages (bundles) to the board.
 
 For each reference app it creates `PKGS/<APP>/` containing the app payload

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file archive.h
  * @brief USTAR (.p4a) backup archives for P4MiniShell.

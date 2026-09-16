@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """asset_test.py - HW verify crc32/asset verbs.
 
 Usage: python asset_test.py [COMx]

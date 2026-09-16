@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file applib_input.h
  * @brief Input-with-timeout group of the applib.

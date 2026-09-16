@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """snake_test.py - run SNAKE.BAT straight into the wall (no steering).
 
 Usage: python snake_test.py [COMx]

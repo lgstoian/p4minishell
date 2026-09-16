@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file font.c
  * @brief Unified font registry with roles and fallback chains.
@@ -317,26 +321,14 @@ static void font_ttf_lock_init(void)
  * renders, never synchronously on the worker. */
 static void font_ttf_destroy_cb(void *font)
 {
-    int i;
-
     if (font == NULL) {
         return;
     }
+    /* Runs on the LVGL task with the port lock held, so it MUST NOT take
+     * s_ttf_lock: the worker holds s_ttf_lock while waiting for the port lock
+     * (the load path), and that would be an ABBA deadlock. The owning slot is
+     * cleared synchronously at schedule time instead. */
     lv_tiny_ttf_destroy((lv_font_t *)font);
-    if (s_ttf_lock != NULL) {
-        xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
-    }
-    for (i = 0; i < FONT_TTF_SLOTS; i++) {
-        /* Stale check: the slot may have been reused since scheduling. */
-        if (s_ttf_slots[i].used && s_ttf_slots[i].font == (lv_font_t *)font) {
-            s_ttf_slots[i].used = false;
-            s_ttf_slots[i].font = NULL;
-            break;
-        }
-    }
-    if (s_ttf_lock != NULL) {
-        xSemaphoreGive(s_ttf_lock);
-    }
 }
 
 static void font_ttf_release_locked(int slot)
@@ -345,9 +337,15 @@ static void font_ttf_release_locked(int slot)
         return;
     }
     if (--s_ttf_slots[slot].refs <= 0) {
+        lv_font_t *old = s_ttf_slots[slot].font;
+
+        /* Clear the slot now so it can never be found/reacquired while the
+         * destroy is pending; the object itself is freed async (in-flight
+         * renders may still reference it). */
         s_ttf_slots[slot].refs = 0;
-        /* Freed async (see above); the slot stays reserved until then. */
-        lv_async_call(font_ttf_destroy_cb, s_ttf_slots[slot].font);
+        s_ttf_slots[slot].used = false;
+        s_ttf_slots[slot].font = NULL;
+        (void)lv_async_call(font_ttf_destroy_cb, old);
     }
 }
 
@@ -417,9 +415,14 @@ static int font_ttf_load_locked(const char *stem, int px)
          * reused immediately and the destroy callback stale-checks. */
         for (i = 0; i < FONT_TTF_SLOTS; i++) {
             if (s_ttf_slots[i].used && s_ttf_slots[i].refs <= 0) {
+                lv_font_t *old = s_ttf_slots[i].font;
+
                 ESP_LOGW(FONT_TAG, "slot pressure: evicting %s@%d",
                          s_ttf_slots[i].stem, s_ttf_slots[i].px);
-                lv_async_call(font_ttf_destroy_cb, s_ttf_slots[i].font);
+                s_ttf_slots[i].used = false;
+                s_ttf_slots[i].font = NULL;
+                s_ttf_slots[i].refs = 0;
+                (void)lv_async_call(font_ttf_destroy_cb, old);
                 slot = i;
                 break;
             }

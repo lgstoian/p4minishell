@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file ansi.h
  * @brief ANSI/VT escape sequence module for P4MiniShell.

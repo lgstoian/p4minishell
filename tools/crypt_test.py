@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """crypt_test.py - hardware driver for the crypt password-file verb.
 
 Checks lock/unlock round-trip, ciphertext opacity, wrong-password

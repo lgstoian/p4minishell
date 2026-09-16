@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """run_companion.py - RETIRED driver stub.
 
 The pre-TUI text scenarios this driver asserted ("Enter choice (1-6):",

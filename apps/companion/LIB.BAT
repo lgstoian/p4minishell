@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  LIB.BAT - shared routines for the P4 Companion.
 rem  Every routine is reached with `call LIB.BAT::<routine> [args]`.

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_tcpterm.c
  * @brief Unit tests for the pure tcpterm helpers (networking/tcpterm.c).

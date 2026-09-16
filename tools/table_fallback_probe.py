@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """table_fallback_probe.py - force the off-TUI table path, read parse result.
 
 Usage: python table_fallback_probe.py [COMx]

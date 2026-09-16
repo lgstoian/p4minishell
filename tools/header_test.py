@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """header_test.py - HW verification for the responsive header.
 
 Checks, across layout modes and rotations, that:

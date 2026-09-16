@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """editor_test.py - HW verification for the touch-complete `edit` surface.
 
 The editor is a modal surface driven by serial lines while it is open, so this

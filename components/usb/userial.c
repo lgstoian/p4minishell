@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file userial.c
  * @brief USB-Host CDC-ACM serial driver (`usb userial`, verbs in command/).

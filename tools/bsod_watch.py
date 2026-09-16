@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """BSOD watcher: timestamped serial capture for 25 minutes."""
 import time
 import sys

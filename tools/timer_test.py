@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """timer_test.py - hardware driver for the timer/stopwatch verb.
 
 Exercises start/lap/stop/status, /v:NAME storage, and the usage/error

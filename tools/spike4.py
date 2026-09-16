@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """spike4.py - decisive space/tab choice test.
 
 Usage: python spike4.py [COMx]

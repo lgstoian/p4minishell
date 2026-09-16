@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file wifi_known.c
  * @brief Persistent known Wi-Fi network list (sd:/WIFI.KNOWN).
@@ -98,14 +102,9 @@ static bool known_ssid_equals(const char *left, const char *right)
     if (left == NULL || right == NULL) {
         return false;
     }
-    while (*left != '\0' && *right != '\0') {
-        if (tolower((unsigned char)*left) != tolower((unsigned char)*right)) {
-            return false;
-        }
-        left++;
-        right++;
-    }
-    return *left == '\0' && *right == '\0';
+    /* 802.11 SSIDs are case-sensitive byte strings: two networks whose names
+     * differ only in case are distinct. */
+    return strcmp(left, right) == 0;
 }
 
 static int known_index_of(const char *ssid)
@@ -228,27 +227,27 @@ static esp_err_t known_parse_entry(char *line, networking_wifi_known_entry_t *en
 
     end = NULL;
     entry->authmode = (int)strtol(fields[2], &end, 10);
-    if (end == fields[2]) {
+    if (end == fields[2] || *end != '\0') {
         return ESP_ERR_INVALID_RESPONSE;
     }
     end = NULL;
     entry->priority = (int)strtol(fields[3], &end, 10);
-    if (end == fields[3]) {
+    if (end == fields[3] || *end != '\0') {
         return ESP_ERR_INVALID_RESPONSE;
     }
     end = NULL;
     entry->preferred = (strtol(fields[4], &end, 10) != 0);
-    if (end == fields[4]) {
+    if (end == fields[4] || *end != '\0') {
         return ESP_ERR_INVALID_RESPONSE;
     }
     end = NULL;
     entry->last_connected = (int64_t)strtoll(fields[5], &end, 10);
-    if (end == fields[5]) {
+    if (end == fields[5] || *end != '\0') {
         return ESP_ERR_INVALID_RESPONSE;
     }
     end = NULL;
     entry->connect_count = (int)strtol(fields[6], &end, 10);
-    if (end == fields[6]) {
+    if (end == fields[6] || *end != '\0') {
         return ESP_ERR_INVALID_RESPONSE;
     }
 
@@ -371,10 +370,14 @@ esp_err_t networking_wifi_known_save(void)
     }
     known_unlock();
 
-    if (fflush(file) != 0 || fclose(file) != 0) {
-        remove(tmp);
-        shell_sd_end(&session, "wifi known");
-        return ESP_ERR_INVALID_RESPONSE;
+    {
+        int flush_rc = fflush(file);
+        int close_rc = fclose(file);
+        if (flush_rc != 0 || close_rc != 0) {
+            remove(tmp);
+            shell_sd_end(&session, "wifi known");
+            return ESP_ERR_INVALID_RESPONSE;
+        }
     }
 
     /* Atomic replace. FATFS f_rename refuses to overwrite an existing target,
@@ -384,7 +387,7 @@ esp_err_t networking_wifi_known_save(void)
         if (rename(tmp, path) != 0) {
             remove(tmp);
             shell_sd_end(&session, "wifi known");
-        
+
             return ESP_ERR_INVALID_RESPONSE;
         }
     }

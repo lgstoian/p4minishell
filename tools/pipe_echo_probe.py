@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """pipe_echo_probe.py - minimal quoted-pipeargv test.
 
 Usage: python pipe_echo_probe.py [COMx]

@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  PKGTEST.BAT - minimal package-management demo app. Installed from the
 rem  bundle PKGS/PKGTEST by `pkg install PKGTEST`; uninstalled with

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file serial_commands.c
  * @brief Screenshot and serial-transfer verbs (screenshot/receive/send).
@@ -548,7 +552,14 @@ static void serial_diag_line(char *buf, size_t cap, size_t *pos, const char *fmt
     n = vsnprintf(buf + *pos, cap - *pos, fmt, args);
     va_end(args);
     if (n > 0) {
-        *pos += (size_t)n;
+        /* vsnprintf returns the length it WOULD have written; on truncation
+         * keep *pos at the last writable byte so callers can never use a
+         * length that runs past the buffer. */
+        if (*pos + (size_t)n >= cap) {
+            *pos = cap - 1;
+        } else {
+            *pos += (size_t)n;
+        }
     }
 }
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """spike6.py - render-pipeline primitives go/no-go.
 
 Usage: python spike6.py [COMx]

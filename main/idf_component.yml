@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 dependencies:
   # Reconfigure after managed component version changes: idf.py reconfigure
   lvgl/lvgl:

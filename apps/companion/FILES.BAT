@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  FILES.BAT - File Tools: browse, view, hexview, trash, clipboard, notes.
 rem  Enhanced TUI with draw boxes, fullscreen, and window management.

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file wifi_known.h
  * @brief Persistent known Wi-Fi network list (sd:/WIFI.KNOWN).

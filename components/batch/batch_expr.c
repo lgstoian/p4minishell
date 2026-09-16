@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file batch_expr.c
  * @brief Integer expression evaluator behind `set /a` (+ set helpers).

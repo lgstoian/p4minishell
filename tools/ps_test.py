@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """ps_test.py - grab ps output for stack sizing.
 
 Usage: python ps_test.py [COMx]

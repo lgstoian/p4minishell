@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file clock_commands.c
  * @brief Clock command surface for P4MiniShell (date / time / timezone / sntp).

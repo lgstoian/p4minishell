@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bg_crash_repro.py - start a bg delay, then only listen for death.
 
 Usage: python bg_crash_repro.py [COMx]

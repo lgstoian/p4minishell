@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """pull.py - download an SD file via `send` (SDFX framing).
 
 Usage: python pull.py <remote-path> <local-out> [COMx]

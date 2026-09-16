@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  BOUNCE.BAT - a gfx bouncing-ball demo: pixel canvas + batch math +
 rem  a killable frame loop. Reference app for `gfx` raster verbs.

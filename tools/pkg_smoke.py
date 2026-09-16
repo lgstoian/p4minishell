@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """pkg_smoke.py - quick pkg list/info/verify against existing manifests."""
 import sys
 

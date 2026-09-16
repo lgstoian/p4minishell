@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """asset_test2.py - negative paths (bad CRC, missing file, bad app).
 
 Usage: python asset_test2.py [COMx]

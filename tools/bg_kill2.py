@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bg_kill2.py - start bg delay, verify alive, kill it, verify alive.
 
 Usage: python bg_kill2.py [COMx]

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_db.c
  * @brief Unit tests for the Palm-OS-style SD record store (components/db).

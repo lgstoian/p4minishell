@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file theme.h
  * @brief UI theme registry: chrome colors + font roles, switchable at runtime.

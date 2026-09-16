@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bg_kill4.py - mid-run cooperative kill with silence-drain timing.
 
 Usage: python bg_kill4.py [COMx]

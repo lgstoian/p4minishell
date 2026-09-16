@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """wifi_bench.py - Wi-Fi throughput bench (host endpoint for `wifi throughput`).
 
 Drives the firmware's `wifi throughput` command and runs the matching host

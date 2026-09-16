@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """push_assets.py - push game/app asset blobs + CRC manifests.
 
 Generates deterministic sample sprites with PIL (no binary blobs in the

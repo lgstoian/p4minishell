@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """perf_for_test.py - functional + timing check for the for-loop deferral.
 
 Usage: python perf_for_test.py [COMx]

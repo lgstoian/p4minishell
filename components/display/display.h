@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file display.h
  * @brief Display manager for P4MiniShell — rotation, resolution, refresh rate, backlight.

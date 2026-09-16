@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """sd_check.py - is the SD card mounted?
 
 Usage: python sd_check.py [COMx]

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file applib_tui.h
  * @brief Native TUI SDK — re-exports the shared TUI engine for native apps.
@@ -5,8 +9,8 @@
  * Native apps use the same TUI cell buffer as batch apps (components/tui).
  * This header is a thin re-export so `applib.h` remains the single umbrella
  * for native apps. The implementation lives in components/tui (tui.c); this
- * component's applib_tui.c is intentionally empty (stub) until native TUI
- * helpers are needed.
+ * component's applib_tui.c is intentionally empty, as native apps link
+ * components/tui directly.
  */
 
 #ifndef P4MINISHELL_APPLIB_TUI_H

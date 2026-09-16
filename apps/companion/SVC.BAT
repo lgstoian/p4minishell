@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  SVC.BAT - background service demo. Launch with `start SVC`; stop with
 rem  `taskkill bg0`. Runs on the background worker, so it uses only

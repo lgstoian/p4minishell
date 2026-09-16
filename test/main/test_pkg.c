@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_pkg.c
  * @brief Unit tests for the `pkg` pure helpers (pkg_commands.c).

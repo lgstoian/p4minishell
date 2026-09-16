@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """spike7.py - ^| escape + findstr invert + pipeline-to-file go/no-go.
 
 Usage: python spike7.py [COMx]

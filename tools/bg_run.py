@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bg_run.py - shared marker-sync driver for bg lifecycle tests.
 
 Prompt-tail matching cannot work here: deferred transcript output legally

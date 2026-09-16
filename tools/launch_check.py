@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """launch_check.py - why do ADVENT/NOTES/MOOD fail to launch?
 
 Usage: python launch_check.py [COMx]

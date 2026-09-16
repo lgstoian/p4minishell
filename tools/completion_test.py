@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """completion_test.py - HW verification for shell completion + recall history.
 
 Covers the batch-testable `history /search <text>` filter (hit, miss, and the

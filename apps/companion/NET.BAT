@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  NET.BAT - Network Tools. Enhanced TUI with draw boxes and status.
 rem  Uses TUI for Wi-Fi status, connect, ping, dns, fetch.

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file ui_commands.h
  * @brief `ui` verb family: touch automation / inspection (see ui_commands.c).

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 idf_component_register(
     SRCS "main.c" "p4minishell.c" "native_apps.c" "assets/icon_splash.c"
     INCLUDE_DIRS "." "assets"

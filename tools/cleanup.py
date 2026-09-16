@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """cleanup.py - remove test litter from the SD root.
 
 Usage: python cleanup.py [COMx]

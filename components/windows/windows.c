@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file windows.c
  * @brief Window manager implementation for P4MiniShell LVGL shell UI.
@@ -1338,6 +1342,18 @@ void windows_deinit(void)
     s_windows.stop_button = NULL;
     s_windows.stop_label = NULL;
     s_windows.stop_wanted = false;
+    /* Reset the surface-mode state too: a rotation rebuild deinits and
+     * reinits, and a stale tui_mode/editor_mode would hand back dangling
+     * surface pointers to the next session. */
+    s_windows.input_ghost = NULL;
+    s_windows.search_label = NULL;
+    s_windows.editor_mode = false;
+    s_windows.editor_surface = NULL;
+    s_windows.editor_status = NULL;
+    s_windows.app_mode = false;
+    s_windows.tui_mode = false;
+    s_windows.tui_surface = NULL;
+    s_windows.fullscreen = false;
     s_windows.initialized = false;
 
     /* Release the PSRAM staging buffers so a rebuild starts clean. They are
@@ -1377,6 +1393,13 @@ void windows_notify_keyboard_visibility(bool visible)
 {
     (void)visible;
 
+    /* The keyboard fires this after it releases the port lock, from the
+     * command worker; every call below touches LVGL widgets/layout, so take
+     * the (recursive) port lock here. */
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+
     /* The screen is a flex column; the header, transcript, input row and
      * keyboard are already positioned by flex in creation order. Do NOT set
      * manual y coordinates on any flex child — that fights the flex layout
@@ -1407,6 +1430,8 @@ void windows_notify_keyboard_visibility(bool visible)
                      (int)lv_obj_get_height(s_windows.tui_surface));
         }
     }
+
+    lvgl_port_unlock();
 }
 
 /* ========================================================================

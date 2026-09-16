@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bg_test2.py - start/taskkill lifecycle on-board.
 
 Usage: python bg_test2.py [COMx]

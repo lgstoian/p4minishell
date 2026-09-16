@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_config.c
  * @brief Unit tests for the pure CONFIG.SYS directive line-editing helpers.

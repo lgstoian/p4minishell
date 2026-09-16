@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file config_cmd.c
  * @brief `config` command: read/write the CONFIG.SYS settings file.
@@ -375,15 +379,17 @@ static bool config_write_file(const char *text)
         shell_sd_end(&session, "config");
         return false;
     }
-    if (fwrite(text, 1, text_len, file) != text_len || fflush(file) != 0 || fclose(file) != 0) {
-        if (file != NULL) {
-            fclose(file);
+    {
+        bool wrote_ok = (fwrite(text, 1, text_len, file) == text_len);
+        int flush_rc = fflush(file);
+        int close_rc = fclose(file);
+        file = NULL;
+        if (!wrote_ok || flush_rc != 0 || close_rc != 0) {
+            remove(tmp);
+            shell_sd_end(&session, "config");
+            return false;
         }
-        remove(tmp);
-        shell_sd_end(&session, "config");
-        return false;
     }
-    file = NULL;
 
     /* FATFS f_rename refuses to overwrite an existing target. */
     if (rename(tmp, path) != 0) {

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file asset_commands.c
  * @brief `crc32` + `asset` verbs: file checksums and app asset manifests.

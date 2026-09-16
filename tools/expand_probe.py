@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """expand_probe.py - does `call` double-expand %%vars%%?
 
 Usage: python expand_probe.py [COMx]

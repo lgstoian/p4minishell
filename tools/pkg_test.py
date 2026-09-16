@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """pkg_test.py - HW round-trip for `pkg` (B1 packaged SD apps).
 
 Precondition: `python apps/push_pkgs.py COMx` has pushed PKGS/PKGTEST.

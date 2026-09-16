@@ -1,8 +1,13 @@
 # Hosted Module API
 
-This document describes the public integration surface exposed by the hosted runtime modules under `components/`.
+This document lists the C API each component exposes to the rest of the
+firmware, organized by module and mirroring the headers under `components/`.
 
-> **v0.38.5 public API reference (current).** Recent additions: `components/gfx/` raster + BMP API with the **B2 toolkit** (`gfx_surface_hline/vline/triangle/ellipse/polygon/flood_fill/text`, `gfx_text_width`, `gfx_font8x8`), `shell_command_gfx`/`shell_command_crc32`/`shell_command_asset`, packaged SD apps (`shell_command_pkg`, `pkg_app_name_from_appinfo`, and the shared `asset_app_ok`/`asset_crc_file`/`asset_verify_app`), the **B3 theme registry** (`theme_current`/`theme_get`/`theme_set`/`theme_builtin_at`, `windows_refresh_theme`, `keyboard_refresh_theme`, `header_refresh_theme`), the **plot coordinate layer** (`shell_command_plot`, `gfx_view_*`, shared `gfx_canvas_*`/`draw_*` accessors), background jobs (`shell_command_start`/`shell_command_taskkill`, `batch_bg_alloc/bind/release/request_kill/kill_requested/is_background`), TUI selectable grids (`tui_draw_table_ex`, `tui_table_parse_cursor`, `tui_table_parse_sel`), transcript length tracking (`shell_transcript_get_length`/`get_ansi_length` are O(1)), and `windows_set_transcript_text_len()`. Verified baseline: unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25 (COM3, ESP-IDF v5.5.5).
+> **Current public API reference (v1.0.0).** For the working rules and
+> invariants behind these functions see [`ai-context.md`](ai-context.md); for
+> integration examples see [`SDK.md`](SDK.md); for the user-facing command
+> surface see [`command.md`](command.md). Current verified test baselines live
+> in [`test/README.md`](test/README.md).
 
 ## Shared integration pattern
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It holds no command implementations and no shell state.
@@ -29,6 +34,11 @@ This document describes the public integration surface exposed by the hosted run
 - `components/markdown` owns the CommonMark-subset renderer used by the `markdown` verb and `view *.md`.
 - `components/font` owns the font registry (roles/sizes/fallbacks), the SD TTF loader, CJK auto-attach, and the theme table.
 - `components/boot` owns the `CONFIG.SYS` parser and `AUTOEXEC.BAT` runner (plus default-file generation).
+- `components/storage/storage_csv.c` owns the one RFC-4180-subset CSV parser (`csv_split_line`) shared by the `csv` and `export` command bodies; `components/db/` owns the one `k=v` field parser (`db_field_get`).
+- `components/networking/tcpterm.c` owns the one-shot TCP terminal (`tcpterm`), with the other lwIP socket surfaces.
+- `components/usb/userial.c` owns the lazy CDC-ACM class driver + byte API/RX ring; the `usb userial` verbs live in `components/command/userial_commands.c`.
+- `components/clock/clock_timer.c` owns the named stopwatch slots behind `timer`/`stopwatch`.
+- `components/gfx/gfx_view.c` owns the world-coordinate viewport (map/clip/nice-step) behind `plot`.
 - `components/clock` owns time/SNTP/timezone services and the `date`/`time`/`timezone`/`sntp` verbs.
 - `components/audio` owns the ES8311 codec path, volume, and the background tone/WAV engine; the verbs parse in `components/command/audio_commands.c`.
 - `components/applib` is the native-app runtime/ABI library (umbrella `applib.h` over the lean `applib_*.h` headers).
@@ -843,7 +853,7 @@ esp_err_t storage_temp_cleanup(void);
   state group share this core; the `config` command's `config_directive_*`
   helpers are thin wrappers over `storage_ini_get_value/upsert/remove`.
 
-## TUI Module API (hardware testing patch 0.35.0→0.35.1 on COM11, stack 32768 at 0x4012b75a, companion 10 BATs TUI-expanded)
+## TUI Module API (`components/tui/` + `components/modal/`)
 
 Declared in `components/tui/tui.h` (leaf: `REQUIRES shell, windows, ansi, display`). Logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` `80×25` (`p4minishell_config.h:325`) heap cell buffer (`utf8[4]` `tui_cell_t`) mapped to the live transcript region `1024x510` via `windows_enter_tui_mode`/`windows_refresh_tui_surface`/`windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). Font: extended `unscii_16` in-place (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, 384 glyphs U+2500-U+257F/U+2600-U+26FF, cmaps 3, `CONFIG_LV_FONT_UNSCII_16=y` `sdkconfig.defaults:33`).
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """env_probe.py - count ambient env vars (Snake budget).
 
 Usage: python env_probe.py [COMx]

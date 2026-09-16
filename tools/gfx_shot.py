@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """gfx_shot.py - gfx canvas demo + binary screenshot in one session.
 
 Usage: python gfx_shot.py [COMx] [out.bmp]

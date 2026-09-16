@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """svc_test.py - background service + alarm scheduler on hardware.
 
 Usage: python svc_test.py [COMx]

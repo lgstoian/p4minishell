@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 import os
 import sys
 

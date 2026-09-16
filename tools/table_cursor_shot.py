@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """table_cursor_shot.py - Phase 2 HW verify: /cursor + /sel rendering.
 
 Usage: python table_cursor_shot.py [COMx]

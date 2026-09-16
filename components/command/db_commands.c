@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file db_commands.c
  * @brief The `db` command: a Palm-OS-style SD-backed record store surface.

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file power_commands.c
  * @brief Display/power/battery verbs (brightness/rotate/battery/power/

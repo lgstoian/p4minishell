@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """push_sd.py - upload the P4 Companion app files to the SD card.
 
 Uses the shell's ACK-paced `receive <path> <size> /crc` binary transfer so

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """gfx_sprite_test.py - HW verify gfx load/blt/save/slots/free + errors.
 
 Usage: python gfx_sprite_test.py [COMx]

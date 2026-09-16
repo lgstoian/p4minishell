@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """
 Capture TUI screenshots for regression testing.
 Sends TUI commands, captures screenshots, diffs vs golden.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bounce_test.py - run BOUNCE.BAT to completion + mid-flight screenshot.
 
 Usage: python bounce_test.py [COMx]

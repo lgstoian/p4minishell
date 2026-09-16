@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """clip_probe.py - verify transcript slice (clip copy) after length tracking."""
 import sys
 import time

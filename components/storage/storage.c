@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file storage.c
  * @brief SD session management and filesystem services for P4MiniShell.
@@ -874,6 +878,17 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
         }
     }
 
+    /* A read error returns 0 from fread and is NOT EOF: report and clean up
+     * the partial destination rather than publishing a silently-truncated copy. */
+    if (ferror(source)) {
+        fclose(dest);
+        fclose(source);
+        (void)unlink(dest_path);
+        shell_print_error("copy: read failed, removed the partial %s", dest_path);
+        shell_sd_end(&session, "copy");
+        return ESP_FAIL;
+    }
+
     fclose(dest);
     fclose(source);
 
@@ -1274,7 +1289,8 @@ esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *
             int new_cap = (capacity == 0) ? 8 : capacity * 2;
             char **grown = realloc(tokens, sizeof(char *) * new_cap);
             if (grown == NULL) {
-                free(tokens);
+                /* Free the strings already stored, not just the array. */
+                storage_free_wildcard_expansion(tokens, count);
                 f_closedir(&dir);
                 shell_sd_end(&session, "wildcard");
                 return ESP_ERR_NO_MEM;

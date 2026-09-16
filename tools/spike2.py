@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """spike2.py - Phase 1 follow-up: redirect ANSI?, token parse, space/tab keys.
 
 Usage: python spike2.py [COMx]

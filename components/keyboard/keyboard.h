@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file keyboard.h
  * @brief On-screen keyboard manager for P4MiniShell LVGL shell UI.

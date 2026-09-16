@@ -1,4 +1,6 @@
-﻿import time
+﻿# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
+import time
 import sys
 import os
 
@@ -21,7 +23,7 @@ while time.time() < deadline:
         sys.stdout.flush()
 
 print("\nConnecting WiFi...")
-ser.write(b"wifi connect 4G-CPE_5542 1234567890\r\n")
+ser.write(b"wifi connect <P4_WIFI_SSID> <P4_WIFI_PASSWORD>\r\n")
 ser.flush()
 
 # Wait for got IP

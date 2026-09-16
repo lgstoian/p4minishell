@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file import_commands.c
  * @brief `import` — portable interchange INTO the structured stores.
@@ -109,26 +113,6 @@ static void *import_alloc(size_t size)
         p = malloc(size);
     }
     return p;
-}
-
-/** Bounded string copy (explicit truncation, no -Wformat-truncation). */
-static void import_copy_trunc(char *dst, size_t dst_size, const char *src)
-{
-    size_t n;
-
-    if (dst == NULL || dst_size == 0) {
-        return;
-    }
-    if (src == NULL) {
-        dst[0] = '\0';
-        return;
-    }
-    n = strlen(src);
-    if (n > dst_size - 1) {
-        n = dst_size - 1;
-    }
-    memcpy(dst, src, n);
-    dst[n] = '\0';
 }
 
 /** Guarded SD open for reading (mirrors the csv source pattern). */
@@ -406,9 +390,12 @@ static bool import_read_csv_row(FILE *file, char *row, size_t size, bool *capped
             *capped = true;
             if (!import_quotes_balanced(row)) {
                 bool balanced = false;
+                /* Drain following lines until quote parity closes (the row was
+                 * already oversized/unbalanced; never stop on an unbalanced
+                 * line). */
                 while (!balanced &&
                        import_next_line(file, line, P4_CONFIG_TEXT_LINE_BYTES)) {
-                    balanced = (import_quotes_balanced(line) == balanced);
+                    balanced = import_quotes_balanced(line);
                 }
             }
             heap_caps_free(line);
@@ -453,7 +440,7 @@ static bool import_db_commit(const char *name, long cat, const char *key,
         count->skipped++;
         return false;
     }
-    import_copy_trunc(keybuf, sizeof(keybuf), key);
+    command_copy_trunc(keybuf, sizeof(keybuf), key);
     if (db_add(name, (uint8_t)cat, keybuf, secret,
                payload != NULL ? payload : "", payload != NULL ? strlen(payload) : 0,
                &id) != ESP_OK) {
@@ -909,7 +896,7 @@ static void import_vcf_name_from_n(const char *value, char *out, size_t out_size
     }
     out[0] = '\0';
     if (semi == NULL) {
-        import_copy_trunc(out, out_size, value);
+        command_copy_trunc(out, out_size, value);
         return;
     }
     flen = (size_t)(semi - value);
@@ -929,7 +916,7 @@ static void import_vcf_name_from_n(const char *value, char *out, size_t out_size
         given[glen] = '\0';
     }
     if (given[0] != '\0') {
-        import_copy_trunc(out + pos, out_size - pos, given);
+        command_copy_trunc(out + pos, out_size - pos, given);
         pos = strlen(out);
         if (family[0] != '\0' && pos + 1 < out_size) {
             out[pos++] = ' ';
@@ -937,7 +924,7 @@ static void import_vcf_name_from_n(const char *value, char *out, size_t out_size
         }
     }
     if (family[0] != '\0') {
-        import_copy_trunc(out + pos, out_size - pos, family);
+        command_copy_trunc(out + pos, out_size - pos, family);
     }
 }
 
@@ -1018,7 +1005,7 @@ static void import_vcf_line(const char *current, void *vctx)
         snprintf(decoded, sizeof(decoded), "%s", value);
         import_vcf_unescape(decoded);
         if (strcasecmp(prop, "FN") == 0) {
-            import_copy_trunc(ctx->card.name, sizeof(ctx->card.name), decoded);
+            command_copy_trunc(ctx->card.name, sizeof(ctx->card.name), decoded);
         } else if (strcasecmp(prop, "N") == 0) {
             if (ctx->card.name[0] == '\0') {
                 import_vcf_name_from_n(decoded, ctx->card.name, sizeof(ctx->card.name));
@@ -1029,15 +1016,15 @@ static void import_vcf_line(const char *current, void *vctx)
             import_vcf_join(ctx->card.email, sizeof(ctx->card.email), decoded);
         } else if (strcasecmp(prop, "ORG") == 0) {
             if (ctx->card.org[0] == '\0') {
-                import_copy_trunc(ctx->card.org, sizeof(ctx->card.org), decoded);
+                command_copy_trunc(ctx->card.org, sizeof(ctx->card.org), decoded);
             }
         } else if (strcasecmp(prop, "TITLE") == 0) {
             if (ctx->card.title[0] == '\0') {
-                import_copy_trunc(ctx->card.title, sizeof(ctx->card.title), decoded);
+                command_copy_trunc(ctx->card.title, sizeof(ctx->card.title), decoded);
             }
         } else if (strcasecmp(prop, "NOTE") == 0) {
             if (ctx->card.note[0] == '\0') {
-                import_copy_trunc(ctx->card.note, sizeof(ctx->card.note), decoded);
+                command_copy_trunc(ctx->card.note, sizeof(ctx->card.note), decoded);
             }
         }
         /* PHOTO/LOGO/KEY/SOUND/AGENT/PRODID/VERSION/REV/UID/... skipped. */
@@ -1170,8 +1157,8 @@ static bool import_alarm_commit(const char *title, const char *msg, time_t when,
     uint8_t fl;
     uint32_t id = 0;
 
-    import_copy_trunc(t, sizeof(t), title != NULL && title[0] != '\0' ? title : "Alarm");
-    import_copy_trunc(m, sizeof(m), msg);
+    command_copy_trunc(t, sizeof(t), title != NULL && title[0] != '\0' ? title : "Alarm");
+    command_copy_trunc(m, sizeof(m), msg);
     fl = (uint8_t)(flags & 0xFF);
     fl |= ALARM_FLAG_ENABLED;
     fl &= (uint8_t)~ALARM_FLAG_FIRED;
@@ -1638,14 +1625,14 @@ static void import_ics_line(const char *current, void *vctx)
         char decoded[IMPORT_LINE_BYTES];
         snprintf(decoded, sizeof(decoded), "%s", value);
         import_ics_unescape(decoded);
-        import_copy_trunc(ctx->ev.title, sizeof(ctx->ev.title), decoded);
+        command_copy_trunc(ctx->ev.title, sizeof(ctx->ev.title), decoded);
     } else if (strcasecmp(prop, "DESCRIPTION") == 0) {
         char decoded[IMPORT_LINE_BYTES];
         snprintf(decoded, sizeof(decoded), "%s", value);
         import_ics_unescape(decoded);
-        import_copy_trunc(ctx->ev.msg, sizeof(ctx->ev.msg), decoded);
+        command_copy_trunc(ctx->ev.msg, sizeof(ctx->ev.msg), decoded);
     } else if (strcasecmp(prop, "RRULE") == 0) {
-        import_copy_trunc(ctx->rrule, sizeof(ctx->rrule), value);
+        command_copy_trunc(ctx->rrule, sizeof(ctx->rrule), value);
     }
     /* UID/DTSTAMP/DTEND/DURATION/others are intentionally ignored. */
 }

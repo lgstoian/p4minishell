@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file header.c
  * @brief Fixed top status bar implementation for P4MiniShell.
@@ -1146,6 +1150,14 @@ static void header_render(void)
  * as an LVGL timer-list crash). */
 static bool header_schedule(lv_async_cb_t cb, void *payload)
 {
+    /* No header surface yet (unit tests, very early boot, or between a
+     * header_deinit() and the next header_init()): never touch LVGL. The
+     * caller's fallback header_render() is a safe no-op in that state.
+     * Calling lv_async_call() before LVGL is initialized corrupts the TLSF
+     * pool (the unit-test app crashed here). */
+    if (s_header_root == NULL) {
+        return false;
+    }
     return lv_async_call(cb, payload) == LV_RESULT_OK;
 }
 
@@ -1516,7 +1528,7 @@ void header_refresh_theme(void)
 
 void header_update_status(void)
 {
-    (void)lv_async_call(header_async_refresh, NULL);
+    (void)header_schedule(header_async_refresh, NULL);
 }
 
 void header_notify(header_notify_level_t level, const char *text, uint32_t timeout_ms)
@@ -1654,7 +1666,7 @@ header_mode_t header_get_mode(void)
 
 void header_relayout(void)
 {
-    (void)lv_async_call(header_async_refresh, NULL);
+    (void)header_schedule(header_async_refresh, NULL);
 }
 
 void header_get_metrics(header_metrics_t *out)
@@ -1742,7 +1754,7 @@ void header_update_batch(const header_batch_t *in)
     s_header_state.bg_jobs_running = in->bg_jobs_running;
 
     /* Schedule a single async render (no payload needed) */
-    (void)lv_async_call(header_async_refresh, NULL);
+    (void)header_schedule(header_async_refresh, NULL);
 }
 
 void header_set_visible(bool visible)

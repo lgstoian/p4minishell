@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """unit_run.py - flash the test project, capture Unity results.
 
 Usage: python unit_run.py [COMx]

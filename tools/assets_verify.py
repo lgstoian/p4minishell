@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """assets_verify.py - asset check every pushed manifest + sprite load.
 
 Usage: python assets_verify.py [COMx]

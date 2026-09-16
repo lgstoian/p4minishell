@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  SNAKE.BAT - TUI snake on packed coordinates (v = y*64+x, one env var
 rem  per segment). Batch has no arrays/indirection/substrings and env caps

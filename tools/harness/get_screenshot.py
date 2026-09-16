@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """
 Get screenshot from P4MiniShell and save to project folder.
 Reads the BMP file from SD card via serial console.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bg_kill_test.py - minimal cooperative-kill bisection.
 
 Usage: python bg_kill_test.py [COMx]

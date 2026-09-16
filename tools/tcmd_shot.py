@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tcmd_shot.py - screenshot the TCMD dual-pane UI."""
 import os
 import struct

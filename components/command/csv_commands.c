@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file csv_commands.c
  * @brief `csv` grid verbs: rows/cols/cell over guarded SD plus =EXPR eval.
@@ -635,12 +639,15 @@ static int csv_cmd_set(int argc, char **argv)
         }
         fputc('\n', tmpf);
     }
-    if (fflush(tmpf) != 0 || fclose(tmpf) != 0) {
+    {
+        int flush_rc = fflush(tmpf);
+        int close_rc = fclose(tmpf);
         tmpf = NULL;
-        shell_print_error("csv: cannot write %s", tmp_path);
-        goto close;
+        if (flush_rc != 0 || close_rc != 0) {
+            shell_print_error("csv: cannot write %s", tmp_path);
+            goto close;
+        }
     }
-    tmpf = NULL;
     /* FATFS rename refuses to overwrite: remove-then-rename like the store. */
     remove(resolved);
     if (rename(tmp_path, resolved) != 0) {

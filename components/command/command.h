@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file command.h
  * @brief Command parser and dispatcher for P4MiniShell.
@@ -239,6 +243,28 @@ void shell_command_view(int argc, char **argv);
 void shell_command_open(int argc, char **argv);
 void shell_command_hexview(int argc, char **argv);
 void shell_command_image(int argc, char **argv);
+
+/**
+ * Load a whole file into a PSRAM-first heap buffer under a guarded SD
+ * session. The single shared loader behind `image info`, `draw image`,
+ * `gfx image`, and `gfx load`; the caller decodes and frees the buffer.
+ *
+ * @param path_arg  User-supplied path (resolved internally).
+ * @param verb      Error-message prefix, e.g. "gfx image".
+ * @param max_bytes Upper bound on the file size.
+ * @param out_buf   Receives the heap buffer (caller heap_caps_free()s it).
+ * @param out_size  Receives the byte count.
+ * @return 0 on success, otherwise an ERRORLEVEL (1 I/O, 2 usage/path) after
+ *         printing the reason.
+ */
+int command_load_file_psram(const char *path_arg, const char *verb,
+                            uint32_t max_bytes, uint8_t **out_buf,
+                            size_t *out_size);
+
+/** Bounded string copy with explicit truncation (never -Wformat-truncation).
+ *  Shared by the `export`/`import` interchange writers. */
+void command_copy_trunc(char *dst, size_t dst_size, const char *src);
+
 void shell_command_color(int argc, char **argv);
 void shell_command_locate(int argc, char **argv);
 void shell_command_tui(int argc, char **argv);
@@ -260,7 +286,7 @@ void shell_command_font(int argc, char **argv);
  *         next mount instead of skipping the restore for the whole boot. */
 bool font_restore_saved(void);
 
-/** Theme stub (`theme show` prints the active table; switching later). */
+/** `theme` verb: list / show / set the active UI theme (font_commands.c). */
 void shell_command_theme(int argc, char **argv);
 
 /** `header` verb: layout mode + visibility + status (header_commands.c). */

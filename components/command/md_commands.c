@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file md_commands.c
  * @brief Markdown verbs (`markdown <file> | -e <text> | on | off`).

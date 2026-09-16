@@ -1,4 +1,6 @@
-﻿import time
+﻿# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
+import time
 import sys
 import os
 

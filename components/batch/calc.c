@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file calc.c
  * @brief `calc` command and floating-point expression evaluator.
@@ -859,7 +863,9 @@ static void calc_parse_function_body(calc_parser_t *parser, const char *name,
         calc_set_number(out, exp(x));
         return;
     }
-    if (strncasecmp(name, "LN", 2) == 0) {
+    /* Exact match: `LEN` (string length) starts with `LN`, so a prefix match
+     * would shadow it. */
+    if (strcasecmp(name, "LN") == 0) {
         if (arg_count != 1) { calc_expr_fail(parser, "LN takes 1 argument"); return; }
         if (!calc_arg_number(parser, &args[0], &x)) { return; }
         if (x <= 0.0) { calc_expr_fail(parser, "LN domain error"); return; }

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_task_sort.c
  * @brief Unit tests for the pure `ps`/`top` `/O:` row comparator.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tui_close_test.py - is the grid in the TUI label or the transcript?
 
 Usage: python tui_close_test.py [COMx]

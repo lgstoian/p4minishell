@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_crypt.c
  * @brief Unit tests for the pure crypt core (command/crypt_commands.c).

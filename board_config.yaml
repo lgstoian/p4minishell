@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 # P4MiniShell Board Configuration
 # Single source of truth for all hardware pin assignments, display timing,
 # touch configuration, battery ADC parameters, and storage mount points.

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 import sys
 import time
 import os
@@ -42,7 +44,7 @@ results = []
 for cycle in range(1, CYCLES + 1):
     print(f'\n\n=== Cycle {cycle}/{CYCLES} ===')
     time.sleep(1)
-    send_command(ser, 'wifi connect 4G-CPE_5542 1234567890')
+    send_command(ser, 'wifi connect <P4_WIFI_SSID> <P4_WIFI_PASSWORD>')
     print('Waiting for IP...')
     got_ip = wait_for_marker(ser, b'got IP', 45)
     results.append(got_ip)

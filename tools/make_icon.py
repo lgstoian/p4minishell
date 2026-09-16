@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """make_icon.py - generate the repo icon and the firmware boot-splash asset.
 
 Source of truth: ``icon/icon.png`` (the author's master; it is large and is

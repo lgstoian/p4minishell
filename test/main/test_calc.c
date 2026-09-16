@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_calc.c
  * @brief Unit tests for the `calc` float evaluator and the `for /f` helpers.

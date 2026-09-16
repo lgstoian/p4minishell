@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file font_fs.h
  * @brief Tiny LVGL file-system driver bridging sd:/FONTS to tiny_ttf.

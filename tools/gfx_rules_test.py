@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """gfx_rules_test.py - bg refusal + launch discovery for gfx/BOUNCE.
 
 Usage: python gfx_rules_test.py [COMx]

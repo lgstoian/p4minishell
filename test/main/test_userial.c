@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_userial.c
  * @brief Unit tests for the pure USB CDC-ACM serial parsers (usb/userial.c).

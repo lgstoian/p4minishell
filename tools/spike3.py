@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """spike3.py - Phase 1 follow-ups, corrected.
 
 Usage: python spike3.py [COMx]

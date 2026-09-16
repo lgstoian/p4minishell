@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """userial_test.py - hardware driver for the `usb userial` CDC-ACM verbs.
 
 Exercises the no-device paths (status/open-timeout/close/recv/usage) and

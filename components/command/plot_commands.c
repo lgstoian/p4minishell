@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file plot_commands.c
  * @brief `plot` coordinate-layer verbs: scientific graphs, charts, drawings.
@@ -1657,49 +1661,50 @@ bool shell_command_plot(int argc, char **argv)
             char line[P4_CONFIG_PLOT_LINE_BYTES];
             int total = 0;
             bool have_range = false;
+            bool inline_bar = (kind == PLOT_LAST_BAR &&
+                               strchr(t1, ',') != NULL);
 
-            if (!plot_file_open(t1, &pf)) {
-                shell_transcript_appendf_ansi(SH_ERR "plot auto: cannot open %s\n" SH_RST, t1);
-                batch_set_errorlevel(1);
-                return false;
-            }
-            while (total < P4_CONFIG_PLOT_MAX_POINTS &&
-                   fgets(line, sizeof(line), pf.f) != NULL) {
-                double x = 0.0;
-                double y = 0.0;
-                const char *p = line;
-
-                if (kind == PLOT_LAST_BAR && strchr(t1, ',') != NULL) {
-                    break; /* inline lists refit below */
+            if (!inline_bar) {
+                if (!plot_file_open(t1, &pf)) {
+                    shell_transcript_appendf_ansi(SH_ERR "plot auto: cannot open %s\n" SH_RST, t1);
+                    batch_set_errorlevel(1);
+                    return false;
                 }
-                if (kind == PLOT_LAST_DATA) {
-                    if (!plot_parse_pair(line, &x, &y)) continue;
-                } else {
-                    char *end = NULL;
+                while (total < P4_CONFIG_PLOT_MAX_POINTS &&
+                       fgets(line, sizeof(line), pf.f) != NULL) {
+                    double x = 0.0;
+                    double y = 0.0;
+                    const char *p = line;
 
-                    while (*p == ' ' || *p == '\t') p++;
-                    if (*p == '\0' || *p == '\n' || *p == '\r' ||
-                        *p == '#' || *p == ';') {
-                        continue;
+                    if (kind == PLOT_LAST_DATA) {
+                        if (!plot_parse_pair(line, &x, &y)) continue;
+                    } else {
+                        char *end = NULL;
+
+                        while (*p == ' ' || *p == '\t') p++;
+                        if (*p == '\0' || *p == '\n' || *p == '\r' ||
+                            *p == '#' || *p == ';') {
+                            continue;
+                        }
+                        y = strtod(p, &end);
+                        if (end == p || !isfinite(y)) continue;
+                        x = y;
                     }
-                    y = strtod(p, &end);
-                    if (end == p || !isfinite(y)) continue;
-                    x = y;
+                    total++;
+                    if (!have_range) {
+                        lo = (x < y) ? x : y;
+                        hi = (x > y) ? x : y;
+                        have_range = true;
+                    } else {
+                        if (x < lo) lo = x;
+                        if (y < lo) lo = y;
+                        if (x > hi) hi = x;
+                        if (y > hi) hi = y;
+                    }
                 }
-                total++;
-                if (!have_range) {
-                    lo = (x < y) ? x : y;
-                    hi = (x > y) ? x : y;
-                    have_range = true;
-                } else {
-                    if (x < lo) lo = x;
-                    if (y < lo) lo = y;
-                    if (x > hi) hi = x;
-                    if (y > hi) hi = y;
-                }
+                plot_file_close(&pf);
             }
-            plot_file_close(&pf);
-            if (kind == PLOT_LAST_BAR && strchr(t1, ',') != NULL) {
+            if (inline_bar) {
                 const char *p = t1;
 
                 total = 0;

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file display.c
  * @brief Display manager implementation for P4MiniShell.
@@ -242,14 +246,17 @@ esp_err_t display_set_rotation(display_rotation_t rotation)
      * access (set_rotation plus the synchronous RESOLUTION_CHANGED
      * callback) must run under the LVGL port mutex. The port mutex is
      * recursive, so a call made from the LVGL task itself stays safe. */
-    if (lvgl_port_lock(0)) {
-        lv_display_set_rotation(disp, display_rotation_to_lvgl(rotation));
-
-        /* Keep touch controller in native orientation — LVGL handles the
-         * coordinate transformation automatically when sw_rotate is enabled. */
-        display_update_touch_rotation(rotation);
-        lvgl_port_unlock();
+    if (!lvgl_port_lock(0)) {
+        /* Do not report success (or change the tracked rotation) when the
+         * panel was never rotated. */
+        return ESP_ERR_INVALID_STATE;
     }
+    lv_display_set_rotation(disp, display_rotation_to_lvgl(rotation));
+
+    /* Keep touch controller in native orientation — LVGL handles the
+     * coordinate transformation automatically when sw_rotate is enabled. */
+    display_update_touch_rotation(rotation);
+    lvgl_port_unlock();
 
     /* Track the current rotation atomically */
     portENTER_CRITICAL(&s_display.lock);
@@ -259,10 +266,7 @@ esp_err_t display_set_rotation(display_rotation_t rotation)
     /* Schedule UI rebuild via lv_async_call so it runs on the LVGL task
      * with adequate stack, avoiding stack overflow when called from
      * the UART console task or other small-stack contexts. */
-    if (lvgl_port_lock(0)) {
-        lv_async_call(display_async_rebuild_ui, NULL);
-        lvgl_port_unlock();
-    }
+    (void)display_schedule_ui_rebuild();
 
     return ESP_OK;
 }
@@ -766,7 +770,19 @@ void display_register_ui_rebuild_callback(void (*rebuild_fn)(void))
 
 void display_schedule_ui_rebuild(void)
 {
-    if (s_display.lvgl_display != NULL) {
-        lv_async_call(display_async_rebuild_ui, NULL);
+    bool have_display;
+
+    portENTER_CRITICAL(&s_display.lock);
+    have_display = (s_display.lvgl_display != NULL);
+    portEXIT_CRITICAL(&s_display.lock);
+    if (!have_display) {
+        return;
+    }
+    /* lv_async_call is an LVGL API: run it under the port mutex, exactly like
+     * the rotation path does. The mutex is recursive, so an LVGL-task caller
+     * stays safe. */
+    if (lvgl_port_lock(0)) {
+        (void)lv_async_call(display_async_rebuild_ui, NULL);
+        lvgl_port_unlock();
     }
 }

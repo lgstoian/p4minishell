@@ -1,8 +1,18 @@
-# Hosted Module SDK Guide (v0.38.5, suite 300/0/2)
+# Hosted Module SDK Guide
 
-**Current stack/memory baseline:** transcript `P4_CONFIG_TRANSCRIPT_BYTES` 65536 (PSRAM), async transcript 512, internal trim 4096, SD DMA buffer 4096, command worker stack `P4_CONFIG_COMMAND_TASK_STACK` 32768, batch-file RAM cap `P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072, TUI grid 80x25. Boot banner is `P4MiniShell v0.38.5 ready`. Verified baseline: unit 300/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, plot 25/25 (COM3).
+How to extend and integrate P4MiniShell. This is the practical companion to the
+[`API.md`](API.md) reference: it explains the dependency model, the
+registration tables, the modal/native-app patterns, and how to add commands,
+files, and boot hooks.
 
-This guide describes how `main/main.c` integrates the runtime modules in this workspace: `components/shell`, `components/storage`, `components/batch`, `components/command`, `components/display`, `components/windows`, `components/header`, `components/led`, `components/networking`, `components/usb`, and `components/c6ota`.
+- **Version:** v1.0.0 (ESP-IDF v5.5.5)
+- **Working rules and invariants:** [`ai-context.md`](ai-context.md)
+- **Architecture:** [`documentation.md`](documentation.md)
+- **User-facing commands:** [`command.md`](command.md)
+
+Current stack/memory baselines live in `p4minishell_config.h` (documented in
+`p4minishell_config.yaml`); current verified test baselines live in
+[`test/README.md`](test/README.md).
 
 ## Architecture
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It contains no command implementations and no shell state.
@@ -191,7 +201,7 @@ Built-in surfaces in `components/modal/modal_surf.c` — `dialog`, `list`, `ask`
 batch commands and demonstrate the contract. A third-party `.app` can register
 its own `modal_surface_t` instead of duplicating the session/input plumbing.
 
-### TUI Integration (v0.35.1 — hardware-verified on COM11, final TUI state)
+### TUI Integration
 
 The TUI layer is live and hardware-verified (flash to COM11, boot `1024x510` transcript rect, extensive serial verification of `draw box single/double/rounded` with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` + `tui fullscreen on|off`, `color`/`locate`, `dialog`/`list`/`ask` with timeout + serial input, `browse`/`view`; no abort/watchdog/overlap, header kept unless fullscreen) for batch apps:
 

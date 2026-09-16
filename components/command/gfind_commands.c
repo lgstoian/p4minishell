@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file gfind_commands.c
  * @brief `gfind` - Global Find across the P4MiniShell "apps" (Palm-style).

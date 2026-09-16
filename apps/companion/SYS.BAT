@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  SYS.BAT - Live System dashboard.
 rem  Uses TUI fullscreen with draw boxes for each panel, falls back to

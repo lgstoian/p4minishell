@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  ELITE.BAT - turn-based space trader (batch adaptation of the DOS Elite
 rem  idea: trade, travel, pirates; no real-time flight — the engine is

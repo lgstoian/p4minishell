@@ -1,108 +1,105 @@
 # P4MiniShell Technical Documentation
 
-## Architecture Overview
+This is the technical reference for how P4MiniShell is built: the module
+layout, the boot sequence, the data flow, and the rules each subsystem
+follows. It is aimed at developers extending or porting the firmware.
 
-P4MiniShell is a modular embedded shell application for ESP32-P4 with an ESP32-C6 co-processor. The codebase is organized into a shell orchestration layer and dedicated component modules.
+If you are new, start with [`readme.md`](readme.md) (what it is and how to run
+it) and [`tutorial_getting_started.md`](tutorial_getting_started.md). To add
+code, see [`SDK.md`](SDK.md); for the command surface, see
+[`command.md`](command.md); for the API, see [`API.md`](API.md); for the
+working rules, see [`ai-context.md`](ai-context.md).
 
-**Current verified state (v0.38.5):** unit **300/0/2** on COM3, plus
-the host regression and `boot_regression` 10/10. Components added since the original layout: `gfx`,
-`filetype`, `markdown`, `db`, `alarm`, `audio`, `boot`, `font`; command bodies live in the split
-`components/command/*_commands.c` files. The palmtop-parity pass added `storage_csv.c`,
-`clock_timer.c`, `tcpterm.c`, `usb/userial.c`, and the `csv`/`export`/`crypt`/`userial` command
-files (see `changelog.md` `[0.38.2]`).
+- **Version:** v1.0.0 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
+- **UI:** LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch
+- **License:** MIT (see [`licence.md`](licence.md))
 
-### Module Layout (v0.38.5, 80x25 `utf8[4]` `tui_cell_t` `components/tui/tui.h:35`, suite 300/0/2)
+## System overview
+
+P4MiniShell is a layered embedded application: one process, one LVGL UI, and a
+single command pipeline connect everything.
+
+1. `app_main()` (`main/main.c`) brings up the display, window manager, shell
+   UI, and command module, then starts the background subsystems (boot script,
+   networking, USB, clock).
+2. The SD card mounts first; the boot script (`CONFIG.SYS` / `AUTOEXEC.BAT`)
+   runs before the ESP-Hosted C6 transport starts, because the card and the C6
+   share the SDMMC host and its DMA-capable internal buffers.
+3. The shell owns the transcript (an LVGL span group) and the input line. The
+   UART console and the on-screen/USB keyboards all feed the same pipeline.
+4. Commands run on a dedicated worker task. The pipeline handles quoting,
+   variable expansion, redirection, pipes, and chaining before dispatch.
+5. Subsystems push state to the header/LED/notification surfaces; the header's
+   adaptive timer resamples telemetry off the LVGL task.
+
+The dependency direction is strictly one way; the only upward dependencies are
+inverted through small function tables (see [Layering](#layering) below).
+
+## Module map
 
 ```
 main/main.c                     App entry point, LVGL event callbacks, UI construction, host bridges
-p4minishell_config.h            Centralized configuration header
-p4minishell_config.yaml         Configuration documentation (YAML)
-components/ansi/ansi.c          ANSI/VT escape sequence module (SGR colors, attributes, formatting)
-components/display/display.c    Display manager (rotation, resolution, refresh, brightness, power)
-components/windows/windows.c    Window manager (LVGL screen layout, dynamic scaling, styling)
-components/keyboard/keyboard.c  Keyboard manager (LVGL keyboard, visibility, modes)
-components/shell/shell.c        Shell core (transcript, history, debug log, UART console, input line, sysinfo)
-components/storage/storage.c    SD sessions, path resolution, FATFS conversion, size formatting, cwd
-components/storage/storage_nav.c  Navigation verbs (`cd`/`dir`/`tree`)
-components/storage/storage_files.c  File verbs + `attrib`/`label`/`xcopy`
-components/storage/storage_disk.c  Volume verbs (`chkdsk`/`format` + confirm helper)
-components/storage/storage_text.c  Text utilities (`find`/`more`/`fc`/`sort`/`findstr`/`comp`)
-components/storage/storage_fam.c  `sd` + `disk` command families
-components/storage/storage_ini.c INI-style persistent state + SD temp files (shared by the config/ini/appconfig/temp commands and applib)
-components/storage/storage_csv.c RFC-4180-subset CSV parser (`csv_split_line`; shared by `csv` and `export`)
-components/batch/batch.c        Batch engine, labels, for loops, pipes, environment variables, PATH, aliases, F-key binds
-components/batch/batch_expr.c     Integer-expr evaluator + `set /a`/`set /p` helpers
-components/boot/boot.c            DOS-style boot scripting (CONFIG.SYS parser, AUTOEXEC.BAT runner)
-components/command/command.c    Command module (dispatcher, worker task, execution pipeline, hardware and system commands)
-components/command/command_ui.c  UI query commands (display, keyboard, windows subcommands)
-components/command/audio_commands.c  Audio verbs (`volume`/`beep`/`tone`/`wavplay`/`audio` parsing; codec in components/audio)
-components/command/tui_commands.c  TUI/modal verbs (`draw`/`anchor`/`browse`/`dialog`/`list`/`ask`/`view`/`hexview`/`color`/`locate`/`tui`)
-components/command/periph_commands.c  Peripheral toolkit (`gpio`/`pwm`/`freq`/`adc`/`i2c`/`spi`/`rgb`/`camera` + GPIO table/gate)
-components/command/power_commands.c  Power verbs (`brightness`/`rotate`/`battery`/`power`/`sleep`/`deepsleep` + ADC/idle state)
-components/command/serial_commands.c  Screenshot/serial verbs (`screenshot`/`receive`/`send` + BMP/frame helpers)
-components/command/gfx_commands.c      `gfx` canvas verbs (raster core in `components/gfx/`)
-components/command/image_commands.c    `image info|show` verb (BMP metadata + shared image viewer)
-components/command/plot_commands.c     `plot` coordinate layer (viewport in `components/gfx/gfx_view.c`, sampling via `calc`)
-components/command/csv_commands.c      `csv rows|cols|cell|eval` (grid + `=EXPR` via `calc`; parser in `components/storage/storage_csv.c`)
-components/command/export_commands.c   `export <db|alarms> <csv|json|txt> <file>` (portable store interchange)
-components/command/crypt_commands.c    `crypt lock|unlock` (AES-256-GCM + PBKDF2, mbedTLS)
-components/command/userial_commands.c  `usb userial` verbs over the byte API in `components/usb/userial.c`
-components/command/asset_commands.c    `crc32` + `asset check|list` (shared CRC-32)
-components/command/pkg_commands.c      `pkg` packaged SD apps (PKGS bundles -> APPS)
-components/command/db_commands.c       `db` record-store verbs (core in `components/db/`)
-components/command/alarm_commands.c    `alarm`/`cal` verbs (store + checker in `components/alarm/`)
-components/command/font_commands.c     `font`/`theme` verbs (registry in `components/font/`)
-components/command/md_commands.c       `markdown` verb (renderer in `components/markdown/`)
-components/command/json_commands.c     `json validate|pretty`
-components/command/config_cmd.c        `config` (CONFIG.SYS directive writer)
-components/command/gfind_commands.c    `gfind`
-components/header/header.c      Fixed top status bar (LVGL widgets)
-components/header/header_layout.c  Pure responsive layout policy (fit/compact/yield, unit-tested)
-components/header/header_status.c  Pure indicator mapping (glyph/tone/thresholds, unit-tested)
-components/header/header_notify_queue.c  Pure notification FIFO (order/overflow/clear, unit-tested)
-components/header/header_refresh.c  Pure adaptive-poll policy (situation -> interval, unit-tested)
-components/led/led.c            WS2812 RGB status LED driver + auto status / event notification engine (GPIO26)
-components/editor/editor.c      DOS-style `edit` editor: byte-preserving document model, undo/redo, find/replace, worker session
-components/editor/editor_view.c `edit` editor LVGL surface (syntax spans, block cursor, selection overlay, status-bar prompts)
-components/modal/modal.c        Shared modal runtime: session loop + input routing for native modal surfaces
-components/modal/modal_surf.c   Ready-made batch surfaces: `dialog`, `list`, `ask`, `filebrowser` (`browse`), `viewer` (`view`), `imageview` (BMP), `hexview` — 7 modal surfaces sharing the same runtime; TUI logical grid `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) maps to the live transcript region (rotation/keyboard-aware) via `windows_enter_editor_mode`/`windows_refresh_editor_surface`
-components/applib/applib.c      Native-app runtime library: app stdout/printf onto the transcript (the redirection layer), shared memory policy, time/sleep/sysinfo helpers, Wi-Fi state via an ops table
-components/tui/tui.c            TUI 80x25 cell buffer + draw primitives + `tui_flush` (reached by the `draw`/`tui` verbs)
-components/gfx/gfx.c            Pure RGB565 raster core (surface/pixel/line/rect/circle/hline/vline/triangle/ellipse/polygon/flood-fill/text/blit, general 24/32-bit BMP parse/decode, scaled decode, nearest scaling, aspect-fit, row convert)
-components/gfx/gfx_font.c       Generated 8x8 ASCII font table for `gfx_surface_text` (unscii-8)
-components/gfx/gfx_view.c       World-coordinate viewport (map, Cohen-Sutherland clip, nice ticks) for `plot`
-components/filetype/filetype.c  Central extension->kind registry (batch/markdown/json/text)
-components/markdown/markdown.c  CommonMark-subset renderer (`markdown` verb, `view *.md`)
-components/font/font.c          Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, theme table
-components/font/theme.c         UI theme registry (default/amber/ice/mono) + active selection (pure)
-components/db/db.c              Palm-OS-style SD record store (`sd:/DBS/<name>.DB`)
-components/alarm/alarm.c        SD alarm store + single background checker (`sd:/ALARMS`)
-components/audio/audio.c        ES8311 codec path + background tone/WAV playback engine
-components/clock/clock.c        Time/SNTP/timezone services + `date`/`time`/`timezone`/`sntp`
-components/clock/clock_timer.c  Named stopwatch slots (`timer`/`stopwatch`) — pure, unit-tested
-components/boot/boot.c          CONFIG.SYS parser + AUTOEXEC.BAT runner
-components/networking/networking.c  Hosted Wi-Fi runtime (ESP-Hosted + esp_wifi_remote)
-components/networking/tcpterm.c     One-shot TCP terminal (`tcpterm`) + pure target/escape/sanitize helpers
-components/networking/bluetooth.c   Hosted NimBLE Bluetooth (VHCI on C6)
-components/usb/usb.c            USB Host (MSC storage + HID keyboard/mouse)
-components/usb/userial.c        Lazy CDC-ACM serial driver + byte API + RX ring (leaf)
-components/c6ota/c6ota.c        ESP32-C6 OTA updates (ESP-Hosted SDIO)
+p4minishell_config.h/.yaml      Centralized tunables (C source of truth + documentation)
+board_config.h/.yaml            Hardware pin assignments and display timing
+components/ansi/                ANSI/VT SGR processing, 16-colour palette, format builder, semantic palette
+components/display/             Display manager (rotation, resolution, refresh, brightness, power)
+components/windows/             Window manager (screen layout, dynamic scaling, styling, surface modes)
+components/keyboard/            Keyboard manager (LVGL keyboard, modes, capabilities, external input)
+components/shell/               Shell core (transcript, history, debug log, UART console, input line, sysinfo)
+components/storage/             SD sessions, path resolution, FATFS conversion, cwd, DOS file/volume commands
+  storage_nav.c / storage_files.c / storage_disk.c / storage_text.c / storage_fam.c
+  storage_ini.c                 Shared INI/settings + temp-file core
+  storage_csv.c                 RFC-4180-subset CSV parser (shared by `csv` and `export`)
+  trash.c                       Recycle bin
+components/batch/               Batch engine (labels, for/for /f, pipes, env, PATH, aliases, binds)
+  batch_expr.c / calc.c         Integer-expression evaluator + floating-point calculator
+components/boot/                CONFIG.SYS parser + AUTOEXEC.BAT runner + default-file generation
+components/command/             Command dispatch, worker task, pipeline, and the split *_commands.c verb files
+components/applib/              Native-app runtime library (transcript stdout, memory, time, input, state, ABI)
+components/modal/               Shared modal runtime + ready-made surfaces (dialog/list/ask/browse/view/hexview/imageview/form)
+components/editor/              `edit` editor: byte-preserving document model + LVGL surface
+components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_flush
+components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport
+components/filetype/            Central extension -> kind registry
+components/markdown/            CommonMark-subset renderer
+components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes
+components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
+components/alarm/               SD alarm store + single background checker (sd:/ALARMS)
+components/audio/               ES8311 codec path + background tone/WAV playback engine
+components/clock/               Time/SNTP/timezone services + date/time/timezone/sntp + named timers
+components/header/              Fixed top status bar (layout/status/notify/refresh pure helpers + widgets)
+components/led/                 WS2812 RGB status LED driver + auto status/event engine
+components/networking/          Sole owner of ESP-Hosted + esp_wifi_remote, BLE, HTTP client/server, netdiag
+components/usb/                 USB host (MSC storage at /usb0 + HID keyboard/mouse + lazy CDC-ACM serial)
+components/c6ota/               ESP32-C6 firmware OTA via ESP-Hosted SDIO
 coprocessor/esp32c6_slave/      ESP32-C6 hosted slave firmware project
 ```
 
-### Configuration System
+The command module's verb bodies live in focused files under
+`components/command/` (`tui_commands.c`, `gfx_commands.c`, `image_commands.c`,
+`plot_commands.c`, `serial_commands.c`, `periph_commands.c`,
+`power_commands.c`, `audio_commands.c`, `font_commands.c`, `md_commands.c`,
+`json_commands.c`, `asset_commands.c`, `pkg_commands.c`, `db_commands.c`,
+`alarm_commands.c`, `config_cmd.c`, `gfind_commands.c`, `csv_commands.c`,
+`export_commands.c`, `crypt_commands.c`, `userial_commands.c`,
+`security_commands.c`, `header_commands.c`, `ui_commands.c`).
 
-All tunable values are centralized in `p4minishell_config.h`. The header is organized
-by subsystem with `P4_CONFIG_` prefixed macros. The companion `p4minishell_config.yaml`
-documents every value with type, description, and valid range.
+## Configuration system
 
-Backward-compatible `SHELL_*`, `NETWORKING_*`, `BLUETOOTH_*`, `HEADER_*`, `C6OTA_*`,
-and `USB_*` aliases are defined in each source file that needs them.
+All tunable values are centralized in `p4minishell_config.h`, organized by
+subsystem with `P4_CONFIG_`-prefixed macros. The companion
+`p4minishell_config.yaml` documents every value with type, description, and
+range. Backward-compatible `SHELL_*`, `NETWORKING_*`, `BLUETOOTH_*`,
+`HEADER_*`, `C6OTA_*`, and `USB_*` aliases are defined in each source file that
+needs them.
 
-Three config sources exist, each with a distinct role:
-- `p4minishell_config.h` � C-level tunable values (buffer sizes, limits, colors, stack sizes)
-- `board_config.h` � Hardware pin assignments and display timing (from board_config.yaml)
-- `sdkconfig` � ESP-IDF build configuration (Kconfig-driven)
+Three configuration sources exist, each with a distinct role:
+
+- `p4minishell_config.h` - C-level tunable values (buffer sizes, limits, colours, stack sizes)
+- `board_config.h` - hardware pin assignments and display timing (from `board_config.yaml`)
+- `sdkconfig` - ESP-IDF build configuration (Kconfig-driven)
+
+## Architecture
 
 ### Layering
 
@@ -688,7 +685,7 @@ Central display controller owning all display hardware state and operations:
 
 Central layout manager owning the LVGL screen region partitioning and dynamic scaling:
 
-- **Named regions**: HEADER, TRANSCRIPT, INPUT_ROW, KEYBOARD � each with computed bounding rectangles
+- **Named regions**: HEADER, TRANSCRIPT, INPUT_ROW, KEYBOARD - each with computed bounding rectangles
 - **Resolution-aware scaling**: All dimensions derived from display.c's current resolution
 - **Rotation-aware**: Recalculates layout on rotation change via the display manager's UI rebuild callback
 - **Consistent styling**: All colors accessed through semantic names via `windows_get_color()`
@@ -1160,7 +1157,7 @@ A new component under `components/` must be added to BOTH the root `CMakeLists.t
 
 - ESP-Hosted reset policy: `SLAVE_RESET_ON_EVERY_HOST_BOOTUP` (required for this hardware)
 - PSRAM XIP mapping disabled (prevents flash/PSRAM overflow at link)
-- LVGL examples disabled (image budget)
+- Upstream LVGL sample applications are not built (image budget)
 - Station-only Wi-Fi (no SoftAP, WPA3, or enterprise)
 - Heap-backed FATFS LFN buffers (not stack)
 - SD VO4 LDO explicitly acquired at 3300 mV before mounts
@@ -1174,10 +1171,10 @@ A new component under `components/` must be added to BOTH the root `CMakeLists.t
 ### Boot Scripting (components/boot)
 
 DOS-style boot configuration that runs at every boot before the interactive
-prompt. Owned by components/boot (oot.c, oot.h), kept deliberately
+prompt. Owned by components/boot (boot.c, boot.h), kept deliberately
 small and free of private-state access.
 
-- **Startup:** oot_run_startup() is called once from pp_main after all
+- **Startup:** boot_run_startup() is called once from app_main after all
   modules (storage, batch, command, display, networking, usb) are initialized.
 - **File handling:** looks for CONFIG.SYS and AUTOEXEC.BAT on the SD root.
   Missing files are generated once from built-in templates when
@@ -1190,15 +1187,14 @@ small and free of private-state access.
   GPIO <n> = OUT [HIGH|LOW]. Unknown KEY=VALUE lines set a batch environment
   variable; unknown keywords without a value warn once and are skipped.
 - **Application:** hardware directives execute their command-line equivalent
-  through the batch pipeline (atch_boot_execute_command()), reusing existing
+  through the batch pipeline (batch_boot_execute_command()), reusing existing
   validation. State-only directives use module accessors
-  (
-etworking_wifi_set_boot_credentials, 
-etworking_wifi_set_boot_autoconnect,
-  atch_set_default_echo). Wi-Fi password is never echoed/logged. GPIO directives
+  (networking_wifi_set_boot_credentials,
+  networking_wifi_set_boot_autoconnect, batch_set_default_echo). Wi-Fi password
+  is never echoed/logged. GPIO directives
   delegate to the existing gpio set safety check.
 - **AUTOEXEC.BAT:** runs through the normal batch pipeline
   (shell_execute_batch_file()), cwd = SD root. Non-zero errorlevel is a warning.
 - **Configurability:** all limits and names in p4minishell_config.h
   (P4_CONFIG_BOOT_*), documented in p4minishell_config.yaml under
-  oot_scripting.
+  boot_scripting.

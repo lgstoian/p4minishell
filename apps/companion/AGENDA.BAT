@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  AGENDA.BAT - agenda job: print today's and the next alarm, notify.
 rem  Safe to run in the foreground (Services - Run agenda now) or in the

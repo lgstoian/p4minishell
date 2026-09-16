@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tui_diag.py - which draw path is taken + errorlevels.
 
 Usage: python tui_diag.py [COMx]

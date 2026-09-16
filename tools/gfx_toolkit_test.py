@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """gfx_toolkit_test.py - HW verification for the B2 gfx toolkit.
 
 Runs the GFXTOOL.BAT reference app (raster primitives + on-canvas text),

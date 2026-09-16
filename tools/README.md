@@ -6,7 +6,8 @@ the shared session driver instead of reimplementing serial loops.
 ## Port selection (all drivers)
 
 First match wins: explicit `port=` argument, a trailing `COMx` argv token, the
-`P4_PORT` environment variable, else `COM11`. Scripts with argparse take
+`P4_PORT` environment variable, else `COM11` (the reference board in this
+repo is `COM3`; pass it explicitly). Scripts with argparse take
 `--port` (same fallback chain). Opening the port asserts DTR and the P4
 resets on the transition — every driver drops DTR/RTS on open via
 `shell_session.open_port()`; never open raw `serial.Serial` without it.
@@ -21,24 +22,25 @@ resets on the transition — every driver drops DTR/RTS on open via
 - `baseline_sweep.py`, `serial_sweep.py`, `serial_sweep2.py` — canned
   bring-up sweeps (versions, TUI/draw, modals, audio, periph, SD cycle).
 - `bsod_watch.py` — timestamped long serial capture for the recurrent
-  display-blink hunt (see `bugs.md` O3). One holder per port.
+  display-fault hunt; the DSI-underrun "BSOD" was root-caused with it. One
+holder per port.
 - `display_glitch_watch.py` — camera + serial detector for the "BSOD" MIPI-DSI
   underrun: mean(blue)−mean(red) over the panel ROI (Lorgar = DirectShow index
   1, auto-scaled ROI on 1280x720), saves peak-frame JPEG proofs. Flags:
   `--calibrate`, `--preview`, `--roi`, `--index`, `--device`, `--reset`,
   `--stress` (drives `display stress on/off`). Runs on system Python (cv2).
-  See `bugs.md` O9 and `changelog.md`.
+  See `changelog.md` (0.38.2).
 - `led_watch.py` — webcam verifier for the WS2812 status LED. Locates the LED by
   cycling colours, calibrates an exposure-invariant (channel-ratio) colour table,
   then checks the solids, the effects (rainbow/breath/pulse/blink), auto-status,
   the `httpd start` transient blue pulse and the boot flash. Usage:
   `python tools/led_watch.py [COMx] [--camera N]`. System Python (cv2). See
-  `bugs.md` O13.
+  `changelog.md` (0.38.5).
 - `harness/` — one-shot host drivers, all on `shell_session` port handling:
   - Wi-Fi: `wifi_connect.py`, `wifi_connect2.py`, `wifi_connect3.py`,
     `wifi_test.py`, `test_wifi.py`, `test_wifi_cycles.py`, `wifi_dump.py`,
     `wifi_dump2.py`, `httpd_start_test.py` (all need a reachable AP; the
-    `4G-CPE_5542` credential inside is lab-only).
+    SSID/password are placeholders (`<P4_WIFI_SSID>` / `<P4_WIFI_PASSWORD>`); set your own before running).
   - Screenshots: `grab_screenshot.py` (`--port/--out/--crop-transcript`,
     BMPX binary protocol), `capture_tui.py` (`--port`, TUI regression +
     goldens), `get_screenshot.py`, `save_to_sd.py` (legacy helpers).
@@ -59,8 +61,7 @@ resets on the transition — every driver drops DTR/RTS on open via
   LVGL minor version matches.
   Re-apply after `idf.py update-dependencies` with
   `powershell -File tools/reapply_managed_patches.ps1`
-  (`-Check` for a dry run). See `bugs.md` M20/M28/M40 and
-  `changelog.md` 0.35.1/0.35.2.
+  (`-Check` for a dry run). See `changelog.md` 0.35.1/0.35.2.
 
 ## Focused drivers (recent)
 
@@ -132,13 +133,17 @@ resets on the transition — every driver drops DTR/RTS on open via
 - `wifi_bench.py` — host endpoint for the firmware `wifi throughput` command:
   runs the matching TCP/UDP peer and prints host- and device-side Mbit/s.
   Host and device must share a subnet.
-- `tx_stress_test.py` — TX-pressure output-integrity guard for bugs.md O3:
+- `tx_stress_test.py` — TX-pressure output-integrity guard:
   emits numbered lines while pausing reads to build backpressure and verifies
   every line arrived (guards the driver-API transcript mirror).
 - `boot_regression.py` — fresh-boot regression guard: reboots N times and
   asserts no panic/assert, exactly one AUTOEXEC run, SD ready, and no
   unexpected W/E log lines (guards the deferred boot-script, header async
   ownership, and boot-warning suppression fixes).
+- `audit_fixes_test.py` — hardware checks for the v1.0.0 audit fixes not
+  covered elsewhere: `plot auto` refitting an inline `plot bar a,b,c` list,
+  `del /s` recursing into subdirectories, and an overlong markdown pipe table
+  keeping every row. Prints RESULT OK.
 - `pull.py` — pull an SD file over `send` (SDFX framing).
 - Deploy tools: `apps/push_apps.py` (reference apps), `apps/push_assets.py`
   (PIL sprites + `.ASSETS` manifests), and `apps/push_pkgs.py` (build + push

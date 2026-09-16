@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file ui_commands.c
  * @brief `ui` verbs: synthetic touch automation and UI inspection.

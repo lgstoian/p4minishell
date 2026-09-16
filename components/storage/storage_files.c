@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file storage_files.c
  * @brief File manipulation verbs + attrib/label/xcopy.
@@ -280,8 +284,9 @@ int shell_command_del(int argc, char **argv)
     }
     shell_sd_end(&session, "del");
 
-    if (recursive && !permanent) {
-        /* A plain file with /s deletes same-named files in subdirectories. */
+    if (recursive) {
+        /* A plain file with /s deletes same-named files in subdirectories
+         * (permanent deletes bypass the recycle bin). */
         const char *base = strrchr(resolved_path, '/');
         char parent[SHELL_SD_PATH_BYTES];
 

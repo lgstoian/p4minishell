@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file netbench.h
  * @brief Minimal TCP/UDP throughput probe for the Wi-Fi link.

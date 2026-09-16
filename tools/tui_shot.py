@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tui_shot.py - draw then binary-capture screenshot in ONE session.
 
 Usage: python tui_shot.py [COMx] [out.bmp]

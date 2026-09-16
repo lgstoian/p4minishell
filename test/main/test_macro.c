@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_macro.c
  * @brief Unit tests for the macro recorder (components/batch/batch.c).
@@ -85,14 +89,14 @@ void test_macro_record_overflow(void)
 
     batch_macro_discard();
     macro_cmd(2, record_argv);
-    /* ~20 bytes x 300 lines overflows the 4 KB buffer mid-way. */
-    for (i = 0; i < 300; i++) {
+    batch_macro_status(&st);
+    /* Each line is at least 12 bytes, so looping up to the buffer capacity
+     * guarantees the recorder auto-stops on overflow; the loop is bounded by
+     * the capacity so it can never run away. */
+    for (i = 0; i < (int)st.capacity && st.active; i++) {
         snprintf(line, sizeof(line), "echo line %d", i);
         batch_macro_record_line(line);
         batch_macro_status(&st);
-        if (!st.active) {
-            break;
-        }
     }
     batch_macro_status(&st);
     TEST_ASSERT_FALSE(st.active);

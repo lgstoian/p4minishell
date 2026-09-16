@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_shell_debug_log.c
  * @brief Unit tests for the shell debug log ring buffer and warning counter.

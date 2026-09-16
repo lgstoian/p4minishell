@@ -1,4 +1,8 @@
-﻿/**
+﻿/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
+/**
  * @file keyboard.c
  * @brief On-screen keyboard manager implementation for P4MiniShell.
  *
@@ -596,6 +600,11 @@ void keyboard_bind_textarea(lv_obj_t *textarea)
         return;
     }
 
+    /* The public API is documented as safe from any task, so take the
+     * recursive port lock around the LVGL widget mutation. */
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
     if (textarea != NULL && s_keyboard.visible) {
         lv_keyboard_set_textarea(s_keyboard.widget, textarea);
     } else if (textarea == NULL) {
@@ -604,6 +613,7 @@ void keyboard_bind_textarea(lv_obj_t *textarea)
          * the binding when it takes over the OSK). */
         lv_keyboard_set_textarea(s_keyboard.widget, NULL);
     }
+    lvgl_port_unlock();
 }
 
 lv_obj_t *keyboard_get_textarea(void)

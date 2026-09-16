@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """a2_test.py - HW verify A2: bg refusal + hold coalescing.
 
 Usage: python a2_test.py [COMx]

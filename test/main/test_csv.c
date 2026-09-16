@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_csv.c
  * @brief Unit tests for the pure CSV helpers (storage_csv.c, csv_commands.c).

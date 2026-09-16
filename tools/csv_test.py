@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """csv_test.py - hardware driver for the csv grid verbs.
 
 Builds a small fixture with quoted fields and =EXPR formulas, checks

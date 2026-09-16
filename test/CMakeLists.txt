@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.16)
 
 # The unit tests link the real shell and command components, so they must be

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """smoke_apps.py - reactive smoke-walk of the P4 reference apps.
 
 Drives apps/adventure, apps/notes and apps/mood on-board the way

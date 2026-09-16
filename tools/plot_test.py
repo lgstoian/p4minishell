@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """plot_test.py - HW verification for the `plot` coordinate layer.
 
 Canvas: PLOT.BAT (axes+grid, sin/cos, world line) -> gfx save -> pull BMP ->

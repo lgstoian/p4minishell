@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """table_dbg.py - read the TEMP DEBUG parse dump."""
 import os
 import sys

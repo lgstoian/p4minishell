@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """snoop.py - read current board state WITHOUT rebooting (no DTR pulse).
 
 Usage: python snoop.py [COMx] [seconds]

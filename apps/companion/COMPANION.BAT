@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  COMPANION.BAT - entry point for the P4 Companion.
 rem  Enhanced TUI with fullscreen, draw boxes, and status.

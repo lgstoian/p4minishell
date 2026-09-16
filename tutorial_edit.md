@@ -1,11 +1,16 @@
-# P4MiniShell `edit` — Complete Tutorial (v0.35.7 hardware bring-up)
+# P4MiniShell `edit` - Complete Tutorial
 
 The `edit` command opens a modal, full-screen text editor for any file on the
 SD card. It is modelled on the classic MS-DOS `EDIT` program and adds modern
 extras: undo/redo, a line-number gutter, a current-line highlight, syntax
 highlighting for batch files, and touch support.
 
-> **Current build (v0.38.5):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 300/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
+> **Current build (v1.0.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
+> `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
+> the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
+> RGB565 canvas are sibling surfaces. Test baselines live in
+> [`test/README.md`](test/README.md).
 
 Everything works from three input surfaces — the on-screen touch keyboard, a
 USB keyboard, and the serial console — and the editor surface is exactly as
@@ -30,9 +35,9 @@ edit                 Open an unnamed scratch buffer
   path; the first `Save` writes it.
 - `edit` with no argument opens an **unnamed buffer**. Saving an unnamed
   buffer opens the Save-As prompt so you pick a name.
-- The editor loads the whole file into RAM. It **refuses** files larger than
-  `P4_CONFIG_EDITOR_MAX_BYTES` (64 KB) or longer than
-  `P4_CONFIG_EDITOR_MAX_LINES` (2048 lines) with a clear error — it never
+- The editor loads the whole file into PSRAM. It **refuses** files larger than
+  `P4_CONFIG_EDITOR_MAX_BYTES` (1 MB) or longer than
+  `P4_CONFIG_EDITOR_MAX_LINES` (65 536 lines) with a clear error — it never
   silently truncates, so a later save can never corrupt a too-big file.
 
 While the editor is open the shell is paused: every keypress, OSK button, and

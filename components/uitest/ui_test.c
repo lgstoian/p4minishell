@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file ui_test.c
  * @brief Synthetic touch injection for firmware UI automation (see ui_test.h).

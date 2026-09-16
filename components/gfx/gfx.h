@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file gfx.h
  * @brief Tiny RGB565 raster surface for P4MiniShell `gfx` batch verbs.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """db_test.py - comprehensive on-board verification of the `db` command.
 
 Runs a single clean sequence through every db verb and asserts the results.

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """
 Grab screenshot from P4MiniShell via USB-Serial-JTAG.
 Protocol: 4-byte magic "BMPX" + 4-byte LE size + raw BMP data.

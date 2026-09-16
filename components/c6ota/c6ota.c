@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 #include <ctype.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -397,7 +401,7 @@ static void c6ota_report_progress(size_t transferred_bytes,
         return;
     }
 
-    percent = (transferred_bytes * 100U) / total_bytes;
+    percent = (uint32_t)(((uint64_t)transferred_bytes * 100ULL) / total_bytes);
     if (percent < *last_reported_percent + C6OTA_PROGRESS_STEP_PERCENT &&
         transferred_bytes < total_bytes) {
         return;
@@ -562,14 +566,15 @@ static esp_err_t c6ota_finish_session(bool *ota_started,
 {
     esp_err_t error = esp_hosted_slave_ota_end();
 
+    /* ota_end() has been issued whether or not it succeeded: mark the session
+     * closed so the abort path never calls it a second time. */
+    if (ota_started != NULL) {
+        *ota_started = false;
+    }
     (void)transferred_bytes;
     if (error != ESP_OK) {
         snprintf(failure_hint, failure_hint_size, "OTA finalize failed - retry after restoring the hosted link");
         return error;
-    }
-
-    if (ota_started != NULL) {
-        *ota_started = false;
     }
 
     if (!activate_supported) {

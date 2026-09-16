@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file clock_rtc.c
  * @brief RTC backup for the system clock: NVS anchor + optional ext. chip.

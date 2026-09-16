@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """snake_steer_test.py - spam keys to hit armed choice windows.
 
 Usage: python snake_steer_test.py [COMx]

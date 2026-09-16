@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """colmap_probe.py - measure TUI col->pixel mapping.
 
 Usage: python colmap_probe.py [COMx]

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """boot_regression.py - fresh-boot regression guard for the boot fixes.
 
 Resets the board and captures N fresh boots, asserting each one:

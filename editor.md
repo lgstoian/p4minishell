@@ -1,11 +1,15 @@
-# P4MiniShell Editor Guide (v0.35.7 hardware bring-up)
+# P4MiniShell Editor Guide
 
 > **Looking for the full reference?** See
 > [tutorial_edit.md](tutorial_edit.md) — the complete tutorial covering every
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v0.38.5):** hardware-verified on COM3 (ESP-IDF v5.5.5); unit 300/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21. The editor is one of six modal surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region; the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are sibling surfaces.
+> **Current build (v1.0.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
+> `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
+> the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
+> RGB565 canvas are sibling surfaces.
 
 The `edit` command opens a modal, touch-first text editor that can create and
 modify any text file on the SD card — batch scripts, `.txt`, `.sys`, config
@@ -267,5 +271,10 @@ modal runtime in `components/modal/`; input routes through the generic
 `modal_handle_usb_key`, `modal_handle_serial_line`), the same ops-table
 pattern used by `dialog`, `list`, and `ask`.
 
-> **Note:** `edit` is one `modal_surface_t` among **6** sharing the same runtime
-> **Note:** `edit` is one of six `modal_surface_t` surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`/`filebrowser`, `view`, `hexview`). The TUI cell buffer (`components/tui/tui.h:35` `utf8[4]`, `tui_draw_box`/`tui_draw_line`, `tui_flush` recolor) and the `gfx` RGB565 canvas are separate surfaces reached through the `draw`/`gfx` batch verbs; all render into the live transcript region (80x25) via `windows_enter_tui_mode`/`windows_refresh_tui_surface`, and `draw fullscreen`/`tui fullscreen` hide the header via `windows_set_fullscreen`.
+> **Note:** `edit` is one of six `modal_surface_t` surfaces on the shared
+> runtime (`dialog`, `list`, `ask`, `browse`/`filebrowser`, `view`, `hexview`).
+> The TUI cell buffer (`components/tui/`) and the `gfx` RGB565 canvas are
+> separate surfaces reached through the `draw`/`gfx` batch verbs; all render
+> into the live transcript region (80x25) via
+> `windows_enter_tui_mode`/`windows_refresh_tui_surface`, and `draw fullscreen`/
+> `tui fullscreen` hide the header via `windows_set_fullscreen`.

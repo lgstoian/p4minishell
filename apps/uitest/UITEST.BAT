@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  UITEST.BAT - touch automation demo. Drives the firmware `ui` verbs
 rem  from a batch file (proves batch support) and reports how many tappable

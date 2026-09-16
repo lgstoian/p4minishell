@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file periph_commands.c
  * @brief Peripheral toolkit verbs (gpio/pwm/freq/adc/i2c/spi/rgb/camera).
@@ -1328,7 +1332,7 @@ static bool shell_rgb_parse_hex(const char *text, uint32_t *rgb_out)
 }
 
 /**
- * `rgb` � control the WS2812 status LED (LED1, GPIO26).
+ * `rgb` - control the WS2812 status LED (LED1, GPIO26).
  *
  * Usage:
  *   rgb status                  Show state (mode, colour, effect, brightness)

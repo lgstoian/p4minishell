@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file batch.c
  * @brief Batch engine, environment variables, and batch language commands.
@@ -2172,7 +2176,7 @@ void shell_command_set(int argc, char **argv)
 
     /* /a and /p change the meaning of the rest of the line, so they are
      * dispatched before the plain NAME=VALUE handling. */
-    if (argv[1][0] == '/' && argv[1][2] == '\0') {
+    if (argv[1][0] == '/' && argv[1][1] != '\0' && argv[1][2] == '\0') {
         char flag = (char)toupper((unsigned char)argv[1][1]);
 
         if (flag == 'A') {
@@ -3686,47 +3690,47 @@ void shell_command_ansi(int argc, char **argv)
 
         if (strncmp(spec, "POS:", 4) == 0) {
             /* @POS:row;col */
-            snprintf(styled, styled_size, "[%sH", spec + 4);
+            snprintf(styled, styled_size, "\x1b[%sH", spec + 4);
         } else if (strncmp(spec, "CLEAR", 5) == 0) {
             /* @CLEAR[=mode] - default 2 (entire screen) */
             if (spec[5] == '=') {
-                snprintf(styled, styled_size, "[%sJ", spec + 6);
+                snprintf(styled, styled_size, "\x1b[%sJ", spec + 6);
             } else {
-                snprintf(styled, styled_size, "[2J");
+                snprintf(styled, styled_size, "\x1b[2J");
             }
         } else if (strcmp(spec, "SAVE") == 0) {
             /* @SAVE - save cursor position */
-            snprintf(styled, styled_size, "[s");
+            snprintf(styled, styled_size, "\x1b[s");
         } else if (strcmp(spec, "RESTORE") == 0) {
             /* @RESTORE - restore cursor position */
-            snprintf(styled, styled_size, "[u");
+            snprintf(styled, styled_size, "\x1b[u");
         } else if (strcmp(spec, "ALTON") == 0) {
             /* @ALTON - enter alternate screen buffer */
-            snprintf(styled, styled_size, "[?1049h");
+            snprintf(styled, styled_size, "\x1b[?1049h");
         } else if (strcmp(spec, "ALTOFF") == 0) {
             /* @ALTOFF - exit alternate screen buffer */
-            snprintf(styled, styled_size, "[?1049l");
+            snprintf(styled, styled_size, "\x1b[?1049l");
         } else if (strcmp(spec, "CURSON") == 0) {
             /* @CURSON - show cursor */
-            snprintf(styled, styled_size, "[?25h");
+            snprintf(styled, styled_size, "\x1b[?25h");
         } else if (strcmp(spec, "CURSOFF") == 0) {
             /* @CURSOFF - hide cursor */
-            snprintf(styled, styled_size, "[?25l");
+            snprintf(styled, styled_size, "\x1b[?25l");
         } else if (strncmp(spec, "SCROLL:", 7) == 0) {
             /* @SCROLL:n - scroll up n lines */
-            snprintf(styled, styled_size, "[%sS", spec + 7);
+            snprintf(styled, styled_size, "\x1b[%sS", spec + 7);
         } else if (strncmp(spec, "FG256:", 6) == 0) {
             /* @FG256:n - 256-color foreground */
-            snprintf(styled, styled_size, "[38;5;%sm", spec + 6);
+            snprintf(styled, styled_size, "\x1b[38;5;%sm", spec + 6);
         } else if (strncmp(spec, "BG256:", 6) == 0) {
             /* @BG256:n - 256-color background */
-            snprintf(styled, styled_size, "[48;5;%sm", spec + 6);
+            snprintf(styled, styled_size, "\x1b[48;5;%sm", spec + 6);
         } else if (strncmp(spec, "FGRGB:", 6) == 0) {
             /* @FGRGB:r;g;b - 24-bit truecolor foreground */
-            snprintf(styled, styled_size, "[38;2;%sm", spec + 6);
+            snprintf(styled, styled_size, "\x1b[38;2;%sm", spec + 6);
         } else if (strncmp(spec, "BGRGB:", 6) == 0) {
             /* @BGRGB:r;g;b - 24-bit truecolor background */
-            snprintf(styled, styled_size, "[48;2;%sm", spec + 6);
+            snprintf(styled, styled_size, "\x1b[48;2;%sm", spec + 6);
         } else {
             shell_print_error("ansi: unknown @-specifier '%s'", arg);
             free(styled);
@@ -3795,10 +3799,10 @@ void shell_command_ansi(int argc, char **argv)
             return;
         }
         shell_join_args(argv, 2, argc, text, SHELL_COMMAND_BYTES);
-        snprintf(styled, styled_size, "[%sm%s[0m", codes, text);
+        snprintf(styled, styled_size, "\x1b[%sm%s\x1b[0m", codes, text);
         free(text);
     } else {
-        snprintf(styled, styled_size, "[%sm", codes);
+        snprintf(styled, styled_size, "\x1b[%sm", codes);
     }
 
     shell_transcript_append_ansi(styled);

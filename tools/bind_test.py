@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bind_test.py - hardware driver for the F-key bind table.
 
 Checks bind set/list, F-key range rejection, /save + /clear + /load

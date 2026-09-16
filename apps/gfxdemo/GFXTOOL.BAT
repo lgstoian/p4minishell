@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  GFXTOOL.BAT - gfx toolkit demo: raster primitives + on-canvas text,
 rem  plus a scaled BMP blit (`gfx image`) of PHOTO.BMP in the free

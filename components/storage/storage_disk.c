@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file storage_disk.c
  * @brief Volume verbs (chkdsk/format) + destructive confirm helper.

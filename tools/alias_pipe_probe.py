@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """alias_pipe_probe.py - argv-level quoted-pipe test via alias store.
 
 Usage: python alias_pipe_probe.py [COMx]

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 import time
 import sys
 import os
@@ -32,7 +34,7 @@ else:
 # Give a moment for prompt to settle
 time.sleep(0.5)
 
-cmd = b"wifi connect 4G-CPE_5542 1234567890\r\n"
+cmd = b"wifi connect <P4_WIFI_SSID> <P4_WIFI_PASSWORD>\r\n"
 print(f"Sending: {cmd.strip().decode()}")
 ser.write(cmd)
 ser.flush()

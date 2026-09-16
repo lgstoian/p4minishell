@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 idf_build_get_property(target IDF_TARGET)
 idf_build_get_property(idf_path IDF_PATH)
 

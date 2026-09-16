@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file archive.c
  * @brief USTAR (.p4a) backup archives: store-only tar + CRC manifest.
@@ -440,6 +444,14 @@ typedef struct {
     bool failed;
 } archive_write_ctx_t;
 
+/** One subdirectory deferred until its parent FF_DIR is closed, so the
+ *  recursive create-walker holds only one directory handle per level. */
+typedef struct archive_pending_dir {
+    struct archive_pending_dir *next;
+    char vfs[P4_CONFIG_SD_PATH_BYTES];
+    char entry[P4_CONFIG_SD_PATH_BYTES];
+} archive_pending_dir_t;
+
 /** Write @p size zero bytes (padding / zero blocks). False on I/O error. */
 static bool archive_write_zeros(FILE *out, uint64_t size, uint8_t *chunk, size_t chunk_size)
 {
@@ -511,9 +523,13 @@ static void archive_write_file(archive_write_ctx_t *ctx, const char *vfs_path,
 /** Split @p entry into USTAR name/prefix form. False when unrepresentable. */
 bool archive_entry_fits(const char *entry)
 {
-    size_t len = strlen(entry);
+    size_t len;
     const char *slash;
 
+    if (entry == NULL) {
+        return false;
+    }
+    len = strlen(entry);
     if (len <= USTAR_NAME_LEN) {
         return true;
     }
@@ -545,6 +561,7 @@ static void archive_create_walk(archive_write_ctx_t *ctx, const char *vfs,
                                 const char *entry, int depth)
 {
     archive_walk_scratch_t *s;
+    archive_pending_dir_t *pending = NULL;
     FRESULT result;
 
     if (depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX || ctx->failed) {
@@ -601,6 +618,7 @@ static void archive_create_walk(archive_write_ctx_t *ctx, const char *vfs,
         if ((s->info.fattrib & AM_DIR) != 0) {
             size_t elen = strlen(e.path);
             uint8_t header[ARCHIVE_BLOCK];
+            archive_pending_dir_t *node;
             if (elen + 1 < sizeof(e.path)) {
                 e.path[elen] = '/';
                 e.path[elen + 1] = '\0';
@@ -612,7 +630,16 @@ static void archive_create_walk(archive_write_ctx_t *ctx, const char *vfs,
                 break;
             }
             ctx->stats->dirs++;
-            archive_create_walk(ctx, s->child_vfs, child_entry, depth + 1);
+            /* Defer the descent until this directory is closed. */
+            node = archive_alloc(sizeof(*node));
+            if (node == NULL) {
+                ctx->failed = true;
+                break;
+            }
+            snprintf(node->vfs, sizeof(node->vfs), "%s", s->child_vfs);
+            snprintf(node->entry, sizeof(node->entry), "%s", child_entry);
+            node->next = pending;
+            pending = node;
         } else {
             e.size = s->info.fsize;
             archive_write_file(ctx, s->child_vfs, &e);
@@ -620,6 +647,16 @@ static void archive_create_walk(archive_write_ctx_t *ctx, const char *vfs,
     }
     f_closedir(&s->dir);
     heap_caps_free(s);
+
+    /* Descend only after the parent handle is released. */
+    while (pending != NULL) {
+        archive_pending_dir_t *node = pending;
+        pending = node->next;
+        if (!ctx->failed) {
+            archive_create_walk(ctx, node->vfs, node->entry, depth + 1);
+        }
+        heap_caps_free(node);
+    }
 }
 
 esp_err_t archive_create(const char *archive_path, const char *const *sources,
@@ -1336,7 +1373,7 @@ esp_err_t archive_verify(const char *archive_path, archive_stats_t *stats)
                         {
                             uint32_t crc = 0;
                             uint64_t size = 0;
-                            char mpath[256];
+                            char mpath[ARCHIVE_PATH_MAX + 1];
                             bool found = false;
                             if (archive_manifest_parse(line, &crc, &size, mpath,
                                                        sizeof(mpath))) {

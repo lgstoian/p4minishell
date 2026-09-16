@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file editor_view.c
  * @brief LVGL surface for the P4MiniShell editor.
@@ -2967,6 +2971,11 @@ static void editor_touch_to_cell(size_t *row_out, size_t *col_out)
     lv_coord_t pad_left = 0;
     lv_coord_t pad_top = 0;
 
+    if (indev == NULL) {
+        *row_out = 0;
+        *col_out = 0;
+        return;
+    }
     lv_indev_get_point(indev, &point);
     rel_x = point.x - editor_surface_x();
     rel_y = point.y - editor_surface_y();

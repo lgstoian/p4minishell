@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """gen_gfx_font.py - generate components/gfx/gfx_font.c (8x8 ASCII font).
 
 Renders printable ASCII (0x20..0x7E) from the public-domain unscii-8 TTF

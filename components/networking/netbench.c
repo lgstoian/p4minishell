@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file netbench.c
  * @brief Minimal TCP/UDP throughput probe implementation (see netbench.h).
@@ -295,15 +299,19 @@ static esp_err_t netbench_udp_rx(const netbench_config_t *cfg, netbench_result_t
 
 esp_err_t netbench_run(const netbench_config_t *cfg, netbench_result_t *result)
 {
-    if (cfg == NULL || result == NULL || cfg->megabytes == 0 ||
+    if (result == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* Zero the result before validating cfg so the caller never prints
+     * uninitialized counters on an early return. */
+    memset(result, 0, sizeof(*result));
+    if (cfg == NULL || cfg->megabytes == 0 ||
         cfg->timeout_ms == 0 || NETBENCH_CHUNK_BYTES == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     if (cfg->direction == NETBENCH_DIR_TX && (cfg->host == NULL || cfg->host[0] == '\0')) {
         return ESP_ERR_INVALID_ARG;
     }
-
-    memset(result, 0, sizeof(*result));
 
     if (cfg->direction == NETBENCH_DIR_TX) {
         return cfg->udp ? netbench_udp_tx(cfg, result) : netbench_tcp_tx(cfg, result);

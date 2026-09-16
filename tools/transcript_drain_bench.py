@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """Transcript drain benchmark for bugs.md O3 (O(buffer) span-rebuild cost).
 
 Streams a large SD file twice back-to-back and reports cumulative drain

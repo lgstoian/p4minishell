@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """ui_touch_test.py - hardware touch-automation suite for every tappable widget.
 
 Uses the firmware `ui` verbs (synthetic LVGL pointer indev) to tap real

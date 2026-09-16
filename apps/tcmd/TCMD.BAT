@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 @echo off
 rem =====================================================================
 rem  TCMD.BAT - dual-pane file commander (batch adaptation of the DOS

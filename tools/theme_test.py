@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """theme_test.py - HW verification for the B3 theme switching + persistence.
 
 Checks the CLI (list/show/set), a rejected unknown theme, that /save survives

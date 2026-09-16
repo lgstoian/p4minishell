@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file audio_commands.c
  * @brief Audio verbs (beep/tone/wavplay/audio/volume) for P4MiniShell.

@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  PALMTOP.BAT - reference app for the palmtop-parity primitives:
 rem  timer/stopwatch, calc conversions, csv grid + =EXPR eval, crypt,

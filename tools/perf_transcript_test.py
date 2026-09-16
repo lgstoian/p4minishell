@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """perf_transcript_test.py - transcript length-tracking sanity.
 
 Usage: python perf_transcript_test.py [COMx]

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file alarm_commands.c
  * @brief The `alarm` and `cal` commands (batch-friendly alarm/calendar).
@@ -569,7 +573,7 @@ static int cal_cmd_today(void)
 static bool cal_day_dump_cb(const alarm_event_t *e, void *ctx)
 {
     alarm_range_ctx_t *c = (alarm_range_ctx_t *)ctx;
-    char time_s[12];
+    char time_s[24];
 
     if (e->when < c->lo || e->when >= c->hi) {
         return true;
@@ -776,7 +780,7 @@ static bool cal_month_dump_cb(const alarm_event_t *e, void *ctx)
 {
     alarm_range_ctx_t *c = (alarm_range_ctx_t *)ctx;
     char date_s[16];
-    char time_s[12];
+    char time_s[24];
 
     if (e->when < c->lo || e->when >= c->hi) {
         return true;

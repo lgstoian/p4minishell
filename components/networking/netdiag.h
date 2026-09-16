@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 #ifndef P4MINISHELL_NETDIAG_H
 #define P4MINISHELL_NETDIAG_H
 

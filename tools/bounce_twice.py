@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bounce_twice.py - run BOUNCE twice; catch a re-init crash.
 
 Usage: python bounce_twice.py [COMx]

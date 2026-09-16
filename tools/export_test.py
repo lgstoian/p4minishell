@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """export_test.py - hardware driver for the export interchange verb.
 
 Builds a two-record database plus one alarm, exports db->csv/json/txt

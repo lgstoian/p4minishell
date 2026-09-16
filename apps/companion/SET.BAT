@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  SET.BAT - Preferences. Every setting is owned and persisted by the
 rem  firmware's single store, CONFIG.SYS:

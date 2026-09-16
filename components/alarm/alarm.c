@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file alarm.c
  * @brief SD-persisted alarm / event store + background checker (see alarm.h).

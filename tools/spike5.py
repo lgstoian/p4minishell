@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """spike5.py - decisive space/+/-/Enter choice test, one stable session.
 
 Usage: python spike5.py [COMx]

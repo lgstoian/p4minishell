@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file markdown.c
  * @brief Markdown rendering (CommonMark-ish subset) to ANSI SGR.
@@ -1094,15 +1098,22 @@ size_t markdown_render_doc(const char *md, char *out, size_t out_size)
             }
             if (nlines >= cap) {
                 size_t ncap = cap == 0 ? 64 : cap * 2;
-                const char **ns = realloc((void *)starts, ncap * sizeof(*ns));
+                /* Grow the two arrays one at a time and never assign a
+                 * pointer until its realloc succeeded, so a partial failure
+                 * cannot free/leak or leave a dangling array. `cap` advances
+                 * only when both succeeded. */
                 const char **ne = realloc((void *)ends, ncap * sizeof(*ne));
-                if (ns == NULL || ne == NULL) {
-                    free(ns);
-                    free(ne);
+                if (ne == NULL) {
                     break;
                 }
-                starts = ns;
                 ends = ne;
+                {
+                    const char **ns = realloc((void *)starts, ncap * sizeof(*ns));
+                    if (ns == NULL) {
+                        break;   /* starts/`cap` unchanged: ends just has spare room */
+                    }
+                    starts = ns;
+                }
                 cap = ncap;
             }
             starts[nlines] = p;
@@ -1169,8 +1180,10 @@ size_t markdown_render_doc(const char *md, char *out, size_t out_size)
                             md_puts(&w, "\n");
                         }
                     }
-                    table_first = -1;
-                    table_count = 0;
+                    /* Keep the row that overflowed as the first of the next
+                     * table instead of dropping it. */
+                    table_first = (int)i;
+                    table_count = 1;
                 }
                 continue;
             }

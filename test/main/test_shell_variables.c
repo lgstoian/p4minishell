@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_shell_variables.c
  * @brief Unit tests for shell variable expansion (shell_expand_variables).

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file clock_timer.c
  * @brief Stopwatch slots for the `timer` command (HP palmtop stopwatch parity).

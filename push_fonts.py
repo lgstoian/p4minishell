@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """push_fonts.py - upload the bundled TTF/OTF fonts to sd:/FONTS/.
 
 Pushes assets/fonts/*.ttf|*.otf the same way apps/push_apps.py pushes apps:

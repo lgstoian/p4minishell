@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file editor.c
  * @brief DOS-style inline text editor document model for P4MiniShell.
@@ -1630,9 +1634,12 @@ bool editor_doc_replace_next(editor_doc_t *doc,
     doc->selection_active = true;
     editor_doc_selection_delete(doc);
     if (repl_len > 0 && replacement != NULL) {
-        editor_line_insert_at(&doc->lines[doc->cursor_row],
-                              doc->cursor_col, replacement, repl_len);
-        doc->cursor_col += repl_len;
+        if (editor_line_insert_at(&doc->lines[doc->cursor_row],
+                                  doc->cursor_col, replacement, repl_len)) {
+            doc->cursor_col += repl_len;
+        }
+        /* On allocation failure the replacement was not inserted, so leave
+         * the cursor where the (deleted) match was. */
     }
 
     if (out_row) *out_row = row;
@@ -2357,7 +2364,10 @@ void editor_doc_undo(editor_doc_t *doc)
         }
     }
 
-    editor_doc_deserialize(doc, slot->data);
+    if (!editor_doc_deserialize(doc, slot->data)) {
+        /* OOM: the document is unchanged, so do not pop the history entry. */
+        return;
+    }
     doc->cursor_row = slot->cursor_row;
     doc->cursor_col = slot->cursor_col;
     doc->sel_row = slot->sel_row;
@@ -2427,7 +2437,9 @@ void editor_doc_redo(editor_doc_t *doc)
         }
     }
 
-    editor_doc_deserialize(doc, slot->data);
+    if (!editor_doc_deserialize(doc, slot->data)) {
+        return;   /* OOM: leave the document and history untouched */
+    }
     doc->cursor_row = slot->cursor_row;
     doc->cursor_col = slot->cursor_col;
     doc->sel_row = slot->sel_row;
@@ -2891,7 +2903,16 @@ static void editor_surface_close(void *ctx)
     editor_session_t *session = mctx->session;
 
     if (session != NULL) {
-        lv_async_call(editor_session_close_cb, session);
+        if (lv_async_call(editor_session_close_cb, session) != LV_RESULT_OK) {
+            /* Async queue full: tear the view down under the port lock and
+             * signal CLOSED directly, or the worker waits out its 5 s timeout
+             * and then frees the document while the view still references it. */
+            if (lvgl_port_lock(0)) {
+                editor_view_close();
+                lvgl_port_unlock();
+            }
+            xEventGroupSetBits(session->event_group, MODAL_EVENT_CLOSED);
+        }
     }
 }
 

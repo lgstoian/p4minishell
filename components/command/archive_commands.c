@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file archive_commands.c
  * @brief `archive` / `backup` / `restore` verbs over components/archive.

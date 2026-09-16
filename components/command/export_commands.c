@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file export_commands.c
  * @brief `export` — portable interchange out of the structured stores.
@@ -442,8 +446,9 @@ static int export_db_txt(const char *name, export_doc_t *doc, int *rows_out)
  * vCard contact rendering (db records with k=v fields)
  * ======================================================================== */
 
-/** Bounded copy into a fixed field (explicit truncation, no -Wformat-truncation). */
-static void export_copy_trunc(char *dst, size_t dst_size, const char *src)
+/** Bounded copy into a fixed field (explicit truncation, no -Wformat-truncation).
+ *  Shared with `import_commands.c` (declared in command.h). */
+void command_copy_trunc(char *dst, size_t dst_size, const char *src)
 {
     size_t n;
 
@@ -514,7 +519,7 @@ static int export_db_vcf(const char *name, export_doc_t *doc, int *rows_out)
         fn[0] = tel[0] = email[0] = org[0] = title[0] = note[0] = '\0';
         db_field_get(payload, "name", fn, sizeof(fn));
         if (fn[0] == '\0') {
-            export_copy_trunc(fn, sizeof(fn), info.key);
+            command_copy_trunc(fn, sizeof(fn), info.key);
         }
         if (!db_field_get(payload, "tel", tel, sizeof(tel))) {
             db_field_get(payload, "phone", tel, sizeof(tel));
@@ -525,7 +530,7 @@ static int export_db_vcf(const char *name, export_doc_t *doc, int *rows_out)
         db_field_get(payload, "org", org, sizeof(org));
         db_field_get(payload, "title", title, sizeof(title));
         if (!db_field_get(payload, "note", note, sizeof(note))) {
-            export_copy_trunc(note, sizeof(note), payload);
+            command_copy_trunc(note, sizeof(note), payload);
         }
         export_doc_text(doc, "BEGIN:VCARD\r\nVERSION:3.0\r\n");
         export_doc_ical_prop(doc, "N", fn);

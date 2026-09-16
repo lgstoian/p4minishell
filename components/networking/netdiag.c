@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file netdiag.c
  * @brief Network diagnostics: `netstat` and `ipconfig` companions.
@@ -82,6 +86,16 @@ static const char *netdiag_ip_string(const ip_addr_t *ip, char *buf, size_t buf_
         return buf;
     }
     return ip4addr_ntoa_r(ip_2_ip4(ip), buf, buf_size);
+}
+
+/** Format "ip:port" without aliasing the destination as the %s source. */
+static void netdiag_fmt_endpoint(const ip_addr_t *ip, uint16_t port,
+                                 char *out, size_t out_size)
+{
+    char ipbuf[16];
+
+    netdiag_ip_string(ip, ipbuf, sizeof(ipbuf));
+    snprintf(out, out_size, "%s:%u", ipbuf, (unsigned int)port);
 }
 
 /** Map a lwIP tcp_state to a short string. */
@@ -181,12 +195,8 @@ void networking_netstat(void)
     netdiag_appendf("  " SH_MUTE "Local                     Remote                    State" SH_RST "\n");
     rows = 0;
     for (pcb = tcp_active_pcbs; pcb != NULL && rows < NETDIAG_ROW_MAX; pcb = pcb->next) {
-        snprintf(local, sizeof(local), "%s:%u",
-                 netdiag_ip_string(&pcb->local_ip, local, sizeof(local)),
-                 (unsigned int)pcb->local_port);
-        snprintf(remote, sizeof(remote), "%s:%u",
-                 netdiag_ip_string(&pcb->remote_ip, remote, sizeof(remote)),
-                 (unsigned int)pcb->remote_port);
+        netdiag_fmt_endpoint(&pcb->local_ip, pcb->local_port, local, sizeof(local));
+        netdiag_fmt_endpoint(&pcb->remote_ip, pcb->remote_port, remote, sizeof(remote));
         netdiag_appendf("  " SH_NUM "%-25s" SH_RST " " SH_NUM "%-25s" SH_RST " " SH_VAL "%s" SH_RST "\n",
                         local, remote, netdiag_tcp_state_string(pcb->state));
         rows++;
@@ -198,12 +208,8 @@ void networking_netstat(void)
         rows++;
     }
     for (pcb = tcp_tw_pcbs; pcb != NULL && rows < NETDIAG_ROW_MAX; pcb = pcb->next) {
-        snprintf(local, sizeof(local), "%s:%u",
-                 netdiag_ip_string(&pcb->local_ip, local, sizeof(local)),
-                 (unsigned int)pcb->local_port);
-        snprintf(remote, sizeof(remote), "%s:%u",
-                 netdiag_ip_string(&pcb->remote_ip, remote, sizeof(remote)),
-                 (unsigned int)pcb->remote_port);
+        netdiag_fmt_endpoint(&pcb->local_ip, pcb->local_port, local, sizeof(local));
+        netdiag_fmt_endpoint(&pcb->remote_ip, pcb->remote_port, remote, sizeof(remote));
         netdiag_appendf("  " SH_NUM "%-25s" SH_RST " " SH_NUM "%-25s" SH_RST " " SH_VAL "%s" SH_RST "\n",
                         local, remote, netdiag_tcp_state_string(pcb->state));
         rows++;
@@ -216,13 +222,9 @@ void networking_netstat(void)
     netdiag_appendf("  " SH_MUTE "Local                     Remote" SH_RST "\n");
     rows = 0;
     for (upcb = udp_pcbs; upcb != NULL && rows < NETDIAG_ROW_MAX; upcb = upcb->next) {
-        snprintf(local, sizeof(local), "%s:%u",
-                 netdiag_ip_string(&upcb->local_ip, local, sizeof(local)),
-                 (unsigned int)upcb->local_port);
+        netdiag_fmt_endpoint(&upcb->local_ip, upcb->local_port, local, sizeof(local));
         if (upcb->remote_port != 0) {
-            snprintf(remote, sizeof(remote), "%s:%u",
-                     netdiag_ip_string(&upcb->remote_ip, remote, sizeof(remote)),
-                     (unsigned int)upcb->remote_port);
+            netdiag_fmt_endpoint(&upcb->remote_ip, upcb->remote_port, remote, sizeof(remote));
         } else {
             snprintf(remote, sizeof(remote), "-");
         }

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file userial_commands.c
  * @brief `usb userial ...` verbs over the CDC-ACM byte API (components/usb).
@@ -276,11 +280,18 @@ static int userial_cmd_recv(int argc, char **argv)
     uint8_t *buffer;
     size_t got;
     size_t max = P4_CONFIG_USERIAL_RING_BYTES;
+    bool no_newline = false;
     int i;
 
     for (i = 3; i < argc; i++) {
         char *end = NULL;
-        long value = strtol(argv[i], &end, 10);
+        long value;
+
+        if (strcasecmp(argv[i], "/n") == 0) {
+            no_newline = true;   /* suppress the trailing newline */
+            continue;
+        }
+        value = strtol(argv[i], &end, 10);
         if (end == argv[i] || *end != '\0' || value < 1) {
             userial_usage();
             return 2;
@@ -311,7 +322,9 @@ static int userial_cmd_recv(int argc, char **argv)
         return 1;
     }
     userial_print_sanitized(buffer, got);
-    shell_transcript_append_text("\n");
+    if (!no_newline) {
+        shell_transcript_append_text("\n");
+    }
     heap_caps_free(buffer);
     return 0;
 }

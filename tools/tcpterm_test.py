@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tcpterm_test.py - hardware driver for the tcpterm TCP terminal.
 
 Probes the device's own loopback and error paths without needing a host

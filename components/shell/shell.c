@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file shell.c
  * @brief Shell core implementation for P4MiniShell.
@@ -4624,11 +4628,11 @@ void shell_command_about(void)
                              uptime_sec % 60);
     shell_transcript_appendf_ansi("  " SH_LBL "about.tasks:" SH_RST " %" PRIu32 "\n", task_count);
 
-    /* License: proprietary notice + third-party summary (always surfaced). */
+    /* License: MIT notice + third-party summary (always surfaced). */
     shell_transcript_appendf_ansi(SH_SUBHEAD "License" SH_RST "\n");
     shell_transcript_appendf_ansi("  " SH_LBL "license:" SH_RST " %s\n", P4_CONFIG_COPYRIGHT_NOTICE);
-    shell_transcript_appendf_ansi("  " SH_MUTE "This firmware is proprietary software. Redistribution or "
-                                  "modification without written permission is not permitted.\n" SH_RST);
+    shell_transcript_appendf_ansi("  " SH_MUTE "P4MiniShell is open-source software released under the MIT "
+                                  "License. See LICENSE for the full text.\n" SH_RST);
     shell_transcript_appendf_ansi(SH_SUBHEAD "Third-party components" SH_RST "\n");
     shell_transcript_appendf_ansi("  ESP-IDF / esp_app_format (Espressif) - Apache-2.0\n");
     shell_transcript_appendf_ansi("  LVGL (LVGL Kft) - MIT\n");

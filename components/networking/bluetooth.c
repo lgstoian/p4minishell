@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -456,8 +460,8 @@ static void bluetooth_report_scan_results(void)
                           s_bluetooth_state.discovered[index].rssi);
     }
     bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " scan complete, " SH_NUM "%u" SH_RST
-                      " device(s) reported (%u shown, cap %u)\n",
-                      (unsigned int)count, (unsigned int)limit, (unsigned int)P4_CONFIG_BT_SCAN_LIMIT);
+                      " device(s) found (%u shown)\n",
+                      (unsigned int)count, (unsigned int)limit);
     bluetooth_notify_headerf(4000,
                              "Bluetooth scan complete: %u device(s)",
                              (unsigned int)count);
@@ -584,6 +588,9 @@ static esp_err_t bluetooth_ensure_ready(void)
         rc = ble_svc_gap_device_name_set(BLUETOOTH_DEVICE_NAME);
         if (rc != 0) {
             s_bluetooth_state.last_error = ESP_FAIL;
+            /* nimble is up but the flag is not set: tear it down so a retry
+             * does not call nimble_port_init() on an initialized stack. */
+            nimble_port_deinit();
             return ESP_FAIL;
         }
 

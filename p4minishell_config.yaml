@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 # P4MiniShell Configuration - Single Source of Truth
 #
 # Every tunable value in the firmware is documented here with:
@@ -10,11 +12,10 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 0.38.1
-# Last updated: 2026-09-13 (0.38.1: verified the wifi throughput bench and
-#   raised the lwIP TCP window 5760->32768; 40 MHz confirmed faster in both
-#   directions; suite 262/0/2 + 11/11)
-config_version: "0.38.1"
+# Version: 1.0.0
+# Last updated: 2026-09-15 (1.0.0: first public release - MIT relicensing,
+#   documentation overhaul; firmware behaviour unchanged from 0.38.5)
+config_version: "1.0.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -35,9 +36,9 @@ shell_identity:
     type: string
     description: "Product display name used by the boot banner, version, about, and header long-press identity"
   copyright_notice:
-    value: "Copyright (c) 2026 P4MiniShell. Proprietary - all rights reserved."
+    value: "Copyright (c) 2026 Stoian Alexandru. MIT License."
     type: string
-    description: "Proprietary notice surfaced by the `about` command and its license section"
+    description: "Copyright/license notice surfaced by the `about` command and its license section"
   boot_message:
     value: "P4MiniShell v0.31.0 ready | JC1060P470C | type help"
     type: string

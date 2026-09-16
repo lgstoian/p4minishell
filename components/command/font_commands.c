@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file font_commands.c
  * @brief Font verbs for P4MiniShell (`font info|coverage|list|set|size`).

@@ -1,4 +1,8 @@
-﻿/**
+﻿/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
+/**
  * @file trash.c
  * @brief Recycle bin (`.trash`) for P4MiniShell.
  *
@@ -254,6 +258,14 @@ static void trash_delete_entry(const trash_entry_t *entry)
     char meta_path[TRASH_FULL_PATH_BYTES];
     struct stat st;
 
+    /* Never resolve an empty / dot / path-bearing name: that would target the
+     * trash root itself and wipe every entry. */
+    if (entry == NULL || entry->entry_name[0] == '\0' ||
+        strcmp(entry->entry_name, ".") == 0 ||
+        strcmp(entry->entry_name, "..") == 0 ||
+        strchr(entry->entry_name, '/') != NULL) {
+        return;
+    }
     snprintf(full, sizeof(full), "%s/%s", trash_root_path(), entry->entry_name);
     snprintf(meta_path, sizeof(meta_path), "%s/%s.meta", trash_root_path(), entry->entry_name);
     if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -435,8 +447,9 @@ static void pattern_walk_recursive(const char *dir_path, const char *pattern,
         if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
             pattern_walk_recursive(full, pattern, permanent, arg, depth + 1);
         } else if (shell_wildcard_match(pattern, entry->d_name)) {
-            (void)trash_move_entry(full, false, permanent);
-            arg->count++;
+            if (trash_move_entry(full, false, permanent) == ESP_OK) {
+                arg->count++;
+            }
         }
         free(full);
         if (arg->stopped) {
@@ -604,19 +617,23 @@ esp_err_t storage_trash_restore(const char *name_or_index)
     char meta_path[TRASH_FULL_PATH_BYTES];
     struct stat st;
 
-    if (!storage_trash_enabled() || name_or_index == NULL) {
+    if (!storage_trash_enabled()) {
         return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (name_or_index == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* Open the guarded session before touching the card (the walk reads it). */
+    err = shell_sd_begin(&session);
+    if (err != ESP_OK) {
+        return err;
     }
     memset(&ra, 0, sizeof(ra));
     ra.want = name_or_index;
     err = trash_walk(trash_resolve_cb, &ra);
     if (err != ESP_OK || !ra.match) {
+        shell_sd_end(&session, TRASH_TAG);
         return ESP_ERR_NOT_FOUND;
-    }
-
-    err = shell_sd_begin(&session);
-    if (err != ESP_OK) {
-        return err;
     }
 
     snprintf(src, sizeof(src), "%s/%s", trash_root_path(), ra.found.entry_name);
@@ -648,21 +665,25 @@ esp_err_t storage_trash_purge(const char *name_or_index)
     shell_sd_session_t session;
     trash_entry_t entry;
 
-    if (!storage_trash_enabled() || name_or_index == NULL) {
+    if (!storage_trash_enabled()) {
         return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (name_or_index == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* Open the guarded session before touching the card (the walk reads it). */
+    err = shell_sd_begin(&session);
+    if (err != ESP_OK) {
+        return err;
     }
     memset(&ra, 0, sizeof(ra));
     ra.want = name_or_index;
     err = trash_walk(trash_resolve_cb, &ra);
     if (err != ESP_OK || !ra.match) {
+        shell_sd_end(&session, TRASH_TAG);
         return ESP_ERR_NOT_FOUND;
     }
     entry = ra.found;
-
-    err = shell_sd_begin(&session);
-    if (err != ESP_OK) {
-        return err;
-    }
     trash_delete_entry(&entry);
     shell_sd_end(&session, TRASH_TAG);
     return ESP_OK;
@@ -800,8 +821,13 @@ static int trash_limit_cb(const trash_entry_t *entry, void *arg)
 
     la->info.count++;
     la->info.bytes += entry->size;
-    if (entry->time_sec != 0 &&
-        (!la->have_oldest || entry->time_sec < la->oldest.time_sec)) {
+    /* Always keep a victim so limits enforcement can make progress even when
+     * no entry carries a timestamp: prefer a real timestamp, otherwise the
+     * first valid entry. Never leave `oldest` pointing at the zero struct
+     * (that resolves to the trash root and would wipe the whole bin). */
+    if (!la->have_oldest ||
+        (entry->time_sec != 0 &&
+         (la->oldest.time_sec == 0 || entry->time_sec < la->oldest.time_sec))) {
         la->oldest = *entry;
         la->have_oldest = true;
     }
@@ -834,9 +860,12 @@ void storage_trash_enforce_limits(void)
         if (la.info.count == 0) {
             break;
         }
+        if (!la.have_oldest) {
+            break;
+        }
         if (la.info.count > (size_t)TRASH_MAX_ENTRIES ||
             la.info.bytes > TRASH_MAX_BYTES ||
-            (la.have_oldest && la.oldest.time_sec != 0 &&
+            (la.oldest.time_sec != 0 &&
              now > (unsigned long)la.oldest.time_sec + (unsigned long)TRASH_MAX_AGE_SEC)) {
             shell_sd_begin(&session);
             trash_delete_entry(&la.oldest);

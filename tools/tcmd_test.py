@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tcmd_test.py - drive TCMD v3 (dual-pane grid) with refresh-marker sync.
 
 Usage: python tcmd_test.py [COMx]

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file command.c
  * @brief Command parser and dispatcher implementation for P4MiniShell.
@@ -986,7 +990,7 @@ int command_ghost_line(const char *line, char *out, size_t out_size)
  * EDITOR COMMAND AND OPS-TABLE HOOKS
  * ======================================================================== */
 
-/** `edit <path>` � open a DOS-style inline text editor. */
+/** `edit <path>` - open a DOS-style inline text editor. */
 static void shell_command_edit(int argc, char **argv)
 {
     const char *path = NULL;
@@ -2324,13 +2328,13 @@ bool shell_execute_command_core(char *command)
         return shell_command_ui(argc, argv);
     }
 
-    /* ---- Font roles + theme stub ---- */
+    /* ---- Font roles + UI theme ---- */
     if (shell_text_equals_ignore_case(argv[0], "font")) {
         shell_command_font(argc, argv);
         return true;
     }
 
-    /* ---- Theme stub (show only; switching arrives later) ---- */
+    /* ---- UI theme (list / show / set) ---- */
     if (shell_text_equals_ignore_case(argv[0], "theme")) {
         shell_command_theme(argc, argv);
         return true;

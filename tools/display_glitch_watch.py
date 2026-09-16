@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """display_glitch_watch.py - observe the physical panel for the "BSOD".
 
 The "BSOD" is a full-screen light-blue flash caused by a MIPI-DSI bridge

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tcmd_debug.py - raw capture of a TCMD run to find the crash point."""
 import sys
 import time

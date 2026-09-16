@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """keyboard_test.py - HW verification for the OSK mode registry + `keyboard mode`.
 
 Checks `keyboard status`, the `keyboard.page=<name>` round-trip for every

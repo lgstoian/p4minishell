@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tui_demo_test.py - draw bar/table/color demo + screenshot.
 
 Usage: python tui_demo_test.py [COMx]

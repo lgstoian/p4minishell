@@ -1,40 +1,109 @@
-# Licence Notice (v0.38.5, suite 300/0/2)
+# License
 
-## Project code
-Unless a file or directory states otherwise, the original project-specific code in this repository is:
+P4MiniShell is open-source software released under the **MIT License**.
+
+```
+MIT License
 
 Copyright (c) 2026 Stoian Alexandru
-All rights reserved.
 
-No permission is granted to copy, redistribute, sublicense, publish, or use the original project-specific source, documentation, or compiled outputs except with prior written permission from Stoian Alexandru.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-This proprietary notice applies to the project-authored parts of the repository, including the shell application logic, ANSI/VT escape sequence module, parser and command-dispatch maintenance fixes, serial-console bridge logic, project documentation, board metadata, command reference files, roadmap notes, and other original files created for P4MiniShell.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-## Third-party code
-This repository also contains third-party components and dependencies that remain under their own licenses. Those licenses are not replaced by the proprietary notice above.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
-### Verified third-party licenses in this workspace
-- `managed_components/espressif__esp_hosted`: Apache License 2.0
-- `managed_components/espressif__esp_wifi_remote`: Apache License 2.0
-- `managed_components/espressif__esp_lvgl_port`: Apache License 2.0
-- `managed_components/espressif__esp_lcd_jd9165`: Apache License 2.0
-- `managed_components/espressif__esp_lcd_touch`: Apache License 2.0
-- `managed_components/espressif__esp_lcd_touch_gt911`: Apache License 2.0
-- `managed_components/lvgl__lvgl`: MIT License
-- `managed_components/espressif__esp_hosted/common/protobuf-c`: BSD-style license from the protobuf-c project
+The full text also ships as [`LICENSE`](LICENSE) at the repository root, and
+every project-authored source file carries an `SPDX-License-Identifier: MIT`
+header.
 
-### Project dependencies that should also be respected
-- ESP-IDF and Espressif BSP components used by this project are distributed under their own licenses, commonly Apache License 2.0 in the checked-in Espressif components.
-- Additional notices inside `managed_components`, `coprocessor`, or future imported components must continue to be preserved exactly as provided by their upstream licensors.
+## What the MIT license covers
 
-## Distribution rule
-Any distribution of this repository or derivative work must preserve:
-- this `licence.md` file
-- all third-party `LICENSE`, `LICENCE`, `license.txt`, or equivalent notice files shipped with dependencies
-- all upstream copyright and attribution notices required by those dependencies
+The MIT license above applies to the original P4MiniShell code: the shell,
+components, batch engine, command verbs, editor, TUI/GFX layers, host tools,
+unit tests, board metadata, and this documentation. You are free to use,
+modify, and redistribute them, including commercially, as long as the
+copyright notice and permission notice are preserved.
 
-## Scope clarification
-This file is a project-level notice only. It is not legal advice, and it does not rewrite the license terms of third-party code already included in the repository.
+## Third-party components
 
-## Version note (v0.38.5)
-P4MiniShell v0.38.5 is hardware-verified on COM3 (ESP-IDF v5.5.5); the full suite is green (unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, plot 25/25). The TUI is an 80x25 cell buffer in the live transcript region. See `command.md` (commands), `API.md` (module APIs), `documentation.md` (architecture), and `SDK.md` (integration) for current details.
+P4MiniShell builds on third-party open-source components that keep their own
+licenses. The MIT license above does **not** replace those terms. The table
+below lists the components that ship in this repository and their licenses.
+
+### Vendored components (`managed_components/`)
+
+| Component | License |
+|-----------|---------|
+| `espressif__esp_hosted` | Apache License 2.0 |
+| `espressif__esp_wifi_remote` | Apache License 2.0 |
+| `espressif__wifi_remote_over_eppp` | Apache License 2.0 |
+| `espressif__eppp_link` | Apache License 2.0 |
+| `espressif__esp_lvgl_port` | Apache License 2.0 |
+| `espressif__esp32_p4_function_ev_board` | Apache License 2.0 |
+| `espressif__esp_codec_dev` | Apache License 2.0 |
+| `espressif__esp_serial_slave_link` | Apache License 2.0 |
+| `espressif__led_strip` | Apache License 2.0 |
+| `espressif__usb` | Apache License 2.0 |
+| `espressif__usb_host_msc` | Apache License 2.0 |
+| `espressif__usb_host_hid` | Apache License 2.0 |
+| `espressif__usb_host_cdc_acm` | Apache License 2.0 |
+| `espressif__esp_lcd_jd9165` | Apache License 2.0 |
+| `espressif__esp_lcd_ili9881c` | Apache License 2.0 |
+| `espressif__esp_lcd_ek79007` | Apache License 2.0 |
+| `espressif__esp_lcd_lt8912b` | Apache License 2.0 |
+| `espressif__esp_lcd_touch` | Apache License 2.0 |
+| `espressif__esp_lcd_touch_gt911` | Apache License 2.0 |
+| `espressif__cmake_utilities` | Apache License 2.0 |
+| `lvgl__lvgl` | MIT License |
+| `espressif__esp_hosted/common/protobuf-c` | BSD-style license (protobuf-c project) |
+
+The exact license texts ship inside each component directory
+(`LICENSE`, `LICENCE`, `license.txt`, or equivalent). Some Espressif
+components bundle additional third-party sources under their own notices; those
+notices are preserved verbatim inside the component.
+
+### Platform and toolchain
+
+- **ESP-IDF** and the Espressif components it provides are distributed under
+  their own licenses (predominantly Apache License 2.0).
+- **FreeRTOS**, **lwIP**, **FatFs**, **mbedTLS**, and **protobuf-c** are
+  provided through ESP-IDF and keep their upstream licenses.
+
+### Bundled assets
+
+| Asset | License |
+|-------|---------|
+| `assets/fonts/DejaVuSansMono*.ttf` | Bitstream Vera / DejaVu license (`assets/fonts/LICENSE-DejaVu.txt`) |
+| `assets/fonts/Noto*.ttf` | SIL Open Font License 1.1 (`assets/fonts/OFL.txt`) |
+| `components/gfx/gfx_font.c` | Generated from the public-domain `unscii-8` font |
+| `icon/icon-512.png`, `main/assets/icon_splash.c` | Project-authored derivatives |
+
+## Distribution rules
+
+If you redistribute P4MiniShell or a derivative work, you must:
+
+- keep [`LICENSE`](LICENSE) and this `licence.md`;
+- keep every third-party `LICENSE`, `LICENCE`, `license.txt`, or equivalent
+  notice shipped with the components you redistribute;
+- preserve the upstream copyright and attribution notices those licenses
+  require.
+
+## Disclaimer
+
+This file is a project-level summary, not legal advice. It does not rewrite the
+license terms of any third-party code included in the repository. When in
+doubt, consult the upstream component's own license text.

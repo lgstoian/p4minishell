@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """alarm_test.py - on-board verification of the `alarm`/`cal` commands.
 
 Runs a clean sequence through the alarm surface and verifies the background

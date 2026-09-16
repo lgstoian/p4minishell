@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file gfx.c
  * @brief RGB565 raster ops. No LVGL, no display: pure buffer math.
@@ -686,7 +690,12 @@ int gfx_surface_flood_fill(gfx_surface_t *s, int x, int y, uint16_t color)
             for (ix = lx; ix <= rx; ix++) {
                 if (gfx_surface_get(s, ix, ny) == target) {
                     if (!in_run) {
-                        gfx_ff_push(&st, &n, &cap, ix, ny);
+                        if (!gfx_ff_push(&st, &n, &cap, ix, ny)) {
+                            /* OOM: stop the fill early (the canvas is never
+                             * corrupted); `filled` reports what was done. */
+                            heap_caps_free(st);
+                            return filled;
+                        }
                         in_run = true;
                     }
                 } else {

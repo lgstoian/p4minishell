@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  FUN.BAT - Demos and games: melody, RGB effects, number guessing,
 rem  and a calc playground. Enhanced TUI with draw and fullscreen.

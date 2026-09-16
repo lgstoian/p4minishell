@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """Minimal USB-Serial-JTAG session driver for P4MiniShell bring-up.
 
 Port selection (first match wins): explicit Shell(port=...), the P4_PORT

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """push_apps.py - upload the P4 reference apps to the SD card.
 
 Pushes apps/adventure, apps/notes and apps/mood the same way

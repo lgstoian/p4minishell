@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file crypt_commands.c
  * @brief `crypt` — password file encryption (AES-256-GCM + PBKDF2-SHA256).
@@ -313,7 +317,7 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
 {
     char resolved_src[P4_CONFIG_SD_PATH_BYTES];
     char resolved_dst[P4_CONFIG_SD_PATH_BYTES];
-    char tmp[P4_CONFIG_SD_PATH_BYTES + 8];
+    char tmp[P4_CONFIG_SD_PATH_BYTES + 8] = "";
     char pass[P4_CONFIG_CRYPT_PASS_BYTES];
     uint8_t salt[P4_CONFIG_CRYPT_SALT_BYTES];
     uint8_t nonce[CRYPT_NONCE_LEN];
@@ -526,12 +530,15 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
             goto done_files;
         }
     }
-    if (fflush(fout) != 0 || fclose(fout) != 0) {
+    {
+        int flush_rc = fflush(fout);
+        int close_rc = fclose(fout);
         fout = NULL;
-        shell_print_error("crypt: write failed");
-        goto done_files;
+        if (flush_rc != 0 || close_rc != 0) {
+            shell_print_error("crypt: write failed");
+            goto done_files;
+        }
     }
-    fout = NULL;
     fclose(fin);
     fin = NULL;
     /* FATFS f_rename refuses to overwrite an existing target. */
@@ -557,7 +564,9 @@ done_files:
     if (fin != NULL) {
         fclose(fin);
     }
-    remove(tmp);
+    if (tmp[0] != '\0') {
+        remove(tmp);   /* only after the temp name was formed */
+    }
     shell_sd_end(&session, "crypt");
     goto done_buffers;
 

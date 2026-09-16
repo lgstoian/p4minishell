@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file modal_surf.c
  * @brief Native modal surfaces for batch apps: dialog, list, ask, filebrowser, viewer, hexview.
@@ -150,10 +154,6 @@ static bool dialog_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->eg = eg;
     ctx->result = -1;
     s_dialog_active = ctx;
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("dlg_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_editor_mode();
     if (!surf) { lvgl_port_unlock(); s_dialog_active = NULL; return false; }
@@ -184,6 +184,10 @@ static bool dialog_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     // otherwise (watchdog in shell_cmd via layout loop, seen on hardware).
     windows_refresh_editor_surface();
     lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("dlg_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
     return true;
 }
 
@@ -206,7 +210,6 @@ static bool dialog_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modif
     if (key_code == 0x29) { ctx->result = -1; surf_request_close(ctx->eg); return true; } /* ESC */
     if (ascii == 'y' || ascii == 'Y' || key_code == 0x28) { ctx->result = 0; surf_request_close(ctx->eg); return true; } /* Enter/Y */
     if (ascii == 'n' || ascii == 'N') { ctx->result = ctx->button2 ? 1 : -1; surf_request_close(ctx->eg); return true; }
-    if (key_code == 0x2B) { /* Tab -> toggle? */ return false; }
     return false;
 }
 
@@ -281,10 +284,6 @@ static bool list_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->result = -1;
     ctx->selected = 0;
     s_list_active = ctx;
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("lst_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
     if (ctx->count <= 0 || ctx->items == NULL) return false;
     if (ctx->count > P4_CONFIG_TUI_LIST_MAX_ITEMS) ctx->count = P4_CONFIG_TUI_LIST_MAX_ITEMS;
     lvgl_port_lock(0);
@@ -318,6 +317,10 @@ static bool list_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
     lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("lst_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
     return true;
 }
 
@@ -411,10 +414,6 @@ static bool ask_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->eg = eg;
     ctx->result = -1;
     s_ask_active = ctx;
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("ask_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_editor_mode();
     if (!surf) { lvgl_port_unlock(); s_ask_active = NULL; return false; }
@@ -445,6 +444,10 @@ static bool ask_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
     lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("ask_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
     return true;
 }
 
@@ -573,9 +576,11 @@ static void fb_entry_cb(lv_event_t *e)
     ctx->selected = idx;
     const char *path = ctx->entries[idx];
     strncpy(ctx->selected_path, path, FB_MAX_PATH - 1);
+    ctx->selected_path[FB_MAX_PATH - 1] = '\0';
     struct stat st;
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
         strncpy(ctx->current_path, path, FB_MAX_PATH - 1);
+        ctx->current_path[FB_MAX_PATH - 1] = '\0';
         fb_refresh_list(ctx);
     } else {
         ctx->result = 0;
@@ -584,7 +589,7 @@ static void fb_entry_cb(lv_event_t *e)
 }
 static void fb_up_cb(lv_event_t *e) { (void)e; if (!s_fb_active) return; fb_ctx_t *ctx = s_fb_active; char *slash = strrchr(ctx->current_path, '/'); if (slash && slash != ctx->current_path) { *slash = '\0'; if (ctx->current_path[0] == '\0') strcpy(ctx->current_path, "/"); } else if (strcmp(ctx->current_path, "/sdcard") == 0) strcpy(ctx->current_path, "/"); else if (strcmp(ctx->current_path, "/") != 0) { char *s2 = strrchr(ctx->current_path, '/'); if (s2) { if (s2 == ctx->current_path) *(s2 + 1) = '\0'; else *s2 = '\0'; } } fb_refresh_list(ctx); }
 static void fb_cancel_cb(lv_event_t *e) { (void)e; if (s_fb_active) { s_fb_active->result = -1; surf_request_close(s_fb_active->eg); } }
-static void fb_select_cb(lv_event_t *e) { (void)e; if (!s_fb_active) return; fb_ctx_t *ctx = s_fb_active; if (ctx->selected >= 0 && ctx->selected < ctx->entry_count) { strncpy(ctx->selected_path, ctx->entries[ctx->selected], FB_MAX_PATH - 1); ctx->result = 0; surf_request_close(ctx->eg); } }
+static void fb_select_cb(lv_event_t *e) { (void)e; if (!s_fb_active) return; fb_ctx_t *ctx = s_fb_active; if (ctx->selected >= 0 && ctx->selected < ctx->entry_count) { strncpy(ctx->selected_path, ctx->entries[ctx->selected], FB_MAX_PATH - 1); ctx->selected_path[FB_MAX_PATH - 1] = '\0'; ctx->result = 0; surf_request_close(ctx->eg); } }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
@@ -670,10 +675,6 @@ static bool fb_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         struct stat st;
         if (stat(ctx->current_path, &st) != 0 || !S_ISDIR(st.st_mode)) strcpy(ctx->current_path, "/");
     }
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("fb_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_editor_mode();
     if (!surf) { lvgl_port_unlock(); s_fb_active = NULL; return false; }
@@ -705,6 +706,10 @@ static bool fb_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     windows_refresh_editor_surface();
     lvgl_port_unlock();
     fb_refresh_list(ctx);
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("fb_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
     return true;
 }
 
@@ -729,7 +734,7 @@ static bool fb_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers
     if (key_code == 0x2A) { /* Backspace -> up */ char *s = strrchr(ctx->current_path, '/'); if (s && s != ctx->current_path) { *s = '\0'; } fb_refresh_list(ctx); return true; }
     if (key_code == 0x52) { if (ctx->selected > 0) ctx->selected--; return true; }
     if (key_code == 0x51) { if (ctx->selected < ctx->entry_count - 1) ctx->selected++; return true; }
-    if (key_code == 0x28) { if (ctx->selected >= 0 && ctx->selected < ctx->entry_count) { const char *p = ctx->entries[ctx->selected]; struct stat st; if (stat(p, &st)==0 && S_ISDIR(st.st_mode)) { strncpy(ctx->current_path, p, FB_MAX_PATH-1); fb_refresh_list(ctx);} else { strncpy(ctx->selected_path, p, FB_MAX_PATH-1); ctx->result=0; surf_request_close(ctx->eg);} } return true; }
+    if (key_code == 0x28) { if (ctx->selected >= 0 && ctx->selected < ctx->entry_count) { const char *p = ctx->entries[ctx->selected]; struct stat st; if (stat(p, &st)==0 && S_ISDIR(st.st_mode)) { strncpy(ctx->current_path, p, FB_MAX_PATH-1); ctx->current_path[FB_MAX_PATH-1]='\0'; fb_refresh_list(ctx);} else { strncpy(ctx->selected_path, p, FB_MAX_PATH-1); ctx->selected_path[FB_MAX_PATH-1]='\0'; ctx->result=0; surf_request_close(ctx->eg);} } return true; }
     return false;
 }
 
@@ -744,7 +749,7 @@ static bool fb_handle_serial_line(void *ctx_ptr, const char *line)
         const char *base = strrchr(ctx->entries[i], '/');
         base = base ? base+1 : ctx->entries[i];
         if (strcasecmp(line, base)==0 || strcasecmp(line, ctx->entries[i])==0) {
-            struct stat st; if (stat(ctx->entries[i],&st)==0 && S_ISDIR(st.st_mode)) { strncpy(ctx->current_path, ctx->entries[i], FB_MAX_PATH-1); fb_refresh_list(ctx); } else { strncpy(ctx->selected_path, ctx->entries[i], FB_MAX_PATH-1); ctx->result=0; surf_request_close(ctx->eg); } return true;
+            struct stat st; if (stat(ctx->entries[i],&st)==0 && S_ISDIR(st.st_mode)) { strncpy(ctx->current_path, ctx->entries[i], FB_MAX_PATH-1); ctx->current_path[FB_MAX_PATH-1]='\0'; fb_refresh_list(ctx); } else { strncpy(ctx->selected_path, ctx->entries[i], FB_MAX_PATH-1); ctx->selected_path[FB_MAX_PATH-1]='\0'; ctx->result=0; surf_request_close(ctx->eg); } return true;
         }
     }
     return false;
@@ -768,7 +773,10 @@ int modal_filebrowser_run(const char *title, const char *start_path,
     selected_path[0] = '\0';
     ctx.title = title;
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
-    if (start_path && start_path[0]) strncpy(ctx.current_path, start_path, FB_MAX_PATH-1);
+    if (start_path && start_path[0]) {
+        strncpy(ctx.current_path, start_path, FB_MAX_PATH-1);
+        ctx.current_path[FB_MAX_PATH-1] = '\0';
+    }
     if (modal_surface_run(&fb_surface, &ctx, &el) != ESP_OK) return -1;
     if (ctx.result != 0 || ctx.selected_path[0]=='\0') return -1;
     strncpy(selected_path, ctx.selected_path, path_size-1);
@@ -803,10 +811,6 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->eg = eg;
     ctx->result = 0;
     s_viewer_active = ctx;
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("vw_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
     /* Load file */
     if (ctx->path && ctx->path[0]) {
         FILE *f = fopen(ctx->path, "rb");
@@ -854,7 +858,13 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
 
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_editor_mode();
-    if (!surf) { lvgl_port_unlock(); s_viewer_active=NULL; return false; }
+    if (!surf) {
+        lvgl_port_unlock();
+        free(ctx->content);   /* open failed: close() will not run */
+        ctx->content = NULL;
+        s_viewer_active = NULL;
+        return false;
+    }
     ctx->panel = surf_create_container(surf);
     surf_create_title(ctx->panel, ctx->title ? ctx->title : (ctx->path ? ctx->path : "Viewer"));
     ctx->ta = lv_textarea_create(ctx->panel);
@@ -874,6 +884,10 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
     lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("vw_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
     return true;
 }
 
@@ -985,12 +999,6 @@ static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->result = 0;
     s_image_active = ctx;
 
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("img_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE,
-                                  (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
-
     if (ctx->path == NULL || ctx->path[0] == '\0') {
         s_image_active = NULL;
         return false;
@@ -1094,6 +1102,12 @@ static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_add_event_cb(btn, image_close_btn_cb, LV_EVENT_CLICKED, NULL);
     windows_refresh_editor_surface();
     lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("img_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE,
+                                  (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
+
     return true;
 }
 
@@ -1200,10 +1214,6 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->eg = eg;
     ctx->result = 0;
     s_hex_active = ctx;
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("hx_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
     /* Load binary and format hex dump */
     FILE *f = ctx->path ? fopen(ctx->path, "rb") : NULL;
     size_t max_bytes = P4_CONFIG_TUI_VIEW_MAX_BYTES;
@@ -1257,7 +1267,13 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
 
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_editor_mode();
-    if (!surf) { lvgl_port_unlock(); s_hex_active=NULL; return false; }
+    if (!surf) {
+        lvgl_port_unlock();
+        free(ctx->content);   /* open failed: close() will not run */
+        ctx->content = NULL;
+        s_hex_active = NULL;
+        return false;
+    }
     ctx->panel = surf_create_container(surf);
     surf_create_title(ctx->panel, ctx->title ? ctx->title : (ctx->path ? ctx->path : "Hexview"));
     ctx->ta = lv_textarea_create(ctx->panel);
@@ -1276,6 +1292,10 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     // Refresh under the port lock (see dialog open).
     windows_refresh_editor_surface();
     lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("hx_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
     return true;
 }
 
@@ -1382,12 +1402,6 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->eg = eg;
     ctx->result = -1;
     s_form_active = ctx;
-    if (ctx->timeout_ms > 0) {
-        ctx->timer = xTimerCreate("form_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE,
-                                  (void *)eg, surf_timeout_cb);
-        if (ctx->timer) xTimerStart(ctx->timer, 0);
-    }
-
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_editor_mode();
     if (!surf) { lvgl_port_unlock(); s_form_active = NULL; return false; }
@@ -1430,9 +1444,21 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
             form_options_to_roller(f->options, opts, sizeof(opts));
             lv_roller_set_options(roller, opts, LV_ROLLER_MODE_NORMAL);
             if (f->value && f->value[0] != '\0') {
-                char needle[64];
-                snprintf(needle, sizeof(needle), "\n%s\n", f->value);
-                lv_roller_set_selected(roller, 0, LV_ANIM_OFF);
+                /* Prefill the roller with the stored value when it matches an
+                 * option (options are '|'-separated in f->options). */
+                int idx = 0;
+                const char *p = f->options;
+                while (p != NULL) {
+                    const char *bar = strchr(p, '|');
+                    size_t len = bar ? (size_t)(bar - p) : strlen(p);
+                    if (len == strlen(f->value) &&
+                        strncmp(p, f->value, len) == 0) {
+                        lv_roller_set_selected(roller, (uint16_t)idx, LV_ANIM_OFF);
+                        break;
+                    }
+                    idx++;
+                    p = bar ? bar + 1 : NULL;
+                }
             }
             ctx->widgets[i] = roller;
             break;
@@ -1467,8 +1493,25 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_t *b2 = surf_create_button(row, "Cancel");
     lv_obj_add_event_cb(b2, form_cancel_cb, LV_EVENT_CLICKED, NULL);
 
+    /* Bind the on-screen keyboard to the first editable field so the touch
+     * keyboard can type into the form. */
+    for (i = 0; i < ctx->count && i < MODAL_FORM_MAX_FIELDS; i++) {
+        if ((ctx->fields[i].type == MODAL_FORM_TEXT ||
+             ctx->fields[i].type == MODAL_FORM_PASSWORD) &&
+            ctx->widgets[i] != NULL) {
+            keyboard_bind_textarea((lv_obj_t *)ctx->widgets[i]);
+            break;
+        }
+    }
+
     windows_refresh_editor_surface();
     lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("form_tmr", pdMS_TO_TICKS(ctx->timeout_ms), pdFALSE,
+                                  (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
+
     return true;
 }
 

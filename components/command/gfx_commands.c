@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file gfx_commands.c
  * @brief `gfx` pixel-canvas verbs for P4MiniShell batch games.
@@ -491,16 +495,13 @@ bool shell_command_gfx(int argc, char **argv)
          * staged through one bounded PSRAM buffer (GFX_BMP_MAX_BYTES); the
          * pure header parser + decoder in components/gfx keep this verb a
          * thin file shell around unit-tested raster code. */
-        char resolved[P4_CONFIG_SD_PATH_BYTES];
-        shell_sd_session_t session;
-        FILE *file = NULL;
-        long size = 0;
         uint8_t *buf = NULL;
         size_t got = 0;
         gfx_bmp_info_t info;
         gfx_surface_t decoded = {NULL, 0, 0};
         int slot;
         char *end = NULL;
+        int rc;
 
         if (!gfx_require_foreground()) return false;
         if (argc != 4) {
@@ -516,68 +517,20 @@ bool shell_command_gfx(int argc, char **argv)
             batch_set_errorlevel(2);
             return false;
         }
-        if (shell_fs_resolve_path(argv[3], resolved, sizeof(resolved)) != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: invalid path %s\n" SH_RST, argv[3]);
-            batch_set_errorlevel(2);
-            return false;
-        }
-        if (shell_sd_begin(&session) != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: SD card not present\n" SH_RST);
-            batch_set_errorlevel(1);
-            return false;
-        }
-        file = fopen(resolved, "rb");
-        if (file == NULL) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: cannot open %s\n" SH_RST, resolved);
-            shell_sd_end(&session, "gfx load");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 ||
-            fseek(file, 0, SEEK_SET) != 0) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: cannot size %s\n" SH_RST, resolved);
-            fclose(file);
-            shell_sd_end(&session, "gfx load");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        if (size < 54 || (uint64_t)size > GFX_BMP_MAX_BYTES) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: bad size %ld (max %u bytes)\n" SH_RST,
-                                          size, (unsigned)GFX_BMP_MAX_BYTES);
-            fclose(file);
-            shell_sd_end(&session, "gfx load");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        buf = heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (buf == NULL) {
-            buf = malloc((size_t)size);
-        }
-        if (buf == NULL) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: out of memory\n" SH_RST);
-            fclose(file);
-            shell_sd_end(&session, "gfx load");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        got = fread(buf, 1, (size_t)size, file);
-        fclose(file);
-        shell_sd_end(&session, "gfx load");
-        if (got != (size_t)size) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: short read %s\n" SH_RST, resolved);
-            heap_caps_free(buf);
-            batch_set_errorlevel(1);
+        rc = command_load_file_psram(argv[3], "gfx load", GFX_BMP_MAX_BYTES, &buf, &got);
+        if (rc != 0) {
+            batch_set_errorlevel(rc);
             return false;
         }
         if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_SPR_MAX, GFX_SPR_MAX)) {
             shell_transcript_appendf_ansi(SH_ERR "gfx load: not a 24/32-bit BI_RGB BMP <= %dx%d (%s)\n" SH_RST,
-                                          GFX_SPR_MAX, GFX_SPR_MAX, resolved);
+                                          GFX_SPR_MAX, GFX_SPR_MAX, argv[3]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;
         }
         if (!gfx_bmp_decode_565(buf, got, &info, &decoded)) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx load: decode failed (%s)\n" SH_RST, resolved);
+            shell_transcript_appendf_ansi(SH_ERR "gfx load: decode failed (%s)\n" SH_RST, argv[3]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;
@@ -634,10 +587,6 @@ bool shell_command_gfx(int argc, char **argv)
         /* gfx image <path> [x y [w h]]: decode a BMP straight to the target
          * rect and blit it onto the canvas. Defaults to the native size
          * aspect-fit to the canvas at 0,0. Reuses the single BMP decoder. */
-        char resolved[P4_CONFIG_SD_PATH_BYTES];
-        shell_sd_session_t session;
-        FILE *file = NULL;
-        long size = 0;
         uint8_t *buf = NULL;
         size_t got = 0;
         gfx_bmp_info_t info;
@@ -646,14 +595,10 @@ bool shell_command_gfx(int argc, char **argv)
         int y = 0;
         int w = 0;
         int h = 0;
+        int rc;
 
         if (argc != 3 && argc != 5 && argc != 7) {
             shell_transcript_appendf_ansi(SH_ERR "gfx image: usage: gfx image <path> [x y [w h]]\n" SH_RST);
-            batch_set_errorlevel(2);
-            return false;
-        }
-        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: invalid path %s\n" SH_RST, argv[2]);
             batch_set_errorlevel(2);
             return false;
         }
@@ -670,53 +615,14 @@ bool shell_command_gfx(int argc, char **argv)
                 }
             }
         }
-        if (shell_sd_begin(&session) != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: SD card not present\n" SH_RST);
-            batch_set_errorlevel(1);
-            return false;
-        }
-        file = fopen(resolved, "rb");
-        if (file == NULL) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: cannot open %s\n" SH_RST, resolved);
-            shell_sd_end(&session, "gfx image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: cannot size %s\n" SH_RST, resolved);
-            fclose(file);
-            shell_sd_end(&session, "gfx image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        if (size < 54 || (uint64_t)size > P4_CONFIG_IMAGE_MAX_BYTES) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: bad size %ld (max %u bytes)\n" SH_RST,
-                                          size, (unsigned)P4_CONFIG_IMAGE_MAX_BYTES);
-            fclose(file);
-            shell_sd_end(&session, "gfx image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        buf = heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (buf == NULL) buf = malloc((size_t)size);
-        if (buf == NULL) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: out of memory\n" SH_RST);
-            fclose(file);
-            shell_sd_end(&session, "gfx image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        got = fread(buf, 1, (size_t)size, file);
-        fclose(file);
-        shell_sd_end(&session, "gfx image");
-        if (got != (size_t)size) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: short read %s\n" SH_RST, resolved);
-            heap_caps_free(buf);
-            batch_set_errorlevel(1);
+        rc = command_load_file_psram(argv[2], "gfx image",
+                                     P4_CONFIG_IMAGE_MAX_BYTES, &buf, &got);
+        if (rc != 0) {
+            batch_set_errorlevel(rc);
             return false;
         }
         if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST, resolved);
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST, argv[2]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;
@@ -725,7 +631,7 @@ bool shell_command_gfx(int argc, char **argv)
             gfx_bmp_fit(info.w, info.h, s_gfx.w, s_gfx.h, &w, &h);
         }
         if (!gfx_bmp_decode_scaled_565(buf, got, &info, w, h, &img)) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: decode failed (%s)\n" SH_RST, resolved);
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: decode failed (%s)\n" SH_RST, argv[2]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;

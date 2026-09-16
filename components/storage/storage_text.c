@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file storage_text.c
  * @brief Text utilities (find/more/fc/sort/findstr/comp).
@@ -244,7 +248,8 @@ bool shell_find_parse_date(const char *text, uint16_t *fdate_out)
     unsigned int month;
     unsigned int day;
 
-    if (text == NULL || sscanf(text, "%u-%u-%u", &year, &month, &day) != 3) {
+    if (text == NULL || fdate_out == NULL ||
+        sscanf(text, "%u-%u-%u", &year, &month, &day) != 3) {
         return false;
     }
     if (year < 1980 || year > 2107 || month < 1 || month > 12 || day < 1 || day > 31) {
@@ -1229,9 +1234,15 @@ static int shell_fsre_match_here(const char *pat, int pi, const char *text, int 
 int shell_fsre_search(const char *pattern, const char *text, bool icase,
                       int *end_out)
 {
-    int tlen = (int)strlen(text);
-    bool anchor_beg = (pattern[0] == '^');
+    int tlen;
+    bool anchor_beg;
     int ti;
+
+    if (pattern == NULL || text == NULL || end_out == NULL) {
+        return -1;
+    }
+    tlen = (int)strlen(text);
+    anchor_beg = (pattern[0] == '^');
 
     for (ti = 0; ti <= tlen; ti++) {
         int end;
@@ -1257,7 +1268,12 @@ bool shell_findstr_match_line(const char *pattern, bool is_regex,
                               const char *line, bool icase,
                               bool beg, bool end, bool whole)
 {
-    int line_len = (int)strlen(line);
+    int line_len;
+
+    if (pattern == NULL || line == NULL) {
+        return false;
+    }
+    line_len = (int)strlen(line);
 
     if (is_regex) {
         int start;
@@ -1544,14 +1560,20 @@ int shell_command_findstr(int argc, char **argv)
         char resolved[SHELL_SD_PATH_BYTES];
         char line[SHELL_TEXT_LINE_BYTES];
         FILE *file;
+        shell_sd_session_t g_session;
 
         if (shell_fs_resolve_path(opts.strings_arg, resolved, sizeof(resolved)) != ESP_OK) {
             shell_print_error("findstr: invalid /G file path");
             return 2;
         }
+        if (shell_sd_begin(&g_session) != ESP_OK) {
+            shell_print_error("findstr: SD card not present - insert and retry");
+            return 1;
+        }
         file = fopen(resolved, "r");
         if (file == NULL) {
             shell_print_error("findstr: cannot open /G file %s", resolved);
+            shell_sd_end(&g_session, "findstr");
             return 1;
         }
         while (fgets(line, sizeof(line), file) != NULL) {
@@ -1561,10 +1583,12 @@ int shell_command_findstr(int argc, char **argv)
             }
             if (!shell_findstr_add_string(&opts, line, opts.use_regex)) {
                 fclose(file);
+                shell_sd_end(&g_session, "findstr");
                 return 2;
             }
         }
         fclose(file);
+        shell_sd_end(&g_session, "findstr");
     }
 
     if (opts.nstrings == 0) {
@@ -1577,14 +1601,20 @@ int shell_command_findstr(int argc, char **argv)
         char resolved[SHELL_SD_PATH_BYTES];
         char line[SHELL_SD_PATH_BYTES];
         FILE *file;
+        shell_sd_session_t f_session;
 
         if (shell_fs_resolve_path(opts.filelist_arg, resolved, sizeof(resolved)) != ESP_OK) {
             shell_print_error("findstr: invalid /F file path");
             return 2;
         }
+        if (shell_sd_begin(&f_session) != ESP_OK) {
+            shell_print_error("findstr: SD card not present - insert and retry");
+            return 1;
+        }
         file = fopen(resolved, "r");
         if (file == NULL) {
             shell_print_error("findstr: cannot open /F file %s", resolved);
+            shell_sd_end(&f_session, "findstr");
             return 1;
         }
         have_filelist = true;
@@ -1605,6 +1635,7 @@ int shell_command_findstr(int argc, char **argv)
             files[nfiles++] = copy;
         }
         fclose(file);
+        shell_sd_end(&f_session, "findstr");
     }
 
     error = shell_sd_begin(&session);
@@ -1719,7 +1750,13 @@ bool shell_comp_first_diff(const uint8_t *a, size_t an,
                            bool icase, size_t *pos, uint8_t *va, uint8_t *vb)
 {
     size_t i;
-    size_t n = (an < bn) ? an : bn;
+    size_t n;
+
+    if (pos == NULL || va == NULL || vb == NULL ||
+        (a == NULL && an > 0) || (b == NULL && bn > 0)) {
+        return false;
+    }
+    n = (an < bn) ? an : bn;
 
     for (i = 0; i < n; i++) {
         unsigned char ca = a[i];

@@ -2,7 +2,12 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v0.38.5** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). Verified baseline on COM3: unit 300/0/2, companion deep 8/8, db 38/38, alarm 25/25, app smoke 21/21, package round-trip 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25.
+> **Applies to firmware v1.0.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> the authoritative command reference; the on-device `help /all` mirrors it.
+> Current verified test baselines live in [`test/README.md`](test/README.md).
+> Related docs: [`readme.md`](readme.md) (overview),
+> [`documentation.md`](documentation.md) (architecture),
+> [`SDK.md`](SDK.md) (integration).
 
 ## ANSI/VT Color Support
 
@@ -89,7 +94,7 @@ new code; these are listed for reference and for the rare case that needs a raw 
 Standard printf specifiers work alongside these, including flags, width, and
 precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 
-## UI Model (v0.35.7 hardware bring-up, 80×25 `utf8[4]` `tui_cell_t`, `draw` auto-enters TUI `tui_init` `components/tui/tui.c:56`, header kept visible by default `windows_enter_tui_mode` hidden only on `draw fullscreen on`/`tui fullscreen on` `windows_set_fullscreen` `components/windows/windows.c:418`, stack 32768 `p4minishell_config.h:1522`)
+## UI Model
 
 - Fixed top header bar with status icons (Wi-Fi, Bluetooth, USB, SD) and system panel (MEM, CPU, BAT) dynamically linked to FreeRTOS
 - Scrollable transcript (LVGL span group) for coloured command output (read-only). It keeps
@@ -161,7 +166,7 @@ worker task.
 | clear / cls | Clear transcript history and redraw prompt |
 | reboot | Restart the board |
 | version / ver | Show app banner, version, build date/time, Git hash, IDF version, chip info, uptime, heap, and task count |
-| about | Show shell and board summary with build metadata, header description, uptime, task count, the proprietary notice, and a third-party license summary |
+| about | Show shell and board summary with build metadata, header description, uptime, task count, the copyright/MIT notice, and a third-party license summary |
 | debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count |
 | mem | Show free heap, total heap, minimum heap, internal heap, task count, PSRAM state |
 
@@ -214,12 +219,13 @@ The entries mirror the authoritative `command.md` reference in this repository.
 
 ### about — license and third-party notice
 
-`about` adds a **License** section that surfaces the proprietary notice
+`about` adds a **License** section that surfaces the copyright/MIT notice
 (`P4_CONFIG_COPYRIGHT_NOTICE`) and a **Third-party components** summary naming
 the principal open-source components and their SPDX identifiers (ESP-IDF,
 LVGL, esp_hosted, esp_wifi_remote, FreeRTOS, lwIP, FatFs, protobuf-c, USB host
-stack). Full license texts ship in the project's `managed_components/`
-directories.
+stack). The project's own license is in [`LICENSE`](LICENSE) and
+[`licence.md`](licence.md); full third-party license texts ship in the
+project's `managed_components/` directories.
 
 ### Header long-press
 
@@ -2719,11 +2725,11 @@ skipped; keywords are case-insensitive. Directives:
 
 Unknown keywords without a value print a single muted warning and are skipped. AUTOEXEC.BAT
 then runs through the normal batch pipeline with full batch power
-(if/or/goto/call, pipes, redirection, chaining).
+(if/for/goto/call, pipes, redirection, chaining).
 
 All limits and filenames are configurable in p4minishell_config.h
 (P4_CONFIG_BOOT_*) and documented in p4minishell_config.yaml under
-oot_scripting.
+boot_scripting.
 
 ## Storage Guardrails
 

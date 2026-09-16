@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """Stall catcher for bugs.md O3 (transient worker stalls + queue-full storms).
 
 Runs mixed SD / non-SD probes with output-anchored timing until a stall is

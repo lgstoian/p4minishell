@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """regression.py - one-command host regression for a release.
 
 Runs the host-side suites and guards against whatever firmware is currently

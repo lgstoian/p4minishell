@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file p4minishell_config.h
  * @brief Centralized configuration for P4MiniShell.
@@ -51,9 +55,9 @@
  * Update these when the project version changes in changelog.md.
  * The boot message and all version commands read from these macros.
  */
-#define P4_CONFIG_VERSION_MAJOR             0
-#define P4_CONFIG_VERSION_MINOR             38
-#define P4_CONFIG_VERSION_PATCH             5
+#define P4_CONFIG_VERSION_MAJOR             1
+#define P4_CONFIG_VERSION_MINOR             0
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -65,8 +69,8 @@
 /** Product display name. */
 #define P4_CONFIG_PRODUCT_NAME               "P4MiniShell"
 
-/** Proprietary copyright/notice surfaced by `about` and the license notice. */
-#define P4_CONFIG_COPYRIGHT_NOTICE           "Copyright (c) 2026 P4MiniShell. Proprietary - all rights reserved."
+/** Copyright/notice surfaced by `about` and the license notice (MIT). */
+#define P4_CONFIG_COPYRIGHT_NOTICE           "Copyright (c) 2026 Stoian Alexandru. MIT License."
 
 /** Boot banner displayed in the transcript on startup. */
 #define P4_CONFIG_BOOT_MESSAGE               P4_CONFIG_PRODUCT_NAME " " P4_CONFIG_VERSION_STRING " ready | " P4_CONFIG_BOARD_REQUESTED " | type help"

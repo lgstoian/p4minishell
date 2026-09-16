@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """bg_kill3.py - mid-run cooperative kill (the real test).
 
 Usage: python bg_kill3.py [COMx]

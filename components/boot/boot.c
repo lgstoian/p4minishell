@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file boot.c
  * @brief DOS-style boot scripting: CONFIG.SYS parser and AUTOEXEC.BAT runner.

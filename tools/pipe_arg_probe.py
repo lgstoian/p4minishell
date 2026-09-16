@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """pipe_arg_probe.py - what argv does a quoted-pipe arg produce?
 
 Usage: python pipe_arg_probe.py [COMx]

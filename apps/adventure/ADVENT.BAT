@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  ADVENT.BAT - a tiny pure-batch text adventure for P4MiniShell.
 rem  Reference app: rooms, inventory, score, save/load, all in batch.

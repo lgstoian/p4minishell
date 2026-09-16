@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file storage_csv.c
  * @brief Pure RFC-4180-subset CSV line parser for the `csv` verbs.

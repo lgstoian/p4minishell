@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file security_commands.c
  * @brief `owner` / `security` verbs: owner identity, device passcode/lock,

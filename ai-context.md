@@ -1,25 +1,155 @@
-# P4MiniShell AI Context Rules
+# P4MiniShell - AI Context
 
-## Project Identity
-- **Name**: P4MiniShell
-- **Type**: Embedded DOS-style command shell
-- **Target**: ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO)
-- **Framework**: ESP-IDF v5.5.5
-- **UI**: LVGL 9.5.0 (esp_lvgl_port 2.9.0) with JD9165 1024x600 display + GT911 touch
-- **Version**: v0.38.5 (`p4minishell_config.h:54-59`). **0.38.5:** fixed the status LED keeping a stale colour after `rgb auto on` (Wi-Fi status events now always refresh the persistent status frame, not only while the auto layer is on); added the webcam LED verifier `tools/led_watch.py` (solids, effects, auto-status, httpd transient, boot flash). **0.38.4:** fixed batch/canvas-app slowdown (the transcript repaint is now skipped while the transcript is hidden) and the dead Stop button / foreground break (`delay` no longer consumes the abort; an aborted command tears down the gfx canvas / TUI / app mode). **0.38.3:** fixed BOUNCE.BAT's jerky/stuck gfx animation (`gfx show` now wakes the LVGL port task so the canvas presents each frame; the in-loop `screenshot` that froze the render loop ~3 s moved to after the loop). **0.38.2:** fixed the recurrent "BSOD" full-screen blue flash (a MIPI-DSI bridge underrun caused by the header telemetry calling `uxTaskGetSystemState()` on the LVGL task; it now samples on a pinned `sheltlm` background task with an idle-counter CPU estimate) and the boot first-mount regression (`security_init()` mounted the SD during `command_init()` before the first-mount hook, so the welcome/defaults/font/CJK/history work was skipped; the CONFIG.SYS reads moved to `security_load_saved()` and `networking_init()` now runs after the SD mounts so the C6 hosted transport does not starve on the shared SDMMC/DMA buffers). Added `tools/display_glitch_watch.py` and `display stress on|off`. **0.38.1:** verified the `wifi throughput` bench (host↔device, same subnet) and raised the lwIP TCP window (`CONFIG_LWIP_TCP_WND_DEFAULT`/`SND_BUF_DEFAULT` 5760→32768, `RECVMBOX_SIZE` 6→32) — the window, not the SDIO clock, had capped a single stream (~2.4 Mbit/s); host→device rose 2.45→~11 Mbit/s and 40 MHz measured faster than 10 MHz in both directions. **0.38.0:** adopted the 40 MHz SDIO clock after a soak gate, added the `wifi throughput` bench (+ `tools/wifi_bench.py`) and `tools/regression.py`. **0.37.1:** fixed O3 (driver-API UART mirror), O4 (no-reset `open_port()`), O5 (I2C bus recovery). **0.37.0:** moved the app-owned flash-safe task stacks (USB, c6ota, audio, alarm, led, shell UART) to PSRAM, which lifted the tightest boot-time internal DMA headroom from ~1 KB to ~10 KB free / 8.7 KB largest block (see `bugs.md` O8); the boot script now runs on a dedicated short-lived `bootscript` task instead of the Wi-Fi event task. **0.36.1:** fixed an LVGL timer-list heap-corruption panic (a `header_schedule()` async payload double free; see changelog `[0.36.1]`), boot SD scripting now runs on the SD first mount so CONFIG.SYS/AUTOEXEC are no longer skipped, and USB host bring-up retries. Including: `components/gfx/` (RGB565 raster + BMP parser/decoder, plus the B2 toolkit: `hline`/`vline`/`triangle`/`ellipse`/`polygon`/`flood_fill`/`text` and the committed 8x8 ASCII font `gfx_font.c`), `gfx`/`crc32`/`asset` verbs, packaged SD apps (`pkg list|info|verify|check|install|remove` over `APPS/<APP>.APPINFO` + `APPS/<APP>.ASSETS`, installed from CRC-checked `PKGS/<APP>/` bundles), `start`/`taskkill` background jobs, `draw table`/`draw list` with cursor/selection, UI themes (B3: `theme list|show|set [/save]` over `default`/`amber`/`ice`/`mono` with live re-apply + `SHELL.INI` persistence), dead-code cleanup (B4: deleted the `storage_commands.c` stub and the `p4_usb` CMake twin, removed dead statics, de-duplicated `help /all`), plot/graph layer (`plot` world-coordinate verbs over the `gfx` canvas or TUI via `gfx_view.c`, sampling `calc`), RAM-loaded batch execution (`P4_CONFIG_BATCH_FILE_MAX_BYTES` 131072), O(1) transcript appends + `windows_set_transcript_text_len()`, off-console mirror suppression, and the TCMD/SNAKE/ELITE/BOUNCE/GFXTOOL/PLOT reference apps. Verified baseline: unit 281/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg 15/15, gfx toolkit 17/17, theme 11/11, plot 25/25, header OK (COM3).
+Working agreement for AI-assisted development on P4MiniShell. Read it before
+changing anything. It is the "how we work" companion to the "what the code
+does" reference in [documentation.md](documentation.md).
 
-## Mandatory Reading Before Any Change
-1. changelog.md - version history and recent changes
-2. readme.md - project overview and current behavior
-3. documentation.md - technical architecture
-4. ai-context.md - this file (project rules)
-5. board_config.yaml - hardware configuration
-6. p4minishell_config.h - centralized config values
-7. p4minishell_config.yaml - config documentation
-8. command.md - command reference
-9. sdkconfig - current build configuration
-10. main/idf_component.yml - component dependencies
-11. For roadmap work: also read roadmap.md and licence.md
+---
+
+## 0. Ground rules for agents
+
+- **Never commit, push, amend, or force-push unless the user explicitly asks.**
+  When asked: inspect `git status`/`git diff`/recent log, stage only intended
+  files, and write a concise message in the repo's style.
+- **Always fix any bug you find, even if unrelated to the current task.** A
+  known failure is never acceptable to leave behind. If it truly cannot be
+  fixed now, report it and land a clearly-scoped follow-up, but the default is
+  to fix it immediately.
+- **A change is finished only when:** the firmware **and** `test/` build with
+  zero errors and zero warnings, the on-board unit suite is green, and the
+  affected hardware behaviour is verified on the board. Reflash the main
+  firmware after running the test app.
+- **Config values are never hardcoded.** All tunables live in
+  `p4minishell_config.h`, mirrored in `p4minishell_config.yaml`. Hardware pins
+  live in `board_config.h` / `board_config.yaml`; build options in `sdkconfig`.
+- **No `// AI:` comments.** Write plain descriptive comments. Replace any that
+  exist.
+- **Docs follow code.** Update them in the same change (see Documentation
+  Updates below).
+
+## 1. Project snapshot
+
+| Field | Value |
+|-------|-------|
+| Name | P4MiniShell |
+| Version | **v1.0.0** (`p4minishell_config.h` version macros) |
+| Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
+| Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
+| Framework | ESP-IDF v5.5.5 |
+| UI | LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch |
+| License | MIT (Copyright (c) 2026 Stoian Alexandru) |
+| Board | ESP32-P4 Function EV Board (JC1060P470C), serial port COM3 |
+
+Recent changes are recorded in [`changelog.md`](changelog.md). Known quirks and
+the bug-campaign log live in [`bugs.md`](bugs.md).
+
+## 2. Repository map
+
+```
+main/            app entry, boot sequencing, LVGL event callbacks, host bridges
+p4minishell_config.h/.yaml   central tunables (C source of truth + documentation)
+board_config.h/.yaml         hardware pins and display timing
+components/      one directory per subsystem (see the Module Layering Rules)
+test/            standalone Unity test project (runs on the P4 target)
+apps/            on-SD reference apps (*.bat) + host push tools
+tools/           host-side serial/screenshot/SD drivers and hardware test suites
+coprocessor/     ESP32-C6 hosted slave firmware project
+```
+
+Key layering (dependencies flow one way):
+
+```
+main -> command -> batch -> storage -> shell -> (ansi, display, windows,
+                                                header, keyboard, clock)
+```
+
+The only upward dependencies are inverted through registration tables
+(`shell_command_ops_t`, `batch_command_ops_t`, `applib_*_ops_t`,
+`networking_host_ops_t`). Never add a bridge trampoline across a layer.
+
+## 3. Build, flash, and test
+
+```powershell
+# One-time per shell: source ESP-IDF (adjust the path to your install)
+$env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"
+. $env:IDF_PATH\export.ps1
+
+# Firmware
+idf.py build
+idf.py -p COM3 flash monitor
+
+# Unit tests (standalone project; black screen is expected - serial only)
+cd test; idf.py build flash; cd ..
+python tools/unit_run.py COM3          # capture Unity summaries from the board
+
+# Host hardware regression (resets the board, runs every suite, PASS/FAIL table)
+python tools/regression.py COM3
+```
+
+- The board is on **COM3**. Host tools take `port=` / `--port` / `P4_PORT`, or a
+  trailing `COMx` argument.
+- `tools/shell_session.open_port()` pre-sets DTR/RTS low **before** `open()` so
+  opening the port does not reset the board. Never open a raw `serial.Serial`.
+  Use `shell_session.hard_reset()` when a fresh boot is required.
+- After flashing the test app, always reflash the main firmware.
+
+## 4. Bugs and known quirks
+
+[`bugs.md`](bugs.md) is the bug-campaign log and reporting template. **Read it
+before starting bug hunting.** It holds:
+
+- severity definitions and the repro / root-cause / fix / verification template;
+- the current test matrix (which suite covers what);
+- a **Known quirks / by design** list — behaviours that look like bugs but are
+  intentional (for example: `pwd` is not a command; `list` selection is 1-based
+  while its ERRORLEVEL is 0-based; serial key waits need Enter). Do not "fix"
+  these without first checking the list.
+
+When you find a bug, add an entry to `bugs.md` (or a new section if the campaign
+has moved on) with the same structure, and mark it FIXED only once verified on
+hardware. Bugs that are fixed are removed when a new campaign starts, so
+`bugs.md` always reflects what is still open.
+
+## 5. Diagnostics with a webcam (screen and LED)
+
+Some failures are visual and leave no trace on the serial console. Two host
+tools use a webcam to observe the device; prefer them over guessing.
+
+**Screen glitches / "BSOD" (`tools/display_glitch_watch.py`)**
+
+- Detects the MIPI-DSI bridge underrun that paints the whole panel blue
+  (a "BSOD" flash) by tracking `mean(blue) - mean(red)` over a panel ROI and
+  saving peak-frame JPEG proofs.
+- Runs on system Python with OpenCV (`cv2`). Typical flags: `--calibrate`,
+  `--preview`, `--roi`, `--index`, `--device`, `--reset`, `--stress`
+  (`--stress` drives the firmware `display stress on|off` reproducer).
+- Camera defaults to the Lorgar (DirectShow index 1) at 1280x720 with an
+  auto-scaled ROI. Calibrate first after moving the camera.
+- Use it to reproduce a display fault, confirm the fix, and attach a proof
+  frame. This is how the O9 DSI-underrun "BSOD" was root-caused.
+
+**Status LED (`tools/led_watch.py`)**
+
+- Locates the WS2812 LED by cycling colours, then builds an
+  exposure-invariant (channel-ratio) colour table and verifies the solids, the
+  effects (`rainbow`/`breath`/`pulse`/`blink`), the auto-status colours, the
+  `httpd start` transient blue pulse, and the boot flash.
+- Usage: `python tools/led_watch.py COM3 [--camera N]`.
+- Use it whenever a change touches `components/led/`, the `rgb` command, Wi-Fi
+  status colours, or the boot flash.
+
+**Still screenshots (transcript / TUI / modals)**
+
+- `tools/harness/grab_screenshot.py --port COM3 --out out.png --crop-transcript`
+  captures the live screen (including open modals and the `edit` editor) via the
+  streaming `screenshot` BMPX protocol.
+- `tools/harness/capture_tui.py` drives TUI regression captures.
+- Convert BMP to PNG with Pillow to view. Treat screenshot pixel geometry as
+  approximate near edges (a known wrap artifact); assert layout through
+  `header status` / `tui status` metrics instead.
+- **Visual-bug workflow:** reproduce -> capture (still or camera) -> assert the
+  pixels/colour/geometry in a host driver -> fix -> re-capture and keep the
+  proof.
 
 ## Configuration Rules
 - ALL tunable values MUST live in p4minishell_config.h, never hardcoded in source
@@ -1290,7 +1420,7 @@ the raster core + 8x8 font are `components/gfx/`
   before v0.23.0.
 - After changing `sdkconfig.defaults`, delete `sdkconfig` and rebuild to confirm the
   intended values actually survive regeneration
-- LVGL examples MUST stay disabled (image budget)
+- Upstream LVGL sample applications MUST stay out of the build (image budget)
 - Station-only Wi-Fi profile: `CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n` AND
   `CONFIG_WIFI_RMT_SOFTAP_SUPPORT=n`
 - Newlib nano formatting
@@ -1302,11 +1432,16 @@ the raster core + 8x8 font are `components/gfx/`
 - ESP-Hosted reset: SLAVE_RESET_ON_EVERY_HOST_BOOTUP
 
 ### Documentation Updates
-After every task, update: changelog.md, readme.md, documentation.md, ai-context.md, board_config.yaml, command.md
-For roadmap work, also update: roadmap.md, API.md, SDK.md
-When bumping the version, update all three: `p4minishell_config.h` version macros,
-`p4minishell_config.yaml` `config_version`, and the `readme.md` version badge, then add
-a new section to `changelog.md`.
+- After every task, update: `changelog.md`, `readme.md`, `documentation.md`,
+  `ai-context.md`, `board_config.yaml`, `command.md`.
+- For roadmap work also update `roadmap.md`, `API.md`, `SDK.md`.
+- When you add or change user-visible behaviour, update the matching tutorial
+  (`tutorial_getting_started.md`, `tutorial_batch.md`, `tutorial_native.md`,
+  `tutorial_edit.md`).
+- When bumping the version, update all of: `p4minishell_config.h` version macros,
+  `p4minishell_config.yaml` `config_version`, the `readme.md` version badge, and add a
+  new section to `changelog.md`.
+- Record new bugs and known quirks in `bugs.md` (see section 4).
 
 ### Hardware Gaps (Do NOT implement)
 - Camera: no local camera stack in workspace
@@ -1412,7 +1547,7 @@ a new section to `changelog.md`.
   is a no-op (boot restores from CONFIG.SYS). Add settings by adding a directive
   in `boot.c` + a `config_persist_set` call in the owning command, then a SET.BAT
   page. Batch menu indices are 0-based (list ERRORLEVEL); modal **serial**
-  selection is 1-based (index+1) � a test-harness gotcha.
+  selection is 1-based (index+1) - a test-harness gotcha.
 - **`form`** (`modal_surf.c`) is a general multi-field modal primitive
   (`text|password|check|select|range`, values bound to env vars, `/t:secs`).
   It is a shell primitive, not a Preferences special case. New full-screen

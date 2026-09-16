@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file config_cmd.h
  * @brief `config` command: read/write the CONFIG.SYS settings file.

@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  PLOT.BAT - `plot` coordinate-layer demo: scientific graphs, charts and
 rem  world-coordinate drawings on the gfx canvas, then a TUI bar chart.

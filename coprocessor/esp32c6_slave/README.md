@@ -1,16 +1,23 @@
 # ESP32-C6 ESP-Hosted Slave
 
-This project builds the ESP-Hosted co-processor firmware that matches the host-side `espressif/esp_hosted 2.12.1` dependency restored in this repository.
+This project builds the ESP-Hosted co-processor firmware for the ESP32-C6 that
+pairs with the P4MiniShell host firmware. It tracks the same ESP-Hosted release
+line as the host dependency (`espressif/esp_hosted ^3.0.6`, see
+`main/idf_component.yml`).
 
-It reuses the checked-in upstream slave sources from `managed_components/espressif__esp_hosted/slave`, so the host and co-processor stay on the same ESP-Hosted release line.
-
-**No custom slave source code.** The `main/` directory contains only build configuration files (`CMakeLists.txt`, `idf_component.yml`, `Kconfig.projbuild`). There are no `.c` files — the entire slave firmware is built from the managed `espressif__esp_hosted` component's upstream slave sources. To modify the slave behavior, change the `esp_hosted` version in `idf_component.yml` or add Kconfig options in `Kconfig.projbuild`.
+**No custom slave source code.** `main/` contains only build configuration
+(`CMakeLists.txt`, `idf_component.yml`, `sdkconfig.defaults`,
+`partitions.esp32c6.csv`) - there are no `.c` files. The slave firmware is built
+entirely from the managed `espressif/esp_hosted` component's upstream slave
+sources. To change slave behaviour, change the `esp_hosted` version in
+`idf_component.yml` or add Kconfig options.
 
 ## Target
 
 - Co-processor: `esp32c6`
-- Transport: `SDIO`
+- Transport: SDIO
 - Board defaults: `ESP32-P4-Function-EV-Board` compatible SDIO pin map
+- Features: Wi-Fi + BLE (controller-only), RPC, system
 
 ## Build
 
@@ -21,7 +28,8 @@ idf.py set-target esp32c6
 idf.py build
 ```
 
-The host-side `c6ota` command expects an ESP-IDF application image, not a merged flash image. Use the app artifact in `build/esp32c6_hosted_slave.bin` for hosted OTA updates from SD or HTTP.
+The host-side `c6ota` command expects an **application image** (not a merged
+flash image). Use `build/esp32c6_hosted_slave.bin`.
 
 ## Flash
 
@@ -31,4 +39,11 @@ Flash the ESP32-C6 on its own serial port:
 idf.py -p <COPROCESSOR_PORT> flash monitor
 ```
 
-After flashing, the host log should report a co-processor hosted version in the `2.12.x` release line, which keeps the SDIO transport aligned with the host build used by `c6ota` and normal boot-time Wi-Fi.
+After flashing, the host log should report a co-processor version in the same
+`3.0.x` release line the host was built against. The host enforces a version
+compatibility gate at boot, so keep the two in sync (see the Wi-Fi rules in
+[`../../ai-context.md`](../../ai-context.md)).
+
+Alternatively, update the C6 from the shell over SDIO with
+`c6ota sd:/path/to/app.bin` or `c6ota http(s)://...` (see
+[`../../command.md`](../../command.md)).

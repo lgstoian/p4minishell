@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """deep_test.py - reactive on-board test of the P4 Companion app.
 
 A state-machine driver: it reads the serial stream continuously and reacts to

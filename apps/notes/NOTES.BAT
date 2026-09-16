@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  NOTES.BAT - a Zettelkasten note app on the `db` record store.
 rem  Reference app: db create/add/get/find/count/export/import, for /f

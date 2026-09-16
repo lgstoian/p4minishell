@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file theme.c
  * @brief Built-in UI themes + active selection. Pure data, no LVGL/IO.

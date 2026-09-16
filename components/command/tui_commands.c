@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file tui_commands.c
  * @brief TUI and modal-surface verbs for P4MiniShell.
@@ -909,10 +913,6 @@ bool shell_command_draw(int argc, char **argv)
         /* draw image <file.bmp> <x> <y> <w> <h>  (cells, 1-based): render a BMP
          * into the cell grid as nearest-DOS-color blocks. Reuses the single BMP
          * decoder in components/gfx. */
-        char resolved[P4_CONFIG_SD_PATH_BYTES];
-        shell_sd_session_t session;
-        FILE *file = NULL;
-        long size = 0;
         uint8_t *buf = NULL;
         size_t got = 0;
         gfx_bmp_info_t info;
@@ -921,6 +921,7 @@ bool shell_command_draw(int argc, char **argv)
         int y;
         int w;
         int h;
+        int rc;
 
         if (argc != 7) {
             shell_transcript_appendf_ansi(SH_ERR "draw image: usage: draw image <file.bmp> <x> <y> <w> <h>\n" SH_RST);
@@ -941,64 +942,20 @@ bool shell_command_draw(int argc, char **argv)
             batch_set_errorlevel(2);
             return false;
         }
-        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: invalid path %s\n" SH_RST, argv[2]);
-            batch_set_errorlevel(2);
-            return false;
-        }
-        if (shell_sd_begin(&session) != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: SD card not present\n" SH_RST);
-            batch_set_errorlevel(1);
-            return false;
-        }
-        file = fopen(resolved, "rb");
-        if (file == NULL) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: cannot open %s\n" SH_RST, resolved);
-            shell_sd_end(&session, "draw image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: cannot size %s\n" SH_RST, resolved);
-            fclose(file);
-            shell_sd_end(&session, "draw image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        if (size < 54 || (uint64_t)size > P4_CONFIG_IMAGE_MAX_BYTES) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: bad size %ld (max %u bytes)\n" SH_RST,
-                                          size, (unsigned)P4_CONFIG_IMAGE_MAX_BYTES);
-            fclose(file);
-            shell_sd_end(&session, "draw image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        buf = heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (buf == NULL) buf = malloc((size_t)size);
-        if (buf == NULL) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: out of memory\n" SH_RST);
-            fclose(file);
-            shell_sd_end(&session, "draw image");
-            batch_set_errorlevel(1);
-            return false;
-        }
-        got = fread(buf, 1, (size_t)size, file);
-        fclose(file);
-        shell_sd_end(&session, "draw image");
-        if (got != (size_t)size) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: short read %s\n" SH_RST, resolved);
-            heap_caps_free(buf);
-            batch_set_errorlevel(1);
+        rc = command_load_file_psram(argv[2], "draw image",
+                                     P4_CONFIG_IMAGE_MAX_BYTES, &buf, &got);
+        if (rc != 0) {
+            batch_set_errorlevel(rc);
             return false;
         }
         if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST, resolved);
+            shell_transcript_appendf_ansi(SH_ERR "draw image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST, argv[2]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;
         }
         if (!gfx_bmp_decode_scaled_565(buf, got, &info, w, h, &img)) {
-            shell_transcript_appendf_ansi(SH_ERR "draw image: decode failed (%s)\n" SH_RST, resolved);
+            shell_transcript_appendf_ansi(SH_ERR "draw image: decode failed (%s)\n" SH_RST, argv[2]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;
@@ -1199,6 +1156,7 @@ void shell_command_ask(int argc, char **argv)
 void shell_command_form(int argc, char **argv)
 {
     modal_form_field_t fields[MODAL_FORM_MAX_FIELDS];
+    char labels[MODAL_FORM_MAX_FIELDS][80];
     char *values[MODAL_FORM_MAX_FIELDS];
     const char *vars[MODAL_FORM_MAX_FIELDS];
     const char *title = NULL;
@@ -1208,12 +1166,12 @@ void shell_command_form(int argc, char **argv)
     int i;
 
     memset(fields, 0, sizeof(fields));
+    memset(labels, 0, sizeof(labels));
     memset(values, 0, sizeof(values));
     memset(vars, 0, sizeof(vars));
 
     for (i = 1; i < argc; i++) {
         char *spec, *eq, *colon, *arg, *var, *sep;
-        char label[80];
         char type[24];
         const char *argp = NULL;
         modal_form_field_t *f;
@@ -1236,9 +1194,9 @@ void shell_command_form(int argc, char **argv)
             continue;
         }
         n = (size_t)(eq - spec);
-        if (n >= sizeof(label)) n = sizeof(label) - 1;
-        memcpy(label, spec, n);
-        label[n] = '\0';
+        if (n >= sizeof(labels[0])) n = sizeof(labels[0]) - 1;
+        memcpy(labels[nf], spec, n);
+        labels[nf][n] = '\0';
 
         colon = strchr(eq + 1, ':');
         if (colon == NULL) {
@@ -1264,7 +1222,7 @@ void shell_command_form(int argc, char **argv)
         }
 
         f = &fields[nf];
-        f->label = label;
+        f->label = labels[nf];
         f->value = values[nf] = malloc(P4_CONFIG_ENV_VALUE_BYTES);
         if (f->value == NULL) {
             break;

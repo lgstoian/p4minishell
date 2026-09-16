@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file gfx_font.c
  * @brief Generated 8x8 ASCII glyph table for `gfx_surface_text`.

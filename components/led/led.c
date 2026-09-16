@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file led.c
  * @brief RGB status LED (WS2812 on GPIO26) driver and status/notification engine.

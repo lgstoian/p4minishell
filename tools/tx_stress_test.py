@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """tx_stress_test.py - TX-pressure output-integrity guard for bugs.md O3.
 
 Sends N numbered `echo` lines while deliberately pausing reads so the

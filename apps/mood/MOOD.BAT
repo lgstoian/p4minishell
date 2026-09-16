@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
+rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  MOOD.BAT - a live dashboard: samples `mem`, maps free-heap percent to
 rem  an RGB/audio mood, and can snapshot mem/sysinfo for viewing.

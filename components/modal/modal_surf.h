@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file modal_surf.h
  * @brief Native modal surfaces for batch apps: dialog, list, ask, filebrowser, viewer.

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file tui.c
  * @brief TUI cell buffer implementation.
@@ -73,7 +77,6 @@ bool tui_init(void)
         lvgl_port_unlock();
         free(s_cells);
         s_cells = NULL;
-        if (s_cells && heap_caps_get_allocated_size(s_cells) > 0) heap_caps_free(s_cells);
         return false;
     }
     s_tui_container = surf;
@@ -566,8 +569,9 @@ void tui_draw_table_ex(int x, int y, int ncols, const int *widths, int nrows,
                        uint8_t fg, uint8_t bg, int cursor_data_row,
                        uint32_t sel_mask)
 {
-    /* Column border x-stops (absolute grid coords) for the T-junctions. */
-    int stops[P4_CONFIG_TUI_COLS];
+    /* Column border x-stops (absolute grid coords) for the T-junctions.
+     * One extra slot: stops[ncols] is written for a full-width table. */
+    int stops[P4_CONFIG_TUI_COLS + 2];
     int total_w;
     int r;
     int c;

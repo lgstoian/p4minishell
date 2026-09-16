@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file storage_ini.c
  * @brief INI-style persistent-state and temp-file services.
@@ -114,9 +118,16 @@ int storage_ini_get_value(const char *text, const char *key, char *out, size_t o
 static bool storage_ini_append(char *text, size_t cap,
                                const char *key, const char *value)
 {
-    size_t text_len = strlen(text);
-    size_t key_len = strlen(key);
-    size_t value_len = strlen(value);
+    size_t text_len;
+    size_t key_len;
+    size_t value_len;
+
+    if (text == NULL || key == NULL || value == NULL) {
+        return false;
+    }
+    text_len = strlen(text);
+    key_len = strlen(key);
+    value_len = strlen(value);
 
     if (text_len > 0 && text[text_len - 1] != '\n') {
         if (text_len + 1 + key_len + 1 + value_len + 1 + 1 > cap) {
@@ -191,6 +202,9 @@ bool storage_ini_remove(char *text, size_t cap, const char *key)
 
 bool storage_ini_upsert(char *text, size_t cap, const char *key, const char *value)
 {
+    if (text == NULL || key == NULL || value == NULL) {
+        return false;
+    }
     (void)storage_ini_remove(text, cap, key);
     return storage_ini_append(text, cap, key, value);
 }
@@ -282,15 +296,17 @@ esp_err_t storage_write_text_file(const char *path, const char *text)
         shell_sd_end(&session, INI_TAG);
         return ESP_FAIL;
     }
-    if (fwrite(text, 1, text_len, file) != text_len || fflush(file) != 0 || fclose(file) != 0) {
-        if (file != NULL) {
-            fclose(file);
+    {
+        bool wrote_ok = (fwrite(text, 1, text_len, file) == text_len);
+        int flush_rc = fflush(file);
+        int close_rc = fclose(file);
+        file = NULL;
+        if (!wrote_ok || flush_rc != 0 || close_rc != 0) {
+            remove(tmp);
+            shell_sd_end(&session, INI_TAG);
+            return ESP_FAIL;
         }
-        remove(tmp);
-        shell_sd_end(&session, INI_TAG);
-        return ESP_FAIL;
     }
-    file = NULL;
 
     /* FATFS f_rename refuses to overwrite an existing target. */
     if (rename(tmp, resolved) != 0) {
@@ -364,6 +380,9 @@ esp_err_t storage_ini_file_set(const char *path, const char *key, const char *va
     bool changed;
     esp_err_t error;
 
+    if (path == NULL || key == NULL || value == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     error = storage_ini_resolve(path, resolved, sizeof(resolved));
     if (error != ESP_OK) {
         return error;

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """led_watch.py - webcam verification of the WS2812 status-LED feature set.
 
 Locates the LED in the camera view by cycling colours, calibrates an

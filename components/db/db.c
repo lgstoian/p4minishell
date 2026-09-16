@@ -1,4 +1,8 @@
-﻿/**
+﻿/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
+/**
  * @file db.c
  * @brief Palm-OS-style SD-backed record store (see db.h for the layout).
  *
@@ -181,13 +185,12 @@ static esp_err_t db_write_text_file(const char *resolved, const char *text)
         uint64_t reclaim = 0;
 
         if (db_exists_path(resolved)) {
-            /* best-effort reclaim of the old size */
+            /* best-effort reclaim of the old size. We already hold the guarded
+             * session: reuse it and never arm/end a nested session on the same
+             * handle (that would clear it and leave the worker priority-boosted). */
             struct stat st;
-            if (shell_sd_begin(&session) == ESP_OK) {
-                if (shell_sd_stat_path(resolved, &st) == ESP_OK) {
-                    reclaim = (uint64_t)st.st_size;
-                }
-                shell_sd_end(&session, DB_TAG);
+            if (stat(resolved, &st) == 0) {
+                reclaim = (uint64_t)st.st_size;
             }
         }
         if (!storage_check_free_space(needed, reclaim, DB_TAG)) {
@@ -712,8 +715,8 @@ esp_err_t db_info(const char *name, db_info_t *out)
     return ESP_OK;
 }
 
-/** Recursively delete a directory tree (bounded). */
-static void db_remove_tree(const char *resolved)
+/** Recursively delete a directory tree, bounded like every other walker. */
+static void db_remove_tree(const char *resolved, int depth)
 {
     DIR *dir;
     struct dirent *entry;
@@ -731,8 +734,9 @@ static void db_remove_tree(const char *resolved)
             continue;
         }
         snprintf(child, sizeof(child), "%s/%s", resolved, entry->d_name);
-        if (shell_sd_stat_path(child, &st) == ESP_OK && S_ISDIR(st.st_mode)) {
-            db_remove_tree(child);
+        if (depth < P4_CONFIG_DIR_RECURSE_DEPTH_MAX &&
+            shell_sd_stat_path(child, &st) == ESP_OK && S_ISDIR(st.st_mode)) {
+            db_remove_tree(child, depth + 1);
         } else {
             remove(child);
         }
@@ -756,7 +760,7 @@ esp_err_t db_drop(const char *name)
     if (shell_sd_begin(&session) != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
-    db_remove_tree(dir);
+    db_remove_tree(dir, 0);
     shell_sd_end(&session, DB_TAG);
     return ESP_OK;
 }
@@ -907,6 +911,9 @@ esp_err_t db_add(const char *name, uint8_t cat, const char *key, bool secret,
     if (len > P4_CONFIG_DB_RECORD_MAX_BYTES) {
         return ESP_ERR_INVALID_SIZE;
     }
+    if (payload == NULL && len > 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
     if (!db_exists(name)) {
         return ESP_ERR_NOT_FOUND;
     }
@@ -1042,8 +1049,11 @@ esp_err_t db_get(const char *name, uint32_t id, void *buf, size_t *inout_len,
             *inout_len = payload_len;   /* report the full size */
         } else {
             memcpy(buf, payload, payload_len);
-            /* NUL-terminate so a text payload can be printed as a string. */
-            ((char *)buf)[payload_len] = '\0';
+            /* NUL-terminate so a text payload can be printed as a string, but
+             * only when the caller's buffer has room for the terminator. */
+            if (capacity > payload_len) {
+                ((char *)buf)[payload_len] = '\0';
+            }
             *inout_len = payload_len;
         }
         free(payload);
@@ -1067,6 +1077,9 @@ esp_err_t db_set(const char *name, uint32_t id, uint8_t cat, const char *key,
     }
     if (len > P4_CONFIG_DB_RECORD_MAX_BYTES) {
         return ESP_ERR_INVALID_SIZE;
+    }
+    if (payload == NULL && len > 0) {
+        return ESP_ERR_INVALID_ARG;
     }
     count = db_read_index(name, &lines);
     if (count < 0) {

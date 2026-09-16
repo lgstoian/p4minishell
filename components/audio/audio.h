@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file audio.h
  * @brief ES8311 audio playback for P4MiniShell (`beep` / `tone` / `wavplay`).

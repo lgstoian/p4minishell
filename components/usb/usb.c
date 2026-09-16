@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -942,21 +946,25 @@ static void usb_module_task(void *arg)
                 break;
             }
 
-            if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) == pdTRUE) {
-                slot->attached = true;
-                slot->handle = event.data.hid_connected.handle;
-                slot->params = params;
-                if (params.proto == HID_PROTOCOL_KEYBOARD) {
-                    memset(&s_prev_keyboard_report, 0, sizeof(s_prev_keyboard_report));
-                } else {
-                    s_mouse_x = 0;
-                    s_mouse_y = 0;
-                }
-                usb_emit_asyncf("usb: HID %s connected\n", params.proto == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse");
-                usb_notify_headerf(3500,
-                                   params.proto == HID_PROTOCOL_KEYBOARD ? "USB keyboard connected" : "USB mouse connected");
-                xSemaphoreGive(s_usb_lock);
+            if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+                /* No handle recorded, so close it here or it leaks. */
+                (void)hid_host_device_stop(event.data.hid_connected.handle);
+                (void)hid_host_device_close(event.data.hid_connected.handle);
+                break;
             }
+            slot->attached = true;
+            slot->handle = event.data.hid_connected.handle;
+            slot->params = params;
+            if (params.proto == HID_PROTOCOL_KEYBOARD) {
+                memset(&s_prev_keyboard_report, 0, sizeof(s_prev_keyboard_report));
+            } else {
+                s_mouse_x = 0;
+                s_mouse_y = 0;
+            }
+            usb_emit_asyncf("usb: HID %s connected\n", params.proto == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse");
+            usb_notify_headerf(3500,
+                               params.proto == HID_PROTOCOL_KEYBOARD ? "USB keyboard connected" : "USB mouse connected");
+            xSemaphoreGive(s_usb_lock);
             break;
         }
         case USB_MODULE_EVENT_HID_INPUT:
@@ -1106,6 +1114,16 @@ void usb_init(void)
     s_usb_event_queue = xQueueCreate(USB_EVENT_QUEUE_DEPTH, sizeof(usb_module_event_t));
     if (s_usb_lock == NULL || s_usb_event_queue == NULL) {
         usb_record_errorf(ESP_ERR_NO_MEM, "USB module initialization failed: queue or mutex allocation");
+        /* Do not leak whichever handle did get created; a later usb_init()
+         * must start from a clean slate. */
+        if (s_usb_lock != NULL) {
+            vSemaphoreDelete(s_usb_lock);
+            s_usb_lock = NULL;
+        }
+        if (s_usb_event_queue != NULL) {
+            vQueueDelete(s_usb_event_queue);
+            s_usb_event_queue = NULL;
+        }
         return;
     }
 

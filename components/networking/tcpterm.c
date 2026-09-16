@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file tcpterm.c
  * @brief `tcpterm` — one-shot TCP request/response terminal (modern Datacomm).
@@ -194,6 +198,9 @@ esp_err_t networking_tcp_term(const char *host, int port,
     if (host == NULL || host[0] == '\0' || port < 1 || port > 65535) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (tx == NULL && tx_len > 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
     if (tx_len > (size_t)P4_CONFIG_TCP_TX_MAX_BYTES) {
         tcpterm_appendf("tcpterm: request exceeds %d bytes\n", P4_CONFIG_TCP_TX_MAX_BYTES);
         return ESP_ERR_INVALID_SIZE;
@@ -228,7 +235,11 @@ esp_err_t networking_tcp_term(const char *host, int port,
     /* Non-blocking connect + select gives a hard connect budget (a blocking
      * connect on lwIP can stall far past any socket timeout). */
     flags = fcntl(fd, F_GETFL, 0);
-    (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        tcpterm_appendf("tcpterm: cannot set non-blocking mode\n");
+        close(fd);
+        return ESP_FAIL;
+    }
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 && errno != EINPROGRESS) {
         tcpterm_appendf("tcpterm: connect to %s:%d failed\n", host, port);
         close(fd);

@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 /**
  * @file test_gfx.c
  * @brief Unit tests for the headless raster core (components/gfx/gfx.c).

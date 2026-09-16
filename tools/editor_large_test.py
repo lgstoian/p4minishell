@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """editor_large_test.py - HW verification for large-file `edit` support.
 
 Generates a multi-line file, uploads it with the ACK-paced `receive` path

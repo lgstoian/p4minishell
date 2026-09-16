@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """elite_test.py - drive ELITE: save + quit + save-file assert.
 
 Usage: python elite_test.py [COMx]

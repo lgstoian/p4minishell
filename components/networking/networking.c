@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Stoian Alexandru
+ * SPDX-License-Identifier: MIT
+ */
 #include <ctype.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -70,6 +74,9 @@ typedef struct {
 static networking_host_ops_t s_host_ops;
 static networking_wifi_state_t s_wifi_state = NETWORKING_WIFI_STATE_NOT_ATTEMPTED;
 static esp_err_t s_wifi_last_error = ESP_OK;
+/* True between a successful esp_wifi_init() and its matching deinit, so the
+ * failure cleanup can release the driver without spurious NOT_INIT errors. */
+static bool s_wifi_driver_inited;
 static bool s_wifi_connected;
 static bool s_wifi_connect_requested;
 static bool s_wifi_boot_autoconnect = true;
@@ -317,6 +324,15 @@ static void networking_wifi_cleanup_runtime_artifacts(void)
     if (s_wifi_sta_netif != NULL) {
         esp_netif_destroy_default_wifi(s_wifi_sta_netif);
         s_wifi_sta_netif = NULL;
+    }
+
+    /* Release the Wi-Fi driver itself. Without this a runtime-init failure
+     * leaves esp_wifi initialized, so every later retry fails at
+     * esp_wifi_init() and the only recovery is a reboot. */
+    if (s_wifi_driver_inited) {
+        (void)esp_wifi_stop();
+        (void)esp_wifi_deinit();
+        s_wifi_driver_inited = false;
     }
 #endif
 
@@ -577,6 +593,7 @@ esp_err_t networking_wifi_shutdown(void)
     if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_INIT) {
         return error;
     }
+    s_wifi_driver_inited = false;
 
     networking_wifi_cleanup_runtime_artifacts();
     s_wifi_state = NETWORKING_WIFI_STATE_NOT_ATTEMPTED;
@@ -2738,6 +2755,7 @@ static void networking_wifi_runtime_init(void)
         networking_wifi_cleanup_runtime_artifacts();
         return;
     }
+    s_wifi_driver_inited = true;
 
     networking_wifi_append_step("esp_event_handler_instance_register(...)");
     error = networking_wifi_register_event_handlers();

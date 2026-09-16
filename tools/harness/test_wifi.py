@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 import sys
 import time
 import os
@@ -23,8 +25,8 @@ def drain(timeout_s):
             sys.stdout.buffer.write(chunk)
             sys.stdout.flush()
 
-print('\n>> wifi connect 4G-CPE_5542 1234567890')
-ser.write(b'wifi connect 4G-CPE_5542 1234567890\r\n')
+print('\n>> wifi connect <P4_WIFI_SSID> <P4_WIFI_PASSWORD>')
+ser.write(b'wifi connect <P4_WIFI_SSID> <P4_WIFI_PASSWORD>\r\n')
 ser.flush()
 
 print('Waiting 30 seconds for connection...')

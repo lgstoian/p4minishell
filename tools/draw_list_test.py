@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """draw_list_test.py - Phase 3: draw list panel + screenshot.
 
 Usage: python draw_list_test.py [COMx]

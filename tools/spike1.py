@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
 """spike1.py - Phase 1 HW spike: raw dir bytes (ANSI?), skip= paging, keys.
 
 Usage: python spike1.py [COMx]  (default COM11)
