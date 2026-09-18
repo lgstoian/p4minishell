@@ -11,6 +11,16 @@ display/TUI/GFX stack you can build on.
 
 **Version:** 1.0.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
+| Shell | TUI apps |
+|---|---|
+| ![Shell prompt](docs/assets/shell-idle.png) | ![TUI boxes](docs/assets/tui-boxes.png) |
+| Plot graphs | Text editor |
+| ![Sine and cosine plot](docs/assets/plot-graph.png) | ![edit editor](docs/assets/editor-editing.png) |
+
+All screenshots are captured live from the device over USB serial
+(`python tools/capture_docs.py <COM_PORT>`); the full set is in
+[`docs/assets/`](docs/assets/README.md).
+
 ---
 
 ## What is P4MiniShell?
@@ -20,8 +30,8 @@ palmtops, PDAs, writerdecks, and similar handheld devices** on the ESP32-P4.
 It provides the parts such devices share:
 
 - a **touch-first shell** with history, completion, and a serial console bridge;
-- a **DOS-style batch language** (variables, `if`/`for`/`goto`/`call`, pipes,
-  redirection, aliases, error levels) that runs from the SD card;
+- a **DOS-style batch language** (variables, `if`/`for`/`goto`/`call`/`gosub`/`on`,
+  pipes, redirection, aliases, error levels) that runs from the SD card;
 - an **application model** where a `.bat` file *is* an app, plus a **native C
   SDK** (`applib`) for the polished surfaces batch cannot draw;
 - shared **UI surfaces**: modals (`dialog`, `list`, `ask`, `browse`, `view`,
@@ -61,8 +71,9 @@ and the on-board unit suite plus the host regression runners are green. See
   append touch`), full `dir` switch set, `xcopy`, `attrib`, `label`, a recycle
   bin (`undelete`/`trash`), `chkdsk`, `format`, and `disk` partition tools.
 - **Batch:** `set`/`set /a`/`set /p`, `calc` (floating point + BASIC-style
-  math/string functions), `if`, `for`, `for /f`, `goto`, `call` (including
-  shared-library routines), `alias`, `bind`, `macro`, `start`/`taskkill`
+  math/string functions), `if`, `for`, `for /f`, `goto`, `call`/`gosub`
+  (local and shared-library routines with `return`), `on … goto|gosub`
+  computed dispatch, `alias`, `bind`, `macro`, `start`/`taskkill`
   background jobs, `dialog`/`list`/`ask` modals, and `exit /b`.
 - **Apps:** PATH + `sd:/APPS` discovery with `APPINFO` metadata, `pkg`
   install/remove from CRC-checked bundles, asset manifests (`asset`), and the
@@ -81,7 +92,8 @@ and the on-board unit suite plus the host regression runners are green. See
 
 Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
 `tcmd` (dual-pane commander), `snake`, `elite`, `adventure`, `notes`, `mood`,
-`gfxdemo` (`BOUNCE`, `GFXTOOL`, `PLOT`), and `pics`.
+`gfxdemo` (`BOUNCE`, `GFXTOOL`, `PLOT`), `pics`, and `diag` (system health,
+capability and frame-rate diagnostics).
 
 > **Build constraints.** The LVGL sample applications are excluded from the
 > build to fit the image budget. Wi-Fi is station-only (SoftAP is compiled
@@ -105,13 +117,17 @@ Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
 
 ```powershell
 # Source ESP-IDF (adjust the path to your install)
-$env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"
+$env:IDF_PATH = "<path-to-esp-idf-v5.5.5>"
 . $env:IDF_PATH\export.ps1
 
 # From the repository root:
 idf.py build
-idf.py -p COM<port> flash monitor
+idf.py -p <COM_PORT> flash monitor
 ```
+
+Replace `<COM_PORT>` with your board's serial port (e.g. `COM3` on Windows,
+`/dev/ttyACM0` on Linux). Host tools accept the port as a trailing argument
+or via the `P4_PORT` environment variable.
 
 Use the **app image** for C6 OTA updates (not the merged flash image).
 
@@ -144,14 +160,15 @@ the discovered apps in a menu, or `launch <name>` to run one directly.
 
 ### 5. Deploy the reference apps
 
-Host tools in `apps/` push files to the card over serial:
+Host tools in `apps/` push files to the card over serial
+(replace `<COM_PORT>` with your port, or set `P4_PORT`):
 
 ```powershell
-python apps/companion/push_sd.py COM3        # the Companion app
-python apps/push_apps.py COM3                # tcmd/snake/elite/adventure/...
-python apps/push_assets.py COM3              # demo BMP sprites + manifests
-python apps/push_pkgs.py COM3                # build + push PKGS/ bundles
-python push_fonts.py COM3                    # optional SD fonts
+python apps/companion/push_sd.py <COM_PORT>   # the Companion app
+python apps/push_apps.py <COM_PORT>           # tcmd/snake/elite/adventure/...
+python apps/push_assets.py <COM_PORT>         # demo BMP sprites + manifests
+python apps/push_pkgs.py <COM_PORT>           # build + push PKGS/ bundles
+python push_fonts.py <COM_PORT>               # optional SD fonts
 ```
 
 Then, at the shell prompt: `launch COMPANION`, `tcmd`, `snake`, `bounce`, and
@@ -161,8 +178,8 @@ so on. Install a package with `pkg install <app>` and remove it with
 ### 6. Test it
 
 ```powershell
-python tools/unit_run.py COM3          # on-board unit suite (Unity)
-python tools/regression.py COM3        # host regression (apps, modals, gfx, ...)
+python tools/unit_run.py <COM_PORT>     # on-board unit suite (Unity)
+python tools/regression.py <COM_PORT>   # host regression (apps, modals, gfx, ...)
 ```
 
 `tools/regression.py` resets the board and runs every host-side suite and
@@ -204,7 +221,8 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - `calc` floating-point calculator with the FX-870P/VX-4 style math and string
   functions, angle modes, hex, and environment-variable results.
 - `if` (errorlevel / exist / defined / numeric keywords / `/i`), `for`,
-  `for /f`, `goto`, `call`, and `call <file.bat>::<routine>` shared libraries.
+  `for /f`, `goto`, `call`, `gosub`/`return`/`on` (BASIC control flow), and
+  `call <file.bat>::<routine>` shared libraries.
 - Multi-stage pipes, `<`/`>`/`>>` redirection, `&`/`&&`/`||` chaining, and
   quote/escape rules shared by one scanner.
 - `alias`/`unalias`, `bind` (F-keys and Ctrl-chords), `macro` recorder,
@@ -232,7 +250,9 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - **`draw`** TUI verbs (box/line/fill/text/bar/table/list/window/cursor/hold/
   fullscreen) over an 80x25 cell grid that maps to the live transcript region.
 - **`gfx`** — an RGB565 canvas with pixel/line/rect/circle/polygon/fill/text,
-  BMP load/save, and 8 sprite slots (up to 64x64) for batch games.
+  BMP load/save, 8 sprite slots (up to 64x64) for batch games, and
+  firmware-measured frame pacing (`gfx stats`: frames/min/avg/max/jitter/
+  dropped/fps).
 - **`plot`** — world-coordinate graphs (`func`/`polar`/`para`/`data`/`bar`/
   `table`) sampling `calc` expressions onto the canvas or the TUI.
 - **`font`** registry (roles/sizes/fallbacks), SD TTF loading, CJK fallback,
@@ -301,7 +321,17 @@ All tunable values are in `p4minishell_config.h`, grouped by subsystem. The
 companion `p4minishell_config.yaml` documents each value (type, meaning,
 range). Edit the header, then keep the YAML in sync. Hardware pins and display
 timing live in `board_config.h` / `board_config.yaml`; build options live in
-`sdkconfig`.
+`sdkconfig` (generated — edit via `idf.py menuconfig`, the committed source
+of truth is `sdkconfig.defaults`).
+
+> **Fresh checkout:** `dependencies.lock` may contain absolute paths from the
+> machine that last ran the component manager. If a build complains about
+> missing component paths, delete `dependencies.lock` (and
+> `test/dependencies.lock`) and run `idf.py update-dependencies`, then
+> re-apply the vendored patches with
+> `powershell -File tools/reapply_managed_patches.ps1` (see
+> `tools/README.md`). `build/`, `test/build/`, `sdkconfig`, `screenshots/`,
+> `spikes/`, and `assets_out/` are all local-only and git-ignored.
 
 ---
 
@@ -324,17 +354,30 @@ timing live in `board_config.h` / `board_config.yaml`; build options live in
 | [bugs.md](bugs.md) | Bug campaign template and known quirks |
 | [ai-context.md](ai-context.md) | Working rules for AI-assisted development |
 | [licence.md](licence.md) | MIT license + third-party notices |
+| [SECURITY.md](SECURITY.md) | Security policy: device lock, secrets, httpd auth |
 | [test/README.md](test/README.md) | Unit-test layout and how to run them |
 | [tools/README.md](tools/README.md) | Host-side drivers and hardware tests |
+| [docs/assets/README.md](docs/assets/README.md) | Public screenshot set + capture guide |
+
+> **Screenshots:** curated public captures live in `docs/assets/` (see its
+> README for the naming convention and the build-mode capture commands).
+> `screenshots/` at the repo root is git-ignored test scratch and is
+> intentionally empty here.
 
 ---
 
 ## Testing
 
 - **Unit tests:** Unity suites in `test/` run on the P4 target
-  (`python tools/unit_run.py COM3`).
-- **Hardware suites:** `python tools/regression.py COM3` drives the apps,
-  modals, editor, TUI/GFX, networking, and boot path.
+  (`python tools/unit_run.py COM3`; non-zero exit on any failure).
+- **Hardware suites:** `python tools/p4test_run.py COM3` runs the shared
+  `tools/p4test/` framework over `tools/suites/` (smoke, storage, batch, data,
+  display, editor, input/UI, connectivity, power/audio, performance, apps) and
+  prints a PASS/FAIL table. `python tools/regression.py COM3` remains as the
+  legacy host regression.
+- **Dogfooding:** `python tools/dogfood.py COM3 --minutes 15` autonomously
+  drives the board like a curious user, screenshots every action, and journals
+  anomalies (panics, timeouts, "BSOD" frames, heap decline).
 - **Camera diagnostics:** `tools/display_glitch_watch.py` and
   `tools/led_watch.py` watch the panel and the status LED with a webcam.
 

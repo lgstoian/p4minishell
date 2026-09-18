@@ -211,9 +211,9 @@ draw text 20 10 "The chest opens: gold! Score %score% in %moves% moves." 14
 tone 784 150
 tone 1046 300
 pause
-goto :eof
+return
 
 :do_quit
 echo [M-ADV-QUIT]
 draw clear screen
-goto :eof
+return

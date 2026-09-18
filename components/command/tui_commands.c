@@ -1000,21 +1000,46 @@ bool shell_command_anchor(int argc, char **argv)
 
 void shell_command_browse(int argc, char **argv)
 {
-    char selected_path[P4_CONFIG_TUI_BROWSE_PATH_BYTES];
+    const char *varname = "BROWSE_RESULT";
     const char *start_path = NULL;
+    uint32_t timeout_ms = 0;
+    char selected_path[P4_CONFIG_TUI_BROWSE_PATH_BYTES];
+    int result;
+    int i;
 
-    if (argc > 1) {
-        start_path = argv[1];
+    /* Parse the shared modal options here too: the dispatcher previously sent
+     * only `/v:` commands to the batch variant, so `browse /t:30 sd:/APPS`
+     * consumed `/t:30` as the start path (empty listing, no timeout). */
+    for (i = 1; i < argc; i++) {
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
+        } else if (modal_parse_var_arg(argv[i], &varname)) {
+            continue;
+        } else if (start_path == NULL) {
+            start_path = argv[i];
+        } else {
+            shell_print_usage("Usage: browse [/t:secs] [/v:NAME] [path]");
+            batch_set_errorlevel(2);
+            return;
+        }
     }
 
-    int result = modal_filebrowser_run("Browse", start_path, selected_path, sizeof(selected_path), 0);
+    result = modal_filebrowser_run("Browse", start_path, selected_path,
+                                   sizeof(selected_path), timeout_ms);
 
-    if (result == 0) {
-        shell_transcript_appendf_ansi(SH_OK "selected: %s" SH_RST "\n", selected_path);
-    } else {
-        shell_transcript_appendf_ansi(SH_MUTE "browse: cancelled" SH_RST "\n");
+    if (result != 0) {
+        shell_env_set(varname, "");
+        shell_print_muted("browse: cancelled");
+        batch_set_errorlevel(1);
+        return;
     }
-    batch_set_errorlevel(result == 0 ? 0 : 1);
+    if (shell_env_set(varname, selected_path) != ESP_OK) {
+        shell_print_error("browse: cannot set %s", varname);
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_print_ok("selected: %s", selected_path);
+    batch_set_errorlevel(0);
 }
 
 /* ========================================================================
@@ -1287,35 +1312,9 @@ void shell_command_form(int argc, char **argv)
 
 void shell_command_browse_batch(int argc, char **argv)
 {
-    const char *varname = "BROWSE_RESULT";
-    const char *start_path = NULL;
-    uint32_t timeout_ms = 0;
-    char selected[P4_CONFIG_TUI_BROWSE_PATH_BYTES];
-    int rc;
-
-    for (int i = 1; i < argc; i++) {
-        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
-            continue;
-        } else if (modal_parse_var_arg(argv[i], &varname)) {
-            continue;
-        } else if (start_path == NULL) {
-            start_path = argv[i];
-        }
-    }
-
-    rc = modal_filebrowser_run("Browse", start_path, selected, sizeof(selected), timeout_ms);
-    if (rc != 0) {
-        batch_set_errorlevel(1);
-        shell_env_set(varname, "");
-        return;
-    }
-    if (shell_env_set(varname, selected) != ESP_OK) {
-        shell_print_error("browse: cannot set %s", varname);
-        batch_set_errorlevel(1);
-        return;
-    }
-    shell_print_ok("selected: %s", selected);
-    batch_set_errorlevel(0);
+    /* Retained for API compatibility; the single option parser in
+     * shell_command_browse() now handles the interactive and batch paths. */
+    shell_command_browse(argc, argv);
 }
 
 /** Shared image-view entry (used by `view` and `open`): resolve, show in the
@@ -1499,12 +1498,14 @@ void shell_command_locate(int argc, char **argv)
 void shell_command_tui(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui clear");
+        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear");
         batch_set_errorlevel(2);
         return;
     }
-    /* `tui status` is a read-only query: safe (and useful) in bg jobs. */
+    /* `tui status` / `tui stats` are read-only queries: safe (and useful) in
+     * bg jobs. */
     if (!shell_text_equals_ignore_case(argv[1], "status") &&
+        !shell_text_equals_ignore_case(argv[1], "stats") &&
         !draw_require_foreground("tui")) {
         return;
     }
@@ -1531,12 +1532,36 @@ void shell_command_tui(int argc, char **argv)
         shell_print_field("cols/rows", "%d x %d", P4_CONFIG_TUI_COLS, P4_CONFIG_TUI_ROWS);
         batch_set_errorlevel(0);
         return;
+    } else if (shell_text_equals_ignore_case(argv[1], "stats")) {
+        /* TUI frame pacing: frames/min/avg/max/jitter/dropped (per present). */
+        if (argc >= 3 && shell_text_equals_ignore_case(argv[2], "reset")) {
+            tui_frame_stats_reset();
+            shell_print_ok("tui stats: reset");
+            batch_set_errorlevel(0);
+            return;
+        }
+        if (argc >= 4 && shell_text_equals_ignore_case(argv[2], "target")) {
+            uint32_t fps = (shell_text_equals_ignore_case(argv[3], "off") ||
+                            shell_text_equals_ignore_case(argv[3], "0"))
+                           ? 0u : (uint32_t)atoi(argv[3]);
+            tui_frame_stats_set_target_fps(fps);
+            shell_transcript_appendf("tui stats: target %u fps\n", (unsigned)fps);
+            batch_set_errorlevel(0);
+            return;
+        }
+        {
+            char fields[160];
+            gfx_frame_stats_format(tui_frame_stats_get(), fields, sizeof(fields));
+            shell_transcript_appendf("tui stats: %s\n", fields);
+        }
+        batch_set_errorlevel(0);
+        return;
     } else if (shell_text_equals_ignore_case(argv[1], "clear")) {
         if (tui_is_active()) tui_clear();
         draw_maybe_flush();
         batch_set_errorlevel(0);
         return;
     }
-    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui clear");
+    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear");
     batch_set_errorlevel(2);
 }

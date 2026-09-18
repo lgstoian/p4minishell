@@ -22,4 +22,4 @@ echo hit at 500,20: %UIHIT%
 ui tap 500 20
 ui state
 echo [M-UITEST-DONE]
-goto :eof
+return

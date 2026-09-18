@@ -653,8 +653,10 @@ static void header_format_mem(header_level_t level, char *buf, size_t buf_size)
     }
 
     if (header_glyph_style()) {
-        /* Compact: the glyph carries the identity, the value carries the size. */
-        snprintf(buf, buf_size, "%s%s", header_status_glyph(HEADER_STATUS_MEM), num);
+        /* Compact: the glyph carries the identity, the value carries the size.
+         * Keep a separator between them so MEM matches the CPU/battery glyph
+         * labels, which are separate widgets with a flex gap. */
+        snprintf(buf, buf_size, "%s %s", header_status_glyph(HEADER_STATUS_MEM), num);
     } else if (level == HEADER_LEVEL_FULL) {
         snprintf(buf, buf_size, "%s %s", prefix, num);
     } else if (level == HEADER_LEVEL_SHORT) {
@@ -1158,7 +1160,23 @@ static bool header_schedule(lv_async_cb_t cb, void *payload)
     if (s_header_root == NULL) {
         return false;
     }
-    return lv_async_call(cb, payload) == LV_RESULT_OK;
+
+    /* lv_async_call() creates a one-shot LVGL timer, mutating the global timer
+     * list that the LVGL task walks in lv_timer_handler(). With
+     * CONFIG_LV_OS_NONE the lv_lock() inside lv_async_call() is a no-op, so
+     * the esp_lvgl_port mutex is the only serialisation point; a foreign-task
+     * call made without it can interleave with the timer walk and leave a
+     * freed timer node linked, which later faults in lv_timer_exec (the
+     * 0xcececece Core 0 panic). Every caller of header_schedule() is either
+     * the worker task or an event task, so take the (recursive) port lock for
+     * the duration of the call. */
+    bool ok = false;
+
+    if (lvgl_port_lock(portMAX_DELAY)) {
+        ok = lv_async_call(cb, payload) == LV_RESULT_OK;
+        lvgl_port_unlock();
+    }
+    return ok;
 }
 
 /* ---- Async callbacks ---- */

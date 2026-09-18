@@ -1,0 +1,7 @@
+launch PLOT
+[M-PLOT]
+calc.angle=radians
+gfx: canvas NxN (N KB PSRAM)
+plot: window x=[-N.N, N.N] y=[-N.N, N.N]
+gfx: saved /sdcard/PLOT.BMP (N bytes)
+[M-PLOT-DONE]

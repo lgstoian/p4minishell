@@ -9,9 +9,11 @@ against the RGB565 quantization the firmware applies.
 
 Usage: python tools/gfx_toolkit_test.py [COMx]
 """
+import os
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, "tools")
@@ -63,7 +65,8 @@ class Bmp:
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM3"
-    out = r"C:\Users\lgstoian\AppData\Local\Temp\opencode\GFXTOOL.BMP"
+    out = os.path.join(tempfile.gettempdir(), "p4minishell", "GFXTOOL.BMP")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     sh = boot(port)
     img = False
     try:

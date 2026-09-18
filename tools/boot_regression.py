@@ -57,7 +57,7 @@ def main():
 
         panics = len(re.findall(r"Guru Meditation|panic'ed|Load access fault|"
                                 r"Illegal instruction|assert failed|multi_heap", text))
-        autoexec = len(re.findall(r"=== AUTOEXEC START ===", text))
+        autoexec = len(re.findall(r"Boot Script: running AUTOEXEC\.BAT", text))
         sd_ready = "SD card ready" in text
         warnings = [ln.strip() for ln in text.splitlines()
                     if re.search(r"^[WE] \(\d+\)", ln.strip()) and not BENIGN_WE.search(ln)]

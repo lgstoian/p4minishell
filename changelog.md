@@ -14,6 +14,178 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [Unreleased]
+
+### Added - production test framework, frame metrics, diagnostics app
+
+- **Shared host test framework (`tools/p4test/`).** One package replaces the
+  copy-pasted serial loops, BMPX/SDFX readers, and ad-hoc PASS/FAIL
+  bookkeeping scattered across `tools/`: `session.DeviceSession` (DTR-safe
+  open, marker-synchronised `run()`, panic detection, byte-exact binary
+  framing), `asserts.Checklist`/`SuiteResult`, `screenshot` (streaming capture
+  + a pixel model), `sdbridge` (`receive`/`send` transfers), `perf` (frame
+  stats + marker timing), `device.Device` (boot/run/screenshot/deploy facade),
+  and `runner` (suite discovery + PASS/FAIL table). Every BMPX/SDFX reader now
+  routes here.
+- **Comprehensive regression suites (`tools/suites/`).** Ordered,
+  hardware-verified suites covering smoke, storage, batch language, data
+  (db/csv/export/import/archive/crypt/alarm/json/markdown), display (TUI/gfx/
+  plot/font/theme/header/cursor), editor, input+UI, connectivity,
+  power/audio/peripherals, performance, and every reference app. Run with
+  `python tools/p4test_run.py COM3 [--only ... | --tag ... | --list]`.
+- **Autonomous dogfooding agent (`tools/p4test/agent.py`, `tools/dogfood.py`).**
+  A seedable policy drives the board like a curious user (help, status, files,
+  apps, modals, TUI/canvas animation), captures a screenshot after EVERY
+  action, and journals panics, timeouts, blue "BSOD" frames, blank frames and
+  heap decline to `screenshots/dogfood/<run>/` (JSONL journal + Markdown
+  report + PNG/frame proofs).
+- **Frame-smoothness metrics.** New pure `gfx_frame_stats_t` core in
+  `components/gfx` (sample/reset/target/avg/jitter/fps/format) instrumented at
+  the two present points: `gfx show` and `tui_flush`. New `gfx stats [reset |
+  target <fps|off>]` and `tui stats [reset | target <fps|off>]` commands report
+  `frames/min_us/avg_us/max_us/jitter_us/dropped/fps10/target_fps` on the
+  device (integer-only, newlib-nano safe). New config `P4_CONFIG_TUI_TARGET_FPS`
+  (default 30). Unit-tested in `test/main/test_gfx.c`.
+- **P4 Diagnostics app (`apps/diag/`).** A pure-batch system health,
+  capability and performance console: TUI dashboard, identity/system/storage/
+  network/device sections, a live errorlevel capability matrix, an animated
+  gfx benchmark that prints the firmware-measured frame pacing, screenshots,
+  and a written `DIAG.TXT` report. Markers `[M-DIAG]` / `[M-DIAG-SECTION]` /
+  `[M-DIAG-DONE]`.
+- **BOUNCE** now reports `gfx stats` after its animation loop.
+
+### Changed
+
+- `tools/unit_run.py` aggregates every Unity suite summary and now returns a
+  non-zero exit code on any failure, missing completion, or panic (it
+  previously always exited 0), and honours `P4_PORT`.
+- Driver selection everywhere is unified on `p4test.session`/`shell_session`
+  (DTR-safe open).
+
+### Fixed - second production sweep (F1-F11, H1-H10)
+
+Every finding from the clean-slate production sweep was fixed and verified on
+COM3; locations and verification are recorded in [`bugs.md`](bugs.md).
+
+- **`format` (F1).** Auto allocation-unit selection scales the FAT cluster with
+  the card (32 KiB on a 29 GiB card): format drops from ~4 min to **5.3 s**.
+- **`findstr /C:` / `/G:` (F2).** Option-supplied search strings no longer make
+  the parser eat the following file operand.
+- **Boot auto-connect (F4).** A dedicated `s_wifi_autoretry` flag makes the
+  retry watchdog actually retry after a disconnect (3/3 boots now connect).
+- **`wifi throughput ... udp` (F6).** The family parser accepts 8 tokens, so the
+  7-token form no longer drops `udp` and runs TCP.
+- **`db` corrupt header (F7).** `db add` derives `next_id` from the surviving
+  index and rewrites `record_count` from the index count.
+- **Pipeline redirection (F8).** An active redirect captures stdout only; the
+  transcript/serial no longer duplicate it (DOS `>` semantics).
+- **Editor layout WARN (F9).** Only a collapsed editor surface warns now.
+- **Interactive `ask` (F10).** Serial Ctrl+C is a foreground break, and the
+  ready-made modals poll it (`abort_cancels`) so no app can wedge the worker.
+- **TCMD label overflow (F11).** `P4_CONFIG_BATCH_LABEL_MAX` raised 32 → 48 so
+  TCMD.BAT's 34 labels (notably `:end`) register and `goto end` works.
+- **Test harness (H1-H10).** `s14_apps._shell_echo`/`_close_surfaces`, `s13_perf`
+  SNAKE quit + frame diff, `s08_display` font/plot checks, `s10_input_ui`
+  determinism, `Device.format_sd` wait, `tcpterm`/`regression` skip handling,
+  `dogfood` escape, `stall_catch` reset, and `led_watch` ROI guard are all
+  corrected.
+
+### Fixed - production-readiness campaign (P1-P13, H1-H11)
+
+Every finding from the v1.0.0 production sweep was fixed and verified on COM3;
+locations and verification are recorded in [`bugs.md`](bugs.md).
+
+- **`call :label args` (P1).** In-file labelled subroutines now receive their
+  own arguments, `%*`/`shift` are scoped to the block, and the caller's
+  arguments are restored on return.
+- **`wifi diag` dropped the link (P2).** The background Wi-Fi task no longer
+  re-runs the boot auto-connect while already associated, so `wifi diag`/`wifi
+  scan` are non-disruptive.
+- **HTTPS always failed (P3).** mbedTLS record buffers now allocate from PSRAM
+  (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`); `httpget https://...` returns 200.
+- **`wifi status` RSSI/PHY (P4).** The hosted `get_ap_info` RPC omits RSSI/PHY,
+  so they are taken from a cached scan record; the header shows "unknown"
+  rather than a false 0.
+- **Battery N/C (P5).** A new `BOARD_CFG_BATTERY_PRESENT_MV` classifies a
+  floating sense input as "BAT N/C" instead of 0%.
+- **Font boot warnings (P6).** The optional CJK tail probe is silent when the
+  file is absent.
+- **`wifi throughput` (P7).** Works both directions (the P2 fix); status line
+  gained its missing separator.
+- **`appconfig <app> list` (P8)**, **unquoted alias values (P9)**, **`mem`
+  doubled percent (P10)**, **editor `ui state nav=on` (P11)**, and **TCMD
+  `mkdir` spam (P12)** fixed.
+- **Socket headroom (P13).** `CONFIG_LWIP_MAX_SOCKETS=12` (16 breaks the boot
+  command-worker task on this board).
+- **Test harness (H1-H11).** `DeviceSession.run()` strips the echoed command
+  (negative `if exist` checks), and the `s07`/`s08`/`s10`/`s12`/`s13`/`s14`
+  suites, `boot_regression.py`, `tcpterm_test.py`, and `dogfood.py` defects are
+  corrected.
+
+---
+
+## [Unreleased] - batch control flow (gosub / return / on)
+
+### Added - BASIC-flavoured batch control flow
+
+- **`call :label [args]`** — run a local `:label` block as a subroutine and
+  resume at the next line when it returns (`return` / `exit /b` /
+  `goto :eof` / EOF).
+- **`gosub :label [args]` and `gosub <file.bat>::<routine> [args]`** — the
+  BASIC-named siblings of `call :label` and the shared-library routine call.
+- **`return [code]`** — leave a `call`/`gosub` scope (at the top level of a
+  file it ends the frame exactly like `goto :eof`); an optional code sets
+  errorlevel.
+- **`on <expr> goto|gosub|call <label>[,<label>...]`** — BASIC computed
+  dispatch. The expression is evaluated by the `set /a` engine; the 1-based
+  result selects a target and an out-of-range value falls through. `on … call`
+  is an alias of `on … gosub`.
+- **Higher label capacity.** `P4_CONFIG_BATCH_LABEL_MAX` 48 -> 128 and
+  `P4_CONFIG_BATCH_LABEL_BYTES` 48 -> 64, and a target now accepts both
+  `:label` and bare `label` forms.
+- **`proc /labels` and `proc /goto`** report the scanned labels / pending goto.
+- **`apps/controlflow/CONTROL.BAT`** — a self-contained demo app exercising
+  `gosub`/`return`/`on`; wired into `push_apps.py`, `s14_apps.py` and the
+  `appdiff` parity gate.
+
+### Changed - reference apps use the new control flow
+
+- Every reference app that used `call :label`, `call <file>::<routine>` or
+  `goto :eof` now uses the BASIC-named `gosub` / `gosub <file>::<routine>` /
+  `return` equivalents (`DIAG.BAT` converted all 29 local calls and 10 returns;
+  `COMPANION.BAT` and `LIB.BAT` converted their library-routine calls). The
+  conversions are exact aliases, so the `appdiff` golden gate stays 0-diff
+  across all 15 apps. The `companion` library files keep `call`/`goto :eof`
+  because a `::routine` entry skips the library's `@echo off`, so their command
+  text is echoed and changing it would alter the transcript.
+
+### Fixed - `rem` and `::` comments were not opaque
+
+- A comment line containing `|`, `<`, `>`, `&` or `%` was expanded, chained,
+  piped and redirected because those parsers ran before the comment was
+  recognised. `rem … | …` ran the tail as a command and `rem … > file` created
+  a file; app comments such as `GFXTOOL.BAT`'s marker list emitted a spurious
+  `Unknown command: NOIMG]`. Comments are now swallowed to end of line at both
+  command entry points (cmd.exe parity), covered by new `s06_batch.py` checks
+  and the `appdiff` gate (the `GFXTOOL` baseline was re-captured without the
+  spurious lines).
+
+### Changed - test coverage
+
+- **Unit tests (`test/main/test_batch_control.c`)** for the pure label scanner
+  and `on` parser (`batch_label_is_line`, `batch_label_extract`,
+  `batch_on_parse`, `batch_on_select`), exposed as thin wrappers so the tests
+  share the executor's exact parsing.
+- **`s06_batch.py`** extended with `gosub`/`return`/`on` (dispatch, arithmetic
+  expressions, nesting, `file::routine`, out-of-range fall-through), the `rem`
+  opacity cases, and the DOS parity rules (missing `goto` aborts, missing
+  `call` sets errorlevel 1 and continues).
+- **`tools/appdiff.py`** golden gate extended to the new app and pinned to a
+  known on-screen-keyboard state so persisted UI settings cannot create false
+  diffs.
+
+---
+
 ## [1.0.0] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
 ### Changed - first public release: MIT license + documentation overhaul

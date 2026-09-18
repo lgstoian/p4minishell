@@ -1,0 +1,4 @@
+launch COMPANION
+goto :eof
+[C-MENU]
+[C-EXIT]

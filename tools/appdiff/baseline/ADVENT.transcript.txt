@@ -1,0 +1,13 @@
+launch ADVENT
+room=courtyard
+has_lantern=N
+has_key=N
+has_amulet=N
+score=N
+moves=N
+[M-ADV]
+room=courtyard
+moves=N
+---
+modal: ask serial line: 'quit'
+[M-ADV-QUIT]

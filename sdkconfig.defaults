@@ -186,6 +186,22 @@ CONFIG_LV_USE_CLIB_MALLOC=y
 # CONFIG_LV_USE_ASSERT_MALLOC is not set
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
+# TLS on this P4 build must allocate from PSRAM. The default internal-memory
+# strategy leaves mbedTLS ~16KB short of internal RAM once the UI/network
+# stacks are up, so every HTTPS connection fails at mbedtls_ssl_setup with
+# MBEDTLS_ERR_SSL_ALLOC_FAILED (-0x7F00). With SPIRAM_USE_MALLOC enabled this
+# places mbedTLS's record/handshake buffers in PSRAM (31MB free) and fixes
+# `httpget https://...` and the C6 OTA TLS path.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# The lwIP socket pool defaults to 10, which the HTTP server, ping, DNS, and
+# short-lived HTTPS/TCP sessions can exhaust under a long networked session
+# (socket() then fails until reset). Give it modest headroom. Do NOT raise it
+# further: this build's internal RAM is tight enough at boot that 16 makes the
+# 32KB command-worker task creation fail ("Failed to create command worker
+# task"), bricking the shell. 12 has been verified to boot cleanly.
+CONFIG_LWIP_MAX_SOCKETS=12
+
 # TCP throughput: the 5760-byte default window caps a single stream at
 # window/RTT over the ESP-Hosted link (~4-5 Mbit/s measured with the
 # `wifi throughput` bench). Raise the window/send buffers and the receive

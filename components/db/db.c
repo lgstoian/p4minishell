@@ -929,7 +929,21 @@ esp_err_t db_add(const char *name, uint8_t cat, const char *key, bool secret,
 
     id = db_header_get_u32(name, "next_id");
     if (id == 0) {
-        id = 1;
+        /* Corrupt/missing header: never blind-assign id 1. Derive the next id
+         * from the surviving index so a new record cannot overwrite an
+         * existing record and leave INDEX.TXT keyed to the old one (F7). */
+        uint32_t max_id = 0;
+        int scan;
+
+        for (scan = 0; scan < count; scan++) {
+            if (lines[scan].valid && lines[scan].id > max_id) {
+                max_id = lines[scan].id;
+            }
+        }
+        id = max_id + 1;
+        if (id == 0) {
+            id = 1;
+        }
     }
 
     memset(&new_line, 0, sizeof(new_line));
@@ -975,7 +989,7 @@ esp_err_t db_add(const char *name, uint8_t cat, const char *key, bool secret,
     }
 
     error = db_rewrite_index(name, lines, count,
-                             db_header_get_u32(name, "record_count") + 1,
+                             (uint32_t)count,
                              db_header_get_u32(name, "deleted_count"));
     free(lines);
     if (error != ESP_OK) {

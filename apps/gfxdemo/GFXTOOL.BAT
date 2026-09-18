@@ -30,7 +30,7 @@ if not errorlevel 1 echo [M-GFXTOOL-IMG]
 gfx save GFXTOOL.BMP
 gfx close
 echo [M-GFXTOOL-DONE]
-goto :eof
+return
 
 :nofx
 echo gfx: canvas unavailable (TUI active or out of memory)

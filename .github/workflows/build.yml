@@ -1,0 +1,28 @@
+# P4MiniShell CI: firmware + unit-test builds (no hardware required).
+#
+# Uses the ESP-IDF v5.5.5 container. Both projects must build with zero
+# errors and zero warnings; hardware suites (tools/p4test_run.py,
+# tools/regression.py, tools/capture_docs.py) stay local (see readme.md).
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build
+      - name: Build unit-test project
+        run: |
+          . $IDF_PATH/export.sh
+          cd test
+          idf.py build
+      - name: Python syntax check (host tools)
+        run: python3 -m compileall -q tools apps

@@ -1,0 +1,7 @@
+launch GFXTOOL
+[M-GFXTOOL]
+gfx: canvas NxN (N KB PSRAM)
+gfx: filled N pixel(s)
+[M-GFXTOOL-IMG]
+gfx: saved /sdcard/GFXTOOL.BMP (N bytes)
+[M-GFXTOOL-DONE]

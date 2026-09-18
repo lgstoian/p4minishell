@@ -88,6 +88,11 @@ extern void test_batch_expr_variables(void);
 extern void test_batch_expr_errors(void);
 extern void test_batch_expr_comparisons(void);
 extern void test_batch_expr_logical(void);
+extern void test_batch_label_is_line(void);
+extern void test_batch_label_extract(void);
+extern void test_batch_on_parse(void);
+extern void test_batch_on_select(void);
+extern void test_batch_on_dispatch_selection(void);
 
 extern void test_variable_expansion_env_var(void);
 extern void test_variable_expansion_empty_name(void);
@@ -341,6 +346,8 @@ extern void test_gfx_view_map(void);
 extern void test_gfx_view_clip_line(void);
 extern void test_gfx_view_line_draws(void);
 extern void test_gfx_view_nice_step(void);
+extern void test_gfx_frame_stats_intervals(void);
+extern void test_gfx_frame_stats_dropped(void);
 extern void test_asset_crc32_vectors(void);
 extern void test_csv_split_simple(void);
 extern void test_csv_split_quoted(void);
@@ -523,6 +530,11 @@ void app_main(void)
     RUN_TEST(test_batch_expr_comparisons);
     RUN_TEST(test_batch_expr_logical);
     RUN_TEST(test_batch_expr_errors);
+    RUN_TEST(test_batch_label_is_line);
+    RUN_TEST(test_batch_label_extract);
+    RUN_TEST(test_batch_on_parse);
+    RUN_TEST(test_batch_on_select);
+    RUN_TEST(test_batch_on_dispatch_selection);
     UNITY_END();
 
     /* Variable expansion tests */
@@ -855,6 +867,8 @@ void app_main(void)
     RUN_TEST(test_gfx_view_clip_line);
     RUN_TEST(test_gfx_view_line_draws);
     RUN_TEST(test_gfx_view_nice_step);
+    RUN_TEST(test_gfx_frame_stats_intervals);
+    RUN_TEST(test_gfx_frame_stats_dropped);
     UNITY_END();
 
     /* Asset manifest core (command component). */

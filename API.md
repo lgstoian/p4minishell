@@ -13,7 +13,7 @@ firmware, organized by module and mirroring the headers under `components/`.
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It holds no command implementations and no shell state.
 - `components/shell` owns the transcript and async buffer, command history, debug log, UART console, the input-line prompt contract, and the system info commands.
 - `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, and every DOS file command.
-- `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, `for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, and the batch language commands.
+- `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, `gosub`/`return`/`on`, `for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, and the batch language commands.
 - `components/command` owns the single dispatcher, the execution pipeline, output-redirection parsing, the worker task, the hardware commands, the UI query commands, and the remaining system commands.
 - `components/ansi` owns the ANSI/VT escape sequence processing: SGR color palette, format string builder, text processing.
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
@@ -1039,6 +1039,9 @@ void shell_command_set(int argc, char **argv);   /* also handles /a and /p */
 void shell_command_path(int argc, char **argv);
 void shell_command_echo(int argc, char **argv);
 void shell_command_call(int argc, char **argv);
+void shell_command_gosub(int argc, char **argv);   /* BASIC twin of call :label */
+void shell_command_return(int argc, char **argv);  /* leave a call/gosub scope */
+void shell_command_on(int argc, char **argv);      /* on <expr> goto|gosub <a,b,...> */
 void shell_command_if(int argc, char **argv);
 void shell_command_for(int argc, char **argv);    /* classic tokens/wildcards + for /f */
 void shell_command_goto(int argc, char **argv);
@@ -1061,7 +1064,14 @@ int  shell_command_calc_line(const char *line);       /* `calc` (see "Calculator
   numeric keywords `[not] a EQU|NEQ|LSS|LEQ|GTR|GEQ b` (operands parsed as decimal,
   non-numeric reads as 0), and `not` for each form. `goto :eof` jumps to the end of the
   current batch file, unwinding its open setlocal scopes. `call` propagates the called
-  script's final errorlevel to the caller.
+  script's final errorlevel to the caller. `call :label`/`gosub :label` enter a local
+  `:label` and resume at the next line on `return`/`exit /b`/`goto :eof`; `on <expr>
+  goto|gosub|call <label>[,<label>...]` dispatches on the 1-based `set /a` result
+  (out of range falls through). A `goto` to a missing label aborts the frame; a missing
+  `call`/`gosub`/`on` target sets errorlevel 1 and continues.
+- Pure control-flow helpers are exposed for unit tests (used by the executor, not
+  duplicated): `batch_label_is_line`, `batch_label_extract`, `batch_on_parse`,
+  `batch_on_select`.
 - `set /p NAME=< file` (and a pipe stage) reads one line from the active input-redirection
   source instead of the interactive key queue; `for /f` iterates file lines with the
   `eol=`/`skip=`/`delims=`/`tokens=` options (see "`for /f` helpers" above).

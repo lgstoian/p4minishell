@@ -8,6 +8,7 @@ idf_component_register(
         esp_common
         log
         shell
+        storage
         windows
         keyboard
         espressif__esp_lvgl_port

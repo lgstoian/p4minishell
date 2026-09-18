@@ -1,0 +1,9 @@
+launch SNAKE
+[M-SNAKE]
+len=N
+score=N
+sN=N   (xN)
+fx=N
+fy=N
+sN=N   (xN)
+[M-SNAKE-DONE]

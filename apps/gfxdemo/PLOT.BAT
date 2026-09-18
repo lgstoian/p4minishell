@@ -20,7 +20,7 @@ gfx show
 gfx save PLOT.BMP
 gfx close
 echo [M-PLOT-DONE]
-goto :eof
+return
 
 :nofx
 echo gfx: canvas unavailable (TUI active or out of memory)

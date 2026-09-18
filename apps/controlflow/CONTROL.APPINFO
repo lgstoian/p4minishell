@@ -1,0 +1,5 @@
+; APPINFO metadata for the batch control-flow demo (INI format, read by `launch`).
+; Copied to sd:/APPS/CONTROL.APPINFO by apps/push_apps.py.
+title=Control Flow
+description=Demo of gosub / return / on dispatch
+version=1.0

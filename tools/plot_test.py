@@ -14,6 +14,7 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, "tools")
@@ -23,7 +24,7 @@ from bg_run import boot, run_quiet  # noqa: E402
 from shell_session import open_port, hard_reset  # noqa: E402
 
 FAILS = []
-TMP = r"C:\Users\lgstoian\AppData\Local\Temp\opencode"
+TMP = os.path.join(tempfile.gettempdir(), "p4minishell")
 
 
 def q(rgb):
@@ -199,6 +200,7 @@ def main():
         sh.close()
 
     # ---- Pull canvases and check pixels ----
+    os.makedirs(TMP, exist_ok=True)
     p = os.path.join(TMP, "PLOT.BMP")
     if pull(port, "PLOT.BMP", p):
         b = Bmp(p)

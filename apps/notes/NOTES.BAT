@@ -121,4 +121,4 @@ goto menu
 
 :back
 draw clear screen
-goto :eof
+return

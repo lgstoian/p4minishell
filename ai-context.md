@@ -38,7 +38,7 @@ does" reference in [documentation.md](documentation.md).
 | Framework | ESP-IDF v5.5.5 |
 | UI | LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch |
 | License | MIT (Copyright (c) 2026 Stoian Alexandru) |
-| Board | ESP32-P4 Function EV Board (JC1060P470C), serial port COM3 |
+| Board | ESP32-P4 Function EV Board (JC1060P470C), serial port `<COM_PORT>` (e.g. `COM3` during development) |
 
 Recent changes are recorded in [`changelog.md`](changelog.md). Known quirks and
 the bug-campaign log live in [`bugs.md`](bugs.md).
@@ -71,23 +71,23 @@ The only upward dependencies are inverted through registration tables
 
 ```powershell
 # One-time per shell: source ESP-IDF (adjust the path to your install)
-$env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"
+$env:IDF_PATH = "<path-to-esp-idf-v5.5.5>"
 . $env:IDF_PATH\export.ps1
 
-# Firmware
+# Firmware (replace <COM_PORT> with your board's port)
 idf.py build
-idf.py -p COM3 flash monitor
+idf.py -p <COM_PORT> flash monitor
 
 # Unit tests (standalone project; black screen is expected - serial only)
 cd test; idf.py build flash; cd ..
-python tools/unit_run.py COM3          # capture Unity summaries from the board
+python tools/unit_run.py <COM_PORT>     # capture Unity summaries from the board
 
 # Host hardware regression (resets the board, runs every suite, PASS/FAIL table)
-python tools/regression.py COM3
+python tools/regression.py <COM_PORT>
 ```
 
-- The board is on **COM3**. Host tools take `port=` / `--port` / `P4_PORT`, or a
-  trailing `COMx` argument.
+- Pass your port explicitly or set `P4_PORT`. Host tools take `port=` / `--port` / `P4_PORT`, or a
+  trailing `<COM_PORT>` argument.
 - `tools/shell_session.open_port()` pre-sets DTR/RTS low **before** `open()` so
   opening the port does not reset the board. Never open a raw `serial.Serial`.
   Use `shell_session.hard_reset()` when a fresh boot is required.
@@ -346,7 +346,9 @@ tools use a webcam to observe the device; prefer them over guessing.
   empty key so the parser is unambiguous. The `db` command prints `/b` output
   without ANSI colour and sets ERRORLEVEL 0/1/2 so `for /f` and `if errorlevel`
   work. The applib surface (`applib_db.h`) wraps the core with NULL-checked
-  `app_db_*` bool wrappers.
+  `app_db_*` bool wrappers. A corrupt/missing `HEADER.INI` yields `next_id == 0`:
+  `db add` MUST derive the next id from the surviving index and rewrite
+  `record_count` from the index count, never blind-assign id 1 (bugs.md F7).
 - `components/alarm/` is the SD-persisted alarm/event store + one background
   checker task. It is a LEAF: REQUIRES only `shell`, `clock`, `storage`,
   `led`, `audio`, `freertos`, `esp_timer` (plus the board header). It NEVER
@@ -519,6 +521,12 @@ tools use a webcam to observe the device; prefer them over guessing.
   be typed on one serial line. This is safe because `shell_key_wait_begin()`/`end()` reset the
   queue, so strays from one-key waits (`pause`/`choice`/`more`) are flushed before the next
   prompt. Keep the forwarding bounded by `P4_CONFIG_KEY_QUEUE_DEPTH`.
+- The UART console reader treats a raw ETX (`0x03`) as the foreground break: it drops the
+  partial line and calls `shell_request_abort()` (so serial Ctrl+C cancels a stuck command).
+  Native modal surfaces on the shared runtime set `modal_surface_t.abort_cancels` (all the
+  ready-made dialog/list/ask/form/browse/view/image/hex ones) and `modal_surface_run()` polls
+  the abort on a 100 ms wait. The editor leaves it false (it owns a quit confirmation). Do not
+  make a ready-made surface wait on `portMAX_DELAY` (bugs.md F10).
 - The prompt is a runtime template owned by `components/shell/`. Never hardcode the prompt
   string in a new surface; call `shell_prompt_render_plain()` (plain) or let
   `shell_uart_console_print_prompt()` handle the colored form.
@@ -580,7 +588,9 @@ tools use a webcam to observe the device; prefer them over guessing.
     `shell_findstr_match_line`, `shell_comp_first_diff`) are exposed in `storage_commands.h`
     for the unit tests. All of `find`, `findstr`, `more`, `fc`, `comp`, `sort`, and `xcopy`
     return an int ERRORLEVEL (0 ok/found, 1 not found/different, 2 usage) that the dispatcher
-    records with `batch_set_errorlevel()`.
+    records with `batch_set_errorlevel()`. `findstr` treats `/C:`/`/G:` as supplying the
+    search string, so every following bare token is a FILE (do not let the `bare_string`
+    branch eat the file operand — bugs.md F2).
   - `del`/`erase` and `rd /s` move entries into the hidden `.trash` recycle bin
     (`components/storage/trash.c`) by default; `/p`/`/f` delete permanently. All of
     `del`, `rd`, `format`, `disk`, `undelete`, `trash` return an int ERRORLEVEL (0/1/2)
@@ -596,10 +606,10 @@ tools use a webcam to observe the device; prefer them over guessing.
     discovery walker reuses the `dir /s` FATFS primitives, keeps each recursion level's state
     in one heap block, respects `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, and caps output at
     `P4_CONFIG_FIND_MATCH_MAX`.
-  - Batch language verbs (`set`, `calc`, `path`, `echo`, `call`, `if`, `for`
-    including `for /f`, `goto`, `shift`, `pause`, `choice`, `setlocal`,
-    `endlocal`, `exit`, `proc`, `ini`, `appconfig`, `temp`, `ansi`, `menu`,
-    `appmode`) ->
+  - Batch language verbs (`set`, `calc`, `path`, `echo`, `call`, `gosub`,
+    `return`, `on`, `if`, `for` including `for /f`, `goto`, `shift`, `pause`,
+    `choice`, `setlocal`, `endlocal`, `exit`, `proc`, `ini`, `appconfig`,
+    `temp`, `ansi`, `menu`, `appmode`) ->
     `components/batch/batch.c` (+ `components/batch/calc.c` for the `calc`
     float evaluator).
   - Alias verbs (`alias`, `unalias`) -> `components/batch/batch.c` (the alias table, the
@@ -726,6 +736,15 @@ the raster core + 8x8 font are `components/gfx/`
 - `goto :eof` is the implicit end-of-file label and ends only the current batch frame. A pending
   `goto`/`goto :eof` MUST be cleared when a frame returns so it cannot leak into the caller's
   line loop when issued from inside a `for` or `if` body.
+- `call :label`/`gosub :label` enter a local `:label` as a subroutine and resume at the next line
+  on `return`/`exit /b`/`goto :eof`/EOF. `return` outside a scope ends the frame like `goto :eof`.
+  `on <expr> goto|gosub|call <label>[,<label>...]` dispatches on the 1-based `set /a` result; an
+  out-of-range index falls through. A `goto`/`on … goto` to a missing label prints the cmd.exe
+  message and aborts the frame; a missing `call`/`gosub`/`on … gosub` target sets errorlevel 1 and
+  continues.
+- `rem` and `::` comments are opaque to end of line: `shell_comment_line()` MUST be checked before
+  alias expansion, chain splitting, pipes and redirection, or a comment's `|`/`<`/`>`/`&` leaks
+  into the pipeline.
 - `for` loop sets support literal token lists, a single wildcard pattern, and the `for /f`
   file-line form (`for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd`).
   All three re-enter the pipeline per iteration, so the substituted body buffer MUST be
@@ -764,7 +783,11 @@ the raster core + 8x8 font are `components/gfx/`
   capture per level up to `P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH`. The inner stage's capture
   is written and popped, and the outer capture resumes so the outer file still receives the
   whole pipeline output. Never flatten it back to a single buffer: `cmd1 | cmd2 > out.txt`
-  would silently write an empty file.
+  would silently write an empty file. While a capture is active, stdout goes to the
+  capture ONLY: `shell_transcript_append_internal`/`_ansi` divert to it and skip the
+  transcript, label repaint and serial mirror (DOS `>` semantics). Do not restore the old
+  "mirror" behaviour — it duplicated redirected output on screen and leaked intermediate
+  pipeline stages (bugs.md F8).
 - Persistent state (DOS-style env + temp files + simple INI files) MUST live on the SD card.
   The shared core is `components/storage/storage_ini.c`: the pure line editors
   (`storage_ini_get_value` / `storage_ini_upsert` / `storage_ini_remove`) are the single
@@ -1125,6 +1148,24 @@ the raster core + 8x8 font are `components/gfx/`
   Never call `esp_http_client` / mbedTLS / socket APIs from shell/, command/, batch/, or main/.
 - When another layer needs networking state, add a status accessor to `networking.h`.
   Never call `esp_wifi_*` from `shell/`, `command/`, `storage/`, `batch/`, or `main/`.
+- The ESP-Hosted `esp_wifi_sta_get_ap_info` RPC on this board returns only
+  SSID/BSSID/channel/authmode — **RSSI and the PHY flags are dropped**. RSSI and
+  PHY therefore come from the associated AP's *scan record*: every scan path
+  caches it (`networking_wifi_ap_cache_from_scan`), `wifi status` refreshes it
+  with a one-shot scan when cold (`networking_wifi_ap_cache_refresh`), and
+  `networking_wifi_get_rssi()` (header telemetry) reads the cache only and
+  returns false (header "unknown") rather than a false 0. Never add a periodic
+  scan on the header/telemetry task.
+- The background Wi-Fi task MUST NOT re-run the boot auto-connect while the
+  station is already associated (`!s_wifi_connected`): the auto-connect scan
+  tears the live link down, which made `wifi diag`/`wifi status` reconnect (P2).
+- HTTPS needs `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`: internal RAM is ~16 KB
+  short of a TLS record buffer once the UI/network stacks are up, so the
+  default internal allocator fails `mbedtls_ssl_setup` with
+  `MBEDTLS_ERR_SSL_ALLOC_FAILED` (-0x7F00) (P3).
+- `CONFIG_LWIP_MAX_SOCKETS` may be 12 but **not 16** on this build: 16 makes the
+  32 KB command-worker task creation fail at boot ("Failed to create command
+  worker task") because internal RAM is tight (P13).
 - Only the official path is permitted: `espressif/esp_hosted` + `espressif/esp_wifi_remote`.
   Never introduce custom RPC, an alternative transport, or a re-implemented control plane.
 - The initialization order in `networking_wifi_start_runtime()` is load-bearing and MUST
@@ -1148,6 +1189,10 @@ the raster core + 8x8 font are `components/gfx/`
 - Wi-Fi init task claiming MUST use wifi_try_claim_init_task()/wifi_release_init_task() (TOCTOU-safe atomic)
 - Persistent watchdog (networking_wifi_watchdog_task) retries disconnected Wi-Fi with exponential backoff (1s→30s cap, 120s total timeout)
 - Watchdog starts automatically on WIFI_EVENT_STA_DISCONNECTED; stops on successful connection or timeout
+- The watchdog retries only while `s_wifi_autoretry` is set (any connect request / boot
+  credentials). Do NOT gate it on `s_wifi_connect_requested`: the disconnect handler clears
+  that flag, which made the watchdog exit immediately and left the station offline forever
+  (bugs.md F4). A user `wifi disconnect` clears `s_wifi_autoretry` so it stays down.
 
 ### Network Services Rules (httpd / netstat / ipconfig)
 - The HTTP file server (`components/networking/http_server.c`) is the sole owner of the
@@ -1212,6 +1257,11 @@ the raster core + 8x8 font are `components/gfx/`
 - Destructive volume operations (`format`) MUST require the exact confirmation word through
   the shell key queue AND refuse to run when `shell_key_input_available()` is false, so they
   can never execute unattended from a batch file
+- `format` with `P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES=0` MUST choose the cluster size itself
+  (`storage_format_pick_alloc_unit`, scaled by card capacity). Never pass 0 to
+  `esp_vfs_fat_sdcard_format_cfg`: IDF's helper clamps it up to the 512-byte sector, giving a
+  29 GiB card 1-sector clusters (~230 MiB FAT/copy) and a multi-minute blocking format
+  (bugs.md F1). The `/A:` option still overrides.
 - FATFS LFN enabled with heap-backed buffers, MAX_LFN=255, UTF-8 encoding
 - Bounded output: 128 entries max for listings, 8192 bytes max for sd cat
 - SD VO4 LDO explicitly acquired at 3300 mV before mounts
@@ -1315,7 +1365,10 @@ the raster core + 8x8 font are `components/gfx/`
 - No persistence across boots
 - Environment variables: max 24, names alphanumeric + underscore
 - Batch depth: max 4 nested calls
-- Batch labels: max 32 per file (`P4_CONFIG_BATCH_LABEL_MAX`)
+- Batch labels: max 128 per file (`P4_CONFIG_BATCH_LABEL_MAX`). Keep it above the
+  label count of the largest shipped app (TCMD.BAT uses 34): an over-limit label
+  is dropped, so `goto` to it falls through to the next line instead of
+  transferring (the TCMD `:end` bug, bugs.md F11)
 - `set /a` parenthesis nesting: max 16 (`P4_CONFIG_SET_EXPR_DEPTH_MAX`)
 - `set /p` input: max 128 bytes (`P4_CONFIG_SET_PROMPT_INPUT_BYTES`); the same cap bounds a
   line read from a `< file`/pipe source (`set /p NAME=< file`)
@@ -1328,8 +1381,9 @@ the raster core + 8x8 font are `components/gfx/`
   caller's environment is corrupted.
 - Chained commands: max 8 (`P4_CONFIG_CHAIN_SEGMENT_MAX`); truncation MUST be reported, never
   silent
-- Batch label names: max 48 bytes (`P4_CONFIG_BATCH_LABEL_BYTES`). This is deliberately small
+- Batch label names: max 64 bytes (`P4_CONFIG_BATCH_LABEL_BYTES`). This is deliberately small
   because the label table is `LABEL_MAX * LABEL_BYTES` and lives in the batch frame.
+  A `goto`/`call`/`on` target may be written `:label` or bare `label`.
 - Pipeline stages: max 4 (`P4_CONFIG_PIPE_STAGE_MAX`). Every spool file MUST be removed on
   every exit path, including a stage failure.
 - Prompt template: max 64 bytes (`P4_CONFIG_PROMPT_TEMPLATE_BYTES`)
@@ -1383,6 +1437,44 @@ the raster core + 8x8 font are `components/gfx/`
 - `Kconfig.projbuild` MUST live with the component that consumes its options, not in `main/`.
   This keeps the symbols available to any project that includes the component, including `test/`.
 - `CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID` / `_PASSWORD` are defined in `components/networking/`
+
+### Host Test Framework Rules (tools/p4test)
+- There is ONE host test framework: `tools/p4test/`. New host tests are suites
+  under `tools/suites/` (`sNN_*.py`, exposing `NAME`, `TAGS`, `run(dev, ctx)`
+  returning a `Checklist`), run by `tools/p4test_run.py`. Do NOT add another
+  serial loop, BMPX reader, SDFX reader, or PASS/FAIL bookkeeping — import
+  `DeviceSession`/`Checklist`/`screenshot`/`sdbridge`/`perf`/`Device`.
+- The firmware's destructive commands stay the single implementation: suites
+  and deployment tools drive `config factory` and `format` through
+  `Device.factory_reset()`/`format_sd()`. Never reimplement reset/format on the
+  host.
+- Visual verification is mandatory: capture with the streaming `screenshot`
+  (`Device.screenshot()` / `p4test.screenshot.capture()`) and assert with the
+  `Bmp` pixel model. Treat screenshot geometry near edges as approximate (the
+  known wrap artifact); assert layout through `header status`/`tui status`
+  metrics where precision matters.
+- `tools/dogfood.py` + `tools/p4test/agent.py` is the autonomous dogfooding
+  harness. Every action captures a screenshot; anomalies (panic, timeout,
+  BSOD-blue frame, black frame, static streak, heap decline) are journaled.
+  Keep it seed-reproducible.
+
+### Frame Metrics Rules
+- There is ONE frame-pacing core: the pure `gfx_frame_stats_t` in
+  `components/gfx` (reset/sample/target/avg/jitter/fps/format, unit-tested in
+  `test/main/test_gfx.c`). Never add a second timing implementation.
+- Present points are exactly two: `gfx show` (gfx_commands.c) and
+  `tui_flush` (tui.c). Sample there; the target fps defaults come from
+  `P4_CONFIG_TUI_TARGET_FPS`. `gfx stats` / `tui stats` report the shared
+  integer-only format parsed by `tools/p4test/perf.py:parse_perf_report`.
+- New animation apps SHOULD emit `[M-<APP>-FRAME]` markers and end with
+  `gfx stats`/`tui stats` so host suites can measure real present timing.
+
+### Reference App Rules
+- Reference batch apps keep their existing entry `.bat` names and markers; a
+  new app needs an `APPINFO`, an entry in `apps/push_apps.py` FILES (which
+  pushes `.bat` to the SD root and `.APPINFO` to `APPS/`), and a suite in
+  `tools/suites/s14_apps.py`. `apps/diag/DIAG.BAT` is the diagnostics/benchmark
+  reference (markers `[M-DIAG]`/`[M-DIAG-SECTION]`/`[M-DIAG-DONE]`).
 
 ### Unit Test Rules
 - `test/` is a standalone ESP-IDF project and MUST build with zero errors and zero warnings

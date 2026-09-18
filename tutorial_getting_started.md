@@ -15,19 +15,20 @@ For the concepts and the full command list, see [`readme.md`](readme.md) and
   microSD card (any size; class 10 recommended).
 - **Software:** [ESP-IDF v5.5.5](https://docs.espressif.com/projects/esp-idf/)
   and Python 3 with `pyserial` (the host tools use it).
-- **Ports:** the shell console is the native USB-Serial-JTAG port. Note its COM
-  port (COM3 on the reference setup).
+- **Ports:** the shell console is the native USB-Serial-JTAG port. Note your
+  serial port (e.g. `COM3` on Windows, `/dev/ttyACM0` on Linux). Host tools
+  accept it as a trailing argument or via the `P4_PORT` environment variable.
 
 ## 2. Build and flash the firmware
 
 ```powershell
 # Source ESP-IDF (adjust the path to your install)
-$env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"
+$env:IDF_PATH = "<path-to-esp-idf-v5.5.5>"
 . $env:IDF_PATH\export.ps1
 
-# From the repository root
+# From the repository root (replace <COM_PORT> with your port)
 idf.py build
-idf.py -p COM3 flash monitor
+idf.py -p <COM_PORT> flash monitor
 ```
 
 `idf.py monitor` shows the boot log and then the interactive prompt. Press
@@ -95,12 +96,13 @@ Handy commands: `mkdir`, `copy`, `move`, `del` (moves to the recycle bin),
 
 ## 6. Run the reference apps
 
-Push the sample apps over serial (the board must be at its prompt):
+Push the sample apps over serial (the board must be at its prompt,
+replace `<COM_PORT>` with your port):
 
 ```powershell
-python apps/companion/push_sd.py COM3     # the Companion system helper
-python apps/push_apps.py COM3             # tcmd/snake/elite/adventure/...
-python apps/push_assets.py COM3           # demo BMP sprites
+python apps/companion/push_sd.py <COM_PORT>   # the Companion system helper
+python apps/push_apps.py <COM_PORT>           # tcmd/snake/elite/adventure/...
+python apps/push_assets.py <COM_PORT>         # demo BMP sprites
 ```
 
 Then at the prompt:
@@ -121,7 +123,7 @@ Packages are CRC-checked bundles under `PKGS/<APP>/`. Build and push the sample
 bundles, then install from the shell:
 
 ```powershell
-python apps/push_pkgs.py COM3
+python apps/push_pkgs.py <COM_PORT>
 ```
 
 ```

@@ -1,0 +1,20 @@
+launch TCMD
+[M-TCMD]
+LD=/
+RD=/APPS
+LCUR=N
+RCUR=N
+PA=L
+ST=ready
+LDONE=/
+RDONE=/APPS
+LTOP=-N
+LTOP=N
+RTOP=-N
+RTOP=N
+LAC=N
+RAC=N
+LAC=N
+[M-TCMD-R]
+key? q
+[M-TCMD-DONE]

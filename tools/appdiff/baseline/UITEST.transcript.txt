@@ -1,0 +1,28 @@
+launch UITEST
+[M-UITEST]
+ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search=
+ui.targets: N
+N N N N N obj
+N N N N N W   (xN)
+N N N N N BT
+N N N N N U
+N N N N N S
+N N N N N !
+N N N N N M N.NM   (xN)
+N N N N N N%
+N N N N N N/C
+N N N N N obj
+N N -N N N obj [C]
+N N N N N obj
+N N N N N Prev
+N N N N N Next
+N N N N N 
+N N N N N 
+N N N N N Tab
+N N N N N Stop
+N N N N N
+touch targets: N
+ui.hit: N obj
+hit at N,N: N
+ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search=
+[M-UITEST-DONE]

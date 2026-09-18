@@ -157,6 +157,29 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
     }
 
     battery_mv = (gpio_mv * BOARD_CFG_BATTERY_DIVIDER_NUMERATOR) / BOARD_CFG_BATTERY_DIVIDER_DENOMINATOR;
+
+    /* Publish the raw reading first so callers can still print diagnostics. */
+    if (battery_mv_out != NULL) {
+        *battery_mv_out = battery_mv;
+    }
+    if (raw_out != NULL) {
+        *raw_out = raw;
+    }
+    if (gpio_mv_out != NULL) {
+        *gpio_mv_out = gpio_mv;
+    }
+
+    /* A pack voltage below the "present" floor means no battery / no sense
+     * connection: the ADC input floats well under any real pack. Report it as
+     * not connected (ESP_ERR_NOT_FOUND) so the header shows "BAT N/C" and the
+     * battery verbs print N/C instead of a bogus 0%. */
+    if (battery_mv < BOARD_CFG_BATTERY_PRESENT_MV) {
+        if (percent_out != NULL) {
+            *percent_out = 0;
+        }
+        return ESP_ERR_NOT_FOUND;
+    }
+
     if (battery_mv <= BOARD_CFG_BATTERY_EMPTY_MV) {
         percent = 0;
     } else if (battery_mv >= BOARD_CFG_BATTERY_FULL_MV) {
@@ -166,17 +189,8 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
                   (BOARD_CFG_BATTERY_FULL_MV - BOARD_CFG_BATTERY_EMPTY_MV);
     }
 
-    if (battery_mv_out != NULL) {
-        *battery_mv_out = battery_mv;
-    }
     if (percent_out != NULL) {
         *percent_out = percent;
-    }
-    if (raw_out != NULL) {
-        *raw_out = raw;
-    }
-    if (gpio_mv_out != NULL) {
-        *gpio_mv_out = gpio_mv;
     }
 
     return ESP_OK;
@@ -250,6 +264,16 @@ void shell_command_battery(int argc, char **argv)
 
     if (argc == 1) {
         error = command_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
+        if (error == ESP_ERR_NOT_FOUND) {
+            /* No battery / sense connection: the documented N/C state. */
+            shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_MUTE "N/C (no battery connected)" SH_RST "\n");
+            shell_transcript_appendf_ansi(SH_LBL "battery.detail:" SH_RST " " SH_LBL "gpio=" SH_RST SH_NUM "%d" SH_RST " " SH_LBL "raw=" SH_RST SH_NUM "%d" SH_RST " " SH_LBL "gpio_mv=" SH_RST SH_NUM "%d" SH_RST " " SH_LBL "scaled_mv=" SH_RST SH_NUM "%d" SH_RST "\n",
+                                     BOARD_CFG_BATTERY_ADC_GPIO,
+                                     raw,
+                                     gpio_mv,
+                                     battery_mv);
+            return;
+        }
         if (error != ESP_OK) {
             shell_print_error("battery: failed to read ADC on GPIO %d (%s)",
                                      BOARD_CFG_BATTERY_ADC_GPIO,
@@ -371,6 +395,12 @@ static bool shell_power_report_battery(const char *label)
     esp_err_t error;
 
     error = command_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
+    if (error == ESP_ERR_NOT_FOUND) {
+        /* No battery / sense connection: the documented N/C state. */
+        shell_transcript_appendf_ansi(SH_LBL "%s:" SH_RST " " SH_LBL "battery" SH_RST " " SH_MUTE "N/C" SH_RST "\n",
+                                 label);
+        return false;
+    }
     if (error != ESP_OK) {
         shell_transcript_appendf_ansi(SH_LBL "%s:" SH_RST " " SH_LBL "battery" SH_RST " " SH_MUTE "unavailable" SH_RST
                                  " (" SH_WARN "%s" SH_RST ")\n",

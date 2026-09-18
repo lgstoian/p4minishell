@@ -3,8 +3,8 @@
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
 
-Current baseline: **364 tests, 0 failures, 2 ignored** (verify with
-`tools/unit_run.py COM3`). The runner completes cleanly with
+Current baseline: **366 tests, 0 failures, 2 ignored** (verify with
+`tools/unit_run.py <COM_PORT>`). The runner completes cleanly with
 `=== All tests completed ===` and no reboot; if the board is reset-looping,
 check for a newly added test that calls an LVGL/heap path before `lv_init()`.
 
@@ -44,7 +44,7 @@ test/
     test_markdown.c         # markdown renderer
     test_filetype.c         # filetype registry
     test_json.c             # json validate/pretty
-    test_gfx.c              # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step)
+    test_gfx.c             # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
     test_asset.c            # CRC-32 vectors + asset manifest parser
     test_pkg.c              # pkg APPINFO-name helper
     test_theme.c            # UI theme registry (lookup/selection)
@@ -62,12 +62,12 @@ test/
 From the project root:
 
 ```powershell
-$env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"
+$env:IDF_PATH = "<path-to-esp-idf-v5.5.5>"
 . $env:IDF_PATH\export.ps1
 cd test
 idf.py build flash
-# or capture the summaries on the host:
-python ..\tools\unit_run.py COM3
+# or capture the summaries on the host (replace <COM_PORT> with your port):
+python ..\tools\unit_run.py <COM_PORT>
 ```
 
 > The test app drives no UI: after flashing it the display stays black and

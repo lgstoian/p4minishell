@@ -21,10 +21,11 @@ console, the input-line prompt contract, the interactive keypress queue, the DOS
 banner, the system info commands, and the read-only FreeRTOS task introspection (`ps` / `tasks` / `top` via
   `shell_command_ps()`).
 - `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, every DOS file command, and the hidden `.trash` recycle bin (`trash.c`) that `del`/`rd /s` move entries into and `undelete`/`trash` manage.
-- `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, 
-`for` loops incl. `for /f` file-line iteration, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, the
-batch language commands, the `calc` float calculator (`calc.c`), and the DOSKEY-style alias table (`alias` / `unalias`, prompt-only
-expansion, SD persistence via `alias /save`).
+- `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`,
+  `gosub`/`return`/`on` computed dispatch, `for` loops incl. `for /f` file-line iteration, the
+  `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, the
+  batch language commands, the `calc` float calculator (`calc.c`), and the DOSKEY-style alias table (`alias` / `unalias`, prompt-only
+  expansion, SD persistence via `alias /save`).
 - `components/command` owns the single dispatcher, the execution pipeline, output-redirection parsing, the worker task, the hardware commands, and the remaining system commands. The display/keyboard/windows UI query handlers live in `components/command/command_ui.c`.
 - `components/ansi` owns ANSI/VT SGR escape sequence processing, 16-color palette, and format string builder.
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
@@ -692,7 +693,7 @@ process model"):
 | stdout | Every command's transcript output, captured by `>` / `>>`. A batch line inherits the caller's redirect. |
 | stderr | Not a separate stream. Errors interleave on the transcript (and the redirect); failure is signalled by ERRORLEVEL. |
 | stdin | The storage input-redirection slot (a `< file`, a pipe stage, or an explicit filename). Consumed by the text tools via `storage_resolve_input_source()`, by `for /f` over an empty set, and by `set /p NAME=< file` (one line). The interactive key queue backs `set /p`/`pause`/`choice` when no redirect is active. |
-| argv | `%0` = script name, `%1`..`%9` = caller arguments, `%*` = everything from `%1`. `call`/`call :label` push a fresh frame; `shift` slides it. |
+| argv | `%0` = script name, `%1`..`%9` = caller arguments, `%*` = everything from `%1`. `call`/`call :label`/`gosub :label` push a fresh frame; `shift` slides it. |
 | cwd | RAM-only current working directory owned by `components/storage/` (`storage_set_cwd()` / `shell_get_cwd()`); relative paths resolve against it at run time. |
 | PATH | RAM-only `PATH` environment variable (default `sd:/`); `shell_resolve_batch_path()` tries the literal name, `name.bat`, then each `;`-separated PATH entry with both forms. |
 | environment | The 24-slot RAM table is session-global; `set`/`set /a`/`set /p`/`calc` mutate it, `call` hands it to the callee, `setlocal`/`endlocal` snapshot/restore it (a scope left open is unwound when its frame returns). |
@@ -720,7 +721,10 @@ external `.bat` and starts it at `:routine`, returning on `exit /b` /
 `goto :eof` / EOF. Routine calls run in an automatically-pushed environment
 scope (variable isolation beyond `setlocal`), so a library routine's
 temporary variables never leak into the caller; its arguments arrive as
-`%1`..`%9`/`%*` and its final errorlevel propagates. See `command.md`
+`%1`..`%9`/`%*` and its final errorlevel propagates. The BASIC names
+`gosub <file.bat>::<routine>` and `gosub :label` (with `return`) are
+equivalent, and `on <expr> goto|gosub|call <label>[,<label>...]` dispatches
+on a computed 1-based index (out of range falls through). See `command.md`
 ("Shared library of batch routines") for the authoring pattern.
 
 **Persistent state** for batch apps is provided by the `ini`, `appconfig`,
@@ -756,8 +760,9 @@ step. Host-side rules that make a file behave correctly on the firmware:
 - **Line and size limits.** Each line is capped at
   `P4_CONFIG_BATCH_LINE_BYTES` (384); a trailing `^` joins up to
   `P4_CONFIG_LINE_CONTINUATION_MAX` (8) physical lines into one logical
-  line. Up to `P4_CONFIG_BATCH_LABEL_MAX` (32) `:label` targets per file,
-  labels capped at `P4_CONFIG_BATCH_LABEL_BYTES` (48) bytes.
+  line. Up to `P4_CONFIG_BATCH_LABEL_MAX` (128) `:label` targets per file,
+  labels capped at `P4_CONFIG_BATCH_LABEL_BYTES` (64) bytes; a `goto`/`call`/
+  `gosub`/`on` target may be written `:label` or bare `label`.
 - **Arguments.** `%0`..`%9` and `%*`; `shift` slides them. At most
   `P4_CONFIG_BATCH_ARGS_MAX` (9) arguments are captured.
 - **Quoting and escaping.** `"text"` groups with expansion, `'text'` groups

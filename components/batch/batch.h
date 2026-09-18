@@ -449,8 +449,29 @@ void shell_arg_apply_modifiers(const char *value, const char *mods,
 bool shell_forf_is_command_set(const char *set_str, bool usebackq,
                                char *inner_out, size_t inner_size);
 
-/** `goto` — jump to a `:label` in the running batch file. */
+/** `goto` — jump to a `:label` in the running batch file. A missing label
+ *  prints the cmd.exe error, sets ERRORLEVEL 1, and aborts the current file. */
 void shell_command_goto(int argc, char **argv);
+
+/** `gosub` — BASIC-named sibling of `call :label` / `call <file.bat>::<routine>`.
+ *  Enters a labelled subroutine that returns on `return` / `exit /b` /
+ *  `goto :eof`. */
+void shell_command_gosub(int argc, char **argv);
+
+/** `return [code]` — return from a `gosub`/`call :label` scope; at the top
+ *  level of a batch file it ends the frame (like `goto :eof`). */
+void shell_command_return(int argc, char **argv);
+
+/** `on <expr> goto|gosub|call <label>[,<label>...]` — BASIC computed dispatch.
+ *  The 1-based expression result selects a target; out of range falls through. */
+void shell_command_on(int argc, char **argv);
+
+/* Pure control-flow helpers exposed for unit tests (no duplicated parsing). */
+bool batch_label_is_line(const char *line);
+void batch_label_extract(const char *line, char *name, size_t name_size);
+bool batch_on_parse(int argc, char **argv, char *expr, size_t expr_size,
+                    bool *is_gosub_out, char *targets, size_t targets_size);
+const char *batch_on_select(char *targets, int index);
 
 /** `shift` — shift batch arguments left by one position. */
 void shell_command_shift(int argc, char **argv);

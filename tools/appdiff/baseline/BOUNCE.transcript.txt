@@ -1,0 +1,972 @@
+launch BOUNCE
+[M-BOUNCE]
+gfx: canvas NxN (N KB PSRAM)
+x=N
+y=N
+dx=N
+dy=N
+n=N   (xN)
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+dx=-N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+dy=-N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+dx=N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+dy=N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+dx=-N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+dy=-N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+n=N
+x=N
+y=N
+[M-BOUNCE-FRAME] N
+screenshot: capturing current screen...
+screenshot: captured NxN RGBN (N bytes)
+screenshot: saved /sdcard/BOUNCE.BMP (N bytes)
+gfx stats: frames=N min_us=N avg_us=N max_us=N jitter_us=N dropped=N fpsN=N target_fps=N
+[M-BOUNCE-DONE]

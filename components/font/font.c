@@ -103,7 +103,7 @@ static const font_builtin_t *font_find_builtin(const char *name)
 /* Forward declarations (TTF lifecycle lives below; used by font_set). */
 static void font_ttf_lock_init(void);
 static void font_ttf_release_locked(int slot);
-static int font_ttf_load_locked(const char *stem, int px);
+static int font_ttf_load_locked(const char *stem, int px, bool warn_missing);
 static void font_refresh_cjk_locked(font_role_t role);
 
 /* Ensure the FA copy for a role exists (metrics constant; only .fallback
@@ -268,7 +268,7 @@ bool font_set(font_role_t role, const char *name)
     /* Not built-in: try an SD TTF stem at the role's current size. */
     {
         int px = s_role_px[role] > 0 ? s_role_px[role] : P4_CONFIG_FONT_DEFAULT_PX;
-        int slot = font_ttf_load_locked(name, px);
+        int slot = font_ttf_load_locked(name, px, true);
         if (slot < 0) {
             xSemaphoreGive(s_ttf_lock);
             return false;
@@ -331,6 +331,30 @@ static void font_ttf_destroy_cb(void *font)
     lv_tiny_ttf_destroy((lv_font_t *)font);
 }
 
+/**
+ * Schedule (or perform) a TTF destroy without racing the LVGL task.
+ *
+ * lv_async_call() creates a one-shot LVGL timer and mutates the global timer
+ * list; with CONFIG_LV_OS_NONE the lv_lock() inside it is a no-op, so the call
+ * must be made under the esp_lvgl_port mutex. Callers hold s_ttf_lock, so the
+ * documented order (s_ttf_lock -> port lock) is respected. If the async queue
+ * is full, the destroy runs inline while the port lock is held: that stalls
+ * renders, so no frame can reference the font concurrently.
+ */
+static void font_async_destroy(lv_font_t *font)
+{
+    if (font == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(portMAX_DELAY)) {
+        return;
+    }
+    if (lv_async_call(font_ttf_destroy_cb, font) != LV_RESULT_OK) {
+        font_ttf_destroy_cb(font);
+    }
+    lvgl_port_unlock();
+}
+
 static void font_ttf_release_locked(int slot)
 {
     if (slot < 0 || slot >= FONT_TTF_SLOTS || !s_ttf_slots[slot].used) {
@@ -345,7 +369,7 @@ static void font_ttf_release_locked(int slot)
         s_ttf_slots[slot].refs = 0;
         s_ttf_slots[slot].used = false;
         s_ttf_slots[slot].font = NULL;
-        (void)lv_async_call(font_ttf_destroy_cb, old);
+        font_async_destroy(old);
     }
 }
 
@@ -385,8 +409,9 @@ static int font_ttf_find_locked(const char *stem, int px)
 }
 
 /* Load (or reuse) a registry slot. Caller holds s_ttf_lock. Returns slot or -1.
- * Current fonts are untouched on failure. */
-static int font_ttf_load_locked(const char *stem, int px)
+ * Current fonts are untouched on failure. `warn_missing` is false for the
+ * optional CJK fallback probe, whose absence is normal and must stay quiet. */
+static int font_ttf_load_locked(const char *stem, int px, bool warn_missing)
 {
     char host_path[P4_CONFIG_SD_PATH_BYTES];
     char lv_path[P4_CONFIG_SD_PATH_BYTES];
@@ -422,7 +447,7 @@ static int font_ttf_load_locked(const char *stem, int px)
                 s_ttf_slots[i].used = false;
                 s_ttf_slots[i].font = NULL;
                 s_ttf_slots[i].refs = 0;
-                (void)lv_async_call(font_ttf_destroy_cb, old);
+                font_async_destroy(old);
                 slot = i;
                 break;
             }
@@ -445,7 +470,9 @@ static int font_ttf_load_locked(const char *stem, int px)
         }
     }
     if (lv_path[0] == '\0') {
-        ESP_LOGW(FONT_TAG, "load %s: not found in FONTS (%s)", stem, strerror(errno));
+        if (warn_missing) {
+            ESP_LOGW(FONT_TAG, "load %s: not found in FONTS (%s)", stem, strerror(errno));
+        }
         return -1;
     }
     /* Creation touches LVGL heaps: hold the port lock (worker context). */
@@ -475,7 +502,7 @@ bool font_load_ttf(const char *stem)
 
     font_ttf_lock_init();
     xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
-    slot = font_ttf_load_locked(stem, P4_CONFIG_FONT_DEFAULT_PX);
+    slot = font_ttf_load_locked(stem, P4_CONFIG_FONT_DEFAULT_PX, true);
     xSemaphoreGive(s_ttf_lock);
     return slot >= 0;
 }
@@ -486,7 +513,7 @@ bool font_load_ttf(const char *stem)
 static void font_refresh_cjk_locked(font_role_t role)
 {
     int px = s_role_px[role] > 0 ? s_role_px[role] : P4_CONFIG_FONT_DEFAULT_PX;
-    int slot = font_ttf_load_locked("NotoSansSC", px);
+    int slot = font_ttf_load_locked("NotoSansSC", px, false);
 
     if (slot == s_cjk_slot[role]) {
         return;
@@ -546,7 +573,7 @@ lv_font_t *font_variant_for(const char *base_stem, int px, int attr)
     }
     font_ttf_lock_init();
     xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
-    slot = font_ttf_load_locked(stem, px);
+    slot = font_ttf_load_locked(stem, px, true);
     if (slot >= 0) {
         /* Permanent pin: spans hold the pointer across renders with no
          * ref path, so the slot must never be freed. Bounded by the small
@@ -660,7 +687,7 @@ bool font_set_size(font_role_t role, int px)
         return false;
     }
     stem = s_ttf_slots[old_slot].stem;
-    new_slot = font_ttf_load_locked(stem, px);
+    new_slot = font_ttf_load_locked(stem, px, true);
     if (new_slot < 0) {
         xSemaphoreGive(s_ttf_lock);
         return false;
@@ -684,7 +711,7 @@ bool font_is_monospace(const char *name)
     }
     font_ttf_lock_init();
     xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
-    slot = font_ttf_load_locked(name, P4_CONFIG_FONT_DEFAULT_PX);
+    slot = font_ttf_load_locked(name, P4_CONFIG_FONT_DEFAULT_PX, true);
     xSemaphoreGive(s_ttf_lock);
     return slot >= 0 && s_ttf_slots[slot].monospace;
 }
@@ -710,7 +737,7 @@ int font_terminal_max_px(const char *name, int rect_w, int rect_h)
         font_ttf_lock_init();
         xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
         locked = true;
-        slot = font_ttf_load_locked(name, probe_px);
+        slot = font_ttf_load_locked(name, probe_px, true);
         if (slot < 0) {
             xSemaphoreGive(s_ttf_lock);
             return -1;

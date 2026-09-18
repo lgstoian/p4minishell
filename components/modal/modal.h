@@ -83,6 +83,15 @@ struct modal_surface {
      * @return true if the line was consumed.
      */
     bool (*handle_serial_line)(void *ctx, const char *line);
+
+    /**
+     * @brief When true, a foreground break (Ctrl+C / Stop) cancels the surface.
+     *
+     * Ready-made input/pick surfaces (dialog/list/ask/form/browse/view/…) set
+     * this so an app can never wedge the worker. The editor leaves it false:
+     * it owns a quit confirmation and must not be force-closed (unsaved data).
+     */
+    bool abort_cancels;
 };
 
 /**

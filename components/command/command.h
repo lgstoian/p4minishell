@@ -229,6 +229,11 @@ gfx_surface_t *gfx_canvas_surface(void);
  *  so the shell prompt becomes visible again. Safe to call when none is open. */
 void gfx_force_close(void);
 
+/** Tear down any foreground surface (gfx canvas, TUI cell buffer, app mode)
+ *  left open by an aborted batch (Stop / Ctrl+C) or a display-rotation rebuild,
+ *  so the shell prompt becomes visible again. Idempotent. */
+void command_close_foreground_surfaces(void);
+
 /** Frame-coalescing flag for `draw hold on|off` (tui_commands.c). True
  * while per-verb flushes are suppressed; headless-safe unit-test hook. */
 bool draw_hold_active(void);

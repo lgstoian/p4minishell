@@ -11,6 +11,7 @@ idf_component_register(
         test_shell_pipeline.c
         test_storage_format.c
         test_batch_expr.c
+        test_batch_control.c
         test_wifi_state.c
         test_ansi_format.c
         test_shell_variables.c

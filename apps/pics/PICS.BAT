@@ -50,5 +50,7 @@ pause
 goto menu
 
 :back
-draw clear screen
-goto :eof
+rem Leave the TUI: `draw clear screen` alone keeps TUI mode active and would
+rem make the next gfx app refuse ("gfx: TUI mode is active").
+draw close
+return

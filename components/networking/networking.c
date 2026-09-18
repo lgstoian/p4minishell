@@ -79,6 +79,12 @@ static esp_err_t s_wifi_last_error = ESP_OK;
 static bool s_wifi_driver_inited;
 static bool s_wifi_connected;
 static bool s_wifi_connect_requested;
+/* True while the station should stay connected to the target: set by any
+ * connect request and cleared only by a user `wifi disconnect` (or factory
+ * reset). The watchdog retries against this, not s_wifi_connect_requested:
+ * the DISCONNECTED handler clears the latter, which used to make the watchdog
+ * exit immediately and leave the device offline forever (F4). */
+static bool s_wifi_autoretry;
 static bool s_wifi_boot_autoconnect = true;
 static char s_wifi_target_ssid[NETWORKING_WIFI_SSID_BYTES];
 static char s_wifi_target_password[NETWORKING_WIFI_PASSWORD_BYTES];
@@ -91,6 +97,14 @@ static SemaphoreHandle_t s_wifi_mutex;  /* protects all shared Wi-Fi state */
  * handshake (esp_timer_get_time(), 0 = not associated). `wifi status` uses
  * it to report how long the current association has been up. */
 static int64_t s_wifi_associated_at_us;
+
+/* Cached radio telemetry for the associated AP. The ESP-Hosted
+ * `esp_wifi_sta_get_ap_info` RPC on this build returns only
+ * SSID/BSSID/channel/authmode, so RSSI and the PHY generation flags are taken
+ * from the most recent scan record that matches the association (updated by
+ * every scan) or, for an explicit status request, a one-shot scan. */
+static wifi_ap_record_t s_wifi_ap_cache;
+static bool s_wifi_ap_cache_valid;
 
 /* ---- Persistent Wi-Fi watchdog ---- */
 /* A single persistent task that monitors Wi-Fi connection state and retries
@@ -559,6 +573,7 @@ static esp_err_t networking_wifi_connect_with_credentials(const char *ssid, cons
     snprintf(s_wifi_target_ssid, sizeof(s_wifi_target_ssid), "%s", ssid);
     snprintf(s_wifi_target_password, sizeof(s_wifi_target_password), "%s", password);
     s_wifi_connect_requested = true;
+    s_wifi_autoretry = true;
     s_wifi_connected = false;
     networking_schedulef_ansi("@C[wifi]@R @Gconnect requested@R for @W%s@R\n", s_wifi_target_ssid);
     wifi_unlock();
@@ -745,6 +760,106 @@ static void networking_wifi_connect_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* ---- Associated-AP radio telemetry cache -------------------------------
+ * The ESP-Hosted `esp_wifi_sta_get_ap_info` RPC on this build returns only
+ * SSID/BSSID/channel/authmode, so RSSI and the PHY generation flags are
+ * unavailable from it. Every scan record DOES carry them, so the scan paths
+ * cache the record matching the association; the status/diag path can ask for
+ * a one-shot refresh when the cache is cold. */
+
+static bool networking_wifi_ap_has_phy(const wifi_ap_record_t *ap)
+{
+    return ap->phy_11ax || ap->phy_11ac || ap->phy_11n || ap->phy_11a ||
+           ap->phy_11g || ap->phy_11b || ap->phy_lr;
+}
+
+/** True when the cached record describes the AP @p assoc is associated to. */
+static bool networking_wifi_ap_cache_matches(const wifi_ap_record_t *assoc)
+{
+    char target[NETWORKING_WIFI_SSID_BYTES];
+
+    if (!s_wifi_ap_cache_valid || assoc == NULL) {
+        return false;
+    }
+    /* The BSSID is the unambiguous match; fall back to the target SSID. */
+    if (memcmp(assoc->bssid, s_wifi_ap_cache.bssid, sizeof(assoc->bssid)) == 0) {
+        return true;
+    }
+    wifi_lock();
+    snprintf(target, sizeof(target), "%s", s_wifi_target_ssid);
+    wifi_unlock();
+    return target[0] != '\0' &&
+           strcmp((const char *)s_wifi_ap_cache.ssid, target) == 0;
+}
+
+/** Cache the scan record for the currently associated AP, if present. */
+static bool networking_wifi_ap_cache_from_scan(const wifi_ap_record_t *records,
+                                               uint16_t count)
+{
+    wifi_ap_record_t assoc;
+    char target[NETWORKING_WIFI_SSID_BYTES];
+    bool have_assoc;
+    int index;
+    int match = -1;
+
+    if (records == NULL || count == 0) {
+        return false;
+    }
+    memset(&assoc, 0, sizeof(assoc));
+    have_assoc = (esp_wifi_sta_get_ap_info(&assoc) == ESP_OK);
+    wifi_lock();
+    snprintf(target, sizeof(target), "%s", s_wifi_target_ssid);
+    wifi_unlock();
+
+    for (index = 0; index < count; index++) {
+        if (have_assoc && memcmp(records[index].bssid, assoc.bssid, sizeof(assoc.bssid)) == 0) {
+            match = index;
+            break;
+        }
+    }
+    if (match < 0 && target[0] != '\0') {
+        for (index = 0; index < count; index++) {
+            if (strcmp((const char *)records[index].ssid, target) == 0) {
+                match = index;
+                break;
+            }
+        }
+    }
+    if (match < 0) {
+        return false;
+    }
+    s_wifi_ap_cache = records[match];
+    s_wifi_ap_cache_valid = true;
+    return true;
+}
+
+/** One-shot scan to (re)fill the associated-AP telemetry cache. */
+static esp_err_t networking_wifi_ap_cache_refresh(void)
+{
+    wifi_ap_record_t *records;
+    uint16_t requested = P4_CONFIG_WIFI_SCAN_LIMIT;
+    uint16_t record_count;
+    esp_err_t error;
+
+    if (requested < 1) {
+        requested = 1;
+    }
+    records = calloc(requested, sizeof(*records));
+    if (records == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    record_count = requested;
+    error = esp_wifi_scan_start(NULL, true);
+    if (error == ESP_OK) {
+        error = esp_wifi_scan_get_ap_records(&record_count, records);
+    }
+    if (error == ESP_OK) {
+        (void)networking_wifi_ap_cache_from_scan(records, record_count);
+    }
+    free(records);
+    return error;
+}
+
 static esp_err_t networking_wifi_run_diagnostic(const char *origin)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
@@ -777,9 +892,16 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
 
     error = esp_wifi_sta_get_ap_info(&ap_info);
     if (error == ESP_OK) {
+        /* The hosted RPC omits RSSI; use the cached scan record when it
+         * matches the association (the scan below refreshes it). */
+        int display_rssi = ap_info.rssi;
+
+        if (display_rssi == 0 && networking_wifi_ap_cache_matches(&ap_info)) {
+            display_rssi = s_wifi_ap_cache.rssi;
+        }
         networking_schedulef_ansi("@C[wifi.diag]@R @Cconnected_ssid@R=@W%s@R @Crssi@R=@Z%d@R @Cchannel@R=@Z%u@R\n",
                              ap_info.ssid[0] != '\0' ? (const char *)ap_info.ssid : "<hidden>",
-                             ap_info.rssi,
+                             display_rssi,
                              (unsigned int)ap_info.primary);
     } else if (error == ESP_ERR_WIFI_NOT_CONNECT) {
         networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Knot connected to an AP@R\n", label);
@@ -816,6 +938,7 @@ static esp_err_t networking_wifi_run_diagnostic(const char *origin)
         networking_record_warningf("diagnostic scan result read failed from %s", label);
         return error;
     }
+    (void)networking_wifi_ap_cache_from_scan(records, record_count);
 
     networking_schedulef_ansi("@C[wifi.diag]@R @Corigin@R=@W%s@R @Cnetworks@R=@Z%u@R\n", label, (unsigned int)record_count);
     if (record_count == 0) {
@@ -894,6 +1017,7 @@ static bool networking_wifi_auto_connect_known(void)
         free(records);
         return false;
     }
+    (void)networking_wifi_ap_cache_from_scan(records, record_count);
 
     best_index = networking_wifi_known_pick_visible(records, record_count);
     free(records);
@@ -937,7 +1061,11 @@ static void networking_wifi_background_task(void *arg)
          * fall back to the classic single-credential path otherwise. */
         bool connected_known = false;
 
-        if (s_wifi_boot_autoconnect && !s_wifi_connect_requested) {
+        /* Only auto-connect when there is no live association. A background
+         * request that does not ask to connect (for example `wifi diag`) must
+         * never tear down a working link by re-running the boot auto-connect
+         * scan/connect. */
+        if (s_wifi_boot_autoconnect && !s_wifi_connect_requested && !s_wifi_connected) {
             connected_known = networking_wifi_auto_connect_known();
         }
 
@@ -1290,6 +1418,7 @@ void networking_wifi_scan(bool bare)
         free(records);
         return;
     }
+    (void)networking_wifi_ap_cache_from_scan(records, record_count);
 
     if (record_count == 0) {
         networking_appendf(SH_MUTE "wifi.scan:" SH_RST " no access points found\n");
@@ -1444,16 +1573,41 @@ void networking_wifi_status(void)
     memset(&ap_info, 0, sizeof(ap_info));
     error = esp_wifi_sta_get_ap_info(&ap_info);
     if (error == ESP_OK && ap_info.ssid[0] != '\0') {
+        /* `radio_info` must outlive the block below: `radio` can point at it
+         * for the rest of the report. */
+        wifi_ap_record_t radio_info;
+        const wifi_ap_record_t *radio = &ap_info;
+
+        /* The hosted get_ap_info RPC omits RSSI/PHY. Use the cached scan
+         * record for this association, refreshing with a one-shot scan when
+         * the cache is cold or holds a different BSSID. */
+        if ((ap_info.rssi == 0 || !networking_wifi_ap_has_phy(&ap_info)) &&
+            !networking_wifi_ap_cache_matches(&ap_info)) {
+            (void)networking_wifi_ap_cache_refresh();
+        }
+        if (networking_wifi_ap_cache_matches(&ap_info)) {
+            radio_info = s_wifi_ap_cache;
+            /* Keep the authoritative identity from get_ap_info. */
+            memcpy(radio_info.ssid, ap_info.ssid, sizeof(radio_info.ssid));
+            memcpy(radio_info.bssid, ap_info.bssid, sizeof(radio_info.bssid));
+            radio_info.primary = ap_info.primary;
+            radio = &radio_info;
+        }
+
         networking_appendf("  " SH_LBL "SSID:" SH_RST " " SH_VAL "%s" SH_RST "\n", (const char *)ap_info.ssid);
         networking_wifi_format_bssid(ap_info.bssid, bssid_str, sizeof(bssid_str));
         networking_appendf("  " SH_LBL "BSSID:" SH_RST " " SH_VAL "%s" SH_RST "\n", bssid_str);
         networking_appendf("  " SH_LBL "channel:" SH_RST " " SH_NUM "%u" SH_RST "\n", (unsigned int)ap_info.primary);
-        networking_appendf("  " SH_LBL "RSSI:" SH_RST " " SH_NUM "%d" SH_RST " " SH_MUTE "dBm" SH_RST "\n", ap_info.rssi);
+        if (radio->rssi != 0) {
+            networking_appendf("  " SH_LBL "RSSI:" SH_RST " " SH_NUM "%d" SH_RST " " SH_MUTE "dBm" SH_RST "\n", radio->rssi);
+        } else {
+            networking_appendf("  " SH_LBL "RSSI:" SH_RST " " SH_MUTE "unknown" SH_RST "\n");
+        }
         if (esp_wifi_get_bandwidth(WIFI_IF_STA, &bandwidth) == ESP_OK) {
             const char *bw = (bandwidth == WIFI_BW_HT40) ? "HT40"
                              : (bandwidth == WIFI_BW_HT20) ? "HT20"
                              : "20MHz";
-            networking_wifi_format_phy(&ap_info, bw, phy_str, sizeof(phy_str));
+            networking_wifi_format_phy(radio, bw, phy_str, sizeof(phy_str));
             networking_appendf("  " SH_LBL "PHY:" SH_RST " " SH_VAL "%s" SH_RST "\n", phy_str);
         }
     } else if (error != ESP_ERR_WIFI_NOT_CONNECT) {
@@ -1502,6 +1656,7 @@ void networking_wifi_disconnect(void)
     }
 
     s_wifi_connect_requested = false;
+    s_wifi_autoretry = false;   /* user asked to stay disconnected */
     s_wifi_connected = false;
     networking_wifi_append_step("esp_wifi_disconnect()");
     error = esp_wifi_disconnect();
@@ -2150,11 +2305,13 @@ void networking_wifi_set_boot_credentials(const char *ssid, const char *password
     snprintf(pass_copy, sizeof(pass_copy), "%s", s_wifi_target_password);
     if (ssid_copy[0] != '\0') {
         s_wifi_connect_requested = true;
+        s_wifi_autoretry = true;
         s_wifi_connected = false;
         snprintf(masked, sizeof(masked), "%s ********", ssid_copy);
         networking_schedulef_ansi("@C[wifi]@R @Gboot credentials set@R for @W%s@R\n", masked);
     } else {
         s_wifi_connect_requested = false;
+        s_wifi_autoretry = false;
         networking_schedulef_ansi("@C[wifi]@R @Kboot target cleared@R\n");
     }
     wifi_unlock();
@@ -2273,11 +2430,15 @@ static esp_err_t networking_wifi_throughput(int argc, char **argv)
         return ESP_ERR_INVALID_STATE;
     }
 
-    networking_appendf("@Cwifi throughput:@R %s%s %s%u MiB on port %u ...\n",
-                       cfg.direction == NETBENCH_DIR_TX ? "tx " : "rx ",
-                       cfg.udp ? "udp" : "tcp",
-                       cfg.direction == NETBENCH_DIR_TX ? cfg.host : "",
-                       (unsigned)cfg.megabytes, (unsigned)cfg.port);
+    if (cfg.direction == NETBENCH_DIR_TX) {
+        networking_appendf("@Cwifi throughput:@R %s%s %s %u MiB on port %u ...\n",
+                           "tx ", cfg.udp ? "udp" : "tcp", cfg.host,
+                           (unsigned)cfg.megabytes, (unsigned)cfg.port);
+    } else {
+        networking_appendf("@Cwifi throughput:@R %s%s %u MiB on port %u ...\n",
+                           "rx ", cfg.udp ? "udp" : "tcp",
+                           (unsigned)cfg.megabytes, (unsigned)cfg.port);
+    }
 
     error = netbench_run(&cfg, &result);
     if (error == ESP_OK) {
@@ -2308,8 +2469,11 @@ usage:
 
 esp_err_t networking_handle_wifi_command(char *command)
 {
-    char *argv[6];
-    int argc = networking_split_args(command, argv, 6);
+    /* The widest accepted form is `wifi throughput tx <host> [port=N] [mb=N]
+     * [udp]` = 7 tokens, so the previous `argv[6]` silently dropped the
+     * trailing `udp`. Keep headroom above the current verbs. */
+    char *argv[8];
+    int argc = networking_split_args(command, argv, 8);
 
     if (argc <= 1 || networking_text_equals_ignore_case(argv[1], "help")) {
         networking_appendf("@Y@BWi-Fi Commands:@R\n");
@@ -2614,6 +2778,17 @@ bool networking_wifi_get_rssi(int *rssi_out)
     memset(&ap_info, 0, sizeof(ap_info));
     if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) {
         return false;
+    }
+
+    /* The hosted get_ap_info RPC reports RSSI as 0; fall back to the cached
+     * scan record for this association (refreshed by the scan paths). Never
+     * scan from here: this runs on the header telemetry task. */
+    if (ap_info.rssi == 0) {
+        if (!networking_wifi_ap_cache_matches(&ap_info) || s_wifi_ap_cache.rssi == 0) {
+            return false;
+        }
+        *rssi_out = s_wifi_ap_cache.rssi;
+        return true;
     }
 
     *rssi_out = ap_info.rssi;
@@ -2930,7 +3105,7 @@ static void networking_wifi_watchdog_task(void *arg)
         wifi_lock();
         bool should_retry = (s_wifi_state == NETWORKING_WIFI_STATE_STARTED) &&
                             !s_wifi_connected &&
-                            s_wifi_connect_requested &&
+                            s_wifi_autoretry &&
                             s_wifi_boot_autoconnect &&
                             s_wifi_target_ssid[0] != '\0';
         char ssid_copy[NETWORKING_WIFI_SSID_BYTES];

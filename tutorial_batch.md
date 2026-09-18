@@ -68,6 +68,14 @@ if errorlevel 1 echo the previous command failed
 - `goto :eof` ends the current file; `call :label` calls a local label;
   `call LIB.BAT::routine args` calls a shared-library routine with automatic
   variable isolation (`exit /b` returns).
+- `gosub :label [args]` and `return [code]` are the BASIC-named equivalents of
+  `call :label` and `exit /b`; `return` at the top level of a file ends it like
+  `goto :eof`.
+- `on <expr> goto :a,:b,:c` (or `on <expr> gosub :a,:b,:c`) dispatches on a
+  computed 1-based index; an out-of-range value falls through. Targets may be
+  written `:label` or bare `label`.
+- A comment (`rem …` / `:: …`) is opaque to end of line — `|`, `<`, `>`, `&`
+  and `%` inside it are not interpreted.
 - `setlocal` / `endlocal` scope variables; every scope is unwound when the
   frame returns.
 - `set /a` does integer arithmetic; `calc` does floating point (see below).
@@ -195,7 +203,7 @@ technique in this tutorial in a complete, pure-batch program.
 | Limit | Value |
 |-------|-------|
 | Batch nesting depth | 4 |
-| Labels per file | 32 |
+| Labels per file | 128 (64 bytes/name) |
 | Batch argument width / command line | 4096 bytes (`P4_CONFIG_COMMAND_BYTES`) |
 | Environment variables | 24 |
 | Pipe stages | 4 |

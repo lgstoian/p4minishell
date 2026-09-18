@@ -72,7 +72,9 @@ class Led:
         return f[y0:y1, x0:x1].reshape(-1, 3).mean(axis=0)
 
     def set(self, cmd):
-        self.send('rgb ' + cmd, 0.5)
+        # Longer settle so the webcam exposure and the WS2812 latch have both
+        # caught up before sampling (a stale frame reads the previous colour).
+        self.send('rgb ' + cmd, 0.8)
 
     def reset(self):
         self.s.setDTR(True); self.s.setRTS(True); time.sleep(0.15)
@@ -87,6 +89,17 @@ class Led:
         d = (np.abs(red - off) + np.abs(grn - off) + np.abs(blu - off)).sum(axis=2)
         ys, xs = np.where(d > d.max() * 0.5)
         self.roi = (int(xs.min() - 5), int(ys.min() - 5), int(xs.max() + 6), int(ys.max() + 6))
+
+        # A real LED is a small, localized spot. A large ROI means scene-wide
+        # exposure/AGC drift (or the LED is not in frame), which makes the
+        # colour classifier report noise (H10). Refuse instead of lying.
+        w = self.roi[2] - self.roi[0]
+        h = self.roi[3] - self.roi[1]
+        if w * h > RES[0] * RES[1] * 0.10:
+            raise SystemExit(
+                "ERROR: LED ROI auto-detection found a %dx%d region in %dx%d "
+                "(too large); aim the camera at the LED and re-run with "
+                "--preview/--calibrate" % (w, h, RES[0], RES[1]))
 
     def calibrate(self):
         for name, cmd in REF_CMDS.items():

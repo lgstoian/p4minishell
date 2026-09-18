@@ -730,6 +730,14 @@ static void shell_build_ui(void)
         editor_view_close();
     }
 
+    /* A rotation closes a foreground batch app (its TUI/gfx surface would be
+     * destroyed underneath it). Abort the running command, then close the
+     * surface before the window manager deletes the container. */
+    if (windows_app_surface_active()) {
+        shell_request_abort();
+    }
+    command_close_foreground_surfaces();
+
     /* Tear the window manager down first so every widget from the previous
      * layout is released cleanly. Required for display rotation support. */
     windows_deinit();

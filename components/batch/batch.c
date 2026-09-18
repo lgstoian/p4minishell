@@ -96,6 +96,20 @@ typedef struct {
     long file_pos;
 } shell_batch_label_t;
 
+/**
+ * One `call :label` scope running inside a batch frame.
+ *
+ * A labelled subroutine gets its own argument set (the caller's `%1..%9` are
+ * replaced) and `shift` affects only that subroutine, so the caller's
+ * arguments are saved on entry and restored on return. A label may call
+ * another label, so these scopes nest.
+ */
+typedef struct {
+    long resume_pos;                     /**< Position to resume at on return. */
+    int argc;                            /**< Saved caller argument count. */
+    char (*args)[SHELL_COMMAND_BYTES];   /**< Saved caller argument copies. */
+} shell_label_call_t;
+
 /** Execution context for one nested batch file. */
 typedef struct shell_batch_frame {
     bool echo_enabled;
@@ -114,10 +128,9 @@ typedef struct shell_batch_frame {
     size_t ram_pos;
     /** setlocal scopes opened by this frame, unwound when it returns. */
     int setlocal_depth;
-    /** Resume position after a `call :label`, valid while in_label_call. */
-    long call_resume_pos;
-    /** True while executing inside a called `:label` block. */
-    bool in_label_call;
+    /** Nested `call :label` scopes (`call_resume_pos` / argument saves). */
+    shell_label_call_t label_calls[SHELL_BATCH_DEPTH_MAX + 2];
+    int label_call_depth;
     /** True when this frame entered app mode (`appmode on`); the saved screen
      *  is restored automatically when the frame returns. */
     bool app_mode;
@@ -911,9 +924,39 @@ void shell_command_alias(int argc, char **argv)
         }
 
         *equals = '\0';
-        if (shell_alias_set(argv[1], equals + 1) != ESP_OK) {
-            shell_print_error("alias: invalid alias name or the table is full");
-            return;
+        /* The value is the text after `=`. Unquoted multi-word values are
+         * joined from the remaining tokens (like `echo`/`set`) instead of
+         * silently dropping everything after the first word. */
+        {
+            char *value = malloc(SHELL_ALIAS_VALUE_BYTES);
+            bool truncated = false;
+
+            if (value == NULL) {
+                shell_print_error("alias: out of memory");
+                return;
+            }
+            snprintf(value, SHELL_ALIAS_VALUE_BYTES, "%s", equals + 1);
+            for (index = 2; index < argc; index++) {
+                size_t used = strlen(value);
+
+                if (used + 1 >= SHELL_ALIAS_VALUE_BYTES) {
+                    truncated = true;
+                    break;
+                }
+                value[used++] = ' ';
+                value[used] = '\0';
+                strncat(value, argv[index], SHELL_ALIAS_VALUE_BYTES - used - 1);
+            }
+            if (shell_alias_set(argv[1], value) != ESP_OK) {
+                free(value);
+                shell_print_error("alias: invalid alias name or the table is full");
+                return;
+            }
+            if (truncated) {
+                shell_print_warning("alias: value truncated to %d bytes",
+                                    SHELL_ALIAS_VALUE_BYTES - 1);
+            }
+            free(value);
         }
         shell_print_ok("alias: %s set", argv[1]);
     }
@@ -2537,12 +2580,159 @@ done:
  * BATCH CONTROL FLOW: call, goto, shift, if
  * ======================================================================== */
 
+/** True while the frame is executing inside a `call :label` block. */
+static bool shell_in_label_call(const shell_batch_frame_t *frame)
+{
+    return frame != NULL && frame->label_call_depth > 0;
+}
+
+/**
+ * Enter a `call :label` block: save the caller's arguments so they can be
+ * restored on return, then bind the subroutine's own argument set. `%0` stays
+ * the script name; the caller's arguments (`argv[0..argc-1]`) become
+ * `%1..%9`. Returns false when the scope stack is full or allocation fails.
+ */
+static bool shell_label_call_enter(shell_batch_frame_t *frame, long resume_pos,
+                                   int argc, char **argv)
+{
+    shell_label_call_t *slot;
+    int index;
+
+    if (frame == NULL ||
+        frame->label_call_depth >= (int)(sizeof(frame->label_calls) / sizeof(frame->label_calls[0]))) {
+        return false;
+    }
+
+    slot = &frame->label_calls[frame->label_call_depth];
+    slot->args = malloc(sizeof(*slot->args) * SHELL_BATCH_ARGS_MAX);
+    if (slot->args == NULL) {
+        return false;
+    }
+    memcpy(slot->args, frame->args, sizeof(*slot->args) * SHELL_BATCH_ARGS_MAX);
+    slot->argc = frame->argc;
+    slot->resume_pos = resume_pos;
+    frame->label_call_depth++;
+
+    frame->argc = MIN(argc + 1, SHELL_BATCH_ARGS_MAX);
+    for (index = 0; index < argc && index + 1 < SHELL_BATCH_ARGS_MAX; index++) {
+        snprintf(frame->args[index + 1], SHELL_COMMAND_BYTES, "%s", argv[index]);
+    }
+    for (index = argc + 1; index < SHELL_BATCH_ARGS_MAX; index++) {
+        frame->args[index][0] = '\0';
+    }
+    return true;
+}
+
+/**
+ * Leave the innermost `call :label` block, restoring the caller's arguments.
+ * Returns the position to resume at, or -1 when no scope is active.
+ */
+static long shell_label_call_leave(shell_batch_frame_t *frame)
+{
+    shell_label_call_t *slot;
+    long resume;
+
+    if (!shell_in_label_call(frame)) {
+        return -1;
+    }
+    frame->label_call_depth--;
+    slot = &frame->label_calls[frame->label_call_depth];
+    resume = slot->resume_pos;
+    memcpy(frame->args, slot->args, sizeof(*slot->args) * SHELL_BATCH_ARGS_MAX);
+    frame->argc = slot->argc;
+    free(slot->args);
+    slot->args = NULL;
+    return resume;
+}
+
+/** Store a jump target normalised (leading `:` stripped) and length-capped to
+ *  the same width the label scanner stores, so a long target can still match a
+ *  truncated label-table name instead of never being found. */
+static void shell_store_goto_target(const char *label)
+{
+    if (label != NULL && label[0] == ':') {
+        label++;
+    }
+    snprintf(s_goto_label, sizeof(s_goto_label), "%.*s",
+             (int)(SHELL_BATCH_LABEL_BYTES - 1), (label != NULL) ? label : "");
+}
+
+/**
+ * Shared by `call :label`, `gosub :label`, and `on … gosub`/`on … call`:
+ * verify the target exists in the current frame, push a `call :label` scope
+ * with the given arguments, and arm the jump. Prints the cmd.exe-parity error
+ * and sets ERRORLEVEL 1 on failure (a missing label is fatal to the jump, not
+ * to the frame, for the `call`-family verbs). `verb` names the caller for the
+ * diagnostics.
+ */
+static bool shell_local_subroutine_begin(const char *verb, const char *label,
+                                         int argc, char **argv)
+{
+    shell_batch_frame_t *frame = s_active_batch_frame;
+
+    if (frame == NULL) {
+        shell_transcript_appendf("%s: :label is only valid inside batch files\n", verb);
+        batch_set_errorlevel(1);
+        return false;
+    }
+    if (shell_find_label_pos(frame, label) < 0) {
+        shell_transcript_appendf("The system cannot find the batch label specified - %s\n", label);
+        batch_set_errorlevel(1);
+        return false;
+    }
+    if (!shell_label_call_enter(frame, shell_frame_tell(frame), argc, argv)) {
+        shell_print_error("%s: too many nested label calls", verb);
+        batch_set_errorlevel(1);
+        return false;
+    }
+    shell_store_goto_target(label);
+    s_goto_pending = true;
+    return true;
+}
+
+/**
+ * Shared by `call` and `gosub`: run `file.bat::routine [args]` in an isolated
+ * scope that starts at the routine label. Returns false when @p argv[1] is not
+ * the `file::routine` form (so the caller can handle other forms).
+ */
+static bool shell_library_routine_call(const char *verb, int argc, char **argv)
+{
+    const char *double_colon = strstr(argv[1], "::");
+    char lib_path[SHELL_SD_PATH_BYTES];
+    char batch_path[SHELL_SD_PATH_BYTES];
+    char routine[SHELL_BATCH_LABEL_BYTES];
+    size_t path_len;
+
+    if (double_colon == NULL) {
+        return false;
+    }
+    path_len = (size_t)(double_colon - argv[1]);
+    if (path_len == 0 || path_len >= sizeof(lib_path) ||
+        snprintf(routine, sizeof(routine), "%s", double_colon + 2) >= (int)sizeof(routine) ||
+        routine[0] == '\0') {
+        shell_print_usage("Usage: %s <file.bat>::<routine> [args]", verb);
+        batch_set_errorlevel(2);
+        return true;
+    }
+    memcpy(lib_path, argv[1], path_len);
+    lib_path[path_len] = '\0';
+
+    if (!shell_resolve_batch_path(lib_path, batch_path, sizeof(batch_path))) {
+        shell_transcript_appendf("%s: library not found %s\n", verb, lib_path);
+        batch_set_errorlevel(1);
+        return true;
+    }
+    shell_batch_run_internal(batch_path, routine, argc - 2, &argv[2]);
+    return true;
+}
+
 void shell_command_call(int argc, char **argv)
 {
     char batch_path[SHELL_SD_PATH_BYTES];
 
     if (argc < 2) {
-        shell_print_usage("Usage: call <file.bat> [args] | call <file.bat>::<routine> [args]");
+        shell_print_usage("Usage: call <file.bat> [args] | call <file.bat>::<routine> [args] | call :label [args]");
+        batch_set_errorlevel(2);
         return;
     }
 
@@ -2550,62 +2740,195 @@ void shell_command_call(int argc, char **argv)
      * shared library of batch routines: the external file is loaded and
      * execution starts at `:routine`, isolated from the caller's variables
      * (the routine's scope is unwound when it returns). */
-    {
-        const char *double_colon = strstr(argv[1], "::");
-
-        if (double_colon != NULL) {
-            char lib_path[SHELL_SD_PATH_BYTES];
-            char routine[SHELL_BATCH_LABEL_BYTES];
-            size_t path_len = (size_t)(double_colon - argv[1]);
-
-            if (path_len == 0 || path_len >= sizeof(lib_path)) {
-                shell_print_usage("Usage: call <file.bat>::<routine> [args]");
-                return;
-            }
-            memcpy(lib_path, argv[1], path_len);
-            lib_path[path_len] = '\0';
-            snprintf(routine, sizeof(routine), "%s", double_colon + 2);
-            if (routine[0] == '\0') {
-                shell_print_usage("Usage: call <file.bat>::<routine> [args]");
-                return;
-            }
-
-            if (!shell_resolve_batch_path(lib_path, batch_path, sizeof(batch_path))) {
-                shell_transcript_appendf("call: library not found %s\n", lib_path);
-                return;
-            }
-            shell_batch_run_internal(batch_path, routine, argc - 2, &argv[2]);
-            return;
-        }
+    if (shell_library_routine_call("call", argc, argv)) {
+        return;
     }
 
     /* `call :label` runs a labelled block in the current batch file as a
-     * subroutine: the block runs until `exit /b` (or end of file) and then
-     * execution resumes at the line after the call. */
+     * subroutine: the block runs until `return` / `exit /b` / `goto :eof` (or
+     * end of file) and then execution resumes at the line after the call. */
     if (argv[1][0] == ':') {
-        const char *label = argv[1] + 1;
-
-        if (s_active_batch_frame == NULL) {
-            shell_transcript_append_text("call: :label is only valid inside batch files\n");
-            return;
-        }
-        if (shell_find_label_pos(s_active_batch_frame, label) < 0) {
-            shell_transcript_appendf("call: label not found: %s\n", label);
-            return;
-        }
-        s_active_batch_frame->call_resume_pos = shell_frame_tell(s_active_batch_frame);
-        s_active_batch_frame->in_label_call = true;
-        snprintf(s_goto_label, sizeof(s_goto_label), "%s", label);
-        s_goto_pending = true;
+        (void)shell_local_subroutine_begin("call", argv[1] + 1, argc - 2, &argv[2]);
         return;
     }
 
     if (!shell_resolve_batch_path(argv[1], batch_path, sizeof(batch_path))) {
         shell_transcript_appendf("call: batch file not found %s\n", argv[1]);
+        batch_set_errorlevel(1);
         return;
     }
 
     shell_execute_batch_file(batch_path, argc - 2, &argv[2]);
+}
+
+/** `gosub` — BASIC-named sibling of `call :label` / `call file::routine`. */
+void shell_command_gosub(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: gosub :label [args] | gosub <file.bat>::<routine> [args]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (shell_library_routine_call("gosub", argc, argv)) {
+        return;
+    }
+    if (argv[1][0] == ':') {
+        (void)shell_local_subroutine_begin("gosub", argv[1] + 1, argc - 2, &argv[2]);
+        return;
+    }
+    shell_print_usage("Usage: gosub :label [args] | gosub <file.bat>::<routine> [args]");
+    batch_set_errorlevel(2);
+}
+
+/**
+ * `return [code]` — BASIC-named sibling of `goto :eof`. Inside a `call :label`
+ * / `gosub` scope it returns to the caller; at the top level of a batch file it
+ * ends the frame (the documented `RETURN -> goto :eof` mapping). An optional
+ * code sets ERRORLEVEL first.
+ */
+void shell_command_return(int argc, char **argv)
+{
+    if (s_active_batch_frame == NULL) {
+        shell_transcript_append_text("return: only valid inside batch files\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (argc >= 2) {
+        batch_set_errorlevel(atoi(argv[1]));
+    }
+    s_goto_eof = true;
+    s_goto_pending = true;
+    s_goto_label[0] = '\0';
+}
+
+/**
+ * Parse `on <expr> goto|gosub|call <label>[,<label>...]` into @p expr (the
+ * expression tokens joined by spaces) and @p targets (the raw target list).
+ * Sets @p is_gosub_out for the `gosub`/`call` form. Pure; returns false on a
+ * malformed command (missing expression or targets). Shared by the executor and
+ * the unit tests (via `batch_on_parse`).
+ */
+static bool shell_on_parse(int argc, char **argv, char *expr, size_t expr_size,
+                           bool *is_gosub_out, char *targets, size_t targets_size)
+{
+    int kw = -1;
+    bool is_gosub = false;
+    int i;
+
+    if (argv == NULL || expr == NULL || targets == NULL || expr_size == 0 || targets_size == 0) {
+        return false;
+    }
+    for (i = 1; i < argc; i++) {
+        if (shell_text_equals_ignore_case(argv[i], "goto") ||
+            shell_text_equals_ignore_case(argv[i], "gosub") ||
+            shell_text_equals_ignore_case(argv[i], "call")) {
+            kw = i;
+            is_gosub = !shell_text_equals_ignore_case(argv[i], "goto");
+            break;
+        }
+    }
+    if (kw < 2 || kw + 1 >= argc) {
+        return false;
+    }
+    expr[0] = '\0';
+    for (i = 1; i < kw; i++) {
+        snprintf(expr + strlen(expr), expr_size - strlen(expr), "%s%s",
+                 (i > 1) ? " " : "", argv[i]);
+    }
+    targets[0] = '\0';
+    for (i = kw + 1; i < argc; i++) {
+        snprintf(targets + strlen(targets), targets_size - strlen(targets), "%s%s",
+                 (i > kw + 1) ? " " : "", argv[i]);
+    }
+    if (is_gosub_out != NULL) {
+        *is_gosub_out = is_gosub;
+    }
+    return true;
+}
+
+/**
+ * Select the 1-based @p index entry of a comma-separated @p targets list,
+ * splitting @p targets in place (commas and surrounding whitespace). Returns a
+ * pointer to the entry, or NULL when @p index is out of range (BASIC: fall
+ * through). Pure; only touches the caller's buffer.
+ */
+static const char *shell_on_select(char *targets, int index)
+{
+    char *seg = targets;
+    char *selected = NULL;
+    int count = 0;
+
+    while (seg != NULL) {
+        char *comma = strchr(seg, ',');
+        char *s = seg;
+        char *end;
+
+        if (comma != NULL) {
+            *comma = '\0';
+        }
+        while (*s == ' ' || *s == '\t') {
+            s++;
+        }
+        end = s + strlen(s);
+        while (end > s && (end[-1] == ' ' || end[-1] == '\t')) {
+            *--end = '\0';
+        }
+        count++;
+        if (count == index) {
+            selected = s;
+        }
+        seg = (comma != NULL) ? comma + 1 : NULL;
+    }
+    if (index < 1 || index > count) {
+        return NULL;
+    }
+    return selected;
+}
+
+void shell_command_on(int argc, char **argv)
+{
+    char expr[SHELL_COMMAND_BYTES];
+    char targets[SHELL_COMMAND_BYTES];
+    const char *err = NULL;
+    const char *selected;
+    int32_t index = 0;
+    bool is_gosub = false;
+
+    if (s_active_batch_frame == NULL) {
+        shell_transcript_append_text("on: only valid inside batch files\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (!shell_on_parse(argc, argv, expr, sizeof(expr), &is_gosub, targets, sizeof(targets))) {
+        shell_print_usage("Usage: on <expr> goto|gosub <label>[,<label>...]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (!shell_expr_evaluate(expr, &index, &err)) {
+        shell_transcript_appendf("on: %s\n", (err != NULL) ? err : "invalid expression");
+        batch_set_errorlevel(1);
+        return;
+    }
+    selected = shell_on_select(targets, (int)index);
+    if (selected == NULL) {
+        /* Out of range: fall through without jumping (BASIC). */
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (selected[0] == ':') {
+        selected++;
+    }
+    if (selected[0] == '\0') {
+        shell_print_error("on: empty dispatch target");
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (is_gosub) {
+        (void)shell_local_subroutine_begin("on", selected, 0, NULL);
+    } else {
+        shell_store_goto_target(selected);
+        s_goto_pending = true;
+    }
 }
 
 void shell_command_goto(int argc, char **argv)
@@ -2629,16 +2952,8 @@ void shell_command_goto(int argc, char **argv)
         return;
     }
     /* Normalize the label: accept both `goto skip` and `goto :skip` (the
-     * documented form). The stored name has no leading colon, matching the
-     * label table built by shell_extract_label_name(). */
-    {
-        const char *label = argv[1];
-
-        if (label[0] == ':') {
-            label++;
-        }
-        snprintf(s_goto_label, sizeof(s_goto_label), "%s", label);
-    }
+     * documented form), length-capped to the label-table width. */
+    shell_store_goto_target(argv[1]);
     s_goto_pending = true;
 }
 
@@ -3270,8 +3585,24 @@ void shell_command_proc(int argc, char **argv)
             } else {
                 shell_transcript_appendf_ansi(SH_LBL "proc.stdin" SH_RST "=" SH_MUTE "none" SH_RST "\n");
             }
+        } else if (shell_text_equals_ignore_case(argv[1], "/labels")) {
+            int li;
+
+            shell_print_field_num("proc.labels", frame->label_count);
+            for (li = 0; li < frame->label_count; li++) {
+                shell_transcript_appendf_ansi("  " SH_NUM "[%ld]" SH_RST " " SH_PATH "%s" SH_RST "\n",
+                                              frame->labels[li].file_pos, frame->labels[li].name);
+            }
+        } else if (shell_text_equals_ignore_case(argv[1], "/goto")) {
+            if (s_goto_pending && s_goto_eof) {
+                shell_print_field("proc.goto", "eof");
+            } else if (s_goto_pending) {
+                shell_print_field("proc.goto", "%s", s_goto_label);
+            } else {
+                shell_transcript_appendf_ansi(SH_LBL "proc.goto" SH_RST "=" SH_MUTE "none" SH_RST "\n");
+            }
         } else {
-            shell_print_usage("Usage: proc [/args | /name | /depth | /errorlevel | /echo | /stdin]");
+            shell_print_usage("Usage: proc [/args | /name | /depth | /errorlevel | /echo | /stdin | /labels | /goto]");
             batch_set_errorlevel(2);
             return;
         }
@@ -3543,6 +3874,13 @@ void shell_command_appconfig(int argc, char **argv)
     snprintf(path, sizeof(path), "%s/APPS/%s.INI", BSP_SD_MOUNT_POINT, app);
 
     if (argc == 2) {
+        result = shell_ini_cmd_list(path);
+    } else if (shell_text_equals_ignore_case(argv[2], "list")) {
+        if (argc != 3) {
+            shell_print_usage("Usage: appconfig <app> list");
+            batch_set_errorlevel(2);
+            return;
+        }
         result = shell_ini_cmd_list(path);
     } else if (shell_text_equals_ignore_case(argv[2], "path")) {
         if (argc != 3) {
@@ -4279,9 +4617,8 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         if (shell_frame_fgets(frame, line, SHELL_BATCH_LINE_BYTES) == NULL) {
             /* End of file. Inside a called `:label` block this returns to the
              * caller; otherwise the batch frame ends here. */
-            if (frame->in_label_call) {
-                frame->in_label_call = false;
-                shell_frame_seek(frame, frame->call_resume_pos);
+            if (shell_in_label_call(frame)) {
+                shell_frame_seek(frame, shell_label_call_leave(frame));
                 continue;
             }
             break;
@@ -4386,12 +4723,11 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
 
         /* `exit` or `exit /b` asked this file to stop. A frame-stop inside a
          * called `:label` block returns to the caller instead. */
-        if (s_stop_mode == BATCH_STOP_FRAME && frame->in_label_call) {
+        if (s_stop_mode == BATCH_STOP_FRAME && shell_in_label_call(frame)) {
             s_stop_mode = BATCH_STOP_NONE;
             s_goto_pending = false;
             s_goto_eof = false;
-            shell_frame_seek(frame, frame->call_resume_pos);
-            frame->in_label_call = false;
+            shell_frame_seek(frame, shell_label_call_leave(frame));
             continue;
         }
         if (s_stop_mode != BATCH_STOP_NONE) {
@@ -4403,9 +4739,8 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         if (s_goto_eof) {
             s_goto_eof = false;
             s_goto_pending = false;
-            if (frame->in_label_call) {
-                frame->in_label_call = false;
-                shell_frame_seek(frame, frame->call_resume_pos);
+            if (shell_in_label_call(frame)) {
+                shell_frame_seek(frame, shell_label_call_leave(frame));
                 continue;
             }
             break;
@@ -4421,9 +4756,16 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
                 /* Continue from the label position - the label line will be skipped */
                 continue;
             } else {
-                shell_transcript_appendf("goto: label not found: %s\n", s_goto_label);
+                /* cmd.exe parity: a `goto` to a missing label prints this and
+                 * aborts the current batch file. The `call`-family verbs
+                 * already validate the target before arming, so only a `goto`
+                 * (or `on … goto`) can reach here. */
+                shell_transcript_appendf("The system cannot find the batch label specified - %s\n",
+                                         s_goto_label);
+                batch_set_errorlevel(1);
                 s_goto_pending = false;
                 s_goto_label[0] = '\0';
+                break;
             }
         }
     }
@@ -4462,6 +4804,12 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         frame->app_mode = false;
     }
 
+    /* Any `call :label` scope left open (a subroutine that never returned)
+     * owns a heap copy of the caller's arguments; release it with the frame. */
+    while (shell_in_label_call(frame)) {
+        (void)shell_label_call_leave(frame);
+    }
+
     if (file != NULL) fclose(file);
     if (frame->ram != NULL) free(frame->ram);
     shell_sd_end(&session, "call");
@@ -4495,6 +4843,30 @@ static void shell_extract_label_name(const char *line, char *name, size_t name_s
         name[i++] = *line++;
     }
     name[i] = '\0';
+}
+
+/* ---- Test-only wrappers for the pure control-flow helpers ----
+ * These expose the exact parser the executor uses so the unit suite can cover
+ * it without duplicating logic. */
+bool batch_label_is_line(const char *line)
+{
+    return shell_is_label(line);
+}
+
+void batch_label_extract(const char *line, char *name, size_t name_size)
+{
+    shell_extract_label_name(line, name, name_size);
+}
+
+bool batch_on_parse(int argc, char **argv, char *expr, size_t expr_size,
+                    bool *is_gosub_out, char *targets, size_t targets_size)
+{
+    return shell_on_parse(argc, argv, expr, expr_size, is_gosub_out, targets, targets_size);
+}
+
+const char *batch_on_select(char *targets, int index)
+{
+    return shell_on_select(targets, index);
 }
 
 /* Helper: find a label in the current batch frame */

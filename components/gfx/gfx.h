@@ -247,6 +247,54 @@ void gfx_surface_blit_scaled(gfx_surface_t *dst, const gfx_surface_t *src,
 void gfx_bmp_fit(int src_w, int src_h, int max_w, int max_h,
                  int *out_w, int *out_h);
 
+/**
+ * @brief Frame-present statistics for a graphical app loop.
+ *
+ * Pure and headless-safe so the policy is unit-tested (test_gfx.c). The
+ * caller feeds present timestamps (from esp_timer_get_time()); the struct
+ * derives the frame count, min/average/max interval, interval jitter
+ * (standard deviation) and the count of frames that overran 150% of the
+ * configured target (dropped frames).
+ */
+typedef struct {
+    uint64_t started_us;  /**< First present timestamp of the run (0 = none). */
+    uint64_t last_us;     /**< Previous present timestamp (0 = none yet). */
+    uint64_t sum_us;      /**< Sum of measured intervals. */
+    uint64_t sum_sq_us;   /**< Sum of squared intervals (for jitter). */
+    uint32_t frames;      /**< Number of measured intervals. */
+    uint32_t min_us;      /**< Shortest interval. */
+    uint32_t max_us;      /**< Longest interval. */
+    uint32_t dropped;     /**< Intervals over 150% of the target. */
+    uint32_t target_us;   /**< Target interval in us (0 = auto/none). */
+} gfx_frame_stats_t;
+
+/** Clear all frame statistics. */
+void gfx_frame_stats_reset(gfx_frame_stats_t *s);
+
+/** Record one present at @p now_us (the first call only sets the baseline). */
+void gfx_frame_stats_sample(gfx_frame_stats_t *s, uint64_t now_us);
+
+/** Set the target frame rate used to count dropped frames (0 disables). */
+void gfx_frame_stats_set_target_fps(gfx_frame_stats_t *s, uint32_t fps);
+
+/** Average interval in microseconds (0 until two presents are sampled). */
+uint32_t gfx_frame_stats_avg_us(const gfx_frame_stats_t *s);
+
+/** Interval standard deviation ("jitter") in microseconds. */
+uint32_t gfx_frame_stats_jitter_us(const gfx_frame_stats_t *s);
+
+/** Frames per second derived from the average interval (0.0 if unknown). */
+double gfx_frame_stats_fps(const gfx_frame_stats_t *s);
+
+/**
+ * @brief Format frame stats as a machine-readable, integer-only line body.
+ *
+ * Shared by `gfx stats` and `tui stats` (and parsed by tools/p4test/perf.py):
+ * `frames=N min_us=N avg_us=N max_us=N jitter_us=N dropped=N fps10=N
+ * target_fps=N`. Returns the number of characters written (excluding NUL).
+ */
+int gfx_frame_stats_format(const gfx_frame_stats_t *s, char *out, size_t out_size);
+
 #ifdef __cplusplus
 }
 #endif

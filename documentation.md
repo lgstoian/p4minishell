@@ -406,11 +406,19 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
 - **Batch path resolution**: `shell_resolve_batch_path()` tries the literal name, the name with
   `.bat` appended, then each `;`-separated PATH entry with both forms
 - **Labels and jumps**: The label table is built with a full-file scan on load
-  (`P4_CONFIG_BATCH_LABEL_MAX` = 32 targets), so `goto` and `call :label` are an `fseek()`
-  across the file. `goto :eof` is an implicit end-of-file label: it ends the current frame
-  exactly like reaching the end of the file, unwinding any open setlocal scopes. A pending
-  goto is always cleared when a frame returns, so a `goto`/`goto :eof` issued from inside a
-  `for` or `if` body in a called script cannot leak into the caller's line loop.
+  (`P4_CONFIG_BATCH_LABEL_MAX` = 128 targets, names up to
+  `P4_CONFIG_BATCH_LABEL_BYTES` = 64 bytes), so `goto`, `call :label`, `gosub`
+  and `on` are an `fseek()` across the file; a target may be written `:label` or
+  bare `label`. `goto :eof` is an implicit end-of-file label: it ends the current
+  frame exactly like reaching the end of the file, unwinding any open setlocal
+  scopes. A pending goto is always cleared when a frame returns, so a
+  `goto`/`goto :eof` issued from inside a `for` or `if` body in a called script
+  cannot leak into the caller's line loop. `call :label`/`gosub :label` push a
+  label-call scope resumed by `return`/`exit /b`/`goto :eof`; `on <expr> gosub|goto`
+  dispatches on a 1-based `set /a` index (out of range falls through). A `goto` to
+  a missing label aborts the frame, while a missing `call`/`gosub`/`on` target sets
+  errorlevel 1 and continues (cmd.exe parity). `rem`/`::` comments are opaque to
+  end of line (`shell_comment_line()` runs before the chain/pipe/redirect parsers).
 - **`for` loops**: `for %%var in (set) do command` with per-iteration `%var` substitution.
   The set is either a space-separated literal token list (`for %%I in (a b c) do echo %%I`)
   or a single wildcard pattern (`for %%F in (*.txt) do echo %%F`), which is expanded through
@@ -495,7 +503,8 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   variable isolation), `if`
   (with `errorlevel N` — true when errorlevel ≥ N, `exist <path>`, `/i` case-insensitive
   string comparison, and `not` for all three), `for` (classic and `for /f`), `goto`
-  (including `goto :eof`), `shift`, `proc` (process-stack introspection), `ini`
+  (including `goto :eof`), `call :label`/`gosub`/`return`/`on` (local subroutines and
+  BASIC computed dispatch), `shift`, `proc` (process-stack introspection), `ini`
   (persistent `KEY=VALUE` files, import/export the environment), `appconfig` (per-app
   settings file `sd:/APPS/<APP>.INI`), `temp` (SD-backed temporary files), `ansi`
   (menu/form primitive: emit text styled with SGR codes), `menu` (numbered form returning
@@ -1010,14 +1019,23 @@ Hardware-verified on COM11 (v0.35.1, final TUI state: flash, boot `1024x510` tra
 - **Cell buffer** (`components/tui/tui.h:35` `tui_cell_t { char utf8[4]; uint8_t fg/bg/attr; }`, `components/tui/tui.c:129` `tui_cell_set` via `strncpy`): logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:325`, DOS parity) heap cell buffer (PSRAM preferred, `heap_caps_malloc MALLOC_CAP_SPIRAM`) with fg/bg/attribute per cell. Clamped to the logical grid, never to pixels; each cell holds full UTF-8 (3-byte box glyphs). Previously `utf8[2]` truncated box draws — fixed to `utf8[4]`.
 - **Drawing primitives** (`components/tui/tui.c:241` `tui_draw_box`, `components/tui/tui.c:296` `tui_draw_line`, `components/tui/tui.c:312` `tui_fill`, `components/tui/tui.c:201` `tui_print_at`): `tui_draw_box` honors `single`/`double`/`rounded` via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`TR`/`BL`/`BR`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) and optional centered title; `tui_draw_line` honors `single`/`double`/`heavy`; interior cleared; all via `tui_cell_set`.
 - **Flush / color** (`components/tui/tui.c:620` `tui_flush`): coalesces cells by fg, emits `#RRGGBB ` prefix per fg run using `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate palette), wraps run UTF-8 and `#` suffix, rows joined by `\n`, set via `lv_label_set_text` on `s_tui_label` (`lv_label_set_recolor true`) under `lvgl_port_lock`. Default fg 16 emits no tag. `tui_set_default_color` (`components/tui/tui.c:324`) backs `color`; `tui_set_cursor` (`components/tui/tui.c:160`) backs `locate`.
-- **Live region mapping**: TUI uses its own `s_tui_container`/`s_tui_label` inside `windows_enter_tui_mode()`/`windows_exit_tui_mode()` (`components/windows/windows.c:298`) sized to the live transcript region `1024x510` (via `tui status`), resizes with rotation and on-screen-keyboard show/hide via `windows_refresh_tui_surface`/`windows_notify_keyboard_visibility` (`components/windows/windows.c:312`). Logical grid `80×25` clamped; pixel rect follows the transcript (`P4_CONFIG_TUI_*` maps to it, not to a fixed screen size). Header kept visible by default; `tui_enter_fullscreen`/`tui_exit_fullscreen` (`components/tui/tui.c:417`) call `windows_set_fullscreen`/`header_set_visible` (`components/windows/windows.c:418`) to hide header completely when fullscreen. `tui status` reports rect `1024x510`, cols/rows `80x25`, fullscreen, font.
+- **Live region mapping**: TUI uses its own `s_tui_container`/`s_tui_label` inside `windows_enter_tui_mode()`/`windows_exit_tui_mode()` (`components/windows/windows.c`). The transcript container is an **app surface** (see "App surfaces" below): the window manager pins it to the surface origin, drops its padding, suppresses transcript follow-to-bottom and auto-hides the on-screen keyboard while the app owns it. `tui_apply_layout()` (`components/tui/tui.c`) maps the logical `80x25` grid onto the live transcript region by picking the largest committed cell font that fits (`components/tui/tui_fonts.c`, generated by `tools/gen_tui_font.py`: 12x24 for fullscreen, 12x20 windowed, plus 10x16/8x12/8x8 fallbacks), sizing the label to the exact grid and centring it; it re-runs on keyboard show/hide, fullscreen and rotation via the window manager's surface-layout callback. Header kept visible by default; `tui_enter_fullscreen`/`tui_exit_fullscreen` (`components/tui/tui.c`) call `windows_set_fullscreen`/`header_set_visible` to hide the header completely when fullscreen. `tui status` reports rect `1024x510`, cols/rows `80x25`, fullscreen, font.
 - **Fullscreen**: global `draw fullscreen on|off` and per-app `tui fullscreen on|off` both route to `tui_enter_fullscreen`/`tui_exit_fullscreen`; `windows_is_fullscreen()` guards state. Keyboard scaling remains dynamic via `windows_notify_keyboard_visibility` even when header is hidden.
 - **Prompt**: all inputs honor `shell_prompt_render_plain()` (`components/shell/shell.c:412`): `main.c:112` input line echo `SHELL_PROMPT` → `shell_prompt_render_plain()`, `modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea` (`components/keyboard/keyboard.c:88`), shell echo situational color (`SH_PROMPT`). `PROMPT=` template (`$p $g` etc) renders everywhere.
-- **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, cmaps 3, no duplication (previously the `-r` range duplicated the two blocks). `windows_get_terminal_font()` returns this font for the TUI label.
+- **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, cmaps 3, no duplication (previously the `-r` range duplicated the two blocks). `windows_get_terminal_font()` returns this font for the shell transcript. The TUI grid does **not** use it: it uses the generated cell fonts in `components/tui/tui_fonts.c` so the logical `80x25` grid scales to the live region (the terminal font is fixed at 16 px and cannot fit 80 columns).
 - **Batch TUI verbs**: `draw box`/`line`/`fill`/`text`/`bar`/`table`/`list`/`image`/`clear`/`window`/`cursor`/`hold`/`alt-screen`/`fullscreen`, `color`, `locate` compose on the cell buffer; the exclusive `gfx` RGB565 canvas (`pixel`/`line`/`rect`/`circle`/`show`/`image`/`load`/`blit`/`save`) and `browse`/`view`/`image`/`hexview` round out the surfaces. `draw table`/`draw list` add cursor + selection rows. `browse`/`view`/`hexview` are native pagers on the shared modal runtime (`components/modal/modal_surf.c`). `draw` auto-enters TUI (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) when no TUI/modal surface is active. Alt-screen `ESC[?1049h/l` save/restore is honoured when `P4_CONFIG_TUI_ALT_SCREEN` is set (`components/tui/tui.c:327`).
 - **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`): `tui status` shows transcript rect, `grab_screenshot.py` crops to it for pixel-perfect TUI verification (used during hardware bug hunting alongside `windows_debug_editor_layout`).
 - **Essential features implemented**: window stack (nested `tui_draw_box` with title), fullscreen (global + per-app header hide), color (`tui_flush` per-fg recolor), prompt (unified `shell_prompt_render_plain`), screenshot debug; hardware tested without overlap (header kept unless fullscreen, TUI does not overlap shell text), no watchdog, no abort.
 - Surfaces render into the dedicated TUI container and restore on `tui_deinit`/`windows_exit_tui_mode`.
+
+#### App surfaces (foreground TUI + gfx viewport)
+
+A foreground batch app (the TUI cell buffer or the `gfx` RGB565 canvas) owns the transcript region through the window-manager **app surface** API (`components/windows/windows.h`: `windows_enter_app_surface()` / `windows_exit_app_surface()` / `windows_get_app_viewport()` / `windows_set_surface_layout_cb()` / `windows_refresh_app_surface()`):
+
+- **Placement**: the transcript container is scrollable and normally parked at the bottom of the scrollback, which draws any child above the viewport. Entering the app surface pins the container to the surface origin, drops its padding and suppresses transcript follow-to-bottom (`windows.c`) so the app is visible immediately (V9). Leaving it restores the shell surface.
+- **Keyboard**: the on-screen keyboard is auto-hidden on entry and restored on exit if it was visible, so the app gets the full region; showing it again re-runs the surface layout (V9).
+- **Scaling**: the surface registers a layout callback that re-maps it to `windows_get_app_viewport()` on every keyboard/fullscreen/rotation change. The TUI re-maps its `80x25` grid to the region (cell fonts, above); the `gfx` canvas is scaled with a uniform "contain" `lv_image_set_scale` and centred (V10).
+- **Rotation**: the display rebuild path (`main.c` `shell_build_ui`) calls `command_close_foreground_surfaces()` after `shell_request_abort()`, so an open app is closed gracefully (with a shell errorlevel) instead of being destroyed underneath its owner; the UI then rebuilds at the new resolution.
 
 ### Editor Module (components/editor)
 
@@ -1198,3 +1216,26 @@ small and free of private-state access.
 - **Configurability:** all limits and names in p4minishell_config.h
   (P4_CONFIG_BOOT_*), documented in p4minishell_config.yaml under
   boot_scripting.
+
+## Testing and frame metrics
+
+- **Frame pacing.** The pure `gfx_frame_stats_t` core in `components/gfx`
+  (`gfx_frame_stats_reset/sample/set_target_fps/avg_us/jitter_us/fps/format`)
+  is the one timing implementation. Both present points sample it:
+  `gfx show` (`components/command/gfx_commands.c`) and `tui_flush`
+  (`components/tui/tui.c`). `gfx stats` / `tui stats` render the shared
+  integer-only line parsed by `tools/p4test/perf.py`. There is no second
+  timing path and no floating point in the firmware report (newlib-nano).
+- **Host test framework.** `tools/p4test/` owns the serial session
+  (`session.DeviceSession`), assertions (`asserts.Checklist`), streaming
+  screenshots (`screenshot.capture` + a `Bmp` pixel model), SD transfers
+  (`sdbridge`), performance helpers (`perf`), the `device.Device` facade, and
+  the suite `runner`. Hardware suites live in `tools/suites/` and run with
+  `tools/p4test_run.py`. The destructive reset/format paths drive the EXISTING
+  firmware `config factory` and `format` commands; nothing is duplicated on the
+  host.
+- **Autonomous dogfooding.** `tools/dogfood.py` + `tools/p4test/agent.py` run a
+  seedable policy that exercises the shell, files, apps, modals and animation
+  surfaces, screenshots every action, and journals anomalies (panic, timeout,
+  blue DSI-underrun frame, blank frame, static streak, heap decline) plus a
+  Markdown report under `screenshots/dogfood/<run>/`.

@@ -2025,6 +2025,24 @@ static void shell_print_http_body(const uint8_t *body, size_t size)
  * COMMAND DISPATCH
  * ======================================================================== */
 
+/** True when a trimmed line is a comment (`rem ...` or `:: ...`).
+ *
+ * cmd.exe comments are opaque to end of line: the rest must not be expanded,
+ * chained (`&`), piped (`|`) or redirected (`<`/`>`). Comments are therefore
+ * recognised before the chain/pipeline/redirection parsers ever see the text,
+ * which is why this check lives at both command entry points. */
+static bool shell_comment_line(const char *trimmed)
+{
+    if (trimmed == NULL) {
+        return false;
+    }
+    if (trimmed[0] == ':' && trimmed[1] == ':') {
+        return true;
+    }
+    return strncasecmp(trimmed, "rem", 3) == 0 &&
+           (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]));
+}
+
 bool shell_execute_command_core(char *command)
 {
     char *argv[SHELL_ARGV_MAX];
@@ -2044,6 +2062,11 @@ bool shell_execute_command_core(char *command)
     trimmed = shell_trim(command);
     if (trimmed[0] == '\0') {
         return false;
+    }
+
+    /* `rem` and `::` are comments through end of line (opaque, like cmd.exe). */
+    if (shell_comment_line(trimmed)) {
+        return true;
     }
 
     /* A device passcode lock gates the dispatcher. The first token decides
@@ -2588,10 +2611,7 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "browse")) {
-        bool has_v = false;
-        for (int i = 1; i < argc; i++) if (strncasecmp(argv[i], "/v:", 3) == 0) has_v = true;
-        if (has_v) shell_command_browse_batch(argc, argv);
-        else shell_command_browse(argc, argv);
+        shell_command_browse(argc, argv);
         return true;
     }
 
@@ -2740,6 +2760,22 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "goto")) {
         shell_command_goto(argc, argv);
+        return true;
+    }
+
+    /* BASIC-named jump/return/dispatch siblings of goto/call (additive). */
+    if (shell_text_equals_ignore_case(argv[0], "gosub")) {
+        shell_command_gosub(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "return")) {
+        shell_command_return(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "on")) {
+        shell_command_on(argc, argv);
         return true;
     }
 
@@ -3479,6 +3515,12 @@ void shell_execute_command(char *command)
         return;
     }
 
+    /* A comment swallows the whole line before alias expansion, chain
+     * splitting (`&`), pipes and redirection: `rem x > y | z` must do nothing. */
+    if (shell_comment_line(shell_trim(command))) {
+        return;
+    }
+
     /* Reclaim internal heap from the transcript scrollback when the internal
      * heap runs low, before this command prints anything. Without this the
      * accumulated LVGL span overhead can starve the heap until a tiny stdio
@@ -3565,8 +3607,9 @@ void shell_execute_command(char *command)
  *  command does not reserve 16 KB of internal RAM inside the queue. */
 /** Tear down any foreground surface an aborted command left open (gfx canvas,
  *  TUI, full-screen app mode) so the shell prompt becomes visible again after a
- *  Stop / Ctrl+C. Idempotent; safe when nothing is open. */
-static void command_cleanup_foreground_surfaces(void)
+ *  Stop / Ctrl+C or a display rotation rebuild. Idempotent; safe when nothing
+ *  is open. */
+void command_close_foreground_surfaces(void)
 {
     gfx_force_close();
     if (tui_is_active()) {
@@ -3597,7 +3640,7 @@ static void command_worker_task(void *arg)
             /* A foreground break that stopped the command may have left a gfx
              * canvas / TUI / app mode open; close it so the prompt returns. */
             if (shell_foreground_break_pending()) {
-                command_cleanup_foreground_surfaces();
+                command_close_foreground_surfaces();
                 shell_clear_foreground_break();
             }
 #if P4_CONFIG_SD_OP_BOOST

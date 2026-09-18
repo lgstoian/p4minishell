@@ -12,7 +12,9 @@
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
+#include "tui_fonts.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include <string.h>
@@ -39,6 +41,27 @@ static uint8_t s_def_bg = 16;
 static lv_obj_t *s_tui_label = NULL;
 static lv_obj_t *s_tui_container = NULL;
 
+/* Frame pacing for TUI apps: each tui_flush is a present (the batch apps
+ * flush once per drawn frame via `draw refresh`). Shared pure stats core
+ * from components/gfx; formatted by `tui stats`. */
+static gfx_frame_stats_t s_tui_stats;
+
+void tui_frame_stats_reset(void)
+{
+    gfx_frame_stats_reset(&s_tui_stats);
+    gfx_frame_stats_set_target_fps(&s_tui_stats, P4_CONFIG_TUI_TARGET_FPS);
+}
+
+void tui_frame_stats_set_target_fps(uint32_t fps)
+{
+    gfx_frame_stats_set_target_fps(&s_tui_stats, fps);
+}
+
+const gfx_frame_stats_t *tui_frame_stats_get(void)
+{
+    return &s_tui_stats;
+}
+
 static inline tui_cell_t *cell_at(int row, int col)
 {
     if (row < 1) row = 1;
@@ -55,6 +78,58 @@ static void tui_alloc_cells(void)
     s_cells = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
     if (!s_cells) s_cells = malloc(bytes);
     if (s_cells) memset(s_cells, 0, bytes);
+}
+
+/**
+ * Map the logical 80x25 grid onto the live transcript region.
+ *
+ * Picks the largest committed cell font that fits (so the grid never wraps or
+ * clips), sizes the label to the exact grid, and centers it. Registered as the
+ * window manager's app-surface layout callback, so it re-runs on keyboard
+ * visibility, fullscreen and rotation changes. Must run under the LVGL port
+ * lock.
+ */
+static void tui_apply_layout(void)
+{
+    lv_coord_t cw;
+    lv_coord_t ch;
+    const tui_font_cell_t *best = NULL;
+    lv_coord_t gw;
+    lv_coord_t gh;
+
+    if (s_tui_label == NULL || s_tui_container == NULL || s_cols <= 0 || s_rows <= 0) {
+        return;
+    }
+    cw = lv_obj_get_content_width(s_tui_container);
+    ch = lv_obj_get_content_height(s_tui_container);
+    if (cw <= 0 || ch <= 0) {
+        window_rect_t vp = windows_get_app_viewport();
+        cw = vp.width;
+        ch = vp.height;
+    }
+    for (int i = 0; i < tui_font_cell_count; i++) {
+        const tui_font_cell_t *c = &tui_font_cells[i];
+        if ((int64_t)c->cell_w * s_cols > cw || (int64_t)c->cell_h * s_rows > ch) {
+            continue;
+        }
+        if (best == NULL ||
+            (int64_t)c->cell_w * c->cell_h > (int64_t)best->cell_w * best->cell_h) {
+            best = c;
+        }
+    }
+    if (best == NULL) {
+        best = &tui_font_cells[tui_font_cell_count - 1]; /* smallest fallback */
+    }
+    gw = (lv_coord_t)(best->cell_w * s_cols);
+    gh = (lv_coord_t)(best->cell_h * s_rows);
+    lv_obj_set_style_text_font(s_tui_label, best->font, 0);
+    lv_obj_set_style_text_letter_space(s_tui_label, 0, 0);
+    lv_obj_set_style_text_line_space(s_tui_label, 0, 0);
+    lv_obj_set_size(s_tui_label, gw, gh);
+    lv_obj_set_pos(s_tui_label, (cw - gw) / 2, (ch - gh) / 2);
+    lv_obj_update_layout(s_tui_label);
+    ESP_LOGD(TUI_TAG, "tui layout: cell %dx%d grid %dx%d in %dx%d",
+             best->cell_w, best->cell_h, (int)gw, (int)gh, (int)cw, (int)ch);
 }
 
 bool tui_init(void)
@@ -81,15 +156,19 @@ bool tui_init(void)
     }
     s_tui_container = surf;
     s_tui_label = lv_label_create(surf);
-    lv_obj_set_width(s_tui_label, LV_PCT(100));
-    lv_obj_set_height(s_tui_label, LV_PCT(100));
-    lv_obj_set_style_text_font(s_tui_label, windows_get_terminal_font(), 0);
     lv_obj_set_style_bg_opa(s_tui_label, LV_OPA_TRANSP, 0);
     lv_label_set_recolor(s_tui_label, true);
-    lv_label_set_long_mode(s_tui_label, LV_LABEL_LONG_WRAP);
+    /* CLIP, never WRAP: each grid row must stay exactly one visual line. The
+     * cell is chosen to fit, so nothing overflows; WRAP was what split an
+     * 80-column row and produced the doubled border (V5). */
+    lv_label_set_long_mode(s_tui_label, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_pad_all(s_tui_label, 0, 0);
+    tui_apply_layout();
+    /* Re-map the grid when the viewport changes (keyboard, fullscreen). */
+    windows_set_surface_layout_cb(tui_apply_layout);
     lvgl_port_unlock();
     s_active = true;
+    tui_frame_stats_reset();
     tui_clear();
     tui_flush();
     return true;
@@ -104,7 +183,7 @@ void tui_refresh_fonts(void)
     if (!lvgl_port_lock(0)) {
         return;
     }
-    lv_obj_set_style_text_font(s_tui_label, windows_get_terminal_font(), 0);
+    tui_apply_layout();
     lvgl_port_unlock();
 }
 
@@ -112,6 +191,7 @@ void tui_deinit(void)
 {
     if (!s_active) return;
     lvgl_port_lock(0);
+    windows_set_surface_layout_cb(NULL);
     if (s_tui_label) { lv_obj_del(s_tui_label); s_tui_label = NULL; }
     windows_exit_tui_mode();
     s_tui_container = NULL;
@@ -775,6 +855,8 @@ void tui_flush(void)
     lv_label_set_text(s_tui_label, buf);
     lvgl_port_unlock();
     heap_caps_free(buf);
+    /* Present point for the TUI frame-pacing stats (`tui stats`). */
+    gfx_frame_stats_sample(&s_tui_stats, (uint64_t)esp_timer_get_time());
 }
 
 void tui_refresh_surface(void)

@@ -54,6 +54,7 @@ typedef struct {
     lv_obj_t *obj;
     uint32_t btn_id;      /* UINT32_MAX unless a buttonmatrix key */
     lv_area_t area;       /* absolute coordinates */
+    bool clipped;         /* extends outside an ancestor's bounds */
     char name[48];
 } ui_target_t;
 
@@ -113,6 +114,26 @@ static void ui_out_raw(const char *format, ...)
  * TARGET ENUMERATION
  * ======================================================================== */
 
+/** True when @p area (absolute) extends outside any ancestor's bounds, i.e.
+ *  the widget is clipped and cannot actually be seen/tapped there. A scroll
+ *  list's off-view rows are clipped this way, so the host harness can tell them
+ *  apart from a genuinely mis-placed control. */
+static bool ui_target_clipped(lv_obj_t *obj, const lv_area_t *area)
+{
+    lv_obj_t *parent = lv_obj_get_parent(obj);
+
+    while (parent != NULL) {
+        lv_area_t pa;
+        lv_obj_get_coords(parent, &pa);
+        if (area->x1 < pa.x1 || area->y1 < pa.y1 ||
+            area->x2 > pa.x2 || area->y2 > pa.y2) {
+            return true;
+        }
+        parent = lv_obj_get_parent(parent);
+    }
+    return false;
+}
+
 static void ui_target_add(lv_obj_t *obj, uint32_t btn_id, const lv_area_t *area,
                           const char *name)
 {
@@ -125,6 +146,7 @@ static void ui_target_add(lv_obj_t *obj, uint32_t btn_id, const lv_area_t *area,
     t->obj = obj;
     t->btn_id = btn_id;
     t->area = *area;
+    t->clipped = ui_target_clipped(obj, area);
     snprintf(t->name, sizeof(t->name), "%s", (name != NULL) ? name : "?");
 }
 
@@ -298,12 +320,13 @@ static int ui_cmd_targets(bool bare, const char *var)
     }
     for (i = 0; i < s_target_count; i++) {
         const ui_target_t *t = &s_targets[i];
-        /* Name last: it can contain spaces (e.g. list rows "1. one"). */
-        ui_out_raw("%d %d %d %d %d %s\n", i,
+        /* Name last: it can contain spaces (e.g. list rows "1. one"). A
+         * trailing " [C]" marks a clipped (not visible/tappable) target. */
+        ui_out_raw("%d %d %d %d %d %s%s\n", i,
                    (int)t->area.x1, (int)t->area.y1,
                    (int)(t->area.x2 - t->area.x1 + 1),
                    (int)(t->area.y2 - t->area.y1 + 1),
-                   t->name);
+                   t->name, t->clipped ? " [C]" : "");
     }
     if (var != NULL) {
         char buf[16];

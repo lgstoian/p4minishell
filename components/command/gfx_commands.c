@@ -32,11 +32,20 @@
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
 
 static gfx_surface_t s_gfx = {NULL, 0, 0};
 static lv_obj_t *s_gfx_canvas = NULL;
+
+/* Frame pacing for the active canvas app: `gfx show` is the app's present
+ * point, so the interval between consecutive shows is the app-driven frame
+ * time. Exposed through `gfx stats` and parsed by tools/p4test/perf.py. */
+static gfx_frame_stats_t s_gfx_stats;
+#define GFX_DEFAULT_TARGET_FPS 30u
+
+#define GFX_STATS_FIELDS 160
 
 /* Sprite bank: PSRAM RGB565 slots for `gfx load/blit` (SNES-class 16-bit
  * assets, at most GFX_SPR_SLOTS x GFX_SPR_MAX x GFX_SPR_MAX). Zero-init:
@@ -114,15 +123,12 @@ gfx_surface_t *gfx_canvas_surface(void)
 static void gfx_teardown(void)
 {
     if (lvgl_port_lock(0)) {
-        lv_obj_t *spans = windows_get_transcript_spans();
-
+        windows_set_surface_layout_cb(NULL);
         if (s_gfx_canvas != NULL) {
             lv_obj_del(s_gfx_canvas);
             s_gfx_canvas = NULL;
         }
-        if (spans != NULL) {
-            lv_obj_remove_flag(spans, LV_OBJ_FLAG_HIDDEN);
-        }
+        windows_exit_app_surface();
         lvgl_port_unlock();
     } else if (s_gfx_canvas != NULL) {
         /* Lock failed: drop the buffer now; the canvas object leaks one
@@ -132,6 +138,44 @@ static void gfx_teardown(void)
     }
     gfx_surface_free(&s_gfx);
     gfx_sprites_free_all();
+}
+
+/**
+ * Fit the canvas to the app viewport. Uniform "contain" scale (aspect
+ * preserved, antialias off for crisp pixels), centered in the transcript
+ * region. Registered as the window manager's app-surface layout callback so it
+ * re-runs on keyboard/fullscreen changes. Must run under the LVGL port lock.
+ */
+static void gfx_relayout(void)
+{
+    window_rect_t vp;
+    uint32_t scale_x;
+    uint32_t scale_y;
+    uint32_t scale;
+
+    if (s_gfx_canvas == NULL || s_gfx.w <= 0 || s_gfx.h <= 0) {
+        return;
+    }
+    vp = windows_get_app_viewport();
+    if (vp.width <= 0 || vp.height <= 0) {
+        return;
+    }
+    /* Scale is in 1/256 units; >256 upscales. */
+    scale_x = (uint32_t)((int64_t)vp.width * 256 / s_gfx.w);
+    scale_y = (uint32_t)((int64_t)vp.height * 256 / s_gfx.h);
+    scale = (scale_x < scale_y) ? scale_x : scale_y;
+    if (scale < 1) {
+        scale = 1;
+    }
+    lv_image_set_pivot(s_gfx_canvas, s_gfx.w / 2, s_gfx.h / 2);
+    lv_image_set_antialias(s_gfx_canvas, false);
+    lv_image_set_scale(s_gfx_canvas, scale);
+    /* Position the NATIVE box centred; the scale is symmetric about its
+     * centre pivot, so the scaled image lands centred in the viewport. */
+    lv_obj_set_pos(s_gfx_canvas,
+                   (vp.width - s_gfx.w) / 2,
+                   (vp.height - s_gfx.h) / 2);
+    lv_obj_invalidate(s_gfx_canvas);
 }
 
 void gfx_force_close(void)
@@ -146,7 +190,7 @@ bool shell_command_gfx(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "gfx: missing subcommand\n" SH_RST);
-        shell_transcript_appendf_ansi("Usage: gfx init|close|status|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|free|slots|save <args>\n");
+        shell_transcript_appendf_ansi("Usage: gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|free|slots|save <args>\n");
         batch_set_errorlevel(2);
         return false;
     }
@@ -155,7 +199,6 @@ bool shell_command_gfx(int argc, char **argv)
         int w;
         int h;
         lv_obj_t *parent;
-        lv_obj_t *spans;
 
         if (!gfx_require_foreground()) return false;
         if (s_gfx.px != NULL) {
@@ -182,14 +225,15 @@ bool shell_command_gfx(int argc, char **argv)
             return false;
         }
         gfx_surface_clear(&s_gfx, 0x0000);
+        gfx_frame_stats_reset(&s_gfx_stats);
+        gfx_frame_stats_set_target_fps(&s_gfx_stats, GFX_DEFAULT_TARGET_FPS);
         if (!lvgl_port_lock(0)) {
             gfx_surface_free(&s_gfx);
             shell_transcript_appendf_ansi(SH_ERR "gfx init: could not acquire LVGL lock\n" SH_RST);
             batch_set_errorlevel(1);
             return false;
         }
-        parent = windows_get_transcript();
-        spans = windows_get_transcript_spans();
+        parent = windows_enter_app_surface();
         if (parent == NULL) {
             lvgl_port_unlock();
             gfx_surface_free(&s_gfx);
@@ -197,12 +241,13 @@ bool shell_command_gfx(int argc, char **argv)
             batch_set_errorlevel(1);
             return false;
         }
-        if (spans != NULL) lv_obj_add_flag(spans, LV_OBJ_FLAG_HIDDEN);
         s_gfx_canvas = lv_canvas_create(parent);
         lv_canvas_set_buffer(s_gfx_canvas, s_gfx.px, s_gfx.w, s_gfx.h,
                              LV_COLOR_FORMAT_RGB565);
-        lv_obj_center(s_gfx_canvas);
-        lv_obj_invalidate(s_gfx_canvas);
+        /* Fit the canvas to the live viewport; the callback re-runs on
+         * keyboard/fullscreen changes. */
+        windows_set_surface_layout_cb(gfx_relayout);
+        gfx_relayout();
         lvgl_port_unlock();
         shell_transcript_appendf("gfx: canvas %dx%d (%u KB PSRAM)\n", w, h,
                                  (unsigned)(((uint32_t)w * (uint32_t)h * 2u) / 1024u));
@@ -253,6 +298,35 @@ bool shell_command_gfx(int argc, char **argv)
          * redrawn every few frames and the motion looks jerky. */
         lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL);
         lvgl_port_unlock();
+        /* Present point for frame pacing (`gfx stats`). */
+        gfx_frame_stats_sample(&s_gfx_stats, (uint64_t)esp_timer_get_time());
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "stats")) {
+        /* gfx stats [reset|target <fps|off>] - frame pacing for the loop. */
+        if (argc >= 3 && shell_text_equals_ignore_case(argv[2], "reset")) {
+            gfx_frame_stats_reset(&s_gfx_stats);
+            gfx_frame_stats_set_target_fps(&s_gfx_stats, GFX_DEFAULT_TARGET_FPS);
+            shell_print_ok("gfx stats: reset");
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (argc >= 4 && shell_text_equals_ignore_case(argv[2], "target")) {
+            uint32_t fps = (shell_text_equals_ignore_case(argv[3], "off") ||
+                            shell_text_equals_ignore_case(argv[3], "0"))
+                           ? 0u : (uint32_t)atoi(argv[3]);
+            gfx_frame_stats_set_target_fps(&s_gfx_stats, fps);
+            shell_transcript_appendf("gfx stats: target %u fps\n", (unsigned)fps);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        {
+            char fields[GFX_STATS_FIELDS];
+            gfx_frame_stats_format(&s_gfx_stats, fields, sizeof(fields));
+            shell_transcript_appendf("gfx stats: %s\n", fields);
+        }
         batch_set_errorlevel(0);
         return true;
     }

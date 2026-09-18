@@ -52,6 +52,8 @@ goto loop
 :done
 rem Capture the final frame once, off the animation loop.
 screenshot BOUNCE.BMP
+rem Report frame pacing from the canvas stats (frames/min/avg/max/jitter).
+gfx stats
 gfx close
 echo [M-BOUNCE-DONE] frames=%n%
 goto end

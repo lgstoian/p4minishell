@@ -1,0 +1,24 @@
+obj
+W
+W
+BT
+U
+S
+!
+M N.NM
+M N.NM
+N%
+N/C
+#cccccc ╒═══════
+PalmTop
+obj
+N. Calculator + conversions
+N. Stopwatch
+N. CSV sheet (=EXPR)
+N. Encrypt a note
+N. Bind an F-key
+N. TCP probe
+N. Back
+obj
+Cancel
+Text

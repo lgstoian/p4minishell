@@ -263,26 +263,6 @@ uint32_t keyboard_effective_capabilities(void)
     return context | requested;
 }
 
-/** Find the index of the first button whose label equals @p label, or -1. */
-static int keyboard_find_button(const char *label)
-{
-    uint32_t id;
-
-    if (s_keyboard.widget == NULL || label == NULL) {
-        return -1;
-    }
-    for (id = 0; id < 128; id++) {
-        const char *text = lv_buttonmatrix_get_button_text(s_keyboard.widget, id);
-        if (text == NULL) {
-            break;
-        }
-        if (strcmp(text, label) == 0) {
-            return (int)id;
-        }
-    }
-    return -1;
-}
-
 /** Apply capability availability to every capability-governed key on the
  *  current page. Assumes the caller holds the LVGL port lock. */
 static void keyboard_apply_capabilities_locked(void)
@@ -356,25 +336,20 @@ void keyboard_request_capability(uint32_t caps, bool on)
 
 keyboard_nav_key_state_t keyboard_nav_key_state(void)
 {
-    int id;
-    bool disabled;
+    uint32_t caps;
 
     if (s_keyboard.widget == NULL) {
         return KEYBOARD_NAV_KEY_ABSENT;
     }
-    if (!lvgl_port_lock(0)) {
-        return KEYBOARD_NAV_KEY_ABSENT;
-    }
-    id = keyboard_find_button("Nav");
-    if (id < 0) {
-        lvgl_port_unlock();
-        return KEYBOARD_NAV_KEY_ABSENT;
-    }
-    disabled = lv_buttonmatrix_has_button_ctrl(s_keyboard.widget, (uint32_t)id,
-                                               LV_BUTTONMATRIX_CTRL_DISABLED);
-    lvgl_port_unlock();
 
-    return disabled ? KEYBOARD_NAV_KEY_DISABLED : KEYBOARD_NAV_KEY_ENABLED;
+    /* Report the Nav CAPABILITY, not the current page's button: the editor
+     * shows the navigation page (which has no "Nav" button) exactly when the
+     * capability is granted, so a page-local lookup would always read "na".
+     * The capability is what `ui state`/tests assert in shell vs editor
+     * context, and it matches `keyboard nav`. */
+    caps = keyboard_effective_capabilities();
+    return (caps & KEYBOARD_CAP_NAV) ? KEYBOARD_NAV_KEY_ENABLED
+                                     : KEYBOARD_NAV_KEY_DISABLED;
 }
 
 /* ========================================================================

@@ -1488,6 +1488,9 @@ int shell_command_findstr(int argc, char **argv)
     const char *bare_string = NULL;
     int nfiles = 0;
     bool have_filelist = false;   /* /F: entries are strdup'd and owned */
+    /* True once /C: or /G: has supplied the search string(s). Then the first
+     * bare token is a FILE, not the search string (DOS findstr semantics). */
+    bool option_search = false;
     int total_matches = 0;
     int index;
     int rc = 1;
@@ -1500,6 +1503,7 @@ int shell_command_findstr(int argc, char **argv)
 
         if (token[0] == '/') {
             if (strncasecmp(token, "/C:", 3) == 0) {
+                option_search = true;
                 if (!shell_findstr_add_string(&opts, token + 3, false)) {
                     return 2;
                 }
@@ -1510,6 +1514,7 @@ int shell_command_findstr(int argc, char **argv)
                 continue;
             }
             if (strncasecmp(token, "/G:", 3) == 0) {
+                option_search = true;
                 opts.strings_arg = token + 3;
                 continue;
             }
@@ -1537,8 +1542,9 @@ int shell_command_findstr(int argc, char **argv)
         }
 
         /* The first bare token is the single search string; any further bare
-         * tokens are files, matching DOS findstr. */
-        if (bare_string == NULL) {
+         * tokens are files, matching DOS findstr. When /C: or /G: already
+         * supplied the search, EVERY bare token is a file. */
+        if (!option_search && bare_string == NULL) {
             bare_string = token;
         } else if (nfiles < (int)(sizeof(files) / sizeof(files[0]))) {
             files[nfiles++] = token;

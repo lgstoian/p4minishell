@@ -419,6 +419,42 @@ void windows_set_fullscreen(bool fullscreen);
 /** Report whether fullscreen TUI is active. */
 bool windows_is_fullscreen(void);
 
+/* ========================================================================
+ * APP SURFACE (foreground TUI cell buffer / gfx canvas)
+ * ========================================================================
+ * A foreground batch app (the TUI cell buffer or the gfx RGB565 canvas) owns
+ * the transcript region. Entering the state hides the transcript text,
+ * auto-hides the on-screen keyboard (restored on exit), suppresses the
+ * transcript follow-to-bottom so the scrollback cannot drag the surface
+ * off-screen, and pins the container to the surface origin. The surface fills
+ * windows_get_app_viewport() and re-maps its cells/scale on every keyboard,
+ * fullscreen or rotation change.
+ */
+
+/** The viewport an app surface must fill (the live transcript region, which
+ * already accounts for header, input row, keyboard visibility and rotation). */
+window_rect_t windows_get_app_viewport(void);
+
+/** True while an app surface (TUI cell buffer or gfx canvas) owns the
+ * transcript region. */
+bool windows_app_surface_active(void);
+
+/** Enter the app-surface state. Returns the transcript container to host the
+ * surface, or NULL. Must run on the LVGL task. */
+lv_obj_t *windows_enter_app_surface(void);
+
+/** Leave the app-surface state and restore the shell surface. LVGL task. */
+void windows_exit_app_surface(void);
+
+/** Re-apply the active surface's registered layout and re-pin the container.
+ * Called automatically on keyboard-visibility and fullscreen changes. LVGL
+ * task. */
+void windows_refresh_app_surface(void);
+
+/** Register the active surface's relayout callback (the TUI cell metrics or
+ * the gfx scale). Pass NULL when the surface is destroyed. */
+void windows_set_surface_layout_cb(void (*cb)(void));
+
 #ifdef __cplusplus
 }
 #endif

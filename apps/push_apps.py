@@ -53,6 +53,10 @@ FILES = [
     ("uitest", "UITEST.APPINFO", True),
     ("palmtop", "PALMTOP.BAT", False),
     ("palmtop", "PALMTOP.APPINFO", True),
+    ("diag", "DIAG.BAT", False),
+    ("diag", "DIAG.APPINFO", True),
+    ("controlflow", "CONTROL.BAT", False),
+    ("controlflow", "CONTROL.APPINFO", True),
 ]
 
 

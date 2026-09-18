@@ -1,0 +1,22 @@
+obj
+W
+W
+BT
+U
+S
+!
+M N.NM
+M N.NM
+N%
+N/C
+#cccccc ╒═══════
+Pictures
+obj
+N. View PHOTO.BMP (full color)
+N. Draw into TUI (N color)
+N. Blit to gfx canvas
+N. Image info
+N. Back
+obj
+Cancel
+Text

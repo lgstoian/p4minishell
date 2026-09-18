@@ -1,0 +1,20 @@
+launch CONTROL
+[M-CONTROL]
+CONTROL: start
+n=N
+CONTROL: banner
+CONTROL: branch two
+sum=N
+CONTROL: add N N
+CONTROL: sum N
+out=[hi]
+CONTROL: wrapped [hi]
+CONTROL: tick
+CONTROL: gosub dispatch done
+CONTROL: count N
+next=N
+CONTROL: count N
+next=N
+CONTROL: count N
+next=N
+[M-CONTROL-DONE]

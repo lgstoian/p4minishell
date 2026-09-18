@@ -80,6 +80,15 @@ static struct {
     /* TUI mode: like editor mode but for the TUI cell buffer. */
     bool tui_mode;
     lv_obj_t *tui_surface;
+    /* App surface: a foreground app (TUI cell buffer or gfx canvas) owns the
+     * transcript region. The OSK is auto-hidden (and restored on exit), the
+     * transcript follow-to-bottom is suppressed, and the container is pinned
+     * to the surface origin so the app is visible immediately instead of being
+     * dragged off-screen by the scrollback (V1 class). */
+    bool app_surface_active;
+    bool app_surface_kb_was_visible;
+    lv_coord_t app_surface_saved_pad;
+    void (*app_surface_layout_cb)(void);
     bool fullscreen;
 } s_windows = {
     .initialized = false,
@@ -109,6 +118,10 @@ static struct {
     .app_mode = false,
     .tui_mode = false,
     .tui_surface = NULL,
+    .app_surface_active = false,
+    .app_surface_kb_was_visible = false,
+    .app_surface_saved_pad = 0,
+    .app_surface_layout_cb = NULL,
     .fullscreen = false,
 };
 
@@ -515,6 +528,11 @@ static void windows_create_input_row(void)
     lv_obj_set_height(s_windows.input_line, LV_PCT(100));
     lv_textarea_set_one_line(s_windows.input_line, true);
     lv_textarea_set_cursor_click_pos(s_windows.input_line, false);
+    /* The vertical padding makes the content box a hair shorter than one text
+     * line, so LVGL's AUTO scrollbar mode draws a spurious vertical bar on the
+     * right edge. The input is one line and never scrolls vertically; turn the
+     * scrollbar off (horizontal text scrolling still follows the cursor). */
+    lv_obj_set_scrollbar_mode(s_windows.input_line, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_bg_color(s_windows.input_line,
                                windows_get_color(WINDOWS_COLOR_BG_TRANSCRIPT), 0);
     lv_obj_set_style_bg_opa(s_windows.input_line, LV_OPA_COVER, 0);
@@ -864,9 +882,16 @@ static void windows_transcript_apply(void)
      * earlier history is not yanked down by new output), or when a submitted
      * command requested a forced jump to its output. The force flag is
      * consumed here so it affects only the output of the just-submitted
-     * command. */
-    bool follow_bottom = s_transcript_force_follow ||
-                         lv_obj_get_scroll_bottom(container) < P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX;
+     * command.
+     *
+     * Never follow while a modal surface owns the transcript (editor mode):
+     * the modal panel is pinned at the content origin, and scrolling to the
+     * newest shell output would drag the panel off-screen above the viewport
+     * (V1). The deferred apply can run right after the modal opens, so the
+     * guard must live here, not only at panel creation. */
+    bool follow_bottom = !s_windows.editor_mode && !s_windows.app_surface_active &&
+                         (s_transcript_force_follow ||
+                          lv_obj_get_scroll_bottom(container) < P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX);
     s_transcript_force_follow = false;
 
     new_len = strlen(s_transcript_staged);
@@ -1431,6 +1456,12 @@ void windows_notify_keyboard_visibility(bool visible)
         }
     }
 
+    /* An app surface (TUI/gfx) must re-map its cells/scale to the slot the
+     * keyboard just freed or used. */
+    if (s_windows.app_surface_active) {
+        windows_refresh_app_surface();
+    }
+
     lvgl_port_unlock();
 }
 
@@ -1473,13 +1504,21 @@ void windows_debug_editor_layout(void)
                                : 0;
     lv_coord_t kb_h = keyboard_is_visible() ? keyboard_get_height() : 0;
 
-    /* Logged at warn level (the firmware's default log floor) so the editor
-     * surface geometry is verifiable on the serial console during an edit
-     * session. */
-    ESP_LOGW(WINDOWS_TAG,
-             "editor layout diagnostic: surface h=%d px, transcript region "
-             "h=%d px (y=%d), keyboard h=%d px",
-             (int)surface_h, (int)region.height, (int)region.y, (int)kb_h);
+    /* A healthy layout is the normal case and must not spam the serial log
+     * (the firmware logs at WARN by default). Only a collapsed surface — the
+     * real failure this guards against — is worth a warning; the full geometry
+     * is available at debug level. */
+    if (surface_h < region.height) {
+        ESP_LOGW(WINDOWS_TAG,
+                 "editor layout diagnostic: surface h=%d px, transcript region "
+                 "h=%d px (y=%d), keyboard h=%d px",
+                 (int)surface_h, (int)region.height, (int)region.y, (int)kb_h);
+    } else {
+        ESP_LOGD(WINDOWS_TAG,
+                 "editor layout: surface h=%d px, transcript region h=%d px "
+                 "(y=%d), keyboard h=%d px",
+                 (int)surface_h, (int)region.height, (int)region.y, (int)kb_h);
+    }
 }
 
 /**
@@ -1677,6 +1716,91 @@ void windows_exit_app_mode(void)
 }
 
 /* ========================================================================
+ * APP SURFACE (foreground TUI cell buffer / gfx canvas viewport)
+ * ======================================================================== */
+
+window_rect_t windows_get_app_viewport(void)
+{
+    return windows_get_rect(WINDOW_REGION_TRANSCRIPT);
+}
+
+bool windows_app_surface_active(void)
+{
+    return s_windows.app_surface_active;
+}
+
+void windows_set_surface_layout_cb(void (*cb)(void))
+{
+    s_windows.app_surface_layout_cb = cb;
+}
+
+void windows_refresh_app_surface(void)
+{
+    if (!s_windows.app_surface_active || s_windows.transcript == NULL) {
+        return;
+    }
+    if (s_windows.app_surface_layout_cb != NULL) {
+        s_windows.app_surface_layout_cb();
+    }
+    lv_obj_update_layout(s_windows.transcript);
+    /* Pin the surface to the content origin: the scrollback may be parked at
+     * its bottom, which would draw the app surface above the viewport. */
+    lv_obj_scroll_to_y(s_windows.transcript, 0, LV_ANIM_OFF);
+}
+
+lv_obj_t *windows_enter_app_surface(void)
+{
+    if (s_windows.app_surface_active) {
+        return s_windows.transcript;
+    }
+    if (s_windows.screen == NULL || s_windows.transcript == NULL) {
+        return NULL;
+    }
+    if (s_windows.transcript_spans != NULL) {
+        lv_obj_add_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    }
+    /* Drop the transcript padding so the app surface gets the full region; the
+     * shell transcript keeps its inset when the surface exits. */
+    s_windows.app_surface_saved_pad =
+        lv_obj_get_style_pad_top(s_windows.transcript, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_windows.transcript, 0, LV_PART_MAIN);
+    s_windows.app_surface_active = true;
+    /* Free the ~240 px the on-screen keyboard occupies for the app; restore it
+     * on exit if it was visible. */
+    s_windows.app_surface_kb_was_visible = keyboard_is_visible();
+    if (s_windows.app_surface_kb_was_visible) {
+        keyboard_hide();
+    }
+    windows_apply_stop_visibility();
+    windows_refresh_app_surface();
+    return s_windows.transcript;
+}
+
+void windows_exit_app_surface(void)
+{
+    if (!s_windows.app_surface_active) {
+        return;
+    }
+    s_windows.app_surface_active = false;
+    s_windows.app_surface_layout_cb = NULL;
+    if (s_windows.transcript != NULL) {
+        lv_obj_set_style_pad_all(s_windows.transcript,
+                                 s_windows.app_surface_saved_pad, LV_PART_MAIN);
+    }
+    if (s_windows.transcript_spans != NULL) {
+        lv_obj_remove_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_windows.transcript != NULL) {
+        windows_apply_transcript_height();
+    }
+    if (s_windows.app_surface_kb_was_visible) {
+        keyboard_show();
+        s_windows.app_surface_kb_was_visible = false;
+    }
+    windows_apply_stop_visibility();
+}
+
+/* ========================================================================
  * TUI MODE
  * ======================================================================== */
 
@@ -1685,13 +1809,7 @@ lv_obj_t *windows_enter_tui_mode(void)
     if (s_windows.tui_mode) return s_windows.tui_surface;
     if (s_windows.screen == NULL) return NULL;
     if (s_windows.editor_mode) return NULL;
-    if (s_windows.prev_button) lv_obj_add_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.next_button) lv_obj_add_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.scroll_up_button) lv_obj_add_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.scroll_down_button) lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.tab_button) lv_obj_add_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.input_line) lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.transcript_spans) lv_obj_add_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    if (windows_enter_app_surface() == NULL) return NULL;
     s_windows.tui_surface = s_windows.transcript;
     s_windows.tui_mode = true;
     windows_apply_stop_visibility();
@@ -1703,16 +1821,9 @@ void windows_exit_tui_mode(void)
 {
     if (!s_windows.tui_mode) return;
     s_windows.tui_surface = NULL;
-    if (s_windows.transcript) lv_obj_remove_flag(s_windows.transcript, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.transcript_spans) lv_obj_remove_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.transcript) windows_apply_transcript_height();
-    if (s_windows.prev_button) lv_obj_remove_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.next_button) lv_obj_remove_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.scroll_up_button) lv_obj_remove_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.scroll_down_button) lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.tab_button) lv_obj_remove_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
-    if (s_windows.input_line) lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
     s_windows.tui_mode = false;
+    windows_exit_app_surface();
+    if (s_windows.transcript) lv_obj_remove_flag(s_windows.transcript, LV_OBJ_FLAG_HIDDEN);
     windows_apply_stop_visibility();
 }
 
@@ -1752,6 +1863,7 @@ void windows_set_fullscreen(bool fullscreen)
     }
     if (s_windows.tui_mode) windows_refresh_tui_surface();
     if (s_windows.editor_mode) windows_refresh_editor_surface();
+    if (s_windows.app_surface_active) windows_refresh_app_surface();
 }
 
 bool windows_is_fullscreen(void) { return s_windows.fullscreen; }

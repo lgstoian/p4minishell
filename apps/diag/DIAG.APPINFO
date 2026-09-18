@@ -1,0 +1,5 @@
+; APPINFO metadata for P4 Diagnostics (INI format, read by `launch`).
+; Copied to sd:/APPS/DIAG.APPINFO by apps/push_apps.py.
+title=P4 Diagnostics
+description=System health, capability and frame-rate diagnostics console
+version=1.0

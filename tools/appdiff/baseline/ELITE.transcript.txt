@@ -1,0 +1,11 @@
+launch ELITE
+[M-ELITE]
+credits=N
+sys=N
+cN=N   (xN)
+hull=N
+sname=Lave
+mult=N
+pN=N   (xN)
+[M-ELITE-DOCKED] Lave
+[M-ELITE-DONE]

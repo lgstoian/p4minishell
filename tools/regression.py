@@ -79,7 +79,14 @@ def main():
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             out = (proc.stdout or "") + (proc.stderr or "")
             ok = expect in out
-            detail = "ok" if ok else "missing %r" % expect
+            # A network-dependent driver may legitimately skip when the board
+            # is not associated (`tcpterm_test.py` prints RESULT SKIP); that is
+            # not a firmware failure.
+            if not ok and "RESULT SKIP" in out:
+                ok = True
+                detail = "skipped (prerequisite unavailable)"
+            else:
+                detail = "ok" if ok else "missing %r" % expect
         except subprocess.TimeoutExpired:
             ok = False
             detail = "timeout after %ds" % timeout

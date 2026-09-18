@@ -85,6 +85,27 @@ def panel_blue_metric(frame, roi):
     return blue_dominance, light_blue
 
 
+def auto_roi(frame):
+    """Locate the lit panel: the largest bright region in the frame.
+
+    The camera framing is fixed, so a hardcoded ROI can miss the panel
+    entirely (T2). Detect the brightest large blob instead and return
+    (x0, y0, x1, y1), or None when nothing panel-like is visible.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, 90, 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((21, 21), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+    if w < 80 or h < 60:
+        return None
+    pad = 8
+    return (max(0, x - pad), max(0, y - pad),
+            min(frame.shape[1], x + w + pad), min(frame.shape[0], y + h + pad))
+
+
 class SerialTail(threading.Thread):
     """Read the board console in the background; keep the last lines."""
 
@@ -148,6 +169,8 @@ def main():
     ap.add_argument("--port", default=None, help="serial port (default)")
     ap.add_argument("--duration", type=float, default=120.0, help="seconds to watch")
     ap.add_argument("--roi", default=None, help="x0,y0,x1,y1 panel crop")
+    ap.add_argument("--auto-roi", action="store_true",
+                    help="auto-detect the lit panel instead of the fixed crop")
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
                     help="blue-dominance threshold (mean B - mean R); default 45")
     ap.add_argument("--out", default=OUT_DIR)
@@ -181,6 +204,16 @@ def main():
     # DEFAULT_ROI is expressed on the 1280x720 frame; scale to the real size.
     roi = (int(roi[0] * fw / 1280), int(roi[1] * fh / 720),
            int(roi[2] * fw / 1280), int(roi[3] * fh / 720))
+
+    if args.auto_roi:
+        frame0 = cap.read()[1]
+        found = auto_roi(frame0) if frame0 is not None else None
+        if found is None:
+            print("auto-roi: no lit panel found; keeping roi=%s - re-aim the "
+                  "camera, camera results are inconclusive" % (roi,))
+        else:
+            roi = found
+            print("auto-roi: panel at %s" % (roi,))
 
     if args.preview:
         frame = cap.read()[1]

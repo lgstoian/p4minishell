@@ -12,6 +12,53 @@ repo is `COM3`; pass it explicitly). Scripts with argparse take
 resets on the transition — every driver drops DTR/RTS on open via
 `shell_session.open_port()`; never open raw `serial.Serial` without it.
 
+## Production test framework — `p4test/`
+
+One package replaces the copy-pasted serial loops, BMPX/SDFX readers, and
+ad-hoc PASS/FAIL bookkeeping. Import it; do not reimplement.
+
+- `p4test/session.py` — `DeviceSession`: DTR-safe open, marker-synchronised
+  `run()`, ANSI strip, panic detection, pushback-buffered `read_until` /
+  `read_exact`, `read_binary_frame` (BMPX/SDFX).
+- `p4test/asserts.py` — `Checklist` (named PASS/FAIL checks + table) and
+  `SuiteResult`.
+- `p4test/screenshot.py` — streaming capture + a `Bmp` pixel model
+  (`px`/`region_mean`/`count_near`/`to_image`/`save_png`, `diff_ratio`).
+- `p4test/sdbridge.py` — `push_file`/`push_local`/`pull_file` over the
+  firmware `receive`/`send` channels (CRC-checked).
+- `p4test/perf.py` — `parse_perf_report` (the `gfx stats`/`tui stats` line),
+  `FrameStats` + smoothness score, `measure_markers`.
+- `p4test/device.py` — `Device` facade (boot/run/screenshot/deploy, and the
+  EXISTING destructive `factory_reset`/`format_sd` commands).
+- `p4test/runner.py` + `p4test_run.py` — suite discovery and PASS/FAIL table.
+- `p4test/agent.py` + `dogfood.py` — the autonomous dogfooding agent (below).
+
+Suites live in `tools/suites/` as `sNN_*.py` exposing `NAME`, `TAGS`, and
+`run(dev, ctx)`; they cover smoke, storage, batch, data, display, editor,
+input/UI, connectivity, power/audio, performance and every reference app.
+
+```powershell
+python tools/p4test_run.py COM3                 # run every suite
+python tools/p4test_run.py COM3 --list          # list suites
+python tools/p4test_run.py COM3 --tag core      # subset by tag
+python tools/p4test_run.py COM3 --only s05_storage,s06_batch
+python tools/p4test_run.py COM3 --quick         # shorten soak/boot waits
+```
+
+## Autonomous dogfooding — `dogfood.py`
+
+A seedable policy drives the board like a curious user (help, status, files,
+apps, modals, TUI/canvas animation), captures a screenshot after EVERY action,
+and journals anomalies (panics, timeouts, blue "BSOD" frames, all-black
+frames, static-frame streaks, heap decline) to `screenshots/dogfood/<run>/`
+(a `journal.jsonl`, a `report.md`, and the PNG/BMP proofs). It is
+reproducible from `--seed`.
+
+```powershell
+python tools/dogfood.py COM3 --minutes 15
+python tools/dogfood.py COM3 --minutes 3 --seed 7 --out screenshots/dogfood/run7
+```
+
 ## Files
 
 - `shell_session.py` — shared USB-Serial/JTAG session driver: `Shell`

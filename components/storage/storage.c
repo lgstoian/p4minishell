@@ -1733,9 +1733,49 @@ esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition
     return error;
 }
 
+/**
+ * Pick the FAT allocation unit (cluster) for a format.
+ *
+ * An explicit `/A:` value wins. For the automatic case we must choose it
+ * ourselves: IDF's `esp_vfs_fat_get_allocation_unit_size()` clamps a 0 request
+ * UP to the sector size (512), so FatFs never runs its own auto-selection and
+ * a 29 GiB card ends up with 1-sector clusters — a ~230 MB FAT per copy, and a
+ * synchronous format that blocks the worker for minutes. Scale the cluster with
+ * the volume instead.
+ */
+static uint32_t storage_format_pick_alloc_unit(uint32_t requested, uint64_t volume_bytes)
+{
+    const uint64_t mb = 1024ull * 1024ull;
+    const uint64_t gb = 1024ull * mb;
+    uint32_t alloc;
+
+    if (requested != 0) {
+        alloc = requested;
+    } else if (volume_bytes <= 512ull * mb) {
+        alloc = 4096;
+    } else if (volume_bytes <= 8ull * gb) {
+        alloc = 8192;
+    } else if (volume_bytes <= 16ull * gb) {
+        alloc = 16384;
+    } else if (volume_bytes <= 32ull * gb) {
+        alloc = 32768;
+    } else {
+        alloc = 65536;
+    }
+
+    if (alloc < P4_CONFIG_FORMAT_ALLOC_UNIT_MIN) {
+        alloc = P4_CONFIG_FORMAT_ALLOC_UNIT_MIN;
+    }
+    if (alloc > P4_CONFIG_FORMAT_ALLOC_UNIT_MAX) {
+        alloc = P4_CONFIG_FORMAT_ALLOC_UNIT_MAX;
+    }
+    return alloc;
+}
+
 esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_t *opts)
 {
     esp_vfs_fat_mount_config_t cfg;
+    uint64_t volume_bytes = 0;
     esp_err_t error;
 
     if (opts == NULL) {
@@ -1753,14 +1793,18 @@ esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (bsp_sdcard->csd.sector_size > 0) {
+        volume_bytes = (uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size;
+    }
+
     /* The standard IDF helper unmounts, formats with a size-appropriate FAT
-     * type (FAT12/16 for small volumes, FAT32 for large), and remounts. The
-     * allocation-unit size comes straight from the /A: option; 0 lets FATFS
-     * choose. max_files must match the BSP mount so the remount's VFS
-     * registration is consistent. */
+     * type (FAT12/16 for small volumes, FAT32 for large), and remounts.
+     * max_files must match the BSP mount so the remount's VFS registration is
+     * consistent. */
     cfg.format_if_mount_failed = false;
     cfg.max_files = 8;
-    cfg.allocation_unit_size = opts->alloc_unit_bytes;
+    cfg.allocation_unit_size = storage_format_pick_alloc_unit(opts->alloc_unit_bytes,
+                                                              volume_bytes);
     cfg.disk_status_check_enable = false;
     cfg.use_one_fat = false;
 

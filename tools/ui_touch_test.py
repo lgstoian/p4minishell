@@ -79,9 +79,12 @@ class Ui:
         for ln in out.splitlines():
             m = re.match(r"\s*(\d+)\s+(-?\d+)\s+(-?\d+)\s+(\d+)\s+(\d+)\s+(.*\S)\s*$", ln)
             if m:
+                name = m.group(6)
+                if name.endswith("[C]"):   # firmware clip marker (ui targets)
+                    name = name[:-3].rstrip()
                 items.append({"id": int(m.group(1)), "x": int(m.group(2)),
                               "y": int(m.group(3)), "w": int(m.group(4)),
-                              "h": int(m.group(5)), "name": m.group(6)})
+                              "h": int(m.group(5)), "name": name})
         return items
 
     def tap(self, x, y, wait=1.0):

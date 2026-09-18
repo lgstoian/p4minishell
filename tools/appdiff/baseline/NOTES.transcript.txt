@@ -1,0 +1,6 @@
+launch NOTES
+[M-NOTE]
+del: deleted /sdcard/_zinit.txt permanently
+N
+Unknown command: N
+shell: Unknown command: N

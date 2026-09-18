@@ -10,6 +10,7 @@
 #include "gfx.h"
 #include "esp_heap_caps.h"
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -755,4 +756,89 @@ int gfx_text_width(const char *text, int scale)
     if (text == NULL) return 0;
     if (scale < 1) scale = 1;
     return (int)strlen(text) * GFX_FONT_W * scale;
+}
+
+/*
+ * Frame-present statistics. Pure across the whole struct: no clocks, no
+ * allocation, no LVGL. Callers feed esp_timer_get_time() timestamps from the
+ * gfx/TUI present paths; a target frame rate turns overruns into "dropped".
+ */
+void gfx_frame_stats_reset(gfx_frame_stats_t *s)
+{
+    if (s == NULL) return;
+    memset(s, 0, sizeof(*s));
+}
+
+void gfx_frame_stats_set_target_fps(gfx_frame_stats_t *s, uint32_t fps)
+{
+    if (s == NULL) return;
+    s->target_us = (fps == 0) ? 0u : (1000000u / fps);
+}
+
+void gfx_frame_stats_sample(gfx_frame_stats_t *s, uint64_t now_us)
+{
+    uint64_t interval;
+
+    if (s == NULL) return;
+    if (s->started_us == 0) {
+        s->started_us = now_us;
+        s->last_us = now_us;
+        return;
+    }
+    if (now_us <= s->last_us) {
+        return; /* non-monotonic sample: ignore rather than underflow */
+    }
+    interval = now_us - s->last_us;
+    s->last_us = now_us;
+    if (s->frames == 0 || interval < s->min_us) s->min_us = (uint32_t)interval;
+    if (interval > s->max_us) s->max_us = (uint32_t)interval;
+    s->sum_us += interval;
+    s->sum_sq_us += interval * interval;
+    s->frames++;
+    if (s->target_us != 0 && interval > (uint64_t)s->target_us * 3u / 2u) {
+        s->dropped++;
+    }
+}
+
+uint32_t gfx_frame_stats_avg_us(const gfx_frame_stats_t *s)
+{
+    if (s == NULL || s->frames == 0) return 0;
+    return (uint32_t)(s->sum_us / s->frames);
+}
+
+uint32_t gfx_frame_stats_jitter_us(const gfx_frame_stats_t *s)
+{
+    double mean;
+    double variance;
+
+    if (s == NULL || s->frames < 2) return 0;
+    mean = (double)s->sum_us / (double)s->frames;
+    variance = (double)s->sum_sq_us / (double)s->frames - mean * mean;
+    if (variance <= 0.0) return 0;
+    return (uint32_t)(sqrt(variance) + 0.5);
+}
+
+double gfx_frame_stats_fps(const gfx_frame_stats_t *s)
+{
+    uint32_t avg = gfx_frame_stats_avg_us(s);
+    return (avg == 0) ? 0.0 : (1000000.0 / (double)avg);
+}
+
+int gfx_frame_stats_format(const gfx_frame_stats_t *s, char *out, size_t out_size)
+{
+    unsigned fps10;
+
+    if (out == NULL || out_size == 0) return 0;
+    if (s == NULL) {
+        out[0] = '\0';
+        return 0;
+    }
+    fps10 = (unsigned)(gfx_frame_stats_fps(s) * 10.0 + 0.5);
+    return snprintf(out, out_size,
+                    "frames=%u min_us=%u avg_us=%u max_us=%u jitter_us=%u "
+                    "dropped=%u fps10=%u target_fps=%u",
+                    (unsigned)s->frames, (unsigned)s->min_us,
+                    (unsigned)gfx_frame_stats_avg_us(s), (unsigned)s->max_us,
+                    (unsigned)gfx_frame_stats_jitter_us(s), (unsigned)s->dropped,
+                    fps10, (unsigned)(s->target_us ? 1000000u / s->target_us : 0u));
 }

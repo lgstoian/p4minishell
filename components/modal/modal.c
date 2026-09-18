@@ -196,17 +196,23 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
 
     /* Service events until the surface asks to close. Custom bits are
      * serviced before checking CLOSE_REQUEST so a final save/confirm is not
-     * dropped when the user quits in the same instant. */
+     * dropped when the user quits in the same instant. The wait is bounded so
+     * a foreground break can be polled: an app that never closes its surface
+     * must not be able to wedge the command worker (the request stays set so
+     * the batch line loop still unwinds the script with `^C`). */
     for (;;) {
         bits = xEventGroupWaitBits(event_group,
                                    MODAL_EVENT_CLOSE_REQUEST | MODAL_EVENT_CLOSED | 0x00FFFFFC,
-                                   pdTRUE, pdFALSE, portMAX_DELAY);
+                                   pdTRUE, pdFALSE, pdMS_TO_TICKS(100));
 
-        if (surface->service != NULL) {
+        if (bits != 0 && surface->service != NULL) {
             surface->service(ctx, bits);
         }
 
         if ((bits & MODAL_EVENT_CLOSE_REQUEST) != 0) {
+            break;
+        }
+        if (surface->abort_cancels && shell_abort_requested()) {
             break;
         }
     }

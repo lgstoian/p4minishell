@@ -21,6 +21,7 @@
 #include "theme.h"
 #include "shell.h"
 #include "keyboard.h"
+#include "storage.h"
 #include "p4minishell_config.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
@@ -80,6 +81,7 @@ static void surf_timeout_cb(TimerHandle_t timer)
 static lv_obj_t *surf_create_container(lv_obj_t *parent)
 {
     lv_obj_t *c;
+    lv_coord_t surface_h;
 
     /* Every ready-made modal opens with the on-screen keyboard back in the
      * letters page, regardless of what page the shell left it on. (The editor
@@ -87,7 +89,16 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
     keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
 
     c = lv_obj_create(parent);
-    lv_obj_set_size(c, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_width(c, LV_PCT(100));
+    /* Bound the panel to the VISIBLE surface height. `LV_PCT(100)` resolves
+     * against the parent's scrollable CONTENT height, which includes the whole
+     * transcript; with a tall scrollback the panel became far taller than the
+     * screen and `lv_obj_scroll_to_view` could only show a sliver of it, so the
+     * panel appeared above the viewport (V1). Use the parent's CONTENT height
+     * (minus its padding) so the panel fits exactly inside the transcript slot
+     * and is not itself clipped. */
+    surface_h = lv_obj_get_content_height(parent);
+    lv_obj_set_height(c, surface_h > 0 ? surface_h : LV_PCT(100));
     lv_obj_set_style_pad_all(c, 8, 0);
     lv_obj_set_style_bg_color(c, lv_color_hex(theme_current()->bg_transcript), 0);
     lv_obj_set_style_border_width(c, 1, 0);
@@ -95,14 +106,14 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_gap(c, 6, 0);
-    /* The modal surface is the (scrollable) transcript container. The panel is
-     * a child at the content origin, so when the shell transcript was scrolled
-     * to its newest output the panel sits off-screen above the viewport. Bring
-     * it into view so the modal is actually visible (and therefore capturable
-     * by `screenshot`). The editor does not use this helper; it renders into
-     * the span group itself. */
+    /* The modal surface is the (scrollable) transcript container and the panel
+     * is placed at its content origin. If the shell transcript was scrolled to
+     * its newest output, that origin is above the viewport, so pin the
+     * container to the panel (y = 0) instead of relying on
+     * lv_obj_scroll_to_view, which does not settle reliably across the layout
+     * passes that follow (V1). */
     lv_obj_update_layout(parent);
-    lv_obj_scroll_to_view(c, LV_ANIM_OFF);
+    lv_obj_scroll_to_y(parent, lv_obj_get_y(c), LV_ANIM_OFF);
     return c;
 }
 
@@ -119,11 +130,79 @@ static lv_obj_t *surf_create_title(lv_obj_t *parent, const char *title)
 
 static lv_obj_t *surf_create_button(lv_obj_t *parent, const char *label)
 {
+    const theme_t *th = theme_current();
     lv_obj_t *btn = lv_btn_create(parent);
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, label ? label : "");
+    /* Theme the button instead of LVGL's default green so the modal chrome
+     * matches the active theme (V4). */
+    lv_obj_set_style_bg_color(btn, lv_color_hex(th->text), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(btn, 0, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(th->modal_panel_border), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(th->bg_transcript), 0);
     lv_obj_center(lbl);
     return btn;
+}
+
+/** Paint one list row with the active theme. Rows use the panel background
+ * with a themed border; the selected row inverts to the accent colour so the
+ * keyboard/joystick selection is always visible (V4). */
+static void surf_style_item(lv_obj_t *btn, lv_obj_t *lbl, bool selected)
+{
+    const theme_t *th = theme_current();
+    uint32_t bg = selected ? th->text : th->bg_input_row;
+    uint32_t fg = selected ? th->bg_transcript : th->text_body;
+    uint32_t bd = selected ? th->text : th->modal_panel_border;
+
+    if (btn == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_color(btn, lv_color_hex(bg), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(bd), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_radius(btn, 0, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_text_color(btn, lv_color_hex(fg), 0);
+    if (lbl != NULL) {
+        lv_obj_set_style_text_color(lbl, lv_color_hex(fg), 0);
+    }
+}
+
+/** Theme a modal list container (the inner scroll box shared by `list` and
+ * `browse`): panel background, themed border, body text. */
+static void surf_style_list_container(lv_obj_t *list)
+{
+    const theme_t *th = theme_current();
+
+    if (list == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_color(list, lv_color_hex(th->bg_transcript), 0);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(list, lv_color_hex(th->modal_panel_border), 0);
+    lv_obj_set_style_border_width(list, 1, 0);
+    lv_obj_set_style_radius(list, 0, 0);
+    lv_obj_set_style_text_color(list, lv_color_hex(th->text_body), 0);
+}
+
+/** Theme a modal text field (`ask`, `form`): input background, body text, and
+ * a themed border instead of LVGL's default white field (V4). */
+static void surf_style_textarea(lv_obj_t *ta)
+{
+    const theme_t *th = theme_current();
+
+    if (ta == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_color(ta, lv_color_hex(th->bg_input_row), 0);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(ta, lv_color_hex(th->text_body), 0);
+    lv_obj_set_style_border_color(ta, lv_color_hex(th->modal_panel_border), 0);
+    lv_obj_set_style_border_width(ta, 1, 0);
+    lv_obj_set_style_radius(ta, 0, 0);
 }
 
 /* ========================================================================
@@ -230,6 +309,7 @@ static const modal_surface_t dialog_surface = {
     .close = dialog_surface_close,
     .handle_usb_key = dialog_handle_usb_key,
     .handle_serial_line = dialog_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_dialog_run(const char *title, const char *message,
@@ -277,6 +357,21 @@ static void list_select_cb(lv_event_t *e)
 }
 static void list_cancel_cb(lv_event_t *e) { (void)e; if (s_list_active) { s_list_active->result = -1; surf_request_close(s_list_active->eg); } }
 
+/** Repaint every row so the current `selected` index is visually distinct.
+ * Runs under the LVGL port lock (open, and the USB Up/Down handlers). */
+static void list_apply_selection(list_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->list == NULL) {
+        return;
+    }
+    for (int i = 0; i < ctx->count; i++) {
+        lv_obj_t *btn = lv_obj_get_child(ctx->list, i);
+        if (btn != NULL) {
+            surf_style_item(btn, lv_obj_get_child(btn, 0), i == ctx->selected);
+        }
+    }
+}
+
 static bool list_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
 {
     list_ctx_t *ctx = (list_ctx_t *)ctx_ptr;
@@ -292,9 +387,14 @@ static bool list_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->panel = surf_create_container(surf);
     surf_create_title(ctx->panel, ctx->title ? ctx->title : "Select");
     ctx->list = lv_obj_create(ctx->panel);
-    lv_obj_set_size(ctx->list, LV_PCT(100), LV_PCT(100));
+    /* Grow to fill the space between the title and the button row. An explicit
+     * 100% height would push the row past the panel and overlap the input line
+     * (the list must be the flexible child, not a full-height sibling). */
+    lv_obj_set_width(ctx->list, LV_PCT(100));
+    lv_obj_set_flex_grow(ctx->list, 1);
     lv_obj_set_flex_flow(ctx->list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(ctx->list, 2, 0);
+    surf_style_list_container(ctx->list);
     for (int i = 0; i < ctx->count; i++) {
         const char *label = ctx->items[i] ? ctx->items[i] : "";
         char buf[160];
@@ -303,8 +403,10 @@ static bool list_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         lv_obj_set_width(btn, LV_PCT(100));
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, buf);
+        surf_style_item(btn, lbl, i == ctx->selected);
         lv_obj_add_event_cb(btn, list_select_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
+    list_apply_selection(ctx);
     lv_obj_t *row = lv_obj_create(ctx->panel);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -342,8 +444,8 @@ static bool list_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modifie
     list_ctx_t *ctx = (list_ctx_t *)ctx_ptr;
     if (key_code == 0x29) { ctx->result = -1; surf_request_close(ctx->eg); return true; }
     if (key_code == 0x28) { if (ctx->selected >= 0 && ctx->selected < ctx->count) { ctx->result = ctx->selected; } surf_request_close(ctx->eg); return true; }
-    if (key_code == 0x52) { if (ctx->selected > 0) ctx->selected--; return true; } /* Up */
-    if (key_code == 0x51) { if (ctx->selected < ctx->count - 1) ctx->selected++; return true; } /* Down */
+    if (key_code == 0x52) { if (ctx->selected > 0) { ctx->selected--; list_apply_selection(ctx); } return true; } /* Up */
+    if (key_code == 0x51) { if (ctx->selected < ctx->count - 1) { ctx->selected++; list_apply_selection(ctx); } return true; } /* Down */
     if (ascii >= '1' && ascii <= '9') { int idx = ascii - '1'; if (idx < ctx->count) { ctx->result = idx; surf_request_close(ctx->eg); return true; } }
     return false;
 }
@@ -369,6 +471,7 @@ static const modal_surface_t list_surface = {
     .close = list_surface_close,
     .handle_usb_key = list_handle_usb_key,
     .handle_serial_line = list_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_list_run(const char *title, const char **items, int count, uint32_t timeout_ms)
@@ -427,6 +530,7 @@ static bool ask_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_width(ctx->ta, LV_PCT(100));
     lv_textarea_set_one_line(ctx->ta, true);
     lv_textarea_set_password_mode(ctx->ta, ctx->password);
+    surf_style_textarea(ctx->ta);
     if (ctx->prompt) lv_textarea_set_placeholder_text(ctx->ta, ctx->prompt);
     if (ctx->def) lv_textarea_set_text(ctx->ta, ctx->def);
     keyboard_bind_textarea(ctx->ta);
@@ -512,6 +616,7 @@ static const modal_surface_t ask_surface = {
     .close = ask_surface_close,
     .handle_usb_key = ask_handle_usb_key,
     .handle_serial_line = ask_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_ask_run(const char *prompt, const char *default_text, bool password,
@@ -567,6 +672,21 @@ static void fb_free_entries(fb_ctx_t *ctx)
 }
 
 static void fb_refresh_list(fb_ctx_t *ctx);
+
+/** Highlight the current browse selection (V4). Runs under the port lock or on
+ * the LVGL task (where the USB key handler runs). */
+static void fb_apply_selection(fb_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->list == NULL) {
+        return;
+    }
+    for (int i = 0; i < ctx->entry_count; i++) {
+        lv_obj_t *btn = lv_obj_get_child(ctx->list, i);
+        if (btn != NULL) {
+            surf_style_item(btn, lv_obj_get_child(btn, 0), i == ctx->selected);
+        }
+    }
+}
 
 static void fb_entry_cb(lv_event_t *e)
 {
@@ -660,6 +780,7 @@ static void fb_refresh_list(fb_ctx_t *ctx)
     /* free remaining names where not transferred (should be none) */
     for (int i = ctx->entry_count; i < n; i++) { free(names[i]); free(paths[i]); }
     ctx->selected = 0;
+    fb_apply_selection(ctx);
     lvgl_port_unlock();
 }
 #pragma GCC diagnostic pop
@@ -682,12 +803,14 @@ static bool fb_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     surf_create_title(ctx->panel, ctx->title ? ctx->title : "Browse");
     ctx->path_label = lv_label_create(ctx->panel);
     lv_obj_set_width(ctx->path_label, LV_PCT(100));
-    lv_obj_set_style_text_color(ctx->path_label, lv_color_hex(0x00FFFF), 0);
+    lv_obj_set_style_text_color(ctx->path_label, lv_color_hex(theme_current()->text), 0);
     lv_label_set_text(ctx->path_label, ctx->current_path);
     ctx->list = lv_obj_create(ctx->panel);
-    lv_obj_set_size(ctx->list, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_width(ctx->list, LV_PCT(100));
+    lv_obj_set_flex_grow(ctx->list, 1);
     lv_obj_set_flex_flow(ctx->list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(ctx->list, 2, 0);
+    surf_style_list_container(ctx->list);
     lv_obj_t *row = lv_obj_create(ctx->panel);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -732,8 +855,8 @@ static bool fb_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers
     fb_ctx_t *ctx = (fb_ctx_t *)ctx_ptr;
     if (key_code == 0x29) { ctx->result = -1; surf_request_close(ctx->eg); return true; }
     if (key_code == 0x2A) { /* Backspace -> up */ char *s = strrchr(ctx->current_path, '/'); if (s && s != ctx->current_path) { *s = '\0'; } fb_refresh_list(ctx); return true; }
-    if (key_code == 0x52) { if (ctx->selected > 0) ctx->selected--; return true; }
-    if (key_code == 0x51) { if (ctx->selected < ctx->entry_count - 1) ctx->selected++; return true; }
+    if (key_code == 0x52) { if (ctx->selected > 0) { ctx->selected--; fb_apply_selection(ctx); } return true; }
+    if (key_code == 0x51) { if (ctx->selected < ctx->entry_count - 1) { ctx->selected++; fb_apply_selection(ctx); } return true; }
     if (key_code == 0x28) { if (ctx->selected >= 0 && ctx->selected < ctx->entry_count) { const char *p = ctx->entries[ctx->selected]; struct stat st; if (stat(p, &st)==0 && S_ISDIR(st.st_mode)) { strncpy(ctx->current_path, p, FB_MAX_PATH-1); ctx->current_path[FB_MAX_PATH-1]='\0'; fb_refresh_list(ctx);} else { strncpy(ctx->selected_path, p, FB_MAX_PATH-1); ctx->selected_path[FB_MAX_PATH-1]='\0'; ctx->result=0; surf_request_close(ctx->eg);} } return true; }
     return false;
 }
@@ -761,6 +884,7 @@ static const modal_surface_t fb_surface = {
     .close = fb_surface_close,
     .handle_usb_key = fb_handle_usb_key,
     .handle_serial_line = fb_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_filebrowser_run(const char *title, const char *start_path,
@@ -774,8 +898,17 @@ int modal_filebrowser_run(const char *title, const char *start_path,
     ctx.title = title;
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
     if (start_path && start_path[0]) {
-        strncpy(ctx.current_path, start_path, FB_MAX_PATH-1);
-        ctx.current_path[FB_MAX_PATH-1] = '\0';
+        /* Resolve the shell's `sd:`/relative form to a real VFS path before
+         * opendir(), otherwise `browse sd:/APPS` shows the label but lists
+         * nothing (opendir("sd:/APPS") fails). */
+        char resolved[FB_MAX_PATH];
+        if (shell_fs_resolve_path(start_path, resolved, sizeof(resolved)) == ESP_OK &&
+            resolved[0] != '\0') {
+            strncpy(ctx.current_path, resolved, FB_MAX_PATH - 1);
+        } else {
+            strncpy(ctx.current_path, start_path, FB_MAX_PATH - 1);
+        }
+        ctx.current_path[FB_MAX_PATH - 1] = '\0';
     }
     if (modal_surface_run(&fb_surface, &ctx, &el) != ESP_OK) return -1;
     if (ctx.result != 0 || ctx.selected_path[0]=='\0') return -1;
@@ -925,6 +1058,7 @@ static const modal_surface_t viewer_surface = {
     .close = viewer_surface_close,
     .handle_usb_key = viewer_handle_usb_key,
     .handle_serial_line = viewer_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_viewer_run(const char *title, const char *file_path, uint32_t timeout_ms)
@@ -1171,6 +1305,7 @@ static const modal_surface_t image_surface = {
     .close = image_surface_close,
     .handle_usb_key = image_handle_usb_key,
     .handle_serial_line = image_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_image_run(const char *title, const char *file_path,
@@ -1333,6 +1468,7 @@ static const modal_surface_t hex_surface = {
     .close = hex_surface_close,
     .handle_usb_key = hex_handle_usb_key,
     .handle_serial_line = hex_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_hexview_run(const char *title, const char *file_path, uint32_t timeout_ms)
@@ -1421,6 +1557,7 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
             lv_obj_set_width(ta, LV_PCT(100));
             lv_textarea_set_one_line(ta, true);
             lv_textarea_set_password_mode(ta, f->type == MODAL_FORM_PASSWORD);
+            surf_style_textarea(ta);
             if (f->value && f->value[0] != '\0') {
                 lv_textarea_set_text(ta, f->value);
             }
@@ -1430,6 +1567,7 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         case MODAL_FORM_CHECK: {
             lv_obj_t *cb = lv_checkbox_create(ctx->panel);
             lv_checkbox_set_text(cb, "");
+            lv_obj_set_style_text_color(cb, lv_color_hex(theme_current()->text_body), 0);
             if (f->value && (strcmp(f->value, "1") == 0 || strcasecmp(f->value, "on") == 0 ||
                              strcasecmp(f->value, "true") == 0 || strcasecmp(f->value, "yes") == 0)) {
                 lv_obj_add_state(cb, LV_STATE_CHECKED);
@@ -1439,8 +1577,16 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         }
         case MODAL_FORM_SELECT: {
             char opts[MODAL_FORM_OPTIONS_BYTES];
+            const theme_t *th = theme_current();
             lv_obj_t *roller = lv_roller_create(ctx->panel);
             lv_obj_set_width(roller, LV_PCT(100));
+            lv_obj_set_style_bg_color(roller, lv_color_hex(th->bg_input_row), LV_PART_MAIN);
+            lv_obj_set_style_text_color(roller, lv_color_hex(th->text_body), LV_PART_MAIN);
+            lv_obj_set_style_border_color(roller, lv_color_hex(th->modal_panel_border), LV_PART_MAIN);
+            lv_obj_set_style_border_width(roller, 1, LV_PART_MAIN);
+            lv_obj_set_style_radius(roller, 0, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(roller, lv_color_hex(th->text), LV_PART_SELECTED);
+            lv_obj_set_style_text_color(roller, lv_color_hex(th->bg_transcript), LV_PART_SELECTED);
             form_options_to_roller(f->options, opts, sizeof(opts));
             lv_roller_set_options(roller, opts, LV_ROLLER_MODE_NORMAL);
             if (f->value && f->value[0] != '\0') {
@@ -1464,8 +1610,12 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
             break;
         }
         case MODAL_FORM_RANGE: {
+            const theme_t *th = theme_current();
             lv_obj_t *slider = lv_slider_create(ctx->panel);
             lv_obj_set_width(slider, LV_PCT(100));
+            lv_obj_set_style_bg_color(slider, lv_color_hex(th->bg_input_row), LV_PART_MAIN);
+            lv_obj_set_style_bg_color(slider, lv_color_hex(th->text), LV_PART_INDICATOR);
+            lv_obj_set_style_bg_color(slider, lv_color_hex(th->text), LV_PART_KNOB);
             lv_slider_set_range(slider, f->min, f->max > f->min ? f->max : f->min + 1);
             if (f->value && f->value[0] != '\0') {
                 lv_slider_set_value(slider, atoi(f->value), LV_ANIM_OFF);
@@ -1595,6 +1745,7 @@ static const modal_surface_t form_surface = {
     .close = form_surface_close,
     .handle_usb_key = form_handle_usb_key,
     .handle_serial_line = form_handle_serial_line,
+    .abort_cancels = true,
 };
 
 int modal_form_run(const char *title, modal_form_field_t *fields, int count,

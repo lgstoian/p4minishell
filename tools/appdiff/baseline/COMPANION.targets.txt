@@ -1,0 +1,23 @@
+obj
+W
+W
+BT
+U
+S
+!
+M N.NM
+M N.NM
+N%
+N/C
+#cccccc ╒═══════
+PN Companion
+obj
+N. Live System
+N. File Tools
+N. Network Tools
+N. Fun / Demos
+N. Settings
+N. Exit
+obj
+Cancel
+Text

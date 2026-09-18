@@ -1,0 +1,22 @@
+obj
+W
+W
+BT
+U
+S
+!
+M N.NM
+M N.NM
+N%
+N/C
+#cccccc ╒═══════
+Mood
+obj
+N. Live mood (N samples)
+N. RGB demo
+N. Tone demo
+N. Snapshot
+N. Back
+obj
+Cancel
+Text

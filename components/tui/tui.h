@@ -166,6 +166,15 @@ void tui_alt_leave(void);
 /** Flush logical buffer to LVGL TUI label. Must run on LVGL task or via async. */
 void tui_flush(void);
 
+/** Reset the TUI frame-pacing statistics (also done on tui_init). */
+void tui_frame_stats_reset(void);
+
+/** Set the target frame rate that counts dropped frames (0 disables). */
+void tui_frame_stats_set_target_fps(uint32_t fps);
+
+/** Read-only view of the TUI frame-pacing statistics. */
+const gfx_frame_stats_t *tui_frame_stats_get(void);
+
 /** Refresh TUI surface size to live transcript region (call on rotation/keyboard). */
 void tui_refresh_surface(void);
 

@@ -502,6 +502,11 @@ tui:
     type: uint32_t
     description: "Default auto-cancel timeout for modal surfaces in ms (0 = no timeout)"
     range: "0..60000"
+  target_fps:
+    value: 30
+    type: uint32_t
+    description: "Target frame rate for TUI frame-pacing stats (tui stats); frames slower than 150% of this interval count as dropped (0 disables)"
+    range: "0..120"
 
 # ---- Image (BMP) ----
 image:
@@ -1003,8 +1008,11 @@ sd_card:
     value: 0
     type: uint32_t
     description: >-
-      Default allocation unit size requested when formatting; 0 selects
-      FATFS automatic. The /A: option overrides it.
+      Default allocation unit size requested when formatting; 0 scales the
+      cluster with the card capacity (4 KiB to 512 MiB, 8 KiB to 8 GiB, 16 KiB
+      to 16 GiB, 32 KiB to 32 GiB, 64 KiB above). The /A: option overrides it.
+      Zero is NOT passed to the IDF helper directly: it clamps 0 up to the
+      512-byte sector size, which produced a pathologically slow format.
     range: "0..65536"
   format_alloc_unit_min:
     value: 4096
@@ -1254,12 +1262,12 @@ batch_env:
     description: "I/O buffer size for general file operations"
     range: "64..4096"
   batch_label_max:
-    value: 32
+    value: 128
     type: int
-    description: "Maximum :label targets tracked per batch file for goto/call"
+    description: "Maximum :label targets tracked per batch file for goto/call/gosub/on (must exceed the largest shipped app's label count; TCMD.BAT uses 34)"
     range: "8..128"
   batch_label_bytes:
-    value: 48
+    value: 64
     type: size_t
     description: "Maximum bytes for a single :label name; the label table is label_max * label_bytes, so this drives the batch frame footprint"
     range: "16..128"

@@ -16,7 +16,7 @@ import time
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from shell_session import open_port, default_port
+from shell_session import open_port, default_port, hard_reset
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else default_port()
 BUDGET_MIN = float(sys.argv[2]) if len(sys.argv) > 2 else 20.0
@@ -78,6 +78,11 @@ def run_once(ser, cmd, expect):
 
 
 def main():
+    # Always start from a clean shell: a previous driver can leave an app or
+    # modal owning the worker, which otherwise reports as a false global stall.
+    # (The port is not open yet, so esptool can reboot the board.)
+    hard_reset(PORT)
+    time.sleep(0.5)
     ser = open_port(PORT, 115200, timeout=1)
     time.sleep(15.0)  # boot quiesce
     ser.reset_input_buffer()

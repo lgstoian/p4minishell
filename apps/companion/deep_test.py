@@ -38,7 +38,16 @@ def worker_line(text, word):
             return True
     return False
 UPTIME_RE = re.compile(r"uptime=(\d+)d (\d+)h (\d+)m (\d+)s")
-ESPTool = r"C:\esp\v5.5.5\esp-idf\components\esptool_py\esptool\esptool.py"
+# esptool.py from the active ESP-IDF install ($IDF_PATH). Falls back to PATH
+# lookup when IDF_PATH is unset so no machine-specific absolute path is needed.
+def _esptool_path():
+    idf = os.environ.get("IDF_PATH", "")
+    if idf:
+        cand = os.path.join(idf, "components", "esptool_py", "esptool", "esptool.py")
+        if os.path.isfile(cand):
+            return cand
+    return "esptool.py"
+ESPTool = _esptool_path()
 
 
 def read_all(ser, seconds):

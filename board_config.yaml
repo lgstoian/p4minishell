@@ -117,6 +117,10 @@ board:
     divider_denominator: 1
     empty_mv: 3300
     full_mv: 4200
+    # Below this scaled pack voltage the sense input is treated as
+    # unconnected (the divider floats well under any real pack), so the
+    # `battery`/`power` telemetry and the header show "BAT N/C".
+    present_mv: 2500
 
   # ---- RGB LED (WS2812 on GPIO26, back panel) ----
   # LED1 on the JC1060P470 back panel is a WS2812 (NeoPixel) addressable RGB

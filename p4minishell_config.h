@@ -431,6 +431,10 @@
 /** Default auto-cancel timeout for modal surfaces in ms (0 = no timeout). */
 #define P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS        0
 
+/** Target frame rate for TUI frame-pacing stats (`tui stats`): frames slower
+ * than 150% of this interval count as dropped. 0 disables dropped tracking. */
+#define P4_CONFIG_TUI_TARGET_FPS                30
+
 /* ========================================================================
  * IMAGE SUPPORT (BMP)
  * ========================================================================
@@ -916,8 +920,12 @@
  *  and `trash` commands share this one word (no per-command aliases). */
 #define P4_CONFIG_DESTRUCTIVE_CONFIRM_WORD   "YES"
 
-/** Default allocation unit size in bytes requested when formatting. 0 = let
- *  FATFS (via esp_vfs_fat_sdcard_format_cfg) choose a size-appropriate value. */
+/** Default allocation unit size in bytes requested when formatting. 0 = scale
+ *  the cluster with the card capacity (storage_format_pick_alloc_unit): 4 KiB
+ *  up to 512 MiB, 8 KiB to 8 GiB, 16 KiB to 16 GiB, 32 KiB to 32 GiB, 64 KiB
+ *  above. Do NOT pass 0 through to esp_vfs_fat_sdcard_format_cfg: IDF clamps it
+ *  up to the 512-byte sector size, which gives a 29 GiB card 1-sector clusters
+ *  (a ~230 MiB FAT per copy) and a multi-minute blocking format. */
 #define P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES    0
 
 /** Smallest `/A:` allocation unit (cluster) size accepted by `format`. */
@@ -1105,16 +1113,20 @@
 /** I/O buffer size for general file operations. */
 #define P4_CONFIG_FILE_IO_BUFFER_BYTES       512
 
-/** Maximum `:label` targets tracked per batch file for goto/call. */
-#define P4_CONFIG_BATCH_LABEL_MAX            32
+/** Maximum `:label` targets tracked per batch file for goto/call/gosub/on.
+ *  Must stay above the label count of the largest shipped app (TCMD.BAT uses
+ *  34): an over-limit label is dropped from the table, so a jump to it fails
+ *  like any other missing label. */
+#define P4_CONFIG_BATCH_LABEL_MAX            128
 
 /**
  * Maximum bytes for a single `:label` name.
  * A label is one identifier, so this is far smaller than a command line.
  * The label table is sized LABEL_MAX * LABEL_BYTES, so keeping this tight
- * matters for the batch frame footprint.
+ * matters for the batch frame footprint. Each frame is heap-allocated, so
+ * this only affects the heap, never the worker stack.
  */
-#define P4_CONFIG_BATCH_LABEL_BYTES          48
+#define P4_CONFIG_BATCH_LABEL_BYTES          64
 
 /** Maximum argv slots produced by the command tokenizer. */
 #define P4_CONFIG_COMMAND_ARGV_MAX           32
@@ -1940,8 +1952,7 @@
  *  Raised above the 7168-byte esp_lvgl_port default: a full-screen redraw
  *  (transcript span group, input line, on-screen keyboard, header) recurses
  *  deep enough that the stock stack overflowed into a boot-loop panic. The
- *  modal editor adds row rendering on this same task, so the budget stays a
- *  generous 12 KB. */
+ *  modal editor adds row rendering on this same task. */
 #define P4_CONFIG_LVGL_TASK_STACK            24576
 
 /** Log tag for networking/Wi-Fi module. */

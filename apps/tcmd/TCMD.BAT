@@ -31,7 +31,9 @@ goto refresh
 :refresh
 rem Relist a pane only when its directory changed since the last frame:
 rem `dir` is the expensive SD op, and j/k navigation does not change dirs.
-md sd:/tmp
+rem Create the scratch dir only when missing: a redundant `md` on an
+rem existing directory is an error and would spam the pane each refresh.
+if not exist sd:/tmp md sd:/tmp
 if "%LD%"=="%LDONE%" goto ldone
 dir /o:gn /b sd:%LD% > sd:/tmp/_LT.txt
 rem Line counts via draw list's /count (a for-loop counter would flood:

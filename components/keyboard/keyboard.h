@@ -257,14 +257,17 @@ uint32_t keyboard_effective_capabilities(void);
 /** Re-evaluate capability key availability for the current page (idempotent). */
 void keyboard_refresh_availability(void);
 
-/** Tri-state of the current page's "Nav" key, for diagnostics/tests. */
+/** Tri-state of the Nav capability key, for diagnostics/tests. */
 typedef enum {
-    KEYBOARD_NAV_KEY_ABSENT = -1,   /**< Current page has no Nav key. */
-    KEYBOARD_NAV_KEY_ENABLED = 0,   /**< Nav key present and usable. */
-    KEYBOARD_NAV_KEY_DISABLED = 1,  /**< Nav key present but greyed out. */
+    KEYBOARD_NAV_KEY_ABSENT = -1,   /**< No on-screen keyboard (nothing to report). */
+    KEYBOARD_NAV_KEY_ENABLED = 0,   /**< Nav capability granted (key usable). */
+    KEYBOARD_NAV_KEY_DISABLED = 1,  /**< Nav capability denied (key greyed out). */
 } keyboard_nav_key_state_t;
 
-/** Query the Nav key state on the current page. */
+/** Query the Nav capability state: granted by the shell context (editor open)
+ *  or by a reference-counted request (`keyboard nav on`). Matches
+ *  `keyboard_effective_capabilities()`, so `ui state nav=` reads `on` while the
+ *  editor (which switches to the page that has no literal Nav button) is open. */
 keyboard_nav_key_state_t keyboard_nav_key_state(void);
 
 /* Pure helpers (no LVGL; unit-tested): the capability a key label requires

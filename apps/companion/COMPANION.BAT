@@ -6,7 +6,7 @@ rem  COMPANION.BAT - entry point for the P4 Companion.
 rem  Enhanced TUI with fullscreen, draw boxes, and status.
 rem =====================================================================
 setlocal
-call LIB.BAT::load_settings
+gosub LIB.BAT::load_settings
 
 :main_menu
 draw clear screen
@@ -33,19 +33,19 @@ if errorlevel 0 goto :opt_sys
 goto main_menu
 
 :opt_sys
-call SYS.BAT::main
+gosub SYS.BAT::main
 goto main_menu
 :opt_files
-call FILES.BAT::main
+gosub FILES.BAT::main
 goto main_menu
 :opt_net
-call NET.BAT::main
+gosub NET.BAT::main
 goto main_menu
 :opt_fun
-call FUN.BAT::main
+gosub FUN.BAT::main
 goto main_menu
 :opt_settings
-call SET.BAT::main
+gosub SET.BAT::main
 goto main_menu
 :opt_exit
 echo [C-EXIT]

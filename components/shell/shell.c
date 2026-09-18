@@ -509,11 +509,6 @@ static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
     memcpy(plain + plain_len, plain_text, plain_text_len);
     plain[plain_len + plain_text_len] = '\0';
 
-    /* Mirror the newly-appended plain text into an active output-redirection
-     * capture, so a redirected file holds the command's full output even when
-     * the transcript itself truncates. */
-    shell_redirect_capture_add(plain_text, plain_text_len);
-
     if (ansi_len + ansi_text_len + 1 >= ansi_size) {
         ansi_text_len = ansi_size - ansi_len - 1;
     }
@@ -659,6 +654,16 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
         return;
     }
 
+    /* An active output-redirection capture owns stdout: the command's text
+     * goes to the capture (and thus the redirect file) ONLY, never the visible
+     * transcript or the serial mirror. This is DOS `>` semantics; mirroring it
+     * would both duplicate the output on screen and leak the intermediate
+     * stages of `cmd1 | cmd2 > file`. */
+    if (s_redirect_capturing) {
+        shell_redirect_capture_add(text, strlen(text));
+        return;
+    }
+
     /* A single command with a large output can grow the span group fast
      * enough to exhaust the internal heap mid-command. Reclaim scrollback
      * when the internal heap drops below the threshold (rate-limited, keeps
@@ -740,6 +745,13 @@ void shell_transcript_append_ansi(const char *text)
      * appear on screen too. s_transcript stays plain for history/redirection,
      * while s_transcript_ansi keeps the real escape sequences for the label. */
     ansi_strip_to_plain(plain, sizeof(plain), text);
+
+    /* While an output-redirection capture is active, the (stripped) output
+     * goes to the capture only — see shell_transcript_append_internal. */
+    if (s_redirect_capturing) {
+        shell_redirect_capture_add(plain, strlen(plain));
+        return;
+    }
 
     /* Buffer appends serialize on the lightweight buffer mutex (see
      * shell_transcript_append_internal); the label step takes the LVGL port
@@ -1879,7 +1891,19 @@ void shell_input_line_set_text(const char *command_text)
 
 void shell_input_line_reset(void)
 {
+    /* Re-entrancy guard: lv_textarea_set_text() fires LV_EVENT_VALUE_CHANGED,
+     * and the input-line handler resets the line again while a keypress wait is
+     * active (pause/choice/more). Without this guard that ping-pongs
+     * indefinitely and overflows the LVGL task stack (the "Stack protection
+     * fault" crash when pressing OK on the OSK mid-prompt). */
+    static bool resetting;
+
+    if (resetting) {
+        return;
+    }
+    resetting = true;
     shell_input_line_set_text("");
+    resetting = false;
 }
 
 void shell_extract_input_text(char *output, size_t output_size)
@@ -2893,6 +2917,18 @@ static void shell_uart_console_task(void *arg)
 
         got = strlen(line + length);
         length += got;
+
+        /* Serial Ctrl+C (ETX, 0x03) is the same foreground break as the USB
+         * keyboard/mouse Stop. Abandon the partial line so it is not
+         * dispatched, and leave the request set: an open modal polls it and
+         * cancels, the batch line loop unwinds with `^C`. */
+        if (memchr(line + length - got, 0x03, got) != NULL) {
+            length = 0;
+            line[0] = '\0';
+            shell_request_abort();
+            prompt_visible = false;
+            continue;
+        }
 
         /* Drop the artifact LF of a CRLF whose first LF just completed a line
          * (the CR->LF mapping makes the host's CRLF two LFs). Only LFs in the
@@ -4181,7 +4217,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "image",    "image info <file.bmp> | image show [/t:secs] <file.bmp> - BMP metadata / fit-to-screen viewer (ERRORLEVEL 0/1/2)" },
     { "draw",     "draw <box|line|fill|text|bar|table|list|image|clear|window|save|restore|cursor|hold|alt-screen|close|refresh|fullscreen> - TUI drawing (foreground only)" },
     { "anchor",   "anchor <label> <command> [continue_line] - named transcript anchor region" },
-    { "tui",      "tui status|clear|fullscreen|refresh - TUI control" },
+    { "tui",      "tui status|stats|clear|fullscreen|refresh - TUI control" },
     { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
     { "locate",   "locate <row> <col> - DOS LOCATE parity (1-based, 80x25)" },
     { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },
@@ -4231,11 +4267,14 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "call",     "call <file.bat> [args] - run a batch file from another" },
     { "if",       "if [not] errorlevel|exist|\"a\"==\"b\" <cmd> - conditional execution" },
     { "goto",     "goto :label - jump to a label in a batch file" },
+    { "gosub",    "gosub :label [args] | <file>::<routine> - call a labelled subroutine" },
+    { "return",   "return [code] - return from a gosub/call :label (ends the file at top level)" },
+    { "on",       "on <expr> goto|gosub <label>[,<label>...] - computed dispatch" },
     { "shift",    "shift - shift batch arguments" },
     { "pause",    "pause [message] - wait for a key (30 s timeout)" },
     { "choice",   "choice [/C:keys] [/N] [/T:c,secs] [/S] [text] - interactive selection" },
     { "delay",    "delay <ms> - pure deterministic wait (melodies/demos), clamped to P4_CONFIG_DELAY_MAX_MS" },
-    { "gfx",      "gfx init|close|status|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|free|slots|save - RGB565 canvas + toolkit (max 320x240); image <file.bmp> blits a scaled BMP; load ingests 24/32-bit BMP sprites (max 64x64)" },
+    { "gfx",      "gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|free|slots|save - RGB565 canvas + toolkit (max 320x240); image <file.bmp> blits a scaled BMP; load ingests 24/32-bit BMP sprites (max 64x64); stats reports frame pacing" },
     { "plot",     "plot tui|window|auto|axes|func|polar|para|data|bar|table|line|point|clear|status - world-coordinate graphs + charts on the gfx canvas or TUI (uses calc)" },
     { "crc32",    "crc32 <path> - print a file's CRC-32 checksum (ERRORLEVEL 0/1)" },
     { "asset",    "asset check|list <app> - verify/list an app's APPS/<APP>.ASSETS manifest (ERRORLEVEL 0/1)" },
@@ -4492,7 +4531,7 @@ void shell_command_sysinfo(void)
                                  BOARD_CFG_I2C_ENABLE_INTERNAL_PULLUP);
     }
 
-    shell_transcript_appendf_ansi("  " SH_LBL "audio:" SH_RST " I2S%d BCLK=%d WS=%d DOUT=%d MCLK=%d amp=%d volume=%d%%%%\n",
+    shell_transcript_appendf_ansi("  " SH_LBL "audio:" SH_RST " I2S%d BCLK=%d WS=%d DOUT=%d MCLK=%d amp=%d volume=%d%%\n",
                              BOARD_CFG_I2S_PORT,
                              BSP_I2S_SCLK,
                              BSP_I2S_LCLK,
@@ -4526,9 +4565,9 @@ void shell_command_sysinfo(void)
                                  (unsigned int)free_heap, (unsigned int)free_internal,
                                  (unsigned int)total_heap);
         if (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) {
-            shell_transcript_appendf_ansi(SH_ERR "%u%%%%" SH_RST ")\n", heap_pct);
+            shell_transcript_appendf_ansi(SH_ERR "%u%%" SH_RST ")\n", heap_pct);
         } else {
-            shell_transcript_appendf_ansi(SH_OK "%u%%%%" SH_RST ")\n", heap_pct);
+            shell_transcript_appendf_ansi(SH_OK "%u%%" SH_RST ")\n", heap_pct);
         }
 #if CONFIG_SPIRAM
     shell_transcript_appendf_ansi("  " SH_LBL "psram:" SH_RST " " SH_OK "enabled" SH_RST ", total=%u bytes, free=%u bytes\n",
@@ -4585,9 +4624,9 @@ void shell_command_version(void)
     shell_transcript_appendf_ansi("  " SH_LBL "heap:" SH_RST " %u/%u bytes free (",
                              (unsigned int)free_heap, (unsigned int)total_heap);
     if (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) {
-        shell_transcript_appendf_ansi(SH_ERR "%u%%%%" SH_RST ")\n", heap_pct);
+        shell_transcript_appendf_ansi(SH_ERR "%u%%" SH_RST ")\n", heap_pct);
     } else {
-        shell_transcript_appendf_ansi(SH_OK "%u%%%%" SH_RST ")\n", heap_pct);
+        shell_transcript_appendf_ansi(SH_OK "%u%%" SH_RST ")\n", heap_pct);
     }
     shell_transcript_appendf_ansi("  " SH_LBL "tasks:" SH_RST " %" PRIu32 "\n", task_count);
 }
@@ -4655,9 +4694,9 @@ void shell_command_mem(void)
     shell_transcript_appendf_ansi("  " SH_LBL "mem.heap:" SH_RST " free=%u bytes, total=%u bytes (",
                              (unsigned int)free_heap, (unsigned int)total_heap);
     if (heap_pct < P4_CONFIG_HEADER_MEM_LOW_PCT) {
-        shell_transcript_appendf_ansi(SH_ERR "%u%%%%" SH_RST ")\n", heap_pct);
+        shell_transcript_appendf_ansi(SH_ERR "%u%%" SH_RST ")\n", heap_pct);
     } else {
-        shell_transcript_appendf_ansi(SH_OK "%u%%%%" SH_RST ")\n", heap_pct);
+        shell_transcript_appendf_ansi(SH_OK "%u%%" SH_RST ")\n", heap_pct);
     }
     shell_transcript_appendf_ansi("  " SH_LBL "mem.heap_min:" SH_RST " %u bytes\n", (unsigned int)min_free);
     shell_transcript_appendf_ansi("  " SH_LBL "mem.internal:" SH_RST " %u bytes free\n", (unsigned int)free_internal);

@@ -763,3 +763,52 @@ void test_gfx_view_nice_step(void)
     TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, gfx_view_nice_step(0.0, 8));
     TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, gfx_view_nice_step(10.0, 0));
 }
+
+void test_gfx_frame_stats_intervals(void)
+{
+    gfx_frame_stats_t s;
+
+    gfx_frame_stats_reset(&s);
+    TEST_ASSERT_EQUAL_UINT32(0, s.frames);
+    TEST_ASSERT_EQUAL_UINT32(0, gfx_frame_stats_avg_us(&s));
+    TEST_ASSERT_DOUBLE_WITHIN(0.001, 0.0, gfx_frame_stats_fps(&s));
+
+    /* First sample is the baseline only. */
+    gfx_frame_stats_sample(&s, 1000);
+    TEST_ASSERT_EQUAL_UINT32(0, s.frames);
+    /* Three intervals: 30, 40, 50 ms -> avg 40 ms, min 30, max 50. */
+    gfx_frame_stats_sample(&s, 1000 + 30000);
+    gfx_frame_stats_sample(&s, 1000 + 70000);
+    gfx_frame_stats_sample(&s, 1000 + 120000);
+    TEST_ASSERT_EQUAL_UINT32(3, s.frames);
+    TEST_ASSERT_EQUAL_UINT32(30000, s.min_us);
+    TEST_ASSERT_EQUAL_UINT32(50000, s.max_us);
+    TEST_ASSERT_EQUAL_UINT32(40000, gfx_frame_stats_avg_us(&s));
+    TEST_ASSERT_DOUBLE_WITHIN(0.01, 25.0, gfx_frame_stats_fps(&s));
+    /* Jitter (population stddev of 30/40/50k) ~= 8165 us. */
+    TEST_ASSERT_UINT32_WITHIN(50, 8165, gfx_frame_stats_jitter_us(&s));
+}
+
+void test_gfx_frame_stats_dropped(void)
+{
+    gfx_frame_stats_t s;
+    char text[128];
+
+    gfx_frame_stats_reset(&s);
+    gfx_frame_stats_set_target_fps(&s, 30);      /* 33333 us target */
+    gfx_frame_stats_sample(&s, 0);
+    gfx_frame_stats_sample(&s, 33000);           /* on target */
+    gfx_frame_stats_sample(&s, 66000);           /* on target */
+    gfx_frame_stats_sample(&s, 66000 + 80000);   /* 80 ms -> dropped */
+    TEST_ASSERT_EQUAL_UINT32(1, s.dropped);
+    gfx_frame_stats_set_target_fps(&s, 0);
+    TEST_ASSERT_EQUAL_UINT32(0, s.target_us);
+
+    gfx_frame_stats_format(&s, text, sizeof(text));
+    TEST_ASSERT_NOT_NULL(strstr(text, "frames="));
+    TEST_ASSERT_NOT_NULL(strstr(text, "avg_us="));
+    TEST_ASSERT_NOT_NULL(strstr(text, "dropped="));
+    /* NULL / short-buffer safety. */
+    TEST_ASSERT_EQUAL_INT(0, gfx_frame_stats_format(NULL, text, sizeof(text)));
+    TEST_ASSERT_EQUAL_INT(0, gfx_frame_stats_format(&s, NULL, 0));
+}

@@ -76,6 +76,10 @@
 #define BOARD_CFG_BATTERY_DIVIDER_DENOMINATOR 1
 #define BOARD_CFG_BATTERY_EMPTY_MV 3300
 #define BOARD_CFG_BATTERY_FULL_MV 4200
+/* Below this scaled pack voltage the sense input is treated as unconnected
+ * (the divider floats well under any real pack), so telemetry reports
+ * "BAT N/C" instead of a bogus 0%. */
+#define BOARD_CFG_BATTERY_PRESENT_MV 2500
 
 #define BOARD_CFG_RGB_LED_GPIO GPIO_NUM_26
 #define BOARD_CFG_RGB_LED_IS_WS2812 1
