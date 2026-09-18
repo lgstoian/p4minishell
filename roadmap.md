@@ -106,10 +106,10 @@ Grouped by milestone rather than by version. Full per-version detail is in
 
 - Editor **focus / typewriter mode** (`edit /focus`): header and keyboard
   hidden, caret centred, live word count.
-- **Markdown export** (`markdown export <src> <out> [text|html]`) and a
-  self-contained HTML serializer.
-- **Reading typography**: a proportional/serif `reading` font role for the
-  viewer and editor Markdown preview.
+- **Markdown export** (`markdown export <src> <out> [text|html|print]`), a
+  self-contained HTML serializer, and a fixed-page print paginator.
+- **Reading typography**: a proportional/serif `reading` font role (vendored
+  `DejaVuSerif`) with reader line spacing for the viewer and editor preview.
 - **Offline spellcheck**: SD wordlist (`sd:/DICTS/`) with editor underlines.
 - **Document templates** (`sd:/TEMPLATES/`) and the `WRITER` reference app.
 

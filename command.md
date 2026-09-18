@@ -471,7 +471,7 @@ thin bar, plus blink period (`off`/0 = steady). Blink also retimes an open
 editor. Defaults from `P4_CONFIG_CURSOR_BLINK_MS` (shared with the editor
 timer). USB keyboard: arrows move, Ctrl+arrows word-jump, Home/End jump.
 
-### markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html]
+### markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print]
 Render Markdown (CommonMark-ish subset: headings, nested lists, quotes,
 fences, GFM tables with alignment, task lists, bold/italic/strike/code,
 links as `text (url)`) through the ANSI SGR pipeline, so spans style it on
