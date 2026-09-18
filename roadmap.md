@@ -92,6 +92,16 @@ Grouped by milestone rather than by version. Full per-version detail is in
 - Firmware behaviour is unchanged from v0.38.5; this release is about
   openness, documentation, and a clean baseline for the next campaign.
 
+### 8. Portability groundwork (v1.1.0)
+
+- Board profiles (`boards/<name>/` + `-DP4_BOARD=`, SD/SDIO pins promoted to
+  `BOARD_CFG_*`) and a `PORTING.md` bring-up checklist.
+- Native-app packaging spec (`docs/native_packaging.md`); `pkg` installs
+  native bundles store-only (execution needs a future loader).
+- SDK scaffolding: `tools/newapp.py` plus the `whoami` sample component.
+- CI build matrix across board profiles; `debug save` export
+  (`txt`/`csv`/`json`) with host-side `tools/parse_debuglog.py`.
+
 ---
 
 ## Part 2 — Where we are going
@@ -101,13 +111,13 @@ meant to build. Priorities are suggestions, not commitments.
 
 ### A. Framework and portability
 
+Section-A groundwork is done (v1.1.0, see Part 1 §8). Remaining:
+
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **Board abstraction + porting guide** | The reference board should not be the only option | The BSP already carries ILI9881C/EK79007/LT8912B panel drivers; document a `board_config` port and a minimal bring-up checklist |
-| **Native-app packaging** | Batch apps install with `pkg`; native apps do not | Define an SD-deployable native app format and a `pkg` path for it |
-| **App SDK scaffolding** | Lower the bar to start an app | A `newapp` template generator and an `applib` sample that builds out of tree |
-| **CI / build matrix** | Catch drift without hardware | GitHub Actions for firmware + test builds; keep hardware tests local |
-| **Structured logging hook** | Field debugging | A debug-log export command and a host-side parser |
+| **M5Stack Tab5 + Tab5Keyboard port** | Second board proves the abstraction | `boards/m5stack_tab5/` profile (ST7123/ST7121 panel split, ES8388 audio, RX8130CE RTC, Tab5Keyboard I2C input); needs `esp_lcd_st7123`, not vendored yet |
+| **Native-app loader** | Execute the stored native bundles | Position-independent blob + `app_register`; `abi`/`arch` enforced |
+| **Signed manifests** | Safe installation | Sign `PKGS` manifests, verify before install (platform/security row) |
 
 ### B. Writerdeck
 

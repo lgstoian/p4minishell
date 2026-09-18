@@ -40,7 +40,7 @@ inverted through small function tables (see [Layering](#layering) below).
 ```
 main/main.c                     App entry point, LVGL event callbacks, UI construction, host bridges
 p4minishell_config.h/.yaml      Centralized tunables (C source of truth + documentation)
-board_config.h/.yaml            Hardware pin assignments and display timing
+boards/<name>/board_config.h/.yaml  Board profile: pins, display timing (default jc1060p470c)
 components/ansi/                ANSI/VT SGR processing, 16-colour palette, format builder, semantic palette
 components/display/             Display manager (rotation, resolution, refresh, brightness, power)
 components/windows/             Window manager (screen layout, dynamic scaling, styling, surface modes)
@@ -72,6 +72,7 @@ components/led/                 WS2812 RGB status LED driver + auto status/event
 components/networking/          Sole owner of ESP-Hosted + esp_wifi_remote, BLE, HTTP client/server, netdiag
 components/usb/                 USB host (MSC storage at /usb0 + HID keyboard/mouse + lazy CDC-ACM serial)
 components/c6ota/               ESP32-C6 firmware OTA via ESP-Hosted SDIO
+samples/whoami/               Sample native app component (`whoami`, applib-only)
 coprocessor/esp32c6_slave/      ESP32-C6 hosted slave firmware project
 ```
 
@@ -1144,7 +1145,9 @@ shared modal runtime (see SDK.md, "Modal app surfaces").
 
 - Root `CMakeLists.txt`: Sets `EXTRA_COMPONENT_DIRS` for managed components and the project's own
   components (`ansi`, `batch`, `command`, `display`, `keyboard`, `shell`, `storage`, `clock`,
-  `windows`), and configures `board_config.h`
+  `windows`, plus `samples/whoami`), selects the board profile
+  (`-DP4_BOARD=`, default `jc1060p470c`), and stages that profile's
+  `board_config.h`
 - `main/CMakeLists.txt`: Registers `main.c` and `p4minishell.c` with component dependencies
 - `components/command/CMakeLists.txt`: Requires `batch` and `storage` in addition to `shell`
 - `components/batch/CMakeLists.txt`: Requires `shell` and `storage`
@@ -1152,7 +1155,7 @@ shared modal runtime (see SDK.md, "Modal app surfaces").
 - `components/networking/Kconfig.projbuild`: Defines the `P4MINISHELL_WIFI_DEFAULT_*` options
   (lives with its only consumer so any project including the component gets the symbols)
 - `test/CMakeLists.txt`: Standalone unit-test project. Pins `IDF_TARGET` to `esp32p4`, stages
-  `board_config.h` and `p4minishell_config.h` into the generated config directory the same way
+  the active `boards/<name>/board_config.h` and `p4minishell_config.h` into the generated config directory the same way
   the firmware project does, and lists every shared component directory including `storage`
   and `batch`.
 - Component `CMakeLists.txt` files: Standard `idf_component_register()` for each module

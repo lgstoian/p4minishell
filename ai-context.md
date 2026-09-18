@@ -49,8 +49,9 @@ the bug-campaign log live in [`bugs.md`](bugs.md).
 ```
 main/            app entry, boot sequencing, LVGL event callbacks, host bridges
 p4minishell_config.h/.yaml   central tunables (C source of truth + documentation)
-board_config.h/.yaml         hardware pins and display timing
+boards/<name>/board_config.h/.yaml  board profile: pins, display timing (default jc1060p470c, see PORTING.md)
 components/      one directory per subsystem (see the Module Layering Rules)
+samples/         out-of-tree-style native app components (whoami + newapp.py output)
 test/            standalone Unity test project (runs on the P4 target)
 apps/            on-SD reference apps (*.bat) + host push tools
 tools/           host-side serial/screenshot/SD drivers and hardware test suites
@@ -157,7 +158,7 @@ tools use a webcam to observe the device; prefer them over guessing.
 - p4minishell_config.yaml MUST be updated whenever a config value changes
 - Use P4_CONFIG_* macros for new code; SHELL_* aliases exist for backward compatibility
 - USB HID key codes are standard USB HID usage table values and stay local to usb.c
-- board_config.h remains the hardware-pin source of truth (GPIO assignments, display timing)
+- boards/<name>/board_config.h remains the hardware-pin source of truth (GPIO assignments, display timing)
 - sdkconfig remains the ESP-IDF build-configuration source of truth
 
 ## Source Code Rules
@@ -331,6 +332,8 @@ tools use a webcam to observe the device; prefer them over guessing.
   primitives. New runtime services for native apps belong in the matching
   `applib_*.h` (or an ops table when the owner lives higher in the stack). A new component under `components/` must be added to BOTH the root
   `CMakeLists.txt` `EXTRA_COMPONENT_DIRS` and `test/CMakeLists.txt`.
+  (`samples/` app components wire to the root project only — the test
+  project never links apps.)
 - `components/db/` is the Palm-OS-style SD record store (`db.{h,c}`). It is a
   LEAF below `storage`: it REQUIRES only `storage`, `esp_timer`, `freertos`
   (plus the board header for `BSP_SD_MOUNT_POINT`), never includes
@@ -621,7 +624,7 @@ tools use a webcam to observe the device; prefer them over guessing.
     writes the profile via the guarded storage session; boot.c auto-runs it after CONFIG.SYS.
     The profile path is `P4_CONFIG_ALIAS_PROFILE` (`ALIASES.BAT`), values are quoted on save,
     and values containing `"` are skipped.
-- System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c`
+- System info verbs (`help`, `sysinfo`, `version`, `about`, `mem`, `debug`) -> `components/shell/shell.c` (the `debug save` exporter is the exception: command-layer `shell_command_debug_save()` in `components/command/command.c`, mirroring `history /save`, because shell must not depend on storage)
 - Task introspection verbs (`ps`, `tasks`, `top`) -> `components/shell/shell.c` (`shell_command_ps`).
   They support `dir /O:`-style sorting (`/O:N|C|S|P|T`, `-` reverses; `top` defaults to CPU
   descending), return an int ERRORLEVEL (0 ok / 2 usage) the dispatcher records, and must stay
@@ -1479,8 +1482,9 @@ the raster core + 8x8 font are `components/gfx/`
 
 ### Unit Test Rules
 - `test/` is a standalone ESP-IDF project and MUST build with zero errors and zero warnings
-- `test/CMakeLists.txt` pins `IDF_TARGET` to `esp32p4` and stages `board_config.h` and
-  `p4minishell_config.h` into the generated config directory
+- `test/CMakeLists.txt` pins `IDF_TARGET` to `esp32p4` and stages the active
+  `boards/<name>/board_config.h` and `p4minishell_config.h` into the generated
+  config directory
 - `test/main/idf_component.yml` MUST pin the same managed component versions as `main/idf_component.yml`
 - `test/sdkconfig.defaults` MUST mirror the firmware's build-affecting options (FATFS LFN,
   ESP-Hosted, NimBLE, USB host) or the shared components will not compile

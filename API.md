@@ -244,6 +244,8 @@ void   shell_record_errorf(const char *tag, int error, const char *format, ...);
 void   shell_record_warningf(const char *tag, const char *format, ...);
 void   shell_record_infof(const char *tag, const char *format, ...);
 size_t shell_get_warning_count(void);
+size_t shell_debug_get_count(void);
+bool   shell_debug_get_entry(size_t index, char *out, size_t out_size);
 void   shell_command_debug(void);
 int    shell_command_ps(int argc, char **argv);   /* 0 ok, 2 usage; /O: sort */
 ```

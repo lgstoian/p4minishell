@@ -116,7 +116,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 
 | Command group | Implemented in |
 |---------------|----------------|
-| `help`, `sysinfo`, `version`/`ver`, `about`, `mem`, `debug` | `components/shell/shell.c` |
+| `help`, `sysinfo`, `version`/`ver`, `about`, `mem`, `debug` | `components/shell/shell.c` (`debug save` export lives in `components/command/command.c` beside `history /save`) |
 | `cd`/`chdir`, `dir`, `tree` | `components/storage/storage_nav.c` |
 | `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`, `append`, `touch`, `undelete`, `trash`, `attrib`, `label`, `xcopy` | `components/storage/storage_files.c` |
 | `find`, `findstr`, `more`, `fc`, `comp`, `sort` | `components/storage/storage_text.c` |

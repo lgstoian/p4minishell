@@ -321,10 +321,10 @@ LT8912B); porting to a new board is a documented roadmap item.
 All tunable values are in `p4minishell_config.h`, grouped by subsystem. The
 companion `p4minishell_config.yaml` documents each value (type, meaning,
 range). Edit the header, then keep the YAML in sync. Hardware pins and display
-timing live in `board_config.h` / `board_config.yaml`; build options live in
+timing live in `boards/<name>/board_config.h` / `.yaml` (default
+`boards/jc1060p470c/`, selected by `-DP4_BOARD=`); build options live in
 `sdkconfig` (generated — edit via `idf.py menuconfig`, the committed source
-of truth is `sdkconfig.defaults`). Board profiles live under `boards/`
-(`boards/jc1060p470c/` is the default); adding a board is documented in
+of truth is `sdkconfig.defaults`). Adding a board is documented in
 [`PORTING.md`](PORTING.md).
 
 > **Fresh checkout:** `dependencies.lock` may contain absolute paths from the

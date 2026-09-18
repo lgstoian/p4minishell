@@ -9,7 +9,7 @@
 #   - range: valid range or constraint
 #
 # The companion C header is p4minishell_config.h.
-# board_config.yaml remains the hardware-pin source of truth.
+# boards/<name>/board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
 # Version: 1.1.0

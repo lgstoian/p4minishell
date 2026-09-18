@@ -100,8 +100,9 @@ holder per port.
   longer occur).
 - `managed_patches.patch` — backup of the hand-authored `managed_components/`
   deltas (currently: LVGL `lv_async` PSRAM/lock hardening, the port
-  JD9165 `swap_xy` guard, and the BSP 4.x board wiring: `board_config.h`
-  pin/timing defines, JD9165 panel select, audio fail-soft init, backlight
+  JD9165 `swap_xy` guard, and the BSP 4.x board wiring: `boards/<name>/`
+  `board_config.h` pin/timing defines (incl. the uSD `BOARD_CFG_SD_*` pin
+  redirect), JD9165 panel select, audio fail-soft init, backlight
   config, touch tolerance + remap, SD slot-0 deinit + explicit-V LDO power).
   The generated 384-glyph `unscii_16` font is
   tracked in git; the reapply script restores it from HEAD when the vendored
@@ -199,3 +200,8 @@ holder per port.
 - Deploy tools: `apps/push_apps.py` (reference apps), `apps/push_assets.py`
   (PIL sprites + `.ASSETS` manifests), and `apps/push_pkgs.py` (build + push
   `PKGS/<APP>/` install bundles).
+- `newapp.py` — scaffold a native applib app component from the
+  `samples/whoami/` template: `python tools/newapp.py <name>`, then follow
+  the printed wiring steps (see `tutorial_native.md` §10).
+- `capture_docs.py` — curated public screenshots into `docs/assets/`
+  (non-destructive; see `docs/assets/README.md`).

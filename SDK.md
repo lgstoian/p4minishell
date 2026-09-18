@@ -370,7 +370,7 @@ work the integrator has to perform.
    | Peripheral toolkit | `components/command/periph_commands.c` | declare in `command.h` |
    | Power / display / battery | `components/command/power_commands.c` | declare in `command.h` |
    | Screenshot / serial | `components/command/serial_commands.c` | declare in `command.h` |
-   | System info | `components/shell/shell.c` | declare in `shell.h` |
+    | System info | `components/shell/shell.c` | declare in `shell.h` (`debug save` is the exception: command-layer file I/O in `command.c`, mirroring `history /save`) |
    | Hardware, UI query, other system | `components/command/command.c` | keep `static` |
 
 2. Implement the handler there. Handlers outside `command.c` must be non-`static` and declared
