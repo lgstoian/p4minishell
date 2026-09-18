@@ -2014,18 +2014,46 @@ size_t editor_lex_batch(const char *text, size_t len,
 ### Session (worker task)
 ```c
 esp_err_t editor_session_run(const char *path, int *errorlevel);
+esp_err_t editor_session_run_opts(const char *path,
+                                  const editor_session_opts_t *opts,
+                                  int *errorlevel);
 bool      editor_session_is_active(void);
 ```
+- `editor_session_run_opts` adds the writerdeck modifiers: `opts->focus` starts
+  in focus/typewriter mode and `opts->template_name` seeds a new buffer from
+  `sd:/TEMPLATES/<name>.MD`. `editor_session_run` is the plain wrapper (NULL
+  options).
 - `editor_session_run` blocks the worker until the user quits; the view
   signals saves/quits through the `editor_control_t` event group.
 - `editor_control_t.save_as_path` carries a Save-As target: when non-empty the
   worker saves there and re-titles the document.
+
+### Document word count (writerdeck)
+```c
+size_t editor_doc_word_count(const editor_doc_t *doc);
+```
+- Whitespace-delimited word count across the whole document; pure and
+  never mutating. Backs the editor status bar's `W n` and is unit-tested.
+
+### Offline spellcheck (writerdeck)
+```c
+bool   editor_spell_load(const char *name);   /* sd:/DICTS/<name>.words */
+void   editor_spell_unload(void);
+bool   editor_spell_ready(void);
+size_t editor_spell_word_count(void);
+bool   editor_spell_ok(const char *word, size_t len);
+```
+- Loads a wordlist once per session into PSRAM (a pool plus a sorted pointer
+  index) and binary-searches it. With no list loaded, `editor_spell_ok`
+  returns true so nothing is ever flagged. Bounded by `P4_CONFIG_SPELL_*`.
 
 ### View (LVGL task)
 ```c
 bool editor_view_open(editor_doc_t *doc, editor_control_t *control);
 void editor_view_close(void);
 bool editor_view_is_open(void);
+bool editor_view_is_preview(void);
+bool editor_view_is_focus(void);
 bool editor_view_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii);
 bool editor_view_handle_osk(const char *label);
 void editor_view_notify_saved(bool ok);
@@ -2033,6 +2061,8 @@ void editor_view_scroll_by(int32_t pixels);
 void editor_view_set_quit_requested(void);
 void editor_view_set_save_requested(void);
 ```
+- `editor_view_get_state()` reports the session flags (`preview`, `wrap`,
+  `focus`, `spell`) for `ui state` and tests.
 
 ### Shell bridge hooks (in `shell_command_ops_t`)
 The shell core and UART reader reach any active native modal surface through
@@ -2079,6 +2109,43 @@ int modal_ask_run(const char *prompt, const char *default_text, bool password,
   `result` and returns `0` on OK, `-1` on cancel/timeout.
 - All three take a `timeout_ms` (0 = wait forever); on timeout they close as
   a cancel.
+
+## Markdown API (`components/markdown/`)
+
+```c
+void   markdown_set_auto(bool on);
+bool   markdown_get_auto(void);
+size_t markdown_display_width(const char *s);
+size_t markdown_strip_ansi(const char *src, char *dst, size_t dst_size);
+bool   markdown_render_line(const char *line, char *out, size_t out_size);
+size_t markdown_render_doc(const char *md, char *out, size_t out_size);
+size_t markdown_render_html(const char *md, char *out, size_t out_size);
+size_t markdown_render_print(const char *text, const char *title,
+                             int cols, int rows,
+                             char *out, size_t out_size);
+```
+- `markdown_render_doc` emits ANSI SGR for on-device rendering (the single
+  implementation for the transcript, viewer, and editor preview).
+- `markdown_render_html` (writerdeck) serializes a self-contained HTML
+  fragment for `markdown export ... html`.
+- `markdown_render_print` (writerdeck) lays plain text out in fixed pages
+  (`cols` x `rows`, `title   Page N` header, form feed between pages) for
+  `markdown export ... print`. All are separate output formats and never
+  affect the ANSI path; each NUL-terminates and truncates safely.
+
+## Font API (`components/font/`)
+
+```c
+typedef enum { FONT_ROLE_TERMINAL, FONT_ROLE_UI, FONT_ROLE_READING,
+               FONT_ROLE_COUNT } font_role_t;
+const lv_font_t *font_get(font_role_t role);
+bool font_set(font_role_t role, const char *name);
+bool font_restore(const char *terminal, const char *ui, const char *reading);
+```
+- `FONT_ROLE_READING` (writerdeck) is the proportional/serif face for the
+  `view` viewer and the editor Markdown preview; only `FONT_ROLE_TERMINAL`
+  enforces the monospace rule. `windows_get_reading_font()` returns the
+  resolved reading chain.
 
 ## TUI Module API (`components/tui/` + `components/modal/`)
 

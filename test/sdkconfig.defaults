@@ -11,6 +11,15 @@ CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_SPIRAM=y
 
+# The test image links every component and had reached 0% free in the 2 MB
+# default app partition; 4 MB flash gives the single-app partition comfortable
+# headroom (the reference board has 16 MB flash).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# A custom table gives the app partition 2 MB (the default single-app table
+# caps factory at 1 MB). See test/partitions.csv.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
 CONFIG_FREERTOS_HZ=1000
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 

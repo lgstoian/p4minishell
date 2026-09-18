@@ -1,0 +1,7 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Unit-test image: the suite links every component, so give the app partition
+# comfortable headroom (the default single-app table caps factory at 1 MB and
+# the suite had reached 0% free).
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, ,        2M,

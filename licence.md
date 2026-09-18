@@ -88,6 +88,7 @@ notices are preserved verbatim inside the component.
 | Asset | License |
 |-------|---------|
 | `assets/fonts/DejaVuSansMono*.ttf` | Bitstream Vera / DejaVu license (`assets/fonts/LICENSE-DejaVu.txt`) |
+| `assets/fonts/DejaVuSerif*.ttf` | Bitstream Vera / DejaVu license (`assets/fonts/LICENSE-DejaVu.txt`) |
 | `assets/fonts/Noto*.ttf` | SIL Open Font License 1.1 (`assets/fonts/OFL.txt`) |
 | `components/gfx/gfx_font.c` | Generated from the public-domain `unscii-8` font |
 | `icon/icon-512.png`, `main/assets/icon_splash.c` | Project-authored derivatives |

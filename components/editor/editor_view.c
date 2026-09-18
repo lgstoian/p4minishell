@@ -23,8 +23,11 @@
 
 #include "editor_view.h"
 #include "editor.h"
+#include "editor_spell.h"
 #include "windows.h"
 #include "keyboard.h"
+#include "header.h"
+#include "display.h"
 #include "ansi.h"
 #include "font.h"
 #include "markdown.h"
@@ -90,6 +93,8 @@ static struct {
     size_t replace_len;
     bool replace_armed;         /* Enter repeats the last replace */
     bool preview;               /* Rendered Markdown preview (read-only) */
+    bool focus;                 /* Focus / typewriter mode (header+kbd hidden) */
+    bool spell;                 /* Spellcheck underlines on (session) */
     bool find_case;             /* Find/replace case sensitivity (session) */
     bool wrap;                  /* Word-wrap long rows (session) */
     size_t *wrap_counts;        /* Visual chunks per doc row (wrap on) */
@@ -127,6 +132,8 @@ static struct {
     .replace_len = 0,
     .replace_armed = false,
     .preview = false,
+    .focus = false,
+    .spell = false,
     .find_case = P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE,
     .wrap = false,
     .wrap_counts = NULL,
@@ -682,6 +689,12 @@ static void editor_emit_break(void)
     }
 }
 
+/** ASCII letter test for spellcheck tokenization. */
+static bool editor_spell_is_word_char(char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
 /** Emit [start, start+len) of @p text, splitting at wrap chunk bounds. */
 static void editor_emit_span(const char *text, size_t start, size_t len,
                              ansi_color_index_t color, unsigned attrs)
@@ -690,7 +703,37 @@ static void editor_emit_span(const char *text, size_t start, size_t len,
 
     if (!s_emit_wrap || len == 0) {
         if (len > 0) {
-            editor_add_run(text + start, len, color, attrs);
+            /* Spellcheck underlines split the run at word boundaries. Only
+             * the non-wrapping path applies it (wrap+spell is not combined;
+             * the toggle reports that honestly at the call site). */
+            if (s_editor_view.spell && editor_spell_ready()) {
+                size_t i = 0;
+                while (i < len) {
+                    size_t ws = i;
+                    while (ws < len && !editor_spell_is_word_char(text[start + ws])) {
+                        ws++;
+                    }
+                    if (ws > i) {
+                        editor_add_run(text + start + i, ws - i, color, attrs);
+                    }
+                    if (ws >= len) {
+                        break;
+                    }
+                    {
+                        size_t we = ws;
+                        bool miss;
+                        while (we < len && editor_spell_is_word_char(text[start + we])) {
+                            we++;
+                        }
+                        miss = !editor_spell_ok(text + start + ws, we - ws);
+                        editor_add_run(text + start + ws, we - ws, color,
+                                       attrs | (miss ? ANSI_ATTR_UNDERLINE : 0u));
+                        i = we;
+                    }
+                }
+            } else {
+                editor_add_run(text + start, len, color, attrs);
+            }
         }
         return;
     }
@@ -1046,6 +1089,17 @@ static void editor_scroll_event_cb(lv_event_t *event)
 #define EDITOR_PREVIEW_MAX_BYTES (96 * 1024)
 
 /* ANSI segment bridge: SGR runs become editor spans. */
+/** Line pitch for rendered Markdown in the reading font. */
+static lv_coord_t editor_reading_line_height(void)
+{
+    const lv_font_t *font = windows_get_reading_font();
+    lv_coord_t lh = font != NULL ? lv_font_get_line_height(font) : 0;
+    if (lh <= 0) {
+        return editor_line_height();
+    }
+    return lh + P4_CONFIG_READING_LINE_SPACING;
+}
+
 static void editor_preview_segment(const char *text, const ansi_state_t *state,
                                    void *user_data)
 {
@@ -1070,7 +1124,8 @@ static void editor_preview_segment(const char *text, const ansi_state_t *state,
     }
     lv_span_set_text(span, text);
     style = lv_span_get_style(span);
-    font_span_style(style, FONT_ROLE_TERMINAL, attrs, (int)color,
+    /* Reading role: proportional/serif is allowed here (not a cell surface). */
+    font_span_style(style, FONT_ROLE_READING, attrs, (int)color,
                     ansi_get_palette_color(color));
 }
 
@@ -1121,10 +1176,15 @@ static void editor_preview_show(void)
     s_editor_view.render_first = 0;
     lv_obj_set_y(s_editor_view.spans, 0);
     editor_clear_spans(s_editor_view.spans);
+    /* Render (and meter) in the reading font for a book-like preview. */
+    lv_obj_set_style_text_font(s_editor_view.spans,
+                               windows_get_reading_font(), 0);
+    lv_obj_set_style_text_line_space(s_editor_view.spans,
+                                     P4_CONFIG_READING_LINE_SPACING, 0);
     ansi_process_text(rendered, editor_preview_segment, s_editor_view.spans);
     editor_mem_free(rendered);
     lv_obj_set_height(s_editor_view.spans,
-                      (lv_coord_t)(count * (size_t)editor_line_height()));
+                      (lv_coord_t)(count * (size_t)editor_reading_line_height()));
 
     /* Preview owns the surface: hide source chrome. */
     if (s_editor_view.cursor != NULL) {
@@ -1147,6 +1207,17 @@ static void editor_preview_exit(void)
         return;
     }
     s_editor_view.preview = false;
+    /* Restore the source-view font + row pitch before rebuilding spans. */
+    if (s_editor_view.spans != NULL) {
+        const lv_font_t *font = windows_get_terminal_font();
+        lv_coord_t font_lh = font != NULL ? lv_font_get_line_height(font) : 16;
+        lv_coord_t line_space = editor_line_height() - font_lh;
+        if (line_space < 0) {
+            line_space = 0;
+        }
+        lv_obj_set_style_text_font(s_editor_view.spans, font, 0);
+        lv_obj_set_style_text_line_space(s_editor_view.spans, line_space, 0);
+    }
     editor_rebuild();
     editor_status_default();
 }
@@ -1429,6 +1500,19 @@ static void editor_ensure_cursor_visible(void)
         lv_obj_scroll_to_y(surface, cy + lh - view_h, LV_ANIM_OFF);
     }
 
+#if P4_CONFIG_EDITOR_FOCUS
+    /* Typewriter mode: keep the caret row vertically centred so writing does
+     * not drift toward the bottom edge. lv_obj_scroll_to_y clamps to the
+     * scrollable range, so no explicit end clamp is needed. */
+    if (s_editor_view.focus && view_h > lh) {
+        lv_coord_t target = cy - (view_h - lh) / 2;
+        if (target < 0) {
+            target = 0;
+        }
+        lv_obj_scroll_to_y(surface, target, LV_ANIM_OFF);
+    }
+#endif
+
     /* Horizontal follow (wrap off, long rows): keep the caret's x in view
      * so wrapped-off lines stay reachable without touch-dragging. */
     if (!s_editor_view.wrap) {
@@ -1478,11 +1562,46 @@ static void editor_status(const char *format, ...)
     free(buf);
 }
 
+/** Count whitespace-delimited words across the document (writerdeck status).
+ *  Delegates to the pure `editor_doc_word_count` so the status bar and the
+ *  unit tests share one definition. */
+static size_t editor_word_count(const editor_doc_t *doc)
+{
+    return editor_doc_word_count(doc);
+}
+
+/** Apply the focus/typewriter chrome (hide the header + OSK). Safe to call
+ *  repeatedly; restores the previous visibility on exit. Uses the light
+ *  editor-focus path (no full UI rebuild, which would close the editor). */
+static void editor_focus_apply(bool on)
+{
+#if P4_CONFIG_EDITOR_FOCUS
+    windows_set_editor_focus(on);
+#else
+    (void)on;
+#endif
+}
+
+/** Set focus mode and refresh the surface (centering in ensure_cursor_visible
+ *  reacts to the flag). */
+static void editor_focus_set(bool on)
+{
+    if (s_editor_view.focus == on) {
+        return;
+    }
+    s_editor_view.focus = on;
+    editor_focus_apply(on);
+    if (s_editor_view.doc != NULL) {
+        editor_ensure_cursor_visible();
+    }
+    editor_status("focus %s", on ? "on" : "off");
+}
+
 /** Render the status bar (or the active prompt) on the input-row label. */
 static void editor_status_default(void)
 {
     editor_doc_t *doc = s_editor_view.doc;
-    char *buf = malloc(P4_CONFIG_SD_PATH_BYTES + 96);
+    char *buf = malloc(P4_CONFIG_SD_PATH_BYTES + 160);
 
     if (doc == NULL || buf == NULL) {
         free(buf);
@@ -1505,10 +1624,10 @@ static void editor_status_default(void)
         s_editor_view.prompt_buf[s_editor_view.prompt_len] = '\0';
         if (s_editor_view.prompt == EDITOR_PROMPT_QUIT_CONFIRM ||
             s_editor_view.prompt == EDITOR_PROMPT_OPEN_CONFIRM) {
-            snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 96, "%s?  (Y/N)",
+            snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 160, "%s?  (Y/N)",
                      label);
         } else {
-            snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 96, "%s: %s_",
+            snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 160, "%s: %s_",
                      label, s_editor_view.prompt_buf);
         }
         editor_status_raw(buf);
@@ -1525,17 +1644,24 @@ static void editor_status_default(void)
         case EDITOR_SYNTAX_JSON: syntax = "json"; break;
         default: break;
         }
-        snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 96, "%s  %s  Ln %u, Col %u  %s %s%s%s%s%s",
+        snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 160, "%s  %s  Ln %u, Col %u  W %u  %s %s%s%s%s%s%s%s",
                  name,
                  doc->modified ? "*" : " ",
                  (unsigned)(editor_doc_cursor_row(doc) + 1),
                  (unsigned)(editor_doc_cursor_col(doc) + 1),
+#if P4_CONFIG_EDITOR_WORD_COUNT
+                 (unsigned)editor_word_count(doc),
+#else
+                 0u,
+#endif
                  doc->overwrite ? "OVR" : "INS",
                  syntax,
                  doc->crlf ? " CRLF" : "",
                  doc->readonly ? " RO" : "",
                  s_editor_view.preview ? "  PREVIEW" : "",
-                 s_editor_view.wrap ? "  WRAP" : "");
+                 s_editor_view.wrap ? "  WRAP" : "",
+                 s_editor_view.focus ? "  FOCUS" : "",
+                 s_editor_view.spell ? "  SPELL" : "");
         editor_status_raw(buf);
     }
     free(buf);
@@ -2312,6 +2438,34 @@ static void editor_apply_key(editor_key_t key, char ch)
         editor_rebuild();
         editor_status("wrap %s", s_editor_view.wrap ? "on" : "off");
         return;
+    case EDITOR_KEY_FOCUS_TOGGLE:
+        editor_focus_set(!s_editor_view.focus);
+        return;
+    case EDITOR_KEY_SPELL_TOGGLE:
+#if !P4_CONFIG_SPELL_ENABLE
+        editor_status("spellcheck disabled in this build (P4_CONFIG_SPELL_ENABLE=0)");
+        return;
+#else
+        if (!s_editor_view.spell) {
+            if (!editor_spell_ready()) {
+                /* Loading happens at session open on the worker; here we only
+                 * flip the flag, so no SD I/O runs on the LVGL task. */
+                editor_status("spell: no sd:/%s/%s.words dictionary",
+                              P4_CONFIG_SPELL_DICT_DIR_NAME,
+                              P4_CONFIG_SPELL_DICT_NAME);
+                return;
+            }
+            s_editor_view.spell = true;
+            editor_rebuild();
+            editor_status("spell on (%u words)",
+                          (unsigned)editor_spell_word_count());
+        } else {
+            s_editor_view.spell = false;
+            editor_rebuild();
+            editor_status("spell off");
+        }
+        return;
+#endif
     case EDITOR_KEY_GOTO_LINE:
         editor_prompt_begin(EDITOR_PROMPT_GOTO);
         return;
@@ -2411,6 +2565,8 @@ static const editor_osk_entry_t k_editor_osk_actions[] = {
     {"Comment", EDITOR_KEY_COMMENT},
     {"Match", EDITOR_KEY_MATCH_JUMP},
     {"Wrap", EDITOR_KEY_WRAP_TOGGLE},
+    {"Focus", EDITOR_KEY_FOCUS_TOGGLE},
+    {"Spell", EDITOR_KEY_SPELL_TOGGLE},
     {"Reload", EDITOR_KEY_RELOAD},
 };
 
@@ -2538,6 +2694,9 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     s_editor_view.preview = false;
     s_editor_view.find_case = P4_CONFIG_EDITOR_FIND_CASE_SENSITIVE;
     s_editor_view.wrap = false;
+    /* Spellcheck starts on only if a wordlist is already loaded (the worker
+     * loads it before the view opens) and the default enables it. */
+    s_editor_view.spell = (P4_CONFIG_SPELL_DEFAULT != 0) && editor_spell_ready();
     editor_mem_free(s_editor_view.wrap_counts);
     s_editor_view.wrap_counts = NULL;
     s_editor_view.wrap_count_rows = 0;
@@ -2693,6 +2852,14 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     keyboard_bind_textarea(NULL);
     keyboard_set_mode(KEYBOARD_MODE_NAV);
 
+#if P4_CONFIG_EDITOR_FOCUS
+    /* Opt-in focus / typewriter mode for this session. */
+    if (control != NULL && control->focus) {
+        s_editor_view.focus = true;
+        editor_focus_apply(true);
+    }
+#endif
+
     return true;
 }
 
@@ -2769,6 +2936,12 @@ void editor_view_close(void)
     keyboard_bind_textarea(windows_get_input_line());
     keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
 
+    /* Focus mode hid the header + OSK; make sure the shell chrome returns. */
+    if (s_editor_view.focus) {
+        editor_focus_apply(false);
+        s_editor_view.focus = false;
+    }
+
     windows_exit_editor_mode();
 
     s_editor_view.open = false;
@@ -2795,6 +2968,8 @@ void editor_view_get_state(editor_view_state_t *out)
     out->open = s_editor_view.open;
     out->preview = s_editor_view.preview;
     out->wrap = s_editor_view.wrap;
+    out->focus = s_editor_view.focus;
+    out->spell = s_editor_view.spell;
     doc = s_editor_view.doc;
     if (doc != NULL) {
         out->modified = doc->modified;
@@ -2810,6 +2985,12 @@ void editor_view_get_state(editor_view_state_t *out)
 bool editor_view_is_preview(void)
 {
     return s_editor_view.open && s_editor_view.preview;
+}
+
+/** Whether focus / typewriter mode is active. */
+bool editor_view_is_focus(void)
+{
+    return s_editor_view.open && s_editor_view.focus;
 }
 
 /** Rebuild open editor spans with current fonts after a font switch.

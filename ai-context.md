@@ -1018,12 +1018,20 @@ the raster core + 8x8 font are `components/gfx/`
 - Serial console verbs: `\q` quit, `\s` save, `\f` find, `\g` go-to-line,
   `\o` save-as, `\open` open another file, `\u` undo, `\r` redo,
   `\all` replace-all, `\c` case, `\b` match-jump, `\co` comment, `\w` wrap,
-  `\l` reload, `\p` preview, `\a` select-all; any other serial line
+  `\focus` focus/typewriter, `\spell` spellcheck, `\l` reload, `\p` preview,
+  `\a` select-all; any other serial line
   is typed text + Enter. Keep this set documented in command.md/editor.md.
 - All editor tunables live in `P4_CONFIG_EDITOR_*` (documented in
   p4minishell_config.yaml). New syntax modes extend `editor_syntax_t`,
   `editor_doc_pick_syntax()`, and the lexer — never special-case file
   extensions in the view.
+- Writerdeck additions (v1.2.0): `EDITOR_KEY_FOCUS_TOGGLE` (focus/typewriter,
+  header+OSK hidden via `windows_set_editor_focus()` — never a full UI
+  rebuild), `EDITOR_KEY_SPELL_TOGGLE` (underlines from
+  `editor_spell_*`). The spellcheck wordlist is loaded on the WORKER at
+  session open, never on the LVGL task, and read through an internal
+  `MALLOC_CAP_DMA` bounce buffer (PSRAM is not DMA-capable). `edit` also
+  accepts `/focus` and `/template <name>` via `editor_session_run_opts()`.
 - The status-bar prompt system (Find / Replace / Go-to-Line / Save-As / Open /
   quit confirmation) is the DOS EDIT search surface. Keep prompt strings in
   the status bar, never in the document.

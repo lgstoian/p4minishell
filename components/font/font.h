@@ -28,10 +28,12 @@ extern "C" {
 typedef enum {
     FONT_ROLE_TERMINAL = 0, /**< Monospace surfaces (transcript, TUI, editor). */
     FONT_ROLE_UI = 1,       /**< Chrome (header, input, keyboard, dialogs). */
+    FONT_ROLE_READING = 2,  /**< Reading surfaces (viewer, editor markdown
+                             *   preview); proportional/serif allowed. */
     FONT_ROLE_COUNT
 } font_role_t;
 
-/** Display name of a role ("terminal"/"ui"). Never NULL. */
+/** Display name of a role ("terminal"/"ui"/"reading"). Never NULL. */
 const char *font_role_name(font_role_t role);
 
 /** Init defaults from P4_CONFIG_FONT_*_DEFAULT. Call once before windows_init. */
@@ -52,7 +54,7 @@ bool font_builtin_monospace(int index);
 bool font_set(font_role_t role, const char *name);
 
 /** Best-effort boot restore (NULL = keep current). False if any name invalid. */
-bool font_restore(const char *terminal, const char *ui);
+bool font_restore(const char *terminal, const char *ui, const char *reading);
 
 /* ========================================================================
  * SD TTF FONTS (Phase 3)

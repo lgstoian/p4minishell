@@ -171,8 +171,13 @@ from the touch keyboard alone. The editor **opens on the Nav page**:
 5. **Edit** — enter it with `Edit` on the Nav page, a 3×6 grid: `Copy`, `Cut`,
    `Paste`, `SelAll`, `WordL`/`WordR` (word left/right), `DocTop`/`DocBot`
    (document home/end), `DelLine` (delete line), `DelEOL` (delete to end of
-   line), `Reload`, `Quit`, `Preview`, `Comment`, `Match`, `Wrap`, `Nav`
-   (→ the Nav page), and `abc`.
+   line), `Reload`, `Quit`, `Preview`, `Comment`, `Match`, `Wrap`, `Focus`,
+   `Spell`, `Nav` (→ the Nav page), and `abc`.
+
+Writerdeck additions: `Focus` toggles focus/typewriter mode (hides the header
+and keyboard, centres the caret) and `Spell` toggles spellcheck underlines from
+`sd:/DICTS/<name>.words`. The status bar shows the live word count (`W n`) and
+the `FOCUS` / `SPELL` flags.
 
 When a prompt asks for text (Find, Replace, Go to line, Save As, Open) the
 keyboard switches to the letters page automatically; committing or cancelling
@@ -206,6 +211,8 @@ verb controls the editor; any other line is typed as text followed by Enter:
 | `\l` or `\reload` | Reload from disk |
 | `\p` or `\preview` | Toggle preview |
 | `\a` or `\selectall` | Select all |
+| `\focus` | Toggle focus / typewriter mode (writerdeck) |
+| `\spell` | Toggle spellcheck underlines (writerdeck) |
 
 ## Syntax highlighting
 

@@ -3,7 +3,7 @@
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
 
-Current baseline: **372 tests, 0 failures, 2 ignored** (verify with
+Current baseline: **375 tests, 0 failures, 2 ignored** (verify with
 `tools/unit_run.py <COM_PORT>`). The runner completes cleanly with
 `=== All tests completed ===` and no reboot; if the board is reset-looping,
 check for a newly added test that calls an LVGL/heap path before `lv_init()`.
@@ -29,7 +29,7 @@ test/
     test_findstr.c          # findstr matcher
     test_comp.c             # byte compare
     test_task_sort.c        # ps/tasks/top sort comparator
-    test_editor.c           # editor document model
+    test_editor.c           # editor document model + OSK map + word count
     test_keyboard.c         # keyboard/external-input state
     test_config.c           # CONFIG.SYS directive helpers
     test_applib.c           # applib runtime helpers
@@ -41,7 +41,7 @@ test/
     test_tui.c              # TUI state, table width/parse helpers, draw hold
     test_clipboard.c        # RAM clipboard
     test_history_file.c     # history file round-trip
-    test_markdown.c         # markdown renderer
+    test_markdown.c         # markdown ANSI renderer + HTML serializer + print paginator
     test_filetype.c         # filetype registry
     test_json.c             # json validate/pretty
     test_gfx.c             # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
@@ -77,7 +77,9 @@ python ..\tools\unit_run.py <COM_PORT>
 
 The committed `test/sdkconfig` is a generated file; if a test knob (e.g.
 `CONFIG_LV_FONT_UNSCII_16`) silently reverts, re-check `test/sdkconfig.defaults`
-and regenerate (see `bugs.md` M42).
+and regenerate (see `bugs.md` M42). The unit image uses a custom partition
+table (`test/partitions.csv`, 2 MB app) because the suite links every component
+and the default 1 MB single-app partition ran out of room.
 
 ## Coverage notes
 

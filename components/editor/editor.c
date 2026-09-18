@@ -14,10 +14,12 @@
 
 #include "editor.h"
 #include "editor_view.h"
+#include "editor_spell.h"
 #include "p4minishell_config.h"
 #include "storage.h"
 #include "filetype.h"
 #include "shell.h"
+#include "ansi_palette.h"
 #include "modal.h"
 #include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
@@ -813,6 +815,37 @@ bool editor_doc_is_modified(const editor_doc_t *doc)
 bool editor_doc_needs_save(const editor_doc_t *doc)
 {
     return editor_doc_is_modified(doc);
+}
+
+size_t editor_doc_word_count(const editor_doc_t *doc)
+{
+    size_t words = 0;
+    size_t row;
+
+    if (doc == NULL) {
+        return 0;
+    }
+    for (row = 0; row < doc->line_count; row++) {
+        const char *text = doc->lines[row].text;
+        size_t len = doc->lines[row].length;
+        bool in_word = false;
+        size_t i;
+
+        if (text == NULL) {
+            continue;
+        }
+        for (i = 0; i < len; i++) {
+            unsigned char ch = (unsigned char)text[i];
+            bool space = (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n');
+            if (space) {
+                in_word = false;
+            } else if (!in_word) {
+                in_word = true;
+                words++;
+            }
+        }
+    }
+    return words;
 }
 
 static void editor_doc_mark_modified(editor_doc_t *doc)
@@ -2687,6 +2720,8 @@ typedef struct {
     int *errorlevel_out;
     esp_err_t result;
     editor_session_t *session;
+    bool focus;
+    const char *template_name;
 } editor_modal_ctx_t;
 
 /** Report whether a modal editor session is running (view open or opening). */
@@ -2720,6 +2755,50 @@ static void editor_session_close_cb(void *user_data)
         editor_view_close();
         xEventGroupSetBits(session->event_group, MODAL_EVENT_CLOSED);
     }
+}
+
+/** Seed a new buffer with sd:/TEMPLATES/<name>.MD (writerdeck). Runs on the
+ *  command worker (guarded SD session); the document keeps its own path. */
+static bool editor_seed_template(editor_doc_t *doc, const char *name)
+{
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *file;
+    char *buf;
+    size_t got;
+
+    if (doc == NULL || name == NULL || name[0] == '\0') {
+        return false;
+    }
+    snprintf(rel, sizeof(rel), "%s/%s.MD", P4_CONFIG_TEMPLATES_DIR_NAME, name);
+    if (shell_fs_resolve_path(rel, resolved, sizeof(resolved)) != ESP_OK) {
+        return false;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return false;
+    }
+    file = fopen(resolved, "rb");
+    if (file == NULL) {
+        shell_sd_end(&session, "edit");
+        return false;
+    }
+    buf = malloc(P4_CONFIG_TEMPLATE_MAX_BYTES + 1);
+    if (buf == NULL) {
+        fclose(file);
+        shell_sd_end(&session, "edit");
+        return false;
+    }
+    got = fread(buf, 1, P4_CONFIG_TEMPLATE_MAX_BYTES, file);
+    fclose(file);
+    shell_sd_end(&session, "edit");
+    if (got > 0) {
+        editor_doc_insert_bytes(doc, buf, got);
+    }
+    free(buf);
+    /* A seeded buffer is a starting point, not a saved file. */
+    doc->modified = true;
+    return true;
 }
 
 static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
@@ -2772,8 +2851,29 @@ static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
         return false;
     }
 
+    /* Seed a brand-new buffer from sd:/TEMPLATES/<name>.MD (writerdeck). Only
+     * for new/unnamed buffers: an existing file is never overwritten. */
+    if (mctx->template_name != NULL && mctx->template_name[0] != '\0' &&
+        (unnamed || editor_file_missing(resolved))) {
+        if (editor_seed_template(session->control.doc, mctx->template_name)) {
+            shell_transcript_appendf_ansi(SH_MUTE "edit: started from template '%s'\n" SH_RST,
+                                          mctx->template_name);
+        } else {
+            shell_print_warning("edit: template '%s' not found in sd:/%s/",
+                                mctx->template_name, P4_CONFIG_TEMPLATES_DIR_NAME);
+        }
+    }
+
+    /* Load the spellcheck wordlist on the worker (SD I/O must not run on the
+     * LVGL task). Best-effort: absent/broken dictionaries leave spell off.
+     * EXPERIMENTAL (v1.2.0): gated off until the crash in bugs.md is fixed. */
+#if P4_CONFIG_SPELL_ENABLE
+    (void)editor_spell_load(P4_CONFIG_SPELL_DICT_NAME);
+#endif
+
     session->event_group = event_group;
     session->control.event_group = event_group;
+    session->control.focus = mctx->focus;
 
     /* Mark the session active BEFORE the async view-open so serial input
      * arriving while the view is opening routes to the editor, not the shell. */
@@ -2990,6 +3090,10 @@ static void editor_serial_line_cb(void *user_data)
         editor_view_handle_usb_key(0x38, 0x01, '/'); /* Ctrl+/ -> comment */
     } else if (editor_serial_is_verb(line, "w") || editor_serial_is_verb(line, "wrap")) {
         editor_view_handle_usb_key(0, 0x01, 'w'); /* Ctrl+W -> wrap toggle */
+    } else if (editor_serial_is_verb(line, "focus")) {
+        editor_view_handle_usb_key(0, 0x03, 'f'); /* Ctrl+Shift+F -> focus toggle */
+    } else if (editor_serial_is_verb(line, "spell")) {
+        editor_view_handle_usb_key(0, 0x03, 's'); /* Ctrl+Shift+S -> spell toggle */
     } else if (editor_serial_is_verb(line, "l") || editor_serial_is_verb(line, "reload")) {
         editor_view_handle_usb_key(0, 0x01, 'l'); /* Ctrl+L -> reload */
     } else if (editor_serial_is_verb(line, "a") || editor_serial_is_verb(line, "selectall")) {
@@ -3070,7 +3174,9 @@ static const modal_surface_t editor_surface = {
     .handle_serial_line = editor_surface_handle_serial_line,
 };
 
-esp_err_t editor_session_run(const char *path, int *errorlevel)
+esp_err_t editor_session_run_opts(const char *path,
+                                  const editor_session_opts_t *opts,
+                                  int *errorlevel)
 {
     editor_modal_ctx_t mctx = {0};
     esp_err_t run_err;
@@ -3078,6 +3184,10 @@ esp_err_t editor_session_run(const char *path, int *errorlevel)
     mctx.path_arg = path;
     mctx.errorlevel_out = errorlevel;
     mctx.result = ESP_OK;
+    if (opts != NULL) {
+        mctx.focus = opts->focus;
+        mctx.template_name = opts->template_name;
+    }
 
     if (errorlevel != NULL) {
         *errorlevel = 0;
@@ -3101,11 +3211,19 @@ esp_err_t editor_session_run(const char *path, int *errorlevel)
 
     s_session_active = false;
 
+    /* Release the spellcheck wordlist with the session (returns PSRAM). */
+    editor_spell_unload();
+
     if (errorlevel != NULL && mctx.result != ESP_OK) {
         *errorlevel = 1;
     }
 
     return mctx.result;
+}
+
+esp_err_t editor_session_run(const char *path, int *errorlevel)
+{
+    return editor_session_run_opts(path, NULL, errorlevel);
 }
 
 /* ========================================================================
@@ -3149,6 +3267,8 @@ editor_key_t editor_key_from_usb(uint8_t key_code, uint8_t modifiers, char ascii
         if (shift) {
             switch (ascii) {
             case 'z': case 'Z': return EDITOR_KEY_REDO;
+            case 'f': case 'F': return EDITOR_KEY_FOCUS_TOGGLE;
+            case 's': case 'S': return EDITOR_KEY_SPELL_TOGGLE;
             default:
                 break;
             }

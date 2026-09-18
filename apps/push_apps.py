@@ -57,6 +57,8 @@ FILES = [
     ("diag", "DIAG.APPINFO", True),
     ("controlflow", "CONTROL.BAT", False),
     ("controlflow", "CONTROL.APPINFO", True),
+    ("writer", "WRITER.BAT", False),
+    ("writer", "WRITER.APPINFO", True),
 ]
 
 

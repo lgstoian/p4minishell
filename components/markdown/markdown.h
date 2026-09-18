@@ -49,6 +49,27 @@ bool markdown_render_line(const char *line, char *out, size_t out_size);
  */
 size_t markdown_render_doc(const char *md, char *out, size_t out_size);
 
+/**
+ * Serialize a full document to a self-contained HTML fragment (writerdeck
+ * `markdown export ... html`). Always NUL-terminates; truncates safely.
+ * Returns bytes written excluding NUL.
+ */
+size_t markdown_render_html(const char *md, char *out, size_t out_size);
+
+/** File extension (no dot) of the HTML export MIME/type hint, for reference. */
+#define MARKDOWN_HTML_EXT "html"
+
+/**
+ * Lay out plain text (already ANSI-stripped) as fixed-size pages for the
+ * writerdeck `markdown export ... print` format. Each page is @p cols wide and
+ * @p rows tall, with a title/`Page N` header and a form-feed between pages.
+ * Long lines are word-wrapped. Always NUL-terminates; truncates safely.
+ * Returns bytes written excluding NUL.
+ */
+size_t markdown_render_print(const char *text, const char *title,
+                             int cols, int rows,
+                             char *out, size_t out_size);
+
 #ifdef __cplusplus
 }
 #endif

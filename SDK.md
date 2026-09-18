@@ -279,6 +279,26 @@ in `components/applib` (or route it through an ops table when the owner lives
 higher in the stack), then add the component to the root and test
 `CMakeLists.txt` `EXTRA_COMPONENT_DIRS`.
 
+## Writerdeck surfaces (v1.2.0)
+
+The writing features are additive surfaces on the existing editor, markdown,
+and font modules — no new app model:
+
+- **Editor** (`components/editor/`): `editor_session_run_opts()` carries
+  `focus` and `template_name`; `editor_doc_word_count()` is the pure word
+  counter; `editor_spell_*` is the offline checker (wordlist read through an
+  internal DMA bounce buffer — never DMA into PSRAM). A new editor action is
+  one `editor_key_t` value + a `case` in the key handler + an OSK label + a
+  serial verb, exactly like `EDITOR_KEY_WRAP_TOGGLE`.
+- **Markdown** (`components/markdown/`): `markdown_render_doc` stays the single
+  ANSI renderer; `markdown_render_html` and `markdown_render_print`
+  (fixed-page, `print`) are separate output formats for the `markdown export`
+  verb.
+- **Fonts** (`components/font/`): `FONT_ROLE_READING` is the third role
+  (proportional/serif allowed, `DejaVuSerif` vendored); the viewer and editor
+  preview use `windows_get_reading_font()`, cell-metric surfaces stay on
+  `FONT_ROLE_TERMINAL`.
+
 ## Networking ownership
 
 Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, NimBLE, and HTTP call belongs in

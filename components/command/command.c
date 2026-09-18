@@ -995,20 +995,33 @@ int command_ghost_line(const char *line, char *out, size_t out_size)
 static void shell_command_edit(int argc, char **argv)
 {
     const char *path = NULL;
+    const char *template_name = NULL;
+    editor_session_opts_t opts = {0};
     int errorlevel = 0;
+    int i;
 
-    if (argc > 2) {
-        shell_print_usage("Usage: edit <path>");
-        batch_set_errorlevel(2);
-        return;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "/focus") == 0) {
+            opts.focus = true;
+        } else if (strcmp(argv[i], "/template") == 0) {
+            if (i + 1 >= argc) {
+                shell_print_usage("Usage: edit <path> [/focus] [/template <name>]");
+                batch_set_errorlevel(2);
+                return;
+            }
+            template_name = argv[++i];
+        } else if (path == NULL) {
+            path = argv[i];
+        } else {
+            shell_print_usage("Usage: edit <path> [/focus] [/template <name>]");
+            batch_set_errorlevel(2);
+            return;
+        }
     }
-
-    if (argc == 2) {
-        path = argv[1];
-    }
+    opts.template_name = template_name;
 
     /* The editor runs on the command worker task; it blocks until quit. */
-    esp_err_t err = editor_session_run(path, &errorlevel);
+    esp_err_t err = editor_session_run_opts(path, &opts, &errorlevel);
     if (err != ESP_OK && errorlevel == 0) {
         errorlevel = 1;
     }

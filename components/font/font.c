@@ -105,6 +105,7 @@ static void font_ttf_lock_init(void);
 static void font_ttf_release_locked(int slot);
 static int font_ttf_load_locked(const char *stem, int px, bool warn_missing);
 static void font_refresh_cjk_locked(font_role_t role);
+static void font_refresh_all_cjk_locked(void);
 
 /* Ensure the FA copy for a role exists (metrics constant; only .fallback
  * mutates later, atomically). Caller holds s_ttf_lock. */
@@ -138,13 +139,24 @@ static void font_rebuild_chain_locked(font_role_t role)
 
 const char *font_role_name(font_role_t role)
 {
-    return role == FONT_ROLE_UI ? "ui" : "terminal";
+    switch (role) {
+    case FONT_ROLE_UI:      return "ui";
+    case FONT_ROLE_READING: return "reading";
+    default:                return "terminal";
+    }
+}
+
+/** True for the roles the registry accepts. */
+static bool font_role_valid(font_role_t role)
+{
+    return role < FONT_ROLE_COUNT;
 }
 
 void font_init(void)
 {
     const font_builtin_t *term = font_find_builtin(P4_CONFIG_FONT_TERMINAL_DEFAULT);
     const font_builtin_t *ui = font_find_builtin(P4_CONFIG_FONT_UI_DEFAULT);
+    const font_builtin_t *reading = font_find_builtin(P4_CONFIG_FONT_READING_DEFAULT);
 
     /* Drive letter for sd:/FONTS (owned tiny driver; works with or without
      * a mounted card — opens simply fail until it mounts). */
@@ -157,24 +169,34 @@ void font_init(void)
     if (ui == NULL) {
         ui = &s_font_builtins[0];
     }
+    if (reading == NULL) {
+        /* Fall back to the UI default (proportional is fine for reading). */
+        reading = ui;
+    }
     s_font_role_primary[FONT_ROLE_TERMINAL] = term->font;
     s_font_role_primary[FONT_ROLE_UI] = ui->font;
+    s_font_role_primary[FONT_ROLE_READING] = reading->font;
     s_role_px[FONT_ROLE_TERMINAL] = P4_CONFIG_FONT_DEFAULT_PX;
     s_role_px[FONT_ROLE_UI] = P4_CONFIG_FONT_DEFAULT_PX;
+    s_role_px[FONT_ROLE_READING] = P4_CONFIG_FONT_DEFAULT_PX;
     s_role_ttf[FONT_ROLE_TERMINAL] = -1;
     s_role_ttf[FONT_ROLE_UI] = -1;
+    s_role_ttf[FONT_ROLE_READING] = -1;
     s_cjk_slot[FONT_ROLE_TERMINAL] = -1;
     s_cjk_slot[FONT_ROLE_UI] = -1;
+    s_cjk_slot[FONT_ROLE_READING] = -1;
     /* Chains (re)build lazily on first font_get. */
     s_chain_ready[FONT_ROLE_TERMINAL] = false;
     s_chain_ready[FONT_ROLE_UI] = false;
+    s_chain_ready[FONT_ROLE_READING] = false;
     s_fa_ready[FONT_ROLE_TERMINAL] = false;
     s_fa_ready[FONT_ROLE_UI] = false;
+    s_fa_ready[FONT_ROLE_READING] = false;
 }
 
 const lv_font_t *font_get(font_role_t role)
 {
-    if (role != FONT_ROLE_TERMINAL && role != FONT_ROLE_UI) {
+    if (!font_role_valid(role)) {
         role = FONT_ROLE_TERMINAL;
     }
     if (!s_chain_ready[role]) {
@@ -190,17 +212,20 @@ const lv_font_t *font_get(font_role_t role)
 
 const char *font_current_name(font_role_t role)
 {
-    const lv_font_t *font = (role == FONT_ROLE_UI)
-        ? s_font_role_primary[FONT_ROLE_UI]
-        : s_font_role_primary[FONT_ROLE_TERMINAL];
+    const lv_font_t *font;
     int i;
+
+    if (!font_role_valid(role)) {
+        role = FONT_ROLE_TERMINAL;
+    }
+    font = s_font_role_primary[role];
 
     for (i = 0; i < FONT_BUILTIN_COUNT; i++) {
         if (s_font_builtins[i].font == font) {
             return s_font_builtins[i].name;
         }
     }
-    if (role == FONT_ROLE_TERMINAL || role == FONT_ROLE_UI) {
+    {
         int slot = s_role_ttf[role];
         if (slot >= 0 && slot < P4_CONFIG_FONT_TTF_SLOTS &&
             s_ttf_slots[slot].used) {
@@ -249,7 +274,7 @@ bool font_set(font_role_t role, const char *name)
 {
     const font_builtin_t *found = font_find_builtin(name);
 
-    if (role != FONT_ROLE_TERMINAL && role != FONT_ROLE_UI) {
+    if (!font_role_valid(role)) {
         return false;
     }
     font_ttf_lock_init();
@@ -260,8 +285,7 @@ bool font_set(font_role_t role, const char *name)
             return false;
         }
         font_apply_primary_locked(role, found->font);
-        font_refresh_cjk_locked(FONT_ROLE_TERMINAL);
-        font_refresh_cjk_locked(FONT_ROLE_UI);
+        font_refresh_all_cjk_locked();
         xSemaphoreGive(s_ttf_lock);
         return true;
     }
@@ -280,14 +304,13 @@ bool font_set(font_role_t role, const char *name)
         s_ttf_slots[slot].refs++;
         font_apply_primary_locked(role, s_ttf_slots[slot].font);
         s_role_ttf[role] = slot;
-        font_refresh_cjk_locked(FONT_ROLE_TERMINAL);
-        font_refresh_cjk_locked(FONT_ROLE_UI);
+        font_refresh_all_cjk_locked();
         xSemaphoreGive(s_ttf_lock);
         return true;
     }
 }
 
-bool font_restore(const char *terminal, const char *ui)
+bool font_restore(const char *terminal, const char *ui, const char *reading)
 {
     bool ok = true;
 
@@ -295,6 +318,9 @@ bool font_restore(const char *terminal, const char *ui)
         ok = false;
     }
     if (ui != NULL && !font_set(FONT_ROLE_UI, ui)) {
+        ok = false;
+    }
+    if (reading != NULL && !font_set(FONT_ROLE_READING, reading)) {
         ok = false;
     }
     return ok;
@@ -533,29 +559,48 @@ void font_attach_cjk(void)
 {
     font_ttf_lock_init();
     xSemaphoreTake(s_ttf_lock, portMAX_DELAY);
-    font_refresh_cjk_locked(FONT_ROLE_TERMINAL);
-    font_refresh_cjk_locked(FONT_ROLE_UI);
+    font_refresh_all_cjk_locked();
     xSemaphoreGive(s_ttf_lock);
+}
+
+/** Refresh the CJK tail on every role (caller holds s_ttf_lock). */
+static void font_refresh_all_cjk_locked(void)
+{
+    font_role_t role;
+
+    for (role = 0; role < FONT_ROLE_COUNT; role++) {
+        font_refresh_cjk_locked(role);
+    }
 }
 
 /* ========================================================================
  * VARIANTS + SPAN STYLING
  * ======================================================================== */
 
-/* (stem, attr) -> variant stem. Only the vendored DejaVuSansMono pair. */
+/* (stem, attr) -> variant stem. Only the vendored DejaVu pair(s). */
 static const char *font_variant_stem(const char *base_stem, int attr)
 {
     if (base_stem == NULL) {
         return NULL;
     }
-    if (strcasecmp(base_stem, "DejaVuSansMono") != 0) {
+    if (strcasecmp(base_stem, "DejaVuSansMono") == 0) {
+        if (attr == FONT_VARIANT_BOLD) {
+            return "DejaVuSansMono-Bold";
+        }
+        if (attr == FONT_VARIANT_ITALIC) {
+            return "DejaVuSansMono-Oblique";
+        }
         return NULL;
     }
-    if (attr == FONT_VARIANT_BOLD) {
-        return "DejaVuSansMono-Bold";
-    }
-    if (attr == FONT_VARIANT_ITALIC) {
-        return "DejaVuSansMono-Oblique";
+    /* Reading serif (writerdeck): vendored as DejaVuSerif-Bold/-Italic. */
+    if (strcasecmp(base_stem, "DejaVuSerif") == 0) {
+        if (attr == FONT_VARIANT_BOLD) {
+            return "DejaVuSerif-Bold";
+        }
+        if (attr == FONT_VARIANT_ITALIC) {
+            return "DejaVuSerif-Italic";
+        }
+        return NULL;
     }
     return NULL;
 }
@@ -660,7 +705,7 @@ int font_scan_ttf(char out[][P4_CONFIG_FONT_NAME_BYTES], int cap)
 
 int font_current_size(font_role_t role)
 {
-    if (role != FONT_ROLE_TERMINAL && role != FONT_ROLE_UI) {
+    if (!font_role_valid(role)) {
         return P4_CONFIG_FONT_DEFAULT_PX;
     }
     return s_role_px[role];
@@ -672,7 +717,7 @@ bool font_set_size(font_role_t role, int px)
     int new_slot;
     const char *stem;
 
-    if (role != FONT_ROLE_TERMINAL && role != FONT_ROLE_UI) {
+    if (!font_role_valid(role)) {
         return false;
     }
     if (px < P4_CONFIG_FONT_SIZE_MIN || px > P4_CONFIG_FONT_SIZE_MAX) {

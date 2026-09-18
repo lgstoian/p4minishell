@@ -19,7 +19,7 @@ def run(dev, ctx):
 
     out = dev.run("about")
     c.expect("about banner", "P4MiniShell", out)
-    c.expect("about version", "about.version: 1.1.0", out)
+    c.expect("about version", "about.version: 1.2.0", out)
     c.expect("about board", "JC1060P470C", out)
     c.expect("about idf", "v5.5.5", out)
 
@@ -31,7 +31,7 @@ def run(dev, ctx):
     c.expect("mem reports heap", "heap", out)
 
     out = dev.run("version")
-    c.expect("version banner", "1.1.0", out)
+    c.expect("version banner", "1.2.0", out)
 
     # The on-screen keyboard's visibility is persisted UI state, so pin it
     # visible before sampling; otherwise a prior `keyboard hide` (e.g. the

@@ -199,7 +199,9 @@ holder per port.
   `python tools/parse_debuglog.py DEBUG.LOG`.
 - Deploy tools: `apps/push_apps.py` (reference apps), `apps/push_assets.py`
   (PIL sprites + `.ASSETS` manifests), and `apps/push_pkgs.py` (build + push
-  `PKGS/<APP>/` install bundles).
+  `PKGS/<APP>/` install bundles). `apps/push_templates.py` pushes the
+  writerdeck document templates to `sd:/TEMPLATES/`. `push_fonts.py` also
+  pushes the vendored reading serif (`assets/fonts/DejaVuSerif*.ttf`).
 - `newapp.py` — scaffold a native applib app component from the
   `samples/whoami/` template: `python tools/newapp.py <name>`, then follow
   the printed wiring steps (see `tutorial_native.md` §10).

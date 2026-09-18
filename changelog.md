@@ -14,6 +14,49 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [1.2.0] - Unreleased
+
+Writerdeck milestone (roadmap section B). Additive only — no existing
+feature removed. See [`roadmap.md`](roadmap.md) and
+[`tutorial_edit.md`](tutorial_edit.md).
+
+### Added
+
+- **Editor focus / typewriter mode** (`edit <file> /focus`): hides the header
+  and on-screen keyboard, keeps the caret vertically centred, and shows a live
+  word count in the status bar. Toggle in-session from the keyboard/touch.
+- **Markdown export** (`markdown export <src> <out> [text|html|print]`):
+  renders a `.md` file to plain text (ANSI stripped), HTML (headings, lists,
+  quotes, code, tables, links), or a fixed-page **print** layout (80x60 with a
+  `Page N` header and form feeds), written atomically.
+- **Reading typography**: a `reading` font role (proportional/serif) applied
+  to the modal viewer and the editor markdown preview, with reader line
+  spacing; the vendored `DejaVuSerif` face is auto-selected at first SD mount.
+  `font set reading`. The terminal role stays monospace-only.
+- **Spellcheck**: an SD wordlist (`sd:/DICTS/`) checked per line while editing,
+  with misspellings underlined; session toggle. The wordlist is read through
+  an internal DMA bounce buffer.
+- **Document templates**: shared `sd:/TEMPLATES/` root, `edit <file>
+  /template <name>`, and the `WRITER.BAT` reference app.
+
+### Fixed
+
+- **Spellcheck wordlist load crashed the board** (`bugs.md` W1): `fread` was
+  handed a PSRAM buffer (SD reads need DMA-capable internal memory) and
+  `bsearch` reused the `qsort` comparator, which misread the search key as a
+  pointer. Now chunk-read through an internal bounce buffer, with a dedicated
+  `bsearch` comparator. Verified on hardware.
+- **`view` / `open` / `hexview` did not resolve relative paths** (pre-existing):
+  the viewer opened the raw argument, so `view NOTES.TXT` failed with
+  `(cannot open file)` while `type` worked. Resolution now happens once in
+  `modal_viewer_run` / `modal_viewer_run_raw` / `modal_hexview_run`.
+- **The Markdown viewer rendered blank** (pre-existing): the viewer called
+  `markdown_strip_ansi(rendered, rendered, ...)` in place, but the function
+  NUL-terminates its destination before reading the source, so the same buffer
+  always emptied. Renders into a separate buffer now.
+
+---
+
 ## [1.1.0] - Unreleased
 
 Roadmap section A groundwork (framework + portability), targeting a future

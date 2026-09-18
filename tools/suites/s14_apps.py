@@ -65,6 +65,8 @@ PUSH_APPS = [
     ("diag", "DIAG.APPINFO", True),
     ("controlflow", "CONTROL.BAT", False),
     ("controlflow", "CONTROL.APPINFO", True),
+    ("writer", "WRITER.BAT", False),
+    ("writer", "WRITER.APPINFO", True),
 ]
 
 # Mirrors apps/companion/push_sd.py FILES.
@@ -81,6 +83,7 @@ NONSTOP = [
     ("PLOT", "[M-PLOT]", "[M-PLOT-DONE]", 60.0),
     ("UITEST", "[M-UITEST]", "[M-UITEST-DONE]", 60.0),
     ("CONTROL", "[M-CONTROL]", "[M-CONTROL-DONE]", 60.0),
+    ("WRITER", "[M-WRITER]", "[M-WRITER-DONE]", 60.0),
 ]
 
 # Interactive apps: launch, let the surface open, send an exit, then either

@@ -95,3 +95,66 @@ void test_markdown_display_width(void)
     TEST_ASSERT_EQUAL(2, (int)markdown_display_width("\xe4\xb8\xad"));
     TEST_ASSERT_EQUAL(3, (int)markdown_display_width("a\xe4\xb8\xad"));
 }
+
+void test_markdown_render_html(void)
+{
+    char out[1024];
+    size_t n;
+
+    n = markdown_render_html("# Title\n\nHello **bold** and `code`.\n", out, sizeof(out));
+    TEST_ASSERT_GREATER_THAN_size_t(0, n);
+    TEST_ASSERT_NOT_NULL(strstr(out, "<h1>Title</h1>"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "<strong>bold</strong>"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "<code>code</code>"));
+
+    n = markdown_render_html("- one\n- two\n", out, sizeof(out));
+    TEST_ASSERT_GREATER_THAN_size_t(0, n);
+    TEST_ASSERT_NOT_NULL(strstr(out, "<ul>"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "<li>one</li>"));
+
+    n = markdown_render_html("> quoted\n", out, sizeof(out));
+    TEST_ASSERT_NOT_NULL(strstr(out, "<blockquote>"));
+
+    n = markdown_render_html("```\n<b>raw</b>\n```\n", out, sizeof(out));
+    TEST_ASSERT_NOT_NULL(strstr(out, "<pre><code>"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "&lt;b&gt;raw&lt;/b&gt;"));
+
+    /* Escaping keeps angle brackets inert in a paragraph. */
+    (void)markdown_render_html("a < b & c\n", out, sizeof(out));
+    TEST_ASSERT_NOT_NULL(strstr(out, "&lt;"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "&amp;"));
+
+    /* NULL-safety and truncation contract. */
+    TEST_ASSERT_EQUAL_size_t(0, markdown_render_html(NULL, out, sizeof(out)));
+    TEST_ASSERT_EQUAL_size_t(0, markdown_render_html("x", NULL, sizeof(out)));
+}
+
+void test_markdown_render_print(void)
+{
+    char out[4096];
+    char body[512];
+    size_t i;
+    size_t n;
+
+    n = markdown_render_print("hello print", "Doc", 40, 20, out, sizeof(out));
+    TEST_ASSERT_GREATER_THAN_size_t(0, n);
+    TEST_ASSERT_NOT_NULL(strstr(out, "Doc"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "Page 1"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "hello print"));
+
+    /* A body taller than the page must paginate with a form feed + Page 2. */
+    for (i = 0; i < sizeof(body) - 2; i++) {
+        body[i] = (i % 2 == 0) ? 'a' : ' ';
+    }
+    body[sizeof(body) - 1] = '\0';
+    n = markdown_render_print(body, "Long", 40, 6, out, sizeof(out));
+    TEST_ASSERT_GREATER_THAN_size_t(0, n);
+    TEST_ASSERT_NOT_NULL(strstr(out, "Page 1"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "Page 2"));
+    TEST_ASSERT_NOT_NULL(strchr(out, '\f'));
+
+    /* NULL / zero-size safety. */
+    TEST_ASSERT_EQUAL_size_t(0, markdown_render_print(NULL, NULL, 40, 20, NULL, 0));
+    TEST_ASSERT_EQUAL_size_t(0, markdown_render_print("x", "t", 40, 20, NULL, 10));
+}
+

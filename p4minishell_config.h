@@ -56,7 +56,7 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             1
-#define P4_CONFIG_VERSION_MINOR             1
+#define P4_CONFIG_VERSION_MINOR             2
 #define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
@@ -259,6 +259,51 @@
 
 /** RGB colour of the `edit` editor's current-line highlight background. */
 #define P4_CONFIG_EDITOR_CURRENT_LINE_COLOR   0x16222A
+
+/** Show a live word count in the `edit` status bar (writerdeck). */
+#define P4_CONFIG_EDITOR_WORD_COUNT           1
+
+/** Enable focus / typewriter mode (`edit ... /focus`). */
+#define P4_CONFIG_EDITOR_FOCUS                1
+
+/* ---- Spellcheck (writerdeck) ----
+ * An offline wordlist is loaded from sd:/DICTS/<name>.words (one lower-case
+ * word per line) and misspellings are underlined while editing. The wordlist
+ * is read through an internal DMA bounce buffer (PSRAM is not DMA-capable). */
+#define P4_CONFIG_SPELL_ENABLE                1
+#define P4_CONFIG_SPELL_DEFAULT               0      /**< Underlines on at session start */
+#define P4_CONFIG_SPELL_DICT_DIR_NAME         "DICTS"
+#define P4_CONFIG_SPELL_DICT_NAME             "en"   /**< Default <name>.words stem */
+#define P4_CONFIG_SPELL_WORD_MAX              64     /**< Longest checkable word */
+#define P4_CONFIG_SPELL_MAX_WORDS             65536  /**< Wordlist capacity */
+#define P4_CONFIG_SPELL_MAX_BYTES             (1024 * 1024) /**< Wordlist file cap */
+
+/* ---- Document templates (writerdeck) ----
+ * New-file seeds live in sd:/TEMPLATES/<name>.MD (`edit <file> /template <name>`). */
+#define P4_CONFIG_TEMPLATES_DIR_NAME          "TEMPLATES"
+#define P4_CONFIG_TEMPLATE_NAME_BYTES         32
+#define P4_CONFIG_TEMPLATE_MAX_BYTES          8192  /**< Seeded template cap */
+
+/** Render-target byte cap for `markdown export` (text/HTML document). */
+#define P4_CONFIG_MD_EXPORT_MAX_BYTES         (256 * 1024)
+
+/** Print-to-file layout (writerdeck): fixed page geometry for the `print`
+ *  export format, wrapped and paginated for sharing/printing. */
+#define P4_CONFIG_PRINT_COLUMNS               80
+#define P4_CONFIG_PRINT_ROWS                  60
+
+/** Default font for the reading role (viewer + editor markdown preview).
+ *  Proportional is allowed here (unlike the terminal role); install a serif
+ *  TTF on SD and `font set reading <name> /save` for a book-like face. */
+#define P4_CONFIG_FONT_READING_DEFAULT        "montserrat_14"
+
+/** Serif reading face vendored in assets/fonts/ and pushed to sd:/FONTS/;
+ *  auto-selected for the reading role at first mount when no choice is saved. */
+#define P4_CONFIG_FONT_READING_SERIF          "DejaVuSerif"
+
+/** Extra line spacing (px) added to the reading role's line height in the
+ *  viewer and the editor Markdown preview (typography polish). */
+#define P4_CONFIG_READING_LINE_SPACING        4
 
 /** Number of entries in the debug/error log ring buffer. */
 #define P4_CONFIG_DEBUG_LOG_DEPTH            5

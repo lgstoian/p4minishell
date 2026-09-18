@@ -933,6 +933,7 @@ typedef struct {
     char *content;
     size_t content_size;
     bool raw;
+    bool reading;                /* Rendered markdown: use the reading font */
 } viewer_ctx_t;
 
 static viewer_ctx_t *s_viewer_active = NULL;
@@ -971,13 +972,21 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
             filetype_is_markdown(filetype_of(ctx->path))) {
             size_t cap = ctx->content_size * 2 + 64;
             char *rendered = malloc(cap);
-            if (rendered != NULL) {
+            char *plain = malloc(cap);
+            if (rendered != NULL && plain != NULL) {
                 markdown_render_doc(ctx->content, rendered, cap);
-                /* Strip in place (shrinks), then swap buffers. */
-                markdown_strip_ansi(rendered, rendered, cap);
+                /* Strip SGR into a SEPARATE buffer: markdown_strip_ansi()
+                 * NUL-terminates dst before reading src, so an in-place call
+                 * (src == dst) always yields an empty string. */
+                markdown_strip_ansi(rendered, plain, cap);
                 free(ctx->content);
-                ctx->content = rendered;
-                ctx->content_size = strlen(rendered);
+                ctx->content = plain;
+                ctx->content_size = strlen(plain);
+                ctx->reading = true;
+                free(rendered);
+            } else {
+                free(rendered);
+                free(plain);
             }
         }
         if (!ctx->content) {
@@ -1003,7 +1012,14 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->ta = lv_textarea_create(ctx->panel);
     lv_obj_set_size(ctx->ta, LV_PCT(100), LV_PCT(100));
     lv_textarea_set_text(ctx->ta, ctx->content ? ctx->content : "");
-    lv_obj_set_style_text_font(ctx->ta, windows_get_terminal_font(), 0);
+    lv_obj_set_style_text_font(ctx->ta,
+                               ctx->reading ? windows_get_reading_font()
+                                            : windows_get_terminal_font(), 0);
+    if (ctx->reading) {
+        /* Reader line spacing (typography polish). */
+        lv_obj_set_style_text_line_space(ctx->ta,
+                                         P4_CONFIG_READING_LINE_SPACING, 0);
+    }
     lv_textarea_set_cursor_click_pos(ctx->ta, false);
     lv_obj_t *row = lv_obj_create(ctx->panel);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
@@ -1064,9 +1080,17 @@ static const modal_surface_t viewer_surface = {
 int modal_viewer_run(const char *title, const char *file_path, uint32_t timeout_ms)
 {
     viewer_ctx_t ctx = {0};
+    char resolved[FB_MAX_PATH];
     int el=0;
     ctx.title = title;
-    ctx.path = file_path;
+    /* The viewer opens ctx.path directly, so resolve the shell's `sd:`/relative
+     * form to a real VFS path here (one place, every caller). */
+    if (file_path != NULL &&
+        shell_fs_resolve_path(file_path, resolved, sizeof(resolved)) == ESP_OK) {
+        ctx.path = resolved;
+    } else {
+        ctx.path = file_path;
+    }
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
     ctx.raw = false;
     if (modal_surface_run(&viewer_surface, &ctx, &el) != ESP_OK) return -1;
@@ -1077,9 +1101,15 @@ int modal_viewer_run(const char *title, const char *file_path, uint32_t timeout_
 int modal_viewer_run_raw(const char *title, const char *file_path, uint32_t timeout_ms, bool raw)
 {
     viewer_ctx_t ctx = {0};
+    char resolved[FB_MAX_PATH];
     int el=0;
     ctx.title = title;
-    ctx.path = file_path;
+    if (file_path != NULL &&
+        shell_fs_resolve_path(file_path, resolved, sizeof(resolved)) == ESP_OK) {
+        ctx.path = resolved;
+    } else {
+        ctx.path = file_path;
+    }
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
     ctx.raw = raw;
     if (modal_surface_run(&viewer_surface, &ctx, &el) != ESP_OK) return -1;
@@ -1474,9 +1504,15 @@ static const modal_surface_t hex_surface = {
 int modal_hexview_run(const char *title, const char *file_path, uint32_t timeout_ms)
 {
     hex_ctx_t ctx = {0};
+    char resolved[FB_MAX_PATH];
     int el=0;
     ctx.title = title;
-    ctx.path = file_path;
+    if (file_path != NULL &&
+        shell_fs_resolve_path(file_path, resolved, sizeof(resolved)) == ESP_OK) {
+        ctx.path = resolved;
+    } else {
+        ctx.path = file_path;
+    }
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
     if (modal_surface_run(&hex_surface, &ctx, &el) != ESP_OK) return -1;
     return 0;

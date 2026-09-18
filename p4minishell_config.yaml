@@ -12,11 +12,10 @@
 # boards/<name>/board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 1.1.0
-# Last updated: 2026-09-18 (1.1.0: roadmap section A groundwork -
-#   board profiles, native packaging spec, SDK scaffolding, CI matrix,
-#   structured logging)
-config_version: "1.1.0"
+# Version: 1.2.0
+# Last updated: 2026-09-18 (1.2.0: writerdeck - editor focus/typewriter mode,
+#   markdown export, reading typography, spellcheck, document templates)
+config_version: "1.2.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -228,6 +227,87 @@ buffers:
     type: int
     description: "RGB colour of the edit editor's current-line highlight background"
     range: "0x000000..0xFFFFFF"
+  editor_word_count:
+    value: 1
+    type: bool
+    description: "Show a live word count in the edit status bar (P4_CONFIG_EDITOR_WORD_COUNT)"
+  editor_focus:
+    value: 1
+    type: bool
+    description: "Enable focus / typewriter mode (edit ... /focus) (P4_CONFIG_EDITOR_FOCUS)"
+  spell_default:
+    value: 0
+    type: bool
+    description: "Spellcheck underlines on at editor session start (P4_CONFIG_SPELL_DEFAULT)"
+  spell_enable:
+    value: 1
+    type: bool
+    description: "Enable the editor spellcheck wordlist load (P4_CONFIG_SPELL_ENABLE). The wordlist is read via an internal DMA bounce buffer"
+  spell_dict_dir_name:
+    value: "DICTS"
+    type: string
+    description: "SD directory for wordlists (sd:/DICTS/<name>.words) (P4_CONFIG_SPELL_DICT_DIR_NAME)"
+  spell_dict_name:
+    value: "en"
+    type: string
+    description: "Default wordlist stem for spellcheck (P4_CONFIG_SPELL_DICT_NAME)"
+  spell_word_max:
+    value: 64
+    type: size_t
+    description: "Longest checkable word (P4_CONFIG_SPELL_WORD_MAX)"
+    range: "8..128"
+  spell_max_words:
+    value: 65536
+    type: size_t
+    description: "Wordlist capacity (P4_CONFIG_SPELL_MAX_WORDS)"
+    range: "256..262144"
+  spell_max_bytes:
+    value: 1048576
+    type: size_t
+    description: "Wordlist file size cap in bytes (P4_CONFIG_SPELL_MAX_BYTES)"
+    range: "4096..4194304"
+  templates_dir_name:
+    value: "TEMPLATES"
+    type: string
+    description: "SD directory for new-file templates (sd:/TEMPLATES/<name>.MD) (P4_CONFIG_TEMPLATES_DIR_NAME)"
+  template_name_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum template name length (P4_CONFIG_TEMPLATE_NAME_BYTES)"
+    range: "8..128"
+  template_max_bytes:
+    value: 8192
+    type: size_t
+    description: "Seeded template byte cap (P4_CONFIG_TEMPLATE_MAX_BYTES)"
+    range: "256..65536"
+  md_export_max_bytes:
+    value: 262144
+    type: size_t
+    description: "Render-target byte cap for markdown export text/HTML (P4_CONFIG_MD_EXPORT_MAX_BYTES)"
+    range: "65536..1048576"
+  font_reading_default:
+    value: "montserrat_14"
+    type: string
+    description: "Default font for the reading role (viewer + editor markdown preview); proportional/serif allowed (P4_CONFIG_FONT_READING_DEFAULT)"
+  font_reading_serif:
+    value: "DejaVuSerif"
+    type: string
+    description: "Serif reading face vendored in assets/fonts/ and pushed to sd:/FONTS/; auto-selected for the reading role at first mount when no choice is saved (P4_CONFIG_FONT_READING_SERIF)"
+  reading_line_spacing:
+    value: 4
+    type: int
+    description: "Extra line spacing (px) for the reading role in the viewer and editor markdown preview (P4_CONFIG_READING_LINE_SPACING)"
+    range: "0..16"
+  print_columns:
+    value: 80
+    type: int
+    description: "Print-to-file page width in columns for `markdown export ... print` (P4_CONFIG_PRINT_COLUMNS)"
+    range: "40..132"
+  print_rows:
+    value: 60
+    type: int
+    description: "Print-to-file page height in lines for `markdown export ... print` (P4_CONFIG_PRINT_ROWS)"
+    range: "20..200"
   debug_log_depth:
     value: 5
     type: size_t

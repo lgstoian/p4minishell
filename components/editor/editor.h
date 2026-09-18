@@ -114,6 +114,8 @@ typedef enum {
     EDITOR_KEY_OPEN,          /**< Open another file (touch `Open` / USB F4) */
     EDITOR_KEY_GOTO_LINE,     /**< Jump to a line number */
     EDITOR_KEY_PREVIEW,       /**< Toggle rendered Markdown preview (USB Ctrl+P) */
+    EDITOR_KEY_FOCUS_TOGGLE,  /**< Toggle focus/typewriter mode (USB Ctrl+Shift+F) */
+    EDITOR_KEY_SPELL_TOGGLE,  /**< Toggle spellcheck underlines (session) */
 } editor_key_t;
 
 /** One line of the document: a byte buffer that never contains '\n' or '\r'. */
@@ -212,6 +214,10 @@ bool editor_doc_is_modified(const editor_doc_t *doc);
 
 /** Whether the document is byte-identical to the file it was loaded from. */
 bool editor_doc_needs_save(const editor_doc_t *doc);
+
+/** Count whitespace-delimited words across the whole document (writerdeck
+ *  status bar). Pure; never mutates. */
+size_t editor_doc_word_count(const editor_doc_t *doc);
 
 /* ========================================================================
  * EDITING OPERATIONS (all run on the LVGL task)
@@ -457,6 +463,15 @@ size_t editor_format_line_number(size_t line, unsigned width,
 typedef struct editor_session editor_session_t;
 
 /**
+ * Optional `edit` session modifiers. All default to off when the struct is
+ * zeroed (the plain `edit <path>` behaviour).
+ */
+typedef struct {
+    bool focus;              /**< Start in focus/typewriter mode */
+    const char *template_name; /**< Seed a new buffer from TEMPLATES/<name> (B5) */
+} editor_session_opts_t;
+
+/**
  * Run a modal `edit <path>` session on the command worker task.
  *
  * Loads the file (or starts a new buffer when the path does not exist), opens
@@ -468,6 +483,11 @@ typedef struct editor_session editor_session_t;
  * @return ESP_OK on success.
  */
 esp_err_t editor_session_run(const char *path, int *errorlevel);
+
+/** As editor_session_run(), with focus/template modifiers. @p opts may be NULL. */
+esp_err_t editor_session_run_opts(const char *path,
+                                  const editor_session_opts_t *opts,
+                                  int *errorlevel);
 
 /** Report whether a modal editor session is running (view open or opening).
  *  Used by the UART console reader to route serial input to the editor even
@@ -503,6 +523,7 @@ typedef struct {
     bool open_ok;                     /**< Set by worker: last open succeeded */
     char save_as_path[P4_CONFIG_EDITOR_PROMPT_BYTES]; /**< Save As target; "" = source path */
     char open_path[P4_CONFIG_EDITOR_PROMPT_BYTES];    /**< Open target path */
+    bool focus;                       /**< Start the view in focus/typewriter mode */
 } editor_control_t;
 
 #ifdef __cplusplus

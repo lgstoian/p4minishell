@@ -239,6 +239,15 @@ const lv_font_t *windows_get_terminal_font(void);
  * Both delegate to the components/font/ registry. */
 const lv_font_t *windows_get_ui_font(void);
 
+/** Get the reading font: a proportional/serif face for the viewer and the
+ *  editor markdown preview. Never used for cell-metric surfaces. */
+const lv_font_t *windows_get_reading_font(void);
+
+/** Enter/leave writerdeck focus mode: hides the header and keyboard and
+ *  reflows the editor surface, without a full UI rebuild. Call while the
+ *  editor session is open (from the LVGL task). */
+void windows_set_editor_focus(bool focus);
+
 /** Re-resolve owned widget fonts after a font switch (see impl note). */
 void windows_refresh_fonts(void);
 

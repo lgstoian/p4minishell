@@ -38,9 +38,32 @@
 /* SHELL.INI keys for the saved font choice (sd:/APPS/SHELL.INI). */
 #define FONT_INI_KEY_TERMINAL      "font_terminal"
 #define FONT_INI_KEY_UI            "font_ui"
+#define FONT_INI_KEY_READING       "font_reading"
 #define FONT_INI_KEY_TERMINAL_SIZE "font_terminal_size"
 #define FONT_INI_KEY_UI_SIZE       "font_ui_size"
+#define FONT_INI_KEY_READING_SIZE  "font_reading_size"
 #define THEME_INI_KEY              "theme"
+
+/** Parse a role token ("terminal"/"ui"/"reading"). */
+static bool font_parse_role(const char *text, font_role_t *out)
+{
+    if (text == NULL || out == NULL) {
+        return false;
+    }
+    if (shell_text_equals_ignore_case(text, "terminal")) {
+        *out = FONT_ROLE_TERMINAL;
+        return true;
+    }
+    if (shell_text_equals_ignore_case(text, "ui")) {
+        *out = FONT_ROLE_UI;
+        return true;
+    }
+    if (shell_text_equals_ignore_case(text, "reading")) {
+        *out = FONT_ROLE_READING;
+        return true;
+    }
+    return false;
+}
 
 static void font_shell_ini_path(char *out, size_t out_size)
 {
@@ -86,7 +109,8 @@ static bool font_save_current(void)
     char size_buf[16];
 
     if (!config_persist_set("FONT_TERMINAL", font_current_name(FONT_ROLE_TERMINAL)) ||
-        !config_persist_set("FONT_UI", font_current_name(FONT_ROLE_UI))) {
+        !config_persist_set("FONT_UI", font_current_name(FONT_ROLE_UI)) ||
+        !config_persist_set("FONT_READING", font_current_name(FONT_ROLE_READING))) {
         return false;
     }
     /* Sizes are best-effort (names already saved); keep going on failure. */
@@ -94,6 +118,8 @@ static bool font_save_current(void)
     config_persist_set("FONT_TERMINAL_SIZE", size_buf);
     snprintf(size_buf, sizeof(size_buf), "%d", font_current_size(FONT_ROLE_UI));
     config_persist_set("FONT_UI_SIZE", size_buf);
+    snprintf(size_buf, sizeof(size_buf), "%d", font_current_size(FONT_ROLE_READING));
+    config_persist_set("FONT_READING_SIZE", size_buf);
     return true;
 }
 
@@ -128,10 +154,12 @@ bool font_restore_saved(void)
     char path[P4_CONFIG_SD_PATH_BYTES];
     char terminal[P4_CONFIG_FONT_NAME_BYTES];
     char ui[P4_CONFIG_FONT_NAME_BYTES];
+    char reading[P4_CONFIG_FONT_NAME_BYTES];
     char size_buf[16];
     char theme_name[32];
     bool have_terminal = false;
     bool have_ui = false;
+    bool have_reading = false;
 
     font_shell_ini_path(path, sizeof(path));
 
@@ -152,8 +180,13 @@ bool font_restore_saved(void)
     if (font_pref_get(path, FONT_INI_KEY_UI, ui, sizeof(ui))) {
         have_ui = true;
     }
-    if (have_terminal || have_ui) {
-        font_restore(have_terminal ? terminal : NULL, have_ui ? ui : NULL);
+    if (font_pref_get(path, FONT_INI_KEY_READING, reading, sizeof(reading))) {
+        have_reading = true;
+    }
+    if (have_terminal || have_ui || have_reading) {
+        font_restore(have_terminal ? terminal : NULL,
+                     have_ui ? ui : NULL,
+                     have_reading ? reading : NULL);
     }
     /* Sizes restore after names (a size needs its TTF selected first).
      * Terminal sizes are clamp-checked (a saved size may postdate a
@@ -175,6 +208,27 @@ bool font_restore_saved(void)
             font_set_size(FONT_ROLE_UI, px);
         }
     }
+    if (font_pref_get(path, FONT_INI_KEY_READING_SIZE, size_buf, sizeof(size_buf))) {
+        int px = atoi(size_buf);
+        if (px > 0) {
+            font_set_size(FONT_ROLE_READING, px);
+        }
+    }
+    /* Reading typography: when no reading font was saved, prefer the vendored
+     * serif face if it is present on the card (silent when absent). */
+    if (!have_reading) {
+        char stems[16][P4_CONFIG_FONT_NAME_BYTES];
+        int ntts = font_scan_ttf(stems, 16);
+        int i;
+        for (i = 0; i < ntts; i++) {
+            if (strcasecmp(stems[i], P4_CONFIG_FONT_READING_SERIF) == 0) {
+                if (font_set(FONT_ROLE_READING, P4_CONFIG_FONT_READING_SERIF)) {
+                    font_refresh_live();
+                }
+                break;
+            }
+        }
+    }
     /* Report the mount state (the original contract): an unreadable card makes
      * the caller re-arm the one-shot so the next mount retries. */
     return storage_sd_is_mounted();
@@ -182,7 +236,7 @@ bool font_restore_saved(void)
 
 static void shell_command_font_usage(void)
 {
-    shell_transcript_appendf_ansi("Usage: font info | font coverage | font list | font set <terminal|ui> <name> [/save] | font size <terminal|ui> <px> [/save]\n");
+    shell_transcript_appendf_ansi("Usage: font info | font coverage | font list | font set <terminal|ui|reading> <name> [/save] | font size <terminal|ui|reading> <px> [/save]\n");
     shell_transcript_appendf_ansi("  info      - font roles, line heights, fallback state\n");
     shell_transcript_appendf_ansi("  coverage  - labeled glyph rows ([have] renders, [want:P2] tofu until SD TTFs)\n");
     shell_transcript_appendf_ansi("  list      - built-ins + sd:/FONTS/*.ttf with per-role sizes\n");
@@ -204,6 +258,8 @@ static void shell_command_font_info(void)
     shell_transcript_appendf("  header     : chain\n");
     shell_transcript_appendf("  keyboard   : chain\n");
     shell_transcript_appendf("  buttons    : chain\n");
+    shell_transcript_appendf("  reading    : %s (viewer + markdown preview; proportional/serif)\n",
+                             font_current_name(FONT_ROLE_READING));
     shell_transcript_appendf("line heights: terminal=%ld ui=%ld\n",
                              (long)lv_font_get_line_height(term),
                              (long)lv_font_get_line_height(ui));
@@ -261,11 +317,13 @@ void shell_command_font(int argc, char **argv)
         if (ntts == 0) {
             shell_transcript_appendf("  (no sd:/FONTS/*.ttf found - push with push_fonts.py)\n");
         }
-        shell_transcript_appendf("roles: terminal=%s@%d ui=%s@%d\n",
+        shell_transcript_appendf("roles: terminal=%s@%d ui=%s@%d reading=%s@%d\n",
                                  font_current_name(FONT_ROLE_TERMINAL),
                                  font_current_size(FONT_ROLE_TERMINAL),
                                  font_current_name(FONT_ROLE_UI),
-                                 font_current_size(FONT_ROLE_UI));
+                                 font_current_size(FONT_ROLE_UI),
+                                 font_current_name(FONT_ROLE_READING),
+                                 font_current_size(FONT_ROLE_READING));
         batch_set_errorlevel(0);
         return;
     }
@@ -275,16 +333,12 @@ void shell_command_font(int argc, char **argv)
         int i;
 
         if (argc < 4) {
-            shell_transcript_appendf_ansi(SH_ERR "font set: usage: font set <terminal|ui> <name> [/save]\n" SH_RST);
+            shell_transcript_appendf_ansi(SH_ERR "font set: usage: font set <terminal|ui|reading> <name> [/save]\n" SH_RST);
             batch_set_errorlevel(2);
             return;
         }
-        if (shell_text_equals_ignore_case(argv[2], "terminal")) {
-            role = FONT_ROLE_TERMINAL;
-        } else if (shell_text_equals_ignore_case(argv[2], "ui")) {
-            role = FONT_ROLE_UI;
-        } else {
-            shell_transcript_appendf_ansi(SH_ERR "font set: unknown role '%s' (terminal|ui)\n" SH_RST, argv[2]);
+        if (!font_parse_role(argv[2], &role)) {
+            shell_transcript_appendf_ansi(SH_ERR "font set: unknown role '%s' (terminal|ui|reading)\n" SH_RST, argv[2]);
             batch_set_errorlevel(2);
             return;
         }
@@ -342,16 +396,12 @@ void shell_command_font(int argc, char **argv)
         int px;
 
         if (argc < 4) {
-            shell_transcript_appendf_ansi(SH_ERR "font size: usage: font size <terminal|ui> <px 10..28> [/save]\n" SH_RST);
+            shell_transcript_appendf_ansi(SH_ERR "font size: usage: font size <terminal|ui|reading> <px 10..28> [/save]\n" SH_RST);
             batch_set_errorlevel(2);
             return;
         }
-        if (shell_text_equals_ignore_case(argv[2], "terminal")) {
-            role = FONT_ROLE_TERMINAL;
-        } else if (shell_text_equals_ignore_case(argv[2], "ui")) {
-            role = FONT_ROLE_UI;
-        } else {
-            shell_transcript_appendf_ansi(SH_ERR "font size: unknown role '%s' (terminal|ui)\n" SH_RST, argv[2]);
+        if (!font_parse_role(argv[2], &role)) {
+            shell_transcript_appendf_ansi(SH_ERR "font size: unknown role '%s' (terminal|ui|reading)\n" SH_RST, argv[2]);
             batch_set_errorlevel(2);
             return;
         }

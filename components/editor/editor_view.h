@@ -41,6 +41,8 @@ typedef struct {
     bool modified;
     bool preview;
     bool wrap;
+    bool focus;
+    bool spell;
     bool readonly;
     size_t cursor_row;
     size_t cursor_col;
@@ -53,6 +55,9 @@ void editor_view_get_state(editor_view_state_t *out);
 
 /** Whether the rendered Markdown preview is showing (read-only). */
 bool editor_view_is_preview(void);
+
+/** Whether focus / typewriter mode is active. */
+bool editor_view_is_focus(void);
 
 /** Live-update the cursor blink period of an open editor (0 = steady).
  * No-op unless open. Takes the port lock. */

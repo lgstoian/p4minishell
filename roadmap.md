@@ -102,6 +102,17 @@ Grouped by milestone rather than by version. Full per-version detail is in
 - CI build matrix across board profiles; `debug save` export
   (`txt`/`csv`/`json`) with host-side `tools/parse_debuglog.py`.
 
+### 9. Writerdeck (v1.2.0)
+
+- Editor **focus / typewriter mode** (`edit /focus`): header and keyboard
+  hidden, caret centred, live word count.
+- **Markdown export** (`markdown export <src> <out> [text|html]`) and a
+  self-contained HTML serializer.
+- **Reading typography**: a proportional/serif `reading` font role for the
+  viewer and editor Markdown preview.
+- **Offline spellcheck**: SD wordlist (`sd:/DICTS/`) with editor underlines.
+- **Document templates** (`sd:/TEMPLATES/`) and the `WRITER` reference app.
+
 ---
 
 ## Part 2 — Where we are going
@@ -121,13 +132,13 @@ Section-A groundwork is done (v1.1.0, see Part 1 §8). Remaining:
 
 ### B. Writerdeck
 
+Section-B groundwork is done (v1.2.0, see Part 1 §9). Remaining:
+
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **Focus / typewriter mode** | Distraction-free writing | Full-screen editor mode that hides the header, keyboard, and status; word count |
-| **Markdown export & print** | Get text off the device | Render `.md` to text/HTML and share via `httpd`; a print-to-file/PDF-less layout |
-| **Typography** | Readability | Better proportional UI fonts, line spacing, and a serif reading mode |
-| **Spell-check / thesaurus** | Writing aid | Offline dictionary on SD; highlight misspellings in the editor |
-| **Document templates** | Faster starts | New-file templates (letter, note, log) from `APPS/<APP>/templates` |
+| **Thesaurus / richer dictionary** | Writing aid | Extend the spellcheck wordlist with synonyms; larger bundled dictionaries |
+| **Full-page HTML wrapper** | Standalone share | The HTML export is a fragment; a `<!DOCTYPE html>` page wrapper with reader CSS is future work |
+| **More serif faces / weights** | Choice | Only `DejaVuSerif` (+Bold/Italic) ships; add more reading faces |
 
 ### C. PDA / PIM
 
@@ -144,7 +155,6 @@ Section-A groundwork is done (v1.1.0, see Part 1 §8). Remaining:
 
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **BASIC interpreter** | The defining palmtop feature | A small interpreter over the batch/`calc` engine; the BASIC-to-batch mapping already exists |
 | **Spreadsheet app** | The other defining feature | Build on `csv` + `calc`; add an interactive grid modal and a recalculation engine |
 | **Calculator UI app** | Everyday use | A modal keypad over `calc` (HP-12C / FX-870P layouts) |
 | **Structured app format** | Richer apps | A declarative form/menu description so apps do not hand-roll every screen |

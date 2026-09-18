@@ -261,6 +261,14 @@ const lv_font_t *windows_get_ui_font(void)
     return font_get(FONT_ROLE_UI);
 }
 
+const lv_font_t *windows_get_reading_font(void)
+{
+    /* Proportional reading face for the viewer and the editor markdown
+     * preview. Defaults to the UI font when no serif TTF is configured;
+     * never used for cell-metric surfaces (transcript/TUI/editor). */
+    return font_get(FONT_ROLE_READING);
+}
+
 /** Re-resolve owned widget fonts after a `font set/size` switch. Styles
  * snapshot the chain pointer at creation, so without this everything
  * created before the switch renders the orphaned copy. No-op before init.
@@ -1867,3 +1875,26 @@ void windows_set_fullscreen(bool fullscreen)
 }
 
 bool windows_is_fullscreen(void) { return s_windows.fullscreen; }
+
+void windows_set_editor_focus(bool focus)
+{
+    /* Writerdeck focus mode: hide the header + on-screen keyboard and give the
+     * space to the editor surface, mirroring windows_set_fullscreen() but
+     * keeping the input row (the editor status bar with the word count) and
+     * WITHOUT a full UI rebuild — a rebuild would tear down the open editor. */
+    header_set_visible(!focus);
+    if (focus) {
+        keyboard_hide();
+    } else {
+        /* Touch users need the OSK back to type; USB auto-detect may re-hide
+         * it when an external keyboard is attached. */
+        keyboard_show();
+    }
+    if (s_windows.transcript) {
+        windows_apply_transcript_height();
+        lv_obj_update_layout(s_windows.transcript);
+    }
+    if (s_windows.editor_mode) {
+        windows_refresh_editor_surface();
+    }
+}

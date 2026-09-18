@@ -57,11 +57,11 @@ components/boot/                CONFIG.SYS parser + AUTOEXEC.BAT runner + defaul
 components/command/             Command dispatch, worker task, pipeline, and the split *_commands.c verb files
 components/applib/              Native-app runtime library (transcript stdout, memory, time, input, state, ABI)
 components/modal/               Shared modal runtime + ready-made surfaces (dialog/list/ask/browse/view/hexview/imageview/form)
-components/editor/              `edit` editor: byte-preserving document model + LVGL surface
+components/editor/              `edit` editor: byte-preserving document model + LVGL surface + focus/spell/templates
 components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_flush
 components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport
 components/filetype/            Central extension -> kind registry
-components/markdown/            CommonMark-subset renderer
+components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator
 components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes
 components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
 components/alarm/               SD alarm store + single background checker (sd:/ALARMS)

@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.1.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.2.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -53,7 +53,7 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.1.0)
+## Current state (v1.2.0)
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
@@ -89,6 +89,12 @@ and the on-board unit suite plus the host regression runners are green. See
   `wavplay`), WS2812 status LED, GPIO/PWM/ADC/I2C toolkit, idle display-off,
   and sleep/deep-sleep.
 - **Editor:** a touch-first, PSRAM-backed `edit` editor for any SD text file.
+- **Writerdeck:** focus/typewriter mode (`edit /focus`, live word count),
+  document templates (`sd:/TEMPLATES/`), proportional/serif *reading*
+  typography for `view`/preview (vendored `DejaVuSerif`), offline spelling
+  underlines from an SD wordlist (`sd:/DICTS/`), and
+  `markdown export <src> <out> [text|html|print]` (plain text, HTML, or a
+  paginated print layout) for sharing over `httpd`.
 
 Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
 `tcmd` (dual-pane commander), `snake`, `elite`, `adventure`, `notes`, `mood`,

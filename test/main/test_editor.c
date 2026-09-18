@@ -55,6 +55,10 @@ void test_editor_osk_key_from_label(void)
     TEST_ASSERT_EQUAL_INT(EDITOR_KEY_MATCH_JUMP, key);
     TEST_ASSERT_TRUE(editor_osk_key_from_label("Wrap", &key));
     TEST_ASSERT_EQUAL_INT(EDITOR_KEY_WRAP_TOGGLE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Focus", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_FOCUS_TOGGLE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("Spell", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SPELL_TOGGLE, key);
     TEST_ASSERT_TRUE(editor_osk_key_from_label("Reload", &key));
     TEST_ASSERT_EQUAL_INT(EDITOR_KEY_RELOAD, key);
     TEST_ASSERT_TRUE(editor_osk_key_from_label("Find", &key));
@@ -1012,4 +1016,18 @@ void test_editor_lex_markdown(void)
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown(NULL, 4, runs, 16));
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown("abc", 3, NULL, 16));
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown("abc", 3, runs, 0));
+}
+
+void test_editor_word_count(void)
+{
+    editor_doc_t *doc = editor_doc_new(NULL);
+
+    TEST_ASSERT_NOT_NULL(doc);
+    editor_doc_insert_bytes(doc, "three words here", 16);
+    TEST_ASSERT_EQUAL_size_t(3, editor_doc_word_count(doc));
+    editor_doc_newline(doc);
+    editor_doc_insert_bytes(doc, "  two   more ", 12);
+    TEST_ASSERT_EQUAL_size_t(5, editor_doc_word_count(doc));
+    TEST_ASSERT_EQUAL_size_t(0, editor_doc_word_count(NULL));
+    editor_doc_free(doc);
 }

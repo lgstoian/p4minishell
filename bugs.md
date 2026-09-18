@@ -155,6 +155,43 @@ These look like bugs but are intentional. Check here before "fixing" one.
   display verbs refuse), do not run an OTA overlapping PSRAM background stacks,
   and serialise SDMMC bring-up and host tools. I2C-308 (slave-only) and
   RMT-176/ECDSA-837 need no action on this board.
+- **Writerdeck: spellcheck needs a wordlist.** Word coverage is exactly the
+  wordlist's coverage; with no `sd:/DICTS/<name>.words` present the `Spell`
+  toggle reports the expected path and stays off. Underlines are not applied
+  while word-wrap is on.
+- **Writerdeck: focus mode hides the header and keyboard.** Toggle out with
+  `Ctrl+Shift+F` (USB), the `Focus` key, or `\focus`; quitting the editor
+  restores both.
+- **Writerdeck: spell underlines and word-wrap are not combined.** With both on
+  the wrap path renders without underlines (the toggle still applies once wrap
+  is off). By design for v1.2.0.
+- **Writerdeck: `edit /template` only seeds new files.** An existing target is
+  never overwritten by a template; the option is ignored for it.
+- **Markdown HTML export is a fragment, not a full page.** It emits block
+  elements for embedding/serving; a bundling `<!DOCTYPE html>` page wrapper is
+  future work.
+
+### W1. Spellcheck wordlist load crashes the board — **FIXED**
+
+- **Severity:** HIGH (panic/reboot on the spell path)
+- **Component:** `components/editor/editor_spell.c` (`editor_spell_load`)
+- **Found on:** 2026-09-18, COM3, firmware v1.2.0
+- **Symptom:** toggling `Spell` (or opening `edit` while a wordlist exists)
+  rebooted the board (`Guru Meditation` / boot banner).
+- **Root cause (two defects):**
+  1. The wordlist was read with `fread()` straight into a **PSRAM** buffer.
+     SD/FATFS reads go through DMA, and PSRAM is not `MALLOC_CAP_DMA` on this
+     P4 build — the documented "never hand a PSRAM pointer to fread" rule.
+  2. `bsearch()` was passed the `qsort` comparator `spell_cmp`, which
+     dereferences an element as `char **`. For `bsearch`, the key is the
+     search string itself (`char *`), so the comparator read the first four
+     bytes of the string as a pointer and `strcmp` faulted.
+- **Fix:** read the wordlist in chunks through an internal
+  `MALLOC_CAP_DMA` bounce buffer, and add a dedicated `spell_cmp_key`
+  comparator for `bsearch` (qsort keeps `spell_cmp`).
+- **Verified:** `P4_CONFIG_SPELL_ENABLE=1`; the `Spell` toggle reports
+  `spell on (3 words)` with misspellings underlined (`screenshots` proof), the
+  shell survives the session, and `edit` open/quit is clean.
 
 ---
 

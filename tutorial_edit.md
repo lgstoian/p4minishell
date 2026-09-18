@@ -361,6 +361,8 @@ by `Enter`.
 | `\l` or `\reload` | Reload from disk |
 | `\p` or `\preview` | Toggle preview |
 | `\a` or `\selectall` | Select all |
+| `\focus` | Toggle focus / typewriter mode |
+| `\spell` | Toggle spellcheck underlines |
 
 Example serial session:
 
@@ -377,7 +379,35 @@ type TEST.TXT          <- verify: line one / line two
 
 ---
 
-## 15. Editor limits
+## 15. Focus, spellcheck, templates, and word count (writerdeck)
+
+Writing-oriented extras, all opt-in and non-destructive:
+
+- **Focus / typewriter mode** — `edit NOTES.TXT /focus` hides the header and
+  the on-screen keyboard and keeps the caret vertically centred so text does
+  not drift toward the bottom edge. Toggle in-session with `Ctrl+Shift+F`, the
+  nav/edit `Focus` key, or `\focus`. The status bar shows `FOCUS` while on; the
+  header and keyboard return on exit.
+- **Word count** — the status bar shows `W n` (whitespace-delimited words across
+  the whole document), refreshed as you type. Disable with
+  `P4_CONFIG_EDITOR_WORD_COUNT=0`.
+- **Spellcheck** — put a wordlist at `sd:/DICTS/<name>.words` (one lower-case
+  word per line; default `<name>` is `en`). Toggle with `Ctrl+Shift+S`, the
+  `Spell` key, or `\spell`; misspellings are underlined and the status bar shows
+  `SPELL`. With no list present the toggle tells you the expected path and stays
+  off. Underlines are not applied while word-wrap is on.
+- **Reading typography** — `view` (for `.md`) and the editor Markdown preview
+  use the `reading` font role: a vendored `DejaVuSerif` face (auto-selected
+  once pushed to `sd:/FONTS/`) with reader line spacing. `font set reading
+  <name>` / `font size reading <px>` override it; the terminal role stays
+  monospace.
+- **Templates** — `edit DIARY.TXT /template NOTE` starts a **new** buffer
+  pre-filled from `sd:/TEMPLATES/NOTE.MD` (an existing file is never
+  overwritten). Ship the samples from `apps/templates/` with
+  `python apps/push_templates.py <COM_PORT>`. The `WRITER` app demonstrates the
+  flow.
+
+## 16. Editor limits
 
 | Value | Default |
 |-------|---------|
@@ -389,6 +419,8 @@ type TEST.TXT          <- verify: line one / line two
 | Rendered rows at once | `P4_CONFIG_EDITOR_RENDER_ROWS` (256) |
 | Tab width | `P4_CONFIG_EDITOR_TAB_WIDTH` (4) |
 | Find / Replace string length | `P4_CONFIG_EDITOR_FIND_BYTES` (128) |
+| Spell wordlist cap | `P4_CONFIG_SPELL_MAX_BYTES` / `_MAX_WORDS` (1 MB / 65536) |
+| Template seed cap | `P4_CONFIG_TEMPLATE_MAX_BYTES` (8 KB) |
 | Line-number gutter width | `P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS` (5) |
 
 Files beyond the byte/line limits are refused with an error, never truncated.
@@ -401,7 +433,7 @@ the session to avoid copying the whole document on every keystroke.
 
 ---
 
-## 16. Edge cases and tips
+## 17. Edge cases and tips
 
 - **Editing at the start of a line with serial**: a serial line is *text plus
   Enter*, so typing at the start of an existing line splits it at the caret.
@@ -422,7 +454,7 @@ the session to avoid copying the whole document on every keystroke.
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 - **The shell looks empty after a session** — quitting restores the transcript
   and jumps it to the newest output; scroll with `Up`/`Dn` if needed.
@@ -439,7 +471,7 @@ the session to avoid copying the whole document on every keystroke.
 
 ---
 
-## 18. Implementation notes
+## 19. Implementation notes
 
 The editor lives in `components/editor/`:
 
