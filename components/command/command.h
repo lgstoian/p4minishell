@@ -509,10 +509,12 @@ bool asset_crc_file(const char *resolved, uint32_t *crc_out);
 int  asset_verify_app(const char *tag, const char *app, bool list_only);
 
 /**
- * `pkg` — SD app packages over `APPS/<APP>.APPINFO` (title/description/version)
- * + `APPS/<APP>.ASSETS` (contents manifest), installed from a `PKGS/<APP>/`
- * bundle. Verbs: list, info, verify, check, install, remove. Implemented in
- * pkg_commands.c; ERRORLEVEL 0 ok / 1 some failure / 2 usage.
+ * `pkg` — SD app packages over `APPS/<APP>.APPINFO`
+ * (title/description/version, plus type=/abi= for native bundles — see
+ * docs/native_packaging.md) + `APPS/<APP>.ASSETS` (contents manifest),
+ * installed from a `PKGS/<APP>/` bundle. Verbs: list, info, verify, check,
+ * install, remove. Implemented in pkg_commands.c; ERRORLEVEL 0 ok / 1 some
+ * failure / 2 usage.
  */
 void shell_command_pkg(int argc, char **argv);
 

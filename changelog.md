@@ -14,6 +14,30 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [1.1.0] - Unreleased
+
+Roadmap section A groundwork (framework + portability), targeting a future
+M5Stack Tab5 + Tab5Keyboard port. No port code yet — this release only lays
+the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
+
+### Added
+
+- **Board profiles.** `boards/<name>/board_config.h` + `.yaml` selected by
+  `-DP4_BOARD=` (default `jc1060p470c`); SDMMC/SDIO pins promoted into
+  `BOARD_CFG_*` macros; new [`PORTING.md`](PORTING.md) with the port
+  anatomy and minimal bring-up checklist.
+- **Native-app packaging spec.** `docs/native_packaging.md` defines the
+  manifest keys, ABI version, and hash; `pkg` accepts and verifies
+  store-only native payloads (execution deferred — MCUs have no `dlopen`).
+- **SDK scaffolding.** `tools/newapp.py` template generator plus an
+  out-of-tree-style `applib` sample component.
+- **CI build matrix.** Firmware + test builds across board profiles;
+  hardware suites stay local.
+- **Structured logging.** `debug save` export (`txt`/`csv`/`json`) plus
+  host-side `tools/parse_debuglog.py`.
+
+---
+
 ## [Unreleased]
 
 ### Added - production test framework, frame metrics, diagnostics app

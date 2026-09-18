@@ -11,8 +11,12 @@ set(IDF_TARGET esp32p4)
 # board_config.h; the tests also need p4minishell_config.h because the
 # components resolve it through ${CMAKE_SOURCE_DIR}, which points at this
 # directory rather than the repository root.
+# Board profile selection, mirroring the firmware project: the same
+# boards/<name>/board_config.h is staged. Override with -DP4_BOARD=<name>.
+set(P4_BOARD "jc1060p470c" CACHE STRING "P4MiniShell board profile (see boards/ + PORTING.md)")
+
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/config)
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../board_config.h
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../boards/${P4_BOARD}/board_config.h
                ${CMAKE_BINARY_DIR}/config/board_config.h COPYONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../p4minishell_config.h
                ${CMAKE_BINARY_DIR}/config/p4minishell_config.h COPYONLY)

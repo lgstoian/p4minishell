@@ -38,10 +38,15 @@ set(EXTRA_COMPONENT_DIRS
   components/uitest
   components/usb
   components/windows
+  samples/whoami
 )
 
+# Board profile selection: boards/<name>/board_config.h is staged into the
+# generated config include path. Override with -DP4_BOARD=<name>.
+set(P4_BOARD "jc1060p470c" CACHE STRING "P4MiniShell board profile (see boards/ + PORTING.md)")
+
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/config)
-configure_file(${CMAKE_SOURCE_DIR}/board_config.h ${CMAKE_BINARY_DIR}/config/board_config.h COPYONLY)
+configure_file(${CMAKE_SOURCE_DIR}/boards/${P4_BOARD}/board_config.h ${CMAKE_BINARY_DIR}/config/board_config.h COPYONLY)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(p4minishell)

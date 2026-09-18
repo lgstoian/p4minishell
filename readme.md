@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.0.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.1.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -53,7 +53,7 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.0.0)
+## Current state (v1.1.0)
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
@@ -286,8 +286,9 @@ The only upward dependencies are inverted through registration tables
 (`shell_command_ops_t`, `batch_command_ops_t`, `applib_*_ops_t`), so the shell
 core and batch engine never include the command layer. Modal surfaces share one
 runtime (`components/modal/`). All tunables live in `p4minishell_config.h`
-(documented in `p4minishell_config.yaml`); board pins live in `board_config.h`
-(from `board_config.yaml`).
+(documented in `p4minishell_config.yaml`); board pins live in
+`boards/<name>/board_config.h` (from the matching `.yaml`, default
+`boards/jc1060p470c/`).
 
 See [documentation.md](documentation.md) for the full module map and
 [SDK.md](SDK.md) for how to extend the system.
@@ -322,7 +323,9 @@ companion `p4minishell_config.yaml` documents each value (type, meaning,
 range). Edit the header, then keep the YAML in sync. Hardware pins and display
 timing live in `board_config.h` / `board_config.yaml`; build options live in
 `sdkconfig` (generated — edit via `idf.py menuconfig`, the committed source
-of truth is `sdkconfig.defaults`).
+of truth is `sdkconfig.defaults`). Board profiles live under `boards/`
+(`boards/jc1060p470c/` is the default); adding a board is documented in
+[`PORTING.md`](PORTING.md).
 
 > **Fresh checkout:** `dependencies.lock` may contain absolute paths from the
 > machine that last ran the component manager. If a build complains about
@@ -357,6 +360,8 @@ of truth is `sdkconfig.defaults`).
 | [SECURITY.md](SECURITY.md) | Security policy: device lock, secrets, httpd auth |
 | [test/README.md](test/README.md) | Unit-test layout and how to run them |
 | [tools/README.md](tools/README.md) | Host-side drivers and hardware tests |
+| [PORTING.md](PORTING.md) | Board profiles (`boards/`) and bring-up checklist |
+| [docs/native_packaging.md](docs/native_packaging.md) | Native-app package spec (store-only in v1.1) |
 | [docs/assets/README.md](docs/assets/README.md) | Public screenshot set + capture guide |
 
 > **Screenshots:** curated public captures live in `docs/assets/` (see its

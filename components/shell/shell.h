@@ -733,6 +733,15 @@ void shell_record_infof(const char *tag, const char *format, ...);
 /** Get the number of runtime warnings recorded. */
 size_t shell_get_warning_count(void);
 
+/** Number of entries currently held in the debug log ring. */
+size_t shell_debug_get_count(void);
+
+/** Copy the i-th oldest entry (0 = oldest) into @p out.
+ *  Returns false when @p index is out of range. Pure reader for the
+ *  `debug save` exporter (the SD file itself is opened by the command
+ *  layer, mirroring shell_history_save_lines). */
+bool shell_debug_get_entry(size_t index, char *out, size_t out_size);
+
 /** Print the debug log to the transcript. */
 void shell_command_debug(void);
 

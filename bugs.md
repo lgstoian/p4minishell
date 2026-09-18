@@ -1,11 +1,12 @@
-# P4MiniShell — Bug Log (v1.0.0)
+# P4MiniShell — Bug Log (v1.1.0)
 
 This file is the working log for bug hunting and hardware stress testing. It
-was reset for the v1.0.0 public release so it reflects what is **still open**.
+was reset for the v1.0.0 public release and now tracks v1.1.0 development,
+so it reflects what is **still open**.
 Fixed entries are removed at each reset (their history lives in
 [`changelog.md`](changelog.md) and git).
 
-- **Firmware:** v1.0.0 (ESP-IDF v5.5.5)
+- **Firmware:** v1.1.0 (ESP-IDF v5.5.5)
 - **Reference board:** ESP32-P4 Function EV Board (JC1060P470C), ESP32-C6
   co-processor, JD9165 1024x600, GT911 touch, SD card present
 

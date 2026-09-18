@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.0.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.1.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -167,7 +167,7 @@ worker task.
 | reboot | Restart the board |
 | version / ver | Show app banner, version, build date/time, Git hash, IDF version, chip info, uptime, heap, and task count |
 | about | Show shell and board summary with build metadata, header description, uptime, task count, the copyright/MIT notice, and a third-party license summary |
-| debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count |
+| debug | Show last 5 error/warning entries, Wi-Fi state, heap, warning count (`debug save [file] [txt\|csv\|json]` exports the ring for `tools/parse_debuglog.py`) |
 | mem | Show free heap, total heap, minimum heap, internal heap, task count, PSRAM state |
 
 ### apps
@@ -2463,7 +2463,9 @@ Installing it is a verify-then-copy; removing it is a trash (undelete-able)
 delete, so `undelete` can recover an uninstalled payload.
 
 - **Installed side** (`sd:/APPS/`): `<APP>.APPINFO` (metadata: `title=`,
-  `description=`, `version=`) and `<APP>.ASSETS` (the `path=HEXCRC` manifest —
+  `description=`, `version=`, plus `type=` — `batch` when absent, or `native`
+  with `abi=`/`arch=`/`entry=`, see `docs/native_packaging.md`) and
+  `<APP>.ASSETS` (the `path=HEXCRC` manifest —
   the same format and checker as `asset`).
 - **Bundle side** (`sd:/PKGS/<APP>/`): `<APP>.ASSETS` (manifest),
   `<APP>.APPINFO` (metadata), and payload files at their install-relative
@@ -2473,15 +2475,19 @@ delete, so `undelete` can recover an uninstalled payload.
 
 | Command | Description |
 |---------|-------------|
-| `pkg list` | One line per installed app: `APP  title  vVERSION  N file(s)` |
-| `pkg info <app>` | Title/description/version plus each manifest entry as `ok`/`MISSING`/`BAD` |
+| `pkg list` | One line per installed app: `APP  title  vVERSION  N file(s)` (` [native]` suffix for native bundles) |
+| `pkg info <app>` | Title/description/version/type (+abi) plus each manifest entry as `ok`/`MISSING`/`BAD` |
 | `pkg verify <app>` | CRC-check the installed manifest (`pkg: OK n/m ok` / `FAIL`) |
 | `pkg check` | Run the verify check over every installed app and summarise `pkg: n/m package(s) ok` |
 | `pkg install <app>` | Two-pass copy of `PKGS/<app>/`: pass 1 verifies every payload CRC, pass 2 copies payloads, then the APPINFO and manifest into `APPS/` |
 | `pkg remove <app>` | Trash every manifest payload plus `<APP>.APPINFO` and `<APP>.ASSETS` |
 
 `pkg install` aborts without touching installed files if any bundle payload is
-missing or corrupt (`pkg: install aborted (n bad file(s))`). `pkg` reuses the
+missing or corrupt (`pkg: install aborted (n bad file(s))`), or if the bundle
+`type=` is anything but `batch`/`native`. Native bundles (`type=native`)
+install **store-only** in v1.1 — verified and copied, but not executable
+(`pkg: <app> is a native package (stored only, …)`); an `abi=` mismatch with
+`P4_CONFIG_NATIVE_ABI` warns. `launch` never offers native apps. `pkg` reuses the
 `asset` manifest parser/checker (`asset_parse_line`, `asset_crc_file`,
 `asset_verify_app`) and `shell_fs_copy_file`, so an app name is the same
 `[A-Za-z0-9_-]+` rule as `asset`. `pkg info` on a missing manifest prints

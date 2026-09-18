@@ -297,6 +297,7 @@ static bool shell_command_has_pipe(const char *command)
 static void shell_command_clip(int argc, char **argv);
 static void shell_command_paste(int argc, char **argv);
 static void shell_command_history(int argc, char **argv);
+static void shell_command_debug_save(int argc, char **argv);
 static void shell_command_reboot(void);
 static void shell_command_clear(void);
 static void shell_command_prompt_cmd(int argc, char **argv);
@@ -1165,6 +1166,171 @@ static void shell_command_history(int argc, char **argv)
 
     shell_print_usage("Usage: history | history /save [file] | history /load [file] | history /search <text> | history /clear");
     batch_set_errorlevel(2);
+}
+
+/* ========================================================================
+ * DEBUG LOG EXPORT: `debug save [file] [txt|csv|json]`
+ * ========================================================================
+ * The ring lives in the shell core (shell_debug_get_count/get_entry); this
+ * command only opens the SD file and renders it, mirroring the history
+ * /save flow (guarded session, free-space precheck, partial-file cleanup).
+ * Entries are stored plain ("tag: message"), so no ANSI stripping is needed.
+ */
+
+/** CSV-escape @p text into @p out (quotes when it contains , " or newline). */
+static void shell_debug_csv_field(const char *text, char *out, size_t out_size)
+{
+    size_t pos = 0;
+    bool quote = false;
+    const char *p;
+
+    if (out == NULL || out_size == 0) return;
+    for (p = text; *p != '\0'; p++) {
+        if (*p == ',' || *p == '"' || *p == '\n' || *p == '\r') {
+            quote = true;
+            break;
+        }
+    }
+    if (quote && pos + 1 < out_size) out[pos++] = '"';
+    for (p = text; *p != '\0' && pos + 2 < out_size; p++) {
+        if (*p == '"') {
+            if (pos + 2 >= out_size) break;
+            out[pos++] = '"';
+            out[pos++] = '"';
+        } else if (*p == '\n' || *p == '\r') {
+            out[pos++] = ' ';
+        } else {
+            out[pos++] = *p;
+        }
+    }
+    if (quote && pos + 1 < out_size) out[pos++] = '"';
+    out[pos] = '\0';
+}
+
+/** JSON-escape @p text into @p out (quotes, backslash, control chars). */
+static void shell_debug_json_string(const char *text, char *out, size_t out_size)
+{
+    size_t pos = 0;
+    const char *p;
+
+    if (out == NULL || out_size == 0) return;
+    if (pos + 1 < out_size) out[pos++] = '"';
+    for (p = text; *p != '\0' && pos + 6 < out_size; p++) {
+        if (*p == '"' || *p == '\\') {
+            out[pos++] = '\\';
+            out[pos++] = *p;
+        } else if (*p == '\n') {
+            out[pos++] = '\\';
+            out[pos++] = 'n';
+        } else if (*p == '\r') {
+            out[pos++] = '\\';
+            out[pos++] = 'r';
+        } else if ((unsigned char)*p < 0x20) {
+            if (pos + 6 >= out_size) break;
+            snprintf(out + pos, out_size - pos, "\\u%04x", (unsigned)*p);
+            pos += 6;
+        } else {
+            out[pos++] = *p;
+        }
+    }
+    if (pos + 1 < out_size) out[pos++] = '"';
+    out[pos] = '\0';
+}
+
+static void shell_command_debug_save(int argc, char **argv)
+{
+    const char *file = P4_CONFIG_DEBUG_LOG_PROFILE;
+    const char *format = "txt";
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    char entry[P4_CONFIG_DEBUG_ENTRY_BYTES + 32];
+    char cell[P4_CONFIG_DEBUG_ENTRY_BYTES * 2 + 8];
+    size_t count;
+    size_t i;
+    FILE *fp;
+    int arg;
+    bool file_given = false;
+
+    for (arg = 2; arg < argc; arg++) {
+        if (shell_text_equals_ignore_case(argv[arg], "txt") ||
+            shell_text_equals_ignore_case(argv[arg], "csv") ||
+            shell_text_equals_ignore_case(argv[arg], "json")) {
+            format = argv[arg];
+        } else if (!file_given) {
+            file = argv[arg];
+            file_given = true;
+        } else {
+            shell_print_usage("Usage: debug | debug save [file] [txt|csv|json]");
+            batch_set_errorlevel(2);
+            return;
+        }
+    }
+
+    count = shell_debug_get_count();
+    if (shell_fs_resolve_path(file, resolved, sizeof(resolved)) != ESP_OK) {
+        shell_print_error("debug: invalid path %s", file);
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        shell_print_error("debug: SD card not present - insert and retry");
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (!storage_check_free_space((uint64_t)count * 256 + 4096, 0, "debug")) {
+        shell_sd_end(&session, "debug");
+        shell_print_error("debug: not enough free space on the SD card");
+        batch_set_errorlevel(1);
+        return;
+    }
+    fp = fopen(resolved, "w");
+    if (fp == NULL) {
+        shell_sd_end(&session, "debug");
+        shell_print_error("debug: cannot open %s for writing", resolved);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(format, "json")) {
+        fprintf(fp, "{\"entries\":%u,\"warnings\":%u,\"log\":[",
+                (unsigned)count, (unsigned)shell_get_warning_count());
+    } else if (shell_text_equals_ignore_case(format, "csv")) {
+        fprintf(fp, "index,entry\n");
+    } else {
+        fprintf(fp, "# P4MiniShell debug log: %u entries, %u warnings\n",
+                (unsigned)count, (unsigned)shell_get_warning_count());
+    }
+    for (i = 0; i < count; i++) {
+        if (!shell_debug_get_entry(i, entry, sizeof(entry))) {
+            break;
+        }
+        if (shell_text_equals_ignore_case(format, "json")) {
+            shell_debug_json_string(entry, cell, sizeof(cell));
+            fprintf(fp, "%s%s", i == 0 ? "" : ",", cell);
+        } else if (shell_text_equals_ignore_case(format, "csv")) {
+            shell_debug_csv_field(entry, cell, sizeof(cell));
+            fprintf(fp, "%u,%s\n", (unsigned)i, cell);
+        } else {
+            fprintf(fp, "[%u] %s\n", (unsigned)i, entry);
+        }
+    }
+    if (shell_text_equals_ignore_case(format, "json")) {
+        fprintf(fp, "]}\n");
+    }
+    if (fflush(fp) != 0) {
+        fclose(fp);
+        (void)unlink(resolved);
+        shell_sd_end(&session, "debug");
+        shell_print_error("debug: write failed, removed the partial file");
+        batch_set_errorlevel(1);
+        return;
+    }
+    fclose(fp);
+    shell_sd_end(&session, "debug");
+    shell_transcript_appendf_ansi(SH_LBL "debug:" SH_RST " saved " SH_NUM "%u" SH_RST
+                                  " entr%s to " SH_PATH "%s" SH_RST "\n",
+                                  (unsigned)count, count == 1 ? "y" : "ies", resolved);
+    batch_set_errorlevel(0);
 }
 
 /* ========================================================================
@@ -2204,7 +2370,11 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "debug")) {
-        shell_command_debug();
+        if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "save")) {
+            shell_command_debug_save(argc, argv);
+        } else {
+            shell_command_debug();
+        }
         return true;
     }
 

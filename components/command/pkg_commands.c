@@ -7,7 +7,9 @@
  * @brief `pkg` — SD application packages.
  *
  * A package is metadata plus a contents manifest:
- *   APPS/<APP>.APPINFO   INI: title=, description=, version=
+ *   APPS/<APP>.APPINFO   INI: title=, description=, version=, plus type=
+ *                        (batch when absent, or native) and for native apps
+ *                        abi=/arch=/entry= (see docs/native_packaging.md)
  *   APPS/<APP>.ASSETS    `path=HEXCRC` lines (shared with `asset`)
  * The install source is a bundle directory:
  *   PKGS/<APP>/<APP>.ASSETS   the same manifest
@@ -93,7 +95,7 @@ static bool pkg_read_file(const char *path, char **text_out, size_t *len_out)
     return true;
 }
 
-/** Read one APPINFO key (`title`/`description`/`version`). Empty on miss. */
+/** Read one APPINFO key (`title`/`description`/`version`/`type`/`abi`). Empty on miss. */
 static void pkg_meta(const char *app, const char *key, char *out, size_t size)
 {
     char rel[P4_CONFIG_SD_PATH_BYTES];
@@ -249,9 +251,20 @@ static void pkg_list(void)
             }
             heap_caps_free(text);
         }
-        shell_transcript_appendf("pkg: %-10s %-24s v%-10s %d file(s)\n",
-                                 names[i], title[0] ? title : "(untitled)",
-                                 version[0] ? version : "-", files);
+        {
+            /* Native bundles are stored only in v1.1 (see
+             * docs/native_packaging.md); flag them in the listing. */
+            char ptype[16];
+            bool native = false;
+
+            ptype[0] = '\0';
+            pkg_meta(names[i], "type", ptype, sizeof(ptype));
+            native = shell_text_equals_ignore_case(ptype, "native");
+            shell_transcript_appendf("pkg: %-10s %-24s v%-10s %d file(s)%s\n",
+                                     names[i], title[0] ? title : "(untitled)",
+                                     version[0] ? version : "-", files,
+                                     native ? " [native]" : "");
+        }
     }
     batch_set_errorlevel(0);
 }
@@ -262,6 +275,8 @@ static void pkg_info(const char *app)
     char title[64];
     char description[160];
     char version[32];
+    char ptype[16];
+    char abi[32];
     char rel[P4_CONFIG_SD_PATH_BYTES];
     char *text = NULL;
     size_t len = 0;
@@ -273,9 +288,17 @@ static void pkg_info(const char *app)
     pkg_meta(app, "title", title, sizeof(title));
     pkg_meta(app, "description", description, sizeof(description));
     pkg_meta(app, "version", version, sizeof(version));
+    ptype[0] = '\0';
+    abi[0] = '\0';
+    pkg_meta(app, "type", ptype, sizeof(ptype));
+    pkg_meta(app, "abi", abi, sizeof(abi));
     shell_transcript_appendf("pkg: %s\n", app);
     shell_transcript_appendf("  title:       %s\n", title[0] ? title : "(none)");
     shell_transcript_appendf("  version:     %s\n", version[0] ? version : "(none)");
+    shell_transcript_appendf("  type:        %s\n", ptype[0] ? ptype : "batch");
+    if (abi[0]) {
+        shell_transcript_appendf("  abi:         %s\n", abi);
+    }
     if (description[0]) {
         shell_transcript_appendf("  description: %s\n", description);
     }
@@ -341,6 +364,7 @@ static void pkg_check(void)
 static void pkg_install(const char *app)
 {
     char bmanifest_rel[P4_CONFIG_SD_PATH_BYTES];
+    char bappinfo_rel[P4_CONFIG_SD_PATH_BYTES];
     char *text = NULL;
     size_t len = 0;
     char (*paths)[P4_CONFIG_SD_PATH_BYTES] = NULL;
@@ -350,6 +374,7 @@ static void pkg_install(const char *app)
     int failed = 0;
     char *save = NULL;
     char *ln;
+    bool native = false;
 
     snprintf(bmanifest_rel, sizeof(bmanifest_rel), "%s/%s/%s.ASSETS",
              P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, app);
@@ -385,6 +410,30 @@ static void pkg_install(const char *app)
         heap_caps_free(text);
         batch_set_errorlevel(1);
         return;
+    }
+
+    /* Validate the bundle type before touching installed files. Unknown
+     * types fail loudly; native bundles install store-only (see
+     * docs/native_packaging.md). */
+    snprintf(bappinfo_rel, sizeof(bappinfo_rel), "%s/%s/%s.APPINFO",
+             P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, app);
+    {
+        char btype[16];
+
+        btype[0] = '\0';
+        (void)storage_ini_file_get(bappinfo_rel, "type", btype, sizeof(btype));
+        if (btype[0] != '\0' &&
+            !shell_text_equals_ignore_case(btype, "batch") &&
+            !shell_text_equals_ignore_case(btype, "native")) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: bundle %s has unknown type=%s (want batch|native)\n" SH_RST,
+                                          app, btype);
+            free(paths);
+            free(crcs);
+            heap_caps_free(text);
+            batch_set_errorlevel(1);
+            return;
+        }
+        native = shell_text_equals_ignore_case(btype, "native");
     }
 
     /* Pass 1: verify every source payload before touching installed files. */
@@ -438,18 +487,14 @@ static void pkg_install(const char *app)
     }
     if (failed == 0) {
         /* Metadata + manifest from the bundle into APPS/. */
-        char bundle_appinfo[P4_CONFIG_SD_PATH_BYTES];
         char bundle_manifest[P4_CONFIG_SD_PATH_BYTES];
         char dst_rel[P4_CONFIG_SD_PATH_BYTES];
         char src[P4_CONFIG_SD_PATH_BYTES];
         char dst[P4_CONFIG_SD_PATH_BYTES];
 
-        snprintf(bundle_appinfo, sizeof(bundle_appinfo), "%s/%s/%s.APPINFO",
-                 P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, app);
         snprintf(bundle_manifest, sizeof(bundle_manifest), "%s/%s/%s.ASSETS",
                  P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, app);
-
-        if (shell_fs_resolve_path(bundle_appinfo, src, sizeof(src)) == ESP_OK) {
+        if (shell_fs_resolve_path(bappinfo_rel, src, sizeof(src)) == ESP_OK) {
             pkg_appinfo_rel(app, dst_rel, sizeof(dst_rel));
             if (shell_fs_resolve_path(dst_rel, dst, sizeof(dst)) != ESP_OK ||
                 shell_fs_copy_file(src, dst) != ESP_OK) {
@@ -472,6 +517,20 @@ static void pkg_install(const char *app)
     heap_caps_free(text);
     if (failed == 0) {
         shell_transcript_appendf("pkg: %s installed\n", app);
+        if (native) {
+            /* Store-only in v1.1: the blob is verified and in place, but no
+             * loader exists yet (see docs/native_packaging.md). */
+            char babi[32];
+
+            babi[0] = '\0';
+            (void)storage_ini_file_get(bappinfo_rel, "abi", babi, sizeof(babi));
+            if (babi[0] != '\0' && strcmp(babi, P4_CONFIG_NATIVE_ABI) != 0) {
+                shell_transcript_appendf_ansi(SH_WARN "pkg: warning: %s abi=%s, firmware expects %s\n" SH_RST,
+                                              app, babi, P4_CONFIG_NATIVE_ABI);
+            }
+            shell_transcript_appendf_ansi(SH_MUTE "pkg: %s is a native package (stored only, execution needs a v1.2+ loader)\n" SH_RST,
+                                          app);
+        }
         batch_set_errorlevel(0);
     } else {
         shell_transcript_appendf_ansi(SH_ERR "pkg: %s install had %d error(s)\n" SH_RST, app, failed);

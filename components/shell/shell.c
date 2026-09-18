@@ -2261,10 +2261,37 @@ size_t shell_get_warning_count(void)
     return s_runtime_warning_count;
 }
 
+/** Oldest-entry slot: the ring overwrites from next_index, so a full ring
+ *  starts there and a partial ring starts at 0. Shared by the transcript
+ *  printer and the `debug save` exporter so both agree on ordering. */
+static size_t shell_debug_oldest_slot(void)
+{
+    return s_debug_log.count >= SHELL_DEBUG_LOG_DEPTH
+           ? s_debug_log.next_index
+           : 0;
+}
+
+size_t shell_debug_get_count(void)
+{
+    return s_debug_log.count;
+}
+
+bool shell_debug_get_entry(size_t index, char *out, size_t out_size)
+{
+    size_t slot;
+
+    if (out == NULL || out_size == 0 || index >= s_debug_log.count) {
+        return false;
+    }
+    slot = (shell_debug_oldest_slot() + index) % SHELL_DEBUG_LOG_DEPTH;
+    snprintf(out, out_size, "%s", s_debug_log.entries[slot]);
+    return true;
+}
+
 void shell_command_debug(void)
 {
     size_t i;
-    size_t start;
+    size_t start = shell_debug_oldest_slot();
 
     shell_transcript_appendf_ansi(SH_LBL "debug.log:" SH_RST " %u entries, " SH_WARN "%u warnings" SH_RST "\n",
                              (unsigned int)s_debug_log.count,
@@ -2276,10 +2303,6 @@ void shell_command_debug(void)
         shell_transcript_appendf_ansi(SH_MUTE "debug.log: (empty)" SH_RST "\n");
         return;
     }
-
-    start = s_debug_log.count >= SHELL_DEBUG_LOG_DEPTH
-            ? s_debug_log.next_index
-            : 0;
 
     for (i = 0; i < s_debug_log.count; i++) {
         size_t index = (start + i) % SHELL_DEBUG_LOG_DEPTH;
@@ -4171,7 +4194,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "version",  "version | ver - banner, version, build date/time, Git hash, IDF, board, heap, uptime" },
     { "sysinfo",  "sysinfo - board, display, storage, heap, FreeRTOS tasks, uptime, Wi-Fi, OTA state" },
     { "mem",      "mem - free heap, total, minimum, internal, task count, PSRAM state" },
-    { "debug",    "debug - last error/warning entries, Wi-Fi state, heap, warning count" },
+    { "debug",    "debug [save [file] [txt|csv|json]] - last error/warning entries, Wi-Fi state, heap, warning count" },
     { "clear",    "clear | cls - clear transcript history and redraw the prompt" },
     { "reboot",   "reboot - restart the board" },
     { "launch",   "launch | launch <name> [args] | launch /list - discover and run script apps .bat/.cmd (PATH + sd:/APPS)" },

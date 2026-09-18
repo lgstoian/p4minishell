@@ -56,7 +56,7 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             1
-#define P4_CONFIG_VERSION_MINOR             0
+#define P4_CONFIG_VERSION_MINOR             1
 #define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
@@ -265,6 +265,9 @@
 
 /** Maximum bytes per debug log entry. */
 #define P4_CONFIG_DEBUG_ENTRY_BYTES          192
+
+/** Default SD profile for `debug save` (mirrors P4_CONFIG_HISTORY_PROFILE). */
+#define P4_CONFIG_DEBUG_LOG_PROFILE          "DEBUG.LOG"
 
 /* ========================================================================
  * UI LAYOUT
@@ -1101,6 +1104,10 @@
 #define P4_CONFIG_PKG_MAX_ENTRIES            48
 #define P4_CONFIG_PKG_MANIFEST_BYTES         16384
 #define P4_CONFIG_PKG_LINE_BYTES             512
+
+/** Native-app ABI tag (see docs/native_packaging.md). `pkg install` warns
+ *  when a native bundle's `abi=` differs; the future loader will refuse. */
+#define P4_CONFIG_NATIVE_ABI                 "applib-1"
 
 /** Maximum nested batch file call depth. */
 #define P4_CONFIG_BATCH_DEPTH_MAX            4

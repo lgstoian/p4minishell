@@ -207,6 +207,17 @@ on the shared runtime in `components/modal/`, never a private event loop. The
 
 ## 10. Build and register
 
+The fast path is the scaffolder (template: `samples/whoami/`):
+
+```powershell
+python tools/newapp.py myapp
+```
+
+It creates `samples/myapp/` (`myapp.c/.h`, `CMakeLists.txt`, `README.md`)
+and prints the three wiring steps: root `CMakeLists.txt`
+`EXTRA_COMPONENT_DIRS`, `main/CMakeLists.txt` `REQUIRES`, and a
+`<name>_register()` call from `native_apps_register()`. Then:
+
 1. Put the source in the component that owns the domain (or in `main/` for a
    small sample).
 2. Add it to that component's `CMakeLists.txt` `SRCS`.

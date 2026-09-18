@@ -5,7 +5,7 @@
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v1.0.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.1.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`

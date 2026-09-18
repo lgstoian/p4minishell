@@ -100,3 +100,27 @@
 #define BOARD_CFG_SPIFFS_PARTITION_LABEL "storage"
 #define BOARD_CFG_SPIFFS_MAX_FILES 5
 #define BOARD_CFG_SPIFFS_FORMAT_ON_MOUNT_FAIL 0
+
+// ---- MicroSD SDMMC pins (slot 0, 4-bit) ----
+// Consumed by the BSP uSD block (BSP_SD_*); the mount point above stays the
+// only thing most firmware code touches.
+#define BOARD_CFG_SD_D0_GPIO GPIO_NUM_39
+#define BOARD_CFG_SD_D1_GPIO GPIO_NUM_40
+#define BOARD_CFG_SD_D2_GPIO GPIO_NUM_41
+#define BOARD_CFG_SD_D3_GPIO GPIO_NUM_42
+#define BOARD_CFG_SD_CMD_GPIO GPIO_NUM_44
+#define BOARD_CFG_SD_CLK_GPIO GPIO_NUM_43
+
+// ---- ESP-Hosted SDIO link (ESP32-C6 co-processor, slot 1) ----
+// The SDIO bus pins themselves live in sdkconfig (CONFIG_ESP_HOSTED_HOST_SDIO_*
+// Kconfig); these macros mirror them for the GPIO table, `gpio`/`i2c` guards,
+// and status output so a board port keeps one authoritative pin list.
+#define BOARD_CFG_HOSTED_SDIO_D0_GPIO GPIO_NUM_14
+#define BOARD_CFG_HOSTED_SDIO_D1_GPIO GPIO_NUM_15
+#define BOARD_CFG_HOSTED_SDIO_D2_GPIO GPIO_NUM_16
+#define BOARD_CFG_HOSTED_SDIO_D3_GPIO GPIO_NUM_17
+#define BOARD_CFG_HOSTED_SDIO_CLK_GPIO GPIO_NUM_18
+#define BOARD_CFG_HOSTED_SDIO_CMD_GPIO GPIO_NUM_19
+#define BOARD_CFG_HOSTED_SDIO_SLOT 1
+// C6 reset line: P4_CONFIG_C6_HOST_RESET_GPIO (p4minishell_config.h) stays the
+// tunable; it must match CONFIG_ESP_HOSTED_HOST_RESET_GPIO in sdkconfig.

@@ -142,12 +142,23 @@ board:
   storage:
     sd_mount_point: /sdcard
     sd_format_on_mount_fail: false
+    # MicroSD SDMMC pins (slot 0, 4-bit). Mirrored as BOARD_CFG_SD_*_GPIO;
+    # the BSP uSD block consumes the macros, firmware code uses the mount point.
+    sd_d0_gpio: 39
+    sd_d1_gpio: 40
+    sd_d2_gpio: 41
+    sd_d3_gpio: 42
+    sd_cmd_gpio: 44
+    sd_clk_gpio: 43
     spiffs_mount_point: /spiffs
     spiffs_partition_label: storage
     spiffs_max_files: 5
     spiffs_format_on_mount_fail: false
 
   # ---- ESP-Hosted SDIO (ESP32-C6 co-processor) ----
+  # The bus pins are authoritative in sdkconfig (CONFIG_ESP_HOSTED_HOST_SDIO_*
+  # Kconfig); the matching BOARD_CFG_HOSTED_SDIO_* macros exist for the GPIO
+  # table and guards so a port keeps one pin list.
   hosted_sdio:
     clk_gpio: 18
     cmd_gpio: 19

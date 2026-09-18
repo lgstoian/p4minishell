@@ -91,3 +91,31 @@ void test_debug_log_push_null(void)
     shell_debug_log_push("test", NULL);
     shell_debug_log_push(NULL, NULL);
 }
+
+/* ========================================================================
+ * READ API (backs `debug save`)
+ * ======================================================================== */
+
+void test_debug_get_entry_order_and_range(void)
+{
+    char buf[256];
+    size_t n;
+
+    /* The ring is shared global state (earlier tests fill it), so assert
+     * relative positions only — never an absolute count. */
+    shell_debug_log_push("unittest", "export-order-a");
+    shell_debug_log_push("unittest", "export-order-b");
+    n = shell_debug_get_count();
+    TEST_ASSERT_TRUE(n >= 2);
+
+    /* Oldest-first: the two just-pushed entries are the newest two. */
+    TEST_ASSERT_TRUE(shell_debug_get_entry(n - 2, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("unittest: export-order-a", buf);
+    TEST_ASSERT_TRUE(shell_debug_get_entry(n - 1, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("unittest: export-order-b", buf);
+
+    /* Out of range and NULL-safe. */
+    TEST_ASSERT_FALSE(shell_debug_get_entry(n, buf, sizeof(buf)));
+    TEST_ASSERT_FALSE(shell_debug_get_entry(n - 1, NULL, sizeof(buf)));
+    TEST_ASSERT_FALSE(shell_debug_get_entry(n - 1, buf, 0));
+}

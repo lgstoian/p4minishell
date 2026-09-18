@@ -22,6 +22,7 @@ idf_component_register(
         boot
         clock
         windows
+        whoami
         esp_adc
         esp_event
         esp_hosted

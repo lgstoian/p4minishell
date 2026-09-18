@@ -192,6 +192,10 @@ holder per port.
   `del /s` recursing into subdirectories, and an overlong markdown pipe table
   keeping every row. Prints RESULT OK.
 - `pull.py` — pull an SD file over `send` (SDFX framing).
+- `parse_debuglog.py` — host-side parser for `debug save` exports
+  (`txt`/`csv`/`json`, auto-detected): severity summary + chronological
+  table. Pull `DEBUG.LOG` with `pull.py`, then
+  `python tools/parse_debuglog.py DEBUG.LOG`.
 - Deploy tools: `apps/push_apps.py` (reference apps), `apps/push_assets.py`
   (PIL sprites + `.ASSETS` manifests), and `apps/push_pkgs.py` (build + push
   `PKGS/<APP>/` install bundles).

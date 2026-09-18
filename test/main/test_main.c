@@ -113,7 +113,7 @@ extern void test_debug_log_error_does_not_increment_warning(void);
 extern void test_debug_log_info_does_not_increment_warning(void);
 extern void test_debug_log_ring_overflow(void);
 extern void test_debug_log_push_null(void);
-
+extern void test_debug_get_entry_order_and_range(void);
 extern void test_wifi_state_transitions(void);
 extern void test_wifi_mutex(void);
 
@@ -561,6 +561,7 @@ void app_main(void)
     RUN_TEST(test_debug_log_info_does_not_increment_warning);
     RUN_TEST(test_debug_log_ring_overflow);
     RUN_TEST(test_debug_log_push_null);
+    RUN_TEST(test_debug_get_entry_order_and_range);
     UNITY_END();
 
     /* Wi-Fi state machine tests */

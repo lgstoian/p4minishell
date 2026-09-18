@@ -12,10 +12,11 @@
 # board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 1.0.0
-# Last updated: 2026-09-15 (1.0.0: first public release - MIT relicensing,
-#   documentation overhaul; firmware behaviour unchanged from 0.38.5)
-config_version: "1.0.0"
+# Version: 1.1.0
+# Last updated: 2026-09-18 (1.1.0: roadmap section A groundwork -
+#   board profiles, native packaging spec, SDK scaffolding, CI matrix,
+#   structured logging)
+config_version: "1.1.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -237,6 +238,10 @@ buffers:
     type: size_t
     description: "Maximum bytes per debug log entry"
     range: "32..512"
+  debug_log_profile:
+    value: "DEBUG.LOG"
+    type: string
+    description: "Default SD profile for debug save"
 
 # ---- Clock and SNTP ----
 # Managed by: components/clock/clock.c + clock_commands.c
@@ -1246,6 +1251,10 @@ batch_env:
     type: size_t
     description: "Maximum files listed in one package manifest (P4_CONFIG_PKG_MAX_ENTRIES)"
     range: "1..256"
+  native_abi:
+    value: "applib-1"
+    type: string
+    description: "Native-app ABI tag; `pkg install` warns when a native bundle abi= differs, the future loader refuses (P4_CONFIG_NATIVE_ABI, see docs/native_packaging.md)"
   batch_depth_max:
     value: 4
     type: size_t

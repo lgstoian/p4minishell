@@ -5,7 +5,7 @@ How to extend and integrate P4MiniShell. This is the practical companion to the
 registration tables, the modal/native-app patterns, and how to add commands,
 files, and boot hooks.
 
-- **Version:** v1.0.0 (ESP-IDF v5.5.5)
+- **Version:** v1.1.0 (ESP-IDF v5.5.5)
 - **Working rules and invariants:** [`ai-context.md`](ai-context.md)
 - **Architecture:** [`documentation.md`](documentation.md)
 - **User-facing commands:** [`command.md`](command.md)

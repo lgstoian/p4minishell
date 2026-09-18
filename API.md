@@ -3,7 +3,7 @@
 This document lists the C API each component exposes to the rest of the
 firmware, organized by module and mirroring the headers under `components/`.
 
-> **Current public API reference (v1.0.0).** For the working rules and
+> **Current public API reference (v1.1.0).** For the working rules and
 > invariants behind these functions see [`ai-context.md`](ai-context.md); for
 > integration examples see [`SDK.md`](SDK.md); for the user-facing command
 > surface see [`command.md`](command.md). Current verified test baselines live

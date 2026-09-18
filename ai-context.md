@@ -21,7 +21,8 @@ does" reference in [documentation.md](documentation.md).
   firmware after running the test app.
 - **Config values are never hardcoded.** All tunables live in
   `p4minishell_config.h`, mirrored in `p4minishell_config.yaml`. Hardware pins
-  live in `board_config.h` / `board_config.yaml`; build options in `sdkconfig`.
+  live in `boards/<name>/board_config.h` / `.yaml` (default
+  `boards/jc1060p470c/`, selected by `-DP4_BOARD=`); build options in `sdkconfig`.
 - **No `// AI:` comments.** Write plain descriptive comments. Replace any that
   exist.
 - **Docs follow code.** Update them in the same change (see Documentation
@@ -32,7 +33,7 @@ does" reference in [documentation.md](documentation.md).
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.0.0** (`p4minishell_config.h` version macros) |
+| Version | **v1.1.0** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -1525,7 +1526,7 @@ the raster core + 8x8 font are `components/gfx/`
 
 ### Documentation Updates
 - After every task, update: `changelog.md`, `readme.md`, `documentation.md`,
-  `ai-context.md`, `board_config.yaml`, `command.md`.
+  `ai-context.md`, `boards/<name>/board_config.yaml`, `command.md`.
 - For roadmap work also update `roadmap.md`, `API.md`, `SDK.md`.
 - When you add or change user-visible behaviour, update the matching tutorial
   (`tutorial_getting_started.md`, `tutorial_batch.md`, `tutorial_native.md`,

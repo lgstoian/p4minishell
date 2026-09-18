@@ -24,6 +24,7 @@
 
 #include "p4minishell.h"
 #include "applib.h"
+#include "whoami.h"
 
 #include <string.h>
 
@@ -58,4 +59,5 @@ void native_apps_register(void)
     (void)app_register("hello",
                        "native-app ABI sample: show argv, env, and cwd",
                        hello_main);
+    whoami_register();
 }

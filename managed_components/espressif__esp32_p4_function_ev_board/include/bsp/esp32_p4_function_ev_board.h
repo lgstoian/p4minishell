@@ -68,13 +68,13 @@
 #define BSP_LCD_TOUCH_INT     (GPIO_NUM_NC)
 #endif
 
-/* uSD card */
-#define BSP_SD_D0             (GPIO_NUM_39)
-#define BSP_SD_D1             (GPIO_NUM_40)
-#define BSP_SD_D2             (GPIO_NUM_41)
-#define BSP_SD_D3             (GPIO_NUM_42)
-#define BSP_SD_CMD            (GPIO_NUM_44)
-#define BSP_SD_CLK            (GPIO_NUM_43)
+/* uSD card (pins from the board profile) */
+#define BSP_SD_D0             (BOARD_CFG_SD_D0_GPIO)
+#define BSP_SD_D1             (BOARD_CFG_SD_D1_GPIO)
+#define BSP_SD_D2             (BOARD_CFG_SD_D2_GPIO)
+#define BSP_SD_D3             (BOARD_CFG_SD_D3_GPIO)
+#define BSP_SD_CMD            (BOARD_CFG_SD_CMD_GPIO)
+#define BSP_SD_CLK            (BOARD_CFG_SD_CLK_GPIO)
 
 #ifdef __cplusplus
 extern "C" {

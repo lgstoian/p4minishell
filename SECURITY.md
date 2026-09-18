@@ -4,7 +4,7 @@ How P4MiniShell protects secrets, what the device lock actually enforces,
 and what is still missing. Read this before exposing a device to an
 untrusted network.
 
-- **Version:** v1.0.0 · **License:** MIT (see [`licence.md`](licence.md))
+- **Version:** v1.1.0 · **License:** MIT (see [`licence.md`](licence.md))
 - Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`),
   [`readme.md`](readme.md), [`roadmap.md`](roadmap.md) (platform/security row).
 
@@ -83,11 +83,11 @@ design — the firmware never rewrites FAT structures.
 
 - HTTPS client (`httpget https://…`) uses mbedTLS. There is no SD
   certificate store yet (see `roadmap.md` TLS row); pinning custom CAs is
-  not supported in v1.0.0.
+  not supported in v1.1.0.
 - C6 OTA requires the explicit `YES` confirmation, refuses while background
   jobs run, and restores Wi-Fi afterwards.
 - SoftAP is compiled out (station-only); there is no open AP by default.
-- Secure boot / flash encryption: no provisioned profile ships in v1.0.0
+- Secure boot / flash encryption: no provisioned profile ships in v1.1.0
   (see `roadmap.md` platform row). Enable them via your own ESP-IDF signing
   flow if your deployment needs them.
 
