@@ -4,7 +4,7 @@ idf_component_register(
     SRCS "c6ota.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
-        espressif__esp32_p4_function_ev_board
+        board_bsp
         bootloader_support
         esp_app_format
         esp_http_client
@@ -12,4 +12,5 @@ idf_component_register(
         esp-tls
         fatfs
         networking
+        strutil
 )

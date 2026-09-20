@@ -55,6 +55,7 @@
 #include "led.h"
 #include "alarm.h"
 #include "bluetooth.h"
+#include "tab5kbd.h"
 #include "c6ota.h"
 #include "tui.h"
 #include "clock.h"
@@ -1952,6 +1953,22 @@ static void command_bg_pool_init(void)
     }
 }
 
+/**
+ * True when ANY physical keyboard is attached: a USB HID keyboard, a connected
+ * Bluetooth HID keyboard, or the M5Stack Tab5 keyboard module. The shell hides
+ * the on-screen keyboard while this holds.
+ */
+static bool command_physical_keyboard_present(void)
+{
+    if (usb_is_keyboard_attached()) {
+        return true;
+    }
+    if (bluetooth_is_connected()) {
+        return true;
+    }
+    return tab5kbd_is_ready();
+}
+
 /** True when any bg job is currently running (OTA guard). */
 static bool command_bg_any_running(void)
 {
@@ -2431,6 +2448,12 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "shutdown") ||
+        shell_text_equals_ignore_case(argv[0], "poweroff")) {
+        shell_command_shutdown(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "volume")) {
         shell_command_volume(argc, argv);
         return true;
@@ -2503,6 +2526,11 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "rgb")) {
         shell_execute_rgb_command(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "imu")) {
+        shell_execute_imu_command(argc, argv);
         return true;
     }
 
@@ -4121,6 +4149,7 @@ void command_init(void)
         .bluetooth_is_connected = bluetooth_is_connected,
         .usb_is_connected       = usb_is_connected,
         .usb_is_keyboard_attached = usb_is_keyboard_attached,
+        .physical_keyboard_present = command_physical_keyboard_present,
         .bg_jobs_running        = command_bg_any_running,
         .usb_key_to_ascii       = usb_key_to_ascii_full,
         .bind_lookup_fkey       = shell_bind_lookup_fkey,

@@ -57,7 +57,11 @@ background jobs, and a C app ABI included.
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
-and the on-board unit suite plus the host regression runners are green. See
+and on the M5Stack Tab5 (ILI9881C/ST7123 720x1280 DSI, ES8388 audio, hosted C6
+Wi-Fi + BLE, Tab5Keyboard input with two independent RGB LEDs, INA226 pack
+gauge with charging, RX8130CE RTC, BMI270 IMU with tilt auto-rotate, and an
+SC202CS MIPI-CSI camera that captures BMP stills); the on-board unit suite plus
+the host regression runners are green. See
 [`test/README.md`](test/README.md) for the current unit-test count and
 [`tools/README.md`](tools/README.md) for the hardware drivers.
 
@@ -90,11 +94,18 @@ and the on-board unit suite plus the host regression runners are green. See
   and sleep/deep-sleep.
 - **Editor:** a touch-first, PSRAM-backed `edit` editor for any SD text file.
 - **Writerdeck:** focus/typewriter mode (`edit /focus`, live word count),
-  document templates (`sd:/TEMPLATES/`), proportional/serif *reading*
-  typography for `view`/preview (vendored `DejaVuSerif`), offline spelling
-  underlines from an SD wordlist (`sd:/DICTS/`), and
-  `markdown export <src> <out> [text|html|print]` (plain text, HTML, or a
-  paginated print layout) for sharing over `httpd`.
+  document templates (`sd:/TEMPLATES/`, push with
+  `python apps/push_templates.py <COM_PORT>`), proportional/serif *reading*
+  typography for `view`/preview (vendored `DejaVuSerif`, push with
+  `python push_fonts.py <COM_PORT>`), offline spelling underlines from an SD
+  wordlist (`sd:/DICTS/`, push the `apps/dicts/` sample with
+  `python apps/push_dicts.py <COM_PORT>`), and
+  `markdown export <src> <out> [text|html|print]` (plain text, a standalone
+  HTML reader page, or a paginated print layout) for sharing over `httpd`.
+  Nothing above is turnkey: each SD payload must be pushed once (see
+  [SD card layout](#4-sd-card-layout) and
+  [Deploy the reference apps](#5-deploy-the-reference-apps)); missing pieces
+  fall back visibly (bitmap font, `Spell` stays off, empty template buffer).
 
 Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
 `tcmd` (dual-pane commander), `snake`, `elite`, `adventure`, `notes`, `mood`,
@@ -113,9 +124,11 @@ capability and frame-rate diagnostics).
 
 - [ESP-IDF **v5.5.5**](https://docs.espressif.com/projects/esp-idf/) and the
   `esp32p4` toolchain.
-- An ESP32-P4 board with a JD9165 1024x600 MIPI-DSI display and GT911 touch
-  (the ESP32-P4 Function EV Board / JC1060P470C is the reference), an ESP32-C6
-  co-processor on the SDIO link, and a FAT32 microSD card.
+- An ESP32-P4 board with a MIPI-DSI display and touch — the ESP32-P4 Function
+  EV Board / JC1060P470C (JD9165 1024x600 + GT911) is the reference, and the
+  M5Stack Tab5 (ILI9881C/ST7123 720x1280, ES8388, Tab5Keyboard) is also
+  supported (`-DP4_BOARD=m5stack_tab5`, see [`PORTING.md`](PORTING.md) §6) — an
+  ESP32-C6 co-processor on the SDIO link, and a FAT32 microSD card.
 - Python 3 with `pyserial` (and `opencv-python` for the camera diagnostics) to
   run the host tools.
 
@@ -157,7 +170,9 @@ reference. `about` prints the build identity and license.
 | `PKGS/<APP>/` | Installable package bundles for `pkg install` |
 | `DBS/` | `db` record stores (`DBS/<name>.DB/`) |
 | `ALARMS/` | Persisted alarms and calendar events |
-| `FONTS/` | Optional SD TrueType fonts (`font set`) |
+| `FONTS/` | Optional SD TrueType fonts (`font set`); the vendored reading serif (`DejaVuSerif`) is pushed by `push_fonts.py` and auto-selected for `view`/preview |
+| `TEMPLATES/` | Writerdeck new-file seeds (`edit <file> /template <name>`); pushed by `apps/push_templates.py` |
+| `DICTS/` | Writerdeck spell wordlists (`<name>.words`, default `en`); the `apps/dicts/` sample is pushed by `apps/push_dicts.py`; without one `Spell` stays off |
 | `WIFI.KNOWN` | Saved Wi-Fi networks |
 | `HISTORY.TXT`, `ALIASES.BAT`, `BIND.BAT`, `SHELL.INI` | Persistent shell state |
 
@@ -174,7 +189,9 @@ python apps/companion/push_sd.py <COM_PORT>   # the Companion app
 python apps/push_apps.py <COM_PORT>           # tcmd/snake/elite/adventure/...
 python apps/push_assets.py <COM_PORT>         # demo BMP sprites + manifests
 python apps/push_pkgs.py <COM_PORT>           # build + push PKGS/ bundles
-python push_fonts.py <COM_PORT>               # optional SD fonts
+python push_fonts.py <COM_PORT>               # optional SD fonts (incl. the reading serif)
+python apps/push_templates.py <COM_PORT>      # writerdeck document templates -> sd:/TEMPLATES/
+python apps/push_dicts.py <COM_PORT>          # writerdeck spell wordlists -> sd:/DICTS/
 ```
 
 Then, at the shell prompt: `launch COMPANION`, `tcmd`, `snake`, `bounce`, and
@@ -271,11 +288,26 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
   and rich `wifi status`, plus `ping`, `dns`, `httpget`, and `tcpterm`.
 - An SD **HTTP file server** (`httpd`), `netstat`, and `ipconfig`.
 - Hosted BLE (scan/advertise), USB host MSC/HID/CDC-ACM, and C6 OTA.
-- Brightness/rotation, battery, audio, WS2812 status LED, GPIO/PWM/ADC/I2C, and
-  power management (idle display-off, sleep, deep-sleep).
+- Brightness/rotation, battery, audio, status LED(s), GPIO/PWM/ADC/I2C, and
+  power management (idle display-off, sleep, deep-sleep, and `shutdown`).
+- Status LED(s): a single WS2812 on the EV board, or the two **independently
+  addressable** keyboard LEDs on the Tab5 (`rgb 1|2 <r> <g> <b>`; LED1 = status,
+  LED2 = user).
+- **Battery:** EV = ADC divider; Tab5 = INA226 pack gauge (read-only measurement)
+  with charging enabled at boot and an honest `charging`/`discharging`/`idle`/
+  `full` state.
+- **IMU** (`imu`): Tab5 BMI270 accel/gyro + orientation, opt-in tilt auto-rotate,
+  and `IMU_*` environment variables for batch.
+- **Camera** (`camera`): Tab5 SC202CS MIPI-CSI still capture to 24-bit BMP.
+- `shutdown`/`poweroff`: flush, darken the LEDs, and cut board power (PMIC latch
+  on the Tab5, deep sleep on the EV board).
+- The on-screen keyboard auto-hides whenever **any** physical keyboard is present
+  (USB HID, a connected Bluetooth HID keyboard, or the Tab5 keyboard).
 
 A responsive status header shows Wi-Fi, battery, Bluetooth, USB, SD, memory,
-CPU, and the clock, with a notification queue and adaptive refresh.
+CPU, and the clock, with a notification queue and adaptive refresh; the Wi-Fi
+indicator color follows the connection/signal state (and stays green when
+associated even if the hosted path cannot report an RSSI).
 
 ---
 
@@ -293,8 +325,8 @@ The only upward dependencies are inverted through registration tables
 core and batch engine never include the command layer. Modal surfaces share one
 runtime (`components/modal/`). All tunables live in `p4minishell_config.h`
 (documented in `p4minishell_config.yaml`); board pins live in
-`boards/<name>/board_config.h` (from the matching `.yaml`, default
-`boards/jc1060p470c/`).
+`boards/<name>/board_config.h` (from the matching `.yaml`; default
+`boards/jc1060p470c/`, with `boards/m5stack_tab5/` also shipped).
 
 See [documentation.md](documentation.md) for the full module map and
 [SDK.md](SDK.md) for how to extend the system.
@@ -302,6 +334,9 @@ See [documentation.md](documentation.md) for the full module map and
 ---
 
 ## Hardware baseline
+
+The JC1060P470C reference profile (the M5Stack Tab5 profile is summarised in
+[`PORTING.md`](PORTING.md) §6):
 
 | Component | Detail |
 |-----------|--------|

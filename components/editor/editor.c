@@ -2757,48 +2757,94 @@ static void editor_session_close_cb(void *user_data)
     }
 }
 
+/** Validate a template name: lowercase/uppercase/digit/`_`/`-`, 1..
+ *  P4_CONFIG_TEMPLATE_NAME_BYTES-1 chars, no path separators or dots. Keeps
+ *  `..`, extension games, and overlong names from ever reaching a path. */
+static bool editor_template_name_ok(const char *name)
+{
+    size_t i = 0;
+
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+    while (name[i] != '\0') {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+            return false;
+        }
+        i++;
+    }
+    if (i == 0 || i >= P4_CONFIG_TEMPLATE_NAME_BYTES) {
+        return false;
+    }
+    return true;
+}
+
 /** Seed a new buffer with sd:/TEMPLATES/<name>.MD (writerdeck). Runs on the
- *  command worker (guarded SD session); the document keeps its own path. */
-static bool editor_seed_template(editor_doc_t *doc, const char *name)
+ *  command worker (guarded SD session); the document keeps its own path.
+ *  Reports (through @p err) why it failed so the caller can be specific. */
+typedef enum {
+    EDITOR_TEMPLATE_OK = 0,
+    EDITOR_TEMPLATE_BAD_NAME,
+    EDITOR_TEMPLATE_NO_SD,
+    EDITOR_TEMPLATE_MISSING,
+    EDITOR_TEMPLATE_TOO_BIG,
+    EDITOR_TEMPLATE_EMPTY,
+    EDITOR_TEMPLATE_NO_MEM,
+} editor_template_result_t;
+
+static editor_template_result_t editor_seed_template(editor_doc_t *doc,
+                                                     const char *name)
 {
     char rel[P4_CONFIG_SD_PATH_BYTES];
     char resolved[P4_CONFIG_SD_PATH_BYTES];
     shell_sd_session_t session;
     FILE *file;
     char *buf;
+    bool oversize = false;
     size_t got;
 
-    if (doc == NULL || name == NULL || name[0] == '\0') {
-        return false;
+    if (doc == NULL || !editor_template_name_ok(name)) {
+        return EDITOR_TEMPLATE_BAD_NAME;
     }
     snprintf(rel, sizeof(rel), "%s/%s.MD", P4_CONFIG_TEMPLATES_DIR_NAME, name);
     if (shell_fs_resolve_path(rel, resolved, sizeof(resolved)) != ESP_OK) {
-        return false;
+        return EDITOR_TEMPLATE_NO_SD;
     }
     if (shell_sd_begin(&session) != ESP_OK) {
-        return false;
+        return EDITOR_TEMPLATE_NO_SD;
     }
     file = fopen(resolved, "rb");
     if (file == NULL) {
         shell_sd_end(&session, "edit");
-        return false;
+        return EDITOR_TEMPLATE_MISSING;
     }
     buf = malloc(P4_CONFIG_TEMPLATE_MAX_BYTES + 1);
     if (buf == NULL) {
         fclose(file);
         shell_sd_end(&session, "edit");
-        return false;
+        return EDITOR_TEMPLATE_NO_MEM;
     }
     got = fread(buf, 1, P4_CONFIG_TEMPLATE_MAX_BYTES, file);
+    if (got == P4_CONFIG_TEMPLATE_MAX_BYTES && fgetc(file) != EOF) {
+        oversize = true;
+    }
     fclose(file);
     shell_sd_end(&session, "edit");
     if (got > 0) {
         editor_doc_insert_bytes(doc, buf, got);
     }
     free(buf);
+    if (got == 0) {
+        return EDITOR_TEMPLATE_EMPTY;
+    }
+    if (oversize) {
+        return EDITOR_TEMPLATE_TOO_BIG;
+    }
     /* A seeded buffer is a starting point, not a saved file. */
     doc->modified = true;
-    return true;
+    return EDITOR_TEMPLATE_OK;
 }
 
 static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
@@ -2855,12 +2901,33 @@ static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
      * for new/unnamed buffers: an existing file is never overwritten. */
     if (mctx->template_name != NULL && mctx->template_name[0] != '\0' &&
         (unnamed || editor_file_missing(resolved))) {
-        if (editor_seed_template(session->control.doc, mctx->template_name)) {
+        switch (editor_seed_template(session->control.doc, mctx->template_name)) {
+        case EDITOR_TEMPLATE_OK:
             shell_transcript_appendf_ansi(SH_MUTE "edit: started from template '%s'\n" SH_RST,
                                           mctx->template_name);
-        } else {
+            break;
+        case EDITOR_TEMPLATE_TOO_BIG:
+            shell_print_warning("edit: template '%s' exceeds %u KB and was truncated",
+                                mctx->template_name,
+                                (unsigned)(P4_CONFIG_TEMPLATE_MAX_BYTES / 1024));
+            break;
+        case EDITOR_TEMPLATE_EMPTY:
+            shell_print_warning("edit: template '%s' is empty; opened an empty buffer",
+                                mctx->template_name);
+            break;
+        case EDITOR_TEMPLATE_BAD_NAME:
+            shell_print_warning("edit: invalid template name '%s' (letters, digits, _-, max %u)",
+                                mctx->template_name,
+                                (unsigned)(P4_CONFIG_TEMPLATE_NAME_BYTES - 1));
+            break;
+        case EDITOR_TEMPLATE_NO_SD:
+            shell_print_warning("edit: template '%s' unavailable (SD card not ready)",
+                                mctx->template_name);
+            break;
+        default:
             shell_print_warning("edit: template '%s' not found in sd:/%s/",
                                 mctx->template_name, P4_CONFIG_TEMPLATES_DIR_NAME);
+            break;
         }
     }
 

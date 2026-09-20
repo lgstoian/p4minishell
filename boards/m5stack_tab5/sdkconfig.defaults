@@ -1,0 +1,42 @@
+# M5Stack Tab5 board-profile build overrides.
+#
+# Layered on top of the repository sdkconfig.defaults by the root and test
+# CMakeLists when P4_BOARD=m5stack_tab5. Only board-specific ESP-IDF options
+# belong here; shared project options stay in the repository defaults.
+#
+# ESP-Hosted SDIO pins differ from the JC1060P470C reference board. The values
+# mirror BOARD_CFG_HOSTED_SDIO_* in board_config.h and the C6 reset line
+# (P4_CONFIG_C6_HOST_RESET_GPIO).
+
+# C6 co-processor SDIO transport (slot 1).
+CONFIG_ESP_HOSTED_HOST_SDIO_SLOT=1
+CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4=y
+# 10 MHz: the Tab5's C6 SDIO link answers the version/OTA RPCs reliably at this
+# clock, while 40 MHz (the M5Stack demo value) times out the first RPC and then
+# crashes under Wi-Fi load with our esp_hosted 3.0.6 stack (see bugs.md F6). The
+# shared SDMMC controller and the C6 reset timing on this board need the margin.
+CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=10000
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK=12
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CMD=13
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D0=11
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1=10
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2=9
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3=8
+CONFIG_ESP_HOSTED_HOST_RESET_GPIO=15
+CONFIG_ESP_HOSTED_HOST_CP_RESET_STRATEGY_ALWAYS=y
+CONFIG_ESP_HOSTED_HOST_CP_BRINGUP_ON_TIMEOUT_NONE=y
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_RESTART_ON_FAILURE=n
+
+# MIPI-CSI camera: enable the SC202CS sensor driver (the Tab5's 2 MP sensor;
+# the board text also calls it SC2356, but the shipped esp_cam_sensor driver is
+# SC202CS). The CSI/ISP video devices are already enabled on the P4.
+CONFIG_CAMERA_SC202CS=y
+# Run the ISP auto-tune pipeline (exposure/gain/AWB) so RAW8 from the sensor is
+# correctly processed into RGB565 (matches the M5Stack demo, where the pipeline
+# controller was unconditional).
+CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y
+
+# The vendored Tab5 BSP is driven by board_config.h rather than a Kconfig, so
+# there are no CONFIG_BSP_* symbols to set here. The backlight uses LEDC
+# timer 0/channel 1 on this board; the peripheral toolkit's timer/channel
+# exclusions come from BOARD_CFG_DISPLAY_BRIGHTNESS_LEDC_CH.

@@ -22,7 +22,7 @@
 #include "ansi_palette.h"
 #include "header.h"
 #include "p4minishell_config.h"
-#include "bsp/esp-bsp.h"
+#include "board_bsp.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
 #include "esp_log.h"
@@ -228,14 +228,14 @@ esp_err_t shell_sd_begin(shell_sd_session_t *session)
  */
 void storage_sd_ensure_dma_buffer(void)
 {
-    if (bsp_sdcard == NULL) {
+    if (P4_BSP_SDCARD == NULL) {
         return;
     }
-    if (bsp_sdcard->host.dma_aligned_buffer != NULL) {
+    if (P4_BSP_SDCARD->host.dma_aligned_buffer != NULL) {
         return;
     }
 
-    size_t sector_size = (bsp_sdcard->csd.sector_size > 0) ? bsp_sdcard->csd.sector_size : 512;
+    size_t sector_size = (P4_BSP_SDCARD->csd.sector_size > 0) ? P4_BSP_SDCARD->csd.sector_size : 512;
     size_t buffer_size = P4_CONFIG_SD_DMA_BUFFER_BYTES;
     size_t chunk = buffer_size / sector_size;
     if (chunk < 1) {
@@ -263,8 +263,8 @@ void storage_sd_ensure_dma_buffer(void)
         chunk = 1;
     }
 
-    bsp_sdcard->host.dma_aligned_buffer = buffer;
-    bsp_sdcard->host.unaligned_multi_block_rw_max_chunk_size = chunk;
+    P4_BSP_SDCARD->host.dma_aligned_buffer = buffer;
+    P4_BSP_SDCARD->host.unaligned_multi_block_rw_max_chunk_size = chunk;
     ESP_LOGI(STORAGE_TAG, "SD card DMA scratch buffer cached (%u B, %u block(s) per op)",
              (unsigned int)buffer_size, (unsigned int)chunk);
 }
@@ -378,11 +378,11 @@ void shell_command_sd_eject(void)
         /* The cached DMA scratch buffer belongs to the (now gone) card
          * handle; release it so the internal DMA-capable heap is reclaimed
          * and a re-inserted card gets a fresh buffer on next mount. */
-        if (bsp_sdcard != NULL) {
-            if (bsp_sdcard->host.dma_aligned_buffer != NULL) {
-                free(bsp_sdcard->host.dma_aligned_buffer);
-                bsp_sdcard->host.dma_aligned_buffer = NULL;
-                bsp_sdcard->host.unaligned_multi_block_rw_max_chunk_size = 0;
+        if (P4_BSP_SDCARD != NULL) {
+            if (P4_BSP_SDCARD->host.dma_aligned_buffer != NULL) {
+                free(P4_BSP_SDCARD->host.dma_aligned_buffer);
+                P4_BSP_SDCARD->host.dma_aligned_buffer = NULL;
+                P4_BSP_SDCARD->host.unaligned_multi_block_rw_max_chunk_size = 0;
             }
         }
         shell_print_ok("SD card unmounted safely. You may now remove the card.");
@@ -1507,16 +1507,16 @@ esp_err_t storage_disk_get_info(storage_volume_t vol, storage_disk_info_t *out)
         return error;
     }
 
-    if (bsp_sdcard != NULL) {
-        snprintf(out->card_name, sizeof(out->card_name), "%s", bsp_sdcard->cid.name);
-        out->sector_size = bsp_sdcard->csd.sector_size;
-        out->sector_count = bsp_sdcard->csd.capacity;
+    if (P4_BSP_SDCARD != NULL) {
+        snprintf(out->card_name, sizeof(out->card_name), "%s", P4_BSP_SDCARD->cid.name);
+        out->sector_size = P4_BSP_SDCARD->csd.sector_size;
+        out->sector_count = P4_BSP_SDCARD->csd.capacity;
         out->capacity_bytes = (uint64_t)out->sector_size * (uint64_t)out->sector_count;
-        out->max_freq_khz = bsp_sdcard->max_freq_khz;
+        out->max_freq_khz = P4_BSP_SDCARD->max_freq_khz;
     }
 
     shell_sd_end(&session, "disk info");
-    return (bsp_sdcard != NULL) ? ESP_OK : ESP_ERR_INVALID_STATE;
+    return (P4_BSP_SDCARD != NULL) ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out)
@@ -1541,12 +1541,12 @@ esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out)
     if (error != ESP_OK) {
         return error;
     }
-    if (bsp_sdcard == NULL) {
+    if (P4_BSP_SDCARD == NULL) {
         shell_sd_end(&session, "disk detail");
         return ESP_ERR_INVALID_STATE;
     }
 
-    error = sdmmc_read_sectors(bsp_sdcard, sector, 0, 1);
+    error = sdmmc_read_sectors(P4_BSP_SDCARD, sector, 0, 1);
     shell_sd_end(&session, "disk detail");
     if (error != ESP_OK) {
         return error;
@@ -1586,7 +1586,7 @@ esp_err_t storage_disk_clean(storage_volume_t vol)
     if (error != ESP_OK) {
         return error;
     }
-    if (bsp_sdcard == NULL) {
+    if (P4_BSP_SDCARD == NULL) {
         shell_sd_end(&session, "disk clean");
         return ESP_ERR_INVALID_STATE;
     }
@@ -1599,7 +1599,7 @@ esp_err_t storage_disk_clean(storage_volume_t vol)
     sector[STORAGE_MBR_SIGNATURE_OFFSET] = 0x55;
     sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] = 0xAA;
 
-    error = sdmmc_write_sectors(bsp_sdcard, sector, 0, 1);
+    error = sdmmc_write_sectors(P4_BSP_SDCARD, sector, 0, 1);
 
     /* Even on write failure the volume is unmounted and the old partition
      * table may be gone, so reflect "card present, no filesystem". */
@@ -1628,12 +1628,12 @@ esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t s
     if (error != ESP_OK) {
         return error;
     }
-    if (bsp_sdcard == NULL) {
+    if (P4_BSP_SDCARD == NULL) {
         shell_sd_end(&session, "disk create");
         return ESP_ERR_INVALID_STATE;
     }
 
-    error = sdmmc_read_sectors(bsp_sdcard, sector, 0, 1);
+    error = sdmmc_read_sectors(P4_BSP_SDCARD, sector, 0, 1);
     if (error != ESP_OK) {
         shell_sd_end(&session, "disk create");
         return error;
@@ -1655,10 +1655,10 @@ esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t s
     }
 
     /* Size and align the partition. */
-    total_sectors = (uint64_t)bsp_sdcard->csd.capacity;
+    total_sectors = (uint64_t)P4_BSP_SDCARD->csd.capacity;
     start_lba = P4_CONFIG_DISK_PARTITION_ALIGN_SECTORS;
     if (size_bytes > 0) {
-        size_lba = size_bytes / (uint64_t)bsp_sdcard->csd.sector_size;
+        size_lba = size_bytes / (uint64_t)P4_BSP_SDCARD->csd.sector_size;
     } else {
         size_lba = 0;
     }
@@ -1684,7 +1684,7 @@ esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t s
     /* Unmount before writing so the mounted volume cannot cache a stale
      * partition table. The card stays initialized for `format`. */
     f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
-    error = sdmmc_write_sectors(bsp_sdcard, sector, 0, 1);
+    error = sdmmc_write_sectors(P4_BSP_SDCARD, sector, 0, 1);
 
     header_update_sd(HEADER_SD_INSERTED);
     shell_sd_end(&session, "disk create");
@@ -1709,12 +1709,12 @@ esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition
     if (error != ESP_OK) {
         return error;
     }
-    if (bsp_sdcard == NULL) {
+    if (P4_BSP_SDCARD == NULL) {
         shell_sd_end(&session, "disk delete");
         return ESP_ERR_INVALID_STATE;
     }
 
-    error = sdmmc_read_sectors(bsp_sdcard, sector, 0, 1);
+    error = sdmmc_read_sectors(P4_BSP_SDCARD, sector, 0, 1);
     if (error != ESP_OK) {
         shell_sd_end(&session, "disk delete");
         return error;
@@ -1726,7 +1726,7 @@ esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition
     sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] = 0xAA;
 
     f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
-    error = sdmmc_write_sectors(bsp_sdcard, sector, 0, 1);
+    error = sdmmc_write_sectors(P4_BSP_SDCARD, sector, 0, 1);
 
     header_update_sd(HEADER_SD_INSERTED);
     shell_sd_end(&session, "disk delete");
@@ -1789,12 +1789,12 @@ esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_
 
     /* esp_vfs_fat_sdcard_format_cfg() needs an initialized card whose FATFS
      * context is still registered (a mount or the disk commands keep it so). */
-    if (bsp_sdcard == NULL) {
+    if (P4_BSP_SDCARD == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (bsp_sdcard->csd.sector_size > 0) {
-        volume_bytes = (uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size;
+    if (P4_BSP_SDCARD->csd.sector_size > 0) {
+        volume_bytes = (uint64_t)P4_BSP_SDCARD->csd.capacity * P4_BSP_SDCARD->csd.sector_size;
     }
 
     /* The standard IDF helper unmounts, formats with a size-appropriate FAT
@@ -1808,7 +1808,7 @@ esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_
     cfg.disk_status_check_enable = false;
     cfg.use_one_fat = false;
 
-    error = esp_vfs_fat_sdcard_format_cfg(BSP_SD_MOUNT_POINT, bsp_sdcard, &cfg);
+    error = esp_vfs_fat_sdcard_format_cfg(BSP_SD_MOUNT_POINT, P4_BSP_SDCARD, &cfg);
     if (error != ESP_OK) {
         return error;
     }

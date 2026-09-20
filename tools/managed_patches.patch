@@ -964,3 +964,39 @@ index 771be50..0ed77af 100644
  /**
   * Get the whether a control value is enabled or disabled for button of a button matrix
   * @param obj       pointer to a button matrix object
+
+diff --git a/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c b/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c
+index f2e84fb..8c44d36 100644
+--- a/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c
++++ b/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c
+@@ -512,7 +512,16 @@ static int sdio_get_tx_buffer_num(uint32_t *tx_num, bool is_lock_needed)
+ 		sizeof(len), is_lock_needed);
+ 
+ 	if (ret) {
+-		ESP_LOGE(TAG, "%s: err: %d", __func__, ret);
++		/* A stalled slave makes this probe fail on every ~20us credit poll, so
++		 * rate-limit the error to the first failure and then at most once a
++		 * second. The unstoppable per-poll log flooded the console and cost the
++		 * TX task enough time on a busy board to trip the task watchdog. */
++		static uint32_t last_log_ms = 0;
++		uint32_t now_ms = esp_log_timestamp();
++		if (last_log_ms == 0 || (now_ms - last_log_ms) >= 1000u) {
++			last_log_ms = now_ms;
++			ESP_LOGE(TAG, "%s: err: %d", __func__, ret);
++		}
+ 		return ret;
+ 	}
+ 
+@@ -866,7 +875,11 @@ static void sdio_tx_aggregate_iter(void)
+ 				got = BUFFER_AVAILABLE;
+ 				break;
+ 			}
+-			eh_host_port_task_delay_us(20);
++			/* Yield a full tick, not a sub-tick busy-wait: esp_rom_delay_us
++			 * does not schedule, so a stalled slave kept this task spinning on
++			 * the core and starved the idle task into the task watchdog. A tick
++			 * still gives 12/200 chances inside the bulk/ctrl wait window. */
++			eh_host_port_task_delay_ms(1);
+ 		}
+ 		if (got != BUFFER_AVAILABLE) {
+ 			sdio_aggr_credit_timeouts++;

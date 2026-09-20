@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
+#
+# Managed dependencies for the vendored M5Stack Tab5 BSP.
+#
+# The upstream espressif/m5stack_tab5 BSP manifest also pulls esp_video, bmi270
+# and sensor_hub for its camera/IMU features. This port does not use those
+# (the camera stack is a documented gap and there is no IMU consumer), and the
+# trimmed in-tree sources drop bsp_camera.c / bsp_sensors.c, so the heavy
+# camera/sensor dependency tree is intentionally not listed here.
+#
+# esp_codec_dev is pinned to the repository-wide 1.6.2 (the upstream BSP pins
+# ~1.5); the ES8388/ES7210 drivers used here are unchanged between the two.
+dependencies:
+  espressif/esp_codec_dev:
+    version: "1.6.2"
+    public: true
+  espressif/esp_io_expander:
+    version: "^1.2.0"
+    public: true
+  espressif/esp_io_expander_pi4ioe5v6408:
+    version: "^1.0.0"
+    public: true
+  espressif/esp_lcd_ili9881c:
+    version: "*"
+  espressif/esp_lcd_st7123:
+    version: "^1.0.2"
+  espressif/esp_lcd_touch_gt911:
+    version: "*"
+  espressif/esp_lcd_touch_st7123:
+    version: "^1.0.2"
+  espressif/esp_lvgl_port:
+    version: "^2"
+    public: true
+  espressif/usb:
+    version: "^1"
+    public: true
+  idf: ">=5.4"

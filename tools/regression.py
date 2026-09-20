@@ -46,6 +46,9 @@ def main():
         ("companion db", [sys.executable, os.path.join(APPS, "companion", "db_test.py"), port], "DB PASS", 1200),
         ("companion alarm", [sys.executable, os.path.join(APPS, "companion", "alarm_test.py"), port], "ALARM PASS", 1200),
         ("app smoke", [sys.executable, os.path.join(APPS, "smoke_apps.py"), port], "SMOKE 21/21 PASS", 1200),
+        # Deploy the package bundles first: pkg_test.py installs/removes them and
+        # fails on a fresh SD that never had apps/push_pkgs.py run (the Tab5).
+        ("pak deploy", [sys.executable, os.path.join(APPS, "push_pkgs.py"), port], "RESULT OK", 600),
         ("pak install/remove", [sys.executable, os.path.join(TOOLS, "pkg_test.py"), port], "RESULT OK", 900),
         ("theme", [sys.executable, os.path.join(TOOLS, "theme_test.py"), port], "RESULT OK", 900),
         ("gfx toolkit", [sys.executable, os.path.join(TOOLS, "gfx_toolkit_test.py"), port], "RESULT OK", 900),

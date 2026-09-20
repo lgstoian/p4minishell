@@ -11,5 +11,5 @@ idf_component_register(
         filetype
         tui
         clock
-        espressif__esp32_p4_function_ev_board
+        board_bsp
 )

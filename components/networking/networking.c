@@ -42,6 +42,7 @@
 
 #include "bluetooth.h"
 #include "http_server.h"
+#include "strutil.h"
 #include "led.h"
 #include "netbench.h"
 #include "netdiag.h"
@@ -138,50 +139,6 @@ static void wifi_lock(void);
 static void wifi_unlock(void);
 static bool wifi_try_claim_init_task(void);
 static void wifi_release_init_task(void);
-
-static bool networking_text_equals_ignore_case(const char *left, const char *right)
-{
-    if (left == NULL || right == NULL) {
-        return false;
-    }
-
-    while (*left != '\0' && *right != '\0') {
-        if (tolower((unsigned char)*left) != tolower((unsigned char)*right)) {
-            return false;
-        }
-        left++;
-        right++;
-    }
-
-    return *left == '\0' && *right == '\0';
-}
-
-static int networking_split_args(char *text, char **argv, int max_args)
-{
-    int argc = 0;
-    char *cursor = text;
-
-    while (cursor != NULL && *cursor != '\0' && argc < max_args) {
-        while (isspace((unsigned char)*cursor)) {
-            cursor++;
-        }
-
-        if (*cursor == '\0') {
-            break;
-        }
-
-        argv[argc++] = cursor;
-        while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
-            cursor++;
-        }
-        if (*cursor != '\0') {
-            *cursor = '\0';
-            cursor++;
-        }
-    }
-
-    return argc;
-}
 
 static void networking_appendf(const char *format, ...)
 {
@@ -467,20 +424,25 @@ static esp_err_t networking_wifi_register_event_handlers(void)
 #endif
 }
 
-static esp_err_t networking_wifi_validate_hosted_version(void)
+/* @param report_failure  Log the read failure loudly. False for the first
+ *  attempt, which the caller retries after a transport reset; the retry reports
+ *  the terminal failure so a recovered first-RPC timeout stays quiet. */
+static esp_err_t networking_wifi_validate_hosted_version(bool report_failure)
 {
     esp_hosted_coprocessor_fwver_t version = { 0 };
     esp_err_t error;
 
     error = esp_hosted_get_coprocessor_fwversion(&version);
     if (error != ESP_OK) {
-        networking_wifi_set_detail("ESP-Hosted connected but the shell could not read the ESP32-C6 firmware version. Wi-Fi stays off because the hosted link is not trustworthy for remote Wi-Fi init. Rebuild or externally refresh coprocessor/esp32c6_slave and retry.");
-        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "failed to read C6 hosted firmware version:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
-                             esp_err_to_name(error),
-                             (unsigned int)error);
-        networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
-                             P4_CONFIG_HOSTED_COMPAT_MAJOR);
-        networking_record_warningf("Failed to read hosted firmware version: %s", esp_err_to_name(error));
+        if (report_failure) {
+            networking_wifi_set_detail("ESP-Hosted connected but the shell could not read the ESP32-C6 firmware version. Wi-Fi stays off because the hosted link is not trustworthy for remote Wi-Fi init. Rebuild or externally refresh coprocessor/esp32c6_slave and retry.");
+            networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_ERR "failed to read C6 hosted firmware version:" SH_RST " " SH_ERR "%s" SH_RST " (0x%x)\n",
+                                 esp_err_to_name(error),
+                                 (unsigned int)error);
+            networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST " " SH_WARN "Recovery:" SH_RST " flash a matching " SH_VAL "%u.x" SH_RST " ESP32-C6 image from " SH_PATH "coprocessor/esp32c6_slave" SH_RST " or use c6ota default with " SH_PATH "esp32c6_hosted_slave.bin" SH_RST "\n",
+                                 P4_CONFIG_HOSTED_COMPAT_MAJOR);
+            networking_record_warningf("Failed to read hosted firmware version: %s", esp_err_to_name(error));
+        }
         return error;
     }
 
@@ -2387,14 +2349,14 @@ static esp_err_t networking_wifi_throughput(int argc, char **argv)
     cfg.megabytes = P4_CONFIG_WIFI_BENCH_DEFAULT_MB;
     cfg.timeout_ms = P4_CONFIG_WIFI_BENCH_TIMEOUT_MS;
 
-    if (networking_text_equals_ignore_case(argv[2], "tx")) {
+    if (strutil_text_equals_ignore_case(argv[2], "tx")) {
         cfg.direction = NETBENCH_DIR_TX;
         if (argc < 4) {
             goto usage;
         }
         cfg.host = argv[3];
         i = 4;
-    } else if (networking_text_equals_ignore_case(argv[2], "rx")) {
+    } else if (strutil_text_equals_ignore_case(argv[2], "rx")) {
         cfg.direction = NETBENCH_DIR_RX;
         i = 3;
     } else {
@@ -2404,7 +2366,7 @@ static esp_err_t networking_wifi_throughput(int argc, char **argv)
     for (; i < argc; i++) {
         const char *a = argv[i];
 
-        if (networking_text_equals_ignore_case(a, "udp")) {
+        if (strutil_text_equals_ignore_case(a, "udp")) {
             cfg.udp = true;
         } else if (strncasecmp(a, "port=", 5) == 0) {
             long v = strtol(a + 5, NULL, 10);
@@ -2473,9 +2435,9 @@ esp_err_t networking_handle_wifi_command(char *command)
      * [udp]` = 7 tokens, so the previous `argv[6]` silently dropped the
      * trailing `udp`. Keep headroom above the current verbs. */
     char *argv[8];
-    int argc = networking_split_args(command, argv, 8);
+    int argc = strutil_split_args(command, argv, 8);
 
-    if (argc <= 1 || networking_text_equals_ignore_case(argv[1], "help")) {
+    if (argc <= 1 || strutil_text_equals_ignore_case(argv[1], "help")) {
         networking_appendf("@Y@BWi-Fi Commands:@R\n");
         networking_appendf("  @Gwifi status@R                 Full association and IP report (SSID/BSSID/PHY/DNS)\n");
         networking_appendf("  @Gwifi scan@R                   Scan for nearby SSIDs, sorted by RSSI\n");
@@ -2497,12 +2459,12 @@ esp_err_t networking_handle_wifi_command(char *command)
         return ESP_OK;
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "status")) {
+    if (strutil_text_equals_ignore_case(argv[1], "status")) {
         networking_wifi_status();
         return ESP_OK;
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "scan")) {
+    if (strutil_text_equals_ignore_case(argv[1], "scan")) {
         bool bare = false;
 
         /* Parse the optional `wifi scan [/b]` argument. A leading `/b`
@@ -2522,22 +2484,22 @@ esp_err_t networking_handle_wifi_command(char *command)
         return ESP_OK;
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "diag")) {
+    if (strutil_text_equals_ignore_case(argv[1], "diag")) {
         networking_wifi_diag();
         return ESP_OK;
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "throughput") ||
-        networking_text_equals_ignore_case(argv[1], "bench")) {
+    if (strutil_text_equals_ignore_case(argv[1], "throughput") ||
+        strutil_text_equals_ignore_case(argv[1], "bench")) {
         return networking_wifi_throughput(argc, argv);
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "disconnect")) {
+    if (strutil_text_equals_ignore_case(argv[1], "disconnect")) {
         networking_wifi_disconnect();
         return ESP_OK;
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "connect")) {
+    if (strutil_text_equals_ignore_case(argv[1], "connect")) {
         if (argc == 2) {
             if (!networking_wifi_defaults_available()) {
                 networking_appendf("@Cwifi:@R @ysdkconfig default credentials are not configured@R\n");
@@ -2574,13 +2536,13 @@ esp_err_t networking_handle_wifi_command(char *command)
      * the returned esp_err_t: ESP_OK = success, ESP_ERR_NOT_FOUND = SD
      * known-list unavailable, ESP_ERR_INVALID_ARG = usage, other = I/O error. */
 
-    if (networking_text_equals_ignore_case(argv[1], "known") ||
-        (networking_text_equals_ignore_case(argv[1], "list") &&
-         argc >= 3 && networking_text_equals_ignore_case(argv[2], "known"))) {
+    if (strutil_text_equals_ignore_case(argv[1], "known") ||
+        (strutil_text_equals_ignore_case(argv[1], "list") &&
+         argc >= 3 && strutil_text_equals_ignore_case(argv[2], "known"))) {
         return networking_wifi_known_list();
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "save")) {
+    if (strutil_text_equals_ignore_case(argv[1], "save")) {
         char ssid[NETWORKING_WIFI_SSID_BYTES];
         char password[NETWORKING_WIFI_PASSWORD_BYTES];
         int authmode = -1;
@@ -2611,7 +2573,7 @@ esp_err_t networking_handle_wifi_command(char *command)
          * existing known entry's password, else empty (open network). */
         if (password[0] == '\0') {
             wifi_lock();
-            if (networking_text_equals_ignore_case(ssid, s_wifi_target_ssid)) {
+            if (strutil_text_equals_ignore_case(ssid, s_wifi_target_ssid)) {
                 snprintf(password, sizeof(password), "%s", s_wifi_target_password);
             }
             wifi_unlock();
@@ -2623,7 +2585,7 @@ esp_err_t networking_handle_wifi_command(char *command)
             (void)networking_wifi_known_load();
             for (index = 0; index < networking_wifi_known_count(); index++) {
                 if (networking_wifi_known_get(index, &entry) &&
-                    networking_text_equals_ignore_case(entry.ssid, ssid)) {
+                    strutil_text_equals_ignore_case(entry.ssid, ssid)) {
                     snprintf(password, sizeof(password), "%s", entry.password);
                     break;
                 }
@@ -2644,13 +2606,13 @@ esp_err_t networking_handle_wifi_command(char *command)
         return ESP_OK;
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "forget") ||
-        networking_text_equals_ignore_case(argv[1], "delete")) {
+    if (strutil_text_equals_ignore_case(argv[1], "forget") ||
+        strutil_text_equals_ignore_case(argv[1], "delete")) {
         if (argc < 3) {
             networking_appendf("@yUsage: wifi forget <ssid> | wifi forget all@R\n");
             return ESP_ERR_INVALID_ARG;
         }
-        if (networking_text_equals_ignore_case(argv[2], "all")) {
+        if (strutil_text_equals_ignore_case(argv[2], "all")) {
             esp_err_t clear_error = networking_wifi_known_clear();
             if (clear_error != ESP_OK) {
                 networking_appendf("@Cwifi:@R @yknown-list unavailable@R (no SD card or write failed)\n");
@@ -2670,8 +2632,8 @@ esp_err_t networking_handle_wifi_command(char *command)
         }
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "clear") &&
-        argc >= 3 && networking_text_equals_ignore_case(argv[2], "known")) {
+    if (strutil_text_equals_ignore_case(argv[1], "clear") &&
+        argc >= 3 && strutil_text_equals_ignore_case(argv[2], "known")) {
         esp_err_t clear_error = networking_wifi_known_clear();
         if (clear_error != ESP_OK) {
             networking_appendf("@Cwifi:@R @yknown-list unavailable@R (no SD card or write failed)\n");
@@ -2681,7 +2643,7 @@ esp_err_t networking_handle_wifi_command(char *command)
         return ESP_OK;
     }
 
-    if (networking_text_equals_ignore_case(argv[1], "preferred")) {
+    if (strutil_text_equals_ignore_case(argv[1], "preferred")) {
         if (argc < 3) {
             networking_appendf("@yUsage: wifi preferred <ssid>@R\n");
             return ESP_ERR_INVALID_ARG;
@@ -2820,7 +2782,21 @@ static void networking_wifi_runtime_init(void)
 
     networking_wifi_append_step("queued background boot workflow");
     networking_wifi_append_step("runtime Wi-Fi initialization requested from sdkconfig");
-    networking_wifi_append_step("ESP-Hosted SDIO backend: ESP32-C6 on CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17 RESET=54");
+    {
+        /* Report the pins actually built from sdkconfig, not a baked-in string:
+         * the ESP-Hosted SDIO pins are board-specific (see PORTING.md). */
+        char backend[128];
+        snprintf(backend, sizeof(backend),
+                 "ESP-Hosted SDIO backend: ESP32-C6 on CLK=%d CMD=%d D0=%d D1=%d D2=%d D3=%d RESET=%d",
+                 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK,
+                 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CMD,
+                 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D0,
+                 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1,
+                 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2,
+                 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3,
+                 CONFIG_ESP_HOSTED_HOST_RESET_GPIO);
+        networking_wifi_append_step(backend);
+    }
 
     /* ---- Step 1: bring up the hosted transport ----
      * The SDIO link to the C6 comes up first. Everything below depends on it:
@@ -2869,7 +2845,29 @@ static void networking_wifi_runtime_init(void)
      * expected range. Running esp_wifi_remote against an incompatible slave
      * produces failures that are much harder to diagnose than this message. */
     networking_wifi_append_step("esp_hosted_get_coprocessor_fwversion()");
-    error = networking_wifi_validate_hosted_version();
+    error = networking_wifi_validate_hosted_version(false);
+    if (error != ESP_OK) {
+        /* The first RPC issued right after a fresh connect can time out at the
+         * SDIO layer (the slave still holds DAT0 from its power-on auto-init),
+         * which shows up as "sdmmc_send_cmd 0x107" and a lost version read.
+         * A full transport reset clears the stuck bus; retry once, mirroring
+         * the connect-retry above and the reset c6ota performs. */
+        networking_wifi_append_step("retrying hosted transport for version read");
+        esp_err_t deinit_error = esp_hosted_deinit();
+        if (deinit_error != ESP_OK) {
+            ESP_LOGW(NETWORKING_TAG, "hosted deinit before version retry: %s (0x%x)",
+                     esp_err_to_name(deinit_error), (unsigned int)deinit_error);
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        error = esp_hosted_init();
+        if (error == ESP_OK || error == ESP_ERR_INVALID_STATE) {
+            error = esp_hosted_connect_to_slave();
+            if (error == ESP_OK || error == ESP_ERR_INVALID_STATE) {
+                error = networking_wifi_validate_hosted_version(true);
+            }
+        }
+    }
     if (error != ESP_OK) {
         s_wifi_state = NETWORKING_WIFI_STATE_FAILED;
         s_wifi_last_error = error;
@@ -2969,6 +2967,10 @@ static void networking_wifi_runtime_init(void)
     s_wifi_connected = false;
     s_wifi_connect_requested = false;
     s_wifi_target_ssid[0] = '\0';
+    /* Clear any detail left by a transient first-RPC failure that the
+     * transport-reset retry recovered from, so `wifi status` does not show a
+     * stale note after a successful start. */
+    s_wifi_last_detail[0] = '\0';
     networking_wifi_append_step("Wi-Fi runtime started in STA mode");
     if (networking_wifi_defaults_available()) {
         networking_schedulef_ansi("@C[wifi]@R @Gdefault sdkconfig profile ready@R for ssid @W%s@R\n", CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID);

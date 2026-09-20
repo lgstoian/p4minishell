@@ -6,8 +6,10 @@ the shared session driver instead of reimplementing serial loops.
 ## Port selection (all drivers)
 
 First match wins: explicit `port=` argument, a trailing `COMx` argv token, the
-`P4_PORT` environment variable, else `COM11` (the reference board in this
-repo is `COM3`; pass it explicitly). Scripts with argparse take
+`P4_PORT` environment variable, else the board resolved from `P4_BOARD` via
+`tools/board_ports.py`. In this two-board workspace the reference board
+(JC1060P470C) is `COM3` and the M5Stack Tab5 is `COM6`; pass the port
+explicitly when both are attached. Scripts with argparse take
 `--port` (same fallback chain). Opening the port asserts DTR and the P4
 resets on the transition — every driver drops DTR/RTS on open via
 `shell_session.open_port()`; never open raw `serial.Serial` without it.

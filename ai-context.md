@@ -33,13 +33,13 @@ does" reference in [documentation.md](documentation.md).
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.1.0** (`p4minishell_config.h` version macros) |
+| Version | **v1.2.0** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
-| UI | LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch |
-| License | MIT (Copyright (c) 2026 Stoian Alexandru) |
-| Board | ESP32-P4 Function EV Board (JC1060P470C), serial port `<COM_PORT>` (e.g. `COM3` during development) |
+| UI | LVGL 9.5.0 / esp_lvgl_port 2.9.0; reference: JD9165 1024x600 + GT911; Tab5: ILI9881C/ST7123 720x1280 + integrated touch |
+| License | MIT (Copyright (c) 2026 Stoian Alexandru); vendored Tab5 BSP is Apache-2.0 (see `licence.md`) |
+| Boards | `boards/jc1060p470c/` (reference, ESP32-P4 Function EV Board) and `boards/m5stack_tab5/` (M5Stack Tab5); serial port `<COM_PORT>` (e.g. `COM3`/`COM6` during development) |
 
 Recent changes are recorded in [`changelog.md`](changelog.md). Known quirks and
 the bug-campaign log live in [`bugs.md`](bugs.md).
@@ -49,7 +49,8 @@ the bug-campaign log live in [`bugs.md`](bugs.md).
 ```
 main/            app entry, boot sequencing, LVGL event callbacks, host bridges
 p4minishell_config.h/.yaml   central tunables (C source of truth + documentation)
-boards/<name>/board_config.h/.yaml  board profile: pins, display timing (default jc1060p470c, see PORTING.md)
+boards/<name>/board_config.h/.yaml  board profile: pins, display timing (jc1060p470c + m5stack_tab5, see PORTING.md)
+boards/<name>/board_bsp/            staged `board_bsp` component (thin wrapper or vendored BSP)
 components/      one directory per subsystem (see the Module Layering Rules)
 samples/         out-of-tree-style native app components (whoami + newapp.py output)
 test/            standalone Unity test project (runs on the P4 target)
@@ -204,6 +205,9 @@ tools use a webcam to observe the device; prefer them over guessing.
 - If LVGL async dispatch fails (lv_async_call returns error), fall back to synchronous header_render()
 - If allocation fails for the async payload, fall back to synchronous header_render()
 - SD indicator shows persistent state (NO/INS/ON/ERR)
+- Wi-Fi tone: disconnected is always ERR, but **associated with an unknown RSSI**
+  (`P4_CONFIG_HEADER_RSSI_UNKNOWN`; the hosted `get_ap_info` RPC returns 0) maps to OK,
+  never ERR — otherwise the indicator is stuck red while connected.
 - Status classification (glyph, tone, Wi-Fi label, and the memory/CPU/battery
   healthy/warn/critical thresholds) MUST live ONLY in `header_status.c` (pure,
   unit-tested). Never re-derive a threshold, re-classify a state, or pick a raw
@@ -294,7 +298,7 @@ tools use a webcam to observe the device; prefer them over guessing.
 
 ### Module Layering Rules
 - Component dependencies flow ONE WAY: `main` -> `command` -> `batch` -> `storage` -> `shell` -> (`ansi`, `display`, `windows`, `header`, `keyboard`, `clock`). `components/modal/` is a shared runtime used by `editor` and by the batch `dialog`/`list`/`ask` commands; it is reached through `command`/`batch`, never from `shell`.
-- Leaf components below the shell: `components/tui/` (80x25 cell buffer + draw primitives, reached by `draw`/`tui` in `components/command/tui_commands.c` and by `windows`), `components/gfx/` (pure RGB565 raster + general 24/32-bit BMP parser/decoder + scaled decode + nearest scaling + aspect-fit + blit + B2 toolkit primitives + 8x8 font `gfx_font.c`, no LVGL; reached by `components/command/gfx_commands.c`, `image_commands.c`, `components/tui/`, and `components/modal/`), `components/filetype/` (extension→kind registry), `components/markdown/`, `components/font/` (registry + SD TTF + CJK + theme registry `theme.c`), `components/db/`, `components/alarm/`, `components/audio/`, `components/boot/`, `components/clock/`.
+- Leaf components below the shell: `components/tui/` (80x25 cell buffer + draw primitives, reached by `draw`/`tui` in `components/command/tui_commands.c` and by `windows`), `components/gfx/` (pure RGB565 raster + general 24/32-bit BMP parser/decoder + scaled decode + nearest scaling + aspect-fit + blit + B2 toolkit primitives + 8x8 font `gfx_font.c`, no LVGL; reached by `components/command/gfx_commands.c`, `image_commands.c`, `components/tui/`, and `components/modal/`), `components/filetype/` (extension→kind registry), `components/markdown/`, `components/font/` (registry + SD TTF + CJK + theme registry `theme.c`), `components/db/`, `components/alarm/`, `components/audio/`, `components/boot/`, `components/clock/`, `components/strutil/` (shared case-insensitive compare + arg split leaf).
 - `components/applib/` is the native-app runtime library (the shell SDK
   surface). It is a leaf: REQUIRES only `shell`, `clock`, `storage`, `db`, `tui` (for the
   shared INI / temp-file state mechanics, the same guarded-SD pattern the
@@ -449,8 +453,16 @@ tools use a webcam to observe the device; prefer them over guessing.
   (`usb_serial_jtag_write_bytes`), not `printf`/VFS: the IDF VFS write drops the whole line when the
   SOF connection monitor reports a false disconnect under load (the O3 single-output loss). It must
   also expand LF to CRLF itself (the VFS did) and only stop on a *persistent* disconnect
-  (`P4_CONFIG_UART_MIRROR_DISCONNECT_GRACE_MS`) so on-device no-host use does not block. Binary
-  transfers already bypass this path via `serial_commands.c`.
+  (`P4_CONFIG_UART_MIRROR_DISCONNECT_GRACE_MS`) so on-device no-host use does not block.
+- The mirror MUST stay strictly NON-BLOCKING per segment: do not add a retry loop around its
+  `usb_serial_jtag_write_bytes` calls. The mirror and the console reader share
+  `s_uart_console_lock`, so retrying a full TX ring stalls the reader (dropped *incoming* commands)
+  and, under sustained host backpressure, wedges the P4 USB-Serial/JTAG peripheral (measured on the
+  Tab5). Binary `send`/`screenshot` frames DO need completion: they go through
+  `shell_uart_console_write_bytes()`, which completes partial writes under
+  `P4_CONFIG_UART_WRITE_TOTAL_MS` (the host is actively reading the frame).
+- The host framing reader (`tools/p4test/session.py:read_binary_frame`) scans for the magic before
+  the size header; it must tolerate interleaved log text (never assume the next bytes are the magic).
 - Host tooling: `shell_session.open_port()` pre-sets `dtr=False`/`rts=False` before `open()` so it
   never resets the board (setting DTR after open is too late — O4). Anything that needs a fresh boot
   calls `shell_session.hard_reset()`; do not reintroduce raw `serial.Serial(...)` opens.
@@ -913,6 +925,11 @@ the raster core + 8x8 font are `components/gfx/`
   while `c6ota_is_busy()`. Add new zones via the offset path, not a table.
 
 ### Keyboard Manager Rules
+- External input: `keyboard_set_external_input()` hides the on-screen keyboard whenever
+  ANY physical keyboard is present. The shell drives it from the
+  `physical_keyboard_present` op, which is USB HID **OR** a connected Bluetooth HID
+  keyboard **OR** the M5Stack Tab5 keyboard (`tab5kbd_is_ready()`). Do not special-case
+  USB only.
 - ALL keyboard operations MUST go through `components/keyboard/` — never call LVGL keyboard APIs directly from main.c
 - `keyboard_init()` MUST be called after `display_init()` and from the LVGL task context
 - Keyboard visibility changes trigger automatic UI reflow via the window manager callback
@@ -1193,7 +1210,22 @@ the raster core + 8x8 font are `components/gfx/`
 - Auto-start in background task on normal boot
 - Restore after successful c6ota
 - ESP-Hosted + esp_wifi_remote for C6 SDIO path
-- Version compatibility gate: refuse init if C6 firmware major/minor != host 2.12.x
+- Version compatibility gate: refuse init if the C6-reported **major** !=
+  `P4_CONFIG_HOSTED_COMPAT_MAJOR` (esp_hosted 3.x froze its compat major/minor macros at the
+  2.12.x baseline, so only the C6 major is meaningful; `P4_CONFIG_HOSTED_SKIP_VERSION_GATE` can
+  downgrade the mismatch to a warning for bring-up)
+- After a failed version read, `networking_wifi_start_runtime()` MUST reset the hosted transport
+  (`esp_hosted_deinit()` + init + connect) and retry the read **once** before failing. On the Tab5
+  the first RPC after a fresh connect times out at the SDIO layer (`sdmmc_send_cmd 0x107`, the
+  slave holds DAT0 through its power-on auto-init); the reset clears it and lets Wi-Fi/BLE start.
+  The retry is failure-only, so the reference board path is unchanged. Do NOT turn this into a
+  multi-attempt loop or add an explicit C6 reset pulse: a loop with the slave unresponsive hangs
+  Wi-Fi in `starting` forever (verified and reverted).
+- The esp_hosted SDIO TX credit loop is patched in `tools/managed_patches.patch`
+  (`eh_host_bus_sdio.c`): the per-poll `sdio_get_tx_buffer_num` error is rate-limited to once a
+  second and the 20 us `esp_rom_delay_us` busy-wait is replaced with `eh_host_port_task_delay_ms(1)`
+  so a stalled slave cannot starve IDLE into the task watchdog. Re-apply with
+  `tools/reapply_managed_patches.ps1` after `idf.py update-dependencies`, like the other patches.
 - NVS initialized before esp_wifi_init() with erase-and-retry recovery
 - Station-only profile; no SoftAP, WPA3, or enterprise
 - Password masking in transcript and command history
@@ -1237,6 +1269,37 @@ the raster core + 8x8 font are `components/gfx/`
 - `bluetooth advertise on [name]` stores the name in s_bluetooth_state.session_advertise_name;
   it is session-only and must never be persisted across boots
 
+### Tab5 On-Board Hardware Rules
+- `components/power_monitor/` is the ONLY INA226 owner (Tab5 pack gauge, addr 0x41 on the SYS
+  I2C). Its measurement path is READ-ONLY: it only configures/reads the INA226 registers and
+  never sets charge voltage/current. `command_battery_read()` prefers the gauge on
+  `BOARD_CFG_BATTERY_INA226_PRESENT` boards and reports `N/C` below
+  `BOARD_CFG_BATTERY_PRESENT_MV`. The charge state is derived from the signed current
+  (`power_monitor_classify_charge`), NOT from an IO-expander pin: current `<= -deadband` is
+  discharging, at/above full voltage with no current is full, and everything else (into the
+  pack, or external power holding a non-full pack at a standstill) is reported as **charging** -
+  the same "not discharging" convention the M5Stack reference UI uses.
+- Charging is enabled once at boot by `board_bsp_charge_enable(true)` (Tab5: PI4IOE5V6408 0x44
+  P7/P5), matching the M5Stack reference; the Tab5 gates the charge path off after reset, so
+  without this the pack never charges. It only gates the charge path - voltage/current stay
+  under the PMIC's control. On boards without a charge gate it is a no-op.
+- `components/tab5kbd/` is the ONLY Tab5Keyboard owner (STM32F030, addr 0x6D). It runs on its OWN
+  I2C controller (pins in `board_config.h`; the Tab5 expansion bus GPIO0/1, INT GPIO50) so it
+  never shares the SYS I2C, drives HID reports through `shell_usb_keyboard_input()` (the single
+  keystroke injection point), and owns the module's two RGB LEDs. Every entry point degrades to a
+  benign error when the module is absent.
+- The Tab5 has no on-board status LED. `components/led/` stays the status engine and, on
+  `BOARD_CFG_RGB_VIA_TAB5KBD`, routes its rendered frame to `tab5kbd_set_rgb()` instead of a
+  WS2812; the `rgb` command works unchanged. Do not add a second LED engine.
+- The RX8130CE RTC lives behind the existing `components/clock/` external-RTC hook, selected by
+  `BOARD_CFG_RTC_EXT_TIME_REG`/`BOARD_CFG_RTC_EXT_KIND_RX8130` (time block at 0x10, 2000-based
+  year, weekday one-hot, STOP bit in control 0x1E, VBLF/AF/TF flags surfaced by `rtc`). The
+  BMI270 IMU (`components/imu/`) and the SC202CS MIPI-CSI camera (`components/camera/`, BMP
+  stills) are now supported; see the Camera/IMU rules below.
+- The two keyboard RGB LEDs are independently addressable: LED1 (index 0) is the status
+  engine, LED2 (index 1) is user-driven via `rgb 2 <r> <g> <b>`. `shutdown`/`poweroff` darkens
+  both before cutting the PMIC rail (the reference board falls back to deep sleep).
+
 ### SD Card Rules
 - All SD access goes through `components/storage/`. No other module may call `bsp_sdcard_mount()`
   or `bsp_sdcard_unmount()` directly.
@@ -1263,6 +1326,8 @@ the raster core + 8x8 font are `components/gfx/`
   failure as non-fatal: the data is already correct.
 - A failed write MUST remove its partial destination. A truncated file that looks complete is
   worse than no file.
+- Creating a directory tree goes through the ONE `storage_mkdir_p()` (it opens its own guarded
+  session; nested calls are safe). Do not hand-roll a `mkdir -p` loop in a new module.
 - Capacity queries go through `storage_get_space_info()`; never call `f_getfree()` directly
 - `chkdsk` and any future integrity tool MUST stay read-only. This firmware does not rewrite
   FAT structures: report a problem, never attempt an in-place repair.
@@ -1284,7 +1349,7 @@ the raster core + 8x8 font are `components/gfx/`
 - MSC mounts at /usb0 via VFS/FATFS
 - HID echo is opt-in (keyboard/mouse on/off)
 - Follows same bounded transcript style as SD commands
-- USB keyboard auto-detect: automatically hides on-screen keyboard when USB keyboard attached
+- Physical-keyboard auto-detect: automatically hides the on-screen keyboard when a USB HID, Bluetooth HID, or Tab5 keyboard is present
 - USB keystrokes injected into shell CLI input line via shell_usb_keyboard_input() bridge
 - Full US keyboard layout supported (60+ HID key codes with modifier-aware mapping)
 - Auto-detect runs in periodic header refresh timer; state transitions trigger notifications
@@ -1296,7 +1361,12 @@ the raster core + 8x8 font are `components/gfx/`
 - Validates ESP-IDF app magic 0xE9 + ESP32-C6 chip ID 0x000D
 - 1500-byte chunks, progress every 5%
 - Wi-Fi stopped before transfer, kept alive during (no esp_hosted_deinit())
-- Factory v2.3.0 needs one-time standalone tool first
+- A **factory v2.3.0** C6 (as shipped on the M5Stack Tab5) is not wire-compatible with the
+  host `esp_hosted` 3.0.6: `c6ota` refuses it and an SD-sourced transfer wedges the shared
+  SDMMC bus. Such a C6 needs a one-time standalone flasher first — a small P4 app that carries
+  the slave image in a raw P4 partition (no SD, no Wi-Fi) and streams it over
+  `esp_hosted_slave_ota_*`. Build `coprocessor/esp32c6_slave` for `esp32c6`; once the C6 runs
+  the matching 3.x image, `c6ota` works normally.
 
 ### Stack Discipline
 - The command worker task stack is `P4_CONFIG_COMMAND_TASK_STACK` (32768 bytes) and is shared by
@@ -1548,13 +1618,48 @@ the raster core + 8x8 font are `components/gfx/`
   new section to `changelog.md`.
 - Record new bugs and known quirks in `bugs.md` (see section 4).
 
+### Camera Rules (components/camera + `camera`)
+- `components/camera/` owns the M5Stack Tab5 MIPI-CSI camera through the managed
+  `espressif/esp_video` + `espressif/esp_cam_sensor` stack (the Tab5 sensor is
+  SC202CS at SCCB 0x36; the board text also calls it SC2356). The sensor rail is
+  powered with `bsp_feature_enable(BSP_FEATURE_CAMERA, true)` before `esp_video_init`.
+- **BMP only.** `camera init` + `camera snap <file.bmp>` capture a still and write a
+  24-bit BI_RGB BMP (via `components/imagefmt/`); non-`.bmp` names are rejected. Do
+  not add JPEG/PNG encoders.
+- The capture path is split into reusable open/queue/dequeue primitives so a live
+  preview can be added later; **live preview is not implemented yet** (no command).
+- Boards without a camera (`BOARD_CFG_CAMERA_PRESENT == 0`) compile the no-op path;
+  `camera` must report the gap explicitly, never crash. A detached module also
+  fails sensor detect and reports NOT_FOUND.
+- Two bring-up details are required on the Tab5: (1) the sensor needs ~100 ms
+  after `bsp_feature_enable(BSP_FEATURE_CAMERA, true)` before it answers SCCB, so
+  `camera_init` settles then retries `esp_video_init` once (otherwise the first
+  probe logs "Get sensor ID failed"); (2) `CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y`
+  must stay set, or RAW8 from the sensor is not auto-exposed and frames come out
+  near-black. Both are in the Tab5 `sdkconfig.defaults`.
+
+### IMU Rules (components/imu + `imu`)
+- `components/imu/` owns the BMI270 (Tab5 main board, SYS I2C 0x68); the Bosch
+  bmi2/bmi270 driver + the M5Stack `accel_gyro_bmi270` wrapper are vendored under
+  `src/`+`include/` (BSD-3 / MIT; see `licence.md`). The I2C device add must never
+  abort (`ESP_ERROR_CHECK` removed) so a missing IMU degrades cleanly.
+- The module is a leaf: it reads the SYS I2C bus and applies display rotation through
+  a callback the owner installs (`imu_set_rotation_callback`), so `imu` does not
+  depend on `display`. Tilt auto-rotate (`imu rotate on|off`) is **off by default**;
+  a manual `rotate` is not auto-reverted (the user can turn auto-rotate off).
+- `imu read` also publishes `IMU_AX/AY/AZ` (m/s^2), `IMU_GX/GY/GZ` (deg/s),
+  `IMU_PITCH`, `IMU_ROLL`, and `IMU_ORIENT` (rotation degrees) via `app_env_set` for
+  batch apps.
+
 ### Hardware Gaps (Do NOT implement)
-- Camera: no local camera stack in workspace
 - Should fail explicitly with honest messages
 
 ### LED Rules (components/led + `rgb`)
-- `components/led/led.c` is the single owner of the WS2812 status LED on GPIO26
-  (`BOARD_CFG_RGB_LED_GPIO`, `BOARD_CFG_RGB_LED_IS_WS2812`). It creates the strip via the
+- `components/led/led.c` owns the status LED(s): a single WS2812 on GPIO26
+  (`BOARD_CFG_RGB_LED_GPIO`, `BOARD_CFG_RGB_LED_IS_WS2812`), or the Tab5
+  keyboard's two LEDs when `BOARD_CFG_RGB_VIA_TAB5KBD` routes the frame to
+  `tab5kbd`. On the two-LED board, index 0 is the status LED and index 1 is an
+  independent user LED (`rgb 2 <r> <g> <b>`); `shutdown` darkens both. It creates the strip via the
   `espressif/led_strip` managed component over RMT and drives ALL strip I/O from one small
   animation task; public API calls only mutate a mutex-protected state snapshot, so the
   command worker and the Wi-Fi event handler never block on RMT.

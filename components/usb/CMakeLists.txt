@@ -57,6 +57,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS ${priv_includes}
     REQUIRES
         ansi
+        strutil
         usb_host_hid
         usb_host_msc
         usb_host_cdc_acm

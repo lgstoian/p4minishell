@@ -949,11 +949,15 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     if (ctx->path && ctx->path[0]) {
         FILE *f = fopen(ctx->path, "rb");
         if (f) {
+            bool clipped = false;
             fseek(f, 0, SEEK_END);
             long sz = ftell(f);
             fseek(f, 0, SEEK_SET);
             if (sz < 0) sz = 0;
-            if ((size_t)sz > P4_CONFIG_TUI_VIEW_MAX_BYTES) sz = P4_CONFIG_TUI_VIEW_MAX_BYTES;
+            if ((size_t)sz > P4_CONFIG_TUI_VIEW_MAX_BYTES) {
+                sz = P4_CONFIG_TUI_VIEW_MAX_BYTES;
+                clipped = true;
+            }
             ctx->content = malloc((size_t)sz + 1);
             if (ctx->content) {
                 size_t r = fread(ctx->content, 1, (size_t)sz, f);
@@ -963,6 +967,14 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
                 for (size_t i=0;i<r;i++) if (ctx->content[i]=='\0') ctx->content[i]=' ';
             }
             fclose(f);
+            if (clipped) {
+                /* Say so in the transcript: a silently cut view looked like a
+                 * complete file. */
+                shell_print_warning("view: %s exceeds %u KB; showing the first %u KB",
+                                    ctx->path,
+                                    (unsigned)(P4_CONFIG_TUI_VIEW_MAX_BYTES / 1024),
+                                    (unsigned)(P4_CONFIG_TUI_VIEW_MAX_BYTES / 1024));
+            }
         }
         /* Markdown branch: render the document, then strip SGR for the
          * plain textarea (it cannot render escapes). Rendered-plain reads
@@ -1383,11 +1395,15 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     FILE *f = ctx->path ? fopen(ctx->path, "rb") : NULL;
     size_t max_bytes = P4_CONFIG_TUI_VIEW_MAX_BYTES;
     if (f) {
+        bool clipped = false;
         fseek(f, 0, SEEK_END);
         long sz = ftell(f);
         fseek(f, 0, SEEK_SET);
         if (sz < 0) sz = 0;
-        if ((size_t)sz > max_bytes) sz = (long)max_bytes;
+        if ((size_t)sz > max_bytes) {
+            sz = (long)max_bytes;
+            clipped = true;
+        }
         uint8_t *buf = malloc((size_t)sz);
         size_t r = buf ? fread(buf, 1, (size_t)sz, f) : 0;
         fclose(f);
@@ -1426,6 +1442,12 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         }
         free(buf);
         if (!ctx->content) ctx->content = strdup("(cannot read file)");
+        if (clipped) {
+            shell_print_warning("hexview: %s exceeds %u KB; showing the first %u KB",
+                                ctx->path ? ctx->path : "?",
+                                (unsigned)(max_bytes / 1024),
+                                (unsigned)(max_bytes / 1024));
+        }
     } else {
         ctx->content = strdup("(cannot open file)");
     }

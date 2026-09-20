@@ -18,10 +18,31 @@ PANICS = [b"Guru Meditation", b"Stack protection", b"Backtrace",
 
 
 def default_port():
+    """Resolve the serial port for the active board.
+
+    Resolution order (first match wins):
+      1. an explicit trailing ``COMx`` argv token;
+      2. ``P4_PORT`` (explicit override for a single board);
+      3. ``P4_BOARD=<slug>`` resolved through ``tools/board_ports.py`` so two
+         boards can be driven at once by exporting a different slug per shell;
+      4. ``COM11`` (the historical default).
+    """
     for arg in sys.argv[1:]:
         if arg.upper().startswith("COM"):
             return arg.upper()
-    return os.environ.get("P4_PORT", "COM11")
+    explicit = os.environ.get("P4_PORT")
+    if explicit:
+        return explicit
+    board = os.environ.get("P4_BOARD")
+    if board:
+        try:
+            import board_ports
+            port = board_ports.resolve_port(board)
+            if port:
+                return port
+        except Exception:
+            pass
+    return "COM11"
 
 
 def open_port(port=None, baud=115200, timeout=1):

@@ -84,6 +84,34 @@ esp_err_t led_set_hex(uint32_t rgb);
 esp_err_t led_off(void);
 
 /**
+ * True when the board exposes a second, independently addressable status LED
+ * (the M5Stack Tab5 keyboard module has two). On single-LED boards only index 0
+ * exists.
+ */
+bool led_secondary_present(void);
+
+/**
+ * Set one status LED to a solid colour independently.
+ *
+ * Index 0 is the primary status LED (identical to `led_set_color`, and it
+ * turns the auto-status layer off). Index 1 is the secondary LED, which is
+ * always user-driven and never follows the auto status. On boards without a
+ * secondary LED, index 1 returns ESP_ERR_NOT_SUPPORTED.
+ *
+ * @param index 0 (primary) or 1 (secondary).
+ */
+esp_err_t led_set_index_color(uint8_t index, uint8_t red, uint8_t green, uint8_t blue);
+
+/** Turn one status LED off (solid black). Index 0 or 1. */
+esp_err_t led_index_off(uint8_t index);
+
+/** Copy the state of one LED (index 0 or 1) into @p out (NULL-safe). */
+void led_get_index_state(uint8_t index, led_state_t *out);
+
+/** Turn every status LED off at once (used on shutdown). */
+esp_err_t led_all_off(void);
+
+/**
  * Select an effect and switch off the auto status layer.
  * @param effect  One of LED_EFFECT_*.
  * @param speed   1 (slow) .. 10 (fast); 0 selects the configured default.

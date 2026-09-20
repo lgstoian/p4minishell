@@ -22,12 +22,17 @@
  *   - An optional external DS3231-class I2C chip (P4_CONFIG_RTC_EXT_*,
  *     default off) is read first at boot and rewritten on SNTP/manual set.
  *
- * No new tasks: the periodic anchor rides an esp_timer. No VBAT API exists
- * in IDF 5.5, so backup health is inferred from counter continuity and
- * reported by `rtc status`.
+ * No new tasks: the anchors ride esp_timers (whose task has an internal-RAM
+ * stack). The post-SNTP anchor is deferred through a one-shot timer because
+ * that callback runs on the lwIP tcpip_thread, whose stack may be in PSRAM
+ * (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP), where flash/NVS writes are illegal.
+ * No VBAT API exists in IDF 5.5, so backup health is inferred from counter
+ * continuity and reported by `rtc status`.
  */
 
 #include "clock.h"
+#include "board_config.h"
+#include "board_bsp.h"
 #include "p4minishell_config.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -55,29 +60,72 @@
 #define P4_CONFIG_RTC_EXT_ENABLE 0
 #endif
 
-#ifndef P4_CONFIG_RTC_EXT_ADDR
-#define P4_CONFIG_RTC_EXT_ADDR 0x68
+/* Board profile pins win over the central defaults: board_config.h is the
+ * hardware source of truth. When the board wires its RTC on the shared BSP
+ * I2C bus (BOARD_CFG_RTC_USE_BSP_I2C), the driver reuses bsp_i2c_get_handle()
+ * instead of creating a second master bus on the same pins. */
+#ifdef BOARD_CFG_RTC_EXT_ENABLE
+#define RTC_EXT_ENABLE BOARD_CFG_RTC_EXT_ENABLE
+#else
+#define RTC_EXT_ENABLE P4_CONFIG_RTC_EXT_ENABLE
 #endif
 
-#ifndef P4_CONFIG_RTC_EXT_SDA
-#define P4_CONFIG_RTC_EXT_SDA (-1)
+#ifdef BOARD_CFG_RTC_EXT_ADDR
+#define RTC_EXT_ADDR BOARD_CFG_RTC_EXT_ADDR
+#else
+#define RTC_EXT_ADDR P4_CONFIG_RTC_EXT_ADDR
 #endif
 
-#ifndef P4_CONFIG_RTC_EXT_SCL
-#define P4_CONFIG_RTC_EXT_SCL (-1)
+#ifdef BOARD_CFG_RTC_EXT_SDA
+#define RTC_EXT_SDA BOARD_CFG_RTC_EXT_SDA
+#else
+#define RTC_EXT_SDA P4_CONFIG_RTC_EXT_SDA
 #endif
 
-#ifndef P4_CONFIG_RTC_EXT_PORT
-#define P4_CONFIG_RTC_EXT_PORT 0
+#ifdef BOARD_CFG_RTC_EXT_SCL
+#define RTC_EXT_SCL BOARD_CFG_RTC_EXT_SCL
+#else
+#define RTC_EXT_SCL P4_CONFIG_RTC_EXT_SCL
+#endif
+
+#ifdef BOARD_CFG_RTC_EXT_PORT
+#define RTC_EXT_PORT BOARD_CFG_RTC_EXT_PORT
+#else
+#define RTC_EXT_PORT P4_CONFIG_RTC_EXT_PORT
+#endif
+
+#ifndef BOARD_CFG_RTC_USE_BSP_I2C
+#define BOARD_CFG_RTC_USE_BSP_I2C 0
 #endif
 
 #ifndef P4_CONFIG_RTC_EXT_TIMEOUT_MS
 #define P4_CONFIG_RTC_EXT_TIMEOUT_MS 50
 #endif
 
-/* DS3231 register map (seconds..year at 0x00..0x06). */
+/* Time register base: the DS3231 family maps seconds..year at 0x00..0x06; the
+ * RX8130CE maps the same fields at 0x10..0x16 (WEEK sits at 0x13, which the
+ * decoder skips). The board profile selects the base. */
+#ifdef BOARD_CFG_RTC_EXT_TIME_REG
+#define RTC_EXT_REG_TIME BOARD_CFG_RTC_EXT_TIME_REG
+#else
 #define RTC_EXT_REG_TIME 0x00
+#endif
 #define RTC_EXT_TIME_LEN 7
+
+/* The RX8130CE has no century bit in the month register (its year is a plain
+ * 00..99 BCD field, always 2000-based here) and gates the oscillator with a
+ * STOP bit in control register 0x1E bit 6. */
+#ifdef BOARD_CFG_RTC_EXT_KIND_RX8130
+#define RTC_EXT_KIND_RX8130 BOARD_CFG_RTC_EXT_KIND_RX8130
+#else
+#define RTC_EXT_KIND_RX8130 0
+#endif
+#define RTC_EXT_RX8130_REG_CTRL 0x1E
+#define RTC_EXT_RX8130_CTRL_STOP 0x40
+#define RTC_EXT_RX8130_REG_FLAG 0x1D
+#define RTC_EXT_RX8130_FLAG_VBLF 0x80
+#define RTC_EXT_RX8130_FLAG_AF   0x08
+#define RTC_EXT_RX8130_FLAG_TF   0x10
 
 static bool s_nvs_ready = false;
 static bool s_nvs_tried = false;
@@ -86,6 +134,7 @@ static bool s_stale = false;
 static int64_t s_anchor_at_us = 0;
 static int s_ext_present = -1; /* -1 unknown, 0 absent, 1 present */
 static esp_timer_handle_t s_anchor_timer = NULL;
+static esp_timer_handle_t s_anchor_defer = NULL;
 
 /* ========================================================================
  * Pure core (unit-tested)
@@ -203,12 +252,38 @@ void clock_rtc_anchor_now(void)
     clock_rtc_anchor_store((int64_t)now, esp_rtc_get_time_us());
 }
 
+static void clock_rtc_anchor_defer_cb(void *arg)
+{
+    (void)arg;
+    clock_rtc_anchor_now();
+}
+
+/**
+ * Persist the current wall time without writing flash on the caller's stack.
+ *
+ * `clock_rtc_note_synced()` runs from the SNTP notification callback, which
+ * executes on the lwIP `tcpip_thread`. With SPIRAM Wi-Fi/LWIP allocation that
+ * thread's stack lives in PSRAM, and an NVS write disables the flash cache,
+ * which the cache-disabled code path asserts must not run on an external-RAM
+ * stack (`esp_task_stack_is_sane_cache_disabled`). Hand the write to the
+ * esp_timer task, which always uses an internal-RAM stack. Falls back to a
+ * synchronous write when the timer is unavailable.
+ */
+static void clock_rtc_anchor_async(void)
+{
+    if (s_anchor_defer != NULL) {
+        (void)esp_timer_start_once(s_anchor_defer, 1000); /* 1 ms */
+    } else {
+        clock_rtc_anchor_now();
+    }
+}
+
 /** Note a trustworthy time source (SNTP sync or manual set). */
 void clock_rtc_note_synced(const char *source)
 {
     s_stale = false;
     s_source = (source != NULL) ? source : "manual";
-    clock_rtc_anchor_now();
+    clock_rtc_anchor_async();
 }
 
 /* ========================================================================
@@ -217,42 +292,67 @@ void clock_rtc_note_synced(const char *source)
 
 static bool clock_rtc_ext_configured(void)
 {
-    return P4_CONFIG_RTC_EXT_ENABLE != 0 &&
-           P4_CONFIG_RTC_EXT_SDA >= 0 && P4_CONFIG_RTC_EXT_SCL >= 0;
+    if (RTC_EXT_ENABLE == 0) {
+        return false;
+    }
+#if BOARD_CFG_RTC_USE_BSP_I2C
+    /* The RTC shares the board's BSP I2C bus (pins owned by the BSP). */
+    return true;
+#else
+    return RTC_EXT_SDA >= 0 && RTC_EXT_SCL >= 0;
+#endif
 }
 
 typedef struct {
     i2c_master_bus_handle_t bus;
     i2c_master_dev_handle_t dev;
+    bool owns_bus;  /* true only when this session created the master bus */
     bool open;
 } clock_rtc_ext_session_t;
 
 static esp_err_t clock_rtc_ext_open(clock_rtc_ext_session_t *s)
 {
-    i2c_master_bus_config_t bus_cfg;
     i2c_device_config_t dev_cfg;
 
     memset(s, 0, sizeof(*s));
     if (!clock_rtc_ext_configured()) {
         return ESP_ERR_INVALID_STATE;
     }
-    memset(&bus_cfg, 0, sizeof(bus_cfg));
-    bus_cfg.i2c_port = P4_CONFIG_RTC_EXT_PORT;
-    bus_cfg.sda_io_num = (gpio_num_t)P4_CONFIG_RTC_EXT_SDA;
-    bus_cfg.scl_io_num = (gpio_num_t)P4_CONFIG_RTC_EXT_SCL;
-    bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    bus_cfg.glitch_ignore_cnt = 7;
-    bus_cfg.trans_queue_depth = 1;
-    bus_cfg.flags.enable_internal_pullup = true;
-    if (i2c_new_master_bus(&bus_cfg, &s->bus) != ESP_OK) {
+
+#if BOARD_CFG_RTC_USE_BSP_I2C
+    /* Reuse the board's shared I2C master bus; never create a second master on
+     * the same pins, and never delete a bus this session did not create. */
+    s->bus = bsp_i2c_get_handle();
+    s->owns_bus = false;
+    if (s->bus == NULL) {
         return ESP_FAIL;
     }
+#else
+    {
+        i2c_master_bus_config_t bus_cfg;
+        memset(&bus_cfg, 0, sizeof(bus_cfg));
+        bus_cfg.i2c_port = RTC_EXT_PORT;
+        bus_cfg.sda_io_num = (gpio_num_t)RTC_EXT_SDA;
+        bus_cfg.scl_io_num = (gpio_num_t)RTC_EXT_SCL;
+        bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+        bus_cfg.glitch_ignore_cnt = 7;
+        bus_cfg.trans_queue_depth = 1;
+        bus_cfg.flags.enable_internal_pullup = true;
+        if (i2c_new_master_bus(&bus_cfg, &s->bus) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        s->owns_bus = true;
+    }
+#endif
+
     memset(&dev_cfg, 0, sizeof(dev_cfg));
     dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    dev_cfg.device_address = P4_CONFIG_RTC_EXT_ADDR;
+    dev_cfg.device_address = RTC_EXT_ADDR;
     dev_cfg.scl_speed_hz = 100000;
     if (i2c_master_bus_add_device(s->bus, &dev_cfg, &s->dev) != ESP_OK) {
-        i2c_del_master_bus(s->bus);
+        if (s->owns_bus) {
+            i2c_del_master_bus(s->bus);
+        }
         s->bus = NULL;
         return ESP_FAIL;
     }
@@ -266,10 +366,10 @@ static void clock_rtc_ext_close(clock_rtc_ext_session_t *s)
         i2c_master_bus_rm_device(s->dev);
         s->dev = NULL;
     }
-    if (s->bus != NULL) {
+    if (s->bus != NULL && s->owns_bus) {
         i2c_del_master_bus(s->bus);
-        s->bus = NULL;
     }
+    s->bus = NULL;
     s->open = false;
 }
 
@@ -299,6 +399,9 @@ static bool clock_rtc_ext_decode(const uint8_t regs[RTC_EXT_TIME_LEN], struct tm
     if ((regs[5] & 0x80) != 0) {
         century = 100;
     }
+#if RTC_EXT_KIND_RX8130
+    century = 100;   /* RX8130CE year is 00..99 BCD, always 2000-based */
+#endif
     year = clock_rtc_bcd_to_bin(regs[6]);
     if (sec > 59 || min > 59 || hour > 23 || date < 1 || date > 31 ||
         mon < 1 || mon > 12) {
@@ -374,24 +477,162 @@ void clock_rtc_ext_write(time_t unix)
     buf[1] = clock_rtc_bin_to_bcd((uint8_t)tmv.tm_sec);
     buf[2] = clock_rtc_bin_to_bcd((uint8_t)tmv.tm_min);
     buf[3] = clock_rtc_bin_to_bcd((uint8_t)tmv.tm_hour); /* 24-hour mode */
+#if RTC_EXT_KIND_RX8130
+    /* RX8130CE weekday is one-hot (bit0=Sunday .. bit6=Saturday). */
+    buf[4] = (uint8_t)(1u << ((unsigned)tmv.tm_wday & 7u));
+#else
     buf[4] = clock_rtc_bin_to_bcd((uint8_t)((tmv.tm_wday + 6) % 7 + 1));
+#endif
     buf[5] = clock_rtc_bin_to_bcd((uint8_t)tmv.tm_mday);
     buf[6] = clock_rtc_bin_to_bcd((uint8_t)tmv.tm_mon + 1);
+#if RTC_EXT_KIND_RX8130
+    /* No century bit on the RX8130CE; years are 2000-based. */
+    year = (year >= 2000) ? (year - 2000) : (year - 1900);
+#else
     if (year >= 2000) {
         buf[6] |= 0x80; /* century bit */
         year -= 2000;
     } else {
         year -= 1900;
     }
+#endif
     buf[7] = clock_rtc_bin_to_bcd((uint8_t)year);
     if (clock_rtc_ext_open(&s) != ESP_OK) {
         return;
     }
+#if RTC_EXT_KIND_RX8130
+    /* Make sure the oscillator is running (clear STOP) before loading time. */
+    {
+        uint8_t ctrl_reg = RTC_EXT_RX8130_REG_CTRL;
+        uint8_t ctrl = 0;
+
+        if (i2c_master_transmit_receive(s.dev, &ctrl_reg, 1, &ctrl, 1,
+                                        P4_CONFIG_RTC_EXT_TIMEOUT_MS) == ESP_OK) {
+            ctrl &= (uint8_t)~RTC_EXT_RX8130_CTRL_STOP;
+            uint8_t ctrl_buf[2] = { RTC_EXT_RX8130_REG_CTRL, ctrl };
+            (void)i2c_master_transmit(s.dev, ctrl_buf, sizeof(ctrl_buf),
+                                      P4_CONFIG_RTC_EXT_TIMEOUT_MS);
+        }
+    }
+#endif
     if (i2c_master_transmit(s.dev, buf, sizeof(buf),
                             P4_CONFIG_RTC_EXT_TIMEOUT_MS) == ESP_OK) {
         s_ext_present = 1;
     }
+#if RTC_EXT_KIND_RX8130
+    /* Clear stale alarm/timer IRQ flags; VBLF is diagnostic and left intact. */
+    {
+        uint8_t flag_reg = RTC_EXT_RX8130_REG_FLAG;
+        uint8_t raw = 0;
+
+        if (i2c_master_transmit_receive(s.dev, &flag_reg, 1, &raw, 1,
+                                        P4_CONFIG_RTC_EXT_TIMEOUT_MS) == ESP_OK) {
+            uint8_t cleared = (uint8_t)(raw & (uint8_t)~(RTC_EXT_RX8130_FLAG_AF | RTC_EXT_RX8130_FLAG_TF));
+            uint8_t flag_buf[2] = { RTC_EXT_RX8130_REG_FLAG, cleared };
+            (void)i2c_master_transmit(s.dev, flag_buf, sizeof(flag_buf),
+                                      P4_CONFIG_RTC_EXT_TIMEOUT_MS);
+        }
+    }
+#endif
     clock_rtc_ext_close(&s);
+}
+
+#if RTC_EXT_KIND_RX8130
+static unsigned clock_rtc_rx8130_flags_to_api(uint8_t raw)
+{
+    unsigned flags = 0;
+
+    if ((raw & RTC_EXT_RX8130_FLAG_VBLF) != 0) {
+        flags |= CLOCK_RTC_FLAG_VBLF;
+    }
+    if ((raw & RTC_EXT_RX8130_FLAG_AF) != 0) {
+        flags |= CLOCK_RTC_FLAG_AF;
+    }
+    if ((raw & RTC_EXT_RX8130_FLAG_TF) != 0) {
+        flags |= CLOCK_RTC_FLAG_TF;
+    }
+    return flags;
+}
+
+static uint8_t clock_rtc_rx8130_flags_to_reg(unsigned flags)
+{
+    uint8_t raw = 0;
+
+    if ((flags & CLOCK_RTC_FLAG_VBLF) != 0) {
+        raw |= RTC_EXT_RX8130_FLAG_VBLF;
+    }
+    if ((flags & CLOCK_RTC_FLAG_AF) != 0) {
+        raw |= RTC_EXT_RX8130_FLAG_AF;
+    }
+    if ((flags & CLOCK_RTC_FLAG_TF) != 0) {
+        raw |= RTC_EXT_RX8130_FLAG_TF;
+    }
+    return raw;
+}
+#endif
+
+esp_err_t clock_rtc_ext_flags(unsigned *flags_out)
+{
+    if (flags_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *flags_out = 0;
+#if !RTC_EXT_KIND_RX8130
+    /* Only the RX8130CE exposes a status-flag register in this driver. */
+    return ESP_ERR_NOT_FOUND;
+#else
+    {
+        clock_rtc_ext_session_t s;
+        uint8_t reg = RTC_EXT_RX8130_REG_FLAG;
+        uint8_t raw = 0;
+        esp_err_t error;
+
+        if (clock_rtc_ext_open(&s) != ESP_OK) {
+            s_ext_present = 0;
+            return ESP_ERR_NOT_FOUND;
+        }
+        error = i2c_master_transmit_receive(s.dev, &reg, 1, &raw, 1,
+                                            P4_CONFIG_RTC_EXT_TIMEOUT_MS);
+        clock_rtc_ext_close(&s);
+        if (error != ESP_OK) {
+            s_ext_present = 0;
+            return error;
+        }
+        s_ext_present = 1;
+        *flags_out = clock_rtc_rx8130_flags_to_api(raw);
+        return ESP_OK;
+    }
+#endif
+}
+
+esp_err_t clock_rtc_ext_clear_flags(unsigned flags)
+{
+#if !RTC_EXT_KIND_RX8130
+    (void)flags;
+    return ESP_ERR_NOT_FOUND;
+#else
+    clock_rtc_ext_session_t s;
+    uint8_t reg = RTC_EXT_RX8130_REG_FLAG;
+    uint8_t raw = 0;
+    uint8_t mask = clock_rtc_rx8130_flags_to_reg(flags);
+    esp_err_t error;
+
+    if (mask == 0) {
+        return ESP_OK;
+    }
+    if (clock_rtc_ext_open(&s) != ESP_OK) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    error = i2c_master_transmit_receive(s.dev, &reg, 1, &raw, 1,
+                                        P4_CONFIG_RTC_EXT_TIMEOUT_MS);
+    if (error == ESP_OK) {
+        uint8_t updated = (uint8_t)(raw & (uint8_t)~mask);
+        uint8_t buf[2] = { RTC_EXT_RX8130_REG_FLAG, updated };
+        error = i2c_master_transmit(s.dev, buf, sizeof(buf), P4_CONFIG_RTC_EXT_TIMEOUT_MS);
+    }
+    clock_rtc_ext_close(&s);
+    return error;
+#endif
 }
 
 /* ========================================================================
@@ -474,6 +715,20 @@ void clock_rtc_start_timer(void)
 {
     esp_timer_create_args_t args;
 
+    /* The deferred anchor is always created: a post-SNTP persist must not run
+     * on the lwIP thread (its stack can be in PSRAM, where flash writes are
+     * illegal). */
+    if (s_anchor_defer == NULL) {
+        memset(&args, 0, sizeof(args));
+        args.callback = clock_rtc_anchor_defer_cb;
+        args.name = "rtc_anchor_defer";
+        if (esp_timer_create(&args, &s_anchor_defer) != ESP_OK) {
+            s_anchor_defer = NULL;
+        }
+    }
+
+    /* The periodic anchor is optional (P4_CONFIG_RTC_ANCHOR_PERIOD_S <= 0
+     * disables it). */
     if (s_anchor_timer != NULL || P4_CONFIG_RTC_ANCHOR_PERIOD_S <= 0) {
         return;
     }

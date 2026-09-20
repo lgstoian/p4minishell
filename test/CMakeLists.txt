@@ -21,6 +21,21 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../boards/${P4_BOARD}/board_config.h
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../p4minishell_config.h
                ${CMAKE_BINARY_DIR}/config/p4minishell_config.h COPYONLY)
 
+# Layer the board-specific sdkconfig defaults on top of the shared test
+# defaults (mirrors the firmware project; later files win).
+set(SDKCONFIG_DEFAULTS
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../boards/${P4_BOARD}/sdkconfig.defaults")
+
+# Per-board generated sdkconfig (mirrors the firmware project). Re-derived from
+# P4_BOARD on every configure so a reused build directory follows -DP4_BOARD;
+# override with -DP4_SDKCONFIG=<path>.
+if(NOT P4_SDKCONFIG)
+    set(P4_SDKCONFIG "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.${P4_BOARD}")
+endif()
+set(SDKCONFIG "${P4_SDKCONFIG}" CACHE FILEPATH
+    "sdkconfig file for the active board profile (sdkconfig.<P4_BOARD>)" FORCE)
+
 # Include the ESP-IDF project cmake
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
@@ -28,14 +43,17 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # components/usb builds both the vendored USB host stack and the shell-facing
 # USB module (usb.c); shell and command depend on it directly.
 set(EXTRA_COMPONENT_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/../boards/${P4_BOARD}/board_bsp
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ansi
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/audio
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/shell
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/storage
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/strutil
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/batch
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/boot
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/command
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/networking
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/power_monitor
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/led
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/keyboard
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/display
@@ -50,11 +68,15 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/clock
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/applib
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/tui
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/tab5kbd
+${CMAKE_CURRENT_SOURCE_DIR}/../components/imu
+${CMAKE_CURRENT_SOURCE_DIR}/../components/imagefmt
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/db
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/alarm
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/archive
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/usb
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/c6ota
+${CMAKE_CURRENT_SOURCE_DIR}/../components/camera
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/uitest
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_hosted
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_wifi_remote
@@ -65,8 +87,11 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__usb_host_hid
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__usb_host_msc
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/lvgl__lvgl
-    ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp32_p4_function_ev_board
 )
+
+# Let the active board profile add its backing BSP component dir(s); the same
+# hook the firmware project includes, so the two projects never disagree.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../boards/${P4_BOARD}/board_bsp/extra_dirs.cmake)
 
 project(p4minishell_tests)
 

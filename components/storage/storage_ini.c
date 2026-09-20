@@ -344,33 +344,49 @@ esp_err_t storage_ini_file_get(const char *path, const char *key,
 }
 
 /** Ensure a directory exists on the SD card, creating missing parents. */
-static esp_err_t storage_ini_mkdirs(const char *dir)
+esp_err_t storage_mkdir_p(const char *vfs_dir)
 {
-    char buf[SHELL_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    char *buf;
     char *p;
     struct stat st;
+    esp_err_t error;
 
-    if (dir == NULL || dir[0] == '\0') {
+    if (vfs_dir == NULL || vfs_dir[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
-    if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (stat(vfs_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+        shell_sd_end(&session, "mkdir");
         return ESP_OK;
     }
 
-    snprintf(buf, sizeof(buf), "%s", dir);
+    /* Heap (not a 320-byte stack local): callers include the recursive batch
+     * path, where a path-sized frame is multiplied by the nesting depth. */
+    buf = malloc(P4_CONFIG_SD_PATH_BYTES);
+    if (buf == NULL) {
+        shell_sd_end(&session, "mkdir");
+        return ESP_ERR_NO_MEM;
+    }
+    snprintf(buf, P4_CONFIG_SD_PATH_BYTES, "%s", vfs_dir);
     for (p = buf + 1; *p != '\0'; p++) {
         if (*p == '/') {
             *p = '\0';
             if (stat(buf, &st) != 0) {
-                (void)mkdir(buf, 0755);
+                (void)mkdir(buf, 0775);
             }
             *p = '/';
         }
     }
     if (stat(buf, &st) != 0) {
-        (void)mkdir(buf, 0755);
+        (void)mkdir(buf, 0775);
     }
-    return (stat(buf, &st) == 0 && S_ISDIR(st.st_mode)) ? ESP_OK : ESP_FAIL;
+    error = (stat(buf, &st) == 0 && S_ISDIR(st.st_mode)) ? ESP_OK : ESP_FAIL;
+    free(buf);
+    shell_sd_end(&session, "mkdir");
+    return error;
 }
 
 esp_err_t storage_ini_file_set(const char *path, const char *key, const char *value)
@@ -395,7 +411,7 @@ esp_err_t storage_ini_file_set(const char *path, const char *key, const char *va
 
         if (slash != NULL && slash != resolved) {
             *slash = '\0';
-            (void)storage_ini_mkdirs(resolved);
+            (void)storage_mkdir_p(resolved);
             *slash = '/';
         }
     }

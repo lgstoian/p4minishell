@@ -166,8 +166,9 @@ board:
     d1_gpio: 15
     d2_gpio: 16
     d3_gpio: 17
-    reset_gpio: 54
-    bus_width: 1
-    slot: 1
-    reset_policy: SLAVE_RESET_ON_EVERY_HOST_BOOTUP
-    host_version: 2.12.1
+       reset_gpio: 54
+       bus_width: 4
+       clock_khz: 40000
+       slot: 1
+       reset_policy: SLAVE_RESET_ON_EVERY_HOST_BOOTUP
+       host_version: 3.0.6

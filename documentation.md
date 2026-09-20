@@ -40,7 +40,7 @@ inverted through small function tables (see [Layering](#layering) below).
 ```
 main/main.c                     App entry point, LVGL event callbacks, UI construction, host bridges
 p4minishell_config.h/.yaml      Centralized tunables (C source of truth + documentation)
-boards/<name>/board_config.h/.yaml  Board profile: pins, display timing (default jc1060p470c)
+boards/<name>/board_config.h/.yaml  Board profile: pins, display timing (jc1060p470c + m5stack_tab5)
 components/ansi/                ANSI/VT SGR processing, 16-colour palette, format builder, semantic palette
 components/display/             Display manager (rotation, resolution, refresh, brightness, power)
 components/windows/             Window manager (screen layout, dynamic scaling, styling, surface modes)
@@ -68,7 +68,12 @@ components/alarm/               SD alarm store + single background checker (sd:/
 components/audio/               ES8311 codec path + background tone/WAV playback engine
 components/clock/               Time/SNTP/timezone services + date/time/timezone/sntp + named timers
 components/header/              Fixed top status bar (layout/status/notify/refresh pure helpers + widgets)
-components/led/                 WS2812 RGB status LED driver + auto status/event engine
+components/led/                 Status LED driver + auto status/event engine (WS2812 or the Tab5 keyboard's two LEDs)
+components/tab5kbd/             M5Stack Tab5Keyboard: HID input + two RGB LEDs (expansion I2C)
+components/power_monitor/       Tab5 INA226 pack gauge (read-only measurement + charge classification)
+components/imu/                 BMI270 accel/gyro (vendored Bosch driver) + orientation/auto-rotate
+components/camera/              M5Stack Tab5 MIPI-CSI camera via esp_video (BMP still capture)
+components/imagefmt/            Shared BMP header writer + RGB565->BGR24 (screenshot/gfx/camera)
 components/networking/          Sole owner of ESP-Hosted + esp_wifi_remote, BLE, HTTP client/server, netdiag
 components/usb/                 USB host (MSC storage at /usb0 + HID keyboard/mouse + lazy CDC-ACM serial)
 components/c6ota/               ESP32-C6 firmware OTA via ESP-Hosted SDIO
@@ -83,7 +88,8 @@ The command module's verb bodies live in focused files under
 `json_commands.c`, `asset_commands.c`, `pkg_commands.c`, `db_commands.c`,
 `alarm_commands.c`, `config_cmd.c`, `gfind_commands.c`, `csv_commands.c`,
 `export_commands.c`, `crypt_commands.c`, `userial_commands.c`,
-`security_commands.c`, `header_commands.c`, `ui_commands.c`).
+`security_commands.c`, `header_commands.c`, `ui_commands.c`,
+`imu_commands.c`).
 
 ## Configuration system
 
@@ -98,8 +104,8 @@ Three configuration sources exist, each with a distinct role:
 
 - `p4minishell_config.h` - C-level tunable values (buffer sizes, limits, colours, stack sizes)
 - `board_config.h` - hardware pin assignments and display timing (from the
-  active `boards/<name>/board_config.yaml` profile, default
-  `boards/jc1060p470c/`)
+  active `boards/<name>/board_config.yaml` profile; default
+  `boards/jc1060p470c/`, also `boards/m5stack_tab5/`)
 - `sdkconfig` - ESP-IDF build configuration (Kconfig-driven)
 
 ## Architecture
@@ -623,9 +629,17 @@ filesystem or the batch language:
   COMMAND.COM.
 - **Quote-aware pipe detection**: `shell_command_has_pipe()` so `echo "a | b"` is not mistaken
   for a pipeline
-- **Hardware controls**: Backlight PWM, display rotation with touch remapping, battery ADC
-  with calibration, ES8311 codec volume, and light-sleep requests — display operations are
-  routed through `components/display/`
+- **Hardware controls**: Backlight PWM, display rotation with touch remapping, battery
+  telemetry (EV ADC divider; Tab5 INA226 gauge with charge classification), charging enabled
+  at boot on the Tab5, ES8311 codec volume, light-sleep requests, and `shutdown`/`poweroff`
+  (PMIC latch on the Tab5, deep sleep on the EV board) — display operations are routed through
+  `components/display/`.
+- **IMU** (`imu`): the Tab5 BMI270; `imu [read]` prints accel/gyro + orientation and publishes
+  `IMU_*` environment variables, `imu rotate on|off` toggles tilt-based display rotation. Lives
+  in `components/imu/` with the dispatch in `components/command/imu_commands.c`.
+- **Camera** (`camera`): the Tab5 SC202CS MIPI-CSI sensor through the managed
+  `espressif/esp_video` stack; `camera init` + `camera snap <file.bmp>` write a 24-bit BMP
+  (BMP only). Lives in `components/camera/`.
 - **Basic audio** (`beep`, `tone <freq> [ms]`, `wavplay <file>`, `audio status|stop`,
   `volume [<0-100>]`): tones are generated in heap chunks and WAVs (16-bit PCM mono/stereo at
   22050/44100 Hz, stereo mixed to mono and 44100 decimated) stream from SD, both through the
@@ -643,13 +657,15 @@ filesystem or the batch language:
   this P4 with the ESP-Hosted SDIO link active stalls the chip. Every command gates its pins
   through `shell_pin_is_reserved()` (the critical entries of the board GPIO table), so active
   I2C/I2S/SDIO/display/SD lines can never be repurposed.
-- **RGB status LED** (`rgb`): `components/led/led.c` owns the WS2812 strip on GPIO26
-  (espressif/led_strip over RMT), a small animation task, and a mutex-protected state engine.
-  It renders solid colours, effects (`rainbow`/`breath`/`pulse`/`blink`/`solid`), and transient
-  event notifications on top of a persistent status colour. The `rgb` command lives in
-  `components/command/command.c` (hardware verbs), the Wi-Fi/HTTP event hooks are pushed from
-  `components/networking`, and `main.c` fires the boot confirmation flash. GPIO26 is a reserved
-  critical line in the board pin table.
+- **Status LED(s)** (`rgb`): `components/led/led.c` owns the status LED(s) — a WS2812 strip on
+  GPIO26 (espressif/led_strip over RMT), or the Tab5 keyboard's two LEDs over I2C when
+  `BOARD_CFG_RGB_VIA_TAB5KBD` is set — a small animation task, and a mutex-protected state
+  engine. It renders solid colours, effects (`rainbow`/`breath`/`pulse`/`blink`/`solid`), and
+  transient event notifications on top of a persistent status colour. On the two-LED board the
+  primaries are independently addressable (`rgb 1|2 <r> <g> <b>`; LED1 = status, LED2 = user).
+  The `rgb` command lives in `components/command/command.c` (hardware verbs), the Wi-Fi/HTTP
+  event hooks are pushed from `components/networking`, and `main.c` fires the boot confirmation
+  flash. GPIO26 is a reserved critical line in the board pin table.
 - **UI query commands**: `display info|resolution|refresh|power`, `keyboard show|hide|toggle|status`,
   `windows info` — implemented in `command_ui.c` to keep `keyboard.h` and `windows.h` out of
   `command.c`

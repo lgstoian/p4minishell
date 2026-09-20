@@ -44,11 +44,10 @@
 /** Log tag used by ESP_LOGx macros in the shell layer. */
 #define P4_CONFIG_SHELL_TAG                  "p4minishell"
 
-/** Board name requested by the user (may differ from detected BSP name). */
-#define P4_CONFIG_BOARD_REQUESTED            "JC1060P470C"
-
-/** Board name detected from the BSP component. */
-#define P4_CONFIG_BOARD_DETECTED             "ESP32-P4-Function-EV-Board"
+/* Board identity (slug, requested name, detected name) is a per-board fact and
+ * lives in boards/<name>/board_config.h as BOARD_CFG_ID / BOARD_CFG_NAME /
+ * BOARD_CFG_DETECTED_NAME. It is NOT duplicated here so the two board profiles
+ * cannot drift. See PORTING.md. */
 
 /**
  * P4MiniShell semantic version.
@@ -72,8 +71,9 @@
 /** Copyright/notice surfaced by `about` and the license notice (MIT). */
 #define P4_CONFIG_COPYRIGHT_NOTICE           "Copyright (c) 2026 Stoian Alexandru. MIT License."
 
-/** Boot banner displayed in the transcript on startup. */
-#define P4_CONFIG_BOOT_MESSAGE               P4_CONFIG_PRODUCT_NAME " " P4_CONFIG_VERSION_STRING " ready | " P4_CONFIG_BOARD_REQUESTED " | type help"
+/** Boot banner displayed in the transcript on startup. The board name comes
+ *  from the active board profile's BOARD_CFG_NAME. */
+#define P4_CONFIG_BOOT_MESSAGE               P4_CONFIG_PRODUCT_NAME " " P4_CONFIG_VERSION_STRING " ready | " BOARD_CFG_NAME " | type help"
 
 /* ========================================================================
  * BOOT SPLASH (generated icon overlay)
@@ -274,7 +274,7 @@
 #define P4_CONFIG_SPELL_DEFAULT               0      /**< Underlines on at session start */
 #define P4_CONFIG_SPELL_DICT_DIR_NAME         "DICTS"
 #define P4_CONFIG_SPELL_DICT_NAME             "en"   /**< Default <name>.words stem */
-#define P4_CONFIG_SPELL_WORD_MAX              64     /**< Longest checkable word */
+#define P4_CONFIG_SPELL_WORD_MAX              64     /**< Retained for compatibility (token lookups compare any length directly, single-character included) */
 #define P4_CONFIG_SPELL_MAX_WORDS             65536  /**< Wordlist capacity */
 #define P4_CONFIG_SPELL_MAX_BYTES             (1024 * 1024) /**< Wordlist file cap */
 
@@ -553,6 +553,9 @@
  *  al.) at the 2.12.6 baseline, so the gate must not use them. Minor/patch
  *  float within a major (RPC-V2 is wire-stable there); only the major gates. */
 #define P4_CONFIG_HOSTED_COMPAT_MAJOR       3
+
+/** I2C transaction timeout (ms) for the INA226 battery gauge. */
+#define P4_CONFIG_BATTERY_I2C_TIMEOUT_MS    100
 
 /** Maximum access points surfaced by `wifi scan`. Scan results are sorted by
  *  RSSI (strongest first) and capped at this value, so a busy channel cannot
@@ -1064,8 +1067,11 @@
  * BATCH ENGINE AND ENVIRONMENT VARIABLES
  * ======================================================================== */
 
-/** Maximum number of RAM-only environment variables. */
-#define P4_CONFIG_ENV_VAR_MAX                24
+/** Maximum number of RAM-only environment variables. Sized above the largest
+ *  shipped reference app (SNAKE holds ~22) plus boot/alias variables, since
+ *  the table is global across nested frames; a full table used to make `set`
+ *  fail mid-loop and stall the worker (W2). */
+#define P4_CONFIG_ENV_VAR_MAX                64
 
 /* ========================================================================
  * ALIASES (alias / unalias, DOSKEY-style)
@@ -1638,6 +1644,25 @@
 #define P4_CONFIG_LED_COLOR_ALARM             0x00FFFF
 
 /* ========================================================================
+ * TAB5 KEYBOARD (components/tab5kbd)
+ * ========================================================================
+ * The M5Stack Tab5Keyboard is an optional I2C module (STM32F030, address
+ * 0x6D) on the Tab5 expansion port. It is compiled on every board but only
+ * activates where BOARD_CFG_TAB5KBD_PRESENT is set; the pins/address live in
+ * board_config.h. The driver is compile-verified only (no Tab5 hardware test
+ * yet). */
+
+/** I2C transaction timeout for one Tab5Keyboard register access (ms). */
+#define P4_CONFIG_TAB5KBD_I2C_TIMEOUT_MS      50
+
+/** Poll cadence for pending Tab5Keyboard events (ms). The module also has an
+ *  interrupt line; polling is the board-agnostic fallback. */
+#define P4_CONFIG_TAB5KBD_POLL_PERIOD_MS      20
+
+/** Stack bytes for the Tab5Keyboard event poll task. */
+#define P4_CONFIG_TAB5KBD_TASK_STACK          3072
+
+/* ========================================================================
  * HEADER BAR VISUAL STYLING
  * ======================================================================== */
 
@@ -1990,6 +2015,14 @@
  * this bound stops a stalled TX ring from blocking the writer indefinitely.
  */
 #define P4_CONFIG_UART_MIRROR_WRITE_TIMEOUT_MS   50
+
+/** Total budget (ms) for one `shell_uart_console_write_bytes()` payload. Used
+ *  by the binary `send`/`screenshot` path, which retries partial writes so
+ *  transient TX backpressure cannot truncate a multi-megabyte frame; the writer
+ *  gives up only after this many ms with no progress (a genuinely unresponsive
+ *  host). The transcript mirror does NOT use this bound (see shell.c): retrying
+ *  a full TX ring there would starve the console reader. */
+#define P4_CONFIG_UART_WRITE_TOTAL_MS            10000
 
 /**
  * Grace period, in milliseconds, after the connection monitor first reports

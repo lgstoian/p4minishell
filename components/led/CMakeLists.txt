@@ -5,8 +5,10 @@ idf_component_register(
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         esp_driver_rmt
+        esp_driver_gpio
         esp_timer
         freertos
         log
         espressif__led_strip
+        tab5kbd
 )

@@ -523,40 +523,7 @@ static void alarm_index_set(const char *base, const char *key, uint32_t v)
 }
 
 /** Ensure the ALARMS directory exists (ignore "already exists"). */
-static esp_err_t alarm_ensure_dir(const char *base)
-{
-    char *copy;
-    char *p;
-    shell_sd_session_t session;
-    esp_err_t error = ESP_OK;
 
-    if (shell_sd_begin(&session) != ESP_OK) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    copy = strdup(base);
-    if (copy == NULL) {
-        shell_sd_end(&session, ALARM_TAG);
-        return ESP_ERR_NO_MEM;
-    }
-    for (p = copy; *p != '\0'; p++) {
-        if (*p == '/') {
-            char save = *p;
-            *p = '\0';
-            if (copy[0] != '\0' && mkdir(copy, 0755) != 0 && errno != EEXIST) {
-                error = ESP_FAIL;
-                *p = save;
-                break;
-            }
-            *p = save;
-        }
-    }
-    if (error == ESP_OK && copy[0] != '\0' && mkdir(copy, 0755) != 0 && errno != EEXIST) {
-        error = ESP_FAIL;
-    }
-    free(copy);
-    shell_sd_end(&session, ALARM_TAG);
-    return error;
-}
 
 /* ------------------------------------------------------------------------
  * Store API
@@ -600,7 +567,7 @@ esp_err_t alarm_add_ex(const char *title, const char *msg, time_t when,
 
     alarm_lock();
     alarm_base_dir(base, sizeof(base));
-    error = alarm_ensure_dir(base);
+    error = storage_mkdir_p(base);
     if (error != ESP_OK) {
         alarm_unlock();
         return error;
@@ -1143,7 +1110,7 @@ esp_err_t alarm_init(void)
 
     /* Make sure the store directory exists (best-effort; the checker retries). */
     alarm_base_dir(base, sizeof(base));
-    (void)alarm_ensure_dir(base);
+    (void)storage_mkdir_p(base);
 
     /* Boot catch-up: fire anything that became due while powered off. */
 #if P4_CONFIG_ALARM_CATCHUP_ON_BOOT

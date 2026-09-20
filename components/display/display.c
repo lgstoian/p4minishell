@@ -20,13 +20,13 @@
 
 #include "display.h"
 #include "board_config.h"
+#include "board_bsp.h"
 #include "p4minishell_config.h"
 #include "esp_lcd_touch.h"
 #include "hal/axi_icm_ll.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "driver/gpio.h"
-#include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -486,8 +486,8 @@ display_info_t display_get_info(void)
     info.power_state = display_get_power_state();
     info.brightness_percent = display_get_brightness();
 
-    info.panel_driver = P4_CONFIG_DISPLAY_PANEL_DRIVER;
-    info.touch_driver = P4_CONFIG_DISPLAY_TOUCH_DRIVER;
+    info.panel_driver = P4_BSP_PANEL_DRIVER;
+    info.touch_driver = P4_BSP_TOUCH_DRIVER;
 
     info.draw_buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE;
     info.double_buffer = (BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE != 0);
@@ -664,6 +664,8 @@ esp_err_t display_init(void)
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = BOARD_CFG_LCD_DRAW_BUFFER_SIZE,
         .double_buffer = BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE,
+#if P4_BSP_DISPLAY_CFG_HAS_HW_CFG
+        /* EV board: the BSP takes the DSI bus/HDMI selection through hw_cfg. */
         .hw_cfg = {
             .hdmi_resolution = BSP_HDMI_RES_NONE,
             .dsi_bus = {
@@ -671,6 +673,7 @@ esp_err_t display_init(void)
                 .lane_bit_rate_mbps = BOARD_CFG_LCD_DSI_BUS_LANE_BITRATE_MBPS_RUNTIME,
             },
         },
+#endif
         .flags = {
             .buff_dma = BOARD_CFG_APP_BUFFER_DMA,
             .buff_spiram = BOARD_CFG_APP_BUFFER_SPIRAM,
@@ -693,6 +696,19 @@ esp_err_t display_init(void)
      * "BSOD" underrun): the DSI DMA is live now, so the DW-GDMA master is up. */
     display_apply_axi_icm_qos();
 
+    /* The board profile requests the default orientation. The Tab5 panel is
+     * natively portrait and is mounted landscape, so it asks for a 90-degree
+     * software rotation; the reference board is already landscape (0). */
+#if (BOARD_CFG_DISPLAY_DEFAULT_ROTATION == 90)
+#define P4_DISPLAY_DEFAULT_ROTATION DISPLAY_ROTATION_90
+#elif (BOARD_CFG_DISPLAY_DEFAULT_ROTATION == 180)
+#define P4_DISPLAY_DEFAULT_ROTATION DISPLAY_ROTATION_180
+#elif (BOARD_CFG_DISPLAY_DEFAULT_ROTATION == 270)
+#define P4_DISPLAY_DEFAULT_ROTATION DISPLAY_ROTATION_270
+#else
+#define P4_DISPLAY_DEFAULT_ROTATION DISPLAY_ROTATION_0
+#endif
+
     portENTER_CRITICAL(&s_display.lock);
     s_display.lvgl_display = display;
     s_display.initialized = true;
@@ -700,6 +716,10 @@ esp_err_t display_init(void)
     s_display.brightness_percent = P4_CONFIG_DISPLAY_DEFAULT_BRIGHTNESS;
     s_display.power_state = DISPLAY_POWER_ON;
     portEXIT_CRITICAL(&s_display.lock);
+
+    /* Apply the board default through the manager (takes the LVGL port lock,
+     * updates the touch transform, and schedules the UI rebuild). */
+    (void)display_set_rotation(P4_DISPLAY_DEFAULT_ROTATION);
 
     /* Turn on the backlight by default */
     bsp_display_backlight_on();
@@ -714,9 +734,9 @@ esp_err_t display_init(void)
     ESP_LOGI(DISPLAY_TAG, "Display manager initialized: %" PRId32 "x%" PRId32
              " %s panel, %s touch",
              BOARD_CFG_LCD_WIDTH, BOARD_CFG_LCD_HEIGHT,
-             P4_CONFIG_DISPLAY_PANEL_DRIVER,
-             touch_err == ESP_OK ? P4_CONFIG_DISPLAY_TOUCH_DRIVER " ready"
-                                : P4_CONFIG_DISPLAY_TOUCH_DRIVER " unavailable");
+             P4_BSP_PANEL_DRIVER,
+             touch_err == ESP_OK ? P4_BSP_TOUCH_DRIVER " ready"
+                                : P4_BSP_TOUCH_DRIVER " unavailable");
 
     return ESP_OK;
 }

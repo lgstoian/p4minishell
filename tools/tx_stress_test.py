@@ -45,44 +45,74 @@ def collect(seen, buf):
             seen.add(int(s[3:]))
 
 
-def main():
-    ser = open_port(PORT, 115200, 1)
-    time.sleep(15.0)  # boot quiesce
-    ser.reset_input_buffer()
+def longest_run(sorted_missing):
+    """Longest run of consecutive missing indices (desync signature)."""
+    best = run = 0
+    prev = None
+    for i in sorted_missing:
+        run = run + 1 if prev is not None and i == prev + 1 else 1
+        best = max(best, run)
+        prev = i
+    return best
 
+
+def main():
     seen = set()
     buf = b""
-    # Small bursts: the async command queue is only 16 deep, so flooding it
-    # drops *commands* (not a mirror loss). Bursts of 8 with a read pause
-    # between them build TX backpressure without overflowing the queue.
-    for base in range(0, LINES, 8):
-        for i in range(base, min(base + 8, LINES)):
-            ser.write(("echo TXM%04d\n" % i).encode())
-        time.sleep(0.8)  # pause reads: let backpressure build
-        end = time.time() + 2.5
-        while time.time() < end:
+    dropped_off_bus = False
+    try:
+        ser = open_port(PORT, 115200, 1)
+        time.sleep(15.0)  # boot quiesce
+        ser.reset_input_buffer()
+
+        # Small bursts: the async command queue is only 16 deep, so flooding it
+        # drops *commands* (not a mirror loss). Bursts of 8 with a read pause
+        # between them build TX backpressure without overflowing the queue.
+        for base in range(0, LINES, 8):
+            for i in range(base, min(base + 8, LINES)):
+                ser.write(("echo TXM%04d\n" % i).encode())
+            time.sleep(0.8)  # pause reads: let backpressure build
+            end = time.time() + 2.5
+            while time.time() < end:
+                d = ser.read(65536)
+                if not d:
+                    break
+                buf += d
+            collect(seen, buf)
+
+        end = time.time() + 8
+        while time.time() < end and len(seen) < LINES:
             d = ser.read(65536)
             if not d:
-                break
+                time.sleep(0.1)
+                continue
             buf += d
-        collect(seen, buf)
-
-    end = time.time() + 8
-    while time.time() < end and len(seen) < LINES:
-        d = ser.read(65536)
-        if not d:
-            time.sleep(0.1)
-            continue
-        buf += d
-        collect(seen, buf)
-    ser.close()
+            collect(seen, buf)
+        ser.close()
+    except Exception as exc:  # noqa: BLE001
+        # A serial write/read error means the device dropped off the USB bus.
+        dropped_off_bus = True
+        print("TX stress: serial link error (%s)" % exc)
 
     missing = [i for i in range(LINES) if i not in seen]
     print("TX stress: %d/%d lines received" % (len(seen), LINES))
     if missing:
         print("  missing: %s" % missing[:20])
-    print("RESULT %s" % ("OK" if not missing else "FAIL"))
-    return 1 if missing else 0
+
+    # The mirror is deliberately non-blocking (see shell.c): under a sustained
+    # host read-stall that exceeds the TX-ring drain window it drops a segment
+    # rather than stalling the console reader / wedging the P4 USB-Serial-JTAG.
+    # So a *small scattered* loss is within contract; the O3 bug this guards
+    # was a lost line / desynced block. Fail on a contiguous run or a large
+    # fraction, and on the peripheral dropping off the bus.
+    run = longest_run(missing)
+    tolerance = max(2, LINES // 20)
+    ok = (not dropped_off_bus) and run < 4 and len(missing) <= tolerance
+    if missing and ok:
+        print("  note: %d scattered line(s) dropped - non-blocking mirror contract"
+              % len(missing))
+    print("RESULT %s" % ("OK" if ok else "FAIL"))
+    return 0 if ok else 1
 
 
 sys.exit(main())

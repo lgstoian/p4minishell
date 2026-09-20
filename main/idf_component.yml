@@ -18,6 +18,30 @@ dependencies:
     version: "1.6.2"
     rules:
       - if: "target in [esp32p4]"
+  # Tab5 BSP display/touch/IO-expander dependencies. They are only linked when
+  # the m5stack_tab5 board_bsp is selected, but the component manager resolves
+  # them for every P4 build so switching -DP4_BOARD= does not require a manual
+  # `idf.py update-dependencies`.
+  espressif/esp_lcd_ili9881c:
+    version: "*"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_lcd_st7123:
+    version: "^1.0.2"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_lcd_touch_st7123:
+    version: "^1.0.2"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_io_expander:
+    version: "^1.2.0"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_io_expander_pi4ioe5v6408:
+    version: "^1.0.0"
+    rules:
+      - if: "target in [esp32p4]"
   espressif/esp_wifi_remote:
     version: "^1.6.4"
     rules:

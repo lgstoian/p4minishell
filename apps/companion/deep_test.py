@@ -13,13 +13,12 @@ Usage: python deep_test.py [COMx]
 
 import os
 import re
-import subprocess
 import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "tools"))
-from shell_session import open_port  # noqa: E402
+from shell_session import open_port, hard_reset  # noqa: E402
 
 PANIC_MARKERS = ("Guru Meditation", "assert failed", "Stack protection", "Backtrace", "Rebooting")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -38,16 +37,6 @@ def worker_line(text, word):
             return True
     return False
 UPTIME_RE = re.compile(r"uptime=(\d+)d (\d+)h (\d+)m (\d+)s")
-# esptool.py from the active ESP-IDF install ($IDF_PATH). Falls back to PATH
-# lookup when IDF_PATH is unset so no machine-specific absolute path is needed.
-def _esptool_path():
-    idf = os.environ.get("IDF_PATH", "")
-    if idf:
-        cand = os.path.join(idf, "components", "esptool_py", "esptool", "esptool.py")
-        if os.path.isfile(cand):
-            return cand
-    return "esptool.py"
-ESPTool = _esptool_path()
 
 
 def read_all(ser, seconds):
@@ -93,15 +82,11 @@ def sd_mounted(ser):
 
 
 def esptool_hard_reset(port):
-    try:
-        subprocess.run(
-            [sys.executable, ESPTool, "--chip", "esp32p4", "-p", port, "-b", "460800",
-             "--before=default_reset", "--after=hard_reset", "read_mac"],
-            capture_output=True, timeout=60)
-        return True
-    except Exception as exc:
-        print("  esptool reset failed: %r" % exc)
-        return False
+    """Reboot through the shared shell_session helper (one esptool path)."""
+    ok = hard_reset(port)
+    if not ok:
+        print("  esptool reset failed")
+    return ok
 
 
 def open_noreset(port, baud=115200, timeout=1):

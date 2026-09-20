@@ -9,7 +9,7 @@ idf_component_register(
         header
         keyboard
         ansi
-        espressif__esp32_p4_function_ev_board
+        board_bsp
         espressif__esp_lvgl_port
         lvgl__lvgl
 )

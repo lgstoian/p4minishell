@@ -13,6 +13,7 @@
  */
 
 #include "markdown.h"
+#include "esp_heap_caps.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -957,23 +958,38 @@ static char *md_render_cell(const char *a, const char *b)
 static bool md_render_table(const char **starts, const char **ends,
                             int first, int count, md_writer_t *w)
 {
-    static const char *cells[MD_TABLE_ROWS_MAX][MD_TABLE_COLS_MAX][2];
+    /* Heap-backed, not a file-scope static: the cell table is
+     * MD_TABLE_ROWS_MAX * MD_TABLE_COLS_MAX * 2 pointers (8 KB), so it stays
+     * off the stack, and a heap table keeps the renderer reentrant. PSRAM is
+     * preferred (internal RAM is scarce while the transport is up). */
+    const char *(*cells)[MD_TABLE_COLS_MAX][2] = heap_caps_malloc(
+        (size_t)MD_TABLE_ROWS_MAX * sizeof(*cells),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     int widths[MD_TABLE_COLS_MAX];
     int align[MD_TABLE_COLS_MAX];
     int ncols;
     int r;
     int c;
 
+    if (cells == NULL) {
+        cells = malloc((size_t)MD_TABLE_ROWS_MAX * sizeof(*cells));
+    }
+    if (cells == NULL) {
+        return false;
+    }
     if (count < 2 || count > MD_TABLE_ROWS_MAX) {
+        free(cells);
         return false;
     }
     ncols = md_split_row(starts[first], ends[first], cells[0], MD_TABLE_COLS_MAX);
     if (ncols <= 0 ||
         md_parse_table_sep(starts[first + 1], ends[first + 1], align, ncols) != ncols) {
+        free(cells);
         return false;
     }
     for (r = first + 2; r < first + count; r++) {
         if (md_split_row(starts[r], ends[r], cells[r - first], MD_TABLE_COLS_MAX) != ncols) {
+            free(cells);
             return false;
         }
     }
@@ -989,6 +1005,7 @@ static bool md_render_table(const char **starts, const char **ends,
             char *tmp = md_render_cell(cells[r][c][0], cells[r][c][1]);
             size_t wd;
             if (tmp == NULL) {
+                free(cells);
                 return false;
             }
             wd = md_ansi_width(tmp);
@@ -1022,6 +1039,7 @@ static bool md_render_table(const char **starts, const char **ends,
             size_t wd;
             int pad;
             if (tmp == NULL) {
+                free(cells);
                 return false;
             }
             wd = md_ansi_width(tmp);
@@ -1056,6 +1074,7 @@ static bool md_render_table(const char **starts, const char **ends,
         }
         md_puts(w, "\n");
     }
+    free(cells);
     return true;
 }
 

@@ -17,7 +17,7 @@
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
-#include "bsp/esp-bsp.h"
+#include "board_bsp.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_vfs_fat.h"
@@ -73,15 +73,15 @@ static void shell_command_sd_info(void)
     }
 
     shell_print_field("sd.mount_point:", "%s", BSP_SD_MOUNT_POINT);
-    if (bsp_sdcard != NULL) {
+    if (P4_BSP_SDCARD != NULL) {
         char capacity_text[32];
-        uint64_t capacity_bytes = (uint64_t)bsp_sdcard->csd.capacity * (uint64_t)bsp_sdcard->csd.sector_size;
+        uint64_t capacity_bytes = (uint64_t)P4_BSP_SDCARD->csd.capacity * (uint64_t)P4_BSP_SDCARD->csd.sector_size;
 
         shell_sd_format_size(capacity_bytes, capacity_text, sizeof(capacity_text));
-        shell_print_field("sd.card_name:", "%s", bsp_sdcard->cid.name);
-        shell_print_field_num("sd.sector_size:", (long)bsp_sdcard->csd.sector_size);
+        shell_print_field("sd.card_name:", "%s", P4_BSP_SDCARD->cid.name);
+        shell_print_field_num("sd.sector_size:", (long)P4_BSP_SDCARD->csd.sector_size);
         shell_print_field("sd.capacity:", "%s", capacity_text);
-        shell_print_field_num("sd.max_freq_khz:", (long)bsp_sdcard->max_freq_khz);
+        shell_print_field_num("sd.max_freq_khz:", (long)P4_BSP_SDCARD->max_freq_khz);
     } else {
         shell_print_muted("sd.card_name: unavailable");
     }

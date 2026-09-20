@@ -30,8 +30,19 @@ BOOTS = int(sys.argv[2]) if len(sys.argv) > 2 else 10
 CAPTURE_S = 18.0
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-# ROM/bootloader banner and the memprobe diagnostic are not firmware warnings.
-BENIGN_WE = re.compile(r"memprobe|rst:0x|boot: |boot\.esp32p4|esp_image|qio_mode")
+# Lines that are not firmware warnings:
+#   - ROM/bootloader banner and the memprobe diagnostic;
+#   - the IDF on-chip-LDO "voltage 0" note emitted while acquiring the SD
+#     power rail (`sd_pwr_ctrl_new_on_chip_ldo`) on the M5Stack Tab5;
+#   - the Tab5's first hosted RPC, which times out at the SDIO layer before the
+#     networking transport-reset retry recovers it (a persistent failure still
+#     surfaces as a later Wi-Fi init error, which is not benign).
+BENIGN_WE = re.compile(
+    r"memprobe|rst:0x|boot: |boot\.esp32p4|esp_image|qio_mode"
+    r"|ldo: The voltage value 0 is out of the recommended range"
+    r"|sdmmc_io:.*returned 0x107"
+    r"|eh_sdio: SDIO aggr: unrecoverable write failure"
+    r"|eh_host_feat_rpc: request: no response uid=1 msg_id=350")
 
 
 def capture_boot(ser):

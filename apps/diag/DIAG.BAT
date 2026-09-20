@@ -199,6 +199,10 @@ rem once after the loop (a capture inside the loop stalls it for seconds).
 echo [M-DIAG-SECTION] benchmark
 echo.
 echo ==== BENCHMARK ==== >> %REPORT%
+rem The menu drew into the TUI grid; close it before opening the gfx canvas
+rem (gfx init refuses while TUI mode is active). The menu redraws on return.
+draw hold off
+draw close
 gfx init 320 200
 if errorlevel 1 goto no_bench
 set bx=20

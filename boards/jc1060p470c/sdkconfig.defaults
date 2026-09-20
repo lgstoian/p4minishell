@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
+# JC1060P470C board-profile build overrides.
+#
+# Layered on top of the repository sdkconfig.defaults by the root and test
+# CMakeLists when P4_BOARD=jc1060p470c. This board uses the repository default
+# ESP-Hosted SDIO pins, so there are no board-specific ESP-IDF options here.

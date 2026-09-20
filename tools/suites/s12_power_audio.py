@@ -52,6 +52,8 @@ def _restore_rgb(dev, status):
 def run(dev, ctx):
     c = Checklist(NAME)
     quick = bool(ctx.get("quick"))
+    disp_w, disp_h = dev.display_size()
+    rgb_ok = dev.rgb_available()
 
     # -- audio -----------------------------------------------------------------
     out = _run(dev, c, "audio status", "audio status", timeout=15)
@@ -89,15 +91,21 @@ def run(dev, ctx):
         _run(dev, c, "volume restore", "volume %d" % original_volume, timeout=15)
 
     # -- RGB status LED --------------------------------------------------------
-    status = _run(dev, c, "rgb status", "rgb status", timeout=15)
-    c.expect("rgb status title", "RGB LED", status)
-    c.expect("rgb status driver field", "driver:", status)
+    # Boards without a controllable LED (the Tab5 exposes one only when its
+    # keyboard is attached) honestly refuse the verb; skip rather than fail.
+    status = ""
+    if rgb_ok:
+        status = _run(dev, c, "rgb status", "rgb status", timeout=15)
+        c.expect("rgb status title", "RGB LED", status)
+        c.expect("rgb status driver field", "driver:", status)
 
-    out = _run(dev, c, "rgb set", "rgb 255 0 0", timeout=15)
-    c.expect("rgb colour set", "colour set to", out)
-    out = _run(dev, c, "rgb off", "rgb off", timeout=15)
-    c.expect("rgb off", "off", out)
-    _restore_rgb(dev, status)
+        out = _run(dev, c, "rgb set", "rgb 255 0 0", timeout=15)
+        c.expect("rgb colour set", "colour set to", out)
+        out = _run(dev, c, "rgb off", "rgb off", timeout=15)
+        c.expect("rgb off", "off", out)
+        _restore_rgb(dev, status)
+    else:
+        c.note("rgb skipped - no controllable status LED on this board")
 
     # -- power / battery -------------------------------------------------------
     out = _run(dev, c, "power status", "power", timeout=20)
@@ -142,16 +150,17 @@ def run(dev, ctx):
 
     # -- a couple of visual states --------------------------------------------
     bmp = dev.screenshot(out_dir=OUT_DIR, name="power_audio")
-    c.equals("screenshot width", bmp.width, 1024)
-    c.equals("screenshot height", bmp.height, 600)
-    mean = bmp.region_mean(0, 0, 1024, 600)
+    c.equals("screenshot width", bmp.width, disp_w)
+    c.equals("screenshot height", bmp.height, disp_h)
+    mean = bmp.region_mean(0, 0, disp_w, disp_h)
     c.check("screen is not uniformly black", sum(mean) > 5, "mean=%r" % (mean,))
 
-    out = _run(dev, c, "rgb visual", "rgb 0 0 255", timeout=15)
-    _run(dev, c, "rgb off visual", "rgb off", timeout=15)
+    if rgb_ok:
+        _run(dev, c, "rgb visual", "rgb 0 0 255", timeout=15)
+        _run(dev, c, "rgb off visual", "rgb off", timeout=15)
+        _restore_rgb(dev, status)
     bmp2 = dev.screenshot(out_dir=OUT_DIR, name="power_audio_rgb")
-    c.equals("second screenshot geometry", (bmp2.width, bmp2.height), (1024, 600))
-    _restore_rgb(dev, status)
+    c.equals("second screenshot geometry", (bmp2.width, bmp2.height), (disp_w, disp_h))
 
     _ = quick
     return c

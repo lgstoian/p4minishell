@@ -157,8 +157,12 @@ static bool s_initialized = false;
 /* Command pipeline hooks registered by command_init() */
 static batch_command_ops_t s_command_ops;
 
-/* Environment variables (RAM-only, not persisted across boots) */
-static shell_env_var_t s_shell_env_vars[SHELL_ENV_VAR_MAX];
+/* Environment variables (RAM-only, not persisted across boots). The slot
+ * array is heap-allocated (PSRAM first) in batch_init(): a static table large
+ * enough for the reference apps (~22 vars each) costs too much internal DIRAM
+ * at boot, which starved the command-worker stack. */
+#define SHELL_ENV_BYTES (sizeof(shell_env_var_t) * SHELL_ENV_VAR_MAX)
+static shell_env_var_t *s_shell_env_vars;
 
 /* Shared tables (env vars, aliases) are DOS-global across workers: `set`
  * on one task is visible to the other, which is exactly the cheap IPC games
@@ -1680,13 +1684,13 @@ static bool shell_setlocal_push(void)
         return false;
     }
 
-    snapshot = malloc(sizeof(s_shell_env_vars));
+    snapshot = malloc(SHELL_ENV_BYTES);
     if (snapshot == NULL) {
         return false;
     }
 
     batch_shared_take();
-    memcpy(snapshot, s_shell_env_vars, sizeof(s_shell_env_vars));
+    memcpy(snapshot, s_shell_env_vars, SHELL_ENV_BYTES);
     batch_shared_give();
     s_setlocal_stack[s_setlocal_depth++] = snapshot;
     return true;
@@ -1712,7 +1716,7 @@ static bool shell_setlocal_pop(void)
     }
 
     batch_shared_take();
-    memcpy(s_shell_env_vars, snapshot, sizeof(s_shell_env_vars));
+    memcpy(s_shell_env_vars, snapshot, SHELL_ENV_BYTES);
     batch_shared_give();
     free(snapshot);
     return true;
@@ -5943,7 +5947,22 @@ void batch_init(void)
         return;
     }
 
-    memset(s_shell_env_vars, 0, sizeof(s_shell_env_vars));
+    /* Allocate the environment slot table off the internal bank (PSRAM
+     * first): the table must not consume boot internal RAM ahead of the
+     * command-worker stack. A failed allocation leaves the table NULL and
+     * env lookups/sets degrade to no-ops. */
+    if (s_shell_env_vars == NULL) {
+        s_shell_env_vars = (shell_env_var_t *)heap_caps_malloc(SHELL_ENV_BYTES,
+                                                               MALLOC_CAP_SPIRAM);
+        if (s_shell_env_vars == NULL) {
+            s_shell_env_vars = (shell_env_var_t *)heap_caps_malloc(SHELL_ENV_BYTES,
+                                                                   MALLOC_CAP_DEFAULT);
+        }
+    }
+    if (s_shell_env_vars == NULL) {
+        return;
+    }
+    memset(s_shell_env_vars, 0, SHELL_ENV_BYTES);
     (void)shell_env_set("PATH", "sd:/");
     memset(s_aliases, 0, sizeof(s_aliases));
 

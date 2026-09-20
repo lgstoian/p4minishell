@@ -30,7 +30,13 @@ banner, the system info commands, and the read-only FreeRTOS task introspection 
 - `components/ansi` owns ANSI/VT SGR escape sequence processing, 16-color palette, and format string builder.
 - `components/display` owns all display hardware state: rotation, resolution, refresh rate, brightness, power management, and touch handle.
 - `components/windows` owns the LVGL screen layout: named regions, dynamic scaling, rotation-aware layout, and consistent styling.
-- `components/header` owns the fixed top-bar LVGL widgets for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status.
+- `components/header` owns the fixed top-bar LVGL widgets for notifications plus Wi-Fi, battery, Bluetooth, USB, and SD status. Its pure classification (`header_status.c`) maps Wi-Fi/Bluetooth/USB/SD/memory/CPU/battery into tones; a connected-but-unknown-RSSI Wi-Fi link maps to the connected tone, not an error.
+- `components/led` owns the status LED(s) and the auto status/event engine: a WS2812 strip on GPIO26, or the M5Stack Tab5 keyboard's two independently addressable LEDs when `BOARD_CFG_RGB_VIA_TAB5KBD` routes the frame to `components/tab5kbd`.
+- `components/tab5kbd` owns the M5Stack Tab5Keyboard (expansion I2C, HID input into the shell key path, and the two RGB LEDs).
+- `components/power_monitor` owns the Tab5 INA226 pack gauge (read-only measurement) and the pure charge-state classifier; charging itself is gated once at boot by `board_bsp_charge_enable(true)`.
+- `components/imu` owns the Tab5 BMI270 (vendored Bosch driver): samples, gravity-based orientation, and opt-in tilt auto-rotate via an installed rotation callback.
+- `components/camera` owns the Tab5 SC202CS MIPI-CSI camera through the managed `espressif/esp_video` stack (BMP still capture).
+- `components/imagefmt` owns the shared BMP header writer + RGB565->BGR24 used by `screenshot`, `gfx save`, and `camera snap`.
 - `components/editor` owns the DOS-style `edit` text editor: a byte-preserving
   document model (`editor.c`), a modal LVGL surface with syntax-coloured
   spans, a block cursor, a selection overlay, and status-bar prompts
@@ -291,7 +297,9 @@ and font modules — no new app model:
   one `editor_key_t` value + a `case` in the key handler + an OSK label + a
   serial verb, exactly like `EDITOR_KEY_WRAP_TOGGLE`.
 - **Markdown** (`components/markdown/`): `markdown_render_doc` stays the single
-  ANSI renderer; `markdown_render_html` and `markdown_render_print`
+  ANSI renderer; `markdown_render_html` (body fragment) plus
+  `markdown_render_html_page` (`<!DOCTYPE html>` reader-CSS wrapper, the
+  `markdown export ... html` target) and `markdown_render_print`
   (fixed-page, `print`) are separate output formats for the `markdown export`
   verb.
 - **Fonts** (`components/font/`): `FONT_ROLE_READING` is the third role

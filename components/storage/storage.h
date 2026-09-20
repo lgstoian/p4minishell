@@ -615,6 +615,15 @@ esp_err_t storage_ini_file_foreach(const char *path,
                                    void *ctx);
 
 /** Write a whole text file on the SD card atomically (free-space guardrail). */
+/**
+ * Ensure @p vfs_dir exists on the SD card, creating missing parents.
+ *
+ * Single implementation of the recursive `mkdir -p` used by the INI/temp core,
+ * the record store, the archive, and the alarm store. Opens its own guarded SD
+ * session (nested calls are safe), so callers do not manage a session for this.
+ */
+esp_err_t storage_mkdir_p(const char *vfs_dir);
+
 esp_err_t storage_write_text_file(const char *path, const char *text);
 
 /** Create a unique temporary file under the SD temp directory and return its

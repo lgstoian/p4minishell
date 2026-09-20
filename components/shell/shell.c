@@ -48,8 +48,8 @@
 
 /* Backward-compatibility aliases */
 #define SHELL_TAG                       P4_CONFIG_SHELL_TAG
-#define SHELL_BOARD_REQUESTED           P4_CONFIG_BOARD_REQUESTED
-#define SHELL_BOARD_DETECTED            P4_CONFIG_BOARD_DETECTED
+#define SHELL_BOARD_REQUESTED           BOARD_CFG_NAME
+#define SHELL_BOARD_DETECTED            BOARD_CFG_DETECTED_NAME
 #define SHELL_BOOT_MESSAGE              P4_CONFIG_BOOT_MESSAGE
 #define SHELL_PROMPT                    P4_CONFIG_SHELL_PROMPT
 #define SHELL_TRANSCRIPT_BYTES          P4_CONFIG_TRANSCRIPT_BYTES
@@ -3150,6 +3150,40 @@ void shell_uart_console_start(void)
     s_uart_console_running = true;
 }
 
+bool shell_uart_console_write_bytes(const void *data, size_t len,
+                                    uint32_t total_ms)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    size_t remaining = len;
+
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    /* usb_serial_jtag_write_bytes() queues what fits and returns that count, so
+     * a single call silently drops the tail when the TX ring is full because
+     * the host paused reading (the `tx_stress` line loss and a truncated
+     * `screenshot`/`send` frame). Loop the remainder under the caller's bounded
+     * total wait so transient backpressure cannot truncate a payload. */
+    int64_t deadline_us = esp_timer_get_time() + (int64_t)total_ms * 1000;
+
+    while (remaining > 0) {
+        size_t chunk = remaining > 1024u ? 1024u : remaining;
+        int written = usb_serial_jtag_write_bytes(
+            p, chunk, pdMS_TO_TICKS(P4_CONFIG_UART_MIRROR_WRITE_TIMEOUT_MS));
+
+        if (written > 0) {
+            p += (size_t)written;
+            remaining -= (size_t)written;
+            continue;
+        }
+        if (total_ms == 0 || esp_timer_get_time() >= deadline_us) {
+            return false;
+        }
+    }
+    return true;
+#else
+    return len == 0 || fwrite(data, 1, len, stdout) == len;
+#endif
+}
+
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 /**
  * Mirror text to the USB-Serial/JTAG TX ring through the driver API.
@@ -3159,8 +3193,14 @@ void shell_uart_console_start(void)
  * false-report a disconnect for a few ms under host/load pressure. Writing via
  * usb_serial_jtag_write_bytes() bypasses that check. The VFS would expand LF to
  * CRLF (CONFIG_NEWLIB_STDOUT_LINE_ENDING_CRLF); do it here so the wire format
- * is unchanged. Each segment waits at most the configured bound, so a stalled
- * ring delays but never wedges the writer.
+ * is unchanged.
+ *
+ * This stays strictly non-blocking per segment: the transcript writer and the
+ * console reader share s_uart_console_lock, so retrying a full TX ring here
+ * would stall the reader and drop *incoming* commands (and, under sustained
+ * host backpressure, wedge the P4 USB-Serial-JTAG peripheral). A short bounded
+ * wait is enough to ride out the sub-second SOF-monitor false disconnects the
+ * O3 fix targets; a longer stall drops the segment rather than the shell.
  */
 static void shell_uart_mirror_write(const char *text, size_t len)
 {
@@ -4208,6 +4248,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "power",    "power [status] | power idle [seconds|off] - display power state and idle display-off timeout" },
     { "sleep",    "sleep - enter light sleep (timer/GPIO wake); display-only idle is power/display off" },
     { "deepsleep", "deepsleep - enter ESP deep sleep (wake on configured source)" },
+    { "shutdown", "shutdown (poweroff) - flush, LEDs off, and cut board power (deep sleep when no latch)" },
     { "pwm",      "pwm <pin> <freq> <duty%> - LEDC PWM tone on a pin" },
     { "freq",     "freq <pin> <hz> - square wave generator on a pin" },
     { "tone",     "tone <freq> [duration_ms] - play a tone through the speaker" },
@@ -4216,7 +4257,8 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "adc",      "adc <pin> - one-shot ADC read on a pin" },
     { "i2c",      "i2c scan | peek <addr> <reg> | poke <addr> <reg> <val> - I2C bus tools" },
     { "spi",      "spi status - SPI configuration (transactions unsupported with hosted SDIO)" },
-    { "rgb",      "rgb status | rgb <#RRGGBB|r g b|effect> | rgb auto <on|off> - WS2812 status LED" },
+    { "rgb",      "rgb status | rgb <#RRGGBB|r g b|effect> | rgb auto <on|off> | rgb <1|2> r g b - status LED(s)" },
+    { "imu",      "imu [read] | imu status | imu rotate <on|off> - BMI270 accel/gyro + tilt auto-rotate" },
     { "gpio",     "gpio list | status | read <pin> | set <pin> <0|1> - digital IO" },
     { "volume",   "volume <0-100> - set speaker volume" },
     { "display",  "display info | resolution | refresh | power <on|sleep|off>" },
@@ -4484,6 +4526,9 @@ void shell_command_sysinfo(void)
     unsigned int heap_pct = (unsigned int)(total_heap > 0 ? (free_heap * 100 / total_heap) : 0);
 
     shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell System Information:" SH_RST "\n");
+    /* Machine-readable identity line: host tools grep `board.id: <slug>` to map
+     * a COM port to a board profile (tools/board_ports.py). */
+    shell_transcript_appendf_ansi("  " SH_LBL "board.id:" SH_RST " %s\n", BOARD_CFG_ID);
     shell_transcript_appendf_ansi("  " SH_LBL "board.requested_name:" SH_RST " %s\n", SHELL_BOARD_REQUESTED);
     shell_transcript_appendf_ansi("  " SH_LBL "board.detected_name:" SH_RST " %s\n", SHELL_BOARD_DETECTED);
     shell_transcript_appendf_ansi("  " SH_LBL "version:" SH_RST " %d.%d.%d\n",
@@ -4573,9 +4618,10 @@ void shell_command_sysinfo(void)
                              BOARD_CFG_RGB_LED_GPIO,
                              BOARD_CFG_RGB_LED_IS_WS2812);
     shell_transcript_appendf_ansi("  " SH_LBL "hardware.camera:" SH_RST " supported=%d\n", BOARD_CFG_CAMERA_SUPPORTED);
+    shell_transcript_appendf_ansi("  " SH_LBL "hardware.imu:" SH_RST " supported=%d\n", BOARD_CFG_IMU_SUPPORTED);
     shell_transcript_appendf_ansi("  " SH_LBL "storage:" SH_RST " spiffs=%s, sd=%s\n", BSP_SPIFFS_MOUNT_POINT, BSP_SD_MOUNT_POINT);
     shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport:" SH_RST " sdio reset_gpio=%d\n",
-                                 P4_CONFIG_C6_HOST_RESET_GPIO);
+                                 BOARD_CFG_C6_HOST_RESET_GPIO);
     if (s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy()) {
         shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport.busy:" SH_RST " " SH_WARN "yes" SH_RST "\n");
     } else {
@@ -4680,7 +4726,16 @@ void shell_command_about(void)
     } else {
         shell_transcript_appendf_ansi("  " SH_LBL "about.idf:" SH_RST " " SH_ERR "unknown" SH_RST "\n");
     }
-    shell_transcript_appendf_ansi("  " SH_LBL "about.display:" SH_RST " JD9165 1024x600 MIPI-DSI, GT911 touch\n");
+    {
+        /* Report the live panel/touch instead of a baked-in reference string,
+         * so a port (e.g. the M5Stack Tab5) never advertises the wrong panel. */
+        display_info_t display = display_get_info();
+        shell_transcript_appendf_ansi("  " SH_LBL "about.display:" SH_RST " %s %ldx%ld MIPI-DSI, %s touch\n",
+                                      display.panel_driver != NULL ? display.panel_driver : "panel",
+                                      (long)display.resolution.native_width,
+                                      (long)display.resolution.native_height,
+                                      display.touch_driver != NULL ? display.touch_driver : "touch");
+    }
     shell_transcript_appendf_ansi("  " SH_LBL "about.ui:" SH_RST " locked transcript with touch keyboard, history buttons, and command prompt\n");
     shell_transcript_appendf_ansi("  " SH_LBL "about.header:" SH_RST " real-time status bar (WiFi, BT, USB, SD, MEM, CPU, BAT) from FreeRTOS\n");
     shell_transcript_appendf_ansi("  " SH_LBL "about.uptime:" SH_RST " %" PRIu32 "d %" PRIu32 "h %" PRIu32 "m %" PRIu32 "s\n",
@@ -5258,18 +5313,19 @@ void shell_header_status_refresh(void)
     };
     header_update_batch(&batch);
 
-    /* USB keyboard auto-detect: hide the on-screen keyboard while a USB
-     * keyboard is attached and restore it on removal. Edge-triggered so the
-     * keyboard is not forced on every refresh tick. */
+    /* Physical keyboard auto-detect: hide the on-screen keyboard while ANY
+     * physical keyboard is present (USB HID, a connected Bluetooth HID
+     * keyboard, or the M5Stack Tab5 keyboard) and restore it on removal.
+     * Edge-triggered so the keyboard is not forced on every refresh tick. */
     {
-        static bool s_last_usb_kb_attached = false;
-        bool usb_kb_attached = s_command_ops.usb_is_keyboard_attached != NULL &&
-                               s_command_ops.usb_is_keyboard_attached();
+        static bool s_last_physical_kb = false;
+        bool physical_kb = s_command_ops.physical_keyboard_present != NULL &&
+                           s_command_ops.physical_keyboard_present();
 
-        if (usb_kb_attached != s_last_usb_kb_attached) {
-            s_last_usb_kb_attached = usb_kb_attached;
-            keyboard_set_external_input(usb_kb_attached);
-            shell_header_notify(usb_kb_attached ? "USB keyboard detected" : "USB keyboard removed",
+        if (physical_kb != s_last_physical_kb) {
+            s_last_physical_kb = physical_kb;
+            keyboard_set_external_input(physical_kb);
+            shell_header_notify(physical_kb ? "Physical keyboard detected" : "Physical keyboard removed",
                                 P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
         }
     }

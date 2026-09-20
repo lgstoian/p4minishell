@@ -76,6 +76,45 @@ The exact license texts ship inside each component directory
 components bundle additional third-party sources under their own notices; those
 notices are preserved verbatim inside the component.
 
+### Board support packages vendored in-tree (`boards/*/board_bsp/`)
+
+Each board profile stages its BSP as the `board_bsp` component. Two profiles
+exist, and one of them vendors upstream sources directly:
+
+| Path | Origin | Copyright | License |
+|------|--------|-----------|---------|
+| `boards/m5stack_tab5/board_bsp/` | Sources trimmed from the Espressif **`m5stack_tab5`** BSP (`espressif/m5stack_tab5`, part of [espressif/esp-bsp](https://github.com/espressif/esp-bsp) and mirrored by M5Stack's [M5Tab5-UserDemo](https://github.com/m5stack/M5Tab5-UserDemo)) | © 2025-2026 Espressif Systems (Shanghai) CO LTD | Apache License 2.0 (see `boards/m5stack_tab5/board_bsp/LICENSE`) |
+| `boards/jc1060p470c/board_bsp/` | Project-authored thin wrapper over the managed `espressif__esp32_p4_function_ev_board` component | © 2026 Stoian Alexandru | MIT License |
+
+The vendored Tab5 BSP keeps the upstream `SPDX-FileCopyrightText: Espressif
+Systems (Shanghai) CO LTD` and `SPDX-License-Identifier: Apache-2.0` headers on
+every file taken from the upstream BSP. This repository only removes sources for
+features the port does not use (the camera and IMU/sensor-hub blocks); it does
+not relicense them. Project-authored glue (`board_bsp.h`,
+`extra_dirs.cmake`, the CMake wiring, and `board_config.h`) is MIT.
+
+The M5Stack [M5Tab5-UserDemo](https://github.com/m5stack/M5Tab5-UserDemo) and
+[M5Tab5-Keyboard-UserDemo](https://github.com/m5stack/M5Tab5-Keyboard-UserDemo)
+(MIT) were used as the reference for the Tab5 hardware bring-up and the
+on-board device protocols. Most protocol knowledge (not source) was re-expressed
+in this project's own drivers; the BMI270 wrapper is vendored verbatim:
+
+| This project | Adapted from | Terms |
+|--------------|--------------|-------|
+| `components/tab5kbd/` | M5Tab5-Keyboard-UserDemo `m5_tab5_keyboard.*` (register map, HID/RGB protocol) | MIT, © 2025-2026 M5Stack |
+| `components/power_monitor/` | M5Tab5-UserDemo `power_monitor_ina226` (INA226 config/calibration) and the TI INA226 datasheet (SBOS547) | MIT (driver) / TI datasheet |
+| `components/clock/clock_rtc.c` (RX8130CE flavour) | M5Tab5-Keyboard-UserDemo `rtc_rx8130` (register map) | MIT, © M5Stack |
+| `components/imu/` (`accel_gyro_bmi270.*`) | M5Stack M5Tab5-UserDemo `sensor_bmi270` (MIT); local change: no `ESP_ERROR_CHECK` on I2C add | MIT, © 2025-2026 M5Stack |
+| `components/imu/` (`bmi2.*`, `bmi270*.c`, `bmi2_ois.*`) | Bosch Sensortec BMI270 Sensor API | BSD-3-Clause, © 2023 Bosch Sensortec GmbH |
+| `components/camera/` | Espressif `esp_video` V4L2 usage pattern (M5Tab5-UserDemo `hal_camera.cpp`) | Apache-2.0 (Espressif) / MIT (M5Stack) |
+
+The `espressif/esp_video`, `espressif/esp_cam_sensor`, `espressif/esp_ipa`, and
+`espressif/esp_sccb_intf` camera stack are consumed as managed components and
+keep their own Apache-2.0 licenses.
+
+The co-processor firmware this project ships is built from its own
+`coprocessor/esp32c6_slave` project and the `esp_hosted` component.
+
 ### Platform and toolchain
 
 - **ESP-IDF** and the Espressif components it provides are distributed under

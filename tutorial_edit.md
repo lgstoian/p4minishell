@@ -13,9 +13,11 @@ highlighting for batch files, and touch support.
 > [`test/README.md`](test/README.md).
 
 Everything works from three input surfaces — the on-screen touch keyboard, a
-USB keyboard, and the serial console — and the editor surface is exactly as
-large as the normal shell transcript (the touch keyboard stays at the bottom
-of the screen, just like in the shell).
+physical keyboard (USB HID, a connected Bluetooth HID keyboard, or the M5Stack
+Tab5 keyboard; any of these auto-hides the on-screen keyboard), and the serial
+console — and the editor surface is exactly as large as the normal shell
+transcript (the touch keyboard stays at the bottom of the screen, just like in
+the shell).
 
 > Quick-reference and implementation notes live in [editor.md](editor.md).
 > This tutorial covers every feature in depth.
@@ -392,10 +394,14 @@ Writing-oriented extras, all opt-in and non-destructive:
   the whole document), refreshed as you type. Disable with
   `P4_CONFIG_EDITOR_WORD_COUNT=0`.
 - **Spellcheck** — put a wordlist at `sd:/DICTS/<name>.words` (one lower-case
-  word per line; default `<name>` is `en`). Toggle with `Ctrl+Shift+S`, the
-  `Spell` key, or `\spell`; misspellings are underlined and the status bar shows
-  `SPELL`. With no list present the toggle tells you the expected path and stays
-  off. Underlines are not applied while word-wrap is on.
+  word per line; default `<name>` is `en`; a curated sample ships in
+  `apps/dicts/`, push it with `python apps/push_dicts.py <COM_PORT>`).
+  Toggle with `Ctrl+Shift+S`, the `Spell` key, or `\spell`; misspellings are
+  underlined and the status bar shows `SPELL`. With no list present the toggle
+  tells you the expected path and stays off. Tokenization is UTF-8 aware
+  (`don't`/`well-known` stay whole; CJK, digits, `_`, and non-ASCII Latin are
+  never flagged), single-character words are checked like any other, and
+  underlines compose with word-wrap.
 - **Reading typography** — `view` (for `.md`) and the editor Markdown preview
   use the `reading` font role: a vendored `DejaVuSerif` face (auto-selected
   once pushed to `sd:/FONTS/`) with reader line spacing. `font set reading
@@ -468,6 +474,28 @@ the session to avoid copying the whole document on every keystroke.
   column 1.
 - **Find "not found"** — the search is case-insensitive by default; check the
   text for trailing spaces or punctuation.
+- **`edit /template` warns instead of seeding** — the target already exists
+  (templates only seed *new* files), the name is invalid (letters, digits,
+  `_`/`-` only), or `sd:/TEMPLATES/<name>.MD` is missing (push with
+  `python apps/push_templates.py <COM_PORT>`). An over-8 KB template is
+  seeded truncated with a warning.
+- **`Spell` stays off** — no `sd:/DICTS/<name>.words` on the card (push the
+  `apps/dicts/` sample with `python apps/push_dicts.py <COM_PORT>`).
+  Coverage is exactly the wordlist: add domain words (one per line) for
+  false-flagged terms.
+- **Preview reports `preview needs a Markdown file`** — preview renders
+  Markdown only; rename to `.md`/`.markdown`/`.mkd` or open a Markdown file.
+  **`too large to preview`** means the document is past the 96 KB preview
+  cap — split it or share it with `markdown export` instead.
+- **`markdown export` refuses the file** — sources past 64 KB are not
+  exported, and output past the 256 KB export cap is not written; split the
+  source or export a smaller range.
+- **Serif preview falls back to a bitmap face** — `sd:/FONTS/` has no reading
+  serif yet; push with `python push_fonts.py <COM_PORT>` and
+  `font set reading <name> /save`.
+- **The `WRITER` demo reports a failure** — run it as `WRITER` and read the
+  `FAIL` line: it names the missing push (`push_templates.py`,
+  `push_dicts.py`) or the failed export step.
 
 ---
 

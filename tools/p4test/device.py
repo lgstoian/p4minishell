@@ -10,12 +10,13 @@ already provides - no duplicated reset logic lives here.
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 from . import screenshot as shot
 from . import sdbridge
-from .session import DeviceSession, P4Error
+from .session import DeviceSession, P4Error, strip_ansi
 
 
 class Device:
@@ -60,6 +61,40 @@ class Device:
     def screenshot(self, out_dir: Optional[str] = None,
                    name: Optional[str] = None) -> shot.Bmp:
         return shot.capture(self.session, out_dir, name)
+
+    # -- board capabilities ---------------------------------------------
+    def sysinfo(self) -> str:
+        """`sysinfo` text (ANSI-stripped), cached for the session."""
+        cached = getattr(self, "_sysinfo_cache", None)
+        if cached is None:
+            cached = strip_ansi(self.run("sysinfo", timeout=25))
+            self._sysinfo_cache = cached
+        return cached
+
+    def board_id(self) -> str:
+        """The active board profile slug (e.g. ``jc1060p470c``)."""
+        m = re.search(r"board\.id:\s*([A-Za-z0-9_\-]+)", self.sysinfo())
+        return m.group(1) if m else ""
+
+    def display_size(self) -> Tuple[int, int]:
+        """The live landscape display size as ``(width, height)``.
+
+        Declared per board: 1024x600 on the reference board, 1280x720 on the
+        Tab5. Suites must assert against this rather than a hardcoded panel.
+        """
+        m = re.search(r"display:\s*(\d+)\s*x\s*(\d+)", self.sysinfo())
+        if not m:
+            return (1024, 600)
+        return (int(m.group(1)), int(m.group(2)))
+
+    def rgb_available(self) -> bool:
+        """True when the board exposes a controllable WS2812 status LED.
+
+        The Tab5 has no on-board LED; its keyboard adds one when attached, so
+        the firmware reports ``hardware.rgb: gpio=-1`` without it.
+        """
+        m = re.search(r"hardware\.rgb:\s*gpio=(-?\d+)", self.sysinfo())
+        return bool(m and int(m.group(1)) >= 0)
 
     # -- SD transfer -----------------------------------------------------
     def push_file(self, remote: str, data: bytes) -> None:

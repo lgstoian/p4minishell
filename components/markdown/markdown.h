@@ -51,10 +51,21 @@ size_t markdown_render_doc(const char *md, char *out, size_t out_size);
 
 /**
  * Serialize a full document to a self-contained HTML fragment (writerdeck
- * `markdown export ... html`). Always NUL-terminates; truncates safely.
- * Returns bytes written excluding NUL.
+ * `markdown export ... html` body). Always NUL-terminates; truncates safely.
+ * Returns bytes written excluding NUL. Kept for embedding; the export verb
+ * wraps it in a full page (see below).
  */
 size_t markdown_render_html(const char *md, char *out, size_t out_size);
+
+/**
+ * Serialize a full document to a standalone HTML page (writerdeck
+ * `markdown export ... html`): `<!DOCTYPE html>` wrapper with embedded
+ * reader CSS around the `markdown_render_html` body. The title is escaped
+ * for `<title>`; a NULL/empty title falls back to "P4MiniShell".
+ * Always NUL-terminates; truncates safely. Returns bytes written excl. NUL.
+ */
+size_t markdown_render_html_page(const char *md, const char *title,
+                                 char *out, size_t out_size);
 
 /** File extension (no dot) of the HTML export MIME/type hint, for reference. */
 #define MARKDOWN_HTML_EXT "html"

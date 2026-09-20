@@ -6,6 +6,6 @@ idf_component_register(
     REQUIRES
         lvgl__lvgl
         espressif__esp_lvgl_port
-        espressif__esp32_p4_function_ev_board
+        board_bsp
         ansi
 )

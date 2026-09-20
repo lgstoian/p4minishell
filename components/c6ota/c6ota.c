@@ -14,6 +14,7 @@
 
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
+#include "strutil.h"
 #include "esp_crt_bundle.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -83,23 +84,6 @@ extern void c6ota_host_notify_header_level(const char *text, uint32_t timeout_ms
 static c6ota_progress_callback_t s_progress_callback;
 static bool s_update_in_progress;
 static c6ota_confirmation_t s_confirmation;
-
-static bool c6ota_text_equals_ignore_case(const char *left, const char *right)
-{
-    if (left == NULL || right == NULL) {
-        return false;
-    }
-
-    while (*left != '\0' && *right != '\0') {
-        if (tolower((unsigned char)*left) != tolower((unsigned char)*right)) {
-            return false;
-        }
-        left++;
-        right++;
-    }
-
-    return *left == '\0' && *right == '\0';
-}
 
 static void c6ota_record_errorf(esp_err_t error, const char *format, ...)
 {
@@ -203,7 +187,7 @@ static bool c6ota_source_is_http(const char *source)
 
 static bool c6ota_source_is_default(const char *source)
 {
-    return source != NULL && c6ota_text_equals_ignore_case(source, C6OTA_DEFAULT_SOURCE);
+    return source != NULL && strutil_text_equals_ignore_case(source, C6OTA_DEFAULT_SOURCE);
 }
 
 static bool c6ota_source_is_sd(const char *source)
@@ -1149,7 +1133,7 @@ bool c6ota_try_handle_input(const char *input)
         return false;
     }
 
-    if (c6ota_text_equals_ignore_case(input, "YES")) {
+    if (strutil_text_equals_ignore_case(input, "YES")) {
         request = (c6ota_request_t *)calloc(1, sizeof(*request));
         if (request == NULL) {
             c6ota_emit_syncf("%s", "c6ota: out of memory\n");
@@ -1178,7 +1162,7 @@ bool c6ota_try_handle_input(const char *input)
         return true;
     }
 
-    if (c6ota_text_equals_ignore_case(input, "NO")) {
+    if (strutil_text_equals_ignore_case(input, "NO")) {
         s_confirmation.active = false;
         c6ota_emit_syncf("%s", "c6ota: cancelled before rebooting the C6\n");
         c6ota_record_infof("User cancelled OTA confirmation");

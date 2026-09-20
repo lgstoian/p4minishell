@@ -180,8 +180,22 @@ def phase_header(ui):
 def phase_input_row(ui):
     print("== input-row buttons ==")
     ui.ensure_shell()
-    row = [t for t in ui.targets()
-           if 342 <= t["y"] < 392 and t["w"] > 0 and not t["name"].startswith("kbd:")]
+    ui.send("keyboard show", 1.0)
+    targets = ui.targets()
+    # The input row (Prev/Next/Up/Dn/Tab) sits directly above the on-screen
+    # keyboard, so locate it relative to the keyboard's top edge instead of a
+    # fixed reference-board Y band (which is wrong on the 1280x720 Tab5).
+    kbd_top = min((t["y"] for t in targets if t["name"].startswith("kbd:")),
+                  default=None)
+    row = []
+    for t in targets:
+        if t["name"].startswith("kbd:") or t["w"] <= 0 or t["h"] <= 0:
+            continue
+        if kbd_top is not None:
+            if (kbd_top - 80) <= t["y"] < kbd_top:
+                row.append(t)
+        elif t["name"] in ("Prev", "Next", "Up", "Dn", "Tab"):
+            row.append(t)
     check("input-row targets present", len(row) > 0, "%d" % len(row))
     for t in row:
         out = ui.tap(t["x"] + t["w"] // 2, t["y"] + t["h"] // 2, 0.5)

@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
+dependencies:
+  # MIPI-CSI camera stack (V4L2 devices + sensor drivers). Only linked on boards
+  # that set BOARD_CFG_CAMERA_PRESENT; harmless elsewhere.
+  espressif/esp_video:
+    version: "^2.0.0"
+    rules:
+      - if: "target in [esp32p4]"

@@ -28,11 +28,38 @@
 #include "led_strip.h"
 
 #include "led.h"
+#include "board_config.h"
 #include "p4minishell_config.h"
 
 #define LED_TAG                "led"
 
-#define LED_GPIO               P4_CONFIG_LED_GPIO
+/* The RGB status LED is board-specific. The EV board wires a WS2812 on
+ * BOARD_CFG_RGB_LED_GPIO; the M5Stack Tab5 main board has none, so the module
+ * degrades to a no-op there (every public call still succeeds safely). */
+#if defined(BOARD_CFG_RGB_LED_GPIO) && defined(BOARD_CFG_RGB_LED_IS_WS2812) && \
+    (BOARD_CFG_RGB_LED_IS_WS2812 != 0)
+#define LED_PRESENT            1
+#define LED_GPIO               BOARD_CFG_RGB_LED_GPIO
+#else
+#define LED_PRESENT            0
+#define LED_GPIO               GPIO_NUM_NC
+#endif
+
+/* The Tab5 has no on-board LED; its status LEDs are the two on the keyboard
+ * module, driven over I2C by components/tab5kbd. When so configured the LED
+ * engine still owns the frames/effects and routes its output to the keyboard. */
+#ifndef BOARD_CFG_RGB_VIA_TAB5KBD
+#define BOARD_CFG_RGB_VIA_TAB5KBD 0
+#endif
+#if !LED_PRESENT && BOARD_CFG_RGB_VIA_TAB5KBD
+#define LED_BACKEND_KEYBOARD   1
+#else
+#define LED_BACKEND_KEYBOARD   0
+#endif
+
+#if LED_BACKEND_KEYBOARD
+#include "tab5kbd.h"
+#endif
 #define LED_RMT_RESOLUTION_HZ  P4_CONFIG_LED_RMT_RESOLUTION_HZ
 #define LED_RMT_SYMBOLS        P4_CONFIG_LED_RMT_SYMBOLS
 #define LED_BRIGHTNESS_PCT     P4_CONFIG_LED_MAX_BRIGHTNESS_PCT
@@ -75,6 +102,7 @@ static bool s_auto_status;
 static uint8_t s_speed;
 static led_frame_t s_status_frame;   /* persistent auto status colour */
 static led_frame_t s_manual_frame;   /* persistent manual colour/effect */
+static led_frame_t s_secondary_frame;/* secondary user LED (Tab5 keyboard RGB2) */
 static led_notification_t s_notification;
 
 static void led_lock(void)
@@ -266,6 +294,20 @@ static void led_task(void *arg)
             led_strip_set_pixel(s_strip, 0, red, green, blue);
             led_strip_refresh(s_strip);
         }
+#if LED_BACKEND_KEYBOARD
+        /* Drive the two keyboard LEDs independently; a detached module reports
+         * INVALID_STATE and is silently ignored (the engine still runs, nothing
+         * lights up). LED1 (index 0) is the status engine, LED2 (index 1) is
+         * the independent user LED. */
+        {
+            uint8_t sr = (uint8_t)((uint16_t)s_secondary_frame.red * LED_BRIGHTNESS_PCT / 100);
+            uint8_t sg = (uint8_t)((uint16_t)s_secondary_frame.green * LED_BRIGHTNESS_PCT / 100);
+            uint8_t sb = (uint8_t)((uint16_t)s_secondary_frame.blue * LED_BRIGHTNESS_PCT / 100);
+
+            (void)tab5kbd_set_rgb_index(0, red, green, blue);
+            (void)tab5kbd_set_rgb_index(1, sr, sg, sb);
+        }
+#endif
         led_unlock();
 
         vTaskDelay(pdMS_TO_TICKS(LED_TICK_MS));
@@ -280,10 +322,18 @@ void led_init(void)
     if (s_initialized) {
         return;
     }
+#if !LED_PRESENT && !LED_BACKEND_KEYBOARD
+    /* No addressable status LED on this board: stay uninitialized so every
+     * consumer (rgb command, Wi-Fi status, boot flash) reports "not present"
+     * instead of driving a phantom strip. */
+    ESP_LOGI(LED_TAG, "No RGB status LED on this board; LED engine disabled");
+    return;
+#endif
     if (s_lock == NULL) {
         s_lock = xSemaphoreCreateMutex();
     }
 
+#if LED_PRESENT
     const led_strip_config_t strip_config = {
         .strip_gpio_num = LED_GPIO,
         .max_leds = 1,
@@ -303,6 +353,9 @@ void led_init(void)
         ESP_LOGE(LED_TAG, "WS2812 init failed on GPIO%d (%s)", LED_GPIO, esp_err_to_name(error));
         return;
     }
+#else
+    (void)error;
+#endif
 
     led_lock();
     s_strip = strip;
@@ -312,8 +365,12 @@ void led_init(void)
     led_event_frame(LED_EVENT_WIFI_CONNECTING, &s_status_frame);
     memset(&s_manual_frame, 0, sizeof(s_manual_frame));
     s_manual_frame.effect = LED_EFFECT_SOLID;
+    memset(&s_secondary_frame, 0, sizeof(s_secondary_frame));
+    s_secondary_frame.effect = LED_EFFECT_SOLID;
     s_notification.active = false;
+#if LED_PRESENT
     led_strip_clear(strip);
+#endif
     s_initialized = true;
     led_unlock();
 
@@ -357,6 +414,88 @@ esp_err_t led_set_hex(uint32_t rgb)
 esp_err_t led_off(void)
 {
     return led_set_color(0, 0, 0);
+}
+
+bool led_secondary_present(void)
+{
+#if LED_BACKEND_KEYBOARD
+    return true;
+#else
+    return false;
+#endif
+}
+
+esp_err_t led_set_index_color(uint8_t index, uint8_t red, uint8_t green, uint8_t blue)
+{
+    if (index == 0) {
+        return led_set_color(red, green, blue);
+    }
+    if (index != 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+#if !LED_BACKEND_KEYBOARD
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    led_lock();
+    s_secondary_frame.red = red;
+    s_secondary_frame.green = green;
+    s_secondary_frame.blue = blue;
+    s_secondary_frame.effect = LED_EFFECT_SOLID;
+    led_unlock();
+    return ESP_OK;
+#endif
+}
+
+esp_err_t led_index_off(uint8_t index)
+{
+    return led_set_index_color(index, 0, 0, 0);
+}
+
+void led_get_index_state(uint8_t index, led_state_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    if (index == 0) {
+        led_get_state(out);
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (index != 1) {
+        return;
+    }
+    led_lock();
+    out->initialized = s_initialized;
+    if (s_initialized) {
+        out->auto_status = false;
+        out->red = s_secondary_frame.red;
+        out->green = s_secondary_frame.green;
+        out->blue = s_secondary_frame.blue;
+        out->effect = LED_EFFECT_SOLID;
+        out->speed = s_speed;
+        out->brightness_pct = LED_BRIGHTNESS_PCT;
+    }
+    led_unlock();
+}
+
+esp_err_t led_all_off(void)
+{
+    esp_err_t error = led_off();
+
+    if (s_initialized) {
+        led_lock();
+        memset(&s_secondary_frame, 0, sizeof(s_secondary_frame));
+        s_secondary_frame.effect = LED_EFFECT_SOLID;
+        led_unlock();
+    }
+#if LED_BACKEND_KEYBOARD
+    /* Apply immediately so a following power cut leaves the LEDs dark. */
+    (void)tab5kbd_set_rgb(0, 0, 0);
+#endif
+    return error;
 }
 
 esp_err_t led_set_effect(led_effect_t effect, uint8_t speed)

@@ -413,6 +413,7 @@ void shell_command_battery(int argc, char **argv);
 void shell_command_power(int argc, char **argv);
 void shell_command_sleep(int argc, char **argv);
 void shell_command_deepsleep(int argc, char **argv);
+void shell_command_shutdown(int argc, char **argv);
 
 /**
  * Parse `sleep`/`deepsleep` seconds (pure, unit-tested): no argument yields
@@ -442,6 +443,7 @@ void shell_execute_adc_command(int argc, char **argv);
 void shell_execute_i2c_command(int argc, char **argv);
 void shell_execute_spi_command(int argc, char **argv);
 void shell_execute_rgb_command(int argc, char **argv);
+void shell_execute_imu_command(int argc, char **argv);
 void shell_execute_camera_command(int argc, char **argv);
 
 /* ========================================================================

@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        board: [jc1060p470c]
+        board: [jc1060p470c, m5stack_tab5]
     steps:
       - uses: actions/checkout@v4
       - name: Build firmware (${{ matrix.board }})
@@ -38,4 +38,6 @@ jobs:
       - name: Python syntax check (host tools)
         run: python3 -m compileall -q tools apps
       - name: Board profiles present
-        run: test -f boards/jc1060p470c/board_config.h
+        run: |
+          test -f boards/jc1060p470c/board_config.h
+          test -f boards/m5stack_tab5/board_config.h

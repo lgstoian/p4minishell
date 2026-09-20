@@ -17,7 +17,7 @@
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
-#include "bsp/esp-bsp.h"
+#include "board_bsp.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_vfs_fat.h"
@@ -411,9 +411,9 @@ int shell_format_execute(const char *operation,
         shell_sd_end(&session, operation);
     }
 
-    if (bsp_sdcard == NULL) {
+    if (P4_BSP_SDCARD == NULL) {
         shell_print_error("%s: no SD card handle is available", operation);
-        shell_record_errorf(operation, ESP_ERR_INVALID_STATE, "bsp_sdcard is NULL");
+        shell_record_errorf(operation, ESP_ERR_INVALID_STATE, "SD card handle is NULL");
         return 1;
     }
 

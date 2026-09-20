@@ -37,6 +37,7 @@
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 #include "board_config.h"
+#include "board_bsp.h"
 #include "p4minishell_config.h"
 #include "p4minishell.h"
 
@@ -56,6 +57,8 @@
 #include "shell.h"
 #include "boot.h"
 #include "storage.h"
+#include "tab5kbd.h"
+#include "imu.h"
 #include "usb.h"
 #include "windows.h"
 #include "ui_test.h"
@@ -905,10 +908,29 @@ void app_main(void)
      * spawns the wifi_bg task) and before any SD access. */
     storage_sdmmc_host_preinit();
 
+    /* Assert board power/enable rails that are gated behind an IO expander
+     * (the Tab5 co-processor and USB rails) before the C6 hosted transport and
+     * the USB host start. A no-op on boards without gated rails. */
+    (void)board_bsp_early_init();
+
+    /* Enable battery charging: the Tab5 gates the charge path off after reset,
+     * so without this the pack never charges. A no-op on boards without a
+     * charge gate. */
+    (void)board_bsp_charge_enable(true);
+
     usb_init();
 
     /* Route USB keyboard keystrokes into the shell input line. */
     usb_register_keyboard_input_callback(shell_usb_keyboard_cb);
+
+    /* Optional M5Stack Tab5Keyboard (I2C). Its HID reports feed the same shell
+     * key path as the USB keyboard; a no-op on boards without the module. */
+    (void)tab5kbd_init();
+
+    /* Optional BMI270 IMU (Tab5 main board). Probed once here; the `imu`
+     * command reports the gap on boards without one, and tilt auto-rotate is
+     * off until `imu rotate on`. */
+    (void)imu_init();
 
     /* Timezone setup only. The SNTP client starts when Wi-Fi connects,
      * because it requires the lwIP TCP/IP thread to be running. */

@@ -23,14 +23,9 @@ shell_identity:
     value: "p4minishell"
     type: string
     description: "ESP_LOGx tag for shell-layer messages"
-  board_requested:
-    value: "JC1060P470C"
-    type: string
-    description: "User-requested board name"
-  board_detected:
-    value: "ESP32-P4-Function-EV-Board"
-    type: string
-    description: "Board name detected from BSP component"
+  # Board identity is a per-board fact and lives in boards/<name>/board_config.h
+  # as BOARD_CFG_ID / BOARD_CFG_NAME / BOARD_CFG_DETECTED_NAME (see PORTING.md).
+  # It is intentionally NOT duplicated here so the profiles cannot drift.
   product_name:
     value: "P4MiniShell"
     type: string
@@ -40,9 +35,9 @@ shell_identity:
     type: string
     description: "Copyright/license notice surfaced by the `about` command and its license section"
   boot_message:
-    value: "P4MiniShell v0.31.0 ready | JC1060P470C | type help"
+    value: "P4MiniShell v1.2.0 ready | <BOARD_CFG_NAME> | type help"
     type: string
-    description: "Startup banner shown in transcript (assembled from P4_CONFIG_VERSION_STRING and P4_CONFIG_BOARD_REQUESTED in the C header)"
+    description: "Startup banner shown in transcript (assembled from P4_CONFIG_VERSION_STRING and the active board profile's BOARD_CFG_NAME in the C header)"
   shell_prompt:
     value: "PS \\> "
     type: string
@@ -254,7 +249,7 @@ buffers:
   spell_word_max:
     value: 64
     type: size_t
-    description: "Longest checkable word (P4_CONFIG_SPELL_WORD_MAX)"
+    description: "Retained for compatibility; token lookups compare any length directly, single-character included (P4_CONFIG_SPELL_WORD_MAX)"
     range: "8..128"
   spell_max_words:
     value: 65536
@@ -1250,9 +1245,9 @@ boot_scripting:
 # ---- Batch Engine and Environment ----
 batch_env:
   env_var_max:
-    value: 24
+    value: 64
     type: size_t
-    description: "Maximum RAM-only environment variables"
+    description: "Maximum RAM-only environment variables (sized above the largest reference app, SNAKE ~22, plus boot/alias vars; the table is shared across nested frames)"
     range: "1..128"
   env_name_bytes:
     value: 32
@@ -1623,6 +1618,11 @@ gpio_hardware:
     value: "ADC_ATTEN_DB_12"
     type: adc_atten_t
     description: "ADC attenuation for battery voltage reading"
+  battery_i2c_timeout_ms:
+    value: 100
+    type: int
+    description: "I2C transaction timeout for the INA226 fuel gauge on gauge boards (M5Stack Tab5). Read-only; the firmware never writes the charge rails."
+    range: "10..1000"
   battery_min_sleep_freq_mhz:
     value: 40
     type: int
@@ -2124,6 +2124,11 @@ task_stacks:
     type: int
     description: "Bounded wait per segment of a UART transcript mirror write. The mirror bypasses the IDF VFS (which drops the whole line on a false connection-monitor disconnect); this bound stops a stalled TX ring from wedging the writer."
     range: "0..1000"
+  uart_write_total_ms:
+    value: 10000
+    type: int
+    description: "Total budget for one shell_uart_console_write_bytes() payload, used by the binary send/screenshot path. Partial writes are retried so transient TX backpressure cannot truncate a multi-megabyte frame; the writer gives up only after this many ms with no progress. The transcript mirror does not use this bound."
+    range: "0..60000"
   uart_mirror_disconnect_grace_ms:
     value: 2000
     type: int

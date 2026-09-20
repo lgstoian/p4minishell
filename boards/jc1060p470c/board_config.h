@@ -21,6 +21,20 @@
 
 #include "driver/gpio.h"
 
+// ---- Board identity ----
+// BOARD_CFG_ID is the machine-readable profile slug used by the host tools to
+// map a COM port to a board (see tools/board_ports.py + PORTING.md). It must
+// match the boards/<name>/ directory name and the -DP4_BOARD= value.
+#define BOARD_CFG_ID "jc1060p470c"
+#define BOARD_CFG_NAME "JC1060P470C"
+#define BOARD_CFG_DETECTED_NAME "ESP32-P4-Function-EV-Board"
+
+// ---- BSP backend selector ----
+// 0 = ESP32-P4 Function EV Board managed BSP (espressif__esp32_p4_function_ev_board).
+// Set to 1 on the M5Stack Tab5 profile. Consumed by board_bsp.h and the
+// board-conditional adapters in display/storage/clock.
+#define BOARD_CFG_BSP_M5STACK_TAB5 0
+
 // ---- I2C bus (shared by GT911 touch and onboard peripherals) ----
 #define BOARD_CFG_I2C_PORT 1
 #define BOARD_CFG_I2C_SDA_GPIO GPIO_NUM_7
@@ -43,6 +57,7 @@
 
 #define BOARD_CFG_LCD_WIDTH 1024
 #define BOARD_CFG_LCD_HEIGHT 600
+#define BOARD_CFG_DISPLAY_DEFAULT_ROTATION 0
 #define BOARD_CFG_LCD_PIXEL_CLOCK_MHZ 80
 #define BOARD_CFG_LCD_HSYNC 1344
 #define BOARD_CFG_LCD_HBP 160
@@ -72,6 +87,9 @@
 #define BOARD_CFG_TOUCH_MIRROR_Y 0
 
 #define BOARD_CFG_BATTERY_ADC_GPIO GPIO_NUM_53
+/* Preprocessor-friendly battery-sense presence flag (GPIO_NUM_NC is an enum,
+ * so it cannot be compared in an #if). 1 = an ADC divider is wired. */
+#define BOARD_CFG_BATTERY_ADC_PRESENT 1
 #define BOARD_CFG_BATTERY_DIVIDER_NUMERATOR 2
 #define BOARD_CFG_BATTERY_DIVIDER_DENOMINATOR 1
 #define BOARD_CFG_BATTERY_EMPTY_MV 3300
@@ -85,6 +103,7 @@
 #define BOARD_CFG_RGB_LED_IS_WS2812 1
 
 #define BOARD_CFG_CAMERA_SUPPORTED 0
+#define BOARD_CFG_IMU_SUPPORTED 0
 
 #define BOARD_CFG_APP_BUFFER_DMA 1
 #define BOARD_CFG_APP_BUFFER_SPIRAM 1
@@ -100,6 +119,22 @@
 #define BOARD_CFG_SPIFFS_PARTITION_LABEL "storage"
 #define BOARD_CFG_SPIFFS_MAX_FILES 5
 #define BOARD_CFG_SPIFFS_FORMAT_ON_MOUNT_FAIL 0
+
+// ---- External RTC ----
+// No external RTC is fitted on the reference board; the clock falls back to the
+// ESP32-P4 internal RTC + NVS anchor. See P4_CONFIG_RTC_EXT_* in
+// p4minishell_config.h for the DS3231-class hook.
+#define BOARD_CFG_RTC_EXT_ENABLE 0
+#define BOARD_CFG_RTC_USE_BSP_I2C 0
+#define BOARD_CFG_RTC_EXT_ADDR 0x68
+#define BOARD_CFG_RTC_EXT_SDA (-1)
+#define BOARD_CFG_RTC_EXT_SCL (-1)
+#define BOARD_CFG_RTC_EXT_PORT 0
+
+// ---- Tab5Keyboard module (not present on this board) ----
+#define BOARD_CFG_TAB5KBD_PRESENT 0
+#define BOARD_CFG_TAB5KBD_I2C_ADDR 0x6D
+#define BOARD_CFG_TAB5KBD_INT_GPIO GPIO_NUM_NC
 
 // ---- MicroSD SDMMC pins (slot 0, 4-bit) ----
 // Consumed by the BSP uSD block (BSP_SD_*); the mount point above stays the
@@ -122,5 +157,5 @@
 #define BOARD_CFG_HOSTED_SDIO_CLK_GPIO GPIO_NUM_18
 #define BOARD_CFG_HOSTED_SDIO_CMD_GPIO GPIO_NUM_19
 #define BOARD_CFG_HOSTED_SDIO_SLOT 1
-// C6 reset line: P4_CONFIG_C6_HOST_RESET_GPIO (p4minishell_config.h) stays the
-// tunable; it must match CONFIG_ESP_HOSTED_HOST_RESET_GPIO in sdkconfig.
+// C6 reset line. Must match CONFIG_ESP_HOSTED_HOST_RESET_GPIO in sdkconfig.
+#define BOARD_CFG_C6_HOST_RESET_GPIO GPIO_NUM_54

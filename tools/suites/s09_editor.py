@@ -74,6 +74,7 @@ def _wait_field(dev, key, want, timeout=15.0):
 
 def run(dev, ctx):
     c = Checklist(NAME)
+    disp_w, disp_h = dev.display_size()
     created = [FILE_A, FILE_C, FILE_D, FILE_BIG]
 
     def shot(name):
@@ -105,11 +106,11 @@ def run(dev, ctx):
 
         bmp = shot("s09_editor_open")
         if bmp is not None:
-            c.equals("editor screenshot width", bmp.width, 1024)
-            c.equals("editor screenshot height", bmp.height, 600)
+            c.equals("editor screenshot width", bmp.width, disp_w)
+            c.equals("editor screenshot height", bmp.height, disp_h)
             c.check("editor surface visible",
-                    sum(bmp.region_mean(0, 40, 1024, 480)) > 10,
-                    "mean=%r" % (bmp.region_mean(0, 40, 1024, 480),))
+                    sum(bmp.region_mean(0, 40, disp_w, disp_h - 40 * 2)) > 10,
+                    "mean=%r" % (bmp.region_mean(0, 40, disp_w, disp_h - 40 * 2),))
         else:
             c.check("editor screenshot captured", False, "screenshot failed")
 

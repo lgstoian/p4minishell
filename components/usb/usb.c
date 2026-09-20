@@ -15,6 +15,7 @@
 #include <wchar.h>
 
 #include "esp_err.h"
+#include "strutil.h"
 #include "esp_intr_alloc.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
@@ -249,50 +250,6 @@ static void usb_notify_headerf(uint32_t timeout_ms, const char *format, ...)
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     usb_host_notify_header(buffer, timeout_ms);
-}
-
-static bool usb_text_equals_ignore_case(const char *left, const char *right)
-{
-    if (left == NULL || right == NULL) {
-        return false;
-    }
-
-    while (*left != '\0' && *right != '\0') {
-        if (tolower((unsigned char)*left) != tolower((unsigned char)*right)) {
-            return false;
-        }
-        left++;
-        right++;
-    }
-
-    return *left == '\0' && *right == '\0';
-}
-
-static int usb_split_args(char *text, char **argv, int max_args)
-{
-    int argc = 0;
-    char *cursor = text;
-
-    while (cursor != NULL && *cursor != '\0' && argc < max_args) {
-        while (isspace((unsigned char)*cursor)) {
-            cursor++;
-        }
-
-        if (*cursor == '\0') {
-            break;
-        }
-
-        argv[argc++] = cursor;
-        while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
-            cursor++;
-        }
-        if (*cursor != '\0') {
-            *cursor = '\0';
-            cursor++;
-        }
-    }
-
-    return argc;
 }
 
 static void usb_wide_to_ascii(const wchar_t *input, char *output, size_t output_size)
@@ -1529,29 +1486,29 @@ void usb_handle_command(char *command)
     }
 
     snprintf(buffer, sizeof(buffer), "%s", command);
-    argc = usb_split_args(buffer, argv, 6);
+    argc = strutil_split_args(buffer, argv, 6);
     if (argc <= 1) {
         usb_status();
         usb_print_usage();
         return;
     }
 
-    if (usb_text_equals_ignore_case(argv[1], "status")) {
+    if (strutil_text_equals_ignore_case(argv[1], "status")) {
         usb_status();
         return;
     }
 
-    if (usb_text_equals_ignore_case(argv[1], "ls")) {
+    if (strutil_text_equals_ignore_case(argv[1], "ls")) {
         usb_msc_ls(argc >= 3 ? argv[2] : NULL);
         return;
     }
 
-    if (usb_text_equals_ignore_case(argv[1], "keyboard")) {
-        if (argc >= 3 && usb_text_equals_ignore_case(argv[2], "on")) {
+    if (strutil_text_equals_ignore_case(argv[1], "keyboard")) {
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "on")) {
             usb_hid_keyboard_enable();
             return;
         }
-        if (argc >= 3 && usb_text_equals_ignore_case(argv[2], "off")) {
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "off")) {
             usb_hid_keyboard_disable();
             return;
         }
@@ -1559,12 +1516,12 @@ void usb_handle_command(char *command)
         return;
     }
 
-    if (usb_text_equals_ignore_case(argv[1], "mouse")) {
-        if (argc >= 3 && usb_text_equals_ignore_case(argv[2], "on")) {
+    if (strutil_text_equals_ignore_case(argv[1], "mouse")) {
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "on")) {
             usb_hid_mouse_enable();
             return;
         }
-        if (argc >= 3 && usb_text_equals_ignore_case(argv[2], "off")) {
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "off")) {
             usb_hid_mouse_disable();
             return;
         }

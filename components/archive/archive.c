@@ -327,32 +327,6 @@ static int64_t archive_fat_to_unix(uint16_t fdate, uint16_t ftime)
 }
 
 /** mkdir -p over a resolved VFS directory. Missing parents are created. */
-static esp_err_t archive_mkdir_p(const char *vfs_dir)
-{
-    char *tmp = archive_alloc(P4_CONFIG_SD_PATH_BYTES);
-    esp_err_t error = ESP_OK;
-
-    if (tmp == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    snprintf(tmp, P4_CONFIG_SD_PATH_BYTES, "%s", vfs_dir);
-    for (char *p = tmp + 1; *p != '\0'; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            if (mkdir(tmp, 0775) != 0 && errno != EEXIST) {
-                error = ESP_FAIL;
-                break;
-            }
-            *p = '/';
-        }
-    }
-    if (error == ESP_OK && mkdir(tmp, 0775) != 0 && errno != EEXIST) {
-        error = ESP_FAIL;
-    }
-    heap_caps_free(tmp);
-    return error;
-}
-
 /** Parent directory of @p vfs_path (no trailing slash). */
 static void archive_parent_dir(const char *vfs_path, char *out, size_t out_size)
 {
@@ -1084,7 +1058,7 @@ esp_err_t archive_extract(const char *archive_path, const char *dest_dir,
     if (shell_sd_begin(&session) != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (archive_mkdir_p(dest_dir) != ESP_OK) {
+    if (storage_mkdir_p(dest_dir) != ESP_OK) {
         shell_sd_end(&session, "archive");
         return ESP_FAIL;
     }
@@ -1142,7 +1116,7 @@ esp_err_t archive_extract(const char *archive_path, const char *dest_dir,
                     error = ESP_FAIL;
                     break;
                 }
-                if (archive_mkdir_p(dest) != ESP_OK) {
+                if (storage_mkdir_p(dest) != ESP_OK) {
                     stats->skipped++;
                 } else {
                     stats->dirs++;
@@ -1156,7 +1130,7 @@ esp_err_t archive_extract(const char *archive_path, const char *dest_dir,
                 bool ok = false;
 
                 archive_parent_dir(dest, parent, sizeof(parent));
-                if (archive_mkdir_p(parent) != ESP_OK) {
+                if (storage_mkdir_p(parent) != ESP_OK) {
                     if (!archive_reader_skip(&r, e.size)) {
                         error = ESP_FAIL;
                         break;

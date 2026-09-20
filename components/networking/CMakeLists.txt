@@ -24,4 +24,5 @@ idf_component_register(
         lwip
         nvs_flash
         storage
+        strutil
 )

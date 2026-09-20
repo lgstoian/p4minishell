@@ -7,5 +7,5 @@ idf_component_register(
         storage
         esp_timer
         freertos
-        espressif__esp32_p4_function_ev_board
+        board_bsp
 )

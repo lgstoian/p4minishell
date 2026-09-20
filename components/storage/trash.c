@@ -578,33 +578,23 @@ static int trash_resolve_cb(const trash_entry_t *entry, void *arg)
     return 0;
 }
 
-/** Recursively create missing parent directories of an absolute path. */
+/** Recursively create the parent directories of an absolute file path. */
 static esp_err_t trash_mkdir_parents(const char *path)
 {
-    char copy[TRASH_PATH_BYTES];
-    char *cursor;
+    char copy[TRASH_FULL_PATH_BYTES];
+    char *slash;
 
     if (path == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    strncpy(copy, path, sizeof(copy) - 1);
-    copy[sizeof(copy) - 1] = '\0';
-    /* Trim trailing slashes. */
-    cursor = copy + strlen(copy);    while (cursor > copy && *(cursor - 1) == '/') {
-        *--cursor = '\0';
+    snprintf(copy, sizeof(copy), "%s", path);
+    slash = strrchr(copy, '/');
+    if (slash == NULL || slash == copy) {
+        return ESP_OK;
     }
-    cursor = copy;
-    while (*cursor != '\0') {
-        if (*cursor == '/') {
-            *cursor = '\0';
-            if (cursor != copy) {
-                (void)mkdir(copy, 0775);
-            }
-            *cursor = '/';
-        }
-        cursor++;
-    }
-    return ESP_OK;
+    *slash = '\0';
+    /* One shared mkdir -p (opens its own guarded session; nested is safe). */
+    return storage_mkdir_p(copy);
 }
 
 esp_err_t storage_trash_restore(const char *name_or_index)

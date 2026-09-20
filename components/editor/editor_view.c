@@ -689,54 +689,14 @@ static void editor_emit_break(void)
     }
 }
 
-/** ASCII letter test for spellcheck tokenization. */
-static bool editor_spell_is_word_char(char c)
-{
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
-}
-
-/** Emit [start, start+len) of @p text, splitting at wrap chunk bounds. */
-static void editor_emit_span(const char *text, size_t start, size_t len,
-                             ansi_color_index_t color, unsigned attrs)
+/** Emit [start, start+len) split at wrap chunk bounds (the widths table
+ *  must be cached for s_emit_row). Falls back to one whole run when the
+ *  cache is lost. */
+static void editor_emit_text_chunks(const char *text, size_t start, size_t len,
+                                    ansi_color_index_t color, unsigned attrs)
 {
     size_t off = 0;
 
-    if (!s_emit_wrap || len == 0) {
-        if (len > 0) {
-            /* Spellcheck underlines split the run at word boundaries. Only
-             * the non-wrapping path applies it (wrap+spell is not combined;
-             * the toggle reports that honestly at the call site). */
-            if (s_editor_view.spell && editor_spell_ready()) {
-                size_t i = 0;
-                while (i < len) {
-                    size_t ws = i;
-                    while (ws < len && !editor_spell_is_word_char(text[start + ws])) {
-                        ws++;
-                    }
-                    if (ws > i) {
-                        editor_add_run(text + start + i, ws - i, color, attrs);
-                    }
-                    if (ws >= len) {
-                        break;
-                    }
-                    {
-                        size_t we = ws;
-                        bool miss;
-                        while (we < len && editor_spell_is_word_char(text[start + we])) {
-                            we++;
-                        }
-                        miss = !editor_spell_ok(text + start + ws, we - ws);
-                        editor_add_run(text + start + ws, we - ws, color,
-                                       attrs | (miss ? ANSI_ATTR_UNDERLINE : 0u));
-                        i = we;
-                    }
-                }
-            } else {
-                editor_add_run(text + start, len, color, attrs);
-            }
-        }
-        return;
-    }
     if (s_editor_view.widths == NULL ||
         s_editor_view.width_row != s_emit_row) {
         /* Widths lost (should not happen mid-render): emit whole. */
@@ -759,6 +719,104 @@ static void editor_emit_span(const char *text, size_t start, size_t len,
         if (off < len) {
             editor_emit_break();
             s_emit_remain = editor_wrap_px();
+        }
+    }
+}
+
+/** Emit one spell segment, honouring wrap chunking when active. */
+static void editor_emit_segment(const char *text, size_t start, size_t len,
+                                ansi_color_index_t color, unsigned attrs,
+                                bool miss)
+{
+    unsigned seg_attrs = attrs | (miss ? ANSI_ATTR_UNDERLINE : 0u);
+
+    if (!s_emit_wrap) {
+        editor_add_run(text + start, len, color, seg_attrs);
+    } else {
+        editor_emit_text_chunks(text, start, len, color, seg_attrs);
+    }
+}
+
+/** Emit [start, start+len) of @p text, splitting at wrap chunk bounds.
+ *
+ *  Spellcheck underlines split the run at word boundaries using the shared
+ *  codepoint-aware tokenizer in editor_spell.c (in-word `'`/`-`/U+2019
+ *  joiners keep `don't`/`well-known` whole; multi-byte sequences are never
+ *  split). Underlines compose with word-wrap: each word segment is chunked
+ *  separately, so the underline survives visual line breaks. */
+static void editor_emit_span(const char *text, size_t start, size_t len,
+                             ansi_color_index_t color, unsigned attrs)
+{
+    bool spell;
+    size_t i = 0;
+
+    if (len == 0) {
+        return;
+    }
+    spell = s_editor_view.spell && editor_spell_ready();
+    if (!spell) {
+        if (!s_emit_wrap) {
+            editor_add_run(text + start, len, color, attrs);
+        } else {
+            editor_emit_text_chunks(text, start, len, color, attrs);
+        }
+        return;
+    }
+    while (i < len) {
+        size_t ws = i;
+        /* Skip separators one codepoint at a time (never split UTF-8). */
+        while (ws < len) {
+            unsigned long cp = 0;
+            size_t step = editor_spell_utf8(text + start + ws, len - ws, &cp);
+            if (step == 0) {
+                step = 1;
+                cp = (unsigned char)text[start + ws];
+            }
+            if (editor_spell_is_letter(cp)) {
+                break;
+            }
+            ws += step;
+        }
+        if (ws > i) {
+            editor_emit_segment(text, start + i, ws - i, color, attrs, false);
+        }
+        if (ws >= len) {
+            break;
+        }
+        {
+            size_t we = ws;
+            bool miss;
+            /* Letter run, absorbing in-word joiners between letters so
+             * `don't`/`well-known` are one token, but never a trailing
+             * joiner. */
+            while (we < len) {
+                unsigned long cp = 0;
+                size_t step = editor_spell_utf8(text + start + we,
+                                                len - we, &cp);
+                if (step == 0) {
+                    break; /* Invalid byte ends the word. */
+                }
+                if (editor_spell_is_letter(cp)) {
+                    we += step;
+                    continue;
+                }
+                if (editor_spell_is_joiner(cp)) {
+                    size_t after = we + step;
+                    unsigned long next = 0;
+                    if (after >= len ||
+                        editor_spell_utf8(text + start + after,
+                                          len - after, &next) == 0 ||
+                        !editor_spell_is_letter(next)) {
+                        break;
+                    }
+                    we = after;
+                    continue;
+                }
+                break;
+            }
+            miss = !editor_spell_token_ok(text + start + ws, we - ws);
+            editor_emit_segment(text, start + ws, we - ws, color, attrs, miss);
+            i = we;
         }
     }
 }
@@ -1196,8 +1254,27 @@ static void editor_preview_show(void)
     editor_doc_selection_clear(doc);
     editor_build_selection();
     s_editor_view.preview = true;
-    /* Scroll back to the top for the fresh render. */
-    lv_obj_scroll_to_y(s_editor_view.surface, 0, LV_ANIM_OFF);
+    /* Scroll back to the top for the fresh render. In typewriter mode centre
+     * the source line's preview row instead, so focus+preview composes. */
+#if P4_CONFIG_EDITOR_FOCUS
+    if (s_editor_view.focus) {
+        editor_doc_t *d = s_editor_view.doc;
+        lv_coord_t lh = editor_reading_line_height();
+        lv_coord_t view_h = lv_obj_get_height(s_editor_view.surface);
+        size_t row = editor_doc_cursor_row(d);
+        lv_coord_t cy = (lv_coord_t)(row * (size_t)(lh > 0 ? lh : 1));
+        lv_coord_t target = cy - (view_h - lh) / 2;
+
+        if (target < 0) {
+            target = 0;
+        }
+        lv_obj_update_layout(s_editor_view.surface);
+        lv_obj_scroll_to_y(s_editor_view.surface, target, LV_ANIM_OFF);
+    } else
+#endif
+    {
+        lv_obj_scroll_to_y(s_editor_view.surface, 0, LV_ANIM_OFF);
+    }
     editor_status("preview (Ctrl+P to edit)");
 }
 
@@ -1589,9 +1666,20 @@ static void editor_focus_set(bool on)
     if (s_editor_view.focus == on) {
         return;
     }
+#if !P4_CONFIG_EDITOR_FOCUS
+    /* Compiled out: do not flip a flag that nothing consumes and then report
+     * a mode that is not active. */
+    editor_status("focus mode disabled (P4_CONFIG_EDITOR_FOCUS=0)");
+    return;
+#endif
     s_editor_view.focus = on;
     editor_focus_apply(on);
     if (s_editor_view.doc != NULL) {
+        if (s_editor_view.preview) {
+            /* Preview scrolls to the top on entry and owns the surface; exit
+             * it so typewriter centering applies to the source view. */
+            editor_preview_exit();
+        }
         editor_ensure_cursor_visible();
     }
     editor_status("focus %s", on ? "on" : "off");

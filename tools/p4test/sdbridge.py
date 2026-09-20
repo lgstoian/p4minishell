@@ -61,18 +61,27 @@ def push_file(dev: DeviceSession, remote: str, data: bytes,
 
 
 def push_local(dev: DeviceSession, local: str, remote: Optional[str] = None,
-               retries: int = 3) -> None:
+               retries: int = 4) -> None:
     remote = remote or os.path.basename(local)
     with open(local, "rb") as fh:
         data = fh.read()
     last = None
-    for _ in range(retries):
+    for attempt in range(retries):
         try:
             push_file(dev, remote, data)
             return
         except P4Error as exc:
             last = exc
-            time.sleep(1.5)
+            # The device removes a partial destination on a failed transfer, so
+            # a retry is clean. Drain any trailing footer/newline left by the
+            # aborted exchange and settle before re-issuing, or the next READY
+            # marker can be missed and every retry fails the same way.
+            try:
+                dev.reset_input()
+                dev.read_for(0.4)
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(1.5 + attempt)
     raise P4Error("push %s failed after %d retries: %s" % (remote, retries, last))
 
 

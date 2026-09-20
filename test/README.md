@@ -3,7 +3,7 @@
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
 
-Current baseline: **375 tests, 0 failures, 2 ignored** (verify with
+Current baseline: **389 tests, 0 failures, 2 ignored** (verify with
 `tools/unit_run.py <COM_PORT>`). The runner completes cleanly with
 `=== All tests completed ===` and no reboot; if the board is reset-looping,
 check for a newly added test that calls an LVGL/heap path before `lv_init()`.

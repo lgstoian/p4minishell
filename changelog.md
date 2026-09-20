@@ -14,11 +14,15 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
-## [1.2.0] - Unreleased
+## [1.2.0] - 2026-09-20
 
-Writerdeck milestone (roadmap section B). Additive only — no existing
-feature removed. See [`roadmap.md`](roadmap.md) and
-[`tutorial_edit.md`](tutorial_edit.md).
+Writerdeck milestone (roadmap section B) and the two-board bring-up: the
+M5Stack Tab5 is now a first-class `-DP4_BOARD` target with full on-board
+hardware (display/touch, audio, RTC, keyboard + LEDs, INA226 gauge + charging,
+BMI270 IMU, SC202CS MIPI-CSI camera, hosted C6 Wi-Fi/BLE) alongside the
+JC1060P470C reference. Additive only — no existing feature removed. See
+[`roadmap.md`](roadmap.md), [`tutorial_edit.md`](tutorial_edit.md), and
+[`PORTING.md`](PORTING.md) §6.
 
 ### Added
 
@@ -26,8 +30,10 @@ feature removed. See [`roadmap.md`](roadmap.md) and
   and on-screen keyboard, keeps the caret vertically centred, and shows a live
   word count in the status bar. Toggle in-session from the keyboard/touch.
 - **Markdown export** (`markdown export <src> <out> [text|html|print]`):
-  renders a `.md` file to plain text (ANSI stripped), HTML (headings, lists,
-  quotes, code, tables, links), or a fixed-page **print** layout (80x60 with a
+  renders a `.md` file to plain text (ANSI stripped), a standalone HTML
+  reader page (`<!DOCTYPE html>` wrapper with embedded CSS, `<title>` from
+  the source basename; the fragment renderer stays the single body
+  implementation), or a fixed-page **print** layout (80x60 with a
   `Page N` header and form feeds), written atomically.
 - **Reading typography**: a `reading` font role (proportional/serif) applied
   to the modal viewer and the editor markdown preview, with reader line
@@ -38,9 +44,71 @@ feature removed. See [`roadmap.md`](roadmap.md) and
   an internal DMA bounce buffer.
 - **Document templates**: shared `sd:/TEMPLATES/` root, `edit <file>
   /template <name>`, and the `WRITER.BAT` reference app.
+- **Spell wordlist sample + push tool**: curated `apps/dicts/en.words`
+  pushed by `python apps/push_dicts.py <COM_PORT>` to `sd:/DICTS/`.
+- **M5Stack Tab5 board profile** (`boards/m5stack_tab5/`): a second selectable
+  `-DP4_BOARD` target with its own `board_config.h/.yaml`,
+  `sdkconfig.defaults`, a staged `board_bsp` (vendored, trimmed Espressif
+  `m5stack_tab5` BSP), a per-board `sdkconfig.<board>`, and the Tab5Keyboard
+  I2C component. Peripherals: 1280x720 MIPI-DSI with runtime
+  ILI9881C/ST7123/ST7121 panel auto-detect, ES8388 audio, RX8130CE RTC,
+  MicroSD, and hosted C6 Wi-Fi + BLE. See `PORTING.md` §6.
+- **Board-aware tooling**: `tools/board_ports.py` resolves board↔COM by USB
+  serial + live `sysinfo`, and `sysinfo` now reports `board.id` /
+  `board.requested_name` / `board.detected_name`.
+- **M5Stack Tab5 on-board hardware support**: the INA226 pack fuel gauge
+  (`components/power_monitor/`, read-only; `battery` shows voltage/current/
+  power/charge and the header shows SoC), the Tab5Keyboard module
+  (`components/tab5kbd/`: HID key input on the expansion I2C bus plus the two
+  RGB LEDs), the keyboard RGB wired into the status engine and the `rgb`
+  command (`BOARD_CFG_RGB_VIA_TAB5KBD`), and the RX8130CE RTC (the external-RTC
+  hook gained the RX8130CE register map). The camera and IMU arrived in "round
+  two" below. The co-processor firmware this project
+  ships is built from its own `coprocessor/esp32c6_slave` project.
+- **Tab5 hardware round two**: the two keyboard RGB LEDs are now independently
+  addressable (`rgb 1|2 <r> <g> <b>`; LED1 is the status engine, LED2 a user
+  LED), a `shutdown`/`poweroff` command flushes state, darkens both LEDs, and
+  cuts the PMIC power latch (the reference board falls back to deep sleep), the
+  BMI270 IMU is exposed by a new `imu` command (accel/gyro + orientation, and
+  opt-in `imu rotate on|off` tilt auto-rotation; `imu read` also publishes
+  `IMU_*` environment variables for batch), the M5Stack Tab5 MIPI-CSI camera is
+  driven through `espressif/esp_video` (`camera init` + `camera snap <file.bmp>`,
+  BMP only; live preview is future work), the pack charge state is now honest
+  (charging/discharging/idle/full from the INA226 current instead of a
+  misread IO-expander pin), and the RX8130CE gained weekday/24 h handling plus
+  VBLF/AF/TF flag reporting in `rtc`. New leaf components: `components/imu/`,
+  `components/camera/`, `components/imagefmt/` (shared BMP/RGB565 helpers).
 
 ### Fixed
 
+- **Tab5 camera bring-up** (`bugs.md` F19): the first `camera init` failed a
+  sensor power-up race and frames were near-black. `camera_init` now settles
+  after enabling the camera rail and retries once, and the Tab5 profile enables
+  the esp_video ISP pipeline controller so RAW8 is auto-exposed. Verified
+  capturing a properly-exposed 1280x720 BMP.
+- **Tab5 battery charging** (`bugs.md` F20): the firmware never enabled the
+  charge path, so the pack stayed idle. Charging is now enabled once at boot
+  (`board_bsp_charge_enable`, PI4IOE5V6408 P7/P5), matching the M5Stack
+  reference, and the charge state follows the vendor convention: discharging
+  when current flows out, full at the full threshold, otherwise **charging** (so
+  a pack on external power reads `charging` even when the source supplies no net
+  current).
+- **Status header Wi-Fi indicator was always red** (`bugs.md` F21): when the
+  hosted path could not report an RSSI it was treated as an error even while
+  associated. `header_status_wifi_tone()` now maps the unknown-RSSI sentinel to
+  the connected tone.
+- **On-screen keyboard only hid for USB keyboards** (`bugs.md` F22): the shell
+  now hides it for **any** physical keyboard via a combined
+  `physical_keyboard_present` op (USB HID, connected Bluetooth HID keyboard, or
+  the M5Stack Tab5 keyboard).
+- **Tab5 boot loop on SNTP sync** (`bugs.md` F17): the SNTP notification
+  callback runs on the lwIP `tcpip_thread`, whose stack is in PSRAM on the Tab5
+  (`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`), so the NVS anchor write from
+  `clock_rtc_note_synced()` triggered
+  `assert(spi_flash_disable_interrupts_caches... esp_task_stack_is_sane_cache_disabled())`
+  and rebooted the board every time Wi-Fi synced. The anchor is now deferred to
+  a one-shot esp_timer (internal-RAM stack); verified `sntp`/`date` report
+  `synced` with no reboot.
 - **Spellcheck wordlist load crashed the board** (`bugs.md` W1): `fread` was
   handed a PSRAM buffer (SD reads need DMA-capable internal memory) and
   `bsearch` reused the `qsort` comparator, which misread the search key as a
@@ -54,6 +122,97 @@ feature removed. See [`roadmap.md`](roadmap.md) and
   `markdown_strip_ansi(rendered, rendered, ...)` in place, but the function
   NUL-terminates its destination before reading the source, so the same buffer
   always emptied. Renders into a separate buffer now.
+- **A full batch environment stalled the command worker to a watchdog**
+  (`bugs.md` W2, pre-existing): the 24-slot environment was smaller than a
+  single reference app (`SNAKE` ~22) and the table is global across frames, so
+  a failed `set /a` left a game loop spinning until the IDLE0 watchdog
+  aborted. The cap is now 64 and the slot table is heap-allocated (PSRAM
+  first) so the larger table does not starve the command-worker stack.
+- **`DIAG.BAT` benchmark always failed** (`bugs.md` W2): `:bench` opened the
+  gfx canvas while the menu's `draw` TUI surface was still active, so
+  `gfx init` was refused and `perf`'s DIAG step hung. `:bench` now closes the
+  draw surface first. Verified: `perf` suite 16/16 (was 0/1 panic).
+- **Spell tokenizer was ASCII-only and dropped wrap underlines**: word chars
+  are now codepoint-aware (Latin/Greek/Cyrillic/CJK letters, in-word
+  `'`/`-`/U+2019 joiners, multi-byte sequences never split); lookups accept
+  any token length including single characters; contractions pass when their
+  parts do; CJK/digit/`_`/`non-ASCII-Latin` tokens are never flagged; and
+  underlines compose with word-wrap. Pure helpers unit-tested
+  (`test_editor_spell_tokenizer`).
+- **`WRITER.BAT` demoed less than it claimed**: it now seeds its demo
+  document from `TEMPLATES/NOTE.MD` (mirroring `edit /template`), renders it
+  with `markdown` (the preview engine), exports all three formats, verifies
+  `DICTS/en.words`, fails loudly (`ERR=1`) on any missing push, and documents
+  the interactive-only steps (`/focus`, preview, `Spell`) with exact
+  commands. Header rewritten to match the body.
+- **Writerdeck provisioning was undiscoverable**: `readme.md` now names every
+  push (`push_fonts.py`, `apps/push_templates.py`, `apps/push_dicts.py`),
+  lists `TEMPLATES/` + `DICTS/` in the SD layout, and states the fallbacks.
+- **Stale writerdeck docs**: `command.md` editor limits corrected to
+  1 MB / 65536, export caps/refusals, the 96 KB Markdown-only preview gate,
+   and the template-ignore rules documented; `tutorial_edit.md` §18 gained
+   writerdeck troubleshooting.
+- **Tab5 Wi-Fi/BT failed on the first hosted RPC** (new board): the first
+  `esp_hosted` RPC issued immediately after a fresh connect timed out at the
+  SDIO layer (`sdmmc_send_cmd 0x107`, the slave held DAT0 through its power-on
+  auto-init), so the version gate aborted Wi-Fi even though the link was
+  healthy. `components/networking/` now resets the hosted transport
+  (`esp_hosted_deinit()` + init + connect) and retries the version read once on
+  failure. Failure-only, so the reference board path is unchanged. Verified on
+  hardware: Tab5 `wifi scan` finds APs and `bt enable` synchronizes with the C6
+  (fw 3.0.6); reference board unit suite stays 384/0/2.
+- **Switching `-DP4_BOARD` in a reused build directory kept the previous
+  board's `SDKCONFIG`** (build system): `SDKCONFIG` was cached and only set
+  when empty, so a later `idf.py -DP4_BOARD=<other>` silently built against the
+  first board's `sdkconfig.<board>`. It is now re-derived from `P4_BOARD` on
+  every configure (override with `-DP4_SDKCONFIG=<path>`), in both the firmware
+  and test projects.
+- **Tab5 C6 shipped with factory v2.3.0**: documented the one-time standalone
+  flasher required to move the C6 to a host-compatible ESP-Hosted 3.x image
+  (`c6ota` cannot do it — an SD-sourced transfer wedges the shared SDMMC bus),
+  and attributed the vendored Tab5 BSP in `licence.md`.
+- **`about.display` advertised the reference panel on the Tab5** (identity
+  drift): the line was hardcoded; it now reports the live panel/touch/resolution
+  from `display_get_info()` (`ST7123 720x1280` on the Tab5).
+- **Synthetic touch taps hit the mirror key on a rotated display**: the uitest
+  pointer indev fed logical coordinates, which LVGL rotates again
+  (`lv_display_rotate_point`); it now converts logical targets to native panel
+  coordinates, so `ui tap`/`ui key`/`ui targets` agree on the Tab5 (rotation 90)
+  as well as the reference board (rotation 0).
+- **Recovering Tab5 first RPC logged a spurious Wi-Fi warning**: the version
+  read now reports only on the terminal retry, so a successful transport-reset
+  recovery stays quiet.
+- **Vendored Tab5 BSP warned that SD long filenames were disabled**: the guard
+  used the legacy `CONFIG_FATFS_LONG_FILENAMES`; it now tests
+  `CONFIG_FATFS_LFN_NONE`, so the false warning is gone.
+- **Host harness made board-aware for two-board runs**: `board_ports.py`
+  strips ANSI before parsing `board.id`; the suites read geometry/board name/RGB
+  from `sysinfo` (`Device.display_size/board_id/rgb_available`) instead of
+  hardcoding the reference panel; `ui_touch_test` locates the input row
+  relative to the keyboard; `deep_test` uses the shared `shell_session`
+  reset; `regression.py` deploys the pkg bundles before the pkg test; and
+  `visual_sweep.py` writes per-port output (`screenshots/visual/<PORT>`).
+- **Tab5 hosted-SDIO TX credit storm tripped the task watchdog**: a managed patch
+  to esp_hosted's SDIO credit loop (tracked in `tools/managed_patches.patch`)
+  rate-limits the per-poll `sdio_get_tx_buffer_num` error to once a second and
+  replaces the sub-tick `esp_rom_delay_us` busy-wait with a real 1 ms tick delay,
+  so a stalled slave can no longer flood the console or starve IDLE. The
+  existing single transport-reset retry is enough to recover; an attempted
+  hard-reset + two-attempt loop was reverted because it could hang Wi-Fi when
+  the C6 was unresponsive.
+- **Screenshot/send frames were truncated under TX backpressure**: the binary
+  path now writes through a shared `shell_uart_console_write_bytes()` that
+  completes partial writes under a bounded total wait (`components/shell/`).
+  The transcript mirror stays strictly non-blocking (retrying there starved the
+  console reader and wedged the P4 USB-Serial/JTAG).
+- **`read_binary_frame` desynced on an interleaved log line**: it now scans the
+  stream for the frame magic instead of assuming the next bytes are the header.
+- **`sdbridge.push_local` could not re-sync after a failed SD push**: it now
+  drains the port and backs off between retries.
+- **Removed the duplicated string helpers (`strutil`) and `mkdir -p` variants
+  (`storage_mkdir_p`)**: new leaf `components/strutil/`; five `mkdir -p` copies
+  unified in `components/storage/`. `md_render_table`'s scratch table is now a
+  heap block (reentrant).
 
 ---
 

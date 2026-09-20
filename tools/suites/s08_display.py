@@ -114,6 +114,7 @@ def _make_bmp(w, h, rgb):
 # ---------------------------------------------------------------------------
 def run(dev, ctx):
     c = Checklist(NAME)
+    disp_w, disp_h = dev.display_size()
     created = [GFX_BMP, PLOT_BMP]
     initial_theme = "default"
     initial_hdr = "auto"
@@ -196,8 +197,8 @@ def run(dev, ctx):
 
         tui_shot = shot("s08_tui")
         if tui_shot is not None:
-            c.equals("TUI screenshot width", tui_shot.width, 1024)
-            c.equals("TUI screenshot height", tui_shot.height, 600)
+            c.equals("TUI screenshot width", tui_shot.width, disp_w)
+            c.equals("TUI screenshot height", tui_shot.height, disp_h)
             bright = tui_shot.count_near(0, 40, 1024, 480, (200, 204, 200), tol=32)
             c.check("TUI text visible on screen", bright > 0, "white px=%d" % bright)
         dev.run("draw close")
@@ -253,8 +254,8 @@ def run(dev, ctx):
 
         gfx_shot = shot("s08_gfx")
         if gfx_shot is not None:
-            c.equals("gfx screenshot width", gfx_shot.width, 1024)
-            c.equals("gfx screenshot height", gfx_shot.height, 600)
+            c.equals("gfx screenshot width", gfx_shot.width, disp_w)
+            c.equals("gfx screenshot height", gfx_shot.height, disp_h)
             magenta = gfx_shot.count_near(0, 40, 1024, 480, (248, 0, 248), tol=40)
             c.check("gfx canvas sprite visible", magenta > 0, "magenta px=%d" % magenta)
 
@@ -346,8 +347,8 @@ def run(dev, ctx):
         dev.run('plot func "X" 15')
         plot_shot = shot("s08_plot_tui")
         if plot_shot is not None:
-            c.equals("plot TUI screenshot width", plot_shot.width, 1024)
-            c.equals("plot TUI screenshot height", plot_shot.height, 600)
+            c.equals("plot TUI screenshot width", plot_shot.width, disp_w)
+            c.equals("plot TUI screenshot height", plot_shot.height, disp_h)
             # A plot is a thin line on the (near-black) TUI background, so the
             # whole-region mean is low even when the plot is drawn. Require a
             # clearly non-blank region rather than a bright one.

@@ -50,6 +50,7 @@ idf_component_register(
         test_theme.c
         test_header.c
         test_clock.c
+        test_hardware.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"
@@ -70,6 +71,10 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/markdown"
         "${CMAKE_SOURCE_DIR}/../components/filetype"
         "${CMAKE_SOURCE_DIR}/../components/gfx"
+        "${CMAKE_SOURCE_DIR}/../components/imu/include"
+        "${CMAKE_SOURCE_DIR}/../components/power_monitor/include"
+        "${CMAKE_SOURCE_DIR}/../components/imagefmt/include"
+        "${CMAKE_SOURCE_DIR}/../components/header"
     REQUIRES
         unity
         shell
@@ -90,6 +95,10 @@ idf_component_register(
         filetype
         gfx
         usb
+        imu
+        power_monitor
+        imagefmt
+        header
         esp_timer
         mbedtls
 )

@@ -388,6 +388,17 @@ void clock_command_rtc(int argc, char **argv)
         clock_emit_field("Ext chip:", "%s",
                          ext > 0 ? "present" : (ext == 0 ? "absent/unconfigured" : "not probed"));
     }
+    {
+        unsigned flags = 0;
+        if (clock_rtc_ext_flags(&flags) == ESP_OK) {
+            char text[48];
+            snprintf(text, sizeof(text), "%s%s%s",
+                     (flags & CLOCK_RTC_FLAG_VBLF) ? "VBLF " : "",
+                     (flags & CLOCK_RTC_FLAG_AF) ? "AF " : "",
+                     (flags & CLOCK_RTC_FLAG_TF) ? "TF " : "");
+            clock_emit_field("Ext flags:", "%s", (text[0] != '\0') ? text : "none");
+        }
+    }
     clock_emit_field("SNTP:", "%s", time_is_synchronized() ? "synced" : "not synced");
     clock_emit_muted("rtc anchor forces an NVS anchor write now");
 }

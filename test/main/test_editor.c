@@ -14,6 +14,7 @@
 
 #include "unity.h"
 #include "editor.h"
+#include "editor_spell.h"
 #include "editor_view.h"
 #include "shell.h"
 #include <stdlib.h>
@@ -1016,6 +1017,52 @@ void test_editor_lex_markdown(void)
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown(NULL, 4, runs, 16));
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown("abc", 3, NULL, 16));
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown("abc", 3, runs, 0));
+}
+
+void test_editor_spell_tokenizer(void)
+{
+    unsigned long cp = 0;
+
+    /* UTF-8 decode: ASCII, 2/3/4-byte sequences, rejects, NUL. */
+    TEST_ASSERT_EQUAL_size_t(1, editor_spell_utf8("A", 1, &cp));
+    TEST_ASSERT_EQUAL_UINT32((unsigned long)'A', cp);
+    TEST_ASSERT_EQUAL_size_t(1, editor_spell_utf8("caf\xC3\xA9", 5, NULL));
+    cp = 0;
+    TEST_ASSERT_EQUAL_size_t(2, editor_spell_utf8("caf\xC3\xA9" + 3, 2, &cp));
+    TEST_ASSERT_EQUAL_UINT32(0xE9, cp);
+    cp = 0;
+    TEST_ASSERT_EQUAL_size_t(3, editor_spell_utf8("\xE6\x97\xA5", 3, &cp));
+    TEST_ASSERT_EQUAL_UINT32(0x65E5, cp);
+    cp = 0;
+    TEST_ASSERT_EQUAL_size_t(4, editor_spell_utf8("\xF0\x9F\x98\x80", 4, &cp));
+    TEST_ASSERT_EQUAL_UINT32(0x1F600, cp);
+    TEST_ASSERT_EQUAL_size_t(0, editor_spell_utf8("\xFF", 1, &cp));
+    TEST_ASSERT_EQUAL_size_t(0, editor_spell_utf8("\xE6\x97", 2, &cp));
+    TEST_ASSERT_EQUAL_size_t(0, editor_spell_utf8("", 1, &cp));
+    TEST_ASSERT_EQUAL_size_t(0, editor_spell_utf8(NULL, 0, &cp));
+
+    /* Letter classes: ASCII, Latin-1, Greek, CJK; digits/punct are not. */
+    TEST_ASSERT_TRUE(editor_spell_is_letter('a'));
+    TEST_ASSERT_TRUE(editor_spell_is_letter('Z'));
+    TEST_ASSERT_TRUE(editor_spell_is_letter(0xE9));
+    TEST_ASSERT_TRUE(editor_spell_is_letter(0x3B1));
+    TEST_ASSERT_TRUE(editor_spell_is_letter(0x65E5));
+    TEST_ASSERT_FALSE(editor_spell_is_letter('5'));
+    TEST_ASSERT_FALSE(editor_spell_is_letter(' '));
+    TEST_ASSERT_FALSE(editor_spell_is_letter('\''));
+
+    /* CJK detection (never flagged) vs accented Latin. */
+    TEST_ASSERT_TRUE(editor_spell_is_cjk(0x65E5));
+    TEST_ASSERT_TRUE(editor_spell_is_cjk(0x3042));
+    TEST_ASSERT_TRUE(editor_spell_is_cjk(0xAC00));
+    TEST_ASSERT_FALSE(editor_spell_is_cjk('a'));
+    TEST_ASSERT_FALSE(editor_spell_is_cjk(0xE9));
+
+    /* Joiners: ASCII quote/hyphen plus U+2019. */
+    TEST_ASSERT_TRUE(editor_spell_is_joiner('\''));
+    TEST_ASSERT_TRUE(editor_spell_is_joiner('-'));
+    TEST_ASSERT_TRUE(editor_spell_is_joiner(0x2019));
+    TEST_ASSERT_FALSE(editor_spell_is_joiner('a'));
 }
 
 void test_editor_word_count(void)

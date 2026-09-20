@@ -25,9 +25,13 @@
 #include "display.h"
 #include "audio.h"
 #include "networking.h"
+#include "power_monitor.h"
 #include "command.h"
+#include "clock.h"
+#include "led.h"
 #include "p4minishell_config.h"
 #include "board_config.h"
+#include "board_bsp.h"
 #include "bsp/esp-bsp.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -72,6 +76,16 @@ static bool s_battery_cali_ready;
 
 static esp_err_t shell_battery_ensure_adc(void)
 {
+    if (s_battery_adc_ready) {
+        return ESP_OK;
+    }
+
+#if !BOARD_CFG_BATTERY_ADC_PRESENT
+    /* This board has no ADC battery-sense divider (for example the M5Stack
+     * Tab5 uses an INA226 fuel gauge instead). Report the documented N/C state
+     * instead of probing an unconnected pin. */
+    return ESP_ERR_NOT_FOUND;
+#else
     esp_err_t error;
     adc_unit_t unit_id;
     adc_oneshot_unit_init_cfg_t unit_cfg = {0};
@@ -79,10 +93,6 @@ static esp_err_t shell_battery_ensure_adc(void)
         .atten = SHELL_BATTERY_ATTEN,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-
-    if (s_battery_adc_ready) {
-        return ESP_OK;
-    }
 
     error = adc_oneshot_io_to_channel(BOARD_CFG_BATTERY_ADC_GPIO, &unit_id, &s_battery_adc_channel);
     if (error != ESP_OK) {
@@ -127,6 +137,7 @@ static esp_err_t shell_battery_ensure_adc(void)
 
     s_battery_adc_ready = true;
     return ESP_OK;
+#endif /* !BOARD_CFG_BATTERY_ADC_PRESENT */
 }
 
 esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out)
@@ -136,6 +147,28 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
     int gpio_mv = 0;
     int battery_mv;
     int percent;
+
+#if BOARD_CFG_BATTERY_INA226_PRESENT
+    /* Fuel-gauge boards (M5Stack Tab5): pack voltage/SoC come from the INA226.
+     * Read-only; the ADC divider path below is not wired on these boards. */
+    if (power_monitor_available() || power_monitor_init() == ESP_OK) {
+        int pack_mv = 0;
+        int soc = 0;
+        bool charging = false;
+
+        if (power_monitor_battery_read(&pack_mv, &soc, &charging) == ESP_OK) {
+            if (pack_mv < BOARD_CFG_BATTERY_PRESENT_MV) {
+                /* Gauge present but the pack is absent/near-empty on the rail. */
+                return ESP_ERR_NOT_FOUND;
+            }
+            if (battery_mv_out != NULL) { *battery_mv_out = pack_mv; }
+            if (percent_out != NULL)    { *percent_out = soc; }
+            if (raw_out != NULL)        { *raw_out = 0; }
+            if (gpio_mv_out != NULL)    { *gpio_mv_out = pack_mv; }
+            return ESP_OK;
+        }
+    }
+#endif
 
     error = shell_battery_ensure_adc();
     if (error != ESP_OK) {
@@ -256,13 +289,54 @@ void shell_command_rotate(int argc, char **argv)
 
 void shell_command_battery(int argc, char **argv)
 {
-    int battery_mv;
-    int percent;
-    int raw;
-    int gpio_mv;
+    int battery_mv = 0;
+    int percent = 0;
+    int raw = 0;
+    int gpio_mv = 0;
     esp_err_t error;
 
     if (argc == 1) {
+#if BOARD_CFG_BATTERY_INA226_PRESENT
+        /* Fuel-gauge boards report the pack directly (read-only INA226). */
+        if (power_monitor_available()) {
+            int mv = 0, soc = 0, ma = 0, mw = 0;
+            bool charging = false;
+
+            if (power_monitor_read_sample(&mv, &soc, &ma, &mw, &charging) == ESP_OK) {
+                bool pack_present = (mv >= BOARD_CFG_BATTERY_PRESENT_MV);
+                power_monitor_charge_t charge = power_monitor_classify_charge(mv, ma);
+
+                if (!pack_present) {
+                    shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_MUTE "N/C (no pack connected)" SH_RST "\n");
+                } else if (charge == POWER_MONITOR_CHARGE_CHARGING) {
+                    shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_NUM "%d%%" SH_RST ", " SH_NUM "%d.%03d V" SH_RST " " SH_OK "charging" SH_RST "\n",
+                                                  soc, mv / 1000, mv % 1000);
+                } else if (charge == POWER_MONITOR_CHARGE_DISCHARGING) {
+                    shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_NUM "%d%%" SH_RST ", " SH_NUM "%d.%03d V" SH_RST " " SH_VAL "discharging" SH_RST "\n",
+                                                  soc, mv / 1000, mv % 1000);
+                } else if (charge == POWER_MONITOR_CHARGE_FULL) {
+                    shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_NUM "%d%%" SH_RST ", " SH_NUM "%d.%03d V" SH_RST " " SH_OK "full" SH_RST "\n",
+                                                  soc, mv / 1000, mv % 1000);
+                } else {
+                    shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_NUM "%d%%" SH_RST ", " SH_NUM "%d.%03d V" SH_RST "\n",
+                                                  soc, mv / 1000, mv % 1000);
+                }
+                shell_transcript_appendf_ansi(SH_LBL "battery.gauge:" SH_RST " " SH_LBL "INA226" SH_RST " " SH_NUM "%d.%03d V" SH_RST " " SH_NUM "%d mA" SH_RST " " SH_NUM "%d mW" SH_RST " " SH_LBL "charge=" SH_RST "%s" SH_RST "\n",
+                                              mv / 1000, mv % 1000, ma, mw,
+                                              pack_present ? power_monitor_charge_name(charge) : "n/a");
+#if CONFIG_PM_ENABLE
+                if (s_light_sleep_requested) {
+                    shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST SH_OK "yes" SH_RST "\n");
+                } else {
+                    shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST SH_MUTE "no" SH_RST "\n");
+                }
+#else
+                shell_print_muted("battery.sleep: unavailable because CONFIG_PM_ENABLE is off in sdkconfig");
+#endif
+                return;
+            }
+        }
+#endif
         error = command_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
         if (error == ESP_ERR_NOT_FOUND) {
             /* No battery / sense connection: the documented N/C state. */
@@ -388,10 +462,10 @@ const char *shell_power_wake_cause_string(esp_sleep_wakeup_cause_t cause)
 /** Read and print the battery through the shared ADC path. */
 static bool shell_power_report_battery(const char *label)
 {
-    int battery_mv;
-    int percent;
-    int raw;
-    int gpio_mv;
+    int battery_mv = 0;
+    int percent = 0;
+    int raw = 0;
+    int gpio_mv = 0;
     esp_err_t error;
 
     error = command_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
@@ -839,5 +913,46 @@ void shell_command_deepsleep(int argc, char **argv)
     shell_transcript_appendf_ansi(SH_LBL "deepsleep:" SH_RST " entering deep sleep\n");
     vTaskDelay(pdMS_TO_TICKS(SHELL_REBOOT_DELAY_MS));
 
+    esp_deep_sleep_start();
+}
+
+void shell_command_shutdown(int argc, char **argv)
+{
+    esp_err_t error;
+
+    (void)argc;
+    (void)argv;
+
+    shell_transcript_appendf_ansi(SH_ERR "Shutting down..." SH_RST "\n");
+    shell_power_report_battery("shutdown");
+
+    /* Persist the state that would otherwise be lost (recall history is
+     * debounced; the wall-time anchor seeds the next boot). */
+    command_history_save_now();
+    clock_rtc_anchor_now();
+
+    /* Best-effort: stop the radio, blank the panel/audio, and darken every
+     * status LED so the board does not glow after the rails drop. */
+    shell_power_shutdown_wifi();
+    display_set_power_state(DISPLAY_POWER_OFF);
+    audio_stop();
+    (void)led_all_off();
+
+    /* Let the transcript, the I2C LED write, and the SD flush settle. */
+    vTaskDelay(pdMS_TO_TICKS(SHELL_POWER_SLEEP_PRE_DELAY_MS));
+
+    shell_transcript_appendf_ansi(SH_LBL "shutdown:" SH_RST " cutting power\n");
+    vTaskDelay(pdMS_TO_TICKS(SHELL_REBOOT_DELAY_MS));
+
+    error = board_bsp_poweroff();
+    if (error != ESP_OK) {
+        shell_transcript_appendf_ansi(SH_WARN "shutdown: power latch failed (%s)" SH_RST "\n",
+                                      esp_err_to_name(error));
+    }
+
+    /* Reached only when the board has no working power latch: idle as low as we
+     * can instead of rebooting back into a running system. */
+    shell_transcript_appendf_ansi(SH_WARN "shutdown: no hardware power latch; entering deep sleep" SH_RST "\n");
+    vTaskDelay(pdMS_TO_TICKS(SHELL_REBOOT_DELAY_MS));
     esp_deep_sleep_start();
 }

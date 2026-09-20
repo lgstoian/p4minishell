@@ -7,6 +7,6 @@ idf_component_register(
         shell
         ansi
         freertos
-        espressif__esp32_p4_function_ev_board
+        board_bsp
         espressif__esp_codec_dev
 )

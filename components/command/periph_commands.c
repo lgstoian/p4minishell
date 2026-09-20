@@ -25,6 +25,8 @@
 #include "ansi_palette.h"
 #include "display.h"
 #include "led.h"
+#include "camera.h"
+#include "storage.h"
 #include "command.h"
 #include "p4minishell_config.h"
 #include "board_config.h"
@@ -44,7 +46,7 @@
 #include "freertos/task.h"
 
 /* Compat aliases (moved with the toolkit in v0.35.4). */
-#define SHELL_C6_HOST_RESET_GPIO        P4_CONFIG_C6_HOST_RESET_GPIO
+#define SHELL_C6_HOST_RESET_GPIO        BOARD_CFG_C6_HOST_RESET_GPIO
 #define SHELL_PWM_FREQ_MAX_HZ           P4_CONFIG_PWM_FREQ_MAX_HZ
 #define SHELL_PWM_SRC_CLK_HZ            P4_CONFIG_PWM_SRC_CLK_HZ
 #define SHELL_PWM_CLK_SOURCE            P4_CONFIG_PWM_CLK_SOURCE
@@ -102,6 +104,11 @@ static const shell_gpio_pin_desc_t s_gpio_pins[] = {
     {"sd_clk", BSP_SD_CLK, "MicroSD clock", false, true},
     {"sd_cmd", BSP_SD_CMD, "MicroSD command", false, true},
     {"led_status", (gpio_num_t)BOARD_CFG_RGB_LED_GPIO, "WS2812 RGB status LED (LED1, back panel)", false, true},
+#if defined(BOARD_CFG_TAB5KBD_PRESENT) && BOARD_CFG_TAB5KBD_PRESENT
+    {"tab5kbd_sda", BOARD_CFG_TAB5KBD_SDA_GPIO, "Tab5Keyboard I2C data (expansion port)", false, true},
+    {"tab5kbd_scl", BOARD_CFG_TAB5KBD_SCL_GPIO, "Tab5Keyboard I2C clock (expansion port)", false, true},
+    {"tab5kbd_int", BOARD_CFG_TAB5KBD_INT_GPIO, "Tab5Keyboard interrupt line", false, true},
+#endif
 }
 
 
@@ -1331,16 +1338,31 @@ static bool shell_rgb_parse_hex(const char *text, uint32_t *rgb_out)
     return true;
 }
 
+/** Parse one 0..255 channel; false on a malformed or out-of-range value. */
+static bool shell_rgb_parse_channel(const char *text, uint8_t *out)
+{
+    char *end = NULL;
+    long value = strtol(text, &end, 10);
+
+    if (end == NULL || *end != '\0' || value < 0 || value > 255) {
+        return false;
+    }
+    *out = (uint8_t)value;
+    return true;
+}
+
 /**
- * `rgb` - control the WS2812 status LED (LED1, GPIO26).
+ * `rgb` - control the status LED(s).
  *
  * Usage:
  *   rgb status                  Show state (mode, colour, effect, brightness)
- *   rgb off                     Turn the LED off
+ *   rgb off                     Turn the (primary) LED off
  *   rgb <r> <g> <b>             Solid colour, each channel 0-255
  *   rgb #RRGGBB                 Solid colour from a hex value
  *   rgb <effect> [speed]        rainbow | breath | pulse | blink (speed 1..10)
  *   rgb auto <on|off>           Enable/disable the status-driven colour layer
+ *   rgb 1|2 <r> <g> <b>         Set one LED independently (Tab5 keyboard LEDs)
+ *   rgb 1|2 off                 Turn one LED off
  *
  * ERRORLEVEL: 0 success, 1 failure, 2 usage. Works in batch files and is
  * redirectable/pipable like every other command.
@@ -1362,8 +1384,13 @@ void shell_execute_rgb_command(int argc, char **argv)
         }
         led_get_state(&state);
         shell_transcript_appendf_ansi(SH_HEAD "RGB LED" SH_RST "\n");
+#if defined(BOARD_CFG_RGB_VIA_TAB5KBD) && BOARD_CFG_RGB_VIA_TAB5KBD
+        shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " Tab5Keyboard LEDs (I2C " SH_NUM "0x%02X" SH_RST ")\n",
+                                      (int)BOARD_CFG_TAB5KBD_I2C_ADDR);
+#else
         shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " WS2812 on " SH_NUM "GPIO%d" SH_RST "\n",
                                       (int)BOARD_CFG_RGB_LED_GPIO);
+#endif
         if (state.auto_status) {
             shell_transcript_appendf_ansi("  " SH_LBL "mode:" SH_RST " " SH_OK "auto status" SH_RST "\n");
         } else {
@@ -1377,6 +1404,13 @@ void shell_execute_rgb_command(int argc, char **argv)
                                       (unsigned int)state.speed);
         shell_transcript_appendf_ansi("  " SH_LBL "brightness:" SH_RST " " SH_NUM "%u%%" SH_RST "\n",
                                       (unsigned int)state.brightness_pct);
+        if (led_secondary_present()) {
+            led_state_t second;
+            led_get_index_state(1, &second);
+            shell_transcript_appendf_ansi("  " SH_LBL "LED2:" SH_RST " " SH_NUM "#%02X%02X%02X" SH_RST
+                                          " " SH_MUTE "(independent)" SH_RST "\n",
+                                          second.red, second.green, second.blue);
+        }
         batch_set_errorlevel(0);
         return;
     }
@@ -1430,36 +1464,70 @@ void shell_execute_rgb_command(int argc, char **argv)
         goto done;
     }
 
+    /* rgb 1|2 <r> <g> <b>   /   rgb 1|2 off */
+    if (argc >= 3 && (shell_text_equals_ignore_case(argv[1], "1") ||
+                      shell_text_equals_ignore_case(argv[1], "2"))) {
+        uint8_t index = (argv[1][0] == '1') ? 0 : 1;
+
+        if (argc == 3 && shell_text_equals_ignore_case(argv[2], "off")) {
+            error = led_index_off(index);
+            if (error == ESP_OK) {
+                shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " LED%c " SH_ERR "off" SH_RST "\n",
+                                              argv[1][0]);
+            }
+            goto done;
+        }
+        if (argc == 5) {
+            uint8_t red, green, blue;
+
+            if (!shell_rgb_parse_channel(argv[2], &red) ||
+                !shell_rgb_parse_channel(argv[3], &green) ||
+                !shell_rgb_parse_channel(argv[4], &blue)) {
+                shell_print_usage("Usage: rgb <1|2> <r> <g> <b>  (0-255 each)");
+                shell_record_warningf("rgb", "Invalid rgb channel for LED%s", argv[1]);
+                batch_set_errorlevel(2);
+                return;
+            }
+            error = led_set_index_color(index, red, green, blue);
+            if (error == ESP_OK) {
+                shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " LED%c colour set to " SH_NUM
+                                              "r=%u g=%u b=%u" SH_RST "\n",
+                                              argv[1][0], (unsigned)red, (unsigned)green, (unsigned)blue);
+            }
+            goto done;
+        }
+        shell_print_usage("Usage: rgb <1|2> <r> <g> <b> | rgb <1|2> off");
+        shell_record_warningf("rgb", "Usage error for rgb LED index");
+        batch_set_errorlevel(2);
+        return;
+    }
+
     /* rgb <r> <g> <b> */
     if (argc == 4) {
-        char *end = NULL;
-        long red = strtol(argv[1], &end, 10);
-        if (end == NULL || *end != '\0' || red < 0 || red > 255) {
+        uint8_t red, green, blue;
+
+        if (!shell_rgb_parse_channel(argv[1], &red)) {
             shell_print_usage("Usage: rgb <r> <g> <b>  (0-255 each)");
             shell_record_warningf("rgb", "Invalid rgb red argument");
             batch_set_errorlevel(2);
             return;
         }
-        end = NULL;
-        long green = strtol(argv[2], &end, 10);
-        if (end == NULL || *end != '\0' || green < 0 || green > 255) {
+        if (!shell_rgb_parse_channel(argv[2], &green)) {
             shell_print_usage("Usage: rgb <r> <g> <b>  (0-255 each)");
             shell_record_warningf("rgb", "Invalid rgb green argument");
             batch_set_errorlevel(2);
             return;
         }
-        end = NULL;
-        long blue = strtol(argv[3], &end, 10);
-        if (end == NULL || *end != '\0' || blue < 0 || blue > 255) {
+        if (!shell_rgb_parse_channel(argv[3], &blue)) {
             shell_print_usage("Usage: rgb <r> <g> <b>  (0-255 each)");
             shell_record_warningf("rgb", "Invalid rgb blue argument");
             batch_set_errorlevel(2);
             return;
         }
-        error = led_set_color((uint8_t)red, (uint8_t)green, (uint8_t)blue);
+        error = led_set_color(red, green, blue);
         if (error == ESP_OK) {
-            shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " colour set to " SH_NUM "r=%ld g=%ld b=%ld" SH_RST "\n",
-                                          red, green, blue);
+            shell_transcript_appendf_ansi(SH_LBL "rgb:" SH_RST " colour set to " SH_NUM "r=%u g=%u b=%u" SH_RST "\n",
+                                          (unsigned)red, (unsigned)green, (unsigned)blue);
         }
         goto done;
     }
@@ -1496,7 +1564,7 @@ void shell_execute_rgb_command(int argc, char **argv)
         goto done;
     }
 
-    shell_print_usage("Usage: rgb status | rgb off | rgb <r> <g> <b> | rgb #RRGGBB | rgb <effect> [speed] | rgb auto <on|off>");
+    shell_print_usage("Usage: rgb status | rgb off | rgb <r> <g> <b> | rgb #RRGGBB | rgb <effect> [speed] | rgb auto <on|off> | rgb <1|2> <r> <g> <b>");
     shell_record_warningf("rgb", "Usage error for rgb command");
     batch_set_errorlevel(2);
     return;
@@ -1513,19 +1581,61 @@ done:
 
 void shell_execute_camera_command(int argc, char **argv)
 {
+    /* camera init */
     if (argc == 2 && shell_text_equals_ignore_case(argv[1], "init")) {
-        shell_print_error("camera: unsupported because the JC1060 reference repo shows a camera add-on path, but this workspace still does not declare the sensor, CSI pin map, or local esp_video camera stack needed to initialize it");
-        shell_record_warningf("camera", "Camera init requested without camera metadata in the workspace");
+        esp_err_t error = camera_init();
+
+        if (error == ESP_OK) {
+            shell_transcript_appendf_ansi(SH_LBL "camera:" SH_RST " sensor ready " SH_MUTE "(MIPI-CSI, RGB565)" SH_RST "\n");
+            batch_set_errorlevel(0);
+        } else if (error == ESP_ERR_NOT_SUPPORTED) {
+            shell_print_error("camera: this board has no camera");
+            shell_record_warningf("camera", "Camera requested on a board without one");
+            batch_set_errorlevel(1);
+        } else {
+            shell_print_error("camera: init failed (%s)", esp_err_to_name(error));
+            shell_record_errorf("camera", error, "Camera init failed");
+            batch_set_errorlevel(1);
+        }
         return;
     }
 
+    /* camera snap <file.bmp> */
     if (argc == 3 && shell_text_equals_ignore_case(argv[1], "snap")) {
-        shell_transcript_appendf("camera: snap unavailable for %s because the workspace still lacks the declared sensor, CSI pin map, and local camera stack that the JC1060 examples depend on\n",
-                                 argv[2]);
-        shell_record_warningf("camera", "Camera snap requested without camera metadata in the workspace");
+        int width = 0;
+        int height = 0;
+        esp_err_t error;
+
+        if (!shell_path_has_extension(argv[2], ".bmp")) {
+            shell_print_usage("Usage: camera snap <file.bmp>  (BMP only)");
+            shell_record_warningf("camera", "Camera snap requested with a non-BMP extension");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (!camera_available()) {
+            error = camera_init();
+            if (error != ESP_OK) {
+                shell_print_error("camera: no camera available (%s)", esp_err_to_name(error));
+                shell_record_warningf("camera", "Camera snap requested but no camera is present");
+                batch_set_errorlevel(1);
+                return;
+            }
+        }
+        error = camera_capture_bmp(argv[2], &width, &height);
+        if (error != ESP_OK) {
+            shell_print_error("camera: snap failed (%s)", esp_err_to_name(error));
+            shell_record_errorf("camera", error, "Camera snap failed");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf_ansi(SH_LBL "camera:" SH_RST " saved " SH_NUM "%dx%d" SH_RST " " SH_VAL "%s" SH_RST
+                                      " " SH_MUTE "(BMP)" SH_RST "\n",
+                                      width, height, argv[2]);
+        batch_set_errorlevel(0);
         return;
     }
 
-    shell_print_usage("Usage: camera init | camera snap <filename>");
+    shell_print_usage("Usage: camera init | camera snap <file.bmp>");
     shell_record_warningf("camera", "Usage error for camera command");
+    batch_set_errorlevel(2);
 }

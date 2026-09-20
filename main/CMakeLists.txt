@@ -4,7 +4,7 @@ idf_component_register(
     SRCS "main.c" "p4minishell.c" "native_apps.c" "assets/icon_splash.c"
     INCLUDE_DIRS "." "assets"
     REQUIRES
-        espressif__esp32_p4_function_ev_board
+        board_bsp
         espressif__esp_lcd_touch
         espressif__esp_lvgl_port
         applib
@@ -22,6 +22,8 @@ idf_component_register(
         boot
         clock
         windows
+        tab5kbd
+        imu
         whoami
         esp_adc
         esp_event

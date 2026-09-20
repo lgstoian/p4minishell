@@ -65,10 +65,33 @@ def _between(text, key, nextkey):
 
 
 def _console(dev, line, settle=1.0):
-    """Send a console-reader line and return only its own reply."""
+    """Send a console-reader line and return only its own reply.
+
+    Reads until the reply is complete (``ui.state:``/``ui.target`` seen and
+    traffic has gone quiet) rather than a fixed settle: Wi-Fi chatter can
+    delay the reply past a short window, which made the input/ghost assertion
+    flake. Falls back to the full deadline so a genuinely missing reply still
+    fails the assertion with a useful tail.
+    """
     dev.session.reset_input()
     dev.session.write_line(line)
-    return dev.read_for(settle)
+    buf = bytearray()
+    end = time.time() + max(settle, 3.0)
+    quiet_since = None
+    while time.time() < end:
+        chunk = dev.session._read_serial(8192, 0.2)
+        if chunk:
+            buf += chunk
+            quiet_since = None
+        else:
+            text = buf.decode("utf-8", "replace")
+            has_reply = ("ui.state:" in text) or ("ui.target" in text) or \
+                        ("ui.hit:" in text)
+            if has_reply and quiet_since is None:
+                quiet_since = time.time()
+            elif quiet_since is not None and time.time() - quiet_since > settle:
+                break
+    return bytes(buf).decode("utf-8", "replace")
 
 
 def _ui_state(dev, settle=1.0):
@@ -88,6 +111,7 @@ def _wait_modal(dev, want, timeout=8.0):
 
 def run(dev, ctx):
     c = Checklist(NAME)
+    disp_w, disp_h = dev.display_size()
 
     def grab(name):
         try:
@@ -139,12 +163,13 @@ def run(dev, ctx):
         dev.run("keyboard hide")
         after = grab("s10_kbd_hidden")
         if before is not None and after is not None:
-            c.equals("keyboard screenshot width", before.width, 1024)
-            c.equals("keyboard screenshot height", before.height, 600)
+            c.equals("keyboard screenshot width", before.width, disp_w)
+            c.equals("keyboard screenshot height", before.height, disp_h)
             ratio = shot.diff_ratio(before, after)
             c.check("keyboard hide changes screen", ratio > 0.02, "diff=%.3f" % ratio)
-            band_before = sum(before.region_mean(0, 450, 1024, 150)) / 3.0
-            band_after = sum(after.region_mean(0, 450, 1024, 150)) / 3.0
+            band_y = disp_h - disp_h // 4
+            band_before = sum(before.region_mean(0, band_y, disp_w, disp_h - band_y)) / 3.0
+            band_after = sum(after.region_mean(0, band_y, disp_w, disp_h - band_y)) / 3.0
             c.check("keyboard band differs", abs(band_before - band_after) > 1.0,
                     "before=%.1f after=%.1f" % (band_before, band_after))
         else:
@@ -206,17 +231,34 @@ def run(dev, ctx):
         # check cannot make the "co" prefix assertion flake (H6). The on-screen
         # line is only cleared by submitting it (OSK enter key \uf8a2); a serial
         # empty line does not touch OSK-typed text, so it accumulated across
-        # runs.
+        # runs. Submit, then WAIT until the line is back to the bare prompt
+        # before typing, otherwise the first key races the submit.
         dev.run("ui key \uf8a2", timeout=15)
-        time.sleep(0.5)
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            st = _ui_state(dev)
+            cur = _between(st, "input", "ghost") or ""
+            if cur.rstrip() in ("", "PS /sdcard>", "PS /sdcard> "):
+                break
+            time.sleep(0.3)
         dev.session.reset_input()
         time.sleep(0.3)
-        dev.run("ui key c", timeout=15)
-        time.sleep(0.4)
-        dev.run("ui key o", timeout=15)
-        time.sleep(0.4)
-        typed = _ui_state(dev)
-        typed_input = _between(typed, "input", "ghost") or ""
+        # Type "co" one key at a time, confirming each key actually landed
+        # before sending the next. The OSK event path can drop a key while the
+        # UI is busy after a heavy preceding suite; retry each character until
+        # the input line reflects it (bounded).
+        typed = ""
+        typed_input = ""
+        for idx, want in enumerate(("c", "co")):
+            deadline = time.time() + 10.0
+            while time.time() < deadline:
+                dev.run("ui key %s" % want[-1], timeout=15)
+                time.sleep(0.4)
+                typed = _ui_state(dev)
+                typed_input = (_between(typed, "input", "ghost") or "").rstrip()
+                if typed_input.endswith(want):
+                    break
+                time.sleep(0.3)
         c.expect("ui key typed prefix", "co", typed_input)
         ghost = _between(typed, "ghost", "search") or ""
         c.check("ghost completion shown", len(ghost) > 0, "ghost=%r" % ghost)

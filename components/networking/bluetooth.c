@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "esp_err.h"
+#include "strutil.h"
 #include "esp_hosted.h"
 #include "esp_hosted_host_fw_ver.h"
 #include "esp_hosted_misc.h"
@@ -77,50 +78,6 @@ static bluetooth_state_t s_bluetooth_state;
 static esp_err_t bluetooth_start_scan(void);
 static esp_err_t bluetooth_start_advertising(void);
 #endif
-
-static bool bluetooth_text_equals_ignore_case(const char *left, const char *right)
-{
-    if (left == NULL || right == NULL) {
-        return false;
-    }
-
-    while (*left != '\0' && *right != '\0') {
-        if (tolower((unsigned char)*left) != tolower((unsigned char)*right)) {
-            return false;
-        }
-        left++;
-        right++;
-    }
-
-    return *left == '\0' && *right == '\0';
-}
-
-static int bluetooth_split_args(char *text, char **argv, int max_args)
-{
-    int argc = 0;
-    char *cursor = text;
-
-    while (cursor != NULL && *cursor != '\0' && argc < max_args) {
-        while (isspace((unsigned char)*cursor)) {
-            cursor++;
-        }
-
-        if (*cursor == '\0') {
-            break;
-        }
-
-        argv[argc++] = cursor;
-        while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
-            cursor++;
-        }
-        if (*cursor != '\0') {
-            *cursor = '\0';
-            cursor++;
-        }
-    }
-
-    return argc;
-}
 
 /**
  * Append plain text to the transcript.
@@ -788,9 +745,9 @@ bool bluetooth_is_connected(void)
 void bluetooth_handle_command(char *command)
 {
     char *argv[6];
-    int argc = bluetooth_split_args(command, argv, 6);
+    int argc = strutil_split_args(command, argv, 6);
 
-    if (argc <= 1 || bluetooth_text_equals_ignore_case(argv[1], "help")) {
+    if (argc <= 1 || strutil_text_equals_ignore_case(argv[1], "help")) {
         bluetooth_appendf(SH_SUBHEAD SH_BOLD "Bluetooth Commands:" SH_RST "\n");
         bluetooth_appendf("  " SH_CMD "bluetooth status" SH_RST "            Show hosted BLE state on the ESP32-C6\n");
         bluetooth_appendf("  " SH_CMD "bluetooth scan" SH_RST " [limit]     Bounded passive BLE scan, sorted by RSSI\n");
@@ -800,12 +757,12 @@ void bluetooth_handle_command(char *command)
         return;
     }
 
-    if (bluetooth_text_equals_ignore_case(argv[1], "status")) {
+    if (strutil_text_equals_ignore_case(argv[1], "status")) {
         bluetooth_status();
         return;
     }
 
-    if (bluetooth_text_equals_ignore_case(argv[1], "scan")) {
+    if (strutil_text_equals_ignore_case(argv[1], "scan")) {
         int limit = 0;
 
         if (argc >= 3) {
@@ -822,7 +779,7 @@ void bluetooth_handle_command(char *command)
         return;
     }
 
-    if (bluetooth_text_equals_ignore_case(argv[1], "enable")) {
+    if (strutil_text_equals_ignore_case(argv[1], "enable")) {
         esp_err_t error = bluetooth_ensure_ready();
         if (error != ESP_OK) {
             bluetooth_report_not_available(error);
@@ -832,14 +789,14 @@ void bluetooth_handle_command(char *command)
         return;
     }
 
-    if (bluetooth_text_equals_ignore_case(argv[1], "advertise") && argc >= 3) {
-        if (bluetooth_text_equals_ignore_case(argv[2], "on")) {
+    if (strutil_text_equals_ignore_case(argv[1], "advertise") && argc >= 3) {
+        if (strutil_text_equals_ignore_case(argv[2], "on")) {
             /* The optional name is session-only and never persisted. */
             bluetooth_advertise(true, argc >= 4 ? argv[3] : NULL);
             return;
         }
 
-        if (bluetooth_text_equals_ignore_case(argv[2], "off")) {
+        if (strutil_text_equals_ignore_case(argv[2], "off")) {
             bluetooth_advertise(false, NULL);
             return;
         }

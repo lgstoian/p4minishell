@@ -92,27 +92,6 @@ Grouped by milestone rather than by version. Full per-version detail is in
 - Firmware behaviour is unchanged from v0.38.5; this release is about
   openness, documentation, and a clean baseline for the next campaign.
 
-### 8. Portability groundwork (v1.1.0)
-
-- Board profiles (`boards/<name>/` + `-DP4_BOARD=`, SD/SDIO pins promoted to
-  `BOARD_CFG_*`) and a `PORTING.md` bring-up checklist.
-- Native-app packaging spec (`docs/native_packaging.md`); `pkg` installs
-  native bundles store-only (execution needs a future loader).
-- SDK scaffolding: `tools/newapp.py` plus the `whoami` sample component.
-- CI build matrix across board profiles; `debug save` export
-  (`txt`/`csv`/`json`) with host-side `tools/parse_debuglog.py`.
-
-### 9. Writerdeck (v1.2.0)
-
-- Editor **focus / typewriter mode** (`edit /focus`): header and keyboard
-  hidden, caret centred, live word count.
-- **Markdown export** (`markdown export <src> <out> [text|html|print]`), a
-  self-contained HTML serializer, and a fixed-page print paginator.
-- **Reading typography**: a proportional/serif `reading` font role (vendored
-  `DejaVuSerif`) with reader line spacing for the viewer and editor preview.
-- **Offline spellcheck**: SD wordlist (`sd:/DICTS/`) with editor underlines.
-- **Document templates** (`sd:/TEMPLATES/`) and the `WRITER` reference app.
-
 ---
 
 ## Part 2 — Where we are going
@@ -122,23 +101,29 @@ meant to build. Priorities are suggestions, not commitments.
 
 ### A. Framework and portability
 
-Section-A groundwork is done (v1.1.0, see Part 1 §8). Remaining:
-
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **M5Stack Tab5 + Tab5Keyboard port** | Second board proves the abstraction | `boards/m5stack_tab5/` profile (ST7123/ST7121 panel split, ES8388 audio, RX8130CE RTC, Tab5Keyboard I2C input); needs `esp_lcd_st7123`, not vendored yet |
+| ~~**M5Stack Tab5 + Tab5Keyboard port**~~ **— done** | Second board proves the abstraction | `boards/m5stack_tab5/` profile shipped and verified: ILI9881C/ST7123/ST7121 auto-detect, ES8388 audio, RX8130CE RTC, Tab5Keyboard I2C input (+ two independent RGB LEDs), INA226 pack gauge, BMI270 IMU (`imu`, tilt auto-rotate), SC202CS MIPI-CSI camera (BMP stills via esp_video), MicroSD, hosted C6 Wi-Fi + BLE, `shutdown`/`poweroff`. See `PORTING.md` §6. Remaining gap: camera live preview. |
 | **Native-app loader** | Execute the stored native bundles | Position-independent blob + `app_register`; `abi`/`arch` enforced |
 | **Signed manifests** | Safe installation | Sign `PKGS` manifests, verify before install (platform/security row) |
 
 ### B. Writerdeck
 
-Section-B groundwork is done (v1.2.0, see Part 1 §9). Remaining:
+#### Writerdeck audit — closed (code audit 2026-09-18, fixes landed after)
 
-| Feature | Why | Notes |
-|---------|-----|-------|
-| **Thesaurus / richer dictionary** | Writing aid | Extend the spellcheck wordlist with synonyms; larger bundled dictionaries |
-| **Full-page HTML wrapper** | Standalone share | The HTML export is a fragment; a `<!DOCTYPE html>` page wrapper with reader CSS is future work |
-| **More serif faces / weights** | Choice | Only `DejaVuSerif` (+Bold/Italic) ships; add more reading faces |
+The `Full-page HTML wrapper` item is done (`markdown_render_html_page()`
+ships the `<!DOCTYPE html>` reader page). The 16 parity/robustness gaps it
+exposed are all fixed in the current tree: ordered lists, GFM tables,
+images/task lists, inline nesting, flanking/escape rules, the HTML
+truncation contract, export truncation/ERRORLEVEL handling, export
+titles/format selection, the print paginator, template-seeding validation,
+focus+preview composition, loud viewer/preview/export caps, the UTF-8-aware
+spell tokenizer (length-unlimited lookups, wrap+spell composed), a
+`WRITER.BAT` that seeds/renders/exports/verifies end to end, discoverable
+provisioning (`push_fonts.py`, `apps/push_templates.py`,
+`apps/push_dicts.py` + `apps/dicts/en.words`), and corrected writerdeck
+docs (limits, caps, gates, troubleshooting). No open writerdeck items
+remain.
 
 ### C. PDA / PIM
 
@@ -158,7 +143,6 @@ Section-B groundwork is done (v1.2.0, see Part 1 §9). Remaining:
 | **Spreadsheet app** | The other defining feature | Build on `csv` + `calc`; add an interactive grid modal and a recalculation engine |
 | **Calculator UI app** | Everyday use | A modal keypad over `calc` (HP-12C / FX-870P layouts) |
 | **Structured app format** | Richer apps | A declarative form/menu description so apps do not hand-roll every screen |
-| **Third-party app registry** | Distribution | A signed index of `PKGS` bundles fetchable over Wi-Fi |
 
 ### E. Platform, power, and security
 
@@ -166,7 +150,6 @@ Section-B groundwork is done (v1.2.0, see Part 1 §9). Remaining:
 |---------|-----|-------|
 | **Deep low-power / AON** | All-day battery | RTC wake, power-domain tuning, and peripheral runtime PM beyond idle display-off |
 | **Battery/charging UI** | Trust the gauge | Better ADC calibration, charge-state detection, and a battery panel |
-| **Secure boot + flash encryption** | Protect the device | Document and provide a build profile; keep an unencrypted dev profile |
 | **Signed apps** | Safe installation | Sign `PKGS` manifests and verify before install |
 | **Push-to-talk / BLE HID** | Peripheral use | BLE keyboard/mouse bridging and simple phone-side transfer |
 
@@ -197,8 +180,10 @@ Section-B groundwork is done (v1.2.0, see Part 1 §9). Remaining:
   works; the peek/poke/loopback verbs return an honest error.
 - **Touch wake from sleep** — the GT911 INT line is not wired on this board, so
   light-sleep wake is timer/GPIO only (reported honestly).
-- **Camera** — no local camera stack in the workspace; camera verbs report the
-  gap rather than pretending.
+- **Camera live preview** — still BMP capture works on the Tab5
+  (`camera init` + `camera snap <file.bmp>`, verified 1280x720 to SD); the
+  live-preview path (streaming frames into an LVGL canvas) is not implemented
+  yet. Boards without a camera report the gap rather than pretending.
 
 ---
 

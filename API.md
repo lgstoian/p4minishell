@@ -2042,10 +2042,19 @@ void   editor_spell_unload(void);
 bool   editor_spell_ready(void);
 size_t editor_spell_word_count(void);
 bool   editor_spell_ok(const char *word, size_t len);
+size_t editor_spell_utf8(const char *s, size_t avail, unsigned long *cp_out);
+bool   editor_spell_is_letter(unsigned long cp);
+bool   editor_spell_is_cjk(unsigned long cp);
+bool   editor_spell_is_joiner(unsigned long cp);
+bool   editor_spell_token_ok(const char *word, size_t len);
 ```
 - Loads a wordlist once per session into PSRAM (a pool plus a sorted pointer
-  index) and binary-searches it. With no list loaded, `editor_spell_ok`
-  returns true so nothing is ever flagged. Bounded by `P4_CONFIG_SPELL_*`.
+  index) and binary-searches it. With no list loaded, the checks return true
+  so nothing is ever flagged. Bounded by `P4_CONFIG_SPELL_*`; lookups accept
+  any token length. The `utf8`/`is_letter`/`is_cjk`/`is_joiner` helpers are
+  the single UTF-8-aware tokenizer shared by the core and the view (pure,
+  unit-tested): `token_ok` passes whole-word hits and contractions whose
+  parts hit, and never flags CJK/digit/`_`/`non-ASCII-Latin` tokens.
 
 ### View (LVGL task)
 ```c
@@ -2120,14 +2129,19 @@ size_t markdown_strip_ansi(const char *src, char *dst, size_t dst_size);
 bool   markdown_render_line(const char *line, char *out, size_t out_size);
 size_t markdown_render_doc(const char *md, char *out, size_t out_size);
 size_t markdown_render_html(const char *md, char *out, size_t out_size);
+size_t markdown_render_html_page(const char *md, const char *title,
+                                 char *out, size_t out_size);
 size_t markdown_render_print(const char *text, const char *title,
                              int cols, int rows,
                              char *out, size_t out_size);
 ```
 - `markdown_render_doc` emits ANSI SGR for on-device rendering (the single
   implementation for the transcript, viewer, and editor preview).
-- `markdown_render_html` (writerdeck) serializes a self-contained HTML
-  fragment for `markdown export ... html`.
+- `markdown_render_html` (writerdeck) serializes the HTML body fragment
+  (kept for embedding).
+- `markdown_render_html_page` (writerdeck) wraps that body in a standalone
+  `<!DOCTYPE html>` reader page (embedded CSS, escaped `<title>`) for
+  `markdown export ... html`.
 - `markdown_render_print` (writerdeck) lays plain text out in fixed pages
   (`cols` x `rows`, `title   Page N` header, form feed between pages) for
   `markdown export ... print`. All are separate output formats and never
@@ -2230,3 +2244,71 @@ int modal_hexview_run(const char *title, const char *path, uint32_t timeout_ms);
 - OTA success text remains `C6 OTA completed successfully! Type reboot to activate new firmware.`.
 - OTA progress text remains `C6 OTA: XX% (YYYY KB / ZZZZ KB)`.
 - OTA continues to validate ESP-IDF app-image magic `0xE9` and ESP32-C6 chip ID `0x000D` before transfer.
+
+## Hardware module APIs (v1.2.0)
+
+These leaf modules back the M5Stack Tab5 hardware support; all are safe to call on
+boards that lack the hardware (they degrade to a benign error).
+
+### IMU (`components/imu/imu.h`)
+```c
+esp_err_t imu_init(void);              /* probe + configure the BMI270, start the sampler */
+void      imu_deinit(void);
+bool      imu_available(void);
+esp_err_t imu_read(imu_sample_t *out); /* accel (m/s^2), gyro (deg/s), pitch/roll, orientation */
+imu_orientation_t imu_orientation_from_sample(const imu_sample_t *s); /* pure */
+int       imu_orientation_rotation_deg(imu_orientation_t o);          /* pure: 0/90/180/270 */
+void      imu_set_rotation_callback(imu_rotation_cb_t cb, void *user);
+esp_err_t imu_set_auto_rotate(bool enable);   /* off by default */
+bool      imu_auto_rotate_enabled(void);
+```
+- The module never calls into `display`; the owner installs the rotation sink, so
+  there is no layering cycle.
+
+### Camera (`components/camera/camera.h`)
+```c
+esp_err_t camera_init(void);            /* power the rail + esp_video_init (retried) */
+void      camera_deinit(void);
+bool      camera_available(void);
+esp_err_t camera_capture_bmp(const char *path, int *w_out, int *h_out);
+```
+- BMP only (via `components/imagefmt/`); the still path is split into reusable
+  open/queue/dequeue primitives for a future preview.
+
+### Battery gauge (`components/power_monitor/power_monitor.h`)
+```c
+esp_err_t power_monitor_init(void);
+bool      power_monitor_available(void);
+esp_err_t power_monitor_read_sample(int *mv, int *soc, int *ma, int *mw, bool *charging);
+esp_err_t power_monitor_battery_read(int *mv, int *soc, bool *charging);
+power_monitor_charge_t power_monitor_classify_charge(int pack_mv, int current_ma); /* pure */
+const char *power_monitor_charge_name(power_monitor_charge_t state);               /* pure */
+```
+- Read-only measurement; charging is gated once at boot by
+  `board_bsp_charge_enable(true)` (Tab5 only).
+
+### Image format (`components/imagefmt/imagefmt.h`)
+```c
+int  imagefmt_write_bmp_header(uint8_t *buf, uint32_t width, uint32_t height);
+void imagefmt_rgb565_to_bgr24(const uint16_t *src, uint8_t *dst, size_t pixels);
+```
+- Shared by `screenshot`, `gfx save`, and `camera snap`.
+
+### Tab5 keyboard (`components/tab5kbd/tab5kbd.h`)
+```c
+esp_err_t tab5kbd_init(void);
+bool      tab5kbd_is_ready(void);
+esp_err_t tab5kbd_set_rgb(uint8_t r, uint8_t g, uint8_t b);
+esp_err_t tab5kbd_set_rgb_index(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
+esp_err_t tab5kbd_get_rgb_index(uint8_t index, uint8_t *r, uint8_t *g, uint8_t *b);
+esp_err_t tab5kbd_set_brightness(uint8_t percent);
+```
+
+### New shell command hooks
+- `void shell_execute_imu_command(int argc, char **argv)` (`imu`)
+- `void shell_execute_rgb_command(int argc, char **argv)` now accepts `rgb <1|2> ...`
+- `void shell_command_shutdown(int argc, char **argv)` (`shutdown` / `poweroff`)
+- `bool (*physical_keyboard_present)(void)` in `shell_command_ops_t`: USB HID **or**
+  connected Bluetooth HID **or** the Tab5 keyboard; drives OSK auto-hide.
+- `header_status_wifi_tone()` maps the unknown-RSSI sentinel to the connected
+  tone (pure, unit-tested).

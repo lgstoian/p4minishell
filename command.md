@@ -487,15 +487,21 @@ invocation. Batch scripts with literal `#`/`*` lines should use `/raw`.
 
 **`markdown export <src> <out> [text|html|print]`** writes `src` to `out` as a
 portable document (writerdeck): `text` renders then strips SGR (the same
-plain-text bridge the viewer uses); `html` serializes a self-contained HTML
-fragment (headings, lists, quotes, fences, bold/italic/strike/code, links,
-escaped text); `print` lays the text out in fixed pages
-(`P4_CONFIG_PRINT_COLUMNS` x `P4_CONFIG_PRINT_ROWS`, default 80x60) with a
-`title   Page N` header and a form feed between pages — a PDF-less document for
-printing. The write is atomic (`storage_write_text_file`) and bounded by
-`P4_CONFIG_MD_EXPORT_MAX_BYTES`. An exported `.html` serves over `httpd`
-(`httpd start`, then `http://<ip>/<name>.HTML`). ERRORLEVEL: `0` ok,
-`1` open/write failure, `2` usage/unknown format.
+plain-text bridge the viewer uses); `html` writes a standalone
+`<!DOCTYPE html>` reader page (embedded CSS, `<title>` from the source
+basename, body = headings, lists, quotes, fences, bold/italic/strike/code,
+links, escaped text) for sharing without extra assets; `print` lays the text
+ out in fixed pages
+ (`P4_CONFIG_PRINT_COLUMNS` x `P4_CONFIG_PRINT_ROWS`, default 80x60) with a
+ `title   Page N` header and a form feed between pages — a PDF-less document for
+ printing. Sources past 64 KB are refused, not truncated
+ (`markdown export: ... is larger than 64 KB - not exported`); output that
+ would expand past `P4_CONFIG_MD_EXPORT_MAX_BYTES` (256 KB) is likewise
+ refused unwritten. The write is atomic (`storage_write_text_file`). Pass
+ exactly one format (`text|html|print`); naming two is a usage error. An
+ exported `.html` serves over `httpd`
+ (`httpd start`, then `http://<ip>/<name>.HTML`). ERRORLEVEL: `0` ok,
+ `1` open/write/refused failure, `2` usage/unknown format.
 
 ### markdown / spellcheck / templates (writerdeck)
 
@@ -518,13 +524,19 @@ The writing-oriented surfaces share one theme:
 
 The editor underlines misspellings using an offline wordlist on the SD card.
 The default is `sd:/DICTS/<name>.words` (`<name>` = `P4_CONFIG_SPELL_DICT_NAME`,
-default `en`): one lower-case word per line, ASCII. Toggle with the nav/edit
-`Spell` key, `Ctrl+Shift+S`, or the serial verb `\spell`; the status bar shows
-`SPELL` while on. With no dictionary present the toggle reports the expected
-path and stays off. The wordlist is loaded once per session into PSRAM (read
-through an internal DMA bounce buffer, since PSRAM is not DMA-capable) and
-bounded by `P4_CONFIG_SPELL_MAX_BYTES` / `P4_CONFIG_SPELL_MAX_WORDS`; spell
-underlines are not combined with word-wrap. `P4_CONFIG_SPELL_ENABLE=0` compiles
+default `en`): one lower-case word per line. A curated `en` sample ships in
+`apps/dicts/` — push it with `python apps/push_dicts.py <COM_PORT>`. Toggle
+with the nav/edit `Spell` key, `Ctrl+Shift+S`, or the serial verb `\spell`;
+the status bar shows `SPELL` while on. With no dictionary present the toggle
+reports the expected path and stays off. The wordlist is loaded once per
+session into PSRAM (read through an internal DMA bounce buffer, since PSRAM
+is not DMA-capable) and bounded by `P4_CONFIG_SPELL_MAX_BYTES` /
+`P4_CONFIG_SPELL_MAX_WORDS`; lookups themselves accept any token length,
+single-character words included. Tokenization is UTF-8 aware: in-word
+`'`/`-` (plus U+2019) keep `don't`/`well-known` whole (a contraction passes
+when its parts do, so `don't` needs `don`); tokens with CJK, digits, `_`, or
+non-ASCII Latin letters are never flagged, since the wordlist cannot cover
+them. Underlines compose with word-wrap. `P4_CONFIG_SPELL_ENABLE=0` compiles
 the engine out and makes the toggle report that it is disabled.
 
 ### Document templates
@@ -534,8 +546,10 @@ starts a **new** buffer pre-filled from that template (the target file must not
 already exist — an existing file is never overwritten). Templates ship in
 `apps/templates/` (`LETTER.MD`, `NOTE.MD`, `LOG.MD`) and are pushed with
 `python apps/push_templates.py <COM_PORT>`. The `WRITER` reference app
-(`apps/writer/WRITER.BAT`) demonstrates the whole flow (template → build →
-`markdown export` → share over `httpd`).
+(`apps/writer/WRITER.BAT`) exercises the flow without an interactive session
+(template seed → build → `markdown` render → all three `markdown export`
+formats → spell-wordlist check → share over `httpd`) and prints the
+interactive commands (`/focus`, preview, `Spell`) it cannot drive itself.
 
 ### config [KEY=VALUE | KEY value | save | reset [key] | factory]
 Read and write the persistent settings stored in `sd:/CONFIG.SYS` — the same
@@ -696,6 +710,35 @@ Enter deep sleep. RAM is lost, so on wake the device boots fresh (same path
 as `reboot`). With `seconds` the chip wakes on a timer; without it, wake
 requires an external wake source. Battery level is reported before sleeping.
 
+### shutdown (alias poweroff)
+Shut the board down: flush recall history and the wall-time anchor, stop Wi-Fi,
+blank the panel/audio, darken every status LED, then cut power. On the M5Stack
+Tab5 this pulses the PMIC power-off latch (PI4IOE5V6408 P4 on 0x44); on a board
+with no software power latch (the JC1060P470 reference) it falls back to deep
+sleep. Returns only if the latch fails (then it deep-sleeps anyway).
+
+### imu [read] | imu status | imu rotate <on|off>
+Reads the M5Stack Tab5 BMI270 six-axis IMU (`components/imu/`, SYS I2C 0x68).
+
+- `imu` / `imu read` — prints acceleration (m/s²), angular rate (deg/s),
+  pitch/roll, and the classified held orientation. It also publishes the sample
+  to the environment (`IMU_AX/AY/AZ`, `IMU_GX/GY/GZ`, `IMU_PITCH`, `IMU_ROLL`,
+  `IMU_ORIENT` = rotation degrees) so batch files can consume it.
+- `imu status` — presence, orientation, and auto-rotate state.
+- `imu rotate on|off` — enable/disable rotating the display as the board is
+  turned (gravity-based, with hysteresis; off by default). A manual `rotate`
+  does not disable auto-rotate.
+
+On boards without an IMU every form reports the gap honestly (ERRORLEVEL 1).
+
+### camera init | camera snap <file.bmp>
+Powers and initialises the M5Stack Tab5 MIPI-CSI camera (SC202CS at SCCB 0x36)
+through the managed `espressif/esp_video` stack. `camera snap` captures one
+still and writes a **24-bit BMP** (the only format supported; non-`.bmp` names
+are rejected). Live preview is future work. On boards without a camera the
+command reports the gap (ERRORLEVEL 1); a detached camera module fails sensor
+detection and reports NOT_FOUND.
+
 ### volume [<0-100>]
 Set speaker volume through the ES8311 codec path. `volume` with no argument
 prints the current level (`volume: <pct>%`); `volume <0-100>` sets it. All
@@ -843,14 +886,15 @@ the ESP-Hosted SDIO link active stalls the chip and drops USB-Serial-JTAG off
 the bus, so SPI transactions are deliberately not wired to the SPI master
 driver. This follows the same explicit-failure policy as `camera`.
 
-### rgb status | rgb off | rgb <r> <g> <b> | rgb #RRGGBB | rgb <effect> [speed] | rgb auto <on|off>
-Controls the WS2812 (NeoPixel) RGB status LED on the JC1060P470 back panel,
-wired to GPIO26. `components/led` owns the driver (espressif/led_strip over
-RMT), a small animation task, and the auto status layer.
+### rgb status | rgb off | rgb <r> <g> <b> | rgb #RRGGBB | rgb <effect> [speed] | rgb auto <on|off> | rgb <1|2> <r> <g> <b>
+Controls the status LED(s). On the JC1060P470 that is the WS2812 (NeoPixel) on
+GPIO26; on the M5Stack Tab5 it is the **two RGB LEDs on the keyboard module**
+(I2C), driven by `components/led` through `components/tab5kbd`. `components/led`
+owns the driver, a small animation task, and the auto status layer.
 
 - `rgb status` — report driver pin, mode (auto/manual), effect, colour, speed,
-  and brightness.
-- `rgb off` — turn the LED off.
+  and brightness; on a two-LED board it also lists the independent LED2 colour.
+- `rgb off` — turn the (primary) LED off.
 - `rgb <r> <g> <b>` — solid colour, each channel 0-255 (switches to manual).
 - `rgb #RRGGBB` — solid colour from a hex value.
 - `rgb <effect> [speed]` — `rainbow`, `breath`, `pulse`, `blink`, or `solid`;
@@ -859,6 +903,9 @@ RMT), a small animation task, and the auto status layer.
   mode the LED follows Wi-Fi state (amber while connecting, green when
   connected, red blink when disconnected, red pulse on watchdog timeout) and
   flashes blue when the HTTP server starts. A green flash confirms boot.
+- `rgb 1 <r> <g> <b>` / `rgb 2 <r> <g> <b>` — set one LED independently
+  (Tab5 keyboard LEDs only). LED1 (index 1) is the status engine; LED2
+  (index 2) is an independent user LED, off by default. `rgb 1|2 off` clears one.
 
 **ERRORLEVEL:** 0 success, 1 failure (LED driver unavailable), 2 usage.
 Works in batch files (`rgb 255 0 0 && echo led-red`, `if errorlevel 1 ...`) and
@@ -2985,9 +3032,11 @@ misspellings from an SD wordlist (`sd:/DICTS/<name>.words`); toggle with the
 - **Markdown**: `.md`/`.markdown`/`.mkd` files get Markdown highlighting
   (headings bold, code spans yellow, links cyan+underline, markers green).
   `Ctrl+P` (USB), nav-page `Prev` (touch), or `\p` (serial) toggles a
-  read-only rendered preview on the same surface (status shows `PREVIEW`;
-  navigation scrolls, edits are discarded, `Ctrl+P`/`\p` returns to source,
-  Esc quits). The first render can take tens of seconds after heavy
+   read-only rendered preview on the same surface (status shows `PREVIEW`;
+   navigation scrolls, edits are discarded, `Ctrl+P`/`\p` returns to source,
+   Esc quits). Preview renders Markdown files only (other syntaxes report
+   `preview needs a Markdown file`) and refuses documents past 96 KB
+   (`too large to preview`). The first render can take tens of seconds after heavy
   transcript use (TTF variant load over the SD bus shares the O6 latency
   tail); the status line shows `rendering preview...` meanwhile.
 - **Touch keyboard**: the symbol page (reachable via `1#`) adds a `Nav`
@@ -3010,8 +3059,8 @@ misspellings from an SD wordlist (`sd:/DICTS/<name>.words`); toggle with the
   (`components/filetype/`), shared with the viewer, `launch`, `dir`
   colours, and batch resolution.
 
-Editor limits are `P4_CONFIG_EDITOR_MAX_BYTES` (64 KB) and
-`P4_CONFIG_EDITOR_MAX_LINES` (2048); files beyond these are refused with an
+Editor limits are `P4_CONFIG_EDITOR_MAX_BYTES` (1 MB) and
+`P4_CONFIG_EDITOR_MAX_LINES` (65536); files beyond these are refused with an
 error instead of being truncated. The editor is safe against data loss: an
 existing file that cannot be loaded never silently opens as an empty buffer.
 | fc <file1> <file2> | Compare two text files line by line |
@@ -3283,8 +3332,9 @@ ERRORLEVEL: 0 = identical, 1 = different, 2 = usage / error.
 ### Wi-Fi Behavior
 - Boot-time startup in background task (does not block shell UI)
 - ESP-Hosted version compatibility gate: compares the C6-reported major against `P4_CONFIG_HOSTED_COMPAT_MAJOR` (3.x froze its public compat macros at the 2.12.6 baseline)
-- Hosted SDIO link runs at `CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ` (40000 since v0.38.0; soak-verified)
-- Recovery guidance points to coprocessor/esp32c6_slave or c6ota default
+- If the C6 version read fails, the transport is reset (`esp_hosted_deinit()` + init + connect) and the read is retried once before Wi-Fi is declared failed — this recovers the first-RPC SDIO timeout seen on the M5Stack Tab5 without affecting boards where the first read succeeds
+- Hosted SDIO link runs at `CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ`: 40000 on the reference board (soak-verified), 10000 on the M5Stack Tab5
+- Recovery guidance points to coprocessor/esp32c6_slave or c6ota default; a factory `v2.3.0` C6 (as shipped on the Tab5) needs a one-time standalone flasher first (see `PORTING.md` §6)
 - Restores automatically after successful c6ota
 - Transcript-facing diagnostics on boot and post-OTA restore
 
@@ -3669,8 +3719,12 @@ with their own sections, like rgb, are not stubs.)
 | Command | Reason |
 |---------|--------|
 | rgb <#RRGGBB|r g b|effect|auto> | WS2812 status LED (GPIO26) with auto status layer -- see Hardware Commands |
-| camera init | No camera stack in current workspace; stub prints an error |
-| camera snap <filename> | No camera stack in current workspace; stub prints an error |
+| camera init | Power and initialise the MIPI-CSI camera (Tab5 SC202CS via esp_video) |
+| camera snap <file.bmp> | Capture a still to a 24-bit BMP on SD (BMP only) |
+| imu [read] | Read the BMI270 accel/gyro + orientation; publishes IMU_* env vars |
+| imu status | IMU presence, orientation, and auto-rotate state |
+| imu rotate <on\|off> | Enable/disable tilt-based display rotation |
+| shutdown (poweroff) | Flush, darken LEDs, cut board power (deep sleep when no latch) |
 
 ## Runtime Notes
 

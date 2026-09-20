@@ -41,6 +41,12 @@ header_tone_t header_status_wifi_tone(bool connected, int rssi)
     if (!connected) {
         return HEADER_TONE_ERR;
     }
+    /* Associated but with no usable RSSI (the hosted get_ap_info RPC reports 0,
+     * and the cached scan record may be missing): show the connected colour
+     * instead of a false error. */
+    if (rssi == P4_CONFIG_HEADER_RSSI_UNKNOWN) {
+        return HEADER_TONE_OK;
+    }
     if (rssi >= P4_CONFIG_HEADER_RSSI_GOOD) {
         return HEADER_TONE_OK;
     }

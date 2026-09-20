@@ -6,7 +6,7 @@ idf_component_register(
     REQUIRES
         shell
         header
-        espressif__esp32_p4_function_ev_board
+        board_bsp
         fatfs
         markdown
         filetype

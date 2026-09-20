@@ -9,7 +9,7 @@ idf_component_register(
         storage
         led
         audio
-        espressif__esp32_p4_function_ev_board
+        board_bsp
         freertos
         esp_timer
 )

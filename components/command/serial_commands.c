@@ -27,6 +27,8 @@
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "command.h"
+#include "imagefmt.h"
+#include "board_config.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -68,71 +70,15 @@
 /** Pure BMP header writer (unit-tested): fills 54 header bytes, no I/O. */
 int screenshot_write_bmp_headers(uint8_t *buf, uint32_t width, uint32_t height)
 {
-    uint32_t row_bytes = width * 3;  /* 24-bit RGB */
-    uint32_t img_size = row_bytes * height;
-    uint32_t file_size = 54 + img_size;
-    uint32_t bpp = 24;
-    uint32_t planes = 1;
-    uint32_t compression = 0;
-    int32_t xppm = 3780;  /* 96 DPI */
-    int32_t yppm = 3780;
-
-    memset(buf, 0, 54);
-
-    /* File header */
-    buf[0] = 'B';
-    buf[1] = 'M';
-    buf[2] = (uint8_t)(file_size);
-    buf[3] = (uint8_t)(file_size >> 8);
-    buf[4] = (uint8_t)(file_size >> 16);
-    buf[5] = (uint8_t)(file_size >> 24);
-    buf[10] = 54;  /* offset to pixel data */
-
-    /* Info header */
-    buf[14] = 40;  /* header size */
-    buf[18] = (uint8_t)(width);
-    buf[19] = (uint8_t)(width >> 8);
-    buf[20] = (uint8_t)(width >> 16);
-    buf[21] = (uint8_t)(width >> 24);
-    buf[22] = (uint8_t)(height);
-    buf[23] = (uint8_t)(height >> 8);
-    buf[24] = (uint8_t)(height >> 16);
-    buf[25] = (uint8_t)(height >> 24);
-    buf[26] = (uint8_t)(planes);       /* planes = 1 */
-    buf[28] = (uint8_t)(bpp);          /* bits per pixel */
-    buf[30] = (uint8_t)(compression);
-    buf[34] = (uint8_t)(img_size);
-    buf[35] = (uint8_t)(img_size >> 8);
-    buf[36] = (uint8_t)(img_size >> 16);
-    buf[37] = (uint8_t)(img_size >> 24);
-    buf[38] = (uint8_t)(xppm);
-    buf[39] = (uint8_t)(xppm >> 8);
-    buf[40] = (uint8_t)(xppm >> 16);
-    buf[41] = (uint8_t)(xppm >> 24);
-    buf[42] = (uint8_t)(yppm);
-    buf[43] = (uint8_t)(yppm >> 8);
-    buf[44] = (uint8_t)(yppm >> 16);
-    buf[45] = (uint8_t)(yppm >> 24);
-
-    return 54;
+    return imagefmt_write_bmp_header(buf, width, height);
 }
 
 /**
- * Convert a single RGB565 pixel (uint16_t, little-endian) to 3 bytes of
- * RGB888 in the output buffer. BMP bottom-up format expects BGR ordering.
+ * Convert one RGB565 row to 24-bit BGR (BMP bottom-up byte order).
  */
 static inline void rgb565_to_bmp_row(uint8_t *dst, const uint16_t *src, uint32_t width)
 {
-    uint32_t i;
-    for (i = 0; i < width; i++) {
-        uint16_t px = src[i];
-        uint8_t r = (uint8_t)(((px >> 11) & 0x1F) << 3);
-        uint8_t g = (uint8_t)(((px >> 5) & 0x3F) << 2);
-        uint8_t b = (uint8_t)((px & 0x1F) << 3);
-        *dst++ = b;
-        *dst++ = g;
-        *dst++ = r;
-    }
+    imagefmt_rgb565_to_bgr24(src, dst, (size_t)width);
 }
 
 /**
@@ -150,27 +96,17 @@ static inline void rgb565_to_bmp_row(uint8_t *dst, const uint16_t *src, uint32_t
 /* Raw byte write straight to the USB-Serial/JTAG TX ring. Unlike fwrite to
  * stdout, this bypasses the console VFS's CRLF newline translation, so binary
  * payloads (send/screenshot frames, receive ACKs) are never corrupted by an
- * inserted \r before every \n byte. The writes are chunked: the driver's
- * xRingbufferSend rejects a single buffer larger than the TX ring (4 KB), so
- * a big payload (e.g. a full screenshot) must be broken into small pieces.
- * Each chunk is time-bounded (P4_CONFIG_SERIAL_SEND_TIMEOUT_MS) so a host that
- * stops reading can never wedge the command worker. */
+ * inserted \r before every \n byte. Delegates to the shared UART writer, which
+ * chunks for the driver's TX ring (4 KB) and completes partial writes under a
+ * bounded total wait, so a big payload cannot be truncated under backpressure
+ * and a host that stops reading cannot wedge the command worker. */
 static bool serial_write_raw(const void *data, size_t len)
 {
-    const uint8_t *p = (const uint8_t *)data;
-    size_t remaining = len;
-
-    while (remaining > 0) {
-        size_t chunk = remaining > 1024 ? 1024 : remaining;
-
-        if (usb_serial_jtag_write_bytes(p, chunk,
-                                        pdMS_TO_TICKS(P4_CONFIG_SERIAL_SEND_TIMEOUT_MS)) != (int)chunk) {
-            return false;
-        }
-        p += chunk;
-        remaining -= chunk;
-    }
-    return true;
+    /* One shared writer completes partial writes under a bounded total wait
+     * (chunked internally for the TX ring), so a full screenshot/send frame is
+     * never truncated by transient TX backpressure. */
+    return shell_uart_console_write_bytes(data, len,
+                                          P4_CONFIG_UART_WRITE_TOTAL_MS);
 }
 
 /* Serial binary-stream framing shared by `screenshot`, `send`, and the
@@ -833,7 +769,7 @@ void shell_command_send(int argc, char **argv)
         serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
                          "P4MiniShell %s\n", P4_CONFIG_VERSION_STRING);
         serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
-                         "board %s\n", P4_CONFIG_BOARD_REQUESTED);
+                         "board %s\n", BOARD_CFG_NAME);
         serial_diag_line(report, P4_CONFIG_SERIAL_DIAG_BYTES, &pos,
                          "idf %s\n", esp_get_idf_version());
         {

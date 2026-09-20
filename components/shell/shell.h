@@ -106,6 +106,11 @@ typedef struct {
     /** Report whether a USB HID keyboard is currently attached. */
     bool (*usb_is_keyboard_attached)(void);
 
+    /** Report whether ANY physical keyboard is present: USB HID, a connected
+     *  Bluetooth HID keyboard, or the M5Stack Tab5 keyboard module. When true
+     *  the on-screen keyboard is auto-hidden. */
+    bool (*physical_keyboard_present)(void);
+
     /** Report whether at least one background job is currently running. */
     bool (*bg_jobs_running)(void);
 
@@ -754,6 +759,20 @@ void shell_uart_console_start(void);
 
 /** Write text to the UART console output. */
 void shell_uart_console_write_text(const char *text);
+
+/**
+ * Write raw bytes to the UART console output, completing partial writes.
+ *
+ * Shared by the transcript mirror and the binary `send`/`screenshot` stream.
+ * Retries the unwritten remainder so transient TX backpressure cannot truncate
+ * a line or a framed payload; returns false only when no progress is made for
+ * @p total_ms (0 means a single attempt). Callers choose the budget: the binary
+ * path can wait seconds because the host is actively reading the frame, while
+ * the transcript mirror must stay short so it never stalls the console reader
+ * (the P4 USB-Serial/JTAG peripheral also wedges under a long full-ring stall).
+ */
+bool shell_uart_console_write_bytes(const void *data, size_t len,
+                                    uint32_t total_ms);
 
 /**
  * Claim the console's raw byte stream so the caller can read binary input from

@@ -126,47 +126,6 @@ static bool db_exists(const char *name)
     return db_exists_path(dir);
 }
 
-/** mkdir -p a path (resolved, absolute) with a guarded session. */
-static esp_err_t db_mkdir_p(const char *resolved)
-{
-    shell_sd_session_t session;
-    char *copy;
-    char *p;
-    esp_err_t error = ESP_OK;
-
-    if (shell_sd_begin(&session) != ESP_OK) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    copy = strdup(resolved);
-    if (copy == NULL) {
-        shell_sd_end(&session, DB_TAG);
-        return ESP_ERR_NO_MEM;
-    }
-    /* Skip the leading "/sdcard" mount point (already exists). */
-    p = copy;
-    while (*p == '/') {
-        p++;
-    }
-    for (; *p != '\0'; p++) {
-        if (*p == '/') {
-            char save = *p;
-            *p = '\0';
-            if (copy[0] != '\0' && mkdir(copy, 0755) != 0 && errno != EEXIST) {
-                error = ESP_FAIL;
-                *p = save;
-                break;
-            }
-            *p = save;
-        }
-    }
-    if (error == ESP_OK && copy[0] != '\0' && mkdir(copy, 0755) != 0 && errno != EEXIST) {
-        error = ESP_FAIL;
-    }
-    free(copy);
-    shell_sd_end(&session, DB_TAG);
-    return error;
-}
-
 /** Atomic-write a whole text file (temp + rename, free-space precheck). */
 static esp_err_t db_write_text_file(const char *resolved, const char *text)
 {
@@ -626,7 +585,7 @@ esp_err_t db_create(const char *name, const char *creator, const char *type,
 
     now = db_now();
 
-    error = db_mkdir_p(dir);
+    error = storage_mkdir_p(dir);
     if (error != ESP_OK) {
         return error;
     }
@@ -666,7 +625,7 @@ esp_err_t db_create(const char *name, const char *creator, const char *type,
     {
         char rec[SHELL_SD_PATH_BYTES];
         db_file_path(name, DB_RECORDS_DIR, rec, sizeof(rec));
-        error = db_mkdir_p(rec);
+        error = storage_mkdir_p(rec);
         if (error != ESP_OK) {
             return error;
         }

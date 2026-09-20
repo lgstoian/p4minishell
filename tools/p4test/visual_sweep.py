@@ -592,7 +592,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--only", default=None, help="comma-separated groups")
     ap.add_argument("--no-apps", action="store_true")
     ap.add_argument("--quick", action="store_true", help="fewer surfaces")
+    ap.add_argument("--out", default=None,
+                    help="output dir (default screenshots/visual/<PORT>)")
     args = ap.parse_args(argv)
+
+    # Namespace the output by port so two boards can be swept in parallel
+    # without overwriting each other's captures/report.
+    out_dir = args.out or (
+        os.path.join(OUT, args.port.upper()) if args.port else OUT)
 
     groups = {
         "shell": shell_surfaces,
@@ -623,7 +630,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             time.sleep(2)
     except Exception:  # noqa: BLE001
         pass
-    sw = Sweep(dev, OUT)
+    sw = Sweep(dev, out_dir)
     try:
         for gname, fn in groups.items():
             print("== group: %s ==" % gname, flush=True)
@@ -647,11 +654,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         ],
         "findings": [f.__dict__ for f in sw.findings],
     }
-    with open(os.path.join(OUT, "report.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(sw.out, "report.json"), "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2, ensure_ascii=False)
 
     # Review draft
-    with open(os.path.join(OUT, "findings_draft.md"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(sw.out, "findings_draft.md"), "w", encoding="utf-8") as fh:
         fh.write("# Visual sweep - candidate findings\n\n")
         by_kind = {}
         for f in sw.findings:
@@ -666,11 +673,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Contact sheets per group
     for g in {c.group for c in sw.captures}:
         paths = [c.bmp for c in sw.captures if c.group == g]
-        contact_sheet(paths, os.path.join(OUT, "contact_%s.png" % g))
+        contact_sheet(paths, os.path.join(sw.out, "contact_%s.png" % g))
 
     print("\ncaptures=%d findings=%d" % (len(sw.captures), len(sw.findings)))
-    print("report:", os.path.join(OUT, "report.json"))
-    print("draft :", os.path.join(OUT, "findings_draft.md"))
+    print("report:", os.path.join(sw.out, "report.json"))
+    print("draft :", os.path.join(sw.out, "findings_draft.md"))
     return 0
 
 

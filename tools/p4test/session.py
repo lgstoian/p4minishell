@@ -281,9 +281,15 @@ class DeviceSession:
 
     def read_binary_frame(self, magic: bytes, size_timeout: float = 15.0,
                           data_timeout: float = 60.0) -> bytes:
-        got = self.read_exact(len(magic), size_timeout)
-        if got != magic:
-            raise P4Error("bad frame magic %r (want %r)" % (got, magic))
+        # Scan through any interleaved log text (the board keeps emitting
+        # E/W/I lines while a binary stream is framed) until the magic appears,
+        # instead of assuming the very next bytes are the header. Without this,
+        # a single log line between the "streaming" notice and the frame made
+        # the capture fail with `bad frame magic` (the visual-sweep flake).
+        prelude = self.read_until(magic, size_timeout)
+        if magic not in prelude:
+            raise P4Error("no frame magic %r in stream (%r)"
+                          % (magic, bytes(prelude[-120:])))
         size = int.from_bytes(self.read_exact(4, size_timeout), "little")
         return self.read_exact(size, data_timeout)
 

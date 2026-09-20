@@ -18,8 +18,9 @@ program: full-screen inline editing, a line-number gutter, a current-line
 highlight, text selection, cut/copy/paste, find and replace, and a status bar
 that always shows where you are.
 
-Everything works from the on-screen touch keyboard, a USB keyboard, or the
-serial console.
+Everything works from the on-screen touch keyboard, any physical keyboard (USB
+HID, a connected Bluetooth HID keyboard, or the M5Stack Tab5 keyboard - all of
+which auto-hide the on-screen keyboard), or the serial console.
 
 ---
 

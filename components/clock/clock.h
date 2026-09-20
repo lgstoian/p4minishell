@@ -138,6 +138,29 @@ int64_t clock_rtc_anchor_age_sec(void);
 /** External-chip presence: -1 unknown, 0 absent/unconfigured, 1 present. */
 int clock_rtc_ext_state(void);
 
+/** External-RTC health flags (RX8130CE; zero for DS3231-class parts). */
+typedef enum {
+    CLOCK_RTC_FLAG_VBLF = 1 << 0, /**< Backup voltage low (oscillator may have stopped) */
+    CLOCK_RTC_FLAG_AF   = 1 << 1, /**< Alarm flag */
+    CLOCK_RTC_FLAG_TF   = 1 << 2, /**< Timer flag */
+} clock_rtc_flag_t;
+
+/**
+ * Read the external chip's status flags.
+ *
+ * @param flags_out Receives a mask of clock_rtc_flag_t (0 when the chip has no
+ *                  such flags or is absent).
+ * @return ESP_OK when read, ESP_ERR_NOT_FOUND when no external chip is
+ *         configured/present, or an I2C error.
+ */
+esp_err_t clock_rtc_ext_flags(unsigned *flags_out);
+
+/**
+ * Clear the selected external-chip flags (mask of clock_rtc_flag_t). VBLF can
+ * be cleared after a backup-battery replacement.
+ */
+esp_err_t clock_rtc_ext_clear_flags(unsigned flags);
+
 /**
  * Host-render ops for the clock command surface.
  *

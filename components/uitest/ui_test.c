@@ -57,11 +57,49 @@ static struct {
  * POINTER STATE
  * ======================================================================== */
 
+/* LVGL rotates every pointer indev's reported point from the panel's native
+ * orientation into the logical (rotated) display - see lv_display_rotate_point.
+ * Callers express targets in logical coordinates (widget geometry, `ui targets`
+ * output), so convert here before handing the point to LVGL, exactly as a real
+ * touch controller reports native coordinates. Without this the synthetic tap
+ * lands on the mirror-image key on a rotated board (e.g. the Tab5's 90-degree
+ * panel). */
+static void ui_test_to_native(int lx, int ly, int *nx, int *ny)
+{
+    display_resolution_t native = display_get_native_resolution();
+    int w = (int)native.native_width;
+    int h = (int)native.native_height;
+
+    switch (display_get_rotation()) {
+    case DISPLAY_ROTATION_90:
+        *nx = ly;
+        *ny = h - 1 - lx;
+        break;
+    case DISPLAY_ROTATION_180:
+        *nx = w - 1 - lx;
+        *ny = h - 1 - ly;
+        break;
+    case DISPLAY_ROTATION_270:
+        *nx = w - 1 - ly;
+        *ny = lx;
+        break;
+    case DISPLAY_ROTATION_0:
+    default:
+        *nx = lx;
+        *ny = ly;
+        break;
+    }
+}
+
 static void ui_test_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
+    int nx;
+    int ny;
+
     (void)indev;
-    data->point.x = (lv_coord_t)s_ui.cur_x;
-    data->point.y = (lv_coord_t)s_ui.cur_y;
+    ui_test_to_native((int)s_ui.cur_x, (int)s_ui.cur_y, &nx, &ny);
+    data->point.x = (lv_coord_t)nx;
+    data->point.y = (lv_coord_t)ny;
     data->state = s_ui.cur_pressed ? LV_INDEV_STATE_PRESSED
                                    : LV_INDEV_STATE_RELEASED;
 }

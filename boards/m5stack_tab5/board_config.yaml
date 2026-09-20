@@ -1,0 +1,201 @@
+# SPDX-FileCopyrightText: 2026 Stoian Alexandru
+# SPDX-License-Identifier: MIT
+# P4MiniShell Board Configuration - M5Stack Tab5
+# Single source of truth for all hardware pin assignments, display timing,
+# touch configuration, battery parameters, and storage mount points.
+#
+# Board baseline: M5Stack Tab5 (ESP32-P4NRW32 + ESP32-C6-MINI-1U)
+# Target MCU: ESP32-P4
+# ESP-IDF: v5.5.5
+#
+# Backed by the official espressif/m5stack_tab5 BSP, vendored in-tree under
+# board_bsp/m5stack_tab5 (trimmed to display/touch/audio/storage/IO-expander).
+# The display panel is auto-detected at runtime (ILI9881C / ST7123 / ST7121).
+#
+# Sources verified against:
+#   - https://github.com/espressif/esp-bsp (bsp/m5stack_tab5, v1.3.1)
+#   - https://components.espressif.com/components/espressif/esp_lcd_st7123
+#   - https://docs.m5stack.com/en/core/Tab5
+
+board:
+  requested_name: M5Stack Tab5
+  detected_name: M5Stack Tab5
+  mcu: ESP32-P4
+  chip_revision:
+    support_mode: less_than_v3
+    minimum_supported: v1.0
+    maximum_supported: v1.99
+
+  # ---- I2C Bus (shared by touch, codec, IO expander, RTC) ----
+  i2c:
+    port: 1
+    sda_gpio: 31
+    scl_gpio: 32
+    clock_speed_hz: 400000
+    enable_internal_pullup: true
+
+  # ---- I2S Audio (ES8388 codec + ES7210 AEC front end) ----
+  i2s:
+    port: 1
+    mclk_gpio: 30
+    sclk_gpio: 27
+    lclk_gpio: 29
+    dout_gpio: 26
+    dsin_gpio: 28
+    # The speaker amplifier enable is on the IO expander, not a GPIO.
+    power_amp_gpio: NC
+
+  # ---- Display (MIPI-DSI 1280x720, panel auto-detected by the BSP) ----
+  # Managed by: components/display/display.c (display manager), which wraps the
+  # board_bsp (m5stack_tab5) display API. The BSP probes the Sitronix TDDI at
+  # I2C 0x55 to pick ST7121 vs ST7123, else falls back to ILI9881C + GT911.
+  display:
+    # Native panel geometry is portrait; the display manager boots rotated 90
+    # so the logical desktop is 1280x720 (see components/display/).
+    width: 720
+    height: 1280
+    rotation: 90
+    panel_driver: ST7123
+    color_format_rgb888: false
+    panel_supports_hw_swap_xy: false
+    backlight_gpio: 22
+    backlight_control: ledc_pwm
+    backlight_pwm_frequency_hz: 5000
+    backlight_pwm_timer: 0
+    backlight_pwm_resolution_bits: 10
+    reset_gpio: NC
+    pixel_clock_mhz: 70
+    hsync: 1360
+    hbp: 40
+    hfp: 40
+    vsync: 730
+    vbp: 8
+    vfp: 220
+    mipi_dsi_lane_num: 2
+    mipi_dsi_lane_bitrate_mbps_macro: 1000
+    dsi_bus_lane_bitrate_mbps_runtime: 1000
+    refresh_rate_hz: 70
+    refresh_rate_dynamic_supported: false
+    display_manager_component: components/display
+    window_manager_component: components/windows
+
+  # ---- Touch (GT911 on ILI9881C units; integrated Sitronix TDDI otherwise) ----
+  touch:
+    driver: ST7123
+    reset_gpio: NC
+    interrupt_gpio: 23
+    swap_xy: false
+    mirror_x: false
+    mirror_y: false
+
+  # ---- LVGL Display Buffer ----
+  lvgl:
+    draw_buffer_size: 36000  # native width * 50
+    double_buffer: false
+    dpi_buffer_nums: 1
+    buffer_dma: true
+    buffer_spiram: true
+    sw_rotate: true
+    bsp_default_sw_rotate: true
+    avoid_tear: false
+    full_refresh: false
+    direct_mode: false
+
+  # ---- Battery (INA226 fuel gauge; no ADC divider wired) ----
+  # The ADC sense pin is NC, so the header/battery telemetry reports "BAT N/C".
+  battery:
+    # Fuel gauge on the SYS I2C bus (read-only; the firmware never toggles the
+    # charge rails). NP-F550-class 2S pack thresholds.
+    adc_gpio: NC
+    ina226:
+      present: true
+      i2c_addr: 0x41
+      shunt_milliohm: 5
+      max_current_ma: 2000
+    divider_numerator: 1
+    divider_denominator: 1
+    empty_mv: 6000
+    full_mv: 8400
+    present_mv: 5000
+
+  # ---- RGB LED: the two LEDs on the Tab5Keyboard module (over I2C) ----
+  rgb_led:
+    gpio: NC
+    is_ws2812: false
+    via_tab5_keyboard: true
+    status: "keyboard"
+
+  # ---- MIPI-CSI camera (SC202CS; board text also calls it SC2356) ----
+  camera:
+    supported: true
+    sensor: SC202CS
+    sccb_addr: 0x36
+    stack: esp_video
+    formats: [bmp]
+    status: "BMP still capture; live preview not implemented"
+
+  # ---- BMI270 IMU (main board, SYS I2C) ----
+  imu:
+    present: true
+    chip: BMI270
+    i2c_addr: 0x68
+    features: [accel, gyro, tilt_auto_rotate]
+
+  # ---- Storage ----
+  storage:
+    sd_mount_point: /sdcard
+    sd_format_on_mount_fail: false
+    sd_d0_gpio: 39
+    sd_d1_gpio: 40
+    sd_d2_gpio: 41
+    sd_d3_gpio: 42
+    sd_cmd_gpio: 44
+    sd_clk_gpio: 43
+    spiffs_mount_point: /spiffs
+    spiffs_partition_label: storage
+    spiffs_max_files: 5
+    spiffs_format_on_mount_fail: false
+
+  # ---- ESP-Hosted SDIO (ESP32-C6 co-processor) ----
+  # The bus pins are authoritative in sdkconfig
+  # (boards/m5stack_tab5/sdkconfig.defaults overrides the ESP-Hosted pins);
+  # the matching BOARD_CFG_HOSTED_SDIO_* macros exist for the GPIO table and
+  # guards so a port keeps one pin list.
+  hosted_sdio:
+    clk_gpio: 12
+    cmd_gpio: 13
+    d0_gpio: 11
+    d1_gpio: 10
+    d2_gpio: 9
+    d3_gpio: 8
+    reset_gpio: 15
+    bus_width: 4
+    # 10 MHz: the Tab5's first hosted RPC is unreliable at the 40 MHz the
+    # reference board uses. Mirrored in sdkconfig.defaults (the authoritative
+    # CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ).
+    clock_khz: 10000
+    slot: 1
+    reset_policy: SLAVE_RESET_ON_EVERY_HOST_BOOTUP
+    host_version: 3.0.6
+
+  # ---- External RTC (RX8130CE on the shared BSP I2C bus) ----
+  rtc:
+    chip: RX8130CE
+    use_bsp_i2c: true
+    i2c_addr: 0x32
+    time_reg: 0x10            # RX8130CE time block (DS3231 uses 0x00)
+    kind_rx8130: true         # 2000-based year, STOP bit in control 0x1E
+    sda_gpio: 31
+    scl_gpio: 32
+    port: 1
+
+  # ---- Tab5Keyboard module (STM32F030, external I2C 0x6D + INT) ----
+  tab5_keyboard:
+    present: true
+    i2c_addr: 0x6D
+    i2c_port: 0
+    sda_gpio: 0
+    scl_gpio: 1
+    int_gpio: 50
+    modes: [normal, hid, string]
+    rgb: [custom, brightness]

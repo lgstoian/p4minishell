@@ -140,6 +140,7 @@ extern void test_config_remove_multiple(void);
 extern void test_config_remove_last_line_no_newline(void);
 
 extern void test_editor_osk_key_from_label(void);
+extern void test_editor_spell_tokenizer(void);
 extern void test_editor_word_count(void);
 extern void test_editor_new_doc(void);
 extern void test_editor_insert_and_cursor(void);
@@ -267,6 +268,11 @@ extern void test_modal_timeout_rejects(void);
 extern void test_modal_var_basic(void);
 extern void test_modal_var_rejects(void);
 
+extern void test_hardware_wifi_tone(void);
+extern void test_hardware_imu_orientation(void);
+extern void test_hardware_charge_state(void);
+extern void test_hardware_bmp_header(void);
+extern void test_hardware_rgb565_to_bgr24(void);
 extern void test_power_parse_default(void);
 extern void test_power_parse_valid(void);
 extern void test_power_parse_clamp_and_reject(void);
@@ -313,6 +319,14 @@ extern void test_markdown_doc_tables(void);
 extern void test_markdown_doc_fences(void);
 extern void test_markdown_display_width(void);
 extern void test_markdown_render_html(void);
+extern void test_markdown_render_html_page(void);
+extern void test_markdown_html_lists(void);
+extern void test_markdown_html_table(void);
+extern void test_markdown_html_inline(void);
+extern void test_markdown_html_links_images(void);
+extern void test_markdown_html_heading_fence(void);
+extern void test_markdown_html_measure(void);
+extern void test_markdown_print_widths(void);
 extern void test_markdown_render_print(void);extern void test_filetype_batch(void);
 extern void test_filetype_markdown(void);
 extern void test_filetype_json_text(void);
@@ -603,6 +617,7 @@ void app_main(void)
     /* Editor document-model tests */
     UNITY_BEGIN();
     RUN_TEST(test_editor_osk_key_from_label);
+    RUN_TEST(test_editor_spell_tokenizer);
     RUN_TEST(test_editor_word_count);
     RUN_TEST(test_editor_new_doc);
     RUN_TEST(test_editor_insert_and_cursor);
@@ -760,6 +775,11 @@ void app_main(void)
 
     /* Power helpers (components/command/power_commands.c). */
     UNITY_BEGIN();
+    RUN_TEST(test_hardware_wifi_tone);
+    RUN_TEST(test_hardware_imu_orientation);
+    RUN_TEST(test_hardware_charge_state);
+    RUN_TEST(test_hardware_bmp_header);
+    RUN_TEST(test_hardware_rgb565_to_bgr24);
     RUN_TEST(test_power_parse_default);
     RUN_TEST(test_power_parse_valid);
     RUN_TEST(test_power_parse_clamp_and_reject);
@@ -825,6 +845,14 @@ void app_main(void)
     RUN_TEST(test_markdown_doc_fences);
     RUN_TEST(test_markdown_display_width);
     RUN_TEST(test_markdown_render_html);
+    RUN_TEST(test_markdown_render_html_page);
+    RUN_TEST(test_markdown_html_lists);
+    RUN_TEST(test_markdown_html_table);
+    RUN_TEST(test_markdown_html_inline);
+    RUN_TEST(test_markdown_html_links_images);
+    RUN_TEST(test_markdown_html_heading_fence);
+    RUN_TEST(test_markdown_html_measure);
+    RUN_TEST(test_markdown_print_widths);
     RUN_TEST(test_markdown_render_print);
     UNITY_END();
 
