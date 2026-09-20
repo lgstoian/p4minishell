@@ -14,6 +14,32 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [1.2.1] - 2026-09-20
+
+Patch release: make the M5Stack Tab5 battery actually charge and report it.
+
+### Fixed
+
+- **Tab5 battery never charged and reported the wrong state** (`bugs.md` F20):
+  the second PI4IOE5V6408 (0x44) was left in the managed driver's default
+  high-impedance state, so the charge-enable pin never drove, and the INA226
+  charge sign was inverted. The expander is now configured exactly like the
+  M5Stack reference (raw `DIR=0xB9`, `OUT_H_IM=0x06`, `PULL_SEL=0xB9`,
+  `PULL_EN=0xF9`, `IN_DEF_STA=0x40`, `INT_MASK=0xBF`, `OUT_SET=0x89`; P7 charge,
+  P5 QuickCharge, P4 power-off), the gauge is calibrated to the reference
+  (shunt 5 mOhm, 8.192 A, `CAL=0x0D55`), and negative current now classifies as
+  **charging**. Verified on COM6: the pack voltage rises (7.762 → 7.808 V) and
+  the level climbs (73% → 75%).
+
+### Added
+
+- **`battery diag`**: prints the raw INA226 bus/shunt/current/power registers
+  plus the programmed CONFIG/CALIBRATION.
+- **Header charging indicator**: the battery cell shows `+NN%` while charging
+  (and the tap detail appends `(charging)`).
+
+---
+
 ## [1.2.0] - 2026-09-20
 
 Writerdeck milestone (roadmap section B) and the two-board bring-up: the
@@ -87,12 +113,14 @@ JC1060P470C reference. Additive only — no existing feature removed. See
   the esp_video ISP pipeline controller so RAW8 is auto-exposed. Verified
   capturing a properly-exposed 1280x720 BMP.
 - **Tab5 battery charging** (`bugs.md` F20): the firmware never enabled the
-  charge path, so the pack stayed idle. Charging is now enabled once at boot
-  (`board_bsp_charge_enable`, PI4IOE5V6408 P7/P5), matching the M5Stack
-  reference, and the charge state follows the vendor convention: discharging
-  when current flows out, full at the full threshold, otherwise **charging** (so
-  a pack on external power reads `charging` even when the source supplies no net
-  current).
+  charge path, and the INA226 charge sign was inverted. The second IO expander
+  is now configured exactly like the M5Stack reference (raw `DIR`/`OUT_H_IM`/
+  `PULL`/`IN_DEF`/`INT_MASK`, driving P7 charge-enable, P5 QuickCharge, P4
+  power-off) and the INA226 is calibrated to the reference (shunt 5 mOhm,
+  8.192 A, `CAL=0x0D55`). Negative gauge current now classifies as **charging**
+  (verified: the pack voltage rises while charging). The header battery cell
+  shows `+NN%` and the tap detail adds `(charging)`, and `battery diag` prints
+  the raw INA226 registers.
 - **Status header Wi-Fi indicator was always red** (`bugs.md` F21): when the
   hosted path could not report an RSSI it was treated as an error even while
   associated. `header_status_wifi_tone()` now maps the unknown-RSSI sentinel to

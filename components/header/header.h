@@ -234,6 +234,7 @@ typedef struct {
     int wifi_rssi;              /**< Wi-Fi signal strength in dBm. */
     int battery_percent;        /**< 0-100 (only meaningful when adc_ready). */
     bool battery_adc_ready;
+    bool battery_charging;      /**< true when the pack is on external charge power. */
     bool bt_enabled;
     bool bt_connected;
     bool usb_connected;

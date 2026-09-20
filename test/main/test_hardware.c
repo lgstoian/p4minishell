@@ -58,13 +58,13 @@ void test_hardware_imu_orientation(void)
 
 void test_hardware_charge_state(void)
 {
-    /* Positive current flows into the pack (M5Stack convention). */
+    /* The Tab5 INA226 reads charge current as NEGATIVE; positive current is the
+     * pack supplying the system (verified on hardware). */
     TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_CHARGING,
-                          power_monitor_classify_charge(7600, 500));
-    TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_DISCHARGING,
                           power_monitor_classify_charge(7600, -500));
-    /* Not discharging (external power holding the pack at a standstill) is
-     * reported as charging, matching the vendor UI. */
+    TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_DISCHARGING,
+                          power_monitor_classify_charge(7600, 500));
+    /* No meaningful current on external power reads as charging (not full). */
     TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_CHARGING,
                           power_monitor_classify_charge(7600, 0));
 

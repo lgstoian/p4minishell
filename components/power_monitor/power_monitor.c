@@ -16,6 +16,7 @@
  * the charge-enable rails, so it cannot over-charge or damage the pack.
  */
 
+#include <math.h>
 #include <string.h>
 
 #include "esp_err.h"
@@ -23,7 +24,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "driver/i2c_master.h"
-#include "esp_io_expander.h"
 
 #include "power_monitor.h"
 #include "board_config.h"
@@ -59,20 +59,22 @@
 
 power_monitor_charge_t power_monitor_classify_charge(int pack_mv, int current_ma)
 {
-    if (current_ma <= -(int)BOARD_CFG_BATTERY_CHARGE_CURRENT_MA) {
+    /* On the Tab5 the INA226 shunt reads charge current as NEGATIVE (verified:
+     * the pack voltage rises while the current is negative, and it moves toward
+     * zero as system load rises), so positive current is the pack supplying the
+     * system. */
+    if (current_ma >= (int)BOARD_CFG_BATTERY_CHARGE_CURRENT_MA) {
         return POWER_MONITOR_CHARGE_DISCHARGING;
     }
 #if BOARD_CFG_BATTERY_FULL_MV > 0
     /* At/above the full threshold with no meaningful current: charged. */
-    if (current_ma < (int)BOARD_CFG_BATTERY_CHARGE_CURRENT_MA &&
+    if (current_ma > -(int)BOARD_CFG_BATTERY_CHARGE_CURRENT_MA &&
         pack_mv >= (int)BOARD_CFG_BATTERY_FULL_MV) {
         return POWER_MONITOR_CHARGE_FULL;
     }
 #else
     (void)pack_mv;
 #endif
-    /* Not discharging (current flows in, or external power holds the pack at a
-     * standstill): the vendor UI treats this as "charging". */
     return POWER_MONITOR_CHARGE_CHARGING;
 }
 
@@ -94,6 +96,7 @@ static struct {
     SemaphoreHandle_t lock;
     bool present;
     float current_lsb;   /* A per LSB */
+    uint16_t cal;        /* programmed calibration register */
 } s_pm;
 
 static esp_err_t pm_read16(uint8_t reg, uint16_t *out)
@@ -166,17 +169,27 @@ esp_err_t power_monitor_init(void)
         goto fail;
     }
 
-    s_pm.current_lsb = ((float)BOARD_CFG_BATTERY_INA226_MAX_CURRENT_MA / 1000.0f) / 32768.0f;
     {
+        /* Match the M5Stack reference calibration: Current_LSB is rounded UP to
+         * the next 0.1 mA, then CAL = 0.00512 / (Current_LSB * Rshunt). */
+        float max_a = (float)BOARD_CFG_BATTERY_INA226_MAX_CURRENT_MA / 1000.0f;
         float shunt_ohms = (float)BOARD_CFG_BATTERY_INA226_SHUNT_MILLIOHM / 1000.0f;
-        uint32_t cal = (uint32_t)(0.00512f / (s_pm.current_lsb * shunt_ohms));
+        float min_lsb = max_a / 32767.0f;
+        uint32_t cal;
+
+        s_pm.current_lsb = ceilf(min_lsb / 0.0001f) * 0.0001f;
+        if (s_pm.current_lsb <= 0.0f) {
+            s_pm.current_lsb = 0.0001f;
+        }
+        cal = (uint32_t)(0.00512f / (s_pm.current_lsb * shunt_ohms));
         if (cal == 0) {
             cal = 1;
         }
         if (cal > 0xFFFFu) {
             cal = 0xFFFFu;
         }
-        error = pm_write16(INA226_REG_CALIBRATION, (uint16_t)cal);
+        s_pm.cal = (uint16_t)cal;
+        error = pm_write16(INA226_REG_CALIBRATION, s_pm.cal);
         if (error != ESP_OK) {
             goto fail;
         }
@@ -278,6 +291,46 @@ esp_err_t power_monitor_battery_read(int *pack_mv_out, int *percent_out,
                                      charging_out);
 }
 
+esp_err_t power_monitor_read_diag(power_monitor_diag_t *out)
+{
+    uint16_t bus_raw = 0;
+    uint16_t shunt_raw = 0;
+    uint16_t cur_raw = 0;
+    uint16_t pow_raw = 0;
+    uint16_t config = 0;
+    esp_err_t error;
+
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out, 0, sizeof(*out));
+    if (!s_pm.present) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (s_pm.lock != NULL) {
+        xSemaphoreTake(s_pm.lock, portMAX_DELAY);
+    }
+    error = pm_read16(INA226_REG_BUS_VOLT, &bus_raw);
+    if (error == ESP_OK) {
+        (void)pm_read16(INA226_REG_SHUNT_VOLT, &shunt_raw);
+        (void)pm_read16(INA226_REG_CURRENT, &cur_raw);
+        (void)pm_read16(INA226_REG_POWER, &pow_raw);
+        (void)pm_read16(INA226_REG_CONFIG, &config);
+
+        out->bus_mv = (int)(((uint32_t)bus_raw * 125u) / 100u);
+        out->shunt_uv = (int)((int16_t)shunt_raw) * 25 / 10;  /* 2.5 uV/LSB */
+        out->current_raw = (int)(int16_t)cur_raw;
+        out->current_ma = (int)((int16_t)cur_raw * s_pm.current_lsb * 1000.0f);
+        out->power_mw = (int)((float)pow_raw * (25.0f * s_pm.current_lsb) * 1000.0f);
+        out->config = config;
+        out->cal = s_pm.cal;
+    }
+    if (s_pm.lock != NULL) {
+        xSemaphoreGive(s_pm.lock);
+    }
+    return error;
+}
+
 #else  /* !BOARD_CFG_BATTERY_INA226_PRESENT */
 
 esp_err_t power_monitor_init(void)
@@ -307,6 +360,14 @@ esp_err_t power_monitor_battery_read(int *pack_mv_out, int *percent_out,
 {
     return power_monitor_read_sample(pack_mv_out, percent_out, NULL, NULL,
                                      charging_out);
+}
+
+esp_err_t power_monitor_read_diag(power_monitor_diag_t *out)
+{
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    return ESP_ERR_NOT_FOUND;
 }
 
 #endif /* BOARD_CFG_BATTERY_INA226_PRESENT */

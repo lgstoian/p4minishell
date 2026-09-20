@@ -5201,6 +5201,7 @@ static uint32_t s_tlm_task_count;
 static int s_tlm_cpu_percent;
 static int s_tlm_battery_percent;
 static bool s_tlm_battery_ok;
+static bool s_tlm_battery_charging;
 static TaskHandle_t s_tlm_task;
 
 /** Sample the expensive telemetry once. Runs on the telemetry task. */
@@ -5224,6 +5225,8 @@ static void shell_telemetry_sample(void)
         s_command_ops.battery_read(NULL, &s_tlm_battery_percent, NULL, NULL) == ESP_OK) {
         s_tlm_battery_ok = true;
     }
+    s_tlm_battery_charging = s_command_ops.battery_is_charging != NULL &&
+                             s_command_ops.battery_is_charging();
 }
 
 static void shell_telemetry_task(void *arg)
@@ -5298,6 +5301,7 @@ void shell_header_status_refresh(void)
         .wifi_rssi = wifi_rssi,
         .battery_percent = s_tlm_battery_percent,
         .battery_adc_ready = s_tlm_battery_ok,
+        .battery_charging = s_tlm_battery_charging,
         .bt_enabled = s_command_ops.bluetooth_is_enabled != NULL && s_command_ops.bluetooth_is_enabled(),
         .bt_connected = s_command_ops.bluetooth_is_connected != NULL && s_command_ops.bluetooth_is_connected(),
         .usb_connected = s_command_ops.usb_is_connected != NULL && s_command_ops.usb_is_connected(),

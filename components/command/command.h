@@ -114,6 +114,9 @@ void command_set_volume(int percent);
  */
 esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out);
 
+/** True when the pack is on external charge power (gauge boards). */
+bool command_battery_is_charging(void);
+
 /* ========================================================================
  * POWER / IDLE
  * ======================================================================== */

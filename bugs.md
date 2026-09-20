@@ -383,19 +383,23 @@ dedicated follow-up (per the campaign scope).
 - **Found on:** 2026-09-20, COM6, firmware v1.2.0
 - **Symptom:** `battery` showed a static 73% (7.76 V, ~0 mA); the pack never
   charged while on USB power.
-- **Root cause:** the Tab5 gates the charge path off after reset, and the
-  firmware never enabled it (the M5Stack reference calls `setChargeEnable(true)`
-  / `setChargeQcEnable(true)` at init).
-- **Fix:** `board_bsp_charge_enable(true)` at boot sets PI4IOE5V6408 0x44 P7
-  (charge enable) and clears P5 (QC enable); the EV board is a no-op. The charge
-  state now follows the vendor convention (not-discharging = charging), so a
-  pack on external power reads `charging` even when the source supplies no net
-  charge current.
-- **Verified:** the expander output register reads 0x89 (P7 set) after boot and
-  `battery` reports `charging` (73%, 7.762 V, 0 mA). The INA226 still measures
-  ~0 mA net because this power source supplies no surplus charge current (the
-  M5Stack reference uses the same bits and the same "not discharging" UI
-  convention).
+- **Root cause:** two problems. (1) The firmware never enabled the charge path,
+  and the managed `esp_io_expander` driver leaves every pin **high-impedance**
+  (`OUT_H_IM=0xFF`); the charge-enable pin never actually drove. (2) The INA226
+  charge sign was inverted — on the Tab5 the shunt reads charge current as
+  **negative**.
+- **Fix:** the second PI4IOE5V6408 (0x44) is now configured exactly as the
+  M5Stack reference (raw `DIR=0xB9`, `OUT_H_IM=0x06`, `PULL_SEL=0xB9`,
+  `PULL_EN=0xF9`, `IN_DEF_STA=0x40`, `INT_MASK=0xBF`, `OUT_SET=0x89`), driving
+  P7 (charge), P5 (QuickCharge) and P4 (power-off); the INA226 is calibrated to
+  the reference (shunt 5 mOhm, 8.192 A max, `CAL=0x0D55`); and
+  `power_monitor_classify_charge()` now treats negative current as charging.
+  The header shows `+NN%` + `(charging)`, and `battery diag` dumps the raw
+  registers.
+- **Verified:** COM6 `battery` reports `charging` with the pack voltage rising
+  (7.762 V → 7.808 V) and the level climbing (73% → 75%); live `0x44` reads are
+  `DIR=0xB9`, `OUT_H_IM=0x06`, `OUT_SET=0x89`. Under heavy load the (negative)
+  charge current moves toward zero, as expected for a source sharing its input.
 
 ### F21. Header Wi-Fi indicator stuck red — **FIXED**
 

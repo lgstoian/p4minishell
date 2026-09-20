@@ -135,22 +135,6 @@ dependencies:
     targets:
     - esp32p4
     version: 2.4.0
-  espressif/esp_lcd_ek79007:
-    component_hash: 8005700b7f10c7136b6e2a3f19a48f972aa1d13ed107ed298574e8d24d17ea83
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: 0.*
-    - name: idf
-      require: private
-      version: '>=5.3'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32p4
-    version: 1.0.4
   espressif/esp_lcd_ili9881c:
     component_hash: 0288df12755c95d406ccea245a427595f314df0b14a61846286d926ea6f3698e
     dependencies:
@@ -163,22 +147,6 @@ dependencies:
     targets:
     - esp32p4
     version: 1.1.0
-  espressif/esp_lcd_jd9165:
-    dependencies: []
-    source:
-      path: D:\Code\new\p4minishell\managed_components\espressif__esp_lcd_jd9165
-      type: local
-    version: 1.0.2
-  espressif/esp_lcd_lt8912b:
-    component_hash: e85b82fc4366dadff18af76df8584249df9df3326d44feb30888130e19930098
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.3'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 0.2.1
   espressif/esp_lcd_st7123:
     component_hash: 067236d959e1b4e51467708242083926d3fe898e071a5a92086c5a94f1c5dac7
     dependencies:
@@ -474,10 +442,7 @@ direct_dependencies:
 - espressif/esp_hosted
 - espressif/esp_io_expander
 - espressif/esp_io_expander_pi4ioe5v6408
-- espressif/esp_lcd_ek79007
 - espressif/esp_lcd_ili9881c
-- espressif/esp_lcd_jd9165
-- espressif/esp_lcd_lt8912b
 - espressif/esp_lcd_st7123
 - espressif/esp_lcd_touch
 - espressif/esp_lcd_touch_gt911
@@ -492,6 +457,6 @@ direct_dependencies:
 - espressif/usb_host_msc
 - idf
 - lvgl/lvgl
-manifest_hash: 01c3e564d41601117ff361abd160cf5b7a0f8bbc68b5fa19010d35f2da5230f8
+manifest_hash: 73d5db26edf63597ecd9da849ce58dd0bedcee9ff2314dfdac954072b742f655
 target: esp32p4
 version: 2.0.0

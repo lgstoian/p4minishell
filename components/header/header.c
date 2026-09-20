@@ -84,6 +84,7 @@ typedef struct {
     int wifi_rssi;
     int battery_percent;
     bool battery_adc_ready;       /* true when ADC is connected and reading valid data */
+    bool battery_charging;        /* true when the pack is on external charge power */
     bool bluetooth_enabled;
     bool bluetooth_connected;
     bool usb_connected;
@@ -180,6 +181,7 @@ static int s_last_actual_right = 0;
 static header_state_t s_header_state = {
     .battery_percent = 100,
     .battery_adc_ready = false,
+    .battery_charging = false,
     .wifi_rssi = -127,
     .sd_state = HEADER_SD_NONE,
     .free_heap_bytes = 0,
@@ -530,7 +532,8 @@ static void header_show_status_detail(header_status_kind_t kind)
         break;
     case HEADER_STATUS_BATTERY:
         if (s_header_state.battery_adc_ready) {
-            snprintf(text, sizeof(text), "Battery %d%%", s_header_state.battery_percent);
+            snprintf(text, sizeof(text), "Battery %d%%%s", s_header_state.battery_percent,
+                     s_header_state.battery_charging ? " (charging)" : "");
         } else {
             snprintf(text, sizeof(text), "Battery N/C (ADC not connected)");
         }
@@ -1102,7 +1105,8 @@ static void header_render(void)
                      LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_battery_bar, battery_color, LV_PART_INDICATOR);
     if (s_header_state.battery_adc_ready) {
-        snprintf(buf, sizeof(buf), "%d%%", s_header_state.battery_percent);
+        snprintf(buf, sizeof(buf), s_header_state.battery_charging ? "+%d%%" : "%d%%",
+                 s_header_state.battery_percent);
     } else {
         snprintf(buf, sizeof(buf), "%s", "N/C");
     }
@@ -1756,6 +1760,7 @@ void header_update_batch(const header_batch_t *in)
     s_header_state.battery_percent =
         (in->battery_percent < 0) ? 0 : (in->battery_percent > 100) ? 100 : in->battery_percent;
     s_header_state.battery_adc_ready = in->battery_adc_ready;
+    s_header_state.battery_charging = in->battery_charging;
     s_header_state.bluetooth_enabled = in->bt_enabled;
     s_header_state.bluetooth_connected = in->bt_connected;
     s_header_state.usb_connected = in->usb_connected;
@@ -1843,6 +1848,7 @@ void header_deinit(void)
     s_header_state = (header_state_t){
         .battery_percent = 100,
         .battery_adc_ready = false,
+    .battery_charging = false,
         .wifi_rssi = -127,
         .sd_state = HEADER_SD_NONE,
         .free_heap_bytes = 0,

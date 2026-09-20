@@ -56,7 +56,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             1
 #define P4_CONFIG_VERSION_MINOR             2
-#define P4_CONFIG_VERSION_PATCH             0
+#define P4_CONFIG_VERSION_PATCH             1
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)

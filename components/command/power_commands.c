@@ -229,9 +229,23 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
     return ESP_OK;
 }
 
+bool command_battery_is_charging(void)
+{
+#if BOARD_CFG_BATTERY_INA226_PRESENT
+    bool charging = false;
+
+    if (power_monitor_available() || power_monitor_init() == ESP_OK) {
+        if (power_monitor_battery_read(NULL, NULL, &charging) == ESP_OK) {
+            return charging;
+        }
+    }
+#endif
+    return false;
+}
+
 static void shell_battery_print_usage(void)
 {
-    shell_print_usage("Usage: battery or battery sleep <on|off|status>");
+    shell_print_usage("Usage: battery | battery diag | battery sleep <on|off|status>");
 }
 
 /* ========================================================================
@@ -287,6 +301,32 @@ void shell_command_rotate(int argc, char **argv)
     shell_transcript_appendf_ansi(SH_LBL "rotation set to" SH_RST " " SH_NUM "%s" SH_RST " " SH_LBL "degrees and GT911 remap updated" SH_RST "\n", argv[1]);
 }
 
+/** `battery diag`: raw INA226 registers, for on-device bring-up/verification. */
+static void shell_battery_print_diag(void)
+{
+    power_monitor_diag_t d;
+
+    if (!power_monitor_available() && power_monitor_init() != ESP_OK) {
+        shell_print_error("battery: no fuel gauge on this board");
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (power_monitor_read_diag(&d) != ESP_OK) {
+        shell_print_error("battery: gauge read failed");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_transcript_appendf_ansi(SH_HEAD "Battery gauge (INA226)" SH_RST "\n");
+    shell_transcript_appendf_ansi("  " SH_LBL "bus:" SH_RST " " SH_NUM "%d mV" SH_RST "\n", d.bus_mv);
+    shell_transcript_appendf_ansi("  " SH_LBL "shunt:" SH_RST " " SH_NUM "%d uV" SH_RST "\n", d.shunt_uv);
+    shell_transcript_appendf_ansi("  " SH_LBL "current:" SH_RST " " SH_NUM "raw=%d" SH_RST " " SH_NUM "%d mA" SH_RST "\n",
+                                  d.current_raw, d.current_ma);
+    shell_transcript_appendf_ansi("  " SH_LBL "power:" SH_RST " " SH_NUM "%d mW" SH_RST "\n", d.power_mw);
+    shell_transcript_appendf_ansi("  " SH_LBL "config:" SH_RST " " SH_NUM "0x%04X" SH_RST " " SH_LBL "cal:" SH_RST
+                                  " " SH_NUM "0x%04X" SH_RST "\n", d.config, d.cal);
+    batch_set_errorlevel(0);
+}
+
 void shell_command_battery(int argc, char **argv)
 {
     int battery_mv = 0;
@@ -294,6 +334,11 @@ void shell_command_battery(int argc, char **argv)
     int raw = 0;
     int gpio_mv = 0;
     esp_err_t error;
+
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "diag")) {
+        shell_battery_print_diag();
+        return;
+    }
 
     if (argc == 1) {
 #if BOARD_CFG_BATTERY_INA226_PRESENT

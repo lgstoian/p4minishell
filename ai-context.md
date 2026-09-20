@@ -1275,10 +1275,11 @@ the raster core + 8x8 font are `components/gfx/`
   never sets charge voltage/current. `command_battery_read()` prefers the gauge on
   `BOARD_CFG_BATTERY_INA226_PRESENT` boards and reports `N/C` below
   `BOARD_CFG_BATTERY_PRESENT_MV`. The charge state is derived from the signed current
-  (`power_monitor_classify_charge`), NOT from an IO-expander pin: current `<= -deadband` is
-  discharging, at/above full voltage with no current is full, and everything else (into the
-  pack, or external power holding a non-full pack at a standstill) is reported as **charging** -
-  the same "not discharging" convention the M5Stack reference UI uses.
+  (`power_monitor_classify_charge`), NOT from an IO-expander pin. On the Tab5 the INA226 shunt
+  reads **charge current as negative** (verified on hardware: the pack voltage rises while the
+  current is negative, and it moves toward zero as system load rises), so `<= -deadband` is
+  **charging**, `>= +deadband` is **discharging**, at/above full voltage with no current is
+  **full**, and near-zero on external power is charging.
 - Charging is enabled once at boot by `board_bsp_charge_enable(true)` (Tab5: PI4IOE5V6408 0x44
   P7/P5), matching the M5Stack reference; the Tab5 gates the charge path off after reset, so
   without this the pack never charges. It only gates the charge path - voltage/current stay

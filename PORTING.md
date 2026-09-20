@@ -125,8 +125,11 @@ board, so the toolchain and target carry over; the deltas:
   by `BOARD_CFG_RTC_EXT_TIME_REG` (0x10) / `BOARD_CFG_RTC_EXT_KIND_RX8130`
   (2000-based year, STOP bit in control 0x1E).
 - **Battery:** INA226 fuel gauge (addr 0x41, 5 mOhm) on the SYS I2C bus, owned
-  by `components/power_monitor/`. Read-only by design (the firmware never writes
-  the charge rails). `battery` shows V/A/W/charge; the header shows SoC.
+  by `components/power_monitor/`. Measurement is read-only, but charging is
+  enabled once at boot (`board_bsp_charge_enable`) via the M5Stack PI4IOE5V6408
+  sequence. The shunt reads charge current as **negative**; `battery` shows
+  V/A/W/charge, the header shows `+NN%` while charging, and `battery diag` prints
+  the raw registers.
 - **Input:** the Tab5Keyboard module (STM32F030, expansion I2C 0x6D, INT GPIO50)
   via `components/tab5kbd/`, feeding HID reports into the shell beside USB HID
   and the OSK. Its two RGB LEDs are the board's status LEDs: `components/led/`

@@ -4137,6 +4137,7 @@ void command_init(void)
         .get_volume_percent = command_get_volume_percent,
         .sd_is_mounted      = storage_sd_is_mounted,
         .battery_read       = command_battery_read,
+        .battery_is_charging = command_battery_is_charging,
 
         /* External-module accessors. These let the shell core read state from
          * the networking, Bluetooth, USB, and C6 OTA modules without including

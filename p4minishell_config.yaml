@@ -12,10 +12,10 @@
 # boards/<name>/board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 1.2.0
+# Version: 1.2.1
 # Last updated: 2026-09-18 (1.2.0: writerdeck - editor focus/typewriter mode,
 #   markdown export, reading typography, spellcheck, document templates)
-config_version: "1.2.0"
+config_version: "1.2.1"
 
 # ---- Shell Identity ----
 shell_identity:

@@ -73,6 +73,10 @@ typedef struct {
     /** Read battery telemetry. Any output pointer may be NULL. */
     esp_err_t (*battery_read)(int *battery_mv, int *percent, int *raw, int *gpio_mv);
 
+    /** Report whether the pack is on external charge power (gauge boards).
+     *  NULL/false on boards without a charge-capable gauge. */
+    bool (*battery_is_charging)(void);
+
     /* ------------------------------------------------------------------
      * External-module accessors.
      * These let the shell core read state from the networking, Bluetooth,

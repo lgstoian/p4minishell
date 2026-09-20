@@ -75,6 +75,20 @@ esp_err_t power_monitor_read_sample(int *pack_mv_out, int *percent_out,
                                     int *current_ma_out, int *power_mw_out,
                                     bool *charging_out);
 
+/** Raw INA226 registers for diagnostics (`battery diag`). */
+typedef struct {
+    int bus_mv;       /*!< Bus voltage (1.25 mV/LSB) */
+    int shunt_uv;     /*!< Shunt voltage, signed (2.5 uV/LSB) */
+    int current_raw;  /*!< Current register, signed */
+    int current_ma;   /*!< Current in mA (current_raw * current_lsb) */
+    int power_mw;     /*!< Power register in mW */
+    uint16_t config;  /*!< CONFIG register */
+    uint16_t cal;     /*!< Programmed CALIBRATION register */
+} power_monitor_diag_t;
+
+/** Read raw INA226 diagnostics. ESP_ERR_NOT_FOUND when no gauge is available. */
+esp_err_t power_monitor_read_diag(power_monitor_diag_t *out);
+
 #ifdef __cplusplus
 }
 #endif
