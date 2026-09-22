@@ -4,7 +4,7 @@
  */
 /**
  * @file audio.h
- * @brief ES8311 audio playback for P4MiniShell (`beep` / `tone` / `wavplay`).
+ * @brief Codec audio playback for P4MiniShell (`beep` / `tone` / `wavplay`).
  *
  * Owns the speaker codec path (mono 16-bit at 22050 Hz), the speaker volume,
  * and a small background playback task so shell commands never block on

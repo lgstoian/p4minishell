@@ -184,9 +184,10 @@ static void display_update_touch_rotation(display_rotation_t rotation)
      * coordinates, causing mirroring and incorrect rotation.
      *
      * When sw_rotate is false and the panel supports hardware rotation,
-     * the touch controller would need manual remapping to match. But the
-     * JD9165 panel does not support hardware rotation, so we always use
-     * software rotation. */
+     * the touch controller would need manual remapping to match. But neither
+     * supported panel exposes hardware rotation here
+     * (BOARD_CFG_LCD_PANEL_SUPPORTS_HW_SWAP_XY is 0 on all profiles), so we
+     * always use software rotation. */
     (void)rotation;
 
     if (display_acquire_touch_handle() != ESP_OK || s_display.touch_handle == NULL) {
@@ -354,8 +355,8 @@ display_refresh_config_t display_get_refresh_config(void)
 esp_err_t display_set_refresh_rate(uint32_t target_hz)
 {
     /* Dynamic refresh rate change via DSI bitrate adjustment is not
-     * supported on the current JD9165 panel baseline. The panel timing
-     * is fixed at 80 MHz pixel clock with the current hsync/vsync values.
+     * supported on the current panels. Panel timing is fixed per board
+     * profile (BOARD_CFG_LCD_PIXEL_CLOCK_MHZ plus the hsync/vsync values).
      *
      * Future panels or board revisions may support this through:
      *   - Reconfiguring the MIPI DSI PHY bitrate
@@ -374,9 +375,10 @@ esp_err_t display_set_refresh_rate(uint32_t target_hz)
         return ESP_OK;
     }
 
-    /* The JD9165 panel is fixed at ~60 Hz with current timing.
-     * 30 Hz could theoretically be achieved by doubling vertical blanking
-     * but that requires panel-specific DCS commands not yet implemented. */
+    /* The active panel runs at a fixed rate derived from its timing
+     * (see display_get_refresh_config()). A lower rate could theoretically
+     * be achieved by doubling vertical blanking but that requires
+     * panel-specific DCS commands not yet implemented. */
     ESP_LOGW(DISPLAY_TAG, "Dynamic refresh rate change not supported on current panel");
     ESP_LOGW(DISPLAY_TAG, "Current rate: %" PRIu32 " Hz, requested: %" PRIu32 " Hz",
              current.current_hz, target_hz);
@@ -727,8 +729,9 @@ esp_err_t display_init(void)
     /* Attempt to acquire touch handle (non-fatal if it fails) */
     esp_err_t touch_err = display_acquire_touch_handle();
     if (touch_err != ESP_OK) {
-        ESP_LOGW(DISPLAY_TAG, "GT911 touch handle lookup failed: %s; "
-                 "rotation will be display-only", esp_err_to_name(touch_err));
+        ESP_LOGW(DISPLAY_TAG, "%s touch handle lookup failed: %s; "
+                 "rotation will be display-only", P4_BSP_TOUCH_DRIVER,
+                 esp_err_to_name(touch_err));
     }
 
     ESP_LOGI(DISPLAY_TAG, "Display manager initialized: %" PRId32 "x%" PRId32

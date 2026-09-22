@@ -272,6 +272,40 @@ def run(dev, ctx):
     c.expect("gfind total count", "gfind.total", out)
 
     # ==================================================================
+    # gfind /files (opt-in text-file scope; shared with findstr /S)
+    # ==================================================================
+    fdir = "%s/files" % DATA
+    token = "P4NEEDLE%s" % stamp
+    dev.run("md %s" % fdir)
+    dev.run('write %s/a.txt "line one %s"' % (fdir, token))
+    dev.run('write %s/b.md "markdown %s"' % (fdir, token))
+    # An image and an unknown-kind file must be skipped by the default filter.
+    dev.run('write %s/c.bmp "binary %s"' % (fdir, token))
+    dev.run('write %s/d.dat "opaque %s"' % (fdir, token))
+
+    out = dev.run("gfind %s /files /root:%s /b" % (token, fdir))
+    c.expect("gfind file txt match", "FILE|", out)
+    c.expect("gfind file txt path", "a.txt", out)
+    c.expect("gfind file md match", "b.md", out)
+    c.expect("gfind skips images", "c.bmp", out, want=False)
+    c.expect("gfind skips unknown kinds", "d.dat", out, want=False)
+
+    out = dev.run("gfind %s /files /root:%s /count" % (token, fdir))
+    c.expect("gfind files count", "gfind.files=2", out)
+    c.expect("gfind total includes files", "gfind.total=2", out)
+
+    out = dev.run("gfind %s /files /root:%s /ext:.md /b" % (token, fdir))
+    c.expect("gfind ext filter keeps md", "b.md", out)
+    c.expect("gfind ext filter drops txt", "a.txt", out, want=False)
+
+    out = dev.run("gfind %s /files /root:%s /filesonly" % (token, fdir))
+    c.expect("gfind filesonly lists a file", "a.txt", out)
+
+    # Opt-in proof: without /files the text tree is never scanned.
+    out = dev.run("gfind %s /b" % token)
+    c.expect("gfind default does not scan files", "FILE|", out, want=False)
+
+    # ==================================================================
     # archive
     # ==================================================================
     # Archive a source subdirectory so the output .p4a/.tmp never lands inside
@@ -297,6 +331,9 @@ def run(dev, ctx):
     lock = "%s/secret.lock" % DATA
     unlocked = "%s/secret.out" % DATA
     dev.run("write %s P4CRYPT-%s" % (plain, stamp))
+    # crypt now carries a software AES-256-GCM fallback for a fragmented
+    # Tab5 DMA heap (was bugs.md F23: hardware descriptors failed after a
+    # busy session). No skip: lock/unlock must pass on every board.
     out = dev.run("crypt lock %s %s /p:%s" % (plain, lock, pw), timeout=120)
     c.expect("crypt lock", "locked", out)
     out = dev.run("crypt unlock %s %s /p:%s" % (lock, unlocked, pw), timeout=120)

@@ -27,6 +27,8 @@ TAGS = ["display", "slow"]
 OUT_DIR = os.path.join("screenshots", "regression")
 
 SPR = "_S08SPR.BMP"
+SPR2 = "_S08SP2.BMP"
+SPR3 = "_S08SP3.BMP"
 GFX_BMP = "_S08GFX.BMP"
 PLOT_BMP = "_S08PLOT.BMP"
 LIST_TXT = "_S08LIST.TXT"
@@ -101,6 +103,24 @@ def _make_bmp(w, h, rgb):
     pix = bytearray()
     for _y in range(h):
         pix += bytes((b, g, r)) * w
+        pix += b"\x00" * (stride - row)
+    size = 54 + len(pix)
+    header = (b"BM" + struct.pack("<IHHI", size, 0, 0, 54)
+              + struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0, len(pix),
+                            2835, 2835, 0, 0))
+    return header + bytes(pix)
+
+
+def _make_halves(w, h, left_rgb, right_rgb):
+    """A 24-bit BMP, left half one color and right half another (rotation
+    proof: a 90-degree turn moves the right half to the bottom row)."""
+    lr, lg, lb = left_rgb
+    rr, rg, rb = right_rgb
+    row = w * 3
+    stride = (row + 3) & ~3
+    pix = bytearray()
+    for _y in range(h):
+        pix += bytes((lb, lg, lr)) * (w // 2) + bytes((rb, rg, rr)) * (w - w // 2)
         pix += b"\x00" * (stride - row)
     size = 54 + len(pix)
     header = (b"BM" + struct.pack("<IHHI", size, 0, 0, 54)
@@ -220,6 +240,12 @@ def run(dev, ctx):
         # Solid 64x64 sprite for load/blit.
         dev.push_file(SPR, _make_bmp(64, 64, (255, 0, 255)))
         created.append(SPR)
+        # Small sprites for blitmany scale/rotation (free canvas zones:
+        # 16x16 at (90,110) and (200,110) touch nothing else).
+        dev.push_file(SPR2, _make_bmp(16, 16, (255, 0, 255)))
+        created.append(SPR2)
+        dev.push_file(SPR3, _make_halves(16, 16, (255, 0, 255), (0, 255, 255)))
+        created.append(SPR3)
 
         ops = [
             "gfx clear 0x101820",
@@ -238,12 +264,20 @@ def run(dev, ctx):
             "gfx text /scale:1 18 170 0x00FFFF world",
             "gfx load 0 %s" % SPR,
             "gfx blit 0 230 120",
+            "gfx load 1 %s" % SPR2,
+            "gfx load 2 %s" % SPR3,
+            "gfx blitmany 1 /s:2 90 110",
+            "gfx blitmany 2 /r:90 200 110",
             "gfx show",
         ]
         for op in ops:
             dev.run(op, timeout=15)
 
         c.expect("gfx slots lists sprite", "gfx.slot: 0 64x64", dev.run("gfx slots"))
+        c.expect("gfx blitmany bad scale", "P8_BS=2",
+                 dev.run("gfx blitmany 0 /s:9 0 0 & echo P8_BS=%ERRORLEVEL%"))
+        c.expect("gfx blitmany bad rotation", "P8_BR=2",
+                 dev.run("gfx blitmany 0 /r:45 0 0 & echo P8_BR=%ERRORLEVEL%"))
         gstats = parse_perf_report(dev.run("gfx stats"))
         c.check("gfx stats parses", gstats is not None, "no frames field")
         if gstats is not None:
@@ -261,6 +295,8 @@ def run(dev, ctx):
 
         c.expect("gfx save", "gfx: saved", dev.run("gfx save %s" % GFX_BMP, timeout=30))
         dev.run("gfx free 0")
+        dev.run("gfx free 1")
+        dev.run("gfx free 2")
         c.check("gfx free clears slot", "gfx.slot:" not in dev.run("gfx slots"))
         dev.run("gfx close")
 
@@ -279,6 +315,11 @@ def run(dev, ctx):
             c.equals("gfx polygon fill", b.px(100, 80), q565(0x5599FF))
             c.equals("gfx flood fill", b.px(260, 30), q565(0xFFAA00))
             c.equals("gfx sprite blit", b.px(260, 150), q565(0xFF00FF))
+            c.equals("gfx blitmany scale fills 2x", b.px(100, 120), q565(0xFF00FF))
+            c.equals("gfx blitmany scale edge", b.px(89, 109), q565(0x101820))
+            c.equals("gfx blitmany rotate top stays", b.px(200, 110), q565(0xFF00FF))
+            c.equals("gfx blitmany rotate moves right half down",
+                     b.px(200, 125), q565(0x00FFFF))
             c.check("gfx text scale2 white",
                     b.count_near(18, 150, 100, 16, q565(0xFFFFFF)) > 0)
             c.check("gfx text scale1 cyan",

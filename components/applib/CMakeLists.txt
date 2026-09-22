@@ -10,6 +10,7 @@ idf_component_register(
         db
         tui
         heap
+        p4heap
         esp_timer
         freertos
 )

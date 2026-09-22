@@ -14,6 +14,7 @@
 #include "p4minishell_config.h"
 #include "tui_fonts.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
@@ -75,8 +76,7 @@ static void tui_alloc_cells(void)
 {
     size_t total = (size_t)s_rows * (size_t)s_cols;
     size_t bytes = total * sizeof(tui_cell_t);
-    s_cells = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
-    if (!s_cells) s_cells = malloc(bytes);
+    s_cells = p4heap_alloc_psram(bytes);
     if (s_cells) memset(s_cells, 0, bytes);
 }
 
@@ -744,8 +744,7 @@ void tui_alt_enter(void)
 {
     if (s_alt_saved) return;
     size_t total = (size_t)s_rows * s_cols * sizeof(tui_cell_t);
-    s_alt_cells = heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
-    if (!s_alt_cells) s_alt_cells = malloc(total);
+    s_alt_cells = p4heap_alloc_psram(total);
     if (s_alt_cells && s_cells) {
         memcpy(s_alt_cells, s_cells, total);
         s_alt_cur_row = s_cur_row;
@@ -776,8 +775,7 @@ void tui_flush(void)
     // `#` cells split colored runs (close/escape/reopen), so budget 16
     // bytes per cell worst case. Rows separated by "\n".
     size_t cap = (size_t)s_rows * (size_t)(s_cols * 16 + 1) + 1;
-    char *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
-    if (!buf) buf = malloc(cap);
+    char *buf = p4heap_alloc_psram(cap);
     if (!buf) return;
     size_t pos = 0;
     for (int r = 1; r <= s_rows; r++) {

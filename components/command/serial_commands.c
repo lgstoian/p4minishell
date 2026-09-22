@@ -30,6 +30,7 @@
 #include "imagefmt.h"
 #include "board_config.h"
 #include "p4minishell_config.h"
+#include "p4heap.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -143,11 +144,8 @@ void shell_command_screenshot(int argc, char **argv)
 
     shell_print_muted("screenshot: capturing current screen...");
 
-    /* Allocate the lv_draw_buf_t structure from PSRAM */
-    draw_buf = (lv_draw_buf_t *)heap_caps_malloc(sizeof(lv_draw_buf_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (draw_buf == NULL) {
-        draw_buf = (lv_draw_buf_t *)malloc(sizeof(lv_draw_buf_t));
-    }
+    /* Allocate the lv_draw_buf_t structure via the central allocator */
+    draw_buf = (lv_draw_buf_t *)p4heap_alloc_any(sizeof(lv_draw_buf_t));
     if (draw_buf == NULL) {
         shell_print_error("screenshot: out of memory for draw buffer structure");
         batch_set_errorlevel(1);
@@ -194,10 +192,7 @@ void shell_command_screenshot(int argc, char **argv)
     uint32_t stride = width * 2;  /* stride in bytes */
 
     /* Allocate pixel data from PSRAM */
-    pixel_data = heap_caps_malloc(data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (pixel_data == NULL) {
-        pixel_data = malloc(data_size);
-    }
+    pixel_data = p4heap_alloc_psram(data_size);
     if (pixel_data == NULL) {
         lvgl_port_unlock();
         free(draw_buf);
@@ -298,10 +293,7 @@ void shell_command_screenshot(int argc, char **argv)
         /* Convert RGB565 to RGB888 row-by-row, bottom-up (BMP convention).
          * Allocate a row buffer on heap to avoid stack pressure. */
         uint32_t row_bytes = width * 3;
-        uint8_t *row_buf = heap_caps_malloc(row_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (row_buf == NULL) {
-            row_buf = malloc(row_bytes);
-        }
+        uint8_t *row_buf = p4heap_alloc_psram(row_bytes);
         if (row_buf == NULL) {
             shell_print_error("screenshot: out of memory for row buffer");
             fclose(f);
@@ -354,10 +346,7 @@ void shell_command_screenshot(int argc, char **argv)
         shell_print_muted("screenshot: streaming %lu bytes to serial...", (unsigned long)total_size);
 
         /* Build the full BMP in memory first */
-        uint8_t *bmp_data = heap_caps_malloc(total_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (bmp_data == NULL) {
-            bmp_data = malloc(total_size);
-        }
+        uint8_t *bmp_data = p4heap_alloc_psram(total_size);
         if (bmp_data == NULL) {
             shell_print_error("screenshot: out of memory for BMP buffer");
             free(pixel_data);
@@ -371,10 +360,7 @@ void shell_command_screenshot(int argc, char **argv)
 
         /* Convert RGB565 to RGB888 row-by-row, bottom-up (BMP convention) */
         uint32_t row_bytes = width * 3;
-        uint8_t *row_buf = heap_caps_malloc(row_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (row_buf == NULL) {
-            row_buf = malloc(row_bytes);
-        }
+        uint8_t *row_buf = p4heap_alloc_psram(row_bytes);
         if (row_buf == NULL) {
             shell_print_error("screenshot: out of memory for row buffer");
             free(bmp_data);

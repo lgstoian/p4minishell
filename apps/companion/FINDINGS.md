@@ -12,6 +12,8 @@ Append new findings in the same shape as a firmware bug report.
 ## Current status
 
 - Driver: `apps/companion/deep_test.py` (reactive marker-driven suite).
+- Firmware: v1.2.1 · Boards: `jc1060p470c` (COM3), `m5stack_tab5` (COM6) · Date: 2026-09-21.
+- Scope: Companion only (dogfood/visual runs are reported separately, not here).
 - Modules exercised: menu, Live System dashboard, files/notes, network, fun,
   settings (persistence across reboot), shared-library routines, background
   jobs (`SVC.BAT`/`AGENDA.BAT`).
@@ -39,8 +41,8 @@ Append new findings in the same shape as a firmware bug report.
 ## Behaviours that are by design
 
 - **Modal output is silent on serial by design.** `dialog`/`list`/`ask` draw on
-  the screen only; the reactive driver keys on serial echo markers
-  (`[C-MENU]`, `[M-<MOD>]`, ...) rather than screen text.
+  the screen only; the reactive menu walk keys on the `[C-MENU]` serial echo
+  marker (`deep_test.py:299,310`, exit on `[C-EXIT]`) rather than screen text.
 - **`list` serial selection is 1-based** (the number you type) while its
   ERRORLEVEL is the 0-based index; `q` cancels with 255.
 - **`set /a` prints its result**, so loop counters emit one line per iteration;

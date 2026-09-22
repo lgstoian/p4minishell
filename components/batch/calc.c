@@ -1150,6 +1150,110 @@ static void calc_parse_function_body(calc_parser_t *parser, const char *name,
         calc_set_string(out, result);
         return;
     }
+    if (strncasecmp(name, "UPPER$", 6) == 0) {
+        char text[CALC_STR_BYTES];
+        if (arg_count != 1) { calc_expr_fail(parser, "UPPER$ takes 1 argument"); return; }
+        if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
+        for (char *p = text; *p != '\0'; p++) {
+            *p = (char)toupper((unsigned char)*p);
+        }
+        calc_set_string(out, text);
+        return;
+    }
+    if (strncasecmp(name, "LOWER$", 6) == 0) {
+        char text[CALC_STR_BYTES];
+        if (arg_count != 1) { calc_expr_fail(parser, "LOWER$ takes 1 argument"); return; }
+        if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
+        for (char *p = text; *p != '\0'; p++) {
+            *p = (char)tolower((unsigned char)*p);
+        }
+        calc_set_string(out, text);
+        return;
+    }
+    if (strncasecmp(name, "TRIM$", 5) == 0) {
+        char text[CALC_STR_BYTES];
+        char *start;
+        size_t len;
+        if (arg_count != 1) { calc_expr_fail(parser, "TRIM$ takes 1 argument"); return; }
+        if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
+        start = text;
+        while (*start == ' ' || *start == '\t') {
+            start++;
+        }
+        len = strlen(start);
+        while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) {
+            len--;
+        }
+        start[len] = '\0';
+        calc_set_string(out, start);
+        return;
+    }
+    if (strncasecmp(name, "INSTR", 5) == 0) {
+        char text[CALC_STR_BYTES];
+        char needle[CALC_STR_BYTES];
+        char *found;
+        if (arg_count != 2 && arg_count != 3) { calc_expr_fail(parser, "INSTR takes 2 or 3 arguments"); return; }
+        if (arg_count == 3) {
+            /* INSTR(start, text, needle): 1-based start like MID$. */
+            if (!calc_arg_number(parser, &args[0], &x)) { return; }
+            if (!calc_arg_string(parser, &args[1], text, sizeof(text))) { return; }
+            if (!calc_arg_string(parser, &args[2], needle, sizeof(needle))) { return; }
+            if (x < 1.0) { calc_expr_fail(parser, "INSTR start must be >= 1"); return; }
+            size_t from = (size_t)x - 1;
+            if (from >= strlen(text) || needle[0] == '\0') {
+                calc_set_number(out, 0.0);
+                return;
+            }
+            found = strstr(text + from, needle);
+            calc_set_number(out, found != NULL ? (double)(found - text + 1) : 0.0);
+            return;
+        }
+        if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
+        if (!calc_arg_string(parser, &args[1], needle, sizeof(needle))) { return; }
+        if (needle[0] == '\0') {
+            calc_set_number(out, 0.0);
+            return;
+        }
+        found = strstr(text, needle);
+        calc_set_number(out, found != NULL ? (double)(found - text + 1) : 0.0);
+        return;
+    }
+    if (strncasecmp(name, "REPLACE$", 8) == 0) {
+        char text[CALC_STR_BYTES];
+        char old[CALC_STR_BYTES];
+        char replacement[CALC_STR_BYTES];
+        char result[CALC_STR_BYTES];
+        size_t old_len, used = 0;
+        const char *src;
+        if (arg_count != 3) { calc_expr_fail(parser, "REPLACE$ takes 3 arguments"); return; }
+        if (!calc_arg_string(parser, &args[0], text, sizeof(text))) { return; }
+        if (!calc_arg_string(parser, &args[1], old, sizeof(old))) { return; }
+        if (!calc_arg_string(parser, &args[2], replacement, sizeof(replacement))) { return; }
+        if (old[0] == '\0') {
+            calc_set_string(out, text);
+            return;
+        }
+        old_len = strlen(old);
+        src = text;
+        result[0] = '\0';
+        while (*src != '\0' && used + 1 < sizeof(result)) {
+            if (strncmp(src, old, old_len) == 0) {
+                size_t room = sizeof(result) - 1 - used;
+                size_t take = strlen(replacement);
+                if (take > room) {
+                    take = room;
+                }
+                memcpy(result + used, replacement, take);
+                used += take;
+                src += old_len;
+            } else {
+                result[used++] = *src++;
+            }
+        }
+        result[used] = '\0';
+        calc_set_string(out, result);
+        return;
+    }
     if (strncasecmp(name, "POL", 3) == 0) {
         double r, t;
         char rbuf[32];
@@ -1589,11 +1693,13 @@ static void calc_parse_primary(calc_parser_t *parser, calc_value_t *out)
         return;
     }
 
-    /* Identifier: a function call, PI / RAN#, or an environment variable. */
+    /* Identifier: a function call, PI / RAN#, or an environment variable.
+     * Brackets are name characters so indexed `ARR[i]` elements read back. */
     if (isalpha((unsigned char)*parser->cursor) || *parser->cursor == '_') {
         while ((isalnum((unsigned char)*parser->cursor) ||
                 *parser->cursor == '_' || *parser->cursor == '$' ||
-                *parser->cursor == '#') && name_len + 1 < sizeof(name)) {
+                *parser->cursor == '#' || *parser->cursor == '[' ||
+                *parser->cursor == ']') && name_len + 1 < sizeof(name)) {
             name[name_len++] = *parser->cursor++;
         }
         name[name_len] = '\0';

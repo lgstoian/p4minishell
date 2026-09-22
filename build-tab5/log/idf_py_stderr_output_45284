@@ -1,0 +1,22 @@
+Command: ninja all
+CMake Warning at C:/esp/v5.5.5/esp-idf/tools/cmake/build.cmake:631 (message):
+  WARNING: 3 unexpected files and directories were found in the
+  "managed_components" directory: espressif__esp_lcd_jd9165
+  espressif__esp32_p4_function_ev_board espressif__esp_lcd_ek79007
+
+  Content of the managed components directory is managed automatically and
+  it's not recommended to place any files there manually.  To suppress this
+  warning set the environment variable:
+  IDF_COMPONENT_SUPPRESS_UNKNOWN_FILE_WARNINGS=1
+
+Call Stack (most recent call first):
+  C:/esp/v5.5.5/esp-idf/tools/cmake/project.cmake:752 (idf_build_process)
+  CMakeLists.txt:88 (project)
+
+
+CMake Warning at C:/esp/v5.5.5/esp-idf/tools/cmake/project.cmake:765 (message):
+  Missing kconfig option.  Re-run the build process...
+Call Stack (most recent call first):
+  CMakeLists.txt:88 (project)
+
+

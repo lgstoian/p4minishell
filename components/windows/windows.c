@@ -30,6 +30,9 @@ extern void tui_hide_for_modal(void);
 extern void tui_show_after_modal(void);
 #include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "p4heap.h"
 #include "board_config.h"
 #include "p4minishell_config.h"
 #include "esp_err.h"
@@ -90,6 +93,10 @@ static struct {
     lv_coord_t app_surface_saved_pad;
     void (*app_surface_layout_cb)(void);
     bool fullscreen;
+    /* Shadow of the transcript span group's HIDDEN flag (maintained by
+     * windows_shell_spans_set_hidden) so non-LVGL tasks can query it without
+     * touching the LVGL object (bugs.md F26 worker/render decoupling). */
+    bool shell_spans_hidden;
 } s_windows = {
     .initialized = false,
     .screen = NULL,
@@ -123,6 +130,7 @@ static struct {
     .app_surface_saved_pad = 0,
     .app_surface_layout_cb = NULL,
     .fullscreen = false,
+    .shell_spans_hidden = false,
 };
 
 /* ========================================================================
@@ -381,8 +389,8 @@ static void windows_create_transcript(void)
      * into the visible text.
      *
      * The actual widget update (rebuild spans, force layout, scroll to end)
-     * is DEFERRED to the LVGL task via lv_async_call (see
-     * windows_set_transcript_text): rebuilding spans synchronously from a
+     * is DEFERRED to the LVGL task through the coalesced apply timer (see
+     * windows_transcript_schedule_apply): rebuilding spans synchronously from a
      * non-LVGL task races with the LVGL render cycle and hangs
      * lv_timer_handler on the LVGL task, freezing the whole UI. The apply is
      * coalesced so bursty output paints once per handler pass.
@@ -397,8 +405,8 @@ static void windows_create_transcript(void)
      * then sees a taller-than-itself child and scrolls through it.
      *
      * The actual widget update (rebuild spans, size the child, force layout,
-     * scroll to end) is DEFERRED to the LVGL task via lv_async_call (see
-     * windows_set_transcript_text): rebuilding spans synchronously from a
+     * scroll to end) is DEFERRED to the LVGL task through the coalesced apply timer (see
+     * windows_transcript_schedule_apply): rebuilding spans synchronously from a
      * non-LVGL task races with the LVGL render cycle and hangs
      * lv_timer_handler on the LVGL task, freezing the whole UI. The apply is
      * coalesced so bursty output paints once per handler pass.
@@ -443,6 +451,7 @@ static void windows_create_transcript(void)
     lv_obj_set_style_border_width(s_windows.transcript_spans, 0, 0);
     lv_obj_set_style_pad_all(s_windows.transcript_spans, 0, 0);
     lv_obj_set_style_text_font(s_windows.transcript_spans, font, 0);
+    s_windows.shell_spans_hidden = false;
 }
 
 static void windows_create_input_row(void)
@@ -673,11 +682,12 @@ lv_obj_t *windows_get_transcript_spans(void)
  * forcing the flex layout synchronously from a non-LVGL task (the command
  * worker, UART console, or networking background task) while the LVGL task is
  * mid-render hangs lv_timer_handler and freezes the whole UI. Every request
- * stages the raw ANSI text into a persistent buffer and schedules a single
- * lv_async_call; the callback runs on the LVGL task where it rebuilds the
+ * stages the raw ANSI text into a persistent buffer (guarded by its own
+ * mutex, NOT the port lock, so the worker never serializes behind a render -
+ * bugs.md F26) and wakes the LVGL task; the apply-timer callback rebuilds the
  * spans from the newest staged content and scrolls to the end. Bursts of
- * output coalesce into one apply per handler pass, which also keeps the
- * render cost bounded.
+ * output coalesce into one apply per tick, which also keeps the render cost
+ * bounded.
  */
 
 static bool s_transcript_apply_pending = false;
@@ -689,74 +699,94 @@ static bool s_transcript_apply_pending = false;
  * (LVGL event or UART console task) and read on the LVGL task, both of which
  * serialize through the LVGL port lock. */
 static bool s_transcript_force_follow = false;
-/* Staged ANSI text awaiting span conversion, plus the rendered-prefix
- * snapshot used to detect scrollback truncation. Both live in PSRAM (not
- * internal DRAM): at P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES each they would
- * otherwise consume ~2x scrollback of internal heap and force the very
- * memory-pressure trims they exist to survive. Allocated on first transcript
- * creation with an internal-heap fallback; every use NULL-checks. */
+/* Staged ANSI text awaiting span conversion. It lives in PSRAM (not internal
+ * DRAM): at P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES it would otherwise consume a
+ * scrollback of internal heap and force the very memory-pressure trims it
+ * exists to survive. Allocated on first transcript creation with an
+ * internal-heap fallback; every use NULL-checks.
+ *
+ * The staging buffer is guarded by its own mutex, NOT the LVGL port lock:
+ * the command worker only pays for the (sub-millisecond) copy and a
+ * non-blocking render wake, never for the LVGL-side apply + redraw that
+ * happens on the LVGL task within one apply-tick (bugs.md F26: the worker
+ * used to serialize behind the whole port-lock hold, costing 300+ ms per
+ * command). The lock order is always PORT outer, STAGE inner. */
 static char *s_transcript_staged = NULL;
-static char *s_transcript_rendered_prefix = NULL;
+static SemaphoreHandle_t s_transcript_stage_lock = NULL;
+static lv_timer_t *s_transcript_apply_timer = NULL;
 
-/* Incremental-render bookkeeping. s_transcript_rendered_len is the byte count
- * of s_transcript_staged already converted into spans; the prefix snapshot lets
- * the apply detect scrollback truncation (the shell drops the oldest bytes
- * when its buffer fills). s_transcript_last_fg carries the ANSI foreground
- * across an append that splits a colour run, so the next fragment keeps its
- * hue instead of restarting at the default colour. */
+/** Take/release the staging mutex (created in windows_init; unit-test paths
+ *  run before the UI exists and never reach the staged buffer). */
+static void windows_stage_lock(void)
+{
+    if (s_transcript_stage_lock != NULL) {
+        xSemaphoreTake(s_transcript_stage_lock, portMAX_DELAY);
+    }
+}
+
+static void windows_stage_unlock(void)
+{
+    if (s_transcript_stage_lock != NULL) {
+        xSemaphoreGive(s_transcript_stage_lock);
+    }
+}
+
+/* Incremental-render bookkeeping (bugs.md F26). s_transcript_staged_len and
+ * s_transcript_staged_epoch are written by the staging path (under the LVGL
+ * port lock) from the shell's length-tracked buffer; s_transcript_rendered_len
+ * is the byte count of s_transcript_staged already converted into spans, and
+ * s_transcript_rendered_epoch the scrollback generation that covers. The two
+ * epochs differing means the shell dropped the oldest bytes (reset, trim,
+ * buffer-full truncation), so the apply rebuilds; equality makes truncation
+ * detection O(1) with no prefix snapshot and no whole-buffer compares.
+ * s_transcript_last_fg carries the ANSI foreground across an append that
+ * splits a colour run, so the next fragment keeps its hue instead of
+ * restarting at the default colour. */
+static size_t s_transcript_staged_len = 0;
+static uint32_t s_transcript_staged_epoch = 0;
+static uint32_t s_transcript_rendered_epoch = 0;
 static size_t s_transcript_rendered_len = 0;
 static uint32_t s_transcript_last_fg = 0;
 static uint32_t s_transcript_seen_fg = 0;
+static int32_t s_transcript_content_height = 0;
+static int32_t s_transcript_pending_height_delta = 0;
 
 /**
- * Ensure the PSRAM staging buffers exist. Called on every staging-buffer use
- * (all callers hold the LVGL port lock or run on the LVGL task, and allocation
- * happens once, so no race). Returns false when neither PSRAM nor the internal
- * fallback could satisfy the request; callers then skip the render update
- * rather than touching a NULL buffer.
+ * Ensure the PSRAM staging buffer exists. Called from the staging paths and
+ * the apply; the caller must hold the staging mutex (allocation happens once,
+ * and the buffer must never be freed while a copy reads it). Returns false
+ * when PSRAM could not satisfy the request; callers then skip the render
+ * update rather than touching a NULL buffer.
  */
 static bool windows_transcript_staging_ensure(void)
 {
-    if (s_transcript_staged != NULL && s_transcript_rendered_prefix != NULL) {
+    if (s_transcript_staged != NULL) {
         return true;
     }
-    if (s_transcript_staged == NULL) {
-        s_transcript_staged = heap_caps_malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES,
-                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_transcript_staged == NULL) {
-            s_transcript_staged = malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES);
-        }
-        if (s_transcript_staged != NULL) {
-            s_transcript_staged[0] = '\0';
-        }
+    s_transcript_staged = p4heap_alloc_psram(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES);
+    if (s_transcript_staged != NULL) {
+        s_transcript_staged[0] = '\0';
     }
-    if (s_transcript_rendered_prefix == NULL) {
-        s_transcript_rendered_prefix = heap_caps_malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES,
-                                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_transcript_rendered_prefix == NULL) {
-            s_transcript_rendered_prefix = malloc(P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES);
-        }
-        if (s_transcript_rendered_prefix != NULL) {
-            s_transcript_rendered_prefix[0] = '\0';
-        }
-    }
-    return s_transcript_staged != NULL && s_transcript_rendered_prefix != NULL;
+    return s_transcript_staged != NULL;
 }
 
-/** Release the PSRAM staging buffers (windows_deinit). */
+/** Release the PSRAM staging buffers (windows_deinit). The staging mutex
+ *  serializes this against any in-flight copy on the command worker; it is
+ *  created with the UI and outlives rebuilds. */
 static void windows_transcript_staging_free(void)
 {
+    windows_stage_lock();
     if (s_transcript_staged != NULL) {
         heap_caps_free(s_transcript_staged);
         s_transcript_staged = NULL;
     }
-    if (s_transcript_rendered_prefix != NULL) {
-        heap_caps_free(s_transcript_rendered_prefix);
-        s_transcript_rendered_prefix = NULL;
-    }
+    s_transcript_staged_len = 0;
+    s_transcript_staged_epoch = 0;
     s_transcript_rendered_len = 0;
+    s_transcript_rendered_epoch = 0;
     s_transcript_last_fg = 0;
     s_transcript_seen_fg = 0;
+    windows_stage_unlock();
     s_transcript_apply_pending = false;
 }
 
@@ -852,37 +882,60 @@ static void windows_transcript_update_content_size(lv_obj_t *spans)
     if (width <= 0 && s_windows.transcript != NULL) {
         width = lv_obj_get_content_width(s_windows.transcript);
     }
-    lv_obj_set_height(spans, lv_spangroup_get_expand_height(spans, width));
+
+    /* Incremental height update: add the pending delta to the tracked height.
+     * This avoids the O(retained) lv_spangroup_get_expand_height() call. */
+    s_transcript_content_height += s_transcript_pending_height_delta;
+    s_transcript_pending_height_delta = 0;
+
+    if (s_transcript_content_height <= 0 && s_windows.transcript != NULL) {
+        /* Fallback: compute full height if we don't have a valid cached value. */
+        int32_t width = lv_obj_get_content_width(spans);
+        if (width <= 0 && s_windows.transcript != NULL) {
+            width = lv_obj_get_content_width(s_windows.transcript);
+        }
+        s_transcript_content_height = lv_spangroup_get_expand_height(spans, width);
+    }
+
+    lv_obj_set_height(spans, s_transcript_content_height);
 }
 
 /**
  * Paint the staged raw ANSI text onto the transcript span group and scroll to
- * the end. Runs on the LVGL task (from the async apply callback) or, in the
- * lv_async_call failure fallback, on the caller's task while holding the LVGL
- * port lock. Both callers serialize with the render cycle, so the staging
- * buffer is never written and read concurrently.
+ * the end. Runs ONLY on the LVGL task (the coalescing apply timer callback in
+ * the handler pass), so it is inherently serialized with the render cycle.
+ * The staged buffer is read under its own mutex, which the command worker may
+ * hold briefly while copying; everything expensive (span parse, re-wrap,
+ * layout) happens after that mutex is released.
  *
  * To avoid flicker, the apply renders INCREMENTALLY: when the staged buffer
- * still begins with the bytes already turned into spans, only the newly
- * appended fragment is parsed into new spans and existing spans are left
- * untouched. A full teardown/rebuild happens only when the scrollback
- * truncated (the staged content no longer starts with the rendered prefix).
+ * still carries the scrollback generation already turned into spans, only the
+ * newly appended fragment is parsed into new spans and existing spans are left
+ * untouched. A full teardown/rebuild happens when the epochs differ (the shell
+ * dropped the oldest bytes: reset, trim, or buffer-full truncation).
  */
 static void windows_transcript_apply(void)
 {
     lv_obj_t *container = s_windows.transcript;
     lv_obj_t *spans = s_windows.transcript_spans;
     size_t new_len;
-    const char *append_start;
+    size_t append_len = 0;
+    char *fragment = NULL;
+    int carry_code = -1;
     uint32_t default_fg;
 
     if (container == NULL || spans == NULL) {
         return;
     }
 
-    /* Staging lives in PSRAM; if it could not be allocated, there is nothing
-     * to render (the UART console still received the text). */
-    if (!windows_transcript_staging_ensure()) {
+    /* While an app surface (gfx canvas, fullscreen app) owns the transcript,
+     * the span group is hidden and its exact height is irrelevant. Skip the
+     * reconcile entirely: re-wrapping the whole scrollback
+     * (`lv_spangroup_get_expand_height`, O(all spans)) on every command was
+     * the dominant per-frame cost of a gfx animation (bugs.md F25). The staged
+     * text keeps accumulating; `windows_exit_app_surface()` schedules one
+     * catch-up apply that appends the whole delta in a single pass. */
+    if (s_windows.app_surface_active) {
         return;
     }
 
@@ -902,23 +955,36 @@ static void windows_transcript_apply(void)
                           lv_obj_get_scroll_bottom(container) < P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX);
     s_transcript_force_follow = false;
 
-    new_len = strlen(s_transcript_staged);
+    /* Snapshot the staged delta under the staging mutex. Only the staged
+     * bytes and the render bookkeeping are touched here; the expensive work
+     * below (span parse, re-wrap, layout) runs unlocked against the private
+     * fragment copy. Lock order is PORT outer, STAGE inner: apply runs on the
+     * LVGL task which holds the port lock, and the worker never takes the
+     * port lock at all (bugs.md F26 decoupling). */
+    windows_stage_lock();
 
-    /* Scrollback truncation: the staged content shrank, or the first rendered
-     * bytes no longer match what we already drew. Rebuild from scratch. */
-    if (s_transcript_rendered_len > new_len ||
-        strncmp(s_transcript_staged, s_transcript_rendered_prefix,
-                s_transcript_rendered_len) != 0) {
+    /* Staging lives in PSRAM; if it could not be allocated, there is nothing
+     * to render (the UART console still received the text). */
+    if (!windows_transcript_staging_ensure()) {
+        windows_stage_unlock();
+        return;
+    }
+    new_len = s_transcript_staged_len;
+
+    /* Scrollback truncation: the shell replaced the buffer content (its epoch
+     * moved) or the staged text somehow shrank. Rebuild from scratch. */
+    if (s_transcript_rendered_epoch != s_transcript_staged_epoch ||
+        s_transcript_rendered_len > new_len) {
         windows_transcript_clear_spans(spans);
         s_transcript_rendered_len = 0;
         s_transcript_last_fg = 0;
     }
 
-    append_start = s_transcript_staged + s_transcript_rendered_len;
-    if (*append_start != '\0') {
-        size_t append_len = strlen(append_start);
-        char *fragment = malloc(append_len + 16);
-        int carry_code = -1;
+    if (new_len > s_transcript_rendered_len) {
+        const char *append_start = s_transcript_staged + s_transcript_rendered_len;
+        uint32_t head = 0;
+
+        append_len = new_len - s_transcript_rendered_len;
 
         /* If the new bytes begin mid-colour (the previous append left the SGR
          * state non-default and the fragment does not open with its own SGR
@@ -929,44 +995,107 @@ static void windows_transcript_apply(void)
             append_start[0] != '\x1B') {
             carry_code = windows_ansi_sgr_for_color(s_transcript_last_fg);
         }
+        if (carry_code > 0) {
+            head = 10; /* room for "\x1B[NNdm" */
+        }
 
+        fragment = malloc(append_len + head + 1);
         if (fragment != NULL) {
             if (carry_code > 0) {
-                snprintf(fragment, append_len + 16, "\x1B[%dm%s", carry_code, append_start);
+                int n = snprintf(fragment, head + 1, "\x1B[%dm", carry_code);
+                if (n < 0) {
+                    n = 0;
+                }
+                memcpy(fragment + n, append_start, append_len + 1);
             } else {
-                snprintf(fragment, append_len + 16, "%s", append_start);
+                memcpy(fragment, append_start, append_len + 1);
             }
-
-            s_transcript_seen_fg = 0;
-            ansi_process_text(fragment, windows_span_segment, spans);
-            if (s_transcript_seen_fg != 0) {
-                s_transcript_last_fg = s_transcript_seen_fg;
-            }
-            free(fragment);
+            /* Claim the bytes now: the next staging pass must not be told a
+             * smaller rendered length than the delta we already copied. */
+            s_transcript_rendered_len = new_len;
+            s_transcript_rendered_epoch = s_transcript_staged_epoch;
         } else {
             ESP_LOGW(WINDOWS_TAG, "transcript: out of memory for fragment");
         }
     }
+    windows_stage_unlock();
 
-    /* Record how much of the staged buffer is now rendered. */
-    s_transcript_rendered_len = new_len;
-    snprintf(s_transcript_rendered_prefix, P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES,
-             "%s", s_transcript_staged);
+    if (fragment != NULL) {
+        s_transcript_seen_fg = 0;
+        ansi_process_text(fragment, windows_span_segment, spans);
+        if (s_transcript_seen_fg != 0) {
+            s_transcript_last_fg = s_transcript_seen_fg;
+        }
+        free(fragment);
+    }
 
-    /* Size the child to its new content height, then force one layout pass so
-     * the container's scroll range matches, and pin to the bottom if the user
-     * was already following. lv_obj_update_layout on the container also lays
-     * out its children (the span group). */
-    windows_transcript_update_content_size(spans);
-    lv_obj_update_layout(container);
+    /* Calculate the height delta for the newly added spans. We measure the
+     * height of the span group before and after adding the new spans to get
+     * the incremental height delta, avoiding O(retained) get_expand_height calls. */
+    if (new_len > s_transcript_rendered_len) {
+        int32_t old_height = lv_obj_get_height(spans);
+        windows_transcript_update_content_size(spans);
+        int32_t new_height = lv_obj_get_height(spans);
+        s_transcript_pending_height_delta += (new_height - old_height);
+    } else {
+        /* Even if no new text, the span bounds might have changed due to
+         * span deletions from trimming. Recompute height delta. */
+        int32_t old_height = lv_obj_get_height(spans);
+        windows_transcript_update_content_size(spans);
+        int32_t new_height = lv_obj_get_height(spans);
+        s_transcript_pending_height_delta += (new_height - old_height);
+    }
+
+    /* Bound the retained span group: the newest spans are kept, the oldest
+     * dropped. Without this every append re-wraps the whole scrollback
+     * (`windows_transcript_update_content_size`), which degrades to hundreds
+     * of ms per command after a long session (bugs.md F25). The rendered-length
+     * bookkeeping is intentionally left at the full staged length, so the next
+     * append stays incremental. */
+    {
+        uint32_t span_count = lv_spangroup_get_span_count(spans);
+
+        while (span_count > P4_CONFIG_TRANSCRIPT_MAX_SPANS) {
+            lv_span_t *oldest = lv_spangroup_get_child(spans, 0);
+
+            if (oldest == NULL) {
+                break;
+            }
+            lv_spangroup_delete_span(spans, oldest);
+            span_count--;
+        }
+    }
+
+    /* Incremental height update: apply the accumulated height delta to the
+     * span group, then clear the pending delta. This avoids the O(retained)
+     * lv_spangroup_get_expand_height() call. The container layout will be
+     * refreshed on the next LVGL render pass or when follow_bottom requires
+     * an immediate scroll. */
+    if (s_transcript_pending_height_delta != 0) {
+        int32_t new_height = lv_obj_get_height(spans) + s_transcript_pending_height_delta;
+        if (new_height < 0) new_height = 0;
+        lv_obj_set_height(spans, new_height);
+        s_transcript_pending_height_delta = 0;
+    }
+
+    /* Force layout only when follow_bottom requires immediate scroll sync.
+     * Otherwise the LVGL render pass will pick up the height change naturally. */
     if (follow_bottom) {
+        lv_obj_update_layout(container);
         lv_obj_scroll_to_y(container, LV_COORD_MAX, LV_ANIM_OFF);
     }
 }
-
-static void windows_transcript_apply_cb(void *user_data)
+/**
+ * Apply-timer tick (LVGL task, inside the handler pass with the port lock
+ * held). The pending flag is the coalescing token set by every staging write;
+ * bursts of lines consume as one apply.
+ */
+static void windows_transcript_apply_timer_cb(lv_timer_t *timer)
 {
-    (void)user_data;
+    (void)timer;
+    if (!s_transcript_apply_pending) {
+        return;
+    }
     s_transcript_apply_pending = false;
     windows_transcript_apply();
 }
@@ -982,9 +1111,9 @@ static void windows_transcript_apply_cb(void *user_data)
  * Only the OLDEST quarter of spans is deleted, so the newest content stays
  * on screen without an empty-frame flash. The staged buffer is NOT modified
  * here - it will be synced from the main transcript buffers (which already
- * contain the trim marker) on the next append via windows_set_transcript_text().
- * The render bookkeeping is reset so the next apply reconciles spans against
- * the new staged text in one pass.
+ * contain the trim marker) on the next append via
+ * windows_set_transcript_text_len(). The render bookkeeping is reset so the
+ * next apply reconciles spans against the new staged text in one pass.
  */
 void windows_transcript_trim(void)
 {
@@ -993,19 +1122,16 @@ void windows_transcript_trim(void)
     uint32_t drop_spans;
     uint32_t index;
 
-    if (!windows_transcript_staging_ensure()) {
+    windows_stage_lock();
+    if (spans == NULL || !windows_transcript_staging_ensure()) {
+        windows_stage_unlock();
         return;
     }
-
-    if (spans == NULL) {
-        return;
-    }
-
-    span_count = lv_spangroup_get_span_count(spans);
 
     /* Free roughly the oldest quarter of spans immediately (this is the
      * internal-heap reclamation the guard needs), leaving the newest spans
      * visible so the screen never flashes empty. */
+    span_count = lv_spangroup_get_span_count(spans);
     drop_spans = span_count / 4;
     for (index = 0; index < drop_spans; index++) {
         lv_span_t *span = lv_spangroup_get_child(spans, 0);
@@ -1016,70 +1142,106 @@ void windows_transcript_trim(void)
         lv_spangroup_delete_span(spans, span);
     }
 
-    s_transcript_rendered_len = 0;
+s_transcript_rendered_len = 0;
     s_transcript_last_fg = 0;
     s_transcript_seen_fg = 0;
-    s_transcript_rendered_prefix[0] = '\0';
-    windows_transcript_update_content_size(spans);
+    /* Force a clean rebuild from staged text: the retained spans no longer
+     * match its head after the drop. The staged buffer itself is untouched
+     * here (the guard re-stages the trimmed text before calling this).
+     * UINT32_MAX never equals a real shell epoch (0xFFFFFFFF trims would need
+     * ~270 years at the trim rate). */
+    s_transcript_rendered_epoch = UINT32_MAX;
+    windows_stage_unlock();
+
+    /* Incremental height update: the span group is shorter now, but we don't
+     * know the exact new height without a full re-wrap. Set a sentinel to
+     * force a full re-measure on the next apply pass. */
+    s_transcript_pending_height_delta = INT32_MIN;
+    /* No layout update here - the LVGL render pass will pick up the change. */
 }
 
 /**
- * Schedule a transcript repaint on the LVGL task. Coalesces: if an apply is
- * already queued, the staging buffer already holds the newest text and the
- * queued callback paints it; no second async call is needed.
+ * Schedule a transcript repaint. Coalesces: if an apply is already pending,
+ * the staging buffer already holds the newest text and the apply timer paints
+ * it; no second wake is needed. The LVGL task consumes the flag through the
+ * apply timer (P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS), and the port-task wake
+ * short-cuts the sleep between handler passes so output appears within one
+ * tick. This path takes NO LVGL lock: it is called from the command worker
+ * between staging copies, and must never serialize behind a long render
+ * (bugs.md F26). Without a live apply timer (UI torn down between rebuilds)
+ * the staged text simply stays pending; the next init + repaint-pending pass
+ * (shell_transcript_repaint_if_pending / app-surface exit) consumes it.
  */
 static void windows_transcript_schedule_apply(void)
 {
+    if (s_transcript_apply_timer == NULL) {
+        return;
+    }
     if (s_transcript_apply_pending) {
         return;
     }
-
     s_transcript_apply_pending = true;
-    if (lv_async_call(windows_transcript_apply_cb, NULL) != LV_RESULT_OK) {
-        s_transcript_apply_pending = false;
-        // Async dispatch failed: run the apply synchronously on the caller's
-        // task. Callers hold the LVGL port lock here and the port mutex is
-        // recursive, so take it explicitly to match the documented contract
-        // ("on the caller's task while holding the LVGL port lock").
-        lvgl_port_lock(0);
-        windows_transcript_apply();
-        lvgl_port_unlock();
+    (void)lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL);
+}
+
+/**
+ * Run a pending repaint synchronously. Explicit synchronization points
+ * (screenshots, key waits, batch segment end) call this while holding the
+ * LVGL port lock (or on the LVGL task) so the widget state provably includes
+ * everything staged before the call; the normal per-append path never waits.
+ */
+void windows_transcript_sync_apply(void)
+{
+    if (!s_transcript_apply_pending) {
+        return;
     }
+    s_transcript_apply_pending = false;
+    windows_transcript_apply();
 }
 
 void windows_set_transcript_text(const char *text)
 {
+    /* Writers that do not track the shell's scrollback generation replace the
+     * whole content, so each one gets a fresh (always-different) epoch and the
+     * next apply rebuilds spans from scratch. */
+    static uint32_t s_external_epoch = 0x80000000u;
+
     if (text == NULL) {
         text = "";
     }
-    windows_set_transcript_text_len(text, strlen(text));
+    windows_set_transcript_text_len(text, strlen(text), ++s_external_epoch);
 }
 
-void windows_set_transcript_text_len(const char *text, size_t len)
+void windows_set_transcript_text_len(const char *text, size_t len, uint32_t epoch)
 {
-    lv_obj_t *transcript = s_windows.transcript;
-
-    if (transcript == NULL) {
-        return;
-    }
     if (text == NULL) {
         text = "";
         len = 0;
     }
-    if (!windows_transcript_staging_ensure()) {
-        return;
-    }
-
-    /* Stage the raw ANSI text for the deferred span render. Callers hold the
-     * LVGL port lock, so the staging buffer is never written and read
-     * concurrently. The staging buffer is twice the ANSI transcript size, so
-     * the accumulated scrollback always fits. Copy by known length so no
-     * strlen scan of the (up to 64 KB) transcript is needed. */
     if (len >= P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES) {
         len = P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES - 1;
     }
+
+    /* Stage the raw ANSI text for the deferred span render. This takes only
+     * the staging mutex (sub-millisecond copy), never the LVGL port lock: the
+     * command worker must not serialize behind a long render pass (bugs.md
+     * F26). The UI-down checks live under the same mutex because teardown
+     * clears the pointers and frees the buffer under it too. The apply timer
+     * consumes the copy on the LVGL task. */
+    windows_stage_lock();
+    if (s_windows.transcript == NULL || s_windows.transcript_spans == NULL) {
+        windows_stage_unlock();
+        return;
+    }
+    if (!windows_transcript_staging_ensure()) {
+        windows_stage_unlock();
+        return;
+    }
     memcpy(s_transcript_staged, text, len);
     s_transcript_staged[len] = '\0';
+    s_transcript_staged_len = len;
+    s_transcript_staged_epoch = epoch;
+    windows_stage_unlock();
 
     windows_transcript_schedule_apply();
 }
@@ -1203,10 +1365,25 @@ lv_obj_t *windows_get_stop_button(void)
 
 bool windows_transcript_is_hidden(void)
 {
+    /* Shadow flag, safe to read from any task (the shell's append path asks
+     * this from the command worker without the LVGL port lock). */
     if (s_windows.transcript_spans == NULL) {
         return true;
     }
-    return lv_obj_has_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    return s_windows.shell_spans_hidden;
+}
+
+void windows_shell_spans_set_hidden(bool hidden)
+{
+    if (s_windows.transcript_spans == NULL) {
+        return;
+    }
+    if (hidden) {
+        lv_obj_add_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+    }
+    s_windows.shell_spans_hidden = hidden;
 }
 
 /** Re-apply the Stop visibility rule (must run on the LVGL task). */
@@ -1281,6 +1458,12 @@ esp_err_t windows_init(void)
     /* Font registry first: every surface below resolves its role font here. */
     font_init();
 
+    /* Transcript staging mutex: created once, survives rebuilds (teardown
+     * never deletes it, so no task can race its creation). */
+    if (s_transcript_stage_lock == NULL) {
+        s_transcript_stage_lock = xSemaphoreCreateMutex();
+    }
+
     /* Clean the screen and apply root layout */
     lv_obj_clean(screen);
     s_windows.screen = screen;
@@ -1291,6 +1474,17 @@ esp_err_t windows_init(void)
     windows_create_transcript();
     windows_create_input_row();
     windows_create_keyboard();
+
+    /* Transcript apply pump: a periodic LVGL timer consumed by the staging
+     * path's schedule call. Created here (windows_init runs on the LVGL
+     * task, inside the port lock) and deleted in windows_deinit before the
+     * objects it paints go away (bugs.md F26: replaces the lv_async_call
+     * scheduling whose dispatch required the port lock from every worker
+     * append). */
+    s_windows.shell_spans_hidden = false;
+    s_transcript_apply_pending = false;
+    s_transcript_apply_timer = lv_timer_create(windows_transcript_apply_timer_cb,
+                                               P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS, NULL);
 
     /* Reflow the transcript when the on-screen keyboard is shown/hidden, so
      * hiding the OSK expands the transcript into the freed space. This wires
@@ -1348,6 +1542,15 @@ void windows_deinit(void)
 
     /* Detach the visibility callback (the keyboard is being torn down). */
     keyboard_register_visibility_callback(NULL);
+
+    /* Stop the transcript apply pump before the widgets disappear; the
+     * staging path degrades to no-op scheduling until the next windows_init
+     * recreates it (a timer tick against cleaned objects must never run). */
+    if (s_transcript_apply_timer != NULL) {
+        lv_timer_delete(s_transcript_apply_timer);
+        s_transcript_apply_timer = NULL;
+    }
+    s_transcript_apply_pending = false;
 
     if (s_windows.screen != NULL) {
         /* Kill every pending animation on the screen and its descendants
@@ -1765,7 +1968,7 @@ lv_obj_t *windows_enter_app_surface(void)
         return NULL;
     }
     if (s_windows.transcript_spans != NULL) {
-        lv_obj_add_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+        windows_shell_spans_set_hidden(true);
     }
     /* Drop the transcript padding so the app surface gets the full region; the
      * shell transcript keeps its inset when the surface exits. */
@@ -1796,11 +1999,15 @@ void windows_exit_app_surface(void)
                                  s_windows.app_surface_saved_pad, LV_PART_MAIN);
     }
     if (s_windows.transcript_spans != NULL) {
-        lv_obj_remove_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+        windows_shell_spans_set_hidden(false);
     }
     if (s_windows.transcript != NULL) {
         windows_apply_transcript_height();
     }
+    /* Catch up the span group in one pass: while the surface was active the
+     * transcript applies were suspended (F25), so the staged text advanced
+     * past the rendered prefix. */
+    windows_transcript_schedule_apply();
     if (s_windows.app_surface_kb_was_visible) {
         keyboard_show();
         s_windows.app_surface_kb_was_visible = false;

@@ -256,6 +256,23 @@ void test_calc_string_functions(void)
     expect_str("mid$('hello',2)", "ello");
     expect_str("mid$('hello',9)", "");
     expect_str("left$('hello',99)", "hello");
+    expect_str("upper$('Hello')", "HELLO");
+    expect_str("lower$('HeLLo')", "hello");
+    expect_str("trim$('  hi  ')", "hi");
+    expect_str("trim$('hi')", "hi");
+    expect_str("replace$('aaa','a','b')", "bbb");
+    expect_str("replace$('hello','l','')", "heo");
+    expect_str("replace$('hello','','x')", "hello");
+}
+
+void test_calc_instr(void)
+{
+    expect_num("instr('hello','l')", 3);
+    expect_num("instr('hello','z')", 0);
+    expect_num("instr('hello','')", 0);
+    expect_num("instr(2,'hello','l')", 3);
+    expect_num("instr(4,'hello','l')", 4);
+    expect_num("instr(9,'hello','l')", 0);
 }
 
 void test_calc_string_numbers(void)

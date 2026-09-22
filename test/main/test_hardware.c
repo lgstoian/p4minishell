@@ -59,14 +59,18 @@ void test_hardware_imu_orientation(void)
 void test_hardware_charge_state(void)
 {
     /* The Tab5 INA226 reads charge current as NEGATIVE; positive current is the
-     * pack supplying the system (verified on hardware). */
+     * pack supplying the system (verified on hardware). Use a mid-pack voltage
+     * derived from the active board profile so the test holds on both boards
+     * (a hardcoded 7600 mV is above the reference board's full threshold and
+     * would classify as FULL there). */
+    const int mid_mv = ((int)BOARD_CFG_BATTERY_EMPTY_MV + (int)BOARD_CFG_BATTERY_FULL_MV) / 2;
     TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_CHARGING,
-                          power_monitor_classify_charge(7600, -500));
+                          power_monitor_classify_charge(mid_mv, -500));
     TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_DISCHARGING,
-                          power_monitor_classify_charge(7600, 500));
+                          power_monitor_classify_charge(mid_mv, 500));
     /* No meaningful current on external power reads as charging (not full). */
     TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_CHARGING,
-                          power_monitor_classify_charge(7600, 0));
+                          power_monitor_classify_charge(mid_mv, 0));
 
 #if BOARD_CFG_BATTERY_FULL_MV > 0
     TEST_ASSERT_EQUAL_INT(POWER_MONITOR_CHARGE_FULL,

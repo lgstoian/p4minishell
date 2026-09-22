@@ -26,6 +26,7 @@
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -131,14 +132,10 @@ static int csv_parse_args(int argc, char **argv, const char **sub_out,
 }
 
 /** Heap helper: PSRAM first (bulk CSV buffers must stay out of the scarce
- *  internal DMA heap), plain malloc fallback. Freed with heap_caps_free. */
+ *  internal DMA heap). Freed with heap_caps_free. */
 static void *csv_alloc(size_t size)
 {
-    void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (p == NULL) {
-        p = malloc(size);
-    }
-    return p;
+    return p4heap_alloc_psram(size);
 }
 
 /** Format one field with RFC-4180 quoting (`"a""b"`), for files and pipes.

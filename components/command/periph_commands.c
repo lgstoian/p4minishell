@@ -79,16 +79,16 @@ typedef struct {
  * ======================================================================== */
 
 static const shell_gpio_pin_desc_t s_gpio_pins[] = {
-    {"i2c_sda", BSP_I2C_SDA, "Shared control bus for GT911 touch and onboard peripherals", false, true},
-    {"i2c_scl", BSP_I2C_SCL, "Shared control clock for GT911 touch and onboard peripherals", false, true},
+    {"i2c_sda", BSP_I2C_SDA, "Shared control bus for touch and onboard peripherals (see P4_BSP_TOUCH_DRIVER)", false, true},
+    {"i2c_scl", BSP_I2C_SCL, "Shared control clock for touch and onboard peripherals (see P4_BSP_TOUCH_DRIVER)", false, true},
     {"i2s_dout", BSP_I2S_DOUT, "Audio codec data from the ESP32-P4 to the speaker path", false, true},
     {"i2s_lclk", BSP_I2S_LCLK, "Audio codec word-select clock", false, true},
     {"i2s_dsin", BSP_I2S_DSIN, "Audio codec data into the ESP32-P4", false, true},
     {"i2s_sclk", BSP_I2S_SCLK, "Audio codec bit clock", false, true},
     {"i2s_mclk", BSP_I2S_MCLK, "Audio codec master clock", false, true},
     {"power_amp", BSP_POWER_AMP_IO, "Speaker amplifier enable line", true, false},
-    {"backlight", BSP_LCD_BACKLIGHT, "JD9165 panel backlight control", false, true},
-    {"lcd_reset", BSP_LCD_RST, "JD9165 panel hardware reset", false, true},
+    {"backlight", BSP_LCD_BACKLIGHT, "Panel backlight control (see P4_BSP_PANEL_DRIVER)", false, true},
+    {"lcd_reset", BSP_LCD_RST, "Panel hardware reset (NC on boards without a reset line)", false, true},
     {"battery_adc", BOARD_CFG_BATTERY_ADC_GPIO, "Battery divider sense input", false, true},
     {"hosted_sdio_d0", BOARD_CFG_HOSTED_SDIO_D0_GPIO, "ESP32-C6 hosted SDIO data lane D0", false, true},
     {"hosted_sdio_d1", BOARD_CFG_HOSTED_SDIO_D1_GPIO, "ESP32-C6 hosted SDIO data lane D1", false, true},
@@ -103,7 +103,7 @@ static const shell_gpio_pin_desc_t s_gpio_pins[] = {
     {"sd_d3", BSP_SD_D3, "MicroSD data lane D3", false, true},
     {"sd_clk", BSP_SD_CLK, "MicroSD clock", false, true},
     {"sd_cmd", BSP_SD_CMD, "MicroSD command", false, true},
-    {"led_status", (gpio_num_t)BOARD_CFG_RGB_LED_GPIO, "WS2812 RGB status LED (LED1, back panel)", false, true},
+    {"led_status", (gpio_num_t)BOARD_CFG_RGB_LED_GPIO, "Board status LED (WS2812 on reference board, NC when routed via Tab5Keyboard)", false, true},
 #if defined(BOARD_CFG_TAB5KBD_PRESENT) && BOARD_CFG_TAB5KBD_PRESENT
     {"tab5kbd_sda", BOARD_CFG_TAB5KBD_SDA_GPIO, "Tab5Keyboard I2C data (expansion port)", false, true},
     {"tab5kbd_scl", BOARD_CFG_TAB5KBD_SCL_GPIO, "Tab5Keyboard I2C clock (expansion port)", false, true},
@@ -320,16 +320,18 @@ void shell_execute_gpio_command(int argc, char **argv)
  */
 
 /* ---- PWM and square-wave generation (LEDC) ----
- * The display backlight owns LEDC channel 1 / timer 1 on this board, so the
- * toolkit allocates channels and timers from the remaining set and never
- * touches the backlight path. */
+ * The display backlight owns SHELL_PWM_BACKLIGHT_CHANNEL /
+ * SHELL_PWM_BACKLIGHT_TIMER (timer 1 on the reference board, timer 0 on the
+ * Tab5 — see BOARD_CFG_LCD_BACKLIGHT_PWM_TIMER), so the toolkit never hands
+ * out that timer/channel pair and never touches the backlight path. */
 
 #define SHELL_PWM_BACKLIGHT_CHANNEL      BOARD_CFG_DISPLAY_BRIGHTNESS_LEDC_CH
 #define SHELL_PWM_BACKLIGHT_TIMER        BOARD_CFG_LCD_BACKLIGHT_PWM_TIMER
 
-/** LEDC timers available to the toolkit (P4 has 4 timers, timer 1 is used). */
+/** LEDC timers available to the toolkit (P4 has 4 timers; the backlight
+ * timer is skipped at claim time so no profile can collide with it). */
 static const ledc_timer_t s_pwm_timers[] = {
-    LEDC_TIMER_0, LEDC_TIMER_2, LEDC_TIMER_3
+    LEDC_TIMER_0, LEDC_TIMER_1, LEDC_TIMER_2, LEDC_TIMER_3
 };
 
 /** LEDC channels available to the toolkit (channel 1 is used by backlight). */
@@ -381,6 +383,9 @@ static esp_err_t shell_pwm_claim(ledc_timer_t *timer_out, ledc_channel_t *channe
 
     for (i = 0; i < sizeof(s_pwm_timers) / sizeof(s_pwm_timers[0]); i++) {
         bool used = false;
+        if (s_pwm_timers[i] == (ledc_timer_t)SHELL_PWM_BACKLIGHT_TIMER) {
+            continue;
+        }
         for (j = 0; j < SHELL_PWM_CHANNEL_MAX; j++) {
             if (s_pwm_slots[j].in_use && s_pwm_slots[j].timer == s_pwm_timers[i]) {
                 used = true;
@@ -950,9 +955,9 @@ typedef struct {
 } shell_i2c_session_t;
 
 /**
- * Open an I2C session. The board's shared bus (pins 7/8) is reused through
- * the BSP handle so a scan never conflicts with the touch controller; any
- * other pin pair gets a temporary master bus on a free port.
+ * Open an I2C session. The board's shared bus (BSP_I2C_SDA/BSP_I2C_SCL) is
+ * reused through the BSP handle so a scan never conflicts with the touch
+ * controller; any other pin pair gets a temporary master bus on a free port.
  */
 static esp_err_t shell_i2c_open(int sda, int scl, shell_i2c_session_t *session)
 {
@@ -1036,8 +1041,8 @@ static bool shell_i2c_pins_allowed(int sda, int scl)
  * Probe one 7-bit address for an ACK using a normal device transaction.
  *
  * Unlike i2c_master_probe(), this path never touches the shared controller's
- * bus timing or interrupt mask, so a scan cannot disrupt the GT911 touch that
- * runs on the same bus. A one-byte write to a device that NACKs the address
+ * bus timing or interrupt mask, so a scan cannot disrupt the touch controller
+ * that runs on the same bus. A one-byte write to a device that NACKs the address
  * fails immediately; a device that ACKs the address replies with a NACK only
  * on the data byte, which the driver surfaces as a transaction error too, so
  * only addresses that fully ACK count as present.
@@ -1376,8 +1381,12 @@ void shell_execute_rgb_command(int argc, char **argv)
         led_state_t state;
 
         if (!led_is_initialized()) {
+#if defined(BOARD_CFG_RGB_VIA_TAB5KBD) && BOARD_CFG_RGB_VIA_TAB5KBD
+            shell_print_error("rgb: keyboard LED driver is not initialized (Tab5Keyboard module not attached)");
+#else
             shell_print_error("rgb: WS2812 LED driver is not initialized (check GPIO%d)",
                               (int)BOARD_CFG_RGB_LED_GPIO);
+#endif
             shell_record_warningf("rgb", "RGB LED driver not initialized");
             batch_set_errorlevel(1);
             return;

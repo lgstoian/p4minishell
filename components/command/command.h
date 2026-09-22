@@ -247,6 +247,40 @@ void shell_command_list(int argc, char **argv);
 void shell_command_ask(int argc, char **argv);
 void shell_command_form(int argc, char **argv);
 void shell_command_browse_batch(int argc, char **argv);
+void shell_command_screen(int argc, char **argv);   /* screen run|info <file.frm> | flow <file.flow> */
+/**
+ * Split @p text on @p delim into @p store, recording up to @p max entries in
+ * @p out (pure, unit-tested). Empty entries are dropped; per-entry spaces are
+ * trimmed. Returns the count (0 for NULL/empty), or -1 when @p store is too
+ * small or the arguments are unusable.
+ */
+int screen_split_list(const char *text, char delim, char *store, size_t store_size,
+                      const char **out, int max);
+
+/** Fixed widths for a flow rule (the config caps must fit; asserted in
+ *  screen_commands.c so a raised P4_CONFIG_* fails the build, not silently
+ *  truncates). */
+#define COMMAND_FLOW_ID_BYTES    16
+#define COMMAND_FLOW_TOKEN_BYTES 40
+#define COMMAND_FLOW_TARGET_BYTES 32
+
+/** One routing rule of a declarative flow (`screen flow <file.flow>`). */
+typedef struct {
+    char step[COMMAND_FLOW_ID_BYTES];      /**< Owning step id. */
+    char token[COMMAND_FLOW_TOKEN_BYTES];  /**< `*`, `err:<n>`, or `val:<text>`. */
+    char target[COMMAND_FLOW_TARGET_BYTES];/**< Next step id, or `end`. */
+} screen_flow_rule_t;
+
+/**
+ * Pick the first matching rule for @p step (pure, unit-tested). Rules are
+ * evaluated in array order: a `*` token always matches, `err:<n>` matches
+ * @p errorlevel, and `val:<text>` matches @p var_value case-insensitively.
+ *
+ * @return The rule's target (never NULL), or NULL when nothing matches.
+ */
+const char *screen_flow_select(const screen_flow_rule_t *rules, int rule_count,
+                               const char *step, int errorlevel,
+                               const char *var_value);
 void shell_command_view(int argc, char **argv);
 void shell_command_open(int argc, char **argv);
 void shell_command_hexview(int argc, char **argv);
@@ -515,13 +549,48 @@ int  asset_verify_app(const char *tag, const char *app, bool list_only);
 
 /**
  * `pkg` — SD app packages over `APPS/<APP>.APPINFO`
- * (title/description/version, plus type=/abi= for native bundles — see
- * docs/native_packaging.md) + `APPS/<APP>.ASSETS` (contents manifest),
- * installed from a `PKGS/<APP>/` bundle. Verbs: list, info, verify, check,
- * install, remove. Implemented in pkg_commands.c; ERRORLEVEL 0 ok / 1 some
- * failure / 2 usage.
+ * (title/description/version, plus type=/abi=/arch=/entry= for native and
+ * hybrid apps — see ABI.md) + `APPS/<APP>.ASSETS` (contents manifest,
+ * optional `SIGN=` ECDSA line), installed from a `PKGS/<APP>/` bundle.
+ * Verbs: list, info, verify, check, install [/signed], remove,
+ * key show|install|clear. Implemented in pkg_commands.c; ERRORLEVEL 0 ok /
+ * 1 some failure / 2 usage.
  */
 void shell_command_pkg(int argc, char **argv);
+
+/** Manifest trust sizes (pkg_commands.c): raw P-256 X||Y, raw r||s, SHA-256. */
+#define PKG_SIGN_PUB_BYTES 64
+#define PKG_SIGN_SIG_BYTES 64
+#define PKG_SIGN_HASH_BYTES 32
+
+/** Manifest trust verdict over in-memory manifest text. */
+typedef enum {
+    PKG_SIGN_NONE = 0,   /**< No SIGN line: CRC-only, policy decides. */
+    PKG_SIGN_OK,          /**< Signed and verified against the trusted key. */
+    PKG_SIGN_BAD,         /**< Signed but wrong (bad math, malformed, double). */
+    PKG_SIGN_NOKEY,       /**< Signed but no trusted key is installed. */
+    PKG_SIGN_ERROR,       /**< Cannot judge (I/O, overflow, no memory). */
+} pkg_sign_status_t;
+
+/**
+ * Manifest signature helpers (pkg_commands.c, pure except the NVS key
+ * store, unit-tested): `SIGN=<128 hex>` (raw r||s) lines, canonical bytes
+ * (every line except blanks, `#`/`;` comments, and SIGN lines, each + LF),
+ * ECDSA P-256 + SHA-256 verification, and the `p4sign` NVS trust store.
+ */
+bool pkg_is_sign_line(const char *line);
+bool pkg_sign_parse(const char *line, uint8_t *sig_out);
+int pkg_sign_canonical(const char *text, char *out, size_t out_size, size_t *len_out);
+int pkg_sign_hash(const uint8_t *msg, size_t msg_len, uint8_t *hash_out);
+int pkg_sign_verify(const uint8_t *msg, size_t msg_len,
+                    const uint8_t *sig, const uint8_t *pub);
+void pkg_sign_fingerprint(const uint8_t *pub, char *hex_out);
+int pkg_sign_pubkey_load(uint8_t *pub_out);
+int pkg_sign_pubkey_save(const uint8_t *pub);
+int pkg_sign_pubkey_clear(void);
+pkg_sign_status_t pkg_sign_check_with_key(const char *text, const uint8_t *pub,
+                                          char *fingerprint_out);
+pkg_sign_status_t pkg_sign_check_manifest(const char *text, char *fingerprint_out);
 
 /**
  * Pure helper (pkg_commands.c, unit-tested): true when @p filename is a
@@ -587,10 +656,27 @@ void shell_command_cal(int argc, char **argv);
  * and alarm/calendar events, searched through the existing db_find / alarm_list
  * APIs (no parallel search logic). `/b` = bare machine-readable lines,
  * `/i` = case-insensitive, `/db:name` restricts to one database,
- * `/noalarms` / `/nodb` exclude a store. ERRORLEVEL 0 (matches) / 1 (none) /
- * 2 (usage / I/O).
+ * `/noalarms` / `/nodb` exclude a store.
+ *
+ * `/files` (opt-in) adds a text-file scan sharing the `findstr /S` storage
+ * core (`storage_walk_files` + `storage_scan_file_lines`, same matcher):
+ * `/root:path` (default sd:/), `/ext:.txt,.md` (default: text-bearing kinds),
+ * `/hidden` (descend dot dirs), `/filesonly` (one line per file), `/nofiles`.
+ * The structured stores' directories (`P4_CONFIG_GFIND_SKIP_DIRS`) are never
+ * descended. ERRORLEVEL 0 (matches) / 1 (none) / 2 (usage / I/O).
  */
 void shell_command_gfind(int argc, char **argv);
+
+/**
+ * Pure file-scope filter for `gfind /files` (unit-tested): true when @p name
+ * should be visited. Hidden entries (leading `.`) are skipped unless
+ * @p include_hidden; a store directory in `P4_CONFIG_GFIND_SKIP_DIRS` is
+ * skipped; a file must match @p ext_list (comma/semicolon/space list, dots
+ * optional) or, when @p ext_list is empty, be a text-bearing filetype (never
+ * an image).
+ */
+bool gfind_name_allowed(const char *name, bool is_dir, bool include_hidden,
+                        const char *ext_list);
 
 #ifdef __cplusplus
 }

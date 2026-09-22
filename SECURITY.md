@@ -4,9 +4,10 @@ How P4MiniShell protects secrets, what the device lock actually enforces,
 and what is still missing. Read this before exposing a device to an
 untrusted network.
 
-- **Version:** v1.1.0 · **License:** MIT (see [`licence.md`](licence.md))
-- Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`),
-  [`readme.md`](readme.md), [`roadmap.md`](roadmap.md) (platform/security row).
+- **Version:** v1.2.1 · **License:** MIT (see [`licence.md`](licence.md))
+- Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`,
+  `pkg`), [`ABI.md`](ABI.md) (package signing), [`readme.md`](readme.md),
+  [`roadmap.md`](roadmap.md) (platform/security row).
 
 ## Threat model
 
@@ -54,10 +55,29 @@ report. There is no bug-bounty program.
   written to the debug log.
 - `ask /p`, `set /p /P`, and `app_read_password()` read without echo.
 - `crypt lock|unlock` is AES-256-GCM under a PBKDF2-SHA256 key, streamed in
-  4 KB chunks; key and password buffers are **zeroed after every run**, and
-  `/p:` passwords are masked like Wi-Fi credentials
-  (`components/command/crypt_commands.c`).
+  512-byte chunks (hardware esp-aes over cache-aligned DMA buffers, with a
+  self-contained software fallback in `components/swgcm/` in the identical
+  format — bugs.md F23, fixed in v1.2.1); key and password buffers are
+  **zeroed after every run**, and `/p:` passwords are masked like Wi-Fi
+  credentials (`components/command/crypt_commands.c`).
 - Per-file encryption only: `crypt` protects chosen files, not the card.
+
+## Package signing (`pkg` / `pkg key`)
+
+- Installed bundles are integrity-checked by CRC-32 and may be
+  authenticity-checked by an ECDSA P-256 `SIGN=` line (`ABI.md` §4).
+- The **private key never touches the device**: sign on the host with
+  `tools/pkg_sign.py`; the device trusts only a raw public key installed via
+  `pkg key install` (stored in the `p4sign` NVS namespace). `pkg key install`
+  rejects an off-curve point; `pkg key clear` confirms first.
+- A **bad signature always refuses** the install, even when every CRC matches
+  (CRCs are attacker-recomputable). Unsigned bundles keep the CRC-only
+  contract unless `P4_CONFIG_PKG_REQUIRE_SIGN=1` or `pkg install /signed`
+  enforces signing.
+- There is no revocation list and no online trust: rotating the key means
+  re-signing bundles and running `pkg key install` again. Anyone with USB
+  serial control (which equals full control by design) can replace the trusted
+  key.
 
 ## HTTP file server (`httpd`)
 
@@ -83,11 +103,11 @@ design — the firmware never rewrites FAT structures.
 
 - HTTPS client (`httpget https://…`) uses mbedTLS. There is no SD
   certificate store yet (see `roadmap.md` TLS row); pinning custom CAs is
-  not supported in v1.1.0.
+  not supported in v1.2.1.
 - C6 OTA requires the explicit `YES` confirmation, refuses while background
   jobs run, and restores Wi-Fi afterwards.
 - SoftAP is compiled out (station-only); there is no open AP by default.
-- Secure boot / flash encryption: no provisioned profile ships in v1.1.0
+- Secure boot / flash encryption: no provisioned profile ships in v1.2.1
   (see `roadmap.md` platform row). Enable them via your own ESP-IDF signing
   flow if your deployment needs them.
 

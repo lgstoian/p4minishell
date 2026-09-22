@@ -53,7 +53,7 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.2.0)
+## Current state (v1.2.1)
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
@@ -75,12 +75,20 @@ the host regression runners are green. See
   append touch`), full `dir` switch set, `xcopy`, `attrib`, `label`, a recycle
   bin (`undelete`/`trash`), `chkdsk`, `format`, and `disk` partition tools.
 - **Batch:** `set`/`set /a`/`set /p`, `calc` (floating point + BASIC-style
-  math/string functions), `if`, `for`, `for /f`, `goto`, `call`/`gosub`
-  (local and shared-library routines with `return`), `on … goto|gosub`
-  computed dispatch, `alias`, `bind`, `macro`, `start`/`taskkill`
-  background jobs, `dialog`/`list`/`ask` modals, and `exit /b`.
-- **Apps:** PATH + `sd:/APPS` discovery with `APPINFO` metadata, `pkg`
-  install/remove from CRC-checked bundles, asset manifests (`asset`), and the
+  math/string functions incl. `UPPER$`/`LOWER$`/`TRIM$`/`INSTR`/`REPLACE$`),
+  `if` (+ single-line `(cmd) else (cmd)` groups), `for`, `for /f`, `for /L`,
+  `for /A`, `for /D`, `for /R`, `while` condition loops, `switch` string
+  dispatch, `NAME[i]` arrays, `%VAR:~%`/`%VAR:old=new%` string forms,
+  `!VAR!` delayed expansion, `goto`,
+  `call`/`gosub` (local and shared-library routines with `return`),
+  `on … goto|gosub` computed dispatch, `alias`, `bind`, `macro`,
+  `start`/`taskkill` background jobs, `dialog`/`list`/`ask` modals,
+  declarative screens and multi-screen flows (`screen run` / `screen flow`,
+  see [batch.md](batch.md) §13), and `exit /b`.
+- **Apps:** every app launches through a `*.bat` shim (pure batch, hybrid, or
+  native-linked — see [ABI.md](ABI.md)); PATH + `sd:/APPS` discovery with
+  `APPINFO` metadata, `pkg` install/remove from CRC-checked and **ECDSA-signed**
+  bundles (`pkg key`, `tools/pkg_sign.py`), asset manifests (`asset`), and the
   `applib` native-app runtime.
 - **Data:** `db` record store, `csv` grid + `=EXPR` evaluation, `export`/`import`
   interchange, `archive`/`backup`, `crypt` (AES-256-GCM), `ini`/`appconfig`/`temp`.
@@ -254,15 +262,21 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 
 ### Apps and data
 
-- **Apps are batch files.** Path/`APPS` discovery, `APPINFO` metadata, and the
-  `launch` menu.
-- **`pkg`** installs apps from CRC-checked `PKGS/<APP>/` bundles; **`asset`**
-  verifies asset manifests; **`crc32`** hashes files.
+- **Apps launch through a `.bat` shim** (pure batch, hybrid, or native-linked),
+  with Path/`APPS` discovery, `APPINFO` metadata, and the `launch` menu — see
+  [ABI.md](ABI.md).
+- **`pkg`** installs apps from CRC-checked `PKGS/<APP>/` bundles and verifies
+  optional ECDSA P-256 signatures (`pkg install /signed`, `pkg key`, host
+  signer `tools/pkg_sign.py`); **`asset`** verifies asset manifests; **`crc32`**
+  hashes files.
 - **`db`** — a Palm-OS-style record store (records, categories, secret fields,
   `db /field:`/`/sort:`), with `export`/`import` to CSV/JSON/TXT/VCF/ICS.
 - **`alarm`/`cal`** — persisted events with recurrence and a background checker
   that can run a `/run:` batch file.
 - **`archive`/`backup`** — USTAR `.p4a` backups with CRC manifests.
+- **`gfind`** — Palm-style global find over `db` records + alarms, plus an
+  opt-in `/files` scan of text files (one shared storage search core; no index,
+  always live).
 - **`crypt`** — AES-256-GCM + PBKDF2 file encryption.
 - **Native app SDK (`applib`)** — transcript stdout (so `myapp > out.txt`
   works), PSRAM-aware allocation, time/input/state helpers, Wi-Fi accessors,
@@ -273,9 +287,9 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - **`draw`** TUI verbs (box/line/fill/text/bar/table/list/window/cursor/hold/
   fullscreen) over an 80x25 cell grid that maps to the live transcript region.
 - **`gfx`** — an RGB565 canvas with pixel/line/rect/circle/polygon/fill/text,
-  BMP load/save, 8 sprite slots (up to 64x64) for batch games, and
-  firmware-measured frame pacing (`gfx stats`: frames/min/avg/max/jitter/
-  dropped/fps).
+  BMP load/save, 8 sprite slots (up to 64x64) for batch games with bulk
+  `blitmany` formation stamps, and firmware-measured frame pacing
+  (`gfx stats`: frames/min/avg/max/jitter/dropped/fps).
 - **`plot`** — world-coordinate graphs (`func`/`polar`/`para`/`data`/`bar`/
   `table`) sampling `calc` expressions onto the canvas or the TUI.
 - **`font`** registry (roles/sizes/fallbacks), SD TTF loading, CJK fallback,
@@ -335,25 +349,29 @@ See [documentation.md](documentation.md) for the full module map and
 
 ## Hardware baseline
 
-The JC1060P470C reference profile (the M5Stack Tab5 profile is summarised in
-[`PORTING.md`](PORTING.md) §6):
+Two first-class board profiles ship under `boards/` (select with
+`-DP4_BOARD=<name>`, default `jc1060p470c`). Both are ESP32-P4 + ESP32-C6 with
+LVGL 9.5.0 (esp_lvgl_port 2.9.0), FATFS SD storage (255-char long filenames),
+USB host (MSC at `/usb0` + HID keyboard/mouse + lazy CDC-ACM serial), and
+ESP-IDF v5.5.5. Full bring-up checklist in [`PORTING.md`](PORTING.md).
 
-| Component | Detail |
-|-----------|--------|
-| **Host MCU** | ESP32-P4 (rev 1, dual core) |
-| **Co-processor** | ESP32-C6 over ESP-Hosted SDIO |
-| **Display** | JD9165 1024x600 MIPI-DSI via LVGL 9.5.0 (esp_lvgl_port 2.9.0) |
-| **Touch** | GT911 via I2C |
-| **Storage** | FATFS on SD with long-filename support (255 chars) |
-| **Audio** | ES8311 codec via I2S |
-| **Battery** | ADC on GPIO53 with a 2:1 divider |
-| **RGB LED** | WS2812 status LED on GPIO26 |
-| **Hosted SDIO** | CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 |
-| **USB Host** | MSC at `/usb0` + HID keyboard/mouse + CDC-ACM serial |
-| **ESP-IDF** | v5.5.5 |
+| Component | JC1060P470C (reference) | M5Stack Tab5 |
+|-----------|-------------------------|--------------|
+| **Host MCU** | ESP32-P4 (rev 1, dual core) | ESP32-P4NRW32 (rev 1, dual core) |
+| **Co-processor** | ESP32-C6 over ESP-Hosted SDIO 3.0.6 | ESP32-C6-MINI-1U over ESP-Hosted SDIO 3.0.6 |
+| **Display** | JD9165 1024x600 MIPI-DSI, rotation 0 | 1280x720 MIPI-DSI (native 720x1280, rotation 90), runtime auto-detect ILI9881C / ST7123 / ST7121 (`BOARD_CFG_LCD_FORCE_VERSION` pins it) |
+| **Touch** | GT911 via I2C (GPIO7/8) | GT911 on ILI9881C units, integrated Sitronix TDDI otherwise (INT GPIO23) |
+| **Audio** | ES8311 codec via I2S + GPIO20 amp | ES8388 codec + ES7210 front end via I2S (amp on IO expander) |
+| **Battery** | ADC on GPIO53 with a 2:1 divider | INA226 pack gauge (0x41, 5 mOhm) on SYS I2C; charging enabled once at boot; `battery` shows V/A/W/state, `battery diag` dumps registers, header shows `+NN%` while charging |
+| **RGB LED** | WS2812 status LED on GPIO26 | Two Tab5Keyboard RGB LEDs over I2C (`rgb 1\|2 ...`; LED1 = status, LED2 = user) |
+| **Hosted SDIO** | Slot 1, 40 MHz: CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 | Slot 1, **10 MHz**: CLK=12 CMD=13 D0=11 D1=10 D2=9 D3=8, reset GPIO15 (40 MHz crashes on assoc; first RPC retried once via transport reset) |
+| **Input** | USB HID + on-screen keyboard | + Tab5Keyboard module (STM32F030, EXT I2C 0x6D, INT GPIO50); OSK auto-hides for any physical keyboard |
+| **Sensors** | — | BMI270 IMU (`imu`, tilt auto-rotate, `IMU_*` vars); RX8130CE RTC; SC202CS MIPI-CSI camera (`camera init` + `camera snap <file.bmp>`, BMP stills only) |
+| **Power** | `shutdown` = deep sleep | `shutdown`/`poweroff` cuts the PMIC rail (PI4IOE5V6408 P4 latch) |
+| **Build it** | `idf.py -DP4_BOARD=jc1060p470c build` | `idf.py -DP4_BOARD=m5stack_tab5 build` (per-board `sdkconfig.<board>`, CI builds both) |
 
 Other panels are supported by the vendored BSP drivers (ILI9881C, EK79007,
-LT8912B); porting to a new board is a documented roadmap item.
+LT8912B); porting to a new board is documented in [`PORTING.md`](PORTING.md).
 
 ---
 
@@ -390,9 +408,11 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [tutorial_edit.md](tutorial_edit.md) | Complete `edit` editor guide |
 | [editor.md](editor.md) | `edit` quick reference |
 | [command.md](command.md) | Complete command reference |
+| [batch.md](batch.md) | Batch app language spec (loops, arrays, strings, game kit) — the single file for writing `.bat` apps |
 | [documentation.md](documentation.md) | Technical architecture |
 | [SDK.md](SDK.md) | Integration guide for extending the system |
 | [API.md](API.md) | Public module API reference |
+| [ABI.md](ABI.md) | Application ABI + package trust (launch model, entry ABI, signing) |
 | [roadmap.md](roadmap.md) | Feature history and future direction |
 | [changelog.md](changelog.md) | Version history |
 | [bugs.md](bugs.md) | Bug campaign template and known quirks |
@@ -400,9 +420,10 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [licence.md](licence.md) | MIT license + third-party notices |
 | [SECURITY.md](SECURITY.md) | Security policy: device lock, secrets, httpd auth |
 | [test/README.md](test/README.md) | Unit-test layout and how to run them |
+| [harness.md](harness.md) | Full testing harness guide (unit, suites, drivers, diagnostics) |
 | [tools/README.md](tools/README.md) | Host-side drivers and hardware tests |
 | [PORTING.md](PORTING.md) | Board profiles (`boards/`) and bring-up checklist |
-| [docs/native_packaging.md](docs/native_packaging.md) | Native-app package spec (store-only in v1.1) |
+| [docs/native_packaging.md](docs/native_packaging.md) | Package spec: bundle layout, hybrid/native types, signed manifests (packaging spec v1.2) |
 | [docs/assets/README.md](docs/assets/README.md) | Public screenshot set + capture guide |
 
 > **Screenshots:** curated public captures live in `docs/assets/` (see its

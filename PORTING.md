@@ -7,7 +7,7 @@ P4MiniShell keeps all board-specific facts in one **board profile**:
 1024x600 MIPI-DSI, GT911 touch). A port means adding a profile, pointing the
 build at it, and wiring the drivers below — no firmware logic changes.
 
-- **Version:** v1.2.0 · **Target family:** ESP32-P4 + ESP32-C6
+- **Version:** v1.2.1 · **Target family:** ESP32-P4 + ESP32-C6
 - Shipped profiles: `boards/jc1060p470c/` (reference) and
   `boards/m5stack_tab5/` (see §6).
 - Related: [`readme.md`](readme.md) (configuration), [`SDK.md`](SDK.md)
@@ -40,7 +40,7 @@ Copy `boards/jc1060p470c/` and edit. YAML first, then the matching macros:
 | `board.battery` (ADC GPIO, divider, thresholds) | `BOARD_CFG_BATTERY_*` | Below `PRESENT_MV` the header shows `BAT N/C` instead of 0% |
 | `board.rgb_led` | `BOARD_CFG_RGB_LED_GPIO/_IS_WS2812` | Non-WS2812 LEDs need a `components/led/` backend note |
 | `board.storage` (mount points **and SDMMC pins**) | `BOARD_CFG_SD_*`, `BOARD_CFG_SD_*_GPIO` | BSP `BSP_SD_*` macros read the pin macros (§4) |
-| `board.hosted_sdio` | `BOARD_CFG_HOSTED_SDIO_*` | Mirrors `sdkconfig` `CONFIG_ESP_HOSTED_HOST_SDIO_*`; the C6 reset line stays the `P4_CONFIG_C6_HOST_RESET_GPIO` tunable and must match `CONFIG_ESP_HOSTED_HOST_RESET_GPIO` |
+| `board.hosted_sdio` | `BOARD_CFG_HOSTED_SDIO_*` | Mirrors `sdkconfig` `CONFIG_ESP_HOSTED_HOST_SDIO_*` (checked by a build-time `_Static_assert` in `components/networking/`); the C6 reset line is `BOARD_CFG_C6_HOST_RESET_GPIO` and must match `CONFIG_ESP_HOSTED_HOST_RESET_GPIO` |
 
 `P4_CONFIG_DISPLAY_PANEL_DRIVER` / `P4_CONFIG_TOUCH_DRIVER`
 (`p4minishell_config.h`) are display strings only — update them so
@@ -141,6 +141,18 @@ board, so the toolchain and target carry over; the deltas:
 - **Storage/SDIO:** MicroSD on SDMMC slot 0 (pins 39-44); the C6 hosted
   transport shares the SDMMC controller on slot 1. The hosted SDIO clock is
   **10 MHz** here (40 MHz on the reference board).
+- **Crypt/DMA:** `crypt` streams in 512-byte chunks over small cache-aligned
+  DMA buffers (hardware esp-aes); when the Tab5 DMA pool is too fragmented, a
+  self-contained software AES-256-GCM fallback (`components/swgcm/`)
+  seals/opens the identical format with no DMA needed (bugs.md F23, fixed in
+  v1.2.1 — no suite skip; `tools/suites/s07_data.py` asserts lock/unlock on
+  all boards).
+- **Malloc policy:** plain `malloc()` is PSRAM-first
+  (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0`) with a 32 KB
+  `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL` pool kept for DMA/internal needs
+  (`sdkconfig.defaults:140-141`); bulk data goes through the central
+  `components/p4heap/` allocator (PSRAM-first bulk, explicit DMA,
+  PSRAM-or-fail for bulk — bulk must never spill into the DMA pool).
 
 ### Co-processor (C6) firmware
 
@@ -173,13 +185,30 @@ uses a different Wi-Fi/BT stack (`esp_hosted` 1.4.0 + `esp_wifi_remote` 0.8.5
 and its `wifi_c6_fw` binary). This project keeps the project-wide 3.0.6 stack
 so a single `components/networking/` drives both boards; the board wiring
 (WLAN/USB power and the external-antenna switch through the PI4IOE5V6408
-expanders) is identical and already lives in the vendored BSP.
+expanders) is identical and already lives in the vendored BSP. Adopting the
+1.4.0 vendor stack was considered as the F6 fix and **rejected**: it downgrades
+the RPC ABI under the 3.x compat gate + `c6ota`, and the measured root cause
+turned out to be the boot-time 0x44 expander reset (see "First-RPC transport
+reset" below), not the esp_hosted version.
 
 ### First-RPC transport reset
 
 On this board the **first hosted RPC issued immediately after a fresh connect**
 can time out at the SDIO layer (`sdmmc_send_cmd 0x107`; the slave still holds
-DAT0 from its power-on auto-init). `components/networking/networking.c` now
-tears the hosted transport down and re-inits/connects once when the C6 version
-read fails, which clears the stuck bus and lets Wi-Fi and BLE start. The retry
-is failure-only and board-agnostic, so the reference board path is unchanged.
+DAT0 from its power-on auto-init). `components/networking/networking.c` tears
+the hosted transport down and re-inits/connects once when the C6 version read
+fails, which clears the stuck bus and lets Wi-Fi and BLE start. The retry is
+failure-only and board-agnostic, so the reference board path is unchanged.
+
+The trigger for that first-RPC timeout (bugs.md F6) was **not** the C6 link
+itself: `board_bsp_early_init()` created the managed `pi4ioe5v6408` driver
+handle for the second expander (0x44), whose `esp_io_expander_new_*()` issues a
+**chip-wide software reset** — floating P0 `WLAN_PWR_EN` and power-cycling the
+C6 microseconds before hosted enumeration, so the slave's power-on auto-init
+raced the host's first RPC. The 0x44 is now **single-writer and reset-free**:
+the Wi-Fi/USB feature enables drive P0/P3 through the raw, read-back-verified,
+retrying path in `bsp_io_expander.c`, and the driver-creation reset never runs
+against it. After this change `boot_regression.py COM6 20` is clean 20/20 with
+**zero** first-RPC/`0x107`/recovery signatures (previously every boot hit the
+recovery path), and `dogfood.py COM6` no longer reboots under load. The
+transport-reset retry stays as a safety net for the genuinely marginal link.

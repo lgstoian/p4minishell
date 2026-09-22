@@ -84,6 +84,7 @@
 #include "freertos/queue.h"
 #include "lvgl.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_lvgl_port.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -1453,6 +1454,7 @@ typedef struct {
     char name[SHELL_LAUNCH_NAME_BYTES];   /* Base name without extension */
     char path[SHELL_SD_PATH_BYTES];       /* Full resolved .bat path */
     char title[SHELL_LAUNCH_TITLE_BYTES]; /* APPINFO title, or "" */
+    char app_type[16];                    /* APPINFO type ("" when absent) */
 } shell_launch_entry_t;
 
 static int shell_launch_find(const shell_launch_entry_t *table, int count, const char *name)
@@ -1521,6 +1523,17 @@ static void shell_launch_add(shell_launch_entry_t *table, int *count, const char
         title[0] = '\0';
     }
     snprintf(table[*count].title, sizeof(table[*count].title), "%s", title);
+    /* Hybrid shims advertise their kind; anything else stays unmarked. */
+    table[*count].app_type[0] = '\0';
+    {
+        char ptype[16];
+
+        ptype[0] = '\0';
+        if (storage_ini_file_get(appinfo, "type", ptype, sizeof(ptype)) == ESP_OK &&
+            shell_text_equals_ignore_case(ptype, "hybrid")) {
+            snprintf(table[*count].app_type, sizeof(table[*count].app_type), "hybrid");
+        }
+    }
     (*count)++;
 }
 
@@ -1637,13 +1650,16 @@ static void shell_command_launch(int argc, char **argv)
     }
     count = shell_launch_discover(table);
 
-    /* `launch /list` — bare machine-parsable list for scripting. */
+    /* `launch /list` — bare machine-parsable list for scripting. Hybrid
+     * shims carry a ` [hybrid]` tag; plain batch lines stay exactly as
+     * before so `for /f` scripts keep parsing. */
     if (argc == 2 && shell_text_equals_ignore_case(argv[1], "/list")) {
         for (i = 0; i < count; i++) {
+            const char *tag = (table[i].app_type[0] != '\0') ? " [hybrid]" : "";
             if (table[i].title[0] != '\0') {
-                shell_transcript_appendf("%s  -  %s\n", table[i].name, table[i].title);
+                shell_transcript_appendf("%s  -  %s%s\n", table[i].name, table[i].title, tag);
             } else {
-                shell_transcript_appendf("%s\n", table[i].name);
+                shell_transcript_appendf("%s%s\n", table[i].name, tag);
             }
         }
         batch_set_errorlevel(count > 0 ? 0 : 1);
@@ -1712,12 +1728,23 @@ static void shell_command_launch(int argc, char **argv)
         return;
     }
     for (i = 0; i < count; i++) {
-        if (table[i].title[0] != '\0') {
-            shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "  -  %s\n",
-                                          i + 1, table[i].name, table[i].title);
-        } else {
-            shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "\n",
-                                          i + 1, table[i].name);
+        {
+            /* Hybrid shims show their kind; the numbers (what `for /f`
+             * scripts and fingers select) never move. */
+            char label[SHELL_LAUNCH_NAME_BYTES + 12];
+
+            if (table[i].app_type[0] != '\0') {
+                snprintf(label, sizeof(label), "%s [hybrid]", table[i].name);
+            } else {
+                snprintf(label, sizeof(label), "%s", table[i].name);
+            }
+            if (table[i].title[0] != '\0') {
+                shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "  -  %s\n",
+                                              i + 1, label, table[i].title);
+            } else {
+                shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "\n",
+                                              i + 1, label);
+            }
         }
     }
     {
@@ -1925,8 +1952,7 @@ static void command_bg_pool_init(void)
     int index;
 
     for (index = 0; index < P4_CONFIG_BG_TASKS; index++) {
-        s_bg_jobs[index].stack = heap_caps_malloc(SHELL_COMMAND_TASK_STACK_BYTES,
-                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_bg_jobs[index].stack = p4heap_alloc_psram(SHELL_COMMAND_TASK_STACK_BYTES);
 
         snprintf(s_bg_jobs[index].name, sizeof(s_bg_jobs[index].name),
                  "bg%d", index);
@@ -2990,6 +3016,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "switch")) {
+        shell_command_switch(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "shift")) {
         shell_command_shift(argc, argv);
         return true;
@@ -3049,6 +3080,16 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "for")) {
         shell_command_for(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "while")) {
+        shell_command_while(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "screen")) {
+        shell_command_screen(argc, argv);
         return true;
     }
 
@@ -3298,10 +3339,7 @@ bool shell_execute_command_core(char *command)
             return true;
         }
         text_cap = P4_CONFIG_TCP_TX_MAX_BYTES + 1;
-        text = heap_caps_malloc(text_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (text == NULL) {
-            text = malloc(text_cap);
-        }
+        text = p4heap_alloc_psram(text_cap);
         if (text == NULL) {
             shell_print_error("tcpterm: out of memory");
             batch_set_errorlevel(1);
@@ -3875,15 +3913,10 @@ void shell_execute_command_async(char *command)
         shell_record_errorf("shell", ESP_FAIL, "Command worker not initialized");
         return;
     }
-    /* A command-sized request is ~4 KB; allocate it from PSRAM so a burst of
-     * queued commands (pasted lines, modal chains, scripted drivers) never
-     * fragments or exhausts the internal DMA-capable heap. Fall back to the
-     * internal heap only if PSRAM is unavailable. */
-    request = heap_caps_malloc(sizeof(*request),
-                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (request == NULL) {
-        request = malloc(sizeof(*request));
-    }
+    /* A command-sized request is small and must-succeed; allocate it via
+     * the central allocator (any pool) so a burst of queued commands never
+     * exhausts one pool. NULL propagates to the error path below. */
+    request = p4heap_alloc_any(sizeof(*request));
     if (request == NULL) {
         shell_print_error("shell: out of memory queuing the command");
         shell_record_errorf("shell", ESP_ERR_NO_MEM, "Out of memory queuing async command");

@@ -94,11 +94,23 @@ def _parse_bmp(data: bytes) -> Bmp:
 
 def capture(dev: DeviceSession, out_dir: Optional[str] = None,
             name: Optional[str] = None, timeout: float = 40.0) -> Bmp:
-    """Grab the live screen (works while a modal/editor is open)."""
-    dev.reset_input()
-    dev.write_line("screenshot")
-    prelude = dev.read_until(b"streaming", 15.0)
-    if b"streaming" not in prelude:
+    """Grab the live screen (works while a modal/editor is open).
+
+    The device takes the LVGL port lock with a zero wait, so a frame that is
+    mid-render can refuse once with "could not acquire LVGL lock". That is
+    transient (not a fault), so a bounded retry absorbs it instead of failing
+    a suite on a timing race.
+    """
+    prelude = b""
+    for attempt in range(4):
+        dev.reset_input()
+        dev.write_line("screenshot")
+        prelude = dev.read_until(b"streaming", 15.0)
+        if b"streaming" in prelude:
+            break
+        if b"could not acquire LVGL lock" in prelude and attempt < 3:
+            time.sleep(0.6)
+            continue
         raise P4Error("screenshot: no streaming prelude; got %r" % prelude[-200:])
     # consume the rest of the "... bytes to serial...\r\n" line so the next
     # four bytes really are the BMPX magic.

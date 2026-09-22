@@ -58,6 +58,7 @@ def capture_boot(ser):
 
 def main():
     failures = 0
+    totals = {}
     for i in range(1, BOOTS + 1):
         # open_port() does not reboot, so reset explicitly to capture each
         # boot from the ROM banner.
@@ -73,17 +74,35 @@ def main():
         warnings = [ln.strip() for ln in text.splitlines()
                     if re.search(r"^[WE] \(\d+\)", ln.strip()) and not BENIGN_WE.search(ln)]
 
+        # bugs.md F6 signatures: the tolerated boot noise is counted even when
+        # benign, so a fix can be graded on storm volume, not just PASS/FAIL.
+        sigs = {}
+        for name, pat in (
+                ("txbuf_err", r"sdio_get_tx_buffer_num: err"),
+                ("sdmmc_107", r"sdmmc_io:.*returned 0x107"),
+                ("rpc350", r"no response uid=1 msg_id=350"),
+                ("aggr_fail", r"SDIO aggr: unrecoverable write failure"),
+                ("task_wdt", r"Task watchdog got triggered"),
+                ("backtrace", r"Backtrace:")):
+            n = len(re.findall(pat, text))
+            if n:
+                sigs[name] = n
+                totals[name] = totals.get(name, 0) + n
+
         ok = (panics == 0) and (autoexec == 1) and sd_ready and not warnings
         if not ok:
             failures += 1
-        print("boot %2d : %s  panics=%d autoexec=%d sd_ready=%s warn/err=%d"
-              % (i, "PASS" if ok else "FAIL", panics, autoexec, sd_ready, len(warnings)),
+        print("boot %2d : %s  panics=%d autoexec=%d sd_ready=%s warn/err=%d%s"
+              % (i, "PASS" if ok else "FAIL", panics, autoexec, sd_ready, len(warnings),
+                 ("  f6[" + " ".join("%s=%d" % kv for kv in sorted(sigs.items())) + "]")
+                 if sigs else ""),
               flush=True)
         for w in warnings[:5]:
             print("           " + w[:140], flush=True)
 
-    print("\nRESULT %s (%d/%d clean)" %
-          ("OK" if failures == 0 else "FAIL", BOOTS - failures, BOOTS))
+    print("\nRESULT %s (%d/%d clean)  f6_totals=%s" %
+          ("OK" if failures == 0 else "FAIL", BOOTS - failures, BOOTS,
+             totals if totals else "clean"))
     return 1 if failures else 0
 
 

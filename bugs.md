@@ -118,11 +118,11 @@ dedicated follow-up (per the campaign scope).
 - **Fix:** skip the RGB checks when `Device.rgb_available()` is false.
 - **Verified:** the suite passes on COM6 (RGB skipped) and COM3 (RGB exercised).
 
-### F6. Tab5: intermittent hosted-SDIO TX storm → task-watchdog reboot — **OPEN (HIGH)**
+### F6. Tab5: intermittent hosted-SDIO TX storm → task-watchdog reboot — **FIXED**
 
 - **Severity:** HIGH (crash/reboot on the boot path, intermittent)
-- **Component:** `components/networking/` first-RPC recovery + esp_hosted SDIO TX
-  (`eh_host_sdio.c: sdio_tx_credit_ready` / `sdio_is_write_buffer_available`)
+- **Component:** `boards/m5stack_tab5/board_bsp/` (second PI4IOE5V6408 @ 0x44)
+  + `components/networking/` first-RPC recovery (unchanged safety net)
 - **Board:** m5stack_tab5
 - **Found on:** 2026-09-19, COM6, firmware v1.2.0 (reproduced 2/10 boots)
 - **Symptom:** on ~1 in 5 boots the first hosted RPC (fw-version, msg 350) times
@@ -139,26 +139,52 @@ dedicated follow-up (per the campaign scope).
 - **Clock experiment:** at the demo's **40 MHz** the Tab5 booted clean 8/8 with
   no storm, but then crashed (`Backtrace`) as soon as Wi-Fi associated — so
   40 MHz is not viable with the 3.0.6 stack. 10 MHz is the working value.
-- **Root cause (preliminary):** the reset-retry calls `esp_hosted_deinit()`
-  while the SDIO TX credit loop is mid-retry against an unresponsive slave; the
-  free-running credit probe logs per iteration and the worker is starved into
-  the watchdog. The first version RPC timing out right after connect is the
-  trigger.
-- **Fix (mitigation, applied):** a managed patch to esp_hosted's SDIO TX credit
-  loop (`eh_host_bus_sdio.c`, tracked in `tools/managed_patches.patch`):
-  rate-limit the `sdio_get_tx_buffer_num` error to once/sec and replace the
-  20 us busy-wait (`esp_rom_delay_us`, no schedule) with `eh_host_port_task_delay_ms(1)`
-  so a stalled slave can no longer starve IDLE into the task watchdog. With the
-  existing single transport-reset retry this gives clean boots (10/10) and no
-  log flood.
-- **Attempted and reverted:** an explicit C6 hard-reset hook plus a 2-attempt
-  recovery loop. It hung Wi-Fi permanently ("runtime initialization is in
-  progress") when the C6 was unresponsive, so it was reverted to the single
-  retry. Do not reintroduce it without a bounded per-attempt timeout.
-- **Residual:** on some boots the C6 SDIO link still fails (`sdmmc_io … 0x107`)
-  and the recovery/`sdmmc_io` traffic can be heavy; this is the board's marginal
-  C6 link and is NOT fully fixable in software. Candidate real fix: adopt the
-  vendor-proven M5Stack stack (`esp_hosted` 1.4.0 + their C6 image).
+- **Root cause (final):** the v1.2.0 mitigations (SDIO credit-loop patch, single
+  transport-reset retry) treated the escalation, not the trigger. The trigger is
+  the boot order: `board_bsp_early_init()` called
+  `bsp_io_expander1_init()`, and the managed pi4ioe5v6408 driver **chip-resets
+  the whole 0x44 expander on creation** (`esp_io_expander_pi4ioe5v6408.c:111` →
+  `reset()` writes CHIP_RESET=0xFF), which floats P0 `WLAN_PWR_EN` — the ESP32-C6
+  loses power for the duration of the driver's default re-programming,
+  immediately before hosted enumeration. The C6 then races its power-on
+  auto-init against the host's first RPC: on a marginal boot the first RPC
+  times out (`sdmmc_send_cmd 0x107` / `msg_id=350`), and the transport-reset
+  retry escalates into the TX-credit storm / watchdog. The 2026-09-22 baseline
+  proved the boot path was ALWAYS on the recovery route: **20/20 boots** logged
+  `rpc350=1 sdmmc_107=3 aggr_fail=1` (benign-but-hiding), never a healthy
+  first RPC. A second, latent defect: the F20 raw-register configuration was
+  fire-and-forget (every I2C write `(void)`-cast, no read-back, never re-run),
+  so one shared-bus hiccup could leave the C6 rail un-powered for the whole
+  session.
+- **Fix:** the 0x44 expander is now **single-writer and reset-free**. The
+  Wi-Fi/USB feature enables in `bsp_feature_en.c` route through
+  `bsp_io_expander1_set_output()` — the raw path that programs DIR/OUT_H_IM/
+  PULL/IN_DEF/INT_MASK/OUT exactly as the M5Stack reference, with **every write
+  read back** and the whole sequence retried up to `BSP_E2_CONFIG_ATTEMPTS` (3)
+  times, `ESP_LOGE` on persistent failure. The managed-driver creation path
+  (`bsp_io_expander1_init()`, chip-reset) is no longer reachable from any live
+  code (documented `@warning` on the prototype). The C6 rail therefore stays
+  asserted across boots and warm reboots; esp_hosted's own GPIO15 CP-reset
+  pulse + settle remains the single reset mechanism. `networking.c`'s
+  connect-retry + transport-reset-retry stay as the safety net.
+- **Attempted and reverted (earlier passes, unchanged):** explicit C6
+  hard-reset hook + 2-attempt recovery loop (hung Wi-Fi permanently);
+  do not reintroduce without a bounded per-attempt timeout.
+- **Verified (2026-09-22, COM6, firmware from this tree):**
+  `boot_regression.py COM6 20` → **OK 20/20 clean, `f6_totals=clean`** — zero
+  `rpc350`, zero `sdmmc_io 0x107`, zero `SDIO aggr` write failures, zero
+  watchdog/backtrace (baseline on the same build path: 20/20 boots with
+  signatures). Sustained load: `dogfood.py COM6 8` → **PASS 5/5 checks,
+  no panics, no reboots** (baseline campaign: dogfood FAIL via F6 reboots;
+  one run reported 2 HIGH screenshot-framing anomalies under BOUNCE load that
+  did not reproduce on a fresh-seed re-run — see the sweep-flakiness note).
+  `battery`/`battery diag` and the charge path (OUT_SET bits maintained by the
+  same single writer) re-checked green; COM3 unaffected (11/11 p4test, Unity
+  428/0/2, boot path unchanged on that board).
+- **Residual (not fixed here, by design):** the Tab5's C6 link is physically
+  marginal; the 10 MHz + credit-patch + single-retry configuration is the
+  software floor. The now-clean first RPC removed the recovery route as a
+  storm trigger, which is why the storm class is closed rather than mitigated.
 
 ### F8. Tab5 BSP warned that SD long filenames were disabled — **FIXED**
 
@@ -432,6 +458,280 @@ dedicated follow-up (per the campaign scope).
 - **Verified:** COM6 with the Tab5 keyboard attached reports
   `keyboard: hidden, external=on`.
 
+### F23. Tab5 `crypt` fails after a busy session: AES DMA descriptors — **FIXED**
+
+- **Severity:** MEDIUM (file encryption unavailable on the Tab5 after heavy use)
+- **Component:** `components/command/crypt_commands.c`
+- **Board:** m5stack_tab5 (the reference board has more DMA-capable internal RAM and is unaffected)
+- **Found on:** 2026-09-21, COM6, firmware v1.2.1
+- **Symptom:** `crypt lock <f> <f.lock> /p:…` prints `E esp-aes: Failed to
+  allocate memory for the array of DMA descriptors` /
+  `Generating input DMA descriptors failed` (earlier variants: `start
+  alignment buffer`, `output DMA descriptors`) and no `locked …` line.
+- **Repro:** run `s07_data` on COM6; the crypt block (near the end) fails.
+  From a fresh boot an isolated `crypt lock`/`unlock` succeeds.
+- **Root cause:** the esp-aes hardware path needs **DMA-capable internal**
+  memory for its descriptor array. On the Tab5 that pool is fragmented/near
+  zero after a busy session even though `mem.internal` still reports ~30 KB
+  free — that figure includes non-DMA internal RAM, which is not usable here.
+  PSRAM cannot help: this P4 build has `dma_spi=0`, so PSRAM is not
+  DMA-capable, and feeding AES a PSRAM buffer actually makes it worse (it then
+  also needs an internal bounce buffer).
+- **Mitigation (landed earlier):** `crypt` now allocates its chunk buffers as small
+  **DMA-capable internal** buffers (`heap_caps_malloc(..., MALLOC_CAP_DMA)`,
+  512 B chunks) so AES runs straight through with the smallest possible
+  descriptor footprint; the recursive file-walk scratch was moved PSRAM-first
+  so it stops churning internal RAM. This fixes the isolated case and reduces
+  pressure, but the esp-aes descriptor allocation can still fail under the
+  suite's accumulated fragmentation.
+- **Fix (landed v1.2.1):** `crypt` now runs hardware-first with a software
+  fallback. The hardware path uses cache-line-aligned DMA buffers
+  (`p4heap_alloc_dma_aligned(128, 512)`, never PSRAM-backed) so a 512 B
+  chunk needs a single GDMA descriptor and no internal alignment bounce
+  buffer. When the DMA pool cannot satisfy
+  `P4_CONFIG_CRYPT_DMA_MIN_BYTES` (4096) — or a hardware run still fails on
+  crypto — the whole file is retried once through a self-contained software
+  AES-256-GCM engine (`components/swgcm/`, PSRAM buffers, identical
+  `P4CRYPT1` format, OpenSSL-vector + HW-crosscheck unit-tested in
+  `test_sw_gcm.c`). Bulk allocations across the tree moved to the central
+  `components/p4heap/` policy (PSRAM-first, bulk PSRAM-or-fail so large
+  requests can no longer starve the DMA pool), `mem` reports
+  `mem.dma.free/largest` + `mem.internal.largest`, and the transcript guard
+  also trims on DMA-largest pressure. Files sealed by either engine open
+  with the other.
+- **Verified:** COM6 direct probe with a busy session (`dir /s` x3, 2
+  screenshots, gfx open/fill/text/close; `mem.dma.largest` fell to 980 B):
+  `crypt lock`/`unlock` succeeded through the software engine, the round-trip
+  content matched, a wrong password was rejected, and no `esp-aes … DMA`
+  error appeared. COM3 unit suite 423/0/2 includes the five new
+  `test_sw_gcm` vectors; COM3 `s07_data` 93/93.
+
+### F24. Tab5 reports a 100% "full" battery with no pack attached — **FIXED**
+
+- **Severity:** MEDIUM (misleading battery state)
+- **Component:** `components/power_monitor/` (INA226) + `components/header/`
+- **Board:** m5stack_tab5
+- **Found on:** 2026-09-21, COM6, firmware v1.2.1
+- **Symptom:** with no battery on the pack connector, `battery` intermittently
+  prints `100%, 8.400 V full` (and the header shows a full cell) instead of
+  `N/C (no pack connected)`.
+- **Repro:** `battery` a few times with no pack: the reading jumps between
+  ~8.400 V (→ 100% full) and ~3.88 V (→ N/C).
+- **Root cause:** the INA226 bus-voltage register is the only pack-presence
+  signal. With no pack and USB power, the INA226 VBUS node floats to the
+  (charger/system) rail ≈ 8.40 V, which is ≥ `BOARD_CFG_BATTERY_FULL_MV`
+  (8400) and ≥ `BOARD_CFG_BATTERY_PRESENT_MV` (5000), so
+  `pm_mv_to_percent()` returns 100. A genuine full 2S pack is also 8.4 V, so
+  voltage alone cannot distinguish "no pack on the float rail" from "full
+  pack"; the reading also flips to ~3.9 V between samples, i.e. it is not a
+  stable pack voltage.
+- **Fix:** `power_monitor_pack_present()` (pure, unit-tested): a reading
+  clearly inside the pack range is trusted at once; a reading in the ambiguous
+  rail band (≥ `FULL_MV - P4_CONFIG_BATTERY_RAIL_BAND_TOL_MV`) is accepted only
+  when the last `P4_CONFIG_BATTERY_PRESENT_STABLE_SAMPLES` readings are all
+  plausible and within `P4_CONFIG_BATTERY_PRESENT_MAX_SWING_MV` of each other
+  (a floating node swings volts). `power_monitor_read_sample()` returns
+  `ESP_ERR_NOT_FOUND` when no pack is present, so the header and every battery
+  verb show `N/C` through the one existing path.
+  **Corroboration (F24-B):** the IP2326 `CHG_STAT_LED` line (Tab5 expander-2
+  0x44 P6) is now read via `board_bsp_charge_status_level()` /
+  `bsp_get_charge_status_level()` and a level that toggles while the voltage is
+  in the rail band and the current is ~0 (charger blinking into no pack)
+  rejects presence. Surfaced as `battery diag` `chg_stat`.
+- **Verified:** COM6 with no pack, `battery` reported
+  `N/C (no battery connected)` on 5/5 consecutive samples (previously the
+  8.40 V/"100% full" sample appeared intermittently); `battery diag` shows
+  `chg_stat: 0`. Unit tests cover the below-floor / in-range / stable /
+  unstable / chg-stat cases (`test_power_pack_present_*`). COM3 unit suite
+  428/0/2; COM3 `p4test` 11/11.
+
+### F25. Tab5 UI animation / scrolling is slow and tears — **FIXED**
+
+- **Severity:** MEDIUM (usability; no data loss)
+- **Component:** `components/display/`, `components/windows/`,
+  `components/command/gfx_commands.c`, Tab5 BSP display port
+- **Board:** m5stack_tab5
+- **Found on:** 2026-09-21, COM6, firmware v1.2.1
+- **Symptom:** `BOUNCE.BAT` and other animated/scrollback-heavy surfaces look
+  laggy with visible tearing. `gfx stats` on the demo: `frames=233
+  avg_us=160727 fps10=62 dropped=233`.
+- **Repro:** run `BOUNCE` on COM6; or a burst of `gfx show` (see measurement).
+- **Root cause (three parts, all fixed + one residual):**
+  1. **CPU rotation (F25-A):** `CONFIG_LVGL_PORT_ENABLE_PPA` was off, so the
+     LVGL port rotated every flush with `lv_draw_sw_rotate()` on the CPU.
+     Enabled the P4 PPA (`sdkconfig.defaults`), which allocates a rotation
+     buffer and drives it through the 2D accelerator
+     (`lvgl_port_ppa_create`, `esp_lvgl_port_disp.c:455-473`).
+  2. **O(all-spans) transcript size (F25-B):** every append called
+     `windows_transcript_update_content_size()` →
+     `lv_spangroup_get_expand_height()` (re-wraps the whole span group), so each
+     command's transcript echo cost time proportional to all history. `gfx show`
+     also took the LVGL lock while that render was pending.
+  3. **Tearing + app viewport (F25-C):** a single draw buffer
+     (`BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE 0`) and the gfx canvas sharing the
+     transcript region.
+- **Fix:**
+  1. PPA rotation enabled for both boards (shared `sdkconfig.defaults`).
+  2. `windows_transcript_apply()` now skips the reconcile entirely while an app
+     surface owns the transcript (the np group is hidden), and one catch-up
+     apply runs on `windows_exit_app_surface()`; a bounded retained-span window
+     (`P4_CONFIG_TRANSCRIPT_MAX_SPANS`, oldest dropped) keeps the per-append
+     cost flat over a long session.
+  3. Tab5 double buffering + a larger draw buffer
+     (`BOARD_CFG_LCD_DRAW_BUFFER_SIZE = width*100`, `..._DOUBLE 1`); `gfx init`
+     now enters true fullscreen (`windows_set_fullscreen(true)`, header/input
+     row hidden) and `gfx close` restores the inherited state, so the canvas
+     owns the whole panel (F25-C).
+- **Measured (COM6):** `gfx show` burst 270 ms → **51 ms** per command; `gfx
+  stats` average frame 190 ms → **5.6 ms** (`dropped=1`); BOUNCE's display
+  present is no longer the bottleneck. Repeated `echo` no longer degrades with
+  session length (was 353→706 ms as history grew; now flat once the span cap
+  engages). Tearing reduced by double buffering.
+- **Residual (major, tracked as F26):** `echo` still costs ~300+ ms per command
+  and scales with output length per line (`100`/`250`/`500` chars → 374/531/881
+  ms). This is the transcript **repaint/layout** (`lv_obj_update_layout`) and
+  LVGL line-wrapping of a long line, not the span count; batching the whole
+  `gfx show` path is now cheap, but chatty batch lines are still expensive.
+  Next step: differential/incremental transcript rendering (only the newly
+  appended fragment, no full-child layout) — a dedicated window-manager pass.
+  (v1.2.2 update: the incremental apply + off-port-lock pump landed; the
+  window-manager pass is the open F26 follow-up.)
+- **Verified:** header `visible=OFF` during gfx and `ON` after close; display
+  suite `RESULT OK` on COM6; COM3 `p4test` 11/11 with the same transcript
+  changes.
+
+### F26. Transcript per-command cost still scales with session length — **OPEN (MEDIUM)**
+
+- **Severity:** MEDIUM (usability: chatty interactive sessions slow down; no
+  data loss; batch jobs are unaffected once the transcript is hidden or
+  coalesced)
+- **Component:** `components/windows/windows.c` (transcript render),
+  `components/shell/shell.c` (label pump), LVGL spangroup draw walk
+- **Board:** both (Tab5 worst)
+- **Found on:** 2026-09-21 as the F25 residual; re-baselined 2026-09-22 with a
+  dedicated harness
+- **Symptom:** sustained interactive output slows as the session lengthens.
+  With the byte-wise bench, a fresh-boot echo's *minimum* is ~3-16 ms (true
+  worker cost), but its median climbs to ~1.1-2.2 s once hundreds of lines are
+  retained and the board is kept busy — on both boards (Tab5 worst). (An earlier
+  ~312 ms "floor" seen with `read(65536)` was a harness artifact: pyserial
+  blocks the whole 0.3 s timeout when fewer bytes are buffered — the bench now
+  reads `in_waiting` byte-wise.)
+- **Repro (tooling landed with this entry):**
+  `python tools/transcript_perf.py COM6` (and `COM3`) — times fresh-boot,
+  after-`cls`, and filled-scrollback `echo` round-trips at 100/250/500-char
+  payloads, one command in flight. Keep the byte-wise `in_waiting` read in the
+  tool: a block `read(65536)` adds a ~312 ms floor that swamps the real signal.
+- **Fixes landed this pass (v1.2.2, keep them):**
+  1. Truncation detection is O(1): the shell bumps a scrollback **epoch** on
+     reset/trim/truncate and `windows_set_transcript_text_len()` carries it;
+     the rendered-prefix snapshot buffer (64 KB PSRAM) and the per-apply
+     `strlen`+`strncmp`+full-buffer `snprintf` scans are gone. The span parse
+     was already incremental; the apply now *stays* incremental across trims.
+  2. The command worker no longer takes the LVGL port lock on the append path
+     at all: staging copies take the window manager's own mutex (lock order is
+     always PORT outer, STAGE inner), and repaints are pumped by an LVGL timer
+     at `P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS` (10 ms) plus
+     `lvgl_port_task_wake()` — replacing the `lv_async_call` whose dispatch
+     serialized every append behind whichever render held the port lock.
+     True synchronization points (screenshots, key waits, visible-again
+     repaints) call `shell_transcript_flush_now()` →
+     `windows_transcript_sync_apply()` and still see a current screen.
+  3. Worker wall-time inside `shell_execute_command` is measured ~2 ms per echo
+     even at full scrollback, so the per-echo serial round-trip is no longer the
+     transcript rebuild blocking the worker — the remaining growth is CPU
+     contention against the LVGL task (below).
+- **Measured (2026-09-22, byte-wise harness):** a burst-free single echo after
+  `cls` is 3-16 ms; back-to-back `echo` fills climb from ~300 ms (short session)
+  to ~1100 ms (EV) / ~2050 ms (Tab5) once the session is long, because the
+  LVGL apply+redraw is ~90-155 ms at full scrollback and, at a 10 ms tick and
+  priority 4, it saturates one core so the priority-1 reader / priority-2
+  worker only run in the gaps. The transient `windows_transcript_apply` probe
+  confirmed the apply phase is `lv_spangroup_get_expand_height` (`exp≈tot`),
+  linear at ~2.7 µs/retained-char. A temporary 128-span cap moved the
+  full-session median only ~1900→1500 ms, so the span cap is not the dominant
+  term and it was reverted to 384 (deep scrollback is worth more than the ~0.4 s).
+- **Root cause of the residual (partially attributed):** per-command cost
+  tracks retained **text length**, not span count (cap 384→128 removed only
+  ~25%). The known O(retained-text) passes that remain are the two LVGL
+  spangroup walks — `windows_transcript_update_content_size()`'s
+  `lv_spangroup_get_expand_height` and `lv_draw_span()` re-laying-out from the
+  first span on every redraw (~2.7 µs/char measured) — plus an unattributed
+  ~1 s/line base at full scrollback (candidates: flush/DSI + PSRAM/heap
+  contention with the saturated LVGL task vs the priority-1 reader; a
+  worker-side `TCOST` probe showed ~2 ms, so the time is NOT in
+  `shell_execute_command`).
+- **Next step (the dedicated pass this needs — do not half-do it):**
+  windowed transcript rendering — materialize only the visible rows (+a small
+  margin) as spans inside the container, keep full scroll range via a spacer
+  (the proven `editor_view` pattern), re-materialize on scroll events. That
+  bounds BOTH LVGL walks (apply and draw) to the viewport instead of the
+  session, whatever the retained text length. Needs care with: follow/scroll
+  math, `anchor` click regions (offsets must map through the window), the
+  editor/app-surface coexistence (now via the `shell_spans_hidden` shadow
+  flag), trim pressure (fewer spans → cheaper), and the retained-span/`clip`
+  paths (staged text already stays whole). The `P4_CONFIG_TRANSCRIPT_MAX_SPANS`
+  cap becomes the window size (drop oldest *visually* only). A managed LVGL
+  patch adding an incremental layout cache to the spangroup is the alternative
+  worth weighing against the windows-level rewrite, but it hits the
+  head-trim-invalidates-everything problem for this widget.
+- **Verified (partial, this pass):** EV p4test 11/11, Unity 428/0/2, editor +
+  input-ui + display + perf suites green with the new pump; visual spot-checks
+  (scroll follow, anchor, app-mode restore) pass on COM3.
+
+### F27. Tab5: transient crash in long mixed sweeps after the F6/F26 pass — **OPEN (HIGH)**
+
+- **Severity:** HIGH (crash/reboot under sustained mixed load; not reproduced
+  on any targeted re-run yet)
+- **Component:** under determination — the F26 transcript pump, esp_hosted
+  under load (F6-class), or a pre-existing load-path fault
+- **Board:** m5stack_tab5 (COM6)
+- **Found on:** 2026-09-22, firmware from the F6/F26 pass
+- **Symptom:** three consecutive full `p4test_run COM6` sweeps each lost the
+  suite running after `perf`/near the end — sweep 1: `Guru Meditation`
+  detected in `s07_data` right after the `appconfig path` check; sweep 2:
+  `Task watchdog` detected during `s14_apps` immediately after `launch BOUNCE`
+  completed; sweep 3: no panic marker, but `s14_apps` setup shows the signature
+  of a silent reboot (prompt cwd reset to `PS \>`, `mkdir APPS` marker timeout,
+  then four `receive … no READY` / `timed out waiting for data` failures).
+  All targeted re-runs (short sequences and even the exact suite combos) pass
+  cleanly; boards always recover on the next boot.
+- **Repro attempts (all CLEAN):** `--only s07_data` (93/93), targeted
+  appconfig/temp/alarm sequence, `--only s06_batch,s07_data` (202/202),
+  `--only s01_smoke,s05_storage,s06_batch,s07_data` (267/267),
+  `--only s14_apps` (90/90), `--only s13_perf,s14_apps` (106/106).
+- **Context / suspicion:** matches the F6-A residual note ("the Tab5 still
+  wedges late in a full p4test sweep under sustained load — the C6 link is
+  marginal"): a reboot-less stall or SDIO storm under sustained SD+host traffic
+  then escalates to the watchdog. A second candidate is the F26 render pump:
+  during heavy batch output the LVGL task now runs an apply every tick
+  (10 ms) at near-100 % duty, so a starved task fits too. The v1.2.0 sweeps
+  (pre-pump) completed 11/11 on COM6, so the pump is the prime NEW variable,
+  unproven.
+- **Next step:** the runner now embeds the output around any panic marker
+  (`tools/p4test/session.py`), and the sweep logs must be re-checked for the
+  `task_wdt` task list + backtrace; also add a raw serial tap during a full
+  sweep to catch the silent-reboot case (watch `rst:0x` cause — `WDT` vs
+  `PANIC` vs `INT` distinguishes the classes). If it is the idle/`taskLVGL`
+  pair, tune `P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS` (coarser tick) and/or give
+  `windows_transcript_apply` a per-tick work budget.
+
+### F6-A. Tab5 hosted-SDIO mitigation — verified (F6 fixed above; kept as the audit trail)
+
+- **Mitigation present:** the `esp_hosted` SDIO credit patch
+  (`tools/managed_patches.patch` → `eh_host_bus_sdio.c`: rate-limited
+  `sdio_get_tx_buffer_num` error + `eh_host_port_task_delay_ms(1)` yield
+  instead of the 20 µs busy-wait) is applied in the built tree
+  (`last_log_ms` at line 519, `eh_host_port_task_delay_ms(1)` at line 882).
+  `networking.c` does one connect-retry and one transport-reset retry around
+  the first hosted RPC; Tab5 SDIO runs at 10 MHz.
+- **Verified:** COM6 `boot_regression.py COM6 6` → **OK 6/6 clean**
+  (`panics=0 autoexec=1 sd_ready=True warn/err=0`) with the F6-FIXED build above:
+  20/20 clean with **zero** first-RPC/`0x107`/storm signatures, dogfood 8 min
+  PASS. The earlier "adopt the M5Stack vendor stack (esp_hosted 1.4.0)" idea is
+  **retired**: it downgrades the RPC ABI under the 3.x compat gate + `c6ota`,
+  and the measured root cause was the boot-time C6 rail glitch, now gone.
+
 Use this template for every new finding. Keep one heading
 per bug; move the entry to the matching severity section once triaged. When
 it is fixed, add the fix + verification and remove it at the next reset.
@@ -473,10 +773,22 @@ warnings). Results with the fixes above:
 | `tx_stress_test.py` (200) | **OK 200/200** | flaky (F16) |
 | `dogfood.py` (5 min) | **PASS 5/5** | FAIL — F6 reboots under load |
 
-Open items: **F6 (HIGH)** and **F16 (MEDIUM)** are Tab5-only stability/integrity
-issues deferred to a dedicated pass; **F13 (LOW)** is cosmetic. The Tab5's
-usable Wi-Fi/BT work, but F6 makes long/loaded runs unreliable and must be the
-next fix.
+Open items at snapshot time: **F6 (HIGH)** and **F16 (MEDIUM)** were Tab5-only
+stability/integrity issues deferred to a dedicated pass; **F13 (LOW)** is
+cosmetic.
+
+> **Update (2026-09-22, F6/F26 pass).** **F6 is FIXED** (see the entry above):
+> the Tab5 boot path now reports 20/20 clean with zero first-RPC/`0x107`/storm
+> signatures and `dogfood.py COM6 8` PASS — the root cause was a boot-time C6
+> power-rail glitch on the 0x44 IO expander, not the marginal link, so the
+> "adopt the M5Stack vendor stack" idea is retired. The COM6 "blocked by F6" and
+> "FAIL — F6 reboots" rows above no longer apply. **F26** (transcript per-command
+> cost) is opened as the F25 residual and partially mitigated this pass (worker
+> off the port lock, O(1) truncation); the windowed-render fix remains a
+> dedicated follow-up. **F27** (new): two consecutive full COM6 sweeps each hit
+> one transient, so-far unreproducible crash (`Guru Meditation` in `s07_data`,
+> `Task watchdog` in `s14_apps`); all targeted re-runs pass. F16/F13 are
+> unchanged.
 
 ---
 
@@ -648,3 +960,4 @@ Not bugs — just high-value areas to probe while a campaign is open:
   playing into sleep.
 - **Board portability:** Tab5 vs reference differences (10 MHz SDIO, panel
   auto-detect, no RGB LED, `BAT N/C`), and panels other than JD9165.
+

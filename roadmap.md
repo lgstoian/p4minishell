@@ -6,9 +6,10 @@ records how the framework evolved and where it is going.
 
 The application model is deliberately **batch-first**: an on-SD `.bat` file is
 an app, and a native C SDK (`applib`) supplies the polished surfaces batch
-cannot draw. There is no PC-executable runtime and none is planned; the batch
-surface *is* the app/compatibility layer. See [`readme.md`](readme.md) for the
-feature tour and [`documentation.md`](documentation.md) for the architecture.
+cannot draw. Every app — pure batch, hybrid, or native-linked — launches
+through a `.bat` shim; the frozen contract is [`ABI.md`](ABI.md). See
+[`readme.md`](readme.md) for the feature tour and
+[`documentation.md`](documentation.md) for the architecture.
 
 ---
 
@@ -92,6 +93,60 @@ Grouped by milestone rather than by version. Full per-version detail is in
 - Firmware behaviour is unchanged from v0.38.5; this release is about
   openness, documentation, and a clean baseline for the next campaign.
 
+### 8. Two-board era + hardware abstraction (v1.2.0)
+
+- **M5Stack Tab5 is a first-class `-DP4_BOARD` target** alongside the
+  JC1060P470C reference: 1280x720 MIPI-DSI with runtime ILI9881C / ST7123 /
+  ST7121 auto-detect, ES8388 audio, RX8130CE RTC, BMI270 IMU (tilt
+  auto-rotate), INA226 pack gauge with charging, SC202CS MIPI-CSI camera
+  (BMP stills), the Tab5Keyboard (input + two independent RGB LEDs), hosted C6
+  Wi-Fi + BLE at 10 MHz, and PMIC `shutdown`. See [`PORTING.md`](PORTING.md) §6.
+- Hardware abstraction hardened without new layers: a zero-cost
+  `components/board_caps/` helper set, compile-time `_Static_assert` guards
+  that board/sdkconfig pins agree, a board-driven backlight LEDC timer, and
+  board-neutral logs/labels.
+
+### 9. Batch language era (v1.2.x)
+
+- Loops and control flow: `for /L` (numeric), `for /A` (array iteration),
+  `for /D` and `for /R` (directories/trees), `while` condition loops,
+  `switch` string dispatch, and single-line `if (…) else (…)` groups.
+- Data: `NAME[i]` indexed arrays, `%VAR:~start[,len]%` substrings,
+  `%VAR:old=new%` replacement, and `!VAR!` delayed expansion via
+  `setlocal enabledelayedexpansion`.
+- Calculator + graphics: `calc` string functions (`UPPER$ LOWER$ TRIM$ INSTR
+  REPLACE$`) and `gfx blitmany` with `/s:` upscale and `/r:` quarter-turn
+  rotation.
+- Authoring: the single-file [`batch.md`](batch.md) spec.
+
+### 10. App model, packaging, and trust (v1.2.x)
+
+- **Every app launches through a `*.bat` shim** — pure batch, hybrid (a shim
+  driving a linked-in C entry), or native-linked for dev/test. Documented and
+  frozen in [`ABI.md`](ABI.md).
+- **Signed `PKGS` manifests**: optional ECDSA P-256 `SIGN=` line verified
+  against a trusted public key in NVS (`pkg key …`); bad signatures always
+  refuse, and `pkg install /signed` enforces signing. Host signer
+  `tools/pkg_sign.py`, wired into `apps/push_pkgs.py --sign`.
+- **Declarative screens and flows**: a `.FRM` file describes a
+  `dialog`/`list`/`ask`/`form`/`menu` screen rendered through the existing
+  verbs (`screen run|info`), and a `.FLOW` file declares a multi-screen
+  navigation graph over those nodes (`screen flow`) — routing is the pure
+  `screen_flow_select()`, so apps neither hand-roll every screen nor a `goto`
+  web (see `batch.md` §13 / §13.1).
+
+### 11. Search everywhere (v1.2.x)
+
+- `gfind` grew an opt-in `/files` text-file scope on top of its existing db +
+  alarm search: one query over everything a PDA would hold. It reuses the ONE
+  shared storage search core (`storage_walk_files` + `storage_scan_file_lines`,
+  the same one `findstr /S` uses) and the same matcher, with `/root:`, `/ext:`,
+  `/hidden`, `/filesonly`, and `/nofiles`.
+- **There is no on-disk search index and none is planned**: search is always
+  live over the stores and the files, so it can never go stale. (An index would
+  have duplicated the existing scanners — see the no-duplication hard rule in
+  [`ai-context.md`](ai-context.md).)
+
 ---
 
 ## Part 2 — Where we are going
@@ -103,9 +158,7 @@ meant to build. Priorities are suggestions, not commitments.
 
 | Feature | Why | Notes |
 |---------|-----|-------|
-| ~~**M5Stack Tab5 + Tab5Keyboard port**~~ **— done** | Second board proves the abstraction | `boards/m5stack_tab5/` profile shipped and verified: ILI9881C/ST7123/ST7121 auto-detect, ES8388 audio, RX8130CE RTC, Tab5Keyboard I2C input (+ two independent RGB LEDs), INA226 pack gauge, BMI270 IMU (`imu`, tilt auto-rotate), SC202CS MIPI-CSI camera (BMP stills via esp_video), MicroSD, hosted C6 Wi-Fi + BLE, `shutdown`/`poweroff`. See `PORTING.md` §6. Remaining gap: camera live preview. |
-| **Native-app loader** | Execute the stored native bundles | Position-independent blob + `app_register`; `abi`/`arch` enforced |
-| **Signed manifests** | Safe installation | Sign `PKGS` manifests, verify before install (platform/security row) |
+| **Additional board / panel profiles** | More hardware | The EK79007 and LT8912B display drivers are vendored; a `boards/<name>/` profile + BSP wiring is the remaining work (see [`PORTING.md`](PORTING.md)). |
 
 ### B. Writerdeck
 
@@ -133,8 +186,7 @@ remain.
 | **Agenda integration** | One place for time | Merge `alarm`/`cal` events, tasks, and documents into a today view |
 | **Sync (WebDAV / CalDAV-lite)** | Back up and share | HTTP client + VFS bridge; reuse the `export`/`import` interchange formats |
 | **RSS / plain-text reader** | The classic PDA use | `httpget` + a reading view with the font/markdown stack |
-| **Secrets manager** | Passwords on the go | Uses the existing `crypt` core and `db` secret fields, behind the passcode lock |
-| **Search everywhere** | Find anything fast | A global index over `db`, alarms, and text files (`gfind` is the seed) |
+| **Secrets manager** | Passwords on the go | Uses the existing `crypt` core and `db` secret fields, behind the passcode lock (crypt reliable on both boards now — bugs.md F23 fixed in v1.2.1) |
 
 ### D. Palmtop / programmable
 
@@ -142,7 +194,6 @@ remain.
 |---------|-----|-------|
 | **Spreadsheet app** | The other defining feature | Build on `csv` + `calc`; add an interactive grid modal and a recalculation engine |
 | **Calculator UI app** | Everyday use | A modal keypad over `calc` (HP-12C / FX-870P layouts) |
-| **Structured app format** | Richer apps | A declarative form/menu description so apps do not hand-roll every screen |
 
 ### E. Platform, power, and security
 
@@ -150,7 +201,6 @@ remain.
 |---------|-----|-------|
 | **Deep low-power / AON** | All-day battery | RTC wake, power-domain tuning, and peripheral runtime PM beyond idle display-off |
 | **Battery/charging UI** | Trust the gauge | Better ADC calibration, charge-state detection, and a battery panel |
-| **Signed apps** | Safe installation | Sign `PKGS` manifests and verify before install |
 | **Push-to-talk / BLE HID** | Peripheral use | BLE keyboard/mouse bridging and simple phone-side transfer |
 
 ### F. Connectivity and services
@@ -164,8 +214,11 @@ remain.
 
 ### Explicitly not planned
 
-- A second application-runtime model: the batch + native-app model is the
-  contract.
+- A second application-runtime model: the batch + hybrid/native-app model is
+  the contract (see [`ABI.md`](ABI.md)).
+- SD/flash code execution (`dlopen`, dynamic linking, per-app memory
+  isolation): C apps are linked into the firmware and reached through a `.bat`
+  shim.
 - A second display writer or windowing model: the transcript/TUI/modal/GFX
   surfaces and the single UI-rebuild path are the contract.
 - A native Preferences GUI — settings stay in `CONFIG.SYS` behind the `config`
@@ -190,7 +243,8 @@ remain.
 ## How to propose work
 
 1. Check this file and [`bugs.md`](bugs.md) to avoid duplicate effort.
-2. Read the owning module's rules in [`ai-context.md`](ai-context.md) and the
-   integration guide in [`SDK.md`](SDK.md).
+2. Read the owning module's rules in [`ai-context.md`](ai-context.md), the
+   integration guide in [`SDK.md`](SDK.md), and the app contract in
+   [`ABI.md`](ABI.md).
 3. Follow the change and verification workflow in [`ai-context.md`](ai-context.md):
    build both projects clean, verify on hardware, update the docs and changelog.

@@ -15,6 +15,7 @@ idf_component_register(
         filetype
         markdown
         modal
+        p4heap
         espressif__esp_lvgl_port
         lvgl__lvgl
 )

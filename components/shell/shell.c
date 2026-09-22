@@ -27,6 +27,7 @@
 #include "esp_system.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -131,6 +132,13 @@ static char *s_transcript_ansi = NULL;
  * in sync, and all reads use them instead of strlen(). */
 static size_t s_transcript_len = 0;
 static size_t s_transcript_ansi_len = 0;
+
+/* Scrollback-generation counter (bugs.md F26). The render path detects
+ * head-moving truncation in O(1) from this value instead of comparing a
+ * snapshot of the rendered prefix: every site that drops the oldest bytes
+ * (reset, memory-pressure trim, buffer-full truncation) bumps it, and the
+ * window manager rebuilds spans only when the epoch changes. */
+static uint32_t s_transcript_epoch = 1;
 
 /* Deferred label repaint batching (see shell_transcript_defer_begin()).
  * Repainting the LVGL span group costs O(buffer): each repaint re-parses the
@@ -473,11 +481,14 @@ static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
         plain_len = 0;
         ansi[0] = '\0';
         ansi_len = 0;
+        s_transcript_epoch++;   /* the rendered prefix was thrown away */
     }
 
     /* Drop the oldest half and mark the cut. */
     if (plain_len + plain_text_len + 1 >= plain_size) {
         size_t keep = plain_size / 2;
+
+        s_transcript_epoch++;
 
         if (plain_len > keep) {
             memmove(plain, plain + plain_len - keep, keep);
@@ -527,7 +538,9 @@ static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
 /**
  * Repaint the transcript label from the ANSI transcript buffer, converting
  * the real SGR escapes into LVGL recolor markup so colours render on screen.
- * Caller must hold the LVGL port lock.
+ * No LVGL calls happen here: the copy into the window manager's staging buffer
+ * is guarded by the manager's own staging mutex (bugs.md F26), so this runs on
+ * the command worker without the port lock. Caller holds the buffer lock.
  */
 static void shell_transcript_update_label(void)
 {
@@ -538,23 +551,21 @@ static void shell_transcript_update_label(void)
     }
 
     /* While the transcript is hidden (a gfx canvas, TUI, or full-screen app
-     * covers it), skip the O(transcript) staging copy + span rebuild: nothing
-     * is visible, and doing it per batch line is what made batch/canvas apps
-     * slow down as the transcript grew (each line copied the whole up-to-64 KB
-     * buffer). Remember to repaint once when it becomes visible again. */
+     * covers it), skip the staging copy + span rebuild: nothing is visible,
+     * and doing it per batch line is what made batch/canvas apps slow down as
+     * the transcript grew (each line copied the whole up-to-64 KB buffer).
+     * Remember to repaint once when it becomes visible again. */
     if (windows_transcript_is_hidden()) {
         s_transcript_repaint_pending = true;
         return;
     }
     s_transcript_repaint_pending = false;
 
-    /* The transcript is an LVGL label with recolor enabled. windows_set_
-     * transcript_text() converts the ANSI buffer to recolor markup and defers
-     * the actual widget update (set text, layout, scroll) to the LVGL task via
-     * a coalesced lv_async_call, so no label work races the render cycle from
-     * a non-LVGL task. Called under lvgl_port lock from
-     * shell_transcript_append_internal. */
-    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len);
+    /* windows_set_transcript_text_len() stages the raw ANSI text (with the
+     * scrollback epoch so the render can append incrementally) and hands the
+     * widget work to the LVGL task's coalesced apply timer. */
+    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len,
+                                    s_transcript_epoch);
 }
 
 /**
@@ -583,16 +594,18 @@ void shell_transcript_flush_now(void)
     }
     s_transcript_defer_dirty = false;
     s_transcript_last_flush_us = esp_timer_get_time();
-    /* update_label() requires the port lock; none of the explicit flush
-     * points (segment end, key waits, screenshots) holds it, and the mutex
-     * is recursive so the time-rule path (already locked) nests safely.
-     * Strict order PORT outer, buffer inner: the staging read below races
-     * worker appends otherwise. */
+    /* Explicit synchronization point (segment end, key waits, screenshots):
+     * stage and then run the repaint while holding the port lock, so the
+     * caller can render immediately and sees exactly this content. The
+     * per-append paths do NOT take this lock (bugs.md F26); only these
+     * flushes pay the synchronous apply. Strict order PORT outer, buffer
+     * inner. */
     if (windows_get_transcript() != NULL) {
         lvgl_port_lock(0);
         shell_transcript_buf_lock();
         shell_transcript_update_label();
         shell_transcript_buf_unlock();
+        windows_transcript_sync_apply();
         lvgl_port_unlock();
     }
 }
@@ -602,8 +615,22 @@ void shell_transcript_defer_end(void)
     if (s_transcript_defer_depth > 0) {
         s_transcript_defer_depth--;
     }
-    if (s_transcript_defer_depth == 0) {
-        shell_transcript_flush_now();
+    if (s_transcript_defer_depth > 0) {
+        return;
+    }
+    /* Segment end: stage the final text but do NOT block for the repaint - the
+     * LVGL apply timer consumes it within one tick (bugs.md F26). Consumers
+     * that truly need the widgets updated right now (screenshot, key waits,
+     * visible-again repaint) call shell_transcript_flush_now() explicitly. */
+    if (!s_transcript_defer_dirty) {
+        return;
+    }
+    s_transcript_defer_dirty = false;
+    s_transcript_last_flush_us = esp_timer_get_time();
+    if (windows_get_transcript() != NULL) {
+        shell_transcript_buf_lock();
+        shell_transcript_update_label();
+        shell_transcript_buf_unlock();
     }
 }
 
@@ -612,8 +639,9 @@ void shell_transcript_defer_end(void)
  * this repaints immediately (historical behavior); inside one it marks the
  * label dirty and repaints at most every P4_CONFIG_TRANSCRIPT_FLUSH_MS, so a
  * burst of lines costs O(1) span rebuilds instead of O(lines) while staying
- * live for slow printers. Takes both locks itself (PORT outer, buffer inner:
- * the staging read races worker appends otherwise); append paths hold none.
+ * live for slow printers. Takes the buffer lock (the ANSI text must stay
+ * consistent while staged); no LVGL port lock is taken on the append path
+ * (bugs.md F26).
  */
 static void shell_transcript_maybe_update_label(void)
 {
@@ -629,11 +657,9 @@ static void shell_transcript_maybe_update_label(void)
          * still reconciles anything appended after this repaint. */
     }
     if (windows_get_transcript() != NULL) {
-        lvgl_port_lock(0);
         shell_transcript_buf_lock();
         shell_transcript_update_label();
         shell_transcript_buf_unlock();
-        lvgl_port_unlock();
     }
     s_transcript_last_flush_us = esp_timer_get_time();
 }
@@ -1125,6 +1151,7 @@ void shell_transcript_reset(void)
     s_transcript_ansi[0] = '\0';
     s_transcript_len = 0;
     s_transcript_ansi_len = 0;
+    s_transcript_epoch++;
     /* Content was replaced, not appended: no pending repaint can be valid. */
     s_transcript_defer_dirty = false;
     shell_transcript_buf_unlock();
@@ -1174,6 +1201,14 @@ void shell_transcript_guard_internal(void)
     size_t ansi_len;
     size_t keep;
 
+    /* Span/struct overhead lives in the internal heap and can exhaust it to
+     * the point where a newlib lock allocation aborts, so the guard keys on
+     * free internal RAM only. It deliberately does NOT key on the DMA pool:
+     * the Tab5's DMA-capable internal heap is tiny even when idle (e.g.
+     * mem.dma.largest ~1 KB) and trimming spans does not hand it back, so a
+     * DMA trigger would trim continuously for no benefit. `crypt` handles a
+     * short DMA pool itself via the software fallback (bugs.md F23); see
+     * `mem.dma.largest` for that health metric. */
     if (free_internal >= P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES) {
         return;
     }
@@ -1198,7 +1233,10 @@ void shell_transcript_guard_internal(void)
     ansi_len = s_transcript_ansi_len;
 
     /* Gentle trim: keep the newest three quarters so a single trim rarely
-     * repeats; only under severe pressure fall back to keeping half. */
+     * repeats; only under severe internal pressure fall back to keeping
+     * half. A DMA-largest shortfall alone trims gently: the software crypto
+     * fallback (bugs.md F23) no longer needs the DMA pool, so scrollback
+     * is preserved while span pressure is still relieved. */
     if (free_internal < SHELL_TRIM_SEVERE_BYTES) {
         keep = P4_CONFIG_TRANSCRIPT_BYTES / 2;
     } else {
@@ -1209,6 +1247,7 @@ void shell_transcript_guard_internal(void)
         memmove(s_transcript, s_transcript + plain_len - keep, keep);
         plain_len = keep;
         s_transcript[plain_len] = '\0';
+        s_transcript_epoch++;
     }
     if (ansi_len > keep) {
         memmove(s_transcript_ansi, s_transcript_ansi + ansi_len - keep, keep);
@@ -1234,7 +1273,8 @@ void shell_transcript_guard_internal(void)
      * trimming spans. Otherwise windows_transcript_trim() works on stale
      * content, and the subsequent shell_transcript_update_label() overwrites
      * it again, causing a full span rebuild (blue flash). */
-    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len);
+    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len,
+                                    s_transcript_epoch);
     windows_transcript_trim();
     shell_transcript_buf_unlock();
     lvgl_port_unlock();
@@ -4268,6 +4308,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "dialog",   "dialog [/t:secs] \"title\" \"message\" [button1] [button2] - message box (ERRORLEVEL 0/1/255)" },
     { "list",     "list [/t:secs] [/v:NAME] \"title\" item... - scrollable selector (ERRORLEVEL = 0-based index)" },
     { "ask",      "ask [/t:secs] [/v:NAME] [/p] \"prompt\" [default] - text input to ASK_RESULT (ERRORLEVEL 0/1)" },
+    { "screen",   "screen run <file.frm> | screen flow <file.flow> | screen info <file> - declarative screen (dialog|list|ask|form|menu) or multi-screen flow, results to env" },
     { "browse",   "browse [/t:secs] [/v:NAME] [path] - fullscreen file picker (ERRORLEVEL 0/1)" },
     { "view",     "view [/t:secs] [--raw] <file> - text viewer pager (.md renders in the reading font, .bmp/.dib open the image viewer) (ERRORLEVEL 0/1)" },
     { "open",     "open [/t:secs] [--raw] <file> - open by type: scripts in editor, md rendered, images viewed, rest as text (never executes)" },
@@ -4335,11 +4376,12 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "gosub",    "gosub :label [args] | <file>::<routine> - call a labelled subroutine" },
     { "return",   "return [code] - return from a gosub/call :label (ends the file at top level)" },
     { "on",       "on <expr> goto|gosub <label>[,<label>...] - computed dispatch" },
+    { "switch",   "switch <value> <match>:<label> [...] [/d:<label>] - string-match dispatch to a label" },
     { "shift",    "shift - shift batch arguments" },
     { "pause",    "pause [message] - wait for a key (30 s timeout)" },
     { "choice",   "choice [/C:keys] [/N] [/T:c,secs] [/S] [text] - interactive selection" },
     { "delay",    "delay <ms> - pure deterministic wait (melodies/demos), clamped to P4_CONFIG_DELAY_MAX_MS" },
-    { "gfx",      "gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|free|slots|save - RGB565 canvas + toolkit (max 320x240); image <file.bmp> blits a scaled BMP; load ingests 24/32-bit BMP sprites (max 64x64); stats reports frame pacing" },
+    { "gfx",      "gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|blitmany|free|slots|save - RGB565 canvas + toolkit (max 320x240); image <file.bmp> blits a scaled BMP; load ingests 24/32-bit BMP sprites (max 64x64); blitmany stamps one slot at many X Y pairs; stats reports frame pacing" },
     { "plot",     "plot tui|window|auto|axes|func|polar|para|data|bar|table|line|point|clear|status - world-coordinate graphs + charts on the gfx canvas or TUI (uses calc)" },
     { "crc32",    "crc32 <path> - print a file's CRC-32 checksum (ERRORLEVEL 0/1)" },
     { "asset",    "asset check|list <app> - verify/list an app's APPS/<APP>.ASSETS manifest (ERRORLEVEL 0/1)" },
@@ -4347,8 +4389,9 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "header",   "header [status] | mode [auto|full|compact] [/save] | show|hide - responsive status-bar layout" },
     { "start",    "start <command> [args] - run a command or batch file as a background job (see taskkill)" },
     { "taskkill", "taskkill <job> - cooperatively stop a background job (name like bg0, or slot number)" },
-    { "for",      "for %v in (set) do <cmd> | for /f \"delims= tokens=\\n\" %%v in (file) do <cmd> - loops" },
-    { "setlocal", "setlocal - begin a local environment scope" },
+    { "for",      "for %v in (set) do <cmd> | for /f \"delims= tokens=\\n\" %%v in (file) do <cmd> | for /L %%v in (start,step,end) do <cmd> | for /A %%k in (PREFIX) do <cmd> | for /D %%v in (set) do <cmd> | for /R [path] %%v in (set) do <cmd> - loops" },
+    { "while",    "while <expr> do <cmd> - re-run while a set /a expression is nonzero (ERRORLEVEL 0/1/2)" },
+    { "setlocal", "setlocal [enabledelayedexpansion|disabledelayedexpansion] - begin a local environment scope (!VAR! when enabled)" },
     { "endlocal", "endlocal - end a local environment scope" },
     { "exit",     "exit [/b] [code] - leave a batch file or the shell" },
     { "proc",     "proc [/args | /name | /depth | /errorlevel | /echo | /stdin] - introspect the batch process stack" },
@@ -4369,7 +4412,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "db",       "db <create|list|info|drop|open|close|categories|add|get|set|del|purge|count|find|export|import> [...] - Palm-OS-style SD record store" },
     { "alarm",    "alarm <add|list|del|enable|disable|snooze|status|purge> [...] - SD-persisted alarms (daily/weekly/monthly/yearly, header notify / beep / LED / optional run)" },
     { "cal",      "cal [today|week|next|YYYY-MM] - calendar grid + events over the alarm store" },
-    { "gfind",    "gfind <text> [/b] [/i] [/db:name] [/noalarms] [/nodb] - search db records + alarms (Palm-style global find)" },
+    { "gfind",    "gfind <text> [/b] [/i] [/count] [/db:name] [/cat:N] [/field:k=v] [/files [/root:path] [/ext:.txt,.md] [/hidden] [/filesonly]] - Palm-style global find over db + alarms + (opt-in) text files" },
     { "time",     "time [HH:MM[:SS]] - show/set the time" },
     { "timer",    "timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME] - named stopwatch runs" },
     { "timezone", "timezone - show/set the timezone" },
@@ -4778,6 +4821,15 @@ void shell_command_mem(void)
     }
     shell_transcript_appendf_ansi("  " SH_LBL "mem.heap_min:" SH_RST " %u bytes\n", (unsigned int)min_free);
     shell_transcript_appendf_ansi("  " SH_LBL "mem.internal:" SH_RST " %u bytes free\n", (unsigned int)free_internal);
+    /* DMA pool detail (bugs.md F23): `mem.internal` includes non-DMA RAM,
+     * so hardware consumers (esp-aes descriptors, SDMMC bounce) go by
+     * `mem.dma.largest` — one contiguous DMA block is what they allocate. */
+    shell_transcript_appendf_ansi("  " SH_LBL "mem.dma.free:" SH_RST " %u bytes\n",
+                             (unsigned int)p4heap_dma_free());
+    shell_transcript_appendf_ansi("  " SH_LBL "mem.dma.largest:" SH_RST " %u bytes\n",
+                             (unsigned int)p4heap_dma_largest());
+    shell_transcript_appendf_ansi("  " SH_LBL "mem.internal.largest:" SH_RST " %u bytes\n",
+                             (unsigned int)p4heap_internal_largest());
     shell_transcript_appendf_ansi("  " SH_LBL "mem.tasks:" SH_RST " %" PRIu32 "\n", task_count);
 #if CONFIG_SPIRAM
     shell_transcript_appendf_ansi("  " SH_LBL "mem.psram.free:" SH_RST " %u bytes\n",
@@ -5951,25 +6003,13 @@ void shell_init(void)
      * tight internal heap stays available for DMA-capable users (WiFi/SDIO
      * transport mempool, USB-Serial/JTAG rings). */
     if (s_transcript == NULL) {
-        s_transcript = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_transcript == NULL) {
-            s_transcript = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES, MALLOC_CAP_8BIT);
-        }
+        s_transcript = p4heap_alloc_psram(SHELL_TRANSCRIPT_BYTES);
     }
     if (s_transcript_ansi == NULL) {
-        s_transcript_ansi = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES,
-                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_transcript_ansi == NULL) {
-            s_transcript_ansi = heap_caps_malloc(SHELL_TRANSCRIPT_BYTES, MALLOC_CAP_8BIT);
-        }
+        s_transcript_ansi = p4heap_alloc_psram(SHELL_TRANSCRIPT_BYTES);
     }
     if (s_clipboard == NULL) {
-        s_clipboard = heap_caps_malloc(SHELL_CLIPBOARD_BYTES,
-                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_clipboard == NULL) {
-            s_clipboard = heap_caps_malloc(SHELL_CLIPBOARD_BYTES, MALLOC_CAP_8BIT);
-        }
+        s_clipboard = p4heap_alloc_psram(SHELL_CLIPBOARD_BYTES);
     }
     if (s_transcript == NULL || s_transcript_ansi == NULL || s_clipboard == NULL) {
         shell_record_errorf("shell", ESP_ERR_NO_MEM,

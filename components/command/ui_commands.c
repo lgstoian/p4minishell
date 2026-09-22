@@ -38,6 +38,7 @@
 
 #include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "lvgl.h"
 
 #include <stdarg.h>
@@ -67,11 +68,7 @@ static bool s_console_mode;
 static ui_target_t *ui_targets_buffer(void)
 {
     if (s_targets == NULL) {
-        s_targets = heap_caps_malloc(UI_TARGETS_MAX * sizeof(ui_target_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_targets == NULL) {
-            s_targets = malloc(UI_TARGETS_MAX * sizeof(ui_target_t));
-        }
+        s_targets = p4heap_alloc_psram(UI_TARGETS_MAX * sizeof(ui_target_t));
     }
     return s_targets;
 }

@@ -18,6 +18,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_http_client.h"
 #include "esp_hosted.h"
 #include "esp_hosted_api_types.h"
@@ -357,14 +358,9 @@ static bool c6ota_reliable_supported(const esp_hosted_coprocessor_fwver_t *versi
 
 static uint8_t *c6ota_alloc_transfer_buffer(void)
 {
-    uint8_t *payload = heap_caps_malloc(C6OTA_TRANSFER_CHUNK_BYTES,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
-    if (payload == NULL) {
-        payload = heap_caps_malloc(C6OTA_TRANSFER_CHUNK_BYTES, MALLOC_CAP_8BIT);
-    }
-
-    return payload;
+    /* 1500 B control-size buffer used DURING C6 OTA when PSRAM can be
+     * unavailable: general allocator (PSRAM-first, internal fallback). */
+    return p4heap_alloc_any(C6OTA_TRANSFER_CHUNK_BYTES);
 }
 
 static void c6ota_free_transfer_buffer(uint8_t *payload)
@@ -719,10 +715,7 @@ static esp_err_t c6ota_download_http_image(const char *url,
     }
 
     content_length = (size_t)remote_length;
-    download_buffer = heap_caps_malloc(content_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (download_buffer == NULL) {
-        download_buffer = heap_caps_malloc(content_length, MALLOC_CAP_8BIT);
-    }
+    download_buffer = p4heap_alloc_psram(content_length);
     if (download_buffer == NULL) {
         snprintf(failure_hint, failure_hint_size, "out of memory buffering HTTP OTA image");
         error = ESP_ERR_NO_MEM;

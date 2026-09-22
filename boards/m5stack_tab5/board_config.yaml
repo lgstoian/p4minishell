@@ -90,8 +90,8 @@ board:
 
   # ---- LVGL Display Buffer ----
   lvgl:
-    draw_buffer_size: 36000  # native width * 50
-    double_buffer: false
+    draw_buffer_size: 72000  # native width * 100 (50 lines per buffer)
+    double_buffer: true
     dpi_buffer_nums: 1
     buffer_dma: true
     buffer_spiram: true
@@ -104,14 +104,15 @@ board:
   # ---- Battery (INA226 fuel gauge; no ADC divider wired) ----
   # The ADC sense pin is NC, so the header/battery telemetry reports "BAT N/C".
   battery:
-    # Fuel gauge on the SYS I2C bus (read-only; the firmware never toggles the
-    # charge rails). NP-F550-class 2S pack thresholds.
+    # Fuel gauge on the SYS I2C bus (measurement is read-only; charging is
+    # enabled once at boot via board_bsp_charge_enable()). NP-F550-class 2S
+    # pack thresholds.
     adc_gpio: NC
     ina226:
       present: true
       i2c_addr: 0x41
       shunt_milliohm: 5
-      max_current_ma: 2000
+      max_current_ma: 8192
     divider_numerator: 1
     divider_denominator: 1
     empty_mv: 6000

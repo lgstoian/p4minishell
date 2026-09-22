@@ -112,7 +112,8 @@ lv_obj_t *windows_get_transcript_spans(void);
 
 /**
  * Set the transcript text, converting ANSI SGR escape sequences to LVGL
- * recolor markup for coloured rendering on the label.
+ * recolor markup for coloured rendering on the label. The whole content is
+ * replaced, so the deferred render rebuilds spans from scratch.
  *
  * @param text  ANSI text to render (may contain ESC[..m sequences).
  */
@@ -122,16 +123,22 @@ void windows_set_transcript_text(const char *text);
  * Length-aware variant of windows_set_transcript_text(): copies exactly
  * @p len bytes (no strlen scan of a potentially 64 KB buffer). Used by the
  * transcript append/trim paths that already track the length.
+ *
+ * @p epoch is the caller's scrollback generation: passing the same value with
+ * @p text that only grows lets the render append just the new tail (bugs.md
+ * F26); any change forces a full rebuild. The shell bumps it whenever the
+ * buffer's head moves (reset, trim, truncation).
  */
-void windows_set_transcript_text_len(const char *text, size_t len);
+void windows_set_transcript_text_len(const char *text, size_t len, uint32_t epoch);
 
 /**
- * Drop the oldest half of the rendered scrollback and free its spans.
+ * Drop the oldest quarter of the rendered scrollback spans and free them.
  *
  * Invoked under memory pressure from the shell (which holds the LVGL port
  * lock) to reclaim the internal-heap memory owned by the accumulated span
- * objects. The staged buffer keeps the newest half plus a truncation marker
- * so the next append re-renders only a small tail.
+ * objects. The shell has already trimmed the text buffers and staged the
+ * newest content (with a truncation marker) when this runs, so the next
+ * apply reconciles spans against the new staged text in one rebuild pass.
  */
 void windows_transcript_trim(void);
 
@@ -202,10 +209,25 @@ lv_obj_t *windows_get_stop_button(void);
 /**
  * True while the transcript span group is hidden (gfx canvas / TUI / app mode
  * cover it). Callers that would repaint the transcript from their own text
- * buffer can skip the O(transcript) staging + span rebuild entirely: nothing is
- * visible. Must run under the LVGL port lock.
+ * buffer can skip the staging + span rebuild entirely: nothing is visible.
+ * Safe from any task: reads a shadow flag, not LVGL state.
  */
 bool windows_transcript_is_hidden(void);
+
+/**
+ * Hide/show the shell transcript span group (LVGL task only). Routes the
+ * HIDDEN flag through the window manager so windows_transcript_is_hidden()
+ * stays correct; used by the editor surface and app-surface enter/exit.
+ */
+void windows_shell_spans_set_hidden(bool hidden);
+
+/**
+ * Run a pending transcript repaint synchronously. Called by explicit
+ * synchronization points (batch segment end, key waits, screenshots) while
+ * holding the LVGL port lock, so the widget state provably matches the
+ * staged text at that moment. No-op when nothing is pending.
+ */
+void windows_transcript_sync_apply(void);
 
 /**
  * Request Stop-button visibility (shows while a command runs, in shell

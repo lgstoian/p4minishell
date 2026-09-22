@@ -1,0 +1,13 @@
+Command: ninja flash
+CMake Warning at C:/esp/v5.5.5/esp-idf/tools/cmake/build.cmake:631 (message):
+Call Stack (most recent call first):
+  C:/esp/v5.5.5/esp-idf/tools/cmake/project.cmake:752 (idf_build_process)
+  CMakeLists.txt:99 (project)
+
+
+CMake Warning at C:/esp/v5.5.5/esp-idf/tools/cmake/project.cmake:765 (message):
+  Missing kconfig option.  Re-run the build process...
+Call Stack (most recent call first):
+  CMakeLists.txt:99 (project)
+
+

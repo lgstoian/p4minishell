@@ -12,4 +12,5 @@ idf_component_register(
         tui
         clock
         board_bsp
+        p4heap
 )

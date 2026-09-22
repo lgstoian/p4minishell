@@ -298,4 +298,11 @@ class DeviceSession:
     def _check_panic(text: str) -> None:
         for marker in PANICS:
             if marker.decode() in text:
-                raise PanicError("panic marker %r in output" % marker.decode())
+                # Keep the surrounding output: the task-watchdog task list and
+                # the backtrace are what identify the failing task; dropping
+                # them left two full-sweep crashes unattributable.
+                idx = text.find(marker.decode())
+                start = max(0, idx - 600)
+                tail = text[start:idx + 1200].replace("\r", "")
+                raise PanicError("panic marker %r in output:\n%s"
+                                 % (marker.decode(), tail))

@@ -27,6 +27,7 @@
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 
 /** Manifest cap (same class as INI 16K: manifests are small by design). */
 #define ASSET_MANIFEST_MAX_BYTES 16384
@@ -158,10 +159,7 @@ bool asset_crc_file(const char *resolved, uint32_t *crc_out)
         shell_sd_end(&session, "crc32");
         return false;
     }
-    chunk = heap_caps_malloc(ASSET_CRC_CHUNK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (chunk == NULL) {
-        chunk = malloc(ASSET_CRC_CHUNK_BYTES);
-    }
+    chunk = p4heap_alloc_psram(ASSET_CRC_CHUNK_BYTES);
     if (chunk == NULL) {
         fclose(file);
         shell_sd_end(&session, "crc32");
@@ -281,10 +279,7 @@ int asset_verify_app(const char *tag, const char *app, bool list_only)
         batch_set_errorlevel(1);
         return 1;
     }
-    text = heap_caps_malloc(ASSET_MANIFEST_MAX_BYTES + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (text == NULL) {
-        text = malloc(ASSET_MANIFEST_MAX_BYTES + 1);
-    }
+    text = p4heap_alloc_psram(ASSET_MANIFEST_MAX_BYTES + 1);
     if (text == NULL) {
         shell_transcript_appendf_ansi(SH_ERR "%s: out of memory\n" SH_RST, pfx);
         fclose(file);
@@ -296,6 +291,17 @@ int asset_verify_app(const char *tag, const char *app, bool list_only)
     fclose(file);
     shell_sd_end(&session, pfx);
     text[got] = '\0';
+
+    /* Trust verdict first: the CRC loop below tokenizes @p text in place, so
+     * the canonical bytes must be judged while newlines still separate the
+     * lines. Reported after the per-file results. */
+    char fingerprint[PKG_SIGN_HASH_BYTES * 2 + 1];
+    pkg_sign_status_t sign = PKG_SIGN_NONE;
+
+    if (!list_only) {
+        fingerprint[0] = '\0';
+        sign = pkg_sign_check_manifest(text, fingerprint);
+    }
 
     /* Split in place; overlong lines fail the entry loudly. */
     for (ln = strtok_r(text, "\n", &save); ln != NULL; ln = strtok_r(NULL, "\n", &save)) {
@@ -314,6 +320,9 @@ int asset_verify_app(const char *tag, const char *app, bool list_only)
                                           pfx, (unsigned)ASSET_LINE_MAX_BYTES);
             failed++;
             continue;
+        }
+        if (pkg_is_sign_line(ln)) {
+            continue;   /* trust line, judged after the CRC pass below */
         }
         if (!asset_parse_line(ln, path, sizeof(path), &expect)) {
             shell_transcript_appendf_ansi(SH_ERR "%s: malformed line: %s\n" SH_RST, pfx, ln);
@@ -342,6 +351,23 @@ int asset_verify_app(const char *tag, const char *app, bool list_only)
                 continue;
             }
             ok++;
+        }
+    }
+    if (!list_only) {
+        /* A present but BAD signature fails the verify even when every CRC
+         * matches (an attacker can rewrite CRCs). Unsigned manifests keep
+         * the CRC-only contract they always had. */
+        if (sign == PKG_SIGN_OK) {
+            shell_transcript_appendf("%s: signed OK %.8s\n", pfx, fingerprint);
+        } else if (sign == PKG_SIGN_BAD) {
+            shell_transcript_appendf_ansi(SH_ERR "%s: BAD signature (manifest untrusted)\n" SH_RST, pfx);
+            failed++;
+        } else if (sign == PKG_SIGN_NOKEY) {
+            shell_transcript_appendf_ansi(SH_ERR "%s: signed but no trusted key (pkg key install <file>)\n" SH_RST, pfx);
+            failed++;
+        } else if (sign == PKG_SIGN_ERROR) {
+            shell_transcript_appendf_ansi(SH_ERR "%s: cannot judge signature\n" SH_RST, pfx);
+            failed++;
         }
     }
     heap_caps_free(text);

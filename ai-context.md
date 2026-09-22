@@ -15,6 +15,15 @@ does" reference in [documentation.md](documentation.md).
   known failure is never acceptable to leave behind. If it truly cannot be
   fixed now, report it and land a clearly-scoped follow-up, but the default is
   to fix it immediately.
+- **Read [`schematics.md`](schematics.md) before ANY task that touches hardware**
+  (pins, buses, I2C addresses, display/touch, audio, storage, power/battery,
+  sensors, buttons, LEDs, IO expanders, expansion headers, or board bring-up).
+  It is the detailed per-board hardware reference for `jc1060p470c` and
+  `m5stack_tab5` (features, pinouts, device addresses, power tree, expander
+  maps). Never guess a pin or address from a schematic or re-derive it from
+  code: the board_config is the machine source of truth and `schematics.md` is
+  the human/agent one — keep both in sync, and update `schematics.md` in the
+  same change whenever a pin/signal/device changes.
 - **A change is finished only when:** the firmware **and** `test/` build with
   zero errors and zero warnings, the on-board unit suite is green, and the
   affected hardware behaviour is verified on the board. Reflash the main
@@ -33,7 +42,7 @@ does" reference in [documentation.md](documentation.md).
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.2.0** (`p4minishell_config.h` version macros) |
+| Version | **v1.2.1** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -165,6 +174,17 @@ tools use a webcam to observe the device; prefer them over guessing.
 ## Source Code Rules
 
 ### Hard Rules
+- **NEVER duplicate. Every capability has exactly ONE implementation.** Before
+  writing anything, find and use the existing one (search the tree, read the
+  owning component, check `API.md`). Do not add a second parser, matcher,
+  scanner, walker, decoder, CRC, registry, dispatcher, or search path, and do
+  not copy a helper into a new file "to avoid a cross-component include" — add
+  the include, extend the existing API, or refactor the existing implementation
+  so both callers share it. If a new feature seems to need its own version,
+  make the existing one general instead. Never propose or implement a duplicate
+  (for example, an on-disk search index beside the existing scanners, a second
+  BMP/JSON/CSV parser, a second command dispatcher, or a parallel asset/manifest
+  checker). Duplication is a review-blocking defect, not a shortcut.
 - **Always fix any issue or bug that is found, even if it is unrelated to the
   current task.** A known failure is never acceptable to leave behind: never
   ignore or suppress it, never mark it "out of scope" and move on. Fix it in
@@ -319,6 +339,10 @@ tools use a webcam to observe the device; prefer them over guessing.
   `app_register`ed, the shell dispatcher runs it via `app_dispatch` (after
   built-ins and `.bat` lookup), and its return value becomes ERRORLEVEL. New
   apps MUST go through `app_register`, never a private dispatcher branch.
+  The launch/entry contract is frozen in [`ABI.md`](ABI.md): every app
+  launches through a `*.bat` shim (pure batch, `hybrid` shim driving a linked
+  `entry=`, or `native`-linked for dev/test); there is NO SD code execution.
+  Do not add a second entry path.
 - `.bat` app discovery (`launch`, `components/command/command.c`) scans the
   command PATH + `sd:/APPS` for `*.bat` and reads optional APPINFO metadata
   from `sd:/APPS/<name>.APPINFO`. The discovery table MUST be heap-allocated —
@@ -326,7 +350,8 @@ tools use a webcam to observe the device; prefer them over guessing.
   batch re-enters the dispatcher per line (a real crash found in bring-up). A
   batch app is made discoverable by placing it in a PATH dir or `sd:/APPS` and
   (optionally) adding an APPINFO file; `launch` never shadows a built-in or a
-  PATH-resolved `.bat`.
+  PATH-resolved `.bat`. Hybrid shims (`type=hybrid`) are tagged ` [hybrid]`;
+  discovery order and menu numbering MUST stay stable (scripts parse `/list`).
   Input helpers (`app_wait_key`,
   `app_read_line`) wrap the shell key queue with a caller timeout and MUST
   return false on a headless board rather than stalling. The persistent-state
@@ -423,11 +448,19 @@ tools use a webcam to observe the device; prefer them over guessing.
 - Plain transcript appends mirror to UART; ANSI appends must NOT mirror the stripped copy or
   every colored line prints twice on the serial console
 - The on-screen transcript is an LVGL span group (`lv_spangroup`), not a textarea. Coloured
-  output reaches it through `windows_set_transcript_text()` (in `components/windows/`), which
-  parses the raw ANSI text into per-colour spans. That rebuild deletes/recreates spans, so it
-  is DEFERRED to an `lv_async_call` to avoid a use-after-free when the rebuild is triggered from
-  an LVGL event or during a redraw pass. Never call LVGL textarea APIs on the transcript, and
-  never rebuild the span group synchronously from an LVGL event context.
+  output reaches it through `windows_set_transcript_text[_len]()` (in `components/windows/`),
+  which STAGES the raw ANSI text (plus the shell's scrollback epoch) and defers the widget work
+  to the LVGL task's coalesced apply timer (`P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS` +
+  `lvgl_port_task_wake`). Staging takes only the window manager's staging mutex — the command
+  worker must NEVER take the LVGL port lock on the append path, or it serializes behind every
+  render (bugs.md F26). Lock order is always PORT outer, STAGE inner. Explicit consumers of a
+  current screen (screenshots, key waits, visible-again repaints) go through
+  `shell_transcript_flush_now()` → `windows_transcript_sync_apply()` under the port lock.
+  Never call LVGL textarea APIs on the transcript, and never rebuild spans from a non-LVGL
+  task outside that pump. The scrollback epoch changes only when the buffer head moves
+  (reset/trim/truncate) and forces the rebuild; unchanged epochs apply the new tail only.
+  Hidden-state checks (`windows_transcript_is_hidden()`) read a shadow flag maintained by
+  `windows_shell_spans_set_hidden()` — never raw LVGL flags — so they are safe from any task.
 - The transcript span group's per-span overhead lives in the internal DMA-capable heap. If the
   internal heap runs low (`P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES`), the shell auto-trims the
   oldest scrollback — keeping the newest three quarters (half only under severe pressure) — and
@@ -440,7 +473,10 @@ tools use a webcam to observe the device; prefer them over guessing.
   it, per-transaction DMA allocation fails (`allocate_dma_buf: not enough mem`) once the internal
   heap fragments — every SD command goes down. Keep `shell_sd_begin()` calling it on every path.
 - Boot-time internal RAM is the scarce resource, and PSRAM is NOT `MALLOC_CAP_DMA` on this P4 build
-  (`dma_spi=0`), so `MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA` requests fall back to internal RAM. New
+  (`dma_spi=0`), so `MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA` requests fall back to internal RAM. The
+  central allocator is `components/p4heap/` (PSRAM-first bulk, explicit small DMA, bulk PSRAM-or-fail;
+  plain `malloc()` is PSRAM-first via `sdkconfig.defaults:140-141`
+  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0` + `RESERVE_INTERNAL=32768`). New
   tasks whose work never runs with the flash cache disabled SHOULD use
   `xTaskCreate*WithCaps(..., MALLOC_CAP_SPIRAM)` (and `vTaskDeleteWithCaps` if they self-delete) to
   keep the boot peak low. Tasks that may touch host flash/NVS (the command worker, the Wi-Fi
@@ -466,13 +502,17 @@ tools use a webcam to observe the device; prefer them over guessing.
 - Host tooling: `shell_session.open_port()` pre-sets `dtr=False`/`rts=False` before `open()` so it
   never resets the board (setting DTR after open is too late — O4). Anything that needs a fresh boot
   calls `shell_session.hard_reset()`; do not reintroduce raw `serial.Serial(...)` opens.
-- `CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=40000` is the adopted hosted SDIO clock (v0.38.0). The
-  10 MHz value it replaced was a conservative early-bring-up default, not a signal-integrity
-  requirement: the trial that reverted it had crashed on the O7 header double free, which the higher
-  clock only made more likely. Re-adopting was soak-gated (20 clean boots + 20-min concurrent
-  Wi-Fi+SD soak, 0 stalls + full suite). Measured with `wifi throughput tx|rx [port=N] [mb=N] [udp]`
-  (device) + `tools/wifi_bench.py` (host, same subnet): 40 MHz beats 10 MHz in both directions
-  (~11 vs 7.9 Mbit/s host→device, 4.4 vs ~1.6 device→host). `CONFIG_LWIP_TCP_WND_DEFAULT`/
+- Hosted SDIO clock is per-board: `CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=40000`
+  on the reference board (adopted v0.38.0; the 10 MHz value it replaced was a
+  conservative early-bring-up default, not a signal-integrity requirement —
+  soak-gated with 20 clean boots + 20-min concurrent Wi-Fi+SD soak, 0 stalls +
+  full suite; ~11 vs 7.9 Mbit/s host→device, 4.4 vs ~1.6 device→host measured
+  with `wifi throughput` + `tools/wifi_bench.py`) and **10000 on the M5Stack
+  Tab5** (40 MHz crashes on Wi-Fi assoc there; the first hosted RPC after a
+  fresh connect is retried once via a transport reset — see `PORTING.md` §6 and
+  `bugs.md` F6). `BOARD_CFG_HOSTED_SDIO_*` must mirror the matching
+  `CONFIG_ESP_HOSTED_HOST_SDIO_*` (build-time `_Static_assert` in
+  `components/networking/`). `CONFIG_LWIP_TCP_WND_DEFAULT`/
   `CONFIG_LWIP_TCP_SND_BUF_DEFAULT` are 32768 (raised from 5760 in v0.38.1) so the window is not the
   bottleneck. `tools/regression.py` runs the whole host suite in one command.
 - The transcript is a scrollable CONTAINER holding the span group. The span group is sized to
@@ -500,8 +540,8 @@ tools use a webcam to observe the device; prefer them over guessing.
   `shell_transcript_get_ansi_length()` (O(1)). The label path calls
   `windows_set_transcript_text_len()` so no `strlen` / `snprintf("%s")` scans the 64 KB buffer.
   Any new writer of these buffers MUST keep the tracked length in sync.
-- The transcript repaint is O(transcript) per call (full staging copy + span rebuild), and a batch
-  triggers one repaint per command LINE. It MUST be skipped while the transcript is hidden
+- The transcript staging copy is O(buffer) per scheduled repaint (the span rebuild itself is
+  incremental; see the span-group rule above). It MUST be skipped while the transcript is hidden
   (`windows_transcript_is_hidden()` — a gfx canvas, TUI, or full-screen app covers it), or canvas
   apps slow down as the buffer grows (each line copying up to 64 KB). The header poll repaints
   once when it becomes visible again (`shell_transcript_repaint_if_pending`).
@@ -622,6 +662,14 @@ tools use a webcam to observe the device; prefer them over guessing.
     discovery walker reuses the `dir /s` FATFS primitives, keeps each recursion level's state
     in one heap block, respects `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, and caps output at
     `P4_CONFIG_FIND_MATCH_MAX`.
+  - **Searching file contents has exactly ONE implementation.** `findstr /S`
+    and `gfind /files` both go through `storage_walk_files()` (the tree walk)
+    and `storage_scan_file_lines()` (the line loop), and both match with the
+    pure `shell_findstr_match_line()`/`shell_fsre_search()`. Never add a second
+    walker, line scanner, or matcher, and never add an on-disk search index
+    (search is always live; an index would duplicate the scanners and go
+    stale). `gfind` itself is a thin orchestrator over `db_find`/`db_list`,
+    `alarm_list`, and that shared scan core — no parallel store search.
   - Batch language verbs (`set`, `calc`, `path`, `echo`, `call`, `gosub`,
     `return`, `on`, `if`, `for` including `for /f`, `goto`, `shift`, `pause`,
     `choice`, `setlocal`, `endlocal`, `exit`, `proc`, `ini`, `appconfig`,
@@ -646,8 +694,12 @@ tools use a webcam to observe the device; prefer them over guessing.
 - Command verbs live in the split `components/command/*.c` files (never one monolith):
   - TUI/modal verbs (`draw`, `tui`, `color`, `locate`, `anchor`, `dialog`, `list`, `ask`,
     `browse`, `view`, `hexview`) -> `components/command/tui_commands.c`
+  - Declarative screens + flows (`screen run|flow|info`) -> `components/command/screen_commands.c`
+    (flat KEY=VALUE reader + argv synthesis into the existing verbs; `flow` routes over `.FRM`
+    nodes via the pure `screen_flow_select()`; never a second surface and never a second router)
 - GFX canvas verbs (`gfx init/close/status/clear/pixel/line/rect/circle/hline/vline/triangle/
-ellipse/polygon/fill/text/show/load/blit/free/slots/save`) -> `components/command/gfx_commands.c`;
+ellipse/polygon/fill/text/show/load/blit/blitmany[/s][/r]/free/slots/save`) -> `components/command/gfx_commands.c`
+  (rotation via pure `gfx_surface_rotate_cw()`, scale via `gfx_surface_blit_scaled()`);
 the raster core + 8x8 font are `components/gfx/`
   - `gfx show` MUST `lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL)` after
     `lv_obj_invalidate()`: the ESP LVGL port task sleeps up to `task_max_sleep_ms`
@@ -657,6 +709,12 @@ the raster core + 8x8 font are `components/gfx/`
     frame loop — do it once after the loop.
   - Checksum/manifest (`crc32`, `asset check|list`) -> `components/command/asset_commands.c`; packaged SD apps (`pkg`) -> `components/command/pkg_commands.c`
     (the ONE CRC-32 primitive is `shell_crc32_update`, shared with `receive`)
+  - Manifest signatures/trust (`SIGN=` ECDSA P-256 lines, the `p4sign` NVS key store, `pkg key`) ->
+    `components/command/pkg_commands.c` (`pkg_sign_*`; the pure helpers are unit-tested). The
+    package trust contract (canonical bytes, verdicts, enforcement matrix, no-SD-execution) is
+    frozen in [`ABI.md`](ABI.md) — change it there first. `asset_verify_app` reports the verdict but
+    delegates the crypto to `pkg_sign_*`; never add a second signature implementation. Neither the
+    private key nor an unsanctioned trust root may enter the firmware.
   - Database (`db ...`) -> `components/command/db_commands.c`
   - Alarm / calendar (`alarm ...`, `cal ...`) -> `components/command/alarm_commands.c`
   - Fonts/theme/cursor (`font ...`, `theme show`, `cursor ...`) -> `components/command/font_commands.c`
@@ -679,7 +737,10 @@ the raster core + 8x8 font are `components/gfx/`
     `components/command/export_commands.c`; it MUST render through the existing `db_find`/`db_get`
     and `alarm_list` APIs (no parallel readers) and write via `storage_write_text_file` (atomic).
   - Password encryption (`crypt lock|unlock`) -> `components/command/crypt_commands.c`; the ONE
-    AES-256-GCM/PBKDF2 core is the `crypt_*_mem`/`crypt_derive_key` set there (mbedTLS). The key and
+    AES-256-GCM/PBKDF2 core is the `crypt_*_mem`/`crypt_derive_key` set there (mbedTLS), streaming
+    files in 512 B chunks (`P4_CONFIG_CRYPT_CHUNK_BYTES`). A self-contained software AES-256-GCM
+    fallback (`components/swgcm`, `sw_gcm.h`) seals/opens the identical format when the Tab5 DMA
+    heap is too fragmented for hardware (bugs.md F23, fixed in v1.2.1). The key and
     password buffers MUST be zeroed after every run; `/p:` passwords are masked by the shell core.
   - `db` field queries (`/field:`, `/sort:`, `db get /field:`) use the ONE pure parser
     `db_field_get` in `components/db/db.c`; the payload `k=v;k=v` convention is documented in
@@ -761,12 +822,36 @@ the raster core + 8x8 font are `components/gfx/`
 - `rem` and `::` comments are opaque to end of line: `shell_comment_line()` MUST be checked before
   alias expansion, chain splitting, pipes and redirection, or a comment's `|`/`<`/`>`/`&` leaks
   into the pipeline.
-- `for` loop sets support literal token lists, a single wildcard pattern, and the `for /f`
-  file-line form (`for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd`).
-  All three re-enter the pipeline per iteration, so the substituted body buffer MUST be
+- `for` loop sets support literal token lists, a single wildcard pattern, the `for /f`
+  file-line form (`for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do cmd`),
+  the numeric `for /L %%v in (start,step,end) do cmd` (inclusive, negative
+  step counts down, pure `shell_forl_parse()`, cap `P4_CONFIG_FORL_ITER_MAX`),
+  the associative `for /A %%k in (PREFIX) do cmd` (pure `shell_fora_collect()`,
+  `%%k` = index, next letter = live value), the directory `for /D` (dirs-only
+  `storage_expand_dirs()`, literals pass through), and the recursive
+  `for /R [path]` (files-only `storage_expand_recursive()`, depth cap
+  `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, listing-limit cap).
+  All re-enter the pipeline per iteration, so the substituted body buffer MUST be
   heap-allocated (the loop is on the recursive batch path). `for /f` sources are an explicit
   file, a wildcard, or the active `< file`/pipe input when the set is empty; `tokens=` replaces
   the default token 1 rather than appending, and a trailing `*` binds the rest of the line.
+- `switch <value> <match>:<label> [...] [/d:<label>]` dispatches on the first
+  case-insensitive match (pure `shell_switch_select()`, split on the last
+  colon), else `/d:`, else fallthrough ERRORLEVEL 1. Jump through the `goto`
+  machinery (`shell_store_goto_target` + pending), batch files only.
+- `!VAR!` delayed expansion (same token forms as `%VAR%` via the shared
+  `shell_expand_token_text()`) runs only under a `setlocal
+  enabledelayedexpansion` scope; the flag lives in the batch task ctx with one
+  saved value per open scope, restored by `endlocal` and the frame-return
+  unwind. New `!` handling MUST NOT fire inside `'...'` (literal) or for
+  `^!` (already consumed as a pair) or without a closing `!`.
+- `while <expr> do cmd` re-runs its body while the `set /a` expression is
+  nonzero (DOS keywords `EQU NEQ LSS LEQ GTR GEQ` via pure
+  `shell_while_translate_keywords()`, cap `P4_CONFIG_WHILE_ITER_MAX`). The
+  condition and body MUST re-expand from pristine text every pass (bare names
+  read the live table, `%%n%%` resolves live) because the pipeline expanded
+  `%VAR%` once before dispatch — a frozen `%n%` loops forever.
+  ERRORLEVEL 0/1/2. The single-file authoring spec is [`batch.md`](batch.md).
 - The `calc` command (`components/batch/calc.c`) is a batch language verb and MUST keep its
   evaluator frames small: `calc_value_t` (double + fixed string) lives in parser locals across
   the additive/multiplicative/unary/power/primary/function-call recursion, so a deeply nested
@@ -780,7 +865,8 @@ the raster core + 8x8 font are `components/gfx/`
   (no separate stream); stdin = the storage input-redirection slot, consumed by the text tools,
   `for /f` over an empty set, and `set /p NAME=< file` (the interactive key queue is the
   fallback); argv = `%0`..`%9`/`%*`; cwd = storage-owned; PATH = batch-owned; environment =
-  the shared 24-slot RAM table, scoped by `setlocal`/`endlocal`. `%ERRORLEVEL%` expands to
+  the shared 64-slot RAM table (`P4_CONFIG_ENV_VAR_MAX`, names allow `[`/`]` for `NAME[i]`
+  arrays), scoped by `setlocal`/`endlocal`. `%ERRORLEVEL%` expands to
   the current errorlevel, and `proc` introspects the active batch process stack (`/args`
   `/name` `/depth` `/errorlevel` `/echo` `/stdin`). Batch files are first-class pipe
   processes: a `.bat` stage reads the pipe spool via `for /f in ()` / `set /p <` and its
@@ -1226,6 +1312,13 @@ the raster core + 8x8 font are `components/gfx/`
   second and the 20 us `esp_rom_delay_us` busy-wait is replaced with `eh_host_port_task_delay_ms(1)`
   so a stalled slave cannot starve IDLE into the task watchdog. Re-apply with
   `tools/reapply_managed_patches.ps1` after `idf.py update-dependencies`, like the other patches.
+- On the Tab5 the second PI4IOE5V6408 (0x44) drives the ESP32-C6 power rail on P0 and is
+  **SINGLE-WRITER** (bugs.md F6): configure/read it only through `bsp_io_expander1_set_output()`
+  and the charge/power-off helpers in `bsp_io_expander.c` (raw registers, every write read back
+  with a bounded retry). Never create the managed driver handle for 0x44 —
+  `esp_io_expander_new_i2c_pi4ioe5v6408()` issues a chip-wide reset that floats P0 and
+  power-cycles the C6 right before hosted enumeration, which is what made the first RPC time out.
+  The 0x43 expander (LCD/TP/audio/camera) has no bypass writer and keeps using the driver.
 - NVS initialized before esp_wifi_init() with erase-and-retry recovery
 - Station-only profile; no SoftAP, WPA3, or enterprise
 - Password masking in transcript and command history
@@ -1446,7 +1539,7 @@ the raster core + 8x8 font are `components/gfx/`
 - Environment variables, PATH, batch frame stack, and errorlevel owned by
   `components/batch/batch.c`
 - No persistence across boots
-- Environment variables: max 24, names alphanumeric + underscore
+- Environment variables: max 64 (`P4_CONFIG_ENV_VAR_MAX`), names alphanumeric + underscore + `[`/`]` (indexed `NAME[i]` arrays)
 - Batch depth: max 4 nested calls
 - Batch labels: max 128 per file (`P4_CONFIG_BATCH_LABEL_MAX`). Keep it above the
   label count of the largest shipped app (TCMD.BAT uses 34): an over-limit label

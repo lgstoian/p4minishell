@@ -83,9 +83,39 @@ esp_err_t shell_env_set(const char *name, const char *value);
 /**
  * Expand `%VAR%`, `%0` (script name), `%1`..`%9`, and `%*` (all arguments)
  * into @p output. An undefined `%VAR%` expands to the empty string (cmd.exe
- * parity), and `%%` yields a literal `%`.
+ * parity), and `%%` yields a literal `%`. DOS string forms are supported:
+ * `%VAR:~start[,len]%` slices a substring (negative counts from the end) and
+ * `%VAR:old=new%` replaces every (case-insensitive) occurrence of @p old.
  */
 void shell_expand_variables(const char *input, char *output, size_t output_size);
+
+/**
+ * Slice a `%VAR:~start[,len]%` substring (pure, unit-tested).
+ *
+ * @param value  The variable's value (never NULL).
+ * @param start  First kept character; negative counts back from the end.
+ * @param has_len  Whether @p len is present.
+ * @param len    Kept characters; negative drops that many from the end.
+ * @param out    Destination (always NUL-terminated).
+ */
+void shell_expand_substring(const char *value, int start, bool has_len, int len,
+                            char *out, size_t out_size);
+
+/**
+ * Apply a `%VAR:old=new%` replacement (pure, unit-tested): every
+ * case-insensitive occurrence of @p old in @p value becomes @p new_str.
+ * An empty @p old copies @p value unchanged. Always NUL-terminates @p out.
+ */
+void shell_expand_replace(const char *value, const char *old, const char *new_str,
+                          char *out, size_t out_size);
+
+/**
+ * Delayed-expansion flag for the current task (`!VAR!`, cmd.exe parity).
+ * Set by `setlocal enabledelayedexpansion|disabledelayedexpansion`, saved and
+ * restored with every setlocal scope (including the automatic unwind).
+ */
+bool shell_delayed_expansion_enabled(void);
+void shell_set_delayed_expansion(bool enabled);
 
 /* ========================================================================
  * ALIASES (alias / unalias, DOSKEY-style macros)
@@ -372,6 +402,52 @@ void shell_command_if(int argc, char **argv);
 /** `for` — loop over a token set or wildcard pattern: `for %v in (set) do cmd`. */
 void shell_command_for(int argc, char **argv);
 
+/**
+ * Parse a `for /L` numeric set `(start,step,end)` (pure, unit-tested).
+ * Whitespace around the three integers is allowed; @p step must be nonzero.
+ *
+ * @return true and the three values, or false for any malformed set
+ *         (wrong arity, non-numeric text, a zero step, trailing garbage).
+ */
+bool shell_forl_parse(const char *set, int32_t *start_out, int32_t *step_out,
+                      int32_t *end_out);
+
+/**
+ * `while` — re-run a body while a `set /a` expression is nonzero:
+ * `while <expr> do <command>`. The expression uses the same evaluator (and
+ * operators) as `set /a`, so `%n%<5`, `%x%==3`, or `1` (until ^C) all work.
+ * Bounded by `P4_CONFIG_WHILE_ITER_MAX`; a foreground break unwinds the loop.
+ * ERRORLEVEL: 0 done, 1 capped or condition error, 2 usage.
+ */
+void shell_command_while(int argc, char **argv);
+
+/**
+ * Collect every variable name shaped `PREFIX[...]` (case-insensitive prefix,
+ * non-empty index) into @p names (slot order). Pure over the shared table;
+ * values are re-read live per iteration.
+ *
+ * @return The entry count (0 when nothing matches or the arguments are
+ *         unusable).
+ */
+int shell_fora_collect(const char *prefix, char names[][P4_CONFIG_ENV_NAME_BYTES], int max);
+
+/**
+ * `switch` case matcher (pure, unit-tested): first case-insensitive match
+ * wins. Each case is `match:label`, split on the LAST colon; entries without
+ * a colon never match.
+ *
+ * @return The label (possibly empty), or NULL when nothing matches.
+ */
+const char *shell_switch_select(const char *value, char **cases, int count);
+
+/**
+ * Translate the DOS comparison keywords (EQU NEQ LSS LEQ GTR GEQ) in a
+ * `while` condition to `set /a` operators (pure, unit-tested). Keywords must
+ * be standalone whitespace-separated words; anything else passes through, and
+ * @p out is always NUL-terminated.
+ */
+void shell_while_translate_keywords(const char *cond, char *out, size_t out_size);
+
 /* ========================================================================
  * `for /f` FILE-LINE LOOPS (pure helpers, unit-tested in test/main)
  * ========================================================================
@@ -465,6 +541,11 @@ void shell_command_return(int argc, char **argv);
 /** `on <expr> goto|gosub|call <label>[,<label>...]` — BASIC computed dispatch.
  *  The 1-based expression result selects a target; out of range falls through. */
 void shell_command_on(int argc, char **argv);
+
+/** `switch <value> <match>:<label> [...] [/d:<label>]` — string-match dispatch
+ *  to a batch label (the string twin of `on ... goto`). First case-insensitive
+ *  match jumps, else the `/d:` default, else fallthrough with ERRORLEVEL 1. */
+void shell_command_switch(int argc, char **argv);
 
 /* Pure control-flow helpers exposed for unit tests (no duplicated parsing). */
 bool batch_label_is_line(const char *line);

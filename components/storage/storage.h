@@ -260,8 +260,58 @@ esp_err_t shell_list_directory_path(const char *normalized_path);
  */
 esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *count_out);
 
+/**
+ * Expand a DOS wildcard pattern into matching DIRECTORY paths (`for /D`).
+ * Same shape as storage_expand_wildcard(), but keeps directory entries and
+ * skips files. The caller frees the result with
+ * storage_free_wildcard_expansion().
+ */
+esp_err_t storage_expand_dirs(const char *pattern, char ***tokens_out, int *count_out);
+
+/**
+ * Recursively expand a filename pattern under @p root into matching FILE
+ * paths (`for /R`). Walks to `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, emits at
+ * most `P4_CONFIG_SD_LIST_LIMIT` tokens (full VFS paths, so a `for` body can
+ * use them directly), and skips unreadable subdirectories rather than
+ * aborting the walk. An empty @p name_pattern matches everything. The caller
+ * frees the result with storage_free_wildcard_expansion().
+ */
+esp_err_t storage_expand_recursive(const char *root, const char *name_pattern,
+                                   char ***tokens_out, int *count_out);
+
 /** Free a wildcard expansion returned by storage_expand_wildcard(). */
 void storage_free_wildcard_expansion(char **tokens, int count);
+
+/**
+ * Stream one resolved file line by line (trailing CR/LF stripped), invoking
+ * @p cb per line. This is the ONE line-reading loop shared by `findstr` and
+ * `gfind`; nothing else reads a file line-by-line for searching.
+ *
+ * @return ESP_OK, ESP_ERR_NOT_FOUND when the file cannot be opened, or
+ *         ESP_ERR_INVALID_ARG. @p cb returning false stops early (still OK).
+ */
+typedef bool (*storage_line_cb_t)(const char *vfs_path, int line_no,
+                                  const char *line, void *ctx);
+esp_err_t storage_scan_file_lines(const char *resolved_path,
+                                  storage_line_cb_t cb, void *ctx);
+
+/**
+ * Visit every file under @p vfs_root recursively (depth-bounded by
+ * `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, one heap block per level, "."/".."
+ * skipped). This is the ONE search tree walker shared by `findstr /S` and
+ * `gfind /files`.
+ *
+ * @param vfs_root  Directory (or single file) to visit.
+ * @param skip      Optional predicate; return true to skip an entry (the walk
+ *                  does not descend a skipped directory). NULL visits all.
+ * @param on_file   Called with each file's full VFS path.
+ * @return ESP_OK, ESP_ERR_NOT_FOUND for a missing root, or ESP_ERR_INVALID_ARG.
+ */
+typedef bool (*storage_walk_skip_cb_t)(const char *dir_vfs, const char *entry_name,
+                                       bool is_dir, void *ctx);
+typedef void (*storage_file_cb_t)(const char *vfs_path, void *ctx);
+esp_err_t storage_walk_files(const char *vfs_root, storage_walk_skip_cb_t skip,
+                             storage_file_cb_t on_file, void *ctx);
 
 /** Print the contents of a text file, sanitizing non-printable bytes. */
 esp_err_t shell_print_file_text(const char *normalized_path);

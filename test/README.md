@@ -1,9 +1,9 @@
-# P4MiniShell Unit Tests
+# P4MiniShell Unit Tests (firmware v1.2.1)
 
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
 
-Current baseline: **389 tests, 0 failures, 2 ignored** (verify with
+Current baseline: **423 tests, 0 failures, 2 ignored** (verify with
 `tools/unit_run.py <COM_PORT>`). The runner completes cleanly with
 `=== All tests completed ===` and no reboot; if the board is reset-looping,
 check for a newly added test that calls an LVGL/heap path before `lv_init()`.
@@ -46,13 +46,15 @@ test/
     test_json.c             # json validate/pretty
     test_gfx.c             # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
     test_asset.c            # CRC-32 vectors + asset manifest parser
-    test_pkg.c              # pkg APPINFO-name helper
+    test_pkg.c              # pkg APPINFO-name helper + ECDSA signature vectors
+    test_screen.c           # screen list splitter + declarative flow router
+    test_gfind.c            # gfind /files pure name filter (hidden/store/ext/kinds)
     test_theme.c            # UI theme registry (lookup/selection)
     test_header.c           # header layout policy (fit/compact/yield/smaller-font)
     test_wifi_state.c       # Wi-Fi state machine
     test_csv.c              # CSV splitter + R1C1 ref substitution + field formatter
     test_bind.c             # F-key bind table (set/lookup/count/index)
-    test_crypt.c            # PBKDF2 key derivation + AES-GCM envelope round-trip
+    test_crypt.c            # PBKDF2 key derivation + AES-GCM envelope round-trip (unit always runs; the former s07 hardware skip is gone — crypt now passes on both boards, F23 fixed)
     test_tcpterm.c          # tcpterm target parse, escape expansion, reply sanitize
     test_userial.c          # userial VID:PID + line-coding parsers
 ```

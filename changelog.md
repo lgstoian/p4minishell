@@ -14,6 +14,147 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [Unreleased]
+
+RAM/PSRAM modernization, the Tab5 `crypt` DMA failure (`bugs.md` F23), the
+Tab5 battery-presence bug (F24), the Tab5 animation/scroll performance pass
+(F25), the Tab5 hosted-SDIO boot storm (F6) and the transcript per-command
+performance pass (F26).
+
+### Fixed
+
+- **Tab5 hosted-SDIO TX storm → task-watchdog reboot** (`bugs.md` F6): the
+  boot-time first hosted RPC timed out because `board_bsp_early_init()` created
+  the managed `pi4ioe5v6408` driver for the second expander (0x44), whose
+  handle-creation issues a chip-wide software reset that floats `WLAN_PWR_EN`
+  (P0) and power-cycles the ESP32-C6 microseconds before hosted enumeration. The
+  0x44 is now **single-writer and reset-free**: Wi-Fi/USB feature enables drive
+  P0/P3 through a raw, read-back-verified, bounded-retry path in
+  `bsp_io_expander.c`, and the driver chip-reset never runs against it.
+  `boot_regression.py COM6 20` is now clean 20/20 with zero first-RPC/`0x107`/
+  storm signatures (was 20/20 boots on the recovery path) and `dogfood.py COM6`
+  no longer reboots under load. The transport-reset retry stays as a safety net.
+- **Tab5 reported a 100% "full" battery with no pack** (`bugs.md` F24): with no
+  pack the INA226 bus node floats to the charger rail (~8.40 V) with ~0 current
+  — indistinguishable from a full 2S pack by voltage alone. A pack is now
+  judged present only when the reading is clearly inside the pack range or the
+  recent samples are all plausible and stable; the IP2326 `CHG_STAT_LED` line
+  (expander-2 0x44 P6) corroborates a toggling-with-no-current charger. No pack
+  now reports `N/C` and the header `BAT N/C`.
+- **Tab5 animation/scroll lag and tearing** (`bugs.md` F25): three causes —
+  CPU screen rotation, an O(all-spans) transcript re-wrap on every append, and
+  a single draw buffer. Rotation now uses the P4 PPA; the transcript reconcile
+  is suspended while a gfx app surface owns the screen and its retained span
+  count is bounded; the Tab5 uses double buffering + a larger draw buffer, and
+  `gfx` now runs full-screen. Measured `gfx show` burst 270 → 51 ms and `gfx
+  stats` average frame 190 → 5.6 ms on COM6.
+
+### Added
+
+- **`tools/transcript_perf.py`**: a per-command transcript-cost bench (fresh /
+  after-`cls` / filled-scrollback echo round-trips at several payload lengths)
+  used to gate the F26 work; byte-wise serial reads so the harness adds no
+  floor.
+- **`boot_regression.py`** now counts the F6 signatures (`sdio_get_tx_buffer_num`
+  / `0x107` / `msg_id=350` / watchdog / backtrace) per boot and totals them, so
+  an F6 regression is visible as storm volume, not just PASS/FAIL.
+- **`schematics.md`**: a detailed per-board hardware reference (features,
+  pinouts, I2C addresses, power tree, IO-expander maps, buttons/LEDs/expansion)
+  for `jc1060p470c` and `m5stack_tab5`, with a hard rule in `ai-context.md` to
+  read it before any hardware task.
+
+### Changed
+
+- **Transcript repaint is now incremental and off the worker's critical path**
+  (`bugs.md` F26, partial): the shell carries a scrollback **epoch** so the
+  window manager detects head-moving truncation in O(1) (the 64 KB
+  rendered-prefix snapshot and the per-apply `strlen`/`strncmp`/full-buffer
+  `snprintf` scans are gone), and staging copies take a dedicated mutex instead
+  of the LVGL port lock — the command worker no longer serializes behind a
+  render on the append path. Repaints are pumped by a coalescing LVGL timer
+  (`P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS`, default 10 ms); screenshots/key-waits
+  still force a synchronous apply (`windows_transcript_sync_apply`). Worker
+  wall-time per echo at full scrollback is now ~2 ms; the residual
+  per-command cost is the LVGL-side O(retained-text) span walk, tracked as F26.
+- **Pack-presence config**: `P4_CONFIG_BATTERY_PRESENT_STABLE_SAMPLES`,
+  `P4_CONFIG_BATTERY_PRESENT_MAX_SWING_MV`, `P4_CONFIG_BATTERY_RAIL_BAND_TOL_MV`
+  (mirrored in `p4minishell_config.yaml`).
+- **Transcript span cap** `P4_CONFIG_TRANSCRIPT_MAX_SPANS` bounds the rendered
+  scrollback so per-append cost stays flat over a long session.
+- **Tab5 display buffers**: `BOARD_CFG_LCD_DRAW_BUFFER_SIZE` doubled to
+  `width*100`, `BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE` enabled.
+- **`battery diag`** prints the IP2326 `chg_stat` line.
+
+### Known issues (see `bugs.md`)
+
+- **F27**: two consecutive full COM6 sweeps each hit one transient crash
+  (`s07_data` Guru Meditation / `s14_apps` task watchdog), unreproducible in
+  six targeted re-runs; attribution vs the new render pump is the next hunt.
+- **F26**: routine transcript repaints still cost ~1.5–2 s per interactive
+  command at full scrollback on the Tab5; the worker is now off the critical
+  path, and the residual is the LVGL span-group re-wrap — windowed transcript
+  rendering is the next performance pass.
+
+### Earlier in this release
+
+
+- **Tab5 `crypt` failed after a busy session** (`bugs.md` F23): the esp-aes
+  hardware path needs DMA-capable internal RAM for its GDMA descriptor
+  array, which fragments to zero on the Tab5 while `mem.internal` still
+  reports free (non-DMA) bytes. `crypt` now runs hardware-first on
+  cache-line-aligned DMA buffers (single-descriptor 512 B chunks, never
+  PSRAM-backed) and retries once through a self-contained software
+  AES-256-GCM engine (`components/swgcm/`, identical `P4CRYPT1` format)
+  when the DMA pool is short or hardware fails on crypto. The `s07_data`
+  F23 skip is removed: lock/unlock is asserted on every board.
+
+### Added
+
+- **Central RAM/PSRAM policy (`components/p4heap/`)**: bulk data goes to
+  PSRAM first and large requests fail cleanly instead of spilling into the
+  internal DMA pool; DMA consumers allocate explicitly and handle NULL;
+  `p4heap_dma_largest()` is the F23 health metric. All ~82 heap sites
+  migrated to it.
+- **Software AES-256-GCM (`components/swgcm/`)**: pure-CPU fallback needing
+  no DMA memory (OpenSSL-vector + hardware-crosscheck unit tests in
+  `test/main/test_sw_gcm.c`: AES block KAT, empty/16-zero/ref3 GCM vectors,
+  1000-byte SW-vs-HW byte-identity both directions).
+- **`mem` DMA detail**: new `mem.dma.free`, `mem.dma.largest`, and
+  `mem.internal.largest` lines. The transcript guard deliberately stays keyed
+  on internal free RAM only (the Tab5's DMA pool is tiny even when idle, so a
+  DMA trigger would trim continuously for no benefit; `crypt` handles a short
+  DMA pool itself via the software fallback).
+- **`P4_CONFIG_CRYPT_DMA_MIN_BYTES`** (4096): contiguous-DMA threshold
+  below which `crypt` goes straight to software.
+
+### Changed
+
+- **PPA screen rotation enabled** (`sdkconfig.defaults`:
+  `CONFIG_LVGL_PORT_ENABLE_PPA=y`): both boards run the UI rotated
+  (`BOARD_CFG_APP_SW_ROTATE=1`), and the LVGL port was rotating every flush
+  with the CPU `lv_draw_sw_rotate()` path. The P4 2D accelerator now performs
+  the rotation (`esp_lvgl_port` allocates a rotation buffer and drives it
+  through the PPA). Measured on the Tab5: `BOUNCE.BAT` average frame
+  206 ms → 161 ms. The residual per-frame cost is the LVGL software draw of
+  the transcript span group, tracked in `bugs.md` F25.
+- **Harness reliability**: `tools/p4test/sdbridge.py` `push_file()` now
+  retries a failed/CRC-mismatched `receive` exchange (the retry previously
+  lived only in `push_local()`, so in-memory `push_file` callers such as the
+  batch suite had no recovery); `tools/ui_touch_test.py` `ensure_shell()`
+  retries a transient empty `ui state` read and `state()` uses a longer read
+  window. Fixes the intermittent `s06_batch` `receive P4BTEST.BAT` failure
+  and the `ui_touch` "shell for modals" failure.
+
+### Known issues (see `bugs.md`)
+
+- **F24**: Tab5 reports a 100% "full" battery with no pack attached (the
+  INA226 floats to the charger rail; needs a real presence criterion).
+- **F25**: the Tab5 frame budget is dominated by the transcript span-group
+  repaint (~220 ms/frame regardless of canvas size); tearing remains with a
+  single draw buffer. Major follow-up.
+
+---
+
 ## [1.2.1] - 2026-09-20
 
 Patch release: make the M5Stack Tab5 battery actually charge and report it.
@@ -269,6 +410,276 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 ---
 
 ## [Unreleased]
+
+### Added - search everywhere via `gfind /files` (roadmap item done)
+
+- **`gfind` gained an opt-in text-file scope** (`/files`): the Palm-style
+  global find now searches `db` records, alarms, **and** files in one query.
+  Options: `/files` / `/nofiles`, `/root:<path>` (default `sd:/`),
+  `/ext:.txt,.md`, `/hidden`, `/filesonly`. Bare rows are
+  `FILE|<path>|<lineno>|<text>`, and `/count` adds `gfind.files=` beside the
+  existing `gfind.db=`/`gfind.alarms=`/`gfind.total=`. Files are **opt-in**
+  (config default `P4_CONFIG_GFIND_SEARCH_FILES_DEFAULT=0`), so existing
+  `gfind` output and timing are unchanged.
+- **No duplication and no index.** The file scope walks the **same shared
+  storage search core `findstr /S` uses** — new public
+  `storage_walk_files()` (tree walk) + `storage_scan_file_lines()` (line loop)
+  in `components/storage/storage_text.c` — and the same pure matcher
+  (`shell_findstr_match_line`). `findstr /S` was refactored onto that core, so
+  there is exactly one content-search walker and one line loop. The structured
+  stores' directories (`P4_CONFIG_GFIND_SKIP_DIRS`: `DBS`, `ALARMS`) and
+  images/unknown kinds are skipped; the scan is bounded by
+  `P4_CONFIG_GFIND_MAX_FILES` / `_MAX_FILE_BYTES` / `_MAX_MATCHES`.
+- **No SD search index exists and none is planned** (documentation and the
+  roadmap say so explicitly); search is always live and can never go stale.
+- **`ai-context.md` hard rule:** *NEVER duplicate — every capability has
+  exactly one implementation.* A review-blocking rule, added to Source Code
+  Rules → Hard Rules, with concrete examples (no second parser/walker/matcher,
+  no parallel search index, no duplicate dispatcher).
+- **Tests:** 5 Unity cases for the pure filter `gfind_name_allowed()`
+  (hidden, store dirs, `/ext:` list, default kinds, NULL-safe), and
+  `s07_data` now builds a small text tree and asserts `/files` hits, the
+  image/unknown skip, `/ext:` filtering, `/filesonly`, `/count`, and that the
+  default does not scan files (93/93 on COM3).
+- **Docs:** `command.md` (gfind), `SDK.md` (walker renamed to the shared core),
+  `documentation.md`, `ai-context.md`, `batch.md`, `readme.md`, `test/README.md`;
+  the roadmap "Search everywhere" future row was removed and folded into
+  Part 1 §11.
+
+### Fixed
+
+- **Tab5 `crypt` under load (`bugs.md` F23, mitigated):** the streaming loop
+  now allocates its chunk buffers as small **DMA-capable internal** buffers
+  (`heap_caps_malloc(..., MALLOC_CAP_DMA)`, 512 B chunks) so esp-aes runs
+  straight through with the smallest descriptor footprint, and the recursive
+  file-walk scratch is PSRAM-first so it stops churning internal RAM. This
+  fixes isolated `crypt` on COM6 and reduces pressure, but the esp-aes
+  descriptor allocation can still fail after a busy session because the
+  Tab5's DMA-capable internal pool fragments while `mem.internal` still shows
+  ~30 KB free (PSRAM cannot help: this P4 build has `dma_spi=0`, so PSRAM is
+  not DMA-capable). Residual tracked in F23; `s07_data` reports a skip for
+  `crypt` on that board instead of a false failure.
+
+### Added - declarative multi-screen flows (`screen flow`, roadmap item done)
+
+- **`screen flow <file.flow>`**: a flat `KEY=VALUE` navigation graph whose
+  steps point at existing `.FRM` screens, so a multi-screen app no longer
+  needs a hand-written `goto` web. Per-step keys: `<id>.screen=`,
+  `<id>.var=`, and routing `<id>.err:<n>=`, `<id>.val:<text>=`, `<id>.*=`
+  (evaluated in file order, first match wins; target = another step or
+  `end`/`exit`). `screen info <file.flow>` lists steps/rules; `screen run` on
+  a flow refuses and points at `screen flow`. Each step prints a muted
+  `flow: <id>` trace.
+- **Pure, unit-tested router** `screen_flow_select()` (in
+  `components/command/screen_commands.c`): `*` always matches, `err:<n>`
+  matches ERRORLEVEL, `val:<text>` matches the step's declared var
+  (case-insensitive); empty `err:`/`val:` never match. The driver reuses
+  `shell_command_screen()` per step (screen rendering stays in one place),
+  bounds transitions at `P4_CONFIG_SCREEN_FLOW_ITER_MAX`, honors the
+  foreground break (`^C`), and refuses an ill-formed graph up front
+  (missing `flow.start`, unknown step/target, unknown rule token) with
+  ERRORLEVEL 1.
+- **Config:** `P4_CONFIG_SCREEN_FLOW_STEPS` (16), `P4_CONFIG_SCREEN_FLOW_RULES`
+  (64), `P4_CONFIG_SCREEN_FLOW_ITER_MAX` (256), `P4_CONFIG_SCREEN_FLOW_ID_BYTES`
+  (16) in `p4minishell_config.h` + `.yaml`; the fixed-width rule structs are
+  guarded by `_Static_assert` so a raised cap fails the build.
+- **Tests:** 3 Unity cases for the router; `s06_batch` deploys a `.FLOW` +
+  two timeout-`dialog` `.FRM`s and asserts `screen info`, the `flow: a`/`flow: b`
+  trace, the `err:255` route, the final ERRORLEVEL, the `screen run` refusal,
+  and a broken-flow refusal (109/109 on COM3 and COM6).
+- **Docs:** `batch.md` §13.1, `command.md` (`screen` + Where-Commands),
+  `documentation.md`, `SDK.md`, `ai-context.md`, `readme.md`, `test/README.md`;
+  the roadmap "Multi-screen flow engine" residual row is removed as done.
+
+### Added - signed apps, hybrid launch, ABI.md (roadmap: signing + loader, done)
+
+- **Signed `PKGS` manifests (ECDSA P-256 + SHA-256).** An optional
+  `SIGN=<128 hex>` line (raw r||s) covers the canonical manifest bytes
+  (every line except blanks, `#`/`;` comments, and SIGN lines). `pkg install`,
+  `verify`, `check`, and `info` report the verdict; a **bad signature always
+  refuses** before any copy, and `pkg install /signed` (or
+  `P4_CONFIG_PKG_REQUIRE_SIGN=1`) refuses unsigned bundles too. New `pkg key
+  show|install <file>|clear` manages the trusted raw public key in the
+  `p4sign` NVS namespace (off-curve points rejected; clear confirms). The one
+  trust core is `components/command/pkg_commands.c` (`pkg_sign_*`, pure
+  helpers unit-tested against a fixed NIST vector); `asset_verify_app` reports
+  the verdict without re-implementing the crypto.
+- **Host signer** `tools/pkg_sign.py` (`keygen`/`sign`/`verify`); `apps/
+  push_pkgs.py --sign KEY.pem` signs every bundle it builds.
+- **Hybrid app launch model (every app through a `*.bat`).** `pkg` now
+  accepts `type=hybrid` (requires `entry=`); a hybrid `.BAT` shim calls a
+  linked-in `app_main_t`, so a C app gets a batch front door with no new
+  runtime. `launch /list` and the menu tag hybrid shims ` [hybrid]`;
+  `type=native` stays dev/test-only (linked, no SD execution).
+- **`ABI.md`** freezes the contract: the single launch model, the `applib-1`
+  entry ABI + versioning rule, the `APPINFO` key table (`type`/`abi`/`arch`/
+  `entry`), the manifest trust rules + enforcement matrix, `.P4X` data-payload
+  status, and the explicit non-goals (no `dlopen`/MMU/SD code execution).
+  `docs/native_packaging.md` rewritten to v1.2 (hybrid + signed); the roadmap
+  rows for the loader and signing are removed as done.
+- **Reference hybrid app** `apps/hybrid/HYBRID.BAT` + `.APPINFO` (drives the
+  linked `hello` entry), pushed by `push_apps.py` and covered by `s14_apps`.
+- **Fixed:** `P4_CONFIG_LAUNCH_MAX` 24 → 40. The app ecosystem (reference
+  apps + root utility scripts) had grown past the cap, so late discovery
+  entries (e.g. HYBRID/WRITER/CONTROL) were silently dropped from `launch`.
+- **Fixed (harness):** `tools/p4test/screenshot.py` now retries a bounded
+  number of times on the transient `could not acquire LVGL lock` refusal, so a
+  suite following heavy batch/GFX work does not fail on a frame-timing race.
+- **Tests:** 5 new Unity cases for the signature core (line parse, canonical
+  bytes, SHA-256, verify vectors/rejects, stock-unsigned manifest), and
+  `pkg_test.py` gained the end-to-end signing matrix. `s14_apps` covers the
+  hybrid shim and its ` [hybrid]` tag.
+- **Docs:** `ABI.md` (new), `docs/native_packaging.md`, `readme.md`,
+  `command.md` (`pkg`/`launch`), `batch.md` (hybrid), `tutorial_native.md`
+  (shim recipe), `SDK.md`, `API.md`, `documentation.md`, `ai-context.md`,
+  `SECURITY.md` (key custody), `tools/README.md`, `test/README.md`,
+  `roadmap.md`.
+
+### Added - batch language gaps closed (roadmap section, dedicated pass)
+
+- **Delayed expansion (`!VAR!`)**: `setlocal
+  enabledelayedexpansion|disabledelayedexpansion` flips a per-task flag saved
+  and restored with every setlocal scope (including the frame-return unwind);
+  `!NAME!` (same `:~`/`:`, pseudo, and ERRORLEVEL forms via the shared
+  `shell_expand_token_text()`) resolves at execution time, literal without
+  the scope, in `'...'`, for `^!`, and without a closing `!`.
+  `enableextensions`/`disableextensions` accepted and ignored for script
+  portability. Unit-tested (expansion + scope restore).
+- **`for /A %%k in (PREFIX)`**: iterates one `PREFIX[...]` in slot order via
+  the pure `shell_fora_collect()` helper, binding the index to `%%k` and the
+  live value to the next letter (mirrors `for /f`). String keys work
+  (`CFG[theme]=amber`). Unit-tested; `s06_batch` covers it on hardware.
+- **`for /D` + `for /R [path]`** (cmd.exe parity): `/D` matches directory
+  names through the dirs-only `storage_expand_dirs()` (same FATFS core as
+  the file wildcard); `/R` walks files through `storage_expand_recursive()`
+  (single open handle per level, heap name lists, depth cap
+  `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, listing-limit cap, unreadable subtrees
+  skipped). Covered in `s06_batch` on hardware (COM3).
+- **`switch <value> <m>:<l> [...] [/d:<label>]`**: string-match dispatch
+  (the string twin of `on ... goto`) through the pure
+  `shell_switch_select()` helper (first case-insensitive match, split on the
+  last colon), else the `/d:` default, else fallthrough ERRORLEVEL 1; jumps
+  reuse the `goto` machinery (missing labels abort). Batch files only.
+  Unit-tested; `s06_batch` covers match/default/fallthrough on hardware.
+- **Documented `if (true-cmd) else (false-cmd)`** single-line groups (already
+  implemented, previously undocumented); multi-line blocks stay
+  `:label`+`goto` (recorded residual).
+- **`gfx blitmany /s:1..4 /r:0|90|180|270`**: uniform nearest-neighbour
+  upscale plus clockwise quarter-turns via the pure
+  `gfx_surface_rotate_cw()` core (one rotated copy per command, canvas-fit
+  refusal). Unit-tested; `s08_display` proves scale + 90-degree orientation
+  on pulled-BMP pixels plus both usage errors (102/102 on COM3).
+- **Background compute loops**: hardware-verified `while`/`for /L` bodies
+  under `start` with cooperative `taskkill`; display verbs refuse there by
+  design (single shared writer). Pattern documented in `batch.md` §17.
+- **Docs**: `batch.md` (§5 delayed, §6 `/A`, §10.3 `/D`+`/R`, §11 `switch` +
+  paren groups, §16 `blitmany` flags, §17 bg pattern), `command.md`
+  (reference rows + sections), `API.md`, `ai-context.md`, `documentation.md`,
+  `SDK.md`, `tutorial_batch.md`, `roadmap.md` gaps rewritten as done with
+  residuals, `test/README.md` count.
+
+### Added - structured app format (declarative screens, roadmap item done)
+
+- **`screen run <file.frm>` / `screen info <file.frm>`** (new
+  `components/command/screen_commands.c`): one screen per flat `KEY=VALUE`
+  file (same shape as `APPS/<APP>.APPINFO`, read through the shared
+  `storage_ini` core — no second parser). `type=` selects
+  `dialog`/`list`/`ask`/`form`/`menu`; the runner synthesizes an argv vector
+  and calls the existing verb, so every surface has exactly one
+  implementation and results keep the same variables + ERRORLEVEL contract.
+  `info` describes without UI. Multi-screen apps stay batch files (`screen
+  run` per screen + `if errorlevel`/`goto` — no flow engine by design).
+  Format reference in `batch.md` §13; `command.md`, `API.md` updated;
+  pure `screen_split_list()` unit-tested; `s06_batch` covers `info` +
+  timeout-bounded `run` on hardware (88/88 on COM3).
+- **Roadmap:** the "Structured app format" row (section D) is marked done
+  with its residual gap (flow engine) recorded.
+
+### Added - batch language expansion (arrays, numeric for, while, string funcs, bulk blit)
+
+- **`for /L %%v in (start,step,end) do cmd`** (cmd.exe parity): inclusive
+  counting, negative step counts down, values bind as decimal text through
+  the classic substitution runner. Pure `shell_forl_parse()` helper,
+  unit-tested; bounded by `P4_CONFIG_FORL_ITER_MAX` (100000). Verified on
+  COM3 (`1,1,3` and `5,-2,0` countdown).
+- **`while <expr> do cmd`**: re-runs its body while the `set /a` expression
+  is nonzero, with the DOS keywords `EQU NEQ LSS LEQ GTR GEQ` (`if` parity)
+  so conditions never collide with `<` input redirection. Condition and body
+  re-expand from pristine text every pass (bare names read the live table,
+  `%%n%%` resolves the live value); bounded by `P4_CONFIG_WHILE_ITER_MAX`
+  (100000); ERRORLEVEL 0/1/2. Verified on COM3 (bare-name and `%%` forms).
+- **Indexed arrays**: `[`/`]` are name characters, so `set SPR[0]=...` /
+  `%SPR[0]%` / `set /a SPR[0]+=5` / `calc SPR[1]*2` just work — same 64-slot
+  table, no new storage. Verified on COM3.
+- **DOS string forms**: `%VAR:~start[,len]%` substring (negative counts from
+  the end) and `%VAR:old=new%` case-insensitive replace-every, through the
+  pure `shell_expand_substring()` / `shell_expand_replace()` helpers over
+  the same named-value resolution as plain `%VAR%`. Unit-tested.
+- **`calc` string functions**: `UPPER$` `LOWER$` `TRIM$` `INSTR` (2- or
+  3-arg, 1-based like `MID$`) `REPLACE$`. Unit-tested.
+- **`gfx blitmany <slot> <x1> <y1> [<x2> <y2> ...] [transparent]`**: stamps
+  one sprite at up to `P4_CONFIG_GFX_BLITMANY_MAX` (64) positions per
+  command — a whole formation per line for batch games. Same blit core,
+  same guards (foreground, open canvas, ERRORLEVEL 0/1/2).
+- **`batch.md`**: single-file batch app spec — process model, quoting,
+  variables/arrays/string forms, `set /a`, `calc`, every loop form, `while`
+  live-value rules, subroutines, input/modals, persistence, the TUI/GFX
+  game kit with a game-loop sketch, packaging/testing, and budgets. An AI
+  agent reading only this file can write batch apps.
+- **Docs**: `command.md` (`for /L`, `while`, string forms, arrays, new
+  `calc` rows, `blitmany`, 64-slot correction), `documentation.md` (batch
+  module), `roadmap.md` (batch gaps note), `readme.md` docs table.
+
+### Added - hardware-abstraction hardening (Tab5 portability, no new layers)
+
+- **Zero-cost `components/board_caps/` leaf** (`board_caps.h`, header-only
+  `static inline` over `BOARD_CFG_*`): `board_caps_has_camera/imu/ina226/
+  battery_adc/tab5kbd/ws2812/rgb_via_tab5kbd()` — one truth for new code
+  instead of scattered `#if BOARD_CFG_*_PRESENT` branches. No RAM, no tasks,
+  same codegen; wired into both root and `test/` `EXTRA_COMPONENT_DIRS`.
+- **Board/SDK mirror guard:** build-time `_Static_assert` in
+  `components/networking/` that `BOARD_CFG_HOSTED_SDIO_*` +
+  `BOARD_CFG_C6_HOST_RESET_GPIO` mirror `CONFIG_ESP_HOSTED_HOST_SDIO_*` +
+  `CONFIG_ESP_HOSTED_HOST_RESET_GPIO`, so a port that updates one side
+  without the other fails the build instead of timing out hosted RPCs.
+- **Tab5 LEDC timer follows the profile:** the vendored Tab5
+  `bsp_display_brightness_*` now derives `LCD_LEDC_TIMER` from
+  `BOARD_CFG_LCD_BACKLIGHT_PWM_TIMER` (timer 0 on Tab5, timer 1 on the
+  reference board) instead of a hardcoded `LEDC_TIMER_0`.
+- **PWM toolkit can no longer steal the backlight timer:** `shell_pwm_claim()`
+  skips `SHELL_PWM_BACKLIGHT_TIMER` (the timer list now names all four timers
+  and filters at claim time — the old table silently assumed timer 1, which is
+  the backlight on the reference board but timer 0 on the Tab5).
+
+### Fixed - hardware-abstraction hardening
+
+- **Board-neutral logs/descriptions:** `display.c` (rotation/refresh/touch
+  messages), the `periph_commands.c` GPIO table (`i2c_sda/scl`, `backlight`,
+  `lcd_reset`, `led_status`), the I2C session comments, `volume`/`audio.h`
+  (codec-neutral: ES8311 vs ES8388), and a stale power-monitor comment all no
+  longer name reference-board parts on the Tab5. `rgb status` reports the
+  keyboard-LED path when `BOARD_CFG_RGB_VIA_TAB5KBD` is set instead of
+  `check GPIO-1`.
+- **Bounded first-RPC recovery (F6):** the hosted version-read retry no longer
+  fires on a definitive version mismatch (`ESP_ERR_INVALID_STATE` — resetting
+  the transport cannot change the C6 image) and settles 200 ms (was 50 ms) so
+  the slave can release DAT0. Still a single retry; no loop growth, no
+  hard-reset hook (reverted before for hanging Wi-Fi).
+- **Tab5 battery YAML/H drift:** `board_config.yaml` `max_current_ma` 2000 →
+  8192 to match `board_config.h`/reference calibration (`CAL=0x0D55`); the
+  "firmware never toggles charge rails" comments now state measurement is
+  read-only with charging enabled once at boot via `board_bsp_charge_enable()`.
+- **Board-agnostic charge unit test:** `test_hardware_charge_state` derives its
+  mid-pack voltage from `BOARD_CFG_BATTERY_EMPTY/FULL_MV` instead of a hardcoded
+  7600 mV (which is above the reference board's full threshold and misclassified
+  as FULL there). Verified 389/0/2 on COM3 and COM6.
+- **Version-agnostic smoke suite:** `s01_smoke.py` matches `about.version:` and
+  the firmware's own reported version instead of a hardcoded `1.2.0`.
+- **Docs:** `readme.md` Hardware baseline is now a two-board table (Tab5 panel
+  auto-detect, ES8388, INA226+charging, Tab5Keyboard+LEDs, BMI270/RX8130CE/
+  SC202CS, 10 MHz SDIO, PMIC shutdown, per-board build lines);
+  `PORTING.md` reset-line wording corrected to `BOARD_CFG_C6_HOST_RESET_GPIO`;
+  `ai-context.md` SDIO clock paragraph reconciled per-board.
 
 ### Added - production test framework, frame metrics, diagnostics app
 

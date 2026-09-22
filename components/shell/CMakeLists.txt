@@ -10,6 +10,7 @@ idf_component_register(
         keyboard
         clock
         windows
+        p4heap
         board_bsp
         espressif__esp_lvgl_port
         lvgl__lvgl

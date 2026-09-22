@@ -20,6 +20,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -1349,6 +1350,176 @@ static bool shell_findstr_add_string(findstr_opts_t *opts, const char *text, boo
     return true;
 }
 
+/* ------------------------------------------------------------------------
+ * SHARED SEARCH SCAN CORE (storage_scan_file_lines + storage_walk_files)
+ * ------------------------------------------------------------------------
+ * The ONE line-reading loop and the ONE recursive search walker. `findstr`
+ * (below) and `gfind /files` both build on these, so no search path grows a
+ * second file loop or a second tree walk. See ai-context.md "no duplication".
+ */
+
+esp_err_t storage_scan_file_lines(const char *resolved_path,
+                                  storage_line_cb_t cb, void *ctx)
+{
+    char line[SHELL_TEXT_LINE_BYTES];
+    FILE *file;
+    int lineno = 0;
+
+    if (resolved_path == NULL || cb == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    file = fopen(resolved_path, "r");
+    if (file == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    while (fgets(line, sizeof(line), file) != NULL) {
+        lineno++;
+        shell_text_strip_eol(line);
+        if (!cb(resolved_path, lineno, line, ctx)) {
+            break;   /* consumer asked to stop (e.g. match cap reached) */
+        }
+    }
+    fclose(file);
+    return ESP_OK;
+}
+
+static void storage_walk_dir(const char *vfs_dir, int depth,
+                             storage_walk_skip_cb_t skip,
+                             storage_file_cb_t on_file, void *ctx)
+{
+    struct walk_level_scratch {
+        char fatfs_path[SHELL_SD_PATH_BYTES];
+        char child[SHELL_SD_PATH_BYTES];
+        FF_DIR dir;
+        FILINFO info;
+    } *scratch = NULL;
+    FRESULT result;
+
+    if (depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX) {
+        return;
+    }
+    /* The per-level scratch (FATFS handle, FILINFO, path buffers) never needs
+     * to be DMA-capable — FATFS reads through its own DMA bounce buffer — so
+     * it prefers PSRAM. This keeps the scarce internal heap unfragmented for
+     * callers that DO need internal DMA (e.g. the esp-aes path in `crypt`;
+     * see bugs.md F23). NULL propagates to the error path below. */
+    scratch = p4heap_calloc_psram(1, sizeof(*scratch));
+    if (scratch == NULL) {
+        shell_record_errorf("storage", ESP_ERR_NO_MEM, "Out of memory during a file walk");
+        return;
+    }
+    if (shell_sd_vfs_to_fatfs_path(vfs_dir, scratch->fatfs_path,
+                                   sizeof(scratch->fatfs_path)) != ESP_OK) {
+        heap_caps_free(scratch);
+        return;
+    }
+    result = f_opendir(&scratch->dir, scratch->fatfs_path);
+    if (result != FR_OK) {
+        heap_caps_free(scratch);
+        return;
+    }
+
+    while (true) {
+        bool is_dir;
+
+        result = f_readdir(&scratch->dir, &scratch->info);
+        if (result != FR_OK || scratch->info.fname[0] == '\0') {
+            break;
+        }
+        if (strcmp(scratch->info.fname, ".") == 0 ||
+            strcmp(scratch->info.fname, "..") == 0) {
+            continue;
+        }
+        if (skip != NULL && skip(vfs_dir, scratch->info.fname,
+                                 (scratch->info.fattrib & AM_DIR) != 0, ctx)) {
+            continue;
+        }
+        if (snprintf(scratch->child, sizeof(scratch->child), "%s/%s",
+                     vfs_dir, scratch->info.fname) < 0) {
+            continue;
+        }
+        is_dir = (scratch->info.fattrib & AM_DIR) != 0;
+        if (is_dir) {
+            storage_walk_dir(scratch->child, depth + 1, skip, on_file, ctx);
+        } else {
+            on_file(scratch->child, ctx);
+        }
+    }
+
+    (void)f_closedir(&scratch->dir);
+    heap_caps_free(scratch);
+}
+
+esp_err_t storage_walk_files(const char *vfs_root, storage_walk_skip_cb_t skip,
+                             storage_file_cb_t on_file, void *ctx)
+{
+    struct stat st;
+
+    if (vfs_root == NULL || on_file == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (stat(vfs_root, &st) != 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        storage_walk_dir(vfs_root, 0, skip, on_file, ctx);
+    } else {
+        on_file(vfs_root, ctx);
+    }
+    return ESP_OK;
+}
+
+/** Context for one `findstr` file scan. */
+typedef struct {
+    const findstr_opts_t *opts;
+    bool prefix_file;
+    int *total_matches;
+    int matched_lines;
+} findstr_file_ctx_t;
+
+/** Per-line matching + printing for `findstr` (over storage_scan_file_lines). */
+static bool shell_findstr_line_cb(const char *path, int lineno, const char *line,
+                                  void *ctx)
+{
+    findstr_file_ctx_t *c = (findstr_file_ctx_t *)ctx;
+    bool hit = false;
+    int index;
+
+    if (*c->total_matches >= P4_CONFIG_FINDSTR_MATCH_MAX) {
+        return false;
+    }
+    for (index = 0; index < c->opts->nstrings; index++) {
+        if (shell_findstr_match_line(c->opts->strings[index],
+                                     c->opts->regex_strings[index],
+                                     line, c->opts->icase, c->opts->beg,
+                                     c->opts->end, c->opts->whole)) {
+            hit = true;
+            break;
+        }
+    }
+    if (c->opts->invert) {
+        hit = !hit;
+    }
+    if (!hit) {
+        return true;
+    }
+
+    c->matched_lines++;
+    (*c->total_matches)++;
+
+    if (c->opts->files_only) {
+        return true;   /* the filename is printed once at the end */
+    }
+    if (c->prefix_file) {
+        shell_transcript_appendf("%s:", path);
+    }
+    if (c->opts->numbers) {
+        shell_transcript_appendf("%d:", lineno);
+    }
+    shell_transcript_appendf("%s\n", line);
+    return true;
+}
+
 /**
  * Search one file, printing matching lines. When @p prefix_file is set (more
  * than one source) each line is prefixed with the filename. Stops once the
@@ -1357,119 +1528,25 @@ static bool shell_findstr_add_string(findstr_opts_t *opts, const char *text, boo
 static void shell_findstr_search_file(const char *path, const findstr_opts_t *opts,
                                       bool prefix_file, int *total_matches)
 {
-    char line[SHELL_TEXT_LINE_BYTES];
-    FILE *file;
-    int lineno = 0;
-    int matched_lines = 0;
+    findstr_file_ctx_t ctx = { opts, prefix_file, total_matches, 0 };
 
-    file = fopen(path, "r");
-    if (file == NULL) {
+    if (storage_scan_file_lines(path, shell_findstr_line_cb, &ctx) != ESP_OK) {
         shell_print_error("findstr: cannot open %s (%s)", path, strerror(errno));
         return;
     }
-
-    while (fgets(line, sizeof(line), file) != NULL &&
-           *total_matches < P4_CONFIG_FINDSTR_MATCH_MAX) {
-        bool hit = false;
-        int index;
-
-        lineno++;
-        shell_text_strip_eol(line);
-
-        for (index = 0; index < opts->nstrings; index++) {
-            if (shell_findstr_match_line(opts->strings[index], opts->regex_strings[index],
-                                         line, opts->icase, opts->beg, opts->end,
-                                         opts->whole)) {
-                hit = true;
-                break;
-            }
-        }
-        if (opts->invert) {
-            hit = !hit;
-        }
-        if (!hit) {
-            continue;
-        }
-
-        matched_lines++;
-        (*total_matches)++;
-
-        if (opts->files_only) {
-            continue;   /* the filename is printed once at the end */
-        }
-        if (prefix_file) {
-            shell_transcript_appendf("%s:", path);
-        }
-        if (opts->numbers) {
-            shell_transcript_appendf("%d:", lineno);
-        }
-        shell_transcript_appendf("%s\n", line);
-    }
-
-    fclose(file);
-
-    if (opts->files_only && matched_lines > 0) {
+    if (opts->files_only && ctx.matched_lines > 0) {
         shell_transcript_appendf("%s\n", path);
     }
 }
 
-/**
- * Recursively search every file under @p vfs_dir (`findstr /S`). Each level
- * keeps its state in one heap block, matching the `find` discovery walker.
- */
-static void shell_findstr_walk(const char *vfs_dir, int depth, const findstr_opts_t *opts,
-                               int *total_matches)
+/** `findstr /S` per-file visitor (over storage_walk_files). */
+static void shell_findstr_visit_file(const char *path, void *ctx)
 {
-    struct findstr_level_scratch {
-        char fatfs_path[SHELL_SD_PATH_BYTES];
-        char child[SHELL_SD_PATH_BYTES];
-        FF_DIR dir;
-        FILINFO info;
-    } *scratch = NULL;
-    FRESULT result;
+    findstr_file_ctx_t *fctx = (findstr_file_ctx_t *)ctx;
 
-    if (depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX ||
-        *total_matches >= P4_CONFIG_FINDSTR_MATCH_MAX) {
-        return;
+    if (*fctx->total_matches < P4_CONFIG_FINDSTR_MATCH_MAX) {
+        shell_findstr_search_file(path, fctx->opts, true, fctx->total_matches);
     }
-
-    scratch = calloc(1, sizeof(*scratch));
-    if (scratch == NULL) {
-        shell_record_errorf("findstr", ESP_ERR_NO_MEM, "Out of memory during findstr /S");
-        return;
-    }
-    if (shell_sd_vfs_to_fatfs_path(vfs_dir, scratch->fatfs_path, sizeof(scratch->fatfs_path)) != ESP_OK) {
-        free(scratch);
-        return;
-    }
-    result = f_opendir(&scratch->dir, scratch->fatfs_path);
-    if (result != FR_OK) {
-        free(scratch);
-        return;
-    }
-
-    while (true) {
-        result = f_readdir(&scratch->dir, &scratch->info);
-        if (result != FR_OK || scratch->info.fname[0] == '\0' ||
-            *total_matches >= P4_CONFIG_FINDSTR_MATCH_MAX) {
-            break;
-        }
-        if (strcmp(scratch->info.fname, ".") == 0 || strcmp(scratch->info.fname, "..") == 0) {
-            continue;
-        }
-        if (snprintf(scratch->child, sizeof(scratch->child), "%s/%s",
-                     vfs_dir, scratch->info.fname) < 0) {
-            continue;
-        }
-        if ((scratch->info.fattrib & AM_DIR) != 0) {
-            shell_findstr_walk(scratch->child, depth + 1, opts, total_matches);
-        } else {
-            shell_findstr_search_file(scratch->child, opts, true, total_matches);
-        }
-    }
-
-    (void)f_closedir(&scratch->dir);
-    free(scratch);
 }
 
 /**
@@ -1685,7 +1762,9 @@ int shell_command_findstr(int argc, char **argv)
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                shell_findstr_walk(resolved, 0, &opts, &total_matches);
+                findstr_file_ctx_t fctx = { &opts, true, &total_matches, 0 };
+
+                (void)storage_walk_files(resolved, NULL, shell_findstr_visit_file, &fctx);
             } else {
                 shell_findstr_search_file(resolved, &opts, nfiles > 1, &total_matches);
             }

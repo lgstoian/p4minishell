@@ -3,7 +3,7 @@
 This document lists the C API each component exposes to the rest of the
 firmware, organized by module and mirroring the headers under `components/`.
 
-> **Current public API reference (v1.1.0).** For the working rules and
+> **Current public API reference (v1.2.1).** For the working rules and
 > invariants behind these functions see [`ai-context.md`](ai-context.md); for
 > integration examples see [`SDK.md`](SDK.md); for the user-facing command
 > surface see [`command.md`](command.md). Current verified test baselines live
@@ -381,8 +381,20 @@ bool draw_hold_active(void);                      /* `draw hold` state (unit-tes
 
 /* components/command/gfx_commands.c  (raster core: components/gfx/) */
 bool shell_command_gfx(int argc, char **argv);    /* init|close|status|clear|pixel|line|rect|circle|
-                                                     hline|vline|triangle|ellipse|polygon|fill|text|
-                                                     show|load|blit|free|slots|save */
+                                                      hline|vline|triangle|ellipse|polygon|fill|text|
+                                                      show|load|blit|blitmany|free|slots|save */
+
+/* components/command/screen_commands.c (declarative .FRM screens) */
+void shell_command_screen(int argc, char **argv); /* screen run|info <file.frm> */
+int  screen_split_list(const char *text, char delim, char *store, size_t store_size,
+                       const char **out, int max);  /* pure `|`-split, unit-tested */
+
+/* storage wildcard family (components/storage/storage.c) */
+esp_err_t storage_expand_dirs(const char *pattern, char ***tokens_out,
+                              int *count_out);     /* dirs-only (`for /D`) */
+esp_err_t storage_expand_recursive(const char *root, const char *name_pattern,
+                                   char ***tokens_out,
+                                   int *count_out); /* tree walk (`for /R`) */
 
 /* components/command/asset_commands.c */
 void shell_command_crc32(int argc, char **argv);
@@ -395,8 +407,29 @@ bool     asset_crc_file(const char *resolved, uint32_t *crc_out);
 int      asset_verify_app(const char *tag, const char *app, bool list_only);  /* 0 ok, 1 fail */
 
 /* components/command/pkg_commands.c  (packaged SD apps: PKGS/<APP>/ -> APPS/) */
-void shell_command_pkg(int argc, char **argv);     /* list|info|verify|check|install|remove */
+void shell_command_pkg(int argc, char **argv);     /* list|info|verify|check|install [/signed]|remove|key ... */
 bool pkg_app_name_from_appinfo(const char *filename, char *out, size_t size);  /* pure, unit-tested */
+
+/* Manifest trust (ECDSA P-256 + SHA-256; contract in ABI.md). The pure
+ * helpers are unit-tested; the key store uses the `p4sign` NVS namespace. */
+typedef enum { PKG_SIGN_NONE = 0, PKG_SIGN_OK, PKG_SIGN_BAD,
+               PKG_SIGN_NOKEY, PKG_SIGN_ERROR } pkg_sign_status_t;
+#define PKG_SIGN_PUB_BYTES 64   /* raw P-256 X||Y */
+#define PKG_SIGN_SIG_BYTES 64   /* raw r||s */
+#define PKG_SIGN_HASH_BYTES 32  /* SHA-256 */
+bool pkg_is_sign_line(const char *line);
+bool pkg_sign_parse(const char *line, uint8_t *sig_out);
+int  pkg_sign_canonical(const char *text, char *out, size_t out_size, size_t *len_out);
+int  pkg_sign_hash(const uint8_t *msg, size_t msg_len, uint8_t *hash_out);
+int  pkg_sign_verify(const uint8_t *msg, size_t msg_len,
+                     const uint8_t *sig, const uint8_t *pub);   /* 0 valid */
+void pkg_sign_fingerprint(const uint8_t *pub, char *hex_out);
+int  pkg_sign_pubkey_load(uint8_t *pub_out);   /* 0 ok, 1 none, 2 NVS/corrupt */
+int  pkg_sign_pubkey_save(const uint8_t *pub);
+int  pkg_sign_pubkey_clear(void);
+pkg_sign_status_t pkg_sign_check_with_key(const char *text, const uint8_t *pub,
+                                          char *fingerprint_out);
+pkg_sign_status_t pkg_sign_check_manifest(const char *text, char *fingerprint_out);
 
 /* components/command/plot_commands.c  (coordinate layer over gfx canvas / TUI) */
 bool shell_command_plot(int argc, char **argv);    /* tui|window|auto|axes|func|polar|para|
@@ -920,11 +953,19 @@ const char *shell_env_get(const char *name);
 esp_err_t   shell_env_set(const char *name, const char *value);
 void        shell_expand_variables(const char *input, char *output, size_t output_size);
 ```
-- Names are normalized to upper case and must be alphanumeric plus underscore. Setting an empty
-  or `NULL` value clears the slot. `shell_env_set()` returns `ESP_ERR_NO_MEM` when all 24 slots
-  are used.
+```c
+void shell_expand_substring(const char *value, int start, bool has_len, int len,
+                            char *out, size_t out_size);
+void shell_expand_replace(const char *value, const char *old, const char *new_str,
+                          char *out, size_t out_size);
+```
+- Names are normalized to upper case and must be alphanumeric plus underscore
+  plus `[`/`]` (indexed `NAME[i]` array slots). Setting an empty
+  or `NULL` value clears the slot. `shell_env_set()` returns `ESP_ERR_NO_MEM` when all 64 slots
+  (`P4_CONFIG_ENV_VAR_MAX`) are used.
 - `shell_expand_variables()` handles `%VAR%`, `%0` (script name), `%1`..`%9` (the caller's
-  arguments), `%*` (every argument from `%1` onward), `%%` → `%`, and the dynamic
+  arguments), `%*` (every argument from `%1` onward), `%%` → `%`, the DOS string
+  forms `%VAR:~start[,len]%` / `%VAR:old=new%` (pure helpers above), and the dynamic
   pseudo-variables `%DATE%` (`MM-DD-YYYY`), `%TIME%` (`HH:MM:SS`), `%RANDOM%`
   (`0..32767`), `%CD%` (current directory), and `%ERRORLEVEL%`. An **undefined `%VAR%`
   expands to the empty string** (cmd.exe parity), so `if "%var%"==""` works. Single-quoted
@@ -1045,7 +1086,17 @@ void shell_command_gosub(int argc, char **argv);   /* BASIC twin of call :label 
 void shell_command_return(int argc, char **argv);  /* leave a call/gosub scope */
 void shell_command_on(int argc, char **argv);      /* on <expr> goto|gosub <a,b,...> */
 void shell_command_if(int argc, char **argv);
-void shell_command_for(int argc, char **argv);    /* classic tokens/wildcards + for /f */
+void shell_command_for(int argc, char **argv);    /* classic + /f + /L + /A + /D + /R */
+bool shell_forl_parse(const char *set, int32_t *start_out, int32_t *step_out,
+                      int32_t *end_out);   /* pure (start,step,end) parser */
+int  shell_fora_collect(const char *prefix, char names[][P4_CONFIG_ENV_NAME_BYTES],
+                        int max);          /* pure PREFIX[...] collector */
+const char *shell_switch_select(const char *value, char **cases, int count);  /* pure match:label */
+void shell_command_switch(int argc, char **argv);  /* switch string dispatch (goto twin of on) */
+void shell_command_while(int argc, char **argv);  /* while <expr> do cmd (0/1/2) */
+void shell_while_translate_keywords(const char *cond, char *out, size_t out_size);  /* pure EQU..GEQ map */
+bool shell_delayed_expansion_enabled(void);  /* !VAR! flag for the current task */
+void shell_set_delayed_expansion(bool enabled);
 void shell_command_goto(int argc, char **argv);
 void shell_command_shift(int argc, char **argv);
 void shell_command_pause(int argc, char **argv);      /* blocks on a real keypress */
@@ -2245,7 +2296,7 @@ int modal_hexview_run(const char *title, const char *path, uint32_t timeout_ms);
 - OTA progress text remains `C6 OTA: XX% (YYYY KB / ZZZZ KB)`.
 - OTA continues to validate ESP-IDF app-image magic `0xE9` and ESP32-C6 chip ID `0x000D` before transfer.
 
-## Hardware module APIs (v1.2.0)
+## Hardware module APIs (v1.2.1)
 
 These leaf modules back the M5Stack Tab5 hardware support; all are safe to call on
 boards that lack the hardware (they degrade to a benign error).
@@ -2303,6 +2354,19 @@ esp_err_t tab5kbd_set_rgb_index(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
 esp_err_t tab5kbd_get_rgb_index(uint8_t index, uint8_t *r, uint8_t *g, uint8_t *b);
 esp_err_t tab5kbd_set_brightness(uint8_t percent);
 ```
+
+### Crypt file core (`components/command/command.h`, `crypt_commands.c`)
+```c
+int crypt_derive_key(const char *pass, const uint8_t *salt, uint8_t *key_out);
+int crypt_encrypt_mem(const uint8_t *in, size_t len, const char *pass,
+                      uint8_t *out, size_t out_size, size_t *out_len);
+int crypt_decrypt_mem(const uint8_t *in, size_t len, const char *pass,
+                      uint8_t *out, size_t out_size, size_t *out_len);
+```
+- `P4CRYPT1` envelope (salt + nonce + ciphertext + tag), PBKDF2-SHA256 key,
+  512 B streaming chunks; software AES-256-GCM fallback in
+  `components/swgcm/include/sw_gcm.h` (`sw_gcm_*`) seals the identical format
+  (bugs.md F23, fixed in v1.2.1).
 
 ### New shell command hooks
 - `void shell_execute_imu_command(int argc, char **argv)` (`imu`)

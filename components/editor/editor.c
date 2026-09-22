@@ -23,6 +23,7 @@
 #include "modal.h"
 #include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -44,10 +45,7 @@ void *editor_mem_alloc(size_t size)
     if (size == 0) {
         size = 1;
     }
-    ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ptr == NULL) {
-        ptr = malloc(size); /* PSRAM absent (unit tests / early boot) */
-    }
+    ptr = p4heap_alloc_psram(size);
     return ptr;
 }
 
@@ -61,12 +59,9 @@ void *editor_mem_realloc(void *ptr, size_t size)
     if (size == 0) {
         size = 1;
     }
-    out = heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (out == NULL) {
-        /* PSRAM exhausted or the block is internal-cap: retry on the default
-         * heap. heap_caps_realloc leaves @p ptr valid on failure. */
-        out = realloc(ptr, size);
-    }
+    /* p4heap_realloc_psram leaves @p ptr valid on failure (NULL propagates
+     * to the caller, which keeps using the old block). */
+    out = p4heap_realloc_psram(ptr, size);
     return out;
 }
 
@@ -85,15 +80,12 @@ void editor_mem_free(void *ptr)
  * document lives in PSRAM, and on this P4 build PSRAM is not
  * `MALLOC_CAP_DMA`, so PSRAM buffers must never be handed to `fread`/`fwrite`
  * directly (the SDMMC DMA cannot reach them). Data is bounced through this
- * buffer. Falls back to the default heap if no DMA-capable block is available.
+ * buffer. Returns NULL on failure so callers fall back to a safe path
+ * (never a PSRAM pointer: PSRAM is not DMA-capable on this P4 build).
  */
 static void *editor_dma_alloc(size_t size)
 {
-    void *ptr = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    if (ptr == NULL) {
-        ptr = malloc(size);
-    }
-    return ptr;
+    return p4heap_alloc_dma(size);
 }
 
 /* ========================================================================

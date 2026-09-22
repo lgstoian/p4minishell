@@ -29,6 +29,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -270,7 +271,7 @@ void *app_alloc(size_t size)
         return NULL;
     }
     if (size >= APPLIB_PSRAM_THRESHOLD) {
-        void *block = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+        void *block = p4heap_alloc_psram(size);
 
         if (block != NULL) {
             return block;

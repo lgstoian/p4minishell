@@ -67,6 +67,8 @@ PUSH_APPS = [
     ("controlflow", "CONTROL.APPINFO", True),
     ("writer", "WRITER.BAT", False),
     ("writer", "WRITER.APPINFO", True),
+    ("hybrid", "HYBRID.BAT", False),
+    ("hybrid", "HYBRID.APPINFO", True),
 ]
 
 # Mirrors apps/companion/push_sd.py FILES.
@@ -78,6 +80,7 @@ COMPANION_FILES = [
 
 # Apps that run to completion on their own: (name, start, done, timeout).
 NONSTOP = [
+    ("HYBRID", "[M-HYBRID]", "[M-HYBRID-DONE]", 60.0),
     ("BOUNCE", "[M-BOUNCE]", "[M-BOUNCE-DONE]", 200.0),
     ("GFXTOOL", "[M-GFXTOOL]", "[M-GFXTOOL-DONE]", 120.0),
     ("PLOT", "[M-PLOT]", "[M-PLOT-DONE]", 60.0),
@@ -365,6 +368,13 @@ def run(dev, ctx):
 
     for name, start, done, timeout in NONSTOP:
         _oneshot(dev, c, name, start, done, timeout)
+
+    # Hybrid model: every app launches through a .BAT shim, even when a
+    # linked-in C entry does the work (see ABI.md).
+    c.expect("launch tags hybrid shims", "[hybrid]", listed)
+    hybrid = _run(dev, c, "launch HYBRID", "launch HYBRID", timeout=60.0)
+    c.expect("hybrid shim reaches native entry", "HELLO_RESULT=ok", hybrid)
+    c.expect("hybrid shim sees no BAD markers", "[M-HYBRID] BAD", hybrid, want=False)
 
     _drive(dev, c, *DRIVE[0])
     _snake(dev, c)

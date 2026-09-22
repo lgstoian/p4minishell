@@ -5,7 +5,7 @@
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v1.1.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.2.1):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
@@ -163,13 +163,14 @@ from the touch keyboard alone. The editor **opens on the Nav page**:
 
 1. **Letters** (default) — lowercase.
 2. **Uppercase** — `ABC`.
-3. **Symbols** — every printable ASCII character including the shell-critical
+3. **Numbers** — digits `0`–`9`.
+4. **Symbols** — every printable ASCII character including the shell-critical
    `|`, `^`, `~`, and `` ` ``; its `Nav` button switches to the Nav page.
-4. **Nav** — the editor's control page, a uniform 4×6 grid: `Tab`, arrows,
+5. **Nav** — the editor's control page, a uniform 4×6 grid: `Tab`, arrows,
    `Home`/`End`, `PgUp`/`PgDn`, `Del`, `Ins`, `Undo`, `Redo`, `Find`, `Next`
    (repeat find), `Replace`, `ReplAll`, `Case`, `Goto`, `Save`, `SaveAs`,
    `Open`, `Edit` (→ the Edit page), and `abc` (→ letters).
-5. **Edit** — enter it with `Edit` on the Nav page, a 3×6 grid: `Copy`, `Cut`,
+6. **Edit** — enter it with `Edit` on the Nav page, a 3×6 grid: `Copy`, `Cut`,
    `Paste`, `SelAll`, `WordL`/`WordR` (word left/right), `DocTop`/`DocBot`
    (document home/end), `DelLine` (delete line), `DelEOL` (delete to end of
    line), `Reload`, `Quit`, `Preview`, `Comment`, `Match`, `Wrap`, `Focus`,

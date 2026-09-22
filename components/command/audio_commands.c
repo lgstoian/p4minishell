@@ -48,7 +48,7 @@ void shell_command_volume(int argc, char **argv)
 
     error = audio_set_volume(percent);
     if (error != ESP_OK) {
-        shell_print_error("volume: failed to initialize the ES8311 speaker path (%s)", esp_err_to_name(error));
+        shell_print_error("volume: failed to initialize the codec speaker path (%s)", esp_err_to_name(error));
         shell_record_errorf("volume", error, "Failed to initialize speaker device");
         batch_set_errorlevel(1);
         return;

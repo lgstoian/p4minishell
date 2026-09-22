@@ -39,6 +39,7 @@
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -1384,10 +1385,7 @@ bool shell_command_plot(int argc, char **argv)
         }
         if (!plot_require_target(&tui)) return false;
         cap = P4_CONFIG_PLOT_MAX_POINTS;
-        vals = heap_caps_malloc((size_t)cap * sizeof(*vals), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (vals == NULL) {
-            vals = malloc((size_t)cap * sizeof(*vals));
-        }
+        vals = p4heap_alloc_psram((size_t)cap * sizeof(*vals));
         if (vals == NULL) {
             shell_transcript_appendf_ansi(SH_ERR "plot bar: out of memory\n" SH_RST);
             batch_set_errorlevel(1);

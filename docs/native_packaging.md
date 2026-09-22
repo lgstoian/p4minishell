@@ -1,79 +1,95 @@
-# Native-App Packaging Spec (v1.1.0 — store-only)
+# Native-App Packaging Spec (v1.2 — hybrid launch + signed manifests)
 
-How an SD-deployable **native** app is described, verified, and installed
-with the existing `pkg` system. In v1.1.0 native payloads are **stored and
-verified only** — the shell cannot execute them yet (bare-metal ESP-IDF has
-no `dlopen`; a loader is v1.2+ work). Storing them now means bundles built
-today keep working when execution lands.
+How an SD-deployable app is described, verified, installed, and launched with
+the `pkg` system. **Every** app launches through a `*.bat` file; the work
+behind the shim is pure batch, a linked-in C entry (hybrid), or a
+native-linked entry reached directly (native). There is still **no SD code
+execution** — the `.P4X`/`.bin` payload is a verified data blob (see
+[`ABI.md`](../ABI.md) §1). This document is the packaging walk-through; the
+frozen contract is `ABI.md`.
 
-- **Version:** v1.1.0 · **Target:** ESP32-P4 + ESP32-C6
-- Related: [`command.md`](../command.md) (`pkg`, `asset`, `launch`),
-  [`SDK.md`](../SDK.md) (applib ABI), `tools/push_pkgs.py`.
+- **Packaging spec:** v1.2 (firmware v1.2.1) · **Target:** ESP32-P4 + ESP32-C6
+- Related: [`ABI.md`](../ABI.md) (the contract), [`command.md`](../command.md)
+  (`pkg`, `asset`, `launch`), [`SDK.md`](../SDK.md) (applib ABI),
+  `tools/pkg_sign.py`, `apps/push_pkgs.py`.
 
 ## 1. Bundle layout
-
-Same shape as a batch bundle, plus two APPINFO keys:
 
 ```
 PKGS/<APP>/
   <APP>.APPINFO      INI metadata (see §2)
-  <APP>.ASSETS       path=HEXCRC manifest (unchanged, shared with `asset`)
-  NATIVE/<APP>.P4X   the opaque native payload (any bytes, CRC-covered)
-  ...                optional batch shims / docs (normal payloads)
+  <APP>.ASSETS       path=HEXCRC lines + optional SIGN= line (see §4)
+  <APP>.BAT          the launch shim (batch and hybrid apps)
+  ...                optional payloads (data, native blob, docs)
 ```
 
-Payload convention: the executable blob lives at `NATIVE/<APP>.P4X`
-(uppercase app name, matching `asset_app_ok`). Extra data files may sit
-beside it; every file must be manifest-listed or install aborts.
+Payload convention: an optional native blob lives at `NATIVE/<APP>.P4X`
+(uppercase app name, matching `asset_app_ok`). Every file must be
+manifest-listed or install aborts. `pkg install <APP>` copies each payload to
+its install-relative path and the `.APPINFO`/`.ASSETS` into `APPS/`.
 
 ## 2. APPINFO keys
 
 | Key | Required | Meaning |
 |---|---|---|
 | `title`, `description`, `version` | yes | As for batch apps |
-| `type` | yes for native | `batch` (default when absent) or `native`; anything else aborts `pkg install` loudly |
-| `abi` | native only | applib ABI the blob was built against, e.g. `applib-1` (must equal `P4_CONFIG_NATIVE_ABI`); mismatch warns at install, refuses at future execution |
-| `arch` | native only | `esp32p4` today; a future loader refuses anything else |
-| `entry` | native only | C symbol the loader will resolve, e.g. `myapp_main` (an `app_main_t`) |
+| `type` | no | `batch` (default when absent), `hybrid`, or `native`; anything else aborts `pkg install` loudly |
+| `abi` | hybrid/native | `applib-1`; must equal `P4_CONFIG_NATIVE_ABI` (mismatch warns at install, refuses at execution) |
+| `arch` | hybrid/native | `esp32p4` |
+| `entry` | hybrid/native | C entry name the shim/dispatcher invokes; hybrid bundles MUST set it |
 
 ```ini
 title=Hello Native
-description=applib sample as a native package
+description=Batch shim driving the linked hello entry
 version=1.0
-type=native
+type=hybrid
 abi=applib-1
 arch=esp32p4
-entry=hello_main
+entry=hello
 ```
 
-## 3. Install / verify / remove semantics (v1.1.0)
+## 3. Install / verify / remove semantics (v1.2)
 
-- `pkg install <app>`: identical two-pass flow (verify-then-copy over
-  `shell_fs_copy_file`), including `.APPINFO`/`.ASSETS`. Afterwards, for
-  `type=native`, it prints
-  `pkg: <app> is a native package (stored only, execution needs a v1.2+ loader)`
-  and succeeds (ERRORLEVEL 0). Unknown `type=` aborts before any copy
-  (ERRORLEVEL 1). An `abi` mismatch with `P4_CONFIG_NATIVE_ABI` warns but
-  still stores.
-- `pkg verify|check|info|list`: unchanged mechanics; `list`/`info` display
-  the `type` (and `abi` when present).
+- `pkg install <app> [/signed]`: two-pass flow (verify-then-copy over
+  `shell_fs_copy_file`). Pass 1 checks CRCs **and** the manifest trust verdict
+  (see §4); a BAD signature aborts before any copy. Pass 2 copies payloads,
+  then metadata + manifest.
+  - `type=batch` installs as before.
+  - `type=hybrid` requires `entry=`; install reports
+    `pkg: <app> is hybrid (launch <app> runs <app>.BAT into <entry>)`.
+  - `type=native` reports the store-only note; the blob is verified and in
+    place but runs only if linked into the firmware.
+  - Unknown `type=` aborts before any copy (ERRORLEVEL 1).
+- `pkg verify|check|info|list`: unchanged mechanics; `list`/`info` show the
+  `type` and the `signed:` line; hybrid/native are flagged.
 - `pkg remove <app>`: trashes payloads + metadata like batch apps.
-- `launch`: native apps are never offered — discovery scans `*.bat`, and a
-  v1.1 native bundle must not ship a same-name `.BAT` shim (reserved for the
-  future loader entry point).
+- `launch`: discovers `*.bat`, so batch and hybrid apps appear; hybrid shims
+  are tagged ` [hybrid]` in `/list` and the menu. Native-only entries are
+  reached by name (dev/test) and are not offered by `launch`.
 
-## 4. Trust model
+## 4. Trust model (CRC + ECDSA P-256)
 
-Same as batch bundles today: per-file CRC-32 against the manifest, verified
-before anything is copied. No signatures in v1.1.0 — do not install native
-payloads from untrusted sources; a malicious blob is inert on v1.1 firmware
-but must still be treated as untrusted bytes. Signed manifests are v1.2+
-work (see `roadmap.md` platform/security rows).
+The manifest is integrity-checked by CRC and may be authenticity-checked by a
+`SIGN=<128 hex>` line (raw `r||s`) over the canonical manifest bytes with a
+trusted raw P-256 public key in the `p4sign` NVS store (`pkg key ...`). Bad
+signatures always refuse; unsigned bundles keep the CRC-only contract unless
+`P4_CONFIG_PKG_REQUIRE_SIGN=1` or `/signed` demands otherwise. Full rules,
+canonicalization, and the enforcement matrix are in [`ABI.md`](../ABI.md) §4.
 
-## 5. Future loader sketch (v1.2+, non-normative)
+Host tooling:
 
-Position-independent blob (`-fPIC`, single `app_main_t` entry) relocated by
-a firmware loader into PSRAM, `abi`/`arch` checked, then registered through
-the existing `app_register` table so dispatch, ERRORLEVEL, and redirection
-behave exactly like linked-in apps. The `NATIVE/*.P4X` path and this spec's
-keys are chosen so v1.1 bundles load unmodified.
+```powershell
+python tools/pkg_sign.py keygen --out mykey     # mykey.priv.pem + mykey.pub.bin
+python apps/push_pkgs.py COM3 --sign mykey.priv.pem
+# push mykey.pub.bin and, on the device:
+pkg key install mykey.pub.bin
+pkg install MYAPP /signed
+```
+
+## 5. Future: true native execution
+
+Running unmodified SD code needs a dynamic linker/relocator and per-app
+memory protection, which this bare-metal ESP-IDF target does not provide
+(`ABI.md` §5). Until then, C apps are linked into the firmware and reach users
+through a `.BAT` shim (hybrid). The `NATIVE/<APP>.P4X` path and the metadata
+keys are chosen so today's bundles stay valid if such a loader ever lands.

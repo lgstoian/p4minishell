@@ -41,6 +41,7 @@
 #include "alarm.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -105,14 +106,11 @@ static void shell_command_import_usage(void)
     shell_print_usage("Usage: import alarms <csv|json|ics> <file>");
 }
 
-/** Heap helper: PSRAM first, plain malloc fallback. Freed with heap_caps_free. */
+/** Heap helper: PSRAM (bulk import buffers must stay out of the scarce
+ *  internal DMA heap). Freed with heap_caps_free. */
 static void *import_alloc(size_t size)
 {
-    void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (p == NULL) {
-        p = malloc(size);
-    }
-    return p;
+    return p4heap_alloc_psram(size);
 }
 
 /** Guarded SD open for reading (mirrors the csv source pattern). */

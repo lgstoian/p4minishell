@@ -77,6 +77,15 @@ buffers:
       v0.35.2 (was internal DRAM, which forced the very trims it existed to
       survive).
     range: "1024..65536"
+  transcript_max_spans:
+    value: 384
+    type: int
+    description: >-
+      Maximum coloured spans the transcript span group retains. Every append
+      makes LVGL re-wrap the whole group to size it, so an unbounded scrollback
+      makes each line O(all history); the oldest spans past this cap are
+      dropped (the newest are kept) to bound the per-append cost.
+    range: "64..4096"
   transcript_scroll_step:
     value: 60
     type: int
@@ -102,6 +111,15 @@ buffers:
       often (plus once per command, before key waits, and before screenshots);
       serial output stays live on every line.
     range: "0..2000"
+  transcript_apply_tick_ms:
+    value: 10
+    type: int
+    description: >-
+      Period of the transcript apply pump on the LVGL task. The command worker
+      stages text and wakes the port task; the apply timer consumes it within
+      one tick, bounding visible transcript staleness without serializing the
+      worker behind the LVGL port lock (bugs.md F26).
+    range: "5..100"
   async_transcript_bytes:
     value: 512
     type: size_t
@@ -600,6 +618,11 @@ image:
     type: int
     description: "Show the image viewer fit-to-screen (1) or at native size only (0)"
     range: "0..1"
+  blitmany_max:
+    value: 64
+    type: int
+    description: "Maximum sprite stamps one `gfx blitmany` command draws"
+    range: "8..256"
 
 # ---- Wi-Fi ----
 wifi:
@@ -1242,6 +1265,29 @@ boot_scripting:
     description: "Name of the directory (under the SD mount point) where temporary files live; all temp files live on the SD card"
     range: "any valid SD directory name"
 
+# ---- Declarative Screen Flows (screen flow <file.flow>) ----
+screen_flow:
+  steps:
+    value: 16
+    type: int
+    description: "Maximum distinct screen steps one .FLOW file may declare (P4_CONFIG_SCREEN_FLOW_STEPS)"
+    range: "2..64"
+  rules:
+    value: 64
+    type: int
+    description: "Maximum routing rules across all steps of one flow, evaluated in file order (P4_CONFIG_SCREEN_FLOW_RULES)"
+    range: "2..256"
+  iter_max:
+    value: 256
+    type: int
+    description: "Maximum step transitions one screen flow run may take before stopping with ERRORLEVEL 1 (bounds a mis-wired loop)"
+    range: "8..4096"
+  id_bytes:
+    value: 16
+    type: size_t
+    description: "Maximum length of a flow step id including NUL (P4_CONFIG_SCREEN_FLOW_ID_BYTES)"
+    range: "8..48"
+
 # ---- Batch Engine and Environment ----
 batch_env:
   env_var_max:
@@ -1329,7 +1375,12 @@ batch_env:
   native_abi:
     value: "applib-1"
     type: string
-    description: "Native-app ABI tag; `pkg install` warns when a native bundle abi= differs, the future loader refuses (P4_CONFIG_NATIVE_ABI, see docs/native_packaging.md)"
+    description: "Native-app ABI tag; `pkg install` warns when a native/hybrid bundle abi= differs, execution refuses (P4_CONFIG_NATIVE_ABI, see ABI.md)"
+  pkg_require_sign:
+    value: 0
+    type: int
+    description: "Manifest trust policy; 1 refuses unsigned bundles at `pkg install`, 0 warns (a bad signature always refuses; `pkg install /signed` enforces per invocation)"
+    range: "0..1"
   batch_depth_max:
     value: 4
     type: size_t
@@ -1395,6 +1446,36 @@ batch_env:
     type: int
     description: "Mismatches comp reports before ending the comparison (DOS prints the first 10 and stops)"
     range: "1..64"
+
+# ---- Global Find: text-file scope (gfind <text> /files) ----
+# Bounds one opt-in file scan; gfind reuses the shared storage walk/scan core
+# (the one findstr /S uses), so no second search implementation exists.
+gfind:
+  max_files:
+    value: 256
+    type: int
+    description: "Maximum files gfind /files opens in one run (P4_CONFIG_GFIND_MAX_FILES)"
+    range: "16..4096"
+  max_file_bytes:
+    value: 131072
+    type: size_t
+    description: "Files larger than this are skipped by gfind /files (P4_CONFIG_GFIND_MAX_FILE_BYTES)"
+    range: "4096..8388608"
+  max_matches:
+    value: 256
+    type: int
+    description: "Maximum matching lines gfind /files prints before truncating (P4_CONFIG_GFIND_MAX_MATCHES)"
+    range: "16..4096"
+  search_files_default:
+    value: 0
+    type: int
+    description: "Default file scope when /files is absent (0 = stores only, 1 = search files everywhere) (P4_CONFIG_GFIND_SEARCH_FILES_DEFAULT)"
+    range: "0..1"
+  skip_dirs:
+    value: "DBS,ALARMS"
+    type: string
+    description: "Directory names gfind /files never descends into; the structured stores are covered by their own scopes (P4_CONFIG_GFIND_SKIP_DIRS)"
+    range: "comma-separated directory names"
   pause_delay_ms:
     value: 2000
     type: uint32_t
@@ -1494,6 +1575,16 @@ batch_env:
     type: size_t
     description: "Maximum length of the `for /f` `delims=` character set"
     range: "1..64"
+  forl_iter_max:
+    value: 100000
+    type: int
+    description: "Maximum iterations one `for /L` numeric loop runs"
+    range: "64..1000000"
+  while_iter_max:
+    value: 100000
+    type: int
+    description: "Maximum iterations one `while` loop runs before it stops with ERRORLEVEL 1"
+    range: "64..1000000"
   csv_max_cols:
     value: 32
     type: int
@@ -1535,7 +1626,7 @@ batch_env:
     description: "Maximum length of a registered native app's one-line description (native-app ABI)"
     range: "16..128"
   launch_max:
-    value: 24
+    value: 40
     type: size_t
     description: "Maximum number of script apps (.bat/.cmd) surfaced by the launch command / menu (PATH + sd:/APPS discovery)"
     range: "4..64"
@@ -1623,6 +1714,21 @@ gpio_hardware:
     type: int
     description: "I2C transaction timeout for the INA226 fuel gauge on gauge boards (M5Stack Tab5). Read-only; the firmware never writes the charge rails."
     range: "10..1000"
+  battery_present_stable_samples:
+    value: 3
+    type: int
+    description: "Pack-presence window: readings in the ambiguous rail band are accepted only after this many consecutive stable samples (no-pack floats between the rail and a low value)."
+    range: "2..8"
+  battery_present_max_swing_mv:
+    value: 800
+    type: int
+    description: "Maximum peak-to-peak swing (mV) across the presence window that still counts as a stable pack voltage."
+    range: "100..2000"
+  battery_rail_band_tol_mv:
+    value: 200
+    type: int
+    description: "Width (mV) of the ambiguous rail band below the board full voltage; readings this close to full need the stability window."
+    range: "0..1000"
   battery_min_sleep_freq_mhz:
     value: 40
     type: int
@@ -2325,10 +2431,10 @@ serial_transfer:
     range: "256..4096"
 crypt:
   chunk_bytes:
-    value: 4096
+    value: 512
     type: size_t
-    description: "Bytes encrypted per chunk during a crypt file run"
-    range: "1024..16384"
+    description: "Bytes encrypted per chunk during a crypt file run (small keeps the esp-aes DMA descriptor array tiny on a fragmented DMA heap)"
+    range: "128..16384"
   pbkdf2_iters:
     value: 10000
     type: int
@@ -2344,6 +2450,11 @@ crypt:
     type: int
     description: "Maximum password characters accepted by crypt (plus the terminator)"
     range: "16..256"
+  dma_min_bytes:
+    value: 4096
+    type: size_t
+    description: "Minimum contiguous DMA-capable bytes before crypt tries the esp-aes hardware path (else the software AES fallback runs)"
+    range: "1024..16384"
 
 # =============================================================================
 # BUILD-AFFECTING KCONFIG OPTIONS

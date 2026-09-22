@@ -14,6 +14,7 @@
 
 #include "markdown.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -962,18 +963,14 @@ static bool md_render_table(const char **starts, const char **ends,
      * MD_TABLE_ROWS_MAX * MD_TABLE_COLS_MAX * 2 pointers (8 KB), so it stays
      * off the stack, and a heap table keeps the renderer reentrant. PSRAM is
      * preferred (internal RAM is scarce while the transport is up). */
-    const char *(*cells)[MD_TABLE_COLS_MAX][2] = heap_caps_malloc(
-        (size_t)MD_TABLE_ROWS_MAX * sizeof(*cells),
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const char *(*cells)[MD_TABLE_COLS_MAX][2] = p4heap_alloc_psram(
+        (size_t)MD_TABLE_ROWS_MAX * sizeof(*cells));
     int widths[MD_TABLE_COLS_MAX];
     int align[MD_TABLE_COLS_MAX];
     int ncols;
     int r;
     int c;
 
-    if (cells == NULL) {
-        cells = malloc((size_t)MD_TABLE_ROWS_MAX * sizeof(*cells));
-    }
     if (cells == NULL) {
         return false;
     }

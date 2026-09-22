@@ -18,6 +18,7 @@
 #include <string.h>
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_log.h"
 #include "p4minishell_config.h"
 
@@ -161,7 +162,7 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
      * DMA (M21); fall back to the internal heap when PSRAM is unavailable.
      * A statically-created group never frees its buffer on delete, so the
      * PSRAM block is tracked here and released on both exit paths. */
-    eg_buf = heap_caps_malloc(sizeof(*eg_buf), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    eg_buf = p4heap_alloc_any(sizeof(*eg_buf));
     if (eg_buf != NULL) {
         event_group = xEventGroupCreateStatic(eg_buf);
         if (event_group == NULL) {

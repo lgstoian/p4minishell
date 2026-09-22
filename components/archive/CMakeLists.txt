@@ -6,4 +6,5 @@ idf_component_register(
     REQUIRES
         storage
         shell
+        p4heap
 )

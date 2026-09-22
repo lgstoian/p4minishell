@@ -23,6 +23,7 @@
 #include "shell.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "bsp/esp-bsp.h"
 
 static char *s_pool;
@@ -85,17 +86,12 @@ bool editor_spell_load(const char *name)
         shell_sd_end(&session, "spell");
         return false;
     }
-    pool = heap_caps_malloc(P4_CONFIG_SPELL_MAX_BYTES + 1,
-                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (pool == NULL) {
-        pool = malloc(P4_CONFIG_SPELL_MAX_BYTES + 1);
-    }
+    pool = p4heap_alloc_psram(P4_CONFIG_SPELL_MAX_BYTES + 1);
     /* SD/FATFS reads go through DMA: the bounce buffer MUST be internal,
      * DMA-capable memory. PSRAM is NOT MALLOC_CAP_DMA on this P4 build, so
      * reading straight into the PSRAM pool crashes (same rule the editor's
      * SD load/save follow). Read in chunks and copy into the pool. */
-    bounce = heap_caps_malloc(P4_CONFIG_FILE_IO_BUFFER_BYTES,
-                              MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    bounce = p4heap_alloc_dma(P4_CONFIG_FILE_IO_BUFFER_BYTES);
     if (pool == NULL || bounce == NULL) {
         fclose(file);
         shell_sd_end(&session, "spell");
@@ -146,11 +142,7 @@ bool editor_spell_load(const char *name)
         heap_caps_free(pool);
         return false;
     }
-    index = heap_caps_malloc((words + 1) * sizeof(*index),
-                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (index == NULL) {
-        index = malloc((words + 1) * sizeof(*index));
-    }
+    index = p4heap_alloc_psram((words + 1) * sizeof(*index));
     if (index == NULL) {
         heap_caps_free(pool);
         return false;

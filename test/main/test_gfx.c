@@ -406,6 +406,44 @@ void test_gfx_blit_scaled(void)
     gfx_surface_free(&dst);
 }
 
+void test_gfx_rotate_cw(void)
+{
+    gfx_surface_t src = {NULL, 0, 0};
+    gfx_surface_t out = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&src, 2, 2));
+    gfx_surface_pixel(&src, 0, 0, 0xF800);
+    gfx_surface_pixel(&src, 1, 0, 0x07E0);
+    gfx_surface_pixel(&src, 0, 1, 0x001F);
+    gfx_surface_pixel(&src, 1, 1, 0xFFFF);
+
+    /* One quarter turn: (x,y) -> (h-1-y,x). */
+    TEST_ASSERT_TRUE(gfx_surface_rotate_cw(&src, 1, &out));
+    TEST_ASSERT_EQUAL_INT(2, out.w);
+    TEST_ASSERT_EQUAL_INT(2, out.h);
+    TEST_ASSERT_EQUAL_UINT16(0x001F, gfx_surface_get(&out, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&out, 1, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&out, 0, 1));
+    TEST_ASSERT_EQUAL_UINT16(0x07E0, gfx_surface_get(&out, 1, 1));
+    gfx_surface_free(&out);
+
+    /* Half turn swaps both axes; non-square swaps dimensions. */
+    TEST_ASSERT_TRUE(gfx_surface_rotate_cw(&src, 2, &out));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&out, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x07E0, gfx_surface_get(&out, 0, 1));
+    gfx_surface_free(&out);
+
+    /* Zero turns copies; NULL-safe failure clears the output. */
+    TEST_ASSERT_TRUE(gfx_surface_rotate_cw(&src, 0, &out));
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&out, 0, 0));
+    gfx_surface_free(&out);
+    TEST_ASSERT_FALSE(gfx_surface_rotate_cw(NULL, 1, &out));
+    TEST_ASSERT_NULL(out.px);
+    TEST_ASSERT_FALSE(gfx_surface_rotate_cw(&src, 1, NULL));
+
+    gfx_surface_free(&src);
+}
+
 void test_gfx_blit_clip_transparent(void)
 {
     gfx_surface_t dst = {NULL, 0, 0};

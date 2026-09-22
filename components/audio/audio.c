@@ -4,7 +4,8 @@
  */
 /**
  * @file audio.c
- * @brief ES8311 audio playback for P4MiniShell.
+ * @brief Codec audio playback for P4MiniShell (ES8311 on the reference board,
+ * ES8388 on the Tab5; both reached through the board BSP).
  *
  * `beep`, `tone`, and `wavplay` hand a play request to a small dedicated
  * task and return immediately, so batch files never block on audio. One
@@ -64,7 +65,7 @@ static void audio_play_task(void *arg);
 static void audio_task_play_tone(const audio_request_t *req);
 static void audio_task_play_wav(const audio_request_t *req);
 
-/** Default sample description for the ES8311 mono 16-bit 22050 Hz path. */
+/** Default sample description for the mono 16-bit 22050 Hz codec path. */
 static void audio_fill_sample_info(esp_codec_dev_sample_info_t *fs)
 {
     fs->sample_rate = 22050;

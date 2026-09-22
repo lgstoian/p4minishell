@@ -5,7 +5,7 @@ How to extend and integrate P4MiniShell. This is the practical companion to the
 registration tables, the modal/native-app patterns, and how to add commands,
 files, and boot hooks.
 
-- **Version:** v1.1.0 (ESP-IDF v5.5.5)
+- **Version:** v1.2.1 (ESP-IDF v5.5.5)
 - **Working rules and invariants:** [`ai-context.md`](ai-context.md)
 - **Architecture:** [`documentation.md`](documentation.md)
 - **User-facing commands:** [`command.md`](command.md)
@@ -22,7 +22,7 @@ banner, the system info commands, and the read-only FreeRTOS task introspection 
   `shell_command_ps()`).
 - `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, every DOS file command, and the hidden `.trash` recycle bin (`trash.c`) that `del`/`rd /s` move entries into and `undelete`/`trash` manage.
 - `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`,
-  `gosub`/`return`/`on` computed dispatch, `for` loops incl. `for /f` file-line iteration, the
+  `gosub`/`return`/`on` computed dispatch, `switch` string dispatch, `for` loops incl. `for /f`/`/L`/`/A`/`/D`/`/R` and `while`, `!VAR!` delayed expansion, the
   `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, the
   batch language commands, the `calc` float calculator (`calc.c`), and the DOSKEY-style alias table (`alias` / `unalias`, prompt-only
   expansion, SD persistence via `alias /save`).
@@ -208,6 +208,14 @@ Built-in surfaces in `components/modal/modal_surf.c` — `dialog`, `list`, `ask`
 batch commands and demonstrate the contract. A third-party `.app` can register
 its own `modal_surface_t` instead of duplicating the session/input plumbing.
 
+**Declarative screens and flows** (`components/command/screen_commands.c`):
+`screen run <file.frm>` renders one flat-`KEY=VALUE` screen by synthesizing the
+verb's argv (so no surface is implemented twice); `screen flow <file.flow>`
+routes a navigation graph over `.FRM` nodes via the pure
+`screen_flow_select()` (file-order first match on `*`/`err:`/`val:`), bounded
+and `^C`-aware. Both reuse the ready-made modal surfaces — an app that needs a
+screen chain should declare it, not hand-roll `goto` or a new modal.
+
 ### TUI Integration
 
 The TUI layer is live and hardware-verified (flash to COM11, boot `1024x510` transcript rect, extensive serial verification of `draw box single/double/rounded` with title + nested window stack, `draw line`/`fill`/`text`/`clear`/`window`, `draw fullscreen on|off` + `tui fullscreen on|off`, `color`/`locate`, `dialog`/`list`/`ask` with timeout + serial input, `browse`/`view`; no abort/watchdog/overlap, header kept unless fullscreen) for batch apps:
@@ -285,6 +293,24 @@ in `components/applib` (or route it through an ops table when the owner lives
 higher in the stack), then add the component to the root and test
 `CMakeLists.txt` `EXTRA_COMPONENT_DIRS`.
 
+## App launch model and package trust (v1.2)
+
+The app/package contract is frozen in [`ABI.md`](ABI.md). In short:
+
+- **Every app launches through a `*.bat` shim.** A `type=hybrid` shim drives a
+  linked-in `app_main_t` (registered via `app_register`, named by `entry=`); a
+  `type=native` bundle is dev/test-only (linked and dispatched by name); a
+  `type=batch` app is the shim itself. There is no SD code execution.
+- **Manifests may be signed.** `pkg_commands.c` owns the trust core
+  (`pkg_sign_check_manifest`, `pkg_sign_verify`, `pkg_sign_canonical`, the
+  `p4sign` NVS key store). `asset_verify_app` reports the verdict but never
+  re-implements the crypto. The host signs with `tools/pkg_sign.py`
+  (`apps/push_pkgs.py --sign`), and the device trusts one raw P-256 public key
+  installed with `pkg key install`.
+- **Extending it:** new metadata keys are optional and additive; a breaking
+  change to the entry ABI or a metadata key bumps `P4_CONFIG_NATIVE_ABI`, and
+  `ABI.md` / `docs/native_packaging.md` / the changelog move together.
+
 ## Writerdeck surfaces (v1.2.0)
 
 The writing features are additive surfaces on the existing editor, markdown,
@@ -292,10 +318,16 @@ and font modules — no new app model:
 
 - **Editor** (`components/editor/`): `editor_session_run_opts()` carries
   `focus` and `template_name`; `editor_doc_word_count()` is the pure word
-  counter; `editor_spell_*` is the offline checker (wordlist read through an
-  internal DMA bounce buffer — never DMA into PSRAM). A new editor action is
-  one `editor_key_t` value + a `case` in the key handler + an OSK label + a
-  serial verb, exactly like `EDITOR_KEY_WRAP_TOGGLE`.
+   counter; `editor_spell_*` is the offline checker (wordlist read through an
+   internal DMA bounce buffer — never DMA into PSRAM). A new editor action is
+   one `editor_key_t` value + a `case` in the key handler + an OSK label + a
+   serial verb, exactly like `EDITOR_KEY_WRAP_TOGGLE`.
+- **Crypto-adjacent native code:** the Tab5 DMA heap fragments over a busy
+  session, so any DMA consumer must request explicit small DMA buffers and
+  handle NULL with a PSRAM/software fallback — never DMA into PSRAM (PSRAM is
+  not DMA-capable here). See the `crypt` precedent: 512 B chunks +
+  `components/swgcm` software AES-256-GCM fallback (bugs.md F23, fixed in
+  v1.2.1) and the central `components/p4heap/` policy.
 - **Markdown** (`components/markdown/`): `markdown_render_doc` stays the single
   ANSI renderer; `markdown_render_html` (body fragment) plus
   `markdown_render_html_page` (`<!DOCTYPE html>` reader-CSS wrapper, the
@@ -395,6 +427,7 @@ work the integrator has to perform.
    | Storage verbs | `components/storage/storage_nav.c` / `storage_files.c` / `storage_disk.c` / `storage_text.c` / `storage_fam.c` | declare in `storage_commands.h` |
    | Audio verbs | `components/command/audio_commands.c` | declare in `command.h` |
    | TUI / modal verbs | `components/command/tui_commands.c` | declare in `command.h` |
+   | Declarative screens | `components/command/screen_commands.c` (`screen run|info`, INI reader + argv synthesis into the existing verbs) | declare in `command.h` |
    | Peripheral toolkit | `components/command/periph_commands.c` | declare in `command.h` |
    | Power / display / battery | `components/command/power_commands.c` | declare in `command.h` |
    | Screenshot / serial | `components/command/serial_commands.c` | declare in `command.h` |
@@ -509,10 +542,15 @@ for (i = 0; i < subdir_count; i++) {
 
 `shell_dir_list_one()`, `shell_tree_walk()`, and `shell_chkdsk_walk()` all follow this shape.
 
-The `xcopy` walker (`shell_xcopy_walk`) and the `findstr /S` walker
-(`shell_findstr_walk`) follow the same rule; `xcopy` must never re-enter the
-`xcopy` command for subdirectories — that is how the old recursive copy
-stacked frames.
+The `xcopy` walker (`shell_xcopy_walk`) follows the same rule; it must never
+re-enter the `xcopy` command for subdirectories — that is how the old recursive
+copy stacked frames.
+
+**Searching file contents** has one shared implementation in
+`components/storage/`: `storage_walk_files()` (tree walk) and
+`storage_scan_file_lines()` (line loop), both used by `findstr /S` and
+`gfind /files`. Never add a second walker, line scanner, or on-disk index —
+search every caller through these two functions.
 
 ### Pure, unit-testable text logic
 
@@ -724,7 +762,7 @@ process model"):
 | argv | `%0` = script name, `%1`..`%9` = caller arguments, `%*` = everything from `%1`. `call`/`call :label`/`gosub :label` push a fresh frame; `shift` slides it. |
 | cwd | RAM-only current working directory owned by `components/storage/` (`storage_set_cwd()` / `shell_get_cwd()`); relative paths resolve against it at run time. |
 | PATH | RAM-only `PATH` environment variable (default `sd:/`); `shell_resolve_batch_path()` tries the literal name, `name.bat`, then each `;`-separated PATH entry with both forms. |
-| environment | The 24-slot RAM table is session-global; `set`/`set /a`/`set /p`/`calc` mutate it, `call` hands it to the callee, `setlocal`/`endlocal` snapshot/restore it (a scope left open is unwound when its frame returns). |
+| environment | The 64-slot RAM table is session-global; `set`/`set /a`/`set /p`/`calc` mutate it, `call` hands it to the callee, `setlocal`/`endlocal` snapshot/restore it (a scope left open is unwound when its frame returns). |
 | errorlevel | `batch_get_errorlevel()` / `batch_set_errorlevel()`, read by `if errorlevel N` and `&&`/`||`. |
 
 There is no process isolation: the file shares the worker task, the
@@ -800,9 +838,11 @@ step. Host-side rules that make a file behave correctly on the firmware:
   command runs, so arithmetic `set /a` and `calc` expressions using those
   operators must be quoted.
 - **Environment hygiene.** Variables are capped at `P4_CONFIG_ENV_VAR_MAX`
-  (24) with names `[A-Za-z0-9_]` (upper-cased); a `setlocal` block that
-  creates variables should close with `endlocal` so the 24-slot table is
-  not exhausted by long scripts.
+  (64) with names `[A-Za-z0-9_\[\]]` (upper-cased; `NAME[i]` indexed arrays
+  are ordinary slots); a `setlocal` block that creates variables should
+  close with `endlocal` so the 64-slot table is not exhausted by long
+  scripts. Game loops use `for /L`, `while`, and `gfx blitmany` — see the
+  single-file authoring spec [`batch.md`](batch.md).
 - **Validation before deploying.** Run the file once under `echo on` (or
   `tron`-style line-by-line) from the UART console, check the ERRORLEVEL of
   each step with `if errorlevel`, and keep a copy on the host — the shell

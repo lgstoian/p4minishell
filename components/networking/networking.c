@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_hosted.h"
 #include "esp_hosted_api_types.h"
 #include "esp_hosted_host_fw_ver.h"
@@ -56,6 +57,30 @@
 #define NETWORKING_WIFI_ORIGIN_BYTES        P4_CONFIG_WIFI_ORIGIN_BYTES
 #define NETWORKING_WIFI_INIT_TASK_STACK_BYTES P4_CONFIG_WIFI_INIT_TASK_STACK
 #define NETWORKING_WIFI_RUNTIME_ENABLED     P4_CONFIG_WIFI_RUNTIME_ENABLED
+
+/* Board/SDK config mirror guard: the SDIO bus pins live in sdkconfig
+ * (CONFIG_ESP_HOSTED_HOST_SDIO_*) and are mirrored as BOARD_CFG_HOSTED_SDIO_*
+ * for the GPIO table and guards. A port that updates one side without the
+ * other gets a silent hosted-RPC timeout, so fail the build instead. */
+#include "board_config.h"
+#if defined(CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK)
+_Static_assert((int)BOARD_CFG_HOSTED_SDIO_CLK_GPIO == CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK,
+               "BOARD_CFG_HOSTED_SDIO_CLK_GPIO must mirror CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK");
+_Static_assert((int)BOARD_CFG_HOSTED_SDIO_CMD_GPIO == CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CMD,
+               "BOARD_CFG_HOSTED_SDIO_CMD_GPIO must mirror CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CMD");
+_Static_assert((int)BOARD_CFG_HOSTED_SDIO_D0_GPIO == CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D0,
+               "BOARD_CFG_HOSTED_SDIO_D0_GPIO must mirror CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D0");
+_Static_assert((int)BOARD_CFG_HOSTED_SDIO_D1_GPIO == CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1,
+               "BOARD_CFG_HOSTED_SDIO_D1_GPIO must mirror CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1");
+_Static_assert((int)BOARD_CFG_HOSTED_SDIO_D2_GPIO == CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2,
+               "BOARD_CFG_HOSTED_SDIO_D2_GPIO must mirror CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2");
+_Static_assert((int)BOARD_CFG_HOSTED_SDIO_D3_GPIO == CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3,
+               "BOARD_CFG_HOSTED_SDIO_D3_GPIO must mirror CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3");
+_Static_assert((int)BOARD_CFG_C6_HOST_RESET_GPIO == CONFIG_ESP_HOSTED_HOST_RESET_GPIO,
+               "BOARD_CFG_C6_HOST_RESET_GPIO must mirror CONFIG_ESP_HOSTED_HOST_RESET_GPIO");
+_Static_assert(BOARD_CFG_HOSTED_SDIO_SLOT == CONFIG_ESP_HOSTED_HOST_SDIO_SLOT,
+               "BOARD_CFG_HOSTED_SDIO_SLOT must mirror CONFIG_ESP_HOSTED_HOST_SDIO_SLOT");
+#endif
 
 typedef struct {
     bool use_defaults;
@@ -2080,11 +2105,9 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
         goto cleanup;
     }
 
-    /* Large response buffer from PSRAM first, internal RAM as a fallback. */
-    out->body = heap_caps_malloc(P4_CONFIG_HTTP_MAX_BODY_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (out->body == NULL) {
-        out->body = heap_caps_malloc(P4_CONFIG_HTTP_MAX_BODY_BYTES, MALLOC_CAP_8BIT);
-    }
+    /* Large response buffer from PSRAM (no internal spill: NULL propagates
+     * to the error path below). */
+    out->body = p4heap_alloc_psram(P4_CONFIG_HTTP_MAX_BODY_BYTES);
     if (out->body == NULL) {
         if (!quiet) {
             networking_appendf(SH_ERR "httpget:" SH_RST " out of memory buffering the response\n");
@@ -2846,19 +2869,22 @@ static void networking_wifi_runtime_init(void)
      * produces failures that are much harder to diagnose than this message. */
     networking_wifi_append_step("esp_hosted_get_coprocessor_fwversion()");
     error = networking_wifi_validate_hosted_version(false);
-    if (error != ESP_OK) {
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
         /* The first RPC issued right after a fresh connect can time out at the
          * SDIO layer (the slave still holds DAT0 from its power-on auto-init),
          * which shows up as "sdmmc_send_cmd 0x107" and a lost version read.
          * A full transport reset clears the stuck bus; retry once, mirroring
-         * the connect-retry above and the reset c6ota performs. */
+         * the connect-retry above and the reset c6ota performs.
+         * Bounded: a definitive version mismatch (INVALID_STATE) is never
+         * retried — resetting the transport cannot change the C6 image. The
+         * longer settle lets the slave release DAT0 before the second probe. */
         networking_wifi_append_step("retrying hosted transport for version read");
         esp_err_t deinit_error = esp_hosted_deinit();
         if (deinit_error != ESP_OK) {
             ESP_LOGW(NETWORKING_TAG, "hosted deinit before version retry: %s (0x%x)",
                      esp_err_to_name(deinit_error), (unsigned int)deinit_error);
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(200));
 
         error = esp_hosted_init();
         if (error == ESP_OK || error == ESP_ERR_INVALID_STATE) {

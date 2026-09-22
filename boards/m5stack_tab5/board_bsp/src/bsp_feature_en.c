@@ -51,17 +51,14 @@ esp_err_t bsp_feature_enable(bsp_feature_t feature, bool enable)
         break;
     }
     case BSP_FEATURE_USB: {
-        esp_io_expander_handle_t io_expander = bsp_io_expander1_init();
-        ret |= esp_io_expander_set_dir(io_expander, BSP_USB_EN, IO_EXPANDER_OUTPUT);
-        ret |= esp_io_expander_set_level(io_expander, BSP_USB_EN, enable);
-        ret |= esp_io_expander_set_output_mode(io_expander, BSP_USB_EN, IO_EXPANDER_OUTPUT_MODE_PUSH_PULL);
+        /* Single-writer path (bugs.md F6): the second expander holds the
+         * ESP32-C6 rail on P0, so this must not create the driver handle
+         * (creation issues a chip-wide reset that floats every output). */
+        ret = bsp_io_expander1_set_output((uint8_t)BSP_USB_EN, enable);
         break;
     }
     case BSP_FEATURE_WIFI: {
-        esp_io_expander_handle_t io_expander = bsp_io_expander1_init();
-        ret |= esp_io_expander_set_dir(io_expander, BSP_WIFI_EN, IO_EXPANDER_OUTPUT);
-        ret |= esp_io_expander_set_level(io_expander, BSP_WIFI_EN, enable);
-        ret |= esp_io_expander_set_output_mode(io_expander, BSP_WIFI_EN, IO_EXPANDER_OUTPUT_MODE_PUSH_PULL);
+        ret = bsp_io_expander1_set_output((uint8_t)BSP_WIFI_EN, enable);
         break;
     }
     }

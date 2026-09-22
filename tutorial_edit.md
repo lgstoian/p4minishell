@@ -5,7 +5,7 @@ SD card. It is modelled on the classic MS-DOS `EDIT` program and adds modern
 extras: undo/redo, a line-number gutter, a current-line highlight, syntax
 highlighting for batch files, and touch support.
 
-> **Current build (v1.1.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.2.1):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
@@ -70,7 +70,7 @@ reachable by touch from the first frame); `abc` returns to the letters page.
 
 - **Line-number gutter** (left): every line is prefixed with its 1-based line
   number, right-aligned in a fixed-width gutter (`P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS`,
-  default 4 digits) followed by a space. The gutter is muted grey and never
+  default 5 digits) followed by a space. The gutter is muted grey and never
   part of the document.
 - **Text area**: the current line is softly highlighted
   (`P4_CONFIG_EDITOR_CURRENT_LINE`); the blinking block caret marks your
@@ -93,8 +93,8 @@ reachable by touch from the first frame); `abc` returns to the letters page.
 | Delete forward | `Del` (Nav page) | `Delete` | — |
 | Tab (to next stop) | `Tab` (Nav page) | `Tab` | — |
 | Insert / overwrite | `Ins` (Nav page) | `Insert` | — |
-| Delete whole line | `DelLn` (Edit page) | `Ctrl+Y` | — |
-| Delete to end of line | `DelE` (Edit page) | `Ctrl+Shift+End` | — |
+| Delete whole line | `DelLine` (Edit page) | `Ctrl+Y` | — |
+| Delete to end of line | `DelEOL` (Edit page) | `Ctrl+Shift+End` | — |
 
 - **Insert mode (default)**: typing pushes the rest of the line to the right.
 - **Overwrite mode**: typing replaces the character under the caret. Toggle
@@ -121,8 +121,8 @@ reachable by touch from the first frame); `abc` returns to the letters page.
 | Place caret | tap the text | click (mouse) | — |
 | Left / right / up / down | nav arrows | arrow keys | — |
 | Start / end of line | `Home` / `End` (Nav page) | `Home` / `End` | — |
-| One word left / right | `WdL` / `WdR` (Edit page) | `Ctrl+Left` / `Ctrl+Right` | — |
-| Start / end of document | `DocH` / `DocE` (Edit page) | `Ctrl+Home` / `Ctrl+End` | — |
+| One word left / right | `WordL` / `WordR` (Edit page) | `Ctrl+Left` / `Ctrl+Right` | — |
+| Start / end of document | `DocTop` / `DocBot` (Edit page) | `Ctrl+Home` / `Ctrl+End` | — |
 | One page up / down | `PgUp` / `PgDn` (Nav page) | `PageUp` / `PageDown` | — |
 | Go to a line | `Goto` (Nav page) | `Ctrl+G` | `\g` |
 
@@ -263,13 +263,14 @@ from the touch keyboard alone. The editor **opens on the Nav page**:
 
 1. **Letters** (default) — lowercase `a`–`z`.
 2. **Uppercase** — `ABC`.
-3. **Symbols** — every printable ASCII character, including the shell-critical
+3. **Numbers** — digits `0`–`9`.
+4. **Symbols** — every printable ASCII character, including the shell-critical
    `|`, `^`, `~`, and `` ` ``; its `Nav` button switches to the Nav page.
-4. **Nav** — the editor control page (uniform 4×6). Carries navigation, file,
+5. **Nav** — the editor control page (uniform 4×6). Carries navigation, file,
    and search commands.
-5. **Edit** — press `Edit` on the Nav page (uniform 3×6). Carries clipboard,
-   advanced editing, and text-tool commands.
-6. Text pages again — `abc` (on either nav page) returns to the letters page.
+6. **Edit** — press `Edit` on the Nav page (uniform 3×6). Carries clipboard,
+   advanced editing, and text-tool commands. `abc` (on either Nav page)
+   returns to the letters page.
 
 **Nav page (page 1, 4×6):**
 
@@ -298,7 +299,7 @@ action pages; `abc` returns to the letters page.
 
 When a prompt asks for text (Find, Replace, Go to line, Save As, Open) the
 keyboard automatically switches to the letters page; committing or cancelling
-returns it to the letters page (the editor's default page).
+returns it to the Nav page.
 
 In the shell (editor closed) the same pages type commands; the Nav/Edit pages
 are only available while the editor is open. The shell input row also has a `Tab`

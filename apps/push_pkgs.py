@@ -9,7 +9,10 @@ files at the bundle root, the app's `.APPINFO`, and a `<APP>.ASSETS` manifest
 `pkg verify <APP>` re-checks them. Manual install path; push once, install on
 device.
 
-Usage: python push_pkgs.py [COMx]
+With `--sign NAME.priv.pem` every manifest gains an ECDSA P-256 `SIGN=` line
+(see ABI.md), so `pkg install` verifies it against the device's trusted key.
+
+Usage: python push_pkgs.py [COMx] [--sign NAME.priv.pem]
 """
 import os
 import sys
@@ -19,6 +22,10 @@ import zlib
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "companion"))
 from push_sd import push_file, wait_shell, open_port  # noqa: E402
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from pkg_sign import canonical  # noqa: E402
 
 APPS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -43,8 +50,33 @@ def crc_hex(data):
     return "%08X" % (zlib.crc32(data) & 0xFFFFFFFF)
 
 
+def sign_manifest(body, keypath):
+    """Prepend a `SIGN=<128 hex>` line (ECDSA P-256) over the canonical body."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric.utils import (
+        decode_dss_signature)
+
+    with open(keypath, "rb") as f:
+        priv = serialization.load_pem_private_key(f.read(), password=None)
+    if not isinstance(priv, ec.EllipticCurvePrivateKey) or \
+            not isinstance(priv.curve, ec.SECP256R1):
+        raise ValueError("key is not an ECDSA P-256 private key")
+    r, s = decode_dss_signature(priv.sign(canonical(body), ec.ECDSA(hashes.SHA256())))
+    return ("SIGN=%064x%064x\n" % (r, s)).encode() + body
+
+
 def main():
-    port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
+    args = sys.argv[1:]
+    keypath = None
+    if "--sign" in args:
+        i = args.index("--sign")
+        if i + 1 >= len(args):
+            print("FAIL: --sign needs a private-key path")
+            return 2
+        keypath = args[i + 1]
+        del args[i:i + 2]
+    port = args[0] if args else "COM11"
     ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
     if not wait_shell(ser):
@@ -79,10 +111,13 @@ def main():
         body = ("; %s bundle manifest (pkg install %s)\n" % (app, app)).encode()
         for line in manifest:
             body += (line + "\n").encode()
+        if keypath is not None:
+            body = sign_manifest(body, keypath)
         if not push_file(ser, "PKGS/%s/%s.ASSETS" % (app, app), body):
             print("FAIL manifest %s" % app)
             ok = False
-        print("BUNDLE ok   %s (%d payloads)" % (app, len(manifest)))
+        print("BUNDLE ok   %s (%d payloads%s)" %
+              (app, len(manifest), ", signed" if keypath else ""))
     ser.close()
     print("RESULT %s" % ("OK" if ok else "FAIL"))
     return 0 if ok else 1

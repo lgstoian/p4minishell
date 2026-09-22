@@ -21,6 +21,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -393,11 +394,8 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
 
     /* ~40 KB per level: prefer PSRAM so the DMA-capable internal heap (which
      * backs LVGL spans, WiFi/SDIO pools and the USB ring buffers) is left
-     * alone. Fall back to internal RAM when PSRAM is unavailable. */
-    scratch = heap_caps_calloc(1, sizeof(*scratch), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (scratch == NULL) {
-        scratch = calloc(1, sizeof(*scratch));
-    }
+     * alone. NULL propagates to the error path below. */
+    scratch = p4heap_calloc_psram(1, sizeof(*scratch));
     if (scratch == NULL) {
         shell_transcript_append_text("dir: out of memory buffering the directory\n");
         shell_record_errorf("dir", ESP_ERR_NO_MEM, "Out of memory buffering a directory level");
@@ -640,11 +638,7 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
         size_t subdir_count = 0;
 
         /* Up to 128 x 256 B: prefer PSRAM to protect the internal heap. */
-        subdirs = heap_caps_calloc(count > 0 ? count : 1, sizeof(*subdirs),
-                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (subdirs == NULL) {
-            subdirs = calloc(count > 0 ? count : 1, sizeof(*subdirs));
-        }
+        subdirs = p4heap_calloc_psram(count > 0 ? count : 1, sizeof(*subdirs));
         if (subdirs != NULL) {
             for (index = 0; index < count; index++) {
                 if (scratch->entries[index].is_dir) {
@@ -663,11 +657,7 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
              * P4_CONFIG_DIR_RECURSE_DEPTH_MAX would overflow the 8 KB command
              * worker task stack (a stack overflow corrupts memory and shows up
              * as an intermittent crash). */
-            char *child_path = heap_caps_malloc(SHELL_SD_PATH_BYTES,
-                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (child_path == NULL) {
-                child_path = malloc(SHELL_SD_PATH_BYTES);
-            }
+            char *child_path = p4heap_alloc_any(SHELL_SD_PATH_BYTES);
             if (child_path == NULL) {
                 free(subdirs);
                 return false;

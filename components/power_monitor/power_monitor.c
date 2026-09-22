@@ -49,7 +49,9 @@
 #define INA226_CONFIG_VALUE    0x4527u
 
 /* Signed-current deadband (mA) that separates charging/discharging from idle.
- * Positive current flows INTO the pack (matches the M5Stack reference). */
+ * On the Tab5 the shunt reads charge current as NEGATIVE (verified: the pack
+ * voltage rises while the current is negative), so positive current is the
+ * pack supplying the system. */
 #ifndef BOARD_CFG_BATTERY_CHARGE_CURRENT_MA
 #define BOARD_CFG_BATTERY_CHARGE_CURRENT_MA 20
 #endif
@@ -89,6 +91,77 @@ const char *power_monitor_charge_name(power_monitor_charge_t state)
     }
 }
 
+bool power_monitor_pack_present(int pack_mv, int current_ma,
+                                const int *recent_mv, int recent_count,
+                                int chg_stat, int chg_stat_prev)
+{
+    const int present_mv = BOARD_CFG_BATTERY_PRESENT_MV;
+    int window = 1 + recent_count;
+    int minv;
+    int maxv;
+    int i;
+
+    if (pack_mv < present_mv) {
+        /* A real pack never reads this low while the gauge is powered. */
+        return false;
+    }
+
+#if BOARD_CFG_BATTERY_FULL_MV > 0
+    {
+        int rail_floor = (int)BOARD_CFG_BATTERY_FULL_MV - P4_CONFIG_BATTERY_RAIL_BAND_TOL_MV;
+
+        if (rail_floor < present_mv) {
+            rail_floor = present_mv;
+        }
+        if (pack_mv < rail_floor) {
+            /* Clearly inside the pack range: trust it immediately. */
+            return true;
+        }
+    }
+
+    /* Ambiguous rail band (>= FULL_MV - tolerance). With no pack the node
+     * floats here and swings to the low cluster; a real pack is stable. */
+    if (window < P4_CONFIG_BATTERY_PRESENT_STABLE_SAMPLES) {
+        return false;
+    }
+    minv = pack_mv;
+    maxv = pack_mv;
+    for (i = 0; i < recent_count; i++) {
+        if (recent_mv[i] < present_mv) {
+            return false;
+        }
+        if (recent_mv[i] < minv) {
+            minv = recent_mv[i];
+        }
+        if (recent_mv[i] > maxv) {
+            maxv = recent_mv[i];
+        }
+    }
+    if (maxv - minv > P4_CONFIG_BATTERY_PRESENT_MAX_SWING_MV) {
+        return false;
+    }
+
+    /* Corroboration (F24-B): a charge-status line that toggles while the
+     * voltage sits in the rail band with ~0 current is the charger blinking
+     * with no pack to charge. Gated on ~0 current so a charging pack (toggling
+     * status, non-zero current) is never rejected. */
+    if (chg_stat >= 0 && chg_stat_prev >= 0 && chg_stat != chg_stat_prev &&
+        current_ma > -(int)BOARD_CFG_BATTERY_CHARGE_CURRENT_MA &&
+        current_ma < (int)BOARD_CFG_BATTERY_CHARGE_CURRENT_MA) {
+        return false;
+    }
+    return true;
+#else
+    (void)current_ma;
+    (void)recent_mv;
+    (void)recent_count;
+    (void)chg_stat;
+    (void)chg_stat_prev;
+    (void)window;
+    return true;
+#endif
+}
+
 #if BOARD_CFG_BATTERY_INA226_PRESENT
 
 static struct {
@@ -97,6 +170,9 @@ static struct {
     bool present;
     float current_lsb;   /* A per LSB */
     uint16_t cal;        /* programmed calibration register */
+    int hist[P4_CONFIG_BATTERY_PRESENT_STABLE_SAMPLES]; /* prior pack_mv, newest first */
+    int hist_count;
+    int chg_stat_prev;   /* previous IP2326 CHG_STAT level, -1 when unavailable */
 } s_pm;
 
 static esp_err_t pm_read16(uint8_t reg, uint16_t *out)
@@ -240,6 +316,9 @@ esp_err_t power_monitor_read_sample(int *pack_mv_out, int *percent_out,
     uint16_t cur_raw = 0;
     uint16_t pow_raw = 0;
     int pack_mv;
+    int current_ma = 0;
+    int chg_stat = -1;
+    bool pack_present;
     esp_err_t error;
 
     if (!s_pm.present) {
@@ -257,6 +336,37 @@ esp_err_t power_monitor_read_sample(int *pack_mv_out, int *percent_out,
     (void)pm_read16(INA226_REG_POWER, &pow_raw);
 
     pack_mv = (int)(((uint32_t)bus_raw * 125u) / 100u);   /* 1.25 mV/LSB */
+    current_ma = (int)((int16_t)cur_raw * s_pm.current_lsb * 1000.0f);
+
+    /* Corroborating charge-status line (F24-B); -1 when the board has none. */
+    (void)board_bsp_charge_status_level(&chg_stat);
+
+    /* Decide pack presence BEFORE publishing: a floating rail (no pack) must
+     * not be reported as a full pack (bugs.md F24). */
+    pack_present = power_monitor_pack_present(pack_mv, current_ma,
+                                              s_pm.hist, s_pm.hist_count,
+                                              chg_stat, s_pm.chg_stat_prev);
+
+    /* Push this sample into the presence window (newest first). */
+    {
+        int keep = P4_CONFIG_BATTERY_PRESENT_STABLE_SAMPLES - 1;
+        int i;
+
+        if (keep < 1) {
+            keep = 1;
+        }
+        if (s_pm.hist_count > keep) {
+            s_pm.hist_count = keep;
+        }
+        for (i = s_pm.hist_count; i > 0; i--) {
+            s_pm.hist[i] = s_pm.hist[i - 1];
+        }
+        s_pm.hist[0] = pack_mv;
+        if (s_pm.hist_count < keep) {
+            s_pm.hist_count++;
+        }
+    }
+    s_pm.chg_stat_prev = chg_stat;
 
     if (pack_mv_out != NULL) {
         *pack_mv_out = pack_mv;
@@ -265,16 +375,18 @@ esp_err_t power_monitor_read_sample(int *pack_mv_out, int *percent_out,
         *percent_out = pm_mv_to_percent(pack_mv);
     }
     if (current_ma_out != NULL) {
-        *current_ma_out = (int)((int16_t)cur_raw * s_pm.current_lsb * 1000.0f);
+        *current_ma_out = current_ma;
     }
     if (power_mw_out != NULL) {
         *power_mw_out = (int)((float)pow_raw * (25.0f * s_pm.current_lsb) * 1000.0f);
     }
     if (charging_out != NULL) {
-        int current_ma = (int)((int16_t)cur_raw * s_pm.current_lsb * 1000.0f);
-
         *charging_out = (power_monitor_classify_charge(pack_mv, current_ma) ==
                          POWER_MONITOR_CHARGE_CHARGING);
+    }
+
+    if (!pack_present) {
+        error = ESP_ERR_NOT_FOUND;
     }
 
 out:
@@ -324,6 +436,7 @@ esp_err_t power_monitor_read_diag(power_monitor_diag_t *out)
         out->power_mw = (int)((float)pow_raw * (25.0f * s_pm.current_lsb) * 1000.0f);
         out->config = config;
         out->cal = s_pm.cal;
+        (void)board_bsp_charge_status_level(&out->chg_stat);
     }
     if (s_pm.lock != NULL) {
         xSemaphoreGive(s_pm.lock);

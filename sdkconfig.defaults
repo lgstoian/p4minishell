@@ -180,6 +180,16 @@ CONFIG_LV_USE_SNAPSHOT=y
 # With CLIB malloc, LVGL allocations use the system heap (ESP32-P4: PSRAM), so memory is effectively unbounded.
 CONFIG_LV_USE_CLIB_MALLOC=y
 
+# Rotate the LVGL flush with the ESP32-P4 PPA (2D pixel accelerator) instead of
+# the CPU lv_draw_sw_rotate() path. Both boards run the UI rotated
+# (BOARD_CFG_APP_SW_ROTATE=1: the Tab5's native 720x1280 panel is shown
+# 1280x720 at 90 degrees), and the CPU rotate on every partial flush is the
+# main cause of laggy animation/scroll and tearing (the LVGL port allocates a
+# rotation buffer and drives it through the PPA when this is enabled). The
+# symbol lives in the esp_lvgl_port managed component and depends on
+# SOC_PPA_SUPPORTED (present on this ESP32-P4 build).
+CONFIG_LVGL_PORT_ENABLE_PPA=y
+
 # If an allocation ever fails, degrade gracefully (skip the span) instead of LVGL's
 # LV_ASSERT_MALLOC infinite loop that freezes the UI. lv_span_set_text() already
 # returns when the allocation is NULL.

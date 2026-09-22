@@ -50,10 +50,13 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/storage
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/strutil
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/batch
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/board_caps
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/boot
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/command
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/networking
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/power_monitor
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/p4heap
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/swgcm
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/led
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/keyboard
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/display

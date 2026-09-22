@@ -10,7 +10,7 @@ code, see [`SDK.md`](SDK.md); for the command surface, see
 [`command.md`](command.md); for the API, see [`API.md`](API.md); for the
 working rules, see [`ai-context.md`](ai-context.md).
 
-- **Version:** v1.1.0 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
+- **Version:** v1.2.1 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
 - **UI:** LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch
 - **License:** MIT (see [`licence.md`](licence.md))
 
@@ -89,7 +89,13 @@ The command module's verb bodies live in focused files under
 `alarm_commands.c`, `config_cmd.c`, `gfind_commands.c`, `csv_commands.c`,
 `export_commands.c`, `crypt_commands.c`, `userial_commands.c`,
 `security_commands.c`, `header_commands.c`, `ui_commands.c`,
-`imu_commands.c`).
+`imu_commands.c`, `screen_commands.c`, plus the pure `gfx_surface_rotate_cw()`
+in `components/gfx/gfx.c` behind `gfx blitmany /r:`).
+
+`crypt` (`crypt_commands.c`) streams files in 512-byte chunks: hardware
+esp-aes over small cache-aligned DMA buffers, with a self-contained software
+AES-256-GCM fallback (`components/swgcm/`) in the identical envelope format —
+no suite skip (bugs.md F23, fixed in v1.2.1).
 
 ## Configuration system
 
@@ -167,12 +173,24 @@ Owns the shell's runtime surface and output plumbing:
 
 - **Transcript system**: Scrollable LVGL span group backed by a 65536-byte ANSI buffer
   (`P4_CONFIG_TRANSCRIPT_BYTES`, PSRAM) with overflow protection. Appends track the buffer length
-  (`s_transcript_len`/`s_transcript_ansi_len`) so no `strlen` scan is needed per line; the
+  (`s_transcript_len`/`s_transcript_ansi_len`) and a scrollback **epoch** (bumped whenever the
+  buffer head moves: reset/trim/truncation), so no `strlen` scan is needed per line and the
+  render detects truncation in O(1); the
   memory-pressure guard trims the oldest scrollback (keeping the newest three quarters) and a
   `[history truncated]` / `[history trimmed under memory pressure]` marker is inserted. New output
   auto-follows the view only while it is
   near the bottom (`P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX`); submitting a command forces a
   jump to the newest output so the user always sees the result of what they ran.
+- **Transcript render pump** (bugs.md F26): the command worker stages the raw ANSI text plus the
+  epoch into the window manager's PSRAM buffer under a dedicated **staging mutex** (lock order
+  PORT outer, STAGE inner) and wakes the LVGL task; the widget work — incremental span parse,
+  height sizing, one layout pass, follow-scroll — runs on the LVGL task from a coalescing
+  apply timer (`P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS`). The append path never takes the LVGL port
+  lock, so a long render cannot stall command execution. Explicit synchronization points
+  (screenshot, key waits, visible-again repaint — via `shell_transcript_flush_now()`) run
+  `windows_transcript_sync_apply()` under the port lock and
+  see a current screen. Hidden-state checks (`windows_transcript_is_hidden()`) read a shadow
+  flag maintained by `windows_shell_spans_set_hidden()`, never raw LVGL object state.
 - **Memory-pressure auto-trim**: the LVGL span objects that render the scrollback carry
   per-span overhead in the internal (DMA-capable) heap, which is shared with the WiFi/SDIO
   transport. When free internal RAM drops below
@@ -385,6 +403,14 @@ Owns everything that sits between the shell commands and the SD card. Split acro
   caps matches at `P4_CONFIG_FIND_MATCH_MAX` (256). `find`, `findstr`, and `comp` return a DOS
   ERRORLEVEL (0 found / identical, 1 not found / different, 2 usage), and `more`, `fc`, and
   `sort` return 0/1/2 too, so `if errorlevel` and `&&`/`||` work with every text command.
+- **Shared content-search core:** `storage_walk_files()` (the recursive search
+  tree walk) and `storage_scan_file_lines()` (the line loop) in
+  `components/storage/storage_text.c` are the ONE implementation of "read
+  files under a root and inspect their lines". `findstr /S` and `gfind /files`
+  both use them with the pure matcher `shell_findstr_match_line()`. There is
+  no on-disk search index — search is always live, so it can never go stale.
+  `gfind` is otherwise a thin orchestrator over `db_find`/`db_list` and
+  `alarm_list`.
 - Recursive copy: `xcopy` supports the full DOS 6.x / WinXP switch set
   (`/S /E /I /Y /-Y /D[:date] /H /R /K /C /Q /T /F /L /A /M /U /P /W /N /V`)
   and walks trees with one heap block per recursion level, never re-entering
@@ -439,13 +465,42 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   options and split each line without mutating it, token indices bind to consecutive
   loop-variable letters (`%%a %%b ...`), and a `*` captures the rest of the line. This is
   the mechanism behind the BASIC `READ`/`DATA`/`INPUT#` verbs.
+- **Numeric `for /L` loops**: `for /L %%v in (start,step,end) do cmd` counts
+  inclusively (negative step counts down) through the pure `shell_forl_parse()`
+  helper, binding each value as decimal text via the classic substitution
+  runner. Bounded by `P4_CONFIG_FORL_ITER_MAX`.
+- **Associative `for /A` loops**: `for /A %%k in (PREFIX) do cmd` iterates one
+  `PREFIX[...]` through the pure `shell_fora_collect()` helper, binding the
+  index to `%%k` and the live value to the next letter.
+- **Directory / recursive loops**: `for /D` matches directory names through
+  the dirs-only `storage_expand_dirs()` (same core as the file wildcard);
+  `for /R [path]` walks the tree for files through `storage_expand_recursive()`
+  (single open FATFS handle per level, heap name lists, depth cap
+  `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, listing-limit cap, unreadable
+  subdirectories skipped).
+- **`switch` dispatch**: `switch <value> <m>:<l> [...] [/d:<label>]` jumps on
+  the first case-insensitive match through the pure `shell_switch_select()`
+  helper (split on the last colon), else the `/d:` default, else fallthrough;
+  the jump reuses the `goto` machinery.
+- **Delayed expansion**: `!VAR!` (same token forms as `%VAR%` via the shared
+  `shell_expand_token_text()`) resolves only under a `setlocal
+  enabledelayedexpansion` scope; the flag is per-task with one saved value per
+  open scope, restored by `endlocal` and the frame-return unwind.
+- **`while` condition loops**: `while <expr> do cmd` re-runs its body while the
+  `set /a` expression is nonzero. The condition and body re-expand from
+  pristine text every pass (bare names read the live table, `%%n%%` resolves
+  the live value), and the DOS keywords `EQU NEQ LSS LEQ GTR GEQ` translate via
+  the pure `shell_while_translate_keywords()` so conditions never collide with
+  `<` input redirection. Bounded by `P4_CONFIG_WHILE_ITER_MAX`.
 - **Multi-stage pipes**: `shell_execute_pipe()` splits on unquoted `|` into up to
   `P4_CONFIG_PIPE_STAGE_MAX` stages. Each stage but the last spools to its own file, and the
   next stage reads it through the storage input-redirection slot. Spooling rather than streaming
   is the correct model here: the shell runs one command at a time on a single worker task, so
   there is no second process to stream into. Every spool file is removed on every exit path.
-- **Environment variables**: 24 RAM-only slots, names normalized to upper case and restricted to
-  alphanumerics plus underscore. PATH is one of these slots and defaults to `sd:/`.
+- **Environment variables**: 64 RAM-only slots (`P4_CONFIG_ENV_VAR_MAX`), names
+  normalized to upper case and restricted to alphanumerics plus underscore plus
+  `[`/`]` (so `SPR[3]` array slots are ordinary variables). PATH is one of
+  these slots and defaults to `sd:/`.
 - **`setlocal` / `endlocal` scoping**: a stack of full environment snapshots
   (`P4_CONFIG_SETLOCAL_DEPTH_MAX` = 8). Snapshotting the whole table is the honest approach for a
   fixed-size array: restoring it reverts creations, modifications, and deletions in one step. A
@@ -456,7 +511,11 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   and the dynamic pseudo-variables `%DATE%` (`MM-DD-YYYY`), `%TIME%` (`HH:MM:SS`),
   `%RANDOM%` (`0..32767`), `%CD%` (current directory), and `%ERRORLEVEL%`. An undefined
   `%VAR%` expands to the empty string (cmd.exe parity) so the DOS `if "%var%"==""` idiom
-  works; single-quoted runs stay literal and `^%` is a literal percent.
+  works; single-quoted runs stay literal and `^%` is a literal percent. The DOS
+  string forms `%VAR:~start[,len]%` (substring, negative counts from the end)
+  and `%VAR:old=new%` (case-insensitive replace-every) run through the pure
+  `shell_expand_substring()` / `shell_expand_replace()` helpers over the same
+  named-value resolution, so `%TIME:~0,2%` agrees with `%TIME%`.
 - **`if` forms**: `if [not] [/i] errorlevel N`, `if [not] [/i] exist <path>`,
   `if [not] [/i] defined <name>`, the numeric keywords (`EQU NEQ LSS LEQ GTR GEQ`), and
   `==` string tests. An undefined variable in a numeric operand reads as 0 (DOS parity).
@@ -534,7 +593,7 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   queue backs `set /p`/`pause`/`choice` when no redirect is active); **argv** is `%0`..`%9`/
   `%*` with `call`/`shift`; **cwd** is the storage-owned current directory; **PATH** is the
   batch-owned environment slot used by `shell_resolve_batch_path()`; and **environment
-  propagation** is the shared 24-slot RAM table mutated by `set`/`set /a`/`set /p`/`calc`
+   propagation** is the shared 64-slot RAM table mutated by `set`/`set /a`/`set /p`/`calc`
   and scoped by `setlocal`/`endlocal` (auto-unwound on frame return). See `command.md`
   "Batch process model" and `SDK.md` "Batch process model" / "Authoring and deploying batch
   files" for the full authoring and deployment rules.
@@ -590,6 +649,24 @@ The module depends only on `shell`, `clock`, `storage`, and the FreeRTOS/
 heap/esp_timer IDF components. `components/command` requires it to register
 the networking and environment hooks; native apps link `applib` instead of
 reaching into module internals.
+
+### App launch model and package trust
+
+The app/package contract is frozen in [`ABI.md`](ABI.md); the code follows it:
+
+- **One launch path.** `launch` discovers `*.bat` on PATH + `sd:/APPS` and
+  executes through `shell_execute_batch_file()`. A `type=hybrid` bundle is a
+  shim that calls a linked-in `app_main_t` (registered via `app_register`,
+  dispatched after built-ins and `.bat`), so a C app gets a batch front door
+  with no new runtime. `type=native` is dev/test-only. Nothing executes code
+  from the SD card (no `dlopen`/MMU); `.P4X`/`.bin` payloads are verified data.
+- **Package trust.** `pkg_commands.c` owns the trust core (`pkg_sign_*`):
+  canonical manifest bytes, ECDSA P-256 + SHA-256 verification against a raw
+  public key in the `p4sign` NVS namespace (`pkg key ...`), and the
+  enforcement policy (`P4_CONFIG_PKG_REQUIRE_SIGN`, `pkg install /signed`).
+  `asset_verify_app()` reports the verdict but delegates the crypto, so there
+  is one signature implementation. Bad signatures refuse before any copy;
+  unsigned bundles keep the CRC-only contract unless enforcement is on.
 
 ### Command Module (components/command)
 
@@ -1019,6 +1096,17 @@ built on the same runtime (v0.35.0: 6 surfaces).
   - All accept `/t:secs` to auto-cancel: each surface starts a FreeRTOS
     one-shot timer in `open` that fires `MODAL_EVENT_CLOSE_REQUEST`, so an
     unattended batch script can never hang on a dialog.
+  - **Declarative screens:** `screen run <file.frm>` (in
+    `components/command/screen_commands.c`) renders one flat-`KEY=VALUE`
+    screen through the existing verbs — dialog/list/ask via argv synthesis,
+    so no surface is implemented twice. `screen info` describes without UI.
+  - **Declarative flows:** `screen flow <file.flow>` walks a flat
+    `KEY=VALUE` navigation graph whose steps point at `.FRM` files, so a
+    multi-screen app needs no hand-written `goto` web. Routing is the pure
+    `screen_flow_select()` (file-order first match on `*`/`err:`/`val:`),
+    bounded by `P4_CONFIG_SCREEN_FLOW_ITER_MAX` and honoring the foreground
+    break. Each step calls `shell_command_screen()` for its `.FRM`, so screen
+    rendering stays in exactly one place.
   - **Screen capture:** a modal blocks the command worker for its whole
     lifetime, so the bare `screenshot` command is handled by the console-reader
     task instead — `shell_command_ops_t.modal_console_command` (registered by
@@ -1087,7 +1175,7 @@ shared modal runtime (see SDK.md, "Modal app surfaces").
 - **Layout integration**: `windows_enter_editor_mode()` aliases the transcript
   container as the editor surface and the input row becomes a status bar.
   The view hides the shell's own span group
-  (`windows_get_transcript_spans()`) while open and restores it on close.
+  (`windows_shell_spans_set_hidden()`) while open and restores it on close.
 - **Input routing**: the editor is a surface on the shared modal runtime in
   `components/modal/`. USB keys and serial lines reach it through the generic
   `shell_command_ops_t.modal_is_active` / `modal_handle_usb_key` /

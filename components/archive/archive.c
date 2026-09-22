@@ -18,6 +18,7 @@
 #include "shell.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_log.h"
 #include "ff.h"
 #include <stdio.h>
@@ -275,12 +276,9 @@ bool archive_path_safe(const char *path)
  * Small helpers (sessions, paths, time)
  * ======================================================================== */
 
-/** Heap helper: PSRAM first, plain malloc fallback. Freed with heap_caps_free. */
+/** Heap helper: PSRAM via p4heap. Freed with heap_caps_free. */
 static void *archive_alloc(size_t size){
-    void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (p == NULL) {
-        p = malloc(size);
-    }
+    void *p = p4heap_alloc_psram(size);
     return p;
 }
 

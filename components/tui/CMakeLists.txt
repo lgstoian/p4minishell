@@ -9,6 +9,7 @@ idf_component_register(
         ansi
         display
         gfx
+        p4heap
         espressif__esp_lvgl_port
         lvgl__lvgl
 )

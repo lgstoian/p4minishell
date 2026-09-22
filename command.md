@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.1.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.2.1** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -104,7 +104,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
   (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` pixels per notch).
 - Single-line input textarea with prompt for command entry
 - On-screen LVGL keyboard attached to input line
-- Prev/Next buttons for 10-command recall history
+- Prev/Next buttons for 32-command recall history
 - Serial console: idf.py monitor accepts same commands via UART/USB-Serial-JTAG
 - Command submission: LV_EVENT_READY on input line (touch) or Enter (serial)
 - Heavy commands run on dedicated worker task (not LVGL input callback stack)
@@ -122,12 +122,15 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `find`, `findstr`, `more`, `fc`, `comp`, `sort` | `components/storage/storage_text.c` |
 | `chkdsk`/`scandisk`, `format` | `components/storage/storage_disk.c` |
 | `sd info|ls|stat|cat|mount|eject`, `sdeject`, `disk` family | `components/storage/storage_fam.c` + `storage.c` |
-| `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`, `delay`, `notify`, `appmode` | `components/batch/batch.c` + `components/batch/batch_expr.c` (`set /a` evaluator) + `components/batch/calc.c` (TUI/modal verbs dispatch from `components/command/`) |
+| `set`, `calc`, `path`, `echo`, `call`, `if`, `for`, `for /L`, `while`, `goto`, `shift`, `pause`, `choice`, `setlocal`,
+`endlocal`, `exit`, `delay`, `notify`, `appmode` | `components/batch/batch.c` + `components/batch/batch_expr.c` (`set
+/a` evaluator) + `components/batch/calc.c` (TUI/modal verbs dispatch from `components/command/`) |
 | `dialog`, `list`, `ask`, `browse`, `view`, `hexview` | `components/command/tui_commands.c` + `components/modal/modal_surf.c` (dispatched from `components/command/command.c`) |
+| `screen` (`run`/`flow`/`info`) | `components/command/screen_commands.c` (flat KEY=VALUE reader + argv synthesis into the existing `dialog`/`list`/`ask`/`form`/`menu` verbs — no second surface; `flow` walks a declarative `.FLOW` graph over `.FRM` nodes) |
 | `draw` (`box`/`line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`) | `components/tui/tui.c` (`tui_draw_box` `components/tui/tui.c:241` title+style via `tui_cell_set` `components/tui/tui.c:129` `utf8[4]` `components/tui/tui.h:35` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`, `tui_draw_line` `components/tui/tui.c:296` single/double/heavy, `tui_fill` `tui_print_at`, `tui_flush` `components/tui/tui.c:620` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, `tui_enter_fullscreen` `components/tui/tui.c:417` / `windows_set_fullscreen` `components/windows/windows.c:418`, `windows_notify_keyboard_visibility` → `windows_refresh_tui_surface`, `tui_hide_for_modal`) + `components/command/command.c` dispatcher (auto-enters TUI for box/text/line/fill/clear/window `tui_init` `components/tui/tui.c:56`) |
 | `tui` (`status`/`clear`/`fullscreen`/`refresh`) | `components/tui/tui.c` (`tui_status` rect `1024x510` cols `80` rows `25` `p4minishell_config.h:325`, `tui_enter_fullscreen`/`tui_exit_fullscreen` `components/tui/tui.c:417`, `tui_refresh_surface` `components/tui/tui.c:408`, `tui_flush` `components/tui/tui.c:620`) + `components/windows/windows.c` (`windows_enter_tui_mode` keeps header visible by default, `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` hides header only on fullscreen, `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` `components/windows/windows.c:312`, `tui_hide_for_modal`) |
 | `color`, `locate`, `tui`, `draw`, `anchor` | `components/command/tui_commands.c` + `components/tui/tui.c` (`tui_set_default_color` `color` DOS parity, `tui_set_cursor` `locate` DOS parity, both TUI-aware via `tui_cell_set` `utf8[4]` and `tui_flush` recolor `#RRGGBB` per fg run) |
-| `gfx` (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`hline`/`vline`/`triangle`/`ellipse`/`polygon`/`fill`/`text`/`show`/`load`/`blit`/`free`/`slots`/`save`) | `components/command/gfx_commands.c` + `components/gfx/gfx.c` (pure RGB565 raster, `gfx_font.c` 8x8 ASCII font) |
+| `gfx` (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`hline`/`vline`/`triangle`/`ellipse`/`polygon`/`fill`/`text`/`show`/`load`/`blit`/`blitmany`/`free`/`slots`/`save`) | `components/command/gfx_commands.c` + `components/gfx/gfx.c` (pure RGB565 raster, `gfx_font.c` 8x8 ASCII font) |
 | `plot` (`tui`/`window`/`auto`/`axes`/`func`/`polar`/`para`/`data`/`bar`/`table`/`line`/`point`/`clear`/`status`) | `components/command/plot_commands.c` + `components/gfx/gfx_view.c` (pure viewport math) + `components/batch/calc.c` (expression sampling) |
 | `beep`, `tone`, `wavplay`, `audio`, `volume` | `components/command/audio_commands.c` + `components/audio/audio.c` (parsing here, codec/playback in `audio`) |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
@@ -137,10 +140,10 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `screenshot`, `receive`, `send` | `components/command/serial_commands.c` |
 | `display`, `keyboard`, `windows` (UI query) | `components/command/command_ui.c` (dispatched from `components/command/command.c`) |
 | `config` (persistent settings / CONFIG.SYS + factory reset) | `components/command/config_cmd.c` |
-| `crc32`, `asset check|list` + package install/verify (`pkg`) | `components/command/asset_commands.c` + `components/command/pkg_commands.c` |
+| `crc32`, `asset check|list` + package install/verify/signing (`pkg`, `pkg key`) | `components/command/asset_commands.c` + `components/command/pkg_commands.c` |
 | `db` (record store verbs, incl. `/field:`/`/sort:`) | `components/command/db_commands.c` (dispatched from `components/command/command.c`; field parser in `components/db/db.c`) |
 | `alarm`/`cal` (alarm + calendar verbs) | `components/command/alarm_commands.c` (dispatched from `components/command/command.c`) |
-| `gfind` (Palm-style global find over db + alarms) | `components/command/gfind_commands.c` (dispatched from `components/command/command.c`) |
+| `gfind` (Palm-style global find over db + alarms + opt-in text files) | `components/command/gfind_commands.c` (dispatched from `components/command/command.c`; file scope reuses `storage_walk_files`/`storage_scan_file_lines` from `components/storage/`) |
 | `export` (portable store interchange) | `components/command/export_commands.c` (dispatched from `components/command/command.c`) |
 | `csv` (grid substrate) | `components/command/csv_commands.c`; pure parser `components/storage/storage_csv.c` |
 | `crypt` (password file encryption) | `components/command/crypt_commands.c` (mbedTLS AES-256-GCM) |
@@ -179,24 +182,28 @@ to it with `argc`/`argv` (see `SDK.md`, "Native-app ABI"). ERRORLEVEL: 0.
 
 ### launch
 
-Discover, list, and run the script apps installed on the shell. An app is any
-`*.bat` or `*.cmd` file in a PATH directory or in the conventional `sd:/APPS`
-directory (up to `P4_CONFIG_LAUNCH_MAX` entries, `.bat` first per directory);
-its optional metadata lives in `sd:/APPS/<name>.APPINFO` (INI format:
-`title=`, `description=`, `version=`), shown when present. Typing an app name runs it
-directly (extensionless names probe `.bat` then `.cmd`); `launch` does the
-same by name.
+Discover, list, and run the apps installed on the shell. **Every app launches
+through a batch file** (see [`ABI.md`](ABI.md)): an app is any `*.bat` or
+`*.cmd` in a PATH directory or in the conventional `sd:/APPS` directory (up to
+`P4_CONFIG_LAUNCH_MAX` entries, `.bat` first per directory); its optional
+metadata lives in `sd:/APPS/<name>.APPINFO` (INI format: `title=`,
+`description=`, `version=`, and `type=` — a `hybrid` shim that drives a
+linked-in C `entry=` is tagged ` [hybrid]`), shown when present. Typing an app
+name runs it directly (extensionless names probe `.bat` then `.cmd`);
+`launch` does the same by name.
 
 - `launch` — list the installed apps as a numbered menu and run the chosen one.
 - `launch <name>` — run an app by name (PATH resolution, then `sd:/APPS`).
-- `launch /list` — bare list (`name  -  title`), for scripting.
+- `launch /list` — bare list (`name  -  title`, ` [hybrid]` suffix), for scripting.
 
 ERRORLEVEL: 0 ok, 1 not found, 2 usage.
 
-Example (the companion app carries an APPINFO file):
+Example:
 ```
 launch /list        ->  COMPANION  -  P4 Companion
+                    ->  HYBRID  -  Hybrid demo [hybrid]
 launch COMPANION    ->  runs COMPANION.BAT
+launch HYBRID       ->  runs HYBRID.BAT, which calls the linked `hello` entry
 ```
 
 The boot flow can offer an app automatically: a CONFIG.SYS `LAUNCH_APP=<app>`
@@ -230,7 +237,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v0.32.7 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.2.1 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -1239,6 +1246,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | return [code] | Return from a `call`/`gosub` scope (or, at the top level of a file, end the frame like `goto :eof`); an optional code sets errorlevel |
 | on <expr> goto <label>[,<label>...] | BASIC computed jump: the integer `expr` (via the `set /a` evaluator) selects the 1-based target; out of range falls through |
 | on <expr> gosub <label>[,<label>...] | As above, but `gosub`-calls the selected target (`on … call` is an alias) |
+| switch <value> <m>:<label> [...] [/d:<label>] | String-match dispatch: first case-insensitive match jumps, else the `/d:` default, else fallthrough with ERRORLEVEL 1 |
 | if [not] errorlevel N cmd | Run cmd when errorlevel is at least N |
 | if [not] exist <file> cmd | Run cmd when the file or directory exists |
 | if [/i] [not] "a"=="b" cmd | Run cmd when the strings match; `/i` makes the comparison case-insensitive |
@@ -1247,11 +1255,16 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | goto :eof | Jump to the end of the current batch file, unwinding its open setlocal scopes |
 | for %%v in (set) do cmd | Loop over literal tokens or a wildcard pattern |
 | for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c`, `skip=n`, `delims=xyz`, `tokens=a,b,m-n,*`; a single-quoted set `in ('command')` iterates command output |
+| for /L %%v in (start,step,end) do cmd | Count inclusively (negative step counts down; cap `P4_CONFIG_FORL_ITER_MAX`) |
+| for /A %%k in (PREFIX) do cmd | Iterate one `PREFIX[...]` array: `%%k` binds the index, the next letter the live value |
+| for /D %%v in (set) do cmd | Loop over directory names (wildcards match dirs; literals pass through) |
+| for /R [path] %%v in (set) do cmd | Recursively loop over files matching the set under `path` (cwd default; depth cap `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`) |
+| while <expr> do cmd | Re-run while a `set /a` expression is nonzero (`EQU NEQ LSS LEQ GTR GEQ` keywords; bare names or `%%n%%` stay live; cap `P4_CONFIG_WHILE_ITER_MAX`) |
 | shift | Shift batch arguments left by one position |
 | pause | Wait for a keypress |
 | choice [/C:keys] [/N] [/T:c,secs] [/S] [text] | Wait for one of the listed keys |
-| setlocal | Push a copy of the environment; later changes are local |
-| endlocal | Pop the most recent setlocal scope |
+| setlocal [enabledelayedexpansion\|disabledelayedexpansion] | Push a copy of the environment; later changes are local (`!VAR!` delayed expansion when enabled; `enableextensions`/`disableextensions` accepted and ignored) |
+| endlocal | Pop the most recent setlocal scope (restores variables and the delayed flag) |
 | exit [code] | Leave every nested batch file, setting errorlevel |
 | exit /b [code] | Leave only the current batch file |
 | proc | List every active batch process (script, depth, args, echo state) |
@@ -1478,6 +1491,12 @@ while `if a EQU b` compares numerically.
 `defined <name>` (variable is set, cmd.exe parity), the numeric keywords above,
 and `"a"=="b"` string tests. An undefined variable in a numeric operand reads
 as 0, matching DOS.
+
+**Parenthesized groups.** Any `if` body may be a single-line group, with an
+optional `else` group: `if %n% GTR 1 (echo big & exit /b 0) else (echo small)`.
+Each group runs through the full pipeline when selected. Groups cannot hold
+unbalanced parens; multi-line branches stay `:label` + `goto`/`gosub`
+subroutines.
 
 ### set /p — prompted input
 
@@ -1839,8 +1858,13 @@ IDF mbedTLS port in `components/command/crypt_commands.c`.
   `wifi connect` precedent).
 
 The envelope is `P4CRYPT1` + salt + nonce + ciphertext + 16-byte tag. Files
-stream in 4 KB chunks through internal (DMA-safe) buffers, so multi-megabyte
-files never hand PSRAM pointers to FATFS. Writes are atomic; a failed run (or
+stream in 512-byte chunks through small cache-aligned DMA-capable buffers
+(hardware esp-aes), so multi-megabyte files never hand PSRAM pointers to
+FATFS and the GDMA descriptor array stays tiny. When the DMA pool is too
+fragmented for hardware, a self-contained software AES-256-GCM fallback
+(`components/swgcm/`) seals/opens the identical format with no DMA needed —
+the old bugs.md F23 failure is fixed, so lock/unlock pass on every board with
+no suite skip. Writes are atomic; a failed run (or
 a tag mismatch) removes the partial. A wrong password and a corrupt file are
 reported identically (`wrong password or corrupt file`). The password buffer
 and key are zeroed after every run.
@@ -2017,6 +2041,9 @@ Functions (BASIC names; `ASIN`/`ACOS`/`ATAN` are accepted for `ASN`/`ACS`/
 | `C2F` `F2C` `IN2MM` `MM2IN` `LB2KG` `KG2LB` | Unit conversions (temperature, length, mass) |
 | `ASC` `CHR$` `LEN` | Char→code; code→char; string length |
 | `LEFT$` `MID$` `RIGHT$` | 1-based string slices |
+| `UPPER$` `LOWER$` `TRIM$` | Case convert; strip surrounding spaces/tabs |
+| `INSTR(text,needle)` `INSTR(start,text,needle)` | 1-based position of `needle` (0 when absent); 3-arg form starts at a 1-based index like `MID$` |
+| `REPLACE$(text,old,new)` | Every `old` becomes `new` (empty `old` = unchanged) |
 | `PV` `FV` `PMT` `NPER` `RATE` | Time value of money, HP-12C conventions (cash out is negative; optional `fv`/`pv`, `type` 0=end/1=beginning, `RATE` optional guess) |
 | `NPV(rate,v0,v1,...)` `IRR(v0,v1,...)` | Net present value; internal rate of return (up to `P4_CONFIG_CALC_ARG_MAX` args) |
 | `SLN` `SYD` `DB` | Straight-line / sum-of-years-digits / declining-balance depreciation (`DB` optional first-year `month`) |
@@ -2057,7 +2084,8 @@ literal caret, not a continuation.
   path, `d` = drive (always empty on FATFS), `p` = directory with trailing
   `/`, `n` = base name without extension, `x` = extension with dot
   (`%~dpnx1` combines them; `s` is accepted and ignored — no short names)
-- %VAR% environment variable expansion
+- %VAR% environment variable expansion (names allow letters, digits, `_`, `[`, `]` — `SPR[3]` array slots are ordinary variables)
+- `%VAR:~start[,len]%` substrings (negative counts from the end) and `%VAR:old=new%` case-insensitive replacement
 - Dynamic pseudo-variables (always win over a user variable of the same name):
   - `%ERRORLEVEL%` — current errorlevel as a decimal string
   - `%DATE%` — current date as `MM-DD-YYYY`
@@ -2079,6 +2107,14 @@ literal caret, not a continuation.
   are ignored with a `batch: too many labels` warning, so keep big apps under
   the cap.
 - `for %%var in (set) do command` loops over literal tokens or a single wildcard pattern (for example `for %%F in (*.txt) do echo %%F`)
+- `for /L %%v in (start,step,end) do command` numeric loops (negative step counts down; cap `P4_CONFIG_FORL_ITER_MAX`)
+- `for /A %%k in (PREFIX) do command` iterates one `PREFIX[...]` array (`%%k` = index, next letter = live value)
+- `for /D %%v in (set) do command` directory loops; `for /R [path] %%v in (set) do command` recursive file loops
+- `while <expr> do command` condition loops over `set /a` expressions with `EQU NEQ LSS LEQ GTR GEQ` keywords (cap `P4_CONFIG_WHILE_ITER_MAX`; bare names or `%%n%%` stay live per pass)
+- `switch <value> <match>:<label> [...] [/d:<label>]` string-match dispatch to a label
+- `if <cond> (true-cmd) [else (false-cmd)]` single-line parenthesized groups (multi-line branches stay `:label` + `goto`/`gosub`)
+- `!VAR!` delayed expansion inside `setlocal enabledelayedexpansion` (same forms as `%VAR%`; literal otherwise)
+- The single-file [`batch.md`](batch.md) spec covers the whole language for app authors and AI agents
 
 ### for — loops (interactive and batch)
 `for %var in (set) do command` runs `command` once per element of `set`, with
@@ -2093,6 +2129,89 @@ wildcard pattern expanded against the current directory:
 At the interactive prompt the variable is written `%var`; inside batch files it
 is `%%var` (the batch-file escape for a literal `%`). The body may not contain
 the chain/pipe operators that the shell splits on before `for` runs.
+
+### for /L — numeric loops
+
+`for /L %%v in (start,step,end) do command` counts from `start` to `end`
+inclusively (a negative step counts down), binding each value as decimal
+text — cmd.exe parity for game loops and table fills:
+
+```
+for /L %%i in (1,1,5) do echo %%i
+for /L %%i in (0,1,7) do set SPR[%%i]=0
+for /L %%i in (10,-2,0) do echo %%i
+```
+
+Bounded by `P4_CONFIG_FORL_ITER_MAX` (100000). A malformed set prints
+`for /L: needs (start,step,end) with a nonzero step`.
+
+### for /A — associative-array iteration
+
+`for /A %%k in (PREFIX) do command` iterates one `PREFIX[...]` array in slot
+order, binding the index text to `%%k` and the live value to the next letter
+(`%%l`), mirroring the `for /f` consecutive-letter convention (use letters
+`a`–`y` so the value letter exists):
+
+```
+set SPR[0]=10
+set SPR[1]=20
+for /A %%k in (SPR) do echo %%k=%%l
+```
+
+### for /D — directory loops
+
+`for /D %%v in (set) do command` matches directory names instead of file
+names (cmd.exe parity): wildcard tokens expand to directories, literal
+tokens pass through unverified:
+
+```
+for /D %%v in (P*) do echo DIR %%v
+```
+
+### for /R — recursive-tree loops
+
+`for /R [path] %%v in (set) do command` walks the tree for files matching
+the set (cmd.exe parity; empty set matches everything):
+
+```
+for /R %%v in (*.TXT) do echo %%v
+for /R APPS %%v in (*.BAT) do echo %%v
+```
+
+Walks to `P4_CONFIG_DIR_RECURSE_DEPTH_MAX` (8), emits full paths, caps at
+the listing limit, and skips unreadable subdirectories.
+
+### switch — string-match dispatch
+
+`switch <value> <match>:<label> [...] [/d:<label>]` jumps to the first
+case-insensitive match (the string twin of `on ... goto`); otherwise the
+`/d:` default; otherwise fallthrough with ERRORLEVEL 1. Matches split on
+the last `:` so paths survive (`C:\x:lbl`); a missing label aborts like
+`goto`. Batch files only:
+
+```
+switch %MODE% setup:cfg diag:dg /d:help
+```
+
+### while — condition loops
+
+`while <expr> do command` re-runs its body while the `set /a` expression is
+nonzero, with the DOS comparison keywords (`EQU NEQ LSS LEQ GTR GEQ`, `if`
+parity) so conditions never collide with redirection (`<` is claimed as
+input redirect before dispatch — `while n LSS 3`, never `while n<3`):
+
+```
+set /a n=0
+while n LSS 3 do set /a n=n+1
+while %%n%% GTR 0 do set /a n=n-1
+```
+
+The condition and body re-expand from pristine text every pass, so bare
+names read the live table and `%%n%%` resolves the live value (a single
+`%n%` would freeze at its entry value — the pipeline expands once before
+the loop starts). Bounded by `P4_CONFIG_WHILE_ITER_MAX` (100000);
+ERRORLEVEL 0 done, 1 capped/condition error, 2 usage. Full rules and the
+game-loop pattern live in [`batch.md`](batch.md).
 
 ### for /f — file-line loops
 
@@ -2185,8 +2304,10 @@ state model is fully defined so scripts behave predictably:
 - **PATH** — the RAM-only `PATH` environment variable (default `sd:/`),
   used by `shell_resolve_batch_path` to find `.bat` files: the literal
   name, then `name.bat`, then each `;`-separated PATH entry with both forms.
-- **environment propagation** — the 24-slot RAM table is shared across the
-  whole session. `set NAME=value`, `set /a`, `set /p`, and `calc` mutate it;
+- **environment propagation** — the 64-slot RAM table (`P4_CONFIG_ENV_VAR_MAX`)
+  is shared across the whole session. `set NAME=value`, `set /a`, `set /p`,
+  and `calc` mutate it; names allow letters, digits, `_`, `[`, `]` (so
+  `SPR[3]` array slots are ordinary variables — see [`batch.md`](batch.md));
   `call` hands the full table to the callee; `setlocal`/`endlocal` push and
   pop snapshots (a scope left open is unwound when its frame returns); a
   bare `exit` unwinds every nested frame.
@@ -2276,6 +2397,75 @@ title or no fields is usage (`2`). Serial input is `ok`/`y` to accept or
 set theme=amber
 form "Preferences" "Theme=select:default|amber|ice|mono:theme" "Lock=check:lock"
 ```
+
+### screen
+
+`screen run <file.frm>` renders one declarative screen from a flat
+`KEY=VALUE` file (same shape as `APPS/<APP>.APPINFO`) through the existing
+`dialog` / `list` / `ask` / `form` / `menu` verbs — the file declares, the
+verbs render, results land in the same variables with the same ERRORLEVEL.
+`screen info <file.frm>` describes the screen without showing UI.
+
+```
+title=Network setup
+type=form
+timeout=60
+field0=SSID=text:SSID
+field1=Password=password:PASS
+field2=DHCP=check:DHCP
+```
+
+| Key | Meaning |
+|-----|---------|
+| `type=` | Required: `dialog` `list` `ask` `form` `menu` |
+| `title=` | Screen title (required except `menu`) |
+| `timeout=` | Auto-cancel seconds (same `/t:` semantics) |
+| `message=` | `dialog` body (required) |
+| `buttons=` | `dialog` buttons as `A\|B` (1–2; default `OK`) |
+| `items=` | `list`/`menu` entries as `a\|b\|c` (required, up to 32) |
+| `var=` | `list`/`ask` result variable (`ask` defaults to `ASK_RESULT`) |
+| `prompt=` `default=` | `ask` prompt (required) and default text |
+| `password=` | `ask` hides input when `1`/`yes`/`true`/`on` |
+| `field0..field11=` | `form` fields as `Label=type[:arg]:VAR` (at least one required) |
+
+`screen flow <file.flow>` runs a **declarative multi-screen flow**: a flat
+`KEY=VALUE` navigation graph whose steps point at `.FRM` files, so a screen
+chain needs no hand-written `goto` web. `screen info <file.flow>` lists the
+steps and rules (a file is a flow when it has a `flow.start=` key).
+
+```
+flow.start=welcome
+welcome.screen=WELCOME.FRM
+welcome.*=menu
+menu.screen=MENU.FRM
+menu.var=MENUCHOICE
+menu.err:1=wifi
+menu.err:2=about
+menu.*=end
+wifi.screen=WIFI.FRM
+wifi.*=menu
+about.screen=ABOUT.FRM
+about.*=menu
+```
+
+- Step keys: `<id>.screen=` (the `.FRM`), `<id>.var=` (value source for
+  `val:`), and routing `<id>.err:<n>=`, `<id>.val:<text>=`, `<id>.*=`.
+- Rules match in file order (first wins); a target is another step, or
+  `end`/`exit` (stop; ERRORLEVEL = the last screen's). No match ends the flow.
+- Each step prints a muted `flow: <id>` trace. Stops at
+  `P4_CONFIG_SCREEN_FLOW_ITER_MAX` transitions (ERRORLEVEL 1), honors `^C`,
+  and refuses an ill-formed graph up front (ERRORLEVEL 1). `screen run` on a
+  flow refuses and points at `screen flow`.
+- ERRORLEVEL: the last screen's (0/1/2/255 per its verb), or 1 on a bad flow.
+
+```bat
+screen flow SETUP.FLOW
+echo SSID=%SSID% MODE=%MODE%
+```
+
+A multi-screen app can also stay hand-rolled in batch: several `screen run`
+calls branched with `if errorlevel` / `goto`. Full format reference in
+[`batch.md`](batch.md) §13 / §13.1.
 
 ### owner
 
@@ -2456,6 +2646,7 @@ pixels are ignored, never an error).
 | `gfx image <path> [x y [w h]]` | Decode a 24/32-bit `BI_RGB` BMP (either orientation) straight to the target rect and blit it onto the canvas. Defaults to native size aspect-fit to the canvas at 0,0. Reuses the shared decoder; ERRORLEVEL `1` on a bad file, `2` usage. |
 | `gfx load <slot 0..7> <path>` | Ingest a 24/32-bit uncompressed BMP (`BI_RGB`, the exact format `screenshot <file>` writes, at most 64×64) into a sprite slot (PSRAM). Rejects other bit depths, RLE, and oversize art with ERRORLEVEL `1`. |
 | `gfx blit <slot> <x> <y> [transparent]` | Stamp a sprite onto the canvas (clipped; needs `gfx show`). Optional transparent color skips matching pixels. ERRORLEVEL `1` when the slot is empty. |
+| `gfx blitmany <slot> [/s:N] [/r:deg] <x1> <y1> [<x2> <y2> ...] [transparent]` | Stamp one sprite at up to `P4_CONFIG_GFX_BLITMANY_MAX` (64) positions in a single command — a whole formation per line for batch games. `/s:1..4` upscales every stamp, `/r:0|90|180|270` rotates clockwise first (refused when the transformed sprite exceeds the canvas). A trailing odd token is the transparent color (same as `blit`). |
 | `gfx free <slot>` | Release one sprite slot. |
 | `gfx slots` | List live slots as `gfx.slot: <n> <w>x<h>` (batch `for /f`-friendly). |
 | `gfx save <path>` | Write the canvas as a 24-bit BMP (same layout `screenshot <file>` produces: shared `screenshot_write_bmp_headers`, guarded SD session, free-space precheck, partial removed on failure). |
@@ -2568,38 +2759,45 @@ Installing it is a verify-then-copy; removing it is a trash (undelete-able)
 delete, so `undelete` can recover an uninstalled payload.
 
 - **Installed side** (`sd:/APPS/`): `<APP>.APPINFO` (metadata: `title=`,
-  `description=`, `version=`, plus `type=` — `batch` when absent, or `native`
-  with `abi=`/`arch=`/`entry=`, see `docs/native_packaging.md`) and
-  `<APP>.ASSETS` (the `path=HEXCRC` manifest —
-  the same format and checker as `asset`).
+  `description=`, `version=`, plus `type=` — `batch` when absent, `hybrid`, or
+  `native`, with `abi=`/`arch=`/`entry=`, see [`ABI.md`](ABI.md)) and
+  `<APP>.ASSETS` (the `path=HEXCRC` manifest, optionally with one
+  `SIGN=<128 hex>` line — the same format and checker as `asset`).
 - **Bundle side** (`sd:/PKGS/<APP>/`): `<APP>.ASSETS` (manifest),
   `<APP>.APPINFO` (metadata), and payload files at their install-relative
   paths. A root payload `FOO.BAT` installs to `sd:/FOO.BAT`; a payload
   `sub/x` installs to `sd:/sub/x`. Bundles are built host-side by
-  `apps/push_pkgs.py` (same PIL/`zlib`/receive path as the other push tools).
+  `apps/push_pkgs.py` (add `--sign NAME.priv.pem` to sign every manifest).
 
 | Command | Description |
 |---------|-------------|
-| `pkg list` | One line per installed app: `APP  title  vVERSION  N file(s)` (` [native]` suffix for native bundles) |
-| `pkg info <app>` | Title/description/version/type (+abi) plus each manifest entry as `ok`/`MISSING`/`BAD` |
-| `pkg verify <app>` | CRC-check the installed manifest (`pkg: OK n/m ok` / `FAIL`) |
+| `pkg list` | One line per installed app: `APP  title  vVERSION  N file(s)` (` [native]`/` [hybrid]` suffix) |
+| `pkg info <app>` | Title/description/version/type (+abi), a `signed:` line, plus each manifest entry as `ok`/`MISSING`/`BAD` |
+| `pkg verify <app>` | CRC-check the installed manifest and report its signature verdict (`pkg: OK n/m ok`) |
 | `pkg check` | Run the verify check over every installed app and summarise `pkg: n/m package(s) ok` |
-| `pkg install <app>` | Two-pass copy of `PKGS/<app>/`: pass 1 verifies every payload CRC, pass 2 copies payloads, then the APPINFO and manifest into `APPS/` |
+| `pkg install <app> [/signed]` | Two-pass copy of `PKGS/<app>/`: pass 1 verifies CRCs **and** the signature, pass 2 copies payloads, then the APPINFO and manifest into `APPS/` |
 | `pkg remove <app>` | Trash every manifest payload plus `<APP>.APPINFO` and `<APP>.ASSETS` |
+| `pkg key show \| install <file> \| clear` | Manage the trusted ECDSA P-256 public key (`p4sign` NVS store) |
 
 `pkg install` aborts without touching installed files if any bundle payload is
-missing or corrupt (`pkg: install aborted (n bad file(s))`), or if the bundle
-`type=` is anything but `batch`/`native`. Native bundles (`type=native`)
-install **store-only** in v1.1 — verified and copied, but not executable
-(`pkg: <app> is a native package (stored only, …)`); an `abi=` mismatch with
-`P4_CONFIG_NATIVE_ABI` warns. `launch` never offers native apps. `pkg` reuses the
-`asset` manifest parser/checker (`asset_parse_line`, `asset_crc_file`,
+missing or corrupt (`pkg: install aborted (n bad file(s))`), if the bundle
+`type=` is anything but `batch`/`hybrid`/`native`, or if a **present but bad
+signature** fails (`pkg: bundle <app> has a BAD signature`). Signing is opt-in:
+an unsigned bundle installs (noted `unsigned (CRC-only)`), unless `/signed` or
+`P4_CONFIG_PKG_REQUIRE_SIGN=1` refuses it; a signed bundle with no trusted key
+warns (or refuses under enforcement). `pkg key install` rejects an off-curve
+point; `pkg key clear` confirms first. Hybrid bundles must set `entry=`;
+`launch` tags hybrid shims ` [hybrid]`. Native bundles (`type=native`) install
+**store-only** — verified and copied, but they run only if linked into the
+firmware (`launch` never offers native-only apps). `pkg` reuses the `asset`
+manifest parser/checker (`asset_parse_line`, `asset_crc_file`,
 `asset_verify_app`) and `shell_fs_copy_file`, so an app name is the same
 `[A-Za-z0-9_-]+` rule as `asset`. `pkg info` on a missing manifest prints
 `manifest: APPS/<APP>.ASSETS (missing)`. ERRORLEVEL: `0` ok, `1`
-missing/corrupt/empty-manifest, `2` usage or bad app name. Companion UI:
-**Live System ‣ Packages** in `apps/companion/SYS.BAT`; HW driver
-`tools/pkg_test.py`.
+missing/corrupt/untrusted/empty-manifest, `2` usage or bad app name. Full
+trust rules in [`ABI.md`](ABI.md) §4; Companion UI: **Live System ‣ Packages**
+in `apps/companion/SYS.BAT`; HW driver `tools/pkg_test.py`; host signer
+`tools/pkg_sign.py`.
 
 ### color
 
@@ -2639,10 +2837,11 @@ Proven patterns (all hardware-verified on COM3; reference apps:
   clean message on ERRORLEVEL `1` — `start`ed copies refuse loudly.
 - One flush per frame: `draw hold on` at entry, compose, `draw refresh`;
   `draw hold off` + `draw close` at every exit (`:end`, `:quit`, death).
-- Batch has no arrays, indirection, substrings, or delayed expansion, and
-  env caps at 24 vars (`P4_CONFIG_ENV_VAR_MAX`, one ambient `PATH` at boot):
-  fixed literal slots (`s0`..) plus packed numbers (`y*64+x`, split only for
-  checks/draws with `set /a`) cover snake-class state in ~22 vars.
+- Batch has `NAME[i]` arrays (iterated with `for /A`), `%VAR:~%`/`%VAR:old=new%`
+  string forms, `!VAR!` delayed expansion, and 64 env slots
+  (`P4_CONFIG_ENV_VAR_MAX`, one ambient `PATH` at boot): indexed slots plus
+  packed numbers (`y*64+x`, split only for checks/draws with `set /a`) cover
+  snake-class state with room to spare (see [`batch.md`](batch.md) §6).
 - `list` serial numbers are 1-based while its ERRORLEVEL is 0-based; `q`
   cancels (255). Count items twice when writing `if errorlevel` chains —
   an off-by-one silently remaps every selection (caught live in TCMD).
@@ -3042,10 +3241,10 @@ misspellings from an SD wordlist (`sd:/DICTS/<name>.words`); toggle with the
 - **Touch keyboard**: the symbol page (reachable via `1#`) adds a `Nav`
   button that opens a navigation page (Tab, Ins, Del, arrows, Home/End,
   PgUp/PgDn, Find, Next, Rep, All, Case, Goto, Undo, Redo, Save, SaveAs, Quit), and a
-  second `Nav2` page adds the clipboard and advanced editing (Copy, Cut,
-  Paste, SelAll, WdL/WdR word nav, DocH/DocE, DelLn, DelE). Every editor
+  second `Edit` page adds the clipboard and advanced editing (Copy, Cut,
+  Paste, SelAll, WordL/WordR word nav, DocTop/DocBot, DelLine, DelEOL). Every editor
   feature is reachable from the touch keyboard alone. Mode switching
-  (abc / ABC / 1# / Nav / Nav1 / Nav2) is handled by the shell keyboard
+  (abc / ABC / 1# / Nav / Edit) is handled by the shell keyboard
   callback.
 - **Serial console**: while the editor is open, UART lines are fed to the
   editor (`\q` quit, `\s` save, `\f` find, `\g` go-to-line, `\o` save-as,
@@ -3259,19 +3458,27 @@ ERRORLEVEL: 0 ok, 1 empty/out-of-range/unresolved, 2 usage.
 
 ### gfind
 
-Palm-style global find across the structured stores: the `db` record databases
-and the `alarm`/calendar store.
+Palm-style global find across the structured stores — the `db` record
+databases and the `alarm`/calendar store — plus an **opt-in** scan of text
+files (`/files`), so one query searches everything a PDA would.
 
-Usage: `gfind <text> [/b] [/i] [/count] [/cat:N] [/field:k=v] [/db:name] [/noalarms] [/nodb]`
+Usage: `gfind <text> [/b] [/i] [/count] [/cat:N] [/field:k=v] [/db:name]
+[/files [/root:path] [/ext:.txt,.md] [/hidden] [/filesonly]] [/noalarms] [/nodb]`
 
 | Switch | Meaning |
 |--------|---------|
 | `/b` | Bare output (pipe/`for /f` friendly) |
 | `/i` | Case-insensitive match |
-| `/count` | Print `gfind.db`/`gfind.alarms`/`gfind.total` counts instead of rows |
+| `/count` | Print `gfind.db`/`gfind.alarms`/`gfind.files`/`gfind.total` counts instead of rows |
 | `/cat:N` | Restrict database matches to category `N` |
 | `/field:k=v` | Require a `k=v` payload field to match |
 | `/db:name` | Search only the named database (default: all databases) |
+| `/files` | Also scan text files (off by default unless `P4_CONFIG_GFIND_SEARCH_FILES_DEFAULT`) |
+| `/nofiles` | Force the file scope off (overrides the config default) |
+| `/root:path` | File-scope root (default `sd:/`) |
+| `/ext:.txt,.md` | File-scope extensions (default: text-bearing kinds from the filetype registry) |
+| `/hidden` | Descend into dot directories (`.trash` etc.; off by default) |
+| `/filesonly` | One line per matching file instead of per line |
 | `/noalarms` | Skip the alarm store |
 | `/nodb` | Skip the databases |
 
@@ -3279,13 +3486,23 @@ The search text is a single positional argument — quote it when it contains
 spaces (`gfind "team call"`); more than one positional is a usage error.
 Prints `gfind.matches` with the number of matches (unless `/b`). Secret records
 are only searched/revealed while the device is unlocked; `conceal hide` skips
-them entirely. Memory of the note app (`db` records) and the calendar are both
-covered, so `gfind` is the Palm-style global find.
+them entirely.
+
+The file scope walks the **same shared storage core `findstr /S` uses**
+(`storage_walk_files` + `storage_scan_file_lines`, one matcher), skips the
+structured-store directories (`P4_CONFIG_GFIND_SKIP_DIRS`: `DBS`, `ALARMS`),
+images, and unknown kinds, and is bounded by `P4_CONFIG_GFIND_MAX_FILES` /
+`_MAX_FILE_BYTES` / `_MAX_MATCHES`. Bare file rows are
+`FILE|<path>|<lineno>|<text>`, alongside the existing `DB|` and `ALARM|` rows.
+There is no on-disk search index: search is always live over the stores and
+files.
 
 Examples:
 ```
 gfind Standup
 gfind /i /b meeting /db:contacts
+gfind "todo" /files /root:sd:/NOTES /ext:.txt,.md
+gfind budget /files /count
 ```
 
 ERRORLEVEL: 0 = at least one match, 1 = no match, 2 = usage / error.

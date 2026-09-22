@@ -38,6 +38,7 @@
 #include "tui.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -222,10 +223,7 @@ static int userial_cmd_send(int argc, char **argv)
         shell_print_error("userial: no device open (usb userial open <vid:pid>)");
         return 1;
     }
-    payload = heap_caps_malloc(payload_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (payload == NULL) {
-        payload = malloc(payload_cap);
-    }
+    payload = p4heap_alloc_psram(payload_cap);
     if (payload == NULL) {
         shell_print_error("userial: out of memory");
         return 1;
@@ -307,10 +305,7 @@ static int userial_cmd_recv(int argc, char **argv)
         shell_print_error("userial: no device open (usb userial open <vid:pid>)");
         return 1;
     }
-    buffer = heap_caps_malloc(max, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (buffer == NULL) {
-        buffer = malloc(max);
-    }
+    buffer = p4heap_alloc_psram(max);
     if (buffer == NULL) {
         shell_print_error("userial: out of memory");
         return 1;
@@ -511,10 +506,7 @@ static int userial_cmd_term(int argc, char **argv)
         shell_print_error("userial: no interactive key source (term needs keys)");
         return 1;
     }
-    rxbuf = heap_caps_malloc(P4_CONFIG_USERIAL_CHUNK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (rxbuf == NULL) {
-        rxbuf = malloc(P4_CONFIG_USERIAL_CHUNK_BYTES);
-    }
+    rxbuf = p4heap_alloc_psram(P4_CONFIG_USERIAL_CHUNK_BYTES);
     if (rxbuf == NULL) {
         shell_print_error("userial: out of memory");
         return 1;
@@ -526,13 +518,8 @@ static int userial_cmd_term(int argc, char **argv)
     char *vt_text = NULL;
     if (use_vt) {
         bool was_active = tui_is_active();
-        vt_text = heap_caps_malloc((size_t)P4_CONFIG_USERIAL_CHUNK_BYTES +
-                                   (size_t)P4_CONFIG_VT100_PENDING_BYTES + 1,
-                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (vt_text == NULL) {
-            vt_text = malloc((size_t)P4_CONFIG_USERIAL_CHUNK_BYTES +
-                             (size_t)P4_CONFIG_VT100_PENDING_BYTES + 1);
-        }
+        vt_text = p4heap_alloc_psram((size_t)P4_CONFIG_USERIAL_CHUNK_BYTES +
+                                   (size_t)P4_CONFIG_VT100_PENDING_BYTES + 1);
         if (vt_text == NULL) {
             shell_print_warning("userial: VT screen unavailable, using /raw passthrough");
             use_vt = false;

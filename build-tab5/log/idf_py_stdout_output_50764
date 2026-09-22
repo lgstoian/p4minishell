@@ -1,0 +1,38 @@
+Command: ninja all
+[1/29] Building C object esp-idf/command/CMakeFiles/__idf_command.dir/command.c.obj
+[2/29] Performing build step for 'bootloader'
+[1/1] C:\WINDOWS\system32\cmd.exe /C "cd /D D:\Code\new\p4minishell\build-tab5\bootloader\esp-idf\esptool_py && C:\Users\lgstoian\.espressif\python_env\idf5.5_py3.12_env\Scripts\python.exe C:/esp/v5.5.5/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x2000 D:/Code/new/p4minishell/build-tab5/bootloader/bootloader.bin"
+Bootloader binary size 0x5e40 bytes. 0x1c0 bytes (2%) free.
+[3/29] No install step for 'bootloader'
+[4/29] Completed 'bootloader'
+[5/29] Building C object esp-idf/tui/CMakeFiles/__idf_tui.dir/tui.c.obj
+[6/29] Building C object esp-idf/windows/CMakeFiles/__idf_windows.dir/windows.c.obj
+[7/29] Building C object esp-idf/command/CMakeFiles/__idf_command.dir/command_ui.c.obj
+[8/29] Linking C static library esp-idf\windows\libwindows.a
+[9/29] Building C object esp-idf/editor/CMakeFiles/__idf_editor.dir/editor_view.c.obj
+[10/29] Building C object esp-idf/command/CMakeFiles/__idf_command.dir/ui_commands.c.obj
+[11/29] Building C object esp-idf/modal/CMakeFiles/__idf_modal.dir/modal_surf.c.obj
+[12/29] Building C object esp-idf/command/CMakeFiles/__idf_command.dir/font_commands.c.obj
+[13/29] Building C object esp-idf/command/CMakeFiles/__idf_command.dir/gfx_commands.c.obj
+[14/29] Building C object esp-idf/command/CMakeFiles/__idf_command.dir/config_cmd.c.obj
+[15/29] Building C object esp-idf/boot/CMakeFiles/__idf_boot.dir/boot.c.obj
+[16/29] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/main.c.obj
+[17/29] Building C object esp-idf/command/CMakeFiles/__idf_command.dir/tui_commands.c.obj
+[18/29] Building C object esp-idf/shell/CMakeFiles/__idf_shell.dir/shell.c.obj
+[19/29] Linking C static library esp-idf\shell\libshell.a
+[20/29] Linking C static library esp-idf\tui\libtui.a
+[21/29] Linking C static library esp-idf\modal\libmodal.a
+[22/29] Linking C static library esp-idf\editor\libeditor.a
+[23/29] Linking C static library esp-idf\command\libcommand.a
+[24/29] Linking C static library esp-idf\boot\libboot.a
+[25/29] Linking C static library esp-idf\main\libmain.a
+[26/29] Generating esp-idf/esp_system/ld/sections.ld
+[27/29] Linking CXX executable p4minishell.elf
+[28/29] Generating binary image from built executable
+esptool.py v4.12.0
+Creating esp32p4 image...
+Merged 6 ELF sections
+Successfully created esp32p4 image.
+Generated D:/Code/new/p4minishell/build-tab5/p4minishell.bin
+[29/29] C:\WINDOWS\system32\cmd.exe /C "cd /D D:\Code\new\p4minishell\build-tab5\esp-idf\esptool_py && C:\Users\lgstoian\.espressif\python_env\idf5.5_py3.12_env\Scripts\python.exe C:/esp/v5.5.5/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app D:/Code/new/p4minishell/build-tab5/partition_table/partition-table.bin D:/Code/new/p4minishell/build-tab5/p4minishell.bin"
+p4minishell.bin binary size 0x325390 bytes. Smallest app partition is 0x800000 bytes. 0x4dac70 bytes (61%) free.

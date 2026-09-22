@@ -29,6 +29,8 @@ idf_component_register(
         test_modal.c
         test_power.c
         test_serial.c
+        test_screen.c
+        test_gfind.c
         test_tui.c
         test_clipboard.c
         test_history_file.c
@@ -44,6 +46,7 @@ idf_component_register(
         test_macro.c
         test_bind.c
         test_crypt.c
+        test_sw_gcm.c
         test_tcpterm.c
         test_userial.c        test_asset.c
         test_pkg.c
@@ -74,6 +77,7 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/imu/include"
         "${CMAKE_SOURCE_DIR}/../components/power_monitor/include"
         "${CMAKE_SOURCE_DIR}/../components/imagefmt/include"
+        "${CMAKE_SOURCE_DIR}/../components/swgcm/include"
         "${CMAKE_SOURCE_DIR}/../components/header"
     REQUIRES
         unity
@@ -98,6 +102,7 @@ idf_component_register(
         imu
         power_monitor
         imagefmt
+        swgcm
         header
         esp_timer
         mbedtls

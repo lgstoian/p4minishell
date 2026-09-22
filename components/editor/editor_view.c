@@ -2760,7 +2760,6 @@ bool editor_view_handle_osk(const char *label)
 bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
 {
     lv_obj_t *surface;
-    lv_obj_t *shell_spans;
 
     if (s_editor_view.open) {
         editor_view_close();
@@ -2792,9 +2791,8 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
 
     /* Hide the shell's own transcript spans so the editor's span group owns
      * the container (its content is retained and re-shown on close). */
-    shell_spans = windows_get_transcript_spans();
-    if (shell_spans != NULL) {
-        lv_obj_add_flag(shell_spans, LV_OBJ_FLAG_HIDDEN);
+    if (windows_get_transcript_spans() != NULL) {
+        windows_shell_spans_set_hidden(true);
     }
 
     /* Full-height invisible spacer: establishes the scroll range for the whole
@@ -3000,11 +2998,8 @@ void editor_view_close(void)
     }
 
     /* Restore the shell's own transcript spans so the shell output returns. */
-    {
-        lv_obj_t *shell_spans = windows_get_transcript_spans();
-        if (shell_spans != NULL) {
-            lv_obj_remove_flag(shell_spans, LV_OBJ_FLAG_HIDDEN);
-        }
+    if (windows_get_transcript_spans() != NULL) {
+        windows_shell_spans_set_hidden(false);
     }
     /* Re-paint the shell transcript and jump back to its newest output. */
     windows_scroll_transcript_to_end();

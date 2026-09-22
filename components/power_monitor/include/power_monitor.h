@@ -54,14 +54,38 @@ power_monitor_charge_t power_monitor_classify_charge(int pack_mv, int current_ma
 const char *power_monitor_charge_name(power_monitor_charge_t state);
 
 /**
+ * Decide whether a pack is actually attached (pure, unit-tested).
+ *
+ * With no pack the INA226 bus node floats to the charger/system rail, so a
+ * reading can sit at/above the full voltage with ~0 current — the same as a
+ * full 2S pack. A reading clearly inside the pack range is trusted at once; a
+ * reading inside the ambiguous rail band (>= FULL_MV - rail tolerance) is only
+ * accepted when the recent samples are all plausible and stable (a floating
+ * node swings volts; a real pack does not). `chg_stat` is the IP2326
+ * charge-status line (P4MiniShell: Tab5 E2.P6) or -1 when unavailable; a
+ * status line that toggles while the pack voltage is in the rail band and the
+ * current is ~0 corroborates an absent pack (charger fault/no-battery blink).
+ *
+ * @param pack_mv      Current pack voltage (mV).
+ * @param current_ma   Signed current (mA, positive into the pack).
+ * @param recent_mv    Prior samples, newest first (may be NULL).
+ * @param recent_count Number of valid entries in @p recent_mv.
+ * @param chg_stat     Current charge-status level (0/1) or -1 if unavailable.
+ * @param chg_stat_prev Previous charge-status level or -1 if unavailable.
+ */
+bool power_monitor_pack_present(int pack_mv, int current_ma,
+                                const int *recent_mv, int recent_count,
+                                int chg_stat, int chg_stat_prev);
+
+/**
  * Read one battery sample.
  *
  * @param pack_mv_out  Pack voltage in millivolts (NULL to skip).
  * @param percent_out  State of charge 0..100 from the pack voltage (NULL to
  *                     skip). Reports 0..100; never negative.
  * @param charging_out True when current flows INTO the pack (NULL to skip).
- * @return ESP_OK on success, ESP_ERR_NOT_FOUND/ESP_ERR_INVALID_STATE when no
- *         gauge is available, or an I2C error.
+ * @return ESP_OK on success, ESP_ERR_NOT_FOUND when no gauge is available or no
+ *         pack is attached (see `power_monitor_pack_present`), or an I2C error.
  */
 esp_err_t power_monitor_battery_read(int *pack_mv_out, int *percent_out,
                                      bool *charging_out);
@@ -84,6 +108,7 @@ typedef struct {
     int power_mw;     /*!< Power register in mW */
     uint16_t config;  /*!< CONFIG register */
     uint16_t cal;     /*!< Programmed CALIBRATION register */
+    int chg_stat;     /*!< IP2326 charge-status level (0/1), -1 if unavailable */
 } power_monitor_diag_t;
 
 /** Read raw INA226 diagnostics. ESP_ERR_NOT_FOUND when no gauge is available. */

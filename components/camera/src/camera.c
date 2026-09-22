@@ -20,6 +20,7 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -252,10 +253,7 @@ esp_err_t camera_capture_bmp(const char *path, int *width_out, int *height_out)
     }
 
     row_bytes = (uint32_t)s_width * 3u;
-    row_buf = heap_caps_malloc(row_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (row_buf == NULL) {
-        row_buf = malloc(row_bytes);
-    }
+    row_buf = p4heap_alloc_psram(row_bytes);
     if (row_buf == NULL) {
         (void)ioctl(s_fd, VIDIOC_QBUF, &buf);
         return ESP_ERR_NO_MEM;

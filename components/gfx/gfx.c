@@ -9,6 +9,7 @@
 
 #include "gfx.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,10 +33,7 @@ static bool gfx_surface_alloc_bounded(gfx_surface_t *s, int w, int h,
     if (s == NULL) return false;
     if (w < 1 || w > max_w || h < 1 || h > max_h) return false;
     n = (size_t)w * (size_t)h;
-    s->px = heap_caps_malloc(n * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s->px == NULL) {
-        s->px = malloc(n * sizeof(uint16_t));
-    }
+    s->px = p4heap_alloc_psram(n * sizeof(uint16_t));
     if (s->px == NULL) {
         s->w = 0;
         s->h = 0;
@@ -325,6 +323,58 @@ void gfx_surface_blit_scaled(gfx_surface_t *dst, const gfx_surface_t *src,
             gfx_surface_pixel(dst, x + dx, y + dy, px);
         }
     }
+}
+
+bool gfx_surface_rotate_cw(const gfx_surface_t *src, int turns, gfx_surface_t *out)
+{
+    int dw;
+    int dh;
+
+    if (out != NULL) {
+        out->px = NULL;
+        out->w = 0;
+        out->h = 0;
+    }
+    if (src == NULL || src->px == NULL || out == NULL) {
+        return false;
+    }
+    turns %= 4;
+    if (turns < 0) {
+        turns += 4;
+    }
+    if (turns == 0) {
+        /* Identity: still a copy, so the caller always owns @p out. */
+        if (!gfx_surface_alloc(out, src->w, src->h)) {
+            return false;
+        }
+        memcpy(out->px, src->px, (size_t)src->w * (size_t)src->h * sizeof(uint16_t));
+        return true;
+    }
+    dw = (turns % 2 == 0) ? src->w : src->h;
+    dh = (turns % 2 == 0) ? src->h : src->w;
+    if (!gfx_surface_alloc(out, dw, dh)) {
+        return false;
+    }
+    for (int y = 0; y < src->h; y++) {
+        for (int x = 0; x < src->w; x++) {
+            uint16_t px = src->px[(size_t)y * (size_t)src->w + (size_t)x];
+            int dx;
+            int dy;
+
+            if (turns == 1) {
+                dx = src->h - 1 - y;
+                dy = x;
+            } else if (turns == 2) {
+                dx = src->w - 1 - x;
+                dy = src->h - 1 - y;
+            } else {
+                dx = y;
+                dy = src->w - 1 - x;
+            }
+            out->px[(size_t)dy * (size_t)dw + (size_t)dx] = px;
+        }
+    }
+    return true;
 }
 
 void gfx_bmp_fit(int src_w, int src_h, int max_w, int max_h,
@@ -632,10 +682,8 @@ static bool gfx_ff_push(gfx_ff_pt_t **st, size_t *n, size_t *cap, int x, int y)
 {
     if (*n == *cap) {
         size_t ncap = *cap * 2;
-        gfx_ff_pt_t *ns = heap_caps_realloc(*st, ncap * sizeof(**st),
-                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        gfx_ff_pt_t *ns = p4heap_realloc_psram(*st, ncap * sizeof(**st));
 
-        if (ns == NULL) ns = realloc(*st, ncap * sizeof(**st));
         if (ns == NULL) return false;
         *st = ns;
         *cap = ncap;
@@ -659,8 +707,7 @@ int gfx_surface_flood_fill(gfx_surface_t *s, int x, int y, uint16_t color)
     target = gfx_surface_get(s, x, y);
     if (target == color) return 0;
 
-    st = heap_caps_malloc(cap * sizeof(*st), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (st == NULL) st = malloc(cap * sizeof(*st));
+    st = p4heap_alloc_psram(cap * sizeof(*st));
     if (st == NULL) return 0;
     st[n].x = (int16_t)x;
     st[n].y = (int16_t)y;

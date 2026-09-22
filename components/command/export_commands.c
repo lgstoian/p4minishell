@@ -46,6 +46,7 @@
 #include "storage.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 
 #ifndef P4_CONFIG_DB_FIND_MAX
 #define P4_CONFIG_DB_FIND_MAX 64
@@ -82,10 +83,7 @@ typedef struct {
 
 static void export_doc_init(export_doc_t *doc)
 {
-    doc->data = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (doc->data == NULL) {
-        doc->data = malloc(4096);
-    }
+    doc->data = p4heap_alloc_psram(4096);
     doc->used = 0;
     doc->cap = (doc->data != NULL) ? 4096 : 0;
     doc->overflow = (doc->data == NULL);
@@ -124,16 +122,11 @@ static void export_doc_write(export_doc_t *doc, const char *text, size_t len)
         if (grown > (size_t)P4_CONFIG_DB_EXPORT_MAX_BYTES) {
             grown = P4_CONFIG_DB_EXPORT_MAX_BYTES;
         }
-        grown_data = heap_caps_malloc(grown, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (grown_data == NULL) {
-            grown_data = malloc(grown);
-        }
+        grown_data = p4heap_realloc_psram(doc->data, grown);
         if (grown_data == NULL) {
             doc->overflow = true;
             return;
         }
-        memcpy(grown_data, doc->data, doc->used + 1);
-        heap_caps_free(doc->data);
         doc->data = grown_data;
         doc->cap = grown;
     }
@@ -178,10 +171,7 @@ static void export_doc_json_string(export_doc_t *doc, const char *text, size_t l
 static void export_doc_csv_field(export_doc_t *doc, const char *text)
 {
     size_t need = csv_format_field(text, NULL, 0);
-    char *quoted = heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (quoted == NULL) {
-        quoted = malloc(need);
-    }
+    char *quoted = p4heap_alloc_psram(need);
     if (quoted == NULL) {
         doc->overflow = true;
         return;
@@ -266,11 +256,7 @@ static int export_db_csv(const char *name, export_doc_t *doc, int *rows_out)
     esp_err_t error;
     int i;
 
-    collect.infos = heap_caps_malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (collect.infos == NULL) {
-        collect.infos = malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
-    }
+    collect.infos = p4heap_alloc_psram((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
     if (collect.infos == NULL) {
         return 2;
     }
@@ -287,15 +273,11 @@ static int export_db_csv(const char *name, export_doc_t *doc, int *rows_out)
     }
     export_doc_text(doc, "id,cat,key,payload\n");
     for (i = 0; i < collect.count; i++) {
-        char *payload = heap_caps_malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1,
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        char *payload = p4heap_alloc_psram(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
         size_t len = P4_CONFIG_DB_RECORD_MAX_BYTES;
         db_record_info_t info;
         char idbuf[16];
         char catbuf[8];
-        if (payload == NULL) {
-            payload = malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
-        }
         if (payload == NULL) {
             heap_caps_free(collect.infos);
             return 2;
@@ -329,11 +311,7 @@ static int export_db_json(const char *name, export_doc_t *doc, int *rows_out)
     esp_err_t error;
     int i;
 
-    collect.infos = heap_caps_malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (collect.infos == NULL) {
-        collect.infos = malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
-    }
+    collect.infos = p4heap_alloc_psram((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
     if (collect.infos == NULL) {
         return 2;
     }
@@ -350,15 +328,11 @@ static int export_db_json(const char *name, export_doc_t *doc, int *rows_out)
     }
     export_doc_text(doc, "[\n");
     for (i = 0; i < collect.count; i++) {
-        char *payload = heap_caps_malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1,
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        char *payload = p4heap_alloc_psram(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
         size_t len = P4_CONFIG_DB_RECORD_MAX_BYTES;
         db_record_info_t info;
         char idbuf[16];
         char catbuf[8];
-        if (payload == NULL) {
-            payload = malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
-        }
         if (payload == NULL) {
             heap_caps_free(collect.infos);
             return 2;
@@ -394,11 +368,7 @@ static int export_db_txt(const char *name, export_doc_t *doc, int *rows_out)
     esp_err_t error;
     int i;
 
-    collect.infos = heap_caps_malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (collect.infos == NULL) {
-        collect.infos = malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
-    }
+    collect.infos = p4heap_alloc_psram((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
     if (collect.infos == NULL) {
         return 2;
     }
@@ -414,14 +384,10 @@ static int export_db_txt(const char *name, export_doc_t *doc, int *rows_out)
         return 2;
     }
     for (i = 0; i < collect.count; i++) {
-        char *payload = heap_caps_malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1,
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        char *payload = p4heap_alloc_psram(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
         size_t len = P4_CONFIG_DB_RECORD_MAX_BYTES;
         db_record_info_t info;
         char head[96];
-        if (payload == NULL) {
-            payload = malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
-        }
         if (payload == NULL) {
             heap_caps_free(collect.infos);
             return 2;
@@ -474,11 +440,7 @@ static int export_db_vcf(const char *name, export_doc_t *doc, int *rows_out)
     esp_err_t error;
     int i;
 
-    collect.infos = heap_caps_malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (collect.infos == NULL) {
-        collect.infos = malloc((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
-    }
+    collect.infos = p4heap_alloc_psram((size_t)P4_CONFIG_DB_FIND_MAX * sizeof(db_record_info_t));
     if (collect.infos == NULL) {
         return 2;
     }
@@ -494,8 +456,7 @@ static int export_db_vcf(const char *name, export_doc_t *doc, int *rows_out)
         return 2;
     }
     for (i = 0; i < collect.count; i++) {
-        char *payload = heap_caps_malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1,
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        char *payload = p4heap_alloc_psram(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
         size_t len = P4_CONFIG_DB_RECORD_MAX_BYTES;
         db_record_info_t info;
         char fn[64];
@@ -504,9 +465,6 @@ static int export_db_vcf(const char *name, export_doc_t *doc, int *rows_out)
         char org[64];
         char title[64];
         char note[512];
-        if (payload == NULL) {
-            payload = malloc(P4_CONFIG_DB_RECORD_MAX_BYTES + 1);
-        }
         if (payload == NULL) {
             heap_caps_free(collect.infos);
             return 2;
@@ -591,11 +549,7 @@ static int export_alarms_collect(export_alarm_collect_t *collect)
 {
     esp_err_t error;
 
-    collect->events = heap_caps_malloc((size_t)P4_CONFIG_ALARM_MAX_EVENTS * sizeof(alarm_event_t),
-                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (collect->events == NULL) {
-        collect->events = malloc((size_t)P4_CONFIG_ALARM_MAX_EVENTS * sizeof(alarm_event_t));
-    }
+    collect->events = p4heap_alloc_psram((size_t)P4_CONFIG_ALARM_MAX_EVENTS * sizeof(alarm_event_t));
     if (collect->events == NULL) {
         return 2;
     }

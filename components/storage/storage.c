@@ -27,6 +27,7 @@
 #include "driver/sdmmc_host.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "p4heap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <ctype.h>
@@ -249,7 +250,7 @@ void storage_sd_ensure_dma_buffer(void)
      * giving up; any cached size beats per-op allocation. */
     void *buffer = NULL;
     while (buffer == NULL && buffer_size >= sector_size) {
-        buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+        buffer = p4heap_alloc_dma(buffer_size);
         if (buffer == NULL) {
             buffer_size /= 2;
         }
@@ -1202,7 +1203,12 @@ static char *storage_split_pattern(char *pattern, char **dir_out)
     return last_sep + 1;
 }
 
-esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *count_out)
+/* Shared single-directory matcher behind storage_expand_wildcard() (files)
+ * and storage_expand_dirs() (`for /D`, directories): one FATFS listing with
+ * the same heap discipline, so the two verbs can never disagree about names,
+ * truncation, or cleanup. */
+static esp_err_t storage_expand_matching(const char *pattern, bool dirs_only, const char *op,
+                                         char ***tokens_out, int *count_out)
 {
     shell_sd_session_t session;
     char pattern_copy[SHELL_SD_PATH_BYTES];
@@ -1250,7 +1256,7 @@ esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *
 
     error = shell_sd_vfs_to_fatfs_path(dir_resolved, fatfs_path, sizeof(fatfs_path));
     if (error != ESP_OK) {
-        shell_sd_end(&session, "wildcard");
+        shell_sd_end(&session, op);
         return error;
     }
 
@@ -1258,7 +1264,7 @@ esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *
     memset(&entry_info, 0, sizeof(entry_info));
     result = f_opendir(&dir, fatfs_path);
     if (result != FR_OK) {
-        shell_sd_end(&session, "wildcard");
+        shell_sd_end(&session, op);
         return shell_sd_fresult_to_esp_err(result);
     }
 
@@ -1271,15 +1277,15 @@ esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *
         if (strcmp(entry_info.fname, ".") == 0 || strcmp(entry_info.fname, "..") == 0) {
             continue;
         }
-        if (entry_info.fattrib & AM_DIR) {
-            continue;   /* file-only wildcard for basic set form */
+        if (((entry_info.fattrib & AM_DIR) != 0) != dirs_only) {
+            continue;   /* wildcard keeps files, dirs keeps directories */
         }
         if (!shell_wildcard_match(name_pattern, entry_info.fname)) {
             continue;
         }
 
         if (count >= SHELL_SD_LIST_LIMIT) {
-            shell_record_warningf("wildcard", "Wildcard expansion truncated at %d entries", SHELL_SD_LIST_LIMIT);
+            shell_record_warningf(op, "Wildcard expansion truncated at %d entries", SHELL_SD_LIST_LIMIT);
             break;
         }
 
@@ -1292,7 +1298,7 @@ esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *
                 /* Free the strings already stored, not just the array. */
                 storage_free_wildcard_expansion(tokens, count);
                 f_closedir(&dir);
-                shell_sd_end(&session, "wildcard");
+                shell_sd_end(&session, op);
                 return ESP_ERR_NO_MEM;
             }
             tokens = grown;
@@ -1305,7 +1311,7 @@ esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *
         if (token == NULL) {
             storage_free_wildcard_expansion(tokens, count);
             f_closedir(&dir);
-            shell_sd_end(&session, "wildcard");
+            shell_sd_end(&session, op);
             return ESP_ERR_NO_MEM;
         }
         if (dir_resolved[0] != '\0' && strcmp(dir_resolved, BSP_SD_MOUNT_POINT) != 0) {
@@ -1317,10 +1323,222 @@ esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *
     }
 
     f_closedir(&dir);
-    shell_sd_end(&session, "wildcard");
+    shell_sd_end(&session, op);
 
     *tokens_out = tokens;
     *count_out = count;
+    return ESP_OK;
+}
+
+esp_err_t storage_expand_wildcard(const char *pattern, char ***tokens_out, int *count_out)
+{
+    return storage_expand_matching(pattern, false, "wildcard", tokens_out, count_out);
+}
+
+esp_err_t storage_expand_dirs(const char *pattern, char ***tokens_out, int *count_out)
+{
+    return storage_expand_matching(pattern, true, "dirs", tokens_out, count_out);
+}
+
+/** Growable heap list of VFS paths shared by the recursive walker. */
+typedef struct {
+    char **items;
+    int count;
+    int capacity;
+} storage_path_list_t;
+
+static void storage_path_list_free(storage_path_list_t *list)
+{
+    if (list == NULL) {
+        return;
+    }
+    for (int i = 0; i < list->count; i++) {
+        free(list->items[i]);
+    }
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+/** Append one heap string to the list (takes ownership on success). */
+static bool storage_path_list_push(storage_path_list_t *list, char *item)
+{
+    char **grown;
+
+    if (item == NULL) {
+        return false;
+    }
+    if (list->count >= list->capacity) {
+        int new_cap = (list->capacity == 0) ? 8 : list->capacity * 2;
+        grown = realloc(list->items, sizeof(char *) * (size_t)new_cap);
+        if (grown == NULL) {
+            free(item);
+            return false;
+        }
+        list->items = grown;
+        list->capacity = new_cap;
+    }
+    list->items[list->count++] = item;
+    return true;
+}
+
+static bool storage_path_list_add(storage_path_list_t *list, const char *vfs_dir,
+                                  const char *name)
+{
+    size_t need;
+    char *item;
+
+    if (list->count >= SHELL_SD_LIST_LIMIT) {
+        return true;   /* capped upstream; stop collecting quietly */
+    }
+    need = strlen(vfs_dir) + 1 + strlen(name) + 1;
+    item = malloc(need);
+    if (item == NULL) {
+        return false;
+    }
+    if (vfs_dir[0] != '\0' && strcmp(vfs_dir, BSP_SD_MOUNT_POINT) != 0) {
+        snprintf(item, need, "%s/%s", vfs_dir, name);
+    } else {
+        snprintf(item, need, "%s", name);
+    }
+    return storage_path_list_push(list, item);
+}
+
+/* One level of the `for /R` walk: emit matching files, stash subdirectories
+ * (names only — the directory is closed before descending, so a single FATFS
+ * handle is ever open and per-level heap is just names). An unreadable
+ * subdirectory is skipped, never fatal to the walk. */
+static esp_err_t storage_walk_level(const char *fatfs_dir, const char *vfs_dir,
+                                    const char *name_pattern, int depth,
+                                    storage_path_list_t *out)
+{
+    FF_DIR dir;
+    FILINFO entry_info;
+    FRESULT result;
+    storage_path_list_t subdirs = { NULL, 0, 0 };
+    esp_err_t error = ESP_OK;
+
+    memset(&dir, 0, sizeof(dir));
+    memset(&entry_info, 0, sizeof(entry_info));
+    result = f_opendir(&dir, fatfs_dir);
+    if (result != FR_OK) {
+        return (depth == 0) ? shell_sd_fresult_to_esp_err(result) : ESP_OK;
+    }
+    while (true) {
+        char child_vfs[SHELL_SD_PATH_BYTES];
+
+        result = f_readdir(&dir, &entry_info);
+        if (result != FR_OK || entry_info.fname[0] == '\0') {
+            break;
+        }
+        if (strcmp(entry_info.fname, ".") == 0 || strcmp(entry_info.fname, "..") == 0) {
+            continue;
+        }
+        if (out->count >= SHELL_SD_LIST_LIMIT) {
+            shell_record_warningf("recurse", "Recursive expansion truncated at %d entries",
+                                  SHELL_SD_LIST_LIMIT);
+            break;
+        }
+        if ((entry_info.fattrib & AM_DIR) != 0) {
+            char *child;
+
+            if (depth >= P4_CONFIG_DIR_RECURSE_DEPTH_MAX) {
+                continue;
+            }
+            if (vfs_dir[0] != '\0' && strcmp(vfs_dir, BSP_SD_MOUNT_POINT) != 0) {
+                if (snprintf(child_vfs, sizeof(child_vfs), "%s/%s",
+                             vfs_dir, entry_info.fname) >= (int)sizeof(child_vfs)) {
+                    continue;
+                }
+            } else {
+                /* At the SD root the walker uses bare names, exactly like the
+                 * single-directory matcher, so `for /R` bodies see root files
+                 * in the same spelling. */
+                if (snprintf(child_vfs, sizeof(child_vfs), "%s",
+                             entry_info.fname) >= (int)sizeof(child_vfs)) {
+                    continue;
+                }
+            }
+            child = malloc(strlen(child_vfs) + 1);
+            if (child == NULL) {
+                error = ESP_ERR_NO_MEM;
+                break;
+            }
+            snprintf(child, strlen(child_vfs) + 1, "%s", child_vfs);
+            if (!storage_path_list_push(&subdirs, child)) {
+                error = ESP_ERR_NO_MEM;
+                break;
+            }
+        } else if (shell_wildcard_match(name_pattern, entry_info.fname)) {
+            if (!storage_path_list_add(out, vfs_dir, entry_info.fname)) {
+                error = ESP_ERR_NO_MEM;
+                break;
+            }
+        }
+    }
+    f_closedir(&dir);
+    if (error != ESP_OK) {
+        storage_path_list_free(&subdirs);
+        return error;
+    }
+    /* Descend after the directory is closed (single open handle). */
+    for (int i = 0; i < subdirs.count && error == ESP_OK; i++) {
+        char child_fatfs[SHELL_SD_PATH_BYTES];
+
+        /* Re-derive the FATFS path from the stored VFS path. */
+        if (shell_sd_vfs_to_fatfs_path(subdirs.items[i], child_fatfs,
+                                       sizeof(child_fatfs)) != ESP_OK) {
+            continue;
+        }
+        error = storage_walk_level(child_fatfs, subdirs.items[i], name_pattern,
+                                   depth + 1, out);
+    }
+    storage_path_list_free(&subdirs);
+    return error;
+}
+
+esp_err_t storage_expand_recursive(const char *root, const char *name_pattern,
+                                   char ***tokens_out, int *count_out)
+{
+    shell_sd_session_t session;
+    char root_resolved[SHELL_SD_PATH_BYTES];
+    char fatfs_root[SHELL_SD_PATH_BYTES];
+    storage_path_list_t out = { NULL, 0, 0 };
+    esp_err_t error;
+
+    if (tokens_out == NULL || count_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *tokens_out = NULL;
+    *count_out = 0;
+    if (name_pattern == NULL || *name_pattern == '\0') {
+        name_pattern = "*";
+    }
+    error = shell_fs_resolve_path((root != NULL && *root != '\0') ? root : ".",
+                                  root_resolved, sizeof(root_resolved));
+    if (error != ESP_OK) {
+        return error;
+    }
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (shell_sd_vfs_to_fatfs_path(root_resolved, fatfs_root,
+                                   sizeof(fatfs_root)) != ESP_OK) {
+        shell_sd_end(&session, "recurse");
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* The walker reuses the one session; unreadable subtrees are skipped
+     * inside, so only a dead root is an error here. */
+    error = storage_walk_level(fatfs_root, root_resolved, name_pattern, 0, &out);
+    shell_sd_end(&session, "recurse");
+    if (error != ESP_OK) {
+        storage_path_list_free(&out);
+        return error;
+    }
+    *tokens_out = out.items;
+    *count_out = out.count;
     return ESP_OK;
 }
 

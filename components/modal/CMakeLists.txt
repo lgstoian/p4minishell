@@ -17,4 +17,5 @@ idf_component_register(
         filetype
         font
         gfx
+        p4heap
 )

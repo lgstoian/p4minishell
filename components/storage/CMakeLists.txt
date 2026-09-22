@@ -10,5 +10,6 @@ idf_component_register(
         fatfs
         markdown
         filetype
+        p4heap
         esp_driver_sdmmc
 )

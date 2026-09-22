@@ -21,6 +21,7 @@ set(EXTRA_COMPONENT_DIRS
   components/archive
   components/audio
   components/batch
+  components/board_caps
   components/boot
   components/c6ota
   components/camera
@@ -41,9 +42,11 @@ set(EXTRA_COMPONENT_DIRS
   components/modal
   components/networking
   components/power_monitor
+  components/p4heap
   components/shell
   components/storage
   components/strutil
+  components/swgcm
   components/tab5kbd
   components/tui
   components/uitest

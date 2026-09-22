@@ -241,6 +241,11 @@ void gfx_surface_blit_scaled(gfx_surface_t *dst, const gfx_surface_t *src,
                              int x, int y, int dw, int dh,
                              bool use_transparent, uint16_t transparent);
 
+/** Copy @p src rotated clockwise by @p turns quarter-turns (0..3, normalized)
+ * into a freshly allocated surface (caller frees with gfx_surface_free).
+ * @return true on success (caller owns @p out), false leaving @p out cleared. */
+bool gfx_surface_rotate_cw(const gfx_surface_t *src, int turns, gfx_surface_t *out);
+
 /** Largest w,h that preserves @p src_w x @p src_h aspect within
  * @p max_w x @p max_h. Never upscales (a source that already fits is
  * returned unchanged); always yields >= 1. */

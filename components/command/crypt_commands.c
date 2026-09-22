@@ -14,10 +14,14 @@
  *
  * Format: `P4CRYPT1` magic + 16-byte salt + 12-byte nonce + ciphertext +
  * 16-byte GCM tag. The key comes from PBKDF2-HMAC-SHA256 over the password.
- * Files stream in 4 KB chunks through internal (DMA-safe) buffers, so
- * multi-megabyte files never touch PSRAM pointers in FATFS calls. Writes
- * are atomic (temp + rename with the FATFS no-overwrite dance) behind a
- * free-space pre-check; a failed run removes the partial destination.
+ * Files stream in `P4_CONFIG_CRYPT_CHUNK_BYTES`-sized pieces. The esp-aes
+ * hardware path runs on small cache-aligned DMA-capable internal buffers so
+ * multi-megabyte files never touch PSRAM pointers in FATFS calls and the
+ * GDMA descriptor array stays tiny; when the Tab5 DMA heap is too
+ * fragmented for hardware (bugs.md F23) a self-contained software
+ * AES-256-GCM fallback seals/opens the identical format from PSRAM buffers.
+ * Writes are atomic (temp + rename with the FATFS no-overwrite dance) behind
+ * a free-space pre-check; a failed run removes the partial destination.
  * A tag mismatch reports "wrong password or corrupt file" (never
  * distinguished) and also removes the partial.
  *
@@ -36,6 +40,8 @@
 #include "storage.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
+#include "sw_gcm.h"
 #include "esp_random.h"
 #include "mbedtls/gcm.h"
 #include "mbedtls/md.h"
@@ -138,6 +144,82 @@ static int crypt_gcm_finish_all(mbedtls_gcm_context *ctx,
     }
     *tail_len_out = tail_len;
     return 0;
+}
+
+/* ========================================================================
+ * GCM engine adapter (hardware esp-aes vs software fallback)
+ * ======================================================================== */
+
+/** One live GCM session on either engine. @p hw selects esp-aes (needs
+ *  DMA-capable buffers) or the self-contained software fallback (any RAM).
+ *  Both produce the identical AES-256-GCM wire format. */
+typedef struct {
+    bool hw;
+    mbedtls_gcm_context hw_ctx;
+    sw_gcm_ctx_t sw_ctx;
+} crypt_gcm_t;
+
+static void crypt_gcm_engine_init(crypt_gcm_t *c, bool hw)
+{
+    c->hw = hw;
+    if (hw) {
+        mbedtls_gcm_init(&c->hw_ctx);
+    } else {
+        sw_gcm_init(&c->sw_ctx);
+    }
+}
+
+static int crypt_gcm_engine_setkey(crypt_gcm_t *c, const uint8_t *key)
+{
+    if (c->hw) {
+        return mbedtls_gcm_setkey(&c->hw_ctx, MBEDTLS_CIPHER_ID_AES, key, CRYPT_KEY_LEN * 8);
+    }
+    return sw_gcm_setkey(&c->sw_ctx, key);
+}
+
+static int crypt_gcm_engine_starts(crypt_gcm_t *c, bool encrypt, const uint8_t *nonce)
+{
+    if (c->hw) {
+        return mbedtls_gcm_starts(&c->hw_ctx, encrypt ? MBEDTLS_GCM_ENCRYPT : MBEDTLS_GCM_DECRYPT,
+                                  nonce, CRYPT_NONCE_LEN);
+    }
+    return sw_gcm_starts(&c->sw_ctx, encrypt, nonce);
+}
+
+static int crypt_gcm_engine_update(crypt_gcm_t *c, const uint8_t *in, size_t len,
+                                   uint8_t *out, size_t *olen_out)
+{
+    if (c->hw) {
+        return crypt_gcm_update_all(&c->hw_ctx, in, len, out, olen_out);
+    }
+    if (olen_out != NULL) {
+        *olen_out = 0;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (sw_gcm_update(&c->sw_ctx, in, len, out, olen_out) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int crypt_gcm_engine_finish(crypt_gcm_t *c, uint8_t *tail_out, size_t *tail_len_out,
+                                   uint8_t *tag)
+{
+    if (c->hw) {
+        return crypt_gcm_finish_all(&c->hw_ctx, tail_out, tail_len_out, tag);
+    }
+    return sw_gcm_finish(&c->sw_ctx, tail_out, tail_len_out, tag);
+}
+
+static void crypt_gcm_engine_free(crypt_gcm_t *c)
+{
+    if (c->hw) {
+        mbedtls_gcm_free(&c->hw_ctx);
+    } else {
+        sw_gcm_free(&c->sw_ctx);
+    }
 }
 
 /** One-shot GCM (single session, whole buffer). @p encrypt selects direction;
@@ -312,8 +394,15 @@ static bool crypt_collect_password(const char *inline_pass, bool ask,
  * File verbs (streaming GCM session, atomic temp+rename)
  * ======================================================================== */
 
-static int crypt_run_file(bool lock, const char *src, const char *dst,
-                          const char *inline_pass, bool ask)
+/** Single streaming pass. @p use_hw selects esp-aes (DMA-capable buffers)
+ *  or the software AES-256-GCM fallback (PSRAM buffers, identical format).
+ *  Sets @p *crypto_err when the failure came from the crypto engine itself
+ *  (retryable through the other engine); I/O, usage, and path failures
+ *  leave it false. Return values match the `crypt` ERRORLEVEL (0 ok,
+ *  1 crypto/IO failure, 2 usage). */
+static int crypt_run_once(bool lock, const char *src, const char *dst,
+                          const char *inline_pass, bool ask,
+                          bool use_hw, bool *crypto_err)
 {
     char resolved_src[P4_CONFIG_SD_PATH_BYTES];
     char resolved_dst[P4_CONFIG_SD_PATH_BYTES];
@@ -328,10 +417,11 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
     shell_sd_session_t session;
     FILE *fin = NULL;
     FILE *fout = NULL;
-    mbedtls_gcm_context ctx;
+    crypt_gcm_t gcm;
     uint64_t total = 0;
     int rc = 1;
     bool ctx_live = false;
+    bool crypto_fail = false;
     uint32_t word;
     int i;
 
@@ -346,8 +436,8 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
     if (shell_sd_begin(&session) != ESP_OK) {
         shell_print_error("crypt: SD card not present - insert and retry");
         memset(pass, 0, sizeof(pass));
-        free(inbuf);
-        free(outbuf);
+        p4heap_free(inbuf);
+        p4heap_free(outbuf);
         return 2;
     }
     fin = fopen(resolved_src, "rb");
@@ -370,13 +460,30 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
         shell_print_error("crypt: cannot write %s", tmp);
         goto done_files;
     }
-    inbuf = malloc(P4_CONFIG_CRYPT_CHUNK_BYTES);
-    outbuf = malloc(P4_CONFIG_CRYPT_CHUNK_BYTES);
+    /* Hardware path: small cache-line-aligned DMA-capable buffers so AES
+     * runs straight through with a single-descriptor array and no internal
+     * alignment bounce buffer (each bounce is another internal allocation
+     * that can fail on a fragmented Tab5 heap; see bugs.md F23). PSRAM can
+     * never back this path (dma_spi=0): it would force a bounce plus a
+     * bigger descriptor array. A NULL here is a crypto-engine failure and
+     * the wrapper retries the whole file through software. */
+    /* Software path: PSRAM buffers (no DMA needed, no descriptor array). */
+    if (use_hw) {
+        inbuf = p4heap_alloc_dma_aligned(128, P4_CONFIG_CRYPT_CHUNK_BYTES);
+        outbuf = p4heap_alloc_dma_aligned(128, P4_CONFIG_CRYPT_CHUNK_BYTES);
+    } else {
+        inbuf = p4heap_alloc_psram(P4_CONFIG_CRYPT_CHUNK_BYTES);
+        outbuf = p4heap_alloc_psram(P4_CONFIG_CRYPT_CHUNK_BYTES);
+    }
     if (inbuf == NULL || outbuf == NULL) {
-        shell_print_error("crypt: out of memory");
+        if (use_hw) {
+            crypto_fail = true;
+        } else {
+            shell_print_error("crypt: out of memory");
+        }
         goto done_files;
     }
-    mbedtls_gcm_init(&ctx);
+    crypt_gcm_engine_init(&gcm, use_hw);
     ctx_live = true;
     if (lock) {
         for (i = 0; i < P4_CONFIG_CRYPT_SALT_BYTES; i += 4) {
@@ -391,9 +498,13 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
             shell_print_error("crypt: bad password");
             goto done_files;
         }
-        if (mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, CRYPT_KEY_LEN * 8) != 0 ||
-            mbedtls_gcm_starts(&ctx, MBEDTLS_GCM_ENCRYPT, nonce, CRYPT_NONCE_LEN) != 0) {
-            shell_print_error("crypt: crypto init failed");
+        if (crypt_gcm_engine_setkey(&gcm, key) != 0 ||
+            crypt_gcm_engine_starts(&gcm, true, nonce) != 0) {
+            if (use_hw) {
+                crypto_fail = true;
+            } else {
+                shell_print_error("crypt: crypto init failed");
+            }
             goto done_files;
         }
         if (fwrite(CRYPT_MAGIC, 1, CRYPT_MAGIC_LEN, fout) != CRYPT_MAGIC_LEN ||
@@ -406,8 +517,15 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
             size_t n = fread(inbuf, 1, P4_CONFIG_CRYPT_CHUNK_BYTES, fin);
             size_t olen = 0;
             if (n > 0) {
-                if (crypt_gcm_update_all(&ctx, inbuf, n, outbuf, &olen) != 0 ||
-                    fwrite(outbuf, 1, olen, fout) != olen) {
+                if (crypt_gcm_engine_update(&gcm, inbuf, n, outbuf, &olen) != 0) {
+                    if (use_hw) {
+                        crypto_fail = true;
+                    } else {
+                        shell_print_error("crypt: crypto failed");
+                    }
+                    goto done_files;
+                }
+                if (fwrite(outbuf, 1, olen, fout) != olen) {
                     shell_print_error("crypt: write failed");
                     goto done_files;
                 }
@@ -420,9 +538,13 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
         {
             uint8_t tail[16];
             size_t tail_len = 0;
-            if (crypt_gcm_finish_all(&ctx, tail, &tail_len, tag) != 0) {
+            if (crypt_gcm_engine_finish(&gcm, tail, &tail_len, tag) != 0) {
                 memset(tail, 0, sizeof(tail));
-                shell_print_error("crypt: write failed");
+                if (use_hw) {
+                    crypto_fail = true;
+                } else {
+                    shell_print_error("crypt: crypto failed");
+                }
                 goto done_files;
             }
             if ((tail_len > 0 && fwrite(tail, 1, tail_len, fout) != tail_len) ||
@@ -464,9 +586,13 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
             shell_print_error("crypt: bad password");
             goto done_files;
         }
-        if (mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key, CRYPT_KEY_LEN * 8) != 0 ||
-            mbedtls_gcm_starts(&ctx, MBEDTLS_GCM_DECRYPT, nonce, CRYPT_NONCE_LEN) != 0) {
-            shell_print_error("crypt: crypto init failed");
+        if (crypt_gcm_engine_setkey(&gcm, key) != 0 ||
+            crypt_gcm_engine_starts(&gcm, false, nonce) != 0) {
+            if (use_hw) {
+                crypto_fail = true;
+            } else {
+                shell_print_error("crypt: crypto init failed");
+            }
             goto done_files;
         }
         /* Position past the header; ciphertext runs to data_end. */
@@ -490,8 +616,15 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
             }
             {
                 size_t olen = 0;
-                if (crypt_gcm_update_all(&ctx, inbuf, n, outbuf, &olen) != 0 ||
-                    fwrite(outbuf, 1, olen, fout) != olen) {
+                if (crypt_gcm_engine_update(&gcm, inbuf, n, outbuf, &olen) != 0) {
+                    if (use_hw) {
+                        crypto_fail = true;
+                    } else {
+                        shell_print_error("crypt: crypto failed");
+                    }
+                    goto done_files;
+                }
+                if (fwrite(outbuf, 1, olen, fout) != olen) {
                     shell_print_error("crypt: write failed");
                     goto done_files;
                 }
@@ -508,9 +641,13 @@ static int crypt_run_file(bool lock, const char *src, const char *dst,
         {
             uint8_t tail[16];
             size_t tail_len = 0;
-            if (crypt_gcm_finish_all(&ctx, tail, &tail_len, check) != 0) {
+            if (crypt_gcm_engine_finish(&gcm, tail, &tail_len, check) != 0) {
                 memset(tail, 0, sizeof(tail));
-                shell_print_error("crypt: read failed");
+                if (use_hw) {
+                    crypto_fail = true;
+                } else {
+                    shell_print_error("crypt: read failed");
+                }
                 goto done_files;
             }
             if (tail_len > 0 && fwrite(tail, 1, tail_len, fout) != tail_len) {
@@ -572,14 +709,37 @@ done_files:
 
 done_buffers:
     if (ctx_live) {
-        mbedtls_gcm_free(&ctx);
+        crypt_gcm_engine_free(&gcm);
     }
     memset(key, 0, sizeof(key));
     memset(tag, 0, sizeof(tag));
     memset(pass, 0, sizeof(pass));
-    free(inbuf);
-    free(outbuf);
+    p4heap_free(inbuf);
+    p4heap_free(outbuf);
+    if (crypto_err != NULL) {
+        *crypto_err = crypto_fail;
+    }
     return rc;
+}
+
+/** Engine selection + one retry (see `crypt_run_once`). Hardware first when
+ *  the DMA pool looks healthy; otherwise straight to software. A hardware
+ *  crypto failure (the F23 fragmented-DMA case, silent here so the
+ *  transcript stays clean) retries once through software, which needs no
+ *  DMA memory at all. I/O and usage failures are returned as-is. */
+static int crypt_run_file(bool lock, const char *src, const char *dst,
+                          const char *inline_pass, bool ask)
+{
+    bool crypto_err = false;
+    int rc;
+
+    if (p4heap_dma_ready(P4_CONFIG_CRYPT_DMA_MIN_BYTES)) {
+        rc = crypt_run_once(lock, src, dst, inline_pass, ask, true, &crypto_err);
+        if (rc == 0 || rc == 2 || !crypto_err) {
+            return rc;
+        }
+    }
+    return crypt_run_once(lock, src, dst, inline_pass, ask, false, &crypto_err);
 }
 
 int shell_command_crypt(int argc, char **argv)

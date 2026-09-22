@@ -23,6 +23,7 @@ idf_component_register(
         led
         lwip
         nvs_flash
+        p4heap
         storage
         strutil
 )

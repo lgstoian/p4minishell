@@ -10,9 +10,10 @@ First match wins: explicit `port=` argument, a trailing `COMx` argv token, the
 `tools/board_ports.py`. In this two-board workspace the reference board
 (JC1060P470C) is `COM3` and the M5Stack Tab5 is `COM6`; pass the port
 explicitly when both are attached. Scripts with argparse take
-`--port` (same fallback chain). Opening the port asserts DTR and the P4
-resets on the transition — every driver drops DTR/RTS on open via
-`shell_session.open_port()`; never open raw `serial.Serial` without it.
+`--port` (same fallback chain). Opening the port is DTR-safe and does **not**
+reset the board — every driver opens via `shell_session.open_port()` (DTR/RTS
+pre-set low before `open()`); never open raw `serial.Serial` without it.
+Anything needing a fresh boot calls `shell_session.hard_reset()` explicitly.
 
 ## Production test framework — `p4test/`
 
@@ -128,7 +129,13 @@ holder per port.
 - `asset_test.py`/`asset_test2.py`/`assets_verify.py`, `draw_list_test.py`,
   `table_cursor_shot.py`, `gfx_sprite_test.py` — asset/manifest + TUI/gfx verbs.
 - `pkg_test.py`/`pkg_smoke.py` — packaged SD apps (`pkg` list/info/verify +
-  install→run→remove round-trip; needs `apps/push_pkgs.py` first).
+  install→run→remove round-trip; needs `apps/push_pkgs.py` first). `pkg_test.py`
+  also runs a self-contained ECDSA matrix: it generates a fresh keypair,
+  installs it with `pkg key install`, and asserts signed-install OK, tampered
+  refusal, unsigned policy notes, `/signed` enforcement, and key cleanup.
+- `pkg_sign.py` — host ECDSA P-256 manifest signer/verifier for `pkg`
+  (`keygen`/`sign`/`verify`; contract in `ABI.md` §4). `apps/push_pkgs.py
+  --sign KEY.pem` signs every bundle it builds.
 - `gfx_toolkit_test.py` — runs `GFXTOOL.BAT`, pulls the saved BMP with
   `pull.py`, and checks pixels for the B2 primitives + text, plus the scaled
   `PHOTO.BMP` blit region (when `[M-GFXTOOL-IMG]` is emitted).
@@ -177,7 +184,8 @@ holder per port.
 - `unit_run.py` — build-independent capture of the unit-test summaries.
 - `regression.py` — one-command host regression: resets the board, runs every
   suite/guard (`deep`/`db`/`alarm`/`smoke`/`pkg`/`theme`/`gfx`/`plot`/`header`/
-  `keyboard`/`editor`/`editor large`/`ui touch`/`completion`/`tx_stress`/`boot_regression`), prints a
+  `keyboard`/`editor`/`editor large`/`timer`/`csv`/`export`/`bind`/`crypt`/
+  `tcpterm`/`userial`/`ui touch`/`completion`/`tx_stress`/`boot_regression`), prints a
   PASS/FAIL table, non-zero exit on failure. `--quick` shortens the boot soak.
   Unit tests remain a separate step.
 - `wifi_bench.py` — host endpoint for the firmware `wifi throughput` command:

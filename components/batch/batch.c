@@ -32,6 +32,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <ctype.h>
@@ -264,6 +265,11 @@ typedef struct {
     batch_stop_mode_t stop_mode;
     shell_env_var_t *setlocal_stack[SHELL_SETLOCAL_DEPTH_MAX];
     int setlocal_depth;
+    /* Delayed-expansion flag (`!VAR!`) with one saved value per open scope,
+     * so `endlocal` (and the frame-return unwind) restores exactly what the
+     * matching `setlocal` saw — the COMMAND.COM contract. */
+    bool delayed_expansion;
+    bool delayed_stack[SHELL_SETLOCAL_DEPTH_MAX];
     TaskHandle_t task;      /* owning bg task, NULL for slot 0 */
     bool in_use;            /* bg slot claimed by a live task */
     bool kill_requested;    /* taskkill: unwind at the next batch line */
@@ -297,6 +303,8 @@ static batch_task_ctx_t *batch_ctx_current(void)
 #define s_stop_mode          (batch_ctx_current()->stop_mode)
 #define s_setlocal_stack     (batch_ctx_current()->setlocal_stack)
 #define s_setlocal_depth     (batch_ctx_current()->setlocal_depth)
+#define s_delayed_expansion  (batch_ctx_current()->delayed_expansion)
+#define s_delayed_stack      (batch_ctx_current()->delayed_stack)
 static bool s_default_echo = true;   /* CONFIG.SYS ECHO ON|OFF sets this; batch frames inherit it */
 
 /**
@@ -401,8 +409,13 @@ static bool shell_env_name_is_valid(const char *name)
         return false;
     }
 
+    /* Alphanumerics plus underscore, plus `[`/`]` so batch apps can keep
+     * indexed arrays (`set SPR[3]=...` / `%SPR[3]%`). Brackets are only
+     * name characters here — the value side is untouched — so existing
+     * names keep working and no new storage is introduced. */
     for (index = 0; name[index] != '\0'; index++) {
-        if (!(isalnum((unsigned char)name[index]) || name[index] == '_')) {
+        if (!(isalnum((unsigned char)name[index]) || name[index] == '_' ||
+              name[index] == '[' || name[index] == ']')) {
             return false;
         }
     }
@@ -1692,6 +1705,7 @@ static bool shell_setlocal_push(void)
     batch_shared_take();
     memcpy(snapshot, s_shell_env_vars, SHELL_ENV_BYTES);
     batch_shared_give();
+    s_delayed_stack[s_setlocal_depth] = s_delayed_expansion;
     s_setlocal_stack[s_setlocal_depth++] = snapshot;
     return true;
 }
@@ -1710,6 +1724,7 @@ static bool shell_setlocal_pop(void)
 
     snapshot = s_setlocal_stack[--s_setlocal_depth];
     s_setlocal_stack[s_setlocal_depth] = NULL;
+    s_delayed_expansion = s_delayed_stack[s_setlocal_depth];
 
     if (snapshot == NULL) {
         return false;
@@ -1900,12 +1915,242 @@ void shell_arg_apply_modifiers(const char *value, const char *mods,
     out[pos] = '\0';
 }
 
+void shell_expand_substring(const char *value, int start, bool has_len, int len,
+                            char *out, size_t out_size)
+{
+    size_t vlen;
+    size_t first;
+    size_t count;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (value == NULL) {
+        return;
+    }
+    vlen = strlen(value);
+
+    /* Negative start counts back from the end (cmd.exe parity). */
+    if (start < 0) {
+        long from_end = (long)vlen + (long)start;
+        first = (from_end > 0) ? (size_t)from_end : 0;
+    } else {
+        first = (size_t)start;
+    }
+    if (first > vlen) {
+        return;
+    }
+    count = vlen - first;
+    if (has_len) {
+        if (len < 0) {
+            /* Negative length drops that many characters from the end. */
+            long keep = (long)count + (long)len;
+            count = (keep > 0) ? (size_t)keep : 0;
+        } else {
+            count = ((size_t)len < count) ? (size_t)len : count;
+        }
+    }
+    if (count > out_size - 1) {
+        count = out_size - 1;
+    }
+    memcpy(out, value + first, count);
+    out[count] = '\0';
+}
+
+void shell_expand_replace(const char *value, const char *old, const char *new_str,
+                          char *out, size_t out_size)
+{
+    size_t old_len;
+    size_t new_len;
+    size_t used = 0;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (value == NULL) {
+        return;
+    }
+    if (old == NULL || *old == '\0') {
+        snprintf(out, out_size, "%s", value);
+        return;
+    }
+    if (new_str == NULL) {
+        new_str = "";
+    }
+    old_len = strlen(old);
+    new_len = strlen(new_str);
+
+    while (*value != '\0' && used + 1 < out_size) {
+        /* Case-insensitive match (cmd.exe parity: replacement ignores case). */
+        bool match = true;
+
+        for (size_t i = 0; i < old_len; i++) {
+            if (tolower((unsigned char)value[i]) != tolower((unsigned char)old[i])) {
+                match = false;
+                break;
+            }
+            if (value[i] == '\0') {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            size_t room = out_size - 1 - used;
+            size_t take = (new_len < room) ? new_len : room;
+
+            memcpy(out + used, new_str, take);
+            used += take;
+            value += old_len;
+        } else {
+            out[used++] = *value++;
+        }
+    }
+    out[used] = '\0';
+}
+
+/**
+ * Resolve a bare `%NAME%` token to its text (ERRORLEVEL, the DOS dynamic
+ * variables, or the environment table). The single shared implementation
+ * behind plain expansion and the `:` string forms, so `%TIME%` and
+ * `%TIME:~0,2%` can never disagree.
+ */
+static const char *shell_expand_named_value(const char *token, char *errorlevel_buf,
+                                            char *pseudo_buf)
+{
+    if (shell_text_equals_ignore_case(token, "ERRORLEVEL")) {
+        snprintf(errorlevel_buf, 16, "%d", s_errorlevel);
+        return errorlevel_buf;
+    }
+    if (shell_text_equals_ignore_case(token, "DATE") ||
+        shell_text_equals_ignore_case(token, "TIME") ||
+        shell_text_equals_ignore_case(token, "RANDOM") ||
+        shell_text_equals_ignore_case(token, "CD")) {
+        /* DOS/cmd-style dynamic variables. They always win over a user
+         * variable of the same name. */
+        if (shell_text_equals_ignore_case(token, "RANDOM")) {
+            /* cmd.exe %RANDOM% is 0..32767. */
+            snprintf(pseudo_buf, 40, "%d", (int)(esp_random() & 0x7FFF));
+            return pseudo_buf;
+        }
+        if (shell_text_equals_ignore_case(token, "CD")) {
+            const char *cwd = shell_get_cwd();
+            return (cwd != NULL) ? cwd : "";
+        }
+        {
+            struct tm lt = time_get_local();
+            if (shell_text_equals_ignore_case(token, "DATE")) {
+                snprintf(pseudo_buf, 40, "%02d-%02d-%04d",
+                         lt.tm_mon + 1, lt.tm_mday, lt.tm_year + 1900);
+            } else {
+                snprintf(pseudo_buf, 40, "%02d:%02d:%02d",
+                         lt.tm_hour, lt.tm_min, lt.tm_sec);
+            }
+            return pseudo_buf;
+        }
+    }
+    {
+        const char *value = shell_env_get(token);
+        if (value == NULL) {
+            /* cmd.exe parity: an undefined variable expands to the empty
+             * string, so the DOS `if "%var%"==""` idiom works. */
+            return "";
+        }
+        return value;
+    }
+}
+
+/**
+ * Resolve one `%...%` / `!...!` token (without the delimiters) to its text:
+ * plain names via shell_expand_named_value(), `NAME:~start[,len]` via
+ * shell_expand_substring(), `NAME:old=new` via shell_expand_replace().
+ * Scratch comes from the caller (@p pseudo_buf 40 bytes, @p strbuf value
+ * sized); the result points at one of the scratches, the environment slot,
+ * or a literal. The single shared implementation behind both delimiter
+ * forms, so `%TIME:~0,2%` and `!TIME:~0,2!` can never disagree.
+ */
+static const char *shell_expand_token_text(char *token, char *errorlevel_buf,
+                                           char *pseudo_buf, char *strbuf,
+                                           size_t strbuf_size)
+{
+    char *colon = strchr(token, ':');
+
+    if (colon == NULL) {
+        return shell_expand_named_value(token, errorlevel_buf, pseudo_buf);
+    }
+    if (colon[1] == '~') {
+        /* `NAME:~start[,len]`: slice a substring. */
+        const char *base = NULL;
+        const char *spec = colon + 2;
+        char *num_end = NULL;
+        long start;
+        bool has_len = false;
+        long len = 0;
+
+        *colon = '\0';
+        base = shell_expand_named_value(token, errorlevel_buf, pseudo_buf);
+        start = strtol(spec, &num_end, 10);
+        if (num_end == spec) {
+            strbuf[0] = '\0';
+        } else {
+            spec = num_end;
+            while (*spec == ' ') {
+                spec++;
+            }
+            if (*spec == ',') {
+                spec++;
+                len = strtol(spec, &num_end, 10);
+                if (num_end == spec) {
+                    strbuf[0] = '\0';
+                    spec = NULL;
+                } else {
+                    has_len = true;
+                    spec = num_end;
+                }
+            }
+            if (spec != NULL) {
+                while (*spec == ' ') {
+                    spec++;
+                }
+                if (*spec != '\0') {
+                    strbuf[0] = '\0';
+                    spec = NULL;
+                }
+            }
+            if (spec != NULL) {
+                shell_expand_substring(base, (int)start, has_len,
+                                       (int)len, strbuf, strbuf_size);
+            }
+        }
+        return strbuf;
+    }
+    /* `NAME:old=new`: replace every occurrence. */
+    {
+        const char *base = NULL;
+        char *equals;
+
+        *colon = '\0';
+        base = shell_expand_named_value(token, errorlevel_buf, pseudo_buf);
+        equals = strchr(colon + 1, '=');
+        if (equals == NULL) {
+            strbuf[0] = '\0';
+        } else {
+            *equals = '\0';
+            shell_expand_replace(base, colon + 1, equals + 1,
+                                 strbuf, strbuf_size);
+        }
+        return strbuf;
+    }
+}
+
 void shell_expand_variables(const char *input, char *output, size_t output_size)
 {
     size_t out_index = 0;
     shell_quote_state_t quote = SHELL_QUOTE_NONE;
     char errorlevel_buf[16];   /* %ERRORLEVEL% renders here; copied immediately */
     char modbuf[SHELL_SD_PATH_BYTES]; /* %~ modifiers render here; copied immediately */
+    char strbuf[SHELL_ENV_VALUE_BYTES]; /* %VAR:...% / !VAR...! forms render here */
 
     if (output == NULL || output_size == 0) {
         return;
@@ -2019,11 +2264,12 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                 }
                 /* else: no valid digit follows — the `%` is copied literally below. */
             } else {
-                /* Environment variable `%VAR%` or a literal `%%`: needs the
-                 * closing `%`. An undefined name expands to the empty string
-                 * (cmd.exe parity), so the DOS `if "%var%"==""` idiom works.
-                 * `%ERRORLEVEL%` expands to the current errorlevel as a decimal
-                 * string, giving a batch process access to its own exit code. */
+                /* Environment variable `%VAR%` (or a literal `%%`), plus the
+                 * DOS string forms `%VAR:~start[,len]%` and `%VAR:old=new%`:
+                 * needs the closing `%`. An undefined name expands to the
+                 * empty string (cmd.exe parity), so the DOS `if "%var%"=="`
+                 * idiom works. `%ERRORLEVEL%` expands to the current
+                 * errorlevel as a decimal string. */
                 const char *end = strchr(input + 1, '%');
                 if (end != NULL) {
                     size_t token_len = (size_t)(end - (input + 1));
@@ -2033,50 +2279,53 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                         replacement = "%";
                     } else if (token_len < sizeof(token)) {
                         char pseudo_buf[40];
+
                         memcpy(token, input + 1, token_len);
                         token[token_len] = '\0';
-                        if (shell_text_equals_ignore_case(token, "ERRORLEVEL")) {
-                            snprintf(errorlevel_buf, sizeof(errorlevel_buf), "%d", s_errorlevel);
-                            replacement = errorlevel_buf;
-                        } else if (shell_text_equals_ignore_case(token, "DATE") ||
-                                   shell_text_equals_ignore_case(token, "TIME") ||
-                                   shell_text_equals_ignore_case(token, "RANDOM") ||
-                                   shell_text_equals_ignore_case(token, "CD")) {
-                            /* DOS/cmd-style dynamic variables. They always win
-                             * over a user variable of the same name. */
-                            if (shell_text_equals_ignore_case(token, "RANDOM")) {
-                                /* cmd.exe %RANDOM% is 0..32767. */
-                                snprintf(pseudo_buf, sizeof(pseudo_buf), "%d",
-                                         (int)(esp_random() & 0x7FFF));
-                            } else if (shell_text_equals_ignore_case(token, "CD")) {
-                                const char *cwd = shell_get_cwd();
-                                replacement = (cwd != NULL) ? cwd : "";
-                            } else {
-                                struct tm lt = time_get_local();
-                                if (shell_text_equals_ignore_case(token, "DATE")) {
-                                    snprintf(pseudo_buf, sizeof(pseudo_buf), "%02d-%02d-%04d",
-                                             lt.tm_mon + 1, lt.tm_mday, lt.tm_year + 1900);
-                                } else {
-                                    snprintf(pseudo_buf, sizeof(pseudo_buf), "%02d:%02d:%02d",
-                                             lt.tm_hour, lt.tm_min, lt.tm_sec);
-                                }
-                            }
-                            if (replacement == NULL) {
-                                replacement = pseudo_buf;
-                            }
-                        } else {
-                            replacement = shell_env_get(token);
-                            if (replacement == NULL) {
-                                /* cmd.exe parity: an undefined variable
-                                 * expands to the empty string, so the DOS
-                                 * `if "%var%"==""` idiom works. */
-                                replacement = "";
-                            }
-                        }
+                        replacement = shell_expand_token_text(token, errorlevel_buf,
+                                                              pseudo_buf, strbuf,
+                                                              sizeof(strbuf));
                     }
                     after = end + 1;
                 }
                 /* No closing `%`: the percent is copied literally below. */
+            }
+
+            if (replacement != NULL && after != NULL) {
+                while (*replacement != '\0' && out_index + 1 < output_size) {
+                    output[out_index++] = *replacement++;
+                }
+                input = after;
+                continue;
+            }
+        }
+
+        /* Delayed expansion `!VAR!` (cmd.exe parity): only when a
+         * `setlocal enabledelayedexpansion` scope is open. Same token forms
+         * as `%VAR%` through the shared helper; a missing closing `!` (or a
+         * disabled scope) copies the `!` literally. The caret handler above
+         * already consumed `^!` pairs, so they never reach here. */
+        if (s_delayed_expansion && *input == '!') {
+            const char *replacement = NULL;
+            const char *after = NULL;
+            const char *end = strchr(input + 1, '!');
+
+            if (end != NULL) {
+                size_t token_len = (size_t)(end - (input + 1));
+                char token[SHELL_ENV_NAME_BYTES];
+
+                if (token_len > 0 && token_len < sizeof(token)) {
+                    char pseudo_buf[40];
+
+                    memcpy(token, input + 1, token_len);
+                    token[token_len] = '\0';
+                    replacement = shell_expand_token_text(token, errorlevel_buf,
+                                                          pseudo_buf, strbuf,
+                                                          sizeof(strbuf));
+                } else if (token_len == 0) {
+                    replacement = "!";
+                }
+                after = end + 1;
             }
 
             if (replacement != NULL && after != NULL) {
@@ -2935,6 +3184,68 @@ void shell_command_on(int argc, char **argv)
     }
 }
 
+/**
+ * `switch <value> <match>:<label> [...] [/d:<label>]` — string-match dispatch
+ * to a batch label (the string twin of `on ... goto`, which dispatches on a
+ * 1-based number). The first case-insensitive match jumps; otherwise the
+ * `/d:` default jumps; otherwise the line falls through with ERRORLEVEL 1.
+ * A missing label behaves exactly like `goto` to a missing label (the frame
+ * aborts at the jump). Only valid inside batch files.
+ */
+void shell_command_switch(int argc, char **argv)
+{
+    const char *def = NULL;
+    const char *target = NULL;
+    char **cases = NULL;
+    int ncases = 0;
+    int i;
+
+    if (s_active_batch_frame == NULL) {
+        shell_transcript_append_text("switch: only valid inside batch files\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (argc < 3) {
+        shell_print_usage("Usage: switch <value> <match>:<label> [...] [/d:<label>]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    /* Split off the /d: default first so it never competes as a case (a match
+     * containing a colon splits on its LAST colon, so `C:\\x:lbl` works). */
+    cases = malloc(sizeof(char *) * (size_t)(argc - 2));
+    if (cases == NULL) {
+        shell_transcript_append_text("switch: out of memory\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    for (i = 2; i < argc; i++) {
+        if (strncasecmp(argv[i], "/d:", 3) == 0 && argv[i][3] != '\0') {
+            def = argv[i] + 3;
+        } else {
+            cases[ncases++] = argv[i];
+        }
+    }
+    target = shell_switch_select(argv[1], cases, ncases);
+    if (target == NULL) {
+        target = def;
+    }
+    free(cases);
+    if (target == NULL) {
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (target[0] == '\0') {
+        shell_print_error("switch: empty dispatch target");
+        batch_set_errorlevel(1);
+        return;
+    }
+    /* Same jump machinery as `goto` (leading `:` accepted, length-capped, the
+     * executor aborts the frame on a missing label). */
+    shell_store_goto_target(target);
+    s_goto_pending = true;
+    batch_set_errorlevel(0);
+}
+
 void shell_command_goto(int argc, char **argv)
 {
     if (argc < 2) {
@@ -3438,10 +3749,44 @@ done:
     free(message);
 }
 
+/** Delayed `!VAR!` expansion for the current task (see `setlocal`). */
+bool shell_delayed_expansion_enabled(void)
+{
+    return s_delayed_expansion;
+}
+
+/** Test hook: set the delayed-expansion flag directly. */
+void shell_set_delayed_expansion(bool enabled)
+{
+    s_delayed_expansion = enabled;
+}
+
 void shell_command_setlocal(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    bool want_delayed = s_delayed_expansion;
+    bool want_set = false;
+
+    /* Optional switches (cmd.exe parity): `enabledelayedexpansion` /
+     * `disabledelayedexpansion` flip the `!VAR!` flag inside the new scope
+     * (restored by `endlocal`); `enableextensions` / `disableextensions` are
+     * accepted and ignored (extensions are always on here) so portable
+     * scripts parse. Anything else is a usage error. */
+    for (int i = 1; i < argc; i++) {
+        if (shell_text_equals_ignore_case(argv[i], "enabledelayedexpansion")) {
+            want_delayed = true;
+            want_set = true;
+        } else if (shell_text_equals_ignore_case(argv[i], "disabledelayedexpansion")) {
+            want_delayed = false;
+            want_set = true;
+        } else if (shell_text_equals_ignore_case(argv[i], "enableextensions") ||
+                   shell_text_equals_ignore_case(argv[i], "disableextensions")) {
+            continue;
+        } else {
+            shell_print_usage("Usage: setlocal [enabledelayedexpansion|disabledelayedexpansion]");
+            s_errorlevel = 2;
+            return;
+        }
+    }
 
     if (!shell_setlocal_push()) {
         shell_print_error("setlocal: cannot nest deeper than %d scopes",
@@ -3450,12 +3795,16 @@ void shell_command_setlocal(int argc, char **argv)
         s_errorlevel = 1;
         return;
     }
+    if (want_set) {
+        s_delayed_expansion = want_delayed;
+    }
 
     /* Track the scope against the running frame so an unmatched setlocal is
      * unwound automatically when the batch file returns. */
     if (s_active_batch_frame != NULL) {
         s_active_batch_frame->setlocal_depth++;
     }
+    s_errorlevel = 0;
 }
 
 void shell_command_endlocal(int argc, char **argv)
@@ -4946,10 +5295,7 @@ static void shell_frame_load(shell_batch_frame_t *frame, FILE *file)
         fseek(file, 0, SEEK_SET);
         return;
     }
-    frame->ram = heap_caps_malloc((size_t)size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (frame->ram == NULL) {
-        frame->ram = malloc((size_t)size + 1);
-    }
+    frame->ram = p4heap_alloc_psram((size_t)size + 1);
     if (frame->ram == NULL) {
         fseek(file, 0, SEEK_SET);
         return;
@@ -5149,6 +5495,140 @@ static void shell_for_substitute_and_run(const char *do_command, char var_name, 
     binding.text = value != NULL ? value : "";
     binding.len = value != NULL ? strlen(value) : 0;
     shell_for_substitute_and_run_bindings(do_command, &binding, 1);
+}
+
+/* `for /A` prefix collector: copy every variable name shaped `PREFIX[...]`
+ * (case-insensitive prefix, non-empty index) into @p names. Slot (creation)
+ * order, which is the only stable order the table has. Pure over the shared
+ * table (copy-out discipline: names are copied, values are re-read live per
+ * iteration so a body that stores stays coherent). */
+int shell_fora_collect(const char *prefix, char names[][SHELL_ENV_NAME_BYTES], int max)
+{
+    size_t prefix_len;
+    size_t index = 0;
+    int count = 0;
+
+    if (prefix == NULL || prefix[0] == '\0' || names == NULL || max <= 0) {
+        return 0;
+    }
+    prefix_len = strlen(prefix);
+    batch_shared_take();
+    for (index = 0; index < SHELL_ENV_VAR_MAX && count < max; index++) {
+        const char *name;
+        size_t name_len;
+        const char *open;
+        const char *close;
+
+        if (!s_shell_env_vars[index].used) {
+            continue;
+        }
+        name = s_shell_env_vars[index].name;
+        name_len = strlen(name);
+        if (name_len <= prefix_len + 2) {
+            continue;
+        }
+        if (strncasecmp(name, prefix, prefix_len) != 0) {
+            continue;
+        }
+        open = name + prefix_len;
+        if (*open != '[') {
+            continue;
+        }
+        close = name + name_len - 1;
+        if (*close != ']' || close == open + 1) {
+            continue;
+        }
+        snprintf(names[count], SHELL_ENV_NAME_BYTES, "%s", name);
+        count++;
+    }
+    batch_shared_give();
+    return count;
+}
+
+/* `switch` case matcher (pure, unit-tested): first case-insensitive match
+ * wins. Each case is `match:label`, split on the LAST colon so a match
+ * containing `:` (such as a path) survives. Entries without a colon never
+ * match. Returns the label (possibly empty), or NULL when nothing matches. */
+const char *shell_switch_select(const char *value, char **cases, int count)
+{
+    int i;
+
+    if (value == NULL || cases == NULL || count <= 0) {
+        return NULL;
+    }
+    for (i = 0; i < count; i++) {
+        const char *arg = cases[i];
+        const char *split;
+        size_t match_len;
+
+        if (arg == NULL) {
+            continue;
+        }
+        split = strrchr(arg, ':');
+        if (split == NULL || split == arg) {
+            continue;
+        }
+        match_len = (size_t)(split - arg);
+        if (strlen(value) == match_len && strncasecmp(value, arg, match_len) == 0) {
+            return split + 1;
+        }
+    }
+    return NULL;
+}
+
+/* `for /L` (start,step,end) set parser: three comma-separated integers with
+ * optional whitespace, nothing else. Pure so the unit tests drive it
+ * directly; the loop body below reuses the classic substitution runner. */
+bool shell_forl_parse(const char *set, int32_t *start_out, int32_t *step_out,
+                      int32_t *end_out)
+{
+    long values[3];
+    const char *cursor;
+    int index;
+
+    if (set == NULL || start_out == NULL || step_out == NULL || end_out == NULL) {
+        return false;
+    }
+    cursor = set;
+    for (index = 0; index < 3; index++) {
+        char *num_end = NULL;
+        long value;
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            return false;
+        }
+        value = strtol(cursor, &num_end, 10);
+        if (num_end == cursor) {
+            return false;
+        }
+        if (value < INT32_MIN || value > INT32_MAX) {
+            return false;
+        }
+        values[index] = value;
+        cursor = num_end;
+        while (*cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+        if (index < 2) {
+            if (*cursor != ',') {
+                return false;
+            }
+            cursor++;
+        }
+    }
+    if (*cursor != '\0') {
+        return false;
+    }
+    if (values[1] == 0) {
+        return false;
+    }
+    *start_out = (int32_t)values[0];
+    *step_out = (int32_t)values[1];
+    *end_out = (int32_t)values[2];
+    return true;
 }
 
 /* ========================================================================
@@ -5747,16 +6227,74 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
     char var_name;
     shell_forf_options_t forf_opts;
     bool for_f = false;
+    bool for_l = false;
+    bool for_a = false;
+    bool for_d = false;
+    bool for_r = false;
+    char for_root[SHELL_SD_PATH_BYTES];
 
     (void)frame;
+    for_root[0] = '\0';
 
-    /* Parse: for [/f "options"] %%var in (set) do command */
+    /* Parse: for [/f "options" | /L | /A | /D | /R [path]] %%var in (set) do command */
     for_ptr = strstr(command_line, "for ");
     if (for_ptr == NULL) return;
 
     /* Skip "for " */
     for_ptr += 4;
     while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+
+    /* `for /L` — numeric counting loop (cmd.exe parity). */
+    if (*for_ptr == '/' && (for_ptr[1] == 'l' || for_ptr[1] == 'L') &&
+        (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
+        for_l = true;
+        for_ptr += 2;
+        while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+    }
+
+    /* `for /A` — associative-array iteration over one `PREFIX[...]`. */
+    if (!for_l && *for_ptr == '/' &&
+        (for_ptr[1] == 'a' || for_ptr[1] == 'A') &&
+        (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
+        for_a = true;
+        for_ptr += 2;
+        while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+    }
+
+    /* `for /D` — directory names instead of file names (cmd.exe parity). */
+    if (!for_l && !for_a && *for_ptr == '/' &&
+        (for_ptr[1] == 'd' || for_ptr[1] == 'D') &&
+        (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
+        for_d = true;
+        for_ptr += 2;
+        while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+    }
+
+    /* `for /R [path]` — recursive file walk (cmd.exe parity). The optional
+     * root comes between the flag and the loop variable. */
+    if (!for_l && !for_a && !for_d && *for_ptr == '/' &&
+        (for_ptr[1] == 'r' || for_ptr[1] == 'R') &&
+        (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
+        char *path_end;
+
+        for_r = true;
+        for_ptr += 2;
+        while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+        /* A `%var` next means no root was given (the walk starts at the
+         * cwd); anything else up to whitespace is the root. */
+        if (*for_ptr != '%' && *for_ptr != '\0') {
+            path_end = for_ptr;
+            while (*path_end != '\0' && !isspace((unsigned char)*path_end)) {
+                path_end++;
+            }
+            if ((size_t)(path_end - for_ptr) < sizeof(for_root)) {
+                memcpy(for_root, for_ptr, (size_t)(path_end - for_ptr));
+                for_root[path_end - for_ptr] = '\0';
+            }
+            for_ptr = path_end;
+            while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+        }
+    }
 
     /* `for /f` — file-line loops. The DOS options are one quoted string
      * ("delims=, tokens=1,2"); the shell tokenizer has stripped the quotes and
@@ -5872,6 +6410,165 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
         return;
     }
 
+    /* `for /R` walks the tree for files matching the set pattern (an empty
+     * set matches everything, cmd.exe parity). */
+    if (for_r) {
+        char *pattern = shell_trim(set_str);
+        char **tokens = NULL;
+        int count = 0;
+        esp_err_t error;
+
+        if (*pattern == '\0') {
+            pattern = "*";
+        }
+        error = storage_expand_recursive(for_root[0] != '\0' ? for_root : ".",
+                                         pattern, &tokens, &count);
+        free(set_str);
+        set_str = NULL;
+        if (error != ESP_OK) {
+            shell_print_warning("for /R: could not walk %s (%s)",
+                                for_root[0] != '\0' ? for_root : ".",
+                                esp_err_to_name(error));
+            shell_record_warningf("for", "Recursive expansion failed");
+            return;
+        }
+        for (int i = 0; i < count; i++) {
+            shell_for_substitute_and_run(do_command, var_name, tokens[i]);
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+        }
+        storage_free_wildcard_expansion(tokens, count);
+        return;
+    }
+
+    /* `for /L` counts from start to end inclusive (a negative step counts
+     * down). Values are bound to the loop variable as decimal text through
+     * the classic substitution runner, so `%i`/`%%i` work per iteration. */
+    if (for_l) {
+        int32_t start = 0;
+        int32_t step = 0;
+        int32_t end = 0;
+        int64_t value;
+        int iterations = 0;
+        char numbuf[12];
+
+        if (!shell_forl_parse(set_str, &start, &step, &end)) {
+            shell_transcript_append_text("for /L: needs (start,step,end) with a nonzero step\n");
+            free(set_str);
+            return;
+        }
+        free(set_str);
+        set_str = NULL;
+        for (value = start;
+             (step > 0) ? (value <= (int64_t)end) : (value >= (int64_t)end);
+             value += step) {
+            if (iterations++ >= P4_CONFIG_FORL_ITER_MAX) {
+                shell_transcript_append_text("for /L: iteration cap reached, stopping\n");
+                break;
+            }
+            snprintf(numbuf, sizeof(numbuf), "%lld", (long long)value);
+            shell_for_substitute_and_run(do_command, var_name, numbuf);
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+        }
+        return;
+    }
+
+    /* `for /A` iterates one `PREFIX[...]`: `%%k` binds the index text and
+     * the next letter (`%%l`) the live value, mirroring the `for /f`
+     * consecutive-letter convention. Values read live per iteration, so a
+     * body that stores stays coherent. */
+    if (for_a) {
+        /* The set names the prefix; surrounding whitespace is trimmed. */
+        char *prefix = shell_trim(set_str);
+        char (*names)[SHELL_ENV_NAME_BYTES] = NULL;
+        int collected = 0;
+
+        if (*prefix == '\0') {
+            shell_transcript_append_text("for /A: needs a PREFIX in (prefix)\n");
+            free(set_str);
+            return;
+        }
+        names = malloc(sizeof(*names) * SHELL_ENV_VAR_MAX);
+        if (names == NULL) {
+            shell_transcript_append_text("for /A: out of memory\n");
+            free(set_str);
+            return;
+        }
+        collected = shell_fora_collect(prefix, names, SHELL_ENV_VAR_MAX);
+        free(set_str);
+        set_str = NULL;
+        for (int i = 0; i < collected; i++) {
+            /* Index text lives between the brackets of the stored name. */
+            char *open = strchr(names[i], '[');
+            char *close = strrchr(names[i], ']');
+            char index[SHELL_ENV_NAME_BYTES];
+            size_t index_len;
+            const char *value;
+            shell_for_binding_t bindings[2];
+
+            if (open == NULL || close == NULL || close <= open + 1) {
+                continue;
+            }
+            index_len = (size_t)(close - (open + 1));
+            if (index_len >= sizeof(index)) {
+                index_len = sizeof(index) - 1;
+            }
+            memcpy(index, open + 1, index_len);
+            index[index_len] = '\0';
+            value = shell_env_get(names[i]);
+            bindings[0].var = var_name;
+            bindings[0].text = index;
+            bindings[0].len = index_len;
+            bindings[1].var = (char)(var_name + 1);
+            bindings[1].text = value != NULL ? value : "";
+            bindings[1].len = value != NULL ? strlen(value) : 0;
+            shell_for_substitute_and_run_bindings(do_command, bindings, 2);
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+        }
+        free(names);
+        return;
+    }
+
+    /* `for /D` matches directory names: wildcard tokens expand through the
+     * dirs-only matcher, literal tokens pass through untouched (cmd.exe
+     * parity — the set is enumerated, not verified). */
+    if (for_d) {
+        char *save_ptr = NULL;
+        char *token = strtok_r(set_str, " \t", &save_ptr);
+
+        while (token != NULL) {
+            if (strchr(token, '*') != NULL || strchr(token, '?') != NULL) {
+                char **tokens = NULL;
+                int count = 0;
+
+                if (storage_expand_dirs(token, &tokens, &count) == ESP_OK) {
+                    for (int i = 0; i < count; i++) {
+                        shell_for_substitute_and_run(do_command, var_name, tokens[i]);
+                        if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                            break;
+                        }
+                    }
+                    storage_free_wildcard_expansion(tokens, count);
+                } else {
+                    shell_print_warning("for /D: could not expand %s", token);
+                }
+            } else {
+                shell_for_substitute_and_run(do_command, var_name, token);
+            }
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                break;
+            }
+            token = strtok_r(NULL, " \t", &save_ptr);
+        }
+        free(set_str);
+        return;
+    }
+
     /* Wildcard set: if the set contains `*` or `?`, expand it against the
      * filesystem and iterate over matching paths. Otherwise fall through to
      * the classic in-line token set. */
@@ -5937,6 +6634,217 @@ void shell_command_for(int argc, char **argv)
     free(command_line);
 }
 
+/* Translate the DOS numeric-comparison keywords (`if` parity: EQU NEQ LSS
+ * LEQ GTR GEQ) in a `while` condition to the `set /a` operators. Keywords
+ * must be standalone whitespace-separated words; anything else (including a
+ * bare `<`, which the pipeline already claimed as input redirection) is left
+ * alone. Pure, so the unit tests drive it directly. */
+void shell_while_translate_keywords(const char *cond, char *out, size_t out_size)
+{
+    const char *cursor;
+    size_t used = 0;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (cond == NULL) {
+        return;
+    }
+    cursor = cond;
+    while (*cursor != '\0') {
+        const char *end;
+        size_t len;
+        const char *op = NULL;
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+        end = cursor;
+        while (*end != '\0' && *end != ' ' && *end != '\t') {
+            end++;
+        }
+        len = (size_t)(end - cursor);
+        if (len == 3 && (strncasecmp(cursor, "EQU", 3) == 0)) {
+            op = "==";
+        } else if (len == 3 && (strncasecmp(cursor, "NEQ", 3) == 0)) {
+            op = "!=";
+        } else if (len == 3 && (strncasecmp(cursor, "LSS", 3) == 0)) {
+            op = "<";
+        } else if (len == 3 && (strncasecmp(cursor, "LEQ", 3) == 0)) {
+            op = "<=";
+        } else if (len == 3 && (strncasecmp(cursor, "GTR", 3) == 0)) {
+            op = ">";
+        } else if (len == 3 && (strncasecmp(cursor, "GEQ", 3) == 0)) {
+            op = ">=";
+        }
+        if (used > 0 && used + 1 < out_size) {
+            out[used++] = ' ';
+        }
+        if (op != NULL) {
+            size_t oplen = strlen(op);
+            if (used + oplen < out_size) {
+                memcpy(out + used, op, oplen);
+                used += oplen;
+            }
+        } else {
+            size_t take = len;
+            if (used + take >= out_size) {
+                take = out_size - 1 - used;
+            }
+            memcpy(out + used, cursor, take);
+            used += take;
+        }
+        out[used] = '\0';
+        cursor = end;
+    }
+}
+
+/* Split a `while` line into its condition and body at the first unquoted
+ * `do` surrounded by whitespace (quote/caret rules match the shared
+ * scanner: `"..."` groups, `'...'` is literal, `^c` escapes one char). */
+static bool shell_while_split(char *line, char **cond_out, char **body_out)
+{
+    shell_quote_state_t quote = SHELL_QUOTE_NONE;
+    char *cursor = line;
+
+    while (*cursor != '\0') {
+        if (*cursor == P4_CONFIG_ESCAPE_CHAR && quote != SHELL_QUOTE_SINGLE &&
+            cursor[1] != '\0') {
+            cursor += 2;
+            continue;
+        }
+        if (*cursor == '"' && quote != SHELL_QUOTE_SINGLE) {
+            quote = (quote == SHELL_QUOTE_DOUBLE) ? SHELL_QUOTE_NONE : SHELL_QUOTE_DOUBLE;
+            cursor++;
+            continue;
+        }
+        if (*cursor == '\'' && quote != SHELL_QUOTE_DOUBLE) {
+            quote = (quote == SHELL_QUOTE_SINGLE) ? SHELL_QUOTE_NONE : SHELL_QUOTE_SINGLE;
+            cursor++;
+            continue;
+        }
+        if (quote == SHELL_QUOTE_NONE &&
+            (cursor == line || isspace((unsigned char)cursor[-1])) &&
+            (strncasecmp(cursor, "do", 2) == 0) &&
+            (cursor[2] == '\0' || isspace((unsigned char)cursor[2]))) {
+            *cursor = '\0';
+            *cond_out = shell_trim(line);
+            *body_out = shell_trim(cursor + 2);
+            return true;
+        }
+        cursor++;
+    }
+    return false;
+}
+
+void shell_command_while(int argc, char **argv)
+{
+    char *command_line = NULL;
+    char *rest = NULL;
+    char *cond = NULL;
+    char *body = NULL;
+    int iterations = 0;
+
+    command_line = malloc(SHELL_COMMAND_BYTES);
+    if (command_line == NULL) {
+        shell_transcript_append_text("while: out of memory\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_join_args(argv, 0, argc, command_line, SHELL_COMMAND_BYTES);
+    rest = strstr(command_line, "while ");
+    if (rest == NULL) {
+        shell_print_usage("Usage: while <expr> do <command>");
+        batch_set_errorlevel(2);
+        free(command_line);
+        return;
+    }
+    rest += 6;
+    while (*rest && isspace((unsigned char)*rest)) {
+        rest++;
+    }
+    if (!shell_while_split(rest, &cond, &body) || *cond == '\0' || *body == '\0') {
+        shell_print_usage("Usage: while <expr> do <command>");
+        batch_set_errorlevel(2);
+        free(command_line);
+        return;
+    }
+
+    /* Per-iteration live values: the pipeline expanded `%VAR%` once before
+     * dispatch, so the condition and body re-expand every pass from their
+     * pristine text. A batch file writes `while %%n%% LSS 3 do ...` (the
+     * pipeline turns `%%` into `%`, each pass resolves the live value); bare
+     * names (`while n LSS 3 do ...`) read the table directly through the
+     * evaluator. DOS keywords (`LSS`, `EQU`, ...) read like `if` and dodge
+     * the `<` input-redirection trap: the pipeline claims a bare `<` before
+     * dispatch, so `while %n%<3` can never arrive intact. All scratch is
+     * heap-allocated (line-sized, recursive batch path). */
+    {
+        char *cond_live = malloc(SHELL_BATCH_LINE_BYTES);
+        char *cond_eval = malloc(SHELL_BATCH_LINE_BYTES);
+
+        if (cond_live == NULL || cond_eval == NULL) {
+            shell_transcript_append_text("while: out of memory\n");
+            batch_set_errorlevel(1);
+            free(cond_live);
+            free(cond_eval);
+            free(command_line);
+            return;
+        }
+
+        /* One repaint per loop (same reasoning as the `for` wrapper): each
+         * body re-enters the pipeline with its own defer window. */
+        shell_transcript_defer_begin();
+        for (iterations = 0; iterations < P4_CONFIG_WHILE_ITER_MAX; iterations++) {
+            /* Both scratch buffers are re-filled every pass: the pipeline may
+             * mutate the line it runs, so every pass starts from pristine
+             * text and the current environment. */
+            char *run = malloc(SHELL_BATCH_LINE_BYTES * 2);
+            int32_t check = 0;
+            const char *error = NULL;
+
+            if (run == NULL) {
+                shell_transcript_append_text("while: out of memory\n");
+                batch_set_errorlevel(1);
+                break;
+            }
+            shell_expand_variables(cond, cond_live, SHELL_BATCH_LINE_BYTES);
+            shell_while_translate_keywords(cond_live, cond_eval, SHELL_BATCH_LINE_BYTES);
+            if (!shell_expr_evaluate(cond_eval, &check, &error)) {
+                shell_transcript_appendf("while: %s\n", error != NULL ? error : "invalid expression");
+                free(run);
+                batch_set_errorlevel(1);
+                break;
+            }
+            if (check == 0) {
+                free(run);
+                batch_set_errorlevel(0);
+                break;
+            }
+            shell_expand_variables(body, run, SHELL_BATCH_LINE_BYTES * 2);
+            batch_run_nested(run);
+            free(run);
+            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                batch_set_errorlevel(0);
+                break;
+            }
+            if (iterations + 1 >= P4_CONFIG_WHILE_ITER_MAX) {
+                shell_transcript_append_text("while: iteration cap reached, stopping\n");
+                batch_set_errorlevel(1);
+                break;
+            }
+        }
+        shell_transcript_defer_end();
+        free(cond_live);
+        free(cond_eval);
+    }
+    free(command_line);
+}
+
 /* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
@@ -5952,11 +6860,9 @@ void batch_init(void)
      * command-worker stack. A failed allocation leaves the table NULL and
      * env lookups/sets degrade to no-ops. */
     if (s_shell_env_vars == NULL) {
-        s_shell_env_vars = (shell_env_var_t *)heap_caps_malloc(SHELL_ENV_BYTES,
-                                                               MALLOC_CAP_SPIRAM);
+        s_shell_env_vars = (shell_env_var_t *)p4heap_alloc_psram(SHELL_ENV_BYTES);
         if (s_shell_env_vars == NULL) {
-            s_shell_env_vars = (shell_env_var_t *)heap_caps_malloc(SHELL_ENV_BYTES,
-                                                                   MALLOC_CAP_DEFAULT);
+            s_shell_env_vars = (shell_env_var_t *)p4heap_alloc_any(SHELL_ENV_BYTES);
         }
     }
     if (s_shell_env_vars == NULL) {
@@ -5976,7 +6882,9 @@ void batch_init(void)
     /* Release any setlocal snapshot left over from a previous init. */
     shell_setlocal_unwind_to(0);
     memset(s_setlocal_stack, 0, sizeof(s_setlocal_stack));
+    memset(s_delayed_stack, 0, sizeof(s_delayed_stack));
     s_setlocal_depth = 0;
+    s_delayed_expansion = false;
 
     s_initialized = true;
     ESP_LOGI(BATCH_TAG, "Batch module initialized");

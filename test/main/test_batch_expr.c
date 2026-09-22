@@ -159,6 +159,19 @@ void test_batch_expr_variables(void)
     TEST_ASSERT_EQUAL_INT32(0, result);
 }
 
+void test_batch_expr_bracket_names(void)
+{
+    int32_t result = 0;
+
+    /* Indexed `ARR[i]` elements are ordinary environment slots. */
+    TEST_ASSERT_EQUAL(ESP_OK, shell_env_set("BRK[2]", "7"));
+    TEST_ASSERT_TRUE(shell_expr_evaluate("BRK[2]*2", &result, NULL));
+    TEST_ASSERT_EQUAL_INT32(14, result);
+    TEST_ASSERT_TRUE(shell_expr_evaluate("BRK[9]+1", &result, NULL));
+    TEST_ASSERT_EQUAL_INT32(1, result);
+    TEST_ASSERT_EQUAL(ESP_OK, shell_env_set("BRK[2]", ""));
+}
+
 /* ========================================================================
  * COMPARISON OPERATORS (== != < > <= >=)
  * ======================================================================== */

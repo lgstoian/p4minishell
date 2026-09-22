@@ -44,6 +44,15 @@ static esp_lcd_touch_handle_t tp;   // LCD touch handle
 #define LCD_CMD_BITS           8
 #define LCD_PARAM_BITS         8
 #define LCD_LEDC_CH            BOARD_CFG_DISPLAY_BRIGHTNESS_LEDC_CH
+#if BOARD_CFG_LCD_BACKLIGHT_PWM_TIMER == 0
+#define LCD_LEDC_TIMER LEDC_TIMER_0
+#elif BOARD_CFG_LCD_BACKLIGHT_PWM_TIMER == 1
+#define LCD_LEDC_TIMER LEDC_TIMER_1
+#elif BOARD_CFG_LCD_BACKLIGHT_PWM_TIMER == 2
+#define LCD_LEDC_TIMER LEDC_TIMER_2
+#else
+#define LCD_LEDC_TIMER LEDC_TIMER_3
+#endif
 #define BSP_LCD_ST712X_MIPI_DSI_LANE_BITRATE_MBPS 965
 
 typedef enum {
@@ -61,14 +70,14 @@ esp_err_t bsp_display_brightness_init(void)
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LCD_LEDC_CH,
         .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = LEDC_TIMER_0,
+        .timer_sel = LCD_LEDC_TIMER,
         .duty = 0,
         .hpoint = 0
     };
     const ledc_timer_config_t LCD_backlight_timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .duty_resolution = LEDC_TIMER_10_BIT,
-        .timer_num = LEDC_TIMER_0,
+        .timer_num = LCD_LEDC_TIMER,
         .freq_hz = 5000,
         .clk_cfg = LEDC_AUTO_CLK
     };
@@ -83,10 +92,10 @@ esp_err_t bsp_display_brightness_deinit(void)
 {
     const ledc_timer_config_t LCD_backlight_timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
-        .timer_num = LEDC_TIMER_0,
+        .timer_num = LCD_LEDC_TIMER,
         .deconfigure = 1
     };
-    BSP_ERROR_CHECK_RETURN_ERR(ledc_timer_pause(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0));
+    BSP_ERROR_CHECK_RETURN_ERR(ledc_timer_pause(LEDC_LOW_SPEED_MODE, LCD_LEDC_TIMER));
     BSP_ERROR_CHECK_RETURN_ERR(ledc_timer_config(&LCD_backlight_timer));
     return ESP_OK;
 }

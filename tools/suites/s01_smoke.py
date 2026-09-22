@@ -26,9 +26,12 @@ def run(dev, ctx):
             detected = line.split(":", 1)[1].strip()
             break
 
-    out = dev.run("about")
-    c.expect("about banner", "P4MiniShell", out)
-    c.expect("about version", "about.version: 1.2.0", out)
+    about_out = dev.run("about")
+    c.expect("about banner", "P4MiniShell", about_out)
+    # Firmware version floats with releases (1.2.0 -> 1.2.1 ...); match the
+    # label the firmware itself prints rather than a hardcoded version.
+    c.expect("about version", "about.version:", about_out)
+    out = about_out
     if detected:
         c.expect("about board", detected, out)
     else:
@@ -43,7 +46,11 @@ def run(dev, ctx):
     c.expect("mem reports heap", "heap", out)
 
     out = dev.run("version")
-    c.expect("version banner", "1.2.0", out)
+    # Expect the same version string `about` reported, not a hardcoded value.
+    import re as _re
+    _m = _re.search(r"about\.version:\s*(\S+)", about_out)
+    _want = _m.group(1) if _m else "1."
+    c.expect("version banner", _want, out)
 
     # The on-screen keyboard's visibility is persisted UI state, so pin it
     # visible before sampling; otherwise a prior `keyboard hide` (e.g. the

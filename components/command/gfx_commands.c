@@ -32,12 +32,15 @@
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
 
 static gfx_surface_t s_gfx = {NULL, 0, 0};
 static lv_obj_t *s_gfx_canvas = NULL;
+/** Fullscreen state saved on `gfx init`, restored on `gfx close` (F25-C). */
+static bool s_gfx_fullscreen_saved;
 
 /* Frame pacing for the active canvas app: `gfx show` is the app's present
  * point, so the interval between consecutive shows is the app-driven frame
@@ -128,6 +131,9 @@ static void gfx_teardown(void)
             lv_obj_del(s_gfx_canvas);
             s_gfx_canvas = NULL;
         }
+        /* Restore the fullscreen state the app inherited, so a global
+         * `draw fullscreen on` survives a gfx session (F25-C). */
+        windows_set_fullscreen(s_gfx_fullscreen_saved);
         windows_exit_app_surface();
         lvgl_port_unlock();
     } else if (s_gfx_canvas != NULL) {
@@ -190,7 +196,7 @@ bool shell_command_gfx(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "gfx: missing subcommand\n" SH_RST);
-        shell_transcript_appendf_ansi("Usage: gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|free|slots|save <args>\n");
+            shell_transcript_appendf_ansi("Usage: gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|blitmany|free|slots|save <args>\n");
         batch_set_errorlevel(2);
         return false;
     }
@@ -244,6 +250,11 @@ bool shell_command_gfx(int argc, char **argv)
         s_gfx_canvas = lv_canvas_create(parent);
         lv_canvas_set_buffer(s_gfx_canvas, s_gfx.px, s_gfx.w, s_gfx.h,
                              LV_COLOR_FORMAT_RGB565);
+        /* Give the canvas the whole panel: a gfx app is a full-screen surface,
+         * so hide the header/input row for the session and restore the
+         * inherited fullscreen state on close (F25-C). */
+        s_gfx_fullscreen_saved = windows_is_fullscreen();
+        windows_set_fullscreen(true);
         /* Fit the canvas to the live viewport; the callback re-runs on
          * keyboard/fullscreen changes. */
         windows_set_surface_layout_cb(gfx_relayout);
@@ -657,6 +668,155 @@ bool shell_command_gfx(int argc, char **argv)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[1], "blitmany")) {
+        /* gfx blitmany <slot> [/s:N] [/r:deg] <x1> <y1> [<x2> <y2> ...]
+         * [transparent]: stamp one sprite at many positions in a single
+         * command, so a batch game draws a whole formation without one
+         * transcript line per stamp. A trailing odd token is the transparent
+         * color (same as `blit`). `/s:1..4` upscales every stamp
+         * (nearest-neighbour); `/r:0|90|180|270` rotates clockwise first. */
+        int slot;
+        char *end = NULL;
+        bool use_t = false;
+        uint16_t tcolor = 0x0000;
+        const char *color_arg = NULL;
+        int scale = 1;
+        int turns = 0;
+        int coords = 0;
+        int pairs = 0;
+        int index;
+        gfx_surface_t rotated = {NULL, 0, 0};
+        const gfx_surface_t *spr = NULL;
+
+        if (!gfx_require_foreground()) return false;
+        if (!gfx_require_open()) return false;
+        if (argc < 5) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: usage: gfx blitmany <slot 0..%d> [/s:1..4] [/r:0|90|180|270] <x1> <y1> [<x2> <y2> ...] [transparent]\n" SH_RST,
+                                          GFX_SPR_SLOTS - 1);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        slot = (int)strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || slot < 0 || slot >= GFX_SPR_SLOTS) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: bad slot '%s' (0..%d)\n" SH_RST,
+                                          argv[2], GFX_SPR_SLOTS - 1);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (s_gfx_spr[slot].px == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: slot %d empty (gfx load first)\n" SH_RST, slot);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        /* Two passes over argv[3..] keep stack use flat: first validate the
+         * flags and count the coordinates, then stamp. */
+        for (index = 3; index < argc; index++) {
+            if (strncasecmp(argv[index], "/s:", 3) == 0) {
+                scale = atoi(argv[index] + 3);
+                if (scale < 1 || scale > 4) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: bad scale '%s' (1..4)\n" SH_RST,
+                                                  argv[index]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+            } else if (strncasecmp(argv[index], "/r:", 3) == 0) {
+                int deg = atoi(argv[index] + 3);
+                if (deg != 0 && deg != 90 && deg != 180 && deg != 270) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: bad rotation '%s' (0|90|180|270)\n" SH_RST,
+                                                  argv[index]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+                turns = deg / 90;
+            } else {
+                coords++;
+            }
+        }
+        if (coords > P4_CONFIG_GFX_BLITMANY_MAX * 2 + 1) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: needs 1..%d X Y pairs\n" SH_RST,
+                                          P4_CONFIG_GFX_BLITMANY_MAX);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        /* A trailing odd token is the transparent color (same as `blit`);
+         * flags were consumed above, so the last non-flag token dangles. */
+        if ((coords % 2) != 0) {
+            for (index = argc - 1; index >= 3; index--) {
+                if (strncasecmp(argv[index], "/s:", 3) != 0 &&
+                    strncasecmp(argv[index], "/r:", 3) != 0) {
+                    color_arg = argv[index];
+                    break;
+                }
+            }
+            use_t = true;
+            tcolor = gfx_color_arg(color_arg != NULL ? color_arg : "", 0x0000);
+            coords--;
+        }
+        pairs = coords / 2;
+        if (pairs < 1 || pairs > P4_CONFIG_GFX_BLITMANY_MAX) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: needs 1..%d X Y pairs\n" SH_RST,
+                                          P4_CONFIG_GFX_BLITMANY_MAX);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        spr = &s_gfx_spr[slot];
+        if (turns != 0) {
+            /* One rotated copy serves every stamp; freed on every path below. */
+            if (!gfx_surface_rotate_cw(spr, turns, &rotated)) {
+                shell_transcript_append_text("gfx blitmany: out of memory\n");
+                batch_set_errorlevel(1);
+                return false;
+            }
+            spr = &rotated;
+        }
+        if (spr->w * scale > GFX_MAX_W || spr->h * scale > GFX_MAX_H) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: scaled %dx%d exceeds the %dx%d canvas\n" SH_RST,
+                                          spr->w * scale, spr->h * scale,
+                                          GFX_MAX_W, GFX_MAX_H);
+            gfx_surface_free(&rotated);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        /* Second pass over a heap index (this sits on the recursive batch
+         * path, so no line-sized stack array): the pair order is the argv
+         * order with flags and the color removed. */
+        {
+            int *pair_idx = malloc(sizeof(int) * (size_t)coords);
+            int held = 0;
+
+            if (pair_idx == NULL) {
+                shell_transcript_append_text("gfx blitmany: out of memory\n");
+                gfx_surface_free(&rotated);
+                batch_set_errorlevel(1);
+                return false;
+            }
+            for (index = 3; index < argc; index++) {
+                if (strncasecmp(argv[index], "/s:", 3) == 0 ||
+                    strncasecmp(argv[index], "/r:", 3) == 0 ||
+                    (color_arg != NULL && argv[index] == color_arg)) {
+                    continue;
+                }
+                pair_idx[held++] = index;
+            }
+            for (index = 0; index + 1 < held; index += 2) {
+                int x = atoi(argv[pair_idx[index]]);
+                int y = atoi(argv[pair_idx[index + 1]]);
+
+                if (scale == 1) {
+                    gfx_surface_blit(&s_gfx, spr, x, y, use_t, tcolor);
+                } else {
+                    gfx_surface_blit_scaled(&s_gfx, spr, x, y,
+                                            spr->w * scale, spr->h * scale,
+                                            use_t, tcolor);
+                }
+            }
+            free(pair_idx);
+        }
+        gfx_surface_free(&rotated);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[1], "image")) {
         /* gfx image <path> [x y [w h]]: decode a BMP straight to the target
          * rect and blit it onto the canvas. Defaults to the native size
@@ -813,10 +973,7 @@ bool shell_command_gfx(int argc, char **argv)
             return false;
         }
         row_bytes = (uint32_t)s_gfx.w * 3u;
-        row_buf = heap_caps_malloc(row_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (row_buf == NULL) {
-            row_buf = malloc(row_bytes);
-        }
+        row_buf = p4heap_alloc_psram(row_bytes);
         if (row_buf == NULL) {
             shell_transcript_appendf_ansi(SH_ERR "gfx save: out of memory for row buffer\n" SH_RST);
             fclose(f);

@@ -59,6 +59,8 @@ FILES = [
     ("controlflow", "CONTROL.APPINFO", True),
     ("writer", "WRITER.BAT", False),
     ("writer", "WRITER.APPINFO", True),
+    ("hybrid", "HYBRID.BAT", False),
+    ("hybrid", "HYBRID.APPINFO", True),
 ]
 
 

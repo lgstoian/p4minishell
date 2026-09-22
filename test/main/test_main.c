@@ -85,6 +85,7 @@ extern void test_batch_expr_literals(void);
 extern void test_batch_expr_arithmetic(void);
 extern void test_batch_expr_bitwise(void);
 extern void test_batch_expr_variables(void);
+extern void test_batch_expr_bracket_names(void);
 extern void test_batch_expr_errors(void);
 extern void test_batch_expr_comparisons(void);
 extern void test_batch_expr_logical(void);
@@ -106,6 +107,15 @@ extern void test_variable_expansion_null_input(void);
 extern void test_variable_expansion_null_output(void);
 extern void test_variable_expansion_no_batch_frame(void);
 extern void test_variable_expansion_tilde_modifiers(void);
+extern void test_variable_expansion_substring(void);
+extern void test_variable_expansion_replace(void);
+extern void test_variable_expansion_array_names(void);
+extern void test_variable_expansion_delayed(void);
+extern void test_variable_expansion_delayed_scope(void);
+extern void test_batch_forl_parse(void);
+extern void test_batch_while_keywords(void);
+extern void test_batch_fora_collect(void);
+extern void test_batch_switch_select(void);
 
 extern void test_debug_log_push_and_read(void);
 extern void test_debug_log_warning_count(void);
@@ -192,6 +202,7 @@ extern void test_calc_new_math_errors(void);
 extern void test_calc_string_functions(void);
 extern void test_calc_string_numbers(void);
 extern void test_calc_string_errors(void);
+extern void test_calc_instr(void);
 extern void test_calc_base_and_units(void);
 extern void test_calc_env_variables(void);
 extern void test_calc_command_assignment(void);
@@ -277,9 +288,25 @@ extern void test_power_parse_default(void);
 extern void test_power_parse_valid(void);
 extern void test_power_parse_clamp_and_reject(void);
 extern void test_power_wake_cause_strings(void);
+extern void test_power_pack_present_below_present_is_absent(void);
+extern void test_power_pack_present_in_range_is_immediate(void);
+extern void test_power_pack_present_rail_band_needs_stable_window(void);
+extern void test_power_pack_present_rail_band_unstable_is_absent(void);
+extern void test_power_pack_present_chg_stat_corroboration(void);
 
 extern void test_serial_bmp_headers(void);
 extern void test_serial_bmp_headers_small(void);
+extern void test_screen_split_basic(void);
+extern void test_screen_flow_select_errorlevel(void);
+extern void test_screen_flow_select_value(void);
+extern void test_screen_flow_select_order_and_bounds(void);
+extern void test_gfind_hidden(void);
+extern void test_gfind_store_dirs(void);
+extern void test_gfind_ext_list(void);
+extern void test_gfind_default_kinds(void);
+extern void test_gfind_null_safe(void);
+extern void test_screen_split_trims_and_drops_empties(void);
+extern void test_screen_split_bounds(void);
 
 extern void test_tui_default_color_roundtrip(void);
 extern void test_tui_default_color_null_safe(void);
@@ -349,6 +376,7 @@ extern void test_gfx_bmp_ex_32bit_top_down(void);
 extern void test_gfx_bmp_ex_large_and_scaled(void);
 extern void test_gfx_bmp_fit(void);
 extern void test_gfx_blit_scaled(void);
+extern void test_gfx_rotate_cw(void);
 extern void test_gfx_blit_clip_transparent(void);
 extern void test_gfx_565_to_888_row(void);
 extern void test_gfx_hline_vline_clip(void);
@@ -385,6 +413,11 @@ extern void test_macro_double_record(void);
 extern void test_crypt_derive_deterministic(void);
 extern void test_crypt_mem_roundtrip(void);
 extern void test_crypt_mem_rejects(void);
+extern void test_sw_aes256_block_kat(void);
+extern void test_sw_gcm_empty_vector(void);
+extern void test_sw_gcm_16zero_vector(void);
+extern void test_sw_gcm_ref3_vector(void);
+extern void test_sw_gcm_hw_crosscheck(void);
 extern void test_tcp_parse_target_ok(void);
 extern void test_tcp_parse_target_rejects(void);
 extern void test_tcp_unescape(void);
@@ -399,6 +432,12 @@ extern void test_asset_parse_skip(void);
 extern void test_asset_parse_bad(void);
 extern void test_pkg_app_name_from_appinfo_ok(void);
 extern void test_pkg_app_name_from_appinfo_bad(void);
+extern void test_pkg_sign_line(void);
+extern void test_pkg_sign_canonical(void);
+extern void test_pkg_sign_hash(void);
+extern void test_pkg_sign_verify(void);
+extern void test_pkg_sign_check_manifest(void);
+extern void test_pkg_sign_stock_manifest(void);
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
@@ -543,6 +582,7 @@ void app_main(void)
     RUN_TEST(test_batch_expr_arithmetic);
     RUN_TEST(test_batch_expr_bitwise);
     RUN_TEST(test_batch_expr_variables);
+    RUN_TEST(test_batch_expr_bracket_names);
     RUN_TEST(test_batch_expr_comparisons);
     RUN_TEST(test_batch_expr_logical);
     RUN_TEST(test_batch_expr_errors);
@@ -551,6 +591,10 @@ void app_main(void)
     RUN_TEST(test_batch_on_parse);
     RUN_TEST(test_batch_on_select);
     RUN_TEST(test_batch_on_dispatch_selection);
+    RUN_TEST(test_batch_forl_parse);
+    RUN_TEST(test_batch_while_keywords);
+    RUN_TEST(test_batch_fora_collect);
+    RUN_TEST(test_batch_switch_select);
     UNITY_END();
 
     /* Variable expansion tests */
@@ -567,6 +611,11 @@ void app_main(void)
     RUN_TEST(test_variable_expansion_null_output);
     RUN_TEST(test_variable_expansion_no_batch_frame);
     RUN_TEST(test_variable_expansion_tilde_modifiers);
+    RUN_TEST(test_variable_expansion_substring);
+    RUN_TEST(test_variable_expansion_replace);
+    RUN_TEST(test_variable_expansion_array_names);
+    RUN_TEST(test_variable_expansion_delayed);
+    RUN_TEST(test_variable_expansion_delayed_scope);
     UNITY_END();
 
     /* Debug log tests */
@@ -675,6 +724,7 @@ void app_main(void)
     RUN_TEST(test_calc_string_functions);
     RUN_TEST(test_calc_string_numbers);
     RUN_TEST(test_calc_string_errors);
+    RUN_TEST(test_calc_instr);
     RUN_TEST(test_calc_base_and_units);
     RUN_TEST(test_calc_env_variables);
     RUN_TEST(test_calc_command_assignment);
@@ -784,12 +834,32 @@ void app_main(void)
     RUN_TEST(test_power_parse_valid);
     RUN_TEST(test_power_parse_clamp_and_reject);
     RUN_TEST(test_power_wake_cause_strings);
+    RUN_TEST(test_power_pack_present_below_present_is_absent);
+    RUN_TEST(test_power_pack_present_in_range_is_immediate);
+    RUN_TEST(test_power_pack_present_rail_band_needs_stable_window);
+    RUN_TEST(test_power_pack_present_rail_band_unstable_is_absent);
+    RUN_TEST(test_power_pack_present_chg_stat_corroboration);
     UNITY_END();
 
     /* BMP header writer (components/command/serial_commands.c). */
     UNITY_BEGIN();
     RUN_TEST(test_serial_bmp_headers);
     RUN_TEST(test_serial_bmp_headers_small);
+    UNITY_END();
+
+    /* Declarative screens (components/command/screen_commands.c). */
+    UNITY_BEGIN();
+    RUN_TEST(test_screen_split_basic);
+    RUN_TEST(test_screen_split_trims_and_drops_empties);
+    RUN_TEST(test_screen_split_bounds);
+    RUN_TEST(test_screen_flow_select_errorlevel);
+    RUN_TEST(test_screen_flow_select_value);
+    RUN_TEST(test_screen_flow_select_order_and_bounds);
+    RUN_TEST(test_gfind_hidden);
+    RUN_TEST(test_gfind_store_dirs);
+    RUN_TEST(test_gfind_ext_list);
+    RUN_TEST(test_gfind_default_kinds);
+    RUN_TEST(test_gfind_null_safe);
     UNITY_END();
 
     /* Headless-safe TUI state (components/tui). */
@@ -888,6 +958,7 @@ void app_main(void)
     RUN_TEST(test_gfx_bmp_ex_large_and_scaled);
     RUN_TEST(test_gfx_bmp_fit);
     RUN_TEST(test_gfx_blit_scaled);
+    RUN_TEST(test_gfx_rotate_cw);
     RUN_TEST(test_gfx_blit_clip_transparent);
     RUN_TEST(test_gfx_565_to_888_row);
     RUN_TEST(test_gfx_hline_vline_clip);
@@ -935,6 +1006,11 @@ void app_main(void)
     RUN_TEST(test_crypt_derive_deterministic);
     RUN_TEST(test_crypt_mem_roundtrip);
     RUN_TEST(test_crypt_mem_rejects);
+    RUN_TEST(test_sw_aes256_block_kat);
+    RUN_TEST(test_sw_gcm_empty_vector);
+    RUN_TEST(test_sw_gcm_16zero_vector);
+    RUN_TEST(test_sw_gcm_ref3_vector);
+    RUN_TEST(test_sw_gcm_hw_crosscheck);
     RUN_TEST(test_tcp_parse_target_ok);
     RUN_TEST(test_tcp_parse_target_rejects);
     RUN_TEST(test_tcp_unescape);
@@ -950,6 +1026,12 @@ void app_main(void)
     UNITY_BEGIN();
     RUN_TEST(test_pkg_app_name_from_appinfo_ok);
     RUN_TEST(test_pkg_app_name_from_appinfo_bad);
+    RUN_TEST(test_pkg_sign_line);
+    RUN_TEST(test_pkg_sign_canonical);
+    RUN_TEST(test_pkg_sign_hash);
+    RUN_TEST(test_pkg_sign_verify);
+    RUN_TEST(test_pkg_sign_check_manifest);
+    RUN_TEST(test_pkg_sign_stock_manifest);
     UNITY_END();
 
     /* Theme registry (font component). */

@@ -30,6 +30,7 @@
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 
 int command_load_file_psram(const char *path_arg, const char *verb,
                             uint32_t max_bytes, uint8_t **out_buf,
@@ -73,10 +74,7 @@ int command_load_file_psram(const char *path_arg, const char *verb,
         shell_sd_end(&session, verb);
         return 1;
     }
-    buf = heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (buf == NULL) {
-        buf = malloc((size_t)size);
-    }
+    buf = p4heap_alloc_psram((size_t)size);
     if (buf == NULL) {
         shell_print_error("%s: out of memory", verb);
         fclose(file);

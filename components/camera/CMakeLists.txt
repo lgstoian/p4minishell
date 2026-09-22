@@ -11,6 +11,7 @@ idf_component_register(
         board_bsp
         storage
         imagefmt
+        p4heap
         espressif__esp_video
     PRIV_REQUIRES
         esp_driver_i2c

@@ -12,5 +12,6 @@ idf_component_register(
         esp-tls
         fatfs
         networking
+        p4heap
         strutil
 )

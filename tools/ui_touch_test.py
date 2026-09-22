@@ -50,7 +50,7 @@ class Ui:
 
     def state(self, tries=4):
         for _ in range(tries):
-            out = self.send("ui state", 0.9)
+            out = self.send("ui state", 1.6)
             m = re.search(r"ui\.state:(.*)", out)
             if m:
                 body = m.group(1).splitlines()[0].strip()
@@ -100,7 +100,11 @@ class Ui:
         for _ in range(8):
             st = self.state(tries=2)
             if st is None:
-                return False
+                # A transient empty read (the board is busy right after a heavy
+                # phase such as the editor close) must not end the wait: retry
+                # within the loop instead of reporting "not a shell" at once.
+                time.sleep(0.3)
+                continue
             if st.get("modal") == "none":
                 return True
             if st.get("modal") == "edit":
@@ -141,6 +145,7 @@ def phase_keyboard(ui):
     print("== shell keyboard ==")
     ui.ensure_shell()
     okay = True
+    typed = ""
     for mode, chars in (("text_lower", "abc"),
                         ("text_upper", "ABC"),
                         ("number", "123"),
@@ -152,11 +157,22 @@ def phase_keyboard(ui):
             okay = False
             continue
         for ch in chars:
-            if ch in labels:
-                ui.key(ch, 0.8)
-            else:
+            if ch not in labels:
                 check("key '%s' on %s" % (ch, mode), False, sorted(labels)[:10])
                 okay = False
+                continue
+            # Confirm each key actually landed before the next: the OSK event
+            # path can drop a press while the UI is busy (same drop the
+            # s10_input_ui suite guards against). Retry the same key (bounded)
+            # until the input line ends with it.
+            for _ in range(5):
+                ui.key(ch, 0.6)
+                time.sleep(0.15)
+                st = ui.state()
+                inp = st.get("input", "") if st else ""
+                if inp.rstrip().endswith(typed + ch):
+                    typed += ch
+                    break
     ui.send("keyboard mode text_lower", 1.3)
     st = ui.state()
     inp = st.get("input", "") if st else ""

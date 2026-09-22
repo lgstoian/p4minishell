@@ -668,10 +668,29 @@ esp_io_expander_handle_t bsp_io_expander_init(void);
 /**
  * @brief Init second IO expander
  * @note If the device was already initialized, users can also call it to get handle
+ * @warning Do NOT use this for the 0x44 outputs: handle creation issues a
+ *          chip-wide reset that floats the ESP32-C6 power rail (P0). The
+ *          second expander is single-writer through
+ *          bsp_io_expander1_set_output() (bugs.md F6).
  *
  * @return Pointer to device handle or NULL when error occurred
  */
 esp_io_expander_handle_t bsp_io_expander1_init(void);
+
+/**
+ * @brief Drive one output pin of the second IO expander (0x44) raw.
+ *
+ * Programs the chip on first use (M5Stack register sequence, no chip reset,
+ * every write read back and retried - bugs.md F6) and maintains a private
+ * shadow of the output register so rail bits survive later updates. Used by
+ * the Wi-Fi/USB feature enables and the charge/power-off helpers; it is the
+ * ONLY sanctioned writer to 0x44 outputs.
+ *
+ * @param pin   Pin number 0..7
+ * @param level Output level (true = high)
+ * @return ESP_OK when the register write completed
+ */
+esp_err_t bsp_io_expander1_set_output(uint8_t pin, bool level);
 
 /**
  * @brief Latch the PMIC off by pulsing the power-off signal on the second
@@ -693,6 +712,14 @@ void bsp_generate_poweroff_signal(void);
  */
 void bsp_set_charge_en(bool enable);
 void bsp_set_charge_qc_en(bool enable);
+
+/**
+ * @brief Read the IP2326 charge-status line (PI4IOE5V6408 0x44 P6, CHG_STAT_LED).
+ *
+ * @return The raw pin level (0 or 1), or -1 when the expander is unavailable.
+ *         Used as a corroborating signal for pack presence (bugs.md F24-B).
+ */
+int bsp_get_charge_status_level(void);
 
 /** @} */ // end of others
 

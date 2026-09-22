@@ -204,3 +204,116 @@ void test_batch_on_dispatch_selection(void)
     char none[] = ":one,:two,:three";
     TEST_ASSERT_NULL(batch_on_select(none, (int)index));
 }
+
+/* ========================================================================
+ * `for /L` NUMERIC SET PARSER
+ * ======================================================================== */
+
+void test_batch_forl_parse(void)
+{
+    int32_t start = 0;
+    int32_t step = 0;
+    int32_t end = 0;
+
+    TEST_ASSERT_TRUE(shell_forl_parse("1,1,5", &start, &step, &end));
+    TEST_ASSERT_EQUAL_INT32(1, start);
+    TEST_ASSERT_EQUAL_INT32(1, step);
+    TEST_ASSERT_EQUAL_INT32(5, end);
+
+    TEST_ASSERT_TRUE(shell_forl_parse(" 10 , -2 , 4 ", &start, &step, &end));
+    TEST_ASSERT_EQUAL_INT32(10, start);
+    TEST_ASSERT_EQUAL_INT32(-2, step);
+    TEST_ASSERT_EQUAL_INT32(4, end);
+
+    /* Zero step, wrong arity, non-numeric text, and trailing garbage fail. */
+    TEST_ASSERT_FALSE(shell_forl_parse("1,0,5", &start, &step, &end));
+    TEST_ASSERT_FALSE(shell_forl_parse("1,1", &start, &step, &end));
+    TEST_ASSERT_FALSE(shell_forl_parse("1,1,5,7", &start, &step, &end));
+    TEST_ASSERT_FALSE(shell_forl_parse("a,1,5", &start, &step, &end));
+    TEST_ASSERT_FALSE(shell_forl_parse("1,1,5x", &start, &step, &end));
+    TEST_ASSERT_FALSE(shell_forl_parse("", &start, &step, &end));
+    TEST_ASSERT_FALSE(shell_forl_parse(NULL, &start, &step, &end));
+    TEST_ASSERT_FALSE(shell_forl_parse("1,1,5", NULL, &step, &end));
+}
+
+/* ========================================================================
+ * `for /A` PREFIX COLLECTION + `switch` MATCHER
+ * ======================================================================== */
+
+void test_batch_fora_collect(void)
+{
+    char names[64][32];
+    int n;
+
+    shell_env_set("TST[2]", "b");
+    shell_env_set("TST[10]", "j");
+    shell_env_set("TST[X]", "x");
+    shell_env_set("OTHER[1]", "o");
+    shell_env_set("TST", "plain");
+    shell_env_set("TSTX[1]", "prefix-but-no-bracket");
+
+    n = shell_fora_collect("TST", names, 64);
+    TEST_ASSERT_EQUAL_INT(3, n);
+    TEST_ASSERT_EQUAL_STRING("TST[2]", names[0]);
+    TEST_ASSERT_EQUAL_STRING("TST[10]", names[1]);
+    TEST_ASSERT_EQUAL_STRING("TST[X]", names[2]);
+
+    /* Case-insensitive prefix; empty prefix and NULL-safe. */
+    n = shell_fora_collect("tst", names, 64);
+    TEST_ASSERT_EQUAL_INT(3, n);
+    TEST_ASSERT_EQUAL_INT(0, shell_fora_collect("", names, 64));
+    TEST_ASSERT_EQUAL_INT(0, shell_fora_collect(NULL, names, 64));
+    TEST_ASSERT_EQUAL_INT(0, shell_fora_collect("TST", NULL, 64));
+    TEST_ASSERT_EQUAL_INT(0, shell_fora_collect("NOPE", names, 64));
+
+    shell_env_set("TST[2]", "");
+    shell_env_set("TST[10]", "");
+    shell_env_set("TST[X]", "");
+    shell_env_set("OTHER[1]", "");
+    shell_env_set("TST", "");
+    shell_env_set("TSTX[1]", "");
+}
+
+void test_batch_switch_select(void)
+{
+    char *cases1[] = { "setup:cfg", "diag:dg" };
+    char *cases2[] = { "C:\\x:lbl", "other:oo" };
+    char *cases3[] = { "nocolon", "a:b" };
+
+    TEST_ASSERT_EQUAL_STRING("cfg", shell_switch_select("setup", cases1, 2));
+    TEST_ASSERT_EQUAL_STRING("dg", shell_switch_select("DIAG", cases1, 2));
+    TEST_ASSERT_NULL(shell_switch_select("nope", cases1, 2));
+    /* Split on the LAST colon so a match containing one survives. */
+    TEST_ASSERT_EQUAL_STRING("lbl", shell_switch_select("C:\\x", cases2, 2));
+    /* Entries without a colon never match. */
+    TEST_ASSERT_NULL(shell_switch_select("nocolon", cases3, 2));
+    TEST_ASSERT_EQUAL_STRING("b", shell_switch_select("a", cases3, 2));
+    TEST_ASSERT_NULL(shell_switch_select(NULL, cases1, 2));
+    TEST_ASSERT_NULL(shell_switch_select("setup", NULL, 2));
+    TEST_ASSERT_NULL(shell_switch_select("setup", cases1, 0));
+}
+
+/* ========================================================================
+ * `while` CONDITION KEYWORD TRANSLATION
+ * ======================================================================== */
+
+void test_batch_while_keywords(void)
+{
+    char out[64];
+
+    shell_while_translate_keywords("%n% LSS 3", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("%n% < 3", out);
+    shell_while_translate_keywords("a GEQ b", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("a >= b", out);
+    shell_while_translate_keywords("x EQU 1", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("x == 1", out);
+
+    /* Non-keywords pass through; NULL is safe. */
+    shell_while_translate_keywords("1", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("1", out);
+    shell_while_translate_keywords("LESSER", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("LESSER", out);
+    shell_while_translate_keywords(NULL, out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+    shell_while_translate_keywords("1", NULL, 0);
+}

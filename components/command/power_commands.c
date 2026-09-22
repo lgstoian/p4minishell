@@ -157,10 +157,8 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
         bool charging = false;
 
         if (power_monitor_battery_read(&pack_mv, &soc, &charging) == ESP_OK) {
-            if (pack_mv < BOARD_CFG_BATTERY_PRESENT_MV) {
-                /* Gauge present but the pack is absent/near-empty on the rail. */
-                return ESP_ERR_NOT_FOUND;
-            }
+            /* Presence (including the floating-rail rejection, bugs.md F24) is
+             * decided inside power_monitor; ESP_OK means a pack is attached. */
             if (battery_mv_out != NULL) { *battery_mv_out = pack_mv; }
             if (percent_out != NULL)    { *percent_out = soc; }
             if (raw_out != NULL)        { *raw_out = 0; }
@@ -324,6 +322,12 @@ static void shell_battery_print_diag(void)
     shell_transcript_appendf_ansi("  " SH_LBL "power:" SH_RST " " SH_NUM "%d mW" SH_RST "\n", d.power_mw);
     shell_transcript_appendf_ansi("  " SH_LBL "config:" SH_RST " " SH_NUM "0x%04X" SH_RST " " SH_LBL "cal:" SH_RST
                                   " " SH_NUM "0x%04X" SH_RST "\n", d.config, d.cal);
+    if (d.chg_stat >= 0) {
+        shell_transcript_appendf_ansi("  " SH_LBL "chg_stat:" SH_RST " " SH_NUM "%d" SH_RST
+                                      " " SH_MUTE "(IP2326 CHG_STAT_LED)" SH_RST "\n", d.chg_stat);
+    } else {
+        shell_transcript_appendf_ansi("  " SH_LBL "chg_stat:" SH_RST " " SH_MUTE "unavailable" SH_RST "\n");
+    }
     batch_set_errorlevel(0);
 }
 
@@ -348,12 +352,11 @@ void shell_command_battery(int argc, char **argv)
             bool charging = false;
 
             if (power_monitor_read_sample(&mv, &soc, &ma, &mw, &charging) == ESP_OK) {
-                bool pack_present = (mv >= BOARD_CFG_BATTERY_PRESENT_MV);
+                /* ESP_OK already means a pack is attached (power_monitor
+                 * rejects a floating rail; bugs.md F24). */
                 power_monitor_charge_t charge = power_monitor_classify_charge(mv, ma);
 
-                if (!pack_present) {
-                    shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_MUTE "N/C (no pack connected)" SH_RST "\n");
-                } else if (charge == POWER_MONITOR_CHARGE_CHARGING) {
+                if (charge == POWER_MONITOR_CHARGE_CHARGING) {
                     shell_transcript_appendf_ansi(SH_LBL "battery:" SH_RST " " SH_NUM "%d%%" SH_RST ", " SH_NUM "%d.%03d V" SH_RST " " SH_OK "charging" SH_RST "\n",
                                                   soc, mv / 1000, mv % 1000);
                 } else if (charge == POWER_MONITOR_CHARGE_DISCHARGING) {
@@ -368,7 +371,7 @@ void shell_command_battery(int argc, char **argv)
                 }
                 shell_transcript_appendf_ansi(SH_LBL "battery.gauge:" SH_RST " " SH_LBL "INA226" SH_RST " " SH_NUM "%d.%03d V" SH_RST " " SH_NUM "%d mA" SH_RST " " SH_NUM "%d mW" SH_RST " " SH_LBL "charge=" SH_RST "%s" SH_RST "\n",
                                               mv / 1000, mv % 1000, ma, mw,
-                                              pack_present ? power_monitor_charge_name(charge) : "n/a");
+                                              power_monitor_charge_name(charge));
 #if CONFIG_PM_ENABLE
                 if (s_light_sleep_requested) {
                     shell_transcript_appendf_ansi(SH_LBL "battery.sleep:" SH_RST " " SH_LBL "light sleep requested=" SH_RST SH_OK "yes" SH_RST "\n");

@@ -22,8 +22,37 @@ DONE = b"=== RX DONE ==="
 
 
 def push_file(dev: DeviceSession, remote: str, data: bytes,
-              timeout: float = 90.0) -> None:
-    """Upload ``data`` to ``remote`` via the CRC-checked ``receive`` path."""
+              timeout: float = 90.0, retries: int = 4) -> None:
+    """Upload ``data`` to ``remote`` via the CRC-checked ``receive`` path.
+
+    Retries on a failed/CRC-mismatched exchange: the device removes the
+    partial destination, so the next attempt starts clean. Transient
+    USB-Serial/JTAG byte loss under load can otherwise fail an in-memory
+    push (which has no other recovery), e.g. the `s06_batch` P4BTEST.BAT
+    transfer. Between attempts the input is drained and allowed to settle so
+    a half-consumed footer cannot desync the next READY marker.
+    """
+    last = None
+    for attempt in range(retries):
+        try:
+            _push_file_once(dev, remote, data, timeout)
+            return
+        except P4Error as exc:
+            last = exc
+            if attempt + 1 >= retries:
+                break
+            try:
+                dev.reset_input()
+                dev.read_for(0.4)
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(1.5 + attempt)
+    raise P4Error("push %s failed after %d retries: %s" % (remote, retries, last))
+
+
+def _push_file_once(dev: DeviceSession, remote: str, data: bytes,
+                    timeout: float) -> None:
+    """One `receive` exchange (see `push_file` for the retry contract)."""
     dev.reset_input()
     size = len(data)
     dev.write(("receive %s %d /crc\r\n" % (remote, size)).encode())
@@ -36,7 +65,7 @@ def push_file(dev: DeviceSession, remote: str, data: bytes,
     dev.write(data[:CHUNK])
     sent = min(CHUNK, size)
     while True:
-        ack = dev.read_until(b"\n", 15.0)
+        ack = dev.read_until(b"\n", timeout)
         if not ack:
             raise P4Error("receive %s: no ACK" % remote)
         ack = ack.replace(b"\r", b"")
@@ -65,24 +94,7 @@ def push_local(dev: DeviceSession, local: str, remote: Optional[str] = None,
     remote = remote or os.path.basename(local)
     with open(local, "rb") as fh:
         data = fh.read()
-    last = None
-    for attempt in range(retries):
-        try:
-            push_file(dev, remote, data)
-            return
-        except P4Error as exc:
-            last = exc
-            # The device removes a partial destination on a failed transfer, so
-            # a retry is clean. Drain any trailing footer/newline left by the
-            # aborted exchange and settle before re-issuing, or the next READY
-            # marker can be missed and every retry fails the same way.
-            try:
-                dev.reset_input()
-                dev.read_for(0.4)
-            except Exception:  # noqa: BLE001
-                pass
-            time.sleep(1.5 + attempt)
-    raise P4Error("push %s failed after %d retries: %s" % (remote, retries, last))
+    push_file(dev, remote, data, retries=retries)
 
 
 def pull_file(dev: DeviceSession, remote: str, timeout: float = 120.0) -> bytes:

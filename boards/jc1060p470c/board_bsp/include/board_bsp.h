@@ -67,3 +67,17 @@ static inline esp_err_t board_bsp_charge_enable(bool enable)
     (void)enable;
     return ESP_OK;
 }
+
+/**
+ * @brief Read the board's charge-status line (corroborates pack presence).
+ *
+ * The reference board has no charge-status line; @p level_out is set to -1 and
+ * ESP_ERR_NOT_SUPPORTED is returned (see the Tab5 profile for the real one).
+ */
+static inline esp_err_t board_bsp_charge_status_level(int *level_out)
+{
+    if (level_out != NULL) {
+        *level_out = -1;
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}

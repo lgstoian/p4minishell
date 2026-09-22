@@ -73,3 +73,22 @@ static inline esp_err_t board_bsp_charge_enable(bool enable)
     bsp_set_charge_en(enable);
     return ESP_OK;
 }
+
+/**
+ * @brief Read the board's charge-status line (corroborates pack presence).
+ *
+ * On the Tab5 this is the IP2326 CHG_STAT_LED on the second IO expander
+ * (0x44 P6). @p level_out receives the raw pin level (0/1). Boards without a
+ * status line return ESP_ERR_NOT_SUPPORTED and leave @p level_out at -1.
+ */
+static inline esp_err_t board_bsp_charge_status_level(int *level_out)
+{
+    int level;
+
+    if (level_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    level = bsp_get_charge_status_level();
+    *level_out = level;
+    return (level < 0) ? ESP_ERR_NOT_SUPPORTED : ESP_OK;
+}

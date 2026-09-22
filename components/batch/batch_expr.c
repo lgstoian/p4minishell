@@ -151,13 +151,15 @@ static int32_t shell_expr_parse_primary(expr_parser_t *parser)
         return (int32_t)value;
     }
 
-    /* Variable reference. An undefined name is 0, matching DOS. */
+    /* Variable reference. An undefined name is 0, matching DOS. Brackets
+     * are name characters so indexed `ARR[i]` elements read back. */
     if (isalpha((unsigned char)*parser->cursor) || *parser->cursor == '_') {
         char name[SHELL_ENV_NAME_BYTES];
         size_t length = 0;
         const char *value;
 
-        while ((isalnum((unsigned char)*parser->cursor) || *parser->cursor == '_') &&
+        while ((isalnum((unsigned char)*parser->cursor) || *parser->cursor == '_' ||
+                *parser->cursor == '[' || *parser->cursor == ']') &&
                length + 1 < sizeof(name)) {
             name[length++] = *parser->cursor++;
         }

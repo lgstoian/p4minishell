@@ -1,14 +1,16 @@
 # Bundled SD fonts (Phase 3)
 
-Optional TrueType/OpenType fonts pushed to `sd:/FONTS/` by `push_fonts.py`.
+Optional TrueType/OpenType fonts pushed to `sd:/FONTS/` by [`../../push_fonts.py`](../../push_fonts.py).
 Verify with `SHA256SUMS`. Never loaded at boot; selected live via
-`font set <terminal|ui|reading> <name>` (see `command.md`).
+`font set <terminal|ui|reading> <name> [/save]` (see [`../../command.md`](../../command.md)).
 
 | File | Source | License | Notes |
 |------|--------|---------|-------|
 | DejaVuSansMono.ttf | dejavu-fonts 2.37 release | LICENSE-DejaVu.txt (Bitstream Vera + PD changes) | monospace; terminal-capable |
-| DejaVuSerif.ttf | dejavu-fonts 2.37 release | LICENSE-DejaVu.txt | proportional serif; **reading role** default (writerdeck) |
-| DejaVuSerif-Bold.ttf / -Italic.ttf | dejavu-fonts 2.37 release | LICENSE-DejaVu.txt | reading-role bold/italic variants |
+| DejaVuSansMono-Bold.ttf | dejavu-fonts 2.37 release | LICENSE-DejaVu.txt | monospace bold variant; terminal-capable |
+| DejaVuSansMono-Oblique.ttf | dejavu-fonts 2.37 release | LICENSE-DejaVu.txt | monospace oblique variant; terminal-capable |
+| DejaVuSerif.ttf | dejavu-fonts 2.37 release | LICENSE-DejaVu.txt | proportional serif; **reading** role default (writerdeck) |
+| DejaVuSerif-Bold.ttf / DejaVuSerif-Italic.ttf | dejavu-fonts 2.37 release | LICENSE-DejaVu.txt | reading-role bold/italic variants |
 | NotoSans-Regular.ttf | googlefonts/noto-fonts (hinted) | OFL.txt | proportional; UI role only |
 | NotoSansSC.ttf | google/fonts variable `[wght]` | OFL.txt | CJK display; default (Regular) instance used |
 

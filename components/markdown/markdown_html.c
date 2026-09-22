@@ -37,6 +37,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 /* ---- bounded writer ----
  * Counts every byte that should be written; copies into @c out only while it
  * fits. On overflow it keeps counting (so the return value is the required
@@ -778,13 +779,7 @@ static html_table_scratch_t *html_table_scratch(void)
 {
     if (s_html_table_scratch == NULL) {
         s_html_table_scratch =
-            (html_table_scratch_t *)heap_caps_malloc(sizeof(*s_html_table_scratch),
-                                                     MALLOC_CAP_SPIRAM);
-        if (s_html_table_scratch == NULL) {
-            s_html_table_scratch =
-                (html_table_scratch_t *)heap_caps_malloc(sizeof(*s_html_table_scratch),
-                                                         MALLOC_CAP_DEFAULT);
-        }
+            (html_table_scratch_t *)p4heap_alloc_any(sizeof(*s_html_table_scratch));
     }
     return s_html_table_scratch;
 }

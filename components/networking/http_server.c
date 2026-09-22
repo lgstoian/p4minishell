@@ -32,6 +32,7 @@
 
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "p4heap.h"
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -459,10 +460,7 @@ static esp_err_t httpd_serve_file(httpd_req_t *req, const char *full_path)
         return ESP_OK;
     }
 
-    buffer = heap_caps_malloc(HTTPD_BLOCK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (buffer == NULL) {
-        buffer = heap_caps_malloc(HTTPD_BLOCK_BYTES, MALLOC_CAP_8BIT);
-    }
+    buffer = p4heap_alloc_psram(HTTPD_BLOCK_BYTES);
     if (buffer == NULL) {
         fclose(file);
         httpd_send_error(req, "500 Internal Server Error", "Out of memory\n");

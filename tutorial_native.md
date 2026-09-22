@@ -228,7 +228,43 @@ and prints the three wiring steps: root `CMakeLists.txt`
 5. Build both projects (`idf.py build` and the `test/` project) with zero
    warnings, flash, and verify on hardware.
 
-## 11. Rules that matter
+## 11. Shipping it: the `.bat` front door (hybrid)
+
+Every app launches through a `*.bat` file (the frozen model in
+[`ABI.md`](ABI.md)). For a C app, ship a **hybrid** shim: a small `.bat` that
+sets up state and then calls your registered entry by name. Package it with
+`type=hybrid`, `abi=applib-1`, `arch=esp32p4`, and `entry=<your-entry-name>`:
+
+```bat
+@echo off
+rem MYAPP.BAT - front door for the linked myapp entry
+set MYAPP_MODE=full
+myapp %*
+if errorlevel 1 echo [M-MYAPP] failed
+exit /b %ERRORLEVEL%
+```
+
+```ini
+title=My App
+version=1.0
+type=hybrid
+abi=applib-1
+arch=esp32p4
+entry=myapp
+```
+
+Build the bundle host-side and optionally sign it (see
+[`docs/native_packaging.md`](docs/native_packaging.md) and `ABI.md` §4):
+
+```powershell
+python tools/pkg_sign.py keygen --out mykey
+python apps/push_pkgs.py COM3 --sign mykey.priv.pem
+```
+
+The single-file batch spec is [`batch.md`](batch.md); `launch /list` tags the
+shim ` [hybrid]`.
+
+## 12. Rules that matter
 
 - Keep heavy buffer allocation on the heap/PSRAM — never a command-sized local
   on the worker stack.
