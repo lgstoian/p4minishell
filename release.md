@@ -200,8 +200,10 @@ fully provisioned card for archival; there is no committed golden SD image.
 ## 6. Legal and hygiene checklist
 
 - **Source zip clean** — `git archive` ships tracked files only; confirm the zip
-  has no `build*/`, `sdkconfig.*`, `managed_components/`, `release/`, logs, or
-  screenshots.
+  has no `build*/`, `sdkconfig.*`, `release/`, logs, or screenshots. The vendored
+  `managed_components/` **is** included on purpose (the reference-board BSP and
+  the pinned ESP-Hosted/LVGL/esp_h264 trees are committed so a clone builds
+  without network fetches).
 - **Licenses present** — `LICENSE` + [`licence.md`](licence.md) (MIT + the
   third-party table) ship with the source; vendored component `LICENSE`s
   (`managed_components/`, `boards/m5stack_tab5/board_bsp/` under Apache-2.0,
