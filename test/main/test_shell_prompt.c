@@ -170,3 +170,38 @@ void test_shell_key_wait_state(void)
     /* Ending the wait discards anything still queued. */
     TEST_ASSERT_FALSE(shell_key_wait_submit('Z'));
 }
+
+/* ========================================================================
+ * SESSION TITLE
+ * ======================================================================== */
+
+void test_shell_title_roundtrip(void)
+{
+    shell_title_reset();
+    TEST_ASSERT_EQUAL_STRING("", shell_title_get());
+
+    shell_title_set("adventure");
+    TEST_ASSERT_EQUAL_STRING("adventure", shell_title_get());
+
+    /* Empty and NULL clear back to the unset state. */
+    shell_title_set("");
+    TEST_ASSERT_EQUAL_STRING("", shell_title_get());
+    shell_title_set("temp");
+    shell_title_set(NULL);
+    TEST_ASSERT_EQUAL_STRING("", shell_title_get());
+    shell_title_reset();
+    TEST_ASSERT_EQUAL_STRING("", shell_title_get());
+}
+
+void test_shell_title_truncates(void)
+{
+    char long_title[P4_CONFIG_TITLE_BYTES + 64];
+    size_t kept;
+
+    memset(long_title, 't', sizeof(long_title) - 1);
+    long_title[sizeof(long_title) - 1] = '\0';
+    shell_title_set(long_title);
+    kept = strlen(shell_title_get());
+    TEST_ASSERT_EQUAL(P4_CONFIG_TITLE_BYTES - 1, kept);
+    shell_title_reset();
+}

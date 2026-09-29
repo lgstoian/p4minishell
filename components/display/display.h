@@ -252,6 +252,15 @@ lv_display_t *display_get_lvgl_handle(void);
 void *display_get_touch_handle(void);
 
 /**
+ * Get the touch controller interrupt GPIO actually in use, from the live
+ * panel driver config. Returns GPIO_NUM_NC when the interrupt line is not a
+ * real IRQ on this unit (for example the Tab5 BSP straps GPIO23 low on
+ * ILI9881C+GT911 revisions) or before display_init(). Used by the power
+ * module so touch-wake reporting matches the fitted hardware.
+ */
+int display_get_touch_int_gpio(void);
+
+/**
  * Register a callback to be invoked when the UI needs rebuilding after
  * rotation or resolution changes. The display manager calls this via
  * lv_async_call on the LVGL task.

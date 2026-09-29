@@ -1,4 +1,4 @@
-# P4MiniShell Unit Tests (firmware v1.2.1)
+# P4MiniShell Unit Tests (firmware v1.3.0)
 
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
@@ -7,6 +7,19 @@ Current baseline: **423 tests, 0 failures, 2 ignored** (verify with
 `tools/unit_run.py <COM_PORT>`). The runner completes cleanly with
 `=== All tests completed ===` and no reboot; if the board is reset-looping,
 check for a newly added test that calls an LVGL/heap path before `lv_init()`.
+The latest additions — the 14 `test_pim.c` sync tests, the 3 `test_alarm.c`
+render/parse tests, the editor CSV tests, the power deep-wake test, the new
+`test_html.c` reader tests (12), the `test_markdown.c` strip/auto/form-feed
+tests (3), `test_filetype_html`, the `test_editor.c` HTML lexer/comment
+tests (2), the 4 `test_audio.c` output-mode/route/WAV tests, the 4 spell
+overlay/cursor-word tests, the USB/HID spell key-map test, the batch
+round (`test_batch_control.c`: `shift /n` parser, `for /f` defaults),
+the shell round (`test_shell_prompt.c`: session title,
+`test_shell_pipeline.c`: echo-glued detector, redirect devices/missing
+targets/handle prefixes), and the 7 `test_netsvc.c` event-service tests
+(MQTT codec, topic matcher, backoff, outbox framing) — bring the
+suite to **495 RUN_TEST total**, build-verified this
+pass; refresh the count on hardware with `tools/unit_run.py <COM_PORT>`.
 
 ## Test Structure
 
@@ -16,15 +29,22 @@ test/
   main/
     CMakeLists.txt          # Test main component (lists every test_*.c)
     test_main.c             # Test runner entry point (RUN_TEST registrations)
-    test_shell_parser.c     # split_args, trim, text_equals, percentage parse
+    test_shell_parser.c     # split_args, trim, text_equals, percentage parse, echo-glued detector
     test_shell_history.c    # history store/recall/password mask
-    test_shell_prompt.c     # prompt template + metacharacters
+    test_shell_prompt.c     # prompt template + metacharacters, session title
     test_shell_quoting.c    # quoting/escaping, chain split
-    test_shell_pipeline.c   # pipe detection
+    test_shell_pipeline.c   # pipe detection, redirect devices/missing targets/handle prefixes
+    test_shell_abort.c      # foreground-break flag and worker-busy state
     test_shell_variables.c  # variable expansion
     test_shell_debug_log.c  # debug log buffer
+    test_ansi_format.c      # ANSI format string builder
     test_storage_format.c   # size formatting, path helpers
     test_batch_expr.c       # set /a integer evaluator
+    test_batch_control.c    # labels, on/goto parsing, for/while/switch helpers, shift parser, forf defaults
+    test_macro.c            # macro recorder
+    test_completion.c       # tab-completion and inline ghost providers
+    test_history_search.c   # reverse-history search matching
+    test_clock.c            # header-clock formatter
     test_calc.c             # calc float/string evaluator
     test_findstr.c          # findstr matcher
     test_comp.c             # byte compare
@@ -37,6 +57,7 @@ test/
     test_alarm.c            # alarm parse/advance helpers
     test_modal.c            # modal option parsers
     test_power.c            # power/idle state
+    test_audio.c            # audio output-mode parse, route resolve, WAV params
     test_serial.c           # serial framing/CRC
     test_tui.c              # TUI state, table width/parse helpers, draw hold
     test_clipboard.c        # RAM clipboard
@@ -56,7 +77,13 @@ test/
     test_bind.c             # F-key bind table (set/lookup/count/index)
     test_crypt.c            # PBKDF2 key derivation + AES-GCM envelope round-trip (unit always runs; the former s07 hardware skip is gone — crypt now passes on both boards, F23 fixed)
     test_tcpterm.c          # tcpterm target parse, escape expansion, reply sanitize
+    test_netsvc.c           # MQTT codec, topic matcher, backoff, outbox framing
+    test_archive.c          # USTAR core
+    test_hardware.c         # Tab5 hardware-support pure helpers
+    test_sw_gcm.c           # software AES-256-GCM fallback
     test_userial.c          # userial VID:PID + line-coding parsers
+    test_import.c           # vCard/iCalendar line + DATE-TIME parsers, JSON unescape
+    test_pim.c              # PIM render buffer + uid mint + newer-wins + identity payload
 ```
 
 ## Running Tests

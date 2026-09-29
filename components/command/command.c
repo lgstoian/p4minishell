@@ -39,6 +39,7 @@
 #include "shell.h"
 #include "editor.h"
 #include "editor_view.h"
+#include "editor_spell.h"
 #include "ansi_palette.h"
 #include "ansi.h"
 #include "audio.h"
@@ -47,6 +48,7 @@
 #include "p4minishell_config.h"
 #include "board_config.h"
 #include "networking.h"
+#include "netsvc.h"
 #include "driver/usb_serial_jtag.h"
 #include <errno.h>
 #include <stdarg.h>
@@ -196,6 +198,7 @@ typedef struct {
     char *target;     /**< First character of the target text. */
     bool is_output;   /**< true for `>` / `>>`, false for `<`. */
     bool is_append;   /**< true for `>>`. */
+    bool has_handle;  /**< true when a `0`/`1`/`2` handle prefix was consumed. */
 } shell_redirect_token_t;
 
 /**
@@ -210,11 +213,12 @@ typedef struct {
  *
  * The last occurrence of each direction wins, matching COMMAND.COM.
  */
-static bool shell_parse_redirection(char *command,
-                                    char **command_part,
-                                    char **redirect_target,
-                                    bool *append_mode,
-                                    char **input_source)
+bool shell_parse_redirection(char *command,
+                             char **command_part,
+                             char **redirect_target,
+                             bool *append_mode,
+                             char **input_source,
+                             bool *missing_target_out)
 {
     shell_redirect_token_t tokens[SHELL_REDIRECT_TOKEN_MAX];
     size_t token_count = 0;
@@ -230,12 +234,18 @@ static bool shell_parse_redirection(char *command,
     *redirect_target = NULL;
     *append_mode = false;
     *input_source = NULL;
+    if (missing_target_out != NULL) {
+        *missing_target_out = false;
+    }
 
     if (command == NULL) {
         return false;
     }
 
-    /* Pass 1: locate every unquoted operator. */
+    /* Pass 1: locate every unquoted operator. A `0`/`1`/`2` glued directly
+     * before the operator is a cmd.exe stream handle: with no separate
+     * stderr stream both handles merge into the transcript, so the digit is
+     * recorded for removal rather than leaking into the command text. */
     cursor = shell_redirect_find_operator(command);
     while (cursor != NULL && token_count < SHELL_REDIRECT_TOKEN_MAX) {
         shell_redirect_token_t *token = &tokens[token_count++];
@@ -244,6 +254,8 @@ static bool shell_parse_redirection(char *command,
         token->is_output = (*cursor == '>');
         token->is_append = token->is_output && (cursor[1] == '>');
         token->target = cursor + (token->is_append ? 2 : 1);
+        token->has_handle = (cursor > command &&
+                             (cursor[-1] == '0' || cursor[-1] == '1' || cursor[-1] == '2'));
 
         cursor = shell_redirect_find_operator(token->target);
     }
@@ -254,18 +266,26 @@ static bool shell_parse_redirection(char *command,
     }
 
     /* Pass 2: cut the line at every operator. A `>>` needs both characters
-     * blanked so the extra '>' cannot leak into the preceding text. */
+     * blanked so the extra '>' cannot leak into the preceding text; a handle
+     * digit is blanked for the same reason. */
     for (index = 0; index < token_count; index++) {
         tokens[index].position[0] = '\0';
         if (tokens[index].is_append) {
             tokens[index].position[1] = '\0';
         }
+        if (tokens[index].has_handle) {
+            tokens[index].position[-1] = '\0';
+        }
     }
 
-    /* Pass 3: publish the targets. */
+    /* Pass 3: publish the targets. An empty target (`echo hi >`) is a DOS
+     * syntax error: flag it so the caller refuses the line. */
     for (index = 0; index < token_count; index++) {
         char *target = shell_redirect_unquote(shell_trim(tokens[index].target));
 
+        if (target[0] == '\0' && missing_target_out != NULL) {
+            *missing_target_out = true;
+        }
         if (tokens[index].is_output) {
             *redirect_target = target;
             *append_mode = tokens[index].is_append;
@@ -276,6 +296,30 @@ static bool shell_parse_redirection(char *command,
 
     *command_part = shell_trim(command);
     return true;
+}
+
+/**
+ * Classify a redirection target for DOS device handling: `NUL` (any case,
+ * any extension) discards output / reads EOF, `CON` keeps the console path,
+ * everything else is an SD file. Pure.
+ */
+shell_redirect_target_kind_t shell_redirect_target_kind(const char *target)
+{
+    const char *dot;
+    size_t head_len;
+
+    if (target == NULL || target[0] == '\0') {
+        return SHELL_REDIRECT_FILE;
+    }
+    dot = strchr(target, '.');
+    head_len = (dot != NULL) ? (size_t)(dot - target) : strlen(target);
+    if (head_len == 3 && strncasecmp(target, "NUL", 3) == 0) {
+        return SHELL_REDIRECT_NUL;
+    }
+    if (head_len == 3 && strncasecmp(target, "CON", 3) == 0) {
+        return SHELL_REDIRECT_CON;
+    }
+    return SHELL_REDIRECT_FILE;
 }
 
 /**
@@ -306,6 +350,8 @@ static void shell_command_prompt_cmd(int argc, char **argv);
 
 /* Editor command + ops-table hooks. */
 static void shell_command_edit(int argc, char **argv);
+static void shell_command_recover(int argc, char **argv);
+static void shell_command_spell(int argc, char **argv);
 
 /* ========================================================================
  * CLIPBOARD COMMANDS: clip, paste
@@ -994,14 +1040,424 @@ int command_ghost_line(const char *line, char *out, size_t out_size)
  * ======================================================================== */
 
 /** `edit <path>` - open a DOS-style inline text editor. */
-static void shell_command_edit(int argc, char **argv)
+/** `spell learn <word> | spell forget <word> | spell list user` — manage the
+ *  user dictionary overlay from the shell (batch-compatible; runs on the
+ *  command worker where SD file I/O is allowed). */
+static void shell_command_spell(int argc, char **argv)
 {
-    const char *path = NULL;
-    const char *template_name = NULL;
-    editor_session_opts_t opts = {0};
-    int errorlevel = 0;
+    if (argc < 2) {
+        shell_print_usage("Usage: spell learn <word> | spell forget <word> | spell list user");
+        batch_set_errorlevel(2);
+        return;
+    }
+    /* The overlay is unloaded when an editor session closes; reload it here
+     * (on the worker, where SD I/O is allowed) so shell list/forget see the
+     * persisted user dictionary. */
+    (void)spell_user_load();
+    if (shell_text_equals_ignore_case(argv[1], "learn")) {
+        if (argc != 3) {
+            shell_print_usage("Usage: spell learn <word>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (spell_user_learn(argv[2], strlen(argv[2]))) {
+            shell_transcript_appendf_ansi(SH_LBL "spell:" SH_RST " learned '%s'\n", argv[2]);
+            batch_set_errorlevel(0);
+        } else {
+            shell_print_error("spell: cannot learn '%s'", argv[2]);
+            batch_set_errorlevel(1);
+        }
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "forget")) {
+        if (argc != 3) {
+            shell_print_usage("Usage: spell forget <word>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (spell_user_forget(argv[2], strlen(argv[2]))) {
+            shell_transcript_appendf_ansi(SH_LBL "spell:" SH_RST " forgot '%s'\n", argv[2]);
+            batch_set_errorlevel(0);
+        } else {
+            shell_print_error("spell: '%s' is not in the user dictionary", argv[2]);
+            batch_set_errorlevel(1);
+        }
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "list")) {
+        if (argc == 3 && shell_text_equals_ignore_case(argv[2], "user")) {
+            size_t need = spell_user_list(NULL, 0);
+            char *buf = malloc(need + 1);
+
+            if (buf == NULL) {
+                shell_print_error("spell: out of memory");
+                batch_set_errorlevel(1);
+                return;
+            }
+            spell_user_list(buf, need + 1);
+            shell_transcript_appendf_ansi(SH_LBL "spell.user:" SH_RST " %u words\n%s",
+                                          (unsigned)spell_user_count(), buf);
+            free(buf);
+            batch_set_errorlevel(0);
+            return;
+        }
+        shell_print_usage("Usage: spell list user");
+        batch_set_errorlevel(2);
+        return;
+    }
+    shell_print_usage("Usage: spell learn <word> | spell forget <word> | spell list user");
+    batch_set_errorlevel(2);
+}
+
+/** One editor crash file (sd:/tmp/edit/ plus the .autosave suffix). */
+typedef struct {
+    char orig[P4_CONFIG_SD_PATH_BYTES]; /**< Original path from the header ("" when unrecognized) */
+    char file[P4_CONFIG_SD_PATH_BYTES]; /**< Crash file absolute path */
+    long size;                          /**< Crash file bytes */
+    time_t mtime;                       /**< Crash file modification time */
+    bool recognized;                    /**< Header parsed */
+} recover_entry_t;
+
+#define RECOVER_MAX_ENTRIES 64
+#define RECOVER_HEADER_PREFIX "#P4AUTOSAVE "
+
+/** Parse a crash-file header line into @p orig_out. @return true when recognized. */
+static bool recover_parse_header(const char *line, char *orig_out, size_t orig_size)
+{
+    static const char prefix[] = RECOVER_HEADER_PREFIX;
+    size_t n = strlen(prefix);
+    size_t len;
+
+    if (orig_out == NULL || orig_size == 0) {
+        return false;
+    }
+    orig_out[0] = '\0';
+    if (line == NULL || strncmp(line, prefix, n) != 0) {
+        return false;
+    }
+    len = strlen(line + n);
+    while (len > 0 && (line[n + len - 1] == '\n' || line[n + len - 1] == '\r')) {
+        len--;
+    }
+    if (len + 1 > orig_size) {
+        return false;
+    }
+    memcpy(orig_out, line + n, len);
+    orig_out[len] = '\0';
+    return true;
+}
+
+/** Scan the recovery dir into @p entries. @return count (0 when none/absent). */
+static int recover_scan(recover_entry_t *entries, int cap)
+{
+    char dir[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    DIR *d;
+    struct dirent *e;
+    int n = 0;
+
+    if (entries == NULL || cap <= 0) {
+        return 0;
+    }
+    if (storage_recovery_dir(dir, sizeof(dir)) != ESP_OK) {
+        return 0;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return 0;
+    }
+    d = opendir(dir);
+    if (d == NULL) {
+        shell_sd_end(&session, "recover");
+        return 0;
+    }
+    while ((e = readdir(d)) != NULL && n < cap) {
+        size_t L = strlen(e->d_name);
+        struct stat st;
+        FILE *f;
+        char line[P4_CONFIG_SD_PATH_BYTES + 16];
+
+        if (L <= 9 || strcmp(e->d_name + L - 9, ".autosave") != 0) {
+            continue;
+        }
+        if (snprintf(entries[n].file, sizeof(entries[n].file), "%s/%s",
+                     dir, e->d_name) >= (int)sizeof(entries[n].file)) {
+            continue;
+        }
+        if (stat(entries[n].file, &st) != 0) {
+            continue;
+        }
+        entries[n].size = (long)st.st_size;
+        entries[n].mtime = st.st_mtime;
+        entries[n].recognized = false;
+        entries[n].orig[0] = '\0';
+        f = fopen(entries[n].file, "rb");
+        if (f != NULL) {
+            if (fgets(line, sizeof(line), f) != NULL) {
+                entries[n].recognized =
+                    recover_parse_header(line, entries[n].orig, sizeof(entries[n].orig));
+            }
+            fclose(f);
+        }
+        n++;
+    }
+    closedir(d);
+    shell_sd_end(&session, "recover");
+    return n;
+}
+
+/** True when @p e is the entry @p arg names (resolved original path, or the
+ *  crash filename itself). */
+static bool recover_entry_matches(const recover_entry_t *e, const char *resolved_arg,
+                                  const char *raw_arg)
+{
+    if (e == NULL || resolved_arg == NULL) {
+        return false;
+    }
+    if (e->recognized && e->orig[0] != '\0' &&
+        strcmp(e->orig, "(unnamed)") != 0) {
+        char ro[P4_CONFIG_SD_PATH_BYTES];
+        if (shell_fs_resolve_path(e->orig, ro, sizeof(ro)) == ESP_OK &&
+            strcmp(ro, resolved_arg) == 0) {
+            return true;
+        }
+    }
+    if (raw_arg != NULL) {
+        const char *base = strrchr(e->file, '/');
+        base = (base != NULL) ? base + 1 : e->file;
+        if (strcmp(raw_arg, base) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Print one entry line for `recover` list output. */
+static void recover_print_entry(const recover_entry_t *e)
+{
+    char when[24];
+    struct tm *tm = localtime(&e->mtime);
+
+    if (tm != NULL) {
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M", tm);
+    } else {
+        snprintf(when, sizeof(when), "?");
+    }
+    if (e->recognized && e->orig[0] != '\0') {
+        shell_transcript_appendf_ansi(SH_LBL "recover:" SH_RST " " SH_PATH "%s" SH_RST
+                                      " " SH_MUTE "%ld bytes, %s" SH_RST "\n",
+                                      e->orig, e->size, when);
+    } else {
+        const char *base = strrchr(e->file, '/');
+        base = (base != NULL) ? base + 1 : e->file;
+        shell_transcript_appendf_ansi(SH_LBL "recover:" SH_RST " " SH_PATH "%s" SH_RST
+                                      " " SH_WARN "(unrecognized)" SH_RST "\n",
+                                      base);
+    }
+}
+
+/** `recover [list] | recover restore <path> | recover discard <path> | recover clear`. */
+static void shell_command_recover_inner(int argc, char **argv,
+                                        recover_entry_t *entries)
+{
+    int count;
     int i;
 
+    if (argc == 1 ||
+        (argc == 2 && shell_text_equals_ignore_case(argv[1], "list"))) {
+        count = recover_scan(entries, RECOVER_MAX_ENTRIES);
+        if (count == 0) {
+            shell_transcript_appendf_ansi(SH_MUTE "recover: no crash files\n" SH_RST);
+        } else {
+            for (i = 0; i < count; i++) {
+                recover_print_entry(&entries[i]);
+            }
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "restore")) {
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+
+        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("recover: invalid path %s", argv[2]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        count = recover_scan(entries, RECOVER_MAX_ENTRIES);
+        for (i = 0; i < count; i++) {
+            if (recover_entry_matches(&entries[i], resolved, argv[2])) {
+                break;
+            }
+        }
+        if (i >= count) {
+            shell_print_error("recover: no crash file for %s", argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (!entries[i].recognized || entries[i].orig[0] == '\0' ||
+            strcmp(entries[i].orig, "(unnamed)") == 0) {
+            shell_print_error("recover: crash file has no restorable path");
+            batch_set_errorlevel(1);
+            return;
+        }
+        {
+            /* Binary-safe restore: exact body bytes through a temp file and
+             * the shared atomic replace (same guarantee as editor save). */
+            shell_sd_session_t session;
+            FILE *f = fopen(entries[i].file, "rb");
+            char *data = NULL;
+            long body_off = 0;
+            long body_len = 0;
+            char tmp[P4_CONFIG_SD_PATH_BYTES + 5];
+            char outpath[P4_CONFIG_SD_PATH_BYTES];
+            bool ok = false;
+
+            if (f == NULL) {
+                shell_print_error("recover: cannot read crash file");
+                batch_set_errorlevel(1);
+                return;
+            }
+            if (shell_fs_resolve_path(entries[i].orig, outpath, sizeof(outpath)) != ESP_OK) {
+                fclose(f);
+                shell_print_error("recover: cannot restore %s", argv[2]);
+                batch_set_errorlevel(1);
+                return;
+            }
+            if (shell_sd_begin(&session) != ESP_OK) {
+                fclose(f);
+                shell_print_error("recover: SD unavailable");
+                batch_set_errorlevel(1);
+                return;
+            }
+            if (fseek(f, 0, SEEK_END) == 0) {
+                long total = ftell(f);
+                if (total > 0 && total <= (long)P4_CONFIG_EDITOR_MAX_BYTES + 4096) {
+                    data = malloc((size_t)total);
+                    if (data != NULL && fseek(f, 0, SEEK_SET) == 0 &&
+                        fread(data, 1, (size_t)total, f) == (size_t)total) {
+                        char *nl = memchr(data, '\n', (size_t)total);
+                        if (nl != NULL) {
+                            body_off = (long)(nl + 1 - data);
+                            body_len = total - body_off;
+                            ok = true;
+                        }
+                    }
+                }
+            }
+            fclose(f);
+            if (ok && snprintf(tmp, sizeof(tmp), "%s.tmp", outpath) < (int)sizeof(tmp)) {
+                FILE *w = fopen(tmp, "wb");
+                if (w != NULL) {
+                    ok = (body_len == 0 ||
+                          fwrite(data + body_off, 1, (size_t)body_len, w) == (size_t)body_len) &&
+                         fclose(w) == 0;
+                    if (!ok) {
+                        remove(tmp);
+                    }
+                } else {
+                    ok = false;
+                }
+            } else {
+                ok = false;
+            }
+            free(data);
+            if (ok) {
+                ok = (storage_replace_file(tmp, outpath) == ESP_OK);
+            }
+            shell_sd_end(&session, "recover");
+            if (ok) {
+                shell_transcript_appendf_ansi(SH_LBL "recover:" SH_RST " restored " SH_PATH "%s" SH_RST
+                                              " (%ld bytes)\n", entries[i].orig, body_len);
+                batch_set_errorlevel(0);
+            } else {
+                shell_print_error("recover: restore failed for %s", argv[2]);
+                batch_set_errorlevel(1);
+            }
+        }
+        return;
+    }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "discard")) {
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        shell_sd_session_t session;
+
+        if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("recover: invalid path %s", argv[2]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        count = recover_scan(entries, RECOVER_MAX_ENTRIES);
+        for (i = 0; i < count; i++) {
+            if (recover_entry_matches(&entries[i], resolved, argv[2])) {
+                break;
+            }
+        }
+        if (i >= count) {
+            shell_print_error("recover: no crash file for %s", argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_print_error("recover: SD unavailable");
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (remove(entries[i].file) != 0) {
+            shell_sd_end(&session, "recover");
+            shell_print_error("recover: cannot discard %s", argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_sd_end(&session, "recover");
+        shell_transcript_appendf_ansi(SH_LBL "recover:" SH_RST " discarded " SH_PATH "%s" SH_RST "\n",
+                                      argv[2]);
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "clear")) {
+        shell_sd_session_t session;
+
+        count = recover_scan(entries, RECOVER_MAX_ENTRIES);
+        if (shell_sd_begin(&session) != ESP_OK) {
+            shell_print_error("recover: SD unavailable");
+            batch_set_errorlevel(1);
+            return;
+        }
+        for (i = 0; i < count; i++) {
+            remove(entries[i].file);
+        }
+        shell_sd_end(&session, "recover");
+        shell_transcript_appendf_ansi(SH_MUTE "recover: cleared %d crash file(s)\n" SH_RST, count);
+        batch_set_errorlevel(0);
+        return;
+    }
+    shell_print_usage("Usage: recover [list] | recover restore <path> | recover discard <path> | recover clear");
+    batch_set_errorlevel(2);
+}
+
+static void shell_command_recover(int argc, char **argv)
+{
+    recover_entry_t *entries = malloc(sizeof(*entries) * RECOVER_MAX_ENTRIES);
+
+    if (entries == NULL) {
+        shell_print_error("recover: out of memory");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_command_recover_inner(argc, argv, entries);
+    free(entries);
+}
+
+static void shell_command_edit(int argc, char **argv)
+{
+    const char *pos[3];
+    const char *template_name = NULL;
+    editor_session_opts_t opts;
+    int errorlevel = 0;
+    int pcount = 0;
+    int i;
+
+    opts.focus = false;
+    opts.template_name = NULL;
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "/focus") == 0) {
             opts.focus = true;
@@ -1012,8 +1468,8 @@ static void shell_command_edit(int argc, char **argv)
                 return;
             }
             template_name = argv[++i];
-        } else if (path == NULL) {
-            path = argv[i];
+        } else if (pcount < 3) {
+            pos[pcount++] = argv[i];
         } else {
             shell_print_usage("Usage: edit <path> [/focus] [/template <name>]");
             batch_set_errorlevel(2);
@@ -1022,12 +1478,36 @@ static void shell_command_edit(int argc, char **argv)
     }
     opts.template_name = template_name;
 
-    /* The editor runs on the command worker task; it blocks until quit. */
-    esp_err_t err = editor_session_run_opts(path, &opts, &errorlevel);
-    if (err != ESP_OK && errorlevel == 0) {
-        errorlevel = 1;
+    /* Record modes (exact arity only, so `edit db` still opens a file
+     * literally named "db"): */
+    if (pcount == 3 && shell_text_equals_ignore_case(pos[0], "db")) {
+        batch_set_errorlevel(shell_command_edit_db(pos[1], pos[2],
+                                                   opts.focus,
+                                                   opts.template_name));
+        return;
     }
-    batch_set_errorlevel(errorlevel);
+    if (pcount == 2 &&
+        (shell_text_equals_ignore_case(pos[0], "alarm") ||
+         shell_text_equals_ignore_case(pos[0], "alarms"))) {
+        batch_set_errorlevel(shell_command_edit_alarm(pos[1], opts.focus,
+                                                      opts.template_name));
+        return;
+    }
+    if (pcount > 1) {
+        shell_print_usage("Usage: edit <path> [/focus] [/template <name>]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    /* The editor runs on the command worker task; it blocks until quit. */
+    {
+        const char *path = pcount == 1 ? pos[0] : NULL;
+        esp_err_t err = editor_session_run_opts(path, &opts, &errorlevel);
+        if (err != ESP_OK && errorlevel == 0) {
+            errorlevel = 1;
+        }
+        batch_set_errorlevel(errorlevel);
+    }
 }
 
 /* Forward declarations for modal functions */
@@ -1989,15 +2469,21 @@ static bool command_physical_keyboard_present(void)
     if (usb_is_keyboard_attached()) {
         return true;
     }
-    if (bluetooth_is_connected()) {
+    if (bluetooth_is_device_connected()) {
         return true;
     }
     return tab5kbd_is_ready();
 }
 
 /** True when any bg job is currently running (OTA guard). */
-static bool command_bg_any_running(void)
+/* True while an OTA owns flash (netsvc pauses; PSRAM off-limits). */
+static bool command_netsvc_ota_active(void)
 {
+    return c6ota_is_confirmation_pending() || c6ota_is_busy();
+}
+
+static bool command_bg_any_running(void)
+  {
     int index;
 
     for (index = 0; index < P4_CONFIG_BG_TASKS; index++) {
@@ -2190,6 +2676,40 @@ static void shell_command_prompt_cmd(int argc, char **argv)
 }
 
 /* ========================================================================
+ * TITLE
+ * ========================================================================
+ * `title [text]` — DOS session-title parity. The text is shell-core
+ * session state (like the prompt template): `title` alone reports it,
+ * `title <text>` stores it (truncated to P4_CONFIG_TITLE_BYTES),
+ * `title ""`... an empty value clears it. It is also listed by `sysinfo`.
+ * Display ownership is unchanged: the header keeps status, the transcript
+ * keeps output; the title is metadata scripts and the host can read.
+ */
+static void shell_command_title_cmd(int argc, char **argv)
+{
+    char title_text[P4_CONFIG_TITLE_BYTES];
+
+    if (argc == 1) {
+        const char *current = shell_title_get();
+        if (current == NULL || current[0] == '\0') {
+            shell_print_muted("title: (none)");
+        } else {
+            shell_print_field("title:", "%s", current);
+        }
+        return;
+    }
+
+    /* Join so an unquoted multi-word title survives like the prompt body. */
+    shell_join_args(argv, 1, argc, title_text, sizeof(title_text));
+    shell_title_set(title_text);
+    if (shell_title_get()[0] == '\0') {
+        shell_print_ok("title: cleared");
+    } else {
+        shell_print_ok("title: set to '%s'", shell_title_get());
+    }
+}
+
+/* ========================================================================
  * HTTPGET / WGET
  * ========================================================================
  * `httpget <url> [localfile]` — the HTTP engine lives in
@@ -2354,6 +2874,7 @@ bool shell_execute_command_core(char *command)
      * the argc==0 guard below) are the only paths that free it. */
     bool want_echo = (strncasecmp(trimmed, "echo", 4) == 0 &&
                       (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) ||
+                     shell_command_echo_glued(trimmed, NULL, NULL) ||
                      (strncasecmp(trimmed, "calc", 4) == 0 &&
                       (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4])));
     if (want_echo) {
@@ -2606,6 +3127,12 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- TLS trust store management ---- */
+    if (shell_text_equals_ignore_case(argv[0], "certs")) {
+        shell_command_certs(argc, argv);
+        return true;
+    }
+
     /* ---- Markdown rendering ---- */
     if (shell_text_equals_ignore_case(argv[0], "markdown")) {
         shell_command_markdown(argc, argv);
@@ -2633,6 +3160,24 @@ bool shell_execute_command_core(char *command)
     /* ---- Portable store import; int return becomes ERRORLEVEL. */
     if (shell_text_equals_ignore_case(argv[0], "import")) {
         batch_set_errorlevel(shell_command_import(argc, argv));
+        return true;
+    }
+
+    /* ---- Serial PIM sync; int return becomes ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "pim")) {
+        batch_set_errorlevel(shell_command_pim(argc, argv));
+        return true;
+    }
+
+    /* ---- P4Sync handshake; int return becomes ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "sync")) {
+        batch_set_errorlevel(shell_command_sync(argc, argv));
+        return true;
+    }
+
+    /* ---- Event service (persistent MQTT + outbox); int becomes ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "net")) {
+        batch_set_errorlevel(shell_command_net(argc, argv));
         return true;
     }
 
@@ -2702,9 +3247,14 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "c6ota")) {
         /* PSRAM bg stacks go inaccessible during OTA flash writes: the two
-         * must never overlap, so OTA waits for background jobs. */
+         * must never overlap, so OTA waits for background jobs. The event
+         * service pauses on its own hook, but its PSRAM buffers stay
+         * allocated, so an active session refuses here too. */
         if (command_bg_any_running()) {
             shell_transcript_append_text("c6ota: stop background jobs first (taskkill bg0 ...)\n");
+            batch_set_errorlevel(1);
+        } else if (netsvc_is_active()) {
+            shell_transcript_append_text("c6ota: disconnect the event service first (net disconnect)\n");
             batch_set_errorlevel(1);
         } else {
             free(family_command);
@@ -2809,6 +3359,16 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "edit")) {
         shell_command_edit(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "spell")) {
+        shell_command_spell(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "recover")) {
+        shell_command_recover(argc, argv);
         return true;
     }
 
@@ -2941,16 +3501,12 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "echo") ||
-        (strncasecmp(argv[0], "echo.", 5) == 0 && argv[0][5] == '\0')) {
-        if (strncasecmp(argv[0], "echo.", 5) == 0) {
-            /* The DOS `echo.` idiom prints a blank line. */
-            if (echo_line != NULL) {
-                free(echo_line);
-            }
-            shell_transcript_append_text("\n");
-        } else if (echo_line != NULL) {
-            /* A raw-line snapshot exists when the command started with "echo";
-             * use it so a long echo line is never truncated by the argv cap. */
+        shell_command_echo_glued(argv[0], NULL, NULL)) {
+        /* The raw-line snapshot (taken before the tokenizer above) carries the
+         * exact text, including a DOS glued separator (`echo.`/`echo/`/`echo(`/
+         * `echo:`) and any long remainder the argv cap would truncate. One
+         * renderer owns every echo spelling; this arm never rebuilds it. */
+        if (echo_line != NULL) {
             shell_command_echo_text(echo_line);
             free(echo_line);
         } else {
@@ -3070,6 +3626,11 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "prompt")) {
         shell_command_prompt_cmd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "title")) {
+        shell_command_title_cmd(argc, argv);
         return true;
     }
 
@@ -3635,6 +4196,12 @@ static bool shell_execute_command_segment(char *command)
     char *input_source = NULL;
     bool append_mode = false;
     bool input_redirect_set = false;
+    bool missing_target = false;
+    bool have_output = false;
+    bool discard_output = false;
+    bool empty_command = false;
+    char input_temp_file[SHELL_SD_PATH_BYTES];
+    bool input_temp_created = false;
     bool recognized;
     int errorlevel_before;
 
@@ -3653,33 +4220,75 @@ static bool shell_execute_command_segment(char *command)
     /* Expand directly into the working buffer: no second allocation and no
      * whole-line copy (this runs once per loop iteration). */
     shell_expand_variables(command, command_buffer, work_size);
-    shell_parse_redirection(command_buffer, &command_part, &redirect_target, &append_mode, &input_source);
+    shell_parse_redirection(command_buffer, &command_part, &redirect_target,
+                            &append_mode, &input_source, &missing_target);
+
+    /* A bare operator with no target is a DOS syntax error: the line never
+     * runs and no file is touched. */
+    if (missing_target) {
+        shell_print_error("redirection: missing target file");
+        shell_record_warningf("shell", "Redirection operator without a target");
+        batch_set_errorlevel(2);
+        free(command_buffer);
+        return false;
+    }
 
     /* Publish the `<` source so the text-processing commands can pick it up
      * when the user gave no filename argument. A pipeline stage sets the same
-     * slot, so both spellings reach one code path. */
+     * slot, so both spellings reach one code path. DOS devices: `< CON`
+     * leaves the slot clear (readers fall back to the console key queue),
+     * `< NUL` reserves an empty temp file so readers see end-of-file. */
     if (input_source != NULL && input_source[0] != '\0') {
-        char resolved_input[SHELL_SD_PATH_BYTES];
-        esp_err_t error = shell_fs_resolve_path(input_source, resolved_input, sizeof(resolved_input));
+        shell_redirect_target_kind_t in_kind = shell_redirect_target_kind(input_source);
 
-        if (error != ESP_OK) {
-            shell_print_error("redirection: invalid input path %s", input_source);
-            shell_record_warningf("shell", "Invalid input redirection path %s", input_source);
-            batch_set_errorlevel(1);
-            free(command_buffer);
-            return false;
+        if (in_kind == SHELL_REDIRECT_CON) {
+            /* Console input: no slot, the key queue is the source. */
+        } else if (in_kind == SHELL_REDIRECT_NUL) {
+            if (storage_temp_path(input_temp_file, sizeof(input_temp_file), "nul") == ESP_OK) {
+                storage_set_input_redirect(input_temp_file);
+                input_redirect_set = true;
+                input_temp_created = true;
+            }
+        } else {
+            char resolved_input[SHELL_SD_PATH_BYTES];
+            esp_err_t error = shell_fs_resolve_path(input_source, resolved_input, sizeof(resolved_input));
+
+            if (error != ESP_OK) {
+                shell_print_error("redirection: invalid input path %s", input_source);
+                shell_record_warningf("shell", "Invalid input redirection path %s", input_source);
+                batch_set_errorlevel(1);
+                free(command_buffer);
+                return false;
+            }
+
+            storage_set_input_redirect(resolved_input);
+            input_redirect_set = true;
         }
-
-        storage_set_input_redirect(resolved_input);
-        input_redirect_set = true;
     }
 
-    /* A redirected command's output is captured into a dedicated heap buffer
-     * (independent of the transcript), so a large output survives the 16 KB
-     * transcript truncation. Open the capture window before dispatch. */
+    /* DOS output devices: `> CON` runs unredirected (the transcript is the
+     * console), `> NUL` captures and drops. Anything else captures for the
+     * redirect file. A redirected command's output is captured into a
+     * dedicated heap buffer (independent of the transcript), so a large
+     * output survives the 16 KB transcript truncation. Open the capture
+     * window before dispatch. */
     if (redirect_target != NULL && redirect_target[0] != '\0') {
+        shell_redirect_target_kind_t out_kind = shell_redirect_target_kind(redirect_target);
+
+        if (out_kind == SHELL_REDIRECT_CON) {
+            redirect_target = NULL;
+        } else {
+            have_output = true;
+            discard_output = (out_kind == SHELL_REDIRECT_NUL);
+        }
+    }
+    if (have_output) {
         shell_redirect_capture_begin();
     }
+
+    /* A line of only redirections (`> f`) truncates/creates the file like
+     * DOS instead of dispatching an empty command. */
+    empty_command = (command_part == NULL || command_part[0] == '\0');
 
     /* draw_buf errorlevel rather than clearing it. Clearing would destroy the
      * value that the very next `if errorlevel N` is meant to read, and DOS
@@ -3691,12 +4300,18 @@ static bool shell_execute_command_segment(char *command)
     /* Batch label repaints across this segment's output: appends stay live in
      * the buffers and on serial, but the O(buffer) LVGL span rebuild happens
      * once per segment (plus a periodic live flush) instead of per line. */
-    shell_transcript_defer_begin();
-    recognized = shell_execute_command_core(command_part);
-    if (!recognized) {
-        shell_transcript_appendf_ansi(SH_ERR "Unknown command:" SH_RST " %s\n", command_part);
-        shell_record_warningf("shell", "Unknown command: %s", command_part);
-        batch_set_errorlevel(P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND);
+    if (!empty_command) {
+        shell_transcript_defer_begin();
+        recognized = shell_execute_command_core(command_part);
+        if (!recognized) {
+    shell_transcript_appendf_ansi(SH_ERR "Unknown command:" SH_RST " %s\n", command_part);
+    /* A mistyped command is user input, not a fault: report it in the
+     * transcript and debug history without raising a warning-level log. */
+    shell_record_infof("shell", "Unknown command: %s", command_part);
+            batch_set_errorlevel(P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND);
+        }
+    } else {
+        recognized = true;
     }
 
     /* The input slot belongs to exactly one command. Clear it here so a
@@ -3704,20 +4319,26 @@ static bool shell_execute_command_segment(char *command)
     if (input_redirect_set) {
         storage_clear_input_redirect();
     }
+    if (input_temp_created) {
+        (void)remove(input_temp_file);
+        input_temp_created = false;
+    }
 
-    if (redirect_target != NULL && redirect_target[0] != '\0') {
+    if (have_output) {
         size_t captured_len = 0;
         const char *captured = shell_redirect_capture_get(&captured_len);
-        esp_err_t error;
+        esp_err_t error = ESP_OK;
 
         shell_redirect_capture_end();
 
-        error = shell_write_redirect_output(redirect_target, captured, append_mode);
-        if (shell_redirect_capture_was_truncated()) {
-            shell_print_warning("redirection: output exceeded %d bytes and was truncated",
-                                P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES);
-            shell_record_warningf("shell", "Redirected output truncated at %d bytes",
-                                  P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES);
+        if (!discard_output) {
+            error = shell_write_redirect_output(redirect_target, captured, append_mode);
+            if (shell_redirect_capture_was_truncated()) {
+                shell_print_warning("redirection: output exceeded %d bytes and was truncated",
+                                    P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES);
+                shell_record_warningf("shell", "Redirected output truncated at %d bytes",
+                                      P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES);
+            }
         }
         if (error != ESP_OK) {
             shell_print_error("redirection: failed to write %s (%s)",
@@ -4294,6 +4915,19 @@ void command_init(void)
         applib_register_net_ops(&applib_net_ops);
     }
 
+    /* Publish the message service accessors to the applib runtime. Native
+     * apps publish/subscribe through applib (app_msg_*) without including
+     * networking.h; netsvc_publish returns esp_err_t (an int), so the
+     * table assigns directly with the same 0-ok contract. */
+    {
+        static const applib_msg_ops_t applib_msg_ops = {
+            .msg_publish   = netsvc_publish,
+            .msg_subscribe = netsvc_subscribe,
+            .msg_connected = netsvc_is_connected,
+        };
+        applib_register_msg_ops(&applib_msg_ops);
+    }
+
     /* Publish the process-environment accessors to the applib runtime. The
      * env table is owned by components/batch and cwd by components/storage;
      * applib reaches both through this table (never those headers), and every
@@ -4317,6 +4951,20 @@ void command_init(void)
             .execute_async = shell_execute_command_async,
         };
         alarm_register_host_ops(&alarm_ops);
+    }
+
+    /* Publish the upward hooks to the event service. The service task starts
+     * lazily on the first `net` verb; inbound messages reach batch through
+     * the async hook with NET_TOPIC/NET_LEN set, merges honor the device
+     * lock, and the task pauses while an OTA owns flash. */
+    {
+        static const netsvc_host_ops_t netsvc_ops = {
+            .execute_async      = shell_execute_command_async,
+            .can_reveal_private = security_can_reveal_private,
+            .set_env            = shell_env_set,
+            .ota_active         = command_netsvc_ota_active,
+        };
+        netsvc_register_host_ops(&netsvc_ops);
     }
 
     /* Debounced history persistence: save to SD only when the recall ring

@@ -217,7 +217,16 @@ def run(dev, ctx):
             out = dev.run("ui tap %d %d 80" % (t["x"] + t["w"] // 2,
                                                 t["y"] + t["h"] // 2), timeout=15)
             c.check("ui tap header no panic", "Backtrace" not in out and "Guru" not in out)
-            c.check("ui state alive after tap", _field(_ui_state(dev), "modal") is not None)
+            # A header tap can open an overlay/animation that delays the state
+            # reply past a single read window, so poll: the device is alive as
+            # long as any reading returns the well-formed `modal=` field.
+            alive = False
+            deadline = time.time() + 8.0
+            while time.time() < deadline:
+                if _field(_ui_state(dev), "modal") is not None:
+                    alive = True
+                    break
+            c.check("ui state alive after tap", alive)
         else:
             c.check("header target present", False, "no header target")
 
@@ -261,7 +270,8 @@ def run(dev, ctx):
                 time.sleep(0.3)
         c.expect("ui key typed prefix", "co", typed_input)
         ghost = _between(typed, "ghost", "search") or ""
-        c.check("ghost completion shown", len(ghost) > 0, "ghost=%r" % ghost)
+        c.check("ghost completion shown", len(ghost) > 0,
+                "ghost=%r state=%s" % (ghost, typed[-200:]))
         # Submit the pending input line (OSK enter) so the shell starts clean.
         dev.run("ui key \uf8a2", timeout=15)
         time.sleep(0.8)

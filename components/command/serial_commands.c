@@ -100,8 +100,9 @@ static inline void rgb565_to_bmp_row(uint8_t *dst, const uint16_t *src, uint32_t
  * inserted \r before every \n byte. Delegates to the shared UART writer, which
  * chunks for the driver's TX ring (4 KB) and completes partial writes under a
  * bounded total wait, so a big payload cannot be truncated under backpressure
- * and a host that stops reading cannot wedge the command worker. */
-static bool serial_write_raw(const void *data, size_t len)
+ * and a host that stops reading cannot wedge the command worker. Shared with
+ * the serial transfer engine below (and future `pim` frames). */
+bool serial_write_raw(const void *data, size_t len)
 {
     /* One shared writer completes partial writes under a bounded total wait
      * (chunked internally for the TX ring), so a full screenshot/send frame is
@@ -110,12 +111,12 @@ static bool serial_write_raw(const void *data, size_t len)
                                           P4_CONFIG_UART_WRITE_TOTAL_MS);
 }
 
-/* Serial binary-stream framing shared by `screenshot`, `send`, and the
- * `receive` protocol: a 4-byte magic + 4-byte little-endian payload size,
- * then the raw bytes. The magic/size lets a host reader frame exactly one
- * payload off the USB-Serial/JTAG console stream without depending on the
- * surrounding transcript text. */
-static void serial_write_frame_header(const char *magic4, uint32_t payload_size)
+/* Serial binary-stream framing shared by `screenshot`, `send`, the `receive`
+ * protocol, and future `pim` frames: a 4-byte magic + 4-byte little-endian
+ * payload size, then the raw bytes. The magic/size lets a host reader frame
+ * exactly one payload off the USB-Serial/JTAG console stream without depending
+ * on the surrounding transcript text. */
+void serial_write_frame_header(const char *magic4, uint32_t payload_size)
 {
     uint8_t hdr[8];
 
@@ -453,12 +454,115 @@ uint32_t shell_crc32_update(uint32_t crc, const uint8_t *data, size_t len)
     return crc;
 }
 
-/* Write the 8-byte `send` frame header: 4-byte magic + 4-byte little-endian
- * payload size. (The generic serial_write_frame_header() above is shared with
- * `screenshot`.) */
-static void serial_send_frame_header(uint32_t payload_size)
+/* ========================================================================
+ * SHARED SERIAL TRANSFER ENGINE
+ * ========================================================================
+ * `receive` and `send` are thin policy shells (usage, paths, SD sessions,
+ * markers, summaries) over this engine; future `pim get`/`pim put` reuse the
+ * same engine with the PIMX magic. There is exactly one framing writer
+ * (serial_write_frame_header above), one TX path per source shape, one RX
+ * pump, and one CRC trailer — never a second copy.
+ */
+
+/**
+ * Stream an SD file range as one framed TX payload: `magic4` + 4-byte
+ * little-endian size header, `count` bytes from `file` at `offset`, then the
+ * 4-byte little-endian CRC-32 trailer (empty payload => 0x00000000).
+ *
+ * The console reader must already be suspended by the caller
+ * (`shell_uart_console_rx_begin/end`).
+ *
+ * @return true only when the header, every byte, and the trailer were
+ * accepted by the TX ring.
+ */
+bool serial_xfer_stream_file(FILE *file, size_t offset, size_t count,
+                             const char *magic4)
 {
-    serial_write_frame_header(P4_CONFIG_SERIAL_SEND_MAGIC, payload_size);
+    uint32_t crc = 0xFFFFFFFFu;
+    bool stream_ok;
+
+    serial_write_frame_header(magic4, (uint32_t)count);
+    if (count > 0) {
+        uint8_t *buf = malloc(P4_CONFIG_SERIAL_XFER_CHUNK_BYTES);
+        size_t remaining = count;
+
+        if (buf == NULL) {
+            return false;
+        }
+        if (fseek(file, (long)offset, SEEK_SET) != 0) {
+            free(buf);
+            return false;
+        }
+        stream_ok = true;
+        while (stream_ok && remaining > 0) {
+            size_t want = remaining > P4_CONFIG_SERIAL_XFER_CHUNK_BYTES
+                              ? P4_CONFIG_SERIAL_XFER_CHUNK_BYTES
+                              : remaining;
+            size_t got = fread(buf, 1, want, file);
+
+            if (got == 0) {
+                stream_ok = false;
+                break;
+            }
+            if (!serial_write_raw(buf, got)) {
+                stream_ok = false;
+                break;
+            }
+            crc = shell_crc32_update(crc, buf, got);
+            remaining -= got;
+        }
+        free(buf);
+    } else {
+        stream_ok = true;
+    }
+
+    /* CRC-32 trailer over the payload so the host can verify the frame was
+     * not corrupted or interleaved. */
+    if (stream_ok) {
+        uint32_t final_crc = ~crc;
+        uint8_t trailer[4];
+
+        trailer[0] = (uint8_t)(final_crc & 0xFFu);
+        trailer[1] = (uint8_t)((final_crc >> 8) & 0xFFu);
+        trailer[2] = (uint8_t)((final_crc >> 16) & 0xFFu);
+        trailer[3] = (uint8_t)((final_crc >> 24) & 0xFFu);
+        if (!serial_write_raw(trailer, sizeof(trailer))) {
+            stream_ok = false;
+        }
+    }
+    return stream_ok;
+}
+
+/**
+ * Stream one framed TX payload from memory: `magic4` + 4-byte little-endian
+ * size header, `len` bytes, then the 4-byte little-endian CRC-32 trailer.
+ * Same frame layout as serial_xfer_stream_file (buffer source instead of a
+ * file range). The console reader must already be suspended by the caller.
+ *
+ * @return true only when the header, every byte, and the trailer were
+ * accepted by the TX ring.
+ */
+bool serial_xfer_stream_buffer(const uint8_t *data, size_t len,
+                               const char *magic4)
+{
+    uint32_t final_crc;
+    uint8_t trailer[4];
+
+    if (data == NULL && len > 0) {
+        return false;
+    }
+    serial_write_frame_header(magic4, (uint32_t)len);
+    if (len > 0) {
+        if (!serial_write_raw(data, len)) {
+            return false;
+        }
+    }
+    final_crc = ~shell_crc32_update(0xFFFFFFFFu, data, len);
+    trailer[0] = (uint8_t)(final_crc & 0xFFu);
+    trailer[1] = (uint8_t)((final_crc >> 8) & 0xFFu);
+    trailer[2] = (uint8_t)((final_crc >> 16) & 0xFFu);
+    trailer[3] = (uint8_t)((final_crc >> 24) & 0xFFu);
+    return serial_write_raw(trailer, sizeof(trailer));
 }
 
 /* Bounded append helper for the `send /diag` report. */
@@ -485,6 +589,146 @@ static void serial_diag_line(char *buf, size_t cap, size_t *pos, const char *fmt
     }
 }
 
+/**
+ * ACK-paced RX pump shared by `receive` and future `pim put`: read exactly
+ * `size` raw bytes from the USB-Serial/JTAG ring into `file`, emitting an
+ * "RX <cumulative>" ACK per accepted chunk. The device's USB RX ring drops
+ * bytes under a burst, so the host only sends what the ACK count confirms
+ * was accepted. With `verify_crc`, read and check the 4-byte little-endian
+ * CRC-32 trailer after the payload.
+ *
+ * Drains the ring and resumes the console reader before returning — in that
+ * order, so leftover binary can never reach the resumed console task as
+ * command lines.
+ *
+ * Entry contract: the console reader is already suspended
+ * (`shell_uart_console_rx_begin`), the READY marker is already emitted, and
+ * `file` is already open for writing. `tag` names the caller in error lines
+ * ("receive", "pim").
+ *
+ * @return true only when all `size` bytes arrived (and a matching trailer,
+ * when requested); `*cumulative_out` holds the accepted byte count.
+ */
+bool serial_xfer_receive_pump(FILE *file, unsigned long size, bool verify_crc,
+                              const char *tag, unsigned long *cumulative_out)
+{
+    uint8_t *buf = malloc(P4_CONFIG_SERIAL_XFER_CHUNK_BYTES);
+    bool ok = (buf != NULL);
+    unsigned long cumulative = 0;
+    unsigned long idle_ms = 0;
+    uint32_t crc = 0xFFFFFFFFu;
+
+    if (buf == NULL) {
+        shell_print_error("%s: out of memory", tag);
+    } else {
+        while (cumulative < size && ok) {
+            size_t want = size - cumulative;
+            size_t got;
+
+            if (want > P4_CONFIG_SERIAL_XFER_CHUNK_BYTES) {
+                want = P4_CONFIG_SERIAL_XFER_CHUNK_BYTES;
+            }
+
+            /* Read until the chunk is full, or the host goes idle. Reads
+             * go through the USB-Serial/JTAG driver ring (installed with a
+             * large RX buffer in shell_uart_console_start) so bursts do
+             * not overflow; the 100 ms window gives a bounded idle check. */
+            got = 0;
+            while (got < want && ok) {
+                int r = usb_serial_jtag_read_bytes(buf + got, want - got,
+                                                   pdMS_TO_TICKS(100));
+
+                if (r < 0 || r == 0) {
+                    idle_ms += 100;
+                    if (idle_ms >= P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS) {
+                        shell_print_error("%s: timed out waiting for data", tag);
+                        ok = false;
+                        break;
+                    }
+                    continue;
+                }
+                idle_ms = 0;
+                got += (size_t)r;
+            }
+
+            if (ok && got > 0) {
+                if (fwrite(buf, 1, got, file) != got) {
+                    shell_print_error("%s: SD write failed", tag);
+                    ok = false;
+                    break;
+                }
+                crc = shell_crc32_update(crc, buf, got);
+                cumulative += got;
+
+                /* ACK: report cumulative bytes so the host knows how much
+                 * of this chunk was accepted and sends the right delta
+                 * next. */
+                {
+                    char ack[48];
+                    int ack_len = snprintf(ack, sizeof(ack), "RX %lu\n", cumulative);
+
+                    (void)serial_write_raw(ack, (size_t)ack_len);
+                }
+            }
+        }
+
+        if (ok && verify_crc) {
+            /* The host appended a 4-byte little-endian CRC-32 trailer. */
+            uint8_t crc_bytes[4];
+            size_t got_crc = 0;
+            unsigned long crc_idle_ms = 0;
+
+            while (got_crc < sizeof(crc_bytes) && ok) {
+                int r = usb_serial_jtag_read_bytes(crc_bytes + got_crc,
+                                                   sizeof(crc_bytes) - got_crc,
+                                                   pdMS_TO_TICKS(100));
+
+                if (r < 0 || r == 0) {
+                    crc_idle_ms += 100;
+                    if (crc_idle_ms >= P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS) {
+                        shell_print_error("%s: timed out waiting for CRC trailer", tag);
+                        ok = false;
+                        break;
+                    }
+                    continue;
+                }
+                crc_idle_ms = 0;
+                got_crc += (size_t)r;
+            }
+            if (ok) {
+                uint32_t expected = (uint32_t)crc_bytes[0]
+                    | ((uint32_t)crc_bytes[1] << 8)
+                    | ((uint32_t)crc_bytes[2] << 16)
+                    | ((uint32_t)crc_bytes[3] << 24);
+                uint32_t computed = ~crc;
+
+                if (computed != expected) {
+                    shell_print_error("%s: CRC mismatch (expected %08lx, computed %08lx)",
+                                      tag, (unsigned long)expected,
+                                      (unsigned long)computed);
+                    ok = false;
+                }
+            }
+        }
+        free(buf);
+    }
+
+    /* Drain any bytes still buffered in the USB ring so the resumed
+     * console task never sees leftover binary as a command line. */
+    {
+        uint8_t drain_buf[64];
+
+        while (usb_serial_jtag_read_bytes(drain_buf, sizeof(drain_buf), 0) > 0) {
+        }
+    }
+
+    shell_uart_console_rx_end();
+    if (cumulative_out != NULL) {
+        *cumulative_out = cumulative;
+    }
+    return ok;
+}
+
 void shell_command_receive(int argc, char **argv)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
@@ -494,10 +738,10 @@ void shell_command_receive(int argc, char **argv)
     unsigned long size = 0;
     unsigned long cumulative = 0;
     bool verify_crc = false;
+    bool ok = false;
     char *end = NULL;
     esp_err_t error;
     int64_t start_us;
-    uint32_t crc = 0xFFFFFFFFu;
 
     if (argc != 3 && argc != 4) {
         shell_print_usage("Usage: receive <path> <size> [/crc]");
@@ -563,132 +807,24 @@ void shell_command_receive(int argc, char **argv)
     /* Ready marker: the host now streams `size` raw bytes, ACK-paced. */
     shell_uart_console_write_text("\n" P4_CONFIG_SERIAL_RX_READY_MARKER "\n");
 
-    {
-        uint8_t *buf = malloc(P4_CONFIG_SERIAL_XFER_CHUNK_BYTES);
-        bool ok = (buf != NULL);
-        unsigned long idle_ms = 0;
+    ok = serial_xfer_receive_pump(file, size, verify_crc, "receive",
+                                  &cumulative);
 
-        if (buf == NULL) {
-            shell_print_error("receive: out of memory");
+    fclose(file);
+    file = NULL;
+
+    if (!ok || cumulative < size) {
+        if (verify_crc && cumulative == size) {
+            shell_print_error("receive: transfer failed - CRC mismatch or missing trailer (%lu bytes received)",
+                              size);
         } else {
-            while (cumulative < size && ok) {
-                size_t want = size - cumulative;
-                size_t got;
-
-                if (want > P4_CONFIG_SERIAL_XFER_CHUNK_BYTES) {
-                    want = P4_CONFIG_SERIAL_XFER_CHUNK_BYTES;
-                }
-
-                /* Read until the chunk is full, or the host goes idle. Reads
-                 * go through the USB-Serial/JTAG driver ring (installed with a
-                 * large RX buffer in shell_uart_console_start) so bursts do
-                 * not overflow; the 100 ms window gives a bounded idle check. */
-                got = 0;
-                while (got < want && ok) {
-                    int r = usb_serial_jtag_read_bytes(buf + got, want - got,
-                                                       pdMS_TO_TICKS(100));
-
-                    if (r < 0 || r == 0) {
-                        idle_ms += 100;
-                        if (idle_ms >= P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS) {
-                            shell_print_error("receive: timed out waiting for data");
-                            ok = false;
-                            break;
-                        }
-                        continue;
-                    }
-                    idle_ms = 0;
-                    got += (size_t)r;
-                }
-
-                if (ok && got > 0) {
-                    if (fwrite(buf, 1, got, file) != got) {
-                        shell_print_error("receive: SD write failed");
-                        ok = false;
-                        break;
-                    }
-                    crc = shell_crc32_update(crc, buf, got);
-                    cumulative += got;
-
-                    /* ACK: report cumulative bytes so the host knows how much
-                     * of this chunk was accepted and sends the right delta
-                     * next. */
-                    {
-                        char ack[48];
-                        int ack_len = snprintf(ack, sizeof(ack), "RX %lu\n", cumulative);
-
-                        (void)serial_write_raw(ack, (size_t)ack_len);
-                    }
-                }
-            }
-
-            if (ok && verify_crc) {
-                /* The host appended a 4-byte little-endian CRC-32 trailer. */
-                uint8_t crc_bytes[4];
-                size_t got_crc = 0;
-                unsigned long crc_idle_ms = 0;
-
-                while (got_crc < sizeof(crc_bytes) && ok) {
-                    int r = usb_serial_jtag_read_bytes(crc_bytes + got_crc,
-                                                       sizeof(crc_bytes) - got_crc,
-                                                       pdMS_TO_TICKS(100));
-
-                    if (r < 0 || r == 0) {
-                        crc_idle_ms += 100;
-                        if (crc_idle_ms >= P4_CONFIG_SERIAL_XFER_IDLE_TIMEOUT_MS) {
-                            shell_print_error("receive: timed out waiting for CRC trailer");
-                            ok = false;
-                            break;
-                        }
-                        continue;
-                    }
-                    crc_idle_ms = 0;
-                    got_crc += (size_t)r;
-                }
-                if (ok) {
-                    uint32_t expected = (uint32_t)crc_bytes[0]
-                        | ((uint32_t)crc_bytes[1] << 8)
-                        | ((uint32_t)crc_bytes[2] << 16)
-                        | ((uint32_t)crc_bytes[3] << 24);
-                    uint32_t computed = ~crc;
-
-                    if (computed != expected) {
-                        shell_print_error("receive: CRC mismatch (expected %08lx, computed %08lx)",
-                                          (unsigned long)expected, (unsigned long)computed);
-                        ok = false;
-                    }
-                }
-            }
-            free(buf);
+            shell_print_error("receive: transfer incomplete (%lu/%lu bytes)",
+                              cumulative, size);
         }
-
-        /* Drain any bytes still buffered in the USB ring so the resumed
-         * console task never sees leftover binary as a command line. */
-        {
-            uint8_t drain_buf[64];
-
-            while (usb_serial_jtag_read_bytes(drain_buf, sizeof(drain_buf), 0) > 0) {
-            }
-        }
-
-        shell_uart_console_rx_end();
-
-        fclose(file);
-        file = NULL;
-
-        if (!ok || cumulative < size) {
-            if (verify_crc && cumulative == size) {
-                shell_print_error("receive: transfer failed - CRC mismatch or missing trailer (%lu bytes received)",
-                                  size);
-            } else {
-                shell_print_error("receive: transfer incomplete (%lu/%lu bytes)",
-                                  cumulative, size);
-            }
-            remove(tmp_path);
-            shell_sd_end(&session, "receive");
-            batch_set_errorlevel(1);
-            return;
-        }
+        remove(tmp_path);
+        shell_sd_end(&session, "receive");
+        batch_set_errorlevel(1);
+        return;
     }
 
     /* Atomic replace: FATFS f_rename refuses to overwrite, so remove first. */
@@ -792,23 +928,12 @@ void shell_command_send(int argc, char **argv)
                          "wifi %s\n", networking_wifi_state_string());
 
         payload_size = (uint32_t)pos;
-        serial_send_frame_header(payload_size);
-        if (payload_size > 0) {
-            (void)serial_write_raw(report, payload_size);
-        }
-        /* CRC-32 trailer over the report (frame protocol parity with send). */
-        {
-            uint32_t final_crc = ~shell_crc32_update(0xFFFFFFFFu,
-                                                      (const uint8_t *)report,
-                                                      (size_t)pos);
-            uint8_t trailer[4];
-
-            trailer[0] = (uint8_t)(final_crc & 0xFFu);
-            trailer[1] = (uint8_t)((final_crc >> 8) & 0xFFu);
-            trailer[2] = (uint8_t)((final_crc >> 16) & 0xFFu);
-            trailer[3] = (uint8_t)((final_crc >> 24) & 0xFFu);
-            (void)serial_write_raw(trailer, sizeof(trailer));
-        }
+        /* `send /diag` is best-effort and historically always reports success
+         * once the report is built, so keep that verdict here while the
+         * shared engine returns its real status for the `send`/future `pim`
+         * file paths below. */
+        (void)serial_xfer_stream_buffer((const uint8_t *)report, pos,
+                                        P4_CONFIG_SERIAL_SEND_MAGIC);
         free(report);
         stream_ok = true;
     } else {
@@ -889,61 +1014,8 @@ void shell_command_send(int argc, char **argv)
         }
 
         payload_size = (uint32_t)count;
-        serial_send_frame_header(payload_size);
-
-        {
-            uint32_t crc = 0xFFFFFFFFu;
-
-            if (count > 0) {
-                uint8_t *buf = malloc(P4_CONFIG_SERIAL_XFER_CHUNK_BYTES);
-                size_t remaining = count;
-
-                if (buf == NULL) {
-                    stream_ok = false;
-                } else {
-                    stream_ok = true;
-                    if (fseek(file, (long)offset, SEEK_SET) != 0) {
-                        stream_ok = false;
-                    }
-                    while (stream_ok && remaining > 0) {
-                        size_t want = remaining > P4_CONFIG_SERIAL_XFER_CHUNK_BYTES
-                                          ? P4_CONFIG_SERIAL_XFER_CHUNK_BYTES
-                                          : remaining;
-                        size_t got = fread(buf, 1, want, file);
-
-                        if (got == 0) {
-                            stream_ok = false;
-                            break;
-                        }
-                        if (!serial_write_raw(buf, got)) {
-                            stream_ok = false;
-                            break;
-                        }
-                        crc = shell_crc32_update(crc, buf, got);
-                        remaining -= got;
-                    }
-                    free(buf);
-                }
-            } else {
-                stream_ok = true;
-            }
-
-            /* Append the 4-byte little-endian CRC-32 trailer over the payload
-             * (empty payload => CRC of nothing = 0x00000000) so the host can
-             * verify the frame was not corrupted or interleaved. */
-            if (stream_ok) {
-                uint32_t final_crc = ~crc;
-                uint8_t trailer[4];
-
-                trailer[0] = (uint8_t)(final_crc & 0xFFu);
-                trailer[1] = (uint8_t)((final_crc >> 8) & 0xFFu);
-                trailer[2] = (uint8_t)((final_crc >> 16) & 0xFFu);
-                trailer[3] = (uint8_t)((final_crc >> 24) & 0xFFu);
-                if (!serial_write_raw(trailer, sizeof(trailer))) {
-                    stream_ok = false;
-                }
-            }
-        }
+        stream_ok = serial_xfer_stream_file(file, offset, count,
+                                            P4_CONFIG_SERIAL_SEND_MAGIC);
 
         fclose(file);
         file = NULL;

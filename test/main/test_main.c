@@ -26,6 +26,7 @@ extern void test_shell_abort_initially_clear(void);
 extern void test_shell_abort_request_and_clear(void);
 extern void test_shell_command_busy_tracks(void);
 extern void test_redirect_capture_nested(void);
+extern void test_shell_parser_echo_glued(void);
 
 extern void test_shell_history_store(void);
 extern void test_shell_history_recall(void);
@@ -37,6 +38,8 @@ extern void test_shell_format_command_handles_null(void);
 extern void test_shell_prompt_template_roundtrip(void);
 extern void test_shell_prompt_metacharacters(void);
 extern void test_shell_prompt_path_expansion(void);
+extern void test_shell_title_roundtrip(void);
+extern void test_shell_title_truncates(void);
 extern void test_shell_key_wait_state(void);
 
 extern void test_shell_quoting_find_unquoted(void);
@@ -51,6 +54,9 @@ extern void test_chain_single_quote_protection(void);
 extern void test_chain_truncation_with_pipes(void);
 extern void test_chain_empty_and_whitespace(void);
 extern void test_find_unquoted_pipe(void);
+extern void test_redirect_target_kind(void);
+extern void test_redirect_parse_missing_target(void);
+extern void test_redirect_parse_handle_prefix(void);
 
 extern void test_storage_format_size(void);
 extern void test_storage_wildcard_match(void);
@@ -116,6 +122,8 @@ extern void test_batch_forl_parse(void);
 extern void test_batch_while_keywords(void);
 extern void test_batch_fora_collect(void);
 extern void test_batch_switch_select(void);
+extern void test_batch_shift_parse_start(void);
+extern void test_batch_forf_option_defaults(void);
 
 extern void test_debug_log_push_and_read(void);
 extern void test_debug_log_warning_count(void);
@@ -150,7 +158,12 @@ extern void test_config_remove_multiple(void);
 extern void test_config_remove_last_line_no_newline(void);
 
 extern void test_editor_osk_key_from_label(void);
+extern void test_editor_key_from_usb_spell(void);
 extern void test_editor_spell_tokenizer(void);
+extern void test_editor_spell_user_validation(void);
+extern void test_editor_spell_ignore_session(void);
+extern void test_editor_spell_user_list_empty(void);
+extern void test_editor_cursor_word(void);
 extern void test_editor_word_count(void);
 extern void test_editor_new_doc(void);
 extern void test_editor_insert_and_cursor(void);
@@ -169,6 +182,8 @@ extern void test_editor_set_path(void);
 extern void test_editor_paste_multiline(void);
 extern void test_editor_lex_batch(void);
 extern void test_editor_lex_markdown(void);
+extern void test_editor_lex_html(void);
+extern void test_editor_html_comment_toggle(void);
 extern void test_editor_lex_json(void);
 extern void test_editor_replace_all(void);
 extern void test_editor_comment_toggle(void);
@@ -184,6 +199,8 @@ extern void test_editor_find_wrap_boundary(void);
 extern void test_editor_undo_ring_wrap_free(void);
 extern void test_editor_selection_delete_multirow_tail(void);
 extern void test_editor_format_line_number(void);
+extern void test_editor_csv_renders_as_plain_lines(void);
+extern void test_editor_csv_extension_is_plain(void);
 
 extern void test_keyboard_mode_names(void);
 extern void test_keyboard_mode_parse(void);
@@ -228,6 +245,20 @@ extern void test_import_json_unescape_safety(void);
 extern void test_import_ics_datetime_full(void);
 extern void test_import_ics_datetime_forms(void);
 extern void test_import_ics_datetime_rejects(void);
+extern void test_pim_doc_init_write(void);
+extern void test_pim_doc_growth(void);
+extern void test_pim_doc_overflow_cap(void);
+extern void test_pim_doc_ical_escape(void);
+extern void test_pim_doc_ical_prop(void);
+extern void test_pim_copy_trunc_basic(void);
+extern void test_pim_mint_uid_shape(void);
+extern void test_pim_merge_should_replace(void);
+extern void test_pim_vcf_build_payload_identity(void);
+extern void test_pim_bump_replaces_mtime(void);
+extern void test_pim_bump_width_change(void);
+extern void test_pim_bump_appends_mtime(void);
+extern void test_pim_bump_csv_untouched(void);
+extern void test_pim_bump_plain_and_limits(void);
 extern void test_forf_options_defaults(void);
 extern void test_forf_parse_options(void);
 extern void test_forf_parse_star(void);
@@ -272,6 +303,9 @@ extern void test_alarm_advance_monthly_by_day(void);
 extern void test_alarm_advance_monthly_nth(void);
 extern void test_alarm_advance_yearly(void);
 extern void test_alarm_advance_event_dispatch(void);
+extern void test_alarm_event_render_parse_roundtrip(void);
+extern void test_alarm_event_render_omits_identity_when_unsynced(void);
+extern void test_alarm_event_parse_tolerates_missing_keys(void);
 
 extern void test_modal_timeout_basic(void);
 extern void test_modal_timeout_case_and_zero(void);
@@ -284,15 +318,25 @@ extern void test_hardware_imu_orientation(void);
 extern void test_hardware_charge_state(void);
 extern void test_hardware_bmp_header(void);
 extern void test_hardware_rgb565_to_bgr24(void);
+extern void test_audio_output_parse(void);
+extern void test_audio_output_name(void);
+extern void test_audio_route_resolve(void);
+extern void test_audio_wav_params_ok(void);
 extern void test_power_parse_default(void);
 extern void test_power_parse_valid(void);
 extern void test_power_parse_clamp_and_reject(void);
 extern void test_power_wake_cause_strings(void);
+extern void test_power_deep_wake_gpio_eligibility(void);
 extern void test_power_pack_present_below_present_is_absent(void);
 extern void test_power_pack_present_in_range_is_immediate(void);
 extern void test_power_pack_present_rail_band_needs_stable_window(void);
 extern void test_power_pack_present_rail_band_unstable_is_absent(void);
 extern void test_power_pack_present_chg_stat_corroboration(void);
+extern void test_battery_soc_at_full(void);
+extern void test_battery_soc_at_empty(void);
+extern void test_battery_soc_midrange(void);
+extern void test_battery_soc_monotonic(void);
+extern void test_battery_soc_known_points(void);
 
 extern void test_serial_bmp_headers(void);
 extern void test_serial_bmp_headers_small(void);
@@ -354,11 +398,28 @@ extern void test_markdown_html_links_images(void);
 extern void test_markdown_html_heading_fence(void);
 extern void test_markdown_html_measure(void);
 extern void test_markdown_print_widths(void);
-extern void test_markdown_render_print(void);extern void test_filetype_batch(void);
+extern void test_markdown_render_print(void);
+extern void test_markdown_strip_ansi(void);
+extern void test_markdown_auto_toggle(void);
+extern void test_markdown_expand_form_feeds(void);
+extern void test_html_render_basic(void);
+extern void test_html_render_entities(void);
+extern void test_html_render_lists(void);
+extern void test_html_render_nested_list(void);
+extern void test_html_render_table(void);
+extern void test_html_render_links_images(void);
+extern void test_html_render_skips_head_script_style(void);
+extern void test_html_render_pre_preserves(void);
+extern void test_html_render_comment_and_doctype(void);
+extern void test_html_render_blockquote(void);
+extern void test_html_render_measure_and_truncate(void);
+extern void test_html_render_malformed_is_tolerated(void);
+extern void test_filetype_batch(void);
 extern void test_filetype_markdown(void);
 extern void test_filetype_json_text(void);
 extern void test_filetype_unknown(void);
 extern void test_filetype_image(void);
+extern void test_filetype_html(void);
 extern void test_filetype_has_extension(void);
 extern void test_json_validate_ok(void);
 extern void test_json_validate_bad(void);
@@ -422,6 +483,13 @@ extern void test_tcp_parse_target_ok(void);
 extern void test_tcp_parse_target_rejects(void);
 extern void test_tcp_unescape(void);
 extern void test_tcp_sanitize(void);
+extern void test_netsvc_remaining_roundtrip(void);
+extern void test_netsvc_connect_codec(void);
+extern void test_netsvc_publish_codec(void);
+extern void test_netsvc_subscribe_codec(void);
+extern void test_netsvc_topic_matches(void);
+extern void test_netsvc_backoff(void);
+extern void test_netsvc_outbox_codec(void);
 extern void test_userial_parse_id_ok(void);
 extern void test_userial_parse_id_rejects(void);
 extern void test_userial_parse_coding_defaults(void);
@@ -496,6 +564,7 @@ void app_main(void)
     RUN_TEST(test_shell_abort_request_and_clear);
     RUN_TEST(test_shell_command_busy_tracks);
     RUN_TEST(test_redirect_capture_nested);
+    RUN_TEST(test_shell_parser_echo_glued);
     UNITY_END();
 
     /* Shell history tests */
@@ -513,6 +582,8 @@ void app_main(void)
     RUN_TEST(test_shell_prompt_template_roundtrip);
     RUN_TEST(test_shell_prompt_metacharacters);
     RUN_TEST(test_shell_prompt_path_expansion);
+    RUN_TEST(test_shell_title_roundtrip);
+    RUN_TEST(test_shell_title_truncates);
     RUN_TEST(test_shell_key_wait_state);
     UNITY_END();
 
@@ -533,6 +604,9 @@ void app_main(void)
     RUN_TEST(test_chain_truncation_with_pipes);
     RUN_TEST(test_chain_empty_and_whitespace);
     RUN_TEST(test_find_unquoted_pipe);
+    RUN_TEST(test_redirect_target_kind);
+    RUN_TEST(test_redirect_parse_missing_target);
+    RUN_TEST(test_redirect_parse_handle_prefix);
     UNITY_END();
 
     /* Storage formatting and matching tests */
@@ -595,6 +669,8 @@ void app_main(void)
     RUN_TEST(test_batch_while_keywords);
     RUN_TEST(test_batch_fora_collect);
     RUN_TEST(test_batch_switch_select);
+    RUN_TEST(test_batch_shift_parse_start);
+    RUN_TEST(test_batch_forf_option_defaults);
     UNITY_END();
 
     /* Variable expansion tests */
@@ -666,7 +742,12 @@ void app_main(void)
     /* Editor document-model tests */
     UNITY_BEGIN();
     RUN_TEST(test_editor_osk_key_from_label);
+    RUN_TEST(test_editor_key_from_usb_spell);
     RUN_TEST(test_editor_spell_tokenizer);
+    RUN_TEST(test_editor_spell_user_validation);
+    RUN_TEST(test_editor_spell_ignore_session);
+    RUN_TEST(test_editor_spell_user_list_empty);
+    RUN_TEST(test_editor_cursor_word);
     RUN_TEST(test_editor_word_count);
     RUN_TEST(test_editor_new_doc);
     RUN_TEST(test_editor_insert_and_cursor);
@@ -691,6 +772,8 @@ void app_main(void)
     RUN_TEST(test_editor_undo_restores_clean);
     RUN_TEST(test_editor_newline_auto_indent);
     RUN_TEST(test_editor_lex_markdown);
+    RUN_TEST(test_editor_lex_html);
+    RUN_TEST(test_editor_html_comment_toggle);
     RUN_TEST(test_editor_newline_on_empty_doc);
     RUN_TEST(test_editor_selection_delete_empty_start);
     RUN_TEST(test_editor_word_nav_empty_line);
@@ -700,6 +783,8 @@ void app_main(void)
     RUN_TEST(test_editor_undo_ring_wrap_free);
     RUN_TEST(test_editor_selection_delete_multirow_tail);
     RUN_TEST(test_editor_format_line_number);
+    RUN_TEST(test_editor_csv_renders_as_plain_lines);
+    RUN_TEST(test_editor_csv_extension_is_plain);
     UNITY_END();
 
     /* On-screen keyboard input deduplication tests */
@@ -741,7 +826,8 @@ void app_main(void)
     RUN_TEST(test_calc_date_errors);
     UNITY_END();
 
-    /* Import interchange parsers (components/command/import_commands.c). */
+    /* Import interchange parsers (components/command/import_commands.c
+     * plus components/pim) plus the PIM render buffer tests. */
     UNITY_BEGIN();
     RUN_TEST(test_import_vcf_prop_split_plain);
     RUN_TEST(test_import_vcf_prop_split_params);
@@ -754,6 +840,20 @@ void app_main(void)
     RUN_TEST(test_import_ics_datetime_full);
     RUN_TEST(test_import_ics_datetime_forms);
     RUN_TEST(test_import_ics_datetime_rejects);
+    RUN_TEST(test_pim_doc_init_write);
+    RUN_TEST(test_pim_doc_growth);
+    RUN_TEST(test_pim_doc_overflow_cap);
+    RUN_TEST(test_pim_doc_ical_escape);
+    RUN_TEST(test_pim_doc_ical_prop);
+    RUN_TEST(test_pim_copy_trunc_basic);
+    RUN_TEST(test_pim_mint_uid_shape);
+    RUN_TEST(test_pim_merge_should_replace);
+    RUN_TEST(test_pim_vcf_build_payload_identity);
+    RUN_TEST(test_pim_bump_replaces_mtime);
+    RUN_TEST(test_pim_bump_width_change);
+    RUN_TEST(test_pim_bump_appends_mtime);
+    RUN_TEST(test_pim_bump_csv_untouched);
+    RUN_TEST(test_pim_bump_plain_and_limits);
     UNITY_END();
 
     /* `for /f` option parser / line splitter tests */
@@ -812,6 +912,9 @@ void app_main(void)
     RUN_TEST(test_alarm_advance_monthly_nth);
     RUN_TEST(test_alarm_advance_yearly);
     RUN_TEST(test_alarm_advance_event_dispatch);
+    RUN_TEST(test_alarm_event_render_parse_roundtrip);
+    RUN_TEST(test_alarm_event_render_omits_identity_when_unsynced);
+    RUN_TEST(test_alarm_event_parse_tolerates_missing_keys);
     UNITY_END();
 
     /* Modal option parsers (components/modal shared by all TUI verbs). */
@@ -830,15 +933,25 @@ void app_main(void)
     RUN_TEST(test_hardware_charge_state);
     RUN_TEST(test_hardware_bmp_header);
     RUN_TEST(test_hardware_rgb565_to_bgr24);
+    RUN_TEST(test_audio_output_parse);
+    RUN_TEST(test_audio_output_name);
+    RUN_TEST(test_audio_route_resolve);
+    RUN_TEST(test_audio_wav_params_ok);
     RUN_TEST(test_power_parse_default);
     RUN_TEST(test_power_parse_valid);
     RUN_TEST(test_power_parse_clamp_and_reject);
     RUN_TEST(test_power_wake_cause_strings);
+    RUN_TEST(test_power_deep_wake_gpio_eligibility);
     RUN_TEST(test_power_pack_present_below_present_is_absent);
     RUN_TEST(test_power_pack_present_in_range_is_immediate);
     RUN_TEST(test_power_pack_present_rail_band_needs_stable_window);
     RUN_TEST(test_power_pack_present_rail_band_unstable_is_absent);
     RUN_TEST(test_power_pack_present_chg_stat_corroboration);
+    RUN_TEST(test_battery_soc_at_full);
+    RUN_TEST(test_battery_soc_at_empty);
+    RUN_TEST(test_battery_soc_midrange);
+    RUN_TEST(test_battery_soc_monotonic);
+    RUN_TEST(test_battery_soc_known_points);
     UNITY_END();
 
     /* BMP header writer (components/command/serial_commands.c). */
@@ -924,6 +1037,21 @@ void app_main(void)
     RUN_TEST(test_markdown_html_measure);
     RUN_TEST(test_markdown_print_widths);
     RUN_TEST(test_markdown_render_print);
+    RUN_TEST(test_markdown_strip_ansi);
+    RUN_TEST(test_markdown_auto_toggle);
+    RUN_TEST(test_markdown_expand_form_feeds);
+    RUN_TEST(test_html_render_basic);
+    RUN_TEST(test_html_render_entities);
+    RUN_TEST(test_html_render_lists);
+    RUN_TEST(test_html_render_nested_list);
+    RUN_TEST(test_html_render_table);
+    RUN_TEST(test_html_render_links_images);
+    RUN_TEST(test_html_render_skips_head_script_style);
+    RUN_TEST(test_html_render_pre_preserves);
+    RUN_TEST(test_html_render_comment_and_doctype);
+    RUN_TEST(test_html_render_blockquote);
+    RUN_TEST(test_html_render_measure_and_truncate);
+    RUN_TEST(test_html_render_malformed_is_tolerated);
     UNITY_END();
 
     /* File-type registry (components/filetype). */
@@ -933,6 +1061,7 @@ void app_main(void)
     RUN_TEST(test_filetype_json_text);
     RUN_TEST(test_filetype_unknown);
     RUN_TEST(test_filetype_image);
+    RUN_TEST(test_filetype_html);
     RUN_TEST(test_filetype_has_extension);
     UNITY_END();
 
@@ -1015,6 +1144,13 @@ void app_main(void)
     RUN_TEST(test_tcp_parse_target_rejects);
     RUN_TEST(test_tcp_unescape);
     RUN_TEST(test_tcp_sanitize);
+    RUN_TEST(test_netsvc_remaining_roundtrip);
+    RUN_TEST(test_netsvc_connect_codec);
+    RUN_TEST(test_netsvc_publish_codec);
+    RUN_TEST(test_netsvc_subscribe_codec);
+    RUN_TEST(test_netsvc_topic_matches);
+    RUN_TEST(test_netsvc_backoff);
+    RUN_TEST(test_netsvc_outbox_codec);
     RUN_TEST(test_userial_parse_id_ok);
     RUN_TEST(test_userial_parse_id_rejects);
     RUN_TEST(test_userial_parse_coding_defaults);

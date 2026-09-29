@@ -406,7 +406,8 @@ bool gfind_name_allowed(const char *name, bool is_dir, bool include_hidden,
         filetype_t kind = filetype_of(name);
 
         return kind == FILETYPE_TEXT || kind == FILETYPE_MARKDOWN ||
-               kind == FILETYPE_JSON || kind == FILETYPE_BATCH;
+               kind == FILETYPE_JSON || kind == FILETYPE_BATCH ||
+               kind == FILETYPE_HTML;
     }
 }
 

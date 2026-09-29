@@ -31,6 +31,7 @@
 #include "led.h"
 #include "p4minishell_config.h"
 #include "board_config.h"
+#include "board_caps.h"
 #include "board_bsp.h"
 #include "bsp/esp-bsp.h"
 #include "esp_err.h"
@@ -42,6 +43,7 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "soc/adc_channel.h"
+#include "soc/soc_caps.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -63,12 +65,19 @@ static bool s_light_sleep_requested;
 #define SHELL_POWER_IDLE_DISPLAY_MAX_SECS  P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS
 #define SHELL_POWER_WAKE_GPIO              P4_CONFIG_POWER_WAKE_GPIO
 #define SHELL_POWER_WAKE_LEVEL             P4_CONFIG_POWER_WAKE_LEVEL
+#define SHELL_POWER_WAKE_TOUCH             P4_CONFIG_POWER_WAKE_TOUCH
+#define SHELL_POWER_WAKE_KEYBOARD          P4_CONFIG_POWER_WAKE_KEYBOARD
 
 static adc_oneshot_unit_handle_t s_battery_adc_unit;
 static adc_channel_t s_battery_adc_channel;
 static bool s_battery_adc_ready;
 static adc_cali_handle_t s_battery_cali_handle;
 static bool s_battery_cali_ready;
+
+/* EMA (exponential moving average) state for the ADC battery voltage.
+ * Guarded by the ADC init flag; updated by command_battery_read(). */
+static int s_battery_ema_mv;
+static bool s_battery_ema_valid;
 
 /* ========================================================================
  * BATTERY HARDWARE
@@ -80,14 +89,15 @@ static esp_err_t shell_battery_ensure_adc(void)
         return ESP_OK;
     }
 
-#if !BOARD_CFG_BATTERY_ADC_PRESENT
-    /* This board has no ADC battery-sense divider (for example the M5Stack
-     * Tab5 uses an INA226 fuel gauge instead). Report the documented N/C state
-     * instead of probing an unconnected pin. */
-    return ESP_ERR_NOT_FOUND;
-#else
-    esp_err_t error;
-    adc_unit_t unit_id;
+    if (!board_caps_has_battery_adc()) {
+        /* This board has no ADC battery-sense divider (for example the M5Stack
+         * Tab5 uses an INA226 fuel gauge instead). Report the documented N/C state
+         * instead of probing an unconnected pin. */
+        return ESP_ERR_NOT_FOUND;
+    }
+    {
+        esp_err_t error;
+        adc_unit_t unit_id;
     adc_oneshot_unit_init_cfg_t unit_cfg = {0};
     adc_oneshot_chan_cfg_t channel_cfg = {
         .atten = SHELL_BATTERY_ATTEN,
@@ -137,7 +147,66 @@ static esp_err_t shell_battery_ensure_adc(void)
 
     s_battery_adc_ready = true;
     return ESP_OK;
-#endif /* !BOARD_CFG_BATTERY_ADC_PRESENT */
+    }
+}
+
+/**
+ * Li-ion single-cell state-of-charge lookup from pack voltage.
+ * Uses a piecewise-linear interpolation over a typical discharge curve,
+ * which is more accurate than the simple linear (empty-to-full) mapping
+ * for the non-linear Li-ion voltage profile.
+ *
+ * Table entries: { voltage_mv, soc_percent } in descending voltage order.
+ * The last entry's voltage must equal BOARD_CFG_BATTERY_EMPTY_MV.
+ */
+typedef struct {
+    int voltage_mv;
+    int soc_percent;
+} battery_soc_point_t;
+
+static const battery_soc_point_t s_soc_table[] = {
+    { 4200, 100 },
+    { 4150,  90 },
+    { 4110,  80 },
+    { 4080,  70 },
+    { 4020,  60 },
+    { 3980,  50 },
+    { 3950,  40 },
+    { 3910,  30 },
+    { 3870,  20 },
+    { 3820,  10 },
+    { 3790,   5 },
+    { 3300,   0 },
+};
+
+int battery_soc_from_mv(int voltage_mv)
+{
+    const int table_len = (int)(sizeof(s_soc_table) / sizeof(s_soc_table[0]));
+    int i;
+
+    /* Above the highest table entry: clamp to 100%. */
+    if (voltage_mv >= s_soc_table[0].voltage_mv) {
+        return 100;
+    }
+    /* Below the lowest entry: clamp to 0%. */
+    if (voltage_mv <= s_soc_table[table_len - 1].voltage_mv) {
+        return 0;
+    }
+    /* Piecewise linear interpolation between the two bracketing entries. */
+    for (i = 0; i < table_len - 1; i++) {
+        int v_hi = s_soc_table[i].voltage_mv;
+        int v_lo = s_soc_table[i + 1].voltage_mv;
+        int soc_hi = s_soc_table[i].soc_percent;
+        int soc_lo = s_soc_table[i + 1].soc_percent;
+
+        if (voltage_mv >= v_lo) {
+            if (v_hi == v_lo) {
+                return soc_hi;
+            }
+            return soc_hi + (voltage_mv - v_hi) * (soc_lo - soc_hi) / (v_lo - v_hi);
+        }
+    }
+    return 0;
 }
 
 esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_out, int *gpio_mv_out)
@@ -148,10 +217,11 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
     int battery_mv;
     int percent;
 
-#if BOARD_CFG_BATTERY_INA226_PRESENT
-    /* Fuel-gauge boards (M5Stack Tab5): pack voltage/SoC come from the INA226.
-     * Read-only; the ADC divider path below is not wired on these boards. */
-    if (power_monitor_available() || power_monitor_init() == ESP_OK) {
+    /* Fuel-gauge boards (M5Stack Tab5): pack voltage/SoC come from the INA226
+     * (queried through board_caps; the ADC divider path below is not wired
+     * on these boards). */
+    if (board_caps_has_ina226() &&
+        (power_monitor_available() || power_monitor_init() == ESP_OK)) {
         int pack_mv = 0;
         int soc = 0;
         bool charging = false;
@@ -166,16 +236,35 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
             return ESP_OK;
         }
     }
-#endif
 
     error = shell_battery_ensure_adc();
     if (error != ESP_OK) {
         return error;
     }
 
-    error = adc_oneshot_read(s_battery_adc_unit, s_battery_adc_channel, &raw);
-    if (error != ESP_OK) {
-        return error;
+    /* Multi-sample averaging: read ADC_SAMPLES raw values and average them
+     * to reduce noise on the battery divider. Each oneshot read takes ~10 us,
+     * so even 16 samples adds only ~160 us — negligible vs. the 5 s telemetry
+     * period. */
+    {
+        int raw_sum = 0;
+        int valid_count = 0;
+        int n = P4_CONFIG_BATTERY_ADC_SAMPLES;
+
+        if (n < 1) {
+            n = 1;
+        }
+        for (int i = 0; i < n; i++) {
+            int sample = 0;
+            if (adc_oneshot_read(s_battery_adc_unit, s_battery_adc_channel, &sample) == ESP_OK) {
+                raw_sum += sample;
+                valid_count++;
+            }
+        }
+        if (valid_count == 0) {
+            return ESP_FAIL;
+        }
+        raw = raw_sum / valid_count;
     }
 
     if (s_battery_cali_ready) {
@@ -188,6 +277,20 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
     }
 
     battery_mv = (gpio_mv * BOARD_CFG_BATTERY_DIVIDER_NUMERATOR) / BOARD_CFG_BATTERY_DIVIDER_DENOMINATOR;
+
+    /* EMA (exponential moving average) filter: smooths the voltage over time
+     * to suppress transient noise. Alpha is Q0.16 fixed-point (0..65536). */
+    if (P4_CONFIG_BATTERY_ADC_EMA_ALPHA > 0 && P4_CONFIG_BATTERY_ADC_EMA_ALPHA < 65536) {
+        if (s_battery_ema_valid) {
+            int filtered = (P4_CONFIG_BATTERY_ADC_EMA_ALPHA * battery_mv +
+                            (65536 - P4_CONFIG_BATTERY_ADC_EMA_ALPHA) * s_battery_ema_mv) / 65536;
+            s_battery_ema_mv = filtered;
+        } else {
+            s_battery_ema_mv = battery_mv;
+            s_battery_ema_valid = true;
+        }
+        battery_mv = s_battery_ema_mv;
+    }
 
     /* Publish the raw reading first so callers can still print diagnostics. */
     if (battery_mv_out != NULL) {
@@ -216,8 +319,9 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
     } else if (battery_mv >= BOARD_CFG_BATTERY_FULL_MV) {
         percent = 100;
     } else {
-        percent = ((battery_mv - BOARD_CFG_BATTERY_EMPTY_MV) * 100) /
-                  (BOARD_CFG_BATTERY_FULL_MV - BOARD_CFG_BATTERY_EMPTY_MV);
+        /* Use the Li-ion discharge-curve lookup table for a more accurate
+         * SoC estimate than simple linear interpolation. */
+        percent = battery_soc_from_mv(battery_mv);
     }
 
     if (percent_out != NULL) {
@@ -229,21 +333,21 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
 
 bool command_battery_is_charging(void)
 {
-#if BOARD_CFG_BATTERY_INA226_PRESENT
-    bool charging = false;
+    if (board_caps_has_ina226()) {
+        bool charging = false;
 
-    if (power_monitor_available() || power_monitor_init() == ESP_OK) {
-        if (power_monitor_battery_read(NULL, NULL, &charging) == ESP_OK) {
-            return charging;
+        if (power_monitor_available() || power_monitor_init() == ESP_OK) {
+            if (power_monitor_battery_read(NULL, NULL, &charging) == ESP_OK) {
+                return charging;
+            }
         }
     }
-#endif
     return false;
 }
 
 static void shell_battery_print_usage(void)
 {
-    shell_print_usage("Usage: battery | battery diag | battery sleep <on|off|status>");
+    shell_print_usage("Usage: battery | battery status | battery diag | battery sleep <on|off|status>");
 }
 
 /* ========================================================================
@@ -344,10 +448,41 @@ void shell_command_battery(int argc, char **argv)
         return;
     }
 
+    /* `battery status`: a concise one-liner for scripts and quick checks. */
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "status")) {
+        if (board_caps_has_ina226() && power_monitor_available()) {
+            int mv = 0, soc = 0, ma = 0, mw = 0;
+            bool charging = false;
+
+            if (power_monitor_read_sample(&mv, &soc, &ma, &mw, &charging) == ESP_OK) {
+                power_monitor_charge_t charge = power_monitor_classify_charge(mv, ma);
+                shell_transcript_appendf_ansi(SH_NUM "%d%%" SH_RST " " SH_NUM "%d.%03dV" SH_RST " %s %dmW\n",
+                                              soc, mv / 1000, mv % 1000,
+                                              power_monitor_charge_name(charge), mw);
+                batch_set_errorlevel(0);
+                return;
+            }
+        }
+        error = command_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
+        if (error == ESP_ERR_NOT_FOUND) {
+            shell_transcript_appendf_ansi(SH_MUTE "N/C" SH_RST "\n");
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (error != ESP_OK) {
+            shell_transcript_appendf_ansi(SH_ERR "ERR" SH_RST "\n");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf_ansi(SH_NUM "%d%%" SH_RST " " SH_NUM "%d.%03dV" SH_RST "\n",
+                                      percent, battery_mv / 1000, battery_mv % 1000);
+        batch_set_errorlevel(0);
+        return;
+    }
+
     if (argc == 1) {
-#if BOARD_CFG_BATTERY_INA226_PRESENT
         /* Fuel-gauge boards report the pack directly (read-only INA226). */
-        if (power_monitor_available()) {
+        if (board_caps_has_ina226() && power_monitor_available()) {
             int mv = 0, soc = 0, ma = 0, mw = 0;
             bool charging = false;
 
@@ -384,7 +519,6 @@ void shell_command_battery(int argc, char **argv)
                 return;
             }
         }
-#endif
         error = command_battery_read(&battery_mv, &percent, &raw, &gpio_mv);
         if (error == ESP_ERR_NOT_FOUND) {
             /* No battery / sense connection: the documented N/C state. */
@@ -706,49 +840,172 @@ void shell_power_idle_tick(void)
     }
 }
 
-/** Configure a user-wired GPIO to wake light/deep sleep, if one is set. */
-static void shell_power_enable_gpio_wake(void)
+/* Pins armed for light-sleep GPIO wake this cycle (cleared after wake). */
+static int s_wake_pins[4];
+static int s_wake_pin_count;
+
+/**
+ * True when @p gpio can wake deep sleep: only RTC IOs can (the ESP32-P4 RTC
+ * domain covers GPIO0..GPIO15, expressed by SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK).
+ * Pure, unit-tested.
+ */
+bool shell_power_deep_wake_gpio_eligible(int gpio)
+{
+#if defined(SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK)
+    if (gpio < 0 || gpio > 63) {
+        return false;
+    }
+    return (SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK & (1ULL << gpio)) != 0;
+#else
+    (void)gpio;
+    return false;
+#endif
+}
+
+/**
+ * Arm one pin for light-sleep GPIO wake at @p level (0 = low, 1 = high).
+ * With @p configure false an already-configured input is left alone (the
+ * touch controller interrupt is owned by its panel driver; reconfiguring it
+ * would break touch after wake). Returns true when armed.
+ */
+static bool shell_power_arm_light_pin(int gpio, int level, bool configure)
+{
+    if (gpio < 0) {
+        return false;
+    }
+    if (configure) {
+        gpio_config_t wake_io;
+
+        memset(&wake_io, 0, sizeof(wake_io));
+        wake_io.pin_bit_mask = 1ULL << gpio;
+        wake_io.mode = GPIO_MODE_INPUT;
+        wake_io.pull_up_en = (level == 0) ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE;
+        wake_io.pull_down_en = (level == 1) ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE;
+        wake_io.intr_type = GPIO_INTR_DISABLE;
+        gpio_config(&wake_io);
+    }
+    if (gpio_wakeup_enable((gpio_num_t)gpio,
+                           level ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL) != ESP_OK) {
+        return false;
+    }
+    if (s_wake_pin_count < (int)(sizeof(s_wake_pins) / sizeof(s_wake_pins[0]))) {
+        s_wake_pins[s_wake_pin_count++] = gpio;
+    }
+    return true;
+}
+
+/**
+ * Arm every configured light-sleep wake source and report what is (and is
+ * not) available honestly: the user GPIO, the touch interrupt when the fitted
+ * panel wires it, and the Tab5 keyboard interrupt. Light sleep can wake from
+ * any IO, so none of these need to be RTC pins.
+ */
+static void shell_power_arm_light_wake(void)
+{
+    s_wake_pin_count = 0;
+
+    if (SHELL_POWER_WAKE_GPIO != GPIO_NUM_NC) {
+        int wake_gpio = (int)SHELL_POWER_WAKE_GPIO;
+
+        if (shell_power_arm_light_pin(wake_gpio, SHELL_POWER_WAKE_LEVEL, true)) {
+            shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " GPIO wake on " SH_NUM "GPIO%d" SH_RST
+                                          " (" SH_VAL "%s" SH_RST ")\n",
+                                          wake_gpio, SHELL_POWER_WAKE_LEVEL ? "high" : "low");
+        } else {
+            shell_print_warning("sleep: failed to enable GPIO wake on GPIO%d", wake_gpio);
+        }
+    }
+
+#if SHELL_POWER_WAKE_TOUCH
+    {
+        int touch_gpio = display_get_touch_int_gpio();
+
+        if (touch_gpio != (int)GPIO_NUM_NC) {
+            /* Active low, already an input owned by the panel driver. */
+            if (shell_power_arm_light_pin(touch_gpio, 0, false)) {
+                shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " touch wake armed (INT " SH_NUM "GPIO%d" SH_RST ")\n",
+                                              touch_gpio);
+            }
+        } else {
+            shell_transcript_appendf_ansi(SH_MUTE "sleep: touch wake unavailable (no touch interrupt on this panel revision)\n");
+        }
+    }
+#endif
+
+#if SHELL_POWER_WAKE_KEYBOARD
+    if (BOARD_CFG_TAB5KBD_INT_GPIO != GPIO_NUM_NC) {
+        int kbd_gpio = (int)BOARD_CFG_TAB5KBD_INT_GPIO;
+
+        if (shell_power_arm_light_pin(kbd_gpio, 0, true)) {
+            shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " keyboard wake armed (" SH_NUM "GPIO%d" SH_RST ")\n",
+                                          kbd_gpio);
+        }
+    }
+#endif
+
+    if (s_wake_pin_count > 0) {
+        (void)esp_sleep_enable_gpio_wakeup();
+    } else {
+        shell_transcript_appendf_ansi(SH_MUTE "sleep: no GPIO wake source; set P4_CONFIG_POWER_WAKE_GPIO or use `power idle`\n");
+    }
+}
+
+/**
+ * Arm the user GPIO for deep-sleep wake when it is an RTC IO; report honestly
+ * when it is not (the ESP32-P4 RTC domain is GPIO0..GPIO15).
+ */
+static void shell_power_arm_deep_wake(void)
 {
     int wake_gpio = (int)SHELL_POWER_WAKE_GPIO;
 
     if (wake_gpio < 0) {
         return;
     }
-
-    {
-        gpio_config_t wake_io;
-
-        memset(&wake_io, 0, sizeof(wake_io));
-        wake_io.pin_bit_mask = 1ULL << wake_gpio;
-        wake_io.mode = GPIO_MODE_INPUT;
-        wake_io.pull_up_en = (SHELL_POWER_WAKE_LEVEL == 0) ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE;
-        wake_io.pull_down_en = (SHELL_POWER_WAKE_LEVEL == 1) ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE;
-        wake_io.intr_type = GPIO_INTR_DISABLE;
-
-        gpio_config(&wake_io);
-        if (gpio_wakeup_enable((gpio_num_t)wake_gpio,
-                               SHELL_POWER_WAKE_LEVEL ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL) == ESP_OK) {
-            (void)esp_sleep_enable_gpio_wakeup();
-            shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " GPIO wake on " SH_NUM "GPIO%d" SH_RST
-                                     " (" SH_VAL "%s" SH_RST ")\n",
-                                     wake_gpio,
-                                     SHELL_POWER_WAKE_LEVEL ? "high" : "low");
-        } else {
-            shell_print_warning("sleep: failed to enable GPIO wake on GPIO%d", wake_gpio);
-        }
+    if (!shell_power_deep_wake_gpio_eligible(wake_gpio)) {
+        shell_transcript_appendf_ansi(SH_WARN "deepsleep: GPIO%d is not an RTC IO; cannot wake deep sleep - timer only" SH_RST "\n",
+                                      wake_gpio);
+        return;
+    }
+    if (esp_deep_sleep_enable_gpio_wakeup(
+            1ULL << wake_gpio,
+            SHELL_POWER_WAKE_LEVEL ? ESP_GPIO_WAKEUP_GPIO_HIGH : ESP_GPIO_WAKEUP_GPIO_LOW) == ESP_OK) {
+        shell_transcript_appendf_ansi(SH_LBL "deepsleep:" SH_RST " GPIO wake on " SH_NUM "GPIO%d" SH_RST
+                                      " (" SH_VAL "%s" SH_RST ")\n",
+                                      wake_gpio, SHELL_POWER_WAKE_LEVEL ? "high" : "low");
+    } else {
+        shell_print_warning("deepsleep: failed to enable GPIO wake on GPIO%d", wake_gpio);
     }
 }
 
-/** Report the touch-wake situation honestly before entering light sleep. */
-static void shell_power_report_wake_capability(void)
+/** Print the available light/deep-sleep wake sources for `power status`. */
+static void shell_power_report_wake_sources(void)
 {
-#if BOARD_CFG_LCD_TOUCH_INT_GPIO == GPIO_NUM_NC
-    shell_transcript_appendf_ansi(SH_MUTE "sleep: touch wake unavailable (GT911 INT is not wired on this board)\n");
-    shell_transcript_appendf_ansi(SH_MUTE "       set P4_CONFIG_POWER_WAKE_GPIO for a button/switch, or use `power idle`\n");
-#else
-    shell_transcript_appendf_ansi(SH_MUTE "sleep: touch wake available (GT911 INT on GPIO%d)\n",
-                             (int)BOARD_CFG_LCD_TOUCH_INT_GPIO);
+    shell_transcript_appendf_ansi(SH_LBL "power.wake_sources:" SH_RST " " SH_NUM "timer" SH_RST);
+
+    if (SHELL_POWER_WAKE_GPIO != GPIO_NUM_NC) {
+        shell_transcript_appendf_ansi(SH_NUM ", GPIO%d" SH_RST, (int)SHELL_POWER_WAKE_GPIO);
+    }
+#if SHELL_POWER_WAKE_TOUCH
+    {
+        int touch_gpio = display_get_touch_int_gpio();
+
+        if (touch_gpio != (int)GPIO_NUM_NC) {
+            shell_transcript_appendf_ansi(SH_NUM ", touch GPIO%d" SH_RST, touch_gpio);
+        }
+    }
 #endif
+#if SHELL_POWER_WAKE_KEYBOARD
+    if (BOARD_CFG_TAB5KBD_INT_GPIO != GPIO_NUM_NC) {
+        shell_transcript_appendf_ansi(SH_NUM ", keyboard GPIO%d" SH_RST, (int)BOARD_CFG_TAB5KBD_INT_GPIO);
+    }
+#endif
+
+    if (SHELL_POWER_WAKE_GPIO != GPIO_NUM_NC) {
+        shell_transcript_appendf_ansi(" " SH_MUTE "(deep sleep: %s)" SH_RST,
+                                      shell_power_deep_wake_gpio_eligible((int)SHELL_POWER_WAKE_GPIO)
+                                          ? "GPIO wake" : "timer only");
+    }
+    shell_transcript_appendf_ansi("\n");
 }
 
 void shell_command_power(int argc, char **argv)
@@ -837,6 +1094,7 @@ void shell_command_power(int argc, char **argv)
         shell_transcript_appendf_ansi(SH_LBL "power.wake_gpio:" SH_RST " " SH_NUM "GPIO%d" SH_RST "\n",
                                  (int)SHELL_POWER_WAKE_GPIO);
     }
+    shell_power_report_wake_sources();
 
     shell_transcript_appendf_ansi(SH_LBL "power.wifi:" SH_RST " " SH_NUM "%s" SH_RST "\n",
                              networking_wifi_is_connected() ? "connected" : "down");
@@ -848,14 +1106,19 @@ void shell_command_power(int argc, char **argv)
     shell_transcript_appendf_ansi(SH_MUTE "Tip: `power idle 60` turns the display off after 60 s of inactivity.\n");
 }
 
-/** Clear the configured GPIO wake so a still-active level cannot re-trigger. */
-static void shell_power_disable_gpio_wake(void)
+/**
+ * Clear every armed light-sleep wake pin so a still-active level cannot
+ * re-trigger. Pin configuration is never reset here: the touch interrupt is
+ * owned by its panel driver and must stay an input after wake.
+ */
+static void shell_power_disable_light_wake(void)
 {
-    int wake_gpio = (int)SHELL_POWER_WAKE_GPIO;
+    int i;
 
-    if (wake_gpio >= 0) {
-        (void)gpio_wakeup_disable((gpio_num_t)wake_gpio);
+    for (i = 0; i < s_wake_pin_count; i++) {
+        (void)gpio_wakeup_disable((gpio_num_t)s_wake_pins[i]);
     }
+    s_wake_pin_count = 0;
 }
 
 void shell_command_sleep(int argc, char **argv)
@@ -883,11 +1146,10 @@ void shell_command_sleep(int argc, char **argv)
                                  (unsigned)seconds);
     }
 
-    /* Wake capability: the GT911 INT line is not wired on this board, so
-     * report that honestly and offer the configured GPIO wake as the
-     * external alternative. */
-    shell_power_report_wake_capability();
-    shell_power_enable_gpio_wake();
+    /* Arm every configured light-sleep wake source (user GPIO, and the touch
+     * / keyboard interrupts when the fitted hardware wires them), reporting
+     * what is and is not available honestly. */
+    shell_power_arm_light_wake();
 
 #if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
     /* Remember the runtime/connection intent so the wake path can bring the
@@ -907,7 +1169,7 @@ void shell_command_sleep(int argc, char **argv)
     vTaskDelay(pdMS_TO_TICKS(SHELL_POWER_SLEEP_PRE_DELAY_MS));
 
     error = esp_light_sleep_start();
-    shell_power_disable_gpio_wake();
+    shell_power_disable_light_wake();
     if (error != ESP_OK) {
         shell_transcript_appendf_ansi(SH_ERR "sleep: light sleep failed" SH_RST " (" SH_WARN "%s" SH_RST ")\n",
                                  esp_err_to_name(error));
@@ -951,6 +1213,11 @@ void shell_command_deepsleep(int argc, char **argv)
         shell_transcript_appendf_ansi(SH_LBL "deepsleep:" SH_RST " timer wake in " SH_NUM "%u" SH_RST " s\n",
                                  (unsigned)seconds);
     }
+
+    /* Deep sleep can only be woken by an RTC IO or the timer (the touch and
+     * keyboard interrupts are outside the RTC domain), so arm the user GPIO
+     * when it is eligible and say so honestly when it is not. */
+    shell_power_arm_deep_wake();
 
     shell_power_shutdown_wifi();
     display_set_power_state(DISPLAY_POWER_OFF);

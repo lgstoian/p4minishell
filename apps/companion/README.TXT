@@ -15,7 +15,8 @@ WHAT IT TESTS
   - Menus: menu, choice, set /p, ask, dialogs
   - App mode: a full-screen Live System dashboard that restores on exit
   - File tools: dir, find, trash browser, clipboard, and a note pad
-  - Network tools: wifi status/connect, ping, DNS, and an httpget fetch
+  - Network tools: wifi status/connect, ping, DNS, an httpget fetch, and
+    the firmware MQTT event service (net status/sub/pub/msg/outbox)
   - Fun: a tone melody, RGB LED effects, a number-guessing game, calc
   - Settings: persisted across reboots with `appconfig companion`
   - Batch process model: call, call :routine, goto, for /f, pipes,
@@ -38,3 +39,16 @@ Connect Wi-Fi from the Network Tools menu (or pre-connect with
 `wifi connect <ssid> <pass>`). The joke fetch uses a configurable URL:
     appconfig companion set fun_url <url>
 (default: https://icanhazdadjoke.com/). Offline the tools just say so.
+
+MESSAGING NOTE
+--------------
+Network Tools -> Messaging (MQTT) shows the persistent event-service state
+(read-only, always available). To use it, point at a broker and connect:
+    net broker <host> [port] [user]
+    net password                 (hidden entry)
+    net connect
+    net sub p4/demo/#
+    net pub p4/demo/heartbeat hi
+    net msg
+Offline publishes queue in the SD outbox (sd:/NET/OUTBOX/) and flush on
+reconnect. Inbound topics can run a batch line via `net onmsg`.

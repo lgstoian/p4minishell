@@ -4,10 +4,11 @@
  */
 /**
  * @file test_import.c
- * @brief Unit tests for the pure `import` interchange parsers.
+ * @brief Unit tests for the pure interchange parsers.
  *
- * Covers import_vcf_prop_split(), import_json_unescape(), and
- * import_ics_datetime() from components/command/import_commands.c.
+ * Covers pim_vcf_prop_split() and pim_ics_datetime() from
+ * components/pim, plus import_json_unescape() from
+ * components/command/import_commands.c.
  * Store I/O (db_add/alarm_add round-trips) stays hardware-verified: it
  * needs the guarded SD sessions.
  *
@@ -16,6 +17,7 @@
 
 #include "unity.h"
 #include "command.h"
+#include "pim.h"
 #include <string.h>
 #include <time.h>
 
@@ -28,7 +30,7 @@ void test_import_vcf_prop_split_plain(void)
     char name[32];
     const char *value = NULL;
 
-    TEST_ASSERT_TRUE(import_vcf_prop_split("FN:John Doe", name, sizeof(name), &value));
+    TEST_ASSERT_TRUE(pim_vcf_prop_split("FN:John Doe", name, sizeof(name), &value));
     TEST_ASSERT_EQUAL_STRING("FN", name);
     TEST_ASSERT_EQUAL_STRING("John Doe", value);
 }
@@ -38,7 +40,7 @@ void test_import_vcf_prop_split_params(void)
     char name[32];
     const char *value = NULL;
 
-    TEST_ASSERT_TRUE(import_vcf_prop_split("TEL;TYPE=CELL,VOICE:+1 555 1234",
+    TEST_ASSERT_TRUE(pim_vcf_prop_split("TEL;TYPE=CELL,VOICE:+1 555 1234",
                                            name, sizeof(name), &value));
     TEST_ASSERT_EQUAL_STRING("TEL", name);
     TEST_ASSERT_EQUAL_STRING("+1 555 1234", value);
@@ -49,7 +51,7 @@ void test_import_vcf_prop_split_group(void)
     char name[32];
     const char *value = NULL;
 
-    TEST_ASSERT_TRUE(import_vcf_prop_split("item1.EMAIL;TYPE=HOME:a@b.c",
+    TEST_ASSERT_TRUE(pim_vcf_prop_split("item1.EMAIL;TYPE=HOME:a@b.c",
                                            name, sizeof(name), &value));
     TEST_ASSERT_EQUAL_STRING("EMAIL", name);
     TEST_ASSERT_EQUAL_STRING("a@b.c", value);
@@ -61,7 +63,7 @@ void test_import_vcf_prop_split_first_colon(void)
     const char *value = NULL;
 
     /* The value may hold colons (URLs, times); only the first splits. */
-    TEST_ASSERT_TRUE(import_vcf_prop_split("URL:https://x.test:8080/a",
+    TEST_ASSERT_TRUE(pim_vcf_prop_split("URL:https://x.test:8080/a",
                                            name, sizeof(name), &value));
     TEST_ASSERT_EQUAL_STRING("URL", name);
     TEST_ASSERT_EQUAL_STRING("https://x.test:8080/a", value);
@@ -72,15 +74,15 @@ void test_import_vcf_prop_split_rejects(void)
     char name[32];
     const char *value = NULL;
 
-    TEST_ASSERT_FALSE(import_vcf_prop_split("NOVALUE", name, sizeof(name), &value));
-    TEST_ASSERT_FALSE(import_vcf_prop_split(":x", name, sizeof(name), &value));
-    TEST_ASSERT_FALSE(import_vcf_prop_split("", name, sizeof(name), &value));
-    TEST_ASSERT_FALSE(import_vcf_prop_split(NULL, name, sizeof(name), &value));
-    TEST_ASSERT_FALSE(import_vcf_prop_split("FN:x", NULL, sizeof(name), &value));
-    TEST_ASSERT_FALSE(import_vcf_prop_split("FN:x", name, 0, &value));
-    TEST_ASSERT_FALSE(import_vcf_prop_split("FN:x", name, sizeof(name), NULL));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split("NOVALUE", name, sizeof(name), &value));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split(":x", name, sizeof(name), &value));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split("", name, sizeof(name), &value));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split(NULL, name, sizeof(name), &value));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split("FN:x", NULL, sizeof(name), &value));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split("FN:x", name, 0, &value));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split("FN:x", name, sizeof(name), NULL));
     /* A 2-byte buffer cannot hold "FN" plus the terminator. */
-    TEST_ASSERT_FALSE(import_vcf_prop_split("FN:x", name, 2, &value));
+    TEST_ASSERT_FALSE(pim_vcf_prop_split("FN:x", name, 2, &value));
 }
 
 /* ========================================================================
@@ -143,7 +145,7 @@ void test_import_ics_datetime_full(void)
 {
     struct tm tmv;
 
-    TEST_ASSERT_TRUE(import_ics_datetime("20260915T093000", &tmv));
+    TEST_ASSERT_TRUE(pim_ics_datetime("20260915T093000", &tmv));
     TEST_ASSERT_EQUAL_INT(126, tmv.tm_year);
     TEST_ASSERT_EQUAL_INT(8, tmv.tm_mon);
     TEST_ASSERT_EQUAL_INT(15, tmv.tm_mday);
@@ -157,13 +159,13 @@ void test_import_ics_datetime_forms(void)
     struct tm tmv;
 
     /* Date-only defaults to midnight. */
-    TEST_ASSERT_TRUE(import_ics_datetime("20240229", &tmv));
+    TEST_ASSERT_TRUE(pim_ics_datetime("20240229", &tmv));
     TEST_ASSERT_EQUAL_INT(124, tmv.tm_year);
     TEST_ASSERT_EQUAL_INT(1, tmv.tm_mon);
     TEST_ASSERT_EQUAL_INT(29, tmv.tm_mday);
     TEST_ASSERT_EQUAL_INT(0, tmv.tm_hour);
     /* A trailing Z (UTC) is accepted as device-local (documented). */
-    TEST_ASSERT_TRUE(import_ics_datetime("20260915T093000Z", &tmv));
+    TEST_ASSERT_TRUE(pim_ics_datetime("20260915T093000Z", &tmv));
     TEST_ASSERT_EQUAL_INT(9, tmv.tm_hour);
 }
 
@@ -171,16 +173,16 @@ void test_import_ics_datetime_rejects(void)
 {
     struct tm tmv;
 
-    TEST_ASSERT_FALSE(import_ics_datetime("20260229T000000", &tmv)); /* not a leap year */
-    TEST_ASSERT_FALSE(import_ics_datetime("20261301", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("20260015", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("20260900", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("20260932", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("20260915T240000", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("20260915T093061", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("2026-09-15", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("garbage", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("", &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime(NULL, &tmv));
-    TEST_ASSERT_FALSE(import_ics_datetime("20260915T093000", NULL));
+    TEST_ASSERT_FALSE(pim_ics_datetime("20260229T000000", &tmv)); /* not a leap year */
+    TEST_ASSERT_FALSE(pim_ics_datetime("20261301", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("20260015", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("20260900", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("20260932", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("20260915T240000", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("20260915T093061", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("2026-09-15", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("garbage", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("", &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime(NULL, &tmv));
+    TEST_ASSERT_FALSE(pim_ics_datetime("20260915T093000", NULL));
 }

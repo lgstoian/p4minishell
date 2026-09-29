@@ -34,6 +34,7 @@
 
 #include "p4minishell_config.h"
 #include "storage.h"
+#include "certs.h"
 #include "batch.h"
 #include "command.h"
 #include "font.h"
@@ -78,6 +79,7 @@ static bool s_boot_script_applied;
     ";   DISPLAY_POWER=ON|OFF|SLEEP  Set display power state\n" \
     ";   DISPLAY_TIMEOUT=<secs|OFF>  Auto display-off after N idle seconds\n" \
     ";   VOLUME=0-100              Set speaker volume\n" \
+    ";   AUDIO_OUTPUT=AUTO|SPEAKER|HEADPHONES  Playback route (auto-mutes on headphone insert)\n" \
     ";   RGB=<r>,<g>,<b>|#RRGGBB|<effect>[,speed]|OFF|AUTO,<ON|OFF>  Set the WS2812 status LED\n" \
     ";   OSK=ON|OFF                Show/hide the on-screen keyboard at boot\n" \
     ";   HEADER=ON|OFF             Show/hide the header status bar at boot\n" \
@@ -431,6 +433,19 @@ static bool boot_handle_volume(const char *value)
         return false;
     }
     snprintf(cmd, sizeof(cmd), "volume %s", value);
+    boot_exec(cmd);
+    return true;
+}
+
+static bool boot_handle_audio_output(const char *value)
+{
+    char cmd[BOOT_CMD_LEN];
+
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("AUDIO_OUTPUT");
+        return false;
+    }
+    snprintf(cmd, sizeof(cmd), "audio output %s", value);
     boot_exec(cmd);
     return true;
 }
@@ -821,6 +836,8 @@ static void boot_script_apply(void)
                     (void)boot_handle_display_power(value);
                 } else if (boot_starts_with_ci(keyword, "VOLUME")) {
                     (void)boot_handle_volume(value);
+                } else if (boot_starts_with_ci(keyword, "AUDIO_OUTPUT")) {
+                    (void)boot_handle_audio_output(value);
                 } else if (boot_starts_with_ci(keyword, "RGB")) {
                     (void)boot_handle_rgb(value);
                 } else if (boot_starts_with_ci(keyword, "WIFI_SSID")) {
@@ -1094,6 +1111,17 @@ void boot_on_sd_first_mount(void)
     /* Restore the shell recall history (auto-save profile) now that the SD is
      * mounted and readable. */
     command_history_autoload();
+
+    /* Load the TLS trust store from sd:/CERTS/ so httpget and c6ota can
+     * verify peer certificates against user-provided CAs. Best-effort;
+     * errors are logged but never block boot. */
+    {
+        esp_err_t tls_err = certs_load_sd_store();
+
+        if (tls_err == ESP_OK) {
+            shell_transcript_appendf_ansi(SH_LBL "TLS trust store loaded\n" SH_RST);
+        }
+    }
 
     if (generated) {
         shell_transcript_appendf_ansi(SH_OK "SD card ready (first run)" SH_RST " - created "

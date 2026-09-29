@@ -1,10 +1,12 @@
 # ESP-Hosted 3.x C6 coprocessor configuration for ESP32-P4-Function-EV-Board
 
 # 1. Role
+# The board personality (CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD or
+# CONFIG_ESP32P4_TAB5_C6_BOARD) is provided by the per-board profile layered on
+# top: boards/<C6_BOARD>/sdkconfig.defaults (see CMakeLists.txt).
 CONFIG_ESP_HOSTED=y
 CONFIG_ESP_HOSTED_CP=y
 CONFIG_ESP_HOSTED_CP_FOR_MCU=y
-CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
 
 # 2. CPU
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y

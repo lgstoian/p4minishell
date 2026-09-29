@@ -72,6 +72,7 @@
 #define LED_COLOR_BOOT_OK           P4_CONFIG_LED_COLOR_BOOT_OK
 #define LED_COLOR_WIFI_CONNECTING   P4_CONFIG_LED_COLOR_WIFI_CONNECTING
 #define LED_COLOR_WIFI_CONNECTED    P4_CONFIG_LED_COLOR_WIFI_CONNECTED
+#define LED_COLOR_WIFI_IDLE         P4_CONFIG_LED_COLOR_WIFI_IDLE
 #define LED_COLOR_WIFI_DISCONNECTED P4_CONFIG_LED_COLOR_WIFI_DISCONNECTED
 #define LED_COLOR_WIFI_ERROR        P4_CONFIG_LED_COLOR_WIFI_ERROR
 #define LED_COLOR_HTTPD             P4_CONFIG_LED_COLOR_HTTPD
@@ -143,9 +144,13 @@ static void led_event_frame(led_event_t event, led_frame_t *frame)
         led_unpack(LED_COLOR_WIFI_CONNECTED, &frame->red, &frame->green, &frame->blue);
         frame->effect = LED_EFFECT_SOLID;
         break;
+    case LED_EVENT_WIFI_IDLE:
+        led_unpack(LED_COLOR_WIFI_IDLE, &frame->red, &frame->green, &frame->blue);
+        frame->effect = LED_EFFECT_SOLID;
+        break;
     case LED_EVENT_WIFI_DISCONNECTED:
         led_unpack(LED_COLOR_WIFI_DISCONNECTED, &frame->red, &frame->green, &frame->blue);
-        frame->effect = LED_EFFECT_BLINK;
+        frame->effect = LED_EFFECT_PULSE;
         break;
     case LED_EVENT_WIFI_ERROR:
         led_unpack(LED_COLOR_WIFI_ERROR, &frame->red, &frame->green, &frame->blue);
@@ -172,6 +177,7 @@ static bool led_event_is_status(led_event_t event)
 {
     return event == LED_EVENT_WIFI_CONNECTING ||
            event == LED_EVENT_WIFI_CONNECTED ||
+           event == LED_EVENT_WIFI_IDLE ||
            event == LED_EVENT_WIFI_DISCONNECTED;
 }
 

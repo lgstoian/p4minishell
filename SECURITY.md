@@ -4,7 +4,7 @@ How P4MiniShell protects secrets, what the device lock actually enforces,
 and what is still missing. Read this before exposing a device to an
 untrusted network.
 
-- **Version:** v1.2.1 · **License:** MIT (see [`licence.md`](licence.md))
+- **Version:** v1.3.0 · **License:** MIT (see [`licence.md`](licence.md))
 - Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`,
   `pkg`), [`ABI.md`](ABI.md) (package signing), [`readme.md`](readme.md),
   [`roadmap.md`](roadmap.md) (platform/security row).
@@ -16,7 +16,8 @@ P4MiniShell is a single-user hobby firmware. It assumes:
 - the **owner holds the hardware** (USB serial = full control by design);
 - the **SD card is portable storage**, readable on any host — there is no
   full-disk encryption;
-- the **LAN may be hostile** once Wi-Fi is connected (`httpd`, `tcpterm`).
+- the **LAN may be hostile** once Wi-Fi is connected (`httpd`, `tcpterm`,
+  `net` plaintext MQTT).
 
 It defends against casual snooping (shoulder surfing, shared photos of the
 screen, a borrowed device) and against remote LAN access to the file server.
@@ -41,8 +42,11 @@ report. There is no bug-bounty program.
   `version`/`ver`, `about` run; everything else is refused with
   `Device locked - run 'security unlock' first`.
 - `security conceal` controls private-record visibility; `db /reveal`,
-  `gfind`, and `export` refuse secret payloads while locked
-  (`security_can_reveal_private()` in `security_commands.h`).
+  `gfind`, `export`, `edit db`, and `pim get db` refuse secret payloads
+  while locked
+  (`security_can_reveal_private()` in `security_commands.h`). Once unlocked,
+  `pim get` includes secrets like `export` does; `pim put` preserves each
+  record's existing secret flag and never clears it.
 - **Recovery is physical by design:** delete the `SECURITY_*` lines from
   `CONFIG.SYS` on any host, or run `config factory` (interactive `YES`
   confirmation). Anyone holding the SD card can do this — that is the
@@ -61,6 +65,11 @@ report. There is no bug-bounty program.
   **zeroed after every run**, and `/p:` passwords are masked like Wi-Fi
   credentials (`components/command/crypt_commands.c`).
 - Per-file encryption only: `crypt` protects chosen files, not the card.
+- The MQTT broker password (`net password`) is read hidden, never echoed,
+  and its buffer is **zeroed after every run**; like the Wi-Fi known list it
+  is stored on the SD card (`sd:/NET.INI`), readable on any host — the
+  documented recovery trade, not a bypass. The v1 transport is plaintext
+  MQTT: use it on a trusted LAN until the TLS client trust store lands.
 
 ## Package signing (`pkg` / `pkg key`)
 
@@ -103,11 +112,11 @@ design — the firmware never rewrites FAT structures.
 
 - HTTPS client (`httpget https://…`) uses mbedTLS. There is no SD
   certificate store yet (see `roadmap.md` TLS row); pinning custom CAs is
-  not supported in v1.2.1.
+  not supported in v1.3.0.
 - C6 OTA requires the explicit `YES` confirmation, refuses while background
   jobs run, and restores Wi-Fi afterwards.
 - SoftAP is compiled out (station-only); there is no open AP by default.
-- Secure boot / flash encryption: no provisioned profile ships in v1.2.1
+- Secure boot / flash encryption: no provisioned profile ships in v1.3.0
   (see `roadmap.md` platform row). Enable them via your own ESP-IDF signing
   flow if your deployment needs them.
 

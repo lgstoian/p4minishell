@@ -27,6 +27,7 @@
 
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -196,7 +197,7 @@ static void tab5kbd_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(P4_CONFIG_TAB5KBD_POLL_PERIOD_MS));
     }
     s_tab5kbd.task = NULL;
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 /* ---- Init ---------------------------------------------------------------- */
@@ -259,8 +260,14 @@ esp_err_t tab5kbd_init(void)
 
     s_tab5kbd.events = 0;
     s_tab5kbd.ready = true;
-    if (xTaskCreate(tab5kbd_task, "tab5kbd", P4_CONFIG_TAB5KBD_TASK_STACK, NULL,
-                    tskIDLE_PRIORITY + 1, &s_tab5kbd.task) != pdPASS) {
+    /* The poll task only reads the I2C bus and forwards HID reports into the
+     * shell input path; it never runs with the flash cache disabled, so keep
+     * its stack in PSRAM and leave the scarce internal RAM for the
+     * internal-only bring-up tasks (Wi-Fi/ESP-Hosted needs a contiguous block
+     * at boot). */
+    if (xTaskCreateWithCaps(tab5kbd_task, "tab5kbd", P4_CONFIG_TAB5KBD_TASK_STACK, NULL,
+                            tskIDLE_PRIORITY + 1, &s_tab5kbd.task,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAB5KBD_TAG, "failed to create poll task");
         s_tab5kbd.ready = false;
         i2c_master_bus_rm_device(s_tab5kbd.dev);

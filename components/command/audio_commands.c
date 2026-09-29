@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "shell.h"
 #include "batch.h"
@@ -158,19 +159,104 @@ void shell_command_wavplay(int argc, char **argv)
     batch_set_errorlevel(0);
 }
 
+/** `audio output [auto|speaker|headphones] [/b] [/v:NAME]`. Query form prints
+ *  the mode and effective route; a mode word applies it first. Follows the
+ *  csv/timer option pattern: /b anywhere gives one plain route line for
+ *  `for /f`, /v:NAME captures the route into the environment. */
+static void shell_audio_output_cmd(int argc, char **argv)
+{
+    bool bare = false;
+    char var[64];
+    bool has_var = false;
+    const char *mode_arg = NULL;
+    int i;
+
+    var[0] = '\0';
+    for (i = 2; i < argc; i++) {
+        const char *arg = argv[i];
+
+        if (arg == NULL || arg[0] == '\0') {
+            continue;
+        }
+        if (arg[0] == '/') {
+            if (strcasecmp(arg, "/b") == 0) {
+                bare = true;
+            } else if (strncasecmp(arg, "/v:", 3) == 0 && strlen(arg) > 3 &&
+                       strlen(arg) < sizeof(var)) {
+                snprintf(var, sizeof(var), "%s", arg + 3);
+                has_var = true;
+            } else {
+                shell_print_usage("Usage: audio output [auto|speaker|headphones] [/b] [/v:NAME]");
+                batch_set_errorlevel(2);
+                return;
+            }
+        } else if (mode_arg == NULL) {
+            mode_arg = arg;
+        } else {
+            shell_print_usage("Usage: audio output [auto|speaker|headphones] [/b] [/v:NAME]");
+            batch_set_errorlevel(2);
+            return;
+        }
+    }
+
+    if (mode_arg != NULL) {
+        audio_output_mode_t mode;
+
+        if (!audio_output_parse(mode_arg, &mode)) {
+            shell_print_error("audio output: expected auto|speaker|headphones");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (audio_set_output_mode(mode) != ESP_OK) {
+            shell_print_error("audio output: cannot apply mode");
+            batch_set_errorlevel(1);
+            return;
+        }
+    }
+
+    {
+        const char *route_name = audio_output_name(audio_effective_route());
+
+        if (has_var && shell_env_set(var, route_name) != ESP_OK) {
+            shell_print_error("audio output: cannot set variable %s", var);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (bare) {
+            shell_transcript_appendf("%s\n", route_name);
+        } else {
+            shell_transcript_appendf_ansi(SH_LBL "audio.output:" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                                          audio_output_name(audio_get_output_mode()));
+            shell_transcript_appendf_ansi(SH_LBL "audio.route:" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                                          route_name);
+        }
+        batch_set_errorlevel(0);
+    }
+}
+
 void shell_command_audio(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_usage("Usage: audio status | audio stop");
+        shell_print_usage("Usage: audio status | audio stop | audio output [auto|speaker|headphones] [/b] [/v:NAME]");
         batch_set_errorlevel(2);
         return;
     }
     if (shell_text_equals_ignore_case(argv[1], "status")) {
+        bool inserted = false;
+        bool supported = false;
+
         if (audio_busy()) {
             shell_transcript_appendf_ansi(SH_LBL "audio:" SH_RST " " SH_WARN "playing" SH_RST "\n");
         } else {
             shell_transcript_appendf_ansi(SH_LBL "audio:" SH_RST " " SH_MUTE "idle" SH_RST "\n");
         }
+        audio_headphone_state(&inserted, &supported);
+        shell_transcript_appendf_ansi(SH_LBL "audio.output:" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                                      audio_output_name(audio_get_output_mode()));
+        shell_transcript_appendf_ansi(SH_LBL "audio.route:" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                                      audio_output_name(audio_effective_route()));
+        shell_transcript_appendf_ansi(SH_LBL "audio.jack:" SH_RST " " SH_VAL "%s" SH_RST "\n",
+                                      supported ? (inserted ? "in" : "out") : "n/a");
         batch_set_errorlevel(0);
         return;
     }
@@ -180,6 +266,10 @@ void shell_command_audio(int argc, char **argv)
         batch_set_errorlevel(0);
         return;
     }
-    shell_print_usage("Usage: audio status | audio stop");
+    if (shell_text_equals_ignore_case(argv[1], "output")) {
+        shell_audio_output_cmd(argc, argv);
+        return;
+    }
+    shell_print_usage("Usage: audio status | audio stop | audio output [auto|speaker|headphones] [/b] [/v:NAME]");
     batch_set_errorlevel(2);
 }

@@ -14,6 +14,7 @@ rem  Markers: [M-UITEST] / [M-UITEST-DONE].
 rem =====================================================================
 setlocal
 echo [M-UITEST]
+title "UI Test"
 ui state
 ui targets /v:UICOUNT
 echo touch targets: %UICOUNT%

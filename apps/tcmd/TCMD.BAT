@@ -1,20 +1,22 @@
 @echo off
 rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
-@echo off
 rem =====================================================================
 rem  TCMD.BAT - dual-pane file commander (batch adaptation of the DOS
 rem  Total Commander idea). Two live panes rendered with `draw list` over
 rem  `dir /o:gn /b` captures, a bright cursor row per pane, an active-pane
 rem  accent, path titles, a status line and an F-key-style hint bar. All
 rem  file ops stay on the stock verbs via the F2-style menu; `browse` is
-rem  still reachable for full-screen picking.
+rem  still reachable for full-screen picking. The key-poll and the F2
+rem  menu dispatch through `on` (choice/list 0-based index -> 1-based on
+rem  target), and pane-conditional ops use single-line if groups.
 rem  Keys (serial: letter then Enter): j/k move, t switch pane, o open,
 rem  x menu, s swap panes, 1/2 jump pane to a root, q quit.
-rem  Markers: [M-TCMD] / [M-TCMD-OP] / [M-TCMD-DONE].
+rem  Markers: [M-TCMD] / [M-TCMD-R] / [M-TCMD-OP] / [M-TCMD-DONE].
 rem  Foreground-only: draw/browse refuse in background jobs (see :nogfx).
 setlocal
 echo [M-TCMD]
+title "Commander"
 set LD=/
 set RD=/APPS
 set LCUR=1
@@ -33,7 +35,7 @@ rem Relist a pane only when its directory changed since the last frame:
 rem `dir` is the expensive SD op, and j/k navigation does not change dirs.
 rem Create the scratch dir only when missing: a redundant `md` on an
 rem existing directory is an error and would spam the pane each refresh.
-if not exist sd:/tmp md sd:/tmp
+if not exist sd:/tmp md sd:/tmp > NUL
 if "%LD%"=="%LDONE%" goto ldone
 dir /o:gn /b sd:%LD% > sd:/tmp/_LT.txt
 rem Line counts via draw list's /count (a for-loop counter would flood:
@@ -75,53 +77,29 @@ draw text 1 23 "j/k move  t pane  o open  x menu  s swap  1/2 root  p snap  q qu
 draw refresh
 echo [M-TCMD-R]
 choice /C:jktosx12qzp /N /T:z,30 key?
-if errorlevel 11 goto snap
-if errorlevel 10 goto refresh
-if errorlevel 9 goto done
-if errorlevel 8 goto drive2
-if errorlevel 7 goto drive1
-if errorlevel 6 goto menu
-if errorlevel 5 goto swap
-if errorlevel 4 goto openf
-if errorlevel 3 goto toggle
-if errorlevel 2 goto up
-if errorlevel 1 goto down
+on %errorlevel% goto :down,:up,:toggle,:openf,:swap,:menu,:drive1,:drive2,:done,:refresh,:snap
 goto refresh
 
 :down
-if %PA%==L set /a LCUR+=1
-if %PA%==R set /a RCUR+=1
+if %PA%==R (set /a RCUR+=1) else (set /a LCUR+=1)
 set ST=down
 goto refresh
 
 :up
-if %PA%==L set /a LCUR-=1
-if %PA%==R set /a RCUR-=1
+if %PA%==R (set /a RCUR-=1) else (set /a LCUR-=1)
 set ST=up
 goto refresh
 
 :toggle
-if %PA%==L goto toR
-set PA=L
-goto refresh
-:toR
-set PA=R
+if %PA%==L (set PA=R) else (set PA=L)
 goto refresh
 
 :drive1
-if %PA%==R goto d1R
-set LD=/
-goto refresh
-:d1R
-set RD=/
+if %PA%==R (set RD=/) else (set LD=/)
 goto refresh
 
 :drive2
-if %PA%==R goto d2R
-set LD=/APPS
-goto refresh
-:d2R
-set RD=/APPS
+if %PA%==R (set RD=/APPS) else (set LD=/APPS)
 goto refresh
 
 :openf
@@ -130,7 +108,9 @@ rem either enter it (directory) or open it (file).
 if %PA%==R goto openR
 set /a SKP=%LCUR% - 1
 set FN=
-for /f "skip=%SKP%" %%a in (_LT.txt) do set FN=%%a & goto openL
+rem `eol=` disables the cmd.exe `;`-comment filter: a directory entry may
+rem legitimately begin with `;`, so the pane listing must not drop it.
+for /f "eol= skip=%SKP%" %%a in (sd:/tmp/_LT.txt) do set FN=%%a & goto openL
 :openL
 if "%FN%"=="" goto refresh
 cd sd:%LD%/%FN%
@@ -146,7 +126,7 @@ goto refresh
 :openR
 set /a SKP=%RCUR% - 1
 set FN=
-for /f "skip=%SKP%" %%a in (_RT.txt) do set FN=%%a & goto openR2
+for /f "eol= skip=%SKP%" %%a in (sd:/tmp/_RT.txt) do set FN=%%a & goto openR2
 :openR2
 if "%FN%"=="" goto refresh
 cd sd:%RD%/%FN%
@@ -181,17 +161,8 @@ goto refresh
 
 :menu
 list "Commander" "Copy to other" "Move to other" "Delete file" "Mkdir here" "Rename file" "View file" "Edit file" "Change path" "Refresh" "Quit"
-if errorlevel 255 goto refresh
-if errorlevel 9 goto done
-if errorlevel 8 goto forcerelist
-if errorlevel 7 goto chdir
-if errorlevel 6 goto editf
-if errorlevel 5 goto viewf
-if errorlevel 4 goto renf
-if errorlevel 3 goto mkdirf
-if errorlevel 2 goto delf
-if errorlevel 1 goto movef
-goto copyf
+on %errorlevel%+1 goto :copyf,:movef,:delf,:mkdirf,:renf,:viewf,:editf,:chdir,:forcerelist,:done
+goto refresh
 
 :copyf
 set ST=copy to %RD%
@@ -219,7 +190,7 @@ goto refresh
 browse /v:F sd:%LD%
 if errorlevel 1 goto refresh
 ask /v:YN "Delete %F%? (yes/no)" no
-if "%YN%"=="yes" del %F%
+if "%YN%"=="yes" del %F% > NUL
 if "%YN%"=="yes" set ST=deleted
 set LDONE=
 set RDONE=
@@ -229,14 +200,7 @@ goto refresh
 :mkdirf
 ask /v:N "New dir name"
 if "%N%"=="" goto refresh
-if %PA%==R goto mkR
-md sd:%LD%/%N%
-set ST=mkdir %LD%
-goto mkd
-:mkR
-md sd:%RD%/%N%
-set ST=mkdir %RD%
-:mkd
+if %PA%==R (md sd:%RD%/%N% > NUL & set ST=mkdir %RD%) else (md sd:%LD%/%N% > NUL & set ST=mkdir %LD%)
 set LDONE=
 set RDONE=
 echo [M-TCMD-OP] mkdir %N%

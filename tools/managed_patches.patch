@@ -454,7 +454,7 @@ diff --git a/managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_f
  
      /* Setup I2S channels */
      const i2s_std_config_t std_cfg_default = BSP_I2S_DUPLEX_MONO_CFG(22050);
-@@ -208,17 +327,33 @@
+@@ -208,17 +327,23 @@
      }
  
      if (i2s_tx_chan != NULL) {
@@ -465,11 +465,6 @@ diff --git a/managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_f
 +            ESP_LOGE("bsp_audio", "i2s tx init failed: %s", esp_err_to_name(err));
 +            return err;
 +        }
-+        err = i2s_channel_enable(i2s_tx_chan);
-+        if (err != ESP_OK) {
-+            ESP_LOGE("bsp_audio", "i2s tx enable failed: %s", esp_err_to_name(err));
-+            return err;
-+        }
      }
  
      if (i2s_rx_chan != NULL) {
@@ -478,11 +473,6 @@ diff --git a/managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_f
 +        esp_err_t err = i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg);
 +        if (err != ESP_OK) {
 +            ESP_LOGE("bsp_audio", "i2s rx init failed: %s", esp_err_to_name(err));
-+            return err;
-+        }
-+        err = i2s_channel_enable(i2s_rx_chan);
-+        if (err != ESP_OK) {
-+            ESP_LOGE("bsp_audio", "i2s rx enable failed: %s", esp_err_to_name(err));
 +            return err;
 +        }
      }
@@ -1000,3 +990,33 @@ index f2e84fb..8c44d36 100644
  		}
  		if (got != BUFFER_AVAILABLE) {
  			sdio_aggr_credit_timeouts++;
+diff --git a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
+--- a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
++++ b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
+@@ -643,15 +643,19 @@ static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_
+     if (_i2s_valid_fmt(fs) == false) {
+         return ESP_CODEC_DEV_NOT_SUPPORT;
+     }
+ #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+     int ret;
+     _i2s_lock(i2s_data, __func__);
+-    // disable internally
+-    if (dev_type & ESP_CODEC_DEV_TYPE_OUT) {
+-        _i2s_drv_enable(i2s_data, true, false);
+-    }
+-    if (dev_type & ESP_CODEC_DEV_TYPE_IN) {
+-        _i2s_drv_enable(i2s_data, false, false);
+-    }
++    // Disable internally before reconfiguring the clock. The IDF I2S driver
++    // rejects a clock/slot change while a channel is running and logs an error
++    // when asked to disable an already-idle channel, so only touch a channel
++    // this interface believes it has enabled (the board BSP no longer
++    // pre-enables them; enable/disable is owned by esp_codec_dev).
++    if ((dev_type & ESP_CODEC_DEV_TYPE_OUT) && i2s_data->out_enable) {
++        _i2s_drv_enable(i2s_data, true, false);
++    }
++    if ((dev_type & ESP_CODEC_DEV_TYPE_IN) && i2s_data->in_enable) {
++        _i2s_drv_enable(i2s_data, false, false);
++    }
+     if ((dev_type & ESP_CODEC_DEV_TYPE_IN) != 0 &&
+         (dev_type & ESP_CODEC_DEV_TYPE_OUT) != 0) {

@@ -5,7 +5,7 @@
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v1.2.1):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.3.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
@@ -142,8 +142,14 @@ to that line. Invalid numbers clamp to the file's first/last line.
 - **Quit** discards the session. If you have unsaved changes the editor asks
   `Quit without saving? (Y/N)` first — press `Y` to discard or `N` to keep
   editing. This guards against losing work by accident.
-- A failed save removes the partial destination file and reports
-  `save failed`; your edits stay in memory so you can try again.
+- A failed save reports `save failed` and your edits stay in memory so you
+  can try again. Saves are atomic (temp file + rename): the original is left
+  untouched, so there is never a partial destination to remove.
+- **Autosave** spills a dirty buffer to `sd:/tmp/edit/` every
+  `P4_CONFIG_EDITOR_AUTOSAVE_SECS` seconds (default 30, `0` disables). After a
+  crash or a discarded quit, `recover` lists the crash files,
+  `recover restore <path>` writes one back, and `recover discard <path>` /
+  `recover clear` drops them; a successful save deletes its crash file.
 
 ## Undo / Redo
 
@@ -214,6 +220,11 @@ verb controls the editor; any other line is typed as text followed by Enter:
 | `\p` or `\preview` | Toggle preview |
 | `\a` or `\selectall` | Select all |
 | `\focus` | Toggle focus / typewriter mode (writerdeck) |
+| `\spell` | Toggle spellcheck underlines (writerdeck) |
+| `\spell-add [word]` | Learn a word into the user dictionary (bare: word under cursor) |
+| `\spell-forget <word>` | Remove a learned word (base words stay) |
+| `\spell-ignore [word]` | Skip a word for this session only |
+| `\spell-list` | Show the user dictionary count |
 | `\spell` | Toggle spellcheck underlines (writerdeck) |
 
 ## Syntax highlighting

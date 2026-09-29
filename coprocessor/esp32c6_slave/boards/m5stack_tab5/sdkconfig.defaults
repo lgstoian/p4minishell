@@ -1,0 +1,7 @@
+# ESP32-C6 coprocessor profile: M5Stack Tab5.
+#
+# Selects the ESP-Hosted board personality for the C6 wired to the Tab5. The
+# C6 SDIO pins are fixed in silicon; this board choice carries the Tab5 board
+# defaults. Layer this after the common sdkconfig.defaults:
+#   idf.py -DC6_BOARD=m5stack_tab5 build
+CONFIG_ESP32P4_TAB5_C6_BOARD=y

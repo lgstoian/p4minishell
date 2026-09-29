@@ -53,10 +53,11 @@ def _run(dev, c, label, cmd, timeout=30.0, settle=0.5):
 
 
 def _stat_line(text, prefix):
+    last = ""
     for line in text.splitlines():
         if prefix.lower() in line.lower():
-            return line.strip()
-    return ""
+            last = line.strip()
+    return last
 
 
 def _deploy(dev, c, files):

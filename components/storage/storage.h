@@ -676,12 +676,30 @@ esp_err_t storage_mkdir_p(const char *vfs_dir);
 
 esp_err_t storage_write_text_file(const char *path, const char *text);
 
+/** Atomically replace @p dest with the file at @p tmp (FATFS-safe rename:
+ *  removes @p dest first because f_rename refuses to overwrite). Removes
+ *  @p tmp on failure. Single home for the temp+rename pattern shared by the
+ *  text writer and the editor save/autosave paths. */
+esp_err_t storage_replace_file(const char *tmp, const char *dest);
+
 /** Create a unique temporary file under the SD temp directory and return its
  *  resolved path in @p buf (the file is created so the path is reserved). */
 esp_err_t storage_temp_path(char *buf, size_t size, const char *ext);
 
-/** Delete every file under the SD temp directory. */
+/** Reserve `<tmpdir>/<stem>.<ext>` (creating it empty) and return the path
+ *  in @p buf. Same directory, same boot cleanup as storage_temp_path, but
+ *  with a caller-chosen stem for deterministic per-owner names (pipeline
+ *  spool files). A stale file at that path is replaced. */
+esp_err_t storage_temp_path_stem(char *buf, size_t size, const char *stem, const char *ext);
+
+/** Delete every file under the SD temp directory, except the editor
+ *  crash-file subdirectory (see storage_recovery_dir). */
 esp_err_t storage_temp_cleanup(void);
+
+/** Absolute VFS path of the editor crash-file directory
+ *  (`<tmp>/P4_CONFIG_EDITOR_RECOVERY_DIR`), created on demand. Crash files
+ *  there survive storage_temp_cleanup() and are listed by `recover`. */
+esp_err_t storage_recovery_dir(char *buf, size_t size);
 
 /* ========================================================================
  * LIFECYCLE

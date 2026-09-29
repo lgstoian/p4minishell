@@ -7,6 +7,7 @@ rem  and a calc playground. Enhanced TUI with draw and fullscreen.
 rem =====================================================================
 
 :main
+title "Fun & Demos"
 echo [M-FUN]
 draw clear screen
 draw box 1 1 80 3 single
@@ -14,16 +15,8 @@ draw text 35 2 "FUN / DEMOS" 14
 draw box 1 4 80 10 single "Demos"
 draw text 5 6 "Melody, RGB, guessing, calc, snake, elite trader"
 list "Fun / Demos" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Snake" "Elite Trader" "Back"
-if errorlevel 255 goto :back
-if errorlevel 8 goto :back
-if errorlevel 7 goto :elite
-if errorlevel 6 goto :snake
-if errorlevel 5 goto :tui_demo
-if errorlevel 4 goto :browse_demo
-if errorlevel 3 goto :calc
-if errorlevel 2 goto :guess
-if errorlevel 1 goto :rgb
-goto :melody
+on %errorlevel%+1 goto :melody,:rgb,:guess,:calc,:browse_demo,:tui_demo,:snake,:elite,:back
+goto :back
 
 :tui_demo
 tui fullscreen on
@@ -149,7 +142,7 @@ if "%expr%"=="" goto main
 calc %expr% > _calc.txt
 draw box 5 5 70 10 single "Result"
 view _calc.txt
-del /p _calc.txt
+del /p _calc.txt > NUL
 goto main
 
 :browse_demo

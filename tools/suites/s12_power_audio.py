@@ -11,8 +11,10 @@ text is verified. The status LED camera (``tools/led_watch.py``) is not invoked
 """
 from __future__ import annotations
 
+import math
 import os
 import re
+import struct
 
 from p4test.asserts import Checklist
 from p4test.session import PanicError
@@ -66,6 +68,51 @@ def run(dev, ctx):
     m = re.search(r"volume:\s*(\d+)%", out)
     original_volume = int(m.group(1)) if m else None
 
+    # Output routing: query the mode, force the speaker, round-trip /b + /v:,
+    # then restore. The effective route is board-dependent (Tab5 follows the
+    # headphone jack; the reference board is always the speaker).
+    out = _run(dev, c, "output query", "audio output", timeout=15)
+    c.expect("output prints mode", "audio.output:", out)
+    c.expect("output prints route", "audio.route:", out)
+    mo = re.search(r"audio\.output:\s*(\w+)", out)
+    original_mode = mo.group(1) if mo else "auto"
+
+    out = _run(dev, c, "output bare", "audio output /b", timeout=15)
+    c.check("output /b is a bare route line",
+            re.search(r"(?:^|\s)(speaker|headphones)\r?$", out, re.M) is not None,
+            out[-120:])
+    out = _run(dev, c, "output var", "audio output /v:P4ROUTE", timeout=15)
+    out = _run(dev, c, "output var readback", "echo ROUTE=%P4ROUTE%", timeout=15)
+    c.expect("output /v captures route", "ROUTE=", out)
+    dev.run("set P4ROUTE=", timeout=15)
+
+    out = _run(dev, c, "output set", "audio output speaker", timeout=15)
+    c.expect("output set confirms", "audio.output:", out)
+    out = _run(dev, c, "output set route", "audio output /b", timeout=15)
+    c.check("forced speaker routes to speaker",
+            re.search(r"(?:^|\s)speaker\r?$", out, re.M) is not None, out[-120:])
+    out = _run(dev, c, "output restore", "audio output %s" % original_mode,
+               timeout=15)
+    c.expect("output restore confirms", "audio.output:", out)
+
+    # Jack state is reported but not asserted: no plug is inserted during the
+    # suite, so both "out" (Tab5, jack present in hardware) and "n/a"
+    # (reference board, no jack) are correct.
+    out = _run(dev, c, "output jack", "audio status", timeout=15)
+    c.expect("status reports jack", "audio.jack:", out)
+    m = re.search(r"audio\.jack:\s*(\S+)", out)
+    c.note("jack state: %s" % (m.group(1) if m else "?"))
+
+    # CONFIG.SYS persistence round-trips the mode through the key table.
+    out = _run(dev, c, "config output set", "config AUDIO_OUTPUT headphones",
+               timeout=15)
+    c.expect("config saves output", "saved to", out)
+    out = _run(dev, c, "config output sticks", "audio output", timeout=15)
+    c.expect("config persisted headphones", "headphones", out)
+    out = _run(dev, c, "config output restore",
+               "config AUDIO_OUTPUT %s" % original_mode.upper(), timeout=15)
+    c.expect("config restore saves", "saved to", out)
+
     out = _run(dev, c, "volume set", "volume 50", timeout=15)
     c.expect("volume set confirms", "volume set to", out)
 
@@ -86,6 +133,27 @@ def run(dev, ctx):
         c.expect("wavplay starts", "wavplay:", out)
     else:
         c.note("wavplay skipped - no .WAV on the SD card")
+
+    # Push a generated 22050 Hz mono 16-bit PCM sine so wavplay always runs:
+    # no WAV fixture is deployed, so the suite brings its own and deletes it.
+    wav_name = "P4S12T.WAV"
+    wav_rate = 22050
+    wav_n = wav_rate // 4
+    wav_pcm = b"".join(
+        struct.pack("<h", int(12000 * math.sin(2.0 * math.pi * 440.0 * i / wav_rate)))
+        for i in range(wav_n))
+    wav_bytes = (struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(wav_pcm),
+                             b"WAVE", b"fmt ", 16, 1, 1, wav_rate,
+                             wav_rate * 2, 2, 16, b"data", len(wav_pcm))
+                 + wav_pcm)
+    try:
+        dev.push_file(wav_name, wav_bytes)
+        out = _run(dev, c, "wavplay fixture", "wavplay %s" % wav_name, timeout=30)
+        c.expect("wavplay fixture starts", "wavplay:", out)
+        _run(dev, c, "wavplay stop", "audio stop", timeout=15)
+        _run(dev, c, "wavplay delete", "del /p %s" % wav_name, timeout=15)
+    except Exception as exc:  # noqa: BLE001
+        c.check("wavplay fixture", False, "push/play failed: %s" % exc)
 
     if original_volume is not None:
         _run(dev, c, "volume restore", "volume %d" % original_volume, timeout=15)
@@ -116,7 +184,12 @@ def run(dev, ctx):
 
     out = _run(dev, c, "battery", "battery", timeout=20)
     c.expect("battery level", "battery:", out)
-    c.expect("battery detail", "battery.detail:", out)
+    # INA226 fuel-gauge boards print battery.gauge:; ADC-only boards print
+    # battery.detail:.  Accept either so the suite is board-agnostic.
+    has_detail = "battery.detail:" in out
+    has_gauge = "battery.gauge:" in out
+    c.check("battery detail or gauge", has_detail or has_gauge,
+            "battery.detail: %s, battery.gauge: %s" % (has_detail, has_gauge))
 
     # sleep/deepsleep must NOT be executed here (display blank + Wi-Fi teardown);
     # only their documented usage strings are verified.
@@ -147,6 +220,24 @@ def run(dev, ctx):
     c.expect("adc status field", "adc.status:", out)
     out = _run(dev, c, "i2c scan", "i2c scan", timeout=30)
     c.expect("i2c scan field", "i2c.scan:", out)
+
+    # SPI master transactions must work while the C6 hosted SDIO link is active
+    # (SPI3 + GPIO-matrix pins; the SDIO link is on SDMMC, not a SPI host). This
+    # guards the regression that once made `spi` refuse transactions.
+    out = _run(dev, c, "spi status", "spi status", timeout=20)
+    c.expect("spi status reports available", "spi.transactions:", out)
+    c.expect("spi transactions available", "available", out)
+    # Free GPIOs 2/3/4/5 are safe on both boards (not reserved board lines).
+    out = _run(dev, c, "spi peek", "spi peek 2 3 4 5 0x00", timeout=20)
+    c.expect("spi peek reads a byte", "spi.peek:", out)
+    out = _run(dev, c, "spi poke", "spi poke 2 3 4 5 0x10 0xAB", timeout=20)
+    c.expect("spi poke writes a byte", "spi.poke:", out)
+    out = _run(dev, c, "spi loopback", "spi loopback 2 3 4", timeout=20)
+    c.expect("spi loopback runs", "spi loopback:", out)
+    # The C6 link must still be alive after the SPI bus came up.
+    out = _run(dev, c, "ver after spi", "ver", timeout=20)
+    c.expect("shell alive after spi init", "P4MiniShell", out)
+    _run(dev, c, "spi release", "spi release", timeout=15)
 
     # -- a couple of visual states --------------------------------------------
     bmp = dev.screenshot(out_dir=OUT_DIR, name="power_audio")

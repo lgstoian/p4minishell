@@ -60,6 +60,20 @@ void test_power_wake_cause_strings(void)
     TEST_ASSERT_EQUAL_STRING("none", shell_power_wake_cause_string(ESP_SLEEP_WAKEUP_UNDEFINED));
 }
 
+/* Deep-sleep wake eligibility: only RTC IOs can wake deep sleep. On the
+ * ESP32-P4 target that is GPIO0..GPIO15 (SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK);
+ * the touch (23) and keyboard (50) interrupt lines are outside it. */
+void test_power_deep_wake_gpio_eligibility(void)
+{
+    TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(-1));
+    TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(64));
+    TEST_ASSERT_TRUE(shell_power_deep_wake_gpio_eligible(0));
+    TEST_ASSERT_TRUE(shell_power_deep_wake_gpio_eligible(15));
+    TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(16));
+    TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(23));
+    TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(50));
+}
+
 /* Pack-presence classifier (bugs.md F24). The full-voltage/rail-band values
  * come from the board profile; the tests use the configured thresholds. */
 void test_power_pack_present_below_present_is_absent(void)
@@ -114,4 +128,48 @@ void test_power_pack_present_chg_stat_corroboration(void)
     TEST_ASSERT_TRUE(power_monitor_pack_present(full, -500, stable, 2, 1, 0));
     /* Unavailable status line never blocks a stable pack. */
     TEST_ASSERT_TRUE(power_monitor_pack_present(full, 0, stable, 2, -1, -1));
+}
+
+/* ---- Li-ion SoC lookup table (battery_soc_from_mv) ---- */
+
+void test_battery_soc_at_full(void)
+{
+    TEST_ASSERT_EQUAL_INT(100, battery_soc_from_mv(4200));
+    TEST_ASSERT_EQUAL_INT(100, battery_soc_from_mv(4300));
+}
+
+void test_battery_soc_at_empty(void)
+{
+    TEST_ASSERT_EQUAL_INT(0, battery_soc_from_mv(3300));
+    TEST_ASSERT_EQUAL_INT(0, battery_soc_from_mv(3200));
+}
+
+void test_battery_soc_midrange(void)
+{
+    /* Mid-range voltage should produce a reasonable SoC. */
+    int soc = battery_soc_from_mv(3950);
+    TEST_ASSERT_TRUE(soc >= 30 && soc <= 50);
+}
+
+void test_battery_soc_monotonic(void)
+{
+    /* SoC should be monotonically non-decreasing with voltage. */
+    int prev = 0;
+
+    for (int mv = 3300; mv <= 4200; mv += 50) {
+        int soc = battery_soc_from_mv(mv);
+        TEST_ASSERT_TRUE(soc >= prev);
+        prev = soc;
+    }
+}
+
+void test_battery_soc_known_points(void)
+{
+    /* Verify a few well-known points on the discharge curve. */
+    TEST_ASSERT_EQUAL_INT(100, battery_soc_from_mv(4200));
+    TEST_ASSERT_EQUAL_INT(90,  battery_soc_from_mv(4150));
+    TEST_ASSERT_EQUAL_INT(80,  battery_soc_from_mv(4110));
+    TEST_ASSERT_EQUAL_INT(50,  battery_soc_from_mv(3980));
+    TEST_ASSERT_EQUAL_INT(20,  battery_soc_from_mv(3870));
+    TEST_ASSERT_EQUAL_INT(0,   battery_soc_from_mv(3300));
 }

@@ -426,6 +426,30 @@ def run(dev, ctx):
     c.expect("redirection > writes", "P4REDIR-TOKEN", out)
     c.expect("redirection >> appends", "P4REDIR-TWO", out)
 
+    # ---- redirection devices, missing target, 2> merge, type stdin ----
+    # Keep the whole-batch `out` intact for the checks below; this section
+    # uses its own `red` variable.
+    red = dev.run("echo hi > NUL")
+    c.expect("NUL swallows redirected output", "hi", red, want=False)
+    c.expect("NUL creates no file", "P4NULLEFT",
+             dev.run("if exist NUL echo P4NULLEFT"), want=False)
+    c.expect("CON passes output through", "hi", dev.run("echo hi > CON"))
+    c.expect("missing target errors",
+             "missing target", dev.run("echo hi >"))
+    c.expect("missing input target errors",
+             "missing target", dev.run("sort <"))
+    dev.run("echo P4HANDLE > P4HANDLE.TXT")
+    red = dev.run("echo hi 2> P4HANDLE.TXT & type P4HANDLE.TXT")
+    c.expect("2> merges into the stdout file", "hi", red)
+    c.expect("2> leaves no handle digit", "hi 2", red, want=False)
+    dev.push_file("P4RDIR.TXT", b"redirstdin\n")
+    c.expect("type reads the input slot", "redirstdin",
+             dev.run("type < P4RDIR.TXT"))
+    c.expect("pipe spools leave the card root", "_pipe",
+             dev.run("echo abc | sort & dir sd:/ /b"), want=False)
+    dev.run("del /p P4HANDLE.TXT")
+    dev.run("del /p P4RDIR.TXT")
+
     # ---- chaining ----------------------------------------------------
     c.expect("chain & runs both", "P4BATCH: chain-amp2 OK", out)
     c.expect("chain && on success", "P4BATCH: chain-and2 OK", out)
@@ -525,7 +549,36 @@ def run(dev, ctx):
     dev.run("del /p %s" % FLOW_OK)
     dev.run("del /p %s" % FLOW_BAD)
 
+    # ---- DOS parity round: glued echo, for /f eol default, shift /n, title
+    c.expect("echo. with text prints it", "Hello", dev.run("echo.Hello"))
+    c.expect("echo. bare is not a state report", "ECHO is", dev.run("echo."), want=False)
+    c.expect("echo/ prints text", "Bye", dev.run("echo/Bye"))
+    c.expect("echo( prints text", "Paren", dev.run("echo(Paren"))
+    c.expect("echo: prints text", "Word", dev.run("echo:Word"))
+
+    dev.push_file("P4BEOL.TXT", b";comment\nkeep\n")
+    out = dev.run("for /f %%l in (P4BEOL.TXT) do echo P4EOL: %%l")
+    c.expect("for /f skips ;-lines by default", "P4EOL: keep", out)
+    c.expect("for /f default eol hides comment", "P4EOL: ;comment", out, want=False)
+    out = dev.run('for /f "eol=" %%l in (P4BEOL.TXT) do echo P4EOL2: %%l')
+    c.expect("for /f explicit empty eol disables filter", "P4EOL2: ;comment", out)
+
+    dev.push_file("P4BSHIFT.BAT", b"@echo off\r\nshift /2\r\necho P4SHIFT: %1-%2\r\n")
+    out = dev.run("P4BSHIFT.BAT a b c d", timeout=60)
+    c.expect("shift /2 preserves %1 and slides %2", "P4SHIFT: a-c", out)
+    out = dev.run("shift /9")
+    c.expect("shift outside a batch refuses", "only valid inside batch files", out)
+
+    out = dev.run("title P4SYNC Hockey")
+    c.expect("title stores multi-word text", "P4SYNC Hockey", out)
+    c.expect("title bare reports it", "P4SYNC Hockey", dev.run("title"))
+    c.expect("sysinfo lists the title", "title:", dev.run("sysinfo"))
+    dev.run('title ""')
+    c.expect("title clears", "(none)", dev.run("title"))
+
     # ---- cleanup -----------------------------------------------------
+    dev.run("del /p P4BEOL.TXT")
+    dev.run("del /p P4BSHIFT.BAT")
     dev.run("del /p %s" % BATCH)
     dev.run("del /p %s" % LIB)
     dev.run("del /p %s" % MISS_ABORT)

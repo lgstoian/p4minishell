@@ -64,6 +64,7 @@ def _push_file_once(dev: DeviceSession, remote: str, data: bytes,
     sent = 0
     dev.write(data[:CHUNK])
     sent = min(CHUNK, size)
+    ack_deadline = time.time() + 30.0
     while True:
         ack = dev.read_until(b"\n", timeout)
         if not ack:
@@ -73,7 +74,11 @@ def _push_file_once(dev: DeviceSession, remote: str, data: bytes,
             return
         lines = [ln for ln in ack.split(b"\n") if ln.strip().startswith(b"RX ")]
         if not lines:
-            raise P4Error("receive %s: bad ACK %r" % (remote, ack[-80:]))
+            # Interleaved log text (Wi-Fi chatter etc.) is not an ACK: skip it
+            # and keep reading instead of failing the transfer.
+            if time.time() > ack_deadline:
+                raise P4Error("receive %s: bad ACK %r" % (remote, ack[-80:]))
+            continue
         cum = int(lines[-1].strip()[3:])
         if cum >= size:
             break

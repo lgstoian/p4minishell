@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <stdbool.h>
 #include "esp_err.h"
 #include "esp_check.h"
 #include "bsp_err_check.h"
@@ -59,11 +60,9 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     }
     if (i2s_tx_chan != NULL) {
         ESP_GOTO_ON_ERROR(i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg), err, TAG, "I2S channel initialization failed");
-        ESP_GOTO_ON_ERROR(i2s_channel_enable(i2s_tx_chan), err, TAG, "I2S enabling failed");
     }
     if (i2s_rx_chan != NULL) {
         ESP_GOTO_ON_ERROR(i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg), err, TAG, "I2S channel initialization failed");
-        ESP_GOTO_ON_ERROR(i2s_channel_enable(i2s_rx_chan), err, TAG, "I2S enabling failed");
     }
 
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -142,6 +141,57 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
         .data_if = i2s_data_if,
     };
     return esp_codec_dev_new(&codec_dev_cfg);
+}
+
+/**
+ * @brief Read the 3.5 mm headphone-detect line.
+ *
+ * HP_DET lives on PI4IOE5V6408 #1 (0x43) pin P7 (BOARD_CFG_HP_DET_EXP_PIN),
+ * active-high when a plug is inserted. Read at command/playback time through
+ * the managed first-expander handle; the pin is set to input with no internal
+ * pull (M5 drives it externally, so this disturbs nothing else on the chip).
+ * Never touches the 0x44 expander (see the F6 rule).
+ */
+esp_err_t bsp_audio_headphone_detected(bool *inserted_out)
+{
+    esp_io_expander_handle_t io;
+    uint32_t level = 0;
+    esp_err_t err;
+
+    if (inserted_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *inserted_out = false;
+#if !BOARD_CFG_HP_DET_PRESENT
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    io = bsp_io_expander_init();
+    if (io == NULL) {
+        return ESP_FAIL;
+    }
+    err = esp_io_expander_set_dir(io, (1u << BOARD_CFG_HP_DET_EXP_PIN), IO_EXPANDER_INPUT);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_io_expander_get_level(io, (1u << BOARD_CFG_HP_DET_EXP_PIN), &level);
+    if (err != ESP_OK) {
+        return err;
+    }
+    *inserted_out = ((level >> BOARD_CFG_HP_DET_EXP_PIN) & 1u) != 0;
+    return ESP_OK;
+#endif
+}
+
+/**
+ * @brief Enable/disable the speaker power amplifier.
+ *
+ * Thin wrapper over the existing BSP_FEATURE_SPEAKER path (NS4150B SPK_EN on
+ * 0x43 P1); kept as a named entry point so components/audio never drives
+ * expander pins directly.
+ */
+esp_err_t bsp_audio_speaker_enable(bool enable)
+{
+    return bsp_feature_enable(BSP_FEATURE_SPEAKER, enable);
 }
 
 esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)

@@ -31,6 +31,7 @@
 #include "ansi.h"
 #include "font.h"
 #include "markdown.h"
+#include "html.h"
 #include "shell.h"
 #include "modal.h"
 #include "esp_lvgl_port.h"
@@ -880,6 +881,8 @@ static void editor_render_row(editor_doc_t *doc, size_t row)
         run_count = editor_lex_markdown(text, len, runs, 64);
     } else if (doc->syntax == EDITOR_SYNTAX_JSON) {
         run_count = editor_lex_json(text, len, runs, 64);
+    } else if (doc->syntax == EDITOR_SYNTAX_HTML) {
+        run_count = editor_lex_html(text, len, runs, 64);
     }
     if (run_count == 0) {
         runs[0].start = 0;
@@ -1226,7 +1229,11 @@ static void editor_preview_show(void)
         joined[off++] = '\n';
     }
     joined[off] = '\0';
-    markdown_render_doc(joined, rendered, total * 2 + 64);
+    if (doc->syntax == EDITOR_SYNTAX_HTML) {
+        html_render_ansi(joined, rendered, total * 2 + 64);
+    } else {
+        markdown_render_doc(joined, rendered, total * 2 + 64);
+    }
     editor_mem_free(joined);
 
     /* Preview replaces the source spans; reset any virtualized window and
@@ -1310,9 +1317,10 @@ static void editor_preview_toggle(void)
         editor_preview_exit();
         return;
     }
-    /* Preview renders Markdown; other syntaxes stay in source view. */
-    if (doc->syntax != EDITOR_SYNTAX_MARKDOWN) {
-        editor_status("preview needs a Markdown file");
+    /* Preview renders Markdown and HTML; other syntaxes stay in source view. */
+    if (doc->syntax != EDITOR_SYNTAX_MARKDOWN &&
+        doc->syntax != EDITOR_SYNTAX_HTML) {
+        editor_status("preview needs a Markdown or HTML file");
         return;
     }
     /* Immediate feedback: the render (TTF variant load over SD) can take
@@ -1730,6 +1738,7 @@ static void editor_status_default(void)
         case EDITOR_SYNTAX_BATCH: syntax = "bat"; break;
         case EDITOR_SYNTAX_MARKDOWN: syntax = "md"; break;
         case EDITOR_SYNTAX_JSON: syntax = "json"; break;
+        case EDITOR_SYNTAX_HTML: syntax = "html"; break;
         default: break;
         }
         snprintf(buf, P4_CONFIG_SD_PATH_BYTES + 160, "%s  %s  Ln %u, Col %u  W %u  %s %s%s%s%s%s%s%s",
@@ -2507,8 +2516,9 @@ static void editor_apply_key(editor_key_t key, char ch)
                           changed == 1 ? "" : "s");
         } else if (doc->syntax != EDITOR_SYNTAX_BATCH &&
                    doc->syntax != EDITOR_SYNTAX_JSON &&
-                   doc->syntax != EDITOR_SYNTAX_MARKDOWN) {
-            editor_status("comment toggle needs batch/json/md");
+                   doc->syntax != EDITOR_SYNTAX_MARKDOWN &&
+                   doc->syntax != EDITOR_SYNTAX_HTML) {
+            editor_status("comment toggle needs batch/json/md/html");
         } else {
             editor_status("nothing to comment");
         }
@@ -2546,12 +2556,21 @@ static void editor_apply_key(editor_key_t key, char ch)
             s_editor_view.spell = true;
             editor_rebuild();
             editor_status("spell on (%u words)",
-                          (unsigned)editor_spell_word_count());
+                          (unsigned)(editor_spell_word_count() +
+                                     spell_user_count()));
         } else {
             s_editor_view.spell = false;
             editor_rebuild();
             editor_status("spell off");
         }
+        return;
+#endif
+    case EDITOR_KEY_SPELL_ADD:
+#if !P4_CONFIG_SPELL_ENABLE
+        editor_status("spellcheck disabled in this build (P4_CONFIG_SPELL_ENABLE=0)");
+        return;
+#else
+        editor_view_spell_learn(NULL);
         return;
 #endif
     case EDITOR_KEY_GOTO_LINE:
@@ -2655,6 +2674,7 @@ static const editor_osk_entry_t k_editor_osk_actions[] = {
     {"Wrap", EDITOR_KEY_WRAP_TOGGLE},
     {"Focus", EDITOR_KEY_FOCUS_TOGGLE},
     {"Spell", EDITOR_KEY_SPELL_TOGGLE},
+    {"AddWord", EDITOR_KEY_SPELL_ADD},
     {"Reload", EDITOR_KEY_RELOAD},
 };
 
@@ -3106,6 +3126,105 @@ void editor_view_notify_saved(bool ok)
 void editor_view_notify_saved_cb(void *user_data)
 {
     editor_view_notify_saved((intptr_t)user_data != 0);
+}
+
+/* Queue a spell learn/forget for the worker (SD file I/O must stay off the
+ * LVGL/UART tasks). op: 0 = learn, 1 = forget. */
+static bool editor_spell_request(int op, const char *word)
+{
+    editor_control_t *ctl = s_editor_view.control;
+
+    if (ctl == NULL || word == NULL || word[0] == '\0') {
+        return false;
+    }
+    snprintf(ctl->spell_word, sizeof(ctl->spell_word), "%s", word);
+    ctl->spell_op = op;
+    ctl->spell_op_requested = true;
+    if (ctl->event_group != NULL) {
+        xEventGroupSetBits((EventGroupHandle_t)ctl->event_group,
+                           EDITOR_EVENT_SPELL);
+    }
+    return true;
+}
+
+void editor_view_spell_learn(const char *word)
+{
+    char buf[P4_CONFIG_SPELL_WORD_MAX + 1];
+
+    if (word == NULL) {
+        if (!editor_doc_cursor_word(s_editor_view.doc, buf, sizeof(buf))) {
+            editor_status("no word under cursor");
+            return;
+        }
+        word = buf;
+    }
+    if (editor_spell_request(0, word)) {
+        editor_status("learning '%s'...", word);
+    } else {
+        editor_status("cannot learn word");
+    }
+}
+
+void editor_view_spell_forget(const char *word)
+{
+    if (word == NULL || word[0] == '\0') {
+        editor_status("spell forget needs a word");
+        return;
+    }
+    if (editor_spell_request(1, word)) {
+        editor_status("forgetting '%s'...", word);
+    } else {
+        editor_status("cannot forget word");
+    }
+}
+
+void editor_view_spell_ignore(const char *word)
+{
+    char buf[P4_CONFIG_SPELL_WORD_MAX + 1];
+
+    if (word == NULL) {
+        if (!editor_doc_cursor_word(s_editor_view.doc, buf, sizeof(buf))) {
+            editor_status("no word under cursor");
+            return;
+        }
+        word = buf;
+    }
+    /* Memory-only: safe to run inline on this task. */
+    if (spell_ignore(word, strlen(word))) {
+        editor_rebuild();
+        editor_status("ignoring '%s' this session", word);
+    } else {
+        editor_status("cannot ignore word");
+    }
+}
+
+void editor_view_spell_list(void)
+{
+    editor_status("user dictionary: %u words (+ base %u)",
+                  (unsigned)spell_user_count(),
+                  (unsigned)editor_spell_word_count());
+}
+
+void editor_view_notify_spell(bool ok)
+{
+    editor_control_t *ctl = s_editor_view.control;
+
+    if (!s_editor_view.open || ctl == NULL) {
+        return;
+    }
+    editor_rebuild();
+    if (ok) {
+        editor_status(ctl->spell_op == 1 ? "forgot '%s'" : "learned '%s'",
+                      ctl->spell_word);
+    } else {
+        editor_status(ctl->spell_op == 1 ? "cannot forget '%s'" : "cannot learn '%s'",
+                      ctl->spell_word);
+    }
+}
+
+void editor_view_notify_spell_cb(void *user_data)
+{
+    editor_view_notify_spell((intptr_t)user_data != 0);
 }
 
 void editor_view_notify_reloaded(bool ok)

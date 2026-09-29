@@ -31,6 +31,20 @@ static char **s_index;
 static size_t s_count;
 static bool s_ready;
 
+/* User overlay: same format, separate small set consulted before the base. */
+static char *u_pool;
+static char **u_index;
+static size_t u_count;
+static bool u_ready;
+
+/* Session ignore list: NUL-joined lower-cased words, linear scan. */
+static char *ig_pool;
+static size_t ig_used;
+static size_t ig_count;
+
+/* Forward: defined below, used by editor_spell_ok above. */
+static bool spell_ignored_has(const char *word, size_t len);
+
 /* qsort comparator: both arguments point at `char *` elements. */
 static int spell_cmp(const void *a, const void *b)
 {
@@ -39,7 +53,7 @@ static int spell_cmp(const void *a, const void *b)
 
 bool editor_spell_ready(void)
 {
-    return s_ready && s_count > 0;
+    return (s_ready && s_count > 0) || (u_ready && u_count > 0);
 }
 
 size_t editor_spell_word_count(void)
@@ -55,36 +69,35 @@ void editor_spell_unload(void)
     s_index = NULL;
     s_count = 0;
     s_ready = false;
+    spell_user_unload();
+    spell_ignored_clear();
 }
 
-bool editor_spell_load(const char *name)
+/* Read a DICTS/<rel> file into a heap pool (NUL-terminated). Shared by the
+ * base and user loaders: one SD read path, one DMA rule. Returns NULL when
+ * missing/unreadable or on allocation failure. */
+static char *spell_read_rel(const char *rel, size_t *got_out)
 {
-    char rel[P4_CONFIG_SD_PATH_BYTES];
     char resolved[P4_CONFIG_SD_PATH_BYTES];
     shell_sd_session_t session;
     FILE *file;
     char *pool;
-    char **index;
     uint8_t *bounce;
     size_t got = 0;
-    size_t words = 0;
-    size_t i;
 
-    if (name == NULL || name[0] == '\0') {
-        name = P4_CONFIG_SPELL_DICT_NAME;
+    if (got_out != NULL) {
+        *got_out = 0;
     }
-    snprintf(rel, sizeof(rel), "%s/%s.words",
-             P4_CONFIG_SPELL_DICT_DIR_NAME, name);
     if (shell_fs_resolve_path(rel, resolved, sizeof(resolved)) != ESP_OK) {
-        return false;
+        return NULL;
     }
     if (shell_sd_begin(&session) != ESP_OK) {
-        return false;
+        return NULL;
     }
     file = fopen(resolved, "rb");
     if (file == NULL) {
         shell_sd_end(&session, "spell");
-        return false;
+        return NULL;
     }
     pool = p4heap_alloc_psram(P4_CONFIG_SPELL_MAX_BYTES + 1);
     /* SD/FATFS reads go through DMA: the bounce buffer MUST be internal,
@@ -97,7 +110,7 @@ bool editor_spell_load(const char *name)
         shell_sd_end(&session, "spell");
         heap_caps_free(pool);
         heap_caps_free(bounce);
-        return false;
+        return NULL;
     }
     while (got < P4_CONFIG_SPELL_MAX_BYTES) {
         size_t want = P4_CONFIG_SPELL_MAX_BYTES - got;
@@ -116,35 +129,57 @@ bool editor_spell_load(const char *name)
     fclose(file);
     pool[got] = '\0';
     shell_sd_end(&session, "spell");
+    if (got_out != NULL) {
+        *got_out = got;
+    }
+    return pool;
+}
 
-    /* Split lines in place: NUL-terminate each word, lower-case it. */
+/* Split lines in place (NUL-terminate, lower-case) and build the sorted
+ * pointer index, capped at cap_words. Shared by both loaders. */
+static bool spell_build_index(char *pool, size_t got, size_t cap_words,
+                              char ***index_out, size_t *count_out)
+{
+    char **index;
+    size_t words = 0;
+    size_t i;
+
+    if (index_out != NULL) {
+        *index_out = NULL;
+    }
+    if (count_out != NULL) {
+        *count_out = 0;
+    }
+    if (pool == NULL) {
+        return false;
+    }
     {
         size_t start = 0;
-        for (i = 0; i <= got; i++) {
-            char c = pool[i];
+        size_t k;
+
+        for (k = 0; k <= got; k++) {
+            char c = pool[k];
             if (c == '\n' || c == '\r' || c == '\0') {
-                pool[i] = '\0';
-                if (i > start) {
+                pool[k] = '\0';
+                if (k > start) {
                     size_t j;
-                    for (j = start; j < i; j++) {
+                    for (j = start; j < k; j++) {
                         pool[j] = (char)tolower((unsigned char)pool[j]);
                     }
-                    if (words < P4_CONFIG_SPELL_MAX_WORDS) {
+                    if (words < cap_words) {
                         /* Index rebuilt below; just count here. */
                         words++;
                     }
                 }
-                start = i + 1;
+                start = k + 1;
             }
         }
     }
     if (words == 0) {
-        heap_caps_free(pool);
         return false;
     }
     index = p4heap_alloc_psram((words + 1) * sizeof(*index));
     if (index == NULL) {
-        heap_caps_free(pool);
         return false;
     }
     {
@@ -161,6 +196,40 @@ bool editor_spell_load(const char *name)
         words = n;
     }
     qsort(index, words, sizeof(*index), spell_cmp);
+    if (index_out != NULL) {
+        *index_out = index;
+    } else {
+        heap_caps_free(index);
+    }
+    if (count_out != NULL) {
+        *count_out = words;
+    }
+    return true;
+}
+
+bool editor_spell_load(const char *name)
+{
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char *pool;
+    char **index;
+    size_t got = 0;
+    size_t words = 0;
+
+    if (name == NULL || name[0] == '\0') {
+        name = P4_CONFIG_SPELL_DICT_NAME;
+    }
+    snprintf(rel, sizeof(rel), "%s/%s.words",
+             P4_CONFIG_SPELL_DICT_DIR_NAME, name);
+    pool = spell_read_rel(rel, &got);
+    if (pool == NULL) {
+        return false;
+    }
+    if (!spell_build_index(pool, got, P4_CONFIG_SPELL_MAX_WORDS, &index, &words) ||
+        words == 0) {
+        heap_caps_free(pool);
+        heap_caps_free(index);
+        return false;
+    }
 
     /* Swap in (release the previous list only after the new one is ready). */
     heap_caps_free(s_pool);
@@ -210,20 +279,366 @@ static int spell_cmp_token(const void *keyp, const void *elemp)
     }
 }
 
-bool editor_spell_ok(const char *word, size_t len)
+/* Membership in one sorted set (shared by base and overlay lookups). */
+static bool spell_set_ok(char **index, size_t count, const char *word, size_t len)
 {
     spell_lookup_t key;
 
-    if (!editor_spell_ready()) {
-        return true; /* No dictionary: nothing is ever flagged. */
-    }
-    if (word == NULL || len == 0) {
-        return true;
+    if (index == NULL || count == 0) {
+        return false;
     }
     key.s = word;
     key.len = len;
-    return bsearch(&key, s_index, s_count, sizeof(*s_index),
+    return bsearch(&key, index, count, sizeof(*index), spell_cmp_token) != NULL;
+}
+
+bool editor_spell_ok(const char *word, size_t len)
+{
+    if (word == NULL || len == 0) {
+        return true;
+    }
+    if (spell_ignored_has(word, len)) {
+        return true;
+    }
+    if (u_ready && u_count > 0 && spell_set_ok(u_index, u_count, word, len)) {
+        return true;
+    }
+    if (!editor_spell_ready()) {
+        return true; /* No dictionary: nothing is ever flagged. */
+    }
+    return spell_set_ok(s_index, s_count, word, len);
+}
+
+/* ------------------------------------------------------------------------
+ * User dictionary overlay + session ignore list
+ * ---------------------------------------------------------------------- */
+
+/* Normalize a candidate word into buf (ASCII-lowercased, NUL-terminated).
+ * Rejects empty/overlong/control/whitespace so file lines stay clean. */
+static bool spell_normalize(const char *word, size_t len, char *buf, size_t size)
+{
+    size_t i;
+
+    if (word == NULL || len == 0 || len + 1 > size ||
+        len > P4_CONFIG_SPELL_WORD_MAX) {
+        return false;
+    }
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)word[i];
+        if (c <= ' ' || c == 0x7F) {
+            return false;
+        }
+        buf[i] = (char)tolower(c);
+    }
+    buf[len] = '\0';
+    return true;
+}
+
+/* Relative SD path of the user overlay file. */
+static void spell_user_rel(char *rel, size_t size)
+{
+    snprintf(rel, size, "%s/%s",
+             P4_CONFIG_SPELL_DICT_DIR_NAME, P4_CONFIG_SPELL_USER_FILE);
+}
+
+bool spell_user_load(void)
+{
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char *pool;
+    char **index = NULL;
+    size_t got = 0;
+    size_t words = 0;
+
+    spell_user_rel(rel, sizeof(rel));
+    pool = spell_read_rel(rel, &got);
+    if (pool == NULL) {
+        /* Missing file is fine: an empty overlay. */
+        spell_user_unload();
+        u_ready = true;
+        return true;
+    }
+    if (!spell_build_index(pool, got, P4_CONFIG_SPELL_USER_MAX_WORDS,
+                           &index, &words)) {
+        /* An all-whitespace overlay is legal: it means every learned word was
+         * forgotten. Clear the overlay instead of failing and leaving a stale
+         * in-memory index behind (which made `spell forget` of the last word
+         * report the word as still present). */
+        size_t i;
+        bool empty = true;
+
+        for (i = 0; i < got; i++) {
+            if (!isspace((unsigned char)pool[i])) {
+                empty = false;
+                break;
+            }
+        }
+        heap_caps_free(pool);
+        if (empty) {
+            spell_user_unload();
+            u_ready = true;
+            return true;
+        }
+        return false;
+    }
+    heap_caps_free(u_pool);
+    heap_caps_free(u_index);
+    u_pool = pool;
+    u_index = index;
+    u_count = words;
+    u_ready = true;
+    return true;
+}
+
+void spell_user_unload(void)
+{
+    heap_caps_free(u_pool);
+    heap_caps_free(u_index);
+    u_pool = NULL;
+    u_index = NULL;
+    u_count = 0;
+    u_ready = false;
+}
+
+size_t spell_user_count(void)
+{
+    return u_ready ? u_count : 0;
+}
+
+/** True when the normalized word is in the user overlay. */
+static bool spell_user_has(const char *norm)
+{
+    spell_lookup_t key;
+
+    if (!u_ready || u_count == 0 || norm == NULL) {
+        return false;
+    }
+    key.s = norm;
+    key.len = strlen(norm);
+    return bsearch(&key, u_index, u_count, sizeof(*u_index),
                    spell_cmp_token) != NULL;
+}
+
+bool spell_user_learn(const char *word, size_t len)
+{
+    char norm[P4_CONFIG_SPELL_WORD_MAX + 1];
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    size_t norm_len;
+    FILE *file;
+
+    if (!spell_normalize(word, len, norm, sizeof(norm))) {
+        return false;
+    }
+    /* Skip only when the word is genuinely known. Do not use
+     * editor_spell_ok() here: with no base dictionary loaded it reports every
+     * word as known, so learning would silently become a no-op. */
+    norm_len = strlen(norm);
+    if (spell_ignored_has(norm, norm_len) ||
+        spell_user_has(norm) ||
+        (editor_spell_ready() && spell_set_ok(s_index, s_count, norm, norm_len))) {
+        return true; /* Already known (base, overlay, or ignored). */
+    }
+    if (u_count >= P4_CONFIG_SPELL_USER_MAX_WORDS) {
+        return false;
+    }
+    spell_user_rel(rel, sizeof(rel));
+    if (shell_fs_resolve_path(rel, resolved, sizeof(resolved)) != ESP_OK) {
+        return false;
+    }
+    /* The DICTS directory may not exist yet (a board whose wordlists were
+     * never pushed): create it so the first learned word can be written. */
+    {
+        char dir_rel[P4_CONFIG_SD_PATH_BYTES];
+        char dir_resolved[P4_CONFIG_SD_PATH_BYTES];
+
+        snprintf(dir_rel, sizeof(dir_rel), "%s", P4_CONFIG_SPELL_DICT_DIR_NAME);
+        if (shell_fs_resolve_path(dir_rel, dir_resolved, sizeof(dir_resolved)) == ESP_OK) {
+            (void)storage_mkdir_p(dir_resolved);
+        }
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return false;
+    }
+    file = fopen(resolved, "ab");
+    if (file == NULL) {
+        shell_sd_end(&session, "spell");
+        return false;
+    }
+    if (fwrite(norm, 1, strlen(norm), file) != strlen(norm) ||
+        fwrite("\n", 1, 1, file) != 1 || fclose(file) != 0) {
+        shell_sd_end(&session, "spell");
+        return false;
+    }
+    shell_sd_end(&session, "spell");
+    return spell_user_load();
+}
+
+bool spell_user_forget(const char *word, size_t len)
+{
+    char norm[P4_CONFIG_SPELL_WORD_MAX + 1];
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char *pool;
+    size_t got = 0;
+    char *kept = NULL;
+    size_t kept_len = 0;
+    size_t pos = 0;
+    bool removed = false;
+
+    if (!spell_normalize(word, len, norm, sizeof(norm))) {
+        return false;
+    }
+    if (!spell_user_has(norm)) {
+        return false; /* Absent from the overlay (base words stay). */
+    }
+    spell_user_rel(rel, sizeof(rel));
+    pool = spell_read_rel(rel, &got);
+    if (pool == NULL) {
+        return false;
+    }
+    kept = p4heap_alloc_psram(got + 1);
+    if (kept == NULL) {
+        heap_caps_free(pool);
+        return false;
+    }
+    /* Keep every line except the forgotten word (stored lower-cased, like
+     * the loader folds them, so compare folded). */
+    while (pos < got) {
+        size_t start = pos;
+        while (pos < got && pool[pos] != '\n' && pool[pos] != '\r') {
+            pos++;
+        }
+        if (pos > start) {
+            size_t k;
+            bool same = ((pos - start) == strlen(norm));
+            for (k = start; same && k < pos; k++) {
+                if (tolower((unsigned char)pool[k]) != (unsigned char)norm[k - start]) {
+                    same = false;
+                }
+            }
+            if (same) {
+                removed = true;
+            } else {
+                memcpy(kept + kept_len, pool + start, pos - start);
+                kept_len += pos - start;
+                kept[kept_len++] = '\n';
+            }
+        }
+        while (pos < got && (pool[pos] == '\n' || pool[pos] == '\r')) {
+            pos++;
+        }
+    }
+    kept[kept_len] = '\0';
+    heap_caps_free(pool);
+    if (!removed) {
+        heap_caps_free(kept);
+        return false;
+    }
+    /* Atomic rewrite; the loader tolerates the trailing newline. */
+    if (storage_write_text_file(rel, kept) != ESP_OK) {
+        heap_caps_free(kept);
+        return false;
+    }
+    heap_caps_free(kept);
+    return spell_user_load();
+}
+
+size_t spell_user_list(char *buf, size_t size)
+{
+    size_t i;
+    size_t pos = 0;
+    size_t need = 0;
+
+    if (!u_ready) {
+        if (buf != NULL && size > 0) {
+            buf[0] = '\0';
+        }
+        return 0;
+    }
+    for (i = 0; i < u_count; i++) {
+        size_t n = strlen(u_index[i]);
+        need += n + 1;
+        if (buf != NULL && pos + n + 2 <= size) {
+            memcpy(buf + pos, u_index[i], n);
+            pos += n;
+            buf[pos++] = '\n';
+        }
+    }
+    if (buf != NULL && size > 0) {
+        buf[pos < size ? pos : size - 1] = '\0';
+    }
+    return need;
+}
+
+bool spell_ignore(const char *word, size_t len)
+{
+    char norm[P4_CONFIG_SPELL_WORD_MAX + 1];
+    size_t n;
+    size_t pool_cap = (size_t)P4_CONFIG_SPELL_IGNORE_MAX_WORDS *
+                      (P4_CONFIG_SPELL_WORD_MAX + 1);
+
+    if (!spell_normalize(word, len, norm, sizeof(norm))) {
+        return false;
+    }
+    n = strlen(norm);
+    if (spell_ignored_has(norm, n)) {
+        return true;
+    }
+    if (ig_count >= (size_t)P4_CONFIG_SPELL_IGNORE_MAX_WORDS) {
+        return false;
+    }
+    if (ig_pool == NULL) {
+        ig_pool = p4heap_alloc_psram(pool_cap);
+        if (ig_pool == NULL) {
+            return false;
+        }
+        ig_used = 0;
+    }
+    if (ig_used + n + 1 > pool_cap) {
+        return false;
+    }
+    memcpy(ig_pool + ig_used, norm, n + 1);
+    ig_used += n + 1;
+    ig_count++;
+    return true;
+}
+
+void spell_ignored_clear(void)
+{
+    heap_caps_free(ig_pool);
+    ig_pool = NULL;
+    ig_used = 0;
+    ig_count = 0;
+}
+
+size_t spell_ignored_count(void)
+{
+    return ig_count;
+}
+
+/** Linear scan of the session ignore pool (small by cap). */
+static bool spell_ignored_has(const char *word, size_t len)
+{
+    char norm[P4_CONFIG_SPELL_WORD_MAX + 1];
+    const char *p;
+    const char *end;
+
+    if (ig_pool == NULL || ig_count == 0) {
+        return false;
+    }
+    if (!spell_normalize(word, len, norm, sizeof(norm))) {
+        return false;
+    }
+    p = ig_pool;
+    end = ig_pool + ig_used;
+    while (p < end) {
+        size_t n = strlen(p);
+        if (n == strlen(norm) && memcmp(p, norm, n) == 0) {
+            return true;
+        }
+        p += n + 1;
+    }
+    return false;
 }
 
 size_t editor_spell_utf8(const char *s, size_t avail, unsigned long *cp_out)

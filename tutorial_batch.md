@@ -123,6 +123,14 @@ echo hello %WHO%
 - `browse [path]` picks a file (`BROWSE_RESULT`).
 - Simple text prompts: `set /p NAME=<prompt>` and `set /p NAME=< file` to read
   a line from a file or pipe.
+- Machine-readable verbs print one plain line with `/b` and store it with
+  `/v:NAME`, e.g. a jack-aware beep:
+
+```bat
+audio output /v:ROUTE
+if "%ROUTE%"=="headphones" echo private listening
+beep
+```
 
 Remember: a `list` serial selection is **1-based** (the number you type) while
 the returned ERRORLEVEL is the **0-based index**.

@@ -3,7 +3,7 @@
 This document lists the C API each component exposes to the rest of the
 firmware, organized by module and mirroring the headers under `components/`.
 
-> **Current public API reference (v1.2.1).** For the working rules and
+> **Current public API reference (v1.3.0).** For the working rules and
 > invariants behind these functions see [`ai-context.md`](ai-context.md); for
 > integration examples see [`SDK.md`](SDK.md); for the user-facing command
 > surface see [`command.md`](command.md). Current verified test baselines live
@@ -29,9 +29,10 @@ firmware, organized by module and mirroring the headers under `components/`.
 - `components/tui` owns the 80x25 TUI cell buffer, the drawing primitives, and `tui_flush`; it is reached by the `draw`/`tui` verbs and by `components/windows`.
 - `components/gfx` owns the pure RGB565 raster core (surface/pixel/line/rect/circle/blit), BMP header parse + decode, and 565→888 row conversion. It has no LVGL dependency; the `gfx` command glue is `components/command/gfx_commands.c`.
 - `components/db` owns the Palm-OS-style SD record store (`sd:/DBS/<name>.DB`); the `db` command lives in `components/command/db_commands.c`.
-- `components/alarm` owns the SD alarm/event store and the single background checker; the `alarm`/`cal` commands live in `components/command/alarm_commands.c`.
-- `components/filetype` owns the one extension→kind registry (batch/markdown/json/text) used by the editor, viewer, `launch`, `dir`, and the batch resolver.
-- `components/markdown` owns the CommonMark-subset renderer used by the `markdown` verb and `view *.md`.
+- `components/alarm` owns the SD alarm/event store and the single background checker; the `alarm`/`cal` commands live in `components/command/alarm_commands.c`. Events carry optional sync identity (`uid`/`modified`, see `alarm_set()`).
+- `components/pim` owns the single vCard 3.0 / iCalendar VEVENT codecs plus sync identity and newer-wins merge (`uid=`/`mtime=` contact payload fields, `pim_db_upsert`/`pim_alarms_upsert`, `pim get` backfill); the `pim` verbs live in `components/command/pim_commands.c` and `export`/`import` are thin shells over the add/render paths.
+- `components/filetype` owns the one extension→kind registry (batch/markdown/json/text/image/html) used by the editor, viewer, `launch`, `dir`, and the batch resolver.
+- `components/markdown` owns the CommonMark-subset renderer used by the `markdown` verb and `view *.md`, the HTML serializer, the print paginator, and the **HTML reader** (`html_read.c`, the inverse serializer) used by `view`/`type` of `.html`/`.htm` and the editor preview.
 - `components/font` owns the font registry (roles/sizes/fallbacks), the SD TTF loader, CJK auto-attach, and the theme table.
 - `components/boot` owns the `CONFIG.SYS` parser and `AUTOEXEC.BAT` runner (plus default-file generation).
 - `components/storage/storage_csv.c` owns the one RFC-4180-subset CSV parser (`csv_split_line`) shared by the `csv` and `export` command bodies; `components/db/` owns the one `k=v` field parser (`db_field_get`).
@@ -40,7 +41,7 @@ firmware, organized by module and mirroring the headers under `components/`.
 - `components/clock/clock_timer.c` owns the named stopwatch slots behind `timer`/`stopwatch`.
 - `components/gfx/gfx_view.c` owns the world-coordinate viewport (map/clip/nice-step) behind `plot`.
 - `components/clock` owns time/SNTP/timezone services and the `date`/`time`/`timezone`/`sntp` verbs.
-- `components/audio` owns the ES8311 codec path, volume, and the background tone/WAV engine; the verbs parse in `components/command/audio_commands.c`.
+- `components/audio` owns the codec path (ES8311 on the reference board, ES8388 on the Tab5), volume, output routing, and the background tone/WAV engine; the verbs parse in `components/command/audio_commands.c`. The BSP owns the amp/jack pins; audio owns the route policy.
 - `components/applib` is the native-app runtime/ABI library (umbrella `applib.h` over the lean `applib_*.h` headers).
 - All modules keep user-visible behavior in the shell transcript or fixed status header instead of returning rich status objects to the caller.
 
@@ -358,6 +359,7 @@ void        shell_power_set_idle_timeout(int seconds);
 int         shell_power_get_idle_timeout(void);
 void        shell_power_notify_activity(void);
 void        shell_power_idle_tick(void);
+bool        shell_power_deep_wake_gpio_eligible(int gpio);  /* RTC IO check (GPIO0..15 on P4) */
 ```
 - These are the concrete implementations behind two of the `shell_command_ops_t` hooks. The
   `get_cwd` and `sd_is_mounted` hooks are satisfied by `shell_get_cwd()` and
@@ -614,12 +616,27 @@ void audio_stop(void);
 bool audio_busy(void);
 esp_err_t audio_set_volume(int percent);
 int  audio_get_volume(void);
+typedef enum { AUDIO_OUTPUT_AUTO, AUDIO_OUTPUT_SPEAKER, AUDIO_OUTPUT_HEADPHONES } audio_output_mode_t;
+esp_err_t audio_set_output_mode(audio_output_mode_t mode);
+audio_output_mode_t audio_get_output_mode(void);
+audio_output_mode_t audio_effective_route(void);
+void audio_headphone_state(bool *inserted_out, bool *supported_out);
+bool audio_output_parse(const char *text, audio_output_mode_t *out);
+const char *audio_output_name(audio_output_mode_t mode);
+bool audio_wav_params_ok(uint16_t audio_format, uint16_t channels,
+                         uint32_t sample_rate, uint16_t bits, uint32_t data_size);
 ```
 - The codec is mono 16-bit at 22050 Hz (BSP default). Tones are generated in heap chunks with
   a short fade; WAVs (16-bit PCM mono/stereo at 22050/44100 Hz) stream from SD, stereo mixed to
   mono and 44100 decimated. Playback is background and single-slot; `audio_stop()` is also
   called by `sleep`/`deepsleep`. `command_set_volume()` / `command_get_volume_percent()` in
   command.c are thin wrappers over `audio_set_volume()` / `audio_get_volume()`.
+- Output routing: `audio_set_output_mode()` selects AUTO (speaker unless headphones are
+  detected) / SPEAKER / HEADPHONES; the route is evaluated at each play/volume/status call
+  (no poller) and applied to the amp through the BSP (`bsp_audio_speaker_enable`). Boards
+  without a jack report unsupported and always resolve to the speaker. The pure
+  `audio_output_parse()` / `audio_route_resolve()` / `audio_wav_params_ok()` helpers are
+  unit-tested in `test/main/test_audio.c`.
 
 ## Storage Module API
 
@@ -1210,6 +1227,23 @@ const char *app_wifi_state_string(void);
 - `command_init()` registers the table with `networking_*` wrappers; every
   hook is NULL-checked, so the helpers degrade gracefully before registration.
 
+### Messaging helpers (applib_msg.h) (event-service pub/sub via the registered ops table)
+```c
+typedef struct {
+    int  (*msg_publish)(const char *topic, const uint8_t *payload, size_t len);
+    int  (*msg_subscribe)(const char *filter);
+    bool (*msg_connected)(void);
+} applib_msg_ops_t;
+void applib_register_msg_ops(const applib_msg_ops_t *ops);
+bool app_msg_publish(const char *topic, const char *text);
+bool app_msg_subscribe(const char *filter);
+bool app_msg_connected(void);
+```
+- `command_init()` registers the table with `netsvc_*` wrappers; every hook is
+  NULL-checked, so the helpers return false before registration. Publishing
+  journals to the SD outbox when offline (at-least-once); native apps never
+  touch sockets or `networking.h`.
+
 ### Input with timeout (applib_input.h)
 ```c
 bool app_wait_key(uint32_t timeout_ms, char *key_out);
@@ -1520,6 +1554,12 @@ The display manager (`components/display/`) is the central controller for all di
 - `esp_err_t display_sleep(void)` / `esp_err_t display_wake(void)`
   - Convenience functions for sleep/wake transitions.
 
+- `int display_get_touch_int_gpio(void)`
+  - Get the touch controller interrupt GPIO actually in use, from the live panel
+    driver config (`GPIO_NUM_NC` when the interrupt line is not a real IRQ on this
+    unit, e.g. the Tab5 BSP straps GPIO23 low on ILI9881C+GT911 revisions). Used by
+    the power module so `sleep` arms/reports touch wake per fitted hardware.
+
 ### Display Info & Diagnostics
 
 - `display_info_t display_get_info(void)`
@@ -1745,6 +1785,64 @@ All `header_update_*()` functions are **safe to call from any task context** (LV
   - Set/read whether the Wi-Fi watchdog retries the stored target SSID (the CONFIG.SYS
     `WIFI_AUTOCONNECT=` policy and the `config WIFI_AUTOCONNECT` setting).
 
+## Event service (`netsvc.h` + `mqtt_codec.h`)
+```c
+/* mqtt_codec.h: pure MQTT 3.1.1 packet codec (no I/O, unit-tested). */
+int  mqtt_encode_connect(uint8_t *out, size_t cap, const mqtt_connect_args_t *args);
+int  mqtt_encode_subscribe(uint8_t *out, size_t cap, uint16_t pkt_id, const char *filter, uint8_t qos);
+int  mqtt_encode_unsubscribe(uint8_t *out, size_t cap, uint16_t pkt_id, const char *filter);
+int  mqtt_encode_publish(uint8_t *out, size_t cap, const char *topic, const uint8_t *payload,
+                         size_t payload_len, uint8_t qos, uint16_t pkt_id, bool retain);
+int  mqtt_encode_puback(uint8_t *out, size_t cap, uint16_t pkt_id);
+int  mqtt_encode_pingreq(uint8_t *out, size_t cap);
+int  mqtt_encode_disconnect(uint8_t *out, size_t cap);
+int  mqtt_decode_header(const uint8_t *p, size_t avail, uint8_t *type_out, uint8_t *flags_out,
+                        uint32_t *rem_out, size_t *hdrlen_out);
+int  mqtt_decode_connack(const uint8_t *body, size_t len, uint8_t *rc_out);
+int  mqtt_decode_publish(const uint8_t *body, size_t len, uint8_t flags, mqtt_view_t *topic_out,
+                         uint16_t *pkt_id_out, mqtt_view_t *payload_out);
+int  mqtt_decode_suback(const uint8_t *body, size_t len, uint16_t *pkt_id_out,
+                        uint8_t *granted, size_t granted_cap);
+bool mqtt_topic_matches(const char *filter, const char *topic);
+
+/* netsvc.h: the ONE persistent MQTT service (one lazy task). */
+typedef struct {
+    void (*execute_async)(char *command);   /* /onmsg hook */
+    bool (*can_reveal_private)(void);       /* lock gate */
+    esp_err_t (*set_env)(const char *name, const char *value);
+    bool (*ota_active)(void);               /* pause during OTA */
+} netsvc_host_ops_t;
+void netsvc_register_host_ops(const netsvc_host_ops_t *ops);
+void netsvc_ensure_init(void);
+bool netsvc_is_connected(void);
+bool netsvc_is_active(void);
+esp_err_t netsvc_set_broker(const char *host, int port, const char *user);
+esp_err_t netsvc_set_password(const char *password);
+esp_err_t netsvc_connect(void);
+esp_err_t netsvc_disconnect(void);
+esp_err_t netsvc_subscribe(const char *filter);
+esp_err_t netsvc_unsubscribe(const char *filter);
+esp_err_t netsvc_publish(const char *topic, const uint8_t *payload, size_t len);
+bool netsvc_last_msg(char *topic_out, size_t topic_size, uint8_t *payload_out,
+                     size_t *payload_len_inout, size_t payload_cap);
+esp_err_t netsvc_set_onmsg(const char *line);
+int netsvc_outbox_count(void);
+esp_err_t netsvc_outbox_purge(void);
+const char *netsvc_state_string(void);
+int netsvc_sub_count(void);
+bool netsvc_sub_get(int index, char *out, size_t out_size);
+uint32_t netsvc_backoff_ms(unsigned attempt, uint32_t base_ms, uint32_t cap_ms);
+int netsvc_outbox_encode(const char *topic, const uint8_t *payload, size_t len,
+                         uint8_t qos, char *out, size_t out_size);
+int netsvc_outbox_decode(const char *rec, size_t rec_len, char *topic_out, size_t topic_size,
+                         const uint8_t **payload_out, size_t *payload_len_out, uint8_t *qos_out);
+```
+- The codec is pure and fully unit-tested (`test_netsvc.c`). The service is
+  plaintext MQTT, journals every publish to `sd:/NET/OUTBOX/` before the wire
+  (at-least-once), and pauses while Wi-Fi is down or an OTA owns flash. Inbound
+  `$pim/db/<name>` and `$pim/alarms` payloads merge newer-wins through
+  `components/pim/`; delivery reaches batch only through `execute_async`.
+
 ## Persistent known networks (`wifi_known.h`)
 ```c
 void networking_wifi_known_init(const networking_host_ops_t *ops);
@@ -1886,9 +1984,28 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
     or empty falls back to the configured default device name.
   - Focused Bluetooth helpers for shell subcommands.
 
+- `esp_err_t bluetooth_connect(const char *addr_str)`
+  - Acts as a BLE central for an external HID keyboard/mouse. Parses a
+    `XX:XX:XX:XX:XX:XX` address, stops any scan/advertising, connects, negotiates
+    the MTU, and discovers the HID service (0x1812) through the NimBLE GATT client.
+    Incoming reports are routed to the shell input path. Returns
+    `ESP_ERR_INVALID_STATE` when already connected, `ESP_ERR_INVALID_ARG` for a
+    malformed address, or `ESP_ERR_NOT_SUPPORTED` when NimBLE is disabled.
+- `void bluetooth_disconnect(void)`
+  - Terminates the current BLE HID connection (no-op when none).
+- `bool bluetooth_is_device_connected(void)`
+  - True when a BLE HID peripheral is attached and able to send reports. Distinct
+    from `bluetooth_is_connected()` (NimBLE host sync); the on-screen-keyboard
+    auto-hide uses this via `command_physical_keyboard_present()`.
+
 - `bool bluetooth_is_enabled(void)`
 - `bool bluetooth_is_connected(void)`
   - Read-only state helpers used by the header status refresh in `components/shell/` to show hosted BLE readiness without moving Bluetooth ownership out of this module.
+
+- `networking_host_ops_t.bluetooth_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed)`
+  - Host callback invoked from the NimBLE task when a BLE HID report arrives; filled
+    by `main.c` with `shell_usb_keyboard_input` so BLE and USB keyboards share one
+    input path.
 
 ## LED API
 - `void led_init(void)`
@@ -2060,7 +2177,16 @@ bool editor_doc_replace_next(editor_doc_t *doc, const char *needle,
 ```c
 size_t editor_lex_batch(const char *text, size_t len,
                         editor_syntax_run_t *runs, size_t capacity);
+size_t editor_lex_markdown(const char *text, size_t len,
+                           editor_syntax_run_t *runs, size_t capacity);
+size_t editor_lex_json(const char *text, size_t len,
+                       editor_syntax_run_t *runs, size_t capacity);
+size_t editor_lex_html(const char *text, size_t len,
+                       editor_syntax_run_t *runs, size_t capacity);
 ```
+- The three non-batch lexers share `editor_syntax_run_t` and the one emit
+  helper; `editor_doc_pick_syntax` maps a path through the `filetype` registry
+  to `EDITOR_SYNTAX_{PLAIN,BATCH,MARKDOWN,JSON,HTML}`.
 
 ### Session (worker task)
 ```c
@@ -2106,6 +2232,23 @@ bool   editor_spell_token_ok(const char *word, size_t len);
   the single UTF-8-aware tokenizer shared by the core and the view (pure,
   unit-tested): `token_ok` passes whole-word hits and contractions whose
   parts hit, and never flags CJK/digit/`_`/`non-ASCII-Latin` tokens.
+```c
+bool   spell_user_load(void);                    /* sd:/DICTS/user.words */
+void   spell_user_unload(void);
+size_t spell_user_count(void);
+bool   spell_user_learn(const char *word, size_t len);
+bool   spell_user_forget(const char *word, size_t len);
+size_t spell_user_list(char *buf, size_t size);  /* NULL buf measures */
+bool   spell_ignore(const char *word, size_t len);
+void   spell_ignored_clear(void);
+size_t spell_ignored_count(void);
+```
+- The user overlay (`sd:/DICTS/user.words`, same one-per-line format, learned
+  via `spell learn` / the editor `AddWord` key) is a second pool+index
+  consulted before the base list; the session ignore list is an in-memory set
+  consulted first. Base words are never removable. Overlay file writes are
+  immediate (append on learn, atomic rewrite on forget); lookups stay
+  allocation-free after load.
 
 ### View (LVGL task)
 ```c
@@ -2185,6 +2328,10 @@ size_t markdown_render_html_page(const char *md, const char *title,
 size_t markdown_render_print(const char *text, const char *title,
                              int cols, int rows,
                              char *out, size_t out_size);
+size_t markdown_expand_form_feeds(const char *src, char *dst, size_t dst_size);
+
+/* HTML reader (html.h) - the inverse of markdown_render_html */
+size_t html_render_ansi(const char *html, char *out, size_t out_size);
 ```
 - `markdown_render_doc` emits ANSI SGR for on-device rendering (the single
   implementation for the transcript, viewer, and editor preview).
@@ -2197,6 +2344,15 @@ size_t markdown_render_print(const char *text, const char *title,
   (`cols` x `rows`, `title   Page N` header, form feed between pages) for
   `markdown export ... print`. All are separate output formats and never
   affect the ANSI path; each NUL-terminates and truncates safely.
+- `markdown_expand_form_feeds` replaces each `\f` (the print page separator)
+  with a visible `page break` rule for on-screen viewing; the on-disk bytes
+  are unchanged.
+- `html_render_ansi` (html_read.c) is the **only** HTML reader: it renders
+  `.html`/`.htm` to ANSI SGR for the viewer, `type`, and the editor preview
+  (headings, nested lists, tables, pre/code, blockquotes, links, images,
+  entities; `head`/`script`/`style`/comments skipped). The caller reuses
+  `markdown_strip_ansi()` for plain surfaces. Bounded by
+  `P4_CONFIG_HTML_RENDER_MAX_BYTES`.
 
 ## Font API (`components/font/`)
 
@@ -2296,7 +2452,7 @@ int modal_hexview_run(const char *title, const char *path, uint32_t timeout_ms);
 - OTA progress text remains `C6 OTA: XX% (YYYY KB / ZZZZ KB)`.
 - OTA continues to validate ESP-IDF app-image magic `0xE9` and ESP32-C6 chip ID `0x000D` before transfer.
 
-## Hardware module APIs (v1.2.1)
+## Hardware module APIs (v1.3.0)
 
 These leaf modules back the M5Stack Tab5 hardware support; all are safe to call on
 boards that lack the hardware (they degrade to a benign error).
@@ -2369,6 +2525,12 @@ int crypt_decrypt_mem(const uint8_t *in, size_t len, const char *pass,
   (bugs.md F23, fixed in v1.2.1).
 
 ### New shell command hooks
+- `int shell_command_pim(int argc, char **argv)` (`pim get|put`; PIMX framing over the shared serial engine)
+- `int shell_command_sync(int argc, char **argv)` (`sync [status]`; read-only P4Sync `sync.*` handshake snapshot, `sync_commands.c`)
+- `int shell_command_net(int argc, char **argv)` (`net status|broker|...`; thin shell over the MQTT event service, `netsvc_commands.c`)
+- `int shell_command_edit_db(const char *dbname, const char *id_arg, bool focus, const char *template_name)` and `int shell_command_edit_alarm(const char *id_arg, bool focus, const char *template_name)` (`edit db|alarm` record editing over temp `.txt` staging; `edit_record_commands.c`)
+- `esp_err_t alarm_event_render(const alarm_event_t *e, char *buf, size_t size)` / `esp_err_t alarm_event_parse(const char *text, uint32_t id, alarm_event_t *out)` (canonical event text; single shared core with the file saver/loader; `ALARM_EVENT_TEXT_BYTES` render cap)
+- `bool pim_payload_bump_mtime(char *buf, size_t cap, time_t now)` (in-place `mtime=` bump for uid-carrying payloads; CSV/plain pass through byte-identical)
 - `void shell_execute_imu_command(int argc, char **argv)` (`imu`)
 - `void shell_execute_rgb_command(int argc, char **argv)` now accepts `rgb <1|2> ...`
 - `void shell_command_shutdown(int argc, char **argv)` (`shutdown` / `poweroff`)

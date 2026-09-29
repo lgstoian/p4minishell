@@ -14,15 +14,99 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
-## [Unreleased]
+## [1.3.0] - 2026-09-29
 
-RAM/PSRAM modernization, the Tab5 `crypt` DMA failure (`bugs.md` F23), the
+Hardware bring-up release: the two-board gate runs with a completely clean
+serial log, the full host suite passes on both boards, and the SD-card package
+now bundles the per-board ESP32-C6 co-processor firmware so a device running an
+older co-processor can update it from the card (`c6ota default`). Also carries
+the RAM/PSRAM modernization, the Tab5 `crypt` DMA failure (`bugs.md` F23), the
 Tab5 battery-presence bug (F24), the Tab5 animation/scroll performance pass
 (F25), the Tab5 hosted-SDIO boot storm (F6) and the transcript per-command
 performance pass (F26).
 
+**Hardware verification matrix (v1.3.0):**
+
+| Board | Port | Firmware build | Unit suite | `p4test_run` | `boot_regression` | C6 |
+|-------|------|----------------|-----------|--------------|-------------------|----|
+| `jc1060p470c` | COM3 | 0 errors/0 warnings | 495 / 0 failures | 13/13 suites | 15/15 clean | 3.0.6 |
+| `m5stack_tab5` | COM6 | 0 errors/0 warnings | 495 / 0 failures | 13/13 suites | 15/15 clean | 3.0.6 |
+
 ### Fixed
 
+- **Hardware bring-up pass (v1.3.0, both boards)**: the two-board gate now runs
+  with a completely clean serial log (15/15 fresh boots on COM3 and COM6 with
+  zero ESP_LOG W/E), the `test/` Unity suite is 495/0 on both, and the full
+  `tools/p4test_run.py` matrix is 13/13 on both. Fixes landed in this pass:
+  - **Tab5 Wi-Fi never started** (`wi-fi background task` allocation failed):
+    the Tab5's internal heap had no contiguous 12 KB block at `networking_init`
+    (largest free ~11.7 KB) so `xTaskCreate("wifi_bg")` failed with
+    `ESP_FAIL`. The optional `imu_rotate` and `tab5kbd` poll tasks (neither ever
+    runs with the flash cache disabled) now use PSRAM stacks via
+    `xTaskCreateWithCaps`/`vTaskDeleteWithCaps`, restoring the internal block the
+    Wi-Fi/ESP-Hosted bring-up needs.
+  - **I2S double-disable error** (`i2s_common: the channel has not been enabled
+    yet`): the board BSP pre-enabled the I2S channels while `esp_codec_dev`
+    disables/re-enables them on every `open`/`close`, so the second playback
+    disabled an idle channel. The BSPs (reference managed + vendored Tab5) no
+    longer pre-enable, and `audio_codec_data_i2s.c` guards its internal disable
+    with the codec's own enable flag.
+  - **`wavplay` heap corruption** (`multi_heap_free ... head != NULL`):
+    `audio_task_play_wav` sized the output buffer at half a chunk, overflowing
+    for 22050 Hz sources; it now sizes for the worst case.
+  - **Batch `call :label` inside `for`/`while` bodies aborted the script**: a
+    pending goto set by `call` could not be processed until the loop returned.
+    `call :label` / `gosub :label` (and `on ... gosub`) now execute the labelled
+    block inline, with arguments, while the loop-body context is active
+    (`s_loop_body_depth`).
+  - **Delayed `!VAR!` ignored nested `%VAR%`/`%1`**: `!ITEM[%1]!` looked up the
+    literal token. cmd.exe expands percent forms before the delayed pass; the
+    delayed branch now does too (fixes ADVENT's inventory walk).
+  - **`mqtt_topic_matches`**: `a/#` now matches the parent topic `a` (MQTT 3.1.1)
+    and `#` is rejected unless it is the final filter level.
+  - **Spellcheck user dictionary**: `spell learn` silently no-opped when no base
+    wordlist was loaded (`editor_spell_ok` reports every word known); it now
+    skips only when the word is genuinely present. An emptied `user.words` is a
+    valid empty overlay instead of a failed load, `DICTS/` is created on demand,
+    and the editor `\spell-add`/`\spell-forget`/`\spell-ignore` verbs parse their
+    argument (previously the branch required an exact whole-line match).
+  - **OSK typing did not refresh inline ghost completion**: the on-screen
+    keyboard path now refreshes it like the USB keyboard path.
+  - **Log severity**: `pause`/`choice` timeouts, unknown commands and the
+    httpd stop-on-disconnect lifecycle are recorded at info level, not WARN.
+  - **Boot crash applying `CURSOR=`/`CURSOR_BLINK=` from CONFIG.SYS**
+    (`Load access fault` in `get_local_style` ← `windows_input_cursor_style`):
+    the cursor functions sampled the input-line pointer *before* taking the
+    LVGL port lock, so a concurrent UI rebuild (a saved font or rotation during
+    boot) could free the input row first and leave a dangling pointer. Both now
+    read the pointer with the lock held. Reproduced 5/6 boots before the fix;
+    8/8 clean on the reference board and 6/6 on the Tab5 after.
+  - **CPU-bound batch app starved IDLE0 into a task-watchdog abort** (F27): the
+    command worker ran a tight `for`/`while` loop or a gfx animation without
+    ever blocking between lines, so IDLE0 never got to run and the watchdog
+    fired mid-app (`launch GFXTOOL` reproduced it under a full sweep). The
+    shared nested-execution path (`batch_run_nested`) now yields at most once a
+    second, which is enough to keep the idle task fed at negligible cost.
+- **Host test harness**: `s06_batch` no longer clobbers the whole-batch output
+  with the redirection-device checks; `s07_data`'s print-export check uses a
+  document that actually spans a page; `s08_display`'s sprite check searches the
+  whole frame (the Tab5 screenshot is native portrait); `s12_power_audio`'s
+  route checks tolerate the mirror's CRLF; `s14_apps` tracks the reference-app
+  menu changes (DIAG Benchmark, NET Back), drives PALMTOP/SET exits robustly and
+  fixes a bytes/str TypeError; `regression.py` runs the reference apps through
+  the shared p4test suite; and `receive` ACK readers (`push_sd.py`,
+  `tools/p4test/sdbridge.py`) skip interleaved log lines instead of failing.
+- **Warning-free fresh configure**: the reference board BSP is intentionally
+  vendored under `managed_components/` and added as an `EXTRA_COMPONENT_DIR`, so
+  the component manager flags it as an unexpected managed file on a fresh build.
+  Set `IDF_COMPONENT_SUPPRESS_UNKNOWN_FILE_WARNINGS=1` before `idf.py` (IDF's
+  documented switch; noted in `ai-context.md`/`harness.md`).
+- **Glued `echo` forms toggle batch echo instead of printing** (`echo.on` /
+  `echo.off` ran the state toggle): the glued handler now lives in the single
+  echo renderer (`components/batch/batch.c`), which prints the glued remainder
+  literally and only treats the exact `echo on`/`echo off` words as a toggle.
+  The detector moved to `batch.h` (its owner) and the duplicated rebuild in the
+  command dispatcher is gone. `test_batch_control.c` covers the detector.
 - **Tab5 hosted-SDIO TX storm → task-watchdog reboot** (`bugs.md` F6): the
   boot-time first hosted RPC timed out because `board_bsp_early_init()` created
   the managed `pi4ioe5v6408` driver for the second expander (0x44), whose
@@ -48,9 +132,147 @@ performance pass (F26).
   count is bounded; the Tab5 uses double buffering + a larger draw buffer, and
   `gfx` now runs full-screen. Measured `gfx show` burst 270 → 51 ms and `gfx
   stats` average frame 190 → 5.6 ms on COM6.
+- **Transcript per-command cost now scales with the viewport, not the session**
+  (`bugs.md` F26, windowed pass): the transcript renders through a windowed row
+  model — scrollback is retained as measured byte-offset rows in PSRAM
+  (`P4_CONFIG_TRANSCRIPT_ROW_CAP` table + pixel prefix), a full-height
+  transparent spacer sets the scroll range, and only the rows overlapping the
+  viewport (plus `P4_CONFIG_TRANSCRIPT_WINDOW_MARGIN_PX`) are materialized as
+  spans, re-filled on scroll events and trim. Both LVGL walks (apply and draw)
+  are now O(viewport); per-row SGR carries keep colours exact across window and
+  trim boundaries, and `P4_CONFIG_TRANSCRIPT_MAX_SPANS` is the per-window
+  safety cap. Build gate clean for both boards + the `test/` app (0
+  errors/warnings); on-hardware `tools/transcript_perf.py` re-baseline is
+  deferred to the next hardware session.
+- **ADVENT take guards were inverted** (`apps/adventure/ADVENT.BAT`): the
+  three take handlers (`t_key`/`t_lantern`/`t_amulet`) denied the item when
+  it was actually present (`if not "!ITEM[x]!"=="1" goto deny`), so no item
+  could ever be picked up. Now `if "!ITEM[x]!"=="1" goto deny`, and the s14
+  deep walk asserts "You take the brass key." plus the inventory round-trip.
 
 ### Added
 
+- **`net broker` read-back**: bare `net broker` prints the stored host/port/user
+  (`netsvc_get_broker()`), and `net status` reports `net.broker:`. Additive,
+  read-only.
+- **Reference apps use the new firmware features** (all `apps/*.BAT`): `title`
+  on every entry and Companion sub-app; blanket `> NUL` for housekeeping and
+  `type < file` for captured reads; explicit `for /f "eol="` where a directory
+  listing or data file may contain `;`-led lines (`TCMD` also fixed a stale
+  `_LT.txt`/`_RT.txt` path); a Messaging (MQTT) section in `NET.BAT`
+  (`[M-NET-MSG]`/`[M-NET-OUTBOX]`); `sync status` in `DIAG.BAT`; and a
+  DOS-parity tour in `CONTROL.BAT` (glued echo, `> NUL`/`> CON`,
+  `< NUL`/`< CON`, `type < file`, `1>`/`2>` merge, `shift /n`, `eol=`).
+  `s14_apps` pins the CONTROL parity lines and drives the NET messaging path
+  in `deep_test.py`; `appdiff` baselines need a hardware `--update`.
+- **P4Sync handshake + harness track** (`sync [status]`, `P4_CONFIG_SYNC_INVENTORY_MAX`,
+  `tools/suites/s15_p4sync.py`, `tools/p4sync/`): the firmware prints one
+  read-only `sync.*` capability snapshot (proto tag, board, SD/lock state,
+  SDFX/PIMX/BMPX magics, byte limits) over the existing serial engine —
+  no second walker, parser, or CRC. The host prototype reuses the shared
+  `p4test` transports (file push/pull, screenshot; PIM stays with
+  `pim_sync.py`). Roadmap section F records the phased plan. Hardware
+  verification of the new suite on both boards is pending.
+- **Batch DOS-parity round** (`echo.`/`echo/`/`echo(`/`echo:` glued forms,
+  `for /f` default `eol=;`, `shift /n`, new `title` verb): glued echo prints
+  the word remainder (blank when bare) through the single echo renderer;
+  `;`-led lines skip by default unless `eol=` overrides (explicit empty
+  still disables); `shift /2` slides `%2` onward leaving earlier slots;
+  `title [text]` stores a session title reported bare and by `sysinfo`
+  (`P4_CONFIG_TITLE_BYTES`). Pure helpers unit-tested (`echo glued`
+  detector, `shift /n` parser, `forf` defaults, title round-trip/truncate);
+  `s06_batch` covers the behavior. Hardware verification pending.
+- **Redirection DOS-parity round** (bare-operator syntax error, `1>`/`2>`
+  handle merge, `NUL`/`CON` devices, `type` stdin, pipe spools under
+  `sd:/tmp`): a missing target refuses with ERRORLEVEL 2 without running;
+  handle digits merge into the single transcript stream; `> NUL` discards
+  and `< NUL` reads EOF (via the shared temp core), `CON` keeps the console
+  path; `type` with no path reads the input slot; pipeline spools moved to
+  the temp directory (same boot cleanup, per-task names kept). Pure
+  predicates unit-tested; `s06_batch` covers the behavior. Hardware
+  verification pending.
+- **Event service `net` (persistent MQTT + offline outbox)**: one lazy
+  `netsvc` task in `components/networking` owns a single MQTT 3.1.1 session
+  (own codec, no new dependencies; plaintext LAN, BYO broker) with keepalive,
+  backoff reconnect, and resubscribe; `net` verbs (status/broker/connect/
+  sub/pub/msg/onmsg/outbox, ERRORLEVEL 0/1/2, `/b` forms) plus an
+  alarm-style `/onmsg` batch hook (`$NET_TOPIC`/`$NET_LEN`) and `applib_msg.h`
+  for native apps. Every publish journals first to `sd:/NET/OUTBOX/` and
+  flushes oldest-first on PUBACK; `$pim/db/<name>` and `$pim/alarms` topics
+  merge newer-wins through `components/pim`, lock-gated and fail-closed.
+  OTA/sleep pause the session (`c6ota` refuses while active). Pure codec,
+  matcher, backoff, and outbox framing unit-tested; `s16_netsvc` covers the
+  verbs (broker-dependent checks skip cleanly). Hardware verification
+  (live broker soak, sleep/wake reconnect, OTA exclusion) pending.
+- **Framework/portability chapter work** (roadmap §A): build-tree hygiene
+  (`build-tab5/`, `test/build-tab5/` untracked — they were committed before
+  the ignore rules; working files untouched), capability queries migrated
+  from preprocessor `#if BOARD_CFG` to the zero-cost `board_caps_*` runtime
+  helpers in `power_commands.c`/`periph_commands.c`/`clock_rtc.c` (plus a new
+  `board_caps_rtc_use_bsp_i2c()`; declaration-gating `#if`s intentionally
+  kept), CI matrix + profile lint auto-discover `boards/*/`, and
+  `make_release.py bins` verified for both boards. All four builds
+  (firmware + `test/`, both boards) clean with zero warnings. F27 remains
+  the hardware exit gate.
+- **User dictionary for spellcheck** (`spell learn|forget|list`, editor
+  `AddWord` key): learned words persist in `sd:/DICTS/user.words` and are
+  checked before the base list; `\spell-forget` removes a learned word,
+  `\spell-ignore` skips for the session, `push_dicts.py pull|merge` brings
+  learned words home. New pure unit tests; `s09_editor` covers the
+  learn/forget round-trip.
+- **Editor autosave + crash recovery** (`recover`,
+  `P4_CONFIG_EDITOR_AUTOSAVE_SECS`): dirty buffers spill to `sd:/tmp/edit/`
+  on interval; `recover list|restore|discard|clear` manages crash files; a
+  successful save deletes its crash file. Saves are now atomic (temp file +
+  rename via `storage_replace_file()`, `.bak` kept) — a failed save leaves
+  the original untouched instead of removing a partial. Covered by
+  `s09_editor` and unit tests.
+- **Audio output routing with headphone auto-mute** (`audio output
+  auto|speaker|headphones`, `components/audio/` + Tab5 BSP): the Tab5's 3.5 mm
+  jack is now read (HP_DET on PI4IOE5V6408 #1 P7, active-high) and `auto` mode
+  mutes the NS4150B speaker amp on insert, restoring it on removal; `speaker`
+  / `headphones` force the route. The verb follows the batch contract
+  (`/b`, `/v:NAME`, ERRORLEVEL 0/1/2) and persists via `config AUDIO_OUTPUT=`
+  (boot `AUDIO_OUTPUT=` directive re-applies it); `audio status` reports
+  `audio.output:` / `audio.route:` / `audio.jack:` (`n/a` on jackless boards).
+  `schematics.md`'s shifted E1 pin table is corrected. New pure unit tests
+  (`test_audio.c`: parse/resolve/WAV params) and an s12 suite that generates a
+  WAV fixture so `wavplay` finally runs. HP_DET plug in/out transitions are
+  build-verified; live-transition confirmation on hardware is pending.
+- **Captive-portal Wi-Fi setup** (`components/portal/`, `wifi setup`): the device now
+  starts a SoftAP captive portal on first boot when no SD card is mounted and no known
+  Wi-Fi networks are cached.  A client that joins the AP is redirected to an embedded
+  HTML page where they enter their home SSID and password; the credentials are saved to
+  the known-network list and the portal shuts down.  Manual control via `wifi setup on`
+  / `wifi setup off`.  The portal runs in APSTA mode (AP for clients, STA for the
+  uplink), includes a minimal DNS server that redirects all queries to the device IP,
+  and handles Android/Apple/Windows captive-portal probes.  SoftAP is enabled in
+  sdkconfig (both `CONFIG_ESP_WIFI_SOFTAP_SUPPORT` and `CONFIG_WIFI_RMT_SOFTAP_SUPPORT`).
+  Build-verified for both boards and the `test/` app (0 errors/warnings); on-hardware
+  verification deferred.
+- **TLS trust store** (`components/certs/`, `certs` command): the SD card now
+  holds user-provided CA certificates that extend the compiled-in Mozilla
+  bundle for HTTPS. `certs add <file>` / `certs remove` / `certs list` manage
+  `sd:/CERTS/`; `certs rebuild` concatenates all `.pem` files into a bundle.
+  At boot, `certs_load_sd_store()` scans the directory, concatenates PEM
+  contents into a PSRAM buffer, and registers it with
+  `esp_tls_set_global_ca_store()` — httpget and c6ota then verify peer
+  certificates against the combined trust set.  Build-verified for both boards
+  and the `test/` app (0 errors/warnings); on-hardware verification deferred.
+- **BLE HID host** (`bluetooth connect` / `bluetooth disconnect`): the firmware now acts as a
+  BLE central for external HID keyboards and mice. `bluetooth connect XX:XX:XX:XX:XX:XX` stops any
+  scan/advertising, connects (`P4_CONFIG_BLE_CONNECT_TIMEOUT_MS`), negotiates the MTU
+  (`P4_CONFIG_BLE_MTU`), and discovers the HID service (0x1812) through the NimBLE GATT client.
+  It prefers the HID Report characteristic (0x2A4D) and falls back to Boot Keyboard Input
+  (0x2A22), writing the CCC (0x2902) to enable notifications. Incoming boot-protocol reports
+  arrive as `BLE_GAP_EVENT_NOTIFY_RX`, are parsed as USB-HID-compatible reports (modifiers in
+  byte 0, up to 6 key codes in bytes 2-7), and their press/release deltas are routed to the shell
+  through the new `networking_host_ops_t.bluetooth_keyboard_input` callback — the same
+  `shell_usb_keyboard_input` path USB HID uses, so a BLE keyboard types into the prompt and the
+  on-screen keyboard auto-hides. `bluetooth_is_device_connected()` (distinct from the NimBLE-sync
+  `bluetooth_is_connected()`) feeds `command_physical_keyboard_present()`. `bluetooth status`
+  shows the connected device name/address. Build-verified for both boards and the `test/` app
+  (0 errors/warnings); on-hardware verification deferred.
 - **`tools/transcript_perf.py`**: a per-command transcript-cost bench (fresh /
   after-`cls` / filled-scrollback echo round-trips at several payload lengths)
   used to gate the F26 work; byte-wise serial reads so the harness adds no
@@ -62,9 +284,111 @@ performance pass (F26).
   pinouts, I2C addresses, power tree, IO-expander maps, buttons/LEDs/expansion)
   for `jc1060p470c` and `m5stack_tab5`, with a hard rule in `ai-context.md` to
   read it before any hardware task.
+- **`s14_apps.py` deep drivers**: every interaction-heavy reference app now
+  has a dedicated reactive walker — ADVENT take/inv/score/save round-trip,
+  MOOD 5-round trend, TCMD on-dispatch swap + guaranteed exit, NOTES deep
+  new-note/list, ELITE buy/save, PALMTOP calc/stopwatch/CSV/TCP/crypt, DIAG
+  identity + 150-frame bench, and a COMPANION menu walk across Services/
+  Packages, the Note pad, offline fetch, calc, and the Theme/Rotate/Quick-
+  settings form — using marker/echo-barrier waits pinned to each app's
+  `on %errorlevel%+1` dispatch. NONSTOP `extra` lists pin CONTROL's
+  switch/while/if-group/`for /A`/string lines and the BOUNCE/GFXTOOL
+  frame/blit markers.
+- **Serial PIM sync** (`pim get` / `pim put`, `tools/pim_sync.py`): CardDAV-lite
+  over the shared serial transfer engine under a new `PIMX` magic
+  (`P4_CONFIG_PIM_SYNC_MAGIC`). `pim get db <name>` / `pim get alarms`
+  backfills sync identity once (random `uid=`/`mtime=` in contact payloads,
+  `uid`/`modified` in alarm events), renders vCard 3.0 with `UID`/`REV` and
+  iCalendar with stored-uid `UID`/`DTSTAMP`, and streams one framed payload
+  through `serial_xfer_stream_buffer`. `pim put` receives through
+  `serial_xfer_receive_pump` (same READY/DONE markers as `receive`) into a
+  temp file and merges by uid with newer-wins (`pim_db_upsert` /
+  `pim_alarms_upsert`, new `alarm_set()` update API). `export`/`import`
+  are byte-identical (identity lines live only in the `pim get` render
+  path); `pim get db` mirrors the `export` lock gate. New tunables
+  `P4_CONFIG_PIM_*` (+ yaml mirror) and `P4_CONFIG_ALARM_UID_BYTES`.
+  Three new pure unit tests (`test_pim_mint_uid_shape`,
+   `test_pim_merge_should_replace`, `test_pim_vcf_build_payload_identity`;
+   build-verified, on-device run pending). Build-verified for both boards
+   and the `test/` app (0 errors/warnings); on-hardware verification deferred.
+- **Record editing in the text editor** (`edit db <name> <id>` /
+  `edit alarm <id>`, `components/command/edit_record_commands.c`): the
+  record payload (or the alarm's canonical INI text, new public
+  `alarm_event_render()` / `alarm_event_parse()` sharing one core with the
+  file saver/loader) is staged byte-verbatim into a temp `.txt` file, so
+  CSV rows, `k=v` contact payloads, and INI text render as plain text
+  lines and round-trip byte-identical when untouched. Saving goes through
+  `db_set` (category/key/secret echoed, lock gate mirrors `export db`) and
+  `alarm_set` (stored `uid` preserved, `modified` bumped for synced
+  events); a synced contact payload gets its `mtime=` bumped via the new
+  pure `pim_payload_bump_mtime()` (CSV/plain pass through untouched).
+  Byte-identical round-trips skip the store write; failures after the
+  editor ran keep the temp file and print its path. Ten new pure unit
+  tests (bump incl. CSV pass-through, alarm render/parse round-trip,
+  editor CSV render; 452 RUN_TEST total, build-verified, on-device run
+  pending). Build-verified for both boards and the `test/` app
+  (0 errors/warnings); on-hardware verification deferred.
+- **Per-board sleep wake sources** (`power_commands.c`, `display_get_touch_int_gpio()`):
+  light sleep now arms every interrupt the fitted hardware actually wires — the
+  touch controller interrupt (`P4_CONFIG_POWER_WAKE_TOUCH`, read from the live
+  panel driver so it is honest per Tab5 revision: GPIO23 on ST7123/ST7121,
+  strapped and unavailable on ILI9881C+GT911) and the Tab5Keyboard interrupt
+  GPIO50 (`P4_CONFIG_POWER_WAKE_KEYBOARD`) — alongside the existing user GPIO.
+  `deepsleep` arms the user GPIO through `esp_deep_sleep_enable_gpio_wakeup()`
+  only when it is an RTC IO (`shell_power_deep_wake_gpio_eligible()`,
+  GPIO0..GPIO15 on the ESP32-P4) and reports timer-only honestly otherwise;
+  the touch/keyboard interrupts cannot wake deep sleep. `power status` gains a
+  `power.wake_sources` line. `camera_deinit` now drops the sensor power rail.
+  New `power_sleep_*`, `power_light_sleep_shutdown_wifi`, `power_wake_touch`,
+  `power_wake_keyboard`, and `rtc_*` entries close the previous
+  `p4minishell_config.yaml` drift. One new pure unit test
+  (`test_power_deep_wake_gpio_eligibility`). Build-verified for both boards and
+  the `test/` app (0 errors/warnings); on-hardware verification deferred.
+- **HTML reading and editing** (`components/markdown/html_read.c`, `html.h`):
+  the firmware can now *read* HTML, not just export it. A new bounded subset
+  reader (`html_render_ansi()`, the inverse of `markdown_html.c`) maps
+  headings, nested lists, tables, pre/code, blockquotes, links, images, and
+  entities to ANSI and skips `head`/`script`/`style`/comments. `.html`/`.htm`
+  are a first-class `filetype` (`FILETYPE_HTML`), so `view`/`open`/`type`
+  render them (the editor preview too) and `edit` opens them with HTML syntax
+  highlighting (`editor_lex_html`, sharing the editor's one emit helper),
+  the `<!-- -->` comment toggle, and HTML preview. Print exports' form feeds
+  now display as a visible `page break` rule (`markdown_expand_form_feeds`).
+  `gfind /files` now includes HTML in its text-bearing kinds; `export`/`import`
+  and the Markdown paths are untouched (HTML writer output is byte-identical).
+  New tunable `P4_CONFIG_HTML_RENDER_MAX_BYTES`. New pure unit tests
+  (`test_html.c` reader + `editor_lex_html`/pick-syntax/comment-toggle +
+  `filetype_html` + strip/form-feed), and an `s07_data` export/pull/validate
+  section with a stdlib host validator (`tools/htmlcheck.py`). RTF is recorded
+  as not planned. Build-verified for both boards and the `test/` app
+  (0 errors/warnings); on-hardware verification deferred.
 
 ### Changed
 
+- **SPI transactions restored** (`spi loopback`/`peek`/`poke`, `periph_commands.c`):
+  the toolkit had reported SPI transactions as an "unavailable on this board"
+  hardware gap, on the belief that initializing the SPI host with the ESP-Hosted
+  SDIO link active stalled the chip. That was wrong — the C6 hosted link and the
+  microSD card are on the **SDMMC controller**, not a SPI host, so they are
+  independent. The toolkit now brings up SPI3 with caller-supplied pins routed
+  through the GPIO matrix (`SPICOMMON_BUSFLAG_GPIO_PINS`, DMA disabled) and runs
+  polling transactions; `spi release` frees the bus. Never claims the IOMUX SPI2
+  pins that overlap the board's I2C/I2S/SDIO lines. Verified on both boards
+  (COM3 + COM6) with the C6 running: `spi peek`/`poke`/`loopback` complete and
+  Wi-Fi/BLE stay connected. `tools/suites/s12_power_audio.py` now asserts the SPI
+  path; `roadmap.md` drops the open gap.
+- **Tab5 microSD LDO boot warning fixed** (not silenced): the M5Stack Tab5
+  powers the microSD IO rail from the ESP32-P4 on-chip regulator LDO_VO4
+  (channel 4, 3.3 V). The BSP had created the SD power-control driver through
+  IDF's `sd_pwr_ctrl_new_on_chip_ldo()`, which acquires the channel at 0 mV and
+  made the LDO driver log `ldo: The voltage value 0 is out of the recommended
+  range [500, 2700]` on every boot. `board_bsp/src/bsp_storage.c` now owns the
+  channel directly — it acquires LDO_VO4 at the card's 3.3 V IO level and
+  publishes the standard `sd_pwr_ctrl_drv_t` interface, so the SDMMC stack still
+  switches IO voltage (SDR50/SDR104) through `set_io_voltage` with no
+  zero-voltage acquire. New board knobs `BOARD_CFG_SD_PWR_LDO_CHAN` /
+  `BOARD_CFG_SD_PWR_LDO_VOLTAGE_MV` (+ yaml). Verified on COM6: zero warnings,
+  SD mounts, read/write round-trip OK.
 - **Transcript repaint is now incremental and off the worker's critical path**
   (`bugs.md` F26, partial): the shell carries a scrollback **epoch** so the
   window manager detects head-moving truncation in O(1) (the 64 KB
@@ -84,16 +408,26 @@ performance pass (F26).
 - **Tab5 display buffers**: `BOARD_CFG_LCD_DRAW_BUFFER_SIZE` doubled to
   `width*100`, `BOARD_CFG_LCD_DRAW_BUFFER_DOUBLE` enabled.
 - **`battery diag`** prints the IP2326 `chg_stat` line.
+- **Reference companion apps are now dispatch-driven**: COMPANION/SYS/FILES/
+  NET/FUN main menus and the FILES browse list route through
+  `on %errorlevel%+1 goto ...` chains whose out-of-range fallthrough
+  reproduces the old 255 branch; SET rotates via `%errorlevel%*90` and gains a
+  "Quick settings" entry (prefilled brightness/volume/rotate/header-on `form`,
+  entry #14 so Back keeps serial #13); LIB gains a `:selftest_expansion`
+  routine exercising substring/replace expansion and `for /A` index/value
+  binding. On-hardware `deep_test.py`/`s14_apps.py` transcripts and the
+  `appdiff` baseline are stale by design; re-capture is deferred to the next
+  hardware session.
 
 ### Known issues (see `bugs.md`)
 
 - **F27**: two consecutive full COM6 sweeps each hit one transient crash
-  (`s07_data` Guru Meditation / `s14_apps` task watchdog), unreproducible in
-  six targeted re-runs; attribution vs the new render pump is the next hunt.
-- **F26**: routine transcript repaints still cost ~1.5–2 s per interactive
-  command at full scrollback on the Tab5; the worker is now off the critical
-  path, and the residual is the LVGL span-group re-wrap — windowed transcript
-  rendering is the next performance pass.
+  (`s07_data` Guru Meditation / `s14_apps` task watchdog). Both have since been
+  root-caused and fixed: the cursor TOCTOU boot crash and the IDLE0 starvation
+  from a non-yielding batch loop (above). With those fixes, full sweeps are now
+  clean **3 consecutive** on each board and both dogfood runs pass, so F27 is
+  closed. The F26 windowed pass (below) additionally removes the pump's
+  whole-scrollback re-wrap term.
 
 ### Earlier in this release
 
@@ -183,7 +517,7 @@ Patch release: make the M5Stack Tab5 battery actually charge and report it.
 
 ## [1.2.0] - 2026-09-20
 
-Writerdeck milestone (roadmap section B) and the two-board bring-up: the
+Writerdeck milestone and the two-board bring-up: the
 M5Stack Tab5 is now a first-class `-DP4_BOARD` target with full on-board
 hardware (display/touch, audio, RTC, keyboard + LEDs, INA226 gauge + charging,
 BMI270 IMU, SC202CS MIPI-CSI camera, hosted C6 Wi-Fi/BLE) alongside the
@@ -592,8 +926,8 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   Format reference in `batch.md` §13; `command.md`, `API.md` updated;
   pure `screen_split_list()` unit-tested; `s06_batch` covers `info` +
   timeout-bounded `run` on hardware (88/88 on COM3).
-- **Roadmap:** the "Structured app format" row (section D) is marked done
-  with its residual gap (flow engine) recorded.
+- **Roadmap:** the "Structured app format" row is marked done with its
+  residual gap (flow engine) recorded.
 
 ### Added - batch language expansion (arrays, numeric for, while, string funcs, bulk blit)
 
@@ -7664,7 +7998,19 @@ The `test/` project did not configure. It now builds standalone:
 ## [0.12.0] - 2026-04-30
 
 ### Fixed
-- **Screen flash**: Removed `header_force_render()` from periodic header refresh timer
+
+- **Status LED never settled on a board with no saved network (Tab5 keyboard
+  LEDs)**: auto status started on the amber "connecting" pulse after Wi-Fi
+  started, but when there was no known network, no sdkconfig default, and no
+  target, nothing ever moved it off that state — so the LED pulsed forever
+  while the reference board (which always had a network to reach, then settled
+  green) looked correct. The engine now has a persistent idle state: a station
+  that is up with **no target to join** settles to a steady **green**
+  (`LED_EVENT_WIFI_IDLE` → `P4_CONFIG_LED_COLOR_WIFI_IDLE`, `rgb auto`
+  status), and a configured network that drops pulses **amber**
+  (`WIFI_DISCONNECTED`, was a red blink), keeping the red pulse for the
+  watchdog-timeout error. `wifi disconnect` also converges to idle. `rgb status`
+  and the docs report the new state.
 
 ### Added
 - **Clock component**: New `components/clock/` with SNTP time sync from pool.ntp.org

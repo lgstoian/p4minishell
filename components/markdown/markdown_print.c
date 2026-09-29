@@ -23,6 +23,41 @@
 #include <stdio.h>
 #include <string.h>
 
+size_t markdown_expand_form_feeds(const char *src, char *dst, size_t dst_size)
+{
+    /* "\n" + 8 rule bars + " page break " + 8 rule bars + "\n". */
+    static const char MARK[] =
+        "\n\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80"
+        "\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80"
+        " page break "
+        "\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80"
+        "\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\n";
+    const size_t marklen = sizeof(MARK) - 1;
+    const char *p;
+    size_t o = 0;
+
+    if (src == NULL) {
+        return 0;
+    }
+    for (p = src; *p != '\0'; p++) {
+        if (*p == '\f') {
+            if (dst != NULL && o + marklen + 1 <= dst_size) {
+                memcpy(dst + o, MARK, marklen);
+            }
+            o += marklen;
+        } else {
+            if (dst != NULL && o + 2 <= dst_size) {
+                dst[o] = *p;
+            }
+            o += 1;
+        }
+    }
+    if (dst != NULL && dst_size > 0) {
+        dst[o < dst_size ? o : dst_size - 1] = '\0';
+    }
+    return o;
+}
+
 typedef struct {
     char *out;      /**< destination, or NULL for measure-only. */
     size_t cap;

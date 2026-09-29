@@ -3,18 +3,20 @@ rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  NOTES.BAT - a Zettelkasten note app on the `db` record store.
-rem  Reference app: db create/add/get/find/count/export/import, for /f
-rem  over bare find output, category labels, file-payload bodies via edit.
-rem  Markers: [M-NOTE] / [M-NOTE-SAVED].
+rem  Reference app: db create/add/get/find/count/export/import, for /f over
+rem  pipe-fed find output, category labels, file-payload bodies via edit,
+rem  and `on`-dispatched menus (list's 0-based index -> 1-based on target).
+rem  Markers: [M-NOTE] / [M-NOTE-SAVED] / [M-NOTE-COUNT].
 rem =====================================================================
 setlocal
 echo [M-NOTE]
+title "Notes"
 db info zettel > _zinit.txt
 if errorlevel 1 goto first_run
-del /p _zinit.txt
+del /p _zinit.txt > NUL
 goto menu
 :first_run
-del /p _zinit.txt
+del /p _zinit.txt > NUL
 db create zettel /cr:NOTE /tp:ZTL /vr:1
 db categories zettel set 0 Fleeting
 db categories zettel set 1 Permanent
@@ -27,15 +29,8 @@ draw clear screen
 draw box 1 1 80 3 double "ZETTELKASTEN"
 draw text 5 2 "linked notes on the db store" 14
 list "Zettelkasten" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"
-if errorlevel 255 goto back
-if errorlevel 7 goto back
-if errorlevel 6 goto import
-if errorlevel 5 goto export
-if errorlevel 4 goto del_note
-if errorlevel 3 goto search
-if errorlevel 2 goto view_note
-if errorlevel 1 goto list_notes
-goto new_note
+on %errorlevel%+1 goto :new_note,:list_notes,:view_note,:search,:del_note,:export,:import,:back
+goto :back
 
 :new_note
 ask /v:zkey "Link key (one word)"
@@ -43,10 +38,8 @@ if errorlevel 1 goto menu
 if "%zkey%"=="" goto menu
 list "Category" "Fleeting" "Permanent" "Project" "Archive"
 if errorlevel 255 goto menu
-if errorlevel 3 set zcat=3 & goto body_choice
-if errorlevel 2 set zcat=2 & goto body_choice
-if errorlevel 1 set zcat=1 & goto body_choice
-set zcat=0
+rem list returns the 0-based index, which is exactly the db category number.
+set zcat=%errorlevel%
 :body_choice
 list "Body entry" "Type it" "Edit file" "Cancel"
 if errorlevel 255 goto menu
@@ -65,19 +58,20 @@ goto menu
 edit _zettel.txt
 db add zettel /cat:%zcat% /key:%zkey% _zettel.txt
 if errorlevel 1 dialog "Notes" "Could not save." "OK" & goto menu
-del /p _zettel.txt
+del /p _zettel.txt > NUL
 echo [M-NOTE-SAVED]
 dialog "Notes" "Saved [%zkey%] from editor." "OK"
 goto menu
 
 :list_notes
-db find zettel /b > _z.txt
-if errorlevel 1 dialog "Notes" "No notes yet." "OK" & goto menu
-rem No del: `>` overwrites each listing (see bugs.md O6).
+db count zettel
+echo [M-NOTE-COUNT]
+rem No temp file: `db find /b` feeds the for /f pipe source directly, so a
+rem slow-SD unlink never stalls the listing (see bugs.md O6).
+db find zettel /b | for /f "eol= tokens=1-3 delims=|" %%r in () do echo %%r. [%%s] %%t
 draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "ALL NOTES" 14
-for /f "tokens=1-3 delims=|" %%r in (_z.txt) do echo %%r. [%%s] %%t
 pause
 goto menu
 

@@ -9,10 +9,13 @@ idf_component_register(
         "netdiag.c"
         "netbench.c"
         "tcpterm.c"
+        "mqtt_codec.c"
+        "netsvc.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
         bt
+        certs
         esp_event
         esp_hosted
         esp_http_client
@@ -24,6 +27,8 @@ idf_component_register(
         lwip
         nvs_flash
         p4heap
+        pim
+        portal
         storage
         strutil
 )

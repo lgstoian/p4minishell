@@ -308,17 +308,25 @@ esp_err_t storage_write_text_file(const char *path, const char *text)
         }
     }
 
+    error = storage_replace_file(tmp, resolved);
+
+    shell_sd_end(&session, INI_TAG);
+    return error;
+}
+
+esp_err_t storage_replace_file(const char *tmp, const char *dest)
+{
+    if (tmp == NULL || dest == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     /* FATFS f_rename refuses to overwrite an existing target. */
-    if (rename(tmp, resolved) != 0) {
-        remove(resolved);
-        if (rename(tmp, resolved) != 0) {
+    if (rename(tmp, dest) != 0) {
+        remove(dest);
+        if (rename(tmp, dest) != 0) {
             remove(tmp);
-            shell_sd_end(&session, INI_TAG);
             return ESP_FAIL;
         }
     }
-
-    shell_sd_end(&session, INI_TAG);
     return ESP_OK;
 }
 
@@ -605,6 +613,57 @@ esp_err_t storage_temp_path(char *buf, size_t size, const char *ext)
     return ESP_FAIL;
 }
 
+esp_err_t storage_temp_path_stem(char *buf, size_t size, const char *stem, const char *ext)
+{
+    char dir[SHELL_SD_PATH_BYTES];
+    int n;
+    FILE *f;
+
+    if (buf == NULL || size == 0 || stem == NULL || stem[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (storage_temp_ensure_dir() != ESP_OK) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    storage_temp_dir_path(dir, sizeof(dir));
+    if (ext == NULL || ext[0] == '\0') {
+        ext = "tmp";
+    }
+    n = snprintf(buf, size, "%s/%s.%s", dir, stem, ext);
+    if (n < 0 || (size_t)n >= size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    /* Deterministic owner names are reused across runs: replace any stale
+     * file (a crash orphan the boot sweep has not removed yet) so the path
+     * is reserved for the caller. */
+    (void)remove(buf);
+    f = fopen(buf, "w");
+    if (f == NULL) {
+        return ESP_FAIL;
+    }
+    fclose(f);
+    return ESP_OK;
+}
+
+esp_err_t storage_recovery_dir(char *buf, size_t size)
+{
+    char dir[SHELL_SD_PATH_BYTES];
+    int n;
+
+    if (buf == NULL || size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (storage_temp_ensure_dir() != ESP_OK) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    storage_temp_dir_path(dir, sizeof(dir));
+    n = snprintf(buf, size, "%s/%s", dir, P4_CONFIG_EDITOR_RECOVERY_DIR);
+    if (n < 0 || (size_t)n >= size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return storage_mkdir_p(buf);
+}
+
 esp_err_t storage_temp_cleanup(void)
 {
     char dir[SHELL_SD_PATH_BYTES];
@@ -624,6 +683,11 @@ esp_err_t storage_temp_cleanup(void)
         int n;
 
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+            continue;
+        }
+        /* Editor crash files live in their own subdirectory (listed by
+         * `recover`); never sweep them with the scratch files. */
+        if (strcmp(e->d_name, P4_CONFIG_EDITOR_RECOVERY_DIR) == 0) {
             continue;
         }
         n = snprintf(full, sizeof(full), "%s/%s", dir, e->d_name);

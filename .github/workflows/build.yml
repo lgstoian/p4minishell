@@ -2,7 +2,8 @@
 #
 # Uses the ESP-IDF v5.5.5 container. Every matrix leg must build with zero
 # errors and zero warnings. Add a board by adding its profile under boards/
-# (see PORTING.md) and its name to the matrix below. Hardware suites
+# (see PORTING.md): the matrix below discovers it automatically, so no
+# workflow edit is needed. Hardware suites
 # (tools/p4test_run.py, tools/regression.py, tools/capture_docs.py) stay
 # local (see readme.md).
 name: build
@@ -12,13 +13,36 @@ on:
   pull_request:
 
 jobs:
+  boards:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        name: Discover board profiles
+        run: |
+          python3 - <<'EOF' >>"$GITHUB_OUTPUT"
+          import glob
+          import json
+          import os
+          found = sorted(
+              os.path.basename(os.path.normpath(p))
+              for p in glob.glob(os.path.join("boards", "*/"))
+              if os.path.isfile(os.path.join(p, "board_config.h"))
+          )
+          assert found, "no board profiles under boards/"
+          print("matrix=" + json.dumps(found))
+          EOF
+
   firmware:
+    needs: boards
     runs-on: ubuntu-latest
     container: espressif/idf:v5.5.5
     strategy:
       fail-fast: false
       matrix:
-        board: [jc1060p470c, m5stack_tab5]
+        board: ${{ fromJson(needs.boards.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - name: Build firmware (${{ matrix.board }})
@@ -37,7 +61,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Python syntax check (host tools)
         run: python3 -m compileall -q tools apps
-      - name: Board profiles present
+      - name: Board profiles complete
         run: |
-          test -f boards/jc1060p470c/board_config.h
-          test -f boards/m5stack_tab5/board_config.h
+          python3 - <<'EOF'
+          import glob
+          import os
+          import sys
+          required = ("board_config.h", "board_config.yaml",
+                      "sdkconfig.defaults", os.path.join("board_bsp", "extra_dirs.cmake"))
+          missing = [
+              os.path.join(profile, name)
+              for profile in sorted(glob.glob(os.path.join("boards", "*/")))
+              for name in required
+              if not os.path.isfile(os.path.join(profile, name))
+          ]
+          if missing:
+              print("incomplete board profiles:")
+              print("\n".join("  " + path for path in missing))
+              sys.exit(1)
+          print("board profiles complete")
+          EOF

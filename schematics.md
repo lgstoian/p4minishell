@@ -14,7 +14,7 @@
 > [`documentation.md`](documentation.md) (modules),
 > [`bugs.md`](bugs.md) (findings).
 
-- **Firmware:** v1.2.1 (ESP-IDF v5.5.5)
+- **Firmware:** v1.3.0 (ESP-IDF v5.5.5)
 - **SoC family:** ESP32-P4 (host) + ESP32-C6 (co-processor, ESP-Hosted SDIO)
 - **Boards:** `jc1060p470c` (reference) and `m5stack_tab5`
 - **Serial:** reference `COM3`, Tab5 `COM6` during development
@@ -51,6 +51,11 @@
 - **Co-processor link:** ESP-Hosted over SDMMC **slot 1**, 4-bit. The card
   (slot 0) and the C6 share the SDMMC controller and its DMA-capable internal
   buffers (see `ai-context.md` SD Card Rules; `bugs.md` F6).
+- **Bluetooth:** the C6's BLE radio (no BT radio on the P4) is driven as a
+  hosted NimBLE host over ESP-Hosted VHCI. The firmware uses it for scanning,
+  non-connectable advertising, and as a **BLE central/HID host** for external
+  BLE keyboards/mice (`bluetooth connect`). No board pin or external component
+  is involved beyond the shared C6 SDIO link above.
 - **Wireless stack:** `espressif/esp_hosted` 3.0.6 + `espressif/esp_wifi_remote`
   1.6.2 (only the official path is permitted). The vendor M5Tab5 demo uses
   `esp_hosted` 1.4.0 + `esp_wifi_remote` 0.8.5 — a different pair (see F6).
@@ -133,7 +138,9 @@ display/touch/audio/storage/IO-expander).
 - 5" IPS **1280x720** MIPI-DSI, integrated TDDI: **ST7123 / ST7121**
   (early units: **ILI9881C** + **GT911**).
 - **ES8388** codec + **ES7210** AEC front end, dual mic, **NS4150B** 1 W amp,
-  3.5 mm headphone jack.
+  3.5 mm headphone jack with detect (`HP_DET`, E1 0x43 P7, active-high); the
+  firmware auto-mutes the amp on insert (`audio output auto`), overridable via
+  `audio output speaker|headphones`.
 - **INA226** (0x41) pack monitor + **IP2326** charge management; removable
   **NP-F550** 7.4 V / 2000 mAh 2S pack.
 - **RX8130CE** RTC (0x32), **BMI270** IMU (0x68), **SC202CS/SC2356** MIPI-CSI
@@ -196,18 +203,28 @@ it chip-resets the device and floats P0, power-cycling the C6 mid-boot. P0 must
 be driven before esp_hosted enumeration and stay asserted for the session;
 esp_hosted's GPIO15 CP-reset pulse is the only sanctioned C6 reset.
 
-**E1 — 0x43** (per M5Stack pinmap; **VERIFY** exact pin→signal before use):
+**E1 — 0x43** (verified against the M5Stack Tab5 pinmap, esp-cpp BSP, and ESPHome
+references; corrected — the earlier table here was shifted by one row):
 
-| Pin | Signal | Notes |
-|-----|--------|-------|
-| P0 | RF_PTH_L_INT_H_EXT | internal/external antenna select (low=int) |
-| P1 | RF_INT_EXT_SWITCH | antenna switch |
-| P2 | NS4150B SPK_EN | speaker amp enable |
-| P4 | EXT_5V_BUS | expansion 5 V rail |
-| P5 | EXT5V_EN | expansion 5 V enable |
-| P6 | LCD_RST | panel reset |
-| P7 | TP_RST | touch reset |
-| ? | CAM_RST / HP_DET | camera reset / headphone detect — pin unknown |
+| Pin | Dir | Signal | Notes |
+|-----|-----|--------|-------|
+| P0 | out | RF_PTH_L_INT_H_EXT | internal/external antenna select (low=int) |
+| P1 | out | NS4150B SPK_EN | speaker amp enable (HIGH = amp on; BSP drives it) |
+| P2 | out | EXT5V_EN | expansion 5 V enable (`EXT_5V_BUS`) |
+| P3 | — | (unused) | not connected in the Tab5 design |
+| P4 | out | LCD_RST | panel reset |
+| P5 | out | TP_RST | touch reset |
+| P6 | out | CAM_RST | camera reset |
+| P7 | **in** | **HP_DET** | 3.5 mm headphone detect, **active-high** on insert; read-only input, never driven |
+
+**Tab5 audio path:** `ES8388 LINE1 (LOUT1/ROUT1)` → `NS4150B` 1 W amp → speaker;
+`ES8388 LINE2 (LOUT2/ROUT2)` → 3.5 mm jack (LINE2 inference from the
+LINE1=speaker mapping is unverified — see below). The amp has no hardware
+jack-mute: the firmware gates `SPK_EN` in software from `HP_DET`. The ES8388
+driver powers both output pairs; `components/audio` never pokes DAC registers.
+`HP_DET` level must be confirmed on hardware with a plug in/out (read `IN_STA`
+bit 7): if a given unit's jack is a mechanically switched type that already
+mutes the amp input, software gating is redundant but harmless.
 
 ### 3.4 Display timing (ST7123/ST7121, native portrait)
 Native 720x1280, **rotation 90** (logical 1280x720). PCLK 70 MHz, HSYNC 1360,
@@ -243,6 +260,15 @@ Separate I2C **controller 0** (SDA 0 / SCL 1): **Tab5Keyboard** 0x6D (STM32F030)
 - **IP2326** charge IC. Charging gated by E2.P7 `CHG_EN` (+ E2.P5
   `nCHG_QC_EN`), enabled once at boot by `board_bsp_charge_enable(true)`.
   Charge status is E2.P6 `CHG_STAT_LED`.
+- **microSD rail LDO:** the card's IO rail (`SD_VDD`) is the ESP32-P4 on-chip
+  regulator **LDO_VO4** (channel 4), 3.3 V. The BSP owns this channel directly
+  (`board_bsp/src/bsp_storage.c`) instead of using IDF's
+  `sd_pwr_ctrl_new_on_chip_ldo()`, which acquires it at 0 mV and logs the
+  spurious boot warning `ldo: The voltage value 0 is out of the recommended
+  range`. The BSP publishes the standard `sd_pwr_ctrl_drv_t` interface over the
+  channel so SDMMC still switches IO voltage (SDR50/SDR104) via
+  `set_io_voltage`. Verified on COM6: zero LDO warnings, SD mounts, read/write
+  OK (`sd.fs_free` 14.9 GiB).
 - With **no pack**, the INA226 bus floats to the charger/rail (~8.40 V) with
   ~0 current — indistinguishable from a full pack by voltage alone (F24).
 - Power-on: single press power button; power-off: double press; `shutdown`
@@ -269,7 +295,10 @@ Separate I2C **controller 0** (SDA 0 / SCL 1): **Tab5Keyboard** 0x6D (STM32F030)
 - Reference: `managed_components/espressif__esp32_p4_function_ev_board`,
   `espressif__esp_lcd_jd9165`, `espressif__esp_lcd_touch_gt911`.
 - Tab5 schematics: `Tab5_Schematics_PDF.pdf`, `Tab5_Overall_Design_Block_Diagram.pdf`
-  (linked from the M5Stack product page).
+  (linked from the M5Stack product page). Confirmed from that schematic: the
+  microSD IO rail is driven by the P4 on-chip LDO (`ESP_LDO4`/`LDO_VO4`), and
+  the ESP32-P4 SDMMC host defaults to 3.3 V IO (`SDMMC_HOST_DEFAULT`), which is
+  what `board_bsp/src/bsp_storage.c` now acquires.
 
 When a signal is added or changed, update **both** the board_config and this
 file in the same change (Documentation Updates rule in `ai-context.md`).

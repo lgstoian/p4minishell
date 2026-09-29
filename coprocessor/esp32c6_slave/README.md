@@ -19,29 +19,40 @@ To change slave behaviour, change the `esp_hosted` version in
 - Co-processor: `esp32c6`
 - Transport: SDIO
 - Board defaults: `ESP32-P4-Function-EV-Board` compatible SDIO pin map
-  (`sdkconfig.defaults`); v1.2.1 also supports the M5Stack Tab5 C6 wiring
+  (`sdkconfig.defaults`); v1.3.0 also supports the M5Stack Tab5 C6 wiring
   (slot 1, CLK 12 / CMD 13 / D0-D3 11,10,9,8, reset 15, 10 MHz — see
   `boards/m5stack_tab5/board_config.h` and `boards/m5stack_tab5/sdkconfig.defaults`)
 - Features: Wi-Fi + BLE (controller-only), RPC, system
 
 ## Build
 
-From this directory:
+The board profile is selected with `-DC6_BOARD=<name>`, which layers the shared
+`sdkconfig.defaults` under `boards/<name>/sdkconfig.defaults` (the board
+`choice` lives in the per-board file, not the shared one). Use a per-board build
+directory so the two images never collide:
 
 ```powershell
-idf.py set-target esp32c6
-idf.py build
+# Reference board (JC1060P470C / ESP32-P4-Function-EV-Board SDIO map)
+idf.py -B build-jc1060p470c -DC6_BOARD=jc1060p470c set-target esp32c6
+idf.py -B build-jc1060p470c -DC6_BOARD=jc1060p470c build
+
+# M5Stack Tab5
+idf.py -B build-m5stack_tab5 -DC6_BOARD=m5stack_tab5 set-target esp32c6
+idf.py -B build-m5stack_tab5 -DC6_BOARD=m5stack_tab5 build
 ```
 
 The host-side `c6ota` command expects an **application image** (not a merged
-flash image). Use `build/esp32c6_hosted_slave.bin`.
+flash image): `build-<board>/esp32c6_hosted_slave.bin`. The release stages these
+per-board images as `esp32c6_hosted_slave-<board>.bin`; `apps/push_c6.py`
+pushes the matching one to the SD root as `esp32c6_hosted_slave.bin`, which
+`c6ota default` then flashes.
 
 ## Flash
 
 Flash the ESP32-C6 on its own serial port:
 
 ```powershell
-idf.py -p <COPROCESSOR_PORT> flash monitor
+idf.py -B build-<board> -DC6_BOARD=<board> -p <COPROCESSOR_PORT> flash monitor
 ```
 
 After flashing, the host log should report a co-processor version in the same

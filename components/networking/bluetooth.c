@@ -23,6 +23,7 @@
 
 #if CONFIG_BT_NIMBLE_ENABLED
 #include "host/ble_gap.h"
+#include "host/ble_gatt.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
@@ -77,6 +78,55 @@ static bluetooth_state_t s_bluetooth_state;
 #if CONFIG_BT_NIMBLE_ENABLED
 static esp_err_t bluetooth_start_scan(void);
 static esp_err_t bluetooth_start_advertising(void);
+
+/* ---- BLE HID host state ---- */
+
+/** BLE HID connection state. Tracked separately from the NimBLE sync flag
+ *  because "synced" means the host stack is ready, while "device_connected"
+ *  means a HID peripheral is actively attached and sending reports. */
+typedef struct {
+    bool connected;                 /**< A BLE HID device is connected. */
+    uint16_t conn_handle;           /**< NimBLE connection handle. */
+    uint16_t hid_service_handle;    /**< Handle of the HID service (0x1812). */
+    uint16_t hid_service_end;       /**< End handle of the HID service. */
+    uint16_t report_char_handle;    /**< Handle of the HID Report characteristic (0x2A4D). */
+    uint16_t report_ccc_handle;     /**< Handle of the Report CCC descriptor. */
+    uint16_t dsc_char_handle;       /**< Characteristic whose descriptors are being discovered. */
+    uint16_t boot_kbd_inp_handle;   /**< Handle of the Boot Keyboard Input char (0x2A22), or 0. */
+    uint16_t boot_mouse_inp_handle; /**< Handle of the Boot Mouse Input char (0x2A33), or 0. */
+    bool hid_service_found;         /**< GATT discovery completed for HID service. */
+    bool notifications_enabled;     /**< CCC notifications are active. */
+    char address[BLUETOOTH_ADDR_BYTES]; /**< Connected device address. */
+    char name[BLUETOOTH_NAME_BYTES];    /**< Connected device name. */
+    int discovery_state;            /**< 0 idle, 1 discovering, 2 done. */
+} ble_hid_state_t;
+
+static ble_hid_state_t s_ble_hid;
+
+/* Forward declarations for GATT client callbacks (defined after the GAP handler). */
+static int bluetooth_disc_svc_cb(uint16_t conn_handle,
+                                  const struct ble_gatt_error *error,
+                                  const struct ble_gatt_svc *service,
+                                  void *arg);
+static int bluetooth_disc_chr_cb(uint16_t conn_handle,
+                                  const struct ble_gatt_error *error,
+                                  const struct ble_gatt_chr *chr,
+                                  void *arg);
+static int bluetooth_disc_dsc_cb(uint16_t conn_handle,
+                                  const struct ble_gatt_error *error,
+                                  uint16_t chr_val_handle,
+                                  const struct ble_gatt_dsc *dsc,
+                                  void *arg);
+static void bluetooth_hid_cleanup(void);
+static void bluetooth_process_hid_characteristics(uint16_t conn_handle);
+
+/** HID Boot Keyboard report: 8 bytes, same format as USB HID boot protocol.
+ *  Byte 0: modifier bitmask, byte 1: reserved, bytes 2-7: key codes. */
+#define BLE_HID_BOOT_KBD_REPORT_LEN  8
+
+/** Route a BLE HID boot keyboard report to the shell input path. */
+static void bluetooth_hid_route_boot_keyboard(const uint8_t *report, uint16_t len);
+
 #endif
 
 /**
@@ -424,6 +474,31 @@ static void bluetooth_report_scan_results(void)
                              (unsigned int)count);
 }
 
+/** Initiate GATT service discovery for the HID service on the connected device. */
+static void bluetooth_start_hid_discovery(uint16_t conn_handle)
+{
+    /* 16-bit UUID for HID Service: 0x1812. Static so its address outlives the
+     * asynchronous discovery call. */
+    static const ble_uuid16_t hid_svc_uuid = BLE_UUID16_INIT(0x1812);
+    int rc;
+
+    s_ble_hid.discovery_state = 1;
+    s_ble_hid.hid_service_handle = 0;
+    s_ble_hid.hid_service_end = 0;
+    s_ble_hid.report_char_handle = 0;
+    s_ble_hid.report_ccc_handle = 0;
+    s_ble_hid.boot_kbd_inp_handle = 0;
+    s_ble_hid.boot_mouse_inp_handle = 0;
+    s_ble_hid.hid_service_found = false;
+
+    rc = ble_gattc_disc_svc_by_uuid(conn_handle, &hid_svc_uuid.u,
+                                     bluetooth_disc_svc_cb, NULL);
+    if (rc != 0) {
+        s_ble_hid.discovery_state = 0;
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " HID service discovery start failed (rc=%d)\n", rc);
+    }
+}
+
 static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -454,6 +529,76 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_ADV_COMPLETE:
         s_bluetooth_state.advertising_active = false;
         return 0;
+
+#if CONFIG_BT_NIMBLE_ENABLED
+    case BLE_GAP_EVENT_CONNECT: {
+        /* A BLE connection was established (we initiated it) or failed. */
+        if (event->connect.status == 0) {
+            /* Connection successful. */
+            s_ble_hid.connected = true;
+            s_ble_hid.conn_handle = event->connect.conn_handle;
+            s_ble_hid.discovery_state = 0;
+
+            bluetooth_appendf(SH_OK "bluetooth:" SH_RST " connected to " SH_VAL "%s" SH_RST
+                              " (handle %u)\n", s_ble_hid.address, event->connect.conn_handle);
+            bluetooth_notify_headerf(4000, "BLE connected");
+
+            /* Start HID service discovery. The ATT MTU is left at the default
+             * (23 bytes): boot-keyboard reports are 8 bytes, so an explicit MTU
+             * exchange adds no value and would start a second GATT procedure
+             * while discovery is queued. */
+            bluetooth_start_hid_discovery(event->connect.conn_handle);
+        } else {
+            /* Connection failed. */
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " connection failed (status=%d)\n",
+                              event->connect.status);
+            bluetooth_record_errorf(ESP_FAIL, "BLE connection failed (status=%d)", event->connect.status);
+            bluetooth_hid_cleanup();
+        }
+        return 0;
+    }
+
+    case BLE_GAP_EVENT_DISCONNECT: {
+        /* A BLE connection was terminated. */
+        if (event->disconnect.conn.conn_handle == s_ble_hid.conn_handle) {
+            bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " BLE HID device disconnected (reason=%d)\n",
+                              event->disconnect.reason);
+            bluetooth_notify_headerf(4000, "BLE keyboard disconnected");
+            bluetooth_record_infof("BLE HID disconnected (reason=%d)", event->disconnect.reason);
+            bluetooth_hid_cleanup();
+        }
+        return 0;
+    }
+
+    case BLE_GAP_EVENT_NOTIFY_RX: {
+        /* A HID report (or other notification) arrived from the connected
+         * device. Route boot-protocol keyboard reports to the shell input. */
+        uint16_t attr_handle = event->notify_rx.attr_handle;
+
+        if (s_ble_hid.connected &&
+            event->notify_rx.conn_handle == s_ble_hid.conn_handle &&
+            event->notify_rx.om != NULL &&
+            (attr_handle == s_ble_hid.report_char_handle ||
+             attr_handle == s_ble_hid.boot_kbd_inp_handle)) {
+            uint8_t data[64];
+            uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
+
+            if (len > sizeof(data)) {
+                len = sizeof(data);
+            }
+            os_mbuf_copydata(event->notify_rx.om, 0, len, data);
+            if (len >= BLE_HID_BOOT_KBD_REPORT_LEN) {
+                bluetooth_hid_route_boot_keyboard(data, len);
+            }
+        }
+        return 0;
+    }
+
+    case BLE_GAP_EVENT_MTU: {
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " MTU negotiated: %d bytes\n", event->mtu.value);
+        return 0;
+    }
+#endif
 
     default:
         return 0;
@@ -641,6 +786,13 @@ void bluetooth_status(void)
                           esp_err_to_name(s_bluetooth_state.last_error),
                           (unsigned int)s_bluetooth_state.last_error);
     }
+#if CONFIG_BT_NIMBLE_ENABLED
+    if (s_ble_hid.connected) {
+        bluetooth_appendf("  " SH_LBL "HID device:" SH_RST " " SH_VAL "%s" SH_RST " (" SH_VAL "%s" SH_RST ")\n",
+                          s_ble_hid.name[0] != '\0' ? s_ble_hid.name : "(unnamed)",
+                          s_ble_hid.address);
+    }
+#endif
 }
 
 void bluetooth_scan(int limit)
@@ -742,6 +894,407 @@ bool bluetooth_is_connected(void)
     return s_bluetooth_state.synced;
 }
 
+#if CONFIG_BT_NIMBLE_ENABLED
+bool bluetooth_is_device_connected(void)
+{
+    return s_ble_hid.connected;
+}
+
+/* ---- BLE HID GATT client ----
+ * The GATT client discovers the HID service (0x1812) on a connected peripheral
+ * and subscribes to HID report notifications. Incoming reports are routed to
+ * the shell input path via the same keyboard callback USB HID uses.
+ *
+ * NimBLE GATT client uses individual typed callbacks for each operation:
+ *   ble_gatt_disc_svc_fn  for service discovery
+ *   ble_gatt_chr_fn       for characteristic discovery
+ *   ble_gatt_dsc_fn       for descriptor discovery */
+
+/** Previous HID report for delta detection (press/release). */
+static uint8_t s_ble_hid_prev_keys[6];
+
+/** Route a BLE HID boot keyboard report to the shell input path. The report
+ *  format matches USB HID boot protocol: modifiers in byte 0, up to 6 key
+ *  codes in bytes 2-7. Emits PRESS for newly-present keys and RELEASE for keys
+ *  that were in the previous report but are gone from this one. */
+static void bluetooth_hid_route_boot_keyboard(const uint8_t *report, uint16_t len)
+{
+    uint8_t modifiers;
+    uint8_t current_keys[6];
+    int i, j;
+    bool found;
+
+    if (len < BLE_HID_BOOT_KBD_REPORT_LEN) {
+        return;
+    }
+
+    modifiers = report[0];
+    memset(current_keys, 0, sizeof(current_keys));
+    for (i = 0; i < 6 && (size_t)(2 + i) < len; i++) {
+        current_keys[i] = report[2 + i];
+    }
+
+    /* Emit RELEASE for keys that were pressed but are no longer in the report. */
+    for (i = 0; i < 6; i++) {
+        if (s_ble_hid_prev_keys[i] == 0) {
+            continue;
+        }
+        found = false;
+        for (j = 0; j < 6; j++) {
+            if (current_keys[j] == s_ble_hid_prev_keys[i]) {
+                found = true;
+                break;
+            }
+        }
+        if (!found && s_host_ops.bluetooth_keyboard_input != NULL) {
+            s_host_ops.bluetooth_keyboard_input(s_ble_hid_prev_keys[i], 0, false);
+        }
+    }
+
+    /* Emit PRESS for newly-pressed keys. */
+    for (i = 0; i < 6; i++) {
+        if (current_keys[i] == 0) {
+            continue;
+        }
+        found = false;
+        for (j = 0; j < 6; j++) {
+            if (current_keys[j] == current_keys[i] && j < i) {
+                found = true;
+                break;
+            }
+        }
+        if (!found && s_host_ops.bluetooth_keyboard_input != NULL) {
+            s_host_ops.bluetooth_keyboard_input(current_keys[i], modifiers, true);
+        }
+    }
+
+    memcpy(s_ble_hid_prev_keys, current_keys, sizeof(s_ble_hid_prev_keys));
+}
+
+/** Callback for service discovery by UUID. Called once per matching service. */
+static int bluetooth_disc_svc_cb(uint16_t conn_handle,
+                                  const struct ble_gatt_error *error,
+                                  const struct ble_gatt_svc *service,
+                                  void *arg)
+{
+    (void)arg;
+
+    if (error != NULL && error->status != 0) {
+        s_ble_hid.discovery_state = 0;
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " HID service discovery error (status=%d)\n",
+                          error->status);
+        return 0;
+    }
+
+    if (service == NULL) {
+        /* Discovery complete (no more services). If HID service not found, report it. */
+        if (!s_ble_hid.hid_service_found) {
+            s_ble_hid.discovery_state = 0;
+            bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " HID service (0x1812) not found on device\n");
+        }
+        return 0;
+    }
+
+    /* Found the HID service. */
+    s_ble_hid.hid_service_handle = service->start_handle;
+    s_ble_hid.hid_service_end = service->end_handle;
+    s_ble_hid.hid_service_found = true;
+
+    bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " HID service found at handles %u-%u\n",
+                      service->start_handle, service->end_handle);
+
+    /* Now discover characteristics within the HID service. */
+    {
+        int rc = ble_gattc_disc_all_chrs(conn_handle, service->start_handle,
+                                          service->end_handle,
+                                          bluetooth_disc_chr_cb, NULL);
+        if (rc != 0) {
+            s_ble_hid.discovery_state = 0;
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " characteristic discovery failed (rc=%d)\n", rc);
+        }
+    }
+
+    return 0;
+}
+
+/** Callback for characteristic discovery. Called once per characteristic. */
+static int bluetooth_disc_chr_cb(uint16_t conn_handle,
+                                  const struct ble_gatt_error *error,
+                                  const struct ble_gatt_chr *chr,
+                                  void *arg)
+{
+    (void)arg;
+
+    if (error != NULL && error->status != 0) {
+        return 0;
+    }
+
+    if (chr == NULL) {
+        /* Discovery complete. Now subscribe to notifications. */
+        bluetooth_process_hid_characteristics(conn_handle);
+        return 0;
+    }
+
+    if (chr->uuid.u.type != BLE_UUID_TYPE_16) {
+        return 0;
+    }
+
+    switch (ble_uuid_u16(&chr->uuid.u)) {
+    case 0x2A4D: /* HID Report */
+        s_ble_hid.report_char_handle = chr->val_handle;
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " found HID Report handle=%u\n", chr->val_handle);
+        break;
+    case 0x2A22: /* Boot Keyboard Input */
+        s_ble_hid.boot_kbd_inp_handle = chr->val_handle;
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " found Boot Keyboard handle=%u\n", chr->val_handle);
+        break;
+    case 0x2A33: /* Boot Mouse Input */
+        s_ble_hid.boot_mouse_inp_handle = chr->val_handle;
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " found Boot Mouse handle=%u\n", chr->val_handle);
+        break;
+    case 0x2A4E: { /* Protocol Mode - set boot protocol */
+        uint8_t proto = 0x00;
+        (void)ble_gattc_write_flat(conn_handle, chr->val_handle,
+                                   &proto, sizeof(proto), NULL, NULL);
+        break;
+    }
+    default:
+        break;
+    }
+
+    return 0;
+}
+
+/** After characteristic discovery, subscribe to the best HID input. */
+static void bluetooth_process_hid_characteristics(uint16_t conn_handle)
+{
+    int rc;
+
+    /* Prefer HID Report Input (0x2A4D), fall back to Boot Keyboard Input (0x2A22). */
+    if (s_ble_hid.report_char_handle != 0) {
+        /* Discover the CCC descriptor for the Report characteristic. */
+        s_ble_hid.dsc_char_handle = s_ble_hid.report_char_handle;
+        rc = ble_gattc_disc_all_dscs(conn_handle, s_ble_hid.report_char_handle,
+                                      s_ble_hid.hid_service_end,
+                                      bluetooth_disc_dsc_cb, NULL);
+        if (rc == 0) {
+            bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " discovering HID Report CCC\n");
+            return;
+        }
+    }
+
+    if (s_ble_hid.boot_kbd_inp_handle != 0) {
+        s_ble_hid.dsc_char_handle = s_ble_hid.boot_kbd_inp_handle;
+        rc = ble_gattc_disc_all_dscs(conn_handle, s_ble_hid.boot_kbd_inp_handle,
+                                      s_ble_hid.hid_service_end,
+                                      bluetooth_disc_dsc_cb, NULL);
+        if (rc == 0) {
+            bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " discovering Boot Keyboard CCC\n");
+            return;
+        }
+    }
+
+    s_ble_hid.discovery_state = 0;
+    bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " no usable HID input found\n");
+}
+
+/** Callback for descriptor discovery. Called once per descriptor. */
+static int bluetooth_disc_dsc_cb(uint16_t conn_handle,
+                                  const struct ble_gatt_error *error,
+                                  uint16_t chr_val_handle,
+                                  const struct ble_gatt_dsc *dsc,
+                                  void *arg)
+{
+    (void)arg;
+    (void)chr_val_handle;
+
+    if (error != NULL && error->status != 0) {
+        return 0;
+    }
+
+    if (dsc == NULL) {
+        /* Descriptor discovery complete. If no CCC was found for the Report
+         * characteristic, fall back to the Boot Keyboard characteristic. */
+        if (!s_ble_hid.notifications_enabled) {
+            if (s_ble_hid.dsc_char_handle == s_ble_hid.report_char_handle &&
+                s_ble_hid.boot_kbd_inp_handle != 0) {
+                s_ble_hid.dsc_char_handle = s_ble_hid.boot_kbd_inp_handle;
+                if (ble_gattc_disc_all_dscs(conn_handle, s_ble_hid.boot_kbd_inp_handle,
+                                            s_ble_hid.hid_service_end,
+                                            bluetooth_disc_dsc_cb, NULL) == 0) {
+                    return 0;
+                }
+            }
+            s_ble_hid.discovery_state = 0;
+            bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " no HID notification descriptor found\n");
+        }
+        return 0;
+    }
+
+    /* Look for the Client Characteristic Configuration descriptor (0x2902). */
+    if (dsc->uuid.u.type == BLE_UUID_TYPE_16 &&
+        ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
+        uint8_t val[2] = { 0x01, 0x00 }; /* Enable notifications */
+        int rc = ble_gattc_write_flat(conn_handle, dsc->handle, val, sizeof(val), NULL, NULL);
+
+        if (rc == 0) {
+            s_ble_hid.report_ccc_handle = dsc->handle;
+            s_ble_hid.notifications_enabled = true;
+            s_ble_hid.discovery_state = 0;
+            bluetooth_appendf(SH_OK "bluetooth:" SH_RST " BLE HID notifications enabled\n");
+            bluetooth_notify_headerf(4000, "BLE keyboard connected");
+            bluetooth_record_infof("BLE HID connected: %s", s_ble_hid.name);
+        } else {
+            s_ble_hid.discovery_state = 0;
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " CCC write failed (rc=%d)\n", rc);
+        }
+    }
+
+    return 0;
+}
+
+/** Connect to a BLE device by MAC address. */
+esp_err_t bluetooth_connect(const char *addr_str)
+{
+    ble_addr_t addr;
+    struct ble_gap_conn_params conn_params;
+    int rc;
+    unsigned int a[6];
+
+    if (s_ble_hid.connected) {
+        bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " already connected to " SH_VAL "%s" SH_RST "\n",
+                          s_ble_hid.address);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (addr_str == NULL || addr_str[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Parse XX:XX:XX:XX:XX:XX address. */
+    if (sscanf(addr_str, "%2x:%2x:%2x:%2x:%2x:%2x",
+               &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]) != 6) {
+        bluetooth_appendf(SH_USAGE "Usage: bluetooth connect XX:XX:XX:XX:XX:XX" SH_RST "\n");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    addr.type = BLE_OWN_ADDR_PUBLIC;
+    addr.val[0] = (uint8_t)a[5];
+    addr.val[1] = (uint8_t)a[4];
+    addr.val[2] = (uint8_t)a[3];
+    addr.val[3] = (uint8_t)a[2];
+    addr.val[4] = (uint8_t)a[1];
+    addr.val[5] = (uint8_t)a[0];
+
+    if (bluetooth_ensure_ready() != ESP_OK) {
+        bluetooth_report_not_available(s_bluetooth_state.last_error);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(&conn_params, 0, sizeof(conn_params));
+    conn_params.scan_itvl = P4_CONFIG_BLE_CONN_SCAN_ITVL;
+    conn_params.scan_window = P4_CONFIG_BLE_CONN_SCAN_WINDOW;
+    conn_params.itvl_min = P4_CONFIG_BLE_CONN_ITVL_MIN;
+    conn_params.itvl_max = P4_CONFIG_BLE_CONN_ITVL_MAX;
+    conn_params.latency = P4_CONFIG_BLE_CONN_LATENCY;
+    conn_params.supervision_timeout = P4_CONFIG_BLE_CONN_SUPERVISION_TIMEOUT;
+    conn_params.min_ce_len = 0;
+    conn_params.max_ce_len = 0;
+
+    /* Stop any active scan before connecting. */
+    if (s_bluetooth_state.scan_active) {
+        (void)ble_gap_disc_cancel();
+        s_bluetooth_state.scan_active = false;
+    }
+
+    /* Stop advertising before connecting. */
+    if (s_bluetooth_state.advertising_active) {
+        (void)ble_gap_adv_stop();
+        s_bluetooth_state.advertising_active = false;
+    }
+
+    /* Remember the target address/name before the async connection callback
+     * can fire, and reuse the name from a prior scan when available. */
+    snprintf(s_ble_hid.address, sizeof(s_ble_hid.address), "%s", addr_str);
+    s_ble_hid.name[0] = '\0';
+    {
+        size_t index;
+
+        for (index = 0; index < s_bluetooth_state.discovered_count; index++) {
+            if (strutil_text_equals_ignore_case(s_bluetooth_state.discovered[index].address,
+                                                addr_str)) {
+                snprintf(s_ble_hid.name, sizeof(s_ble_hid.name), "%s",
+                         s_bluetooth_state.discovered[index].name);
+                break;
+            }
+        }
+    }
+
+    rc = ble_gap_connect(s_bluetooth_state.own_addr_type, &addr,
+                          P4_CONFIG_BLE_CONNECT_TIMEOUT_MS,
+                          &conn_params,
+                          bluetooth_gap_event, NULL);
+    if (rc != 0) {
+        s_ble_hid.address[0] = '\0';
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " connect failed (rc=%d)\n", rc);
+        return ESP_FAIL;
+    }
+
+    bluetooth_appendf(SH_PROMPT "bluetooth:" SH_RST " connecting to " SH_VAL "%s" SH_RST "...\n", addr_str);
+    bluetooth_record_infof("BLE connecting to %s", addr_str);
+    return ESP_OK;
+}
+
+/** Disconnect from the current BLE HID device. */
+void bluetooth_disconnect(void)
+{
+    if (!s_ble_hid.connected) {
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " no BLE device connected\n");
+        return;
+    }
+
+    (void)ble_gap_terminate(s_ble_hid.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    bluetooth_appendf(SH_OK "bluetooth:" SH_RST " disconnected from " SH_VAL "%s" SH_RST "\n",
+                      s_ble_hid.address);
+    bluetooth_record_infof("BLE disconnected from %s", s_ble_hid.address);
+}
+
+/** Clean up BLE HID state on disconnection. */
+static void bluetooth_hid_cleanup(void)
+{
+    s_ble_hid.connected = false;
+    s_ble_hid.conn_handle = 0;
+    s_ble_hid.hid_service_handle = 0;
+    s_ble_hid.hid_service_end = 0;
+    s_ble_hid.report_char_handle = 0;
+    s_ble_hid.report_ccc_handle = 0;
+    s_ble_hid.dsc_char_handle = 0;
+    s_ble_hid.boot_kbd_inp_handle = 0;
+    s_ble_hid.boot_mouse_inp_handle = 0;
+    s_ble_hid.hid_service_found = false;
+    s_ble_hid.notifications_enabled = false;
+    s_ble_hid.discovery_state = 0;
+    memset(s_ble_hid_prev_keys, 0, sizeof(s_ble_hid_prev_keys));
+}
+#else  /* !CONFIG_BT_NIMBLE_ENABLED */
+/* NimBLE is disabled: the BLE HID host compiles to no-ops so the shell command
+ * surface stays link-complete (the verbs report unavailable). */
+bool bluetooth_is_device_connected(void)
+{
+    return false;
+}
+
+esp_err_t bluetooth_connect(const char *addr_str)
+{
+    (void)addr_str;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+void bluetooth_disconnect(void)
+{
+}
+#endif /* CONFIG_BT_NIMBLE_ENABLED */
+
 void bluetooth_handle_command(char *command)
 {
     char *argv[6];
@@ -753,6 +1306,8 @@ void bluetooth_handle_command(char *command)
         bluetooth_appendf("  " SH_CMD "bluetooth scan" SH_RST " [limit]     Bounded passive BLE scan, sorted by RSSI\n");
         bluetooth_appendf("  " SH_CMD "bluetooth advertise on" SH_RST " [name]  Start non-connectable advertising (session name)\n");
         bluetooth_appendf("  " SH_CMD "bluetooth advertise off" SH_RST "     Stop BLE advertising\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth connect" SH_RST " XX:XX:XX:XX:XX:XX  Connect to a BLE HID device\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth disconnect" SH_RST "       Disconnect from the current BLE device\n");
         bluetooth_appendf("  " SH_CMD "bt ..." SH_RST "                      Alias for the bluetooth family\n");
         return;
     }
@@ -802,5 +1357,20 @@ void bluetooth_handle_command(char *command)
         }
     }
 
-    bluetooth_appendf(SH_USAGE "Usage: bluetooth status | bluetooth scan [limit] | bluetooth advertise <on [name]|off>" SH_RST "\n");
+#if CONFIG_BT_NIMBLE_ENABLED
+    if (strutil_text_equals_ignore_case(argv[1], "connect") && argc >= 3) {
+        esp_err_t error = bluetooth_connect(argv[2]);
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " connect failed (%s)\n", esp_err_to_name(error));
+        }
+        return;
+    }
+
+    if (strutil_text_equals_ignore_case(argv[1], "disconnect")) {
+        bluetooth_disconnect();
+        return;
+    }
+#endif
+
+    bluetooth_appendf(SH_USAGE "Usage: bluetooth status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect" SH_RST "\n");
 }

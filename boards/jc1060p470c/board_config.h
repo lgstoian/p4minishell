@@ -49,6 +49,10 @@
 #define BOARD_CFG_I2S_DOUT_GPIO GPIO_NUM_9
 #define BOARD_CFG_I2S_DSIN_GPIO GPIO_NUM_11
 #define BOARD_CFG_POWER_AMP_GPIO GPIO_NUM_20
+// No headphone jack on this board: the audio route is always the speaker.
+// BOARD_CFG_HP_DET_EXP_PIN is kept for shape parity and must not be read.
+#define BOARD_CFG_HP_DET_PRESENT              0
+#define BOARD_CFG_HP_DET_EXP_PIN              7
 
 #define BOARD_CFG_LCD_BACKLIGHT_GPIO GPIO_NUM_23
 #define BOARD_CFG_LCD_RST_GPIO GPIO_NUM_27
@@ -98,6 +102,10 @@
  * (the divider floats well under any real pack), so telemetry reports
  * "BAT N/C" instead of a bogus 0%. */
 #define BOARD_CFG_BATTERY_PRESENT_MV 2500
+/* Signed-current deadband (mA) that separates charging/discharging from idle.
+ * The reference board has no charge-current sense, so this is informational
+ * and the charge state is always "unknown" for ADC-only boards. */
+#define BOARD_CFG_BATTERY_CHARGE_CURRENT_MA 20
 
 #define BOARD_CFG_RGB_LED_GPIO GPIO_NUM_26
 #define BOARD_CFG_RGB_LED_IS_WS2812 1

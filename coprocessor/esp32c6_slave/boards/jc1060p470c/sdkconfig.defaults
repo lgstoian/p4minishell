@@ -1,0 +1,6 @@
+# ESP32-C6 coprocessor profile: ESP32-P4-Function-EV-Board (reference board).
+#
+# Selects the ESP-Hosted board personality for the C6 wired to the reference
+# board. Layer this after the common sdkconfig.defaults:
+#   idf.py -DC6_BOARD=jc1060p470c build
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y

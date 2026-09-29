@@ -1,4 +1,4 @@
-# P4MiniShell Application ABI & Package Trust (firmware v1.2.1)
+# P4MiniShell Application ABI & Package Trust (firmware v1.3.0)
 
 > **The contract between firmware and applications.** Read this before
 > shipping an app bundle or changing the native-app entry points. It freezes

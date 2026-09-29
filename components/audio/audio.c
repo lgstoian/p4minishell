@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_codec_dev.h"
 #include "freertos/FreeRTOS.h"
@@ -32,6 +33,7 @@
 
 #include "ansi_palette.h"
 #include "bsp/esp-bsp.h"
+#include "board_bsp.h"
 #include "p4minishell_config.h"
 #include "shell.h"
 
@@ -40,6 +42,7 @@
 /* ---- Hardware ---- */
 static esp_codec_dev_handle_t s_speaker_dev;
 static int s_volume_percent = P4_CONFIG_VOLUME_DEFAULT_PCT;
+static audio_output_mode_t s_output_mode = AUDIO_OUTPUT_AUTO;
 
 /* ---- Background playback engine ---- */
 typedef enum {
@@ -64,6 +67,7 @@ static audio_request_t s_audio_request;
 static void audio_play_task(void *arg);
 static void audio_task_play_tone(const audio_request_t *req);
 static void audio_task_play_wav(const audio_request_t *req);
+static void audio_apply_route(void);
 
 /** Default sample description for the mono 16-bit 22050 Hz codec path. */
 static void audio_fill_sample_info(esp_codec_dev_sample_info_t *fs)
@@ -80,22 +84,29 @@ static esp_err_t audio_ensure_speaker(void)
 {
     int attempt;
 
-    if (s_speaker_dev != NULL) {
-        return ESP_OK;
+    if (s_speaker_dev == NULL) {
+        /* The codec/I2S path needs DMA-capable heap, which can be contended
+         * while Wi-Fi, USB and the SD stack initialize (a boot pre-warm in
+         * app_main normally wins this race). Retry briefly instead of failing
+         * once; the pressure subsides within seconds as boot settles. */
+        for (attempt = 0; attempt < 3; attempt++) {
+            s_speaker_dev = bsp_audio_codec_speaker_init();
+            if (s_speaker_dev != NULL) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        if (s_speaker_dev == NULL) {
+            return ESP_FAIL;
+        }
     }
 
-    /* The codec/I2S path needs DMA-capable heap, which can be contended
-     * while Wi-Fi, USB and the SD stack initialize (a boot pre-warm in
-     * app_main normally wins this race). Retry briefly instead of failing
-     * once; the pressure subsides within seconds as boot settles. */
-    for (attempt = 0; attempt < 3; attempt++) {
-        s_speaker_dev = bsp_audio_codec_speaker_init();
-        if (s_speaker_dev != NULL) {
-            return ESP_OK;
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-    return ESP_FAIL;
+    /* Apply the output route on every ensure (every play/volume call), so a
+     * jack change or mode switch takes effect without a reboot. Best-effort:
+     * boards whose amp is codec-driven report NOT_SUPPORTED and keep the
+     * driver's own amp control. */
+    audio_apply_route();
+    return ESP_OK;
 }
 
 /** Ensure the playback task and its synchronization are created. */
@@ -187,6 +198,7 @@ static void audio_task_play_wav(const audio_request_t *req)
     esp_codec_dev_sample_info_t fs;
     FILE *file;
     uint8_t hdr[12];
+    uint16_t audio_format = 0;
     uint16_t channels = 0;
     uint32_t sample_rate = 0;
     uint16_t bits = 0;
@@ -220,7 +232,7 @@ static void audio_task_play_wav(const audio_request_t *req)
             uint8_t fmt[16];
 
             if (chunk_size >= 16 && fread(fmt, 1, 16, file) == 16) {
-                uint16_t audio_format = (uint16_t)(fmt[0] | (fmt[1] << 8));
+                audio_format = (uint16_t)(fmt[0] | (fmt[1] << 8));
 
                 channels = (uint16_t)(fmt[2] | (fmt[3] << 8));
                 sample_rate = (uint32_t)fmt[4] | ((uint32_t)fmt[5] << 8) |
@@ -243,9 +255,8 @@ static void audio_task_play_wav(const audio_request_t *req)
         }
     }
 
-    if (bits != 16 || (channels != 1 && channels != 2) ||
-        (sample_rate != 22050 && sample_rate != 44100) ||
-        data_size == 0) {
+    if (!audio_wav_params_ok(audio_format, channels, sample_rate, bits,
+                             data_size)) {
         shell_transcript_appendf_ansi(SH_ERR "wavplay: unsupported WAV (need 16-bit PCM mono/stereo "
                                  "at 22050/44100 Hz)\n" SH_RST);
         fclose(file);
@@ -263,7 +274,10 @@ static void audio_task_play_wav(const audio_request_t *req)
     stereo = (channels == 2);
     decimate = (sample_rate == 44100);
     inbuf = malloc(chunk_samples * sizeof(int16_t) * (stereo ? 2u : 1u));
-    outbuf = malloc((chunk_samples / 2) * sizeof(int16_t));
+    /* A 22050 Hz source is written through unmixed, so the output can hold a
+     * full chunk (44100 Hz decimates by two, needing only half). Size for the
+     * worst case: undersizing here overruns the heap and corrupts it. */
+    outbuf = malloc(chunk_samples * sizeof(int16_t));
     if (inbuf == NULL || outbuf == NULL) {
         free(inbuf);
         free(outbuf);
@@ -425,4 +439,114 @@ esp_err_t audio_set_volume(int percent)
 int audio_get_volume(void)
 {
     return s_volume_percent;
+}
+
+/* ------------------------------------------------------------------------
+ * Output routing (speaker vs headphones)
+ * ---------------------------------------------------------------------- */
+
+bool audio_output_parse(const char *text, audio_output_mode_t *out)
+{
+    if (text == NULL || out == NULL) {
+        return false;
+    }
+    if (strcasecmp(text, "auto") == 0) {
+        *out = AUDIO_OUTPUT_AUTO;
+        return true;
+    }
+    if (strcasecmp(text, "speaker") == 0) {
+        *out = AUDIO_OUTPUT_SPEAKER;
+        return true;
+    }
+    if (strcasecmp(text, "headphones") == 0 || strcasecmp(text, "headphone") == 0) {
+        *out = AUDIO_OUTPUT_HEADPHONES;
+        return true;
+    }
+    return false;
+}
+
+const char *audio_output_name(audio_output_mode_t mode)
+{
+    switch (mode) {
+    case AUDIO_OUTPUT_SPEAKER:
+        return "speaker";
+    case AUDIO_OUTPUT_HEADPHONES:
+        return "headphones";
+    case AUDIO_OUTPUT_AUTO:
+    default:
+        return "auto";
+    }
+}
+
+audio_output_mode_t audio_route_resolve(audio_output_mode_t mode,
+                                        bool hp_inserted, bool hp_supported)
+{
+    if (mode == AUDIO_OUTPUT_SPEAKER) {
+        return AUDIO_OUTPUT_SPEAKER;
+    }
+    if (mode == AUDIO_OUTPUT_HEADPHONES) {
+        return AUDIO_OUTPUT_HEADPHONES;
+    }
+    if (hp_supported && hp_inserted) {
+        return AUDIO_OUTPUT_HEADPHONES;
+    }
+    return AUDIO_OUTPUT_SPEAKER;
+}
+
+void audio_headphone_state(bool *inserted_out, bool *supported_out)
+{
+    bool inserted = false;
+    bool supported = (bsp_audio_headphone_detected(&inserted) == ESP_OK);
+
+    if (inserted_out != NULL) {
+        *inserted_out = inserted;
+    }
+    if (supported_out != NULL) {
+        *supported_out = supported;
+    }
+}
+
+audio_output_mode_t audio_effective_route(void)
+{
+    bool inserted = false;
+    bool supported = false;
+
+    audio_headphone_state(&inserted, &supported);
+    return audio_route_resolve(s_output_mode, inserted, supported);
+}
+
+/** Apply the effective route to the speaker amp. Best-effort (see above). */
+static void audio_apply_route(void)
+{
+    audio_output_mode_t route = audio_effective_route();
+
+    (void)bsp_audio_speaker_enable(route == AUDIO_OUTPUT_SPEAKER);
+}
+
+esp_err_t audio_set_output_mode(audio_output_mode_t mode)
+{
+    if (mode != AUDIO_OUTPUT_AUTO && mode != AUDIO_OUTPUT_SPEAKER &&
+        mode != AUDIO_OUTPUT_HEADPHONES) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_output_mode = mode;
+    /* Apply promptly so a mode switch mutes/unmutes without waiting for the
+     * next play. The codec need not exist for this (amp-only path). */
+    audio_apply_route();
+    return ESP_OK;
+}
+
+audio_output_mode_t audio_get_output_mode(void)
+{
+    return s_output_mode;
+}
+
+bool audio_wav_params_ok(uint16_t audio_format, uint16_t channels,
+                         uint32_t sample_rate, uint16_t bits,
+                         uint32_t data_size)
+{
+    return audio_format == 1 && bits == 16 &&
+           (channels == 1 || channels == 2) &&
+           (sample_rate == 22050 || sample_rate == 44100) &&
+           data_size != 0;
 }

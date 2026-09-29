@@ -623,14 +623,22 @@ void shell_command_type_file(int argc, char **argv)
     char resolved_path[SHELL_SD_PATH_BYTES];
     esp_err_t error;
 
-    if (argc != 2) {
+    if (argc == 1) {
+        /* `type < file` / pipe stage with no filename: honor the shared
+         * input slot like sort/more/find/findstr do. */
+        if (storage_resolve_input_source(NULL, resolved_path,
+                                         sizeof(resolved_path)) != ESP_OK) {
+            shell_print_usage("Usage: type <path>");
+            return;
+        }
+    } else if (argc == 2) {
+        error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
+        if (error != ESP_OK) {
+            shell_print_error("type: invalid path");
+            return;
+        }
+    } else {
         shell_print_usage("Usage: type <path>");
-        return;
-    }
-
-    error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
-    if (error != ESP_OK) {
-        shell_print_error("type: invalid path");
         return;
     }
 

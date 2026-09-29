@@ -32,6 +32,7 @@
 
 #include "clock.h"
 #include "board_config.h"
+#include "board_caps.h"
 #include "board_bsp.h"
 #include "p4minishell_config.h"
 #include "esp_log.h"
@@ -295,12 +296,11 @@ static bool clock_rtc_ext_configured(void)
     if (RTC_EXT_ENABLE == 0) {
         return false;
     }
-#if BOARD_CFG_RTC_USE_BSP_I2C
-    /* The RTC shares the board's BSP I2C bus (pins owned by the BSP). */
-    return true;
-#else
+    if (board_caps_rtc_use_bsp_i2c()) {
+        /* The RTC shares the board's BSP I2C bus (pins owned by the BSP). */
+        return true;
+    }
     return RTC_EXT_SDA >= 0 && RTC_EXT_SCL >= 0;
-#endif
 }
 
 typedef struct {
@@ -319,16 +319,15 @@ static esp_err_t clock_rtc_ext_open(clock_rtc_ext_session_t *s)
         return ESP_ERR_INVALID_STATE;
     }
 
-#if BOARD_CFG_RTC_USE_BSP_I2C
-    /* Reuse the board's shared I2C master bus; never create a second master on
-     * the same pins, and never delete a bus this session did not create. */
-    s->bus = bsp_i2c_get_handle();
-    s->owns_bus = false;
-    if (s->bus == NULL) {
-        return ESP_FAIL;
-    }
-#else
-    {
+    if (board_caps_rtc_use_bsp_i2c()) {
+        /* Reuse the board's shared I2C master bus; never create a second master on
+         * the same pins, and never delete a bus this session did not create. */
+        s->bus = bsp_i2c_get_handle();
+        s->owns_bus = false;
+        if (s->bus == NULL) {
+            return ESP_FAIL;
+        }
+    } else {
         i2c_master_bus_config_t bus_cfg;
         memset(&bus_cfg, 0, sizeof(bus_cfg));
         bus_cfg.i2c_port = RTC_EXT_PORT;
@@ -343,7 +342,6 @@ static esp_err_t clock_rtc_ext_open(clock_rtc_ext_session_t *s)
         }
         s->owns_bus = true;
     }
-#endif
 
     memset(&dev_cfg, 0, sizeof(dev_cfg));
     dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;

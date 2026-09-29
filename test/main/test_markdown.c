@@ -345,3 +345,53 @@ void test_markdown_print_widths(void)
     }
 }
 
+void test_markdown_strip_ansi(void)
+{
+    char out[64];
+
+    TEST_ASSERT_EQUAL_size_t(5, markdown_strip_ansi("\x1b[1mhello\x1b[0m", out, sizeof(out)));
+    TEST_ASSERT_EQUAL_STRING("hello", out);
+
+    /* Plain text passes through unchanged. */
+    (void)markdown_strip_ansi("plain", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("plain", out);
+
+    /* Unterminated SGR is dropped safely. */
+    (void)markdown_strip_ansi("a\x1b[3m", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("a", out);
+
+    TEST_ASSERT_EQUAL_size_t(0, markdown_strip_ansi(NULL, out, sizeof(out)));
+}
+
+void test_markdown_auto_toggle(void)
+{
+    markdown_set_auto(false);
+    TEST_ASSERT_FALSE(markdown_get_auto());
+    markdown_set_auto(true);
+    TEST_ASSERT_TRUE(markdown_get_auto());
+}
+
+void test_markdown_expand_form_feeds(void)
+{
+    char out[256];
+
+    /* No form feed: verbatim. */
+    TEST_ASSERT_EQUAL_size_t(5, markdown_expand_form_feeds("hello", out, sizeof(out)));
+    TEST_ASSERT_EQUAL_STRING("hello", out);
+
+    /* A form feed becomes a visible "page break" rule. */
+    {
+        size_t n = markdown_expand_form_feeds("a\fb", out, sizeof(out));
+        TEST_ASSERT_GREATER_THAN_size_t(2, n);
+        TEST_ASSERT_NOT_NULL(strstr(out, "a\n"));
+        TEST_ASSERT_NOT_NULL(strstr(out, "page break"));
+        TEST_ASSERT_NOT_NULL(strstr(out, "\nb"));
+        TEST_ASSERT_NULL(strchr(out, '\f'));
+    }
+
+    /* Measure-only matches the written length. */
+    TEST_ASSERT_EQUAL_size_t(markdown_expand_form_feeds("x\fy", NULL, 0),
+                             markdown_expand_form_feeds("x\fy", out, sizeof(out)));
+    TEST_ASSERT_EQUAL_size_t(0, markdown_expand_form_feeds(NULL, out, sizeof(out)));
+}
+

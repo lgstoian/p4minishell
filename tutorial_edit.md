@@ -5,7 +5,7 @@ SD card. It is modelled on the classic MS-DOS `EDIT` program and adds modern
 extras: undo/redo, a line-number gutter, a current-line highlight, syntax
 highlighting for batch files, and touch support.
 
-> **Current build (v1.2.1):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.3.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
@@ -229,9 +229,18 @@ number, `Enter`. See §4.
 - **Quit** ends the session. If the buffer has unsaved changes the editor asks
   `Quit without saving? (Y/N)` — `Y` discards, `N` keeps editing. A clean
   buffer quits immediately.
-- If a save fails (read-only destination, full card, write error) the partial
-  destination file is removed and the status bar reports `save failed`; your
-  edits stay in memory so you can retry or Save As to another path.
+- If a save fails (read-only destination, full card, write error) the status
+  bar reports `save failed` and your edits stay in memory so you can retry or
+  Save As to another path. Saves are atomic (temp file + rename), so a failed
+  save never leaves a truncated destination behind; the previous version also
+  survives as `<file>.bak`.
+- **Autosave / crash recovery** — while the buffer is dirty the editor spills
+  it to `sd:/tmp/edit/` every `P4_CONFIG_EDITOR_AUTOSAVE_SECS` seconds
+  (default 30; `0` disables). If the session ends without saving (crash, power
+  loss, discarded quit), `recover` lists the crash files afterwards,
+  `recover restore <path>` writes one back over its original, and
+  `recover discard <path>` / `recover clear` drops them. A successful save
+  deletes its crash file.
 
 ---
 
@@ -403,6 +412,16 @@ Writing-oriented extras, all opt-in and non-destructive:
   (`don't`/`well-known` stay whole; CJK, digits, `_`, and non-ASCII Latin are
   never flagged), single-character words are checked like any other, and
   underlines compose with word-wrap.
+- **User dictionary** — teach the checker your words with `Ctrl+D` (any
+  physical keyboard: USB HID, Bluetooth, or Tab5 keyboard) or
+  `\spell-add [word]` (bare form learns the word under the
+  cursor). Learned words persist at once in `sd:/DICTS/user.words` (same
+  one-per-line format) and silence underlines immediately. `\spell-forget
+  <word>` removes one again (base words stay); `\spell-ignore [word]` skips a
+  word for this session only; `\spell-list` shows the overlay count. The same
+  store is managed outside the editor with
+  `spell learn <word> | spell forget <word> | spell list user`, and learned
+  words travel home with `python apps/push_dicts.py pull|merge`.
 - **Reading typography** — `view` (for `.md`) and the editor Markdown preview
   use the `reading` font role: a vendored `DejaVuSerif` face (auto-selected
   once pushed to `sd:/FONTS/`) with reader line spacing. `font set reading

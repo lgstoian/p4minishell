@@ -215,6 +215,10 @@ void camera_deinit(void)
         close(s_fd);
         s_fd = -1;
     }
+    /* Drop the sensor rail too, not just the V4L2 device: the camera is used
+     * on demand and its power rail (expander P6 on the Tab5) otherwise keeps
+     * drawing current after `camera deinit`. */
+    (void)bsp_feature_enable(BSP_FEATURE_CAMERA, false);
 }
 
 bool camera_available(void)

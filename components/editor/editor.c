@@ -29,6 +29,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -314,6 +315,9 @@ void editor_doc_pick_syntax(editor_doc_t *doc)
     case FILETYPE_JSON:
         doc->syntax = EDITOR_SYNTAX_JSON;
         break;
+    case FILETYPE_HTML:
+        doc->syntax = EDITOR_SYNTAX_HTML;
+        break;
     default:
         doc->syntax = EDITOR_SYNTAX_PLAIN;
         break;
@@ -535,18 +539,66 @@ bool editor_file_missing(const char *resolved_path)
  * SAVE
  * ======================================================================== */
 
-esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
+/** Stream the document lines with the document EOL style (plus the trailing
+ *  newline when the original file had one) into @p file, bouncing through
+ *  @p chunk (internal DMA-capable, EDITOR_SD_CHUNK_BYTES). Binary-safe
+ *  (length-counted, never strlen). Shared by the atomic save path and the
+ *  autosave crash writer so both emit byte-identical content. */
+static esp_err_t editor_doc_write_stream(editor_doc_t *doc, FILE *file,
+                                         char *chunk)
 {
-    char resolved[P4_CONFIG_SD_PATH_BYTES];
-    shell_sd_session_t session;
-    FILE *file = NULL;
-    char *chunk = NULL;
-    size_t i;
-    esp_err_t err;
     const char crlf[] = "\r\n";
     const char lf[] = "\n";
     const char *eol;
     size_t eol_len;
+    size_t i;
+
+    if (doc == NULL || file == NULL || chunk == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    eol = doc->crlf ? crlf : lf;
+    eol_len = doc->crlf ? 2 : 1;
+    for (i = 0; i < doc->line_count; i++) {
+        const char *text = doc->lines[i].text != NULL ? doc->lines[i].text : "";
+        size_t len = doc->lines[i].length;
+        size_t off = 0;
+
+        while (off < len) {
+            size_t n = len - off;
+            if (n > EDITOR_SD_CHUNK_BYTES) {
+                n = EDITOR_SD_CHUNK_BYTES;
+            }
+            memcpy(chunk, text + off, n);
+            if (fwrite(chunk, 1, n, file) != n) {
+                return ESP_FAIL;
+            }
+            off += n;
+        }
+        if (i + 1 < doc->line_count) {
+            /* CRLF when the file uses CRLF, otherwise a bare LF. The EOL is
+             * selected explicitly: writing only the first byte of "\r\n" when
+             * crlf is false would emit a lone CR. */
+            if (fwrite(eol, 1, eol_len, file) != eol_len) {
+                return ESP_FAIL;
+            }
+        }
+    }
+
+    /* Preserve a trailing newline when the original file had one. */
+    if (doc->trailing_newline && doc->line_count > 0) {
+        if (fwrite(eol, 1, eol_len, file) != eol_len) {
+            return ESP_FAIL;
+        }
+    }
+    return ESP_OK;
+}
+
+esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    char *chunk = NULL;
+    esp_err_t err;
 
     if (doc == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -554,8 +606,6 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
     if (path == NULL || path[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
-    eol = doc->crlf ? crlf : lf;
-    eol_len = doc->crlf ? 2 : 1;
 
     err = shell_fs_resolve_path(path, resolved, sizeof(resolved));
     if (err != ESP_OK) {
@@ -620,58 +670,37 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
         }
     }
 
-    file = fopen(resolved, "wb");
-    if (file == NULL) {
-        err = ESP_FAIL;
-        goto out;
-    }
+    /* Atomic write: stream into "<resolved>.tmp", then swap it over the
+     * destination with the shared replace primitive. Unlike the old direct
+     * truncating write, a power loss can never leave a truncated destination
+     * behind. The .bak copy above still protects the previous version, and on
+     * failure the original file is left untouched (there is no partial to
+     * remove). */
+    {
+        char tmp[P4_CONFIG_SD_PATH_BYTES + 5];
+        FILE *file = NULL;
 
-    /* A failed write removes the partial destination: a truncated file that
-     * looks complete is worse than no file (the shell's storage guardrail). */
-    for (i = 0; i < doc->line_count; i++) {
-        const char *text = doc->lines[i].text != NULL ? doc->lines[i].text : "";
-        size_t len = doc->lines[i].length;
-        size_t off = 0;
-
-        while (off < len) {
-            size_t n = len - off;
-            if (n > EDITOR_SD_CHUNK_BYTES) {
-                n = EDITOR_SD_CHUNK_BYTES;
-            }
-            memcpy(chunk, text + off, n);
-            if (fwrite(chunk, 1, n, file) != n) {
+        if (snprintf(tmp, sizeof(tmp), "%s.tmp", resolved) >= (int)sizeof(tmp)) {
+            err = ESP_ERR_INVALID_SIZE;
+        } else {
+            file = fopen(tmp, "wb");
+            if (file == NULL) {
                 err = ESP_FAIL;
-                goto out;
-            }
-            off += n;
-        }
-        if (i + 1 < doc->line_count) {
-            /* CRLF when the file uses CRLF, otherwise a bare LF. The EOL is
-             * selected explicitly: writing only the first byte of "\r\n" when
-             * crlf is false would emit a lone CR. */
-            if (fwrite(eol, 1, eol_len, file) != eol_len) {
-                err = ESP_FAIL;
-                goto out;
+            } else {
+                err = editor_doc_write_stream(doc, file, chunk);
+                if (fclose(file) != 0 && err == ESP_OK) {
+                    err = ESP_FAIL;
+                }
+                file = NULL;
+                if (err == ESP_OK) {
+                    err = storage_replace_file(tmp, resolved);
+                } else {
+                    remove(tmp);
+                }
             }
         }
     }
 
-    /* Preserve a trailing newline when the original file had one. */
-    if (doc->trailing_newline && doc->line_count > 0) {
-        if (fwrite(eol, 1, eol_len, file) != eol_len) {
-            err = ESP_FAIL;
-            goto out;
-        }
-    }
-    err = ESP_OK;
-
-out:
-    if (file != NULL && fclose(file) != 0 && err == ESP_OK) {
-        err = ESP_FAIL;
-    }
-    if (err != ESP_OK) {
-        remove(resolved);
-    }
     editor_mem_free(chunk);
     shell_sd_end(&session, "edit");
     return err;
@@ -1205,6 +1234,55 @@ void editor_doc_cursor_word_right(editor_doc_t *doc)
             doc->cursor_col++;
         }
     }
+}
+
+bool editor_doc_cursor_word(editor_doc_t *doc, char *buf, size_t size)
+{
+    const char *text;
+    size_t len;
+    size_t start;
+    size_t end;
+
+    if (doc == NULL || buf == NULL || size == 0) {
+        return false;
+    }
+    buf[0] = '\0';
+    if (doc->cursor_row >= doc->line_count) {
+        return false;
+    }
+    text = doc->lines[doc->cursor_row].text;
+    len = doc->lines[doc->cursor_row].length;
+    if (text == NULL || len == 0) {
+        return false;
+    }
+    /* Expand over the whitespace-delimited run around the cursor. */
+    start = doc->cursor_col;
+    if (start > len) {
+        start = len;
+    }
+    if (start < len && !editor_is_word_char(text[start]) && start > 0) {
+        start--;
+    }
+    end = start;
+    while (start > 0 && editor_is_word_char(text[start - 1])) {
+        start--;
+    }
+    while (end < len && editor_is_word_char(text[end])) {
+        end++;
+    }
+    /* Trim ASCII punctuation from both ends (interior kept). */
+    while (start < end && ispunct((unsigned char)text[start])) {
+        start++;
+    }
+    while (end > start && ispunct((unsigned char)text[end - 1])) {
+        end--;
+    }
+    if (start >= end || end - start + 1 > size) {
+        return false;
+    }
+    memcpy(buf, text + start, end - start);
+    buf[end - start] = '\0';
+    return true;
 }
 
 void editor_doc_cursor_doc_home(editor_doc_t *doc)
@@ -1763,6 +1841,7 @@ size_t editor_doc_comment_toggle(editor_doc_t *doc)
         prefix = "// ";
         break;
     case EDITOR_SYNTAX_MARKDOWN:
+    case EDITOR_SYNTAX_HTML:
         prefix = "<!-- ";
         suffix = " -->";
         break;
@@ -2706,6 +2785,9 @@ struct editor_session {
  * editor even during the async view-open window. */
 static volatile bool s_session_active;
 
+/* Last autosave tick (worker task only; reset at session open). */
+static TickType_t s_autosave_last;
+
 /** Per-modal-run context handed to the shared modal runtime. */
 typedef struct {
     const char *path_arg;
@@ -2923,12 +3005,16 @@ static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
         }
     }
 
-    /* Load the spellcheck wordlist on the worker (SD I/O must not run on the
-     * LVGL task). Best-effort: absent/broken dictionaries leave spell off.
-     * EXPERIMENTAL (v1.2.0): gated off until the crash in bugs.md is fixed. */
+    /* Load the spellcheck wordlists on the worker (SD I/O must not run on
+     * the LVGL task). Best-effort: absent/broken dictionaries leave spell
+     * off. The user overlay loads alongside the base list and a fresh
+     * session starts with an empty ignore list. */
 #if P4_CONFIG_SPELL_ENABLE
     (void)editor_spell_load(P4_CONFIG_SPELL_DICT_NAME);
+    (void)spell_user_load();
+    spell_ignored_clear();
 #endif
+    s_autosave_last = 0;
 
     session->event_group = event_group;
     session->control.event_group = event_group;
@@ -2952,6 +3038,170 @@ static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
     return true;
 }
 
+/** Crash-file base name for a document path: alphanumerics kept, everything
+ *  else folded to '_', truncated, plus ".autosave". Deterministic per
+ *  document so one crash file exists per open file. */
+static void editor_autosave_name(const char *docpath, char *out, size_t size)
+{
+    size_t pos = 0;
+    size_t i;
+
+    if (out == NULL || size == 0) {
+        return;
+    }
+    if (docpath == NULL || docpath[0] == '\0') {
+        docpath = "untitled";
+    }
+    for (i = 0; docpath[i] != '\0' && pos + 10 < size; i++) {
+        char c = docpath[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9')) {
+            out[pos++] = c;
+        } else {
+            out[pos++] = '_';
+        }
+    }
+    if (pos == 0 && size > 1) {
+        out[pos++] = '_';
+    }
+    {
+        const char *suffix = ".autosave";
+        size_t k = 0;
+        while (suffix[k] != '\0' && pos + 1 < size) {
+            out[pos++] = suffix[k++];
+        }
+    }
+    out[pos] = '\0';
+}
+
+/** Write the crash file for @p doc: a `#P4AUTOSAVE <path>` header plus the
+ *  exact save bytes, streamed to "<crash>.tmp" and swapped over. Silent on
+ *  any failure: autosave must never interrupt editing. */
+static void editor_autosave_write(editor_doc_t *doc)
+{
+    char dir[P4_CONFIG_SD_PATH_BYTES];
+    char base[96];
+    char crash[P4_CONFIG_SD_PATH_BYTES];
+    char tmp[P4_CONFIG_SD_PATH_BYTES + 5];
+    shell_sd_session_t session;
+    FILE *file = NULL;
+    char *chunk = NULL;
+    const char *orig;
+    char head[P4_CONFIG_SD_PATH_BYTES + 16];
+    int n;
+
+    if (doc == NULL) {
+        return;
+    }
+    if (storage_recovery_dir(dir, sizeof(dir)) != ESP_OK) {
+        return;
+    }
+    editor_autosave_name(doc->path, base, sizeof(base));
+    n = snprintf(crash, sizeof(crash), "%s/%s", dir, base);
+    if (n < 0 || (size_t)n >= sizeof(crash)) {
+        return;
+    }
+    n = snprintf(tmp, sizeof(tmp), "%s.tmp", crash);
+    if (n < 0 || (size_t)n >= sizeof(tmp)) {
+        return;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return;
+    }
+    chunk = editor_dma_alloc(EDITOR_SD_CHUNK_BYTES);
+    if (chunk == NULL) {
+        shell_sd_end(&session, "edit");
+        return;
+    }
+    file = fopen(tmp, "wb");
+    if (file == NULL) {
+        editor_mem_free(chunk);
+        shell_sd_end(&session, "edit");
+        return;
+    }
+    /* Header carries the original path for `recover` ("(unnamed)" buffers
+     * restore-refuse later). */
+    {
+        bool ok = true;
+
+        orig = (doc->path[0] != '\0') ? doc->path : "(unnamed)";
+        n = snprintf(head, sizeof(head), "#P4AUTOSAVE %s\n", orig);
+        if (n < 0 || (size_t)n >= sizeof(head)) {
+            ok = false;
+        } else if (fwrite(head, 1, (size_t)n, file) != (size_t)n) {
+            ok = false;
+        } else if (editor_doc_write_stream(doc, file, chunk) != ESP_OK) {
+            ok = false;
+        }
+        if (fclose(file) != 0) {
+            ok = false;
+        }
+        file = NULL;
+        if (ok) {
+            (void)storage_replace_file(tmp, crash);
+        } else {
+            remove(tmp);
+        }
+    }
+    editor_mem_free(chunk);
+    shell_sd_end(&session, "edit");
+}
+
+/** Remove the crash file for @p doc (called after a successful save). */
+static void editor_autosave_clear(editor_doc_t *doc)
+{
+    char dir[P4_CONFIG_SD_PATH_BYTES];
+    char base[96];
+    char crash[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    int n;
+
+    if (doc == NULL) {
+        return;
+    }
+    if (storage_recovery_dir(dir, sizeof(dir)) != ESP_OK) {
+        return;
+    }
+    editor_autosave_name(doc->path[0] != '\0' ? doc->path : "untitled",
+                         base, sizeof(base));
+    n = snprintf(crash, sizeof(crash), "%s/%s", dir, base);
+    if (n < 0 || (size_t)n >= sizeof(crash)) {
+        return;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return;
+    }
+    remove(crash);
+    shell_sd_end(&session, "edit");
+}
+
+/** Autosave tick: spill a dirty buffer to its crash file when due. Runs on
+ *  the worker inside editor_surface_service (100 ms ticks); the interval and
+ *  dirty check keep SD writes sparse. */
+static void editor_autosave_tick(editor_control_t *control)
+{
+    editor_doc_t *doc;
+    TickType_t now;
+
+    if (control == NULL || (doc = control->doc) == NULL) {
+        return;
+    }
+    if (P4_CONFIG_EDITOR_AUTOSAVE_SECS <= 0) {
+        return;
+    }
+    if (!editor_doc_is_modified(doc)) {
+        return;
+    }
+    now = xTaskGetTickCount();
+    if (s_autosave_last != 0 &&
+        (now - s_autosave_last) <
+            pdMS_TO_TICKS((TickType_t)P4_CONFIG_EDITOR_AUTOSAVE_SECS * 1000)) {
+        return;
+    }
+    s_autosave_last = now;
+    editor_autosave_write(doc);
+}
+
 static void editor_surface_service(void *ctx, EventBits_t bits)
 {
     editor_modal_ctx_t *mctx = (editor_modal_ctx_t *)ctx;
@@ -2959,12 +3209,19 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
     editor_control_t *control;
     esp_err_t err;
 
-    if (session == NULL ||
-        ((bits & (EDITOR_EVENT_SAVE | EDITOR_EVENT_RELOAD | EDITOR_EVENT_OPEN)) == 0)) {
+    if (session == NULL) {
         return;
     }
-
     control = &session->control;
+
+    /* Autosave runs on every service tick (100 ms), independent of event
+     * bits; the dirty + interval check inside keeps it sparse. */
+    editor_autosave_tick(control);
+
+    if (((bits & (EDITOR_EVENT_SAVE | EDITOR_EVENT_RELOAD | EDITOR_EVENT_OPEN |
+                  EDITOR_EVENT_SPELL)) == 0)) {
+        return;
+    }
     err = ESP_ERR_INVALID_ARG;
 
     /* Reload runs first when both bits arrive together: it replaces the
@@ -3008,12 +3265,32 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
             err = editor_doc_save(control->doc, "EDIT.NEW");
         }
         control->save_ok = (err == ESP_OK);
-        if (err != ESP_OK) {
+        if (err == ESP_OK) {
+            /* A saved buffer needs no crash file. */
+            editor_autosave_clear(control->doc);
+        } else {
             mctx->result = err;
         }
 
         /* Refresh the status bar on the LVGL task. */
         lv_async_call(editor_view_notify_saved_cb, (void *)(intptr_t)(err == ESP_OK));
+    }
+
+    /* Spell learn/forget runs here on the worker: the SD file append and
+     * rewrite must stay off the LVGL/UART tasks that raise the request. */
+    if ((bits & EDITOR_EVENT_SPELL) != 0) {
+        bool ok = false;
+
+        control->spell_op_requested = false;
+        if (control->spell_word[0] != '\0') {
+            if (control->spell_op == 1) {
+                ok = spell_user_forget(control->spell_word, strlen(control->spell_word));
+            } else {
+                ok = spell_user_learn(control->spell_word, strlen(control->spell_word));
+            }
+        }
+        control->spell_op_ok = ok;
+        lv_async_call(editor_view_notify_spell_cb, (void *)(intptr_t)ok);
     }
 
     if ((bits & EDITOR_EVENT_OPEN) == 0) {
@@ -3091,6 +3368,40 @@ static bool editor_serial_is_verb(const char *line, const char *verb)
     return line[0] == '\\' && strcasecmp(line + 1, verb) == 0;
 }
 
+/* Match `\verb` or `\verb <arg>`; copies the argument (possibly empty) into
+ * @p out. Used by verbs that take a word. */
+static bool editor_serial_verb_arg(const char *line, const char *verb,
+                                   char *out, size_t size)
+{
+    size_t n;
+
+    if (out == NULL || size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    if (line == NULL || line[0] != '\\') {
+        return false;
+    }
+    n = strlen(verb);
+    if (strncasecmp(line + 1, verb, n) != 0) {
+        return false;
+    }
+    {
+        const char *rest = line + 1 + n;
+        if (*rest == '\0') {
+            return true;
+        }
+        if (*rest != ' ' && *rest != '\t') {
+            return false;
+        }
+        while (*rest == ' ' || *rest == '\t') {
+            rest++;
+        }
+        snprintf(out, size, "%s", rest);
+        return true;
+    }
+}
+
 /* Per-call context for async serial-line dispatch to the LVGL task. */
 typedef struct {
     char *line;
@@ -3102,6 +3413,7 @@ static void editor_serial_line_cb(void *user_data)
 {
     editor_serial_line_ctx_t *ctx = (editor_serial_line_ctx_t *)user_data;
     const char *line;
+    char word[P4_CONFIG_SPELL_WORD_MAX + 1];
     size_t i;
     size_t len;
 
@@ -3153,6 +3465,21 @@ static void editor_serial_line_cb(void *user_data)
         editor_view_handle_usb_key(0, 0x03, 'f'); /* Ctrl+Shift+F -> focus toggle */
     } else if (editor_serial_is_verb(line, "spell")) {
         editor_view_handle_usb_key(0, 0x03, 's'); /* Ctrl+Shift+S -> spell toggle */
+    } else if (editor_serial_verb_arg(line, "spell-add", word, sizeof(word)) ||
+               editor_serial_verb_arg(line, "spelladd", word, sizeof(word))) {
+        /* Bare form learns the word under the cursor; `\spell-add WORD` learns
+         * the explicit word. Select on verb_arg (not is_verb) or a form with an
+         * argument never enters this branch and is typed into the document. */
+        editor_view_spell_learn(word[0] != '\0' ? word : NULL);
+    } else if (editor_serial_verb_arg(line, "spell-forget", word, sizeof(word)) ||
+               editor_serial_verb_arg(line, "spellforget", word, sizeof(word))) {
+        editor_view_spell_forget(word);
+    } else if (editor_serial_verb_arg(line, "spell-ignore", word, sizeof(word)) ||
+               editor_serial_verb_arg(line, "spellignore", word, sizeof(word))) {
+        editor_view_spell_ignore(word[0] != '\0' ? word : NULL);
+    } else if (editor_serial_is_verb(line, "spell-list") ||
+               editor_serial_is_verb(line, "spelllist")) {
+        editor_view_spell_list();
     } else if (editor_serial_is_verb(line, "l") || editor_serial_is_verb(line, "reload")) {
         editor_view_handle_usb_key(0, 0x01, 'l'); /* Ctrl+L -> reload */
     } else if (editor_serial_is_verb(line, "a") || editor_serial_is_verb(line, "selectall")) {
@@ -3335,6 +3662,7 @@ editor_key_t editor_key_from_usb(uint8_t key_code, uint8_t modifiers, char ascii
         switch (ascii) {
         case 'a': case 'A': return EDITOR_KEY_SELECT_ALL;
         case 'c': case 'C': return EDITOR_KEY_COPY;
+        case 'd': case 'D': return EDITOR_KEY_SPELL_ADD;
         case 'x': case 'X': return EDITOR_KEY_CUT;
         case 'v': case 'V': return EDITOR_KEY_PASTE;
         case 'z': case 'Z': return EDITOR_KEY_UNDO;
@@ -3368,8 +3696,8 @@ editor_key_t editor_key_from_usb(uint8_t key_code, uint8_t modifiers, char ascii
  * MARKDOWN LEXER (single line, no multi-line state)
  * ======================================================================== */
 
-/* Emit one run if capacity allows. */
-static void md_lex_emit(editor_syntax_run_t *runs, size_t capacity,
+/* Emit one run if capacity allows (shared by the markdown and HTML lexers). */
+static void editor_lex_emit(editor_syntax_run_t *runs, size_t capacity,
                         size_t *count, size_t start, size_t length,
                         ansi_color_index_t color, unsigned attrs)
 {
@@ -3402,7 +3730,7 @@ static void md_lex_inline(const char *text, size_t len, size_t start,
                 j++;
             }
             if (j < iend) {
-                md_lex_emit(runs, capacity, count, i, j - i + 1,
+                editor_lex_emit(runs, capacity, count, i, j - i + 1,
                             ANSI_COLOR_BRIGHT_YELLOW, 0);
                 i = j + 1;
                 continue;
@@ -3418,7 +3746,7 @@ static void md_lex_inline(const char *text, size_t len, size_t start,
                 j++;
             }
             if (j + 1 < iend && j > i + 2 && text[j - 1] != ' ') {
-                md_lex_emit(runs, capacity, count, i, j + 2 - i,
+                editor_lex_emit(runs, capacity, count, i, j + 2 - i,
                             ANSI_COLOR_BRIGHT_WHITE, ANSI_ATTR_BOLD);
                 i = j + 2;
                 continue;
@@ -3433,7 +3761,7 @@ static void md_lex_inline(const char *text, size_t len, size_t start,
                 j++;
             }
             if (j < iend && j > i + 1 && text[j - 1] != ' ') {
-                md_lex_emit(runs, capacity, count, i, j - i + 1,
+                editor_lex_emit(runs, capacity, count, i, j - i + 1,
                             ANSI_COLOR_BRIGHT_WHITE, ANSI_ATTR_ITALIC);
                 i = j + 1;
                 continue;
@@ -3454,7 +3782,7 @@ static void md_lex_inline(const char *text, size_t len, size_t start,
                     u++;
                 }
                 if (u < iend) {
-                    md_lex_emit(runs, capacity, count, i, t - i + 1,
+                    editor_lex_emit(runs, capacity, count, i, t - i + 1,
                                 ANSI_COLOR_BRIGHT_CYAN, ANSI_ATTR_UNDERLINE);
                     i = u + 1;
                     continue;
@@ -3493,9 +3821,9 @@ size_t editor_lex_markdown(const char *text, size_t len,
             h++;
         }
         if (h - i <= 6 && h < len && (text[h] == ' ' || text[h] == '\t')) {
-            md_lex_emit(runs, capacity, &run_count, i, h - i,
+            editor_lex_emit(runs, capacity, &run_count, i, h - i,
                         ANSI_COLOR_BRIGHT_GREEN, 0);
-            md_lex_emit(runs, capacity, &run_count, h, len - h,
+            editor_lex_emit(runs, capacity, &run_count, h, len - h,
                         ANSI_COLOR_BRIGHT_WHITE, ANSI_ATTR_BOLD);
             return run_count;
         }
@@ -3503,7 +3831,7 @@ size_t editor_lex_markdown(const char *text, size_t len,
 
     /* Quote marker. */
     if (i < len && text[i] == '>') {
-        md_lex_emit(runs, capacity, &run_count, i, 1,
+        editor_lex_emit(runs, capacity, &run_count, i, 1,
                     ANSI_COLOR_BRIGHT_BLACK, 0);
         i += 1;
         if (i < len && text[i] == ' ') {
@@ -3534,7 +3862,7 @@ size_t editor_lex_markdown(const char *text, size_t len,
             }
         }
         if (is_list) {
-            md_lex_emit(runs, capacity, &run_count, i, m - i + 1,
+            editor_lex_emit(runs, capacity, &run_count, i, m - i + 1,
                         ANSI_COLOR_BRIGHT_GREEN, 0);
             i = m + 1;
             while (i < len && (text[i] == ' ' || text[i] == '\t')) {
@@ -3547,7 +3875,7 @@ size_t editor_lex_markdown(const char *text, size_t len,
 
     /* Fence line: whole line code-yellow. */
     if (i + 2 < len && text[i] == '`' && text[i + 1] == '`' && text[i + 2] == '`') {
-        md_lex_emit(runs, capacity, &run_count, 0, len,
+        editor_lex_emit(runs, capacity, &run_count, 0, len,
                     ANSI_COLOR_BRIGHT_YELLOW, 0);
         return run_count;
     }
@@ -3574,7 +3902,7 @@ size_t editor_lex_markdown(const char *text, size_t len,
             h++;
         }
         if (ok && cnt >= 3) {
-            md_lex_emit(runs, capacity, &run_count, 0, len,
+            editor_lex_emit(runs, capacity, &run_count, 0, len,
                         ANSI_COLOR_BRIGHT_BLACK, 0);
             return run_count;
         }
@@ -3628,7 +3956,7 @@ size_t editor_lex_json(const char *text, size_t len,
                 if (k < len && text[k] == ':') {
                     color = ANSI_COLOR_BRIGHT_CYAN;
                 }
-                md_lex_emit(runs, capacity, &run_count, i, j - i, color, 0);
+                editor_lex_emit(runs, capacity, &run_count, i, j - i, color, 0);
             }
             i = j;
             continue;
@@ -3667,7 +3995,7 @@ size_t editor_lex_json(const char *text, size_t len,
                 }
             }
             if (j > i + (text[i] == '-' ? 1 : 0)) {
-                md_lex_emit(runs, capacity, &run_count, i, j - i,
+                editor_lex_emit(runs, capacity, &run_count, i, j - i,
                             ANSI_COLOR_BRIGHT_YELLOW, 0);
                 i = j;
                 continue;
@@ -3678,19 +4006,19 @@ size_t editor_lex_json(const char *text, size_t len,
         }
         /* Literals true/false/null. */
         if (i + 4 <= len && strncmp(text + i, "true", 4) == 0) {
-            md_lex_emit(runs, capacity, &run_count, i, 4,
+            editor_lex_emit(runs, capacity, &run_count, i, 4,
                         ANSI_COLOR_BRIGHT_MAGENTA, 0);
             i += 4;
             continue;
         }
         if (i + 5 <= len && strncmp(text + i, "false", 5) == 0) {
-            md_lex_emit(runs, capacity, &run_count, i, 5,
+            editor_lex_emit(runs, capacity, &run_count, i, 5,
                         ANSI_COLOR_BRIGHT_MAGENTA, 0);
             i += 5;
             continue;
         }
         if (i + 4 <= len && strncmp(text + i, "null", 4) == 0) {
-            md_lex_emit(runs, capacity, &run_count, i, 4,
+            editor_lex_emit(runs, capacity, &run_count, i, 4,
                         ANSI_COLOR_BRIGHT_MAGENTA, 0);
             i += 4;
             continue;
@@ -3698,13 +4026,140 @@ size_t editor_lex_json(const char *text, size_t len,
         /* Structural punctuation. */
         if (text[i] == '{' || text[i] == '}' || text[i] == '[' ||
             text[i] == ']' || text[i] == ':' || text[i] == ',') {
-            md_lex_emit(runs, capacity, &run_count, i, 1,
+            editor_lex_emit(runs, capacity, &run_count, i, 1,
                         ANSI_COLOR_BRIGHT_WHITE, 0);
             i++;
             continue;
         }
         /* Plain character: renderer folds gaps to default. */
         i++;
+    }
+    return run_count;
+}
+
+/* ========================================================================
+ * HTML LEXER (single line, no multi-line state)
+ * ======================================================================== */
+
+/** True for an HTML tag/attribute name character. */
+static bool editor_html_name_char(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '-' || c == ':' || c == '_';
+}
+
+size_t editor_lex_html(const char *text, size_t len,
+                       editor_syntax_run_t *runs, size_t capacity)
+{
+    size_t run_count = 0;
+    size_t i = 0;
+
+    if (text == NULL || runs == NULL || capacity == 0) {
+        return 0;
+    }
+
+    while (i < len) {
+        if (text[i] != '<') {
+            i++; /* Plain: renderer folds gaps to the default run. */
+            continue;
+        }
+        /* Comment: <!-- ... --> (to EOL when unterminated on this line). */
+        if (i + 3 < len && strncmp(text + i, "<!--", 4) == 0) {
+            size_t j = i + 4;
+            while (j + 2 < len && !(text[j] == '-' && text[j + 1] == '-')) {
+                j++;
+            }
+            if (j + 3 <= len && text[j] == '-' && text[j + 1] == '-') {
+                j += 3;
+            } else {
+                j = len;
+            }
+            editor_lex_emit(runs, capacity, &run_count, i, j - i,
+                            ANSI_COLOR_BRIGHT_GREEN, 0);
+            i = j;
+            continue;
+        }
+        /* Doctype / processing instruction / declaration. */
+        if (i + 1 < len && (text[i + 1] == '!' || text[i + 1] == '?')) {
+            size_t j = i + 1;
+            while (j < len && text[j] != '>') {
+                j++;
+            }
+            if (j < len) {
+                j++;
+            }
+            editor_lex_emit(runs, capacity, &run_count, i, j - i,
+                            ANSI_COLOR_BRIGHT_MAGENTA, 0);
+            i = j;
+            continue;
+        }
+        /* Tag: '<' '/' name (attrs) '>'. */
+        {
+            size_t j = i;
+            editor_lex_emit(runs, capacity, &run_count, j, 1,
+                            ANSI_COLOR_BRIGHT_CYAN, 0); /* '<' */
+            j++;
+            if (j < len && text[j] == '/') {
+                editor_lex_emit(runs, capacity, &run_count, j, 1,
+                                ANSI_COLOR_BRIGHT_CYAN, 0);
+                j++;
+            }
+            {
+                size_t ns = j;
+                while (j < len && editor_html_name_char(text[j])) {
+                    j++;
+                }
+                if (j > ns) {
+                    editor_lex_emit(runs, capacity, &run_count, ns, j - ns,
+                                    ANSI_COLOR_BRIGHT_YELLOW, ANSI_ATTR_BOLD);
+                }
+            }
+            while (j < len && text[j] != '>') {
+                if (text[j] == ' ' || text[j] == '\t') {
+                    j++;
+                    continue;
+                }
+                if (text[j] == '/' || text[j] == '=') {
+                    editor_lex_emit(runs, capacity, &run_count, j, 1,
+                                    ANSI_COLOR_BRIGHT_CYAN, 0);
+                    j++;
+                    continue;
+                }
+                if (text[j] == '"' || text[j] == '\'') {
+                    char quote = text[j];
+                    size_t vs = j;
+                    j++;
+                    while (j < len && text[j] != quote) {
+                        j++;
+                    }
+                    if (j < len) {
+                        j++;
+                    }
+                    editor_lex_emit(runs, capacity, &run_count, vs, j - vs,
+                                    ANSI_COLOR_BRIGHT_GREEN, 0);
+                    continue;
+                }
+                {
+                    size_t as = j;
+                    while (j < len && text[j] != '>' && text[j] != '=' &&
+                           text[j] != ' ' && text[j] != '\t' && text[j] != '/') {
+                        j++;
+                    }
+                    if (j > as) {
+                        editor_lex_emit(runs, capacity, &run_count, as, j - as,
+                                        ANSI_COLOR_BRIGHT_WHITE, 0);
+                    } else {
+                        j++; /* stray char, keep scanning */
+                    }
+                }
+            }
+            if (j < len && text[j] == '>') {
+                editor_lex_emit(runs, capacity, &run_count, j, 1,
+                                ANSI_COLOR_BRIGHT_CYAN, 0);
+                j++;
+            }
+            i = j;
+        }
     }
     return run_count;
 }

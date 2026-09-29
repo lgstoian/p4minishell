@@ -16,6 +16,7 @@
 #include "modal.h"
 #include "windows.h"
 #include "markdown.h"
+#include "html.h"
 #include "filetype.h"
 #include "gfx.h"
 #include "theme.h"
@@ -296,7 +297,7 @@ static bool dialog_handle_serial_line(void *ctx_ptr, const char *line)
 {
     dialog_ctx_t *ctx = (dialog_ctx_t *)ctx_ptr;
     if (!line) return false;
-    ESP_LOGW("modal", "dialog serial line: '%s'", line);
+    ESP_LOGD("modal", "dialog serial line: '%s'", line);
     if (strcasecmp(line, "y") == 0 || strcasecmp(line, "yes") == 0 || strcasecmp(line, "1") == 0 || strcasecmp(line, "ok") == 0) { ctx->result = 0; surf_request_close(ctx->eg); return true; }
     if (strcasecmp(line, "n") == 0 || strcasecmp(line, "no") == 0 || strcasecmp(line, "2") == 0) { ctx->result = ctx->button2 ? 1 : -1; surf_request_close(ctx->eg); return true; }
     if (strcasecmp(line, "q") == 0 || strcasecmp(line, "quit") == 0 || strcasecmp(line, "") == 0) { ctx->result = -1; surf_request_close(ctx->eg); return true; }
@@ -597,7 +598,7 @@ static bool ask_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modifier
 static bool ask_handle_serial_line(void *ctx_ptr, const char *line)
 {
     ask_ctx_t *ctx = (ask_ctx_t *)ctx_ptr;
-    ESP_LOGW("modal", "ask serial line: '%s'", line ? line : "(null)");
+    ESP_LOGD("modal", "ask serial line: '%s'", line ? line : "(null)");
     if (line == NULL) return false;
     /* Serial line is the answer itself; empty line is cancel if no default, else OK with empty */
     if (ctx->out && ctx->out_size) {
@@ -976,29 +977,52 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
                                     (unsigned)(P4_CONFIG_TUI_VIEW_MAX_BYTES / 1024));
             }
         }
-        /* Markdown branch: render the document, then strip SGR for the
+        /* Form feeds (print exports) would render as a control glyph in the
+         * textarea; show them as a visible page-break rule. */
+        if (ctx->content != NULL &&
+            memchr(ctx->content, '\f', ctx->content_size) != NULL) {
+            size_t need = markdown_expand_form_feeds(ctx->content, NULL, 0);
+            char *expanded = malloc(need + 1);
+            if (expanded != NULL) {
+                markdown_expand_form_feeds(ctx->content, expanded, need + 1);
+                free(ctx->content);
+                ctx->content = expanded;
+                ctx->content_size = strlen(expanded);
+            }
+        }
+
+        /* Markdown / HTML branch: render the document, then strip SGR for the
          * plain textarea (it cannot render escapes). Rendered-plain reads
          * cleanly (no markup noise, aligned tables). Type test is the
          * central registry (components/filetype), not a local list. */
-        if (ctx->content != NULL && !ctx->raw &&
-            filetype_is_markdown(filetype_of(ctx->path))) {
-            size_t cap = ctx->content_size * 2 + 64;
-            char *rendered = malloc(cap);
-            char *plain = malloc(cap);
-            if (rendered != NULL && plain != NULL) {
-                markdown_render_doc(ctx->content, rendered, cap);
-                /* Strip SGR into a SEPARATE buffer: markdown_strip_ansi()
-                 * NUL-terminates dst before reading src, so an in-place call
-                 * (src == dst) always yields an empty string. */
-                markdown_strip_ansi(rendered, plain, cap);
-                free(ctx->content);
-                ctx->content = plain;
-                ctx->content_size = strlen(plain);
-                ctx->reading = true;
-                free(rendered);
-            } else {
-                free(rendered);
-                free(plain);
+        if (ctx->content != NULL && !ctx->raw) {
+            filetype_t kind = filetype_of(ctx->path);
+            bool is_md = filetype_is_markdown(kind);
+            bool is_html = filetype_is_html(kind);
+
+            if (is_md || is_html) {
+                size_t cap = ctx->content_size * 2 + 64;
+                char *rendered = malloc(cap);
+                char *plain = malloc(cap);
+                if (rendered != NULL && plain != NULL) {
+                    if (is_html) {
+                        html_render_ansi(ctx->content, rendered, cap);
+                    } else {
+                        markdown_render_doc(ctx->content, rendered, cap);
+                    }
+                    /* Strip SGR into a SEPARATE buffer: markdown_strip_ansi()
+                     * NUL-terminates dst before reading src, so an in-place call
+                     * (src == dst) always yields an empty string. */
+                    markdown_strip_ansi(rendered, plain, cap);
+                    free(ctx->content);
+                    ctx->content = plain;
+                    ctx->content_size = strlen(plain);
+                    ctx->reading = true;
+                    free(rendered);
+                } else {
+                    free(rendered);
+                    free(plain);
+                }
             }
         }
         if (!ctx->content) {

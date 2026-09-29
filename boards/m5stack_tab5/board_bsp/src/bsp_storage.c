@@ -4,20 +4,100 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <stdlib.h>
 #include <string.h>
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_ldo_regulator.h"
 #include "bsp_err_check.h"
 #include "esp_spiffs.h"
 #include "esp_vfs_fat.h"
-#include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#include "sd_pwr_ctrl.h"
+#include "sd_pwr_ctrl_interface.h"
 
 #include "bsp/m5stack_tab5.h"
 
 static const char *TAG = "M5Stack Tab5";
-static sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL; //SD LDO handle
+static sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL; //SD power control handle
+static esp_ldo_channel_handle_t sd_ldo_chan = NULL; //SD rail (LDO_VO4)
 static sdmmc_card_t *bsp_sdcard = NULL;    // Global uSD card handler
 static bool spi_sd_initialized = false;
+
+/*
+ * microSD rail power control over on-chip LDO channel 4 (LDO_VO4 -> SD_VDD).
+ *
+ * The stock `sd_pwr_ctrl_new_on_chip_ldo()` acquires the channel with voltage
+ * 0 and adjustable=true, which makes the LDO driver log "The voltage value 0 is
+ * out of the recommended range [500, 2700]" on every boot before the SDMMC
+ * stack sets the real card IO voltage. To avoid that spurious boot warning the
+ * BSP owns the channel directly: it acquires LDO_VO4 once at the card's 3.3 V
+ * IO level and exposes the standard `sd_pwr_ctrl_drv_t` interface, so the SDMMC
+ * stack still switches IO voltage through `set_io_voltage` (SDR50/SDR104) but no
+ * zero-voltage acquire ever happens.
+ */
+typedef struct {
+    esp_ldo_channel_handle_t chan;
+    int voltage_mv;
+} bsp_sd_ldo_ctx_t;
+
+static bsp_sd_ldo_ctx_t sd_ldo_ctx;
+
+static esp_err_t bsp_sd_ldo_set_voltage(void *arg, int voltage_mv)
+{
+    bsp_sd_ldo_ctx_t *ctx = (bsp_sd_ldo_ctx_t *)arg;
+
+    ESP_RETURN_ON_FALSE(ctx != NULL, ESP_ERR_INVALID_ARG, TAG, "null SD LDO ctx");
+    ESP_RETURN_ON_ERROR(esp_ldo_channel_adjust_voltage(ctx->chan, voltage_mv), TAG,
+                        "failed to set SD LDO voltage");
+    ctx->voltage_mv = voltage_mv;
+    return ESP_OK;
+}
+
+/* Acquire LDO_VO4 at the given IO voltage and return the SD power-control
+ * handle. The caller must NOT also call sd_pwr_ctrl_new_on_chip_ldo(). */
+static esp_err_t bsp_sd_ldo_pwr_ctrl_new(int voltage_mv, sd_pwr_ctrl_handle_t *out)
+{
+    esp_err_t ret;
+
+    ESP_RETURN_ON_FALSE(out != NULL, ESP_ERR_INVALID_ARG, TAG, "null out");
+
+    if (pwr_ctrl_handle != NULL) {
+        *out = pwr_ctrl_handle;
+        return ESP_OK;
+    }
+    if (sd_ldo_chan == NULL) {
+        esp_ldo_channel_config_t ldo_cfg = {
+            .chan_id = BOARD_CFG_SD_PWR_LDO_CHAN,
+            .voltage_mv = voltage_mv,
+            .flags.adjustable = true,
+        };
+        ret = esp_ldo_acquire_channel(&ldo_cfg, &sd_ldo_chan);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "failed to acquire SD LDO channel");
+            return ret;
+        }
+        sd_ldo_ctx.chan = sd_ldo_chan;
+        sd_ldo_ctx.voltage_mv = voltage_mv;
+    }
+    pwr_ctrl_handle = (sd_pwr_ctrl_handle_t)calloc(1, sizeof(sd_pwr_ctrl_drv_t));
+    ESP_RETURN_ON_FALSE(pwr_ctrl_handle != NULL, ESP_ERR_NO_MEM, TAG, "no mem for SD pwr ctrl");
+    pwr_ctrl_handle->set_io_voltage = bsp_sd_ldo_set_voltage;
+    pwr_ctrl_handle->ctx = &sd_ldo_ctx;
+    *out = pwr_ctrl_handle;
+    return ESP_OK;
+}
+
+static void bsp_sd_ldo_pwr_ctrl_del(void)
+{
+    if (pwr_ctrl_handle != NULL) {
+        free(pwr_ctrl_handle);
+        pwr_ctrl_handle = NULL;
+    }
+    if (sd_ldo_chan != NULL) {
+        esp_ldo_release_channel(sd_ldo_chan);
+        sd_ldo_chan = NULL;
+    }
+}
 
 esp_err_t bsp_spiffs_mount(void)
 {
@@ -136,15 +216,11 @@ esp_err_t bsp_sdcard_sdmmc_mount(bsp_sdcard_cfg_t *cfg)
         cfg->slot.sdmmc = &sdslot;
     }
 
-    sd_pwr_ctrl_ldo_config_t ldo_config = {
-        .ldo_chan_id = 4,
-    };
-    esp_err_t ret = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &pwr_ctrl_handle);
+    esp_err_t ret = bsp_sd_ldo_pwr_ctrl_new(BOARD_CFG_SD_PWR_LDO_VOLTAGE_MV, &cfg->host->pwr_ctrl_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create a new on-chip LDO power control driver");
+        ESP_LOGE(TAG, "Failed to create the SD power control driver");
         return ret;
     }
-    cfg->host->pwr_ctrl_handle = pwr_ctrl_handle;
 
 #if defined(CONFIG_FATFS_LFN_NONE)
     ESP_LOGW(TAG, "Warning: Long filenames on SD card are disabled in menuconfig!");
@@ -193,15 +269,11 @@ esp_err_t bsp_sdcard_sdspi_mount(bsp_sdcard_cfg_t *cfg)
         cfg->slot.sdspi = &sdslot;
     }
 
-    sd_pwr_ctrl_ldo_config_t ldo_config = {
-        .ldo_chan_id = 4,
-    };
-    esp_err_t ret = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &pwr_ctrl_handle);
+    esp_err_t ret = bsp_sd_ldo_pwr_ctrl_new(BOARD_CFG_SD_PWR_LDO_VOLTAGE_MV, &cfg->host->pwr_ctrl_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create a new on-chip LDO power control driver");
+        ESP_LOGE(TAG, "Failed to create the SD power control driver");
         return ret;
     }
-    cfg->host->pwr_ctrl_handle = pwr_ctrl_handle;
 
 #if defined(CONFIG_FATFS_LFN_NONE)
     ESP_LOGW(TAG, "Warning: Long filenames on SD card are disabled in menuconfig!");
@@ -220,10 +292,8 @@ esp_err_t bsp_sdcard_unmount(void)
 {
     esp_err_t ret = ESP_OK;
 
-    if (pwr_ctrl_handle) {
-        ret |= sd_pwr_ctrl_del_on_chip_ldo(pwr_ctrl_handle);
-        pwr_ctrl_handle = NULL;
-    }
+    /* Releases our power-control shim and the LDO channel it owns. */
+    bsp_sd_ldo_pwr_ctrl_del();
 
     ret |= esp_vfs_fat_sdcard_unmount(BSP_SD_MOUNT_POINT, bsp_sdcard);
     bsp_sdcard = NULL;

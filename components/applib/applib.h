@@ -48,6 +48,7 @@
 #include "applib_mem.h"
 #include "applib_time.h"
 #include "applib_net.h"
+#include "applib_msg.h"
 #include "applib_input.h"
 #include "applib_state.h"
 #include "applib_db.h"

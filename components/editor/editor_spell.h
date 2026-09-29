@@ -37,7 +37,8 @@ extern "C" {
  *  allocation failed (the current list, if any, is left untouched). */
 bool editor_spell_load(const char *name);
 
-/** Free the loaded wordlist. Safe to call when nothing is loaded. */
+/** Free the loaded wordlist (base, user overlay, and session ignore list).
+ *  Safe to call when nothing is loaded. */
 void editor_spell_unload(void);
 
 /** True when a wordlist is loaded and checks are meaningful. */
@@ -70,6 +71,47 @@ bool editor_spell_is_joiner(unsigned long cp);
  *  non-ASCII Latin letters are never flagged. Always true when no list is
  *  loaded. */
 bool editor_spell_token_ok(const char *word, size_t len);
+
+/* ------------------------------------------------------------------------
+ * User dictionary overlay (sd:/DICTS/user.words) + session ignore list
+ * ---------------------------------------------------------------------- */
+
+/** Load the user overlay wordlist (same one-per-line format as the base).
+ *  Missing file is fine (empty overlay); a broken file leaves the current
+ *  overlay untouched. @return true when loaded or absent-empty. */
+bool spell_user_load(void);
+
+/** Release the user overlay (the file on SD is kept). */
+void spell_user_unload(void);
+
+/** Number of words in the user overlay (0 when none). */
+size_t spell_user_count(void);
+
+/** Learn @p word (length @p len) into the overlay: appends to the SD file,
+ *  then reloads. Idempotent (already-known words succeed silently).
+ *  @return true on success. */
+bool spell_user_learn(const char *word, size_t len);
+
+/** Forget @p word from the overlay (base words are never removable).
+ *  Rewrites the SD file minus the word, then reloads.
+ *  @return true when a user word was removed. */
+bool spell_user_forget(const char *word, size_t len);
+
+/** Write the user overlay as newline-joined text into @p buf.
+ *  Pass @p buf NULL for a measure-only call. Always NUL-terminates @p buf
+ *  when non-NULL. @return the byte count that should be written (excluding
+ *  NUL); a value >= @p size means truncation. */
+size_t spell_user_list(char *buf, size_t size);
+
+/** Ignore @p word for this session only (never persisted).
+ *  @return true on success. */
+bool spell_ignore(const char *word, size_t len);
+
+/** Clear the session ignore list. */
+void spell_ignored_clear(void);
+
+/** Number of session-ignored words. */
+size_t spell_ignored_count(void);
 
 #ifdef __cplusplus
 }

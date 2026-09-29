@@ -57,6 +57,12 @@
 #define BOARD_CFG_I2S_DSIN_GPIO GPIO_NUM_28
 // The speaker amplifier enable is on the IO expander, not a GPIO; the BSP owns it.
 #define BOARD_CFG_POWER_AMP_GPIO GPIO_NUM_NC
+// Headphone detect: PI4IOE5V6408 #1 (0x43) pin P7, active-high input. Read at
+// command/playback time via board_bsp_audio_headphone_level(); not interrupt
+// driven. Verified against the M5Stack Tab5 pinmap plus esp-cpp and ESPHome
+// references; confirm on hardware by reading IN_STA bit 7 with a plug in/out.
+#define BOARD_CFG_HP_DET_PRESENT              1
+#define BOARD_CFG_HP_DET_EXP_PIN              7
 
 // ---- Display / touch (owned by the BSP + IO expander on this board) ----
 #define BOARD_CFG_LCD_BACKLIGHT_GPIO GPIO_NUM_22
@@ -145,6 +151,12 @@
 
 #define BOARD_CFG_SD_MOUNT_POINT "/sdcard"
 #define BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL 0
+// microSD power rail: on-chip LDO channel 4 (LDO_VO4 -> SD_VDD). The BSP owns
+// the channel (acquired at this IO voltage) instead of letting the SDMMC
+// power-control driver acquire it at 0 mV, which logs a spurious boot warning.
+// Mirrors the host default io_voltage (SDMMC_HOST_DEFAULT 3.3f).
+#define BOARD_CFG_SD_PWR_LDO_CHAN 4
+#define BOARD_CFG_SD_PWR_LDO_VOLTAGE_MV 3300
 #define BOARD_CFG_SPIFFS_MOUNT_POINT "/spiffs"
 #define BOARD_CFG_SPIFFS_PARTITION_LABEL "storage"
 #define BOARD_CFG_SPIFFS_MAX_FILES 5

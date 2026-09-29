@@ -108,6 +108,26 @@ void editor_view_notify_opened(bool ok);
 /** lv_async_call trampoline for editor_view_notify_opened(). */
 void editor_view_notify_opened_cb(void *user_data);
 
+/** Notify the editor that a spell learn/forget finished (rebuild + status). */
+void editor_view_notify_spell(bool ok);
+
+/** lv_async_call trampoline for editor_view_notify_spell(). */
+void editor_view_notify_spell_cb(void *user_data);
+
+/** Learn a word into the user dictionary via the worker (SD-safe).
+ *  @p word NULL learns the word under the cursor. Safe from any task. */
+void editor_view_spell_learn(const char *word);
+
+/** Forget a word from the user dictionary via the worker. */
+void editor_view_spell_forget(const char *word);
+
+/** Ignore a word for this session (memory-only, immediate). @p word NULL
+ *  ignores the word under the cursor. */
+void editor_view_spell_ignore(const char *word);
+
+/** Show user/base dictionary counts on the status bar. */
+void editor_view_spell_list(void);
+
 /** Scroll the editor surface vertically by @p pixels (mouse wheel). */
 void editor_view_scroll_by(int32_t pixels);
 

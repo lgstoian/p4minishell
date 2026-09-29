@@ -37,17 +37,21 @@ idf_component_register(
         test_completion.c
         test_history_search.c
         test_markdown.c
+        test_html.c
         test_filetype.c
+        test_audio.c
         test_json.c
         test_gfx.c
         test_csv.c
         test_import.c
+        test_pim.c
         test_archive.c
         test_macro.c
         test_bind.c
         test_crypt.c
         test_sw_gcm.c
         test_tcpterm.c
+        test_netsvc.c
         test_userial.c        test_asset.c
         test_pkg.c
         test_theme.c
@@ -62,6 +66,7 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/storage"
         "${CMAKE_SOURCE_DIR}/../components/batch"
         "${CMAKE_SOURCE_DIR}/../components/command"
+        "${CMAKE_SOURCE_DIR}/../components/pim"
         "${CMAKE_SOURCE_DIR}/../components/networking"
         "${CMAKE_SOURCE_DIR}/../components/editor"
         "${CMAKE_SOURCE_DIR}/../components/keyboard"
@@ -72,6 +77,7 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/modal"
         "${CMAKE_SOURCE_DIR}/../components/tui"
         "${CMAKE_SOURCE_DIR}/../components/markdown"
+        "${CMAKE_SOURCE_DIR}/../components/audio"
         "${CMAKE_SOURCE_DIR}/../components/filetype"
         "${CMAKE_SOURCE_DIR}/../components/gfx"
         "${CMAKE_SOURCE_DIR}/../components/imu/include"
@@ -86,6 +92,7 @@ idf_component_register(
         storage
         batch
         command
+        pim
         networking
         editor
         keyboard
@@ -96,6 +103,7 @@ idf_component_register(
         modal
         tui
         markdown
+        audio
         filetype
         gfx
         usb

@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include "board_config.h"
 #include "bsp/esp-bsp.h"
 #include "esp_sleep.h"
@@ -66,6 +67,34 @@ static inline esp_err_t board_bsp_charge_enable(bool enable)
 {
     (void)enable;
     return ESP_OK;
+}
+
+/**
+ * @brief Read the 3.5 mm headphone-detect line.
+ *
+ * The reference board has no headphone jack; @p inserted_out is set to false
+ * and ESP_ERR_NOT_SUPPORTED is returned (see the Tab5 profile for the real one).
+ * The audio layer treats this as "route always speaker".
+ */
+static inline esp_err_t bsp_audio_headphone_detected(bool *inserted_out)
+{
+    if (inserted_out != NULL) {
+        *inserted_out = false;
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Enable/disable the speaker power amplifier.
+ *
+ * The reference board's amp is owned by the ES8311 codec driver (GPIO20 PA
+ * pin), not the shell; ESP_ERR_NOT_SUPPORTED is returned and the audio layer
+ * leaves amp control to the driver.
+ */
+static inline esp_err_t bsp_audio_speaker_enable(bool enable)
+{
+    (void)enable;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 /**

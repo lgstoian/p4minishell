@@ -94,6 +94,11 @@ typedef struct {
     void (*record_warning)(const char *tag, const char *message);
     void (*record_info)(const char *tag, const char *message);
     void (*notify_header)(const char *text, uint32_t timeout_ms);
+    /** BLE HID keyboard input callback. Called from the NimBLE host task when
+     *  a HID report arrives from a connected BLE keyboard. Uses the same
+     *  signature as usb_keyboard_input_cb_t (USB HID key code + modifiers +
+     *  press/release event). NULL when not registered. */
+    void (*bluetooth_keyboard_input)(uint8_t key_code, uint8_t modifiers, bool pressed);
 } networking_host_ops_t;
 
 /** Initialize networking: stores host callbacks, starts boot-time Wi-Fi restore, bootstraps Bluetooth. */

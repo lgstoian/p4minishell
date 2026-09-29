@@ -383,12 +383,22 @@ void shell_command_path(int argc, char **argv);
 /** `echo` — print text, or toggle batch echo with `on`/`off`. */
 void shell_command_echo(int argc, char **argv);
 
+/** DOS glued-echo detector: `echo.`, `echo/`, `echo(`, `echo:` (any case).
+ *  cmd.exe treats the first `.`/`/`/`(`/`:` glued to `echo` as a text
+ *  separator, so the word remainder is the text (`echo.` = blank line,
+ *  `echo.Hello` = `Hello`, `echo.on` = literal `on`). Plain `echo` (exact
+ *  word) is NOT glued and returns false. On success writes the separator to
+ *  @p sep_out and the word remainder (possibly "") to @p rest_out (both
+ *  NULL-checked). Pure and unit-tested; the single echo renderer below owns
+ *  the printing. */
+bool shell_command_echo_glued(const char *word, char *sep_out, const char **rest_out);
+
 /**
  * Echo the remainder of a raw command line after the leading `echo` word.
  * Used by the dispatcher when an `echo` line has more arguments than the argv
  * capacity (so a full 4096-byte echo line is never truncated). Handles the
- * bare `echo` state report and batch `echo on`/`echo off` like
- * shell_command_echo(), then prints the remainder verbatim.
+ * bare `echo` state report, batch `echo on`/`echo off`, and the DOS glued
+ * separators, then prints the remainder verbatim.
  * @param line  The raw line, starting with `echo` (mutated by trimming).
  */
 void shell_command_echo_text(char *line);
@@ -556,6 +566,15 @@ const char *batch_on_select(char *targets, int index);
 
 /** `shift` — shift batch arguments left by one position. */
 void shell_command_shift(int argc, char **argv);
+
+/**
+ * Parse the optional `shift /n` start index (DOS parity: slide `%n`..`%9`,
+ * leaving `%0`..`%(n-1)` in place). @p arg is the candidate switch text,
+ * @p frame_argc the current frame size (`args[0]` is the script name).
+ * On success writes the slide origin (0..frame_argc-1) to @p start_out.
+ * Pure and unit-tested; defined beside shell_command_shift in batch.c.
+ */
+bool shell_shift_parse_start(const char *arg, int frame_argc, int *start_out);
 
 /**
  * `pause` — print the DOS prompt text and block until a key is pressed.

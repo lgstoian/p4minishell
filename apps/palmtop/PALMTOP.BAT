@@ -10,6 +10,7 @@ rem           [M-PALM-CRYPT], [M-PALM-BIND], [M-PALM-TCP].
 rem =====================================================================
 setlocal
 echo [M-PALM]
+title "Palmtop"
 goto menu
 
 :menu
@@ -18,14 +19,8 @@ draw box 1 1 80 3 double "PALMTOP"
 draw text 5 2 "palmtop-parity primitives demo" 14
 draw text 45 2 "local %TIME%" 7
 list "PalmTop" "Calculator + conversions" "Stopwatch" "CSV sheet (=EXPR)" "Encrypt a note" "Bind an F-key" "TCP probe" "Back"
-if errorlevel 255 goto back
-if errorlevel 6 goto back
-if errorlevel 5 goto tcp
-if errorlevel 4 goto bind
-if errorlevel 3 goto crypt
-if errorlevel 2 goto sheet
-if errorlevel 1 goto timer
-goto calc_demo
+on %errorlevel%+1 goto :calc_demo,:timer,:sheet,:crypt,:bind,:tcp,:back
+goto back
 
 :calc_demo
 draw clear screen
@@ -76,7 +71,7 @@ draw box 1 1 80 3 double "CSV"
 csv eval _palm.csv
 draw text 5 15 "Press any key..." 7
 pause
-del _palm.csv
+del _palm.csv > NUL
 goto menu
 
 :crypt
@@ -87,13 +82,13 @@ echo [M-PALM-CRYPT]
 draw clear screen
 draw box 1 1 80 3 double "CRYPT"
 draw text 5 5 "Locked then unlocked _palm_note.txt" 14
-type _palm_note.out > _palm_view.txt
+type < _palm_note.out > _palm_view.txt
 draw text 5 7 "Plaintext recovered:" 7
 view _palm_view.txt
-del _palm_note.txt
-del _palm_note.enc
-del _palm_note.out
-del _palm_view.txt
+del _palm_note.txt > NUL
+del _palm_note.enc > NUL
+del _palm_note.out > NUL
+del _palm_view.txt > NUL
 goto menu
 
 :bind

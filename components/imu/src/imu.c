@@ -15,6 +15,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -202,8 +203,13 @@ esp_err_t imu_init(void)
     s_available = true;
 
     if (s_rotate_task == NULL) {
-        if (xTaskCreate(imu_rotate_task, "imu_rotate", IMU_ROTATE_TASK_STACK, NULL,
-                        tskIDLE_PRIORITY + 1, &s_rotate_task) != pdPASS) {
+        /* The sampler only reads the I2C bus and posts a rotation callback, so
+         * its stack never runs with the flash cache disabled. Keep it in PSRAM
+         * to leave internal RAM for the internal-only bring-up tasks (the
+         * Wi-Fi/ESP-Hosted task needs a contiguous internal block at boot). */
+        if (xTaskCreateWithCaps(imu_rotate_task, "imu_rotate", IMU_ROTATE_TASK_STACK, NULL,
+                                tskIDLE_PRIORITY + 1, &s_rotate_task,
+                                MALLOC_CAP_SPIRAM) != pdPASS) {
             s_rotate_task = NULL;
             ESP_LOGW(IMU_TAG, "auto-rotate task not started");
         }
@@ -216,7 +222,7 @@ esp_err_t imu_init(void)
 void imu_deinit(void)
 {
     if (s_rotate_task != NULL) {
-        vTaskDelete(s_rotate_task);
+        vTaskDeleteWithCaps(s_rotate_task);
         s_rotate_task = NULL;
     }
     s_auto_rotate = false;

@@ -6,6 +6,7 @@ idf_component_register(
     REQUIRES
         storage
         batch
+        certs
         command
         font
         display

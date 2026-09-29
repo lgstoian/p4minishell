@@ -54,6 +54,9 @@ board:
     dout_gpio: 9
     dsin_gpio: 11
     power_amp_gpio: 20
+    # No headphone jack on this board; the audio route is always the speaker.
+    hp_det_present: false
+    hp_det_exp_pin: 7
 
   # ---- Display (JD9165 1024x600 MIPI-DSI) ----
   # Managed by: components/display/display.c (display manager)
@@ -121,6 +124,10 @@ board:
     # unconnected (the divider floats well under any real pack), so the
     # `battery`/`power` telemetry and the header show "BAT N/C".
     present_mv: 2500
+    # Signed-current deadband (mA) for charge-state classification.
+    # The reference board has no charge-current sense, so this is
+    # informational and the charge state is always "unknown" for ADC-only boards.
+    charge_current_ma: 20
 
   # ---- RGB LED (WS2812 on GPIO26, back panel) ----
   # LED1 on the JC1060P470 back panel is a WS2812 (NeoPixel) addressable RGB

@@ -317,3 +317,91 @@ void test_batch_while_keywords(void)
     TEST_ASSERT_EQUAL_STRING("", out);
     shell_while_translate_keywords("1", NULL, 0);
 }
+
+/* ========================================================================
+ * `shift /n` START-INDEX PARSER
+ * ======================================================================== */
+
+void test_batch_shift_parse_start(void)
+{
+    int start = -1;
+
+    /* Plain forms: /0 is a full slide, /n preserves the slots before n. */
+    TEST_ASSERT_TRUE(shell_shift_parse_start("/0", 4, &start));
+    TEST_ASSERT_EQUAL(0, start);
+    TEST_ASSERT_TRUE(shell_shift_parse_start("/1", 4, &start));
+    TEST_ASSERT_EQUAL(1, start);
+    TEST_ASSERT_TRUE(shell_shift_parse_start("/3", 4, &start));
+    TEST_ASSERT_EQUAL(3, start);
+    TEST_ASSERT_TRUE(shell_shift_parse_start("\\2", 4, &start));
+    TEST_ASSERT_EQUAL(2, start);
+
+    /* Out of range (nothing left to slide), non-numeric, and NULL refuse. */
+    TEST_ASSERT_FALSE(shell_shift_parse_start("/4", 4, &start));
+    TEST_ASSERT_FALSE(shell_shift_parse_start("/9", 2, &start));
+    TEST_ASSERT_FALSE(shell_shift_parse_start("/", 4, &start));
+    TEST_ASSERT_FALSE(shell_shift_parse_start("/x", 4, &start));
+    TEST_ASSERT_FALSE(shell_shift_parse_start("/1x", 4, &start));
+    TEST_ASSERT_FALSE(shell_shift_parse_start("1", 4, &start));
+    TEST_ASSERT_FALSE(shell_shift_parse_start(NULL, 4, &start));
+    TEST_ASSERT_FALSE(shell_shift_parse_start("/1", 4, NULL));
+    TEST_ASSERT_FALSE(shell_shift_parse_start("/1", -1, &start));
+}
+
+/* ========================================================================
+ * `for /f` OPTION DEFAULTS
+ * ======================================================================== */
+
+void test_batch_forf_option_defaults(void)
+{
+    shell_forf_options_t opts;
+
+    shell_forf_options_default(&opts);
+    /* cmd.exe parity: `;`-led lines are comments unless `eol=` overrides. */
+    TEST_ASSERT_EQUAL(';', opts.eol);
+    TEST_ASSERT_EQUAL_STRING(" \t", opts.delims);
+    TEST_ASSERT_EQUAL(0, opts.skip);
+    TEST_ASSERT_FALSE(opts.usebackq);
+
+    /* NULL is safe. */
+    shell_forf_options_default(NULL);
+}
+
+/* ========================================================================
+ * GLUED-ECHO DETECTOR
+ * ======================================================================== */
+
+void test_shell_parser_echo_glued(void)
+{
+    char sep = '\0';
+    const char *rest = NULL;
+
+    /* All four DOS separators glue, any case; the remainder is reported. */
+    TEST_ASSERT_TRUE(shell_command_echo_glued("echo.", &sep, &rest));
+    TEST_ASSERT_EQUAL('.', sep);
+    TEST_ASSERT_EQUAL_STRING("", rest);
+    TEST_ASSERT_TRUE(shell_command_echo_glued("ECHO.", NULL, NULL));
+    TEST_ASSERT_TRUE(shell_command_echo_glued("echo/", &sep, &rest));
+    TEST_ASSERT_EQUAL('/', sep);
+    TEST_ASSERT_TRUE(shell_command_echo_glued("Echo(", &sep, &rest));
+    TEST_ASSERT_EQUAL('(', sep);
+    TEST_ASSERT_TRUE(shell_command_echo_glued("echo:", &sep, &rest));
+    TEST_ASSERT_EQUAL(':', sep);
+    TEST_ASSERT_TRUE(shell_command_echo_glued("echo.Hello", NULL, &rest));
+    TEST_ASSERT_EQUAL_STRING("Hello", rest);
+    /* A text remainder is reported for the on/off words too: the renderer
+     * prints them literally instead of toggling echo. */
+    TEST_ASSERT_TRUE(shell_command_echo_glued("echo.on", NULL, &rest));
+    TEST_ASSERT_EQUAL_STRING("on", rest);
+
+    /* Plain echo, other commands, other glue chars, and NULL stay false. */
+    TEST_ASSERT_FALSE(shell_command_echo_glued("echo", NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued("ECHO", NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued("echo ", NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued("echo-", NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued("echox", NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued("ec", NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued("", NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued(NULL, NULL, NULL));
+    TEST_ASSERT_FALSE(shell_command_echo_glued(NULL, &sep, &rest));
+}

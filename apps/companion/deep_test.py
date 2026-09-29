@@ -416,10 +416,18 @@ def main():
             # The flow may have opened the Result viewer (or be back at the
             # menu already): q closes a viewer, cancels a menu back to :main
             # (which reopens it), or is a harmless unknown command. Either
-            # way the main menu ends up open for the Back selection below.
+            # way the main menu ends up open for the selection below.
             send_after_settle(ser, b"q\n", settle=3.0)
             time.sleep(2.0)
-            net_ok = press(ser, st, b"7\n", "[M-NET-BACK]")  # Back
+            # Menu item 7 = Messaging (MQTT): a read-only status screen that
+            # ends in `pause`, so any line dismisses it back to the menu.
+            net_ok = press(ser, st, b"7\n", "[M-NET-MSG]")
+            print("  net msg:", net_ok, flush=True)
+        if net_ok:
+            net_ok = press(ser, st, b"q\n", "[M-NET-MSG-BACK]")
+            print("  net msg back:", net_ok, flush=True)
+        if net_ok:
+            net_ok = press(ser, st, b"8\n", "[M-NET-BACK]")  # Back
             print("  net back:", net_ok, flush=True)
         blob = "".join(st.log)
         results["net"] = net_ok and check(blob, "net")

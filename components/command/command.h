@@ -37,6 +37,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <time.h>
 #include "esp_err.h"
 #include "esp_sleep.h"
@@ -116,6 +117,17 @@ esp_err_t command_battery_read(int *battery_mv_out, int *percent_out, int *raw_o
 
 /** True when the pack is on external charge power (gauge boards). */
 bool command_battery_is_charging(void);
+
+/**
+ * Li-ion single-cell state-of-charge from pack voltage (mV).
+ * Uses a piecewise-linear discharge-curve lookup table, which is more
+ * accurate than the simple linear (empty-to-full) mapping for the non-linear
+ * Li-ion voltage profile. Pure, unit-tested.
+ *
+ * @param voltage_mv  Pack voltage in millivolts.
+ * @return State of charge in the range 0..100.
+ */
+int battery_soc_from_mv(int voltage_mv);
 
 /* ========================================================================
  * POWER / IDLE
@@ -303,9 +315,7 @@ int command_load_file_psram(const char *path_arg, const char *verb,
                             uint32_t max_bytes, uint8_t **out_buf,
                             size_t *out_size);
 
-/** Bounded string copy with explicit truncation (never -Wformat-truncation).
- *  Shared by the `export`/`import` interchange writers. */
-void command_copy_trunc(char *dst, size_t dst_size, const char *src);
+/* (Bounded string copy lives in components/pim: pim_copy_trunc.) */
 
 void shell_command_color(int argc, char **argv);
 void shell_command_locate(int argc, char **argv);
@@ -333,6 +343,9 @@ void shell_command_theme(int argc, char **argv);
 
 /** `header` verb: layout mode + visibility + status (header_commands.c). */
 void shell_command_header(int argc, char **argv);
+/** `certs` verb: TLS trust store management (certs_commands.c). */
+void shell_command_certs(int argc, char **argv);
+
 /** Best-effort boot restore of the saved header mode (CONFIG.SYS). */
 void header_restore_saved(void);
 
@@ -369,26 +382,87 @@ int shell_command_export(int argc, char **argv);
  *  Returns 0 imported, 1 empty, 2 usage/I-O. */
 int shell_command_import(int argc, char **argv);
 
+/** Serial PIM sync (`pim get db <name> | pim get alarms`,
+ *  `pim put db <name> <size> [/crc] | pim put alarms <size> [/crc]`,
+ *  pim_commands.c). `get` backfills sync identity once, renders vCard /
+ *  iCalendar with UID/REV/DTSTAMP, and streams one PIMX frame through the
+ *  shared serial engine; `put` receives a stream into a temp file and
+ *  merges it by uid with newer-wins. `export`/`import` are untouched.
+ *  Returns 0 synced, 1 empty/failed, 2 usage/I-O. */
+int shell_command_pim(int argc, char **argv);
+
+/** P4Sync handshake (`sync [status]`, sync_commands.c). Read-only `sync.*`
+ *  capability snapshot (proto tag, board, SD/lock state, magics, limits);
+ *  store contents stay with the existing verbs. Returns 0 printed,
+ *  2 usage. */
+int shell_command_sync(int argc, char **argv);
+
+/** Event service verbs (`net ...`, netsvc_commands.c): thin shells over
+ *  components/networking/netsvc.c (status/broker/connect/sub/pub/msg/onmsg/
+ *  outbox). Returns 0 ok/queued, 1 failed, 2 usage. */
+int shell_command_net(int argc, char **argv);
+
+/** What an output/input redirection target names (DOS device parity). */
+typedef enum {
+    SHELL_REDIRECT_FILE, /**< Ordinary SD path. */
+    SHELL_REDIRECT_NUL,  /**< `NUL`/`NUL.*`: output is discarded, input reads EOF. */
+    SHELL_REDIRECT_CON   /**< `CON`/`CON.*`: output goes to the transcript, input is the console. */
+} shell_redirect_target_kind_t;
+
+/** Classify a redirection target (NULL/empty is an ordinary path that the
+ *  parser reports as missing). Pure and unit-tested. */
+shell_redirect_target_kind_t shell_redirect_target_kind(const char *target);
+
+/** Split a command line into command text plus `>` / `>>` / `<` targets.
+ *
+ *  Two-pass scan over unquoted operators (shared shell-core scanner):
+ *  last occurrence of each direction wins (COMMAND.COM). A `0`/`1`/`2`
+ *  glued directly before `>`/`>>`/`<` is a stream handle and is consumed,
+ *  merging both handles into the single transcript stream (there is no
+ *  separate stderr: errors interleave, so `2>` behaves as `>`).
+ *
+ *  @param missing_target_out Set true when any operator has an empty target
+ *         (`echo hi >`); the caller must refuse the line (DOS syntax error)
+ *         without running the command or touching a file.
+ *  Pure apart from no I/O; unit-tested. @return true when any operator found.
+ */
+bool shell_parse_redirection(char *command,
+                             char **command_part,
+                             char **redirect_target,
+                             bool *append_mode,
+                             char **input_source,
+                             bool *missing_target_out);
+
+/** Edit one db record's payload in the modal text editor
+ *  (`edit db <name> <id>`, edit_record_commands.c). Stages the payload
+ *  byte-verbatim (CSV-safe) into a temp `.txt` file, then writes back via
+ *  db_set echoing category/key/secret, bumping `mtime=` when the payload
+ *  carries pim identity. Returns 0 saved/unchanged, 1 not-found/locked
+ *  /failed, 2 usage. */
+int shell_command_edit_db(const char *dbname, const char *id_arg, bool focus,
+                          const char *template_name);
+
+/** Edit one alarm event in the modal text editor (`edit alarm <id>`,
+ *  edit_record_commands.c). Renders via alarm_event_render, validates the
+ *  edited text via alarm_event_parse (same semantics as the file loader),
+ *  then writes back via alarm_set, preserving a stored uid and bumping
+ *  `modified` for synced events. Returns 0 saved/unchanged,
+ *  1 not-found/failed, 2 usage. */
+int shell_command_edit_alarm(const char *id_arg, bool focus,
+                             const char *template_name);
+
 /** USTAR backup archives (`archive create|extract|list|verify` and the
  *  `backup` alias; archive_commands.c over components/archive).
  *  argv[0] selects the family. Returns 0 ok, 1 nothing/mismatch,
  *  2 usage/I-O. */
 int shell_command_archive(int argc, char **argv);
-/** Split a vCard/iCalendar content line ("NAME;params:value") into the
- *  property name (group prefix stripped, params dropped) and the raw value.
- *  Pure, unit-tested. */
-bool import_vcf_prop_split(const char *line, char *name_out, size_t name_size,
-                           const char **value_out);
+/* (vCard/iCalendar content-line splitting and DATE-TIME parsing live in
+ *  components/pim: pim_vcf_prop_split(), pim_ics_datetime().) */
 
 /** Unescape a JSON string body (no quotes) into @p dst. Handles \" \\ \/
  *  \b \f \n \r \t and \uXXXX (BMP as UTF-8, lone surrogates as '?').
  *  Pure, unit-tested. @return bytes written excluding NUL. */
 size_t import_json_unescape(const char *src, size_t len, char *dst, size_t dst_size);
-
-/** Parse an iCalendar DATE-TIME ("YYYYMMDDTHHMMSS", date-only, trailing Z
- *  accepted as device-local) into @p out with full range checks (no mktime,
- *  so TZ-independent). Pure, unit-tested. */
-bool import_ics_datetime(const char *text, struct tm *out);
 
 /** Password file encryption (`crypt lock|unlock <src> <dst> [/p:pass|/ask]`,
  *  crypt_commands.c). AES-256-GCM with a PBKDF2-SHA256 key; secrets never
@@ -463,6 +537,13 @@ bool shell_power_parse_seconds(int argc, char **argv, uint32_t *seconds_out);
  */
 const char *shell_power_wake_cause_string(esp_sleep_wakeup_cause_t cause);
 
+/**
+ * True when @p gpio can wake the chip from deep sleep (an RTC IO; the
+ * ESP32-P4 RTC domain covers GPIO0..GPIO15). Pure, unit-tested. Light sleep
+ * can wake from any IO and does not use this check.
+ */
+bool shell_power_deep_wake_gpio_eligible(int gpio);
+
 /* ========================================================================
  * PERIPHERAL TOOLKIT (`gpio`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`,
  * `camera`)
@@ -508,6 +589,62 @@ int screenshot_write_bmp_headers(uint8_t *buf, uint32_t width, uint32_t height);
  * Start the accumulator at 0xFFFFFFFF and invert at the end (zlib parity).
  */
 uint32_t shell_crc32_update(uint32_t crc, const uint8_t *data, size_t len);
+
+/**
+ * Raw chunked write to the USB-Serial/JTAG TX ring (no CRLF translation;
+ * implemented in serial_commands.c). Shared by `screenshot`, `send`,
+ * `receive` ACKs, and future `pim` frames.
+ *
+ * @return true when every byte was accepted by the TX ring.
+ */
+bool serial_write_raw(const void *data, size_t len);
+
+/**
+ * 8-byte binary-stream frame header: 4-byte magic + 4-byte little-endian
+ * payload size (implemented in serial_commands.c). The firmware's single
+ * framing writer for `screenshot` (BMPX), `send` (SDFX), and future `pim`
+ * (PIMX) payloads.
+ */
+void serial_write_frame_header(const char *magic4, uint32_t payload_size);
+
+/**
+ * Framed TX engine over an SD file range (implemented in
+ * serial_commands.c): `magic4` + 4-byte little-endian size + `count` bytes
+ * from `file` at `offset` + 4-byte little-endian CRC-32 trailer. The console
+ * reader must already be suspended by the caller. Shared by `send` and
+ * future `pim get`.
+ *
+ * @return true only when the header, every byte, and the trailer were
+ * accepted by the TX ring.
+ */
+bool serial_xfer_stream_file(FILE *file, size_t offset, size_t count,
+                             const char *magic4);
+
+/**
+ * Framed TX engine over a memory buffer (implemented in serial_commands.c):
+ * same frame layout as serial_xfer_stream_file with a buffer source instead
+ * of a file range. The console reader must already be suspended by the
+ * caller. Shared by `send /diag` and future `pim get`.
+ *
+ * @return true only when the header, every byte, and the trailer were
+ * accepted by the TX ring.
+ */
+bool serial_xfer_stream_buffer(const uint8_t *data, size_t len,
+                               const char *magic4);
+
+/**
+ * ACK-paced RX engine into an open file (implemented in serial_commands.c):
+ * read exactly `size` raw bytes with "RX <cumulative>" ACKs and an optional
+ * 4-byte little-endian CRC-32 trailer, drain the USB ring, then resume the
+ * console reader. Entry requires the console reader already suspended and
+ * the READY marker already emitted. `tag` names the caller in error lines
+ * ("receive", "pim"). Shared by `receive` and future `pim put`.
+ *
+ * @return true only when all `size` bytes arrived (and a matching trailer,
+ * when requested); `*cumulative_out` holds the accepted byte count.
+ */
+bool serial_xfer_receive_pump(FILE *file, unsigned long size, bool verify_crc,
+                              const char *tag, unsigned long *cumulative_out);
 
 /* ========================================================================
  * ASSET MANIFESTS (`crc32`, `asset`)

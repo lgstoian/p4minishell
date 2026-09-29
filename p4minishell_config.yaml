@@ -12,10 +12,10 @@
 # boards/<name>/board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 1.2.1
+# Version: 1.3.0
 # Last updated: 2026-09-18 (1.2.0: writerdeck - editor focus/typewriter mode,
 #   markdown export, reading typography, spellcheck, document templates)
-config_version: "1.2.1"
+config_version: "1.3.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -81,11 +81,34 @@ buffers:
     value: 384
     type: int
     description: >-
-      Maximum coloured spans the transcript span group retains. Every append
-      makes LVGL re-wrap the whole group to size it, so an unbounded scrollback
-      makes each line O(all history); the oldest spans past this cap are
-      dropped (the newest are kept) to bound the per-append cost.
+      Maximum coloured spans the transcript span group retains at once. The
+      transcript renders windowed: a PSRAM row table keeps the full scrollback,
+      per-row heights are measured incrementally, and only the rows overlapping
+      the viewport become LVGL spans. The oldest spans past this cap are
+      dropped when a rendered window fragments into more spans than the cap.
     range: "64..4096"
+  transcript_window_rows:
+    value: 128
+    type: int
+    description: >-
+      Maximum transcript rows materialized as LVGL spans at once. The window
+      rebuild stays bounded to this many rows regardless of the viewport.
+    range: "16..512"
+  transcript_window_margin_px:
+    value: 96
+    type: int
+    description: >-
+      Extra pixels of rows kept materialized above and below the transcript
+      viewport, so the window is rebuilt only when a scroll moves the visible
+      range out of the materialized rows.
+    range: "0..512"
+  transcript_row_cap:
+    value: 2048
+    type: int
+    description: >-
+      Maximum rows retained in the transcript window row table; the oldest are
+      evicted once the table is full (bounds the PSRAM rows + prefix).
+    range: "64..16384"
   transcript_scroll_step:
     value: 60
     type: int
@@ -279,6 +302,29 @@ buffers:
     type: size_t
     description: "Wordlist file size cap in bytes (P4_CONFIG_SPELL_MAX_BYTES)"
     range: "4096..4194304"
+  spell_user_file:
+    value: "user.words"
+    type: string
+    description: "User overlay wordlist filename inside sd:/DICTS (P4_CONFIG_SPELL_USER_FILE)"
+  spell_user_max_words:
+    value: 4096
+    type: size_t
+    description: "User overlay word capacity (P4_CONFIG_SPELL_USER_MAX_WORDS)"
+    range: "256..16384"
+  spell_ignore_max_words:
+    value: 128
+    type: size_t
+    description: "Per-session ignore-list capacity, in-memory only (P4_CONFIG_SPELL_IGNORE_MAX_WORDS)"
+    range: "16..1024"
+  editor_autosave_secs:
+    value: 30
+    type: int
+    description: "Dirty-buffer autosave interval in seconds, 0 disables (P4_CONFIG_EDITOR_AUTOSAVE_SECS)"
+    range: "0..3600"
+  editor_recovery_dir:
+    value: "edit"
+    type: string
+    description: "Recovery subdirectory inside the SD temp dir (P4_CONFIG_EDITOR_RECOVERY_DIR)"
   templates_dir_name:
     value: "TEMPLATES"
     type: string
@@ -297,6 +343,11 @@ buffers:
     value: 262144
     type: size_t
     description: "Render-target byte cap for markdown export text/HTML (P4_CONFIG_MD_EXPORT_MAX_BYTES)"
+    range: "65536..1048576"
+  html_render_max_bytes:
+    value: 262144
+    type: size_t
+    description: "Render-target byte cap for the on-device HTML reader used by view/type/preview of .html/.htm (P4_CONFIG_HTML_RENDER_MAX_BYTES)"
     range: "65536..1048576"
   font_reading_default:
     value: "montserrat_14"
@@ -381,6 +432,38 @@ clock:
     type: int
     description: "Maximum bytes for a timer slot name (plus the terminator)"
     range: "4..64"
+  rtc_anchor_period_secs:
+    value: 3600
+    type: int
+    description: "Refresh the NVS time anchor this often (seconds); 0 disables the periodic timer (anchors still land on SNTP sync, manual set, and reboot)"
+    range: "0..86400"
+  rtc_ext_enable:
+    value: 0
+    type: int
+    description: "Enable the external I2C RTC driver path (0 = internal RTC + NVS anchor only)"
+    range: "0..1"
+  rtc_ext_addr:
+    value: "0x68"
+    type: int
+    description: "7-bit I2C address of the external RTC (DS3231 register map; Tab5 overrides to 0x32 RX8130CE in its board profile)"
+  rtc_ext_sda:
+    value: -1
+    type: int
+    description: "I2C SDA GPIO for the external RTC (-1 = unset, driver stays off; board profile overrides)"
+  rtc_ext_scl:
+    value: -1
+    type: int
+    description: "I2C SCL GPIO for the external RTC (-1 = unset, driver stays off; board profile overrides)"
+  rtc_ext_port:
+    value: 0
+    type: int
+    description: "I2C port number for the external RTC"
+    range: "0..1"
+  rtc_ext_timeout_ms:
+    value: 50
+    type: int
+    description: "Milliseconds for one external-RTC I2C transaction"
+    range: "5..1000"
 
 # ---- UI Layout ----
 ui_layout:
@@ -795,6 +878,74 @@ tcp_terminal:
     description: "Maximum request bytes a tcpterm session sends"
     range: "1024..262144"
 
+# ---- Event service (netsvc: persistent MQTT + outbox) ----
+event_service:
+  task_stack:
+    value: 8192
+    type: int
+    description: "Stack bytes for the netsvc task"
+    range: "4096..16384"
+  rx_bytes:
+    value: 4096
+    type: size_t
+    description: "Socket receive scratch per read"
+    range: "1024..16384"
+  publish_max_bytes:
+    value: 16384
+    type: size_t
+    description: "Largest single MQTT publish payload accepted"
+    range: "1024..65536"
+  keepalive_s:
+    value: 60
+    type: int
+    description: "MQTT keepalive seconds advertised in CONNECT"
+    range: "10..600"
+  connect_timeout_ms:
+    value: 10000
+    type: uint32_t
+    description: "Milliseconds a broker TCP connect may take"
+    range: "1000..60000"
+  backoff_base_ms:
+    value: 1000
+    type: uint32_t
+    description: "Reconnect backoff base (doubled per attempt)"
+    range: "250..10000"
+  backoff_cap_ms:
+    value: 60000
+    type: uint32_t
+    description: "Reconnect backoff ceiling"
+    range: "1000..300000"
+  outbox_max:
+    value: 64
+    type: int
+    description: "Outbox journal record bound"
+    range: "8..512"
+  outbox_max_bytes:
+    value: 262144
+    type: size_t
+    description: "Outbox journal total payload bound"
+    range: "16384..1048576"
+  topic_bytes:
+    value: 128
+    type: size_t
+    description: "Maximum MQTT topic/filter bytes"
+    range: "32..512"
+  onmsg_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum /onmsg batch-line bytes"
+    range: "64..1024"
+  lastmsg_bytes:
+    value: 4096
+    type: size_t
+    description: "Maximum last-message payload bytes kept for net msg"
+    range: "512..16384"
+  password_bytes:
+    value: 64
+    type: size_t
+    description: "Password bytes for the broker credential"
+    range: "16..128"
+
 # ---- HTTP Client (httpget / wget) ----
 # `httpget <url> [localfile]` performs a simple HTTPS or HTTP GET through the
 # esp_http_client stack (the same one c6ota uses for firmware downloads). All
@@ -829,6 +980,30 @@ http_client:
       Maximum response body bytes printed to the transcript when no localfile
       is given. The full body is always available via httpget <url> <localfile>.
     range: "256..65536"
+
+# ---- TLS Trust Store (sd:/CERTS/) ----
+# User-provided CA certificates on the SD card extend the compiled-in Mozilla
+# bundle.  Loaded at boot into the mbedTLS global CA store so httpget and c6ota
+# verify peer certificates against the combined trust set automatically.
+tls_certificates:
+  certs_dir:
+    value: "CERTS"
+    type: string
+    description: "SD directory for user-provided CA certificates (relative to SD root)"
+  certs_max_pem_bytes:
+    value: 65536
+    type: size_t
+    description: "Maximum bytes for the concatenated PEM buffer in memory"
+    range: "4096..262144"
+  certs_max_der_files:
+    value: 8
+    type: int
+    description: "Maximum number of DER (binary) certificate files the store will load"
+    range: "0..32"
+  certs_combined_pem:
+    value: "CERTS/BUNDLE.PEM"
+    type: string
+    description: "Path for the combined PEM bundle written by certs rebuild"
 
 # ---- HTTP File Server (httpd) ----
 # A lightweight read-only HTTP file server that shares the SD card over the
@@ -974,6 +1149,10 @@ rgb_led:
     value: "0x00FF00"
     type: int
     description: "Wi-Fi connected colour as 0xRRGGBB"
+  color_wifi_idle:
+    value: "0x00FF00"
+    type: int
+    description: "Wi-Fi idle colour (started, no target network) as 0xRRGGBB"
   color_wifi_disconnected:
     value: "0xFF0000"
     type: int
@@ -986,6 +1165,48 @@ rgb_led:
     value: "0x0080FF"
     type: int
     description: "HTTP server started colour as 0xRRGGBB"
+
+# ---- Captive Portal (wifi setup / first-run) ----
+# When the device boots without a configured Wi-Fi network, the captive
+# portal starts: a SoftAP that clients can join, a DNS server that
+# redirects all queries to the device, and a minimal HTTP page that
+# collects the user's SSID and password.  Once entered the credentials
+# are saved to the known-network list and the portal shuts down.
+portal:
+  enable:
+    value: 1
+    type: int
+    description: "Enable the captive-portal Wi-Fi setup feature (0 compiles it out)"
+    range: "0..1"
+  ap_ssid:
+    value: "P4MiniShell-Setup"
+    type: string
+    description: "SSID broadcast by the SoftAP"
+  ap_open:
+    value: 1
+    type: int
+    description: "Open (no password) or WPA2-PSK (0) SoftAP"
+    range: "0..1"
+  ap_channel:
+    value: 1
+    type: int
+    description: "Wi-Fi channel for the SoftAP"
+    range: "1..13"
+  ap_max_conn:
+    value: 4
+    type: int
+    description: "Maximum simultaneous SoftAP client connections"
+    range: "1..10"
+  timeout_secs:
+    value: 300
+    type: int
+    description: "Portal auto-stop timeout in seconds (0 disables)"
+    range: "0..3600"
+  http_port:
+    value: 80
+    type: int
+    description: "HTTP port the portal page listens on"
+    range: "80..65535"
 
 
 # ---- Bluetooth ----
@@ -1025,6 +1246,43 @@ bluetooth:
       Duration in milliseconds of a single bluetooth scan run. The scan is
       bounded so the command always terminates and the worker task never hangs.
     range: "1000..60000"
+  ble_connect_timeout_ms:
+    value: 5000
+    type: uint32_t
+    description: >-
+      Timeout for a BLE connection attempt (bluetooth connect). The connection
+      is aborted if the remote device does not respond within this window.
+    range: "1000..30000"
+  ble_conn_itvl_min:
+    value: "0x0018"
+    type: int
+    description: "BLE connection interval minimum in 1.25 ms units (0x0018 = 30 ms)"
+    range: "0x0006..0x0C80"
+  ble_conn_itvl_max:
+    value: "0x0028"
+    type: int
+    description: "BLE connection interval maximum in 1.25 ms units (0x0028 = 50 ms)"
+    range: "0x0006..0x0C80"
+  ble_conn_latency:
+    value: 0
+    type: int
+    description: "BLE slave latency (connection events the peripheral may skip)"
+    range: "0..499"
+  ble_conn_supervision_timeout:
+    value: "0x00C8"
+    type: int
+    description: "BLE supervision timeout in 10 ms units (0x00C8 = 2000 ms)"
+    range: "0x000A..0x0C80"
+  ble_conn_scan_itvl:
+    value: "0x0060"
+    type: int
+    description: "BLE connection-request scan interval in 0.625 ms units (0x0060 = 60 ms)"
+    range: "0x0004..0x4000"
+  ble_conn_scan_window:
+    value: "0x0030"
+    type: int
+    description: "BLE connection-request scan window in 0.625 ms units (0x0030 = 30 ms)"
+    range: "0x0004..0x4000"
 
 # ---- SD Card and Filesystem ----
 sd_card:
@@ -1664,6 +1922,11 @@ gfind:
     value: "PS $p$g "
     type: string
     description: "Default prompt template; $p expands to the path and $g to >"
+  title_bytes:
+    value: 96
+    type: size_t
+    description: "Maximum bytes for the session title string (DOS title verb)"
+    range: "16..512"
   key_queue_depth:
     value: 16
     type: int
@@ -1729,6 +1992,16 @@ gpio_hardware:
     type: int
     description: "Width (mV) of the ambiguous rail band below the board full voltage; readings this close to full need the stability window."
     range: "0..1000"
+  battery_adc_samples:
+    value: 8
+    type: int
+    description: "Number of ADC oneshot samples averaged per battery read (reference board). Higher values reduce noise."
+    range: "1..64"
+  battery_adc_ema_alpha:
+    value: 26214
+    type: int
+    description: "EMA filter coefficient (Q0.16 fixed-point, 0..65536) for ADC battery voltage. 0 disables, 65536 = no filter."
+    range: "0..65536"
   battery_min_sleep_freq_mhz:
     value: 40
     type: int
@@ -1744,14 +2017,44 @@ gpio_hardware:
     type: int
     description: "Maximum idle timeout accepted by power idle (seconds)"
     range: "1..86400"
+  power_sleep_default_secs:
+    value: 60
+    type: uint32_t
+    description: "Default duration in seconds for `sleep` when no duration is given"
+    range: "1..86400"
+  power_sleep_max_secs:
+    value: 86400
+    type: uint32_t
+    description: "Maximum duration in seconds accepted by `sleep`/`deepsleep`"
+    range: "1..604800"
+  power_sleep_pre_delay_ms:
+    value: 150
+    type: uint32_t
+    description: "Delay in ms after printing before entering sleep so the transcript paints"
+    range: "0..2000"
+  power_light_sleep_shutdown_wifi:
+    value: 1
+    type: int
+    description: "Tear down Wi-Fi/hosted state when entering light sleep (`sleep`); 0 keeps the radio up"
+    range: "0..1"
   power_wake_gpio:
     value: "GPIO_NUM_NC"
     type: gpio_num_t
-    description: "GPIO that wakes light/deep sleep when pulled to its active level; GPIO_NUM_NC disables (GT911 INT is not wired on this board)"
+    description: "User-wired GPIO that wakes sleep when pulled to its active level; GPIO_NUM_NC disables. Light sleep wakes from any IO; deep sleep only from GPIO0..GPIO15 (ESP32-P4 RTC IOs)"
   power_wake_level:
     value: 1
     type: int
     description: "Wake level for power_wake_gpio (0 = low, 1 = high)"
+    range: "0..1"
+  power_wake_touch:
+    value: 1
+    type: int
+    description: "Arm the touch controller interrupt as a light-sleep wake source when the fitted panel wires it (Tab5 ST7123/ST7121 TDDI on GPIO23); no-op on the reference board and GT911 Tab5 units"
+    range: "0..1"
+  power_wake_keyboard:
+    value: 1
+    type: int
+    description: "Arm the M5Stack Tab5Keyboard interrupt (GPIO50) as a light-sleep wake source; no-op without the keyboard"
     range: "0..1"
   volume_default_pct:
     value: 60
@@ -2429,6 +2732,24 @@ serial_transfer:
     type: size_t
     description: "Maximum size in bytes of the send /diag diagnostic report payload"
     range: "256..4096"
+
+# ---- PIM sync (pim get / pim put) ----
+pim_sync:
+  sync_magic:
+    value: "PIMX"
+    type: string
+    description: "Four-byte magic prefix of the pim get framed payload"
+  rx_max_bytes:
+    value: 1048576
+    type: uint32_t
+    description: "Hard upper bound (bytes) for a single pim put payload (one full vCard/iCalendar collection; streams to SD)"
+    range: "4096..67108864"
+sync:
+  inventory_max:
+    value: 256
+    type: int
+    description: "Maximum entries in one sync inventory listing (bounds the future machine-readable set; the current sync verb is status-only)"
+    range: "16..4096"
 crypt:
   chunk_bytes:
     value: 512
@@ -2485,19 +2806,19 @@ build_constraints:
       Pinned in sdkconfig.defaults.
     options: ["none", "error", "warn", "info", "debug", "verbose"]
   wifi_softap_support:
-    value: "n"
+    value: "y"
     type: bool
     description: >-
-      Disable Wi-Fi SoftAP support. Station-only is enforced structurally: both
-      CONFIG_ESP_WIFI_SOFTAP_SUPPORT and CONFIG_WIFI_RMT_SOFTAP_SUPPORT must be
-      disabled because esp_wifi_remote mirrors the Wi-Fi Kconfig under its own
-      WIFI_RMT_ prefix. Pinned in sdkconfig.defaults.
+      Enable Wi-Fi SoftAP support for the captive-portal setup mode.
+      Both CONFIG_ESP_WIFI_SOFTAP_SUPPORT and CONFIG_WIFI_RMT_SOFTAP_SUPPORT
+      must be enabled because esp_wifi_remote mirrors the Wi-Fi Kconfig under
+      its own WIFI_RMT_ prefix. Pinned in sdkconfig.defaults.
   wifi_rmt_softap_support:
-    value: "n"
+    value: "y"
     type: bool
     description: >-
       Mirror of CONFIG_ESP_WIFI_SOFTAP_SUPPORT for the esp_wifi_remote component.
-      Both symbols must be disabled together. Pinned in sdkconfig.defaults.
+      Both symbols must be enabled together. Pinned in sdkconfig.defaults.
 # ---- Database (db) ----
 database:
   db_max_databases:
@@ -2567,6 +2888,10 @@ alarm:
     value: 160
     type: int
     description: "Maximum characters in an alarm message (header notification width)."
+  alarm_uid_bytes:
+    value: 33
+    type: int
+    description: "Bytes in an alarm event's sync identity (uid= INI field): 32 hex chars plus the terminator."
   alarm_poll_ms:
     value: 30000
     type: int

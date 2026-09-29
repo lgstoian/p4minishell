@@ -25,6 +25,7 @@ set(EXTRA_COMPONENT_DIRS
   components/boot
   components/c6ota
   components/camera
+  components/certs
   components/command
   components/clock
   components/db
@@ -41,8 +42,10 @@ set(EXTRA_COMPONENT_DIRS
   components/markdown
   components/modal
   components/networking
+  components/portal
   components/power_monitor
   components/p4heap
+  components/pim
   components/shell
   components/storage
   components/strutil

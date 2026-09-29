@@ -30,6 +30,8 @@ static const filetype_entry_t s_filetype_table[] = {
     { ".ini", FILETYPE_TEXT },
     { ".bmp", FILETYPE_IMAGE },
     { ".dib", FILETYPE_IMAGE },
+    { ".html", FILETYPE_HTML },
+    { ".htm", FILETYPE_HTML },
 };
 
 #define FILETYPE_TABLE_COUNT ((int)(sizeof(s_filetype_table) / sizeof(s_filetype_table[0])))
@@ -78,6 +80,7 @@ const char *filetype_name(filetype_t type)
     case FILETYPE_JSON: return "json";
     case FILETYPE_TEXT: return "text";
     case FILETYPE_IMAGE: return "image";
+    case FILETYPE_HTML: return "html";
     default: return "unknown";
     }
 }
@@ -95,6 +98,11 @@ bool filetype_is_markdown(filetype_t type)
 bool filetype_is_image(filetype_t type)
 {
     return type == FILETYPE_IMAGE;
+}
+
+bool filetype_is_html(filetype_t type)
+{
+    return type == FILETYPE_HTML;
 }
 
 bool filetype_has_extension(const char *path, const char *ext)

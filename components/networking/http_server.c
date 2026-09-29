@@ -110,6 +110,21 @@ static void httpd_record_warningf(const char *format, ...)
     ops->record_warning(NETDIAG_TAG, buffer);
 }
 
+static void httpd_record_infof(const char *format, ...)
+{
+    const networking_host_ops_t *ops = httpd_ops();
+    char buffer[256];
+    va_list args;
+
+    if (ops == NULL || ops->record_info == NULL) {
+        return;
+    }
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    ops->record_info(NETDIAG_TAG, buffer);
+}
+
 /* ---- Auth ---- */
 
 /** True when Basic auth is enabled by configuration. */
@@ -713,6 +728,8 @@ void networking_httpd_maybe_stop(void)
 {
     if (s_server != NULL) {
         networking_httpd_stop();
-        httpd_record_warningf("HTTP server stopped on Wi-Fi disconnect");
+        /* Tearing the server down with the link is the normal lifecycle, not
+         * a fault: record it at info level. */
+        httpd_record_infof("HTTP server stopped on Wi-Fi disconnect");
     }
 }

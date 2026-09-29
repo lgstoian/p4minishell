@@ -62,6 +62,57 @@ esp_err_t audio_set_volume(int percent);
 /** Current speaker volume percentage (0..100). */
 int audio_get_volume(void);
 
+/**
+ * Playback output routing. AUTO (default) plays the speaker unless headphones
+ * are detected; SPEAKER forces the amp on; HEADPHONES forces it off. The route
+ * is evaluated at play/volume/status time (no background poller).
+ */
+typedef enum {
+    AUDIO_OUTPUT_AUTO = 0,
+    AUDIO_OUTPUT_SPEAKER,
+    AUDIO_OUTPUT_HEADPHONES,
+} audio_output_mode_t;
+
+/** Set the output mode (persists via `config AUDIO_OUTPUT=`). */
+esp_err_t audio_set_output_mode(audio_output_mode_t mode);
+
+/** Current output mode (as set, not the resolved route). */
+audio_output_mode_t audio_get_output_mode(void);
+
+/**
+ * Resolve the effective route: forced modes win; AUTO follows the headphone
+ * jack when the board has one, otherwise the speaker. Pure, unit-tested.
+ */
+audio_output_mode_t audio_route_resolve(audio_output_mode_t mode,
+                                        bool hp_inserted, bool hp_supported);
+
+/** Effective route right now (mode + live jack state). */
+audio_output_mode_t audio_effective_route(void);
+
+/**
+ * Read the headphone jack state. @p inserted_out gets the plug state;
+ * @p supported_out is false on boards without a jack (route always speaker).
+ * Either out pointer may be NULL.
+ */
+void audio_headphone_state(bool *inserted_out, bool *supported_out);
+
+/**
+ * Parse an output-mode word ("auto"/"speaker"/"headphones",
+ * case-insensitive). Pure, unit-tested.
+ */
+bool audio_output_parse(const char *text, audio_output_mode_t *out);
+
+/** Mode name for status lines ("auto"/"speaker"/"headphones"). Pure. */
+const char *audio_output_name(audio_output_mode_t mode);
+
+/**
+ * WAV acceptance predicate (16-bit PCM mono/stereo at 22050/44100 Hz with a
+ * non-empty data chunk). Mirrors the `wavplay` checks; pure, unit-tested.
+ */
+bool audio_wav_params_ok(uint16_t audio_format, uint16_t channels,
+                         uint32_t sample_rate, uint16_t bits,
+                         uint32_t data_size);
+
 #ifdef __cplusplus
 }
 #endif

@@ -784,6 +784,22 @@ void *display_get_touch_handle(void)
     return handle;
 }
 
+int display_get_touch_int_gpio(void)
+{
+    esp_lcd_touch_handle_t handle = (esp_lcd_touch_handle_t)display_get_touch_handle();
+
+    /* The panel driver is the source of truth for whether the interrupt line
+     * is a real IRQ on this unit: the Tab5 BSP drives GPIO23 as a strapped
+     * output and clears int_gpio_num to NC on ILI9881C+GT911 revisions, and
+     * only keeps it as an interrupt on ST7123/ST7121 revisions. Reading the
+     * handle (rather than the compile-time BOARD_CFG_* macro) keeps sleep
+     * wake reporting honest on every revision. */
+    if (handle == NULL) {
+        return (int)GPIO_NUM_NC;
+    }
+    return (int)handle->config.int_gpio_num;
+}
+
 void display_register_ui_rebuild_callback(void (*rebuild_fn)(void))
 {
     portENTER_CRITICAL(&s_display.lock);

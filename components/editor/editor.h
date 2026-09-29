@@ -67,6 +67,7 @@ typedef enum {
     EDITOR_SYNTAX_BATCH,       /**< DOS batch / .bat highlighting */
     EDITOR_SYNTAX_MARKDOWN,    /**< Markdown / .md highlighting */
     EDITOR_SYNTAX_JSON,        /**< JSON data highlighting */
+    EDITOR_SYNTAX_HTML,        /**< HTML / .html/.htm highlighting */
     EDITOR_SYNTAX_COUNT
 } editor_syntax_t;
 
@@ -116,6 +117,7 @@ typedef enum {
     EDITOR_KEY_PREVIEW,       /**< Toggle rendered Markdown preview (USB Ctrl+P) */
     EDITOR_KEY_FOCUS_TOGGLE,  /**< Toggle focus/typewriter mode (USB Ctrl+Shift+F) */
     EDITOR_KEY_SPELL_TOGGLE,  /**< Toggle spellcheck underlines (session) */
+    EDITOR_KEY_SPELL_ADD,     /**< Learn the word under the cursor (USB Ctrl+D) */
 } editor_key_t;
 
 /** One line of the document: a byte buffer that never contains '\n' or '\r'. */
@@ -255,6 +257,11 @@ void editor_doc_cursor_end(editor_doc_t *doc);
 void editor_doc_cursor_word_left(editor_doc_t *doc);
 void editor_doc_cursor_word_right(editor_doc_t *doc);
 
+/** Copy the whitespace-delimited token around the cursor into @p buf
+ *  (ASCII punctuation trimmed from both ends, interior kept so `don't`
+ *  survives). @return true when a non-empty token was copied. */
+bool editor_doc_cursor_word(editor_doc_t *doc, char *buf, size_t size);
+
 /** Jump to the start / end of the whole document. */
 void editor_doc_cursor_doc_home(editor_doc_t *doc);
 void editor_doc_cursor_doc_end(editor_doc_t *doc);
@@ -386,8 +393,11 @@ void editor_doc_redo(editor_doc_t *doc);
 
 /**
  * Serialize the document to the file it was opened from (or the given path).
- * A pre-existing destination is first copied to "<file>.bak" (best-effort).
- * Returns ESP_OK on success. Runs on the worker task.
+ * A pre-existing destination is first copied to "<file>.bak" (best-effort),
+ * then the document is written atomically (temp file + rename with a
+ * free-space guard, shared with storage_write_text_file): a power loss can
+ * never leave a truncated destination. Returns ESP_OK on success. Runs on
+ * the worker task.
  */
 esp_err_t editor_doc_save(editor_doc_t *doc, const char *path);
 
@@ -435,6 +445,12 @@ size_t editor_lex_markdown(const char *text, size_t len,
  * yellow, true/false/null magenta, punctuation white). Unterminated strings
  * run to EOL so the error is visible. */
 size_t editor_lex_json(const char *text, size_t len,
+                       editor_syntax_run_t *runs, size_t capacity);
+
+/** Lex one HTML source line into runs (tags cyan, attribute names/values
+ *  yellow, comments green, doctype magenta). Per-line only (no multi-line
+ *  state): a `<!--` without a same-line `-->` highlights to EOL. */
+size_t editor_lex_html(const char *text, size_t len,
                        editor_syntax_run_t *runs, size_t capacity);
 
 /* ========================================================================
@@ -510,6 +526,7 @@ bool editor_session_is_active(void);
 #define EDITOR_EVENT_SAVE   (1u << 2)
 #define EDITOR_EVENT_RELOAD (1u << 3)
 #define EDITOR_EVENT_OPEN   (1u << 4)
+#define EDITOR_EVENT_SPELL  (1u << 5)
 
 typedef struct {
     editor_doc_t *doc;                /**< Document being edited */
@@ -524,6 +541,10 @@ typedef struct {
     char save_as_path[P4_CONFIG_EDITOR_PROMPT_BYTES]; /**< Save As target; "" = source path */
     char open_path[P4_CONFIG_EDITOR_PROMPT_BYTES];    /**< Open target path */
     bool focus;                       /**< Start the view in focus/typewriter mode */
+    bool spell_op_requested;          /**< Set by view/serial: worker should run a spell op */
+    bool spell_op_ok;                 /**< Set by worker: last spell op succeeded */
+    int spell_op;                     /**< 0 = learn word, 1 = forget word */
+    char spell_word[P4_CONFIG_SPELL_WORD_MAX + 1]; /**< Word for the spell op */
 } editor_control_t;
 
 #ifdef __cplusplus

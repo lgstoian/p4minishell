@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.2.1** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.3.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -145,6 +145,9 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `alarm`/`cal` (alarm + calendar verbs) | `components/command/alarm_commands.c` (dispatched from `components/command/command.c`) |
 | `gfind` (Palm-style global find over db + alarms + opt-in text files) | `components/command/gfind_commands.c` (dispatched from `components/command/command.c`; file scope reuses `storage_walk_files`/`storage_scan_file_lines` from `components/storage/`) |
 | `export` (portable store interchange) | `components/command/export_commands.c` (dispatched from `components/command/command.c`) |
+| `pim` (serial PIM sync) | `components/command/pim_commands.c` (dispatched from `components/command/command.c`; identity/merge in `components/pim/`) |
+| `sync` (P4Sync USB handshake, read-only `sync.*` snapshot) | `components/command/sync_commands.c` (dispatched from `components/command/command.c`) |
+| `net` (persistent MQTT event service: status/broker/connect/sub/pub/msg/onmsg/outbox) | `components/command/netsvc_commands.c` over `components/networking/netsvc.c` (+ pure `mqtt_codec.c`) |
 | `csv` (grid substrate) | `components/command/csv_commands.c`; pure parser `components/storage/storage_csv.c` |
 | `crypt` (password file encryption) | `components/command/crypt_commands.c` (mbedTLS AES-256-GCM) |
 | `usb userial` (CDC-ACM serial) | `components/command/userial_commands.c` → byte API in `components/usb/userial.c` |
@@ -237,7 +240,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v1.2.1 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.3.0 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -506,9 +509,21 @@ links, escaped text) for sharing without extra assets; `print` lays the text
  would expand past `P4_CONFIG_MD_EXPORT_MAX_BYTES` (256 KB) is likewise
  refused unwritten. The write is atomic (`storage_write_text_file`). Pass
  exactly one format (`text|html|print`); naming two is a usage error. An
- exported `.html` serves over `httpd`
- (`httpd start`, then `http://<ip>/<name>.HTML`). ERRORLEVEL: `0` ok,
- `1` open/write/refused failure, `2` usage/unknown format.
+  exported `.html` serves over `httpd`
+  (`httpd start`, then `http://<ip>/<name>.HTML`), and its images are
+  relative-path references, so keep the page beside its image files (or serve
+  it from the SD over `httpd`). ERRORLEVEL: `0` ok,
+  `1` open/write/refused failure, `2` usage/unknown format.
+
+**Reading and editing HTML.** `.html`/`.htm` are a first-class text type:
+`view`/`open`/`type` render them (headings, nested lists, tables, frames,
+quotes, links, images, entities) through the same ANSI pipeline via the
+built-in reader (`components/markdown/html_read.c`), and `edit` opens them with
+HTML syntax highlighting (tags, attributes, values, comments, doctype) plus
+the `<!-- -->` comment toggle; the editor preview (`Ctrl+P`) renders HTML too.
+`view --raw` (and `open --raw`) still shows the source markup. `type` renders
+HTML in document mode (tags are parsed, not shown). The reader is bounded by
+`P4_CONFIG_HTML_RENDER_MAX_BYTES` (256 KB).
 
 ### markdown / spellcheck / templates (writerdeck)
 
@@ -517,8 +532,8 @@ The writing-oriented surfaces share one theme:
 - **Focus / typewriter** — `edit <file> /focus` hides the header and keyboard
   and keeps the caret centred (toggle `Ctrl+Shift+F` / `Focus` / `\focus`).
 - **Word count** — the editor status bar shows `W n` live.
-- **Reading typography** — `view` (for `.md`) and the editor's Markdown
-  preview render in the `reading` font role (proportional/serif allowed):
+- **Reading typography** — `view` (for `.md` and `.html`) and the editor's
+  Markdown/HTML preview render in the `reading` font role (proportional/serif allowed):
   `font set reading <name>` / `font size reading <px>` (persisted like the
   other roles). A proportional **serif** face (`DejaVuSerif`, vendored in
   `assets/fonts/`) is auto-selected at first SD mount when present, and
@@ -545,6 +560,20 @@ when its parts do, so `don't` needs `don`); tokens with CJK, digits, `_`, or
 non-ASCII Latin letters are never flagged, since the wordlist cannot cover
 them. Underlines compose with word-wrap. `P4_CONFIG_SPELL_ENABLE=0` compiles
 the engine out and makes the toggle report that it is disabled.
+
+**User dictionary.** Words you add live in `sd:/DICTS/user.words` (same
+one-per-line format, `P4_CONFIG_SPELL_USER_FILE`, capped at
+`P4_CONFIG_SPELL_USER_MAX_WORDS`) and are checked before the base list, so
+they silence underlines immediately. Learn the word under the cursor with
+`Ctrl+D` (any physical keyboard) or the serial verb `\spell-add [word]`;
+`\spell-forget <word>` removes a learned word again (base words are never
+removable), `\spell-ignore [word]` skips a word for this session only, and
+`\spell-list` shows the overlay count. Outside the editor the same store is
+managed with `spell learn <word> | spell forget <word> | spell list user`
+(ERRORLEVEL 0 ok, 1 failed/absent, 2 usage). Learned words persist on the card
+at once (no save step); pull them home with
+`python apps/push_dicts.py pull`, or union them into the local file with
+`python apps/push_dicts.py merge`.
 
 ### Document templates
 
@@ -609,7 +638,8 @@ Request or inspect light sleep. Only available when CONFIG_PM_ENABLE is enabled 
 Report power-management state: PM enabled status, the automatic light sleep
 request (`battery sleep on|off`), display power state, the idle display-off
 timeout, Wi-Fi link state, battery level/voltage, the configured wake GPIO,
-and the last sleep wake-up cause.
+the assembled wake sources (`power.wake_sources`, with a deep-sleep
+eligibility note), and the last sleep wake-up cause.
 
 `power idle <seconds>` turns the display backlight off after that many seconds
 without user input (touch, USB keyboard/mouse, or a serial command); `power
@@ -706,16 +736,26 @@ shape as the post-OTA restore) instead of leaving a manual `wifi connect` —
 the line-current palmtop behaviour. Light-sleep Wi-Fi teardown can be
 disabled with `P4_CONFIG_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI=0`.
 
-Wake sources: the timer is always available; a user-wired button on
-`P4_CONFIG_POWER_WAKE_GPIO` wakes via GPIO. Touch wake is not available on
-this board because the GT911 interrupt line is not wired
-(`BOARD_CFG_LCD_TOUCH_INT_GPIO = GPIO_NUM_NC`) — `sleep` reports this
-honestly. For an always-on touch/USB-wake screen use `power idle` instead.
+Wake sources: the timer is always available. Light sleep can wake from any
+IO, so `sleep` also arms the touch controller interrupt when the fitted panel
+wires it (`P4_CONFIG_POWER_WAKE_TOUCH`) and the Tab5Keyboard interrupt on
+GPIO50 (`P4_CONFIG_POWER_WAKE_KEYBOARD`), plus a user-wired button on
+`P4_CONFIG_POWER_WAKE_GPIO`. The touch interrupt is read from the live panel
+driver, not the compile-time pin macro: the M5Stack Tab5 keeps it on GPIO23
+for ST7123/ST7121 units but straps GPIO23 low and reports **no** interrupt on
+ILI9881C+GT911 units, so `sleep` reports touch wake honestly per revision and
+never arms a strapped pin. The JC1060P470 reference has no touch interrupt
+wired at all. For an always-on touch/USB-wake screen use `power idle` instead.
 
 ### deepsleep [seconds]
 Enter deep sleep. RAM is lost, so on wake the device boots fresh (same path
 as `reboot`). With `seconds` the chip wakes on a timer; without it, wake
 requires an external wake source. Battery level is reported before sleeping.
+Deep sleep can only wake from an RTC IO, so the user GPIO
+(`P4_CONFIG_POWER_WAKE_GPIO`) is armed only when it is in the ESP32-P4 RTC
+domain (GPIO0..GPIO15); a pin outside that range is reported honestly and the
+timer remains the only source. The touch and keyboard interrupts cannot wake
+deep sleep (both are outside the RTC domain).
 
 ### shutdown (alias poweroff)
 Shut the board down: flush recall history and the wall-time anchor, stop Wi-Fi,
@@ -747,7 +787,8 @@ command reports the gap (ERRORLEVEL 1); a detached camera module fails sensor
 detection and reports NOT_FOUND.
 
 ### volume [<0-100>]
-Set speaker volume through the ES8311 codec path. `volume` with no argument
+Set speaker volume through the board codec path (ES8311 on the reference
+board, ES8388 on the Tab5). `volume` with no argument
 prints the current level (`volume: <pct>%`); `volume <0-100>` sets it. All
 audio output (`beep`, `tone`, `wavplay`) rides on this volume. Returns an
 ERRORLEVEL (0 ok / 2 usage).
@@ -770,9 +811,22 @@ decimated to 22050); other formats are rejected. Files are bounded by
 `P4_CONFIG_WAV_MAX_BYTES`. Background playback. ERRORLEVEL: 0 started,
 1 busy / file not found, 2 usage.
 
-### audio status | audio stop
-`audio status` reports `playing` or `idle`; `audio stop` cuts the current
+### audio status | audio stop | audio output [auto|speaker|headphones] [/b] [/v:NAME]
+`audio status` reports `playing` or `idle`, plus the output mode
+(`audio.output:`), the effective route (`audio.route: speaker|headphones`), and
+the jack state (`audio.jack: in|out|n/a` — `n/a` on boards without a jack).
+`audio stop` cuts the current
 background playback short (useful for a long tone or WAV). ERRORLEVEL 0/2.
+
+`audio output` selects where playback goes. `auto` (default) plays the speaker
+unless headphones are detected; `speaker` forces the amp on; `headphones`
+forces it off. On the Tab5 a 3.5 mm plug is detected on the headphone line and
+auto-mutes the speaker amp; on boards without a jack the route is always the
+speaker (`headphones` is accepted with a note). The route is evaluated at each
+play/volume/status call. With `/b` the verb prints one plain route line for
+`for /f`; with `/v:NAME` it stores the route in the environment. Persists via
+`config AUDIO_OUTPUT=` (re-applied from CONFIG.SYS at boot). ERRORLEVEL: 0
+ok, 1 apply/env failure, 2 usage.
 
 ### clip [text] | clip copy [N] | clip file <path> | clip read <file>
 RAM clipboard for text, transcript lines, and files.
@@ -885,13 +939,29 @@ device transactions (a short per-address timeout), so it is fast and does not
 reprogram the shared controller. `peek` reads one byte, `poke` writes one byte.
 Reserved pin pairs other than the board bus are refused.
 
-### spi status
-Reports the toolkit's SPI configuration (host, mode, clock, timeout). The
-`loopback` / `peek` / `poke` verbs are recognized but return an honest
-"unavailable on this board" error: initializing the SPI host on this P4 with
-the ESP-Hosted SDIO link active stalls the chip and drops USB-Serial-JTAG off
-the bus, so SPI transactions are deliberately not wired to the SPI master
-driver. This follows the same explicit-failure policy as `camera`.
+### spi status | spi loopback <sclk> <mosi> <miso> | spi peek <sclk> <mosi> <miso> <cs> <reg> | spi poke <sclk> <mosi> <miso> <cs> <reg> <value> | spi release
+SPI master transactions on the P4's third SPI host (SPI3). `spi status`
+reports the toolkit configuration (host, mode, clock, timeout) and confirms
+transactions are available. The bus is brought up lazily on first use with the
+**pins you supply**, routed through the GPIO matrix (`SPICOMMON_BUSFLAG_GPIO_PINS`)
+so it never claims the IOMUX SPI2 pins that overlap the board's I2C/I2S/SDIO
+lines:
+
+- `spi loopback <sclk> <mosi> <miso>` — shift a 16-byte pattern and compare the
+  received bytes. Bridge MOSI→MISO (with a level shifter if needed) to see
+  `spi loopback: OK`; otherwise it reports the first mismatched byte (expected
+  on a floating MISO line).
+- `spi peek <sclk> <mosi> <miso> <cs> <reg>` — read one register byte using the
+  bit7=0 read convention (`reg -> 0xNN`).
+- `spi poke <sclk> <mosi> <miso> <cs> <reg> <value>` — write one register byte
+  (bit7=1 write convention).
+- `spi release` — tear the bus down when you are done with an accessory.
+
+Every pin is gated through the board GPIO table (`shell_pin_is_reserved()`), so
+active I2C/I2S/SDIO/display/SD lines are refused. The ESP-Hosted C6 link and the
+microSD card live on the SDMMC controller (not a SPI host) and are unaffected by
+SPI use — verified on both boards with the C6 running (Wi-Fi/BLE stay up).
+ERRORLEVEL: `0` ok, `1` transaction/validation failure, `2` usage.
 
 ### rgb status | rgb off | rgb <r> <g> <b> | rgb #RRGGBB | rgb <effect> [speed] | rgb auto <on|off> | rgb <1|2> <r> <g> <b>
 Controls the status LED(s). On the JC1060P470 that is the WS2812 (NeoPixel) on
@@ -908,8 +978,9 @@ owns the driver, a small animation task, and the auto status layer.
   speed 1 (slow) .. 10 (fast).
 - `rgb auto <on|off>` — enable/disable the status-driven colour layer. In auto
   mode the LED follows Wi-Fi state (amber while connecting, green when
-  connected, red blink when disconnected, red pulse on watchdog timeout) and
-  flashes blue when the HTTP server starts. A green flash confirms boot.
+  connected, green when idle with no network to join, amber pulse when a
+  configured network drops, red pulse on watchdog timeout) and flashes blue
+  when the HTTP server starts. A green flash confirms boot.
 - `rgb 1 <r> <g> <b>` / `rgb 2 <r> <g> <b>` — set one LED independently
   (Tab5 keyboard LEDs only). LED1 (index 1) is the status engine; LED2
   (index 2) is an independent user LED, off by default. `rgb 1|2 off` clears one.
@@ -1072,7 +1143,9 @@ USB-Serial/JTAG console, framed for host-side extraction:
 little-endian CRC-32 trailer (IEEE 802.3, matching zlib's `crc32` over the
 payload) + `=== TX DONE ===`. The host reads the magic, then the size, then
 that many bytes, then the CRC, and verifies the CRC to confirm the frame was
-not corrupted or interleaved (empty payload => CRC `0x00000000`).
+not corrupted or interleaved (empty payload => CRC `0x00000000`). `pim get`
+reuses the same framing with the `PIMX` magic (see `pim` below); `pim put`
+reuses the `receive` upload protocol above.
 
 **Usage:**
 ```
@@ -1134,7 +1207,7 @@ All file commands operate on SD card through guarded mount/unmount. Working dire
 | rd / rmdir [opts] <path> | Remove directory; `/s` moves to the recycle bin |
 | undelete <name\|index> | Restore a recycle-bin entry (alias: `restore`) |
 | trash [subcommand] | Manage the recycle bin (alias: `recycle`) |
-| type <path> | Print text-safe file preview (no raw binary) |
+| type <path> | Print text-safe file preview (no raw binary); with no path reads the active `< file` / pipe input |
 | write <path> <text> | Create or overwrite text file |
 | append <path> <text> | Append text to file |
 | touch <path> | Create empty file or refresh timestamp |
@@ -1237,6 +1310,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | path | Show current batch PATH |
 | path <dir1>;<dir2>;... | Replace PATH for .bat lookup |
 | echo <text> | Print text after variable expansion |
+| echo. / echo/ / echo( / echo: [text] | DOS glued forms: blank line when bare, otherwise the glued text prints literally (`echo.on` prints `on`, it does not toggle echo) |
 | echo on / echo off | Enable/disable batch command echoing |
 | call <file.bat> [args] | Execute batch file; `%0` is the script name, `%1..%9`/`%*` are the forwarded arguments, and the caller's errorlevel becomes the script's final errorlevel |
 | call <file.bat>::<routine> [args] | Call one routine from a shared library of batch routines: execution starts at `:routine` in the external file, isolated from the caller's variables, and returns on `exit /b` / `goto :eof` / EOF |
@@ -1254,13 +1328,13 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | goto <label> | Jump to a `:label` in the running batch file |
 | goto :eof | Jump to the end of the current batch file, unwinding its open setlocal scopes |
 | for %%v in (set) do cmd | Loop over literal tokens or a wildcard pattern |
-| for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c`, `skip=n`, `delims=xyz`, `tokens=a,b,m-n,*`; a single-quoted set `in ('command')` iterates command output |
+| for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c` (default `;`, empty disables), `skip=n`, `delims=xyz`, `tokens=a,b,m-n,*`; a single-quoted set `in ('command')` iterates command output |
 | for /L %%v in (start,step,end) do cmd | Count inclusively (negative step counts down; cap `P4_CONFIG_FORL_ITER_MAX`) |
 | for /A %%k in (PREFIX) do cmd | Iterate one `PREFIX[...]` array: `%%k` binds the index, the next letter the live value |
 | for /D %%v in (set) do cmd | Loop over directory names (wildcards match dirs; literals pass through) |
 | for /R [path] %%v in (set) do cmd | Recursively loop over files matching the set under `path` (cwd default; depth cap `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`) |
 | while <expr> do cmd | Re-run while a `set /a` expression is nonzero (`EQU NEQ LSS LEQ GTR GEQ` keywords; bare names or `%%n%%` stay live; cap `P4_CONFIG_WHILE_ITER_MAX`) |
-| shift | Shift batch arguments left by one position |
+| shift | Shift batch arguments left by one position (`shift /n` slides only `%n` onward) |
 | pause | Wait for a keypress |
 | choice [/C:keys] [/N] [/T:c,secs] [/S] [text] | Wait for one of the listed keys |
 | setlocal [enabledelayedexpansion\|disabledelayedexpansion] | Push a copy of the environment; later changes are local (`!VAR!` delayed expansion when enabled; `enableextensions`/`disableextensions` accepted and ignored) |
@@ -1806,6 +1880,69 @@ import alarms ics alarms.ics
 
 ERRORLEVEL: 0 imported, 1 nothing imported, 2 usage / I-O.
 
+### pim get db <name> | pim get alarms | pim put db <name> <size> [/crc] | pim put alarms <size> [/crc]
+
+Serial CardDAV-lite sync over the shared transfer engine (PIMX framing).
+`pim get` renders vCard 3.0 / iCalendar with sync identity and streams one
+`PIMX` frame (magic + size + payload + CRC-32, like `send`); `pim put`
+receives a stream (like `receive`, same READY/DONE markers) into a temp
+file and merges it by uid with newer-wins. `export`/`import` are untouched:
+identity lines (`UID`/`REV`/`DTSTAMP`) appear only in the `pim get` stream,
+and `import` keeps its fresh-ids behavior.
+
+```
+pim get db contacts                  Stream contacts as vCards (PIMX frame)
+pim get alarms                       Stream events as iCalendar (PIMX frame)
+pim put db contacts 4096 /crc        Receive vCards, merge by UID
+pim put alarms 2048                  Receive VEVENTs, merge by UID
+```
+
+- `pim get` backfills sync identity once per record/event (random `uid=`
+  + `mtime=` in contact payloads, `uid`/`modified` in alarm events) so the
+  next render's UIDs are stable; a muted line reports the backfill count
+  before framing (the host scans for the `PIMX` magic and skips the text).
+- Contacts merge by `UID` with `REV` newer-wins (a missing incoming REV
+  never overwrites a timestamped record); events merge by `UID` with
+  `DTSTAMP` newer-wins. Unknown uids are created (incoming uid stored);
+  known-but-older cards are skipped and counted. Merges preserve the
+  record category/key/secret flag and the event flags/action.
+- `pim get db` refuses while the device is locked (mirrors `export`) and
+  includes secret payloads once unlocked; `pim put` is ungated like `import`.
+- The `put` payload is bounded by `P4_CONFIG_PIM_RX_MAX_BYTES` (1 MiB).
+- Host side: `tools/pim_sync.py pull|push|sync` keeps a mirror directory
+  (one card per `<uid>.vcf`/`<uid>.ics` file) and merges with the same
+  newer-wins rule.
+
+ERRORLEVEL: 0 synced, 1 empty store / nothing merged / transfer failed, 2 usage / I-O.
+
+### sync [status]
+
+Read-only P4Sync handshake for USB desktop sync (the ActiveSync-style
+north star in `roadmap.md` §F). Prints one `sync.*` capability snapshot —
+proto tag, board, SD/lock state, SDFX/PIMX/BMPX magics, and byte limits —
+over the existing serial engine. Store contents are never enumerated here;
+the host composes inventory from `dir /b`, `db`, `alarm`, `pkg`, and
+`asset`, and transfers through `receive` / `send` / `pim` / `screenshot`.
+
+```
+sync                 Same as sync status
+sync status          Print the handshake lines + sync: ready
+sync bogus           Usage, ERRORLEVEL 2
+```
+
+- Machine-readable lines (`sync.proto: p4sync-1`, `sync.board:`,
+  `sync.sd:`, `sync.lock:`, `sync.send_magic:`, `sync.pim_magic:`,
+  `sync.shot_magic:`, `sync.send_max:`, `sync.rx_max:`,
+  `sync.pim_rx_max:`, `sync.inventory_max:`, `sync.free_bytes:`);
+  the host asserts the proto tag before any bulk transfer.
+- `sync.lock:` mirrors the device-lock secret gate (`locked` refuses
+  secret payloads in `db`/`export`/`pim get db`); `sync.sd:` reports
+  `mounted`/`absent` and `sync.free_bytes:` is `unavailable` off-card.
+- Host side: `tools/p4sync/` (`status|push|pull|shot`) over the shared
+  `p4test` transports; PIM merge stays with `tools/pim_sync.py`.
+
+ERRORLEVEL: 0 printed, 2 usage.
+
 ### archive create|extract|list|verify, backup
 
 USTAR (`.p4a`) backups with a CRC manifest trailer — the 95LX backup story:
@@ -2240,7 +2377,7 @@ set /p v=< data.txt
 
 | Option | Meaning |
 |--------|---------|
-| `eol=c` | Lines starting with `c` are ignored (comment marker) |
+| `eol=c` | Lines starting with `c` are ignored (comment marker; default `;` like cmd.exe, an explicit empty `eol=` disables the filter) |
 | `skip=n` | Skip the first `n` lines |
 | `delims=xyz` | Delimiter characters used to split each line (default space+tab) |
 | `tokens=a,b,m-n,*` | 1-based token indices to bind to `%%a`, `%%b`, ...; `*` binds the rest of the line |
@@ -2500,7 +2637,7 @@ lock/conceal policy. Recovery is deleting the `SECURITY_*` lines on the SD card
 
 ### view
 
-`view [/t:secs] [--raw] <file>` opens a native pager that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. For text, a paginated read-only preview with scrolling: drag on the transcript, Up/Dn buttons, USB keyboard PageUp/PageDown or arrows, mouse wheel (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` per notch). Shows the file with line numbers and shell colours; keyboard/serial controls match `browse`. `/t:secs` auto-cancels after `secs` seconds. `.md`/`.markdown`/`.mkd` files render rendered-plain (markup stripped, tables aligned) unless `--raw` is given. **`.bmp`/`.dib` files open the image viewer** (fit-to-screen, `Esc`/`q`/Close) instead of the text pager — this is routed by the central `components/filetype/` registry. ERRORLEVEL is `0` on close (OK), `1` on cancel/Esc/timeout or a bad image, or `2` for usage or missing file. `draw` is TUI-aware when `view` is active.
+`view [/t:secs] [--raw] <file>` opens a native pager that fills the live transcript region (`P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via `windows_enter_editor_mode`; hardware-tested via serial on COM11) using the shared modal runtime in `components/modal/`. For text, a paginated read-only preview with scrolling: drag on the transcript, Up/Dn buttons, USB keyboard PageUp/PageDown or arrows, mouse wheel (`P4_CONFIG_TRANSCRIPT_SCROLL_STEP` per notch). Shows the file with line numbers and shell colours; keyboard/serial controls match `browse`. `/t:secs` auto-cancels after `secs` seconds. `.md`/`.markdown`/`.mkd` (and `.html`/`.htm`, via the HTML reader) render rendered-plain (markup stripped, tables aligned) unless `--raw` is given. A print export's form feeds show as a visible `page break` rule. **`.bmp`/`.dib` files open the image viewer** (fit-to-screen, `Esc`/`q`/Close) instead of the text pager — this is routed by the central `components/filetype/` registry. ERRORLEVEL is `0` on close (OK), `1` on cancel/Esc/timeout or a bad image, or `2` for usage or missing file. `draw` is TUI-aware when `view` is active.
 
 ### hexview
 
@@ -2510,7 +2647,8 @@ lock/conceal policy. Recovery is deleting the `SECURITY_*` lines on the SD card
 
 `open [/t:secs] [--raw] <file>` does the right thing per file type (central
 registry `components/filetype/`): scripts (`.bat`/`.cmd`) open in the editor
-as source (never execute — typing the name runs them), Markdown renders,
+as source (never execute — typing the name runs them), Markdown and HTML
+(`.html`/`.htm`) render,
 **BMP images (`.bmp`/`.dib`) open the image viewer**, everything else views as
 text. Batch-callable with the same ERRORLEVELs as `view`/`edit`. `open` is the
 batch-file-friendly way to present a file: `if exist README.MD open README.MD`.
@@ -2883,6 +3021,20 @@ shows the stored template and its rendered form; `prompt /?` lists the codes.
 
 Example: `prompt $t $p$g ` renders as `14:32:07 /sdcard/logs> `.
 
+### title [text]
+
+DOS session-title parity. `title` alone reports the stored title (`(none)`
+until set); `title <text>` stores it (truncated to `P4_CONFIG_TITLE_BYTES`);
+an empty value clears it. The title is session metadata scripts and the host
+can read — it is also listed as `title:` by `sysinfo`. Display ownership is
+unchanged: the header keeps status, the transcript keeps output.
+
+```
+title                  Show the session title
+title Adventure game   Store a multi-word title (unquoted words join)
+title ""               Clear it
+```
+
 ### Quoting and escaping
 
 | Form | Meaning |
@@ -2915,10 +3067,16 @@ pipe stages, and chain separators.
 | `> file` | Write command transcript output to an SD file (overwrite) |
 | `>> file` | Append command transcript output to an SD file |
 | `< file` | Read a file as the command's input |
+| `> NUL` / `>> NUL` | Discard the output (DOS device; no file is created) |
+| `> CON` | Print to the transcript (DOS device; no file is created) |
+| `< NUL` / `< CON` | Read end-of-file / read the console |
+| `1>`, `2>` | Stream-handle prefixes merge into the one transcript stream (`2>` behaves as `>`; there is no separate stderr) |
 
-All three may appear on one line in any order, for example
+All three directions may appear on one line in any order, for example
 `sort < unsorted.txt > sorted.txt`. An operator that is quoted or caret-escaped is
-treated as data.
+treated as data. A bare operator with no target is a syntax error
+(ERRORLEVEL 2); a line of only redirections truncates/creates the file.
+Pipe stages spool under `sd:/tmp` through the shared temp core.
 
 ### Command chaining
 
@@ -3152,7 +3310,9 @@ guarded SD session.
 
 | Command | Description |
 |---------|-------------|
-| edit <path> | Open a DOS-style inline text editor (see below) |
+| edit <file> \| edit db <name> <id> \| edit alarm <id> | Open a DOS-style inline text editor (see below; record editing included) |
+| spell learn <word> \| spell forget <word> \| spell list user | Manage the spellcheck user dictionary overlay (see Spellcheck) |
+| recover [list] \| recover restore <path> \| recover discard <path> \| recover clear | List, restore, or drop editor crash files (see Save / Quit / Reload) |
 | find <text> [file] [/I] [/N] [/C] [/V] | Search a file for a literal substring |
 | find [path] [/NAME:pat] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B] | Recursively list files by name / size / date |
 | findstr [switches] <search> [file...] | Classic DOS text search, literal or regex-lite |
@@ -3170,6 +3330,22 @@ usable from the touch keyboard, a USB keyboard, or the serial console. See
 [tutorial_edit.md](tutorial_edit.md) for the complete tutorial and
 [editor.md](editor.md) for the quick reference.
 
+**Record editing**: `edit db <name> <id>` opens one db record's payload,
+`edit alarm <id>` opens one alarm event as its canonical INI text. The
+record is staged byte-verbatim into a temp `.txt` file (PLAIN rendering:
+CSV rows, `k=v` contact payloads, and INI text all appear as plain text
+lines), and saving writes back through the store APIs — `db_set` echoing
+category/key/secret exactly, `alarm_set` after re-validating the text with
+the same semantics as the file loader. Byte-identical round-trips skip the
+store write entirely. Pim sync identity is preserved: editing a synced
+contact bumps its `mtime=`, editing a synced event bumps `modified=` (and
+a stored event `uid` survives even when the `uid=` line was touched), so
+newer-wins protects the device-side edit; CSV grids and plain notes never
+carry `uid=` and pass through untouched. Editing a secret record requires
+an unlocked device (same gate as `export db`). Any failure after the editor
+ran keeps the temp file and prints its path, so edited text is never lost.
+ERRORLEVEL is 0 saved/unchanged, 1 not-found/locked/failed, 2 usage.
+
 Options (writerdeck):
 
 | Option | Effect |
@@ -3181,6 +3357,13 @@ The status bar shows the live **word count** (`W n`, `P4_CONFIG_EDITOR_WORD_COUN
 plus the `FOCUS` and `SPELL` session flags. **Spellcheck** underlines
 misspellings from an SD wordlist (`sd:/DICTS/<name>.words`); toggle with the
 `Spell` key or `Ctrl+Shift+S` / `\spell` (see [spellcheck](#spellcheck)).
+
+**Syntax highlighting** follows the central file-type registry: `.bat`/`.cmd`,
+`.md`, `.json`, and `.html`/`.htm` (tags, attribute names/values, comments,
+doctype) each get their syntax shown in the status bar (`bat`/`md`/`json`/
+`html`/`txt`). The comment toggle (`Ctrl+/`) uses the syntax's own marker, so
+HTML gets `<!-- ... -->` like Markdown. The `Ctrl+P` preview renders Markdown
+**and** HTML (via the same HTML reader the viewer uses).
 
 - **Line numbers**: a right-aligned gutter shows each line's 1-based number
   (`P4_CONFIG_EDITOR_LINE_NUMBER_WIDTH_CHARS` digits, muted), and the cursor's
@@ -3219,12 +3402,21 @@ misspellings from an SD wordlist (`sd:/DICTS/<name>.words`); toggle with the
   `\l` reloads from disk, discarding edits; Esc / `\q`
   (serial) quits, with a `Y/N` confirmation whenever there are unsaved
   changes. Read-only files (FATFS `+R`) refuse saves with a status message —
-  use Save As. A failed save removes the partial destination and keeps your
-  edits in memory.
+  use Save As. Saves are atomic (temp file + rename, shared with the storage
+  layer): a failed save leaves the original untouched and keeps your edits in
+  memory — there is never a partial destination to remove.
+- **Autosave / crash recovery**: while a buffer is dirty the editor spills it
+  to `sd:/tmp/edit/` every `P4_CONFIG_EDITOR_AUTOSAVE_SECS` seconds
+  (default 30, `0` disables; the first spill lands on the first dirty tick).
+  After a crash, power loss, or discarded quit, `recover` lists the crash
+  files, `recover restore <path>` writes one back over its original, and
+  `recover discard <path>` / `recover clear` drops them. A successful save
+  deletes its crash file. Crash files survive `temp clean`; only `recover`
+  manages them.
 - **Wrap / comment**: Ctrl+W (or `\w`) toggles word wrap for long rows
   (cursor, selection, scroll, and touch all follow visual rows); Ctrl+/
   (or `\co`) toggles line comments over the selection or cursor row
-  (`rem ` for batch, `// ` for JSON, `<!-- ... -->` for Markdown).
+  (`rem ` for batch, `// ` for JSON, `<!-- ... -->` for Markdown and HTML).
 - **Status bar**: path, `*` modified flag, `Ln`/`Col`, `INS`/`OVR`, syntax
   (`bat`/`md`/`json`/`txt`), `CRLF` when applicable, `RO` for read-only,
   plus `PREVIEW`/`WRAP` modes.
@@ -3249,7 +3441,9 @@ misspellings from an SD wordlist (`sd:/DICTS/<name>.words`); toggle with the
 - **Serial console**: while the editor is open, UART lines are fed to the
   editor (`\q` quit, `\s` save, `\f` find, `\g` go-to-line, `\o` save-as,
   `\u` undo, `\r` redo, `\a` select-all, `\p` preview, `\all` replace-all,
-  `\c` case toggle, `\b` match jump, `\co` comment, `\w` wrap, `\l` reload;
+  `\c` case toggle, `\b` match jump, `\co` comment, `\w` wrap, `\l` reload,
+  `\spell` toggle, `\spell-add [word]` learn, `\spell-forget <word>`,
+  `\spell-ignore [word]`, `\spell-list`;
   any other line is typed).
 - **Syntax**: batch `.bat`/`.cmd` files are syntax-highlighted by the batch
   lexer (commands, comments, labels, `%VAR%`, strings, operators); `.json`
@@ -3545,6 +3739,7 @@ ERRORLEVEL: 0 = identical, 1 = different, 2 = usage / error.
 | wifi preferred <ssid> | Mark a saved network as preferred for auto-connect |
 | wifi throughput tx <host> [port=N] [mb=N] [udp] | TCP/UDP send bench to `host`; prints Mbit/s (host peer: `tools/wifi_bench.py`) |
 | wifi throughput rx [port=N] [mb=N] [udp] | TCP/UDP receive bench; the host connects and sends (same-subnet host required) |
+| wifi setup [on/off] | Start/stop the captive-portal Wi-Fi setup (SoftAP + DNS + HTTP page). Auto-starts on first boot without SD card |
 
 ### Wi-Fi Behavior
 - Boot-time startup in background task (does not block shell UI)
@@ -3696,6 +3891,54 @@ tcpterm example.com 80 "HEAD / HTTP/1.0\r\n\r\n" > head.txt
 
 ERRORLEVEL: 0 session completed, 1 resolve/connect/send/Wi-Fi failure, 2 usage.
 
+### net status|broker|connect|sub|pub|msg|onmsg|outbox (event service)
+
+Persistent MQTT 3.1.1 service (plaintext LAN): one background task in
+`components/networking/netsvc.c` owns a single broker session while Wi-Fi
+is associated, and pauses for OTA/sleep teardown. Batch reaches it through
+these verbs; native apps through `applib_msg.h`. Inbound messages fan out
+over the header plus an alarm-style async batch hook — never a private
+loop. Publishes while offline journal to `sd:/NET/OUTBOX/` and flush
+oldest-first on reconnect (QoS 1, at-least-once); `$pim/db/<name>` and
+`$pim/alarms` payloads merge newer-wins through `components/pim`.
+
+```
+net broker mqtt.lan 1883             Remember broker coordinates (NET.INI)
+net broker                           Show the stored broker (read-only)
+net password                         Store the credential (hidden entry)
+net connect                          Enable the session (lazy task start)
+net sub sensors/#                    Subscribe (RAM table, resent on reconnect)
+net pub desk/lamp on                 Publish now, or journal when offline
+net msg                              Show the last inbound message
+net onmsg notify Arrived: $NET_TOPIC  Run a batch line per message
+net status                           Session, subscription, and outbox counts
+```
+
+- `net broker <host> [port] [user]` persists coordinates; bare `net broker`
+  shows the stored coordinates (read-only, echoed by `net status` as
+  `net.broker:`); `net password` reads hidden (never echoed, never stored in
+  history). Changing the broker applies on the next connect.
+- `net sub <filter>` (`+`/`#` wildcards, at most 8); `net unsub <filter>`;
+  `net subs [/b]` lists them.
+- `net pub <topic> <text...>` journals first, then sends; the verdict line
+  says `live` or `queued`. Bounded by `P4_CONFIG_NET_PUBLISH_MAX_BYTES`
+  (16 KiB) and the outbox caps (64 records / 256 KiB).
+- `net msg [/b]` prints the last arrival (`/b` emits the bare payload for
+  scripts and pipes).
+- `net onmsg <line...>` stores a RAM-only batch line run per arrival with
+  `$NET_TOPIC`/`$NET_LEN` set; `net onmsg off` clears it. The payload itself
+  is fetched with `net msg` inside the hook.
+- `net outbox [/b]` reports depth; `net outbox purge` drops it.
+- Mutating verbs refuse with `net: paused during OTA` while a C6 OTA owns
+  flash; `c6ota` likewise refuses while the service is active
+  (`net disconnect` first). Merges honor the device lock (locked drops
+  inbound before surfacing).
+- Requires Wi-Fi; without a broker the task backs off
+  (`P4_CONFIG_NET_BACKOFF_BASE_MS` doubling to `P4_CONFIG_NET_BACKOFF_CAP_MS`).
+  TLS is future work (see `SECURITY.md`): this speaks plaintext MQTT.
+
+ERRORLEVEL: 0 ok/queued, 1 failed (offline store full, no broker, OTA pause), 2 usage.
+
 ### httpd start | httpd stop | httpd status
 
 Drives the HTTP file server that shares the SD card over the Wi-Fi link.
@@ -3761,14 +4004,24 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | bluetooth enable | Initialize the hosted controller + NimBLE host and report readiness (idempotent; scan/advertise also bring it up on demand) |
 | bluetooth advertise on [name] | Start non-connectable BLE advertising. `name` is session-only (RAM-only, never persisted); without it the configured default name is used |
 | bluetooth advertise off | Stop BLE advertising |
+| bluetooth connect XX:XX:XX:XX:XX:XX | Connect to a BLE HID keyboard/mouse (BLE central). Discovers the HID service (0x1812), subscribes to reports, and routes keystrokes to the shell input line; the on-screen keyboard hides while connected |
+| bluetooth disconnect | Disconnect the current BLE HID device |
 | bt ... | Alias for bluetooth command family |
 
 ### Bluetooth Lifecycle
 - The hosted controller and NimBLE host initialize once on first use
-- Subsequent scan/advertise commands reuse active session
+- Subsequent scan/advertise/connect commands reuse active session
 - Hosted NimBLE VHCI on ESP32-C6 over ESP-Hosted SDIO
 - `bluetooth scan` is always bounded by `P4_CONFIG_BT_SCAN_DURATION_MS`, so it
   always terminates and the worker task never hangs
+- `bluetooth connect` acts as a BLE central: it stops any scan/advertising, connects with
+  `P4_CONFIG_BLE_CONNECT_TIMEOUT_MS`, negotiates the MTU (`P4_CONFIG_BLE_MTU`), and discovers the
+  HID service through the NimBLE GATT client. It prefers the HID Report characteristic (0x2A4D)
+  and falls back to Boot Keyboard Input (0x2A22); the CCC (0x2902) is written to enable
+  notifications. Incoming boot-protocol reports are routed to the shell through the same input
+  path as USB HID (`bluetooth_keyboard_input` host-ops callback), so a BLE keyboard types into
+  the prompt and hides the on-screen keyboard exactly like a wired one. `bluetooth status` shows
+  the connected device name/address.
 
 ## USB Commands
 
@@ -3853,6 +4106,31 @@ cooperatively with `^C`, exactly one message per press:
 | sd mount | Mount the SD card, clearing the eject latch so a re-inserted card works without rebooting |
 | sd eject / sdeject | Safe unmount before card removal |
 
+## TLS Trust Store Commands
+
+| Command | Description |
+|---------|-------------|
+| certs [info] | Show trust store status: SD availability, global CA store state, PEM/DER file counts and buffer size |
+| certs list | List all certificate files in sd:/CERTS/ |
+| certs add <file> | Import a PEM or DER CA certificate into sd:/CERTS/ |
+| certs remove <name> | Remove a certificate file from sd:/CERTS/ |
+| certs rebuild | Concatenate all .pem files into sd:/CERTS/BUNDLE.PEM for fast loading |
+| certs clear | Clear the loaded trust store from memory (SD files untouched; reboot reloads) |
+| certs reload | Re-scan sd:/CERTS and re-load the global CA store |
+
+### TLS Trust Store Lifecycle
+- `certs` manages a certificate store on the SD card (sd:/CERTS/) that extends the
+  compiled-in Mozilla CA bundle for HTTPS verification.
+- At boot, `certs_load_sd_store()` scans sd:/CERTS/, concatenates all .pem files
+  into a PSRAM buffer, and registers it with mbedTLS via `esp_tls_set_global_ca_store()`.
+  httpget and c6ota then prefer this user store over the compiled bundle.
+- `certs add <file>` copies a PEM or DER certificate into the store. After adding,
+  run `certs reload` to activate the new certificates without rebooting.
+- `certs rebuild` concatenates all .pem files into BUNDLE.PEM (the pre-built
+  bundle used for fast loading at boot).
+- `certs clear` frees the loaded store from memory; `certs reload` re-scans and
+  re-loads. A reboot also reloads from SD.
+
 ## C6 OTA Commands
 
 ### c6ota <source>
@@ -3862,6 +4140,8 @@ Sources:
 - sd:/path/to/firmware.bin - Load image from SD card
 - http://host/path or https://host/path - Download then transfer
 - default - Auto-load esp32c6_hosted_slave.bin or network_adapter.bin from SD root
+  (push the per-board app image there with `apps/push_c6.py <COM_PORT>`; it
+  auto-detects the board and writes `sd:/esp32c6_hosted_slave.bin`)
 
 ### OTA Flow
 1. Validate source and show factory warning if needed (v2.3.0)

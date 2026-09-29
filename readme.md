@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.2.1 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.3.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -53,7 +53,7 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.2.1)
+## Current state (v1.3.0)
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
@@ -69,8 +69,8 @@ the host regression runners are green. See
 
 - **Shell:** transcript with ANSI colour on screen and serial, scrollback,
   command history with SD save/restore, tab + ghost completion, reverse search,
-  a flexible `prompt` template, and a worker task so heavy commands never stall
-  the UI.
+  a flexible `prompt` template, a `title` session title, and a worker task so
+  heavy commands never stall the UI.
 - **Filesystem:** DOS file verbs (`cd dir copy move del ren md rd type write
   append touch`), full `dir` switch set, `xcopy`, `attrib`, `label`, a recycle
   bin (`undelete`/`trash`), `chkdsk`, `format`, and `disk` partition tools.
@@ -81,7 +81,9 @@ the host regression runners are green. See
   dispatch, `NAME[i]` arrays, `%VAR:~%`/`%VAR:old=new%` string forms,
   `!VAR!` delayed expansion, `goto`,
   `call`/`gosub` (local and shared-library routines with `return`),
-  `on … goto|gosub` computed dispatch, `alias`, `bind`, `macro`,
+  `on … goto|gosub` computed dispatch, `shift` (`/n` start index), `title`,
+  DOS `echo.`/`echo/`/`echo(`/`echo:` forms, `for /f` with `eol=;` default,
+  `alias`, `bind`, `macro`,
   `start`/`taskkill` background jobs, `dialog`/`list`/`ask` modals,
   declarative screens and multi-screen flows (`screen run` / `screen flow`,
   see [batch.md](batch.md) §13), and `exit /b`.
@@ -91,14 +93,16 @@ the host regression runners are green. See
   bundles (`pkg key`, `tools/pkg_sign.py`), asset manifests (`asset`), and the
   `applib` native-app runtime.
 - **Data:** `db` record store, `csv` grid + `=EXPR` evaluation, `export`/`import`
-  interchange, `archive`/`backup`, `crypt` (AES-256-GCM), `ini`/`appconfig`/`temp`.
+  interchange, `pim` serial sync (PIMX + `tools/pim_sync.py`), `archive`/`backup`,
+  `crypt` (AES-256-GCM), `ini`/`appconfig`/`temp`.
 - **Display:** `draw` TUI verbs, `gfx` RGB565 canvas with sprites and images,
   `plot` graphs, `font` registry with SD TTFs and CJK fallback, and UI themes.
 - **Connectivity:** hosted Wi-Fi (station + known-network list), BLE,
   `ping`/`dns`/`httpget`/`tcpterm`, `httpd` file server, `netstat`/`ipconfig`,
   USB host (MSC, HID, CDC-ACM `usb userial`), and C6 OTA.
 - **Hardware:** brightness/rotation, battery telemetry, audio (`beep`/`tone`/
-  `wavplay`), WS2812 status LED, GPIO/PWM/ADC/I2C toolkit, idle display-off,
+  `wavplay`, output routing with headphone auto-mute on the Tab5), WS2812
+  status LED, GPIO/PWM/ADC/I2C toolkit, idle display-off,
   and sleep/deep-sleep.
 - **Editor:** a touch-first, PSRAM-backed `edit` editor for any SD text file.
 - **Writerdeck:** focus/typewriter mode (`edit /focus`, live word count),
@@ -107,13 +111,24 @@ the host regression runners are green. See
   typography for `view`/preview (vendored `DejaVuSerif`, push with
   `python push_fonts.py <COM_PORT>`), offline spelling underlines from an SD
   wordlist (`sd:/DICTS/`, push the `apps/dicts/` sample with
-  `python apps/push_dicts.py <COM_PORT>`), and
+  `python apps/push_dicts.py <COM_PORT>`), a learnable user dictionary
+  (`spell learn`, editor `AddWord` key), dirty-buffer autosave with `recover`,
+  and
   `markdown export <src> <out> [text|html|print]` (plain text, a standalone
-  HTML reader page, or a paginated print layout) for sharing over `httpd`.
+  HTML reader page, or a paginated print layout) for sharing over `httpd`, and
+  on-device reading/editing of `.html`/`.htm` (`view`/`open`/`type` render
+  them; `edit` highlights the markup) alongside Markdown.
   Nothing above is turnkey: each SD payload must be pushed once (see
   [SD card layout](#4-sd-card-layout) and
   [Deploy the reference apps](#5-deploy-the-reference-apps)); missing pieces
   fall back visibly (bitmap font, `Spell` stays off, empty template buffer).
+
+> **Shipped and hardware-verified in v1.3.0** (see [`changelog.md`](changelog.md)):
+> the `sync` USB handshake, the `net` MQTT event service with SD outbox, the
+> batch DOS-parity round (`title`, `shift /n`, `echo.` forms, `for /f` `eol=;`),
+> and the redirection round (missing-target errors, `1>`/`2>` merge, `NUL`/`CON`,
+> `type` stdin, pipe spools under `sd:/tmp`). The tour below describes them;
+> both boards pass the full regression sweep and dogfood run on this release.
 
 Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
 `tcmd` (dual-pane commander), `snake`, `elite`, `adventure`, `notes`, `mood`,
@@ -156,7 +171,14 @@ Replace `<COM_PORT>` with your board's serial port (e.g. `COM3` on Windows,
 `/dev/ttyACM0` on Linux). Host tools accept the port as a trailing argument
 or via the `P4_PORT` environment variable.
 
-Use the **app image** for C6 OTA updates (not the merged flash image).
+The C6 co-processor firmware is flashed with `c6ota` from the **app image**
+(the `esp32c6_hosted_slave.bin` produced by the C6 project), never the merged
+P4 flash image. To update it from the card, push the image for your board to
+the SD root and run `c6ota default`:
+
+```powershell
+python apps/push_c6.py <COM_PORT>   # pushes this board's esp32c6_hosted_slave.bin to sd:/
+```
 
 ### 3. First boot
 
@@ -182,6 +204,8 @@ reference. `about` prints the build identity and license.
 | `TEMPLATES/` | Writerdeck new-file seeds (`edit <file> /template <name>`); pushed by `apps/push_templates.py` |
 | `DICTS/` | Writerdeck spell wordlists (`<name>.words`, default `en`); the `apps/dicts/` sample is pushed by `apps/push_dicts.py`; without one `Spell` stays off |
 | `WIFI.KNOWN` | Saved Wi-Fi networks |
+| `esp32c6_hosted_slave.bin` | ESP32-C6 co-processor app image (`c6ota default` flashes it from the SD root); per-board, pushed by `apps/push_c6.py` |
+| `NET.INI`, `NET/OUTBOX/` | MQTT broker coordinates and the event-service offline publish journal |
 | `HISTORY.TXT`, `ALIASES.BAT`, `BIND.BAT`, `SHELL.INI` | Persistent shell state |
 
 Put an app's entry `.bat` on `PATH` or under `sd:/APPS`. Run `launch` to see
@@ -231,7 +255,8 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
   `HISTORY.TXT`; tab and ghost completion for commands, aliases, and paths;
   `history /save` `/load` `/search` `/clear`.
 - A configurable `prompt` template (`$p $g $t $d $v $n` …) driving both the
-  serial console and the on-screen input line.
+  serial console and the on-screen input line, plus a `title` session title
+  (also listed by `sysinfo`).
 - Serial bridge: `idf.py monitor` is an interactive shell endpoint.
 
 ### Files, volumes, and storage guardrails
@@ -254,7 +279,9 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - `if` (errorlevel / exist / defined / numeric keywords / `/i`), `for`,
   `for /f`, `goto`, `call`, `gosub`/`return`/`on` (BASIC control flow), and
   `call <file.bat>::<routine>` shared libraries.
-- Multi-stage pipes, `<`/`>`/`>>` redirection, `&`/`&&`/`||` chaining, and
+- Multi-stage pipes (spooled under `sd:/tmp`), `<`/`>`/`>>` redirection
+  (missing targets error, `1>`/`2>` merge into the one stream, `NUL`/`CON`
+  devices, `type` reads stdin), `&`/`&&`/`||` chaining, and
   quote/escape rules shared by one scanner.
 - `alias`/`unalias`, `bind` (F-keys and Ctrl-chords), `macro` recorder,
   `delay`, `start`/`taskkill` background jobs, and a foreground break
@@ -270,9 +297,17 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
   signer `tools/pkg_sign.py`); **`asset`** verifies asset manifests; **`crc32`**
   hashes files.
 - **`db`** — a Palm-OS-style record store (records, categories, secret fields,
-  `db /field:`/`/sort:`), with `export`/`import` to CSV/JSON/TXT/VCF/ICS.
+  `db /field:`/`/sort:`), with `export`/`import` to CSV/JSON/TXT/VCF/ICS and
+  in-place record editing via `edit db <name> <id>` (CSV-safe, sync-stamp
+  preserving).
+- **`pim`** — serial CardDAV-lite sync: `pim get`/`pim put` over PIMX framing
+  with uid/newer-wins merge, plus host-side `tools/pim_sync.py`
+  (`pull`/`push`/`sync` against a mirror directory).
+- **`sync`** — USB-sync handshake for the future P4Sync desktop app: one
+  read-only `sync.*` capability snapshot (see [roadmap.md](roadmap.md) §F).
 - **`alarm`/`cal`** — persisted events with recurrence and a background checker
-  that can run a `/run:` batch file.
+  that can run a `/run:` batch file; `edit alarm <id>` edits one event as
+  INI text (sync identity preserved).
 - **`archive`/`backup`** — USTAR `.p4a` backups with CRC manifests.
 - **`gfind`** — Palm-style global find over `db` records + alarms, plus an
   opt-in `/files` scan of text files (one shared storage search core; no index,
@@ -280,6 +315,7 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - **`crypt`** — AES-256-GCM + PBKDF2 file encryption.
 - **Native app SDK (`applib`)** — transcript stdout (so `myapp > out.txt`
   works), PSRAM-aware allocation, time/input/state helpers, Wi-Fi accessors,
+  message publish/subscribe (`applib_msg.h` over the event service),
   and the native-app ABI (`app_register`).
 
 ### Display, TUI, and graphics
@@ -301,6 +337,9 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - Hosted Wi-Fi on the C6 (station-only) with a known-network list, `wifi scan`
   and rich `wifi status`, plus `ping`, `dns`, `httpget`, and `tcpterm`.
 - An SD **HTTP file server** (`httpd`), `netstat`, and `ipconfig`.
+- An MQTT **event service** (`net` verbs + `/onmsg` batch hook): one task
+  owns a persistent plaintext-LAN session with an SD outbox (offline
+  publishes flush on reconnect) and newer-wins `$pim/...` merges.
 - Hosted BLE (scan/advertise), USB host MSC/HID/CDC-ACM, and C6 OTA.
 - Brightness/rotation, battery, audio, status LED(s), GPIO/PWM/ADC/I2C, and
   power management (idle display-off, sleep, deep-sleep, and `shutdown`).
@@ -361,7 +400,7 @@ ESP-IDF v5.5.5. Full bring-up checklist in [`PORTING.md`](PORTING.md).
 | **Co-processor** | ESP32-C6 over ESP-Hosted SDIO 3.0.6 | ESP32-C6-MINI-1U over ESP-Hosted SDIO 3.0.6 |
 | **Display** | JD9165 1024x600 MIPI-DSI, rotation 0 | 1280x720 MIPI-DSI (native 720x1280, rotation 90), runtime auto-detect ILI9881C / ST7123 / ST7121 (`BOARD_CFG_LCD_FORCE_VERSION` pins it) |
 | **Touch** | GT911 via I2C (GPIO7/8) | GT911 on ILI9881C units, integrated Sitronix TDDI otherwise (INT GPIO23) |
-| **Audio** | ES8311 codec via I2S + GPIO20 amp | ES8388 codec + ES7210 front end via I2S (amp on IO expander) |
+| **Audio** | ES8311 codec via I2S + GPIO20 amp; no headphone jack | ES8388 codec + ES7210 front end via I2S (amp on IO expander); 3.5 mm jack with detect (0x43 P7), speaker auto-mutes on insert (`audio output auto`) |
 | **Battery** | ADC on GPIO53 with a 2:1 divider | INA226 pack gauge (0x41, 5 mOhm) on SYS I2C; charging enabled once at boot; `battery` shows V/A/W/state, `battery diag` dumps registers, header shows `+NN%` while charging |
 | **RGB LED** | WS2812 status LED on GPIO26 | Two Tab5Keyboard RGB LEDs over I2C (`rgb 1\|2 ...`; LED1 = status, LED2 = user) |
 | **Hosted SDIO** | Slot 1, 40 MHz: CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 | Slot 1, **10 MHz**: CLK=12 CMD=13 D0=11 D1=10 D2=9 D3=8, reset GPIO15 (40 MHz crashes on assoc; first RPC retried once via transport reset) |
@@ -409,12 +448,14 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [editor.md](editor.md) | `edit` quick reference |
 | [command.md](command.md) | Complete command reference |
 | [batch.md](batch.md) | Batch app language spec (loops, arrays, strings, game kit) — the single file for writing `.bat` apps |
-| [documentation.md](documentation.md) | Technical architecture |
+| [architecture.md](architecture.md) | System views: context, runtime flows, concurrency, memory, power/reset domains, persistence, board layer, ADRs |
+| [documentation.md](documentation.md) | Technical reference (per-module layout, boot sequence, data flow) |
 | [SDK.md](SDK.md) | Integration guide for extending the system |
 | [API.md](API.md) | Public module API reference |
 | [ABI.md](ABI.md) | Application ABI + package trust (launch model, entry ABI, signing) |
 | [roadmap.md](roadmap.md) | Feature history and future direction |
 | [changelog.md](changelog.md) | Version history |
+| [release.md](release.md) | Pre-public-release gate: version freeze, artifacts, verification ladder, packaging, sign-off |
 | [bugs.md](bugs.md) | Bug campaign template and known quirks |
 | [ai-context.md](ai-context.md) | Working rules for AI-assisted development |
 | [licence.md](licence.md) | MIT license + third-party notices |
@@ -423,8 +464,15 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [harness.md](harness.md) | Full testing harness guide (unit, suites, drivers, diagnostics) |
 | [tools/README.md](tools/README.md) | Host-side drivers and hardware tests |
 | [PORTING.md](PORTING.md) | Board profiles (`boards/`) and bring-up checklist |
+| [schematics.md](schematics.md) | Per-board hardware reference: pinouts, buses, power tree, expander maps |
 | [docs/native_packaging.md](docs/native_packaging.md) | Package spec: bundle layout, hybrid/native types, signed manifests (packaging spec v1.2) |
 | [docs/assets/README.md](docs/assets/README.md) | Public screenshot set + capture guide |
+| [apps/companion/FINDINGS.md](apps/companion/FINDINGS.md) | Companion batch-app findings log (test campaigns) |
+| [assets/fonts/README.md](assets/fonts/README.md) | Vendored/pushed font payloads |
+| [boards/m5stack_tab5/board_bsp/README.md](boards/m5stack_tab5/board_bsp/README.md) \| [boards/m5stack_tab5/board_bsp/API.md](boards/m5stack_tab5/board_bsp/API.md) | Vendored Tab5 BSP notes + API surface |
+| [coprocessor/esp32c6_slave/README.md](coprocessor/esp32c6_slave/README.md) | C6 hosted-slave firmware project |
+| [samples/whoami/README.md](samples/whoami/README.md) | Sample native app (`whoami`) |
+| `apps/templates/*.MD` | Writerdeck new-file seeds (letter/note/log, pushed to `sd:/TEMPLATES/`) |
 
 > **Screenshots:** curated public captures live in `docs/assets/` (see its
 > README for the naming convention and the build-mode capture commands).
@@ -439,9 +487,10 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
   (`python tools/unit_run.py COM3`; non-zero exit on any failure).
 - **Hardware suites:** `python tools/p4test_run.py COM3` runs the shared
   `tools/p4test/` framework over `tools/suites/` (smoke, storage, batch, data,
-  display, editor, input/UI, connectivity, power/audio, performance, apps) and
-  prints a PASS/FAIL table. `python tools/regression.py COM3` remains as the
-  legacy host regression.
+  display, editor, input/UI, connectivity, power/audio, performance, apps,
+  p4sync, netsvc) and prints a PASS/FAIL table. `python tools/regression.py COM3`
+  remains as the legacy host regression. The netsvc live checks need a LAN
+  MQTT broker; without one they record notes, not failures.
 - **Dogfooding:** `python tools/dogfood.py COM3 --minutes 15` autonomously
   drives the board like a curious user, screenshots every action, and journals
   anomalies (panics, timeouts, "BSOD" frames, heap decline).

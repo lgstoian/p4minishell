@@ -15,6 +15,7 @@
 
 #include "unity.h"
 #include "shell.h"
+#include "command.h"
 #include "p4minishell_config.h"
 #include <string.h>
 
@@ -259,4 +260,100 @@ void test_find_unquoted_pipe(void)
     found = shell_find_unquoted_char(buf, '|');
     TEST_ASSERT_NOT_NULL(found);
     TEST_ASSERT_EQUAL('|', *found);
+}
+
+/* ========================================================================
+ * REDIRECTION TARGET DEVICES
+ * ======================================================================== */
+
+void test_redirect_target_kind(void)
+{
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_NUL, shell_redirect_target_kind("NUL"));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_NUL, shell_redirect_target_kind("nul"));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_NUL, shell_redirect_target_kind("NUL.txt"));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_CON, shell_redirect_target_kind("CON"));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_CON, shell_redirect_target_kind("con."));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_FILE, shell_redirect_target_kind("out.txt"));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_FILE, shell_redirect_target_kind("NULL"));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_FILE, shell_redirect_target_kind("CONSOLE"));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_FILE, shell_redirect_target_kind(""));
+    TEST_ASSERT_EQUAL(SHELL_REDIRECT_FILE, shell_redirect_target_kind(NULL));
+}
+
+/* ========================================================================
+ * REDIRECTION PARSING: MISSING TARGETS AND HANDLE PREFIXES
+ * ======================================================================== */
+
+void test_redirect_parse_missing_target(void)
+{
+    char buf[64];
+    char *part = NULL;
+    char *target = NULL;
+    char *input = NULL;
+    bool append = false;
+    bool missing = false;
+
+    strcpy(buf, "echo hi >");
+    TEST_ASSERT_TRUE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_TRUE(missing);
+
+    strcpy(buf, "sort <");
+    missing = false;
+    TEST_ASSERT_TRUE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_TRUE(missing);
+
+    /* A present target is not missing; last direction wins. */
+    strcpy(buf, "echo hi > f.txt");
+    missing = true;
+    TEST_ASSERT_TRUE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_FALSE(missing);
+    TEST_ASSERT_EQUAL_STRING("f.txt", target);
+    TEST_ASSERT_FALSE(append);
+
+    strcpy(buf, "echo hi >> f.txt");
+    missing = true;
+    TEST_ASSERT_TRUE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_FALSE(missing);
+    TEST_ASSERT_TRUE(append);
+
+    /* No operator at all: nothing found, nothing missing. */
+    strcpy(buf, "dir");
+    missing = true;
+    TEST_ASSERT_FALSE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_FALSE(missing);
+
+    /* NULL-tolerant like the other parser helpers. */
+    TEST_ASSERT_FALSE(shell_parse_redirection(NULL, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_FALSE(shell_parse_redirection(buf, NULL, &target, &append, &input, &missing));
+}
+
+void test_redirect_parse_handle_prefix(void)
+{
+    char buf[64];
+    char *part = NULL;
+    char *target = NULL;
+    char *input = NULL;
+    bool append = false;
+    bool missing = true;
+
+    /* `2>` merges into the transcript stream: the digit is consumed. */
+    strcpy(buf, "echo hi 2> f.txt");
+    TEST_ASSERT_TRUE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_FALSE(missing);
+    TEST_ASSERT_EQUAL_STRING("echo hi", part);
+    TEST_ASSERT_EQUAL_STRING("f.txt", target);
+
+    strcpy(buf, "echo hi 2>> f.txt");
+    missing = true;
+    TEST_ASSERT_TRUE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_FALSE(missing);
+    TEST_ASSERT_TRUE(append);
+    TEST_ASSERT_EQUAL_STRING("f.txt", target);
+
+    /* A digit separated by space is data, not a handle. */
+    strcpy(buf, "echo 2 > f.txt");
+    missing = true;
+    TEST_ASSERT_TRUE(shell_parse_redirection(buf, &part, &target, &append, &input, &missing));
+    TEST_ASSERT_FALSE(missing);
+    TEST_ASSERT_EQUAL_STRING("echo 2", part);
 }

@@ -60,6 +60,8 @@ void test_editor_osk_key_from_label(void)
     TEST_ASSERT_EQUAL_INT(EDITOR_KEY_FOCUS_TOGGLE, key);
     TEST_ASSERT_TRUE(editor_osk_key_from_label("Spell", &key));
     TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SPELL_TOGGLE, key);
+    TEST_ASSERT_TRUE(editor_osk_key_from_label("AddWord", &key));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SPELL_ADD, key);
     TEST_ASSERT_TRUE(editor_osk_key_from_label("Reload", &key));
     TEST_ASSERT_EQUAL_INT(EDITOR_KEY_RELOAD, key);
     TEST_ASSERT_TRUE(editor_osk_key_from_label("Find", &key));
@@ -118,6 +120,27 @@ void test_editor_osk_key_from_label(void)
     TEST_ASSERT_FALSE(editor_osk_key_from_label("bogus", &key));
     TEST_ASSERT_FALSE(editor_osk_key_from_label("abc", &key));
     TEST_ASSERT_FALSE(editor_osk_key_from_label("a", &key));
+}
+
+void test_editor_key_from_usb_spell(void)
+{
+    /* Physical keyboards (USB HID and the Tab5 keyboard module) reach the
+     * editor through shell_usb_keyboard_input() -> editor_key_from_usb().
+     * HID usage IDs: 0x07='d', 0x13='s', 0x1A='z'; modifier 0x01/0x10 = L/R
+     * Ctrl, 0x02/0x20 = L/R Shift. */
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SPELL_ADD,
+                          editor_key_from_usb(0x07, 0x01, 'd'));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SPELL_ADD,
+                          editor_key_from_usb(0x07, 0x10, 'D'));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SPELL_TOGGLE,
+                          editor_key_from_usb(0x13, 0x03, 'S'));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_SAVE,
+                          editor_key_from_usb(0x13, 0x01, 's'));
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_UNDO,
+                          editor_key_from_usb(0x1A, 0x01, 'z'));
+    /* No modifier: plain typing, not a command. */
+    TEST_ASSERT_EQUAL_INT(EDITOR_KEY_NONE,
+                          editor_key_from_usb(0x07, 0x00, 'd'));
 }
 
 void test_editor_new_doc(void)
@@ -1019,6 +1042,67 @@ void test_editor_lex_markdown(void)
     TEST_ASSERT_EQUAL_size_t(0, editor_lex_markdown("abc", 3, runs, 0));
 }
 
+void test_editor_lex_html(void)
+{
+    editor_syntax_run_t runs[16];
+    size_t n;
+
+    /* Tag: '<' cyan, name yellow (bold). */
+    n = editor_lex_html("<a href=\"x\">t</a>", 17, runs, 16);
+    TEST_ASSERT(n >= 2);
+    TEST_ASSERT_EQUAL_size_t(0, runs[0].start);
+    TEST_ASSERT_EQUAL_size_t(1, runs[0].length);
+    TEST_ASSERT_EQUAL(ANSI_COLOR_BRIGHT_CYAN, runs[0].color);
+    {
+        bool found_name = false;
+        size_t i;
+        for (i = 0; i < n; i++) {
+            if (runs[i].color == ANSI_COLOR_BRIGHT_YELLOW && runs[i].start == 1) {
+                found_name = true;
+            }
+        }
+        TEST_ASSERT_TRUE(found_name);
+    }
+    /* Comment is one green run spanning the line. */
+    n = editor_lex_html("<!-- c -->", 10, runs, 16);
+    TEST_ASSERT_EQUAL_size_t(1, n);
+    TEST_ASSERT_EQUAL(ANSI_COLOR_BRIGHT_GREEN, runs[0].color);
+    /* Doctype is magenta. */
+    n = editor_lex_html("<!DOCTYPE html>", 15, runs, 16);
+    TEST_ASSERT_EQUAL_size_t(1, n);
+    TEST_ASSERT_EQUAL(ANSI_COLOR_BRIGHT_MAGENTA, runs[0].color);
+    /* NULL safety. */
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_html(NULL, 4, runs, 16));
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_html("abc", 3, NULL, 16));
+    TEST_ASSERT_EQUAL_size_t(0, editor_lex_html("abc", 3, runs, 0));
+}
+
+void test_editor_html_comment_toggle(void)
+{
+    editor_doc_t *doc = editor_doc_new("PAGE.HTML");
+    size_t n;
+
+    TEST_ASSERT_NOT_NULL(doc);
+    TEST_ASSERT_EQUAL(EDITOR_SYNTAX_HTML, doc->syntax);
+    editor_doc_insert_bytes(doc, "hello", 5);
+    n = editor_doc_comment_toggle(doc);
+    TEST_ASSERT_EQUAL_size_t(1, n);
+    {
+        char *s = line_str(doc, 0);
+        TEST_ASSERT_EQUAL_STRING("<!-- hello -->", s);
+        free(s);
+    }
+    /* Toggling again strips the HTML comment markers. */
+    n = editor_doc_comment_toggle(doc);
+    TEST_ASSERT_EQUAL_size_t(1, n);
+    {
+        char *s = line_str(doc, 0);
+        TEST_ASSERT_EQUAL_STRING("hello", s);
+        free(s);
+    }
+    editor_doc_free(doc);
+}
+
 void test_editor_spell_tokenizer(void)
 {
     unsigned long cp = 0;
@@ -1065,6 +1149,94 @@ void test_editor_spell_tokenizer(void)
     TEST_ASSERT_FALSE(editor_spell_is_joiner('a'));
 }
 
+void test_editor_spell_user_validation(void)
+{
+    char over[P4_CONFIG_SPELL_WORD_MAX + 8];
+
+    /* Rejections happen before any SD touch. */
+    TEST_ASSERT_FALSE(spell_user_learn(NULL, 0));
+    TEST_ASSERT_FALSE(spell_user_learn("", 0));
+    memset(over, 'x', sizeof(over));
+    TEST_ASSERT_FALSE(spell_user_learn(over, sizeof(over)));
+    TEST_ASSERT_FALSE(spell_user_learn("has space", 9));
+    TEST_ASSERT_FALSE(spell_user_learn("a\nb", 3));
+    TEST_ASSERT_FALSE(spell_user_learn("tab\there", 8));
+    TEST_ASSERT_FALSE(spell_user_forget(NULL, 0));
+    TEST_ASSERT_FALSE(spell_user_forget("", 0));
+}
+
+void test_editor_spell_ignore_session(void)
+{
+    spell_ignored_clear();
+    TEST_ASSERT_EQUAL_size_t(0, spell_ignored_count());
+
+    /* Memory-only: add, idempotent re-add, clear. */
+    TEST_ASSERT_TRUE(spell_ignore("Zebra", 5));
+    TEST_ASSERT_EQUAL_size_t(1, spell_ignored_count());
+    TEST_ASSERT_TRUE(spell_ignore("zebra", 5));
+    TEST_ASSERT_EQUAL_size_t(1, spell_ignored_count());
+    TEST_ASSERT_TRUE(spell_ignore("quux", 4));
+    TEST_ASSERT_EQUAL_size_t(2, spell_ignored_count());
+
+    /* Bad inputs rejected. */
+    TEST_ASSERT_FALSE(spell_ignore(NULL, 0));
+    TEST_ASSERT_FALSE(spell_ignore("", 0));
+
+    spell_ignored_clear();
+    TEST_ASSERT_EQUAL_size_t(0, spell_ignored_count());
+}
+
+void test_editor_spell_user_list_empty(void)
+{
+    char buf[16];
+
+    spell_user_unload();
+    TEST_ASSERT_EQUAL_size_t(0, spell_user_count());
+    TEST_ASSERT_EQUAL_size_t(0, spell_user_list(buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("", buf);
+    TEST_ASSERT_EQUAL_size_t(0, spell_user_list(NULL, 0));
+}
+
+void test_editor_cursor_word(void)
+{
+    editor_doc_t *doc = editor_doc_new(NULL);
+    char buf[65];
+
+    TEST_ASSERT_NOT_NULL(doc);
+    editor_doc_insert_bytes(doc, "hello brave world", 17);
+    doc->cursor_row = 0;
+
+    /* Mid-word positions expand to the whole token. */
+    doc->cursor_col = 8;
+    TEST_ASSERT_TRUE(editor_doc_cursor_word(doc, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("brave", buf);
+
+    /* Cursor at EOL/whitespace still finds the adjacent word. */
+    doc->cursor_col = 17;
+    TEST_ASSERT_TRUE(editor_doc_cursor_word(doc, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("world", buf);
+
+    /* ASCII punctuation trims from both ends, interior kept. */
+    editor_doc_free(doc);
+    doc = editor_doc_new(NULL);
+    editor_doc_insert_bytes(doc, "(don't!)", 8);
+    doc->cursor_row = 0;
+    doc->cursor_col = 3;
+    TEST_ASSERT_TRUE(editor_doc_cursor_word(doc, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("don't", buf);
+
+    /* Empty line, NULLs, tiny buffer all fail safely. */
+    editor_doc_free(doc);
+    doc = editor_doc_new(NULL);
+    doc->cursor_row = 0;
+    doc->cursor_col = 0;
+    TEST_ASSERT_FALSE(editor_doc_cursor_word(doc, buf, sizeof(buf)));
+    TEST_ASSERT_FALSE(editor_doc_cursor_word(NULL, buf, sizeof(buf)));
+    TEST_ASSERT_FALSE(editor_doc_cursor_word(doc, NULL, sizeof(buf)));
+    TEST_ASSERT_FALSE(editor_doc_cursor_word(doc, buf, 0));
+    editor_doc_free(doc);
+}
+
 void test_editor_word_count(void)
 {
     editor_doc_t *doc = editor_doc_new(NULL);
@@ -1076,5 +1248,45 @@ void test_editor_word_count(void)
     editor_doc_insert_bytes(doc, "  two   more ", 12);
     TEST_ASSERT_EQUAL_size_t(5, editor_doc_word_count(doc));
     TEST_ASSERT_EQUAL_size_t(0, editor_doc_word_count(NULL));
+    editor_doc_free(doc);
+}
+
+void test_editor_csv_renders_as_plain_lines(void)
+{
+    /* A db CSV payload staged for `edit db` (a temp `.txt` keeps the TEXT
+     * type): quoted commas/quotes/`=` cells render as plain lines,
+     * byte-exact. */
+    static const char csv[] =
+        "id,name,note\n"
+        "1,Ann,\"hi, \"\"yo\"\"\"\n"
+        "2,Bob,x=1";
+    editor_doc_t *doc = editor_doc_new("REC.TXT");
+    char *l0;
+    char *l1;
+    char *l2;
+
+    TEST_ASSERT_NOT_NULL(doc);
+    TEST_ASSERT_EQUAL(EDITOR_SYNTAX_PLAIN, doc->syntax);
+    editor_doc_insert_bytes(doc, csv, strlen(csv));
+    TEST_ASSERT_EQUAL_size_t(3, editor_doc_line_count(doc));
+    l0 = line_str(doc, 0);
+    l1 = line_str(doc, 1);
+    l2 = line_str(doc, 2);
+    TEST_ASSERT_EQUAL_STRING("id,name,note", l0);
+    TEST_ASSERT_EQUAL_STRING("1,Ann,\"hi, \"\"yo\"\"\"", l1);
+    TEST_ASSERT_EQUAL_STRING("2,Bob,x=1", l2);
+    free(l0);
+    free(l1);
+    free(l2);
+    editor_doc_free(doc);
+}
+
+void test_editor_csv_extension_is_plain(void)
+{
+    /* `.csv` is not a highlighted syntax: deterministic PLAIN rendering. */
+    editor_doc_t *doc = editor_doc_new("DATA.CSV");
+
+    TEST_ASSERT_NOT_NULL(doc);
+    TEST_ASSERT_EQUAL(EDITOR_SYNTAX_PLAIN, doc->syntax);
     editor_doc_free(doc);
 }

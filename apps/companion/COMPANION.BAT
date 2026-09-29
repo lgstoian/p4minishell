@@ -6,6 +6,7 @@ rem  COMPANION.BAT - entry point for the P4 Companion.
 rem  Enhanced TUI with fullscreen, draw boxes, and status.
 rem =====================================================================
 setlocal
+title "P4 Companion"
 gosub LIB.BAT::load_settings
 
 :main_menu
@@ -23,13 +24,7 @@ draw box 1 20 80 3 single
 draw text 5 22 "Use list to select, ESC to cancel"
 echo [C-MENU]
 list "P4 Companion" "Live System" "File Tools" "Network Tools" "Fun / Demos" "Settings" "Exit"
-if errorlevel 255 goto main_menu
-if errorlevel 5 goto :opt_exit
-if errorlevel 4 goto :opt_settings
-if errorlevel 3 goto :opt_fun
-if errorlevel 2 goto :opt_net
-if errorlevel 1 goto :opt_files
-if errorlevel 0 goto :opt_sys
+on %errorlevel%+1 goto :opt_sys,:opt_files,:opt_net,:opt_fun,:opt_settings,:opt_exit
 goto main_menu
 
 :opt_sys

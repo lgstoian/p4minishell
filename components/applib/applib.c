@@ -10,7 +10,8 @@
  *   1. Console output through the shell transcript (the redirection layer).
  *   2. A single memory-allocation policy plus debug-log error reporting.
  *   3. Time / timer / sleep / system-info helpers over clock and FreeRTOS.
- *   4. Wi-Fi state accessors routed through a registered ops table.
+ *   4. Wi-Fi state accessors routed through a registered ops table, plus
+ *      message publish/subscribe through the netsvc service ops table.
  *
  * Layering: this component depends only on `shell` and `clock` (plus the
  * FreeRTOS / heap / esp_timer IDF components). It never includes
@@ -505,6 +506,46 @@ const char *app_wifi_state_string(void)
         return "n/a";
     }
     return s_net_ops.wifi_state_string();
+}
+
+/* ========================================================================
+ * 4b. MESSAGING HELPERS (publish/subscribe through the registered ops table)
+ * ======================================================================== */
+
+static applib_msg_ops_t s_msg_ops;
+
+void applib_register_msg_ops(const applib_msg_ops_t *ops)
+{
+    if (ops != NULL) {
+        s_msg_ops = *ops;
+    } else {
+        s_msg_ops.msg_publish = NULL;
+        s_msg_ops.msg_subscribe = NULL;
+        s_msg_ops.msg_connected = NULL;
+    }
+}
+
+bool app_msg_publish(const char *topic, const char *text)
+{
+    size_t len;
+    if (s_msg_ops.msg_publish == NULL || topic == NULL || topic[0] == '\0') {
+        return false;
+    }
+    len = (text != NULL) ? strlen(text) : 0;
+    return s_msg_ops.msg_publish(topic, (const uint8_t *)text, len) == 0;
+}
+
+bool app_msg_subscribe(const char *filter)
+{
+    if (s_msg_ops.msg_subscribe == NULL || filter == NULL || filter[0] == '\0') {
+        return false;
+    }
+    return s_msg_ops.msg_subscribe(filter) == 0;
+}
+
+bool app_msg_connected(void)
+{
+    return (s_msg_ops.msg_connected != NULL) ? s_msg_ops.msg_connected() : false;
 }
 
 /* ========================================================================

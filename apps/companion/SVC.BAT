@@ -10,6 +10,7 @@ rem  calendar checks and DB maintenance running while the shell stays live.
 rem  Markers: [M-SVC] / [M-SVC-TICK] / [M-SVC] stopped.
 rem =====================================================================
 echo [M-SVC] service started
+title "Companion Service"
 notify "background service running" /t:3
 :loop
 rem Each tick: report the next scheduled alarm and keep the record store

@@ -7,7 +7,7 @@
 > for architecture see [`documentation.md`](documentation.md); for the
 > step-by-step tutorial see [`tutorial_batch.md`](tutorial_batch.md).
 
-- **Version:** v1.2.1 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
+- **Version:** v1.3.0 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
   (FATFS long filenames are UTF-8) · **Size:** ≤128 KB runs RAM-resident
   (`P4_CONFIG_BATCH_FILE_MAX_BYTES`); larger files stream from SD with
   identical semantics.
@@ -62,6 +62,10 @@ the shim ` [hybrid]`. The frozen contract and the C side live in
 
 - `@` as the first character suppresses per-line echo for that line;
   `@echo off` silences the file (restored per frame).
+- `echo.`, `echo/`, `echo(`, `echo:` print a blank line (DOS parity); with
+  text after the separator (`echo.Hello`) that text prints, so portable
+  scripts keep their blank-line idioms. The glued text is literal: `echo.on`
+  prints `on` and never toggles batch echo (only the exact `echo on` does).
 - `rem <text>` and `::` are comments, **opaque to end of line**: `rem a | b`
   never pipes, `rem x > f` never writes. (The comment gate runs before the
   chain/pipe/redirect parsers.)
@@ -98,12 +102,19 @@ One scanner backs all five surfaces, so they never disagree. Rules:
   on failure. Splitting happens *before* expansion, so a variable whose value
   contains `&` cannot inject a command.
 - **Pipes:** `cmd1 | cmd2 | ...` (up to `P4_CONFIG_PIPE_STAGE_MAX` stages).
-  Each stage but the last spools to an SD temp file; the next stage reads it.
-  A `.bat` file can sit mid-pipeline (stdin via `for /f ... in ()`,
-  `set /p NAME=<`, or a text tool; stdout via `echo` / `>`).
+  Each stage but the last spools to an SD temp file under `sd:/tmp` (shared
+  temp core, boot-cleaned); the next stage reads it. A `.bat` file can sit
+  mid-pipeline (stdin via `for /f ... in ()`, `set /p NAME=<`, or a text
+  tool; stdout via `echo` / `>`).
 - **Redirection:** `>` / `>>` capture stdout (transcript delta), `<` feeds
   stdin. Quote-aware; last occurrence of each direction wins (COMMAND.COM).
-  Target paths resolve against the cwd.
+  Target paths resolve against the cwd. A bare operator with no target
+  (`echo hi >`) is a syntax error (ERRORLEVEL 2). A `0`/`1`/`2` glued
+  before the operator is a stream handle and merges into the one transcript
+  stream (`2>` behaves as `>`; there is no separate stderr). DOS devices:
+  `> NUL` discards, `> CON` prints to the transcript, `< NUL` reads
+  end-of-file, `< CON` reads the console. A line of only redirections
+  (`> f`) truncates/creates the file.
 - A batch file is a valid pipe stage and a valid redirect target/source.
 
 ---
@@ -289,7 +300,8 @@ for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do <cmd>
 
 Iterates file lines (or the active `< file` / pipe source when the set is
 empty, or a command's captured output with `in ('command')`). Options:
-`eol=` (comment marker), `skip=` (leading lines), `delims=` (default space +
+`eol=` (comment marker, default `;` like cmd.exe — an explicit empty `eol=`
+disables the filter), `skip=` (leading lines), `delims=` (default space +
 tab; empty `delims=` = whole line one token), `tokens=` (1-based indices
 bound to consecutive letters `%%a %%b ...`; `*` captures the rest).
 The mechanism behind BASIC `READ`/`DATA`/`INPUT#` verbs.
@@ -345,9 +357,11 @@ pristine text. Countdown: `while n GTR 0 do set /a n=n-1`.
   when the condition holds, the `else` group when it does not. Groups cannot
   hold unbalanced parens; multi-line branches stay `:label` + `goto`/`gosub`
   subroutines (see §17).
-- `shift` slides `%1`..`%9`. `proc` introspects the stack (`/args` `/name`
-  `/depth` `/errorlevel` `/echo` `/stdin`); `proc /labels` and `proc /goto`
-  report scanned labels / pending goto.
+- `shift` slides `%1`..`%9`. `shift /n` slides only `%n` onward (DOS
+  parity), leaving `%0`..`%(n-1)` in place; `/0` is a plain shift.
+  `proc` introspects the stack (`/args` `/name` `/depth` `/errorlevel`
+  `/echo` `/stdin`); `proc /labels` and `proc /goto` report scanned
+  labels / pending goto.
 - `exit /b [code]` leaves one file; bare `exit` unwinds every level.
 
 ---
@@ -359,7 +373,8 @@ pristine text. Countdown: `while n GTR 0 do set /a n=n-1`.
   redirect/pipe instead of the keyboard (BASIC `INPUT#`).
 - `pause`, `choice [/C:keys] [/N] [/T:c,secs] [/S] [text]` (ERRORLEVEL =
   1-based key index), `delay <ms>` (pure deterministic wait — melodies and
-  demos; unlike light-sleep `sleep`).
+  demos; unlike light-sleep `sleep`), `title [text]` (session title:
+  bare reports it, empty clears it, also listed by `sysinfo`).
 - Native modal surfaces (shared `components/modal/` runtime, never a private
   loop): `dialog`, `list` (serial selection is 1-based, ERRORLEVEL is the
   0-based index, `q` cancels with 255), `ask`, `browse`, `view`, `hexview`,
@@ -373,6 +388,13 @@ pristine text. Countdown: `while n GTR 0 do set /a n=n-1`.
   break (`abort_cancels` surfaces poll it every 100 ms).
 - When a screen is static (same fields every run), declare it once as a
   `.FRM` file instead of hand-rolling the verbs — see §13.
+- **Event service:** `net sub <filter>` listens on the shared MQTT session;
+  `net onmsg <line...>` runs one batch line per arrival with `$NET_TOPIC` /
+  `$NET_LEN` set (the payload itself comes from `net msg`, which is
+  redirectable). Like the `alarm` `/run:` hook, the hook fires on the
+  command worker — keep it short, queue work with files/`db`, and never
+  block on keys or modals inside it. `net pub` journals while offline and
+  flushes on reconnect, so a hook script can answer with `net pub` safely.
 
 ---
 
@@ -509,8 +531,9 @@ prechecks, partial-file cleanup):
   exact confirmation word and refuse headless.
 - Records: `db` (Palm-OS-style `k=v;k=v` payloads, `/field:` `/sort:`),
   `csv rows|cols|cell|eval` (`=EXPR` via `calc`, `R<row>C<col>` refs),
-  `export`/`import` (`csv|json|txt`, plus `vcf`/`ics`), `archive`/`backup`
-   (USTAR `.p4a` + CRC), `crypt lock|unlock` (AES-256-GCM/PBKDF2, 512-byte
+  `export`/`import` (`csv|json|txt`, plus `vcf`/`ics`), `pim get|put`
+  (serial PIM sync over PIMX, merge by uid with newer-wins), `archive`/`backup`
+  (USTAR `.p4a` + CRC), `crypt lock|unlock` (AES-256-GCM/PBKDF2, 512-byte
    chunks + `components/swgcm/` software fallback, zeroed secrets, `/p:` masked),
    `alarm`/`cal` (persisted events + `/run:` batch hook), `timer`/`stopwatch`, `gfind` (global find over db + alarms, plus an
   opt-in `/files` text scan, with secret/conceal
@@ -559,9 +582,13 @@ prechecks, partial-file cleanup):
   freezes the loop for seconds — capture once after.
 - **Audio:** `beep`, `tone <freq> [ms]`, `wavplay <file>`
   (16-bit PCM mono/stereo 22050/44100 Hz), `audio status|stop`,
+  `audio output [auto|speaker|headphones] [/b] [/v:NAME]`,
   `volume <0-100>`. Single background slot (`audio stop` cuts it); batch
   files never block. First `tone` after boot logs a benign `i2s_common`
-  error while still playing (managed-codec open path).
+  error while still playing (managed-codec open path). Jack-aware scripts
+  read the route with `audio output /b` or `/v:ROUTE` (route is `speaker` on
+  boards without a jack); `audio output headphones` mutes the speaker amp
+  where one exists.
 - **Idle/power:** `power idle`, `sleep`, `deepsleep` (timer/GPIO wake —
   touch wake is honestly unavailable), `shutdown`/`poweroff` (PMIC cut on
   Tab5, deep sleep on reference). New input sources must notify activity so
@@ -581,7 +608,7 @@ prechecks, partial-file cleanup):
   `dlopen`). See [`ABI.md`](ABI.md) and `docs/native_packaging.md`.
   `tools/newapp.py` scaffolds an `applib` component from `samples/whoami/`.
 - **Test your app:** `python tools/p4test_run.py <COM> --only s06_batch`
-  (109 language checks) and `--only s14_apps` (reference apps, incl. the
+  (120+ language checks) and `--only s14_apps` (reference apps, incl. the
   `appdiff` golden gate — app transcript output must stay byte-stable).
   New language coverage belongs in `tools/suites/s06_batch.py` plus the
   on-board Unity pure-helper tests (`test/main/test_*.c`, run with

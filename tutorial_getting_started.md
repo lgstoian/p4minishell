@@ -160,6 +160,7 @@ header mode auto          responsive status bar
 brightness 80
 rotate 90
 power idle 120            blank the backlight after 2 minutes idle
+volume 60                 speaker level (Tab5: plugging in headphones auto-mutes)
 ```
 
 ## 10. Get help

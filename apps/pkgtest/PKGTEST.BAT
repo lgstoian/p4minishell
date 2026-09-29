@@ -7,5 +7,6 @@ rem  bundle PKGS/PKGTEST by `pkg install PKGTEST`; uninstalled with
 rem  `pkg remove PKGTEST`. Markers: [M-PKGTEST] / [M-PKGTEST-DONE].
 rem =====================================================================
 echo [M-PKGTEST]
+title "Package Test"
 echo pkgtest: installed package is running
 echo [M-PKGTEST-DONE]

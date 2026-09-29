@@ -444,7 +444,7 @@ void test_forf_options_defaults(void)
     TEST_ASSERT_EQUAL(1, opts.token_count);
     TEST_ASSERT_EQUAL(1, opts.token_list[0]);
     TEST_ASSERT_EQUAL(0, opts.skip);
-    TEST_ASSERT_EQUAL('\0', opts.eol);
+    TEST_ASSERT_EQUAL(';', opts.eol);
     TEST_ASSERT_FALSE(opts.star);
 }
 

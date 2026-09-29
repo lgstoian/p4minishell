@@ -10,6 +10,7 @@ rem  Needs PHOTO.BMP from apps/push_assets.py (SD root). Markers: [M-PICS].
 rem =====================================================================
 setlocal
 echo [M-PICS]
+title "Pictures"
 goto menu
 
 :menu
@@ -17,12 +18,8 @@ draw clear screen
 draw box 1 1 80 3 double "PICS"
 draw text 5 2 "BMP image support" 14
 list "Pictures" "View PHOTO.BMP (full color)" "Draw into TUI (16 color)" "Blit to gfx canvas" "Image info" "Back"
-if errorlevel 255 goto back
-if errorlevel 4 goto back
-if errorlevel 3 goto info
-if errorlevel 2 goto canvas
-if errorlevel 1 goto tui
-goto view
+on %errorlevel%+1 goto :view,:tui,:canvas,:info,:back
+goto back
 
 :view
 view PHOTO.BMP

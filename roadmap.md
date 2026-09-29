@@ -4,239 +4,202 @@ P4MiniShell is a **software framework for building palmtops, PDAs,
 writerdecks, and similar handhelds on the ESP32-P4 + ESP32-C6**. This document
 records how the framework evolved and where it is going.
 
-The application model is deliberately **batch-first**: an on-SD `.bat` file is
-an app, and a native C SDK (`applib`) supplies the polished surfaces batch
-cannot draw. Every app — pure batch, hybrid, or native-linked — launches
-through a `.bat` shim; the frozen contract is [`ABI.md`](ABI.md). See
-[`readme.md`](readme.md) for the feature tour and
+The application model is **batch-first**: an on-SD `.bat` file is an app, and a
+native C SDK (`applib`) supplies the polished surfaces batch cannot draw. Every
+app launches through a `.bat` shim; the frozen contract is [`ABI.md`](ABI.md).
+See [`readme.md`](readme.md) for the feature tour and
 [`documentation.md`](documentation.md) for the architecture.
 
 ---
 
 ## Part 1 — How we got here
 
-Grouped by milestone rather than by version. Full per-version detail is in
+Grouped by milestone. Full per-version detail is in
 [`changelog.md`](changelog.md).
 
 ### 1. Foundation (v0.1 – v0.13)
 
-- Embedded shell on LVGL with a coloured transcript, prompt input line, command
-  history, on-screen keyboard, UART console bridge, and a fixed status header.
-- Window/display/keyboard managers, rotation, brightness, and a central config
-  header.
-- First DOS-style file verbs, ANSI colour processing, and the unit-test project.
+Shell on LVGL with coloured transcript, prompt, history, OSK, UART bridge,
+status header. Window/display/keyboard managers, rotation, brightness, central
+config. First DOS file verbs, ANSI colour, unit-test project.
 
 ### 2. Architecture and shell core (v0.14 – v0.17)
 
-- Split the monolithic command code into modules; established the one-way
-  dependency graph and the `shell_command_ops_t` / `batch_command_ops_t`
-  registration tables that invert the only upward dependencies.
-- Restored the extended DOS command set (`attrib`, `label`, `xcopy`, wildcard
-  matching).
+Split monolithic command code into modules; established one-way dependency graph
+and `shell_command_ops_t` / `batch_command_ops_t` registration tables. Restored
+extended DOS commands (`attrib`, `label`, `xcopy`, wildcards).
 
 ### 3. DOS language completeness (v0.18 – v0.21)
 
-- Batch control flow: `if`/`goto`/`shift`/`pause`/`choice`/`setlocal`/`exit /b`,
-  a runtime prompt template, and a real keypress-wait facility.
-- Pipes and `<` input redirection; quoting (`" "`, `' '`, `^`), command
-  chaining (`&`, `&&`, `||`), `set /a` integer arithmetic, `set /p`, and line
-  continuation.
-- Volume management (`chkdsk`/`format`), the full `dir` switch set, attribute
-  preservation, and free-space guardrails.
+Batch control flow: `if`/`goto`/`shift`/`pause`/`choice`/`setlocal`/`exit /b`,
+runtime prompt template, keypress-wait. Pipes, `<` redirection, quoting (`" "`,
+`' '`, `^`), chaining (`&`, `&&`, `||`), `set /a`, `set /p`, line
+continuation. Volume management, full `dir` switches, attribute preservation,
+free-space guardrails.
 
 ### 4. Hardening, devices, and the editor (v0.22 – v0.24)
 
-- Semantic colour palette and print helpers; memory- and crash-hardening sweeps.
-- Device subsystems: recycle bin, `findstr`/`comp`/`xcopy /S`, task
-  introspection (`ps`/`tasks`/`top` + CPU graph), `config` settings, boot
-  scripting (`CONFIG.SYS`/`AUTOEXEC.BAT`), idle display-off, audio, clipboard,
-  tab completion, SD-backed history, HTTP file server, known Wi-Fi networks,
-  the WS2812 status LED, and the peripheral toolkit (PWM/ADC/I2C/SPI).
-- The `edit` text editor (touch-first, with undo, find/replace, and Save-As).
+Semantic colour palette; memory- and crash-hardening. Device subsystems: recycle
+bin, `findstr`/`comp`/`xcopy /S`, task introspection (`ps`/`tasks`/`top`),
+`config` settings, boot scripting (`CONFIG.SYS`/`AUTOEXEC.BAT`), idle
+display-off, audio, clipboard, tab completion, SD-backed history, HTTP server,
+known Wi-Fi networks, WS2812 LED, peripheral toolkit (PWM/ADC/I2C/SPI). The
+`edit` text editor (touch-first, undo, find/replace, Save-As). The 2026-09-18
+writerdeck audit later closed all 16 parity/robustness gaps (ordered lists, GFM
+tables, images/task lists, inline nesting, flanking/escape rules, HTML
+truncation, export handling, print paginator, template validation,
+focus+preview composition, spell tokenizer, `WRITER.BAT` end-to-end, provision
+scripts, and corrected docs).
 
 ### 5. Apps, data, and connectivity (v0.30 – v0.33)
 
-- Serial file transfer (`receive`/`send`) and screenshot framing.
-- Shared-SDMMC reliability fixes; ESP-Hosted 3.0.6.
-- Batch-first app model: native-app ABI, `applib`, PATH/`APPS` discovery with
-  `launch` and `APPINFO`, the batch process model (`proc`/`%ERRORLEVEL%`),
-  shared batch libraries (`call file::routine`), and native modal surfaces
-  (`dialog`/`list`/`ask`).
-- Palm-OS-style `db` record store and SD-persisted `alarm`/`cal`.
+Serial file transfer (`receive`/`send`) and screenshot framing. Shared-SDMMC
+reliability; ESP-Hosted 3.0.6. Batch-first app model: native ABI, `applib`,
+PATH/`APPS` discovery with `launch`/`APPINFO`, batch process model
+(`proc`/`%ERRORLEVEL%`), shared libraries (`call file::routine`), native modals
+(`dialog`/`list`/`ask`). Palm-OS `db` store, `alarm`/`cal`.
 
 ### 6. Palmtop parity (v0.34 – v0.38)
 
-- FX-870P/VX-4 style `calc` (math + string + financial/date functions, angle
-  modes, base conversions) and the BASIC-to-batch mapping.
-- Display/graphics: the 80x25 TUI cell buffer and `draw` verbs, the `gfx`
-  RGB565 canvas with sprites and BMP support, and the `plot` graph layer.
-- App ecosystem: `crc32`/`asset` manifests, `pkg` install bundles, UI themes,
-  the font registry with SD TTFs and CJK fallback, markdown rendering, and
-  reference apps (`companion`, `tcmd`, `snake`, `elite`, `adventure`, `notes`,
-  `mood`, `gfxdemo`, `pics`).
-- Data/state: `csv` grid + `=EXPR`, `export`/`import` interchange, `archive`
-  backups, `crypt` encryption, `ini`/`appconfig`/`temp`.
-- Experience: responsive colour-coded header, notification queue, network clock
-  with auto timezone, background jobs (`start`/`taskkill`), macro recorder,
-  F-key binds, `tcpterm`, `usb userial`, boot splash, and device security.
-- Reliability campaign: transcript batching, boot internal-RAM relief, SD/C6
-  bring-up ordering, the MIPI-DSI "BSOD" fix, Wi-Fi throughput tuning, and the
-  host regression runner.
+FX-870P/VX-4 `calc` (math/string/financial, base conversions). TUI cell buffer
++ `draw` verbs, `gfx` RGB565 canvas with sprites/BMP, `plot` graph layer. App
+ecosystem: `crc32`/`asset` manifests, `pkg` bundles, UI themes, font registry
+with SD TTFs/CJK, markdown rendering, reference apps. Data: `csv` grid +
+`=EXPR`, `export`/`import`, `archive`, `crypt`, `ini`/`appconfig`/`temp`.
+Experience: header, notifications, network clock, background jobs, macro
+recorder, F-key binds, `tcpterm`, `usb userial`, boot splash, device security.
+Reliability: transcript batching, boot RAM relief, SD/C6 bring-up, MIPI-DSI
+fix, Wi-Fi tuning, host regression runner.
 
 ### 7. First public release (v1.0.0)
 
-- Relicensed to **MIT**; added SPDX headers across the project and an
-  authoritative third-party license table.
-- Rewrote the documentation for newcomers: a new readme, a grouped roadmap,
-  three tutorials (getting started, batch apps, native apps), an agent-focused
-  `ai-context.md`, and a reset `bugs.md`.
-- Firmware behaviour is unchanged from v0.38.5; this release is about
-  openness, documentation, and a clean baseline for the next campaign.
+Relicensed to MIT; SPDX headers, third-party license table. Rewrote docs for
+newcomers: readme, roadmap, tutorials, `ai-context.md`, reset `bugs.md`.
+Firmware unchanged from v0.38.5.
 
-### 8. Two-board era + hardware abstraction (v1.2.0)
+### 8. Two-board era (v1.2.0)
 
-- **M5Stack Tab5 is a first-class `-DP4_BOARD` target** alongside the
-  JC1060P470C reference: 1280x720 MIPI-DSI with runtime ILI9881C / ST7123 /
-  ST7121 auto-detect, ES8388 audio, RX8130CE RTC, BMI270 IMU (tilt
-  auto-rotate), INA226 pack gauge with charging, SC202CS MIPI-CSI camera
-  (BMP stills), the Tab5Keyboard (input + two independent RGB LEDs), hosted C6
-  Wi-Fi + BLE at 10 MHz, and PMIC `shutdown`. See [`PORTING.md`](PORTING.md) §6.
-- Hardware abstraction hardened without new layers: a zero-cost
-  `components/board_caps/` helper set, compile-time `_Static_assert` guards
-  that board/sdkconfig pins agree, a board-driven backlight LEDC timer, and
-  board-neutral logs/labels.
+M5Stack Tab5 as first-class `-DP4_BOARD` target: 1280x720 MIPI-DSI with
+runtime panel auto-detect, ES8388 audio, RX8130CE RTC, BMI270 IMU, INA226 pack
+gauge, SC202CS camera, Tab5Keyboard, hosted C6 Wi-Fi+BLE at 10 MHz, PMIC
+shutdown. See [`PORTING.md`](PORTING.md). Hardware abstraction: zero-cost
+`board_caps/` helpers, compile-time board/sdkconfig guards, board-driven
+backlight, board-neutral logs.
 
 ### 9. Batch language era (v1.2.x)
 
-- Loops and control flow: `for /L` (numeric), `for /A` (array iteration),
-  `for /D` and `for /R` (directories/trees), `while` condition loops,
-  `switch` string dispatch, and single-line `if (…) else (…)` groups.
-- Data: `NAME[i]` indexed arrays, `%VAR:~start[,len]%` substrings,
-  `%VAR:old=new%` replacement, and `!VAR!` delayed expansion via
-  `setlocal enabledelayedexpansion`.
-- Calculator + graphics: `calc` string functions (`UPPER$ LOWER$ TRIM$ INSTR
-  REPLACE$`) and `gfx blitmany` with `/s:` upscale and `/r:` quarter-turn
-  rotation.
-- Authoring: the single-file [`batch.md`](batch.md) spec.
+`for /L`, `for /A`, `for /D`, `for /R`, `while`, `switch`, single-line
+`if (...) else (...)`. `NAME[i]` arrays, `%VAR:~start[,len]%` substrings,
+`%VAR:old=new%` replacement, `!VAR!` delayed expansion. `calc` string functions,
+`gfx blitmany` with `/s:` upscale and `/r:` rotation. Single-file
+[`batch.md`](batch.md) spec.
 
 ### 10. App model, packaging, and trust (v1.2.x)
 
-- **Every app launches through a `*.bat` shim** — pure batch, hybrid (a shim
-  driving a linked-in C entry), or native-linked for dev/test. Documented and
-  frozen in [`ABI.md`](ABI.md).
-- **Signed `PKGS` manifests**: optional ECDSA P-256 `SIGN=` line verified
-  against a trusted public key in NVS (`pkg key …`); bad signatures always
-  refuse, and `pkg install /signed` enforces signing. Host signer
-  `tools/pkg_sign.py`, wired into `apps/push_pkgs.py --sign`.
-- **Declarative screens and flows**: a `.FRM` file describes a
-  `dialog`/`list`/`ask`/`form`/`menu` screen rendered through the existing
-  verbs (`screen run|info`), and a `.FLOW` file declares a multi-screen
-  navigation graph over those nodes (`screen flow`) — routing is the pure
-  `screen_flow_select()`, so apps neither hand-roll every screen nor a `goto`
-  web (see `batch.md` §13 / §13.1).
+Every app launches through a `*.bat` shim — pure batch, hybrid, or native-linked.
+Frozen in [`ABI.md`](ABI.md). Signed `PKGS` manifests (ECDSA P-256); host
+signer `tools/pkg_sign.py`. Declarative screens (`.FRM`) and flows (`.FLOW`)
+over `dialog`/`list`/`ask`/`form`/`menu` verbs.
 
 ### 11. Search everywhere (v1.2.x)
 
-- `gfind` grew an opt-in `/files` text-file scope on top of its existing db +
-  alarm search: one query over everything a PDA would hold. It reuses the ONE
-  shared storage search core (`storage_walk_files` + `storage_scan_file_lines`,
-  the same one `findstr /S` uses) and the same matcher, with `/root:`, `/ext:`,
-  `/hidden`, `/filesonly`, and `/nofiles`.
-- **There is no on-disk search index and none is planned**: search is always
-  live over the stores and the files, so it can never go stale. (An index would
-  have duplicated the existing scanners — see the no-duplication hard rule in
-  [`ai-context.md`](ai-context.md).)
+`gfind` with opt-in `/files` text scope over db + alarm + files. One shared
+storage search core (`storage_walk_files` + `storage_scan_file_lines`), no
+on-disk index — always live.
 
 ---
 
 ## Part 2 — Where we are going
 
-Realistic, useful directions grouped by the kind of device the framework is
-meant to build. Priorities are suggestions, not commitments.
+Realistic directions grouped by device class. Priorities are suggestions, not
+commitments.
 
 ### A. Framework and portability
 
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **Additional board / panel profiles** | More hardware | The EK79007 and LT8912B display drivers are vendored; a `boards/<name>/` profile + BSP wiring is the remaining work (see [`PORTING.md`](PORTING.md)). |
+| Additional board / panel profiles | More hardware | EK79007 and LT8912B vendored; `boards/<name>/` profile + BSP wiring remains ([`PORTING.md`](PORTING.md)) |
+| Build-tree hygiene | Release-ready tree | Done: `build-tab5/` + `test/build-tab5/` untracked from git (were committed before the ignore rules); `git ls-files` shows no build output. See [`release.md`](release.md) §0 |
+| Single capability-query style | One way to ask | Done: runtime code queries `board_caps_*` (battery ADC/INA226, RTC BSP-I2C, keyboard RGB routing); preprocessor `#if BOARD_CFG` remains only where required (macro definitions, includes, table entries, value defaults). Both boards + `test/` build clean |
+| CI board auto-discovery | Scaling | Done: `build.yml` discovers `boards/*/` for the matrix and completeness lint — adding a profile needs no workflow edit |
+| Per-board release artifacts | Shippable images | Done: `make_release.py bins` verified for both boards (`p4minishell-<board>.bin` merge; `release/` stays ignored) |
+| Two-board stability gate | Exit criterion | Open: `bugs.md` F27 (transient Tab5 crash under long mixed sweeps) must close with three clean full sweeps on both boards + a `dogfood` soak before this chapter is declared complete |
 
-### B. Writerdeck
-
-#### Writerdeck audit — closed (code audit 2026-09-18, fixes landed after)
-
-The `Full-page HTML wrapper` item is done (`markdown_render_html_page()`
-ships the `<!DOCTYPE html>` reader page). The 16 parity/robustness gaps it
-exposed are all fixed in the current tree: ordered lists, GFM tables,
-images/task lists, inline nesting, flanking/escape rules, the HTML
-truncation contract, export truncation/ERRORLEVEL handling, export
-titles/format selection, the print paginator, template-seeding validation,
-focus+preview composition, loud viewer/preview/export caps, the UTF-8-aware
-spell tokenizer (length-unlimited lookups, wrap+spell composed), a
-`WRITER.BAT` that seeds/renders/exports/verifies end to end, discoverable
-provisioning (`push_fonts.py`, `apps/push_templates.py`,
-`apps/push_dicts.py` + `apps/dicts/en.words`), and corrected writerdeck
-docs (limits, caps, gates, troubleshooting). No open writerdeck items
-remain.
-
-### C. PDA / PIM
+### B. PDA / PIM
 
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **Contacts / tasks apps** | Complete the PIM story | Build on the existing `db` store; ship as batch apps with modal surfaces |
-| **Agenda integration** | One place for time | Merge `alarm`/`cal` events, tasks, and documents into a today view |
-| **Sync (WebDAV / CalDAV-lite)** | Back up and share | HTTP client + VFS bridge; reuse the `export`/`import` interchange formats |
-| **RSS / plain-text reader** | The classic PDA use | `httpget` + a reading view with the font/markdown stack |
-| **Secrets manager** | Passwords on the go | Uses the existing `crypt` core and `db` secret fields, behind the passcode lock (crypt reliable on both boards now — bugs.md F23 fixed in v1.2.1) |
+| Contacts / tasks apps | Complete the PIM story | Build on `db` store; batch apps with modal surfaces |
+| Agenda integration | One place for time | Merge `alarm`/`cal` events, tasks, documents into today view |
+| RSS / plain-text reader | Classic PDA use | `httpget` + reading view with font/markdown stack |
+| Secrets manager | Passwords on the go | `crypt` core + `db` secret fields, behind passcode lock |
 
-### D. Palmtop / programmable
-
-| Feature | Why | Notes |
-|---------|-----|-------|
-| **Spreadsheet app** | The other defining feature | Build on `csv` + `calc`; add an interactive grid modal and a recalculation engine |
-| **Calculator UI app** | Everyday use | A modal keypad over `calc` (HP-12C / FX-870P layouts) |
-
-### E. Platform, power, and security
+### C. Palmtop / programmable
 
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **Deep low-power / AON** | All-day battery | RTC wake, power-domain tuning, and peripheral runtime PM beyond idle display-off |
-| **Battery/charging UI** | Trust the gauge | Better ADC calibration, charge-state detection, and a battery panel |
-| **Push-to-talk / BLE HID** | Peripheral use | BLE keyboard/mouse bridging and simple phone-side transfer |
+| Spreadsheet app | The other defining feature | Build on `csv` + `calc`; add interactive grid modal and recalculation engine |
+| Calculator UI app | Everyday use | Modal keypad over `calc` (HP-12C / FX-870P layouts) |
 
-### F. Connectivity and services
+### D. Platform, power, and security
 
 | Feature | Why | Notes |
 |---------|-----|-------|
-| **Captive-portal Wi-Fi setup** | First-run without a card | SoftAP is currently compiled out by policy; a temporary setup mode is a design decision |
-| **USB gadget modes** | Easier file transfer | RNDIS/MTP-style gadget as an alternative to the SD and `receive` paths |
-| **TLS trust management** | Real HTTPS | Certificate store on SD and a `certs` command; `httpget`/`c6ota` already use mbedTLS |
-| **Calendar/contact sync protocols** | Real PIM | CalDAV/CardDAV-lite over the existing HTTP client |
+| Deep low-power / AON | All-day battery | Started: light-sleep wake from the wired touch/keyboard interrupts, deep-sleep RTC-IO GPIO wake, camera rail off. Still open: power-domain tuning, retention/AON memory, peripheral runtime PM, RTC-alarm wake (RX8130 INT not routed), and touch wake on GT911 Tab5 units / the JC1060P470 reference (no interrupt wired) |
 
-### Explicitly not planned
+### E. Connectivity and services
 
-- A second application-runtime model: the batch + hybrid/native-app model is
-  the contract (see [`ABI.md`](ABI.md)).
-- SD/flash code execution (`dlopen`, dynamic linking, per-app memory
-  isolation): C apps are linked into the firmware and reached through a `.bat`
-  shim.
-- A second display writer or windowing model: the transcript/TUI/modal/GFX
-  surfaces and the single UI-rebuild path are the contract.
-- A native Preferences GUI — settings stay in `CONFIG.SYS` behind the `config`
-  machinery, with `SET.BAT` as the touch UI.
+| Feature | Why | Notes |
+|---------|-----|-------|
+| HTTP-client CardDAV sync | Real PIM | Serial CardDAV-lite is done (`pim`, PIMX framing); the HTTP client remains open |
+| Event service (MQTT + outbox) | Live apps | Done: one `netsvc` task owns a persistent MQTT 3.1.1 session (plaintext LAN, BYO broker); `net` verbs + `/onmsg` hook for batch, `applib_msg.h` for native apps; SD outbox with oldest-first flush; `$pim/...` topics merge newer-wins. TLS waits on the CERTS row; hardware soak (keepalive on the Tab5 SDIO margin, sleep/wake reconnect, OTA exclusion) is pending |
+| MQTTS / WSS transport | Encrypted events | Blocked on the TLS client trust store; plaintext MQTT is the v1 transport |
+
+### F. P4Sync — USB desktop sync (ActiveSync spirit, harness-proven first)
+
+North star: a future `P4Sync` desktop app manages boards over USB-Serial/JTAG
+the way Palm Desktop managed handhelds — one session covers files + PIM
+(`db`/`alarm`) + apps (`pkg`/`asset`) + screenshots. Until that app exists,
+the harness is the prototype: every needed protocol feature is proven through
+`tools/p4test/` suites and the `tools/p4sync/` host client, never through a
+second firmware stack. All firmware additions are thin shells over the
+existing `storage` / `db` / `alarm` / `pim` / `pkg` / `asset` / serial-engine
+cores (one dispatcher, one framing writer, one CRC-32, one search core — see
+[`ai-context.md`](ai-context.md) Hard Rules). Batch-first launch
+([`ABI.md`](ABI.md)), no SD code execution, the device-lock secret gate
+([`SECURITY.md`](SECURITY.md)), and gated destructive actions stay unchanged.
+
+| Phase | Task | Why (P4Sync need) | Harness proof |
+|-------|------|-------------------|---------------|
+| 0 | USB-serial protocol inventory | Freeze what exists before extending it | `receive`/`send` (SDFX), `screenshot` (BMPX), `pim get/put` (PIMX) magics, markers, limits documented in `command.md` / `harness.md` |
+| 0 | P4Sync gap list | Name delta/inventory/progress/cancel/lock-aware gaps explicitly | Gaps tracked here, not as silent firmware drift |
+| 1 | `s15_p4sync` conformance suite | Prove full-image sync without new firmware | `tools/suites/s15_p4sync.py`: `sync status` handshake, file push/pull, PIM round-trip, `pkg`/`asset`, screenshot geometry on both boards |
+| 1 | Framing robustness matrix | Host scans for magic past log text; CRC/timeout paths covered | Short-payload, CRC-mismatch, and backpressure cases through `p4test.session.read_binary_frame` |
+| 2 | `sync status` handshake verb | One capability/lock/limits snapshot for the host | Thin read-only shell over `storage` + lock state; `s15_p4sync` asserts every `sync.*` line |
+| 2 | `P4_CONFIG_SYNC_*` tunables | No hardcoded sync limits | Header + YAML mirror (`p4minishell_config.h`, `p4minishell_config.yaml`) |
+| 3 | `tools/p4sync/` host prototype | Reusable sync core for the future desktop app | Python client reusing `p4test.device/sdbridge/screenshot` + `pim_sync` merge; no raw `serial.Serial`, DTR-safe open only |
+| 3 | Full-image CLI run | PIM + files + apps + screenshot in one session | `python -m p4sync status/pull/push` against both boards, locked and unlocked |
+| 4 | Two-board verification ladder | No regressions | Firmware + `test/` zero warnings, unit suite green, `p4test_run` + `regression.py` PASS, `dogfood` soak, main firmware reflashed |
+
+### Not planned
+
+| Item | Why not |
+|------|---------|
+| Second application-runtime model | Batch + hybrid/native is the contract ([`ABI.md`](ABI.md)) |
+| SD/flash code execution | C apps linked into firmware, reached through `.bat` shim |
+| Second display writer / windowing model | Transcript/TUI/modal/GFX surfaces are the contract |
+| Native Preferences GUI | Settings stay in `CONFIG.SYS` + `config`; `SET.BAT` is the touch UI |
+| Rich Text Format (RTF) | A large spec (font/colour tables, stylesheets, fields, `\pict`); a lossy subset would mislead. Markdown + HTML reading cover the on-device document needs |
 
 ---
 
 ## Open gaps (intentionally deferred)
 
-- **SPI transactions** — reported as unavailable on this board: initializing
-  the SPI host with the hosted SDIO link active stalls the chip. `spi status`
-  works; the peek/poke/loopback verbs return an honest error.
-- **Touch wake from sleep** — the GT911 INT line is not wired on this board, so
-  light-sleep wake is timer/GPIO only (reported honestly).
-- **Camera live preview** — still BMP capture works on the Tab5
-  (`camera init` + `camera snap <file.bmp>`, verified 1280x720 to SD); the
-  live-preview path (streaming frames into an LVGL canvas) is not implemented
-  yet. Boards without a camera report the gap rather than pretending.
+| Gap | Status |
+|-----|--------|
+| Touch wake from sleep | Wired on Tab5 ST7123/ST7121 units (GPIO23) and armed by `sleep`; unavailable on GT911 Tab5 units (pin strapped low by the BSP) and the JC1060P470 reference (no interrupt wired) |
+| Camera live preview | BMP capture works (`camera init` + `camera snap`); streaming frames into LVGL canvas not implemented |
+| RTC-alarm wake | RX8130CE `INT` pin not routed on the Tab5 (no INT macro/row) and no alarm-IRQ driver; deep sleep also only wakes from GPIO0..GPIO15 |
 
 ---
 

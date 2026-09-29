@@ -1132,6 +1132,20 @@ const char *shell_prompt_render_plain(void);
 /** Reset the prompt template to the configured default. */
 void shell_prompt_reset(void);
 
+/**
+ * Set the session title (DOS `title` verb). Passing NULL clears it.
+ * Longer text is truncated to `P4_CONFIG_TITLE_BYTES`.
+ *
+ * @param text  Title text (may be an empty string to clear).
+ */
+void shell_title_set(const char *text);
+
+/** Get the session title ("" until set). Never NULL. */
+const char *shell_title_get(void);
+
+/** Clear the session title. */
+void shell_title_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

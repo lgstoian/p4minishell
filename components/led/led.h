@@ -31,7 +31,8 @@ typedef enum {
     LED_EVENT_BOOT_OK,           /**< Green confirmation flash after boot scripting. */
     LED_EVENT_WIFI_CONNECTING,   /**< Amber pulse while connecting. */
     LED_EVENT_WIFI_CONNECTED,    /**< Green steady; becomes the status colour in auto mode. */
-    LED_EVENT_WIFI_DISCONNECTED, /**< Red blink; becomes the status colour in auto mode. */
+    LED_EVENT_WIFI_IDLE,         /**< Wi-Fi started but no network to join: steady dim white. */
+    LED_EVENT_WIFI_DISCONNECTED, /**< Amber pulse; a target was set but the link dropped. */
     LED_EVENT_WIFI_ERROR,        /**< Red pulse (transient). */
     LED_EVENT_HTTPD_STARTED,     /**< Blue pulse when the HTTP server starts. */
     LED_EVENT_HTTPD_STOPPED,     /**< Transient cue back to the status colour. */
@@ -121,8 +122,9 @@ esp_err_t led_set_effect(led_effect_t effect, uint8_t speed);
 /**
  * Enable or disable the auto status layer. When enabled, Wi-Fi state events
  * drive the persistent colour (amber while connecting, green when connected,
- * red blink when disconnected); when disabled the LED shows the last manual
- * colour/effect and events are transient.
+ * steady grey when idle with no network to join, amber pulse when a target
+ * dropped); when disabled the LED shows the last manual colour/effect and
+ * events are transient.
  */
 esp_err_t led_set_auto_status(bool enable);
 

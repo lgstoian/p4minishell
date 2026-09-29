@@ -10,7 +10,7 @@ code, see [`SDK.md`](SDK.md); for the command surface, see
 [`command.md`](command.md); for the API, see [`API.md`](API.md); for the
 working rules, see [`ai-context.md`](ai-context.md).
 
-- **Version:** v1.2.1 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
+- **Version:** v1.3.0 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
 - **UI:** LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch
 - **License:** MIT (see [`licence.md`](licence.md))
 
@@ -61,10 +61,11 @@ components/editor/              `edit` editor: byte-preserving document model + 
 components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_flush
 components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport
 components/filetype/            Central extension -> kind registry
-components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator
+components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader
 components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes
 components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
 components/alarm/               SD alarm store + single background checker (sd:/ALARMS)
+components/pim/                 Single vCard/iCalendar codecs + sync identity/newer-wins merge (pim_doc/parse/store/vcard/ical)
 components/audio/               ES8311 codec path + background tone/WAV playback engine
 components/clock/               Time/SNTP/timezone services + date/time/timezone/sntp + named timers
 components/header/              Fixed top status bar (layout/status/notify/refresh pure helpers + widgets)
@@ -74,7 +75,7 @@ components/power_monitor/       Tab5 INA226 pack gauge (read-only measurement + 
 components/imu/                 BMI270 accel/gyro (vendored Bosch driver) + orientation/auto-rotate
 components/camera/              M5Stack Tab5 MIPI-CSI camera via esp_video (BMP still capture)
 components/imagefmt/            Shared BMP header writer + RGB565->BGR24 (screenshot/gfx/camera)
-components/networking/          Sole owner of ESP-Hosted + esp_wifi_remote, BLE, HTTP client/server, netdiag
+components/networking/          Sole owner of ESP-Hosted + esp_wifi_remote, BLE, HTTP client/server, netdiag, persistent MQTT event service (netsvc + pure mqtt_codec)
 components/usb/                 USB host (MSC storage at /usb0 + HID keyboard/mouse + lazy CDC-ACM serial)
 components/c6ota/               ESP32-C6 firmware OTA via ESP-Hosted SDIO
 samples/whoami/               Sample native app component (`whoami`, applib-only)
@@ -87,10 +88,20 @@ The command module's verb bodies live in focused files under
 `power_commands.c`, `audio_commands.c`, `font_commands.c`, `md_commands.c`,
 `json_commands.c`, `asset_commands.c`, `pkg_commands.c`, `db_commands.c`,
 `alarm_commands.c`, `config_cmd.c`, `gfind_commands.c`, `csv_commands.c`,
-`export_commands.c`, `crypt_commands.c`, `userial_commands.c`,
+`export_commands.c`, `import_commands.c`, `pim_commands.c`,
+`sync_commands.c`, `netsvc_commands.c`,
+`edit_record_commands.c`, `crypt_commands.c`, `userial_commands.c`,
 `security_commands.c`, `header_commands.c`, `ui_commands.c`,
 `imu_commands.c`, `screen_commands.c`, plus the pure `gfx_surface_rotate_cw()`
 in `components/gfx/gfx.c` behind `gfx blitmany /r:`).
+
+`netsvc` (`components/networking/netsvc.c`, pure codec `mqtt_codec.c`) is the
+persistent event service: one lazy task owns a single plaintext-MQTT session,
+publishes journal-first through the SD outbox, merges `$pim/...` arrivals
+through `components/pim/`, and delivers to batch only through the registered
+`netsvc_host_ops_t` async hook (the `/onmsg` line). Batch drives it with the
+`net` verbs (`netsvc_commands.c`); native apps use `applib_msg.h`. `sync`
+(`sync_commands.c`) is the read-only USB-sync handshake (`sync.*` snapshot).
 
 `crypt` (`crypt_commands.c`) streams files in 512-byte chunks: hardware
 esp-aes over small cache-aligned DMA buffers, with a self-contained software
@@ -305,6 +316,28 @@ Owns the shell's runtime surface and output plumbing:
   input line via `lv_async_call`; while a modal surface is active the key goes
   to the modal hook instead.
 
+### Portal Module (components/portal)
+
+Captive-portal Wi-Fi setup for first-run without an SD card:
+
+- **SoftAP mode**: starts in APSTA (`WIFI_MODE_APSTA`) so the device can still
+  scan and connect while the AP is active; switches back to `WIFI_MODE_STA`
+  when the portal shuts down
+- **DNS server**: minimal UDP server on port 53 that responds to all queries
+  with the device's AP IP address (captive-portal DNS redirect)
+- **Captive portal HTTP**: serves an embedded HTML page (flash-resident, works
+  without SD) that collects SSID + password; Android/Apple/Windows captive-
+  portal probes are redirected via 302; the form POST saves to the known-
+  network list and triggers portal shutdown
+- **First-run auto-start**: `portal_should_autostart()` returns true when the
+  SD card is not mounted and no known networks are cached; manual control via
+  `wifi setup on/off`; auto-stops after `P4_CONFIG_PORTAL_TIMEOUT_SECS`
+- **Deferred stop**: the HTTP handler sets a flag; the Wi-Fi event handler
+  calls `portal_stop()` so netif/wifi operations are serialised on the
+  event-loop task
+- **Config**: `P4_CONFIG_PORTAL_*` (AP SSID, open/WPA2, channel, max
+  connections, timeout, HTTP port)
+
 ### Storage Module (components/storage)
 
 Owns everything that sits between the shell commands and the SD card. Split across several files:
@@ -426,6 +459,9 @@ Owns everything that sits between the shell commands and the SD card. Split acro
   writes any text file atomically; `storage_temp_path` / `storage_temp_cleanup` keep temp
   files under `sd:/tmp`. All storage lives on the SD card. Shared by the `config`/`ini`/
   `appconfig`/`temp` commands and the applib state group — never re-implemented elsewhere.
+  `storage_replace_file()` is the single temp+rename primitive (used by the text writer
+  and the editor save/autosave paths); `storage_recovery_dir()` resolves the editor
+  crash-file directory, which `storage_temp_cleanup()` deliberately spares.
 
 ### Batch Module (components/batch)
 
@@ -684,19 +720,23 @@ filesystem or the batch language:
 - **Heap-backed line buffers**: the expansion and chain buffers are heap-allocated because this
   function sits on the batch recursion path — a batch file re-enters the pipeline for every
   line, and stack buffers here would overflow the worker task at nesting depth.
-- **Dispatcher**: `shell_execute_command_core()` — 155 distinct `argv[0]` spellings (aliases included) with family routing
+- **Dispatcher**: `shell_execute_command_core()` — 156 distinct `argv[0]` spellings (aliases included) with family routing
   (wifi, bluetooth, usb, c6ota, sd) that receive the original unsplit command text
-- **Serial file transfer** (`receive` / `send`, plus the `screenshot` stream):
+- **Serial file transfer** (`receive` / `send`, plus the `screenshot` stream)
+  and **serial PIM sync** (`pim get` / `pim put`):
   binary host<->device transfer over the USB-Serial/JTAG console. Both directions
   suspend the console reader (`shell_uart_console_rx_begin/end`) so the raw byte
   stream is never mistaken for command lines. `receive` is ACK-paced against the
   device's small RX ring and supports an optional CRC-32 trailer; `send` streams
   SD files (or byte ranges, or a `send /diag` report) framed as a 4-byte magic +
-  4-byte little-endian size + payload. All three share
-  `serial_write_frame_header()` and write payloads through
+  4-byte little-endian size + payload. `pim get` reuses the same framed engine
+  with the `PIMX` magic (`P4_CONFIG_PIM_SYNC_MAGIC`); `pim put` reuses the
+  `receive` upload protocol (same READY/DONE markers, temp file, CRC trailer).
+  All share `serial_write_frame_header()` and write payloads through
   `usb_serial_jtag_write_bytes()` in chunks, bypassing the console VFS's CRLF
-  translation so binary data is byte-exact. Both commands set ERRORLEVEL for
-  batch use. All tunables live in `P4_CONFIG_SERIAL_*`.
+  translation so binary data is byte-exact. All commands set ERRORLEVEL for
+  batch use. File-transfer tunables live in `P4_CONFIG_SERIAL_*`, sync tunables
+  in `P4_CONFIG_PIM_*`.
 - **Worker task**: `shell_execute_command_async()` creates a dedicated FreeRTOS task so heavy
   commands never run on the LVGL event-callback stack
 - **Redirection parsing**: a quote-aware two-pass scan handling `>`, `>>`, and `<` in any order
@@ -718,20 +758,26 @@ filesystem or the batch language:
   `espressif/esp_video` stack; `camera init` + `camera snap <file.bmp>` write a 24-bit BMP
   (BMP only). Lives in `components/camera/`.
 - **Basic audio** (`beep`, `tone <freq> [ms]`, `wavplay <file>`, `audio status|stop`,
-  `volume [<0-100>]`): tones are generated in heap chunks and WAVs (16-bit PCM mono/stereo at
+  `audio output [auto|speaker|headphones]`, `volume [<0-100>]`): tones are generated in heap
+  chunks and WAVs (16-bit PCM mono/stereo at
   22050/44100 Hz, stereo mixed to mono and 44100 decimated) stream from SD, both through the
-  ES8311 codec (mono 16-bit 22050 Hz). All audio logic — codec init, speaker volume, and the
+  board codec (ES8311 on the reference board, ES8388 on the Tab5; mono 16-bit 22050 Hz). All
+  audio logic — codec init, speaker volume, output routing, and the
   background `audio_play` task — lives in `components/audio/` (`audio.h`/`audio.c`); the
   commands only dispatch from `components/command/` and call the `audio.h` API. One sound plays
   at a time (`audio stop` cuts it short) so batch files never block, and every audio command
   sets an ERRORLEVEL. `volume` and the boot `VOLUME=` directive drive the codec output level,
-  which all playback rides on.
+  which all playback rides on. `audio output` selects the route (AUTO = speaker unless
+  headphones are detected; evaluated per play/volume/status); it persists via `config
+  AUDIO_OUTPUT=` (boot `AUDIO_OUTPUT=` directive re-applies it).
 - **Peripheral toolkit** (`pwm`, `freq`, `adc`, `i2c`, `spi`): LEDC PWM/square waves on
   timers 0/2/3 sharing the backlight's XTAL clock; one-shot ADC reads with SOC channel-map
   enumeration; an I2C scanner/peek-poke that reuses the BSP shared bus handle (or a temporary
-  bus on custom pins) via normal device transactions; and `spi status` reporting the SPI
-  configuration. SPI transactions are refused with an honest error because SPI host init on
-  this P4 with the ESP-Hosted SDIO link active stalls the chip. Every command gates its pins
+  bus on custom pins) via normal device transactions; and SPI master transactions
+  (`spi loopback`/`peek`/`poke`) on SPI3 with caller-supplied pins routed through the GPIO
+  matrix, so they never claim the IOMUX SPI2 pins that overlap the board's I2C/I2S/SDIO lines.
+  The C6 hosted link and the SD card live on the SDMMC controller (not a SPI host), so SPI is
+  independent of them (verified on hardware with the C6 running). Every command gates its pins
   through `shell_pin_is_reserved()` (the critical entries of the board GPIO table), so active
   I2C/I2S/SDIO/display/SD lines can never be repurposed.
 - **Status LED(s)** (`rgb`): `components/led/led.c` owns the status LED(s) — a WS2812 strip on
@@ -777,9 +823,16 @@ Central display controller owning all display hardware state and operations:
   backlight-on. Tracked in the power module (`shell_power_notify_activity` /
   `shell_power_idle_tick`, fed by the header-refresh LVGL timer and the input injection
   points), with `P4_CONFIG_POWER_IDLE_DISPLAY_OFF_SECS` (0 = disabled) as the default.
-- **Sleep wake sources**: `sleep`/`deepsleep` keep the timer wake; a user-wired
-  `P4_CONFIG_POWER_WAKE_GPIO` wakes light sleep via GPIO. Touch wake is honestly reported
-  unavailable because the GT911 INT line is not wired on this board.
+- **Sleep wake sources** (assembled in `power_commands.c`): the timer always wakes;
+  light sleep additionally arms the user GPIO `P4_CONFIG_POWER_WAKE_GPIO`, the touch
+  interrupt when the fitted panel wires one (`P4_CONFIG_POWER_WAKE_TOUCH`, read from the
+  live panel driver via `display_get_touch_int_gpio()`), and the Tab5Keyboard interrupt
+  (`P4_CONFIG_POWER_WAKE_KEYBOARD`). Touch wake is revision-dependent: the Tab5 keeps
+  GPIO23 as the ST7123/ST7121 interrupt but straps it low and reports NC on ILI9881C+GT911
+  units, and the JC1060P470 reference wires no touch interrupt — all reported honestly.
+  Deep sleep wakes only from an RTC IO (GPIO0..GPIO15 on the ESP32-P4) or the timer, so
+  `shell_power_deep_wake_gpio_eligible()` gates the user GPIO and the touch/keyboard
+  interrupts can never wake it.
 - **Display diagnostics**: Comprehensive `display_info_t` struct with all timing, buffer, and config data
 - **Thread safety**: State variables protected by critical sections; LVGL operations dispatched via `lv_async_call`
 - **UI rebuild callback**: Registered callback invoked after rotation changes to trigger full UI rebuild
@@ -1011,6 +1064,16 @@ Wi-Fi Kconfig under its own `WIFI_RMT_` prefix.
   (`tcp_active_pcbs`, `tcp_tw_pcbs`, `tcp_listen_pcbs`, `udp_pcbs`) read-only under the
   TCP/IP core lock (`LOCK_TCPIP_CORE()` when `LWIP_TCPIP_CORE_LOCKING`, no-op otherwise),
   capped by `P4_CONFIG_NETSTAT_ROW_MAX`.
+- **Event service (`net`)**: `components/networking/netsvc.c` owns the ONE persistent client
+  connection — a single lazy task speaking MQTT 3.1.1 (pure packet codec `mqtt_codec.c`,
+  plaintext LAN). It connects with keepalive + backoff reconnect, resubscribes its RAM
+  filter table, flushes the SD outbox (`sd:/NET/OUTBOX/`) oldest-first on PUBACK, and leaves
+  the session idle (not torn down) while Wi-Fi is down or an OTA owns flash. Inbound
+  `$pim/db/<name>` / `$pim/alarms` payloads merge newer-wins through `components/pim/`
+  (lock-gated, size-capped); all other topics reach batch through the registered
+  `netsvc_host_ops_t.execute_async` hook (the `/onmsg` line, with `$NET_TOPIC`/`$NET_LEN`)
+  and the last-message slot (`net msg`). Broker state is public API in `netsvc.h`; the verbs
+  live in `components/command/netsvc_commands.c` and native apps use `applib_msg.h`.
 - **OTA hooks**: `networking_wifi_wait_for_ota()`, `networking_wifi_shutdown()`, capture/restore state
 - **Boot restore**: Automatic Wi-Fi restore after normal boot and after successful `c6ota`
 - **Diagnostics**: Transcript-facing status + scan output via `wifi diag`
@@ -1034,8 +1097,22 @@ Owns hosted NimBLE Bluetooth on ESP32-C6:
 - **BLE advertising**: Non-connectable advertising. `bluetooth advertise on [name]` accepts a
   session-only advertising name stored in `s_bluetooth_state.session_advertise_name` (RAM-only,
   never persisted); without one the configured default device name is used.
+- **BLE HID host**: `bluetooth connect XX:XX:XX:XX:XX:XX` acts as a BLE central for external HID
+  keyboards/mice. It stops any scan/advertising, connects (`P4_CONFIG_BLE_CONNECT_TIMEOUT_MS`),
+  negotiates the MTU (`P4_CONFIG_BLE_MTU`), and discovers the HID service (0x1812) through the
+  NimBLE GATT client (typed `ble_gatt_disc_svc_fn`/`ble_gatt_chr_fn`/`ble_gatt_dsc_fn` callbacks).
+  It prefers the HID Report characteristic (0x2A4D) and falls back to Boot Keyboard Input
+  (0x2A22); the CCC (0x2902) is written to enable notifications. Incoming reports arrive as
+  `BLE_GAP_EVENT_NOTIFY_RX`, are parsed as USB-HID-compatible boot keyboard reports (modifiers in
+  byte 0, up to 6 key codes in bytes 2-7), and press/release deltas are routed to the shell through
+  the `networking_host_ops_t.bluetooth_keyboard_input` callback — the same `shell_usb_keyboard_input`
+  path USB HID uses, so a BLE keyboard types into the prompt and auto-hides the on-screen keyboard.
+  `bluetooth disconnect` terminates the connection; `bluetooth_is_device_connected()` reports
+  whether a HID peripheral is attached (distinct from `bluetooth_is_connected()`, which only means
+  the NimBLE host is synced).
 - **Status reporting**: Colour-coded report of controller readiness, NimBLE sync state,
-  advertising state (with active name), C6 firmware version, and last error
+  advertising state (with active name), connected HID device (name/address), C6 firmware version,
+  and last error
 - **Shared callbacks**: Uses same `networking_host_ops_t` as Wi-Fi module
 
 ### USB Module (components/usb)
@@ -1053,6 +1130,23 @@ Owns ESP-IDF USB Host Library with two class drivers:
 - **Command family**: `usb status|ls|keyboard on|off|mouse on|off`
 - **Bounded output**: Directory listings and file previews mirror SD command style
 - **Transcript integration**: Uses dedicated host bridge functions in main.c
+
+### TLS Trust Store Module (components/certs)
+
+Manages a certificate store on the SD card and loads user-provided CAs into the
+mbedTLS global CA store:
+
+- **SD certificate store**: PEM and DER files in `sd:/CERTS/`; auto-created on
+  first boot; `certs` command manages add/remove/rebuild/reload/clear
+- **Global CA store**: `certs_load_sd_store()` scans the CERTS directory,
+  concatenates PEM files into a PSRAM buffer, and registers the result with
+  `esp_tls_set_global_ca_store()`. httpget and c6ota prefer this user store
+  and fall back to the compiled-in Mozilla certificate bundle.
+- **Boot hook**: `boot_on_sd_first_mount()` calls `certs_load_sd_store()` so
+  the trust store is ready before any HTTP client runs.
+- **Bundle rebuild**: `certs rebuild` concatenates all .pem files into
+  `sd:/CERTS/BUNDLE.PEM` for fast loading.
+- **Command family**: `certs info|list|add|remove|rebuild|clear|reload`
 
 ### C6 OTA Module (components/c6ota)
 
@@ -1088,7 +1182,9 @@ built on the same runtime (v0.35.0: 6 surfaces).
     answer in `ASK_RESULT` (or `/v:NAME`), with `/p` password masking.
   - `browse` (`filebrowser`) — SD file picker (`BROWSE_RESULT`/`/v:NAME`, 0/1).
   - `view` — text viewer pager for SD files (20 lines/page); `.bmp`/`.dib`
-    route to the image viewer through the `components/filetype/` registry.
+    route to the image viewer and `.md`/`.html` render (through the markdown
+    renderer / HTML reader, ANSI stripped) via the `components/filetype/`
+    registry. `--raw` keeps the source.
   - `imageview` — fit-to-screen BMP viewer (`image show`/`view`/`open`): reuses
     the pure decoder in `components/gfx`, decodes straight to a fit-to-screen
     RGB565 `lv_canvas` (source never materialized), `Esc`/`q`/Close.
@@ -1152,14 +1248,19 @@ shared modal runtime (see SDK.md, "Modal app surfaces").
 - **`editor.c`** owns the byte-preserving document model: heap lines with
   exact lengths, CRLF/LF EOL tracking, cursor/selection state, snapshot
   undo/redo (`P4_CONFIG_EDITOR_UNDO_DEPTH`), word navigation, delete
-  line/EOL, pure find/replace helpers, and the guarded SD load/save
-  (a failed save removes its partial destination). It also runs the modal
+  line/EOL, pure find/replace helpers, the guarded SD load/save (atomic
+  temp+rename via `storage_replace_file()`, `.bak` kept — a failed save
+  leaves the original untouched), the dirty-buffer autosave spill to
+  `sd:/tmp/edit/`, and the user-dictionary overlay plus session ignore list
+  for spellcheck. It also runs the modal
   session on the command worker: it loads the file, opens the view via
   `lv_async_call`, then services save requests and waits for quit — file I/O
   never runs on the LVGL task.
 - **`editor_view.c`** owns the LVGL surface. It renders one row per document
-  line into a dedicated span group (with batch syntax colours applied through
-  `editor_lex_batch` and a right-aligned line-number gutter via the pure
+  line into a dedicated span group (with syntax colours applied through the
+  per-syntax lexers `editor_lex_batch` / `editor_lex_markdown` /
+  `editor_lex_json` / `editor_lex_html`, all sharing `editor_syntax_run_t` and
+  one emit helper, and a right-aligned line-number gutter via the pure
   `editor_format_line_number` helper), draws a blinking block cursor, a
   current-line highlight bar, and a selection background overlay, and
   implements an inline status-bar prompt system for Find / Replace /
@@ -1239,7 +1340,11 @@ shared modal runtime (see SDK.md, "Modal app surfaces").
 
 ### Storage
 
-- **SD Card**: FATFS at `/sdcard`, LFN with 255-char limit, heap-backed buffers
+- **SD Card**: FATFS at `/sdcard`, LFN with 255-char limit, heap-backed buffers.
+  On the M5Stack Tab5 the card IO rail is the P4 on-chip LDO_VO4 (channel 4,
+  3.3 V); the BSP owns that channel and supplies the SDMMC `sd_pwr_ctrl_drv_t`
+  itself (`board_bsp/src/bsp_storage.c`), rather than letting IDF acquire the
+  channel at 0 mV and log a spurious voltage-range warning.
 - **USB MSC**: VFS/FATFS at `/usb0`, mounted on demand
 - **SPIFFS**: Partition `storage` at `/spiffs`, 7 MB
 

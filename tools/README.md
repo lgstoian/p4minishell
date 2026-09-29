@@ -38,7 +38,9 @@ ad-hoc PASS/FAIL bookkeeping. Import it; do not reimplement.
 
 Suites live in `tools/suites/` as `sNN_*.py` exposing `NAME`, `TAGS`, and
 `run(dev, ctx)`; they cover smoke, storage, batch, data, display, editor,
-input/UI, connectivity, power/audio, performance and every reference app.
+input/UI, connectivity, power/audio, performance, every reference app, the
+P4Sync handshake (`s15_p4sync`), and the MQTT event service (`s16_netsvc`,
+live checks skip cleanly without a LAN broker).
 
 ```powershell
 python tools/p4test_run.py COM3                 # run every suite
@@ -203,6 +205,12 @@ holder per port.
   `del /s` recursing into subdirectories, and an overlong markdown pipe table
   keeping every row. Prints RESULT OK.
 - `pull.py` — pull an SD file over `send` (SDFX framing).
+- `pim_sync.py` — serial PIM sync over the `pim` verbs (PIMX framing):
+  `pull db <name>|alarms <dir>`, `push`, and `sync` (newer-wins merge by
+  UID into a mirror dir of per-`<uid>.vcf`/`<uid>.ics` files).
+- `p4sync/` — P4Sync USB prototype over the shared `p4test` transports
+  (handshake, file push/pull, screenshot; PIM stays with `pim_sync.py`):
+  `python tools/p4sync --port COM3 status|push|pull|shot`.
 - `parse_debuglog.py` — host-side parser for `debug save` exports
   (`txt`/`csv`/`json`, auto-detected): severity summary + chronological
   table. Pull `DEBUG.LOG` with `pull.py`, then
@@ -212,6 +220,20 @@ holder per port.
   `PKGS/<APP>/` install bundles). `apps/push_templates.py` pushes the
   writerdeck document templates to `sd:/TEMPLATES/`. `push_fonts.py` also
   pushes the vendored reading serif (`assets/fonts/DejaVuSerif*.ttf`).
+- `htmlcheck.py` — host-side validator for `markdown export` output
+  (`html`/`print`/`text`): checks the standalone HTML page for doctype,
+  charset, `title`, `<main>`, tag balance, and unsafe URL schemes (stdlib
+  `html.parser`, no browser), the print pagination (`Page N` + form feed), and
+  the plain text for stripped ANSI. Used by `tools/suites/s07_data.py`; run
+  standalone as `python tools/htmlcheck.py DOC.HTML`.
+- `make_release.py` — assemble the artifacts a public release ships (the
+  host-side counterpart to `release.md`): `bins` merges bootloader + partition
+  table + app from a build dir into one flashable image (esptool `merge_bin`),
+  `srczip` archives the committed tree (`git archive`), `push <COMx>` sequences
+  the SD pushers (companion → apps → assets → templates → dicts → fonts →
+  pkgs), and `manifest` writes `release/SHA256SUMS`. `all` runs bins + srczip +
+  manifest; `--dry-run` on any subcommand prints the actions. It never flashes
+  and never re-implements a pusher's file list.
 - `newapp.py` — scaffold a native applib app component from the
   `samples/whoami/` template: `python tools/newapp.py <name>`, then follow
   the printed wiring steps (see `tutorial_native.md` §10).

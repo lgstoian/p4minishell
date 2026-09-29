@@ -29,6 +29,7 @@ typedef enum {
     FILETYPE_JSON,        /**< .json — highlight + pretty/validate */
     FILETYPE_TEXT,        /**< .txt/.log/.sys/.ini — plain viewer */
     FILETYPE_IMAGE,       /**< .bmp/.dib — BMP image viewer / canvas / TUI */
+    FILETYPE_HTML,        /**< .html/.htm — rendered reader + editor highlight */
     FILETYPE_COUNT
 } filetype_t;
 
@@ -47,6 +48,9 @@ bool filetype_is_markdown(filetype_t type);
 
 /** True for BMP image types (viewer / gfx canvas / TUI). */
 bool filetype_is_image(filetype_t type);
+
+/** True for HTML types (.html/.htm — rendered reader + editor highlight). */
+bool filetype_is_html(filetype_t type);
 
 /** True when @p path ends in @p ext (case-insensitive, ext with dot).
  * Used for one-off checks outside the registry (e.g. "%~x" parity). */

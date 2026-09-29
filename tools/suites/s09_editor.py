@@ -12,7 +12,9 @@ are checked with ``type`` / ``findstr``.
 
 Covers: push a generated file, ``\\g`` goto, ``\\f`` find, ``\\u`` undo,
 ``\\r`` redo, ``\\s`` save, ``\\o`` save-as, ``\\q`` quit, the edit-page verbs,
-and a few-thousand-line PSRAM document.
+a few-thousand-line PSRAM document, the spell user dictionary
+(``\\spell-add`` learn flow), and the autosave crash-file round-trip
+(``recover`` list/restore/discard).
 """
 import os
 import re
@@ -29,8 +31,11 @@ FILE_A = "_S09A.TXT"
 FILE_C = "_S09C.TXT"
 FILE_D = "_S09D.BAT"
 FILE_BIG = "_S09BIG.TXT"
+FILE_E = "_S09E.TXT"
 BIG_LINES = 2000
 BIG_MARK = "ZZBIGENDMARK"
+SPELL_WORD = "ZZQWIK"
+CRASH_MARK = "ZZCRASHMARK"
 
 
 def _field(text, key):
@@ -75,7 +80,7 @@ def _wait_field(dev, key, want, timeout=15.0):
 def run(dev, ctx):
     c = Checklist(NAME)
     disp_w, disp_h = dev.display_size()
-    created = [FILE_A, FILE_C, FILE_D, FILE_BIG]
+    created = [FILE_A, FILE_C, FILE_D, FILE_BIG, FILE_E]
 
     def shot(name):
         try:
@@ -208,6 +213,60 @@ def run(dev, ctx):
             c.expect("big marker persisted", BIG_MARK, out)
         else:
             c.check("big editor closed", False, "editor did not open")
+
+        # =================================================================
+        # 4. Spell user dictionary: in-editor learn, shell list/forget,
+        #    autosave crash round-trip through `recover`
+        # =================================================================
+        c.note("editor: spell user dictionary")
+        dev.push_file(FILE_E, b"RECOVER BASE LINE\n")
+        dev.send("edit %s" % FILE_E, 6.0)
+        c.check("spell editor opened",
+                _wait_editor(dev, "open", timeout=15) == "open",
+                "state=%r" % _ui_state(dev)[-160:])
+        # Learn an explicit word (worker event + SD append, async).
+        dev.send("\\spell-add %s" % SPELL_WORD, 4.0)
+        dev.send("\\q", 4.0)
+        dev.send("y", 2.5)
+        c.check("spell editor closed",
+                _wait_editor(dev, "closed", timeout=12) == "closed",
+                "state=%r" % _ui_state(dev)[-160:])
+        out = dev.run("spell list user", timeout=20)
+        c.expect("spell list shows learned word", SPELL_WORD.lower(), out)
+        out = dev.run("type DICTS/user.words", timeout=20)
+        c.expect("user.words persists the word", SPELL_WORD.lower(), out)
+        out = dev.run("spell forget %s" % SPELL_WORD, timeout=20)
+        c.expect("spell forget confirms", "forgot", out)
+        out = dev.run("spell list user", timeout=20)
+        c.check("spell forget removed the word", SPELL_WORD.lower() not in out,
+                out[-200:])
+
+        # Autosave: type without saving, let the crash file land, quit
+        # discarding, then recover the unsaved content back.
+        dev.send("edit %s" % FILE_E, 6.0)
+        c.check("recover editor opened",
+                _wait_editor(dev, "open", timeout=15) == "open",
+                "state=%r" % _ui_state(dev)[-160:])
+        dev.send(CRASH_MARK, 2.0)
+        time.sleep(6.0)  # first dirty tick spills promptly, then interval-gated
+        dev.send("\\q", 4.0)
+        dev.send("y", 2.5)
+        c.check("recover editor closed",
+                _wait_editor(dev, "closed", timeout=12) == "closed",
+                "state=%r" % _ui_state(dev)[-160:])
+        out = dev.run("recover", timeout=20)
+        c.expect("recover lists the crash", FILE_E, out)
+        out = dev.run("recover restore %s" % FILE_E, timeout=25)
+        c.expect("recover restore confirms", "restored", out)
+        out = dev.run("type %s" % FILE_E, timeout=20)
+        c.expect("restored file keeps unsaved marker", CRASH_MARK, out)
+        out = dev.run("recover discard %s" % FILE_E, timeout=20)
+        c.expect("recover discard confirms", "discarded", out)
+        # Sweep any other crash litter (e.g. the section-2 smoke session).
+        out = dev.run("recover clear", timeout=20)
+        c.expect("recover clear confirms", "cleared", out)
+        out = dev.run("recover", timeout=20)
+        c.expect("recover list clean", "no crash files", out)
 
         # The shell must be fully restored and functional.
         c.expect("shell restored", "EDITOR_SUITE_DONE",

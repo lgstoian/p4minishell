@@ -5,7 +5,7 @@ How to extend and integrate P4MiniShell. This is the practical companion to the
 registration tables, the modal/native-app patterns, and how to add commands,
 files, and boot hooks.
 
-- **Version:** v1.2.1 (ESP-IDF v5.5.5)
+- **Version:** v1.3.0 (ESP-IDF v5.5.5)
 - **Working rules and invariants:** [`ai-context.md`](ai-context.md)
 - **Architecture:** [`documentation.md`](documentation.md)
 - **User-facing commands:** [`command.md`](command.md)
@@ -271,6 +271,13 @@ internals. The service groups:
    `applib_net_ops_t` table. `command_init()` registers the hooks; every hook
    is NULL-checked, so the helpers degrade to safe defaults before
    registration.
+5. **Messaging** (`applib_msg.h`) — `app_msg_publish(topic, text)`,
+   `app_msg_subscribe(filter)`, and `app_msg_connected()` publish/subscribe
+   through the persistent MQTT event service via the registered
+   `applib_msg_ops_t` table (NULL-checked; false before registration).
+   Publishing journals to the SD outbox when offline — apps never touch
+   sockets. Use this for live events; use `applib_db.h`/`applib_state.h` for
+   stored data.
 5. **Input with timeout** (`applib_input.h`) — `app_wait_key(timeout_ms,
    &key)`, `app_read_line(buf, size, timeout_ms)`, and
    `app_read_password(buf, size, timeout_ms)` give apps bounded keypress /
@@ -319,9 +326,12 @@ and font modules — no new app model:
 - **Editor** (`components/editor/`): `editor_session_run_opts()` carries
   `focus` and `template_name`; `editor_doc_word_count()` is the pure word
    counter; `editor_spell_*` is the offline checker (wordlist read through an
-   internal DMA bounce buffer — never DMA into PSRAM). A new editor action is
-   one `editor_key_t` value + a `case` in the key handler + an OSK label + a
-   serial verb, exactly like `EDITOR_KEY_WRAP_TOGGLE`.
+  internal DMA bounce buffer — never DMA into PSRAM), extended by the
+  `spell_user_*` overlay and the session ignore list (`spell_ignore*`). A new
+  editor action is one `editor_key_t` value + a `case` in the key handler + an
+  OSK label + a serial verb, exactly like `EDITOR_KEY_WRAP_TOGGLE` (see
+  `EDITOR_KEY_SPELL_ADD`); actions that touch SD must route through a worker
+  `EDITOR_EVENT_*` bit, never run file I/O on the LVGL/UART tasks.
 - **Crypto-adjacent native code:** the Tab5 DMA heap fragments over a busy
   session, so any DMA consumer must request explicit small DMA buffers and
   handle NULL with a PSRAM/software fallback — never DMA into PSRAM (PSRAM is
@@ -333,7 +343,12 @@ and font modules — no new app model:
   `markdown_render_html_page` (`<!DOCTYPE html>` reader-CSS wrapper, the
   `markdown export ... html` target) and `markdown_render_print`
   (fixed-page, `print`) are separate output formats for the `markdown export`
-  verb.
+  verb. The same component owns the **HTML reader** (`html_render_ansi()`),
+  the inverse of `markdown_render_html`, used by `view`/`open`/`type` and the
+  editor preview; `markdown_expand_form_feeds()` renders a `print` export's
+  page breaks visibly. To add a document format, extend this component — never
+  add a second Markdown/HTML parser, and classify files through
+  `components/filetype/` rather than a local extension check.
 - **Fonts** (`components/font/`): `FONT_ROLE_READING` is the third role
   (proportional/serif allowed, `DejaVuSerif` vendored); the viewer and editor
   preview use `windows_get_reading_font()`, cell-metric surfaces stay on
@@ -355,6 +370,12 @@ Two more modules extend the same ownership boundary:
   It walks `netif_list`, the DNS servers, and the TCP/UDP PCB lists read-only under
   `LOCK_TCPIP_CORE()` when core locking is enabled. Never iterate or modify PCBs from
   another context without the lock.
+- `components/networking/netsvc.c` (+ the pure `mqtt_codec.c`) owns the ONE persistent
+  client connection: a single lazy task speaking MQTT 3.1.1 (plaintext LAN). It journals
+  publishes to `sd:/NET/OUTBOX/` (journal-first, at-least-once) and delivers inbound
+  events to batch only through the registered `netsvc_host_ops_t.execute_async` hook;
+  native apps go through `applib_msg.h`. Never add a second socket owner or a second
+  inbound notification loop; `$pim/...` merges reuse `components/pim/`.
 - `components/led/led.c` owns the WS2812 RGB status LED on GPIO26 (espressif/led_strip over
   RMT) and the animation task. `networking` pushes Wi-Fi/HTTP events with `led_notify()`;
   the `rgb` command (in `components/command`) and the CONFIG.SYS `RGB=` directive drive it.
@@ -430,7 +451,8 @@ work the integrator has to perform.
    | Declarative screens | `components/command/screen_commands.c` (`screen run|info`, INI reader + argv synthesis into the existing verbs) | declare in `command.h` |
    | Peripheral toolkit | `components/command/periph_commands.c` | declare in `command.h` |
    | Power / display / battery | `components/command/power_commands.c` | declare in `command.h` |
-   | Screenshot / serial | `components/command/serial_commands.c` | declare in `command.h` |
+    | Screenshot / serial | `components/command/serial_commands.c` | declare in `command.h` |
+    | Serial PIM sync | `components/command/pim_commands.c` (identity/merge in `components/pim/`) | declare in `command.h` |
     | System info | `components/shell/shell.c` | declare in `shell.h` (`debug save` is the exception: command-layer file I/O in `command.c`, mirroring `history /save`) |
    | Hardware, UI query, other system | `components/command/command.c` | keep `static` |
 
@@ -583,6 +605,16 @@ USB and touch wake through main.c and the LVGL indev scan in
 `shell_power_idle_tick()`. Idle-off must only toggle the backlight via
 `display_set_power_state()` — never halt the panel or touch shell state.
 
+Sleep wake is separate and assembled in `power_commands.c`
+(`shell_power_arm_light_wake()` / `shell_power_arm_deep_wake()`); do not add a
+second arming path. Light sleep can wake from any IO, so it arms the user GPIO,
+the touch interrupt (read from the live panel driver via
+`display_get_touch_int_gpio()`, never the compile-time pin macro), and the
+Tab5Keyboard interrupt. Deep sleep wakes only from an RTC IO (GPIO0..GPIO15 on
+the ESP32-P4); `shell_power_deep_wake_gpio_eligible()` gates it. Report wake
+availability honestly per board/revision rather than promising a source the
+hardware does not wire.
+
 ### Audio playback
 
 All audio lives in `components/audio/` (`audio.h`). To play a tone or WAV,
@@ -591,7 +623,12 @@ component's background task and return immediately; check `audio_busy()` to
 avoid the single-slot refusal, and `audio_stop()` to cancel. The command layer
 (`components/command/command.c`) only parses `beep`/`tone`/`wavplay`/`audio`/
 `volume` and calls these — do not reimplement codec or playback logic there.
-Chunk buffers stay on the heap, never on the audio task's stack.
+Chunk buffers stay on the heap, never on the audio task's stack. To query or
+set where playback goes, use `audio_get_output_mode()` /
+`audio_effective_route()` / `audio_headphone_state()` and
+`audio_set_output_mode()` — never drive amp or expander pins directly; the
+BSP owns the pins (`bsp_audio_speaker_enable`, `bsp_audio_headphone_detected`)
+and `components/audio` owns the route policy.
 
 ### Clipboard
 
@@ -807,7 +844,10 @@ full syntax): `timer`/`stopwatch` for timing with `/v:NAME`, `calc` unit/base
 functions (`BIN$`/`OCT$`/`VALB`/`C2F`/`IN2MM`/`LB2KG` and inverses), `csv
 rows|cols|cell|eval` for a spreadsheet-lite grid with `=EXPR`/`R1C1` formulas,
 `crypt lock|unlock` for AES-256-GCM file encryption, `export <db|alarms>
-<csv|json|txt>` for interchange, `tcpterm` for one-shot TCP, `usb userial` for
+<csv|json|txt|vcf|ics>` for interchange, `edit db <name> <id>` /
+`edit alarm <id>` for in-place record editing (CSV-safe, sync-stamp
+preserving), `pim get|put` for serial PIM sync
+(uid/newer-wins merge), `tcpterm` for one-shot TCP, `usb userial` for
 external serial, `bind F1..F12` for function-key macros, and `db /field:`
 `/sort:` for fielded record queries. The reference app
 `apps/palmtop/PALMTOP.BAT` demonstrates them end to end.

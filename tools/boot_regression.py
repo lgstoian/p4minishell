@@ -32,8 +32,9 @@ CAPTURE_S = 18.0
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Lines that are not firmware warnings:
 #   - ROM/bootloader banner and the memprobe diagnostic;
-#   - the IDF on-chip-LDO "voltage 0" note emitted while acquiring the SD
-#     power rail (`sd_pwr_ctrl_new_on_chip_ldo`) on the M5Stack Tab5;
+#   - the IDF on-chip-LDO "voltage 0" note: the Tab5 BSP used to trigger it via
+#     `sd_pwr_ctrl_new_on_chip_ldo` and now owns LDO_VO4 itself, so it should not
+#     appear; kept as a defensive guard in case a future BSP regresses;
 #   - the Tab5's first hosted RPC, which times out at the SDIO layer before the
 #     networking transport-reset retry recovers it (a persistent failure still
 #     surfaces as a later Wi-Fi init error, which is not benign).

@@ -116,6 +116,21 @@ static void config_render_volume(char *out, size_t out_size)
     snprintf(out, out_size, "%d", audio_get_volume());
 }
 
+static bool config_apply_audio_output(const char *value)
+{
+    audio_output_mode_t mode;
+
+    if (!audio_output_parse(value, &mode)) {
+        return false;
+    }
+    return audio_set_output_mode(mode) == ESP_OK;
+}
+
+static void config_render_audio_output(char *out, size_t out_size)
+{
+    snprintf(out, out_size, "%s", audio_output_name(audio_get_output_mode()));
+}
+
 static bool config_apply_prompt(const char *value)
 {
     if (value == NULL) {
@@ -254,6 +269,7 @@ static const config_setting_t config_settings[] = {
     { "BRIGHTNESS",       STR(P4_CONFIG_DISPLAY_DEFAULT_BRIGHTNESS), config_apply_brightness,       config_render_brightness },
     { "ROTATE",           "0",                                        config_apply_rotate,           config_render_rotate },
     { "VOLUME",           STR(P4_CONFIG_VOLUME_DEFAULT_PCT),         config_apply_volume,           config_render_volume },
+    { "AUDIO_OUTPUT",     "AUTO",                                      config_apply_audio_output,     config_render_audio_output },
     { "PROMPT",           P4_CONFIG_PROMPT_DEFAULT_TEMPLATE,         config_apply_prompt,           config_render_prompt },
     { "WIFI_AUTOCONNECT", "ON",                                      config_apply_wifi_autoconnect, config_render_wifi_autoconnect },
     { "DISPLAY_TIMEOUT",  "0",                                       config_apply_display_timeout,  config_render_display_timeout },

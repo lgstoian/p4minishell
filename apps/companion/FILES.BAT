@@ -8,6 +8,7 @@ rem =====================================================================
 
 :main
 :files_menu
+title "File Tools"
 echo [M-FILES]
 draw clear screen
 draw box 1 1 80 3 single
@@ -18,16 +19,8 @@ draw text 5 7 "Quick dir, search, trash, clipboard, notes"
 draw box 1 17 80 8 single "Status"
 draw text 5 19 "Use Browse for full-screen file picker"
 list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
-if errorlevel 255 goto :back
-if errorlevel 8 goto :back
-if errorlevel 7 goto :tcmd
-if errorlevel 6 goto :hex_demo
-if errorlevel 5 goto :notes
-if errorlevel 4 goto :clipboard
-if errorlevel 3 goto :trash
-if errorlevel 2 goto :search
-if errorlevel 1 goto :dir
-goto :browse
+on %errorlevel%+1 goto :browse,:dir,:search,:trash,:clipboard,:notes,:hex_demo,:tcmd,:back
+goto :back
 
 :browse
 tui fullscreen on
@@ -37,14 +30,11 @@ draw box 1 1 80 3 single
 draw text 30 2 "SELECTED FILE" 14
 echo Selected: %BROWSE_RESULT%
 list "Open" "View (TUI)" "Hexview" "Back"
-if errorlevel 255 goto :browse_done
-if errorlevel 2 goto :do_hexview
-if errorlevel 1 goto :do_view
-if errorlevel 0 goto :do_open
+on %errorlevel%+1 goto :do_open,:do_view,:do_hexview,:browse_done
 goto :browse_done
 :do_open
 tui fullscreen off
-type %BROWSE_RESULT%
+type < "%BROWSE_RESULT%"
 pause
 tui fullscreen on
 goto :browse_done
@@ -72,7 +62,7 @@ draw box 1 1 80 3 single
 draw text 35 2 "DIRECTORY" 14
 dir /a > _dir.txt
 view _dir.txt
-del /p _dir.txt
+del /p _dir.txt > NUL
 goto files_menu
 
 :search
@@ -80,13 +70,13 @@ ask /v:pat "Search pattern (e.g. *.txt)" "*.txt"
 if errorlevel 1 goto files_menu
 find /NAME:%pat% > _search.txt
 view _search.txt
-del /p _search.txt
+del /p _search.txt > NUL
 goto files_menu
 
 :trash
 trash list > _trash.txt
 view _trash.txt
-del /p _trash.txt
+del /p _trash.txt > NUL
 ask /v:idx "Restore entry number (blank = back)"
 if errorlevel 1 goto files_menu
 if "%idx%"=="NONE" goto files_menu
@@ -121,7 +111,7 @@ goto clipboard
 :clip_view
 clip > _clip.txt
 view _clip.txt
-del /p _clip.txt
+del /p _clip.txt > NUL
 goto clipboard
 
 :notes
@@ -130,7 +120,7 @@ draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "NOTE PAD" 14
 draw text 5 5 "Notes stored in sd:/NOTES"
-if not exist NOTES md NOTES
+if not exist NOTES md NOTES > NUL
 list "Notes" "New note" "List notes" "View note" "Browse notes" "Back"
 if errorlevel 255 goto :back
 if errorlevel 4 goto :back
@@ -153,7 +143,7 @@ goto notes
 :list_notes
 dir NOTES > _notes.txt
 view _notes.txt
-del /p _notes.txt
+del /p _notes.txt > NUL
 goto notes
 
 :view_note

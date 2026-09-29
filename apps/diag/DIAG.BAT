@@ -18,6 +18,7 @@ rem =====================================================================
 setlocal
 set REPORT=DIAG.TXT
 echo [M-DIAG]
+title "P4 Diagnostics"
 echo P4 Diagnostics report > %REPORT%
 echo ===================== >> %REPORT%
 
@@ -38,16 +39,7 @@ draw box 1 21 80 3 single
 draw text 3 22 "Select a diagnostic; Exit returns to the shell"
 echo [M-DIAG-MENU]
 list "P4 Diagnostics" "Full report" "Identity" "System" "Storage" "Network" "Devices" "Benchmark" "Capabilities" "Exit"
-if errorlevel 255 goto menu
-if errorlevel 8 goto do_exit
-if errorlevel 7 goto do_cap
-if errorlevel 6 goto do_bench
-if errorlevel 5 goto do_devices
-if errorlevel 4 goto do_network
-if errorlevel 3 goto do_storage
-if errorlevel 2 goto do_system
-if errorlevel 1 goto do_identity
-if errorlevel 0 goto do_full
+on %errorlevel%+1 goto :do_full,:do_identity,:do_system,:do_storage,:do_network,:do_devices,:do_bench,:do_cap,:do_exit
 goto menu
 
 rem ---- dispatch wrappers (call the section, then return to the menu) ---
@@ -137,9 +129,11 @@ echo ==== NETWORK ==== >> %REPORT%
 wifi status
 ipconfig
 netstat
+sync status
 wifi status >> %REPORT%
 ipconfig >> %REPORT%
 netstat >> %REPORT%
+sync status >> %REPORT%
 return
 
 rem ---- Devices --------------------------------------------------------
@@ -180,6 +174,8 @@ gosub :probe "csv" "csv rows"
 gosub :probe "markdown" "markdown DIAG.TXT"
 gosub :probe "network" "wifi status"
 gosub :probe "usb" "usb status"
+gosub :probe "sync" "sync status"
+gosub :probe "events" "net status"
 echo capabilities checked
 return
 
@@ -211,7 +207,18 @@ set bdx=4
 set bdy=3
 set n=0
 gfx stats reset
-:bench_loop
+while n LSS 150 do call :bench_frame
+screenshot DIAG_BENCH.BMP
+echo --- frame pacing (%n% frames) ---
+gfx stats
+gfx stats >> %REPORT%
+gfx close
+return
+:no_bench
+echo gfx unavailable in this context
+return
+
+:bench_frame
 set /a n+=1
 set /a bx+=%bdx%
 set /a by+=%bdy%
@@ -224,17 +231,6 @@ gfx rect 0 0 320 200 1
 gfx circle %bx% %by% 16 14 fill
 gfx circle %bx% %by% 6 15 fill
 gfx show
-if %n% GEQ 150 goto bench_done
-goto bench_loop
-:bench_done
-screenshot DIAG_BENCH.BMP
-echo --- frame pacing (%n% frames) ---
-gfx stats
-gfx stats >> %REPORT%
-gfx close
-return
-:no_bench
-echo gfx unavailable in this context
 return
 
 :help

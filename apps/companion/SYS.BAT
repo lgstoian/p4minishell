@@ -8,6 +8,7 @@ rem  appmode if TUI not available. Shows sysinfo, mem, ps, battery, wifi.
 rem =====================================================================
 
 :main
+title "Live System"
 echo [M-SYS]
 tui fullscreen on
 draw clear screen
@@ -20,14 +21,8 @@ draw text 5 7 "Use View to see sysinfo/mem/ps"
 draw text 5 8 "Use Save to keep snapshot"
 :refresh
 list "Dashboard" "Refresh" "View details" "Save snapshot" "Services" "Packages" "Back"
-if errorlevel 255 goto :back
-if errorlevel 5 goto :back
-if errorlevel 4 goto :packages
-if errorlevel 3 goto :services
-if errorlevel 2 goto :save
-if errorlevel 1 goto :view_details
-if errorlevel 0 goto :do_refresh
-goto refresh
+on %errorlevel%+1 goto :do_refresh,:view_details,:save,:services,:packages,:back
+goto :back
 :do_refresh
 draw clear screen
 draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"

@@ -15,4 +15,5 @@ idf_component_register(
         esp_driver_gpio
         esp_hw_support
         board_bsp
+        board_caps
 )

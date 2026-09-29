@@ -19,6 +19,8 @@
 #include "storage.h"
 #include "shell.h"
 #include "markdown.h"
+#include "html.h"
+#include "filetype.h"
 #include "ansi_palette.h"
 #include "header.h"
 #include "p4minishell_config.h"
@@ -1060,6 +1062,32 @@ static bool shell_type_md_accumulate(char ch)
     return false;
 }
 
+/**
+ * Whole-file HTML render for `type`. The line-by-line Markdown path cannot
+ * parse tags, so an HTML document is read (bounded), rendered to ANSI by the
+ * shared reader, and appended in one go. Reuses html_render_ansi() and the
+ * transcript's ANSI append (same channel the Markdown path uses).
+ */
+static void shell_type_html_stream(FILE *file)
+{
+    char *src = p4heap_alloc_psram(P4_CONFIG_HTML_RENDER_MAX_BYTES + 1);
+    char *out = p4heap_alloc_psram(P4_CONFIG_HTML_RENDER_MAX_BYTES + 1);
+    size_t got;
+
+    if (src == NULL || out == NULL) {
+        heap_caps_free(src);
+        heap_caps_free(out);
+        shell_transcript_appendf("%s", "(out of memory)");
+        return;
+    }
+    got = fread(src, 1, P4_CONFIG_HTML_RENDER_MAX_BYTES, file);
+    src[got] = '\0';
+    html_render_ansi(src, out, P4_CONFIG_HTML_RENDER_MAX_BYTES + 1);
+    shell_transcript_append_ansi(out);
+    heap_caps_free(src);
+    heap_caps_free(out);
+}
+
 /* Emit the accumulated line (no-op when empty). */
 static void shell_type_emit_md_line(void)
 {
@@ -1114,6 +1142,15 @@ esp_err_t shell_print_file_text(const char *normalized_path)
         return ESP_FAIL;
     }
 
+    /* HTML needs whole-document parsing; the per-line Markdown path below
+     * would show raw tags. Render it in one pass and return. */
+    if (markdown_get_auto() && filetype_is_html(filetype_of(normalized_path))) {
+        shell_type_html_stream(file);
+        fclose(file);
+        shell_sd_end(&session, "type");
+        return ESP_OK;
+    }
+
     /* Fresh accumulator per file (a file without trailing newline must not
      * leak its tail into the next one). */
     s_type_md_len = 0;
@@ -1128,6 +1165,12 @@ esp_err_t shell_print_file_text(const char *normalized_path)
 
         for (index = 0; index < bytes_read; index++) {
             if (buffer[index] == '\n' || buffer[index] == '\r' || buffer[index] == '\t') {
+                continue;
+            }
+            if (buffer[index] == '\f') {
+                /* Print-export page separator: a line break reads better than
+                 * the '.' a non-printable would get (viewer shows the rule). */
+                buffer[index] = '\n';
                 continue;
             }
             if (!isprint(buffer[index])) {

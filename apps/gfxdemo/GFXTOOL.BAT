@@ -9,6 +9,7 @@ rem  GFXTOOL.BMP, and exits. Needs PHOTO.BMP (apps/push_assets.py).
 rem  Markers: [M-GFXTOOL] / [M-GFXTOOL-IMG|NOIMG] / [M-GFXTOOL-DONE].
 rem =====================================================================
 echo [M-GFXTOOL]
+title "GFX Tool"
 gfx init 320 200
 if errorlevel 1 goto :nofx
 gfx clear 0x101820
@@ -22,6 +23,15 @@ gfx hline 8 190 304 0xFFFFFF
 gfx vline 158 20 120 0xFFFF00
 gfx text /scale:2 18 150 0xFFFFFF Gfx Toolkit
 gfx text 18 170 0x00FFFF tri ellipse poly fill text
+rem Sprite stamp row (blitmany): load the 16x16 BALL sprite once and stamp a
+rem diagonal row of copies, rotating each step 90 degrees. The stamps land
+rem in the free area below the triangle/ellipse and beside the PHOTO blit,
+rem so no representative primitive pixel (gfx_toolkit_test.py) is touched.
+gfx load 0 BALL.BMP
+set /a sx=24
+set /a sy=160
+for /L %%s in (0,1,3) do call :stamp %%s
+echo [M-GFXTOOL-BLIT]
 rem Scaled BMP blit below the text and above the hline: 232..312 x 154..186
 rem is outside every primitive/text region checked by gfx_toolkit_test.py.
 gfx image PHOTO.BMP 232 154 80 32
@@ -30,6 +40,14 @@ if not errorlevel 1 echo [M-GFXTOOL-IMG]
 gfx save GFXTOOL.BMP
 gfx close
 echo [M-GFXTOOL-DONE]
+return
+
+:stamp
+rem %1 = 0..3; %so% = the rotation for this step, sx/sy slide across the row.
+set /a so=%1*90
+gfx blitmany 0 /r:%so% %sx% %sy% transparent
+set /a sx+=34
+set /a sy-=14
 return
 
 :nofx

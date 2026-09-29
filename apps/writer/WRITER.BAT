@@ -20,6 +20,7 @@ rem =====================================================================
 setlocal
 set ERR=0
 echo [M-WRITER]
+title "Writer"
 echo WRITER: P4MiniShell writerdeck
 echo.
 echo WRITER: templates need apps/push_templates.py; spell needs apps/push_dicts.py
@@ -34,7 +35,7 @@ if "%HAVE_TEMPLATES%"=="0" (echo WRITER: FAIL some templates missing ^(run apps/
 echo.
 
 rem --- 2. Seed the demo document from the NOTE template (as edit /template does) ---
-if exist WRITERDEMO.MD del /f WRITERDEMO.MD
+if exist WRITERDEMO.MD del /f WRITERDEMO.MD > NUL
 if "%HAVE_TEMPLATES%"=="1" (copy TEMPLATES\NOTE.MD WRITERDEMO.MD)
 if exist WRITERDEMO.MD (echo WRITER: seeded WRITERDEMO.MD from template NOTE) else (echo WRITER: FAIL template seed & set ERR=1)
 append WRITERDEMO.MD ""

@@ -262,6 +262,10 @@ typedef struct {
     char goto_label[SHELL_COMMAND_BYTES];
     bool goto_pending;
     bool goto_eof;
+    /* >0 while a for/while body is executing: `call :label`/`gosub :label`
+     * inside must run inline, because a goto set from a loop body is only
+     * processed by the enclosing frame after the loop returns. */
+    int loop_body_depth;
     batch_stop_mode_t stop_mode;
     shell_env_var_t *setlocal_stack[SHELL_SETLOCAL_DEPTH_MAX];
     int setlocal_depth;
@@ -300,6 +304,7 @@ static batch_task_ctx_t *batch_ctx_current(void)
 #define s_goto_label         (batch_ctx_current()->goto_label)
 #define s_goto_pending       (batch_ctx_current()->goto_pending)
 #define s_goto_eof           (batch_ctx_current()->goto_eof)
+#define s_loop_body_depth    (batch_ctx_current()->loop_body_depth)
 #define s_stop_mode          (batch_ctx_current()->stop_mode)
 #define s_setlocal_stack     (batch_ctx_current()->setlocal_stack)
 #define s_setlocal_depth     (batch_ctx_current()->setlocal_depth)
@@ -337,6 +342,8 @@ static long shell_frame_tell(shell_batch_frame_t *frame);
 static void shell_frame_seek(shell_batch_frame_t *frame, long pos);
 static void shell_frame_load(shell_batch_frame_t *frame, FILE *file);
 static void batch_run_nested(char *command);
+static void shell_execute_label_block(const char *verb, const char *label,
+                                      int argc, char **argv);
 static esp_err_t shell_batch_run_internal(const char *path, const char *start_label,
                                           int argc, char **argv);
 
@@ -372,6 +379,21 @@ static void batch_run_nested(char *command)
         shell_transcript_append_text("batch: command pipeline is not available yet\n");
         shell_record_warningf("batch", "Nested execution attempted before command_init()");
         return;
+    }
+
+    /* A CPU-bound script (a tight for/while loop, a gfx animation) keeps the
+     * command worker running without ever blocking between lines, which
+     * starves IDLE0 and trips the task watchdog mid-app. Yield at most once a
+     * second (a 1-tick delay is the minimum that lets IDLE run); the throttle
+     * is a shared, atomic tick read, so the worst case is one extra yield. */
+    {
+        static TickType_t s_last_yield_tick;
+        TickType_t now = xTaskGetTickCount();
+
+        if ((TickType_t)(now - s_last_yield_tick) >= pdMS_TO_TICKS(1000)) {
+            s_last_yield_tick = now;
+            vTaskDelay(1);
+        }
     }
 
     s_command_ops.execute_command(command);
@@ -2316,10 +2338,16 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
 
                 if (token_len > 0 && token_len < sizeof(token)) {
                     char pseudo_buf[40];
+                    char expanded[SHELL_ENV_NAME_BYTES];
 
                     memcpy(token, input + 1, token_len);
                     token[token_len] = '\0';
-                    replacement = shell_expand_token_text(token, errorlevel_buf,
+                    /* cmd.exe expands `%VAR%`/`%1` before the delayed `!VAR!`
+                     * pass, so a nested form such as `!ITEM[%1]!` must resolve
+                     * its percent reference first (or the lookup uses the
+                     * literal `%1` and never matches). */
+                    shell_expand_variables(token, expanded, sizeof(expanded));
+                    replacement = shell_expand_token_text(expanded, errorlevel_buf,
                                                           pseudo_buf, strbuf,
                                                           sizeof(strbuf));
                 } else if (token_len == 0) {
@@ -2652,35 +2680,71 @@ static void shell_echo_emit_rendered(const char *text)
     }
 }
 
+bool shell_command_echo_glued(const char *word, char *sep_out, const char **rest_out)
+{
+    if (word == NULL) {
+        return false;
+    }
+    if (strncasecmp(word, "echo", 4) != 0 || word[4] == '\0') {
+        return false;
+    }
+    if (word[4] != '.' && word[4] != '/' && word[4] != '(' && word[4] != ':') {
+        return false;
+    }
+    if (sep_out != NULL) {
+        *sep_out = word[4];
+    }
+    if (rest_out != NULL) {
+        *rest_out = word + 5;
+    }
+    return true;
+}
+
 void shell_command_echo_text(char *line)
 {
     char *p;
     char *text;
+    bool glued;
 
     if (line == NULL) {
         return;
     }
 
-    /* Skip the leading "echo" word (case-insensitive) and the space after it. */
+    /* A DOS glued separator (`.`, `/`, `(`, `:`) glued to `echo` makes the
+     * word remainder literal text: `echo.` is a blank line, `echo.Hello` is
+     * `Hello`, and `echo.on` prints `on` (it must NOT toggle batch echo). */
+    glued = shell_command_echo_glued(line, NULL, NULL);
+
+    /* Skip the leading "echo" word, then the glued separator, then one space. */
     p = line + 4;
+    if (glued) {
+        p = line + 5;
+    }
     if (*p != '\0' && isspace((unsigned char)*p)) {
         p++;
     }
     p = shell_trim(p);
 
-    /* Bare `echo` reports the current batch-echo state. */
-    if (*p == '\0') {
+    /* Bare `echo` reports the current batch-echo state. A glued form never
+     * does (`echo.` is a blank line, handled below). */
+    if (!glued && *p == '\0') {
         shell_transcript_appendf_ansi(SH_LBL "ECHO is" SH_RST " " SH_VAL "%s" SH_RST "\n",
                  (s_active_batch_frame != NULL && !s_active_batch_frame->echo_enabled) ? "off" : "on");
         return;
     }
 
-    /* `echo on` / `echo off` toggle the batch echo state. Checked on the raw
-     * value (before caret-unescaping) so `echo ^on` prints "on" literally
-     * instead of toggling the flag. */
-    if (s_active_batch_frame != NULL &&
+    /* `echo on` / `echo off` toggle the batch echo state (exact word only, so
+     * `echo.on` prints the literal text). Checked on the raw value (before
+     * caret-unescaping) so `echo ^on` prints "on" literally too. */
+    if (!glued && s_active_batch_frame != NULL &&
         (shell_text_equals_ignore_case(p, "on") || shell_text_equals_ignore_case(p, "off"))) {
         s_active_batch_frame->echo_enabled = shell_text_equals_ignore_case(p, "on");
+        return;
+    }
+
+    /* Glued with an empty remainder prints one blank line. */
+    if (glued && *p == '\0') {
+        shell_transcript_append_text("\n");
         return;
     }
 
@@ -2689,9 +2753,10 @@ void shell_command_echo_text(char *line)
      * full interactive command line (up to P4_CONFIG_COMMAND_BYTES), and
      * `echo` runs on the recursive batch path, so the copy is heap-allocated. */
     shell_unescape_carets_in_place(p);
-    /* `echo /raw ...` bypasses Markdown auto-render (documented). */
-    if (shell_text_equals_ignore_case(p, "/raw") ||
-        strncasecmp(p, "/raw ", 5) == 0) {
+    /* `echo /raw ...` bypasses Markdown auto-render (documented). The
+     * space-separated form only; a glued `echo./raw` is literal text. */
+    if (!glued && (shell_text_equals_ignore_case(p, "/raw") ||
+                   strncasecmp(p, "/raw ", 5) == 0)) {
         const char *raw = p + 4;
         if (*raw != '\0') {
             raw++;
@@ -3001,7 +3066,13 @@ void shell_command_call(int argc, char **argv)
      * subroutine: the block runs until `return` / `exit /b` / `goto :eof` (or
      * end of file) and then execution resumes at the line after the call. */
     if (argv[1][0] == ':') {
-        (void)shell_local_subroutine_begin("call", argv[1] + 1, argc - 2, &argv[2]);
+        if (s_loop_body_depth > 0) {
+            /* Inside a for/while body the goto-based dispatch cannot work, so
+             * run the labelled block inline (with its arguments). */
+            shell_execute_label_block("call", argv[1] + 1, argc - 2, &argv[2]);
+        } else {
+            (void)shell_local_subroutine_begin("call", argv[1] + 1, argc - 2, &argv[2]);
+        }
         return;
     }
 
@@ -3026,7 +3097,11 @@ void shell_command_gosub(int argc, char **argv)
         return;
     }
     if (argv[1][0] == ':') {
-        (void)shell_local_subroutine_begin("gosub", argv[1] + 1, argc - 2, &argv[2]);
+        if (s_loop_body_depth > 0) {
+            shell_execute_label_block("gosub", argv[1] + 1, argc - 2, &argv[2]);
+        } else {
+            (void)shell_local_subroutine_begin("gosub", argv[1] + 1, argc - 2, &argv[2]);
+        }
         return;
     }
     shell_print_usage("Usage: gosub :label [args] | gosub <file.bat>::<routine> [args]");
@@ -3177,7 +3252,11 @@ void shell_command_on(int argc, char **argv)
         return;
     }
     if (is_gosub) {
-        (void)shell_local_subroutine_begin("on", selected, 0, NULL);
+        if (s_loop_body_depth > 0) {
+            shell_execute_label_block("on", selected, 0, NULL);
+        } else {
+            (void)shell_local_subroutine_begin("on", selected, 0, NULL);
+        }
     } else {
         shell_store_goto_target(selected);
         s_goto_pending = true;
@@ -3274,18 +3353,66 @@ void shell_command_goto(int argc, char **argv)
 
 void shell_command_shift(int argc, char **argv)
 {
+    int start = 0;
+    int frame_argc;
+
     (void)argc;
-    (void)argv;
     if (s_active_batch_frame == NULL) {
         shell_transcript_append_text("shift: only valid inside batch files\n");
         return;
     }
-    if (s_active_batch_frame->argc <= 1) return;
-    for (int i = 0; i < s_active_batch_frame->argc - 1; i++) {
+    frame_argc = s_active_batch_frame->argc;
+    if (argc >= 2 && argv != NULL && argv[1] != NULL &&
+        (argv[1][0] == '/' || argv[1][0] == '\\')) {
+        /* DOS `shift /n`: slide only `%n` onward. Anything else in switch
+         * position (or an out-of-range index) is a usage error. */
+        if (!shell_shift_parse_start(argv[1], frame_argc, &start)) {
+            shell_print_usage("Usage: shift [/n]");
+            return;
+        }
+    }
+    if (frame_argc <= 1) {
+        return;
+    }
+    if (start < 0 || start >= frame_argc) {
+        return;
+    }
+    for (int i = start; i < frame_argc - 1; i++) {
         memmove(s_active_batch_frame->args[i], s_active_batch_frame->args[i + 1], SHELL_COMMAND_BYTES);
     }
-    s_active_batch_frame->args[s_active_batch_frame->argc - 1][0] = '\0';
+    s_active_batch_frame->args[frame_argc - 1][0] = '\0';
     s_active_batch_frame->argc--;
+}
+
+/**
+ * Parse the `shift /n` switch: `/` or `\` followed by decimal digits naming
+ * the first slot to slide. Mirrors the DOS range (`0` behaves like a plain
+ * `shift`); anything past the last argument is out of range. Pure.
+ */
+bool shell_shift_parse_start(const char *arg, int frame_argc, int *start_out)
+{
+    long value = 0;
+
+    if (arg == NULL || start_out == NULL || frame_argc < 0) {
+        return false;
+    }
+    if (arg[0] != '/' && arg[0] != '\\') {
+        return false;
+    }
+    if (arg[1] == '\0') {
+        return false;
+    }
+    for (size_t i = 1; arg[i] != '\0'; i++) {
+        if (!isdigit((unsigned char)arg[i])) {
+            return false;
+        }
+        value = value * 10 + (arg[i] - '0');
+        if (value >= frame_argc) {
+            return false;
+        }
+    }
+    *start_out = (int)value;
+    return true;
 }
 
 void shell_command_if(int argc, char **argv)
@@ -3557,8 +3684,10 @@ void shell_command_pause(int argc, char **argv)
     shell_transcript_appendf_ansi(SH_MUTE "Press any key to continue . . . " SH_RST "\n");
 
     if (!shell_wait_for_key(SHELL_KEY_WAIT_TIMEOUT_MS, NULL)) {
+        /* A bounded timeout is normal (headless/batch use); report it in the
+         * transcript and debug history, never as a warning. */
         shell_transcript_append_text("pause: timed out waiting for a key\n");
-        shell_record_warningf("pause", "Timed out waiting for a keypress");
+        shell_record_infof("pause", "Timed out waiting for a keypress");
     }
     shell_key_wait_end();
 }
@@ -4694,11 +4823,19 @@ void shell_command_appmode(int argc, char **argv)
  */
 
 /** Build the spool path for pipeline stage @p stage. Per-task names so two
- * workers piping at once never share a spool file. */
+ * workers piping at once never share a spool file. Spools live in the shared
+ * SD temp directory (same boot cleanup as every other temp file) under a
+ * deterministic per-owner stem; a missing temp directory falls back to the
+ * card root so a pipe never fails on a temp-dir diagnostic. */
 static void shell_pipe_spool_path(int stage, char *output, size_t output_size)
 {
+    char stem[32];
     int slot = (int)(batch_ctx_current() - s_batch_ctx);
-    snprintf(output, output_size, "%s/_pipe%d_%d.tmp", BSP_SD_MOUNT_POINT, slot, stage);
+
+    snprintf(stem, sizeof(stem), "_pipe%d_%d", slot, stage);
+    if (storage_temp_path_stem(output, output_size, stem, "tmp") != ESP_OK) {
+        snprintf(output, output_size, "%s/_pipe%d_%d.tmp", BSP_SD_MOUNT_POINT, slot, stage);
+    }
 }
 
 void shell_execute_pipe(char *command)
@@ -5482,7 +5619,12 @@ static void shell_for_substitute_and_run_bindings(const char *do_command,
     }
     *dst = '\0';
 
+    /* Mark the loop-body context so `call :label`/`gosub :label` inside run
+     * the labelled block inline (a goto from a loop body cannot be processed
+     * until the loop returns). */
+    s_loop_body_depth++;
     batch_run_nested(expanded_cmd);
+    s_loop_body_depth--;
     free(expanded_cmd);
 }
 
@@ -5644,7 +5786,9 @@ void shell_forf_options_default(shell_forf_options_t *opts)
     opts->token_list[0] = 1;
     opts->token_count = 1;
     opts->skip = 0;
-    opts->eol = '\0';
+    /* cmd.exe parity: `;`-led lines are comments unless `eol=` overrides
+     * (an explicit empty `eol=` still disables the filter). */
+    opts->eol = ';';
     opts->star = false;
     opts->usebackq = false;
 }
@@ -6741,6 +6885,111 @@ static bool shell_while_split(char *line, char **cond_out, char **body_out)
     return false;
 }
 
+/**
+ * Execute a `:label` block inline (bypassing the goto mechanism) with the
+ * given arguments.
+ *
+ * Used for `call :label` / `gosub :label` issued from a for/while loop body:
+ * a goto set there is only processed by the enclosing frame after the loop
+ * returns, so the label must run directly. Seeks to the label in the current
+ * frame, runs lines until `return` / `goto :eof` / EOF, then restores the
+ * caller's position and arguments.
+ */
+static void shell_execute_label_block(const char *verb, const char *label,
+                                      int argc, char **argv)
+{
+    shell_batch_frame_t *frame = s_active_batch_frame;
+    long label_pos, resume_pos;
+    char *line;
+
+    if (frame == NULL) {
+        shell_transcript_appendf("%s: :label is only valid inside batch files\n", verb);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (label == NULL || label[0] == '\0') {
+        shell_print_error("%s: empty dispatch target", verb);
+        batch_set_errorlevel(1);
+        return;
+    }
+    label_pos = shell_find_label_pos(frame, label);
+    if (label_pos < 0) {
+        shell_transcript_appendf("call: the system cannot find the batch label specified - %s\n",
+                                 label);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    resume_pos = shell_frame_tell(frame);
+    if (!shell_label_call_enter(frame, resume_pos, argc, argv)) {
+        shell_print_error("%s: too many nested label calls", verb);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    shell_frame_seek(frame, label_pos);
+
+    line = malloc(SHELL_BATCH_LINE_BYTES);
+    if (line == NULL) {
+        (void)shell_label_call_leave(frame);
+        shell_frame_seek(frame, resume_pos);
+        batch_set_errorlevel(1);
+        return;
+    }
+
+    while (true) {
+        if (shell_frame_fgets(frame, line, SHELL_BATCH_LINE_BYTES) == NULL) {
+            break;  /* EOF — implicit return */
+        }
+        {
+            char *trimmed = shell_trim(line);
+            size_t len = strlen(trimmed);
+            while (len > 0 && (trimmed[len - 1] == '\n' || trimmed[len - 1] == '\r')) {
+                trimmed[--len] = '\0';
+            }
+            if (trimmed[0] == '\0' || shell_is_label(trimmed)) {
+                continue;
+            }
+            batch_run_nested(trimmed);
+        }
+        /* A `return` / `goto :eof` / `exit /b` ends the block. */
+        if (s_goto_eof) {
+            s_goto_eof = false;
+            s_goto_pending = false;
+            s_goto_label[0] = '\0';
+            break;
+        }
+        if (s_stop_mode == BATCH_STOP_FRAME) {
+            /* `exit /b` inside the label block — end the block, not the caller. */
+            s_stop_mode = BATCH_STOP_NONE;
+            s_goto_pending = false;
+            s_goto_label[0] = '\0';
+            break;
+        }
+        if (s_stop_mode != BATCH_STOP_NONE) {
+            break;  /* `exit` (ALL) — propagate to caller. */
+        }
+        if (s_goto_pending) {
+            /* An inner `goto` inside the label body — process it here. */
+            long goto_pos = shell_find_label_pos(frame, s_goto_label);
+            if (goto_pos >= 0) {
+                shell_frame_seek(frame, goto_pos);
+                s_goto_pending = false;
+                s_goto_label[0] = '\0';
+            } else {
+                /* Missing label — let the caller's frame loop handle it. */
+                break;
+            }
+        }
+    }
+
+    free(line);
+
+    /* Pop the scope and restore the caller's file position. */
+    (void)shell_label_call_leave(frame);
+    shell_frame_seek(frame, resume_pos);
+}
+
 void shell_command_while(int argc, char **argv)
 {
     char *command_line = NULL;
@@ -6826,9 +7075,19 @@ void shell_command_while(int argc, char **argv)
                 break;
             }
             shell_expand_variables(body, run, SHELL_BATCH_LINE_BYTES * 2);
+            /* Mark the loop-body context so `call :label`/`gosub :label`
+             * inside run the labelled block inline rather than setting a
+             * pending goto the frame loop cannot process until we return. */
+            s_loop_body_depth++;
             batch_run_nested(run);
+            s_loop_body_depth--;
             free(run);
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (s_stop_mode != BATCH_STOP_NONE) {
+                batch_set_errorlevel(0);
+                break;
+            }
+            if (s_goto_pending) {
+                /* A real `goto` (not `call :label`) should break the loop. */
                 batch_set_errorlevel(0);
                 break;
             }

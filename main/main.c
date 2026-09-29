@@ -559,6 +559,11 @@ static void shell_osk_into_input(const char *txt)
             lv_textarea_add_char(input_line, cp);
         }
     }
+
+    /* Keep the inline ghost completion in sync with OSK typing: the USB
+     * keyboard path refreshes it, but the on-screen keys must too, or the
+     * suggestion is stale (e.g. hidden right after an OSK submit). */
+    shell_input_line_ghost_refresh();
 }
 
 /* Logs on-screen keyboard mode changes and special button presses, and routes
@@ -961,6 +966,7 @@ void app_main(void)
         .record_warning = shell_networking_record_warning,
         .record_info = shell_networking_record_info,
         .notify_header = shell_header_notify,
+        .bluetooth_keyboard_input = shell_usb_keyboard_input,
     });
 
     /* Boot confirmation light: a short green flash once the shell is ready. */

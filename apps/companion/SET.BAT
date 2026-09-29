@@ -13,31 +13,21 @@ rem    owner ... / security ...      identity, passcode, private records
 rem  The app only drives shell commands; it owns no settings file.
 rem  Markers: [M-SET] [M-SET-BACK] [M-SET-THEME] [M-SET-THEME-SAVED]
 rem           [M-SET-FONT] [M-SET-FONT-SAVED] [M-SET-ROTATE] [M-SET-SEC]
+rem           [M-SET-QUICK]
 rem  Indices below are 0-based (list returns the selected 0-based index).
 rem =====================================================================
 
 :main
+title "Settings"
 echo [M-SET]
 draw clear screen
 draw box 1 1 80 3 single
 draw text 34 2 "PREFERENCES" 14
 draw box 1 4 80 16 single "Options"
 draw text 5 6 "Settings persist in CONFIG.SYS"
-list "Preferences" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back"
-if errorlevel 255 goto :back
-if errorlevel 12 goto :back
-if errorlevel 11 goto :show_all
-if errorlevel 10 goto :security
-if errorlevel 9 goto :system
-if errorlevel 8 goto :keyboard
-if errorlevel 7 goto :cursor
-if errorlevel 6 goto :fonts
-if errorlevel 5 goto :theme
-if errorlevel 4 goto :header
-if errorlevel 3 goto :idle
-if errorlevel 2 goto :rotate
-if errorlevel 1 goto :volume
-goto :brightness
+list "Preferences" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back" "Quick settings"
+on %errorlevel%+1 goto :brightness,:volume,:rotate,:idle,:header,:theme,:fonts,:cursor,:keyboard,:system,:security,:show_all,:back,:quick
+goto :back
 
 :brightness
 draw box 1 1 80 3 single
@@ -67,12 +57,9 @@ draw clear screen
 draw box 1 1 80 3 single
 draw text 34 2 "ROTATE" 14
 list "Rotate" "0" "90" "180" "270" "Back"
-if errorlevel 255 goto :main
-if errorlevel 4 goto :main
-if errorlevel 3 config ROTATE 270 & goto :rot_done
-if errorlevel 2 config ROTATE 180 & goto :rot_done
-if errorlevel 1 config ROTATE 90 & goto :rot_done
-config ROTATE 0
+if %errorlevel% GEQ 4 goto :main
+set /a deg=%errorlevel%*90
+config ROTATE %deg%
 :rot_done
 dialog "Preferences" "Rotation saved." "OK"
 goto :main
@@ -126,7 +113,7 @@ goto :theme
 echo [M-SET-THEME-SHOW]
 theme show > _theme.txt
 view _theme.txt
-del /p _theme.txt
+del /p _theme.txt > NUL
 goto :theme
 
 :fonts
@@ -190,7 +177,7 @@ goto :fonts
 :fonts_show
 font list > _font.txt
 view _font.txt
-del /p _font.txt
+del /p _font.txt > NUL
 goto :fonts
 
 :fonts_default
@@ -292,10 +279,30 @@ draw box 1 1 80 3 single
 draw text 33 2 "ALL SETTINGS" 14
 config /b > _set.txt
 view _set.txt
-del /p _set.txt
+del /p _set.txt > NUL
 goto :main
 
 :back
 echo [M-SET-BACK]
 draw clear screen
 goto :eof
+
+:quick
+rem One form, four persistent scalars: range sliders, a select roller and a
+rem checkbox. Prefill from the last accepted values (or safe defaults) so a
+rem serial-driven "ok" never sends an empty slider value; cancel is 255 and
+rem applies nothing.
+echo [M-SET-QUICK]
+if not defined QBR set QBR=50
+if not defined QVO set QVO=50
+if not defined QRO set QRO=0
+if not defined QHDR set QHDR=1
+form /t:30 "Quick settings" "Brightness=range:0-100:QBR" "Volume=range:0-100:QVO" "Rotate=select:0|90|180|270:QRO" "Header on=check:QHDR"
+if errorlevel 1 goto :main
+config BRIGHTNESS %QBR%
+config VOLUME %QVO%
+config ROTATE %QRO%
+if "%QHDR%"=="1" config HEADER ON
+if "%QHDR%"=="0" config HEADER OFF
+dialog "Preferences" "Quick settings applied." "OK"
+goto :main

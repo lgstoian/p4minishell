@@ -290,7 +290,8 @@ def run(dev, ctx):
         if gfx_shot is not None:
             c.equals("gfx screenshot width", gfx_shot.width, disp_w)
             c.equals("gfx screenshot height", gfx_shot.height, disp_h)
-            magenta = gfx_shot.count_near(0, 40, 1024, 480, (248, 0, 248), tol=40)
+            magenta = gfx_shot.count_near(0, 0, gfx_shot.width, gfx_shot.height,
+                                           (248, 0, 248), tol=40)
             c.check("gfx canvas sprite visible", magenta > 0, "magenta px=%d" % magenta)
 
         c.expect("gfx save", "gfx: saved", dev.run("gfx save %s" % GFX_BMP, timeout=30))

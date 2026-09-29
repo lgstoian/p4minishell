@@ -74,7 +74,7 @@ rem ---- selftest: for /f command form ------------------------------------
 rem Iterates command output instead of a file (no temp file needed).
 rem Callable headless: call LIB.BAT::selftest_forf_cmd
 :selftest_forf_cmd
-for /f "tokens=*" %%v in ('echo hello-forf') do echo SELFTEST forf-cmd got=[%%v]
+for /f "eol= tokens=*" %%v in ('echo hello-forf') do echo SELFTEST forf-cmd got=[%%v]
 goto :eof
 
 rem ---- selftest: defined/empty observation -------------------------------
@@ -90,6 +90,22 @@ if defined SELFTEST_X echo SELFTEST defined-after-set=1
 set SELFTEST_X=
 goto :eof
 
+rem ---- selftest: substring/replace + for /A ------------------------------
+rem Exercises the `%VAR:~%` / `%VAR:old=new%` expansions and the associative
+rem `for /A` binding (index in %%k, live slot value in the next letter).
+rem Callable headless: call LIB.BAT::selftest_expansion
+:selftest_expansion
+set SELFTEST_WORD=cloudpilot
+echo SELFTEST substr=[%SELFTEST_WORD:~0,4%]
+echo SELFTEST replace=[%SELFTEST_WORD:pilot=P4%]
+set SELFTEST_A[0]=alpha
+set SELFTEST_A[1]=beta
+for /A %%k in (SELFTEST_A) do echo SELFTEST fora %%k=%%l
+set SELFTEST_A[0]=
+set SELFTEST_A[1]=
+set SELFTEST_WORD=
+goto :eof
+
 rem ---- selftest: all ------------------------------------------------------
 rem Runs every selftest routine above. Callable headless:
 rem   call LIB.BAT::selftest_all
@@ -97,5 +113,6 @@ rem   call LIB.BAT::selftest_all
 call LIB.BAT::selftest_tilde "sd:/DIR/FILE.TXT"
 call LIB.BAT::selftest_forf_cmd
 call LIB.BAT::selftest_defined
+call LIB.BAT::selftest_expansion
 echo SELFTEST done
 goto :eof

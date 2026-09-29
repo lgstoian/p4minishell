@@ -3,26 +3,26 @@ rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  ADVENT.BAT - a tiny pure-batch text adventure for P4MiniShell.
-rem  Reference app: rooms, inventory, score, save/load, all in batch.
+rem  Reference app: the move map is one `switch %cmd%%room%` statement
+rem  (glued single-token match values), rooms use single-line `if (true)
+rem  else (false)` groups, and inventory lives in an ITEM[name] array
+rem  walked with `for` + delayed `!ITEM[%1]!` reads. Multi-word verbs
+rem  (take key) stay an if-chain: switch matches are split on spaces.
 rem  Type lowercase commands. Markers: [M-ADV] / [M-ADV-WIN] / [M-ADV-QUIT].
 rem =====================================================================
-setlocal
+setlocal enabledelayedexpansion
 set room=courtyard
-set has_lantern=0
-set has_key=0
-set has_amulet=0
+set ITEM[lantern]=0
+set ITEM[key]=0
+set ITEM[amulet]=0
 set score=0
 set moves=0
 echo [M-ADV]
+title "Adventure"
 goto room_courtyard
 
 :back_to_room
-if "%room%"=="hall" goto room_hall
-if "%room%"=="library" goto room_library
-if "%room%"=="tower" goto room_tower
-if "%room%"=="cellar" goto room_cellar
-if "%room%"=="garden" goto room_garden
-goto room_courtyard
+switch %room% hall:room_hall library:room_library tower:room_tower cellar:room_cellar garden:room_garden /d:room_courtyard
 
 :room_courtyard
 set room=courtyard
@@ -44,8 +44,7 @@ goto prompt
 set room=library
 draw clear screen
 draw box 1 1 80 3 double "LIBRARY"
-if "%has_key%"=="1" draw text 5 5 "Dusty shelves. The key hook stands empty."
-if "%has_key%"=="0" draw text 5 5 "Dusty shelves. A brass key hangs on a hook."
+if "!ITEM[key]!"=="0" (draw text 5 5 "Dusty shelves. A brass key hangs on a hook.") else (draw text 5 5 "Dusty shelves. The key hook stands empty.")
 draw text 5 6 "Exits: e"
 goto prompt
 
@@ -53,31 +52,18 @@ goto prompt
 set room=tower
 draw clear screen
 draw box 1 1 80 3 double "TOWER"
-if "%has_amulet%"=="1" draw text 5 5 "Windy rooftop. The pedestal is empty."
-if "%has_amulet%"=="0" draw text 5 5 "Windy rooftop. A glowing amulet rests on a pedestal."
+if "!ITEM[amulet]!"=="0" (draw text 5 5 "Windy rooftop. A glowing amulet rests on a pedestal.") else (draw text 5 5 "Windy rooftop. The pedestal is empty.")
 draw text 5 6 "Exits: d"
 goto prompt
 
 :room_cellar
-if not "%has_lantern%"=="1" goto cellar_dark
-set room=cellar
-draw clear screen
-draw box 1 1 80 3 double "CELLAR"
-draw text 5 5 "Your lantern lights a wine cellar. An iron chest sits here."
-draw text 5 6 "Exits: w"
-goto prompt
-:cellar_dark
-draw clear screen
-draw text 5 5 "Pitch black below. You stumble back up to the hall."
-delay 1200
-goto room_hall
+if "!ITEM[lantern]!"=="1" (set room=cellar & draw clear screen & draw box 1 1 80 3 double "CELLAR" & draw text 5 5 "Your lantern lights a wine cellar. An iron chest sits here." & draw text 5 6 "Exits: w" & goto prompt) else (draw clear screen & draw text 5 5 "Pitch black below. You stumble back up to the hall." & delay 1200 & goto room_hall)
 
 :room_garden
 set room=garden
 draw clear screen
 draw box 1 1 80 3 double "GARDEN"
-if "%has_lantern%"=="1" draw text 5 5 "Moonlit garden. The lantern post is bare."
-if "%has_lantern%"=="0" draw text 5 5 "Moonlit garden. A lantern hangs by the gate."
+if "!ITEM[lantern]!"=="0" (draw text 5 5 "Moonlit garden. A lantern hangs by the gate.") else (draw text 5 5 "Moonlit garden. The lantern post is bare.")
 draw text 5 6 "Exits: w"
 goto prompt
 
@@ -110,37 +96,28 @@ echo I do not understand "%cmd%".
 goto prompt
 
 :move
-if "%cmd%%room%"=="ncourtyard" goto room_hall
-if "%cmd%%room%"=="shall" goto room_courtyard
-if "%cmd%%room%"=="ecourtyard" goto room_garden
-if "%cmd%%room%"=="ehall" goto room_cellar
-if "%cmd%%room%"=="elibrary" goto room_hall
-if "%cmd%%room%"=="whall" goto room_library
-if "%cmd%%room%"=="wcellar" goto room_hall
-if "%cmd%%room%"=="wgarden" goto room_courtyard
-if "%cmd%%room%"=="uhall" goto room_tower
-if "%cmd%%room%"=="dtower" goto room_hall
+switch %cmd%%room% ncourtyard:room_hall shall:room_courtyard ecourtyard:room_garden ehall:room_cellar elibrary:room_hall whall:room_library wcellar:room_hall wgarden:room_courtyard uhall:room_tower dtower:room_hall
 echo You cannot go that way.
 goto prompt
 
 :t_key
 if not "%room%"=="library" goto deny
-if "%has_key%"=="1" goto deny
-set has_key=1
+if "!ITEM[key]!"=="1" goto deny
+set ITEM[key]=1
 set /a score+=10
 echo You take the brass key. [+10]
 goto prompt
 :t_lantern
 if not "%room%"=="garden" goto deny
-if "%has_lantern%"=="1" goto deny
-set has_lantern=1
+if "!ITEM[lantern]!"=="1" goto deny
+set ITEM[lantern]=1
 set /a score+=10
 echo You take the lantern. [+10]
 goto prompt
 :t_amulet
 if not "%room%"=="tower" goto deny
-if "%has_amulet%"=="1" goto deny
-set has_amulet=1
+if "!ITEM[amulet]!"=="1" goto deny
+set ITEM[amulet]=1
 set /a score+=20
 echo You take the glowing amulet. [+20]
 goto prompt
@@ -149,27 +126,30 @@ echo Can't do that here.
 goto prompt
 
 :u_key
-if not "%has_key%"=="1" goto deny
+if not "!ITEM[key]!"=="1" goto deny
 if not "%room%"=="cellar" goto deny
 goto do_win
 :u_lantern
-if not "%has_lantern%"=="1" goto deny
+if not "!ITEM[lantern]!"=="1" goto deny
 echo The lantern burns steady. The dark holds no fear now.
 goto prompt
 :u_amulet
-if not "%has_amulet%"=="1" goto deny
+if not "!ITEM[amulet]!"=="1" goto deny
 echo The amulet hums warm in your hand.
 set /a score+=5
 goto prompt
 
 :inv
 echo You carry:
-set /a inv_n=%has_lantern% + %has_key% + %has_amulet%
-if "%has_lantern%"=="1" echo " - lantern"
-if "%has_key%"=="1" echo " - brass key"
-if "%has_amulet%"=="1" echo " - glowing amulet"
+set /a inv_n=ITEM[lantern]+ITEM[key]+ITEM[amulet]
+for %%i in (lantern key amulet) do call :invcheck %%i
 if %inv_n% EQU 0 echo " - nothing yet"
 goto prompt
+:invcheck
+rem %1 = item name; delayed !ITEM[%1]! resolves the per-name slot and the
+rem nested if-groups map the slot name to its display label.
+if "!ITEM[%1]!"=="1" (if "%1"=="key" (echo " - brass key") else (if "%1"=="amulet" (echo " - glowing amulet") else (echo " - lantern")))
+return
 
 :show_score
 echo Score: %score% in %moves% moves.
@@ -186,9 +166,9 @@ goto back_to_room
 
 :save
 echo set room=%room% > ADVENT.SAV
-echo set has_lantern=%has_lantern% >> ADVENT.SAV
-echo set has_key=%has_key% >> ADVENT.SAV
-echo set has_amulet=%has_amulet% >> ADVENT.SAV
+echo set ITEM[lantern]=!ITEM[lantern]! >> ADVENT.SAV
+echo set ITEM[key]=!ITEM[key]! >> ADVENT.SAV
+echo set ITEM[amulet]=!ITEM[amulet]! >> ADVENT.SAV
 echo set score=%score% >> ADVENT.SAV
 echo set moves=%moves% >> ADVENT.SAV
 echo [M-ADV-SAVED]

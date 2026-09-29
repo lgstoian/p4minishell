@@ -42,7 +42,7 @@ does" reference in [documentation.md](documentation.md).
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.2.1** (`p4minishell_config.h` version macros) |
+| Version | **v1.3.0** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -85,6 +85,12 @@ The only upward dependencies are inverted through registration tables
 # One-time per shell: source ESP-IDF (adjust the path to your install)
 $env:IDF_PATH = "<path-to-esp-idf-v5.5.5>"
 . $env:IDF_PATH\export.ps1
+
+# Keep the build warning-free on a fresh configure: the reference board BSP is
+# intentionally vendored under managed_components/ and added as an
+# EXTRA_COMPONENT_DIR, which the component manager otherwise reports as an
+# "unexpected" managed file (IDF's documented switch).
+$env:IDF_COMPONENT_SUPPRESS_UNKNOWN_FILE_WARNINGS = "1"
 
 # Firmware (replace <COM_PORT> with your board's port)
 idf.py build
@@ -318,7 +324,7 @@ tools use a webcam to observe the device; prefer them over guessing.
 
 ### Module Layering Rules
 - Component dependencies flow ONE WAY: `main` -> `command` -> `batch` -> `storage` -> `shell` -> (`ansi`, `display`, `windows`, `header`, `keyboard`, `clock`). `components/modal/` is a shared runtime used by `editor` and by the batch `dialog`/`list`/`ask` commands; it is reached through `command`/`batch`, never from `shell`.
-- Leaf components below the shell: `components/tui/` (80x25 cell buffer + draw primitives, reached by `draw`/`tui` in `components/command/tui_commands.c` and by `windows`), `components/gfx/` (pure RGB565 raster + general 24/32-bit BMP parser/decoder + scaled decode + nearest scaling + aspect-fit + blit + B2 toolkit primitives + 8x8 font `gfx_font.c`, no LVGL; reached by `components/command/gfx_commands.c`, `image_commands.c`, `components/tui/`, and `components/modal/`), `components/filetype/` (extension→kind registry), `components/markdown/`, `components/font/` (registry + SD TTF + CJK + theme registry `theme.c`), `components/db/`, `components/alarm/`, `components/audio/`, `components/boot/`, `components/clock/`, `components/strutil/` (shared case-insensitive compare + arg split leaf).
+- Leaf components below the shell: `components/tui/` (80x25 cell buffer + draw primitives, reached by `draw`/`tui` in `components/command/tui_commands.c` and by `windows`), `components/gfx/` (pure RGB565 raster + general 24/32-bit BMP parser/decoder + scaled decode + nearest scaling + aspect-fit + blit + B2 toolkit primitives + 8x8 font `gfx_font.c`, no LVGL; reached by `components/command/gfx_commands.c`, `image_commands.c`, `components/tui/`, and `components/modal/`), `components/filetype/` (extension→kind registry), `components/markdown/`, `components/font/` (registry + SD TTF + CJK + theme registry `theme.c`), `components/db/`, `components/alarm/`, `components/pim/` (single vCard/iCalendar codecs + sync identity/merge; REQUIRES only db, alarm, p4heap; never prints/parses commands), `components/audio/`, `components/boot/`, `components/clock/`, `components/strutil/` (shared case-insensitive compare + arg split leaf).
 - `components/applib/` is the native-app runtime library (the shell SDK
   surface). It is a leaf: REQUIRES only `shell`, `clock`, `storage`, `db`, `tui` (for the
   shared INI / temp-file state mechanics, the same guarded-SD pattern the
@@ -515,12 +521,22 @@ tools use a webcam to observe the device; prefer them over guessing.
   `components/networking/`). `CONFIG_LWIP_TCP_WND_DEFAULT`/
   `CONFIG_LWIP_TCP_SND_BUF_DEFAULT` are 32768 (raised from 5760 in v0.38.1) so the window is not the
   bottleneck. `tools/regression.py` runs the whole host suite in one command.
-- The transcript is a scrollable CONTAINER holding the span group. The span group is sized to
-  its exact wrapped content height (`windows_transcript_update_content_size()`), never
-  `LV_SIZE_CONTENT`: a content-sized child inside a scrollable container makes
-  `lv_obj_update_layout()` loop forever (the `scr->scr_layout_inv` while-loop), freezing the
-  LVGL task. An explicit pixel height keeps the widget in `LV_SPAN_MODE_FIXED` so layout
-  converges in one pass while the container still scrolls.
+- The transcript is a scrollable CONTAINER with a **windowed row model**
+  (`bugs.md` F26): the scrollback bytes stay whole in the PSRAM staging buffer,
+  a `P4_CONFIG_TRANSCRIPT_ROW_CAP`-deep row table records each line's byte
+  offset / wrapped height / ANSI foreground, and a full-height transparent
+  **spacer** child sets the container's scroll range. Only the rows overlapping
+  the viewport (plus `P4_CONFIG_TRANSCRIPT_WINDOW_MARGIN_PX`) are materialized
+  as spans, re-filled on scroll events and on the apply — so both the apply and
+  the draw are O(viewport), not O(scrollback). The span group and its hidden
+  measure scratch must serve an explicit pixel height (never `LV_SIZE_CONTENT`):
+  a content-sized child inside a scrollable container makes
+  `lv_obj_update_layout()` loop forever (the `scr->scr_layout_inv` while-loop),
+  freezing the LVGL task. An explicit height keeps the widgets in
+  `LV_SPAN_MODE_FIXED`, so layout converges in one pass while the container
+  scrolls through the spacer; the scratch must stay hidden (so it never widens
+  the scroll extent) with the default `line_space` (measurement reads it from
+  the group style).
 - Transcript follow policy: new output pins the view to the bottom only when the view is within
   `P4_CONFIG_TRANSCRIPT_SCROLL_FOLLOW_PX` of the bottom. Submitting a command
   (`shell_force_transcript_scroll_to_end()`) sets a one-shot force-follow flag so the command's
@@ -719,7 +735,19 @@ the raster core + 8x8 font are `components/gfx/`
   - Alarm / calendar (`alarm ...`, `cal ...`) -> `components/command/alarm_commands.c`
   - Fonts/theme/cursor (`font ...`, `theme show`, `cursor ...`) -> `components/command/font_commands.c`
     and `components/command/command_ui.c` (keyboard/windows/cursor)
-  - Markdown (`markdown`) -> `components/command/md_commands.c` (renderer `components/markdown/`)
+  - Markdown (`markdown`) -> `components/command/md_commands.c` (renderer `components/markdown/`).
+    `components/markdown/` is the ONE home for document formats: the CommonMark-subset
+    ANSI renderer, the HTML serializer (`markdown_html.c`), the print paginator
+    (`markdown_print.c`), and the HTML reader (`html_read.c`, `html_render_ansi()` — the
+    inverse serializer). Never add a second Markdown or HTML parser: `.md`/`.html` reading
+    goes through `html_render_ansi()`/`markdown_render_doc()`, `.html` is classified by the
+    `filetype` registry (never a local extension check), and plain surfaces reuse
+    `markdown_strip_ansi()` rather than a new stripper. `view`/`open`/`type` render
+    `.md`/`.html` (respecting `--raw` and `markdown on|off`); `edit` highlights `.html`
+    via `editor_lex_html()` in the shared editor lexer framework (one `editor_lex_emit`
+    helper), with `<!-- -->` comment toggle and the HTML preview through `html_render_ansi()`.
+    Adding `.html`/`.htm` to the registry must also add `FILETYPE_HTML` to the `gfind /files`
+    text-bearing set (`gfind_commands.c`), or HTML silently stops being searchable.
   - JSON (`json validate|pretty`) -> `components/command/json_commands.c`
   - Power/idle/sleep/battery/volume -> `components/command/power_commands.c`
   - Peripheral toolkit (`gpio`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`) ->
@@ -736,6 +764,25 @@ the raster core + 8x8 font are `components/gfx/`
   - Portable interchange (`export <db|alarms> <csv|json|txt> <file>`) ->
     `components/command/export_commands.c`; it MUST render through the existing `db_find`/`db_get`
     and `alarm_list` APIs (no parallel readers) and write via `storage_write_text_file` (atomic).
+  - Serial PIM sync (`pim get|put`) -> `components/command/pim_commands.c`;
+    it MUST reuse the shared serial engine (`serial_write_frame_header` /
+    `serial_xfer_stream_buffer` / `serial_xfer_receive_pump`, the one CRC,
+    the one RX pump) with the `PIMX` magic and the identity/merge API in
+    `components/pim/` (never a second vCard/iCal parser/writer, never new
+    stores — PIM is an overlay on `db`+`alarm`). `export`/`import` stay
+    byte-identical: identity lines live only in the `pim get` render path.
+  - Record editing (`edit db <name> <id>` / `edit alarm <id>`) ->
+    `components/command/edit_record_commands.c`; it MUST stage payloads
+    byte-verbatim into a temp `.txt` (CSV-safe), save back through
+    `db_set`/`alarm_set` only (never direct store-file writes), skip the
+    write when unchanged, preserve sync identity (stored alarm `uid`
+    survives; `mtime=`/`modified` bump on change via the pure
+    `pim_payload_bump_mtime()`), gate secrets on
+    `security_can_reveal_private()`, and keep the temp file (printing its
+    path) on any post-editor failure. Canonical event text is the ONE
+    shared core `alarm_event_format()` / `alarm_event_parse_core()` in
+    `components/alarm/alarm.c` (public as `alarm_event_render()` /
+    `alarm_event_parse()`).
   - Password encryption (`crypt lock|unlock`) -> `components/command/crypt_commands.c`; the ONE
     AES-256-GCM/PBKDF2 core is the `crypt_*_mem`/`crypt_derive_key` set there (mbedTLS), streaming
     files in 512 B chunks (`P4_CONFIG_CRYPT_CHUNK_BYTES`). A self-contained software AES-256-GCM
@@ -753,6 +800,21 @@ the raster core + 8x8 font are `components/gfx/`
     needs (M48; same class as M38/O8).
   - TCP terminal (`tcpterm`) -> `components/networking/tcpterm.c` (owned with ping/dns/http;
     `components/networking/` stays the sole owner of the lwIP socket surface).
+  - USB-sync handshake (`sync [status]`) -> `components/command/sync_commands.c`; read-only
+    `sync.*` capability snapshot (proto tag, board, SD/lock state, transfer magics, byte
+    limits) assembled from `storage` + lock state only — it MUST NOT enumerate store
+    contents (inventory stays with `dir /b`, `db`, `alarm`, `pkg`, `asset`) and MUST NOT add a
+    framing reader, CRC, or walker.
+  - Event service (`net status|broker|password|connect|disconnect|sub|unsub|subs|pub|msg|onmsg|outbox`)
+    -> `components/command/netsvc_commands.c`, a thin shell over the ONE MQTT service in
+    `components/networking/netsvc.c` (with the pure `mqtt_codec.c`). The service owns the only
+    persistent client connection: one lazy task, sockets via the shared networking component,
+    SD outbox journal-first delivery, and `$pim/...` inbound merges through the ONE
+    `components/pim/` merger. Inbound reaches batch ONLY through the registered
+    `netsvc_host_ops_t.execute_async` hook (the `/onmsg` line) plus the last-message slot —
+    never a second dispatcher, notification loop, or socket owner. Native apps publish/
+    subscribe through `applib_msg.h` (`applib_msg_ops_t`, registered by `command_init()`),
+    never `networking.h`.
   - Stopwatch (`timer`/`stopwatch`) -> `components/clock/clock_timer.c` (pure slot core) + the
     command surface in `clock_commands.c`; results reach the environment only through the
     registered `clock_host_ops_t.set_env` hook (the clock component stays a leaf).
@@ -976,11 +1038,27 @@ the raster core + 8x8 font are `components/gfx/`
   keyboard/mouse through main.c, and command dispatch through the top of
   `shell_execute_command_core()`. Guard the idle state (timeout, last-activity timestamp,
   off-by-idle flag) with a `portMUX` critical section; it is touched from several tasks.
-- Sleep wake: timer always; `P4_CONFIG_POWER_WAKE_GPIO` (default `GPIO_NUM_NC`) enables
-  `gpio_wakeup_enable()` + `esp_sleep_enable_gpio_wakeup()` and is disabled after wake. The
-  GT911 INT line is NOT wired on this board (`BOARD_CFG_LCD_TOUCH_INT_GPIO = GPIO_NUM_NC`), so
-  touch cannot wake light sleep — report that honestly in `sleep`/`power` and point at the
-  alternatives instead of pretending touch wake works.
+- Sleep wake is assembled per board by `shell_power_arm_light_wake()` /
+  `shell_power_arm_deep_wake()` in `power_commands.c`; never add a second arming path.
+  - **Light sleep** wakes from ANY IO (`gpio_wakeup_enable` + `esp_sleep_enable_gpio_wakeup`),
+    so it arms: the user GPIO `P4_CONFIG_POWER_WAKE_GPIO` (level `P4_CONFIG_POWER_WAKE_LEVEL`),
+    the **touch** interrupt when the fitted panel wires one (`P4_CONFIG_POWER_WAKE_TOUCH`), and
+    the **Tab5Keyboard** interrupt `BOARD_CFG_TAB5KBD_INT_GPIO` (`P4_CONFIG_POWER_WAKE_KEYBOARD`).
+    All armed pins are disabled after wake; pin *configuration* is never reset (the touch
+    interrupt is owned by its panel driver — resetting it breaks touch).
+  - **Touch wake is revision-dependent, not board-dependent.** Read the live pin from
+    `display_get_touch_int_gpio()` (the panel driver's `config.int_gpio_num`), never the
+    compile-time `BOARD_CFG_LCD_TOUCH_INT_GPIO`: the M5Stack Tab5 keeps GPIO23 as the ST7123/ST7121
+    TDDI interrupt, but the BSP drives GPIO23 as a strapped output and reports NC on ILI9881C+GT911
+    units. The JC1060P470 reference wires no touch interrupt. Report honestly per revision.
+  - **Deep sleep** wakes only from an RTC IO (ESP32-P4: GPIO0..GPIO15). `deepsleep` arms the user
+    GPIO via `esp_deep_sleep_enable_gpio_wakeup()` only when `shell_power_deep_wake_gpio_eligible()`
+    passes, and says so honestly when it does not. The touch and keyboard interrupts are outside
+    the RTC domain and can never wake deep sleep.
+  - There is no RTC-alarm wake: the RX8130CE `INT` pin is not routed on the Tab5 (no INT macro in
+    `board_config.h`, no INT row in `schematics.md`) and `clock_rtc.c` is time-only. Do not plan
+    around it without hardware proof of routing.
+  - `power idle` (backlight-only) is still the right tool for an always-on, any-input-wake screen.
 
 ### Clock Rules
 - The clock component (`components/clock/`) owns ALL time/SNTP behaviour: the
@@ -1121,9 +1199,24 @@ the raster core + 8x8 font are `components/gfx/`
 - Serial console verbs: `\q` quit, `\s` save, `\f` find, `\g` go-to-line,
   `\o` save-as, `\open` open another file, `\u` undo, `\r` redo,
   `\all` replace-all, `\c` case, `\b` match-jump, `\co` comment, `\w` wrap,
-  `\focus` focus/typewriter, `\spell` spellcheck, `\l` reload, `\p` preview,
-  `\a` select-all; any other serial line
+  `\focus` focus/typewriter, `\spell` spellcheck, `\spell-add [word]`,
+  `\spell-forget <word>`, `\spell-ignore [word]`, `\spell-list`, `\l` reload,
+  `\p` preview, `\a` select-all; any other serial line
   is typed text + Enter. Keep this set documented in command.md/editor.md.
+- Spellcheck has ONE API surface (`editor_spell.h`): the base wordlist, the
+  user overlay (`spell_user_*`), and the session ignore list
+  (`spell_ignore*`). Lookups consult ignore, then overlay, then base; the base
+  index is never rebuilt for user words. All overlay file I/O runs on the
+  worker (via `EDITOR_EVENT_SPELL`); the LVGL/UART tasks only fill the control
+  block. Never add a second wordlist parser — share the line-split/lower
+  helper — and never drive expander/GPIO pins from spell code.
+- Editor saves are atomic (temp file + rename via `storage_replace_file()`,
+  `.bak` kept, no partial ever lands); the old direct-overwrite path is gone.
+  Autosave spills dirty buffers to `sd:/tmp/edit/` on
+  `P4_CONFIG_EDITOR_AUTOSAVE_SECS` (0 disables) through the service tick —
+  never a new timer/task — and `recover` lists/restores/discards crash files.
+  A successful save deletes its crash file. Crash files are exempt from
+  `storage_temp_cleanup()`.
 - All editor tunables live in `P4_CONFIG_EDITOR_*` (documented in
   p4minishell_config.yaml). New syntax modes extend `editor_syntax_t`,
   `editor_doc_pick_syntax()`, and the lexer — never special-case file
@@ -1354,13 +1447,67 @@ the raster core + 8x8 font are `components/gfx/`
 
 ### Bluetooth Rules
 - Hosted NimBLE on C6 over ESP-Hosted VHCI (not Bluedroid)
-- Stateful lifecycle: enable once, reuse for scan/advertise
+- Stateful lifecycle: enable once, reuse for scan/advertise/connect
 - bt is alias for bluetooth
-- Supported: status, scan [limit], advertise on [name]|off
+- Supported: status, scan [limit], advertise on [name]|off, connect <addr>, disconnect
 - A scan run MUST be bounded by P4_CONFIG_BT_SCAN_DURATION_MS (passed as the ble_gap_disc
   duration), so `bluetooth scan` always terminates and the worker task never hangs
 - `bluetooth advertise on [name]` stores the name in s_bluetooth_state.session_advertise_name;
   it is session-only and must never be persisted across boots
+- BLE HID host: `bluetooth connect XX:XX:XX:XX:XX:XX` acts as a BLE central and connects to an
+  external HID keyboard/mouse. It discovers the HID service (0x1812) via the NimBLE GATT client,
+  prefers the HID Report characteristic (0x2A4D) and falls back to Boot Keyboard Input (0x2A22),
+  then writes the CCC (0x2902) to enable notifications. Incoming reports arrive as
+  `BLE_GAP_EVENT_NOTIFY_RX` in the GAP handler and are parsed as USB-HID-compatible boot keyboard
+  reports (modifiers in byte 0, up to 6 key codes in bytes 2-7); press/release deltas are routed
+  to the shell through the `networking_host_ops_t.bluetooth_keyboard_input` callback (the same
+  `shell_usb_keyboard_input` path USB HID uses). NimBLE GATT client callbacks are typed per
+  operation (`ble_gatt_disc_svc_fn`/`ble_gatt_chr_fn`/`ble_gatt_dsc_fn`); never add a parallel
+  HID parser or a second input path. `bluetooth_is_connected()` means "NimBLE synced";
+  `bluetooth_is_device_connected()` means "a HID peripheral is attached" - the latter is what
+  `command_physical_keyboard_present()` and the OSK auto-hide use.
+- The BLE HID host is a leaf: all NimBLE calls stay in `components/networking/bluetooth.c`; the
+  shell reaches the keyboard input path only through the host-ops callback. When
+  `CONFIG_BT_NIMBLE_ENABLED` is off the connect/disconnect/is_device_connected surface compiles
+  to no-op stubs so the command layer stays link-complete.
+
+### TLS Trust Store Rules
+- `components/certs/` is the single owner of the SD certificate store and the mbedTLS global CA
+  store.  All NimBLE/certs calls stay in this module; the shell reaches it only through the
+  `certs.h` API.  The boot hook (`boot_on_sd_first_mount`) calls `certs_load_sd_store()`.
+- httpget and c6ota prefer `use_global_ca_store` (user CAs from sd:/CERTS/) and fall back to
+  the compiled-in Mozilla certificate bundle (`crt_bundle_attach`) when no SD certificates are
+  present.  This is the ONLY place TLS configuration lives; never add custom `esp_tls_cfg_t`
+  elsewhere.  The `certs` command manages add/remove/rebuild/reload/clear.
+- Certificate files live in `sd:/CERTS/` as `.pem` (ASCII) or `.der` (binary) files.  `certs
+  rebuild` concatenates every `.pem` into `sd:/CERTS/BUNDLE.PEM` for quick loading.  The store
+  is loaded once at boot into a PSRAM buffer (`P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES`); `certs
+  reload` re-scans and `certs clear` frees the buffer.
+- All TLS-related tunables live in `p4minishell_config.h` (`P4_CONFIG_TLS_*`).  Never add
+  hardcoded cert paths, sizes, or verify flags to httpget or c6ota.  The `certs` component is
+  a leaf: it depends on `storage` and `esp-tls` but not on `command`, `networking`, or `c6ota`.
+
+### Captive Portal Rules
+- `components/portal/` owns the captive-portal Wi-Fi setup: SoftAP + DNS server + HTTP
+  portal page.  It is a leaf module that depends on `lwip`, `esp_netif`, `esp_wifi`, and
+  `esp_http_server`.  All NimBLE/wifi_known calls are made via `extern` to avoid circular
+  dependencies with `components/networking/`.
+- SoftAP support is now enabled in `sdkconfig.defaults` (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y`
+  and `CONFIG_WIFI_RMT_SOFTAP_SUPPORT=y`).  The portal starts in APSTA mode
+  (`WIFI_MODE_APSTA`) so the device can still scan/connect while the AP is active.  It
+  switches back to `WIFI_MODE_STA` when the portal shuts down.
+- The portal auto-starts on first boot when no SD card is mounted and no known networks
+  are cached (`portal_should_autostart()`).  Manual control: `wifi setup on` /
+  `wifi setup off`.  The portal shuts down after credential submission or a timeout
+  (`P4_CONFIG_PORTAL_TIMEOUT_SECS`).
+- The embedded portal HTML is a lightweight form in flash (not on SD, which may not be
+  present on first boot).  Credentials are saved to the known-network list via
+  `networking_wifi_known_upsert()`.  The deferred-stop pattern: the HTTP handler sets a
+  flag (`portal_request_stop()`); the Wi-Fi event handler checks it and calls
+  `portal_stop()` on the event-loop task so netif/wifi operations are serialised.
+- All portal tunables live in `p4minishell_config.h` (`P4_CONFIG_PORTAL_*`).  The DNS
+  server is a minimal UDP socket on port 53 that responds to all queries with the AP IP;
+  it does not implement the full RFC 1033/1035 recursion or zone transfers.
 
 ### Tab5 On-Board Hardware Rules
 - `components/power_monitor/` is the ONLY INA226 owner (Tab5 pack gauge, addr 0x41 on the SYS
@@ -1410,6 +1557,14 @@ the raster core + 8x8 font are `components/gfx/`
   its DMA-capable internal buffers. The card MUST mount before `networking_init()` starts the
   C6 bring-up (main runs `boot_run_startup()` first); bringing the C6 up first races the mount
   and makes the C6 SDIO card init retry `sdmmc_allocate_aligned_buf: not enough mem`.
+- When a board powers the SD IO rail from an on-chip LDO, the board BSP MUST own that LDO
+  channel directly (acquire it at the card IO voltage and publish the standard
+  `sd_pwr_ctrl_drv_t` `set_io_voltage` callback), NOT call IDF's
+  `sd_pwr_ctrl_new_on_chip_ldo()`. That helper acquires the channel at 0 mV, which makes the
+  LDO driver log `ldo: The voltage value 0 is out of the recommended range` on every boot. The
+  Tab5 does this for LDO_VO4 (`BOARD_CFG_SD_PWR_LDO_CHAN`/`BOARD_CFG_SD_PWR_LDO_VOLTAGE_MV` in
+  `board_bsp/src/bsp_storage.c`). Never silence the warning with `esp_log_level_set` — fix the
+  acquire. A board with a plain always-on 3.3 V SD rail needs no override.
 - Any command that WRITES a file MUST precheck capacity with `storage_check_free_space()`
   before opening the destination, so a truncating overwrite cannot destroy the existing
   contents and then fail for lack of room
@@ -1761,17 +1916,29 @@ the raster core + 8x8 font are `components/gfx/`
   that `command`, `networking`, and `main` can all depend on (no layering cycle). The `rgb`
   command body stays in `components/command/command.c` (hardware verbs); `networking` pushes
   Wi-Fi/HTTP events via `led_notify()`; `main` fires the boot confirmation flash.
-- Auto status follows Wi-Fi state (connecting=amber pulse, connected=green, disconnected=red
-  blink, watchdog timeout=red pulse); HTTP server start flashes blue. In manual mode events
-  are transient (`P4_CONFIG_LED_NOTIFY_MS`). GPIO26 is a reserved critical line in the board
-  pin table, so `pwm`/`freq`/`adc`/`i2c`/`spi` refuse it.
+- Auto status follows Wi-Fi state (connecting=amber pulse, connected=green, idle-with-no-target=steady
+  green, disconnected=amber pulse, watchdog timeout=red pulse); HTTP server start flashes blue. In manual
+  mode events are transient (`P4_CONFIG_LED_NOTIFY_MS`). Idle matters on boards like the Tab5 that boot
+  without a saved network: without a target the LED must settle to green, never blink forever. GPIO26 is a
+  reserved critical line in the board pin table, so `pwm`/`freq`/`adc`/`i2c`/`spi` refuse it.
 - All tunables live in `P4_CONFIG_LED_*` (documented in `p4minishell_config.yaml`).
 
 ### Audio Rules (beep / tone / wavplay / volume)
-- ALL audio logic lives in `components/audio/` (`audio.h` / `audio.c`): the ES8311 codec handle,
-  speaker volume (`audio_set_volume` / `audio_get_volume`), and the background playback engine.
+- ALL audio logic lives in `components/audio/` (`audio.h` / `audio.c`): the codec handle
+  (ES8311 on the reference board, ES8388 on the Tab5), speaker volume
+  (`audio_set_volume` / `audio_get_volume`), output routing
+  (`audio_set/get_output_mode`, `audio_effective_route`, `audio_headphone_state`),
+  and the background playback engine.
   The codec is mono 16-bit at 22050 Hz (the BSP default) — `esp_codec_dev_open({22050,1,16})` /
   `write` / `close` is the whole output path, driven through `bsp_audio_codec_speaker_init()`.
+- Output route policy lives in `components/audio`; amp and jack pins live in the board BSP.
+  The route (AUTO = speaker unless headphones detected, else forced) is evaluated at each
+  play/volume/status call — no background poller. The BSP exposes only thin accessors
+  (`bsp_audio_headphone_detected`, `bsp_audio_speaker_enable` over the existing amp path);
+  never drive expander/GPIO amp pins from `components/audio` or `components/command`, and
+  never create a second codec handle. Boards without a jack report unsupported and resolve
+  to the speaker. On the Tab5 the jack is HP_DET on PI4IOE5V6408 #1 P7
+  (`BOARD_CFG_HP_DET_EXP_PIN`); never touch the 0x44 expander for audio (F6 rule).
 - The command layer (`components/command/command.c`) only dispatches `beep` / `tone` /
   `wavplay` / `audio` / `volume`, parses arguments, and calls the `audio.h` API. Keep audio
   logic out of command.c; add it to the `audio` component instead.
@@ -1804,13 +1971,16 @@ the raster core + 8x8 font are `components/gfx/`
   I2C pair, otherwise it creates a temporary `i2c_master` bus on a free port. Scans probe via
   normal device transactions (add device + one-byte transmit), NEVER `i2c_master_probe()`,
   which reprograms the shared controller's timing/interrupts and disrupts the GT911 touch.
-- SPI is a reported hardware gap on this board: `spi status` reports the toolkit
-  configuration, but the `loopback`/`peek`/`poke` verbs return an honest
-  "unavailable on this board" error and MUST NOT call the SPI driver — initializing
-  the SPI host on this P4 with the ESP-Hosted SDIO link active stalls the chip and
-  drops USB-Serial-JTAG off the bus (verified with both SPI2 and SPI3, DMA on and
-  off). Do not re-wire SPI transactions without first proving the host init does
-  not stall the chip.
+- SPI transactions are available and MUST go through the toolkit path in
+  `periph_commands.c`: SPI3 (`P4_CONFIG_SPI_TOOL_HOST`) with caller-supplied pins
+  bound via the GPIO matrix (`SPICOMMON_BUSFLAG_GPIO_PINS`, DMA disabled), lazily
+  initialised on first use and freed with `spi release`. Never use the IOMUX SPI2
+  pins (they overlap the board's I2C/I2S/SDIO lines) and never a hardcoded CS.
+  The earlier "SPI host init stalls the chip" doctrine was WRONG: the ESP-Hosted
+  C6 link and the microSD card live on the SDMMC controller, not a SPI host, so
+  SPI3 is independent of them. Verified on both boards (COM3 + COM6) with the C6
+  running: `spi peek`/`poke`/`loopback` all complete and Wi-Fi/BLE stay
+  connected. Do not re-add an "unavailable" refusal.
 
 ### Error Handling
 - Friendly transcript messages for all failures

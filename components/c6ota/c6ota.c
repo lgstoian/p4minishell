@@ -16,6 +16,7 @@
 #include "esp_app_format.h"
 #include "strutil.h"
 #include "esp_crt_bundle.h"
+#include "certs.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
@@ -684,7 +685,11 @@ static esp_err_t c6ota_download_http_image(const char *url,
     }
 
     if (strncmp(url, "https://", 8) == 0) {
-        http_config.crt_bundle_attach = esp_crt_bundle_attach;
+        if (certs_is_loaded()) {
+            http_config.use_global_ca_store = true;
+        } else {
+            http_config.crt_bundle_attach = esp_crt_bundle_attach;
+        }
     }
 
     c6ota_emit_asyncf("c6ota: downloading %s\n", url);

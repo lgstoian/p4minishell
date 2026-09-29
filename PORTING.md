@@ -7,7 +7,7 @@ P4MiniShell keeps all board-specific facts in one **board profile**:
 1024x600 MIPI-DSI, GT911 touch). A port means adding a profile, pointing the
 build at it, and wiring the drivers below — no firmware logic changes.
 
-- **Version:** v1.2.1 · **Target family:** ESP32-P4 + ESP32-C6
+- **Version:** v1.3.0 · **Target family:** ESP32-P4 + ESP32-C6
 - Shipped profiles: `boards/jc1060p470c/` (reference) and
   `boards/m5stack_tab5/` (see §6).
 - Related: [`readme.md`](readme.md) (configuration), [`SDK.md`](SDK.md)
@@ -33,7 +33,8 @@ Copy `boards/jc1060p470c/` and edit. YAML first, then the matching macros:
 | YAML section | Header macros | Notes |
 |---|---|---|
 | `board.i2c` (port, SDA/SCL, clock, pullup) | `BOARD_CFG_I2C_*` | Shared touch + codec + future I2C peripherals; consumed via `BSP_I2C_*` in the patched BSP header |
-| `board.i2s` (port, 5 pins, amp GPIO) | `BOARD_CFG_I2S_*`, `BOARD_CFG_POWER_AMP_GPIO` | `components/audio/` only calls `bsp_audio_codec_speaker_init()`; codec differences stay in the BSP |
+| `board.i2s` (port, 5 pins, amp GPIO) | `BOARD_CFG_I2S_*`, `BOARD_CFG_POWER_AMP_GPIO` | `components/audio/` only calls `bsp_audio_codec_speaker_init()` plus the thin `bsp_audio_headphone_detected()` / `bsp_audio_speaker_enable()` accessors; codec + amp + jack differences stay in the BSP |
+| `board.audio` (headphone detect) | `BOARD_CFG_HP_DET_PRESENT`, `BOARD_CFG_HP_DET_EXP_PIN` | Set PRESENT=1 with the detect pin only when the jack is wired to a readable input; otherwise 0 (route always speaker). Never point it at an output pin. |
 | `board.display` (geometry, timing, lanes, backlight, reset) | `BOARD_CFG_LCD_*`, `BOARD_CFG_DISPLAY_BRIGHTNESS_LEDC_CH` | `components/display/` builds `bsp_display_cfg_t` from these; see §3 for panel choice |
 | `board.touch` (driver, RST/INT, swap/mirror) | `BOARD_CFG_TOUCH_*`, `BOARD_CFG_LCD_TOUCH_*` | Touch INT `NC` disables touch-wake honestly (`sleep` reports it) |
 | `board.lvgl` (buffers, rotate, tear) | `BOARD_CFG_LCD_DRAW_BUFFER_*`, `BOARD_CFG_APP_*`, `BOARD_CFG_LVGL_*` | Draw buffer defaults to `width * 50` |
@@ -120,7 +121,10 @@ board, so the toolchain and target carry over; the deltas:
   work. The sensor rail is gated by `BSP_FEATURE_CAMERA`.
 - **IMU:** BMI270 (SYS I2C 0x68) via `components/imu/`; the `imu` command reads
   accel/gyro + orientation and can auto-rotate the display (`imu rotate on`).
-- **Audio:** ES8388 codec via the BSP.
+- **Audio:** ES8388 codec + ES7210 AEC front end via the BSP; NS4150B speaker amp
+  on PI4IOE5V6408 #1 P1 (`BSP_SPEAKER_EN`); 3.5 mm jack with detect on #1 P7
+  (`BOARD_CFG_HP_DET_EXP_PIN`), active-high on insert — the firmware auto-mutes
+  the amp in `audio output auto` mode.
 - **RTC:** RX8130CE through the `components/clock/` external-RTC hook, selected
   by `BOARD_CFG_RTC_EXT_TIME_REG` (0x10) / `BOARD_CFG_RTC_EXT_KIND_RX8130`
   (2000-based year, STOP bit in control 0x1E).
@@ -140,7 +144,13 @@ board, so the toolchain and target carry over; the deltas:
   no latch and deep-sleeps instead.
 - **Storage/SDIO:** MicroSD on SDMMC slot 0 (pins 39-44); the C6 hosted
   transport shares the SDMMC controller on slot 1. The hosted SDIO clock is
-  **10 MHz** here (40 MHz on the reference board).
+  **10 MHz** here (40 MHz on the reference board). The microSD IO rail is the
+  P4 on-chip LDO_VO4 (channel 4, 3.3 V); the BSP owns that channel directly
+  (`BOARD_CFG_SD_PWR_LDO_CHAN` / `BOARD_CFG_SD_PWR_LDO_VOLTAGE_MV`) and exposes
+  the standard `sd_pwr_ctrl_drv_t`, so IDF never acquires it at 0 mV (which
+  logged a spurious LDO-range warning). A new board whose SD rail is a plain
+  always-on 3.3 V supply can drop the override and let the BSP's stock path
+  stand.
 - **Crypt/DMA:** `crypt` streams in 512-byte chunks over small cache-aligned
   DMA buffers (hardware esp-aes); when the Tab5 DMA pool is too fragmented, a
   self-contained software AES-256-GCM fallback (`components/swgcm/`)

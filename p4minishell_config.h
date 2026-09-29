@@ -55,8 +55,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             1
-#define P4_CONFIG_VERSION_MINOR             2
-#define P4_CONFIG_VERSION_PATCH             1
+#define P4_CONFIG_VERSION_MINOR             3
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -135,17 +135,49 @@
 #define P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES   4096
 
 /**
- * Maximum coloured spans the transcript span group retains. Every append makes
- * LVGL re-wrap the whole span group to size it
- * (`lv_spangroup_get_expand_height`), so an unbounded scrollback makes each
- * line O(all history) — measured at hundreds of ms per command after a long
- * session, and the dominant cost of gfx animation and scrolling (bugs.md F25).
- * The oldest spans past this cap are dropped so the per-append cost stays
- * bounded; the newest output is always kept. The full raw text still lives in
- * the transcript buffer for `screenshot`/copy, so only the rendered scrollback
- * is bounded.
+ * Maximum coloured spans the transcript span group retains AT ONCE.
+ *
+ * The transcript uses windowed rendering (bugs.md F26): the full scrollback is
+ * retained as a PSRAM row table (offset/len/height into the staged buffer) and
+ * a full-height invisible spacer establishes the scroll range, but only the
+ * rows overlapping the viewport (± P4_CONFIG_TRANSCRIPT_WINDOW_MARGIN_PX) are
+ * materialized as LVGL spans. Rows are re-measured incrementally as they
+ * arrive (`lv_spangroup_get_expand_height` per row, never a re-wrap of the
+ * whole scrollback), so the apply cost is O(new bytes) and the draw cost is
+ * O(viewport), not O(all history). The oldest spans past this cap are dropped
+ * when a rendered window fragments into more spans than the cap.
  */
 #define P4_CONFIG_TRANSCRIPT_MAX_SPANS      384
+
+/**
+ * Maximum transcript rows materialized as LVGL spans at once. The window
+ * rebuild stays bounded to this many rows regardless of the viewport, so a
+ * pathological wrap/scroll cannot trip the LVGL task watchdog.
+ */
+#define P4_CONFIG_TRANSCRIPT_WINDOW_ROWS    128
+
+/**
+ * Extra pixels of rows kept materialized above and below the transcript
+ * viewport. The window is rebuilt only when a scroll moves the visible range
+ * out of the materialized rows, so a margin trades a little more span memory
+ * for far fewer scroll-time rebuilds.
+ */
+#define P4_CONFIG_TRANSCRIPT_WINDOW_MARGIN_PX 96
+
+/**
+ * Maximum rows retained in the transcript window row table. The oldest rows
+ * are evicted once the table is full, bounding the PSRAM rows + prefix to
+ * roughly P4_CONFIG_TRANSCRIPT_ROW_CAP * (struct + prefix) bytes.
+ */
+#define P4_CONFIG_TRANSCRIPT_ROW_CAP        2048
+
+/**
+ * Bytes of the transient PSRAM work buffer used to assemble per-row measure
+ * inputs and the visible-row window stream. The largest single input is one
+ * whole staged transcript (P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES); the headroom
+ * covers SGR carry prefixes and the scan bookkeeping.
+ */
+#define P4_CONFIG_TRANSCRIPT_WORK_BYTES     (P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES + 32 + (P4_CONFIG_TRANSCRIPT_ROW_CAP * 12))
 
 /**
  * Transcript scroll step in pixels applied by one on-screen scroll button
@@ -301,6 +333,18 @@
 #define P4_CONFIG_SPELL_WORD_MAX              64     /**< Retained for compatibility (token lookups compare any length directly, single-character included) */
 #define P4_CONFIG_SPELL_MAX_WORDS             65536  /**< Wordlist capacity */
 #define P4_CONFIG_SPELL_MAX_BYTES             (1024 * 1024) /**< Wordlist file cap */
+/** User overlay wordlist filename inside sd:/DICTS (one lower-case word per
+ *  line, same format as the base list; learned words persist here). */
+#define P4_CONFIG_SPELL_USER_FILE             "user.words"
+/** User overlay word capacity (small linear set; base index is untouched). */
+#define P4_CONFIG_SPELL_USER_MAX_WORDS        4096
+/** Per-session ignore-list capacity (in-memory only, cleared on load). */
+#define P4_CONFIG_SPELL_IGNORE_MAX_WORDS      128
+/** Dirty-buffer autosave interval in seconds (0 disables). Crash files land in
+ *  sd:/tmp/<P4_CONFIG_EDITOR_RECOVERY_DIR>/ and are listed by `recover`. */
+#define P4_CONFIG_EDITOR_AUTOSAVE_SECS        30
+/** Recovery subdirectory inside the SD temp dir (exempt from temp cleanup). */
+#define P4_CONFIG_EDITOR_RECOVERY_DIR         "edit"
 
 /* ---- Document templates (writerdeck) ----
  * New-file seeds live in sd:/TEMPLATES/<name>.MD (`edit <file> /template <name>`). */
@@ -310,6 +354,11 @@
 
 /** Render-target byte cap for `markdown export` (text/HTML document). */
 #define P4_CONFIG_MD_EXPORT_MAX_BYTES         (256 * 1024)
+
+/** Render-target byte cap for the on-device HTML reader (view/type/preview
+ *  of .html/.htm files; the viewer input is capped separately by
+ *  P4_CONFIG_TUI_VIEW_MAX_BYTES). */
+#define P4_CONFIG_HTML_RENDER_MAX_BYTES       (256 * 1024)
 
 /** Print-to-file layout (writerdeck): fixed page geometry for the `print`
  *  export format, wrapped and paginated for sharing/printing. */
@@ -658,6 +707,44 @@
 #define P4_CONFIG_WIFI_KNOWN_LINE_BYTES     256
 
 /* ========================================================================
+ * CAPTIVE PORTAL (wifi setup / first-run)
+ * ========================================================================
+ * When the device boots without a configured Wi-Fi network (no CONFIG.SYS
+ * credentials and no saved known network on the SD card), the captive
+ * portal starts automatically: a SoftAP that clients can join, a DNS server
+ * that redirects all queries to the device, and a minimal HTTP page that
+ * collects the user's SSID and password.  Once entered, the credentials are
+ * saved to the known-network list and the portal shuts down.  A manual
+ * `wifi setup on` starts the portal on demand; `wifi setup off` stops it. */
+
+/** Enable the captive-portal Wi-Fi setup feature. When 0 the SoftAP and
+ *  portal code paths are compiled out entirely (image budget). */
+#define P4_CONFIG_PORTAL_ENABLE              1
+
+/** SSID broadcast by the SoftAP.  Keep it short and recognisable. */
+#define P4_CONFIG_PORTAL_AP_SSID             "P4MiniShell-Setup"
+
+/** Open (no password) or WPA2-PSK.  An open AP is expected for first-run
+ *  setup so any device can connect without knowing a password. */
+#define P4_CONFIG_PORTAL_AP_OPEN             1
+
+/** WPA2-PSK password for the SoftAP (only used when PORTAL_AP_OPEN is 0). */
+#define P4_CONFIG_PORTAL_AP_PASSWORD         ""
+
+/** Wi-Fi channel for the SoftAP.  1 is universally supported. */
+#define P4_CONFIG_PORTAL_AP_CHANNEL          1
+
+/** Maximum simultaneous SoftAP client connections. */
+#define P4_CONFIG_PORTAL_AP_MAX_CONN         4
+
+/** How long (seconds) the portal runs before auto-stopping if no
+ *  credentials are entered.  0 disables the timeout. */
+#define P4_CONFIG_PORTAL_TIMEOUT_SECS        300
+
+/** The HTTP port the portal page listens on. */
+#define P4_CONFIG_PORTAL_HTTP_PORT           80
+
+/* ========================================================================
  * PING AND DNS
  * ========================================================================
  * `ping` and `dns` (alias `nslookup`) are classic DOS-style connectivity
@@ -686,6 +773,57 @@
 
 /** Maximum request bytes a `tcpterm` session sends. */
 #define P4_CONFIG_TCP_TX_MAX_BYTES          65536
+
+/* ========================================================================
+ * EVENT SERVICE (netsvc: persistent MQTT + outbox)
+ * ========================================================================
+ * One background task in components/networking owns a single MQTT 3.1.1
+ * session (packet bytes via mqtt_codec.h, sockets on the shared lwIP
+ * surface). Batch reaches it through the `net` verbs, native apps through
+ * applib_msg.h; inbound events fan out over the existing header/LED plus an
+ * alarm-style async batch hook. Publishes while offline journal to SD and
+ * flush oldest-first on reconnect (newer-wins merge for $pim topics). */
+
+/** Stack bytes for the netsvc task (sockets + SD work stay off it). */
+#define P4_CONFIG_NET_TASK_STACK            8192
+
+/** Socket receive scratch per read (heap, sized for one control frame). */
+#define P4_CONFIG_NET_RX_BYTES              4096
+
+/** Largest single MQTT publish payload accepted (send or journal). */
+#define P4_CONFIG_NET_PUBLISH_MAX_BYTES     16384
+
+/** MQTT keepalive seconds advertised in CONNECT. */
+#define P4_CONFIG_NET_KEEPALIVE_S           60
+
+/** Milliseconds a broker TCP connect may take. */
+#define P4_CONFIG_NET_CONNECT_TIMEOUT_MS    10000
+
+/** Reconnect backoff base / ceiling (doubled per attempt, capped). */
+#define P4_CONFIG_NET_BACKOFF_BASE_MS       1000
+#define P4_CONFIG_NET_BACKOFF_CAP_MS        60000
+
+/** Outbox journal bounds (records, then total payload bytes). */
+#define P4_CONFIG_NET_OUTBOX_MAX            64
+#define P4_CONFIG_NET_OUTBOX_MAX_BYTES      262144
+
+/** Maximum MQTT topic/filter bytes (`net sub` / `net pub`). */
+#define P4_CONFIG_NET_TOPIC_BYTES           128
+
+/** Maximum `/onmsg` batch-line bytes (RAM-only hook). */
+#define P4_CONFIG_NET_ONMSG_BYTES           256
+
+/** Maximum last-message payload bytes kept for `net msg`. */
+#define P4_CONFIG_NET_LASTMSG_BYTES         4096
+
+/** NET profile file (broker coordinates, persisted via the INI core). */
+#define P4_CONFIG_NET_PROFILE_FILE          "sd:/NET.INI"
+
+/** Outbox journal directory (atomic records, boot-cleaned temp sibling). */
+#define P4_CONFIG_NET_OUTBOX_DIR            "sd:/NET/OUTBOX"
+
+/** Password bytes for the broker credential (masked at entry). */
+#define P4_CONFIG_NET_PASSWORD_BYTES        64
 
 /** Hard upper bound for `ping <host> <count>`. A larger request is clamped. */
 #define P4_CONFIG_PING_COUNT_MAX            10
@@ -796,6 +934,32 @@
 #define P4_CONFIG_HTTP_USER_AGENT           "P4MiniShell/" P4_CONFIG_VERSION_STRING " httpget"
 
 /* ========================================================================
+ * TLS TRUST STORE (sd:/CERTS)
+ * ========================================================================
+ * The SD card holds user-provided CA certificates that extend the compiled-in
+ * Mozilla bundle.  When at least one certificate is present the firmware
+ * loads them into the mbedTLS global CA store on first mount; httpget and
+ * c6ota then use the combined trust set automatically.  The `certs` command
+ * manages the store (add / remove / list / rebuild). */
+
+/** SD directory for user-provided CA certificates (relative to SD root).
+ *  PEM (`.pem`) and DER (`.der`) files are accepted. */
+#define P4_CONFIG_TLS_CERTS_DIR             "CERTS"
+
+/** Maximum bytes the concatenated PEM buffer can occupy in memory. The store
+ *  is loaded once; the buffer lives until `certs clear` / `certs rebuild` /
+ *  reboot. Typical usage: a few root CAs (< 50 KiB). */
+#define P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES   (64 * 1024)
+
+/** Maximum number of individual DER (binary) certificate files the store will
+ *  load. Each DER cert occupies up to 2 KiB in the combined buffer. */
+#define P4_CONFIG_TLS_CERTS_MAX_DER_FILES   8
+
+/** Path for the compiled PEM bundle written by `certs rebuild`.  This file
+ *  is the concatenation of every `.pem` in the CERTS directory. */
+#define P4_CONFIG_TLS_CERTS_COMBINED_PEM    "CERTS/BUNDLE.PEM"
+
+/* ========================================================================
  * HTTP FILE SERVER (httpd) AND NETWORK DIAGNOSTICS
  * ========================================================================
  * A lightweight read-only HTTP file server that shares the SD card over the
@@ -884,6 +1048,35 @@
 /** Duration in milliseconds of a single `bluetooth scan` run. The scan is
  *  bounded so the command always terminates and the worker task never hangs. */
 #define P4_CONFIG_BT_SCAN_DURATION_MS        8000
+
+/**
+ * BLE HID host: connection and input parameters.
+ *
+ * The P4MiniShell acts as a BLE central (host) that connects to external
+ * BLE HID keyboards and mice. Incoming HID reports are routed to the same
+ * shell input path as USB HID keyboards, so a BLE keyboard works identically
+ * to a wired one.
+ */
+
+/** Timeout (ms) for a BLE connection attempt. The connection is aborted if the
+ *  remote device does not respond within this window. */
+#define P4_CONFIG_BLE_CONNECT_TIMEOUT_MS     5000
+
+/** BLE connection timing parameters, in the units the HCI/ATT layer expects.
+ *  These are HID-friendly values (low latency, quick supervision) that suit a
+ *  keyboard/mouse; raise the interval to save power at the cost of latency. */
+/** Connection interval minimum (units of 1.25 ms; 0x0018 = 30 ms). */
+#define P4_CONFIG_BLE_CONN_ITVL_MIN          0x0018
+/** Connection interval maximum (units of 1.25 ms; 0x0028 = 50 ms). */
+#define P4_CONFIG_BLE_CONN_ITVL_MAX          0x0028
+/** Slave latency (connection events the peripheral may skip; 0 = none). */
+#define P4_CONFIG_BLE_CONN_LATENCY           0
+/** Supervision timeout (units of 10 ms; 0x00C8 = 2000 ms). */
+#define P4_CONFIG_BLE_CONN_SUPERVISION_TIMEOUT 0x00C8
+/** Connection-request scan interval (units of 0.625 ms; 0x0060 = 60 ms). */
+#define P4_CONFIG_BLE_CONN_SCAN_ITVL         0x0060
+/** Connection-request scan window (units of 0.625 ms; 0x0030 = 30 ms). */
+#define P4_CONFIG_BLE_CONN_SCAN_WINDOW       0x0030
 
 /* ========================================================================
  * SD CARD AND FILESYSTEM
@@ -1532,6 +1725,9 @@
 /** Default `prompt` template. `$p` expands to the path, `$g` to `>`. */
 #define P4_CONFIG_PROMPT_DEFAULT_TEMPLATE    "PS $p$g "
 
+/** Maximum bytes for the session `title` string (DOS `title` verb). */
+#define P4_CONFIG_TITLE_BYTES                96
+
 /** Depth of the interactive keypress queue used by `pause`, `choice`, `more`. */
 #define P4_CONFIG_KEY_QUEUE_DEPTH            16
 
@@ -1571,15 +1767,34 @@
 #define P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS   86400
 
 /**
- * GPIO that wakes light/deep sleep when pulled to its active level. Defaults
- * to GPIO_NUM_NC (no GPIO wake); set it to a user-wired button/switch pin.
- * The GT911 touch interrupt line (BOARD_CFG_LCD_TOUCH_INT_GPIO) is not wired
- * on this board, so touch cannot wake sleep directly.
+ * User-wired GPIO that wakes sleep when pulled to its active level. Defaults
+ * to GPIO_NUM_NC (no user GPIO wake); set it to a button/switch pin.
+ *
+ * Light sleep can wake from any IO. Deep sleep can only wake from the RTC
+ * IOs (GPIO0..GPIO15 on ESP32-P4); a pin outside that range is armed for
+ * light sleep only and `deepsleep` reports that honestly.
  */
 #define P4_CONFIG_POWER_WAKE_GPIO               GPIO_NUM_NC
 
 /** Wake level for P4_CONFIG_POWER_WAKE_GPIO (0 = low, 1 = high). */
 #define P4_CONFIG_POWER_WAKE_LEVEL              1
+
+/**
+ * Arm the touch controller interrupt line as a light-sleep wake source when
+ * the fitted panel actually wires it (the Tab5 BSP keeps the ST7123/ST7121
+ * TDDI interrupt on GPIO23, but straps GPIO23 low and reports no interrupt on
+ * ILI9881C+GT911 revisions). The pin is read from the live panel driver, so
+ * this is a no-op on the reference board and on GT911 Tab5 units. Deep sleep
+ * is unaffected (GPIO23 is outside the ESP32-P4 deep-sleep IO range).
+ */
+#define P4_CONFIG_POWER_WAKE_TOUCH              1
+
+/**
+ * Arm the M5Stack Tab5Keyboard interrupt line (BOARD_CFG_TAB5KBD_INT_GPIO,
+ * GPIO50) as a light-sleep wake source so a keypress wakes the board. No-op
+ * on boards without the keyboard.
+ */
+#define P4_CONFIG_POWER_WAKE_KEYBOARD           1
 
 /** Line buffer size for text-processing commands (find, more, fc, sort). */
 #define P4_CONFIG_TEXT_LINE_BYTES            512
@@ -1639,6 +1854,24 @@
 
 /** ADC attenuation used for battery voltage reading. */
 #define P4_CONFIG_BATTERY_ATTEN              3  /* ADC_ATTEN_DB_12 */
+
+/**
+ * Number of ADC oneshot samples averaged per battery read (reference board).
+ * Higher values reduce noise at the cost of longer read time. Each sample
+ * takes ~10 us, so 8 samples adds ~80 us — negligible vs. the 5 s telemetry
+ * period. Set to 1 to disable averaging.
+ */
+#define P4_CONFIG_BATTERY_ADC_SAMPLES        8
+
+/**
+ * Exponential moving average (EMA) filter coefficient for the ADC battery
+ * voltage. The filtered value is: ema = alpha * new + (1 - alpha) * old.
+ * Alpha is stored as a fixed-point Q0.16 value (0..65536). 0 disables
+ * filtering; 65536 means "no filter, always use latest sample". A good
+ * starting point is 26214 (alpha = 0.4) for fast response with moderate
+ * smoothing.
+ */
+#define P4_CONFIG_BATTERY_ADC_EMA_ALPHA      26214
 
 /** Minimum CPU frequency in MHz for light sleep entry. */
 #define P4_CONFIG_BATTERY_MIN_SLEEP_FREQ_MHZ 40
@@ -1758,6 +1991,7 @@
 #define P4_CONFIG_LED_COLOR_BOOT_OK           0x00FF00
 #define P4_CONFIG_LED_COLOR_WIFI_CONNECTING   0xFF9900
 #define P4_CONFIG_LED_COLOR_WIFI_CONNECTED    0x00FF00
+#define P4_CONFIG_LED_COLOR_WIFI_IDLE         0x00FF00
 #define P4_CONFIG_LED_COLOR_WIFI_DISCONNECTED 0xFF0000
 #define P4_CONFIG_LED_COLOR_WIFI_ERROR        0xFF4040
 #define P4_CONFIG_LED_COLOR_HTTPD             0x0080FF
@@ -2224,6 +2458,35 @@
 #define P4_CONFIG_SERIAL_DIAG_BYTES          1024
 
 /* ========================================================================
+ * PIM SYNC (`pim get` / `pim put`)
+ * Serial CardDAV-lite sync over the shared serial transfer engine: `pim get`
+ * streams vCard/iCalendar through serial_xfer_stream_buffer under the PIMX
+ * magic; `pim put` receives through serial_xfer_receive_pump (same READY /
+ * DONE markers as `receive`). Identity/merge live in components/pim.
+ * ======================================================================== */
+
+/** Four-byte magic prefix of the `pim get` framed payload ("PIMX"). */
+#define P4_CONFIG_PIM_SYNC_MAGIC             "PIMX"
+
+/** Hard upper bound (bytes) for a single `pim put` payload. Sized for one
+ *  full vCard/iCalendar collection (bounded by P4_CONFIG_DB_EXPORT_MAX_BYTES
+ *  on the render side); streams to SD in 4 KB chunks. */
+#define P4_CONFIG_PIM_RX_MAX_BYTES           1048576
+
+/* ========================================================================
+ * P4SYNC HANDSHAKE (`sync status`)
+ * Read-only capability snapshot for the P4Sync host prototype over the
+ * shared USB-serial console. The verb itself lists no stores: file, PIM,
+ * package, and screenshot transfers reuse the existing `receive` / `send` /
+ * `pim` / `pkg` / `asset` / `screenshot` paths (single implementations).
+ * ======================================================================== */
+
+/** Maximum entries the host may request in one `sync inventory` line set.
+ *  The current `sync` verb is status-only; the cap bounds the future
+ *  machine-readable listing so it can never exhaust the worker stack. */
+#define P4_CONFIG_SYNC_INVENTORY_MAX          256
+
+/* ========================================================================
  * PASSWORD FILE ENCRYPTION (`crypt` lock/unlock)
  * AES-256-GCM with a PBKDF2-HMAC-SHA256 key over the user password.
  * Envelope: `P4CRYPT1` magic + salt + nonce + ciphertext + tag. Files
@@ -2324,6 +2587,11 @@
 
 /** Maximum characters in an alarm message (header notification width). */
 #define P4_CONFIG_ALARM_MSG_BYTES             160
+
+/** Bytes in an alarm event's sync identity (`uid=` INI field): 32 hex chars
+ *  (128-bit random, minted by `pim get` backfill) plus the terminator.
+ *  Empty until first sync; the loader tolerates older files without it. */
+#define P4_CONFIG_ALARM_UID_BYTES             33
 
 /** Checker poll interval in milliseconds (fires within this granularity). */
 #define P4_CONFIG_ALARM_POLL_MS               30000

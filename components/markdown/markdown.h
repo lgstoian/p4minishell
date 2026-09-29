@@ -81,6 +81,16 @@ size_t markdown_render_print(const char *text, const char *title,
                              int cols, int rows,
                              char *out, size_t out_size);
 
+/**
+ * Replace each form feed (`\f`, the print export's page separator) with a
+ * visible `page break` rule so a `.prn` file reads correctly on screen
+ * (viewer/`type`); the raw bytes are left alone on disk. Always
+ * NUL-terminates @p dst when non-NULL. Pass @p dst NULL for a measure-only
+ * call. Returns the byte count that should be written (excl. NUL); a value
+ * >= @p dst_size means truncation.
+ */
+size_t markdown_expand_form_feeds(const char *src, char *dst, size_t dst_size);
+
 #ifdef __cplusplus
 }
 #endif

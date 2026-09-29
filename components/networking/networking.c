@@ -13,6 +13,8 @@
 #include <strings.h>
 
 #include "esp_crt_bundle.h"
+#include "certs.h"
+#include "portal.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_event.h"
@@ -123,6 +125,16 @@ static SemaphoreHandle_t s_wifi_mutex;  /* protects all shared Wi-Fi state */
  * handshake (esp_timer_get_time(), 0 = not associated). `wifi status` uses
  * it to report how long the current association has been up. */
 static int64_t s_wifi_associated_at_us;
+
+/* Pick the steady LED status for a station that is not connected: a retrying
+ * drop (target set) pulses the disconnected colour, while a station that was
+ * never given a network to join (no target) settles to the idle colour instead
+ * of blinking forever. Caller holds the Wi-Fi lock. */
+static led_event_t networking_wifi_idle_led_event_locked(void)
+{
+    return (s_wifi_target_ssid[0] != '\0') ? LED_EVENT_WIFI_DISCONNECTED
+                                           : LED_EVENT_WIFI_IDLE;
+}
 
 /* Cached radio telemetry for the associated AP. The ESP-Hosted
  * `esp_wifi_sta_get_ap_info` RPC on this build returns only
@@ -342,6 +354,14 @@ static void networking_wifi_cleanup_runtime_artifacts(void)
 static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
+    led_event_t led_event = LED_EVENT_NONE;
+
+    /* Handle deferred portal stop: the HTTP handler task sets the flag; we
+     * execute the actual teardown on the event-loop task so netif/wifi
+     * operations are serialised with other Wi-Fi state changes. */
+    if (portal_should_stop()) {
+        portal_stop();
+    }
 
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
@@ -377,10 +397,11 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
             s_wifi_connected = false;
             s_wifi_connect_requested = false;
             s_wifi_associated_at_us = 0;
+            led_event = networking_wifi_idle_led_event_locked();
             wifi_unlock();
             networking_schedulef_ansi("@C[wifi]@R event: @ydisconnected@R\n");
             networking_notify_headerf(4000, "WiFi disconnected");
-            led_notify(LED_EVENT_WIFI_DISCONNECTED);
+            led_notify(led_event);
             /* The HTTP file server needs a reachable link; tear it down. */
             networking_httpd_maybe_stop();
             /* Start the persistent watchdog to attempt reconnection */
@@ -1082,6 +1103,16 @@ static void networking_wifi_background_task(void *arg)
                                          (unsigned int)connect_error);
                     networking_record_warningf("%s connect failed for %s", request->origin, request->ssid);
                 }
+            } else if (!request->connect_with_defaults) {
+                /* Wi-Fi started but there is nothing to join (no known network,
+                 * no default profile, no explicit request): settle the status
+                 * LED to idle instead of leaving it pulsing "connecting"
+                 * forever. */
+                wifi_lock();
+                if (!s_wifi_connected && s_wifi_target_ssid[0] == '\0') {
+                    led_notify(LED_EVENT_WIFI_IDLE);
+                }
+                wifi_unlock();
             }
         }
 
@@ -1645,6 +1676,8 @@ void networking_wifi_disconnect(void)
     s_wifi_connect_requested = false;
     s_wifi_autoretry = false;   /* user asked to stay disconnected */
     s_wifi_connected = false;
+    s_wifi_target_ssid[0] = '\0';  /* no target: the LED settles to idle, not a blink */
+    led_notify(LED_EVENT_WIFI_IDLE);
     networking_wifi_append_step("esp_wifi_disconnect()");
     error = esp_wifi_disconnect();
     if (error == ESP_OK || error == ESP_ERR_WIFI_NOT_CONNECT) {
@@ -2053,7 +2086,11 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
     http_config.max_redirection_count = P4_CONFIG_HTTP_FOLLOW_REDIRECTS ? 3 : 0;
 
     if (strncmp(url, "https://", 8) == 0) {
-        http_config.crt_bundle_attach = esp_crt_bundle_attach;
+        if (certs_is_loaded()) {
+            http_config.use_global_ca_store = true;
+        } else {
+            http_config.crt_bundle_attach = esp_crt_bundle_attach;
+        }
     }
 
     if (!quiet) {
@@ -2516,6 +2553,35 @@ esp_err_t networking_handle_wifi_command(char *command)
         strutil_text_equals_ignore_case(argv[1], "bench")) {
         return networking_wifi_throughput(argc, argv);
     }
+
+#if P4_CONFIG_PORTAL_ENABLE
+    if (strutil_text_equals_ignore_case(argv[1], "setup")) {
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "on")) {
+            esp_err_t error = portal_start();
+
+            if (error == ESP_OK) {
+                networking_appendf("@Gwifi:@R captive portal @Gactive@R — connect to "
+                                  "@"P4_CONFIG_PORTAL_AP_SSID"@R and visit http://192.168.4.1\n");
+            } else {
+                networking_appendf("@Cwifi:@R portal start failed (@y%s@R)\n",
+                                  esp_err_to_name(error));
+            }
+            return error;
+        }
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "off")) {
+            portal_stop();
+            networking_appendf("@Gwifi:@R captive portal @Mstopped@R\n");
+            return ESP_OK;
+        }
+        if (portal_is_active()) {
+            networking_appendf("@Gwifi:@R captive portal @Gactive@R — SSID "
+                              "@"P4_CONFIG_PORTAL_AP_SSID"@R, http://192.168.4.1\n");
+        } else {
+            networking_appendf("@Gwifi:@R captive portal @Minactive@R\n");
+        }
+        return ESP_OK;
+    }
+#endif
 
     if (strutil_text_equals_ignore_case(argv[1], "disconnect")) {
         networking_wifi_disconnect();

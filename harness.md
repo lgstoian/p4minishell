@@ -8,7 +8,7 @@
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
 
-- **Version:** v1.2.1 · **Targets:** ESP32-P4 + ESP32-C6
+- **Version:** v1.3.0 · **Targets:** ESP32-P4 + ESP32-C6
 - **Boards:** `jc1060p470c` (reference, e.g. COM3) and `m5stack_tab5` (COM6)
 
 ---
@@ -29,6 +29,11 @@ board. After flashing the test app, **reflash the main firmware**.
 # 1. Source the matching ESP-IDF in every new shell (v5.5.5)
 $env:IDF_PATH = "C:\esp\v5.5.5\esp-idf"      # adjust to your install
 . $env:IDF_PATH\export.ps1
+
+# 2. Keep a fresh configure warning-free: the reference board BSP is vendored
+#    under managed_components/ as an EXTRA_COMPONENT_DIR, which the component
+#    manager otherwise flags as an "unexpected" managed file.
+$env:IDF_COMPONENT_SUPPRESS_UNKNOWN_FILE_WARNINGS = "1"
 
 # 2. Host tools need Python 3 with:
 #    pyserial            - all serial drivers
@@ -65,8 +70,9 @@ calls `shell_session.hard_reset()`.
 
 ## 3. Layer 1 — on-target unit tests (Unity)
 
-Pure/headless logic runs on the P4 in `test/` (Unity, ~423 tests, 2 ignored;
-includes the software AES-256-GCM vectors in `test_sw_gcm.c`).
+Pure/headless logic runs on the P4 in `test/` (Unity, ~423 tests, 2 ignored
+plus the 9 `test_pim.c` sync tests, build-verified; refresh the count on
+hardware; includes the software AES-256-GCM vectors in `test_sw_gcm.c`).
 
 ```powershell
 cd test
@@ -107,14 +113,16 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s01_smoke` | identity (`about`/`version`/`sysinfo`), help, memory, screenshot geometry |
 | `s05_storage` | `dir`/`copy`/`xdel`, `chkdsk`, `disk detail`, labels, recycle bin |
 | `s06_batch` | the whole batch language (loops, `if`, pipes, redirection, `screen`, `screen flow`) |
-| `s07_data` | `db`, `csv`, `export`/`import`, `archive`, `crypt` (lock/unlock round-trip, passes on both boards since F23 fixed in v1.2.1), `json`, `markdown`, alarms, `gfind` (+ `/files`) |
+| `s07_data` | `db`, `csv`, `export`/`import`, `archive`, `crypt` (lock/unlock round-trip, passes on both boards since F23 fixed in v1.2.1), `json`, `markdown` (render + `export` html/print/text pulled and validated, incl. the on-device HTML reader via `type`), alarms, `gfind` (+ `/files`) |
 | `s08_display` | `draw`/`tui`/`gfx`/`plot`/`font`/`theme`/header/cursor + screenshot invariants |
-| `s09_editor` | the `edit` editor surfaces and save round-trips |
+| `s09_editor` | the `edit` editor surfaces and save round-trips, the spell user dictionary (`\spell-add` learn, `spell list/forget`), and the autosave/`recover` crash round-trip |
 | `s10_input_ui` | keyboard pages, `ui` synthetic touch/key, modals |
 | `s11_connectivity` | Wi-Fi, `ipconfig`/`netstat`/`ping`/`dns`, `httpd`/`httpget`, USB, BT, `c6ota status` |
-| `s12_power_audio` | audio, `battery`, `power`, `gpio`/`pwm`/`adc`/`i2c`, RGB LED (skipped if absent) |
+| `s12_power_audio` | audio (`status` route/jack, `output` mode + `/b` + `/v:`, generated-WAV `wavplay`, `CONFIG AUDIO_OUTPUT` persist), `battery`, `power`, `gpio`/`pwm`/`adc`/`i2c`, SPI master (`status`/`peek`/`poke`/`loopback`, C6 stays alive), RGB LED (skipped if absent) |
 | `s13_perf` | frame pacing (`gfx stats`/`tui stats`) and app animation |
 | `s14_apps` | every reference app (launch, drive, markers), incl. the hybrid demo |
+| `s15_p4sync` | P4Sync handshake (`sync status` lines), file push/pull round-trip, screenshot geometry |
+| `s16_netsvc` | event service (`net status/subs/msg/outbox`, hook set/clear, usage errors); broker-dependent live checks skip cleanly without a LAN broker (documented Mosquitto fixture) |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
 `run()`, panic detection, byte-exact `BMPX`/`SDFX` framing), `device.py`
@@ -228,6 +236,15 @@ Board-specific suites skip what a board lacks (RGB LED, camera) via
 `sdkconfig.<board>` is generated per
 profile and git-ignored; switching `-DP4_BOARD` in a reused build dir retargets
 it automatically.
+
+- **Always pass `-DP4_BOARD=<board>` on every `idf.py` invocation.** The CMake
+  cache value defaults to `jc1060p470c` (root `CMakeLists.txt`), so a deleted
+  or `fullclean`-ed build dir silently reconfigures to the reference board; the
+  result compiles with zero warnings and flashes fine but is the wrong image
+  (on the Tab5 it asserts in `esp32_p4_function_ev_board.c` and reset-loops).
+  Use one build dir per board (`build/` for `jc1060p470c`, `build-tab5/` for
+  `m5stack_tab5`) with `-B`, and confirm the staged config afterwards via
+  `Select-String build-tab5\config\board_config.h -Pattern "BOARD_CFG_NAME|BOARD_CFG_BSP_M5STACK_TAB5"`.
 
 ---
 

@@ -44,6 +44,9 @@ board:
     dsin_gpio: 28
     # The speaker amplifier enable is on the IO expander, not a GPIO.
     power_amp_gpio: NC
+    # Headphone detect: PI4IOE5V6408 #1 (0x43) pin P7, active-high input.
+    hp_det_present: true
+    hp_det_exp_pin: 7
 
   # ---- Display (MIPI-DSI 1280x720, panel auto-detected by the BSP) ----
   # Managed by: components/display/display.c (display manager), which wraps the
@@ -118,6 +121,9 @@ board:
     empty_mv: 6000
     full_mv: 8400
     present_mv: 5000
+    # Signed-current deadband (mA) for charge-state classification.
+    # On the Tab5 the INA226 shunt reads charge current as NEGATIVE (verified).
+    charge_current_ma: 20
 
   # ---- RGB LED: the two LEDs on the Tab5Keyboard module (over I2C) ----
   rgb_led:
@@ -146,6 +152,11 @@ board:
   storage:
     sd_mount_point: /sdcard
     sd_format_on_mount_fail: false
+    # microSD power rail: on-chip LDO channel 4 (LDO_VO4 -> SD_VDD) at the card
+    # 3.3 V IO level; the BSP owns this channel so the SDMMC stack never
+    # acquires it at 0 mV (which logged a spurious boot warning).
+    sd_pwr_ldo_chan: 4
+    sd_pwr_ldo_voltage_mv: 3300
     sd_d0_gpio: 39
     sd_d1_gpio: 40
     sd_d2_gpio: 41

@@ -70,6 +70,7 @@
 #define SHELL_KEY_SEQ_BYTES             5
 #define SHELL_PROMPT_TEMPLATE_BYTES     P4_CONFIG_PROMPT_TEMPLATE_BYTES
 #define SHELL_PROMPT_RENDER_BYTES       (P4_CONFIG_PROMPT_TEMPLATE_BYTES + P4_CONFIG_PS_PATH_MAX_DISPLAY + 64)
+#define SHELL_TITLE_BYTES               P4_CONFIG_TITLE_BYTES
 
 /**
  * Body budget for the semantic print helpers.
@@ -368,6 +369,8 @@ static volatile bool s_key_wait_active;
 static bool s_batch_active;
 /* Runtime prompt template set by the `prompt` command */
 static char s_prompt_template[SHELL_PROMPT_TEMPLATE_BYTES] = P4_CONFIG_PROMPT_DEFAULT_TEMPLATE;
+/* Session title set by the `title` command (empty until set) */
+static char s_title[SHELL_TITLE_BYTES] = "";
 
 /* Boot timestamp */
 static int64_t s_boot_timestamp_us;
@@ -2902,6 +2905,25 @@ void shell_prompt_reset(void)
     snprintf(s_prompt_template, sizeof(s_prompt_template), "%s", P4_CONFIG_PROMPT_DEFAULT_TEMPLATE);
 }
 
+void shell_title_set(const char *text)
+{
+    if (text == NULL) {
+        s_title[0] = '\0';
+        return;
+    }
+    snprintf(s_title, sizeof(s_title), "%s", text);
+}
+
+const char *shell_title_get(void)
+{
+    return s_title;
+}
+
+void shell_title_reset(void)
+{
+    s_title[0] = '\0';
+}
+
 const char *shell_prompt_render_plain(void)
 {
     static char rendered[SHELL_PROMPT_RENDER_BYTES];
@@ -4296,7 +4318,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "audio",    "audio status | audio stop - background playback state" },
     { "adc",      "adc <pin> - one-shot ADC read on a pin" },
     { "i2c",      "i2c scan | peek <addr> <reg> | poke <addr> <reg> <val> - I2C bus tools" },
-    { "spi",      "spi status - SPI configuration (transactions unsupported with hosted SDIO)" },
+    { "spi",      "spi status | spi loopback <sclk> <mosi> <miso> | spi peek|poke <sclk> <mosi> <miso> <cs> <reg> [value] | spi release - SPI master (SPI3, GPIO-matrix pins)" },
     { "rgb",      "rgb status | rgb <#RRGGBB|r g b|effect> | rgb auto <on|off> | rgb <1|2> r g b - status LED(s)" },
     { "imu",      "imu [read] | imu status | imu rotate <on|off> - BMI270 accel/gyro + tilt auto-rotate" },
     { "gpio",     "gpio list | status | read <pin> | set <pin> <0|1> - digital IO" },
@@ -4316,6 +4338,9 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "csv",      "csv rows|cols|cell|get|set|eval <file> [row col] [/b] [/v:NAME] - CSV grid (R1C1 refs, ranges, =EXPR via calc) (ERRORLEVEL 0/1/2)" },
     { "export",   "export <db NAME|alarms> <csv|json|txt|vcf|ics> <file> - portable store interchange (ERRORLEVEL 0/1/2)" },
     { "import",   "import db <name> <csv|json|vcf> <file> | import alarms <csv|json|ics> <file> - store interchange in, fresh ids (ERRORLEVEL 0/1/2)" },
+    { "pim",      "pim get db <name> | pim get alarms | pim put db <name> <size> [/crc] | pim put alarms <size> [/crc] - serial PIM sync, merge by uid (ERRORLEVEL 0/1/2)" },
+    { "sync",     "sync [status] - P4Sync handshake: sync.* capability snapshot for USB desktop sync (ERRORLEVEL 0/2)" },
+    { "net",      "net status|broker|connect|sub|pub|msg|onmsg|outbox - persistent MQTT service with SD outbox (ERRORLEVEL 0/1/2)" },
     { "archive",  "archive create|extract|list|verify ... - USTAR backups with CRC manifest (ERRORLEVEL 0/1/2)" },
     { "backup",   "backup <file> [paths...] - archive DBS + alarms by default (ERRORLEVEL 0/1/2)" },
     { "crypt",    "crypt lock|unlock <src> <dst> [/p:pass|/ask] - password file encryption (ERRORLEVEL 0/1/2)" },
@@ -4328,6 +4353,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "locate",   "locate <row> <col> - DOS LOCATE parity (1-based, 80x25)" },
     { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },
     { "prompt",   "prompt [template] - set the command prompt template" },
+    { "title",    "title [text] - show or set the session title (empty clears)" },
     { "cd",       "cd | chdir [path] - show or change the working directory" },
     { "dir",      "dir [path] [/W] [/P] [/S] [/B] [/L] [/A:attrs] [/O:order] - list directory" },
     { "copy",     "copy <src> <dst> - copy a file (dir target keeps basename)" },
@@ -4357,7 +4383,9 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "sort",     "sort [file] [/R] [/I] [/U] - sort lines (pipes: sort < f | sort)" },
     { "clip",     "clip [text | copy [N] | file <path> | read <file> | paste <dest>] - clipboard" },
     { "history",  "history [ /save [file] | /load [file] | /search <text> | /clear ] - command recall buffer" },
-    { "edit",     "edit <file> [/focus] [/template <name>] - modal text editor (byte-preserving document model)" },
+    { "edit",     "edit <file> | edit db <name> <id> | edit alarm <id> [/focus] [/template <name>] - modal text editor (byte-preserving document model)" },
+    { "spell",    "spell learn <word> | spell forget <word> | spell list user - user dictionary overlay" },
+    { "recover",  "recover [list] | recover restore <path> | recover discard <path> | recover clear - editor crash-file recovery" },
     { "trash",    "trash - show trash | trash <path> - move to trash | trash empty - empty it" },
     { "undelete", "undelete <path> - restore a file from trash" },
     { "receive",  "receive <path> <size> [/crc] - host-to-device binary transfer (USB serial)" },
@@ -4418,10 +4446,11 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "timezone", "timezone - show/set the timezone" },
     { "sntp",     "sntp | ntpsync [server] - sync the clock via SNTP" },
     { "rtc",      "rtc [anchor] - RTC backup status (source, anchor age, ext chip)" },
-    { "wifi",     "wifi status | scan [/b] | diag | connect [ssid pass] | disconnect" },
-    { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off>" },
+    { "wifi",     "wifi status | scan [/b] | diag | connect [ssid pass] | disconnect | setup [on|off]" },
+    { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect" },
     { "usb",      "usb status | ls [path] | keyboard <on|off> | mouse <on|off> | userial <status|open|close|send|recv|term>" },
     { "httpd",    "httpd status | start | stop - HTTP file server on port 80" },
+    { "certs",    "certs [info|list|add <file>|remove <name>|rebuild|clear|reload] - TLS trust store" },
     { "netstat",  "netstat - active TCP/UDP connections and listeners" },
     { "ipconfig", "ipconfig [/all] - IP configuration" },
     { "ping",     "ping <host-or-ip> [count] - ICMP echo" },
@@ -4533,15 +4562,16 @@ void shell_command_help(int argc, char **argv)
     shell_transcript_appendf_ansi("  " SH_EXE "tree" SH_RST " [path] [/F] [/A] | " SH_EXE "sort" SH_RST " [file] [/R] [/I] [/U]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "sd" SH_RST " info | ls [path] | stat <path> | cat <path> [bytes] | " SH_EXE "sdeject" SH_RST "\n");
     shell_transcript_appendf_ansi("  " SH_EXE "disk" SH_RST " list | detail | clean | create partition primary [size=N] | delete partition N | format\n");
-    shell_transcript_appendf_ansi("  " SH_EXE "wifi" SH_RST " status | scan [/b] | diag | connect [ssid pass] | disconnect\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "wifi" SH_RST " status | scan [/b] | diag | connect [ssid pass] | setup [on|off]\n");
     shell_transcript_appendf_ansi("  " SH_EXE "ping" SH_RST " <host-or-ip> [count] | " SH_EXE "dns" SH_RST " <hostname> (nslookup)\n");
     shell_transcript_appendf_ansi("  " SH_EXE "httpget" SH_RST " <url> [localfile]  (alias " SH_EXE "wget" SH_RST ")\n");
-    shell_transcript_appendf_ansi("  " SH_EXE "bluetooth" SH_RST " status | scan [limit] | advertise <on [name]|off>\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "bluetooth" SH_RST " status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect\n");
     shell_transcript_appendf_ansi("  " SH_EXE "usb" SH_RST " status | ls [path] | keyboard <on|off> | mouse <on|off>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "c6ota" SH_RST " <sd:/path|http[s]://url|default>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "display" SH_RST " info | resolution | refresh | power <on|sleep|off>\n");
     shell_transcript_appendf_ansi("  " SH_EXE "keyboard" SH_RST " show | hide | toggle | status\n");
     shell_transcript_appendf_ansi("  " SH_EXE "windows" SH_RST " info\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "certs" SH_RST " info | list | add <file> | remove <name> | rebuild | reload\n");
     shell_transcript_appendf_ansi(SH_MUTE "History recall:" SH_RST " Prev/Next buttons above the keyboard\n");
     shell_transcript_appendf_ansi(SH_MUTE "Redirection:" SH_RST " > file (overwrite) | >> file (append) | < file (input)\n");
     shell_transcript_appendf_ansi(SH_MUTE "Pipes:" SH_RST " cmd1 | cmd2 | cmd3 (up to %d stages)\n", P4_CONFIG_PIPE_STAGE_MAX);
@@ -4578,6 +4608,7 @@ void shell_command_sysinfo(void)
                              P4_CONFIG_VERSION_MAJOR,
                              P4_CONFIG_VERSION_MINOR,
                              P4_CONFIG_VERSION_PATCH);
+    shell_transcript_appendf_ansi("  " SH_LBL "title:" SH_RST " %s\n", s_title);
     {
         const esp_app_desc_t *d = esp_app_get_description();
         const char *date = (d != NULL) ? d->date : "n/a";
@@ -5405,6 +5436,33 @@ void shell_header_status_refresh(void)
     /* header_update_batch() schedules the async render itself. Never call
      * header_force_render() here: a synchronous full redraw on every refresh
      * period causes visible screen flashes. */
+
+    /* Low/critical battery notification: fires once when the battery drops
+     * below the warn or critical threshold, then stays quiet until the next
+     * state change (e.g. charger plugged in resets the flag). Runs on the
+     * LVGL task so header_notify() is safe. */
+    {
+        static bool s_bat_warned = false;
+        static bool s_bat_crit = false;
+        bool bat_ok = s_tlm_battery_ok;
+        int bat_pct = s_tlm_battery_percent;
+
+        if (bat_ok) {
+            if (bat_pct <= P4_CONFIG_HEADER_BAT_CRIT_PCT && !s_bat_crit) {
+                s_bat_crit = true;
+                s_bat_warned = true;
+                shell_header_notify("Battery CRITICAL", P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
+            } else if (bat_pct <= P4_CONFIG_HEADER_BAT_LOW_PCT && !s_bat_warned) {
+                s_bat_warned = true;
+                shell_header_notify("Battery low", P4_CONFIG_HEADER_NOTIFY_TIMEOUT_MS);
+            }
+            /* Reset flags when battery recovers (charger plugged in). */
+            if (bat_pct > P4_CONFIG_HEADER_BAT_LOW_PCT) {
+                s_bat_warned = false;
+                s_bat_crit = false;
+            }
+        }
+    }
 }
 
 uint32_t shell_header_refresh_interval_ms(void)
@@ -6031,6 +6089,9 @@ void shell_init(void)
 
     /* Restore the default DOS prompt template */
     shell_prompt_reset();
+
+    /* Clear the session title */
+    shell_title_reset();
 
     /* Clear state */
     s_transcript[0] = '\0';

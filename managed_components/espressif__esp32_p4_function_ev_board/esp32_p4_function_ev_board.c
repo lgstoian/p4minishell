@@ -332,22 +332,12 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
             ESP_LOGE("bsp_audio", "i2s tx init failed: %s", esp_err_to_name(err));
             return err;
         }
-        err = i2s_channel_enable(i2s_tx_chan);
-        if (err != ESP_OK) {
-            ESP_LOGE("bsp_audio", "i2s tx enable failed: %s", esp_err_to_name(err));
-            return err;
-        }
     }
 
     if (i2s_rx_chan != NULL) {
         esp_err_t err = i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg);
         if (err != ESP_OK) {
             ESP_LOGE("bsp_audio", "i2s rx init failed: %s", esp_err_to_name(err));
-            return err;
-        }
-        err = i2s_channel_enable(i2s_rx_chan);
-        if (err != ESP_OK) {
-            ESP_LOGE("bsp_audio", "i2s rx enable failed: %s", esp_err_to_name(err));
             return err;
         }
     }

@@ -48,6 +48,20 @@ void test_filetype_image(void)
     TEST_ASSERT_EQUAL_STRING("image", filetype_name(FILETYPE_IMAGE));
 }
 
+void test_filetype_html(void)
+{
+    TEST_ASSERT_EQUAL(FILETYPE_HTML, filetype_of("page.html"));
+    TEST_ASSERT_EQUAL(FILETYPE_HTML, filetype_of("PAGE.HTM"));
+    TEST_ASSERT_EQUAL(FILETYPE_HTML, filetype_of("sd:/DIR.X/page.html"));
+    TEST_ASSERT_TRUE(filetype_is_html(FILETYPE_HTML));
+    TEST_ASSERT_FALSE(filetype_is_html(FILETYPE_TEXT));
+    /* HTML is neither executable nor an image; it stays a normal file. */
+    TEST_ASSERT_FALSE(filetype_is_executable(FILETYPE_HTML));
+    TEST_ASSERT_FALSE(filetype_is_markdown(FILETYPE_HTML));
+    TEST_ASSERT_FALSE(filetype_is_image(FILETYPE_HTML));
+    TEST_ASSERT_EQUAL_STRING("html", filetype_name(FILETYPE_HTML));
+}
+
 void test_filetype_unknown(void)
 {
     TEST_ASSERT_EQUAL(FILETYPE_UNKNOWN, filetype_of(NULL));

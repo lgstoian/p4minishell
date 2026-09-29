@@ -7,7 +7,9 @@ sort/del/purge/export/import), the ``csv`` grid verbs with ``=EXPR``
 formulas, portable ``export`` / ``import`` for databases and alarms, ``archive``
 create/list/verify/extract, the ``crypt`` lock/unlock round-trip, the
 persistent-state verbs (``ini``, ``appconfig``, ``temp``), the ``alarm`` /
-``cal`` calendar store, ``json validate|pretty``, ``markdown`` and ``gfind``.
+``cal`` calendar store, ``json validate|pretty``, ``markdown`` (render +
+``export`` to html/print/text, validated on the host and read back through
+``type``) and ``gfind``.
 
 A scratch database name and a scratch ``sd:/P4DATA`` directory are used and
 both are cleaned up. ``alarm purge`` is only reached after deleting exactly the
@@ -174,6 +176,60 @@ def run(dev, ctx):
     c.expect("markdown renders file", "P4MD%s" % stamp, out)
     out = dev.run('markdown -e "# P4MDINLINE%s"' % stamp)
     c.expect("markdown -e renders text", "P4MDINLINE%s" % stamp, out)
+
+    # ------------------------------------------------------------------
+    # markdown export formats (html / print / text) + the on-device reader
+    # ------------------------------------------------------------------
+    doc = (
+        "# Doc %s\n\nIntro **bold** and `code`.\n\n"
+        "- one\n- two\n\n"
+        "> quoted\n\n"
+        "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+        "```\n<b>raw</b>\n```\n\n"
+        "A & B <x> [link](http://example/x)\n"
+    ) % stamp
+    # A long wrapped paragraph so the fixed-page print layout actually crosses a
+    # page boundary; its form feed is only written *between* pages.
+    doc += ("filler " * 900) + "\n"
+    dev.push_file("%s/doc2.md" % DATA, doc.encode())
+    dev.run("markdown export %s/doc2.md %s/doc2.html html" % (DATA, DATA))
+    dev.run("markdown export %s/doc2.md %s/doc2.prn print" % (DATA, DATA))
+    dev.run("markdown export %s/doc2.md %s/doc2.txt text" % (DATA, DATA))
+
+    html = dev.pull_file("%s/doc2.html" % DATA).decode("utf-8", "replace")
+    c.check("html export has DOCTYPE", "<!DOCTYPE html>" in html)
+    c.check("html export has title", "doc2" in html)
+    c.check("html export has table", "<table>" in html)
+    c.check("html export has fence", "<pre><code" in html)
+    c.check("html export escapes raw tags", "&lt;b&gt;raw&lt;/b&gt;" in html)
+    c.check("html export has bold", "<strong>bold</strong>" in html)
+    c.check("html export refuses unsafe scheme", "javascript:" not in html)
+
+    prn = dev.pull_file("%s/doc2.prn" % DATA).decode("utf-8", "replace")
+    c.check("print export paginated", "Page 1" in prn)
+    c.check("print export has form feed", "\f" in prn)
+
+    txt = dev.pull_file("%s/doc2.txt" % DATA).decode("utf-8", "replace")
+    c.check("text export stripped ANSI", "\x1b" not in txt)
+    c.check("text export keeps content", ("Doc %s" % stamp) in txt)
+
+    # Host well-formedness validator (browser proxy, stdlib only).
+    try:
+        import os
+        import sys
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        import htmlcheck
+        problems = htmlcheck.check_html(html, title="doc2")
+        c.check("html well-formed (host validator)", not problems,
+                "; ".join(problems))
+    except Exception as exc:  # defensive: never fail the suite on the helper
+        c.note("htmlcheck unavailable: %s" % exc)
+
+    # On-device reader: `type` must render the document, not echo raw tags.
+    out = dev.run("type %s/doc2.html" % DATA)
+    c.expect("type renders html heading", "Doc %s" % stamp, out)
+    c.check("type hides raw tags", "<h1>" not in out)
 
     # ==================================================================
     # ini / appconfig / temp

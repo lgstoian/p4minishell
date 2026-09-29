@@ -99,7 +99,10 @@ def capture(dev: DeviceSession, out_dir: Optional[str] = None,
     The device takes the LVGL port lock with a zero wait, so a frame that is
     mid-render can refuse once with "could not acquire LVGL lock". That is
     transient (not a fault), so a bounded retry absorbs it instead of failing
-    a suite on a timing race.
+    a suite on a timing race. The same retry absorbs a polluted prelude: when
+    a dogfooding action fires `screenshot` while an app/modal is still
+    streaming, the read picks up that output before the prelude, which also
+    clears once the line is drained and re-issued.
     """
     prelude = b""
     for attempt in range(4):
@@ -108,7 +111,14 @@ def capture(dev: DeviceSession, out_dir: Optional[str] = None,
         prelude = dev.read_until(b"streaming", 15.0)
         if b"streaming" in prelude:
             break
-        if b"could not acquire LVGL lock" in prelude and attempt < 3:
+        if attempt < 3:
+            # A foreground app owning the input (a `key?` prompt) swallows the
+            # screenshot line; send the documented foreground break so it
+            # unwinds, then retry.
+            try:
+                dev.write(b"\x03\r\n")
+            except Exception:  # noqa: BLE001
+                pass
             time.sleep(0.6)
             continue
         raise P4Error("screenshot: no streaming prelude; got %r" % prelude[-200:])

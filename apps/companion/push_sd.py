@@ -86,6 +86,7 @@ def push_file(ser, name, data):
     sent = 0
     ser.write(data[:CHUNK])
     sent = min(CHUNK, size)
+    ack_deadline = time.time() + 30
     while True:
         ack = read_until(ser, b"\n", 15)
         if not ack:
@@ -96,8 +97,12 @@ def push_file(ser, name, data):
             return True
         lines = [l for l in ack.split(b"\n") if l.strip().startswith(b"RX ")]
         if not lines:
-            print("  !! bad ACK %r for %s" % (ack[-80:], name))
-            return False
+            # An interleaved log line (e.g. Wi-Fi chatter) is not an ACK: skip
+            # it and keep reading rather than failing the transfer.
+            if time.time() > ack_deadline:
+                print("  !! bad ACK %r for %s" % (ack[-80:], name))
+                return False
+            continue
         cum = int(lines[-1].strip()[3:])
         if cum >= size:
             break

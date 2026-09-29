@@ -54,8 +54,10 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/boot
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/command
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/networking
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/portal
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/power_monitor
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/p4heap
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/pim
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/swgcm
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/led
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/keyboard
@@ -80,6 +82,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../components/imagefmt
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/usb
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/c6ota
 ${CMAKE_CURRENT_SOURCE_DIR}/../components/camera
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/certs
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/uitest
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_hosted
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_wifi_remote

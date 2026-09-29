@@ -6,6 +6,7 @@ idf_component_register(
     REQUIRES
         board_bsp
         bootloader_support
+        certs
         esp_app_format
         esp_http_client
         esp_hosted

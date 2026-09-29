@@ -646,11 +646,15 @@ static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     int ret;
     _i2s_lock(i2s_data, __func__);
-    // disable internally
-    if (dev_type & ESP_CODEC_DEV_TYPE_OUT) {
+    // Disable internally before reconfiguring the clock. The IDF I2S driver
+    // rejects a clock/slot change while a channel is running and logs an error
+    // when asked to disable an already-idle channel, so only touch a channel
+    // this interface believes it has enabled (the board BSP no longer
+    // pre-enables them; enable/disable is owned by esp_codec_dev).
+    if ((dev_type & ESP_CODEC_DEV_TYPE_OUT) && i2s_data->out_enable) {
         _i2s_drv_enable(i2s_data, true, false);
     }
-    if (dev_type & ESP_CODEC_DEV_TYPE_IN) {
+    if ((dev_type & ESP_CODEC_DEV_TYPE_IN) && i2s_data->in_enable) {
         _i2s_drv_enable(i2s_data, false, false);
     }
     if ((dev_type & ESP_CODEC_DEV_TYPE_IN) != 0 &&

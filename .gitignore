@@ -1,5 +1,9 @@
+# Build outputs (firmware + test), with or without a board suffix
+# (build/, build-tab5/, test/build/, test/build-tab5/).
 build/
+build-*/
 test/build/
+test/build-*/
 .vscode/
 __pycache__/
 *.pyc
@@ -27,6 +31,10 @@ spikes/*
 assets_out/
 tools/*.log
 apps/*.log
+
+# Release artifacts built by tools/make_release.py (merged bins, source zip,
+# SHA256SUMS) are produced on demand, never committed.
+release/
 
 # Icon master (16384x16384, ~70 MB). The committed derivatives are
 # icon/icon-512.png (readme) and main/assets/icon_splash.c (firmware splash);

@@ -346,6 +346,10 @@ class DogfoodAgent:
         return "\n".join(out)
 
     def action_gfx(self) -> str:
+        # A surface left by the previous step (an app prompt, a lingering
+        # modal) would bury the `gfx init` marker behind its output and time
+        # the run out, so return to a usable shell first.
+        self._close_surfaces()
         out = [self.dev.run("gfx init 200 150", timeout=15)]
         try:
             for i in range(self.rng.randint(10, 30)):

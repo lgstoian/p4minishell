@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include "board_config.h"
 #include "bsp/esp-bsp.h"
 
@@ -73,6 +74,24 @@ static inline esp_err_t board_bsp_charge_enable(bool enable)
     bsp_set_charge_en(enable);
     return ESP_OK;
 }
+
+/**
+ * @brief Read the 3.5 mm headphone-detect line.
+ *
+ * On the Tab5 this is HP_DET on the first IO expander (0x43 P7), active-high
+ * when a plug is inserted. @p inserted_out receives true/false. Boards without
+ * a jack return ESP_ERR_NOT_SUPPORTED and leave @p inserted_out false.
+ */
+esp_err_t bsp_audio_headphone_detected(bool *inserted_out);
+
+/**
+ * @brief Enable/disable the speaker power amplifier.
+ *
+ * On the Tab5 this drives NS4150B SPK_EN (0x43 P1). Boards whose amp is owned
+ * by the codec driver return ESP_ERR_NOT_SUPPORTED; the audio layer tolerates
+ * that and leaves amp control to the driver.
+ */
+esp_err_t bsp_audio_speaker_enable(bool enable);
 
 /**
  * @brief Read the board's charge-status line (corroborates pack presence).

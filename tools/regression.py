@@ -45,7 +45,11 @@ def main():
         ("companion deep", [sys.executable, os.path.join(APPS, "companion", "deep_test.py"), port], "DEEP PASS", 1200),
         ("companion db", [sys.executable, os.path.join(APPS, "companion", "db_test.py"), port], "DB PASS", 1200),
         ("companion alarm", [sys.executable, os.path.join(APPS, "companion", "alarm_test.py"), port], "ALARM PASS", 1200),
-        ("app smoke", [sys.executable, os.path.join(APPS, "smoke_apps.py"), port], "SMOKE 21/21 PASS", 1200),
+        # Reference-app coverage runs through the shared p4test framework (the
+        # one host test harness); the legacy fixed-timing smoke_apps.py drive
+        # is flaky under Wi-Fi/load and leaves the board mid-modal, cascading
+        # into the following steps.
+        ("app smoke", [sys.executable, os.path.join(TOOLS, "p4test_run.py"), port, "--only", "s14_apps", "--quick"], "RESULT OK", 1800),
         # Deploy the package bundles first: pkg_test.py installs/removes them and
         # fails on a fresh SD that never had apps/push_pkgs.py run (the Tab5).
         ("pak deploy", [sys.executable, os.path.join(APPS, "push_pkgs.py"), port], "RESULT OK", 600),

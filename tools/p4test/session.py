@@ -30,6 +30,11 @@ from shell_session import default_port, hard_reset, open_port  # noqa: E402
 ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]")
 ANSI_STR_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 PROMPT_GLUED = re.compile(r"^(?:PS \S*> *)+")
+# ROM boot-log reset-cause line, e.g. `rst:0x9 (TG1WDT_SYS_RST)`. The name in
+# parentheses (when present) is kept verbatim, so attribution never depends on
+# a local table; the raw code survives either way. This is how a silent reboot
+# (no panic marker, F27 class) is distinguished from a deliberate hard reset.
+RST_CAUSE_RE = re.compile(r"rst:0x([0-9a-fA-F]+)(?:\s+\(([A-Za-z0-9_]+)\))?")
 PANICS = (
     b"Guru Meditation",
     b"Stack protection",
@@ -58,6 +63,16 @@ def strip_ansi(text: str) -> str:
     return ANSI_STR_RE.sub("", text)
 
 
+def rst_cause_strings(text: str) -> list:
+    """Extract every ``rst:0x`` boot-cause annotation from ``text``."""
+    out = []
+    for m in RST_CAUSE_RE.finditer(text):
+        code = m.group(1).lower()
+        name = m.group(2)
+        out.append("rst:0x%s (%s)" % (code, name) if name else "rst:0x%s" % code)
+    return out
+
+
 class DeviceSession:
     """A live, DTR-safe USB-Serial-JTAG session to the board.
 
@@ -73,6 +88,7 @@ class DeviceSession:
         self.ser: Optional[serial.Serial] = None
         self._rx = bytearray()
         self._tag = 0
+        self.boot_causes: list = []
         self.open()
 
     # -- lifecycle -------------------------------------------------------
@@ -81,6 +97,7 @@ class DeviceSession:
             return
         self.ser = open_port(self.port, self.baud, timeout=0.3)
         self._rx.clear()
+        self.boot_causes = []
 
     def close(self) -> None:
         if self.ser is not None:
@@ -163,7 +180,7 @@ class DeviceSession:
             if chunk:
                 buf += chunk
         text = strip_ansi(strip_ansi_bytes(bytes(buf)).decode("utf-8", "replace"))
-        self._check_panic(text)
+        self._analyze(text)
         return text
 
     def wait_prompt(self, timeout: float = 15.0) -> str:
@@ -178,7 +195,7 @@ class DeviceSession:
             if text.rstrip().endswith(">") or re.search(r"PS .*>\s*$", text):
                 break
         text = strip_ansi(strip_ansi_bytes(bytes(buf)).decode("utf-8", "replace"))
-        self._check_panic(text)
+        self._analyze(text)
         return text
 
     def write(self, data: bytes) -> None:
@@ -244,6 +261,7 @@ class DeviceSession:
         assert self.ser is not None
         tag = self._next_tag()
         self.reset_input()
+        before = len(self.boot_causes)
         self.write_line(cmd)
         time.sleep(settle)
         self.write_line("echo " + tag)
@@ -258,7 +276,7 @@ class DeviceSession:
                 buf += chunk
                 last_data = time.time()
                 text = strip_ansi(strip_ansi_bytes(bytes(buf)).decode("utf-8", "replace"))
-                self._check_panic(text)
+                self._analyze(text)
                 if self._marked(text, tag):
                     marked = True
             else:
@@ -266,9 +284,11 @@ class DeviceSession:
                     break
         text = strip_ansi(strip_ansi_bytes(bytes(buf)).decode("utf-8", "replace"))
         if not marked:
-            self._check_panic(text)
-            raise P4Error("run(%r): marker %s not seen within %ss\n%s"
-                          % (cmd, tag, timeout, text[-800:]))
+            self._analyze(text)
+            causes = self.boot_causes[before:]
+            note = ("\ndevice reset cause: %s" % ", ".join(causes)) if causes else ""
+            raise P4Error("run(%r): marker %s not seen within %ss%s\n%s"
+                          % (cmd, tag, timeout, note, text[-800:]))
         if drop_echo:
             text = self._drop_echo(text, cmd)
         return text
@@ -294,6 +314,21 @@ class DeviceSession:
         return self.read_exact(size, data_timeout)
 
     # -- panic detection -------------------------------------------------
+    def _analyze(self, text: str) -> None:
+        """Record any boot reset causes in ``text``, then raise on panics.
+
+        The rom-boot ``rst:0x`` line is the only reliable crash class evidence
+        for a silent reboot (bugs.md F27 sweep 3): the cause code/name tells a
+        task-WDT reboot apart from a software restart or a brownout without any
+        panic marker to catch.
+        """
+        for cause in rst_cause_strings(text):
+            # A boot prints its cause line once; skip an immediate repeat so a
+            # burst containing the same banner does not inflate the trace.
+            if not self.boot_causes or self.boot_causes[-1] != cause:
+                self.boot_causes.append(cause)
+        self._check_panic(text)
+
     @staticmethod
     def _check_panic(text: str) -> None:
         for marker in PANICS:

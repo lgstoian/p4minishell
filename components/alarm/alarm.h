@@ -82,6 +82,15 @@ typedef struct {
     uint8_t  recur_day;                   /**< Monthly/yearly day 1..31 (0 = from `when`). */
     uint8_t  recur_month;                 /**< Yearly month 1..12 (0 = from `when`). */
     int8_t   recur_nth;                   /**< Monthly nth weekday 1..5, -1 = last, 0 = by monthday. */
+    /** Sync identity (32 hex chars + NUL). Empty until the first `pim get`
+     *  backfill; the loader tolerates older files without it, and the saver
+     *  omits it while empty so untouched events stay byte-identical. */
+    char     uid[P4_CONFIG_ALARM_UID_BYTES];
+    /** Last sync-relevant mutation (Unix). Set by `pim get` backfill, `pim
+     *  put` merge, snooze, and the tick fire pass — but only once @p uid is
+     *  set, so never-synced events never gain the field. `alarm_enable`
+     *  never bumps it (flags are device-local and merge preserves them). */
+    time_t   modified;
 #if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
     char     run[P4_CONFIG_SD_PATH_BYTES]; /**< Batch file for ALARM_ACTION_RUN. */
 #endif
@@ -216,6 +225,40 @@ esp_err_t alarm_del_all(void);
 
 /** Enable or disable an event (writes the flags back). */
 esp_err_t alarm_enable(uint32_t id, bool enable);
+
+/**
+ * Replace an event wholesale: loads @p id (NOT_FOUND when absent), stores
+ * every field of @p ev except the id (which is kept from the stored event),
+ * and writes the file back. The sync merge path (`pim put`) for newer-wins
+ * updates. Never touches INDEX.INI; the caller's @p ev.modified is kept
+ * verbatim (no bump here — bumps happen in snooze/the fire pass).
+ */
+esp_err_t alarm_set(uint32_t id, const alarm_event_t *ev);
+
+/** Render cap for one canonical event text (id/when/title/msg/flags/recur/
+ *  action/run plus the conditional uid/modified lines). Buffers passed to
+ *  alarm_event_render() must hold at least this many bytes. */
+#define ALARM_EVENT_TEXT_BYTES \
+    (P4_CONFIG_ALARM_TITLE_BYTES + P4_CONFIG_ALARM_MSG_BYTES + \
+     P4_CONFIG_SD_PATH_BYTES + 512)
+
+/**
+ * Render @p e as the canonical E<id>.INI text (the same bytes
+ * alarm_event_save() persists). Pure: no SD, unit-testable. The `id=` line
+ * is informational; alarm_set() always keeps the stored id. @p size must be
+ * at least ALARM_EVENT_TEXT_BYTES.
+ */
+esp_err_t alarm_event_render(const alarm_event_t *e, char *buf, size_t size);
+
+/**
+ * Parse canonical event text (as produced by alarm_event_render()) into
+ * @p out. Same field semantics as the file loader: every key but `when` is
+ * optional (historical defaults and clamps apply), missing `when` is
+ * ESP_ERR_NOT_FOUND, and the event id comes from @p id, never from the
+ * text. Pure: no SD, unit-testable. Used by `edit alarm` to validate the
+ * edited text before alarm_set().
+ */
+esp_err_t alarm_event_parse(const char *text, uint32_t id, alarm_event_t *out);
 
 /** Physically remove every soft-deleted (fired + disabled) event. */
 esp_err_t alarm_purge(void);

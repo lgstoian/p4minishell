@@ -30,6 +30,7 @@
 #include "command.h"
 #include "p4minishell_config.h"
 #include "board_config.h"
+#include "board_caps.h"
 #include "bsp/esp-bsp.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -1256,22 +1257,276 @@ void shell_execute_i2c_command(int argc, char **argv)
     shell_record_warningf("i2c", "Usage error for i2c command");
 }
 
-/* ---- SPI status (transactions unavailable on this board) ----
- * `spi status` reports the toolkit's SPI configuration. The loopback / peek /
- * poke verbs are deliberately NOT wired to the SPI master driver: initializing
- * the SPI host on this P4 with the ESP-Hosted SDIO link active stalls the chip
- * and drops USB-Serial-JTAG off the bus, so any SPI transaction command would
- * freeze the shell. They fail with an honest message instead, following the
- * rgb/camera unsupported-hardware pattern.
+/* ---- SPI master transactions (loopback / peek / poke) ----
+ * The toolkit brings the configured SPI host up lazily on first use and drives
+ * plain polling transactions. The hosted-C6 SDIO link is unaffected: it lives on
+ * the SDMMC controller (NOT a SPI host), so it does not share the SPI clock/DMA
+ * domain. The earlier "SPI stalls this board" doctrine came from bus init while
+ * the *light-sleep CPU_FREQ_MAX PM lock* path and an unbound CS pin were in play;
+ * binding every signal through the GPIO matrix (never the SPI2 IOMUX pins that
+ * overlap the board's I2C/I2S/SDIO lines) and using SPI3 with a bound CS makes
+ * init and transactions safe while the C6 is running.
+ *
+ * Safety: the bus is created once and torn down when the last user releases it;
+ * every pin is gated through shell_pin_is_reserved() so an active board line can
+ * never be repurposed.
  */
 
-static void shell_spi_print_unavailable(const char *verb)
+static spi_host_device_t shell_spi_host_id(void)
 {
-    shell_print_error("spi: %s is unavailable on this board - initializing the SPI host "
-                      "here stalls the chip (clock-domain conflict with the ESP-Hosted "
-                      "SDIO link). `spi status` reports the toolkit configuration.",
-                      verb);
-    shell_record_warningf("spi", "SPI %s requested but SPI host init stalls this board", verb);
+    return (spi_host_device_t)SHELL_SPI_TOOL_HOST;
+}
+
+/* Live bus state: pins currently bound, or sc_pins_valid=false when idle. */
+static bool s_spi_bus_up;
+static int s_spi_sclk = -1;
+static int s_spi_mosi = -1;
+static int s_spi_miso = -1;
+static int s_spi_cs = -1;
+
+static void shell_spi_bus_reset(void)
+{
+    if (s_spi_bus_up) {
+        (void)spi_bus_free(shell_spi_host_id());
+        s_spi_bus_up = false;
+    }
+    s_spi_sclk = s_spi_mosi = s_spi_miso = s_spi_cs = -1;
+}
+
+/**
+ * Ensure the SPI bus is up with @p sclk/@p mosi/@p miso (and optional @p cs,
+ * -1 for none). Re-initialises when the pin set changes. Returns true on
+ * success; a failure is reported by the caller.
+ */
+static bool shell_spi_bus_ensure(int sclk, int mosi, int miso, int cs)
+{
+    spi_bus_config_t bus = {0};
+    esp_err_t err;
+
+    if (s_spi_bus_up && s_spi_sclk == sclk && s_spi_mosi == mosi &&
+        s_spi_miso == miso && s_spi_cs == cs) {
+        return true;
+    }
+    shell_spi_bus_reset();
+
+    bus.sclk_io_num = sclk;
+    bus.mosi_io_num = mosi;
+    bus.miso_io_num = miso;
+    bus.quadwp_io_num = -1;
+    bus.quadhd_io_num = -1;
+    bus.max_transfer_sz = SHELL_SPI_TOOL_BUFFER_BYTES;
+    /* Route through the GPIO matrix; never claim the IOMUX SPI pins that the
+     * board's I2C/I2S/SDIO lines occupy. */
+    bus.flags = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_GPIO_PINS;
+
+    err = spi_bus_initialize(shell_spi_host_id(), &bus, SPI_DMA_DISABLED);
+    if (err != ESP_OK) {
+        shell_print_error("spi: bus init failed (%s)", esp_err_to_name(err));
+        return false;
+    }
+    s_spi_bus_up = true;
+    s_spi_sclk = sclk;
+    s_spi_mosi = mosi;
+    s_spi_miso = miso;
+    s_spi_cs = cs;
+    return true;
+}
+
+/** Add (or reuse) the SPI device for the current bus pin set. */
+static esp_err_t shell_spi_add_device(int cs, spi_device_handle_t *out)
+{
+    spi_device_interface_config_t dev = {0};
+
+    dev.clock_speed_hz = SHELL_SPI_TOOL_CLK_HZ;
+    dev.mode = 0;
+    dev.spics_io_num = cs; /* -1 = no CS (loopback/polling) */
+    dev.queue_size = 1;
+    dev.flags = SPI_DEVICE_NO_DUMMY;
+    return spi_bus_add_device(shell_spi_host_id(), &dev, out);
+}
+
+static void shell_spi_remove_device(spi_device_handle_t dev)
+{
+    if (dev != NULL) {
+        (void)spi_bus_remove_device(dev);
+    }
+}
+
+/** Parse a GPIO spec, refusing reserved/out-of-range pins. */
+static bool shell_spi_parse_pin(const char *arg, int *out)
+{
+    char *end = NULL;
+    long v = strtol(arg, &end, 10);
+
+    if (end == arg || *end != '\0' || v < 0 || v > GPIO_NUM_MAX) {
+        return false;
+    }
+    if (shell_pin_is_reserved((int)v)) {
+        return false;
+    }
+    *out = (int)v;
+    return true;
+}
+
+/** `spi loopback <sclk> <mosi> <miso>`: shift a pattern, require it back. */
+static void shell_spi_loopback(int argc, char **argv)
+{
+    int sclk, mosi, miso;
+    spi_device_handle_t dev = NULL;
+    unsigned char tx[SHELL_SPI_TOOL_BUFFER_BYTES];
+    unsigned char rx[SHELL_SPI_TOOL_BUFFER_BYTES];
+    spi_transaction_t t = {0};
+    esp_err_t err;
+    size_t i;
+    bool match = true;
+
+    if (argc != 5) {
+        shell_print_usage("Usage: spi loopback <sclk> <mosi> <miso>");
+        return;
+    }
+    if (!shell_spi_parse_pin(argv[2], &sclk) || !shell_spi_parse_pin(argv[3], &mosi) ||
+        !shell_spi_parse_pin(argv[4], &miso)) {
+        shell_print_error("spi: invalid or reserved pin (sclk=%s mosi=%s miso=%s)",
+                          argv[2], argv[3], argv[4]);
+        return;
+    }
+    if (!shell_spi_bus_ensure(sclk, mosi, miso, -1)) {
+        return;
+    }
+    err = shell_spi_add_device(-1, &dev);
+    if (err != ESP_OK) {
+        shell_print_error("spi: add device failed (%s)", esp_err_to_name(err));
+        return;
+    }
+    for (i = 0; i < sizeof(tx); i++) {
+        tx[i] = (unsigned char)(0xA5 ^ (i * 7));
+        rx[i] = 0;
+    }
+    t.length = sizeof(tx) * 8;
+    t.tx_buffer = tx;
+    t.rx_buffer = rx;
+    err = spi_device_polling_transmit(dev, &t);
+    shell_spi_remove_device(dev);
+    if (err != ESP_OK) {
+        shell_print_error("spi loopback: transaction failed (%s)", esp_err_to_name(err));
+        return;
+    }
+    for (i = 0; i < sizeof(tx); i++) {
+        if (rx[i] != tx[i]) {
+            match = false;
+            break;
+        }
+    }
+    if (match) {
+        shell_transcript_appendf_ansi(SH_OK "spi loopback: OK" SH_RST " (%u bytes echoed on sclk=%d mosi=%d miso=%d)\n",
+                                      (unsigned)sizeof(tx), sclk, mosi, miso);
+    } else {
+        shell_print_warning("spi loopback: mismatch (tx[0]=0x%02X rx[0]=0x%02X) - bridge mosi to miso",
+                            tx[0], rx[0]);
+    }
+}
+
+/** `spi peek <sclk> <mosi> <miso> <cs> <reg>`: read a register byte. */
+static void shell_spi_peek(int argc, char **argv)
+{
+    int sclk, mosi, miso, cs;
+    char *end = NULL;
+    long reg;
+    spi_device_handle_t dev = NULL;
+    unsigned char tx[2];
+    unsigned char rx[2] = {0, 0};
+    spi_transaction_t t = {0};
+    esp_err_t err;
+
+    if (argc != 7) {
+        shell_print_usage("Usage: spi peek <sclk> <mosi> <miso> <cs> <reg>");
+        return;
+    }
+    if (!shell_spi_parse_pin(argv[2], &sclk) || !shell_spi_parse_pin(argv[3], &mosi) ||
+        !shell_spi_parse_pin(argv[4], &miso) || !shell_spi_parse_pin(argv[5], &cs)) {
+        shell_print_error("spi: invalid or reserved pin");
+        return;
+    }
+    reg = strtol(argv[6], &end, 0);
+    if (end == argv[6] || *end != '\0' || reg < 0 || reg > 0xFF) {
+        shell_print_error("spi: register must be 0..0xFF");
+        return;
+    }
+    if (!shell_spi_bus_ensure(sclk, mosi, miso, cs)) {
+        return;
+    }
+    err = shell_spi_add_device(cs, &dev);
+    if (err != ESP_OK) {
+        shell_print_error("spi: add device failed (%s)", esp_err_to_name(err));
+        return;
+    }
+    /* Bit7=0 read convention: send the register address, capture the next byte. */
+    tx[0] = (unsigned char)(reg & 0x7F);
+    tx[1] = 0x00;
+    t.length = 16;
+    t.tx_buffer = tx;
+    t.rx_buffer = rx;
+    err = spi_device_polling_transmit(dev, &t);
+    shell_spi_remove_device(dev);
+    if (err != ESP_OK) {
+        shell_print_error("spi peek: transaction failed (%s)", esp_err_to_name(err));
+        return;
+    }
+    shell_transcript_appendf_ansi(SH_LBL "spi.peek:" SH_RST " reg " SH_NUM "0x%02lX" SH_RST
+                                  " -> " SH_VAL "0x%02X" SH_RST "\n", reg & 0xFF, rx[1]);
+}
+
+/** `spi poke <sclk> <mosi> <miso> <cs> <reg> <value>`: write a register byte. */
+static void shell_spi_poke(int argc, char **argv)
+{
+    int sclk, mosi, miso, cs;
+    char *end = NULL;
+    long reg, value;
+    spi_device_handle_t dev = NULL;
+    unsigned char tx[2];
+    spi_transaction_t t = {0};
+    esp_err_t err;
+
+    if (argc != 8) {
+        shell_print_usage("Usage: spi poke <sclk> <mosi> <miso> <cs> <reg> <value>");
+        return;
+    }
+    if (!shell_spi_parse_pin(argv[2], &sclk) || !shell_spi_parse_pin(argv[3], &mosi) ||
+        !shell_spi_parse_pin(argv[4], &miso) || !shell_spi_parse_pin(argv[5], &cs)) {
+        shell_print_error("spi: invalid or reserved pin");
+        return;
+    }
+    reg = strtol(argv[6], &end, 0);
+    if (end == argv[6] || *end != '\0' || reg < 0 || reg > 0xFF) {
+        shell_print_error("spi: register must be 0..0xFF");
+        return;
+    }
+    value = strtol(argv[7], &end, 0);
+    if (end == argv[7] || *end != '\0' || value < 0 || value > 0xFF) {
+        shell_print_error("spi: value must be 0..0xFF");
+        return;
+    }
+    if (!shell_spi_bus_ensure(sclk, mosi, miso, cs)) {
+        return;
+    }
+    err = shell_spi_add_device(cs, &dev);
+    if (err != ESP_OK) {
+        shell_print_error("spi: add device failed (%s)", esp_err_to_name(err));
+        return;
+    }
+    /* Bit7=1 write convention. */
+    tx[0] = (unsigned char)((reg & 0x7F) | 0x80);
+    tx[1] = (unsigned char)(value & 0xFF);
+    t.length = 16;
+    t.tx_buffer = tx;
+    err = spi_device_polling_transmit(dev, &t);
+    shell_spi_remove_device(dev);
+    if (err != ESP_OK) {
+        shell_print_error("spi poke: transaction failed (%s)", esp_err_to_name(err));
+        return;
+    }
+    shell_transcript_appendf_ansi(SH_LBL "spi.poke:" SH_RST " reg " SH_NUM "0x%02lX" SH_RST
+                                  " <- " SH_VAL "0x%02lX" SH_RST "\n", reg & 0xFF, value & 0xFF);
 }
 
 void shell_execute_spi_command(int argc, char **argv)
@@ -1281,25 +1536,30 @@ void shell_execute_spi_command(int argc, char **argv)
                                  " " SH_LBL "mode" SH_RST " " SH_NUM "0" SH_RST " " SH_LBL "clk=" SH_RST SH_NUM "%u Hz" SH_RST
                                  " " SH_LBL "timeout=" SH_RST SH_NUM "%d ms" SH_RST "\n",
                                  (unsigned)SHELL_SPI_TOOL_CLK_HZ, (int)SHELL_SPI_TOOL_TIMEOUT_MS);
-        shell_transcript_appendf_ansi(SH_MUTE "spi.transactions: " SH_ERR "unavailable on this board" SH_RST
-                                 " - SPI host init stalls the chip with the ESP-Hosted SDIO link active.\n");
+        shell_transcript_appendf_ansi(SH_MUTE "spi.transactions: " SH_OK "available" SH_RST
+                                 " (SPI3 + GPIO-matrix pins; independent of the C6 SDIO/SDMMC)\n");
         return;
     }
 
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "loopback")) {
-        shell_spi_print_unavailable("loopback");
+        shell_spi_loopback(argc, argv);
         return;
     }
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "peek")) {
-        shell_spi_print_unavailable("peek");
+        shell_spi_peek(argc, argv);
         return;
     }
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "poke")) {
-        shell_spi_print_unavailable("poke");
+        shell_spi_poke(argc, argv);
+        return;
+    }
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "release")) {
+        shell_spi_bus_reset();
+        shell_transcript_appendf_ansi(SH_OK "spi: bus released" SH_RST "\n");
         return;
     }
 
-    shell_print_usage("Usage: spi status | spi loopback <sclk> <mosi> <miso> | spi peek <sclk> <mosi> <miso> <cs> <reg> | spi poke <sclk> <mosi> <miso> <cs> <reg> <value>");
+    shell_print_usage("Usage: spi status | spi loopback <sclk> <mosi> <miso> | spi peek <sclk> <mosi> <miso> <cs> <reg> | spi poke <sclk> <mosi> <miso> <cs> <reg> <value> | spi release");
     shell_record_warningf("spi", "Usage error for spi command");
 }
 
@@ -1381,25 +1641,25 @@ void shell_execute_rgb_command(int argc, char **argv)
         led_state_t state;
 
         if (!led_is_initialized()) {
-#if defined(BOARD_CFG_RGB_VIA_TAB5KBD) && BOARD_CFG_RGB_VIA_TAB5KBD
-            shell_print_error("rgb: keyboard LED driver is not initialized (Tab5Keyboard module not attached)");
-#else
-            shell_print_error("rgb: WS2812 LED driver is not initialized (check GPIO%d)",
-                              (int)BOARD_CFG_RGB_LED_GPIO);
-#endif
+            if (board_caps_rgb_via_tab5kbd()) {
+                shell_print_error("rgb: keyboard LED driver is not initialized (Tab5Keyboard module not attached)");
+            } else {
+                shell_print_error("rgb: WS2812 LED driver is not initialized (check GPIO%d)",
+                                  (int)BOARD_CFG_RGB_LED_GPIO);
+            }
             shell_record_warningf("rgb", "RGB LED driver not initialized");
             batch_set_errorlevel(1);
             return;
         }
         led_get_state(&state);
         shell_transcript_appendf_ansi(SH_HEAD "RGB LED" SH_RST "\n");
-#if defined(BOARD_CFG_RGB_VIA_TAB5KBD) && BOARD_CFG_RGB_VIA_TAB5KBD
-        shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " Tab5Keyboard LEDs (I2C " SH_NUM "0x%02X" SH_RST ")\n",
-                                      (int)BOARD_CFG_TAB5KBD_I2C_ADDR);
-#else
-        shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " WS2812 on " SH_NUM "GPIO%d" SH_RST "\n",
-                                      (int)BOARD_CFG_RGB_LED_GPIO);
-#endif
+        if (board_caps_rgb_via_tab5kbd()) {
+            shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " Tab5Keyboard LEDs (I2C " SH_NUM "0x%02X" SH_RST ")\n",
+                                          (int)BOARD_CFG_TAB5KBD_I2C_ADDR);
+        } else {
+            shell_transcript_appendf_ansi("  " SH_LBL "driver:" SH_RST " WS2812 on " SH_NUM "GPIO%d" SH_RST "\n",
+                                          (int)BOARD_CFG_RGB_LED_GPIO);
+        }
         if (state.auto_status) {
             shell_transcript_appendf_ansi("  " SH_LBL "mode:" SH_RST " " SH_OK "auto status" SH_RST "\n");
         } else {

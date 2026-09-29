@@ -104,14 +104,13 @@ CONFIG_USB_HOST_RESUME_RECOVERY_MS=20
 CONFIG_USB_HOST_SUSPEND_ENTRY_MS=20
 CONFIG_USB_OTG_SUPPORTED=y
 
-# Station-only Wi-Fi profile. The networking module always calls
-# esp_wifi_set_mode(WIFI_MODE_STA); disabling SoftAP support here makes the
-# constraint structural rather than conventional, and reclaims the AP code
-# path from the image.
-CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+# SoftAP is required for the captive-portal Wi-Fi setup mode (first-run
+# without an SD card).  The P4 firmware runs in APSTA mode when the portal
+# is active (AP for clients, STA for the uplink).
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
 # esp_wifi_remote mirrors the Wi-Fi Kconfig under its own WIFI_RMT_ prefix, and
 # on the hosted path that mirror is the one that matters. Both must be set.
-CONFIG_WIFI_RMT_SOFTAP_SUPPORT=n
+CONFIG_WIFI_RMT_SOFTAP_SUPPORT=y
 
 # Image-budget constraints. These were previously only in the generated
 # sdkconfig, so regenerating it silently reverted them to the ESP-IDF defaults

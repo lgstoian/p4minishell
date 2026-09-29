@@ -63,6 +63,16 @@ static inline bool board_caps_has_imu(void)
 #endif
 }
 
+/** True when the external RTC shares the board's BSP I2C bus. */
+static inline bool board_caps_rtc_use_bsp_i2c(void)
+{
+#if defined(BOARD_CFG_RTC_USE_BSP_I2C) && BOARD_CFG_RTC_USE_BSP_I2C
+    return true;
+#else
+    return false;
+#endif
+}
+
 /** True when the Tab5Keyboard module is part of the profile. */
 static inline bool board_caps_has_tab5kbd(void)
 {

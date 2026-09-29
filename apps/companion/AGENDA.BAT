@@ -9,6 +9,7 @@ rem  (see command.md for the exact alarm add syntax).
 rem  Markers: [M-AGENDA] / [M-AGENDA-DONE].
 rem =====================================================================
 echo [M-AGENDA]
+title "Agenda"
 cal today
 cal next
 notify "agenda checked" /t:3

@@ -4,7 +4,8 @@
  */
 /**
  * @file test_alarm.c
- * @brief Unit tests for the alarm module's pure time / recurrence helpers.
+ * @brief Unit tests for the alarm module's pure time / recurrence helpers
+ * plus the event render/parse pair.
  *
  * The SD-backed store, checker task, and fire actions are exercised on
  * hardware (see apps/companion/alarm_test.py and command.md). These tests
@@ -12,6 +13,8 @@
  *   - weekday-mask matching for weekly recurrences
  *   - recurrence advance (none / daily / weekly / monthly / yearly)
  *   - local "YYYY-MM-DD HH:MM" parsing into a Unix timestamp
+ *   - canonical event text render/parse round-trip (the `edit alarm`
+ *     backing, incl. identity omission for unsynced events)
  *
  * Date assertions are TZ-relative (weekday, month, day, time-of-day via
  * localtime_r) so they hold in any timezone, DST quirks aside.
@@ -260,4 +263,107 @@ void test_alarm_advance_event_dispatch(void)
     e.recur = ALARM_RECUR_NONE;
     TEST_ASSERT_TRUE(alarm_advance_event(t, &e) == t);
     TEST_ASSERT_TRUE(alarm_advance_event(t, NULL) == t);
+}
+
+/* ========================================================================
+ * EVENT RENDER / PARSE (edit alarm backing)
+ * ======================================================================== */
+
+/** Representative event: every field set, incl. CSV-hostile title/msg. */
+static void alarm_test_fill(alarm_event_t *e)
+{
+    memset(e, 0, sizeof(*e));
+    e->id = 7;
+    e->when = (time_t)1800000000;
+    strcpy(e->title, "Standup, \"daily\" & coffee");
+    strcpy(e->msg, "msg with, commas; semicolons=equals");
+    e->flags = ALARM_FLAG_ENABLED;
+    e->recur = ALARM_RECUR_DAILY;
+    e->action = (uint8_t)(ALARM_ACTION_NOTIFY | ALARM_ACTION_BEEP);
+    strcpy(e->uid, "0123456789abcdef0123456789abcdef");
+    e->modified = (time_t)1799999999;
+#if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
+    strcpy(e->run, "sd:/AUTO.BAT");
+#endif
+}
+
+void test_alarm_event_render_parse_roundtrip(void)
+{
+    alarm_event_t e;
+    alarm_event_t back;
+    char text[ALARM_EVENT_TEXT_BYTES];
+
+    alarm_test_fill(&e);
+    TEST_ASSERT_EQUAL(ESP_OK, alarm_event_render(&e, text, sizeof(text)));
+    TEST_ASSERT_NOT_NULL(strstr(text, "uid=0123456789abcdef0123456789abcdef"));
+    TEST_ASSERT_EQUAL(ESP_OK, alarm_event_parse(text, 7, &back));
+    TEST_ASSERT_TRUE(back.id == 7);
+    TEST_ASSERT_TRUE(back.when == e.when);
+    TEST_ASSERT_EQUAL_STRING(e.title, back.title);
+    TEST_ASSERT_EQUAL_STRING(e.msg, back.msg);
+    TEST_ASSERT_TRUE(back.flags == e.flags);
+    TEST_ASSERT_TRUE(back.recur == e.recur);
+    TEST_ASSERT_TRUE(back.action == e.action);
+    TEST_ASSERT_TRUE(back.recur_day == e.recur_day);
+    TEST_ASSERT_TRUE(back.recur_month == e.recur_month);
+    TEST_ASSERT_TRUE(back.recur_nth == e.recur_nth);
+    TEST_ASSERT_EQUAL_STRING(e.uid, back.uid);
+    TEST_ASSERT_TRUE(back.modified == e.modified);
+#if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
+    TEST_ASSERT_EQUAL_STRING(e.run, back.run);
+#endif
+    /* The id comes from the caller, never from the text. */
+    TEST_ASSERT_EQUAL(ESP_OK, alarm_event_parse(text, 9, &back));
+    TEST_ASSERT_TRUE(back.id == 9);
+}
+
+void test_alarm_event_render_omits_identity_when_unsynced(void)
+{
+    alarm_event_t e;
+    alarm_event_t back;
+    char text[ALARM_EVENT_TEXT_BYTES];
+
+    memset(&e, 0, sizeof(e));
+    e.id = 3;
+    e.when = (time_t)1800000000;
+    strcpy(e.title, "plain");
+    TEST_ASSERT_EQUAL(ESP_OK, alarm_event_render(&e, text, sizeof(text)));
+    /* Never-synced events stay byte-identical: no identity lines. */
+    TEST_ASSERT_NULL(strstr(text, "uid="));
+    TEST_ASSERT_NULL(strstr(text, "modified="));
+    TEST_ASSERT_EQUAL(ESP_OK, alarm_event_parse(text, 3, &back));
+    TEST_ASSERT_EQUAL_STRING("", back.uid);
+    TEST_ASSERT_TRUE(back.modified == (time_t)0);
+}
+
+void test_alarm_event_parse_tolerates_missing_keys(void)
+{
+    alarm_event_t back;
+
+    /* Only `when` is mandatory; everything else falls back. */
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      alarm_event_parse("when=1800000000\n", 11, &back));
+    TEST_ASSERT_TRUE(back.id == 11);
+    TEST_ASSERT_TRUE(back.when == (time_t)1800000000);
+    TEST_ASSERT_EQUAL_STRING("", back.title);
+    TEST_ASSERT_EQUAL_STRING("", back.uid);
+    TEST_ASSERT_TRUE(back.recur_day == 0);
+    /* Out-of-range monthly params clamp, like the file loader. */
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      alarm_event_parse("when=1\nrecur_day=99\nrecur_nth=-1\n",
+                                        11, &back));
+    TEST_ASSERT_TRUE(back.recur_day == 0);
+    TEST_ASSERT_TRUE(back.recur_nth == -1);
+    /* Missing `when` is NOT_FOUND, like the file loader. */
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      alarm_event_parse("title=x\n", 11, &back));
+    /* NULL guards. */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      alarm_event_parse(NULL, 11, &back));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      alarm_event_parse("when=1\n", 11, NULL));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      alarm_event_render(NULL, (char[16]){0}, 16));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE,
+                      alarm_event_render(&back, (char[16]){0}, 0));
 }

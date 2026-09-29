@@ -2,19 +2,22 @@
 rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
 rem =====================================================================
-rem  SNAKE.BAT - TUI snake on packed coordinates (v = y*64+x, one env var
-rem  per segment). Batch has no arrays/indirection/substrings and env caps
-rem  at 24 vars, so segments are opaque packed numbers: copies compare and
-rem  shift without ever splitting; split (q=y, t=x) happens only for wall
-rem  checks and drawing. choice /T timeout steering (1 s pace), draw hold
-rem  coalescing (one flush per frame via draw refresh).
+rem  SNAKE.BAT - TUI snake on packed coordinates (v = y*64+x). The body
+rem  lives in the S[] array; `for /L` seeds the slots, `for /A` iterates
+rem  the prefix (index to %%k, live value to %%l) for drawing, food
+rem  collision and the shift, and each slot is a gosub routine so `%1`
+rem  re-expands per call (the fresh-pipeline-per-call idiom). Segments
+rem  stay opaque packed numbers: split (q=y, t=x) happens only for wall
+rem  checks and drawing.
 rem  Markers: [M-SNAKE] / [M-SNAKE-EAT] / [M-SNAKE-DONE].
 rem  Foreground-only: draw refuses in background jobs (see :nogfx).
 rem  Grid: x 3..42, y 4..21 maps to packed max 21*64+42=1386. Sentinel 6435
-rem  (99,99) never matches a live head; guarded draws keep it off-screen.
+rem  (99,99) fills the spare slots and never matches a live head; guarded
+rem  draws keep it off-screen.
 rem =====================================================================
 setlocal
 echo [M-SNAKE]
+title "Snake"
 draw hold on
 if errorlevel 1 goto nogfx
 draw box 1 2 44 22 double SNAKE
@@ -24,36 +27,25 @@ set dir=1
 set dc=d
 set len=3
 set score=0
-set s0=596
-set s1=595
-set s2=594
-set s3=6435
-set s4=6435
-set s5=6435
-set s6=6435
-set s7=6435
-set s8=6435
-set s9=6435
-set s10=6435
-set s11=6435
+rem Seed all twelve slots with the guaranteed-miss sentinel, then lay the
+rem 3-cell start: `for /L` precomputes the index (%%i -> n) so set S[n]=
+rem writes plain numbered slots.
+for /L %%i in (0,1,11) do set S[%%i]=6435
+set S[0]=596
+set S[1]=595
+set S[2]=594
 goto newfood
 
 :newfood
 set /a fx=%RANDOM% / 820 + 3
 set /a fy=%RANDOM% / 1821 + 4
 set /a nh=%fy% * 64 + %fx%
-if %nh%==%s0% goto newfood
-if %nh%==%s1% goto newfood
-if %nh%==%s2% goto newfood
-if %nh%==%s3% goto newfood
-if %nh%==%s4% goto newfood
-if %nh%==%s5% goto newfood
-if %nh%==%s6% goto newfood
-if %nh%==%s7% goto newfood
-if %nh%==%s8% goto newfood
-if %nh%==%s9% goto newfood
-if %nh%==%s10% goto newfood
-if %nh%==%s11% goto newfood
+set col=0
+rem Body check: for /A hands the live segment value to %%l, so no dynamic
+rem name lookups are needed. Every slot is either a segment or the 6435
+rem sentinel (which can never equal a real cell).
+for /A %%k in (S) do if %nh%==%%l set col=1
+if %col%==1 goto newfood
 goto frame
 
 :frame
@@ -66,42 +58,8 @@ draw text 48 9 Enter on serial
 draw text 48 10 q quit
 draw text 48 12 1s per step
 draw text %fx% %fy% *
-set /a q=%s0% / 64
-set /a t=%s0% - %q% * 64
-draw text %t% %q% @
-set /a q=%s1% / 64
-set /a t=%s1% - %q% * 64
-draw text %t% %q% O
-set /a q=%s2% / 64
-set /a t=%s2% - %q% * 64
-draw text %t% %q% O
-set /a q=%s3% / 64
-set /a t=%s3% - %q% * 64
-if %len% GTR 3 draw text %t% %q% O
-set /a q=%s4% / 64
-set /a t=%s4% - %q% * 64
-if %len% GTR 4 draw text %t% %q% O
-set /a q=%s5% / 64
-set /a t=%s5% - %q% * 64
-if %len% GTR 5 draw text %t% %q% O
-set /a q=%s6% / 64
-set /a t=%s6% - %q% * 64
-if %len% GTR 6 draw text %t% %q% O
-set /a q=%s7% / 64
-set /a t=%s7% - %q% * 64
-if %len% GTR 7 draw text %t% %q% O
-set /a q=%s8% / 64
-set /a t=%s8% - %q% * 64
-if %len% GTR 8 draw text %t% %q% O
-set /a q=%s9% / 64
-set /a t=%s9% - %q% * 64
-if %len% GTR 9 draw text %t% %q% O
-set /a q=%s10% / 64
-set /a t=%s10% - %q% * 64
-if %len% GTR 10 draw text %t% %q% O
-set /a q=%s11% / 64
-set /a t=%s11% - %q% * 64
-if %len% GTR 11 draw text %t% %q% O
+rem Draw the body once per frame: head gets the @, the rest get O.
+for /A %%k in (S) do if %%k LSS %len% call :drawseg %%k %%l
 draw refresh
 if %dir% EQU 0 set dc=w
 if %dir% EQU 1 set dc=d
@@ -141,34 +99,24 @@ if %q% LSS 4 goto dead
 if %q% GTR 21 goto dead
 if %t% LSS 3 goto dead
 if %t% GTR 42 goto dead
-if %nh%==%s0% goto dead
-if %nh%==%s1% goto dead
-if %nh%==%s2% goto dead
-if %nh%==%s3% goto dead
-if %nh%==%s4% goto dead
-if %nh%==%s5% goto dead
-if %nh%==%s6% goto dead
-if %nh%==%s7% goto dead
-if %nh%==%s8% goto dead
-if %nh%==%s9% goto dead
-if %nh%==%s10% goto dead
-if %nh%==%s11% goto dead
+set col=0
+for /A %%k in (S) do if %nh%==%%l set col=1
+if %col%==1 goto dead
 set /a q=%fy% * 64 + %fx%
 if %q%==%nh% goto eat
-if %len% GTR 11 set s11=%s10%
-if %len% GTR 10 set s10=%s9%
-if %len% GTR 9 set s9=%s8%
-if %len% GTR 8 set s8=%s7%
-if %len% GTR 7 set s7=%s6%
-if %len% GTR 6 set s6=%s5%
-if %len% GTR 5 set s5=%s4%
-if %len% GTR 4 set s4=%s3%
-if %len% GTR 3 set s3=%s2%
-if %len% GTR 2 set s2=%s1%
-set s1=%s0%
-set s0=%nh%
+rem Shift the body down one slot (S[k]=S[k-1]) so the new head lands in
+rem S[0]. `for /A` visits slots ascending and the previous slot's OLD value
+rem is carried in %prev%, so no slot overwrites data it still needs.
+set prev=%nh%
+for /A %%k in (S) do call :shiftseg %%k %%l
 set hh=%nh%
 goto frame
+
+:shiftseg
+rem %1 = index text, %2 = that slot's current value
+set S[%1]=%prev%
+set prev=%2
+return
 
 :eat
 set /a score+=10
@@ -177,6 +125,14 @@ echo [M-SNAKE-EAT] %score%
 if %len% GEQ 12 goto win
 tone 880 80
 goto newfood
+
+:drawseg
+rem %1 = index, %2 = packed segment value (y*64+x)
+set /a q=%2 / 64
+set /a t=%2 - %q% * 64
+if %1 EQU 0 draw text %t% %q% @
+if not %1 EQU 0 draw text %t% %q% O
+return
 
 :dead
 draw text 48 13 GAME OVER

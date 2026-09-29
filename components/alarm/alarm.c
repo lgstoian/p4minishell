@@ -9,6 +9,7 @@
  * All event data lives on the SD card under `sd:/ALARMS/`:
  *   INDEX.INI         next_id, count, version
  *   E<id>.INI         id, when, title, msg, flags, recur, action, run
+ *                     (+ uid, modified once the event has been synced)
  *
  * A single checker task polls the store every P4_CONFIG_ALARM_POLL_MS and
  * fires due events through the existing surfaces only: the header notification
@@ -364,19 +365,17 @@ bool alarm_parse_datetime(const char *date, const char *time_str, time_t *out)
  * Event file read/write
  * ---------------------------------------------------------------------- */
 
-/** Write an event atomically (builds the INI text, one atomic write). */
-static esp_err_t alarm_event_save(const char *base, const alarm_event_t *e)
+/**
+ * Format one event as canonical INI text (the exact bytes alarm_event_save
+ * persists). Shared by the file saver and the public alarm_event_render()
+ * so `edit alarm` previews the same text the store writes. The sync
+ * identity (`uid=`, `modified=`) is appended only once assigned, so event
+ * files for never-synced events stay byte-identical through every save.
+ */
+static void alarm_event_format(const alarm_event_t *e, char *text, size_t cap)
 {
-    char path[SHELL_SD_PATH_BYTES];
-    size_t cap = P4_CONFIG_ALARM_TITLE_BYTES + P4_CONFIG_ALARM_MSG_BYTES +
-                 P4_CONFIG_SD_PATH_BYTES + 256;
-    char *text;
-    esp_err_t error;
-
-    alarm_event_path(base, e->id, path, sizeof(path));
-    text = malloc(cap);
-    if (text == NULL) {
-        return ESP_ERR_NO_MEM;
+    if (e == NULL || text == NULL || cap == 0) {
+        return;
     }
 #if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
     snprintf(text, cap,
@@ -409,67 +408,159 @@ static esp_err_t alarm_event_save(const char *base, const alarm_event_t *e)
              "action=%u\n",
              (unsigned long)e->id, (long long)e->when, e->title, e->msg,
              (unsigned)e->flags, (unsigned)e->recur,
-             (unsigned)e->recur_day, (unsigned)e->recur_month, (int)e->recur_nth,
-             (unsigned)e->action);
+              (unsigned)e->recur_day, (unsigned)e->recur_month, (int)e->recur_nth,
+              (unsigned)e->action);
 #endif
+    if (e->uid[0] != '\0') {
+        /* Bound is dynamic (cap - used), so no -Wformat-truncation; worst
+         * case "uid=<32hex>\nmodified=<20digits>\n" is 67 bytes. */
+        size_t used = strlen(text);
+        if (used + 80 < cap) {
+            snprintf(text + used, cap - used, "uid=%s\nmodified=%lld\n",
+                     e->uid, (long long)e->modified);
+        }
+    }
+}
+
+esp_err_t alarm_event_render(const alarm_event_t *e, char *buf, size_t size)
+{
+    if (e == NULL || buf == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (size == 0) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    alarm_event_format(e, buf, size);
+    return ESP_OK;
+}
+
+/**
+ * Write an event atomically (formats the INI text, one atomic write).
+ */
+static esp_err_t alarm_event_save(const char *base, const alarm_event_t *e)
+{
+    char path[SHELL_SD_PATH_BYTES];
+    char *text;
+    esp_err_t error;
+
+    alarm_event_path(base, e->id, path, sizeof(path));
+    text = malloc(ALARM_EVENT_TEXT_BYTES);
+    if (text == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    alarm_event_format(e, text, ALARM_EVENT_TEXT_BYTES);
     error = storage_write_text_file(path, text);
     free(text);
     return error;
+}
+
+/** INI value source for the shared event parser (file vs text buffer). */
+typedef bool (*alarm_ini_get_t)(const char *key, char *value, size_t size,
+                                void *ctx);
+
+/** File adapter: reads one key from the event file (same call the old
+ *  loader used per key). */
+static bool alarm_ini_file_get(const char *key, char *value, size_t size,
+                               void *ctx)
+{
+    const char *path = (const char *)ctx;
+
+    return storage_ini_file_get(path, key, value, size) == ESP_OK;
+}
+
+/** Text adapter: reads one key from an in-memory INI buffer. The buffer
+ *  getter is the same scanner the file getter reads through, so both
+ *  shapes parse identically. */
+static bool alarm_ini_text_get(const char *key, char *value, size_t size,
+                               void *ctx)
+{
+    const char *text = (const char *)ctx;
+
+    return storage_ini_get_value(text, key, value, size) >= 0;
+}
+
+/**
+ * Shared event field mapping: the single home for both the file loader and
+ * the text parser. Missing `when` is NOT_FOUND (absent/unreadable file);
+ * every other key is optional with the historical defaults and clamps, so
+ * files written before sync (or hand-edited text missing keys) load the
+ * same way through either path. The event id comes from @p id, never from
+ * the text: an edited `id=` line is informational.
+ */
+static esp_err_t alarm_event_parse_core(alarm_ini_get_t get, void *ctx,
+                                        uint32_t id, alarm_event_t *e)
+{
+    char value[24];
+    long long when = 0;
+
+    memset(e, 0, sizeof(*e));
+    e->id = id;
+
+    if (!get("when", value, sizeof(value), ctx)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    when = atoll(value);
+    e->when = (time_t)when;
+
+    if (!get("title", e->title, sizeof(e->title), ctx)) {
+        e->title[0] = '\0';
+    }
+    if (!get("msg", e->msg, sizeof(e->msg), ctx)) {
+        e->msg[0] = '\0';
+    }
+    if (get("flags", value, sizeof(value), ctx)) {
+        e->flags = (uint8_t)atoi(value);
+    }
+    if (get("recur", value, sizeof(value), ctx)) {
+        e->recur = (uint8_t)atoi(value);
+    }
+    /* Monthly/yearly params are optional: older files predate them. */
+    if (get("recur_day", value, sizeof(value), ctx)) {
+        int day = atoi(value);
+        e->recur_day = (day >= 1 && day <= 31) ? (uint8_t)day : 0;
+    }
+    if (get("recur_month", value, sizeof(value), ctx)) {
+        int month = atoi(value);
+        e->recur_month = (month >= 1 && month <= 12) ? (uint8_t)month : 0;
+    }
+    if (get("recur_nth", value, sizeof(value), ctx)) {
+        int nth = atoi(value);
+        e->recur_nth = (nth >= -1 && nth <= 5 && nth != 0) ? (int8_t)nth : 0;
+    }
+    if (get("action", value, sizeof(value), ctx)) {
+        e->action = (uint8_t)atoi(value);
+    }
+    /* Sync identity is optional: files written before sync exist without it. */
+    if (!get("uid", e->uid, sizeof(e->uid), ctx)) {
+        e->uid[0] = '\0';
+    }
+    if (get("modified", value, sizeof(value), ctx)) {
+        long long mod = atoll(value);
+        e->modified = (mod > 0) ? (time_t)mod : 0;
+    }
+#if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
+    if (!get("run", e->run, sizeof(e->run), ctx)) {
+        e->run[0] = '\0';
+    }
+#endif
+    return ESP_OK;
 }
 
 /** Read one event file. Returns ESP_ERR_NOT_FOUND when absent/unreadable. */
 static esp_err_t alarm_event_load(const char *base, uint32_t id, alarm_event_t *e)
 {
     char path[SHELL_SD_PATH_BYTES];
-    char value[24];
-    esp_err_t error;
-    long long when = 0;
 
     alarm_event_path(base, id, path, sizeof(path));
-    memset(e, 0, sizeof(*e));
-    e->id = id;
+    return alarm_event_parse_core(alarm_ini_file_get, path, id, e);
+}
 
-    error = storage_ini_file_get(path, "when", value, sizeof(value));
-    if (error != ESP_OK) {
-        return ESP_ERR_NOT_FOUND;
+esp_err_t alarm_event_parse(const char *text, uint32_t id, alarm_event_t *out)
+{
+    if (text == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-    when = atoll(value);
-    e->when = (time_t)when;
-
-    if (storage_ini_file_get(path, "title", e->title, sizeof(e->title)) != ESP_OK) {
-        e->title[0] = '\0';
-    }
-    if (storage_ini_file_get(path, "msg", e->msg, sizeof(e->msg)) != ESP_OK) {
-        e->msg[0] = '\0';
-    }
-    if (storage_ini_file_get(path, "flags", value, sizeof(value)) == ESP_OK) {
-        e->flags = (uint8_t)atoi(value);
-    }
-    if (storage_ini_file_get(path, "recur", value, sizeof(value)) == ESP_OK) {
-        e->recur = (uint8_t)atoi(value);
-    }
-    /* Monthly/yearly params are optional: older files predate them. */
-    if (storage_ini_file_get(path, "recur_day", value, sizeof(value)) == ESP_OK) {
-        int day = atoi(value);
-        e->recur_day = (day >= 1 && day <= 31) ? (uint8_t)day : 0;
-    }
-    if (storage_ini_file_get(path, "recur_month", value, sizeof(value)) == ESP_OK) {
-        int month = atoi(value);
-        e->recur_month = (month >= 1 && month <= 12) ? (uint8_t)month : 0;
-    }
-    if (storage_ini_file_get(path, "recur_nth", value, sizeof(value)) == ESP_OK) {
-        int nth = atoi(value);
-        e->recur_nth = (nth >= -1 && nth <= 5 && nth != 0) ? (int8_t)nth : 0;
-    }
-    if (storage_ini_file_get(path, "action", value, sizeof(value)) == ESP_OK) {
-        e->action = (uint8_t)atoi(value);
-    }
-#if P4_CONFIG_ALARM_ENABLE_RUN_ACTION
-    if (storage_ini_file_get(path, "run", e->run, sizeof(e->run)) != ESP_OK) {
-        e->run[0] = '\0';
-    }
-#endif
-    return ESP_OK;
+    return alarm_event_parse_core(alarm_ini_text_get, (void *)text, id, out);
 }
 
 /** True when a path names an event file (E<6 digits>.INI). */
@@ -809,6 +900,33 @@ esp_err_t alarm_enable(uint32_t id, bool enable)
     return error;
 }
 
+esp_err_t alarm_set(uint32_t id, const alarm_event_t *ev)
+{
+    char base[SHELL_SD_PATH_BYTES];
+    alarm_event_t merged;
+    esp_err_t error;
+
+    if (ev == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    alarm_lock();
+    alarm_base_dir(base, sizeof(base));
+    /* Load-check: NOT_FOUND when the id is absent. */
+    {
+        alarm_event_t cur;
+        error = alarm_event_load(base, id, &cur);
+        if (error != ESP_OK) {
+            alarm_unlock();
+            return ESP_ERR_NOT_FOUND;
+        }
+    }
+    merged = *ev;
+    merged.id = id;
+    error = alarm_event_save(base, &merged);
+    alarm_unlock();
+    return error;
+}
+
 esp_err_t alarm_snooze(uint32_t id, int minutes)
 {
     char base[SHELL_SD_PATH_BYTES];
@@ -830,6 +948,9 @@ esp_err_t alarm_snooze(uint32_t id, int minutes)
     e.when = time(NULL) + (time_t)minutes * 60;
     e.flags |= ALARM_FLAG_ENABLED;
     e.flags &= (uint8_t)~ALARM_FLAG_FIRED;
+    if (e.uid[0] != '\0') {
+        e.modified = time(NULL);
+    }
     error = alarm_event_save(base, &e);
     alarm_unlock();
     return error;
@@ -1044,6 +1165,9 @@ void alarm_tick(void)
                 guard++;
             }
             e.when = next;
+        }
+        if (e.uid[0] != '\0') {
+            e.modified = now;
         }
         (void)alarm_event_save(base, &e);
         due[due_count++] = e;
