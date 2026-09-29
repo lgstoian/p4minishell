@@ -171,8 +171,8 @@ performance pass (F26).
   SDFX/PIMX/BMPX magics, byte limits) over the existing serial engine —
   no second walker, parser, or CRC. The host prototype reuses the shared
   `p4test` transports (file push/pull, screenshot; PIM stays with
-  `pim_sync.py`). Roadmap section F records the phased plan. Hardware
-  verification of the new suite on both boards is pending.
+  `pim_sync.py`). Roadmap section F records the phased plan. The new suite
+  runs on both boards (`s15_p4sync` 19/19 in the v1.3.0 sweep).
 - **Batch DOS-parity round** (`echo.`/`echo/`/`echo(`/`echo:` glued forms,
   `for /f` default `eol=;`, `shift /n`, new `title` verb): glued echo prints
   the word remainder (blank when bare) through the single echo renderer;
@@ -181,7 +181,7 @@ performance pass (F26).
   `title [text]` stores a session title reported bare and by `sysinfo`
   (`P4_CONFIG_TITLE_BYTES`). Pure helpers unit-tested (`echo glued`
   detector, `shift /n` parser, `forf` defaults, title round-trip/truncate);
-  `s06_batch` covers the behavior. Hardware verification pending.
+  `s06_batch` covers the behavior on both boards.
 - **Redirection DOS-parity round** (bare-operator syntax error, `1>`/`2>`
   handle merge, `NUL`/`CON` devices, `type` stdin, pipe spools under
   `sd:/tmp`): a missing target refuses with ERRORLEVEL 2 without running;
@@ -189,8 +189,7 @@ performance pass (F26).
   and `< NUL` reads EOF (via the shared temp core), `CON` keeps the console
   path; `type` with no path reads the input slot; pipeline spools moved to
   the temp directory (same boot cleanup, per-task names kept). Pure
-  predicates unit-tested; `s06_batch` covers the behavior. Hardware
-  verification pending.
+  predicates unit-tested; `s06_batch` covers the behavior on both boards.
 - **Event service `net` (persistent MQTT + offline outbox)**: one lazy
   `netsvc` task in `components/networking` owns a single MQTT 3.1.1 session
   (own codec, no new dependencies; plaintext LAN, BYO broker) with keepalive,
@@ -202,8 +201,9 @@ performance pass (F26).
   merge newer-wins through `components/pim`, lock-gated and fail-closed.
   OTA/sleep pause the session (`c6ota` refuses while active). Pure codec,
   matcher, backoff, and outbox framing unit-tested; `s16_netsvc` covers the
-  verbs (broker-dependent checks skip cleanly). Hardware verification
-  (live broker soak, sleep/wake reconnect, OTA exclusion) pending.
+  verbs (broker-dependent checks skip cleanly). The v1.3.0 sweep exercises the
+  suite on both boards (15/15 with no broker attached); a live broker soak,
+  sleep/wake reconnect, and OTA-exclusion retest remain follow-ups.
 - **Framework/portability chapter work** (roadmap §A): build-tree hygiene
   (`build-tab5/`, `test/build-tab5/` untracked — they were committed before
   the ignore rules; working files untouched), capability queries migrated
@@ -212,8 +212,8 @@ performance pass (F26).
   `board_caps_rtc_use_bsp_i2c()`; declaration-gating `#if`s intentionally
   kept), CI matrix + profile lint auto-discover `boards/*/`, and
   `make_release.py bins` verified for both boards. All four builds
-  (firmware + `test/`, both boards) clean with zero warnings. F27 remains
-  the hardware exit gate.
+  (firmware + `test/`, both boards) clean with zero warnings. F27 was the
+  hardware exit gate; it is now closed (see the F27 fix above).
 - **User dictionary for spellcheck** (`spell learn|forget|list`, editor
   `AddWord` key): learned words persist in `sd:/DICTS/user.words` and are
   checked before the base list; `\spell-forget` removes a learned word,
@@ -237,8 +237,8 @@ performance pass (F26).
   `audio.output:` / `audio.route:` / `audio.jack:` (`n/a` on jackless boards).
   `schematics.md`'s shifted E1 pin table is corrected. New pure unit tests
   (`test_audio.c`: parse/resolve/WAV params) and an s12 suite that generates a
-  WAV fixture so `wavplay` finally runs. HP_DET plug in/out transitions are
-  build-verified; live-transition confirmation on hardware is pending.
+  WAV fixture so `wavplay` finally runs. The s12 suite passes on both boards;
+  a physical HP_DET plug in/out transition is still a manual check.
 - **Captive-portal Wi-Fi setup** (`components/portal/`, `wifi setup`): the device now
   starts a SoftAP captive portal on first boot when no SD card is mounted and no known
   Wi-Fi networks are cached.  A client that joins the AP is redirected to an embedded
