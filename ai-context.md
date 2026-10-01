@@ -42,7 +42,7 @@ does" reference in [documentation.md](documentation.md).
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.3.0** (`p4minishell_config.h` version macros) |
+| Version | **v1.3.1** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -752,7 +752,7 @@ the raster core + 8x8 font are `components/gfx/`
   - Power/idle/sleep/battery/volume -> `components/command/power_commands.c`
   - Peripheral toolkit (`gpio`, `pwm`, `freq`, `adc`, `i2c`, `spi`, `rgb`) ->
     `components/command/periph_commands.c`
-  - Audio verbs (`beep`, `tone`, `wavplay`, `audio`, `volume`) parse in
+  - Audio verbs (`beep`, `tone`, `wavplay`, `audio`, `mic`, `volume`) parse in
     `components/command/audio_commands.c`; ALL audio implementation lives in `components/audio/`
   - Screenshot/serial (`screenshot`/`scr`/`capture`, `receive`, `send`) ->
     `components/command/serial_commands.c`
@@ -1923,32 +1923,50 @@ the raster core + 8x8 font are `components/gfx/`
   reserved critical line in the board pin table, so `pwm`/`freq`/`adc`/`i2c`/`spi` refuse it.
 - All tunables live in `P4_CONFIG_LED_*` (documented in `p4minishell_config.yaml`).
 
-### Audio Rules (beep / tone / wavplay / volume)
+### Audio Rules (beep / tone / wavplay / volume / mic)
 - ALL audio logic lives in `components/audio/` (`audio.h` / `audio.c`): the codec handle
   (ES8311 on the reference board, ES8388 on the Tab5), speaker volume
   (`audio_set_volume` / `audio_get_volume`), output routing
-  (`audio_set/get_output_mode`, `audio_effective_route`, `audio_headphone_state`),
+  (`audio_set/get_output_mode`, `audio_effective_route`, `audio_headphone_state`,
+  the pure `audio_amp_should_enable` predicate), microphone diagnostics
+  (`audio_mic_level`, `audio_hiss_selftest`, `audio_mic_hear`,
+  `audio_mic_audit`, pure `audio_mic_*` stats/goertzel, `audio_speaker_diag`),
   and the background playback engine.
-  The codec is mono 16-bit at 22050 Hz (the BSP default) — `esp_codec_dev_open({22050,1,16})` /
-  `write` / `close` is the whole output path, driven through `bsp_audio_codec_speaker_init()`.
+  Playback is stereo 16-bit (tones at `P4_CONFIG_TONE_SAMPLE_RATE_HZ`, WAVs at
+  file rate) — `esp_codec_dev_open` / `write` / `close` is the whole output
+  path, driven through `bsp_audio_codec_speaker_init()` plus the Tab5
+  post-open ES8388 sequence (`bsp_audio_codec_speaker_post_open`).
 - Output route policy lives in `components/audio`; amp and jack pins live in the board BSP.
-  The route (AUTO = speaker unless headphones detected, else forced) is evaluated at each
-  play/volume/status call — no background poller. The BSP exposes only thin accessors
+  The route (AUTO = speaker unless headphones detected, else forced) is recorded at each
+  mode switch and applied at the next playback open (or live mid-play) — no background poller.
+  The amp itself is gated to the playback window only (mute-at-boot invariant owned by the
+  pure `audio_amp_should_enable()` predicate: enabled after open, muted before every close,
+  never on while idle), so a powered-but-clockless codec cannot idle as white noise (F28).
+  `volume` and mode/config changes at rest must never power the amp. The BSP exposes only thin accessors
   (`bsp_audio_headphone_detected`, `bsp_audio_speaker_enable` over the existing amp path);
   never drive expander/GPIO amp pins from `components/audio` or `components/command`, and
   never create a second codec handle. Boards without a jack report unsupported and resolve
   to the speaker. On the Tab5 the jack is HP_DET on PI4IOE5V6408 #1 P7
   (`BOARD_CFG_HP_DET_EXP_PIN`); never touch the 0x44 expander for audio (F6 rule).
+- Microphone diagnostics (`mic level [ms]` / `mic hear <freq> [ms]` /
+  `mic audit [freq]` / `mic selftest`, ES7210 on the Tab5) live in
+  `components/audio/` too. The mic shares the speaker rate, so `level`/`hear`
+  may record during a playback; `selftest`/`audit` refuse with
+  `ESP_ERR_INVALID_STATE` while one holds the path (`audit` owns its own
+  tone). A record parks the shared TX channel
+  (duplex clock master); the vendored `audio_codec_data_i2s.c` park/unpark patch (tracked in
+  `tools/managed_patches.patch`, re-apply after `update-dependencies`) stands it down on
+  record stop, or the next playback open reconfigures a running channel and fails.
 - The command layer (`components/command/command.c`) only dispatches `beep` / `tone` /
-  `wavplay` / `audio` / `volume`, parses arguments, and calls the `audio.h` API. Keep audio
+  `wavplay` / `audio` / `mic` / `volume`, parses arguments, and calls the `audio.h` API. Keep audio
   logic out of command.c; add it to the `audio` component instead.
 - `beep`, `tone`, and `wavplay` MUST play in the background: they post a request to the
   component's `audio_play` task and return immediately, so batch files never block. One sound
   at a time (a second request is refused with `audio busy`); `audio stop` sets a stop flag the
   play loop checks; all audio commands return an ERRORLEVEL (0 started / 1 busy|io / 2 usage).
 - Tone PCM is generated in heap chunks (`P4_CONFIG_TONE_CHUNK_SAMPLES`) with a short
-  fade-in/out; WAVs (16-bit PCM mono/stereo at 22050/44100 Hz) are streamed from SD, stereo
-  mixed to mono and 44100 decimated to 22050, bounded by `P4_CONFIG_WAV_MAX_BYTES`. Keep all
+  fade-in/out; WAVs (16-bit PCM mono/stereo at 22050/44100 Hz) are streamed from SD at file
+  rate with mono upmixed to stereo, bounded by `P4_CONFIG_WAV_MAX_BYTES`. Keep all
   chunk buffers on the heap, never on the audio task's stack. Call `audio_stop()` before
   `sleep`/`deepsleep` so playback cannot continue into sleep.
 

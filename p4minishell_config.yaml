@@ -12,10 +12,9 @@
 # boards/<name>/board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 1.3.0
-# Last updated: 2026-09-18 (1.2.0: writerdeck - editor focus/typewriter mode,
-#   markdown export, reading typography, spellcheck, document templates)
-config_version: "1.3.0"
+# Version: 1.3.1
+# Last updated: 2026-10-01 (1.3.1: Tab5 white-noise fix - amp gating, mic diagnostics)
+config_version: "1.3.1"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -2096,6 +2095,11 @@ gpio_hardware:
     type: int
     description: "Peak tone amplitude as a percentage of full scale"
     range: "1..100"
+  tone_sample_rate_hz:
+    value: 48000
+    type: int
+    description: "Speaker playback path rate in Hz (M5Stack-proven 48 kHz stereo)"
+    range: "8000..48000"
   tone_chunk_samples:
     value: 1024
     type: int
@@ -2106,6 +2110,26 @@ gpio_hardware:
     type: int
     description: "Maximum WAV file size in bytes accepted by wavplay"
     range: "1024..8388608"
+  mic_sample_rate_hz:
+    value: 48000
+    type: int
+    description: "Microphone sample rate in Hz (matches the speaker path so a record can share the I2S clocks with a playback)"
+    range: "8000..48000"
+  mic_default_ms:
+    value: 500
+    type: int
+    description: "Default mic recording length in ms with no argument"
+    range: "10..5000"
+  mic_max_ms:
+    value: 5000
+    type: int
+    description: "Maximum mic recording length in ms (a record always terminates)"
+    range: "100..60000"
+  mic_chunk_samples:
+    value: 1024
+    type: int
+    description: "Samples read per chunk while recording the microphone"
+    range: "64..8192"
   audio_task_stack:
     value: 8192
     type: int

@@ -1,4 +1,4 @@
-# P4MiniShell — Bug Log (v1.3.0)
+# P4MiniShell — Bug Log (v1.3.1)
 
 This file is the working log for bug hunting and hardware stress testing. It
 was reset for the v1.2.0 campaign (the two-board release) and carried into
@@ -7,7 +7,7 @@ v1.3.0, so it reflects what is **still open**.
 Fixed entries are removed at each reset (their history lives in
 [`changelog.md`](changelog.md) and git).
 
-- **Firmware:** v1.3.0 (ESP-IDF v5.5.5)
+- **Firmware:** v1.3.1 (ESP-IDF v5.5.5)
 - **Boards under test (in parallel):**
   - `jc1060p470c` — ESP32-P4 Function EV Board (COM3), ESP32-C6 co-processor,
     JD9165 1024x600, GT911 touch, SD card present.
@@ -68,6 +68,60 @@ All fixed. One-line summaries; full details live in `changelog.md` and git.
 ---
 
 ## Open findings
+
+### F28. Constant white noise from the Tab5 speaker since v1.3.0 — **FIXED, verified on hardware**
+
+- **Severity:** HIGH (speaker unusable at any volume; survived `volume` and factory reset)
+- **Component:** `components/audio/` + Tab5 `board_bsp` + vendored `esp_codec_dev`
+- **Board:** `m5stack_tab5` (COM6); reference board (COM3) unaffected by the hiss
+  (its amp is codec-driver-owned) but shared the duplex defect below
+- **Symptom:** constant white noise from boot; `volume` and factory reset had no effect.
+- **Root cause (two coupled v1.3.0 changes):**
+  1. The new `audio output` routing applied the resolved route on every codec
+     ensure, and the boot pre-warm (`audio_init()` in `main.c`) plus
+     `bsp_audio_codec_speaker_init()` latched the NS4150B amp ON from boot —
+     while the I2S double-disable fix in the same release left the I2S clocks
+     stopped while idle. A powered-but-clockless ES8388 idles as hiss.
+  2. Found while verifying with the new mic probe: a microphone record parks
+     the shared TX channel (duplex clock master) and never stood it down, so
+     the next `tone`/`wavplay` open reconfigured a running channel and failed
+     (`I2S_IF: Failed to reconfig STD slot`, playback dead until reboot).
+- **Fix:**
+  - Amp gated to the playback window only (mute-at-boot invariant, pure
+    `audio_amp_should_enable()` predicate, unit-tested): enabled after
+    `esp_codec_dev_open()`, muted before every close; `volume`/mode/config
+    changes at rest never power the amp; `audio stop` mutes immediately; the
+    Tab5 `bsp_audio_codec_speaker_init()` no longer touches the amp.
+  - Playback standardized on the M5Stack-proven 48 kHz stereo path
+    (`P4_CONFIG_TONE_SAMPLE_RATE_HZ`, stereo-duplicated PCM; WAVs play at
+    file rate); post-open the Tab5 programs M5Unified's ES8388 speaker
+    register sequence (separate ADC/DAC clocks, DAC mixers, LOUT volumes)
+    through a cached I2C handle with read-back (`bsp_audio_codec_speaker_
+    post_open`, no-op `NOT_SUPPORTED` on other boards), plus an explicit
+    output unmute per play.
+  - New `mic level [ms]` / `mic hear <freq> [ms]` / `mic audit [freq]` /
+    `mic selftest` verbs (ES7210 on the Tab5, ES8311 on the reference
+    board): room levels, a Goertzel tone detector, a lag-immune end-to-end
+    speaker audit (waits for actual streaming, retries up to 3 takes) and an
+    amp-on vs amp-off hiss verdict that always leaves the amp off; plus
+    `audio diag` (live ES8388 register dump).
+  - Vendored `audio_codec_data_i2s.c` duplex park/unpark patch (tracked in
+    `tools/managed_patches.patch`): the record path still parks TX for the
+    duplex clocks but stands it down on record stop (and a stale park is
+    dropped before any playback reconfig), with no disable-idle log spam.
+- **Verification (COM6 + COM3, focused runs only):** all four builds
+  (firmware + `test/`, both boards) 0 errors/0 warnings; fresh-boot serial
+  logs 0 ESP_LOG W/E on both boards; boot is silent (operator-confirmed);
+  `tone 440` + `tone 880` both audible by ear; `mic audit` reports
+  `speaker plays` repeatedly and `audio diag` shows the M5 register state;
+  `wavplay`→`mic`→`tone`→`selftest`→`wavplay` in every order with zero `E()`
+  lines on both boards; COM3 `mic selftest` reports clean.
+- **Known residual (observation, not a bug):** playback start can jitter by
+  ~1 s+ on a loaded system and host serial round-trips lag under the same
+  load, so a single fixed-window acoustic check can miss the tone; `mic
+  audit` compensates (streaming handshake + best-of-3). The 440 Hz band
+  couples weakly into the onboard mics in some acoustics, so the audit
+  defaults to 880 Hz.
 
 ### F27. Transient crash in long mixed sweeps — **RESOLVED (v1.3.0)**
 

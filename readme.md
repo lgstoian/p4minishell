@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.3.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.3.1 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -101,7 +101,8 @@ the host regression runners are green. See
   `ping`/`dns`/`httpget`/`tcpterm`, `httpd` file server, `netstat`/`ipconfig`,
   USB host (MSC, HID, CDC-ACM `usb userial`), and C6 OTA.
 - **Hardware:** brightness/rotation, battery telemetry, audio (`beep`/`tone`/
-  `wavplay`, output routing with headphone auto-mute on the Tab5), WS2812
+  `wavplay`, output routing with headphone auto-mute on the Tab5, `mic`
+  diagnostics + speaker self-test), WS2812
   status LED, GPIO/PWM/ADC/I2C toolkit, idle display-off,
   and sleep/deep-sleep.
 - **Editor:** a touch-first, PSRAM-backed `edit` editor for any SD text file.
@@ -400,7 +401,7 @@ ESP-IDF v5.5.5. Full bring-up checklist in [`PORTING.md`](PORTING.md).
 | **Co-processor** | ESP32-C6 over ESP-Hosted SDIO 3.0.6 | ESP32-C6-MINI-1U over ESP-Hosted SDIO 3.0.6 |
 | **Display** | JD9165 1024x600 MIPI-DSI, rotation 0 | 1280x720 MIPI-DSI (native 720x1280, rotation 90), runtime auto-detect ILI9881C / ST7123 / ST7121 (`BOARD_CFG_LCD_FORCE_VERSION` pins it) |
 | **Touch** | GT911 via I2C (GPIO7/8) | GT911 on ILI9881C units, integrated Sitronix TDDI otherwise (INT GPIO23) |
-| **Audio** | ES8311 codec via I2S + GPIO20 amp; no headphone jack | ES8388 codec + ES7210 front end via I2S (amp on IO expander); 3.5 mm jack with detect (0x43 P7), speaker auto-mutes on insert (`audio output auto`) |
+| **Audio** | ES8311 codec via I2S + GPIO20 amp; no headphone jack | ES8388 codec + ES7210 front end via I2S (amp on IO expander, gated to the playback window only so idle is silent); 3.5 mm jack with detect (0x43 P7), speaker auto-mutes on insert (`audio output auto`); `mic level`/`mic selftest` hiss probe |
 | **Battery** | ADC on GPIO53 with a 2:1 divider | INA226 pack gauge (0x41, 5 mOhm) on SYS I2C; charging enabled once at boot; `battery` shows V/A/W/state, `battery diag` dumps registers, header shows `+NN%` while charging |
 | **RGB LED** | WS2812 status LED on GPIO26 | Two Tab5Keyboard RGB LEDs over I2C (`rgb 1\|2 ...`; LED1 = status, LED2 = user) |
 | **Hosted SDIO** | Slot 1, 40 MHz: CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 | Slot 1, **10 MHz**: CLK=12 CMD=13 D0=11 D1=10 D2=9 D3=8, reset GPIO15 (40 MHz crashes on assoc; first RPC retried once via transport reset) |

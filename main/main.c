@@ -897,10 +897,13 @@ void app_main(void)
      * once Wi-Fi, USB and SD all initialize at boot (AUTOEXEC's `volume`
      * would otherwise fail once and spam the boot log; a later manual
      * `volume` always worked). Failures here are harmless: speaker init
-     * stays lazy and retries on next audio use. The I2S driver also logs
-     * two benign "dma frame num adjusted" notices on every successful init;
-     * keep that tag at error level so the boot log stays clean while real
-     * failures (and our own command-layer reports) remain visible. */
+     * stays lazy and retries on next audio use. The pre-warm never powers
+     * the speaker amp (mute-at-boot invariant in components/audio): the amp
+     * is gated to the playback window only, so boot stays silent. The I2S
+     * driver also logs two benign "dma frame num adjusted" notices on every
+     * successful init; keep that tag at error level so the boot log stays
+     * clean while real failures (and our own command-layer reports) remain
+     * visible. */
     esp_log_level_set("i2s_common", ESP_LOG_ERROR);
     (void)audio_init();
 

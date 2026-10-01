@@ -56,7 +56,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             1
 #define P4_CONFIG_VERSION_MINOR             3
-#define P4_CONFIG_VERSION_PATCH             0
+#define P4_CONFIG_VERSION_PATCH             1
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -1823,11 +1823,31 @@
  *  below 100 so a loud codec volume does not clip). */
 #define P4_CONFIG_TONE_AMPLITUDE_PCT         40
 
+/** Sample rate in Hz of the speaker playback path (`tone`/`wavplay` output
+ *  rate; matches the M5Stack-proven 48 kHz stereo while the DAC silence is
+ *  root-caused under F28). */
+#define P4_CONFIG_TONE_SAMPLE_RATE_HZ        48000
+
 /** Samples generated per chunk while playing a tone (16-bit mono). */
 #define P4_CONFIG_TONE_CHUNK_SAMPLES         1024
 
 /** Maximum WAV file size in bytes accepted by `wavplay`. */
 #define P4_CONFIG_WAV_MAX_BYTES              (1024 * 1024)
+
+/** Microphone sample rate in Hz for the `mic` diagnostic verbs. Matches the
+ *  speaker path so a record can share the I2S clocks with an active
+ *  playback (the audibility check) without reconfiguring them. */
+#define P4_CONFIG_MIC_SAMPLE_RATE_HZ         48000
+
+/** Default recording length in ms for `mic level` with no argument. */
+#define P4_CONFIG_MIC_DEFAULT_MS             500
+
+/** Maximum recording length in ms accepted by the `mic` verbs (bounded so a
+ *  record always terminates). */
+#define P4_CONFIG_MIC_MAX_MS                 5000
+
+/** Samples read per chunk while recording the microphone (16-bit mono). */
+#define P4_CONFIG_MIC_CHUNK_SAMPLES          1024
 
 /** Stack size for the background audio playback task. */
 #define P4_CONFIG_AUDIO_TASK_STACK           8192

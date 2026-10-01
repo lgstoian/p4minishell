@@ -1020,3 +1020,77 @@ diff --git a/managed_components/espressif__esp_codec_dev/platform/audio_codec_da
 +    }
      if ((dev_type & ESP_CODEC_DEV_TYPE_IN) != 0 &&
          (dev_type & ESP_CODEC_DEV_TYPE_OUT) != 0) {
+diff --git a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
+--- a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
++++ b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
+@@ -36,6 +36,13 @@ typedef struct {
+     bool                         out_disable_pending;
+     bool                         in_reconfig;
+     bool                         out_reconfig;
++    /* P4MiniShell duplex fix: the record path parks the TX channel (duplex
++     * clock master) while recording and must stand it down again on stop.
++     * Without this, a microphone record leaves TX physically enabled while
++     * the struct believes it idle, so the next playback open reconfigures a
++     * running channel and fails ("Failed to reconfig STD slot"). Tracked in
++     * tools/managed_patches.patch; re-apply after update-dependencies. */
++    bool                         tx_parked_for_rx;
+     esp_codec_dev_sample_info_t  in_fs;
+     esp_codec_dev_sample_info_t  out_fs;
+     esp_codec_dev_sample_info_t  fs;
+@@ -422,9 +429,21 @@ static int set_fs(i2s_data_t *i2s_data, bool playback, bool skip)
+     if (skip == false && playback == false && paired && paired->out_handle != NULL && paired->out_enable == false) {
+         // TX is master, set to RX not take effect need reconfig TX also
+         channel = (i2s_chan_handle_t) paired->out_handle;
+-        _i2s_drv_enable(paired, true, false);
+-        ret = set_drv_fs(channel, true, bits_per_sample, i2s_data->clk_src, fs);
+-        _i2s_drv_enable(paired, true, true);
++        if (paired->tx_parked_for_rx) {
++            // A previous record already parked TX: it is physically running,
++            // so the disable-then-reconfig sequence still applies.
++            _i2s_drv_enable(paired, true, false);
++            ret = set_drv_fs(channel, true, bits_per_sample, i2s_data->clk_src, fs);
++        } else {
++            // TX is provably idle here (playback and record never overlap in
++            // this firmware), so reconfig directly: disabling an idle channel
++            // makes the IDF driver log an error for no benefit.
++            ret = set_drv_fs(channel, true, bits_per_sample, i2s_data->clk_src, fs);
++        }
++        if (ret == ESP_CODEC_DEV_OK) {
++            _i2s_drv_enable(paired, true, true);
++            paired->tx_parked_for_rx = true;
++        }
+     }
+     return ret;
+ }
+@@ -583,6 +602,15 @@ static int _i2s_data_enable(const audio_codec_data_if_t *h, esp_codec_dev_type_t
+     #endif
+         else {
+             ret = _i2s_drv_enable(i2s_data, playback, enable);
++            // A record open parks TX for the duplex clocks; stand it down on
++            // record stop while playback is away, or the next playback open
++            // reconfigures a running channel and fails. The disable succeeds
++            // silently here because the park left TX physically running.
++            if (enable == false && playback == false && paired &&
++                paired->tx_parked_for_rx && paired->out_enable == false) {
++                ret = _i2s_drv_enable(paired, true, false);
++                paired->tx_parked_for_rx = false;
++            }
+             // Disable TX when RX disable if TX disable is pending
+             if (enable == false) {
+                 if (playback == false && paired && paired->out_disable_pending)  {
+@@ -650,9 +678,13 @@ static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_
+     // rejects a clock/slot change while a channel is running and logs an error
+     // when asked to disable an already-idle channel, so only touch a channel
+     // this interface believes it has enabled (the board BSP no longer
+-    // pre-enables them; enable/disable is owned by esp_codec_dev).
+-    if ((dev_type & ESP_CODEC_DEV_TYPE_OUT) && i2s_data->out_enable) {
++    // pre-enables them; enable/disable is owned by esp_codec_dev). A TX parked
++    // for duplex recording counts as enabled: it is physically running even
++    // though out_enable stayed false.
++    if ((dev_type & ESP_CODEC_DEV_TYPE_OUT) &&
++        (i2s_data->out_enable || i2s_data->tx_parked_for_rx)) {
+         _i2s_drv_enable(i2s_data, true, false);
++        i2s_data->tx_parked_for_rx = false;
+     }
+     if ((dev_type & ESP_CODEC_DEV_TYPE_IN) && i2s_data->in_enable) {
+         _i2s_drv_enable(i2s_data, false, false);

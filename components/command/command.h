@@ -211,6 +211,7 @@ void shell_command_beep(int argc, char **argv);
 void shell_command_tone(int argc, char **argv);
 void shell_command_wavplay(int argc, char **argv);
 void shell_command_audio(int argc, char **argv);
+void shell_command_mic(int argc, char **argv);
 
 /* ========================================================================
  * TUI AND MODAL-SURFACE VERBS (`draw`, `anchor`, `browse`, `dialog`,

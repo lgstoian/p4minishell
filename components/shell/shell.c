@@ -4316,6 +4316,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "tone",     "tone <freq> [duration_ms] - play a tone through the speaker" },
     { "wavplay",  "wavplay <file.wav> - play a WAV file from SD" },
     { "audio",    "audio status | audio stop - background playback state" },
+    { "mic",      "mic level [ms] | mic hear <freq> [ms] | mic audit [freq] | mic selftest - mic level, tone detect, speaker audit + hiss probe" },
     { "adc",      "adc <pin> - one-shot ADC read on a pin" },
     { "i2c",      "i2c scan | peek <addr> <reg> | poke <addr> <reg> <val> - I2C bus tools" },
     { "spi",      "spi status | spi loopback <sclk> <mosi> <miso> | spi peek|poke <sclk> <mosi> <miso> <cs> <reg> [value] | spi release - SPI master (SPI3, GPIO-matrix pins)" },

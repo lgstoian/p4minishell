@@ -105,8 +105,11 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
         i2s_data_if = bsp_audio_get_codec_itf();
     }
     assert(i2s_data_if);
-    /* Enable Feature */
-    BSP_ERROR_CHECK_RETURN_NULL(bsp_feature_enable(BSP_FEATURE_SPEAKER, true));
+    /* The NS4150B amp (SPK_EN on 0x43 P1) stays OFF here by design. The audio
+     * layer gates it around the playback window only (enable after
+     * esp_codec_dev_open, mute before close): latching it on at creation
+     * amplified the clockless ES8388 idle into constant white noise from
+     * boot (v1.3.0 regression). See components/audio/audio.c. */
 
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
 
@@ -192,6 +195,100 @@ esp_err_t bsp_audio_headphone_detected(bool *inserted_out)
 esp_err_t bsp_audio_speaker_enable(bool enable)
 {
     return bsp_feature_enable(BSP_FEATURE_SPEAKER, enable);
+}
+
+/* ES8388 DAC bring-up (F28). The vendored codec driver leaves this Tab5's DAC
+ * silent, so after every open the registers are programmed with M5Unified's
+ * proven Tab5 speaker sequence (reg: M5 value): reset dance on CONTROL1,
+ * CONTROL2, CHIPPOWER, ADCPOWER, DACPOWER, VSEL, slave mode, I2S format, DAC
+ * unmute, DAC volumes, click-free, mixer selects, DAC mixers, separate LRCK,
+ * VROI and the LOUT volumes. The single deliberate difference is DACCONTROL2,
+ * kept at the driver's 256 MCLK ratio to match this firmware's I2S clocks
+ * (M5 runs its own clock tree at 128). Written through a cached I2C control
+ * handle: this driver's codec interface exposes no set_reg/get_reg, so
+ * esp_codec_dev_write_reg() cannot reach these registers. */
+static const audio_codec_ctrl_if_t *s_es8388_fixup_ctrl;
+
+static esp_err_t bsp_es8388_fixup_ctrl_ensure(void)
+{
+    if (s_es8388_fixup_ctrl == NULL) {
+        audio_codec_i2c_cfg_t i2c_cfg = {
+            .port = BSP_I2C_NUM,
+            .addr = ES8388_CODEC_DEFAULT_ADDR,
+            .bus_handle = bsp_i2c_get_handle(),
+        };
+        s_es8388_fixup_ctrl = audio_codec_new_i2c_ctrl(&i2c_cfg);
+        if (s_es8388_fixup_ctrl == NULL) {
+            return ESP_FAIL;
+        }
+    }
+    return ESP_OK;
+}
+
+static esp_err_t bsp_es8388_fixup_write(uint8_t reg, uint8_t val)
+{
+    int ret;
+
+    if (bsp_es8388_fixup_ctrl_ensure() != ESP_OK) {
+        return ESP_FAIL;
+    }
+    ret = s_es8388_fixup_ctrl->write_reg(s_es8388_fixup_ctrl, reg, 1,
+                                         &val, 1);
+    return (ret == ESP_CODEC_DEV_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/** Dump ES8388 registers [0x00..0x31] into @p out (50 bytes). */
+esp_err_t bsp_audio_codec_speaker_dump_regs(uint8_t out[50])
+{
+    uint8_t reg;
+
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (bsp_es8388_fixup_ctrl_ensure() != ESP_OK) {
+        return ESP_FAIL;
+    }
+    for (reg = 0; reg < 50; reg++) {
+        uint8_t val = 0;
+
+        if (s_es8388_fixup_ctrl->read_reg(s_es8388_fixup_ctrl, reg, 1,
+                                          &val, 1) != ESP_CODEC_DEV_OK) {
+            return ESP_FAIL;
+        }
+        out[reg] = val;
+    }
+    return ESP_OK;
+}
+
+esp_err_t bsp_audio_codec_speaker_post_open(esp_codec_dev_handle_t dev)
+{
+    /* M5Unified Tab5 speaker sequence (reg, value); DACCONTROL2 stays 0x02
+     * (256x, matching our I2S MCLK) instead of M5's 0x00 (128x). */
+    static const uint8_t seq[][2] = {
+        { 0x00, 0x80 }, { 0x00, 0x00 }, { 0x00, 0x0e },
+        { 0x01, 0x00 }, { 0x02, 0x0a }, { 0x03, 0xff }, { 0x04, 0x3c },
+        { 0x07, 0x7c }, { 0x08, 0x00 }, { 0x17, 0x18 }, { 0x18, 0x02 },
+        { 0x19, 0x20 }, { 0x1a, 0x00 }, { 0x1b, 0x00 }, { 0x1c, 0x08 },
+        { 0x1d, 0x00 }, { 0x26, 0x00 }, { 0x27, 0xb8 }, { 0x2a, 0xb8 },
+        { 0x2b, 0x08 }, { 0x2d, 0x00 }, { 0x2e, 0x21 }, { 0x2f, 0x21 },
+        { 0x30, 0x21 }, { 0x31, 0x21 },
+    };
+    uint8_t readback = 0xff;
+    size_t i;
+    (void)dev;
+
+    for (i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+        if (bsp_es8388_fixup_write(seq[i][0], seq[i][1]) != ESP_OK) {
+            return ESP_FAIL;
+        }
+    }
+    /* Read back the clock select so the board log proves the fixup stuck. */
+    if (s_es8388_fixup_ctrl->read_reg(s_es8388_fixup_ctrl, 0x2b, 1,
+                                      &readback, 1) != ESP_CODEC_DEV_OK ||
+        readback != 0x08) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)

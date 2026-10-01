@@ -98,6 +98,28 @@ static inline esp_err_t bsp_audio_speaker_enable(bool enable)
 }
 
 /**
+ * @brief Post-open fixup for the speaker codec.
+ *
+ * Tab5-only (separate ADC/DAC frame clocks, F28). No-op here.
+ */
+static inline esp_err_t bsp_audio_codec_speaker_post_open(esp_codec_dev_handle_t dev)
+{
+    (void)dev;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Dump speaker codec registers for diagnostics.
+ *
+ * Tab5-only (F28). No-op here.
+ */
+static inline esp_err_t bsp_audio_codec_speaker_dump_regs(uint8_t out[50])
+{
+    (void)out;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+/**
  * @brief Read the board's charge-status line (corroborates pack presence).
  *
  * The reference board has no charge-status line; @p level_out is set to -1 and

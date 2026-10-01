@@ -124,7 +124,12 @@ board, so the toolchain and target carry over; the deltas:
 - **Audio:** ES8388 codec + ES7210 AEC front end via the BSP; NS4150B speaker amp
   on PI4IOE5V6408 #1 P1 (`BSP_SPEAKER_EN`); 3.5 mm jack with detect on #1 P7
   (`BOARD_CFG_HP_DET_EXP_PIN`), active-high on insert — the firmware auto-mutes
-  the amp in `audio output auto` mode.
+  the amp in `audio output auto` mode. The amp is gated to the playback window
+  only (mute-at-boot invariant in `components/audio/`): never latch it on at
+  init, or the powered-but-clockless codec idles as white noise. Playback is
+  48 kHz stereo with M5Unified's ES8388 speaker registers applied post-open
+  (`bsp_audio_codec_speaker_post_open`). The ES7210
+  feeds the `mic level`/`hear`/`audit`/`selftest` diagnostics.
 - **RTC:** RX8130CE through the `components/clock/` external-RTC hook, selected
   by `BOARD_CFG_RTC_EXT_TIME_REG` (0x10) / `BOARD_CFG_RTC_EXT_KIND_RX8130`
   (2000-based year, STOP bit in control 0x1E).

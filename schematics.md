@@ -14,7 +14,7 @@
 > [`documentation.md`](documentation.md) (modules),
 > [`bugs.md`](bugs.md) (findings).
 
-- **Firmware:** v1.3.0 (ESP-IDF v5.5.5)
+- **Firmware:** v1.3.1 (ESP-IDF v5.5.5)
 - **SoC family:** ESP32-P4 (host) + ESP32-C6 (co-processor, ESP-Hosted SDIO)
 - **Boards:** `jc1060p470c` (reference) and `m5stack_tab5`
 - **Serial:** reference `COM3`, Tab5 `COM6` during development
@@ -225,6 +225,12 @@ driver powers both output pairs; `components/audio` never pokes DAC registers.
 `HP_DET` level must be confirmed on hardware with a plug in/out (read `IN_STA`
 bit 7): if a given unit's jack is a mechanically switched type that already
 mutes the amp input, software gating is redundant but harmless.
+**Idle-hiss rule:** a powered ES8388 with stopped I2S clocks idles as white
+noise, so the firmware holds the amp OFF except inside an active playback
+window (enabled after `esp_codec_dev_open`, muted before every close;
+`volume`/mode changes at rest never power it). Latching the amp on at boot
+was the v1.3.0 white-noise regression (F28). `mic selftest` proves the gate on
+hardware by comparing amp-on vs amp-off mic levels.
 
 ### 3.4 Display timing (ST7123/ST7121, native portrait)
 Native 720x1280, **rotation 90** (logical 1280x720). PCLK 70 MHz, HSYNC 1360,

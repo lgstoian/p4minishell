@@ -11,14 +11,16 @@ The latest additions — the 14 `test_pim.c` sync tests, the 3 `test_alarm.c`
 render/parse tests, the editor CSV tests, the power deep-wake test, the new
 `test_html.c` reader tests (12), the `test_markdown.c` strip/auto/form-feed
 tests (3), `test_filetype_html`, the `test_editor.c` HTML lexer/comment
-tests (2), the 4 `test_audio.c` output-mode/route/WAV tests, the 4 spell
+tests (2), the 7 `test_audio.c` output-mode/route/amp-gate/WAV/mic-stats/Goertzel
+tests, the 4 spell
 overlay/cursor-word tests, the USB/HID spell key-map test, the batch
 round (`test_batch_control.c`: `shift /n` parser, `for /f` defaults),
 the shell round (`test_shell_prompt.c`: session title,
 `test_shell_pipeline.c`: echo-glued detector, redirect devices/missing
 targets/handle prefixes), and the 7 `test_netsvc.c` event-service tests
-(MQTT codec, topic matcher, backoff, outbox framing) — bring the
-suite to **495 RUN_TEST total**, build-verified this
+(MQTT codec, topic matcher, backoff, outbox framing) — plus the 3 new
+`test_audio.c` amp-gate/mic-stats/Goertzel cases — bring the
+suite to **498 RUN_TEST total**, build-verified this
 pass; refresh the count on hardware with `tools/unit_run.py <COM_PORT>`.
 
 ## Test Structure
@@ -57,7 +59,7 @@ test/
     test_alarm.c            # alarm parse/advance helpers
     test_modal.c            # modal option parsers
     test_power.c            # power/idle state
-    test_audio.c            # audio output-mode parse, route resolve, WAV params
+    test_audio.c            # audio output-mode parse, route/amp-gate resolve, WAV params, mic stats, Goertzel
     test_serial.c           # serial framing/CRC
     test_tui.c              # TUI state, table width/parse helpers, draw hold
     test_clipboard.c        # RAM clipboard

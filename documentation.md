@@ -66,7 +66,7 @@ components/font/                Font registry (roles/sizes/fallbacks), SD TTF lo
 components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
 components/alarm/               SD alarm store + single background checker (sd:/ALARMS)
 components/pim/                 Single vCard/iCalendar codecs + sync identity/newer-wins merge (pim_doc/parse/store/vcard/ical)
-components/audio/               ES8311 codec path + background tone/WAV playback engine
+components/audio/               ES8311 codec path + background tone/WAV playback engine + mic diagnostics
 components/clock/               Time/SNTP/timezone services + date/time/timezone/sntp + named timers
 components/header/              Fixed top status bar (layout/status/notify/refresh pure helpers + widgets)
 components/led/                 Status LED driver + auto status/event engine (WS2812 or the Tab5 keyboard's two LEDs)
@@ -757,19 +757,28 @@ filesystem or the batch language:
 - **Camera** (`camera`): the Tab5 SC202CS MIPI-CSI sensor through the managed
   `espressif/esp_video` stack; `camera init` + `camera snap <file.bmp>` write a 24-bit BMP
   (BMP only). Lives in `components/camera/`.
-- **Basic audio** (`beep`, `tone <freq> [ms]`, `wavplay <file>`, `audio status|stop`,
-  `audio output [auto|speaker|headphones]`, `volume [<0-100>]`): tones are generated in heap
+- **Basic audio** (`beep`, `tone <freq> [ms]`, `wavplay <file>`, `audio status|stop|diag`,
+  `audio output [auto|speaker|headphones]`, `mic level|hear|audit|selftest`,
+  `volume [<0-100>]`): stereo tones are synthesized in heap
   chunks and WAVs (16-bit PCM mono/stereo at
-  22050/44100 Hz, stereo mixed to mono and 44100 decimated) stream from SD, both through the
-  board codec (ES8311 on the reference board, ES8388 on the Tab5; mono 16-bit 22050 Hz). All
-  audio logic — codec init, speaker volume, output routing, and the
+  22050/44100 Hz, played at file rate with mono upmixed) stream from SD, both through the
+  board codec (ES8311 on the reference board, ES8388 on the Tab5; stereo 16-bit). All
+  audio logic — codec init, speaker volume, output routing, microphone
+  diagnostics, and the
   background `audio_play` task — lives in `components/audio/` (`audio.h`/`audio.c`); the
   commands only dispatch from `components/command/` and call the `audio.h` API. One sound plays
   at a time (`audio stop` cuts it short) so batch files never block, and every audio command
-  sets an ERRORLEVEL. `volume` and the boot `VOLUME=` directive drive the codec output level,
+  sets an ERRORLEVEL. The speaker amp is gated to the playback window only
+  (mute-at-boot invariant: idle output is always silent, so a powered but
+  clockless codec cannot hiss). `volume` and the boot `VOLUME=` directive drive the codec output level,
   which all playback rides on. `audio output` selects the route (AUTO = speaker unless
-  headphones are detected; evaluated per play/volume/status); it persists via `config
-  AUDIO_OUTPUT=` (boot `AUDIO_OUTPUT=` directive re-applies it).
+  headphones are detected; applied at the next open, or live mid-play); it persists via `config
+  AUDIO_OUTPUT=` (boot `AUDIO_OUTPUT=` directive re-applies it). `mic level`
+  records the mic (room floor, share-rate so it may run during a playback),
+  `mic hear` detects a tone band, `mic audit` proves the speaker end-to-end
+  and `mic selftest` compares amp-on vs amp-off
+  mic levels to prove the speaker path is hiss-free; `audio diag` dumps the
+  live codec registers on the Tab5.
 - **Peripheral toolkit** (`pwm`, `freq`, `adc`, `i2c`, `spi`): LEDC PWM/square waves on
   timers 0/2/3 sharing the backlight's XTAL clock; one-shot ADC reads with SOC channel-map
   enumeration; an I2C scanner/peek-poke that reuses the BSP shared bus handle (or a temporary

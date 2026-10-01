@@ -105,7 +105,7 @@ holder per port.
   longer occur).
 - `managed_patches.patch` — backup of the hand-authored `managed_components/`
   deltas (currently: LVGL `lv_async` PSRAM/lock hardening, the port
-  JD9165 `swap_xy` guard, and the BSP 4.x board wiring: `boards/<name>/`
+  JD9165 `swap_xy` guard, the `esp_codec_dev` duplex TX park/unpark fix, and the BSP 4.x board wiring: `boards/<name>/`
   `board_config.h` pin/timing defines (incl. the uSD `BOARD_CFG_SD_*` pin
   redirect), JD9165 panel select, audio fail-soft init, backlight
   config, touch tolerance + remap, SD slot-0 deinit + explicit-V LDO power).

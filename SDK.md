@@ -622,7 +622,7 @@ call `audio_play_tone()` / `audio_play_wav()` — they post a request to the
 component's background task and return immediately; check `audio_busy()` to
 avoid the single-slot refusal, and `audio_stop()` to cancel. The command layer
 (`components/command/command.c`) only parses `beep`/`tone`/`wavplay`/`audio`/
-`volume` and calls these — do not reimplement codec or playback logic there.
+`mic`/`volume` and calls these — do not reimplement codec or playback logic there.
 Chunk buffers stay on the heap, never on the audio task's stack. To query or
 set where playback goes, use `audio_get_output_mode()` /
 `audio_effective_route()` / `audio_headphone_state()` and

@@ -94,6 +94,26 @@ esp_err_t bsp_audio_headphone_detected(bool *inserted_out);
 esp_err_t bsp_audio_speaker_enable(bool enable);
 
 /**
+ * @brief Post-open fixup for the speaker codec (F28).
+ *
+ * Re-selects separate ADC/DAC frame clocks (ES8388 DACCONTROL21 = 0x08,
+ * matching M5Unified's proven Tab5 sequence) after every
+ * `esp_codec_dev_open()`: the vendored driver leaves the DAC waiting on a
+ * shared ADC LRCK while the ADC block stays powered down, so the DAC never
+ * converts. Best-effort; the audio layer ignores failures. Call after a
+ * successful open, before enabling the amp.
+ */
+esp_err_t bsp_audio_codec_speaker_post_open(esp_codec_dev_handle_t dev);
+
+/**
+ * @brief Dump ES8388 registers 0x00..0x31 for diagnostics (F28).
+ *
+ * Reads the live DAC power/mute/mixer/clock state through the fixup control
+ * handle; used by `audio diag` to prove the chip configuration on hardware.
+ */
+esp_err_t bsp_audio_codec_speaker_dump_regs(uint8_t out[50]);
+
+/**
  * @brief Read the board's charge-status line (corroborates pack presence).
  *
  * On the Tab5 this is the IP2326 CHG_STAT_LED on the second IO expander

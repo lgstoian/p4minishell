@@ -743,6 +743,55 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 
 ---
 
+## [1.3.1] - 2026-10-01
+
+### Fixed - Tab5 white-noise regression (bugs.md F28)
+
+- **Constant white noise from the Tab5 speaker since v1.3.0**: two coupled
+  v1.3.0 changes — the new `audio output` routing latched the NS4150B amp ON
+  from the boot pre-warm (plus `bsp_audio_codec_speaker_init()`), while the
+  I2S double-disable fix left the clocks stopped while idle, so the
+  powered-but-clockless ES8388 idled as hiss (`volume` and factory reset could
+  not help). The amp is now gated to the playback window only (mute-at-boot
+  invariant via the pure, unit-tested `audio_amp_should_enable()` predicate:
+  enabled after `esp_codec_dev_open()`, muted before every close, never on
+  while idle; `volume`/mode/config changes at rest stay silent, `audio stop`
+  mutes immediately, and the Tab5 speaker init no longer touches the amp).
+  Playback runs the M5Stack-proven 48 kHz stereo path with M5Unified's ES8388
+  speaker registers applied (read-back verified) plus an explicit unmute per
+  play; WAVs play at file rate.
+- **Microphone record broke the next playback** (found via the new probe):
+  a record parks the shared TX channel (duplex clock master) and never stood
+  it down, so the next `tone`/`wavplay` open reconfigured a running channel
+  (`I2S_IF: Failed to reconfig STD slot`, playback dead until reboot).
+  Vendored `audio_codec_data_i2s.c` duplex park/unpark patch (tracked in
+  `tools/managed_patches.patch`, re-apply after `update-dependencies`):
+  record still parks TX for the duplex clocks but stands it down on record
+  stop (stale parks are dropped before any playback reconfig), with no
+  disable-idle log spam.
+- **Hardware verification (focused runs, no full suite):** all four builds
+  (firmware + `test/`, both boards) 0 errors/0 warnings; fresh-boot logs 0
+  ESP_LOG W/E on COM6 and COM3; silent boot (operator-confirmed); `tone 440`
+  and `tone 880` both audible by ear; `mic audit` reports `speaker plays`
+  repeatedly and `audio diag` shows the M5 register state; every verb order
+  with zero `E()` lines on both boards.
+
+### Added - microphone diagnostics (`mic level`, `mic hear`, `mic audit`, `mic selftest`, `audio diag`)
+
+- **`mic level [ms]`** records the mic (default `P4_CONFIG_MIC_DEFAULT_MS`,
+  max `P4_CONFIG_MIC_MAX_MS`, at `P4_CONFIG_MIC_SAMPLE_RATE_HZ` through
+  `bsp_audio_codec_microphone_init()`) and reports `mic.rms:`/`mic.peak:`;
+  **`mic hear <freq> [ms]`** adds a Goertzel tone detector (`mic.hear.tone:`
+  vs `mic.hear.total:`); **`mic audit [freq]`** (default 880 Hz) is the
+  lag-immune end-to-end speaker proof (room floor, sine through the speaker
+  path, streaming handshake, best-of-3 takes); **`mic selftest`** compares
+  amp-on vs amp-off levels and always leaves the amp off; **`audio diag`**
+  dumps the live ES8388 registers. New tunables `P4_CONFIG_MIC_*` and
+  `P4_CONFIG_TONE_SAMPLE_RATE_HZ` (+ yaml mirror) and unit tests for the pure
+  amp predicate, mic stats, and Goertzel detector. Docs: `command.md`,
+  `documentation.md`, `API.md`, `readme.md`,
+  `PORTING.md`, `schematics.md`, `bugs.md` (F28).
+
 ## [Unreleased]
 
 ### Added - search everywhere via `gfind /files` (roadmap item done)

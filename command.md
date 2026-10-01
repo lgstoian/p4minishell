@@ -811,22 +811,53 @@ decimated to 22050); other formats are rejected. Files are bounded by
 `P4_CONFIG_WAV_MAX_BYTES`. Background playback. ERRORLEVEL: 0 started,
 1 busy / file not found, 2 usage.
 
-### audio status | audio stop | audio output [auto|speaker|headphones] [/b] [/v:NAME]
+### audio status | audio stop | audio diag | audio output [auto|speaker|headphones] [/b] [/v:NAME]
 `audio status` reports `playing` or `idle`, plus the output mode
 (`audio.output:`), the effective route (`audio.route: speaker|headphones`), and
 the jack state (`audio.jack: in|out|n/a` — `n/a` on boards without a jack).
 `audio stop` cuts the current
-background playback short (useful for a long tone or WAV). ERRORLEVEL 0/2.
+background playback short (useful for a long tone or WAV). `audio diag` prints
+the live speaker-codec register dump (`audio.regs.*`, Tab5 only) for hardware
+debugging. ERRORLEVEL 0/1/2.
 
 `audio output` selects where playback goes. `auto` (default) plays the speaker
 unless headphones are detected; `speaker` forces the amp on; `headphones`
 forces it off. On the Tab5 a 3.5 mm plug is detected on the headphone line and
 auto-mutes the speaker amp; on boards without a jack the route is always the
-speaker (`headphones` is accepted with a note). The route is evaluated at each
-play/volume/status call. With `/b` the verb prints one plain route line for
+speaker (`headphones` is accepted with a note). The speaker amp is gated to
+the playback window only (enabled after the codec opens with clocks running,
+muted before every close; always off while idle), so a powered but clockless
+codec can never idle as white noise through the speaker — `volume` and
+`audio output` switches while idle never power the amp; the route takes effect
+at the next play (or immediately mid-play). With `/b` the verb prints one plain route line for
 `for /f`; with `/v:NAME` it stores the route in the environment. Persists via
 `config AUDIO_OUTPUT=` (re-applied from CONFIG.SYS at boot). ERRORLEVEL: 0
 ok, 1 apply/env failure, 2 usage.
+
+### mic level [ms] | mic hear <freq> [ms] | mic audit [freq] | mic selftest
+Microphone diagnostics (ES7210 front end on the Tab5; the reference board
+records through its ES8311). `mic level [ms]` records the mic (default
+`P4_CONFIG_MIC_DEFAULT_MS` 500 ms, max `P4_CONFIG_MIC_MAX_MS`) and reports
+`mic.rms:` / `mic.peak:` sample levels in 16-bit LSB units — the room floor
+when the speaker is idle, or the room plus the speaker output when a playback
+is running (start a `tone` and run `mic level` to check audibility
+objectively). `mic hear <freq> [ms]` is frequency-selective: it reports the
+in-band tone RMS (`mic.hear.tone:`) beside the broadband total
+(`mic.hear.total:`) and verdicts `heard` (ERRORLEVEL 0) only when the band
+dominates — hiss spreads everywhere, a real tone does not. `mic audit [freq]`
+(default 880 Hz — the band the onboard mics couple best; low bands can read
+quiet even when the speaker plays) is the end-to-end speaker proof in one
+lag-immune command: it records the room floor, plays the sine through the
+speaker path, waits for actual streaming, listens with the tone detector
+(retrying the record up to 3 times and keeping the best take, since playback
+start can jitter on a loaded system), then stops and reports
+`mic.audit.room/tone/total` plus a `speaker plays` / `speaker silent`
+verdict. `mic selftest` records with the speaker amp forced
+on and again with it forced off, then reports both pairs plus a verdict:
+`HISS` (ERRORLEVEL 1) when the amp-on level dwarfs the room floor, `clean`
+(ERRORLEVEL 0) otherwise. The amp is always left off afterwards. Refused while
+a playback is active (the speaker and mic share the I2S clocks). On boards
+without a microphone input both verbs report the gap (ERRORLEVEL 1).
 
 ### clip [text] | clip copy [N] | clip file <path> | clip read <file>
 RAM clipboard for text, transcript lines, and files.

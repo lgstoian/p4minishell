@@ -581,8 +581,9 @@ prechecks, partial-file cleanup):
   formation → ONE `gfx show`) → `gfx stats` after. Mid-loop `screenshot`
   freezes the loop for seconds — capture once after.
 - **Audio:** `beep`, `tone <freq> [ms]`, `wavplay <file>`
-  (16-bit PCM mono/stereo 22050/44100 Hz), `audio status|stop`,
+  (16-bit PCM mono/stereo 22050/44100 Hz), `audio status|stop|diag`,
   `audio output [auto|speaker|headphones] [/b] [/v:NAME]`,
+  `mic level [ms]`, `mic hear <freq> [ms]`, `mic audit [freq]`, `mic selftest`,
   `volume <0-100>`. Single background slot (`audio stop` cuts it); batch
   files never block. First `tone` after boot logs a benign `i2s_common`
   error while still playing (managed-codec open path). Jack-aware scripts

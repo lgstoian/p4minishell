@@ -3026,6 +3026,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "mic")) {
+        shell_command_mic(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "clip")) {
         shell_command_clip(argc, argv);
         return true;

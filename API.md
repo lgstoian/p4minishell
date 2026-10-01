@@ -614,29 +614,60 @@ bool audio_play_tone(int freq_hz, uint32_t duration_ms);   /* false = audio busy
 bool audio_play_wav(const char *resolved_path);            /* false = audio busy */
 void audio_stop(void);
 bool audio_busy(void);
+bool audio_playback_started(void);                         /* true once streaming */
 esp_err_t audio_set_volume(int percent);
 int  audio_get_volume(void);
 typedef enum { AUDIO_OUTPUT_AUTO, AUDIO_OUTPUT_SPEAKER, AUDIO_OUTPUT_HEADPHONES } audio_output_mode_t;
 esp_err_t audio_set_output_mode(audio_output_mode_t mode);
 audio_output_mode_t audio_get_output_mode(void);
 audio_output_mode_t audio_effective_route(void);
+bool audio_amp_should_enable(audio_output_mode_t mode, bool hp_inserted,   /* pure: amp only while playing */
+                             bool hp_supported, bool playing);
 void audio_headphone_state(bool *inserted_out, bool *supported_out);
 bool audio_output_parse(const char *text, audio_output_mode_t *out);
 const char *audio_output_name(audio_output_mode_t mode);
 bool audio_wav_params_ok(uint16_t audio_format, uint16_t channels,
                          uint32_t sample_rate, uint16_t bits, uint32_t data_size);
+esp_err_t audio_mic_level(uint32_t duration_ms, int *rms_out, int *peak_out);
+esp_err_t audio_hiss_selftest(uint32_t sample_ms, int *rms_on_out, int *peak_on_out,
+                              int *rms_off_out, int *peak_off_out);
+esp_err_t audio_mic_hear(uint32_t freq_hz, uint32_t duration_ms,         /* Goertzel tone detect */
+                         int *tone_rms_out, int *total_rms_out);
+esp_err_t audio_mic_audit(uint32_t freq_hz, uint32_t sample_ms,          /* end-to-end speaker proof */
+                          int *tone_rms_out, int *total_rms_out,
+                          int *room_rms_out, int *room_tone_out);
+esp_err_t audio_speaker_diag(void);                                     /* Tab5 ES8388 reg dump */
+void audio_mic_accumulate(const int16_t *samples, size_t count,             /* pure stats */
+                          int64_t *sum_sq_out, int *peak_out);
+void audio_mic_stats_finish(int64_t sum_sq, uint64_t sample_count, int peak,
+                            int *rms_out, int *peak_out);
+void audio_mic_goertzel_feed(const int16_t *samples, size_t count,           /* pure detector */
+                             uint32_t sample_rate, uint32_t freq_hz, double state[3]);
+int audio_mic_goertzel_finish(const double state[3], uint64_t sample_count);
 ```
-- The codec is mono 16-bit at 22050 Hz (BSP default). Tones are generated in heap chunks with
-  a short fade; WAVs (16-bit PCM mono/stereo at 22050/44100 Hz) stream from SD, stereo mixed to
-  mono and 44100 decimated. Playback is background and single-slot; `audio_stop()` is also
+- Playback is stereo 16-bit (tones synthesized at `P4_CONFIG_TONE_SAMPLE_RATE_HZ`,
+  WAVs at file rate with mono upmixed) in heap chunks with a short fade.
+  Playback is background and single-slot; `audio_stop()` is also
   called by `sleep`/`deepsleep`. `command_set_volume()` / `command_get_volume_percent()` in
   command.c are thin wrappers over `audio_set_volume()` / `audio_get_volume()`.
-- Output routing: `audio_set_output_mode()` selects AUTO (speaker unless headphones are
-  detected) / SPEAKER / HEADPHONES; the route is evaluated at each play/volume/status call
-  (no poller) and applied to the amp through the BSP (`bsp_audio_speaker_enable`). Boards
-  without a jack report unsupported and always resolve to the speaker. The pure
-  `audio_output_parse()` / `audio_route_resolve()` / `audio_wav_params_ok()` helpers are
-  unit-tested in `test/main/test_audio.c`.
+- Output routing: `audio_set_output_mode()` records AUTO (speaker unless headphones are
+  detected) / SPEAKER / HEADPHONES; the amp itself is gated to the playback window only
+  (mute-at-boot invariant — enabled after open, muted before close, never on while idle —
+  so volume/mode changes at rest stay silent). The pure `audio_amp_should_enable()`
+  predicate owns that policy. Boards without a jack report unsupported and always resolve
+  to the speaker. The pure `audio_output_parse()` / `audio_route_resolve()` /
+  `audio_wav_params_ok()` / `audio_mic_*()` helpers are unit-tested in
+  `test/main/test_audio.c`.
+- Microphone: `audio_mic_level()` records `P4_CONFIG_MIC_*`-bounded audio at
+  `P4_CONFIG_MIC_SAMPLE_RATE_HZ` through `bsp_audio_codec_microphone_init()`
+  (share-rate, so it may run during a playback; `ESP_ERR_NOT_SUPPORTED` with
+  no mic input); `audio_hiss_selftest()` compares amp-on vs amp-off mic
+  levels and always leaves the amp off; `audio_mic_hear()` adds the Goertzel
+  tone detector and `audio_mic_audit()` the lag-immune end-to-end speaker
+  proof (streaming handshake, best-of-3). The vendored
+  `audio_codec_data_i2s.c` carries a duplex park/unpark patch (see
+  `tools/managed_patches.patch`): a record parks TX for the duplex clocks and stands it down
+  on stop, or the next playback open reconfigures a running channel and fails.
 
 ## Storage Module API
 
