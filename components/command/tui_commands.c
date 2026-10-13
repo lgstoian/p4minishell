@@ -26,6 +26,7 @@
 #include "filetype.h"
 #include "modal_surf.h"
 #include "tui.h"
+#include "tui_fonts.h"
 #include "windows.h"
 #include "storage.h"
 #include "ansi.h"
@@ -998,6 +999,106 @@ bool shell_command_anchor(int argc, char **argv)
     return true;
 }
 
+bool shell_command_link(int argc, char **argv)
+{
+    /* link <label> <command...> — emit a tap-confirm hyperlink (batch apps
+     * use this to publish clickable actions); link list; link open <n>. */
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "list")) {
+        int count = shell_link_count();
+        int i;
+
+        for (i = 0; i < count; i++) {
+            const char *label = NULL;
+            const char *command = NULL;
+
+            if (shell_link_get(i, &label, &command) && label != NULL &&
+                command != NULL) {
+                shell_transcript_appendf_ansi(SH_NUM "%d" SH_RST ": " SH_LINK "%s" SH_RST
+                                              SH_MUTE " -> %s\n" SH_RST,
+                                              i, label, command);
+            }
+        }
+        if (count == 0) {
+            shell_transcript_appendf_ansi(SH_MUTE "link: no links (try `help`)\n" SH_RST);
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+    if (argc >= 3 && shell_text_equals_ignore_case(argv[1], "open")) {
+        char *end = NULL;
+        long n = strtol(argv[2], &end, 10);
+        const char *command = NULL;
+
+        if (end == NULL || *end != '\0' || n < 0 ||
+            !shell_link_get((int)n, NULL, &command) || command == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "link: no link %s (see `link list`)\n" SH_RST,
+                                          argv[2]);
+            batch_set_errorlevel(1);
+            return true;
+        }
+        {
+            char *copy = malloc(P4_CONFIG_COMMAND_BYTES);
+
+            if (copy == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "link: out of memory\n" SH_RST);
+                batch_set_errorlevel(1);
+                return true;
+            }
+            snprintf(copy, P4_CONFIG_COMMAND_BYTES, "%s", command);
+            shell_link_clear_pending();
+            shell_transcript_appendf("%s%s\n", shell_prompt_render_plain(), copy);
+            shell_execute_command(copy);
+            free(copy);
+        }
+        return true;
+    }
+    if (argc >= 3) {
+        /* Emit form: join the tail so `link Docs help /all` works unquoted. */
+        char *command = malloc(P4_CONFIG_COMMAND_BYTES);
+        size_t used = 0;
+        int i;
+
+        if (!draw_require_foreground("link")) {
+            free(command);
+            return false;
+        }
+        if (command == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "link: out of memory\n" SH_RST);
+            batch_set_errorlevel(1);
+            return true;
+        }
+        command[0] = '\0';
+        for (i = 2; i < argc; i++) {
+            size_t piece = strlen(argv[i]);
+            size_t need = used + piece + ((i > 2) ? 1u : 0u) + 1u;
+
+            if (need > (size_t)P4_CONFIG_COMMAND_BYTES) {
+                break;
+            }
+            if (i > 2) {
+                command[used++] = ' ';
+            }
+            memcpy(command + used, argv[i], piece);
+            used += piece;
+            command[used] = '\0';
+        }
+        if (command[0] == '\0') {
+            shell_transcript_appendf_ansi(SH_ERR "link: empty command\n" SH_RST);
+            batch_set_errorlevel(2);
+            free(command);
+            return true;
+        }
+        shell_transcript_append_link(argv[1], command);
+        shell_transcript_appendf_ansi("\n");
+        free(command);
+        batch_set_errorlevel(0);
+        return true;
+    }
+    shell_transcript_appendf_ansi(SH_ERR "link: usage: link <label> <command...> | link list | link open <n>\n" SH_RST);
+    batch_set_errorlevel(2);
+    return true;
+}
+
 void shell_command_browse(int argc, char **argv)
 {
     const char *varname = "BROWSE_RESULT";
@@ -1216,6 +1317,7 @@ void shell_command_form(int argc, char **argv)
         spec = argv[i];
         eq = strchr(spec, '=');
         if (eq == NULL) {
+            shell_print_muted("form: skipping '%s' (want Label=type[:arg]:VAR)", spec);
             continue;
         }
         n = (size_t)(eq - spec);
@@ -1225,6 +1327,7 @@ void shell_command_form(int argc, char **argv)
 
         colon = strchr(eq + 1, ':');
         if (colon == NULL) {
+            shell_print_muted("form: skipping '%s' (want Label=type[:arg]:VAR)", spec);
             continue;
         }
         n = (size_t)(colon - (eq + 1));
@@ -1243,6 +1346,7 @@ void shell_command_form(int argc, char **argv)
             var = arg;
         }
         if (var == NULL || var[0] == '\0') {
+            shell_print_muted("form: skipping '%s' (missing :VAR)", spec);
             continue;
         }
 
@@ -1310,30 +1414,72 @@ void shell_command_form(int argc, char **argv)
     batch_set_errorlevel(0);
 }
 
-void shell_command_browse_batch(int argc, char **argv)
-{
-    /* Retained for API compatibility; the single option parser in
-     * shell_command_browse() now handles the interactive and batch paths. */
-    shell_command_browse(argc, argv);
-}
-
 /** Shared image-view entry (used by `view` and `open`): resolve, show in the
- * image viewer, map to ERRORLEVEL. One implementation, no duplicated routing. */
-static void view_image_file(const char *path, uint32_t timeout_ms)
+ * image viewer, map to ERRORLEVEL. One implementation, no duplicated routing.
+ * @p verb names the caller in messages (`open x.bmp` used to blame `view`). */
+static void view_image_file(const char *verb, const char *path, uint32_t timeout_ms)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
 
     if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
-        shell_print_error("view: invalid path %s", path);
+        shell_print_error("%s: invalid path %s", verb, path);
         batch_set_errorlevel(2);
         return;
     }
     if (modal_image_run("Image", resolved, timeout_ms, P4_CONFIG_IMAGE_VIEWER_FIT != 0) != 0) {
-        shell_print_error("view: cannot open image %s", path);
+        shell_print_error("%s: cannot open image %s", verb, path);
         batch_set_errorlevel(1);
         return;
     }
     batch_set_errorlevel(0);
+}
+
+/** Shared `view`/`open` option parse: [/t:secs] [--raw] <file>. @return true
+ *  with @p path_out set, false after printing usage (ERRORLEVEL 2). */
+bool view_parse_args(const char *verb, int argc, char **argv,
+                     const char **path_out, uint32_t *timeout_ms_out,
+                     bool *raw_out)
+{
+    const char *path = NULL;
+    uint32_t timeout_ms = 0;
+    bool raw = false;
+
+    for (int i = 1; i < argc; i++) {
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
+            continue;
+        } else if (shell_text_equals_ignore_case(argv[i], "--raw")) {
+            raw = true;
+        } else if (path == NULL) {
+            path = argv[i];
+        }
+    }
+
+    if (path == NULL) {
+        shell_print_usage("Usage: %s [/t:secs] [--raw] <file>", verb);
+        batch_set_errorlevel(2);
+        return false;
+    }
+    *path_out = path;
+    *timeout_ms_out = timeout_ms;
+    *raw_out = raw;
+    return true;
+}
+
+/** Shared text-or-image dispatch behind `view` and `open`: .bmp/.dib goes
+ *  to the image viewer, everything else to the text pager (or rendered
+ *  Markdown). The type test is the central registry. */
+static void view_show_path(const char *verb, const char *path, uint32_t timeout_ms, bool raw)
+{
+    if (filetype_is_image(filetype_of(path))) {
+        if (raw) {
+            shell_print_muted("%s: --raw ignored for images", verb);
+        }
+        view_image_file(verb, path, timeout_ms);
+        return;
+    }
+
+    int rc = modal_viewer_run_raw("View", path, timeout_ms, raw);
+    batch_set_errorlevel(rc == 0 ? 0 : 1);
 }
 
 void shell_command_view(int argc, char **argv)
@@ -1342,31 +1488,10 @@ void shell_command_view(int argc, char **argv)
     uint32_t timeout_ms = 0;
     bool raw = false;
 
-    for (int i = 1; i < argc; i++) {
-        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
-            continue;
-        } else if (shell_text_equals_ignore_case(argv[i], "--raw")) {
-            raw = true;
-        } else if (path == NULL) {
-            path = argv[i];
-        }
-    }
-
-    if (path == NULL) {
-        shell_print_usage("Usage: view [/t:secs] [--raw] <file>");
-        batch_set_errorlevel(2);
+    if (!view_parse_args("view", argc, argv, &path, &timeout_ms, &raw)) {
         return;
     }
-
-    /* .bmp/.dib route to the image viewer; everything else is text (or
-     * rendered Markdown). The type test is the central registry. */
-    if (filetype_is_image(filetype_of(path))) {
-        view_image_file(path, timeout_ms);
-        return;
-    }
-
-    int rc = modal_viewer_run_raw("View", path, timeout_ms, raw);
-    batch_set_errorlevel(rc == 0 ? 0 : 1);
+    view_show_path("view", path, timeout_ms, raw);
 }
 
 void shell_command_open(int argc, char **argv)
@@ -1375,19 +1500,7 @@ void shell_command_open(int argc, char **argv)
     uint32_t timeout_ms = 0;
     bool raw = false;
 
-    for (int i = 1; i < argc; i++) {
-        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
-            continue;
-        } else if (shell_text_equals_ignore_case(argv[i], "--raw")) {
-            raw = true;
-        } else if (path == NULL) {
-            path = argv[i];
-        }
-    }
-
-    if (path == NULL) {
-        shell_print_usage("Usage: open [/t:secs] [--raw] <file>");
-        batch_set_errorlevel(2);
+    if (!view_parse_args("open", argc, argv, &path, &timeout_ms, &raw)) {
         return;
     }
 
@@ -1404,15 +1517,32 @@ void shell_command_open(int argc, char **argv)
         return;
     }
 
-    if (filetype_is_image(filetype_of(path))) {
-        view_image_file(path, timeout_ms);
-        return;
+    /* Association dispatch: a mapped extension launches its app with the
+     * file as %1 (`assoc`/`ftype`). A mapping to a missing app warns and
+     * falls through to the viewer — forgiving, like DOS. Unmapped files
+     * keep the historical viewer behavior exactly. */
+    {
+        char app[64];
+        char *quoted = NULL;
+
+        if (assoc_lookup_app(path, app, sizeof(app))) {
+            quoted = malloc(strlen(path) + 3u);
+            if (quoted == NULL) {
+                shell_print_error("open: out of memory");
+                batch_set_errorlevel(1);
+                return;
+            }
+            snprintf(quoted, strlen(path) + 3u, "\"%s\"", path);
+            if (shell_launch_app_with_args(app, quoted)) {
+                free(quoted);
+                return;
+            }
+            free(quoted);
+            shell_print_warning("open: '%s' is mapped but missing; showing as text", app);
+        }
     }
 
-    {
-        int rc = modal_viewer_run_raw("View", path, timeout_ms, raw);
-        batch_set_errorlevel(rc == 0 ? 0 : 1);
-    }
+    view_show_path("open", path, timeout_ms, raw);
 }
 
 void shell_command_hexview(int argc, char **argv)
@@ -1498,14 +1628,15 @@ void shell_command_locate(int argc, char **argv)
 void shell_command_tui(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear");
+        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest");
         batch_set_errorlevel(2);
         return;
     }
-    /* `tui status` / `tui stats` are read-only queries: safe (and useful) in
-     * bg jobs. */
+    /* `tui status` / `tui stats` / `tui selftest` are read-only queries: safe
+     * (and useful) in bg jobs. */
     if (!shell_text_equals_ignore_case(argv[1], "status") &&
         !shell_text_equals_ignore_case(argv[1], "stats") &&
+        !shell_text_equals_ignore_case(argv[1], "selftest") &&
         !draw_require_foreground("tui")) {
         return;
     }
@@ -1525,12 +1656,63 @@ void shell_command_tui(int argc, char **argv)
             return;
         }
     } else if (shell_text_equals_ignore_case(argv[1], "status")) {
+        int cell_w = 0;
+        int cell_h = 0;
+        int cell_index = -1;
+
         shell_print_field("tui", "%s", tui_is_active() ? "active" : "inactive");
         shell_print_field("fullscreen", "%s", tui_is_fullscreen() ? "on" : "off");
         window_rect_t r = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
         shell_print_field("transcript rect", "%dx%d at %d,%d", r.width, r.height, r.x, r.y);
         shell_print_field("cols/rows", "%d x %d", P4_CONFIG_TUI_COLS, P4_CONFIG_TUI_ROWS);
+        tui_bound_cell_info(&cell_w, &cell_h, &cell_index);
+        if (cell_index >= 0) {
+            shell_print_field("cell font", "%dx%d (slot %d of %d)",
+                              cell_w, cell_h, cell_index + 1, tui_font_cell_count);
+        } else {
+            shell_print_field("cell font", "%s", "(unbound)");
+        }
         batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "selftest")) {
+        const char *fail_name = NULL;
+        int palette_fails;
+        int coverage_fails;
+        int metrics_fails;
+
+        /* Pure checks (no display needed), so a broken TUI still reports
+         * instead of hanging. Each group runs even if an earlier one fails. */
+        palette_fails = tui_selftest_palette(&fail_name);
+        if (palette_fails == 0) {
+            shell_print_field("tui.selftest.palette", "%s", "ok");
+        } else {
+            shell_print_field("tui.selftest.palette", "FAIL at %s",
+                              fail_name != NULL ? fail_name : "?");
+        }
+        fail_name = NULL;
+        coverage_fails = tui_selftest_coverage(&fail_name);
+        if (coverage_fails == 0) {
+            shell_print_field("tui.selftest.coverage", "%s", "ok");
+        } else {
+            shell_print_field("tui.selftest.coverage", "FAIL at %s",
+                              fail_name != NULL ? fail_name : "?");
+        }
+        fail_name = NULL;
+        metrics_fails = tui_selftest_metrics(&fail_name);
+        if (metrics_fails == 0) {
+            shell_print_field("tui.selftest.metrics", "%s", "ok");
+        } else {
+            shell_print_field("tui.selftest.metrics", "FAIL at %s",
+                              fail_name != NULL ? fail_name : "?");
+        }
+        if (palette_fails + coverage_fails + metrics_fails == 0) {
+            shell_print_ok("tui selftest: clean");
+            batch_set_errorlevel(0);
+        } else {
+            shell_print_error("tui selftest: %d failure(s)",
+                              palette_fails + coverage_fails + metrics_fails);
+            batch_set_errorlevel(1);
+        }
         return;
     } else if (shell_text_equals_ignore_case(argv[1], "stats")) {
         /* TUI frame pacing: frames/min/avg/max/jitter/dropped (per present). */
@@ -1562,6 +1744,6 @@ void shell_command_tui(int argc, char **argv)
         batch_set_errorlevel(0);
         return;
     }
-    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear");
+    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest");
     batch_set_errorlevel(2);
 }

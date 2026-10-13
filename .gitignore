@@ -31,6 +31,10 @@ spikes/*
 assets_out/
 tools/*.log
 apps/*.log
+# Host-side build/boot capture logs (idf.py build, unit_run, serial reads).
+*.log
+# Screenshot captures from the host harness (large BMP/PNG artifacts).
+tools/screenshots/
 
 # Release artifacts built by tools/make_release.py (merged bins, source zip,
 # SHA256SUMS) are produced on demand, never committed.

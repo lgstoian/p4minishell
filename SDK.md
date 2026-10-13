@@ -82,9 +82,9 @@ See "Inverting an upward dependency" below.
 
 ## Required boot-time integration
 1. Include `shell.h`, `command.h`, `ansi.h`, `display.h`, `windows.h`, `header.h`, `networking.h`, `bluetooth.h`, `usb.h`, and `c6ota.h` where those modules are orchestrated.
-2. Call `display_init()` first to initialize the display hardware and LVGL port.
-3. Call `shell_init()` to bring up the transcript, debug log, boot timestamp, and ANSI palette (it calls `ansi_init()` for you).
-4. Call `command_init()`. It brings up `storage_init()` (current working directory, SD mount tracking) and `batch_init()` (environment table, `PATH=sd:/`, errorlevel), then registers `batch_command_ops_t` with the batch engine and `shell_command_ops_t` with the shell core. This must follow `shell_init()`. Do not call `storage_init()` or `batch_init()` yourself; both are idempotent but `command_init()` owns the ordering.
+2. Call `shell_init()` to bring up the transcript, debug log, boot timestamp, and ANSI palette (it calls `ansi_init()` for you).
+3. Call `command_init()`. It brings up `storage_init()` (current working directory, SD mount tracking) and `batch_init()` (environment table, `PATH=sd:/`, errorlevel), then registers `batch_command_ops_t` with the batch engine and `shell_command_ops_t` with the shell core. This must follow `shell_init()`. Do not call `storage_init()` or `batch_init()` yourself; both are idempotent but `command_init()` owns the ordering. Shell + command come before display on purpose: the 32 KiB worker needs one contiguous internal-RAM block and display/LVGL bring-up eats it first (bugs.md F34).
+4. Call `display_init()` to initialize the display hardware and LVGL port.
 5. Register the UI rebuild callback with `display_register_ui_rebuild_callback(shell_build_ui)` so rotation changes trigger full UI rebuilds.
 6. Call `shell_uart_console_start()` to bring up the serial console task.
 7. Call `windows_init()` (from `shell_build_ui()`) to build the LVGL shell surface (header, transcript, input row, keyboard). TUI surfaces (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) need no separate init — they reuse the shared modal runtime and `windows_enter_editor_mode()` / `windows_refresh_editor_surface()` to map the logical `P4_CONFIG_TUI_COLS`×`ROWS` (`80×25`) grid onto the live transcript region.
@@ -921,14 +921,17 @@ static void shell_c6ota_progress(int percent, const char *msg)
 
 void app_main(void)
 {
-    /* 1. Display manager must be initialized first */
+    /* 1. Shell core, then the command module (which registers its ops
+     * table) — BEFORE display_init(): the 32 KiB command worker needs one
+     * contiguous internal-RAM block and display/LVGL bring-up eats it first
+     * (Tab5 bricks otherwise, bugs.md F34). Never reorder this. */
+    shell_init();
+    command_init();
+
+    /* 2. Display manager (see main/main.c app_main for the real sequence) */
     if (display_init() != ESP_OK) {
         return;
     }
-
-    /* 2. Shell core, then the command module (which registers its ops table) */
-    shell_init();
-    command_init();
 
     /* 3. Rotation rebuild hook and the serial console */
     display_register_ui_rebuild_callback(shell_rebuild_ui_callback);

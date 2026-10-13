@@ -6,5 +6,8 @@ idf_component_register(
     REQUIRES
         storage
         shell
+        strutil
         p4heap
+        zip
+        zlib
 )

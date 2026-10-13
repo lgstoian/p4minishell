@@ -17,4 +17,5 @@ idf_component_register(
         driver
         vfs
         esp_app_format
+        strutil
 )

@@ -26,7 +26,7 @@ static void shell_command_net_usage(void)
 {
     shell_print_usage("Usage: net status [/b]");
     shell_print_usage("       net broker <host> [port] [user] | net broker | net password");
-    shell_print_usage("       net connect | net disconnect");
+    shell_print_usage("       net tls on|off | net connect | net disconnect");
     shell_print_usage("       net sub <filter> | net unsub <filter> | net subs [/b]");
     shell_print_usage("       net pub <topic> <text...>");
     shell_print_usage("       net msg [/b] | net onmsg <line...> | net onmsg off");
@@ -58,6 +58,7 @@ static int net_cmd_status(int argc, char **argv)
         return 0;
     }
     shell_print_field("net.state:", "%s", netsvc_state_string());
+    shell_print_field("net.tls:", "%s", netsvc_get_tls() ? "on (MQTT over TLS)" : "off (plain TCP)");
     if (have_broker) {
         shell_print_field("net.broker:", "%s:%d%s%s", host, port,
                           (user[0] != '\0') ? " as " : "", user);
@@ -286,6 +287,24 @@ int shell_command_net(int argc, char **argv)
         }
         shell_print_ok("net: connecting (see net status)");
         return 0;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "tls") && argc == 3) {
+        if (shell_text_equals_ignore_case(argv[2], "on")) {
+            if (netsvc_set_tls(true) != ESP_OK) {
+                shell_print_error("net: cannot store TLS selection");
+                return 1;
+            }
+            shell_print_ok("net: TLS on (takes effect on next connect)");
+            return 0;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "off")) {
+            if (netsvc_set_tls(false) != ESP_OK) {
+                shell_print_error("net: cannot store TLS selection");
+                return 1;
+            }
+            shell_print_ok("net: TLS off (takes effect on next connect)");
+            return 0;
+        }
     }
     if (shell_text_equals_ignore_case(argv[1], "disconnect")) {
         if (argc != 2) {

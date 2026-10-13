@@ -65,6 +65,14 @@ esp_err_t netsvc_get_broker(char *host, size_t host_size, int *port_out,
 /** Persist the broker password (stored like the Wi-Fi known list). */
 esp_err_t netsvc_set_password(const char *password);
 
+/** Persist MQTT-over-TLS selection to the NET profile (default plain TCP).
+ *  TLS uses the httpget CA policy (user CA store when loaded, Mozilla bundle
+ *  otherwise); port stays as configured (8883 is conventional, not automatic). */
+esp_err_t netsvc_set_tls(bool enabled);
+
+/** True when the stored profile requests MQTT over TLS. */
+bool netsvc_get_tls(void);
+
 /** Enable the connection loop (kicks an immediate attempt). */
 esp_err_t netsvc_connect(void);
 

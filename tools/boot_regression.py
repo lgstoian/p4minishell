@@ -14,19 +14,24 @@ and no longer runs twice, the header async double-free crash stays gone, and
 the expected transient boot logs stay suppressed. Widget/hardware behaviour is
 covered by tools/header_test.py and the companion suites.
 
-Usage: python boot_regression.py [COMx] [boots]
+Usage: python boot_regression.py [COMx] [boots] [COMy]
+  One or two ports; two ports capture concurrently.
 """
 
 import os
 import re
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from shell_session import open_port, default_port, hard_reset
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else default_port()
-BOOTS = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+PORTS = [a.upper() for a in sys.argv[1:] if a.upper().startswith("COM")]
+BOOTS = [int(a) for a in sys.argv[1:] if re.fullmatch(r"\d+", a)]
+PORT = PORTS[0] if PORTS else default_port()
+BOOTS = BOOTS[0] if BOOTS else 10
+EXTRA_PORTS = PORTS[1:2]
 CAPTURE_S = 18.0
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -57,14 +62,15 @@ def capture_boot(ser):
     return ANSI.sub("", buf.decode("utf-8", errors="replace"))
 
 
-def main():
+def run_one_port(port, boots, out):
     failures = 0
     totals = {}
-    for i in range(1, BOOTS + 1):
+    lines = []
+    for i in range(1, boots + 1):
         # open_port() does not reboot, so reset explicitly to capture each
         # boot from the ROM banner.
-        hard_reset(PORT)
-        ser = open_port(PORT)
+        hard_reset(port)
+        ser = open_port(port)
         text = capture_boot(ser)
         ser.close()
 
@@ -93,18 +99,44 @@ def main():
         ok = (panics == 0) and (autoexec == 1) and sd_ready and not warnings
         if not ok:
             failures += 1
-        print("boot %2d : %s  panics=%d autoexec=%d sd_ready=%s warn/err=%d%s"
-              % (i, "PASS" if ok else "FAIL", panics, autoexec, sd_ready, len(warnings),
-                 ("  f6[" + " ".join("%s=%d" % kv for kv in sorted(sigs.items())) + "]")
-                 if sigs else ""),
-              flush=True)
+        lines.append("boot %2d : %s  panics=%d autoexec=%d sd_ready=%s warn/err=%d%s"
+                     % (i, "PASS" if ok else "FAIL", panics, autoexec, sd_ready, len(warnings),
+                        ("  f6[" + " ".join("%s=%d" % kv for kv in sorted(sigs.items())) + "]")
+                        if sigs else ""))
         for w in warnings[:5]:
-            print("           " + w[:140], flush=True)
+            lines.append("           " + w[:140])
+    lines.append("")
+    lines.append("RESULT %s (%d/%d clean)  f6_totals=%s" %
+                 ("OK" if failures == 0 else "FAIL", boots - failures, boots,
+                    totals if totals else "clean"))
+    out.append((port, failures == 0, lines))
 
-    print("\nRESULT %s (%d/%d clean)  f6_totals=%s" %
-          ("OK" if failures == 0 else "FAIL", BOOTS - failures, BOOTS,
-             totals if totals else "clean"))
-    return 1 if failures else 0
+
+def main():
+    ports = [PORT] + EXTRA_PORTS
+    multi = len(ports) > 1
+    out = []
+    threads = [threading.Thread(target=run_one_port, args=(p, BOOTS, out),
+                                name="boot-%s" % p, daemon=True)
+               for p in ports]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    failed = 0
+    for port, ok, lines in sorted(out):
+        for line in lines:
+            if multi and line:
+                print("[%s] %s" % (port, line), flush=True)
+            else:
+                print(line, flush=True)
+        if not ok:
+            failed += 1
+    if multi:
+        print("BOOT MERGED %s"
+              % " ".join("%s:%s" % (p, "OK" if ok else "FAIL")
+                         for p, ok, _l in sorted(out)), flush=True)
+    return 1 if failed else 0
 
 
 sys.exit(main())

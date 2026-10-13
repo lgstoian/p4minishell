@@ -247,3 +247,155 @@ void test_shell_chain_split(void)
     TEST_ASSERT_EQUAL(0, shell_split_chain(buf, NULL, 8, NULL));
     TEST_ASSERT_EQUAL(0, shell_split_chain(buf, segments, 0, NULL));
 }
+
+void test_shell_chain_parens(void)
+{
+    shell_chain_segment_t segments[8];
+    char buf[192];
+    bool truncated = false;
+    int count;
+
+    /* Separators inside balanced parens belong to the group: one segment. */
+    strcpy(buf, "echo (a & b)");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL_STRING("echo (a & b)", segments[0].command);
+    TEST_ASSERT_EQUAL(SHELL_CHAIN_FIRST, segments[0].op);
+
+    strcpy(buf, "(a & b)");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL_STRING("(a & b)", segments[0].command);
+
+    /* Depth-0 separators still split around groups. */
+    strcpy(buf, "(a) & b");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL_STRING("(a)", segments[0].command);
+    TEST_ASSERT_EQUAL_STRING("b", segments[1].command);
+    TEST_ASSERT_EQUAL(SHELL_CHAIN_ALWAYS, segments[1].op);
+
+    strcpy(buf, "a && (b || c)");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL_STRING("a", segments[0].command);
+    TEST_ASSERT_EQUAL_STRING("(b || c)", segments[1].command);
+    TEST_ASSERT_EQUAL(SHELL_CHAIN_ON_SUCCESS, segments[1].op);
+
+    /* A lone pipe inside parens is not a chain separator either. */
+    strcpy(buf, "(a | b)");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL_STRING("(a | b)", segments[0].command);
+
+    /* Unbalanced '(' runs literal to end of line; stray ')' is inert. */
+    strcpy(buf, "(a & b");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL_STRING("(a & b", segments[0].command);
+
+    strcpy(buf, "a & b)");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL_STRING("a", segments[0].command);
+    TEST_ASSERT_EQUAL_STRING("b)", segments[1].command);
+
+    /* A caret escapes only its own character, not the paren structure. */
+    strcpy(buf, "^(a & b)");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL_STRING("^(a", segments[0].command);
+    TEST_ASSERT_EQUAL_STRING("b)", segments[1].command);
+
+    /* Quoted parens do not group. */
+    strcpy(buf, "echo \"(a)\" & b");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL_STRING("echo \"(a)\"", segments[0].command);
+    TEST_ASSERT_EQUAL_STRING("b", segments[1].command);
+}
+
+void test_shell_group_match(void)
+{
+    const char *close;
+
+    /* Simple group: pointer just past `)`. */
+    close = shell_group_match("(a & b)");
+    TEST_ASSERT_NOT_NULL(close);
+    TEST_ASSERT_EQUAL_STRING("", close);
+
+    /* Trailing content stays visible to the caller. */
+    close = shell_group_match("(a) & b");
+    TEST_ASSERT_NOT_NULL(close);
+    TEST_ASSERT_EQUAL_STRING(" & b", close);
+
+    /* Nested parens count. */
+    close = shell_group_match("((a) & (b | c)) rest");
+    TEST_ASSERT_NOT_NULL(close);
+    TEST_ASSERT_EQUAL_STRING(" rest", close);
+
+    /* Empty group matches immediately. */
+    close = shell_group_match("()");
+    TEST_ASSERT_NOT_NULL(close);
+    TEST_ASSERT_EQUAL_STRING("", close);
+
+    /* Quoted parens do not count. */
+    close = shell_group_match("(\"(a)\")");
+    TEST_ASSERT_NOT_NULL(close);
+    TEST_ASSERT_EQUAL_STRING("", close);
+
+    /* Caret-escaped parens do not count: the final `)` closes depth 1. */
+    close = shell_group_match("(a ^) b)");
+    TEST_ASSERT_NOT_NULL(close);
+    TEST_ASSERT_EQUAL_STRING("", close);
+
+    /* Rejects: not leading paren, unbalanced, NULL. */
+    TEST_ASSERT_NULL(shell_group_match("echo (a)"));
+    TEST_ASSERT_NULL(shell_group_match("(a & b"));
+    TEST_ASSERT_NULL(shell_group_match(""));
+    TEST_ASSERT_NULL(shell_group_match(NULL));
+}
+
+void test_shell_group_depth(void)
+{
+    TEST_ASSERT_EQUAL(0, shell_group_depth("echo hi"));
+    TEST_ASSERT_EQUAL(1, shell_group_depth("(a & b)"));
+    TEST_ASSERT_EQUAL(2, shell_group_depth("((a) & (b | c))"));
+    TEST_ASSERT_EQUAL(3, shell_group_depth("(((x)))"));
+    /* Unbalanced opens still count the peak (match refuses them). */
+    TEST_ASSERT_EQUAL(2, shell_group_depth("((a)"));
+    TEST_ASSERT_EQUAL(1, shell_group_depth(")a & b("));
+    TEST_ASSERT_EQUAL(0, shell_group_depth(NULL));
+    /* Quoted/escaped parens do not count. */
+    TEST_ASSERT_EQUAL(0, shell_group_depth("\"(a)\""));
+    TEST_ASSERT_EQUAL(0, shell_group_depth("^(a & b)"));
+}
+
+void test_shell_chain_while_guard(void)
+{
+    shell_chain_segment_t segments[8];
+    char buf[192];
+    bool truncated = false;
+    int count;
+
+    /* `while` consumes the rest of the line like `if`/`for`: the body
+     * separator must not become an unconditional top-level link. */
+    strcpy(buf, "while n LSS 2 do echo %n% & echo done");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL_STRING("while n LSS 2 do echo %n% & echo done",
+                             segments[0].command);
+    TEST_ASSERT_EQUAL(SHELL_CHAIN_FIRST, segments[0].op);
+
+    /* Case-insensitive guard, like if/for. */
+    strcpy(buf, "WHILE n LSS 2 do echo hi");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL(SHELL_CHAIN_FIRST, segments[0].op);
+
+    /* A non-verb starting with the same letters still splits. */
+    strcpy(buf, "whilex a & b");
+    count = shell_split_chain(buf, segments, 8, &truncated);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL(SHELL_CHAIN_ALWAYS, segments[1].op);
+}

@@ -10,7 +10,8 @@
  * shape as `APPS/<APP>.APPINFO`, read through the shared `storage_ini`
  * core — no second INI parser). `screen run` translates the keys into an
  * argument vector and calls the existing `dialog` / `list` / `ask` / `form`
- * / `menu` implementations, so there is exactly one copy of every surface:
+ * / `menu` / `browse` / `view` / `hexview` / `image show` implementations,
+ * so there is exactly one copy of every surface:
  * the file only declares, the verbs still render. Results land in the same
  * environment variables with the same ERRORLEVEL contract as the verbs.
  *
@@ -29,6 +30,7 @@
 
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -494,7 +496,7 @@ static void screen_command_info(const char *resolved)
 
     screen_read_key(resolved, "type", type, sizeof(type));
     if (type[0] == '\0') {
-        shell_print_error("screen: %s has no type= (dialog|list|ask|form|menu)", resolved);
+        shell_print_error("screen: %s has no type= (dialog|list|ask|form|menu|browse|view|hexview|image)", resolved);
         batch_set_errorlevel(1);
         return;
     }
@@ -526,6 +528,20 @@ static void screen_command_info(const char *resolved)
                shell_text_equals_ignore_case(type, "menu")) {
         screen_read_key(resolved, "items", probe, sizeof(probe));
         shell_print_field("items:", "%s", probe[0] != '\0' ? probe : "(none)");
+    } else if (shell_text_equals_ignore_case(type, "browse")) {
+        screen_read_key(resolved, "start", probe, sizeof(probe));
+        shell_print_field("start:", "%s", probe[0] != '\0' ? probe : "(cwd)");
+        screen_read_key(resolved, "var", probe, sizeof(probe));
+        shell_print_field("var:", "%s", probe[0] != '\0' ? probe : "BROWSE_RESULT");
+    } else if (shell_text_equals_ignore_case(type, "view") ||
+               shell_text_equals_ignore_case(type, "hexview") ||
+               shell_text_equals_ignore_case(type, "image")) {
+        screen_read_key(resolved, "file", probe, sizeof(probe));
+        shell_print_field("file:", "%s", probe[0] != '\0' ? probe : "(none)");
+        if (shell_text_equals_ignore_case(type, "view")) {
+            screen_read_key(resolved, "raw", probe, sizeof(probe));
+            shell_print_field("raw:", "%s", screen_is_truthy(probe) ? "yes" : "no");
+        }
     }
     batch_set_errorlevel(0);
 }
@@ -613,10 +629,10 @@ static void screen_command_run(const char *resolved)
         }
         screen_read_key(resolved, "var", var, sizeof(var));
         args[argc++] = is_menu ? "menu" : "list";
+        if (timeout_slot != NULL) {
+            args[argc++] = timeout_slot;
+        }
         if (!is_menu) {
-            if (timeout_slot != NULL) {
-                args[argc++] = timeout_slot;
-            }
             if (var[0] != '\0') {
                 snprintf(var_arg, sizeof(var_arg), "/v:%s", var);
                 args[argc++] = var_arg;
@@ -711,10 +727,106 @@ static void screen_command_run(const char *resolved)
         return;
     }
 
+    if (shell_text_equals_ignore_case(type, "browse")) {
+        /* File picker: `start=` is the initial directory (default: cwd),
+         * `var=` names the result variable (default BROWSE_RESULT). */
+        char start[SCREEN_VALUE_BYTES];
+        char var[SCREEN_VALUE_BYTES];
+        char var_arg[SCREEN_VALUE_BYTES + 4];
+        char *args[5];
+        int argc = 0;
+
+        screen_read_key(resolved, "start", start, sizeof(start));
+        screen_read_key(resolved, "var", var, sizeof(var));
+        args[argc++] = "browse";
+        if (timeout_slot != NULL) {
+            args[argc++] = timeout_slot;
+        }
+        if (var[0] != '\0') {
+            snprintf(var_arg, sizeof(var_arg), "/v:%s", var);
+            args[argc++] = var_arg;
+        }
+        if (start[0] != '\0') {
+            args[argc++] = start;
+        }
+        shell_command_browse(argc, args);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(type, "view")) {
+        /* Text pager (Markdown renders unless raw=1): `file=` required. */
+        char file[SCREEN_VALUE_BYTES];
+        char raw_text[SCREEN_VALUE_BYTES];
+        char *args[5];
+        int argc = 0;
+
+        screen_read_key(resolved, "file", file, sizeof(file));
+        if (file[0] == '\0') {
+            shell_print_usage("Usage: screen run <file>  (view needs file=)");
+            batch_set_errorlevel(2);
+            return;
+        }
+        screen_read_key(resolved, "raw", raw_text, sizeof(raw_text));
+        args[argc++] = "view";
+        if (timeout_slot != NULL) {
+            args[argc++] = timeout_slot;
+        }
+        if (screen_is_truthy(raw_text)) {
+            args[argc++] = "--raw";
+        }
+        args[argc++] = file;
+        shell_command_view(argc, args);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(type, "hexview")) {
+        /* Hex pager: `file=` required. */
+        char file[SCREEN_VALUE_BYTES];
+        char *args[4];
+        int argc = 0;
+
+        screen_read_key(resolved, "file", file, sizeof(file));
+        if (file[0] == '\0') {
+            shell_print_usage("Usage: screen run <file>  (hexview needs file=)");
+            batch_set_errorlevel(2);
+            return;
+        }
+        args[argc++] = "hexview";
+        if (timeout_slot != NULL) {
+            args[argc++] = timeout_slot;
+        }
+        args[argc++] = file;
+        shell_command_hexview(argc, args);
+        return;
+    }
+
+    if (shell_text_equals_ignore_case(type, "image")) {
+        /* BMP viewer: `file=` required. Synthesizes `image show` (the verb
+         * keeps its subcommand; the screen only declares). */
+        char file[SCREEN_VALUE_BYTES];
+        char *args[5];
+        int argc = 0;
+
+        screen_read_key(resolved, "file", file, sizeof(file));
+        if (file[0] == '\0') {
+            shell_print_usage("Usage: screen run <file>  (image needs file=)");
+            batch_set_errorlevel(2);
+            return;
+        }
+        args[argc++] = "image";
+        args[argc++] = "show";
+        if (timeout_slot != NULL) {
+            args[argc++] = timeout_slot;
+        }
+        args[argc++] = file;
+        shell_command_image(argc, args);
+        return;
+    }
+
     if (type[0] == '\0') {
-        shell_print_usage("Usage: screen run <file>  (file needs type=dialog|list|ask|form|menu)");
+        shell_print_usage("Usage: screen run <file>  (file needs type=dialog|list|ask|form|menu|browse|view|hexview|image)");
     } else {
-        shell_print_error("screen: unknown type '%s' (dialog|list|ask|form|menu)", type);
+        shell_print_error("screen: unknown type '%s' (dialog|list|ask|form|menu|browse|view|hexview|image)", type);
     }
     batch_set_errorlevel(2);
 }
@@ -745,6 +857,18 @@ void shell_command_screen(int argc, char **argv)
         shell_print_error("screen: invalid path %s", argv[2]);
         batch_set_errorlevel(2);
         return;
+    }
+    /* A resolvable-but-missing file used to fall through to the empty-type
+     * usage text; name it directly (same ERRORLEVEL, useful message). */
+    {
+        FILE *probe = fopen(resolved, "rb");
+
+        if (probe == NULL) {
+            shell_print_error("screen: no such file %s", argv[2]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        fclose(probe);
     }
 
     if (shell_text_equals_ignore_case(argv[1], "flow")) {

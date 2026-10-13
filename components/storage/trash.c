@@ -333,6 +333,13 @@ static esp_err_t trash_move_entry(const char *resolved_path, bool is_dir, bool p
         return (errno == ENOENT) ? ESP_ERR_NOT_FOUND : ESP_FAIL;
     }
 
+    /* The recycle bin lives on the SD card: USB entries cannot move across
+     * volumes (the del/rd commands refuse these paths up front with a
+     * pointer to /p; this is the backstop). */
+    if (!permanent && storage_volume_of_vfs_path(resolved_path) != STORAGE_VOLUME_SD) {
+        return ESP_FAIL;
+    }
+
     if (permanent) {
         if (is_dir || S_ISDIR(st.st_mode)) {
             return trash_remove_tree_recursive(resolved_path, 0) == 0 ? ESP_OK : ESP_FAIL;

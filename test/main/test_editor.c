@@ -1237,6 +1237,44 @@ void test_editor_cursor_word(void)
     editor_doc_free(doc);
 }
 
+void test_editor_link_under_cursor(void)
+{
+    editor_doc_t *doc = editor_doc_new(NULL);
+    char buf[65];
+
+    TEST_ASSERT_NOT_NULL(doc);
+    /* Markdown `[text](url)`: cursor anywhere inside yields the URL. */
+    editor_doc_insert_bytes(doc, "see [notes](sd:/DOCS/N.TXT) ok", 30);
+    doc->cursor_row = 0;
+    doc->cursor_col = 6;
+    TEST_ASSERT_TRUE(editor_link_under_cursor(doc, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("sd:/DOCS/N.TXT", buf);
+    doc->cursor_col = 24;
+    TEST_ASSERT_TRUE(editor_link_under_cursor(doc, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("sd:/DOCS/N.TXT", buf);
+
+    /* Bare URL/path token: needs a `/`, `\`, or `:`. */
+    editor_doc_free(doc);
+    doc = editor_doc_new(NULL);
+    editor_doc_insert_bytes(doc, "open sd:/APPS/X.BAT now", 23);
+    doc->cursor_row = 0;
+    doc->cursor_col = 8;
+    TEST_ASSERT_TRUE(editor_link_under_cursor(doc, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("sd:/APPS/X.BAT", buf);
+
+    /* Plain words never match; NULLs fail safely. */
+    editor_doc_free(doc);
+    doc = editor_doc_new(NULL);
+    editor_doc_insert_bytes(doc, "just words here", 15);
+    doc->cursor_row = 0;
+    doc->cursor_col = 6;
+    TEST_ASSERT_FALSE(editor_link_under_cursor(doc, buf, sizeof(buf)));
+    TEST_ASSERT_FALSE(editor_link_under_cursor(NULL, buf, sizeof(buf)));
+    TEST_ASSERT_FALSE(editor_link_under_cursor(doc, NULL, sizeof(buf)));
+    TEST_ASSERT_FALSE(editor_link_under_cursor(doc, buf, 0));
+    editor_doc_free(doc);
+}
+
 void test_editor_word_count(void)
 {
     editor_doc_t *doc = editor_doc_new(NULL);

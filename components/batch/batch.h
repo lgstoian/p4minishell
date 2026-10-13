@@ -67,13 +67,18 @@ void batch_register_command_ops(const batch_command_ops_t *ops);
 
 /**
  * Look up an environment variable by name (case-insensitive).
+ * A background task reads its job-private overlay first, then the global
+ * table; the foreground reads the global table only.
  * @return Pointer to the stored value, or NULL when the name is not defined.
  */
 const char *shell_env_get(const char *name);
 
 /**
  * Create, update, or clear an environment variable.
- * Passing an empty or NULL value clears the slot.
+ * Passing an empty or NULL value clears the slot. A background task writes
+ * into its job-private overlay (lazily allocated, bounded by
+ * P4_CONFIG_BG_ENV_SLOTS, discarded at job exit) so it can never mutate the
+ * foreground environment; aliases stay global by design.
  *
  * @return ESP_OK, ESP_ERR_INVALID_ARG for a malformed name, or
  *         ESP_ERR_NO_MEM when all slots are in use.
@@ -303,8 +308,35 @@ void batch_bg_request_kill(int slot);
 /** True when the current task's slot has a pending kill request. */
 bool batch_bg_kill_requested(void);
 
+/** Slot index of the calling task (0 = foreground/main worker, N = bg slot
+ *  N). Unknown tasks (unit tests, init) report 0. */
+int batch_bg_current_slot(void);
+
+/** Set an auto-kill deadline for a slot (`start /t:secs`; 0 clears it). The
+ *  deadline is enforced cooperatively at the same poll points as `taskkill`
+ *  (batch line loop + `delay` chunks), so a timed-out job unwinds exactly
+ *  like a killed one. */
+void batch_bg_set_deadline(int slot, uint32_t deadline_ms);
+
+/** Enforce the current task's auto-kill deadline (call at every cooperative
+ *  poll point alongside `batch_bg_kill_requested()`). */
+void batch_bg_poll_timeout(void);
+
 /** True when the current task runs on a background slot. */
 bool batch_bg_is_background(void);
+
+/** Bytes held by a slot's private environment overlay (name + value +
+ *  separators of every set entry; 0 when the slot has no overlay). Slot 0
+ *  (foreground) has no overlay and always reports 0. Used by the task
+ *  manager's per-job memory accounting. */
+size_t batch_bg_overlay_bytes(int slot);
+
+/** A slot's auto-kill deadline in tick ms (0 = none). Read-only accessor
+ *  for the task manager's job listing. */
+uint32_t batch_bg_deadline_ms(int slot);
+
+/** True when a background slot is claimed (1..P4_CONFIG_BG_TASKS). */
+bool batch_bg_slot_in_use(int slot);
 
 /* ========================================================================
  * BATCH ENGINE
@@ -715,6 +747,209 @@ void batch_set_default_echo(bool enabled);
  * @param command  Command line to execute (e.g. "rotate 90").
  */
 void batch_boot_execute_command(const char *command);
+
+/* ========================================================================
+ * COMMAND MODULE HOOKS, BACK END (background-job control for the supervisor)
+ * ========================================================================
+ * The service supervisor (svc.c, this component) decides WHAT should run;
+ * the pool that runs it lives in components/command/. These hooks bridge
+ * the gap the same way batch_command_ops_t does (registered once by
+ * command_init(), always NULL-checked).
+ */
+
+typedef struct {
+    /** Start @p line as a background job (same as `start`, no /wait).
+     *  @return The 1-based slot, or -1 when the pool is full/unavailable. */
+    int (*bg_start)(const char *line);
+    /** True while the 1-based @p slot's job is still running. */
+    bool (*bg_running)(int slot);
+} batch_bg_ops_t;
+
+/** Register the background-job control table (command_init, once). */
+void batch_register_bg_ops(const batch_bg_ops_t *ops);
+
+/* ========================================================================
+ * EXTENDED MEMORY (himem — XMS-style handle blocks over PSRAM)
+ * ========================================================================
+ * DOS extended-memory tricks for batch apps: handle blocks above the
+ * 64-variable environment ceiling, for staging bulk data without touching
+ * the SD card. One handle table over p4heap PSRAM; blocks never move, so
+ * locks guard against free (not relocation). Handles record their owner
+ * task slot: a background job's blocks are freed automatically when the job
+ * exits (no TSRs), and one job's holdings are capped by
+ * P4_CONFIG_HIMEM_JOB_QUOTA_BYTES (foreground uncapped).
+ */
+
+ /** Opaque block size/owner snapshot for `himem info` (no pointers out). */
+typedef struct {
+    bool used;
+    size_t size;
+    int owner_slot;   /**< 0 = foreground, N = bg slot N. */
+    bool locked;
+} himem_handle_info_t;
+
+/** Allocate a zeroed @p size-byte block for @p slot. @return handle 0..N-1,
+ *  or -1 when the table is full, @p size exceeds P4_CONFIG_HIMEM_MAX_BYTES,
+ *  the slot quota is hit, or PSRAM is out. */
+int himem_alloc(size_t size, int slot);
+
+/** Free handle @p h. The owner slot (or the foreground supervisor, slot 0)
+ *  may free; locked handles refuse. @return ESP_OK or an error code. */
+esp_err_t himem_free(int h, int slot);
+
+/** Lock @p h against free (XMS lock guard). Returns the lock count, or -1
+ *  for a bad handle / foreign owner. */
+int himem_lock(int h, int slot);
+
+/** Release one lock on @p h. Returns the remaining count, or -1 for a bad
+ *  handle / foreign owner / unlocked block. */
+int himem_unlock(int h, int slot);
+
+/** Bounds-checked read accessor behind `himem crc` (the CRC primitive lives
+ *  in the command layer, so the verb computes over this view instead of a
+ *  second copy of the bytes). @return ESP_OK with @p ptr_out/@p len_out set,
+ *  or an error for a bad range. The pointer is valid until free/resize. */
+esp_err_t himem_peek(int h, size_t offset, size_t count,
+                     const uint8_t **ptr_out, size_t *len_out);
+
+/** Fill [@p offset, @p offset+@p count) with @p byte. @p count 0 = to end. */
+esp_err_t himem_fill(int h, int slot, uint8_t byte, size_t offset, size_t count);
+
+/** Snapshot one handle for `himem info` (index @p h, never out-of-range). */
+himem_handle_info_t himem_describe(int h);
+
+/** Bytes currently held by @p slot (quota accounting). */
+size_t himem_slot_bytes(int slot);
+
+/** Free every block owned by @p slot (job-exit cleanup; no leaks). */
+void himem_free_owned(int slot);
+
+/** Parse a byte count: decimal, `0x` hex, or `K`/`M` suffix (pure,
+ *  unit-tested). @return Bytes, or 0 for empty/garbage/overflow. */
+uint64_t himem_parse_size(const char *text);
+
+/** Parse a decimal handle number (pure, unit-tested). @return Handle, or -1
+ *  for empty/garbage/out-of-range. */
+int himem_parse_handle(const char *text);
+
+/* ========================================================================
+ * BATCH SYNCHRONIZATION (lock/unlock named mutexes, signal/wait events)
+ * ========================================================================
+ * Real-concurrency coordination for background jobs: one mutex table and
+ * one event table in the batch engine (never a second implementation per
+ * caller). Entries are owner-tracked and released automatically when the
+ * owning job exits, so a dead job can never wedge a mutex. Signals are
+ * sticky until taken; `wait` auto-clears on take so one signal wakes
+ * exactly one waiter.
+ */
+
+/** True for a usable sync name: non-empty, fits, `[A-Za-z0-9_-]+` (pure,
+ *  unit-tested). Sync names are case-sensitive (they are not env vars). */
+bool sync_name_ok(const char *name);
+
+/** Take the named mutex (creating it bounded). @p timeout_ms 0 = forever.
+ *  Chunked so kill/deadline/abort stay responsive. @return ESP_OK,
+ *  ESP_ERR_TIMEOUT, ESP_ERR_NO_MEM (table full), or ESP_ERR_INVALID_ARG. */
+esp_err_t sync_mutex_lock(const char *name, uint32_t timeout_ms, int slot);
+
+/** Release the named mutex (owner slot, or the foreground supervisor).
+ *  @return ESP_OK or an error code. */
+esp_err_t sync_mutex_unlock(const char *name, int slot);
+
+/** Release every mutex owned by @p slot (job-exit cleanup). */
+void sync_release_owned(int slot);
+
+/** Set the named event (creating it bounded; sticky until taken). */
+esp_err_t sync_event_signal(const char *name);
+
+/** Wait for the named event, auto-clearing on take. @p timeout_ms 0 =
+ *  forever (still kill/abort-responsive). @return ESP_OK, ESP_ERR_TIMEOUT,
+ *  or an error code. */
+esp_err_t sync_event_wait(const char *name, uint32_t timeout_ms, int slot);
+
+/** `lock <name> [/t:secs]` — take a named mutex (EL 0/1/2). */
+void shell_command_lock(int argc, char **argv);
+
+/** `unlock <name>` — release a named mutex (EL 0/1/2). */
+void shell_command_unlock(int argc, char **argv);
+
+/** `signal <name>` — set a named event (EL 0/1/2). */
+void shell_command_signal(int argc, char **argv);
+
+/** `wait <name> [/t:secs]` — wait for a named event (EL 0/1/2). */
+void shell_command_wait(int argc, char **argv);
+
+/* ========================================================================
+ * RESIDENT SERVICES (registry + supervisor — TSRs that survive)
+ * ========================================================================
+ * Named background lines persisted in sd:/SERVICES.INI through the shared
+ * storage_ini core. `service install` writes the registry; the supervisor
+ * (own FreeRTOS timer, P4_CONFIG_SVC_TICK_MS) re-starts what should run;
+ * `batch_svc_boot()` re-starts autostart entries after AUTOEXEC.BAT.
+ * Restart-on-unexpected-exit per the /restart flag (bounded per boot);
+ * `service stop` is the admin off switch (never restarted, never counted).
+ * `taskkill` of a service job counts as unexpected — it IS restarted.
+ */
+
+ /** One registered service (RAM mirror of the INI registry + runtime). */
+typedef struct {
+    bool used;
+    char name[P4_CONFIG_SVC_NAME_BYTES];
+    /* Service line in PSRAM (never BSS: COMMAND_BYTES * SVC_MAX of .bss
+     * would eat the boot internal-RAM window the command worker needs). */
+    char *line;
+    bool restart;
+    bool auto_start;
+    bool supervised;    /**< Should be running now (start/boot/restart). */
+    bool stopped;       /**< Admin-stopped via `service stop` (wins). */
+    bool parked;        /**< Restart budget exhausted this boot. */
+    int slot;           /**< Bg slot while running, 0 when down. */
+    int restarts;       /**< Restarts this boot (flood guard). */
+} svc_entry_t;
+
+/** Snapshot one registry entry for `service list` (index order). */
+svc_entry_t svc_describe(int index);
+
+/** Registered service count. */
+int svc_count(void);
+
+/** Install (or replace) a service in the registry + RAM mirror. */
+esp_err_t svc_install(const char *name, const char *line, bool restart, bool auto_start);
+
+/** Remove a service (refused while running — stop it first). */
+esp_err_t svc_remove(const char *name);
+
+/** Start a registered service now (marks supervised). */
+esp_err_t svc_start(const char *name);
+
+/** Admin-stop a service (marks stopped; never restarted, never counted). */
+esp_err_t svc_stop(const char *name);
+
+/** Re-start autostart entries (boot hook, after AUTOEXEC.BAT). */
+void batch_svc_boot(void);
+
+/** Reset supervisor state (once, from batch_init). The supervisor timer is
+ *  created lazily on first supervised service (never inside the boot heap
+ *  window — its task stack would starve the command worker). */
+void batch_svc_init(void);
+
+/** Clear service slot references at job exit (called from
+ *  batch_bg_release, same component). */
+void svc_slot_released(int slot);
+
+/** Supervisor tick: reap unexpected exits, restart per policy. Safe from
+ *  any task; no-ops until the bg ops hook is registered. */
+void batch_svc_tick(void);
+
+/** `service install|remove|list|start|stop ...` (EL 0/1/2). */
+void shell_command_service(int argc, char **argv);
+
+/**
+ * `himem` — the extended-memory verb: alloc/free/info/load/save/fill/crc
+ * over the handle table above. Batch-callable (`himem alloc 65536 /v:H`
+ * then `himem save %H% dump.bin`). ERRORLEVEL 0 ok / 1 failure / 2 usage.
+ */
+void shell_command_himem(int argc, char **argv);
 
 #ifdef __cplusplus
 }

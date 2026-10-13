@@ -244,3 +244,75 @@ void test_pkg_sign_stock_manifest(void)
     TEST_ASSERT_EQUAL_INT(PKG_SIGN_NONE, pkg_sign_check_with_key(manifest, pub, NULL));
     memset(pub, 0, sizeof(pub));
 }
+
+void test_pkg_version_compare(void)
+{
+    /* Equal forms. */
+    TEST_ASSERT_EQUAL_INT(0, pkg_version_compare("1.0", "1.0"));
+    TEST_ASSERT_EQUAL_INT(0, pkg_version_compare("1.0", "1.0.0"));
+    TEST_ASSERT_EQUAL_INT(0, pkg_version_compare("1", "1.0.0"));
+    TEST_ASSERT_EQUAL_INT(0, pkg_version_compare("v1.3.1", "1.3.1"));
+    TEST_ASSERT_EQUAL_INT(0, pkg_version_compare(NULL, NULL));
+    TEST_ASSERT_EQUAL_INT(0, pkg_version_compare("", ""));
+    /* Ordering (numeric parts, not lexical: 10 > 9). */
+    TEST_ASSERT_TRUE(pkg_version_compare("1.0", "1.1") < 0);
+    TEST_ASSERT_TRUE(pkg_version_compare("1.10", "1.9") > 0);
+    TEST_ASSERT_TRUE(pkg_version_compare("1.0", "1.0.1") < 0);
+    TEST_ASSERT_TRUE(pkg_version_compare("2.0", "10.0") < 0);
+    TEST_ASSERT_TRUE(pkg_version_compare("1.0b", "1.0") > 0);
+    TEST_ASSERT_TRUE(pkg_version_compare("1.0", "1.0b") < 0);
+    /* NULL/empty sorts first. */
+    TEST_ASSERT_TRUE(pkg_version_compare(NULL, "1.0") < 0);
+    TEST_ASSERT_TRUE(pkg_version_compare("1.0", NULL) > 0);
+    TEST_ASSERT_TRUE(pkg_version_compare("", "0.0.0") < 0);
+}
+
+void test_pkg_requires_parse(void)
+{
+    char app[64];
+    char op[4];
+    char ver[32];
+
+    TEST_ASSERT_TRUE(pkg_requires_parse("MOOD>=1.2", app, sizeof(app),
+                                        op, ver, sizeof(ver)));
+    TEST_ASSERT_EQUAL_STRING("MOOD", app);
+    TEST_ASSERT_EQUAL_STRING(">=", op);
+    TEST_ASSERT_EQUAL_STRING("1.2", ver);
+    TEST_ASSERT_TRUE(pkg_requires_parse("DB=2.0", app, sizeof(app),
+                                        op, ver, sizeof(ver)));
+    TEST_ASSERT_EQUAL_STRING("DB", app);
+    TEST_ASSERT_EQUAL_STRING("=", op);
+    TEST_ASSERT_EQUAL_STRING("2.0", ver);
+    TEST_ASSERT_TRUE(pkg_requires_parse("X-1_Y>3", app, sizeof(app),
+                                        op, ver, sizeof(ver)));
+    TEST_ASSERT_EQUAL_STRING("X-1_Y", app);
+    TEST_ASSERT_EQUAL_STRING(">", op);
+    TEST_ASSERT_EQUAL_STRING("3", ver);
+    /* Rejects: no op, empty name/version, bad name chars, NULLs. */
+    TEST_ASSERT_FALSE(pkg_requires_parse("MOOD", app, sizeof(app),
+                                         op, ver, sizeof(ver)));
+    TEST_ASSERT_FALSE(pkg_requires_parse(">=1.2", app, sizeof(app),
+                                         op, ver, sizeof(ver)));
+    TEST_ASSERT_FALSE(pkg_requires_parse("MOOD>=", app, sizeof(app),
+                                         op, ver, sizeof(ver)));
+    TEST_ASSERT_FALSE(pkg_requires_parse("MO OD>=1.2", app, sizeof(app),
+                                         op, ver, sizeof(ver)));
+    TEST_ASSERT_FALSE(pkg_requires_parse(NULL, app, sizeof(app),
+                                         op, ver, sizeof(ver)));
+}
+
+void test_pkg_sanitize_pipe_field(void)
+{
+    char field[32];
+
+    snprintf(field, sizeof(field), "%s", "Plain Title");
+    pkg_sanitize_pipe_field(field);
+    TEST_ASSERT_EQUAL_STRING("Plain Title", field);
+    snprintf(field, sizeof(field), "%s", "a|b|c");
+    pkg_sanitize_pipe_field(field);
+    TEST_ASSERT_EQUAL_STRING("a/b/c", field);
+    snprintf(field, sizeof(field), "x\r\ny");
+    pkg_sanitize_pipe_field(field);
+    TEST_ASSERT_EQUAL_STRING("x  y", field);
+    pkg_sanitize_pipe_field(NULL);
+}

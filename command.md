@@ -40,6 +40,7 @@ the whole shell stays consistent and a palette change is a single-file edit.
 | Directory entries | Bold bright blue | `SH_DIR` |
 | File entries | White | `SH_FILE` |
 | Executable / `.bat` entries | Bright green | `SH_EXE` |
+| Hyperlinks (tappable) | Bright cyan + underline | `SH_LINK` |
 | Listing sizes | Bright magenta | `SH_SIZE` |
 | Listing timestamps | Grey | `SH_TIME` |
 | Wi-Fi connected / disconnected | Green / grey | `SH_NET_UP`, `SH_NET_DOWN` |
@@ -60,6 +61,11 @@ the whole shell stays consistent and a palette change is a single-file edit.
   they all go through the same helpers.
 - **`c6ota`** shows progress in bright green and the destructive YES confirmation in
   bright red.
+- **Hyperlinks** (`help` names, `complete` matches, `launch` menu apps, `link`
+  labels) render bright cyan + underline (`SH_LINK`, always via the
+  `shell_link` helpers). Capable serial terminals additionally get a native
+  OSC 8 hyperlink; the LVGL transcript and plain buffers only ever see the
+  label. First tap previews the target, second tap runs it.
 
 ### ANSI format specifiers
 
@@ -133,6 +139,11 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `gfx` (`init`/`close`/`status`/`clear`/`pixel`/`line`/`rect`/`circle`/`hline`/`vline`/`triangle`/`ellipse`/`polygon`/`fill`/`text`/`show`/`load`/`blit`/`blitmany`/`free`/`slots`/`save`) | `components/command/gfx_commands.c` + `components/gfx/gfx.c` (pure RGB565 raster, `gfx_font.c` 8x8 ASCII font) |
 | `plot` (`tui`/`window`/`auto`/`axes`/`func`/`polar`/`para`/`data`/`bar`/`table`/`line`/`point`/`clear`/`status`) | `components/command/plot_commands.c` + `components/gfx/gfx_view.c` (pure viewport math) + `components/batch/calc.c` (expression sampling) |
 | `beep`, `tone`, `wavplay`, `audio`, `volume` | `components/command/audio_commands.c` + `components/audio/audio.c` (parsing here, codec/playback in `audio`) |
+| `json` (`validate`/`pretty`) | `components/command/json_commands.c` + `components/json/json.c` (the ONE JSON reader: `json_validate_text`/`json_pretty_text`/`json_walk`) |
+| `cas` (`open`/`close`/`simplify`/`expand`/`factor`/`diff`/`integrate`/`solve`/`series`/`substitute`/`evaluate`/`latex`) | `components/command/cas_commands.c` + `components/cas/` (exact-rational CAS core; no GPL giac) |
+| `math` (`new`/`open`/`close`/`edit`/`render`/`eval`/`cursor`/`insert`) | `components/command/math_disp_commands.c` + `components/math_disp/` (natural-display math; `eval` serializes and delegates to the one `calc_evaluate`) |
+| `epub` (`open`/`close`/`info`/`toc`/`read`/`next`/`prev`/`goto`/`extract`) | `components/command/epub_commands.c` + `components/epub/` (ZIP via `components/zip`, XML via Expat) |
+| `chat` (`host`/`peer`/`send`/`poll`/`log`/`clear`/`status`/`onmsg`) | `components/command/chat_commands.c` + `components/chat/` (SoftAP host + HTTP; host control serialized through networking's Wi-Fi init-task claim) |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
 | `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep` | `components/command/power_commands.c` |
@@ -154,6 +165,9 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `timer`/`stopwatch` | `components/clock/clock_timer.c` + `clock_commands.c` (dispatched from command.c) |
 | `bind`/`unbind` (F-key bindings; shell hook) | `components/batch/batch.c` + `components/shell/shell.c` key path |
 | `reboot`, `clear`/`cls`, `prompt`, `launch`, `apps` | `components/command/command.c` |
+| `assoc`, `ftype`, `startup` | `components/command/command.c` (ASSOC.INI/STARTUP.INI via shared `storage_ini`; boot runner in `components/boot/boot.c`) |
+| `start`, `taskkill`/`kill`, `suspend`, `resume`, `nice`/`renice`, `taskmgr` | `components/command/command.c` (pool + verbs; per-slot CPU via `shell_task_runtime_for_handle()` in `components/shell/shell.c`, slots/env in `components/batch/batch.c`, himem in `components/batch/himem.c`) |
+| HID mouse cursor/click state + LVGL pointer indev | `components/display/display.c`/`display.h` (shared indev, parsers in `components/usb/usb.c` + `components/networking/bluetooth.c` forward deltas only) |
 | `date`, `time`, `timezone`, `sntp`/`ntpsync` | `components/clock/clock_commands.c` (dispatched from command.c) |
 | `wifi`, `bluetooth`/`bt`, `usb`, `c6ota`, `httpd`, `netstat`, `ipconfig` (family routing) | `components/command/command.c` → owning module |
 | `ping`, `dns`/`nslookup`, `httpget`/`wget`, `tcpterm` (dispatched here, implemented in networking) | `components/command/command.c` → `components/networking/` |
@@ -196,8 +210,10 @@ name runs it directly (extensionless names probe `.bat` then `.cmd`);
 `launch` does the same by name.
 
 - `launch` — list the installed apps as a numbered menu and run the chosen one.
+  Each app name is a tap-confirm hyperlink (`launch <name>`).
 - `launch <name>` — run an app by name (PATH resolution, then `sd:/APPS`).
 - `launch /list` — bare list (`name  -  title`, ` [hybrid]` suffix), for scripting.
+  Deliberately link-free so `for /f` parsing never sees escape bytes.
 
 ERRORLEVEL: 0 ok, 1 not found, 2 usage.
 
@@ -214,6 +230,51 @@ directive asks `run <app> now? (Y/N)` once after AUTOEXEC.BAT and launches it
 on `Y` (a timeout declines). Manage it with `config LAUNCH_APP=<app>` /
 `config reset LAUNCH_APP`.
 
+`launch <app> /setup` runs the app's setup entrypoint: the batch file is
+executed with `%1` set to `/setup`, and apps handle it with a `:setup`
+label (`if "%1"=="/setup" goto setup`). The convention is advertised by an
+APPINFO `setup=` key (shown by `pkg info`); apps without one simply ignore
+the argument.
+
+### startup — one-shot boot apps
+
+DOS STARTUP-folder semantics without a folder: one app name per `name=1`
+line in `sd:/STARTUP.INI`, run in file order after AUTOEXEC.BAT and the
+`LAUNCH_APP` offer, before resident services — with boot privilege
+(pre-lock), as foreground one-shot apps. Unlike `service`s they are NOT
+supervised or restarted (no second supervisor: boot apps vs TSRs).
+
+```
+startup               (list the boot apps)
+startup add MOOD      (MOOD runs at every boot)
+startup remove MOOD
+```
+
+Unknown entries are kept (the app may be installed later) but skipped at
+boot with one muted line. ERRORLEVEL: 0 ok / 1 I/O failure / 2 usage.
+
+### assoc / ftype — file associations
+
+DOS-shaped app registration without a registry: extension→app pairs in
+`sd:/ASSOC.INI`, apps optionally declaring `handles=` in their APPINFO,
+and `open` dispatching to the mapped app with the file as `%1`.
+
+```
+assoc                 (list every .ext=APP mapping)
+assoc .txt            (show one mapping)
+assoc .txt=NOTES      (map; warns when the app is unknown, keeps anyway)
+assoc .txt=           (clear the mapping)
+ftype                 (every installed app declaring handles=)
+ftype NOTES           (its declared handlers + its assigned extensions)
+open NOTES.TXT        (mapped: launches NOTES "NOTES.TXT"; unmapped: viewer)
+```
+
+Extensions normalize to lowercase with a dot (`TXT`/`.TXT` → `.txt`).
+Executable types never dispatch (`open FOO.BAT` always shows source).
+A mapping to a removed app warns (`mapped but missing`) and falls back to
+the viewer — forgiving, like DOS. ERRORLEVEL (`assoc`): 0 ok / 1 no such
+mapping|I/O failure / 2 usage. ERRORLEVEL (`ftype`): 0 always (informational).
+
 ### help [command | /all]
 
 `help` prints a quick command summary. It is also a full offline command
@@ -225,7 +286,9 @@ reference:
 - `help <command>` — prints a single entry, e.g. `help wifi`; an unknown name
   prints an error and points at `help /all`.
 
-The entries mirror the authoritative `command.md` reference in this repository.
+Every printed command name is a tap-confirm hyperlink (`help <name>`), in the
+summary, `/all`, and single-entry forms alike. The entries mirror the
+authoritative `command.md` reference in this repository.
 
 ### about — license and third-party notice
 
@@ -317,6 +380,7 @@ so `top && echo ok`, `if errorlevel 2`, and `top /b /O:-C | findstr /V IDLE`
 work in batch files and pipes.
 
 The command is read-only — it never suspends, deletes, or reprioritises tasks.
+Freeze/thaw/priority live in `suspend`/`resume`/`nice` (pool slots only).
 
 ## Hardware Commands
 
@@ -415,10 +479,17 @@ same code a finger exercises.
   tappable where reported.
 - `ui target <id>` — activate a listed target (its own click/value event).
 - `ui hit <x> <y> [/v:NAME]` — report the target id under a point.
+- `ui links` — list transcript link/anchor regions as `id label -> command`
+  (dense indices for `ui link`).
+- `ui link <n>` — semantically activate link `n`: the same fire path as a
+  transcript tap (confirm-gated links preview first, `ui.link: preview`; a
+  repeat runs — no coordinate race with the auto-scrolling transcript, the
+  `ui target` pattern for links).
 - `ui state [/b] [/v:NAME]` — active modal, keyboard visibility/mode, editor
   document state, the shell input-line text, the inline `ghost=` completion
-  suffix, the active `search=` reverse-search query, and the current page's
-  `nav=on|off|na` capability-key state.
+  suffix, the active `search=` reverse-search query, the current page's
+  `nav=on|off|na` capability-key state, the shared-pointer `cursor=X,Y`
+  (native pixels), and the armed tap-confirm `link=<label|none>`.
 
 Batch-friendly: `ERRORLEVEL` 0/1/2, `/b` bare output, `/v:NAME` result
 variables, redirection. While a modal blocks the command worker a `ui` line is
@@ -662,30 +733,152 @@ delay 250
 tone 523 180 & delay 450   (spaces notes out so they don't overlap)
 ```
 
-### start <command> [args] | taskkill <job>
+### start [/wait] [/t:secs] <command> [args] | taskkill <job>
 `start` runs a command line or batch file as a background job on a pooled
-worker task (`bg0`..`bgN`, pool size `P4_CONFIG_BG_TASKS`), then returns
-immediately — the shell stays interactive while the job runs. A resolvable
-batch file runs as a script, anything else through the normal pipeline:
+worker task (`bg0`..`bgN`, pool size `P4_CONFIG_BG_TASKS`). Bare `start`
+lists the pool. A resolvable batch file runs as a script, anything else
+through the normal pipeline:
 
 ```
 start ADVENT          (adventure game in the background)
 start MOOD.BAT happy
+start /wait BACKUP.BAT        (join: block until the job finishes, EL=its EL)
+start /t:30 SLOW.BAT          (auto-kill after 30 s, like taskkill)
 taskkill bg0          (cooperative stop: batch lines and `delay` exit early)
 ```
 
 Each job owns a private batch context (frames, errorlevel, `%*`, goto),
-transcript defer slot, and storage redirect slot; env/alias writes stay
-shared and locked. Modal/key-wait/appmode verbs (`ask`, `dialog`, `choice`,
+transcript defer slot, and storage redirect slot. **Environment writes are
+job-private**: a bg job reads the global table but `set` lands in a
+lazily-allocated per-job overlay (`P4_CONFIG_BG_ENV_SLOTS` slots, freed at
+job exit), so a background `set` never leaks into the foreground; aliases
+stay global by design. `himem` blocks are owner-tracked with a per-job quota
+(see below) and freed at job exit — nothing a job allocates outlives it (no
+TSRs). Modal/key-wait/appmode verbs (`ask`, `dialog`, `choice`,
 `pause`, `view`, fullscreen TUI) refuse headlessly in a bg job instead of
-blocking the shared UI. Stops are cooperative: `taskkill` sets the slot's
-kill flag, checked per batch line and per 100 ms of `delay`; a job inside a
-single long native command runs it to completion. Pool stacks live in PSRAM
+blocking the shared UI. Stops are cooperative: `taskkill` (or the `/t:`
+deadline) sets the slot's kill flag, checked per batch line and per 100 ms
+of `delay`; a job inside a single long native command runs it to completion.
+`/wait` polls the same way (Ctrl+C breaks the wait only — the job keeps
+running detached). Pool stacks live in PSRAM
 (32 KB internal no longer fits at runtime), so `start` is refused while a
 C6 OTA is pending and `c6ota` is refused while a job runs — flash writes
-make PSRAM briefly inaccessible. ERRORLEVEL (`start`): 0 started /
-1 pool full|unavailable|OTA pending / 2 usage. ERRORLEVEL (`taskkill`):
+make PSRAM briefly inaccessible. ERRORLEVEL (`start`): 0 started|job EL
+with `/wait` / 1 pool full|unavailable|OTA pending|wait interrupted /
+2 usage. ERRORLEVEL (`taskkill`):
 0 stop requested / 1 no such job|already finished / 2 usage.
+
+### suspend <job> | resume <job> | nice <job> <1..3|+n|-n> | taskmgr
+Task-manager control over pool slots only (`bg0`..`bgN`): system tasks
+(LVGL, idle, telemetry) are untouchable — `ps`/`tasks`/`top` stay
+read-only by design.
+
+```
+suspend bg0         (freeze; deadlines pause, taskkill wakes it to stop)
+resume bg0          (thaw; refused unless suspended)
+nice bg0 3          (absolute priority 1..3, bounds P4_CONFIG_TMGR_PRIO_MIN/MAX)
+nice bg0 -1         (relative adjust, clamped; renice is an alias)
+taskmgr             (open the TASKMGR.BAT task manager app)
+```
+
+A suspended job holds whatever it held (mutexes stay owned, SD sessions
+stay open) — freeze is for inspection and pacing, not for breaking
+deadlocks. `taskkill` on a suspended job resumes it first so the stop
+applies immediately (`stop requested (resumed to stop)`). A job can never
+suspend its own slot. Per-slot CPU% (since spawn), stack high-water,
+overlay bytes and himem bytes ride along in the pool listing and in
+`start /b` machine rows
+(`bgN|state|exit|prio|cpu|stack|ovl|himem|line`, `-1` when unknown).
+ERRORLEVEL (`suspend`/`resume`): 0 ok / 1 no such job|not
+running|already (un)suspended|own slot / 2 usage. ERRORLEVEL (`nice`):
+0 ok / 1 no such job|not running|priority outside 1..3 / 2 usage.
+
+### Task-manager events (tmgr_exit | tmgr_svc_restart | tmgr_pool_full)
+Well-known `signal`/`wait` names (`P4_CONFIG_TMGR_EVENT_*`) so batch
+automation can rendezvous with the pool instead of polling it:
+
+```
+wait tmgr_exit /t:5             (one job exit wakes exactly one waiter)
+wait tmgr_svc_restart /t:30     (supervisor restarted a service)
+wait tmgr_pool_full /t:5        (a launch found no free slot)
+```
+
+Every job exit fires `tmgr_exit` (auto-clear: one signal wakes one
+waiter); every supervisor restart fires `tmgr_svc_restart` with a WARN
+header notification (`service '<name>' restarted`); every refused launch
+fires `tmgr_pool_full` with a WARN notification; a parked service posts an
+ERR notification (`service '<name>' parked after N restarts`). The
+reference consumer is `apps/taskmgr/TASKMGR.BAT` (Refresh/Save views).
+
+### himem [info] | alloc | free | lock | unlock | fill | load | save | crc
+XMS-style extended memory for batch apps: handle blocks over PSRAM above
+the 64-variable environment ceiling, for staging bulk data (file slices,
+computed tables) without touching the SD card. One table
+(`P4_CONFIG_HIMEM_HANDLES` handles), zeroed at alloc; blocks never move, so
+`lock` guards against `free` rather than promising relocation:
+
+```
+himem alloc 64K /v:H         (handle number in %H%)
+himem fill %H% 0
+himem load %H% DATA.BIN
+himem crc %H%                (himem.crc: B737FB1A — single strutil CRC-32)
+himem save %H% OUT.BIN
+himem free %H%
+```
+
+Sizes take decimal, `0x` hex, or DOS `K`/`M` suffixes; `fill`/`load`/`save`/
+`crc` take `[offset] [count]` (count 0 = to end of block). A bg job's
+holdings are capped by `P4_CONFIG_HIMEM_JOB_QUOTA_BYTES` (foreground
+uncapped) and freed automatically when the job exits, locked or not.
+ERRORLEVEL: 0 ok / 1 failure (full/quota/foreign/locked/range) / 2 usage.
+
+### service install | remove | list | start | stop
+Resident services — TSRs that survive: named background lines persisted in
+`sd:/SERVICES.INI` (shared INI core, no new format), supervised by a 5 s
+timer, and re-started at boot after AUTOEXEC.BAT:
+
+```
+service install svc "SVC" /restart      (reinstall = replace; autostart on)
+service install memlog "MEMLOG 300000" /restart /noauto
+service list                            (state, flags, restarts, line)
+service start svc
+service stop svc                        (admin off switch: never restarted)
+service remove svc                      (refused while running)
+```
+
+`start` launches immediately and marks supervised; unexpected exits (anything
+except `service stop`, **including `taskkill`**) restart within one tick,
+bounded by `P4_CONFIG_SVC_RESTART_MAX` restarts per boot (then `parked`).
+Each restart fires `tmgr_svc_restart` and posts a WARN header notification;
+parking posts an ERR notification.
+One-shot services (no `/restart`) come to rest after their first exit.
+`stop` never counts and never restarts. Pool-full/OTA launch failures retry
+uncounted. Only the first `P4_CONFIG_BG_EAGER_TASKS` pool tasks exist at
+boot; further slots are created lazily on first claim (past the boot heap
+window), so all `P4_CONFIG_BG_TASKS` slots work identically once up.
+ERRORLEVEL: 0 ok / 1 failure (full/running/not-found/pool-busy) / 2 usage.
+
+### lock <name> [/t:secs] | unlock <name> | signal <name> | wait <name> [/t:secs]
+Batch-level concurrency primitives for background jobs (one mutex table +
+one event table in the batch engine). Names are `[A-Za-z0-9_-]+`
+(case-sensitive), up to `P4_CONFIG_SYNC_MUTEX_MAX` mutexes and
+`P4_CONFIG_SYNC_EVENT_MAX` events:
+
+```
+lock memlog                   (take; blocks, /t: bounds the wait)
+unlock memlog                 (owner only, or the foreground supervisor)
+signal moodtick               (sticky until taken)
+wait moodtick /t:10           (auto-clears on take: one signal wakes one waiter)
+```
+
+All blocking waits poll in 100 ms chunks, so `taskkill`, `start /t:`, and
+Ctrl+C stay responsive mid-wait. Mutexes are owner-tracked and released
+automatically when the owning job exits — a dead job can never wedge one.
+Signals are sticky (no waiter needed yet) and table-bounded. The pool
+reserves `tmgr_exit`, `tmgr_svc_restart`, and `tmgr_pool_full` for
+task-manager rendezvous (see above); application signals should use other
+names.
+ERRORLEVEL: 0 ok / 1 failure (timeout/foreign/full) / 2 usage.
 
 ### Background apps: services, alarms, calendar
 
@@ -701,12 +894,18 @@ slices) rather than `sleep`, which tears Wi-Fi down.
 
 Two schedulers exist, and they compose:
 
-- **`start`** — manual, immediate, one pooled slot (`bg0` here). Ideal for a
-  standing service loop that polls. Reference: `apps/companion/SVC.BAT`
-  (start with `start SVC`, stop with `taskkill bg0`); it ticks `cal next`
-  every 20 s and reports through the shared transcript. Companion exposes it
-  under **Live System ‣ Services** (Status / Start / Stop / List alarms /
-  Run agenda now).
+- **`start`** — manual, immediate, one pooled slot (`bg0`..`bgN`,
+  `P4_CONFIG_BG_TASKS` slots; bare `start` lists them). `start /wait` joins,
+  `start /t:secs` auto-kills. Ideal for one-off background work.
+- **Resident `service`s** — installed (`service install svc "SVC" /restart`),
+  supervised (restart on unexpected exit, `taskkill` included), boot-persistent
+  (`sd:/SERVICES.INI`, autostart unless `/noauto`). Reference:
+  `apps/companion/SVC.BAT` (companion service demo with calendar ticks);
+  `apps/mood/MOODSVC.BAT` (headless heap sampler feeding `MOODLAST.INI` for
+  the MOOD dashboard's Service view); `apps/companion/MEMLOG.BAT` (bounded
+  memory CSV log under the `memlog` mutex). Companion exposes services under
+  **Live System ‣ Services** (Status / Start / Stop / List alarms /
+  Run agenda now), now driving the `service` verbs.
 - **`alarm`** — time-based and persistent (`sd:/ALARMS`), polled every
   `P4_CONFIG_ALARM_POLL_MS` (30 s) with boot catch-up. `alarm add DATE TIME
   /run:APP.BAT [/daily|/weekly:mask|/monthly|/yearly] [/day:D] [/month:M]
@@ -1946,6 +2145,30 @@ pim put alarms 2048                  Receive VEVENTs, merge by UID
 
 ERRORLEVEL: 0 synced, 1 empty store / nothing merged / transfer failed, 2 usage / I-O.
 
+### pim net <pull|push|sync> (HTTP CardDAV)
+
+Network CardDAV sync against a collection URL (Nextcloud/SabreDAV-style),
+reusing the serial merge core (newer-wins) and the HTTP client core (same
+TLS policy as `httpget`: user CA store when loaded, Mozilla bundle
+otherwise). `pull` runs PROPFIND Depth:1, GETs every card resource, and
+merges; `push` renders local cards with sync identity and PUTs each under
+`UID.vcf`; `sync` is pull-then-push. No tombstones in v1: deletions do not
+propagate either way.
+
+```
+pim net pull https://srv/dav/user/contacts/ alice addressbook /p:s3cret
+pim net push https://srv/dav/user/contacts/ alice addressbook /p:s3cret
+pim net sync https://srv/dav/user/contacts/ alice addressbook /p:s3cret
+```
+
+- The password travels only in the Basic-auth header, never the URL; inline
+  `/p:` is history-masked like `crypt`, otherwise the verb refuses (no
+  interactive prompt: modal password entry over headless serial is racy).
+- Bounded by `P4_CONFIG_PIM_NET_MAX_RESOURCES` (256) resources per run.
+- Requires Wi-Fi (`wifi connect` first) and unlocks secrets like `pim get`.
+
+ERRORLEVEL: 0 synced, 1 transport/merge failure, 2 usage.
+
 ### sync [status]
 
 Read-only P4Sync handshake for USB desktop sync (the ActiveSync-style
@@ -1969,38 +2192,50 @@ sync bogus           Usage, ERRORLEVEL 2
 - `sync.lock:` mirrors the device-lock secret gate (`locked` refuses
   secret payloads in `db`/`export`/`pim get db`); `sync.sd:` reports
   `mounted`/`absent` and `sync.free_bytes:` is `unavailable` off-card.
-- Host side: `tools/p4sync/` (`status|push|pull|shot`) over the shared
-  `p4test` transports; PIM merge stays with `tools/pim_sync.py`.
+- Host side: `tools/p4sync/` (`status|push|pull|shot|full-image`) over the shared
+  `p4test` transports; PIM merge stays with `tools/pim_sync.py`. `full-image`
+  runs one session — handshake + PIM sync (contacts + alarms into a mirror
+  dir) + file provisioning (`--files` → `/sdcard/`) + app inventory + PNG
+  screenshot + `image.json` manifest — and exits nonzero on the first failing
+  stage.
 
 ERRORLEVEL: 0 printed, 2 usage.
 
 ### archive create|extract|list|verify, backup
 
-USTAR (`.p4a`) backups with a CRC manifest trailer — the 95LX backup story:
-store-only POSIX tar (no compression, zero new dependencies, streamable,
-host-extractable) plus a trailing `P4CRC.MANIFEST` member with one
-`crc32 size path` line per file. Member paths stay relative under each
-source's basename; names beyond the USTAR 100+155 split are skipped and
-counted, never truncated; absolute or `..`-escaping members are refused on
-extract; directory mtimes are stored for host fidelity but not restored on
-the device.
+Unified archive interface supporting two formats:
+- **USTAR (`.p4a`)**: store-only POSIX tar with CRC manifest trailer —
+  host tar extracts the container fine; `archive verify` checks every
+  member against the manifest.
+- **ZIP (`.zip`)**: standard ZIP with stored (0) and deflate (8) compression.
+  No ZIP64, no encryption, no spanning; CRC-32 per member.
+
+Both formats share the same member model and unified verbs:
+`archive create|extract|list|verify`. Format is auto-detected by
+extension (`.p4a` = USTAR, `.zip` = ZIP) or by magic bytes.
 
 ```
 archive create sys.p4a sd:/DBS sd:/ALARMS
+archive create data.zip sd:/DOCS sd:/LOGS
 archive list sys.p4a
+archive list data.zip
 archive verify sys.p4a
+archive verify data.zip
 archive extract sys.p4a sd:/RESTORE
+archive extract data.zip sd:/UNZIP
 backup sys.p4a
 ```
 
 - `archive create <file> <path> [paths...]` — streams to `<file>.tmp`,
   then renames over; free space is pre-checked from a size pre-walk.
+  Format is auto-detected by extension (`.p4a` = USTAR, `.zip` = ZIP)
+  or by magic bytes; USTAR appends `P4CRC.MANIFEST` trailer.
 - `archive extract <file> [dest]` (dest defaults to the cwd) — recreates
   directories, writes each member through temp+rename with a per-file
-  space guard; the manifest is consumed, never materialized.
+  space guard; USTAR manifest is consumed, never materialized.
 - `archive list <file> [/b]` — members with sizes (`/b` bare names).
 - `archive verify <file>` — re-hashes every member against the manifest
-  (foreign tars without one fail honestly).
+  (USTAR) or CRC-32 (ZIP); foreign tars without manifest fail honestly.
 - `backup <file> [paths...]` — `create` with a friendlier name; bare
   `backup <file>` archives `sd:/DBS` + the alarm store (absent sources
   skipped). (`restore` is NOT aliased — it already means trash-undelete.)
@@ -2570,8 +2805,9 @@ form "Preferences" "Theme=select:default|amber|ice|mono:theme" "Lock=check:lock"
 
 `screen run <file.frm>` renders one declarative screen from a flat
 `KEY=VALUE` file (same shape as `APPS/<APP>.APPINFO`) through the existing
-`dialog` / `list` / `ask` / `form` / `menu` verbs — the file declares, the
-verbs render, results land in the same variables with the same ERRORLEVEL.
+`dialog` / `list` / `ask` / `form` / `menu` / `browse` / `view` / `hexview` /
+`image show` verbs — the file declares, the verbs render, results land in
+the same variables with the same ERRORLEVEL.
 `screen info <file.frm>` describes the screen without showing UI.
 
 ```
@@ -2585,16 +2821,19 @@ field2=DHCP=check:DHCP
 
 | Key | Meaning |
 |-----|---------|
-| `type=` | Required: `dialog` `list` `ask` `form` `menu` |
-| `title=` | Screen title (required except `menu`) |
+| `type=` | Required: `dialog` `list` `ask` `form` `menu` `browse` `view` `hexview` `image` |
+| `title=` | Screen title (required except `menu`; shown by `screen info`, passed to the verb for `dialog`/`list`/`ask`/`form` — `browse`/`view`/`hexview`/`image` keep the verbs' own titles) |
 | `timeout=` | Auto-cancel seconds (same `/t:` semantics) |
 | `message=` | `dialog` body (required) |
 | `buttons=` | `dialog` buttons as `A\|B` (1–2; default `OK`) |
 | `items=` | `list`/`menu` entries as `a\|b\|c` (required, up to 32) |
-| `var=` | `list`/`ask` result variable (`ask` defaults to `ASK_RESULT`) |
+| `var=` | `list`/`ask`/`browse` result variable (`ask` defaults to `ASK_RESULT`, `browse` to `BROWSE_RESULT`) |
 | `prompt=` `default=` | `ask` prompt (required) and default text |
 | `password=` | `ask` hides input when `1`/`yes`/`true`/`on` |
 | `field0..field11=` | `form` fields as `Label=type[:arg]:VAR` (at least one required) |
+| `start=` | `browse` initial directory (default: current directory) |
+| `file=` | `view`/`hexview`/`image` file to show (required) |
+| `raw=` | `view` passes `--raw` (no Markdown render) when `1`/`yes`/`true`/`on` |
 
 `screen flow <file.flow>` runs a **declarative multi-screen flow**: a flat
 `KEY=VALUE` navigation graph whose steps point at `.FRM` files, so a screen
@@ -2677,7 +2916,9 @@ lock/conceal policy. Recovery is deleting the `SECURITY_*` lines on the SD card
 ### open
 
 `open [/t:secs] [--raw] <file>` does the right thing per file type (central
-registry `components/filetype/`): scripts (`.bat`/`.cmd`) open in the editor
+registry `components/filetype/`): first an `assoc` mapping wins (the mapped
+app launches with the file as `%1`; a mapping to a missing app warns and
+falls through), then scripts (`.bat`/`.cmd`) open in the editor
 as source (never execute — typing the name runs them), Markdown and HTML
 (`.html`/`.htm`) render,
 **BMP images (`.bmp`/`.dib`) open the image viewer**, everything else views as
@@ -2773,13 +3014,14 @@ A literal `#` in cell text (e.g. bar `#` fills) is recolor-escaped by
 
 | Form | Meaning |
 |------|---------|
-| `tui status` | Show transcript rect, cols/rows (`80x25`), fullscreen state and header visibility. The pixel cell is chosen from the committed cell fonts (`components/tui/tui_fonts.c`, generated by `tools/gen_tui_font.py`) to fit the live transcript region. |
+| `tui status` | Show transcript rect, cols/rows (`80x25`), fullscreen state, header visibility, and the bound cell font (`cell font WxH (slot N of M)` or `(unbound)` when no grid is allocated). The pixel cell is chosen from the committed cell fonts (`components/tui/tui_fonts.c`, generated by `tools/gen_tui_font.py`) to fit the live transcript region. |
 | `tui stats` | Print TUI frame pacing (see below), machine-readable. |
 | `tui stats reset` | Clear the TUI frame stats and reset the target frame rate to `P4_CONFIG_TUI_TARGET_FPS`. |
 | `tui stats target <fps\|off>` | Set the target frame rate used to count dropped frames. |
 | `tui clear` | Clear TUI grid (same as `draw clear`). |
 | `tui fullscreen on\|off` | Per-app fullscreen: `on` hides header (`windows_set_fullscreen`), `off` restores; kept visible by default. |
 | `tui refresh` | Re-apply transcript rect via `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` (call after rotation/keyboard). |
+| `tui selftest` | Run pure headless checks (palette spec, glyph coverage, metrics) and report per-group PASS/FAIL with location. Safe in background jobs; zero display dependency. Returns ERRORLEVEL 0 on clean, 1 on any failure. |
 
 `tui` and `draw fullscreen` both route to `components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`; `tui` is the per-app alias, `draw fullscreen` is the global batch verb. Screenshot debug: `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
 
@@ -2810,7 +3052,7 @@ pixels are ignored, never an error).
 | `gfx ellipse <cx> <cy> <rx> <ry> <color> [fill]` | Axis-aligned ellipse outline, or filled disc with `fill` (`rx`/`ry` 0 degenerates to a line/pixel). |
 | `gfx polygon <color> <fill\|line> <x1> <y1> <x2> <y2> ...` | Closed polygon: `line` outline, or even-odd scanline `fill` (handles concave shapes); at least 3 vertices, at most `GFX_POLY_MAX_PTS` (64). |
 | `gfx fill <x> <y> <color>` | 4-way flood fill of the seed pixel's connected color (bounded by the canvas); prints `gfx: filled <n> pixel(s)`. |
-| `gfx text [/bg:<color>] [/scale:<n>] <x> <y> <color> <text...>` | Draw 8×8 ASCII text (all remaining words are joined with spaces); `/scale:1..16` integer pixel multiplier, `/bg:<color>` fills the glyph cells (else transparent). |
+| `gfx text [/bg:<color>] [/scale:<n>] <x> <y> <color> <text...>` | Draw 8×8 CP437 text (all remaining words are joined with spaces). When `P4_CONFIG_GFX_FONT_EXTENDED=1` (default), the full CP437 range 0x00-0xFF renders: printable ASCII (0x20-0x7E), box-drawing (0xB3, 0xC9, 0xBB, etc.), accented letters (0x80-0x9F), and symbols (0xB1, 0xF1, 0xF7). Control chars (0x00-0x1F, 0x7F) render as empty. When disabled, only ASCII 0x20-0x7E renders. `/scale:1..16` integer pixel multiplier, `/bg:<color>` fills the glyph cells (else transparent). |
 | `gfx show` | Push the buffer to the display. |
 | `gfx image <path> [x y [w h]]` | Decode a 24/32-bit `BI_RGB` BMP (either orientation) straight to the target rect and blit it onto the canvas. Defaults to native size aspect-fit to the canvas at 0,0. Reuses the shared decoder; ERRORLEVEL `1` on a bad file, `2` usage. |
 | `gfx load <slot 0..7> <path>` | Ingest a 24/32-bit uncompressed BMP (`BI_RGB`, the exact format `screenshot <file>` writes, at most 64×64) into a sprite slot (PSRAM). Rejects other bit depths, RLE, and oversize art with ERRORLEVEL `1`. |
@@ -2944,14 +3186,23 @@ delete, so `undelete` can recover an uninstalled payload.
 | `pkg info <app>` | Title/description/version/type (+abi), a `signed:` line, plus each manifest entry as `ok`/`MISSING`/`BAD` |
 | `pkg verify <app>` | CRC-check the installed manifest and report its signature verdict (`pkg: OK n/m ok`) |
 | `pkg check` | Run the verify check over every installed app and summarise `pkg: n/m package(s) ok` |
-| `pkg install <app> [/signed]` | Two-pass copy of `PKGS/<app>/`: pass 1 verifies CRCs **and** the signature, pass 2 copies payloads, then the APPINFO and manifest into `APPS/` |
-| `pkg remove <app>` | Trash every manifest payload plus `<APP>.APPINFO` and `<APP>.ASSETS` |
+| `pkg install <app> [/signed] [/force]` | Two-pass copy of `PKGS/<app>/`: version/dependency gates, then pass 1 verifies CRCs **and** the signature, pass 2 copies payloads, then the APPINFO and manifest into `APPS/` |
+| `pkg remove <app>` | Trash every manifest payload plus `<APP>.APPINFO` and `<APP>.ASSETS`; app data is KEPT with a `pkg purge` hint |
+| `pkg purge <app>` | `pkg remove` plus app-data cleanup (`data=` entries + `APPS/<APP>.INI`) |
+| `pkg outdated` | Installed apps whose staged `PKGS/` bundle is newer (`UPDATE <app> <old> -> <new>`) |
 | `pkg key show \| install <file> \| clear` | Manage the trusted ECDSA P-256 public key (`p4sign` NVS store) |
 
-`pkg install` aborts without touching installed files if any bundle payload is
-missing or corrupt (`pkg: install aborted (n bad file(s))`), if the bundle
+`pkg install` aborts without touching installed files if the bundle needs a
+newer firmware (`min_fw=`, always enforced), a `requires=APP>=ver` dependency
+is missing or too old, the install would be a downgrade (without `/force`;
+`/force` skips the downgrade guard only), any bundle payload is missing or
+corrupt (`pkg: install aborted (n bad file(s))`), if the bundle
 `type=` is anything but `batch`/`hybrid`/`native`, or if a **present but bad
-signature** fails (`pkg: bundle <app> has a BAD signature`). Signing is opt-in:
+signature** fails (`pkg: bundle <app> has a BAD signature`). Versions compare
+numerically per dot-part (`1.10 > 1.9`; `1.0 == 1.0.0`). A successful install
+advertises registration offers from the bundle APPINFO (hints only, never
+auto-applied): `alias=` suggests the short name (`alias X="launch APP"` +
+`alias /save`), `autostart=true` suggests `startup add APP`. Signing is opt-in:
 an unsigned bundle installs (noted `unsigned (CRC-only)`), unless `/signed` or
 `P4_CONFIG_PKG_REQUIRE_SIGN=1` refuses it; a signed bundle with no trusted key
 warns (or refuses under enforcement). `pkg key install` rejects an off-curve
@@ -2979,9 +3230,32 @@ in `apps/companion/SYS.BAT`; HW driver `tools/pkg_test.py`; host signer
 ### anchor
 
 `anchor <label> <command> [continue_line]` — register a named transcript anchor region bound to a command (`continue_line` accepts `true`/non-zero). Prints `anchor registered: <label> -> <command>`.
-Refused in background jobs (shared display).
+Refused in background jobs (shared display). Tapping an anchor runs its
+command at once (the immediate-run contract links deliberately do not share).
 
 ERRORLEVEL: `0` ok, `1` background job, `2` usage.
+
+### link — tap-confirm hyperlinks
+
+`link <label> <command...>` prints a hyperlink label (bright cyan + underline,
+`SH_LINK`, plus an OSC 8 target for capable serial terminals) and registers
+its tap region — the primitive batch apps use to publish clickable actions.
+`link list` numbers the active regions; `link open <n>` runs one immediately
+(worker-synchronous, preserving errorlevel). Tapping a link never runs it
+directly: the first tap previews (`<label> -> <command> (tap again to run)`),
+the second tap on the same target executes it on the command worker. Regions
+(links and anchors, at most 32) clear on `cls`/`clear`, alt-screen
+enter/exit, and `anchor /clear`. Refused in background jobs (shared display).
+
+ERRORLEVEL: `0` ok, `1` background job/no such link, `2` usage.
+
+### complete — Tab matches as runnable links
+
+`complete <partial line>` prints every Tab-completion match for the line as a
+tap-confirm hyperlink whose target runs the completed text (same provider as
+`Tab` and the ghost hint, so the list can never disagree with the keyboard).
+First-token matches target the command word itself; later tokens target the
+full reconstructed line. ERRORLEVEL: `0` ok, `1` no matches, `2` usage.
 
 ### pause, choice, and more without a keyboard
 
@@ -3159,6 +3433,12 @@ whenever no filename argument is supplied.
 | label <name> | Set volume label (max 11 chars) |
 | xcopy <src> <dst> [/S] [/E] [/I] [/Y\|/-Y] [/D[:date]] [/H] [/R] [/K] [/C] [/Q] [/T] [/F] [/L] [/A] [/M] [/U] [/P] [/W] [/N] [/V] | Copy files and directory trees with the full DOS 6.x switch set |
 
+`attrib` accepts USB paths (`usb:/`, `u:`/`v:`/`w:`/`x:`) too: showing prints
+the target only (`D`/`R` are real, `H`/`S`/`A` print `-`), and only `+R`/`-R`
+are settable there (a USB stick has no hidden/system/archive bits; the
+read-only flag maps to the VFS write permission). H/S/A on a USB path print a
+one-line refusal instead of touching anything.
+
 ### Wildcard Support
 - `*` matches any sequence of characters
 - `?` matches any single character
@@ -3175,6 +3455,12 @@ whenever no filename argument is supplied.
 | disk list / detail / clean | Physical-disk info, MBR partition table, remove partitions |
 | disk create partition primary [size=N] | Create a primary MBR partition (N in MB) |
 | disk delete partition N | Delete MBR partition N (1-4) |
+| disk active N\|none | Mark MBR partition N bootable, or clear all boot flags |
+| disk type N <hex> | Set the MBR partition type byte (e.g. `0C` FAT32 LBA) |
+| disk mbr [save <file>\|restore <file>] | Hexdump sector 0, or back up / restore the 512-byte MBR image |
+| disk verify [count=N] | Read-scan the surface for bad sectors (read-only) |
+| disk geometry | Show C/H/S translation and alignment |
+| disk image save\|restore <file> [sectors=N] | Raw sector backup / restore (destructive on restore) |
 | disk format [fs=...] [label=...] [au=...] [quick] | diskpart-style format of the volume |
 
 ### chkdsk
@@ -3247,7 +3533,19 @@ diskpart-style physical-disk and partition management for the SD card.
 | disk clean | Remove all MBR partitions (destructive, requires `YES`) |
 | disk create partition primary [size=N] | Create a primary FAT32 partition aligned to 1 MiB; `size` in MB (default: rest of card) |
 | disk delete partition N | Delete MBR partition N (1-4), destructive, requires `YES` |
+| disk active N\|none | Mark MBR partition N bootable (`none` clears all flags), destructive, requires `YES` |
+| disk type N <hex> | Set the MBR partition type byte (`0B`/`0C` FAT32, `01`/`04`/`06`/`0E` FAT12/16, `07` NTFS/exFAT, `05`/`0F` extended), destructive, requires `YES` |
+| disk mbr [save <file>\|restore <file>] | Hexdump sector 0, or back up / restore the 512-byte MBR image (restore is destructive, requires `YES`) |
+| disk verify [count=N] | Read-scan the surface for bad sectors (read-only; Ctrl+C aborts); default is the whole card |
+| disk geometry | Show C/H/S translation and alignment |
+| disk image save\|restore <file> [sectors=N] | Raw sector backup / restore (restore is destructive, requires `YES`) |
 | disk format [fs=FAT32] [label=X] [au=size] [quick] | diskpart-style format of the volume |
+
+The `active`/`type`/`mbr restore`/`image restore` editors and
+`clean`/`create`/`delete`/`format` all require the exact `YES` confirmation
+word like `format`. `verify` and the `mbr` hexdump are read-only. All `disk`
+verbs operate on the SD card; USB sticks are listed by `usb ls` and addressed
+as files (`usb:/`, `u:`/`v:`/`w:`/`x:`) rather than raw disks.
 
 After `disk clean` or `disk create partition primary`, run `format` (or
 `disk format`) to create the filesystem. `disk clean`/`delete`/`format` require
@@ -3260,7 +3558,46 @@ disk clean
 disk create partition primary
 disk create partition primary size=2048
 disk delete partition 1
+disk active 1
+disk active none
+disk type 1 0C
+disk mbr
+disk mbr save mbr-backup.bin
+disk mbr restore mbr-backup.bin
+disk verify
+disk verify count=16
+disk geometry
+disk image save card.img sectors=2048
+disk image restore card.img
 disk format fs=fat32 label=DATA au=32K quick
+```
+
+### debug
+
+MS-DOS DEBUG parity for RAM and raw disk sectors. Hex text always prints; on
+an interactive console a hexview modal opens as well (press `q` to close it —
+serial scripts should pipe/expect accordingly, or run headless from batch
+where only the text prints). Destructive writes need the exact `YES` word.
+
+| Form | Meaning |
+|------|---------|
+| debug mem <addr> [len] | Hexdump RAM at `<addr>` (default 128 bytes, max 256) |
+| debug peek <addr> | Print one RAM byte as hex |
+| debug poke <addr> <hex..> | Write up to 64 bytes to RAM (YES-gated; readable RAM outside the flash/RTC code windows) |
+| debug disk <lba> [count] | Hexdump SD sectors (default 1, max 4): sector 0 is the MBR |
+
+Addresses are hex with an optional `0x` prefix (`4FF01000`, `0x4FF0`); at most
+8 digits — longer input is refused rather than wrapped. `peek`/`poke` refuse
+anything outside readable RAM, and `poke` additionally refuses the known code
+windows (flash, RTC fast memory).
+
+```
+debug mem 4FF01000
+debug mem 4FF01000 64
+debug peek 4FF01000
+debug poke 4FF01000 DE AD BE EF
+debug disk 0
+debug disk 0 2
 ```
 
 ## Boot Scripting
@@ -3296,6 +3633,7 @@ skipped; keywords are case-insensitive. Directives:
 | WIFI=ON\|OFF WIFI_AUTOCONNECT=ON\|OFF | Wi-Fi runtime policy |
 | BLUETOOTH=ON\|OFF BT_ADVERTISE=ON\|OFF | Hosted BLE policy |
 | USB_KEYBOARD=ON\|OFF USB_MOUSE=ON\|OFF | USB HID policy |
+| DEVICE=USB | Automount USB MSC drives at boot (`usb:/`, `u:`/`v:`/`w:`/`x:`); anything else warns with the supported list |
 | GPIO <n> = OUT [HIGH\|LOW] | Initial level at a safe output pin (reserved pins refused) |
 | *any* NAME=VALUE | Any unrecognized KEY=VALUE sets a batch environment variable |
 
@@ -3337,7 +3675,14 @@ reported up front instead of leaving a half-written file behind.
 ## Text and Directory Utilities
 
 All of these resolve relative paths against the current directory and run inside a
-guarded SD session.
+guarded volume session that follows the path: SD paths use the SD session,
+`usb:/`, `usbN:/`, and `u:`/`v:`/`w:`/`x:` paths use the USB slot session (which
+also automounts the stick on demand). So `type`, `more`, `find`, `sort`, `fc`,
+`comp`, `write`, `append`, `touch`, `move`, `copy`, `dir`, and `tree` all work
+on USB drives with no extra steps. Two deliberate limits: the working directory
+itself lives on the SD card only (`cd` to a USB path is refused — use absolute
+`usb:/` paths), and the trash bin is SD-only (`del`/`rd` on USB delete
+directly, DOS-style, with no trash detour).
 
 | Command | Description |
 |---------|-------------|
@@ -3362,7 +3707,8 @@ usable from the touch keyboard, a USB keyboard, or the serial console. See
 [editor.md](editor.md) for the quick reference.
 
 **Record editing**: `edit db <name> <id>` opens one db record's payload,
-`edit alarm <id>` opens one alarm event as its canonical INI text. The
+`edit alarm <id>` (also `edit alarms <id>`, `edit cal <id>`) opens one alarm
+event as its canonical INI text. The
 record is staged byte-verbatim into a temp `.txt` file (PLAIN rendering:
 CSV rows, `k=v` contact payloads, and INI text all appear as plain text
 lines), and saving writes back through the store APIs — `db_set` echoing
@@ -3515,6 +3861,10 @@ With no file argument, `find` reads the pending `<` or pipe input source.
 
 Example: `find "timeout" boot.log /I /N`
 
+Redirected output stays machine-readable: `find x f > out` writes the
+matches only (no `---------- file` header, no summary); `find /C x f > out`
+writes the bare count. Interactive output is unchanged.
+
 **File discovery:** `find [path] [/NAME:pattern] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]`
 
 Recursively walks the starting directory (default: current directory) and
@@ -3625,7 +3975,15 @@ bare arguments are files, matching DOS findstr.
 escapes a metacharacter as a literal.
 
 When more than one file is searched, each matching line is prefixed with the
-filename (plus its line number under `/N`).
+filename (plus its line number under `/N`). Works on USB paths (`usb:/`,
+`u:`/`v:`/`w:`/`x:`) like every other file verb; `/F:`/`/G:` list files may
+live on any volume too.
+
+> **Carets in patterns:** the shell consumes `^c` as a one-character escape
+> *everywhere except single quotes* — including inside double quotes. So
+> `findstr /R "^find:"` arrives as `find:` (and then correctly reports no
+> such file). For regex anchors use a doubled caret (`^^find:`) or single
+> quotes (`findstr /R '^find:'`).
 
 Examples:
 ```
@@ -3770,7 +4128,7 @@ ERRORLEVEL: 0 = identical, 1 = different, 2 = usage / error.
 | wifi preferred <ssid> | Mark a saved network as preferred for auto-connect |
 | wifi throughput tx <host> [port=N] [mb=N] [udp] | TCP/UDP send bench to `host`; prints Mbit/s (host peer: `tools/wifi_bench.py`) |
 | wifi throughput rx [port=N] [mb=N] [udp] | TCP/UDP receive bench; the host connects and sends (same-subnet host required) |
-| wifi setup [on/off] | Start/stop the captive-portal Wi-Fi setup (SoftAP + DNS + HTTP page). Auto-starts on first boot without SD card |
+| wifi setup [on/off] | Start/stop the captive-portal Wi-Fi setup (SoftAP + DNS + HTTP page, TX-capped for USB power). Auto-starts on first boot without SD card; auto-stops after `P4_CONFIG_PORTAL_TIMEOUT_SECS` (300 s); the setup page offers a scanned-SSID picker plus manual typing, and submitting joins the network immediately |
 
 ### Wi-Fi Behavior
 - Boot-time startup in background task (does not block shell UI)
@@ -3922,9 +4280,9 @@ tcpterm example.com 80 "HEAD / HTTP/1.0\r\n\r\n" > head.txt
 
 ERRORLEVEL: 0 session completed, 1 resolve/connect/send/Wi-Fi failure, 2 usage.
 
-### net status|broker|connect|sub|pub|msg|onmsg|outbox (event service)
+### net status|broker|connect|sub|pub|msg|onmsg|outbox|tls (event service)
 
-Persistent MQTT 3.1.1 service (plaintext LAN): one background task in
+Persistent MQTT 3.1.1 service (plaintext LAN, or TLS with `net tls on`): one background task in
 `components/networking/netsvc.c` owns a single broker session while Wi-Fi
 is associated, and pauses for OTA/sleep teardown. Batch reaches it through
 these verbs; native apps through `applib_msg.h`. Inbound messages fan out
@@ -3937,12 +4295,14 @@ oldest-first on reconnect (QoS 1, at-least-once); `$pim/db/<name>` and
 net broker mqtt.lan 1883             Remember broker coordinates (NET.INI)
 net broker                           Show the stored broker (read-only)
 net password                         Store the credential (hidden entry)
+net tls on                           Use MQTT over TLS (port stays as set; 8883 is conventional, not automatic)
+net tls off                          Back to plaintext (default)
 net connect                          Enable the session (lazy task start)
 net sub sensors/#                    Subscribe (RAM table, resent on reconnect)
 net pub desk/lamp on                 Publish now, or journal when offline
 net msg                              Show the last inbound message
 net onmsg notify Arrived: $NET_TOPIC  Run a batch line per message
-net status                           Session, subscription, and outbox counts
+net status                           Session, subscription, TLS, and outbox counts
 ```
 
 - `net broker <host> [port] [user]` persists coordinates; bare `net broker`
@@ -3966,9 +4326,97 @@ net status                           Session, subscription, and outbox counts
   inbound before surfacing).
 - Requires Wi-Fi; without a broker the task backs off
   (`P4_CONFIG_NET_BACKOFF_BASE_MS` doubling to `P4_CONFIG_NET_BACKOFF_CAP_MS`).
-  TLS is future work (see `SECURITY.md`): this speaks plaintext MQTT.
+- TLS (`net tls on`, persisted in NET.INI, shown as `net.tls:`) runs the same
+  framing/resubscribe/outbox/pump driver over `esp_tls` with the `httpget` CA
+  policy (user CA store when loaded, Mozilla bundle otherwise); plain TCP is
+  the default and the fallback. Takes effect on the next connect. Live TLS
+  handshakes still need bench time with a real broker (no TLS server was
+  reachable from the lab).
 
 ERRORLEVEL: 0 ok/queued, 1 failed (offline store full, no broker, OTA pause), 2 usage.
+
+### chat host|peer|send|poll|log|clear|status|onmsg (board-to-board chat)
+
+Minimal CLI chat between two P4MiniShell boards with **no external AP, broker, cable, or online service**. One board runs a hosted SoftAP (opt-in APSTA exception to the STA-only rule); the other joins via `wifi connect`. Both use the `chat` verb family. Read-only scope — no remote command execution.
+
+```
+chat host [ssid]          Start SoftAP host (default SSID: P4MiniShell-Chat)
+chat host off             Stop host, restore STA-only mode
+chat peer <host-ip>       Join host AP via `wifi connect` (SSID: P4MiniShell-Chat)
+chat peer off             Disconnect from host AP
+chat send <text...>       Send message to peer (POST /chat)
+chat poll                 Fetch new messages since last poll (GET /chat?since=<seq>)
+chat log                  Show full local message log
+chat clear                Clear inbox and log
+chat status               Show host/peer state (AP IP, peer count, seq)
+chat onmsg <line>|off     Register /onmsg hook (runs on message receive)
+```
+
+Transport: HTTP over the SoftAP link.
+- Host: `POST /chat` (raw text body → `ok <seq>`), `GET /chat?since=<seq>` (→ `seq\tfrom_ip\ttext` lines).
+- Bounded inbox/log (`P4_CONFIG_CHAT_INBOX_MAX`, `P4_CONFIG_CHAT_LOG_MAX`), monotonic sequence.
+- TX power cap (`P4_CONFIG_CHAT_AP_TX_POWER_QDBM` = 52 = 13 dBm) prevents USB brownout (verified 3/3).
+- `/onmsg` hook exposes `CHAT_FROM`, `CHAT_TEXT`, `CHAT_LEN` env vars; bare `chat onmsg off` clears.
+
+Examples:
+```
+chat host on                 (starts APSTA, prints AP IP: 192.168.4.1)
+chat peer 192.168.4.1        (peer joins via wifi connect)
+chat send hello peer
+chat poll
+chat log
+chat status
+chat host off
+chat peer off
+```
+
+**Read-only scope:** No remote command execution. `/onmsg` hook runs a local batch line with message metadata only. No reverse shell, no remote `exec`.
+
+**Opt-in exception:** `chat host on` temporarily lifts the STA-only Wi-Fi rule (`P4_CONFIG_CHAT_HOST_DEFER_PEER` allows deferred peer). `chat host off` restores STA-only.
+
+ERRORLEVEL: 0 ok, 1 state/failure, 2 usage.
+
+### epub open|close|info|toc|read|next|prev|goto|extract (EPUB e-book reader)
+
+EPUB e-book reader for `.epub` files. Opens ZIP-based EPUB archives, parses OPF
+metadata and spine, NCX/nav.xhtml table of contents, and renders chapters via the
+HTML-to-ANSI renderer.
+
+```
+epub open <file.epub>     Open an EPUB file (closes any open book)
+epub close                Close current EPUB
+epub info                 Show metadata (title, author, language, etc.)
+epub toc                  Show table of contents (with entry numbers)
+epub read                 Render current chapter to ANSI
+epub next                 Next chapter in reading order
+epub prev                 Previous chapter in reading order
+epub goto <n>             Go to chapter n (0-based spine index)
+epub toc <n>              Jump to TOC entry n
+epub extract <n> <file>   Extract resource (image, CSS, font) by manifest index
+```
+
+Navigation:
+- Chapters follow the OPF spine order (linear reading order).
+- TOC entries (from NCX or nav.xhtml) provide hierarchical navigation.
+- `epub goto <n>` moves by spine index; `epub toc <n>` jumps by TOC entry.
+- `epub next`/`prev` move sequentially through the spine.
+
+Examples:
+```
+epub open sd:/book.epub
+epub info
+epub toc
+epub goto 0
+epub read
+epub next
+epub toc 3
+epub close
+```
+
+**Read-only scope:** No modification of EPUB files. Resources (images, CSS) can be
+extracted to SD card but not modified in-place.
+
+ERRORLEVEL: 0 ok, 1 state/failure, 2 usage.
 
 ### httpd start | httpd stop | httpd status
 
@@ -4037,7 +4485,15 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | bluetooth advertise off | Stop BLE advertising |
 | bluetooth connect XX:XX:XX:XX:XX:XX | Connect to a BLE HID keyboard/mouse (BLE central). Discovers the HID service (0x1812), subscribes to reports, and routes keystrokes to the shell input line; the on-screen keyboard hides while connected |
 | bluetooth disconnect | Disconnect the current BLE HID device |
+| bluetooth mouse on | Echo BLE mouse motion to the transcript (wheel scrolls regardless) |
+| bluetooth mouse off | Silence BLE mouse motion echo (default) |
+| bluetooth mouse cursor <on\|off> | Track motion with a visible cursor (shared with USB; default off) |
+| bluetooth mouse click <on\|off> | Deliver button-1 presses as taps (shared with USB; default off) |
 | bt ... | Alias for bluetooth command family |
+
+> **Architecture (hard rule):** this board is a BLE/USB HID *host* only — it
+> uses keyboards and mice, it never becomes one. There is no peripheral/device
+> HID mode and none is planned.
 
 ### Bluetooth Lifecycle
 - The hosted controller and NimBLE host initialize once on first use
@@ -4048,28 +4504,71 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 - `bluetooth connect` acts as a BLE central: it stops any scan/advertising, connects with
   `P4_CONFIG_BLE_CONNECT_TIMEOUT_MS`, negotiates the MTU (`P4_CONFIG_BLE_MTU`), and discovers the
   HID service through the NimBLE GATT client. It prefers the HID Report characteristic (0x2A4D)
-  and falls back to Boot Keyboard Input (0x2A22); the CCC (0x2902) is written to enable
+  (boot-keyboard interpretation only for exact 8-byte reports; report-protocol
+  devices need report-map parsing and are ignored rather than misread), then
+  falls back to Boot Keyboard Input (0x2A22) and Boot Mouse Input (0x2A33); the CCC (0x2902) is written to enable
   notifications. Incoming boot-protocol reports are routed to the shell through the same input
   path as USB HID (`bluetooth_keyboard_input` host-ops callback), so a BLE keyboard types into
-  the prompt and hides the on-screen keyboard exactly like a wired one. `bluetooth status` shows
-  the connected device name/address.
+  the prompt and hides the on-screen keyboard exactly like a wired one. Mouse
+  wheel scrolls the transcript through the `bluetooth_mouse_scroll` host op
+  (same convention as USB); motion/buttons echo only with `bluetooth mouse on`.
+  `bluetooth status` shows the connected device name/address.
 
 ## USB Commands
 
 | Command | Description |
 |---------|-------------|
-| usb status | Show USB host, MSC, and HID state |
+| usb status | Show USB host, MSC, and HID state (plus the `usb.msc.automount` flag) |
 | usb ls [path] | Mount MSC drive at /usb0 and list files |
+| usb mount [N] | Mount MSC slot N (`/usbN`); slot 0 when omitted |
 | usb keyboard on | Enable transcript echo for HID boot keyboard |
 | usb keyboard off | Disable keyboard transcript echo |
 | usb mouse on | Enable transcript echo for HID boot mouse |
 | usb mouse off | Disable mouse transcript echo |
+| usb mouse cursor <on\|off> | Track motion with a visible cursor (shared pointer with BLE; default off) |
+| usb mouse click <on\|off> | Deliver button-1 presses as taps at the cursor (shared; default off) |
+| usb mouse move <x> <y> | Place the cursor at native-panel pixels (clamped; needs cursor on) — serial cursor simulation |
+| usb mouse click [ms] | Synthesize one click at the cursor (default 80 ms hold, max 2000; needs click on; refused while a button is held) |
 | usb userial status | Report the open CDC-ACM serial device (or none) |
 | usb userial open <vid:pid> [baud=..] [data=..] [parity=..] [stop=..] | Open a CDC-ACM/virtual-COM device |
 | usb userial close | Close the open device |
 | usb userial send <text...> | Write to the device (or the `< file` / pipe source) |
 | usb userial recv [/n] | Drain the RX ring (up to `n` bytes) to the transcript |
 | usb userial term [/t:secs] [/raw] | VT100 terminal on the TUI grid (ESC exits, idle timeout; /raw = legacy transcript) |
+
+### HID mouse cursor + click (shared USB/BLE pointer)
+Both transports feed one display-owned LVGL pointer indev with native-panel
+deltas (LVGL rotates them like touch). Motion only tracks and button-1 only
+taps while opted in — both default off, so a plugged mouse keeps the
+historical scroll-only behavior until enabled. A tap behaves exactly like a
+touch tap (modal buttons, list rows, transcript anchors). Cursor and click
+are one shared state: `usb mouse` and `bluetooth mouse` toggle the same
+switches. `usb status` reports them (`usb.hid.mouse.ptr:
+cursor=on click=off x=512 y=300`, native pixels). Cursor size is
+`P4_CONFIG_MOUSE_CURSOR_PX`.
+
+Serial cursor simulation needs no physical mouse: with the switches on,
+`usb mouse move <x> <y>` places the cursor (native panel pixels — read them
+from `sysinfo`'s `native W x H`, not the logical display size) and
+`usb mouse click [ms]` presses/releases at the tracked point through the
+same indev (and transcript link hit-testing) as HID reports. The harness
+wraps these as `Device.cursor_move/cursor_click` (see [`harness.md`](harness.md)).
+
+### USB MSC drives (`usb:/`, `u:`/`v:`/`w:`/`x:`)
+
+Up to `P4_CONFIG_USB_MSC_MAX_DEVICES` (default 4) USB sticks mount side by
+side at `/usb0`..`/usb3`, reachable as `usb:/` (slot 0), `usbN:/`, or the DOS
+drive aliases `u:` (slot 0), `v:`, `w:`, `x:`. `usb mount [N]` mounts one slot
+on demand; `usb ls [path]` resolves first, so `usb ls v:/logs` just works;
+`CONFIG.SYS DEVICE=USB` sets automount so arrivals mount by themselves
+(`usb.msc.automount: on` in `usb status`). The whole file-verb surface from
+Text and Directory Utilities works on these paths with no extra steps, and
+`dir` prints the DOS free-space trailer from the stick itself.
+
+Limits, all deliberate: no working directory on USB (`cd usb:/` is refused —
+use absolute paths), trash stays on SD (`del`/`rd` on USB delete directly),
+`attrib` on USB only shows/sets `R`, and the raw `disk` family stays SD-only
+(sticks are addressed as files, not disks).
 
 ### usb userial - USB CDC-ACM serial
 
@@ -4143,9 +4642,9 @@ cooperatively with `^C`, exactly one message per press:
 |---------|-------------|
 | certs [info] | Show trust store status: SD availability, global CA store state, PEM/DER file counts and buffer size |
 | certs list | List all certificate files in sd:/CERTS/ |
-| certs add <file> | Import a PEM or DER CA certificate into sd:/CERTS/ |
-| certs remove <name> | Remove a certificate file from sd:/CERTS/ |
-| certs rebuild | Concatenate all .pem files into sd:/CERTS/BUNDLE.PEM for fast loading |
+| certs add <file> | Import a PEM or DER CA certificate into sd:/CERTS/ (DER is validated + converted; store reloads automatically) |
+| certs remove <name> | Remove a certificate file from sd:/CERTS/ (the bundle itself is refused; store reloads automatically) |
+| certs rebuild | Concatenate everything (PEM as-is, DER converted, bundle skipped) into sd:/CERTS/BUNDLE.PEM |
 | certs clear | Clear the loaded trust store from memory (SD files untouched; reboot reloads) |
 | certs reload | Re-scan sd:/CERTS and re-load the global CA store |
 
@@ -4153,14 +4652,18 @@ cooperatively with `^C`, exactly one message per press:
 - `certs` manages a certificate store on the SD card (sd:/CERTS/) that extends the
   compiled-in Mozilla CA bundle for HTTPS verification.
 - At boot, `certs_load_sd_store()` scans sd:/CERTS/, concatenates all .pem files
-  into a PSRAM buffer, and registers it with mbedTLS via `esp_tls_set_global_ca_store()`.
-  httpget and c6ota then prefer this user store over the compiled bundle.
-- `certs add <file>` copies a PEM or DER certificate into the store. After adding,
-  run `certs reload` to activate the new certificates without rebooting.
-- `certs rebuild` concatenates all .pem files into BUNDLE.PEM (the pre-built
-  bundle used for fast loading at boot).
-- `certs clear` frees the loaded store from memory; `certs reload` re-scans and
-  re-loads. A reboot also reloads from SD.
+  and validated+converted .der files (DER is parsed by mbedTLS first; garbage
+  is skipped with a warning) into a PSRAM buffer, and registers it with
+  mbedTLS via `esp_tls_set_global_ca_store()`. The combined BUNDLE.PEM is
+  never ingested back. httpget, c6ota, CardDAV, and MQTT-TLS then prefer this
+  user store over the compiled bundle.
+- `certs add <file>` copies a PEM or DER certificate into the store and
+  reloads automatically (same for `remove`); the reload line reports the new
+  counts. `certs rebuild` concatenates everything (PEM as-is, DER converted)
+  into BUNDLE.PEM, skipping the bundle itself.
+- `certs clear` frees the loaded store from memory *and* releases the mbedTLS
+  global CA store (peer verification can never run against freed memory);
+  `certs reload` re-scans and re-loads. A reboot also reloads from SD.
 
 ## C6 OTA Commands
 

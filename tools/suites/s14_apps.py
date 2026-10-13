@@ -43,6 +43,8 @@ PUSH_APPS = [
     ("notes", "ALIASES.BAT", False),
     ("mood", "MOOD.BAT", False),
     ("mood", "MOOD.APPINFO", True),
+    ("mood", "MOODSVC.BAT", False),
+    ("mood", "MOODSVC.APPINFO", True),
     ("mood", "ALIASES.BAT", False),
     ("gfxdemo", "BOUNCE.BAT", False),
     ("gfxdemo", "BOUNCE.APPINFO", True),
@@ -70,12 +72,14 @@ PUSH_APPS = [
     ("writer", "WRITER.APPINFO", True),
     ("hybrid", "HYBRID.BAT", False),
     ("hybrid", "HYBRID.APPINFO", True),
+    ("taskmgr", "TASKMGR.BAT", False),
+    ("taskmgr", "TASKMGR.APPINFO", True),
 ]
 
 # Mirrors apps/companion/push_sd.py FILES.
 COMPANION_FILES = [
     "LIB.BAT", "COMPANION.BAT", "SYS.BAT", "FILES.BAT", "NET.BAT", "FUN.BAT",
-    "SET.BAT", "ALIASES.BAT", "SVC.BAT", "AGENDA.BAT", "README.TXT",
+    "SET.BAT", "ALIASES.BAT", "SVC.BAT", "MEMLOG.BAT", "AGENDA.BAT", "README.TXT",
     "COMPANION.APPINFO",
 ]
 
@@ -169,8 +173,13 @@ def _ok(session, marker=None, settle=2.0):
 
 
 def _screenshot(dev, c, name):
+    # unwind=False: the shots fire while the app under test owns the serial
+    # input, and the capture retry's foreground break (Ctrl-C) aborts a batch
+    # at a line modal. That killed ADVENT's `ask` loop (and TCMD's key-loop
+    # state) in every full-suite run while standalone runs passed. A missed
+    # decorative shot is a note; a killed app fails the whole section.
     try:
-        dev.screenshot(out_dir=OUT_DIR, name=name)
+        dev.screenshot(out_dir=OUT_DIR, name=name, unwind=False)
     except PanicError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -351,9 +360,16 @@ def _mood(dev, c):
     c.check("MOOD sampled each round", b"[M-MOOD-SAMPLE]" in tail, "")
     _ok(s)
     s.read_for(3.0)
-    s.write_line("5")   # Back
+    # Service sampler view (item 5): no sampler installed in the suite, so
+    # the empty path reports [M-MOODSVC-NONE].
+    tail = _press(s, "5", "[M-MOODSVC-NONE]", timeout=30.0, settle=4.0)
+    c.check("MOOD service view handles no sampler", b"[M-MOODSVC-NONE]" in tail,
+            tail[-300:].decode("utf-8", "replace"))
+    _ok(s)
+    s.read_for(3.0)
+    s.write_line("6")   # Back
     s.read_for(2.0)
-    s.write_line("5")   # battery: first may have missed the menu list
+    s.write_line("6")   # battery: first may have missed the menu list
     c.check("MOOD returned to the shell", _shell_echo(dev), "")
 
 
@@ -411,6 +427,113 @@ def _tcmd(dev, c):
                 if _shell_echo(dev):
                     break
                 session.read_for(0.5)
+
+
+def _taskmgr(dev, c):
+    """Drive the batch task manager through its own UI: kill one spawned
+    victim via the Kill flow, suspend/resume + nice a second victim, save a
+    snapshot, Back. Victim slot names come from the `start` reply, never
+    assumed (the pool is shared with services). Victims run an endless
+    delay loop: `delay` clamps to 10 s, so a plain `start delay N` would
+    expire mid-flow and fake every assertion."""
+    import re
+    dev.push_file("TMGRVICT.BAT",
+                  b"@echo off\r\necho [M-TMGR-VICTIM]\r\n:loop\r\ndelay 10000\r\ngoto loop\r\n")
+    out = _run(dev, c, "spawn kill victim", "start TMGRVICT.BAT", timeout=20)
+    m = re.search(r"\[(bg\d+)\] started", out)
+    if m is None:
+        c.check("taskmgr victim spawned", False, out[-200:])
+        return
+    victim = m.group(1)
+    out2 = _run(dev, c, "spawn freeze victim", "start TMGRVICT.BAT", timeout=20)
+    m2 = re.search(r"\[(bg\d+)\] started", out2)
+    victim2 = m2.group(1) if m2 else None
+    if victim2 is None:
+        c.check("taskmgr second victim spawned", False, out2[-200:])
+        dev.run("taskkill %s" % victim)
+        dev.run("del /p TMGRVICT.BAT")
+        return
+    # Both victims must be listed as running their loop file: proves they
+    # are really alive (not just claimed) before the UI touches them. (The
+    # [M-TMGR-VICTIM] print cannot gate this: it fires during the spawn
+    # round-trip and is consumed there.)
+    viva = _run(dev, c, "victims listed", "start", timeout=20)
+    c.check("victims alive", viva.count("TMGRVICT.BAT") >= 2,
+            viva[-200:])
+    s = dev.session
+    s.reset_input()
+    s.write_line("launch TASKMGR")
+    head = s.read_until(b"[M-TMGR]", 60)
+    c.check("TASKMGR start marker", b"[M-TMGR]" in head,
+            head[-300:].decode("utf-8", "replace"))
+    s.read_for(4.0)
+    _screenshot(dev, c, "apps_taskmgr")
+
+    def choose(entry, marker, label):
+        s.read_for(3.0)
+        s.write_line(entry)
+        tail = s.read_until(marker.encode(), 30)
+        c.check(label, marker.encode() in tail,
+                tail[-300:].decode("utf-8", "replace"))
+        return tail
+
+    # Kill flow: item 2 -> set /p job -> Kill dialog -> ok.
+    choose("2", "[M-TMGR-KILL]", "TASKMGR kill flow")
+    s.read_for(2.0)
+    s.write_line(victim)
+    s.read_for(2.0)
+    s.write_line("ok")
+    s.read_for(2.0)
+    # Suspend flow: item 3 -> set /p job -> dialog -> ok. The refresh
+    # redraws the pool, so the suspended row proves the freeze.
+    choose("3", "[M-TMGR-SUSP]", "TASKMGR suspend flow")
+    s.read_for(2.0)
+    s.write_line(victim2)
+    s.read_for(2.0)
+    s.write_line("ok")
+    tail = s.read_until(b"suspended", 25)
+    c.check("victim suspended in the pool", b"suspended" in tail,
+            tail[-300:].decode("utf-8", "replace"))
+    # Resume flow: item 4 -> set /p job -> dialog -> ok.
+    choose("4", "[M-TMGR-RES]", "TASKMGR resume flow")
+    s.read_for(2.0)
+    s.write_line(victim2)
+    s.read_for(2.0)
+    s.write_line("ok")
+    s.read_for(2.0)
+    # Priority flow: item 5 -> set /p job -> set /p prio -> dialog -> ok.
+    # The refresh row carries the new priority.
+    choose("5", "[M-TMGR-NICE]", "TASKMGR priority flow")
+    s.read_for(2.0)
+    s.write_line(victim2)
+    s.read_for(2.0)
+    s.write_line("3")
+    s.read_for(2.0)
+    s.write_line("ok")
+    tail = s.read_until(b"prio 3", 25)
+    c.check("priority applied in the pool", b"prio 3" in tail,
+            tail[-300:].decode("utf-8", "replace"))
+    # Save flow: item 8 -> snapshot marker -> dialog -> ok.
+    choose("8", "[M-TMGR-SAVED]", "TASKMGR save flow")
+    s.read_for(2.0)
+    s.write_line("ok")
+    s.read_for(2.0)
+    # Back: item 9 -> quit marker -> shell.
+    choose("9", "[M-TMGR-BACK]", "TASKMGR back marker")
+    c.check("TASKMGR returned to the shell", _shell_echo(dev), "")
+    # Victim 1 is dead (killed through the UI); victim 2 runs at prio 3.
+    # Both run the same loop file, so tell them apart by slot: victim 1's
+    # slot is idle again, victim 2's still runs it.
+    pool = _run(dev, c, "pool after UI kill", "start", timeout=20)
+    c.expect("UI kill cleared the victim slot", "%s: idle" % victim, pool)
+    c.expect("survivor still listed", "%s: running" % victim2, pool)
+    c.expect("machine rows parse", "%s|running" % victim2,
+             _run(dev, c, "start /b rows", "start /b", timeout=20))
+    snap = _run(dev, c, "snapshot exists", "dir TMGR_SNAP.TXT", timeout=20)
+    c.expect("snapshot file written", "TMGR_SNAP.TXT", snap)
+    dev.run("taskkill %s" % victim2)
+    dev.run("del /p TMGR_SNAP.TXT")
+    dev.run("del /p TMGRVICT.BAT")
 
 
 def _notes(dev, c):
@@ -865,6 +988,39 @@ def _cleanup(dev, c):
     c.note("cleanup complete; deployed app payloads left installed")
 
 
+def _services(dev, c):
+    """Resident services end to end: install/start the MOOD sampler and the
+    MEMLOG logger, prove ticks/files/events/supervision, then stop + remove
+    everything (no TSRs left behind) and delete the registry + artifacts."""
+    out = dev.run('service install P14MOOD "MOODSVC" /restart /noauto')
+    c.expect("service installs the sampler", "installed", out)
+    out = dev.run("service start P14MOOD")
+    c.expect("service starts the sampler", "started", out)
+    head = dev.run("delay 12000", timeout=60)
+    c.expect("sampler ticked", "[M-MOODSVC]", head)
+    out = dev.run("type sd:/MOODLAST.INI")
+    c.expect("sampler published heap_free", "heap_free=", out)
+    out = dev.run("service list")
+    c.expect("sampler supervised running", "running", out)
+    dev.run("service stop P14MOOD")
+    dev.run("service remove P14MOOD")
+    out = dev.run('service install P14MEM "MEMLOG 2000" /restart /noauto')
+    c.expect("service installs the logger", "installed", out)
+    dev.run("service start P14MEM")
+    c.expect("logger signalled a tick", "P14WAIT-EL=0",
+             dev.run("wait memlogtick /t:10 & echo P14WAIT-EL=%ERRORLEVEL%", timeout=60))
+    out = dev.run("type sd:/MEMLOG.CSV")
+    c.expect("logger wrote the CSV", "heap_free", out)
+    dev.run("service stop P14MEM")
+    dev.run("service remove P14MEM")
+    dev.run("del /p sd:/MEMLOG.CSV")
+    dev.run("del /p sd:/MEMLOG.OLD")
+    dev.run("del /p sd:/MOODLAST.INI")
+    dev.run("del /p sd:/_memlog.txt")
+    dev.run("del /p sd:/_moods.txt")
+    dev.run("del /p SERVICES.INI")
+
+
 def run(dev, ctx):
     c = Checklist(NAME)
     quick = bool(ctx.get("quick"))
@@ -901,6 +1057,7 @@ def run(dev, ctx):
     _snake(dev, c)
     _mood(dev, c)
     _tcmd(dev, c)
+    _taskmgr(dev, c)
     _notes(dev, c)
     _elite(dev, c)
     _drive(dev, c, *DRIVE[0])    # PICS
@@ -908,6 +1065,7 @@ def run(dev, ctx):
     _diag(dev, c)
     _drive(dev, c, *DRIVE[1])    # COMPANION smoke + screenshot
     _companion_deep(dev, c)
+    _services(dev, c)
 
     if quick:
         c.note("quick mode: no extra long-app interaction")

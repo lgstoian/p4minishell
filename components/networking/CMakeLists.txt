@@ -16,6 +16,7 @@ idf_component_register(
         ansi
         bt
         certs
+        display
         esp_event
         esp_hosted
         esp_http_client
@@ -25,6 +26,7 @@ idf_component_register(
         esp_wifi
         led
         lwip
+        mbedtls
         nvs_flash
         p4heap
         pim

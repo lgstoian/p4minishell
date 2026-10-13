@@ -46,6 +46,10 @@ extern void test_shell_quoting_find_unquoted(void);
 extern void test_shell_quoting_unescape(void);
 extern void test_shell_quoting_split_args(void);
 extern void test_shell_chain_split(void);
+extern void test_shell_chain_parens(void);
+extern void test_shell_chain_while_guard(void);
+extern void test_shell_group_match(void);
+extern void test_shell_group_depth(void);
 
 extern void test_pipe_detection_agreement(void);
 extern void test_redirection_quote_awareness(void);
@@ -62,6 +66,23 @@ extern void test_storage_format_size(void);
 extern void test_storage_wildcard_match(void);
 extern void test_storage_paths_are_same(void);
 extern void test_storage_path_helpers(void);
+
+extern void test_hex_row_full(void);
+extern void test_hex_row_short(void);
+extern void test_hex_row_rejects(void);
+extern void test_debug_parse_hex_addr(void);
+extern void test_debug_parse_hex_byte(void);
+extern void test_debug_addr_guards(void);
+extern void test_volume_of_vfs_path(void);
+extern void test_mbr_decode_rejects(void);
+extern void test_mbr_decode_entries(void);
+
+extern void test_certs_der_to_pem_roundtrip(void);
+extern void test_certs_der_to_pem_rejects(void);
+
+extern void test_portal_html_escape_plain(void);
+extern void test_portal_html_escape_entities(void);
+extern void test_portal_html_escape_truncates(void);
 
 extern void test_findstr_regex_literal(void);
 extern void test_findstr_regex_case(void);
@@ -86,6 +107,18 @@ extern void test_task_sort_by_priority(void);
 extern void test_task_sort_by_state(void);
 extern void test_task_sort_name_tie_break(void);
 extern void test_task_sort_null_safe(void);
+
+extern void test_tmgr_pool_config(void);
+extern void test_tmgr_priority_bounds(void);
+extern void test_tmgr_event_names(void);
+extern void test_tmgr_clamp_priority(void);
+extern void test_tmgr_parse_absolute(void);
+extern void test_tmgr_parse_relative(void);
+extern void test_tmgr_parse_rejects(void);
+
+extern void test_assoc_normalize_ext(void);
+extern void test_assoc_normalize_ext_bounds(void);
+extern void test_assoc_split_arg(void);
 
 extern void test_batch_expr_literals(void);
 extern void test_batch_expr_arithmetic(void);
@@ -142,6 +175,7 @@ extern void test_ansi_format_width_flags(void);
 extern void test_ansi_to_lvgl_recolor(void);
 extern void test_ansi_csi_trailing_complete(void);
 extern void test_ansi_csi_trailing_split(void);
+extern void test_ansi_osc8_strip(void);
 
 extern void test_config_get_simple(void);
 extern void test_config_get_case_and_spacing(void);
@@ -164,6 +198,7 @@ extern void test_editor_spell_user_validation(void);
 extern void test_editor_spell_ignore_session(void);
 extern void test_editor_spell_user_list_empty(void);
 extern void test_editor_cursor_word(void);
+extern void test_editor_link_under_cursor(void);
 extern void test_editor_word_count(void);
 extern void test_editor_new_doc(void);
 extern void test_editor_insert_and_cursor(void);
@@ -253,6 +288,10 @@ extern void test_pim_doc_ical_prop(void);
 extern void test_pim_copy_trunc_basic(void);
 extern void test_pim_mint_uid_shape(void);
 extern void test_pim_merge_should_replace(void);
+extern void test_pim_carddav_scan_prefixed(void);
+extern void test_pim_carddav_scan_entities(void);
+extern void test_pim_carddav_split_and_uid(void);
+extern void test_pim_carddav_join_and_safe(void);
 extern void test_pim_vcf_build_payload_identity(void);
 extern void test_pim_bump_replaces_mtime(void);
 extern void test_pim_bump_width_change(void);
@@ -312,6 +351,26 @@ extern void test_modal_timeout_case_and_zero(void);
 extern void test_modal_timeout_rejects(void);
 extern void test_modal_var_basic(void);
 extern void test_modal_var_rejects(void);
+extern void test_view_parse_basic(void);
+extern void test_view_parse_defaults(void);
+extern void test_view_parse_missing(void);
+
+extern void test_himem_parse_size_plain(void);
+extern void test_himem_parse_size_suffix(void);
+extern void test_himem_parse_size_hex(void);
+extern void test_himem_parse_size_rejects(void);
+extern void test_himem_parse_handle(void);
+extern void test_strutil_crc32_vectors(void);
+extern void test_himem_alloc_free_bounds(void);
+extern void test_himem_quota_and_owner(void);
+extern void test_himem_env_overlay_isolation(void);
+
+extern void test_sync_name_ok(void);
+extern void test_sync_mutex_take_release(void);
+extern void test_sync_mutex_foreign(void);
+extern void test_sync_event_once_and_timeout(void);
+extern void test_svc_registry_guards(void);
+extern void test_svc_bg_slot_helpers(void);
 
 extern void test_hardware_wifi_tone(void);
 extern void test_hardware_imu_orientation(void);
@@ -366,6 +425,11 @@ extern void test_draw_hold_default_off(void);
 extern void test_tui_table_parse_cursor(void);
 extern void test_tui_table_parse_sel(void);
 extern void test_tui_scroll_up_inactive_safe(void);
+extern void test_tui_selftest_palette_clean(void);
+extern void test_tui_selftest_coverage_clean(void);
+extern void test_tui_selftest_metrics_clean(void);
+extern void test_tui_selftest_check_clean(void);
+extern void test_tui_bound_cell_inactive(void);
 
 extern void test_clipboard_set_get(void);
 extern void test_clipboard_empty_and_null(void);
@@ -449,6 +513,7 @@ extern void test_gfx_polygon_fill_outline(void);
 extern void test_gfx_ellipse(void);
 extern void test_gfx_flood_fill(void);
 extern void test_gfx_font_table(void);
+extern void test_gfx_font_extended(void);
 extern void test_gfx_text_render(void);
 extern void test_gfx_view_map(void);
 extern void test_gfx_view_clip_line(void);
@@ -509,6 +574,9 @@ extern void test_pkg_sign_hash(void);
 extern void test_pkg_sign_verify(void);
 extern void test_pkg_sign_check_manifest(void);
 extern void test_pkg_sign_stock_manifest(void);
+extern void test_pkg_version_compare(void);
+extern void test_pkg_requires_parse(void);
+extern void test_pkg_sanitize_pipe_field(void);
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
@@ -542,6 +610,7 @@ extern void test_archive_header_dir_and_split(void);
 extern void test_archive_header_rejects(void);
 extern void test_archive_entry_fits(void);
 extern void test_archive_path_safe(void);
+
 void app_main(void)
 {
     printf("\n=== P4MiniShell Unit Tests ===\n\n");
@@ -596,6 +665,10 @@ void app_main(void)
     RUN_TEST(test_shell_quoting_unescape);
     RUN_TEST(test_shell_quoting_split_args);
     RUN_TEST(test_shell_chain_split);
+    RUN_TEST(test_shell_chain_parens);
+    RUN_TEST(test_shell_chain_while_guard);
+    RUN_TEST(test_shell_group_match);
+    RUN_TEST(test_shell_group_depth);
     UNITY_END();
 
     /* Pipeline detection, redirection awareness, and chain edge cases */
@@ -618,6 +691,32 @@ void app_main(void)
     RUN_TEST(test_storage_wildcard_match);
     RUN_TEST(test_storage_paths_are_same);
     RUN_TEST(test_storage_path_helpers);
+    UNITY_END();
+
+    /* DOS-parity pure helpers: hexdump rows, DEBUG parsing, volumes, MBR */
+    UNITY_BEGIN();
+    RUN_TEST(test_hex_row_full);
+    RUN_TEST(test_hex_row_short);
+    RUN_TEST(test_hex_row_rejects);
+    RUN_TEST(test_debug_parse_hex_addr);
+    RUN_TEST(test_debug_parse_hex_byte);
+    RUN_TEST(test_debug_addr_guards);
+    RUN_TEST(test_volume_of_vfs_path);
+    RUN_TEST(test_mbr_decode_rejects);
+    RUN_TEST(test_mbr_decode_entries);
+    UNITY_END();
+
+    /* CERTS DER helpers */
+    UNITY_BEGIN();
+    RUN_TEST(test_certs_der_to_pem_roundtrip);
+    RUN_TEST(test_certs_der_to_pem_rejects);
+    UNITY_END();
+
+    /* Portal HTML helpers */
+    UNITY_BEGIN();
+    RUN_TEST(test_portal_html_escape_plain);
+    RUN_TEST(test_portal_html_escape_entities);
+    RUN_TEST(test_portal_html_escape_truncates);
     UNITY_END();
 
     /* findstr regex / literal matcher tests */
@@ -651,6 +750,24 @@ void app_main(void)
     RUN_TEST(test_task_sort_by_state);
     RUN_TEST(test_task_sort_name_tie_break);
     RUN_TEST(test_task_sort_null_safe);
+    UNITY_END();
+
+    /* Task manager core (pool config + nice parsing) tests */
+    UNITY_BEGIN();
+    RUN_TEST(test_tmgr_pool_config);
+    RUN_TEST(test_tmgr_priority_bounds);
+    RUN_TEST(test_tmgr_event_names);
+    RUN_TEST(test_tmgr_clamp_priority);
+    RUN_TEST(test_tmgr_parse_absolute);
+    RUN_TEST(test_tmgr_parse_relative);
+    RUN_TEST(test_tmgr_parse_rejects);
+    UNITY_END();
+
+    /* DOS file-association argument helpers */
+    UNITY_BEGIN();
+    RUN_TEST(test_assoc_normalize_ext);
+    RUN_TEST(test_assoc_normalize_ext_bounds);
+    RUN_TEST(test_assoc_split_arg);
     UNITY_END();
 
     /* Batch arithmetic expression tests */
@@ -723,6 +840,7 @@ void app_main(void)
     RUN_TEST(test_ansi_to_lvgl_recolor);
     RUN_TEST(test_ansi_csi_trailing_complete);
     RUN_TEST(test_ansi_csi_trailing_split);
+    RUN_TEST(test_ansi_osc8_strip);
     UNITY_END();
 
     /* CONFIG.SYS directive line-editing tests */
@@ -751,6 +869,7 @@ void app_main(void)
     RUN_TEST(test_editor_spell_ignore_session);
     RUN_TEST(test_editor_spell_user_list_empty);
     RUN_TEST(test_editor_cursor_word);
+    RUN_TEST(test_editor_link_under_cursor);
     RUN_TEST(test_editor_word_count);
     RUN_TEST(test_editor_new_doc);
     RUN_TEST(test_editor_insert_and_cursor);
@@ -851,6 +970,10 @@ void app_main(void)
     RUN_TEST(test_pim_copy_trunc_basic);
     RUN_TEST(test_pim_mint_uid_shape);
     RUN_TEST(test_pim_merge_should_replace);
+    RUN_TEST(test_pim_carddav_scan_prefixed);
+    RUN_TEST(test_pim_carddav_scan_entities);
+    RUN_TEST(test_pim_carddav_split_and_uid);
+    RUN_TEST(test_pim_carddav_join_and_safe);
     RUN_TEST(test_pim_vcf_build_payload_identity);
     RUN_TEST(test_pim_bump_replaces_mtime);
     RUN_TEST(test_pim_bump_width_change);
@@ -927,6 +1050,32 @@ void app_main(void)
     RUN_TEST(test_modal_timeout_rejects);
     RUN_TEST(test_modal_var_basic);
     RUN_TEST(test_modal_var_rejects);
+    RUN_TEST(test_view_parse_basic);
+    RUN_TEST(test_view_parse_defaults);
+    RUN_TEST(test_view_parse_missing);
+    UNITY_END();
+
+    /* Extended memory + env isolation (components/batch/himem.c). */
+    UNITY_BEGIN();
+    RUN_TEST(test_himem_parse_size_plain);
+    RUN_TEST(test_himem_parse_size_suffix);
+    RUN_TEST(test_himem_parse_size_hex);
+    RUN_TEST(test_himem_parse_size_rejects);
+    RUN_TEST(test_himem_parse_handle);
+    RUN_TEST(test_strutil_crc32_vectors);
+    RUN_TEST(test_himem_alloc_free_bounds);
+    RUN_TEST(test_himem_quota_and_owner);
+    RUN_TEST(test_himem_env_overlay_isolation);
+    UNITY_END();
+
+    /* Batch sync + services (components/batch/sync.c, svc.c). */
+    UNITY_BEGIN();
+    RUN_TEST(test_sync_name_ok);
+    RUN_TEST(test_sync_mutex_take_release);
+    RUN_TEST(test_sync_mutex_foreign);
+    RUN_TEST(test_sync_event_once_and_timeout);
+    RUN_TEST(test_svc_registry_guards);
+    RUN_TEST(test_svc_bg_slot_helpers);
     UNITY_END();
 
     /* Power helpers (components/command/power_commands.c). */
@@ -994,6 +1143,11 @@ void app_main(void)
     RUN_TEST(test_tui_table_parse_cursor);
     RUN_TEST(test_tui_table_parse_sel);
     RUN_TEST(test_tui_scroll_up_inactive_safe);
+    RUN_TEST(test_tui_selftest_palette_clean);
+    RUN_TEST(test_tui_selftest_coverage_clean);
+    RUN_TEST(test_tui_selftest_metrics_clean);
+    RUN_TEST(test_tui_selftest_check_clean);
+    RUN_TEST(test_tui_bound_cell_inactive);
     UNITY_END();
 
     /* RAM clipboard (components/shell). */
@@ -1102,6 +1256,7 @@ void app_main(void)
     RUN_TEST(test_gfx_ellipse);
     RUN_TEST(test_gfx_flood_fill);
     RUN_TEST(test_gfx_font_table);
+    RUN_TEST(test_gfx_font_extended);
     RUN_TEST(test_gfx_text_render);
     RUN_TEST(test_gfx_view_map);
     RUN_TEST(test_gfx_view_clip_line);
@@ -1174,6 +1329,9 @@ void app_main(void)
     RUN_TEST(test_pkg_sign_verify);
     RUN_TEST(test_pkg_sign_check_manifest);
     RUN_TEST(test_pkg_sign_stock_manifest);
+    RUN_TEST(test_pkg_version_compare);
+    RUN_TEST(test_pkg_requires_parse);
+    RUN_TEST(test_pkg_sanitize_pipe_field);
     UNITY_END();
 
     /* Theme registry (font component). */
@@ -1219,6 +1377,10 @@ void app_main(void)
     RUN_TEST(test_archive_header_rejects);
     RUN_TEST(test_archive_entry_fits);
     RUN_TEST(test_archive_path_safe);
+
+    /* chat/epub/cas suites use Unity's self-registering TEST_CASE(...) form,
+     * so they are discovered automatically and must NOT be RUN_TEST'd. */
+
     UNITY_END();
 
     printf("\n=== All tests completed ===\n");

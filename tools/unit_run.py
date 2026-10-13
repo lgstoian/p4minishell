@@ -8,11 +8,13 @@ runner hard-resets, reads the whole run, aggregates every PER-SUITE summary
 (Unity resets counters per UNITY_BEGIN), prints the failures, and returns a
 non-zero exit code when any test fails or the run does not complete.
 
-Usage: python unit_run.py [COMx]
+Usage: python unit_run.py [COMx] [COMy]
+  One or two ports; two ports run concurrently with a merged verdict.
 """
 import os
 import re
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,9 +28,7 @@ DONE = "=== All tests completed ==="
 READ_SECONDS = 240
 
 
-def main() -> int:
-    port = (sys.argv[1] if len(sys.argv) > 1
-            else (os.environ.get("P4_PORT") or default_port()))
+def run_one(port: str, out: list) -> None:
     print("unit_run: port=%s (resetting)" % port, flush=True)
     hard_reset(port)
     ser = open_port(port)
@@ -63,25 +63,50 @@ def main() -> int:
               if any(p in l for p in ("Guru Meditation", "Backtrace",
                                       "assert failed", "abort()"))]
 
-    print("--- per-suite summaries ---")
+    buf = ["--- %s per-suite summaries ---" % port]
     for l in lines:
         if SUMMARY.search(l):
-            print("  " + l.strip()[:140])
+            buf.append("  " + l.strip()[:140])
     if fail_lines:
-        print("--- FAIL lines ---")
+        buf.append("--- %s FAIL lines ---" % port)
         for l in fail_lines[:30]:
-            print("  " + l[:160])
+            buf.append("  " + l[:160])
     if panics:
-        print("--- panic markers ---")
+        buf.append("--- %s panic markers ---" % port)
         for l in panics[:10]:
-            print("  " + l[:160])
+            buf.append("  " + l[:160])
 
-    print("TOTAL tests: %d  failures: %d  ignored: %d" % (tests, failures, ignored))
-    print("completed: %s" % ("yes" if completed else "NO"))
+    buf.append("TOTAL %s tests: %d  failures: %d  ignored: %d"
+               % (port, tests, failures, ignored))
+    buf.append("completed %s: %s" % (port, "yes" if completed else "NO"))
 
     ok = completed and failures == 0 and tests > 0 and not panics
-    print("UNIT RESULT %s" % ("OK" if ok else "FAIL"))
-    return 0 if ok else 1
+    buf.append("UNIT RESULT %s %s" % (port, "OK" if ok else "FAIL"))
+    out.append((port, tests, failures, ignored, ok, buf))
+
+
+def main() -> int:
+    args = [a for a in sys.argv[1:] if a.upper().startswith("COM")]
+    if not args:
+        args = [(os.environ.get("P4_PORT") or default_port())]
+    out: list = []
+    threads = [threading.Thread(target=run_one, args=(p.upper(), out),
+                                name="unit-%s" % p.upper(), daemon=True)
+               for p in args[:2]]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    for _port, _t, _f, _i, _ok, buf in sorted(out):
+        for line in buf:
+            print(line, flush=True)
+    failed = sum(1 for _p, _t, _f, _i, ok, _b in out if not ok)
+    if len(out) > 1:
+        cells = ["%s:%s" % (p, "OK" if ok else "FAIL")
+                 for p, _t, _f, _i, ok, _b in sorted(out)]
+        print("UNIT MERGED %s" % " ".join(cells), flush=True)
+    print("UNIT RESULT %s" % ("OK" if failed == 0 else "FAIL"))
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":

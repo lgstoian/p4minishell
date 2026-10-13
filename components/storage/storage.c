@@ -67,6 +67,151 @@ static bool s_sd_ejected;             /* set by sdeject to block auto-remount */
 static void (*s_sd_first_mount_callback)(void) = NULL;
 static bool s_sd_first_mount_fired = false;
 
+/* USB MSC operations table (registered by main.c; NULL before that). USB
+ * drive letters are DOS-conventional u:/v:/w:/x: for slots 0..3. */
+static storage_usb_ops_t s_usb_ops;
+static bool s_usb_ops_registered = false;
+
+/* DOS drive letters for the USB MSC slots (slot order, lowercase match). */
+static const char s_usb_drive_letters[] = "uvwx";
+
+void storage_register_usb_ops(const storage_usb_ops_t *ops)
+{
+    if (ops == NULL) {
+        memset(&s_usb_ops, 0, sizeof(s_usb_ops));
+        s_usb_ops_registered = false;
+        return;
+    }
+    s_usb_ops = *ops;
+    s_usb_ops_registered = true;
+}
+
+char storage_usb_drive_letter(int slot)
+{
+    if (slot < 0 || slot >= (int)(sizeof(s_usb_drive_letters) - 1)) {
+        return '\0';
+    }
+    return s_usb_drive_letters[slot];
+}
+
+int storage_usb_slot_for_drive(char letter)
+{
+    const char *found;
+
+    if (letter >= 'A' && letter <= 'Z') {
+        letter = (char)(letter - 'A' + 'a');
+    }
+    found = strchr(s_usb_drive_letters, letter);
+    if (found == NULL) {
+        return -1;
+    }
+    return (int)(found - s_usb_drive_letters);
+}
+
+/** VFS base path for a USB slot ("/usb0".."/usbN", derived from the slot-0
+ *  base by bumping a trailing digit so a retargeted base keeps working). */
+static void storage_usb_slot_base(int slot, char *out, size_t out_size)
+{
+    const char *base = P4_CONFIG_USB_MSC_BASE_PATH;
+    size_t len;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    snprintf(out, out_size, "%s", base);
+    if (slot <= 0) {
+        return;
+    }
+    len = strlen(out);
+    if (len > 0 && out[len - 1] >= '0' && out[len - 1] <= '9' &&
+        slot >= 0 && slot <= 9) {
+        out[len - 1] = (char)('0' + slot);
+    } else if (slot >= 0 && slot <= 9) {
+        snprintf(out, out_size, "%s%d", base, slot);
+    }
+}
+
+storage_volume_t storage_volume_of_vfs_path(const char *vfs_path)
+{
+    char slot_base[32];
+    int slot;
+
+    if (vfs_path == NULL) {
+        return STORAGE_VOLUME_SD;
+    }
+    for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+        size_t base_len;
+
+        storage_usb_slot_base(slot, slot_base, sizeof(slot_base));
+        base_len = strlen(slot_base);
+        if (strncmp(vfs_path, slot_base, base_len) == 0 &&
+            (vfs_path[base_len] == '\0' || vfs_path[base_len] == '/')) {
+            return (storage_volume_t)(STORAGE_VOLUME_USB0 + slot);
+        }
+    }
+    return STORAGE_VOLUME_SD;
+}
+
+esp_err_t storage_volume_ensure_mounted(storage_volume_t vol)
+{
+    int slot;
+
+    if (vol == STORAGE_VOLUME_SD) {
+        return ESP_OK;
+    }
+    if (vol < STORAGE_VOLUME_USB0 || vol >= STORAGE_VOLUME_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_usb_ops_registered || s_usb_ops.mount == NULL ||
+        s_usb_ops.is_mounted == NULL) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    slot = (int)vol - (int)STORAGE_VOLUME_USB0;
+    s_usb_ops.mount(slot);
+    return s_usb_ops.is_mounted(slot) ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t storage_volume_session_begin(storage_volume_t vol,
+                                       shell_sd_session_t *session)
+{
+    if (session == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (vol == STORAGE_VOLUME_SD) {
+        return shell_sd_begin(session);
+    }
+    if (vol < STORAGE_VOLUME_USB0 || vol >= STORAGE_VOLUME_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(session, 0, sizeof(*session));
+    return storage_volume_ensure_mounted(vol);
+}
+
+void storage_volume_session_end(storage_volume_t vol,
+                                shell_sd_session_t *session,
+                                const char *operation)
+{
+    if (vol == STORAGE_VOLUME_SD) {
+        shell_sd_end(session, operation);
+    }
+}
+
+const char *storage_volume_media_name(storage_volume_t vol)
+{
+    return (vol == STORAGE_VOLUME_SD) ? "SD card" : "USB drive";
+}
+
+bool storage_usb_volume_geometry(int slot, uint32_t *sector_size_out,
+                                 uint32_t *sector_count_out, char *label_out,
+                                 size_t label_size)
+{
+    if (!s_usb_ops_registered || s_usb_ops.get_geometry == NULL) {
+        return false;
+    }
+    return s_usb_ops.get_geometry(slot, sector_size_out, sector_count_out,
+                                  label_out, label_size);
+}
+
 /* Pending `<` or pipe input source for the text-processing commands.
  * One slot per worker task (main + `start` pool): two workers piping at
  * once must not clobber each other's spool path. Selected by task handle
@@ -528,6 +673,8 @@ esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_s
     size_t segment_count = 0;
     char *token;
     char *context = NULL;
+    const char *mount_base = BSP_SD_MOUNT_POINT;
+    char usb_base[32];
     int written;
     size_t index;
 
@@ -538,6 +685,61 @@ esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_s
     if (input == NULL || input[0] == '\0') {
         snprintf(output, output_size, "%s", s_shell_cwd[0] != '\0' ? s_shell_cwd : BSP_SD_MOUNT_POINT);
         return ESP_OK;
+    }
+
+    /* USB volume prefixes resolve against the slot base instead of the SD
+     * mount: `usb:/…` and `usbN:/…` (slot N), `u:`/`v:`/`w:`/`x:` drive
+     * letters (optionally followed by `/…`). Paths stay absolute from the
+     * USB root; there is no per-drive cwd. A connected-but-unmounted slot
+     * is automounted idempotently so DOS verbs work without a prior
+     * `usb ls`. */
+    {
+        int slot = -1;
+        const char *rest = NULL;
+
+        if (strncmp(input, "usb:/", 5) == 0) {
+            slot = 0;
+            rest = input + 4;
+        } else if ((input[0] == 'u' || input[0] == 'U' ||
+                    input[0] == 'v' || input[0] == 'V' ||
+                    input[0] == 'w' || input[0] == 'W' ||
+                    input[0] == 'x' || input[0] == 'X') && input[1] == ':') {
+            slot = storage_usb_slot_for_drive(input[0]);
+            rest = input + 2;
+        } else if (strncmp(input, "usb", 3) == 0 && input[3] >= '0' && input[3] <= '9' &&
+                   input[4] == ':' && input[5] == '/') {
+            slot = input[3] - '0';
+            rest = input + 5;
+        }
+        if (slot >= 0 && slot < P4_CONFIG_USB_MSC_MAX_DEVICES && rest != NULL) {
+            storage_usb_slot_base(slot, usb_base, sizeof(usb_base));
+            mount_base = usb_base;
+            snprintf(combined, sizeof(combined), "/%s", rest[0] == '/' ? rest + 1 : rest);
+                if (s_usb_ops_registered && s_usb_ops.is_connected != NULL &&
+                    s_usb_ops.is_mounted != NULL && s_usb_ops.mount != NULL &&
+                    s_usb_ops.is_connected(slot) && !s_usb_ops.is_mounted(slot)) {
+                    s_usb_ops.mount(slot);
+                }
+                goto normalize;
+        }
+        /* Absolute /usbN paths (e.g. from completion) map the same way. */
+        for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+            size_t len;
+
+            storage_usb_slot_base(slot, usb_base, sizeof(usb_base));
+            len = strlen(usb_base);
+            if (strncmp(input, usb_base, len) == 0 &&
+                (input[len] == '\0' || input[len] == '/')) {
+                mount_base = usb_base;
+                snprintf(combined, sizeof(combined), "/%s", input + len + (input[len] == '/' ? 1 : 0));
+                if (s_usb_ops_registered && s_usb_ops.is_connected != NULL &&
+                    s_usb_ops.is_mounted != NULL && s_usb_ops.mount != NULL &&
+                    s_usb_ops.is_connected(slot) && !s_usb_ops.is_mounted(slot)) {
+                    s_usb_ops.mount(slot);
+                }
+                goto normalize;
+            }
+        }
     }
 
     if (strncmp(input, "sd:/", 4) == 0) {
@@ -558,6 +760,7 @@ esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_s
                  input);
     }
 
+normalize:
     snprintf(scratch, sizeof(scratch), "%s", combined);
     token = strtok_r(scratch, "/\\", &context);
     while (token != NULL && segment_count < (sizeof(segments) / sizeof(segments[0]))) {
@@ -578,7 +781,7 @@ esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_s
         token = strtok_r(NULL, "/\\", &context);
     }
 
-    written = snprintf(output, output_size, "%s", BSP_SD_MOUNT_POINT);
+    written = snprintf(output, output_size, "%s", mount_base);
     if (written < 0 || (size_t)written >= output_size) {
         output[0] = '\0';
         return ESP_ERR_INVALID_SIZE;
@@ -797,10 +1000,17 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
     int last_progress_pct = 0;
     bool report_progress;
     esp_err_t error;
+    storage_volume_t vol;
 
     if (source_path == NULL || dest_path == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    /* Either side may live on USB; the session follows the USB side so a
+     * USB-only copy works with no SD card inserted. */
+    vol = storage_volume_of_vfs_path(source_path) != STORAGE_VOLUME_SD ?
+          storage_volume_of_vfs_path(source_path) :
+          storage_volume_of_vfs_path(dest_path);
 
     /* Copying a file onto itself would open the destination with "wb",
      * truncating the source to zero before the first read. */
@@ -809,24 +1019,24 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
         return ESP_ERR_INVALID_ARG;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(vol, &session);
     if (error != ESP_OK) {
         return error;
     }
-
     source_bytes = storage_get_file_size(source_path);
     dest_bytes = storage_get_file_size(dest_path);
 
     /* An existing destination is truncated, so its blocks come back to the
-     * free pool and only the difference is actually needed. */
-    if (!storage_check_free_space(source_bytes, dest_bytes, "copy")) {
-        shell_sd_end(&session, "copy");
+     * free pool and only the difference is actually needed. The gate follows
+     * the destination volume (SD report or USB FAT info). */
+    if (!storage_check_free_space_at(dest_path, source_bytes, dest_bytes, "copy")) {
+        storage_volume_session_end(vol, &session, "copy");
         return ESP_ERR_NO_MEM;
     }
 
     source = fopen(source_path, "rb");
     if (source == NULL) {
-        shell_sd_end(&session, "copy");
+        storage_volume_session_end(vol, &session, "copy");
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -847,7 +1057,7 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
             shell_print_error("copy: %s is read-only (use attrib -R to clear it)", dest_path);
         }
 
-        shell_sd_end(&session, "copy");
+        storage_volume_session_end(vol, &session, "copy");
         return ESP_FAIL;
     }
 
@@ -865,7 +1075,7 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
              * truncated file that looks complete. */
             (void)unlink(dest_path);
             shell_print_error("copy: write failed, removed the partial %s", dest_path);
-            shell_sd_end(&session, "copy");
+            storage_volume_session_end(vol, &session, "copy");
             return ESP_FAIL;
         }
 
@@ -888,7 +1098,7 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
         fclose(source);
         (void)unlink(dest_path);
         shell_print_error("copy: read failed, removed the partial %s", dest_path);
-        shell_sd_end(&session, "copy");
+        storage_volume_session_end(vol, &session, "copy");
         return ESP_FAIL;
     }
 
@@ -911,7 +1121,7 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path)
         }
     }
 
-    shell_sd_end(&session, "copy");
+    storage_volume_session_end(vol, &session, "copy");
     return ESP_OK;
 }
 
@@ -922,9 +1132,35 @@ esp_err_t storage_copy_attributes(const char *source_path, const char *dest_path
     FILINFO info;
     FRESULT result;
     esp_err_t error;
+    struct stat source_st;
+    struct stat dest_st;
 
     if (source_path == NULL || dest_path == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Unless both sides live on SD only the read-only flag exists: USB has
+     * no hidden/system/archive bits (same R-only rule as `attrib`). */
+    if (storage_volume_of_vfs_path(source_path) != STORAGE_VOLUME_SD ||
+        storage_volume_of_vfs_path(dest_path) != STORAGE_VOLUME_SD) {
+        mode_t mode;
+
+        if (stat(source_path, &source_st) != 0) {
+            return ESP_ERR_NOT_FOUND;
+        }
+        if (stat(dest_path, &dest_st) != 0) {
+            return ESP_ERR_NOT_FOUND;
+        }
+        mode = dest_st.st_mode;
+        if ((source_st.st_mode & 0222) != 0) {
+            mode |= (S_IWUSR | S_IWGRP | S_IWOTH);
+        } else {
+            mode &= (mode_t)~(S_IWUSR | S_IWGRP | S_IWOTH);
+        }
+        if (chmod(dest_path, mode) != 0) {
+            return ESP_FAIL;
+        }
+        return ESP_OK;
     }
 
     error = shell_sd_vfs_to_fatfs_path(source_path, source_fatfs, sizeof(source_fatfs));
@@ -1780,12 +2016,43 @@ esp_err_t storage_disk_get_info(storage_volume_t vol, storage_disk_info_t *out)
     return (P4_BSP_SDCARD != NULL) ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
+/**
+ * Decode sector 0 into an MBR partition table. Pure (no SD access), so the
+ * unit tests can drive it with synthetic sectors.
+ */
+esp_err_t storage_mbr_decode_sector(const uint8_t sector[512], storage_mbr_t *out)
+{
+    int index;
+
+    if (sector == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out, 0, sizeof(*out));
+
+    if (sector[STORAGE_MBR_SIGNATURE_OFFSET] != 0x55 ||
+        sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
+        /* No valid partition table; the struct stays valid=false. */
+        return ESP_OK;
+    }
+
+    out->valid = true;
+    for (index = 0; index < 4; index++) {
+        const uint8_t *pte = sector + STORAGE_MBR_TABLE_OFFSET + index * STORAGE_MBR_PTE_SIZE;
+
+        out->partitions[index].bootable = (pte[STORAGE_PTE_BOOT_FLAG] == STORAGE_PTE_BOOTABLE);
+        out->partitions[index].type = pte[STORAGE_PTE_TYPE_OFFSET];
+        out->partitions[index].start_lba = storage_mbr_get_dword(pte + STORAGE_PTE_START_OFFSET);
+        out->partitions[index].size_lba = storage_mbr_get_dword(pte + STORAGE_PTE_SIZE_OFFSET);
+    }
+
+    return ESP_OK;
+}
+
 esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out)
 {
     shell_sd_session_t session;
     uint8_t sector[512];
     esp_err_t error;
-    int index;
 
     if (out == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -1813,23 +2080,7 @@ esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out)
         return error;
     }
 
-    if (sector[STORAGE_MBR_SIGNATURE_OFFSET] != 0x55 ||
-        sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
-        /* No valid partition table; the struct stays valid=false. */
-        return ESP_OK;
-    }
-
-    out->valid = true;
-    for (index = 0; index < 4; index++) {
-        const uint8_t *pte = sector + STORAGE_MBR_TABLE_OFFSET + index * STORAGE_MBR_PTE_SIZE;
-
-        out->partitions[index].bootable = (pte[STORAGE_PTE_BOOT_FLAG] == STORAGE_PTE_BOOTABLE);
-        out->partitions[index].type = pte[STORAGE_PTE_TYPE_OFFSET];
-        out->partitions[index].start_lba = storage_mbr_get_dword(pte + STORAGE_PTE_START_OFFSET);
-        out->partitions[index].size_lba = storage_mbr_get_dword(pte + STORAGE_PTE_SIZE_OFFSET);
-    }
-
-    return ESP_OK;
+    return storage_mbr_decode_sector(sector, out);
 }
 
 esp_err_t storage_disk_clean(storage_volume_t vol)
@@ -1995,6 +2246,484 @@ esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition
 }
 
 /**
+ * Read raw sectors for the `debug disk` / `disk mbr` / `disk verify` /
+ * `disk image` verbs. Reads never unmount the volume; callers performing a
+ * write unmount first (see below).
+ */
+esp_err_t storage_disk_read_sectors(storage_volume_t vol, uint32_t start_lba,
+                                    uint8_t *buffer, uint32_t sector_count)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (buffer == NULL || sector_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (P4_BSP_SDCARD == NULL) {
+        shell_sd_end(&session, "disk read");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = sdmmc_read_sectors(P4_BSP_SDCARD, buffer, start_lba, sector_count);
+    shell_sd_end(&session, "disk read");
+    return error;
+}
+
+/**
+ * Rewrite one MBR partition-table entry flag or type byte. Shared core for
+ * `disk active` and `disk type`: reads sector 0, patches the entry, and
+ * writes it back behind the same unmount + 0x55AA re-stamp contract the
+ * other MBR editors use.
+ *
+ * @param vol              Target volume (SD only).
+ * @param partition_index  0-based entry, or -1 with @p boot_all to rewrite
+ *                         every boot flag at once (`disk active`).
+ * @param boot_flag        New 0x80/0x00 flag, or -1 to leave it alone. When
+ *                         @p partition_index is -1, the low bit selects the
+ *                         entry to mark and all others are cleared.
+ * @param type             New type byte, or -1 to leave it alone.
+ */
+static esp_err_t storage_disk_patch_pte(storage_volume_t vol,
+                                        int partition_index,
+                                        int boot_flag, int type,
+                                        const char *tag)
+{
+    shell_sd_session_t session;
+    uint8_t sector[512];
+    esp_err_t error;
+    int index;
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (partition_index < -1 || partition_index > 3) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (P4_BSP_SDCARD == NULL) {
+        shell_sd_end(&session, tag);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    error = sdmmc_read_sectors(P4_BSP_SDCARD, sector, 0, 1);
+    if (error != ESP_OK) {
+        shell_sd_end(&session, tag);
+        return error;
+    }
+    if (sector[STORAGE_MBR_SIGNATURE_OFFSET] != 0x55 ||
+        sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
+        shell_sd_end(&session, tag);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    for (index = 0; index < 4; index++) {
+        uint8_t *pte = sector + STORAGE_MBR_TABLE_OFFSET + index * STORAGE_MBR_PTE_SIZE;
+
+        if (partition_index == -1) {
+            /* Whole-table boot-flag rewrite: mark one entry, clear the rest. */
+            if (boot_flag >= 0) {
+                pte[STORAGE_PTE_BOOT_FLAG] =
+                    (boot_flag == index + 1) ? STORAGE_PTE_BOOTABLE : 0x00;
+            }
+            continue;
+        }
+        if (index != partition_index) {
+            continue;
+        }
+        if (boot_flag >= 0) {
+            pte[STORAGE_PTE_BOOT_FLAG] = (uint8_t)boot_flag;
+        }
+        if (type >= 0) {
+            pte[STORAGE_PTE_TYPE_OFFSET] = (uint8_t)type;
+        }
+    }
+    sector[STORAGE_MBR_SIGNATURE_OFFSET] = 0x55;
+    sector[STORAGE_MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+
+    f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
+    error = sdmmc_write_sectors(P4_BSP_SDCARD, sector, 0, 1);
+
+    header_update_sd(HEADER_SD_INSERTED);
+    shell_sd_end(&session, tag);
+    return error;
+}
+
+esp_err_t storage_disk_set_active(storage_volume_t vol, int partition_1based)
+{
+    /* partition_1based == 0 clears every boot flag (no active partition). */
+    if (partition_1based < 0 || partition_1based > 4) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return storage_disk_patch_pte(vol, -1, partition_1based, -1,
+                                  "disk active");
+}
+
+esp_err_t storage_disk_set_partition_type(storage_volume_t vol,
+                                          unsigned partition_index,
+                                          uint8_t type)
+{
+    return storage_disk_patch_pte(vol, (int)partition_index, -1, (int)type,
+                                  "disk type");
+}
+
+/**
+ * Write raw sectors (single MBR edits use the patch core above; this is the
+ * primitive for `disk mbr restore` and `disk image restore`). Unmounts the
+ * FATFS volume first so no stale cache survives the rewrite.
+ */
+esp_err_t storage_disk_write_sectors(storage_volume_t vol, uint32_t start_lba,
+                                     const uint8_t *buffer, uint32_t sector_count)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+
+    if (buffer == NULL || sector_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (P4_BSP_SDCARD == NULL) {
+        shell_sd_end(&session, "disk write");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
+    error = sdmmc_write_sectors(P4_BSP_SDCARD, buffer, start_lba, sector_count);
+
+    header_update_sd(HEADER_SD_INSERTED);
+    shell_sd_end(&session, "disk write");
+    return error;
+}
+
+/**
+ * Surface verify: read every sector (or the first @p max_sectors when
+ * nonzero) and count unreadable ones. Reports progress through @p progress
+ * (may be NULL) and honors the foreground abort flag so a full-card scan
+ * stays cancellable. Read-only: never unmounts or writes.
+ */
+esp_err_t storage_disk_verify(storage_volume_t vol, uint32_t max_sectors,
+                              uint32_t *bad_out, uint32_t *done_out,
+                              storage_disk_progress_fn_t progress)
+{
+    shell_sd_session_t session;
+    storage_disk_info_t info;
+    uint8_t *chunk;
+    uint32_t total;
+    uint32_t done = 0;
+    uint32_t bad = 0;
+    uint32_t last_report = 0;
+    esp_err_t error;
+    const uint32_t chunk_sectors = 16;
+
+    if (bad_out == NULL || done_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *bad_out = 0;
+    *done_out = 0;
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = storage_disk_get_info(vol, &info);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (info.sector_size != 512 || info.sector_count == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    total = info.sector_count;
+    if (max_sectors != 0 && max_sectors < total) {
+        total = max_sectors;
+    }
+
+    chunk = heap_caps_malloc(chunk_sectors * 512, MALLOC_CAP_DEFAULT);
+    if (chunk == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        heap_caps_free(chunk);
+        return error;
+    }
+    if (P4_BSP_SDCARD == NULL) {
+        shell_sd_end(&session, "disk verify");
+        heap_caps_free(chunk);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    while (done < total) {
+        uint32_t want = total - done;
+
+        if (want > chunk_sectors) {
+            want = chunk_sectors;
+        }
+        if (shell_abort_requested()) {
+            error = ESP_ERR_TIMEOUT;
+            break;
+        }
+        if (sdmmc_read_sectors(P4_BSP_SDCARD, chunk, done, want) != ESP_OK) {
+            bad++;
+        }
+        done += want;
+        if (progress != NULL && done - last_report >= total / 20 + 1) {
+            last_report = done;
+            progress(done, total);
+        }
+    }
+
+    shell_sd_end(&session, "disk verify");
+    heap_caps_free(chunk);
+    *bad_out = bad;
+    *done_out = done;
+    return error;
+}
+
+/**
+ * Sector image save: stream the whole card (or @p max_sectors when nonzero)
+ * into @p image_path. The path must already be VFS-resolved; the free-space
+ * gate runs before the first sector moves.
+ */
+esp_err_t storage_disk_image_save(storage_volume_t vol, const char *image_path,
+                                  uint32_t max_sectors, uint32_t *sectors_out,
+                                  storage_disk_progress_fn_t progress)
+{
+    shell_sd_session_t session;
+    storage_disk_info_t info;
+    FILE *out;
+    uint8_t *chunk;
+    uint32_t total;
+    uint32_t done = 0;
+    uint32_t last_report = 0;
+    esp_err_t error = ESP_OK;
+    const uint32_t chunk_sectors = 16;
+
+    if (image_path == NULL || sectors_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *sectors_out = 0;
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = storage_disk_get_info(vol, &info);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (info.sector_size != 512 || info.sector_count == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    total = info.sector_count;
+    if (max_sectors != 0 && max_sectors < total) {
+        total = max_sectors;
+    }
+
+    if (!storage_check_free_space((uint64_t)total * 512ULL, 0, "disk image save")) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    chunk = heap_caps_malloc(chunk_sectors * 512, MALLOC_CAP_DEFAULT);
+    if (chunk == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    out = fopen(image_path, "wb");
+    if (out == NULL) {
+        heap_caps_free(chunk);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        fclose(out);
+        heap_caps_free(chunk);
+        return error;
+    }
+    if (P4_BSP_SDCARD == NULL) {
+        shell_sd_end(&session, "disk image save");
+        fclose(out);
+        heap_caps_free(chunk);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    while (done < total) {
+        uint32_t want = total - done;
+        size_t wrote;
+
+        if (want > chunk_sectors) {
+            want = chunk_sectors;
+        }
+        if (shell_abort_requested()) {
+            error = ESP_ERR_TIMEOUT;
+            break;
+        }
+        if (sdmmc_read_sectors(P4_BSP_SDCARD, chunk, done, want) != ESP_OK) {
+            error = ESP_FAIL;
+            break;
+        }
+        wrote = fwrite(chunk, 1, (size_t)want * 512, out);
+        if (wrote != (size_t)want * 512) {
+            error = ESP_FAIL;
+            break;
+        }
+        done += want;
+        if (progress != NULL && done - last_report >= total / 20 + 1) {
+            last_report = done;
+            progress(done, total);
+        }
+    }
+
+    shell_sd_end(&session, "disk image save");
+    fclose(out);
+    heap_caps_free(chunk);
+    *sectors_out = done;
+    return error;
+}
+
+/**
+ * Sector image restore: stream @p image_path back onto the card from sector
+ * 0. The caller owns the destructive-confirmation contract. Unmounts once up
+ * front so no stale FATFS cache survives the rewrite.
+ */
+esp_err_t storage_disk_image_restore(storage_volume_t vol, const char *image_path,
+                                     uint32_t *sectors_out,
+                                     storage_disk_progress_fn_t progress)
+{
+    shell_sd_session_t session;
+    storage_disk_info_t info;
+    FILE *in;
+    uint8_t *chunk;
+    long file_size;
+    uint32_t total;
+    uint32_t done = 0;
+    uint32_t last_report = 0;
+    esp_err_t error = ESP_OK;
+    const uint32_t chunk_sectors = 16;
+
+    if (image_path == NULL || sectors_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *sectors_out = 0;
+
+    error = storage_volume_require_sd(vol);
+    if (error != ESP_OK) {
+        return error;
+    }
+
+    error = storage_disk_get_info(vol, &info);
+    if (error != ESP_OK) {
+        return error;
+    }
+    if (info.sector_size != 512 || info.sector_count == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    in = fopen(image_path, "rb");
+    if (in == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (fseek(in, 0, SEEK_END) != 0) {
+        fclose(in);
+        return ESP_FAIL;
+    }
+    file_size = ftell(in);
+    rewind(in);
+    if (file_size <= 0 || file_size % 512 != 0) {
+        fclose(in);
+        return ESP_ERR_INVALID_ARG;
+    }
+    total = (uint32_t)file_size / 512;
+    if ((uint64_t)total > (uint64_t)info.sector_count) {
+        fclose(in);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    chunk = heap_caps_malloc(chunk_sectors * 512, MALLOC_CAP_DEFAULT);
+    if (chunk == NULL) {
+        fclose(in);
+        return ESP_ERR_NO_MEM;
+    }
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        fclose(in);
+        heap_caps_free(chunk);
+        return error;
+    }
+    if (P4_BSP_SDCARD == NULL) {
+        shell_sd_end(&session, "disk image restore");
+        fclose(in);
+        heap_caps_free(chunk);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    f_mount(NULL, SHELL_SD_FATFS_DRIVE, 0);
+    while (done < total) {
+        uint32_t want = total - done;
+        size_t got;
+
+        if (want > chunk_sectors) {
+            want = chunk_sectors;
+        }
+        if (shell_abort_requested()) {
+            error = ESP_ERR_TIMEOUT;
+            break;
+        }
+        got = fread(chunk, 1, (size_t)want * 512, in);
+        if (got != (size_t)want * 512) {
+            error = ESP_FAIL;
+            break;
+        }
+        if (sdmmc_write_sectors(P4_BSP_SDCARD, chunk, done, want) != ESP_OK) {
+            error = ESP_FAIL;
+            break;
+        }
+        done += want;
+        if (progress != NULL && done - last_report >= total / 20 + 1) {
+            last_report = done;
+            progress(done, total);
+        }
+    }
+
+    header_update_sd(HEADER_SD_INSERTED);
+    shell_sd_end(&session, "disk image restore");
+    fclose(in);
+    heap_caps_free(chunk);
+    *sectors_out = done;
+    return error;
+}
+
+/**
  * Pick the FAT allocation unit (cluster) for a format.
  *
  * An explicit `/A:` value wins. For the automatic case we must choose it
@@ -2152,12 +2881,11 @@ bool storage_paths_are_same(const char *left, const char *right)
     return strcasecmp(left, right) == 0;
 }
 
+static bool storage_check_free_space_core(uint64_t free_bytes, uint64_t needed_bytes,
+                                          uint64_t reclaim_bytes, const char *operation);
+
 bool storage_check_free_space(uint64_t needed_bytes, uint64_t reclaim_bytes, const char *operation)
-{
-    storage_space_info_t info;
-    char needed_text[32];
-    char free_text[32];
-    uint64_t effective_free;
+{    storage_space_info_t info;
     esp_err_t error;
 
     if (needed_bytes == 0) {
@@ -2175,9 +2903,21 @@ bool storage_check_free_space(uint64_t needed_bytes, uint64_t reclaim_bytes, con
         return true;
     }
 
+    return storage_check_free_space_core(info.free_bytes, needed_bytes,
+                                         reclaim_bytes, operation);
+}
+
+/** Shared margin gate over an explicit free-byte count. */
+static bool storage_check_free_space_core(uint64_t free_bytes, uint64_t needed_bytes,
+                                          uint64_t reclaim_bytes, const char *operation)
+{
+    char needed_text[32];
+    char free_text[32];
+    uint64_t effective_free;
+
     /* Space the destination currently occupies is released by the write, so
      * an in-place overwrite only needs the difference. */
-    effective_free = info.free_bytes + reclaim_bytes;
+    effective_free = free_bytes + reclaim_bytes;
 
     if (effective_free >= needed_bytes &&
         (effective_free - needed_bytes) >= P4_CONFIG_STORAGE_FREE_MARGIN_BYTES) {
@@ -2196,6 +2936,101 @@ bool storage_check_free_space(uint64_t needed_bytes, uint64_t reclaim_bytes, con
                           (unsigned long long)needed_bytes,
                           (unsigned long long)effective_free);
     return false;
+}
+
+/**
+ * Free bytes on the volume backing a resolved VFS path: SD uses the mounted
+ * volume report, USB volumes use esp_vfs_fat_info on the slot base.
+ * (newlib on ESP32 has no statvfs, so the FAT layer is queried directly.)
+ */
+esp_err_t storage_volume_free_bytes(const char *vfs_path, uint64_t *free_out)
+{
+    storage_space_info_t info;
+    esp_err_t error;
+
+    if (free_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    error = storage_volume_space_info(vfs_path, &info);
+    if (error != ESP_OK) {
+        return error;
+    }
+    *free_out = info.free_bytes;
+    return ESP_OK;
+}
+
+/**
+ * Capacity snapshot for the volume backing a resolved VFS path: SD uses
+ * the mounted volume report, USB volumes use esp_vfs_fat_info on the slot
+ * base (newlib on ESP32 has no statvfs, so the FAT layer is queried
+ * directly). Single implementation behind both this and
+ * storage_volume_free_bytes().
+ */
+esp_err_t storage_volume_space_info(const char *vfs_path, storage_space_info_t *info_out)
+{
+    esp_err_t error;
+
+    if (info_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (vfs_path == NULL ||
+        storage_volume_of_vfs_path(vfs_path) == STORAGE_VOLUME_SD) {
+        return storage_get_space_info(info_out);
+    }
+    {
+        char root[32];
+        uint64_t total = 0;
+        uint64_t free_bytes = 0;
+
+        storage_usb_slot_base(storage_volume_of_vfs_path(vfs_path) - STORAGE_VOLUME_USB0,
+                              root, sizeof(root));
+        /* A not-yet-existing destination cannot be queried; the slot base
+         * (volume root) always exists while mounted. */
+        error = esp_vfs_fat_info(root, &total, &free_bytes);
+        if (error != ESP_OK) {
+            return error;
+        }
+        memset(info_out, 0, sizeof(*info_out));
+        info_out->total_bytes = total;
+        info_out->free_bytes = free_bytes;
+        info_out->used_bytes = (total >= free_bytes) ? total - free_bytes : 0;
+        return ESP_OK;
+    }
+}
+
+/** True when a USB slot is attached and VFS-mounted (NULL-safe: an
+ *  unregistered ops table reports unavailable, like every other query). */
+bool storage_usb_slot_mounted(int slot)
+{
+    if (!s_usb_ops_registered || slot < 0 ||
+        slot >= (int)STORAGE_VOLUME_COUNT - (int)STORAGE_VOLUME_USB0) {
+        return false;
+    }
+    if (s_usb_ops.is_connected == NULL || s_usb_ops.is_mounted == NULL) {
+        return false;
+    }
+    return s_usb_ops.is_connected(slot) && s_usb_ops.is_mounted(slot);
+}
+
+/**
+ * Free-space gate for an explicit destination path: SD uses the mounted
+ * volume report, USB volumes use esp_vfs_fat_info on the slot base.
+ */
+bool storage_check_free_space_at(const char *vfs_path, uint64_t needed_bytes,
+                                 uint64_t reclaim_bytes, const char *operation)
+{
+    uint64_t free_bytes;
+
+    if (needed_bytes == 0) {
+        return true;
+    }
+    if (storage_volume_free_bytes(vfs_path, &free_bytes) != ESP_OK) {
+        shell_record_warningf(operation != NULL ? operation : "storage",
+                              "Could not read free space; proceeding without the check");
+        return true;
+    }
+    return storage_check_free_space_core(free_bytes, needed_bytes,
+                                         reclaim_bytes, operation);
 }
 
 /* ========================================================================

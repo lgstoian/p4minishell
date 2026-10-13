@@ -319,6 +319,35 @@ static void ansi_state_apply_sgr(ansi_state_t *state, int code)
  * ANSI TEXT PROCESSING
  * ======================================================================== */
 
+/**
+ * Skip one OSC sequence starting at @p p (`ESC ] ...` terminated by BEL or
+ * `ESC \`). Hyperlinks (`ESC ] 8 ;; <target> ST ... ESC ] 8 ;; ST`) are
+ * metadata, never visible text: every parser drops them so UART mirrors,
+ * plain buffers, redirect captures, and LVGL spans only ever see the label.
+ * An unterminated run consumes to NUL so a truncated tail can never leak
+ * escape bytes into plain text.
+ * @return Pointer just past the terminator (or the NUL).
+ */
+static const char *ansi_skip_osc(const char *p)
+{
+    if (p == NULL || p[0] != '\x1B' || p[1] != ']') {
+        return p;
+    }
+    p += 2;
+    while (*p != '\0') {
+        if (*p == '\x07') {
+            p++;
+            break;
+        }
+        if (*p == '\x1B' && *(p + 1) == '\\') {
+            p += 2;
+            break;
+        }
+        p++;
+    }
+    return p;
+}
+
 void ansi_process_text(const char *text, ansi_segment_fn_t segment_fn, void *user_data)
 {
     ansi_state_t state;
@@ -336,6 +365,18 @@ void ansi_process_text(const char *text, ansi_segment_fn_t segment_fn, void *use
     segment_start = p;
 
     while (*p != '\0') {
+        /* OSC hyperlink/metadata: drop it, keep the visible label. */
+        if (*p == '\x1B' && *(p + 1) == ']') {
+            if (p > segment_start) {
+                char saved = *p;
+                *(char *)p = '\0';
+                segment_fn(segment_start, &state, user_data);
+                *(char *)p = saved;
+            }
+            p = ansi_skip_osc(p);
+            segment_start = p;
+            continue;
+        }
         /* Look for ESC [ sequence */
         if (*p == '\x1B' && *(p + 1) == '[') {
             /* Flush current segment if non-empty */
@@ -408,7 +449,10 @@ int ansi_strip_to_plain(char *dst, size_t dst_size, const char *src)
 
     p = src;
     while (*p != '\0' && written < dst_size - 1) {
-        if (*p == '\x1B' && *(p + 1) == '[') {
+        if (*p == '\x1B' && *(p + 1) == ']') {
+            /* OSC hyperlink/metadata: never part of plain text. */
+            p = ansi_skip_osc(p);
+        } else if (*p == '\x1B' && *(p + 1) == '[') {
             /* Skip the entire escape sequence */
             p += 2;
             while (*p != '\0' && *p != 'm') {
@@ -1334,6 +1378,18 @@ void ansi_process_text_ex(const char *text, ansi_segment_ex_fn_t segment_fn, voi
     segment_start = p;
 
     while (*p != '\0') {
+        /* OSC hyperlink/metadata: drop it, keep the visible label. */
+        if (*p == '\x1B' && *(p + 1) == ']') {
+            if (p > segment_start) {
+                char saved = *p;
+                *(char *)p = '\0';
+                segment_fn(segment_start, &state, user_data);
+                *(char *)p = saved;
+            }
+            p = ansi_skip_osc(p);
+            segment_start = p;
+            continue;
+        }
         /* Look for ESC [ sequence */
         if (*p == '\x1B' && *(p + 1) == '[') {
             /* Flush current segment if non-empty */

@@ -107,8 +107,10 @@ static bool s_boot_script_applied;
     "\n; USB host:\n" \
     ";   USB_KEYBOARD=ON|OFF        Enable/disable HID keyboard\n" \
     ";   USB_MOUSE=ON|OFF           Enable/disable HID mouse echo\n" \
+    ";   DEVICE=USB                Automount USB MSC drives at boot (u:/v:/w:/x:)\n" \
     "\n; Apps:\n" \
     ";   LAUNCH_APP=<app>           Offer to run an installed .bat app after boot\n" \
+    ";   HOSTNAME=<name>            Device hostname (default p4minishell)\n" \
     "\n; GPIO (output-only, safe pins only):\n" \
     ";   GPIO <n> = OUT [HIGH|LOW]   Set initial level at a safe pin\n" \
     "; Unknown KEY=VALUE lines set an environment variable; unknown keywords\n" \
@@ -450,6 +452,40 @@ static bool boot_handle_audio_output(const char *value)
     return true;
 }
 
+/**
+ * CONFIG.SYS loadable-device registry (DOS DEVICE= feel, built-ins only).
+ *
+ * Binary drivers cannot load on this MCU (no dynamic linking by design), so
+ * DEVICE= names a built-in device to bring up at boot. Supported today:
+ *   DEVICE=USB   automount USB MSC drives as they arrive (u:/v:/w:/x:)
+ * Anything else warns with the supported list; GPIO SPI-SD is deliberately
+ * absent (no conflict-free SPI pins on either board - see PORTING.md).
+ */
+static bool boot_handle_device(const char *value)
+{
+    int slot;
+
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown("DEVICE");
+        return false;
+    }
+    if (shell_text_equals_ignore_case(value, "USB")) {
+        usb_msc_set_automount(true);
+        /* Mount whatever is already attached; later arrivals automount on
+         * the connect event. Quiet when no drive is present. */
+        for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+            if (usb_msc_slot_connected(slot) && !usb_msc_slot_mounted(slot)) {
+                usb_msc_mount_slot(slot);
+            }
+        }
+        return true;
+    }
+    shell_transcript_append_text("  DEVICE: only DEVICE=USB is supported (u:/v:/w:/x: USB MSC drives)\n");
+    /* No generic unknown-directive warning on top: the line above already
+     * says exactly what is wrong (the dispatcher stays silent for DEVICE). */
+    return false;
+}
+
 static bool boot_handle_gpio(char *statement)
 {
     /* statement points past the leading "GPIO" whitespace. Format:
@@ -705,6 +741,33 @@ static bool boot_handle_bt_advertise(const char *value)
  * PUBLIC ENTRY POINT
  * ======================================================================== */
 
+/* STARTUP.INI one-shot boot apps: run in file order after AUTOEXEC.BAT
+ * (boot privilege, pre-lock — like services, but foreground one-shots, NOT
+ * supervised TSRs: no second supervisor, see components/batch/svc.c).
+ * Unknown entries are skipped with one muted line (an app removed without
+ * `startup remove` must not wedge the boot). */
+static bool boot_startup_cb(const char *key, const char *value, void *ctx)
+{
+    (void)value;
+    (void)ctx;
+    if (key == NULL || key[0] == '\0') {
+        return true;
+    }
+    if (!shell_app_known(key)) {
+        shell_print_muted("boot: startup: no such app '%s' (skipped)\n", key);
+        return true;
+    }
+    shell_transcript_appendf("boot: startup: running %s\n", key);
+    (void)shell_launch_app(key);
+    return true;
+}
+
+/** Run the STARTUP.INI one-shot apps (called from boot_script_apply). */
+static void boot_run_startup_apps(void)
+{
+    (void)storage_ini_file_foreach("sd:/STARTUP.INI", boot_startup_cb, NULL);
+}
+
 /* CONFIG.SYS `LAUNCH_APP=` hook: ask once whether to run the app now. */
 static void boot_offer_launch(const char *app)
 {
@@ -878,12 +941,13 @@ static void boot_script_apply(void)
                     (void)boot_handle_cursor(value);
                 } else if (boot_starts_with_ci(keyword, "TIMEZONE")) {
                     (void)boot_handle_timezone(value);
+                } else if (shell_text_equals_ignore_case(keyword, "DEVICE")) {
+                    (void)boot_handle_device(value);
                 } else if (boot_starts_with_ci(keyword, "FILES") ||
-                           boot_starts_with_ci(keyword, "BUFFERS") ||
-                           boot_starts_with_ci(keyword, "LASTDRIVE") ||
-                           boot_starts_with_ci(keyword, "DEVICE") ||
-                           boot_starts_with_ci(keyword, "DOS") ||
-                           boot_starts_with_ci(keyword, "SHELL")) {
+                            boot_starts_with_ci(keyword, "BUFFERS") ||
+                            boot_starts_with_ci(keyword, "LASTDRIVE") ||
+                            boot_starts_with_ci(keyword, "DOS") ||
+                            boot_starts_with_ci(keyword, "SHELL")) {
                     boot_warn_unknown(keyword);
                 } else if (equals != NULL) {
                     /* Generic KEY=VALUE fallback: any unrecognized setting is
@@ -934,6 +998,9 @@ run_autoexec:
     file = fopen(path, "r");
     if (file == NULL) {
         ESP_LOGI(BOOT_TAG, "No AUTOEXEC.BAT to run");
+        /* Services are independent of AUTOEXEC.BAT: autostart entries run
+         * from their own registry. */
+        batch_svc_boot();
         shell_sd_end(&session, "boot");
         return;
     }
@@ -968,10 +1035,20 @@ run_autoexec:
         s_boot_launch_app[0] = '\0';
     }
 
+    /* One-shot startup apps (sd:/STARTUP.INI) after AUTOEXEC.BAT and the
+     * LAUNCH_APP offer, before services: foreground apps with boot
+     * privilege, pre-lock. */
+    boot_run_startup_apps();
+
     /* Load the persisted security/owner state now that the card is mounted
      * (security_init left it at defaults so init never mounts the SD ahead of
      * the first-mount hook), then engage the boot lock it feeds. */
     security_load_saved();
+
+    /* Resident services before the lock: autostart entries are boot
+     * scripting (like AUTOEXEC.BAT above), so they launch with boot
+     * privilege, not under the dispatcher lock. */
+    batch_svc_boot();
 
     /* The interactive session starts locked when a passcode + BOOTLOCK are
      * configured. Boot scripting already ran, so CONFIG.SYS/AUTOEXEC are not

@@ -77,7 +77,11 @@ void test_debug_log_ring_overflow(void)
     TEST_ASSERT_EQUAL(before + 7, shell_get_warning_count());
 
     /* The debug command should not crash with overflowed ring. */
-    shell_command_debug();
+    {
+        char *argv[] = { "debug" };
+
+        shell_command_debug(1, argv);
+    }
 }
 
 /* ========================================================================

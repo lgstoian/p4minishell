@@ -12,6 +12,9 @@
  */
 
 #include "shell.h"
+#include "strutil.h"
+#include "esp_memory_utils.h"
+#include <soc/soc.h>
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "display.h"
@@ -1560,6 +1563,11 @@ bool shell_redirect_capture_was_truncated(void)
     return s_redirect_capture_truncated;
 }
 
+bool shell_redirect_capture_active(void)
+{
+    return s_redirect_capturing;
+}
+
 /* ========================================================================
  * COMMAND HISTORY
  * ======================================================================== */
@@ -1585,7 +1593,8 @@ static bool shell_command_is_sensitive(const char *command)
     if (argc >= 4 && strcmp(argv[0], "wifi") == 0 && strcmp(argv[1], "connect") == 0) {
         sensitive = true;
     }
-    if (argc >= 2 && strcmp(argv[0], "crypt") == 0) {
+    /* crypt and pim both take inline /p:<password> tokens. */
+    if (argc >= 2 && (strcmp(argv[0], "crypt") == 0 || strcmp(argv[0], "pim") == 0)) {
         for (i = 1; i < argc; i++) {
             if (strncasecmp(argv[i], "/p:", 3) == 0) {
                 sensitive = true;
@@ -1651,7 +1660,9 @@ void shell_format_command_for_transcript(const char *command, char *output, size
         return;
     }
 
-    if (argc >= 2 && strcmp(argv[0], "crypt") == 0) {
+    /* crypt and pim both take inline /p:<password> tokens: mask the value so
+     * it never reaches the transcript or history in the clear. */
+    if (argc >= 2 && (strcmp(argv[0], "crypt") == 0 || strcmp(argv[0], "pim") == 0)) {
         snprintf(output, output_size, "%s", command != NULL ? command : "");
         shell_mask_inline_password(output);
         free(buffer);
@@ -2137,15 +2148,46 @@ bool shell_clipboard_copy_transcript(int n_lines)
 
 typedef struct {
     char text[64];
-    char command[P4_CONFIG_COMMAND_BYTES];
+    /* Heap-held (PSRAM-first) command line owned by this slot. It used to be
+     * an inline char[P4_CONFIG_COMMAND_BYTES], which put ~128 KB of this table
+     * (32 slots x 4 KB) in .bss, overflowed the internal DRAM region, and left
+     * no room to place .sbss. */
+    char *command;
     bool continue_line;
     int x, y;        /* Approximate position in transcript (line, col) */
     int len;         /* Text length */
     bool active;
+    bool confirm;    /* Tap-confirm gate: first tap previews, second runs */
 } shell_click_region_t;
 
 static shell_click_region_t s_click_regions[SHELL_CLICK_REGION_MAX];
 static int s_click_region_count = 0;
+
+/**
+ * Store @p command in one click-region slot (heap copy, PSRAM-first).
+ * On allocation failure the slot is left unchanged and false is returned, so
+ * the caller can decline to claim the slot.
+ */
+static bool shell_click_region_set_command(shell_click_region_t *region, const char *command)
+{
+    char *copy = p4heap_strdup_psram(command);
+
+    if (copy == NULL) {
+        return false;
+    }
+    free(region->command);
+    region->command = copy;
+    return true;
+}
+
+/* Pending tap-confirm: set by the first tap on a confirm-gated link, run by
+ * the second tap on the same target (or `link open` / `ui link`). Any other
+ * tap replaces it; running or clearing links drops it. No timer: the preview
+ * line names the exact target, so staleness is visible, never surprising.
+ * Heap-held (BSS stays lean for the boot heap window); NULL means disarmed. */
+static char *s_link_pending_cmd = NULL;
+static char s_link_pending_label[64];
+static bool s_link_pending = false;
 
 /* Track approximate cursor position for anchor placement */
 static int s_anchor_line = 0;
@@ -2158,16 +2200,20 @@ void shell_transcript_add_anchor_region(const char *text, const char *command, b
         return;
     }
 
-    shell_click_region_t *r = &s_click_regions[s_click_region_count++];
+    shell_click_region_t *r = &s_click_regions[s_click_region_count];
+
+    if (!shell_click_region_set_command(r, command)) {
+        return;
+    }
+    s_click_region_count++;
     strncpy(r->text, text, sizeof(r->text) - 1);
     r->text[sizeof(r->text) - 1] = '\0';
-    strncpy(r->command, command, sizeof(r->command) - 1);
-    r->command[sizeof(r->command) - 1] = '\0';
     r->continue_line = continue_line;
     r->x = s_anchor_col;
     r->y = s_anchor_line;
-    r->len = (int)strlen(text);
+    r->len = (int)strlen(r->text);
     r->active = true;
+    r->confirm = false;
 
     if (continue_line) {
         s_anchor_col += (int)strlen(text);
@@ -2179,29 +2225,307 @@ void shell_transcript_add_anchor_region(const char *text, const char *command, b
 
 void shell_transcript_clear_click_regions(void)
 {
+    int i;
+
+    /* Release every slot's heap command (all slots, not just the live ones,
+     * so a partial add can never leak). */
+    for (i = 0; i < SHELL_CLICK_REGION_MAX; i++) {
+        free(s_click_regions[i].command);
+        s_click_regions[i].command = NULL;
+        s_click_regions[i].active = false;
+    }
     s_click_region_count = 0;
     s_anchor_line = 0;
     s_anchor_col = 0;
     s_anchor_continue_line = false;
+    s_link_pending = false;
+    free(s_link_pending_cmd);
+    s_link_pending_cmd = NULL;
+    s_link_pending_label[0] = '\0';
 }
 
-bool shell_transcript_hit_test(int x, int y, const char **action_out)
+static int shell_click_region_hit(int x, int y)
 {
-    if (x < 0 || y < 0 || action_out == NULL) {
-        return false;
-    }
+    int i;
 
-    for (int i = 0; i < s_click_region_count; i++) {
+    if (x < 0 || y < 0) {
+        return -1;
+    }
+    for (i = 0; i < s_click_region_count; i++) {
         shell_click_region_t *r = &s_click_regions[i];
         if (!r->active) continue;
 
         /* Simple hit-test: check if click falls within the anchor text region */
         if (y == r->y && x >= r->x && x < r->x + r->len) {
-            *action_out = r->command;
-            return true;
+            return i;
         }
     }
+    return -1;
+}
+
+bool shell_transcript_hit_test(int x, int y, const char **action_out)
+{
+    int hit;
+
+    if (action_out == NULL) {
+        return false;
+    }
+    hit = shell_click_region_hit(x, y);
+    if (hit < 0) {
+        return false;
+    }
+    *action_out = s_click_regions[hit].command;
+    return true;
+}
+
+bool shell_link_hit_test(int x, int y, const char **action_out,
+                         const char **label_out, bool *confirm_out)
+{
+    int hit = shell_click_region_hit(x, y);
+
+    if (hit < 0) {
+        return false;
+    }
+    if (action_out != NULL) {
+        *action_out = s_click_regions[hit].command;
+    }
+    if (label_out != NULL) {
+        *label_out = s_click_regions[hit].text;
+    }
+    if (confirm_out != NULL) {
+        *confirm_out = s_click_regions[hit].confirm;
+    }
+    return true;
+}
+
+int shell_link_count(void)
+{
+    int n = 0;
+    int i;
+
+    for (i = 0; i < s_click_region_count; i++) {
+        if (s_click_regions[i].active) {
+            n++;
+        }
+    }
+    return n;
+}
+
+bool shell_link_get(int index, const char **label_out, const char **command_out)
+{
+    int n = 0;
+    int i;
+
+    if (index < 0) {
+        return false;
+    }
+    for (i = 0; i < s_click_region_count; i++) {
+        if (!s_click_regions[i].active) {
+            continue;
+        }
+        if (n == index) {
+            if (label_out != NULL) {
+                *label_out = s_click_regions[i].text;
+            }
+            if (command_out != NULL) {
+                *command_out = s_click_regions[i].command;
+            }
+            return true;
+        }
+        n++;
+    }
     return false;
+}
+
+bool shell_link_gate_get(int index, bool *confirm_out)
+{
+    int n = 0;
+    int i;
+
+    if (index < 0) {
+        return false;
+    }
+    for (i = 0; i < s_click_region_count; i++) {
+        if (!s_click_regions[i].active) {
+            continue;
+        }
+        if (n == index) {
+            if (confirm_out != NULL) {
+                *confirm_out = s_click_regions[i].confirm;
+            }
+            return true;
+        }
+        n++;
+    }
+    return false;
+}
+
+void shell_link_register(const char *label, const char *command)
+{
+    shell_click_region_t *r;
+
+    if (label == NULL || command == NULL || label[0] == '\0' ||
+        command[0] == '\0' || s_click_region_count >= SHELL_CLICK_REGION_MAX) {
+        return;
+    }
+    r = &s_click_regions[s_click_region_count];
+    if (!shell_click_region_set_command(r, command)) {
+        return;
+    }
+    s_click_region_count++;
+    snprintf(r->text, sizeof(r->text), "%s", label);
+    r->continue_line = true;
+    r->x = s_anchor_col;
+    r->y = s_anchor_line;
+    r->len = (int)strlen(r->text);
+    r->active = true;
+    r->confirm = true;
+    s_anchor_col += r->len;
+}
+
+void shell_transcript_append_link(const char *label, const char *command)
+{
+    /* OSC 8 target + SH_LINK styled label: capable serial terminals render
+     * a native hyperlink, the LVGL transcript keeps the underline + bright
+     * cyan span (parsers drop the OSC bytes), and taps resolve through the
+     * registered region. Heap buffers: the OSC target is a full command
+     * line, far beyond any sane stack local on the LVGL task. */
+    char *styled;
+    char *out;
+    char short_label[64];
+
+    if (label == NULL || command == NULL || label[0] == '\0' ||
+        command[0] == '\0') {
+        return;
+    }
+    snprintf(short_label, sizeof(short_label), "%s", label);
+    styled = malloc(256);
+    out = malloc((size_t)P4_CONFIG_COMMAND_BYTES + 512u);
+    if (styled == NULL || out == NULL) {
+        free(styled);
+        free(out);
+        shell_link_register(short_label, command);
+        shell_transcript_appendf_ansi(SH_LINK "%s" SH_RST, short_label);
+        return;
+    }
+    ansi_vformat(styled, 256, SH_LINK "%s" SH_RST, short_label);
+    snprintf(out, (size_t)P4_CONFIG_COMMAND_BYTES + 512u,
+             ANSI_OSC8_OPEN_FMT "%s" ANSI_OSC8_CLOSE, command, styled);
+    shell_link_register(short_label, command);
+    shell_transcript_append_ansi(out);
+    free(styled);
+    free(out);
+}
+
+void shell_link_clear_pending(void)
+{
+    s_link_pending = false;
+    free(s_link_pending_cmd);
+    s_link_pending_cmd = NULL;
+    s_link_pending_label[0] = '\0';
+}
+
+bool shell_link_pending_get(char *command_out, size_t command_size,
+                            char *label_out, size_t label_size)
+{
+    if (!s_link_pending) {
+        return false;
+    }
+    if (command_out != NULL && command_size > 0) {
+        snprintf(command_out, command_size, "%s",
+                 s_link_pending_cmd != NULL ? s_link_pending_cmd : "");
+    }
+    if (label_out != NULL && label_size > 0) {
+        snprintf(label_out, label_size, "%s", s_link_pending_label);
+    }
+    return true;
+}
+
+bool shell_link_tap_command(const char *command, const char *label)
+{
+    char *copy;
+
+    if (command == NULL || command[0] == '\0') {
+        return false;
+    }
+    if (s_link_pending && s_link_pending_cmd != NULL &&
+        strcmp(s_link_pending_cmd, command) == 0) {
+        /* Second tap on the same target: confirmed, run it on the worker
+         * (never on the LVGL event stack). */
+        shell_link_clear_pending();
+        copy = malloc(P4_CONFIG_COMMAND_BYTES);
+        if (copy == NULL) {
+            return true;
+        }
+        snprintf(copy, P4_CONFIG_COMMAND_BYTES, "%s", command);
+        shell_transcript_appendf("%s%s\n", shell_prompt_render_plain(), copy);
+        shell_force_transcript_scroll_to_end();
+        if (s_command_ops.execute_command_async != NULL) {
+            s_command_ops.execute_command_async(copy);
+        } else if (s_command_ops.execute_command != NULL) {
+            s_command_ops.execute_command(copy);
+        }
+        free(copy);
+        return true;
+    }
+    /* First tap: arm the confirm and preview the exact target. The pending
+     * command is heap-held (full command line); on allocation failure the
+     * preview still prints but nothing arms, so the next tap re-previews
+     * instead of running a half-stored target. */
+    {
+        char *held = malloc(P4_CONFIG_COMMAND_BYTES);
+
+        if (held == NULL) {
+            shell_transcript_appendf_ansi(SH_LINK "%s" SH_RST SH_MUTE " -> %s (tap again to run)\n" SH_RST,
+                                          (label != NULL && label[0] != '\0') ? label : command,
+                                          command);
+            shell_force_transcript_scroll_to_end();
+            return false;
+        }
+        snprintf(held, P4_CONFIG_COMMAND_BYTES, "%s", command);
+        free(s_link_pending_cmd);
+        s_link_pending_cmd = held;
+    }
+    snprintf(s_link_pending_label, sizeof(s_link_pending_label), "%s",
+             (label != NULL && label[0] != '\0') ? label : command);
+    s_link_pending = true;
+    shell_transcript_appendf_ansi(SH_LINK "%s" SH_RST SH_MUTE " -> %s (tap again to run)\n" SH_RST,
+                                 s_link_pending_label, s_link_pending_cmd);
+    shell_force_transcript_scroll_to_end();
+    return false;
+}
+
+bool shell_link_fire(const char *command, const char *label, bool confirm)
+{
+    char *copy;
+
+    if (command == NULL || command[0] == '\0') {
+        return false;
+    }
+    if (confirm) {
+        /* Tap-confirm gate: preview first, worker execution on repeat. */
+        return shell_link_tap_command(command, label);
+    }
+    /* Immediate regions (`anchor` contract): echo the line and queue it for
+     * the worker. Async from every task (LVGL tap, worker `ui link`): the
+     * queue owns ordering, so a fire can never re-enter the executor. A
+     * stale preview for another target dies here — the fired line is the
+     * one the user just chose. */
+    shell_link_clear_pending();
+    copy = malloc(P4_CONFIG_COMMAND_BYTES);
+    if (copy == NULL) {
+        return true;
+    }
+    snprintf(copy, P4_CONFIG_COMMAND_BYTES, "%s", command);
+    shell_transcript_appendf("%s%s\n", shell_prompt_render_plain(), copy);
+    shell_force_transcript_scroll_to_end();
+    if (s_command_ops.execute_command_async != NULL) {
+        s_command_ops.execute_command_async(copy);
+    } else if (s_command_ops.execute_command != NULL) {
+        s_command_ops.execute_command(copy);
+    }
+    free(copy);
+    return true;
 }
 
 /* Update anchor position tracking - called when transcript text is appended */
@@ -2331,33 +2655,418 @@ bool shell_debug_get_entry(size_t index, char *out, size_t out_size)
     return true;
 }
 
-void shell_command_debug(void)
+bool shell_debug_parse_hex_addr(const char *text, uint32_t *addr_out)
 {
-    size_t i;
-    size_t start = shell_debug_oldest_slot();
+    char *end;
+    unsigned long value;
 
-    shell_transcript_appendf_ansi(SH_LBL "debug.log:" SH_RST " %u entries, " SH_WARN "%u warnings" SH_RST "\n",
-                             (unsigned int)s_debug_log.count,
-                             (unsigned int)s_runtime_warning_count);
-    shell_transcript_appendf_ansi(SH_LBL "transcript trims:" SH_RST " " SH_NUM "%u" SH_RST " (internal guard)\n",
-                             (unsigned int)s_transcript_trim_count);
+    if (text == NULL || addr_out == NULL || *text == '\0') {
+        return false;
+    }
+    /* DOS DEBUG numbers are hex; accept an optional 0x prefix. */
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        text += 2;
+    }
+    if (*text == '\0') {
+        return false;
+    }
+    /* strtoul wraps on 32-bit long, so cap the digit count first: more than
+     * 8 hex digits cannot fit a 32-bit address (a 9-digit "100000000" would
+     * otherwise wrap to 0 and read as valid). */
+    if (strlen(text) > 8) {
+        return false;
+    }
+    value = strtoul(text, &end, 16);
+    if (end == text || *end != '\0' || value > UINT32_MAX) {
+        return false;
+    }
+    *addr_out = (uint32_t)value;
+    return true;
+}
 
-    if (s_debug_log.count == 0) {
-        shell_transcript_appendf_ansi(SH_MUTE "debug.log: (empty)" SH_RST "\n");
+bool shell_debug_parse_hex_byte(const char *text, uint8_t *byte_out)
+{
+    char *end;
+    unsigned long value;
+
+    if (text == NULL || byte_out == NULL || *text == '\0') {
+        return false;
+    }
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        text += 2;
+    }
+    if (*text == '\0') {
+        return false;
+    }
+    /* Same wraparound guard as the address parser: a byte is 1-2 digits. */
+    if (strlen(text) > 2) {
+        return false;
+    }
+    value = strtoul(text, &end, 16);
+    if (end == text || *end != '\0' || value > 0xFF) {
+        return false;
+    }
+    *byte_out = (uint8_t)value;
+    return true;
+}
+
+bool shell_debug_addr_readable(uint32_t addr, size_t len)
+{
+    uint64_t end;
+
+    if (len == 0) {
+        return false;
+    }
+    end = (uint64_t)addr + (uint64_t)len;
+    if (end > (uint64_t)UINT32_MAX + 1ULL) {
+        return false;
+    }
+    /* Probe both ends: the IDF memory regions are contiguous ranges, so a
+     * fully-inside range reads without faulting. */
+    if (!esp_ptr_byte_accessible((const void *)addr)) {
+        return false;
+    }
+    return esp_ptr_byte_accessible((const void *)(addr + len - 1));
+}
+
+/** True for address windows that hold code but never writable data: flash
+ * (IROM cache and mask ROM) and RTC fast memory. Used by the poke guard. */
+static bool shell_debug_addr_known_code(uint32_t addr)
+{
+    intptr_t ip = (intptr_t)addr;
+
+    if (ip >= SOC_IROM_LOW && ip < SOC_IROM_HIGH) {
+        return true;
+    }
+    if (ip >= SOC_IROM_MASK_LOW && ip < SOC_IROM_MASK_HIGH) {
+        return true;
+    }
+#if SOC_RTC_FAST_MEM_SUPPORTED
+    if (ip >= SOC_RTC_IRAM_LOW && ip < SOC_RTC_IRAM_HIGH) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+bool shell_debug_addr_writable(uint32_t addr, size_t len)
+{
+    uint64_t end;
+
+    if (len == 0) {
+        return false;
+    }
+    end = (uint64_t)addr + (uint64_t)len;
+    if (end > (uint64_t)UINT32_MAX + 1ULL) {
+        return false;
+    }
+    /* Writable RAM only: known code windows (flash IROM, RTC fast memory)
+     * stay read-only. esp_ptr_executable() is deliberately NOT used here: on
+     * ESP32-P4 the IRAM0/DRAM0 SRAM window is unified (SOC_IRAM_* ==
+     * SOC_DRAM_*), so it reports true for every RAM byte and would make
+     * `debug poke` refuse everything. The YES gate and the audit log remain
+     * the protection for ordinary RAM. */
+    if (shell_debug_addr_known_code(addr) ||
+        shell_debug_addr_known_code((uint32_t)(end - 1))) {
+        return false;
+    }
+    return shell_debug_addr_readable(addr, len);
+}
+
+/** Print @p len bytes at @p addr as shared-format hex rows. */
+static void shell_debug_print_hex(uint32_t base_addr, const uint8_t *data, size_t len)
+{
+    char row[80];
+    size_t offset = 0;
+
+    while (offset < len) {
+        size_t row_len = len - offset;
+
+        if (row_len > STRUTIL_HEX_ROW_BYTES) {
+            row_len = STRUTIL_HEX_ROW_BYTES;
+        }
+        if (strutil_format_hex_row(row, sizeof(row), base_addr + (uint32_t)offset,
+                                   data + offset, row_len) >= 0) {
+            shell_transcript_append_text(row);
+        }
+        offset += row_len;
+    }
+}
+
+/** Open the hexview modal for an in-memory dump when interactive. */
+static void shell_debug_maybe_show_modal(const char *title, const uint8_t *bytes,
+                                         size_t len, uint32_t base_addr)
+{
+    /* Batch files, pipes, and headless boards get the text dump only: a
+     * modal blocks the command worker until dismissed. */
+    if (shell_is_batch_active() || !shell_key_input_available()) {
         return;
     }
+    if (s_command_ops.debug_show_hexview != NULL) {
+        (void)s_command_ops.debug_show_hexview(title, bytes, len, base_addr);
+    }
+}
 
-    for (i = 0; i < s_debug_log.count; i++) {
-        size_t index = (start + i) % SHELL_DEBUG_LOG_DEPTH;
-        const char *entry = s_debug_log.entries[index];
-        /* Color errors red, warnings yellow */
-        if (strstr(entry, "ERROR") != NULL) {
-            shell_transcript_appendf_ansi("  " SH_MUTE "[%u]" SH_RST " " SH_ERR "%s" SH_RST "\n", (unsigned int)i, entry);
-        } else if (strstr(entry, "WARN") != NULL) {
-            shell_transcript_appendf_ansi("  " SH_MUTE "[%u]" SH_RST " " SH_WARN "%s" SH_RST "\n", (unsigned int)i, entry);
-        } else {
-            shell_transcript_appendf_ansi("  " SH_MUTE "[%u]" SH_RST " %s\n", (unsigned int)i, entry);
+static void shell_debug_print_usage(void)
+{
+    shell_print_usage("Usage: debug | debug save [file] [txt|csv|json] | debug mem <addr> [len] | debug peek <addr> | debug poke <addr> <hex..> | debug disk <lba> [count]");
+}
+
+static int shell_debug_do_mem(uint32_t addr, size_t len)
+{
+    uint8_t *heap;
+    volatile const uint8_t *src;
+    size_t index;
+
+    if (len == 0 || len > P4_CONFIG_DEBUG_DUMP_BYTES) {
+        shell_print_error("debug mem: length must be 1..%u bytes",
+                          (unsigned int)P4_CONFIG_DEBUG_DUMP_BYTES);
+        return 2;
+    }
+    if (!shell_debug_addr_readable(addr, len)) {
+        shell_print_error("debug mem: address range %08X+%u is not readable RAM",
+                          (unsigned int)addr, (unsigned int)len);
+        shell_record_warningf("debug", "Refused debug mem outside readable RAM");
+        return 1;
+    }
+
+    /* Snapshot through a heap buffer so the modal and the text dump share
+     * one consistent read even if the target is MMIO-adjacent. */
+    heap = malloc(len);
+    if (heap == NULL) {
+        shell_print_error("debug mem: out of memory");
+        shell_record_errorf("debug", ESP_ERR_NO_MEM, "Debug mem snapshot failed");
+        return 1;
+    }
+    src = (volatile const uint8_t *)addr;
+    for (index = 0; index < len; index++) {
+        heap[index] = src[index];
+    }
+
+    shell_transcript_appendf_ansi(SH_LBL "debug.mem:" SH_RST " " SH_NUM "%08X" SH_RST " (%u bytes)\n",
+                                  (unsigned int)addr, (unsigned int)len);
+    shell_debug_print_hex(addr, heap, len);
+    shell_debug_maybe_show_modal("Debug mem", heap, len, addr);
+    free(heap);
+    return 0;
+}
+
+static int shell_debug_do_peek(uint32_t addr)
+{
+    uint8_t value;
+
+    if (!shell_debug_addr_readable(addr, 1)) {
+        shell_print_error("debug peek: address %08X is not readable RAM",
+                          (unsigned int)addr);
+        shell_record_warningf("debug", "Refused debug peek outside readable RAM");
+        return 1;
+    }
+
+    value = *(volatile const uint8_t *)addr;
+    shell_transcript_appendf_ansi(SH_LBL "debug.peek:" SH_RST " " SH_NUM "%08X" SH_RST " = " SH_NUM "%02X" SH_RST "\n",
+                                   (unsigned int)addr, (unsigned int)value);
+    return 0;
+}
+
+static int shell_debug_do_poke(uint32_t addr, uint8_t *bytes, size_t count)
+{
+    volatile uint8_t *dst;
+    size_t index;
+    char detail[64];
+
+    if (count == 0) {
+        shell_print_usage("Usage: debug poke <addr> <hex..>");
+        return 2;
+    }
+    if (!shell_debug_addr_writable(addr, count)) {
+        shell_print_error("debug poke: address range %08X+%u is not writable RAM",
+                          (unsigned int)addr, (unsigned int)count);
+        shell_record_warningf("debug", "Refused debug poke outside writable RAM");
+        return 1;
+    }
+
+    snprintf(detail, sizeof(detail), "%u byte(s) at %08X",
+             (unsigned int)count, (unsigned int)addr);
+    if (s_command_ops.debug_confirm_destructive != NULL) {
+        if (!s_command_ops.debug_confirm_destructive("debug poke",
+                                                     "WARNING: This will write raw bytes to RAM.",
+                                                     detail)) {
+            shell_print_warning("debug: poke cancelled, memory was not modified");
+            return 1;
         }
+    } else {
+        shell_print_error("debug poke: confirmation unavailable (command layer not registered)");
+        shell_record_warningf("debug", "Refused debug poke without confirm hook");
+        return 1;
+    }
+
+    dst = (volatile uint8_t *)addr;
+    for (index = 0; index < count; index++) {
+        dst[index] = bytes[index];
+    }
+    shell_print_ok("debug: poked %u byte(s) at %08X",
+                   (unsigned int)count, (unsigned int)addr);
+    return 0;
+}
+
+static int shell_debug_do_disk(uint32_t lba, uint32_t count)
+{
+    uint8_t *heap;
+    esp_err_t error;
+
+    if (count == 0 || count > P4_CONFIG_DEBUG_DISK_MAX_SECTORS) {
+        shell_print_error("debug disk: count must be 1..%u sectors",
+                          (unsigned int)P4_CONFIG_DEBUG_DISK_MAX_SECTORS);
+        return 2;
+    }
+    if (s_command_ops.debug_read_sectors == NULL) {
+        shell_print_error("debug disk: sector reader unavailable (command layer not registered)");
+        shell_record_warningf("debug", "Refused debug disk without sector hook");
+        return 1;
+    }
+
+    heap = malloc((size_t)count * 512);
+    if (heap == NULL) {
+        shell_print_error("debug disk: out of memory");
+        shell_record_errorf("debug", ESP_ERR_NO_MEM, "Debug disk snapshot failed");
+        return 1;
+    }
+
+    error = s_command_ops.debug_read_sectors(lba, heap, count);
+    if (error != ESP_OK) {
+        shell_print_error("debug disk: sector %lu read failed (%s)",
+                          (unsigned long)lba, esp_err_to_name(error));
+        shell_record_errorf("debug", error, "Debug disk sector read failed");
+        free(heap);
+        return 1;
+    }
+
+    shell_transcript_appendf_ansi(SH_LBL "debug.disk:" SH_RST " LBA " SH_NUM "%lu" SH_RST " (%lu sectors)\n",
+                                  (unsigned long)lba, (unsigned long)count);
+    shell_debug_print_hex(lba * 512, heap, (size_t)count * 512);
+    shell_debug_maybe_show_modal("Debug disk", heap, (size_t)count * 512, lba * 512);
+    free(heap);
+    return 0;
+}
+
+int shell_command_debug(int argc, char **argv)
+{
+    if (argc >= 2 && !shell_text_equals_ignore_case(argv[1], "save")) {
+        if (shell_text_equals_ignore_case(argv[1], "mem")) {
+            char *end;
+            uint32_t addr;
+            unsigned long len = 128;
+
+            if (argc < 3 || argc > 4 || !shell_debug_parse_hex_addr(argv[2], &addr)) {
+                shell_debug_print_usage();
+                return 2;
+            }
+            if (argc == 4) {
+                len = strtoul(argv[3], &end, 0);
+                if (end == argv[3] || *end != '\0') {
+                    shell_debug_print_usage();
+                    return 2;
+                }
+            }
+            return shell_debug_do_mem(addr, (size_t)len);
+        }
+        if (shell_text_equals_ignore_case(argv[1], "peek")) {
+            uint32_t addr;
+
+            if (argc != 3 || !shell_debug_parse_hex_addr(argv[2], &addr)) {
+                shell_debug_print_usage();
+                return 2;
+            }
+            return shell_debug_do_peek(addr);
+        }
+        if (shell_text_equals_ignore_case(argv[1], "poke")) {
+            uint32_t addr;
+            uint8_t *bytes;
+            int count = 0;
+            int index;
+            int rc;
+
+            if (argc < 4 || !shell_debug_parse_hex_addr(argv[2], &addr)) {
+                shell_debug_print_usage();
+                return 2;
+            }
+            if (argc - 3 > P4_CONFIG_DEBUG_POKE_MAX_BYTES) {
+                shell_print_error("debug poke: at most %u bytes per invocation",
+                                  (unsigned int)P4_CONFIG_DEBUG_POKE_MAX_BYTES);
+                return 2;
+            }
+            bytes = malloc((size_t)(argc - 3));
+            if (bytes == NULL) {
+                shell_print_error("debug poke: out of memory");
+                return 1;
+            }
+            for (index = 3; index < argc; index++) {
+                if (!shell_debug_parse_hex_byte(argv[index], &bytes[count])) {
+                    shell_print_error("debug poke: bad hex byte %s", argv[index]);
+                    free(bytes);
+                    return 2;
+                }
+                count++;
+            }
+            rc = shell_debug_do_poke(addr, bytes, (size_t)count);
+            free(bytes);
+            return rc;
+        }
+        if (shell_text_equals_ignore_case(argv[1], "disk")) {
+            char *end;
+            unsigned long lba;
+            unsigned long count = 1;
+
+            if (argc < 3 || argc > 4) {
+                shell_debug_print_usage();
+                return 2;
+            }
+            lba = strtoul(argv[2], &end, 0);
+            if (end == argv[2] || *end != '\0') {
+                shell_debug_print_usage();
+                return 2;
+            }
+            if (argc == 4) {
+                count = strtoul(argv[3], &end, 0);
+                if (end == argv[3] || *end != '\0') {
+                    shell_debug_print_usage();
+                    return 2;
+                }
+            }
+            return shell_debug_do_disk((uint32_t)lba, (uint32_t)count);
+        }
+        shell_debug_print_usage();
+        return 2;
+    }
+
+    {
+        size_t i;
+        size_t start = shell_debug_oldest_slot();
+
+        shell_transcript_appendf_ansi(SH_LBL "debug.log:" SH_RST " %u entries, " SH_WARN "%u warnings" SH_RST "\n",
+                                 (unsigned int)s_debug_log.count,
+                                 (unsigned int)s_runtime_warning_count);
+        shell_transcript_appendf_ansi(SH_LBL "transcript trims:" SH_RST " " SH_NUM "%u" SH_RST " (internal guard)\n",
+                                 (unsigned int)s_transcript_trim_count);
+
+        if (s_debug_log.count == 0) {
+            shell_transcript_appendf_ansi(SH_MUTE "debug.log: (empty)" SH_RST "\n");
+            return 0;
+        }
+
+        for (i = 0; i < s_debug_log.count; i++) {
+            size_t index = (start + i) % SHELL_DEBUG_LOG_DEPTH;
+            const char *entry = s_debug_log.entries[index];
+            /* Color errors red, warnings yellow */
+            if (strstr(entry, "ERROR") != NULL) {
+                shell_transcript_appendf_ansi("  " SH_MUTE "[%u]" SH_RST " " SH_ERR "%s" SH_RST "\n", (unsigned int)i, entry);
+            } else if (strstr(entry, "WARN") != NULL) {
+                shell_transcript_appendf_ansi("  " SH_MUTE "[%u]" SH_RST " " SH_WARN "%s" SH_RST "\n", (unsigned int)i, entry);
+            } else {
+                shell_transcript_appendf_ansi("  " SH_MUTE "[%u]" SH_RST " %s\n", (unsigned int)i, entry);
+            }
+        }
+        return 0;
     }
 }
 
@@ -4296,7 +5005,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "version",  "version | ver - banner, version, build date/time, Git hash, IDF, board, heap, uptime" },
     { "sysinfo",  "sysinfo - board, display, storage, heap, FreeRTOS tasks, uptime, Wi-Fi, OTA state" },
     { "mem",      "mem - free heap, total, minimum, internal, task count, PSRAM state" },
-    { "debug",    "debug [save [file] [txt|csv|json]] - last error/warning entries, Wi-Fi state, heap, warning count" },
+    { "debug",    "debug [save [file] [txt|csv|json] | mem <addr> [len] | peek <addr> | poke <addr> <hex..> | disk <lba> [count]] - log, RAM/sector hexdumps" },
     { "clear",    "clear | cls - clear transcript history and redraw the prompt" },
     { "reboot",   "reboot - restart the board" },
     { "launch",   "launch | launch <name> [args] | launch /list - discover and run script apps .bat/.cmd (PATH + sd:/APPS)" },
@@ -4331,7 +5040,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "dialog",   "dialog [/t:secs] \"title\" \"message\" [button1] [button2] - message box (ERRORLEVEL 0/1/255)" },
     { "list",     "list [/t:secs] [/v:NAME] \"title\" item... - scrollable selector (ERRORLEVEL = 0-based index)" },
     { "ask",      "ask [/t:secs] [/v:NAME] [/p] \"prompt\" [default] - text input to ASK_RESULT (ERRORLEVEL 0/1)" },
-    { "screen",   "screen run <file.frm> | screen flow <file.flow> | screen info <file> - declarative screen (dialog|list|ask|form|menu) or multi-screen flow, results to env" },
+    { "screen",   "screen run <file.frm> | screen flow <file.flow> | screen info <file> - declarative screen (dialog|list|ask|form|menu|browse|view|hexview|image) or multi-screen flow, results to env" },
     { "browse",   "browse [/t:secs] [/v:NAME] [path] - fullscreen file picker (ERRORLEVEL 0/1)" },
     { "view",     "view [/t:secs] [--raw] <file> - text viewer pager (.md renders in the reading font, .bmp/.dib open the image viewer) (ERRORLEVEL 0/1)" },
     { "open",     "open [/t:secs] [--raw] <file> - open by type: scripts in editor, md rendered, images viewed, rest as text (never executes)" },
@@ -4349,7 +5058,9 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "image",    "image info <file.bmp> | image show [/t:secs] <file.bmp> - BMP metadata / fit-to-screen viewer (ERRORLEVEL 0/1/2)" },
     { "draw",     "draw <box|line|fill|text|bar|table|list|image|clear|window|save|restore|cursor|hold|alt-screen|close|refresh|fullscreen> - TUI drawing (foreground only)" },
     { "anchor",   "anchor <label> <command> [continue_line] - named transcript anchor region" },
-    { "tui",      "tui status|stats|clear|fullscreen|refresh - TUI control" },
+    { "link",     "link <label> <command...> | link list | link open <n> - tap-confirm hyperlink (underline)" },
+    { "complete", "complete <partial line> - list Tab-completion matches as runnable links" },
+    { "tui",      "tui status|stats|clear|fullscreen|refresh|selftest - TUI control (selftest runs headless palette/coverage/metrics checks)" },
     { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
     { "locate",   "locate <row> <col> - DOS LOCATE parity (1-based, 80x25)" },
     { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },
@@ -4370,6 +5081,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "touch",    "touch <path> - create/update a file timestamp" },
     { "attrib",   "attrib [+-RHSA] <path> - show/set file attributes" },
     { "label",    "label [name] - show/set the volume label" },
+    { "vol",      "vol - show the volume label and serial number" },
     { "xcopy",    "xcopy <src> <dst> [/S] [/E] [/I] [/Y] - recursive copy" },
     { "chkdsk",   "chkdsk | scandisk [path] [/F] - read-only filesystem check" },
     { "format",   "format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q] - format the SD volume (interactive)" },
@@ -4394,7 +5106,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "screenshot", "screenshot | scr | capture [file.bmp] - capture the screen to a BMP" },
     { "sd",       "sd info | ls [path] | stat <path> | cat <path> [bytes] | mount | eject" },
     { "sdeject",  "sdeject - safe SD unmount before card removal" },
-    { "disk",     "disk list | detail | clean | create partition primary [size=N] | delete partition N | format" },
+    { "disk",     "disk list | detail | clean | create partition primary [size=N] | delete partition N | active N|none | type N <hex> | mbr [save|restore] | verify | geometry | image save|restore | format" },
     { "set",      "set [NAME=VALUE] | set /a NAME=<expr> | set /p NAME=<prompt> - environment variables" },
     { "calc",     "calc [NAME=] <expr> | calc /deg | /rad | /angle | /hex | /fin | /date - float calculator (BASIC/financial/date funcs, PI, RAN#, &H hex)" },
     { "path",     "path [dirs] - show/set the executable search path" },
@@ -4416,19 +5128,39 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "asset",    "asset check|list <app> - verify/list an app's APPS/<APP>.ASSETS manifest (ERRORLEVEL 0/1)" },
     { "pkg",      "pkg list|info <app>|verify <app>|check|install <app>|remove <app> - SD app packages (APPS/<APP>.APPINFO + .ASSETS, bundles under PKGS/)" },
     { "header",   "header [status] | mode [auto|full|compact] [/save] | show|hide - responsive status-bar layout" },
-    { "start",    "start <command> [args] - run a command or batch file as a background job (see taskkill)" },
+    { "start",    "start [/wait] [/t:secs] <command> [args] | start /b - run as a background job; bare start lists the pool (/b: machine rows bgN|state|exit|prio|cpu|stack|ovl|himem|line); /wait joins, /t: auto-kills" },
     { "taskkill", "taskkill <job> - cooperatively stop a background job (name like bg0, or slot number)" },
+    { "kill",     "kill <job> - alias of taskkill (Unix name, DOS behavior)" },
+    { "suspend",  "suspend <job> - freeze a background pool job (pool slots only; taskkill wakes it to stop)" },
+    { "resume",   "resume <job> - thaw a suspended background pool job" },
+    { "nice",     "nice <job> <1..3|+n|-n> - set a pool job priority within P4_CONFIG_TMGR_PRIO bounds (renice is an alias)" },
+    { "renice",   "renice <job> <1..3|+n|-n> - alias of nice" },
+    { "taskmgr",  "taskmgr - open the task manager app (same as launch TASKMGR)" },
+    { "assoc",    "assoc [.ext[=app]] - show/set/clear file associations (bare lists; .ext= clears)" },
+    { "ftype",    "ftype [app] - show declared (APPINFO handles=) and assigned handlers" },
+    { "startup",  "startup [list] | add <app> | remove <app> - one-shot apps run at boot (sd:/STARTUP.INI)" },
+    { "service",  "service list | install <name> <line> [/restart] [/noauto] | remove|start|stop <name> - resident services (supervised, boot-persistent)" },
+    { "lock",     "lock <name> [/t:secs] - take a named batch mutex (auto-released at job exit)" },
+    { "unlock",   "unlock <name> - release a named batch mutex" },
+    { "signal",   "signal <name> - set a named batch event (sticky until taken)" },
+    { "wait",     "wait <name> [/t:secs] - wait for a named batch event (auto-clears on take)" },
+    { "himem",    "himem [info] | alloc <bytes>[K|M] [/v:VAR] | free|lock|unlock <h> | fill|load|save|crc <h> ... - XMS-style extended memory over PSRAM" },
+    { "uptime",   "uptime - seconds since boot (also in version)" },
+    { "df",       "df - free/total space for every mounted volume (SD + USB sticks)" },
+    { "env",      "env | printenv - alias of bare set (list environment variables)" },
+    { "hostname", "hostname [name] - show or set the device hostname (persisted in CONFIG.SYS)" },
     { "for",      "for %v in (set) do <cmd> | for /f \"delims= tokens=\\n\" %%v in (file) do <cmd> | for /L %%v in (start,step,end) do <cmd> | for /A %%k in (PREFIX) do <cmd> | for /D %%v in (set) do <cmd> | for /R [path] %%v in (set) do <cmd> - loops" },
     { "while",    "while <expr> do <cmd> - re-run while a set /a expression is nonzero (ERRORLEVEL 0/1/2)" },
     { "setlocal", "setlocal [enabledelayedexpansion|disabledelayedexpansion] - begin a local environment scope (!VAR! when enabled)" },
     { "endlocal", "endlocal - end a local environment scope" },
     { "exit",     "exit [/b] [code] - leave a batch file or the shell" },
-    { "proc",     "proc [/args | /name | /depth | /errorlevel | /echo | /stdin] - introspect the batch process stack" },
+    { "proc",     "proc [/args | /name | /depth | /errorlevel | /echo | /stdin | /labels | /goto] - introspect the batch process stack" },
     { "ini",      "ini <list|get|set|del|load|save> <file> [key] [value] - persistent state in KEY=VALUE files on the SD card" },
     { "appconfig", "appconfig <app> [path|list|get|set|del] [key] [value] - per-app settings (sd:/APPS/<APP>.INI)" },
     { "temp",     "temp [new [ext] | clean] - SD-backed temporary files" },
     { "ansi",     "ansi <sgr-codes> [text...] - emit ANSI-styled text (reverse, bold, color) into the transcript" },
     { "menu",     "menu <item> [item...] - numbered menu; ERRORLEVEL = chosen index (0 = cancel)" },
+    { "form",     "form [/t:secs] \"title\" \"Label=type[:arg]:VAR\" ... - multi-field modal (text|password|check|select|range), values to env (ERRORLEVEL 0/255)" },
     { "markdown", "markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print] - render/export Markdown (echo/type auto-render; /raw bypasses)" },
     { "notify",   "notify [/t:secs] <text> | notify - - header notification (clear with -)" },
     { "appmode",  "appmode on [/full] [/clear] | appmode off | appmode status - enter/exit app mode (save/restore screen)" },
@@ -4448,8 +5180,8 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "sntp",     "sntp | ntpsync [server] - sync the clock via SNTP" },
     { "rtc",      "rtc [anchor] - RTC backup status (source, anchor age, ext chip)" },
     { "wifi",     "wifi status | scan [/b] | diag | connect [ssid pass] | disconnect | setup [on|off]" },
-    { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect" },
-    { "usb",      "usb status | ls [path] | keyboard <on|off> | mouse <on|off> | userial <status|open|close|send|recv|term>" },
+    { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect | mouse <on|off|cursor <on|off>|click <on|off>>" },
+    { "usb",      "usb status | ls [path] | keyboard <on|off> | mouse <on|off|cursor <on|off>|click <on|off>> | userial <status|open|close|send|recv|term>" },
     { "httpd",    "httpd status | start | stop - HTTP file server on port 80" },
     { "certs",    "certs [info|list|add <file>|remove <name>|rebuild|clear|reload] - TLS trust store" },
     { "netstat",  "netstat - active TCP/UDP connections and listeners" },
@@ -4465,13 +5197,22 @@ static const shell_help_entry_t s_shell_help_entries[] = {
 #define SHELL_HELP_ENTRY_COUNT \
     ((int)(sizeof(s_shell_help_entries) / sizeof(s_shell_help_entries[0])))
 
-/** Print one help entry with the given label prefix. */
+/** Print one help entry with the given label prefix. The command name is a
+ *  tap-confirm hyperlink (`help <name>`); padding is applied to the plain
+ *  label first so the summary column stays aligned. */
 static void shell_help_print_entry(const shell_help_entry_t *e)
 {
+    char label[16];
+    char target[32];
+
     if (e == NULL) {
         return;
     }
-    shell_transcript_appendf_ansi("  " SH_EXE "%-12s" SH_RST " %s\n", e->name, e->summary);
+    snprintf(label, sizeof(label), "%-12s", e->name);
+    snprintf(target, sizeof(target), "help %s", e->name);
+    shell_transcript_appendf_ansi("  ");
+    shell_transcript_append_link(label, target);
+    shell_transcript_appendf_ansi(" %s\n", e->summary);
 }
 
 size_t shell_help_entry_count(void)
@@ -5023,6 +5764,104 @@ static bool shell_task_parse_sort(const char *value, shell_task_sort_key_t *key,
 }
 
 /**
+ * Shared task-snapshot core: one heap-allocated TaskStatus_t array (capped
+ * by P4_CONFIG_TASK_SNAPSHOT_MAX) filled by a single uxTaskGetSystemState()
+ * walk. Used by `ps`/`tasks`/`top` and by the task manager's per-slot
+ * runtime lookup — one implementation, never two snapshot walks. Free the
+ * result with shell_snapshot_free(). Never call from the LVGL/render task
+ * (the walk suspends scheduling long enough to underrun the panel) or
+ * during an OTA (PSRAM is unavailable).
+ */
+typedef enum {
+    SHELL_SNAPSHOT_OK = 0,
+    SHELL_SNAPSHOT_NO_MEM,
+    SHELL_SNAPSHOT_EMPTY
+} shell_snapshot_rc_t;
+
+static TaskStatus_t *shell_snapshot_alloc(uint32_t *obtained_out,
+                                           uint32_t *total_out,
+                                           shell_snapshot_rc_t *rc_out)
+{
+    uint32_t task_count = uxTaskGetNumberOfTasks();
+    TaskStatus_t *array;
+    uint32_t obtained = 0;
+    uint32_t total = 0;
+
+    if (rc_out != NULL) {
+        *rc_out = SHELL_SNAPSHOT_OK;
+    }
+    if (task_count == 0) {
+        task_count = 1;
+    }
+    if (task_count > P4_CONFIG_TASK_SNAPSHOT_MAX) {
+        task_count = P4_CONFIG_TASK_SNAPSHOT_MAX;
+    }
+    /* The TaskStatus_t array can exceed the 8 KB worker stack (one entry is
+     * ~40 bytes), so it is always heap-allocated. */
+    array = heap_caps_calloc(task_count, sizeof(TaskStatus_t),
+                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (array == NULL) {
+        if (rc_out != NULL) {
+            *rc_out = SHELL_SNAPSHOT_NO_MEM;
+        }
+        return NULL;
+    }
+    obtained = uxTaskGetSystemState(array, task_count, &total);
+    if (obtained == 0) {
+        heap_caps_free(array);
+        if (rc_out != NULL) {
+            *rc_out = SHELL_SNAPSHOT_EMPTY;
+        }
+        return NULL;
+    }
+    if (obtained_out != NULL) {
+        *obtained_out = obtained;
+    }
+    if (total_out != NULL) {
+        *total_out = total;
+    }
+    return array;
+}
+
+static void shell_snapshot_free(TaskStatus_t *array)
+{
+    heap_caps_free(array);
+}
+
+/**
+ * Look up one task's runtime counter plus the snapshot total by handle.
+ * Backs the task manager's per-slot CPU% (anchored at job spawn in the
+ * command layer). Returns false when the handle is gone, the snapshot
+ * fails, or a counter pointer is NULL.
+ */
+bool shell_task_runtime_for_handle(void *task_handle, uint32_t *runtime_out,
+                                   uint32_t *total_out)
+{
+    TaskStatus_t *array;
+    uint32_t obtained = 0;
+    uint32_t total = 0;
+    uint32_t i;
+
+    if (task_handle == NULL || runtime_out == NULL || total_out == NULL) {
+        return false;
+    }
+    array = shell_snapshot_alloc(&obtained, &total, NULL);
+    if (array == NULL) {
+        return false;
+    }
+    for (i = 0; i < obtained; i++) {
+        if (array[i].xHandle == (TaskHandle_t)task_handle) {
+            *runtime_out = (uint32_t)array[i].ulRunTimeCounter;
+            *total_out = total;
+            shell_snapshot_free(array);
+            return true;
+        }
+    }
+    shell_snapshot_free(array);
+    return false;
+}
+
+/**
  * `ps` / `tasks` / `top` — list FreeRTOS tasks and their CPU usage.
  *
  * Usage: ps|tasks|top [/b] [/O:key]
@@ -5040,11 +5879,10 @@ static bool shell_task_parse_sort(const char *value, shell_task_sort_key_t *key,
 int shell_command_ps(int argc, char **argv)
 {
 #if CONFIG_FREERTOS_USE_TRACE_FACILITY
-    uint32_t task_count = uxTaskGetNumberOfTasks();
     TaskStatus_t *task_status_array;
     shell_task_row_t *rows;
     uint32_t total_runtime = 0;
-    uint32_t obtained;
+    uint32_t obtained = 0;
     bool bare = false;
     bool is_top = false;
     bool have_sort = false;
@@ -5087,27 +5925,19 @@ int shell_command_ps(int argc, char **argv)
         sort_reverse = true;
     }
 
-    if (task_count == 0) {
-        task_count = 1;
-    }
-    if (task_count > P4_CONFIG_TASK_SNAPSHOT_MAX) {
-        task_count = P4_CONFIG_TASK_SNAPSHOT_MAX;
-    }
+    {
+        shell_snapshot_rc_t snapshot_rc = SHELL_SNAPSHOT_OK;
 
-    /* The TaskStatus_t array can exceed the 8 KB worker stack (one entry is
-     * ~40 bytes), so it is always heap-allocated. */
-    task_status_array = heap_caps_calloc(task_count, sizeof(TaskStatus_t),
-                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (task_status_array == NULL) {
-        shell_print_error("ps: out of memory for the task snapshot");
-        return 1;
-    }
-
-    obtained = uxTaskGetSystemState(task_status_array, task_count, &total_runtime);
-    if (obtained == 0) {
-        heap_caps_free(task_status_array);
-        shell_print_error("ps: uxTaskGetSystemState returned no tasks");
-        return 1;
+        task_status_array = shell_snapshot_alloc(&obtained, &total_runtime,
+                                                 &snapshot_rc);
+        if (task_status_array == NULL) {
+            if (snapshot_rc == SHELL_SNAPSHOT_NO_MEM) {
+                shell_print_error("ps: out of memory for the task snapshot");
+            } else {
+                shell_print_error("ps: uxTaskGetSystemState returned no tasks");
+            }
+            return 1;
+        }
     }
 
     /* Normalize the snapshot into lightweight rows so /O: can sort them with
@@ -5610,6 +6440,7 @@ char *shell_find_unquoted_any(const char *text, const char *targets)
 {
     shell_quote_state_t state = SHELL_QUOTE_NONE;
     const char *cursor = text;
+    int paren_depth = 0;
 
     if (text == NULL || targets == NULL) {
         return NULL;
@@ -5622,13 +6453,25 @@ char *shell_find_unquoted_any(const char *text, const char *targets)
 
         /* A candidate only counts when it is the character itself, outside
          * quotes, and not the payload of a caret escape. */
-        if (!escaped && state == SHELL_QUOTE_NONE && next == candidate + 1 &&
-            strchr(targets, *candidate) != NULL && *candidate != '\0') {
-            /* Quote delimiters advance by one too, but they were consumed as
-             * state changes above and are never in the target set in
-             * practice. Guard anyway so a caller cannot search for a quote. */
-            if (*candidate != '"' && *candidate != '\'') {
-                return (char *)candidate;
+        if (!escaped && state == SHELL_QUOTE_NONE && next == candidate + 1) {
+            /* Balanced parens group operators: separators inside `(...)`
+             * belong to the group (chain, pipe, and redirect scanners all
+             * share this rule). Unbalanced `(` runs literal to end of
+             * line; a stray `)` never drives the depth negative. */
+            if (*candidate == '(') {
+                paren_depth++;
+            } else if (*candidate == ')') {
+                if (paren_depth > 0) {
+                    paren_depth--;
+                }
+            } else if (paren_depth == 0 && strchr(targets, *candidate) != NULL &&
+                       *candidate != '\0') {
+                /* Quote delimiters advance by one too, but they were consumed as
+                 * state changes above and are never in the target set in
+                 * practice. Guard anyway so a caller cannot search for a quote. */
+                if (*candidate != '"' && *candidate != '\'') {
+                    return (char *)candidate;
+                }
             }
         }
 
@@ -5862,11 +6705,14 @@ int shell_split_chain(char *text,
         return 0;
     }
 
-    /* `if` and `for` consume the rest of the line as their command body
-     * (cmd.exe semantics: `if cond a & b` runs a and b only when cond is
-     * true). Splitting here would turn a `&` inside an if/for body into an
-     * unconditional chain link that runs even when the condition is false,
-     * so a guarded `... & goto label` would jump regardless of the test. */
+    /* `if`, `for`, and `while` consume the rest of the line as their
+     * command body (cmd.exe semantics: `if cond a & b` runs a and b only
+     * when cond is true). Splitting here would turn a `&` inside a guarded
+     * body into an unconditional chain link that runs even when the
+     * condition is false, so a guarded `... & goto label` would jump
+     * regardless of the test. Each body re-enters this splitter on its own
+     * (no longer starting with the guard word), so nested separators still
+     * chain inside the body. */
     {
         char first_word[8];
         size_t word_len = 0;
@@ -5881,7 +6727,8 @@ int shell_split_chain(char *text,
             word++;
         }
         first_word[word_len] = '\0';
-        if (strcmp(first_word, "if") == 0 || strcmp(first_word, "for") == 0) {
+        if (strcmp(first_word, "if") == 0 || strcmp(first_word, "for") == 0 ||
+            strcmp(first_word, "while") == 0) {
             segments[0].command = shell_trim(text);
             segments[0].op = SHELL_CHAIN_FIRST;
             return 1;
@@ -5960,6 +6807,69 @@ int shell_split_chain(char *text,
     }
 
     return count;
+}
+
+const char *shell_group_match(const char *text)
+{
+    shell_quote_state_t state = SHELL_QUOTE_NONE;
+    const char *cursor;
+    int depth = 0;
+
+    if (text == NULL || text[0] != '(') {
+        return NULL;
+    }
+    cursor = text;
+    while (*cursor != '\0') {
+        const char *candidate = cursor;
+        bool escaped = false;
+        const char *next = shell_quote_advance(cursor, &state, &escaped);
+
+        if (!escaped && state == SHELL_QUOTE_NONE && next == candidate + 1) {
+            if (*candidate == '(') {
+                depth++;
+            } else if (*candidate == ')') {
+                depth--;
+                if (depth == 0) {
+                    return next;
+                }
+            }
+        }
+        cursor = next;
+    }
+    return NULL;
+}
+
+int shell_group_depth(const char *text)
+{
+    shell_quote_state_t state = SHELL_QUOTE_NONE;
+    const char *cursor;
+    int depth = 0;
+    int peak = 0;
+
+    if (text == NULL) {
+        return 0;
+    }
+    cursor = text;
+    while (*cursor != '\0') {
+        const char *candidate = cursor;
+        bool escaped = false;
+        const char *next = shell_quote_advance(cursor, &state, &escaped);
+
+        if (!escaped && state == SHELL_QUOTE_NONE && next == candidate + 1) {
+            if (*candidate == '(') {
+                depth++;
+                if (depth > peak) {
+                    peak = depth;
+                }
+            } else if (*candidate == ')') {
+                if (depth > 0) {
+                    depth--;
+                }
+            }
+        }
+        cursor = next;
+    }
+    return peak;
 }
 
 bool shell_parse_percentage_arg(const char *text, int *percentage_out)

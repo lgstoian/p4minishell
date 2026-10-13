@@ -10,6 +10,7 @@
 #include "gfx.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
+#include "p4minishell_config.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -775,8 +776,20 @@ int gfx_surface_text(gfx_surface_t *s, int x, int y, const char *text,
             y += GFX_FONT_H * scale;
             continue;
         }
-        if (ch < GFX_FONT_FIRST || ch > GFX_FONT_LAST) ch = '?';
-        glyph = gfx_font8x8[ch - GFX_FONT_FIRST];
+        /* Control characters (0x00-0x1F, 0x7F) render as empty space.
+         * Printable CP437 (0x20-0xFF) use the font glyph when extended font is enabled.
+         * When extended font is disabled, only ASCII 0x20-0x7E render. */
+#if P4_CONFIG_GFX_FONT_EXTENDED
+        if (ch < 0x20 || ch == 0x7F) {
+#else
+        if (ch < 0x20 || ch > 0x7E || ch == 0x7F) {
+#endif
+            /* Render empty glyph for control characters */
+            static const uint8_t empty_glyph[GFX_FONT_H] = {0};
+            glyph = empty_glyph;
+        } else {
+            glyph = gfx_font8x8[ch];
+        }
         for (gy = 0; gy < GFX_FONT_H; gy++) {
             uint8_t bits = glyph[gy];
             int gx;

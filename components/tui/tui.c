@@ -12,6 +12,7 @@
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
+#include "shell.h"
 #include "tui_fonts.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
@@ -41,11 +42,82 @@ static uint8_t s_def_fg = 16;
 static uint8_t s_def_bg = 16;
 static lv_obj_t *s_tui_label = NULL;
 static lv_obj_t *s_tui_container = NULL;
+/* Currently bound cell font (NULL until the first layout pass or when
+ * inactive). Reported by `tui status` / `tui selftest` so a wrong-font
+ * report is diagnosable on sight. */
+static const tui_font_cell_t *s_bound_cell = NULL;
+/* Title-on-border overlay: the grid label markup carries foreground only,
+ * so a title with an explicit background (bg < 16) gets a same-font overlay
+ * label positioned over its cells. Tracked at draw time; any later write
+ * inside the rect (or clear/scroll/deinit/modal) hides it so it can never
+ * go stale and paint a ghost. Only armed when a title bg is set. */
+static lv_obj_t *s_title_label = NULL;
+static int s_title_col = 0;
+static int s_title_row = 0;
+static int s_title_len = 0;
+static uint8_t s_title_fg = 7;
+static uint8_t s_title_bg = 16;
+static bool s_title_visible = false;
 
 /* Frame pacing for TUI apps: each tui_flush is a present (the batch apps
  * flush once per drawn frame via `draw refresh`). Shared pure stats core
  * from components/gfx; formatted by `tui stats`. */
 static gfx_frame_stats_t s_tui_stats;
+
+/* Box-glyph spec table for `tui selftest` and the unit tests: macro bytes
+ * plus the codepoint each MUST decode to. The expected column is the
+ * independent spec (CP437 doubles); the bytes column follows the macros, so
+ * a scrambled macro fails here instead of on screen. */
+typedef struct {
+    const char *bytes;
+    uint32_t cp;
+    const char *name;
+} tui_box_spec_t;
+
+static const tui_box_spec_t s_box_spec[] = {
+    { SH_BOX_H, 0x2500, "H" }, { SH_BOX_V, 0x2502, "V" },
+    { SH_BOX_TL, 0x250C, "TL" }, { SH_BOX_TR, 0x2510, "TR" },
+    { SH_BOX_BL, 0x2514, "BL" }, { SH_BOX_BR, 0x2518, "BR" },
+    { SH_BOX_T, 0x252C, "T" }, { SH_BOX_B, 0x2534, "B" },
+    { SH_BOX_L, 0x251C, "L" }, { SH_BOX_R, 0x2524, "R" },
+    { SH_BOX_X, 0x253C, "X" },
+    { SH_BOX_H2, 0x2550, "H2" }, { SH_BOX_V2, 0x2551, "V2" },
+    { SH_BOX_TL2, 0x2554, "TL2" }, { SH_BOX_TR2, 0x2557, "TR2" },
+    { SH_BOX_BL2, 0x255A, "BL2" }, { SH_BOX_BR2, 0x255D, "BR2" },
+    { SH_BOX_T2, 0x2566, "T2" }, { SH_BOX_B2, 0x2569, "B2" },
+    { SH_BOX_L2, 0x2560, "L2" }, { SH_BOX_R2, 0x2563, "R2" },
+    { SH_BOX_X2, 0x256C, "X2" },
+    { SH_BOX_TLR, 0x250F, "TLR" }, { SH_BOX_TRR, 0x2513, "TRR" },
+    { SH_BOX_BLR, 0x2517, "BLR" }, { SH_BOX_BRR, 0x251B, "BRR" },
+    { SH_BOX_HL, 0x2501, "HL" }, { SH_BOX_VL, 0x2503, "VL" },
+};
+
+#define TUI_BOX_SPEC_COUNT ((int)(sizeof(s_box_spec) / sizeof(s_box_spec[0])))
+
+/** Count codepoints in a NUL-terminated string (glyph-aware centering).
+ *  Uses the shared shell decoder: no local twin. */
+static int tui_codepoint_len(const char *s)
+{
+    int count = 0;
+    size_t avail;
+    size_t off = 0;
+
+    if (s == NULL) {
+        return 0;
+    }
+    avail = strlen(s);
+    while (off < avail) {
+        uint32_t cp = 0;
+        size_t len = 0;
+
+        if (!shell_utf8_decode(s + off, avail - off, &cp, &len) || len == 0) {
+            break;
+        }
+        off += len;
+        count++;
+    }
+    return count;
+}
 
 void tui_frame_stats_reset(void)
 {
@@ -120,6 +192,7 @@ static void tui_apply_layout(void)
     if (best == NULL) {
         best = &tui_font_cells[tui_font_cell_count - 1]; /* smallest fallback */
     }
+    s_bound_cell = best;
     gw = (lv_coord_t)(best->cell_w * s_cols);
     gh = (lv_coord_t)(best->cell_h * s_rows);
     lv_obj_set_style_text_font(s_tui_label, best->font, 0);
@@ -193,8 +266,11 @@ void tui_deinit(void)
     lvgl_port_lock(0);
     windows_set_surface_layout_cb(NULL);
     if (s_tui_label) { lv_obj_del(s_tui_label); s_tui_label = NULL; }
+    if (s_title_label) { lv_obj_del(s_title_label); s_title_label = NULL; }
+    s_title_visible = false;
     windows_exit_tui_mode();
     s_tui_container = NULL;
+    s_bound_cell = NULL;
     lvgl_port_unlock();
     if (s_cells) {
         heap_caps_free(s_cells);
@@ -212,6 +288,24 @@ bool tui_is_active(void) { return s_active; }
 static void tui_cell_set(tui_cell_t *cell, const char *utf8, uint8_t fg, uint8_t bg)
 {
     if (!cell || !utf8) return;
+    /* Any write inside an armed title band hides the overlay: the band text
+     * below stays authoritative, so the overlay can never paint a ghost.
+     * Bounds-checked (a resize may have orphaned the rect: hide, don't index). */
+    if (s_title_visible && s_cells != NULL && cell >= s_cells) {
+        if (s_title_row < 1 || s_title_row > s_rows ||
+            s_title_col < 1 || s_title_col > s_cols || s_title_len <= 0) {
+            s_title_visible = false;
+        } else {
+            tui_cell_t *first = &s_cells[(s_title_row - 1) * s_cols + (s_title_col - 1)];
+            tui_cell_t *last = first + s_title_len;
+            tui_cell_t *end = s_cells + (size_t)s_rows * (size_t)s_cols;
+            if (last > end) {
+                s_title_visible = false;
+            } else if (cell >= first && cell < last) {
+                s_title_visible = false;
+            }
+        }
+    }
     strncpy(cell->utf8, utf8, sizeof(cell->utf8) - 1);
     cell->utf8[sizeof(cell->utf8) - 1] = '\0';
     cell->fg = fg;
@@ -219,9 +313,21 @@ static void tui_cell_set(tui_cell_t *cell, const char *utf8, uint8_t fg, uint8_t
     cell->attr = 0;
 }
 
+/** Hide the title overlay (keeps the object for reuse). No LVGL lock here:
+ *  callers either hold it (flush) or only flip the flag (draw paths; the
+ *  hidden flag itself is applied at flush). */
+static void tui_title_hide(void)
+{
+    s_title_visible = false;
+}
+
+/* Loop-task side sync for the title overlay (definition after tui_flush). */
+static void tui_title_sync(void);
+
 void tui_clear(void)
 {
     if (!s_cells) return;
+    tui_title_hide();
     for (int r = 1; r <= s_rows; r++) {
         for (int c = 1; c <= s_cols; c++) {
             tui_cell_t *cell = cell_at(r, c);
@@ -256,6 +362,9 @@ void tui_clear_line(int mode)
 void tui_scroll_up(void)
 {
     if (!s_cells) return;
+    /* The title band does not track scrolling: hide the overlay (the cells
+     * below still render the text, just without its background). */
+    tui_title_hide();
     size_t row_bytes = (size_t)s_cols * sizeof(tui_cell_t);
     memmove(s_cells, s_cells + s_cols, row_bytes * (size_t)(s_rows - 1));
     for (int c = 1; c <= s_cols; c++) {
@@ -371,14 +480,59 @@ void tui_draw_box(int x, int y, int w, int h, const char *style, uint8_t fg, uin
         tui_cell_set(left, vch, fg, bg);
         tui_cell_set(right, vch, fg, bg);
     }
-    /* Title centered on top border */
+    /* Title centered on top border (glyph-aware: strlen counts bytes, so
+     * multibyte titles used character columns and could split a UTF-8
+     * sequence across the seam cells). Overlong titles truncate by whole
+     * glyphs to the inner width. */
     if (title && title[0]) {
-        int tlen = (int)strlen(title);
+        int tlen = tui_codepoint_len(title);
         int tx = x + (w - tlen - 2) / 2;
         if (tx < x + 1) tx = x + 1;
         tui_print_at(tx, y, " ", fg, bg);
-        tui_print_at(tx + 1, y, title, fg, bg);
-        tui_print_at(tx + 1 + tlen, y, " ", fg, bg);
+        if (tlen > w - 2 && w > 2) {
+            size_t avail = strlen(title);
+            size_t off = 0;
+            int kept = 0;
+            char *clipped = malloc(avail + 1);
+
+            if (clipped != NULL) {
+                while (off < avail && kept < w - 2) {
+                    uint32_t cp = 0;
+                    size_t len = 0;
+
+                    if (!shell_utf8_decode(title + off, avail - off, &cp, &len) ||
+                        len == 0) {
+                        break;
+                    }
+                    memcpy(clipped + off, title + off, len);
+                    off += len;
+                    kept++;
+                }
+                clipped[off] = '\0';
+                tui_print_at(tx + 1, y, clipped, fg, bg);
+                free(clipped);
+            } else {
+                tui_print_at(tx + 1, y, title, fg, bg);
+            }
+        } else {
+            tui_print_at(tx + 1, y, title, fg, bg);
+        }
+        tui_print_at(tx + 1 + (tlen > w - 2 && w > 2 ? w - 2 : tlen), y, " ", fg, bg);
+        /* Arm the bg overlay band (leading space + title + trailing space)
+         * when the caller set an explicit background; the grid label cannot
+         * render it. Default bg renders inline as before. */
+        if (bg < 16) {
+            s_title_col = tx;
+            s_title_row = y;
+            s_title_len = (tlen > w - 2 && w > 2 ? w - 2 : tlen) + 2;
+            s_title_fg = fg;
+            s_title_bg = bg;
+            s_title_visible = true;
+        } else {
+            s_title_visible = false;
+        }
+    } else {
+        s_title_visible = false;
     }
     /* Clear interior */
     for (int r = y + 1; r < y + h - 1; r++) {
@@ -851,10 +1005,93 @@ void tui_flush(void)
     buf[pos] = '\0';
     lvgl_port_lock(0);
     lv_label_set_text(s_tui_label, buf);
+    tui_title_sync();
     lvgl_port_unlock();
     heap_caps_free(buf);
     /* Present point for the TUI frame-pacing stats (`tui stats`). */
     gfx_frame_stats_sample(&s_tui_stats, (uint64_t)esp_timer_get_time());
+}
+
+/* Sync the title-bg overlay with the armed band. Runs with the LVGL lock
+ * held (from tui_flush). Reads the band text back from the cells so the
+ * overlay can never disagree with the grid, positions it over the exact
+ * cells with the same font metrics, and hides it whenever anything is
+ * off (no bound font, stale rect, default bg). */
+static void tui_title_sync(void)
+{
+    char text[512];
+    size_t tpos = 0;
+    int c;
+    int cell_w;
+    int cell_h;
+    lv_coord_t gx;
+    lv_coord_t gy;
+    uint32_t fg_rgb;
+    uint32_t bg_rgb;
+
+    if (!s_title_visible || s_bound_cell == NULL ||
+        s_title_row < 1 || s_title_row > s_rows ||
+        s_title_col < 1 || s_title_col > s_cols || s_title_len <= 0) {
+        if (s_title_label != NULL) {
+            lv_obj_add_flag(s_title_label, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+    if (s_title_col + s_title_len - 1 > s_cols) {
+        s_title_visible = false;
+        if (s_title_label != NULL) {
+            lv_obj_add_flag(s_title_label, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+    cell_w = s_bound_cell->cell_w;
+    cell_h = s_bound_cell->cell_h;
+    if (cell_w <= 0 || cell_h <= 0) {
+        return;
+    }
+    for (c = 0; c < s_title_len; c++) {
+        tui_cell_t *cell = cell_at(s_title_row, s_title_col + c);
+        size_t n = strlen(cell->utf8);
+
+        if (tpos + n + 1 >= sizeof(text)) {
+            break;
+        }
+        memcpy(text + tpos, cell->utf8, n);
+        tpos += n;
+    }
+    text[tpos] = '\0';
+    if (s_title_label == NULL) {
+        s_title_label = lv_label_create(s_tui_container);
+        if (s_title_label == NULL) {
+            return;
+        }
+        lv_obj_set_style_pad_all(s_title_label, 0, 0);
+        lv_obj_set_style_border_width(s_title_label, 0, 0);
+    }
+    fg_rgb = (s_title_fg < 16) ? ansi_get_palette_color((ansi_color_index_t)s_title_fg)
+                               : ansi_get_default_fg();
+    bg_rgb = (s_title_bg < 16) ? ansi_get_palette_color((ansi_color_index_t)s_title_bg)
+                               : ansi_get_default_bg();
+    if (fg_rgb == 0 && s_title_fg != 0) {
+        fg_rgb = ansi_get_palette_color(ANSI_COLOR_WHITE);
+    }
+    if (bg_rgb == 0 && s_title_bg != 0) {
+        bg_rgb = ansi_get_palette_color(ANSI_COLOR_BLACK);
+    }
+    gx = lv_obj_get_x(s_tui_label);
+    gy = lv_obj_get_y(s_tui_label);
+    lv_obj_set_style_text_font(s_title_label, s_bound_cell->font, 0);
+    lv_obj_set_style_text_letter_space(s_title_label, 0, 0);
+    lv_obj_set_style_text_line_space(s_title_label, 0, 0);
+    lv_obj_set_style_text_color(s_title_label, lv_color_hex(fg_rgb), 0);
+    lv_obj_set_style_bg_color(s_title_label, lv_color_hex(bg_rgb), 0);
+    lv_obj_set_style_bg_opa(s_title_label, LV_OPA_COVER, 0);
+    lv_label_set_text(s_title_label, text);
+    lv_obj_set_size(s_title_label, (lv_coord_t)(s_title_len * cell_w),
+                    (lv_coord_t)cell_h);
+    lv_obj_set_pos(s_title_label, (lv_coord_t)(gx + (s_title_col - 1) * cell_w),
+                    (lv_coord_t)(gy + (s_title_row - 1) * cell_h));
+    lv_obj_remove_flag(s_title_label, LV_OBJ_FLAG_HIDDEN);
 }
 
 void tui_refresh_surface(void)
@@ -871,6 +1108,9 @@ void tui_hide_for_modal(void)
     if (!s_active || !s_tui_label) return;
     lvgl_port_lock(0);
     lv_obj_add_flag(s_tui_label, LV_OBJ_FLAG_HIDDEN);
+    if (s_title_label != NULL) {
+        lv_obj_add_flag(s_title_label, LV_OBJ_FLAG_HIDDEN);
+    }
     lvgl_port_unlock();
 }
 
@@ -879,6 +1119,9 @@ void tui_show_after_modal(void)
     if (!s_active || !s_tui_label) return;
     lvgl_port_lock(0);
     lv_obj_remove_flag(s_tui_label, LV_OBJ_FLAG_HIDDEN);
+    if (s_title_label != NULL && s_title_visible) {
+        lv_obj_remove_flag(s_title_label, LV_OBJ_FLAG_HIDDEN);
+    }
     lvgl_port_unlock();
     tui_flush();
 }
@@ -909,4 +1152,150 @@ void tui_exit_fullscreen(void)
 bool tui_is_fullscreen(void)
 {
     return windows_is_fullscreen();
+}
+
+/* ========================================================================
+ * Self-test (pure, headless-safe): palette spec, glyph coverage, metrics.
+ * `tui selftest` reports these; the unit tests drive the same helpers.
+ * ======================================================================== */
+
+void tui_bound_cell_info(int *cell_w_out, int *cell_h_out, int *index_out)
+{
+    if (cell_w_out != NULL) {
+        *cell_w_out = (s_bound_cell != NULL) ? s_bound_cell->cell_w : 0;
+    }
+    if (cell_h_out != NULL) {
+        *cell_h_out = (s_bound_cell != NULL) ? s_bound_cell->cell_h : 0;
+    }
+    if (index_out != NULL) {
+        *index_out = (s_bound_cell != NULL)
+            ? (int)(s_bound_cell - tui_font_cells) : -1;
+    }
+}
+
+int tui_selftest_palette(const char **fail_name_out)
+{
+    int fails = 0;
+    int i;
+    int j;
+
+    if (fail_name_out != NULL) {
+        *fail_name_out = NULL;
+    }
+    for (i = 0; i < TUI_BOX_SPEC_COUNT; i++) {
+        uint32_t cp = 0;
+        size_t len = 0;
+        size_t raw;
+
+        /* Decodes to exactly one codepoint, and it is the specified one. */
+        if (!shell_utf8_decode(s_box_spec[i].bytes, strlen(s_box_spec[i].bytes),
+                               &cp, &len) ||
+            cp != s_box_spec[i].cp) {
+            fails++;
+            if (fail_name_out != NULL && *fail_name_out == NULL) {
+                *fail_name_out = s_box_spec[i].name;
+            }
+            continue;
+        }
+        raw = strlen(s_box_spec[i].bytes);
+        if (len == 0 || len != raw) {
+            fails++;
+            if (fail_name_out != NULL && *fail_name_out == NULL) {
+                *fail_name_out = s_box_spec[i].name;
+            }
+            continue;
+        }
+        /* No two macros may share a byte sequence (the X2==T2 class). */
+        for (j = 0; j < i; j++) {
+            if (strcmp(s_box_spec[i].bytes, s_box_spec[j].bytes) == 0) {
+                fails++;
+                if (fail_name_out != NULL && *fail_name_out == NULL) {
+                    *fail_name_out = s_box_spec[i].name;
+                }
+                break;
+            }
+        }
+    }
+    return fails;
+}
+
+int tui_selftest_coverage(const char **fail_name_out)
+{
+    int fails = 0;
+    int f;
+    int i;
+
+    if (fail_name_out != NULL) {
+        *fail_name_out = NULL;
+    }
+    for (f = 0; f < tui_font_cell_count; f++) {
+        const lv_font_t *font = tui_font_cells[f].font;
+        /* lv_font_get_glyph_dsc reports advance in whole pixels (the 1/16
+         * table units are rounded down), so a full-cell glyph advances
+         * exactly one cell width. */
+        int expect_adv = tui_font_cells[f].cell_w;
+
+        if (font == NULL) {
+            fails++;
+            continue;
+        }
+        for (i = 0; i < TUI_BOX_SPEC_COUNT; i++) {
+            lv_font_glyph_dsc_t dsc;
+            uint32_t cp = s_box_spec[i].cp;
+
+            /* Only box-drawing codepoints need full-cell glyphs. */
+            if (cp < 0x2500 || cp > 0x257F) {
+                continue;
+            }
+            memset(&dsc, 0, sizeof(dsc));
+            if (!lv_font_get_glyph_dsc(font, &dsc, cp, 0) ||
+                dsc.resolved_font != font ||
+                dsc.adv_w != (uint16_t)expect_adv) {
+                fails++;
+                if (fail_name_out != NULL && *fail_name_out == NULL) {
+                    *fail_name_out = s_box_spec[i].name;
+                }
+            }
+        }
+    }
+    return fails;
+}
+
+int tui_selftest_metrics(const char **fail_name_out)
+{
+    int fails = 0;
+    int f;
+
+    if (fail_name_out != NULL) {
+        *fail_name_out = NULL;
+    }
+    for (f = 0; f < tui_font_cell_count; f++) {
+        const lv_font_t *font = tui_font_cells[f].font;
+
+        if (font == NULL || font->line_height != tui_font_cells[f].cell_h) {
+            fails++;
+            if (fail_name_out != NULL && *fail_name_out == NULL) {
+                *fail_name_out = "metrics";
+            }
+        }
+    }
+    return fails;
+}
+
+int tui_selftest_check(const char **fail_name_out)
+{
+    const char *name = NULL;
+    int fails;
+
+    fails = tui_selftest_palette(&name);
+    if (fails == 0) {
+        fails += tui_selftest_coverage(&name);
+    }
+    if (fails == 0) {
+        fails += tui_selftest_metrics(&name);
+    }
+    if (fail_name_out != NULL) {
+        *fail_name_out = name;
+    }
+    return fails;
 }

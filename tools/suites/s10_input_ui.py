@@ -313,6 +313,85 @@ def run(dev, ctx):
         else:
             c.check("dialog dismissed by target", False, "dialog did not open")
 
+        # =================================================================
+        # 6. HID mouse cursor/click (shared display pointer, default off)
+        # =================================================================
+        c.note("mouse cursor/click toggles")
+        c.expect("mouse cursor enables", "mouse cursor on",
+                 dev.run("usb mouse cursor on", timeout=20))
+        c.expect("mouse click enables", "mouse click on",
+                 dev.run("usb mouse click on", timeout=20))
+        ptr = dev.run("usb status", timeout=20)
+        c.expect("status reports cursor", "cursor=on", ptr)
+        c.expect("status reports click", "click=on", ptr)
+        c.expect("status reports position", "usb.hid.mouse.ptr", ptr)
+        c.expect("mouse cursor disables", "mouse cursor off",
+                 dev.run("usb mouse cursor off", timeout=20))
+        c.expect("mouse click disables", "mouse click off",
+                 dev.run("usb mouse click off", timeout=20))
+        ptr = dev.run("usb status", timeout=20)
+        c.expect("status reports cursor off", "cursor=off", ptr)
+        c.expect("status reports click off", "click=off", ptr)
+        # Toggle storm: the pointer lifecycle must survive rapid cycling
+        # with the board alive afterwards (no watchdog).
+        for _ in range(3):
+            dev.run("usb mouse cursor on", timeout=20)
+            dev.run("usb mouse click on", timeout=20)
+            dev.run("usb mouse cursor off", timeout=20)
+            dev.run("usb mouse click off", timeout=20)
+        c.expect("board alive after toggle storm", "P10ALIVE",
+                 dev.run("echo P10ALIVE", timeout=20))
+        c.expect("bluetooth mouse cursor toggles", "mouse cursor on",
+                 dev.run("bluetooth mouse cursor on", timeout=20))
+        c.expect("bluetooth mouse click toggles", "mouse click on",
+                 dev.run("bluetooth mouse click on", timeout=20))
+        dev.run("bluetooth mouse cursor off", timeout=20)
+        dev.run("bluetooth mouse click off", timeout=20)
+
+        # =================================================================
+        # 7. Hyperlinks: SH_LINK style, tap-confirm, cursor simulation
+        # =================================================================
+        c.note("hyperlinks + cursor simulation")
+        dev.run("cls", timeout=20)
+        out = dev.run("link P10LINK echo P10LINK-OK", timeout=20)
+        c.expect("link emits label", "P10LINK", out)
+        c.check("link leaks no escapes", "\x1b" not in out,
+                "tail=%r" % out[-160:])
+        links = dev.run("ui links", timeout=20)
+        c.expect("ui links lists the link", "P10LINK", links)
+        # First activation previews (no execution), second runs.
+        prev = dev.run("ui link 0", timeout=20)
+        c.expect("first activation previews", "ui.link: preview", prev)
+        c.check("no execution on preview", "P10LINK-OK" not in prev,
+                "tail=%r" % prev[-160:])
+        ran = dev.run("ui link 0", timeout=20)
+        c.expect("second activation runs", "P10LINK-OK", ran)
+        st = _ui_state(dev)
+        c.expect("ui state reports cursor", "cursor=", st)
+        c.expect("ui state reports link", "link=", st)
+        # Serial cursor simulation over the shared pointer indev. `usb mouse
+        # move` takes NATIVE panel pixels (like the HID parsers); the suite
+        # reads them from sysinfo, never from the logical display size.
+        m = re.search(r"native\s+(\d+)\s*x\s*(\d+)", dev.sysinfo())
+        nw, nh = (int(m.group(1)), int(m.group(2))) if m else dev.display_size()
+        dev.run("usb mouse cursor on", timeout=20)
+        dev.run("usb mouse click on", timeout=20)
+        c.expect("cursor move reports", "usb: mouse move",
+                 dev.cursor_move(nw // 2, nh // 2))
+        ptr = dev.run("usb status", timeout=20)
+        c.expect("status reports moved cursor",
+                 "x=%d y=%d" % (nw // 2, nh // 2), ptr)
+        c.expect("cursor click pulses", "usb: mouse click",
+                 dev.cursor_click())
+        c.expect("board alive after click", "P10ALIVE2",
+                 dev.run("echo P10ALIVE2", timeout=20))
+        c.check("no modal after click", _field(_ui_state(dev), "modal") in
+                ("none", None), "state=%r" % _ui_state(dev)[-160:])
+        dev.run("usb mouse cursor off", timeout=20)
+        dev.run("usb mouse click off", timeout=20)
+        c.expect("cursor move refuses while off", "refused",
+                 dev.cursor_move(10, 10))
+
     finally:
         # Make sure no modal is left owning the screen, then restore the
         # baseline keyboard page/visibility.

@@ -338,6 +338,24 @@ int ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args);
 #define ANSI_SGR_FG_BG(fg, bg)  ANSI_CSI #fg ";" #bg ANSI_SGR_END
 
 /* ========================================================================
+ * OSC 8 HYPERLINKS
+ * ========================================================================
+ * Terminal hyperlinks (`ESC ] 8 ;; <target> ST <label> ESC ] 8 ;; ST`,
+ * ST = `ESC \`) ride alongside the visible label: capable serial terminals
+ * render them natively, while every firmware parser (ansi_process_text,
+ * ansi_process_text_ex, ansi_strip_to_plain) drops the OSC bytes and keeps
+ * the label. LVGL taps use the registered shell link region, never the
+ * escape bytes, so the three surfaces (screen, serial, plain buffer) can
+ * never disagree. Emit only through the shell_link helpers.
+ */
+
+/** OSC 8 open printf template: takes the link target (command/URL/path). */
+#define ANSI_OSC8_OPEN_FMT       "\x1B]8;;%s\x1B\\"
+
+/** OSC 8 close sequence: ends the hyperlink, back to plain styled text. */
+#define ANSI_OSC8_CLOSE          "\x1B]8;;\x1B\\"
+
+/* ========================================================================
  * ANSI TEXT PROCESSING
  * ======================================================================== */
 

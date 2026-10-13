@@ -33,8 +33,25 @@
 #include <strings.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <utime.h>
+
+/**
+ * Basename of a resolved path, accepting both '/' and '\' separators (the
+ * resolver keeps DOS-style backslashes in the filename part). Single shared
+ * helper for this file (attrib display, copy/move-into-dir, xcopy).
+ */
+static const char *shell_xcopy_basename(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    const char *bslash = strrchr(path, '\\');
+
+    if (bslash != NULL && (slash == NULL || bslash > slash)) {
+        slash = bslash;
+    }
+    return (slash != NULL) ? slash + 1 : path;
+}
 
 /* ========================================================================
  * FILE MANIPULATION
@@ -59,8 +76,7 @@ static void shell_join_dest_into_dir(char *dest_path, size_t dest_size,
     if (stat(dest_path, &dst_st) != 0 || !S_ISDIR(dst_st.st_mode)) {
         return;
     }
-    base = strrchr(source_path, '/');
-    base = (base != NULL) ? base + 1 : source_path;
+    base = shell_xcopy_basename(source_path);
     if (snprintf(joined, sizeof(joined), "%s/%s", dest_path, base) < (int)sizeof(joined)) {
         snprintf(dest_path, dest_size, "%s", joined);
     }
@@ -242,6 +258,10 @@ int shell_command_del(int argc, char **argv)
             shell_print_error("del: invalid path");
             return 1;
         }
+        if (!permanent && storage_volume_of_vfs_path(resolved_path) != STORAGE_VOLUME_SD) {
+            shell_print_error("del: recycle bin is SD-only; use del /p to delete from USB permanently");
+            return 1;
+        }
         snprintf(pattern_buf, sizeof(pattern_buf), "%s", pattern);
 
         error = storage_trash_delete_pattern(resolved_path, pattern_buf,
@@ -268,21 +288,26 @@ int shell_command_del(int argc, char **argv)
         shell_print_error("del: invalid path");
         return 1;
     }
-    error = shell_sd_begin(&session);
+    if (!permanent && storage_volume_of_vfs_path(resolved_path) != STORAGE_VOLUME_SD) {
+        shell_print_error("del: recycle bin is SD-only; use del /p to delete from USB permanently");
+        return 1;
+    }
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved_path), &session);
     if (error != ESP_OK) {
-        shell_print_error("del: SD card not present - insert and retry");
+        shell_print_error("del: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved_path)));
         return 1;
     }
     {
         struct stat st;
 
         if (stat(resolved_path, &st) == 0 && S_ISDIR(st.st_mode)) {
-            shell_sd_end(&session, "del");
+            storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "del");
             shell_print_error("del: %s is a directory (use rd)", resolved_path);
             return 1;
         }
     }
-    shell_sd_end(&session, "del");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "del");
 
     if (recursive) {
         /* A plain file with /s deletes same-named files in subdirectories
@@ -313,16 +338,16 @@ int shell_command_del(int argc, char **argv)
     error = storage_trash_delete_file(resolved_path, permanent);
     if (error == ESP_ERR_NOT_SUPPORTED) {
         /* Trash disabled: fall back to a plain unlink. */
-        error = shell_sd_begin(&session);
+        error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved_path), &session);
         if (error != ESP_OK) {
             return 1;
         }
         if (unlink(resolved_path) != 0) {
             shell_print_error("del: failed to delete %s (%s)", resolved_path, strerror(errno));
-            shell_sd_end(&session, "del");
+            storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "del");
             return 1;
         }
-        shell_sd_end(&session, "del");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "del");
         shell_print_ok("Deleted %s", resolved_path);
         return 0;
     }
@@ -366,20 +391,28 @@ void shell_command_rename(int argc, char **argv, const char *verb)
         return;
     }
 
-    error = shell_sd_begin(&session);
-    if (error != ESP_OK) {
-        shell_transcript_appendf("%s: SD card not present - insert and retry\n", verb);
-        return;
-    }
+    {
+        storage_volume_t vol =
+            storage_volume_of_vfs_path(source_path) != STORAGE_VOLUME_SD ?
+            storage_volume_of_vfs_path(source_path) :
+            storage_volume_of_vfs_path(target_path);
 
-    if (rename(source_path, target_path) != 0) {
-        shell_transcript_appendf("%s: failed (%s)\n", verb, strerror(errno));
-        shell_sd_end(&session, verb);
-        return;
-    }
+        error = storage_volume_session_begin(vol, &session);
+        if (error != ESP_OK) {
+            shell_transcript_appendf("%s: %s not present - insert and retry\n", verb,
+                                     storage_volume_media_name(vol));
+            return;
+        }
 
-    shell_sd_end(&session, verb);
-    shell_transcript_appendf("%s -> %s\n", source_path, target_path);
+        if (rename(source_path, target_path) != 0) {
+            shell_transcript_appendf("%s: failed (%s)\n", verb, strerror(errno));
+            storage_volume_session_end(vol, &session, verb);
+            return;
+        }
+
+        storage_volume_session_end(vol, &session, verb);
+        shell_transcript_appendf("%s -> %s\n", source_path, target_path);
+    }
 }
 
 void shell_command_mkdir(int argc, char **argv)
@@ -399,19 +432,20 @@ void shell_command_mkdir(int argc, char **argv)
         return;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved_path), &session);
     if (error != ESP_OK) {
-        shell_print_error("mkdir: SD card not present - insert and retry");
+        shell_print_error("mkdir: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved_path)));
         return;
     }
 
     if (mkdir(resolved_path, 0775) != 0) {
         shell_print_error("mkdir: failed to create %s (%s)", resolved_path, strerror(errno));
-        shell_sd_end(&session, "mkdir");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "mkdir");
         return;
     }
 
-    shell_sd_end(&session, "mkdir");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "mkdir");
     shell_print_ok("Created directory %s", resolved_path);
 }
 
@@ -453,6 +487,12 @@ int shell_command_rmdir(int argc, char **argv)
         return 1;
     }
 
+    if (recursive && !permanent &&
+        storage_volume_of_vfs_path(resolved_path) != STORAGE_VOLUME_SD) {
+        shell_print_error("rd: recycle bin is SD-only; use rd /s /p to remove USB directories permanently");
+        return 1;
+    }
+
     if (recursive) {
         char warning[392];
 
@@ -485,19 +525,20 @@ int shell_command_rmdir(int argc, char **argv)
         return 0;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved_path), &session);
     if (error != ESP_OK) {
-        shell_print_error("rd: SD card not present - insert and retry");
+        shell_print_error("rd: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved_path)));
         return 1;
     }
 
     if (rmdir(resolved_path) != 0) {
         shell_print_error("rd: failed to remove %s (%s)", resolved_path, strerror(errno));
-        shell_sd_end(&session, "rd");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "rd");
         return 1;
     }
 
-    shell_sd_end(&session, "rd");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "rd");
     shell_print_ok("Removed directory %s", resolved_path);
     return 0;
 }
@@ -680,10 +721,11 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
     }
     shell_join_args(argv, 2, argc, text, SHELL_COMMAND_BYTES);
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved_path), &session);
     if (error != ESP_OK) {
         free(text);
-        shell_transcript_appendf("%s: SD card not present - insert and retry\n", append_mode ? "append" : "write");
+        shell_transcript_appendf("%s: %s not present - insert and retry\n", append_mode ? "append" : "write",
+                                 storage_volume_media_name(storage_volume_of_vfs_path(resolved_path)));
         return;
     }
 
@@ -694,9 +736,10 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
         uint64_t needed = (uint64_t)strlen(text) + 1u;
         uint64_t reclaim = append_mode ? 0u : storage_get_file_size(resolved_path);
 
-        if (!storage_check_free_space(needed, reclaim, append_mode ? "append" : "write")) {
+        if (!storage_check_free_space_at(resolved_path, needed, reclaim, append_mode ? "append" : "write")) {
             free(text);
-            shell_sd_end(&session, append_mode ? "append" : "write");
+            storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session,
+                                       append_mode ? "append" : "write");
             return;
         }
     }
@@ -708,7 +751,8 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
                                  append_mode ? "append" : "write",
                                  resolved_path,
                                  strerror(errno));
-        shell_sd_end(&session, append_mode ? "append" : "write");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session,
+                                   append_mode ? "append" : "write");
         return;
     }
 
@@ -716,13 +760,15 @@ void shell_command_write_file(int argc, char **argv, bool append_mode)
         shell_transcript_appendf("%s: failed while writing %s\n", append_mode ? "append" : "write", resolved_path);
         fclose(file);
         free(text);
-        shell_sd_end(&session, append_mode ? "append" : "write");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session,
+                                   append_mode ? "append" : "write");
         return;
     }
 
     fclose(file);
     free(text);
-    shell_sd_end(&session, append_mode ? "append" : "write");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session,
+                               append_mode ? "append" : "write");
     shell_transcript_appendf("%s: %s\n", append_mode ? "Appended" : "Wrote", resolved_path);
 }
 
@@ -744,22 +790,23 @@ void shell_command_touch(int argc, char **argv)
         return;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved_path), &session);
     if (error != ESP_OK) {
-        shell_print_error("touch: SD card not present - insert and retry");
+        shell_print_error("touch: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved_path)));
         return;
     }
 
     file = fopen(resolved_path, "ab");
     if (file == NULL) {
         shell_print_error("touch: failed to open %s (%s)", resolved_path, strerror(errno));
-        shell_sd_end(&session, "touch");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "touch");
         return;
     }
 
     fclose(file);
     (void)utime(resolved_path, NULL);
-    shell_sd_end(&session, "touch");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "touch");
     shell_print_ok("Touched %s", resolved_path);
 }
 
@@ -768,6 +815,7 @@ void shell_command_move(int argc, char **argv)
     char source_path[SHELL_SD_PATH_BYTES];
     char target_path[SHELL_SD_PATH_BYTES];
     shell_sd_session_t session;
+    storage_volume_t vol;
     esp_err_t error;
 
     if (argc != 3) {
@@ -800,33 +848,40 @@ void shell_command_move(int argc, char **argv)
         return;
     }
 
-    error = shell_sd_begin(&session);
+    /* The session follows the non-SD side of a cross-volume move (same
+     * rule as copy); a same-volume move only needs its own volume. */
+    vol = storage_volume_of_vfs_path(source_path) != STORAGE_VOLUME_SD ?
+        storage_volume_of_vfs_path(source_path) :
+        storage_volume_of_vfs_path(target_path);
+
+    error = storage_volume_session_begin(vol, &session);
     if (error != ESP_OK) {
-        shell_print_error("move: SD card not present - insert and retry");
+        shell_print_error("move: %s not present - insert and retry",
+                          storage_volume_media_name(vol));
         return;
     }
 
     if (rename(source_path, target_path) == 0) {
-        shell_sd_end(&session, "move");
+        storage_volume_session_end(vol, &session, "move");
         shell_print_ok("Moved %s -> %s", source_path, target_path);
         return;
     }
 
-    shell_sd_end(&session, "move");
+    storage_volume_session_end(vol, &session, "move");
     error = shell_fs_copy_file(source_path, target_path);
     if (error != ESP_OK) {
         shell_print_error("move: failed to copy %s (%s)", source_path, esp_err_to_name(error));
         return;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(vol, &session);
     if (error == ESP_OK) {
         if (unlink(source_path) != 0) {
             shell_transcript_appendf("move: warning, copied but could not remove %s (%s)\n",
                                      source_path,
                                      strerror(errno));
         }
-        shell_sd_end(&session, "move");
+        storage_volume_session_end(vol, &session, "move");
     }
     shell_print_ok("Moved %s -> %s", source_path, target_path);
 }
@@ -860,12 +915,8 @@ void shell_command_attrib(int argc, char **argv)
     BYTE attr = 0;
     bool set_attr = false;
     char attr_char = 0;
-
-    error = shell_sd_begin(&session);
-    if (error != ESP_OK) {
-        shell_print_error("attrib: SD card not present");
-        return;
-    }
+    storage_volume_t vol = STORAGE_VOLUME_SD;
+    const char *path = NULL;
 
     /* Parse attribute operation: +R, -R, +H, -H, +S, -S, +A, -A */
     if (argc >= 2 && (argv[1][0] == '+' || argv[1][0] == '-') &&
@@ -880,30 +931,71 @@ void shell_command_attrib(int argc, char **argv)
         case 'A': attr = AM_ARC; break;
         default:
             shell_print_error("attrib: invalid attribute. Use R, H, S, or A");
-            shell_sd_end(&session, "attrib");
             return;
         }
 
         if (argc < 3) {
             shell_transcript_append_text("attrib: path required when setting/clearing attributes\n");
-            shell_sd_end(&session, "attrib");
             return;
         }
 
-        error = shell_sd_resolve_path(argv[2], resolved, sizeof(resolved));
-        if (error == ESP_OK) {
-            error = shell_sd_vfs_to_fatfs_path(resolved, fatfs_path, sizeof(fatfs_path));
-        }
+        error = shell_fs_resolve_path(argv[2], resolved, sizeof(resolved));
         if (error != ESP_OK) {
             shell_print_error("attrib: invalid path");
-            shell_sd_end(&session, "attrib");
+            return;
+        }
+        vol = storage_volume_of_vfs_path(resolved);
+        error = storage_volume_session_begin(vol, &session);
+        if (error != ESP_OK) {
+            shell_print_error("attrib: %s not present - insert and retry",
+                              storage_volume_media_name(vol));
+            return;
+        }
+
+        if (vol != STORAGE_VOLUME_SD) {
+            /* USB has no FATFS attribute bits: only the read-only flag maps
+             * (VFS write permission), hidden/system/archive are SD-only. */
+            if (attr_char != 'R') {
+                shell_print_error("attrib: only R is supported on USB drives");
+                storage_volume_session_end(vol, &session, "attrib");
+                return;
+            }
+            {
+                struct stat st;
+                mode_t mode;
+
+                if (stat(resolved, &st) != 0) {
+                    shell_print_error("attrib: cannot access %s", argv[2]);
+                    storage_volume_session_end(vol, &session, "attrib");
+                    return;
+                }
+                mode = st.st_mode;
+                if (set_attr) {
+                    mode &= (mode_t)~(S_IWUSR | S_IWGRP | S_IWOTH);
+                } else {
+                    mode |= (S_IWUSR | S_IWGRP | S_IWOTH);
+                }
+                if (chmod(resolved, mode) != 0) {
+                    shell_transcript_appendf("attrib: failed to change attributes\n");
+                } else {
+                    shell_transcript_appendf("attrib: %c%c set for %s\n",
+                                             set_attr ? '+' : '-', attr_char, argv[2]);
+                }
+            }
+            storage_volume_session_end(vol, &session, "attrib");
+            return;
+        }
+
+        if (shell_sd_vfs_to_fatfs_path(resolved, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
+            shell_print_error("attrib: invalid path");
+            storage_volume_session_end(vol, &session, "attrib");
             return;
         }
 
         fr = f_stat(fatfs_path, &info);
         if (fr != FR_OK) {
             shell_print_error("attrib: cannot access %s", argv[2]);
-            shell_sd_end(&session, "attrib");
+            storage_volume_session_end(vol, &session, "attrib");
             return;
         }
 
@@ -917,25 +1009,59 @@ void shell_command_attrib(int argc, char **argv)
             shell_transcript_appendf("attrib: %c%c set for %s\n",
                                      set_attr ? '+' : '-', attr_char, argv[2]);
         }
-        shell_sd_end(&session, "attrib");
+        storage_volume_session_end(vol, &session, "attrib");
         return;
     }
 
     /* Show attributes for a file or directory listing */
     if (argc < 2) {
         shell_print_usage("Usage: attrib [path] | attrib [+-RHSA] <file>");
-        shell_sd_end(&session, "attrib");
         return;
     }
-    const char *path = argv[1];
-    error = shell_sd_resolve_path(path, resolved, sizeof(resolved));
-    if (error == ESP_OK) {
-        error = shell_sd_vfs_to_fatfs_path(resolved, fatfs_path, sizeof(fatfs_path));
-    }
-    if (error != ESP_OK) {
-        shell_print_error("attrib: invalid path");
-        shell_sd_end(&session, "attrib");
-        return;
+    {
+        path = argv[1];
+
+        error = shell_fs_resolve_path(path, resolved, sizeof(resolved));
+        if (error != ESP_OK) {
+            shell_print_error("attrib: invalid path");
+            return;
+        }
+        vol = storage_volume_of_vfs_path(resolved);
+        error = storage_volume_session_begin(vol, &session);
+        if (error != ESP_OK) {
+            shell_print_error("attrib: %s not present - insert and retry",
+                              storage_volume_media_name(vol));
+            return;
+        }
+
+        if (vol != STORAGE_VOLUME_SD) {
+            /* USB shows the target only (no child walk): D/R are real,
+             * H/S/A have no USB equivalent. */
+            struct stat st;
+            const char *base;
+
+            if (stat(resolved, &st) != 0) {
+                shell_print_error("attrib: cannot access %s", path);
+                storage_volume_session_end(vol, &session, "attrib");
+                return;
+            }
+            base = shell_xcopy_basename(resolved);
+            if (*base == '\0') {
+                base = resolved; /* trailing separator: show the full path */
+            }
+            shell_transcript_appendf("  %c%c--  %s\n",
+                                     S_ISDIR(st.st_mode) ? 'D' : '-',
+                                     (st.st_mode & 0222) ? '-' : 'R',
+                                     base);
+            storage_volume_session_end(vol, &session, "attrib");
+            return;
+        }
+
+        if (shell_sd_vfs_to_fatfs_path(resolved, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
+            shell_print_error("attrib: invalid path");
+            storage_volume_session_end(vol, &session, "attrib");
+            return;
+        }
     }
 
     fr = f_stat(fatfs_path, &info);
@@ -951,7 +1077,7 @@ void shell_command_attrib(int argc, char **argv)
         DIR *d = opendir(resolved);
         if (d == NULL) {
             shell_print_error("attrib: cannot access %s", path);
-            shell_sd_end(&session, "attrib");
+            storage_volume_session_end(vol, &session, "attrib");
             return;
         }
         struct dirent *entry;
@@ -974,7 +1100,7 @@ void shell_command_attrib(int argc, char **argv)
         }
         closedir(d);
     }
-    shell_sd_end(&session, "attrib");
+    storage_volume_session_end(vol, &session, "attrib");
 }
 
 /* ========================================================================
@@ -1031,6 +1157,55 @@ void shell_command_label(int argc, char **argv)
         }
     }
     shell_sd_end(&session, "label");
+}
+
+/* ========================================================================
+ * VOLUME NAME AND SERIAL (vol, DOS parity)
+ * ========================================================================
+ * Prints "Volume in drive A: is <label>" plus the FAT volume serial number
+ * (f_getlabel with a VSN out-param), mirroring DOS VOL output.
+ *
+ * Usage:
+ *   vol                  Show volume label and serial number
+ */
+
+void shell_command_vol(void)
+{
+    shell_sd_session_t session;
+    esp_err_t error;
+    char label[12];
+    DWORD vsn = 0;
+    FRESULT fr;
+
+    error = shell_sd_begin(&session);
+    if (error != ESP_OK) {
+        shell_print_error("vol: SD card not present");
+        return;
+    }
+
+    fr = f_getlabel(SHELL_SD_FATFS_DRIVE, label, &vsn);
+    shell_sd_end(&session, "vol");
+    if (fr != FR_OK) {
+        shell_print_error("vol: failed to read volume label");
+        shell_record_errorf("vol", shell_sd_fresult_to_esp_err(fr),
+                            "Volume label read failed");
+        return;
+    }
+
+    {
+        int end = 10;
+
+        while (end >= 0 && label[end] == ' ') end--;
+        label[end + 1] = '\0';
+    }
+    shell_transcript_appendf_ansi(SH_LBL " Volume in drive " SH_RST SH_VAL "%s" SH_RST
+                                  SH_LBL " is " SH_RST SH_VAL "%s" SH_RST "\n",
+                                  P4_CONFIG_SD_DRIVE_LETTER,
+                                  label[0] ? label : "(no volume label)");
+    shell_transcript_appendf_ansi(SH_LBL " Volume Serial Number is " SH_RST
+                                  SH_NUM "%04X-%04X" SH_RST "\n",
+                                  (unsigned int)((vsn >> 16) & 0xFFFF),
+                                  (unsigned int)(vsn & 0xFFFF));
 }
 
 /* ========================================================================
@@ -1112,12 +1287,22 @@ typedef struct {
     bool stopped;
 } xcopy_stats_t;
 
-/** Read the FAT attribute byte for a VFS path via f_stat. */
+/** Read the FAT attribute byte for a VFS path: FATFS on SD, synthesized
+ *  (R/D only) from stat() on USB, which has no H/S/A bits. */
 static bool shell_xcopy_get_attrib(const char *vfs_path, uint8_t *attrib_out)
 {    char fatfs_path[SHELL_SD_PATH_BYTES];
     FILINFO info;
+    struct stat st;
 
     memset(&info, 0, sizeof(info));
+    if (storage_volume_of_vfs_path(vfs_path) != STORAGE_VOLUME_SD) {
+        if (stat(vfs_path, &st) != 0) {
+            return false;
+        }
+        *attrib_out = (uint8_t)(((st.st_mode & 0222) == 0 ? AM_RDO : 0) |
+                                (S_ISDIR(st.st_mode) ? AM_DIR : 0));
+        return true;
+    }
     if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
         return false;
     }
@@ -1128,13 +1313,29 @@ static bool shell_xcopy_get_attrib(const char *vfs_path, uint8_t *attrib_out)
     return true;
 }
 
-/** Read the FAT date word for a VFS path (used by /D with no date). */
+/** Read the FAT date word for a VFS path (used by /D with no date): FATFS on
+ *  SD, converted from st_mtime on USB. */
 static bool shell_xcopy_get_fat_date(const char *vfs_path, uint16_t *fdate_out)
 {
     char fatfs_path[SHELL_SD_PATH_BYTES];
     FILINFO info;
+    struct stat st;
+    struct tm tm_parts;
 
     memset(&info, 0, sizeof(info));
+    if (storage_volume_of_vfs_path(vfs_path) != STORAGE_VOLUME_SD) {
+        if (stat(vfs_path, &st) != 0) {
+            return false;
+        }
+        if (localtime_r(&st.st_mtime, &tm_parts) == NULL ||
+            tm_parts.tm_year + 1900 < 1980) {
+            return false;
+        }
+        *fdate_out = (uint16_t)(((tm_parts.tm_year + 1900 - 1980) << 9) |
+                                ((tm_parts.tm_mon + 1) << 5) |
+                                tm_parts.tm_mday);
+        return true;
+    }
     if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
         return false;
     }
@@ -1145,13 +1346,17 @@ static bool shell_xcopy_get_fat_date(const char *vfs_path, uint16_t *fdate_out)
     return true;
 }
 
-/** Set or clear the archive attribute on a VFS path (used by /M). */
+/** Set or clear the archive attribute on a VFS path (used by /M): FATFS on
+ *  SD, silent no-op on USB (no archive bit exists there). */
 static void shell_xcopy_set_archive(const char *vfs_path, bool set)
 {
     char fatfs_path[SHELL_SD_PATH_BYTES];
     FILINFO info;
     uint8_t new_attrib;
 
+    if (storage_volume_of_vfs_path(vfs_path) != STORAGE_VOLUME_SD) {
+        return;
+    }
     if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
         return;
     }
@@ -1163,12 +1368,23 @@ static void shell_xcopy_set_archive(const char *vfs_path, bool set)
     (void)f_chmod(fatfs_path, new_attrib, AM_ARC);
 }
 
-/** Clear the read-only attribute on a destination so /R can overwrite it. */
+/** Clear the read-only attribute on a destination so /R can overwrite it:
+ *  FATFS on SD, chmod on USB. */
 static void shell_xcopy_clear_readonly(const char *vfs_path)
 {
     char fatfs_path[SHELL_SD_PATH_BYTES];
     FILINFO info;
+    struct stat st;
+    mode_t mode;
 
+    if (storage_volume_of_vfs_path(vfs_path) != STORAGE_VOLUME_SD) {
+        if (stat(vfs_path, &st) != 0) {
+            return;
+        }
+        mode = st.st_mode | (S_IWUSR | S_IWGRP | S_IWOTH);
+        (void)chmod(vfs_path, mode);
+        return;
+    }
     if (shell_sd_vfs_to_fatfs_path(vfs_path, fatfs_path, sizeof(fatfs_path)) != ESP_OK) {
         return;
     }
@@ -1296,6 +1512,8 @@ static void shell_xcopy_walk(const char *src_vfs, const char *dst_vfs, int depth
         char child_src[SHELL_SD_PATH_BYTES];
         char child_dst[SHELL_SD_PATH_BYTES];
         FF_DIR dir;
+        DIR *vfs_dir;
+        bool vfs_mode;
         FILINFO info;
     } *scratch = NULL;
     FRESULT result;
@@ -1310,23 +1528,70 @@ static void shell_xcopy_walk(const char *src_vfs, const char *dst_vfs, int depth
         stats->stopped = true;
         return;
     }
-    if (shell_sd_vfs_to_fatfs_path(src_vfs, scratch->src_fatfs, sizeof(scratch->src_fatfs)) != ESP_OK) {
-        free(scratch);
-        return;
-    }
-    result = f_opendir(&scratch->dir, scratch->src_fatfs);
-    if (result != FR_OK) {
-        free(scratch);
-        return;
+    /* USB sources enumerate through VFS (FATFS has no drive there); the
+     * per-entry fields below are synthesized so the shared loop body runs
+     * byte-identical logic on both volumes. Mirrors the VFS branch of
+     * storage_walk_dir (storage_text.c); kept separate because xcopy also
+     * synthesizes attrib/date per entry while the walker needs only names. */
+    scratch->vfs_mode = (storage_volume_of_vfs_path(src_vfs) != STORAGE_VOLUME_SD);
+    if (scratch->vfs_mode) {
+        scratch->vfs_dir = opendir(src_vfs);
+        if (scratch->vfs_dir == NULL) {
+            free(scratch);
+            return;
+        }
+    } else {
+        if (shell_sd_vfs_to_fatfs_path(src_vfs, scratch->src_fatfs, sizeof(scratch->src_fatfs)) != ESP_OK) {
+            free(scratch);
+            return;
+        }
+        result = f_opendir(&scratch->dir, scratch->src_fatfs);
+        if (result != FR_OK) {
+            free(scratch);
+            return;
+        }
     }
 
     while (!stats->stopped) {
         bool is_dir;
         const char *dest_name;
 
-        result = f_readdir(&scratch->dir, &scratch->info);
-        if (result != FR_OK || scratch->info.fname[0] == '\0') {
-            break;
+        if (scratch->vfs_mode) {
+            struct dirent *entry = readdir(scratch->vfs_dir);
+            uint16_t fdate = 0;
+            uint8_t attrib = 0;
+
+            if (entry == NULL) {
+                break;
+            }
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            if (snprintf(scratch->child_src, sizeof(scratch->child_src), "%s/%s",
+                         src_vfs, entry->d_name) < 0) {
+                continue;
+            }
+            if (!shell_xcopy_get_attrib(scratch->child_src, &attrib) ||
+                !shell_xcopy_get_fat_date(scratch->child_src, &fdate)) {
+                struct stat probe;
+
+                /* stat-based helpers above only fail when the entry vanished
+                 * mid-walk; fall back to a plain existence probe. */
+                if (stat(scratch->child_src, &probe) != 0) {
+                    continue;
+                }
+                attrib = S_ISDIR(probe.st_mode) ? AM_DIR : 0;
+                fdate = 0;
+            }
+            (void)snprintf(scratch->info.fname, sizeof(scratch->info.fname), "%s", entry->d_name);
+            scratch->info.fattrib = attrib;
+            scratch->info.fdate = fdate;
+            scratch->info.altname[0] = '\0';
+        } else {
+            result = f_readdir(&scratch->dir, &scratch->info);
+            if (result != FR_OK || scratch->info.fname[0] == '\0') {
+                break;
+            }
         }
         if (strcmp(scratch->info.fname, ".") == 0 || strcmp(scratch->info.fname, "..") == 0) {
             continue;
@@ -1447,23 +1712,14 @@ static void shell_xcopy_walk(const char *src_vfs, const char *dst_vfs, int depth
         }
     }
 
-    (void)f_closedir(&scratch->dir);
-    free(scratch);
-}
-
-/**
- * Basename of a resolved path, accepting both '/' and '\' separators (the
- * resolver keeps DOS-style backslashes in the filename part).
- */
-static const char *shell_xcopy_basename(const char *path)
-{
-    const char *slash = strrchr(path, '/');
-    const char *bslash = strrchr(path, '\\');
-
-    if (bslash != NULL && (slash == NULL || bslash > slash)) {
-        slash = bslash;
+    if (scratch->vfs_mode) {
+        if (scratch->vfs_dir != NULL) {
+            closedir(scratch->vfs_dir);
+        }
+    } else {
+        (void)f_closedir(&scratch->dir);
     }
-    return (slash != NULL) ? slash + 1 : path;
+    free(scratch);
 }
 
 /**
@@ -1477,6 +1733,7 @@ int shell_command_xcopy(int argc, char **argv)
     xcopy_opts_t opts;
     xcopy_stats_t stats;
     shell_sd_session_t session;
+    storage_volume_t vol;
     esp_err_t error;
     char src_resolved[SHELL_SD_PATH_BYTES];
     char dst_resolved[SHELL_SD_PATH_BYTES];
@@ -1559,28 +1816,33 @@ int shell_command_xcopy(int argc, char **argv)
         return 2;
     }
 
-    error = shell_sd_begin(&session);
+    error = shell_fs_resolve_path(src_arg, src_resolved, sizeof(src_resolved));
     if (error != ESP_OK) {
-        shell_print_error("xcopy: SD card not present");
+        shell_print_error("xcopy: invalid source path");
+        return 1;
+    }
+    error = shell_fs_resolve_path(dst_arg, dst_resolved, sizeof(dst_resolved));
+    if (error != ESP_OK) {
+        shell_print_error("xcopy: invalid destination path");
         return 1;
     }
 
-    error = shell_sd_resolve_path(src_arg, src_resolved, sizeof(src_resolved));
+    /* The session follows the non-SD side of a cross-volume copy (same rule
+     * as copy/move); a same-volume copy only needs its own volume. */
+    vol = storage_volume_of_vfs_path(src_resolved) != STORAGE_VOLUME_SD ?
+        storage_volume_of_vfs_path(src_resolved) :
+        storage_volume_of_vfs_path(dst_resolved);
+
+    error = storage_volume_session_begin(vol, &session);
     if (error != ESP_OK) {
-        shell_print_error("xcopy: invalid source path");
-        shell_sd_end(&session, "xcopy");
-        return 1;
-    }
-    error = shell_sd_resolve_path(dst_arg, dst_resolved, sizeof(dst_resolved));
-    if (error != ESP_OK) {
-        shell_print_error("xcopy: invalid destination path");
-        shell_sd_end(&session, "xcopy");
+        shell_print_error("xcopy: %s not present - insert and retry",
+                          storage_volume_media_name(vol));
         return 1;
     }
 
     if (stat(src_resolved, &src_st) != 0) {
         shell_transcript_appendf("xcopy: source not found: %s\n", src_arg);
-        shell_sd_end(&session, "xcopy");
+        storage_volume_session_end(vol, &session, "xcopy");
         return 1;
     }
 
@@ -1591,18 +1853,18 @@ int shell_command_xcopy(int argc, char **argv)
 
         if (!opts.recursive) {
             shell_transcript_append_text("xcopy: use /S (or /E) to copy directories\n");
-            shell_sd_end(&session, "xcopy");
+            storage_volume_session_end(vol, &session, "xcopy");
             return 1;
         }
         if (stat(dst_resolved, &dst_st) == 0 && !S_ISDIR(dst_st.st_mode)) {
             shell_print_error("xcopy: destination %s exists and is not a directory", dst_resolved);
-            shell_sd_end(&session, "xcopy");
+            storage_volume_session_end(vol, &session, "xcopy");
             return 1;
         }
         if (stat(dst_resolved, &dst_st) != 0) {
             if (mkdir(dst_resolved, 0775) != 0) {
                 shell_print_error("xcopy: cannot create destination directory %s", dst_resolved);
-                shell_sd_end(&session, "xcopy");
+                storage_volume_session_end(vol, &session, "xcopy");
                 return 1;
             }
             /* Carry the source directory's attributes onto the one just
@@ -1617,7 +1879,7 @@ int shell_command_xcopy(int argc, char **argv)
 
         if (opts.tree_only) {
             shell_transcript_append_text("xcopy: /T copies directories only, nothing to do\n");
-            shell_sd_end(&session, "xcopy");
+            storage_volume_session_end(vol, &session, "xcopy");
             return 0;
         }
         if ((opts.archive_only || opts.archive_clear) && (src_st.st_mode & S_IFREG) != 0) {
@@ -1625,7 +1887,7 @@ int shell_command_xcopy(int argc, char **argv)
 
             if (shell_xcopy_get_attrib(src_resolved, &attrib) && (attrib & AM_ARC) == 0) {
                 shell_transcript_append_text("xcopy: 0 file(s) copied (source has no archive attribute)\n");
-                shell_sd_end(&session, "xcopy");
+                storage_volume_session_end(vol, &session, "xcopy");
                 return 1;
             }
         }
@@ -1637,7 +1899,7 @@ int shell_command_xcopy(int argc, char **argv)
         } else if (opts.assume_dir) {
             if (mkdir(dst_resolved, 0775) != 0 && errno != EEXIST) {
                 shell_print_error("xcopy: cannot create destination directory %s", dst_resolved);
-                shell_sd_end(&session, "xcopy");
+                storage_volume_session_end(vol, &session, "xcopy");
                 return 1;
             }
             snprintf(dst_file, sizeof(dst_file), "%s/%s",
@@ -1655,14 +1917,14 @@ int shell_command_xcopy(int argc, char **argv)
                 shell_xcopy_get_fat_date(src_resolved, &src_fdate) &&
                 src_fdate < opts.date_fdate) {
                 shell_transcript_append_text("xcopy: 0 file(s) copied (source older than /D date)\n");
-                shell_sd_end(&session, "xcopy");
+                storage_volume_session_end(vol, &session, "xcopy");
                 return 1;
             }
             if (opts.compare_dest || opts.update_only) {
                 if (stat(dst_file, &dst_st) != 0) {
                     if (opts.update_only) {
                         shell_transcript_append_text("xcopy: 0 file(s) copied (/U: destination does not exist)\n");
-                        shell_sd_end(&session, "xcopy");
+                        storage_volume_session_end(vol, &session, "xcopy");
                         return 1;
                     }
                 } else if (opts.compare_dest &&
@@ -1672,7 +1934,7 @@ int shell_command_xcopy(int argc, char **argv)
                     if (shell_xcopy_get_fat_date(dst_file, &dst_fdate) &&
                         src_fdate <= dst_fdate) {
                         shell_transcript_append_text("xcopy: 0 file(s) copied (source not newer than destination)\n");
-                        shell_sd_end(&session, "xcopy");
+                        storage_volume_session_end(vol, &session, "xcopy");
                         return 1;
                     }
                 }
@@ -1691,7 +1953,7 @@ int shell_command_xcopy(int argc, char **argv)
                 uint8_t dst_attrib;
 
                 if (!shell_xcopy_allow_overwrite(dst_file, &opts)) {
-                    shell_sd_end(&session, "xcopy");
+                    storage_volume_session_end(vol, &session, "xcopy");
                     shell_transcript_append_text("xcopy: 0 file(s) copied\n");
                     return 1;
                 }
@@ -1700,14 +1962,14 @@ int shell_command_xcopy(int argc, char **argv)
                     (dst_attrib & AM_RDO) != 0) {
                     if (!opts.overwrite_readonly) {
                         shell_print_error("xcopy: %s is read-only (use attrib -R or /R)", dst_file);
-                        shell_sd_end(&session, "xcopy");
+                        storage_volume_session_end(vol, &session, "xcopy");
                         return 1;
                     }
                     shell_xcopy_clear_readonly(dst_file);
                 }
             }
             if (!shell_xcopy_confirm_file(dst_file, &opts)) {
-                shell_sd_end(&session, "xcopy");
+                storage_volume_session_end(vol, &session, "xcopy");
                 shell_transcript_append_text("xcopy: 0 file(s) copied\n");
                 return 1;
             }
@@ -1722,7 +1984,7 @@ int shell_command_xcopy(int argc, char **argv)
         }
     }
 
-    shell_sd_end(&session, "xcopy");
+    storage_volume_session_end(vol, &session, "xcopy");
 
     if (opts.list_only) {
         shell_transcript_appendf("xcopy: %d file(s) would be copied\n", stats.copied);

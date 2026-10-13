@@ -27,8 +27,8 @@ import serial  # noqa: E402
 
 from shell_session import default_port, hard_reset, open_port  # noqa: E402
 
-ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]")
-ANSI_STR_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+ANSI_STR_RE = re.compile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
 PROMPT_GLUED = re.compile(r"^(?:PS \S*> *)+")
 # ROM boot-log reset-cause line, e.g. `rst:0x9 (TG1WDT_SYS_RST)`. The name in
 # parentheses (when present) is kept verbatim, so attribution never depends on

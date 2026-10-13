@@ -418,20 +418,29 @@ static int ui_cmd_state(bool bare, const char *var)
     nav_str = (nav_key == KEYBOARD_NAV_KEY_DISABLED) ? "off" :
               (nav_key == KEYBOARD_NAV_KEY_ENABLED) ? "on" : "na";
 
-    snprintf(line, sizeof(line),
-             "modal=%s keyboard=%s mode=%s editor=%s modified=%d row=%u col=%u "
-             "lines=%u readonly=%d preview=%d wrap=%d nav=%s path=%.160s input=%s "
-             "ghost=%s search=%s\n",
-             (modal != NULL) ? modal : "none",
-             kb_visible ? "visible" : "hidden",
-             (mode != NULL) ? mode : "?",
-             ed.open ? "open" : "closed",
-             ed.modified ? 1 : 0,
-             (unsigned)ed.cursor_row, (unsigned)ed.cursor_col,
-             (unsigned)ed.line_count, ed.readonly ? 1 : 0,
-             ed.preview ? 1 : 0, ed.wrap ? 1 : 0, nav_str,
-             (ed.path[0] != '\0') ? ed.path : "(unnamed)",
-             input, ghost, search);
+    {
+        char pending[64] = "(none)";
+        int32_t cursor_x = 0;
+        int32_t cursor_y = 0;
+
+        display_mouse_position(&cursor_x, &cursor_y);
+        (void)shell_link_pending_get(NULL, 0, pending, sizeof(pending));
+        snprintf(line, sizeof(line),
+                 "modal=%s keyboard=%s mode=%s editor=%s modified=%d row=%u col=%u "
+                 "lines=%u readonly=%d preview=%d wrap=%d nav=%s path=%.160s input=%s "
+                 "ghost=%s search=%s cursor=%d,%d link=%s\n",
+                 (modal != NULL) ? modal : "none",
+                 kb_visible ? "visible" : "hidden",
+                 (mode != NULL) ? mode : "?",
+                 ed.open ? "open" : "closed",
+                 ed.modified ? 1 : 0,
+                 (unsigned)ed.cursor_row, (unsigned)ed.cursor_col,
+                 (unsigned)ed.line_count, ed.readonly ? 1 : 0,
+                 ed.preview ? 1 : 0, ed.wrap ? 1 : 0, nav_str,
+                 (ed.path[0] != '\0') ? ed.path : "(unnamed)",
+                 input, ghost, search,
+                 (int)cursor_x, (int)cursor_y, pending);
+    }
     if (!bare) {
         ui_out("ui.state: ");
     }
@@ -457,7 +466,7 @@ static int ui_run(int argc, char **argv)
 
     if (argc < 2) {
         ui_out("Usage: ui <tap|longpress|swipe|press|move|release|target|key|"
-               "targets|hit|state> [...]\n");
+               "targets|hit|state|links|link> [...]\n");
         return 2;
     }
     sub = argv[1];
@@ -542,6 +551,60 @@ static int ui_run(int argc, char **argv)
             return 1;
         }
         return (ui_test_tap(x, y, ms) == ESP_OK) ? 0 : 1;
+    }
+    if (shell_text_equals_ignore_case(sub, "links")) {
+        /* Serial-only listing (like targets): transcript link/anchor regions
+         * with dense indices for `ui link <n>`. */
+        int count = shell_link_count();
+        int i;
+
+        ui_out("ui.links: %d\n", count);
+        for (i = 0; i < count; i++) {
+            const char *label = NULL;
+            const char *command = NULL;
+
+            if (shell_link_get(i, &label, &command) && label != NULL &&
+                command != NULL) {
+                ui_out_raw("%d %.60s -> %.200s\n", i, label, command);
+            }
+        }
+        return 0;
+    }
+    if (shell_text_equals_ignore_case(sub, "link")) {
+        /* Semantic link activation: the same fire path as a transcript tap
+         * (confirm-gated links preview first), without racing coordinates
+         * against the auto-scrolling transcript — the `ui target` pattern. */
+        char *end = NULL;
+        long n = (npos >= 1) ? strtol(argv[pos[0]], &end, 10) : -1;
+        const char *label = NULL;
+        const char *command = NULL;
+
+        if (npos < 1 || end == NULL || *end != '\0' || n < 0 ||
+            !shell_link_get((int)n, &label, &command) || command == NULL) {
+            ui_out("ui link: no link '%s' (see `ui links`)\n",
+                   (npos >= 1) ? argv[pos[0]] : "");
+            return 1;
+        }
+        /* Same fire path as a transcript tap: confirm-gated links preview
+         * first (a repeat runs), anchors run at once. */
+        {
+            char pending[64];
+            bool confirm = true;
+            bool ran;
+
+            (void)shell_link_gate_get((int)n, &confirm);
+            ran = shell_link_fire(command, label, confirm);
+            if (shell_link_pending_get(NULL, 0, pending, sizeof(pending))) {
+                /* First activation armed the preview (not a refusal). */
+                ui_out("ui.link: preview '%s'\n", pending);
+            } else if (ran) {
+                ui_out("ui.link: ran '%s'\n", label != NULL ? label : "?");
+            } else {
+                ui_out("ui.link: refused '%s'\n", label != NULL ? label : "?");
+                return 1;
+            }
+        }
+        return 0;
     }
     if (shell_text_equals_ignore_case(sub, "target")) {
         int id;

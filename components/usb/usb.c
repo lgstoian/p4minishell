@@ -34,6 +34,7 @@
 #include "usb.h"
 #include "ansi.h"
 #include "ansi_palette.h"
+#include "display.h"
 #include "p4minishell_config.h"
 
 /* ---- Backward-compatibility aliases ---- */
@@ -158,7 +159,6 @@ typedef struct {
     msc_host_vfs_handle_t vfs_handle;
     msc_host_device_info_t info;
 } usb_msc_state_t;
-
 extern void usb_host_transcript_append_text(const char *text);
 extern void usb_host_schedule_transcript_append_text(const char *text);
 extern void usb_host_scroll_transcript(int32_t pixels);
@@ -175,7 +175,8 @@ static bool s_usb_msc_driver_installed;
 static bool s_usb_hid_driver_installed;
 static TaskHandle_t s_usb_host_lib_task;
 static TaskHandle_t s_usb_module_task;
-static usb_msc_state_t s_usb_msc;
+static usb_msc_state_t s_usb_msc[P4_CONFIG_USB_MSC_MAX_DEVICES];
+static bool s_usb_msc_automount;
 static usb_hid_slot_t s_usb_keyboard;
 static usb_hid_slot_t s_usb_mouse;
 static hid_keyboard_input_report_boot_t s_prev_keyboard_report;
@@ -545,11 +546,20 @@ static void usb_print_usage(void)
 {
     usb_emit_syncf("Usage:\n");
     usb_emit_syncf("  usb status\n");
+    usb_emit_syncf("  usb mount [N]\n");
     usb_emit_syncf("  usb ls [path]\n");
     usb_emit_syncf("  usb keyboard <on|off>\n");
     usb_emit_syncf("  usb mouse <on|off>\n");
-    usb_emit_syncf("Paths: usb:/file.txt, /usb0/file.txt, or relative-to-/usb0\n");
+    usb_emit_syncf("  usb mouse cursor <on|off>\n");
+    usb_emit_syncf("  usb mouse click <on|off>\n");
+    usb_emit_syncf("  usb mouse move <x> <y>\n");
+    usb_emit_syncf("  usb mouse click [ms]\n");
+    usb_emit_syncf("Paths: usb:/file.txt, usbN:/file.txt, /usbN/file.txt, or relative-to-/usb0\n");
 }
+
+static esp_err_t usb_resolve_path(const char *input, char *output, size_t output_size);
+static void usb_msc_slot_base_path(int slot, char *out, size_t out_size);
+static bool usb_msc_slot_valid(int slot);
 
 static esp_err_t usb_resolve_path(const char *input, char *output, size_t output_size)
 {
@@ -566,6 +576,18 @@ static esp_err_t usb_resolve_path(const char *input, char *output, size_t output
 
     if (strncmp(source, "usb:/", 5) == 0) {
         written = snprintf(output, output_size, "%s%s", USB_MSC_BASE_PATH, source + 4);
+    } else if (strncmp(source, "usb", 3) == 0 && source[3] >= '0' && source[3] <= '9' &&
+               source[4] == ':' && source[5] == '/') {
+        /* usbN:/... selects slot N explicitly. */
+        char base[32];
+        int slot = source[3] - '0';
+
+        if (!usb_msc_slot_valid(slot)) {
+            output[0] = '\0';
+            return ESP_ERR_INVALID_ARG;
+        }
+        usb_msc_slot_base_path(slot, base, sizeof(base));
+        written = snprintf(output, output_size, "%s%s", base, source + 5);
     } else if (strcmp(source, USB_MSC_BASE_PATH) == 0 ||
                strncmp(source, USB_MSC_BASE_PATH "/", strlen(USB_MSC_BASE_PATH) + 1) == 0) {
         written = snprintf(output, output_size, "%s", source);
@@ -593,15 +615,65 @@ static void usb_clear_hid_slot(usb_hid_slot_t *slot)
     }
 }
 
-static void usb_msc_unmount_locked(void)
+/** VFS base path for an MSC slot: slot 0 is the configured base, later
+ *  slots bump a trailing digit (/usb0 -> /usb1) so a retargeted base keeps
+ *  working. */
+static void usb_msc_slot_base_path(int slot, char *out, size_t out_size)
 {
-    if (s_usb_msc.mounted && s_usb_msc.vfs_handle != NULL) {
-        esp_err_t error = msc_host_vfs_unregister(s_usb_msc.vfs_handle);
+    size_t len;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    snprintf(out, out_size, "%s", USB_MSC_BASE_PATH);
+    if (slot <= 0) {
+        return;
+    }
+    len = strlen(out);
+    if (len > 0 && out[len - 1] >= '0' && out[len - 1] <= '9' &&
+        slot >= 0 && slot <= 9) {
+        out[len - 1] = (char)('0' + slot);
+    } else if (slot >= 0 && slot <= 9) {
+        snprintf(out, out_size, "%s%d", USB_MSC_BASE_PATH, slot);
+    }
+}
+
+/** Slot index for a VFS path (/usbN/...), or -1. */
+static int usb_msc_slot_for_vfs_path(const char *vfs_path)
+{
+    char base[32];
+    int slot;
+
+    if (vfs_path == NULL) {
+        return -1;
+    }
+    for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+        size_t len;
+
+        usb_msc_slot_base_path(slot, base, sizeof(base));
+        len = strlen(base);
+        if (strncmp(vfs_path, base, len) == 0 &&
+            (vfs_path[len] == '\0' || vfs_path[len] == '/')) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+static bool usb_msc_slot_valid(int slot)
+{
+    return slot >= 0 && slot < P4_CONFIG_USB_MSC_MAX_DEVICES;
+}
+
+static void usb_msc_unmount_locked(usb_msc_state_t *slot_state)
+{
+    if (slot_state != NULL && slot_state->mounted && slot_state->vfs_handle != NULL) {
+        esp_err_t error = msc_host_vfs_unregister(slot_state->vfs_handle);
         if (error != ESP_OK) {
             usb_record_warningf("USB MSC unmount warning: %s", esp_err_to_name(error));
         }
-        s_usb_msc.vfs_handle = NULL;
-        s_usb_msc.mounted = false;
+        slot_state->vfs_handle = NULL;
+        slot_state->mounted = false;
     }
 }
 
@@ -784,6 +856,12 @@ static void usb_handle_mouse_input_locked(const usb_module_event_t *event)
         usb_host_scroll_transcript(-(int32_t)wheel * P4_CONFIG_TRANSCRIPT_SCROLL_STEP);
     }
 
+    /* Shared cursor: motion + buttons feed the display pointer indev, which
+     * self-gates (ignored unless cursor/click tracking is opted in). */
+    display_mouse_report((int)report.x_displacement,
+                         (int)report.y_displacement,
+                         report.buttons.val);
+
     if (!s_usb_mouse.echo_enabled) {
         return;
     }
@@ -808,36 +886,58 @@ static void usb_module_task(void *arg)
             char manufacturer[64];
             char product[64];
             char serial[64];
+            char base[32];
             esp_err_t error;
+            usb_msc_state_t *slot_state = NULL;
+            int slot;
 
             if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
                 break;
             }
 
-            if (s_usb_msc.device != NULL) {
-                usb_msc_unmount_locked();
-                (void)msc_host_uninstall_device(s_usb_msc.device);
-                memset(&s_usb_msc, 0, sizeof(s_usb_msc));
+            /* Take the first free slot so several drives can mount at once
+             * (/usb0..N). A reconnect installs fresh into whatever is free. */
+            for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+                if (s_usb_msc[slot].connected && s_usb_msc[slot].device != NULL) {
+                    continue;
+                }
+                if (slot_state == NULL) {
+                    slot_state = &s_usb_msc[slot];
+                }
             }
+            if (slot_state == NULL) {
+                xSemaphoreGive(s_usb_lock);
+                usb_record_warningf("USB MSC connect refused: all %d slots busy",
+                                    (int)P4_CONFIG_USB_MSC_MAX_DEVICES);
+                break;
+            }
+            slot = (int)(slot_state - s_usb_msc);
 
-            error = msc_host_install_device(event.data.msc_connected.address, &s_usb_msc.device);
+            error = msc_host_install_device(event.data.msc_connected.address, &slot_state->device);
             if (error == ESP_OK) {
-                s_usb_msc.connected = true;
-                if (msc_host_get_device_info(s_usb_msc.device, &s_usb_msc.info) == ESP_OK) {
-                    usb_wide_to_ascii(s_usb_msc.info.iManufacturer, manufacturer, sizeof(manufacturer));
-                    usb_wide_to_ascii(s_usb_msc.info.iProduct, product, sizeof(product));
-                    usb_wide_to_ascii(s_usb_msc.info.iSerialNumber, serial, sizeof(serial));
-                    usb_emit_asyncf("usb: MSC device connected VID=0x%04X PID=0x%04X %s %s%s%s\n",
-                                    s_usb_msc.info.idVendor,
-                                    s_usb_msc.info.idProduct,
+                slot_state->connected = true;
+                if (msc_host_get_device_info(slot_state->device, &slot_state->info) == ESP_OK) {
+                    usb_wide_to_ascii(slot_state->info.iManufacturer, manufacturer, sizeof(manufacturer));
+                    usb_wide_to_ascii(slot_state->info.iProduct, product, sizeof(product));
+                    usb_wide_to_ascii(slot_state->info.iSerialNumber, serial, sizeof(serial));
+                    usb_msc_slot_base_path(slot, base, sizeof(base));
+                    usb_emit_asyncf("usb: MSC device connected VID=0x%04X PID=0x%04X %s %s%s%s at %s\n",
+                                    slot_state->info.idVendor,
+                                    slot_state->info.idProduct,
                                     manufacturer[0] != '\0' ? manufacturer : "<unknown>",
                                     product[0] != '\0' ? product : "<unnamed>",
                                     serial[0] != '\0' ? " sn=" : "",
-                                    serial);
+                                    serial, base);
                     usb_notify_headerf(4500, "USB MSC connected");
                 } else {
-                    usb_emit_asyncf("usb: MSC device connected at /usb0\n");
+                    usb_msc_slot_base_path(slot, base, sizeof(base));
+                    usb_emit_asyncf("usb: MSC device connected at %s\n", base);
                     usb_notify_headerf(4500, "USB MSC connected");
+                }
+                if (s_usb_msc_automount && !slot_state->mounted) {
+                    xSemaphoreGive(s_usb_lock);
+                    usb_msc_mount_slot(slot);
+                    break;
                 }
             } else {
                 usb_record_errorf(error, "USB MSC install_device failed for address %u", (unsigned int)event.data.msc_connected.address);
@@ -846,19 +946,25 @@ static void usb_module_task(void *arg)
             xSemaphoreGive(s_usb_lock);
             break;
         }
-        case USB_MODULE_EVENT_MSC_DISCONNECTED:
+        case USB_MODULE_EVENT_MSC_DISCONNECTED: {
+            int slot;
+
             if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
                 break;
             }
-            if (s_usb_msc.device == event.data.msc_disconnected.handle) {
-                usb_msc_unmount_locked();
-                (void)msc_host_uninstall_device(s_usb_msc.device);
-                memset(&s_usb_msc, 0, sizeof(s_usb_msc));
-                usb_emit_asyncf("usb: MSC device disconnected\n");
-                usb_notify_headerf(4500, "USB MSC disconnected");
+            for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+                if (s_usb_msc[slot].device == event.data.msc_disconnected.handle) {
+                    usb_msc_unmount_locked(&s_usb_msc[slot]);
+                    (void)msc_host_uninstall_device(s_usb_msc[slot].device);
+                    memset(&s_usb_msc[slot], 0, sizeof(s_usb_msc[slot]));
+                    usb_emit_asyncf("usb: MSC device disconnected\n");
+                    usb_notify_headerf(4500, "USB MSC disconnected");
+                    break;
+                }
             }
             xSemaphoreGive(s_usb_lock);
             break;
+        }
         case USB_MODULE_EVENT_HID_CONNECTED: {
             hid_host_device_config_t config = {
                 .callback = usb_hid_interface_callback,
@@ -1167,29 +1273,31 @@ void usb_status(void)
 
     usb_emit_syncf(SH_LBL "usb.host:" SH_RST " %s" SH_RST "\n", s_usb_host_installed ? "ready" : "not_ready");
     /* Values coloured inline so @-specifiers stay in the format string instead
-     * of being passed as %s arguments (where they would render literally). */
+     * of being passed as %s arguments (where they would render literally).
+     * Slot 0 keeps the historical field names the suites assert on; extra
+     * slots append numbered detail lines below. */
     usb_emit_syncf(SH_LBL "usb.msc:" SH_RST " " SH_LBL "connected=" SH_RST);
-    if (s_usb_msc.connected) {
+    if (s_usb_msc[0].connected) {
         usb_emit_syncf(SH_USB_UP "yes" SH_RST);
     } else {
         usb_emit_syncf(SH_USB_DOWN "no" SH_RST);
     }
     usb_emit_syncf(" " SH_LBL "mounted=" SH_RST);
-    if (s_usb_msc.mounted) {
+    if (s_usb_msc[0].mounted) {
         usb_emit_syncf(SH_USB_UP "yes" SH_RST);
     } else {
         usb_emit_syncf(SH_USB_DOWN "no" SH_RST);
     }
     usb_emit_syncf(" " SH_LBL "path=" SH_RST SH_PATH "%s" SH_RST "\n", USB_MSC_BASE_PATH);
-    if (s_usb_msc.connected) {
-        usb_wide_to_ascii(s_usb_msc.info.iManufacturer, manufacturer, sizeof(manufacturer));
-        usb_wide_to_ascii(s_usb_msc.info.iProduct, product, sizeof(product));
-        usb_wide_to_ascii(s_usb_msc.info.iSerialNumber, serial, sizeof(serial));
-        usb_format_size((uint64_t)s_usb_msc.info.sector_size * (uint64_t)s_usb_msc.info.sector_count,
+    if (s_usb_msc[0].connected) {
+        usb_wide_to_ascii(s_usb_msc[0].info.iManufacturer, manufacturer, sizeof(manufacturer));
+        usb_wide_to_ascii(s_usb_msc[0].info.iProduct, product, sizeof(product));
+        usb_wide_to_ascii(s_usb_msc[0].info.iSerialNumber, serial, sizeof(serial));
+        usb_format_size((uint64_t)s_usb_msc[0].info.sector_size * (uint64_t)s_usb_msc[0].info.sector_count,
                         capacity,
                         sizeof(capacity));
-        usb_emit_syncf("usb.msc.vendor: 0x%04X\n", s_usb_msc.info.idVendor);
-        usb_emit_syncf("usb.msc.product: 0x%04X\n", s_usb_msc.info.idProduct);
+        usb_emit_syncf("usb.msc.vendor: 0x%04X\n", s_usb_msc[0].info.idVendor);
+        usb_emit_syncf("usb.msc.product: 0x%04X\n", s_usb_msc[0].info.idProduct);
         usb_emit_syncf("usb.msc.name: %s %s\n",
                        manufacturer[0] != '\0' ? manufacturer : "<unknown>",
                        product[0] != '\0' ? product : "<unnamed>");
@@ -1197,30 +1305,74 @@ void usb_status(void)
             usb_emit_syncf("usb.msc.serial: %s\n", serial);
         }
         usb_emit_syncf("usb.msc.capacity: %s\n", capacity);
-        usb_emit_syncf("usb.msc.sector_size: %u\n", (unsigned int)s_usb_msc.info.sector_size);
-        usb_emit_syncf("usb.msc.sector_count: %u\n", (unsigned int)s_usb_msc.info.sector_count);
+        usb_emit_syncf("usb.msc.sector_size: %u\n", (unsigned int)s_usb_msc[0].info.sector_size);
+        usb_emit_syncf("usb.msc.sector_count: %u\n", (unsigned int)s_usb_msc[0].info.sector_count);
     }
+    {
+        int slot;
+
+        for (slot = 1; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+            if (s_usb_msc[slot].connected || s_usb_msc[slot].mounted) {
+                char base[32];
+
+                usb_msc_slot_base_path(slot, base, sizeof(base));
+                usb_wide_to_ascii(s_usb_msc[slot].info.iManufacturer, manufacturer, sizeof(manufacturer));
+                usb_wide_to_ascii(s_usb_msc[slot].info.iProduct, product, sizeof(product));
+                usb_format_size((uint64_t)s_usb_msc[slot].info.sector_size *
+                                (uint64_t)s_usb_msc[slot].info.sector_count,
+                                capacity, sizeof(capacity));
+                usb_emit_syncf("usb.msc%d: connected=%s mounted=%s path=%s %s %s %s\n",
+                               slot,
+                               s_usb_msc[slot].connected ? "yes" : "no",
+                               s_usb_msc[slot].mounted ? "yes" : "no",
+                               base,
+                               manufacturer[0] != '\0' ? manufacturer : "<unknown>",
+                               product[0] != '\0' ? product : "<unnamed>",
+                               capacity);
+            }
+        }
+    }
+    /* Automount flag (CONFIG.SYS DEVICE=USB): additive line, the historical
+     * usb.msc:/usb.hid.* field names above stay byte-identical for the suites. */
+    usb_emit_syncf("usb.msc.automount: %s\n", s_usb_msc_automount ? "on" : "off");
     usb_emit_syncf("usb.hid.keyboard: attached=%s echo=%s\n",
                    s_usb_keyboard.attached ? "yes" : "no",
                    s_usb_keyboard.echo_enabled ? "on" : "off");
     usb_emit_syncf("usb.hid.mouse: attached=%s echo=%s\n",
                    s_usb_mouse.attached ? "yes" : "no",
                    s_usb_mouse.echo_enabled ? "on" : "off");
+    /* Shared display pointer state (same switches as `bluetooth mouse
+     * cursor|click`); position in native panel pixels. */
+    {
+        int32_t cursor_x = 0;
+        int32_t cursor_y = 0;
+
+        display_mouse_position(&cursor_x, &cursor_y);
+        usb_emit_syncf("usb.hid.mouse.ptr: cursor=%s click=%s x=%d y=%d\n",
+                       display_mouse_cursor_enabled() ? "on" : "off",
+                       display_mouse_click_enabled() ? "on" : "off",
+                       (int)cursor_x, (int)cursor_y);
+    }
 
     xSemaphoreGive(s_usb_lock);
 }
 
-void usb_msc_mount(void)
+void usb_msc_mount_slot(int slot)
 {
     esp_vfs_fat_mount_config_t mount_config = {
         .format_if_mount_failed = false,
         .max_files = 5,
         .allocation_unit_size = 0,
     };
+    char base[32];
     esp_err_t error;
 
     if (!s_usb_initialized) {
         usb_emit_syncf("usb: host stack unavailable\n");
+        return;
+    }
+    if (!usb_msc_slot_valid(slot)) {
+        usb_emit_syncf("usb: no such device slot %d\n", slot);
         return;
     }
 
@@ -1229,23 +1381,25 @@ void usb_msc_mount(void)
         return;
     }
 
-    if (!s_usb_msc.connected || s_usb_msc.device == NULL) {
+    if (!s_usb_msc[slot].connected || s_usb_msc[slot].device == NULL) {
         xSemaphoreGive(s_usb_lock);
-        usb_emit_syncf("usb: MSC drive not connected - insert and retry\n");
+        usb_emit_syncf("usb: MSC drive %d not connected - insert and retry\n", slot);
         return;
     }
 
-    if (s_usb_msc.mounted) {
+    usb_msc_slot_base_path(slot, base, sizeof(base));
+    if (s_usb_msc[slot].mounted) {
         xSemaphoreGive(s_usb_lock);
-        usb_emit_syncf("usb: MSC already mounted at %s\n", USB_MSC_BASE_PATH);
+        usb_emit_syncf("usb: MSC already mounted at %s\n", base);
         return;
     }
 
-    error = msc_host_vfs_register(s_usb_msc.device, USB_MSC_BASE_PATH, &mount_config, &s_usb_msc.vfs_handle);
+    error = msc_host_vfs_register(s_usb_msc[slot].device, base, &mount_config,
+                                  &s_usb_msc[slot].vfs_handle);
     if (error == ESP_OK) {
-        s_usb_msc.mounted = true;
+        s_usb_msc[slot].mounted = true;
         xSemaphoreGive(s_usb_lock);
-        usb_emit_syncf("usb: mounted %s\n", USB_MSC_BASE_PATH);
+        usb_emit_syncf("usb: mounted %s\n", base);
         usb_notify_headerf(3500, "USB storage mounted");
         return;
     }
@@ -1253,6 +1407,110 @@ void usb_msc_mount(void)
     xSemaphoreGive(s_usb_lock);
     usb_emit_syncf("usb: mount failed (%s)\n", esp_err_to_name(error));
     usb_record_errorf(error, "USB MSC mount failed");
+}
+
+void usb_msc_mount(void)
+{
+    usb_msc_mount_slot(0);
+}
+
+bool usb_msc_slot_connected(int slot)
+{
+    bool connected = false;
+
+    if (!s_usb_initialized || !usb_msc_slot_valid(slot)) {
+        return false;
+    }
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) == pdTRUE) {
+        connected = s_usb_msc[slot].connected;
+        xSemaphoreGive(s_usb_lock);
+    }
+    return connected;
+}
+
+bool usb_msc_slot_mounted(int slot)
+{
+    bool mounted = false;
+
+    if (!s_usb_initialized || !usb_msc_slot_valid(slot)) {
+        return false;
+    }
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) == pdTRUE) {
+        mounted = s_usb_msc[slot].mounted;
+        xSemaphoreGive(s_usb_lock);
+    }
+    return mounted;
+}
+
+bool usb_msc_get_geometry(int slot, uint32_t *sector_size_out,
+                          uint32_t *sector_count_out, char *label_out,
+                          size_t label_size)
+{
+    bool ok = false;
+
+    if (sector_size_out != NULL) {
+        *sector_size_out = 0;
+    }
+    if (sector_count_out != NULL) {
+        *sector_count_out = 0;
+    }
+    if (label_out != NULL && label_size > 0) {
+        label_out[0] = '\0';
+    }
+    if (!s_usb_initialized || !usb_msc_slot_valid(slot)) {
+        return false;
+    }
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) == pdTRUE) {
+        if (s_usb_msc[slot].connected && s_usb_msc[slot].info.sector_size != 0 &&
+            s_usb_msc[slot].info.sector_count != 0) {
+            char manufacturer[64];
+            char product[64];
+
+            if (sector_size_out != NULL) {
+                *sector_size_out = s_usb_msc[slot].info.sector_size;
+            }
+            if (sector_count_out != NULL) {
+                *sector_count_out = s_usb_msc[slot].info.sector_count;
+            }
+            if (label_out != NULL && label_size > 0) {
+                usb_wide_to_ascii(s_usb_msc[slot].info.iManufacturer,
+                                  manufacturer, sizeof(manufacturer));
+                usb_wide_to_ascii(s_usb_msc[slot].info.iProduct,
+                                  product, sizeof(product));
+                snprintf(label_out, label_size, "%s %s",
+                         manufacturer[0] != '\0' ? manufacturer : "USB",
+                         product[0] != '\0' ? product : "disk");
+            }
+            ok = true;
+        }
+        xSemaphoreGive(s_usb_lock);
+    }
+    return ok;
+}
+
+const char *usb_msc_slot_path(int slot)
+{
+    static char bases[P4_CONFIG_USB_MSC_MAX_DEVICES][32];
+    static bool ready[P4_CONFIG_USB_MSC_MAX_DEVICES];
+
+    if (!usb_msc_slot_valid(slot)) {
+        return NULL;
+    }
+    if (!ready[slot]) {
+        usb_msc_slot_base_path(slot, bases[slot], sizeof(bases[slot]));
+        ready[slot] = true;
+    }
+    return bases[slot];
+}
+
+void usb_msc_set_automount(bool enable)
+{
+    s_usb_msc_automount = enable;
+}
+
+bool usb_msc_get_automount(void)
+{
+    return s_usb_msc_automount;
 }
 
 void usb_msc_ls(const char *path)
@@ -1269,11 +1527,26 @@ void usb_msc_ls(const char *path)
         return;
     }
 
-    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) == pdTRUE) {
-        bool needs_mount = s_usb_msc.connected && !s_usb_msc.mounted;
-        xSemaphoreGive(s_usb_lock);
-        if (needs_mount) {
-            usb_msc_mount();
+    /* Automount the path's own slot so `usb ls v:/...` just works. */
+    {
+        char pre_path[USB_PATH_BYTES];
+        int slot = -1;
+
+        if (path != NULL) {
+            if (usb_resolve_path(path, pre_path, sizeof(pre_path)) == ESP_OK) {
+                slot = usb_msc_slot_for_vfs_path(pre_path);
+            }
+        }
+        if (slot < 0) {
+            slot = 0;
+        }
+        if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) == pdTRUE) {
+            bool needs_mount = usb_msc_slot_valid(slot) &&
+                               s_usb_msc[slot].connected && !s_usb_msc[slot].mounted;
+            xSemaphoreGive(s_usb_lock);
+            if (needs_mount) {
+                usb_msc_mount_slot(slot);
+            }
         }
     }
 
@@ -1281,10 +1554,24 @@ void usb_msc_ls(const char *path)
         usb_emit_syncf("usb: state unavailable\n");
         return;
     }
-    if (!s_usb_msc.mounted) {
-        xSemaphoreGive(s_usb_lock);
-        usb_emit_syncf("usb: MSC drive not mounted\n");
-        return;
+    {
+        char slot_path[USB_PATH_BYTES];
+        int slot = 0;
+
+        /* Listings address one slot: resolve first so the mount check below
+         * tests the same device the listing reads. */
+        if (usb_resolve_path(path, slot_path, sizeof(slot_path)) == ESP_OK) {
+            int found = usb_msc_slot_for_vfs_path(slot_path);
+
+            if (found >= 0) {
+                slot = found;
+            }
+        }
+        if (!usb_msc_slot_valid(slot) || !s_usb_msc[slot].mounted) {
+            xSemaphoreGive(s_usb_lock);
+            usb_emit_syncf("usb: MSC drive not mounted\n");
+            return;
+        }
     }
     xSemaphoreGive(s_usb_lock);
 
@@ -1397,6 +1684,46 @@ void usb_hid_mouse_disable(void)
     usb_emit_syncf("usb: mouse echo off\n");
 }
 
+/* Cursor/click switches are thin confirmations over the shared display
+ * pointer state (single implementation in components/display, shared with
+ * BLE): enabling without a mouse attached is allowed so the mode is ready
+ * when one is plugged in. */
+void usb_mouse_cursor_enable(void)
+{
+    if (display_mouse_cursor_enable() == ESP_OK) {
+        usb_emit_syncf("usb: mouse cursor on\n");
+    } else {
+        usb_emit_syncf("usb: mouse cursor unavailable (display not ready)\n");
+    }
+}
+
+void usb_mouse_cursor_disable(void)
+{
+    if (display_mouse_cursor_disable() == ESP_OK) {
+        usb_emit_syncf("usb: mouse cursor off\n");
+    } else {
+        usb_emit_syncf("usb: mouse cursor unavailable (display not ready)\n");
+    }
+}
+
+void usb_mouse_click_enable(void)
+{
+    if (display_mouse_click_enable() == ESP_OK) {
+        usb_emit_syncf("usb: mouse click on\n");
+    } else {
+        usb_emit_syncf("usb: mouse click unavailable (display not ready)\n");
+    }
+}
+
+void usb_mouse_click_disable(void)
+{
+    if (display_mouse_click_disable() == ESP_OK) {
+        usb_emit_syncf("usb: mouse click off\n");
+    } else {
+        usb_emit_syncf("usb: mouse click unavailable (display not ready)\n");
+    }
+}
+
 bool usb_is_connected(void)
 {
     bool connected = false;
@@ -1409,7 +1736,17 @@ bool usb_is_connected(void)
         return false;
     }
 
-    connected = s_usb_msc.connected || s_usb_keyboard.attached || s_usb_mouse.attached;
+    connected = s_usb_keyboard.attached || s_usb_mouse.attached;
+    if (!connected) {
+        int slot;
+
+        for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+            if (s_usb_msc[slot].connected) {
+                connected = true;
+                break;
+            }
+        }
+    }
     xSemaphoreGive(s_usb_lock);
     return connected;
 }
@@ -1426,7 +1763,16 @@ bool usb_is_mounted(void)
         return false;
     }
 
-    mounted = s_usb_msc.mounted;
+    {
+        int slot;
+
+        for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+            if (s_usb_msc[slot].mounted) {
+                mounted = true;
+                break;
+            }
+        }
+    }
     xSemaphoreGive(s_usb_lock);
     return mounted;
 }
@@ -1503,6 +1849,24 @@ void usb_handle_command(char *command)
         return;
     }
 
+    if (strutil_text_equals_ignore_case(argv[1], "mount")) {
+        int slot = 0;
+
+        if (argc >= 3) {
+            char *end;
+            long value = strtol(argv[2], &end, 10);
+
+            if (end == argv[2] || *end != '\0' || !usb_msc_slot_valid((int)value)) {
+                usb_emit_syncf("usb mount: device number must be 0-%d\n",
+                               (int)P4_CONFIG_USB_MSC_MAX_DEVICES - 1);
+                return;
+            }
+            slot = (int)value;
+        }
+        usb_msc_mount_slot(slot);
+        return;
+    }
+
     if (strutil_text_equals_ignore_case(argv[1], "keyboard")) {
         if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "on")) {
             usb_hid_keyboard_enable();
@@ -1523,6 +1887,76 @@ void usb_handle_command(char *command)
         }
         if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "off")) {
             usb_hid_mouse_disable();
+            return;
+        }
+        /* Cursor/click tracking shares one display-owned pointer indev
+         * with BLE (`bluetooth mouse cursor|click` toggles the same
+         * switches); both default off, wheel scroll always works. */
+        if (argc >= 4 && strutil_text_equals_ignore_case(argv[2], "cursor")) {
+            if (strutil_text_equals_ignore_case(argv[3], "on")) {
+                usb_mouse_cursor_enable();
+                return;
+            }
+            if (strutil_text_equals_ignore_case(argv[3], "off")) {
+                usb_mouse_cursor_disable();
+                return;
+            }
+        }
+        if (argc >= 4 && strutil_text_equals_ignore_case(argv[2], "click")) {
+            if (strutil_text_equals_ignore_case(argv[3], "on")) {
+                usb_mouse_click_enable();
+                return;
+            }
+            if (strutil_text_equals_ignore_case(argv[3], "off")) {
+                usb_mouse_click_disable();
+                return;
+            }
+        }
+        /* Serial-harness cursor simulation: absolute placement plus a
+         * synthesized click at the tracked position, driving the same
+         * shared pointer indev (and transcript link hit-testing) as a real
+         * HID mouse. Coordinates are native panel pixels, top-left origin. */
+        if (argc >= 5 && strutil_text_equals_ignore_case(argv[2], "move")) {
+            char *end_x = NULL;
+            char *end_y = NULL;
+            long x = strtol(argv[3], &end_x, 10);
+            long y = strtol(argv[4], &end_y, 10);
+
+            if (end_x == NULL || *end_x != '\0' || end_y == NULL ||
+                *end_y != '\0' || x < 0 || y < 0) {
+                usb_emit_syncf("usb: mouse move <x> <y> (native panel pixels)\n");
+                return;
+            }
+            if (display_mouse_place((int32_t)x, (int32_t)y) == ESP_OK) {
+                usb_emit_syncf("usb: mouse move %ld %ld\n", x, y);
+            } else {
+                usb_emit_syncf("usb: mouse move refused (turn `usb mouse cursor on` on first)\n");
+            }
+            return;
+        }
+        if (strutil_text_equals_ignore_case(argv[2], "click")) {
+            /* `usb mouse click [ms]`: one synthesized click at the cursor
+             * (`on`/`off` returned above, so anything left is a hold time
+             * or a bare click defaulting to 80 ms). */
+            char *end_ms = NULL;
+            unsigned long ms = 80u;
+
+            if (argc >= 4) {
+                if (argv[3][0] == '\0') {
+                    usb_emit_syncf("usb: mouse click [ms]\n");
+                    return;
+                }
+                ms = strtoul(argv[3], &end_ms, 10);
+                if (end_ms == NULL || *end_ms != '\0') {
+                    usb_emit_syncf("usb: mouse click [ms]\n");
+                    return;
+                }
+            }
+            if (display_mouse_click_pulse((uint32_t)ms) == ESP_OK) {
+                usb_emit_syncf("usb: mouse click\n");
+            } else {
+                usb_emit_syncf("usb: mouse click refused (turn `usb mouse click on` on first)\n");
+            }
             return;
         }
         usb_print_usage();

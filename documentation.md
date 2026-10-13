@@ -10,7 +10,7 @@ code, see [`SDK.md`](SDK.md); for the command surface, see
 [`command.md`](command.md); for the API, see [`API.md`](API.md); for the
 working rules, see [`ai-context.md`](ai-context.md).
 
-- **Version:** v1.3.0 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
+- **Version:** v1.3.1 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
 - **UI:** LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch
 - **License:** MIT (see [`licence.md`](licence.md))
 
@@ -78,6 +78,14 @@ components/imagefmt/            Shared BMP header writer + RGB565->BGR24 (screen
 components/networking/          Sole owner of ESP-Hosted + esp_wifi_remote, BLE, HTTP client/server, netdiag, persistent MQTT event service (netsvc + pure mqtt_codec)
 components/usb/                 USB host (MSC storage at /usb0 + HID keyboard/mouse + lazy CDC-ACM serial)
 components/c6ota/               ESP32-C6 firmware OTA via ESP-Hosted SDIO
+components/json/                The ONE JSON reader: validate / pretty / json_walk (dotted-path visitor) / escape decode
+components/zip/                 The ONE ZIP reader: open/close/get_entry/find_entry/extract/list + pure header parsers
+components/archive/             USTAR (.p4a) + ZIP (.zip) create/list/extract/verify; delegates ZIP to components/zip
+components/cas/                  Exact-rational CAS core (parse/simplify/expand/factor/diff/integrate/solve/series), no GPL giac
+components/chat/                Board-to-board chat transport: SoftAP host + bounded HTTP server + singleton host API
+components/epub/                EPUB reader: ZIP-based archives, OPF/NCX/nav (Expat) parsing, HTML-to-ANSI chapters
+components/math_disp/           Natural-display math: parse/edit/layout/render + serialize+evaluate via calc
+components/rss/                 RSS 2.0 / Atom 1.0 / JSON Feed reader: rss_parse + rss_fetch (conditional GET + auth)
 samples/whoami/               Sample native app component (`whoami`, applib-only)
 coprocessor/esp32c6_slave/      ESP32-C6 hosted slave firmware project
 ```
@@ -96,8 +104,10 @@ The command module's verb bodies live in focused files under
 in `components/gfx/gfx.c` behind `gfx blitmany /r:`).
 
 `netsvc` (`components/networking/netsvc.c`, pure codec `mqtt_codec.c`) is the
-persistent event service: one lazy task owns a single plaintext-MQTT session,
-publishes journal-first through the SD outbox, merges `$pim/...` arrivals
+persistent event service: one lazy task owns a single MQTT session over a
+pluggable transport (plain TCP, or TLS via `esp_tls` when the NET profile
+selects it with `net tls on`), publishes journal-first through the SD
+outbox, merges `$pim/...` arrivals
 through `components/pim/`, and delivers to batch only through the registered
 `netsvc_host_ops_t` async hook (the `/onmsg` line). Batch drives it with the
 `net` verbs (`netsvc_commands.c`); native apps use `applib_msg.h`. `sync`
@@ -315,28 +325,42 @@ Owns the shell's runtime surface and output plumbing:
 - **USB keyboard injection**: `shell_usb_keyboard_input()` dispatches HID events into the
   input line via `lv_async_call`; while a modal surface is active the key goes
   to the modal hook instead.
+- **HID mouse pointer**: USB (`components/usb/usb.c`) and BLE (`components/networking/bluetooth.c`)
+  boot-mouse parsers forward native deltas + button byte to `display_mouse_report()`;
+  all state (one shared LVGL pointer indev, cursor box, x/y/pressed under a blocking
+  mutex) lives in `components/display/display.c`. Wheel always scrolls the transcript;
+  cursor/click tracking is opt-in (`usb|bluetooth mouse cursor|click on`, default off)
+  and a tap behaves like a touch tap. See `command.md` (HID mouse cursor + click).
 
 ### Portal Module (components/portal)
 
 Captive-portal Wi-Fi setup for first-run without an SD card:
 
-- **SoftAP mode**: starts in APSTA (`WIFI_MODE_APSTA`) so the device can still
-  scan and connect while the AP is active; switches back to `WIFI_MODE_STA`
-  when the portal shuts down
+- **SoftAP mode**: switches to APSTA (`WIFI_MODE_APSTA`) *before*
+  `set_config(AP)` (the reverse order fails with ESP_ERR_WIFI_MODE) so the
+  device can still scan and connect while the AP is active; switches back to
+  `WIFI_MODE_STA` when the portal shuts down. `wifi setup on|off` serializes
+  against the background boot init through the init-task claim.
+- **RF TX cap**: AP beacons at full power brownout-reboot USB-powered boards
+  (verified on hardware), so the portal caps TX power
+  (`P4_CONFIG_PORTAL_AP_TX_POWER_QDBM`, saved/restored on stop).
 - **DNS server**: minimal UDP server on port 53 that responds to all queries
   with the device's AP IP address (captive-portal DNS redirect)
 - **Captive portal HTTP**: serves an embedded HTML page (flash-resident, works
-  without SD) that collects SSID + password; Android/Apple/Windows captive-
+  without SD) that collects SSID + password, offering a scanned-SSID picker
+  (blocking STA scan per page view, HTML-escaped, degrades to manual typing)
+  alongside the text field; Android/Apple/Windows captive-
   portal probes are redirected via 302; the form POST saves to the known-
-  network list and triggers portal shutdown
+  network list, stashes a post-stop STA join, and triggers portal shutdown
 - **First-run auto-start**: `portal_should_autostart()` returns true when the
-  SD card is not mounted and no known networks are cached; manual control via
+  SD card is not mounted and no known networks are cached (wired in `main.c`
+  after `networking_init()`); manual control via
   `wifi setup on/off`; auto-stops after `P4_CONFIG_PORTAL_TIMEOUT_SECS`
-- **Deferred stop**: the HTTP handler sets a flag; the Wi-Fi event handler
-  calls `portal_stop()` so netif/wifi operations are serialised on the
-  event-loop task
+- **Deferred stop**: the HTTP handler sets a flag; a private event + one-shot
+  timer wake the event-loop task, which runs `portal_stop()` so netif/wifi
+  operations are serialised, then the stashed STA join exactly once
 - **Config**: `P4_CONFIG_PORTAL_*` (AP SSID, open/WPA2, channel, max
-  connections, timeout, HTTP port)
+  connections, TX cap, timeout, HTTP port)
 
 ### Storage Module (components/storage)
 
@@ -344,7 +368,9 @@ Owns everything that sits between the shell commands and the SD card. Split acro
 
 **`storage.c` — services and state**
 
-- **Guarded SD sessions**: `shell_sd_begin()` / `shell_sd_end()` are the single mount path, so a
+- **Guarded sessions**: `shell_sd_begin()` / `shell_sd_end()` are the single SD
+  mount path (plus the volume-aware `storage_volume_session_begin/end()`,
+  which take the SD session for SD paths and ensure-mount USB slots), so a
   failure can never leak mounted state or dereference missing card metadata. The mount is
   persistent — only `sd eject` / `sdeject` tears it down. Mounting updates the header SD icon.
 - **Mount tracking**: `storage_sd_is_mounted()` reports the persistent flag rather than calling
@@ -411,10 +437,16 @@ Owns everything that sits between the shell commands and the SD card. Split acro
   bare `dir /A` asks for everything. `del`, `rd`, `format`, `disk`, `undelete`, and `trash`
   return a real ERRORLEVEL (0/1/2).
 - Disk and partitions: the `disk` family (`list`, `detail`, `clean`, `create partition
-  primary [size=N]`, `delete partition N`, `format`) manages the MBR partition table through
-  `sdmmc_read_sectors`/`sdmmc_write_sectors` on the BSP card handle, unmounting the FATFS
-  volume first. The volume services in `storage.c` are parameterized by `storage_volume_t`
-  so a future USB OTG MSC volume can be added without changing the command surface.
+  primary [size=N]`, `delete partition N`, `active`, `type`, `mbr [save|restore]`,
+  `verify [count=N]`, `geometry`, `image save|restore`, `format`) manages the MBR partition
+  table through `sdmmc_read_sectors`/`sdmmc_write_sectors` on the BSP card handle, unmounting
+  the FATFS volume first. The volume services in `storage.c` are parameterized by
+  `storage_volume_t` (`STORAGE_VOLUME_SD` plus `STORAGE_VOLUME_USB0..3`), so the file verbs
+  work unchanged on USB MSC sticks (`usb:/`, `usbN:/`, `u:`/`v:`/`w:`/`x:`) while raw disk
+  access stays SD-only by design. `dir`'s free-space trailer and the write precheck query
+  USB free space through `esp_vfs_fat_info()` (newlib has no `statvfs`).
+- Machine debugging: `debug mem|peek|poke|disk` (MS-DOS DEBUG parity; hex text always,
+  hexview modal when interactive; `poke` is YES-gated and refuses known code windows).
 - Recursive directory tree: `tree [path] [/F] [/A]` with DOS box-drawing connectors, bounded by
   `P4_CONFIG_TREE_DEPTH_MAX` and the 128-entry listing cap. Each directory level is buffered on
   the heap rather than the worker-task stack, so a wide directory cannot overflow it.
@@ -429,9 +461,11 @@ Owns everything that sits between the shell commands and the SD card. Split acro
   `/R /C /I /N /V /X /E /B /L /S /M /F /G`), `more` (keypress paging with
   `Q` to quit), `fc` (DOS-style differing-line report), `comp` (byte compare
   with `/D /A /L /N /C`), `sort` (qsort-based, `/R /I /U`,
-  1024-line capacity with a single leak-free release path). All resolve relative paths and run
-  inside a guarded SD session, and all read the pending input-redirection source when no
-  filename is supplied. The discovery walker reuses the `dir /s` FATFS primitives, keeps each
+   1024-line capacity with a single leak-free release path). All resolve relative paths and run
+  inside a guarded volume session that follows the path (SD or USB slot, automounting on
+  demand), and all read the pending input-redirection source when no
+  filename is supplied. The trash bin stays SD-only; the working directory lives on SD
+  (`cd` to USB is refused — use absolute `usb:/` paths). The discovery walker reuses the `dir /s` FATFS primitives, keeps each
   recursion level in one heap block, is depth-bounded by `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`, and
   caps matches at `P4_CONFIG_FIND_MATCH_MAX` (256). `find`, `findstr`, and `comp` return a DOS
   ERRORLEVEL (0 found / identical, 1 not found / different, 2 usage), and `more`, `fc`, and
@@ -536,7 +570,12 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
 - **Environment variables**: 64 RAM-only slots (`P4_CONFIG_ENV_VAR_MAX`), names
   normalized to upper case and restricted to alphanumerics plus underscore plus
   `[`/`]` (so `SPR[3]` array slots are ordinary variables). PATH is one of
-  these slots and defaults to `sd:/`.
+  these slots and defaults to `sd:/`. A `start`ed background job reads this
+  global table but writes a lazily-allocated job-private overlay
+  (`P4_CONFIG_BG_ENV_SLOTS` slots, empty value shadows the global); the
+  overlay is discarded when the job exits, so background `set` never leaks
+  into the foreground (aliases stay global — a shared service, like the
+  filesystem).
 - **`setlocal` / `endlocal` scoping**: a stack of full environment snapshots
   (`P4_CONFIG_SETLOCAL_DEPTH_MAX` = 8). Snapshotting the whole table is the honest approach for a
   fixed-size array: restoring it reverts creations, modifications, and deletions in one step. A
@@ -566,6 +605,38 @@ Owns the whole `.bat` interpreter and the RAM-only environment:
   script's final errorlevel back to the caller, matching DOS.
 - **Stop modes**: `batch_stop_mode_t` distinguishes `exit /b` (leave one file) from a bare
   `exit` (unwind every nested level). The executor and `for` loops both honor it.
+- **Background jobs**: `start` resumes a pooled worker (`bg0`.., `P4_CONFIG_BG_TASKS` slots,
+  PSRAM stacks) through the normal pipeline; stops stay cooperative (`taskkill` flag,
+  batch line loop + `delay` chunks). `start /wait` joins (foreground polls, Ctrl+C breaks
+  the wait only), `start /t:secs` arms an auto-kill deadline enforced at the same poll
+  points, bare `start` lists the pool, `start /b` emits machine rows for scripts. A job's final errorlevel is published before its
+  running flag clears, closing the join race. Nothing a job allocates outlives it: the
+  env overlay and its `himem` blocks die at job exit (no TSRs).
+- **Task manager**: `suspend`/`resume`/`nice` (`components/command/command.c`,
+  pool slots only — system tasks untouchable, `ps` stays read-only) plus
+  per-slot CPU% (anchored at spawn, `shell_task_runtime_for_handle()` shares
+  the one snapshot walk with `ps`), stack/overlay/himem accounting, and the
+  `tmgr_exit`/`tmgr_svc_restart`/`tmgr_pool_full` rendezvous events
+  (`components/batch/sync.c` namespace). `taskkill` wakes a suspended job so
+  the stop applies at once. Reference UI: `apps/taskmgr/TASKMGR.BAT`.
+- **Extended memory**: `himem` (`components/batch/himem.c`) is XMS-style handle blocks
+  over the single p4heap PSRAM allocator (`P4_CONFIG_HIMEM_HANDLES` handles,
+  `P4_CONFIG_HIMEM_MAX_BYTES` each, zeroed at alloc, blocks never move so locks guard
+  free). `alloc`/`free`/`lock`/`unlock`/`fill`/`load`/`save`/`crc` (sizes take decimal,
+  `0x`, DOS `K`/`M`); `crc` folds through the single `strutil_crc32_update()`. Handles
+  record their owner slot: one bg job's holdings are capped by
+  `P4_CONFIG_HIMEM_JOB_QUOTA_BYTES` and freed at job exit, locked or not.
+- **Batch synchronization**: `lock`/`unlock`/`signal`/`wait` (`components/batch/sync.c`)
+  are one mutex table + one event table (PSRAM, lazy). Blocking waits poll in 100 ms
+  chunks (kill/deadline/abort stay responsive); `wait` auto-clears so one signal wakes
+  one waiter. Owner-tracked, auto-released at job exit — a dead job never wedges a mutex.
+- **Resident services**: `service` (`components/batch/svc.c`) persists named lines in
+  `sd:/SERVICES.INI` (shared storage_ini core), supervises them on an own FreeRTOS timer
+  (created lazily — never in the boot heap window), and re-starts autostart entries after
+  AUTOEXEC.BAT with boot privilege (before the dispatcher lock). Restart-on-unexpected-exit
+  (taskkill included) within a per-boot budget, then parked; `service stop` is the off
+  switch. The pool runs jobs from `components/command/` through the registered
+  `batch_bg_ops_t` table (same one-way pattern as the pipeline hooks).
 - **Arithmetic expressions**: `shell_expr_evaluate()` is a recursive-descent evaluator over
   32-bit signed integers. Precedence follows cmd.exe: `||` then `&&` then the comparisons
   `== != < > <= >=` (each yielding 1/0) then `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`, unary
@@ -737,6 +808,13 @@ filesystem or the batch language:
   translation so binary data is byte-exact. All commands set ERRORLEVEL for
   batch use. File-transfer tunables live in `P4_CONFIG_SERIAL_*`, sync tunables
   in `P4_CONFIG_PIM_*`.
+- **HTTP CardDAV sync** (`pim net pull|push|sync`, `components/pim/pim_carddav.c`
+  + `networking_http_request`): PROPFIND/GET/PUT against a collection URL with
+  Basic auth, reusing the serial merge core (newer-wins) and renderers; pure
+  multistatus/card/UID/URL helpers are unit-tested, no tombstones in v1.
+- **P4Sync full-image** (`tools/p4sync full-image`): one session composing the
+  handshake, PIM mirror sync (reusing `tools/pim_sync.py`), file provisioning,
+  app inventory, screenshot, and an `image.json` manifest.
 - **Worker task**: `shell_execute_command_async()` creates a dedicated FreeRTOS task so heavy
   commands never run on the LVGL event-callback stack
 - **Redirection parsing**: a quote-aware two-pass scan handling `>`, `>>`, and `<` in any order
@@ -808,7 +886,12 @@ filesystem or the batch language:
   discovery table is heap-allocated (a stack-resident table overflows the
   worker stack once a launched batch re-enters the dispatcher per line). The
   boot flow's `LAUNCH_APP=` CONFIG.SYS directive offers to launch an app after
-  AUTOEXEC.BAT.
+  AUTOEXEC.BAT. App registration without a registry: `assoc`/`ftype`
+  (`sd:/ASSOC.INI`, extension→app for `open` dispatch), `startup`
+  (`sd:/STARTUP.INI`, one-shot boot apps run after AUTOEXEC.BAT + the
+  LAUNCH_APP offer, before services), `launch <app> /setup` (`%1=/setup`
+  convention), and APPINFO `handles=`/`setup=`/`autostart=`/`alias=`/`data=`/
+  `requires=`/`min_fw=` keys (see `command.md`, `ABI.md` §3).
 - **Screenshot command**: `screenshot`/`scr`/`capture` — captures the LVGL screen as a BMP image, streams to serial with magic markers or saves to SD card
 - **GPIO management**: Pin table with board roles; reads allowed on all pins, writes restricted
   to pins marked safe
@@ -971,10 +1054,12 @@ Provides SGR (Select Graphic Rendition) escape sequence processing for colored t
 - **Semantic palette** (`ansi_palette.h`): the single source of truth for what colour each
   category of shell output uses. Defines named `SH_*` macros — `SH_HEAD`, `SH_LBL`, `SH_OK`,
   `SH_ERR`, `SH_WARN`, `SH_MUTE`, `SH_VAL`, `SH_NUM`, `SH_PATH`, `SH_DIR`, `SH_FILE`, `SH_EXE`,
-  and the subsystem accents — that expand to the `@`-specifiers above. Commands compose output
-  from these names rather than choosing colours, so the shell is consistent by construction and
-  a palette change is a one-file edit. The macros are plain string literals, so the header adds
-  no dependencies and the ansi module stays a leaf.
+  `SH_LINK` (hyperlinks: bright cyan + underline), and the subsystem accents — that expand
+  to the `@`-specifiers above. Commands compose output from these names rather than choosing
+  colours, so the shell is consistent by construction and a palette change is a one-file edit.
+  The macros are plain string literals, so the header adds no dependencies and the ansi module
+  stays a leaf. OSC 8 hyperlink sequences (`ESC ] 8 ;; ...`) are dropped by every ANSI parser,
+  so only the label reaches LVGL spans, plain buffers, and redirect captures.
 - **Full printf compatibility**: `ansi_format()` passes captured specifiers to `snprintf`
   verbatim, so flags, width, precision, and `l`/`ll` length modifiers all behave as in printf.
   Column-aligned reports such as `chkdsk` and `dir` depend on this.
@@ -1136,7 +1221,7 @@ Owns ESP-IDF USB Host Library with two class drivers:
 - **External input mode API**: `keyboard_set_external_input()`, `keyboard_force_visible()`, `keyboard_clear_force_visible()`
 - **Input callback**: `usb_register_keyboard_input_callback()` for shell CLI integration
 - **Public key mapping**: `usb_key_to_ascii_full()`, `usb_key_name_full()` for external consumers
-- **Command family**: `usb status|ls|keyboard on|off|mouse on|off`
+- **Command family**: `usb status|ls|keyboard on|off|mouse on|off|cursor <on|off>|click <on|off>|move <x> <y>|click [ms]` (cursor/click share one display-owned pointer with BLE; `usb status` reports `usb.hid.mouse.ptr`; `move`/`click [ms]` simulate the pointer over serial for the harness)
 - **Bounded output**: Directory listings and file previews mirror SD command style
 - **Transcript integration**: Uses dedicated host bridge functions in main.c
 
@@ -1203,7 +1288,8 @@ built on the same runtime (v0.35.0: 6 surfaces).
     unattended batch script can never hang on a dialog.
   - **Declarative screens:** `screen run <file.frm>` (in
     `components/command/screen_commands.c`) renders one flat-`KEY=VALUE`
-    screen through the existing verbs — dialog/list/ask via argv synthesis,
+    screen through the existing verbs — dialog/list/ask/form/menu/browse/
+    view/hexview/image-show via argv synthesis,
     so no surface is implemented twice. `screen info` describes without UI.
   - **Declarative flows:** `screen flow <file.flow>` walks a flat
     `KEY=VALUE` navigation graph whose steps point at `.FRM` files, so a
@@ -1231,10 +1317,11 @@ Hardware-verified on COM11 (v0.35.1, final TUI state: flash, boot `1024x510` tra
 - **Cell buffer** (`components/tui/tui.h:35` `tui_cell_t { char utf8[4]; uint8_t fg/bg/attr; }`, `components/tui/tui.c:129` `tui_cell_set` via `strncpy`): logical `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` (`80×25` `p4minishell_config.h:325`, DOS parity) heap cell buffer (PSRAM preferred, `heap_caps_malloc MALLOC_CAP_SPIRAM`) with fg/bg/attribute per cell. Clamped to the logical grid, never to pixels; each cell holds full UTF-8 (3-byte box glyphs). Previously `utf8[2]` truncated box draws — fixed to `utf8[4]`.
 - **Drawing primitives** (`components/tui/tui.c:241` `tui_draw_box`, `components/tui/tui.c:296` `tui_draw_line`, `components/tui/tui.c:312` `tui_fill`, `components/tui/tui.c:201` `tui_print_at`): `tui_draw_box` honors `single`/`double`/`rounded` via `SH_BOX_*` UTF-8 (`SH_BOX_TL`/`TR`/`BL`/`BR`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR`) and optional centered title; `tui_draw_line` honors `single`/`double`/`heavy`; interior cleared; all via `tui_cell_set`.
 - **Flush / color** (`components/tui/tui.c:620` `tui_flush`): coalesces cells by fg, emits `#RRGGBB ` prefix per fg run using `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate palette), wraps run UTF-8 and `#` suffix, rows joined by `\n`, set via `lv_label_set_text` on `s_tui_label` (`lv_label_set_recolor true`) under `lvgl_port_lock`. Default fg 16 emits no tag. `tui_set_default_color` (`components/tui/tui.c:324`) backs `color`; `tui_set_cursor` (`components/tui/tui.c:160`) backs `locate`.
-- **Live region mapping**: TUI uses its own `s_tui_container`/`s_tui_label` inside `windows_enter_tui_mode()`/`windows_exit_tui_mode()` (`components/windows/windows.c`). The transcript container is an **app surface** (see "App surfaces" below): the window manager pins it to the surface origin, drops its padding, suppresses transcript follow-to-bottom and auto-hides the on-screen keyboard while the app owns it. `tui_apply_layout()` (`components/tui/tui.c`) maps the logical `80x25` grid onto the live transcript region by picking the largest committed cell font that fits (`components/tui/tui_fonts.c`, generated by `tools/gen_tui_font.py`: 12x24 for fullscreen, 12x20 windowed, plus 10x16/8x12/8x8 fallbacks), sizing the label to the exact grid and centring it; it re-runs on keyboard show/hide, fullscreen and rotation via the window manager's surface-layout callback. Header kept visible by default; `tui_enter_fullscreen`/`tui_exit_fullscreen` (`components/tui/tui.c`) call `windows_set_fullscreen`/`header_set_visible` to hide the header completely when fullscreen. `tui status` reports rect `1024x510`, cols/rows `80x25`, fullscreen, font.
+- **Live region mapping**: TUI uses its own `s_tui_container`/`s_tui_label` inside `windows_enter_tui_mode()`/`windows_exit_tui_mode()` (`components/windows/windows.c`). The transcript container is an **app surface** (see "App surfaces" below): the window manager pins it to the surface origin, drops its padding, suppresses transcript follow-to-bottom and auto-hides the on-screen keyboard while the app owns it. `tui_apply_layout()` (`components/tui/tui.c`) maps the logical `80x25` grid onto the live transcript region by picking the largest committed cell font that fits (`components/tui/tui_fonts.c`, generated by `tools/gen_tui_font.py`: 12x24 for fullscreen, 12x20 windowed, plus 10x16/8x12/8x8 fallbacks), sizing the label to the exact grid and centring it (glyph-aware centering: each cell font's advance is measured and the grid is pixel-centered; title background is an overlay label synced at flush); it re-runs on keyboard show/hide, fullscreen and rotation via the window manager's surface-layout callback. Header kept visible by default; `tui_enter_fullscreen`/`tui_exit_fullscreen` (`components/tui/tui.c`) call `windows_set_fullscreen`/`header_set_visible` to hide the header completely when fullscreen. `tui status` reports rect, cols/rows `80x25`, fullscreen, and bound cell font `WxH (slot N of M)` or `(unbound)`.
 - **Fullscreen**: global `draw fullscreen on|off` and per-app `tui fullscreen on|off` both route to `tui_enter_fullscreen`/`tui_exit_fullscreen`; `windows_is_fullscreen()` guards state. Keyboard scaling remains dynamic via `windows_notify_keyboard_visibility` even when header is hidden.
 - **Prompt**: all inputs honor `shell_prompt_render_plain()` (`components/shell/shell.c:412`): `main.c:112` input line echo `SHELL_PROMPT` → `shell_prompt_render_plain()`, `modal_surf.c:412` `ask` placeholder + `keyboard_bind_textarea` (`components/keyboard/keyboard.c:88`), shell echo situational color (`SH_PROMPT`). `PROMPT=` template (`$p $g` etc) renders everywhere.
-- **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, cmaps 3, no duplication (previously the `-r` range duplicated the two blocks). `windows_get_terminal_font()` returns this font for the shell transcript. The TUI grid does **not** use it: it uses the generated cell fonts in `components/tui/tui_fonts.c` so the logical `80x25` grid scales to the live region (the terminal font is fixed at 16 px and cannot fit 80 columns).
+- **Font** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`): extended `unscii_16` in-place with box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, cmaps 3, no duplication (previously the `-r` range duplicated the two blocks). `windows_get_terminal_font()` returns this font for the shell transcript. The TUI grid does **not** use it: it uses the generated cell fonts in `components/tui/tui_fonts.c` so the logical `80x25` grid scales to the live region (the terminal font is fixed at 16 px and cannot fit 80 columns). **Double-glyph set corrected**: the `SH_BOX_*2` and `SH_BOX_*R` macros now map to true CP437 doubles (U+2550–U+256C), not duplicated singles; validated by `tui selftest` (palette + coverage + metrics).
+- **Selftest**: `tui selftest` runs three pure headless check groups (`tui_selftest_palette`, `tui_selftest_coverage`, `tui_selftest_metrics`) and reports per-group PASS/FAIL with location; safe in background jobs, zero display dependency. Unit tests `test_tui_selftest_*_clean` pin clean results on both boards.
 - **Batch TUI verbs**: `draw box`/`line`/`fill`/`text`/`bar`/`table`/`list`/`image`/`clear`/`window`/`cursor`/`hold`/`alt-screen`/`fullscreen`, `color`, `locate` compose on the cell buffer; the exclusive `gfx` RGB565 canvas (`pixel`/`line`/`rect`/`circle`/`show`/`image`/`load`/`blit`/`save`) and `browse`/`view`/`image`/`hexview` round out the surfaces. `draw table`/`draw list` add cursor + selection rows. `browse`/`view`/`hexview` are native pagers on the shared modal runtime (`components/modal/modal_surf.c`). `draw` auto-enters TUI (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) when no TUI/modal surface is active. Alt-screen `ESC[?1049h/l` save/restore is honoured when `P4_CONFIG_TUI_ALT_SCREEN` is set (`components/tui/tui.c:327`).
 - **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`): `tui status` shows transcript rect, `grab_screenshot.py` crops to it for pixel-perfect TUI verification (used during hardware bug hunting alongside `windows_debug_editor_layout`).
 - **Essential features implemented**: window stack (nested `tui_draw_box` with title), fullscreen (global + per-app header hide), color (`tui_flush` per-fg recolor), prompt (unified `shell_prompt_render_plain`), screenshot debug; hardware tested without overlap (header kept unless fullscreen, TUI does not overlap shell text), no watchdog, no abort.

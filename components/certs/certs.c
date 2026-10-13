@@ -6,13 +6,15 @@
  * @file certs.c
  * @brief TLS trust store: scan SD certificates, build a global CA store.
  *
- * The store lives in sd:/CERTS/.  PEM and DER files are accepted.  On load
- * the PEM contents are concatenated into a contiguous heap buffer and
- * registered with mbedTLS via `esp_tls_set_global_ca_store()`.  httpget and
- * c6ota then verify peer certificates against this combined store (user CAs
- * plus the compiled-in Mozilla bundle).  The `certs` shell command drives
- * add/remove/rebuild; the boot hook calls `certs_load_sd_store()` once after
- * the SD card first mounts.
+ * The store lives in sd:/CERTS/.  PEM files are concatenated as-is; DER files
+ * are validated and converted to PEM in memory (never stored converted).
+ * The concatenated buffer is registered with mbedTLS via
+ * `esp_tls_set_global_ca_store()`.  httpget and c6ota then verify peer
+ * certificates against this combined store (user CAs plus the compiled-in
+ * Mozilla bundle).  The `certs` shell command drives add/remove/rebuild; the
+ * boot hook calls `certs_load_sd_store()` once after the SD card first
+ * mounts.  The combined BUNDLE.PEM written by `certs rebuild` lives in the
+ * same directory and is never ingested back.
  */
 
 #include <dirent.h>
@@ -23,6 +25,8 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_tls.h"
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/pem.h"
 #include "p4minishell_config.h"
 #include "storage.h"
 #include "certs.h"
@@ -40,31 +44,117 @@ static bool    s_store_active;
 
 /* ---- Helpers ---- */
 
-/** Check whether a filename has the given extension (case-insensitive). */
-static bool has_extension(const char *name, const char *ext)
+/** True when @p name is the combined bundle file itself (which lives inside
+ *  the scanned directory and must never be ingested, or every rebuild would
+ *  double the store). Compared case-insensitively like the extension checks. */
+static bool certs_is_combined_bundle(const char *name)
 {
-    size_t name_len = strlen(name);
-    size_t ext_len = strlen(ext);
+    const char *base = strrchr(P4_CONFIG_TLS_CERTS_COMBINED_PEM, '/');
 
-    if (name_len < ext_len) {
+    base = (base != NULL) ? base + 1 : P4_CONFIG_TLS_CERTS_COMBINED_PEM;
+    return certs_name_equals_ci(name, base);
+}
+
+/** Read a whole file into a heap buffer, refusing files larger than @p cap.
+ *  Returns the buffer (caller frees) with @p len_out set, or NULL. */
+static uint8_t *certs_read_file_capped(const char *path, size_t cap, size_t *len_out)
+{
+    FILE *fp;
+    long file_size;
+    uint8_t *buf;
+    size_t nread;
+
+    if (len_out != NULL) {
+        *len_out = 0;
+    }
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0 || (file_size = ftell(fp)) < 0) {
+        fclose(fp);
+        return NULL;
+    }
+    rewind(fp);
+    if (file_size == 0 || (size_t)file_size > cap) {
+        fclose(fp);
+        return NULL;
+    }
+    buf = heap_caps_malloc((size_t)file_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == NULL) {
+        fclose(fp);
+        return NULL;
+    }
+    nread = fread(buf, 1, (size_t)file_size, fp);
+    fclose(fp);
+    if (nread != (size_t)file_size) {
+        heap_caps_free(buf);
+        return NULL;
+    }
+    if (len_out != NULL) {
+        *len_out = nread;
+    }
+    return buf;
+}
+
+/** Convert one DER certificate to PEM text. Pure (no SD access), unit-tested.
+ *  Validates with mbedtls_x509_crt_parse_der first so garbage never reaches
+ *  the trust store. */
+esp_err_t certs_der_to_pem(const uint8_t *der, size_t der_len,
+                           uint8_t *pem_out, size_t pem_cap, size_t *pem_len_out)
+{
+    mbedtls_x509_crt crt;
+    int ret;
+    size_t olen = 0;
+
+    if (pem_len_out != NULL) {
+        *pem_len_out = 0;
+    }
+    if (der == NULL || pem_out == NULL || pem_len_out == NULL || der_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    mbedtls_x509_crt_init(&crt);
+    ret = mbedtls_x509_crt_parse_der(&crt, der, der_len);
+    mbedtls_x509_crt_free(&crt);
+    if (ret != 0) {
+        return ESP_FAIL;
+    }
+    /* mbedtls_pem_write_buffer emits the header with NO trailing newline, so
+     * the newline is part of the header argument; without it the PEM is one
+     * fused line and esp_tls_set_global_ca_store refuses it (-0x2780). */
+    ret = mbedtls_pem_write_buffer("-----BEGIN CERTIFICATE-----\n",
+                                   "-----END CERTIFICATE-----",
+                                   der, der_len, pem_out, pem_cap, &olen);
+    if (ret != 0) {
+        return ESP_ERR_NO_MEM;
+    }
+    *pem_len_out = olen;
+    return ESP_OK;
+}
+
+/** Case-insensitive whole-name comparison. Kept local on purpose: the shared
+ *  shell string helper lives in a component certs does not depend on, and a
+ *  certs->shell dependency for one comparison would invert the layering. */
+bool certs_name_equals_ci(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL) {
         return false;
     }
-    const char *suffix = name + name_len - ext_len;
+    while (*a != '\0' && *b != '\0') {
+        char ca = *a++;
+        char cb = *b++;
 
-    for (size_t i = 0; i < ext_len; i++) {
-        char a = suffix[i];
-        char b = ext[i];
-        if (a >= 'A' && a <= 'Z') {
-            a += 32;
+        if (ca >= 'A' && ca <= 'Z') {
+            ca += 32;
         }
-        if (b >= 'A' && b <= 'Z') {
-            b += 32;
+        if (cb >= 'A' && cb <= 'Z') {
+            cb += 32;
         }
-        if (a != b) {
+        if (ca != cb) {
             return false;
         }
     }
-    return true;
+    return *a == '\0' && *b == '\0';
 }
 
 /** Append the content of a file to the PEM buffer.  Returns the number of
@@ -165,16 +255,18 @@ esp_err_t certs_load_sd_store(void)
         shell_sd_end(&session, "certs scan");
     }
 
-    /* Allocate the PEM buffer from PSRAM (can be up to 64 KiB). */
+    /* Allocate the PEM buffer from PSRAM (can be up to 64 KiB, plus one
+     * byte that permanently hosts the NUL terminator mbedTLS needs to
+     * recognize PEM input). */
     if (s_pem_buf == NULL) {
-        s_pem_buf = heap_caps_malloc(P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES, MALLOC_CAP_SPIRAM);
+        s_pem_buf = heap_caps_malloc(P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES + 1, MALLOC_CAP_SPIRAM);
     }
     if (s_pem_buf == NULL) {
         ESP_LOGE(CERTS_TAG, "failed to allocate PEM buffer (%d bytes)",
-                 P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES);
+                 P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES + 1);
         return ESP_ERR_NO_MEM;
     }
-    memset(s_pem_buf, 0, P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES);
+    memset(s_pem_buf, 0, P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES + 1);
 
     /* Second pass: read all .pem and .der files from sd:/CERTS. */
     {
@@ -194,11 +286,12 @@ esp_err_t certs_load_sd_store(void)
         while ((entry = readdir(dir)) != NULL) {
             const char *name = entry->d_name;
 
-            /* Skip directories and the combined bundle. */
-            if (entry->d_type == DT_DIR) {
+            /* Skip directories and the combined bundle (which lives in this
+             * directory and must never be ingested). */
+            if (entry->d_type == DT_DIR || certs_is_combined_bundle(name)) {
                 continue;
             }
-            if (has_extension(name, ".pem")) {
+            if (shell_path_has_extension(name, ".pem")) {
                 char path[512];
 
                 snprintf(path, sizeof(path), "/sdcard/%s/%s",
@@ -211,8 +304,38 @@ esp_err_t certs_load_sd_store(void)
                 } else {
                     ESP_LOGW(CERTS_TAG, "skipped empty/unreadable %s", name);
                 }
-            } else if (has_extension(name, ".der")) {
-                der_count++;
+            } else if (shell_path_has_extension(name, ".der")) {
+                /* DER files are validated and converted to PEM in memory. */
+                if (der_count >= P4_CONFIG_TLS_CERTS_MAX_DER_FILES) {
+                    ESP_LOGW(CERTS_TAG, "skipped %s (DER file cap %d reached)",
+                             name, P4_CONFIG_TLS_CERTS_MAX_DER_FILES);
+                    continue;
+                }
+                {
+                    char path[512];
+                    uint8_t *der;
+                    size_t der_len = 0;
+                    size_t pem_len = 0;
+
+                    snprintf(path, sizeof(path), "/sdcard/%s/%s",
+                             P4_CONFIG_TLS_CERTS_DIR, name);
+                    der = certs_read_file_capped(path, P4_CONFIG_TLS_CERTS_MAX_DER_BYTES,
+                                                 &der_len);
+                    if (der == NULL) {
+                        ESP_LOGW(CERTS_TAG, "skipped unreadable/oversize %s", name);
+                        continue;
+                    }
+                    if (certs_der_to_pem(der, der_len,
+                                         s_pem_buf + pem_offset,
+                                         P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES - pem_offset,
+                                         &pem_len) == ESP_OK && pem_len > 0) {
+                        pem_offset += pem_len;
+                        der_count++;
+                    } else {
+                        ESP_LOGW(CERTS_TAG, "skipped invalid DER %s", name);
+                    }
+                    heap_caps_free(der);
+                }
             }
         }
         closedir(dir);
@@ -231,7 +354,14 @@ esp_err_t certs_load_sd_store(void)
 
     /* Register the PEM buffer with mbedTLS as the global CA store.
      * esp_tls_set_global_ca_store() takes a PEM-encoded buffer and its
-     * length; it parses and caches the certificates internally. */
+     * length; it parses and caches the certificates internally.
+     * Length MUST include the NUL terminator: mbedTLS sniffs PEM-vs-DER by
+     * testing buf[len-1] == '\0', and anything else is DER-parsed (a PEM
+     * file loaded without its terminator fails with -0x2180). The +1 byte
+     * past the content cap permanently hosts it; the converter path already
+     * counts it in olen. */
+    s_pem_buf[pem_offset] = '\0';
+    s_pem_len = pem_offset + 1;
     error = esp_tls_set_global_ca_store(s_pem_buf, s_pem_len);
     if (error != ESP_OK) {
         ESP_LOGE(CERTS_TAG, "failed to set global CA store (%s)", esp_err_to_name(error));
@@ -239,8 +369,8 @@ esp_err_t certs_load_sd_store(void)
     }
 
     s_store_active = true;
-    ESP_LOGI(CERTS_TAG, "loaded %d PEM file(s) (%d bytes) + %d DER file(s) "
-             "into global CA store", pem_count, (int)s_pem_len, der_count);
+    ESP_LOGI(CERTS_TAG, "loaded %d PEM + %d DER file(s) (%d bytes) "
+             "into global CA store", pem_count, der_count, (int)s_pem_len);
     return ESP_OK;
 }
 
@@ -264,6 +394,11 @@ void certs_get_store_info(certs_store_info_t *out)
 
 void certs_clear(void)
 {
+    /* Release the mbedTLS side first: freeing our buffer alone would leave
+     * peer verification running against freed memory. */
+    if (s_store_active) {
+        esp_tls_free_global_ca_store();
+    }
     if (s_pem_buf != NULL) {
         free(s_pem_buf);
         s_pem_buf = NULL;
@@ -313,19 +448,22 @@ esp_err_t certs_rebuild_bundle(void)
 
     {
         int count = 0;
+        int der_seen = 0;
         uint8_t buf[4096];
 
         while ((entry = readdir(dir)) != NULL) {
             const char *name = entry->d_name;
 
-            if (entry->d_type == DT_DIR) {
+            /* Never ingest the bundle we are writing. */
+            if (entry->d_type == DT_DIR || certs_is_combined_bundle(name)) {
                 continue;
             }
-            if (!has_extension(name, ".pem")) {
+            if (!shell_path_has_extension(name, ".pem") &&
+                !shell_path_has_extension(name, ".der")) {
                 continue;
             }
 
-            /* Read and append each PEM file. */
+            /* Read and append each certificate (DER is converted to PEM). */
             {
                 char path[512];
                 FILE *fp_in;
@@ -334,6 +472,39 @@ esp_err_t certs_rebuild_bundle(void)
                          P4_CONFIG_TLS_CERTS_DIR, name);
                 fp_in = fopen(path, "rb");
                 if (fp_in == NULL) {
+                    continue;
+                }
+
+                if (shell_path_has_extension(name, ".der")) {
+                    /* DER files convert through a heap buffer (bounded). */
+                    uint8_t *der;
+                    size_t der_len = 0;
+                    uint8_t *pem;
+                    size_t pem_len = 0;
+
+                    fclose(fp_in);
+                    if (der_seen >= P4_CONFIG_TLS_CERTS_MAX_DER_FILES) {
+                        ESP_LOGW(CERTS_TAG, "rebuild skipped %s (DER file cap reached)",
+                                 name);
+                        continue;
+                    }
+                    der = certs_read_file_capped(path, P4_CONFIG_TLS_CERTS_MAX_DER_BYTES,
+                                                 &der_len);
+                    if (der == NULL) {
+                        continue;
+                    }
+                    pem = heap_caps_malloc(P4_CONFIG_TLS_CERTS_MAX_DER_BYTES * 2,
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    if (pem != NULL &&
+                        certs_der_to_pem(der, der_len, pem,
+                                         P4_CONFIG_TLS_CERTS_MAX_DER_BYTES * 2,
+                                         &pem_len) == ESP_OK && pem_len > 0) {
+                        fwrite(pem, 1, pem_len, fp_out);
+                        count++;
+                        der_seen++;
+                    }
+                    heap_caps_free(pem);
+                    heap_caps_free(der);
                     continue;
                 }
 
@@ -358,7 +529,7 @@ esp_err_t certs_rebuild_bundle(void)
             return ESP_ERR_NOT_FOUND;
         }
 
-        ESP_LOGI(CERTS_TAG, "rebuilt %s from %d PEM file(s)",
+        ESP_LOGI(CERTS_TAG, "rebuilt %s from %d certificate file(s)",
                  P4_CONFIG_TLS_CERTS_COMBINED_PEM, count);
     }
 

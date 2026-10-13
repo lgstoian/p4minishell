@@ -32,6 +32,7 @@ FILES = [
     "SET.BAT",
     "ALIASES.BAT",
     "SVC.BAT",
+    "MEMLOG.BAT",
     "AGENDA.BAT",
     "README.TXT",
     "COMPANION.APPINFO",

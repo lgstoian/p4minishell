@@ -13,6 +13,7 @@
 
 #include "unity.h"
 #include "gfx.h"
+#include "p4minishell_config.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -646,13 +647,13 @@ void test_gfx_flood_fill(void)
 
 void test_gfx_font_table(void)
 {
-    /* Glyph index = ch - 0x20; space is blank, 'A' matches the generator. */
-    const uint8_t *space = gfx_font8x8[' ' - GFX_FONT_FIRST];
-    const uint8_t *A = gfx_font8x8['A' - GFX_FONT_FIRST];
+    /* Glyph index = ch; space is blank, 'A' matches the generator. */
+    const uint8_t *space = gfx_font8x8[' '];
+    const uint8_t *A = gfx_font8x8['A'];
 
     TEST_ASSERT_EQUAL_INT(8, GFX_FONT_W);
     TEST_ASSERT_EQUAL_INT(8, GFX_FONT_H);
-    TEST_ASSERT_EQUAL_INT(0x5F, GFX_FONT_GLYPHS);
+    TEST_ASSERT_EQUAL_INT(256, GFX_FONT_GLYPHS);
     for (int i = 0; i < GFX_FONT_H; i++) {
         TEST_ASSERT_EQUAL_UINT8(0, space[i]);
     }
@@ -660,6 +661,60 @@ void test_gfx_font_table(void)
     TEST_ASSERT_EQUAL_UINT8(0x3C, A[1]);
     TEST_ASSERT_EQUAL_UINT8(0x7E, A[4]);
 }
+
+void test_gfx_font_extended(void)
+{
+    /* Extended CP437 glyphs: box drawing (0xC9, 0xBB, 0xBC, 0xC8),
+     * accented letters (0x80 'C', 0x82 'e', 0xA0 'a'), symbols (0xB1 '+-', 0xF7 '/'). */
+#if P4_CONFIG_GFX_FONT_EXTENDED
+    const uint8_t *box_ul = gfx_font8x8[0xC9];  /* ┌ */
+    const uint8_t *box_ur = gfx_font8x8[0xBB];  /* ┐ */
+    const uint8_t *box_ll = gfx_font8x8[0xC8];  /* └ */
+    const uint8_t *box_lr = gfx_font8x8[0xBC];  /* ┘ */
+    const uint8_t *accent_C = gfx_font8x8[0x80]; /* Ç */
+    const uint8_t *accent_e = gfx_font8x8[0x82]; /* é */
+    const uint8_t *accent_a = gfx_font8x8[0xA0]; /* á */
+    const uint8_t *pm = gfx_font8x8[0xF1];      /* ± */
+    const uint8_t *div = gfx_font8x8[0xF7];     /* ÷ */
+
+    /* Box drawing chars should not be blank. */
+    bool box_ul_nonempty = false, box_ur_nonempty = false;
+    bool box_ll_nonempty = false, box_lr_nonempty = false;
+    for (int i = 0; i < GFX_FONT_H; i++) {
+        if (box_ul[i]) box_ul_nonempty = true;
+        if (box_ur[i]) box_ur_nonempty = true;
+        if (box_ll[i]) box_ll_nonempty = true;
+        if (box_lr[i]) box_lr_nonempty = true;
+    }
+    TEST_ASSERT_TRUE(box_ul_nonempty);
+    TEST_ASSERT_TRUE(box_ur_nonempty);
+    TEST_ASSERT_TRUE(box_ll_nonempty);
+    TEST_ASSERT_TRUE(box_lr_nonempty);
+
+    /* Accented letters and symbols should not be blank. */
+    bool accent_C_nonempty = false, accent_e_nonempty = false;
+    bool accent_a_nonempty = false, pm_nonempty = false, div_nonempty = false;
+    for (int i = 0; i < GFX_FONT_H; i++) {
+        if (accent_C[i]) accent_C_nonempty = true;
+        if (accent_e[i]) accent_e_nonempty = true;
+        if (accent_a[i]) accent_a_nonempty = true;
+        if (pm[i]) pm_nonempty = true;
+        if (div[i]) div_nonempty = true;
+    }
+    TEST_ASSERT_TRUE(accent_C_nonempty);
+    TEST_ASSERT_TRUE(accent_e_nonempty);
+    TEST_ASSERT_TRUE(accent_a_nonempty);
+    TEST_ASSERT_TRUE(pm_nonempty);
+    TEST_ASSERT_TRUE(div_nonempty);
+#else
+    /* When extended font is disabled, extended glyphs should be empty. */
+    const uint8_t *box_ul = gfx_font8x8[0xC9];
+    for (int i = 0; i < GFX_FONT_H; i++) {
+        TEST_ASSERT_EQUAL_UINT8(0, box_ul[i]);
+    }
+#endif
+}
+
 
 void test_gfx_text_render(void)
 {

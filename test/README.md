@@ -1,9 +1,9 @@
-# P4MiniShell Unit Tests (firmware v1.3.0)
+# P4MiniShell Unit Tests (firmware v1.3.1)
 
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
 
-Current baseline: **423 tests, 0 failures, 2 ignored** (verify with
+Current baseline: **562 tests, 0 failures, 2 ignored** (verify with
 `tools/unit_run.py <COM_PORT>`). The runner completes cleanly with
 `=== All tests completed ===` and no reboot; if the board is reset-looping,
 check for a newly added test that calls an LVGL/heap path before `lv_init()`.
@@ -17,10 +17,14 @@ overlay/cursor-word tests, the USB/HID spell key-map test, the batch
 round (`test_batch_control.c`: `shift /n` parser, `for /f` defaults),
 the shell round (`test_shell_prompt.c`: session title,
 `test_shell_pipeline.c`: echo-glued detector, redirect devices/missing
-targets/handle prefixes), and the 7 `test_netsvc.c` event-service tests
-(MQTT codec, topic matcher, backoff, outbox framing) — plus the 3 new
-`test_audio.c` amp-gate/mic-stats/Goertzel cases — bring the
-suite to **498 RUN_TEST total**, build-verified this
+  targets/handle prefixes), and the 7 `test_netsvc.c` event-service tests
+  (MQTT codec, topic matcher, backoff, outbox framing) — plus the 3 new
+  `test_audio.c` amp-gate/mic-stats/Goertzel cases — plus the DOS-parity and
+  deferred-hardware rounds (`test_storage_volumes.c`: hexdump rows, DEBUG
+  parsing/guards, volume classification, MBR decode; `test_certs.c`:
+  DER→PEM conversion; `test_portal.c`: HTML escaping;
+  `test_pim_carddav.c`: multistatus scan, card split, UID, URL join) — plus the **chat transport tests** (`test_chat.c`: config init, inbox/log ring, sequence, send/poll/clear) and **EPUB transport tests** (`test_epub.c`: config init, OPF parse, spine/TOC, render) — bring the
+suite to **562 RUN_TEST total** (latest: `test_epub.c` EPUB transport tests on top of `test_chat.c` chat transport tests, `test_ansi_osc8_strip` for OSC 8 hyperlink stripping, `test_editor_link_under_cursor` for the edit Open link prefill, the 3 `test_assoc.c` association argument cases, the 3 `test_pkg.c` version/dependency/sanitize cases, and the 7 `test_tmgr.c` task-manager cases), hardware-verified this
 pass; refresh the count on hardware with `tools/unit_run.py <COM_PORT>`.
 
 ## Test Structure
@@ -41,6 +45,10 @@ test/
     test_shell_debug_log.c  # debug log buffer
     test_ansi_format.c      # ANSI format string builder
     test_storage_format.c   # size formatting, path helpers
+    test_storage_volumes.c  # hexdump rows, DEBUG number parsing + guards, volume classification, MBR decode
+    test_certs.c            # DER->PEM conversion (real CA cert fixture)
+    test_portal.c           # portal HTML escaping
+    test_pim_carddav.c      # CardDAV multistatus scan, card split, UID, URL join
     test_batch_expr.c       # set /a integer evaluator
     test_batch_control.c    # labels, on/goto parsing, for/while/switch helpers, shift parser, forf defaults
     test_macro.c            # macro recorder
@@ -51,6 +59,7 @@ test/
     test_findstr.c          # findstr matcher
     test_comp.c             # byte compare
     test_task_sort.c        # ps/tasks/top sort comparator
+    test_tmgr.c             # task-manager pool config, priority bounds/clamp, tmgr_* event names, nice parser
     test_editor.c           # editor document model + OSK map + word count
     test_keyboard.c         # keyboard/external-input state
     test_config.c           # CONFIG.SYS directive helpers
@@ -58,10 +67,12 @@ test/
     test_db.c               # db record store
     test_alarm.c            # alarm parse/advance helpers
     test_modal.c            # modal option parsers
+    test_himem.c            # himem size/handle parsers, CRC-32 vectors, handle bounds/quota/lock, env overlay isolation
+    test_svc.c              # sync name/mutex/event semantics, service registry guards
     test_power.c            # power/idle state
     test_audio.c            # audio output-mode parse, route/amp-gate resolve, WAV params, mic stats, Goertzel
     test_serial.c           # serial framing/CRC
-    test_tui.c              # TUI state, table width/parse helpers, draw hold
+    test_tui.c              # TUI state, table width/parse helpers, draw hold, selftest (palette/coverage/metrics), bound cell info
     test_clipboard.c        # RAM clipboard
     test_history_file.c     # history file round-trip
     test_markdown.c         # markdown ANSI renderer + HTML serializer + print paginator
@@ -69,7 +80,8 @@ test/
     test_json.c             # json validate/pretty
     test_gfx.c             # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
     test_asset.c            # CRC-32 vectors + asset manifest parser
-    test_pkg.c              # pkg APPINFO-name helper + ECDSA signature vectors
+    test_pkg.c              # pkg APPINFO-name helper + ECDSA signature vectors + version compare + requires= parse
+    test_assoc.c            # assoc extension normalize + argument split
     test_screen.c           # screen list splitter + declarative flow router
     test_gfind.c            # gfind /files pure name filter (hidden/store/ext/kinds)
     test_theme.c            # UI theme registry (lookup/selection)
@@ -79,9 +91,10 @@ test/
     test_bind.c             # F-key bind table (set/lookup/count/index)
     test_crypt.c            # PBKDF2 key derivation + AES-GCM envelope round-trip (unit always runs; the former s07 hardware skip is gone — crypt now passes on both boards, F23 fixed)
     test_tcpterm.c          # tcpterm target parse, escape expansion, reply sanitize
-    test_netsvc.c           # MQTT codec, topic matcher, backoff, outbox framing
-    test_archive.c          # USTAR core
-    test_hardware.c         # Tab5 hardware-support pure helpers
+test_netsvc.c           # MQTT codec, topic matcher, backoff, outbox framing
+test_archive.c          # USTAR core
+test_epub.c             # EPUB config, OPF/NCX parse, spine/TOC, render
+test_hardware.c         # Tab5 hardware-support pure helpers
     test_sw_gcm.c           # software AES-256-GCM fallback
     test_userial.c          # userial VID:PID + line-coding parsers
     test_import.c           # vCard/iCalendar line + DATE-TIME parsers, JSON unescape
@@ -99,6 +112,8 @@ cd test
 idf.py build flash
 # or capture the summaries on the host (replace <COM_PORT> with your port):
 python ..\tools\unit_run.py <COM_PORT>
+# or both boards concurrently:
+python ..\tools\unit_run.py COM3 COM6
 ```
 
 > The test app drives no UI: after flashing it the display stays black and

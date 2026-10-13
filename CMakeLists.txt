@@ -43,6 +43,13 @@ set(EXTRA_COMPONENT_DIRS
   components/modal
   components/networking
   components/portal
+  components/chat
+  components/epub
+  components/math_disp
+  components/cas
+  components/json
+  components/rss
+  components/zip
   components/power_monitor
   components/p4heap
   components/pim

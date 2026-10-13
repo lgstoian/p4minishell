@@ -41,11 +41,15 @@
 
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "esp_tls.h"
+#include "esp_crt_bundle.h"
 #include "freertos/FreeRTOS.h"
+#include "mbedtls/ssl.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "mqtt_codec.h"
+#include "certs.h"
 #include "networking.h"
 #include "p4minishell_config.h"
 #include "pim.h"
@@ -58,8 +62,21 @@
 #define NETSVC_PROFILE_USER "user"
 #define NETSVC_PROFILE_PASS "pass"
 #define NETSVC_PROFILE_CLIENTID "clientid"
+#define NETSVC_PROFILE_TLS "tls"
 #define NETSVC_PIM_DB_PREFIX "$pim/db/"
 #define NETSVC_PIM_ALARMS "$pim/alarms"
+
+/* Session transport: plain TCP fd or a TLS session. Replaces bare int fds
+ * across the session driver so MQTT-over-TLS rides identical framing,
+ * resubscribe, outbox, and pump logic (host ops unchanged). */
+typedef struct netsvc_tp {
+    bool use_tls;
+    int fd;
+    esp_tls_t *tls;
+} netsvc_tp_t;
+
+/* Forward declarations (used before definition below). */
+static void netsvc_tp_close(netsvc_tp_t *tp);
 
 /* Service state, owned by the task; verbs touch it under the lock. */
 typedef struct {
@@ -68,7 +85,7 @@ typedef struct {
     bool enabled;
     bool connected;
     bool ota_paused;
-    int sock;
+    netsvc_tp_t *tp;
     unsigned attempt;
     uint16_t pkt_id;
     char subs[NETSVC_MAX_SUBS][P4_CONFIG_NET_TOPIC_BYTES];
@@ -282,9 +299,9 @@ static bool netsvc_db_name_ok(const char *name)
 
 static void netsvc_close_socket(void)
 {
-    if (s_net.sock >= 0) {
-        close(s_net.sock);
-        s_net.sock = -1;
+    if (s_net.tp != NULL) {
+        netsvc_tp_close(s_net.tp);
+        s_net.tp = NULL;
     }
     s_net.connected = false;
 }
@@ -510,33 +527,188 @@ static int netsvc_tcp_dial(const char *host, int port, uint32_t timeout_ms)
     return fd;
 }
 
-static int netsvc_send_all(int fd, const uint8_t *buf, size_t len,
-                           uint32_t timeout_ms)
+/* Send all (0 ok, -1 loss). Plain: select+send loop. TLS: conn_write loop
+ * with WANT retry inside the same budget. */
+static int netsvc_tp_send(netsvc_tp_t *tp, const uint8_t *buf, size_t len,
+                          uint32_t timeout_ms)
 {
     int64_t end_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     size_t sent = 0;
+
+    if (tp == NULL || buf == NULL || len == 0) {
+        return -1;
+    }
     while (sent < len) {
-        fd_set wfds;
-        struct timeval tv;
-        ssize_t n;
         int64_t left_us = end_us - esp_timer_get_time();
+
         if (left_us <= 0) {
             return -1;
         }
-        FD_ZERO(&wfds);
-        FD_SET(fd, &wfds);
-        tv.tv_sec = (long)(left_us / 1000000);
-        tv.tv_usec = (long)(left_us % 1000000);
-        if (select(fd + 1, NULL, &wfds, NULL, &tv) <= 0) {
-            return -1;
+        if (tp->use_tls) {
+            ssize_t n;
+
+            if (tp->tls == NULL) {
+                return -1;
+            }
+            n = esp_tls_conn_write(tp->tls, buf + sent, len - sent);
+            if (n > 0) {
+                sent += (size_t)n;
+                continue;
+            }
+            if (n != MBEDTLS_ERR_SSL_WANT_READ && n != MBEDTLS_ERR_SSL_WANT_WRITE) {
+                return -1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
         }
-        n = send(fd, buf + sent, len - sent, 0);
-        if (n <= 0) {
-            return -1;
+        {
+            fd_set wfds;
+            struct timeval tv;
+            ssize_t n;
+
+            FD_ZERO(&wfds);
+            FD_SET(tp->fd, &wfds);
+            tv.tv_sec = (long)(left_us / 1000000);
+            tv.tv_usec = (long)(left_us % 1000000);
+            if (select(tp->fd + 1, NULL, &wfds, NULL, &tv) <= 0) {
+                return -1;
+            }
+            n = send(tp->fd, buf + sent, len - sent, 0);
+            if (n <= 0) {
+                return -1;
+            }
+            sent += (size_t)n;
         }
-        sent += (size_t)n;
     }
     return 0;
+}
+
+/* Single-shot receive with a budget. Plain: one select+recv (select timeout
+ * reads as a 0 tick, select/recv failure as -1, matching the old call
+ * sites). TLS: conn_read with WANT retry (never select: decrypted bytes may
+ * sit in mbedTLS buffers while the fd looks idle); budget expiry reads as a
+ * 0 tick. Returns bytes, 0 on timeout without data, -1 on loss. */
+static ssize_t netsvc_tp_recv(netsvc_tp_t *tp, uint8_t *buf, size_t len,
+                              uint32_t timeout_ms)
+{
+    int64_t end_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+
+    if (tp == NULL || buf == NULL || len == 0) {
+        return -1;
+    }
+    for (;;) {
+        int64_t left_us = end_us - esp_timer_get_time();
+
+        if (left_us <= 0) {
+            return 0;
+        }
+        if (tp->use_tls) {
+            ssize_t n;
+
+            if (tp->tls == NULL) {
+                return -1;
+            }
+            n = esp_tls_conn_read(tp->tls, buf, len);
+            if (n > 0) {
+                return n;
+            }
+            if (n != MBEDTLS_ERR_SSL_WANT_READ && n != MBEDTLS_ERR_SSL_WANT_WRITE) {
+                return -1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        {
+            fd_set rfds;
+            struct timeval tv;
+            ssize_t n;
+            int r;
+
+            FD_ZERO(&rfds);
+            FD_SET(tp->fd, &rfds);
+            tv.tv_sec = (long)(left_us / 1000000);
+            tv.tv_usec = (long)(left_us % 1000000);
+            r = select(tp->fd + 1, &rfds, NULL, NULL, &tv);
+            if (r == 0) {
+                return 0;
+            }
+            if (r < 0) {
+                return -1;
+            }
+            n = recv(tp->fd, buf, len, 0);
+            if (n <= 0) {
+                return -1;
+            }
+            return n;
+        }
+    }
+}
+
+/** Open a transport: plain dial, or TLS via esp_tls with the httpget CA
+ *  policy (user CA store when loaded, Mozilla bundle otherwise). */
+static netsvc_tp_t *netsvc_tp_open(const char *host, int port, bool use_tls,
+                                   uint32_t timeout_ms)
+{
+    netsvc_tp_t *tp;
+
+    if (host == NULL || host[0] == '\0' || port <= 0 || port > 65535) {
+        return NULL;
+    }
+    tp = calloc(1, sizeof(*tp));
+    if (tp == NULL) {
+        return NULL;
+    }
+    tp->use_tls = use_tls;
+    tp->fd = -1;
+    if (!use_tls) {
+        tp->fd = netsvc_tcp_dial(host, port, timeout_ms);
+        if (tp->fd < 0) {
+            free(tp);
+            return NULL;
+        }
+        return tp;
+    }
+    {
+        esp_tls_cfg_t cfg = { 0 };
+
+        cfg.timeout_ms = (int)timeout_ms;
+        /* Same CA policy as the httpget core: user store when loaded,
+         * Mozilla bundle otherwise. */
+        if (certs_is_loaded()) {
+            cfg.use_global_ca_store = true;
+        } else {
+            cfg.crt_bundle_attach = esp_crt_bundle_attach;
+        }
+    tp->tls = esp_tls_init();
+    if (tp->tls == NULL) {
+        free(tp);
+        return NULL;
+    }
+    if (esp_tls_conn_new_sync(host, (int)strlen(host), port, &cfg, tp->tls) != 0) {
+        esp_tls_conn_destroy(tp->tls);
+        tp->tls = NULL;
+        free(tp);
+        return NULL;
+    }
+    return tp;
+    }
+}
+
+static void netsvc_tp_close(netsvc_tp_t *tp)
+{
+    if (tp == NULL) {
+        return;
+    }
+    if (tp->use_tls) {
+        if (tp->tls != NULL) {
+            esp_tls_conn_destroy(tp->tls);
+            tp->tls = NULL;
+        }
+    } else if (tp->fd >= 0) {
+        close(tp->fd);
+        tp->fd = -1;
+    }
+    free(tp);
 }
 
 /* Frame pump state: linear buffer, parsed prefix-first. */
@@ -743,10 +915,10 @@ static void netsvc_on_frame(uint8_t type, uint8_t flags,
         if (mqtt_decode_publish(body, body_len, flags, &topic, &pkt_id,
                                 &payload) == 0 && topic.data != NULL) {
             uint8_t qos = (uint8_t)((flags >> 1) & 0x03u);
-            if (qos == 1 && s_net.sock >= 0) {
+            if (qos == 1 && s_net.tp != NULL) {
                 uint8_t ack[4];
                 if (mqtt_encode_puback(ack, sizeof(ack), pkt_id) == 4) {
-                    (void)netsvc_send_all(s_net.sock, ack, 4, 5000);
+                    (void)netsvc_tp_send(s_net.tp, ack, 4, 5000);
                 }
             }
             /* Views alias the RX buffer: copy the topic for delivery. */
@@ -769,7 +941,7 @@ static void netsvc_on_frame(uint8_t type, uint8_t flags,
  * ======================================================================== */
 
 /* Await one frame of @p want_type. Returns body length or -1. */
-static int netsvc_await_frame(int fd, netsvc_rx_t *rx, uint8_t want_type,
+static int netsvc_await_frame(netsvc_tp_t *tp, netsvc_rx_t *rx, uint8_t want_type,
                               uint8_t *flags_out, uint32_t timeout_ms,
                               size_t *body_off_out)
 {
@@ -780,8 +952,6 @@ static int netsvc_await_frame(int fd, netsvc_rx_t *rx, uint8_t want_type,
         uint32_t rem = 0;
         size_t hdrlen = 0;
         int rc;
-        fd_set rfds;
-        struct timeval tv;
         uint8_t chunk[512];
         ssize_t n;
         int64_t left_us = end_us - esp_timer_get_time();
@@ -810,16 +980,15 @@ static int netsvc_await_frame(int fd, netsvc_rx_t *rx, uint8_t want_type,
         if (rc < 0 || rem > P4_CONFIG_NET_PUBLISH_MAX_BYTES + 512u) {
             return -1;
         }
-        FD_ZERO(&rfds);
-        FD_SET(fd, &rfds);
-        tv.tv_sec = (long)(left_us / 1000000);
-        tv.tv_usec = (long)(left_us % 1000000);
-        if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) {
+        /* Single-shot receive inside the remaining budget (transport picks
+         * select+recv or TLS read; never select on a TLS fd directly). */
+        n = netsvc_tp_recv(tp, chunk, sizeof(chunk),
+                           left_us > 60000000 ? 60000 : (uint32_t)(left_us / 1000));
+        if (n < 0) {
             return -1;
         }
-        n = recv(fd, chunk, sizeof(chunk), 0);
-        if (n <= 0) {
-            return -1;
+        if (n == 0) {
+            continue; /* tick: re-check the deadline above */
         }
         if (netsvc_rx_feed(rx, chunk, (size_t)n) != 0) {
             return -1;
@@ -867,7 +1036,7 @@ static bool netsvc_load_profile(char *host, size_t host_size, int *port_out,
 }
 
 /* Send SUBSCRIBE for every RAM-table filter. Returns false on transport loss. */
-static bool netsvc_resubscribe(int fd, netsvc_rx_t *rx, uint8_t *tx, size_t txcap,
+static bool netsvc_resubscribe(netsvc_tp_t *tp, netsvc_rx_t *rx, uint8_t *tx, size_t txcap,
                                uint16_t *pkt_id)
 {
     char filters[NETSVC_MAX_SUBS][P4_CONFIG_NET_TOPIC_BYTES];
@@ -891,10 +1060,10 @@ static bool netsvc_resubscribe(int fd, netsvc_rx_t *rx, uint8_t *tx, size_t txca
         }
         expect = *pkt_id;
         n = mqtt_encode_subscribe(tx, txcap, expect, filters[i], 1);
-        if (n < 0 || netsvc_send_all(fd, tx, (size_t)n, 10000) != 0) {
+        if (n < 0 || netsvc_tp_send(tp, tx, (size_t)n, 10000) != 0) {
             return false;
         }
-        bodylen = netsvc_await_frame(fd, rx, MQTT_PKT_SUBACK, &flags, 10000, &body_off);
+        bodylen = netsvc_await_frame(tp, rx, MQTT_PKT_SUBACK, &flags, 10000, &body_off);
         if (bodylen < 3) {
             return false;
         }
@@ -913,7 +1082,7 @@ static bool netsvc_resubscribe(int fd, netsvc_rx_t *rx, uint8_t *tx, size_t txca
 }
 
 /* Publish one journal record file; removes it on PUBACK. */
-static bool netsvc_flush_one(int fd, netsvc_rx_t *rx, uint8_t *tx, size_t txcap,
+static bool netsvc_flush_one(netsvc_tp_t *tp, netsvc_rx_t *rx, uint8_t *tx, size_t txcap,
                              const char *path, uint16_t *pkt_id)
 {
     FILE *f = NULL;
@@ -980,12 +1149,12 @@ static bool netsvc_flush_one(int fd, netsvc_rx_t *rx, uint8_t *tx, size_t txcap,
         uint8_t flags = 0;
         size_t body_off = 0;
         int bodylen;
-        if (n < 0 || netsvc_send_all(fd, tx, (size_t)n, 10000) != 0) {
+        if (n < 0 || netsvc_tp_send(tp, tx, (size_t)n, 10000) != 0) {
             free(rec);
             shell_sd_end(&session, "net-flush");
             return false;
         }
-        bodylen = netsvc_await_frame(fd, rx, MQTT_PKT_PUBACK, &flags, 10000, &body_off);
+        bodylen = netsvc_await_frame(tp, rx, MQTT_PKT_PUBACK, &flags, 10000, &body_off);
         if (bodylen != 2) {
             free(rec);
             shell_sd_end(&session, "net-flush");
@@ -1015,7 +1184,7 @@ static int netsvc_name_cmp(const void *a, const void *b)
 }
 
 /* Flush the journal oldest-first (lexicographic ids are chronological). */
-static bool netsvc_flush_outbox(int fd, netsvc_rx_t *rx, uint8_t *tx,
+static bool netsvc_flush_outbox(netsvc_tp_t *tp, netsvc_rx_t *rx, uint8_t *tx,
                                 size_t txcap, uint16_t *pkt_id)
 {
     DIR *d = NULL;
@@ -1057,7 +1226,7 @@ static bool netsvc_flush_outbox(int fd, netsvc_rx_t *rx, uint8_t *tx,
     for (i = 0; i < count; i++) {
         char path[P4_CONFIG_SD_PATH_BYTES];
         snprintf(path, sizeof(path), "%s/%s", P4_CONFIG_NET_OUTBOX_DIR, names[i]);
-        if (!netsvc_flush_one(fd, rx, tx, txcap, path, pkt_id)) {
+        if (!netsvc_flush_one(tp, rx, tx, txcap, path, pkt_id)) {
             ok = false;
             break;
         }
@@ -1067,18 +1236,18 @@ static bool netsvc_flush_outbox(int fd, netsvc_rx_t *rx, uint8_t *tx,
 }
 
 /* CONNECT handshake: returns the fd or -1. */
-static int netsvc_session_open(const char *host, int port,
-                               const char *user, const char *pass,
-                               const char *cid, uint16_t keepalive,
-                               netsvc_rx_t *rx, uint8_t *tx, size_t txcap,
-                               uint16_t *pkt_id)
+static netsvc_tp_t *netsvc_session_open(const char *host, int port, bool use_tls,
+                                         const char *user, const char *pass,
+                                         const char *cid, uint16_t keepalive,
+                                         netsvc_rx_t *rx, uint8_t *tx, size_t txcap,
+                                         uint16_t *pkt_id)
 {
     mqtt_connect_args_t args;
     uint8_t flags = 0;
     size_t body_off = 0;
     int bodylen;
     uint8_t rc = 0;
-    int fd;
+    netsvc_tp_t *tp;
     int n;
     memset(&args, 0, sizeof(args));
     args.client_id = cid;
@@ -1086,45 +1255,42 @@ static int netsvc_session_open(const char *host, int port,
     args.clean_session = true;
     args.username = (user != NULL && user[0] != '\0') ? user : NULL;
     args.password = (pass != NULL && pass[0] != '\0') ? pass : NULL;
-    fd = netsvc_tcp_dial(host, port, P4_CONFIG_NET_CONNECT_TIMEOUT_MS);
-    if (fd < 0) {
-        return -1;
+    tp = netsvc_tp_open(host, port, use_tls, P4_CONFIG_NET_CONNECT_TIMEOUT_MS);
+    if (tp == NULL) {
+        return NULL;
     }
     rx->used = 0;
     n = mqtt_encode_connect(tx, txcap, &args);
-    if (n < 0 || netsvc_send_all(fd, tx, (size_t)n, 10000) != 0) {
-        close(fd);
-        return -1;
+    if (n < 0 || netsvc_tp_send(tp, tx, (size_t)n, 10000) != 0) {
+        netsvc_tp_close(tp);
+        return NULL;
     }
-    bodylen = netsvc_await_frame(fd, rx, MQTT_PKT_CONNACK, &flags, 10000, &body_off);
+    bodylen = netsvc_await_frame(tp, rx, MQTT_PKT_CONNACK, &flags, 10000, &body_off);
     if (bodylen != 2 ||
         mqtt_decode_connack(rx->buf + body_off, (size_t)bodylen, &rc) != 0 ||
         rc != MQTT_RC_ACCEPTED) {
-        close(fd);
-        return -1;
+        netsvc_tp_close(tp);
+        return NULL;
     }
     netsvc_consume_frame(rx, body_off, (size_t)bodylen);
     *pkt_id = (uint16_t)(1 + (esp_random() % 60000u));
-    if (!netsvc_resubscribe(fd, rx, tx, txcap, pkt_id)) {
-        close(fd);
-        return -1;
+    if (!netsvc_resubscribe(tp, rx, tx, txcap, pkt_id)) {
+        netsvc_tp_close(tp);
+        return NULL;
     }
-    if (!netsvc_flush_outbox(fd, rx, tx, txcap, pkt_id)) {
-        close(fd);
-        return -1;
+    if (!netsvc_flush_outbox(tp, rx, tx, txcap, pkt_id)) {
+        netsvc_tp_close(tp);
+        return NULL;
     }
-    return fd;
+    return tp;
 }
 
 /* Connected pump: frames, keepalive, out-of-band acks. Runs until loss. */
-static void netsvc_session_pump(int fd, netsvc_rx_t *rx, uint16_t keepalive_s)
+static void netsvc_session_pump(netsvc_tp_t *tp, netsvc_rx_t *rx, uint16_t keepalive_s)
 {
     for (;;) {
-        fd_set rfds;
-        struct timeval tv;
         uint8_t chunk[512];
         ssize_t n;
-        int r;
         int64_t now_us = esp_timer_get_time();
         int64_t idle_us = now_us - s_net.last_io_us;
         if (!networking_wifi_is_connected() || netsvc_ota_active()) {
@@ -1133,25 +1299,19 @@ static void netsvc_session_pump(int fd, netsvc_rx_t *rx, uint16_t keepalive_s)
         if (idle_us > (int64_t)keepalive_s * 1000000 / 2) {
             uint8_t ping[2];
             if (mqtt_encode_pingreq(ping, sizeof(ping)) != 2 ||
-                netsvc_send_all(fd, ping, 2, 5000) != 0) {
+                netsvc_tp_send(tp, ping, 2, 5000) != 0) {
                 return;
             }
             s_net.last_io_us = now_us;
         }
-        FD_ZERO(&rfds);
-        FD_SET(fd, &rfds);
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
-        r = select(fd + 1, &rfds, NULL, NULL, &tv);
-        if (r < 0) {
+        /* 1 s tick: re-evaluate the gates above. Transport hides the
+         * select-vs-TLS difference (never select on a TLS fd directly). */
+        n = netsvc_tp_recv(tp, chunk, sizeof(chunk), 1000);
+        if (n < 0) {
             return;
         }
-        if (r == 0) {
-            continue; /* tick: re-evaluate the gates above */
-        }
-        n = recv(fd, chunk, sizeof(chunk), 0);
-        if (n <= 0) {
-            return;
+        if (n == 0) {
+            continue; /* tick */
         }
         s_net.last_io_us = esp_timer_get_time();
         if (netsvc_rx_feed(rx, chunk, (size_t)n) != 0) {
@@ -1209,14 +1369,15 @@ static void netsvc_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(5000));
                 continue;
             }
-            s_net.sock = netsvc_session_open(host, port, user, pbuf, cid,
-                                             P4_CONFIG_NET_KEEPALIVE_S,
-                                             &rx, txbuf,
-                                             P4_CONFIG_NET_PUBLISH_MAX_BYTES + 1024u,
-                                             &pkt_id);
+            s_net.tp = netsvc_session_open(host, port, netsvc_get_tls(),
+                                           user, pbuf, cid,
+                                           P4_CONFIG_NET_KEEPALIVE_S,
+                                           &rx, txbuf,
+                                           P4_CONFIG_NET_PUBLISH_MAX_BYTES + 1024u,
+                                           &pkt_id);
             memset(pbuf, 0, sizeof(pbuf));
         }
-        if (s_net.sock < 0) {
+        if (s_net.tp == NULL) {
             uint32_t wait = netsvc_backoff_ms(attempt, P4_CONFIG_NET_BACKOFF_BASE_MS,
                                               P4_CONFIG_NET_BACKOFF_CAP_MS);
             attempt++;
@@ -1230,7 +1391,7 @@ static void netsvc_task(void *arg)
         s_net.last_io_us = esp_timer_get_time();
         netsvc_unlock();
         netsvc_note("net: connected");
-        (void)netsvc_session_pump(s_net.sock, &rx, P4_CONFIG_NET_KEEPALIVE_S);
+        (void)netsvc_session_pump(s_net.tp, &rx, P4_CONFIG_NET_KEEPALIVE_S);
         netsvc_lock();
         netsvc_close_socket();
         netsvc_unlock();
@@ -1257,7 +1418,7 @@ void netsvc_ensure_init(void)
     }
     s_inited = true;
     memset(&s_net, 0, sizeof(s_net));
-    s_net.sock = -1;
+    s_net.tp = NULL;
     s_net.lock = xSemaphoreCreateMutex();
     if (s_net.lock == NULL) {
         s_inited = false;
@@ -1276,7 +1437,7 @@ bool netsvc_is_connected(void)
 {
     bool up = false;
     netsvc_lock();
-    up = s_net.connected && s_net.sock >= 0;
+    up = s_net.connected && s_net.tp != NULL;
     netsvc_unlock();
     return up;
 }
@@ -1330,6 +1491,27 @@ esp_err_t netsvc_set_broker(const char *host, int port, const char *user)
         return ESP_FAIL;
     }
     return ESP_OK;
+}
+
+/** Persist ("1") or clear ("0") the MQTT-over-TLS profile flag. */
+esp_err_t netsvc_set_tls(bool enabled)
+{
+    if (storage_ini_file_set(P4_CONFIG_NET_PROFILE_FILE, NETSVC_PROFILE_TLS,
+                             enabled ? "1" : "0") != ESP_OK) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+/** True when the stored profile requests MQTT over TLS (default off). */
+bool netsvc_get_tls(void)
+{
+    char value[8];
+
+    if (netsvc_profile_get(NETSVC_PROFILE_TLS, value, sizeof(value)) != ESP_OK) {
+        return false;
+    }
+    return value[0] == '1';
 }
 
 esp_err_t netsvc_get_broker(char *host, size_t host_size, int *port_out,
@@ -1397,8 +1579,18 @@ esp_err_t netsvc_disconnect(void)
 {
     netsvc_lock();
     s_net.enabled = false;
-    if (s_net.sock >= 0) {
-        shutdown(s_net.sock, SHUT_RDWR);
+    if (s_net.tp != NULL) {
+        /* Unblock the pump's read side: plain via shutdown, TLS via its
+         * underlying fd (esp_tls has no shutdown of its own). */
+        if (s_net.tp->use_tls && s_net.tp->tls != NULL) {
+            int fd = -1;
+
+            if (esp_tls_get_conn_sockfd(s_net.tp->tls, &fd) == ESP_OK && fd >= 0) {
+                shutdown(fd, SHUT_RDWR);
+            }
+        } else if (s_net.tp->fd >= 0) {
+            shutdown(s_net.tp->fd, SHUT_RDWR);
+        }
     }
     netsvc_unlock();
     return ESP_OK;

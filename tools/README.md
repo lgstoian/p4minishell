@@ -48,7 +48,21 @@ python tools/p4test_run.py COM3 --list          # list suites
 python tools/p4test_run.py COM3 --tag core      # subset by tag
 python tools/p4test_run.py COM3 --only s05_storage,s06_batch
 python tools/p4test_run.py COM3 --quick         # shorten soak/boot waits
+python tools/p4test_run.py --boards COM3,COM6 --tier fast --fail-fast
+# gate a feature on both boards in parallel (minutes)
+python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1
+# release gate: merged table, board differential, FLAKY quarantine
 ```
+
+Tiers: `--tier fast` runs the per-area smoke subset for feature delivery;
+`--tier full` (default) runs everything for releases. `--boards` takes COM
+ports or board slugs and runs them concurrently, one thread per board, with a
+single merged table plus a board-vs-board differential (a suite failing on
+exactly one board is a board-specific regression). `--fail-fast` stops the
+other board at the first failure; `--keep-going` runs everything.
+`--retry N` re-runs a failed suite (never a panic): pass-on-retry is reported
+FLAKY, fail-twice is a bug. `--baseline/--write-baseline` track per-suite
+durations to catch slow-check regressions.
 
 ## Autonomous dogfooding — `dogfood.py`
 
@@ -71,7 +85,7 @@ python tools/dogfood.py COM3 --minutes 3 --seed 7 --out screenshots/dogfood/run7
   **not** reset the board — the line state is set before `open()`), `hard_reset()`
   (explicit esptool reboot for tools that need a fresh boot), `default_port()`
   (port resolution). Import it, do not reimplement.
-- `baseline_sweep.py`, `serial_sweep.py`, `serial_sweep2.py` — canned
+- `baseline_sweep.py`, `serial_sweep.py` — canned
   bring-up sweeps (versions, TUI/draw, modals, audio, periph, SD cycle).
 - `bsod_watch.py` — timestamped long serial capture for the recurrent
   display-fault hunt; the DSI-underrun "BSOD" was root-caused with it. One
@@ -120,15 +134,16 @@ holder per port.
 
 - `bg_run.py` — shared marker-sync drain driver (`run_quiet`, `marker_done`,
   `boot`) for background/loop tests; reuses `apps/companion/deep_test.py`
-  (`worker_line`) rather than reimplementing serial reading.
+  (`worker_line`) rather than reimplementing serial reading. Retired one-shot
+  spikes (`spike*.py`, `bg_test*.py`, `bg_kill*.py`, `bg_crash_repro.py`,
+  `bounce_*.py`, `serial_sweep2.py`, `asset_test2.py`, `match_debug.py`) were
+  removed; their coverage lives in the suites.
 - `perf_for_test.py`, `perf_transcript_test.py`, `clip_probe.py` — batch
   performance/correctness probes (loop output, transcript slice path).
-- `bg_test.py`/`bg_test2.py`/`bg_kill*.py` — `start`/`taskkill` lifecycle.
 - `tcmd_test.py`/`tcmd_shot.py`/`tcmd_debug.py` — dual-pane commander.
 - `snake_test.py`/`snake_steer_test.py`/`snake_quit_test.py` — SNAKE.
-- `bounce_test.py`/`bounce_twice.py` — gfx BOUNCE demo (incl. re-init safety).
 - `elite_test.py`, `svc_test.py` — ELITE trader + background service/alarm.
-- `asset_test.py`/`asset_test2.py`/`assets_verify.py`, `draw_list_test.py`,
+- `asset_test.py`/`assets_verify.py`, `draw_list_test.py`,
   `table_cursor_shot.py`, `gfx_sprite_test.py` — asset/manifest + TUI/gfx verbs.
 - `pkg_test.py`/`pkg_smoke.py` — packaged SD apps (`pkg` list/info/verify +
   install→run→remove round-trip; needs `apps/push_pkgs.py` first). `pkg_test.py`
@@ -173,7 +188,10 @@ holder per port.
   and dialog/list buttons; `--sweep [px]` adds a full-screen coordinate sweep.
   `ui target <id>` is a semantic activation (modal panels live in the
   auto-scrolling transcript, so raw coordinate taps are racy there); `ui tap`
-  remains the raw-coordinate path.
+  remains the raw-coordinate path. `ui links` lists transcript hyperlink
+  regions and `ui link <n>` activates one (same tap-confirm fire path as a
+  finger; coordinates take NATIVE panel pixels for `usb mouse move`, display
+  pixels for `ui tap` — read natives from sysinfo's `native W x H`).
 - `completion_test.py` — shell input-area verification: the `history /search`
   filter (hit, miss, ERRORLEVEL), the debounced autosave profile in
   `HISTORY.TXT`, and the inline ghost completion driven through the OSK
@@ -183,20 +201,22 @@ holder per port.
 - `plot_test.py` — runs `PLOT.BAT`, pulls canvas BMPs with `pull.py` and checks
   world-coordinate pixels (func/axes/data/bar/point/line), plus a TUI-mode
   screenshot to `spikes/plot_tui.bmp`.
-- `unit_run.py` — build-independent capture of the unit-test summaries.
-- `regression.py` — one-command host regression: resets the board, runs every
-  suite/guard (`deep`/`db`/`alarm`/`smoke`/`pkg`/`theme`/`gfx`/`plot`/`header`/
-  `keyboard`/`editor`/`editor large`/`timer`/`csv`/`export`/`bind`/`crypt`/
-  `tcpterm`/`userial`/`ui touch`/`completion`/`tx_stress`/`boot_regression`), prints a
-  PASS/FAIL table, non-zero exit on failure. `--quick` shortens the boot soak.
-  Unit tests remain a separate step.
+- `unit_run.py` — build-independent capture of the unit-test summaries, one
+  or two ports concurrently (`unit_run.py COM3 COM6`).
+- `regression.py` — one-command host regression: one reset, then the full
+  p4test suite plus the unique-coverage drivers (companion deep/db/alarm,
+  package deploy/install, large-editor soak, touch sweep, TX integrity, boot
+  regression), PASS/FAIL table, non-zero exit on failure. Area drivers whose
+  coverage lives in the suites are not re-run. `--quick` shortens the boot
+  soak. Unit tests remain a separate step (`unit_run.py COM3 COM6`).
 - `wifi_bench.py` — host endpoint for the firmware `wifi throughput` command:
   runs the matching TCP/UDP peer and prints host- and device-side Mbit/s.
   Host and device must share a subnet.
 - `tx_stress_test.py` — TX-pressure output-integrity guard:
   emits numbered lines while pausing reads to build backpressure and verifies
   every line arrived (guards the driver-API transcript mirror).
-- `boot_regression.py` — fresh-boot regression guard: reboots N times and
+- `boot_regression.py` — fresh-boot regression guard, one or two ports
+  concurrently: reboots N times and
   asserts no panic/assert, exactly one AUTOEXEC run, SD ready, and no
   unexpected W/E log lines (guards the deferred boot-script, header async
   ownership, and boot-warning suppression fixes).
@@ -210,7 +230,15 @@ holder per port.
   UID into a mirror dir of per-`<uid>.vcf`/`<uid>.ics` files).
 - `p4sync/` — P4Sync USB prototype over the shared `p4test` transports
   (handshake, file push/pull, screenshot; PIM stays with `pim_sync.py`):
-  `python tools/p4sync --port COM3 status|push|pull|shot`.
+  `python tools/p4sync --port COM3 status|push|pull|shot|full-image`.
+  `full-image --mirror DIR --db NAME [--files DIR] [--shot OUT]` composes one
+  session (handshake + PIM mirror sync reusing `pim_sync` + file provisioning
+  + app inventory + shot + `image.json` manifest), nonzero on first failure.
+- `radicale_fixture.py` — local CardDAV bench for `pim net` E2E: `serve`
+  runs Radicale with a 3-contact addressbook (`/alice/contacts/`,
+  alice/benchpass123, bench-only creds) + self-checks (207 + hrefs); `check`
+  re-verifies a running instance. Board and PC must share a LAN (verify with
+  `tcpterm <pc-ip> <port>` first; phone-hotspot NAT is isolated).
 - `parse_debuglog.py` — host-side parser for `debug save` exports
   (`txt`/`csv`/`json`, auto-detected): severity summary + chronological
   table. Pull `DEBUG.LOG` with `pull.py`, then

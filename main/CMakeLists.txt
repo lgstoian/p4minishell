@@ -17,6 +17,7 @@ idf_component_register(
         keyboard
         led
         networking
+        portal
         usb
         shell
         boot

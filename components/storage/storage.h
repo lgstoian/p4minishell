@@ -230,7 +230,8 @@ esp_err_t shell_fs_copy_file(const char *source_path, const char *dest_path);
  * Called after a successful transfer so a read-only or hidden source keeps
  * those attributes at the destination, matching DOS `copy` and `xcopy`.
  * Applied after the data is written because a read-only destination cannot
- * be opened for writing.
+ * be opened for writing. When either side is a USB path only the read-only
+ * flag is carried (USB has no hidden/system/archive bits).
  *
  * @param source_path  Resolved source path.
  * @param dest_path    Resolved destination path.
@@ -370,6 +371,40 @@ esp_err_t storage_get_space_info(storage_space_info_t *info_out);
 bool storage_check_free_space(uint64_t needed_bytes, uint64_t reclaim_bytes, const char *operation);
 
 /**
+ * Free bytes on the volume backing a resolved VFS path: SD uses the mounted
+ * volume report, USB volumes use esp_vfs_fat_info on the slot base.
+ * (newlib on ESP32 has no statvfs, so the FAT layer is queried directly.)
+ *
+ * @param vfs_path  Resolved path selecting the volume (NULL means SD).
+ * @param free_out  Receives the free byte count.
+ * @return ESP_OK or the query error.
+ */
+esp_err_t storage_volume_free_bytes(const char *vfs_path, uint64_t *free_out);
+
+/**
+ * Capacity snapshot (total + free + used) for the volume backing a
+ * resolved VFS path (NULL means SD). Single implementation behind this and
+ * storage_volume_free_bytes().
+ */
+esp_err_t storage_volume_space_info(const char *vfs_path, storage_space_info_t *info_out);
+
+/** True when a USB MSC slot is attached and VFS-mounted. */
+bool storage_usb_slot_mounted(int slot);
+
+/**
+ * Free-space gate for an explicit destination path: SD uses the mounted
+ * volume report, USB volumes use esp_vfs_fat_info on the slot base.
+ *
+ * @param vfs_path       Resolved destination path (selects the volume).
+ * @param needed_bytes   Bytes the operation intends to write.
+ * @param reclaim_bytes  Bytes the operation will free first.
+ * @param operation      Command name used in the refusal message.
+ * @return true when the write may proceed (message already printed on false).
+ */
+bool storage_check_free_space_at(const char *vfs_path, uint64_t needed_bytes,
+                                 uint64_t reclaim_bytes, const char *operation);
+
+/**
  * Report whether two resolved paths refer to the same file.
  * Used to refuse a copy or move onto itself before it truncates the source.
  */
@@ -390,15 +425,88 @@ uint64_t storage_get_file_size(const char *resolved_path);
  * contract; the mechanics live here so the storage module stays the single
  * owner of mount state and low-level FATFS/sdmmc access.
  *
- * Volume targeting is parameterized so a second volume (USB OTG MSC at
- * /usb0) can be added later without changing the command surface.
+ * Volume targeting is parameterized: SD plus the registered USB OTG MSC
+ * slots (/usb0..N, drives u:..) share the file-verb surface; SD-only
+ * mechanics (trash bin, FATFS label/attrib, MBR tools) refuse USB paths
+ * cleanly.
  */
 
 /** Physical storage volume that a disk/format operation targets. */
 typedef enum {
     STORAGE_VOLUME_SD = 0,   /**< SD card on the BSP SDMMC host. */
-    /* Future: STORAGE_VOLUME_USB for the USB OTG MSC device at /usb0. */
+    STORAGE_VOLUME_USB0 = 1, /**< First USB OTG MSC device (/usb0, drive u:). */
+    STORAGE_VOLUME_USB1 = 2, /**< Second USB OTG MSC device (/usb1, drive v:). */
+    STORAGE_VOLUME_USB2 = 3, /**< Third USB OTG MSC device (/usb2, drive w:). */
+    STORAGE_VOLUME_USB3 = 4, /**< Fourth USB OTG MSC device (/usb3, drive x:). */
+    STORAGE_VOLUME_COUNT = 5,
 } storage_volume_t;
+
+/** USB MSC volume operations, owned by the usb component and registered by
+ *  main.c at boot (the storage layer never includes usb headers, keeping the
+ *  dependency direction one-way). Every hook is NULL-checked; without
+ *  registration USB volumes report unavailable. */
+typedef struct {
+    /** True when a device is attached in the slot (0-based). */
+    bool (*is_connected)(int slot);
+    /** True when the slot is VFS-mounted. */
+    bool (*is_mounted)(int slot);
+    /** Mount the slot's device (no-op when already mounted/absent). */
+    void (*mount)(int slot);
+    /** Geometry for `disk list`; false when unknown. */
+    bool (*get_geometry)(int slot, uint32_t *sector_size_out,
+                         uint32_t *sector_count_out, char *label_out,
+                         size_t label_size);
+    /** VFS base path for the slot (e.g. "/usb0"); NULL when unmounted. */
+    const char *(*base_path)(int slot);
+} storage_usb_ops_t;
+
+/**
+ * Register the USB MSC operations table. Called once from app_main;
+ * passing NULL clears it (USB volumes report unavailable).
+ */
+void storage_register_usb_ops(const storage_usb_ops_t *ops);
+
+/** Drive letter for a USB slot (`u:`/`v:`/`w:`/`x`), or '\0' when out of range. */
+char storage_usb_drive_letter(int slot);
+
+/** USB slot for a drive letter (`u`/`v`/`w:`/`x:`, case-insensitive), or -1. */
+int storage_usb_slot_for_drive(char letter);
+
+/**
+ * Classify an already-resolved VFS path by volume (`/usbN/...` → USBn,
+ * anything else → SD). Pure, unit-tested.
+ */
+storage_volume_t storage_volume_of_vfs_path(const char *vfs_path);
+
+/**
+ * Ensure a volume is mounted (SD is always ready via the guarded session;
+ * USB slots automount on demand through the registered ops).
+ */
+esp_err_t storage_volume_ensure_mounted(storage_volume_t vol);
+
+/**
+ * Begin a guarded session for a volume: SD delegates to shell_sd_begin()
+ * (identical errors and messages); USB ensures the slot mount without
+ * touching the SD card, so USB works with no SD inserted.
+ */
+esp_err_t storage_volume_session_begin(storage_volume_t vol,
+                                       shell_sd_session_t *session);
+
+/** End a volume session (SD delegates to shell_sd_end(); USB is a no-op). */
+void storage_volume_session_end(storage_volume_t vol,
+                                shell_sd_session_t *session,
+                                const char *operation);
+
+/** Human media name for messages: "SD card" or "USB drive". */
+const char *storage_volume_media_name(storage_volume_t vol);
+
+/**
+ * Geometry of a USB MSC slot through the registered ops (for `disk list`).
+ * False when the slot is empty, unregistered, or geometry is unknown.
+ */
+bool storage_usb_volume_geometry(int slot, uint32_t *sector_size_out,
+                                 uint32_t *sector_count_out, char *label_out,
+                                 size_t label_size);
 
 /** Physical disk geometry (from the SDMMC card descriptor). */
 typedef struct {
@@ -450,6 +558,13 @@ esp_err_t storage_disk_get_info(storage_volume_t vol, storage_disk_info_t *out);
 esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out);
 
 /**
+ * Decode a raw 512-byte sector into an MBR partition table. Pure (no SD
+ * access), unit-tested with synthetic sectors. `valid` is false when the
+ * 0x55AA signature is missing; ESP_ERR_INVALID_ARG on NULL arguments.
+ */
+esp_err_t storage_mbr_decode_sector(const uint8_t sector[512], storage_mbr_t *out);
+
+/**
  * Remove the partition table (diskpart `clean`).
  *
  * Unmounts the FATFS volume, zeroes the four MBR partition entries (keeping
@@ -487,6 +602,107 @@ esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t s
  *         range index, or the mount/write error.
  */
 esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition_index);
+
+/** Progress callback for long disk scans (`done_sectors` of `total_sectors`). */
+typedef void (*storage_disk_progress_fn_t)(uint32_t done_sectors, uint32_t total_sectors);
+
+/**
+ * Write raw sectors (used by `disk mbr restore`; unmounts first).
+ *
+ * @param vol            Target volume (SD only).
+ * @param start_lba      First sector to write.
+ * @param buffer         sector_count * 512 bytes to write.
+ * @param sector_count   Sector count, must be nonzero.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, or the mount/write error.
+ */
+esp_err_t storage_disk_write_sectors(storage_volume_t vol, uint32_t start_lba,
+                                     const uint8_t *buffer, uint32_t sector_count);
+
+/**
+ * Read raw sectors for the `debug disk` / `disk mbr` verbs.
+ *
+ * @param vol            Target volume (SD only).
+ * @param start_lba      First sector to read.
+ * @param buffer         Receives sector_count * 512 bytes.
+ * @param sector_count   Sector count, must be nonzero.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, or the mount/read error.
+ */
+esp_err_t storage_disk_read_sectors(storage_volume_t vol, uint32_t start_lba,
+                                    uint8_t *buffer, uint32_t sector_count);
+
+/**
+ * Mark an MBR partition bootable (`disk active N`, 1-based; 0 clears all).
+ *
+ * Rewrites every boot flag in one read-modify-write session behind the
+ * unmount + 0x55AA re-stamp contract. Refuses a table without a signature.
+ *
+ * @param vol                Target volume.
+ * @param partition_1based   1..4 to activate, 0 to clear all flags.
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, ESP_ERR_INVALID_ARG for an out-of-
+ *         range selector, ESP_ERR_INVALID_STATE without a valid MBR, or the
+ *         mount/write error.
+ */
+esp_err_t storage_disk_set_active(storage_volume_t vol, int partition_1based);
+
+/**
+ * Set an MBR partition type byte (`disk type N <hex>`).
+ *
+ * @param vol              Target volume.
+ * @param partition_index  0-based index into the MBR partition table.
+ * @param type             New type byte (e.g. 0x0B FAT32, 0x07 NTFS/exFAT).
+ * @return ESP_OK, ESP_ERR_NOT_SUPPORTED, ESP_ERR_INVALID_ARG, or the
+ *         mount/write error.
+ */
+esp_err_t storage_disk_set_partition_type(storage_volume_t vol,
+                                          unsigned partition_index,
+                                          uint8_t type);
+
+/**
+ * Surface verify: read every sector (or the first @p max_sectors when
+ * nonzero) and count unreadable ones. Read-only; honors the foreground
+ * abort flag so a full-card scan stays cancellable.
+ *
+ * @param vol          Target volume.
+ * @param max_sectors  Sector cap, 0 for the whole card.
+ * @param bad_out      Receives the unreadable-sector count.
+ * @param done_out     Receives the sectors actually scanned.
+ * @param progress     Optional progress callback (may be NULL).
+ * @return ESP_OK, ESP_ERR_TIMEOUT when aborted, or the mount error.
+ */
+esp_err_t storage_disk_verify(storage_volume_t vol, uint32_t max_sectors,
+                              uint32_t *bad_out, uint32_t *done_out,
+                              storage_disk_progress_fn_t progress);
+
+/**
+ * Sector image save: stream the card (or @p max_sectors when nonzero) into
+ * @p image_path (already VFS-resolved). Gated on free space first.
+ *
+ * @param vol          Target volume.
+ * @param image_path   Destination file path (overwritten).
+ * @param max_sectors  Sector cap, 0 for the whole card.
+ * @param sectors_out  Receives the sectors written.
+ * @param progress     Optional progress callback (may be NULL).
+ * @return ESP_OK, ESP_ERR_TIMEOUT when aborted, or the mount/IO error.
+ */
+esp_err_t storage_disk_image_save(storage_volume_t vol, const char *image_path,
+                                  uint32_t max_sectors, uint32_t *sectors_out,
+                                  storage_disk_progress_fn_t progress);
+
+/**
+ * Sector image restore: stream @p image_path back onto the card from sector
+ * 0. The caller owns the destructive-confirmation contract. Unmounts once
+ * up front so no stale FATFS cache survives.
+ *
+ * @param vol          Target volume.
+ * @param image_path   Source image (size must be a nonzero 512 multiple that
+ *                     fits the card).
+ * @param sectors_out  Receives the sectors written.
+ * @param progress     Optional progress callback (may be NULL).
+ * @return ESP_OK, ESP_ERR_TIMEOUT when aborted, or the mount/IO error.
+ */
+esp_err_t storage_disk_image_restore(storage_volume_t vol, const char *image_path,
+                                     uint32_t *sectors_out,
+                                     storage_disk_progress_fn_t progress);
 
 /**
  * Format a volume (DOS FORMAT.COM / diskpart `format`).

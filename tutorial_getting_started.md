@@ -68,6 +68,7 @@ mem                  heap usage
 | History | input-row `Up`/`Dn`, `Up`/`Down` keys, `Ctrl+R` to search |
 | Complete | `Tab` (commands, aliases, paths), or tap the ghost text |
 | Scroll | drag the transcript, the input-row `Up`/`Dn` buttons, `PageUp`/`PageDown`, or the mouse wheel |
+| Point & click | USB/BLE mouse with `usb mouse cursor on` + `usb mouse click on` (tap == touch tap; wheel scrolls with everything off). No mouse? `usb mouse move <x> <y>` + `usb mouse click` simulate the same pointer over serial |
 | Copy/paste | `clip` / `paste` (shared with the `edit` editor) |
 | Stop a long command | the input-row **Stop** button or `Ctrl+C` |
 
@@ -116,6 +117,8 @@ bounce                 the gfx bouncing-ball demo
 ```
 
 `launch /list` prints the installed apps with their `APPINFO` titles.
+The `launch` menu prints every app name as a hyperlink: tap once to preview
+`launch <name>`, tap again to run it. `help` command names work the same way.
 
 ## 7. Install a packaged app
 

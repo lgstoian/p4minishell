@@ -34,6 +34,8 @@ FILES = [
     ("notes", "ALIASES.BAT", False),
     ("mood", "MOOD.BAT", False),
     ("mood", "MOOD.APPINFO", True),
+    ("mood", "MOODSVC.BAT", False),
+    ("mood", "MOODSVC.APPINFO", True),
     ("mood", "ALIASES.BAT", False),
     ("gfxdemo", "BOUNCE.BAT", False),
     ("gfxdemo", "BOUNCE.APPINFO", True),
@@ -61,6 +63,8 @@ FILES = [
     ("writer", "WRITER.APPINFO", True),
     ("hybrid", "HYBRID.BAT", False),
     ("hybrid", "HYBRID.APPINFO", True),
+    ("taskmgr", "TASKMGR.BAT", False),
+    ("taskmgr", "TASKMGR.APPINFO", True),
 ]
 
 

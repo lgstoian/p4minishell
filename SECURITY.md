@@ -4,7 +4,7 @@ How P4MiniShell protects secrets, what the device lock actually enforces,
 and what is still missing. Read this before exposing a device to an
 untrusted network.
 
-- **Version:** v1.3.0 · **License:** MIT (see [`licence.md`](licence.md))
+- **Version:** v1.3.1 · **License:** MIT (see [`licence.md`](licence.md))
 - Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`,
   `pkg`), [`ABI.md`](ABI.md) (package signing), [`readme.md`](readme.md),
   [`roadmap.md`](roadmap.md) (platform/security row).
@@ -17,7 +17,7 @@ P4MiniShell is a single-user hobby firmware. It assumes:
 - the **SD card is portable storage**, readable on any host — there is no
   full-disk encryption;
 - the **LAN may be hostile** once Wi-Fi is connected (`httpd`, `tcpterm`,
-  `net` plaintext MQTT).
+  `net` MQTT without `net tls on`).
 
 It defends against casual snooping (shoulder surfing, shared photos of the
 screen, a borrowed device) and against remote LAN access to the file server.
@@ -68,8 +68,11 @@ report. There is no bug-bounty program.
 - The MQTT broker password (`net password`) is read hidden, never echoed,
   and its buffer is **zeroed after every run**; like the Wi-Fi known list it
   is stored on the SD card (`sd:/NET.INI`), readable on any host — the
-  documented recovery trade, not a bypass. The v1 transport is plaintext
-  MQTT: use it on a trusted LAN until the TLS client trust store lands.
+  documented recovery trade, not a bypass. The default transport is plaintext
+  MQTT (trusted LAN only); `net tls on` switches to MQTT over TLS using the
+  `httpget` CA policy (user CA store when loaded, Mozilla bundle otherwise).
+  CardDAV passwords (`pim net ... /p:`) are history-masked and zeroed after
+  the run the same way.
 
 ## Package signing (`pkg` / `pkg key`)
 
@@ -108,17 +111,52 @@ key queue, and **refuse when no interactive input source is attached**, so a
 batch file can never trigger them unattended. `chkdsk` is read-only by
 design — the firmware never rewrites FAT structures.
 
+Taps never execute anything directly: transcript hyperlinks (`link`) only
+arm a preview naming the exact target, and the second tap on the same target
+runs it. `anchor` regions (batch-authored, immediate-run) predate this rule
+and keep their contract; prefer `link` for anything destructive.
+
 ## Transport notes
 
-- HTTPS client (`httpget https://…`) uses mbedTLS. There is no SD
-  certificate store yet (see `roadmap.md` TLS row); pinning custom CAs is
-  not supported in v1.3.0.
+- HTTPS client (`httpget https://…`) uses mbedTLS against the user CA store
+  (`sd:/CERTS/`, managed by `certs`) plus the compiled-in Mozilla bundle.
+  Custom CAs go in via `certs add` (PEM, or DER validated + converted).
 - C6 OTA requires the explicit `YES` confirmation, refuses while background
   jobs run, and restores Wi-Fi afterwards.
-- SoftAP is compiled out (station-only); there is no open AP by default.
+- SoftAP is station-only except the captive portal (`wifi setup on`, open AP
+  `P4MiniShell-Setup` by config, TX-capped) and **board-to-board chat** (`chat host on`, open AP `P4MiniShell-Chat` by config, TX-capped); there is no open AP by default.
 - Secure boot / flash encryption: no provisioned profile ships in v1.3.0
   (see `roadmap.md` platform row). Enable them via your own ESP-IDF signing
   flow if your deployment needs them.
+
+## Chat transport notes
+
+- `chat host on` starts an **open SoftAP** (`P4MiniShell-Chat`, TX-capped to
+  13 dBm / 52 qdBm). Any nearby device can join and send HTTP `POST /chat`
+  messages. **No authentication or encryption** — the link is plain HTTP over
+  the local AP link. Do not use on untrusted physical premises.
+- `chat peer <host-ip>` joins the host AP via `wifi connect`; the peer is
+  also on an open network.
+- **Read-only scope:** the protocol has no remote command execution. Only
+  text messages (`chat send` / `chat poll` / `chat log`) and the optional
+  `/onmsg` hook (runs a local batch line with `CHAT_FROM`, `CHAT_TEXT`,
+  `CHAT_LEN` env vars) are supported. No reverse shell, no `exec`.
+- **Opt-in exception:** `chat host on` temporarily lifts the STA-only Wi-Fi
+  rule. `chat host off` restores STA-only mode immediately.
+- `chat onmsg <line>` runs a local batch line on message receive; the line
+  should be audited like any batch code. `chat onmsg off` disables it.
+
+## EPUB transport notes
+
+- `epub open <file.epub>` opens a **ZIP-based EPUB archive** with an internal
+  SoftAP-free reader. No network exposure.
+- **Read-only scope:** the protocol has no remote command execution. Only
+  local rendering (`epub read`), navigation (`next`/`prev`/`goto`/`toc`),
+  and resource extraction (`epub extract`) are supported.
+- **No network exposure:** EPUB files are local ZIP archives; no network
+  interfaces are opened or exposed.
+- **Opt-in extraction:** `epub extract <n> <file>` writes resources (images,
+  CSS, fonts) to SD card; the source archive is never modified.
 
 ## Known gaps (not bugs)
 

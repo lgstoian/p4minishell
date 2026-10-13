@@ -59,8 +59,26 @@ class Device:
         return self.session.read_for(seconds)
 
     def screenshot(self, out_dir: Optional[str] = None,
-                   name: Optional[str] = None) -> shot.Bmp:
-        return shot.capture(self.session, out_dir, name)
+                   name: Optional[str] = None,
+                   unwind: bool = True) -> shot.Bmp:
+        return shot.capture(self.session, out_dir, name, unwind=unwind)
+
+    # -- cursor simulation + links (serial-driven, same indev as HID) ----
+    def cursor_move(self, x: int, y: int, timeout: float = 20.0) -> str:
+        """Place the shared mouse cursor at native-panel (x, y)."""
+        return self.run("usb mouse move %d %d" % (x, y), timeout=timeout)
+
+    def cursor_click(self, hold_ms: int = 80, timeout: float = 20.0) -> str:
+        """Synthesize one click at the tracked cursor position."""
+        return self.run("usb mouse click %d" % hold_ms, timeout=timeout)
+
+    def ui_links(self, timeout: float = 20.0) -> str:
+        """List transcript link/anchor regions (dense indices)."""
+        return self.run("ui links", timeout=timeout)
+
+    def ui_link(self, index: int, timeout: float = 20.0) -> str:
+        """Semantically activate link <index> (confirm-gated like a tap)."""
+        return self.run("ui link %d" % index, timeout=timeout)
 
     # -- board capabilities ---------------------------------------------
     def sysinfo(self) -> str:

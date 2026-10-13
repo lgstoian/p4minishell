@@ -186,6 +186,13 @@
 #define P4_CONFIG_TRANSCRIPT_SCROLL_STEP      60
 
 /**
+ * Mouse cursor square size in pixels (`usb mouse cursor on`). The cursor is
+ * a hollow LVGL box on the top layer following the shared HID pointer
+ * indev; both default off, so this only takes effect once opted in.
+ */
+#define P4_CONFIG_MOUSE_CURSOR_PX             14
+
+/**
  * Transcript auto-follow threshold in pixels. When the scroll position is
  * within this distance of the bottom, new output keeps the view pinned to the
  * newest lines (a terminal-style follow). Scrolling up past this threshold
@@ -387,6 +394,15 @@
 /** Default SD profile for `debug save` (mirrors P4_CONFIG_HISTORY_PROFILE). */
 #define P4_CONFIG_DEBUG_LOG_PROFILE          "DEBUG.LOG"
 
+/** Maximum bytes shown by a single `debug mem` dump (length arg is clamped). */
+#define P4_CONFIG_DEBUG_DUMP_BYTES           256
+
+/** Maximum disk sectors shown per `debug disk` invocation (512 B each). */
+#define P4_CONFIG_DEBUG_DISK_MAX_SECTORS     4
+
+/** Maximum payload bytes accepted by a single `debug poke`. */
+#define P4_CONFIG_DEBUG_POKE_MAX_BYTES       64
+
 /* ========================================================================
  * UI LAYOUT
  * ======================================================================== */
@@ -565,10 +581,10 @@
  * fit-to-screen RGB565 target (bounded by GFX_IMAGE_MAX_W/H), so these caps
  * bound the file that can be opened while memory stays predictable. */
 
-/** Largest BMP file the image path will ingest (a 1024x640 24-bit BMP is
- * ~1.9 MB; this covers it with headroom while keeping the staging buffer
- * bounded). */
-#define P4_CONFIG_IMAGE_MAX_BYTES               (2 * 1024 * 1024)
+/** Largest BMP file the image path will ingest (a 1280x720 24-bit BMP is
+ * ~2.8 MB; this covers the Tab5's own screenshots with headroom while
+ * keeping the staging buffer bounded). */
+#define P4_CONFIG_IMAGE_MAX_BYTES               (4 * 1024 * 1024)
 
 /** Show the viewer fit-to-screen (1) or at native size only (0). */
 #define P4_CONFIG_IMAGE_VIEWER_FIT              1
@@ -577,6 +593,13 @@
  * Bounds one command's argv and canvas work so a batch game loop stays
  * predictable; stamp more by issuing the verb again. */
 #define P4_CONFIG_GFX_BLITMANY_MAX              64
+
+/** Enable full CP437 extended font (0x00-0xFF, 256 glyphs) instead of
+ *  printable ASCII only (0x20-0x7E, 96 glyphs). The extended font adds
+ *  box-drawing, accented letters, and symbols for hexview, editor, and
+ *  gfx text. When disabled (0), the font array is still 256 entries but
+ *  0x00-0x1F and 0x80-0xFF are empty placeholders. */
+#define P4_CONFIG_GFX_FONT_EXTENDED             1
 
 /* ========================================================================
  * KEYBOARD PARAMETERS
@@ -737,12 +760,151 @@
 /** Maximum simultaneous SoftAP client connections. */
 #define P4_CONFIG_PORTAL_AP_MAX_CONN         4
 
+/** RF TX power cap applied while the portal AP runs, in quarter-dBm
+ *  (52 = 13 dBm). AP beacons are a continuous current draw: at full power
+ *  they brownout-reboot USB-powered boards (verified on hardware). The
+ *  pre-portal cap is restored on stop. Valid range is chip-dependent
+ *  (typically 8..84); out-of-range values are refused by the Wi-Fi driver
+ *  and the portal runs uncapped with a warning. */
+#define P4_CONFIG_PORTAL_AP_TX_POWER_QDBM   52
+
 /** How long (seconds) the portal runs before auto-stopping if no
  *  credentials are entered.  0 disables the timeout. */
 #define P4_CONFIG_PORTAL_TIMEOUT_SECS        300
 
 /** The HTTP port the portal page listens on. */
 #define P4_CONFIG_PORTAL_HTTP_PORT           80
+
+/* ========================================================================
+ * BOARD-TO-BOARD CHAT (chat)
+ * ========================================================================
+ * A minimal CLI chat between two P4MiniShell boards. One board runs a
+ * hosted SoftAP (APSTA mode) with a bounded HTTP server; the other joins
+ * via `wifi connect`. Both boards use the `chat` verb family. The transport
+ * mirrors the captive portal's APSTA/DHCP/TX-cap pattern to avoid USB brownout
+ * on self-powered boards. The chat is read-only (no remote command execution);
+ * messages are text only. */
+
+#define P4_CONFIG_CHAT_ENABLE                1
+
+/** Default SSID for the chat host AP. */
+#define P4_CONFIG_CHAT_AP_SSID               "P4MiniShell-Chat"
+
+/** Wi-Fi channel for the chat AP. */
+#define P4_CONFIG_CHAT_AP_CHANNEL            1
+
+/** Maximum simultaneous SoftAP client connections for chat. */
+#define P4_CONFIG_CHAT_AP_MAX_CONN           4
+
+/** RF TX power cap while the chat AP runs, in quarter-dBm
+ *  (52 = 13 dBm). Mirrors the portal cap to avoid USB brownout. */
+#define P4_CONFIG_CHAT_AP_TX_POWER_QDBM      52
+
+/** HTTP port for the chat server. */
+#define P4_CONFIG_CHAT_HTTP_PORT             80
+
+/** Maximum message bytes a single `chat send` may transmit. */
+#define P4_CONFIG_CHAT_MSG_MAX_BYTES         256
+
+/** Maximum messages retained in the local inbox (per peer). */
+#define P4_CONFIG_CHAT_INBOX_MAX             32
+
+/** Maximum messages retained in the local log (all peers). */
+#define P4_CONFIG_CHAT_LOG_MAX               128
+
+/** Maximum bytes for the `/onmsg` hook command line. */
+#define P4_CONFIG_CHAT_ONMSG_BYTES           256
+
+/** Maximum inactivity seconds before the chat host auto-stops (0 = no timeout). */
+#define P4_CONFIG_CHAT_TIMEOUT_SECS          0
+
+/** Allow the chat AP to be started without an explicit peer IP (peer may join
+ *  later via `chat peer <host-ip>`). When 0, `chat host <ssid>` requires a
+ *  peer IP argument. */
+#define P4_CONFIG_CHAT_HOST_DEFER_PEER       1
+
+/* ========================================================================
+ * EPUB READER
+ * ========================================================================
+ * EPUB e-book reader configuration. The reader parses ZIP-based EPUB archives
+ * with OPF/NCX/nav.xhtml parsing and renders chapters via the HTML-to-ANSI
+ * renderer. */
+
+#define P4_CONFIG_EPUB_ENABLE                1
+
+/** Base temporary directory pattern for EPUB extraction. */
+#define P4_CONFIG_EPUB_TEMP_DIR              "/sd/tmp/epub_XXXXXX"
+
+/** Maximum chapters in spine. */
+#define P4_CONFIG_EPUB_MAX_CHAPTERS          256
+
+/** Maximum table of contents entries. */
+#define P4_CONFIG_EPUB_MAX_TOC               256
+
+/** Maximum manifest items. */
+#define P4_CONFIG_EPUB_MAX_MANIFEST          256
+
+/** Maximum bytes for the `/onmsg` hook command line. */
+#define P4_CONFIG_EPUB_ONMSG_BYTES           256
+
+/* ========================================================================
+ * RSS / ATOM / JSON FEED READER
+ * ========================================================================
+ * Compile-time CAPACITIES only. C cannot size a struct member at runtime, so
+ * the field capacities and hard refusal limits below live here (generated
+ * from p4minishell_config.yaml).
+ *
+ * Every BEHAVIOURAL tunable — poll interval, retention, unread policy,
+ * auto-open, save policy — is NOT here. Those are CONFIG.SYS directives on
+ * the SD card, reached through the `config` command table in
+ * components/command/config_cmd.c and the boot directive parser in
+ * components/boot/boot.c, exactly like BRIGHTNESS / HEADER /
+ * DISPLAY_TIMEOUT. */
+
+/** ESP_LOGx tag for RSS reader messages. */
+#define P4_CONFIG_RSS_LOG_TAG                "rss"
+
+/** Maximum feed body bytes accepted by one fetch; larger responses are
+ *  refused outright rather than silently truncated into a broken feed. */
+#define P4_CONFIG_RSS_MAX_BODY_BYTES         1048576
+
+/** Maximum items retained per parsed feed. */
+#define P4_CONFIG_RSS_ITEM_CAPACITY          200
+
+/** Maximum subscription records held in the PSRAM mirror. */
+#define P4_CONFIG_RSS_SUB_CAPACITY           32
+
+/** Maximum OPML document bytes accepted by `rss import`. */
+#define P4_CONFIG_RSS_OPML_MAX_BYTES         262144
+
+/** Item field capacities (bytes, UTF-8). */
+#define P4_CONFIG_RSS_ITEM_TITLE_BYTES       256
+#define P4_CONFIG_RSS_ITEM_LINK_BYTES        512
+#define P4_CONFIG_RSS_ITEM_SUMMARY_BYTES     2048
+#define P4_CONFIG_RSS_ITEM_CONTENT_BYTES     8192
+#define P4_CONFIG_RSS_ITEM_AUTHOR_BYTES      128
+#define P4_CONFIG_RSS_ITEM_CATEGORIES_BYTES  256
+#define P4_CONFIG_RSS_ITEM_GUID_BYTES        256
+#define P4_CONFIG_RSS_ITEM_DATE_BYTES        64
+
+/** Feed field capacities (bytes, UTF-8). */
+#define P4_CONFIG_RSS_FEED_TITLE_BYTES       256
+#define P4_CONFIG_RSS_FEED_LINK_BYTES        512
+#define P4_CONFIG_RSS_FEED_DESC_BYTES        1024
+#define P4_CONFIG_RSS_FEED_GENERATOR_BYTES   128
+
+/** Subscription field capacities (bytes). */
+#define P4_CONFIG_RSS_SUB_NAME_BYTES         64
+#define P4_CONFIG_RSS_SUB_URL_BYTES          512
+#define P4_CONFIG_RSS_SUB_ETAG_BYTES         128
+/** Auth user / token. Never echoed to the transcript, history, or debug log. */
+#define P4_CONFIG_RSS_SUB_AUTH_BYTES         128
+
+/** Per-fetch network timeout in ms. */
+#define P4_CONFIG_RSS_FETCH_TIMEOUT_MS       15000
+
+/** Guard window before a subscription is eligible for another background poll. */
+#define P4_CONFIG_RSS_POLL_OVERLAP_MS        2000
 
 /* ========================================================================
  * PING AND DNS
@@ -952,8 +1114,13 @@
 #define P4_CONFIG_TLS_CERTS_MAX_PEM_BYTES   (64 * 1024)
 
 /** Maximum number of individual DER (binary) certificate files the store will
- *  load. Each DER cert occupies up to 2 KiB in the combined buffer. */
+ *  convert and load per scan. DER files are validated and converted to PEM in
+ *  memory; the .der originals on SD are never modified. */
 #define P4_CONFIG_TLS_CERTS_MAX_DER_FILES   8
+
+/** Maximum bytes of a single DER file accepted for conversion. CA
+ *  certificates are ~1-2 KiB; larger blobs are skipped with a warning. */
+#define P4_CONFIG_TLS_CERTS_MAX_DER_BYTES   (8 * 1024)
 
 /** Path for the compiled PEM bundle written by `certs rebuild`.  This file
  *  is the concatenation of every `.pem` in the CERTS directory. */
@@ -1337,6 +1504,72 @@
  *  fail mid-loop and stall the worker (W2). */
 #define P4_CONFIG_ENV_VAR_MAX                64
 
+/** Maximum job-private environment slots per background task. A `start`ed
+ *  job reads the global table but writes into its own lazily-allocated
+ *  overlay (nothing allocated until its first `set`); the overlay is
+ *  discarded when the job exits, so background `set` never leaks into the
+ *  foreground (process isolation). Aliases stay global by design. */
+#define P4_CONFIG_BG_ENV_SLOTS               16
+
+/* ========================================================================
+ * EXTENDED MEMORY (himem — XMS-style handle blocks over PSRAM)
+ * ========================================================================
+ * DOS extended-memory tricks for batch apps: named handle blocks above the
+ * 64-variable environment ceiling, for staging bulk data (file slices,
+ *  computed tables) without touching the SD card. One handle table, one
+ *  allocator (p4heap PSRAM); blocks never move, so XMS locks are a guard
+ *  (locked blocks refuse free) rather than a relocation promise. */
+
+/** Maximum simultaneous `himem` blocks (foreground + all jobs share it). */
+#define P4_CONFIG_HIMEM_HANDLES              16
+
+/** Largest single `himem` block (keeps one staging buffer bounded). */
+#define P4_CONFIG_HIMEM_MAX_BYTES            (4 * 1024 * 1024)
+
+/** `himem` bytes one background job may hold at once (foreground uncapped).
+ *  Together with per-job handle ownership (freed automatically at job exit)
+ *  this is the memory side of process isolation: no job can starve the
+ *  shell, and no job leaks blocks (no TSRs). */
+#define P4_CONFIG_HIMEM_JOB_QUOTA_BYTES      (1 * 1024 * 1024)
+
+/* ========================================================================
+ * BATCH SYNCHRONIZATION (lock/unlock named mutexes, signal/wait events)
+ * ========================================================================
+ * Real-concurrency coordination for background jobs: one mutex/event table
+ * each in the batch engine (never a second implementation per caller).
+ * Entries are owner-tracked and released automatically when the owning job
+ * exits, so a dead job can never wedge a mutex or leave a stale signal. */
+
+/** Maximum named mutexes alive at once (foreground + all jobs share it). */
+#define P4_CONFIG_SYNC_MUTEX_MAX             8
+
+/** Maximum named events alive at once (foreground + all jobs share it). */
+#define P4_CONFIG_SYNC_EVENT_MAX             8
+
+/** Maximum bytes for a mutex/event name (including NUL). */
+#define P4_CONFIG_SYNC_NAME_BYTES            32
+
+/* ========================================================================
+ * RESIDENT SERVICES (service registry + supervisor — TSRs that survive)
+ * ========================================================================
+ * Named background lines persisted in sd:/SERVICES.INI through the shared
+ * storage_ini core (no new parser): install/remove/list write the file,
+ * the supervisor re-starts what should run, and a boot hook re-starts
+ * autostart entries after AUTOEXEC.BAT. */
+
+/** Maximum registered services. */
+#define P4_CONFIG_SVC_MAX                    8
+
+/** Maximum bytes for a service name (including NUL). */
+#define P4_CONFIG_SVC_NAME_BYTES             24
+
+/** Supervisor tick: how often unexpected service exits are reaped (ms). */
+#define P4_CONFIG_SVC_TICK_MS                5000
+
+/** Restarts per service per boot before it parks (flood guard); the park
+ *  clears at the next boot. Manual `service stop` never counts. */
+#define P4_CONFIG_SVC_RESTART_MAX            5
+
 /* ========================================================================
  * ALIASES (alias / unalias, DOSKEY-style)
  * ========================================================================
@@ -1434,9 +1667,35 @@
 #define P4_CONFIG_BATCH_DEPTH_MAX            4
 
 /** Maximum background batch tasks (`start` pool) beyond the main worker.
- * Each extra slot is one ctx struct (BSS); tasks themselves are created on
- * demand with the same stack as the main worker. */
-#define P4_CONFIG_BG_TASKS                   1
+ *  Each extra slot is one ctx struct (BSS) plus one preallocated PSRAM
+ *  stack; pool tasks beyond P4_CONFIG_BG_EAGER_TASKS are created lazily on
+ *  first claim, so raising this costs no boot internal RAM. Sized for real
+ *  concurrency: two resident services plus a spare job slot. The task
+ *  manager (`suspend`/`resume`/`nice`, TASKMGR.BAT) operates on these slots. */
+#define P4_CONFIG_BG_TASKS                   3
+
+/** Task-manager priority bounds as offsets above tskIDLE_PRIORITY. Pool
+ *  workers run at +2; `nice` may move a pool slot within [MIN, MAX]. The
+ *  bounds keep pool jobs below the SD boost level and above idle so a
+ *  niced job can neither starve the worker nor wedge the scheduler. */
+#define P4_CONFIG_TMGR_PRIO_MIN              1
+#define P4_CONFIG_TMGR_PRIO_MAX              3
+
+/** Well-known task-manager event names (sync.c `signal`/`wait` namespace).
+ *  `tmgr_exit` fires on every background job exit; `tmgr_svc_restart` fires
+ *  when the supervisor restarts a service; `tmgr_pool_full` fires when a
+ *  launch finds no free slot. Batch automation waits on them with `wait`. */
+#define P4_CONFIG_TMGR_EVENT_EXIT            "tmgr_exit"
+#define P4_CONFIG_TMGR_EVENT_SVC_RESTART     "tmgr_svc_restart"
+#define P4_CONFIG_TMGR_EVENT_POOL_FULL       "tmgr_pool_full"
+
+/** Pool tasks created eagerly at boot (bg0..). The rest are created lazily
+ *  on first claim: every pool task costs internal heap outside its PSRAM
+ *  stack (Newlib reent), and the boot window must keep a contiguous 12 KB
+ *  block free for the Wi-Fi task — two eager tasks fit, four do not
+ *  (measured). Lazy tasks report "pool unavailable" only if creation fails
+ *  under pressure; their stacks are preallocated either way. */
+#define P4_CONFIG_BG_EAGER_TASKS             2
 
 /** I/O buffer size for general file operations. */
 #define P4_CONFIG_FILE_IO_BUFFER_BYTES       512
@@ -1539,6 +1798,12 @@
 
 /** Maximum commands in a single `a & b && c || d` chain. */
 #define P4_CONFIG_CHAIN_SEGMENT_MAX          8
+
+/** Maximum `(...)` group nesting depth. Each level recurses through the
+ *  full pipeline on heap buffers, but every level also costs worker stack;
+ *  syntactic refusal past this depth keeps adversarial `((((...))))` lines
+ *  off the stack. */
+#define P4_CONFIG_GROUP_DEPTH_MAX            8
 
 /**
  * Errorlevel reported when a command name is not recognized.
@@ -1727,6 +1992,10 @@
 
 /** Maximum bytes for the session `title` string (DOS `title` verb). */
 #define P4_CONFIG_TITLE_BYTES                96
+
+/** Default device `hostname` (shown by bare `hostname`; override persists
+ *  as a HOSTNAME= line in CONFIG.SYS and reloads at boot). */
+#define P4_CONFIG_HOSTNAME_DEFAULT           "p4minishell"
 
 /** Depth of the interactive keypress queue used by `pause`, `choice`, `more`. */
 #define P4_CONFIG_KEY_QUEUE_DEPTH            16
@@ -2277,6 +2546,9 @@
 /** VFS mount point for USB MSC devices. */
 #define P4_CONFIG_USB_MSC_BASE_PATH          "/usb0"
 
+/** Maximum simultaneously tracked USB MSC devices (/usb0..N, drives u:..). */
+#define P4_CONFIG_USB_MSC_MAX_DEVICES        4
+
 /** Maximum directory entries for USB ls. */
 #define P4_CONFIG_USB_LIST_LIMIT             128
 
@@ -2492,6 +2764,11 @@
  *  full vCard/iCalendar collection (bounded by P4_CONFIG_DB_EXPORT_MAX_BYTES
  *  on the render side); streams to SD in 4 KB chunks. */
 #define P4_CONFIG_PIM_RX_MAX_BYTES           1048576
+
+/** Maximum CardDAV resources fetched/pushed per `pim net` run. Bounds the
+ *  PROPFIND href list and the per-resource GET/PUT loop so a huge server
+ *  address book cannot exhaust PSRAM or the worker task. */
+#define P4_CONFIG_PIM_NET_MAX_RESOURCES      256
 
 /* ========================================================================
  * P4SYNC HANDSHAKE (`sync status`)

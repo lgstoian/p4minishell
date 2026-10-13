@@ -31,6 +31,7 @@
 #include "config_cmd.h"
 #include "security_commands.h"
 #include "batch.h"
+#include "modal_surf.h"
 #include "filetype.h"
 #include "calc.h"
 #include "applib.h"
@@ -47,6 +48,7 @@
 #include "header.h"
 #include "p4minishell_config.h"
 #include "board_config.h"
+#include "math_disp.h"
 #include "networking.h"
 #include "netsvc.h"
 #include "driver/usb_serial_jtag.h"
@@ -1034,6 +1036,92 @@ int command_ghost_line(const char *line, char *out, size_t out_size)
     return total;
 }
 
+/**
+ * `complete <partial line>` — print every Tab-completion match for the line
+ * as a tap-confirm hyperlink whose target runs the completed text. The same
+ * provider backs Tab and ghost, so the list can never disagree with the
+ * keyboard. Later-token matches target the full reconstructed line; a
+ * first-token match targets the command word itself.
+ */
+static void shell_command_complete(int argc, char **argv)
+{
+    /* One line-sized stack local only: match/target are heap (the worker
+     * stack already nests near its edge under batch recursion, the launch
+     * table lesson). */
+    char line[SHELL_COMMAND_BYTES];
+    char *match;
+    char *target;
+    int total;
+    int shown;
+    int i;
+
+    if (argc < 2) {
+        shell_print_usage("Usage: complete <partial command line>");
+        batch_set_errorlevel(2);
+        return;
+    }
+    match = malloc(SHELL_COMMAND_BYTES);
+    target = malloc(SHELL_COMMAND_BYTES);
+    if (match == NULL || target == NULL) {
+        free(match);
+        free(target);
+        shell_print_error("complete: out of memory");
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_join_args(argv, 1, argc, line, sizeof(line));
+    total = command_complete_line(line, 0, match, SHELL_COMMAND_BYTES);
+    if (total <= 0) {
+        shell_transcript_appendf_ansi(SH_MUTE "complete: no matches for '%s'\n" SH_RST, line);
+        batch_set_errorlevel(1);
+        free(match);
+        free(target);
+        return;
+    }
+    shown = 0;
+    for (i = 0; i < total && i < P4_CONFIG_COMPLETION_MAX_MATCHES; i++) {
+        size_t len;
+
+        command_complete_line(line, i, match, SHELL_COMMAND_BYTES);
+        if (match[0] == '\0') {
+            continue;
+        }
+        /* Reconstruct the runnable line: append after a trailing blank,
+         * else replace the last (partial) word. */
+        len = strlen(line);
+        if (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t')) {
+            snprintf(target, SHELL_COMMAND_BYTES, "%s%s", line, match);
+        } else {
+            char *cut = strrchr(line, ' ');
+            char *tab = strrchr(line, '\t');
+
+            if (tab != NULL && (cut == NULL || tab > cut)) {
+                cut = tab;
+            }
+            if (cut != NULL) {
+                size_t head = (size_t)(cut - line) + 1u;
+
+                if (head >= SHELL_COMMAND_BYTES) {
+                    continue;
+                }
+                memcpy(target, line, head);
+                snprintf(target + head, SHELL_COMMAND_BYTES - head, "%s", match);
+            } else {
+                snprintf(target, SHELL_COMMAND_BYTES, "%s", match);
+            }
+        }
+        shell_transcript_appendf_ansi(SH_NUM "%d" SH_RST ": ", i);
+        shell_transcript_append_link(match, target);
+        shell_transcript_appendf_ansi("\n");
+        shown++;
+    }
+    shell_transcript_appendf_ansi(SH_MUTE "complete: %d match%s (tap one to run it)\n" SH_RST,
+                                 shown, shown == 1 ? "" : "es");
+    batch_set_errorlevel(0);
+    free(match);
+    free(target);
+}
+
 
 /* ========================================================================
  * EDITOR COMMAND AND OPS-TABLE HOOKS
@@ -1488,7 +1576,8 @@ static void shell_command_edit(int argc, char **argv)
     }
     if (pcount == 2 &&
         (shell_text_equals_ignore_case(pos[0], "alarm") ||
-         shell_text_equals_ignore_case(pos[0], "alarms"))) {
+         shell_text_equals_ignore_case(pos[0], "alarms") ||
+         shell_text_equals_ignore_case(pos[0], "cal"))) {
         batch_set_errorlevel(shell_command_edit_alarm(pos[1], opts.focus,
                                                       opts.template_name));
         return;
@@ -1511,12 +1600,13 @@ static void shell_command_edit(int argc, char **argv)
 }
 
 /* Forward declarations for modal functions */
-extern bool modal_is_active(void);
-extern bool modal_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii);
+extern bool modal_is_active(void);extern bool modal_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii);
 extern bool modal_handle_serial_line(const char *line);
 extern int modal_filebrowser_run(const char *title, const char *start_path,
                                   char *selected_path, size_t path_size,
                                   uint32_t timeout_ms);
+extern int modal_hexview_run_buf(const char *title, const uint8_t *bytes, size_t len,
+                                  uint32_t base_addr, uint32_t timeout_ms);
 
 /* ========================================================================
  * HISTORY COMMAND: history [list] / /save [file] / /load [file] / /clear
@@ -1901,18 +1991,188 @@ static void command_history_persist_cb(void *arg)
 }
 
 
-bool shell_launch_app(const char *app_name)
+bool shell_launch_app_with_args(const char *app_name, const char *args)
 {
     char *command = malloc(P4_CONFIG_COMMAND_BYTES);
     if (command == NULL) {
         shell_print_error("launch: out of memory");
         return false;
     }
-    snprintf(command, P4_CONFIG_COMMAND_BYTES, "launch %s", app_name);
+    if (args != NULL && args[0] != '\0') {
+        snprintf(command, P4_CONFIG_COMMAND_BYTES, "launch %s %s", app_name, args);
+    } else {
+        snprintf(command, P4_CONFIG_COMMAND_BYTES, "launch %s", app_name);
+    }
     shell_execute_command(command);
     free(command);
     return true;
 }
+
+bool shell_launch_app(const char *app_name)
+{
+    return shell_launch_app_with_args(app_name, NULL);
+}
+
+/* ========================================================================
+ * FILE ASSOCIATIONS (`assoc` / `ftype` + `open` dispatch)
+ * ========================================================================
+ * DOS-shaped app registration without a registry: extension→app pairs live
+ * in `sd:/ASSOC.INI` through the shared storage_ini core (same shape as
+ * SERVICES.INI — no new parser, no new store), apps optionally declare
+ * `handles=` in their APPINFO, and `open` consults the mapping before the
+ * viewer fallback. Executable types never dispatch (source view only). */
+
+#define ASSOC_REG_FILE "sd:/ASSOC.INI"
+
+/** Longest extension key (`.' + stem), within the INI 32-byte key cap. */
+#define ASSOC_EXT_BYTES 24
+
+/**
+ * Normalize an extension argument to `.lower` form: accepts `txt` or
+ * `.txt`, lowercases, requires dot + alnum/`_.+-` stem. Pure.
+ * @return true with @p out filled (always NUL-terminated).
+ */
+bool command_assoc_normalize_ext(const char *text, char *out, size_t out_size)
+{
+    size_t len = 0;
+    size_t i;
+
+    if (text == NULL || out == NULL || out_size == 0) {
+        return false;
+    }
+    if (text[0] == '.') {
+        text++;
+    }
+    if (text[0] == '\0') {
+        return false;
+    }
+    out[0] = '.';
+    for (i = 0; text[i] != '\0'; i++) {
+        char c = text[i];
+
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '.' || c == '+' || c == '-')) {
+            return false;
+        }
+        len++;
+        if (len + 2 > out_size || len + 2 > ASSOC_EXT_BYTES) {
+            return false;
+        }
+        out[1 + len - 1] = c;
+    }
+    if (len == 0) {
+        return false;
+    }
+    out[1 + len] = '\0';
+    return true;
+}
+
+/* Split an `assoc` argument (forms in command.h): `.ext` → show,
+ * `.ext=` → clear, `.ext=app` → set. @p app_out is filled only for set. */
+assoc_arg_form_t command_assoc_split_arg(const char *text, char *ext_out, size_t ext_size,
+                                         char *app_out, size_t app_size)
+{
+    const char *eq;
+
+    if (text == NULL || ext_out == NULL || ext_size == 0) {
+        return ASSOC_ARG_BAD;
+    }
+    eq = strchr(text, '=');
+    if (eq == NULL) {
+        return command_assoc_normalize_ext(text, ext_out, ext_size) ?
+               ASSOC_ARG_SHOW : ASSOC_ARG_BAD;
+    }
+    {
+        char left[ASSOC_EXT_BYTES];
+        size_t left_len = (size_t)(eq - text);
+
+        if (left_len == 0 || left_len >= sizeof(left)) {
+            return ASSOC_ARG_BAD;
+        }
+        memcpy(left, text, left_len);
+        left[left_len] = '\0';
+        if (!command_assoc_normalize_ext(left, ext_out, ext_size)) {
+            return ASSOC_ARG_BAD;
+        }
+    }
+    if (eq[1] == '\0') {
+        return ASSOC_ARG_CLEAR;
+    }
+    if (app_out == NULL || app_size == 0) {
+        return ASSOC_ARG_BAD;
+    }
+    snprintf(app_out, app_size, "%s", eq + 1);
+    if (app_out[0] == '\0') {
+        return ASSOC_ARG_BAD;
+    }
+    return ASSOC_ARG_SET;
+}
+
+/** Read the app mapped to @p ext (already normalized) into @p app_out.
+ *  @return true on a hit; false covers missing file and unmapped ext. */
+static bool assoc_read(const char *ext, char *app_out, size_t app_size)
+{
+    char value[256];
+
+    if (storage_ini_file_get(ASSOC_REG_FILE, ext, value, sizeof(value)) != ESP_OK) {
+        return false;
+    }
+    if (value[0] == '\0') {
+        return false;
+    }
+    snprintf(app_out, app_size, "%s", value);
+    return app_out[0] != '\0';
+}
+
+/**
+ * Map @p path's extension to its app (extension extracted + normalized
+ * here, so `open` needs no parsing). Never matches executable types.
+ */
+bool assoc_lookup_app(const char *path, char *app_out, size_t app_size)
+{
+    const char *slash;
+    const char *dot;
+    char ext[ASSOC_EXT_BYTES];
+
+    if (path == NULL || app_out == NULL || app_size == 0) {
+        return false;
+    }
+    if (filetype_is_executable(filetype_of(path))) {
+        return false;
+    }
+    slash = strrchr(path, '/');
+    dot = strrchr((slash != NULL) ? slash : path, '.');
+    if (dot == NULL || dot[1] == '\0') {
+        return false;
+    }
+    if (!command_assoc_normalize_ext(dot, ext, sizeof(ext))) {
+        return false;
+    }
+    return assoc_read(ext, app_out, app_size);
+}
+
+/** Declared handlers of one app (`handles=` in its APPINFO, "" when absent). */
+static void assoc_app_handles(const char *app, char *out, size_t out_size)
+{
+    char rel[SHELL_SD_PATH_BYTES];
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (app == NULL || app[0] == '\0') {
+        return;
+    }
+    snprintf(rel, sizeof(rel), "sd:/APPS/%s.APPINFO", app);
+    if (storage_ini_file_get(rel, "handles", out, out_size) != ESP_OK) {
+        out[0] = '\0';
+    }
+}
+
+
 
 /* ========================================================================
  * APP DISCOVERY (`launch`) + NATIVE APP LISTING (`apps`)
@@ -2116,6 +2376,241 @@ static int shell_launch_discover(shell_launch_entry_t *table)
     return count;
 }
 
+bool shell_app_known(const char *app)
+{
+    shell_launch_entry_t *table;
+    int count;
+    int i;
+    bool known = false;
+
+    if (app == NULL || app[0] == '\0') {
+        return false;
+    }
+    table = calloc((size_t)P4_CONFIG_LAUNCH_MAX, sizeof(*table));
+    if (table == NULL) {
+        return false;
+    }
+    count = shell_launch_discover(table);
+    for (i = 0; i < count; i++) {
+        if (shell_text_equals_ignore_case(table[i].name, app)) {
+            known = true;
+            break;
+        }
+    }
+    free(table);
+    return known;
+}
+
+/** `assoc` bare-listing callback: one `.ext=APP` row per entry. */
+static bool assoc_list_cb(const char *key, const char *value, void *ctx)
+{
+    (void)ctx;
+    shell_transcript_appendf("%s=%s\n", key, value);
+    return true;
+}
+
+/** `ftype <app>` callback: print `APP=ext` for entries mapped to @p ctx app. */
+static bool assoc_ftype_cb(const char *key, const char *value, void *ctx)
+{
+    const char *app = (const char *)ctx;
+
+    if (app != NULL && shell_text_equals_ignore_case(value, app)) {
+        shell_transcript_appendf("%s=%s\n", app, key);
+    }
+    return true;
+}
+
+static void shell_command_assoc(int argc, char **argv)
+{
+    char ext[ASSOC_EXT_BYTES];
+    char app[256];
+
+    if (argc == 1) {
+        if (storage_ini_file_foreach(ASSOC_REG_FILE, assoc_list_cb, NULL) != ESP_OK) {
+            shell_print_muted("assoc: no associations");
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc != 2) {
+        shell_print_usage("Usage: assoc [.ext[=app]]   (bare lists; .ext= clears)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    switch (command_assoc_split_arg(argv[1], ext, sizeof(ext), app, sizeof(app))) {
+    case ASSOC_ARG_SHOW:
+        if (assoc_read(ext, app, sizeof(app))) {
+            shell_transcript_appendf("%s=%s\n", ext, app);
+            batch_set_errorlevel(0);
+        } else {
+            shell_print_muted("assoc: no association for %s", ext);
+            batch_set_errorlevel(1);
+        }
+        return;
+    case ASSOC_ARG_CLEAR:
+        if (storage_ini_file_delete(ASSOC_REG_FILE, ext) != ESP_OK) {
+            shell_print_error("assoc: cannot clear %s", ext);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf("assoc: %s cleared\n", ext);
+        batch_set_errorlevel(0);
+        return;
+    case ASSOC_ARG_SET:
+        if (!shell_app_known(app)) {
+            shell_print_warning("assoc: no such app '%s' (mapping kept anyway)", app);
+        }
+        if (storage_ini_file_set(ASSOC_REG_FILE, ext, app) != ESP_OK) {
+            shell_print_error("assoc: cannot map %s", ext);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf("assoc: %s=%s\n", ext, app);
+        batch_set_errorlevel(0);
+        return;
+    case ASSOC_ARG_BAD:
+    default:
+        shell_print_usage("Usage: assoc [.ext[=app]]   (bare lists; .ext= clears)");
+        batch_set_errorlevel(2);
+        return;
+    }
+}
+
+static void shell_command_ftype(int argc, char **argv)
+{
+    char handles[256];
+
+    if (argc == 1) {
+        shell_launch_entry_t *table;
+        int count;
+        int i;
+        int shown = 0;
+
+        table = calloc((size_t)P4_CONFIG_LAUNCH_MAX, sizeof(*table));
+        if (table == NULL) {
+            shell_print_error("ftype: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        count = shell_launch_discover(table);
+        for (i = 0; i < count; i++) {
+            assoc_app_handles(table[i].name, handles, sizeof(handles));
+            if (handles[0] != '\0') {
+                shell_transcript_appendf("%s=%s\n", table[i].name, handles);
+                shown++;
+            }
+        }
+        free(table);
+        if (shown == 0) {
+            shell_print_muted("ftype: no app declares handles= (see ABI.md)");
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc != 2 && !(argc == 3 && shell_text_equals_ignore_case(argv[2], "/b"))) {
+        shell_print_usage("Usage: ftype [app] [/b]   (bare lists declared handlers)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    {
+        /* /b drops the two English headers: assignments only, plus one
+         * handles: row carrying the APPINFO declarations. */
+        bool bare = (argc == 3);
+
+        if (!bare) {
+            assoc_app_handles(argv[1], handles, sizeof(handles));
+            if (handles[0] != '\0') {
+                shell_transcript_appendf("%s declares: %s\n", argv[1], handles);
+            } else {
+                shell_print_muted("ftype: %s declares no handles=", argv[1]);
+            }
+            shell_transcript_appendf("%s opens:\n", argv[1]);
+        } else {
+            assoc_app_handles(argv[1], handles, sizeof(handles));
+            shell_transcript_appendf("%s=handles:%s\n", argv[1], handles);
+        }
+    }
+    if (storage_ini_file_foreach(ASSOC_REG_FILE, assoc_ftype_cb, argv[1]) != ESP_OK) {
+        if (argc != 3) {
+            shell_print_muted("ftype: no associations file yet");
+        }
+    }
+    batch_set_errorlevel(0);
+}
+
+/* ========================================================================
+ * STARTUP APPS (`startup` verb + sd:/STARTUP.INI + boot runner)
+ * ========================================================================
+ * DOS STARTUP-folder semantics without a folder: one app name per
+ * `name=1` line in `sd:/STARTUP.INI` (storage_ini core, like SERVICES.INI),
+ * run in file order after AUTOEXEC.BAT and before the LAUNCH_APP offer by
+ * `boot_run_startup()` (boot privilege, pre-lock, like services — but
+ * one-shot foreground apps, NOT supervised TSRs: no second supervisor). */
+
+#define STARTUP_REG_FILE "sd:/STARTUP.INI"
+
+/** `startup list` row printer (storage_ini foreach callback). */
+typedef struct {
+    bool any;
+} startup_list_ctx_t;
+
+static bool startup_list_cb(const char *key, const char *value, void *vctx)
+{
+    startup_list_ctx_t *ctx = (startup_list_ctx_t *)vctx;
+
+    (void)value;
+    shell_transcript_appendf("%s\n", key);
+    if (ctx != NULL) {
+        ctx->any = true;
+    }
+    return true;
+}
+
+static void shell_command_startup(int argc, char **argv)
+{
+    /* Bare, `list`, and `/b` all emit the same bare-name rows (already
+     * machine-readable); /b exists for switch symmetry with pkg/ftype. */
+    if (argc == 1 ||
+        (argc == 2 && shell_text_equals_ignore_case(argv[1], "list")) ||
+        (argc == 2 && shell_text_equals_ignore_case(argv[1], "/b")) ||
+        (argc == 3 && shell_text_equals_ignore_case(argv[1], "list") &&
+         shell_text_equals_ignore_case(argv[2], "/b"))) {
+        startup_list_ctx_t ctx = { false };
+
+        if (storage_ini_file_foreach(STARTUP_REG_FILE, startup_list_cb, &ctx) != ESP_OK ||
+            !ctx.any) {
+            shell_print_muted("startup: no startup apps (startup add <app>)");
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "add")) {
+        if (!shell_app_known(argv[2])) {
+            shell_print_warning("startup: no such app '%s' (entry kept anyway)", argv[2]);
+        }
+        if (storage_ini_file_set(STARTUP_REG_FILE, argv[2], "1") != ESP_OK) {
+            shell_print_error("startup: cannot add %s", argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf("startup: %s runs at boot\n", argv[2]);
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "remove")) {
+        if (storage_ini_file_delete(STARTUP_REG_FILE, argv[2]) != ESP_OK) {
+            shell_print_error("startup: cannot remove %s", argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf("startup: %s removed\n", argv[2]);
+        batch_set_errorlevel(0);
+        return;
+    }
+    shell_print_usage("Usage: startup [list] [/b] | add <app> | remove <app>");
+    batch_set_errorlevel(2);
+}
+
 static void shell_command_launch(int argc, char **argv)
 {
     shell_launch_entry_t *table;
@@ -2132,27 +2627,47 @@ static void shell_command_launch(int argc, char **argv)
 
     /* `launch /list` — bare machine-parsable list for scripting. Hybrid
      * shims carry a ` [hybrid]` tag; plain batch lines stay exactly as
-     * before so `for /f` scripts keep parsing. */
-    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "/list")) {
+     * before so `for /f` scripts keep parsing. `/v` appends the APPINFO
+     * version (`v-` when absent) without touching the default shape. */
+    if ((argc == 2 || (argc == 3 && shell_text_equals_ignore_case(argv[2], "/v"))) &&
+        shell_text_equals_ignore_case(argv[1], "/list")) {
+        bool verbose = (argc == 3);
+
         for (i = 0; i < count; i++) {
             const char *tag = (table[i].app_type[0] != '\0') ? " [hybrid]" : "";
             if (table[i].title[0] != '\0') {
-                shell_transcript_appendf("%s  -  %s%s\n", table[i].name, table[i].title, tag);
+                shell_transcript_appendf("%s  -  %s%s", table[i].name, table[i].title, tag);
             } else {
-                shell_transcript_appendf("%s%s\n", table[i].name, tag);
+                shell_transcript_appendf("%s%s", table[i].name, tag);
             }
+            if (verbose) {
+                char verel[P4_CONFIG_SD_PATH_BYTES];
+                char ver[32];
+
+                ver[0] = '\0';
+                snprintf(verel, sizeof(verel), "sd:/APPS/%s.APPINFO", table[i].name);
+                (void)storage_ini_file_get(verel, "version", ver, sizeof(ver));
+                shell_transcript_appendf(" v%s", ver[0] ? ver : "-");
+            }
+            shell_transcript_appendf("\n");
         }
         batch_set_errorlevel(count > 0 ? 0 : 1);
         free(table);
         return;
     }
 
-    /* `launch <name> [args...]` — run one app by name. */
+    /* `launch <name> [args...]` — run one app by name. Path scratch lives
+     * on the heap, not in this frame: it persists for the whole app run
+     * (freed after), and batch apps already nest the 32 KB worker stack
+     * to the edge (a stack-resident table here once crashed the same way). */
     if (argc >= 2 && argv[1][0] != '/') {
-        char batch_path[SHELL_SD_PATH_BYTES];
-        bool found = shell_resolve_batch_path(argv[1], batch_path, sizeof(batch_path));
+        char *batch_path = malloc(SHELL_SD_PATH_BYTES);
+        bool found = false;
 
-        if (!found) {
+        if (batch_path != NULL) {
+            found = shell_resolve_batch_path(argv[1], batch_path, SHELL_SD_PATH_BYTES);
+        }
+        if (!found && batch_path != NULL) {
             /* Fall back to the conventional APPS directory. The name becomes
              * part of a path: reject separators and dot segments, mirroring
              * the appconfig validator, so a name can never escape APPS. */
@@ -2160,40 +2675,52 @@ static void shell_command_launch(int argc, char **argv)
                        (strcmp(argv[1], ".") == 0) || (strcmp(argv[1], "..") == 0) ||
                        (argv[1][0] == '\0');
             if (!bad) {
-                char cand[3][SHELL_SD_PATH_BYTES];
+                char *cand = malloc(3u * SHELL_SD_PATH_BYTES);
 
-                snprintf(cand[0], sizeof(cand[0]), "sd:/APPS/%s", argv[1]);
-                snprintf(cand[1], sizeof(cand[1]), "sd:/APPS/%s.BAT", argv[1]);
-                snprintf(cand[2], sizeof(cand[2]), "sd:/APPS/%s.CMD", argv[1]);
-                for (i = 0; i < 3 && !found; i++) {
-                    char resolved[SHELL_SD_PATH_BYTES];
-                    FILE *probe;
+                if (cand != NULL) {
+                    char *slot[3] = { cand, cand + SHELL_SD_PATH_BYTES,
+                                      cand + 2u * SHELL_SD_PATH_BYTES };
 
-                    if (shell_fs_resolve_path(cand[i], resolved, sizeof(resolved)) != ESP_OK) {
-                        continue;
+                    snprintf(slot[0], SHELL_SD_PATH_BYTES, "sd:/APPS/%s", argv[1]);
+                    snprintf(slot[1], SHELL_SD_PATH_BYTES, "sd:/APPS/%s.BAT", argv[1]);
+                    snprintf(slot[2], SHELL_SD_PATH_BYTES, "sd:/APPS/%s.CMD", argv[1]);
+                    for (i = 0; i < 3 && !found; i++) {
+                        char resolved[SHELL_SD_PATH_BYTES];
+                        FILE *probe;
+
+                        if (shell_fs_resolve_path(slot[i], resolved, sizeof(resolved)) != ESP_OK) {
+                            continue;
+                        }
+                        probe = fopen(resolved, "rb");
+                        if (probe != NULL) {
+                            fclose(probe);
+                            snprintf(batch_path, SHELL_SD_PATH_BYTES, "%s", resolved);
+                            found = true;
+                        }
                     }
-                    probe = fopen(resolved, "rb");
-                    if (probe != NULL) {
-                        fclose(probe);
-                        snprintf(batch_path, sizeof(batch_path), "%s", resolved);
-                        found = true;
-                    }
+                    free(cand);
                 }
             }
         }
-        if (found) {
+        if (found && batch_path != NULL) {
             shell_execute_batch_file(batch_path, argc - 2, &argv[2]);
+            free(batch_path);
             free(table);
             return;
         }
-        shell_print_error("launch: app not found: %s", argv[1]);
+        if (batch_path == NULL) {
+            shell_print_error("launch: out of memory");
+        } else {
+            shell_print_error("launch: app not found: %s", argv[1]);
+        }
+        free(batch_path);
         batch_set_errorlevel(1);
         free(table);
         return;
     }
 
     if (argc >= 2) {
-        shell_print_usage("Usage: launch | launch <name> [args] | launch /list");
+        shell_print_usage("Usage: launch | launch <name> [args] | launch /list [/v]");
         batch_set_errorlevel(2);
         free(table);
         return;
@@ -2210,20 +2737,20 @@ static void shell_command_launch(int argc, char **argv)
     for (i = 0; i < count; i++) {
         {
             /* Hybrid shims show their kind; the numbers (what `for /f`
-             * scripts and fingers select) never move. */
-            char label[SHELL_LAUNCH_NAME_BYTES + 12];
+             * scripts and fingers select) never move. The app name is a
+             * tap-confirm hyperlink (`launch <name>`); the machine-parsable
+             * `launch /list` above stays plain so scripts keep parsing. */
+            char target[SHELL_LAUNCH_NAME_BYTES + 8];
+            const char *tag = (table[i].app_type[0] != '\0') ? " [hybrid]" : "";
 
-            if (table[i].app_type[0] != '\0') {
-                snprintf(label, sizeof(label), "%s [hybrid]", table[i].name);
-            } else {
-                snprintf(label, sizeof(label), "%s", table[i].name);
-            }
+            snprintf(target, sizeof(target), "launch %s", table[i].name);
+            shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " ", i + 1);
+            shell_transcript_append_link(table[i].name, target);
             if (table[i].title[0] != '\0') {
-                shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "  -  %s\n",
-                                              i + 1, label, table[i].title);
+                shell_transcript_appendf_ansi(SH_EXE "%s" SH_RST "  -  %s\n",
+                                              tag, table[i].title);
             } else {
-                shell_transcript_appendf_ansi(SH_NUM "%d." SH_RST " " SH_EXE "%s" SH_RST "\n",
-                                              i + 1, label);
+                shell_transcript_appendf_ansi(SH_EXE "%s" SH_RST "\n", tag);
             }
         }
     }
@@ -2323,6 +2850,8 @@ static void shell_command_delay(int argc, char **argv)
 
             vTaskDelay(pdMS_TO_TICKS(chunk));
             remaining -= chunk;
+            /* Auto-kill deadline (`start /t:secs`) unwinds like a kill. */
+            batch_bg_poll_timeout();
             if (batch_bg_kill_requested()) {
                 shell_transcript_append_text("delay: stopped\n");
                 batch_set_errorlevel(1);
@@ -2366,10 +2895,135 @@ typedef struct {
     bool available;  /* pool task created at boot */
     bool active;     /* slot claimed by `start` (cleared when runner exits) */
     bool running;    /* task executing a job (cleared by the runner on exit) */
+    bool suspended;  /* frozen by `suspend` (pool slots only, see below) */
     char *pending;   /* PSRAM job line handed to the runner (pool i -> slot i+1) */
+    int exit_code;   /* job's final errorlevel, published before running clears */
 } bg_job_t;
 
 static bg_job_t s_bg_jobs[P4_CONFIG_BG_TASKS];
+
+/* Per-slot CPU accounting for the task manager. The baseline runtime
+ * counters are anchored at job spawn (first successful sample) and diffed
+ * against the live FreeRTOS counters on each query, so the reported share
+ * covers the job's whole life, not just the last `ps` window. Anchors are
+ * dropped on release; a suspended job's frozen counters make its share
+ * decay toward zero while the snapshot total keeps advancing. */
+typedef struct {
+    bool valid;
+    uint32_t base_runtime;
+    uint32_t base_total;
+    int last_cpu;
+} tmgr_slot_acct_t;
+
+static tmgr_slot_acct_t s_tmgr_acct[P4_CONFIG_BG_TASKS];
+
+/** Drop a slot's accounting anchor (call on release; launch re-anchors). */
+static void tmgr_acct_invalidate(int slot)
+{
+    if (slot < 1 || slot > P4_CONFIG_BG_TASKS) {
+        return;
+    }
+    s_tmgr_acct[slot - 1].valid = false;
+    s_tmgr_acct[slot - 1].last_cpu = 0;
+}
+
+/** Anchor (or re-anchor) a slot's CPU baseline from the live counters. */
+static void tmgr_acct_anchor(int slot)
+{
+    tmgr_slot_acct_t *acct;
+    uint32_t runtime = 0;
+    uint32_t total = 0;
+
+    if (slot < 1 || slot > P4_CONFIG_BG_TASKS) {
+        return;
+    }
+    acct = &s_tmgr_acct[slot - 1];
+    acct->valid = false;
+    acct->last_cpu = 0;
+    if (s_bg_jobs[slot - 1].handle == NULL) {
+        return;
+    }
+    if (shell_task_runtime_for_handle(s_bg_jobs[slot - 1].handle,
+                                      &runtime, &total)) {
+        acct->base_runtime = runtime;
+        acct->base_total = total;
+        acct->valid = true;
+    }
+}
+
+/** Per-slot CPU% since the anchor (0-based pool index; -1 when unknown).
+ *  Anchors lazily on the first query so a spawn that raced the snapshot
+ *  still gets a baseline. */
+static int tmgr_slot_cpu_percent(int index)
+{
+    tmgr_slot_acct_t *acct;
+    uint32_t runtime = 0;
+    uint32_t total = 0;
+    uint32_t task_delta;
+    uint32_t total_delta;
+
+    if (index < 0 || index >= P4_CONFIG_BG_TASKS) {
+        return -1;
+    }
+    if (!s_bg_jobs[index].active || s_bg_jobs[index].handle == NULL) {
+        return -1;
+    }
+    if (!shell_task_runtime_for_handle(s_bg_jobs[index].handle,
+                                       &runtime, &total)) {
+        return -1;
+    }
+    acct = &s_tmgr_acct[index];
+    if (!acct->valid) {
+        acct->base_runtime = runtime;
+        acct->base_total = total;
+        acct->valid = true;
+        acct->last_cpu = 0;
+        return 0;
+    }
+    if (total <= acct->base_total) {
+        return acct->last_cpu;
+    }
+    task_delta = runtime - acct->base_runtime;
+    total_delta = total - acct->base_total;
+    if (total_delta == 0) {
+        return acct->last_cpu;
+    }
+    acct->last_cpu = (int)((task_delta * 100u) / total_delta);
+    return acct->last_cpu;
+}
+
+/** Live pool-slot priority as a tskIDLE offset (0 when no task yet). */
+static unsigned tmgr_slot_prio(int index)
+{
+    TaskHandle_t handle;
+    int offset;
+
+    if (index < 0 || index >= P4_CONFIG_BG_TASKS) {
+        return 0;
+    }
+    handle = s_bg_jobs[index].handle;
+    if (handle == NULL) {
+        return 0;
+    }
+    offset = (int)uxTaskPriorityGet(handle) - (int)tskIDLE_PRIORITY;
+    return (offset < 0) ? 0u : (unsigned)offset;
+}
+
+/** Live pool-slot stack high-water bytes (0 when no task yet). */
+static uint32_t tmgr_slot_stack_hw(int index)
+{
+    TaskHandle_t handle;
+
+    if (index < 0 || index >= P4_CONFIG_BG_TASKS) {
+        return 0;
+    }
+    handle = s_bg_jobs[index].handle;
+    if (handle == NULL) {
+        return 0;
+    }
+    return (uint32_t)uxTaskGetStackHighWaterMark(handle) *
+           (uint32_t)sizeof(StackType_t);
+}
 
 #if P4_CONFIG_SD_OP_BOOST
 /**
@@ -2400,6 +3054,7 @@ static void command_bg_worker_task(void *arg)
 
         /* Bind the private per-task state before touching anything shared. */
         batch_bg_bind(slot);
+        tmgr_acct_anchor(slot);
         shell_register_bg_task(xTaskGetCurrentTaskHandle());
 
 #if P4_CONFIG_SD_OP_BOOST
@@ -2410,11 +3065,20 @@ static void command_bg_worker_task(void *arg)
         command_task_priority_backstop(bg_base_priority);
 #endif
 
+        /* Publish the job's errorlevel for `start /wait` BEFORE clearing
+         * running: the waiter spins on running, so this order closes the
+         * reuse race (no lock needed — single writer, polled reader). */
+        s_bg_jobs[slot - 1].exit_code = batch_get_errorlevel();
         free(s_bg_jobs[slot - 1].pending);
         s_bg_jobs[slot - 1].pending = NULL;
         s_bg_jobs[slot - 1].running = false;
         s_bg_jobs[slot - 1].active = false;
+        s_bg_jobs[slot - 1].suspended = false;
+        tmgr_acct_invalidate(slot);
         batch_bg_release(slot);
+        /* Wake one `wait tmgr_exit` waiter per finished job (auto-clears —
+         * the supervisor and the task manager share this rendezvous). */
+        (void)sync_event_signal(P4_CONFIG_TMGR_EVENT_EXIT);
         shell_unregister_bg_task(xTaskGetCurrentTaskHandle());
     }
 }
@@ -2426,7 +3090,13 @@ static void command_bg_worker_task(void *arg)
  * CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM, pinned in sdkconfig.defaults).
  * PSRAM goes inaccessible while flash cache is disabled (OTA flash writes),
  * so `start` is refused while an OTA is pending and OTA is refused while a
- * bg job runs (see the c6ota dispatch guard) — the two never overlap. */
+ * bg job runs (see the c6ota dispatch guard) — the two never overlap.
+ *
+ * Only the first P4_CONFIG_BG_EAGER_TASKS tasks are created here: every
+ * pool task costs internal heap outside its PSRAM stack, and the boot
+ * window must keep a contiguous 12 KB block for the Wi-Fi task. All slots
+ * get their stacks now (PSRAM, no internal impact); the remaining tasks
+ * are created lazily on first claim (command_bg_launch). */
 static void command_bg_pool_init(void)
 {
     int index;
@@ -2439,6 +3109,12 @@ static void command_bg_pool_init(void)
         if (s_bg_jobs[index].stack == NULL) {
             ESP_LOGE(COMMAND_TAG, "bg pool bg%d: no PSRAM for %u-byte stack",
                      index, (unsigned)SHELL_COMMAND_TASK_STACK_BYTES);
+            s_bg_jobs[index].available = false;
+            continue;
+        }
+        if (index >= P4_CONFIG_BG_EAGER_TASKS) {
+            /* Lazy slot: stack is ready, the task arrives on first claim. */
+            s_bg_jobs[index].handle = NULL;
             s_bg_jobs[index].available = false;
             continue;
         }
@@ -2494,6 +3170,44 @@ static bool command_bg_any_running(void)
     return false;
 }
 
+/**
+ * Reconcile one slot's command flags with batch truth. A slot whose batch
+ * context is gone holds no job by definition (worker exit always releases
+ * it); leftover command flags would otherwise wedge the slot forever with
+ * no verb able to claim or clear it. Batch wins ties.
+ *
+ * @return true when the slot was stale and got cleared.
+ */
+static bool command_bg_heal_stale(int slot)
+{
+    if (slot < 1 || slot > P4_CONFIG_BG_TASKS) {
+        return false;
+    }
+    if (s_bg_jobs[slot - 1].active && !batch_bg_slot_in_use(slot)) {
+        s_bg_jobs[slot - 1].active = false;
+        s_bg_jobs[slot - 1].running = false;
+        s_bg_jobs[slot - 1].suspended = false;
+        free(s_bg_jobs[slot - 1].pending);
+        s_bg_jobs[slot - 1].pending = NULL;
+        tmgr_acct_invalidate(slot);
+        shell_transcript_appendf("task manager: [%s] stale entry cleared\n",
+                                 s_bg_jobs[slot - 1].name);
+        return true;
+    }
+    return false;
+}
+
+/** True when a pool task handle is currently FreeRTOS-suspended. The
+ *  snapshot-free single query behind truthful `start` states and the
+ *  resume-if-stuck paths below. NULL handle reads as not suspended. */
+static bool command_bg_task_suspended(const bg_job_t *job)
+{
+    if (job == NULL || job->handle == NULL) {
+        return false;
+    }
+    return eTaskGetState(job->handle) == eSuspended;
+}
+
 static const bg_job_t *command_bg_find(const char *job, int *slot_out)
 {
     /* Accept the job name (`bg0`) or the bare slot number (`0`). Slot
@@ -2523,50 +3237,252 @@ static const bg_job_t *command_bg_find(const char *job, int *slot_out)
     return NULL;
 }
 
+/** Launch failure reasons (the `start` verb maps these to messages; the
+ *  supervisor hook only needs slot-or--1). */
+typedef enum {
+    BG_LAUNCH_OK = 0,
+    BG_LAUNCH_NO_LINE,
+    BG_LAUNCH_OTA,
+    BG_LAUNCH_FULL,
+    BG_LAUNCH_UNAVAIL,
+    BG_LAUNCH_NOMEM,
+} bg_launch_rc_t;
+
+/** Launch @p line as a background job: claim a slot, hand the line over,
+ *  resume the pooled worker. Shared by `start` and the service-supervisor
+ *  hook (one implementation, never two pool-claim paths). */
+static int command_bg_launch(const char *line, bg_launch_rc_t *rc_out)
+{
+    char *copy;
+    int slot;
+    bg_launch_rc_t rc = BG_LAUNCH_OK;
+
+    if (line == NULL || line[0] == '\0') {
+        rc = BG_LAUNCH_NO_LINE;
+    } else if (c6ota_is_confirmation_pending()) {
+        /* PSRAM stacks go inaccessible during OTA flash writes. */
+        rc = BG_LAUNCH_OTA;
+    } else {
+        bg_job_t *job = NULL;
+
+        slot = batch_bg_alloc();
+        if (slot < 0) {
+            rc = BG_LAUNCH_FULL;
+            /* One rendezvous per refused launch: batch automation waiting
+             * on `tmgr_pool_full` wakes exactly once (auto-clear). */
+            (void)sync_event_signal(P4_CONFIG_TMGR_EVENT_POOL_FULL);
+            shell_header_notify_level("task manager: no background slots free",
+                                      3500, HEADER_NOTIFY_WARN);
+        } else {
+            job = &s_bg_jobs[slot - 1];
+            if (!job->available && job->stack != NULL && job->handle == NULL) {
+                /* Lazy pool slot (past P4_CONFIG_BG_EAGER_TASKS): the stack
+                 * was preallocated at boot, but the task itself is created
+                 * on first claim, past the boot heap window. */
+                job->handle = xTaskCreateStatic(
+                    command_bg_worker_task, job->name,
+                    SHELL_COMMAND_TASK_STACK_BYTES / sizeof(StackType_t),
+                    (void *)(intptr_t)(slot - 1), tskIDLE_PRIORITY + 2,
+                    job->stack, &job->tcb);
+                if (job->handle != NULL) {
+                    job->available = true;
+                }
+            }
+            if (!job->available) {
+                batch_bg_release(slot);
+                rc = BG_LAUNCH_UNAVAIL;
+            } else {
+                copy = malloc(SHELL_COMMAND_BYTES);
+                if (copy == NULL) {
+                    batch_bg_release(slot);
+                    rc = BG_LAUNCH_NOMEM;
+                } else {
+                    snprintf(copy, SHELL_COMMAND_BYTES, "%s", line);
+                    job->pending = copy;
+                    job->active = true;
+                    job->running = true;
+                    job->suspended = false;
+                    job->exit_code = 0;
+                    vTaskResume(job->handle);
+                }
+            }
+        }
+    }
+    if (rc_out != NULL) {
+        *rc_out = rc;
+    }
+    return (rc == BG_LAUNCH_OK) ? slot : -1;
+}
+
+/** batch_bg_ops hook: supervisor launches (pool full/OTA -> -1, retried
+ *  next tick, never counted against the restart budget). */
+static int command_bg_hook_start(const char *line)
+{
+    return command_bg_launch(line, NULL);
+}
+
+/** batch_bg_ops hook: true while the slot's job still runs. */
+static bool command_bg_hook_running(int slot)
+{
+    if (slot < 1 || slot > P4_CONFIG_BG_TASKS) {
+        return false;
+    }
+    return s_bg_jobs[slot - 1].running;
+}
+
 static void shell_command_start(int argc, char **argv)
 {
-    char *line;
-    int slot;
+    int slot = -1;
+    bool wait = false;
+    uint32_t timeout_ms = 0;
+    int first = 1;
 
-    if (argc < 2) {
-        shell_print_usage("Usage: start <command> [args...]");
+    /* Bare `start` lists the pool (no new verb needed). `start /b` emits
+     * uncoloured machine rows for the task manager:
+     *   bgN|state|exit|prio|cpu|stack|ovl|himem|line
+     * state is idle|running|suspended|unavailable; numeric fields are -1
+     * when the slot has no live task. */
+    if (argc < 2 || (argc == 2 && (argv[1][0] == '/' || argv[1][0] == '-') &&
+                     (argv[1][1] == 'b' || argv[1][1] == 'B') && argv[1][2] == '\0')) {
+        int index;
+        bool bare = (argc == 2);
+
+        if (!bare) {
+            shell_transcript_appendf_ansi(SH_HEAD "Background jobs" SH_RST "\n");
+        }
+        for (index = 0; index < P4_CONFIG_BG_TASKS; index++) {
+            /* Heal stale flags so the pool never shows phantom entries. */
+            command_bg_heal_stale(index + 1);
+
+            const char *state = !s_bg_jobs[index].available ? "unavailable" :
+                                !s_bg_jobs[index].active ? "idle" :
+                                command_bg_task_suspended(&s_bg_jobs[index]) ? "suspended" :
+                                s_bg_jobs[index].running ? "running" : "idle";
+            const char *line = s_bg_jobs[index].pending != NULL ?
+                               s_bg_jobs[index].pending : "";
+
+            if (bare) {
+                int cpu = tmgr_slot_cpu_percent(index);
+                int prio = (s_bg_jobs[index].active &&
+                            s_bg_jobs[index].handle != NULL) ?
+                           (int)tmgr_slot_prio(index) : -1;
+                uint32_t stack = tmgr_slot_stack_hw(index);
+                size_t ovl = batch_bg_overlay_bytes(index + 1);
+                size_t himem = himem_slot_bytes(index + 1);
+
+                shell_transcript_appendf("%s|%s|%d|%d|%d|%u|%u|%u|%s\n",
+                                          s_bg_jobs[index].name, state,
+                                          s_bg_jobs[index].exit_code,
+                                          prio, cpu,
+                                          (unsigned int)stack,
+                                          (unsigned int)ovl,
+                                          (unsigned int)himem, line);
+            } else if (s_bg_jobs[index].active) {
+                int cpu = tmgr_slot_cpu_percent(index);
+
+                shell_transcript_appendf_ansi("  " SH_NUM "%s" SH_RST ": %s prio %u cpu %d%%: %s\n",
+                                              s_bg_jobs[index].name, state,
+                                              tmgr_slot_prio(index), cpu, line);
+            } else {
+                shell_transcript_appendf_ansi("  " SH_NUM "%s" SH_RST ": %s\n",
+                                              s_bg_jobs[index].name, state);
+            }
+        }
+        batch_set_errorlevel(0);
+        return;
+    }
+    /* Leading DOS-style options: /wait (join) and /t:secs (auto-kill,
+     * same parser as the modal verbs — one /t: implementation). */
+    while (first < argc) {
+        if (shell_text_equals_ignore_case(argv[first], "/wait")) {
+            wait = true;
+            first++;
+        } else if (modal_parse_timeout_arg(argv[first], &timeout_ms)) {
+            first++;
+        } else {
+            break;
+        }
+    }
+    if (first >= argc) {
+        shell_print_usage("Usage: start [/wait] [/t:secs] <command> [args...]");
         batch_set_errorlevel(2);
         return;
     }
-    /* PSRAM stacks go inaccessible during OTA flash writes: never overlap. */
-    if (c6ota_is_confirmation_pending()) {
-        shell_transcript_append_text("start: refused while a C6 OTA is pending (finish or cancel it first)\n");
-        batch_set_errorlevel(1);
-        return;
-    }
-    slot = batch_bg_alloc();
-    if (slot < 0) {
-        shell_transcript_appendf("start: no background slots free (max %d)\n",
-                                 P4_CONFIG_BG_TASKS);
-        batch_set_errorlevel(1);
-        return;
-    }
-    if (!s_bg_jobs[slot - 1].available) {
-        batch_bg_release(slot);
-        shell_transcript_append_text("start: background pool unavailable (boot task create failed, see boot log)\n");
-        batch_set_errorlevel(1);
-        return;
-    }
-    line = malloc(SHELL_COMMAND_BYTES);
-    if (line == NULL) {
-        batch_bg_release(slot);
-        shell_transcript_append_text("start: out of memory\n");
-        batch_set_errorlevel(1);
-        return;
-    }
-    shell_join_args(argv, 1, argc, line, SHELL_COMMAND_BYTES);
+    {
+        char line[SHELL_COMMAND_BYTES];
+        bg_launch_rc_t rc = BG_LAUNCH_OK;
+        int launched;
 
-    s_bg_jobs[slot - 1].pending = line;
-    s_bg_jobs[slot - 1].active = true;
-    s_bg_jobs[slot - 1].running = true;
-    vTaskResume(s_bg_jobs[slot - 1].handle);
-    shell_transcript_appendf("[%s] started: %s\n", s_bg_jobs[slot - 1].name, line);
-    batch_set_errorlevel(0);
+        shell_join_args(argv, first, argc, line, sizeof(line));
+        launched = command_bg_launch(line, &rc);
+        if (launched < 0) {
+            switch (rc) {
+            case BG_LAUNCH_OTA:
+                shell_transcript_append_text("start: refused while a C6 OTA is pending (finish or cancel it first)\n");
+                break;
+            case BG_LAUNCH_FULL:
+                shell_transcript_appendf("start: no background slots free (max %d)\n",
+                                         P4_CONFIG_BG_TASKS);
+                break;
+            case BG_LAUNCH_UNAVAIL:
+                shell_transcript_append_text("start: background pool unavailable (boot task create failed, see boot log)\n");
+                break;
+            case BG_LAUNCH_NOMEM:
+                shell_transcript_append_text("start: out of memory\n");
+                break;
+            default:
+                shell_transcript_append_text("start: cannot launch job\n");
+                break;
+            }
+            batch_set_errorlevel(1);
+            return;
+        }
+        slot = launched;
+    }
+
+    if (timeout_ms > 0) {
+        uint32_t now = xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+
+        batch_bg_set_deadline(slot, now + timeout_ms);
+    }
+    if (!wait) {
+        shell_transcript_appendf("[%s] started: %s\n", s_bg_jobs[slot - 1].name,
+                                 s_bg_jobs[slot - 1].pending != NULL ?
+                                 s_bg_jobs[slot - 1].pending : "");
+        batch_set_errorlevel(0);
+        return;
+    }
+    /* /wait: cooperative join. Poll the runner's flag in delay chunks (same
+     * shape as `delay`, so taskkill and the deadline keep working while we
+     * wait). Ctrl+C breaks the WAIT only — the job keeps running detached,
+     * like CMD. A bg waiter whose own slot is killed stops waiting too. */
+    shell_transcript_appendf("[%s] waiting: %s\n", s_bg_jobs[slot - 1].name,
+                             s_bg_jobs[slot - 1].pending != NULL ?
+                             s_bg_jobs[slot - 1].pending : "");
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (!s_bg_jobs[slot - 1].running) {
+            break;
+        }
+        if (shell_abort_requested()) {
+            shell_mark_foreground_break();
+            shell_transcript_appendf("start: wait interrupted, [%s] still running\n",
+                                     s_bg_jobs[slot - 1].name);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (batch_bg_kill_requested()) {
+            shell_transcript_append_text("start: wait stopped\n");
+            batch_set_errorlevel(1);
+            return;
+        }
+    }
+    {
+        int code = s_bg_jobs[slot - 1].exit_code;
+
+        shell_transcript_appendf("[%s] finished: EL=%d\n", s_bg_jobs[slot - 1].name, code);
+        batch_set_errorlevel(code);
+    }
 }
 
 static void shell_command_taskkill(int argc, char **argv)
@@ -2585,6 +3501,14 @@ static void shell_command_taskkill(int argc, char **argv)
         batch_set_errorlevel(1);
         return;
     }
+    if (command_bg_heal_stale(slot)) {
+        job = command_bg_find(argv[1], &slot);
+        if (job == NULL) {
+            shell_transcript_appendf("taskkill: no such job '%s'\n", argv[1]);
+            batch_set_errorlevel(1);
+            return;
+        }
+    }
     if (!job->running) {
         shell_transcript_appendf("taskkill: [%s] already finished\n", job->name);
         s_bg_jobs[slot - 1].active = false;
@@ -2592,8 +3516,236 @@ static void shell_command_taskkill(int argc, char **argv)
         return;
     }
     batch_bg_request_kill(slot);
-    shell_transcript_appendf("taskkill: [%s] stop requested\n", job->name);
+    if ((s_bg_jobs[slot - 1].suspended || command_bg_task_suspended(job)) &&
+        job->handle != NULL) {
+        /* Wake it so the kill unwinds now: a suspended job never polls
+         * the kill flag, so without this the slot would leak until a
+         * manual resume. The FreeRTOS state (not just our flag) decides:
+         * a task frozen by any path still wakes. Resuming a running task
+         * is a harmless no-op. */
+        vTaskResume(job->handle);
+        s_bg_jobs[slot - 1].suspended = false;
+        shell_transcript_appendf("taskkill: [%s] stop requested (resumed to stop)\n",
+                                 job->name);
+    } else {
+        shell_transcript_appendf("taskkill: [%s] stop requested\n", job->name);
+    }
     batch_set_errorlevel(0);
+}
+
+/* ========================================================================
+ * TASK MANAGER: suspend, resume, nice (+renice), taskmgr
+ * ========================================================================
+ * Freeze/thaw and bounded priority for POOL slots only (amended ai-context
+ * rule): the verbs validate the slot is a live pool job on every call and
+ * refuse anything else, so system tasks (LVGL, idle, telemetry, workers)
+ * are untouchable — `ps`/`tasks`/`top` stay read-only as required. A job
+ * can never suspend its own slot (nothing could resume it); `taskkill`
+ * still applies to a suspended job on resume, and deadlines pause while
+ * suspended (no poll runs). Priority stays inside
+ * [P4_CONFIG_TMGR_PRIO_MIN, P4_CONFIG_TMGR_PRIO_MAX] so a niced job can
+ * neither starve the command worker nor collide with the SD boost level. */
+
+int command_tmgr_clamp_priority(int prio)
+{
+    if (prio < (int)P4_CONFIG_TMGR_PRIO_MIN) {
+        return (int)P4_CONFIG_TMGR_PRIO_MIN;
+    }
+    if (prio > (int)P4_CONFIG_TMGR_PRIO_MAX) {
+        return (int)P4_CONFIG_TMGR_PRIO_MAX;
+    }
+    return prio;
+}
+
+bool command_tmgr_parse_priority(const char *text, int current, int *out)
+{
+    char *end = NULL;
+    long value;
+
+    if (text == NULL || out == NULL) {
+        return false;
+    }
+    if (text[0] == '\0') {
+        return false;
+    }
+    if (text[0] == '+' || text[0] == '-') {
+        /* Relative adjustment, clamped into range (strtol alone would
+         * accept a bare sign or leading space — require a digit). */
+        if (!isdigit((unsigned char)text[1])) {
+            return false;
+        }
+        value = strtol(text, &end, 10);
+        if (end == NULL || *end != '\0') {
+            return false;
+        }
+        *out = command_tmgr_clamp_priority(current + (int)value);
+        return true;
+    }
+    /* Absolute priority inside the bounds (never clamped silently). */
+    if (!isdigit((unsigned char)text[0])) {
+        return false;
+    }
+    value = strtol(text, &end, 10);
+    if (end == NULL || *end != '\0') {
+        return false;
+    }
+    if (value < (long)P4_CONFIG_TMGR_PRIO_MIN ||
+        value > (long)P4_CONFIG_TMGR_PRIO_MAX) {
+        return false;
+    }
+    *out = (int)value;
+    return true;
+}
+
+static void shell_command_suspend(int argc, char **argv)
+{
+    const bg_job_t *job;
+    int slot = 0;
+
+    if (argc != 2) {
+        shell_print_usage("Usage: suspend <job>   (name like bg0, or slot number)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    job = command_bg_find(argv[1], &slot);
+    if (job == NULL) {
+        shell_transcript_appendf("suspend: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (command_bg_heal_stale(slot)) {
+        shell_transcript_appendf("suspend: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    job = command_bg_find(argv[1], &slot);
+    if (job == NULL) {
+        shell_transcript_appendf("suspend: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (!job->running || job->handle == NULL) {
+        shell_transcript_appendf("suspend: [%s] not running\n", job->name);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (batch_bg_current_slot() == slot) {
+        shell_transcript_append_text("suspend: cannot suspend own slot (nothing could resume it)\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (s_bg_jobs[slot - 1].suspended) {
+        shell_transcript_appendf("suspend: [%s] already suspended\n", job->name);
+        batch_set_errorlevel(1);
+        return;
+    }
+    vTaskSuspend(job->handle);
+    s_bg_jobs[slot - 1].suspended = true;
+    shell_transcript_appendf("suspend: [%s] suspended (taskkill wakes it to stop)\n",
+                             job->name);
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_resume(int argc, char **argv)
+{
+    const bg_job_t *job;
+    int slot = 0;
+
+    if (argc != 2) {
+        shell_print_usage("Usage: resume <job>   (name like bg0, or slot number)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    job = command_bg_find(argv[1], &slot);
+    if (job == NULL) {
+        shell_transcript_appendf("resume: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (command_bg_heal_stale(slot)) {
+        shell_transcript_appendf("resume: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    job = command_bg_find(argv[1], &slot);
+    if (job == NULL) {
+        shell_transcript_appendf("resume: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (!job->running || job->handle == NULL) {
+        shell_transcript_appendf("resume: [%s] not running\n", job->name);
+        batch_set_errorlevel(1);
+        return;
+    }
+    /* No suspended-flag gate: resuming a running task is a harmless no-op,
+     * while gating on the flag would strand a task frozen by any path the
+     * flag missed. The flag still clears so state stays truthful. */
+    vTaskResume(job->handle);
+    s_bg_jobs[slot - 1].suspended = false;
+    shell_transcript_appendf("resume: [%s] running again\n", job->name);
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_nice(int argc, char **argv)
+{
+    const bg_job_t *job;
+    int slot = 0;
+    int current;
+    int want;
+
+    if (argc != 3) {
+        shell_print_usage("Usage: nice <job> <1..3|+n|-n>   (pool priority; renice is an alias)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    job = command_bg_find(argv[1], &slot);
+    if (job == NULL) {
+        shell_transcript_appendf("nice: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (command_bg_heal_stale(slot)) {
+        shell_transcript_appendf("nice: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    job = command_bg_find(argv[1], &slot);
+    if (job == NULL) {
+        shell_transcript_appendf("nice: no such job '%s'\n", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    if (!job->running || job->handle == NULL) {
+        shell_transcript_appendf("nice: [%s] not running\n", job->name);
+        batch_set_errorlevel(1);
+        return;
+    }
+    current = (int)uxTaskPriorityGet(job->handle) - (int)tskIDLE_PRIORITY;
+    if (!command_tmgr_parse_priority(argv[2], current, &want)) {
+        shell_transcript_appendf("nice: priority '%s' outside %d..%d (or use +n/-n)\n",
+                                 argv[2],
+                                 (int)P4_CONFIG_TMGR_PRIO_MIN,
+                                 (int)P4_CONFIG_TMGR_PRIO_MAX);
+        batch_set_errorlevel(1);
+        return;
+    }
+    vTaskPrioritySet(job->handle,
+                     (UBaseType_t)((int)tskIDLE_PRIORITY + want));
+    shell_transcript_appendf("nice: [%s] priority %d -> %d\n", job->name,
+                             current, want);
+    batch_set_errorlevel(0);
+}
+
+static void shell_command_taskmgr(int argc, char **argv)
+{
+    /* Entry point for the task manager app: identical to `launch TASKMGR`
+     * (discovery, .BAT shim, no shadowing), spelled the DOS way. */
+    char *launch_argv[] = { (char *)"launch", (char *)"TASKMGR" };
+
+    (void)argc;
+    (void)argv;
+    shell_command_launch(2, launch_argv);
 }
 
 
@@ -2785,6 +3937,55 @@ static bool shell_comment_line(const char *trimmed)
            (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]));
 }
 
+/** `uptime` — one-line seconds-since-boot (the same figure `version`
+ *  reports, for scripts that do not want to parse the banner). */
+static void shell_command_uptime(int argc, char **argv)
+{
+    char formatted[48];
+
+    if (argc != 1) {
+        shell_print_usage("Usage: uptime");
+        batch_set_errorlevel(2);
+        return;
+    }
+    (void)argv;
+    time_get_uptime_formatted(formatted, sizeof(formatted));
+    shell_print_field("uptime", "%s", formatted);
+    batch_set_errorlevel(0);
+}
+
+/** `hostname [name]` — show the device hostname, or set it (persisted as a
+ *  HOSTNAME= line in CONFIG.SYS, reloaded at boot by the generic KEY=VALUE
+ *  fallback). Names stay short ([A-Za-z0-9_-], fits P4_CONFIG_ENV_NAME_BYTES)
+ *  so the value renders anywhere a label does. */
+static void shell_command_hostname(int argc, char **argv)
+{
+    const char *current;
+
+    if (argc == 1) {
+        current = shell_env_get("HOSTNAME");
+        shell_print_field("hostname", "%s",
+                          (current != NULL && current[0] != '\0') ? current :
+                          P4_CONFIG_HOSTNAME_DEFAULT);
+        batch_set_errorlevel(0);
+        return;
+    }
+    if (argc != 2 || !sync_name_ok(argv[1]) ||
+        strlen(argv[1]) >= (size_t)P4_CONFIG_ENV_NAME_BYTES) {
+        shell_print_usage("Usage: hostname [name]  (letters, digits, _ and -, max 31 chars)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (shell_env_set("HOSTNAME", argv[1]) != ESP_OK ||
+        !config_persist_set("HOSTNAME", argv[1])) {
+        shell_print_error("hostname: cannot persist %s", argv[1]);
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_print_ok("hostname: %s", argv[1]);
+    batch_set_errorlevel(0);
+}
+
 bool shell_execute_command_core(char *command)
 {
     char *argv[SHELL_ARGV_MAX];
@@ -2916,6 +4117,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "complete")) {
+        shell_command_complete(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "cls") || shell_text_equals_ignore_case(argv[0], "clear")) {
         shell_command_clear();
         return true;
@@ -2946,11 +4152,21 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "uptime")) {
+        shell_command_uptime(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "hostname")) {
+        shell_command_hostname(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "debug")) {
         if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "save")) {
             shell_command_debug_save(argc, argv);
         } else {
-            shell_command_debug();
+            batch_set_errorlevel(shell_command_debug(argc, argv));
         }
         return true;
     }
@@ -3177,6 +4393,38 @@ bool shell_execute_command_core(char *command)
     /* ---- P4Sync handshake; int return becomes ERRORLEVEL. */
     if (shell_text_equals_ignore_case(argv[0], "sync")) {
         batch_set_errorlevel(shell_command_sync(argc, argv));
+        return true;
+    }
+
+    /* ---- Board-to-board chat (chat) ----
+     * argv-verb dispatcher: chat host|peer|send|poll|log|clear|status|onmsg.
+     * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage). */
+    if (shell_text_equals_ignore_case(argv[0], "chat")) {
+        batch_set_errorlevel(shell_command_chat(argc, argv));
+        return true;
+    }
+
+    /* ---- EPUB e-book reader (epub) ----
+     * argv-verb dispatcher: epub open|close|info|toc|read|next|prev|goto|extract.
+     * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage). */
+    if (shell_text_equals_ignore_case(argv[0], "epub")) {
+        batch_set_errorlevel(shell_command_epub(argc, argv));
+        return true;
+    }
+
+    /* ---- Natural Display math (math) ----
+     * argv-verb dispatcher: math new|open|close|edit|render|eval|cursor|insert.
+     * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage). */
+    if (shell_text_equals_ignore_case(argv[0], "math")) {
+        batch_set_errorlevel(shell_command_math(argc, argv));
+        return true;
+    }
+
+    /* ---- Computer Algebra System (cas) ----
+     * argv-verb dispatcher: cas open|close|simplify|expand|factor|diff|integrate|solve|series|substitute|evaluate|latex.
+     * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage). */
+    if (shell_text_equals_ignore_case(argv[0], "cas")) {
+        batch_set_errorlevel(shell_command_cas(argc, argv));
         return true;
     }
 
@@ -3412,6 +4660,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "link")) {
+        shell_command_link(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "browse")) {
         shell_command_browse(argc, argv);
         return true;
@@ -3443,6 +4696,16 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "vol")) {
+        shell_command_vol();
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "df")) {
+        batch_set_errorlevel(shell_command_df(argc, argv));
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "xcopy")) {
         batch_set_errorlevel(shell_command_xcopy(argc, argv));
         return true;
@@ -3463,6 +4726,18 @@ bool shell_execute_command_core(char *command)
     /* ---- Environment and batch commands ---- */
     if (shell_text_equals_ignore_case(argv[0], "set")) {
         shell_command_set(argc, argv);
+        return true;
+    }
+
+    /* `env` / `printenv` — Unix names for a bare `set` listing. */
+    if (shell_text_equals_ignore_case(argv[0], "env") ||
+        shell_text_equals_ignore_case(argv[0], "printenv")) {
+        if (argc != 1) {
+            shell_print_usage("Usage: env");
+            batch_set_errorlevel(2);
+            return true;
+        }
+        shell_command_set(1, argv);
         return true;
     }
 
@@ -3724,6 +4999,40 @@ bool shell_execute_command_core(char *command)
     /* `temp` — SD-backed temporary files (new/clean/path). */
     if (shell_text_equals_ignore_case(argv[0], "temp")) {
         shell_command_temp(argc, argv);
+        return true;
+    }
+
+    /* `himem` — XMS-style extended memory over PSRAM (the batch engine
+     * owns the handle table; this is dispatch only). */
+    if (shell_text_equals_ignore_case(argv[0], "himem")) {
+        shell_command_himem(argc, argv);
+        return true;
+    }
+
+    /* Batch synchronization + resident services (state lives in the batch
+     * engine; these arms are dispatch only). */
+    if (shell_text_equals_ignore_case(argv[0], "lock")) {
+        shell_command_lock(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "unlock")) {
+        shell_command_unlock(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "signal")) {
+        shell_command_signal(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "wait")) {
+        shell_command_wait(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "service")) {
+        shell_command_service(argc, argv);
         return true;
     }
 
@@ -4113,6 +5422,31 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- File associations (`assoc` / `ftype`) ----
+     * DOS-shaped app registration over sd:/ASSOC.INI (storage_ini core);
+     * `open` consults the mapping before its viewer fallback. */
+    if (shell_text_equals_ignore_case(argv[0], "assoc")) {
+        shell_command_assoc(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "ftype")) {
+        shell_command_ftype(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    /* ---- Startup apps (one-shot boot apps, not supervised services) ---- */
+    if (shell_text_equals_ignore_case(argv[0], "startup")) {
+        shell_command_startup(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "delay")) {
         shell_command_delay(argc, argv);
         free(family_command);
@@ -4129,6 +5463,45 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "taskkill")) {
         shell_command_taskkill(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    /* `kill` — Unix name for taskkill (same cooperative semantics). */
+    if (shell_text_equals_ignore_case(argv[0], "kill")) {
+        shell_command_taskkill(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    /* ---- Task manager: freeze/thaw/bounded-priority for pool slots ----
+     * Pool slots only (validated per call); system tasks stay untouchable. */
+    if (shell_text_equals_ignore_case(argv[0], "suspend")) {
+        shell_command_suspend(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "resume")) {
+        shell_command_resume(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "nice") ||
+        shell_text_equals_ignore_case(argv[0], "renice")) {
+        shell_command_nice(argc, argv);
+        free(family_command);
+        free(echo_line);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "taskmgr")) {
+        shell_command_taskmgr(argc, argv);
         free(family_command);
         free(echo_line);
         return true;
@@ -4186,6 +5559,44 @@ bool shell_execute_command_core(char *command)
  *
  * @return true when the command was recognized and executed.
  */
+
+/**
+ * Run one `(...)` group: strip a single outer paren pair and execute the
+ * inside through the full pipeline (chains, pipes, redirection per link).
+ * Syntactic depth is refused before executing (bounded worker stack).
+ * Mirrors the segment success rule: success is no *new* non-zero errorlevel.
+ */
+static bool shell_execute_command_group(const char *open, const char *close)
+{
+    size_t inner_len = (size_t)(close - 1 - (open + 1));
+    char *inner;
+    int errorlevel_before;
+    int errorlevel_after;
+
+    if (shell_group_depth(open) > (int)P4_CONFIG_GROUP_DEPTH_MAX) {
+        shell_print_error("group: nesting past %d levels is refused",
+                          (int)P4_CONFIG_GROUP_DEPTH_MAX);
+        shell_record_warningf("shell", "Group nesting past %d refused",
+                              (int)P4_CONFIG_GROUP_DEPTH_MAX);
+        batch_set_errorlevel(2);
+        return false;
+    }
+    inner = malloc(inner_len + 1);
+    if (inner == NULL) {
+        shell_transcript_append_text("shell: out of memory running a command group\n");
+        shell_record_errorf("shell", ESP_ERR_NO_MEM, "Out of memory running a command group");
+        batch_set_errorlevel(1);
+        return false;
+    }
+    memcpy(inner, open + 1, inner_len);
+    inner[inner_len] = '\0';
+    errorlevel_before = batch_get_errorlevel();
+    shell_execute_command(inner);
+    free(inner);
+    errorlevel_after = batch_get_errorlevel();
+    return (errorlevel_after == 0) || (errorlevel_after == errorlevel_before);
+}
+
 static bool shell_execute_command_segment(char *command)
 {
     /* Expansion needs one line-sized buffer. It lives on the heap because
@@ -4225,6 +5636,30 @@ static bool shell_execute_command_segment(char *command)
     /* Expand directly into the working buffer: no second allocation and no
      * whole-line copy (this runs once per loop iteration). */
     shell_expand_variables(command, command_buffer, work_size);
+
+    /* `(...)` group as a chain link: only when the expanded segment is
+     * EXACTLY one balanced group (leading `(` whose match ends the
+     * segment). Anything else — `echo (a)`, `(a) extra`, unbalanced —
+     * flows through the normal redirect/dispatch path untouched, so
+     * literal parens keep working. */
+    {
+        char *grouped = shell_trim(command_buffer);
+        const char *close = (grouped[0] == '(') ? shell_group_match(grouped) : NULL;
+
+        if (close != NULL) {
+            const char *rest = close;
+
+            while (*rest == ' ' || *rest == '\t') {
+                rest++;
+            }
+            if (*rest == '\0') {
+                bool group_ok = shell_execute_command_group(grouped, close);
+
+                free(command_buffer);
+                return group_ok;
+            }
+        }
+    }
     shell_parse_redirection(command_buffer, &command_part, &redirect_target,
                             &append_mode, &input_source, &missing_target);
 
@@ -4787,6 +6222,31 @@ static bool command_modal_console_command(const char *line)
     return true;
 }
 
+/**
+ * Ops-table adapters for the shell `debug` verbs. Each adapts a storage or
+ * modal service to the shell-owned hook signature (the networking_host_ops_t
+ * pattern); the implementations stay in their owning modules.
+ */
+static esp_err_t command_debug_read_sectors(uint32_t start_lba, uint8_t *buffer,
+                                            uint32_t sector_count)
+{
+    return storage_disk_read_sectors(STORAGE_VOLUME_SD, start_lba, buffer,
+                                     sector_count);
+}
+
+static int command_debug_show_hexview(const char *title, const uint8_t *bytes,
+                                      size_t len, uint32_t base_addr)
+{
+    return modal_hexview_run_buf(title, bytes, len, base_addr, 0);
+}
+
+static bool command_debug_confirm_destructive(const char *operation,
+                                              const char *warning,
+                                              const char *detail)
+{
+    return shell_confirm_destructive(operation, warning, detail);
+}
+
 void command_init(void)
 {
     static const shell_command_ops_t shell_ops = {
@@ -4825,6 +6285,9 @@ void command_init(void)
         .modal_handle_usb_key   = modal_handle_usb_key,
         .modal_handle_serial_line = modal_handle_serial_line,
         .modal_console_command  = command_modal_console_command,
+        .debug_read_sectors     = command_debug_read_sectors,
+        .debug_show_hexview     = command_debug_show_hexview,
+        .debug_confirm_destructive = command_debug_confirm_destructive,
     };
     static const batch_command_ops_t batch_ops = {
         .execute_command = shell_execute_command,
@@ -4868,6 +6331,16 @@ void command_init(void)
      * (if bodies, for bodies, pipe stages, batch lines) inherit variable
      * expansion and output redirection. */
     batch_register_command_ops(&batch_ops);
+
+    /* Publish background-job control to the batch service supervisor
+     * (same one-way pattern: supervisor decides, the pool runs). */
+    {
+        static const batch_bg_ops_t bg_ops = {
+            .bg_start   = command_bg_hook_start,
+            .bg_running = command_bg_hook_running,
+        };
+        batch_register_bg_ops(&bg_ops);
+    }
 
     /* Publish this module's services to the shell core. Keeping the
      * dependency one-way (command -> shell) avoids a component cycle. */

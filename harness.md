@@ -8,7 +8,7 @@
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
 
-- **Version:** v1.3.0 · **Targets:** ESP32-P4 + ESP32-C6
+- **Version:** v1.3.1 · **Targets:** ESP32-P4 + ESP32-C6
 - **Boards:** `jc1060p470c` (reference, e.g. COM3) and `m5stack_tab5` (COM6)
 
 ---
@@ -70,7 +70,7 @@ calls `shell_session.hard_reset()`.
 
 ## 3. Layer 1 — on-target unit tests (Unity)
 
-Pure/headless logic runs on the P4 in `test/` (Unity, ~423 tests, 2 ignored
+Pure/headless logic runs on the P4 in `test/` (Unity, 552 tests, 2 ignored
 plus the 9 `test_pim.c` sync tests, build-verified; refresh the count on
 hardware; includes the software AES-256-GCM vectors in `test_sw_gcm.c`).
 
@@ -79,6 +79,7 @@ cd test
 idf.py -DP4_BOARD=jc1060p470c build flash   # or -p COM3
 cd ..
 python tools/unit_run.py COM3               # parse summaries, non-zero on any failure
+python tools/unit_run.py COM3 COM6          # both boards concurrently
 ```
 
 - The test app drives **no UI**: the screen stays black and only serial speaks.
@@ -104,6 +105,11 @@ python tools/p4test_run.py COM3 --list           # list suite names
 python tools/p4test_run.py COM3 --only s01_smoke,s07_data
 python tools/p4test_run.py COM3 --tag core
 python tools/p4test_run.py COM3 --quick          # shorten soak/boot waits
+python tools/p4test_run.py --boards COM3,COM6 --tier fast --fail-fast
+# gate a feature on both boards in parallel (minutes)
+python tools/p4test_run.py --boards COM3,COM6    # full release gate, merged table
+python tools/p4test_run.py --boards m5stack_tab5 --only s12_power_audio
+# slugs work too (resolved via tools/board_ports.py)
 ```
 
 Suites (`tools/suites/sNN_*.py`) and what they cover:
@@ -112,24 +118,43 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 |-------|--------|
 | `s01_smoke` | identity (`about`/`version`/`sysinfo`), help, memory, screenshot geometry |
 | `s05_storage` | `dir`/`copy`/`xdel`, `chkdsk`, `disk detail`, labels, recycle bin |
-| `s06_batch` | the whole batch language (loops, `if`, pipes, redirection, `screen`, `screen flow`) |
+| `s06_batch` | the whole batch language (loops, `if`, pipes, redirection, `screen`, `screen flow`) + task-manager verbs (`suspend`/`resume`/`nice`, `start /b`, `tmgr_*` events) + app registration (`assoc`/`ftype`/`open` dispatch, `startup`, `launch /setup`, `pkg` install gates/outdated/remove/purge) |
 | `s07_data` | `db`, `csv`, `export`/`import`, `archive`, `crypt` (lock/unlock round-trip, passes on both boards since F23 fixed in v1.2.1), `json`, `markdown` (render + `export` html/print/text pulled and validated, incl. the on-device HTML reader via `type`), alarms, `gfind` (+ `/files`) |
 | `s08_display` | `draw`/`tui`/`gfx`/`plot`/`font`/`theme`/header/cursor + screenshot invariants |
 | `s09_editor` | the `edit` editor surfaces and save round-trips, the spell user dictionary (`\spell-add` learn, `spell list/forget`), and the autosave/`recover` crash round-trip |
-| `s10_input_ui` | keyboard pages, `ui` synthetic touch/key, modals |
+| `s10_input_ui` | keyboard pages, `ui` synthetic touch/key, modals, HID mouse cursor/click toggles + status, hyperlinks (`link`/`ui links`/`ui link` tap-confirm) + serial cursor simulation (`usb mouse move`/`click`, `Device.cursor_move/cursor_click`) |
 | `s11_connectivity` | Wi-Fi, `ipconfig`/`netstat`/`ping`/`dns`, `httpd`/`httpget`, USB, BT, `c6ota status` |
 | `s12_power_audio` | audio (`status` route/jack, `output` mode + `/b` + `/v:`, generated-WAV `wavplay`, `CONFIG AUDIO_OUTPUT` persist), `battery`, `power`, `gpio`/`pwm`/`adc`/`i2c`, SPI master (`status`/`peek`/`poke`/`loopback`, C6 stays alive), RGB LED (skipped if absent) |
 | `s13_perf` | frame pacing (`gfx stats`/`tui stats`) and app animation |
-| `s14_apps` | every reference app (launch, drive, markers), incl. the hybrid demo |
+| `s14_apps` | every reference app (launch, drive, markers), incl. the hybrid demo and the `taskmgr` task-manager app (kill/suspend/resume/nice through its own UI) |
 | `s15_p4sync` | P4Sync handshake (`sync status` lines), file push/pull round-trip, screenshot geometry |
 | `s16_netsvc` | event service (`net status/subs/msg/outbox`, hook set/clear, usage errors); broker-dependent live checks skip cleanly without a LAN broker (documented Mosquitto fixture) |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
-`run()`, panic detection, byte-exact `BMPX`/`SDFX` framing), `device.py`
-(boot/run/screenshot/push/pull facade + the existing destructive commands),
+`run()`, panic detection, byte-exact `BMPX`/`SDFX` framing, ANSI+OSC 8 strip
+so hyperlink escapes never reach assertions), `device.py`
+(boot/run/screenshot/push/pull facade + the existing destructive commands +
+`cursor_move`/`cursor_click`/`ui_links`/`ui_link` harness verbs),
 `asserts.py` (`Checklist`/`SuiteResult`), `screenshot.py` (streaming capture +
 a pixel model), `sdbridge.py` (`receive`/`send`), `perf.py` (frame stats),
 `visual.py` + `visual_sweep.py` (geometry/pixel invariants), `runner.py`.
+
+### Tiers, failure policy, and flake discipline
+
+- **Tiers:** `--tier fast` runs the per-area smoke subset (`s01_smoke`,
+  `s05_storage`, `s06_batch`, `s12_power_audio`, `s11_connectivity`, with
+  quick waits) and gates feature delivery; `--tier full` (default) runs all
+  13 suites and gates releases. Explicit `--only`/`--tag` bypass the tier.
+- **Fail-fast:** `--fail-fast` stops remaining suites at the first failure;
+  with `--boards` the other board finishes its current suite, skips the rest
+  (marked SKIP), and the merged table names the red board. `--keep-going`
+  restores run-to-completion.
+- **Flakes vs bugs:** `--retry N` re-runs a failed suite (never a panic); a
+  pass-on-retry is reported FLAKY for quarantine, fail-twice is a bug.
+- **Slow checks:** `--baseline <json>` (see `--write-baseline`) flags suites
+  running far over their recorded durations — a perf regression signal.
+- **Differential:** the merged table flags any suite failing on exactly one
+  board (board-specific regression detector).
 
 ### Writing a suite
 
@@ -169,9 +194,9 @@ logic (`tools/README.md` has the full list).
 
 | Driver | Purpose |
 |--------|---------|
-| `tools/regression.py COM3 [--quick]` | one-command host regression: resets and runs every guard, PASS/FAIL table, non-zero on failure |
-| `tools/unit_run.py COM3` | Unity capture (needs the test image flashed) |
-| `tools/boot_regression.py COM3 [N]` | N fresh boots: no panic, exactly one AUTOEXEC, SD ready, no stray W/E logs |
+| `tools/regression.py COM3 [--quick]` | one-command host regression: one reset, then the full p4test suite plus the unique-coverage drivers (companion deep/db/alarm, package deploy/install, large-editor soak, touch sweep, TX integrity, boot regression), PASS/FAIL table, non-zero on failure. Area drivers duplicated by the suites are not re-run (see the map in `tools/README.md`). |
+| `tools/unit_run.py COM3 [COM6]` | Unity capture, one or two ports concurrently (needs the test image flashed) |
+| `tools/boot_regression.py COM3 [N] [COM6]` | N fresh boots per board concurrently: no panic, exactly one AUTOEXEC, SD ready, no stray W/E logs |
 | `tools/tx_stress_test.py COM3 [N]` | output integrity under TX backpressure |
 | `tools/stall_catch.py COM3` | long serial soak / stall detector |
 | `tools/wifi_bench.py` | host peer for the firmware `wifi throughput` command |
@@ -219,15 +244,20 @@ Both boards enumerate with the same USB VID/PID, so use `tools/board_ports.py`
 or pass ports explicitly. A full two-board gate:
 
 ```powershell
-# Reference board (COM3)
-idf.py -DP4_BOARD=jc1060p470c build
-cd test; idf.py -DP4_BOARD=jc1060p470c build; cd ..
-cd test; idf.py -DP4_BOARD=jc1060p470c -p COM3 flash; cd ..
-python tools/unit_run.py COM3
-idf.py -DP4_BOARD=jc1060p470c -p COM3 flash
-python tools/p4test_run.py COM3
+# Firmware + test images, one build dir per board:
+idf.py -B build -DP4_BOARD=jc1060p470c build
+idf.py -B build-tab5 -DP4_BOARD=m5stack_tab5 build
+cd test; idf.py -B build -DP4_BOARD=jc1060p470c build; cd ..
+cd test; idf.py -B build-tab5 -DP4_BOARD=m5stack_tab5 build; cd ..
+# Flash each board's image to its port, then:
 
-# M5Stack Tab5 (COM6) - same commands with -DP4_BOARD=m5stack_tab5
+# One gate for both boards (parallel, fail-fast, merged table):
+python tools/p4test_run.py --boards COM3,COM6 --tier fast --fail-fast
+python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1
+python tools/unit_run.py COM3 COM6
+python tools/boot_regression.py COM3 5 COM6
+
+# Either board alone — same commands with a single port
 ```
 
 Board-specific suites skip what a board lacks (RGB LED, camera) via
@@ -262,6 +292,13 @@ it automatically.
   timing issue, not a firmware bug.
 - **Screenshot `could not acquire LVGL lock`** is transient; the capture helper
   retries it.
+- **Never screenshot a batch app that owns the input with unwind enabled.**
+  `p4test/screenshot.py::capture()` retries a missing `streaming` prelude with
+  Ctrl-C by default (`unwind=True`), which aborts a batch at a line modal
+  (`ask`) and kills the app under test (s14 ADVENT/TCMD, `bugs.md` F40).
+  Suites that shoot foreground apps must pass `unwind=False`: the shot becomes
+  a noted miss and the app survives. Shell-owned modals (dogfood, visual
+  sweep) keep the default.
 - The unit app's **black screen** is expected; the display suites require the
   **main** firmware to be flashed.
 

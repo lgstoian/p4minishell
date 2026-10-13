@@ -45,6 +45,37 @@ def run(dev, ctx):
     out = dev.run("mem")
     c.expect("mem reports heap", "heap", out)
 
+    out = dev.run("help /all")
+    # Entry-name column ("  name ") so summaries cannot false-positive
+    # (e.g. "lock" inside "unlock", "uptime" inside the version blurb).
+    for verb in ("himem", "service", "lock", "unlock", "signal", "wait",
+                 "menu", "form", "hostname", "uptime", "df"):
+        c.expect("help lists %s" % verb, "  %s " % verb, out)
+
+    out = dev.run("uptime")
+    c.expect("uptime reports", "uptime", out)
+
+    out = dev.run("hostname")
+    c.expect("hostname shows a name", "hostname", out)
+    out = dev.run("hostname P4T-HOST")
+    c.expect("hostname sets", "P4T-HOST", out)
+    out = dev.run("hostname")
+    c.expect("hostname persists in env", "P4T-HOST", out)
+    out = dev.run("hostname \"bad name\"")
+    c.expect("hostname rejects spaces", "Usage", out)
+    dev.run("config reset HOSTNAME")
+    out = dev.run("hostname")
+    c.expect("hostname reset restores default", "P4T-HOST", out, want=False)
+
+    out = dev.run("df")
+    c.expect("df lists volumes", "Mounted volumes", out)
+    c.expect("df shows the SD card", "sd:", out)
+
+    out = dev.run("env")
+    c.expect("env lists PATH", "PATH=", out)
+    out = dev.run("printenv")
+    c.expect("printenv matches env", "PATH=", out)
+
     out = dev.run("version")
     # Expect the same version string `about` reported, not a hardcoded value.
     import re as _re

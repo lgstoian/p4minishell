@@ -50,6 +50,7 @@
 #include "keyboard.h"
 #include "editor_view.h"
 #include "networking.h"
+#include "portal.h"
 #include "led.h"
 #include "ansi.h"
 #include "ansi_palette.h"
@@ -337,6 +338,57 @@ static void shell_scroll_button_event_cb(lv_event_t *event)
     }
 }
 
+/* Map a tap point to transcript (line, col) and run the link/anchor hit
+ * there. Geometry is approximate (wrapped rows and trimmed scrollback shift
+ * real rows), which is safe by construction: a miss falls through to the
+ * focus behaviour below, and a link hit only arms a preview naming the
+ * exact target — the second tap on the same target runs it. Returns true
+ * when a region consumed the tap. LVGL-task only (uses the active indev). */
+static bool shell_transcript_try_link_tap(void)
+{
+    lv_indev_t *indev = lv_indev_active();
+    lv_obj_t *tr = windows_get_transcript();
+    const lv_font_t *font = windows_get_terminal_font();
+    lv_point_t point;
+    lv_area_t area;
+    lv_coord_t line_h;
+    lv_coord_t char_w;
+    lv_coord_t pad_left;
+    lv_coord_t pad_top;
+    int line;
+    int col;
+    const char *action = NULL;
+    const char *label = NULL;
+    bool confirm = false;
+
+    if (indev == NULL || tr == NULL || font == NULL) {
+        return false;
+    }
+    lv_indev_get_point(indev, &point);
+    lv_obj_get_coords(tr, &area);
+    line_h = lv_font_get_line_height(font);
+    if (line_h <= 0) {
+        return false;
+    }
+    char_w = (lv_coord_t)lv_font_get_glyph_width(font, (uint32_t)'M', 0);
+    if (char_w <= 0) {
+        char_w = 8;
+    }
+    pad_left = lv_obj_get_style_pad_left(tr, 0);
+    pad_top = lv_obj_get_style_pad_top(tr, 0);
+    col = (int)((point.x - area.x1 - pad_left) / char_w);
+    line = (int)((point.y - area.y1 - pad_top + lv_obj_get_scroll_y(tr)) / line_h);
+    if (!shell_link_hit_test(col, line, &action, &label, &confirm) ||
+        action == NULL || action[0] == '\0') {
+        return false;
+    }
+    /* One fire path for taps and `ui link`: confirm-gated links preview
+     * first, anchors run at once. (`link open` executes synchronously on
+     * the worker instead, preserving the verb's errorlevel.) */
+    shell_link_fire(action, label, confirm);
+    return true;
+}
+
 /* Tapping the transcript moves focus and the keyboard binding back to the
  * input line so typing always goes to the prompt. */
 static void shell_transcript_event_cb(lv_event_t *event)
@@ -347,6 +399,13 @@ static void shell_transcript_event_cb(lv_event_t *event)
      * transcript behaviour (keyboard re-binding, tap-to-show) is disabled so
      * the editor's own touch handling is never overridden. */
     if (windows_editor_mode_active()) {
+        return;
+    }
+
+    /* Links and anchors first (CLICKED only: FOCUSED has no tap point, and
+     * running a command twice would be the bug this gate exists to stop).
+     * A consumed tap skips the keyboard summon so previews stay readable. */
+    if (code == LV_EVENT_CLICKED && shell_transcript_try_link_tap()) {
         return;
     }
 
@@ -830,7 +889,16 @@ void app_main(void)
 {
     esp_err_t disp_error;
 
-    /* Initialize the display manager first. It wraps
+    /* Shell core + command worker FIRST, before display bring-up. The worker
+     * needs a large contiguous internal-RAM stack, and display/LVGL init
+     * fragments and consumes that heap (on Tab5 the worker request failed
+     * deterministically once layout shifted: 32768 needed vs 32756 largest).
+     * Neither depends on the display (transcript memory is shell-owned and
+     * rendering is lazy), while the reverse order starves the worker. */
+    shell_init();
+    command_init();
+
+    /* Initialize the display manager. It wraps
      * bsp_display_start_with_config() and owns all display state
      * (rotation, brightness, power, touch handle). */
     disp_error = display_init();
@@ -838,12 +906,6 @@ void app_main(void)
         ESP_LOGE(SHELL_TAG, "Display initialization failed");
         return;
     }
-
-    /* Shell core owns the transcript, history, debug log, and boot
-     * timestamp; the command module owns shell state and registers its
-     * operations table with the shell core. */
-    shell_init();
-    command_init();
 
     /* Sample header telemetry on a background task (off the LVGL task) so the
      * task snapshot/battery reads cannot stall the DSI framebuffer fetch. */
@@ -931,6 +993,16 @@ void app_main(void)
     /* Route USB keyboard keystrokes into the shell input line. */
     usb_register_keyboard_input_callback(shell_usb_keyboard_cb);
 
+    /* Publish the USB MSC slots to the storage layer so DOS verbs can address
+     * usb:/ and the u:/v:/w:/x: drives (CONFIG.SYS DEVICE=USB automounts). */
+    storage_register_usb_ops(&(storage_usb_ops_t){
+        .is_connected = usb_msc_slot_connected,
+        .is_mounted = usb_msc_slot_mounted,
+        .mount = usb_msc_mount_slot,
+        .get_geometry = usb_msc_get_geometry,
+        .base_path = usb_msc_slot_path,
+    });
+
     /* Optional M5Stack Tab5Keyboard (I2C). Its HID reports feed the same shell
      * key path as the USB keyboard; a no-op on boards without the module. */
     (void)tab5kbd_init();
@@ -970,7 +1042,15 @@ void app_main(void)
         .record_info = shell_networking_record_info,
         .notify_header = shell_header_notify,
         .bluetooth_keyboard_input = shell_usb_keyboard_input,
+        .bluetooth_mouse_scroll = usb_host_scroll_transcript,
     });
+
+    /* First-run captive portal: no SD card and no known networks means no
+     * other way to configure Wi-Fi. The Wi-Fi stack is up (networking_init),
+     * so the portal can start its SoftAP immediately. */
+    if (portal_should_autostart()) {
+        (void)portal_start();
+    }
 
     /* Boot confirmation light: a short green flash once the shell is ready. */
     led_notify(LED_EVENT_BOOT_OK);

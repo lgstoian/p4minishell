@@ -12,6 +12,7 @@
 
 #include "unity.h"
 #include "ansi.h"
+#include <stdio.h>
 #include <string.h>
 
 /* ========================================================================
@@ -239,6 +240,66 @@ void test_ansi_to_lvgl_recolor(void)
     ansi_to_lvgl_recolor(buf, out, 8);
     TEST_ASSERT_TRUE(strlen(out) < 8);
     TEST_ASSERT_TRUE(strchr(out, '#') == NULL || strrchr(out, '#') != strchr(out, '#'));
+}
+
+/* ========================================================================
+ * OSC 8 HYPERLINK TESTS (metadata dropped, label kept)
+ * ========================================================================
+ * Hyperlinks (`ESC ] 8 ;; <target> ST <label> ESC ] 8 ;; ST`) are metadata:
+ * every parser must drop the OSC bytes and keep the visible label, so UART
+ * mirrors, plain buffers, redirect captures, and LVGL spans never see
+ * escape residue. SH_LINK (`@C@U`: bright cyan + underline) is the label
+ * style the shell_link helpers emit.
+ */
+
+void test_ansi_osc8_strip(void)
+{
+    char buf[256];
+    char link[256];
+    int len;
+
+    ansi_init();
+
+    /* SH_LINK label through the real pipeline, wrapped in OSC 8 open/close. */
+    ansi_format(link, sizeof(link), "@C@U%s@R", "help");
+    {
+        char wrapped[512];
+
+        snprintf(wrapped, sizeof(wrapped), "\x1B]8;;help dir\x1B\\%s\x1B]8;;\x1B\\",
+                 link);
+        len = ansi_strip_to_plain(buf, sizeof(buf), wrapped);
+        TEST_ASSERT_TRUE(len > 0);
+        TEST_ASSERT_EQUAL_STRING("help", buf);
+        TEST_ASSERT_NULL(strchr(buf, '\x1B'));
+    }
+
+    /* BEL terminator is equivalent to ST. */
+    len = ansi_strip_to_plain(buf, sizeof(buf),
+                              "\x1b]8;;http://x\x07""label\x1b]8;;\x07");
+    TEST_ASSERT_TRUE(len > 0);
+    TEST_ASSERT_EQUAL_STRING("label", buf);
+
+    /* An unterminated OSC run consumes to end (never leaks escape bytes). */
+    len = ansi_strip_to_plain(buf, sizeof(buf), "ab\x1B]8;;oops");
+    TEST_ASSERT_TRUE(len >= 0);
+    TEST_ASSERT_EQUAL_STRING("ab", buf);
+
+    /* OSC-bearing text still counts as escapes (UART mirror keeps them for
+     * capable terminals). */
+    TEST_ASSERT_TRUE(ansi_contains_escapes("\x1B]8;;x\x1B\\y\x1B]8;;\x1B\\"));
+
+    /* The LVGL recolor path drops OSC bytes too (no raw ESC in markup). */
+    {
+        char wrapped[512];
+        char out[256];
+
+        snprintf(wrapped, sizeof(wrapped), "\x1B]8;;help dir\x1B\\%s\x1B]8;;\x1B\\",
+                 link);
+        len = ansi_to_lvgl_recolor(wrapped, out, sizeof(out));
+        TEST_ASSERT_TRUE(len > 0);
+        TEST_ASSERT_TRUE(strstr(out, "help") != NULL);
+        TEST_ASSERT_NULL(strchr(out, '\x1B'));
+    }
 }
 
 /* ========================================================================

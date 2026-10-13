@@ -1773,9 +1773,18 @@ static void editor_prompt_begin(editor_prompt_t type)
 
     if ((type == EDITOR_PROMPT_SAVE_AS || type == EDITOR_PROMPT_OPEN) &&
         s_editor_view.doc != NULL) {
-        /* Pre-fill with the current path so it is easy to adjust. */
+        /* Open on a link offers the link target (markdown URL or bare
+         * path); otherwise pre-fill with the current path as before. */
+        char link[P4_CONFIG_EDITOR_PROMPT_BYTES];
         const char *cur = s_editor_view.doc->path;
-        size_t n = cur != NULL ? strlen(cur) : 0;
+        size_t n;
+
+        if (type == EDITOR_PROMPT_OPEN &&
+            editor_link_under_cursor(s_editor_view.doc, link, sizeof(link)) &&
+            link[0] != '\0') {
+            cur = link;
+        }
+        n = cur != NULL ? strlen(cur) : 0;
         if (n >= P4_CONFIG_EDITOR_PROMPT_BYTES) {
             n = P4_CONFIG_EDITOR_PROMPT_BYTES - 1;
         }
@@ -2615,7 +2624,7 @@ bool editor_view_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii)
     key = editor_key_from_usb(key_code, modifiers, ascii);
 
     if (key == EDITOR_KEY_NONE) {
-        if (ascii >= 0x20 && ascii <= 0x7E) {
+        if ((unsigned char)ascii >= 0x20) {
             editor_apply_ascii(ascii);
             return true;
         }

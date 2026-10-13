@@ -114,6 +114,11 @@
 /** A command name, as printed in help, history, or an echoed line. */
 #define SH_CMD      "@C"
 
+/** A clickable hyperlink label: bright cyan + underline, matching the
+ *  markdown link fallback. Emitted only through shell_link helpers so every
+ *  link carries its OSC 8 target and tap region; close with SH_RST. */
+#define SH_LINK     "@C@U"
+
 /** Usage syntax text, shown when a command is invoked incorrectly. */
 #define SH_USAGE    "@y"
 
@@ -194,18 +199,18 @@
 #define SH_BOX_R      "\xE2\x94\xA4"  /* U+2524 ┤ T-left */
 #define SH_BOX_X      "\xE2\x94\xBC"  /* U+253C ┼ cross */
 
-/* Double-line (heavy) box drawing characters */
+/* Double-line box drawing characters (CP437 doubles) */
 #define SH_BOX_H2     "\xE2\x95\x90"  /* U+2550 ═ horizontal double */
 #define SH_BOX_V2     "\xE2\x95\x91"  /* U+2551 ║ vertical double */
-#define SH_BOX_TL2    "\xE2\x95\x92"  /* U+2552 ╒ top-left double */
-#define SH_BOX_TR2    "\xE2\x95\x93"  /* U+2553 ╓ top-right double */
-#define SH_BOX_BL2    "\xE2\x95\x94"  /* U+2554 ╔ bottom-left double */
-#define SH_BOX_BR2    "\xE2\x95\x97"  /* U+2557 ╗ bottom-right double */
-#define SH_BOX_T2     "\xE2\x95\x9C"  /* U+255C ╜ T-down double */
-#define SH_BOX_B2     "\xE2\x95\x9D"  /* U+255D ╝ T-up double */
-#define SH_BOX_L2     "\xE2\x95\x9A"  /* U+255A ╚ T-right double */
-#define SH_BOX_R2     "\xE2\x95\x9B"  /* U+255B ╛ T-left double */
-#define SH_BOX_X2     "\xE2\x95\x9C"  /* U+255C ╜ cross double */
+#define SH_BOX_TL2    "\xE2\x95\x94"  /* U+2554 ╔ top-left double */
+#define SH_BOX_TR2    "\xE2\x95\x97"  /* U+2557 ╗ top-right double */
+#define SH_BOX_BL2    "\xE2\x95\x9A"  /* U+255A ╚ bottom-left double */
+#define SH_BOX_BR2    "\xE2\x95\x9D"  /* U+255D ╝ bottom-right double */
+#define SH_BOX_T2     "\xE2\x95\xA6"  /* U+2566 ╦ T-down double */
+#define SH_BOX_B2     "\xE2\x95\xA9"  /* U+2569 ╩ T-up double */
+#define SH_BOX_L2     "\xE2\x95\xA0"  /* U+2560 ╠ T-right double */
+#define SH_BOX_R2     "\xE2\x95\xA3"  /* U+2563 ╣ T-left double */
+#define SH_BOX_X2     "\xE2\x95\xAC"  /* U+256C ╬ cross double */
 
 /* Rounded corners */
 #define SH_BOX_TLR    "\xE2\x94\x8F"  /* U+250F ┏ rounded top-left */

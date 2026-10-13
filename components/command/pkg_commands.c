@@ -115,6 +115,22 @@ static bool pkg_read_file(const char *path, char **text_out, size_t *len_out)
     return true;
 }
 
+/** Sanitize one `|`-separated machine row field in place: pipes (the
+ *  separator) become `/`, CR/LF become spaces. Pure, unit-tested. */
+void pkg_sanitize_pipe_field(char *text)
+{
+    if (text == NULL) {
+        return;
+    }
+    for (; *text != '\0'; text++) {
+        if (*text == '|') {
+            *text = '/';
+        } else if (*text == '\r' || *text == '\n') {
+            *text = ' ';
+        }
+    }
+}
+
 /** Read one APPINFO key (`title`/`description`/`version`/`type`/`abi`). Empty on miss. */
 static void pkg_meta(const char *app, const char *key, char *out, size_t size)
 {
@@ -236,15 +252,19 @@ int pkg_list_available(char names[][COMMAND_APP_NAME_BYTES], int max)
     return count;
 }
 
-/** `pkg list`: every installed package with title/version + manifest entries. */
-static void pkg_list(void)
+/** `pkg list` worker shared by the human and `/b` forms: `want_bare`
+ *  selects `APP|title|version|type|files|tag` machine rows, otherwise the
+ *  padded human table. Titles are pipe-sanitized for the machine form. */
+static void pkg_list_impl(bool want_bare)
 {
     char names[PKG_MAX_ENTRIES][PKG_APP_NAME_BYTES];
     int count = pkg_collect_apps(names, PKG_MAX_ENTRIES);
     int i;
 
     if (count == 0) {
-        shell_transcript_append_text("pkg: no packages installed (APPS/*.APPINFO)\n");
+        if (!want_bare) {
+            shell_transcript_append_text("pkg: no packages installed (APPS/*.APPINFO)\n");
+        }
         batch_set_errorlevel(1);
         return;
     }
@@ -284,12 +304,39 @@ static void pkg_list(void)
             } else if (shell_text_equals_ignore_case(ptype, "hybrid")) {
                 tag = " [hybrid]";
             }
-            shell_transcript_appendf("pkg: %-10s %-24s v%-10s %d file(s)%s\n",
-                                     names[i], title[0] ? title : "(untitled)",
-                                     version[0] ? version : "-", files, tag);
+            if (want_bare) {
+                char btype[16];
+                char btitle[64];
+
+                snprintf(btype, sizeof(btype), "%s",
+                         tag[0] ? tag + 2 : "batch");
+                snprintf(btitle, sizeof(btitle), "%s",
+                         title[0] ? title : "(untitled)");
+                pkg_sanitize_pipe_field(btitle);
+                shell_transcript_appendf("%s|%s|%s|%s|%d|%s\n",
+                                         names[i], btitle,
+                                         version[0] ? version : "-",
+                                         btype, files, tag[0] ? tag + 2 : "");
+            } else {
+                shell_transcript_appendf("pkg: %-10s %-24s v%-10s %d file(s)%s\n",
+                                         names[i], title[0] ? title : "(untitled)",
+                                         version[0] ? version : "-", files, tag);
+            }
         }
     }
     batch_set_errorlevel(0);
+}
+
+/** `pkg list`: every installed package with title/version + manifest entries. */
+static void pkg_list(void)
+{
+    pkg_list_impl(false);
+}
+
+/** `pkg list /b`: machine rows (`APP|title|version|type|files|tag`). */
+static void pkg_list_bare(void)
+{
+    pkg_list_impl(true);
 }
 
 /** `pkg info <app>`: metadata + per-file manifest status. */
@@ -324,6 +371,17 @@ static void pkg_info(const char *app)
     }
     if (description[0]) {
         shell_transcript_appendf("  description: %s\n", description);
+    }
+    {
+        /* Setup entrypoint convention (`launch <app> /setup` runs the
+         * app's `:setup` label): advertised, never auto-run. */
+        char setup[64];
+
+        setup[0] = '\0';
+        pkg_meta(app, "setup", setup, sizeof(setup));
+        if (setup[0] != '\0') {
+            shell_transcript_appendf("  setup:       launch %s /setup (%s)\n", app, setup);
+        }
     }
     {
         /* Trust line over the installed manifest (no file reads beyond it). */
@@ -385,6 +443,68 @@ static void pkg_info(const char *app)
     batch_set_errorlevel(missing == 0 ? 0 : 1);
 }
 
+/** `pkg info <app> /b`: machine rows for scripts. `key=value` per
+ *  registration key, then `file=<path>|<ok|MISSING|BAD>|<crc>` per manifest
+ *  entry. Values come from the same `pkg_meta()` + manifest primitives as
+ *  the human form — no second parser. */
+static void pkg_info_bare(const char *app)
+{
+    /* Registration keys in ABI.md §3 order (description last: free text). */
+    static const char *const keys[] = {
+        "title", "version", "type", "abi", "arch", "entry", "handles",
+        "setup", "requires", "min_fw", "data", "alias", "autostart",
+        "description",
+    };
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char *text = NULL;
+    size_t len = 0;
+    size_t k;
+
+    for (k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
+        char value[256];
+
+        value[0] = '\0';
+        pkg_meta(app, keys[k], value, sizeof(value));
+        pkg_sanitize_pipe_field(value);
+        shell_transcript_appendf("%s=%s\n", keys[k], value);
+    }
+    pkg_manifest_rel(app, rel, sizeof(rel));
+    if (!pkg_read_file(rel, &text, &len)) {
+        shell_transcript_appendf("manifest=MISSING\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    {
+        char *save = NULL;
+        char *ln;
+
+        for (ln = strtok_r(text, "\n", &save); ln != NULL;
+             ln = strtok_r(NULL, "\n", &save)) {
+            char path[P4_CONFIG_SD_PATH_BYTES];
+            char entry[P4_CONFIG_SD_PATH_BYTES];
+            uint32_t expect = 0;
+            uint32_t actual = 0;
+
+            if (!asset_parse_line(ln, path, sizeof(path), &expect)) {
+                continue;
+            }
+            if (shell_fs_resolve_path(path, entry, sizeof(entry)) != ESP_OK ||
+                !asset_crc_file(entry, &actual)) {
+                shell_transcript_appendf("file=%s|MISSING|%08X\n", path,
+                                         (unsigned)expect);
+            } else if (actual != expect) {
+                shell_transcript_appendf("file=%s|BAD|%08X\n", path,
+                                         (unsigned)actual);
+            } else {
+                shell_transcript_appendf("file=%s|ok|%08X\n", path,
+                                         (unsigned)actual);
+            }
+        }
+    }
+    heap_caps_free(text);
+    batch_set_errorlevel(0);
+}
+
 /** `pkg check`: verify every installed package. */
 static void pkg_check(void)
 {
@@ -408,10 +528,12 @@ static void pkg_check(void)
     batch_set_errorlevel(failed == 0 ? 0 : 1);
 }
 
-/** `pkg install <app> [/signed]`: copy a PKGS/<app> bundle into place,
- *  CRC-verified, with the manifest signature enforced when present (or when
- *  `/signed` / `P4_CONFIG_PKG_REQUIRE_SIGN` demands it). */
-static void pkg_install(const char *app, bool require_sign)
+/** `pkg install <app> [/signed] [/force]`: copy a PKGS/<app> bundle into
+ *  place, CRC-verified, with the manifest signature enforced when present
+ *  (or when `/signed` / `P4_CONFIG_PKG_REQUIRE_SIGN` demands it).
+ *  Version/dependency gates (`version` downgrade, `requires=`,
+ *  `min_fw=`) run first; `force` skips the downgrade guard only. */
+static void pkg_install(const char *app, bool require_sign, bool force)
 {
     char bmanifest_rel[P4_CONFIG_SD_PATH_BYTES];
     char bappinfo_rel[P4_CONFIG_SD_PATH_BYTES];
@@ -499,6 +621,99 @@ static void pkg_install(const char *app, bool require_sign)
             if (bentry[0] == '\0') {
                 shell_transcript_appendf_ansi(SH_ERR "pkg: hybrid bundle %s needs entry=<linked-name>\n" SH_RST,
                                               app);
+                free(paths);
+                free(crcs);
+                heap_caps_free(text);
+                batch_set_errorlevel(1);
+                return;
+            }
+        }
+    }
+
+    /* Version + dependency gates (before the trust gate: no point verifying
+     * crypto for a bundle we will refuse anyway). `/force` skips the
+     * downgrade guard only — `requires=`/`min_fw=` are compatibility, not
+     * preference, and always hold. */
+    {
+        char bversion[32];
+        char brequires[256];
+        char bminfw[32];
+        char iver[32];
+        char irel[P4_CONFIG_SD_PATH_BYTES];
+
+        bversion[0] = '\0';
+        brequires[0] = '\0';
+        bminfw[0] = '\0';
+        iver[0] = '\0';
+        (void)storage_ini_file_get(bappinfo_rel, "version", bversion, sizeof(bversion));
+        (void)storage_ini_file_get(bappinfo_rel, "requires", brequires, sizeof(brequires));
+        (void)storage_ini_file_get(bappinfo_rel, "min_fw", bminfw, sizeof(bminfw));
+        pkg_appinfo_rel(app, irel, sizeof(irel));
+        (void)storage_ini_file_get(irel, "version", iver, sizeof(iver));
+        if (iver[0] != '\0' && bversion[0] != '\0' &&
+            pkg_version_compare(iver, bversion) > 0 && !force) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: bundle %s is older (%s) than installed %s (use /force to downgrade)\n" SH_RST,
+                                          app, bversion, iver);
+            free(paths);
+            free(crcs);
+            heap_caps_free(text);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (bminfw[0] != '\0') {
+            char fw[32];
+
+            snprintf(fw, sizeof(fw), "%d.%d.%d",
+                     (int)P4_CONFIG_VERSION_MAJOR, (int)P4_CONFIG_VERSION_MINOR,
+                     (int)P4_CONFIG_VERSION_PATCH);
+            if (pkg_version_compare(bminfw, fw) > 0) {
+                shell_transcript_appendf_ansi(SH_ERR "pkg: bundle %s needs firmware %s (this is %s)\n" SH_RST,
+                                              app, bminfw, fw);
+                free(paths);
+                free(crcs);
+                heap_caps_free(text);
+                batch_set_errorlevel(1);
+                return;
+            }
+        }
+        if (brequires[0] != '\0') {
+            char rapp[64];
+            char rop[3];
+            char rver[32];
+            char rinstalled[32];
+            char rrel[P4_CONFIG_SD_PATH_BYTES];
+            bool ok = false;
+
+            rapp[0] = '\0';
+            rver[0] = '\0';
+            rinstalled[0] = '\0';
+            if (!pkg_requires_parse(brequires, rapp, sizeof(rapp),
+                                    rop, rver, sizeof(rver))) {
+                shell_transcript_appendf_ansi(SH_ERR "pkg: bundle %s has a malformed requires=%s (want APP>=ver)\n" SH_RST,
+                                              app, brequires);
+                free(paths);
+                free(crcs);
+                heap_caps_free(text);
+                batch_set_errorlevel(1);
+                return;
+            }
+            snprintf(rrel, sizeof(rrel), "%s/%s.APPINFO",
+                     P4_CONFIG_PKG_APPS_DIR_NAME, rapp);
+            (void)storage_ini_file_get(rrel, "version", rinstalled, sizeof(rinstalled));
+            if (rinstalled[0] != '\0') {
+                int cmp = pkg_version_compare(rinstalled, rver);
+
+                ok = (rop[0] == '=' && rop[1] == '\0') ? (cmp == 0) :
+                     (rop[0] == '>' && rop[1] == '\0') ? (cmp > 0) : (cmp >= 0);
+            }
+            if (!ok) {
+                if (rinstalled[0] == '\0') {
+                    shell_transcript_appendf_ansi(SH_ERR "pkg: bundle %s requires %s %s (not installed)\n" SH_RST,
+                                                  app, rapp, brequires + strlen(rapp));
+                } else {
+                    shell_transcript_appendf_ansi(SH_ERR "pkg: bundle %s requires %s %s (installed %s)\n" SH_RST,
+                                                  app, rapp, brequires + strlen(rapp), rinstalled);
+                }
                 free(paths);
                 free(crcs);
                 heap_caps_free(text);
@@ -630,6 +845,29 @@ static void pkg_install(const char *app, bool require_sign)
     heap_caps_free(text);
     if (failed == 0) {
         shell_transcript_appendf("pkg: %s installed\n", app);
+        {
+            /* Registration offers (hints only, never auto-mutated): an
+             * `alias=` key suggests the short name, `autostart=true` the
+             * boot entry. The user runs the verbs; install changes files. */
+            char balias[64];
+            char bautostart[16];
+
+            balias[0] = '\0';
+            bautostart[0] = '\0';
+            (void)storage_ini_file_get(bappinfo_rel, "alias", balias, sizeof(balias));
+            (void)storage_ini_file_get(bappinfo_rel, "autostart", bautostart, sizeof(bautostart));
+            if (balias[0] != '\0') {
+                shell_transcript_appendf("pkg: alias hint: alias %s=\"launch %s\" (then alias /save)\n",
+                                         balias, app);
+            }
+            if (bautostart[0] != '\0' &&
+                (bautostart[0] == '1' ||
+                 shell_text_equals_ignore_case(bautostart, "true") ||
+                 shell_text_equals_ignore_case(bautostart, "yes") ||
+                 shell_text_equals_ignore_case(bautostart, "on"))) {
+                shell_transcript_appendf("pkg: autostart hint: startup add %s\n", app);
+            }
+        }
         if (native || hybrid) {
             /* The blob runs only through linked-in entries (hybrid) or not
              * at all (native store-only): abi=/arch= gate what the firmware
@@ -661,6 +899,119 @@ static void pkg_install(const char *app, bool require_sign)
     }
 }
 
+/** Read an installed app's `data=` uninstall-manifest entries (may be empty). */
+static void pkg_installed_data(const char *app, char *out, size_t out_size)
+{
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (app == NULL) {
+        return;
+    }
+    pkg_appinfo_rel(app, rel, sizeof(rel));
+    (void)storage_ini_file_get(rel, "data", out, out_size);
+}
+
+/**
+ * Sweep an app's data leftovers: its `APPS/<APP>.INI` plus every comma-
+ * separated `data=` entry. Files only (directories are listed, never
+ * descended). With @p do_delete, existing files are trashed; otherwise
+ * their names accumulate in @p kept_out for messages.
+ *
+ * @return trashed (or found) count.
+ */
+/** Sweep one candidate data path: trash it (delete mode) or list it. */
+static int pkg_data_one(const char *tok, bool do_delete,
+                        char *kept_out, size_t kept_size)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    FILE *probe;
+
+    if (tok == NULL || tok[0] == '\0') {
+        return 0;
+    }
+    while (*tok == ' ' || *tok == '\t') {
+        tok++;
+    }
+    if (tok[0] == '\0') {
+        return 0;
+    }
+    {
+        /* Trim in a bounded copy (strtok_r already split the list). */
+        char clean[P4_CONFIG_SD_PATH_BYTES];
+        size_t tl;
+
+        snprintf(clean, sizeof(clean), "%s", tok);
+        tl = strlen(clean);
+        while (tl > 0 && (clean[tl - 1] == ' ' || clean[tl - 1] == '\t')) {
+            clean[--tl] = '\0';
+        }
+        if (clean[0] == '\0') {
+            return 0;
+        }
+        if (shell_fs_resolve_path(clean, resolved, sizeof(resolved)) != ESP_OK) {
+            return 0;
+        }
+        probe = fopen(resolved, "rb");
+        if (probe == NULL) {
+            return 0;
+        }
+        fclose(probe);
+        if (do_delete) {
+            if (storage_trash_delete_file(resolved, false) == ESP_OK) {
+                shell_transcript_appendf("pkg: purged %s\n", clean);
+                return 1;
+            }
+            return 0;
+        }
+        if (kept_out != NULL && kept_size > 0) {
+            size_t have = strlen(kept_out);
+            size_t room = (have < kept_size) ? kept_size - have : 0;
+
+            if (room > 0) {
+                snprintf(kept_out + have, room, "%s%s",
+                         (have > 0) ? ", " : "", clean);
+            }
+        }
+        return 1;
+    }
+}
+
+static int pkg_data_sweep(const char *app, const char *data, bool do_delete,
+                          char *kept_out, size_t kept_size)
+{
+    char ini_rel[P4_CONFIG_SD_PATH_BYTES];
+    char work[256];
+    int count = 0;
+
+    if (app == NULL) {
+        return 0;
+    }
+    /* The appconfig INI first (bounded: name + APPS/ + .INI). */
+    snprintf(ini_rel, sizeof(ini_rel), "%s/%s.INI",
+             P4_CONFIG_PKG_APPS_DIR_NAME, app);
+    count += pkg_data_one(ini_rel, do_delete, kept_out, kept_size);
+    if (data == NULL || data[0] == '\0') {
+        return count;
+    }
+    /* Then each data= entry in order (capped copy: data fits INI caps). */
+    memcpy(work, data, sizeof(work) - 1u);
+    work[sizeof(work) - 1u] = '\0';
+    {
+        char *save = NULL;
+        char *tok;
+
+        for (tok = strtok_r(work, ",", &save); tok != NULL;
+             tok = strtok_r(NULL, ",", &save)) {
+            count += pkg_data_one(tok, do_delete, kept_out, kept_size);
+        }
+    }
+    return count;
+}
+
 /** `pkg remove <app>`: trash every installed file + metadata. */
 static void pkg_remove(const char *app)
 {
@@ -670,7 +1021,11 @@ static void pkg_remove(const char *app)
     int removed = 0;
     char *save = NULL;
     char *ln;
+    /* Snapshot the data manifest BEFORE the metadata below is trashed. */
+    char data[256];
 
+    data[0] = '\0';
+    pkg_installed_data(app, data, sizeof(data));
     pkg_manifest_rel(app, rel, sizeof(rel));
     if (!pkg_read_file(rel, &text, &len)) {
         shell_transcript_appendf_ansi(SH_ERR "pkg: %s is not installed (no %s)\n" SH_RST, app, rel);
@@ -709,6 +1064,75 @@ static void pkg_remove(const char *app)
         }
     }
     shell_transcript_appendf("pkg: %s uninstalled (%d file(s))\n", app, removed);
+    {
+        /* App data is NOT removed with the app (saves, settings, stores
+         * survive reinstalls by design) — but never silently: name what
+         * stayed and how to delete it. */
+        char kept[512];
+
+        kept[0] = '\0';
+        if (pkg_data_sweep(app, data, false, kept, sizeof(kept)) > 0) {
+            shell_transcript_appendf("pkg: kept %s data: %s (pkg purge %s deletes)\n",
+                                     app, kept, app);
+        }
+    }
+    batch_set_errorlevel(0);
+}
+
+/** `pkg purge <app>`: `pkg remove` plus app-data cleanup (`data=` + INI). */
+static void pkg_purge(const char *app)
+{
+    char data[256];
+    int purged;
+
+    pkg_installed_data(app, data, sizeof(data));
+    pkg_remove(app);
+    if (batch_get_errorlevel() != 0) {
+        return;
+    }
+    purged = pkg_data_sweep(app, data, true, NULL, 0);
+    shell_transcript_appendf("pkg: %s purged (%d data file(s))\n", app, purged);
+    batch_set_errorlevel(0);
+}
+
+/** `pkg outdated`: installed apps whose staged PKGS/ bundle is newer. */
+static void pkg_outdated(void)
+{
+    char names[PKG_MAX_ENTRIES][PKG_APP_NAME_BYTES];
+    int count = pkg_collect_apps(names, PKG_MAX_ENTRIES);
+    int i;
+    int avail = 0;
+
+    if (count == 0) {
+        shell_print_muted("pkg: no packages installed");
+        batch_set_errorlevel(1);
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        char irel[P4_CONFIG_SD_PATH_BYTES];
+        char brel[P4_CONFIG_SD_PATH_BYTES];
+        char iver[32];
+        char bver[32];
+
+        iver[0] = '\0';
+        bver[0] = '\0';
+        pkg_appinfo_rel(names[i], irel, sizeof(irel));
+        /* Names are PKG_APP_NAME_BYTES-capped; precision keeps the
+         * truncation checker quiet about the bundle path. */
+        snprintf(brel, sizeof(brel), "%s/%.31s/%.31s.APPINFO",
+                 P4_CONFIG_PKG_BUNDLE_DIR_NAME, names[i], names[i]);
+        (void)storage_ini_file_get(irel, "version", iver, sizeof(iver));
+        if (storage_ini_file_get(brel, "version", bver, sizeof(bver)) != ESP_OK ||
+            bver[0] == '\0') {
+            continue;
+        }
+        if (iver[0] == '\0' || pkg_version_compare(bver, iver) > 0) {
+            shell_transcript_appendf("pkg: UPDATE %s %s -> %s\n", names[i],
+                                     iver[0] ? iver : "(none)", bver);
+            avail++;
+        }
+    }
+    shell_transcript_appendf("pkg: %d update(s) available\n", avail);
     batch_set_errorlevel(0);
 }
 
@@ -723,6 +1147,167 @@ static void pkg_remove(const char *app)
  * touches the device. All helpers below are pure except the NVS key store,
  * and the pure ones are unit-tested (see test/main/test_pkg.c).
  */
+
+/* ========================================================================
+ * Versions + dependency gates (pure, unit-tested in test_pkg.c)
+ * ========================================================================
+ * Dot-separated numeric versions (`1`, `1.0`, `2.10.3`; one leading `v`
+ * tolerated both sides). A part is its leading digits (missing digits = 0,
+ * so `1.0 == 1.0.0`); a non-numeric tail only breaks ties lexically
+ * (`1.0 < 1.0b`). `requires=` entries are `APP>=1.2` / `APP=1.2` /
+ * `APP>1.2`; the app name follows the asset name rule. */
+
+/** Skip one leading `v`/`V` (firmware `P4_CONFIG_VERSION_STRING` has one). */
+static const char *pkg_ver_skip_v(const char *s)
+{
+    if (s != NULL && (s[0] == 'v' || s[0] == 'V') && s[1] != '\0') {
+        return s + 1;
+    }
+    return s;
+}
+
+int pkg_version_compare(const char *a, const char *b)
+{
+    const char *pa;
+    const char *pb;
+
+    if (a == b) {
+        return 0;
+    }
+    if (a == NULL || a[0] == '\0') {
+        return (b == NULL || b[0] == '\0') ? 0 : -1;
+    }
+    if (b == NULL || b[0] == '\0') {
+        return 1;
+    }
+    pa = pkg_ver_skip_v(a);
+    pb = pkg_ver_skip_v(b);
+    for (;;) {
+        /* One dot-part per side: leading digits, then the text tail. */
+        long na = 0;
+        long nb = 0;
+        const char *ea = pa;
+        const char *eb = pb;
+        int ta;
+        int tb;
+
+        while (*ea >= '0' && *ea <= '9') {
+            if (na > 999999) {
+                break;
+            }
+            na = na * 10 + (*ea - '0');
+            ea++;
+        }
+        while (*eb >= '0' && *eb <= '9') {
+            if (nb > 999999) {
+                break;
+            }
+            nb = nb * 10 + (*eb - '0');
+            eb++;
+        }
+        if (na != nb) {
+            return (na < nb) ? -1 : 1;
+        }
+        /* Numeric tie: compare the text tails up to the dot. */
+        ta = (int)(strcspn(ea, "."));
+        tb = (int)(strcspn(eb, "."));
+        {
+            int n = (ta < tb) ? ta : tb;
+            int r = (n > 0) ? strncmp(ea, eb, (size_t)n) : 0;
+
+            if (r != 0) {
+                return (r < 0) ? -1 : 1;
+            }
+            if (ta != tb) {
+                /* Shorter tail sorts first (`1.0 < 1.0b`). */
+                return (ta < tb) ? -1 : 1;
+            }
+        }
+        pa = ea + ta;
+        pb = eb + tb;
+        if (*pa == '.') {
+            pa++;
+        }
+        if (*pb == '.') {
+            pb++;
+        }
+        if (*pa == '\0' && *pb == '\0') {
+            return 0;
+        }
+        /* One side ran out of parts: missing parts read as zero, so the
+         * rest decides (`1.0 < 1.0.1`, `1.0 == 1.0.0`). A rest of only
+         * zeros/dots is still equal. */
+        if (*pa == '\0' || *pb == '\0') {
+            const char *rest = (*pa == '\0') ? pb : pa;
+            const char *q = rest;
+            bool nonzero = false;
+
+            while (*q != '\0') {
+                if (*q >= '1' && *q <= '9') {
+                    nonzero = true;
+                    break;
+                }
+                q++;
+            }
+            if (!nonzero) {
+                return 0;
+            }
+            return (*pa == '\0') ? -1 : 1;
+        }
+    }
+}
+
+bool pkg_requires_parse(const char *text, char *app_out, size_t app_size,
+                        char *op_out, char *ver_out, size_t ver_size)
+{
+    const char *op;
+    size_t name_len;
+    size_t i;
+
+    if (text == NULL || app_out == NULL || app_size == 0 || op_out == NULL ||
+        ver_out == NULL || ver_size == 0) {
+        return false;
+    }
+    app_out[0] = '\0';
+    ver_out[0] = '\0';
+    op = strstr(text, ">=");
+    if (op != NULL) {
+        op_out[0] = '>';
+        op_out[1] = '=';
+        op_out[2] = '\0';
+    } else if ((op = strchr(text, '>')) != NULL) {
+        op_out[0] = '>';
+        op_out[1] = '\0';
+    } else if ((op = strchr(text, '=')) != NULL) {
+        op_out[0] = '=';
+        op_out[1] = '\0';
+    } else {
+        return false;
+    }
+    name_len = (size_t)(op - text);
+    if (name_len == 0 || name_len + 1 > app_size) {
+        return false;
+    }
+    memcpy(app_out, text, name_len);
+    app_out[name_len] = '\0';
+    for (i = 0; i < name_len; i++) {
+        char c = app_out[i];
+
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+            return false;
+        }
+    }
+    {
+        const char *ver = op + strlen(op_out);
+
+        if (ver[0] == '\0') {
+            return false;
+        }
+        snprintf(ver_out, ver_size, "%s", ver);
+    }
+    return true;
+}
 
 /** True when @p line is a manifest signature line (skipped by verifiers). */
 bool pkg_is_sign_line(const char *line)
@@ -1254,7 +1839,7 @@ static void pkg_key_command(int argc, char **argv)
 void shell_command_pkg(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] | remove <app> | key show|install|clear");
+        shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] [/force] | remove <app> | purge <app> | outdated | key show|install|clear");
         batch_set_errorlevel(2);
         return;
     }
@@ -1264,21 +1849,31 @@ void shell_command_pkg(int argc, char **argv)
         return;
     }
 
-    if (shell_text_equals_ignore_case(argv[1], "list")) {
-        pkg_list();
+    if ((argc == 2 || (argc == 3 && shell_text_equals_ignore_case(argv[2], "/b"))) &&
+        shell_text_equals_ignore_case(argv[1], "list")) {
+        if (argc == 3) {
+            pkg_list_bare();
+        } else {
+            pkg_list();
+        }
         return;
     }
     if (shell_text_equals_ignore_case(argv[1], "check")) {
         pkg_check();
         return;
     }
-    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "info")) {
+    if ((argc == 3 || (argc == 4 && shell_text_equals_ignore_case(argv[3], "/b"))) &&
+        shell_text_equals_ignore_case(argv[1], "info")) {
         if (!asset_app_ok(argv[2])) {
             shell_transcript_appendf_ansi(SH_ERR "pkg: bad app name '%s'\n" SH_RST, argv[2]);
             batch_set_errorlevel(2);
             return;
         }
-        pkg_info(argv[2]);
+        if (argc == 4) {
+            pkg_info_bare(argv[2]);
+        } else {
+            pkg_info(argv[2]);
+        }
         return;
     }
     if (argc == 3 && shell_text_equals_ignore_case(argv[1], "verify")) {
@@ -1290,23 +1885,28 @@ void shell_command_pkg(int argc, char **argv)
         (void)asset_verify_app("pkg", argv[2], false);
         return;
     }
-    if ((argc == 3 || argc == 4) && shell_text_equals_ignore_case(argv[1], "install")) {
+    if (argc >= 3 && shell_text_equals_ignore_case(argv[1], "install")) {
         bool require_sign = (P4_CONFIG_PKG_REQUIRE_SIGN != 0);
+        bool force = false;
+        int i;
 
         if (!asset_app_ok(argv[2])) {
             shell_transcript_appendf_ansi(SH_ERR "pkg: bad app name '%s'\n" SH_RST, argv[2]);
             batch_set_errorlevel(2);
             return;
         }
-        if (argc == 4) {
-            if (!shell_text_equals_ignore_case(argv[3], "/signed")) {
-                shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] | remove <app> | key show|install|clear");
+        for (i = 3; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/signed")) {
+                require_sign = true;
+            } else if (shell_text_equals_ignore_case(argv[i], "/force")) {
+                force = true;
+            } else {
+                shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] [/force] | remove <app> | purge <app> | outdated | key show|install|clear");
                 batch_set_errorlevel(2);
                 return;
             }
-            require_sign = true;
         }
-        pkg_install(argv[2], require_sign);
+        pkg_install(argv[2], require_sign, force);
         return;
     }
     if (argc == 3 && shell_text_equals_ignore_case(argv[1], "remove")) {
@@ -1318,7 +1918,20 @@ void shell_command_pkg(int argc, char **argv)
         pkg_remove(argv[2]);
         return;
     }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "purge")) {
+        if (!asset_app_ok(argv[2])) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: bad app name '%s'\n" SH_RST, argv[2]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        pkg_purge(argv[2]);
+        return;
+    }
+    if (argc == 2 && shell_text_equals_ignore_case(argv[1], "outdated")) {
+        pkg_outdated();
+        return;
+    }
 
-    shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] | remove <app> | key show|install|clear");
+    shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] [/force] | remove <app> | purge <app> | outdated | key show|install|clear");
     batch_set_errorlevel(2);
 }

@@ -21,12 +21,12 @@
 #include "gfx.h"
 #include "theme.h"
 #include "shell.h"
+#include "strutil.h"
 #include "keyboard.h"
 #include "storage.h"
 #include "p4minishell_config.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
-#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
 #include "freertos/event_groups.h"
@@ -1404,6 +1404,11 @@ typedef struct {
     const char *title;
     const char *path;
     char *content;
+    /* In-memory source (debug mem/disk dumps). When mem_bytes is not NULL
+     * the file path is ignored and mem_base is the printed base address. */
+    const uint8_t *mem_bytes;
+    size_t mem_len;
+    uint32_t mem_base;
 } hex_ctx_t;
 
 static hex_ctx_t *s_hex_active = NULL;
@@ -1416,9 +1421,38 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     ctx->result = 0;
     s_hex_active = ctx;
     /* Load binary and format hex dump */
-    FILE *f = ctx->path ? fopen(ctx->path, "rb") : NULL;
+    FILE *f = (ctx->mem_bytes == NULL) ? (ctx->path ? fopen(ctx->path, "rb") : NULL) : NULL;
     size_t max_bytes = P4_CONFIG_TUI_VIEW_MAX_BYTES;
-    if (f) {
+    if (ctx->mem_bytes != NULL) {
+        /* In-memory dump: same row formatter as the file path, with the
+         * caller-supplied base address in the offset column. */
+        size_t r = ctx->mem_len;
+        size_t lines;
+        size_t cap;
+        if (r > max_bytes) {
+            r = max_bytes;
+        }
+        lines = (r + 15) / 16;
+        cap = lines * 80 + 32;
+        if (r > 0) {
+            ctx->content = malloc(cap);
+        }
+        if (ctx->content) {
+            size_t pos = 0;
+            size_t off;
+            for (off = 0; off < r; off += 16) {
+                size_t row = (r - off > 16) ? 16 : (r - off);
+                int n = strutil_format_hex_row(ctx->content + pos, cap - pos,
+                                               ctx->mem_base + (uint32_t)off,
+                                               ctx->mem_bytes + off, row);
+                if (n < 0) { pos = cap - 1; break; }
+                pos += (size_t)n;
+                if (pos >= cap - 1) { pos = cap - 1; break; }
+            }
+            ctx->content[pos] = '\0';
+        }
+        if (!ctx->content) ctx->content = strdup("(no data)");
+    } else if (f) {
         bool clipped = false;
         fseek(f, 0, SEEK_END);
         long sz = ftell(f);
@@ -1432,36 +1466,24 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         size_t r = buf ? fread(buf, 1, (size_t)sz, f) : 0;
         fclose(f);
         if (buf && r>0) {
-            /* Each line: 8 hex offset + 16 bytes hex + ascii -> ~80 chars */
+            /* Each line: 8 hex offset + 16 bytes hex + ascii -> ~80 chars.
+             * Rows render through the shared strutil formatter so the modal
+             * and the `debug` text dumps stay byte-identical. */
             size_t lines = (r + 15) / 16;
             size_t cap = lines * 80 + 32;
             ctx->content = malloc(cap);
             if (ctx->content) {
                 size_t pos = 0;
-                for (size_t off=0; off<r; off+=16) {
-                    int n = snprintf(ctx->content+pos, cap-pos, "%08X  ", (unsigned)off);
-                    if (n<0) break;
-                    if ((size_t)n >= cap-pos) { pos = cap-1; break; } // truncated: stop, keep NUL room
+                size_t off;
+                for (off=0; off<r; off+=16) {
+                    size_t row = (r - off > 16) ? 16 : (r - off);
+                    int n = strutil_format_hex_row(ctx->content+pos, cap-pos,
+                                                   (uint32_t)off, buf+off, row);
+                    if (n<0) { pos = cap-1; break; }
                     pos += (size_t)n;
-                    for (int i=0;i<16;i++) {
-                        if (off+i < r) n = snprintf(ctx->content+pos, cap-pos, "%02X ", buf[off+i]);
-                        else n = snprintf(ctx->content+pos, cap-pos, "   ");
-                        if (n<0) break;
-                        if ((size_t)n >= cap-pos) { pos = cap-1; break; }
-                        pos += (size_t)n;
-                    }
-                    if (pos >= cap-1) break;
-                    n = snprintf(ctx->content+pos, cap-pos, " |");
-                    if (n<0) break;
-                    if ((size_t)n >= cap-pos) { pos = cap-1; break; }
-                    pos += (size_t)n;
-                    for (int i=0;i<16 && off+i<r;i++) {
-                        char c = (char)buf[off+i];
-                        if (c < 32 || c > 126) c='.';
-                        if (pos+1 < cap) ctx->content[pos++]=c;
-                    }
-                    if (pos+2 < cap) { ctx->content[pos++]='|'; ctx->content[pos++]='\n'; ctx->content[pos]='\0'; }
+                    if (pos >= cap-1) { pos = cap-1; break; }
                 }
+                ctx->content[pos] = '\0';
             }
         }
         free(buf);
@@ -1560,6 +1582,22 @@ int modal_hexview_run(const char *title, const char *file_path, uint32_t timeout
         ctx.path = file_path;
     }
     ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    if (modal_surface_run(&hex_surface, &ctx, &el) != ESP_OK) return -1;
+    return 0;
+}
+
+int modal_hexview_run_buf(const char *title, const uint8_t *bytes, size_t len,
+                          uint32_t base_addr, uint32_t timeout_ms)
+{
+    hex_ctx_t ctx = {0};
+    int el=0;
+    ctx.title = title;
+    ctx.path = NULL;
+    ctx.mem_bytes = bytes;
+    ctx.mem_len = len;
+    ctx.mem_base = base_addr;
+    ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    if (bytes == NULL || len == 0) return -1;
     if (modal_surface_run(&hex_surface, &ctx, &el) != ESP_OK) return -1;
     return 0;
 }

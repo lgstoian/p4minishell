@@ -60,6 +60,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "esp_http_client.h"
 
 #define NETWORKING_WIFI_SSID_BYTES 33
 #define NETWORKING_WIFI_PASSWORD_BYTES 65
@@ -99,6 +100,11 @@ typedef struct {
      *  signature as usb_keyboard_input_cb_t (USB HID key code + modifiers +
      *  press/release event). NULL when not registered. */
     void (*bluetooth_keyboard_input)(uint8_t key_code, uint8_t modifiers, bool pressed);
+    /** BLE HID mouse wheel scroll, in transcript pixels (positive scrolls up,
+     *  matching the USB mouse convention). Called from the NimBLE host task;
+     *  the implementation must hop to the LVGL task itself. NULL when not
+     *  registered (wheel reports are then ignored). */
+    void (*bluetooth_mouse_scroll)(int32_t pixels);
 } networking_host_ops_t;
 
 /** Initialize networking: stores host callbacks, starts boot-time Wi-Fi restore, bootstraps Bluetooth. */
@@ -137,6 +143,15 @@ void networking_wifi_scan(bool bare);
 
 void networking_wifi_diag(void);
 void networking_wifi_disconnect(void);
+
+/**
+ * Begin an async STA join to explicit credentials (same path as
+ * `wifi connect <ssid>`: runtime init on a worker task, result via the
+ * usual events/status). Used by the captive portal after form submission so
+ * the user does not wait a reboot. Returns false when a connect is already
+ * in progress or the Wi-Fi runtime is disabled.
+ */
+bool networking_wifi_connect_to(const char *ssid, const char *password);
 
 /**
  * Classic DOS-style `ping <host-or-ip> [count]`.
@@ -219,6 +234,94 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
 
 /** Free a body returned by `networking_http_get()`. Safe on a zeroed result. */
 void networking_http_result_free(networking_http_result_t *result);
+
+/** One caller-supplied request header for networking_http_get_ex(). */
+typedef struct {
+    const char *name;   /**< Header name, e.g. "If-None-Match". */
+    const char *value;  /**< Header value. Empty entries are ignored. */
+} networking_http_header_t;
+
+/** Maximum extra request headers networking_http_get_ex() accepts. */
+#define NETWORKING_HTTP_MAX_EXTRA_HEADERS  4
+
+/** Upper bound on a "Bearer <token>" Authorization value built internally. */
+#define NETWORKING_HTTP_BEARER_MAX_BYTES   (128 + 8)
+
+/**
+ * Conditional-GET capable GET for library consumers (the RSS reader).
+ *
+ * Additive extension of networking_http_get(): the existing entry point and
+ * networking_http_request() keep their exact signatures and behaviour, so
+ * `httpget` / `wget` / CardDAV / timezone detection cannot regress.
+ *
+ * Adds the two things a feed fetch needs and the plain GET cannot express:
+ * arbitrary request headers (If-None-Match, If-Modified-Since) and a bearer
+ * token. A 304 Not Modified is reported as SUCCESS with
+ * `result->http_status == 304` and no body, which is the correct answer to a
+ * conditional GET and is otherwise indistinguishable from a hard error.
+ *
+ * Always quiet (no transcript chatter); the caller reports and maps onto
+ * ERRORLEVEL.
+ *
+ * @param url            http:// or https:// URL.
+ * @param headers        Optional extra request headers (may be NULL when
+ *                       @p header_count is 0).
+ * @param header_count   Number of entries in @p headers, at most
+ *                       NETWORKING_HTTP_MAX_EXTRA_HEADERS (plus one when
+ *                       @p bearer_token is set, else ESP_ERR_INVALID_SIZE).
+ * @param bearer_token   Optional bearer token sent as
+ *                       "Authorization: Bearer <token>". NULL for none. When
+ *                       Basic credentials are also supplied, Basic wins and
+ *                       the caller's Authorization header is skipped rather
+ *                       than emitting a conflicting header.
+ * @param auth_user      Optional Basic-auth username (NULL for none).
+ * @param auth_pass      Basic-auth password ("" when NULL).
+ * @param result         Receives status/body; caller frees the body.
+ * @return ESP_OK on 2xx, 207, or (conditional GET) 304 with no body;
+ *         ESP_ERR_INVALID_ARG for a NULL URL/result or a NULL @p headers with
+ *         a non-zero count; ESP_ERR_INVALID_SIZE for too many headers;
+ *         ESP_ERR_INVALID_STATE when Wi-Fi is not connected;
+ *         ESP_ERR_INVALID_SIZE when the body exceeds the configured cap;
+ *         ESP_ERR_NOT_FOUND for other non-2xx statuses.
+ */
+esp_err_t networking_http_get_ex(const char *url,
+                                 const networking_http_header_t *headers,
+                                 size_t header_count,
+                                 const char *auth_user,
+                                 const char *auth_pass,
+                                 const char *bearer_token,
+                                 networking_http_result_t *result);
+
+/**
+ * General HTTP request for in-firmware clients (CardDAV PROPFIND/GET/PUT).
+ *
+ * Same TLS policy (global CA store when loaded, Mozilla bundle otherwise),
+ * timeout, redirect, body-cap, and User-Agent as the GET core; WebDAV 207
+ * Multi-Status counts as success alongside 2xx. Always quiet (no transcript
+ * chatter); the caller reports and maps onto ERRORLEVEL.
+ *
+ * @param method            esp_http_client method (GET/PUT/PROPFIND/...).
+ * @param url               http:// or https:// URL.
+ * @param req_content_type  Content-Type header, or NULL for none.
+ * @param req_body          Request body, or NULL when @p req_len is 0.
+ * @param req_len           Request body length in bytes.
+ * @param depth             Depth header value ("0"/"1"), or NULL for none.
+ * @param auth_user         Basic-auth username, or NULL for none. Password
+ *                          travels only inside the encoded header, never in
+ *                          the URL (which would leak into history).
+ * @param auth_pass         Basic-auth password ("" when NULL).
+ * @param result            Receives status/body; caller frees the body.
+ * @return ESP_OK on 2xx/207 with the body buffered, ESP_ERR_INVALID_ARG,
+ *         ESP_ERR_INVALID_STATE (no Wi-Fi), ESP_ERR_INVALID_SIZE,
+ *         ESP_ERR_TIMEOUT, ESP_ERR_NOT_FOUND (other statuses), or the
+ *         esp_http_client error otherwise.
+ */
+esp_err_t networking_http_request(esp_http_client_method_t method, const char *url,
+                                  const char *req_content_type,
+                                  const uint8_t *req_body, size_t req_len,
+                                  const char *depth,
+                                  const char *auth_user, const char *auth_pass,
+                                  networking_http_result_t *result);
 
 /**
  * One-shot TCP request/response terminal (`tcpterm`, tcpterm.c).
@@ -308,6 +411,28 @@ const char *networking_wifi_state_string(void);
 networking_wifi_state_t networking_wifi_state(void);
 esp_err_t networking_wifi_last_error(void);
 bool networking_wifi_is_connected(void);
+/**
+ * Try to claim the Wi-Fi/Netif initialization task for a caller that is about
+ * to mutate netif/Wi-Fi state (captive portal, chat host AP, and any future
+ * SoftAP or APSTA consumer).
+ *
+ * This module owns the claim (mirroring the captive portal's
+ * `wifi setup on|off` pattern), so higher layers must serialize through it
+ * rather than calling esp_wifi_* or esp_netif_* directly.
+ *
+ * Every successful claim MUST be paired with exactly one
+ * networking_wifi_release_init_task() on every return path.
+ *
+ * @return true when the claim was taken, false when an initialization is
+ *         already in progress.
+ */
+bool networking_wifi_try_claim_init_task(void);
+
+/**
+ * Release a claim previously taken by networking_wifi_try_claim_init_task().
+ */
+void networking_wifi_release_init_task(void);
+
 void networking_append_sysinfo_summary(void);
 
 /**

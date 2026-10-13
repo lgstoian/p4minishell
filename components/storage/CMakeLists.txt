@@ -12,4 +12,5 @@ idf_component_register(
         filetype
         p4heap
         esp_driver_sdmmc
+        strutil
 )

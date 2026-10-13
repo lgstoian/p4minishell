@@ -112,10 +112,10 @@ a raw serial port.
 | # | Step | Command | Pass condition |
 |---|------|---------|----------------|
 | 1 | Static checks | `python -m compileall tools apps` | no errors |
-| 2 | On-target unit tests | `python tools/unit_run.py <COMx>` | `=== All tests completed ===`, 0 failures; **refresh `test/README.md` count** |
-| 3 | Hardware suites | `python tools/p4test_run.py <COMx>` | full PASS table (both boards) |
+| 2 | On-target unit tests | `python tools/unit_run.py COM3 COM6` | `=== All tests completed ===`, 0 failures on both; **refresh `test/README.md` count** |
+| 3 | Hardware suites | `python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1` | merged PASS table (both boards) + no board differential |
 | 4 | Host regression | `python tools/regression.py <COMx>` | PASS (release runner) |
-| 5 | Boot soak | `python tools/boot_regression.py <COMx> 20` | 20/20 clean (no panic, one AUTOEXEC, SD ready, no stray W/E) |
+| 5 | Boot soak | `python tools/boot_regression.py COM3 20 COM6` | 20/20 clean per board (no panic, one AUTOEXEC, SD ready, no stray W/E) |
 | 6 | Transcript parity | `python tools/appdiff.py` | no diff vs baseline (re-baseline only with intent) |
 | 7 | Dogfood soak | `python tools/dogfood.py <COMx> --minutes 15` | no anomalies |
 | 8 | Visual (optional) | `tools/display_glitch_watch.py`, `tools/led_watch.py` | no BSOD frames / LED table matches |

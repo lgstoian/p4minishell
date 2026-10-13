@@ -145,3 +145,58 @@ void test_tui_scroll_up_inactive_safe(void)
     TEST_ASSERT_EQUAL_INT(1, row);
     TEST_ASSERT_EQUAL_INT(1, col);
 }
+
+void test_tui_selftest_palette_clean(void)
+{
+    const char *fail_name = "unset";
+
+    /* Would have failed before the double-glyph fix (X2 duplicated T2's
+     * bytes; T2/B2/L2/R2 decoded off-spec). NULL out-param is safe. */
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_palette(&fail_name));
+    TEST_ASSERT_NULL(fail_name);
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_palette(NULL));
+}
+
+void test_tui_selftest_coverage_clean(void)
+{
+    const char *fail_name = "unset";
+
+    /* Every box codepoint present in every committed cell font with matching
+     * advance (no fallback substitution). Pure table reads, headless-safe. */
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_coverage(&fail_name));
+    TEST_ASSERT_NULL(fail_name);
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_coverage(NULL));
+}
+
+void test_tui_selftest_metrics_clean(void)
+{
+    const char *fail_name = "unset";
+
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_metrics(&fail_name));
+    TEST_ASSERT_NULL(fail_name);
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_metrics(NULL));
+}
+
+void test_tui_selftest_check_clean(void)
+{
+    const char *fail_name = "unset";
+
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_check(&fail_name));
+    TEST_ASSERT_NULL(fail_name);
+    TEST_ASSERT_EQUAL_INT(0, tui_selftest_check(NULL));
+}
+
+void test_tui_bound_cell_inactive(void)
+{
+    int w = -1;
+    int h = -1;
+    int index = -2;
+
+    /* Test app never enters TUI mode (black screen): unbound reads zeros. */
+    TEST_ASSERT_FALSE(tui_is_active());
+    tui_bound_cell_info(&w, &h, &index);
+    TEST_ASSERT_EQUAL_INT(0, w);
+    TEST_ASSERT_EQUAL_INT(0, h);
+    TEST_ASSERT_EQUAL_INT(-1, index);
+    tui_bound_cell_info(NULL, NULL, NULL);
+}

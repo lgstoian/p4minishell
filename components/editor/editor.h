@@ -262,6 +262,13 @@ void editor_doc_cursor_word_right(editor_doc_t *doc);
  *  survives). @return true when a non-empty token was copied. */
 bool editor_doc_cursor_word(editor_doc_t *doc, char *buf, size_t size);
 
+/** Copy the link under the cursor into @p buf: a markdown `[text](url)`
+ *  URL when the cursor sits inside one, else the bare URL/path token around
+ *  the cursor (needs a `/`, `\`, or `:` so plain words never match).
+ *  Feeds the `Open` prompt prefill, so F4 on a link offers its target.
+ *  @return true when a link was copied. */
+bool editor_link_under_cursor(editor_doc_t *doc, char *buf, size_t size);
+
 /** Jump to the start / end of the whole document. */
 void editor_doc_cursor_doc_home(editor_doc_t *doc);
 void editor_doc_cursor_doc_end(editor_doc_t *doc);

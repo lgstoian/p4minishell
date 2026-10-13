@@ -56,15 +56,36 @@ esp_err_t certs_reload(void);
 /** Fill @p out with the current trust store status. */
 void certs_get_store_info(certs_store_info_t *out);
 
-/** Clear the loaded trust store from memory.  The SD files are untouched. */
+/** Clear the loaded trust store from memory.  The SD files are untouched.
+ *  Also releases the mbedTLS global CA store when active, so peer
+ *  verification can never run against the freed buffer. */
 void certs_clear(void);
 
 /** True when the global CA store has been loaded and is active. */
 bool certs_is_loaded(void);
 
-/** Scan sd:/CERTS for *.pem files and write their concatenation to
- *  sd:/CERTS/BUNDLE.PEM.  Used by `certs rebuild`. */
+/** Scan sd:/CERTS for *.pem files (plus DER converted to PEM, bundle skipped)
+ *  and write their concatenation to sd:/CERTS/BUNDLE.PEM.  Used by
+ *  `certs rebuild`. */
 esp_err_t certs_rebuild_bundle(void);
+
+/** Case-insensitive whole-name comparison (bundle-name matching etc.). Kept
+ *  local on purpose: the shared shell string helper lives in a component
+ *  certs does not depend on. */
+bool certs_name_equals_ci(const char *a, const char *b);
+
+/**
+ * Convert one DER certificate to PEM text. Pure (no SD access), unit-tested:
+ * validates with mbedtls_x509_crt_parse_der, then writes the base64 PEM
+ * (`-----BEGIN CERTIFICATE-----\n` / `-----END CERTIFICATE-----`; the newline
+ *  is part of the header argument because mbedtls_pem_write_buffer emits the
+ *  header unterminated, and without it the global store refuses the PEM).
+ *
+ * @return ESP_OK, ESP_ERR_INVALID_ARG on NULL/empty input, ESP_FAIL when the
+ *         DER does not parse, ESP_ERR_NO_MEM when @p pem_cap is too small.
+ */
+esp_err_t certs_der_to_pem(const uint8_t *der, size_t der_len,
+                           uint8_t *pem_out, size_t pem_cap, size_t *pem_len_out);
 
 #ifdef __cplusplus
 }

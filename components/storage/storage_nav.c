@@ -35,6 +35,7 @@
 #include <strings.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <utime.h>
 
@@ -62,6 +63,13 @@ void shell_command_cd(int argc, char **argv)
     error = shell_fs_resolve_path(argv[1], resolved_path, sizeof(resolved_path));
     if (error != ESP_OK) {
         shell_print_error("cd: invalid path");
+        return;
+    }
+
+    /* The working directory lives on the SD card only: USB volumes are
+     * addressed with absolute usb:/ (u:/v:/w:/x:) paths instead. */
+    if (storage_volume_of_vfs_path(resolved_path) != STORAGE_VOLUME_SD) {
+        shell_print_error("cd: USB volumes have no working directory (use absolute usb:/ paths)");
         return;
     }
 
@@ -116,6 +124,28 @@ typedef struct {
     uint8_t attrib;
     bool is_dir;
 } dir_entry_t;
+
+/** Per-level heap scratch for `shell_dir_list_one` (see the function). */
+struct dir_level_scratch {
+    char fatfs_path[SHELL_SD_PATH_BYTES];
+    /* Sized for every column at full width plus one over-long final cell,
+     * which is clipped to the column width but appended before the row is
+     * flushed. Without the extra allowance the last append could be
+     * truncated mid-row and break the grid. */
+    char wide_row[(P4_CONFIG_DIR_WIDE_COLUMNS + 1) * (P4_CONFIG_DIR_WIDE_COLUMN_WIDTH + 4) + 8];
+    FF_DIR dir;
+    FILINFO info;
+    DIR *vfs_dir;
+    char vfs_child[SHELL_SD_PATH_BYTES];
+    dir_entry_t entries[P4_CONFIG_DIR_SORT_ENTRY_MAX];
+    /* Per-level working buffers live here, not on the task stack: /S
+     * recurses once per level, so stack copies would multiply by the
+     * depth limit on the shared command-worker stack. */
+    char display_name[SHELL_LFN_BYTES];
+    char cell[SHELL_LFN_BYTES + 4];
+    char upper[SHELL_LFN_BYTES];
+    char coloured_name[SHELL_LFN_BYTES + 8];
+};
 
 /** Parsed `dir` options plus the running totals for the whole invocation. */
 typedef struct {
@@ -347,72 +377,32 @@ void shell_dir_format_stamp(uint16_t fdate, uint16_t ftime, char *output, size_t
 }
 
 /**
- * List one directory, recursing when `/S` is active.
- *
- * @param dir_path Absolute VFS path.
- * @param pattern  Wildcard filter, or NULL for everything.
- * @param depth    Current recursion depth.
- * @return false when the user aborted a paged listing.
+ * Fill one directory level from the FATFS backend: long names plus the 8.3
+ * alternate and real attribute bits. Prints open errors inline and yields an
+ * empty level (the listing keeps going, matching historical behavior).
  */
-static bool shell_dir_list_one(const char *dir_path, const char *pattern, int depth, dir_ctx_t *ctx)
+static void shell_dir_collect_fatfs(struct dir_level_scratch *scratch,
+                                    const char *dir_path, const char *pattern,
+                                    dir_ctx_t *ctx, size_t *count_out,
+                                    bool *truncated_out)
 {
-    /* Every sizeable local lives in one heap block. This function recurses
-     * once per directory level for /S, and the command worker task stack is
-     * shared with the whole dispatch path, so large stack locals here would
-     * overflow it well before the depth limit. */
-    struct dir_level_scratch {
-        char fatfs_path[SHELL_SD_PATH_BYTES];
-        /* Sized for every column at full width plus one over-long final cell,
-         * which is clipped to the column width but appended before the row is
-         * flushed. Without the extra allowance the last append could be
-         * truncated mid-row and break the grid. */
-        char wide_row[(P4_CONFIG_DIR_WIDE_COLUMNS + 1) * (P4_CONFIG_DIR_WIDE_COLUMN_WIDTH + 4) + 8];
-        FF_DIR dir;
-        FILINFO info;
-        dir_entry_t entries[P4_CONFIG_DIR_SORT_ENTRY_MAX];
-        /* Per-level working buffers live here, not on the task stack: /S
-         * recurses once per level, so stack copies would multiply by the
-         * depth limit on the shared command-worker stack. */
-        char display_name[SHELL_LFN_BYTES];
-        char cell[SHELL_LFN_BYTES + 4];
-        char upper[SHELL_LFN_BYTES];
-        char coloured_name[SHELL_LFN_BYTES + 8];
-    } *scratch = NULL;
     FRESULT result;
     size_t count = 0;
-    size_t index;
-    unsigned int local_files = 0;
-    unsigned int local_dirs = 0;
-    uint64_t local_bytes = 0;
-    size_t wide_column = 0;
     bool truncated = false;
-    bool keep_going = true;
-
-    if (ctx->aborted || depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX) {
-        return !ctx->aborted;
-    }
-
-    /* ~40 KB per level: prefer PSRAM so the DMA-capable internal heap (which
-     * backs LVGL spans, WiFi/SDIO pools and the USB ring buffers) is left
-     * alone. NULL propagates to the error path below. */
-    scratch = p4heap_calloc_psram(1, sizeof(*scratch));
-    if (scratch == NULL) {
-        shell_transcript_append_text("dir: out of memory buffering the directory\n");
-        shell_record_errorf("dir", ESP_ERR_NO_MEM, "Out of memory buffering a directory level");
-        return false;
-    }
 
     if (shell_sd_vfs_to_fatfs_path(dir_path, scratch->fatfs_path, sizeof(scratch->fatfs_path)) != ESP_OK) {
-        free(scratch);
         shell_print_error("dir: invalid FAT path for %s", dir_path);
-        return true;
+        *count_out = 0;
+        *truncated_out = false;
+        return;
     }
 
     result = f_opendir(&scratch->dir, scratch->fatfs_path);
     if (result != FR_OK) {
-        free(scratch);
         shell_print_error("dir: cannot open %s", dir_path);
-        return true;
+        *count_out = 0;
+        *truncated_out = false;
+        return;
     }
 
     /* Buffer the level first so it can be sorted before anything prints. */
@@ -453,6 +443,177 @@ static bool shell_dir_list_one(const char *dir_path, const char *pattern, int de
     }
 
     (void)f_closedir(&scratch->dir);
+    *count_out = count;
+    *truncated_out = truncated;
+}
+
+/**
+ * Convert a POSIX timestamp to FAT date/time words for the VFS directory
+ * collector (local time, like the FATFS layer). Pre-1980 stamps yield zeros,
+ * which the stamp renderer prints blank. Pure, unit-tested.
+ */
+void shell_dir_time_to_fat(time_t mtime, uint16_t *fdate_out, uint16_t *ftime_out)
+{
+    struct tm tm_parts;
+
+    if (fdate_out != NULL) {
+        *fdate_out = 0;
+    }
+    if (ftime_out != NULL) {
+        *ftime_out = 0;
+    }
+    if (localtime_r(&mtime, &tm_parts) == NULL) {
+        return;
+    }
+    if (tm_parts.tm_year + 1900 >= 1980 && tm_parts.tm_year + 1900 <= 2107 &&
+        tm_parts.tm_mon >= 0 && tm_parts.tm_mon <= 11 &&
+        tm_parts.tm_mday >= 1 && tm_parts.tm_mday <= 31 &&
+        tm_parts.tm_hour >= 0 && tm_parts.tm_hour <= 23 &&
+        tm_parts.tm_min >= 0 && tm_parts.tm_min <= 59 &&
+        tm_parts.tm_sec >= 0 && tm_parts.tm_sec <= 61) {
+        if (fdate_out != NULL) {
+            *fdate_out = (uint16_t)(((tm_parts.tm_year + 1900 - 1980) << 9) |
+                                    ((tm_parts.tm_mon + 1) << 5) |
+                                    tm_parts.tm_mday);
+        }
+        if (ftime_out != NULL) {
+            *ftime_out = (uint16_t)((tm_parts.tm_hour << 11) |
+                                    (tm_parts.tm_min << 5) |
+                                    (tm_parts.tm_sec / 2));
+        }
+    }
+}
+
+/**
+ * Fill one directory level from the VFS backend (USB volumes): names, sizes,
+ * and dates via opendir/stat; attribute bits are synthesized (directory and
+ * read-only only — USB has no hidden/system/archive bits). Same contract as
+ * the FATFS collector above, so sort/emit/page/recurse stay shared.
+ */
+static void shell_dir_collect_vfs(struct dir_level_scratch *scratch,
+                                  const char *dir_path, const char *pattern,
+                                  dir_ctx_t *ctx, size_t *count_out,
+                                  bool *truncated_out)
+{
+    DIR *dir;
+    struct dirent *entry;
+    size_t count = 0;
+    bool truncated = false;
+
+    dir = opendir(dir_path);
+    if (dir == NULL) {
+        shell_print_error("dir: cannot open %s", dir_path);
+        *count_out = 0;
+        *truncated_out = false;
+        return;
+    }
+
+    while (count < P4_CONFIG_DIR_SORT_ENTRY_MAX) {
+        struct stat st;
+        uint8_t attrib;
+        uint16_t fdate;
+        uint16_t ftime;
+
+        entry = readdir(dir);
+        if (entry == NULL) {
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (pattern != NULL && !shell_wildcard_match(pattern, entry->d_name)) {
+            continue;
+        }
+        if (snprintf(scratch->vfs_child, sizeof(scratch->vfs_child), "%s/%s",
+                     dir_path, entry->d_name) >= (int)sizeof(scratch->vfs_child)) {
+            continue;
+        }
+        if (stat(scratch->vfs_child, &st) != 0) {
+            continue;
+        }
+
+        attrib = 0;
+        if (S_ISDIR(st.st_mode)) {
+            attrib |= AM_DIR;
+        }
+        if ((st.st_mode & 0222) == 0) {
+            attrib |= AM_RDO;
+        }
+        if (!shell_dir_attr_matches(ctx, attrib)) {
+            continue;
+        }
+
+        shell_dir_time_to_fat(st.st_mtime, &fdate, &ftime);
+        snprintf(scratch->entries[count].name, sizeof(scratch->entries[count].name), "%s", entry->d_name);
+        scratch->entries[count].altname[0] = '\0';
+        scratch->entries[count].size = S_ISDIR(st.st_mode) ? 0 : (uint64_t)st.st_size;
+        scratch->entries[count].fdate = fdate;
+        scratch->entries[count].ftime = ftime;
+        scratch->entries[count].attrib = attrib;
+        scratch->entries[count].is_dir = S_ISDIR(st.st_mode) != 0;
+        count++;
+    }
+
+    /* Detect an over-long directory so the user is told rather than misled. */
+    if (count == P4_CONFIG_DIR_SORT_ENTRY_MAX) {
+        entry = readdir(dir);
+        if (entry != NULL && strcmp(entry->d_name, ".") != 0 &&
+            strcmp(entry->d_name, "..") != 0) {
+            truncated = true;
+        }
+    }
+
+    closedir(dir);
+    *count_out = count;
+    *truncated_out = truncated;
+}
+
+/**
+ * List one directory, recursing when `/S` is active.
+ *
+ * @param dir_path Absolute VFS path.
+ * @param pattern  Wildcard filter, or NULL for everything.
+ * @param depth    Current recursion depth.
+ * @return false when the user aborted a paged listing.
+ */
+static bool shell_dir_list_one(const char *dir_path, const char *pattern, int depth, dir_ctx_t *ctx)
+{
+    /* Every sizeable local lives in one heap block. This function recurses
+     * once per directory level for /S, and the command worker task stack is
+     * shared with the whole dispatch path, so large stack locals here would
+     * overflow it well before the depth limit. */
+    struct dir_level_scratch *scratch = NULL;
+    size_t count = 0;
+    size_t index;
+    unsigned int local_files = 0;
+    unsigned int local_dirs = 0;
+    uint64_t local_bytes = 0;
+    size_t wide_column = 0;
+    bool truncated = false;
+    bool keep_going = true;
+
+    if (ctx->aborted || depth > P4_CONFIG_DIR_RECURSE_DEPTH_MAX) {
+        return !ctx->aborted;
+    }
+
+    /* ~40 KB per level: prefer PSRAM so the DMA-capable internal heap (which
+     * backs LVGL spans, WiFi/SDIO pools and the USB ring buffers) is left
+     * alone. NULL propagates to the error path below. */
+    scratch = p4heap_calloc_psram(1, sizeof(*scratch));
+    if (scratch == NULL) {
+        shell_transcript_append_text("dir: out of memory buffering the directory\n");
+        shell_record_errorf("dir", ESP_ERR_NO_MEM, "Out of memory buffering a directory level");
+        return false;
+    }
+
+    /* Backend split: FATFS (long names, 8.3 aliases, real attribute bits)
+     * for the SD card, VFS (names, sizes, dates, synthesized dir/readonly
+     * bits) for USB volumes. Sort/emit/page/recurse below stay shared. */
+    if (storage_volume_of_vfs_path(dir_path) == STORAGE_VOLUME_SD) {
+        shell_dir_collect_fatfs(scratch, dir_path, pattern, ctx, &count, &truncated);
+    } else {
+        shell_dir_collect_vfs(scratch, dir_path, pattern, ctx, &count, &truncated);
+    }
 
     if (ctx->sort_key != DIR_SORT_NONE || ctx->group_dirs_first) {
         s_dir_sort_ctx = ctx;
@@ -830,16 +991,22 @@ void shell_command_dir(int argc, char **argv)
         return;
     }
 
-    error = shell_sd_begin(&session);
-    if (error != ESP_OK) {
-        shell_print_error("dir: SD card not present - insert and retry");
-        return;
+    {
+        storage_volume_t vol = storage_volume_of_vfs_path(resolved_path);
+
+        error = storage_volume_session_begin(vol, &session);
+        if (error != ESP_OK) {
+            shell_print_error("dir: %s not present - insert and retry",
+                              storage_volume_media_name(vol));
+            return;
+        }
     }
 
     error = shell_sd_stat_path(resolved_path, &path_stat);
     if (error != ESP_OK) {
         shell_transcript_appendf("dir: path not found %s\n", resolved_path);
-        shell_sd_end(&session, "dir");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path),
+                                   &session, "dir");
         return;
     }
 
@@ -849,12 +1016,22 @@ void shell_command_dir(int argc, char **argv)
 
         shell_sd_format_size((uint64_t)path_stat.st_size, size_text, sizeof(size_text));
         shell_transcript_appendf("%s  %s\n", size_text, resolved_path);
-        shell_sd_end(&session, "dir");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path),
+                                   &session, "dir");
         return;
     }
 
     if (!ctx.bare) {
-        shell_transcript_appendf(" Volume in drive %s\n", P4_CONFIG_SD_DRIVE_LETTER);
+        if (storage_volume_of_vfs_path(resolved_path) == STORAGE_VOLUME_SD) {
+            shell_transcript_appendf(" Volume in drive %s\n", P4_CONFIG_SD_DRIVE_LETTER);
+        } else {
+            char drive[8];
+
+            snprintf(drive, sizeof(drive), "%c:",
+                     (char)toupper((unsigned char)storage_usb_drive_letter(
+                         (int)storage_volume_of_vfs_path(resolved_path) - (int)STORAGE_VOLUME_USB0)));
+            shell_transcript_appendf(" Volume in drive %s\n", drive);
+        }
     }
 
     (void)shell_dir_list_one(resolved_path, pattern, 0, &ctx);
@@ -873,15 +1050,107 @@ void shell_command_dir(int argc, char **argv)
             shell_transcript_appendf("%15u dir(s)\n", ctx.total_dirs);
         }
 
-        if (storage_get_space_info(&space) == ESP_OK) {
-            char free_text[24];
+        if (storage_volume_of_vfs_path(resolved_path) == STORAGE_VOLUME_SD) {
+            if (storage_get_space_info(&space) == ESP_OK) {
+                char free_text[24];
 
-            shell_sd_format_size(space.free_bytes, free_text, sizeof(free_text));
-            shell_transcript_appendf("%15s   %s free\n", "", free_text);
+                shell_sd_format_size(space.free_bytes, free_text, sizeof(free_text));
+                shell_transcript_appendf("%15s   %s free\n", "", free_text);
+            }
+        } else {
+            uint64_t free_bytes = 0;
+
+            if (storage_volume_free_bytes(resolved_path, &free_bytes) == ESP_OK) {
+                char free_text[24];
+
+                shell_sd_format_size(free_bytes, free_text, sizeof(free_text));
+                shell_transcript_appendf("%15s   %s free\n", "", free_text);
+            }
         }
     }
 
-    shell_sd_end(&session, "dir");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "dir");
+}
+
+/* ========================================================================
+ * FREE-SPACE TABLE (df)
+ * ========================================================================
+ * Unix `df` over the DOS drive model: one row per mounted volume (SD plus
+ * attached USB sticks), reusing storage_volume_space_info() (itself shared
+ * with the write prechecks) and the dir listing's size formatter. Unmounted
+ * USB slots are skipped silently; a volume whose query fails reports the
+ * error in its row instead of aborting the table.
+ */
+
+/** Print one df row. @return true when the volume read cleanly. */
+static bool shell_df_print_row(const char *label, const char *vfs_path)
+{
+    storage_space_info_t info;
+    char total_text[24];
+    char free_text[24];
+    char used_text[24];
+    unsigned pct = 0;
+
+    if (storage_volume_space_info(vfs_path, &info) != ESP_OK) {
+        shell_transcript_appendf_ansi(SH_LBL "%-4s" SH_RST " " SH_ERR "unreadable" SH_RST "\n",
+                                      label);
+        return false;
+    }
+    if (info.total_bytes > 0) {
+        pct = (unsigned)((info.used_bytes * 100u) / info.total_bytes);
+    }
+    shell_sd_format_size(info.total_bytes, total_text, sizeof(total_text));
+    shell_sd_format_size(info.free_bytes, free_text, sizeof(free_text));
+    shell_sd_format_size(info.used_bytes, used_text, sizeof(used_text));
+    shell_transcript_appendf_ansi(SH_LBL "%-4s" SH_RST " %9s total %9s free %9s used "
+                                  SH_NUM "%3u%%" SH_RST "\n",
+                                  label, total_text, free_text, used_text, pct);
+    return true;
+}
+
+int shell_command_df(int argc, char **argv)
+{
+    int ok = 0;
+    int total = 0;
+    int slot;
+
+    if (argc != 1) {
+        shell_print_usage("Usage: df");
+        (void)argv;
+        return 2;
+    }
+    shell_print_heading("Mounted volumes");
+    if (storage_sd_is_mounted()) {
+        total++;
+        ok += shell_df_print_row("sd:", NULL) ? 1 : 0;
+    }
+    for (slot = 0;
+         slot < (int)STORAGE_VOLUME_COUNT - (int)STORAGE_VOLUME_USB0;
+         slot++) {
+        if (!storage_usb_slot_mounted(slot)) {
+            continue;
+        }
+        {
+            char label[8];
+            char base[32];
+            char drive;
+
+            total++;
+            drive = storage_usb_drive_letter(slot);
+            if (drive != '\0') {
+                snprintf(label, sizeof(label), "%c:", (char)tolower((unsigned char)drive));
+            } else {
+                snprintf(label, sizeof(label), "usb%d", slot);
+            }
+            snprintf(base, sizeof(base), "/usb%d", slot);
+            ok += shell_df_print_row(label, base) ? 1 : 0;
+        }
+    }
+    if (total == 0) {
+        shell_print_muted("df: no volumes mounted");
+        return 1;
+    }
+    return (ok == total) ? 0 : 1;
 }
 
 /* ========================================================================
@@ -1111,22 +1380,27 @@ void shell_command_tree(int argc, char **argv)
         return;
     }
 
-    error = shell_sd_begin(&session);
-    if (error != ESP_OK) {
-        shell_print_error("tree: SD card not present - insert and retry");
-        return;
+    {
+        storage_volume_t vol = storage_volume_of_vfs_path(resolved);
+
+        error = storage_volume_session_begin(vol, &session);
+        if (error != ESP_OK) {
+            shell_print_error("tree: %s not present - insert and retry",
+                              storage_volume_media_name(vol));
+            return;
+        }
     }
 
     error = shell_sd_stat_path(resolved, &root_stat);
     if (error != ESP_OK) {
         shell_transcript_appendf("tree: path not found %s\n", resolved);
-        shell_sd_end(&session, "tree");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "tree");
         return;
     }
 
     if (!S_ISDIR(root_stat.st_mode)) {
         shell_transcript_appendf("tree: %s is not a directory\n", resolved);
-        shell_sd_end(&session, "tree");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "tree");
         return;
     }
 
@@ -1148,5 +1422,5 @@ void shell_command_tree(int argc, char **argv)
                                  ctx.dir_count == 1 ? "y" : "ies");
     }
 
-    shell_sd_end(&session, "tree");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "tree");
 }

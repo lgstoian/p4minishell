@@ -24,6 +24,7 @@
 #include "esp_hosted_api_types.h"
 #include "esp_hosted_host_fw_ver.h"
 #include "esp_http_client.h"
+#include "mbedtls/base64.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -358,10 +359,12 @@ static void networking_wifi_event_handler(void *arg, esp_event_base_t event_base
 
     /* Handle deferred portal stop: the HTTP handler task sets the flag; we
      * execute the actual teardown on the event-loop task so netif/wifi
-     * operations are serialised with other Wi-Fi state changes. */
+     * operations are serialised with other Wi-Fi state changes. A pending
+     * post-stop join (portal form submission) starts here, after teardown. */
     if (portal_should_stop()) {
         portal_stop();
     }
+    portal_connect_pending_after_stop();
 
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
@@ -682,6 +685,14 @@ static bool networking_wifi_begin_connect_request(const char *ssid, const char *
     (void)use_defaults;
     return false;
 #endif
+}
+
+bool networking_wifi_connect_to(const char *ssid, const char *password)
+{
+    if (ssid == NULL || ssid[0] == '\0') {
+        return false;
+    }
+    return networking_wifi_begin_connect_request(ssid, password, false);
 }
 
 static bool networking_wifi_begin_background_request(const networking_wifi_background_request_t *template_request)
@@ -2033,7 +2044,17 @@ void networking_http_result_free(networking_http_result_t *result)
     }
 }
 
-static esp_err_t networking_http_get_internal(const char *url, networking_http_result_t *result, bool quiet)
+static esp_err_t networking_http_request_internal(esp_http_client_method_t method,
+                                                  const char *url,
+                                                  const char *req_content_type,
+                                                  const uint8_t *req_body, size_t req_len,
+                                                  const char *depth,
+                                                  const char *auth_user, const char *auth_pass,
+                                                  const networking_http_header_t *extra_headers,
+                                                  size_t extra_header_count,
+                                                  bool accept_not_modified,
+                                                  networking_http_result_t *result,
+                                                  bool quiet, const char *tag)
 {
     esp_http_client_config_t http_config = { 0 };
     esp_http_client_handle_t client = NULL;
@@ -2045,8 +2066,16 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
     uint8_t probe;
     size_t total_read = 0;
     int chunk_read;
+    /* Basic-auth header material (user:pass base64). Callers bound the
+     * credential pair (CardDAV login fields); stack-sized. */
+    char auth_raw[192];
+    char auth_b64[256];
+    size_t auth_olen = 0;
 
-    if (url == NULL || url[0] == '\0' || result == NULL) {
+    if (url == NULL || url[0] == '\0' || result == NULL || tag == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (extra_headers != NULL && extra_header_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -2057,14 +2086,14 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
 
     if (!networking_http_url_is_supported(url)) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " unsupported URL scheme; use http:// or https://\n");
+            networking_appendf(SH_ERR "%s:" SH_RST " unsupported URL scheme; use http:// or https://\n", tag);
         }
         return ESP_ERR_INVALID_ARG;
     }
 
     if (!networking_wifi_is_connected()) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " no active connection; run " SH_CMD "wifi connect" SH_RST " first\n");
+            networking_appendf(SH_ERR "%s:" SH_RST " no active connection; run " SH_CMD "wifi connect" SH_RST " first\n", tag);
         }
         return ESP_ERR_INVALID_STATE;
     }
@@ -2094,32 +2123,106 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
     }
 
     if (!quiet) {
-        networking_appendf(SH_PROMPT "httpget:" SH_RST " downloading " SH_VAL "%s" SH_RST "\n", url);
+        networking_appendf(SH_PROMPT "%s:" SH_RST " downloading " SH_VAL "%s" SH_RST "\n", tag, url);
     }
 
     client = esp_http_client_init(&http_config);
     if (client == NULL) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " failed to allocate the HTTP client\n");
+            networking_appendf(SH_ERR "%s:" SH_RST " failed to allocate the HTTP client\n", tag);
         }
         return ESP_ERR_NO_MEM;
     }
 
-    error = esp_http_client_open(client, 0);
+    if (method != HTTP_METHOD_GET) {
+        esp_http_client_set_method(client, method);
+    }
+    if (req_content_type != NULL && req_content_type[0] != '\0') {
+        esp_http_client_set_header(client, "Content-Type", req_content_type);
+    }
+    if (depth != NULL && depth[0] != '\0') {
+        esp_http_client_set_header(client, "Depth", depth);
+    }
+    if (auth_user != NULL && auth_user[0] != '\0') {
+        snprintf(auth_raw, sizeof(auth_raw), "%s:%s", auth_user,
+                 auth_pass != NULL ? auth_pass : "");
+        if (mbedtls_base64_encode((unsigned char *)auth_b64, sizeof(auth_b64), &auth_olen,
+                                   (const unsigned char *)auth_raw,
+                                   strlen(auth_raw)) == 0) {
+            char auth_value[320];
+
+            snprintf(auth_value, sizeof(auth_value), "Basic %s", auth_b64);
+            esp_http_client_set_header(client, "Authorization", auth_value);
+        }
+        memset(auth_raw, 0, sizeof(auth_raw));
+        memset(auth_b64, 0, sizeof(auth_b64));
+    }
+
+    /* Caller-supplied request headers. Used for conditional GET
+     * (If-None-Match / If-Modified-Since) and Bearer authorization.
+     *
+     * Authorization is skipped here when Basic credentials were supplied
+     * above, so a caller cannot accidentally emit two Authorization
+     * headers; Basic wins and the caller sees the conflict as a bad feed
+     * rather than a silent header mix. Empty names/values are ignored. */
+    {
+        size_t i;
+
+        for (i = 0; i < extra_header_count; i++) {
+            const networking_http_header_t *h = &extra_headers[i];
+
+            if (h->name == NULL || h->name[0] == '\0' ||
+                h->value == NULL || h->value[0] == '\0') {
+                continue;
+            }
+            if (auth_user != NULL && auth_user[0] != '\0' &&
+                strcasecmp(h->name, "Authorization") == 0) {
+                continue;
+            }
+            esp_http_client_set_header(client, h->name, h->value);
+        }
+    }
+
+    error = esp_http_client_open(client, (int)req_len);
     if (error != ESP_OK) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " connection failed (" SH_ERR "%s" SH_RST
-                               ") - check the URL or Wi-Fi routing\n", esp_err_to_name(error));
+            networking_appendf(SH_ERR "%s:" SH_RST " connection failed (" SH_ERR "%s" SH_RST
+                               ") - check the URL or Wi-Fi routing\n", tag, esp_err_to_name(error));
         }
         goto cleanup;
+    }
+    if (req_body != NULL && req_len > 0) {
+        int written = esp_http_client_write(client, (const char *)req_body, (int)req_len);
+
+        if (written < 0 || (size_t)written != req_len) {
+            if (!quiet) {
+                networking_appendf(SH_ERR "%s:" SH_RST " request body send failed\n", tag);
+            }
+            error = ESP_FAIL;
+            goto cleanup;
+        }
     }
 
     remote_length = esp_http_client_fetch_headers(client);
     http_status = esp_http_client_get_status_code(client);
-    if (http_status < 200 || http_status >= 300) {
+    out->http_status = http_status;
+
+    /* 304 Not Modified is the success answer to a conditional GET: the
+     * caller's cached copy is current. It carries no body, so it must not
+     * fall through to the body-buffer path below. */
+    if (http_status == 304 && accept_not_modified) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " server returned HTTP status " SH_NUM "%d" SH_RST "\n",
-                               http_status);
+            networking_appendf(SH_MUTE "%s:" SH_RST " " SH_LBL "not modified" SH_RST " (HTTP 304)\n", tag);
+        }
+        error = ESP_OK;
+        goto cleanup;
+    }
+
+    /* 207 Multi-Status is the normal WebDAV PROPFIND answer. */
+    if ((http_status < 200 || http_status >= 300) && http_status != 207) {
+        if (!quiet) {
+            networking_appendf(SH_ERR "%s:" SH_RST " server returned HTTP status " SH_NUM "%d" SH_RST "\n",
+                               tag, http_status);
         }
         error = ESP_ERR_NOT_FOUND;
         goto cleanup;
@@ -2134,9 +2237,9 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
     }
     if (out->content_length > P4_CONFIG_HTTP_MAX_BODY_BYTES) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " response of " SH_NUM "%u" SH_RST
+            networking_appendf(SH_ERR "%s:" SH_RST " response of " SH_NUM "%u" SH_RST
                                " bytes exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
-                               (unsigned int)out->content_length, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+                               tag, (unsigned int)out->content_length, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
         }
         error = ESP_ERR_INVALID_SIZE;
         goto cleanup;
@@ -2147,7 +2250,7 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
     out->body = p4heap_alloc_psram(P4_CONFIG_HTTP_MAX_BODY_BYTES);
     if (out->body == NULL) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " out of memory buffering the response\n");
+            networking_appendf(SH_ERR "%s:" SH_RST " out of memory buffering the response\n", tag);
         }
         error = ESP_ERR_NO_MEM;
         goto cleanup;
@@ -2162,7 +2265,7 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
         chunk_read = esp_http_client_read(client, (char *)(out->body + total_read), (int)wanted);
         if (chunk_read < 0) {
             if (!quiet) {
-                networking_appendf(SH_ERR "httpget:" SH_RST " read failed mid-response\n");
+                networking_appendf(SH_ERR "%s:" SH_RST " read failed mid-response\n", tag);
             }
             error = ESP_FAIL;
             goto cleanup;
@@ -2179,18 +2282,18 @@ static esp_err_t networking_http_get_internal(const char *url, networking_http_r
     if (total_read == P4_CONFIG_HTTP_MAX_BODY_BYTES &&
         esp_http_client_read(client, (char *)&probe, 1) > 0) {
         if (!quiet) {
-            networking_appendf(SH_ERR "httpget:" SH_RST " response exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
-                               (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+            networking_appendf(SH_ERR "%s:" SH_RST " response exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
+                               tag, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
         }
         error = ESP_ERR_INVALID_SIZE;
         goto cleanup;
     }
 
     if (!quiet) {
-        networking_appendf(SH_OK "httpget:" SH_RST " " SH_LBL "status" SH_RST "=" SH_NUM "%d" SH_RST
+        networking_appendf(SH_OK "%s:" SH_RST " " SH_LBL "status" SH_RST "=" SH_NUM "%d" SH_RST
                            " " SH_LBL "type" SH_RST "=" SH_VAL "%s" SH_RST
                            " " SH_LBL "bytes" SH_RST "=" SH_NUM "%u" SH_RST "\n",
-                           http_status,
+                           tag, http_status,
                            out->content_type[0] != '\0' ? out->content_type : "n/a",
                            (unsigned int)total_read);
     }
@@ -2211,7 +2314,71 @@ cleanup:
 
 esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
 {
-    return networking_http_get_internal(url, result, false);
+    return networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
+                                            NULL, NULL, NULL, NULL, 0, false,
+                                            result, false, "httpget");
+}
+
+static esp_err_t networking_http_get_internal(const char *url, networking_http_result_t *result, bool quiet)
+{
+    return networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
+                                            NULL, NULL, NULL, NULL, 0, false,
+                                            result, quiet, "httpget");
+}
+
+/**
+ * General HTTP request for in-firmware clients (CardDAV PROPFIND/GET/PUT).
+ * Same TLS, timeout, redirect, body-cap, and User-Agent policy as the GET
+ * core; WebDAV 207 Multi-Status counts as success. Always quiet (no
+ * transcript chatter); the caller reports.
+ */
+esp_err_t networking_http_request(esp_http_client_method_t method, const char *url,
+                                  const char *req_content_type,
+                                  const uint8_t *req_body, size_t req_len,
+                                  const char *depth,
+                                  const char *auth_user, const char *auth_pass,
+                                  networking_http_result_t *result)
+{
+    return networking_http_request_internal(method, url, req_content_type,
+                                            req_body, req_len, depth,
+                                            auth_user, auth_pass,
+                                            NULL, 0, false,
+                                            result, true, "carddav");
+}
+
+esp_err_t networking_http_get_ex(const char *url,
+                                 const networking_http_header_t *headers,
+                                 size_t header_count,
+                                 const char *auth_user,
+                                 const char *auth_pass,
+                                 const char *bearer_token,
+                                 networking_http_result_t *result)
+{
+    networking_http_header_t stack_headers[NETWORKING_HTTP_MAX_EXTRA_HEADERS];
+    const networking_http_header_t *use = headers;
+    size_t use_count = header_count;
+
+    /* A bearer token rides as an Authorization header. When the caller did
+     * not reserve a slot for it, compose the array here (bounded, stack). */
+    if (bearer_token != NULL && bearer_token[0] != '\0') {
+        char token_value[NETWORKING_HTTP_BEARER_MAX_BYTES];
+
+        snprintf(token_value, sizeof(token_value), "Bearer %s", bearer_token);
+        if (header_count >= NETWORKING_HTTP_MAX_EXTRA_HEADERS) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (headers != NULL) {
+            memcpy(stack_headers, headers, header_count * sizeof(*headers));
+        }
+        stack_headers[header_count].name = "Authorization";
+        stack_headers[header_count].value = token_value;
+        use = stack_headers;
+        use_count = header_count + 1;
+    }
+    return networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
+                                            NULL, auth_user, auth_pass,
+                                            use, use_count, true,
+                                            result, true, "rss");
 }
 
 /** Skip leading spaces/tabs and a UTF-8 BOM. */
@@ -2557,7 +2724,16 @@ esp_err_t networking_handle_wifi_command(char *command)
 #if P4_CONFIG_PORTAL_ENABLE
     if (strutil_text_equals_ignore_case(argv[1], "setup")) {
         if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "on")) {
-            esp_err_t error = portal_start();
+            esp_err_t error;
+
+            /* Serialize against the background boot init: starting the AP
+             * mid-init races esp_wifi_init and fails or wedges. */
+            if (!wifi_try_claim_init_task()) {
+                networking_appendf("wifi: initialization is already in progress\n");
+                return ESP_ERR_INVALID_STATE;
+            }
+            error = portal_start();
+            wifi_release_init_task();
 
             if (error == ESP_OK) {
                 networking_appendf("@Gwifi:@R captive portal @Gactive@R — connect to "
@@ -2569,7 +2745,12 @@ esp_err_t networking_handle_wifi_command(char *command)
             return error;
         }
         if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "off")) {
+            if (!wifi_try_claim_init_task()) {
+                networking_appendf("wifi: initialization is already in progress\n");
+                return ESP_ERR_INVALID_STATE;
+            }
             portal_stop();
+            wifi_release_init_task();
             networking_appendf("@Gwifi:@R captive portal @Mstopped@R\n");
             return ESP_OK;
         }
@@ -3142,6 +3323,19 @@ static void wifi_release_init_task(void)
     wifi_lock();
     s_wifi_init_task_in_progress = false;
     wifi_unlock();
+}
+
+/* Public claim pair for higher layers that mutate netif/Wi-Fi state (the chat
+ * host AP). This module owns the flag; callers must not call esp_wifi_* or
+ * esp_netif_* themselves. */
+bool networking_wifi_try_claim_init_task(void)
+{
+    return wifi_try_claim_init_task();
+}
+
+void networking_wifi_release_init_task(void)
+{
+    wifi_release_init_task();
 }
 
 /* ========================================================================

@@ -4,11 +4,12 @@
  */
 /**
  * @file test_json.c
- * @brief Unit tests for the JSON validate/pretty core (json_commands.c).
+ * @brief Unit tests for the shared JSON reader (components/json).
  */
 
 #include "unity.h"
 #include "command.h"
+#include "json.h"
 #include <string.h>
 
 void test_json_validate_ok(void)

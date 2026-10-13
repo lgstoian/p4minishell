@@ -71,21 +71,31 @@ does not repeat them.
 `app_main()` brings subsystems up in a load-bearing order (from `main/main.c`):
 
 ```
-display_init ─▶ shell_init ─▶ command_init ─▶ shell_start_telemetry ("sheltlm")
-   │
-   ├─ native_apps_register, SD-first-mount callback, UI-rebuild callback
-   ├─ shell_uart_console_start ─▶ shell_build_ui (LVGL surface)
-   ├─ c6ota_init ─▶ led_init ─▶ audio_init
-   ├─ storage_sdmmc_host_preinit   (serialize SD slot0 + C6 slot1 host bring-up)
-   ├─ board_bsp_early_init / board_bsp_charge_enable   (gate C6/USB/charge rails)
-   ├─ usb_init (+ keyboard callback) ─▶ tab5kbd_init ─▶ imu_init ─▶ time_init
-   ├─ boot_run_startup: mount SD ─▶ ensure+apply CONFIG.SYS ─▶ run AUTOEXEC.BAT
-   ├─ font_restore_saved
-   ├─ networking_init   ◀── MUST run only AFTER the SD card is mounted
-   └─ led_notify(BOOT_OK) ─▶ header refresh timer
+shell_init ─▶ command_init ─▶ display_init ─▶ shell_start_telemetry ("sheltlm")
+    │
+    ├─ native_apps_register, SD-first-mount callback, UI-rebuild callback
+    ├─ shell_uart_console_start ─▶ shell_build_ui (LVGL surface)
+    ├─ c6ota_init ─▶ led_init ─▶ audio_init
+    ├─ storage_sdmmc_host_preinit   (serialize SD slot0 + C6 slot1 host bring-up)
+    ├─ board_bsp_early_init / board_bsp_charge_enable   (gate C6/USB/charge rails)
+    ├─ usb_init (+ keyboard callback) ─▶ tab5kbd_init ─▶ imu_init ─▶ time_init
+    ├─ boot_run_startup: mount SD ─▶ ensure+apply CONFIG.SYS ─▶ run AUTOEXEC.BAT
+    ├─ font_restore_saved
+    ├─ networking_init   ◀── MUST run only AFTER the SD card is mounted
+    ├─ portal autostart check (first-run SoftAP when SD-less and network-less)
+    └─ led_notify(BOOT_OK) ─▶ header refresh timer
 ```
 
-Two ordering constraints are non-obvious and must not be reordered:
+Three ordering constraints are non-obvious and must not be reordered:
+
+- **Shell/worker before display.** The 32 KiB command worker needs one
+  contiguous internal-RAM block, and display/LVGL bring-up fragments and eats
+  that heap first (Tab5 bricked deterministically: 95,943 free / 32,756
+  largest vs 32,768 needed — bugs.md F34). Neither depends on the display
+  (transcript memory is shell-owned, rendering lazy). Never move
+  `display_init()` above them, never shrink the worker without high-water
+  proof, never put the main worker on a PSRAM stack (it runs OTA flash
+  writes, during which PSRAM is inaccessible).
 
 - **SD before the C6 transport.** The card (slot 0) and the hosted C6 (slot 1)
   share the SDMMC controller and its DMA-capable internal buffers; bringing the
@@ -125,7 +135,9 @@ BLE HID keyboard   ─┼─▶ shell_usb_keyboard_input()  ─▶ shell input l
 Tab5Keyboard (I2C) ─┘
 
 serial console     ─▶ UART reader ─▶ prompt line, key-queue, or active modal hook
-touch (LVGL indev) ─▶ LVGL event callbacks (input line, modal surfaces, idle wake)
+touch (LVGL indev) ─▶ LVGL event callbacks (input line, modal surfaces, idle wake,
+                      transcript link hit-test → tap-confirm → worker async)
+HID mouse / serial sim ─▶ shared pointer indev ─▶ same tap path (cursor/click opt-in)
 ```
 
 An active modal surface (`components/modal/`) captures input through the
@@ -150,6 +162,7 @@ execution; LVGL owns rendering; everything else is a leaf task.
 |------|------|-----------|
 | LVGL port task | Rendering, LVGL event callbacks, timers | `esp_lvgl_port` (via `display_init`) |
 | `cmdw` (command worker) | Runs commands off the LVGL task | `components/command/command.c` |
+| `bg0`..`bgN` (pool workers) | Background jobs (`start`, services); PSRAM stacks, suspend/resume/nice via the task manager | `components/command/command.c` (`P4_CONFIG_BG_TASKS` slots, eager + lazy) |
 | `sheltlm` (pinned) | Header telemetry sampler (heap/CPU/battery) | `components/shell/shell.c` |
 | `alarm` | Alarm checker poll | `components/alarm/alarm.c` |
 | `netsvc` | MQTT session + outbox flush (lazy start on first `net` verb) | `components/networking/netsvc.c` |
@@ -255,6 +268,9 @@ module; this is just the index.
 | Path | Owner | Notes |
 |------|-------|-------|
 | `sd:/CONFIG.SYS`, `sd:/AUTOEXEC.BAT` | `components/boot` | Generated once if missing, then user-owned |
+| `sd:/SERVICES.INI` | `components/batch` (services) | Resident-service registry (`name.line/.restart/.auto`); supervisor restarts fire `tmgr_svc_restart` |
+| `sd:/ASSOC.INI` | `components/command` (assoc) | Extension→app pairs (`.ext=APP`); `open` dispatches before its viewer fallback |
+| `sd:/STARTUP.INI` | `components/command` + `components/boot` | One-shot boot apps (`name=1`, file order); run after AUTOEXEC.BAT + LAUNCH_APP, before services, unsupervised |
 | `sd:/WIFI.KNOWN` | `components/networking` | Known-network list |
 | `sd:/NET.INI`, `sd:/NET/OUTBOX/` | `components/networking` | MQTT broker coordinates (with credential) and the offline publish journal (atomic `.MSG` records, flushed oldest-first) |
 | `sd:/ALIASES.BAT`, `sd:/HISTORY.TXT`, `sd:/DEBUG.LOG` | `components/shell` / `components/command` | Aliases, recall history, debug log |

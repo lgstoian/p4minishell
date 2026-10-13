@@ -26,11 +26,14 @@ FILES
 -----
   COMPANION.BAT   entry point (main menu)
   LIB.BAT         shared routines (banner, settings load, pause)
-  SYS.BAT         live system dashboard (app mode)
+  SYS.BAT         live system dashboard (app mode) + services/packages views
   FILES.BAT       file tools + note pad (sd:/NOTES)
   NET.BAT         network tools
   FUN.BAT         demos and games
   SET.BAT         settings
+  SVC.BAT         resident-service demo (service install/start/stop)
+  AGENDA.BAT      agenda job (cal today/next + notify, alarm /run: target)
+  MEMLOG.BAT      bounded memory CSV logger (memlog mutex + tick event)
   ALIASES.BAT     optional aliases (alias /load ALIASES.BAT)
 
 NETWORK NOTE

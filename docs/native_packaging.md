@@ -32,11 +32,12 @@ its install-relative path and the `.APPINFO`/`.ASSETS` into `APPS/`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `title`, `description`, `version` | yes | As for batch apps |
+| `title`, `description`, `version` | yes | As for batch apps (`version` compares numerically for `outdated`/downgrade) |
 | `type` | no | `batch` (default when absent), `hybrid`, or `native`; anything else aborts `pkg install` loudly |
 | `abi` | hybrid/native | `applib-1`; must equal `P4_CONFIG_NATIVE_ABI` (mismatch warns at install, refuses at execution) |
 | `arch` | hybrid/native | `esp32p4` |
 | `entry` | hybrid/native | C entry name the shim/dispatcher invokes; hybrid bundles MUST set it |
+| `handles`, `setup`, `autostart`, `alias`, `data`, `requires`, `min_fw` | no | Registration keys, same as batch apps (see [`ABI.md`](../../ABI.md) §3) |
 
 ```ini
 title=Hello Native
@@ -50,10 +51,11 @@ entry=hello
 
 ## 3. Install / verify / remove semantics (v1.2)
 
-- `pkg install <app> [/signed]`: two-pass flow (verify-then-copy over
-  `shell_fs_copy_file`). Pass 1 checks CRCs **and** the manifest trust verdict
-  (see §4); a BAD signature aborts before any copy. Pass 2 copies payloads,
-  then metadata + manifest.
+- `pkg install <app> [/signed] [/force]`: version/dependency gates, then the
+  two-pass flow (verify-then-copy over `shell_fs_copy_file`). Pass 1 checks CRCs
+  **and** the manifest trust verdict (see §4); a BAD signature aborts before
+  any copy. Downgrades refuse without `/force`; `requires=`/`min_fw=` always
+  hold. Pass 2 copies payloads, then metadata + manifest.
   - `type=batch` installs as before.
   - `type=hybrid` requires `entry=`; install reports
     `pkg: <app> is hybrid (launch <app> runs <app>.BAT into <entry>)`.
@@ -62,7 +64,9 @@ entry=hello
   - Unknown `type=` aborts before any copy (ERRORLEVEL 1).
 - `pkg verify|check|info|list`: unchanged mechanics; `list`/`info` show the
   `type` and the `signed:` line; hybrid/native are flagged.
-- `pkg remove <app>`: trashes payloads + metadata like batch apps.
+- `pkg remove <app>`: trashes payloads + metadata like batch apps (app data
+  kept with a `purge` hint); `pkg purge <app>` removes those too; `pkg outdated`
+  flags staged newer bundles.
 - `launch`: discovers `*.bat`, so batch and hybrid apps appear; hybrid shims
   are tagged ` [hybrid]` in `/list` and the menu. Native-only entries are
   reached by name (dev/test) and are not offered by `launch`.

@@ -1,4 +1,4 @@
-# P4MiniShell
+﻿# P4MiniShell
 
 <img src="icon/icon-512.png" alt="P4MiniShell icon" width="220">
 
@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.3.1 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.3.1 Â· **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) Â· **Display:** JD9165 1024x600 MIPI-DSI Â· **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -81,14 +81,15 @@ the host regression runners are green. See
   dispatch, `NAME[i]` arrays, `%VAR:~%`/`%VAR:old=new%` string forms,
   `!VAR!` delayed expansion, `goto`,
   `call`/`gosub` (local and shared-library routines with `return`),
-  `on … goto|gosub` computed dispatch, `shift` (`/n` start index), `title`,
+  `on â€¦ goto|gosub` computed dispatch, `shift` (`/n` start index), `title`,
   DOS `echo.`/`echo/`/`echo(`/`echo:` forms, `for /f` with `eol=;` default,
   `alias`, `bind`, `macro`,
-  `start`/`taskkill` background jobs, `dialog`/`list`/`ask` modals,
-  declarative screens and multi-screen flows (`screen run` / `screen flow`,
-  see [batch.md](batch.md) §13), and `exit /b`.
+  `start`/`taskkill` background jobs, `suspend`/`resume`/`nice` pool control
+  with per-slot CPU%/memory and `tmgr_*` automation events, `dialog`/`list`/
+  `ask` modals, declarative screens and multi-screen flows (`screen run` /
+  `screen flow`, see [batch.md](batch.md) Â§13), and `exit /b`.
 - **Apps:** every app launches through a `*.bat` shim (pure batch, hybrid, or
-  native-linked — see [ABI.md](ABI.md)); PATH + `sd:/APPS` discovery with
+  native-linked â€” see [ABI.md](ABI.md)); PATH + `sd:/APPS` discovery with
   `APPINFO` metadata, `pkg` install/remove from CRC-checked and **ECDSA-signed**
   bundles (`pkg key`, `tools/pkg_sign.py`), asset manifests (`asset`), and the
   `applib` native-app runtime.
@@ -99,7 +100,7 @@ the host regression runners are green. See
   `plot` graphs, `font` registry with SD TTFs and CJK fallback, and UI themes.
 - **Connectivity:** hosted Wi-Fi (station + known-network list), BLE,
   `ping`/`dns`/`httpget`/`tcpterm`, `httpd` file server, `netstat`/`ipconfig`,
-  USB host (MSC, HID, CDC-ACM `usb userial`), and C6 OTA.
+  USB host (MSC, HID, CDC-ACM `usb userial`), **board-to-board `chat` over SoftAP + HTTP**, and C6 OTA.
 - **Hardware:** brightness/rotation, battery telemetry, audio (`beep`/`tone`/
   `wavplay`, output routing with headphone auto-mute on the Tab5, `mic`
   diagnostics + speaker self-test), WS2812
@@ -119,6 +120,16 @@ the host regression runners are green. See
   HTML reader page, or a paginated print layout) for sharing over `httpd`, and
   on-device reading/editing of `.html`/`.htm` (`view`/`open`/`type` render
   them; `edit` highlights the markup) alongside Markdown.
+- **EPUB Reader:** `epub open|read|next|prev|goto|toc` for `.epub` files â€”
+  ZIP-based EPUB archives with OPF/NCX/nav parsing, chapter rendering via
+  HTML-to-ANSI, spine/TOC navigation, and resource extraction.
+- **RSS / Atom / JSON Feed reader (`components/rss`):** `rss_parse()` handles
+  all three feed formats (XML through Expat, JSON Feed through the shared
+  `components/json` reader) and `rss_fetch()` performs conditional GET
+  (`If-None-Match` / `If-Modified-Since`) with Basic or Bearer auth through
+  `networking_http_get_ex()`, so an unchanged feed costs a 304 instead of a
+  re-download. Per-feed capacities live in `p4minishell_config.h`; poll
+  interval, retention and the rest are CONFIG.SYS tunables.
   Nothing above is turnkey: each SD payload must be pushed once (see
   [SD card layout](#4-sd-card-layout) and
   [Deploy the reference apps](#5-deploy-the-reference-apps)); missing pieces
@@ -133,12 +144,16 @@ the host regression runners are green. See
 
 Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
 `tcmd` (dual-pane commander), `snake`, `elite`, `adventure`, `notes`, `mood`,
-`gfxdemo` (`BOUNCE`, `GFXTOOL`, `PLOT`), `pics`, and `diag` (system health,
+`gfxdemo` (`BOUNCE`, `GFXTOOL`, `PLOT`), `pics`, `taskmgr` (batch task
+manager: pool jobs, priorities, services, events), and `diag` (system health,
 capability and frame-rate diagnostics).
 
 > **Build constraints.** The LVGL sample applications are excluded from the
-> build to fit the image budget. Wi-Fi is station-only (SoftAP is compiled
-> out). Logging is warn-level. ESP-Hosted resets the C6 on every host boot.
+> build to fit the image budget. SoftAP is compiled in for the captive portal
+> and board-to-board chat; default runtime is STA-only (opt-in APSTA via
+> `chat host on` / `wifi setup on`). EPUB support adds ZIP (zlib) + Expat
+> dependencies for EPUB parsing. Logging is warn-level. ESP-Hosted resets
+> the C6 on every host boot.
 
 ---
 
@@ -148,10 +163,10 @@ capability and frame-rate diagnostics).
 
 - [ESP-IDF **v5.5.5**](https://docs.espressif.com/projects/esp-idf/) and the
   `esp32p4` toolchain.
-- An ESP32-P4 board with a MIPI-DSI display and touch — the ESP32-P4 Function
+- An ESP32-P4 board with a MIPI-DSI display and touch â€” the ESP32-P4 Function
   EV Board / JC1060P470C (JD9165 1024x600 + GT911) is the reference, and the
   M5Stack Tab5 (ILI9881C/ST7123 720x1280, ES8388, Tab5Keyboard) is also
-  supported (`-DP4_BOARD=m5stack_tab5`, see [`PORTING.md`](PORTING.md) §6) — an
+  supported (`-DP4_BOARD=m5stack_tab5`, see [`PORTING.md`](PORTING.md) Â§6) â€” an
   ESP32-C6 co-processor on the SDIO link, and a FAT32 microSD card.
 - Python 3 with `pyserial` (and `opencv-python` for the camera diagnostics) to
   run the host tools.
@@ -252,10 +267,15 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
   `components/ansi/ansi_palette.h`.
 - Scrollback that jumps to the newest output; scroll by touch, the input-row
   `Up`/`Dn` buttons, USB keyboard `PageUp`/`PageDown`, or the mouse wheel.
+  USB/BLE mice also drive an opt-in pointer (`usb mouse cursor|click on`,
+  shared cursor, tap == touch tap; scroll works with everything off).
+  `usb mouse move <x> <y>` + `usb mouse click` simulate the same pointer over
+  serial. Tappable hyperlinks (`help` names, `complete` matches, `launch` menu
+  apps, `link` labels) preview on first tap and run on the second.
 - Command history (32 entries, Up/Down, `Ctrl+R` reverse search) saved to
   `HISTORY.TXT`; tab and ghost completion for commands, aliases, and paths;
   `history /save` `/load` `/search` `/clear`.
-- A configurable `prompt` template (`$p $g $t $d $v $n` …) driving both the
+- A configurable `prompt` template (`$p $g $t $d $v $n` â€¦) driving both the
   serial console and the on-screen input line, plus a `title` session title
   (also listed by `sysinfo`).
 - Serial bridge: `idf.py monitor` is an interactive shell endpoint.
@@ -264,11 +284,13 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 
 - DOS file verbs with wildcards, `dir /W /P /S /B /L /A /O`, `xcopy` (full DOS
   switch set), `attrib`, `label`, `tree`, `fc`, `comp`, `sort`, `find`,
-  `findstr`, `more`, `csv`, `json`, `markdown`.
+  `findstr`, `more`, `csv`, `json`, `markdown` â€” all volume-aware across SD
+  and USB MSC sticks (`usb:/`, `u:`/`v:`/`w:`/`x:`, `DEVICE=USB` automount).
 - Recycle bin: `del`/`rd /s` move to `.trash`; `undelete`/`trash restore`
   recover; `trash list|info|purge|empty` manage it.
-- `chkdsk`, `format` (exact confirmation word), and `disk list|detail|clean|
-  create partition|delete partition|format`.
+- `chkdsk`, `format` (exact confirmation word), `debug mem|peek|poke|disk`
+  (MS-DOS DEBUG parity), and `disk list|detail|clean|create partition|delete
+  partition|active|type|mbr|verify|geometry|image|format`.
 - Free-space prechecks on every write, self-copy protection, and atomic writes.
 
 ### Batch language (the app runtime)
@@ -291,30 +313,38 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 ### Apps and data
 
 - **Apps launch through a `.bat` shim** (pure batch, hybrid, or native-linked),
-  with Path/`APPS` discovery, `APPINFO` metadata, and the `launch` menu — see
+  with Path/`APPS` discovery, `APPINFO` metadata, and the `launch` menu â€” see
   [ABI.md](ABI.md).
 - **`pkg`** installs apps from CRC-checked `PKGS/<APP>/` bundles and verifies
   optional ECDSA P-256 signatures (`pkg install /signed`, `pkg key`, host
   signer `tools/pkg_sign.py`); **`asset`** verifies asset manifests; **`crc32`**
-  hashes files.
-- **`db`** — a Palm-OS-style record store (records, categories, secret fields,
+  hashes files. Installs enforce versions/dependencies (`/force` downgrades,
+  `requires=`/`min_fw=` gates); `pkg outdated` flags staged updates, `pkg
+  remove` keeps app data (with a hint), `pkg purge` deletes it.
+- **Apps register DOS-style, with no registry**: `assoc`/`ftype` map
+  extensions to apps (`open` dispatches), `startup` runs boot apps,
+  `launch <app> /setup` runs setup, and APPINFO `handles=`/`setup=`/
+  `autostart=`/`alias=`/`data=`/`requires=`/`min_fw=` keys declare it all.
+- **`db`** â€” a Palm-OS-style record store (records, categories, secret fields,
   `db /field:`/`/sort:`), with `export`/`import` to CSV/JSON/TXT/VCF/ICS and
   in-place record editing via `edit db <name> <id>` (CSV-safe, sync-stamp
   preserving).
-- **`pim`** — serial CardDAV-lite sync: `pim get`/`pim put` over PIMX framing
+- **`pim`** â€” serial CardDAV-lite sync: `pim get`/`pim put` over PIMX framing
   with uid/newer-wins merge, plus host-side `tools/pim_sync.py`
-  (`pull`/`push`/`sync` against a mirror directory).
-- **`sync`** — USB-sync handshake for the future P4Sync desktop app: one
-  read-only `sync.*` capability snapshot (see [roadmap.md](roadmap.md) §F).
-- **`alarm`/`cal`** — persisted events with recurrence and a background checker
+  (`pull`/`push`/`sync` against a mirror directory); `pim net pull|push|sync`
+  speaks HTTP CardDAV to a collection URL.
+- **`sync`** â€” USB-sync handshake for the future P4Sync desktop app: one
+  read-only `sync.*` capability snapshot (see [roadmap.md](roadmap.md) Â§F),
+  plus `tools/p4sync full-image` (handshake + PIM + files + apps + shot).
+- **`alarm`/`cal`** â€” persisted events with recurrence and a background checker
   that can run a `/run:` batch file; `edit alarm <id>` edits one event as
   INI text (sync identity preserved).
-- **`archive`/`backup`** — USTAR `.p4a` backups with CRC manifests.
-- **`gfind`** — Palm-style global find over `db` records + alarms, plus an
+- **`archive`/`backup`** â€” USTAR `.p4a` backups with CRC manifests.
+- **`gfind`** â€” Palm-style global find over `db` records + alarms, plus an
   opt-in `/files` scan of text files (one shared storage search core; no index,
   always live).
-- **`crypt`** — AES-256-GCM + PBKDF2 file encryption.
-- **Native app SDK (`applib`)** — transcript stdout (so `myapp > out.txt`
+- **`crypt`** â€” AES-256-GCM + PBKDF2 file encryption.
+- **Native app SDK (`applib`)** â€” transcript stdout (so `myapp > out.txt`
   works), PSRAM-aware allocation, time/input/state helpers, Wi-Fi accessors,
   message publish/subscribe (`applib_msg.h` over the event service),
   and the native-app ABI (`app_register`).
@@ -323,11 +353,11 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 
 - **`draw`** TUI verbs (box/line/fill/text/bar/table/list/window/cursor/hold/
   fullscreen) over an 80x25 cell grid that maps to the live transcript region.
-- **`gfx`** — an RGB565 canvas with pixel/line/rect/circle/polygon/fill/text,
+- **`gfx`** â€” an RGB565 canvas with pixel/line/rect/circle/polygon/fill/text,
   BMP load/save, 8 sprite slots (up to 64x64) for batch games with bulk
   `blitmany` formation stamps, and firmware-measured frame pacing
   (`gfx stats`: frames/min/avg/max/jitter/dropped/fps).
-- **`plot`** — world-coordinate graphs (`func`/`polar`/`para`/`data`/`bar`/
+- **`plot`** â€” world-coordinate graphs (`func`/`polar`/`para`/`data`/`bar`/
   `table`) sampling `calc` expressions onto the canvas or the TUI.
 - **`font`** registry (roles/sizes/fallbacks), SD TTF loading, CJK fallback,
   and **`theme`** (default/amber/ice/mono, live-switchable and persisted).
@@ -339,7 +369,7 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
   and rich `wifi status`, plus `ping`, `dns`, `httpget`, and `tcpterm`.
 - An SD **HTTP file server** (`httpd`), `netstat`, and `ipconfig`.
 - An MQTT **event service** (`net` verbs + `/onmsg` batch hook): one task
-  owns a persistent plaintext-LAN session with an SD outbox (offline
+  owns a persistent session (plain TCP, or TLS via `net tls on`) with an SD outbox (offline
   publishes flush on reconnect) and newer-wins `$pim/...` merges.
 - Hosted BLE (scan/advertise), USB host MSC/HID/CDC-ACM, and C6 OTA.
 - Brightness/rotation, battery, audio, status LED(s), GPIO/PWM/ADC/I2C, and
@@ -406,7 +436,7 @@ ESP-IDF v5.5.5. Full bring-up checklist in [`PORTING.md`](PORTING.md).
 | **RGB LED** | WS2812 status LED on GPIO26 | Two Tab5Keyboard RGB LEDs over I2C (`rgb 1\|2 ...`; LED1 = status, LED2 = user) |
 | **Hosted SDIO** | Slot 1, 40 MHz: CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 | Slot 1, **10 MHz**: CLK=12 CMD=13 D0=11 D1=10 D2=9 D3=8, reset GPIO15 (40 MHz crashes on assoc; first RPC retried once via transport reset) |
 | **Input** | USB HID + on-screen keyboard | + Tab5Keyboard module (STM32F030, EXT I2C 0x6D, INT GPIO50); OSK auto-hides for any physical keyboard |
-| **Sensors** | — | BMI270 IMU (`imu`, tilt auto-rotate, `IMU_*` vars); RX8130CE RTC; SC202CS MIPI-CSI camera (`camera init` + `camera snap <file.bmp>`, BMP stills only) |
+| **Sensors** | â€” | BMI270 IMU (`imu`, tilt auto-rotate, `IMU_*` vars); RX8130CE RTC; SC202CS MIPI-CSI camera (`camera init` + `camera snap <file.bmp>`, BMP stills only) |
 | **Power** | `shutdown` = deep sleep | `shutdown`/`poweroff` cuts the PMIC rail (PI4IOE5V6408 P4 latch) |
 | **Build it** | `idf.py -DP4_BOARD=jc1060p470c build` | `idf.py -DP4_BOARD=m5stack_tab5 build` (per-board `sdkconfig.<board>`, CI builds both) |
 
@@ -422,7 +452,7 @@ companion `p4minishell_config.yaml` documents each value (type, meaning,
 range). Edit the header, then keep the YAML in sync. Hardware pins and display
 timing live in `boards/<name>/board_config.h` / `.yaml` (default
 `boards/jc1060p470c/`, selected by `-DP4_BOARD=`); build options live in
-`sdkconfig` (generated — edit via `idf.py menuconfig`, the committed source
+`sdkconfig` (generated â€” edit via `idf.py menuconfig`, the committed source
 of truth is `sdkconfig.defaults`). Adding a board is documented in
 [`PORTING.md`](PORTING.md).
 
@@ -448,7 +478,7 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [tutorial_edit.md](tutorial_edit.md) | Complete `edit` editor guide |
 | [editor.md](editor.md) | `edit` quick reference |
 | [command.md](command.md) | Complete command reference |
-| [batch.md](batch.md) | Batch app language spec (loops, arrays, strings, game kit) — the single file for writing `.bat` apps |
+| [batch.md](batch.md) | Batch app language spec (loops, arrays, strings, game kit) â€” the single file for writing `.bat` apps |
 | [architecture.md](architecture.md) | System views: context, runtime flows, concurrency, memory, power/reset domains, persistence, board layer, ADRs |
 | [documentation.md](documentation.md) | Technical reference (per-module layout, boot sequence, data flow) |
 | [SDK.md](SDK.md) | Integration guide for extending the system |
@@ -509,3 +539,4 @@ P4MiniShell is released under the **MIT License**. See [LICENSE](LICENSE) and
 [licence.md](licence.md). Third-party components (ESP-IDF, LVGL, ESP-Hosted,
 FreeRTOS, lwIP, FatFs, mbedTLS, and others) remain under their own licenses;
 the full list and terms are in [licence.md](licence.md).
+

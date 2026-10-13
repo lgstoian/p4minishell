@@ -1,18 +1,18 @@
-# P4MiniShell Editor Guide
+﻿# P4MiniShell Editor Guide
 
 > **Looking for the full reference?** See
-> [tutorial_edit.md](tutorial_edit.md) — the complete tutorial covering every
+> [tutorial_edit.md](tutorial_edit.md) â€” the complete tutorial covering every
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v1.3.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.3.1):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
 > RGB565 canvas are sibling surfaces.
 
 The `edit` command opens a modal, touch-first text editor that can create and
-modify any text file on the SD card — batch scripts, `.txt`, `.sys`, config
+modify any text file on the SD card â€” batch scripts, `.txt`, `.sys`, config
 files, or any other extension. It is modelled on the classic DOS EDIT
 program: full-screen inline editing, a line-number gutter, a current-line
 highlight, text selection, cut/copy/paste, find and replace, and a status bar
@@ -50,18 +50,18 @@ the first frame; `abc` returns to the letters page for typing.
 | Action | Touch keyboard | USB keyboard | Serial console |
 |--------|----------------|--------------|----------------|
 | Type text | letter keys | letter keys | any line of text |
-| Move caret | tap the text | arrow keys | — |
-| Page up / down | `PgUp` / `PgDn` | `PageUp` / `PageDown` | — |
-| Start / end of line | `Home` / `End` | `Home` / `End` | — |
-| Start / end of file | — | `Ctrl+Home` / `Ctrl+End` | — |
-| Word left / right | — | `Ctrl+Left` / `Ctrl+Right` | — |
+| Move caret | tap the text | arrow keys | â€” |
+| Page up / down | `PgUp` / `PgDn` | `PageUp` / `PageDown` | â€” |
+| Start / end of line | `Home` / `End` | `Home` / `End` | â€” |
+| Start / end of file | â€” | `Ctrl+Home` / `Ctrl+End` | â€” |
+| Word left / right | â€” | `Ctrl+Left` / `Ctrl+Right` | â€” |
 | New line | `Enter` | `Enter` | any line of text |
-| Backspace | backspace key | `Backspace` | — |
-| Delete forward | `Del` | `Delete` | — |
-| Tab (to next stop) | `Tab` | `Tab` | — |
-| Insert / overwrite | `Ins` | `Insert` | — |
-| Delete whole line | — | `Ctrl+Y` | — |
-| Delete to end of line | — | `Ctrl+Shift+End` | — |
+| Backspace | backspace key | `Backspace` | â€” |
+| Delete forward | `Del` | `Delete` | â€” |
+| Tab (to next stop) | `Tab` | `Tab` | â€” |
+| Insert / overwrite | `Ins` | `Insert` | â€” |
+| Delete whole line | â€” | `Ctrl+Y` | â€” |
+| Delete to end of line | â€” | `Ctrl+Shift+End` | â€” |
 
 The status bar shows the file name, an asterisk when the file has unsaved
 changes, the cursor position (`Ln n, Col n`) and the current mode
@@ -84,10 +84,10 @@ line-ending style are preserved on save.
 | Action | Touch keyboard | USB keyboard |
 |--------|----------------|--------------|
 | Select | long-press then drag over the text | `Shift` + arrow keys |
-| Select all | — | `Ctrl+A` |
-| Copy | — | `Ctrl+C` |
-| Cut | — | `Ctrl+X` |
-| Paste | — | `Ctrl+V` |
+| Select all | â€” | `Ctrl+A` |
+| Copy | â€” | `Ctrl+C` |
+| Cut | â€” | `Ctrl+X` |
+| Paste | â€” | `Ctrl+V` |
 
 Selected text is highlighted with a background overlay. Copy and cut use the
 same RAM clipboard as the shell's `clip` / `paste` commands, so text you copy
@@ -102,9 +102,9 @@ The editor has DOS-EDIT style search built into the status bar:
 | Action | Touch keyboard | USB keyboard | Serial console |
 |--------|----------------|--------------|----------------|
 | Find | `Find` | `Ctrl+F` | `\f` |
-| Repeat find (next) | `Next` | `F3` | — |
-| Replace | `Rep` | `Ctrl+H` | — |
-| Go to line | `Goto` | `Ctrl+G` | — |
+| Repeat find (next) | `Next` | `F3` | â€” |
+| Replace | `Rep` | `Ctrl+H` | â€” |
+| Go to line | `Goto` | `Ctrl+G` | â€” |
 
 **Find**: press `Ctrl+F`, type the search text (it appears in the status bar
 with a trailing cursor), then press `Enter`. The caret jumps to the next
@@ -138,13 +138,17 @@ to that line. Invalid numbers clamp to the file's first/last line.
   current one, exactly like Save As); if the buffer has unsaved changes it first
   asks `Open without saving? (Y/N)`. A missing path opens a new empty buffer, so
   `Open` also creates files. A stale Save-As target never follows into the new
-  file.
+  file. When the cursor sits on a link â€” a markdown `[text](url)` URL
+  (highlighted bright cyan + underline, the `SH_LINK` style) or a bare URL/path
+  token â€” the prompt is pre-filled with the link target instead
+  (`editor_link_under_cursor()`), so `F4` on a link offers to follow it.
 - **Quit** discards the session. If you have unsaved changes the editor asks
-  `Quit without saving? (Y/N)` first — press `Y` to discard or `N` to keep
+  `Quit without saving? (Y/N)` first â€” press `Y` to discard or `N` to keep
   editing. This guards against losing work by accident.
 - A failed save reports `save failed` and your edits stay in memory so you
   can try again. Saves are atomic (temp file + rename): the original is left
-  untouched, so there is never a partial destination to remove.
+  untouched, so there is never a partial destination to remove. A backup of
+  the previous version is kept as `<file>.bak`.
 - **Autosave** spills a dirty buffer to `sd:/tmp/edit/` every
   `P4_CONFIG_EDITOR_AUTOSAVE_SECS` seconds (default 30, `0` disables). After a
   crash or a discarded quit, `recover` lists the crash files,
@@ -155,8 +159,8 @@ to that line. Invalid numbers clamp to the file's first/last line.
 
 | Action | Touch keyboard | USB keyboard | Serial console |
 |--------|----------------|--------------|----------------|
-| Undo | — | `Ctrl+Z` | `\u` |
-| Redo | — | `Ctrl+Shift+Z` | `\r` |
+| Undo | â€” | `Ctrl+Z` | `\u` |
+| Redo | â€” | `Ctrl+Shift+Z` | `\r` |
 
 The editor keeps `P4_CONFIG_EDITOR_UNDO_DEPTH` full-document snapshots per
 session, so undo works across line splits, pastes, replacements, and even
@@ -164,23 +168,26 @@ cross-line edits. Note that DOS EDIT had no undo; this is a bonus.
 
 ## Touch keyboard layout
 
-The on-screen keyboard has **six pages** — every editor feature is reachable
+The on-screen keyboard has **six pages** â€” every editor feature is reachable
 from the touch keyboard alone. The editor **opens on the Nav page**:
 
-1. **Letters** (default) — lowercase.
-2. **Uppercase** — `ABC`.
-3. **Numbers** — digits `0`–`9`.
-4. **Symbols** — every printable ASCII character including the shell-critical
+1. **Letters** (default) â€” lowercase.
+2. **Uppercase** â€” `ABC`.
+3. **Numbers** â€” digits `0`â€“`9`.
+4. **Symbols** â€” every printable ASCII character including the shell-critical
    `|`, `^`, `~`, and `` ` ``; its `Nav` button switches to the Nav page.
-5. **Nav** — the editor's control page, a uniform 4×6 grid: `Tab`, arrows,
+   When P4_CONFIG_GFX_FONT_EXTENDED=1 (default), the full CP437 range
+   0x80-0xFF is also available: box-drawing (┌┐└┘├┤┬┴┼), accented letters
+   (ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒ), and symbols (±×÷≈°∙√ⁿ²■).
+5. **Nav** â€” the editor's control page, a uniform 4Ã—6 grid: `Tab`, arrows,
    `Home`/`End`, `PgUp`/`PgDn`, `Del`, `Ins`, `Undo`, `Redo`, `Find`, `Next`
    (repeat find), `Replace`, `ReplAll`, `Case`, `Goto`, `Save`, `SaveAs`,
-   `Open`, `Edit` (→ the Edit page), and `abc` (→ letters).
-6. **Edit** — enter it with `Edit` on the Nav page, a 3×6 grid: `Copy`, `Cut`,
+   `Open`, `Edit` (â†’ the Edit page), and `abc` (â†’ letters).
+6. **Edit** â€” enter it with `Edit` on the Nav page, a 3Ã—6 grid: `Copy`, `Cut`,
    `Paste`, `SelAll`, `WordL`/`WordR` (word left/right), `DocTop`/`DocBot`
    (document home/end), `DelLine` (delete line), `DelEOL` (delete to end of
    line), `Reload`, `Quit`, `Preview`, `Comment`, `Match`, `Wrap`, `Focus`,
-   `Spell`, `Nav` (→ the Nav page), and `abc`.
+   `Spell`, `Nav` (â†’ the Nav page), and `abc`.
 
 Writerdeck additions: `Focus` toggles focus/typewriter mode (hides the header
 and keyboard, centres the caret) and `Spell` toggles spellcheck underlines from
@@ -225,7 +232,6 @@ verb controls the editor; any other line is typed as text followed by Enter:
 | `\spell-forget <word>` | Remove a learned word (base words stay) |
 | `\spell-ignore [word]` | Skip a word for this session only |
 | `\spell-list` | Show the user dictionary count |
-| `\spell` | Toggle spellcheck underlines (writerdeck) |
 
 ## Syntax highlighting
 
@@ -252,36 +258,36 @@ Files beyond the byte/line limits are refused with an error message rather
 than truncated, so a save can never silently corrupt them. The document and
 its caches are **PSRAM-backed** (the internal DMA heap is only used for a
 small SD bounce buffer), and only `P4_CONFIG_EDITOR_RENDER_ROWS` rows are
-materialized as LVGL spans at once — larger files scroll through a moving
+materialized as LVGL spans at once â€” larger files scroll through a moving
 window, so opening a big file stays responsive. Above the snapshot threshold
 undo is unavailable for the session (editing a large file would otherwise copy
 the whole document per keystroke); the byte budget bounds undo memory.
 
 ## Troubleshooting
 
-- **The shell looks empty after a session** — quitting always restores the
+- **The shell looks empty after a session** â€” quitting always restores the
   transcript and jumps it back to the newest output. If you had scrolled up,
   re-scroll with `Up`/`Dn` or press any command.
-- **`edit` reports "cannot load"** — the file is larger than the editor
+- **`edit` reports "cannot load"** â€” the file is larger than the editor
   limits, is not a regular file, or the SD card failed to read. Check the file
   size with `dir` and the card with `sd info`.
-- **A save reports `save failed`** — the destination was read-only, the card
+- **A save reports `save failed`** â€” the destination was read-only, the card
   is full, or the write was interrupted. The partial file is removed and your
   in-memory edits survive so you can save to a different path with Save As.
-- **Esc quits instead of asking** — Esc only asks for confirmation when the
+- **Esc quits instead of asking** â€” Esc only asks for confirmation when the
   document has unsaved changes; an unmodified document quits immediately.
 
 ## Implementation notes
 
 The editor lives in `components/editor/`:
 
-- `editor.c` — the byte-preserving document model (lines, cursor, selection,
+- `editor.c` â€” the byte-preserving document model (lines, cursor, selection,
   undo/redo, find/replace, SD load/save) and the worker-task session.
-- `editor_view.c` — the LVGL surface: a dedicated span group with syntax
+- `editor_view.c` â€” the LVGL surface: a dedicated span group with syntax
   colours, a block cursor with blink timer, a selection background overlay,
   and the inline status-bar prompt system used by Find/Replace/Go-to/Save-As
   and the quit confirmation.
-- `editor_view.h` — the view's public key/OSK/serial entry points.
+- `editor_view.h` â€” the view's public key/OSK/serial entry points.
 
 The editor reuses the transcript container as its surface
 (`windows_enter_editor_mode`), hides the shell's span group while it is open,
@@ -298,3 +304,4 @@ pattern used by `dialog`, `list`, and `ask`.
 > into the live transcript region (80x25) via
 > `windows_enter_tui_mode`/`windows_refresh_tui_surface`, and `draw fullscreen`/
 > `tui fullscreen` hide the header via `windows_set_fullscreen`.
+

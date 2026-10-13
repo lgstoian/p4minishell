@@ -193,6 +193,30 @@ void tui_exit_fullscreen(void);
 /** Report whether TUI is in fullscreen. */
 bool tui_is_fullscreen(void);
 
+/** Bound cell font info for `tui status` (0/-1 when inactive or unlaid-out).
+ *  Pure reads, headless-safe. */
+void tui_bound_cell_info(int *cell_w_out, int *cell_h_out, int *index_out);
+
+/** Self-test: every SH_BOX_* pairwise distinct and decoding to its spec
+ *  codepoint (catches the scrambled-double class). Returns failure count;
+ *  first failing macro name via @p fail_name_out (may be NULL).
+ *  Pure, headless-safe. */
+int tui_selftest_palette(const char **fail_name_out);
+
+/** Self-test: every box codepoint present in every committed cell font with
+ *  matching advance (no fallback substitution). Returns failure count.
+ *  Pure table reads (no display), headless-safe. */
+int tui_selftest_coverage(const char **fail_name_out);
+
+/** Self-test: bound font line heights match their cells. Returns failure
+ *  count. Pure, headless-safe. */
+int tui_selftest_metrics(const char **fail_name_out);
+
+/** Run all self-test groups in order, stopping at the first failing group.
+ *  Returns the failure count; first failing macro/stage name via
+ *  @p fail_name_out (may be NULL). Pure, headless-safe. */
+int tui_selftest_check(const char **fail_name_out);
+
 #ifdef __cplusplus
 }
 #endif

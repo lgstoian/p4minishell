@@ -276,6 +276,71 @@ void display_register_ui_rebuild_callback(void (*rebuild_fn)(void));
  */
 void display_schedule_ui_rebuild(void);
 
+/* ========================================================================
+ * MOUSE CURSOR + CLICK (USB/BLE HID boot-mouse reports)
+ * ========================================================================
+ * A shared LVGL pointer indev fed by the HID parsers (USB in usb.c, BLE in
+ * bluetooth.c) with native-panel deltas; LVGL applies the display-rotation
+ * transform itself, exactly like the touch controller (which stays native).
+ * Motion only tracks and clicks only press while their switches are on —
+ * both default off, so attached mice keep the historical scroll-only
+ * behavior until the user opts in (`usb mouse cursor|click on`). The click
+ * is a tap at the tracked position (modal buttons, lists, transcript
+ * anchors all behave like touch). The parsers own no state: everything
+ * lives here, so USB and BLE share one cursor, one position, one indev. */
+
+/** Track HID mouse motion with a visible cursor (default off). */
+esp_err_t display_mouse_cursor_enable(void);
+
+/** Stop tracking motion and hide the cursor. */
+esp_err_t display_mouse_cursor_disable(void);
+
+/** True while cursor tracking is on. */
+bool display_mouse_cursor_enabled(void);
+
+/** Deliver HID mouse button-1 presses as taps (default off). */
+esp_err_t display_mouse_click_enable(void);
+
+/** Stop delivering button presses (motion tracking is unaffected). */
+esp_err_t display_mouse_click_disable(void);
+
+/** True while button-1 presses are delivered as taps. */
+bool display_mouse_click_enabled(void);
+
+/**
+ * Feed one HID boot-mouse motion sample. Safe from any task context (USB
+ * module task, BLE task); the LVGL read callback consumes it under a
+ * spinlock. Ignored unless cursor or click tracking is on.
+ *
+ * @param dx       Signed X displacement in native panel pixels.
+ * @param dy       Signed Y displacement in native panel pixels.
+ * @param buttons  Button byte, bit 0 = left (only left clicks).
+ */
+void display_mouse_report(int dx, int dy, uint8_t buttons);
+
+/** Current cursor position in native panel pixels (for status lines). */
+void display_mouse_position(int32_t *x_out, int32_t *y_out);
+
+/**
+ * Place the shared cursor at an absolute native-panel position (clamped).
+ * Serial-harness cursor simulation (`usb mouse move`): the box follows via
+ * the same rotate transform as taps, so the cursor marks exactly where the
+ * next click lands on every rotation. Requires cursor tracking on.
+ * @return ESP_OK, ESP_ERR_INVALID_STATE when the cursor is off, or
+ *         ESP_ERR_TIMEOUT when the state lock is contended.
+ */
+esp_err_t display_mouse_place(int32_t x, int32_t y);
+
+/**
+ * Synthesize one click at the tracked position: press now, release after
+ * @p hold_ms (default 80, clamped to 2000) on the LVGL task, so the shared
+ * indev samples a real press. Requires click delivery on; refused while a
+ * physical button is already held (never steals a HID hold).
+ * @return ESP_OK, ESP_ERR_INVALID_STATE when click is off or a press is
+ *         already active, ESP_ERR_NO_MEM/ESP_ERR_TIMEOUT on failure.
+ */
+esp_err_t display_mouse_click_pulse(uint32_t hold_ms);
+
 #ifdef __cplusplus
 }
 #endif

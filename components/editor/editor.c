@@ -1285,6 +1285,106 @@ bool editor_doc_cursor_word(editor_doc_t *doc, char *buf, size_t size)
     return true;
 }
 
+/** True when @p ch may appear inside a link/path token under the cursor. */
+static bool editor_is_link_char(char ch)
+{
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+           (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.' ||
+           ch == '/' || ch == '\\' || ch == ':' || ch == '$' || ch == '%' ||
+           ch == '#' || ch == '?' || ch == '&' || ch == '=' || ch == '+' ||
+           ch == '~';
+}
+
+bool editor_link_under_cursor(editor_doc_t *doc, char *buf, size_t size)
+{
+    const char *text;
+    size_t len;
+    size_t col;
+    size_t start;
+    size_t end;
+    size_t i;
+
+    if (doc == NULL || buf == NULL || size == 0) {
+        return false;
+    }
+    buf[0] = '\0';
+    if (doc->cursor_row >= doc->line_count) {
+        return false;
+    }
+    text = doc->lines[doc->cursor_row].text;
+    len = doc->lines[doc->cursor_row].length;
+    if (text == NULL || len == 0) {
+        return false;
+    }
+    col = doc->cursor_col;
+    if (col > len) {
+        col = len;
+    }
+    /* Markdown `[text](url)`: cursor anywhere inside the construct yields
+     * the URL (same shape the lexer highlights cyan+underline). */
+    for (i = 0; i < len; i++) {
+        if (text[i] == '[') {
+            size_t t = i + 1;
+            size_t u;
+
+            while (t < len && text[t] != ']') {
+                t++;
+            }
+            if (t >= len || t + 1 >= len || text[t + 1] != '(') {
+                continue;
+            }
+            u = t + 2;
+            while (u < len && text[u] != ')') {
+                u++;
+            }
+            if (u >= len || u <= t + 2 || u - (t + 2) >= size) {
+                continue;
+            }
+            if (col >= i && col <= u) {
+                memcpy(buf, text + t + 2, u - (t + 2));
+                buf[u - (t + 2)] = '\0';
+                return true;
+            }
+        }
+    }
+    /* Bare token: expand over link characters, accept URLs and paths
+     * (something with a scheme, a slash, or a drive-ish colon). */
+    start = col;
+    if (start > len) {
+        start = len;
+    }
+    if (start < len && !editor_is_link_char(text[start]) && start > 0) {
+        start--;
+    }
+    end = start;
+    while (start > 0 && editor_is_link_char(text[start - 1])) {
+        start--;
+    }
+    while (end < len && editor_is_link_char(text[end])) {
+        end++;
+    }
+    if (start >= end || end - start + 1 > size) {
+        return false;
+    }
+    {
+        bool pathy = false;
+        size_t k;
+
+        for (k = start; k < end; k++) {
+            if (text[k] == '/' || text[k] == '\\' || text[k] == ':') {
+                pathy = true;
+                break;
+            }
+        }
+        if (!pathy) {
+            return false;
+        }
+        memcpy(buf, text + start, end - start);
+        buf[end - start] = '\0';
+    }
+    return true;
+}
+
 void editor_doc_cursor_doc_home(editor_doc_t *doc)
 {
     if (doc != NULL && doc->line_count > 0) {

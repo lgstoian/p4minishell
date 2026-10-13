@@ -25,6 +25,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 /* Shared SHELL_* compat aliases (moved here in v0.35.6). */
 /* Backward-compatibility aliases */
@@ -72,11 +73,22 @@ void shell_command_dir(int argc, char **argv);
 /** `tree` — single-level directory outline marking subdirectories with `+`. */
 void shell_command_tree(int argc, char **argv);
 
+/** `df` — free/total/used for every mounted volume (SD + USB sticks).
+ *  @return ERRORLEVEL (0 ok, 1 no volumes readable, 2 usage). */
+int shell_command_df(int argc, char **argv);
+
 /**
  * Format a FAT date/time pair as `YYYY-MM-DD HH:MM` (shared by `dir` in
  * storage_nav.c and find discovery output in storage_text.c).
  */
 void shell_dir_format_stamp(uint16_t fdate, uint16_t ftime, char *output, size_t output_size);
+
+/**
+ * Convert a POSIX timestamp to FAT date/time words (local time) for the VFS
+ * directory collector. Out-of-range stamps yield zeros (rendered blank).
+ * Pure, unit-tested.
+ */
+void shell_dir_time_to_fat(time_t mtime, uint16_t *fdate_out, uint16_t *ftime_out);
 
 /* ========================================================================
  * FILE MANIPULATION
@@ -141,6 +153,8 @@ void shell_command_attrib(int argc, char **argv);
 /** `label` — read or set the FATFS volume label. */
 void shell_command_label(int argc, char **argv);
 
+/** `vol` — show the FATFS volume label and serial number (DOS parity). */
+void shell_command_vol(void);
 /**
  * `xcopy` — copy a file, or a directory tree with the full DOS 6.x switch set.
  *

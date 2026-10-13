@@ -62,6 +62,49 @@ static struct {
     .lock = portMUX_INITIALIZER_UNLOCKED,
 };
 
+/* Shared HID pointer state (USB/BLE parsers forward samples; the LVGL
+ * read callback consumes them). Defined early so display_deinit() can tear
+ * the indev down; functions live in the MOUSE section at the end.
+ *
+ * x/y/pressed are guarded by a BLOCKING mutex, never a spinlock: the LVGL
+ * read timer samples them forever, so a portENTER_CRITICAL here deadlocks
+ * the moment the worker and the LVGL task overlap on one core (the spinner
+ * disables that core's interrupts, freezing the holder). The plain bool
+ * switches are single-instruction atomic on this platform and need no
+ * lock. */
+static struct {
+    bool cursor_enabled;
+    bool click_enabled;
+    int32_t x;
+    int32_t y;
+    bool pressed;          /* button-1 currently down */
+    lv_indev_t *indev;
+    lv_obj_t *cursor_obj;
+} s_mouse = {
+    .cursor_enabled = false,
+    .click_enabled = false,
+    .x = 0,
+    .y = 0,
+    .pressed = false,
+    .indev = NULL,
+    .cursor_obj = NULL,
+};
+
+/** Blocking guard for s_mouse.x/y/pressed (created lazily, like s_bg_lock:
+ *  a creation race leaks one mutex at most and never corrupts state). */
+static SemaphoreHandle_t s_mouse_mutex = NULL;
+
+/** At most one cursor-move async outstanding (plain bool: set on driver
+ *  tasks, cleared on the LVGL task; a duplicate move is harmless). */
+static bool s_mouse_move_pending = false;
+
+static void display_mouse_lock_init(void)
+{
+    if (s_mouse_mutex == NULL) {
+        s_mouse_mutex = xSemaphoreCreateMutex();
+    }
+}
+
 /* ========================================================================
  * FORWARD DECLARATIONS
  * ======================================================================== */
@@ -69,6 +112,7 @@ static struct {
 static esp_err_t display_acquire_touch_handle(void);
 static void display_update_touch_rotation(display_rotation_t rotation);
 static void display_async_rebuild_ui(void *user_data);
+static esp_err_t display_mouse_indev_sync(bool want);
 
 /* ========================================================================
  * ROTATION CONVERSION HELPERS
@@ -746,6 +790,19 @@ esp_err_t display_init(void)
 
 void display_deinit(void)
 {
+    /* Park the mouse indev first (port lock outer, same order as the
+     * enable path): the NULL below must never strand an ENABLED indev
+     * against a dead display handle. Flags clear even if the port lock
+     * fails — a surviving indev then reports RELEASED forever (harmless). */
+    if (lvgl_port_lock(0)) {
+        display_mouse_indev_sync(false);
+        lvgl_port_unlock();
+    }
+    s_mouse.cursor_enabled = false;
+    s_mouse.click_enabled = false;
+    s_mouse.pressed = false;
+    s_mouse.x = 0;
+    s_mouse.y = 0;
     portENTER_CRITICAL(&s_display.lock);
     s_display.initialized = false;
     s_display.lvgl_display = NULL;
@@ -824,4 +881,395 @@ void display_schedule_ui_rebuild(void)
         (void)lv_async_call(display_async_rebuild_ui, NULL);
         lvgl_port_unlock();
     }
+}
+
+/* ========================================================================
+ * MOUSE CURSOR + CLICK
+ * ========================================================================
+ * One shared LVGL pointer indev fed by the USB/BLE HID boot-mouse parsers
+ * with native-panel deltas (LVGL rotates pointer coordinates itself, like
+ * touch). State lives here alone; the parsers only forward samples, so USB
+ * and BLE share one cursor. The read callback runs on the LVGL task, the
+ * report path on driver tasks — a blocking mutex guards x/y/pressed (a
+ * spinlock deadlocks the moment both sides overlap on one core, measured
+ * as a task-watchdog abort). The plain bool switches are atomic on this
+ * platform and need no lock. Indev and cursor object lifecycle runs under
+ * the LVGL port mutex on the enable/disable (worker-task) side only. */
+
+/** LVGL-task read callback: report the tracked point, pressed only while
+ *  click delivery is on (a disabled click releases mid-press cleanly).
+ *  Non-blocking take: on the rare contention it replays the previous
+ *  sample instead of stalling the render task. */
+static void display_mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    static int32_t last_x = 0;
+    static int32_t last_y = 0;
+    static bool last_pressed = false;
+
+    (void)indev;
+    if (s_mouse_mutex != NULL &&
+        xSemaphoreTake(s_mouse_mutex, 0) == pdTRUE) {
+        last_x = s_mouse.x;
+        last_y = s_mouse.y;
+        last_pressed = s_mouse.pressed && s_mouse.click_enabled;
+        xSemaphoreGive(s_mouse_mutex);
+    }
+    data->point.x = last_x;
+    data->point.y = last_y;
+    data->state = last_pressed ? LV_INDEV_STATE_PRESSED :
+                                 LV_INDEV_STATE_RELEASED;
+}
+
+/** Async cursor-box mover (runs on the LVGL task): places the shared box
+ *  at the tracked native point using LVGL's own rotate transform — the same
+ *  mapping the indev path applies to taps, so cursor and click agree on
+ *  every rotation. */
+static void display_mouse_move_cb(void *user_data)
+{
+    lv_display_t *disp;
+    int32_t x;
+    int32_t y;
+    lv_point_t point;
+
+    (void)user_data;
+    s_mouse_move_pending = false;
+    if (s_mouse.cursor_obj == NULL) {
+        return;
+    }
+    disp = lv_display_get_default();
+    if (disp == NULL) {
+        return;
+    }
+    display_mouse_lock_init();
+    if (s_mouse_mutex != NULL &&
+        xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        x = s_mouse.x;
+        y = s_mouse.y;
+        xSemaphoreGive(s_mouse_mutex);
+    } else {
+        return;
+    }
+    point.x = x;
+    point.y = y;
+    lv_display_rotate_point(disp, &point);
+    lv_obj_set_pos(s_mouse.cursor_obj, point.x, point.y);
+}
+
+/** Queue one cursor move (coalesced: at most one pending async). */
+static void display_mouse_move_async(void)
+{
+    if (s_mouse_move_pending) {
+        return;
+    }
+    s_mouse_move_pending = true;
+    if (lv_async_call(display_mouse_move_cb, NULL) != LV_RESULT_OK) {
+        s_mouse_move_pending = false;
+    }
+}
+
+/** Place the cursor box now (caller holds the port mutex). */
+static void display_mouse_place_now(void)
+{
+    lv_display_t *disp = s_display.lvgl_display;
+    lv_point_t point;
+    int32_t x;
+    int32_t y;
+
+    if (s_mouse.cursor_obj == NULL || disp == NULL) {
+        return;
+    }
+    display_mouse_lock_init();
+    if (s_mouse_mutex == NULL ||
+        xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return;
+    }
+    x = s_mouse.x;
+    y = s_mouse.y;
+    xSemaphoreGive(s_mouse_mutex);
+    point.x = x;
+    point.y = y;
+    lv_display_rotate_point(disp, &point);
+    lv_obj_set_pos(s_mouse.cursor_obj, point.x, point.y);
+}
+
+/** Create the indev (plus cursor box) when the first switch turns on;
+ *  park both when the last turns off. Nothing is ever deleted and the
+ *  indev cursor API is never used: the box is shown/hidden and moved
+ *  explicitly, so no LVGL-internal cursor reference can dangle. One
+ *  handle + one box for the boot lifetime. Caller holds the port mutex. */
+static esp_err_t display_mouse_indev_sync(bool want)
+{
+    if (want) {
+        if (s_display.lvgl_display == NULL) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (s_mouse.indev == NULL) {
+            s_mouse.indev = lv_indev_create();
+            if (s_mouse.indev == NULL) {
+                return ESP_ERR_NO_MEM;
+            }
+            lv_indev_set_type(s_mouse.indev, LV_INDEV_TYPE_POINTER);
+            lv_indev_set_read_cb(s_mouse.indev, display_mouse_read_cb);
+            lv_indev_set_display(s_mouse.indev, s_display.lvgl_display);
+        }
+        lv_indev_enable(s_mouse.indev, true);
+        if (s_mouse.cursor_enabled) {
+            if (s_mouse.cursor_obj == NULL) {
+                /* Small hollow square on the top layer (survives screen
+                 * rebuilds, invisible to screenshots which snapshot the
+                 * active screen only). Never clickable: it must not eat
+                 * the taps it visualizes. */
+                s_mouse.cursor_obj = lv_obj_create(lv_layer_top());
+                if (s_mouse.cursor_obj == NULL) {
+                    return ESP_ERR_NO_MEM;
+                }
+                lv_obj_set_size(s_mouse.cursor_obj,
+                                (int32_t)P4_CONFIG_MOUSE_CURSOR_PX,
+                                (int32_t)P4_CONFIG_MOUSE_CURSOR_PX);
+                lv_obj_set_style_bg_opa(s_mouse.cursor_obj, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_border_width(s_mouse.cursor_obj, 2, 0);
+                lv_obj_set_style_border_color(s_mouse.cursor_obj,
+                                              lv_color_white(), 0);
+                lv_obj_add_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_FLOATING);
+                lv_obj_remove_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_CLICKABLE);
+            }
+            lv_obj_remove_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+            display_mouse_place_now();
+        } else if (s_mouse.cursor_obj != NULL) {
+            lv_obj_add_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+        }
+        return ESP_OK;
+    }
+    if (s_mouse.indev != NULL) {
+        lv_indev_enable(s_mouse.indev, false);
+    }
+    if (s_mouse.cursor_obj != NULL) {
+        lv_obj_add_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+    }
+    return ESP_OK;
+}
+
+/** Flip one switch and reconcile the indev lifecycle. */
+static esp_err_t display_mouse_set(bool *flag, bool want)
+{
+    bool need;
+    bool have_display;
+    esp_err_t rc = ESP_OK;
+
+    *flag = want;
+    /* Center on first enable so the cursor never starts in a corner. */
+    if (want) {
+        display_resolution_t native = display_get_native_resolution();
+
+        display_mouse_lock_init();
+        if (s_mouse_mutex != NULL &&
+            xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (s_mouse.x == 0 && s_mouse.y == 0) {
+                s_mouse.x = native.native_width / 2;
+                s_mouse.y = native.native_height / 2;
+            }
+            xSemaphoreGive(s_mouse_mutex);
+        }
+    }
+    /* The flag above is already flipped, so either switch on keeps it. */
+    need = s_mouse.cursor_enabled || s_mouse.click_enabled;
+    portENTER_CRITICAL(&s_display.lock);
+    have_display = (s_display.lvgl_display != NULL);
+    portEXIT_CRITICAL(&s_display.lock);
+    /* indev create/delete touches LVGL: port mutex, recursive-safe. */
+    if (!lvgl_port_lock(0)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (need && !have_display) {
+        /* Roll the switch back: without a display there is nothing to
+         * drive, and a half-on state would confuse the status line. */
+        *flag = false;
+        lvgl_port_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    rc = display_mouse_indev_sync(need);
+    lvgl_port_unlock();
+    return rc;
+}
+
+
+
+esp_err_t display_mouse_cursor_enable(void)
+{
+    return display_mouse_set(&s_mouse.cursor_enabled, true);
+}
+
+esp_err_t display_mouse_cursor_disable(void)
+{
+    return display_mouse_set(&s_mouse.cursor_enabled, false);
+}
+
+bool display_mouse_cursor_enabled(void)
+{
+    /* Plain bool store: single-instruction atomic on this platform. */
+    return s_mouse.cursor_enabled;
+}
+
+esp_err_t display_mouse_click_enable(void)
+{
+    return display_mouse_set(&s_mouse.click_enabled, true);
+}
+
+esp_err_t display_mouse_click_disable(void)
+{
+    return display_mouse_set(&s_mouse.click_enabled, false);
+}
+
+bool display_mouse_click_enabled(void)
+{
+    /* Plain bool store: single-instruction atomic on this platform. */
+    return s_mouse.click_enabled;
+}
+
+void display_mouse_report(int dx, int dy, uint8_t buttons)
+{
+    display_resolution_t native;
+
+    if (!s_mouse.cursor_enabled && !s_mouse.click_enabled) {
+        return;
+    }
+    native = display_get_native_resolution();
+    display_mouse_lock_init();
+    /* Bounded take: a dropped motion sample is invisible, a blocked
+     * driver task is not. */
+    if (s_mouse_mutex == NULL ||
+        xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return;
+    }
+    s_mouse.x += (int32_t)dx;
+    if (s_mouse.x < 0) {
+        s_mouse.x = 0;
+    } else if (s_mouse.x >= native.native_width) {
+        s_mouse.x = native.native_width - 1;
+    }
+    s_mouse.y += (int32_t)dy;
+    if (s_mouse.y < 0) {
+        s_mouse.y = 0;
+    } else if (s_mouse.y >= native.native_height) {
+        s_mouse.y = native.native_height - 1;
+    }
+    s_mouse.pressed = (buttons & 0x01u) != 0;
+    xSemaphoreGive(s_mouse_mutex);
+    /* The box follows motion reports; without a mouse nothing moves and
+     * nothing is scheduled. */
+    if (s_mouse.cursor_enabled) {
+        display_mouse_move_async();
+    }
+}
+
+void display_mouse_position(int32_t *x_out, int32_t *y_out)
+{
+    /* Status-line snapshot: word-tearing across an update is harmless
+     * here, so plain reads (no mutex wait on a query path). */
+    if (x_out != NULL) {
+        *x_out = s_mouse.x;
+    }
+    if (y_out != NULL) {
+        *y_out = s_mouse.y;
+    }
+}
+
+/** LVGL-task release for display_mouse_click_pulse (one-shot timer). */
+static void display_mouse_release_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    display_mouse_lock_init();
+    if (s_mouse_mutex != NULL &&
+        xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_mouse.pressed = false;
+        xSemaphoreGive(s_mouse_mutex);
+    }
+}
+
+esp_err_t display_mouse_place(int32_t x, int32_t y)
+{
+    display_resolution_t native;
+
+    /* The box is the point: placing an invisible, undelivered cursor would
+     * lie to the next click, so placement needs the cursor switch on. */
+    if (!s_mouse.cursor_enabled) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    native = display_get_native_resolution();
+    display_mouse_lock_init();
+    if (s_mouse_mutex == NULL ||
+        xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (x < 0) {
+        x = 0;
+    } else if (x >= native.native_width) {
+        x = native.native_width - 1;
+    }
+    if (y < 0) {
+        y = 0;
+    } else if (y >= native.native_height) {
+        y = native.native_height - 1;
+    }
+    s_mouse.x = x;
+    s_mouse.y = y;
+    xSemaphoreGive(s_mouse_mutex);
+    display_mouse_move_async();
+    return ESP_OK;
+}
+
+esp_err_t display_mouse_click_pulse(uint32_t hold_ms)
+{
+    lv_timer_t *release;
+    bool busy = false;
+
+    /* Click delivery owns the press state; pulsing while a real HID button
+     * is held would steal (and early-release) that hold. */
+    if (!s_mouse.click_enabled) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (hold_ms == 0) {
+        hold_ms = 80;
+    } else if (hold_ms > 2000) {
+        hold_ms = 2000;
+    }
+    display_mouse_lock_init();
+    if (s_mouse_mutex == NULL ||
+        xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    busy = s_mouse.pressed;
+    if (!busy) {
+        s_mouse.pressed = true;
+    }
+    xSemaphoreGive(s_mouse_mutex);
+    if (busy) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* One-shot release on the LVGL task: the indev read callback samples
+     * pressed at the render rate, so the hold must outlive at least one
+     * sample. Timer auto-deletes after firing (repeat count 1). */
+    if (!lvgl_port_lock(0)) {
+        display_mouse_lock_init();
+        if (s_mouse_mutex != NULL &&
+            xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_mouse.pressed = false;
+            xSemaphoreGive(s_mouse_mutex);
+        }
+        return ESP_ERR_INVALID_STATE;
+    }
+    release = lv_timer_create(display_mouse_release_cb, hold_ms, NULL);
+    if (release == NULL) {
+        lvgl_port_unlock();
+        display_mouse_lock_init();
+        if (s_mouse_mutex != NULL &&
+            xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_mouse.pressed = false;
+            xSemaphoreGive(s_mouse_mutex);
+        }
+        return ESP_ERR_NO_MEM;
+    }
+    lv_timer_set_repeat_count(release, 1);
+    lvgl_port_unlock();
+    return ESP_OK;
 }

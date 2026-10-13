@@ -184,6 +184,24 @@ typedef struct {
      *  surfaces. Called before modal_handle_serial_line; return true when the
      *  line was fully handled (the modal then never sees it). */
     bool (*modal_console_command)(const char *line);
+
+    /** Read raw SD sectors for `debug disk` (sector 0 is the MBR).
+     *  Implemented in the storage module; registered by command_init().
+     *  NULL-checked: without registration the verb reports unavailable. */
+    esp_err_t (*debug_read_sectors)(uint32_t start_lba, uint8_t *buffer,
+                                    uint32_t sector_count);
+
+    /** Show an in-memory hexdump modal for `debug mem` / `debug disk`.
+     *  @p base_addr is printed for bytes[0] (a RAM address or disk LBA
+     *  base). NULL-checked like the other hooks. */
+    int (*debug_show_hexview)(const char *title, const uint8_t *bytes,
+                              size_t len, uint32_t base_addr);
+
+    /** YES-gated destructive confirmation for `debug poke`, with the same
+     *  batch/headless refusal contract as the storage gate. */
+    bool (*debug_confirm_destructive)(const char *operation,
+                                      const char *warning,
+                                      const char *detail);
 } shell_command_ops_t;
 
 /**
@@ -379,6 +397,11 @@ void shell_redirect_capture_reset(void);
 /** Report whether the capture hit its size cap (some output was dropped). */
 bool shell_redirect_capture_was_truncated(void);
 
+/** True while an output-redirection (or pipe-stage) capture owns stdout.
+ *  Commands consult this to skip human framing (headers, summaries) from
+ *  redirected output so `cmd > file` stays machine-readable. */
+bool shell_redirect_capture_active(void);
+
 /* ========================================================================
  * COMMAND HISTORY
  * ======================================================================== */
@@ -555,6 +578,63 @@ void shell_transcript_clear_click_regions(void);
  * @return true if a region was hit.
  */
 bool shell_transcript_hit_test(int x, int y, const char **action_out);
+
+/* ========================================================================
+ * HYPERLINKS (tap-confirm, OSC 8 + SH_LINK)
+ * ========================================================================
+ * Hyperlinks share the click-region table with `anchor` but render through
+ * the dedicated SH_LINK style (bright cyan + underline) wrapped in an OSC 8
+ * sequence, so capable serial terminals show a native hyperlink while the
+ * LVGL transcript and plain buffers only ever see the label (every ANSI
+ * parser drops OSC bytes). Taps never run a link directly: the first tap
+ * previews the exact target, the second tap on the same target executes it
+ * on the command worker. `anchor` regions keep their immediate-run
+ * contract; only link regions are confirm-gated.
+ */
+
+/** Register a confirm-gated link region (no output of its own). */
+void shell_link_register(const char *label, const char *command);
+
+/** Print a hyperlink label and register its tap region (one call). */
+void shell_transcript_append_link(const char *label, const char *command);
+
+/** Number of active link/anchor regions (for `link list` / `ui links`). */
+int shell_link_count(void);
+
+/** Read back an active region by (dense) index. */
+bool shell_link_get(int index, const char **label_out, const char **command_out);
+
+/** Read back whether a region is tap-confirm gated (links) or immediate. */
+bool shell_link_gate_get(int index, bool *confirm_out);
+
+/**
+ * Hit-test with label + gate: like shell_transcript_hit_test, but also
+ * reports the visible label and whether the region is tap-confirm gated.
+ */
+bool shell_link_hit_test(int x, int y, const char **action_out,
+                         const char **label_out, bool *confirm_out);
+
+/**
+ * Tap-confirm driver: first tap arms the preview, second tap on the same
+ * command executes it via execute_command_async.
+ * @return true when the command was executed (second tap).
+ */
+bool shell_link_tap_command(const char *command, const char *label);
+
+/** Drop any armed tap-confirm preview. */
+void shell_link_clear_pending(void);
+
+/**
+ * Fire a region: confirm-gated links go through the tap-confirm driver,
+ * immediate (`anchor`) regions echo + queue the command for the worker.
+ * Safe from any task (LVGL tap, worker `ui link`/`link open` paths share it).
+ * @return true when a command was queued or executed.
+ */
+bool shell_link_fire(const char *command, const char *label, bool confirm);
+
+/** Read back the armed preview (for `ui state`); false when none armed. */
+bool shell_link_pending_get(char *command_out, size_t command_size,
+                            char *label_out, size_t label_size);
 
 /* ========================================================================
  * INTERACTIVE KEYPRESS WAIT
@@ -751,8 +831,44 @@ size_t shell_debug_get_count(void);
  *  layer, mirroring shell_history_save_lines). */
 bool shell_debug_get_entry(size_t index, char *out, size_t out_size);
 
-/** Print the debug log to the transcript. */
-void shell_command_debug(void);
+/** Print the debug log to the transcript.
+ *
+ * Extended DEBUG equivalent: bare `debug` prints the ring as before;
+ * `debug mem <addr> [len]`, `debug peek <addr>`, `debug poke <addr> <hex..>`,
+ * and `debug disk <lba> [count]` dump RAM and disk sectors (hex text always;
+ * a hexview modal additionally when interactive). Returns an ERRORLEVEL
+ * (0 ok, 1 failure, 2 usage) applied by the command dispatcher.
+ */
+int shell_command_debug(int argc, char **argv);
+
+/**
+ * Parse a DEBUG-style hex address (`0x...` or bare hex like `4FF01000`).
+ * Pure, unit-tested.
+ */
+bool shell_debug_parse_hex_addr(const char *text, uint32_t *addr_out);
+
+/**
+ * Parse one hex byte token (`00`-`FF`, optional `0x` prefix).
+ * Pure, unit-tested.
+ */
+bool shell_debug_parse_hex_byte(const char *text, uint8_t *byte_out);
+
+/**
+ * True when every byte of [@p addr, @p addr + @p len) is readable RAM
+ * (byte-accessible, no wraparound). Pure address check, unit-tested logic
+ * over the IDF probe.
+ */
+bool shell_debug_addr_readable(uint32_t addr, size_t len);
+
+/**
+ * True when a `debug poke` may write [@p addr, @p addr + @p len): readable
+ * and outside the known code windows (flash IROM, RTC fast memory). On
+ * ESP32-P4 the IRAM0/DRAM0 window is unified, so esp_ptr_executable() cannot
+ * be used here (it is true for all RAM); the YES gate and the audit log are
+ * the protection for ordinary RAM. The YES gate itself lives in the
+ * debug_confirm_destructive hook.
+ */
+bool shell_debug_addr_writable(uint32_t addr, size_t len);
 
 /* ========================================================================
  * UART CONSOLE BRIDGE
@@ -874,6 +990,17 @@ typedef enum {
  */
 int shell_task_row_compare(const shell_task_row_t *a, const shell_task_row_t *b,
                            shell_task_sort_key_t key, bool reverse);
+
+/**
+ * Look up one task's FreeRTOS runtime counter plus the snapshot total by
+ * task handle. Backs the task manager's per-slot CPU% (the command layer
+ * anchors the baseline at job spawn and diffs on each query). One snapshot
+ * walk per call — on-demand only, never from the LVGL/render task or during
+ * an OTA. Returns false when the handle is gone, the snapshot fails, or a
+ * counter pointer is NULL.
+ */
+bool shell_task_runtime_for_handle(void *task_handle, uint32_t *runtime_out,
+                                   uint32_t *total_out);
 
 /* ========================================================================
  * HEADER STATUS
@@ -1041,6 +1168,21 @@ int shell_split_chain(char *text,
                       shell_chain_segment_t *segments,
                       int max_segments,
                       bool *truncated_out);
+
+/**
+ * If @p text opens with `(`, find its balanced match. Quote/caret aware
+ * (same rules as the scanners); nested parens count. Pure.
+ *
+ * @return Pointer just past the matching `)`, or NULL when @p text does
+ *         not open with `(` or the group is unbalanced.
+ */
+const char *shell_group_match(const char *text);
+
+/**
+ * Maximum paren nesting depth of @p text (quote/caret aware). Pure.
+ * Used to cap `(...)` group recursion before executing.
+ */
+int shell_group_depth(const char *text);
 
 /** Parse a percentage argument (0-100). Returns true on success. */
 bool shell_parse_percentage_arg(const char *text, int *percentage_out);

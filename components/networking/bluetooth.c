@@ -34,6 +34,7 @@
 #include "bluetooth.h"
 #include "ansi.h"
 #include "ansi_palette.h"
+#include "display.h"
 #include "p4minishell_config.h"
 
 /* ---- Backward-compatibility aliases ---- */
@@ -99,6 +100,9 @@ typedef struct {
     char address[BLUETOOTH_ADDR_BYTES]; /**< Connected device address. */
     char name[BLUETOOTH_NAME_BYTES];    /**< Connected device name. */
     int discovery_state;            /**< 0 idle, 1 discovering, 2 done. */
+    bool mouse_echo;                /**< Report BLE mouse motion to the transcript. */
+    int32_t mouse_x;                /**< Accumulated X (echo only). */
+    int32_t mouse_y;                /**< Accumulated Y (echo only). */
 } ble_hid_state_t;
 
 static ble_hid_state_t s_ble_hid;
@@ -124,8 +128,19 @@ static void bluetooth_process_hid_characteristics(uint16_t conn_handle);
  *  Byte 0: modifier bitmask, byte 1: reserved, bytes 2-7: key codes. */
 #define BLE_HID_BOOT_KBD_REPORT_LEN  8
 
+/** HID Boot Mouse report: buttons(1) + X(1) + Y(1), optional wheel(1).
+ *  Same layout as the USB boot mouse report. */
+#define BLE_HID_BOOT_MOUSE_REPORT_LEN  3
+
 /** Route a BLE HID boot keyboard report to the shell input path. */
 static void bluetooth_hid_route_boot_keyboard(const uint8_t *report, uint16_t len);
+
+/** Route a BLE HID boot mouse report: wheel scrolls the transcript (always),
+ *  motion/buttons echo when `bluetooth mouse on` is set. Layout mirrors
+ *  usb_handle_mouse_input_locked (components/usb/usb.c); kept separate
+ *  because the side-effect paths differ (ops table vs direct emit) and no
+ *  shared HID component owns both transports. */
+static void bluetooth_hid_route_boot_mouse(const uint8_t *report, uint16_t len);
 
 #endif
 
@@ -572,14 +587,18 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
         /* A HID report (or other notification) arrived from the connected
-         * device. Route boot-protocol keyboard reports to the shell input. */
+         * device. Boot handles route by characteristic; the generic Report
+         * handle only counts when it is exactly one boot keyboard report
+         * (report-protocol devices need report-map parsing, which we do
+         * not do — those bytes are ignored rather than misread). */
         uint16_t attr_handle = event->notify_rx.attr_handle;
 
         if (s_ble_hid.connected &&
             event->notify_rx.conn_handle == s_ble_hid.conn_handle &&
             event->notify_rx.om != NULL &&
-            (attr_handle == s_ble_hid.report_char_handle ||
-             attr_handle == s_ble_hid.boot_kbd_inp_handle)) {
+            (attr_handle == s_ble_hid.boot_kbd_inp_handle ||
+             attr_handle == s_ble_hid.boot_mouse_inp_handle ||
+             attr_handle == s_ble_hid.report_char_handle)) {
             uint8_t data[64];
             uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
 
@@ -587,7 +606,15 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
                 len = sizeof(data);
             }
             os_mbuf_copydata(event->notify_rx.om, 0, len, data);
-            if (len >= BLE_HID_BOOT_KBD_REPORT_LEN) {
+            if (attr_handle == s_ble_hid.boot_mouse_inp_handle) {
+                if (len >= BLE_HID_BOOT_MOUSE_REPORT_LEN) {
+                    bluetooth_hid_route_boot_mouse(data, len);
+                }
+            } else if (attr_handle == s_ble_hid.boot_kbd_inp_handle) {
+                if (len >= BLE_HID_BOOT_KBD_REPORT_LEN) {
+                    bluetooth_hid_route_boot_keyboard(data, len);
+                }
+            } else if (len == BLE_HID_BOOT_KBD_REPORT_LEN) {
                 bluetooth_hid_route_boot_keyboard(data, len);
             }
         }
@@ -971,6 +998,47 @@ static void bluetooth_hid_route_boot_keyboard(const uint8_t *report, uint16_t le
     memcpy(s_ble_hid_prev_keys, current_keys, sizeof(s_ble_hid_prev_keys));
 }
 
+/** Route a BLE HID boot mouse report. Button byte 0, signed X/Y in bytes 1-2,
+ *  optional signed wheel in byte 3 (positive = scroll up, matching USB). The
+ *  wheel scrolls the transcript even with echo off; motion echo needs
+ *  `bluetooth mouse on`. */
+static void bluetooth_hid_route_boot_mouse(const uint8_t *report, uint16_t len)
+{
+    uint8_t buttons;
+    int8_t dx;
+    int8_t dy;
+    int8_t wheel = 0;
+
+    if (len < BLE_HID_BOOT_MOUSE_REPORT_LEN) {
+        return;
+    }
+    buttons = report[0];
+    dx = (int8_t)report[1];
+    dy = (int8_t)report[2];
+    if (len > BLE_HID_BOOT_MOUSE_REPORT_LEN) {
+        wheel = (int8_t)report[3];
+    }
+
+    if (wheel != 0 && s_host_ops.bluetooth_mouse_scroll != NULL) {
+        s_host_ops.bluetooth_mouse_scroll(-(int32_t)wheel * P4_CONFIG_TRANSCRIPT_SCROLL_STEP);
+    }
+
+    /* Shared cursor with USB (same display-owned pointer indev, same
+     * opt-in switches): motion + left button feed it, self-gated there. */
+    display_mouse_report((int)dx, (int)dy, buttons);
+
+    if (!s_ble_hid.mouse_echo) {
+        return;
+    }
+    s_ble_hid.mouse_x += dx;
+    s_ble_hid.mouse_y += dy;
+    bluetooth_appendf("bluetooth mouse: X=%06d Y=%06d |%c|%c|\n",
+                      (int)s_ble_hid.mouse_x,
+                      (int)s_ble_hid.mouse_y,
+                      (buttons & 0x01) ? 'o' : ' ',
+                      (buttons & 0x02) ? 'o' : ' ');
+}
+
 /** Callback for service discovery by UUID. Called once per matching service. */
 static int bluetooth_disc_svc_cb(uint16_t conn_handle,
                                   const struct ble_gatt_error *error,
@@ -1070,7 +1138,8 @@ static void bluetooth_process_hid_characteristics(uint16_t conn_handle)
 {
     int rc;
 
-    /* Prefer HID Report Input (0x2A4D), fall back to Boot Keyboard Input (0x2A22). */
+    /* Prefer HID Report Input (0x2A4D), fall back to Boot Keyboard Input (0x2A22),
+     * then Boot Mouse Input (0x2A33). */
     if (s_ble_hid.report_char_handle != 0) {
         /* Discover the CCC descriptor for the Report characteristic. */
         s_ble_hid.dsc_char_handle = s_ble_hid.report_char_handle;
@@ -1086,10 +1155,21 @@ static void bluetooth_process_hid_characteristics(uint16_t conn_handle)
     if (s_ble_hid.boot_kbd_inp_handle != 0) {
         s_ble_hid.dsc_char_handle = s_ble_hid.boot_kbd_inp_handle;
         rc = ble_gattc_disc_all_dscs(conn_handle, s_ble_hid.boot_kbd_inp_handle,
-                                      s_ble_hid.hid_service_end,
-                                      bluetooth_disc_dsc_cb, NULL);
+                                     s_ble_hid.hid_service_end,
+                                     bluetooth_disc_dsc_cb, NULL);
         if (rc == 0) {
             bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " discovering Boot Keyboard CCC\n");
+            return;
+        }
+    }
+
+    if (s_ble_hid.boot_mouse_inp_handle != 0) {
+        s_ble_hid.dsc_char_handle = s_ble_hid.boot_mouse_inp_handle;
+        rc = ble_gattc_disc_all_dscs(conn_handle, s_ble_hid.boot_mouse_inp_handle,
+                                     s_ble_hid.hid_service_end,
+                                     bluetooth_disc_dsc_cb, NULL);
+        if (rc == 0) {
+            bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " discovering Boot Mouse CCC\n");
             return;
         }
     }
@@ -1113,13 +1193,23 @@ static int bluetooth_disc_dsc_cb(uint16_t conn_handle,
     }
 
     if (dsc == NULL) {
-        /* Descriptor discovery complete. If no CCC was found for the Report
-         * characteristic, fall back to the Boot Keyboard characteristic. */
+        /* Descriptor discovery complete. If no CCC was found, walk down the
+         * fallback chain: Report -> Boot Keyboard -> Boot Mouse. */
         if (!s_ble_hid.notifications_enabled) {
             if (s_ble_hid.dsc_char_handle == s_ble_hid.report_char_handle &&
                 s_ble_hid.boot_kbd_inp_handle != 0) {
                 s_ble_hid.dsc_char_handle = s_ble_hid.boot_kbd_inp_handle;
                 if (ble_gattc_disc_all_dscs(conn_handle, s_ble_hid.boot_kbd_inp_handle,
+                                            s_ble_hid.hid_service_end,
+                                            bluetooth_disc_dsc_cb, NULL) == 0) {
+                    return 0;
+                }
+            }
+            if ((s_ble_hid.dsc_char_handle == s_ble_hid.report_char_handle ||
+                 s_ble_hid.dsc_char_handle == s_ble_hid.boot_kbd_inp_handle) &&
+                s_ble_hid.boot_mouse_inp_handle != 0) {
+                s_ble_hid.dsc_char_handle = s_ble_hid.boot_mouse_inp_handle;
+                if (ble_gattc_disc_all_dscs(conn_handle, s_ble_hid.boot_mouse_inp_handle,
                                             s_ble_hid.hid_service_end,
                                             bluetooth_disc_dsc_cb, NULL) == 0) {
                     return 0;
@@ -1274,6 +1364,8 @@ static void bluetooth_hid_cleanup(void)
     s_ble_hid.hid_service_found = false;
     s_ble_hid.notifications_enabled = false;
     s_ble_hid.discovery_state = 0;
+    s_ble_hid.mouse_x = 0;
+    s_ble_hid.mouse_y = 0;
     memset(s_ble_hid_prev_keys, 0, sizeof(s_ble_hid_prev_keys));
 }
 #else  /* !CONFIG_BT_NIMBLE_ENABLED */
@@ -1308,6 +1400,8 @@ void bluetooth_handle_command(char *command)
         bluetooth_appendf("  " SH_CMD "bluetooth advertise off" SH_RST "     Stop BLE advertising\n");
         bluetooth_appendf("  " SH_CMD "bluetooth connect" SH_RST " XX:XX:XX:XX:XX:XX  Connect to a BLE HID device\n");
         bluetooth_appendf("  " SH_CMD "bluetooth disconnect" SH_RST "       Disconnect from the current BLE device\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth mouse on|off" SH_RST "    Echo BLE mouse motion (wheel always scrolls)\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth mouse cursor|click <on|off>" SH_RST "    Shared pointer cursor/click (same switches as usb; default off)\n");
         bluetooth_appendf("  " SH_CMD "bt ..." SH_RST "                      Alias for the bluetooth family\n");
         return;
     }
@@ -1370,7 +1464,59 @@ void bluetooth_handle_command(char *command)
         bluetooth_disconnect();
         return;
     }
+
+    if (strutil_text_equals_ignore_case(argv[1], "mouse") && argc >= 3) {
+        if (strutil_text_equals_ignore_case(argv[2], "on")) {
+            s_ble_hid.mouse_echo = true;
+            bluetooth_appendf(SH_OK "bluetooth:" SH_RST " mouse motion echo on\n");
+            return;
+        }
+        if (strutil_text_equals_ignore_case(argv[2], "off")) {
+            s_ble_hid.mouse_echo = false;
+            bluetooth_appendf(SH_OK "bluetooth:" SH_RST " mouse motion echo off\n");
+            return;
+        }
+        /* Cursor/click tracking shares one display-owned pointer indev
+         * with USB (`usb mouse cursor|click` toggles the same switches);
+         * both default off, wheel scroll always works. */
+        if (argc >= 4 && strutil_text_equals_ignore_case(argv[2], "cursor")) {
+            if (strutil_text_equals_ignore_case(argv[3], "on")) {
+                if (display_mouse_cursor_enable() == ESP_OK) {
+                    bluetooth_appendf(SH_OK "bluetooth:" SH_RST " mouse cursor on\n");
+                } else {
+                    bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " mouse cursor unavailable (display not ready)\n");
+                }
+                return;
+            }
+            if (strutil_text_equals_ignore_case(argv[3], "off")) {
+                if (display_mouse_cursor_disable() == ESP_OK) {
+                    bluetooth_appendf(SH_OK "bluetooth:" SH_RST " mouse cursor off\n");
+                } else {
+                    bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " mouse cursor unavailable (display not ready)\n");
+                }
+                return;
+            }
+        }
+        if (argc >= 4 && strutil_text_equals_ignore_case(argv[2], "click")) {
+            if (strutil_text_equals_ignore_case(argv[3], "on")) {
+                if (display_mouse_click_enable() == ESP_OK) {
+                    bluetooth_appendf(SH_OK "bluetooth:" SH_RST " mouse click on\n");
+                } else {
+                    bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " mouse click unavailable (display not ready)\n");
+                }
+                return;
+            }
+            if (strutil_text_equals_ignore_case(argv[3], "off")) {
+                if (display_mouse_click_disable() == ESP_OK) {
+                    bluetooth_appendf(SH_OK "bluetooth:" SH_RST " mouse click off\n");
+                } else {
+                    bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " mouse click unavailable (display not ready)\n");
+                }
+                return;
+            }
+        }
+    }
 #endif
 
-    bluetooth_appendf(SH_USAGE "Usage: bluetooth status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect" SH_RST "\n");
+    bluetooth_appendf(SH_USAGE "Usage: bluetooth status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect | mouse <on|off|cursor <on|off>|click <on|off>>" SH_RST "\n");
 }

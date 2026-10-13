@@ -62,6 +62,7 @@ static void shell_command_archive_usage(const char *verb)
     shell_print_usage("Usage: archive extract <file> [dest]");
     shell_print_usage("Usage: archive list <file> [/b]");
     shell_print_usage("Usage: archive verify <file>");
+    shell_print_usage("Formats: .p4a (USTAR) .zip (ZIP) — auto-detected by extension");
 }
 
 /** Resolve @p raw into @p out (explicit path; no redirect sourcing here). */
@@ -130,7 +131,7 @@ static int archive_cmd_create(const char *verb, const char *file_arg, char **pat
         for (i = 0; i < ndefaults; i++) {
             all[i] = defaults[i];
         }
-        error = archive_create(file, all, ndefaults, &stats);
+        error = archive_create(file, all, ndefaults, &stats, ARCHIVE_FORMAT_AUTO);
         free((void *)all);
         if (error == ESP_ERR_NOT_FOUND) {
             shell_print_error("archive: nothing to back up");
@@ -163,7 +164,7 @@ static int archive_cmd_create(const char *verb, const char *file_arg, char **pat
         }
         sources[i] = resolved[i];
     }
-    error = archive_create(file, sources, npaths, &stats);
+    error = archive_create(file, sources, npaths, &stats, ARCHIVE_FORMAT_AUTO);
     free(resolved);
     free((void *)sources);
     if (error == ESP_ERR_NOT_FOUND) {

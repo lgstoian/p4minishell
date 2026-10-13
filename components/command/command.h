@@ -84,6 +84,27 @@ void shell_execute_command_async(char *command);
 bool shell_command_ota_is_pending(void);
 
 /* ========================================================================
+ * TASK MANAGER PRIORITY HELPERS (pure, unit-tested)
+ * ======================================================================== */
+
+/**
+ * Clamp a pool priority offset into [P4_CONFIG_TMGR_PRIO_MIN,
+ * P4_CONFIG_TMGR_PRIO_MAX]. Pure.
+ */
+int command_tmgr_clamp_priority(int prio);
+
+/**
+ * Parse a `nice` priority argument: absolute 1..3 within the task-manager
+ * bounds, or a +n/-n adjustment from @p current (clamped). Pure.
+ *
+ * @param text     Argument text (must be fully consumed).
+ * @param current  Current priority as a tskIDLE offset.
+ * @param out      Parsed priority offset on success.
+ * @return true with @p out filled; false leaves @p out untouched.
+ */
+bool command_tmgr_parse_priority(const char *text, int current, int *out);
+
+/* ========================================================================
  * SHELL STATE ACCESSORS
  * ======================================================================== */
 
@@ -196,6 +217,57 @@ void command_history_save_now(void);
  */
 bool shell_launch_app(const char *name);
 
+/**
+ * True when @p name resolves in launch discovery (PATH + sd:/APPS). Shared
+ * by `assoc` validation, `startup` validation, and the boot startup runner —
+ * one implementation, never per-caller scans.
+ */
+bool shell_app_known(const char *name);
+
+/**
+ * Resolve and run a `.bat` app by name with extra arguments appended
+ * (`launch <name> <args>`). @p args is passed verbatim (quote paths with
+ * spaces at the call site). Used by `open` association dispatch; plain
+ * `shell_launch_app()` is the no-args form.
+ *
+ * @return true when the app was found and launched.
+ */
+bool shell_launch_app_with_args(const char *name, const char *args);
+
+/* ========================================================================
+ * FILE ASSOCIATIONS (`assoc` / `ftype`, sd:/ASSOC.INI via storage_ini)
+ * ======================================================================== */
+
+/** `assoc` argument forms (pure `command_assoc_*` helpers, unit-tested). */
+typedef enum {
+    ASSOC_ARG_BAD = 0,  /**< Unparseable (usage error). */
+    ASSOC_ARG_SHOW,     /**< `.ext` — show one mapping. */
+    ASSOC_ARG_CLEAR,    /**< `.ext=` — clear one mapping. */
+    ASSOC_ARG_SET       /**< `.ext=app` — set one mapping. */
+} assoc_arg_form_t;
+
+/**
+ * Normalize an extension to `.lower` form (`txt`/`.TXT` → `.txt`).
+ * Pure. @return true with @p out filled.
+ */
+bool command_assoc_normalize_ext(const char *text, char *out, size_t out_size);
+
+/**
+ * Split an `assoc` argument into form + parts. Pure. @p app_out is filled
+ * only for ASSOC_ARG_SET.
+ */
+assoc_arg_form_t command_assoc_split_arg(const char *text, char *ext_out, size_t ext_size,
+                                         char *app_out, size_t app_size);
+
+/**
+ * Map a file path's extension to its associated app. Never matches
+ * executable types (batch files always open as source). Pure apart from
+ * the ASSOC.INI read.
+ *
+ * @return true with @p app_out filled on a hit.
+ */
+bool assoc_lookup_app(const char *path, char *app_out, size_t app_size);
+
 /* ========================================================================
  * AUDIO (`volume`, `beep`, `tone`, `wavplay`, `audio`)
  * ======================================================================== */
@@ -254,12 +326,12 @@ void command_close_foreground_surfaces(void);
  * while per-verb flushes are suppressed; headless-safe unit-test hook. */
 bool draw_hold_active(void);
 bool shell_command_anchor(int argc, char **argv);
+bool shell_command_link(int argc, char **argv);
 void shell_command_browse(int argc, char **argv);
 void shell_command_dialog(int argc, char **argv);
 void shell_command_list(int argc, char **argv);
 void shell_command_ask(int argc, char **argv);
 void shell_command_form(int argc, char **argv);
-void shell_command_browse_batch(int argc, char **argv);
 void shell_command_screen(int argc, char **argv);   /* screen run|info <file.frm> | flow <file.flow> */
 /**
  * Split @p text on @p delim into @p store, recording up to @p max entries in
@@ -298,6 +370,16 @@ void shell_command_view(int argc, char **argv);
 void shell_command_open(int argc, char **argv);
 void shell_command_hexview(int argc, char **argv);
 void shell_command_image(int argc, char **argv);
+
+/**
+ * Shared `view`/`open` option parse: [/t:secs] [--raw] <file> (pure apart
+ * from usage/ERRORLEVEL reporting, unit-tested).
+ *
+ * @return true with outputs set, false after printing usage (ERRORLEVEL 2).
+ */
+bool view_parse_args(const char *verb, int argc, char **argv,
+                     const char **path_out, uint32_t *timeout_ms_out,
+                     bool *raw_out);
 
 /**
  * Load a whole file into a PSRAM-first heap buffer under a guarded SD
@@ -444,11 +526,11 @@ int shell_command_edit_db(const char *dbname, const char *id_arg, bool focus,
                           const char *template_name);
 
 /** Edit one alarm event in the modal text editor (`edit alarm <id>`,
- *  edit_record_commands.c). Renders via alarm_event_render, validates the
- *  edited text via alarm_event_parse (same semantics as the file loader),
- *  then writes back via alarm_set, preserving a stored uid and bumping
- *  `modified` for synced events. Returns 0 saved/unchanged,
- *  1 not-found/failed, 2 usage. */
+ *  `edit alarms <id>`, `edit cal <id>`, edit_record_commands.c). Renders via
+ *  alarm_event_render, validates the edited text via alarm_event_parse (same
+ *  semantics as the file loader), then writes back via alarm_set, preserving
+ *  a stored uid and bumping `modified` for synced events. Returns 0
+ *  saved/unchanged, 1 not-found/failed, 2 usage. */
 int shell_command_edit_alarm(const char *id_arg, bool focus,
                              const char *template_name);
 
@@ -500,14 +582,10 @@ void csv_substitute_refs(const char *expr, char **cells, int rows, int cols,
  *  with `export` (single quoting implementation). With @p out NULL returns
  *  the bytes needed including the terminator. */
 size_t csv_format_field(const char *text, char *out, size_t out_size);
-/** Validate JSON text (testable core): true when structurally valid.
- * @p err receives "msg at line L col C" on failure (may be NULL). */
-bool json_validate_text(const char *text, size_t len, char *err, size_t err_size);
 
-/** Pretty-print JSON text with 2-space indent (testable core).
- * @return bytes written excluding NUL (0 = invalid; @p err set). */
-size_t json_pretty_text(const char *text, size_t len, char *out, size_t out_size,
-                        char *err, size_t err_size);
+/* The JSON reader (validate / pretty / walk / unescape) is declared in
+ * components/json/include/json.h and is deliberately NOT re-exported here:
+ * it is a shared library, not a command-layer helper. Include <json.h>. */
 
 /* ========================================================================
  * POWER / DISPLAY / BATTERY (`brightness`, `rotate`, `battery`, `power`,
@@ -686,13 +764,101 @@ bool asset_crc_file(const char *resolved, uint32_t *crc_out);
 int  asset_verify_app(const char *tag, const char *app, bool list_only);
 
 /**
+ * One sub-command row for a verb family that dispatches `<verb> <sub> ...`
+ * through a shared table (`chat`, `epub`, `cas`, `math_disp`).
+ *
+ * This is the ONE shape every argv-verb sub-table uses: the family verb walks
+ * the table, matches argv[1] case-insensitively, and re-enters the pipeline
+ * with the remaining tokens. Handlers return the operation result; the family
+ * verb maps it onto ERRORLEVEL (0 ok / 1 state-failure / 2 usage).
+ */
+typedef struct {
+    const char *name;                                  /**< Sub-command token. */
+    esp_err_t (*handler)(int argc, char *argv[]);      /**< Sub-command body. */
+    const char *help;                                  /**< Help-table text. */
+} shell_command_entry_t;
+
+/** Return a family's sub-command table, optionally writing its row count. */
+typedef const shell_command_entry_t *(*shell_command_table_fn_t)(size_t *out_count);
+
+/**
+ * `chat` — board-to-board CLI chat. argv-verb dispatcher:
+ *   chat host [ssid|off] | peer <host-ip|off> | send <text...> |
+ *   poll | log | clear | status | onmsg <line>|off
+ * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
+ */
+const shell_command_entry_t *chat_commands_get_table(size_t *out_count);
+int shell_command_chat(int argc, char **argv);
+
+/**
+ * `epub` — EPUB e-book reader. argv-verb dispatcher:
+ *   epub open <file>       — open an EPUB file
+ *   epub close             — close current EPUB
+ *   epub info              — show metadata (title, author, etc.)
+ *   epub toc               — show table of contents
+ *   epub read              — render current chapter
+ *   epub next              — next chapter in spine
+ *   epub prev              — previous chapter in spine
+ *   epub goto <n>          — go to chapter n (spine index)
+ *   epub toc               — show table of contents
+ *   epub extract <n> <file> — extract resource (image, CSS) by manifest index
+ * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
+ */
+const shell_command_entry_t *epub_commands_get_table(size_t *out_count);
+int shell_command_epub(int argc, char **argv);
+
+/**
+ * `cas` — Computer Algebra System. argv-verb dispatcher:
+ *   cas open <expr>          — parse and open expression
+ *   cas close                — close current expression
+ *   cas simplify             — simplify current expression
+ *   cas expand               — expand current expression
+ *   cas factor               — factor current expression
+ *   cas diff <var>           — differentiate wrt variable
+ *   cas integrate <var> [a b] — integrate (definite if bounds given)
+ *   cas solve <var>          — solve for variable
+ *   cas series <point> [order] — Taylor series
+ *   cas substitute <var> <value> — substitute value
+ *   cas evaluate             — evaluate current expression
+ *   cas latex                — output LaTeX
+ * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
+ */
+const shell_command_entry_t *cas_commands_get_table(size_t *out_count);
+int shell_command_cas(int argc, char **argv);
+
+/**
+ * `math` — Matrix, Complex, Vector math. argv-verb dispatcher:
+ *   math mat <expr>           — matrix operations
+ *   math vec <expr>           — vector operations
+ *   math complex <expr>       — complex number operations
+ * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
+ */
+const shell_command_entry_t *math_disp_commands_get_table(size_t *out_count);
+int shell_command_math(int argc, char **argv);
+
+/**
+ * `math` — Natural Display math editor. argv-verb dispatcher:
+ *   math new                     — create new expression
+ *   math open <expression>       — parse and open expression
+ *   math close                   — close current expression
+ *   math edit <dir>              — move cursor (left/right/up/down/home/end/word_left/word_right)
+ *   math render                  — render current expression to ANSI
+ *   math eval                    — evaluate current expression
+ *   math cursor <cmd>            — move cursor (home/end/left/right/up/down/word_left/word_right)
+ *   math insert <type> [args]    — insert math construct (frac/sqrt/power/sub/paren/func/text)
+ * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
+ */
+const shell_command_entry_t *math_disp_commands_get_table(size_t *out_count);
+int shell_command_math(int argc, char **argv);
+
+/**
  * `pkg` — SD app packages over `APPS/<APP>.APPINFO`
  * (title/description/version, plus type=/abi=/arch=/entry= for native and
  * hybrid apps — see ABI.md) + `APPS/<APP>.ASSETS` (contents manifest,
  * optional `SIGN=` ECDSA line), installed from a `PKGS/<APP>/` bundle.
- * Verbs: list, info, verify, check, install [/signed], remove,
- * key show|install|clear. Implemented in pkg_commands.c; ERRORLEVEL 0 ok /
- * 1 some failure / 2 usage.
+ * Verbs: list, info, verify, check, install [/signed] [/force], remove,
+ * purge, outdated, key show|install|clear. Implemented in pkg_commands.c;
+ * ERRORLEVEL 0 ok / 1 some failure / 2 usage.
  */
 void shell_command_pkg(int argc, char **argv);
 
@@ -735,6 +901,31 @@ pkg_sign_status_t pkg_sign_check_manifest(const char *text, char *fingerprint_ou
  * `NAME.APPINFO` file, writing the uppercased NAME to @p out.
  */
 bool pkg_app_name_from_appinfo(const char *filename, char *out, size_t size);
+
+/**
+ * Sanitize one `|`-separated machine-row field in place (pipes become `/`,
+ * CR/LF become spaces). Pure (pkg_commands.c, unit-tested).
+ */
+void pkg_sanitize_pipe_field(char *text);
+
+/**
+ * Compare dot-separated numeric versions (`1`, `1.0`, `2.10.3`; one
+ * leading `v` tolerated). Missing parts read as zero (`1.0 == 1.0.0`,
+ * `1.0 < 1.0.1`); a non-numeric tail only breaks ties (`1.0 < 1.0b`).
+ * Pure (pkg_commands.c, unit-tested).
+ *
+ * @return <0 when a<b, 0 when equal, >0 when a>b. NULL/empty sorts first.
+ */
+int pkg_version_compare(const char *a, const char *b);
+
+/**
+ * Parse a `requires=` entry (`APP>=1.2`, `APP=1.2`, `APP>1.2`). Pure
+ * (pkg_commands.c, unit-tested). @p op_out holds ">=", ">", or "=".
+ *
+ * @return true with all outputs filled.
+ */
+bool pkg_requires_parse(const char *text, char *app_out, size_t app_size,
+                        char *op_out, char *ver_out, size_t ver_size);
 
 /** App-name buffers for the completion providers (pkg_commands.c). */
 #define COMMAND_APP_NAME_BYTES 32

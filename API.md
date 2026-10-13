@@ -12,7 +12,7 @@ firmware, organized by module and mirroring the headers under `components/`.
 ## Shared integration pattern
 - `main/main.c` is the application entry point: boot sequencing, LVGL event callbacks, UI construction, and the c6ota/usb host bridges. It holds no command implementations and no shell state.
 - `components/shell` owns the transcript and async buffer, command history, debug log, UART console, the input-line prompt contract, and the system info commands.
-- `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, and every DOS file command.
+- `components/storage` owns the guarded volume sessions (SD + USB slots), persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, and every DOS file command.
 - `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`, `gosub`/`return`/`on`, `for` loops, the `|` pipe operator), the RAM-only environment variables and PATH, variable expansion, errorlevel, and the batch language commands.
 - `components/command` owns the single dispatcher, the execution pipeline, output-redirection parsing, the worker task, the hardware commands, the UI query commands, and the remaining system commands.
 - `components/ansi` owns the ANSI/VT escape sequence processing: SGR color palette, format string builder, text processing.
@@ -155,6 +155,8 @@ const char *shell_transcript_get_text_from(size_t offset);
   view to the newest output regardless of position and is the command-submission path.
 - `shell_transcript_get_length()` / `shell_transcript_get_text_from()` let the command
   module capture the output delta produced by a single command for `>` / `>>` redirection.
+- `shell_redirect_capture_active()` reports an open capture window so commands
+  skip human framing (headers, summaries) from redirected output (`find` uses it).
 
 ### Command history
 ```c
@@ -170,8 +172,9 @@ void        shell_history_clear(void);
 ```
 - `shell_command_should_store_history()` returns false for `wifi connect <ssid> <password>`
   and while a C6 OTA confirmation is pending.
-- `shell_format_command_for_transcript()` masks the password argument.
-- The history is heap-backed (`strdup`'d lines, depth + total-byte cap); the accessors feed
+- `shell_format_command_for_transcript()` masks the password argument (also for
+  `pim net ... /p:<pass>`, same `/p:` convention as `crypt`).
+- The history is heap-backed (`strdup`d lines, depth + total-byte cap); the accessors feed
   the `history` command's SD save/load.
 
 ### Input line
@@ -379,6 +382,7 @@ void shell_command_tui(int argc, char **argv);
 void shell_command_color(int argc, char **argv);
 void shell_command_locate(int argc, char **argv);
 bool shell_command_anchor(int argc, char **argv);
+bool shell_command_link(int argc, char **argv);  /* link <label> <cmd...> | list | open <n> */
 bool draw_hold_active(void);                      /* `draw hold` state (unit-test hook) */
 
 /* components/command/gfx_commands.c  (raster core: components/gfx/) */
@@ -387,7 +391,9 @@ bool shell_command_gfx(int argc, char **argv);    /* init|close|status|clear|pix
                                                       show|load|blit|blitmany|free|slots|save */
 
 /* components/command/screen_commands.c (declarative .FRM screens) */
-void shell_command_screen(int argc, char **argv); /* screen run|info <file.frm> */
+void shell_command_screen(int argc, char **argv); /* screen run|info <file.frm> | flow <file.flow>;
+                                                     run synthesizes argv into the existing dialog/list/ask/form/
+                                                     menu/browse/view/hexview/image-show verbs (no second surface) */
 int  screen_split_list(const char *text, char delim, char *store, size_t store_size,
                        const char **out, int max);  /* pure `|`-split, unit-tested */
 
@@ -409,8 +415,11 @@ bool     asset_crc_file(const char *resolved, uint32_t *crc_out);
 int      asset_verify_app(const char *tag, const char *app, bool list_only);  /* 0 ok, 1 fail */
 
 /* components/command/pkg_commands.c  (packaged SD apps: PKGS/<APP>/ -> APPS/) */
-void shell_command_pkg(int argc, char **argv);     /* list|info|verify|check|install [/signed]|remove|key ... */
+void shell_command_pkg(int argc, char **argv);     /* list|info|verify|check|install [/signed] [/force]|remove|purge|outdated|key ... */
 bool pkg_app_name_from_appinfo(const char *filename, char *out, size_t size);  /* pure, unit-tested */
+int  pkg_version_compare(const char *a, const char *b);  /* pure, unit-tested: <0/0/>0 */
+bool pkg_requires_parse(const char *text, char *app_out, size_t app_size,  /* pure, unit-tested */
+                        char *op_out, char *ver_out, size_t ver_size);
 
 /* Manifest trust (ECDSA P-256 + SHA-256; contract in ABI.md). The pure
  * helpers are unit-tested; the key store uses the `p4sign` NVS namespace. */
@@ -440,8 +449,10 @@ bool shell_command_plot(int argc, char **argv);    /* tui|window|auto|axes|func|
 - `gfx`, `plot`, and the mutating `draw`/`tui`/`color`/`locate`/`anchor` verbs REFUSE inside a `start`
   background job (shared display) with ERRORLEVEL `1` — except read-only
   `plot status` and text-only `plot table`, which are background-safe.
-- `shell_crc32_update()` is the firmware's single CRC-32 (shared by `receive` and the `crc32`/`asset`
-  verbs); start the accumulator at `0xFFFFFFFF` and invert at the end (zlib parity).
+- `strutil_crc32_update()` (components/strutil, pure, unit-tested) is the firmware's single
+  CRC-32 (shared by `receive` framing, the `crc32`/`asset` verbs, and `himem crc`);
+  `shell_crc32_update()` is its thin command-layer wrapper. Start the accumulator at
+  `0xFFFFFFFF` and invert at the end (zlib parity).
 - `draw table`/`draw list` use `tui_draw_table_ex()` and `tui_table_parse_cursor()` /
   `tui_table_parse_sel()` (see the TUI Module API).
 
@@ -572,12 +583,58 @@ void header_restore_saved(void);                   /* SHELL.INI header_mode */
 ### Background jobs (`start` / `taskkill`)
 ```c
 void shell_command_start(int argc, char **argv);      /* pooled worker, PSRAM stack */
-void shell_command_taskkill(int argc, char **argv);
+void shell_command_taskkill(int argc, char **argv);   /* wakes suspended jobs to stop */
 ```
 - Lives in `components/command/command.c`. Pool size `P4_CONFIG_BG_TASKS`; workers are created
   suspended at init with PSRAM stacks via `xTaskCreateStatic` and resumed per `start`.
 - Cooperative kill: `batch_bg_request_kill()` sets a flag polled per batch line and every 100 ms of
   `delay`. `start` is refused while a C6 OTA is pending; `c6ota` is refused while a job runs.
+
+### Task manager (`suspend` / `resume` / `nice` / `taskmgr`, pool slots only)
+```c
+int  command_tmgr_clamp_priority(int prio);   /* into [TMGR_PRIO_MIN, TMGR_PRIO_MAX], pure */
+bool command_tmgr_parse_priority(const char *text, int current, int *out);  /* 1..3|+n|-n, pure */
+bool shell_task_runtime_for_handle(void *task, uint32_t *runtime_out, uint32_t *total_out);
+size_t batch_bg_overlay_bytes(int slot);      /* env overlay footprint */
+uint32_t batch_bg_deadline_ms(int slot);      /* auto-kill deadline or 0 */
+bool batch_bg_slot_in_use(int slot);
+```
+- Verbs are `static` in `components/command/command.c` next to `taskkill`
+  (SDK kind table: other → command.c static); only the pure priority helpers
+  are public (declared in `command.h`, unit-tested). Freeze/thaw/priority apply
+  to pool slots only — validated per call, system tasks untouchable, so
+  `ps`/`tasks`/`top` stay read-only. `suspend` refuses its own slot;
+  `taskkill` resumes a suspended job so the stop applies at once.
+- Per-slot CPU% is anchored at spawn (`tmgr_acct_*` in command.c) and diffed
+  against `shell_task_runtime_for_handle()` (one shared snapshot walk with
+  `ps` — never two implementations). Stack high-water reads
+  `uxTaskGetStackHighWaterMark()` per handle; overlay/himem/pending bytes
+  come from the owning components. Well-known events
+  (`P4_CONFIG_TMGR_EVENT_EXIT/_SVC_RESTART/_POOL_FULL`) reuse `sync.c`.
+- `launch` path buffers (`batch_path`, APPS candidates) are heap-allocated:
+  they persist for the whole app run and the worker stack is already near
+  the edge under deep batch nesting (bugs.md F41).
+
+### App registration (`assoc` / `ftype` / `startup`, `launch /setup`)
+```c
+bool shell_launch_app(const char *name);
+bool shell_launch_app_with_args(const char *name, const char *args);  /* launch <app> <args> */
+bool shell_app_known(const char *name);  /* launch-discovery hit, shared by assoc/startup/boot */
+bool command_assoc_normalize_ext(const char *text, char *out, size_t out_size);  /* pure */
+assoc_arg_form_t command_assoc_split_arg(const char *text, char *ext_out, size_t ext_size,
+                                         char *app_out, size_t app_size);        /* pure */
+bool assoc_lookup_app(const char *path, char *app_out, size_t app_size);
+```
+- Verbs are `static` in `components/command/command.c` (`assoc`/`ftype` beside
+  `apps`, `startup` beside `launch`); only the pure assoc parsers plus the
+  shared queries are public (declared in `command.h`, unit-tested).
+  Extension→app pairs live in `sd:/ASSOC.INI` and startup entries in
+  `sd:/STARTUP.INI`, both through the shared `storage_ini` core (same shape
+  as SERVICES.INI — no new parser, no new store). `open` consults
+  `assoc_lookup_app()` (never executable types) before its viewer fallback;
+  `launch <app> /setup` passes `/setup` as `%1` (apps branch to `:setup`).
+  `boot_run_startup_apps()` (`components/boot/boot.c`) runs STARTUP.INI in
+  file order after AUTOEXEC.BAT + the LAUNCH_APP offer, before services.
 
 ### Persistent settings (`config` command)
 `components/command/config_cmd.c` implements `config` (declared in `config_cmd.h`):
@@ -854,17 +911,62 @@ bool shell_comp_first_diff(const uint8_t *a, size_t an, const uint8_t *b, size_t
   `P4_CONFIG_TREE_DEPTH_MAX`, and buffers each directory level on the heap.
 - `find`, `more`, and `sort` read the pending input-redirection source when no filename
   argument is supplied.
-- All of them resolve relative paths and run inside a guarded SD session.
+- All of them resolve relative paths and run inside a guarded volume session that
+  follows the resolved path: SD paths take the SD session, `usb:/`, `usbN:/`,
+  and `u:`/`v:`/`w:`/`x:` paths take the USB slot session (which automounts on
+  demand). Dual-path verbs (`fc`, `comp`, `move`) follow the non-SD side. The
+  trash bin, `label`, `vol`, `xcopy`, `findstr` file operands, and the raw `disk`
+  family stay SD-only by design.
+- `shell_command_attrib()` is FATFS-based on SD and stat/chmod-based on USB
+  (show synthesizes `D`/`R`, only `+R`/`-R` are settable there).
+- `shell_command_debug()` is the MS-DOS DEBUG surface (`mem`/`peek`/`poke`/`disk`;
+  hex text always, hexview modal when interactive). Its parsers
+  (`shell_debug_parse_hex_addr`, `shell_debug_parse_hex_byte`) and guards
+  (`shell_debug_addr_readable`, `shell_debug_addr_writable`) are pure and
+  unit-tested; the poke guard refuses known code windows (flash IROM, RTC fast
+  memory) because on ESP32-P4 the IRAM0/DRAM0 window is unified and
+  `esp_ptr_executable()` would refuse all RAM.
+- Free space never uses `statvfs` (absent from ESP32 newlib): SD uses
+  `storage_get_space_info()`, USB uses `esp_vfs_fat_info()` on the slot base
+  via `storage_volume_free_bytes()`; `storage_check_free_space_at()` gates
+  writes per destination volume.
 
 ### Disk and partition services (storage.c)
 ```c
-typedef enum { STORAGE_VOLUME_SD = 0 } storage_volume_t;   /* USB OTG MSC is a future target */
+typedef enum {
+    STORAGE_VOLUME_SD = 0,   /* /sdcard (sd:/) */
+    STORAGE_VOLUME_USB0,     /* /usb0, drive u: */
+    STORAGE_VOLUME_USB1,     /* /usb1, drive v: */
+    STORAGE_VOLUME_USB2,     /* /usb2, drive w: */
+    STORAGE_VOLUME_USB3,     /* /usb3, drive x: */
+    STORAGE_VOLUME_COUNT
+} storage_volume_t;
+
+storage_volume_t storage_volume_of_vfs_path(const char *vfs_path);  /* resolved paths; NULL/SD default */
+esp_err_t storage_volume_session_begin(storage_volume_t vol, shell_sd_session_t *session);
+void storage_volume_session_end(storage_volume_t vol, shell_sd_session_t *session, const char *operation);
+const char *storage_volume_media_name(storage_volume_t vol);
+esp_err_t storage_volume_free_bytes(const char *vfs_path, uint64_t *free_out);
 
 esp_err_t storage_disk_get_info(storage_volume_t vol, storage_disk_info_t *out);
 esp_err_t storage_disk_read_mbr(storage_volume_t vol, storage_mbr_t *out);
+esp_err_t storage_mbr_decode_sector(const uint8_t sector[512], storage_mbr_t *out);  /* pure, unit-tested */
 esp_err_t storage_disk_clean(storage_volume_t vol);
 esp_err_t storage_disk_create_primary_partition(storage_volume_t vol, uint64_t size_bytes);
 esp_err_t storage_disk_delete_partition(storage_volume_t vol, unsigned partition_index);
+esp_err_t storage_disk_set_active(storage_volume_t vol, int partition_1based);        /* 1..4, 0 clears */
+esp_err_t storage_disk_set_partition_type(storage_volume_t vol, unsigned partition_index, uint8_t type);
+esp_err_t storage_disk_read_sectors(storage_volume_t vol, uint32_t start_lba, uint8_t *out, uint32_t count);
+esp_err_t storage_disk_write_sectors(storage_volume_t vol, uint32_t start_lba, const uint8_t *data, uint32_t count);
+esp_err_t storage_disk_verify(storage_volume_t vol, uint32_t max_sectors,
+                          uint32_t *bad_out, uint32_t *done_out,
+                          storage_disk_progress_fn_t progress);
+esp_err_t storage_disk_image_save(storage_volume_t vol, const char *image_path,
+                                  uint32_t max_sectors, uint32_t *sectors_out,
+                                  storage_disk_progress_fn_t progress);
+esp_err_t storage_disk_image_restore(storage_volume_t vol, const char *image_path,
+                                     uint32_t *sectors_out,
+                                     storage_disk_progress_fn_t progress);
 esp_err_t storage_format_volume(storage_volume_t vol, const storage_format_opts_t *opts);
 const char *storage_get_fat_type(void);
 ```
@@ -971,10 +1073,15 @@ void tui_flush(void);                         /* coalesce per fg run, emit #RRGG
 void tui_refresh_surface(void);               /* windows_refresh_tui_surface + flush on rotation/keyboard */
 void tui_enter_fullscreen(void); void tui_exit_fullscreen(void); bool tui_is_fullscreen(void);
                                              /* hide/restore header via windows_set_fullscreen/header_set_visible, keep header visible by default, dynamic keyboard scaling via windows_notify_keyboard_visibility */
+void tui_bound_cell_info(int *cell_w, int *cell_h, int *index_out); /* bound cell W/H/slot (index = -1 when unbound), NULL-safe */
+int tui_selftest_palette(const char **fail_out);  /* palette spec + double-glyph set sanity, headless; returns failures (0 = clean) */
+int tui_selftest_coverage(const char **fail_out); /* glyph coverage + advance match across all committed cell fonts, headless */
+int tui_selftest_metrics(const char **fail_out);  /* internal metrics sanity (cell count, grid dims), headless */
+int tui_selftest_check(const char **fail_out);    /* aggregate: palette + coverage + metrics */
 ```
 
 - `tui_draw_box`/`tui_draw_line` honor style and title via `tui_cell_set` (`components/tui/tui.c:129`) with full UTF-8 `SH_BOX_*`; `tui_flush` (`components/tui/tui.c:620`) renders fg/bg via `lv_label` recolor `#RRGGBB` per fg run using `ansi_get_palette_color`.
-- `tui status` (command layer) reports `transcript rect 1024x510, cols 80 rows 25, fullscreen, font unscii_16 384 glyphs`, `tui clear`/`tui fullscreen on|off`/`tui refresh` dispatch here.
+- `tui status` (command layer) reports `transcript rect`, `cols/rows`, `fullscreen`, and `cell font WxH (slot N of M)` or `(unbound)`, `tui clear`/`tui fullscreen on|off`/`tui refresh`/`tui selftest` dispatch here.
 - `draw` batch verb (`components/command/command.c`) auto-enters TUI via `tui_init` when no TUI/modal surface is active, otherwise reuses the active buffer; batch verbs `draw box`/`line`/`fill`/`text`/`clear`/`window`/`fullscreen` map directly to these primitives.
 - Prompt fixed: `main.c:112` input line and `modal_surf.c:412` `ask` placeholder use `shell_prompt_render_plain()` (`components/shell/shell.c:412`); screenshot debug loop `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
 
@@ -1118,11 +1225,71 @@ void batch_bg_bind(int slot);              /* the worker binds itself on entry *
 void batch_bg_release(int slot);           /* release when the worker exits */
 void batch_bg_request_kill(int slot);      /* cooperative stop request */
 bool batch_bg_kill_requested(void);        /* polled per batch line and per 100 ms of delay */
+int  batch_bg_current_slot(void);          /* 0 foreground, N bg slot N */
+void batch_bg_set_deadline(int slot, uint32_t deadline_ms);  /* start /t:secs */
+void batch_bg_poll_timeout(void);          /* enforce deadline at poll points */
 bool batch_bg_is_background(void);         /* true on a pooled worker */
 ```
 - The main worker owns slot 0; each `start`ed job owns one of the pool (size
   `P4_CONFIG_BG_TASKS`). Each slot carries its own batch context, errorlevel, goto state,
-  `setlocal` depth, and `%*` scratch (`batch_task_ctx_t`).
+  `setlocal` depth, and `%*` scratch (`batch_task_ctx_t`), plus a lazily-allocated
+  job-private env overlay (`bg_env`, `P4_CONFIG_BG_ENV_SLOTS` slots, freed at release)
+  and an auto-kill deadline. Release also frees the slot's `himem` blocks.
+
+### Extended memory (`himem`, components/batch/himem.c)
+```c
+int   himem_alloc(size_t size, int slot);  /* zeroed PSRAM block, handle or -1 */
+esp_err_t himem_free(int h, int slot);     /* owner or foreground; locked refuses */
+int   himem_lock(int h, int slot);         /* lock guard count, or -1 */
+int   himem_unlock(int h, int slot);       /* remaining count, or -1 */
+esp_err_t himem_peek(int h, size_t off, size_t n, const uint8_t **p, size_t *len);
+esp_err_t himem_fill(int h, int slot, uint8_t b, size_t off, size_t n);
+himem_handle_info_t himem_describe(int h); /* used/size/owner/locked snapshot */
+size_t himem_slot_bytes(int slot);         /* quota accounting */
+void  himem_free_owned(int slot);          /* job-exit cleanup (locks die too) */
+uint64_t himem_parse_size(const char *t);  /* decimal/0x/K|M, 0 = invalid */
+int   himem_parse_handle(const char *t);   /* decimal handle, -1 = invalid */
+void  shell_command_himem(int argc, char **argv);  /* info|alloc|free|lock|unlock|
+                                                      fill|load|save|crc */
+```
+- `himem crc` folds bytes through the single `strutil_crc32_update()` (moved
+  there from `serial_commands.c`; `shell_crc32_update()` is now its thin
+  wrapper, so serial framing, `crc32`/`asset`, and `himem` share one CRC).
+
+### Batch synchronization (`lock`/`unlock`/`signal`/`wait`, components/batch/sync.c)
+```c
+esp_err_t sync_mutex_lock(const char *name, uint32_t timeout_ms, int slot);
+esp_err_t sync_mutex_unlock(const char *name, int slot);
+void  sync_release_owned(int slot);      /* job-exit cleanup */
+esp_err_t sync_event_signal(const char *name);
+esp_err_t sync_event_wait(const char *name, uint32_t timeout_ms, int slot);
+bool  sync_name_ok(const char *name);    /* charset rule, pure */
+void  shell_command_lock/unlock/signal/wait(int argc, char **argv);
+```
+- One mutex + one event table (PSRAM, lazy), owner-tracked, auto-released at
+  job exit. Blocking waits poll in 100 ms chunks (kill/deadline/abort stay
+  responsive). `wait` auto-clears on take: one signal wakes exactly one waiter.
+
+### Resident services (components/batch/svc.c)
+```c
+void  batch_register_bg_ops(const batch_bg_ops_t *ops);  /* command_init once */
+int   svc_count(void);
+svc_entry_t svc_describe(int index);     /* used/name/line/restart/auto/state */
+esp_err_t svc_install(const char *n, const char *line, bool restart, bool auto_start);
+esp_err_t svc_remove(const char *name);  /* refused while running */
+esp_err_t svc_start(const char *name);   /* marks supervised */
+esp_err_t svc_stop(const char *name);    /* admin stop: never restarted */
+void  batch_svc_boot(void);              /* autostart after AUTOEXEC.BAT */
+void  batch_svc_tick(void);              /* supervisor: reap + restart */
+void  batch_svc_init(void);              /* state reset (timer is lazy) */
+void  svc_slot_released(int slot);       /* job-exit hook */
+void  shell_command_service(int argc, char **argv);
+```
+- Registry `sd:/SERVICES.INI` via shared `storage_ini` (`file_set/delete/foreach/get`).
+  Supervisor is an own FreeRTOS timer created lazily on first supervision (never
+  in the boot heap window); service lines live in PSRAM (never BSS — 32 KB of
+  `.bss` starved the command worker exactly like bugs.md F34). Every restart
+  fires `tmgr_svc_restart` + WARN notify; parking posts ERR.
 
 ### Batch language commands
 ```c
@@ -1412,7 +1579,8 @@ macros expand to the `@`-specifiers below, so no command picks a colour by hand.
 | `SH_FILE` | File entry | `SH_BT` | Bluetooth |
 | `SH_EXE` | Executable entry | `SH_USB_UP` / `SH_USB_DOWN` | USB state |
 | `SH_SIZE` / `SH_TIME` | Listing size / time | `SH_OTA` | OTA accent |
-| `SH_RST` | Reset | `SH_BOLD` | Bold |
+| `SH_LINK` | Hyperlink (`@C@U`) | `SH_RST` | Reset |
+| `SH_BOLD` | Bold | | |
 
 The macros are plain string literals, so the header adds no dependencies and the ansi
 module remains a leaf. Colours are compile-time defaults; there is no runtime theming.
@@ -1424,6 +1592,22 @@ bright red. `@L` is bright blue.
 ### Shell Integration
 - `void shell_transcript_append_ansi(const char *text)` — Append ANSI-formatted text to transcript (strips ANSI for LVGL, passes through to UART).
 - `void shell_transcript_appendf_ansi(const char *format, ...)` — Append printf-style ANSI-formatted text to transcript. Honours printf flags, width, precision, and `l`/`ll` modifiers.
+- OSC 8 hyperlinks (`ESC ] 8 ;; <target> ST <label> ESC ] 8 ;; ST`, `ANSI_OSC8_OPEN_FMT` /
+  `ANSI_OSC8_CLOSE` in `components/ansi/ansi.h`) — dropped by every parser
+  (`ansi_process_text`, `ansi_process_text_ex`, `ansi_strip_to_plain`), so the
+  label alone reaches LVGL spans, plain buffers, redirect captures, and the
+  harness strip; capable serial terminals render a native link from the UART
+  mirror. Emit only through the shell link helpers below.
+
+### Hyperlinks (`components/shell/shell.h`, regions shared with `anchor`)
+- `void shell_link_register(label, command)` / `void shell_transcript_append_link(label, command)` —
+  confirm-gated region + `SH_LINK` styled OSC 8 label (one call prints and registers).
+- `int shell_link_count(void)` / `bool shell_link_get(i, &label, &command)` /
+  `bool shell_link_gate_get(i, &confirm)` — dense active-region enumeration (`link list`, `ui links`).
+- `bool shell_link_hit_test(x, y, &action, &label, &confirm)` — region hit with gate.
+- `bool shell_link_tap_command(command, label)` — first tap previews, second tap executes (worker async).
+- `bool shell_link_fire(command, label, confirm)` — one fire path for taps and `ui link`.
+- `void shell_link_clear_pending(void)` / `bool shell_link_pending_get(...)` — armed preview (`ui state link=`).
 
 ### ANSI Format Specifiers
 | Specifier | SGR Code | Meaning |
@@ -1849,6 +2033,8 @@ bool netsvc_is_connected(void);
 bool netsvc_is_active(void);
 esp_err_t netsvc_set_broker(const char *host, int port, const char *user);
 esp_err_t netsvc_set_password(const char *password);
+esp_err_t netsvc_set_tls(bool enabled);
+bool netsvc_get_tls(void);
 esp_err_t netsvc_connect(void);
 esp_err_t netsvc_disconnect(void);
 esp_err_t netsvc_subscribe(const char *filter);
@@ -1869,8 +2055,14 @@ int netsvc_outbox_decode(const char *rec, size_t rec_len, char *topic_out, size_
                          const uint8_t **payload_out, size_t *payload_len_out, uint8_t *qos_out);
 ```
 - The codec is pure and fully unit-tested (`test_netsvc.c`). The service is
-  plaintext MQTT, journals every publish to `sd:/NET/OUTBOX/` before the wire
-  (at-least-once), and pauses while Wi-Fi is down or an OTA owns flash. Inbound
+  MQTT with a pluggable transport: plain TCP by default, TLS when the NET
+  profile selects it (`net tls on`, persisted; port stays as configured). The
+  TLS path runs the same framing/resubscribe/outbox/pump driver over
+  `esp_tls` with the `httpget` CA policy (user CA store when loaded, Mozilla
+  bundle otherwise); plain TCP keeps the previous select+send/recv loops.
+  Selection applies on the next connect. Journals every publish to
+  `sd:/NET/OUTBOX/` before the wire (at-least-once), and pauses while Wi-Fi
+  is down or an OTA owns flash. Inbound
   `$pim/db/<name>` and `$pim/alarms` payloads merge newer-wins through
   `components/pim/`; delivery reaches batch only through `execute_async`.
 
@@ -1911,13 +2103,19 @@ void networking_wifi_known_record_connect(const char *ssid, const char *password
 - `esp_err_t networking_http_get(const char *url, networking_http_result_t *result)`
 - `void networking_http_result_free(networking_http_result_t *result)`
   - The `httpget` / `wget` engine: a simple HTTPS or HTTP GET over the same
-    `esp_http_client` stack c6ota uses. Buffers the body in PSRAM up to
-    `P4_CONFIG_HTTP_MAX_BODY_BYTES`, follows redirects per config, prints the
-    response header with semantic colours, and returns the body for the
-    command layer to print or save to SD. Returns ESP_OK on an HTTP 2xx;
-    the caller maps the return value onto ERRORLEVEL. A `user:pass@` URL
-    prefix enables HTTP Basic auth. An internal quiet mode suppresses the
-    transcript output for background callers.
+  `esp_http_client` stack c6ota uses. Buffers the body in PSRAM up to
+  `P4_CONFIG_HTTP_MAX_BODY_BYTES`, follows redirects per config, prints the
+  response header with semantic colours, and returns the body for the
+  command layer to print or save to SD. Returns ESP_OK on an HTTP 2xx;
+  the caller maps the return value onto ERRORLEVEL. A `user:pass@` URL
+  prefix enables HTTP Basic auth. An internal quiet mode suppresses the
+  transcript output for background callers.
+- `esp_err_t networking_http_request(method, url, req_content_type, req_body, req_len, depth, auth_user, auth_pass, result)`
+  - The general core behind `networking_http_get` (which delegates with GET):
+  arbitrary method (PROPFIND/PUT/GET for CardDAV), request body, Depth
+  header, and explicit Basic-auth credentials (base64 inside; passwords never
+  travel in URLs). WebDAV 207 Multi-Status counts as success alongside 2xx.
+  Always quiet; same TLS/timeout/redirect/body-cap policy as GET.
 
 - `esp_err_t networking_time_detect(int *offset_seconds_out, char *iana_out, size_t iana_size)`
   - Auto-detects the local timezone over the network (no hardcoded zone) by
@@ -1962,7 +2160,8 @@ and esp_http_client / esp_http_server / mbedTLS / TLS call in the firmware lives
 `components/networking/` (`http_server.c` owns the server, `netdiag.c` owns the lwIP
 diagnostics). The sanctioned exceptions are `components/c6ota/`, which drives
 `esp_hosted_slave_ota_*` and its own esp_http_client download because co-processor firmware
-update is its entire purpose. Anything else that needs networking state uses the accessors
+update is its entire purpose, and `components/certs/`, which parses DER certificates
+with mbedTLS because the trust store is its entire purpose. Anything else that needs networking state uses the accessors
 above; if a needed value is missing, add an accessor rather than reaching into the driver.
 
 Only the official Espressif path is used: `espressif/esp_hosted` for the transport and
@@ -2037,6 +2236,13 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
   - Host callback invoked from the NimBLE task when a BLE HID report arrives; filled
     by `main.c` with `shell_usb_keyboard_input` so BLE and USB keyboards share one
     input path.
+- `networking_host_ops_t.bluetooth_mouse_scroll(int32_t pixels)`
+  - Host callback for the BLE mouse wheel (same pixels convention as USB);
+    filled by `main.c` with `usb_host_scroll_transcript`. Mouse motion echo
+    is a local `bluetooth mouse on|off` flag; the wheel always scrolls.
+- Host-only HID is architecture, not a gap: the board uses keyboards/mice
+  (BLE central + USB host) and never becomes one — no peripheral/device HID
+  mode exists or is planned.
 
 ## LED API
 - `void led_init(void)`
@@ -2070,7 +2276,18 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
   - Prints transcript-visible host, MSC, and HID state.
 
 - `void usb_msc_mount(void)`
-  - Mounts a connected MSC device at `/usb0` with `msc_host_vfs_register(...)`.
+  - Mounts the slot-0 MSC device (`/usb0`) with `msc_host_vfs_register(...)`.
+
+- `void usb_msc_mount_slot(int slot)`
+  - Mount one MSC slot (`/usb0`..`/usbN`, up to `P4_CONFIG_USB_MSC_MAX_DEVICES`).
+    No-op when already mounted; reports when no device is connected.
+
+- `bool usb_msc_slot_connected(int slot)` / `bool usb_msc_slot_mounted(int slot)`
+  - Per-slot state used by the resolver automount and the `dir`/`usb ls` errors.
+
+- `void usb_msc_set_automount(bool enable)` / `bool usb_msc_get_automount(void)`
+  - Automount flag set by CONFIG.SYS `DEVICE=USB`; shown as `usb.msc.automount:`
+    in `usb status`. Connected-but-unmounted slots mount on the connect event.
 
 - `void usb_msc_ls(const char *path)`
   - Lists files from `usb:/...`, `/usb0/...`, or a relative USB-root path.
@@ -2098,6 +2315,51 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
 
 - `const char *usb_key_name_full(uint8_t key_code)`
   - Get a human-readable name for any USB HID key code (F1-F12, arrows, navigation, etc.).
+
+## Captive portal API (`components/portal/`)
+- `esp_err_t portal_start(void)` / `esp_err_t portal_stop(void)` / `bool portal_is_active(void)`
+  - SoftAP + DNS catch-all + HTTP setup page; `wifi setup on|off` drives these.
+    `set_config(AP)` must run after `set_mode(APSTA)` (ESP_ERR_WIFI_MODE
+    otherwise). AP TX power is capped (`P4_CONFIG_PORTAL_AP_TX_POWER_QDBM`,
+    saved/restored) because full-power beacons brownout-reboot USB-powered boards.
+- `bool portal_should_autostart(void)` / wired in `main.c` after `networking_init()`
+  - First-run predicate (no SD + no known networks); the SD-present-but-offline
+    case stays manual.
+- `void portal_request_stop(void)` / `bool portal_should_stop(void)` (also true past
+  `P4_CONFIG_PORTAL_TIMEOUT_SECS`) / `void portal_request_connect_after_stop(ssid, pw)` /
+  `void portal_connect_pending_after_stop(void)`
+  - Deferred stop + STA join: teardown always runs on the event-loop task
+    (private event + one-shot timer wake it), then the stashed credentials join
+    exactly once via `networking_wifi_connect_to()`.
+- `bool networking_wifi_connect_to(ssid, password)` — async STA join entry (same
+  task path as `wifi connect`), used by the portal post-submit join.
+- `size_t portal_html_escape(in, out, size)` — SSID escaping for the page (pure, unit-tested).
+- The setup page offers a scanned-SSID `<datalist>` picker (blocking STA scan per
+  page view, HTML-escaped, empty on failure) plus manual typing.
+
+## TLS trust store API (`components/certs/`)
+- `esp_err_t certs_load_sd_store(void)` / `esp_err_t certs_reload(void)` /
+  `void certs_clear(void)` / `bool certs_is_loaded(void)` /
+  `esp_err_t certs_rebuild_bundle(void)` / `void certs_get_store_info(...)`
+  - PEM concatenated as-is; DER validated (`parse_der`) and converted to PEM in
+    memory; the combined BUNDLE.PEM is never ingested back. `clear` also
+    releases the mbedTLS global CA store. `add`/`remove` verbs auto-reload.
+- `esp_err_t certs_der_to_pem(der, len, pem_out, cap, len_out)` — pure DER→PEM
+  (unit-tested with a real CA cert; note `mbedtls_pem_write_buffer` emits the
+  header unterminated, so the `\n` rides in the header argument).
+- `bool certs_name_equals_ci(a, b)` — whole-name compare (local on purpose:
+  the shared shell string helper lives outside certs' dependencies; extension
+  checks reuse `shell_path_has_extension`).
+
+## PIM CardDAV API (`components/pim/pim_carddav.c`)
+- Pure, unit-tested engine behind `pim net pull|push|sync`; HTTP I/O lives in
+  the command layer on `networking_http_request`, merging reuses the serial
+  `pim_vcf_merge_stream` core, rendering reuses `pim_db_render_vcf_uid`.
+  No tombstones in v1 (documented).
+- `int pim_carddav_scan_multistatus(xml, len, cb, ctx)` — namespace-tolerant
+  `<response>` scan yielding (href, etag); `int pim_carddav_split_cards(...)`,
+  `size_t pim_carddav_card_uid(...)` (tolerates `UID;params`), `bool
+  pim_carddav_join_url(...)`, `bool pim_carddav_uid_safe(...)`.
 
 ## Keyboard API (External Input Mode)
 
@@ -2439,6 +2701,8 @@ int modal_viewer_run(const char *title, const char *path, uint32_t timeout_ms);
 int modal_viewer_run_raw(const char *title, const char *path, uint32_t timeout_ms, bool raw);
 int modal_image_run(const char *title, const char *path, uint32_t timeout_ms, bool fit);
 int modal_hexview_run(const char *title, const char *path, uint32_t timeout_ms);
+int modal_hexview_run_buf(const char *title, const uint8_t *data, size_t len,
+                          uint32_t base_addr, uint32_t timeout_ms);
 ```
 
 - The `draw`/`tui` verbs live in `components/command/tui_commands.c`; the modal verbs in the same
@@ -2453,6 +2717,35 @@ int modal_hexview_run(const char *title, const char *path, uint32_t timeout_ms);
   - Handle a USB keyboard input event for CLI injection.
   - Dispatches to LVGL task via `lv_async_call` for safe input line manipulation.
   - Supports: printable characters, Enter (submit), Backspace, ESC (clear), Tab, arrows (cursor/history), Delete, Home, End.
+
+## Display HID Mouse Pointer (`components/display/display.c`)
+
+```c
+esp_err_t display_mouse_cursor_enable/disable(void);   /* default off */
+bool display_mouse_cursor_enabled(void);
+esp_err_t display_mouse_click_enable/disable(void);     /* default off */
+bool display_mouse_click_enabled(void);
+void display_mouse_report(int dx, int dy, uint8_t buttons);  /* native deltas, bit 0 = left */
+void display_mouse_position(int32_t *x_out, int32_t *y_out); /* native pixels */
+esp_err_t display_mouse_place(int32_t x, int32_t y);  /* absolute, clamped; needs cursor on */
+esp_err_t display_mouse_click_pulse(uint32_t hold_ms); /* press now, LVGL-task release; needs click on */
+void usb_mouse_cursor_enable/disable(void);  /* transcript confirmations */
+void usb_mouse_click_enable/disable(void);
+```
+- One shared LVGL pointer indev (USB in `components/usb/usb.c` + BLE in
+  `components/networking/bluetooth.c` forward boot-report deltas only; all
+  state lives here). Reports carry native-panel deltas — LVGL rotates pointer
+  coordinates itself, like touch — clamped to the native resolution.
+- x/y/pressed use a blocking mutex (a spinlock deadlocks the moment the
+  worker and the LVGL read timer overlap on one core: task watchdog,
+  measured). The plain bool switches are atomic and lock-free. Indev create
+  lives under the LVGL port mutex on the enable path; the indev is parked
+  (disabled), never deleted, and the cursor box is shown/hidden, never
+  destroyed (the indev cursor-object lifecycle wedges the worker, measured).
+- Cursor box moves via coalesced `lv_async_call` using
+  `lv_display_rotate_point()` (the same mapping taps use); it lives on the
+  top layer, is never clickable, and never appears in screenshots (active
+  screen only). Cursor size `P4_CONFIG_MOUSE_CURSOR_PX`.
 
 ## C6 OTA API
 - `void c6ota_init(void)`
@@ -2569,3 +2862,53 @@ int crypt_decrypt_mem(const uint8_t *in, size_t len, const char *pass,
   connected Bluetooth HID **or** the Tab5 keyboard; drives OSK auto-hide.
 - `header_status_wifi_tone()` maps the unknown-RSSI sentinel to the connected
   tone (pure, unit-tested).
+---
+
+## Library component APIs (rss / json / zip / archive / cas / chat / epub / math_disp)
+
+Each of these is a leaf-ish library under `components/`, reached through
+`components/command/`'s verb files; the verb bodies live with the command
+module, the logic with the library.
+
+### components/rss (`rss.h`)
+
+- `esp_err_t rss_parse(const char *data, size_t len, rss_feed_t *feed)` — RSS 2.0
+  and Atom 1.0 (Expat) and JSON Feed (`components/json`), auto-detected. On
+  `ESP_OK` the feed owns an item array released with `rss_feed_free()`.
+- `void rss_feed_free(rss_feed_t *feed)` — releases the item array and zeroes.
+- `const char *rss_format_name(rss_format_t format)`.
+- `esp_err_t rss_fetch(const char *url, const rss_subscription_t *sub, rss_feed_t *feed, char *etag_out, size_t etag_out_size, char *last_modified_out, size_t lm_out_size)`
+  — conditional GET plus Basic/Bearer auth through `networking_http_get_ex()`.
+  Returns `RSS_ERR_NOT_MODIFIED` for HTTP 304.
+
+### components/json (`json.h`)
+
+- `bool json_validate_text(...)`, `size_t json_pretty_text(...)`.
+- `bool json_walk(const char *text, size_t len, json_visit_fn visit, void *ctx, char *err, size_t err_size)`
+  — every scalar in document order with its dotted path (`items.0.title`).
+- `size_t json_unescape_span(const char *src, size_t len, char *out, size_t out_size)`.
+
+### components/zip (`zip.h`)
+
+- `zip_open` / `zip_close` / `zip_get_count` / `zip_get_entry` / `zip_find_entry`
+  / `zip_extract_entry` / `zip_extract_all` / `zip_list`, plus the pure header
+  parsers `zip_parse_local_header` / `zip_parse_central_dir` / `zip_parse_eocd`
+  and `zip_path_safe`. The reader is read-only.
+
+### components/archive (`archive.h`)
+
+- `archive_create` / `archive_extract` / `archive_list` / `archive_verify`
+  (USTAR `.p4a`); the ZIP branches delegate to `components/zip`.
+
+### components/cas (`cas.h`)
+
+- `cas_expr_new` / `cas_expr_free` / `cas_expr_clear`, `cas_parse`,
+  `cas_simplify` / `cas_expand` / `cas_factor`, `cas_diff` / `cas_integrate` /
+  `cas_solve` / `cas_series`, `cas_eval_num` / `cas_eval_at`,
+  `cas_get_node_at_cursor`, `cas_to_string`.
+
+### components/networking (additive)
+
+- `esp_err_t networking_http_get_ex(const char *url, const networking_http_header_t *headers, size_t header_count, const char *auth_user, const char *auth_pass, const char *bearer_token, networking_http_result_t *result)`
+  — GET with custom request headers, Basic/Bearer auth, and 304-as-success.
+  `networking_http_get()` and `networking_http_request()` keep their signatures.

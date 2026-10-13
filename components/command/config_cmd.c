@@ -205,6 +205,27 @@ static void config_render_launch_app(char *out, size_t out_size)
     snprintf(out, out_size, "%s", s_config_launch_app);
 }
 
+/* `HOSTNAME` is a plain environment slot (no runtime side effects): apply
+ * validates the charset/length contract shared with the `hostname` verb,
+ * render shows the live value or the compiled default. Boot restores it
+ * through the generic CONFIG.SYS KEY=VALUE fallback. */
+static bool config_apply_hostname(const char *value)
+{
+    if (value == NULL || !sync_name_ok(value) ||
+        strlen(value) >= (size_t)P4_CONFIG_ENV_NAME_BYTES) {
+        return false;
+    }
+    return shell_env_set("HOSTNAME", value) == ESP_OK;
+}
+
+static void config_render_hostname(char *out, size_t out_size)
+{
+    const char *current = shell_env_get("HOSTNAME");
+
+    snprintf(out, out_size, "%s",
+             (current != NULL && current[0] != '\0') ? current : P4_CONFIG_HOSTNAME_DEFAULT);
+}
+
 static bool config_apply_display_timeout(const char *value)
 {
     char *end = NULL;
@@ -276,6 +297,7 @@ static const config_setting_t config_settings[] = {
     { "OSK",              "ON",                                      config_apply_osk,              config_render_osk },
     { "HEADER",           "ON",                                      config_apply_header,           config_render_header },
     { "LAUNCH_APP",       "",                                        config_apply_launch_app,       config_render_launch_app },
+    { "HOSTNAME",         P4_CONFIG_HOSTNAME_DEFAULT,                config_apply_hostname,         config_render_hostname },
 };
 
 #define CONFIG_SETTING_COUNT (sizeof(config_settings) / sizeof(config_settings[0]))

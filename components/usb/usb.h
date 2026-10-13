@@ -139,6 +139,35 @@ void usb_status(void);
 /** Mount a connected MSC device at /usb0 via msc_host_vfs_register(). */
 void usb_msc_mount(void);
 
+/**
+ * Mount one MSC slot (/usb0..N). No-op when already mounted; reports when
+ * no device is connected. Slot 0 is `usb_msc_mount()`.
+ */
+void usb_msc_mount_slot(int slot);
+
+/** True when a device is attached in the MSC slot. */
+bool usb_msc_slot_connected(int slot);
+
+/** True when the MSC slot is VFS-mounted. */
+bool usb_msc_slot_mounted(int slot);
+
+/**
+ * Geometry of a connected MSC device for `disk list`.
+ * @return true with outputs filled (label is "Manufacturer Product").
+ */
+bool usb_msc_get_geometry(int slot, uint32_t *sector_size_out,
+                          uint32_t *sector_count_out, char *label_out,
+                          size_t label_size);
+
+/** VFS base path for an MSC slot ("/usb0"..); NULL when out of range. */
+const char *usb_msc_slot_path(int slot);
+
+/** Automount newly connected MSC devices (set by CONFIG.SYS DEVICE=USB). */
+void usb_msc_set_automount(bool enable);
+
+/** Current automount setting. */
+bool usb_msc_get_automount(void);
+
 /** List files from a USB MSC path with bounded transcript output. */
 void usb_msc_ls(const char *path);
 
@@ -153,6 +182,24 @@ void usb_hid_mouse_enable(void);
 
 /** Disable transcript echo for attached HID boot mouse. */
 void usb_hid_mouse_disable(void);
+
+/**
+ * Track HID mouse motion with a visible cursor (default off; shared
+ * display-owned pointer state with BLE). Prints a confirmation line.
+ */
+void usb_mouse_cursor_enable(void);
+
+/** Stop cursor tracking (click delivery is unaffected). */
+void usb_mouse_cursor_disable(void);
+
+/**
+ * Deliver HID mouse button-1 presses as taps at the tracked position
+ * (default off; shared with BLE). Prints a confirmation line.
+ */
+void usb_mouse_click_enable(void);
+
+/** Stop delivering button presses (motion tracking is unaffected). */
+void usb_mouse_click_disable(void);
 
 /** Returns true when any USB device (MSC or HID) is attached. */
 bool usb_is_connected(void);

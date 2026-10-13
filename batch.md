@@ -17,9 +17,13 @@
 ## 1. What a batch app is
 
 A batch app is a plain-text `.bat` file on the SD card. No compilation step.
-It runs as a command stream on the single command-worker task (no process
-isolation): it shares the transcript, the 64-slot RAM environment, the cwd,
-and ERRORLEVEL with the whole shell (see §3).
+It runs as a command stream on the single command-worker task (foreground
+apps share everything: transcript, the 64-slot RAM environment, cwd, and
+ERRORLEVEL with the whole shell — see §3). A `start`ed background job is
+the isolated case: it reads the global environment but `set` lands in a
+lazily-allocated job-private overlay (freed at job exit), and its `himem`
+blocks are owner-tracked, quota-capped, and freed at exit — so a background
+`set`/alloc never leaks into the foreground (no TSRs). Aliases stay global.
 
 **Discovery.** A file becomes an app by living on `PATH` (default `sd:/`) or
 under `sd:/APPS`, with an optional `sd:/APPS/<NAME>.APPINFO` metadata file.
@@ -87,7 +91,9 @@ the shim ` [hybrid]`. The frozen contract and the C side live in
 | **argv** | `%0` = script name, `%1`..`%9` = caller arguments, `%*` = everything from `%1`. `call` / `call :label` / `gosub` push a fresh frame; `shift` slides it. |
 | **cwd** | RAM-only current directory (storage-owned). Relative paths resolve at run time. |
 | **PATH** | RAM-only `PATH` slot (default `sd:/`). Resolution tries the literal name, `name.bat`, then each `;`-separated PATH entry with both forms. |
-| **environment** | 64 RAM slots (`P4_CONFIG_ENV_VAR_MAX`), session-global. `set` / `set /a` / `set /p` / `calc` mutate it; `call <file>::<routine>` isolates it; `setlocal` / `endlocal` snapshot/restore it (a scope left open is unwound on frame return). |
+| **environment** | 64 RAM slots (`P4_CONFIG_ENV_VAR_MAX`), session-global. `set`
+/ `set /a` / `set /p` / `calc` mutate it; `call <file>::<routine>` isolates it; `setlocal` / `endlocal`
+snapshot/restore it (a scope left open is unwound on frame return). A `start`ed job writes a private overlay instead (see §1). |
 | **errorlevel** | Integer exit code. Read with `if errorlevel N` (true when ≥ N) or `%ERRORLEVEL%`; set by commands, `choice` (1-based key index), `exit /b N`, `return N`. |
 
 ---
@@ -402,7 +408,8 @@ pristine text. Countdown: `while n GTR 0 do set /a n=n-1`.
 
 A `.FRM` file is one screen as flat `KEY=VALUE` lines (the same shape as
 `APPS/<APP>.APPINFO`). `screen run <file>` renders it through the existing
-`dialog` / `list` / `ask` / `form` / `menu` verbs — one implementation per
+`dialog` / `list` / `ask` / `form` / `menu` / `browse` / `view` / `hexview` /
+`image show` verbs — one implementation per
 surface, the file only declares. Results land in the same environment
 variables with the same ERRORLEVEL contract as the verbs.
 `screen info <file>` describes a screen without showing UI. A multi-screen
@@ -420,16 +427,27 @@ field2=DHCP=check:DHCP
 
 | Key | Meaning |
 |-----|---------|
-| `type=` | Required: `dialog` `list` `ask` `form` `menu`. |
-| `title=` | Screen title (required except `menu`, which prints its own). |
+| `type=` | Required: `dialog` `list` `ask` `form` `menu` `browse` `view` `hexview` `image`. |
+| `title=` | Screen title (required except `menu`, which prints its own; `browse`/`view`/`hexview`/`image` keep the verbs' own titles). |
 | `timeout=` | Seconds; the surface auto-cancels (same `/t:` semantics). |
 | `message=` | `dialog` body (required). |
 | `buttons=` | `dialog` buttons as `A|B` (1–2; default `OK`). |
 | `items=` | `list`/`menu` entries as `a|b|c` (required, up to 32). |
-| `var=` | `list`/`ask` result variable (`ask` defaults to `ASK_RESULT`). |
+| `var=` | `list`/`ask`/`browse` result variable (`ask` defaults to `ASK_RESULT`, `browse` to `BROWSE_RESULT`). |
 | `prompt=` `default=` | `ask` prompt (required) and default text. |
 | `password=` | `ask` hides input when `1`/`yes`/`true`/`on`. |
 | `field0..field11=` | `form` fields as `Label=type[:arg]:VAR` (`text`/`password`/`check`/`select` with `a|b|c` / `range` with `min-max`; at least one required). |
+| `start=` | `browse` initial directory (default: current directory). |
+| `file=` | `view`/`hexview`/`image` file to show (required). |
+| `raw=` | `view` skips the Markdown render when `1`/`yes`/`true`/`on`. |
+
+```ini
+title=Pick a document
+type=browse
+timeout=60
+start=sd:/DOCS
+var=CHOICE
+```
 
 ```bat
 screen run SETUP.FRM
@@ -547,7 +565,7 @@ prechecks, partial-file cleanup):
 
 ## 16. Display, TUI, graphics, audio (game kit)
 
-- **TUI grid** (`draw`, `tui`, `color`, `locate`, `anchor`): a logical
+- **TUI grid** (`draw`, `tui`, `color`, `locate`, `anchor`, `link`): a logical
   80×25 cell buffer mapped onto the live transcript region (rotation- and
   keyboard-aware; never pixels). Verbs: `box` (single/double/rounded + title
   + nested window stack), `line`, `fill`, `text`, `bar`, `table`, `list`,
@@ -555,12 +573,17 @@ prechecks, partial-file cleanup):
   `restore`, `close`, `refresh`, `fullscreen`. `tui stats` reports frame
   pacing. Refused in `start` background jobs and while a gfx canvas is open
   (read-only `plot status` / text-only `plot table` excepted).
+- **Hyperlinks** (`link <label> <command...>`, `link list`, `link open <n>`):
+  batch apps publish tap-confirm actions in SH_LINK style (bright cyan +
+  underline, OSC 8 target for serial terminals). First tap previews the
+  target, second tap runs it; `link open` runs synchronously. Regions share
+  the 32-slot table with `anchor` and clear on `cls`.
 - **GFX canvas** (`gfx ...`, exclusive RGB565 `lv_canvas` + one `gfx show`
   present per frame; never blocking I/O inside a frame loop):
   `init <w> <h>` (≤320×240) / `close` / `status` / `stats` / `clear` /
   `pixel` / `line` / `rect` / `circle` / `hline` / `vline` / `triangle` /
   `ellipse` / `polygon` / `fill` / `text` (8×8 bitmap font) / `show` /
-  `image <bmp> [x y [w h]]` / `load <slot> <bmp>` (8 slots, ≤64×64) /
+  `image <bmp> [x y [w h]]` / `load <slot> <bmp>` (8 slots, max 64x64) /
   `blit <slot> <x> <y> [transparent]` / **`blitmany <slot> [/s:N] [/r:deg]
   <x1> <y1> [<x2> <y2> ...] [transparent]`** (one command stamps up to
   `P4_CONFIG_GFX_BLITMANY_MAX` = 64 positions — a whole formation per line;
@@ -599,11 +622,23 @@ prechecks, partial-file cleanup):
 
 ## 17. App packaging, distribution, testing
 
-- `pkg list|info|verify|check|install <app> [/signed]|remove <app>` over
-  `PKGS/<APP>/` bundles (`APPINFO` + `.ASSETS` manifests + payloads). Install
-  CRC-checks everything before touching installed files and can refuse on a
-  bad/missing signature; remove recycles. `pkg key ...` manages the trusted
-  key; sign bundles host-side with `tools/pkg_sign.py`.
+- `pkg list|info|verify|check|install <app> [/signed] [/force]|remove <app>|purge <app>|outdated`
+  over `PKGS/<APP>/` bundles (`APPINFO` + `.ASSETS` manifests + payloads).
+  Install CRC-checks everything before touching installed files and can refuse on a
+  bad/missing signature, a downgrade (without `/force`), a `requires=` miss,
+  or a `min_fw=` gap; remove recycles but keeps app data (with a `purge`
+  hint), `purge` deletes it, `outdated` flags staged newer bundles.
+  `pkg key ...` manages the trusted key; sign bundles host-side with
+  `tools/pkg_sign.py`.
+- **App registration (no registry):** optional APPINFO keys make apps behave —
+  `handles=` (extensions for `assoc`/`open`), `setup=` (entrypoint for
+  `launch <APP> /setup`), `autostart=`/`alias=` (install hints for
+  `startup add` / `alias`), `data=` (uninstall manifest for `pkg purge`),
+  `requires=`/`min_fw=` (install gates). Associations live in `sd:/ASSOC.INI`
+  (`assoc [.ext[=app]]`, `ftype [app]`); boot apps in `sd:/STARTUP.INI`
+  (`startup add|remove|list`, run after AUTOEXEC.BAT, unsupervised —
+  supervised TSRs stay in SERVICES.INI). See [`ABI.md`](ABI.md) §3 and
+  [`command.md`](command.md) (`assoc`/`startup` sections).
 - Hybrid apps (`type=hybrid`) run a `.BAT` shim into a linked C `entry=`;
   native-only payloads are verified data (no SD execution — MCUs have no
   `dlopen`). See [`ABI.md`](ABI.md) and `docs/native_packaging.md`.
@@ -618,16 +653,43 @@ prechecks, partial-file cleanup):
   `start` (own batch context per worker; `taskkill` stops them cooperatively
   — `delay: stopped`). Display verbs refuse there by design (one shared
   canvas/TUI writer): poll sensors, log to `db`, or crunch arrays in the
-  background; keep every pixel foreground.
+  background; keep every pixel foreground. `start /wait` joins (returns the
+  job's errorlevel), `start /t:secs` auto-kills, bare `start` lists the pool
+  (`bg0`..`bgN`, `P4_CONFIG_BG_TASKS` slots), `start /b` emits machine rows
+  (`bgN|state|exit|prio|cpu|stack|ovl|himem|line`) for scripts.
+- **Task manager:** `suspend <job>` freezes a pool job (deadlines pause,
+  held mutexes stay held), `resume <job>` thaws it, `nice <job> <1..3|+n|-n>`
+  (`renice` alias) moves its priority inside
+  `P4_CONFIG_TMGR_PRIO_MIN/MAX` (pool workers run at +2). `taskkill` wakes a
+  suspended job so the stop applies at once. Pool slots only — system tasks
+  stay untouchable. The `tmgr_exit`, `tmgr_svc_restart`, and `tmgr_pool_full`
+  events let batch code rendezvous instead of polling (`wait tmgr_exit`).
+  Reference: `apps/taskmgr/TASKMGR.BAT` (pool/services/events dashboard;
+  `taskmgr` verb opens it).
+- **Resident services:** `service install <name> <line> [/restart] [/noauto]`
+  persists a background line in `sd:/SERVICES.INI`; the supervisor re-starts
+  `/restart` services whose jobs die unexpectedly (`taskkill` counts —
+  `service stop` is the off switch), bounded per boot, and re-starts autostart
+  entries after AUTOEXEC.BAT. `service list|start|stop|remove` manage them.
+  Reference: `SVC.BAT` (companion service), `MOODSVC.BAT` (headless heap
+  sampler feeding `MOODLAST.INI`), `MEMLOG.BAT` (bounded CSV log).
+- **Job coordination:** `lock <name> [/t:secs]` / `unlock <name>` (named
+  mutexes, auto-released at job exit), `signal <name>` / `wait <name> [/t:secs]`
+  (sticky events, one signal wakes one waiter). A job's `set` writes go to a
+  private overlay (freed at exit — no leaks into the foreground); `himem`
+  blocks are owner-tracked and quota-capped the same way. Nothing a job
+  allocates outlives it.
 
 ---
 
 ## 18. Budgets and prohibitions (read before clever ideas)
 
-- **Stacks:** the worker task is 8 KB and `batch → pipeline → batch` is
-  recursive. Never a command/line-sized stack local on that path —
-  heap-allocate transient buffers (the expansion/chain/frame/line buffers
-  all are). The checker task (`alarm`) keeps 8 KB for `snprintf` frames.
+- **Stacks:** the worker task is 32 KB and `batch → pipeline → batch` is
+  recursive — deep app nesting (e.g. `launch`ed batch → `while` → `call` →
+  `for`) already runs near the edge, so never add a command/line-sized
+  stack local on that path: heap-allocate transient buffers (the
+  expansion/chain/frame/line buffers and the `launch` path buffers all
+  are). The checker task (`alarm`) keeps 8 KB for `snprintf` frames.
 - **Heap:** internal DMA RAM is scarce (PSRAM is not DMA here). Large
   buffers prefer PSRAM with internal fallback (`applib` policy: ≥512 B →
   PSRAM first). SD reads never DMA into PSRAM (bounce through internal).

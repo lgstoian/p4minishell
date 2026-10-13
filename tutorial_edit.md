@@ -5,7 +5,7 @@ SD card. It is modelled on the classic MS-DOS `EDIT` program and adds modern
 extras: undo/redo, a line-number gutter, a current-line highlight, syntax
 highlighting for batch files, and touch support.
 
-> **Current build (v1.3.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.3.1):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
@@ -226,6 +226,10 @@ number, `Enter`. See §4.
   prompts for a path, pre-filled with the current one; a dirty buffer first asks
   `Open without saving? (Y/N)`. A missing path opens a new empty buffer bound to
   it, so `Open` is also how you create a file without leaving the editor.
+  When the cursor sits on a link — a markdown `[text](url)` URL (rendered
+  bright cyan + underline, the `SH_LINK` hyperlink style) or a bare URL/path
+  token — the prompt is pre-filled with the link target instead, so `F4` on a
+  link offers to follow it.
 - **Quit** ends the session. If the buffer has unsaved changes the editor asks
   `Quit without saving? (Y/N)` — `Y` discards, `N` keeps editing. A clean
   buffer quits immediately.
@@ -275,6 +279,9 @@ from the touch keyboard alone. The editor **opens on the Nav page**:
 3. **Numbers** — digits `0`–`9`.
 4. **Symbols** — every printable ASCII character, including the shell-critical
    `|`, `^`, `~`, and `` ` ``; its `Nav` button switches to the Nav page.
+When P4_CONFIG_GFX_FONT_EXTENDED=1 (default), the full CP437 range
+0x80-0xFF is also available: box-drawing (┌┐└┘├┤┬┴┼), accented letters
+(ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒ), and symbols (±×÷≈°∙√ⁿ²■).
 5. **Nav** — the editor control page (uniform 4×6). Carries navigation, file,
    and search commands.
 6. **Edit** — press `Edit` on the Nav page (uniform 3×6). Carries clipboard,
@@ -546,7 +553,7 @@ through the generic `shell_command_ops_t.modal_*` hooks (`modal_is_active`,
 pattern used by `dialog`, `list`, and `ask`.
 
 > **Other modals:** `edit` is one of six `modal_surface_t` surfaces on the shared runtime (`dialog`, `list`, `ask`, `browse`/`filebrowser`, `view`, `hexview`). The TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx` RGB565 canvas are separate surfaces reached through the `draw`/`gfx` batch verbs; all render into the live transcript region (80x25).
-> See `documentation.md` (architecture), `SDK.md` (integration), and `command.md` (verbs). The Companion is 10 pushed BATs and hardware-verified (deep 8/8 on COM3).
+> See `documentation.md` (architecture), `SDK.md` (integration), and `command.md` (verbs). The Companion is 11 pushed BATs and hardware-verified (deep 8/8 on COM3).
 
 All tunables are `P4_CONFIG_EDITOR_*` and documented in
 `p4minishell_config.yaml`.

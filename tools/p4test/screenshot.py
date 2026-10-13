@@ -93,7 +93,8 @@ def _parse_bmp(data: bytes) -> Bmp:
 
 
 def capture(dev: DeviceSession, out_dir: Optional[str] = None,
-            name: Optional[str] = None, timeout: float = 40.0) -> Bmp:
+            name: Optional[str] = None, timeout: float = 40.0,
+            unwind: bool = True) -> Bmp:
     """Grab the live screen (works while a modal/editor is open).
 
     The device takes the LVGL port lock with a zero wait, so a frame that is
@@ -103,18 +104,40 @@ def capture(dev: DeviceSession, out_dir: Optional[str] = None,
     a dogfooding action fires `screenshot` while an app/modal is still
     streaming, the read picks up that output before the prelude, which also
     clears once the line is drained and re-issued.
+
+    When a foreground app owns the serial input, it swallows the screenshot
+    line (a batch `ask` eats it as an answer, a `choice` key loop eats it as
+    keys) and no prelude ever arrives. With ``unwind=True`` (default) the
+    retry sends the documented foreground break (Ctrl-C) so a shell-owned
+    modal cancels and the capture can proceed at the shell; callers that
+    screenshot shell-owned modals (dogfood actions, visual sweep) rely on
+    this. With ``unwind=False`` no break is sent: the capture fails with
+    ``P4Error`` and the foreground app is left alive. Pass ``unwind=False``
+    when the app under test must survive the screenshot: Ctrl-C aborts a
+    batch at a line modal, which killed ADVENT's `ask` loop (and TCMD's key
+    loop state) in every full-suite s14 run while standalone runs passed,
+    because the game reached `ask` before the screenshot line arrived only
+    in the prefix state. Fewer attempts are made without unwind: an app that
+    owns the input never yields, so re-sending only feeds it more junk.
     """
+    attempts = 4 if unwind else 2
     prelude = b""
-    for attempt in range(4):
+    for attempt in range(attempts):
         dev.reset_input()
         dev.write_line("screenshot")
         prelude = dev.read_until(b"streaming", 15.0)
         if b"streaming" in prelude:
             break
-        if attempt < 3:
+        if attempt < attempts - 1:
+            if not unwind:
+                # A foreground app owns the input and will never yield it;
+                # leave it alive and let the caller record the miss.
+                time.sleep(0.6)
+                continue
             # A foreground app owning the input (a `key?` prompt) swallows the
             # screenshot line; send the documented foreground break so it
-            # unwinds, then retry.
+            # unwinds, then retry. Never use this while a batch under test
+            # owns the input: the break aborts the batch (ask/choice die).
             try:
                 dev.write(b"\x03\r\n")
             except Exception:  # noqa: BLE001

@@ -115,6 +115,13 @@ buffers:
       Pixels the transcript scrolls per input-row Up/Dn button press and per
       USB mouse wheel notch.
     range: "16..300"
+  mouse_cursor_px:
+    value: 14
+    type: int
+    description: >-
+      Mouse cursor square size in pixels (P4_CONFIG_MOUSE_CURSOR_PX); only
+      visible while `usb mouse cursor on` is opted in.
+    range: "8..32"
   transcript_scroll_follow_px:
     value: 32
     type: int
@@ -385,6 +392,21 @@ buffers:
     value: "DEBUG.LOG"
     type: string
     description: "Default SD profile for debug save"
+  debug_dump_bytes:
+    value: 256
+    type: int
+    description: "Maximum bytes shown by a single debug mem dump"
+    range: "16..2048"
+  debug_disk_max_sectors:
+    value: 4
+    type: int
+    description: "Maximum disk sectors shown per debug disk invocation"
+    range: "1..16"
+  debug_poke_max_bytes:
+    value: 64
+    type: int
+    description: "Maximum payload bytes accepted by a single debug poke"
+    range: "1..256"
 
 # ---- Clock and SNTP ----
 # Managed by: components/clock/clock.c + clock_commands.c
@@ -700,13 +722,18 @@ image:
     type: int
     description: "Show the image viewer fit-to-screen (1) or at native size only (0)"
     range: "0..1"
-  blitmany_max:
-    value: 64
-    type: int
-    description: "Maximum sprite stamps one `gfx blitmany` command draws"
-    range: "8..256"
-
-# ---- Wi-Fi ----
+blitmany_max:
+      value: 64
+      type: int
+      description: "Maximum sprite stamps one `gfx blitmany` command draws"
+      range: "8..256"
+    font_extended:
+      value: 1
+      type: int
+      description: "Enable full CP437 extended font (0x00-0xFF, 256 glyphs) instead of printable ASCII only (0x20-0x7E, 96 glyphs). The extended font adds box-drawing, accented letters, and symbols for hexview, editor, and gfx text. When disabled (0), the font array is still 256 entries but 0x00-0x1F and 0x80-0xFF are empty placeholders."
+      range: "0..1"
+  
+  # ---- Wi-Fi ----
 wifi:
   ssid_bytes:
     value: 33
@@ -997,8 +1024,13 @@ tls_certificates:
   certs_max_der_files:
     value: 8
     type: int
-    description: "Maximum number of DER (binary) certificate files the store will load"
+    description: "Maximum number of DER (binary) certificate files converted per scan"
     range: "0..32"
+  certs_max_der_bytes:
+    value: 8192
+    type: size_t
+    description: "Maximum bytes of a single DER file accepted for conversion"
+    range: "1024..65536"
   certs_combined_pem:
     value: "CERTS/BUNDLE.PEM"
     type: string
@@ -1196,6 +1228,11 @@ portal:
     type: int
     description: "Maximum simultaneous SoftAP client connections"
     range: "1..10"
+  ap_tx_power_qdbm:
+    value: 52
+    type: int
+    description: "RF TX power cap while the portal AP runs, quarter-dBm (52 = 13 dBm); full power brownouts USB-powered boards"
+    range: "8..84"
   timeout_secs:
     value: 300
     type: int
@@ -1206,6 +1243,261 @@ portal:
     type: int
     description: "HTTP port the portal page listens on"
     range: "80..65535"
+
+
+# ---- Board-to-Board Chat (chat) ----
+chat:
+  enable:
+    value: 1
+    type: int
+    description: "Enable the chat verb family and transport (0 compiles it out)"
+    range: "0..1"
+  ap_ssid:
+    value: "P4MiniShell-Chat"
+    type: string
+    description: "SSID broadcast by the chat host AP"
+  ap_channel:
+    value: 1
+    type: int
+    description: "Wi-Fi channel for the chat AP"
+    range: "1..13"
+  ap_max_conn:
+    value: 4
+    type: int
+    description: "Maximum simultaneous SoftAP client connections for chat"
+    range: "1..10"
+  ap_tx_power_qdbm:
+    value: 52
+    type: int
+    description: "RF TX power cap while the chat AP runs, quarter-dBm (52 = 13 dBm); mirrors portal to avoid USB brownout"
+    range: "8..84"
+  http_port:
+    value: 80
+    type: int
+    description: "HTTP port the chat server listens on"
+    range: "80..65535"
+  msg_max_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum message bytes a single chat send may transmit"
+    range: "64..1024"
+  inbox_max:
+    value: 32
+    type: int
+    description: "Maximum messages retained in the local inbox (per peer)"
+    range: "8..256"
+  log_max:
+    value: 128
+    type: int
+    description: "Maximum messages retained in the local log (all peers)"
+    range: "32..1024"
+  onmsg_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum bytes for the /onmsg hook command line"
+    range: "64..1024"
+  timeout_secs:
+    value: 0
+    type: int
+    description: "Maximum inactivity seconds before the chat host auto-stops (0 = no timeout)"
+    range: "0..3600"
+  host_defer_peer:
+    value: 1
+    type: int
+    description: "Allow chat host to start without explicit peer IP; peer joins later via chat peer <host-ip>"
+    range: "0..1"
+
+
+host_defer_peer:
+    value: 1
+    type: int
+    description: "Allow chat host to start without explicit peer IP; peer joins later via chat peer <host-ip>"
+    range: "0..1"
+
+
+# ---- EPUB Reader (epub) ----
+epub:
+  enable:
+    value: 1
+    type: int
+    description: "Enable the EPUB reader verb family and transport (0 compiles it out)"
+    range: "0..1"
+  ap_ssid:
+    value: "P4MiniShell-EPUB"
+    type: string
+    description: "SSID broadcast by the EPUB host AP"
+  ap_channel:
+    value: 1
+    type: int
+    description: "Wi-Fi channel for the EPUB AP"
+    range: "1..13"
+  ap_max_conn:
+    value: 4
+    type: int
+    description: "Maximum simultaneous SoftAP client connections for EPUB"
+    range: "1..10"
+  ap_tx_power_qdbm:
+    value: 52
+    type: int
+    description: "RF TX power cap while the EPUB AP runs, quarter-dBm (52 = 13 dBm); mirrors portal to avoid USB brownout"
+    range: "8..84"
+  http_port:
+    value: 80
+    type: int
+    description: "HTTP port the EPUB server listens on"
+    range: "80..65535"
+  msg_max_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum message bytes a single epub send may transmit"
+    range: "64..1024"
+  inbox_max:
+    value: 32
+    type: int
+    description: "Maximum messages retained in the local inbox (per peer)"
+    range: "8..256"
+  log_max:
+    value: 128
+    type: int
+    description: "Maximum messages retained in the local log (all peers)"
+    range: "32..1024"
+  onmsg_bytes:
+    value: 256
+    type: size_t
+    description: "Maximum bytes for the /onmsg hook command line"
+    range: "64..1024"
+  timeout_secs:
+    value: 0
+    type: int
+    description: "Maximum inactivity seconds before the EPUB host auto-stops (0 = no timeout)"
+    range: "0..3600"
+  host_defer_peer:
+    value: 1
+    type: int
+    description: "Allow EPUB host to start without explicit peer IP; peer joins later via epub peer <host-ip>"
+    range: "0..1"
+
+
+# ---- RSS / Atom / JSON Feed reader ----
+# Compile-time CAPACITIES only. Every behavioural tunable (poll interval,
+# retention, unread policy, auto-open, save policy) lives in CONFIG.SYS on
+# the SD card and is reached through the `config` command table + the boot
+# directive parser, exactly like BRIGHTNESS / HEADER / DISPLAY_TIMEOUT.
+rss:
+  log_tag:
+    value: "rss"
+    type: string
+    description: "ESP_LOGx tag for RSS reader messages"
+  max_body_bytes:
+    value: 1048576
+    type: int
+    description: "Maximum feed body bytes accepted by one fetch (larger responses are refused, not truncated)"
+    range: "8192..16777216"
+  item_capacity:
+    value: 200
+    type: int
+    description: "Maximum items retained per parsed feed (oldest surplus items are dropped)"
+    range: "8..4096"
+  sub_capacity:
+    value: 32
+    type: int
+    description: "Maximum subscription records held in the RAM mirror"
+    range: "4..512"
+  opml_max_bytes:
+    value: 262144
+    type: int
+    description: "Maximum OPML document bytes accepted by rss import"
+    range: "1024..1048576"
+  item_title_bytes:
+    value: 256
+    type: int
+    description: "Item title field capacity (bytes, UTF-8)"
+    range: "32..4096"
+  item_link_bytes:
+    value: 512
+    type: int
+    description: "Item link field capacity (bytes, UTF-8)"
+    range: "64..4096"
+  item_summary_bytes:
+    value: 2048
+    type: int
+    description: "Item summary field capacity (bytes, UTF-8)"
+    range: "128..65536"
+  item_content_bytes:
+    value: 8192
+    type: int
+    description: "Item content field capacity (bytes, UTF-8)"
+    range: "256..262144"
+  item_author_bytes:
+    value: 128
+    type: int
+    description: "Item author field capacity (bytes, UTF-8)"
+    range: "16..2048"
+  item_categories_bytes:
+    value: 256
+    type: int
+    description: "Item categories field capacity (bytes, UTF-8)"
+    range: "32..4096"
+  item_guid_bytes:
+    value: 256
+    type: int
+    description: "Item guid/URL identity field capacity (bytes, UTF-8)"
+    range: "32..4096"
+  item_date_bytes:
+    value: 64
+    type: int
+    description: "Item date field capacity (bytes, RFC 822 / ISO 8601 as published)"
+    range: "16..256"
+  feed_title_bytes:
+    value: 256
+    type: int
+    description: "Feed title field capacity (bytes, UTF-8)"
+    range: "32..4096"
+  feed_link_bytes:
+    value: 512
+    type: int
+    description: "Feed link field capacity (bytes, UTF-8)"
+    range: "64..4096"
+  feed_desc_bytes:
+    value: 1024
+    type: int
+    description: "Feed description field capacity (bytes, UTF-8)"
+    range: "64..16384"
+  feed_generator_bytes:
+    value: 128
+    type: int
+    description: "Feed generator field capacity (bytes, UTF-8)"
+    range: "16..2048"
+  sub_name_bytes:
+    value: 64
+    type: int
+    description: "Subscription INI section key capacity (bytes)"
+    range: "8..256"
+  sub_url_bytes:
+    value: 512
+    type: int
+    description: "Subscription URL capacity (bytes)"
+    range: "64..4096"
+  sub_etag_bytes:
+    value: 128
+    type: int
+    description: "Cached ETag / Last-Modified capacity for conditional GET (bytes)"
+    range: "16..1024"
+  sub_auth_bytes:
+    value: 128
+    type: int
+    description: "Subscription auth user / token capacity (bytes); never echoed to the transcript"
+    range: "16..1024"
+  fetch_timeout_ms:
+    value: 15000
+    type: int
+    description: "Per-fetch network timeout in ms"
+    range: "1000..120000"
+  poll_overlap_ms:
+    value: 2000
+    type: int
+    description: "Guard window before a subscription is eligible for another background poll"
+    range: "0..60000"
 
 
 # ---- Bluetooth ----
@@ -1562,6 +1854,26 @@ batch_env:
     type: size_t
     description: "Maximum environment variable value length"
     range: "16..1024"
+  bg_env_slots:
+    value: 16
+    type: size_t
+    description: "Job-private environment overlay slots per background task (lazily allocated on first bg set, discarded at job exit)"
+    range: "0..64"
+  himem_handles:
+    value: 16
+    type: size_t
+    description: "Maximum simultaneous himem extended-memory blocks"
+    range: "1..64"
+  himem_max_bytes:
+    value: 4194304
+    type: size_t
+    description: "Largest single himem block in bytes"
+    range: "65536..16777216"
+  himem_job_quota_bytes:
+    value: 1048576
+    type: size_t
+    description: "Himem bytes one background job may hold at once (foreground uncapped)"
+    range: "0..16777216"
   alias_max:
     value: 32
     type: size_t
@@ -1644,10 +1956,72 @@ batch_env:
     description: "Maximum nested batch file call depth"
     range: "1..16"
   bg_tasks:
-    value: 1
+    value: 3
     type: size_t
-    description: "Background batch task slots for start (beyond the main worker)"
-    range: "0..4"
+    description: "Background batch task slots for start (beyond the main worker); task manager operates on these slots"
+    range: "0..8"
+  tmgr_prio_min:
+    value: 1
+    type: int
+    description: "Task-manager priority lower bound as offset above tskIDLE_PRIORITY (P4_CONFIG_TMGR_PRIO_MIN)"
+    range: "0..3"
+  tmgr_prio_max:
+    value: 3
+    type: int
+    description: "Task-manager priority upper bound as offset above tskIDLE_PRIORITY (P4_CONFIG_TMGR_PRIO_MAX)"
+    range: "1..3"
+  tmgr_event_exit:
+    value: "tmgr_exit"
+    type: string
+    description: "Well-known event signalled on every background job exit (P4_CONFIG_TMGR_EVENT_EXIT)"
+  tmgr_event_svc_restart:
+    value: "tmgr_svc_restart"
+    type: string
+    description: "Well-known event signalled on every supervisor service restart (P4_CONFIG_TMGR_EVENT_SVC_RESTART)"
+  tmgr_event_pool_full:
+    value: "tmgr_pool_full"
+    type: string
+    description: "Well-known event signalled when a launch finds no free slot (P4_CONFIG_TMGR_EVENT_POOL_FULL)"
+  bg_eager_tasks:
+    value: 2
+    type: size_t
+    description: "Pool tasks created at boot; the rest are created lazily on first claim (boot heap window keeps 12KB for Wi-Fi)"
+    range: "1..8"
+  sync_mutex_max:
+    value: 8
+    type: size_t
+    description: "Maximum named mutexes for lock/unlock (P4_CONFIG_SYNC_MUTEX_MAX)"
+    range: "1..32"
+  sync_event_max:
+    value: 8
+    type: size_t
+    description: "Maximum named events for signal/wait (P4_CONFIG_SYNC_EVENT_MAX)"
+    range: "1..32"
+  sync_name_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum mutex/event name length including NUL (P4_CONFIG_SYNC_NAME_BYTES)"
+    range: "8..64"
+  svc_max:
+    value: 8
+    type: size_t
+    description: "Maximum registered resident services (P4_CONFIG_SVC_MAX)"
+    range: "1..32"
+  svc_name_bytes:
+    value: 24
+    type: size_t
+    description: "Maximum service name length including NUL (P4_CONFIG_SVC_NAME_BYTES)"
+    range: "8..64"
+  svc_tick_ms:
+    value: 5000
+    type: size_t
+    description: "Supervisor tick in ms (P4_CONFIG_SVC_TICK_MS)"
+    range: "1000..60000"
+  svc_restart_max:
+    value: 5
+    type: size_t
+    description: "Restarts per service per boot before parking (P4_CONFIG_SVC_RESTART_MAX)"
+    range: "0..32"
   file_io_buffer_bytes:
     value: 512
     type: size_t
@@ -1757,6 +2131,11 @@ gfind:
     type: int
     description: "Maximum commands in a single a & b && c || d chain"
     range: "2..32"
+  group_depth_max:
+    value: 8
+    type: int
+    description: "Maximum (...) group nesting depth (syntactic refusal past it)"
+    range: "1..32"
   errorlevel_unknown_command:
     value: 9009
     type: int
@@ -1926,6 +2305,10 @@ gfind:
     type: size_t
     description: "Maximum bytes for the session title string (DOS title verb)"
     range: "16..512"
+  hostname_default:
+    value: "p4minishell"
+    type: string
+    description: "Default device hostname shown by bare hostname"
   key_queue_depth:
     value: 16
     type: int
@@ -2420,7 +2803,12 @@ usb_host:
   msc_base_path:
     value: "/usb0"
     type: string
-    description: "VFS mount point for USB MSC devices"
+    description: "VFS mount point for the first USB MSC device (/usbN for later ones)"
+  msc_max_devices:
+    value: 4
+    type: int
+    description: "Maximum simultaneously tracked USB MSC devices (/usb0..N, drives u:..)"
+    range: "1..4"
   list_limit:
     value: 128
     type: size_t
@@ -2768,6 +3156,11 @@ pim_sync:
     type: uint32_t
     description: "Hard upper bound (bytes) for a single pim put payload (one full vCard/iCalendar collection; streams to SD)"
     range: "4096..67108864"
+  net_max_resources:
+    value: 256
+    type: int
+    description: "Maximum CardDAV resources fetched/pushed per pim net run (bounds PROPFIND list and per-resource loop)"
+    range: "16..4096"
 sync:
   inventory_max:
     value: 256

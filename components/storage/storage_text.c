@@ -496,20 +496,21 @@ static int shell_find_files(int argc, char **argv)
         return 2;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved_path), &session);
     if (error != ESP_OK) {
-        shell_print_error("find: SD card not present - insert and retry");
+        shell_print_error("find: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved_path)));
         return 2;
     }
 
     if (shell_sd_stat_path(resolved_path, &path_stat) != ESP_OK || !S_ISDIR(path_stat.st_mode)) {
         shell_transcript_appendf("find: path not found or not a directory %s\n", resolved_path);
-        shell_sd_end(&session, "find");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "find");
         return 2;
     }
 
     shell_find_walk(resolved_path, 0, &ctx);
-    shell_sd_end(&session, "find");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved_path), &session, "find");
 
     shell_sd_format_size(ctx.total_bytes, total_text, sizeof(total_text));
     shell_transcript_appendf_ansi(SH_MUTE "find:" SH_RST " %u file(s), %u dir(s), %s total%s\n",
@@ -563,6 +564,7 @@ int shell_command_find(int argc, char **argv)
     int lineno = 0;
     int matches = 0;
     int index;
+    bool redirect_clean;
 
     /* The presence of any discovery switch selects file-discovery mode;
      * otherwise `find` keeps its classic text-search behaviour. */
@@ -612,20 +614,26 @@ int shell_command_find(int argc, char **argv)
         return 2;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved), &session);
     if (error != ESP_OK) {
-        shell_print_error("find: SD card not present - insert and retry");
+        shell_print_error("find: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved)));
         return 2;
     }
 
     file = fopen(resolved, "r");
     if (file == NULL) {
         shell_print_error("find: cannot open %s (%s)", resolved, strerror(errno));
-        shell_sd_end(&session, "find");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "find");
         return 2;
     }
 
-    shell_transcript_appendf("---------- %s\n", resolved);
+    /* Redirected output stays machine-readable: no filename header, and the
+     * closing summary is reduced to the bare count (count mode) or dropped. */
+    redirect_clean = shell_redirect_capture_active();
+    if (!redirect_clean) {
+        shell_transcript_appendf("---------- %s\n", resolved);
+    }
     while (fgets(line, sizeof(line), file) != NULL) {
         bool hit;
 
@@ -655,11 +663,15 @@ int shell_command_find(int argc, char **argv)
     }
 
     fclose(file);
-    shell_sd_end(&session, "find");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "find");
 
     if (count_only) {
-        shell_transcript_appendf("find: %d line(s)\n", matches);
-    } else {
+        if (redirect_clean) {
+            shell_transcript_appendf("%d\n", matches);
+        } else {
+            shell_transcript_appendf("find: %d line(s)\n", matches);
+        }
+    } else if (!redirect_clean) {
         shell_transcript_appendf("find: %d match(es)\n", matches);
     }
 
@@ -700,16 +712,17 @@ int shell_command_more(int argc, char **argv)
         return 2;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved), &session);
     if (error != ESP_OK) {
-        shell_print_error("more: SD card not present - insert and retry");
+        shell_print_error("more: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved)));
         return 2;
     }
 
     file = fopen(resolved, "r");
     if (file == NULL) {
         shell_print_error("more: cannot open %s (%s)", resolved, strerror(errno));
-        shell_sd_end(&session, "more");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "more");
         return 2;
     }
 
@@ -748,7 +761,7 @@ int shell_command_more(int argc, char **argv)
     }
 
     fclose(file);
-    shell_sd_end(&session, "more");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "more");
 
     if (quit) {
         shell_transcript_appendf("more: stopped after %d line(s)\n", count);
@@ -770,6 +783,7 @@ int shell_command_fc(int argc, char **argv)
     char line1[SHELL_TEXT_LINE_BYTES];
     char line2[SHELL_TEXT_LINE_BYTES];
     shell_sd_session_t session;
+    storage_volume_t vol;
     FILE *file1 = NULL;
     FILE *file2 = NULL;
     esp_err_t error;
@@ -793,9 +807,15 @@ int shell_command_fc(int argc, char **argv)
         return 2;
     }
 
-    error = shell_sd_begin(&session);
+    /* The session follows the non-SD side of a cross-volume compare. */
+    vol = storage_volume_of_vfs_path(resolved1) != STORAGE_VOLUME_SD ?
+        storage_volume_of_vfs_path(resolved1) :
+        storage_volume_of_vfs_path(resolved2);
+
+    error = storage_volume_session_begin(vol, &session);
     if (error != ESP_OK) {
-        shell_print_error("fc: SD card not present - insert and retry");
+        shell_print_error("fc: %s not present - insert and retry",
+                          storage_volume_media_name(vol));
         return 2;
     }
 
@@ -805,7 +825,7 @@ int shell_command_fc(int argc, char **argv)
         shell_print_error("fc: cannot open %s", file1 == NULL ? resolved1 : resolved2);
         if (file1 != NULL) fclose(file1);
         if (file2 != NULL) fclose(file2);
-        shell_sd_end(&session, "fc");
+        storage_volume_session_end(vol, &session, "fc");
         return 2;
     }
 
@@ -852,7 +872,7 @@ int shell_command_fc(int argc, char **argv)
 
     fclose(file1);
     fclose(file2);
-    shell_sd_end(&session, "fc");
+    storage_volume_session_end(vol, &session, "fc");
 
     if (diffs == 0) {
         shell_print_ok("FC: no differences encountered");
@@ -960,17 +980,18 @@ int shell_command_sort(int argc, char **argv)
         return 1;
     }
 
-    error = shell_sd_begin(&session);
+    error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved), &session);
     if (error != ESP_OK) {
         free(lines);
-        shell_print_error("sort: SD card not present - insert and retry");
+        shell_print_error("sort: %s not present - insert and retry",
+                          storage_volume_media_name(storage_volume_of_vfs_path(resolved)));
         return 2;
     }
 
     file = fopen(resolved, "r");
     if (file == NULL) {
         shell_print_error("sort: cannot open %s (%s)", resolved, strerror(errno));
-        shell_sd_end(&session, "sort");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "sort");
         free(lines);
         return 2;
     }
@@ -997,7 +1018,7 @@ int shell_command_sort(int argc, char **argv)
     }
 
     fclose(file);
-    shell_sd_end(&session, "sort");
+    storage_volume_session_end(storage_volume_of_vfs_path(resolved), &session, "sort");
 
     if (count > 1) {
         int (*comparator)(const void *, const void *);
@@ -1391,6 +1412,8 @@ static void storage_walk_dir(const char *vfs_dir, int depth,
         char fatfs_path[SHELL_SD_PATH_BYTES];
         char child[SHELL_SD_PATH_BYTES];
         FF_DIR dir;
+        DIR *vfs_dir;
+        bool vfs_mode;
         FILINFO info;
     } *scratch = NULL;
     FRESULT result;
@@ -1408,37 +1431,73 @@ static void storage_walk_dir(const char *vfs_dir, int depth,
         shell_record_errorf("storage", ESP_ERR_NO_MEM, "Out of memory during a file walk");
         return;
     }
-    if (shell_sd_vfs_to_fatfs_path(vfs_dir, scratch->fatfs_path,
-                                   sizeof(scratch->fatfs_path)) != ESP_OK) {
-        heap_caps_free(scratch);
-        return;
-    }
-    result = f_opendir(&scratch->dir, scratch->fatfs_path);
-    if (result != FR_OK) {
-        heap_caps_free(scratch);
-        return;
+    /* USB roots enumerate through VFS (FATFS has no drive there); the loop
+     * body below runs shared logic on both volumes. Mirrors the VFS branch
+     * of shell_xcopy_walk (storage_files.c); kept separate because xcopy
+     * additionally synthesizes attrib/date per entry. */
+    scratch->vfs_mode = (storage_volume_of_vfs_path(vfs_dir) != STORAGE_VOLUME_SD);
+    if (scratch->vfs_mode) {
+        scratch->vfs_dir = opendir(vfs_dir);
+        if (scratch->vfs_dir == NULL) {
+            heap_caps_free(scratch);
+            return;
+        }
+    } else {
+        if (shell_sd_vfs_to_fatfs_path(vfs_dir, scratch->fatfs_path,
+                                       sizeof(scratch->fatfs_path)) != ESP_OK) {
+            heap_caps_free(scratch);
+            return;
+        }
+        result = f_opendir(&scratch->dir, scratch->fatfs_path);
+        if (result != FR_OK) {
+            heap_caps_free(scratch);
+            return;
+        }
     }
 
     while (true) {
         bool is_dir;
+        const char *name;
 
-        result = f_readdir(&scratch->dir, &scratch->info);
-        if (result != FR_OK || scratch->info.fname[0] == '\0') {
-            break;
+        if (scratch->vfs_mode) {
+            struct dirent *entry = readdir(scratch->vfs_dir);
+            struct stat st;
+
+            if (entry == NULL) {
+                break;
+            }
+            name = entry->d_name;
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+                continue;
+            }
+            if (snprintf(scratch->child, sizeof(scratch->child), "%s/%s",
+                         vfs_dir, name) < 0) {
+                continue;
+            }
+            if (stat(scratch->child, &st) != 0) {
+                continue;
+            }
+            is_dir = S_ISDIR(st.st_mode);
+        } else {
+            result = f_readdir(&scratch->dir, &scratch->info);
+            if (result != FR_OK || scratch->info.fname[0] == '\0') {
+                break;
+            }
+            name = scratch->info.fname;
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+                continue;
+            }
+            is_dir = (scratch->info.fattrib & AM_DIR) != 0;
         }
-        if (strcmp(scratch->info.fname, ".") == 0 ||
-            strcmp(scratch->info.fname, "..") == 0) {
+        if (skip != NULL && skip(vfs_dir, name, is_dir, ctx)) {
             continue;
         }
-        if (skip != NULL && skip(vfs_dir, scratch->info.fname,
-                                 (scratch->info.fattrib & AM_DIR) != 0, ctx)) {
-            continue;
+        if (!scratch->vfs_mode) {
+            if (snprintf(scratch->child, sizeof(scratch->child), "%s/%s",
+                         vfs_dir, name) < 0) {
+                continue;
+            }
         }
-        if (snprintf(scratch->child, sizeof(scratch->child), "%s/%s",
-                     vfs_dir, scratch->info.fname) < 0) {
-            continue;
-        }
-        is_dir = (scratch->info.fattrib & AM_DIR) != 0;
         if (is_dir) {
             storage_walk_dir(scratch->child, depth + 1, skip, on_file, ctx);
         } else {
@@ -1446,7 +1505,11 @@ static void storage_walk_dir(const char *vfs_dir, int depth,
         }
     }
 
-    (void)f_closedir(&scratch->dir);
+    if (scratch->vfs_mode) {
+        closedir(scratch->vfs_dir);
+    } else {
+        (void)f_closedir(&scratch->dir);
+    }
     heap_caps_free(scratch);
 }
 
@@ -1561,6 +1624,7 @@ int shell_command_findstr(int argc, char **argv)
 {
     findstr_opts_t opts;
     shell_sd_session_t session;
+    storage_volume_t vol;
     const char *files[P4_CONFIG_SD_LIST_LIMIT];
     const char *bare_string = NULL;
     int nfiles = 0;
@@ -1649,14 +1713,16 @@ int shell_command_findstr(int argc, char **argv)
             shell_print_error("findstr: invalid /G file path");
             return 2;
         }
-        if (shell_sd_begin(&g_session) != ESP_OK) {
-            shell_print_error("findstr: SD card not present - insert and retry");
+        error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved), &g_session);
+        if (error != ESP_OK) {
+            shell_print_error("findstr: %s not present - insert and retry",
+                              storage_volume_media_name(storage_volume_of_vfs_path(resolved)));
             return 1;
         }
         file = fopen(resolved, "r");
         if (file == NULL) {
             shell_print_error("findstr: cannot open /G file %s", resolved);
-            shell_sd_end(&g_session, "findstr");
+            storage_volume_session_end(storage_volume_of_vfs_path(resolved), &g_session, "findstr");
             return 1;
         }
         while (fgets(line, sizeof(line), file) != NULL) {
@@ -1666,12 +1732,12 @@ int shell_command_findstr(int argc, char **argv)
             }
             if (!shell_findstr_add_string(&opts, line, opts.use_regex)) {
                 fclose(file);
-                shell_sd_end(&g_session, "findstr");
+                storage_volume_session_end(storage_volume_of_vfs_path(resolved), &g_session, "findstr");
                 return 2;
             }
         }
         fclose(file);
-        shell_sd_end(&g_session, "findstr");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved), &g_session, "findstr");
     }
 
     if (opts.nstrings == 0) {
@@ -1690,14 +1756,16 @@ int shell_command_findstr(int argc, char **argv)
             shell_print_error("findstr: invalid /F file path");
             return 2;
         }
-        if (shell_sd_begin(&f_session) != ESP_OK) {
-            shell_print_error("findstr: SD card not present - insert and retry");
+        error = storage_volume_session_begin(storage_volume_of_vfs_path(resolved), &f_session);
+        if (error != ESP_OK) {
+            shell_print_error("findstr: %s not present - insert and retry",
+                              storage_volume_media_name(storage_volume_of_vfs_path(resolved)));
             return 1;
         }
         file = fopen(resolved, "r");
         if (file == NULL) {
             shell_print_error("findstr: cannot open /F file %s", resolved);
-            shell_sd_end(&f_session, "findstr");
+            storage_volume_session_end(storage_volume_of_vfs_path(resolved), &f_session, "findstr");
             return 1;
         }
         have_filelist = true;
@@ -1718,12 +1786,36 @@ int shell_command_findstr(int argc, char **argv)
             files[nfiles++] = copy;
         }
         fclose(file);
-        shell_sd_end(&f_session, "findstr");
+        storage_volume_session_end(storage_volume_of_vfs_path(resolved), &f_session, "findstr");
     }
 
-    error = shell_sd_begin(&session);
+    /* The main session follows the inputs: stdin's volume, else the first
+     * non-SD file's volume (any other volume is ensure-mounted per file). */
+    vol = STORAGE_VOLUME_SD;
+    if (nfiles == 0) {
+        char probe[SHELL_SD_PATH_BYTES];
+
+        if (storage_resolve_input_source(NULL, probe, sizeof(probe)) == ESP_OK) {
+            vol = storage_volume_of_vfs_path(probe);
+        }
+    } else {
+        int probe_index;
+
+        for (probe_index = 0; probe_index < nfiles; probe_index++) {
+            char probe[SHELL_SD_PATH_BYTES];
+
+            if (shell_fs_resolve_path(files[probe_index], probe, sizeof(probe)) == ESP_OK &&
+                storage_volume_of_vfs_path(probe) != STORAGE_VOLUME_SD) {
+                vol = storage_volume_of_vfs_path(probe);
+                break;
+            }
+        }
+    }
+
+    error = storage_volume_session_begin(vol, &session);
     if (error != ESP_OK) {
-        shell_print_error("findstr: SD card not present - insert and retry");
+        shell_print_error("findstr: %s not present - insert and retry",
+                          storage_volume_media_name(vol));
         if (have_filelist) {
             for (index = 0; index < nfiles; index++) {
                 free((void *)files[index]);
@@ -1739,12 +1831,12 @@ int shell_command_findstr(int argc, char **argv)
         error = storage_resolve_input_source(NULL, resolved, sizeof(resolved));
         if (error == ESP_ERR_NOT_FOUND) {
             shell_transcript_append_text("findstr: no input file given and no input redirection active\n");
-            shell_sd_end(&session, "findstr");
+            storage_volume_session_end(vol, &session, "findstr");
             return 1;
         }
         if (error != ESP_OK) {
             shell_print_error("findstr: invalid path");
-            shell_sd_end(&session, "findstr");
+            storage_volume_session_end(vol, &session, "findstr");
             return 1;
         }
         shell_findstr_search_file(resolved, &opts, false, &total_matches);
@@ -1753,8 +1845,13 @@ int shell_command_findstr(int argc, char **argv)
             char resolved[SHELL_SD_PATH_BYTES];
             struct stat st;
 
-            if (shell_sd_resolve_path(files[index], resolved, sizeof(resolved)) != ESP_OK) {
+            if (shell_fs_resolve_path(files[index], resolved, sizeof(resolved)) != ESP_OK) {
                 shell_print_error("findstr: invalid path %s", files[index]);
+                continue;
+            }
+            if (storage_volume_ensure_mounted(storage_volume_of_vfs_path(resolved)) != ESP_OK) {
+                shell_print_error("findstr: %s not present - insert and retry",
+                                  storage_volume_media_name(storage_volume_of_vfs_path(resolved)));
                 continue;
             }
             if (stat(resolved, &st) != 0) {
@@ -1776,8 +1873,13 @@ int shell_command_findstr(int argc, char **argv)
             char resolved[SHELL_SD_PATH_BYTES];
             struct stat st;
 
-            if (shell_sd_resolve_path(files[index], resolved, sizeof(resolved)) != ESP_OK) {
+            if (shell_fs_resolve_path(files[index], resolved, sizeof(resolved)) != ESP_OK) {
                 shell_print_error("findstr: invalid path %s", files[index]);
+                continue;
+            }
+            if (storage_volume_ensure_mounted(storage_volume_of_vfs_path(resolved)) != ESP_OK) {
+                shell_print_error("findstr: %s not present - insert and retry",
+                                  storage_volume_media_name(storage_volume_of_vfs_path(resolved)));
                 continue;
             }
             if (stat(resolved, &st) != 0) {
@@ -1792,7 +1894,7 @@ int shell_command_findstr(int argc, char **argv)
         }
     }
 
-    shell_sd_end(&session, "findstr");
+    storage_volume_session_end(vol, &session, "findstr");
 
     if (have_filelist) {
         for (index = 0; index < nfiles; index++) {
@@ -1995,6 +2097,7 @@ int shell_command_comp(int argc, char **argv)
     char resolved2[SHELL_SD_PATH_BYTES];
     FILE *file1 = NULL;
     FILE *file2 = NULL;
+    storage_volume_t vol;
     esp_err_t error;
     const char *arg1 = NULL;
     const char *arg2 = NULL;
@@ -2063,9 +2166,15 @@ int shell_command_comp(int argc, char **argv)
         return 2;
     }
 
-    error = shell_sd_begin(&session);
+    /* The session follows the non-SD side of a cross-volume compare. */
+    vol = storage_volume_of_vfs_path(resolved1) != STORAGE_VOLUME_SD ?
+        storage_volume_of_vfs_path(resolved1) :
+        storage_volume_of_vfs_path(resolved2);
+
+    error = storage_volume_session_begin(vol, &session);
     if (error != ESP_OK) {
-        shell_print_error("comp: SD card not present - insert and retry");
+        shell_print_error("comp: %s not present - insert and retry",
+                          storage_volume_media_name(vol));
         return 1;
     }
 
@@ -2079,7 +2188,7 @@ int shell_command_comp(int argc, char **argv)
         if (file2 != NULL) {
             fclose(file2);
         }
-        shell_sd_end(&session, "comp");
+        storage_volume_session_end(vol, &session, "comp");
         return 1;
     }
 
@@ -2093,7 +2202,7 @@ int shell_command_comp(int argc, char **argv)
 
     fclose(file1);
     fclose(file2);
-    shell_sd_end(&session, "comp");
+    storage_volume_session_end(vol, &session, "comp");
 
     if (mismatches == 0) {
         shell_print_ok("Files compare OK");

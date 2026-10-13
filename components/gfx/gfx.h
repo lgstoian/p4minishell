@@ -36,21 +36,24 @@ extern "C" {
 
 /** General image budget for `view` / `draw image` / `gfx image`: a
  * fit-to-screen decode target stays within this (the native image is never
- * materialized). 1024x640 RGB565 = 1.25 MB PSRAM worst case. */
-#define GFX_IMAGE_MAX_W 1024
-#define GFX_IMAGE_MAX_H 640
+ * materialized). 1280x1280 RGB565 = 3.2 MB PSRAM worst case — fits the
+ * Tab5's own screenshots in either rotation (1280x720 landscape,
+ * 720x1280 portrait); the reference board's 1024x600 shots fit with room. */
+#define GFX_IMAGE_MAX_W 1280
+#define GFX_IMAGE_MAX_H 1280
 
 /** Largest BMP file `gfx load` will ingest (256 KB: a 64x64 24-bit BMP is
  * ~12 KB; the budget covers headers + padding with headroom while keeping
  * the PSRAM staging buffer bounded). */
 #define GFX_BMP_MAX_BYTES 262144
 
-/** Built-in 8x8 ASCII font (`gfx_surface_text`): glyph index = ch-0x20,
- * one byte per row, MSB = leftmost pixel. Data lives in gfx_font.c. */
+/** Built-in 8x8 CP437 font (`gfx_surface_text`): glyph index = ch,
+ * one byte per row, MSB = leftmost pixel. Data lives in gfx_font.c.
+ * Covers full CP437 range 0x00-0xFF (256 glyphs). */
 #define GFX_FONT_W 8
 #define GFX_FONT_H 8
-#define GFX_FONT_FIRST 0x20
-#define GFX_FONT_LAST 0x7E
+#define GFX_FONT_FIRST 0x00
+#define GFX_FONT_LAST 0xFF
 #define GFX_FONT_GLYPHS (GFX_FONT_LAST - GFX_FONT_FIRST + 1)
 
 /** Polygon vertex cap for `gfx_surface_polygon` (scanline intersection

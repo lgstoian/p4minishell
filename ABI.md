@@ -29,7 +29,9 @@ entry, or a mix of both:
 
 - `launch`, `launch <name>`, and typing a `<name>` all resolve the `.bat`
   first (built-ins → `.bat` → linked native). `launch /list` marks hybrid
-  shims with ` [hybrid]` so scripts and users can tell them apart.
+  shims with ` [hybrid]` so scripts and users can tell them apart; it stays
+  escape-free for `for /f` parsing, while the human `launch` menu prints
+  every app name as a tap-confirm hyperlink.
 - A **hybrid** shim is ordinary batch: it may set variables, branch, open a
   `screen`, then `call` the C entry name, then act on its ERRORLEVEL and
   environment results. This is how a C app gets a batch "front door"
@@ -97,11 +99,21 @@ Flat `KEY=VALUE`, the same shape as any INI file (read through the shared
 
 | Key | Required | Meaning |
 |-----|----------|---------|
-| `title`, `description`, `version` | yes | Human metadata; `title` is shown by `launch`/`pkg list`. |
+| `title`, `description`, `version` | yes | Human metadata; `title` is shown by `launch`/`pkg list`. `version` is compared numerically (`pkg outdated`, downgrade guard). |
 | `type` | no | `batch` (default), `hybrid`, or `native`. Any other value aborts `pkg install`. |
 | `abi` | hybrid/native | Must equal `P4_CONFIG_NATIVE_ABI` (`applib-1`). |
 | `arch` | hybrid/native | Target slug, `esp32p4`. |
 | `entry` | hybrid/native | Name of the linked-in `app_main_t` the shim (hybrid) or dispatcher (native) invokes. Hybrid bundles **must** set it. |
+| `handles` | no | Comma-separated extensions the app opens (`.txt,.md`); listed by `ftype`, honoured by `assoc`/`open`. Documentary — no app is forced to accept `%1`. |
+| `setup` | no | Setup entrypoint label (convention: `:setup`, run via `launch <APP> /setup` with `%1=/setup`); shown by `pkg info`. |
+| `autostart` | no | `true` advertises boot-start; `pkg install` suggests `startup add <APP>` (never auto-added). |
+| `alias` | no | Short name; `pkg install` suggests `alias X="launch <APP>"` (never auto-registered, never a builtin name). |
+| `data` | no | Comma-separated uninstall-manifest paths (saves, stores); `pkg remove` keeps them with a warning, `pkg purge` deletes them. |
+| `requires` | no | Dependency (`APP>=1.2`, `APP=1.2`, `APP>1.2`); enforced at install. |
+| `min_fw` | no | Minimum firmware (`1.4.0`); enforced at install, never bypassed by `/force`. |
+
+New keys are additive metadata only — they never change the entry ABI, so
+no `P4_CONFIG_NATIVE_ABI` bump is required to adopt them.
 
 Bundle layout under `PKGS/<APP>/` mirrors the install tree; every file must
 be CRC-listed in `<APP>.ASSETS`. The optional native payload lives at

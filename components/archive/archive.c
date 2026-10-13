@@ -14,8 +14,10 @@
  */
 
 #include "archive.h"
+#include "zip.h"
 #include "storage.h"
 #include "shell.h"
+#include "strutil.h"
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
@@ -28,11 +30,22 @@
 #include <errno.h>
 #include <limits.h>
 #include <time.h>
+#include <zlib.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 
 #define ARCHIVE_TAG "archive"
 #define ARCHIVE_BLOCK 512
+
+/* Forward declarations: the ZIP format adapters are defined near the end of
+ * this file, after the dispatchers that call them. */
+static archive_format_t archive_detect_format(const char *archive_path);
+esp_err_t archive_create_zip(const char *archive_path, const char *const *sources,
+                             int source_count, archive_stats_t *stats);
+esp_err_t archive_extract_zip(const char *archive_path, const char *dest_dir,
+                              archive_stats_t *stats);
+esp_err_t archive_list_zip(const char *archive_path, archive_list_cb_t cb, void *ctx);
+esp_err_t archive_verify_zip(const char *archive_path, archive_stats_t *stats);
 
 #ifndef P4_CONFIG_ARCHIVE_MAX_ENTRIES
 #define P4_CONFIG_ARCHIVE_MAX_ENTRIES 512
@@ -632,8 +645,16 @@ static void archive_create_walk(archive_write_ctx_t *ctx, const char *vfs,
 }
 
 esp_err_t archive_create(const char *archive_path, const char *const *sources,
-                         int source_count, archive_stats_t *stats)
+                         int source_count, archive_stats_t *stats,
+                         archive_format_t format)
 {
+    if (format == ARCHIVE_FORMAT_AUTO) {
+        format = archive_detect_format(archive_path);
+    }
+    if (format == ARCHIVE_FORMAT_ZIP) {
+        return archive_create_zip(archive_path, sources, source_count, stats);
+    }
+    /* USTAR format (original implementation) */
     char tmp[P4_CONFIG_SD_PATH_BYTES + 16];
     char manifest_tmp[P4_CONFIG_SD_PATH_BYTES + 16];
     shell_sd_session_t session;
@@ -974,6 +995,11 @@ static int archive_reader_next(archive_reader_t *r, archive_entry_t *e)
 
 esp_err_t archive_list(const char *archive_path, archive_list_cb_t cb, void *ctx)
 {
+    archive_format_t format = archive_detect_format(archive_path);
+    if (format == ARCHIVE_FORMAT_ZIP) {
+        return archive_list_zip(archive_path, cb, ctx);
+    }
+    /* USTAR format (original implementation) */
     shell_sd_session_t session;
     archive_reader_t r;
     esp_err_t error = ESP_OK;
@@ -1044,6 +1070,11 @@ static bool archive_stream_to(FILE *in, FILE *out, uint64_t size, uint8_t *chunk
 esp_err_t archive_extract(const char *archive_path, const char *dest_dir,
                           archive_stats_t *stats)
 {
+    archive_format_t format = archive_detect_format(archive_path);
+    if (format == ARCHIVE_FORMAT_ZIP) {
+        return archive_extract_zip(archive_path, dest_dir, stats);
+    }
+    /* USTAR format (original implementation) */
     shell_sd_session_t session;
     archive_reader_t r;
     uint8_t *chunk = NULL;
@@ -1263,6 +1294,11 @@ static bool archive_manifest_parse(const char *line, uint32_t *crc_out,
 
 esp_err_t archive_verify(const char *archive_path, archive_stats_t *stats)
 {
+    archive_format_t format = archive_detect_format(archive_path);
+    if (format == ARCHIVE_FORMAT_ZIP) {
+        return archive_verify_zip(archive_path, stats);
+    }
+    /* USTAR format (original implementation) */
     shell_sd_session_t session;
     archive_reader_t r;
     uint8_t *chunk = NULL;
@@ -1436,4 +1472,235 @@ esp_err_t archive_verify(const char *archive_path, archive_stats_t *stats)
         error = ESP_FAIL; /* manifest lines without a matching member */
     }
     return error;
+}
+
+/* ========================================================================
+ * Format detection and dispatch
+ * ======================================================================== */
+
+static archive_format_t archive_detect_format(const char *archive_path)
+{
+    const char *ext = strrchr(archive_path, '.');
+    if (ext != NULL) {
+        if (strcasecmp(ext, ".zip") == 0) return ARCHIVE_FORMAT_ZIP;
+        if (strcasecmp(ext, ".p4a") == 0) return ARCHIVE_FORMAT_USTAR;
+    }
+
+    FILE *f = fopen(archive_path, "rb");
+    if (!f) return ARCHIVE_FORMAT_AUTO;
+
+    /* The ZIP magic is 4 bytes at offset 0, but the USTAR magic lives at
+     * offset 257 inside the 512-byte first header block, so the probe buffer
+     * must span a whole block (the old 4-byte buffer indexed buf[257..261]
+     * out of bounds). */
+    uint8_t buf[ARCHIVE_BLOCK];
+    size_t got = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+
+    if (got >= 4 && buf[0] == 0x50 && buf[1] == 0x4b && buf[2] == 0x03 && buf[3] == 0x04) {
+        return ARCHIVE_FORMAT_ZIP;
+    }
+    if (got >= ARCHIVE_BLOCK &&
+        memcmp(&buf[257], "ustar", 5) == 0) {
+        return ARCHIVE_FORMAT_USTAR;
+    }
+    return ARCHIVE_FORMAT_AUTO;
+}
+
+/* ---------------------------------------------------------------------
+ * ZIP format adapters
+ * ---------------------------------------------------------------------
+ * components/zip owns the ONLY ZIP reader in the firmware; the EPUB reader
+ * and this component share it. This file used to carry a second, private ZIP
+ * reader (including a duplicated zip_extract_entry_internal); it was removed
+ * and these adapters now delegate, so exactly one implementation exists.
+ */
+
+/** Local bridge state for the archive-level list callback. */
+typedef struct {
+    archive_list_cb_t cb;
+    void *ctx;
+    int count;
+} archive_list_bridge_t;
+
+esp_err_t archive_create_zip(const char *archive_path, const char *const *sources,
+                             int source_count, archive_stats_t *stats)
+{
+    /* components/zip is a reader; there is no ZIP writer. This replaces an
+     * older stub that called archive_create(..., ARCHIVE_FORMAT_ZIP), which
+     * dispatched straight back here and recursed until the stack overflowed. */
+    (void)archive_path;
+    (void)sources;
+    (void)source_count;
+    (void)stats;
+    ESP_LOGW(ARCHIVE_TAG, "ZIP creation unsupported (zip reader is read-only); "
+                          "create USTAR (.p4a) instead");
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t archive_extract_zip(const char *archive_path, const char *dest_dir,
+                              archive_stats_t *stats)
+{
+    void *handle = NULL;
+    zip_stats_t zstats;
+    archive_stats_t local;
+    esp_err_t err;
+    int count;
+    int i;
+
+    if (stats == NULL) {
+        memset(&local, 0, sizeof(local));
+        stats = &local;
+    }
+    memset(&zstats, 0, sizeof(zstats));
+
+    err = zip_open(archive_path, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* zip_stats_t reports one combined entry count; archive_stats_t splits
+     * files and directories, so classify from the directory entries first
+     * (metadata only, nothing is read). */
+    count = zip_get_count(handle);
+    for (i = 0; i < count; i++) {
+        zip_entry_t entry;
+
+        if (zip_get_entry(handle, i, &entry) == ESP_OK) {
+            if (entry.is_dir) {
+                stats->dirs++;
+            } else {
+                stats->files++;
+            }
+        }
+    }
+
+    err = zip_extract_all(handle, dest_dir, &zstats);
+    zip_close(handle);
+
+    stats->bytes += zstats.bytes;
+    stats->skipped += zstats.skipped;
+    return err;
+}
+
+/** Bridge components/zip's entry shape onto the archive-level one. */
+static bool archive_list_zip_bridge(const zip_entry_t *entry, void *ctx)
+{
+    archive_list_bridge_t *bridge = (archive_list_bridge_t *)ctx;
+    archive_entry_t out;
+
+    memset(&out, 0, sizeof(out));
+    snprintf(out.path, sizeof(out.path), "%s", entry->path);
+    out.size = entry->uncompressed_size;
+    out.mtime = 0;
+    out.is_dir = entry->is_dir;
+    out.crc = entry->crc32;
+    out.crc_known = true;
+    out.format = ARCHIVE_FORMAT_ZIP;
+
+    bridge->count++;
+    /* Returning false stops the walk. */
+    return bridge->cb(&out, bridge->ctx);
+}
+
+esp_err_t archive_list_zip(const char *archive_path, archive_list_cb_t cb, void *ctx)
+{
+    void *handle = NULL;
+    archive_list_bridge_t bridge;
+    esp_err_t err;
+
+    if (cb == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    bridge.cb = cb;
+    bridge.ctx = ctx;
+    bridge.count = 0;
+
+    err = zip_open(archive_path, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = zip_list(handle, archive_list_zip_bridge, &bridge);
+    zip_close(handle);
+    return err;
+}
+
+/** Temporary file used to re-read one member while verifying its CRC. */
+#define ARCHIVE_VERIFY_TMP "sd:/tmp/.archive-verify.tmp"
+
+esp_err_t archive_verify_zip(const char *archive_path, archive_stats_t *stats)
+{
+    void *handle = NULL;
+    archive_stats_t local;
+    esp_err_t err;
+    int count;
+    int i;
+
+    if (stats == NULL) {
+        memset(&local, 0, sizeof(local));
+        stats = &local;
+    }
+    err = zip_open(archive_path, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    count = zip_get_count(handle);
+    for (i = 0; i < count; i++) {
+        zip_entry_t entry;
+        FILE *f;
+        uint32_t crc = 0;
+        uint8_t *chunk;
+
+        if (zip_get_entry(handle, i, &entry) != ESP_OK) {
+            stats->skipped++;
+            continue;
+        }
+        if (!zip_path_safe(entry.path)) {
+            stats->skipped++;
+            continue;
+        }
+        if (entry.is_dir) {
+            stats->dirs++;
+            continue;
+        }
+        /* The zip reader exposes no raw-member read, so materialize the
+         * member once and CRC the bytes actually written. */
+        if (zip_extract_entry(handle, &entry, ARCHIVE_VERIFY_TMP) != ESP_OK) {
+            stats->skipped++;
+            continue;
+        }
+        f = fopen(ARCHIVE_VERIFY_TMP, "rb");
+        if (f == NULL) {
+            stats->skipped++;
+            continue;
+        }
+        chunk = malloc(P4_CONFIG_ARCHIVE_CHUNK_BYTES);
+        if (chunk == NULL) {
+            fclose(f);
+            remove(ARCHIVE_VERIFY_TMP);
+            zip_close(handle);
+            return ESP_ERR_NO_MEM;
+        }
+        for (;;) {
+            size_t got = fread(chunk, 1, P4_CONFIG_ARCHIVE_CHUNK_BYTES, f);
+
+            if (got == 0) {
+                break;
+            }
+            crc = strutil_crc32_update(crc, chunk, got);
+        }
+        free(chunk);
+        fclose(f);
+        remove(ARCHIVE_VERIFY_TMP);
+
+        if (crc != entry.crc32) {
+            stats->skipped++;
+        } else {
+            stats->files++;
+            stats->bytes += entry.uncompressed_size;
+        }
+    }
+    zip_close(handle);
+    return ESP_OK;
 }

@@ -7,7 +7,7 @@ P4MiniShell keeps all board-specific facts in one **board profile**:
 1024x600 MIPI-DSI, GT911 touch). A port means adding a profile, pointing the
 build at it, and wiring the drivers below — no firmware logic changes.
 
-- **Version:** v1.3.0 · **Target family:** ESP32-P4 + ESP32-C6
+- **Version:** v1.3.1 · **Target family:** ESP32-P4 + ESP32-C6
 - Shipped profiles: `boards/jc1060p470c/` (reference) and
   `boards/m5stack_tab5/` (see §6).
 - Related: [`readme.md`](readme.md) (configuration), [`SDK.md`](SDK.md)
@@ -58,6 +58,9 @@ Copy `boards/jc1060p470c/` and edit. YAML first, then the matching macros:
    `HW_SWAP_XY` (gates the `esp_lvgl_port` `swap_xy` guard).
 3. Set touch RST/INT (or `NC`), `TOUCH_SWAP/MIRROR_*`, I2C clock. A
    non-GT911 touch needs a `bsp_touch_new` equivalent + component dep.
+   Without a touch panel, transcript hyperlinks still work: `link open <n>`
+   / `ui link <n>` fire regions keyboard-side, and `usb mouse move`/`click`
+   simulate the pointer over serial (a HID mouse needs no touch either).
 4. Backlight: `BACKLIGHT_USE_LEDC_PWM` + timer/channel/freq/resolution, or a
    plain-GPIO path with a `components/display/` note.
 
@@ -227,3 +230,27 @@ against it. After this change `boot_regression.py COM6 20` is clean 20/20 with
 **zero** first-RPC/`0x107`/recovery signatures (previously every boot hit the
 recovery path), and `dogfood.py COM6` no longer reboots under load. The
 transport-reset retry stays as a safety net for the genuinely marginal link.
+
+## 8. EPUB Reader Porting Notes
+
+The EPUB reader (`components/epub/`) requires:
+
+- **Storage**: SD card with sufficient free space for temporary extraction
+  (`P4_CONFIG_EPUB_TEMP_DIR`, default `/sd/tmp/epub_XXXXXX`).
+- **Dependencies**: `zip`, `archive`, `storage`, `strutil`, `markdown`, `expat`, `zlib`
+  (all standard in the build).
+- **Memory**: Temporary extraction uses PSRAM via `p4heap`; chapter rendering
+  uses `html_render_ansi()` with `P4_CONFIG_HTML_RENDER_MAX_BYTES` buffer.
+- **Configuration**: `p4minishell_config.h` macros:
+  - `P4_CONFIG_EPUB_TEMP_DIR` — temp dir pattern (default `/sd/tmp/epub_XXXXXX`)
+  - `P4_CONFIG_EPUB_MAX_CHAPTERS` — spine cap (default 256)
+  - `P4_CONFIG_EPUB_MAX_TOC` — TOC cap (default 256)
+  - `P4_CONFIG_EPUB_MAX_MANIFEST` — manifest cap (default 256)
+- **No hardware dependencies**: EPUB reader is purely software; no board-specific
+  drivers needed. Works on any board with SD card and sufficient PSRAM.
+- **Test**: `test_epub.c` covers config init, OPF/NCX parse, spine/TOC, render.
+  Add to `test/main/CMakeLists.txt` SRCS.
+- **Command registration**: `epub_commands_get_table()` + `shell_command_epub()`
+  in `components/command/epub_commands.c`, registered in `command.c` dispatch.
+- **Documentation**: `command.md` (epub section), `file_support.md` (EPUB row),
+  `command.md` (epub verbs), `readme.md` (EPUB Reader feature).

@@ -12,5 +12,5 @@ echo [M-AGENDA]
 title "Agenda"
 cal today
 cal next
-notify "agenda checked" /t:3
+notify /t:3 "agenda checked"
 echo [M-AGENDA-DONE]

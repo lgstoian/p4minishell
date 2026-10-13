@@ -63,21 +63,23 @@ goto :svc_status
 :svc_status
 echo [M-SVC-STATUS]
 tasks
+service list
 alarm status
 cal next
-dialog "Services" "Tasks, alarm status and the next alarm are shown above." "OK"
+dialog "Services" "Jobs, services, alarm status and the next alarm are shown above." "OK"
 goto :services
 
 :svc_start
 echo [M-SVC-START]
-start SVC
-dialog "Services" "Background service started on bg0. Use Stop service or taskkill bg0." "OK"
+service install svc "SVC" /restart
+service start svc
+dialog "Services" "Companion service installed (/restart) and started. Use Stop service (taskkill only restarts it)." "OK"
 goto :services
 
 :svc_stop
 echo [M-SVC-STOP]
-taskkill bg0
-dialog "Services" "Stop requested for bg0." "OK"
+service stop svc
+dialog "Services" "Service stopped (admin stop: no restart)." "OK"
 goto :services
 
 :svc_list

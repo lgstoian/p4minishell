@@ -10,6 +10,9 @@ idf_component_register(
         test_shell_quoting.c
         test_shell_pipeline.c
         test_storage_format.c
+        test_storage_volumes.c
+        test_certs.c
+        test_portal.c
         test_batch_expr.c
         test_batch_control.c
         test_wifi_state.c
@@ -19,6 +22,8 @@ idf_component_register(
         test_findstr.c
         test_comp.c
         test_task_sort.c
+        test_tmgr.c
+        test_assoc.c
         test_editor.c
         test_keyboard.c
         test_config.c
@@ -27,6 +32,8 @@ idf_component_register(
         test_db.c
         test_alarm.c
         test_modal.c
+        test_himem.c
+        test_svc.c
         test_power.c
         test_serial.c
         test_screen.c
@@ -45,6 +52,7 @@ idf_component_register(
         test_csv.c
         test_import.c
         test_pim.c
+        test_pim_carddav.c
         test_archive.c
         test_macro.c
         test_bind.c
@@ -54,6 +62,9 @@ idf_component_register(
         test_netsvc.c
         test_userial.c        test_asset.c
         test_pkg.c
+        test_epub.c
+        test_chat.c
+        test_cas.c
         test_theme.c
         test_header.c
         test_clock.c
@@ -64,6 +75,9 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/shell"
         "${CMAKE_SOURCE_DIR}/../components/ansi"
         "${CMAKE_SOURCE_DIR}/../components/storage"
+        "${CMAKE_SOURCE_DIR}/../components/certs/include"
+        "${CMAKE_SOURCE_DIR}/../components/portal/include"
+        "${CMAKE_SOURCE_DIR}/../components/strutil/include"
         "${CMAKE_SOURCE_DIR}/../components/batch"
         "${CMAKE_SOURCE_DIR}/../components/command"
         "${CMAKE_SOURCE_DIR}/../components/pim"
@@ -80,6 +94,8 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/audio"
         "${CMAKE_SOURCE_DIR}/../components/filetype"
         "${CMAKE_SOURCE_DIR}/../components/gfx"
+        "${CMAKE_SOURCE_DIR}/../components/math_disp/include"
+        "${CMAKE_SOURCE_DIR}/../components/cas/include"
         "${CMAKE_SOURCE_DIR}/../components/imu/include"
         "${CMAKE_SOURCE_DIR}/../components/power_monitor/include"
         "${CMAKE_SOURCE_DIR}/../components/imagefmt/include"
@@ -90,7 +106,12 @@ idf_component_register(
         shell
         ansi
         storage
+        certs
+        portal
+        strutil
         batch
+        cas
+        math_disp
         command
         pim
         networking
@@ -112,6 +133,8 @@ idf_component_register(
         imagefmt
         swgcm
         header
+        json
+        rss
         esp_timer
         mbedtls
 )

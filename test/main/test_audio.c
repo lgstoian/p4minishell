@@ -7,7 +7,8 @@
  * @brief Unit tests for the pure audio helpers (components/audio/audio.c).
  *
  * Covers audio_output_parse(), audio_output_name(), audio_route_resolve(),
- * audio_amp_should_enable() and audio_wav_params_ok() — all side-effect
+ * audio_amp_should_enable(), audio_wav_params_ok(), audio_mic_accumulate(),
+ * audio_mic_stats_finish(), and the Goertzel detector — all side-effect
  * free. The BSP jack read, amp toggle, codec path, and playback task stay
  * hardware-verified (s12).
  */
@@ -18,6 +19,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 void test_audio_output_parse(void)
 {
@@ -132,19 +134,28 @@ void test_audio_mic_stats(void)
 
 void test_audio_mic_goertzel(void)
 {
-    /* A pure 440 Hz sine at 22050 Hz over 0.5 s: the detector must report
-     * near the sine's RMS (~40% full scale here) and reject silence. */
+    /* A pure 440 Hz sine at 22050 Hz: the detector must report near the
+     * sine's RMS (~40% full scale here) and reject silence. N=2205 is an
+     * exact 44 cycles, so 440 Hz (and its 880 Hz harmonic check) fall on
+     * integer DFT bins. Buffers are heap-allocated: two 0.5 s stack buffers
+     * overflowed the Unity task stack (stack protection fault, reset loop).
+     */
+#define GOERTZEL_N 2205
     double state[3] = { 0.0, 0.0, 0.0 };
-    int16_t sine[11025];
+    int16_t *sine = malloc(GOERTZEL_N * sizeof(int16_t));
+    int16_t *silence = malloc(GOERTZEL_N * sizeof(int16_t));
     int i;
     int tone;
 
-    for (i = 0; i < 11025; i++) {
+    TEST_ASSERT_NOT_NULL(sine);
+    TEST_ASSERT_NOT_NULL(silence);
+    for (i = 0; i < GOERTZEL_N; i++) {
         sine[i] = (int16_t)(13000.0 *
             sin(2.0 * 3.14159265358979323846 * 440.0 * (double)i / 22050.0));
+        silence[i] = 0;
     }
-    audio_mic_goertzel_feed(sine, 11025, 22050, 440, state);
-    tone = audio_mic_goertzel_finish(state, 11025);
+    audio_mic_goertzel_feed(sine, GOERTZEL_N, 22050, 440, state);
+    tone = audio_mic_goertzel_finish(state, GOERTZEL_N);
     TEST_ASSERT_INT_WITHIN(1500, 9192, tone);
 
     /* Off-frequency energy must not leak in: the same buffer read at 880 Hz
@@ -152,13 +163,15 @@ void test_audio_mic_goertzel(void)
     {
         double off[3] = { 0.0, 0.0, 0.0 };
         double quiet[3] = { 0.0, 0.0, 0.0 };
-        int16_t silence[11025] = { 0 };
 
-        audio_mic_goertzel_feed(sine, 11025, 22050, 880, off);
-        TEST_ASSERT_LESS_THAN(2000, audio_mic_goertzel_finish(off, 11025));
-        audio_mic_goertzel_feed(silence, 11025, 22050, 440, quiet);
-        TEST_ASSERT_EQUAL_INT(0, audio_mic_goertzel_finish(quiet, 11025));
+        audio_mic_goertzel_feed(sine, GOERTZEL_N, 22050, 880, off);
+        TEST_ASSERT_LESS_THAN(2000, audio_mic_goertzel_finish(off, GOERTZEL_N));
+        audio_mic_goertzel_feed(silence, GOERTZEL_N, 22050, 440, quiet);
+        TEST_ASSERT_EQUAL_INT(0, audio_mic_goertzel_finish(quiet, GOERTZEL_N));
     }
+    free(sine);
+    free(silence);
+#undef GOERTZEL_N
 
     /* NULL-safe, empty-safe. */
     audio_mic_goertzel_feed(NULL, 10, 22050, 440, state);

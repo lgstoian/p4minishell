@@ -23,6 +23,7 @@
 #include "batch.h"
 #include "storage.h"
 #include "filetype.h"
+#include "modal_surf.h"
 #include "shell.h"
 #include "markdown.h"
 #include "ansi_palette.h"
@@ -252,10 +253,20 @@ static shell_bind_t s_binds[SHELL_BIND_MAX];
  * The main worker owns slot 0; `start` background tasks own the rest.
  * Everything a batch run mutates while executing — frame stack, errorlevel,
  * goto state, stop mode, setlocal scopes — lives here so two workers never
- * share them. Shared DOS-style state (env table, aliases, cwd) stays global.
+ * share them. The environment table is global, but a background task writes
+ * through its lazily-allocated job-private overlay (`bg_env`) and reads
+ * overlay-first, so `set` in a job can never leak into the foreground
+ * (process isolation); the overlay dies with the job. Aliases and cwd stay
+ * global (shared services, like the filesystem).
  * Code below keeps using the historical `s_*` names: they are macros into
  * the current task's slot, so the ~140 use sites needed no edits. Unknown
- * tasks (unit tests, init) fall back to slot 0. */
+ * tasks (unit tests, init) fall back to slot 0.
+ *
+ * Memory placement matters: one ctx is ~10 KB (command-size goto/label
+ * scratch), so only slot 0 lives in BSS — the pool slots live in PSRAM
+ * (allocated at batch_init). BSS growth here directly eats the boot
+ * internal-RAM window that the command worker (32 KB contiguous) and the
+ * Wi-Fi task (12 KB) need. */
 typedef struct {
     shell_batch_frame_t *active_frame;
     int errorlevel;
@@ -278,9 +289,20 @@ typedef struct {
     bool in_use;            /* bg slot claimed by a live task */
     bool kill_requested;    /* taskkill: unwind at the next batch line */
     char all_args[SHELL_BATCH_LINE_BYTES]; /* `%*` scratch (per task) */
+    /* Job-private environment overlay (`set` writes land here, reads check
+     * here first). NULL until the job's first `set` (dynamic: foreground
+     * and read-only jobs cost nothing); freed at job exit. An entry with an
+     * empty value shadows (clears) the same-named global. `setlocal` scopes
+     * snapshot the global table only — the overlay is untouched by
+     * endlocal and dies with the job. */
+    shell_env_var_t *bg_env;
+    /* Auto-kill deadline (`start /t:secs`, tick ms, 0 = none), enforced by
+     * batch_bg_poll_timeout() at the cooperative poll points. */
+    uint32_t bg_deadline_ms;
 } batch_task_ctx_t;
 
-static batch_task_ctx_t s_batch_ctx[1 + P4_CONFIG_BG_TASKS];
+static batch_task_ctx_t s_fg_ctx;
+static batch_task_ctx_t *s_bg_ctx = NULL;
 
 static batch_task_ctx_t *batch_ctx_current(void)
 {
@@ -289,14 +311,43 @@ static batch_task_ctx_t *batch_ctx_current(void)
 
     /* xTaskGetCurrentTaskHandle is safe during init (returns NULL). */
     me = xTaskGetCurrentTaskHandle();
-    if (me != NULL) {
-        for (i = 1; i < 1 + P4_CONFIG_BG_TASKS; i++) {
-            if (s_batch_ctx[i].in_use && s_batch_ctx[i].task == me) {
-                return &s_batch_ctx[i];
+    if (me != NULL && s_bg_ctx != NULL) {
+        for (i = 0; i < (int)P4_CONFIG_BG_TASKS; i++) {
+            if (s_bg_ctx[i].in_use && s_bg_ctx[i].task == me) {
+                return &s_bg_ctx[i];
             }
         }
     }
-    return &s_batch_ctx[0];
+    return &s_fg_ctx;
+}
+
+/** Slot index for a ctx pointer (0 = foreground). */
+static int batch_ctx_slot(const batch_task_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx == &s_fg_ctx || s_bg_ctx == NULL) {
+        return 0;
+    }
+    {
+        long index = (long)(ctx - s_bg_ctx);
+
+        if (index < 0 || index >= (long)P4_CONFIG_BG_TASKS) {
+            return 0;
+        }
+        return (int)index + 1;
+    }
+}
+
+/** Writable slot context: slot 0 is the foreground ctx, 1..N the pool.
+ *  @return NULL for a bad slot (or when the pool array is missing). */
+static batch_task_ctx_t *batch_ctx_at(int slot)
+{
+    if (slot == 0) {
+        return &s_fg_ctx;
+    }
+    if (slot < 1 || slot > (int)P4_CONFIG_BG_TASKS || s_bg_ctx == NULL) {
+        return NULL;
+    }
+    return &s_bg_ctx[slot - 1];
 }
 
 #define s_active_batch_frame (batch_ctx_current()->active_frame)
@@ -460,6 +511,10 @@ static shell_env_var_t *shell_env_find_slot(const char *name)
     return NULL;
 }
 
+/* Forward: the job-private env overlay (defined with shell_env_set below,
+ * used by shell_env_get above). */
+static shell_env_var_t *batch_bg_overlay(bool create);
+
 static shell_env_var_t *shell_env_find_free_slot(void)
 {
     size_t index;
@@ -477,10 +532,44 @@ const char *shell_env_get(const char *name)
 {
     /* Shared table, two workers: a returned pointer stays valid only until
      * the next set (callers copy it out immediately — established pattern).
-     * The lookup itself is lock-free; mutation takes the env lock. */
-    shell_env_var_t *slot = shell_env_find_slot(name);
+     * The lookup itself is lock-free; mutation takes the env lock. A
+     * background task reads its job-private overlay first (an empty overlay
+     * value shadows the global, i.e. reads cleared). */
+    char normalized[SHELL_ENV_NAME_BYTES];
+    shell_env_var_t *overlay;
+    size_t index;
+    shell_env_var_t *slot;
+
+    shell_env_normalize_name(name, normalized, sizeof(normalized));
+    overlay = batch_bg_overlay(false);
+    if (overlay != NULL) {
+        for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS; index++) {
+            if (overlay[index].used && strcmp(overlay[index].name, normalized) == 0) {
+                return overlay[index].value;
+            }
+        }
+    }
+    slot = shell_env_find_slot(name);
 
     return slot != NULL ? slot->value : NULL;
+}
+
+/** Lazily allocate (when @p create) the calling task's env overlay.
+ *  @return The overlay table, or NULL for the foreground / when the
+ *  allocation fails. The overlay is single-owner (its own task), so no
+ *  lock is needed beyond the one the caller already holds. */
+static shell_env_var_t *batch_bg_overlay(bool create)
+{
+    batch_task_ctx_t *ctx = batch_ctx_current();
+    int slot = batch_ctx_slot(ctx);
+
+    if (slot < 1 || slot >= 1 + P4_CONFIG_BG_TASKS) {
+        return NULL;
+    }
+    if (ctx->bg_env == NULL && create) {
+        ctx->bg_env = p4heap_calloc_any(P4_CONFIG_BG_ENV_SLOTS, sizeof(shell_env_var_t));
+    }
+    return ctx->bg_env;
 }
 
 esp_err_t shell_env_set(const char *name, const char *value)
@@ -491,6 +580,65 @@ esp_err_t shell_env_set(const char *name, const char *value)
     shell_env_normalize_name(name, normalized, sizeof(normalized));
     if (!shell_env_name_is_valid(normalized)) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Process isolation: a background task writes overlay-only, so `set`
+     * in a job can never mutate the foreground table. */
+    if (batch_bg_current_slot() > 0) {
+        size_t index;
+        shell_env_var_t *overlay;
+
+        batch_shared_take();
+        overlay = batch_bg_overlay(true);
+        if (overlay == NULL) {
+            batch_shared_give();
+            return ESP_ERR_NO_MEM;
+        }
+        slot = NULL;
+        for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS; index++) {
+            if (overlay[index].used && strcmp(overlay[index].name, normalized) == 0) {
+                slot = &overlay[index];
+                break;
+            }
+        }
+        if (value == NULL || value[0] == '\0') {
+            /* Shadow-clear: an empty overlay entry hides the global rather
+             * than removing it (removal would un-hide it). */
+            if (slot == NULL) {
+                for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS; index++) {
+                    if (!overlay[index].used) {
+                        slot = &overlay[index];
+                        break;
+                    }
+                }
+                if (slot == NULL) {
+                    batch_shared_give();
+                    return ESP_ERR_NO_MEM;
+                }
+                slot->used = true;
+                snprintf(slot->name, sizeof(slot->name), "%s", normalized);
+            }
+            slot->value[0] = '\0';
+            batch_shared_give();
+            return ESP_OK;
+        }
+        if (slot == NULL) {
+            for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS; index++) {
+                if (!overlay[index].used) {
+                    slot = &overlay[index];
+                    break;
+                }
+            }
+            if (slot == NULL) {
+                batch_shared_give();
+                return ESP_ERR_NO_MEM;
+            }
+        }
+        slot->used = true;
+        snprintf(slot->name, sizeof(slot->name), "%s", normalized);
+        snprintf(slot->value, sizeof(slot->value), "%s", value);
+        batch_shared_give();
+        return ESP_OK;
     }
 
     batch_shared_take();
@@ -518,14 +666,30 @@ esp_err_t shell_env_set(const char *name, const char *value)
     return ESP_OK;
 }
 
+/* Effective value of @p normalized for the calling task (overlay wins;
+ * empty overlay value = shadow-cleared, still defined). Copies into
+ * @p value_out. @return true when the name is defined (even as empty). */
+static bool shell_env_effective(const char *normalized, char *value_out, size_t value_size)
+{
+    const char *live = shell_env_get(normalized);
+
+    if (live == NULL) {
+        return false;
+    }
+    snprintf(value_out, value_size, "%s", live);
+    return true;
+}
+
 static void shell_env_print_all(void)
 {
     size_t index;
     bool any = false;
 
+    /* Pass 1: globals with overlay overrides (a background task sees its
+     * private values; shadow-cleared names are skipped). Copy out under
+     * lock, print after: never hold the shared lock across transcript
+     * calls. */
     for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
-        /* Copy out under lock, print after: never hold the shared lock
-         * across transcript calls. */
         bool used = false;
         char name[SHELL_ENV_NAME_BYTES];
         char value[SHELL_ENV_VALUE_BYTES];
@@ -533,14 +697,29 @@ static void shell_env_print_all(void)
         used = s_shell_env_vars[index].used;
         if (used) {
             snprintf(name, sizeof(name), "%s", s_shell_env_vars[index].name);
-            snprintf(value, sizeof(value), "%s", s_shell_env_vars[index].value);
+            (void)shell_env_effective(s_shell_env_vars[index].name, value, sizeof(value));
         }
         batch_shared_give();
-        if (!used) {
+        if (!used || value[0] == '\0') {
             continue;
         }
         shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n", name, value);
         any = true;
+    }
+    /* Pass 2: overlay-only names (a job's private vars invisible globally). */
+    {
+        shell_env_var_t *overlay = batch_bg_overlay(false);
+
+        if (overlay != NULL) {
+            for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS; index++) {
+                if (overlay[index].used && overlay[index].value[0] != '\0' &&
+                    shell_env_find_slot(overlay[index].name) == NULL) {
+                    shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_VAL "%s" SH_RST "\n",
+                                                  overlay[index].name, overlay[index].value);
+                    any = true;
+                }
+            }
+        }
     }
 
     if (!any) {
@@ -2408,18 +2587,26 @@ int batch_bg_alloc(void)
         xSemaphoreTake(s_bg_lock, portMAX_DELAY);
     }
     for (i = 1; i < 1 + P4_CONFIG_BG_TASKS; i++) {
-        if (!s_batch_ctx[i].in_use) {
-            s_batch_ctx[i].in_use = true;
-            s_batch_ctx[i].task = NULL;
-            s_batch_ctx[i].kill_requested = false;
-            /* Fresh execution state (BSS may hold a previous run). */
-            s_batch_ctx[i].active_frame = NULL;
-            s_batch_ctx[i].errorlevel = 0;
-            s_batch_ctx[i].goto_label[0] = '\0';
-            s_batch_ctx[i].goto_pending = false;
-            s_batch_ctx[i].goto_eof = false;
-            s_batch_ctx[i].stop_mode = BATCH_STOP_NONE;
-            s_batch_ctx[i].setlocal_depth = 0;
+        batch_task_ctx_t *ctx = batch_ctx_at(i);
+
+        if (ctx == NULL || ctx->in_use) {
+            continue;
+        }
+        {
+            ctx->in_use = true;
+            ctx->task = NULL;
+            ctx->kill_requested = false;
+            /* Fresh execution state (PSRAM may hold a previous run). */
+            ctx->active_frame = NULL;
+            ctx->errorlevel = 0;
+            ctx->goto_label[0] = '\0';
+            ctx->goto_pending = false;
+            ctx->goto_eof = false;
+            ctx->stop_mode = BATCH_STOP_NONE;
+            ctx->setlocal_depth = 0;
+            /* Fresh isolation state: no overlay yet (lazy), no deadline. */
+            ctx->bg_env = NULL;
+            ctx->bg_deadline_ms = 0;
             slot = i;
             break;
         }
@@ -2432,35 +2619,124 @@ int batch_bg_alloc(void)
 
 void batch_bg_bind(int slot)
 {
-    if (slot < 1 || slot >= 1 + P4_CONFIG_BG_TASKS) {
+    batch_task_ctx_t *ctx = batch_ctx_at(slot);
+
+    if (ctx == NULL) {
         return;
     }
-    s_batch_ctx[slot].task = xTaskGetCurrentTaskHandle();
+    ctx->task = xTaskGetCurrentTaskHandle();
 }
 
 void batch_bg_release(int slot)
 {
-    if (slot < 1 || slot >= 1 + P4_CONFIG_BG_TASKS) {
+    batch_task_ctx_t *ctx = batch_ctx_at(slot);
+
+    if (ctx == NULL) {
         return;
     }
     batch_bg_lock_init();
     if (s_bg_lock != NULL) {
         xSemaphoreTake(s_bg_lock, portMAX_DELAY);
     }
-    s_batch_ctx[slot].in_use = false;
-    s_batch_ctx[slot].task = NULL;
-    s_batch_ctx[slot].kill_requested = false;
+    ctx->in_use = false;
+    ctx->task = NULL;
+    ctx->kill_requested = false;
+    ctx->bg_deadline_ms = 0;
+    /* Isolation teardown: the job's private environment dies here, and
+     * whatever himem blocks it still holds are freed (locks do not survive
+     * job exit — nothing a job allocated outlives it). Service and mutex
+     * ownership die here too (the supervisor reaps the service next). */
+    p4heap_free(ctx->bg_env);
+    ctx->bg_env = NULL;
+    himem_free_owned(slot);
+    sync_release_owned(slot);
+    svc_slot_released(slot);
     if (s_bg_lock != NULL) {
         xSemaphoreGive(s_bg_lock);
     }
 }
 
-void batch_bg_request_kill(int slot)
+int batch_bg_current_slot(void)
 {
+    return batch_ctx_slot(batch_ctx_current());
+}
+
+void batch_bg_set_deadline(int slot, uint32_t deadline_ms)
+{
+    batch_task_ctx_t *ctx = batch_ctx_at(slot);
+
+    if (ctx == NULL) {
+        return;
+    }
+    batch_bg_lock_init();
+    if (s_bg_lock != NULL) {
+        xSemaphoreTake(s_bg_lock, portMAX_DELAY);
+    }
+    ctx->bg_deadline_ms = deadline_ms;
+    if (s_bg_lock != NULL) {
+        xSemaphoreGive(s_bg_lock);
+    }
+}
+
+size_t batch_bg_overlay_bytes(int slot)
+{
+    batch_task_ctx_t *ctx = batch_ctx_at(slot);
+    size_t bytes = 0;
+    int index;
+
+    if (ctx == NULL || ctx->bg_env == NULL) {
+        return 0;
+    }
+    for (index = 0; index < (int)P4_CONFIG_BG_ENV_SLOTS; index++) {
+        if (ctx->bg_env[index].used) {
+            bytes += strlen(ctx->bg_env[index].name) +
+                     strlen(ctx->bg_env[index].value) + 2;
+        }
+    }
+    return bytes;
+}
+
+uint32_t batch_bg_deadline_ms(int slot)
+{
+    batch_task_ctx_t *ctx = batch_ctx_at(slot);
+
+    return (ctx == NULL) ? 0 : ctx->bg_deadline_ms;
+}
+
+bool batch_bg_slot_in_use(int slot)
+{
+    batch_task_ctx_t *ctx = batch_ctx_at(slot);
+
+    return (ctx != NULL) && ctx->in_use;
+}
+
+void batch_bg_poll_timeout(void)
+{
+    batch_task_ctx_t *ctx = batch_ctx_current();
+    int slot = batch_ctx_slot(ctx);
+    uint32_t now;
+
     if (slot < 1 || slot >= 1 + P4_CONFIG_BG_TASKS) {
         return;
     }
-    s_batch_ctx[slot].kill_requested = true;
+    if (ctx->bg_deadline_ms == 0 || ctx->kill_requested) {
+        return;
+    }
+    now = xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+    /* Wrap-safe: the deadline is at most ~a day out, far below 2^31 ms. */
+    if ((int32_t)(now - ctx->bg_deadline_ms) >= 0) {
+        ctx->kill_requested = true;
+    }
+}
+
+void batch_bg_request_kill(int slot)
+{
+    batch_task_ctx_t *ctx = batch_ctx_at(slot);
+
+    if (ctx == NULL) {
+        return;
+    }
+    ctx->kill_requested = true;
 }
 
 bool batch_bg_kill_requested(void)
@@ -2473,11 +2749,11 @@ bool batch_bg_is_background(void)
     TaskHandle_t me = xTaskGetCurrentTaskHandle();
     int i;
 
-    if (me == NULL) {
+    if (me == NULL || s_bg_ctx == NULL) {
         return false;
     }
-    for (i = 1; i < 1 + P4_CONFIG_BG_TASKS; i++) {
-        if (s_batch_ctx[i].in_use && s_batch_ctx[i].task == me) {
+    for (i = 0; i < (int)P4_CONFIG_BG_TASKS; i++) {
+        if (s_bg_ctx[i].in_use && s_bg_ctx[i].task == me) {
             return true;
         }
     }
@@ -4634,27 +4910,37 @@ void shell_command_ansi(int argc, char **argv)
  * `menu <item> [item...]` — render a numbered menu in the transcript and read
  * a numeric choice. ERRORLEVEL becomes the 1-based index of the chosen item
  * (0 on cancel, timeout, or an invalid entry), so a batch app branches on it.
+ * `/t:secs` bounds the wait (same parser as the modal verbs); 0 waits with
+ * the historical key-wait default.
  */
 void shell_command_menu(int argc, char **argv)
 {
     char input[P4_CONFIG_SET_PROMPT_INPUT_BYTES];
-    int count = argc - 1;
+    uint32_t timeout_ms = 0;
+    int first = 1;
+    int count;
     int choice;
     int index;
 
-    if (argc < 2) {
-        shell_print_usage("Usage: menu <item> [item...]");
+    /* Leading options only (a /t: past the items is an item). */
+    while (first < argc && modal_parse_timeout_arg(argv[first], &timeout_ms)) {
+        first++;
+    }
+    count = argc - first;
+    if (count < 1) {
+        shell_print_usage("Usage: menu [/t:secs] <item> [item...]");
         batch_set_errorlevel(2);
         return;
     }
 
     shell_transcript_appendf_ansi(SH_SUBHEAD "Menu" SH_RST "\n");
     for (index = 0; index < count; index++) {
-        shell_transcript_appendf_ansi("  " SH_NUM "%d." SH_RST " %s\n", index + 1, argv[index + 1]);
+        shell_transcript_appendf_ansi("  " SH_NUM "%d." SH_RST " %s\n", index + 1, argv[first + index]);
     }
     shell_transcript_appendf_ansi(SH_LBL "Enter choice (1-%d): " SH_RST, count);
 
-    if (!shell_read_line(input, sizeof(input), SHELL_KEY_WAIT_TIMEOUT_MS)) {
+    if (!shell_read_line(input, sizeof(input),
+                         timeout_ms > 0 ? timeout_ms : SHELL_KEY_WAIT_TIMEOUT_MS)) {
         shell_transcript_append_text("menu: cancelled or timed out\n");
         batch_set_errorlevel(0);
         return;
@@ -4682,11 +4968,13 @@ void shell_command_notify(int argc, char **argv)
     int text_start = 1;
     int i;
 
+    /* Leading options only (same /t: parser as the modal verbs — one
+     * implementation; a /t: past the text belongs to the message). */
     for (i = 1; i < argc; i++) {
-        if (strncasecmp(argv[i], "/t:", 3) == 0 && strlen(argv[i]) > 3) {
-            int secs = atoi(argv[i] + 3);
-            timeout_ms = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
+        if (modal_parse_timeout_arg(argv[i], &timeout_ms)) {
             text_start++;
+        } else {
+            break;
         }
     }
 
@@ -4830,7 +5118,7 @@ void shell_command_appmode(int argc, char **argv)
 static void shell_pipe_spool_path(int stage, char *output, size_t output_size)
 {
     char stem[32];
-    int slot = (int)(batch_ctx_current() - s_batch_ctx);
+    int slot = batch_ctx_slot(batch_ctx_current());
 
     snprintf(stem, sizeof(stem), "_pipe%d_%d", slot, stage);
     if (storage_temp_path_stem(output, output_size, stem, "tmp") != ESP_OK) {
@@ -5093,6 +5381,9 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             s_stop_mode = BATCH_STOP_ALL;
             break;
         }
+        /* Auto-kill deadline (`start /t:secs`): enforced at the same poll
+         * point, unwinding exactly like a kill. */
+        batch_bg_poll_timeout();
 
         /* Foreground break (Ctrl+C / Stop button): the same unwind, with a
          * `^C` echo. Consume-on-fire so one press prints exactly once. */
@@ -5682,6 +5973,55 @@ int shell_fora_collect(const char *prefix, char names[][SHELL_ENV_NAME_BYTES], i
         }
         snprintf(names[count], SHELL_ENV_NAME_BYTES, "%s", name);
         count++;
+    }
+    /* A background job's private array variables live in its overlay:
+     * collect matching overlay names not already seen (shadow-cleared
+     * entries, like empty globals, still count as names — values re-read
+     * live per iteration through shell_env_get). */
+    {
+        shell_env_var_t *overlay = batch_bg_overlay(false);
+
+        if (overlay != NULL) {
+            for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS && count < max; index++) {
+                const char *name;
+                size_t name_len;
+                const char *open;
+                const char *close;
+                int seen;
+
+                if (!overlay[index].used) {
+                    continue;
+                }
+                name = overlay[index].name;
+                name_len = strlen(name);
+                if (name_len <= prefix_len + 2) {
+                    continue;
+                }
+                if (strncasecmp(name, prefix, prefix_len) != 0) {
+                    continue;
+                }
+                open = name + prefix_len;
+                if (*open != '[') {
+                    continue;
+                }
+                close = name + name_len - 1;
+                if (*close != ']' || close == open + 1) {
+                    continue;
+                }
+                seen = 0;
+                for (int k = 0; k < count; k++) {
+                    if (strcasecmp(names[k], name) == 0) {
+                        seen = 1;
+                        break;
+                    }
+                }
+                if (seen) {
+                    continue;
+                }
+                snprintf(names[count], SHELL_ENV_NAME_BYTES, "%s", name);
+                count++;
+            }
+        }
     }
     batch_shared_give();
     return count;
@@ -7124,6 +7464,14 @@ void batch_init(void)
             s_shell_env_vars = (shell_env_var_t *)p4heap_alloc_any(SHELL_ENV_BYTES);
         }
     }
+    /* The background ctx pool (~10 KB per slot) likewise lives in PSRAM:
+     * BSS growth here directly eats the boot internal-RAM window that the
+     * command worker (32 KB contiguous) and the Wi-Fi task (12 KB) need.
+     * A failed allocation leaves `start` with no slots (clean refusal). */
+    if (s_bg_ctx == NULL) {
+        s_bg_ctx = (batch_task_ctx_t *)p4heap_calloc_psram(P4_CONFIG_BG_TASKS,
+                                                           sizeof(*s_bg_ctx));
+    }
     if (s_shell_env_vars == NULL) {
         return;
     }
@@ -7144,6 +7492,9 @@ void batch_init(void)
     memset(s_delayed_stack, 0, sizeof(s_delayed_stack));
     s_setlocal_depth = 0;
     s_delayed_expansion = false;
+
+    /* Arm the service supervisor (no-ops until the bg ops hook lands). */
+    batch_svc_init();
 
     s_initialized = true;
     ESP_LOGI(BATCH_TAG, "Batch module initialized");

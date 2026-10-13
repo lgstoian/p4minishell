@@ -18,8 +18,8 @@ draw clear screen
 draw box 1 1 80 3 double "MOOD"
 draw text 5 2 "board mood from live heap" 14
 draw text 45 2 "local %TIME%" 7
-list "Mood" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Back"
-on %errorlevel%+1 goto :live,:rgb_demo,:tone_demo,:snapshot,:back
+list "Mood" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Service sampler" "Back"
+on %errorlevel%+1 goto :live,:rgb_demo,:tone_demo,:snapshot,:svcview,:back
 goto back
 
 :live
@@ -116,6 +116,33 @@ view _m.txt
 view _s.txt
 view _tz.txt
 view _d.txt
+goto menu
+
+:svcview
+rem Service sampler view: the headless MOODSVC service (installed with
+rem `service install moodsampler "MOODSVC" /restart`) keeps sd:/MOODLAST.INI
+rem fresh; files are the IPC (no shared handles to rendezvous).
+draw clear screen
+draw box 1 1 80 3 double "MOOD SERVICE"
+if not exist sd:/MOODLAST.INI goto svcnone
+set svcf=0
+set svct=1
+set svcp=0
+for /f "eol= tokens=1,2 delims==" %%a in (sd:/MOODLAST.INI) do if "%%a"=="heap_free" set svcf=%%b
+for /f "eol= tokens=1,2 delims==" %%a in (sd:/MOODLAST.INI) do if "%%a"=="heap_total" set svct=%%b
+for /f "eol= tokens=1,2 delims==" %%a in (sd:/MOODLAST.INI) do if "%%a"=="pct" set svcp=%%b
+echo [M-MOOD-SVC]
+draw text 5 5 "sampler heap %svcf% / %svct% = %svcp pct%" 14
+draw bar 14 7 40 %svcp% # . 10 0
+draw text 5 9 "Press any key..." 7
+pause
+goto menu
+:svcnone
+echo [M-MOODSVC-NONE]
+draw text 5 5 "no sampler running" 12
+draw text 5 6 "install: service install moodsampler MOODSVC /restart" 7
+draw text 5 8 "Press any key..." 7
+pause
 goto menu
 
 :back

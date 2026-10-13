@@ -14,6 +14,7 @@
 #include "storage_commands.h"
 #include "storage.h"
 #include "shell.h"
+#include "strutil.h"
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
@@ -456,8 +457,9 @@ void shell_command_sd(char *command)
  * Physical-disk operations on the SD card: geometry, MBR partition-table
  * inspection and editing, and a diskpart-style format alias. The storage
  * module owns the low-level mechanics; these handlers own parsing and the
- * destructive-confirmation contract. USB OTG MSC is a future target - the
- * storage_volume_t plumbing is already in place for it.
+ * destructive-confirmation contract. Raw disk access stays SD-only by design
+ * (USB sticks are addressed as files, not disks); the storage_volume_t
+ * plumbing is shared with the volume-aware file verbs.
  */
 
 static void shell_disk_print_usage(void)
@@ -468,6 +470,12 @@ static void shell_disk_print_usage(void)
     shell_transcript_append_text("  disk clean                    remove the partition table (destructive)\n");
     shell_transcript_append_text("  disk create partition primary [size=N]  create a primary partition (N in MB)\n");
     shell_transcript_append_text("  disk delete partition N       delete MBR partition N (1-4)\n");
+    shell_transcript_append_text("  disk active N|none            mark MBR partition N bootable (destructive)\n");
+    shell_transcript_append_text("  disk type N <hex>             set the MBR partition type byte (destructive)\n");
+    shell_transcript_append_text("  disk mbr [save <file>|restore <file>]   hexdump (or back up / restore) sector 0\n");
+    shell_transcript_append_text("  disk verify [count=N]         read-scan the surface for bad sectors\n");
+    shell_transcript_append_text("  disk geometry                 show C/H/S translation and alignment\n");
+    shell_transcript_append_text("  disk image save|restore <file> [sectors=N]  raw sector backup/restore\n");
     shell_transcript_append_text("  disk format [fs=FAT32] [label=X] [au=size] [quick]   format the volume (diskpart style)\n");
     shell_transcript_append_text("After clean or create, run 'format' (or 'disk format') to create the filesystem.\n");
 }
@@ -511,6 +519,7 @@ static void shell_command_disk_list(void)
 {
     storage_disk_info_t info;
     esp_err_t error;
+    int slot;
 
     error = storage_disk_get_info(STORAGE_VOLUME_SD, &info);
     if (error != ESP_OK) {
@@ -520,7 +529,32 @@ static void shell_command_disk_list(void)
     }
 
     shell_print_heading("Physical Disks");
+    shell_transcript_append_text("  [0] SD card:\n");
     shell_disk_report_geometry(&info);
+
+    /* USB MSC slots share the listing; partition tools stay SD-only. */
+    for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
+        uint32_t sector_size = 0;
+        uint32_t sector_count = 0;
+        char label[64];
+        char capacity_text[32];
+        char drive[8];
+
+        if (!storage_usb_volume_geometry(slot, &sector_size, &sector_count,
+                                           label, sizeof(label))) {
+            continue;
+        }
+        shell_sd_format_size((uint64_t)sector_size * (uint64_t)sector_count,
+                             capacity_text, sizeof(capacity_text));
+        snprintf(drive, sizeof(drive), "%c:",
+                 storage_usb_drive_letter(slot) != '\0' ?
+                 (char)toupper((unsigned char)storage_usb_drive_letter(slot)) : '?');
+        shell_transcript_appendf_ansi("  " SH_NUM "[%d]" SH_RST " USB %s (%s, %s):\n",
+                                      slot + 1, drive, label[0] != '\0' ? label : "disk",
+                                      capacity_text);
+        shell_print_field_num("disk.sector_size:", (long)sector_size);
+        shell_print_field_num("disk.sector_count:", (long)sector_count);
+    }
 }
 
 static void shell_command_disk_detail(void)
@@ -777,6 +811,424 @@ static int shell_command_disk_format(int argc, char **argv)
     return shell_format_execute("disk format", fs_type, label, alloc_unit, alloc_set);
 }
 
+/** Parse a 1-based MBR partition number (1-4) or report usage. */
+static bool shell_disk_parse_partition_number(const char *text, int *index_1based_out)
+{
+    char *end;
+    long value;
+
+    if (text == NULL || index_1based_out == NULL) {
+        return false;
+    }
+    value = strtol(text, &end, 10);
+    if (end == text || *end != '\0' || value < 1 || value > 4) {
+        shell_print_error("disk: partition number must be 1-4");
+        return false;
+    }
+    *index_1based_out = (int)value;
+    return true;
+}
+
+/** Parse a hex byte token (00-FF, optional 0x prefix) for `disk type`. */
+static bool shell_disk_parse_hex_byte(const char *text, uint8_t *byte_out)
+{
+    char *end;
+    unsigned long value;
+
+    if (text == NULL || byte_out == NULL) {
+        return false;
+    }
+    value = strtoul(text, &end, 16);
+    if (end == text || *end != '\0' || value > 0xFF) {
+        shell_print_error("disk: type must be a hex byte 00-FF");
+        return false;
+    }
+    *byte_out = (uint8_t)value;
+    return true;
+}
+
+/** Print one 16-byte hexdump row through the shared strutil formatter. */
+static void shell_disk_print_hex_row(uint32_t base, const uint8_t *data, size_t len)
+{
+    char row[80];
+
+    if (strutil_format_hex_row(row, sizeof(row), base, data, len) >= 0) {
+        shell_transcript_append_text(row);
+    }
+}
+
+/** Progress printer shared by `disk verify` and `disk image`. */
+static void shell_disk_scan_progress(uint32_t done_sectors, uint32_t total_sectors)
+{
+    unsigned percent;
+
+    if (total_sectors == 0) {
+        return;
+    }
+    percent = (unsigned)((uint64_t)done_sectors * 100ULL / (uint64_t)total_sectors);
+    shell_transcript_appendf_ansi(SH_MUTE "  disk: %u%% (%lu/%lu sectors)\n" SH_RST,
+                                  percent, (unsigned long)done_sectors,
+                                  (unsigned long)total_sectors);
+}
+
+static int shell_command_disk_active(int argc, char **argv)
+{
+    int number;
+    esp_err_t error;
+
+    /* disk active N|none */
+    if (argc != 3) {
+        shell_disk_print_usage();
+        shell_record_warningf("disk", "Usage error for disk active command");
+        return 2;
+    }
+    if (shell_text_equals_ignore_case(argv[2], "none")) {
+        number = 0;
+    } else if (!shell_disk_parse_partition_number(argv[2], &number)) {
+        return 2;
+    }
+
+    if (!shell_confirm_destructive("disk active",
+                                   "WARNING: This will rewrite the MBR boot flags on the SD card.",
+                                   "")) {
+        shell_print_warning("disk: active cancelled, the card was not modified");
+        shell_record_warningf("disk", "Cancelled disk active by user");
+        return 1;
+    }
+
+    error = storage_disk_set_active(STORAGE_VOLUME_SD, number);
+    if (error == ESP_ERR_INVALID_STATE) {
+        shell_print_error("disk: no valid MBR partition table (run 'disk create partition primary' first)");
+        return 1;
+    }
+    if (error != ESP_OK) {
+        shell_print_error("disk: active failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk active failed");
+        return 1;
+    }
+
+    if (number == 0) {
+        shell_print_ok("disk: all boot flags cleared");
+    } else {
+        shell_print_ok("disk: partition %d marked bootable", number);
+    }
+    return 0;
+}
+
+static int shell_command_disk_type(int argc, char **argv)
+{
+    int number;
+    uint8_t type;
+    esp_err_t error;
+
+    /* disk type N <hex> */
+    if (argc != 4) {
+        shell_disk_print_usage();
+        shell_record_warningf("disk", "Usage error for disk type command");
+        return 2;
+    }
+    if (!shell_disk_parse_partition_number(argv[2], &number)) {
+        return 2;
+    }
+    if (!shell_disk_parse_hex_byte(argv[3], &type)) {
+        return 2;
+    }
+
+    if (!shell_confirm_destructive("disk type",
+                                   "WARNING: This will rewrite an MBR partition-type byte on the SD card.",
+                                   "")) {
+        shell_print_warning("disk: type cancelled, the card was not modified");
+        shell_record_warningf("disk", "Cancelled disk type by user");
+        return 1;
+    }
+
+    error = storage_disk_set_partition_type(STORAGE_VOLUME_SD, (unsigned)(number - 1), type);
+    if (error != ESP_OK) {
+        shell_print_error("disk: type failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk type failed");
+        return 1;
+    }
+
+    shell_print_ok("disk: partition %d type set to 0x%02X (%s)", number,
+                   (unsigned int)type, shell_disk_partition_type_name(type));
+    return 0;
+}
+
+static int shell_command_disk_mbr(int argc, char **argv)
+{
+    /* disk mbr [save <file> | restore <file>] */
+    if (argc == 2) {
+        uint8_t sector[512];
+        esp_err_t error;
+        unsigned row;
+
+        error = storage_disk_read_sectors(STORAGE_VOLUME_SD, 0, sector, 1);
+        if (error != ESP_OK) {
+            shell_print_error("disk: MBR read failed (%s)", esp_err_to_name(error));
+            shell_record_errorf("disk", error, "Disk MBR read failed");
+            return 1;
+        }
+        shell_print_heading("Disk 0 MBR (sector 0)");
+        for (row = 0; row < 512; row += 16) {
+            shell_disk_print_hex_row(row, sector + row, 16);
+        }
+        return 0;
+    }
+
+    if (argc == 4 && shell_text_equals_ignore_case(argv[2], "save")) {
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        uint8_t sector[512];
+        FILE *out;
+        size_t wrote;
+        esp_err_t error;
+
+        if (shell_fs_resolve_path(argv[3], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("disk mbr save: invalid path %s", argv[3]);
+            return 2;
+        }
+        error = storage_disk_read_sectors(STORAGE_VOLUME_SD, 0, sector, 1);
+        if (error != ESP_OK) {
+            shell_print_error("disk: MBR read failed (%s)", esp_err_to_name(error));
+            shell_record_errorf("disk", error, "Disk MBR save read failed");
+            return 1;
+        }
+        if (!storage_check_free_space(sizeof(sector), sizeof(sector), "disk mbr save")) {
+            shell_print_error("disk mbr save: not enough free space");
+            return 1;
+        }
+        out = fopen(resolved, "wb");
+        if (out == NULL) {
+            shell_print_error("disk mbr save: cannot open %s", argv[3]);
+            return 1;
+        }
+        wrote = fwrite(sector, 1, sizeof(sector), out);
+        fclose(out);
+        if (wrote != sizeof(sector)) {
+            shell_print_error("disk mbr save: short write to %s", argv[3]);
+            shell_record_errorf("disk", ESP_FAIL, "Disk MBR save short write");
+            return 1;
+        }
+        shell_print_ok("disk: MBR saved to %s (512 bytes)", resolved);
+        return 0;
+    }
+
+    if (argc == 4 && shell_text_equals_ignore_case(argv[2], "restore")) {
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        FILE *in;
+        uint8_t sector[512];
+        size_t got;
+
+        if (shell_fs_resolve_path(argv[3], resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("disk mbr restore: invalid path %s", argv[3]);
+            return 2;
+        }
+        in = fopen(resolved, "rb");
+        if (in == NULL) {
+            shell_print_error("disk mbr restore: cannot open %s", argv[3]);
+            return 1;
+        }
+        got = fread(sector, 1, sizeof(sector), in);
+        fclose(in);
+        if (got != sizeof(sector)) {
+            shell_print_error("disk mbr restore: %s is not a 512-byte MBR image", argv[3]);
+            return 1;
+        }
+        if (sector[510] != 0x55 || sector[511] != 0xAA) {
+            shell_print_error("disk mbr restore: %s lacks the 0x55AA signature", argv[3]);
+            return 1;
+        }
+        if (!shell_confirm_destructive("disk mbr restore",
+                                       "WARNING: This will overwrite sector 0 (the partition table) on the SD card.",
+                                       "")) {
+            shell_print_warning("disk: MBR restore cancelled, the card was not modified");
+            shell_record_warningf("disk", "Cancelled disk MBR restore by user");
+            return 1;
+        }
+        /* Reuse the guarded single-sector write primitive. */
+        {
+            esp_err_t error = storage_disk_write_sectors(STORAGE_VOLUME_SD, 0, sector, 1);
+
+            if (error != ESP_OK) {
+                shell_print_error("disk mbr restore failed (%s)", esp_err_to_name(error));
+                shell_record_errorf("disk", error, "Disk MBR restore failed");
+                return 1;
+            }
+        }
+        shell_print_ok("disk: MBR restored from %s", resolved);
+        return 0;
+    }
+
+    shell_disk_print_usage();
+    shell_record_warningf("disk", "Usage error for disk mbr command");
+    return 2;
+}
+
+/** Parse an optional `count=N` / `sectors=N` token (decimal sector count). */
+static bool shell_disk_parse_count_token(const char *token, const char *key, uint32_t *count_out)
+{
+    char *end;
+    unsigned long value;
+    size_t key_len;
+
+    if (token == NULL || key == NULL || count_out == NULL) {
+        return false;
+    }
+    key_len = strlen(key);
+    if (strncmp(token, key, key_len) != 0 || token[key_len] != '=') {
+        return false;
+    }
+    value = strtoul(token + key_len + 1, &end, 10);
+    if (end == token + key_len + 1 || *end != '\0' || value == 0 || value > UINT32_MAX) {
+        return false;
+    }
+    *count_out = (uint32_t)value;
+    return true;
+}
+
+static int shell_command_disk_verify(int argc, char **argv)
+{
+    uint32_t max_sectors = 0;
+    uint32_t bad = 0;
+    uint32_t done = 0;
+    esp_err_t error;
+    int index;
+
+    /* disk verify [count=N] */
+    for (index = 2; index < argc; index++) {
+        if (!shell_disk_parse_count_token(argv[index], "count", &max_sectors)) {
+            shell_print_error("disk verify: unexpected argument %s", argv[index]);
+            shell_disk_print_usage();
+            return 2;
+        }
+    }
+
+    shell_transcript_append_text("  disk: verifying surface (Ctrl+C aborts)…\n");
+    error = storage_disk_verify(STORAGE_VOLUME_SD, max_sectors, &bad, &done,
+                                shell_disk_scan_progress);
+    if (error == ESP_ERR_TIMEOUT) {
+        shell_print_warning("disk: verify aborted after %lu sectors (%lu bad)",
+                            (unsigned long)done, (unsigned long)bad);
+        return 1;
+    }
+    if (error != ESP_OK) {
+        shell_print_error("disk: verify failed (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk verify failed");
+        return 1;
+    }
+
+    if (bad == 0) {
+        shell_print_ok("disk: verify clean (%lu sectors read)", (unsigned long)done);
+    } else {
+        shell_print_error("disk: verify found %lu bad sectors of %lu read",
+                          (unsigned long)bad, (unsigned long)done);
+        shell_record_errorf("disk", ESP_FAIL, "Disk verify found bad sectors");
+    }
+    return bad == 0 ? 0 : 1;
+}
+
+static int shell_command_disk_geometry(void)
+{
+    storage_disk_info_t info;
+    esp_err_t error;
+    uint64_t total_sectors;
+    uint32_t heads = 255;
+    uint32_t sectors_per_track = 63;
+    uint32_t cylinders;
+
+    error = storage_disk_get_info(STORAGE_VOLUME_SD, &info);
+    if (error != ESP_OK) {
+        shell_print_error("disk: no SD card available (%s)", esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk geometry could not read the card");
+        return 1;
+    }
+    if (info.sector_size != 512 || info.sector_count == 0) {
+        shell_print_error("disk: unsupported sector size %lu",
+                          (unsigned long)info.sector_size);
+        return 1;
+    }
+
+    /* Classic BIOS translation (255 heads, 63 sectors/track), the same
+     * geometry FDISK reports for large disks. */
+    total_sectors = (uint64_t)info.sector_count;
+    cylinders = (uint32_t)(total_sectors / ((uint64_t)heads * sectors_per_track));
+
+    shell_print_heading("Disk 0 Geometry");
+    shell_print_field_num("disk.heads:", (long)heads);
+    shell_print_field_num("disk.sectors_per_track:", (long)sectors_per_track);
+    shell_print_field_num("disk.cylinders:", (long)cylinders);
+    shell_print_field_num("disk.total_sectors:", (long)info.sector_count);
+    shell_print_field_num("disk.sector_size:", (long)info.sector_size);
+    shell_print_field_num("disk.align_sectors:", (long)P4_CONFIG_DISK_PARTITION_ALIGN_SECTORS);
+    return 0;
+}
+
+static int shell_command_disk_image(int argc, char **argv)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    uint32_t sectors = 0;
+    uint32_t done = 0;
+    esp_err_t error;
+    int index;
+    bool save;
+
+    /* disk image save|restore <file> [sectors=N] */
+    if (argc < 4) {
+        shell_disk_print_usage();
+        shell_record_warningf("disk", "Usage error for disk image command");
+        return 2;
+    }
+    if (shell_text_equals_ignore_case(argv[2], "save")) {
+        save = true;
+    } else if (shell_text_equals_ignore_case(argv[2], "restore")) {
+        save = false;
+    } else {
+        shell_disk_print_usage();
+        shell_record_warningf("disk", "Usage error for disk image command");
+        return 2;
+    }
+    for (index = 4; index < argc; index++) {
+        if (!shell_disk_parse_count_token(argv[index], "sectors", &sectors)) {
+            shell_print_error("disk image: unexpected argument %s", argv[index]);
+            shell_disk_print_usage();
+            return 2;
+        }
+    }
+    if (shell_fs_resolve_path(argv[3], resolved, sizeof(resolved)) != ESP_OK) {
+        shell_print_error("disk image: invalid path %s", argv[3]);
+        return 2;
+    }
+
+    if (!save) {
+        if (!shell_confirm_destructive("disk image restore",
+                                       "WARNING: This will overwrite the SD card from sector 0 with the image file.",
+                                       "")) {
+            shell_print_warning("disk: image restore cancelled, the card was not modified");
+            shell_record_warningf("disk", "Cancelled disk image restore by user");
+            return 1;
+        }
+        error = storage_disk_image_restore(STORAGE_VOLUME_SD, resolved, &done, shell_disk_scan_progress);
+    } else {
+        shell_transcript_append_text("  disk: reading surface (Ctrl+C aborts)…\n");
+        error = storage_disk_image_save(STORAGE_VOLUME_SD, resolved, sectors, &done, shell_disk_scan_progress);
+    }
+
+    if (error == ESP_ERR_TIMEOUT) {
+        shell_print_warning("disk: image %s aborted after %lu sectors",
+                            save ? "save" : "restore", (unsigned long)done);
+        return 1;
+    }
+    if (error != ESP_OK) {
+        shell_print_error("disk: image %s failed (%s)", save ? "save" : "restore",
+                          esp_err_to_name(error));
+        shell_record_errorf("disk", error, "Disk image failed");
+        return 1;
+    }
+
+    shell_print_ok("disk: image %s complete (%lu sectors)", save ? "saved" : "restored",
+                   (unsigned long)done);
+    return 0;
+}
+
 /**
  * `disk` command family entry point.
  */
@@ -807,6 +1259,18 @@ int shell_command_disk(char *command)
         rc = shell_command_disk_create(argc, argv);
     } else if (strcmp(argv[1], "delete") == 0) {
         rc = shell_command_disk_delete(argc, argv);
+    } else if (strcmp(argv[1], "active") == 0) {
+        rc = shell_command_disk_active(argc, argv);
+    } else if (strcmp(argv[1], "type") == 0) {
+        rc = shell_command_disk_type(argc, argv);
+    } else if (strcmp(argv[1], "mbr") == 0) {
+        rc = shell_command_disk_mbr(argc, argv);
+    } else if (strcmp(argv[1], "verify") == 0) {
+        rc = shell_command_disk_verify(argc, argv);
+    } else if (strcmp(argv[1], "geometry") == 0) {
+        rc = shell_command_disk_geometry();
+    } else if (strcmp(argv[1], "image") == 0) {
+        rc = shell_command_disk_image(argc, argv);
     } else if (strcmp(argv[1], "format") == 0) {
         rc = shell_command_disk_format(argc, argv);
     } else {

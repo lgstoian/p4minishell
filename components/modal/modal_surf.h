@@ -128,6 +128,25 @@ int modal_image_run(const char *title, const char *file_path,
  */
 int modal_hexview_run(const char *title, const char *file_path, uint32_t timeout_ms);
 
+/**
+ * @brief Run a hex viewer modal surface over an in-memory buffer.
+ *
+ * Same surface and row format as modal_hexview_run, but renders @p bytes
+ * ( @p len bytes) instead of opening a file; @p base_addr is printed for
+ * bytes[0] (a RAM address or disk LBA base). Used by the `debug mem` /
+ * `debug disk` verbs. Batch/headless callers use the plain-text dump
+ * instead — a modal blocks the command worker.
+ *
+ * @param title       Dialog title (may be NULL).
+ * @param bytes       Buffer to render (must outlive the call only).
+ * @param len         Bytes to render (capped like file content).
+ * @param base_addr   Address printed for bytes[0].
+ * @param timeout_ms  Auto-cancel after this many ms (0 = wait forever).
+ * @return 0 on exit, -1 on error.
+ */
+int modal_hexview_run_buf(const char *title, const uint8_t *bytes, size_t len,
+                          uint32_t base_addr, uint32_t timeout_ms);
+
 /* -------------------------------------------------------------------------
  * FORM: a multi-field modal editor for batch apps (the Palm-style form).
  * ---------------------------------------------------------------------- */

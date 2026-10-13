@@ -375,6 +375,45 @@ int pim_vcf_merge_stream(FILE *fp, const char *dbname, pim_count_t *count);
  */
 int pim_ics_merge_stream(FILE *fp, pim_count_t *count);
 
+/** One multistatus `<response>`: resource href + optional getetag. */
+typedef void (*pim_carddav_response_cb_t)(const char *href, const char *etag_or_null,
+                                          void *ctx);
+
+/**
+ * Scan a WebDAV multistatus body for `<response>` entries (backs
+ * `pim net pull`). Namespace-prefix tolerant (`D:`, `d:`, none), entity
+ * decoding on hrefs. Pure (no I/O), unit-tested.
+ * @return the response count, or -1 on NULL callback.
+ */
+int pim_carddav_scan_multistatus(const char *xml, size_t len,
+                                 pim_carddav_response_cb_t on_response, void *ctx);
+
+/** One vCard span: pointer + length into the scanned collection text. */
+typedef void (*pim_carddav_card_cb_t)(const char *card, size_t len, void *ctx);
+
+/**
+ * Split collection text into BEGIN:VCARD..END:VCARD spans (backs
+ * `pim net push`). Pure (no I/O), unit-tested.
+ * @return the card count, or -1 on NULL callback.
+ */
+int pim_carddav_split_cards(const char *text, size_t len,
+                            pim_carddav_card_cb_t on_card, void *ctx);
+
+/**
+ * Extract the UID: value of one card (tolerates vCard 4.0 UID;params).
+ * Pure, unit-tested. @return value length, 0 when absent/unfitting.
+ */
+size_t pim_carddav_card_uid(const char *card, size_t len, char *uid_out, size_t uid_cap);
+
+/**
+ * Join a collection base URL with a multistatus href (absolute href wins,
+ * else scheme+authority or base directory resolution). Pure, unit-tested.
+ */
+bool pim_carddav_join_url(const char *base, const char *href, char *out, size_t out_size);
+
+/** True when @p uid is safe to embed in a PUT filename (uuid-style). Pure. */
+bool pim_carddav_uid_safe(const char *uid);
+
 #ifdef __cplusplus
 }
 #endif

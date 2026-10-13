@@ -39,28 +39,6 @@
 
 /* ---- helpers ---- */
 
-static bool certs_name_matches_ext(const char *name, const char *ext)
-{
-    size_t n = strlen(name);
-    size_t e = strlen(ext);
-
-    if (n < e) {
-        return false;
-    }
-    const char *s = name + n - e;
-
-    for (size_t i = 0; i < e; i++) {
-        char a = s[i];
-        char b = ext[i];
-        if (a >= 'A' && a <= 'Z') a += 32;
-        if (b >= 'A' && b <= 'Z') b += 32;
-        if (a != b) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static void certs_print_usage(void)
 {
     shell_print_usage("Usage: certs [info] | list | add <file> | remove <name> | rebuild | clear | reload");
@@ -120,7 +98,7 @@ static void certs_cmd_list(void)
         if (entry->d_type == DT_DIR) {
             continue;
         }
-        if (certs_name_matches_ext(name, ".pem") || certs_name_matches_ext(name, ".der")) {
+        if (shell_path_has_extension(name, ".pem") || shell_path_has_extension(name, ".der")) {
             shell_transcript_appendf_ansi("  " SH_VAL "%s" SH_RST "\n", name);
             count++;
         }
@@ -133,6 +111,28 @@ static void certs_cmd_list(void)
         shell_transcript_appendf_ansi(SH_MUTE "  %d certificate file(s)\n" SH_RST, count);
     }
     shell_sd_end(&session, "certs list");
+}
+
+/** Reload the store after add/remove and report the result in one line. */
+static void certs_cmd_reload_report(const char *verb)
+{
+    certs_store_info_t info;
+    esp_err_t error = certs_reload();
+
+    if (error == ESP_OK) {
+        certs_get_store_info(&info);
+        shell_transcript_appendf_ansi(SH_OK "certs:" SH_RST " %s applied, store reloaded ("
+                                      SH_NUM "%d" SH_RST " PEM + " SH_NUM "%d" SH_RST " DER, "
+                                      SH_NUM "%d bytes" SH_RST ")\n",
+                                      verb, info.pem_files, info.der_files,
+                                      (int)info.pem_bytes);
+    } else if (error == ESP_ERR_NOT_FOUND) {
+        shell_transcript_appendf_ansi(SH_WARN "certs:" SH_RST " %s applied, no certificates remain\n",
+                                      verb);
+    } else {
+        shell_transcript_appendf_ansi(SH_ERR "certs:" SH_RST " %s applied, reload failed (%s)\n",
+                                      verb, esp_err_to_name(error));
+    }
 }
 
 /** `certs add <file>` — import a PEM or DER file into sd:/CERTS. */
@@ -155,7 +155,7 @@ static void certs_cmd_add(const char *src_path)
     basename = strrchr(src_path, '/');
     basename = basename ? basename + 1 : src_path;
 
-    if (!certs_name_matches_ext(basename, ".pem") && !certs_name_matches_ext(basename, ".der")) {
+    if (!shell_path_has_extension(basename, ".pem") && !shell_path_has_extension(basename, ".der")) {
         shell_print_error("certs: file must have .pem or .der extension");
         return;
     }
@@ -192,25 +192,36 @@ static void certs_cmd_add(const char *src_path)
         return;
     }
 
-    /* Copy the file. */
+    /* Copy the file, then reload while the session is closed (the reload
+     * opens its own sessions). */
     {
         uint8_t buf[4096];
         size_t nread;
         size_t total = 0;
+        bool copy_ok = true;
 
         while ((nread = fread(buf, 1, sizeof(buf), fp_src)) > 0) {
-            fwrite(buf, 1, nread, fp_dst);
+            if (fwrite(buf, 1, nread, fp_dst) != nread) {
+                copy_ok = false;
+                break;
+            }
             total += nread;
         }
         fclose(fp_src);
         fclose(fp_dst);
 
+        if (!copy_ok) {
+            shell_print_error("certs: failed while copying %s", basename);
+            shell_sd_end(&session, "certs add");
+            return;
+        }
         shell_transcript_appendf_ansi(SH_OK "certs:" SH_RST " imported " SH_VAL "%s" SH_RST
                                       " (" SH_NUM "%d bytes" SH_RST ") into sd:/" P4_CONFIG_TLS_CERTS_DIR "\n",
                                       basename, (int)total);
     }
 
     shell_sd_end(&session, "certs add");
+    certs_cmd_reload_report("import");
 }
 
 /** `certs remove <name>` — remove a certificate from sd:/CERTS. */
@@ -225,11 +236,16 @@ static void certs_cmd_remove(const char *name)
         return;
     }
 
-    /* Refuse to remove the combined bundle directly. */
-    if (certs_name_matches_ext(name, ".pem") || certs_name_matches_ext(name, ".der")) {
-        /* OK */
-    } else {
-        /* Allow removing by partial match. */
+    /* Refuse to remove the combined bundle directly (rebuild regenerates it). */
+    {
+        const char *bundle = P4_CONFIG_TLS_CERTS_COMBINED_PEM;
+        const char *slash = strrchr(bundle, '/');
+        const char *base = (slash != NULL) ? slash + 1 : bundle;
+
+        if (certs_name_equals_ci(name, base)) {
+            shell_print_error("certs: refusing to remove the combined bundle (rebuild regenerates it)");
+            return;
+        }
     }
 
     error = shell_sd_begin(&session);
@@ -241,11 +257,12 @@ static void certs_cmd_remove(const char *name)
     snprintf(path, sizeof(path), "/sdcard/%s/%s", P4_CONFIG_TLS_CERTS_DIR, name);
     if (remove(path) == 0) {
         shell_transcript_appendf_ansi(SH_OK "certs:" SH_RST " removed " SH_VAL "%s" SH_RST "\n", name);
+        shell_sd_end(&session, "certs remove");
+        certs_cmd_reload_report("removal");
     } else {
         shell_transcript_appendf_ansi(SH_ERR "certs:" SH_RST " cannot remove " SH_VAL "%s" SH_RST " (not found?)\n", name);
+        shell_sd_end(&session, "certs remove");
     }
-
-    shell_sd_end(&session, "certs remove");
 }
 
 /** `certs rebuild` — concatenate all .pem files into BUNDLE.PEM. */
@@ -273,17 +290,7 @@ static void certs_cmd_clear(void)
 /** `certs reload` — re-scan sd:/CERTS and re-load the global CA store. */
 static void certs_cmd_reload(void)
 {
-    certs_clear();
-    esp_err_t error = certs_load_sd_store();
-
-    if (error == ESP_OK) {
-        shell_transcript_appendf_ansi(SH_OK "certs:" SH_RST " store reloaded\n");
-    } else if (error == ESP_ERR_NOT_FOUND) {
-        shell_transcript_appendf_ansi(SH_WARN "certs:" SH_RST " no certificates in sd:/" P4_CONFIG_TLS_CERTS_DIR "\n");
-    } else {
-        shell_transcript_appendf_ansi(SH_ERR "certs:" SH_RST " reload failed (%s)\n",
-                                      esp_err_to_name(error));
-    }
+    certs_cmd_reload_report("reload");
 }
 
 /* ---- dispatcher ---- */

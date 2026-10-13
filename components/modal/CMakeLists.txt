@@ -18,4 +18,5 @@ idf_component_register(
         font
         gfx
         p4heap
+        strutil
 )

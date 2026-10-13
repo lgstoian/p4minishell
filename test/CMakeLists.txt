@@ -55,6 +55,13 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/command
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/networking
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/portal
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/chat
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/epub
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/math_disp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/cas
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/json
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/rss
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/zip
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/power_monitor
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/p4heap
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/pim
@@ -93,6 +100,11 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../components/camera
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__usb_host_hid
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__usb_host_msc
     ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/lvgl__lvgl
+    # zlib/expat left the IDF core in v5.x; components/zip and components/epub
+    # (and now components/rss) require them, so the test project must stage the
+    # same managed copies the firmware project resolves.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__zlib
+    ${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__expat
 )
 
 # Let the active board profile add its backing BSP component dir(s); the same
