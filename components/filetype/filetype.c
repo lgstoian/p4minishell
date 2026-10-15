@@ -32,6 +32,7 @@ static const filetype_entry_t s_filetype_table[] = {
     { ".dib", FILETYPE_IMAGE },
     { ".html", FILETYPE_HTML },
     { ".htm", FILETYPE_HTML },
+    { ".js", FILETYPE_SCRIPT },
 };
 
 #define FILETYPE_TABLE_COUNT ((int)(sizeof(s_filetype_table) / sizeof(s_filetype_table[0])))

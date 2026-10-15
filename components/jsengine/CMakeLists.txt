@@ -1,0 +1,28 @@
+idf_component_register(
+    SRCS
+        "quickjs.c"
+        "cutils.c"
+        "libregexp.c"
+        "libunicode.c"
+        "dtoa.c"
+        "jsengine.c"
+        "js_bindings.c"
+        "js_dom.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "include"
+        "${CMAKE_SOURCE_DIR}"
+    REQUIRES
+        shell
+        batch
+        storage
+        markdown
+        rss
+        json
+        tui
+        modal
+        heap
+        esp_timer
+        freertos
+)

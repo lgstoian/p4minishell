@@ -3025,6 +3025,246 @@ A literal `#` in cell text (e.g. bar `#` fills) is recolor-escaped by
 
 `tui` and `draw fullscreen` both route to `components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`; `tui` is the per-app alias, `draw fullscreen` is the global batch verb. Screenshot debug: `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
 
+### wig — declarative widget layer (foreground only)
+
+| Form | Meaning |
+|------|---------|
+| `wig /panel NAME X Y W H [/title T]` | Declare a panel widget (bordered box). |
+| `wig /text NAME X Y TEXT` | Declare a text widget showing TEXT. |
+| `wig /gauge NAME X Y W /max N` | Declare a gauge (progress bar) with max value N. |
+| `wig /button NAME X Y W LABEL /on LABEL` | Declare a button; `/on` binds a batch label. |
+| `wig /list NAME X Y W /sel VAR` | Declare a list widget; `/sel` reads selection from env VAR. |
+| `wig /clear NAME` | Remove a widget. |
+| `wig /render` | Force flush of all widgets to the TUI. |
+
+Widgets are declarative records stored in a fixed-capacity table (`P4_CONFIG_WS_WIDGET_MAX`). The TUI reads the table and renders; widgets write user intent back into a slot or fire a label. All coordinates are 1-based on the 80x25 grid.
+
+### pane — pane stack management (foreground only)
+
+| Form | Meaning |
+|------|---------|
+| `pane /add NAME X Y W H [/title T]` | Add a named pane at grid rect. |
+| `pane /split NAME /h` | Split pane horizontally (top/bottom). |
+| `pane /split NAME /v` | Split pane vertically (left/right). |
+| `pane /focus NAME` | Set focus to pane NAME. |
+| `pane /cycle` | Advance focus to next visible pane (wraps). |
+| `pane /hide NAME` | Hide pane (skips render and focus). |
+| `pane /close NAME` | Remove pane from stack. |
+| `pane /list` | List all pane names. |
+
+Panes are named regions with their own scrollback, border, and title. The focus ring highlights the focused pane. Batch code can query and change focus. All coordinates are 1-based on the 80x25 grid.
+
+### hud — HUD status cells (foreground only)
+
+| Form | Meaning |
+|------|---------|
+| `hud /add NAME TEXT [/right]` | Add a HUD cell showing TEXT. `/right` right-aligns. |
+| `hud /refresh MS` | Set refresh cadence in ms (0 = manual only). |
+| `hud /flash NAME N` | Flash cell NAME for N refreshes (transient emphasis). |
+| `hud /del NAME` | Remove a HUD cell. |
+
+HUD cells are rendered in a reserved band (row 1) with diff-based redraw — only changed cells are flushed. The HUD is the natural place for transient alerts and live status from named variables.
+
+### key — key bindings and synthetic input
+
+| Form | Meaning |
+|------|---------|
+| `key /bind KEY LABEL` | Bind a key (F1..F12, CTRL+R, etc.) to a batch label. |
+| `key /unbind KEY` | Remove a key binding. |
+| `key /inject TEXT` | Inject synthetic input into the shell input stream. |
+| `key /mode raw` | Set input mode to raw. |
+| `key /mode line` | Set input mode to line (default). |
+| `key /mode passthrough` | Set input mode to passthrough. |
+| `key /list` | List all key bindings. |
+
+`/inject` makes scripted demos and self-tests possible. Key bindings fire batch labels when the key is pressed.
+
+### tap — touch hotspot binding (foreground only)
+
+| Form | Meaning |
+|------|---------|
+| `tap /on X Y W H LABEL` | Register a touch hotspot rect mapped to a batch label. |
+| `tap /off X Y` | Remove hotspots at (X,Y). |
+| `tap /clear` | Clear all hotspots. |
+| `tap /list` | Count active hotspots. |
+
+Rectangles are (x, y, w, h) in 1-based grid coordinates. Overlaps resolve to the most recently added (topmost). `wig /button` and `tap /on` coexist with a documented priority rule.
+
+### event — script-visible event multiplexer
+
+| Form | Meaning |
+|------|---------|
+| `event /wait MS` | Block up to MS milliseconds for an event. ERRORLEVEL 1 on timeout. |
+| `event /type IDX` | Get event type at index (key, tap, timer, serial, resize). |
+| `event /field IDX FIELD` | Copy event payload to env var FIELD. |
+| `event /dispatch` | Run bound handlers for all queued events without blocking. |
+| `event /post TYPE PAYLOAD` | Enqueue a synthetic event. |
+| `event /clear` | Clear the event queue. |
+| `event /count` | Count queued events. |
+
+Events are typed records (key, tap, timer, serial, resize) that scripts can block on with a timeout or dispatch non-blockingly. `while` + `event /wait` replaces polling.
+
+### trace — on-screen diagnostics
+
+| Form | Meaning |
+|------|---------|
+| `trace /on` | Enable trace output. |
+| `trace /off` | Disable trace output. |
+| `trace /level none` | Set trace level to none. |
+| `trace /level warn` | Set trace level to warn. |
+| `trace /level info` | Set trace level to info. |
+| `trace /level debug` | Set trace level to debug. |
+| `trace /status` | Show trace state. |
+
+Trace turns the TUI into its own debugger — valuable when the serial bridge is busy.
+
+### prompt — enhanced line input
+
+| Form | Meaning |
+|------|---------|
+| `prompt /text TEXT /var NAME` | Show TEXT as prompt, read line into NAME. |
+| `prompt /mask /var NAME` | Read masked input (password) into NAME. |
+| `prompt /timeout N /var NAME` | Read line with N ms timeout into NAME. |
+
+Superset of `ask`/`set /p`: default value, masking, timeout, and history reuse.
+
+### mode — mode stack management
+
+| Form | Meaning |
+|------|---------|
+| `mode /push NAME [/type T] [/map M]` | Push a typed frame with optional keymap. |
+| `mode /pop` | Pop the top frame (runs leave guard). |
+| `mode /switch NAME` | Pop to a named frame, or push if absent. |
+| `mode /top` | Print the top frame name, type, depth. |
+| `mode /list` | List all frames on the stack. |
+| `mode /count` | Print the frame count. |
+| `mode /drop TYPE` | Drop all frames of a given type. |
+| `mode /timeout MS` | Set the chord pending timeout. |
+
+Frame types: `normal`, `insert`, `dialog`, `palette`, `macro`. A dialog frame
+captures all input; Esc pops it and runs guards. The stack is fixed-depth
+(`P4_CONFIG_MODAL_MAX_FRAMES`).
+
+### mbind — per-mode chord bindings
+
+| Form | Meaning |
+|------|---------|
+| `mbind /map NAME CHORD LABEL` | Bind a chord to a label in map NAME. |
+| `mbind /unbind NAME CHORD` | Remove a chord binding. |
+| `mbind /leader KEY` | Set the leader key (single char). |
+| `mbind /list NAME` | List all bindings in a map. |
+
+Multi-stroke chords are space-separated keys (e.g. `gg`, `leader f`). Chords
+resolve longest-match-wins with a timeout. The `m` prefix distinguishes this
+from the existing `bind` F-key verb.
+
+### mcmd — named commands
+
+| Form | Meaning |
+|------|---------|
+| `mcmd /def NAME LABEL [/doc D]` | Define a named command. |
+| `mcmd /list` | List all commands. |
+| `mcmd /run NAME` | Execute a named command. |
+| `mcmd /undef NAME` | Remove a command definition. |
+
+Commands are the unit `mbind`, `palette`, and `mmacro` all target, so a chord
+and a typed name reach the same label.
+
+### mdialog — nested blocking dialogs with return values
+
+| Form | Meaning |
+|------|---------|
+| `mdialog /confirm TEXT [/var V]` | Push a confirm dialog; returns 1/0. |
+| `mdialog /input TEXT [/default D] [/var V]` | Push an input dialog. |
+| `mdialog /result V` | Copy the last dialog result to V. |
+
+Nested dialogs stack visually as panes and unwind cleanly on cancel. The `m`
+prefix distinguishes this from the existing `dialog` modal surface verb.
+
+### guard — transition hooks
+
+| Form | Meaning |
+|------|---------|
+| `guard /on enter\|leave TYPE LABEL` | Register a guard hook. |
+| `guard /off enter\|leave TYPE` | Clear a guard hook. |
+| `guard /list` | List all guards. |
+
+A guard is a batch label that runs on mode transition. Non-zero errorlevel
+veto cancels the transition (leaves the stack untouched).
+
+### scope — mode-scoped variable bags
+
+| Form | Meaning |
+|------|---------|
+| `scope /save MODE VAR [VAR ...]` | Snapshot named env vars for a mode. |
+| `scope /restore MODE` | Restore saved values. |
+| `scope /list MODE` | List scope variables. |
+| `scope /clear MODE` | Clear a scope bag. |
+
+Backed by the 64-slot pool; scope tracks its own footprint and errors rather
+than evicting a neighbour.
+
+### palette — command palette
+
+| Form | Meaning |
+|------|---------|
+| `palette /open` | Push a palette frame. |
+| `palette /close` | Pop the palette frame. |
+| `palette /source NAME` | Set the command source. |
+
+### mmacro — event macro record/replay
+
+| Form | Meaning |
+|------|---------|
+| `mmacro /record NAME` | Start recording events into a named slot. |
+| `mmacro /stop` | Stop recording. |
+| `mmacro /replay NAME [N]` | Replay a macro N times (default 1). |
+| `mmacro /list` | List recorded macros. |
+
+Recording captures the event stream into a fixed-size array; replay injects
+it back through the same execution path.
+
+### pending — chord buffer inspection
+
+| Form | Meaning |
+|------|---------|
+| `pending /get` | Print the pending chord prefix. |
+| `pending /clear` | Clear the pending buffer. |
+| `pending /timeout MS` | Set the chord timeout. |
+
+### mstatus — per-mode statusline
+
+| Form | Meaning |
+|------|---------|
+| `mstatus /set TYPE FORMAT` | Set the statusline format for a frame type. |
+| `mstatus /render` | Render the current statusline. |
+
+### repeat — repeat count prefix
+
+| Form | Meaning |
+|------|---------|
+| `repeat /last [N]` | Repeat the last command N times. |
+| `repeat /set N` | Set a count prefix. |
+| `repeat /clear` | Clear the repeat count. |
+
+### cancel — unwind modal state
+
+| Form | Meaning |
+|------|---------|
+| `cancel` | Pop one frame (runs guards). |
+| `cancel /to NAME` | Unwind until a named mode. |
+| `cancel /all` | Unwind all frames. |
+| `cancel /code N` | Unwind all with errorlevel N. |
+
+### buffer — modal text buffer
+
+| Form | Meaning |
+|------|---------|
+| `buffer /open NAME` | Open a named text buffer. |
+| `buffer /close NAME` | Close a buffer. |
+| `buffer /list` | List open buffers. |
+| `buffer /mode NAME MODE` | Set buffer mode (normal/insert/visual). |
+
 ### gfx — pixel canvas for batch games (hardware-verified on COM3)
 
 `gfx` owns one RGB565 canvas (`components/gfx/gfx.c` pure raster, PSRAM

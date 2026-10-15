@@ -352,15 +352,25 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 ### Display, TUI, and graphics
 
 - **`draw`** TUI verbs (box/line/fill/text/bar/table/list/window/cursor/hold/
-  fullscreen) over an 80x25 cell grid that maps to the live transcript region.
-- **`gfx`** â€” an RGB565 canvas with pixel/line/rect/circle/polygon/fill/text,
+  fullscreen/flip) over an 80x25 cell grid that maps to the live transcript region.
+- **`gfx`** — an RGB565 canvas with pixel/line/rect/circle/polygon/fill/text,
   BMP load/save, 8 sprite slots (up to 64x64) for batch games with bulk
   `blitmany` formation stamps, and firmware-measured frame pacing
   (`gfx stats`: frames/min/avg/max/jitter/dropped/fps).
-- **`plot`** â€” world-coordinate graphs (`func`/`polar`/`para`/`data`/`bar`/
+- **`plot`** — world-coordinate graphs (`func`/`polar`/`para`/`data`/`bar`/
   `table`) sampling `calc` expressions onto the canvas or the TUI.
 - **`font`** registry (roles/sizes/fallbacks), SD TTF loading, CJK fallback,
   and **`theme`** (default/amber/ice/mono, live-switchable and persisted).
+- **TUI workspace** — named panes with focus ring (`pane`), declarative widgets
+  (`wig`), HUD status cells with diff rendering (`hud`), script-visible event
+  multiplexer (`event`), key bindings (`key`), touch hotspots (`tap`), on-screen
+  diagnostics (`trace`), and enhanced line input (`prompt`).
+- **Modal layer** — typed mode frame stack (`mode`), multi-stroke keymaps with
+  leader keys (`mbind`), nested blocking dialogs with return values
+  (`mdialog`), mode-scoped state bags (`scope`), transition guards (`guard`),
+  command palette (`palette`), event macro record/replay (`mmacro`), chord
+  buffer (`pending`), per-mode statusline (`mstatus`), repeat count
+  (`repeat`), cancel unwind (`cancel`), and modal text buffer (`buffer`).
 - An `edit` editor for any SD text file (see [tutorial_edit.md](tutorial_edit.md)).
 
 ### Connectivity and hardware

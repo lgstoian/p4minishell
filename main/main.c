@@ -40,6 +40,7 @@
 #include "board_bsp.h"
 #include "p4minishell_config.h"
 #include "p4minishell.h"
+#include "jsengine.h"
 
 #include "bluetooth.h"
 #include "c6ota.h"
@@ -897,6 +898,7 @@ void app_main(void)
      * rendering is lazy), while the reverse order starves the worker. */
     shell_init();
     command_init();
+    jsengine_init();
 
     /* Initialize the display manager. It wraps
      * bsp_display_start_with_config() and owns all display state

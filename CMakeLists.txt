@@ -48,6 +48,7 @@ set(EXTRA_COMPONENT_DIRS
   components/math_disp
   components/cas
   components/json
+  components/jsengine
   components/rss
   components/zip
   components/power_monitor

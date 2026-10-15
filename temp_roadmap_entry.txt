@@ -1,0 +1,9 @@
+### 11. Extended ASCII / CP437 support (v1.3.1)
+
+- **Full CP437 8x8 font**: `gfx_font.c` expanded from printable ASCII (0x20-0x7E, 96 glyphs) to full CP437 range 0x00-0xFF (256 glyphs) via `tools/gen_gfx_font.py` using unscii-8 TTF.
+- **`gfx_surface_text`**: Renders box-drawing (U+2500-U+257F), accented letters, and symbols (0x80-0xFF) when `P4_CONFIG_GFX_FONT_EXTENDED=1` (default). Control chars (0x00-0x1F, 0x7F) render empty; ASCII 0x20-0x7E always render.
+- **Editor USB input**: `editor_view_handle_usb_key` accepts extended ASCII 0x20-0xFF.
+- **`hexview` ASCII column**: Displays extended chars (0x80-0xFF) via `strutil_format_hex_row` when extended font enabled.
+- **Config**: `P4_CONFIG_GFX_FONT_EXTENDED` (default 1) toggles extended rendering; font array always 256 entries but 0x00-0x1F/0x80-0xFF empty when disabled.
+- **Unit tests**: `test_gfx_font_extended`, `test_cas_asc_extended_ascii`, `test_cas_chr_extended_ascii`.
+- **Documentation**: Updated `command.md` (gfx text, hexview), `editor.md` (Symbols page), `readme.md`, `changelog.md`, `ai-context.md`.

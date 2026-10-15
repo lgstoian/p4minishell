@@ -16,6 +16,64 @@ open bugs see [`bugs.md`](bugs.md).
 
 ## [Unreleased]
 
+### Added
+
+- **TUI workspace layer** (`components/tui/tui_pane.h` + `tui_pane.c`): named
+  panes with a focus ring, declarative widget layer, HUD region with diff
+  rendering, and a script-visible event multiplexer — all fixed-capacity (no
+  dynamic allocation), rendered through the existing `tui_draw_*` primitives.
+  - `wig` verb — declarative widget layer (`/panel`, `/text`, `/gauge`,
+    `/button`, `/list`, `/clear`, `/render`). The name avoids collision with
+    the existing `ui` touch-automation verb.
+  - `pane` verb — pane stack management (`/add`, `/split`, `/focus`,
+    `/cycle`, `/hide`, `/close`, `/list`).
+  - `hud` verb — HUD status cells (`/add`, `/refresh`, `/flash`, `/del`)
+    with diff-based redraw (only changed cells flushed).
+  - `key` verb — key bindings + synthetic input (`/bind`, `/unbind`,
+    `/inject`, `/mode`, `/list`).
+  - `tap` verb — touch hotspot binding (`/on`, `/off`, `/clear`, `/list`).
+  - `event` verb — script-visible event multiplexer (`/wait`, `/type`,
+    `/field`, `/dispatch`, `/post`, `/clear`, `/count`). Typed events (key,
+    tap, timer, serial, resize) queue for batch scripts; `event /wait`
+    replaces polling in `while` loops.
+  - `trace` verb — on-screen diagnostics (`/on`, `/off`, `/level`,
+    `/status`).
+  - `prompt` verb — enhanced line input with masking and timeout.
+  - `draw /flip` — back-buffer swap (flush + workspace re-render).
+  - `theme /hud` — HUD band palette control.
+  - 18 new `P4_CONFIG_WS_*` config macros (pane/widget/HUD/event/tap/key
+    capacities) in `p4minishell_config.h` + `.yaml`.
+  - 15 new unit tests covering panes, widgets, HUD, events, keys, taps.
+
+- **Modal layer** (`components/tui/tui_modal.h` + `tui_modal.c`): typed mode
+  frame stack, multi-stroke keymaps with leader keys, nested blocking dialogs
+  with return values, mode-scoped state bags with transition guards, and
+  macro record/replay — all fixed-capacity (no dynamic allocation).
+  - `mode` verb — mode stack management (`/push`, `/pop`, `/switch`,
+    `/top`, `/list`, `/count`, `/drop`, `/timeout`).
+  - `mbind` verb — per-mode chord bindings (`/map`, `/unbind`, `/leader`,
+    `/list`). The `m` prefix avoids collision with the existing `bind`
+    F-key verb.
+  - `mcmd` verb — named commands (`/def`, `/list`, `/run`, `/undef`).
+  - `mdialog` verb — nested blocking dialogs with return values (`/confirm`,
+    `/input`, `/result`). The `m` prefix avoids collision with the existing
+    `dialog` modal surface.
+  - `guard` verb — transition hooks with veto (`/on`, `/off`, `/list`).
+  - `scope` verb — mode-scoped variable bags (`/save`, `/restore`,
+    `/list`, `/clear`).
+  - `palette` verb — command palette dispatch (`/open`, `/close`, `/source`).
+  - `mmacro` verb — event macro record/replay (`/record`, `/stop`,
+    `/replay`, `/list`).
+  - `pending` verb — chord buffer inspection (`/get`, `/clear`, `/timeout`).
+  - `mstatus` verb — per-mode statusline (`/set`, `/render`).
+  - `repeat` verb — repeat count prefix (`/last`, `/set`, `/clear`).
+  - `cancel` verb — unwind modal state (`[/to NAME]`, `[/all]`, `[/code N]`).
+  - `buffer` verb — modal text buffer (`/open`, `/close`, `/list`, `/mode`).
+  - 15 new `P4_CONFIG_MODAL_*` config macros (frame/map/binding/command/
+    scope/guard/macro capacities) in `p4minishell_config.h` + `.yaml`.
+  - 12 new unit tests covering mode push/pop/switch, bindings, chords,
+    commands, scopes, guards, dialogs, macros, and repeat.
+
 ### Fixed
 
 - **Bring-up: the tree now builds, links, and boots green on both board

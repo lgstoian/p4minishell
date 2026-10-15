@@ -367,6 +367,14 @@
  *  P4_CONFIG_TUI_VIEW_MAX_BYTES). */
 #define P4_CONFIG_HTML_RENDER_MAX_BYTES       (256 * 1024)
 
+#define P4_CONFIG_JS_HEAP_MAX_BYTES           (512 * 1024)
+#define P4_CONFIG_JS_STACK_MAX_BYTES          (16 * 1024)
+#define P4_CONFIG_JS_TIMEOUT_MS               5000
+#define P4_CONFIG_JS_EVAL_MAX_BYTES           (16 * 1024)
+#define P4_CONFIG_JS_FILE_MAX_BYTES           (64 * 1024)
+
+#define P4_CONFIG_TUI_PAGE_ROWS               200
+
 /** Print-to-file layout (writerdeck): fixed page geometry for the `print`
  *  export format, wrapped and paginated for sharing/printing. */
 #define P4_CONFIG_PRINT_COLUMNS               80
@@ -569,8 +577,131 @@
 #define P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS        0
 
 /** Target frame rate for TUI frame-pacing stats (`tui stats`): frames slower
- * than 150% of this interval count as dropped. 0 disables dropped tracking. */
+ *  than 150% of this interval count as dropped. 0 disables dropped tracking. */
 #define P4_CONFIG_TUI_TARGET_FPS                30
+
+/* ========================================================================
+ * TUI WORKSPACE (panes / widgets / HUD / events)
+ * ========================================================================
+ * The workspace layer sits on the 80x25 TUI grid: named panes with a focus
+ * ring, declarative widgets bound to environment slots, a HUD band with
+ * diff-based refresh, and a script-visible event multiplexer. All tables are
+ * fixed-capacity (no dynamic allocation) and live in PSRAM.
+ */
+
+/** Maximum number of named panes in the workspace. */
+#define P4_CONFIG_WS_PANE_MAX                   8
+
+/** Maximum bytes for a pane name (NUL-terminated). */
+#define P4_CONFIG_WS_PANE_NAME_BYTES            16
+
+/** Maximum bytes for a pane title (NUL-terminated). */
+#define P4_CONFIG_WS_PANE_TITLE_BYTES           32
+
+/** Scrollback line capacity per pane. */
+#define P4_CONFIG_WS_PANE_SCROLLBACK_LINES      64
+
+/** Maximum bytes per scrollback line (NUL-terminated). */
+#define P4_CONFIG_WS_PANE_LINE_BYTES            128
+
+/** Maximum number of declarative widgets. */
+#define P4_CONFIG_WS_WIDGET_MAX                 16
+
+/** Maximum bytes for a widget name (NUL-terminated). */
+#define P4_CONFIG_WS_WIDGET_NAME_BYTES          16
+
+/** Maximum bytes for a widget label (NUL-terminated). */
+#define P4_CONFIG_WS_WIDGET_LABEL_BYTES         48
+
+/** Maximum number of HUD status cells. */
+#define P4_CONFIG_WS_HUD_MAX                    8
+
+/** Maximum bytes for a HUD cell name (NUL-terminated). */
+#define P4_CONFIG_WS_HUD_NAME_BYTES             16
+
+/** Maximum bytes for a HUD format string (NUL-terminated). */
+#define P4_CONFIG_WS_HUD_FORMAT_BYTES           64
+
+/** Default HUD refresh cadence in ms (0 = manual only). */
+#define P4_CONFIG_WS_HUD_REFRESH_MS             500
+
+/** Maximum number of queued events for the script-visible multiplexer. */
+#define P4_CONFIG_WS_EVENT_MAX                  16
+
+/** Maximum bytes for an event payload (NUL-terminated). */
+#define P4_CONFIG_WS_EVENT_PAYLOAD_BYTES        64
+
+/** Maximum number of touch hotspot bindings. */
+#define P4_CONFIG_WS_TAP_MAX                    16
+
+/** Maximum number of key bindings for the workspace event layer. */
+#define P4_CONFIG_WS_KEY_BIND_MAX               16
+
+/** Maximum bytes for a key name (NUL-terminated). */
+#define P4_CONFIG_WS_KEY_NAME_BYTES             12
+
+/* ========================================================================
+ * MODAL LAYER (mode frames / chords / dialogs / scopes / macros)
+ * ========================================================================
+ * The modal layer sits on top of the workspace: a stack of typed mode
+ * frames, multi-stroke keymaps with leader keys, nested blocking dialogs
+ * with return values, mode-scoped state bags with transition guards, and
+ * macro record/replay. All tables are fixed-capacity (no dynamic allocation).
+ */
+
+/** Maximum depth of the mode stack. */
+#define P4_CONFIG_MODAL_MAX_FRAMES              8
+
+/** Maximum number of named modes (keymaps). */
+#define P4_CONFIG_MODAL_MAX_MAPS                8
+
+/** Maximum number of keymap entries per mode. */
+#define P4_CONFIG_MODAL_MAX_BINDINGS            32
+
+/** Maximum bytes for a chord key (NUL-terminated, e.g. "gg", "<leader>f"). */
+#define P4_CONFIG_MODAL_MAX_CHORD_BYTES         16
+
+/** Maximum number of pending chord strokes in the buffer. */
+#define P4_CONFIG_MODAL_MAX_PENDING             8
+
+/** Default chord timeout in ms (0 = no timeout). */
+#define P4_CONFIG_MODAL_CHORD_TIMEOUT_MS        400
+
+/** Maximum number of named commands (cmd /def). */
+#define P4_CONFIG_MODAL_MAX_CMDS                32
+
+/** Maximum bytes for a command name (NUL-terminated). */
+#define P4_CONFIG_MODAL_MAX_CMD_NAME_BYTES      16
+
+/** Maximum bytes for a command doc string (NUL-terminated). */
+#define P4_CONFIG_MODAL_MAX_CMD_DOC_BYTES       64
+
+/** Maximum number of scope bags (mode-scoped variable snapshots). */
+#define P4_CONFIG_MODAL_MAX_SCOPES              8
+
+/** Maximum variables per scope bag. */
+#define P4_CONFIG_MODAL_MAX_SCOPE_VARS          8
+
+/** Maximum number of transition guards (enter/leave hooks). */
+#define P4_CONFIG_MODAL_MAX_GUARDS              8
+
+/** Maximum number of macro recordings. */
+#define P4_CONFIG_MODAL_MAX_MACROS              8
+
+/** Maximum events per macro recording. */
+#define P4_CONFIG_MODAL_MAX_MACRO_EVENTS        64
+
+/** Maximum bytes for a macro name (NUL-terminated). */
+#define P4_CONFIG_MODAL_MAX_MACRO_NAME_BYTES    16
+
+/** Maximum frames for nested dialogs. */
+#define P4_CONFIG_MODAL_MAX_DIALOGS             4
+
+/** Maximum bytes for a dialog result value (NUL-terminated). */
+#define P4_CONFIG_MODAL_MAX_DIALOG_RESULT_BYTES 64
+
+/** Default leader key (single character). */
+#define P4_CONFIG_MODAL_LEADER_KEY              ','
 
 /* ========================================================================
  * IMAGE SUPPORT (BMP)
@@ -1496,13 +1627,88 @@
 
 /* ========================================================================
  * BATCH ENGINE AND ENVIRONMENT VARIABLES
- * ======================================================================== */
+ * ========================================================================
+ * The single environment slot table is split into named classes, each with
+ * its own budget and its own exhaustion error. A runaway array can no
+ * longer starve scalar variables, and an app that uses no maps pays nothing
+ * for them. Each class can be sized independently at build time.
+ *
+ *  Class            Default  Backing        Used by
+ *  Globals          64       slot table     set, set /a, set /p
+ *  Frame-locals     32       slot stack     call/gosub temporaries
+ *  Array elements   256      element slab   NAME[i]
+ *  Map entries      64       hash slab      (none yet — reserve)
+ */
 
-/** Maximum number of RAM-only environment variables. Sized above the largest
- *  shipped reference app (SNAKE holds ~22) plus boot/alias variables, since
- *  the table is global across nested frames; a full table used to make `set`
- *  fail mid-loop and stall the worker (W2). */
+/** Globals: scalar set/set /a/set /p variables (slot table). */
 #define P4_CONFIG_ENV_VAR_MAX                64
+
+/** Frame-locals: call/gosub temporaries (slot stack, per frame depth). */
+#define P4_CONFIG_ENV_FRAME_LOCAL_SLOTS      32
+
+/** Array elements: NAME[i] element slab. */
+#define P4_CONFIG_ENV_ARRAY_SLOTS            256
+
+/** Map entries: hash slab (compile to 0 to compile maps out entirely). */
+#define P4_CONFIG_ENV_MAP_SLOTS              64
+
+/* ========================================================================
+ * `dim` BOUNDS-CHECKED ARRAY DIMENSIONING
+ * ========================================================================
+ * `dim` gives arrays an explicit size, a hidden bookkeeping slot
+ * (NAME.__len), and bounds checks. All storage lives in the ARRAY class
+ * slot slab; no separate allocation.
+ */
+
+/** Maximum elements one `dim NAME N` allocation can size (per-array cap). */
+#define P4_CONFIG_DIM_MAX_SIZE               1024
+
+/* ========================================================================
+ * `str` STRING OPERATION SUITE
+ * ========================================================================
+ * No dedicated storage: operates on environment variable values (bounded
+ * by P4_CONFIG_ENV_VALUE_BYTES) and emits results the same way.
+ */
+
+/** Maximum output bytes for `str /fmt` (%1..%9 substitution buffer). */
+#define P4_CONFIG_STR_FMT_BYTES              512
+
+/* ========================================================================
+ * `map` ASSOCIATIVE KEY->VALUE STORE
+ * ========================================================================
+ * A real hash map layered on the flat slot table, backed by hashed names
+ * (MAP#<hash>) with short collision chains. All storage lives in the MAP
+ * class slot slab.
+ */
+
+/** Maximum collision chain length for `map` lookups (linear probe cap). */
+#define P4_CONFIG_MAP_MAX_CHAIN              8
+
+/** Maximum bytes for a map key (including NUL). */
+#define P4_CONFIG_MAP_KEY_BYTES              32
+
+/* ========================================================================
+ * `trap` STRUCTURED ERROR HANDLING
+ * ========================================================================
+ * Runtime failures redirect to a label, scoped per call frame. The trap
+ * frame stack mirrors the setlocal depth: each frame can install one trap
+ * handler, and nesting follows the call/gosub stack.
+ */
+
+/** Maximum nested trap handler frames (mirrors setlocal depth). */
+#define P4_CONFIG_TRAP_DEPTH_MAX             8
+
+/** Maximum bytes for a trap error message (stored in %ERRMSG%). */
+#define P4_CONFIG_TRAP_MSG_BYTES             128
+
+/** Per-class usage report buffer rows. */
+#define P4_CONFIG_ENV_CLASS_COUNT            4
+
+/** Total slot pool size across all classes. */
+#define P4_CONFIG_ENV_POOL_TOTAL (P4_CONFIG_ENV_VAR_MAX + \
+                                   P4_CONFIG_ENV_FRAME_LOCAL_SLOTS + \
+                                   P4_CONFIG_ENV_ARRAY_SLOTS + \
+                                   P4_CONFIG_ENV_MAP_SLOTS)
 
 /** Maximum job-private environment slots per background task. A `start`ed
  *  job reads the global table but writes into its own lazily-allocated
@@ -1909,6 +2115,15 @@
 
 /** Maximum iterations one `while` loop runs before it stops with ERRORLEVEL 1. */
 #define P4_CONFIG_WHILE_ITER_MAX             100000
+
+/** Maximum iterations one `for /a NAME` array loop runs (safety cap). */
+#define P4_CONFIG_FORA_ITER_MAX              100000
+
+/** Maximum `for /p N` parallel window (compile-time cap). */
+#define P4_CONFIG_FORP_MAX                   4
+
+/** Maximum `for /t SECONDS` / `while /t SECONDS` timeout (ms cap). */
+#define P4_CONFIG_FORWHILE_TIMEOUT_MAX_MS    300000
 
 /* ========================================================================
  * CSV GRID VERBS (csv rows|cols|cell|eval)
@@ -2635,7 +2850,7 @@
 #define P4_CONFIG_WIFI_INIT_TASK_STACK       12288
 
 /** Stack size for the shell command worker task. */
-#define P4_CONFIG_COMMAND_TASK_STACK         32768
+#define P4_CONFIG_COMMAND_TASK_STACK         16384
 
 /** Depth of the async command queue (pointers only; the worker owns them).
  *  Raised from 4: bursts (pasted lines, scripted drivers, modal chains)

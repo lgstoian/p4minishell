@@ -14,7 +14,7 @@ Drives COM3 (host) and COM6 (peer) through the chat verb family:
   COM6: chat peer off
 """
 
-from p4test import Device, Checklist, NAME, TAGS
+from p4test import Device, Checklist
 
 
 NAME = "chat"

@@ -2192,7 +2192,11 @@ int shell_command_calc_line(const char *line)
 
         calc_result_to_text(&result, hex_mode, text, sizeof(text));
         if (shell_env_set(name, text) != ESP_OK) {
-            shell_print_error("calc: invalid variable name or environment is full");
+            if (shell_env_name_is_array(name)) {
+                shell_print_error("calc: arrays budget exhausted");
+            } else {
+                shell_print_error("calc: globals budget exhausted");
+            }
             free(buffer);
             return 1;
         }

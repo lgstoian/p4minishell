@@ -30,6 +30,8 @@
 #include "p4minishell_config.h"
 #include "clock.h"
 #include "esp_random.h"
+#include "esp_system.h"
+#include "esp_mac.h"
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -81,6 +83,7 @@
 /** One RAM-only environment variable slot. */
 typedef struct {
     bool used;
+    uint8_t class_tag;            /**< SHELL_CLASS_* budget class. */
     char name[SHELL_ENV_NAME_BYTES];
     char value[SHELL_ENV_VALUE_BYTES];
 } shell_env_var_t;
@@ -160,11 +163,21 @@ static bool s_initialized = false;
 static batch_command_ops_t s_command_ops;
 
 /* Environment variables (RAM-only, not persisted across boots). The slot
- * array is heap-allocated (PSRAM first) in batch_init(): a static table large
+ * pool is heap-allocated (PSRAM first) in batch_init(): a static table large
  * enough for the reference apps (~22 vars each) costs too much internal DIRAM
- * at boot, which starved the command-worker stack. */
-#define SHELL_ENV_BYTES (sizeof(shell_env_var_t) * SHELL_ENV_VAR_MAX)
+ * at boot, which starved the command-worker stack.
+ *
+ * The pool is partitioned into classes, each with its own budget. Slot 0
+ * starts the globals run, followed by frame-locals, arrays, and maps. A slot's
+ * class_tag field records its class for routing and reporting. */
+#define SHELL_POOL_TOTAL (P4_CONFIG_ENV_VAR_MAX + P4_CONFIG_ENV_FRAME_LOCAL_SLOTS + \
+                           P4_CONFIG_ENV_ARRAY_SLOTS + P4_CONFIG_ENV_MAP_SLOTS)
+#define SHELL_POOL_BYTES ((size_t)sizeof(shell_env_var_t) * (size_t)SHELL_POOL_TOTAL)
 static shell_env_var_t *s_shell_env_vars;
+
+/* Class boundaries within the flat pool. */
+static size_t s_class_start[SHELL_CLASS_COUNT];
+static size_t s_class_budget[SHELL_CLASS_COUNT];
 
 /* Shared tables (env vars, aliases) are DOS-global across workers: `set`
  * on one task is visible to the other, which is exactly the cheap IPC games
@@ -299,6 +312,9 @@ typedef struct {
     /* Auto-kill deadline (`start /t:secs`, tick ms, 0 = none), enforced by
      * batch_bg_poll_timeout() at the cooperative poll points. */
     uint32_t bg_deadline_ms;
+    /* break / continue request flags (set by the verbs, cleared by loops). */
+    bool break_requested;
+    bool continue_requested;
 } batch_task_ctx_t;
 
 static batch_task_ctx_t s_fg_ctx;
@@ -361,6 +377,8 @@ static batch_task_ctx_t *batch_ctx_at(int slot)
 #define s_setlocal_depth     (batch_ctx_current()->setlocal_depth)
 #define s_delayed_expansion  (batch_ctx_current()->delayed_expansion)
 #define s_delayed_stack      (batch_ctx_current()->delayed_stack)
+#define s_break_requested    (batch_ctx_current()->break_requested)
+#define s_continue_requested (batch_ctx_current()->continue_requested)
 static bool s_default_echo = true;   /* CONFIG.SYS ECHO ON|OFF sets this; batch frames inherit it */
 
 /**
@@ -474,6 +492,75 @@ static void shell_env_normalize_name(const char *name, char *output, size_t outp
     output[index] = '\0';
 }
 
+/* Virtual / read-only variable names. Resolved on read from runtime
+ * state or flash; NEVER stored in the named table, so they consume
+ * zero RAM slots. shell_env_set() refuses them and the expansion
+ * engine short-circuits them before the table lookup. */
+#define SHELL_ENV_VIRTUAL_NAME_COUNT 10
+static const char *const s_virtual_names[SHELL_ENV_VIRTUAL_NAME_COUNT] = {
+    "CD", "DATE", "ERR", "ERRMSG", "ERRORLEVEL",
+    "RANDOM", "TIME", "VERSION", "BOARD", "SERIAL",
+};
+
+/* Lazily-filled scratch for %SERIAL% (MAC-derived, valid for the boot). */
+static char s_virtual_serial[20];
+static bool s_virtual_serial_ready = false;
+
+static bool shell_env_name_is_virtual(const char *normalized)
+{
+    int i;
+    for (i = 0; i < SHELL_ENV_VIRTUAL_NAME_COUNT; i++) {
+        if (strcmp(normalized, s_virtual_names[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Resolve a virtual name into @p buf. Result valid until next call for the
+ * same variable (callers copy out immediately). Returns false if not virtual. */
+static bool shell_env_virtual_value(const char *normalized, char *buf, size_t buf_size)
+{
+    if (strcmp(normalized, "ERR") == 0 || strcmp(normalized, "ERRORLEVEL") == 0) {
+        snprintf(buf, buf_size, "%d", s_errorlevel);
+        return true;
+    }
+    if (strcmp(normalized, "ERRMSG") == 0) {
+        const char *msg = "error";
+        if (s_errorlevel == 0) {
+            msg = "success";
+        } else if (s_errorlevel == 2) {
+            msg = "usage";
+        }
+        snprintf(buf, buf_size, "%s", msg);
+        return true;
+    }
+    if (strcmp(normalized, "VERSION") == 0) {
+        snprintf(buf, buf_size, "%s", P4_CONFIG_VERSION_STRING);
+        return true;
+    }
+    if (strcmp(normalized, "BOARD") == 0) {
+        snprintf(buf, buf_size, "%s", BOARD_CFG_NAME);
+        return true;
+    }
+    if (strcmp(normalized, "SERIAL") == 0) {
+        if (!s_virtual_serial_ready) {
+            uint8_t mac[6] = {0};
+            if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+                snprintf(s_virtual_serial, sizeof(s_virtual_serial),
+                         "%02X%02X%02X%02X%02X%02X",
+                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            } else {
+                s_virtual_serial[0] = '\0';
+            }
+            s_virtual_serial_ready = true;
+        }
+        snprintf(buf, buf_size, "%s", s_virtual_serial);
+        return true;
+    }
+    return false;
+}
+
 static bool shell_env_name_is_valid(const char *name)
 {
     size_t index;
@@ -493,17 +580,61 @@ static bool shell_env_name_is_valid(const char *name)
         }
     }
 
+    /* Purely-numeric names are batch arguments (%1..%9), handled by the
+     * expansion engine. Storing them would waste a named slot. */
+    {
+        bool has_non_digit = false;
+        for (index = 0; name[index] != '\0'; index++) {
+            if (!isdigit((unsigned char)name[index])) {
+                has_non_digit = true;
+                break;
+            }
+        }
+        if (!has_non_digit) {
+            return false;
+        }
+    }
+
     return true;
 }
 
+/* True when @p normalized (already-uppercased) names an array element. */
+static bool shell_env_name_is_array_normalized(const char *normalized)
+{
+    size_t len = strlen(normalized);
+    return len >= 3 && normalized[len - 1] == ']' &&
+           strchr(normalized, '[') != NULL;
+}
+
+/* True when @p name is an indexed array element (e.g. "SPR[3]"). */
+bool shell_env_name_is_array(const char *name)
+{
+    char normalized[SHELL_ENV_NAME_BYTES];
+    shell_env_normalize_name(name, normalized, sizeof(normalized));
+    return shell_env_name_is_array_normalized(normalized);
+}
+
+/* True when @p class_tag has a non-zero budget. */
+static bool shell_env_class_is_active(shell_env_class_t class_tag)
+{
+    if (class_tag >= SHELL_CLASS_COUNT) {
+        return false;
+    }
+    return s_class_budget[class_tag] > 0;
+}
+
+/* Look up a variable slot by name across the whole pool. When @p class_tag
+ * is non-negative, only scan that class. When negative, scan all classes. */
 static shell_env_var_t *shell_env_find_slot(const char *name)
 {
     char normalized[SHELL_ENV_NAME_BYTES];
     size_t index;
 
     shell_env_normalize_name(name, normalized, sizeof(normalized));
-    for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
-        if (s_shell_env_vars[index].used && strcmp(s_shell_env_vars[index].name, normalized) == 0) {
+    for (index = 0; index < SHELL_POOL_TOTAL; index++) {
+        if (s_shell_env_vars[index].used &&
+            s_shell_env_vars[index].class_tag < SHELL_CLASS_COUNT &&
+            strcmp(s_shell_env_vars[index].name, normalized) == 0) {
             return &s_shell_env_vars[index];
         }
     }
@@ -515,17 +646,60 @@ static shell_env_var_t *shell_env_find_slot(const char *name)
  * used by shell_env_get above). */
 static shell_env_var_t *batch_bg_overlay(bool create);
 
-static shell_env_var_t *shell_env_find_free_slot(void)
+/* Find a free slot within a specific class. Returns NULL when the class
+ * budget is exhausted. */
+static shell_env_var_t *shell_env_find_free_slot_class(shell_env_class_t class_tag)
 {
     size_t index;
 
-    for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
+    if (class_tag >= SHELL_CLASS_COUNT || !shell_env_class_is_active(class_tag)) {
+        return NULL;
+    }
+    for (index = s_class_start[class_tag]; index < s_class_start[class_tag] + s_class_budget[class_tag]; index++) {
         if (!s_shell_env_vars[index].used) {
             return &s_shell_env_vars[index];
         }
     }
-
     return NULL;
+}
+
+/* Determine the appropriate class for a new variable being set. Frame-local
+ * scope (call/gosub active) routes to SHELL_CLASS_FRAME_LOCAL. Array-element
+ * names route to SHELL_CLASS_ARRAY. Everything else is a global. The first
+ * existing slot found for the name wins (no re-classification on update). */
+static shell_env_class_t shell_env_route_class(const char *normalized)
+{
+    if (shell_env_name_is_array_normalized(normalized)) {
+        if (shell_env_class_is_active(SHELL_CLASS_ARRAY)) {
+            return SHELL_CLASS_ARRAY;
+        }
+        return SHELL_CLASS_GLOBAL;  /* arrays disabled — fall back to global */
+    }
+    /* Frame-local: only when we are inside a call/gosub scope. */
+    {
+        shell_batch_frame_t *frame = batch_ctx_current()->active_frame;
+        if (frame != NULL && frame->label_call_depth > 0 &&
+            shell_env_class_is_active(SHELL_CLASS_FRAME_LOCAL)) {
+            return SHELL_CLASS_FRAME_LOCAL;
+        }
+    }
+    return SHELL_CLASS_GLOBAL;
+}
+
+/* Count in-use slots per class for the `slots` report. */
+static size_t shell_env_class_used(shell_env_class_t class_tag)
+{
+    size_t index, count = 0;
+
+    if (class_tag >= SHELL_CLASS_COUNT) {
+        return 0;
+    }
+    for (index = s_class_start[class_tag]; index < s_class_start[class_tag] + s_class_budget[class_tag]; index++) {
+        if (s_shell_env_vars[index].used) {
+            count++;
+        }
+    }
+    return count;
 }
 
 const char *shell_env_get(const char *name)
@@ -541,6 +715,28 @@ const char *shell_env_get(const char *name)
     shell_env_var_t *slot;
 
     shell_env_normalize_name(name, normalized, sizeof(normalized));
+
+    /* Virtual / read-only names: computed on read, never stored. Checked
+     * before the table so they always win over a user slot of the same
+     * name and consume zero RAM. */
+    if (shell_env_name_is_virtual(normalized)) {
+        if (strcmp(normalized, "CD") == 0) {
+            /* cwd lives in a storage-owned static; return it directly. */
+            const char *cwd = shell_get_cwd();
+            return cwd != NULL ? cwd : "";
+        }
+        {
+            char virt_buf[40];
+            if (shell_env_virtual_value(normalized, virt_buf, sizeof(virt_buf))) {
+                /* Copy into a per-name static so the returned pointer stays
+                 * valid until the next lookup (established copy-out discipline). */
+                static char s_virtual_result[40];
+                snprintf(s_virtual_result, sizeof(s_virtual_result), "%s", virt_buf);
+                return s_virtual_result;
+            }
+        }
+    }
+
     overlay = batch_bg_overlay(false);
     if (overlay != NULL) {
         for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS; index++) {
@@ -578,6 +774,13 @@ esp_err_t shell_env_set(const char *name, const char *value)
     shell_env_var_t *slot;
 
     shell_env_normalize_name(name, normalized, sizeof(normalized));
+
+    /* Virtual / read-only names: computed on read, never stored. Refuse to
+     * store them so they consume zero RAM slots. */
+    if (shell_env_name_is_virtual(normalized)) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
     if (!shell_env_name_is_valid(normalized)) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -652,11 +855,13 @@ esp_err_t shell_env_set(const char *name, const char *value)
     }
 
     if (slot == NULL) {
-        slot = shell_env_find_free_slot();
+        shell_env_class_t routed = shell_env_route_class(normalized);
+        slot = shell_env_find_free_slot_class(routed);
         if (slot == NULL) {
             batch_shared_give();
             return ESP_ERR_NO_MEM;
         }
+        slot->class_tag = (uint8_t)routed;
     }
 
     slot->used = true;
@@ -688,8 +893,10 @@ static void shell_env_print_all(void)
     /* Pass 1: globals with overlay overrides (a background task sees its
      * private values; shadow-cleared names are skipped). Copy out under
      * lock, print after: never hold the shared lock across transcript
-     * calls. */
-    for (index = 0; index < SHELL_ENV_VAR_MAX; index++) {
+     * calls. Scan only the global class range of the pool. */
+    for (index = s_class_start[SHELL_CLASS_GLOBAL];
+         index < s_class_start[SHELL_CLASS_GLOBAL] + s_class_budget[SHELL_CLASS_GLOBAL];
+         index++) {
         bool used = false;
         char name[SHELL_ENV_NAME_BYTES];
         char value[SHELL_ENV_VALUE_BYTES];
@@ -1898,13 +2105,13 @@ static bool shell_setlocal_push(void)
         return false;
     }
 
-    snapshot = malloc(SHELL_ENV_BYTES);
+    snapshot = malloc(SHELL_POOL_BYTES);
     if (snapshot == NULL) {
         return false;
     }
 
     batch_shared_take();
-    memcpy(snapshot, s_shell_env_vars, SHELL_ENV_BYTES);
+    memcpy(snapshot, s_shell_env_vars, SHELL_POOL_BYTES);
     batch_shared_give();
     s_delayed_stack[s_setlocal_depth] = s_delayed_expansion;
     s_setlocal_stack[s_setlocal_depth++] = snapshot;
@@ -1932,7 +2139,7 @@ static bool shell_setlocal_pop(void)
     }
 
     batch_shared_take();
-    memcpy(s_shell_env_vars, snapshot, SHELL_ENV_BYTES);
+    memcpy(s_shell_env_vars, snapshot, SHELL_POOL_BYTES);
     batch_shared_give();
     free(snapshot);
     return true;
@@ -2230,9 +2437,28 @@ static const char *shell_expand_named_value(const char *token, char *errorlevel_
         shell_text_equals_ignore_case(token, "CD")) {
         /* DOS/cmd-style dynamic variables. They always win over a user
          * variable of the same name. */
-        if (shell_text_equals_ignore_case(token, "RANDOM")) {
-            /* cmd.exe %RANDOM% is 0..32767. */
-            snprintf(pseudo_buf, 40, "%d", (int)(esp_random() & 0x7FFF));
+        if (shell_text_equals_ignore_case(token, "RANDOM") ||
+            strncasecmp(token, "RANDOM(", 7) == 0) {
+            /* cmd.exe %RANDOM% is 0..32767. %RANDOM(min,max)% is bounded. */
+            int r = (int)(esp_random() & 0x7FFF);
+            if (token[6] == '(') {
+                const char *inner = token + 7;
+                const char *comma = strchr(inner, ',');
+                if (comma != NULL) {
+                    int lo = (int)strtol(inner, NULL, 10);
+                    int hi = (int)strtol(comma + 1, NULL, 10);
+                    if (hi > lo) {
+                        int range = hi - lo + 1;
+                        /* Use rejection sampling to avoid modulo bias */
+                        int limit = (0x7FFF / range) * range;
+                        while (r >= limit) {
+                            r = (int)(esp_random() & 0x7FFF);
+                        }
+                        r = lo + (r % range);
+                    }
+                }
+            }
+            snprintf(pseudo_buf, 40, "%d", r);
             return pseudo_buf;
         }
         if (shell_text_equals_ignore_case(token, "CD")) {
@@ -2250,6 +2476,48 @@ static const char *shell_expand_named_value(const char *token, char *errorlevel_
             }
             return pseudo_buf;
         }
+    }
+    /* Virtual / read-only names: computed on read, never stored in the slot
+     * table, so they consume zero RAM. %ERR% is the current errorlevel, the
+     * short form of %ERRORLEVEL%. %ERRMSG% is a short status word derived
+     * from the errorlevel. %VERSION%/%BOARD% come from flash (compile-time
+     * config). %SERIAL% is the MAC-derived chip serial, lazily filled once. */
+    if (shell_text_equals_ignore_case(token, "ERR")) {
+        snprintf(errorlevel_buf, 16, "%d", s_errorlevel);
+        return errorlevel_buf;
+    }
+    if (shell_text_equals_ignore_case(token, "ERRMSG")) {
+        const char *msg = "error";
+        if (s_errorlevel == 0) {
+            msg = "success";
+        } else if (s_errorlevel == 2) {
+            msg = "usage";
+        }
+        snprintf(pseudo_buf, 40, "%s", msg);
+        return pseudo_buf;
+    }
+    if (shell_text_equals_ignore_case(token, "VERSION")) {
+        snprintf(pseudo_buf, 40, "%s", P4_CONFIG_VERSION_STRING);
+        return pseudo_buf;
+    }
+    if (shell_text_equals_ignore_case(token, "BOARD")) {
+        snprintf(pseudo_buf, 40, "%s", BOARD_CFG_NAME);
+        return pseudo_buf;
+    }
+    if (shell_text_equals_ignore_case(token, "SERIAL")) {
+        if (!s_virtual_serial_ready) {
+            uint8_t mac[6] = {0};
+            if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+                snprintf(s_virtual_serial, sizeof(s_virtual_serial),
+                         "%02X%02X%02X%02X%02X%02X",
+                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            } else {
+                s_virtual_serial[0] = '\0';
+            }
+            s_virtual_serial_ready = true;
+        }
+        snprintf(pseudo_buf, 40, "%s", s_virtual_serial);
+        return pseudo_buf;
     }
     {
         const char *value = shell_env_get(token);
@@ -2814,10 +3082,29 @@ void shell_command_set(int argc, char **argv)
 
     *equals = '\0';
     equals++;
-    if (shell_env_set(assignment, equals) != ESP_OK) {
-        shell_print_error("set: invalid variable name or environment is full");
-        free(assignment);
-        return;
+    {
+        esp_err_t err = shell_env_set(assignment, equals);
+        if (err != ESP_OK) {
+            if (err == ESP_ERR_NOT_SUPPORTED) {
+                shell_print_error("set: '%s' is a read-only system variable", assignment);
+            } else if (err == ESP_ERR_INVALID_ARG) {
+                shell_print_error("set: invalid variable name");
+            } else {
+                /* Per-class exhaustion message. */
+                shell_env_class_t routed = shell_env_route_class(assignment);
+                const char *class_name = "globals";
+                if (routed == SHELL_CLASS_ARRAY) {
+                    class_name = "arrays";
+                } else if (routed == SHELL_CLASS_FRAME_LOCAL) {
+                    class_name = "frame-locals";
+                } else if (routed == SHELL_CLASS_MAP) {
+                    class_name = "maps";
+                }
+                shell_print_error("set: %s budget exhausted", class_name);
+            }
+            free(assignment);
+            return;
+        }
     }
 
     if (equals[0] == '\0') {
@@ -4422,11 +4709,15 @@ static bool shell_ini_load_cb(const char *key, const char *value, void *ctx)
     return true;
 }
 
-/** Export the whole environment table into @p buf as KEY=VALUE lines. */
+/** Export the global class into @p buf as KEY=VALUE lines (ini load/save). */
 static bool shell_ini_export_env(char *buf, size_t cap)
 {
+    size_t index;
+
     buf[0] = '\0';
-    for (size_t index = 0; index < SHELL_ENV_VAR_MAX; index++) {
+    for (index = s_class_start[SHELL_CLASS_GLOBAL];
+         index < s_class_start[SHELL_CLASS_GLOBAL] + s_class_budget[SHELL_CLASS_GLOBAL];
+         index++) {
         if (s_shell_env_vars[index].used &&
             !storage_ini_upsert(buf, cap, s_shell_env_vars[index].name,
                                 s_shell_env_vars[index].value)) {
@@ -4434,6 +4725,75 @@ static bool shell_ini_export_env(char *buf, size_t cap)
         }
     }
     return true;
+}
+
+/* Count existing NAME[i] elements for a dimensioned array (used by dim). */
+int shell_env_array_count(const char *name)
+{
+    char prefixed[SHELL_ENV_NAME_BYTES + 2];
+    int count = 0;
+    size_t i;
+
+    if (name == NULL || name[0] == '\0') {
+        return 0;
+    }
+    snprintf(prefixed, sizeof(prefixed), "%s[", name);
+    size_t plen = strlen(prefixed);
+
+    batch_shared_take();
+    size_t start = s_class_start[SHELL_CLASS_ARRAY];
+    size_t budget = s_class_budget[SHELL_CLASS_ARRAY];
+    for (i = 0; i < budget; i++) {
+        shell_env_var_t *slot = &s_shell_env_vars[start + i];
+        if (slot->used && strncmp(slot->name, prefixed, plen) == 0) {
+            count++;
+        }
+    }
+    batch_shared_give();
+    return count;
+}
+
+/* `slots` — per-class budget report. */
+int shell_env_class_info(shell_env_class_info_t *info)
+{
+    static const char *names[SHELL_CLASS_COUNT] = {
+        "globals", "frame-locals", "arrays", "maps"
+    };
+    int count = 0;
+    int i;
+
+    if (info == NULL) {
+        return 0;
+    }
+    for (i = 0; i < SHELL_CLASS_COUNT; i++) {
+        info[count].class_tag = (shell_env_class_t)i;
+        info[count].name = names[i];
+        info[count].budget = s_class_budget[i];
+        info[count].used = shell_env_class_used((shell_env_class_t)i);
+        count++;
+    }
+    return count;
+}
+
+void shell_command_slots(int argc, char **argv)
+{
+    shell_env_class_info_t info[SHELL_CLASS_COUNT];
+    int count;
+    int i;
+
+    (void)argc;
+    (void)argv;
+
+    count = shell_env_class_info(info);
+    shell_print_heading("Slot pool");
+    for (i = 0; i < count; i++) {
+        shell_transcript_appendf_ansi(
+            SH_LBL "%-14s" SH_RST " %s%4u / %-4u" SH_RST "\n",
+            info[i].name,
+            (info[i].used >= info[i].budget) ? SH_ERR : SH_VAL,
+            (unsigned)info[i].used,
+            (unsigned)info[i].budget);
+    }
 }
 
 /* ---- Shared file helpers used by both `ini` and `appconfig` ---- */
@@ -5914,9 +6274,38 @@ static void shell_for_substitute_and_run_bindings(const char *do_command,
      * the labelled block inline (a goto from a loop body cannot be processed
      * until the loop returns). */
     s_loop_body_depth++;
+    s_break_requested = false;
+    s_continue_requested = false;
     batch_run_nested(expanded_cmd);
     s_loop_body_depth--;
     free(expanded_cmd);
+}
+
+/** Check for break/continue in for loop iteration. Returns true to break. */
+static bool for_check_break(void)
+{
+    if (s_break_requested) {
+        s_break_requested = false;
+        return true;
+    }
+    if (s_goto_pending) {
+        return true;
+    }
+    if (s_stop_mode != BATCH_STOP_NONE) {
+        return true;
+    }
+    return false;
+}
+
+/** Check for continue in for loop iteration. Returns true to break inner
+ *  loop and continue the outer for loop. */
+static bool for_check_continue(void)
+{
+    if (s_continue_requested) {
+        s_continue_requested = false;
+        return true;
+    }
+    return false;
 }
 
 /** Single-binding wrapper used by the classic token / wildcard `for`. */
@@ -5946,33 +6335,44 @@ int shell_fora_collect(const char *prefix, char names[][SHELL_ENV_NAME_BYTES], i
     }
     prefix_len = strlen(prefix);
     batch_shared_take();
-    for (index = 0; index < SHELL_ENV_VAR_MAX && count < max; index++) {
-        const char *name;
-        size_t name_len;
-        const char *open;
-        const char *close;
+    /* Array elements now live in their own class slab. */
+    {
+        size_t start = s_class_start[SHELL_CLASS_ARRAY];
+        size_t end = start + s_class_budget[SHELL_CLASS_ARRAY];
+        if (start >= SHELL_POOL_TOTAL) {
+            start = 0;
+            end = 0;
+        } else if (end > SHELL_POOL_TOTAL) {
+            end = SHELL_POOL_TOTAL;
+        }
+        for (index = start; index < end && count < max; index++) {
+            const char *name;
+            size_t name_len;
+            const char *open;
+            const char *close;
 
-        if (!s_shell_env_vars[index].used) {
-            continue;
+            if (!s_shell_env_vars[index].used) {
+                continue;
+            }
+            name = s_shell_env_vars[index].name;
+            name_len = strlen(name);
+            if (name_len <= prefix_len + 2) {
+                continue;
+            }
+            if (strncasecmp(name, prefix, prefix_len) != 0) {
+                continue;
+            }
+            open = name + prefix_len;
+            if (*open != '[') {
+                continue;
+            }
+            close = name + name_len - 1;
+            if (*close != ']' || close == open + 1) {
+                continue;
+            }
+            snprintf(names[count], SHELL_ENV_NAME_BYTES, "%s", name);
+            count++;
         }
-        name = s_shell_env_vars[index].name;
-        name_len = strlen(name);
-        if (name_len <= prefix_len + 2) {
-            continue;
-        }
-        if (strncasecmp(name, prefix, prefix_len) != 0) {
-            continue;
-        }
-        open = name + prefix_len;
-        if (*open != '[') {
-            continue;
-        }
-        close = name + name_len - 1;
-        if (*close != ']' || close == open + 1) {
-            continue;
-        }
-        snprintf(names[count], SHELL_ENV_NAME_BYTES, "%s", name);
-        count++;
     }
     /* A background job's private array variables live in its overlay:
      * collect matching overlay names not already seen (shadow-cleared
@@ -6443,7 +6843,7 @@ static void shell_forf_run_source(const char *spec, const char *do_command,
             break;
         }
         shell_forf_process_line(line, do_command, var_name, opts);
-        if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+        if (for_check_break() || for_check_continue()) {
             break;
         }
     }
@@ -6597,7 +6997,7 @@ static void shell_forf_run_command(const char *inner, const char *do_command,
                 break;
             }
             shell_forf_process_line(line, do_command, var_name, opts);
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
         }
@@ -6670,7 +7070,7 @@ static void shell_execute_for_f_loop(const char *set_str, const char *do_command
                 } else {
                     for (int i = 0; i < count; i++) {
                         shell_forf_run_source(files[i], do_command, var_name, opts);
-                        if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                        if (for_check_break() || for_check_continue()) {
                             break;
                         }
                     }
@@ -6680,7 +7080,7 @@ static void shell_execute_for_f_loop(const char *set_str, const char *do_command
                 shell_forf_run_source(token, do_command, var_name, opts);
             }
 
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
             token = strtok_r(NULL, " \t", &save_ptr);
@@ -6918,7 +7318,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
         }
         for (int i = 0; i < count; i++) {
             shell_for_substitute_and_run(do_command, var_name, tokens[i]);
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
         }
@@ -6953,7 +7353,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
             }
             snprintf(numbuf, sizeof(numbuf), "%lld", (long long)value);
             shell_for_substitute_and_run(do_command, var_name, numbuf);
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
         }
@@ -6975,13 +7375,17 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
             free(set_str);
             return;
         }
-        names = malloc(sizeof(*names) * SHELL_ENV_VAR_MAX);
+        size_t for_max = s_class_budget[SHELL_CLASS_ARRAY];
+        if (for_max > 1024) {
+            for_max = 1024;  /* sanity cap on the scratch buffer */
+        }
+        names = malloc(sizeof(*names) * for_max);
         if (names == NULL) {
             shell_transcript_append_text("for /A: out of memory\n");
             free(set_str);
             return;
         }
-        collected = shell_fora_collect(prefix, names, SHELL_ENV_VAR_MAX);
+        collected = shell_fora_collect(prefix, names, (int)for_max);
         free(set_str);
         set_str = NULL;
         for (int i = 0; i < collected; i++) {
@@ -7010,7 +7414,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
             bindings[1].text = value != NULL ? value : "";
             bindings[1].len = value != NULL ? strlen(value) : 0;
             shell_for_substitute_and_run_bindings(do_command, bindings, 2);
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
         }
@@ -7033,7 +7437,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
                 if (storage_expand_dirs(token, &tokens, &count) == ESP_OK) {
                     for (int i = 0; i < count; i++) {
                         shell_for_substitute_and_run(do_command, var_name, tokens[i]);
-                        if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+                        if (for_check_break() || for_check_continue()) {
                             break;
                         }
                     }
@@ -7044,7 +7448,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
             } else {
                 shell_for_substitute_and_run(do_command, var_name, token);
             }
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
             token = strtok_r(NULL, " \t", &save_ptr);
@@ -7070,7 +7474,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
 
         for (int i = 0; i < count; i++) {
             shell_for_substitute_and_run(do_command, var_name, tokens[i]);
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
         }
@@ -7089,7 +7493,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
             shell_for_substitute_and_run(do_command, var_name, token);
 
             /* Check for goto/exit conditions that end the loop early */
-            if (s_goto_pending || s_stop_mode != BATCH_STOP_NONE) {
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
 
@@ -7419,12 +7823,19 @@ void shell_command_while(int argc, char **argv)
              * inside run the labelled block inline rather than setting a
              * pending goto the frame loop cannot process until we return. */
             s_loop_body_depth++;
+            s_break_requested = false;
+            s_continue_requested = false;
             batch_run_nested(run);
             s_loop_body_depth--;
             free(run);
-            if (s_stop_mode != BATCH_STOP_NONE) {
+            if (s_break_requested || s_stop_mode != BATCH_STOP_NONE) {
+                s_break_requested = false;
                 batch_set_errorlevel(0);
                 break;
+            }
+            if (s_continue_requested) {
+                s_continue_requested = false;
+                continue;
             }
             if (s_goto_pending) {
                 /* A real `goto` (not `call :label`) should break the loop. */
@@ -7444,6 +7855,153 @@ void shell_command_while(int argc, char **argv)
     free(command_line);
 }
 
+/**
+ * Sort an array in-place using stable insertion sort.
+ * @return Number of elements sorted, or -1 if not dimensioned.
+ */
+int shell_sort_array(const char *name, bool numeric, bool descending)
+{
+    char len_name[SHELL_ENV_NAME_BYTES];
+    const char *len_val;
+    int len;
+    char **values;
+    int i, j;
+
+    snprintf(len_name, sizeof(len_name), "%s.__len", name);
+    len_val = shell_env_get(len_name);
+    if (len_val == NULL) {
+        return -1;
+    }
+    len = (int)strtol(len_val, NULL, 10);
+    if (len <= 0) {
+        return 0;
+    }
+
+    values = malloc(sizeof(char *) * len);
+    if (values == NULL) {
+        return -1;
+    }
+    for (i = 0; i < len; i++) {
+        char key[SHELL_ENV_NAME_BYTES];
+        snprintf(key, sizeof(key), "%s[%d]", name, i);
+        const char *val = shell_env_get(key);
+        values[i] = strdup(val != NULL ? val : "");
+    }
+
+    for (i = 1; i < len; i++) {
+        char *key_val = values[i];
+        j = i - 1;
+        for (; j >= 0; j--) {
+            int cmp;
+            if (numeric) {
+                long a = strtol(key_val, NULL, 10);
+                long b = strtol(values[j], NULL, 10);
+                cmp = (a < b) ? -1 : (a > b) ? 1 : 0;
+            } else {
+                cmp = strcmp(key_val, values[j]);
+            }
+            if (descending) cmp = -cmp;
+            if (cmp >= 0) break;
+            values[j + 1] = values[j];
+        }
+        values[j + 1] = key_val;
+    }
+
+    for (i = 0; i < len; i++) {
+        char key[SHELL_ENV_NAME_BYTES];
+        snprintf(key, sizeof(key), "%s[%d]", name, i);
+        shell_env_set(key, values[i]);
+        free(values[i]);
+    }
+    free(values);
+    return len;
+}
+
+/**
+ * `until <expr> do <command>` — negated `while`. Runs the body while the
+ * expression is zero (DOS `until` / shell `until` parity). Delegates to
+ * `while` with the condition inverted by wrapping the expression in `(1 - (expr!=0))`.
+ */
+void shell_command_until(int argc, char **argv)
+{
+    if (argc < 4) {
+        shell_print_usage("Usage: until <expr> do <command>");
+        batch_set_errorlevel(2);
+        return;
+    }
+    /* Rewrite the command line: prefix "while" instead of "until" and invert
+     * the condition by wrapping: replace the original argv[0] with a synthetic
+     * "while" call using !(expr) as the condition. We do this by manipulating
+     * the argument list before calling shell_command_while. */
+    char *cmd_line = malloc(SHELL_COMMAND_BYTES);
+    if (cmd_line == NULL) {
+        shell_transcript_append_text("until: out of memory\n");
+        batch_set_errorlevel(1);
+        return;
+    }
+    /* Build "while !(cond) do body" from "until cond do body" */
+    shell_join_args(argv, 0, argc, cmd_line, SHELL_COMMAND_BYTES);
+    /* Replace "until " at the start with "while 1 - (" and append ")" before " do" */
+    char *until_pos = strstr(cmd_line, "until ");
+    if (until_pos != NULL && (until_pos == cmd_line || isspace((unsigned char)until_pos[-1]))) {
+        /* Find the " do " separator */
+        char *do_pos = strstr(until_pos, " do ");
+        if (do_pos != NULL) {
+            /* Shift: "while !(<cond>)\0<body>" */
+            size_t cond_start = (size_t)(until_pos - cmd_line) + 6; /* skip "until " */
+            size_t cond_len = (size_t)(do_pos - (cmd_line + cond_start));
+            char *cond_buf = malloc(SHELL_BATCH_LINE_BYTES);
+            if (cond_buf == NULL) {
+                free(cmd_line);
+                batch_set_errorlevel(1);
+                return;
+            }
+            /* Build new line: prefix + "while 1-(" + cond + ")" + " do " + body */
+            snprintf(cond_buf, SHELL_BATCH_LINE_BYTES, "%.*s%s%.*s%s%s",
+                     (int)(until_pos - cmd_line), cmd_line,
+                     "while 1-(",
+                     (int)cond_len, cmd_line + cond_start,
+                     ")",
+                     do_pos);
+            /* Parse as a new command line and dispatch */
+            char *cmd_copy = malloc(SHELL_COMMAND_BYTES);
+            if (cmd_copy == NULL) {
+                free(cond_buf);
+                free(cmd_line);
+                batch_set_errorlevel(1);
+                return;
+            }
+            snprintf(cmd_copy, SHELL_COMMAND_BYTES, "%s", cond_buf);
+            free(cond_buf);
+            free(cmd_line);
+            batch_run_nested(cmd_copy);
+            free(cmd_copy);
+            return;
+        }
+    }
+    shell_print_usage("Usage: until <expr> do <command>");
+    batch_set_errorlevel(2);
+    free(cmd_line);
+}
+
+/* ========================================================================
+ * break / continue (loop control)
+ * ======================================================================== */
+
+void shell_command_break(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    s_break_requested = true;
+}
+
+void shell_command_continue(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    s_continue_requested = true;
+}
+
 /* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
@@ -7454,14 +8012,27 @@ void batch_init(void)
         return;
     }
 
-    /* Allocate the environment slot table off the internal bank (PSRAM
-     * first): the table must not consume boot internal RAM ahead of the
-     * command-worker stack. A failed allocation leaves the table NULL and
+    /* Compute class boundaries within the flat pool. Each class owns a
+     * contiguous range of slots. A class with budget 0 is skipped. */
+    {
+        s_class_start[0] = 0;
+        s_class_budget[0] = P4_CONFIG_ENV_VAR_MAX;
+        s_class_start[1] = s_class_budget[0];
+        s_class_budget[1] = P4_CONFIG_ENV_FRAME_LOCAL_SLOTS;
+        s_class_start[2] = s_class_start[1] + s_class_budget[1];
+        s_class_budget[2] = P4_CONFIG_ENV_ARRAY_SLOTS;
+        s_class_start[3] = s_class_start[2] + s_class_budget[2];
+        s_class_budget[3] = P4_CONFIG_ENV_MAP_SLOTS;
+    }
+
+    /* Allocate the environment slot pool off the internal bank (PSRAM
+     * first): the pool must not consume boot internal RAM ahead of the
+     * command-worker stack. A failed allocation leaves the pool NULL and
      * env lookups/sets degrade to no-ops. */
     if (s_shell_env_vars == NULL) {
-        s_shell_env_vars = (shell_env_var_t *)p4heap_alloc_psram(SHELL_ENV_BYTES);
+        s_shell_env_vars = (shell_env_var_t *)p4heap_alloc_psram(SHELL_POOL_BYTES);
         if (s_shell_env_vars == NULL) {
-            s_shell_env_vars = (shell_env_var_t *)p4heap_alloc_any(SHELL_ENV_BYTES);
+            s_shell_env_vars = (shell_env_var_t *)p4heap_alloc_any(SHELL_POOL_BYTES);
         }
     }
     /* The background ctx pool (~10 KB per slot) likewise lives in PSRAM:
@@ -7475,7 +8046,7 @@ void batch_init(void)
     if (s_shell_env_vars == NULL) {
         return;
     }
-    memset(s_shell_env_vars, 0, SHELL_ENV_BYTES);
+    memset(s_shell_env_vars, 0, SHELL_POOL_BYTES);
     (void)shell_env_set("PATH", "sd:/");
     memset(s_aliases, 0, sizeof(s_aliases));
 
@@ -7485,6 +8056,8 @@ void batch_init(void)
     s_goto_label[0] = '\0';
     s_goto_pending = false;
     s_stop_mode = BATCH_STOP_NONE;
+    s_break_requested = false;
+    s_continue_requested = false;
 
     /* Release any setlocal snapshot left over from a previous init. */
     shell_setlocal_unwind_to(0);

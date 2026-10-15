@@ -24,6 +24,7 @@
 #include "keyboard.h"
 #include "header.h"
 #include "tui.h"
+#include "tui_pane.h"
 #include "editor_view.h"
 #include "font.h"
 #include "theme.h"
@@ -538,6 +539,25 @@ void shell_command_theme(int argc, char **argv)
         shell_transcript_appendf("theme: -> %s%s\n", theme_current()->name,
                                  save ? (saved_ok ? " (saved)" : " (save failed)") : "");
         batch_set_errorlevel(saved_ok ? 0 : 1);
+        return;
+    }
+    if (shell_text_equals_ignore_case(argv[1], "hud")) {
+        /* theme /hud bg COLOR [/fg COLOR] — set the HUD band palette.
+         * Colors are DOS 0-15 indices or names (black, red, green, yellow,
+         * blue, magenta, cyan, white, gray, bright-*). */
+        uint8_t bg = 16, fg = 7;
+        for (int i = 2; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "bg") && i + 1 < argc) {
+                bg = (uint8_t)draw_color_arg(argv[i + 1], bg);
+                i++;
+            } else if (shell_text_equals_ignore_case(argv[i], "fg") && i + 1 < argc) {
+                fg = (uint8_t)draw_color_arg(argv[i + 1], fg);
+                i++;
+            }
+        }
+        tui_hud_set_colors(fg, bg);
+        shell_transcript_appendf("theme /hud: fg=%u bg=%u\n", fg, bg);
+        batch_set_errorlevel(0);
         return;
     }
     shell_command_theme_usage();

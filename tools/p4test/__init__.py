@@ -18,6 +18,9 @@ driver imports from here:
 
 from .asserts import Checklist, SuiteResult  # noqa: F401
 from .session import DeviceSession, P4Error, PanicError  # noqa: F401
+from .device import Device  # noqa: F401
+from .screenshot import capture  # noqa: F401
+from .sdbridge import push_file, pull_file  # noqa: F401
 
 __all__ = [
     "Checklist",
@@ -25,4 +28,8 @@ __all__ = [
     "DeviceSession",
     "P4Error",
     "PanicError",
+    "Device",
+    "capture",
+    "push_file",
+    "pull_file",
 ]

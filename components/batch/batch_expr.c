@@ -43,14 +43,19 @@
  * ARITHMETIC EXPRESSIONS (set /a)
  * ========================================================================
  * A recursive-descent evaluator over 32-bit signed integers, following the
- * COMMAND.COM operator set and precedence:
+ * COMMAND.COM operator set and precedence (extended):
  *
- *   |        bitwise or            (lowest)
+ *   ? :      ternary               (lowest)
+ *   ||       logical or
+ *   &&       logical and
+ *   |        bitwise or
  *   ^        bitwise xor
  *   &        bitwise and
- *   << >>    shifts
+ *   << >>    shifts (arithmetic)
+ *   >>>      logical right shift
  *   + -      additive
  *   * / %    multiplicative
+ *   **       power
  *   - ~ !    unary
  *   ( )      grouping              (highest)
  *
@@ -68,9 +73,10 @@ typedef struct {
 } expr_parser_t;
 
 static int32_t shell_expr_parse_or(expr_parser_t *parser);
-static int32_t shell_expr_parse_compare(expr_parser_t *parser);
 static int32_t shell_expr_parse_logical_and(expr_parser_t *parser);
 static int32_t shell_expr_parse_logical(expr_parser_t *parser);
+static int32_t shell_expr_parse_ternary(expr_parser_t *parser);
+static int32_t shell_expr_parse_power(expr_parser_t *parser);
 
 /** Record the first error and stop evaluating. */
 static void shell_expr_fail(expr_parser_t *parser, const char *message)
@@ -209,21 +215,46 @@ static int32_t shell_expr_parse_unary(expr_parser_t *parser)
     return shell_expr_parse_primary(parser);
 }
 
+/** Right-associative power: unary ('**' unary)? */
+static int32_t shell_expr_parse_power(expr_parser_t *parser)
+{
+    int32_t base = shell_expr_parse_unary(parser);
+
+    shell_expr_skip_space(parser);
+    if (shell_expr_accept(parser, "**")) {
+        int32_t exp_val = shell_expr_parse_power(parser); /* right-assoc */
+        /* Integer power with overflow guard */
+        if (exp_val < 0) {
+            return 0; /* negative exponent -> 0 for integers */
+        }
+        int32_t result = 1;
+        for (int32_t i = 0; i < exp_val; i++) {
+            if (result > 0 && base > 0 && result > INT32_MAX / base) {
+                shell_expr_fail(parser, "arithmetic overflow");
+                return 0;
+            }
+            result *= base;
+        }
+        return result;
+    }
+    return base;
+}
+
 static int32_t shell_expr_parse_multiplicative(expr_parser_t *parser)
 {
-    int32_t left = shell_expr_parse_unary(parser);
+    int32_t left = shell_expr_parse_power(parser);
 
     while (!parser->failed) {
         shell_expr_skip_space(parser);
 
         if (*parser->cursor == '*') {
             parser->cursor++;
-            left = left * shell_expr_parse_unary(parser);
+            left = left * shell_expr_parse_power(parser);
         } else if (*parser->cursor == '/') {
             int32_t right;
 
             parser->cursor++;
-            right = shell_expr_parse_unary(parser);
+            right = shell_expr_parse_power(parser);
             if (right == 0) {
                 shell_expr_fail(parser, "divide by zero");
                 return 0;
@@ -238,7 +269,7 @@ static int32_t shell_expr_parse_multiplicative(expr_parser_t *parser)
             int32_t right;
 
             parser->cursor++;
-            right = shell_expr_parse_unary(parser);
+            right = shell_expr_parse_power(parser);
             if (right == 0) {
                 shell_expr_fail(parser, "divide by zero");
                 return 0;
@@ -288,6 +319,10 @@ static int32_t shell_expr_parse_shift(expr_parser_t *parser)
             right = shell_expr_parse_additive(parser);
             /* A shift of 32 or more is undefined in C; clamp to 0. */
             left = (right >= 0 && right < 32) ? (int32_t)((uint32_t)left << right) : 0;
+        } else if (shell_expr_accept(parser, ">>>")) {
+            right = shell_expr_parse_additive(parser);
+            /* Logical right shift: zero-fill */
+            left = (right >= 0 && right < 32) ? (int32_t)((uint32_t)left >> right) : 0;
         } else if (shell_expr_accept(parser, ">>")) {
             right = shell_expr_parse_additive(parser);
             left = (right >= 0 && right < 32) ? (left >> right) : (left < 0 ? -1 : 0);
@@ -443,6 +478,27 @@ static int32_t shell_expr_parse_logical(expr_parser_t *parser)
     return left;
 }
 
+/**
+ * Ternary: cond ? true_val : false_val (right-associative).
+ * Lowest precedence after logical OR. Matches C ternary semantics.
+ */
+static int32_t shell_expr_parse_ternary(expr_parser_t *parser)
+{
+    int32_t cond = shell_expr_parse_logical(parser);
+
+    shell_expr_skip_space(parser);
+    if (shell_expr_accept(parser, "?")) {
+        int32_t true_val = shell_expr_parse_ternary(parser);
+        if (!shell_expr_accept(parser, ":")) {
+            shell_expr_fail(parser, "missing ':' in ternary");
+            return cond;
+        }
+        int32_t false_val = shell_expr_parse_ternary(parser);
+        return (cond != 0) ? true_val : false_val;
+    }
+    return cond;
+}
+
 bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char **error_out)
 {
     expr_parser_t parser;
@@ -467,7 +523,7 @@ bool shell_expr_evaluate(const char *expression, int32_t *result_out, const char
     parser.failed = false;
     parser.message = NULL;
 
-    value = shell_expr_parse_logical(&parser);
+    value = shell_expr_parse_ternary(&parser);
 
     if (!parser.failed) {
         shell_expr_skip_space(&parser);
@@ -522,6 +578,11 @@ static char *shell_expr_find_assignment(char *statement)
                 continue;   /* second of `==`, or the `=` of `!=` */
             }
 
+            /* `?=` default-assign: assign only if undefined or 0 */
+            if (prev == '?') {
+                return p;
+            }
+
             if (prev == '<' || prev == '>') {
                 if (p > statement + 1 && p[-2] == prev) {
                     return p;   /* `<<=` or `>>=` : compound shift assignment */
@@ -564,7 +625,7 @@ void shell_command_set_arithmetic(int argc, char **argv)
 
     if (argc < 3) {
         shell_print_usage("Usage: set /a NAME=<expression>");
-        shell_transcript_append_text("  Operators: + - * / % & | ^ ~ ! << >> == != < > <= >= && || ( )\n");
+        shell_transcript_append_text("  Operators: + - * / % ** & | ^ ~ ! << >> >>> == != < > <= >= && || ? : ( )\n");
         batch_set_errorlevel(1);
         return;
     }
@@ -594,6 +655,7 @@ void shell_command_set_arithmetic(int argc, char **argv)
         char op = '\0';
         char *name_end = equals;
         bool shift_op = false;
+        bool default_assign = false;
 
         if (name_end > statement) {
             char previous = name_end[-1];
@@ -609,6 +671,10 @@ void shell_command_set_arithmetic(int argc, char **argv)
                     shift_op = true;
                     name_end -= 2;
                 }
+            } else if (previous == '?') {
+                /* 'x?=expr' default-assign: assign only if undefined or 0 */
+                default_assign = true;
+                name_end--;
             }
         }
 
@@ -625,6 +691,26 @@ void shell_command_set_arithmetic(int argc, char **argv)
         if (!shell_expr_evaluate(expression, &result, &error)) {
             shell_transcript_appendf("set: %s\n", error != NULL ? error : "invalid expression");
             batch_set_errorlevel(1);
+            return;
+        }
+
+        /* Default-assign: only store if the variable is undefined or 0 */
+        if (default_assign) {
+            const char *existing = shell_env_get(name);
+            int32_t current_val = (existing != NULL) ? (int32_t)strtol(existing, NULL, 0) : 0;
+            if (existing != NULL && current_val != 0) {
+                /* Variable already defined and nonzero: keep it */
+                batch_set_errorlevel(0);
+                return;
+            }
+            snprintf(value_text, sizeof(value_text), "%ld", (long)result);
+            if (shell_env_set(name, value_text) != ESP_OK) {
+                shell_print_error("set: globals budget exhausted");
+                batch_set_errorlevel(1);
+                return;
+            }
+            shell_transcript_appendf_ansi(SH_LBL "%s" SH_RST "=" SH_NUM "%s" SH_RST "\n", name, value_text);
+            batch_set_errorlevel(0);
             return;
         }
 
@@ -672,7 +758,11 @@ void shell_command_set_arithmetic(int argc, char **argv)
 
     snprintf(value_text, sizeof(value_text), "%ld", (long)result);
     if (shell_env_set(name, value_text) != ESP_OK) {
-        shell_print_error("set: invalid variable name or environment is full");
+        if (shell_env_name_is_array(name)) {
+            shell_print_error("set: arrays budget exhausted");
+        } else {
+            shell_print_error("set: globals budget exhausted");
+        }
         batch_set_errorlevel(1);
         return;
     }
@@ -843,7 +933,11 @@ void shell_command_set_prompt(int argc, char **argv)
     }
 
     if (shell_env_set(name, input) != ESP_OK) {
-        shell_print_error("set: invalid variable name or environment is full");
+        if (shell_env_name_is_array(name)) {
+            shell_print_error("set: arrays budget exhausted");
+        } else {
+            shell_print_error("set: globals budget exhausted");
+        }
         batch_set_errorlevel(1);
         return;
     }

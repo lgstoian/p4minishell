@@ -20,6 +20,7 @@ idf_component_register(
         portal
         usb
         shell
+        jsengine
         boot
         clock
         windows

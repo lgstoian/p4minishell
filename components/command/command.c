@@ -62,6 +62,7 @@
 #include "tab5kbd.h"
 #include "c6ota.h"
 #include "tui.h"
+#include "tui_modal.h"
 #include "clock.h"
 #include "usb.h"
 #include "bsp/esp-bsp.h"
@@ -137,6 +138,9 @@ static bool s_initialized = false;
 #define SHELL_COMMAND_QUEUE_SEND_TIMEOUT_MS P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS
 static QueueHandle_t s_command_queue = NULL;
 static TaskHandle_t s_command_worker_handle = NULL;
+static StaticTask_t s_worker_tcb;
+static StackType_t s_worker_stack[(P4_CONFIG_COMMAND_TASK_STACK + sizeof(StackType_t) - 1) / sizeof(StackType_t)];
+
 
 /* Hardware handles */
 
@@ -4366,6 +4370,18 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- JavaScript eval/run/call ---- */
+    if (shell_text_equals_ignore_case(argv[0], "js")) {
+        batch_set_errorlevel(shell_command_js(argc, argv));
+        return true;
+    }
+
+    /* ---- Browser ---- */
+    if (shell_text_equals_ignore_case(argv[0], "browser")) {
+        batch_set_errorlevel(shell_command_browser(argc, argv));
+        return true;
+    }
+
     /* ---- CSV grid (rows/cols/cell/eval); int return becomes ERRORLEVEL. */
     if (shell_text_equals_ignore_case(argv[0], "csv")) {
         batch_set_errorlevel(shell_command_csv(argc, argv));
@@ -4899,6 +4915,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "slots")) {
+        shell_command_slots(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "endlocal")) {
         shell_command_endlocal(argc, argv);
         return true;
@@ -4919,6 +4940,36 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "dim")) {
+        shell_command_dim(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "str")) {
+        shell_command_str(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "map")) {
+        shell_command_map(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "trap")) {
+        shell_command_trap(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "break")) {
+        shell_command_break(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "continue")) {
+        shell_command_continue(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "for")) {
         shell_command_for(argc, argv);
         return true;
@@ -4926,6 +4977,11 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "while")) {
         shell_command_while(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "until")) {
+        shell_command_until(argc, argv);
         return true;
     }
 
@@ -5108,6 +5164,116 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "tui")) {
         shell_command_tui(argc, argv);
+        return true;
+    }
+
+    /* ---- Workspace verbs (wig/pane/hud/key/tap/prompt/event/trace) ---- */
+    if (shell_text_equals_ignore_case(argv[0], "wig")) {
+        shell_command_wig(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "pane")) {
+        shell_command_pane(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "hud")) {
+        shell_command_hud(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "key")) {
+        shell_command_key(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "tap")) {
+        shell_command_tap(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "prompt") && argc >= 2 &&
+        (shell_text_equals_ignore_case(argv[1], "ws") ||
+         shell_text_equals_ignore_case(argv[1], "/text") ||
+         shell_text_equals_ignore_case(argv[1], "/mask"))) {
+        shell_command_prompt_ws(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "event")) {
+        shell_command_event(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "trace")) {
+        shell_command_trace(argc, argv);
+        return true;
+    }
+
+    /* ---- Modal verbs (mode/mbind/mcmd/mdialog/guard/scope/palette/mmacro/pending/mstatus/repeat/cancel/buffer) ---- */
+    if (shell_text_equals_ignore_case(argv[0], "mode")) {
+        shell_command_mode(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mbind")) {
+        shell_command_mbind(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mcmd")) {
+        shell_command_mcmd(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mdialog")) {
+        shell_command_mdialog(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "guard")) {
+        shell_command_guard(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "scope")) {
+        shell_command_scope(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "palette")) {
+        shell_command_palette(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mmacro")) {
+        shell_command_mmacro(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "pending")) {
+        shell_command_pending(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mstatus")) {
+        shell_command_mstatus(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "repeat")) {
+        shell_command_repeat(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "cancel")) {
+        shell_command_cancel(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "buffer")) {
+        shell_command_buffer(argc, argv);
         return true;
     }
 
@@ -6311,15 +6477,23 @@ void command_init(void)
     s_command_queue = xQueueCreate(SHELL_COMMAND_QUEUE_DEPTH, sizeof(command_request_t *));
     if (s_command_queue == NULL) {
         ESP_LOGE(COMMAND_TAG, "Failed to create command queue");
-    } else if (xTaskCreate(command_worker_task,
+    } else {
+        /* Static worker TCB + stack: the large stack is allocated in BSS
+         * (not heap) so it never fragments the heap before SDMMC/DMA buffer
+         * allocation. The worker runs OTA flash writes, so the stack must
+         * stay in internal RAM (PSRAM is inaccessible during flash writes). */
+        s_command_worker_handle = xTaskCreateStatic(command_worker_task,
                            "shell_cmd",
-                           SHELL_COMMAND_TASK_STACK_BYTES,
+                           SHELL_COMMAND_TASK_STACK_BYTES / sizeof(StackType_t),
                            NULL,
                            tskIDLE_PRIORITY + 2,
-                           &s_command_worker_handle) != pdPASS) {
-        ESP_LOGE(COMMAND_TAG, "Failed to create command worker task");
-        vQueueDelete(s_command_queue);
-        s_command_queue = NULL;
+                           s_worker_stack,
+                           &s_worker_tcb);
+        if (s_command_worker_handle == NULL) {
+            ESP_LOGE(COMMAND_TAG, "Failed to create command worker task");
+            vQueueDelete(s_command_queue);
+            s_command_queue = NULL;
+        }
     }
 
     /* Suspended bg pool for `start`: same stack as the main worker (bg jobs
@@ -6460,6 +6634,11 @@ void command_init(void)
 #endif
 
     s_initialized = true;
+
+    /* Initialize the modal layer with command-layer callbacks. */
+    extern bool modal_layer_init(void);
+    modal_layer_init();
+
     ESP_LOGI(COMMAND_TAG, "Command module initialized");
 }
 

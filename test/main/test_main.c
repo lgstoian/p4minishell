@@ -430,6 +430,32 @@ extern void test_tui_selftest_coverage_clean(void);
 extern void test_tui_selftest_metrics_clean(void);
 extern void test_tui_selftest_check_clean(void);
 extern void test_tui_bound_cell_inactive(void);
+extern void test_ws_pane_add_close(void);
+extern void test_ws_pane_duplicate_rejected(void);
+extern void test_ws_pane_focus_cycle(void);
+extern void test_ws_pane_hide_skips_focus(void);
+extern void test_ws_pane_split(void);
+extern void test_ws_pane_append_clear(void);
+extern void test_ws_widget_add_remove(void);
+extern void test_ws_widget_types(void);
+extern void test_ws_hud_add_remove(void);
+extern void test_ws_hud_refresh_cadence(void);
+extern void test_ws_event_post_get_wait(void);
+extern void test_ws_key_bind_unbind(void);
+extern void test_ws_key_mode(void);
+extern void test_ws_tap_add_hit(void);
+extern void test_ws_workspace_reset(void);
+extern void test_modal_init_reset(void);
+extern void test_modal_mode_push_pop(void);
+extern void test_modal_mode_switch(void);
+extern void test_modal_bind_unbind(void);
+extern void test_modal_chord_pending(void);
+extern void test_modal_cmd_def_run(void);
+extern void test_modal_scope_save_restore(void);
+extern void test_modal_guard_set_get(void);
+extern void test_modal_dialog_push_pop(void);
+extern void test_modal_macro_record_replay(void);
+extern void test_modal_repeat(void);
 
 extern void test_clipboard_set_get(void);
 extern void test_clipboard_empty_and_null(void);
@@ -1148,6 +1174,36 @@ void app_main(void)
     RUN_TEST(test_tui_selftest_metrics_clean);
     RUN_TEST(test_tui_selftest_check_clean);
     RUN_TEST(test_tui_bound_cell_inactive);
+
+    RUN_TEST(test_ws_pane_add_close);
+    RUN_TEST(test_ws_pane_duplicate_rejected);
+    RUN_TEST(test_ws_pane_focus_cycle);
+    RUN_TEST(test_ws_pane_hide_skips_focus);
+    RUN_TEST(test_ws_pane_split);
+    RUN_TEST(test_ws_pane_append_clear);
+    RUN_TEST(test_ws_widget_add_remove);
+    RUN_TEST(test_ws_widget_types);
+    RUN_TEST(test_ws_hud_add_remove);
+    RUN_TEST(test_ws_hud_refresh_cadence);
+    RUN_TEST(test_ws_event_post_get_wait);
+    RUN_TEST(test_ws_key_bind_unbind);
+    RUN_TEST(test_ws_key_mode);
+    RUN_TEST(test_ws_tap_add_hit);
+    RUN_TEST(test_ws_workspace_reset);
+
+    /* Modal layer (components/tui/tui_modal.c). */
+    RUN_TEST(test_modal_init_reset);
+    RUN_TEST(test_modal_mode_push_pop);
+    RUN_TEST(test_modal_mode_switch);
+    RUN_TEST(test_modal_bind_unbind);
+    RUN_TEST(test_modal_chord_pending);
+    RUN_TEST(test_modal_cmd_def_run);
+    RUN_TEST(test_modal_scope_save_restore);
+    RUN_TEST(test_modal_guard_set_get);
+    RUN_TEST(test_modal_dialog_push_pop);
+    RUN_TEST(test_modal_macro_record_replay);
+    RUN_TEST(test_modal_repeat);
+
     UNITY_END();
 
     /* RAM clipboard (components/shell). */

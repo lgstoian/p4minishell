@@ -159,6 +159,100 @@ void test_variable_expansion_pseudo_vars(void)
 }
 
 /* ========================================================================
+ * VIRTUAL / READ-ONLY SLOTS (%ERR% %ERRMSG% %VERSION% %BOARD% %SERIAL%)
+ * ======================================================================== */
+
+void test_variable_expansion_err_level_vars(void)
+{
+    char out[256];
+    int saved = batch_get_errorlevel();
+
+    /* %ERR% is the short form of %ERRORLEVEL%. */
+    batch_set_errorlevel(0);
+    shell_expand_variables("echo %ERR%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("echo 0", out);
+
+    batch_set_errorlevel(7);
+    shell_expand_variables("code=%ERR% done", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("code=7 done", out);
+
+    /* %ERRMSG% is a short status word derived from the errorlevel. */
+    batch_set_errorlevel(0);
+    shell_expand_variables("%ERRMSG%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("success", out);
+
+    batch_set_errorlevel(1);
+    shell_expand_variables("%ERRMSG%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("error", out);
+
+    batch_set_errorlevel(2);
+    shell_expand_variables("%ERRMSG%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("usage", out);
+
+    batch_set_errorlevel(42);
+    shell_expand_variables("%ERRMSG%", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("error", out);
+
+    batch_set_errorlevel(saved);
+}
+
+void test_variable_expansion_system_slots(void)
+{
+    char out[256];
+
+    /* %VERSION% expands to the compile-time version string, never literal. */
+    shell_expand_variables("%VERSION%", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "%VERSION%") == NULL);
+    TEST_ASSERT_GREATER_THAN(0, strlen(out));
+
+    /* %BOARD% expands to the board profile name, never literal. */
+    shell_expand_variables("%BOARD%", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "%BOARD%") == NULL);
+    TEST_ASSERT_GREATER_THAN(0, strlen(out));
+
+    /* %SERIAL% expands to the MAC-derived serial, never literal. */
+    shell_expand_variables("%SERIAL%", out, sizeof(out));
+    TEST_ASSERT_TRUE(strstr(out, "%SERIAL%") == NULL);
+}
+
+void test_variable_virtual_names_not_stored(void)
+{
+    /* Virtual names cannot be stored: set refuses them, no slot consumed. */
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("TIME", "override"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("DATE", "x"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("ERR", "99"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("ERRMSG", "oops"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("VERSION", "x"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("BOARD", "x"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("SERIAL", "x"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("ERRORLEVEL", "5"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("RANDOM", "5"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, shell_env_set("CD", "x"));
+
+    /* A user variable of a different name still works. */
+    TEST_ASSERT_EQUAL(ESP_OK, shell_env_set("NORMAL", "value"));
+    const char *v = shell_env_get("NORMAL");
+    TEST_ASSERT_NOT_NULL(v);
+    TEST_ASSERT_EQUAL_STRING("value", v);
+    shell_env_set("NORMAL", "");
+}
+
+void test_variable_numeric_names_rejected(void)
+{
+    /* Purely-numeric names are batch arguments, not named slots. */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, shell_env_set("1", "a"));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, shell_env_set("9", "b"));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, shell_env_set("42", "c"));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, shell_env_set("0", "d"));
+
+    /* Mixed names (with letters or brackets) are still valid. */
+    TEST_ASSERT_EQUAL(ESP_OK, shell_env_set("A1", "ok"));
+    TEST_ASSERT_EQUAL(ESP_OK, shell_env_set("ITEM[0]", "ok"));
+    shell_env_set("A1", "");
+    shell_env_set("ITEM[0]", "");
+}
+
+/* ========================================================================
  * NULL SAFETY
  * ======================================================================== */
 

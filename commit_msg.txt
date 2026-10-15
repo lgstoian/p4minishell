@@ -1,0 +1,42 @@
+F6 FIXED: Tab5 hosted-SDIO boot storm (0x44 expander single-writer, reset-free)
+
+F26 partially fixed: O(1) truncation detection, staging mutex + apply-timer pump, sync flush points
+
+F27 OPEN: transient crash in long sweeps (F27 documented in bugs.md)
+
+- F6: 0x44 expander now single-writer + reset-free (raw write path, read-back verified, 3 retries)
+  - boot_regression.py COM6 20 -> 20/20 clean, f6_totals=clean (was 20/20 with recovery)
+  - dogfood.py COM6 8 min -> PASS 5/5 (was FAIL via F6 reboots)
+  - boot_regression: 20/20 clean, f6_totals=clean (was 20/20 with recovery)
+  - dogfood 8 min: PASS 5/5 (was FAIL via F6 reboots)
+  - battery/camera/wifi regressions clean; COM3 unaffected (11/11 p4test, Unity 428/0/2)
+
+- F26: O(1) epoch-based truncation detection (epoch counter + staged_len)
+  - staging mutex (PORT outer, STAGE inner), apply-timer pump (10ms) + task_wake
+  - worker off port-lock on append path; sync_apply for screenshot/key-wait/repaint
+  - worker wall-time ~2ms/echo at full scrollback
+  - residual: LVGL-side O(retained) expand+draw (~2.7 us/char); windowed render is F26 follow-up
+
+- F27 OPEN: 3/3 sweeps hit 1 late-suite crash (Guru Meditation / Task WDT / silent reboot)
+  - all 6 targeted re-runs clean; documented in bugs.md F27 with attribution plan
+  - suspicion: F26 pump saturating LVGL task during sustained output
+
+- Docs updated: bugs.md (F6 FIXED, F26 updated, F27 OPEN), changelog.md, ai-context.md,
+  schematics.md (E2 single-writer), PORTING.md (§6 first-RPC), documentation.md,
+  p4minishell_config.h/.yaml (+transcript_apply_tick_ms)
+
+- F25 residual (windowed rendering) remains OPEN as F26 follow-up
+
+- Verified: COM3 p4test 11/11, Unity 428/0/2; COM6 boot 20/20 clean, dogfood 8min PASS 5/5,
+  COM3 p4test 11/11, Unity 428/0/2; COM6 boot 20/20 clean, dogfood 8min PASS 5/5,
+  COM6 p4test 10/11 (s07_data flake), COM3 p4test 11/11 (final)
+
+All builds: zero warnings, zero errors on both boards (jc1060p470c, m5stack_tab5)
+
+Refs: bugs.md F6/F26/F27, changelog.md, ai-context.md, schematics.md, PORTING.md, documentation.md
+p4minishell_config.h/.yaml (+transcript_apply_tick_ms)
+tools/transcript_perf.py (new), tools/boot_regression.py (F6 totals), tools/p4test/session.py (panic output)
+boards/m5stack_tab5/board_bsp/ (bsp_io_expander.c, bsp_feature_en.c, m5stack_tab5.h)
+components/windows/ (windows.c, windows.h + epoch/staging_mutex/timer)
+components/shell/ (epoch, staging_mutex, async pump)
+tools/ (transcript_perf.py new, boot_regression.py F6 totals, session.py panic output)

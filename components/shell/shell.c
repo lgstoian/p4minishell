@@ -1,4 +1,4 @@
-/*
+﻿/*
  * SPDX-FileCopyrightText: 2026 Stoian Alexandru
  * SPDX-License-Identifier: MIT
  */
@@ -706,7 +706,7 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
     shell_transcript_guard_internal();
 
     /* Serialize buffer appends (worker, LVGL task via the async drain,
-     * console task) against each other with the lightweight buffer mutex —
+     * console task) against each other with the lightweight buffer mutex â€”
      * deliberately NOT the LVGL port lock, which the render task can hold
      * O(buffer) per frame at a full scrollback. Widget/label work happens
      * below in the deferred label step, which takes the port lock itself. */
@@ -779,7 +779,7 @@ void shell_transcript_append_ansi(const char *text)
     ansi_strip_to_plain(plain, sizeof(plain), text);
 
     /* While an output-redirection capture is active, the (stripped) output
-     * goes to the capture only — see shell_transcript_append_internal. */
+     * goes to the capture only â€” see shell_transcript_append_internal. */
     if (s_redirect_capturing) {
         shell_redirect_capture_add(plain, strlen(plain));
         return;
@@ -1970,7 +1970,7 @@ void shell_extract_input_text(char *output, size_t output_size)
     }
 
     /* The port lock asserts when LVGL is not up (unit tests, early boot),
-     * so only take it when the widget exists — a NULL widget also implies
+     * so only take it when the widget exists â€” a NULL widget also implies
      * no port, matching the transcript/input-line convention. The mutex is
      * recursive, so the LVGL event path nests without deadlock, and the
      * textarea pointer stays valid for the whole locked region. */
@@ -2389,7 +2389,12 @@ void shell_transcript_append_link(const char *label, const char *command)
      * a native hyperlink, the LVGL transcript keeps the underline + bright
      * cyan span (parsers drop the OSC bytes), and taps resolve through the
      * registered region. Heap buffers: the OSC target is a full command
-     * line, far beyond any sane stack local on the LVGL task. */
+     * line, far beyond any sane stack local on the LVGL task.
+     *
+     * These buffers are allocated from internal RAM (not PSRAM) because the
+     * LVGL task may read the rendered transcript concurrently while the
+     * worker task appends to it; PSRAM is inaccessible during flash writes
+     * and can cause Load access faults when touched from the wrong core. */
     char *styled;
     char *out;
     char short_label[64];
@@ -2399,8 +2404,9 @@ void shell_transcript_append_link(const char *label, const char *command)
         return;
     }
     snprintf(short_label, sizeof(short_label), "%s", label);
-    styled = malloc(256);
-    out = malloc((size_t)P4_CONFIG_COMMAND_BYTES + 512u);
+    styled = heap_caps_malloc(256, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    out = heap_caps_malloc((size_t)P4_CONFIG_COMMAND_BYTES + 512u,
+                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (styled == NULL || out == NULL) {
         free(styled);
         free(out);
@@ -2509,7 +2515,7 @@ bool shell_link_fire(const char *command, const char *label, bool confirm)
     /* Immediate regions (`anchor` contract): echo the line and queue it for
      * the worker. Async from every task (LVGL tap, worker `ui link`): the
      * queue owns ordering, so a fire can never re-enter the executor. A
-     * stale preview for another target dies here — the fired line is the
+     * stale preview for another target dies here â€” the fired line is the
      * one the user just chose. */
     shell_link_clear_pending();
     copy = malloc(P4_CONFIG_COMMAND_BYTES);
@@ -3544,7 +3550,7 @@ static void shell_prompt_expand(char *output, size_t output_size, bool allow_esc
         case 'd':
         case 't': {
             const char *stamp = time_get_formatted();
-            /* "YYYY-MM-DD HH:MM:SS" — take the date or the time half. */
+            /* "YYYY-MM-DD HH:MM:SS" â€” take the date or the time half. */
             if (stamp != NULL && strlen(stamp) >= 19) {
                 static char part[12];
                 if (tolower((unsigned char)*cursor) == 'd') {
@@ -4220,7 +4226,7 @@ void shell_get_cwd_for_prompt(char *buf, size_t buf_size)
     const char *last_sep = strrchr(cwd, '\\');
     if (last_sep == NULL) last_sep = strrchr(cwd, '/');
     if (last_sep == NULL) {
-        /* No separator found — truncate from beginning */
+        /* No separator found â€” truncate from beginning */
         size_t keep = P4_CONFIG_PS_PATH_MAX_DISPLAY - 3;
         if (keep > len) keep = len;
         snprintf(buf, buf_size, "...%s", cwd + len - keep);
@@ -5045,6 +5051,8 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "view",     "view [/t:secs] [--raw] <file> - text viewer pager (.md renders in the reading font, .bmp/.dib open the image viewer) (ERRORLEVEL 0/1)" },
     { "open",     "open [/t:secs] [--raw] <file> - open by type: scripts in editor, md rendered, images viewed, rest as text (never executes)" },
     { "json",     "json validate|pretty <file> - check structure or print 2-space indented JSON (ERRORLEVEL 0/1)" },
+    { "js",       "js eval <code> | js run <file.js> | js call <file.js> <fn> [args] - JavaScript engine (ERRORLEVEL 0/1/2)" },
+    { "browser",  "browser <url> | browser back | browser forward - basic web browser (ERRORLEVEL 0/1/2)" },
     { "csv",      "csv rows|cols|cell|get|set|eval <file> [row col] [/b] [/v:NAME] - CSV grid (R1C1 refs, ranges, =EXPR via calc) (ERRORLEVEL 0/1/2)" },
     { "export",   "export <db NAME|alarms> <csv|json|txt|vcf|ics> <file> - portable store interchange (ERRORLEVEL 0/1/2)" },
     { "import",   "import db <name> <csv|json|vcf> <file> | import alarms <csv|json|ics> <file> - store interchange in, fresh ids (ERRORLEVEL 0/1/2)" },
@@ -5061,6 +5069,13 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "link",     "link <label> <command...> | link list | link open <n> - tap-confirm hyperlink (underline)" },
     { "complete", "complete <partial line> - list Tab-completion matches as runnable links" },
     { "tui",      "tui status|stats|clear|fullscreen|refresh|selftest - TUI control (selftest runs headless palette/coverage/metrics checks)" },
+    { "wig",     "wig /panel|text|gauge|button|list|clear|render - declarative widget layer (foreground only)" },
+    { "pane",     "pane /add|split|focus|cycle|hide|close|list - pane stack management (foreground only)" },
+    { "hud",      "hud /add|refresh|flash|del - HUD status cells (foreground only)" },
+    { "key",      "key /bind|unbind|inject|mode|list - key bindings and synthetic input" },
+    { "tap",      "tap /on|off|clear|list - touch hotspot binding (foreground only)" },
+    { "event",    "event /wait|type|field|dispatch|post|clear|count - script-visible event multiplexer" },
+    { "trace",    "trace /on|off|level|status - on-screen diagnostics" },
     { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
     { "locate",   "locate <row> <col> - DOS LOCATE parity (1-based, 80x25)" },
     { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },
@@ -5160,6 +5175,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "temp",     "temp [new [ext] | clean] - SD-backed temporary files" },
     { "ansi",     "ansi <sgr-codes> [text...] - emit ANSI-styled text (reverse, bold, color) into the transcript" },
     { "menu",     "menu <item> [item...] - numbered menu; ERRORLEVEL = chosen index (0 = cancel)" },
+    { "mode",     "mode /push NAME [/type T] [/map M] | mode /pop | mode /switch NAME | mode /top | mode /list | mode /count | mode /drop TYPE | mode /timeout MS - mode stack" },
     { "form",     "form [/t:secs] \"title\" \"Label=type[:arg]:VAR\" ... - multi-field modal (text|password|check|select|range), values to env (ERRORLEVEL 0/255)" },
     { "markdown", "markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print] - render/export Markdown (echo/type auto-render; /raw bypasses)" },
     { "notify",   "notify [/t:secs] <text> | notify - - header notification (clear with -)" },
@@ -5168,6 +5184,18 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "alias",    "alias [name[=value]] | alias /save [/load] [file] - DOSKEY-style macros" },
     { "unalias",  "unalias <name> - remove a macro alias" },
     { "bind",     "bind [F1..F12|^A..^Z <line>] | bind unbind <key> | bind /save [/load] [file] | bind /clear - key bindings (^C reserved)" },
+    { "mbind",    "mbind /map NAME CHORD LABEL | mbind /unbind NAME CHORD | mbind /leader KEY | mbind /list NAME - modal keymap chords" },
+    { "mcmd",     "mcmd /def NAME LABEL [/doc D] | mcmd /list | mcmd /run NAME | mcmd /undef NAME - named commands" },
+    { "mdialog",  "mdialog /confirm TEXT [/var V] | mdialog /input TEXT [/default D] [/var V] | mdialog /result V - nested dialogs" },
+    { "guard",    "guard /on enter|leave TYPE LABEL | guard /off enter|leave TYPE | guard /list - transition guards" },
+    { "scope",    "scope /save MODE VAR [VAR ...] | scope /restore MODE | scope /list MODE | scope /clear MODE - mode-scoped state" },
+    { "palette",  "palette /open | palette /close | palette /source NAME - command palette" },
+    { "mmacro",   "mmacro /record NAME | mmacro /stop | mmacro /replay NAME [N] | mmacro /list - event macro record/replay" },
+    { "pending",  "pending /get | pending /clear | pending /timeout MS - chord buffer" },
+    { "mstatus",  "mstatus /set TYPE FORMAT | mstatus /render - per-mode statusline" },
+    { "repeat",   "repeat /last [N] | repeat /set N | repeat /clear - repeat count" },
+    { "cancel",   "cancel [/to NAME] [/all] [/code N] - unwind modal state" },
+    { "buffer",   "buffer /open NAME | buffer /close NAME | buffer /list | buffer /mode NAME MODE - modal text buffer" },
     { "macro",    "macro record [file] | macro stop | macro play <file> | macro status - capture/replay command macros" },
     { "date",     "date [MM-DD-YYYY] - show/set the date" },
     { "db",       "db <create|list|info|drop|open|close|categories|add|get|set|del|purge|count|find|export|import> [...] - Palm-OS-style SD record store" },
@@ -5211,7 +5239,15 @@ static void shell_help_print_entry(const shell_help_entry_t *e)
     snprintf(label, sizeof(label), "%-12s", e->name);
     snprintf(target, sizeof(target), "help %s", e->name);
     shell_transcript_appendf_ansi("  ");
-    shell_transcript_append_link(label, target);
+    /* Only register a click region if there's room; once the table is full the
+     * label still prints but is not tappable. The region limit is small (32)
+     * because each slot owns a heap-allocated command string and the table
+     * lives in .bss. */
+    if (s_click_region_count < SHELL_CLICK_REGION_MAX) {
+        shell_transcript_append_link(label, target);
+    } else {
+        shell_transcript_appendf_ansi(SH_LINK "%s" SH_RST, label);
+    }
     shell_transcript_appendf_ansi(" %s\n", e->summary);
 }
 
@@ -5266,7 +5302,9 @@ void shell_command_help(int argc, char **argv)
                                       SH_NUM "%d" SH_RST SH_SUBHEAD " commands)" SH_RST "\n",
                                       SHELL_HELP_ENTRY_COUNT);
         for (i = 0; i < SHELL_HELP_ENTRY_COUNT; i++) {
-            shell_help_print_entry(&s_shell_help_entries[i]);
+            shell_transcript_appendf_ansi("  " SH_LINK "%-12s" SH_RST " %s\n",
+                                          s_shell_help_entries[i].name,
+                                          s_shell_help_entries[i].summary);
         }
         shell_transcript_appendf_ansi(SH_MUTE "Offline reference: every command above is runnable. "
                                       "Run " SH_EXE "help <command>" SH_RST SH_MUTE
@@ -5596,7 +5634,7 @@ void shell_command_mem(void)
     shell_transcript_appendf_ansi("  " SH_LBL "mem.internal:" SH_RST " %u bytes free\n", (unsigned int)free_internal);
     /* DMA pool detail (bugs.md F23): `mem.internal` includes non-DMA RAM,
      * so hardware consumers (esp-aes descriptors, SDMMC bounce) go by
-     * `mem.dma.largest` — one contiguous DMA block is what they allocate. */
+     * `mem.dma.largest` â€” one contiguous DMA block is what they allocate. */
     shell_transcript_appendf_ansi("  " SH_LBL "mem.dma.free:" SH_RST " %u bytes\n",
                              (unsigned int)p4heap_dma_free());
     shell_transcript_appendf_ansi("  " SH_LBL "mem.dma.largest:" SH_RST " %u bytes\n",
@@ -5767,7 +5805,7 @@ static bool shell_task_parse_sort(const char *value, shell_task_sort_key_t *key,
  * Shared task-snapshot core: one heap-allocated TaskStatus_t array (capped
  * by P4_CONFIG_TASK_SNAPSHOT_MAX) filled by a single uxTaskGetSystemState()
  * walk. Used by `ps`/`tasks`/`top` and by the task manager's per-slot
- * runtime lookup — one implementation, never two snapshot walks. Free the
+ * runtime lookup â€” one implementation, never two snapshot walks. Free the
  * result with shell_snapshot_free(). Never call from the LVGL/render task
  * (the walk suspends scheduling long enough to underrun the panel) or
  * during an OTA (PSRAM is unavailable).
@@ -5862,7 +5900,7 @@ bool shell_task_runtime_for_handle(void *task_handle, uint32_t *runtime_out,
 }
 
 /**
- * `ps` / `tasks` / `top` — list FreeRTOS tasks and their CPU usage.
+ * `ps` / `tasks` / `top` â€” list FreeRTOS tasks and their CPU usage.
  *
  * Usage: ps|tasks|top [/b] [/O:key]
  *   - no argument: colour-coded table (name, state, priority, core, stack

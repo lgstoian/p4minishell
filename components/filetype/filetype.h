@@ -30,6 +30,7 @@ typedef enum {
     FILETYPE_TEXT,        /**< .txt/.log/.sys/.ini — plain viewer */
     FILETYPE_IMAGE,       /**< .bmp/.dib — BMP image viewer / canvas / TUI */
     FILETYPE_HTML,        /**< .html/.htm — rendered reader + editor highlight */
+    FILETYPE_SCRIPT,      /**< .js — JavaScript (view/edit/run via jsengine) */
     FILETYPE_COUNT
 } filetype_t;
 

@@ -217,6 +217,34 @@ int tui_selftest_metrics(const char **fail_name_out);
  *  @p fail_name_out (may be NULL). Pure, headless-safe. */
 int tui_selftest_check(const char **fail_name_out);
 
+#define TUI_MAX_LINKS 64
+#define TUI_URL_MAX 512
+
+typedef struct {
+    int x, y, w, h;
+    char url[TUI_URL_MAX];
+} tui_link_t;
+
+void tui_viewport_init(int page_rows);
+void tui_viewport_scroll_to(int row);
+void tui_viewport_scroll_by(int delta);
+int tui_viewport_get_offset(void);
+int tui_viewport_get_page_rows(void);
+
+void tui_page_set_cell(int col, int row, const char *utf8, uint8_t fg, uint8_t bg, uint8_t attr);
+void tui_page_clear(void);
+void tui_page_render(void);
+
+void tui_link_register(int x, int y, int w, int h, const char *url);
+bool tui_link_hit_test(int x, int y, const char **url_out);
+void tui_link_clear(void);
+
+void tui_address_bar_set(const char *text);
+void tui_address_bar_render(void);
+
+void tui_status_bar_set(const char *text);
+void tui_status_bar_render(void);
+
 #ifdef __cplusplus
 }
 #endif

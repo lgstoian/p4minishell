@@ -355,6 +355,31 @@ buffers:
     type: size_t
     description: "Render-target byte cap for the on-device HTML reader used by view/type/preview of .html/.htm (P4_CONFIG_HTML_RENDER_MAX_BYTES)"
     range: "65536..1048576"
+  js_heap_max_bytes:
+    value: 524288
+    type: size_t
+    description: "JavaScript engine heap cap in PSRAM (P4_CONFIG_JS_HEAP_MAX_BYTES)"
+    range: "131072..1048576"
+  js_stack_max_bytes:
+    value: 16384
+    type: size_t
+    description: "JavaScript engine max stack size (P4_CONFIG_JS_STACK_MAX_BYTES)"
+    range: "4096..65536"
+  js_timeout_ms:
+    value: 5000
+    type: uint32_t
+    description: "JavaScript eval wall-clock timeout in milliseconds (P4_CONFIG_JS_TIMEOUT_MS)"
+    range: "1000..30000"
+  js_eval_max_bytes:
+    value: 16384
+    type: size_t
+    description: "Max JavaScript eval result size (P4_CONFIG_JS_EVAL_MAX_BYTES)"
+    range: "4096..65536"
+  js_file_max_bytes:
+    value: 65536
+    type: size_t
+    description: "Max JavaScript file size (P4_CONFIG_JS_FILE_MAX_BYTES)"
+    range: "16384..262144"
   font_reading_default:
     value: "montserrat_14"
     type: string
@@ -709,6 +734,187 @@ tui:
     type: uint32_t
     description: "Target frame rate for TUI frame-pacing stats (tui stats); frames slower than 150% of this interval count as dropped (0 disables)"
     range: "0..120"
+
+# ---- TUI workspace (panes / widgets / HUD / events) ----
+workspace:
+  pane_max:
+    value: 8
+    type: int
+    description: "Maximum number of named panes in the workspace"
+    range: "2..16"
+  pane_name_bytes:
+    value: 16
+    type: int
+    description: "Maximum bytes for a pane name"
+    range: "8..32"
+  pane_title_bytes:
+    value: 32
+    type: int
+    description: "Maximum bytes for a pane title"
+    range: "8..64"
+  pane_scrollback_lines:
+    value: 64
+    type: int
+    description: "Scrollback line capacity per pane"
+    range: "16..256"
+  pane_line_bytes:
+    value: 128
+    type: int
+    description: "Maximum bytes per scrollback line"
+    range: "64..256"
+  widget_max:
+    value: 16
+    type: int
+    description: "Maximum number of declarative widgets"
+    range: "4..32"
+  widget_name_bytes:
+    value: 16
+    type: int
+    description: "Maximum bytes for a widget name"
+    range: "8..32"
+  widget_label_bytes:
+    value: 48
+    type: int
+    description: "Maximum bytes for a widget label"
+    range: "16..96"
+  hud_max:
+    value: 8
+    type: int
+    description: "Maximum number of HUD status cells"
+    range: "2..16"
+  hud_name_bytes:
+    value: 16
+    type: int
+    description: "Maximum bytes for a HUD cell name"
+    range: "8..32"
+  hud_format_bytes:
+    value: 64
+    type: int
+    description: "Maximum bytes for a HUD format string"
+    range: "16..128"
+  hud_refresh_ms:
+    value: 500
+    type: uint32_t
+    description: "Default HUD refresh cadence in ms (0 = manual only)"
+    range: "0..5000"
+  event_max:
+    value: 16
+    type: int
+    description: "Maximum number of queued events for the script-visible multiplexer"
+    range: "4..32"
+  event_payload_bytes:
+    value: 64
+    type: int
+    description: "Maximum bytes for an event payload"
+    range: "16..128"
+  tap_max:
+    value: 16
+    type: int
+    description: "Maximum number of touch hotspot bindings"
+    range: "4..32"
+  key_bind_max:
+    value: 16
+    type: int
+    description: "Maximum number of key bindings for the workspace event layer"
+    range: "4..32"
+  key_name_bytes:
+    value: 12
+    type: int
+    description: "Maximum bytes for a key name"
+    range: "4..24"
+
+# ---- Modal layer (mode frames / chords / dialogs / scopes / macros) ----
+modal:
+  max_frames:
+    value: 8
+    type: int
+    description: "Maximum depth of the mode stack"
+    range: "2..16"
+  max_maps:
+    value: 8
+    type: int
+    description: "Maximum number of named modes (keymaps)"
+    range: "2..16"
+  max_bindings:
+    value: 32
+    type: int
+    description: "Maximum keymap entries per mode"
+    range: "8..64"
+  max_chord_bytes:
+    value: 16
+    type: int
+    description: "Maximum bytes for a chord key"
+    range: "4..32"
+  max_pending:
+    value: 8
+    type: int
+    description: "Maximum pending chord strokes in the buffer"
+    range: "2..16"
+  chord_timeout_ms:
+    value: 400
+    type: uint32_t
+    description: "Default chord timeout in ms (0 = no timeout)"
+    range: "0..2000"
+  max_cmds:
+    value: 32
+    type: int
+    description: "Maximum number of named commands"
+    range: "8..64"
+  max_cmd_name_bytes:
+    value: 16
+    type: int
+    description: "Maximum bytes for a command name"
+    range: "4..32"
+  max_cmd_doc_bytes:
+    value: 64
+    type: int
+    description: "Maximum bytes for a command doc string"
+    range: "16..128"
+  max_scopes:
+    value: 8
+    type: int
+    description: "Maximum number of scope bags"
+    range: "2..16"
+  max_scope_vars:
+    value: 8
+    type: int
+    description: "Maximum variables per scope bag"
+    range: "2..16"
+  max_guards:
+    value: 8
+    type: int
+    description: "Maximum number of transition guards"
+    range: "2..16"
+  max_macros:
+    value: 8
+    type: int
+    description: "Maximum number of macro recordings"
+    range: "2..16"
+  max_macro_events:
+    value: 64
+    type: int
+    description: "Maximum events per macro recording"
+    range: "16..256"
+  max_macro_name_bytes:
+    value: 16
+    type: int
+    description: "Maximum bytes for a macro name"
+    range: "4..32"
+  max_dialogs:
+    value: 4
+    type: int
+    description: "Maximum frames for nested dialogs"
+    range: "2..8"
+  max_dialog_result_bytes:
+    value: 64
+    type: int
+    description: "Maximum bytes for a dialog result value"
+    range: "16..128"
+  leader_key:
+    value: ","
+    type: string
+    description: "Default leader key (single character)"
+    range: "any single char"
 
 # ---- Image (BMP) ----
 image:
@@ -1842,8 +2048,53 @@ batch_env:
   env_var_max:
     value: 64
     type: size_t
-    description: "Maximum RAM-only environment variables (sized above the largest reference app, SNAKE ~22, plus boot/alias vars; the table is shared across nested frames)"
+    description: "Maximum RAM-only global environment variables (sized above the largest reference app, SNAKE ~22, plus boot/alias vars; the table is shared across nested frames)"
     range: "1..128"
+  env_frame_local_slots:
+    value: 32
+    type: size_t
+    description: "Frame-local call/gosub temporary slots (slot stack, per frame depth)"
+    range: "0..128"
+  env_array_slots:
+    value: 256
+    type: size_t
+    description: "Array element slab (NAME[i] slots, isolated from the global table so arrays cannot starve scalars)"
+    range: "0..1024"
+  env_map_slots:
+    value: 64
+    type: size_t
+    description: "Map hash slab (reserved; set to 0 to compile maps out entirely)"
+    range: "0..256"
+  dim_max_size:
+    value: 1024
+    type: size_t
+    description: "Maximum elements one dim NAME N allocation can size (per-array cap)"
+    range: "1..4096"
+  str_fmt_bytes:
+    value: 512
+    type: size_t
+    description: "Maximum output bytes for str /fmt (%1..%9 substitution buffer)"
+    range: "64..2048"
+  map_max_chain:
+    value: 8
+    type: size_t
+    description: "Maximum collision chain length for map lookups (linear probe cap)"
+    range: "1..32"
+  map_key_bytes:
+    value: 32
+    type: size_t
+    description: "Maximum bytes for a map key (including NUL)"
+    range: "8..128"
+  trap_depth_max:
+    value: 8
+    type: size_t
+    description: "Maximum nested trap handler frames (mirrors setlocal depth)"
+    range: "1..32"
+  trap_msg_bytes:
+    value: 128
+    type: size_t
+    description: "Maximum bytes for a trap error message (stored in %ERRMSG%)"
+    range: "16..512"
   env_name_bytes:
     value: 32
     type: size_t
@@ -2221,6 +2472,11 @@ gfind:
     type: int
     description: "Maximum iterations one `while` loop runs before it stops with ERRORLEVEL 1"
     range: "64..1000000"
+  forwhile_timeout_max_ms:
+    value: 300000
+    type: uint32_t
+    description: "Maximum for /t or while /t timeout in milliseconds"
+    range: "1000..3600000"
   csv_max_cols:
     value: 32
     type: int

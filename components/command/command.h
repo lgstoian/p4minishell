@@ -1,4 +1,4 @@
-/*
+﻿/*
  * SPDX-FileCopyrightText: 2026 Stoian Alexandru
  * SPDX-License-Identifier: MIT
  */
@@ -6,8 +6,8 @@
  * @file command.h
  * @brief Command parser and dispatcher for P4MiniShell.
  *
- * Owns the command execution pipeline — variable-expansion entry, output
- * redirection, parsing, dispatch, and the worker task — plus the commands
+ * Owns the command execution pipeline â€” variable-expansion entry, output
+ * redirection, parsing, dispatch, and the worker task â€” plus the commands
  * that are not tied to the filesystem or the batch language. Uses shell.c for
  * transcript output and debug logging.
  *
@@ -19,11 +19,11 @@
  *   - Output redirection (> / >>) applied around every dispatch
  *
  * Delegated ownership:
- *   - `components/storage/` — SD sessions, path resolution, current working
+ *   - `components/storage/` â€” SD sessions, path resolution, current working
  *     directory, and every DOS file command
- *   - `components/batch/` — batch engine, environment variables, PATH,
+ *   - `components/batch/` â€” batch engine, environment variables, PATH,
  *     variable expansion, errorlevel, and the batch language commands
- *   - `components/shell/` — transcript, history, debug log, UART console,
+ *   - `components/shell/` â€” transcript, history, debug log, UART console,
  *     input line, and the system info commands
  *
  * Architecture:
@@ -219,7 +219,7 @@ bool shell_launch_app(const char *name);
 
 /**
  * True when @p name resolves in launch discovery (PATH + sd:/APPS). Shared
- * by `assoc` validation, `startup` validation, and the boot startup runner —
+ * by `assoc` validation, `startup` validation, and the boot startup runner â€”
  * one implementation, never per-caller scans.
  */
 bool shell_app_known(const char *name);
@@ -241,13 +241,13 @@ bool shell_launch_app_with_args(const char *name, const char *args);
 /** `assoc` argument forms (pure `command_assoc_*` helpers, unit-tested). */
 typedef enum {
     ASSOC_ARG_BAD = 0,  /**< Unparseable (usage error). */
-    ASSOC_ARG_SHOW,     /**< `.ext` — show one mapping. */
-    ASSOC_ARG_CLEAR,    /**< `.ext=` — clear one mapping. */
-    ASSOC_ARG_SET       /**< `.ext=app` — set one mapping. */
+    ASSOC_ARG_SHOW,     /**< `.ext` â€” show one mapping. */
+    ASSOC_ARG_CLEAR,    /**< `.ext=` â€” clear one mapping. */
+    ASSOC_ARG_SET       /**< `.ext=app` â€” set one mapping. */
 } assoc_arg_form_t;
 
 /**
- * Normalize an extension to `.lower` form (`txt`/`.TXT` → `.txt`).
+ * Normalize an extension to `.lower` form (`txt`/`.TXT` â†’ `.txt`).
  * Pure. @return true with @p out filled.
  */
 bool command_assoc_normalize_ext(const char *text, char *out, size_t out_size);
@@ -405,6 +405,81 @@ void shell_command_locate(int argc, char **argv);
 void shell_command_tui(int argc, char **argv);
 
 /* ========================================================================
+ * WORKSPACE VERBS (ui / pane / hud / key / tap / prompt / event / trace)
+ * ======================================================================== */
+
+/** Declarative widget layer: ui /panel|/text|/gauge|/button|/list|/clear|/render. */
+bool shell_command_wig(int argc, char **argv);
+
+/** Pane stack management: pane /add|/split|/focus|/cycle|/hide|/close|/list. */
+bool shell_command_pane(int argc, char **argv);
+
+/** HUD status cells: hud /add|/refresh|/flash|/del. */
+bool shell_command_hud(int argc, char **argv);
+
+/** Key bindings + synthetic input: key /bind|/unbind|/inject|/mode|/list. */
+bool shell_command_key(int argc, char **argv);
+
+/** Touch hotspots: tap /on|/off|/clear|/list. */
+bool shell_command_tap(int argc, char **argv);
+
+/** Enhanced line input: prompt /text|/mask|/timeout /var NAME. */
+bool shell_command_prompt_ws(int argc, char **argv);
+
+/** Event multiplexer: event /wait|/type|/field|/dispatch|/post|/clear|/count. */
+bool shell_command_event(int argc, char **argv);
+
+/** On-screen diagnostics: trace /on|/off|/level|/status. */
+bool shell_command_trace(int argc, char **argv);
+
+/* ========================================================================
+ * MODAL VERBS (mode / mbind / mcmd / mdialog / guard / scope / palette /
+ *             mmacro / pending / mstatus / repeat / cancel / buffer)
+ * ======================================================================== */
+
+/** Mode stack: mode /push|/pop|/switch|/top|/list|/count|/drop|/timeout. */
+bool shell_command_mode(int argc, char **argv);
+
+/** Keymap chords: mbind /map|/unbind|/leader|/list. */
+bool shell_command_mbind(int argc, char **argv);
+
+/** Named commands: mcmd /def|/list|/run|/undef. */
+bool shell_command_mcmd(int argc, char **argv);
+
+/** Nested dialogs: mdialog /confirm|/input|/result. */
+bool shell_command_mdialog(int argc, char **argv);
+
+/** Transition guards: guard /on|/off|/list. */
+bool shell_command_guard(int argc, char **argv);
+
+/** Mode-scoped state: scope /save|/restore|/list|/clear. */
+bool shell_command_scope(int argc, char **argv);
+
+/** Command palette: palette /open|/close|/source. */
+bool shell_command_palette(int argc, char **argv);
+
+/** Macro record/replay: mmacro /record|/stop|/replay|/list. */
+bool shell_command_mmacro(int argc, char **argv);
+
+/** Chord buffer: pending /get|/clear|/timeout. */
+bool shell_command_pending(int argc, char **argv);
+
+/** Per-mode statusline: mstatus /set|/render. */
+bool shell_command_mstatus(int argc, char **argv);
+
+/** Repeat count: repeat /last|/set|/clear. */
+bool shell_command_repeat(int argc, char **argv);
+
+/** Cancel/unwind: cancel [/to NAME] [/all] [/code N]. */
+bool shell_command_cancel(int argc, char **argv);
+
+/** Modal text buffer: buffer /open|/close|/list|/mode. */
+bool shell_command_buffer(int argc, char **argv);
+
+/** Initialize the modal layer. Called from command_init. */
+bool modal_layer_init(void);
+
+/* ========================================================================
  * FONT VERBS (`font info|coverage|list|set|size`; TTF sizes in Phase 2)
  * ======================================================================== */
 
@@ -452,6 +527,14 @@ void shell_command_json(int argc, char **argv);
  *  =EXPR evaluation reuses the calc engine here in the command layer.
  *  Returns an ERRORLEVEL: 0 ok, 1 none/error, 2 usage. */
 int shell_command_csv(int argc, char **argv);
+
+/** JavaScript eval/run/call (`js eval <code> | run <file> | call <file> <fn>`).
+ *  Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
+int shell_command_js(int argc, char **argv);
+
+/** Browser (`browser <url> | back | forward`).
+ *  Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
+int shell_command_browser(int argc, char **argv);
 
 /** Portable interchange (`export <db NAME | alarms> <csv|json|txt> <file>`,
  *  export_commands.c). Renders the structured stores through the existing
@@ -744,7 +827,7 @@ bool asset_parse_line(const char *line, char *path_out, size_t path_size,
                       uint32_t *crc_out);
 
 /**
- * `crc32 <path>` — print the file's CRC-32. `asset check|list <app>` —
+ * `crc32 <path>` â€” print the file's CRC-32. `asset check|list <app>` â€”
  * verify/list an app's manifest. Implemented in asset_commands.c.
  * Sets ERRORLEVEL 0 (ok/all match) / 1 (I/O or any mismatch) / 2 (usage).
  */
@@ -782,7 +865,7 @@ typedef struct {
 typedef const shell_command_entry_t *(*shell_command_table_fn_t)(size_t *out_count);
 
 /**
- * `chat` — board-to-board CLI chat. argv-verb dispatcher:
+ * `chat` â€” board-to-board CLI chat. argv-verb dispatcher:
  *   chat host [ssid|off] | peer <host-ip|off> | send <text...> |
  *   poll | log | clear | status | onmsg <line>|off
  * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
@@ -791,70 +874,70 @@ const shell_command_entry_t *chat_commands_get_table(size_t *out_count);
 int shell_command_chat(int argc, char **argv);
 
 /**
- * `epub` — EPUB e-book reader. argv-verb dispatcher:
- *   epub open <file>       — open an EPUB file
- *   epub close             — close current EPUB
- *   epub info              — show metadata (title, author, etc.)
- *   epub toc               — show table of contents
- *   epub read              — render current chapter
- *   epub next              — next chapter in spine
- *   epub prev              — previous chapter in spine
- *   epub goto <n>          — go to chapter n (spine index)
- *   epub toc               — show table of contents
- *   epub extract <n> <file> — extract resource (image, CSS) by manifest index
+ * `epub` â€” EPUB e-book reader. argv-verb dispatcher:
+ *   epub open <file>       â€” open an EPUB file
+ *   epub close             â€” close current EPUB
+ *   epub info              â€” show metadata (title, author, etc.)
+ *   epub toc               â€” show table of contents
+ *   epub read              â€” render current chapter
+ *   epub next              â€” next chapter in spine
+ *   epub prev              â€” previous chapter in spine
+ *   epub goto <n>          â€” go to chapter n (spine index)
+ *   epub toc               â€” show table of contents
+ *   epub extract <n> <file> â€” extract resource (image, CSS) by manifest index
  * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
  */
 const shell_command_entry_t *epub_commands_get_table(size_t *out_count);
 int shell_command_epub(int argc, char **argv);
 
 /**
- * `cas` — Computer Algebra System. argv-verb dispatcher:
- *   cas open <expr>          — parse and open expression
- *   cas close                — close current expression
- *   cas simplify             — simplify current expression
- *   cas expand               — expand current expression
- *   cas factor               — factor current expression
- *   cas diff <var>           — differentiate wrt variable
- *   cas integrate <var> [a b] — integrate (definite if bounds given)
- *   cas solve <var>          — solve for variable
- *   cas series <point> [order] — Taylor series
- *   cas substitute <var> <value> — substitute value
- *   cas evaluate             — evaluate current expression
- *   cas latex                — output LaTeX
+ * `cas` â€” Computer Algebra System. argv-verb dispatcher:
+ *   cas open <expr>          â€” parse and open expression
+ *   cas close                â€” close current expression
+ *   cas simplify             â€” simplify current expression
+ *   cas expand               â€” expand current expression
+ *   cas factor               â€” factor current expression
+ *   cas diff <var>           â€” differentiate wrt variable
+ *   cas integrate <var> [a b] â€” integrate (definite if bounds given)
+ *   cas solve <var>          â€” solve for variable
+ *   cas series <point> [order] â€” Taylor series
+ *   cas substitute <var> <value> â€” substitute value
+ *   cas evaluate             â€” evaluate current expression
+ *   cas latex                â€” output LaTeX
  * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
  */
 const shell_command_entry_t *cas_commands_get_table(size_t *out_count);
 int shell_command_cas(int argc, char **argv);
 
 /**
- * `math` — Matrix, Complex, Vector math. argv-verb dispatcher:
- *   math mat <expr>           — matrix operations
- *   math vec <expr>           — vector operations
- *   math complex <expr>       — complex number operations
+ * `math` â€” Matrix, Complex, Vector math. argv-verb dispatcher:
+ *   math mat <expr>           â€” matrix operations
+ *   math vec <expr>           â€” vector operations
+ *   math complex <expr>       â€” complex number operations
  * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
  */
 const shell_command_entry_t *math_disp_commands_get_table(size_t *out_count);
 int shell_command_math(int argc, char **argv);
 
 /**
- * `math` — Natural Display math editor. argv-verb dispatcher:
- *   math new                     — create new expression
- *   math open <expression>       — parse and open expression
- *   math close                   — close current expression
- *   math edit <dir>              — move cursor (left/right/up/down/home/end/word_left/word_right)
- *   math render                  — render current expression to ANSI
- *   math eval                    — evaluate current expression
- *   math cursor <cmd>            — move cursor (home/end/left/right/up/down/word_left/word_right)
- *   math insert <type> [args]    — insert math construct (frac/sqrt/power/sub/paren/func/text)
+ * `math` â€” Natural Display math editor. argv-verb dispatcher:
+ *   math new                     â€” create new expression
+ *   math open <expression>       â€” parse and open expression
+ *   math close                   â€” close current expression
+ *   math edit <dir>              â€” move cursor (left/right/up/down/home/end/word_left/word_right)
+ *   math render                  â€” render current expression to ANSI
+ *   math eval                    â€” evaluate current expression
+ *   math cursor <cmd>            â€” move cursor (home/end/left/right/up/down/word_left/word_right)
+ *   math insert <type> [args]    â€” insert math construct (frac/sqrt/power/sub/paren/func/text)
  * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
  */
 const shell_command_entry_t *math_disp_commands_get_table(size_t *out_count);
 int shell_command_math(int argc, char **argv);
 
 /**
- * `pkg` — SD app packages over `APPS/<APP>.APPINFO`
+ * `pkg` â€” SD app packages over `APPS/<APP>.APPINFO`
  * (title/description/version, plus type=/abi=/arch=/entry= for native and
- * hybrid apps — see ABI.md) + `APPS/<APP>.ASSETS` (contents manifest,
+ * hybrid apps â€” see ABI.md) + `APPS/<APP>.ASSETS` (contents manifest,
  * optional `SIGN=` ECDSA line), installed from a `PKGS/<APP>/` bundle.
  * Verbs: list, info, verify, check, install [/signed] [/force], remove,
  * purge, outdated, key show|install|clear. Implemented in pkg_commands.c;
@@ -961,27 +1044,27 @@ int command_ghost_line(const char *line, char *out, size_t out_size);
  * ======================================================================== */
 
 /**
- * `db` — Palm-OS-style SD-backed record store. argv-verb dispatcher over the
+ * `db` â€” Palm-OS-style SD-backed record store. argv-verb dispatcher over the
  * `db` core (components/db). See command.md for the full verb surface.
  * Sets ERRORLEVEL 0 (ok/found) / 1 (not found / empty) / 2 (usage / I/O).
  */
 void shell_command_db(int argc, char **argv);
 
 /**
- * `alarm` — SD-persisted alarms (components/alarm). argv-verb dispatcher:
+ * `alarm` â€” SD-persisted alarms (components/alarm). argv-verb dispatcher:
  * add / list / del / enable / disable / status / purge. Sets ERRORLEVEL
  * 0 (ok) / 1 (not found / none due) / 2 (usage / I/O).
  */
 void shell_command_alarm(int argc, char **argv);
 
 /**
- * `cal` — thin calendar view over the alarm store: `today`, `next`, or
+ * `cal` â€” thin calendar view over the alarm store: `today`, `next`, or
  * `YYYY-MM`. Sets ERRORLEVEL 0/1/2.
  */
 void shell_command_cal(int argc, char **argv);
 
 /**
- * `gfind` — Global Find across the structured "apps" (Palm-style): db records
+ * `gfind` â€” Global Find across the structured "apps" (Palm-style): db records
  * and alarm/calendar events, searched through the existing db_find / alarm_list
  * APIs (no parallel search logic). `/b` = bare machine-readable lines,
  * `/i` = case-insensitive, `/db:name` restricts to one database,

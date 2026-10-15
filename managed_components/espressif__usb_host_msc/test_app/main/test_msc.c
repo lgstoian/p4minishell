@@ -1,6 +1,6 @@
 
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -17,12 +17,21 @@
 #include "esp_private/usb_phy.h"
 #include "usb/usb_host.h"
 #include "usb/msc_host_vfs.h"
-#include "test_common.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include "../private_include/msc_common.h"
 
 static const char *TAG = "APP";
 
 #define ESP_OK_ASSERT(exp) TEST_ASSERT_EQUAL(ESP_OK, exp)
+#define APP_QUEUE_LENGTH 5
+
+enum {
+    // FatFS only allows to format disks with number of blocks greater than 128
+    DISK_BLOCK_NUM  = 128 + 1,
+    DISK_BLOCK_SIZE = 512
+};
 
 static esp_vfs_fat_mount_config_t mount_config = {
     .format_if_mount_failed = true,
@@ -30,10 +39,32 @@ static esp_vfs_fat_mount_config_t mount_config = {
     .allocation_unit_size = 1024,
 };
 
-static QueueHandle_t app_queue;
+static QueueHandle_t app_queue = NULL;
+static StaticQueue_t s_queue_buf;
 static SemaphoreHandle_t ready_to_deinit_usb;
 static msc_host_device_handle_t device;
 static msc_host_vfs_handle_t vfs_handle;
+static uint8_t ucQueueStorage[APP_QUEUE_LENGTH * sizeof(msc_host_event_t)];
+static char err_msg_buf[128];
+
+// Default structs for wait_for_app_event() function
+static const msc_host_event_t new_dev_event = {
+    .event = MSC_DEVICE_CONNECTED,
+};
+
+static const msc_host_event_t dev_gone_event = {
+    .event = MSC_DEVICE_DISCONNECTED,
+};
+
+#ifdef MSC_HOST_SUSPEND_RESUME_API_SUPPORTED
+static const msc_host_event_t suspend_event = {
+    .event = MSC_DEVICE_SUSPENDED,
+};
+
+static const msc_host_event_t resume_event = {
+    .event = MSC_DEVICE_RESUMED,
+};
+#endif // MSC_HOST_SUSPEND_RESUME_API_SUPPORTED
 
 // usb_host_lib_set_root_port_power is used to force toggle connection, primary developed for esp32p4
 // esp32p4 is supported from IDF 5.3
@@ -118,32 +149,54 @@ static void msc_event_cb(const msc_host_event_t *event, void *arg)
     xQueueSend(app_queue, event, 10);
 }
 
-/**
- * @brief Wait for app event
- *
- * @param expected_app_event expected event (NULL for no event expected)
- * @param ticks ticks to wait for an event
- */
-static void wait_for_app_event(msc_host_event_t *expected_app_event, TickType_t ticks)
+static uint8_t wait_for_app_event_impl(const msc_host_event_t *expected_app_event, TickType_t ticks, const char *file, int line)
 {
     msc_host_event_t app_event;
 
     // Check, that no event is delivered
     if (expected_app_event == NULL) {
         if (pdFALSE == xQueueReceive(app_queue, &app_event, ticks)) {
-            return;
+            return 0;
         } else {
-            TEST_FAIL_MESSAGE("Expecting NO event, but an event delivered");
+            snprintf(err_msg_buf, sizeof(err_msg_buf),
+                     "Expecting NO event, but an event %d delivered at %s:%d\n",
+                     app_event.event, file, line);
+            TEST_FAIL_MESSAGE(err_msg_buf);
         }
     }
 
     // Check that an event is delivered
     if (pdTRUE == xQueueReceive(app_queue, &app_event, ticks)) {
-        TEST_ASSERT_EQUAL_MESSAGE(expected_app_event->event, app_event.event, "Unexpected app event");
+        if (expected_app_event->event == app_event.event) {
+            // Return new device address if the event is connection event, otherwise 0
+            return (app_event.event == MSC_DEVICE_CONNECTED) ? (app_event.device.address) : 0;
+        } else {
+            snprintf(err_msg_buf, sizeof(err_msg_buf), "Unexpected event at %s:%d\n %d expected, %d delivered",
+                     file, line, expected_app_event->event, app_event.event);
+            TEST_FAIL_MESSAGE(err_msg_buf);
+        }
     } else {
-        TEST_ASSERT_MESSAGE(false, "App event not generated on time");
+        snprintf(err_msg_buf, sizeof(err_msg_buf), "App event %d not generated on time at %s:%d\n",
+                 expected_app_event->event, file, line);
+        TEST_FAIL_MESSAGE(err_msg_buf);
     }
+
+    return 0;
 }
+
+/**
+ * @brief Wait for app event
+ *
+ * @param[in] expected_app_event expected event (NULL for no event expected)
+ * @param[in] ticks ticks to wait for an event
+ * @param[in] file file from which the function was called
+ * @param[in] line line from which the function was called
+ *
+ * @return address of the connected MSC device if the event is connection event
+ *         otherwise 0
+ */
+#define wait_for_app_event(expected_app_event, ticks) wait_for_app_event_impl((expected_app_event), (ticks), __FILE__, __LINE__)
+
 
 static const char *TEST_STRING = "Hello World!";
 static const char *FILE_NAME = "/usb/ESP32.txt";
@@ -248,8 +301,7 @@ static void check_sudden_disconnect(void)
     ESP_LOGI(TAG, "Trigger a disconnect");
     force_conn_state(false, 0);
 
-    msc_host_event_t expected_event = {.event = MSC_DEVICE_DISCONNECTED};
-    wait_for_app_event(&expected_event, 100);
+    wait_for_app_event(&dev_gone_event, 100);
 
     ESP_LOGI(TAG, "Write data after disconnect");
     TEST_ASSERT_NOT_EQUAL( DATA_SIZE, fwrite(data, 1, DATA_SIZE, file));
@@ -259,11 +311,15 @@ static void check_sudden_disconnect(void)
 
 static void msc_test_init(void)
 {
+    // Create static app message queue
+    app_queue = xQueueCreateStatic(APP_QUEUE_LENGTH, sizeof(msc_host_event_t), &(ucQueueStorage[0]), &s_queue_buf);
+    configASSERT(app_queue);
+
     BaseType_t task_created;
 
     ready_to_deinit_usb = xSemaphoreCreateBinary();
+    TEST_ASSERT_NOT_NULL_MESSAGE(ready_to_deinit_usb, "Semaphore handle can't be NULL");
 
-    TEST_ASSERT( app_queue = xQueueCreate(5, sizeof(msc_host_event_t)) );
     const bool skip_phy_setup = install_phy();
     const usb_host_config_t host_config = {
         .skip_phy_setup = skip_phy_setup,
@@ -277,10 +333,7 @@ static void msc_test_init(void)
 static void msc_test_wait_and_install_device(void)
 {
     ESP_LOGI(TAG, "Waiting for USB stick to be connected");
-    msc_host_event_t app_event;
-    xQueueReceive(app_queue, &app_event, portMAX_DELAY);
-    TEST_ASSERT_EQUAL(MSC_DEVICE_CONNECTED, app_event.event);
-    uint8_t device_addr = app_event.device.address;
+    const uint8_t device_addr = wait_for_app_event(&new_dev_event, pdMS_TO_TICKS(5000));
 
     ESP_OK_ASSERT( msc_host_install_device(device_addr, &device) );
     ESP_OK_ASSERT( msc_host_vfs_register(device, BASE_PATH, &mount_config, &vfs_handle) );
@@ -309,13 +362,12 @@ static void msc_test_deinit(void)
 {
     ESP_OK_ASSERT( msc_host_uninstall() );
 
-    xSemaphoreTake(ready_to_deinit_usb, portMAX_DELAY);
+    TEST_ASSERT_EQUAL_MESSAGE(pdTRUE, xSemaphoreTake(ready_to_deinit_usb, pdMS_TO_TICKS(5000)), "Test deinit semaphore not taken on time");
     vSemaphoreDelete(ready_to_deinit_usb);
     vTaskDelay(10); // Wait to finish any ongoing USB operations
     ESP_OK_ASSERT( usb_host_uninstall() );
     delete_phy();
 
-    vQueueDelete(app_queue);
     vTaskDelay(10); // Wait for FreeRTOS to clean up deleted tasks
 }
 
@@ -369,6 +421,118 @@ TEST_CASE("sectors_can_be_written_and_read", "[usb_msc]")
     write_read_sectors();
     msc_teardown();
 }
+
+#ifdef MSC_HOST_BDL_API_SUPPORTED
+
+/**
+ * @brief Standalone Block Device Layer usage
+ *
+ * Purpose:
+ *     - Verify msc_host_get_blockdev() returns a working handle whose read/write
+ *       ops round-trip data identically to the raw SCSI transport
+ *     - Verify it is a factory: two calls return two independent handles that
+ *       both observe the same underlying disk
+ *     - Verify msc_host_release_blockdev() rejects a handle it did not create
+ */
+static void blockdev_read_write_roundtrip(void)
+{
+    esp_blockdev_handle_t handle = ESP_BLOCKDEV_HANDLE_INVALID;
+    ESP_OK_ASSERT(msc_host_get_blockdev(device, &handle));
+    TEST_ASSERT_NOT_EQUAL(ESP_BLOCKDEV_HANDLE_INVALID, handle);
+
+    // Geometry matches the device's reported disk size
+    msc_host_device_info_t info;
+    ESP_OK_ASSERT(msc_host_get_device_info(device, &info));
+    // Plain boolean check: TEST_ASSERT_EQUAL_UINT64 requires UNITY_SUPPORT_64,
+    // which is not enabled in this project's Unity config.
+    const uint64_t expected_disk_size = (uint64_t)info.sector_count * info.sector_size;
+    TEST_ASSERT_MESSAGE(expected_disk_size == handle->geometry.disk_size,
+                        "BDL geometry.disk_size does not match sector_count * sector_size");
+    TEST_ASSERT_EQUAL_UINT32(info.sector_size, handle->geometry.read_size);
+    TEST_ASSERT_EQUAL_UINT32(info.sector_size, handle->geometry.write_size);
+
+    uint8_t write_data[DISK_BLOCK_SIZE];
+    uint8_t read_data[DISK_BLOCK_SIZE];
+    memset(write_data, 0xA5, DISK_BLOCK_SIZE);
+    memset(read_data, 0, DISK_BLOCK_SIZE);
+
+    const uint64_t addr = (uint64_t)20 * DISK_BLOCK_SIZE;
+
+    // Write through the BDL handle, read back through raw SCSI: adapter must not diverge from it
+    ESP_OK_ASSERT(handle->ops->write(handle, write_data, addr, DISK_BLOCK_SIZE));
+    ESP_OK_ASSERT(scsi_cmd_read10(device, read_data, 20, 1, DISK_BLOCK_SIZE));
+    TEST_ASSERT_EQUAL_MEMORY(write_data, read_data, DISK_BLOCK_SIZE);
+
+    // Write through raw SCSI, read back through the BDL handle
+    memset(write_data, 0x3C, DISK_BLOCK_SIZE);
+    memset(read_data, 0, DISK_BLOCK_SIZE);
+    ESP_OK_ASSERT(scsi_cmd_write10(device, write_data, 20, 1, DISK_BLOCK_SIZE));
+    ESP_OK_ASSERT(handle->ops->read(handle, read_data, DISK_BLOCK_SIZE, addr, DISK_BLOCK_SIZE));
+    TEST_ASSERT_EQUAL_MEMORY(write_data, read_data, DISK_BLOCK_SIZE);
+
+    // sync() never fails: BOT/SCSI has no host-visible write cache to flush
+    ESP_OK_ASSERT(handle->ops->sync(handle));
+
+    // A second, independent handle sees the same disk
+    esp_blockdev_handle_t handle2 = ESP_BLOCKDEV_HANDLE_INVALID;
+    ESP_OK_ASSERT(msc_host_get_blockdev(device, &handle2));
+    TEST_ASSERT_NOT_EQUAL(ESP_BLOCKDEV_HANDLE_INVALID, handle2);
+    TEST_ASSERT_NOT_EQUAL(handle, handle2);
+
+    memset(read_data, 0, DISK_BLOCK_SIZE);
+    ESP_OK_ASSERT(handle2->ops->read(handle2, read_data, DISK_BLOCK_SIZE, addr, DISK_BLOCK_SIZE));
+    TEST_ASSERT_EQUAL_MEMORY(write_data, read_data, DISK_BLOCK_SIZE);
+
+    // Releasing a foreign handle (mismatched ops table) must be rejected, not crash
+    static const esp_blockdev_ops_t foreign_ops = { 0 };
+    struct esp_blockdev foreign_handle = { .ops = &foreign_ops };
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, msc_host_release_blockdev(&foreign_handle));
+
+    ESP_OK_ASSERT(msc_host_release_blockdev(handle));
+    ESP_OK_ASSERT(msc_host_release_blockdev(handle2));
+}
+
+TEST_CASE("blockdev_read_write_roundtrip", "[usb_msc]")
+{
+    msc_setup();
+    blockdev_read_write_roundtrip();
+    msc_teardown();
+}
+
+/**
+ * @brief BDL handle auto-created by msc_host_install_device() is released on uninstall
+ *
+ * Purpose:
+ *     - Verify that the device's own auto-created BDL handle (the one used by
+ *       msc_host_vfs_register()) is released automatically by
+ *       msc_host_uninstall_device(), with no double free even when an extra,
+ *       independently obtained handle is left un-released beforehand
+ */
+static void blockdev_auto_release_on_uninstall(void)
+{
+    // Extra handle obtained standalone; released explicitly so the test does not leak.
+    // This exercises that obtaining an additional handle does not interfere with the
+    // device's own auto-created handle teardown during msc_host_uninstall_device().
+    esp_blockdev_handle_t extra_handle = ESP_BLOCKDEV_HANDLE_INVALID;
+    ESP_OK_ASSERT(msc_host_get_blockdev(device, &extra_handle));
+    TEST_ASSERT_NOT_EQUAL(ESP_BLOCKDEV_HANDLE_INVALID, extra_handle);
+
+    // Confirm read/write still works through the extra handle before teardown
+    uint8_t data[DISK_BLOCK_SIZE];
+    memset(data, 0x11, DISK_BLOCK_SIZE);
+    ESP_OK_ASSERT(extra_handle->ops->write(extra_handle, data, (uint64_t)30 * DISK_BLOCK_SIZE, DISK_BLOCK_SIZE));
+
+    ESP_OK_ASSERT(msc_host_release_blockdev(extra_handle));
+}
+
+TEST_CASE("blockdev_auto_release_on_uninstall", "[usb_msc]")
+{
+    msc_setup();
+    blockdev_auto_release_on_uninstall();
+    msc_teardown(); // exercises msc_host_uninstall_device() releasing the device's own auto-created handle
+}
+
+#endif // MSC_HOST_BDL_API_SUPPORTED
 
 esp_err_t bot_execute_command(msc_device_t *device, uint8_t *cbw, void *data, size_t size);
 /**
@@ -496,11 +660,12 @@ TEST_CASE("can_be_formated", "[usb_msc]")
     msc_teardown();
 
     printf("Check file does not exist after formatting\n");
+    const bool config_backup = mount_config.format_if_mount_failed;
     mount_config.format_if_mount_failed = true;
     msc_setup();
     TEST_ASSERT_FALSE(file_exists(FILE_NAME));
     msc_teardown();
-    mount_config.format_if_mount_failed = false;
+    mount_config.format_if_mount_failed = config_backup;
 }
 
 /**
@@ -619,9 +784,8 @@ TEST_CASE("suspend_resume", "[usb_msc]")
     write_read_file(FILE_NAME);                         // Initial read write check
     vTaskDelay(10);                                     // Wait some time to finish read_write
 
-    msc_host_event_t expected_event = {.event = MSC_DEVICE_SUSPENDED};
     ESP_OK_ASSERT(usb_host_lib_root_port_suspend());    // Suspend the root port
-    wait_for_app_event(&expected_event, 20);            // Expect MSC device to be suspended
+    wait_for_app_event(&suspend_event, 20);             // Expect suspend event
 
     // Check root por state using usb_host_lib_info
     usb_host_lib_info_t lib_info;
@@ -634,8 +798,7 @@ TEST_CASE("suspend_resume", "[usb_msc]")
 
     // Resume the device
     ESP_OK_ASSERT(usb_host_lib_root_port_resume());     // Resume the root port
-    expected_event.event = MSC_DEVICE_RESUMED;          // Expect MSC device to be resumed
-    wait_for_app_event(&expected_event, 20);            // Expect app event
+    wait_for_app_event(&resume_event, 20);              // Expect resume event
 
     ESP_OK_ASSERT(usb_host_lib_info(&lib_info));
     TEST_ASSERT_FALSE_MESSAGE(lib_info.root_port_suspended, "Root port is suspended, but it's expected not to be");
@@ -672,7 +835,7 @@ TEST_CASE("auto_suspend_timer", "[usb_msc]")
     // Set One-Shot auto suspend timer and start measuring ticks
     ESP_OK_ASSERT(usb_host_lib_set_auto_suspend(USB_HOST_LIB_AUTO_SUSPEND_ONE_SHOT, MSC_TEST_SUSPEND_TIMER_INTERVAL_MS));
     TickType_t auto_suspend_tick_start = xTaskGetTickCount();
-    msc_host_event_t peek_event, expected_event;
+    msc_host_event_t peek_event;
 
     // Simulate some traffic, so the root port would not suspend after MSC_TEST_SUSPEND_TIMER_INTERVAL_MS from now,
     // but after MSC_TEST_SUSPEND_TIMER_INTERVAL_MS, once there is no traffic
@@ -683,8 +846,7 @@ TEST_CASE("auto_suspend_timer", "[usb_msc]")
     }
 
     // Expect MSC device to be suspended, expect app queue and block for MSC_TEST_SUSPEND_TIMER_INTERVAL_MS + some margin
-    expected_event.event = MSC_DEVICE_SUSPENDED;
-    wait_for_app_event(&expected_event, pdMS_TO_TICKS(MSC_TEST_SUSPEND_TIMER_INTERVAL_MS + MSC_TEST_SUSPEND_TIMER_MARGIN_MS));
+    wait_for_app_event(&suspend_event, pdMS_TO_TICKS(MSC_TEST_SUSPEND_TIMER_INTERVAL_MS + MSC_TEST_SUSPEND_TIMER_MARGIN_MS));
 
     TickType_t auto_suspend_tick_end = xTaskGetTickCount();      // App event received, stop measuring ticks
     const uint32_t elapsed_ms = (auto_suspend_tick_end - auto_suspend_tick_start) * portTICK_PERIOD_MS;
@@ -701,8 +863,7 @@ TEST_CASE("auto_suspend_timer", "[usb_msc]")
 
     // Resume the root port manually and expect the resume event
     ESP_OK_ASSERT(usb_host_lib_root_port_resume());
-    expected_event.event = MSC_DEVICE_RESUMED;
-    wait_for_app_event(&expected_event, 20);
+    wait_for_app_event(&resume_event, 20);
 
     // Set Periodic auto suspend timer
     ESP_OK_ASSERT(usb_host_lib_set_auto_suspend(USB_HOST_LIB_AUTO_SUSPEND_PERIODIC, MSC_TEST_SUSPEND_TIMER_INTERVAL_MS));
@@ -710,13 +871,11 @@ TEST_CASE("auto_suspend_timer", "[usb_msc]")
     for (int i = 0; i < 3; i++) {
 
         // Expect suspended event from auto suspend timer
-        expected_event.event = MSC_DEVICE_SUSPENDED;
-        wait_for_app_event(&expected_event, pdMS_TO_TICKS(MSC_TEST_SUSPEND_TIMER_INTERVAL_MS + MSC_TEST_SUSPEND_TIMER_MARGIN_MS));
+        wait_for_app_event(&suspend_event, pdMS_TO_TICKS(MSC_TEST_SUSPEND_TIMER_INTERVAL_MS + MSC_TEST_SUSPEND_TIMER_MARGIN_MS));
 
         // Resume the root port manually and expect the resume event
         ESP_OK_ASSERT(usb_host_lib_root_port_resume());
-        expected_event.event = MSC_DEVICE_RESUMED;
-        wait_for_app_event(&expected_event, 20);
+        wait_for_app_event(&resume_event, 20);
 
         // MSC device resumed, verify read write after suspend/resume cycle
         write_read_file(FILE_NAME);
@@ -749,14 +908,12 @@ TEST_CASE("resume_by_transfer_submit", "[usb_msc]")
     write_read_file(FILE_NAME);                         // Initial read write check
     vTaskDelay(10);                                     // Wait some time to finish read_write
 
-    msc_host_event_t expected_event = {.event = MSC_DEVICE_SUSPENDED,};
     ESP_OK_ASSERT(usb_host_lib_root_port_suspend());    // Suspend the root port
-    wait_for_app_event(&expected_event, 10);            // Expect MSC device to be suspended
+    wait_for_app_event(&suspend_event, 10);             // Expect suspend event
 
     write_read_file(FILE_NAME);                         // Automatically resume the root port by submitting a transfer
 
-    expected_event.event = MSC_DEVICE_RESUMED;          // Expect MSC device to be automatically resumed after transfer submit
-    wait_for_app_event(&expected_event, 10);            // Expect app event
+    wait_for_app_event(&resume_event, 10);              // Expect resume event
     msc_teardown();
 }
 
@@ -785,11 +942,7 @@ TEST_CASE("suspended_device_open_close", "[usb_msc]")
         .task_priority = 5,
     };
     TEST_ASSERT_EQUAL(ESP_OK, msc_host_install(&msc_config) );
-
-    msc_host_event_t app_event;
-    xQueueReceive(app_queue, &app_event, portMAX_DELAY);
-    TEST_ASSERT_EQUAL(MSC_DEVICE_CONNECTED, app_event.event);
-    uint8_t device_addr = app_event.device.address;
+    const uint8_t device_addr = wait_for_app_event(&new_dev_event, pdMS_TO_TICKS(5000));
 
     // Suspend the root port and don't expect any event (device not opened by MSC client)
     ESP_OK_ASSERT(usb_host_lib_root_port_suspend());
@@ -808,35 +961,59 @@ TEST_CASE("suspended_device_open_close", "[usb_msc]")
 
     // Suspend the device and expect supend event
     ESP_OK_ASSERT(usb_host_lib_root_port_suspend());
-    msc_host_event_t expected_event = {.event = MSC_DEVICE_SUSPENDED};
-    wait_for_app_event(&expected_event, 10);
+    wait_for_app_event(&suspend_event, 10);
 
     msc_teardown();
 }
 
 /**
- * @brief Suspend device sudden disconnect
+ * @brief Suspend device sudden disconnect by USB Host
  *
  * Purpose:
- *     - Test disconnection upon a suspended device
+ *     - Test disconnection from a host side upon a suspended device
  *
  * Procedure:
  *     - Install USB Host lib, Install MSC driver, open device, register VFS
- *     - Suspend the root prot and disconnect the device -> make sure app events are delivered
+ *     - Suspend the root prot and disconnect the device from the host side -> make sure app events are delivered
  *     - Teardown
  */
-TEST_CASE("suspended_device_sudden_disconnect", "[usb_msc]")
+TEST_CASE("suspended_device_sudden_disconnect_by_host", "[usb_msc]")
 {
     msc_setup();
 
-    msc_host_event_t expected_event = {.event = MSC_DEVICE_SUSPENDED,};
     ESP_OK_ASSERT(usb_host_lib_root_port_suspend());
-    wait_for_app_event(&expected_event, 10);
+    wait_for_app_event(&suspend_event, 10);         // Expect suspend event
 
+    // Disconnect the deice by the USB Host
     force_conn_state(false, 0);
 
-    expected_event.event = MSC_DEVICE_DISCONNECTED;
-    wait_for_app_event(&expected_event, 10);
+    wait_for_app_event(&dev_gone_event, 10);        // Expect disconnect event
+    msc_teardown();
+}
+
+/**
+ * @brief Suspend device sudden disconnect by USB device
+ *
+ * Purpose:
+ *     - Test disconnection from a device side upon a suspended device
+ *
+ * Procedure:
+ *     - Install USB Host lib, Install MSC driver, open device, register VFS
+ *     - Suspend the root prot and disconnect the device from the device side -> make sure app events are delivered
+ *     - Teardown
+ */
+TEST_CASE("suspended_device_sudden_disconnect_by_device", "[host_suspend_sudden_dconn]")
+{
+    msc_setup();
+
+    vTaskDelay(10);
+
+    ESP_OK_ASSERT(usb_host_lib_root_port_suspend());
+
+    // The device has registered start of suspend sequence from the host and suddenly disconnected the port
+    // No suspend event is expected, since the suspend was not finished
+
+    wait_for_app_event(&dev_gone_event, 10);        // Expect disconnect event
     msc_teardown();
 }
 
@@ -870,13 +1047,11 @@ static void check_sudden_suspend(void)
     ESP_LOGI(TAG, "Trigger a suspend");
     ESP_OK_ASSERT(usb_host_lib_root_port_suspend());
 
-    msc_host_event_t expected_event = {.event = MSC_DEVICE_SUSPENDED,};
-    wait_for_app_event(&expected_event, 10);
+    wait_for_app_event(&suspend_event, 10);
 
     TEST_ASSERT_EQUAL(DATA_SIZE, fwrite(data, 1, DATA_SIZE, file));
 
-    expected_event.event = MSC_DEVICE_RESUMED;
-    wait_for_app_event(&expected_event, 10);
+    wait_for_app_event(&resume_event, 10);
 
     fclose(file);
 }
@@ -929,33 +1104,15 @@ TEST_CASE("sudden_suspend_from_another_task", "[usb_msc]")
     msc_setup();
 
     TEST_ASSERT_EQUAL(pdTRUE, xTaskCreate(write_read_task, "MSC write_read", 4096, xTaskGetCurrentTaskHandle(), 3, NULL));
-    ulTaskNotifyTake(false, portMAX_DELAY);             // Wait for the task writes first data
+    TEST_ASSERT_EQUAL(pdTRUE, ulTaskNotifyTake(false, pdMS_TO_TICKS(5000)));    // Wait for the task writes first data
 
-    msc_host_event_t expected_event = {.event = MSC_DEVICE_SUSPENDED};
     ESP_OK_ASSERT(usb_host_lib_root_port_suspend());    // Suspend the root port
-    wait_for_app_event(&expected_event, 10);            // Expect MSC device to be suspended
+    wait_for_app_event(&suspend_event, 10);             // Expect MSC device to be suspended
 
     vTaskDelay(100);                                    // Wait for all the transfer to finish
     msc_teardown();
 }
 
 #endif // MSC_HOST_SUSPEND_RESUME_API_SUPPORTED
-
-/**
- * @brief USB MSC Device Mock
- *
- * We use this 'testcase' to provide MSC mock device for our DUT
- */
-TEST_CASE("mock_device_app", "[usb_msc_device][ignore]")
-{
-    device_app();
-}
-
-#if SOC_SDMMC_HOST_SUPPORTED
-TEST_CASE("mock_device_app", "[usb_msc_device_sdmmc][ignore]")
-{
-    device_app_sdmmc();
-}
-#endif /* SOC_SDMMC_HOST_SUPPORTED */
 
 #endif /* SOC_USB_OTG_SUPPORTED */

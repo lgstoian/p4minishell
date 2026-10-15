@@ -60,6 +60,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/math_disp
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/cas
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/json
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/jsengine
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/rss
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/zip
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/power_monitor

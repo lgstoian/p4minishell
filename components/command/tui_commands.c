@@ -1,4 +1,4 @@
-/*
+﻿/*
  * SPDX-FileCopyrightText: 2026 Stoian Alexandru
  * SPDX-License-Identifier: MIT
  */
@@ -26,6 +26,7 @@
 #include "filetype.h"
 #include "modal_surf.h"
 #include "tui.h"
+#include "tui_pane.h"
 #include "tui_fonts.h"
 #include "windows.h"
 #include "storage.h"
@@ -568,7 +569,7 @@ bool shell_command_draw(int argc, char **argv)
     if (shell_text_equals_ignore_case(argv[1], "list")) {
         /* draw list <x> <y> <w> <h> <file> [fg] [bg] [/top:N] [/cursor:N]
          *   [/sel:a,b,...]
-         * Renders a file's lines as a bordered, selectable panel — the file
+         * Renders a file's lines as a bordered, selectable panel â€” the file
          * manager primitive (the batch `dir /b > file` + `draw list` pair
          * gives a real column of names). /top is the 1-based first line
          * shown (scroll), /cursor the 1-based highlighted line (bright), and
@@ -831,7 +832,7 @@ bool shell_command_draw(int argc, char **argv)
     }
 
     if (shell_text_equals_ignore_case(argv[1], "window")) {
-        /* draw window <id> <x> <y> <w> <h> [title] — alias to box with id ignored */
+        /* draw window <id> <x> <y> <w> <h> [title] â€” alias to box with id ignored */
         if (argc < 7) {
             shell_transcript_appendf_ansi(SH_ERR "draw window: usage: draw window <id> <x> <y> <w> <h> [title]\n" SH_RST);
             batch_set_errorlevel(2);
@@ -906,6 +907,21 @@ bool shell_command_draw(int argc, char **argv)
 
     if (shell_text_equals_ignore_case(argv[1], "refresh")) {
         if (use_tui) { tui_flush(); batch_set_errorlevel(0); return true; }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "flip")) {
+        /* Back-buffer swap: flush the current frame and re-render the
+         * workspace layer (panes + widgets + HUD) on top. This is the
+         * compositing entry point for a retained-mode frame. */
+        if (use_tui) {
+            tui_flush();
+            tui_workspace_render();
+            tui_flush();
+            batch_set_errorlevel(0);
+            return true;
+        }
         batch_set_errorlevel(0);
         return true;
     }
@@ -1001,7 +1017,7 @@ bool shell_command_anchor(int argc, char **argv)
 
 bool shell_command_link(int argc, char **argv)
 {
-    /* link <label> <command...> — emit a tap-confirm hyperlink (batch apps
+    /* link <label> <command...> â€” emit a tap-confirm hyperlink (batch apps
      * use this to publish clickable actions); link list; link open <n>. */
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "list")) {
         int count = shell_link_count();
@@ -1519,7 +1535,7 @@ void shell_command_open(int argc, char **argv)
 
     /* Association dispatch: a mapped extension launches its app with the
      * file as %1 (`assoc`/`ftype`). A mapping to a missing app warns and
-     * falls through to the viewer — forgiving, like DOS. Unmapped files
+     * falls through to the viewer â€” forgiving, like DOS. Unmapped files
      * keep the historical viewer behavior exactly. */
     {
         char app[64];
@@ -1746,4 +1762,821 @@ void shell_command_tui(int argc, char **argv)
     }
     shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest");
     batch_set_errorlevel(2);
+}
+
+/* ========================================================================
+ * WORKSPACE VERBS: ui, pane, hud, key, tap, prompt, event, trace
+ * ================================================================ */
+
+/** `ui` â€” declare and mutate declarative widgets. */
+bool shell_command_wig(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: ui /panel NAME X Y W H [/border single] [/title T] | ui /text NAME X Y TEXT | ui /gauge NAME X Y W /max N | ui /button NAME X Y W LABEL /on LABEL | ui /list NAME X Y W /sel VAR | ui /clear NAME | ui /render");
+        batch_set_errorlevel(2);
+        return false;
+    }
+    if (!draw_require_foreground("wig")) return false;
+
+    if (shell_text_equals_ignore_case(argv[1], "panel")) {
+        if (argc < 7) {
+            shell_print_usage("Usage: ui /panel NAME X Y W H [/title T]");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        int x = atoi(argv[3]);
+        int y = atoi(argv[4]);
+        int w = atoi(argv[5]);
+        int h = atoi(argv[6]);
+        const char *title = NULL;
+        for (int i = 7; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/title") && i + 1 < argc) {
+                title = argv[i + 1];
+                i++;
+            }
+        }
+        if (!tui_widget_add(name, "panel", x, y, w, h, title)) {
+            shell_print_error("ui /panel: cannot create widget '%s'", name);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "text")) {
+        if (argc < 6) {
+            shell_print_usage("Usage: ui /text NAME X Y TEXT");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        int x = atoi(argv[3]);
+        int y = atoi(argv[4]);
+        const char *text = argv[5];
+        if (!tui_widget_add(name, "text", x, y, 0, 0, NULL)) {
+            shell_print_error("ui /text: cannot create widget '%s'", name);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_widget_set_text(name, text);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "gauge")) {
+        if (argc < 6) {
+            shell_print_usage("Usage: ui /gauge NAME X Y W /max N");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        int x = atoi(argv[3]);
+        int y = atoi(argv[4]);
+        int w = atoi(argv[5]);
+        int max_val = 100;
+        for (int i = 6; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/max") && i + 1 < argc) {
+                max_val = atoi(argv[i + 1]);
+                i++;
+            }
+        }
+        if (!tui_widget_add(name, "gauge", x, y, w, 1, NULL)) {
+            shell_print_error("ui /gauge: cannot create widget '%s'", name);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_widget_set_max(name, max_val);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "button")) {
+        if (argc < 7) {
+            shell_print_usage("Usage: ui /button NAME X Y W LABEL /on LABEL");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        int x = atoi(argv[3]);
+        int y = atoi(argv[4]);
+        int w = atoi(argv[5]);
+        const char *label = argv[6];
+        const char *on_label = NULL;
+        for (int i = 7; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/on") && i + 1 < argc) {
+                on_label = argv[i + 1];
+                i++;
+            }
+        }
+        if (!tui_widget_add(name, "button", x, y, w, 1, label)) {
+            shell_print_error("ui /button: cannot create widget '%s'", name);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (on_label != NULL) {
+            tui_widget_bind_label(name, on_label);
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "list")) {
+        if (argc < 6) {
+            shell_print_usage("Usage: ui /list NAME X Y W /sel VAR");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        int x = atoi(argv[3]);
+        int y = atoi(argv[4]);
+        int w = atoi(argv[5]);
+        for (int i = 6; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/sel") && i + 1 < argc) {
+                const char *var = argv[i + 1];
+                const char *val = shell_env_get(var);
+                tui_widget_add(name, "list", x, y, w, 2, NULL);
+                tui_widget_set_value(name, val != NULL ? atoi(val) : 0);
+                batch_set_errorlevel(0);
+                return true;
+            }
+        }
+        tui_widget_add(name, "list", x, y, w, 2, NULL);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "clear")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: ui /clear NAME");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_widget_remove(argv[2])) {
+            shell_print_error("ui /clear: widget '%s' not found", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "render")) {
+        if (!tui_is_active()) {
+            if (!tui_init()) {
+                shell_print_error("ui /render: tui init failed");
+                batch_set_errorlevel(1);
+                return false;
+            }
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    shell_print_usage("Usage: ui /panel|/text|/gauge|/button|/list|/clear|/render");
+    batch_set_errorlevel(2);
+    return false;
+}
+
+/** `pane` â€” manage the pane stack. */
+bool shell_command_pane(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: pane /add NAME X Y W H [/title T] | pane /split NAME /h | pane /focus NAME | pane /cycle | pane /hide NAME | pane /close NAME | pane /list");
+        batch_set_errorlevel(2);
+        return false;
+    }
+    if (!draw_require_foreground("pane")) return false;
+
+    if (shell_text_equals_ignore_case(argv[1], "add")) {
+        if (argc < 6) {
+            shell_print_usage("Usage: pane /add NAME X Y W H [/title T]");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        int x = atoi(argv[3]);
+        int y = atoi(argv[4]);
+        int w = atoi(argv[5]);
+        int h = atoi(argv[6]);
+        const char *title = NULL;
+        for (int i = 7; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/title") && i + 1 < argc) {
+                title = argv[i + 1];
+                i++;
+            }
+        }
+        if (!tui_pane_add(name, x, y, w, h, title)) {
+            shell_print_error("pane /add: cannot create pane '%s'", name);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        if (!tui_is_active()) {
+            if (!tui_init()) {
+                shell_print_error("pane /add: tui init failed");
+                batch_set_errorlevel(1);
+                return false;
+            }
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "split")) {
+        if (argc < 4) {
+            shell_print_usage("Usage: pane /split NAME /h|/v");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        bool horizontal = shell_text_equals_ignore_case(argv[3], "h");
+        if (!tui_pane_split(name, horizontal)) {
+            shell_print_error("pane /split: cannot split pane '%s'", name);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "focus")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: pane /focus NAME");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_pane_focus(argv[2])) {
+            shell_print_error("pane /focus: pane '%s' not found", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "cycle")) {
+        if (!tui_pane_cycle()) {
+            shell_print_error("pane /cycle: no panes");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "hide")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: pane /hide NAME");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_pane_hide(argv[2], true)) {
+            shell_print_error("pane /hide: pane '%s' not found", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "close")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: pane /close NAME");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_pane_close(argv[2])) {
+            shell_print_error("pane /close: pane '%s' not found", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "list")) {
+        int count = tui_pane_count();
+        char buf[256];
+        int offset = 0;
+        offset += snprintf(buf + offset, sizeof(buf) - offset, "panes=%d", count);
+        for (int i = 0; i < count && offset < (int)sizeof(buf) - 2; i++) {
+            char name[P4_CONFIG_WS_PANE_NAME_BYTES];
+            if (tui_pane_get_name(i, name, sizeof(name))) {
+                offset += snprintf(buf + offset, sizeof(buf) - offset, " %s", name);
+            }
+        }
+        shell_transcript_appendf("%s\n", buf);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    shell_print_usage("Usage: pane /add|/split|/focus|/cycle|/hide|/close|/list");
+    batch_set_errorlevel(2);
+    return false;
+}
+
+/** `hud` â€” bind live status cells. */
+bool shell_command_hud(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: hud /add NAME TEXT [/right] | hud /refresh MS | hud /flash NAME N | hud /del NAME");
+        batch_set_errorlevel(2);
+        return false;
+    }
+    if (!draw_require_foreground("hud")) return false;
+
+    if (shell_text_equals_ignore_case(argv[1], "add")) {
+        if (argc < 4) {
+            shell_print_usage("Usage: hud /add NAME TEXT [/right]");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        const char *name = argv[2];
+        const char *text = argv[3];
+        int position = 0;
+        for (int i = 4; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/right")) {
+                position = 1;
+            }
+        }
+        if (!tui_hud_add(name, position)) {
+            shell_print_error("hud /add: cannot add HUD cell '%s'", name);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_hud_set_text(name, text);
+        if (!tui_is_active()) {
+            if (!tui_init()) {
+                shell_print_error("hud /add: tui init failed");
+                batch_set_errorlevel(1);
+                return false;
+            }
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "refresh")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: hud /refresh MS");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        tui_hud_set_refresh((uint32_t)atoi(argv[2]));
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "flash")) {
+        if (argc < 4) {
+            shell_print_usage("Usage: hud /flash NAME N");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_hud_flash(argv[2], atoi(argv[3]))) {
+            shell_print_error("hud /flash: cell '%s' not found", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_workspace_render();
+        draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "del")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: hud /del NAME");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_hud_remove(argv[2])) {
+            shell_print_error("hud /del: cell '%s' not found", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    shell_print_usage("Usage: hud /add|/refresh|/flash|/del");
+    batch_set_errorlevel(2);
+    return false;
+}
+
+/** `key` â€” key bindings and synthetic input. */
+bool shell_command_key(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: key /bind KEY LABEL | key /unbind KEY | key /inject TEXT | key /mode raw|line|passthrough | key /list");
+        batch_set_errorlevel(2);
+        return false;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "bind")) {
+        if (argc < 4) {
+            shell_print_usage("Usage: key /bind KEY LABEL");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_key_bind(argv[2], argv[3])) {
+            shell_print_error("key /bind: cannot bind '%s'", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "unbind")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: key /unbind KEY");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_key_unbind(argv[2])) {
+            shell_print_error("key /unbind: key '%s' not found", argv[2]);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "inject")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: key /inject TEXT");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (!tui_key_inject(argv[2])) {
+            shell_print_error("key /inject: failed");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "mode")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: key /mode raw|line|passthrough");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        int mode = 0;
+        if (shell_text_equals_ignore_case(argv[2], "raw")) mode = 1;
+        else if (shell_text_equals_ignore_case(argv[2], "passthrough")) mode = 2;
+        tui_key_set_mode(mode);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "list")) {
+        int count = tui_key_count();
+        char buf[256];
+        int offset = 0;
+        offset += snprintf(buf + offset, sizeof(buf) - offset, "keys=%d", count);
+        for (int i = 0; i < count && offset < (int)sizeof(buf) - 2; i++) {
+            char key[P4_CONFIG_WS_KEY_NAME_BYTES];
+            if (tui_key_get_name(i, key, sizeof(key))) {
+                offset += snprintf(buf + offset, sizeof(buf) - offset, " %s", key);
+            }
+        }
+        shell_transcript_appendf("%s\n", buf);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    shell_print_usage("Usage: key /bind|/unbind|/inject|/mode|/list");
+    batch_set_errorlevel(2);
+    return false;
+}
+
+/** `tap` â€” touch hotspot binding. */
+bool shell_command_tap(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: tap /on X Y W H LABEL | tap /off X Y | tap /clear | tap /list");
+        batch_set_errorlevel(2);
+        return false;
+    }
+    if (!draw_require_foreground("tap")) return false;
+
+    if (shell_text_equals_ignore_case(argv[1], "on")) {
+        if (argc < 7) {
+            shell_print_usage("Usage: tap /on X Y W H LABEL");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        int x = atoi(argv[2]);
+        int y = atoi(argv[3]);
+        int w = atoi(argv[4]);
+        int h = atoi(argv[5]);
+        const char *label = argv[6];
+        if (!tui_tap_add(x, y, w, h, label)) {
+            shell_print_error("tap /on: too many hotspots");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "off")) {
+        if (argc < 4) {
+            shell_print_usage("Usage: tap /off X Y");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        int removed = tui_tap_remove(atoi(argv[2]), atoi(argv[3]));
+        shell_transcript_appendf("tap /off: removed %d hotspot(s)\n", removed);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "clear")) {
+        tui_tap_clear();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "list")) {
+        int count = tui_tap_count();
+        shell_transcript_appendf("tap: %d hotspot(s)\n", count);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    shell_print_usage("Usage: tap /on|/off|/clear|/list");
+    batch_set_errorlevel(2);
+    return false;
+}
+
+/** `prompt` â€” enhanced line input. */
+bool shell_command_prompt_ws(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: prompt /text TEXT [/default D] [/var NAME] | prompt /mask /var NAME | prompt /timeout N /var NAME");
+        batch_set_errorlevel(2);
+        return false;
+    }
+
+    const char *var = NULL;
+    const char *default_val = NULL;
+    const char *text = NULL;
+    bool mask = false;
+    int timeout_ms = P4_CONFIG_KEY_WAIT_TIMEOUT_MS;
+
+    for (int i = 2; i < argc; i++) {
+        if (shell_text_equals_ignore_case(argv[i], "/var") && i + 1 < argc) {
+            var = argv[i + 1]; i++;
+        } else if (shell_text_equals_ignore_case(argv[i], "/default") && i + 1 < argc) {
+            default_val = argv[i + 1]; i++;
+        } else if (shell_text_equals_ignore_case(argv[i], "/text") && i + 1 < argc) {
+            text = argv[i + 1]; i++;
+        } else if (shell_text_equals_ignore_case(argv[i], "/mask")) {
+            mask = true;
+        } else if (shell_text_equals_ignore_case(argv[i], "/timeout") && i + 1 < argc) {
+            timeout_ms = atoi(argv[i + 1]); i++;
+        }
+    }
+
+    if (var == NULL) {
+        shell_print_usage("Usage: prompt /var NAME ...");
+        batch_set_errorlevel(2);
+        return false;
+    }
+
+    if (text != NULL) {
+        shell_transcript_appendf("%s", text);
+    }
+    if (default_val != NULL) {
+        shell_transcript_appendf(" [%s]", default_val);
+    }
+    shell_transcript_appendf(" ");
+
+    char result[P4_CONFIG_SET_PROMPT_INPUT_BYTES];
+    bool ok;
+    if (mask) {
+        ok = shell_read_line_hidden(result, sizeof(result), (uint32_t)timeout_ms);
+    } else {
+        ok = shell_read_line(result, sizeof(result), (uint32_t)timeout_ms);
+    }
+
+    if (!ok) {
+        shell_env_set(var, "");
+        batch_set_errorlevel(1);
+        return false;
+    }
+
+    shell_env_set(var, result);
+    batch_set_errorlevel(0);
+    return true;
+}
+
+/** `event` â€” wait, inspect, dispatch. */
+bool shell_command_event(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: event /wait MS | event /type IDX | event /field IDX | event /dispatch | event /post TYPE PAYLOAD | event /clear | event /count");
+        batch_set_errorlevel(2);
+        return false;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "wait")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: event /wait MS");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        int idx = tui_event_wait(atoi(argv[2]));
+        if (idx < 0) {
+            batch_set_errorlevel(1);
+            return false;
+        }
+        tui_event_type_t type;
+        char payload[P4_CONFIG_WS_EVENT_PAYLOAD_BYTES];
+        tui_event_get(idx, &type, payload, sizeof(payload));
+        char type_buf[16];
+        const char *type_str = "unknown";
+        switch (type) {
+        case TUI_EVENT_KEY: type_str = "key"; break;
+        case TUI_EVENT_TAP: type_str = "tap"; break;
+        case TUI_EVENT_TIMER: type_str = "timer"; break;
+        case TUI_EVENT_SERIAL: type_str = "serial"; break;
+        case TUI_EVENT_RESIZE: type_str = "resize"; break;
+        default: break;
+        }
+        snprintf(type_buf, sizeof(type_buf), "EV_%s", type_str);
+        shell_env_set("EV_TYPE", type_buf);
+        shell_env_set("EV", payload);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "type")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: event /type IDX");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        tui_event_type_t type;
+        tui_event_get(atoi(argv[2]), &type, NULL, 0);
+        const char *type_str = "unknown";
+        switch (type) {
+        case TUI_EVENT_KEY: type_str = "key"; break;
+        case TUI_EVENT_TAP: type_str = "tap"; break;
+        case TUI_EVENT_TIMER: type_str = "timer"; break;
+        case TUI_EVENT_SERIAL: type_str = "serial"; break;
+        case TUI_EVENT_RESIZE: type_str = "resize"; break;
+        default: break;
+        }
+        shell_transcript_appendf("%s\n", type_str);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "field")) {
+        if (argc < 4) {
+            shell_print_usage("Usage: event /field IDX FIELD");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        char payload[P4_CONFIG_WS_EVENT_PAYLOAD_BYTES];
+        tui_event_get(atoi(argv[2]), NULL, payload, sizeof(payload));
+        shell_env_set(argv[3], payload);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "dispatch")) {
+        int dispatched = 0;
+        while (tui_event_count() > 0) {
+            tui_event_type_t type;
+            char payload[P4_CONFIG_WS_EVENT_PAYLOAD_BYTES];
+            tui_event_get(0, &type, payload, sizeof(payload));
+            tui_event_clear();
+            dispatched++;
+            if (type == TUI_EVENT_TAP || type == TUI_EVENT_KEY) {
+                if (payload[0] != '\0') {
+                    shell_execute_command(payload);
+                }
+            }
+        }
+        shell_transcript_appendf("event /dispatch: dispatched %d event(s)\n", dispatched);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "post")) {
+        if (argc < 4) {
+            shell_print_usage("Usage: event /post TYPE PAYLOAD");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        tui_event_type_t type = TUI_EVENT_TIMER;
+        if (shell_text_equals_ignore_case(argv[2], "key")) type = TUI_EVENT_KEY;
+        else if (shell_text_equals_ignore_case(argv[2], "tap")) type = TUI_EVENT_TAP;
+        else if (shell_text_equals_ignore_case(argv[2], "serial")) type = TUI_EVENT_SERIAL;
+        else if (shell_text_equals_ignore_case(argv[2], "resize")) type = TUI_EVENT_RESIZE;
+        if (!tui_event_post(type, argv[3])) {
+            shell_print_error("event /post: queue full");
+            batch_set_errorlevel(1);
+            return false;
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "clear")) {
+        tui_event_clear();
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "count")) {
+        shell_transcript_appendf("%d\n", tui_event_count());
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    shell_print_usage("Usage: event /wait|/type|/field|/dispatch|/post|/clear|/count");
+    batch_set_errorlevel(2);
+    return false;
+}
+
+/** `trace` â€” on-screen diagnostics. */
+bool shell_command_trace(int argc, char **argv)
+{
+    if (argc < 2) {
+        shell_print_usage("Usage: trace /on | trace /off | trace /level LEVEL | trace /status");
+        batch_set_errorlevel(2);
+        return false;
+    }
+
+    static bool s_trace_on = false;
+    static int s_trace_level = 1; /* 0=none, 1=warn, 2=info, 3=debug */
+
+    if (shell_text_equals_ignore_case(argv[1], "on")) {
+        s_trace_on = true;
+        shell_transcript_appendf("trace: on\n");
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "off")) {
+        s_trace_on = false;
+        shell_transcript_appendf("trace: off\n");
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "level")) {
+        if (argc < 3) {
+            shell_print_usage("Usage: trace /level none|warn|info|debug");
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "none")) s_trace_level = 0;
+        else if (shell_text_equals_ignore_case(argv[2], "warn")) s_trace_level = 1;
+        else if (shell_text_equals_ignore_case(argv[2], "info")) s_trace_level = 2;
+        else if (shell_text_equals_ignore_case(argv[2], "debug")) s_trace_level = 3;
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "status")) {
+        const char *level_str = "none";
+        switch (s_trace_level) {
+        case 1: level_str = "warn"; break;
+        case 2: level_str = "info"; break;
+        case 3: level_str = "debug"; break;
+        default: break;
+        }
+        shell_transcript_appendf("trace: %s level=%s\n", s_trace_on ? "on" : "off", level_str);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    shell_print_usage("Usage: trace /on|/off|/level|/status");
+    batch_set_errorlevel(2);
+    return false;
 }

@@ -329,6 +329,38 @@ the bug-campaign log live in [`bugs.md`](bugs.md).
   `delay` clamps to 10 s (`P4_CONFIG_DELAY_MAX_MS`); `pkg install /force`
   skips the downgrade guard but never `requires=`/`min_fw=` (compatibility,
   not preference).
+- **Virtual slots / recycled temporaries round (2026-10-14):** `%TIME%`,
+  `%DATE%`, `%RANDOM%`, `%ERR%`, `%ERRMSG%`, `%VERSION%`, `%BOARD%`, `%SERIAL%`
+  are now computed on read and never stored in the named slot table (zero RAM
+  cost). Purely-numeric names (%1..%9 scratch) are rejected by `set` since the
+  expansion engine owns them. `set X=` already freed; virtual-name refusal in
+  `shell_env_set()` (`ESP_ERR_NOT_SUPPORTED`) guarantees the named table never
+  holds a virtual name. Firmware + test build clean.
+- **Spillover Tier PSRAM / class-tagged slot pool (2026-10-14):** the single
+  `P4_CONFIG_ENV_VAR_MAX` slot table is now a class-tagged pool split into
+  named classes, each with its own budget and exhaustion error:
+  `SHELL_CLASS_GLOBAL` (64, `set`/`set /a`/`set /p`), `SHELL_CLASS_FRAME_LOCAL`
+  (32, call/gosub temporaries), `SHELL_CLASS_ARRAY` (256, `NAME[i]`),
+  `SHELL_CLASS_MAP` (64, reserved). A runaway array can no longer starve
+  scalar variables. New `shell_env_route_class()` decides the class at
+  allocation time; `shell_env_find_free_slot_class()` allocates per-class;
+  `shell_env_class_info()` reports usage per class. New `slots` verb prints
+  the per-class used/budget table. Per-class exhaustion errors are reported
+  by name ("arrays budget exhausted", "globals budget exhausted"). Firmware +
+  test build clean. Config macros: `P4_CONFIG_ENV_VAR_MAX`,
+  `P4_CONFIG_ENV_FRAME_LOCAL_SLOTS`, `P4_CONFIG_ENV_ARRAY_SLOTS`,
+  `P4_CONFIG_ENV_MAP_SLOTS`, `P4_CONFIG_ENV_POOL_TOTAL`.
+- **New batch verbs round (2026-10-14):** `dim` (bounds-checked array
+  dimensioning with C pointer-like semantics, `batch_dim.c`), `str` (string
+  operation suite, `batch_str.c`), `map` (associative key→value store,
+  `batch_map.c`), `trap` (structured error handling, `batch_trap.c`). New
+  `until` verb (negated `while`). `break` / `continue` work inside `for` and
+  `while` bodies. `set /a` gains `**` power, `>>>` logical right shift,
+  `cond ? a : b` ternary, `NAME?=expr` default-assign. `%RANDOM(min,max)%`
+  bounded random. `dim` pointer semantics: `/ref PTR ARR` creates a reference,
+  `/get /set` dereference through pointer (1D or 2D). Multi-dimensional arrays
+  stored linearly with `__rows`/`__cols` bookkeeping. All opt-in; existing
+  scripts unaffected. Firmware + test build clean.
 
 ## 2. Repository map
 
@@ -1250,9 +1282,15 @@ the raster core + 8x8 font are `components/gfx/`
 - Variable expansion (`shell_expand_variables`) is the SINGLE place `%VAR%` is resolved.
   It handles `%0`..`%9`/`%*`, `%%` (literal `%`), the dynamic pseudo-variables `%DATE%`
   (`MM-DD-YYYY`), `%TIME%` (`HH:MM:SS`), `%RANDOM%` (`0..32767`, `esp_random() & 0x7FFF`),
-  `%CD%` (cwd) and `%ERRORLEVEL%` (decimal string), and â€” cmd.exe parity â€” an **undefined
-  `%VAR%` expands to the empty string** so `if "%var%"==""` works. Single-quoted text stays
-  literal; `^%` is an escaped literal percent. Do not add variable resolution anywhere else.
+  `%CD%` (cwd), `%ERRORLEVEL%` (decimal string), and the virtual slots `%ERR%` (short
+  errorlevel), `%ERRMSG%` (success/error/usage from errorlevel), `%VERSION%` (flash),
+  `%BOARD%` (flash), `%SERIAL%` (MAC-derived, lazy). An **undefined `%VAR%` expands to
+  the empty string** so `if "%var%"==""` works. Single-quoted text stays literal;
+  `^%` is an escaped literal percent. Do not add variable resolution anywhere else.
+  Virtual names are resolved in `shell_expand_named_value()` / `shell_env_get()` BEFORE
+  the table lookup and are refused by `shell_env_set()` (ESP_ERR_NOT_SUPPORTED), so they
+  consume zero RAM slots. Purely-numeric names (%1..%9 scratch) are rejected by
+  `shell_env_name_is_valid()` since the expansion engine owns them.
 - `if` supports `errorlevel N` (>=), `exist <path>`, `defined <name>` (cmd.exe parity),
   the numeric keywords (`EQU NEQ LSS LEQ GTR GEQ`), and `==` string tests, with optional
   `[not] [/i]`. An undefined variable in a numeric operand reads as 0 (DOS parity).
@@ -1601,7 +1639,36 @@ the raster core + 8x8 font are `components/gfx/`
 - Prompt: all inputs MUST honor `shell_prompt_render_plain()` (`components/shell/shell.c:412`): `main.c:112` input line echo `SHELL_PROMPT` â†’ `shell_prompt_render_plain()`, `modal_surf.c:412` `ask` placeholder `shell_prompt_render_plain()` + `keyboard_bind_textarea`, shell echo situational `SH_PROMPT` color.
 - Screenshot debug loop (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`) crops to transcript rect for pixel-perfect verification; use it during hardware bug hunting.
 - The cell buffer is heap-allocated (PSRAM `MALLOC_CAP_SPIRAM`); every `draw`/`locate`/`color` call clamps to `80Ã—25` and `tui_flush` diffs into LVGL recolor runs. CSI sequences are handled by `components/ansi/ansi.c` (`ansi_process_text` / `ansi_vformat`), so SGR codes in batch `draw`/`color`/`ansi` share one parser. Alt-screen `ESC[?1049h/l` save/restore (`tui_alt_enter`/`tui_alt_leave` `components/tui/tui.c:327`) is unconditional. `draw` auto-enters TUI (`tui_init` `components/tui/tui.c:56`) when no TUI/modal surface is active.
-- New full-screen TUI surfaces MUST be `modal_surface_t` descriptors on the shared modal runtime (`components/modal/modal_surf.c`), never a private loop. They MUST accept `/t:secs` (auto-cancel via FreeRTOS one-shot timer firing `MODAL_EVENT_CLOSE_REQUEST`) and `/v:NAME` (store result variable; dialog/list/ask/browse all do), and MUST be routed through the generic `shell_command_ops_t.modal_*` hooks. `dialog`/`list`/`ask` dispatcher was missing from `command.c` â€” now wired; `browse`/`view`/`hexview` were `return -1` stubs â€” now restored on the same runtime. Companion testing (incl. `SVC.BAT`/`AGENDA.BAT`) is hardware-verified: deep 8/8. Window stack via nested `tui_draw_box` with title is the essential feature â€” not a second window manager.
+- New full-screen TUI surfaces MUST be `modal_surface_t` descriptors on the shared modal runtime (`components/modal/modal_surf.c`), never a private loop. They MUST accept `/t:secs` (auto-cancel via FreeRTOS one-shot timer firing `MODAL_EVENT_CLOSE_REQUEST`) and `/v:NAME` (store result variable; dialog/list/ask/browse all do), and MUST be routed through the generic `shell_command_ops_t.modal_*` hooks. `dialog`/`list`/`ask` dispatcher was missing from `command.c` â€” now wired; `browse`/`view`/`hexview` were `return -1` stubs â€” now restored on the same runtime. Companion testing (incl. `SVC.BAT`/`AGENDA.BAT`) is hardware-verified: deep 8/8. Window stack via nested `tui_draw_box` with title is the essential feature.
+
+### TUI Workspace Rules (v1.4.0 - panes / widgets / HUD / events, `components/tui/tui_pane.{h,c}`)
+
+- The workspace layer sits on the 80x25 TUI grid. All state is **fixed-capacity** (no dynamic allocation): panes (`P4_CONFIG_WS_PANE_MAX` 8), widgets (`P4_CONFIG_WS_WIDGET_MAX` 16), HUD cells (`P4_CONFIG_WS_HUD_MAX` 8), events (`P4_CONFIG_WS_EVENT_MAX` 16), key bindings (`P4_CONFIG_WS_KEY_BIND_MAX` 16), touch hotspots (`P4_CONFIG_WS_TAP_MAX` 16). Bulk tables live in BSS/PSRAM, never heap.
+- **Layering: leaf inside `components/tui/`** - REQUIRES `shell`, `windows`, `ansi`, `display`, `gfx`, `p4heap`, `freertos`. The command layer resolves environment variables and passes concrete display strings/values into the workspace layer. The workspace layer NEVER calls `shell_env_get` / `shell_execute_command` directly (those live above it in the stack).
+- Rendering writes through the existing `tui_draw_box` / `tui_print_at` / `tui_draw_bar` primitives into the cell buffer, then `tui_flush()` pushes to LVGL. `draw /flip` is the compositing entry point: flush + workspace re-render + flush.
+- **Pane stack**: named panes with geometry, scrollback (ring buffer per pane), title, visibility, and focus. `pane /add` / `split` / `focus` / `cycle` / `hide` / `close` / `list`. The focus ring highlights the focused pane (bright cells on the top border). Coordinates are 1-based on the 80x25 grid.
+- **Widget layer**: declarative records (type, geometry, label, binding). Types: `panel`, `text`, `gauge`, `button`, `list`. `wig /panel` / `text` / `gauge` / `button` / `list` / `clear` / `render`. The name `wig` avoids collision with the existing `ui` touch-automation verb (no-duplication rule).
+- **HUD region**: status cells rendered in row 1 with diff-based redraw (only changed cells flushed via `last_rendered` tracking). `hud /add` / `refresh` / `flash` / `del`. `theme /hud fg COLOR bg COLOR` sets the band palette.
+- **Event multiplexer**: typed events (key, tap, timer, serial, resize) queue for batch scripts. `event /wait MS` blocks with a FreeRTOS binary semaphore; `event /type` / `field` / `dispatch` / `post` / `clear` / `count` inspect and manage. `while` + `event /wait` replaces polling. Events posted from the command layer; the workspace layer never calls `shell_execute_command`.
+- **Key bindings**: `key /bind KEY LABEL` maps key names (F1..F12, CTRL+R) to batch labels. `key /inject` pushes synthetic input via `shell_input_line_set_text()`. Input modes: line (default), raw, passthrough.
+- **Touch hotspots**: `tap /on X Y W H LABEL` registers rect-to-label mappings. Overlaps resolve to the most recently added (topmost). Hit-testing is `tui_tap_hit(x, y)`.
+- **Config**: 18 new `P4_CONFIG_WS_*` macros in `p4minishell_config.h` + `.yaml` (workspace section). All capacities are compile-time.
+- **Tests**: 15 new unit tests in `test/main/test_tui.c` covering pane add/close/duplicate/focus/cycle/hide/split/append, widget add/remove/types, HUD add/remove/refresh, event post/get/wait/clear, key bind/unbind/mode, tap add/hit/clear, workspace reset.
+
+### Modal Layer Rules (v1.4.0 - mode frames / chords / dialogs / scopes / macros, `components/tui/tui_modal.{h,c}`)
+
+- The modal layer sits on the TUI workspace. All state is **fixed-capacity** (no dynamic allocation): mode stack (`P4_CONFIG_MODAL_MAX_FRAMES` 8), keymaps (`P4_CONFIG_MODAL_MAX_MAPS` 8), bindings per map (`P4_CONFIG_MODAL_MAX_BINDINGS` 32), named commands (`P4_CONFIG_MODAL_MAX_CMDS` 32), scope bags (`P4_CONFIG_MODAL_MAX_SCOPES` 8), guards (`P4_CONFIG_MODAL_MAX_GUARDS` 8), macros (`P4_CONFIG_MODAL_MAX_MACROS` 8), dialogs (`P4_CONFIG_MODAL_MAX_DIALOGS` 4). Bulk tables live in BSS/PSRAM.
+- **Layering: leaf inside `components/tui/`** - REQUIRES `shell`, `windows`, `ansi`, `display`, `freertos`. Label execution and env access are routed through callbacks registered by the command layer (`modal_layer_init()`). The modal core NEVER calls `shell_execute_command` / `shell_env_get` / `shell_env_set` directly.
+- **Mode stack**: typed frames (`normal`, `insert`, `dialog`, `palette`, `macro`) with name, type, keymap reference. `mode /push` creates a frame; `mode /pop` runs the leave guard then pops; `mode /switch` pops to a named frame or pushes it. Guard veto (non-zero errorlevel) cancels the pop.
+- **Keymaps**: named chord maps with multi-stroke resolution. `mbind /map NAME CHORD LABEL` binds space-separated chords (`gg`, `leader f`). Longest-match-wins with a timeout (`P4_CONFIG_MODAL_CHORD_TIMEOUT_MS`). Leader key is a named prefix (`P4_CONFIG_MODAL_LEADER_KEY` default `,`).
+- **Chord buffer**: pending strokes accumulate with a timeout. `modal_chord_push()` returns true on complete match, false on partial, clears on no match. Inheritance falls back to parent mode's map.
+- **Named commands**: `mcmd /def NAME LABEL` creates a dispatch target. `mcmd /run` executes the label via the registered callback. Commands unify bind/palette/macro targets.
+- **Scope bags**: `scope /save MODE VAR...` snapshots env vars; `scope /restore` writes them back. Used for mode-scoped state (cursor position, selection, etc.).
+- **Guards**: `guard /on enter|leave TYPE LABEL` registers transition hooks. `guard /off` clears them. Non-zero errorlevel from a guard cancels the transition.
+- **Dialogs**: nested blocking frames that return a value. `mdialog /confirm` / `/input` push a dialog frame; result is set by the verb layer; `mdialog /result` reads it. The `m` prefix avoids collision with the existing `dialog` modal surface.
+- **Macros**: `mmacro /record NAME` starts capturing events; `mmacro /stop` ends it; `mmacro /replay NAME N` replays through the same execution path. Events stored in fixed-size arrays.
+- **Config**: 15 new `P4_CONFIG_MODAL_*` macros in `p4minishell_config.h` + `.yaml` (modal section). All capacities are compile-time.
+- **Tests**: 12 new unit tests in `test/main/test_tui.c` covering mode push/pop/switch, bindings, chords, commands, scopes, guards, dialogs, macros, and repeat. â€” not a second window manager.
 
 ### Display and Touch
 - Display init MUST use `display_init()` (which wraps `bsp_display_start_with_config()` with BOARD_CFG_* values)
@@ -1866,6 +1933,32 @@ the raster core + 8x8 font are `components/gfx/`
 - No external network access: all content is local to the EPUB archive.
 - The `epub` command verbs (`open`, `close`, `info`, `toc`, `read`, `next`, `prev`, `goto`, `toc <n>`, `extract`)
   are implemented in `components/command/epub_commands.c` and registered via `shell_command_epub()`.
+
+### JavaScript Engine Rules
+- `components/jsengine/` is the QuickJS-based JavaScript engine. It is a leaf component: REQUIRES only `shell`, `batch`, `storage`, `markdown`, `rss`, `json`, `tui`, `modal`, `heap`, `esp_timer`, `freertos`. It MUST NOT include `command.h` or `batch.h` (the command verbs live in `components/command/js_commands.c`).
+- The engine is initialized once at boot (`jsengine_init()` in `main.c` after `command_init()`). The JS heap is PSRAM-backed via `JS_NewRuntime2` with a custom allocator. The heap is capped by `P4_CONFIG_JS_HEAP_MAX_BYTES` (512 KB).
+- Every eval is bounded by `JS_SetInterruptHandler` + a wall-clock timeout (`P4_CONFIG_JS_TIMEOUT_MS`, 5000 ms). The interrupt handler checks elapsed time via `esp_timer_get_time()`. An infinite loop in a script CANNOT hang the board.
+- The JS stack is capped by `P4_CONFIG_JS_STACK_MAX_BYTES` (16 KB) via `JS_SetMaxStackSize`. Deeply nested expressions may throw a stack overflow error.
+- Host function bindings are registered once at init (`js_bindings_register` in `js_bindings.c`). The available JS functions are: `print(...)`, `html(src)`, `md(src)`, `rssParse(xml)`, `tui.clear()`, `tui.print(x, y, text)`, `tui.box(x, y, w, h, style, title)`, `tui.line(x1, y1, x2, y2, style)`, `tui.flush()`, `modal.alert(title, msg)`, `modal.prompt(prompt, default)`, `modal.list(title, items)`, `batch.get(name)`, `batch.set(name, value)`, `delay(ms)`.
+- The `js` command verbs (`js eval`, `js run`, `js call`) live in `components/command/js_commands.c` (NOT in jsengine). The command component dispatches `js` and calls `shell_command_js()`. The jsengine component only provides the engine API.
+- JS files are loaded from SD through the storage component (`shell_sd_begin`/`shell_sd_end`). The file is read to a heap buffer, evaluated, and the result is freed. Max file size is `P4_CONFIG_JS_FILE_MAX_BYTES` (64 KB).
+- The `.js` extension is registered in the filetype registry as `FILETYPE_SCRIPT`. JS files can be viewed, edited, and run.
+- QuickJS is vendored unmodified except for: (1) ESP3D platform compatibility (conditional `<sys/time.h>`/`<fenv.h>` includes, `tm_gmtoff` stub), (2) `int32_t`/`uint32_t` redefinition to `int`/`unsigned int` for ESP32 RISC-V ABI compatibility, (3) format specifier fixes in dtoa.c/libregexp.c/libunicode.c.
+- The `js_dom_bindings_register()` function in `js_dom.c` exposes the DOM tree to JavaScript. The available JS APIs are: `document.getElementById(id)`, `document.title`, `fetch(url)`.
+- The DOM tree (`dom_tree_t`) is the single internal representation for HTML documents. It is built by `dom_parse()` and walked by all renderers.
+- The CSS parser (`css.c`) is the single CSS engine. It supports: color, background-color, font-weight, font-style, text-decoration, text-align, margin, padding, display (block/inline/none), font-size (normal/large/small).
+
+### Browser Rules
+- `components/command/browser_commands.c` is the browser command. It is reached through `shell_execute_command_core()` (NOT a private dispatcher).
+- The browser pipeline: `networking_http_get()` -> `dom_parse()` -> `css_compute_styles()` -> `browser_render_dom()` -> `tui_page_render()` -> `tui_flush()`.
+- The browser uses the TUI viewport system: a page buffer (P4_CONFIG_TUI_PAGE_ROWS rows) larger than the viewport (P4_CONFIG_TUI_ROWS rows), with scroll offset tracking.
+- Links are registered via `tui_link_register()` with viewport coordinates. Link hit-testing uses `tui_link_hit_test()`.
+- The address bar is rendered at the top of the TUI via `tui_address_bar_render()`. The status bar is rendered at the bottom via `tui_status_bar_render()`.
+- Navigation history is a simple stack of visited URLs (BROWSER_HISTORY_MAX entries).
+- The browser is a modal surface on the shared runtime in `components/modal/`. It is NOT a private loop.
+- The browser renders HTML to the TUI page buffer using `tui_page_set_cell()`. CSS styles are applied to DOM nodes before rendering.
+- The browser supports: headings, paragraphs, lists, links, images (as alt text), tables, forms (as text), and basic CSS (colors, fonts, margins, padding, display, text-align).
+- The browser does NOT support: CSS layout (flexbox/grid), JavaScript execution during page load, cookies, sessions, or image fetching from URLs.
 
 ### SD Card Rules
 - All SD access goes through `components/storage/`. No other module may call `bsp_sdcard_mount()`

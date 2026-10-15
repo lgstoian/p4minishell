@@ -11,11 +11,13 @@
  *   - `:label` scanning, `goto`, and `call :label` targets
  *   - `for %%var in (set) do command` loops
  *   - The `|` pipe operator
- *   - RAM-only environment variables and PATH
+ *   - RAM-only environment variables and PATH (class-tagged slot pool:
+ *     globals, frame-locals, arrays, maps — each with its own budget)
  *   - Variable expansion: `%VAR%`, `%0`, `%1`..`%9`, `%*`
  *   - Errorlevel tracking
  *   - The batch language commands: `set`, `path`, `echo`, `call`, `if`,
- *     `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`
+ *     `goto`, `shift`, `pause`, `choice`, `setlocal`, `endlocal`, `exit`,
+ *     `slots`
  *
  * Architecture:
  *   Dependencies flow one way: `command` -> `batch` -> `storage` -> `shell`.
@@ -60,6 +62,140 @@ typedef struct {
  * dereferencing a null pointer.
  */
 void batch_register_command_ops(const batch_command_ops_t *ops);
+
+/* ========================================================================
+ * SLOT POOL CLASSES (spillover tier)
+ * ========================================================================
+ * The single environment slot table is split into named classes, each with
+ * its own budget and its own exhaustion error. A runaway array can no
+ * longer starve scalar variables, and an app that uses no maps pays nothing
+ * for them.
+ */
+
+/** Class tags for per-class slot budgeting. */
+typedef enum {
+    SHELL_CLASS_GLOBAL = 0,       /**< set, set /a, set /p scalars. */
+    SHELL_CLASS_FRAME_LOCAL,      /**< call/gosub temporaries. */
+    SHELL_CLASS_ARRAY,            /**< NAME[i] element slab. */
+    SHELL_CLASS_MAP,              /**< hash slab (reserved). */
+    SHELL_CLASS_COUNT             /**< number of classes (always last). */
+} shell_env_class_t;
+
+/** Per-class budget descriptor for the `slots` report. */
+typedef struct {
+    shell_env_class_t class_tag;  /**< class identifier. */
+    const char *name;             /**< human-readable class name. */
+    size_t budget;                /**< configured slot budget. */
+    size_t used;                  /**< slots currently in use. */
+} shell_env_class_info_t;
+
+/**
+ * Get per-class budget and usage info for the `slots` report.
+ * @param info  Output array of SHELL_CLASS_COUNT entries.
+ * @return The number of classes written.
+ */
+int shell_env_class_info(shell_env_class_info_t *info);
+
+/**
+ * Count existing NAME[i] element slots for a dimensioned array.
+ * Scans the pool for slots whose name starts with "NAME[".
+ * @param name  Array base name (e.g. "SPR").
+ * @return Number of NAME[i] slots currently allocated.
+ */
+int shell_env_array_count(const char *name);
+
+/**
+ * True when @p name is an indexed array element ("NAME[i]").
+ * Pure — usable from batch_expr.c and calc.c.
+ */
+bool shell_env_name_is_array(const char *name);
+
+/**
+ * `slots` — per-class budget report.
+ *   slots              show all classes (used / budget)
+ */
+void shell_command_slots(int argc, char **argv);
+
+/**
+ * `dim` — bounds-checked array dimensioning with C pointer-like semantics.
+ *
+ *   dim SPR 8 0                 allocate SPR[0..7], default 0
+ *   dim MAT 3 4 0               allocate 3x4 matrix (12 elements)
+ *   dim /len SPR                -> length
+ *   dim /info SPR               -> metadata (dims, length)
+ *   dim /push SPR 42            append at first free slot
+ *   dim /pop SPR [TARGET]       remove last, optionally store in TARGET
+ *   dim /shift SPR [TARGET]     remove first, shift left
+ *   dim /unshift SPR 42         insert at beginning, shift right
+ *   dim /ins SPR 3 99           insert at index, shift right
+ *   dim /rem SPR 3              remove at index, shift left
+ *   dim /slice SPR 2 4 COPY     copy 4 elements into COPY
+ *   dim /copy SRC DST           duplicate array (with dims)
+ *   dim /fill SPR VAL [S C]     fill elements with value
+ *   dim /reverse SPR            reverse in place
+ *   dim /sort SPR [/n] [/d]     sort in place (numeric, descending)
+ *   dim /find SPR VAL [IDX]     find value, return index or -1
+ *   dim /sum SPR DEST           sum of numeric elements
+ *   dim /avg SPR DEST           average of numeric elements
+ *   dim /min SPR DEST           minimum numeric element
+ *   dim /max SPR DEST           maximum numeric element
+ *   dim /cmp ARR1 ARR2          compare arrays (EL 0=same, 1=diff)
+ *   dim /ref PTR ARR            make PTR reference ARR (pointer)
+ *   dim /get PTR IDX [C] DEST   read through pointer (1D or 2D)
+ *   dim /set PTR IDX [C] VAL    write through pointer (1D or 2D)
+ *   dim /del SPR                free all slots
+ */
+void shell_command_dim(int argc, char **argv);
+
+/**
+ * `str` — string operation suite.
+ *
+ *   str /len VAR                 length of VAR
+ *   str /sub VAR START LEN DEST  substring
+ *   str /find VAR NEEDLE [IDX]   index or -1
+ *   str /upper VAR DEST
+ *   str /lower VAR DEST
+ *   str /trim VAR DEST
+ *   str /rep VAR OLD NEW DEST    replace all
+ *   str /split VAR DELIM DEST    split into DEST[0..n-1]
+ *   str /join VAR DELIM DEST     join DEST with DELIM
+ *   str /fmt DEST "f" args...    %1..%9 substitution
+ */
+void shell_command_str(int argc, char **argv);
+
+/**
+ * `map` — associative key->value store.
+ *
+ *   map /set CFG host "p4mini"     set key
+ *   map /get CFG host DEST         get key into DEST
+ *   map /has CFG host              errorlevel 0/1
+ *   map /del CFG host              remove key
+ *   map /keys CFG KEYS             emit keys into KEYS[0..n-1]
+ *   map /size CFG                  number of entries
+ *   map /clear CFG                 remove all entries
+ */
+void shell_command_map(int argc, char **argv);
+
+/**
+ * `trap` — structured error handling.
+ *
+ *   trap :label                    install handler for this frame
+ *   trap /on errorlevel|exit|int   event mask (reserved)
+ *   trap /raise CODE "message"     manual raise
+ *   trap /clear                    remove handler
+ *
+ * Engine hooks (called from the dispatcher on errorlevel):
+ *   trap_handler_installed()
+ *   trap_handler_label()
+ *   trap_handler_pop()
+ *   trap_set_message(msg)
+ */
+void shell_command_trap(int argc, char **argv);
+bool trap_handler_installed(void);
+const char *trap_handler_label(void);
+void trap_handler_pop(void);
+void trap_set_message(const char *msg);
+void trap_init(void);
 
 /* ========================================================================
  * ENVIRONMENT VARIABLES AND EXPANSION
@@ -462,6 +598,16 @@ bool shell_forl_parse(const char *set, int32_t *start_out, int32_t *step_out,
  * ERRORLEVEL: 0 done, 1 capped or condition error, 2 usage.
  */
 void shell_command_while(int argc, char **argv);
+
+/** `break` / `continue` — loop control inside `for` and `while` bodies. */
+void shell_command_break(int argc, char **argv);
+void shell_command_continue(int argc, char **argv);
+
+/** `until` — negated `while`: run body while the expression is zero. */
+void shell_command_until(int argc, char **argv);
+
+/** Sort an array in-place (stable insertion sort). Used by `sort /a`. */
+int shell_sort_array(const char *name, bool numeric, bool descending);
 
 /**
  * Collect every variable name shaped `PREFIX[...]` (case-insensitive prefix,

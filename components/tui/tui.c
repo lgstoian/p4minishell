@@ -64,6 +64,14 @@ static bool s_title_visible = false;
  * from components/gfx; formatted by `tui stats`. */
 static gfx_frame_stats_t s_tui_stats;
 
+static tui_cell_t *s_page = NULL;
+static int s_page_rows = 0;
+static int s_scroll_offset = 0;
+static tui_link_t s_links[TUI_MAX_LINKS];
+static int s_link_count = 0;
+static char s_address_bar[256] = {0};
+static char s_status_bar[256] = {0};
+
 /* Box-glyph spec table for `tui selftest` and the unit tests: macro bytes
  * plus the codepoint each MUST decode to. The expected column is the
  * independent spec (CP437 doubles); the bytes column follows the macros, so
@@ -1298,4 +1306,160 @@ int tui_selftest_check(const char **fail_name_out)
         *fail_name_out = name;
     }
     return fails;
+}
+
+void tui_viewport_init(int page_rows)
+{
+    if (page_rows <= 0) page_rows = P4_CONFIG_TUI_PAGE_ROWS;
+    s_page_rows = page_rows;
+    size_t bytes = (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t);
+    s_page = p4heap_alloc_psram(bytes);
+    if (s_page) memset(s_page, 0, bytes);
+    s_scroll_offset = 0;
+    s_link_count = 0;
+    memset(s_links, 0, sizeof(s_links));
+    s_address_bar[0] = '\0';
+    s_status_bar[0] = '\0';
+}
+
+void tui_viewport_scroll_to(int row)
+{
+    if (s_page_rows <= 0) return;
+    if (row < 0) row = 0;
+    int max_offset = s_page_rows - s_rows;
+    if (max_offset < 0) max_offset = 0;
+    if (row > max_offset) row = max_offset;
+    s_scroll_offset = row;
+}
+
+void tui_viewport_scroll_by(int delta)
+{
+    tui_viewport_scroll_to(s_scroll_offset + delta);
+}
+
+int tui_viewport_get_offset(void)
+{
+    return s_scroll_offset;
+}
+
+int tui_viewport_get_page_rows(void)
+{
+    return s_page_rows;
+}
+
+void tui_page_set_cell(int col, int row, const char *utf8, uint8_t fg, uint8_t bg, uint8_t attr)
+{
+    if (!s_page || col < 1 || col > s_cols || row < 1 || row > s_page_rows) return;
+    tui_cell_t *cell = &s_page[(row - 1) * s_cols + (col - 1)];
+    tui_cell_set(cell, utf8, fg, bg);
+    cell->attr = attr;
+}
+
+void tui_page_clear(void)
+{
+    if (!s_page) return;
+    memset(s_page, 0, (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t));
+    s_scroll_offset = 0;
+    s_link_count = 0;
+    memset(s_links, 0, sizeof(s_links));
+}
+
+void tui_page_render(void)
+{
+    if (!s_page || !s_cells) return;
+    for (int r = 1; r <= s_rows; r++) {
+        int page_row = s_scroll_offset + r;
+        if (page_row < 1 || page_row > s_page_rows) {
+            for (int c = 1; c <= s_cols; c++) {
+                tui_cell_t *cell = cell_at(r, c);
+                tui_cell_set(cell, " ", s_def_fg, s_def_bg);
+            }
+            continue;
+        }
+        for (int c = 1; c <= s_cols; c++) {
+            tui_cell_t *src = &s_page[(page_row - 1) * s_cols + (c - 1)];
+            tui_cell_t *dst = cell_at(r, c);
+            *dst = *src;
+        }
+    }
+}
+
+void tui_link_register(int x, int y, int w, int h, const char *url)
+{
+    if (s_link_count >= TUI_MAX_LINKS || !url) return;
+    tui_link_t *link = &s_links[s_link_count++];
+    link->x = x;
+    link->y = y;
+    link->w = w;
+    link->h = h;
+    strncpy(link->url, url, TUI_URL_MAX - 1);
+    link->url[TUI_URL_MAX - 1] = '\0';
+}
+
+bool tui_link_hit_test(int x, int y, const char **url_out)
+{
+    for (int i = 0; i < s_link_count; i++) {
+        tui_link_t *link = &s_links[i];
+        if (x >= link->x && x < link->x + link->w &&
+            y >= link->y && y < link->y + link->h) {
+            if (url_out) *url_out = link->url;
+            return true;
+        }
+    }
+    return false;
+}
+
+void tui_link_clear(void)
+{
+    s_link_count = 0;
+    memset(s_links, 0, sizeof(s_links));
+}
+
+void tui_address_bar_set(const char *text)
+{
+    if (text) {
+        strncpy(s_address_bar, text, sizeof(s_address_bar) - 1);
+        s_address_bar[sizeof(s_address_bar) - 1] = '\0';
+    }
+}
+
+void tui_address_bar_render(void)
+{
+    if (!s_cells) return;
+    for (int c = 1; c <= s_cols; c++) {
+        tui_cell_t *cell = cell_at(1, c);
+        tui_cell_set(cell, " ", 16, 16);
+    }
+    int len = strlen(s_address_bar);
+    if (len > s_cols - 2) len = s_cols - 2;
+    for (int i = 0; i < len; i++) {
+        tui_cell_t *cell = cell_at(1, i + 1);
+        char ch[2] = {s_address_bar[i], '\0'};
+        tui_cell_set(cell, ch, 16, 16);
+    }
+}
+
+void tui_status_bar_set(const char *text)
+{
+    if (text) {
+        strncpy(s_status_bar, text, sizeof(s_status_bar) - 1);
+        s_status_bar[sizeof(s_status_bar) - 1] = '\0';
+    }
+}
+
+void tui_status_bar_render(void)
+{
+    if (!s_cells) return;
+    int row = s_rows;
+    for (int c = 1; c <= s_cols; c++) {
+        tui_cell_t *cell = cell_at(row, c);
+        tui_cell_set(cell, " ", 16, 16);
+    }
+    int len = strlen(s_status_bar);
+    if (len > s_cols - 2) len = s_cols - 2;
+    for (int i = 0; i < len; i++) {
+        tui_cell_t *cell = cell_at(row, i + 1);
+        char ch[2] = {s_status_bar[i], '\0'};
+        tui_cell_set(cell, ch, 16, 16);
+    }
 }
