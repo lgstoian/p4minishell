@@ -60,7 +60,10 @@ def main():
 
             print("== apps-launch ==")
             sh(dev, "cls")
-            sh(dev, "launch /list", 2.5)
+            # The transcript scroll animation can still be moving a couple of
+            # seconds after a long listing; capture once it has settled or the
+            # rows overlap in the PNG.
+            sh(dev, "launch /list", 5.0)
             shot(dev, "apps-launch")
 
             # --- modal: dialog (auto-cancels via /t) ---
