@@ -14,6 +14,7 @@ rem  [M-TMGR-BACK].
 rem =====================================================================
 
 :main
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "Task Manager"
 echo [M-TMGR]
 tui fullscreen on

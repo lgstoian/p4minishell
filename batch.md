@@ -7,7 +7,7 @@
 > for architecture see [`documentation.md`](documentation.md); for the
 > step-by-step tutorial see [`tutorial_batch.md`](tutorial_batch.md).
 
-- **Version:** v1.3.0 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
+- **Version:** v1.4.0 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
   (FATFS long filenames are UTF-8) · **Size:** ≤128 KB runs RAM-resident
   (`P4_CONFIG_BATCH_FILE_MAX_BYTES`); larger files stream from SD with
   identical semantics.
@@ -138,6 +138,8 @@ table. `set NAME` prints one value. Undefined `%VAR%` expands to empty (so
 | `%0` `%1`..`%9` `%*` | Script name / caller args / all args from `%1`. |
 | `%%` | Literal `%`. |
 | `%ERRORLEVEL%` | Current errorlevel as decimal. |
+| `%ERRCODE%` | Last specific error code (from `error_strings.h`) as decimal. |
+| `%ERRMSG%` | Short status word from ERRORLEVEL (`success`/`error`/`usage`). |
 | `%DATE%` `%TIME%` | `MM-DD-YYYY`, `HH:MM:SS` (device clock). |
 | `%RANDOM%` | `0..32767`. |
 | `%CD%` | Current directory. |
@@ -673,6 +675,18 @@ prechecks, partial-file cleanup):
   entries after AUTOEXEC.BAT. `service list|start|stop|remove` manage them.
   Reference: `SVC.BAT` (companion service), `MOODSVC.BAT` (headless heap
   sampler feeding `MOODLAST.INI`), `MEMLOG.BAT` (bounded CSV log).
+- **Shared routines and the feature probe:** `APPLIB.BAT` is deployed with the
+  apps and called as `gosub APPLIB.BAT::probe`. The probe is opt-in with
+  `P4_APP_FEATURES=1`; when set it runs the locale formatter, `js eval`, the
+  `browser` usage path and `httpget /cookie`, emitting `[M-FEAT-*]` markers.
+  When unset it returns immediately, so the normal app transcript and pace are
+  unchanged. `APPLIB.BAT` uses `call :label` internally (same file) and is a
+  working example of a shared library beyond the Companion's `LIB.BAT`.
+- **Browser showcase:** `WEB.BAT` renders `sd:/WEB/INDEX.HTML` offline with
+  `browser <file>`, captures the page with `screenshot sd:/WEB/SHOT.BMP`, and
+  exits. `apps/website/` holds the page; `apps/app_manifest.py` deploys the
+  `WEB/` site alongside the `.BAT` and `.APPINFO` files. `CHAT.BAT` is the
+  board-to-board chat menu over `chat host/peer/send/poll/status`.
 - **Job coordination:** `lock <name> [/t:secs]` / `unlock <name>` (named
   mutexes, auto-released at job exit), `signal <name>` / `wait <name> [/t:secs]`
   (sticky events, one signal wakes one waiter). A job's `set` writes go to a

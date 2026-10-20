@@ -203,6 +203,10 @@ typedef struct {
     size_t content_length;       /**< Content-Length header, or 0 when unknown. */
     uint8_t *body;               /**< Heap-allocated body, NULL on failure. */
     size_t body_size;            /**< Actual bytes read into @p body. */
+    char etag[128];              /**< ETag response header ("" if none). */
+    char location[512];          /**< Location header (last redirect, "" if none). */
+    uint64_t last_modified;      /**< Last-Modified as unix timestamp (0 if none). */
+    char cache_control[64];      /**< Cache-Control header ("" if none). */
 } networking_http_result_t;
 
 /**
@@ -322,6 +326,105 @@ esp_err_t networking_http_request(esp_http_client_method_t method, const char *u
                                   const char *depth,
                                   const char *auth_user, const char *auth_pass,
                                   networking_http_result_t *result);
+
+/* ========================================================================
+ * COOKIE JAR
+ * ======================================================================== */
+
+/** One stored cookie. */
+typedef struct {
+    char name[64];       /**< Cookie name. */
+    char value[256];      /**< Cookie value. */
+    char domain[128];     /**< Domain scope (lower-case, no leading dot). */
+    uint32_t expires_ts;  /**< Expiry unix timestamp (0 = session cookie). */
+} networking_cookie_t;
+
+/**
+ * The cookie jar is filled automatically: every request registers an
+ * HTTP_EVENT_ON_HEADER hook that stores `Set-Cookie` values scoped to the
+ * request host, and applies the matching stored cookies as a `Cookie` header.
+ * No caller action is required for the normal request path.
+ */
+
+/** Drop every stored cookie. */
+void networking_http_cookie_clear(void);
+
+/** Number of cookies currently stored (0 when the jar is empty). */
+int networking_http_cookie_count(void);
+
+/** Copy the cookie at @p index into @p out. False when out of range. */
+bool networking_http_cookie_at(int index, networking_cookie_t *out);
+
+/**
+ * Add (or replace) a cookie for @p domain. @p expires_ts is a unix
+ * timestamp, or 0 for a session cookie. Returns false on OOM/bad input.
+ */
+bool networking_http_cookie_add(const char *domain, const char *name,
+                                const char *value, uint32_t expires_ts);
+
+/** Delete the cookie matching @p domain and @p name. False when absent. */
+bool networking_http_cookie_remove(const char *domain, const char *name);
+
+/**
+ * Parse and store one raw `Set-Cookie` header value scoped to @p host, using
+ * the same rules as the live capture path (so a persisted jar reloads
+ * identically). Returns true when stored, false when ignored or deleted.
+ */
+bool networking_http_cookie_store_header(const char *host, const char *header);
+
+/** Enable/disable live Set-Cookie capture (default enabled). */
+void networking_http_cookie_set_capture(bool on);
+
+/** True once since the last call if the jar changed (add/remove/clear), so the
+ *  caller can persist it lazily. Clears the flag. */
+bool networking_http_cookie_take_dirty(void);
+
+/* ========================================================================
+ * FORM SUBMISSION
+ * ======================================================================== */
+
+/** One form field for urlencoded POST. */
+typedef struct {
+    const char *name;
+    const char *value;
+} networking_form_field_t;
+
+/**
+ * POST with application/x-www-form-urlencoded body.
+ * @param fields       Array of form fields.
+ * @param field_count  Number of fields (max P4_CONFIG_HTTP_FORM_FIELDS_MAX).
+ * @param result       Receives response; caller frees body.
+ * @return ESP_OK on success.
+ */
+esp_err_t networking_http_post_form(const char *url,
+                                     const networking_form_field_t *fields,
+                                     size_t field_count,
+                                     networking_http_result_t *result);
+
+/* ========================================================================
+ * STREAMING HTTP
+ * ======================================================================== */
+
+/**
+ * Callback for streaming HTTP responses. Called once per chunk.
+ * @param chunk     Pointer to chunk data (valid only during the call).
+ * @param len       Bytes in this chunk.
+ * @param total     Total content-length if known, else 0.
+ * @param ctx       User context pointer.
+ * @return ESP_OK to continue, any other to abort.
+ */
+typedef esp_err_t (*networking_stream_cb)(const uint8_t *chunk, size_t len,
+                                           size_t total, void *ctx);
+
+/**
+ * GET with callback-based streaming (no body cap, no full buffering).
+ * @param url  http:// or https:// URL.
+ * @param cb   Callback for each received chunk.
+ * @param ctx  User context passed to the callback.
+ * @return ESP_OK on completion.
+ */
+esp_err_t networking_http_get_stream(const char *url, networking_stream_cb cb,
+                                      void *ctx);
 
 /**
  * One-shot TCP request/response terminal (`tcpterm`, tcpterm.c).

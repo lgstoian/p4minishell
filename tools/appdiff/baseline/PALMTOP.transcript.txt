@@ -1,2 +1,3 @@
 launch PALMTOP
 [M-PALM]
+title: set to 'Palmtop'

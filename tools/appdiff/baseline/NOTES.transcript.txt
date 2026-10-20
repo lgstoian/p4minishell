@@ -1,6 +1,5 @@
 launch NOTES
 [M-NOTE]
-del: deleted /sdcard/_zinit.txt permanently
+title: set to 'Notes'
 N
 Unknown command: N
-shell: Unknown command: N

@@ -14,10 +14,34 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
-## [Unreleased]
+## [1.4.0] - 2026-10-19
 
 ### Added
 
+- **Browser (`browser <url|file>`)** - the on-device browser now renders a
+  page visibly (TUI surface, not just the page buffer), accepts an SD HTML
+  path as well as `http(s)://` (offline pages need no AP or httpd), resolves
+  `<head>`/`<body>` in a normal `<html>` document, renders siblings in
+  document order, and keeps the ~28 KB CSS ruleset in PSRAM so the command
+  worker stays at 28 KB. Navigation history and bookmarks persist at
+  `sd:/BROWSER.HIST` / `sd:/BROWSER.BOOK`; `user:pass@` URLs use Basic auth;
+  `tui dump [from] [to]` reads the rendered cells back.
+- **Browser showcase** - `apps/website/` (`INDEX.HTML`, `PAGE2.HTML`) and
+  `WEB.BAT` render a basic website from `sd:/WEB/` and capture it to
+  `docs/assets/browser-website.png`; the `s20_website` suite drives it.
+- **`httpget` request flags** - `/h:NAME=VALUE` (extra header), `/post
+  NAME=VALUE` (urlencoded POST), `/stream [file]` (chunked sink), and
+  `/cookie [clear]`. The cookie jar is captured live from `Set-Cookie` via
+  `HTTP_EVENT_ON_HEADER`, applied per request host, and persisted at
+  `sd:/HTTPCOOK.TXT`.
+- **Locale persistence** - `config LOCALE=US|UK|DE|FR` writes a `LOCALE=` line
+  to CONFIG.SYS and boot re-applies it through the shared `locale_parse()`
+  (also accepts the numeric MS-DOS country code).
+- **Shared app routines and feature probe** - `apps/APPLIB.BAT` is deployed by
+  the single-source `apps/app_manifest.py`; every entry app calls
+  `APPLIB.BAT::probe`, which is opt-in with `P4_APP_FEATURES=1` and exercises
+  the locale, JS, browser and cookie surfaces. `CHAT.BAT` adds a board-to-board
+  chat front-end.
 - **TUI workspace layer** (`components/tui/tui_pane.h` + `tui_pane.c`): named
   panes with a focus ring, declarative widget layer, HUD region with diff
   rendering, and a script-visible event multiplexer — all fixed-capacity (no
@@ -73,8 +97,91 @@ open bugs see [`bugs.md`](bugs.md).
     scope/guard/macro capacities) in `p4minishell_config.h` + `.yaml`.
   - 12 new unit tests covering mode push/pop/switch, bindings, chords,
     commands, scopes, guards, dialogs, macros, and repeat.
+  - **Centralized error message table** (`components/batch/error_strings.h` +
+    `.error_strings.c`): compact `error_entry_t` array mapping `ERR_*` codes to
+    human-readable strings. `%ERRMSG%` resolves via `error_code_string()`,
+    `%ERRCODE%` exposes the raw code. `batch_set_errorcode()` /
+    `batch_get_errorcode()` track the last specific error (distinct from
+    errorlevel). Auto-default in `batch_set_errorlevel()`: level 0 →
+    `ERR_BASE_OK`, 1 → `ERR_BASE_ERROR`, 2 → `ERR_BASE_USAGE`.
+  - **Self-healing command worker** (`components/command/command.c`):
+    `command_worker_self_healed()` validates the worker task handle, queue,
+    and task state at boot. Returns 0 (healthy), 1 (repaired queue), -1
+    (fatal). Called once at the start of `command_worker_task()`.
+  - **Pattern-based job management** (`components/command/command.c`):
+    `command_bg_find_pattern()` uses DOS-style wildcard (`*`, `?`) matching
+    over active bg job names. `taskkill bg*` stops all matching jobs.
+  - **Graceful degradation cascade** (`components/p4heap/p4heap.c`):
+    `p4heap_alloc_cascade()` walks PSRAM → internal RAM → DMA-capable,
+    logging a warning at each step. `pool_out` reports which pool succeeded.
+  - **Lightweight internationalization** (`components/shell/locale.h` +
+    `.locale.c`): locale-aware date/time/number formatting with four locales
+    (US, UK, DE, FR). `locale` command shows/sets the locale. `%DATE%` and
+    `%TIME%` respect the active locale.
 
 ### Fixed
+
+- **Browser rendering order and head/body resolution** - sibling blocks were
+  pushed first-to-last onto a LIFO stack and drawn upside down; a normal
+  `<html><head>…</head><body>…` document left `tree->body` NULL, so the renderer
+  walked the root and printed `<title>` and raw `<style>` CSS as page text.
+- **Command-worker memory budget** - the browser's ~28 KB CSS ruleset moved to
+  PSRAM and DOM parse depth is bounded; the SD history save moved off the
+  `esp_timer` task (4 KB timer stack); the Wi-Fi init task is 10 KB; the worker
+  is 28 KB static. Boot-time SDMMC/C6 DMA allocations no longer fail.
+- **Deep batch apps** - MOOD's sampler uses a `goto` loop (the `while … call`
+  wrapper overflowed the 28 KB worker by ~200 B); the APPLIB probe is invoked
+  conditionally so it adds no frame when disabled.
+- **Audio under memory pressure** - playback refuses cleanly when the
+  DMA-capable heap cannot hold the I2S descriptors; a failed I2S init now tears
+  down both channels; the managed codec skips an identical format reconfig and
+  keeps the cached format across close, so a second tone does not reallocate
+  DMA on a fragmented heap.
+- **`httpget` result zeroing** - every early return now leaves a zeroed
+  `networking_http_result_t`; a failed request no longer freed uninitialized
+  memory (CORRUPT HEAP).
+- **HTTP streaming** - the streaming path honours `user:pass@` Basic auth and
+  rejects non-2xx statuses instead of saving an error page.
+- **Screenshot of a TUI page** - the capture no longer prints or flushes the
+  transcript before the snapshot, so a `browser`/TUI page is captured instead
+  of the transcript.
+- **Trash limits** - age/size/count enforcement is one directory pass that
+  sorts by the epoch in the entry name and deletes the victims, instead of
+  re-walking (and re-reading every `.meta`) once per victim; `del` no longer
+  stalls for tens of seconds on a nearly-full bin.
+- **JS command dispatch** - `js eval/run/call` no longer prepends the
+  subcommand to the script or opens a file literally named `run`; the runtime
+  re-anchors its stack top on the command worker, resolves script paths through
+  the shell path rules, and suppresses the trailing `undefined` from `print()`.
+- **Locale parser** - `locale_parse()` accepts names and numeric codes with
+  whitespace; the CONFIG.SYS/`config` paths share it.
+
+### Hardware verification (v1.4.0)
+
+- **Boot:** `boot_regression.py COM3 20 COM6` -> **20/20 clean on both
+  boards** (no panic, one AUTOEXEC, SD ready, 0 stray W/E).
+- **COM3 (`jc1060p470c`)**: firmware + `test/` builds 0 warnings/errors; unit
+  603 tests / 0 failures / 2 ignored; `s01_smoke` 34/34, `s05_storage` 59/59,
+  `s06_batch` 253/253, `s07_data` 107/107, `s08_display` 102/102,
+  `s12_power_audio` 49/49, `s14_apps` 187/187, `s17_browser` 16/16,
+  `s19_app_features` 31/31, `s20_website` 6/6. The bench AP was intermittent
+  during `s18_http` (16/18; the two misses were httpd accepts under the EV
+  board's low internal heap, not feature failures); an earlier run passed
+  19/19. `s09_editor` hits **F53** (unnamed-buffer fault).
+- **COM6 (`m5stack_tab5`)**: firmware + `test/` builds 0 warnings/errors; unit
+  603 tests / 0 failures / 2 ignored; `s01_smoke` 34/34, `s05_storage` 59/59,
+  `s07_data` 107/107, `s08_display` 102/102, `s14_apps` 187/187,
+  `s17_browser` 16/16, `s18_http` 18/18, `s19_app_features` 31/31.
+  `s06_batch` hits **F53** in the crash-restart service section; `s09_editor`
+  is blocked by the same unnamed-buffer fault.
+- **Known issue:** **F53** (open, HIGH) documents the Tab5 long-sweep heap
+  abort and the unnamed-editor fault with a repro and next experiment. It is
+  labelled as a known issue in the release notes instead of being presented
+  as verified.
+- **Browser showcase:** `docs/assets/browser-website.png` (1024x600) captured
+  on COM3 from `sd:/WEB/INDEX.HTML` with no network.
+
+### Fixed (continued)
 
 - **Bring-up: the tree now builds, links, and boots green on both board
   profiles** (`jc1060p470c` and `m5stack_tab5`), for the firmware and the

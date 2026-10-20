@@ -1,2 +1,3 @@
 launch PICS
 [M-PICS]
+title: set to 'Pictures'

@@ -59,6 +59,15 @@
 #define HTTPD_BLOCK_BYTES       P4_CONFIG_HTTPD_BLOCK_BYTES
 #define HTTPD_LISTING_MAX       P4_CONFIG_HTTPD_LISTING_MAX
 #define HTTPD_AUTOSTART         P4_CONFIG_HTTPD_AUTOSTART
+
+/* Auto-start needs the 8 KB internal task stack in one contiguous block, and
+ * leaves too little behind when the boot heap is tight. On the Tab5 (C6 hosted
+ * + 28 KB command worker) and the EV board the largest internal block at
+ * Wi-Fi-up is ~5-10 KB, so starting anyway starved later `pkg`/`ps`/stdio
+ * paths. Require 16 KB before the automatic start (the cooldown/retry still
+ * applies); an explicit `httpd start` always works, and the browser/http
+ * suites start it after the rest of the boot has settled. */
+#define HTTPD_AUTOSTART_MIN_INTERNAL_LARGEST  (16 * 1024)
 #define HTTPD_AUTH_USERNAME     P4_CONFIG_HTTPD_AUTH_USERNAME
 #define HTTPD_AUTH_PASSWORD     P4_CONFIG_HTTPD_AUTH_PASSWORD
 #define NETDIAG_TAG             P4_CONFIG_SHELL_TAG
@@ -709,6 +718,10 @@ void networking_httpd_maybe_autostart(void)
          * hammered with a retry — and a transcript error line — on every
          * Wi-Fi event. Manual `httpd start` bypasses the cooldown. */
         if (esp_timer_get_time() < s_autostart_cooldown_until_us) {
+            return;
+        }
+        if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) <
+            HTTPD_AUTOSTART_MIN_INTERNAL_LARGEST) {
             return;
         }
         esp_err_t error = networking_httpd_start();

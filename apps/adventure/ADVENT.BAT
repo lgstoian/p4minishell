@@ -11,6 +11,7 @@ rem  (take key) stay an if-chain: switch matches are split on spaces.
 rem  Type lowercase commands. Markers: [M-ADV] / [M-ADV-WIN] / [M-ADV-QUIT].
 rem =====================================================================
 setlocal enabledelayedexpansion
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 set room=courtyard
 set ITEM[lantern]=0
 set ITEM[key]=0

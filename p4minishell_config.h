@@ -55,8 +55,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             1
-#define P4_CONFIG_VERSION_MINOR             3
-#define P4_CONFIG_VERSION_PATCH             1
+#define P4_CONFIG_VERSION_MINOR             4
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -372,6 +372,9 @@
 #define P4_CONFIG_JS_TIMEOUT_MS               5000
 #define P4_CONFIG_JS_EVAL_MAX_BYTES           (16 * 1024)
 #define P4_CONFIG_JS_FILE_MAX_BYTES           (64 * 1024)
+#define P4_CONFIG_JS_FS_MAX_BYTES             (65536)
+#define P4_CONFIG_JS_HTTP_MAX_BYTES           (32768)
+#define P4_CONFIG_JS_DB_MAX_RESULTS           64
 
 #define P4_CONFIG_TUI_PAGE_ROWS               200
 
@@ -572,6 +575,73 @@
 
 /** Maximum file bytes the text viewer / hex viewer will load. */
 #define P4_CONFIG_TUI_VIEW_MAX_BYTES            (64 * 1024)
+
+/* ========================================================================
+ * Browser
+ * ======================================================================== */
+
+/** Maximum browser history entries. */
+#define P4_CONFIG_BROWSER_HISTORY_MAX           8
+
+/** Maximum browser bookmarks. */
+#define P4_CONFIG_BROWSER_BOOKMARK_MAX          8
+
+/** Maximum bytes for an image download in the browser. */
+#define P4_CONFIG_BROWSER_IMAGE_MAX_BYTES       (64 * 1024)
+
+/** Maximum image width in terminal columns. */
+#define P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH       80
+
+/** Maximum image height in terminal rows. */
+#define P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT      40
+
+/** Maximum total in-page JavaScript bytes per page. */
+#define P4_CONFIG_BROWSER_JS_MAX_BYTES          (16 * 1024)
+
+/* ========================================================================
+ * Event Bus
+ * ======================================================================== */
+
+/** Maximum distinct event topics. */
+#define P4_CONFIG_EVENT_BUS_TOPICS              16
+
+/** Maximum event subscribers across all topics. */
+#define P4_CONFIG_EVENT_BUS_SUBSCRIBERS         32
+
+/** Events per subscriber queue depth. */
+#define P4_CONFIG_EVENT_BUS_QUEUE_DEPTH         4
+
+/** Maximum JSON payload per event. */
+#define P4_CONFIG_EVENT_BUS_DATA_MAX            128
+
+/** Maximum topic string length. */
+#define P4_CONFIG_EVENT_BUS_TOPIC_LEN           32
+
+/* ========================================================================
+ * State Machine
+ * ======================================================================== */
+
+/** Maximum states per state machine instance. */
+#define P4_CONFIG_SM_MAX_STATES                 8
+
+/** Maximum events per state machine instance. */
+#define P4_CONFIG_SM_MAX_EVENTS                 8
+
+/** Maximum concurrent state machine instances. */
+#define P4_CONFIG_SM_MAX_INSTANCES              4
+
+/* ========================================================================
+ * MCP Bridge
+ * ======================================================================== */
+
+/** Maximum registered MCP tools. */
+#define P4_CONFIG_MCP_MAX_TOOLS                 32
+
+/** Maximum JSON-RPC message size. */
+#define P4_CONFIG_MCP_JSON_MAX                  4096
+
+/** Maximum JSON schema size per tool. */
+#define P4_CONFIG_MCP_SCHEMA_MAX                512
 
 /** Default auto-cancel timeout for modal surfaces in ms (0 = no timeout). */
 #define P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS        0
@@ -1225,6 +1295,15 @@
 
 /** User-Agent string sent by `httpget`; keep it short and identifiable. */
 #define P4_CONFIG_HTTP_USER_AGENT           "P4MiniShell/" P4_CONFIG_VERSION_STRING " httpget"
+
+/** Maximum cookies stored in the HTTP cookie jar. */
+#define P4_CONFIG_HTTP_COOKIE_MAX           16
+
+/** Maximum form fields in a urlencoded POST request. */
+#define P4_CONFIG_HTTP_FORM_FIELDS_MAX      16
+
+/** Chunk size for streaming HTTP reads. */
+#define P4_CONFIG_HTTP_STREAM_CHUNK         4096
 
 /* ========================================================================
  * TLS TRUST STORE (sd:/CERTS)
@@ -2174,7 +2253,7 @@
  * command / menu. Sized past the bundled app count (plus root-level utility
  * scripts, which share the table) so late discovery entries are not
  * silently dropped. The table is heap-allocated per `launch` call. */
-#define P4_CONFIG_LAUNCH_MAX                    40
+#define P4_CONFIG_LAUNCH_MAX                    64
 
 /** Maximum length of the `choice` /C: key list (characters). Single-char
  *  keys only; DOS caps this list at 26, Windows at 99. */
@@ -2846,11 +2925,26 @@
  * TASK STACK SIZES
  * ======================================================================== */
 
-/** Stack size for the Wi-Fi initialization background task. */
-#define P4_CONFIG_WIFI_INIT_TASK_STACK       12288
+/** Stack size for the Wi-Fi initialization background task.
+ *
+ *  This task is created with xTaskCreate (internal RAM). With the command
+ *  worker's static 28 KB stack plus the timer stack, the largest free internal
+ *  block is small at boot, so a 12 KB request failed outright and the C6 never
+ *  came up ("ESP-Hosted probe is still running"). 8 KB fits but overflows by
+ *  ~0.5 KB on Tab5 during hosted bring-up; 10 KB is the working size. */
+#define P4_CONFIG_WIFI_INIT_TASK_STACK       10240
 
-/** Stack size for the shell command worker task. */
-#define P4_CONFIG_COMMAND_TASK_STACK         16384
+/** Stack size for the shell command worker task.
+ *
+ *  This is a static .bss stack, i.e. permanent internal SRAM, so it competes
+ *  with C6 hosted bring-up and the Tab5's pkg/ps/stdio paths. 16/24/26 KB
+ *  overflow in deep batch apps (BOUNCE needs ~27 KB); 32 KB makes the boot-time
+ *  SDMMC/C6 DMA allocations fail (`not enough mem`). 28 KB is the verified
+ *  size; the Tab5's remaining pressure is handled by starting httpd
+ *  automatically only when the internal heap can spare its 8 KB task stack.
+ *  Supporting budget: SD history save moved off esp_timer (4 KB timer stack)
+ *  and the Wi-Fi init task is 10 KB. */
+#define P4_CONFIG_COMMAND_TASK_STACK         28672
 
 /** Depth of the async command queue (pointers only; the worker owns them).
  *  Raised from 4: bursts (pasted lines, scripted drivers, modal chains)

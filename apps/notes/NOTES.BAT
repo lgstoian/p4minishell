@@ -9,6 +9,7 @@ rem  and `on`-dispatched menus (list's 0-based index -> 1-based on target).
 rem  Markers: [M-NOTE] / [M-NOTE-SAVED] / [M-NOTE-COUNT].
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-NOTE]
 title "Notes"
 db info zettel > _zinit.txt

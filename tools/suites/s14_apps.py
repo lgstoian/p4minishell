@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 import time
 
@@ -32,56 +33,19 @@ OUT_DIR = os.path.join("screenshots", "regression")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APPS = os.path.join(ROOT, "apps")
+sys.path.insert(0, APPS)
 
-# Mirrors apps/push_apps.py FILES: (subdir, filename, goes-to-APPS).
-PUSH_APPS = [
-    ("adventure", "ADVENT.BAT", False),
-    ("adventure", "ADVENT.APPINFO", True),
-    ("adventure", "ALIASES.BAT", False),
-    ("notes", "NOTES.BAT", False),
-    ("notes", "NOTES.APPINFO", True),
-    ("notes", "ALIASES.BAT", False),
-    ("mood", "MOOD.BAT", False),
-    ("mood", "MOOD.APPINFO", True),
-    ("mood", "MOODSVC.BAT", False),
-    ("mood", "MOODSVC.APPINFO", True),
-    ("mood", "ALIASES.BAT", False),
-    ("gfxdemo", "BOUNCE.BAT", False),
-    ("gfxdemo", "BOUNCE.APPINFO", True),
-    ("gfxdemo", "GFXTOOL.BAT", False),
-    ("gfxdemo", "GFXTOOL.APPINFO", True),
-    ("gfxdemo", "PLOT.BAT", False),
-    ("gfxdemo", "PLOT.APPINFO", True),
-    ("snake", "SNAKE.BAT", False),
-    ("snake", "SNAKE.APPINFO", True),
-    ("tcmd", "TCMD.BAT", False),
-    ("tcmd", "TCMD.APPINFO", True),
-    ("elite", "ELITE.BAT", False),
-    ("elite", "ELITE.APPINFO", True),
-    ("pics", "PICS.BAT", False),
-    ("pics", "PICS.APPINFO", True),
-    ("uitest", "UITEST.BAT", False),
-    ("uitest", "UITEST.APPINFO", True),
-    ("palmtop", "PALMTOP.BAT", False),
-    ("palmtop", "PALMTOP.APPINFO", True),
-    ("diag", "DIAG.BAT", False),
-    ("diag", "DIAG.APPINFO", True),
-    ("controlflow", "CONTROL.BAT", False),
-    ("controlflow", "CONTROL.APPINFO", True),
-    ("writer", "WRITER.BAT", False),
-    ("writer", "WRITER.APPINFO", True),
-    ("hybrid", "HYBRID.BAT", False),
-    ("hybrid", "HYBRID.APPINFO", True),
-    ("taskmgr", "TASKMGR.BAT", False),
-    ("taskmgr", "TASKMGR.APPINFO", True),
-]
+# The deploy list is the single source in apps/app_manifest.py (shared with
+# push_apps.py and companion/push_sd.py). `APP_PAYLOADS` includes the shared
+# APPLIB.BAT and the CHAT app; `COMPANION_PAYLOADS` covers the menu tree.
+from app_manifest import (  # noqa: E402
+    APP_PAYLOADS,
+    COMPANION_PAYLOADS,
+    payload_path,
+    remote_target,
+)
 
-# Mirrors apps/companion/push_sd.py FILES.
-COMPANION_FILES = [
-    "LIB.BAT", "COMPANION.BAT", "SYS.BAT", "FILES.BAT", "NET.BAT", "FUN.BAT",
-    "SET.BAT", "ALIASES.BAT", "SVC.BAT", "MEMLOG.BAT", "AGENDA.BAT", "README.TXT",
-    "COMPANION.APPINFO",
-]
+
 
 # Apps that run to completion on their own: (name, start, done, timeout,
 # extra-must-see). The `extra` list pins the post-authoring feature lines
@@ -109,6 +73,7 @@ NONSTOP = [
 DRIVE = [
     ("PICS", "[M-PICS]", "5", None, 4.0, True),
     ("COMPANION", "[C-MENU]", "6", "[C-EXIT]", 2.0, True),
+    ("CHAT", "[M-CHAT]", "9", "[M-CHAT-DONE]", 2.0, False),
 ]
 
 
@@ -203,19 +168,14 @@ def _deploy(dev, c):
     for _ in range(3):
         try:
             dev.run("md APPS", timeout=20)
+            dev.run("md WEB", timeout=20)
             break
         except PanicError:
             raise
         except Exception:  # noqa: BLE001
             time.sleep(1.0)
-    for subdir, name, to_apps in PUSH_APPS:
-        local = os.path.join(APPS, subdir, name)
-        remote = ("APPS/" + name) if to_apps else name
-        _push(dev, c, local, remote)
-    for name in COMPANION_FILES:
-        local = os.path.join(APPS, "companion", name)
-        remote = ("APPS/" + name) if name.endswith(".APPINFO") else name
-        _push(dev, c, local, remote)
+    for subdir, name, target in APP_PAYLOADS + COMPANION_PAYLOADS:
+        _push(dev, c, payload_path(subdir, name), remote_target(name, target))
 
 
 def _make_ship(path):
@@ -360,11 +320,20 @@ def _mood(dev, c):
     c.check("MOOD sampled each round", b"[M-MOOD-SAMPLE]" in tail, "")
     _ok(s)
     s.read_for(3.0)
-    # Service sampler view (item 5): no sampler installed in the suite, so
-    # the empty path reports [M-MOODSVC-NONE].
-    tail = _press(s, "5", "[M-MOODSVC-NONE]", timeout=30.0, settle=4.0)
-    c.check("MOOD service view handles no sampler", b"[M-MOODSVC-NONE]" in tail,
+    # Service sampler view (item 5). A sampler MAY still be publishing
+    # MOODLAST.INI from an earlier run on this board, so accept either the live
+    # view ([M-MOOD-SVC]) or the empty path ([M-MOODSVC-NONE]); both end in a
+    # "press any key" pause that must be dismissed before the menu is usable.
+    s.read_for(3.0)
+    s.write_line("5")
+    tail = s.read_until(b"[M-MOOD-SVC]", 20)
+    if b"[M-MOOD-SVC]" not in tail and b"[M-MOODSVC-NONE]" not in tail:
+        tail += s.read_until(b"[M-MOODSVC-NONE]", 20)
+    c.check("MOOD service view responds (sampler or empty)",
+            b"[M-MOOD-SVC]" in tail or b"[M-MOODSVC-NONE]" in tail,
             tail[-300:].decode("utf-8", "replace"))
+    s.write_line("")   # dismiss the pause
+    s.read_for(2.0)
     _ok(s)
     s.read_for(3.0)
     s.write_line("6")   # Back

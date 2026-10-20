@@ -18,6 +18,7 @@ rem  Every step fails loudly (errorlevel 1) so a broken SD/push is visible.
 rem  Markers: [M-WRITER] / [M-WRITER-DONE].
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 set ERR=0
 echo [M-WRITER]
 title "Writer"

@@ -16,6 +16,7 @@ rem
 rem  Output report: DIAG.TXT on the SD root (overwritten per run).
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 set REPORT=DIAG.TXT
 echo [M-DIAG]
 title "P4 Diagnostics"

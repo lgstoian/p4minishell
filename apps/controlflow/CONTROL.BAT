@@ -12,6 +12,7 @@ rem
 rem  Markers: [M-CONTROL] / [M-CONTROL-DONE].
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-CONTROL]
 title "Control Flow Tour"
 echo CONTROL: start

@@ -18,6 +18,7 @@ rem  Indices below are 0-based (list returns the selected 0-based index).
 rem =====================================================================
 
 :main
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "Settings"
 echo [M-SET]
 draw clear screen

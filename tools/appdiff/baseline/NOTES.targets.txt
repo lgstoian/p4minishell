@@ -9,7 +9,7 @@ M N.NM
 M N.NM
 N%
 N/C
-#cccccc ╒═══════
+#cccccc ╔═══════
 Zettelkasten
 obj
 N. New note

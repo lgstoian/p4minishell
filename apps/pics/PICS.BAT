@@ -9,6 +9,7 @@ rem  canvas (`gfx image`), plus `image info` metadata.
 rem  Needs PHOTO.BMP from apps/push_assets.py (SD root). Markers: [M-PICS].
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-PICS]
 title "Pictures"
 goto menu

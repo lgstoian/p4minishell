@@ -19,24 +19,11 @@ import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "tools"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from shell_session import open_port  # noqa: E402
+from app_manifest import COMPANION_PAYLOADS, payload_path, remote_target  # noqa: E402
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-FILES = [
-    "LIB.BAT",
-    "COMPANION.BAT",
-    "SYS.BAT",
-    "FILES.BAT",
-    "NET.BAT",
-    "FUN.BAT",
-    "SET.BAT",
-    "ALIASES.BAT",
-    "SVC.BAT",
-    "MEMLOG.BAT",
-    "AGENDA.BAT",
-    "README.TXT",
-    "COMPANION.APPINFO",
-]
 
 # push_sd.py writes files to the SD root; the APPINFO metadata belongs in the
 # conventional sd:/APPS directory that `launch` reads.
@@ -145,9 +132,9 @@ def main():
     ser.read(ser.in_waiting or 1)
 
     ok = True
-    for name in FILES:
-        path = os.path.join(APP_DIR, name)
-        target = ("APPS/" + name) if name.endswith(".APPINFO") else name
+    for subdir, name, target_kind in COMPANION_PAYLOADS:
+        path = payload_path(subdir, name)
+        target = remote_target(name, target_kind)
         with open(path, "rb") as f:
             data = f.read()
         pushed = False

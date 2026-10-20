@@ -21,6 +21,7 @@
  */
 
 #include "batch.h"
+#include "error_strings.h"
 #include "storage.h"
 #include "filetype.h"
 #include "modal_surf.h"
@@ -283,6 +284,7 @@ static shell_bind_t s_binds[SHELL_BIND_MAX];
 typedef struct {
     shell_batch_frame_t *active_frame;
     int errorlevel;
+    int last_errorcode;       /**< Last specific error code (ERR_*), 0 = none. */
     char goto_label[SHELL_COMMAND_BYTES];
     bool goto_pending;
     bool goto_eof;
@@ -368,6 +370,7 @@ static batch_task_ctx_t *batch_ctx_at(int slot)
 
 #define s_active_batch_frame (batch_ctx_current()->active_frame)
 #define s_errorlevel         (batch_ctx_current()->errorlevel)
+#define s_last_errorcode     (batch_ctx_current()->last_errorcode)
 #define s_goto_label         (batch_ctx_current()->goto_label)
 #define s_goto_pending       (batch_ctx_current()->goto_pending)
 #define s_goto_eof           (batch_ctx_current()->goto_eof)
@@ -495,10 +498,11 @@ static void shell_env_normalize_name(const char *name, char *output, size_t outp
 /* Virtual / read-only variable names. Resolved on read from runtime
  * state or flash; NEVER stored in the named table, so they consume
  * zero RAM slots. shell_env_set() refuses them and the expansion
- * engine short-circuits them before the table lookup. */
-#define SHELL_ENV_VIRTUAL_NAME_COUNT 10
+ * engine short-circuits them before the table lookup.
+ * ERRCODE exposes the last specific error code (additive). */
+#define SHELL_ENV_VIRTUAL_NAME_COUNT 11
 static const char *const s_virtual_names[SHELL_ENV_VIRTUAL_NAME_COUNT] = {
-    "CD", "DATE", "ERR", "ERRMSG", "ERRORLEVEL",
+    "CD", "DATE", "ERR", "ERRCODE", "ERRMSG", "ERRORLEVEL",
     "RANDOM", "TIME", "VERSION", "BOARD", "SERIAL",
 };
 
@@ -533,6 +537,10 @@ static bool shell_env_virtual_value(const char *normalized, char *buf, size_t bu
             msg = "usage";
         }
         snprintf(buf, buf_size, "%s", msg);
+        return true;
+    }
+    if (strcmp(normalized, "ERRCODE") == 0) {
+        snprintf(buf, buf_size, "%d", s_last_errorcode);
         return true;
     }
     if (strcmp(normalized, "VERSION") == 0) {
@@ -2479,8 +2487,8 @@ static const char *shell_expand_named_value(const char *token, char *errorlevel_
     }
     /* Virtual / read-only names: computed on read, never stored in the slot
      * table, so they consume zero RAM. %ERR% is the current errorlevel, the
-     * short form of %ERRORLEVEL%. %ERRMSG% is a short status word derived
-     * from the errorlevel. %VERSION%/%BOARD% come from flash (compile-time
+     * short form of %ERRORLEVEL%. %ERRCODE% is the last specific error
+     * code (from error_strings.h). %VERSION%/%BOARD% come from flash (compile-time
      * config). %SERIAL% is the MAC-derived chip serial, lazily filled once. */
     if (shell_text_equals_ignore_case(token, "ERR")) {
         snprintf(errorlevel_buf, 16, "%d", s_errorlevel);
@@ -2494,6 +2502,10 @@ static const char *shell_expand_named_value(const char *token, char *errorlevel_
             msg = "usage";
         }
         snprintf(pseudo_buf, 40, "%s", msg);
+        return pseudo_buf;
+    }
+    if (shell_text_equals_ignore_case(token, "ERRCODE")) {
+        snprintf(pseudo_buf, 40, "%d", s_last_errorcode);
         return pseudo_buf;
     }
     if (shell_text_equals_ignore_case(token, "VERSION")) {
@@ -2830,6 +2842,21 @@ int batch_get_errorlevel(void)
 void batch_set_errorlevel(int level)
 {
     s_errorlevel = level;
+    if (level == 0) {
+        s_last_errorcode = ERR_BASE_OK;
+    } else if (s_last_errorcode == ERR_BASE_OK || s_last_errorcode == ERR_BASE_ERROR) {
+        s_last_errorcode = (level == 2) ? ERR_BASE_USAGE : ERR_BASE_ERROR;
+    }
+}
+
+void batch_set_errorcode(int code)
+{
+    s_last_errorcode = code;
+}
+
+int batch_get_errorcode(void)
+{
+    return s_last_errorcode;
 }
 
 /* ========================================================================

@@ -9,13 +9,20 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.3.1 Â· **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) Â· **Display:** JD9165 1024x600 MIPI-DSI Â· **License:** MIT
+**Version:** 1.4.0 Â· **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) Â· **Display:** JD9165 1024x600 MIPI-DSI Â· **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
 | ![Shell prompt](docs/assets/shell-idle.png) | ![TUI boxes](docs/assets/tui-boxes.png) |
 | Plot graphs | Text editor |
 | ![Sine and cosine plot](docs/assets/plot-graph.png) | ![edit editor](docs/assets/editor-editing.png) |
+
+**The browser, rendering a real website on the device.** `browser` parses HTML
+and CSS, lays out headings, lists, links, tables and image alt text into the
+80x25 TUI page, and can read the page from SD with no network at all. The
+showcase page ships in `apps/website/` and is driven by `WEB.BAT`.
+
+![The P4MiniShell browser rendering a basic website from sd:/WEB/INDEX.HTML](docs/assets/browser-website.png)
 
 All screenshots are captured live from the device over USB serial
 (`python tools/capture_docs.py <COM_PORT>`); the full set is in
@@ -53,7 +60,7 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.3.0)
+## Current state (v1.4.0)
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
@@ -100,7 +107,13 @@ the host regression runners are green. See
   `plot` graphs, `font` registry with SD TTFs and CJK fallback, and UI themes.
 - **Connectivity:** hosted Wi-Fi (station + known-network list), BLE,
   `ping`/`dns`/`httpget`/`tcpterm`, `httpd` file server, `netstat`/`ipconfig`,
-  USB host (MSC, HID, CDC-ACM `usb userial`), **board-to-board `chat` over SoftAP + HTTP**, and C6 OTA.
+  **`browser`** (HTML/CSS pages over HTTP or from an SD file, navigation
+  history, bookmarks, Basic auth), **`httpget` flags** (`/h:`, `/post`,
+  `/stream`, `/cookie` with a persisted cookie jar), USB host (MSC, HID,
+  CDC-ACM `usb userial`), **board-to-board `chat` over SoftAP + HTTP**, and C6 OTA.
+- **Internationalization:** locale-aware date/time/number formatting
+  (`locale`, `config LOCALE=` persisted in CONFIG.SYS) and an embedded
+  JavaScript engine (`js eval|run|call`).
 - **Hardware:** brightness/rotation, battery telemetry, audio (`beep`/`tone`/
   `wavplay`, output routing with headphone auto-mute on the Tab5, `mic`
   diagnostics + speaker self-test), WS2812
@@ -145,8 +158,12 @@ the host regression runners are green. See
 Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
 `tcmd` (dual-pane commander), `snake`, `elite`, `adventure`, `notes`, `mood`,
 `gfxdemo` (`BOUNCE`, `GFXTOOL`, `PLOT`), `pics`, `taskmgr` (batch task
-manager: pool jobs, priorities, services, events), and `diag` (system health,
-capability and frame-rate diagnostics).
+manager: pool jobs, priorities, services, events), `diag` (system health,
+capability and frame-rate diagnostics), `chat` (board-to-board messaging), and
+`web` (the browser showcase). `APPLIB.BAT` is the shared routine library; every
+entry app calls its opt-in `probe` when `P4_APP_FEATURES=1`, which the
+regression suite uses to exercise the locale, JS, browser and cookie surfaces
+from every app.
 
 > **Build constraints.** The LVGL sample applications are excluded from the
 > build to fit the image budget. SoftAP is compiled in for the captive portal

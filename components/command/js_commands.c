@@ -45,17 +45,12 @@ static int js_command_eval(int argc, char **argv)
     bool ok = jsengine_eval(code, result, P4_CONFIG_JS_EVAL_MAX_BYTES);
     shell_sd_end(&sd_sess, "js eval");
 
-    if (ok) {
+    if (result[0] != '\0') {
         shell_transcript_appendf("%s\n", result);
-        free(code);
-        free(result);
-        return 0;
-    } else {
-        shell_transcript_appendf("%s\n", result);
-        free(code);
-        free(result);
-        return 1;
     }
+    free(code);
+    free(result);
+    return ok ? 0 : 1;
 }
 
 static int js_command_run(int argc, char **argv)
@@ -129,12 +124,16 @@ int shell_command_js(int argc, char **argv)
         return 2;
     }
 
+    /* The helpers index their own arguments from 1 (the first payload),
+     * treating argv[0] as the subcommand name. Pass the narrowed view so
+     * `js run file.js` does not try to open a file literally named "run"
+     * and `js eval code` does not prepend the word "eval" to the script. */
     if (strcmp(argv[1], "eval") == 0) {
-        return js_command_eval(argc, argv);
+        return js_command_eval(argc - 1, argv + 1);
     } else if (strcmp(argv[1], "run") == 0) {
-        return js_command_run(argc, argv);
+        return js_command_run(argc - 1, argv + 1);
     } else if (strcmp(argv[1], "call") == 0) {
-        return js_command_call(argc, argv);
+        return js_command_call(argc - 1, argv + 1);
     }
 
     shell_print_usage("js <eval|run|call> ...");

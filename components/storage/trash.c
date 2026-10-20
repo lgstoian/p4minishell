@@ -46,6 +46,7 @@
 #include "ansi_palette.h"
 #include "shell.h"
 #include "storage.h"
+#include "p4heap.h"
 #include "p4minishell_config.h"
 #include "bsp/esp-bsp.h"
 
@@ -806,69 +807,176 @@ esp_err_t storage_trash_info(void)
     return err;
 }
 
+/* Limit enforcement is a SINGLE directory pass: collect each entry's name,
+ * size and move time, sort by move time, then delete the oldest victims (aged
+ * entries first, then whatever the entry/byte caps require).
+ *
+ * The previous implementation deleted one victim per full re-walk of the bin,
+ * and every walk re-read every `.meta` side-car. Near the 7-day age limit that
+ * made one `del` do ~N walks x N meta reads (tens of seconds on a bin with a
+ * few hundred entries). The names already start with the epoch stamp, so the
+ * timing is available without touching the side-cars at all. */
+#define TRASH_VICTIM_SLACK       32
+#define TRASH_VICTIM_NAME_BYTES  P4_CONFIG_LFN_BYTES
+
 typedef struct {
-    info_arg_t info;
-    trash_entry_t oldest;
-    bool have_oldest;
-} limit_arg_t;
+    char name[TRASH_VICTIM_NAME_BYTES];
+    uint64_t size;
+    uint64_t stamp;
+} trash_victim_t;
 
-static int trash_limit_cb(const trash_entry_t *entry, void *arg)
+static trash_victim_t *s_trash_victims = NULL;
+static int s_trash_victim_capacity = 0;
+
+/* PSRAM-first bulk table (internal RAM is the scarce boot resource). */
+static trash_victim_t *trash_victims_ensure(void)
 {
-    limit_arg_t *la = arg;
-
-    la->info.count++;
-    la->info.bytes += entry->size;
-    /* Always keep a victim so limits enforcement can make progress even when
-     * no entry carries a timestamp: prefer a real timestamp, otherwise the
-     * first valid entry. Never leave `oldest` pointing at the zero struct
-     * (that resolves to the trash root and would wipe the whole bin). */
-    if (!la->have_oldest ||
-        (entry->time_sec != 0 &&
-         (la->oldest.time_sec == 0 || entry->time_sec < la->oldest.time_sec))) {
-        la->oldest = *entry;
-        la->have_oldest = true;
+    if (s_trash_victims == NULL) {
+        s_trash_victim_capacity = TRASH_MAX_ENTRIES + TRASH_VICTIM_SLACK;
+        s_trash_victims = p4heap_alloc_psram(sizeof(trash_victim_t) *
+                                             (size_t)s_trash_victim_capacity);
+        if (s_trash_victims == NULL) {
+            s_trash_victims = p4heap_alloc_any(sizeof(trash_victim_t) *
+                                               (size_t)s_trash_victim_capacity);
+        }
+        if (s_trash_victims == NULL) {
+            s_trash_victim_capacity = 0;
+        }
     }
-    return 0;
+    return s_trash_victims;
+}
+
+/** Leading decimal epoch from `<epoch>_<basename>` (0 when absent). */
+static uint64_t trash_stamp_from_name(const char *name)
+{
+    uint64_t stamp = 0;
+
+    if (name == NULL || name[0] < '0' || name[0] > '9') {
+        return 0;
+    }
+    while (*name >= '0' && *name <= '9') {
+        stamp = stamp * 10 + (uint64_t)(*name - '0');
+        name++;
+    }
+    return stamp;
+}
+
+/** Insertion sort by move time (N <= ~288, so this is cheaper than qsort). */
+static void trash_victims_sort(trash_victim_t *victims, int count)
+{
+    int i;
+
+    for (i = 1; i < count; i++) {
+        trash_victim_t key = victims[i];
+        int j = i - 1;
+
+        while (j >= 0 && victims[j].stamp > key.stamp) {
+            victims[j + 1] = victims[j];
+            j--;
+        }
+        victims[j + 1] = key;
+    }
 }
 
 void storage_trash_enforce_limits(void)
 {
-    limit_arg_t la;
-    unsigned long now;
+    trash_victim_t *victims;
+    DIR *dir;
+    struct dirent *entry;
     shell_sd_session_t session;
-    int guard;
+    uint64_t bytes = 0;
+    uint64_t now;
+    int count = 0;
+    int age_victims = 0;
+    int victims_needed;
+    int i;
 
     if (!storage_trash_enabled()) {
         return;
     }
-    now = (unsigned long)time(NULL);
+    victims = trash_victims_ensure();
+    if (victims == NULL) {
+        return;   /* cannot enumerate safely: leave the bin alone */
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return;
+    }
 
-    for (guard = 0; guard < TRASH_MAX_ENTRIES + 8; guard++) {
-        esp_err_t err;
-
-        memset(&la, 0, sizeof(la));
-        err = shell_sd_begin(&session);
-        if (err != ESP_OK) {
-            return;
-        }
-        (void)trash_walk(trash_limit_cb, &la);
+    now = (uint64_t)time(NULL);
+    dir = opendir(trash_root_path());
+    if (dir == NULL) {
         shell_sd_end(&session, TRASH_TAG);
+        return;
+    }
+    while ((entry = readdir(dir)) != NULL && count < s_trash_victim_capacity) {
+        size_t len = strlen(entry->d_name);
+        char full[TRASH_FULL_PATH_BYTES];
+        struct stat st;
 
-        if (la.info.count == 0) {
-            break;
-        }
-        if (!la.have_oldest) {
-            break;
-        }
-        if (la.info.count > (size_t)TRASH_MAX_ENTRIES ||
-            la.info.bytes > TRASH_MAX_BYTES ||
-            (la.oldest.time_sec != 0 &&
-             now > (unsigned long)la.oldest.time_sec + (unsigned long)TRASH_MAX_AGE_SEC)) {
-            shell_sd_begin(&session);
-            trash_delete_entry(&la.oldest);
-            shell_sd_end(&session, TRASH_TAG);
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        break;
+        if (len > 5 && strcmp(entry->d_name + len - 5, ".meta") == 0) {
+            continue;
+        }
+        if (len >= sizeof(victims[count].name)) {
+            continue;
+        }
+        snprintf(full, sizeof(full), "%s/%s", trash_root_path(), entry->d_name);
+        if (stat(full, &st) != 0) {
+            continue;
+        }
+        snprintf(victims[count].name, sizeof(victims[count].name), "%s", entry->d_name);
+        victims[count].size = S_ISDIR(st.st_mode) ? 0 : (uint64_t)st.st_size;
+        victims[count].stamp = trash_stamp_from_name(entry->d_name);
+        bytes += victims[count].size;
+        count++;
+    }
+    closedir(dir);
+    shell_sd_end(&session, TRASH_TAG);
+
+    if (count == 0) {
+        return;
+    }
+    trash_victims_sort(victims, count);
+
+    for (i = 0; i < count; i++) {
+        if (victims[i].stamp != 0 &&
+            now > victims[i].stamp + (uint64_t)TRASH_MAX_AGE_SEC) {
+            age_victims++;
+        }
+    }
+
+    victims_needed = age_victims;
+    if (count > TRASH_MAX_ENTRIES &&
+        count - TRASH_MAX_ENTRIES > victims_needed) {
+        victims_needed = count - TRASH_MAX_ENTRIES;
+    }
+    {
+        uint64_t remaining = bytes;
+        int by_bytes = 0;
+
+        while (by_bytes < count && remaining > (uint64_t)TRASH_MAX_BYTES) {
+            remaining -= victims[by_bytes].size;
+            by_bytes++;
+        }
+        if (by_bytes > victims_needed) {
+            victims_needed = by_bytes;
+        }
+    }
+    if (victims_needed > TRASH_OP_MAX) {
+        victims_needed = TRASH_OP_MAX;
+    }
+
+    for (i = 0; i < victims_needed && i < count; i++) {
+        trash_entry_t victim;
+
+        memset(&victim, 0, sizeof(victim));
+        snprintf(victim.entry_name, sizeof(victim.entry_name), "%s", victims[i].name);
+        if (shell_sd_begin(&session) != ESP_OK) {
+            return;
+        }
+        trash_delete_entry(&victim);
+        shell_sd_end(&session, TRASH_TAG);
     }
 }

@@ -13,6 +13,7 @@ rem  `ui tap x y` - synthetic touch at a point
 rem  Markers: [M-UITEST] / [M-UITEST-DONE].
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-UITEST]
 title "UI Test"
 ui state

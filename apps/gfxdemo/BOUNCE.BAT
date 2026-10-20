@@ -15,6 +15,7 @@ rem  Foreground-only: the canvas is a shared display surface, so `gfx`
 rem  refuses inside `start` background jobs (like modal verbs).
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-BOUNCE]
 title "Bounce"
 gfx init 240 180

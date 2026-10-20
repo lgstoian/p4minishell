@@ -53,6 +53,10 @@ void tui_deinit(void);
 /** Report whether TUI mode is active. */
 bool tui_is_active(void);
 
+/** True when LVGL/display is up, so tui_init() can safely take the port lock.
+ *  False in the headless unit-test app (the page buffer is still usable). */
+bool tui_ready(void);
+
 /** Re-resolve the TUI label font after a font switch (stale-pointer fix).
  * No-op unless TUI mode is active. */
 void tui_refresh_fonts(void);
@@ -232,6 +236,13 @@ int tui_viewport_get_offset(void);
 int tui_viewport_get_page_rows(void);
 
 void tui_page_set_cell(int col, int row, const char *utf8, uint8_t fg, uint8_t bg, uint8_t attr);
+/** Read one cell of the logical page (1-based col/row). Copies the cell UTF-8
+ *  into @p utf8_out (bounded by @p out_size) and reports fg/bg/attr when the
+ *  pointers are non-NULL. Returns false on an out-of-range coordinate or when
+ *  no page is active. Pure read, headless-safe: used by the browser render
+ *  tests and any host-side page assertion. */
+bool tui_page_get_cell(int col, int row, char *utf8_out, size_t out_size,
+                       uint8_t *fg_out, uint8_t *bg_out, uint8_t *attr_out);
 void tui_page_clear(void);
 void tui_page_render(void);
 

@@ -1,4 +1,5 @@
 launch COMPANION
+title: set to 'PN Companion'
 goto :eof
 [C-MENU]
 [C-EXIT]

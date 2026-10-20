@@ -9,6 +9,7 @@ rem  array + while/gosub sampling + draw bar trend + rgb + tone.
 rem  Markers: [M-MOOD] / [M-MOOD-SAMPLE] / [M-MOOD-TREND].
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-MOOD]
 title "Mood"
 goto menu
@@ -24,7 +25,15 @@ goto back
 
 :live
 set round=0
-while round LSS 5 do call :live_tick
+rem A goto loop rather than `while ... do call`: the while wrapper keeps its
+rem own batch frame for the whole tick, and the five samples then overflow the
+rem command worker's 28 KB stack by ~200 B on MOOD's deepest path. The loop
+rem below has identical behaviour and markers with one frame less.
+:live_loop
+if %round% GEQ 5 goto :live_trend
+call :live_tick
+goto :live_loop
+:live_trend
 draw clear screen
 draw box 1 1 80 3 double "MOOD TREND"
 draw text 5 2 "heap free percent per sample" 14

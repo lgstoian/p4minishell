@@ -1,3 +1,4 @@
 launch MOOD
 [M-MOOD]
+title: set to 'Mood'
 rgb: LED off

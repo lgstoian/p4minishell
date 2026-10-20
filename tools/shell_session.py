@@ -73,6 +73,12 @@ def hard_reset(port=None, baud=460800, chip="esp32p4"):
     open_port() deliberately does NOT reset (it would otherwise reboot on
     every host session), so callers that need a fresh boot - unit_run,
     boot_regression - use this. The port must not be held open by the caller.
+
+    Note: on these USB-Serial/JTAG boards a plain `--after hard_reset` (RTS)
+    intermittently does not restart the application, so the following capture
+    sees only leftover output and the caller records a spurious miss without any
+    panic or firmware warning (bugs.md F42). This is a harness limitation, not
+    a firmware fault: a real `reboot` (or `watchdog_reset`) boots cleanly.
     """
     cmd = [sys.executable, "-m", "esptool", "--chip", chip,
            "-p", port or default_port(), "-b", str(baud),

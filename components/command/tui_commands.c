@@ -1644,7 +1644,7 @@ void shell_command_locate(int argc, char **argv)
 void shell_command_tui(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest");
+        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to]");
         batch_set_errorlevel(2);
         return;
     }
@@ -1653,6 +1653,7 @@ void shell_command_tui(int argc, char **argv)
     if (!shell_text_equals_ignore_case(argv[1], "status") &&
         !shell_text_equals_ignore_case(argv[1], "stats") &&
         !shell_text_equals_ignore_case(argv[1], "selftest") &&
+        !shell_text_equals_ignore_case(argv[1], "dump") &&
         !draw_require_foreground("tui")) {
         return;
     }
@@ -1759,8 +1760,42 @@ void shell_command_tui(int argc, char **argv)
         draw_maybe_flush();
         batch_set_errorlevel(0);
         return;
+    } else if (shell_text_equals_ignore_case(argv[1], "dump")) {
+        /* Read-only text dump of the logical page (browser/TUI content) for
+         * host-side rendering assertions. `tui dump [from] [to]` (1-based rows).
+         * Reuses tui_page_get_cell - no second page model. */
+        int from = (argc >= 3) ? atoi(argv[2]) : 1;
+        int to = (argc >= 4) ? atoi(argv[3]) : tui_viewport_get_page_rows();
+        if (from < 1) from = 1;
+        if (to < from) to = from;
+        shell_transcript_appendf("tui.dump cols=%d from=%d to=%d\n",
+                                 P4_CONFIG_TUI_COLS, from, to);
+        for (int r = from; r <= to; r++) {
+            char line[P4_CONFIG_TUI_COLS * 4 + 1];
+            size_t pos = 0;
+            for (int c = 1; c <= P4_CONFIG_TUI_COLS; c++) {
+                char u[8];
+                if (!tui_page_get_cell(c, r, u, sizeof(u), NULL, NULL, NULL)) {
+                    continue;
+                }
+                size_t l = strlen(u);
+                if (pos + l + 1 >= sizeof(line)) {
+                    break;
+                }
+                memcpy(line + pos, u, l);
+                pos += l;
+            }
+            while (pos > 0 && line[pos - 1] == ' ') {
+                pos--;   /* trim trailing blanks so assertions are stable */
+            }
+            line[pos] = '\0';
+            shell_transcript_appendf("%03d|%s\n", r, line);
+        }
+        shell_transcript_appendf("tui.dump.end\n");
+        batch_set_errorlevel(0);
+        return;
     }
-    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest");
+    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to]");
     batch_set_errorlevel(2);
 }
 

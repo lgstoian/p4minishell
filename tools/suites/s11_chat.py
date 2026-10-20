@@ -1,60 +1,50 @@
 # SPDX-FileCopyrightText: 2026 Stoian Alexandru
 # SPDX-License-Identifier: MIT
-"""
-Two-board chat integration test (sNN_chat.py).
+"""Chat verb surface (single-board).
 
-Drives COM3 (host) and COM6 (peer) through the chat verb family:
-  COM3: chat host on
-  COM6: chat peer <host-ip>
-  COM3: chat send "hello"
-  COM6: chat poll
-  COM6: chat log
-  COM3: chat status
-  COM3: chat host off
-  COM6: chat peer off
+The `chat` family talks to a peer over the C6 (TCP), so the full host<->peer
+exchange needs two boards and lives in the focused driver
+``tools/chat_test.py`` (the suite runner opens one session per board and cannot
+pair them). This suite verifies the verb surface, argument validation and the
+`onmsg` hook round-trip on one board, without bringing the SoftAP up (an
+always-on AP browns out USB-powered boards - bugs.md F35).
 """
 
-from p4test import Device, Checklist
+from p4test import Checklist
 
 
 NAME = "chat"
-TAGS = ["chat", "integration", "two-board"]
+TAGS = ["chat", "core"]
 
 
-async def run(dev_a: Device, dev_b: Device, ctx) -> Checklist:
-    """Run chat integration test between two boards.
+def run(dev, ctx):
+    c = Checklist(NAME)
 
-    dev_a = host (COM3), dev_b = peer (COM6).
-    """
-    cl = Checklist()
+    out = dev.run("chat")
+    c.expect("bare chat lists sub-commands", "chat host", out)
 
-    # 1. Host starts chat AP
-    cl.add("host start", await dev_a.cmd("chat host on"))
-    cl.add("host status shows active", await dev_a.cmd("chat status"))
+    out = dev.run("chat send")
+    c.expect("send without text is a usage error", "send <text", out)
 
-    # 2. Peer connects to host AP
-    # Get host IP from status (or use default 192.168.4.1)
-    host_ip = "192.168.4.1"  # default AP IP
-    cl.add("peer join host", await dev_b.cmd(f"chat peer {host_ip}"))
-    cl.add("peer wifi connected", await dev_b.cmd("wifi status"))
+    out = dev.run("chat send hello")
+    c.expect("send without a peer is refused", "no peer set", out)
 
-    # 3. Host sends message
-    cl.add("host send", await dev_a.cmd('chat send "hello peer"'))
+    out = dev.run("chat peer")
+    c.expect("peer without an IP is a usage error", "host IP required", out)
 
-    # 4. Peer polls for messages
-    cl.add("peer poll receives", await dev_b.cmd("chat poll"))
+    out = dev.run("chat onmsg")
+    c.expect("onmsg without a line is a usage error", "onmsg <line>", out)
 
-    # 5. Peer logs
-    cl.add("peer log shows", await dev_b.cmd("chat log"))
+    out = dev.run("chat onmsg echo hi")
+    c.expect("onmsg registers the line", "onmsg set to", out)
 
-    # 6. Host status
-    cl.add("host status shows peer", await dev_a.cmd("chat status"))
+    out = dev.run("chat onmsg off")
+    c.expect("onmsg clears", "onmsg disabled", out)
 
-    # 7. Host stops
-    cl.add("host stop", await dev_a.cmd("chat host off"))
-    cl.add("host status inactive", await dev_a.cmd("chat status"))
+    out = dev.run("chat status")
+    c.check("status responds", len(out.strip()) > 0, "empty output")
 
-    # 8. Peer disconnects
-    cl.add("peer disconnect", await dev_b.cmd("chat peer off"))
+    out = dev.run("chat bogus")
+    c.expect("unknown sub-command is refused", "unknown sub-command", out)
 
-    return cl
+    return c

@@ -31,6 +31,8 @@ spikes/*
 assets_out/
 tools/*.log
 apps/*.log
+# Bench credentials for live tests (never committed; see p4test/local_config.py).
+tools/wifi_local.json
 # Host-side build/boot capture logs (idf.py build, unit_run, serial reads).
 *.log
 # Screenshot captures from the host harness (large BMP/PNG artifacts).

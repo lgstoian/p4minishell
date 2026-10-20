@@ -8,7 +8,7 @@
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
 
-- **Version:** v1.3.1 · **Targets:** ESP32-P4 + ESP32-C6
+- **Version:** v1.4.0 · **Targets:** ESP32-P4 + ESP32-C6
 - **Boards:** `jc1060p470c` (reference, e.g. COM3) and `m5stack_tab5` (COM6)
 
 ---
@@ -129,10 +129,15 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s14_apps` | every reference app (launch, drive, markers), incl. the hybrid demo and the `taskmgr` task-manager app (kill/suspend/resume/nice through its own UI) |
 | `s15_p4sync` | P4Sync handshake (`sync status` lines), file push/pull round-trip, screenshot geometry |
 | `s16_netsvc` | event service (`net status/subs/msg/outbox`, hook set/clear, usage errors); broker-dependent live checks skip cleanly without a LAN broker (documented Mosquitto fixture) |
+| `s17_browser` | `browser` render matrix over the board's own httpd (heading/paragraph/list/link/image-alt/table), `tui dump` readback, back/forward, bookmark round-trip, no-connection path, Basic auth |
+| `s18_http` | `httpget` flags (`/h:`, `/post`, `/stream` to transcript and SD, `/cookie` show/clear/persist); loopback after httpd is up; a missing AP is a note (`s11` gates Wi-Fi) |
+| `s19_app_features` | the opt-in `APPLIB.BAT::probe` (`P4_APP_FEATURES=1`) across a nonstop app, a menu app and a demo; direct `js eval/run`; locale persistence through a real reboot |
+| `s20_website` | the offline browser showcase: deploys `apps/website/`, renders `sd:/WEB/INDEX.HTML`, captures `browser-website.bmp` for the docs |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
 `run()`, panic detection, byte-exact `BMPX`/`SDFX` framing, ANSI+OSC 8 strip
-so hyperlink escapes never reach assertions), `device.py`
+so hyperlink escapes never reach assertions; the sync marker is re-sent every
+2 s so a slow command cannot swallow it), `device.py`
 (boot/run/screenshot/push/pull facade + the existing destructive commands +
 `cursor_move`/`cursor_click`/`ui_links`/`ui_link` harness verbs),
 `asserts.py` (`Checklist`/`SuiteResult`), `screenshot.py` (streaming capture +
@@ -143,8 +148,9 @@ a pixel model), `sdbridge.py` (`receive`/`send`), `perf.py` (frame stats),
 
 - **Tiers:** `--tier fast` runs the per-area smoke subset (`s01_smoke`,
   `s05_storage`, `s06_batch`, `s12_power_audio`, `s11_connectivity`, with
-  quick waits) and gates feature delivery; `--tier full` (default) runs all
-  13 suites and gates releases. Explicit `--only`/`--tag` bypass the tier.
+  quick waits) and gates feature delivery; `--tier full` (default) runs every
+  suite (see the table above) and gates releases. Explicit `--only`/`--tag`
+  bypass the tier.
 - **Fail-fast:** `--fail-fast` stops remaining suites at the first failure;
   with `--boards` the other board finishes its current suite, skips the rest
   (marked SKIP), and the merged table names the red board. `--keep-going`

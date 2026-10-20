@@ -627,6 +627,26 @@ extern void test_clock_timer_lap_and_status(void);
 extern void test_clock_timer_usage_and_restart(void);
 extern void test_clock_rtc_restore_math(void);
 extern void test_clock_rtc_bcd(void);
+
+/* Browser render + locale + error-string table */
+extern void test_browser_render_heading_and_paragraph(void);
+extern void test_browser_render_link_is_colored(void);
+extern void test_browser_render_image_alt_text(void);
+extern void test_browser_render_list_items(void);
+extern void test_browser_render_null_and_empty_are_safe(void);
+extern void test_browser_render_reinit_does_not_leak(void);
+extern void test_locale_date_orders(void);
+extern void test_locale_time_24h_and_12h(void);
+extern void test_locale_number_thousands_separator(void);
+extern void test_locale_get_set_name_and_bounds(void);
+extern void test_locale_parse_names_and_codes(void);
+extern void test_cookie_store_and_scope(void);
+extern void test_cookie_delete_and_clear(void);
+extern void test_cookie_rejects_malformed_headers(void);
+extern void test_cookie_capacity_eviction(void);
+extern void test_error_code_string_known(void);
+extern void test_error_code_string_unknown(void);
+extern void test_error_code_string_never_null(void);
 extern void test_archive_crc32_reference(void);
 extern void test_archive_crc32_incremental(void);
 extern void test_archive_octal_roundtrip(void);
@@ -1420,6 +1440,24 @@ void app_main(void)
     RUN_TEST(test_clock_timer_usage_and_restart);
     RUN_TEST(test_clock_rtc_restore_math);
     RUN_TEST(test_clock_rtc_bcd);
+    RUN_TEST(test_browser_render_heading_and_paragraph);
+    RUN_TEST(test_browser_render_link_is_colored);
+    RUN_TEST(test_browser_render_image_alt_text);
+    RUN_TEST(test_browser_render_list_items);
+    RUN_TEST(test_browser_render_null_and_empty_are_safe);
+    RUN_TEST(test_browser_render_reinit_does_not_leak);
+    RUN_TEST(test_locale_date_orders);
+    RUN_TEST(test_locale_time_24h_and_12h);
+    RUN_TEST(test_locale_number_thousands_separator);
+    RUN_TEST(test_locale_get_set_name_and_bounds);
+    RUN_TEST(test_locale_parse_names_and_codes);
+    RUN_TEST(test_cookie_store_and_scope);
+    RUN_TEST(test_cookie_delete_and_clear);
+    RUN_TEST(test_cookie_rejects_malformed_headers);
+    RUN_TEST(test_cookie_capacity_eviction);
+    RUN_TEST(test_error_code_string_known);
+    RUN_TEST(test_error_code_string_unknown);
+    RUN_TEST(test_error_code_string_never_null);
     UNITY_END();
 
     /* USTAR archive core (components/archive). */

@@ -1,5 +1,6 @@
 launch CONTROL
 [M-CONTROL]
+title: set to 'Control Flow Tour'
 CONTROL: start
 n=N
 CONTROL: banner
@@ -17,4 +18,30 @@ CONTROL: count N
 next=N
 CONTROL: count N
 next=N
+sw=diag
+CONTROL: switch diag
+w=N   (xN)
+CONTROL: while N
+CONTROL: if-group taken
+ARR[N]=alpha
+ARR[N]=beta
+CONTROL: fora N=alpha
+CONTROL: fora N=beta
+NAME=abcdefgh
+CONTROL: substr cde replace Abcdefgh
+live=now
+CONTROL: delayed now
+[M-CONTROL-PARITY]
+Parity: dot ok
+Parity: slash ok
+Parity: paren ok
+Parity: colon ok
+CONTROL: nul-ok
+CONTROL: console-echo
+CONTROL: handle-merge
+Wrote: /sdcard/_pNparity_in.txt
+CONTROL: stdin-type ok
+CONTROL: shift-N a-c
+Wrote: /sdcard/_pNparity_eol.txt
+CONTROL: eol-keep ;kept
 [M-CONTROL-DONE]

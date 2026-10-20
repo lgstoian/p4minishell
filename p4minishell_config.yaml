@@ -14,7 +14,7 @@
 #
 # Version: 1.3.1
 # Last updated: 2026-10-01 (1.3.1: Tab5 white-noise fix - amp gating, mic diagnostics)
-config_version: "1.3.1"
+config_version: "1.4.0"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -380,6 +380,21 @@ buffers:
     type: size_t
     description: "Max JavaScript file size (P4_CONFIG_JS_FILE_MAX_BYTES)"
     range: "16384..262144"
+  js_fs_max_bytes:
+    value: 65536
+    type: size_t
+    description: "Max file read size via JS fs.read (P4_CONFIG_JS_FS_MAX_BYTES)"
+    range: "4096..262144"
+  js_http_max_bytes:
+    value: 32768
+    type: size_t
+    description: "Max HTTP response size via JS http.get (P4_CONFIG_JS_HTTP_MAX_BYTES)"
+    range: "4096..131072"
+  js_db_max_results:
+    value: 64
+    type: int
+    description: "Max DB query results via JS (P4_CONFIG_JS_DB_MAX_RESULTS)"
+    range: "8..256"
   font_reading_default:
     value: "montserrat_14"
     type: string
@@ -1212,6 +1227,21 @@ http_client:
       Maximum response body bytes printed to the transcript when no localfile
       is given. The full body is always available via httpget <url> <localfile>.
     range: "256..65536"
+  cookie_max:
+    value: 16
+    type: uint8_t
+    description: "Maximum cookies stored in the HTTP cookie jar (0 disables cookies)"
+    range: "0..64"
+  form_fields_max:
+    value: 16
+    type: uint8_t
+    description: "Maximum form fields in a urlencoded POST request"
+    range: "1..64"
+  stream_chunk:
+    value: 4096
+    type: size_t
+    description: "Chunk size for streaming HTTP reads"
+    range: "1024..16384"
 
 # ---- TLS Trust Store (sd:/CERTS/) ----
 # User-provided CA certificates on the SD card extend the compiled-in Mozilla
@@ -1266,7 +1296,7 @@ http_server:
   stack_bytes:
     value: 8192
     type: size_t
-    description: "Stack bytes for the dedicated HTTP server task (handler builds path-sized scratch; 16384 could not allocate from fragmented internal heap at Wi-Fi-up time -> every start failed ESP_ERR_HTTPD_TASK, fixed 2026-09-06)"
+    description: "Stack bytes for the dedicated HTTP server task (handler builds path-sized scratch; 16384 could not allocate from fragmented internal heap at Wi-Fi-up time -> every start failed ESP_ERR_HTTPD_TASK, fixed 2026-09-06; 6 KB was too small to start on Tab5 after churn)"
     range: "2048..32768"
   task_priority:
     value: 5
@@ -2518,9 +2548,9 @@ gfind:
     description: "Maximum length of a registered native app's one-line description (native-app ABI)"
     range: "16..128"
   launch_max:
-    value: 40
+    value: 64
     type: size_t
-    description: "Maximum number of script apps (.bat/.cmd) surfaced by the launch command / menu (PATH + sd:/APPS discovery)"
+    description: "Maximum number of script apps (.bat/.cmd) surfaced by the launch command / menu (PATH + sd:/APPS discovery); 40 filled up once the reference apps + test shims were all deployed and hid later entries from bare `ftype`"
     range: "4..64"
   line_continuation_max:
     value: 8
@@ -3169,17 +3199,19 @@ c6ota:
 # ---- Task Stacks ----
 task_stacks:
   wifi_init:
-    value: 6144
+    value: 10240
     type: size_t
-    description: "Wi-Fi initialization background task stack"
+    description: "Wi-Fi initialization background task stack (internal-RAM xTaskCreate; 8 KB overflowed on Tab5 by ~0.5 KB, 10 KB fits beside the 28 KB command worker)"
     range: "4096..16384"
   command:
-    value: 32768
+    value: 28672
     type: size_t
     description: >-
-      Shell command worker task stack (P4_CONFIG_COMMAND_TASK_STACK). Raised
-      24576 -> 32768 to accommodate recursive dir /S and deep batch+TUI
-      call stacks; 48 KB was too large for task creation on ESP32-P4.
+      Shell command worker task stack (P4_CONFIG_COMMAND_TASK_STACK). Static
+      .bss. 16/24/26 KB overflow in deep batch apps (BOUNCE needs ~27 KB);
+      32 KB starves the boot-time SDMMC/C6 DMA buffers. 28 KB is the verified
+      size. The Tab5's heap pressure is handled by starting httpd
+      automatically only when the internal heap can spare the task.
     range: "4096..65536"
   command_queue_depth:
     value: 32

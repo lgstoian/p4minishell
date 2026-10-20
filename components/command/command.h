@@ -532,9 +532,18 @@ int shell_command_csv(int argc, char **argv);
  *  Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
 int shell_command_js(int argc, char **argv);
 
-/** Browser (`browser <url> | back | forward`).
+/** Browser (`browser <url> | back | forward | bookmark …`).
  *  Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
 int shell_command_browser(int argc, char **argv);
+
+/** Render an in-memory HTML document into the TUI page (the exact path the
+ *  networked `browser <url>` uses after a fetch). Parses the DOM, applies the
+ *  document's `<style>` rules, draws the page and flushes it. @p base_url is
+ *  shown in the address bar (may be NULL). Pure/headless-safe when the TUI
+ *  page is initialized (unit tests + the httpd-loopback suite use this so
+ *  website rendering is assertable without a live network).
+ *  @return 0 on success, 1 on a parse failure. */
+int browser_render_html(const char *html, const char *base_url);
 
 /** Portable interchange (`export <db NAME | alarms> <csv|json|txt> <file>`,
  *  export_commands.c). Renders the structured stores through the existing

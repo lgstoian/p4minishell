@@ -31,6 +31,22 @@
 /* Stored peer IP for chat send (set by chat peer <host-ip>). */
 static char s_chat_peer_ip[16] = "";
 
+/* Stored on-message batch line, invoked through the chat onmsg hook. */
+static char *s_chat_onmsg_line = NULL;
+
+static void chat_run_onmsg(const char *from_ip, const char *text, uint32_t seq)
+{
+    (void)from_ip; (void)text; (void)seq;
+    if (s_chat_onmsg_line == NULL || s_chat_onmsg_line[0] == '\0') {
+        return;
+    }
+    char *copy = strdup(s_chat_onmsg_line);
+    if (copy != NULL) {
+        shell_execute_command_async(copy);
+        free(copy);
+    }
+}
+
 /* Forward declarations */
 
 int shell_command_chat(int argc, char **argv)
@@ -275,7 +291,11 @@ static esp_err_t chat_cmd_onmsg(int argc, char *argv[])
     }
 
     if (strutil_text_equals_ignore_case(argv[1], "off")) {
-        /* TODO: Clear the onmsg hook. */
+        if (s_chat_onmsg_line != NULL) {
+            free(s_chat_onmsg_line);
+            s_chat_onmsg_line = NULL;
+        }
+        (void)chat_host_onmsg(NULL, NULL);
         shell_print_muted("chat: onmsg disabled");
         return ESP_OK;
     }
@@ -300,10 +320,14 @@ static esp_err_t chat_cmd_onmsg(int argc, char *argv[])
     }
     *p = '\0';
 
-    /* TODO: Register the onmsg hook via chat_set_onmsg_cb().
-     * For now, just store the line. */
-    shell_print_muted("chat: onmsg set to: %s", line);
-    free(line);
+    if (s_chat_onmsg_line != NULL) {
+        free(s_chat_onmsg_line);
+    }
+    s_chat_onmsg_line = line;
+    if (chat_host_onmsg(line, chat_run_onmsg) != ESP_OK) {
+        shell_print_muted("chat: onmsg hook failed to register");
+    }
+    shell_print_muted("chat: onmsg set to: %s", s_chat_onmsg_line);
     return ESP_OK;
 }
 

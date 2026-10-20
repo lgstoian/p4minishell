@@ -28,6 +28,7 @@
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "command.h"
+#include "tui.h"
 #include "imagefmt.h"
 #include "board_config.h"
 #include "p4minishell_config.h"
@@ -144,7 +145,8 @@ void shell_command_screenshot(int argc, char **argv)
         return;
     }
 
-    shell_print_muted("screenshot: capturing current screen...");
+    /* No transcript output before the snapshot: printing would repaint the
+     * transcript over a TUI page (e.g. the browser showcase) before capture. */
 
     /* Allocate the lv_draw_buf_t structure via the central allocator */
     draw_buf = (lv_draw_buf_t *)p4heap_alloc_any(sizeof(lv_draw_buf_t));
@@ -165,8 +167,12 @@ void shell_command_screenshot(int argc, char **argv)
     }
 
     /* Repaint any output deferred by the segment batching so the capture
-     * sees the current transcript, not a stale label. */
-    shell_transcript_flush_now();
+     * sees the current transcript, not a stale label. Never do that while the
+     * TUI page is the foreground surface: flushing repaints the transcript
+     * label over it and the capture would show the transcript instead. */
+    if (!tui_is_active()) {
+        shell_transcript_flush_now();
+    }
 
     screen = lv_screen_active();
     if (screen == NULL) {

@@ -3,7 +3,7 @@
 This document lists the C API each component exposes to the rest of the
 firmware, organized by module and mirroring the headers under `components/`.
 
-> **Current public API reference (v1.3.0).** For the working rules and
+> **Current public API reference (v1.4.0).** For the working rules and
 > invariants behind these functions see [`ai-context.md`](ai-context.md); for
 > integration examples see [`SDK.md`](SDK.md); for the user-facing command
 > surface see [`command.md`](command.md). Current verified test baselines live
@@ -2776,7 +2776,7 @@ void usb_mouse_click_enable/disable(void);
 - OTA progress text remains `C6 OTA: XX% (YYYY KB / ZZZZ KB)`.
 - OTA continues to validate ESP-IDF app-image magic `0xE9` and ESP32-C6 chip ID `0x000D` before transfer.
 
-## Hardware module APIs (v1.3.0)
+## Hardware module APIs (v1.4.0)
 
 These leaf modules back the M5Stack Tab5 hardware support; all are safe to call on
 boards that lack the hardware (they degrade to a benign error).

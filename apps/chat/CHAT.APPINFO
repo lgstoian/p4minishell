@@ -1,0 +1,5 @@
+; APPINFO metadata for the board-to-board chat app (INI format, read by `launch`).
+; Copied to sd:/APPS/CHAT.APPINFO by apps/push_apps.py.
+title=Chat
+description=Board-to-board chat over the local link (SoftAP + HTTP)
+version=1.0

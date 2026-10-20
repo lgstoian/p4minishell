@@ -44,6 +44,8 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # USB module (usb.c); shell and command depend on it directly.
 set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../boards/${P4_BOARD}/board_bsp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/state_machine
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/event_bus
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ansi
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/audio
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/shell

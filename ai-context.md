@@ -1,4 +1,4 @@
-﻿# P4MiniShell - AI Context
+# P4MiniShell - AI Context
 
 Working agreement for AI-assisted development on P4MiniShell. Read it before
 changing anything. It is the "how we work" companion to the "what the code
@@ -42,7 +42,7 @@ does" reference in [documentation.md](documentation.md).
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.3.1** (`p4minishell_config.h` version macros) |
+| Version | **v1.4.0** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -2510,3 +2510,234 @@ the raster core + 8x8 font are `components/gfx/`
 
 
 
+
+---
+
+## MS-DOS-inspired features (v1.3.2)
+
+Five features adapted from MS-DOS source code analysis, filtered for ESP32-P4 viability:
+
+### 1. Centralized error message table
+- components/batch/error_strings.h / .error_strings.c: compact error_entry_t array mapping ERR_* codes to human-readable strings.
+- batch_set_errorcode(int) / batch_get_errorcode(void) track the last specific error (distinct from the DOS-style errorlevel).
+- %ERRMSG% keeps its documented short status word from ERRORLEVEL ("success"/"error"/"usage").
+- %ERRCODE% virtual variable exposes the raw int code (additive).
+- Auto-default in batch_set_errorlevel(): level 0 → ERR_BASE_OK, 1 → ERR_BASE_ERROR, 2 → ERR_BASE_USAGE (only overwrites a stale code, never a fresh one).
+
+### 2. Self-healing command worker
+- command_worker_self_heal() in components/command/command.c: validates the worker task handle, queue, and task state at boot.
+- Returns 0 (healthy), 1 (repaired queue), -1 (fatal: task dead).
+- Called from command_init() right after the worker task is created so init-order failures surface as ESP_LOGE.
+
+### 3. Pattern-based job management
+- command_bg_find_pattern() in components/command/command.c: DOS-style wildcard (*, ?) matching over active bg job names via shell_wildcard_match().
+- shell_command_taskkill() falls back to pattern matching when command_bg_find() returns no exact match.
+- Reports "stopped N jobs" or "no job matched 'pattern'" with proper errorlevel.
+
+### 4. Graceful degradation cascade
+- p4heap_alloc_cascade() in components/p4heap/p4heap.c: walks PSRAM → internal RAM → DMA-capable, logging a warning at each degradation step.
+- pool_out receives the pool that succeeded (MALLOC_CAP_ESP32*) for diagnostics.
+
+### 5. Lightweight internationalization
+- components/shell/locale.h / .locale.c: locale-aware date/time/number formatting with four locales (US, UK, DE, FR).
+- locale command: locale shows current + samples; locale US|UK|DE|FR sets; locale list enumerates.
+- %DATE% and %TIME% keep their canonical "MM-DD-YYYY"/"HH:MM:SS" forms; the locale command formats its own samples.
+
+### Build notes
+- batch/CMakeLists.txt: added error_strings.c to SRCS (batch already REQUIRES shell, so no
+  separate PRIV_REQUIRES is needed for locale.h).
+- shell/CMakeLists.txt: added locale.c to SRCS (shell stays a leaf: it does NOT require batch).
+- error_strings.c lives in batch/ (not command/) so its ERR_* table is reachable from the
+  batch virtual-variable expansion without a layering inversion.
+
+### Bulk tables, BSS, and the ESP-IDF install (CRITICAL)
+- **Never edit the ESP-IDF install.** An earlier change moved all application `.bss`
+  (including `.sbss`) into PSRAM by patching `esp_system/ld/ld.dram.sections` in the local
+  ESP-IDF tree. That is a global, out-of-repo build hack: the app then has a NOLOAD PSRAM
+  segment with no loadable PSRAM target, so the bootloader never brings PSRAM up and the
+  app faults while zeroing `_bss_start_high` — a reset loop (the board looks "bricked" and
+  the USB-serial console re-enumerates instead of booting). The fix is always repo-side.
+- **Bulk tables live in PSRAM, never in `.bss`.** Internal SRAM (sram_low/sram_high) is the
+  scarce boot resource. Fixed-capacity tables (the event-bus topic/subscriber pools, the
+  state-machine pool, the HTTP cookie jar, browser history/bookmarks) are allocated once,
+  lazily, through `p4heap_calloc_any()` (PSRAM-first, internal fallback) rather than as a
+  static array. Keep new bulk tables out of `.bss` the same way.
+- **Do not add a `linker.lf` that reroutes `bss`/`sbss`.** ESP-IDF only applies a component
+  fragment declared via `LDFRAGMENTS` in `idf_component_register`, so such a file is inert
+  at best and a global foot-gun if it is ever wired up.
+- **The async boot-script task competes with `networking_init()` for internal RAM.** The
+  `bootscript` task (`components/boot/boot.c`, 16 KB internal stack) runs AUTOEXEC.BAT so a
+  slow script never blocks the mounting task; the idle task reclaims its stack only after it
+  self-deletes, which can overlap the C6 bring-up. `main.c` therefore calls
+  `boot_wait_script_idle()` before `networking_init()`, and the Wi-Fi bring-up task creation
+  retries briefly (`networking_start_task_retry()`). When adding a boot-time internal-RAM
+  consumer, keep this ordering/settling in mind — a failed `xTaskCreate` here silently drops
+  Wi-Fi (and the C6 SDIO DMA scratch buffer) for the whole boot.
+
+### Harness and browser findings (2026-10-19, hardware pass)
+
+- **Suite contract is single-board and synchronous.** `runner.py` calls `run(dev, ctx)` and
+  `Device` exposes `run()`. The committed `s11_chat.py` used `await dev.cmd(...)` /
+  `async def run(dev_a, dev_b, ctx)` and killed every full sweep; it is now a single-board
+  verb-surface suite, and the real host<->peer exchange lives in `tools/chat_test.py`
+  (two `Device` sessions over the bench AP). Do not reintroduce async/`cmd` suites.
+- **Bench Wi-Fi credentials are local-only**: `tools/wifi_local.json` (`{ssid,password}`),
+  git-ignored and read by `p4test.local_config.wifi_credentials()`; live checks skip cleanly
+  when it is absent. Never commit a bench password.
+- **Website rendering is assertable headlessly and on-device.** `browser_render_html(html,
+  base_url)` (command.h) is the one render entry the networked `browser <url>` also uses;
+  `tui_page_get_cell()` + `tui dump [from] [to]` expose the logical page. The focused suite
+  `tools/suites/s17_browser.py` serves crafted HTML from the board's own `httpd`
+  (`http://admin:p4mini@<board-ip>/RENDER.HTML`) so no external site is needed. The pure
+  renderer is unit-tested in `test/main/test_browser.c`.
+- **Browser persistence must use the storage layer.** `sd:/` is a *storage resolver* alias,
+  not a VFS mount (the SD mounts at `/sdcard`); a raw `fopen("sd:/...")` silently fails.
+  Browser history/bookmarks now read through a guarded `shell_sd_begin` session and write
+  through `storage_write_text_file()` (atomic). Files live at `sd:/BROWSER.HIST` /
+  `sd:/BROWSER.BOOK`.
+- **Browser Basic auth is the standard `user:pass@` URL form**, split by
+  `browser_split_userinfo()` and passed to `networking_http_get_ex()`; no extra switch and no
+  second HTTP path. httpd's compile-time auth is `admin`/`p4mini`.
+- **`dom_get_text()` used to recurse onto a shared `static char buf[4096]`** (overlapping
+  memcpy / self-copy). It now appends through `dom_collect_text()`; keep headless text
+  extraction off a single shared buffer if it ever needs re-entrancy.
+- **`tui_viewport_init()` frees the previous page before reallocating** — the browser re-inits
+  per load, so an unconditional alloc leaked a full 80x200 page per fetch.
+- **Locale number grouping is counted from the right** (`locale_format_number`); a left-anchored
+  group is wrong (`1234,567`). Covered by `test_locale_number_thousands_separator`.
+- **Config drift found:** `P4_CONFIG_COMMAND_TASK_STACK` was 16384 in the header while
+  `p4minishell_config.yaml` documented 32768 ("raised 24576 -> 32768 for recursive dir /S and
+  deep batch+TUI stacks"). It is restored to 32768 (the browser fetch+DOM+render path needs
+  >24 KB). Keep the header and yaml in lockstep.
+- **`CONFIG_ESP_TIMER_TASK_STACK_SIZE` must be raised (8192).** IDF's 3584 B default overflows
+  when the `esp_timer` task runs the c6ota progress bridge (`c6ota_host_*` -> `snprintf("%s")`).
+  `sdkconfig.defaults` and `test/sdkconfig.defaults` set 8192.
+- **Open resource conflict (needs a dedicated pass):** the 32 KB command worker that the
+  browser path needs competes with the C6 hosted-SDIO bring-up for internal RAM (with 16 KB the
+  browser stack-faults in `dom_parse`; with 32 KB the C6 can stay "ESP-Hosted probe is still
+  running" and Wi-Fi never associates). The right fix is to shrink the DOM/CSS render stack
+  (bounded parser recursion / no per-level text scratch) so the worker can return to 16 KB.
+  Also, the EV BSP mounts SD with `max_files = 5`; long httpd+browser sessions can exhaust the
+  FATFS descriptor pool (`vfs_fat: open: no free file descriptors`) during a `receive` push —
+  raise the mount limit or find the descriptor holder.
+
+---
+
+## v1.4.0 campaign findings (2026-10-19)
+
+This cycle closed the browser/showcase work and the batch-app feature sweep.
+The notes below are the durable "why", so a later change does not reintroduce
+the same failure.
+
+### Memory budget is the cross-cutting constraint
+
+- The command worker runs on **internal** RAM (it performs flash/NVS writes;
+  a PSRAM stack is inaccessible during a cache-disabled flash write). Its stack
+  is a **28 KB static .bss** block. 32 KB made the boot-time
+  `sdmmc_allocate_aligned_buf`/C6 hosted probe fail (`not enough mem`); 16/24
+  KB overflowed deep batch apps (APPLIB gosub, BOUNCE, MOOD).
+- The budget only works with all of these together:
+  - browser CSS ruleset (~28 KB) moved to PSRAM (`browser_render_html`);
+  - `dom_parse` depth bounded (64) and `dom_collect_text` recursion bounded by
+    that depth;
+  - SD history save moved off the `esp_timer` task to a one-shot PSRAM task
+    (`command_history_persist_task`, 8 KB), so
+    `CONFIG_ESP_TIMER_TASK_STACK_SIZE=4096` is safe (`esp_timer` high-water
+    dropped to ~0.5 KB);
+  - Wi-Fi init task 10 KB (8 KB overflowed by ~0.5 KB on Tab5; 12 KB no longer
+    fits next to the 28 KB worker);
+  - APPLIB probe invoked conditionally (`if "%P4_APP_FEATURES%"=="1" gosub ...`)
+    so it adds no batch frame when disabled.
+- Do not make the worker stack lazy/heap-allocated: after boot the largest
+  contiguous internal block was ~22 KB, so a 28 KB `heap_caps_aligned_alloc`
+  fails (measured). The static reservation is intentional.
+
+### Browser
+
+- `browser_render_dom` used a LIFO stack but pushed siblings first-to-last,
+  drawing every page **bottom-up**. Push `last_child` via `prev_sibling`.
+- `dom_parse` only looked for `head`/`body` among root's *direct* children.
+  A normal `<html><head>…</head><body>…</body></html>` left `tree->body` NULL,
+  so the renderer walked the whole tree and printed `<title>` + raw `<style>`
+  CSS as page text. Resolve both with `dom_find_first_by_tag` before falling
+  back to the root.
+- `browser` now enters TUI mode on first render. Before, it filled the page
+  buffer but `tui_page_render()` returned early when `s_cells` was NULL, so the
+  command looked like a no-op on screen while `tui dump` saw the page.
+- Local paths are first-class: `browser sd:/WEB/INDEX.HTML` reads the file
+  through the storage path resolver and renders it with no AP/httpd. This is
+  the deterministic showcase path (`s20_website`).
+
+### Screenshot of a TUI page
+
+- `screenshot` printed "capturing…" and called `shell_transcript_flush_now()`
+  **before** the snapshot; both repaint the transcript over the TUI page, so a
+  browser capture showed the shell. It now prints nothing before the snapshot
+  and skips the transcript flush while `tui_is_active()`.
+
+### httpget / cookies / locale / JS
+
+- `httpget` gained `/h:NAME=VALUE`, `/post NAME=VALUE`, `/stream [file]` and
+  `/cookie [clear]`. The cookie jar captures `Set-Cookie` in
+  `HTTP_EVENT_ON_HEADER`, scopes by request host, applies `Cookie`, and
+  persists at `sd:/HTTPCOOK.TXT` (dirty-tracked).
+- `networking_http_request_internal` now zeroes the result **before** every
+  early return. A failed request previously left `result` uninitialized and the
+  caller's `networking_http_result_free()` corrupted the heap.
+- Streaming now honours `user:pass@` Basic auth and rejects non-2xx statuses.
+- Locale persists through `config LOCALE=` / CONFIG.SYS and is re-applied at
+  boot via `locale_parse()` (names and numeric codes).
+- `js eval/run/call` were off by one: the subcommand token was prepended to the
+  script / used as the filename. Dispatch now narrows argv. The QuickJS runtime
+  is created on the main task but used on the worker, so `JS_UpdateStackTop()`
+  is called before each eval; script paths go through `shell_fs_resolve_path`;
+  an undefined result no longer prints `undefined`.
+
+### Audio / I2S (memory-pressure interaction)
+
+- `esp_codec_dev` reconfigures the I2S slot on every open; on a fragmented DMA
+  heap the descriptor reallocation fails, IDF leaves a NULL descriptor, and the
+  following enable faults. Three fixes:
+  1. `audio_dma_room_for_playback()` refuses playback with a clear message when
+     the DMA heap cannot hold the descriptors (no crash);
+  2. the managed codec skips an identical format reconfig and keeps
+     `in_fs`/`out_fs` across close so a second identical tone does not
+     reallocate (`tools/managed_patches.patch`);
+  3. the BSP deletes both I2S channels on a failed init so a retry starts
+     cleanly instead of hitting the "already initialized" early return with a
+     half-initialized channel.
+
+### Trash
+
+- `storage_trash_enforce_limits` used to delete one victim per full re-walk and
+  re-read every `.meta`. A bin near the 7-day age limit made one `del` take
+  tens of seconds. It now does one `readdir`+`stat` pass, sorts by the epoch in
+  the entry name, and deletes the computed victims in one batch.
+
+### Harness
+
+- `Session.run` resends its sync marker (every 2 s, bounded) and filters tag
+  lines: slow commands (trash drain, network) could swallow the one queued
+  marker.
+- `s17`/`s18` wait for two consecutive `connected: yes` samples with a real
+  `ipv4:` line (DNS lines are not an address) and do not re-issue `wifi
+  connect` while waiting (that resets the watchdog backoff).
+- `s18_http` uses loopback after httpd is up, retries a fetch once under the EV
+  board's tight heap, and treats a missing AP as a note (s11 gates Wi-Fi).
+- `s20_website` renders/captures the offline showcase.
+- `apps/app_manifest.py` is the single deploy list; `push_apps.py`,
+  `companion/push_sd.py` and `s14_apps.py` all import it.
+
+### Bench note
+
+- The `camera` AP was intermittent during the final sweep (RSSI -75…-84,
+  repeated `watchdog: retry`). Wi-Fi-dependent suites were re-run; feature
+  results above are from runs where the link held. This is environmental, not
+  a firmware regression.
+
+### Managed-component patches
+
+`tools/managed_patches.patch` records the vendored changes:
+browser/audio codec (`audio_codec_data_i2s.c`), the EV board BSP
+(`esp32_p4_function_ev_board.c` I2S cleanup), plus the pre-existing LVGL
+patches. Re-apply after `idf.py update-dependencies`.

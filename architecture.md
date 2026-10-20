@@ -151,6 +151,15 @@ to kinds, and the surfaces ask it rather than re-listing extensions. `view`/
 matching syntax lexer. A new extension is a `filetype` table row plus the
 consumer branches, never a local extension check.
 
+The **`browser` verb** (`components/command/browser_commands.c`) is a second
+consumer of the same HTML/DOM stack: `components/markdown/dom.c` parses the
+document (bounded depth), `css.c` applies style rules, and the renderer lays
+out into the TUI page buffer. Network fetches go through
+`components/networking`; a non-http(s) argument is read from SD, so a page can
+render with no radio. The **JS engine** (`components/jsengine`, QuickJS) is
+driven by `js eval|run|call`; its bindings expose the shell, TUI, modal, FS,
+batch, GPIO, audio, locale, error and event surfaces (`batch.md`).
+
 ---
 
 ## 3. Concurrency and locking

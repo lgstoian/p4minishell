@@ -31,6 +31,7 @@ set(EXTRA_COMPONENT_DIRS
   components/db
   components/display
   components/editor
+  components/event_bus
   components/font
   components/filetype
   components/gfx
@@ -56,6 +57,7 @@ set(EXTRA_COMPONENT_DIRS
   components/pim
   components/shell
   components/storage
+  components/state_machine
   components/strutil
   components/swgcm
   components/tab5kbd

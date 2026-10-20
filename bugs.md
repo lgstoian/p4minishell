@@ -1,4 +1,4 @@
-# P4MiniShell — Bug Log (v1.3.1)
+# P4MiniShell — Bug Log (v1.4.0)
 
 This file is the working log for bug hunting and hardware stress testing. It
 was reset for the v1.2.0 campaign (the two-board release) and carried into
@@ -7,7 +7,7 @@ v1.3.0, so it reflects what is **still open**.
 Fixed entries are removed at each reset (their history lives in
 [`changelog.md`](changelog.md) and git).
 
-- **Firmware:** v1.3.1 (ESP-IDF v5.5.5)
+- **Firmware:** v1.4.0 (ESP-IDF v5.5.5)
 - **Boards under test (in parallel):**
   - `jc1060p470c` — ESP32-P4 Function EV Board (COM3), ESP32-C6 co-processor,
     JD9165 1024x600, GT911 touch, SD card present.
@@ -67,7 +67,177 @@ All fixed. One-line summaries; full details live in `changelog.md` and git.
 
 ---
 
+## Fixed findings (v1.4.0 campaign)
+
+### F45. Browser pages drew bottom-up and leaked `<head>` text - **FIXED, verified on hardware**
+
+`browser_render_dom` pushed siblings first-to-last on a LIFO stack, so every
+document rendered in reverse document order (the text-presence tests could not
+see it). Separately, `dom_parse` only looked for `head`/`body` among the root's
+direct children; a normal `<html><head>…</head><body>…</body></html>` left
+`tree->body` NULL, so the renderer walked the root and printed `<title>` and
+raw `<style>` CSS as page text. Siblings now push `last_child` backwards and
+head/body are resolved with `dom_find_first_by_tag`. Verified by
+`docs/assets/browser-website.png` (`s20_website`).
+
+### F46. Browser CSS ruleset + DOM recursion forced a 32 KB worker - **FIXED, verified on hardware**
+
+`browser_render_html` kept `css_ruleset_t` (64 x 448 B = ~28 KB) on the worker
+stack; 32 KB then starved the boot-time SDMMC/C6 DMA allocations. The ruleset
+now lives in PSRAM, DOM parse depth is capped at 64, and the worker is 28 KB.
+The remaining internal budget required the SD history save to move off the
+`esp_timer` task (4 KB timer stack) and a 10 KB Wi-Fi init task.
+
+### F47. `httpget` freed an uninitialized result on early errors - **FIXED, verified on hardware**
+
+`networking_http_request_internal` zeroed `result` after its argument checks,
+so an early return (e.g. `extra_headers != NULL` with count 0) left the caller's
+`networking_http_result_free()` freeing garbage (CORRUPT HEAP). Zeroing moved
+before every return; `httpget` also initializes the struct and passes NULL when
+there are no extra headers.
+
+### F48. `js eval/run/call` used the subcommand as code/filename - **FIXED, verified on hardware**
+
+The helpers indexed argv from 1 while the dispatcher passed the full argv, so
+`js run file.js` opened a file named `run` and `js eval code` prefixed `eval`.
+Dispatch now narrows argv. The QuickJS runtime is created on the main task and
+used on the worker, so `JS_UpdateStackTop()` re-anchors the stack check before
+each eval; script paths resolve through the shell path rules and an undefined
+result no longer prints `undefined`.
+
+### F49. Second I2S tone faulted when the DMA heap was fragmented - **FIXED, verified on hardware**
+
+The managed codec reconfigures the I2S slot on every open, freeing and
+reallocating the DMA descriptors; on a fragmented heap the allocation failed,
+IDF left a NULL descriptor and the following enable load-faulted. Fixes:
+skip an identical format reconfig and keep the cached format across close;
+refuse playback with a clear message when the DMA heap is too small; tear down
+both I2S channels after a failed BSP init. Managed patches are tracked in
+`tools/managed_patches.patch`.
+
+### F50. `del` stalled for tens of seconds on a nearly-full trash - **FIXED, verified on hardware**
+
+`storage_trash_enforce_limits` deleted one victim per full directory walk and
+re-read every `.meta`; a bin near the 7-day age limit made one `del` ~20 s.
+Enforcement is now one `readdir`+`stat` pass, sorts by the epoch in the entry
+name, and deletes the computed victims in one batch.
+
+### F51. TUI-page screenshots showed the transcript - **FIXED, verified on hardware**
+
+`screenshot` printed "capturing…" and flushed the transcript before taking the
+snapshot; both repaint the transcript over a TUI page. The command now prints
+nothing before the snapshot and skips the flush while `tui_is_active()`.
+
+### F52. Deep batch apps overflowed the 28 KB worker - **FIXED, verified on hardware**
+
+MOOD's `while … do call` sampler kept the while frame for the whole tick and
+overflowed by ~200 B; it now uses a `goto` loop. The APPLIB probe is invoked
+with `if "%P4_APP_FEATURES%"=="1" gosub …` so it costs no batch frame when
+disabled. `s14_apps` is 187/187 on both boards.
+
 ## Open findings
+
+### F53. Long-sweep heap exhaustion / editor unnamed-buffer fault (v1.4.0) - **OPEN**
+
+- **Severity:** HIGH (release gate; not a data-loss bug, reproduced only under
+  long mixed sweeps / the unnamed editor path)
+- **Components:** `components/command` (worker heap), `components/batch/svc.c`
+  (crash-restart supervisor), `components/editor` (unnamed buffer)
+- **Boards:** Tab5 (COM6) for the heap abort; COM3 and COM6 for the editor
+  fault (COM6 blocked earlier by the heap abort).
+- **Symptom 1 (Tab5):** `s06_batch`, after "crash restarts nonzero", aborts in
+  newlib `__sfp` (`abort() was called ... 0x40232baa`) while the crashing
+  service is being stopped/removed. The service restarts in a tight loop and
+  the internal heap drops to ~1.7 KB; a `fopen` for the service/history INI
+  then cannot allocate a `FILE`.
+- **Symptom 2 (both boards):** `s09_editor` opens the first file, then
+  `edit` (unnamed) faults with `MEPC 0xcececece` (instruction access fault;
+  a poisoned/corrupted function pointer) or leaves the editor open and the
+  following `type _S09C.TXT` marker times out. Standalone repro:
+  `python tools/p4test_run.py COM3 --only s09_editor`.
+- **Mitigations already in v1.4.0:** `ps` snapshots and `ftype` launch tables
+  now allocate in PSRAM; httpd auto-start requires 16 KB of internal heap and
+  skips itself on these boards (explicit `httpd start` is unaffected); the
+  service test stops/removes the crash service immediately; editor save-as
+  delays were widened.
+- **Next experiment:** free the remaining internal-RAM consumers (autostart
+  httpd already gated; consider stopping the C6 RPC tasks after disconnect),
+  then bisect `edit`'s unnamed path (a `0xcececece` jump usually means a
+  struct function pointer was freed while the editor kept the pointer; check
+  the PSRAM document/buffer lifetime around `edit` with no path).
+- **Release note:** treat the Tab5 long-sweep (s06 crash-restart section) and
+  the unnamed-editor path as known issues; all individual feature suites and
+  the boot/unit gates are green.
+
+### F43. Firmware "brick"/boot-loop: application BSS relocated to PSRAM by a local ESP-IDF patch — **FIXED, verified on hardware**
+
+- **Severity:** CRITICAL (every board reset-looped after flashing; the USB-Serial/JTAG
+  console re-enumerated instead of booting; boards had to be kept in download mode to
+  stay connected)
+- **Component:** build — the local ESP-IDF tree
+  (`components/esp_system/ld/ld.dram.sections`), plus a redundant, inert
+  `components/event_bus/linker.lf`
+- **Board:** `jc1060p470c` (COM3), `m5stack_tab5` (COM6)
+- **Found on:** 2026-10-19, recovery pass after a v1.3.2 feature round
+- **Symptom:** after flashing, the board never reached the shell. A hard reset dropped
+  the chip into download mode (`rst:0x17 (CHIP_USB_UART_RESET)`,
+  `boot:0x206 (DOWNLOAD(USB/UART0/SPI))`, `waiting for download`); with the port open
+  the console produced no app output. On the console-less path the USB device
+  re-enumerated repeatedly ("connect/disconnect").
+- **Root cause:** to work around an internal-RAM BSS overflow, the `.dram1.bss` block in
+  the local ESP-IDF linker script was rewritten to
+  `*(.bss .bss.* … .sbss …) > ext_ram_seg`, moving **all** application BSS (284 KB) from
+  internal `dram_high_seg` (0x4FF40000) to PSRAM `ext_ram_seg` (0x48000000). The linked
+  ELF then carried a `LOAD 0x48000000 filesz 0 memsz 0x45588` segment — but a NOLOAD
+  segment is not emitted into the app image, so the 2nd-stage bootloader saw no PSRAM
+  load target and never brought PSRAM up. `call_start_cpu0` then faulted while zeroing
+  `_bss_start_high`. Placing `.sbss` in PSRAM is also invalid (gp window). A second copy
+  of the same idea lived in `components/event_bus/linker.lf`, which is **inert**: ESP-IDF
+  only applies a component fragment declared via `LDFRAGMENTS` in `idf_component_register`.
+- **Fix:**
+  - Restored `components/esp_system/ld/ld.dram.sections` to the pristine ESP-IDF v5.5.5
+    content (`.dram1.bss > dram_high_seg` with `mapping[dram0_bss] mutable[dram0_bss]`).
+  - Deleted the inert `components/event_bus/linker.lf`.
+  - Kept every feature, but moved the new fixed-capacity tables out of `.bss` into
+    lazily-allocated PSRAM (`p4heap_calloc_any()`, PSRAM-first with internal fallback):
+    the event-bus topic/subscriber pools, the state-machine pool, the HTTP cookie jar,
+    and the browser history/bookmark tables.
+- **Verification:** firmware **and** `test/` build 0 errors / 0 warnings on both boards;
+  COM3 boots `boot:0x20f (SPI_FAST_FLASH_BOOT)`, SD ready, AUTOEXEC runs, Wi-Fi starts,
+  and the boot log carries no `E (`/`W (` lines; internal BSS is now
+  `.dram0.bss` 26,640 B + `.dram1.bss` 228,240 B (~34 KB `sram_high` headroom) instead of
+  284 KB in PSRAM.
+
+### F44. Intermittent boot Wi-Fi/SDIO failure from the async boot-script task — **FIXED, verified on hardware**
+
+- **Severity:** HIGH (Wi-Fi and the hosted C6 link silently failed to start on ~10–30 % of
+  boots; `E wifi: Failed to start Wi-Fi background task` and a storm of
+  `E sdmmc_common: sdmmc_allocate_aligned_buf: not enough mem` /
+  `eh_host_port_sdio: sdmmc_card_init failed`)
+- **Component:** `components/boot` (async boot-script task) vs `components/networking`
+  (Wi-Fi/C6 bring-up), root-caused with a temporary boot-RAM probe in `main.c`
+- **Board:** `jc1060p470c` (COM3), `m5stack_tab5` (COM6)
+- **Found on:** 2026-10-19, boot-RAM pass after F43
+- **Symptom:** most boots were clean, but some failed the Wi-Fi background task creation
+  (`xTaskCreate` of a 12 KB internal stack) and/or the hosted-C6 SDIO card init
+  (`sdmmc_allocate_aligned_buf: not enough mem`). `boot_regression` was 7–9/10.
+- **Root cause:** `boot_on_sd_first_mount` runs CONFIG.SYS/AUTOEXEC.BAT on a separate
+  `bootscript` task with a **16 KB internal stack**, so a slow script never blocks the
+  mounting task. That stack is reclaimed by the idle task only after the task
+  self-deletes — which can overlap `networking_init()`. The probe showed internal free
+  dropping from 28,008 B (after `usb_init`) to 8,440 B (inside `boot_run_startup`) and back
+  to 26,332 B (before `networking_init`) asynchronously; when the script ran long, the
+    12 KB Wi-Fi task and the C6 SDIO DMA scratch buffer could not be allocated.
+- **Fix:**
+  - `boot_wait_script_idle()` (`components/boot/boot.c`, declared in `boot.h`): a bounded
+    wait for the boot-script task to finish, called from `main.c` right after
+    `boot_run_startup()` and before `networking_init()`, so the C6 bring-up starts on a
+    settled heap.
+  - `networking_start_task_retry()` (`components/networking/networking.c`): the Wi-Fi
+    background/connect task creation retries briefly (up to 1 s) instead of dropping Wi-Fi
+    for the whole boot when internal RAM is transiently held.
+- **Verification:** `boot_regression COM3 10` and `COM6 10` both **10/10 clean** (and 6/6
+  each concurrently); unit suite **585/0** on both boards; 0 build warnings.
 
 ### F28. Constant white noise from the Tab5 speaker since v1.3.0 — **FIXED, verified on hardware**
 

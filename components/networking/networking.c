@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include "esp_crt_bundle.h"
 #include "certs.h"
@@ -171,6 +172,23 @@ static void networking_wifi_background_task(void *arg);
 static void networking_wifi_watchdog_task(void *arg);
 static void networking_wifi_start_watchdog(void);
 static esp_err_t networking_wifi_connect_with_credentials(const char *ssid, const char *password);
+
+/* Create a Wi-Fi bring-up task, retrying briefly when internal RAM is
+ * transiently held by the async boot-script task. That task's 16 KB stack is
+ * freed by the idle task only once AUTOEXEC.BAT finishes, which can overlap
+ * this call on the boot path; a single failed xTaskCreate used to drop Wi-Fi
+ * for the whole boot (and the C6 SDIO bring-up with it). */
+static bool networking_start_task_retry(TaskFunction_t fn, const char *name, void *arg)
+{
+    for (int attempt = 0; attempt < 20; attempt++) {
+        if (xTaskCreate(fn, name, NETWORKING_WIFI_INIT_TASK_STACK_BYTES, arg,
+                        tskIDLE_PRIORITY + 1, NULL) == pdPASS) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return false;
+}
 
 /* Wi-Fi mutex helpers — forward declarations for use in event handler */
 static void wifi_lock(void);
@@ -663,12 +681,7 @@ static bool networking_wifi_begin_connect_request(const char *ssid, const char *
     s_wifi_connect_requested = false;
     wifi_unlock();
 
-    if (xTaskCreate(networking_wifi_connect_task,
-                    "wifi_connect",
-                    NETWORKING_WIFI_INIT_TASK_STACK_BYTES,
-                    request,
-                    tskIDLE_PRIORITY + 1,
-                    NULL) != pdPASS) {
+    if (!networking_start_task_retry(networking_wifi_connect_task, "wifi_connect", request)) {
         free(request);
         wifi_lock();
         s_wifi_state = NETWORKING_WIFI_STATE_NOT_ATTEMPTED;
@@ -726,12 +739,7 @@ static bool networking_wifi_begin_background_request(const networking_wifi_backg
         wifi_unlock();
     }
 
-    if (xTaskCreate(networking_wifi_background_task,
-                    "wifi_bg",
-                    NETWORKING_WIFI_INIT_TASK_STACK_BYTES,
-                    request,
-                    tskIDLE_PRIORITY + 1,
-                    NULL) != pdPASS) {
+    if (!networking_start_task_retry(networking_wifi_background_task, "wifi_bg", request)) {
         free(request);
         if (template_request->start_runtime) {
             wifi_lock();
@@ -2044,6 +2052,12 @@ void networking_http_result_free(networking_http_result_t *result)
     }
 }
 
+/* Cookie-jar helpers are defined in the cookie section below but used by the
+ * request core, so forward-declare them here. */
+static void networking_http_extract_host(const char *url, char *out, size_t out_size);
+static esp_err_t networking_http_event_handler(esp_http_client_event_t *evt);
+static void networking_http_apply_cookies(esp_http_client_handle_t client, const char *host);
+
 static esp_err_t networking_http_request_internal(esp_http_client_method_t method,
                                                   const char *url,
                                                   const char *req_content_type,
@@ -2071,18 +2085,20 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
     char auth_raw[192];
     char auth_b64[256];
     size_t auth_olen = 0;
+    char cookie_host[128];
 
+    /* Zero the result before ANY early return so every error path leaves a
+     * clean struct whose body pointer is NULL — callers run
+     * networking_http_result_free() unconditionally on failure. */
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
     if (url == NULL || url[0] == '\0' || result == NULL || tag == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     if (extra_headers != NULL && extra_header_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-
-    /* Zero the result on entry so every early-return path leaves a clean
-     * struct whose body pointer is NULL — the caller always runs
-     * networking_http_result_free() on the error path. */
-    memset(out, 0, sizeof(*out));
 
     if (!networking_http_url_is_supported(url)) {
         if (!quiet) {
@@ -2113,6 +2129,11 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
      * master switch; max_redirection_count bounds the chain. */
     http_config.disable_auto_redirect = !P4_CONFIG_HTTP_FOLLOW_REDIRECTS;
     http_config.max_redirection_count = P4_CONFIG_HTTP_FOLLOW_REDIRECTS ? 3 : 0;
+    /* Cookie jar: the request host scopes both capture (Set-Cookie) and the
+     * outgoing Cookie header. `cookie_host` outlives perform(). */
+    networking_http_extract_host(url, cookie_host, sizeof(cookie_host));
+    http_config.user_data = cookie_host;
+    http_config.event_handler = networking_http_event_handler;
 
     if (strncmp(url, "https://", 8) == 0) {
         if (certs_is_loaded()) {
@@ -2183,6 +2204,8 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
         }
     }
 
+    networking_http_apply_cookies(client, cookie_host);
+
     error = esp_http_client_open(client, (int)req_len);
     if (error != ESP_OK) {
         if (!quiet) {
@@ -2234,6 +2257,27 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
     }
     if (remote_length > 0) {
         out->content_length = (size_t)remote_length;
+    }
+
+    /* Parse additional response headers. */
+    {
+        char *hdr_val = NULL;
+        if (esp_http_client_get_header(client, "ETag", &hdr_val) == ESP_OK && hdr_val) {
+            snprintf(out->etag, sizeof(out->etag), "%s", hdr_val);
+        }
+        if (esp_http_client_get_header(client, "Location", &hdr_val) == ESP_OK && hdr_val) {
+            snprintf(out->location, sizeof(out->location), "%s", hdr_val);
+        }
+        if (esp_http_client_get_header(client, "Last-Modified", &hdr_val) == ESP_OK && hdr_val) {
+            struct tm tm_val = {0};
+            if (strptime(hdr_val, "%a, %d %b %Y %H:%M:%S GMT", &tm_val) != NULL ||
+                strptime(hdr_val, "%a, %d-%b-%y %H:%M:%S GMT", &tm_val) != NULL) {
+                out->last_modified = (uint64_t)mktime(&tm_val);
+            }
+        }
+        if (esp_http_client_get_header(client, "Cache-Control", &hdr_val) == ESP_OK && hdr_val) {
+            snprintf(out->cache_control, sizeof(out->cache_control), "%s", hdr_val);
+        }
     }
     if (out->content_length > P4_CONFIG_HTTP_MAX_BODY_BYTES) {
         if (!quiet) {
@@ -2379,6 +2423,531 @@ esp_err_t networking_http_get_ex(const char *url,
                                             NULL, auth_user, auth_pass,
                                             use, use_count, true,
                                             result, true, "rss");
+}
+
+/* ========================================================================
+ * COOKIE JAR
+ * ======================================================================== */
+
+/* Cookie jar lives in PSRAM, allocated on first use, NOT in .bss (internal
+ * RAM is the scarce boot resource; see ai-context.md). */
+static networking_cookie_t *s_cookies = NULL;
+static int s_cookie_count = 0;
+static bool s_cookie_capture = true;
+static bool s_cookie_dirty = false;
+
+/* Lazily allocate the cookie jar (PSRAM-first, internal fallback). */
+static networking_cookie_t *networking_cookies_ensure(void)
+{
+    if (s_cookies == NULL) {
+        s_cookies = p4heap_calloc_any(P4_CONFIG_HTTP_COOKIE_MAX, sizeof(*s_cookies));
+    }
+    return s_cookies;
+}
+
+/** strlcpy-style bounded copy (NUL-terminated, never overflows @p cap). */
+static void networking_copy_capped(char *dst, size_t cap, const char *src)
+{
+    size_t len;
+
+    if (dst == NULL || cap == 0) {
+        return;
+    }
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+    len = strlen(src);
+    if (len >= cap) {
+        len = cap - 1;
+    }
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
+/** Lowercase a host string in place and strip a leading '.' (domain form). */
+static void networking_host_normalize(char *host)
+{
+    char *src = host;
+    char *dst = host;
+
+    while (*src != '\0') {
+        *dst++ = (char)tolower((unsigned char)*src);
+        src++;
+    }
+    *dst = '\0';
+    if (host[0] == '.') {
+        memmove(host, host + 1, strlen(host));
+    }
+}
+
+/** Extract the authority host from a URL (no userinfo, no port, lowercased). */
+static void networking_http_extract_host(const char *url, char *out, size_t out_size)
+{
+    const char *authority;
+    const char *end;
+    const char *at;
+    const char *colon;
+
+    out[0] = '\0';
+    if (url == NULL || out_size == 0) {
+        return;
+    }
+    authority = strstr(url, "://");
+    authority = (authority != NULL) ? authority + 3 : url;
+    end = authority;
+    while (*end != '\0' && *end != '/' && *end != '?' && *end != '#') {
+        end++;
+    }
+    at = memchr(authority, '@', (size_t)(end - authority));
+    if (at != NULL) {
+        authority = at + 1;
+    }
+    /* IPv6 literals keep their brackets; a port is stripped for IPv4/host. */
+    colon = memchr(authority, ':', (size_t)(end - authority));
+    if (colon != NULL && authority[0] != '[') {
+        end = colon;
+    }
+    {
+        size_t len = (size_t)(end - authority);
+        if (len >= out_size) {
+            len = out_size - 1;
+        }
+        memcpy(out, authority, len);
+        out[len] = '\0';
+    }
+    networking_host_normalize(out);
+}
+
+/** True when @p host is in @p domain's scope (exact or a subdomain). */
+static bool networking_host_in_domain(const char *host, const char *domain)
+{
+    size_t host_len;
+    size_t domain_len;
+
+    if (host == NULL || domain == NULL || domain[0] == '\0') {
+        return false;
+    }
+    if (strcasecmp(host, domain) == 0) {
+        return true;
+    }
+    host_len = strlen(host);
+    domain_len = strlen(domain);
+    if (host_len > domain_len && host[host_len - domain_len - 1] == '.' &&
+        strcasecmp(host + host_len - domain_len, domain) == 0) {
+        return true;
+    }
+    return false;
+}
+
+static int networking_cookie_find(const char *domain, const char *name)
+{
+    int i;
+
+    for (i = 0; i < s_cookie_count; i++) {
+        if (strcasecmp(s_cookies[i].name, name) == 0 &&
+            strcasecmp(s_cookies[i].domain, domain) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void networking_http_cookie_clear(void)
+{
+    networking_cookie_t *jar = networking_cookies_ensure();
+    if (jar != NULL) {
+        memset(jar, 0, sizeof(*jar) * P4_CONFIG_HTTP_COOKIE_MAX);
+    }
+    s_cookie_count = 0;
+    s_cookie_dirty = true;
+}
+
+bool networking_http_cookie_take_dirty(void)
+{
+    bool was = s_cookie_dirty;
+    s_cookie_dirty = false;
+    return was;
+}
+
+int networking_http_cookie_count(void)
+{
+    return s_cookie_count;
+}
+
+bool networking_http_cookie_at(int index, networking_cookie_t *out)
+{
+    if (index < 0 || index >= s_cookie_count || out == NULL ||
+        s_cookies == NULL) {
+        return false;
+    }
+    *out = s_cookies[index];
+    return true;
+}
+
+bool networking_http_cookie_add(const char *domain, const char *name,
+                                const char *value, uint32_t expires_ts)
+{
+    networking_cookie_t *jar = networking_cookies_ensure();
+    char norm_domain[sizeof(jar->domain)];
+    int index;
+
+    if (jar == NULL || name == NULL || name[0] == '\0' || domain == NULL) {
+        return false;
+    }
+    snprintf(norm_domain, sizeof(norm_domain), "%s", domain);
+    networking_host_normalize(norm_domain);
+    if (norm_domain[0] == '\0') {
+        return false;
+    }
+
+    index = networking_cookie_find(norm_domain, name);
+    if (index < 0) {
+        if (s_cookie_count >= P4_CONFIG_HTTP_COOKIE_MAX) {
+            /* Evict the oldest slot so a long session keeps the most recent
+             * cookies rather than silently dropping new ones. The count stays
+             * at the cap: the freed last slot is about to be overwritten. */
+            memmove(&jar[0], &jar[1], sizeof(*jar) * (P4_CONFIG_HTTP_COOKIE_MAX - 1));
+            index = P4_CONFIG_HTTP_COOKIE_MAX - 1;
+        } else {
+            index = s_cookie_count++;
+        }
+    }
+    snprintf(jar[index].domain, sizeof(jar[index].domain), "%s", norm_domain);
+    snprintf(jar[index].name, sizeof(jar[index].name), "%s", name);
+    snprintf(jar[index].value, sizeof(jar[index].value), "%s",
+             value != NULL ? value : "");
+    jar[index].expires_ts = expires_ts;
+    s_cookie_dirty = true;
+    return true;
+}
+
+bool networking_http_cookie_remove(const char *domain, const char *name)
+{
+    char norm_domain[128];
+    int index;
+
+    if (s_cookies == NULL || domain == NULL || name == NULL) {
+        return false;
+    }
+    snprintf(norm_domain, sizeof(norm_domain), "%s", domain);
+    networking_host_normalize(norm_domain);
+    index = networking_cookie_find(norm_domain, name);
+    if (index < 0) {
+        return false;
+    }
+    memmove(&s_cookies[index], &s_cookies[index + 1],
+            sizeof(*s_cookies) * (size_t)(s_cookie_count - index - 1));
+    s_cookie_count--;
+    memset(&s_cookies[s_cookie_count], 0, sizeof(*s_cookies));
+    s_cookie_dirty = true;
+    return true;
+}
+
+void networking_http_cookie_set_capture(bool on)
+{
+    s_cookie_capture = on;
+}
+
+/** Store one `Set-Cookie` header value for @p host. Public so the command
+ *  layer can feed persisted cookies through the exact same parsing rules.
+ *  Returns true when a cookie was stored, false when it was deleted or
+ *  ignored. */
+bool networking_http_cookie_store_header(const char *host, const char *header)
+{
+    char work[400];
+    char name[64];
+    char value[256];
+    char cookie_domain[128];
+    char *attr;
+    char *sep;
+    char *end;
+    bool deleted = false;
+    uint32_t expires_ts = 0;
+
+    if (host == NULL || header == NULL || header[0] == '\0') {
+        return false;
+    }
+    snprintf(work, sizeof(work), "%s", header);
+
+    /* Split "name=value; attr; attr..." */
+    sep = strchr(work, '=');
+    if (sep == NULL) {
+        return false;
+    }
+    end = strpbrk(work, ";");
+    if (end != NULL) {
+        *end = '\0';
+    }
+    {
+        char *n = work;
+        char *v = sep + 1;
+        while (*n == ' ') n++;
+        *sep = '\0';
+        /* Trim trailing space on the name. */
+        {
+            char *tail = n + strlen(n);
+            while (tail > n && tail[-1] == ' ') *--tail = '\0';
+        }
+        while (*v == ' ') v++;
+        networking_copy_capped(name, sizeof(name), n);
+        networking_copy_capped(value, sizeof(value), v);
+    }
+    if (end != NULL) {
+        *end = ';';
+    }
+
+    networking_copy_capped(cookie_domain, sizeof(cookie_domain), host);
+
+    /* Attribute pass. */
+    if (end != NULL) {
+        attr = end + 1;
+        while (attr != NULL && *attr != '\0') {
+            char *next = strchr(attr, ';');
+            char *pair;
+
+            if (next != NULL) {
+                *next = '\0';
+            }
+            while (*attr == ' ') attr++;
+            pair = attr;
+            if (strncasecmp(pair, "domain=", 7) == 0) {
+                const char *d = pair + 7;
+                while (*d == ' ') d++;
+                networking_copy_capped(cookie_domain, sizeof(cookie_domain), d);
+            } else if (strncasecmp(pair, "max-age=", 8) == 0) {
+                long age = strtol(pair + 8, NULL, 10);
+                if (age <= 0) {
+                    deleted = true;
+                } else {
+                    expires_ts = (uint32_t)((uint64_t)time(NULL) + (uint64_t)age);
+                }
+            } else if (strncasecmp(pair, "expires=", 8) == 0 &&
+                       strstr(pair + 8, "1970") != NULL) {
+                /* The conventional delete date (Unix epoch) drops the cookie;
+                 * we do not track far-future expiry precisely. */
+                deleted = true;
+            }
+            attr = (next != NULL) ? next + 1 : NULL;
+        }
+    }
+
+    if (deleted) {
+        (void)networking_http_cookie_remove(cookie_domain, name);
+        return false;   /* a delete is not a store */
+    }
+    networking_http_cookie_add(cookie_domain, name, value, expires_ts);
+    return true;
+}
+
+/** esp_http_client event handler: capture Set-Cookie headers as they arrive.
+ *  `user_data` is the request host set by the caller. */
+static esp_err_t networking_http_event_handler(esp_http_client_event_t *evt)
+{
+    if (evt != NULL && evt->event_id == HTTP_EVENT_ON_HEADER && s_cookie_capture &&
+        evt->header_key != NULL && evt->header_value != NULL &&
+        strcasecmp(evt->header_key, "Set-Cookie") == 0) {
+        networking_http_cookie_store_header((const char *)evt->user_data,
+                                            evt->header_value);
+    }
+    return ESP_OK;
+}
+
+/** Set a Cookie request header built from the jar (matching @p host). */
+static void networking_http_apply_cookies(esp_http_client_handle_t client,
+                                          const char *host)
+{
+    char header[600];
+    size_t used = 0;
+    int i;
+
+    if (client == NULL || s_cookies == NULL || s_cookie_count == 0) {
+        return;
+    }
+    header[0] = '\0';
+    for (i = 0; i < s_cookie_count; i++) {
+        int written;
+
+        if (!networking_host_in_domain(host, s_cookies[i].domain)) {
+            continue;
+        }
+        written = snprintf(header + used, sizeof(header) - used, "%s%s=%s",
+                           used > 0 ? "; " : "", s_cookies[i].name,
+                           s_cookies[i].value);
+        if (written < 0 || (size_t)written >= sizeof(header) - used) {
+            break;
+        }
+        used += (size_t)written;
+    }
+    if (used > 0) {
+        esp_http_client_set_header(client, "Cookie", header);
+    }
+}
+
+/* ========================================================================
+ * FORM SUBMISSION
+ * ======================================================================== */
+
+esp_err_t networking_http_post_form(const char *url,
+                                     const networking_form_field_t *fields,
+                                     size_t field_count,
+                                     networking_http_result_t *result)
+{
+    if (url == NULL || fields == NULL || field_count == 0 || result == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (field_count > P4_CONFIG_HTTP_FORM_FIELDS_MAX) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Build urlencoded body. */
+    size_t body_buf_size = field_count * 512;
+    char *body_buf = heap_caps_malloc(body_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (body_buf == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t pos = 0;
+    for (size_t i = 0; i < field_count && pos < body_buf_size - 4; i++) {
+        if (i > 0) {
+            body_buf[pos++] = '&';
+        }
+        /* Simple copy (no URL encoding for now — callers must encode). */
+        size_t name_len = strlen(fields[i].name);
+        size_t val_len = strlen(fields[i].value);
+        if (pos + name_len + 1 + val_len < body_buf_size) {
+            memcpy(body_buf + pos, fields[i].name, name_len);
+            pos += name_len;
+            body_buf[pos++] = '=';
+            memcpy(body_buf + pos, fields[i].value, val_len);
+            pos += val_len;
+        }
+    }
+    body_buf[pos] = '\0';
+
+    esp_err_t err = networking_http_request_internal(HTTP_METHOD_POST, url,
+                                                     "application/x-www-form-urlencoded",
+                                                     (const uint8_t *)body_buf, pos,
+                                                     NULL, NULL, NULL, NULL, 0, false,
+                                                     result, false, "httpget");
+
+    /* Clear sensitive body from memory. */
+    memset(body_buf, 0, body_buf_size);
+    heap_caps_free(body_buf);
+    return err;
+}
+
+/* ========================================================================
+ * STREAMING HTTP
+ * ======================================================================== */
+
+esp_err_t networking_http_get_stream(const char *url, networking_stream_cb cb,
+                                      void *ctx)
+{
+    esp_http_client_config_t http_config = {0};
+    esp_http_client_handle_t client = NULL;
+    uint8_t *chunk_buf = NULL;
+    char cookie_host[128];
+    esp_err_t error = ESP_FAIL;
+
+    if (url == NULL || url[0] == '\0' || cb == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!networking_http_url_is_supported(url)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!networking_wifi_is_connected()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    http_config.url = url;
+    /* Same Basic-auth contract as the buffered GET: a `user:pass@` prefix sends
+     * the Authorization header (esp_http_client parses the userinfo). */
+    if (networking_http_url_has_userinfo(url)) {
+        http_config.auth_type = HTTP_AUTH_TYPE_BASIC;
+    }
+    http_config.timeout_ms = P4_CONFIG_HTTP_TIMEOUT_MS;
+    http_config.buffer_size = P4_CONFIG_HTTP_STREAM_CHUNK;
+    http_config.buffer_size_tx = 1024;
+    http_config.user_agent = P4_CONFIG_HTTP_USER_AGENT;
+    http_config.disable_auto_redirect = !P4_CONFIG_HTTP_FOLLOW_REDIRECTS;
+    http_config.max_redirection_count = P4_CONFIG_HTTP_FOLLOW_REDIRECTS ? 3 : 0;
+    networking_http_extract_host(url, cookie_host, sizeof(cookie_host));
+    http_config.user_data = cookie_host;
+    http_config.event_handler = networking_http_event_handler;
+
+    if (strncmp(url, "https://", 8) == 0) {
+        if (certs_is_loaded()) {
+            http_config.use_global_ca_store = true;
+        } else {
+            http_config.crt_bundle_attach = esp_crt_bundle_attach;
+        }
+    }
+
+    chunk_buf = heap_caps_malloc(P4_CONFIG_HTTP_STREAM_CHUNK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (chunk_buf == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    client = esp_http_client_init(&http_config);
+    if (client == NULL) {
+        heap_caps_free(chunk_buf);
+        return ESP_ERR_NO_MEM;
+    }
+
+    networking_appendf(SH_PROMPT "httpget:" SH_RST " streaming " SH_VAL "%s" SH_RST "\n", url);
+
+    networking_http_apply_cookies(client, cookie_host);
+
+    error = esp_http_client_open(client, 0);
+    if (error != ESP_OK) {
+        goto cleanup;
+    }
+
+    {
+        int64_t remote_length = esp_http_client_fetch_headers(client);
+        int total = (remote_length > 0) ? (int)remote_length : 0;
+        int total_read = 0;
+        int status = esp_http_client_get_status_code(client);
+
+        /* The streaming API reports status through its return code: never
+         * hand a 4xx/5xx error page to the sink as if it were the body. */
+        if (status < 200 || status >= 300) {
+            networking_appendf(SH_ERR "httpget:" SH_RST
+                               " server returned HTTP status " SH_NUM "%d" SH_RST "\n",
+                               status);
+            error = ESP_ERR_NOT_FOUND;
+            goto cleanup;
+        }
+
+        while (true) {
+            int chunk_read = esp_http_client_read(client, (char *)chunk_buf,
+                                                   P4_CONFIG_HTTP_STREAM_CHUNK);
+            if (chunk_read < 0) {
+                error = ESP_FAIL;
+                goto cleanup;
+            }
+            if (chunk_read == 0) {
+                break;
+            }
+            total_read += chunk_read;
+            esp_err_t cb_err = cb(chunk_buf, (size_t)chunk_read, (size_t)total, ctx);
+            if (cb_err != ESP_OK) {
+                error = cb_err;
+                goto cleanup;
+            }
+        }
+        error = ESP_OK;
+    }
+
+cleanup:
+    if (client != NULL) {
+        esp_http_client_cleanup(client);
+    }
+    if (chunk_buf != NULL) {
+        heap_caps_free(chunk_buf);
+    }
+    return error;
 }
 
 /** Skip leading spaces/tabs and a UTF-8 BOM. */

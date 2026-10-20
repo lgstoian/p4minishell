@@ -4,7 +4,7 @@ How P4MiniShell protects secrets, what the device lock actually enforces,
 and what is still missing. Read this before exposing a device to an
 untrusted network.
 
-- **Version:** v1.3.1 · **License:** MIT (see [`licence.md`](licence.md))
+- **Version:** v1.4.0 · **License:** MIT (see [`licence.md`](licence.md))
 - Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`,
   `pkg`), [`ABI.md`](ABI.md) (package signing), [`readme.md`](readme.md),
   [`roadmap.md`](roadmap.md) (platform/security row).

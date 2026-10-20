@@ -9,6 +9,7 @@ rem  GFXTOOL.BMP, and exits. Needs PHOTO.BMP (apps/push_assets.py).
 rem  Markers: [M-GFXTOOL] / [M-GFXTOOL-IMG|NOIMG] / [M-GFXTOOL-DONE].
 rem =====================================================================
 echo [M-GFXTOOL]
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "GFX Tool"
 gfx init 320 200
 if errorlevel 1 goto :nofx

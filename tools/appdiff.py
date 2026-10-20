@@ -43,7 +43,7 @@ NONSTOP = [
 # Interactive apps: (name, start, exit_line, exit_marker, open_wait, shot)
 DRIVE = [
     ("ADVENT", "[M-ADV]", "quit", "[M-ADV-QUIT]", 2.5, True),
-    ("MOOD", "[M-MOOD]", "5", None, 5.0, False),
+    ("MOOD", "[M-MOOD]", "6", None, 5.0, False),
     ("TCMD", "[M-TCMD]", "q", "[M-TCMD-DONE]", 3.0, False),
     ("ELITE", "[M-ELITE-DOCKED]", "5", "[M-ELITE-DONE]", 3.0, False),
     ("PICS", "[M-PICS]", "5", None, 4.0, True),
@@ -203,6 +203,13 @@ def run_app(dev: Device, name: str) -> Tuple[str, str]:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252 and the app transcripts contain
+    # box-drawing/ANSI-derived glyphs; never let a diff print crash the gate.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
     ap = argparse.ArgumentParser()
     ap.add_argument("port", nargs="?", default="COM3")
     ap.add_argument("--update", action="store_true")
@@ -224,6 +231,11 @@ def main() -> int:
         # unrelated to app control flow.
         dev.run("keyboard hide", timeout=10)
         dev.run("cls", timeout=10)
+        # Per-run app state must not leak into the control-flow transcript:
+        # ADVENT's save changes the inventory order and MOOD's sampler file
+        # changes the service-view branch. These are disposable test artifacts.
+        for artifact in ("ADVENT.SAV", "MOODLAST.INI"):
+            dev.run("del /f %s" % artifact, timeout=15)
         failures = 0
         for name in apps:
             t0 = time.time()

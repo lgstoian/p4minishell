@@ -1,5 +1,6 @@
 launch TCMD
 [M-TCMD]
+title: set to 'Commander'
 LD=/
 RD=/APPS
 LCUR=N

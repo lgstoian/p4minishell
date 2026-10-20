@@ -952,6 +952,10 @@ void shell_command_about(void);
 /** Print memory statistics. */
 void shell_command_mem(void);
 
+/** `locale` - show or set the active locale for date/time/number formatting.
+ *  @return 0 on success, 2 on usage. */
+int shell_command_locale(int argc, char **argv);
+
 /**
  * List FreeRTOS tasks (`ps` / `tasks` / `top`). Read-only: name, state,
  * priority, core, stack high-water mark, and (for `top`) CPU% since the last

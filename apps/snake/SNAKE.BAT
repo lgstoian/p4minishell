@@ -16,6 +16,7 @@ rem  (99,99) fills the spare slots and never matches a live head; guarded
 rem  draws keep it off-screen.
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-SNAKE]
 title "Snake"
 draw hold on

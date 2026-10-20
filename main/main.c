@@ -956,21 +956,6 @@ void app_main(void)
      * a CONFIG.SYS `RGB=` directive can drive it during startup. */
     led_init();
 
-    /* Pre-warm the speaker codec path while DMA-capable heap is still free.
-     * The codec/I2S init needs contiguous DMA blocks, which lose the race
-     * once Wi-Fi, USB and SD all initialize at boot (AUTOEXEC's `volume`
-     * would otherwise fail once and spam the boot log; a later manual
-     * `volume` always worked). Failures here are harmless: speaker init
-     * stays lazy and retries on next audio use. The pre-warm never powers
-     * the speaker amp (mute-at-boot invariant in components/audio): the amp
-     * is gated to the playback window only, so boot stays silent. The I2S
-     * driver also logs two benign "dma frame num adjusted" notices on every
-     * successful init; keep that tag at error level so the boot log stays
-     * clean while real failures (and our own command-layer reports) remain
-     * visible. */
-    esp_log_level_set("i2s_common", ESP_LOG_ERROR);
-    (void)audio_init();
-
     /* Serialize the shared SDMMC host bring-up (N1). The SD card (slot 0) and
      * the ESP-Hosted C6 transport (slot 1) both initialize the SDMMC host at
      * boot from different tasks; sdmmc_host_init() is not thread-safe, so a
@@ -1023,6 +1008,12 @@ void app_main(void)
      * AUTOEXEC.BAT through the batch pipeline. Safe with no SD card. */
     boot_run_startup();
 
+    /* The boot script runs on its own internal-stack task. Wait for it to
+     * finish so the C6 bring-up below starts with that stack (and its DMA
+     * share) reclaimed; otherwise the hosted SDIO card init can fail with
+     * "sdmmc_allocate_aligned_buf: not enough mem". */
+    boot_wait_script_idle();
+
     /* The SD is mounted and no boot session is held here, so this is the
      * reliable point to apply the saved UI choices (theme / header mode /
      * fonts). The first-mount callback can fire before the VFS is usable. */
@@ -1046,6 +1037,17 @@ void app_main(void)
         .bluetooth_keyboard_input = shell_usb_keyboard_input,
         .bluetooth_mouse_scroll = usb_host_scroll_transcript,
     });
+
+    /* Audio is deliberately LAZY: do not initialize the I2S DMA at boot.
+     * The hosted C6 SDIO transport needs the same contiguous DMA-capable
+     * internal RAM during bring-up; an early I2S init made its
+     * sdmmc_allocate_aligned_buf auto-init task fail (and a blocking `volume`
+     * in AUTOEXEC did the same). The first tone/wavplay/config-volume change
+     * that needs the codec initializes it then, and audio_set_volume() stores
+     * the level without touching the codec. The I2S driver's benign
+     * "dma frame num adjusted" notices stay at error level so only real
+     * failures are visible. */
+    esp_log_level_set("i2s_common", ESP_LOG_ERROR);
 
     /* First-run captive portal: no SD card and no known networks means no
      * other way to configure Wi-Fi. The Wi-Fi stack is up (networking_init),

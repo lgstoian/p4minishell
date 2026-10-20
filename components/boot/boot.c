@@ -46,6 +46,7 @@
 #include "windows.h"
 #include "clock.h"
 #include "shell.h"
+#include "locale.h"
 #include "ansi_palette.h"
 
 /* App requested by the CONFIG.SYS `LAUNCH_APP=` directive; offered to the
@@ -57,6 +58,11 @@ static char s_boot_launch_app[P4_CONFIG_APP_NAME_BYTES];
  * the C6 bring-up, from the first SD mount; this guards against applying it
  * twice. */
 static bool s_boot_script_applied;
+
+/* Handle of the running boot-script task, or NULL when none is running. Set by
+ * the creator, cleared by the task just before it self-deletes, and observed by
+ * boot_wait_script_idle(). */
+static TaskHandle_t s_boot_script_handle;
 
 /* ========================================================================
  * DEFAULT TEMPLATES
@@ -686,6 +692,21 @@ static bool boot_handle_timezone(const char *value)
     return true;
 }
 
+/* CONFIG.SYS `LOCALE=US|UK|DE|FR` (or a numeric country code): restore the
+ * persisted locale at boot. The `locale` verb and `config LOCALE=` share the
+ * same parser (locale_parse). */
+static bool boot_handle_locale(const char *value)
+{
+    locale_id_t id;
+
+    if (!locale_parse(value, &id)) {
+        boot_warn_unknown("LOCALE");
+        return false;
+    }
+    locale_set(id);
+    return true;
+}
+
 static bool boot_handle_wifi_autoconnect(const char *value)
 {
     if (value == NULL || *value == '\0') {
@@ -941,6 +962,8 @@ static void boot_script_apply(void)
                     (void)boot_handle_cursor(value);
                 } else if (boot_starts_with_ci(keyword, "TIMEZONE")) {
                     (void)boot_handle_timezone(value);
+                } else if (boot_starts_with_ci(keyword, "LOCALE")) {
+                    (void)boot_handle_locale(value);
                 } else if (shell_text_equals_ignore_case(keyword, "DEVICE")) {
                     (void)boot_handle_device(value);
                 } else if (boot_starts_with_ci(keyword, "FILES") ||
@@ -1066,6 +1089,7 @@ static void boot_script_task(void *arg)
 {
     (void)arg;
     boot_script_apply();
+    s_boot_script_handle = NULL;   /* signal boot_wait_script_idle() */
     vTaskDelete(NULL);
 }
 
@@ -1117,6 +1141,22 @@ void boot_run_startup(void)
     }
 
     ESP_LOGI(BOOT_TAG, "Boot scripting deferred until the SD card first mounts");
+}
+
+void boot_wait_script_idle(void)
+{
+    /* The boot-script task runs AUTOEXEC.BAT on its own internal-stack task and
+     * self-deletes. Its stack (and the internal/DMA it holds) is reclaimed by
+     * the idle task only after the delete, which can overlap the C6 bring-up.
+     * Wait (bounded) for it to finish so the ESP-Hosted transport starts on a
+     * settled heap. Returns at once when no task is running. */
+    for (int i = 0; i < 200 && s_boot_script_handle != NULL; i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (s_boot_script_handle == NULL) {
+        /* Let the idle task reclaim the deleted task's stack before returning. */
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
 }
 
 /** True when a file does not exist (so the defaults should be generated). */
@@ -1224,7 +1264,7 @@ void boot_on_sd_first_mount(void)
                         P4_CONFIG_BOOT_SCRIPT_TASK_STACK,
                         NULL,
                         tskIDLE_PRIORITY + 2,
-                        NULL) != pdPASS) {
+                        &s_boot_script_handle) != pdPASS) {
             /* Fall back to inline execution on the mounting task. */
             boot_script_apply();
         }

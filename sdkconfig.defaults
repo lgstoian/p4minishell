@@ -230,3 +230,15 @@ CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
 # immediately after Wi-Fi start-up. Keep it off unless specifically debugging
 # connectivity; the `wifi diag` command can still be run manually when needed.
 # CONFIG_P4MINISHELL_WIFI_BOOT_DIAGNOSTIC is not set
+
+# Host (on-die) Wi-Fi is unavailable on ESP32-P4; keep disabled so the hosted
+# (ESP-Hosted/remote) Wi-Fi features are enabled (CONFIG_ESP_WIFI_REMOTE_ENABLED).
+CONFIG_ESP_HOST_WIFI_ENABLED=n
+
+
+
+# The SD history save moved off the esp_timer task to a one-shot PSRAM task,
+# so timer callbacks are shallow again. 4 KB keeps a margin over IDF's 3584 B
+# default while returning ~4 KB of internal RAM to the C6/SDIO bring-up.
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=4096
+

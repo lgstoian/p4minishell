@@ -14,6 +14,7 @@ rem  [M-ELITE] / [M-ELITE-DOCKED] / [M-ELITE-SAVED] / [M-ELITE-DONE].
 rem  Foreground-only (draw/list refuse in bg, see :nogfx).
 rem =====================================================================
 setlocal enabledelayedexpansion
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-ELITE]
 title "Elite"
 if exist ELITE.SAV call ELITE.SAV

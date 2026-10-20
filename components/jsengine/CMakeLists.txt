@@ -23,6 +23,12 @@ idf_component_register(
         tui
         modal
         heap
+        networking
+        audio
+        display
+        db
+        pim
+        event_bus
         esp_timer
         freertos
 )

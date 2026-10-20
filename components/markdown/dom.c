@@ -58,6 +58,13 @@ void dom_node_remove_child(dom_node_t *parent, dom_node_t *child) {
     child->prev_sibling = NULL;
 }
 
+/* Maximum element nesting accepted by the parser. Parsing is recursive, so a
+ * malformed document with thousands of unclosed tags used to consume the whole
+ * command-worker stack (the 64 B parse_element frame times the nesting depth).
+ * Real pages stay well under this; deeper content is kept as a leaf element so
+ * rendering still shows the text but the stack stays bounded. */
+#define DOM_MAX_DEPTH 64
+
 static void skip_whitespace(const char **p) {
     while (**p && isspace((unsigned char)**p)) (*p)++;
 }
@@ -130,7 +137,47 @@ static bool is_block_element(const char *tag) {
     return false;
 }
 
-static dom_node_t *parse_element(const char **p, dom_node_t *parent) {
+/* Consume the remainder of an element whose nesting limit was reached. Tracks
+ * same-name nesting so the correct close tag is honoured, and tolerates the
+ * strings, comments and void tags a malformed document can contain. */
+static void skip_element_content(const char **p, const char *tag) {
+    int depth = 1;
+
+    while (**p) {
+        if (**p != '<') {
+            (*p)++;
+            continue;
+        }
+        if (*(*p + 1) == '/' || *(*p + 1) == '!' || *(*p + 1) == '?') {
+            const char *q = *p + 1 + (*(*p + 1) == '/' ? 1 : 0);
+            char name[32] = {0};
+            size_t i = 0;
+            bool is_close = (*(*p + 1) == '/');
+            while (*q && !isspace((unsigned char)*q) && *q != '>' && *q != '/' &&
+                   i < sizeof(name) - 1) {
+                name[i++] = tolower((unsigned char)*q);
+                q++;
+            }
+            while (**p && **p != '>') (*p)++;
+            if (**p == '>') (*p)++;
+            if (is_close && strcmp(name, tag) == 0 && --depth == 0) return;
+        } else {
+            const char *q = *p + 1;
+            char name[32] = {0};
+            size_t i = 0;
+            while (*q && !isspace((unsigned char)*q) && *q != '>' && *q != '/' &&
+                   i < sizeof(name) - 1) {
+                name[i++] = tolower((unsigned char)*q);
+                q++;
+            }
+            while (**p && **p != '>') (*p)++;
+            if (**p == '>') (*p)++;
+            if (strcmp(name, tag) == 0 && !is_void_element(name)) depth++;
+        }
+    }
+}
+
+static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth) {
     if (**p != '<') return NULL;
     (*p)++;
     if (**p == '!' || **p == '?') {
@@ -159,6 +206,10 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent) {
     if (is_void_element(node->tag)) {
         return node;
     }
+    if (depth >= DOM_MAX_DEPTH) {
+        skip_element_content(p, node->tag);
+        return node;
+    }
     while (**p) {
         skip_whitespace(p);
         if (**p == '<' && *(*p + 1) == '/') {
@@ -177,26 +228,37 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent) {
             }
         }
         if (**p == '<') {
-            dom_node_t *child = parse_element(p, node);
+            dom_node_t *child = parse_element(p, node, depth + 1);
             if (child == (dom_node_t *)-1) break;
             if (child) dom_node_append_child(node, child);
         } else {
-            char text_buf[1024] = {0};
-            size_t ti = 0;
-            while (**p && **p != '<' && ti < sizeof(text_buf) - 1) {
-                text_buf[ti++] = **p;
-                (*p)++;
+            /* Text run: write straight into the new node so no 1 KB scratch is
+             * carried on every recursion level (dom_parse runs on the worker
+             * stack; a nested document would otherwise overflow it). */
+            const char *start = *p;
+            const char *end = start;
+            while (*end != '\0' && *end != '<') {
+                end++;
             }
-            text_buf[ti] = '\0';
-            char *trimmed = text_buf;
-            while (*trimmed && isspace((unsigned char)*trimmed)) trimmed++;
-            if (*trimmed) {
+            while (start < end && isspace((unsigned char)*start)) {
+                start++;
+            }
+            while (end > start && isspace((unsigned char)end[-1])) {
+                end--;
+            }
+            if (end > start) {
                 dom_node_t *text_node = dom_node_new(DOM_NODE_TEXT);
                 if (text_node) {
-                    strncpy(text_node->text, trimmed, sizeof(text_node->text) - 1);
+                    size_t len = (size_t)(end - start);
+                    if (len >= sizeof(text_node->text)) {
+                        len = sizeof(text_node->text) - 1;
+                    }
+                    memcpy(text_node->text, start, len);
+                    text_node->text[len] = '\0';
                     dom_node_append_child(node, text_node);
                 }
             }
+            *p = end;
         }
     }
     return node;
@@ -216,7 +278,7 @@ dom_tree_t *dom_parse(const char *html) {
     while (*p) {
         skip_whitespace(&p);
         if (*p == '<') {
-            dom_node_t *child = parse_element(&p, tree->root);
+            dom_node_t *child = parse_element(&p, tree->root, 0);
             if (child == (dom_node_t *)-1) break;
             if (child) {
                 dom_node_append_child(tree->root, child);
@@ -227,19 +289,31 @@ dom_tree_t *dom_parse(const char *html) {
             p++;
         }
     }
+    /* A normal document nests head/body inside <html>, so the direct-child
+     * scan above misses them and the renderer used to walk the whole tree
+     * (showing <title> and raw <style> CSS as page text). Resolve them
+     * anywhere in the tree before falling back to the root. */
+    if (!tree->head) {
+        tree->head = dom_find_first_by_tag(tree, "head");
+    }
+    if (!tree->body) {
+        tree->body = dom_find_first_by_tag(tree, "body");
+    }
     if (!tree->body) {
         tree->body = tree->root;
     }
-    dom_node_t *child = tree->body->first_child;
-    while (child) {
-        if (strcmp(child->tag, "title") == 0) {
-            dom_node_t *text = child->first_child;
-            if (text && text->type == DOM_NODE_TEXT) {
-                strncpy(tree->title, text->text, sizeof(tree->title) - 1);
+    if (tree->head != NULL) {
+        dom_node_t *child = tree->head->first_child;
+        while (child) {
+            if (strcmp(child->tag, "title") == 0) {
+                dom_node_t *text = child->first_child;
+                if (text && text->type == DOM_NODE_TEXT) {
+                    strncpy(tree->title, text->text, sizeof(tree->title) - 1);
+                }
+                break;
             }
-            break;
+            child = child->next_sibling;
         }
-        child = child->next_sibling;
     }
     return tree;
 }
@@ -317,30 +391,33 @@ void dom_set_attribute(dom_node_t *node, const char *name, const char *value) {
     }
 }
 
+/* Append @p node's descendant text into @p buf in document order. Iterative in
+ * effect (each child is consumed as scanned), so a nested element's text is never
+ * copied onto itself (the old version memcpy'd the shared buffer onto itself). */
+static void dom_collect_text(const dom_node_t *node, char *buf, size_t cap, size_t *pos)
+{
+    const dom_node_t *child;
+
+    for (child = node->first_child; child != NULL; child = child->next_sibling) {
+        if (child->type == DOM_NODE_TEXT) {
+            size_t len = strlen(child->text);
+            if (*pos + len < cap - 1) {
+                memcpy(buf + *pos, child->text, len);
+                *pos += len;
+            }
+        } else {
+            dom_collect_text(child, buf, cap, pos);
+        }
+    }
+}
+
 const char *dom_get_text(const dom_node_t *node) {
     if (!node) return "";
     if (node->type == DOM_NODE_TEXT) return node->text;
     static char buf[4096];
-    buf[0] = '\0';
     size_t pos = 0;
-    dom_node_t *child = node->first_child;
-    while (child && pos < sizeof(buf) - 1) {
-        if (child->type == DOM_NODE_TEXT) {
-            size_t len = strlen(child->text);
-            if (pos + len < sizeof(buf) - 1) {
-                memcpy(buf + pos, child->text, len);
-                pos += len;
-            }
-        } else {
-            const char *child_text = dom_get_text(child);
-            size_t len = strlen(child_text);
-            if (pos + len < sizeof(buf) - 1) {
-                memcpy(buf + pos, child_text, len);
-                pos += len;
-            }
-        }
-        child = child->next_sibling;
-    }
+    buf[0] = '\0';
+    dom_collect_text(node, buf, sizeof(buf), &pos);
     buf[pos] = '\0';
     return buf;
 }

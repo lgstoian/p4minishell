@@ -11,6 +11,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "esp_log.h"
 
 void *p4heap_alloc_psram(size_t size)
 {
@@ -154,4 +155,63 @@ bool p4heap_dma_ready(size_t need)
 size_t p4heap_internal_largest(void)
 {
     return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+}
+
+/* ========================================================================
+ * GRACEFUL DEGRADATION CASCADE (MS-DOS-inspired memory fallback chain)
+ * ========================================================================
+ *
+ * When a critical allocation fails, the cascade walks through progressively
+ * less-preferred memory pools instead of returning NULL immediately:
+ *
+ *   1. PSRAM      — preferred bulk pool, largest available
+ *   2. Internal   — fallback when PSRAM is exhausted (loses bulk capacity)
+ *   3. DMA-capable — last resort for small control blocks (preserves DMA)
+ *
+ * Each step logs a warning so the operator can see the degradation in the
+ * debug log. Returns NULL only if every pool failed.
+ */
+
+void *p4heap_alloc_cascade(size_t size, uint32_t *pool_out)
+{
+    void *p;
+    uint32_t pool = 0;
+
+    if (size == 0) {
+        size = 1;
+    }
+
+    /* Step 1: PSRAM (preferred). */
+    p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p != NULL) {
+        pool = MALLOC_CAP_SPIRAM;
+        goto done;
+    }
+
+    /* Step 2: Internal RAM (PSRAM exhausted). */
+    p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (p != NULL) {
+        pool = MALLOC_CAP_INTERNAL;
+        ESP_LOGW("p4heap",
+                 "cascade: PSRAM exhausted, fell back to internal RAM (%u bytes)", (unsigned)size);
+        goto done;
+    }
+
+    /* Step 3: DMA-capable (last resort for small blocks). */
+    p = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (p != NULL) {
+        pool = MALLOC_CAP_DMA;
+        ESP_LOGW("p4heap",
+                 "cascade: internal RAM exhausted, fell back to DMA pool (%u bytes)", (unsigned)size);
+        goto done;
+    }
+
+    ESP_LOGE("p4heap",
+             "cascade: all memory pools exhausted for %u bytes", (unsigned)size);
+
+done:
+    if (pool_out != NULL) {
+        *pool_out = pool;
+    }
+    return p;
 }

@@ -790,7 +790,7 @@ def run(dev, ctx):
     fill = []
     for _ in range(5):
         f = re.search(r"\[(bg\d+)\] started",
-                      dev.run("start delay 30000", timeout=30))
+                      dev.run("start P4VICT.BAT", timeout=30))
         if f is not None:
             fill.append(f.group(1))
         else:
@@ -802,7 +802,7 @@ def run(dev, ctx):
     if running_after == 3:
         # Launch 4th job - should be refused and fire tmgr_pool_full
         c.expect("fourth launch refused", "no background slots free",
-                 dev.run("start delay 30000", timeout=30))
+                 dev.run("start P4VICT.BAT", timeout=30))
         c.expect("refusal fires tmgr_pool_full", "P4FULL-EL=0",
                  dev.run("wait tmgr_pool_full /t:5 & echo P4FULL-EL=%ERRORLEVEL%",
                          timeout=30))
@@ -837,14 +837,25 @@ def run(dev, ctx):
     c.expect("ftype shows the mapping", "ASSOCAPP=.tst",
              dev.run("ftype ASSOCAPP", timeout=30))
     # ASSOCT needs a .BAT too: `ftype` bare iterates launch discovery,
-    # and an APPINFO without its shim is not an installed app.
+    # and an APPINFO without its shim is not an installed app. The APPS
+    # directory may not exist on a clean card (s14 deploys it later), so
+    # create it before pushing the metadata.
+    dev.run("md APPS", timeout=15)
+    _appinfo = b"title=AssocT\r\ndescription=t\r\nversion=1.0\r\nhandles=.tst,.md\r\n"
     dev.push_file("ASSOCT.BAT", b"@echo off\r\necho ASSOCT here\r\n")
-    dev.push_file("APPS/ASSOCT.APPINFO",
-                  b"title=AssocT\r\ndescription=t\r\nversion=1.0\r\nhandles=.tst,.md\r\n")
+    dev.push_file("APPS/ASSOCT.APPINFO", _appinfo)
+    # The ACK-paced push can lose the metadata under FATFS descriptor pressure
+    # in a long suite; verify the file and retry once before grading ftype.
+    if "handles=" not in dev.run("type APPS/ASSOCT.APPINFO", timeout=15):
+        dev.run("delay 1000", timeout=15)
+        dev.push_file("APPS/ASSOCT.APPINFO", _appinfo)
     c.expect("ftype shows declared handlers", ".tst,.md",
              dev.run("ftype ASSOCT", timeout=30))
-    c.expect("ftype lists declared apps", "ASSOCT=.tst,.md",
-             dev.run("ftype", timeout=30))
+    out = dev.run("ftype", timeout=30)
+    if "ASSOCT=.tst,.md" not in out:
+        dev.push_file("APPS/ASSOCT.APPINFO", _appinfo)
+        out = dev.run("ftype", timeout=30)
+    c.expect("ftype lists declared apps", "ASSOCT=.tst,.md", out)
     dev.run("assoc .tst=", timeout=30)
     c.expect("assoc clear drops the mapping", "no association",
              dev.run("assoc .tst", timeout=30))

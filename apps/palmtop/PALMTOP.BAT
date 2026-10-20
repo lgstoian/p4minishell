@@ -9,6 +9,7 @@ rem  Markers: [M-PALM], [M-PALM-TIMER], [M-PALM-CALC], [M-PALM-CSV],
 rem           [M-PALM-CRYPT], [M-PALM-BIND], [M-PALM-TCP].
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-PALM]
 title "Palmtop"
 goto menu

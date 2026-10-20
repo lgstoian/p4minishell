@@ -44,6 +44,17 @@ extern "C" {
 void boot_run_startup(void);
 
 /**
+ * Block (bounded) until the asynchronous boot-script task has finished, if one
+ * is running. The boot script runs on its own internal-stack task so a slow
+ * AUTOEXEC.BAT never blocks the mounting task; that stack (and its DMA share) is
+ * freed only once the task is deleted, which can overlap the ESP-Hosted C6
+ * bring-up and starve its DMA buffer allocation. Call this once before
+ * `networking_init()` so the C6 transport starts on a settled heap. Returns
+ * immediately when no boot-script task is running (or after a ~2 s cap).
+ */
+void boot_wait_script_idle(void);
+
+/**
  * Ensure CONFIG.SYS and AUTOEXEC.BAT exist on the SD card root, generating the
  * documented defaults when either is missing. Idempotent: an existing file is
  * never overwritten.

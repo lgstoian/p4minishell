@@ -72,6 +72,7 @@ static audio_request_t s_audio_request;
 static void audio_play_task(void *arg);
 static void audio_task_play_tone(const audio_request_t *req);
 static void audio_task_play_wav(const audio_request_t *req);
+static bool audio_dma_room_for_playback(void);
 static void audio_amp_mute(void);
 static void audio_amp_apply_playback(void);
 
@@ -129,6 +130,8 @@ static esp_err_t audio_ensure_speaker(void)
      * mutes it again before every close. Best-effort: boards whose amp is
      * codec-driven report NOT_SUPPORTED and keep the driver's own control. */
     audio_amp_mute();
+    /* Apply the level set before the codec existed (boot `volume`/CONFIG.SYS). */
+    (void)esp_codec_dev_set_out_vol(s_speaker_dev, s_volume_percent);
     return ESP_OK;
 }
 
@@ -173,8 +176,9 @@ static void audio_task_play_tone(const audio_request_t *req)
 
     audio_fill_speaker_info(&fs);
     if (audio_ensure_speaker() != ESP_OK ||
+        !audio_dma_room_for_playback() ||
         esp_codec_dev_open(s_speaker_dev, &fs) != ESP_CODEC_DEV_OK) {
-        shell_transcript_appendf_ansi(SH_ERR "tone: failed to open the speaker\n" SH_RST);
+        shell_transcript_appendf_ansi(SH_ERR "tone: speaker unavailable\n" SH_RST);
         return;
     }
     /* Clocks are running from here on: resolve the jack and gate the amp for
@@ -358,8 +362,9 @@ static void audio_task_play_wav(const audio_request_t *req)
      * (see audio_mic_record_ms). */
     fs.sample_rate = sample_rate;
     if (audio_ensure_speaker() != ESP_OK ||
+        !audio_dma_room_for_playback() ||
         esp_codec_dev_open(s_speaker_dev, &fs) != ESP_CODEC_DEV_OK) {
-        shell_transcript_appendf_ansi(SH_ERR "wavplay: failed to open the speaker\n" SH_RST);
+        shell_transcript_appendf_ansi(SH_ERR "wavplay: speaker unavailable\n" SH_RST);
         fclose(file);
         return;
     }
@@ -465,7 +470,32 @@ esp_err_t audio_init(void)
     if (error != ESP_OK) {
         return error;
     }
-    return audio_ensure_speaker();
+    error = audio_ensure_speaker();
+    return error;
+}
+
+/* The I2S codec reconfigures its DMA descriptors on open. When the DMA-capable
+ * heap is too fragmented (hosted C6 + SD + display + deep apps), that
+ * allocation fails inside esp_codec_dev_open and IDF leaves the channel with a
+ * NULL descriptor while still enabling it -> load access fault. Refuse the
+ * playback window up front instead of faulting; a later attempt on a quieter
+ * heap works normally. */
+#define AUDIO_DMA_MIN_LARGEST_BYTES  (2 * 1024)
+#define AUDIO_DMA_MIN_FREE_BYTES     (6 * 1024)
+
+static bool audio_dma_room_for_playback(void)
+{
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    size_t free_bytes = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+
+    if (largest >= AUDIO_DMA_MIN_LARGEST_BYTES &&
+        free_bytes >= AUDIO_DMA_MIN_FREE_BYTES) {
+        return true;
+    }
+    shell_transcript_appendf_ansi(SH_ERR "audio: not enough DMA memory for playback "
+                                  "(largest %u, free %u)\n" SH_RST,
+                                  (unsigned)largest, (unsigned)free_bytes);
+    return false;
 }
 
 bool audio_play_tone(int freq_hz, uint32_t duration_ms)
@@ -542,24 +572,23 @@ bool audio_playback_started(void)
 
 esp_err_t audio_set_volume(int percent)
 {
-    esp_err_t error;
-
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
 
-    error = audio_ensure_speaker();
-    if (error != ESP_OK) {
-        return error;
-    }
+    s_volume_percent = percent;
 
-    if (esp_codec_dev_set_out_vol(s_speaker_dev, percent) != ESP_CODEC_DEV_OK) {
+    /* Do NOT initialize the speaker just to set a level. AUTOEXEC applies the
+     * saved volume before networking_init(); bringing the I2S DMA up there
+     * starved the hosted C6 SDIO card init. If the codec is not up yet the
+     * level is applied by audio_ensure_speaker() on first playback. */
+    if (s_speaker_dev != NULL &&
+        esp_codec_dev_set_out_vol(s_speaker_dev, percent) != ESP_CODEC_DEV_OK) {
         return ESP_FAIL;
     }
 
-    s_volume_percent = percent;
     /* A volume change must never strand the amp on: gain rides the codec,
      * the amp rides the playback window (mute-at-boot invariant). */
-    if (!s_audio_playing) {
+    if (s_speaker_dev != NULL && !s_audio_playing) {
         audio_amp_mute();
     }
     return ESP_OK;

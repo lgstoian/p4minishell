@@ -116,6 +116,24 @@ over `dialog`/`list`/`ask`/`form`/`menu` verbs.
 storage search core (`storage_walk_files` + `storage_scan_file_lines`), no
 on-disk index — always live.
 
+### 12. Browser and app sweep (v1.4.0)
+
+- **Browser:** `browser <url|file>` renders HTML+CSS visibly in the 80x25 TUI
+  page (headings, lists, links, tables, image alt), with navigation history,
+  bookmarks, Basic auth, and an offline SD path. Test readback is
+  `tui dump`; the offline showcase is `apps/website/` + `WEB.BAT`, captured as
+  [`docs/assets/browser-website.png`](docs/assets/browser-website.png).
+- **HTTP:** `httpget` gained `/h:`, `/post`, `/stream` and a persisted cookie
+  jar (`/cookie`, `sd:/HTTPCOOK.TXT`).
+- **Apps:** a shared `APPLIB.BAT` routine library and opt-in feature probe
+  (`P4_APP_FEATURES=1`), `CHAT.BAT`, a single deploy manifest
+  (`apps/app_manifest.py`), and a deep rewrite pass over every entry app.
+- **Memory:** the 28 KB worker budget was made workable by moving the browser
+  CSS ruleset, the SD history save and the transcript to PSRAM, and by sizing
+  the timer/Wi-Fi tasks to the boot-time C6/SD DMA needs.
+- Locale persistence (`config LOCALE=`) and a working `js eval/run/call`
+  surface round out the release.
+
 ---
 
 ## Part 2 — Where we are going

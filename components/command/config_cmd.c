@@ -40,6 +40,7 @@
 #include "theme.h"
 #include "networking.h"
 #include "wifi_known.h"
+#include "locale.h"
 
 #define SHELL_COMMAND_BYTES         P4_CONFIG_COMMAND_BYTES
 
@@ -286,6 +287,25 @@ static void config_render_header(char *out, size_t out_size)
     snprintf(out, out_size, "%s", header_get_visible() ? "ON" : "OFF");
 }
 
+/* Locale (lightweight i18n). The running value lives in the shell's locale
+ * module; persisting it here is what makes it survive a reboot (boot.c applies
+ * the directive through boot_handle_locale()). */
+static bool config_apply_locale(const char *value)
+{
+    locale_id_t id;
+
+    if (!locale_parse(value, &id)) {
+        return false;
+    }
+    locale_set(id);
+    return true;
+}
+
+static void config_render_locale(char *out, size_t out_size)
+{
+    snprintf(out, out_size, "%s", locale_name(locale_get()));
+}
+
 static const config_setting_t config_settings[] = {
     { "BRIGHTNESS",       STR(P4_CONFIG_DISPLAY_DEFAULT_BRIGHTNESS), config_apply_brightness,       config_render_brightness },
     { "ROTATE",           "0",                                        config_apply_rotate,           config_render_rotate },
@@ -298,6 +318,7 @@ static const config_setting_t config_settings[] = {
     { "HEADER",           "ON",                                      config_apply_header,           config_render_header },
     { "LAUNCH_APP",       "",                                        config_apply_launch_app,       config_render_launch_app },
     { "HOSTNAME",         P4_CONFIG_HOSTNAME_DEFAULT,                config_apply_hostname,         config_render_hostname },
+    { "LOCALE",           "US",                                      config_apply_locale,           config_render_locale },
 };
 
 #define CONFIG_SETTING_COUNT (sizeof(config_settings) / sizeof(config_settings[0]))

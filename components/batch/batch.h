@@ -424,6 +424,12 @@ int batch_get_errorlevel(void);
 /** Set the current errorlevel. */
 void batch_set_errorlevel(int level);
 
+/** Set a specific error code (ERR_* from error_strings.h). */
+void batch_set_errorcode(int code);
+
+/** Get the most recent specific error code. */
+int batch_get_errorcode(void);
+
 /* ========================================================================
  * BACKGROUND TASK SLOTS (`start` pool)
  * ======================================================================== */

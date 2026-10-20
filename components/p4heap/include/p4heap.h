@@ -95,6 +95,13 @@ bool p4heap_dma_ready(size_t need);
  *  compare with `p4heap_dma_largest()` for the DMA-usable figure). */
 size_t p4heap_internal_largest(void);
 
+/** Graceful degradation cascade: PSRAM → internal RAM → DMA-capable.
+ *  Tries each pool in order, logging a warning at each degradation step.
+ *  @param size    Bytes to allocate.
+ *  @param pool_out Receives the pool that succeeded (MALLOC_CAP_*), or 0 on failure.
+ *  @return Pointer to allocated memory, or NULL if all pools exhausted. */
+void *p4heap_alloc_cascade(size_t size, uint32_t *pool_out);
+
 #ifdef __cplusplus
 }
 #endif

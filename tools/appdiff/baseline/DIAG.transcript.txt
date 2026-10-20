@@ -1,5 +1,6 @@
 launch DIAG
 REPORT=DIAG.TXT
 [M-DIAG]
+title: set to 'PN Diagnostics'
 [M-DIAG-MENU]
 [M-DIAG-DONE]

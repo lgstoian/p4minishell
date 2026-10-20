@@ -8,6 +8,7 @@ rem  appmode if TUI not available. Shows sysinfo, mem, ps, battery, wifi.
 rem =====================================================================
 
 :main
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "Live System"
 echo [M-SYS]
 tui fullscreen on

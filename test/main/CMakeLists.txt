@@ -69,6 +69,10 @@ idf_component_register(
         test_header.c
         test_clock.c
         test_hardware.c
+        test_browser.c
+        test_locale.c
+        test_httpget.c
+        test_error_strings.c
     INCLUDE_DIRS
         .
         "${CMAKE_SOURCE_DIR}"

@@ -139,6 +139,11 @@ static bool s_initialized = false;
 static QueueHandle_t s_command_queue = NULL;
 static TaskHandle_t s_command_worker_handle = NULL;
 static StaticTask_t s_worker_tcb;
+/* Static .bss stack: the 28 KB must be one contiguous internal block, and the
+ * heap is too fragmented after boot (largest free ~22 KB) to allocate it
+ * lazily. The internal-RAM budget is kept workable by moving the history save
+ * off the timer task (4 KB timer stack instead of 8 KB) and sizing the Wi-Fi
+ * init task to 10 KB, so the boot-time SDMMC/C6 DMA allocations still fit. */
 static StackType_t s_worker_stack[(P4_CONFIG_COMMAND_TASK_STACK + sizeof(StackType_t) - 1) / sizeof(StackType_t)];
 
 
@@ -150,6 +155,9 @@ static StackType_t s_worker_stack[(P4_CONFIG_COMMAND_TASK_STACK + sizeof(StackTy
 
 /* Token bound for the redirection parser below. */
 #define SHELL_REDIRECT_TOKEN_MAX        4
+
+/* Defined near the lifecycle section; needed by the lazy worker ensure. */
+static void command_worker_task(void *arg);
 
 /* ========================================================================
  * REDIRECTION PARSING
@@ -1986,10 +1994,30 @@ void command_history_save_now(void)
 #endif
 }
 
-static void command_history_persist_cb(void *arg)
+/* The history save writes the SD card and needs a few KB of stack. Running it
+ * directly on the esp_timer task made that task's high-water ~6.4 KB, forcing
+ * CONFIG_ESP_TIMER_TASK_STACK_SIZE=8192 (~8 KB of internal RAM permanently).
+ * A one-shot PSRAM-stack task does the SD write instead (SD, unlike flash, is
+ * safe from a PSRAM stack), so the timer task stays shallow. Falls back to the
+ * timer task only if the one-shot task cannot be created. */
+static void command_history_persist_task(void *arg)
 {
     (void)arg;
     if (shell_history_generation() != s_history_saved_generation) {
+        command_history_save_now();
+    }
+    vTaskDelete(NULL);
+}
+
+static void command_history_persist_cb(void *arg)
+{
+    (void)arg;
+    if (shell_history_generation() == s_history_saved_generation) {
+        return;
+    }
+    if (xTaskCreateWithCaps(command_history_persist_task, "hist_save", 8192,
+                            NULL, tskIDLE_PRIORITY + 1, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         command_history_save_now();
     }
 }
@@ -2490,7 +2518,12 @@ static void shell_command_ftype(int argc, char **argv)
         int i;
         int shown = 0;
 
-        table = calloc((size_t)P4_CONFIG_LAUNCH_MAX, sizeof(*table));
+        /* The launch table is sizable (~16 KB); PSRAM first so `ftype` keeps
+         * working when the internal heap is tight after a long suite. */
+        table = p4heap_calloc_psram((size_t)P4_CONFIG_LAUNCH_MAX, sizeof(*table));
+        if (table == NULL) {
+            table = calloc((size_t)P4_CONFIG_LAUNCH_MAX, sizeof(*table));
+        }
         if (table == NULL) {
             shell_print_error("ftype: out of memory");
             batch_set_errorlevel(1);
@@ -3241,6 +3274,38 @@ static const bg_job_t *command_bg_find(const char *job, int *slot_out)
     return NULL;
 }
 
+/**
+ * Find all active background jobs matching a DOS-style wildcard pattern.
+ * Calls @p cb for every match; stops early if @p cb returns false.
+ * Returns the number of matches.
+ */
+static int command_bg_find_pattern(const char *pattern,
+                                   bool (*cb)(const bg_job_t *job, int slot, void *ctx),
+                                   void *ctx)
+{
+    int matches = 0;
+    size_t index;
+
+    for (index = 0; index < P4_CONFIG_BG_TASKS; index++) {
+        if (!s_bg_jobs[index].active) {
+            continue;
+        }
+        if (!shell_wildcard_match(pattern, s_bg_jobs[index].name)) {
+            continue;
+        }
+        matches++;
+        if (cb != NULL) {
+            if (!cb(&s_bg_jobs[index], (int)index + 1, ctx)) {
+                break;
+            }
+        }
+    }
+    return matches;
+}
+
+/** Callback for command_bg_find_pattern: request kill on one matching job. */
+static bool kill_one_job(const bg_job_t *job, int slot, void *ctx);
+
 /** Launch failure reasons (the `start` verb maps these to messages; the
  *  supervisor hook only needs slot-or--1). */
 typedef enum {
@@ -3495,14 +3560,22 @@ static void shell_command_taskkill(int argc, char **argv)
     int slot = 0;
 
     if (argc != 2) {
-        shell_print_usage("Usage: taskkill <job>   (name like bg0, or slot number)");
+        shell_print_usage("Usage: taskkill <job>   (name like bg0, slot number, or pattern like bg*)");
         batch_set_errorlevel(2);
         return;
     }
     job = command_bg_find(argv[1], &slot);
     if (job == NULL) {
-        shell_transcript_appendf("taskkill: no such job '%s'\n", argv[1]);
-        batch_set_errorlevel(1);
+        /* No exact match — try wildcard pattern (taskkill bg*, taskkill *.bat). */
+        int killed = command_bg_find_pattern(argv[1], kill_one_job, NULL);
+        if (killed == 0) {
+            shell_transcript_appendf("taskkill: no job matched '%s'\n", argv[1]);
+            batch_set_errorlevel(1);
+        } else {
+            shell_transcript_appendf("taskkill: stopped %d job%s\n", killed,
+                                     killed == 1 ? "" : "s");
+            batch_set_errorlevel(0);
+        }
         return;
     }
     if (command_bg_heal_stale(slot)) {
@@ -3522,11 +3595,6 @@ static void shell_command_taskkill(int argc, char **argv)
     batch_bg_request_kill(slot);
     if ((s_bg_jobs[slot - 1].suspended || command_bg_task_suspended(job)) &&
         job->handle != NULL) {
-        /* Wake it so the kill unwinds now: a suspended job never polls
-         * the kill flag, so without this the slot would leak until a
-         * manual resume. The FreeRTOS state (not just our flag) decides:
-         * a task frozen by any path still wakes. Resuming a running task
-         * is a harmless no-op. */
         vTaskResume(job->handle);
         s_bg_jobs[slot - 1].suspended = false;
         shell_transcript_appendf("taskkill: [%s] stop requested (resumed to stop)\n",
@@ -3535,6 +3603,22 @@ static void shell_command_taskkill(int argc, char **argv)
         shell_transcript_appendf("taskkill: [%s] stop requested\n", job->name);
     }
     batch_set_errorlevel(0);
+}
+
+/** Callback for command_bg_find_pattern: request kill one matching job. */
+static bool kill_one_job(const bg_job_t *job, int slot, void *ctx)
+{
+    (void)ctx;
+    if (!job->running) {
+        return true;
+    }
+    batch_bg_request_kill(slot);
+    if ((s_bg_jobs[slot - 1].suspended || command_bg_task_suspended(job)) &&
+        job->handle != NULL) {
+        vTaskResume(job->handle);
+        s_bg_jobs[slot - 1].suspended = false;
+    }
+    return true;
 }
 
 /* ========================================================================
@@ -3916,6 +4000,450 @@ static void shell_print_http_body(const uint8_t *body, size_t size)
     if (limit < size) {
         shell_print_muted("httpget: body truncated at %u bytes (use httpget <url> <file> for the full body)",
                           (unsigned int)limit);
+    }
+}
+
+/* ---- httpget cookie-jar persistence -------------------------------------
+ * The jar itself lives in components/networking; persistence lives here so the
+ * SD write path (guarded session + storage helpers) is reused and networking
+ * gains no new file dependency. Format: one `domain<TAB>name<TAB>value` line
+ * per cookie. The jar is loaded lazily once and saved only when networking
+ * reports it changed. */
+#define HTTPGET_COOKIE_FILE   "sd:/HTTPCOOK.TXT"
+#define HTTPGET_MAX_HEADERS   NETWORKING_HTTP_MAX_EXTRA_HEADERS
+
+static bool s_httpget_cookies_loaded = false;
+
+/* Read a whole SD text file into a heap buffer (caller frees). */
+static char *httpget_read_text_file(const char *path)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    FILE *f;
+    char *buf;
+    size_t cap = 512;
+    size_t len = 0;
+    int c;
+
+    if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
+        return NULL;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        return NULL;
+    }
+    f = fopen(resolved, "r");
+    if (f == NULL) {
+        shell_sd_end(&session, "httpget");
+        return NULL;
+    }
+    buf = p4heap_alloc_any(cap);
+    if (buf == NULL) {
+        fclose(f);
+        shell_sd_end(&session, "httpget");
+        return NULL;
+    }
+    while ((c = fgetc(f)) != EOF) {
+        if (len + 1 >= cap) {
+            size_t ncap = cap * 2;
+            char *grown = realloc(buf, ncap);
+            if (grown == NULL) {
+                break;
+            }
+            buf = grown;
+            cap = ncap;
+        }
+        buf[len++] = (char)c;
+    }
+    buf[len] = '\0';
+    fclose(f);
+    shell_sd_end(&session, "httpget");
+    return buf;
+}
+
+static void httpget_load_cookies(void)
+{
+    char *text;
+    char *line;
+
+    if (s_httpget_cookies_loaded) {
+        return;
+    }
+    s_httpget_cookies_loaded = true;
+
+    text = httpget_read_text_file(HTTPGET_COOKIE_FILE);
+    if (text == NULL) {
+        return;
+    }
+    line = text;
+    while (line != NULL && *line != '\0') {
+        char *nl = strchr(line, '\n');
+        char *tab1;
+        char *tab2;
+
+        if (nl != NULL) {
+            *nl = '\0';
+        }
+        {
+            size_t len = strlen(line);
+            while (len > 0 && line[len - 1] == '\r') line[--len] = '\0';
+        }
+        tab1 = strchr(line, '\t');
+        tab2 = (tab1 != NULL) ? strchr(tab1 + 1, '\t') : NULL;
+        if (tab1 != NULL && tab2 != NULL) {
+            *tab1 = '\0';
+            *tab2 = '\0';
+            if (line[0] != '\0' && tab1[1] != '\0') {
+                (void)networking_http_cookie_add(line, tab1 + 1, tab2 + 1, 0);
+            }
+        }
+        if (nl == NULL) {
+            break;
+        }
+        line = nl + 1;
+    }
+    free(text);
+    /* Loading is not a change worth writing straight back. */
+    (void)networking_http_cookie_take_dirty();
+}
+
+static void httpget_save_cookies(void)
+{
+    char *text;
+    size_t cap = (size_t)P4_CONFIG_HTTP_COOKIE_MAX * 480 + 1;
+    size_t pos = 0;
+    int count;
+    int i;
+
+    if (!networking_http_cookie_take_dirty()) {
+        return;
+    }
+    text = p4heap_alloc_any(cap);
+    if (text == NULL) {
+        return;
+    }
+    count = networking_http_cookie_count();
+    for (i = 0; i < count && pos + 2 < cap; i++) {
+        networking_cookie_t cookie;
+        int written;
+
+        if (!networking_http_cookie_at(i, &cookie)) {
+            continue;
+        }
+        written = snprintf(text + pos, cap - pos, "%s\t%s\t%s\n",
+                           cookie.domain, cookie.name, cookie.value);
+        if (written < 0 || (size_t)written >= cap - pos) {
+            break;
+        }
+        pos += (size_t)written;
+    }
+    if (pos == 0) {
+        text[0] = '\0';
+    }
+    (void)storage_write_text_file(HTTPGET_COOKIE_FILE, text);
+    free(text);
+}
+
+/* ---- `/stream` sink: a file when one is named, else the transcript ------ */
+typedef struct {
+    FILE *file;
+    size_t printed;
+} httpget_stream_t;
+
+static esp_err_t httpget_stream_cb(const uint8_t *chunk, size_t len,
+                                   size_t total, void *ctx)
+{
+    httpget_stream_t *sink = (httpget_stream_t *)ctx;
+    size_t i;
+
+    (void)total;
+    if (sink->file != NULL) {
+        if (fwrite(chunk, 1, len, sink->file) != len) {
+            return ESP_FAIL;
+        }
+        return ESP_OK;
+    }
+    if (sink->printed >= P4_CONFIG_HTTP_PRINT_BODY_BYTES) {
+        return ESP_OK;   /* transcript cap reached; keep draining */
+    }
+    {
+        char line[129];
+        size_t used = 0;
+
+        for (i = 0; i < len && sink->printed < P4_CONFIG_HTTP_PRINT_BODY_BYTES; i++) {
+            char ch = (char)chunk[i];
+
+            if ((unsigned char)ch < 0x20 && ch != '\n' && ch != '\r' && ch != '\t') {
+                ch = '.';
+            }
+            line[used++] = ch;
+            sink->printed++;
+            if (used >= sizeof(line) - 1) {
+                line[used] = '\0';
+                shell_transcript_append_text(line);
+                used = 0;
+            }
+        }
+        if (used > 0) {
+            line[used] = '\0';
+            shell_transcript_append_text(line);
+        }
+    }
+    return ESP_OK;
+}
+
+/** `httpget` / `wget` with the flag surface documented in command.md:
+ *
+ *   httpget [options] <url> [localfile]
+ *     /h:NAME=VALUE     extra request header (repeatable, max 4)
+ *     /post NAME=VALUE  send a urlencoded POST body (repeatable)
+ *     /stream [file]    stream the response instead of buffering it
+ *     /cookie [clear]   show or clear the persisted cookie jar
+ */
+static int shell_command_httpget(int argc, char **argv)
+{
+    const char *url = NULL;
+    const char *localfile = NULL;
+    const char *stream_file = NULL;
+    networking_http_header_t headers[HTTPGET_MAX_HEADERS];
+    networking_form_field_t fields[P4_CONFIG_HTTP_FORM_FIELDS_MAX];
+    size_t header_count = 0;
+    size_t field_count = 0;
+    bool do_post = false;
+    bool do_stream = false;
+    bool show_cookie = false;
+    bool clear_cookie = false;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        char *arg = argv[i];
+
+        if (strncmp(arg, "/h:", 3) == 0) {
+            char *eq = strchr(arg + 3, '=');
+            if (eq == NULL || eq == arg + 3) {
+                shell_print_error("httpget: /h: expects /h:NAME=VALUE");
+                return 2;
+            }
+            *eq = '\0';
+            if (header_count < HTTPGET_MAX_HEADERS) {
+                headers[header_count].name = arg + 3;
+                headers[header_count].value = eq + 1;
+                header_count++;
+            }
+        } else if (strcmp(arg, "/post") == 0) {
+            char *spec;
+            char *eq;
+
+            if (i + 1 >= argc) {
+                shell_print_error("httpget: /post expects NAME=VALUE");
+                return 2;
+            }
+            spec = argv[++i];
+            eq = strchr(spec, '=');
+            if (eq == NULL || eq == spec) {
+                shell_print_error("httpget: /post expects NAME=VALUE");
+                return 2;
+            }
+            *eq = '\0';
+            if (field_count < P4_CONFIG_HTTP_FORM_FIELDS_MAX) {
+                fields[field_count].name = spec;
+                fields[field_count].value = eq + 1;
+                field_count++;
+            }
+            do_post = true;
+        } else if (strcmp(arg, "/stream") == 0) {
+            do_stream = true;
+            if (i + 1 < argc &&
+                strncmp(argv[i + 1], "http://", 7) != 0 &&
+                strncmp(argv[i + 1], "https://", 8) != 0 &&
+                argv[i + 1][0] != '/') {
+                stream_file = argv[++i];
+            } else if (i + 1 < argc &&
+                       (strncmp(argv[i + 1], "/sd/", 4) == 0 ||
+                        strncmp(argv[i + 1], "/sdcard/", 8) == 0)) {
+                /* An absolute SD path is a file, not an option. */
+                stream_file = argv[++i];
+            }
+        } else if (strcmp(arg, "/cookie") == 0) {
+            show_cookie = true;
+            if (i + 1 < argc && shell_text_equals_ignore_case(argv[i + 1], "clear")) {
+                clear_cookie = true;
+                show_cookie = false;
+                i++;
+            }
+        } else if (arg[0] == '/' && strncmp(arg, "/sd/", 4) != 0 &&
+                   strncmp(arg, "/sdcard/", 8) != 0) {
+            shell_print_error("httpget: unknown option %s", arg);
+            return 2;
+        } else if (url == NULL) {
+            url = arg;
+        } else if (localfile == NULL) {
+            localfile = arg;
+        } else {
+            shell_print_error("httpget: too many arguments");
+            return 2;
+        }
+    }
+
+    if (do_post && do_stream) {
+        shell_print_error("httpget: /post and /stream are mutually exclusive");
+        return 2;
+    }
+
+    httpget_load_cookies();
+
+    if (clear_cookie) {
+        networking_http_cookie_clear();
+        httpget_save_cookies();
+        shell_print_ok("httpget: cookie jar cleared");
+        if (url == NULL) {
+            return 0;
+        }
+    }
+
+    if (show_cookie) {
+        int count = networking_http_cookie_count();
+        int n;
+
+        if (count == 0) {
+            shell_print_muted("httpget: no stored cookies\n");
+        }
+        for (n = 0; n < count; n++) {
+            networking_cookie_t cookie;
+
+            if (!networking_http_cookie_at(n, &cookie)) {
+                continue;
+            }
+            shell_transcript_appendf("%s\t%s=%s\n", cookie.domain,
+                                     cookie.name, cookie.value);
+        }
+        if (url == NULL) {
+            return 0;
+        }
+    }
+
+    if (url == NULL) {
+        shell_print_usage("Usage: httpget [/h:N=V] [/post N=V] [/stream [file]] [/cookie [clear]] <url> [localfile]");
+        return 2;
+    }
+
+    if (do_stream) {
+        httpget_stream_t sink = { 0 };
+        shell_sd_session_t session;
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+        bool session_open = false;
+        esp_err_t error;
+
+        if (stream_file != NULL) {
+            if (shell_fs_resolve_path(stream_file, resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("httpget: invalid path %s", stream_file);
+                return 1;
+            }
+            if (shell_sd_begin(&session) != ESP_OK) {
+                shell_print_error("httpget: SD card not present - insert and retry");
+                return 1;
+            }
+            session_open = true;
+            sink.file = fopen(resolved, "wb");
+            if (sink.file == NULL) {
+                shell_print_error("httpget: failed to open %s", resolved);
+                shell_sd_end(&session, "httpget");
+                return 1;
+            }
+        }
+
+        error = networking_http_get_stream(url, httpget_stream_cb, &sink);
+        if (sink.file != NULL) {
+            fclose(sink.file);
+        }
+        if (error == ESP_OK && sink.file != NULL) {
+            shell_print_ok("httpget: streamed to %s", resolved);
+        } else if (sink.file != NULL) {
+            (void)remove(resolved);
+            shell_print_error("httpget: stream failed - removed partial %s", resolved);
+        } else if (error == ESP_OK) {
+            shell_transcript_append_text("\n");
+        }
+        if (session_open) {
+            shell_sd_end(&session, "httpget");
+        }
+        httpget_save_cookies();
+        return error == ESP_OK ? 0 : 1;
+    }
+
+    {
+        networking_http_result_t result;
+        esp_err_t error;
+
+        memset(&result, 0, sizeof(result));
+        if (do_post) {
+            if (field_count == 0) {
+                shell_print_error("httpget: /post needs at least one NAME=VALUE");
+                return 2;
+            }
+            error = networking_http_post_form(url, fields, field_count, &result);
+        } else {
+            error = networking_http_get_ex(url,
+                                           header_count > 0 ? headers : NULL,
+                                           header_count,
+                                           NULL, NULL, NULL, &result);
+        }
+        httpget_save_cookies();
+        if (error != ESP_OK) {
+            networking_http_result_free(&result);
+            return 1;
+        }
+
+        if (localfile != NULL) {
+            char resolved[P4_CONFIG_SD_PATH_BYTES];
+            shell_sd_session_t session;
+            FILE *file = NULL;
+
+            if (shell_fs_resolve_path(localfile, resolved, sizeof(resolved)) != ESP_OK) {
+                shell_print_error("httpget: invalid path %s", localfile);
+                networking_http_result_free(&result);
+                return 1;
+            }
+            if (shell_sd_begin(&session) != ESP_OK) {
+                shell_print_error("httpget: SD card not present - insert and retry");
+                networking_http_result_free(&result);
+                return 1;
+            }
+            {
+                uint64_t reclaim = storage_get_file_size(resolved);
+
+                if (!storage_check_free_space(result.body_size, reclaim, "httpget")) {
+                    shell_sd_end(&session, "httpget");
+                    networking_http_result_free(&result);
+                    return 1;
+                }
+            }
+            file = fopen(resolved, "wb");
+            if (file == NULL) {
+                shell_print_error("httpget: failed to open %s", resolved);
+                shell_sd_end(&session, "httpget");
+                networking_http_result_free(&result);
+                return 1;
+            }
+            if (result.body_size > 0 &&
+                fwrite(result.body, 1, result.body_size, file) != result.body_size) {
+                fclose(file);
+                (void)remove(resolved);
+                shell_print_error("httpget: write failed - removed partial %s", resolved);
+                shell_sd_end(&session, "httpget");
+                networking_http_result_free(&result);
+                return 1;
+            }
+            fclose(file);
+            shell_sd_end(&session, "httpget");
+            shell_print_ok("httpget: saved %u bytes to %s",
+                           (unsigned int)result.body_size, resolved);
+        } else {
+            shell_print_http_body(result.body, result.body_size);
+            shell_transcript_append_text("\n");
+        }
+
+        networking_http_result_free(&result);
+        return 0;
     }
 }
 
@@ -5017,6 +5545,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "locale")) {
+        batch_set_errorlevel(shell_command_locale(argc, argv));
+        return true;
+    }
+
     /* Stopwatch runs live in the clock component; the int return becomes
      * ERRORLEVEL so batch files can branch on it. */
     if (shell_text_equals_ignore_case(argv[0], "timer") ||
@@ -5451,90 +5984,7 @@ bool shell_execute_command_core(char *command)
     }
 
     if (shell_text_equals_ignore_case(argv[0], "httpget") || shell_text_equals_ignore_case(argv[0], "wget")) {
-        networking_http_result_t result;
-        esp_err_t error;
-
-        if (argc < 2 || argc > 3) {
-            shell_print_usage("Usage: httpget <url> [localfile]");
-            batch_set_errorlevel(2);
-            return true;
-        }
-
-        error = networking_http_get(argv[1], &result);
-        if (error != ESP_OK) {
-            networking_http_result_free(&result);
-            batch_set_errorlevel(1);
-            return true;
-        }
-
-        if (argc == 3) {
-            /* Save the exact body to the SD card through the storage write
-             * path: cwd-relative resolution, guarded session, free-space
-             * precheck, and partial-destination cleanup on failure. */
-            char resolved[SHELL_SD_PATH_BYTES];
-            shell_sd_session_t session;
-            FILE *file = NULL;
-
-            if (shell_fs_resolve_path(argv[2], resolved, sizeof(resolved)) != ESP_OK) {
-                shell_print_error("httpget: invalid path %s", argv[2]);
-                networking_http_result_free(&result);
-                batch_set_errorlevel(1);
-                return true;
-            }
-
-            if (shell_sd_begin(&session) != ESP_OK) {
-                shell_print_error("httpget: SD card not present - insert and retry");
-                networking_http_result_free(&result);
-                batch_set_errorlevel(1);
-                return true;
-            }
-
-            /* Refuse before opening so an overwrite cannot destroy the existing
-             * file and then fail for lack of room. */
-            {
-                uint64_t reclaim = storage_get_file_size(resolved);
-
-                if (!storage_check_free_space(result.body_size, reclaim, "httpget")) {
-                    shell_sd_end(&session, "httpget");
-                    networking_http_result_free(&result);
-                    batch_set_errorlevel(1);
-                    return true;
-                }
-            }
-
-            file = fopen(resolved, "wb");
-            if (file == NULL) {
-                shell_print_error("httpget: failed to open %s", resolved);
-                shell_sd_end(&session, "httpget");
-                networking_http_result_free(&result);
-                batch_set_errorlevel(1);
-                return true;
-            }
-
-            if (result.body_size > 0 &&
-                fwrite(result.body, 1, result.body_size, file) != result.body_size) {
-                fclose(file);
-                (void)remove(resolved);
-                shell_print_error("httpget: write failed - removed partial %s", resolved);
-                shell_sd_end(&session, "httpget");
-                networking_http_result_free(&result);
-                batch_set_errorlevel(1);
-                return true;
-            }
-
-            fclose(file);
-            shell_sd_end(&session, "httpget");
-            shell_print_ok("httpget: saved %u bytes to %s",
-                           (unsigned int)result.body_size, resolved);
-        } else {
-            /* Print the body to the transcript (bounded and sanitized). A
-             * trailing newline keeps the next prompt on its own line. */
-            shell_print_http_body(result.body, result.body_size);
-            shell_transcript_append_text("\n");
-        }
-
-        networking_http_result_free(&result);
-        batch_set_errorlevel(0);
+        batch_set_errorlevel(shell_command_httpget(argc, argv));
         return true;
     }
 
@@ -6096,6 +6546,45 @@ void command_close_foreground_surfaces(void)
     }
 }
 
+/**
+ * Self-healing command worker integrity check (inspired by MS-DOS init).
+ *
+ * Validates the worker task handle, command queue, and worker TCB stack
+ * canary. If the queue is missing but the task is alive, re-creates the
+ * queue. If the task died, logs the failure for diagnostics. Called once
+ * during init and exposed for periodic health checks.
+ *
+ * Returns: 0 healthy, 1 repaired (queue re-created), -1 fatal (task dead).
+ */
+/* Create the worker on first use. Its internal-RAM stack is reserved now,
+ * after the boot-time SDMMC/C6 DMA buffers have been allocated, instead of at
+ * link time (see s_worker_stack). */
+static bool command_worker_ensure(void)
+{
+    if (s_command_worker_handle != NULL) {
+        return true;
+    }
+    if (s_command_queue == NULL) {
+        /* Self-heal: a soft reset can lose the queue while this module stays
+         * initialised. Re-create it rather than refusing every command. */
+        s_command_queue = xQueueCreate(SHELL_COMMAND_QUEUE_DEPTH,
+                                       sizeof(command_request_t *));
+        if (s_command_queue == NULL) {
+            ESP_LOGE(COMMAND_TAG, "self-heal: failed to create command queue");
+            return false;
+        }
+    }
+    s_command_worker_handle = xTaskCreateStatic(command_worker_task, "shell_cmd",
+                                                SHELL_COMMAND_TASK_STACK_BYTES / sizeof(StackType_t),
+                                                NULL, tskIDLE_PRIORITY + 2,
+                                                s_worker_stack, &s_worker_tcb);
+    if (s_command_worker_handle == NULL) {
+        ESP_LOGE(COMMAND_TAG, "Failed to create command worker task");
+        return false;
+    }
+    return true;
+}
+
 static void command_worker_task(void *arg)
 {
     (void)arg;
@@ -6135,9 +6624,9 @@ void shell_execute_command_async(char *command)
         return;
     }
 
-    if (s_command_queue == NULL) {
-        shell_print_error("shell: command worker not initialized");
-        shell_record_errorf("shell", ESP_FAIL, "Command worker not initialized");
+    if (!command_worker_ensure()) {
+        shell_print_error("shell: command worker unavailable (out of memory)");
+        shell_record_errorf("shell", ESP_ERR_NO_MEM, "Command worker unavailable");
         return;
     }
     /* A command-sized request is small and must-succeed; allocate it via
@@ -6470,30 +6959,18 @@ void command_init(void)
     batch_init();
     security_init();
 
-    /* Create the persistent command queue and worker task. The queue
-     * replaces per-command task creation: commands are posted to the
-     * queue and processed sequentially by one long-lived task, eliminating
-     * task-creation overhead and heap fragmentation. */
+    /* Create the persistent command queue. The worker task (and its large
+     * internal stack) is created lazily on the first command by
+     * command_worker_ensure(), after the boot-time SDMMC/C6 DMA buffers have
+     * claimed their memory. The worker still runs on internal RAM: it performs
+     * flash/NVS writes, where a PSRAM stack is inaccessible. */
     s_command_queue = xQueueCreate(SHELL_COMMAND_QUEUE_DEPTH, sizeof(command_request_t *));
     if (s_command_queue == NULL) {
         ESP_LOGE(COMMAND_TAG, "Failed to create command queue");
-    } else {
-        /* Static worker TCB + stack: the large stack is allocated in BSS
-         * (not heap) so it never fragments the heap before SDMMC/DMA buffer
-         * allocation. The worker runs OTA flash writes, so the stack must
-         * stay in internal RAM (PSRAM is inaccessible during flash writes). */
-        s_command_worker_handle = xTaskCreateStatic(command_worker_task,
-                           "shell_cmd",
-                           SHELL_COMMAND_TASK_STACK_BYTES / sizeof(StackType_t),
-                           NULL,
-                           tskIDLE_PRIORITY + 2,
-                           s_worker_stack,
-                           &s_worker_tcb);
-        if (s_command_worker_handle == NULL) {
-            ESP_LOGE(COMMAND_TAG, "Failed to create command worker task");
-            vQueueDelete(s_command_queue);
-            s_command_queue = NULL;
-        }
+    } else if (!command_worker_ensure()) {
+        ESP_LOGE(COMMAND_TAG, "Failed to create command worker task");
+        vQueueDelete(s_command_queue);
+        s_command_queue = NULL;
     }
 
     /* Suspended bg pool for `start`: same stack as the main worker (bg jobs

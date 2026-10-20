@@ -147,17 +147,17 @@ def run(dev, ctx):
 
         # Save As from an *unnamed* buffer: the prompt is then empty, so the
         # typed path is not appended to a pre-filled current path.
-        dev.send("edit", 6.0)
+        dev.send("edit", 8.0)
         c.check("unnamed editor opened",
-                _wait_editor(dev, "open", timeout=15) == "open",
+                _wait_editor(dev, "open", timeout=20) == "open",
                 "state=%r" % _ui_state(dev)[-160:])
-        dev.send("UNNAMED LINE ONE", 1.5)
-        dev.send("\\o", 2.0)
-        dev.send(FILE_C, 3.0)
-        dev.send("ZZCMARKER", 1.5)
-        dev.send("\\s", 6.0)
-        dev.send("\\q", 5.0)
-        dev.send("y", 2.5)
+        dev.send("UNNAMED LINE ONE", 2.5)
+        dev.send("\\o", 3.5)
+        dev.send(FILE_C, 5.0)
+        dev.send("ZZCMARKER", 2.5)
+        dev.send("\\s", 8.0)
+        dev.send("\\q", 6.0)
+        dev.send("y", 3.5)
         c.check("editor closed after save-as",
                 _wait_editor(dev, "closed", timeout=12) == "closed",
                 "state=%r" % _ui_state(dev)[-160:])

@@ -7,6 +7,7 @@ rem  Uses TUI for Wi-Fi status, connect, ping, dns, fetch.
 rem =====================================================================
 
 :main
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "Network Tools"
 echo [M-NET]
 draw clear screen

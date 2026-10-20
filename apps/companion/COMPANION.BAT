@@ -6,6 +6,7 @@ rem  COMPANION.BAT - entry point for the P4 Companion.
 rem  Enhanced TUI with fullscreen, draw boxes, and status.
 rem =====================================================================
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "P4 Companion"
 gosub LIB.BAT::load_settings
 

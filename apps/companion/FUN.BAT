@@ -7,6 +7,7 @@ rem  and a calc playground. Enhanced TUI with draw and fullscreen.
 rem =====================================================================
 
 :main
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "Fun & Demos"
 echo [M-FUN]
 draw clear screen

@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from p4test.device import Device  # noqa: E402
 
-PROTO_TAG = "p4sync-1"
+from .protocol import PROTO_TAG  # single source of truth for the handshake tag
 
 
 class P4SyncClient:

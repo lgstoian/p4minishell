@@ -1,4 +1,4 @@
-﻿/*
+/*
  * SPDX-FileCopyrightText: 2026 Stoian Alexandru
  * SPDX-License-Identifier: MIT
  */
@@ -12,6 +12,7 @@
  */
 
 #include "shell.h"
+#include "locale.h"
 #include "strutil.h"
 #include "esp_memory_utils.h"
 #include <soc/soc.h>
@@ -353,6 +354,12 @@ static TaskHandle_t s_uart_console_task_handle;
  * 0 while the SOF monitor reports connected. Used to tolerate transient false
  * disconnects without blocking on-device when no host is attached. */
 static int64_t s_mirror_disconnected_since_us;
+/* True only after shell_uart_console_start() has fully installed the
+ * USB-Serial/JTAG driver (TX mux included) and the console lock. Early LVGL
+ * UI timers can write the boot banner before that point; mirroring then hits
+ * usb_serial_jtag_write_bytes() with a NULL TX mux (assert in
+ * xQueueSemaphoreTake) even though the driver's installed flag is already set. */
+static volatile bool s_uart_mirror_ready;
 
 /* USB-Serial/JTAG driver ring sizes. The default console ring is tiny
  * (256 bytes) and silently drops input whenever a host bursts faster than the
@@ -706,7 +713,7 @@ static void shell_transcript_append_internal(const char *text, bool mirror_to_ua
     shell_transcript_guard_internal();
 
     /* Serialize buffer appends (worker, LVGL task via the async drain,
-     * console task) against each other with the lightweight buffer mutex â€”
+     * console task) against each other with the lightweight buffer mutex —
      * deliberately NOT the LVGL port lock, which the render task can hold
      * O(buffer) per frame at a full scrollback. Widget/label work happens
      * below in the deferred label step, which takes the port lock itself. */
@@ -779,7 +786,7 @@ void shell_transcript_append_ansi(const char *text)
     ansi_strip_to_plain(plain, sizeof(plain), text);
 
     /* While an output-redirection capture is active, the (stripped) output
-     * goes to the capture only â€” see shell_transcript_append_internal. */
+     * goes to the capture only — see shell_transcript_append_internal. */
     if (s_redirect_capturing) {
         shell_redirect_capture_add(plain, strlen(plain));
         return;
@@ -1286,7 +1293,10 @@ void shell_transcript_guard_internal(void)
     lvgl_port_unlock();
 
     s_transcript_trim_count++;
-    ESP_LOGW(SHELL_TAG, "Transcript trimmed under memory pressure "
+    /* Informational: the Tab5 boots with a tight internal heap and the design
+     * deliberately keeps ~4 KB free by trimming old spans. This is the safety
+     * valve working, not a fault, so it must not pollute the boot W/E gate. */
+    ESP_LOGI(SHELL_TAG, "Transcript trimmed under memory pressure "
              "(internal free %u B, trims %u)", (unsigned int)free_internal,
              (unsigned int)s_transcript_trim_count);
 }
@@ -1970,7 +1980,7 @@ void shell_extract_input_text(char *output, size_t output_size)
     }
 
     /* The port lock asserts when LVGL is not up (unit tests, early boot),
-     * so only take it when the widget exists â€” a NULL widget also implies
+     * so only take it when the widget exists — a NULL widget also implies
      * no port, matching the transcript/input-line convention. The mutex is
      * recursive, so the LVGL event path nests without deadlock, and the
      * textarea pointer stays valid for the whole locked region. */
@@ -2414,7 +2424,10 @@ void shell_transcript_append_link(const char *label, const char *command)
         shell_transcript_appendf_ansi(SH_LINK "%s" SH_RST, short_label);
         return;
     }
-    ansi_vformat(styled, 256, SH_LINK "%s" SH_RST, short_label);
+    /* ansi_vformat() takes a va_list, not varargs: passing the label directly
+     * made it interpret the string bytes as a va_list and the first %s read
+     * "slee"/"powe" as a pointer (load access fault on every `help <cmd>`). */
+    ansi_format(styled, 256, SH_LINK "%s" SH_RST, short_label);
     snprintf(out, (size_t)P4_CONFIG_COMMAND_BYTES + 512u,
              ANSI_OSC8_OPEN_FMT "%s" ANSI_OSC8_CLOSE, command, styled);
     shell_link_register(short_label, command);
@@ -2515,7 +2528,7 @@ bool shell_link_fire(const char *command, const char *label, bool confirm)
     /* Immediate regions (`anchor` contract): echo the line and queue it for
      * the worker. Async from every task (LVGL tap, worker `ui link`): the
      * queue owns ordering, so a fire can never re-enter the executor. A
-     * stale preview for another target dies here â€” the fired line is the
+     * stale preview for another target dies here — the fired line is the
      * one the user just chose. */
     shell_link_clear_pending();
     copy = malloc(P4_CONFIG_COMMAND_BYTES);
@@ -3550,7 +3563,7 @@ static void shell_prompt_expand(char *output, size_t output_size, bool allow_esc
         case 'd':
         case 't': {
             const char *stamp = time_get_formatted();
-            /* "YYYY-MM-DD HH:MM:SS" â€” take the date or the time half. */
+            /* "YYYY-MM-DD HH:MM:SS" — take the date or the time half. */
             if (stamp != NULL && strlen(stamp) >= 19) {
                 static char part[12];
                 if (tolower((unsigned char)*cursor) == 'd') {
@@ -3925,6 +3938,8 @@ void shell_uart_console_start(void)
     /* The console reader is now an interactive key source, so pause, choice,
      * and more can block on a real keystroke instead of a timed delay. */
     s_uart_console_running = true;
+    /* Safe point for the transcript mirror: driver + TX mux installed. */
+    s_uart_mirror_ready = true;
 }
 
 bool shell_uart_console_write_bytes(const void *data, size_t len,
@@ -4030,7 +4045,7 @@ void shell_uart_console_write_text(const char *text)
     }
 
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    if (usb_serial_jtag_is_driver_installed()) {
+    if (s_uart_mirror_ready && usb_serial_jtag_is_driver_installed()) {
         shell_uart_mirror_write(text, strlen(text));
     } else {
         printf("%s", text);
@@ -4226,7 +4241,7 @@ void shell_get_cwd_for_prompt(char *buf, size_t buf_size)
     const char *last_sep = strrchr(cwd, '\\');
     if (last_sep == NULL) last_sep = strrchr(cwd, '/');
     if (last_sep == NULL) {
-        /* No separator found â€” truncate from beginning */
+        /* No separator found — truncate from beginning */
         size_t keep = P4_CONFIG_PS_PATH_MAX_DISPLAY - 3;
         if (keep > len) keep = len;
         snprintf(buf, buf_size, "...%s", cwd + len - keep);
@@ -5206,6 +5221,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "timer",    "timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME] - named stopwatch runs" },
     { "timezone", "timezone - show/set the timezone" },
     { "sntp",     "sntp | ntpsync [server] - sync the clock via SNTP" },
+    { "locale",   "locale [US|UK|DE|FR|list] - show/set locale for date/time/number formatting" },
     { "rtc",      "rtc [anchor] - RTC backup status (source, anchor age, ext chip)" },
     { "wifi",     "wifi status | scan [/b] | diag | connect [ssid pass] | disconnect | setup [on|off]" },
     { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect | mouse <on|off|cursor <on|off>|click <on|off>>" },
@@ -5352,6 +5368,13 @@ void shell_command_help(int argc, char **argv)
     shell_transcript_appendf_ansi("  " SH_EXE "keyboard" SH_RST " show | hide | toggle | status\n");
     shell_transcript_appendf_ansi("  " SH_EXE "windows" SH_RST " info\n");
     shell_transcript_appendf_ansi("  " SH_EXE "certs" SH_RST " info | list | add <file> | remove <name> | rebuild | reload\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "hostname" SH_RST " [name] | " SH_EXE "uptime" SH_RST " | " SH_EXE "df" SH_RST
+                                  " | " SH_EXE "himem" SH_RST " info|alloc|free|lock|unlock|fill|load|save|crc\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "service" SH_RST " install|remove|list|start|stop | " SH_EXE "lock" SH_RST
+                                  " <name> | " SH_EXE "unlock" SH_RST " <name> | " SH_EXE "signal" SH_RST
+                                  " <name> | " SH_EXE "wait" SH_RST " <name> [/t:secs]\n");
+    shell_transcript_appendf_ansi("  " SH_EXE "menu" SH_RST " <items...> | " SH_EXE "form" SH_RST " <fields...>"
+                                  " - modal choice and input surfaces\n");
     shell_transcript_appendf_ansi(SH_MUTE "History recall:" SH_RST " Prev/Next buttons above the keyboard\n");
     shell_transcript_appendf_ansi(SH_MUTE "Redirection:" SH_RST " > file (overwrite) | >> file (append) | < file (input)\n");
     shell_transcript_appendf_ansi(SH_MUTE "Pipes:" SH_RST " cmd1 | cmd2 | cmd3 (up to %d stages)\n", P4_CONFIG_PIPE_STAGE_MAX);
@@ -5634,7 +5657,7 @@ void shell_command_mem(void)
     shell_transcript_appendf_ansi("  " SH_LBL "mem.internal:" SH_RST " %u bytes free\n", (unsigned int)free_internal);
     /* DMA pool detail (bugs.md F23): `mem.internal` includes non-DMA RAM,
      * so hardware consumers (esp-aes descriptors, SDMMC bounce) go by
-     * `mem.dma.largest` â€” one contiguous DMA block is what they allocate. */
+     * `mem.dma.largest` — one contiguous DMA block is what they allocate. */
     shell_transcript_appendf_ansi("  " SH_LBL "mem.dma.free:" SH_RST " %u bytes\n",
                              (unsigned int)p4heap_dma_free());
     shell_transcript_appendf_ansi("  " SH_LBL "mem.dma.largest:" SH_RST " %u bytes\n",
@@ -5653,6 +5676,55 @@ void shell_command_mem(void)
 }
 
 /* ========================================================================
+ * LOCALE (lightweight internationalization)
+ * ======================================================================== */
+int shell_command_locale(int argc, char **argv)
+{
+    locale_id_t id;
+
+    if (argc == 1) {
+        char date_buf[16], time_buf[16], num_buf[24];
+        struct tm lt = time_get_local();
+
+        id = locale_get();
+        locale_format_date(lt.tm_mon + 1, lt.tm_mday, lt.tm_year + 1900, date_buf, sizeof(date_buf));
+        locale_format_time(lt.tm_hour, lt.tm_min, lt.tm_sec, time_buf, sizeof(time_buf));
+        locale_format_number(1234567, num_buf, sizeof(num_buf));
+
+        shell_transcript_appendf("locale: %s\n", locale_name(id));
+        shell_transcript_appendf("  date sample: %s\n", date_buf);
+        shell_transcript_appendf("  time sample: %s\n", time_buf);
+        shell_transcript_appendf("  num  sample: %s\n", num_buf);
+        return 0;
+    }
+
+    if (argc == 2) {
+        if (strcmp(argv[1], "list") == 0) {
+            shell_transcript_appendf("available locales: US UK DE FR\n");
+            shell_transcript_appendf("current: %s\n", locale_name(locale_get()));
+            return 0;
+        }
+        if (shell_text_equals_ignore_case(argv[1], "US")) {
+            locale_set(LOCALE_US);
+        } else if (shell_text_equals_ignore_case(argv[1], "UK")) {
+            locale_set(LOCALE_UK);
+        } else if (shell_text_equals_ignore_case(argv[1], "DE")) {
+            locale_set(LOCALE_DE);
+        } else if (shell_text_equals_ignore_case(argv[1], "FR")) {
+            locale_set(LOCALE_FR);
+        } else {
+            shell_print_error("locale: unknown locale '%s' (valid: US UK DE FR)", argv[1]);
+            return 2;
+        }
+        shell_print_ok("locale: set to %s", argv[1]);
+        return 0;
+    }
+
+    shell_print_usage("Usage: locale [US|UK|DE|FR|list]  (show/set locale)");
+    return 2;
+}
+/* ========================================================================
+
  * TASK INTROSPECTION (ps / tasks / top)
  * ========================================================================
  * Read-only FreeRTOS task listing surfaced by `ps`, `tasks`, and `top`. It
@@ -5805,7 +5877,7 @@ static bool shell_task_parse_sort(const char *value, shell_task_sort_key_t *key,
  * Shared task-snapshot core: one heap-allocated TaskStatus_t array (capped
  * by P4_CONFIG_TASK_SNAPSHOT_MAX) filled by a single uxTaskGetSystemState()
  * walk. Used by `ps`/`tasks`/`top` and by the task manager's per-slot
- * runtime lookup â€” one implementation, never two snapshot walks. Free the
+ * runtime lookup — one implementation, never two snapshot walks. Free the
  * result with shell_snapshot_free(). Never call from the LVGL/render task
  * (the walk suspends scheduling long enough to underrun the panel) or
  * during an OTA (PSRAM is unavailable).
@@ -5835,9 +5907,14 @@ static TaskStatus_t *shell_snapshot_alloc(uint32_t *obtained_out,
         task_count = P4_CONFIG_TASK_SNAPSHOT_MAX;
     }
     /* The TaskStatus_t array can exceed the 8 KB worker stack (one entry is
-     * ~40 bytes), so it is always heap-allocated. */
-    array = heap_caps_calloc(task_count, sizeof(TaskStatus_t),
-                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+     * ~40 bytes), so it is always heap-allocated. PSRAM first: `ps` under the
+     * full regression suite ran out of internal RAM on the EV board even
+     * though the snapshot is never touched by a flash write. */
+    array = p4heap_calloc_psram(task_count, sizeof(TaskStatus_t));
+    if (array == NULL) {
+        array = heap_caps_calloc(task_count, sizeof(TaskStatus_t),
+                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
     if (array == NULL) {
         if (rc_out != NULL) {
             *rc_out = SHELL_SNAPSHOT_NO_MEM;
@@ -5900,7 +5977,7 @@ bool shell_task_runtime_for_handle(void *task_handle, uint32_t *runtime_out,
 }
 
 /**
- * `ps` / `tasks` / `top` â€” list FreeRTOS tasks and their CPU usage.
+ * `ps` / `tasks` / `top` — list FreeRTOS tasks and their CPU usage.
  *
  * Usage: ps|tasks|top [/b] [/O:key]
  *   - no argument: colour-coded table (name, state, priority, core, stack

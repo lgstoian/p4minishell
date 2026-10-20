@@ -23,9 +23,11 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_FREERTOS_HZ=1000
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 
-# The whole unit suite runs on the app main task; the calc evaluator and the
-# editor document tests are recursive, so give it a comfortable stack.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# The whole unit suite runs on the app main task; the calc evaluator, the
+# editor document tests and the HTML/DOM render tests are recursive, so give it a
+# comfortable stack (the browser render path needs the same headroom the command
+# worker gets).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
 
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_PM_ENABLE=y
@@ -93,3 +95,8 @@ CONFIG_LV_FONT_UNSCII_16=y
 # prototypes must be visible.
 CONFIG_LV_USE_TINY_TTF=y
 CONFIG_LV_TINY_TTF_FILE_SUPPORT=y
+
+
+
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=4096
+

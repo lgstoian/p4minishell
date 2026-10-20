@@ -75,6 +75,13 @@ static bool js_eval_internal(const char *code, const char *filename,
     s_interrupt_flag = false;
     s_start_time = esp_timer_get_time();
 
+    /* The runtime is created on the main task, but `js` executes on the
+     * command worker task. QuickJS's stack-limit check compares against the
+     * stack top captured at runtime creation; on a different task that
+     * difference is meaningless, which made every eval throw an exception
+     * whose string conversion failed ("Error: unknown"). Re-anchor it. */
+    JS_UpdateStackTop(s_rt);
+
     JSValue val = JS_Eval(s_ctx, code, strlen(code), filename, JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(val)) {
         js_error_to_string(s_ctx, result, result_size);
@@ -82,12 +89,18 @@ static bool js_eval_internal(const char *code, const char *filename,
         return false;
     }
 
-    const char *str = JS_ToCString(s_ctx, val);
-    if (str) {
-        snprintf(result, result_size, "%s", str);
-        JS_FreeCString(s_ctx, str);
-    } else {
+    if (JS_IsUndefined(val) || JS_IsNull(val)) {
+        /* `print(...)` returns undefined; a trailing "undefined" line after
+         * every script is noise, so an undefined result prints nothing. */
         result[0] = '\0';
+    } else {
+        const char *str = JS_ToCString(s_ctx, val);
+        if (str) {
+            snprintf(result, result_size, "%s", str);
+            JS_FreeCString(s_ctx, str);
+        } else {
+            result[0] = '\0';
+        }
     }
     JS_FreeValue(s_ctx, val);
     return true;
@@ -95,7 +108,16 @@ static bool js_eval_internal(const char *code, const char *filename,
 
 static char *read_file_to_heap(const char *path)
 {
-    FILE *f = fopen(path, "rb");
+    /* Resolve through the shell path rules (cwd, `sd:/`, volume aliases).
+     * A raw fopen() on the relative path failed whenever the VFS cwd was not
+     * the shell's cwd, even though `dir` could see the file. */
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    FILE *f;
+
+    if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
+        return NULL;
+    }
+    f = fopen(resolved, "rb");
     if (!f) {
         return NULL;
     }
@@ -171,6 +193,9 @@ void jsengine_deinit(void)
 bool jsengine_eval(const char *code, char *result, size_t result_size)
 {
     if (!s_ctx || !code || !result || result_size == 0) {
+        if (result != NULL && result_size > 0) {
+            snprintf(result, result_size, "Error: JS engine unavailable");
+        }
         return false;
     }
     return js_eval_internal(code, "<eval>", result, result_size);
@@ -179,6 +204,9 @@ bool jsengine_eval(const char *code, char *result, size_t result_size)
 bool jsengine_run_file(const char *path, char *result, size_t result_size)
 {
     if (!s_ctx || !path || !result || result_size == 0) {
+        if (result != NULL && result_size > 0) {
+            snprintf(result, result_size, "Error: JS engine unavailable");
+        }
         return false;
     }
 
@@ -197,6 +225,9 @@ bool jsengine_call(const char *path, const char *func,
                    const char *args_json, char *result, size_t result_size)
 {
     if (!s_ctx || !path || !func || !result || result_size == 0) {
+        if (result != NULL && result_size > 0) {
+            snprintf(result, result_size, "Error: JS engine unavailable");
+        }
         return false;
     }
 

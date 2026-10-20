@@ -7,6 +7,7 @@ rem  world-coordinate drawings on the gfx canvas, then a TUI bar chart.
 rem  Saves PLOT.BMP. Markers: [M-PLOT] / [M-PLOT-DONE].
 rem =====================================================================
 echo [M-PLOT]
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 title "Plot"
 calc /rad
 gfx init 320 200

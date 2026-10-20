@@ -107,10 +107,19 @@ static bool selector_matches(const char *selector, const dom_node_t *node) {
         return strcmp(selector + 1, node->id) == 0;
     }
     if (selector[0] == '.') {
-        char *tok = strtok((char *)node->class, " ");
-        while (tok) {
-            if (strcmp(tok, selector + 1) == 0) return true;
-            tok = strtok(NULL, " ");
+        /* Class lists are space separated. Scan them in place without
+         * strtok(): the old version wrote NULs into node->class (mutating the
+         * DOM) and shared strtok's global state with any nested parse. */
+        const char *p = node->class;
+        while (*p) {
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '\0') break;
+            const char *start = p;
+            while (*p && *p != ' ' && *p != '\t') p++;
+            size_t len = (size_t)(p - start);
+            const char *want = selector + 1;
+            size_t want_len = strlen(want);
+            if (len == want_len && strncmp(start, want, len) == 0) return true;
         }
         return false;
     }

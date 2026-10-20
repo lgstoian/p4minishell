@@ -698,7 +698,24 @@ static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_
         ret = set_fs(i2s_data, true, true);
         ret = set_fs(i2s_data, false, true);
     } else {
-        ret = check_fs_compatible(i2s_data, dev_type & ESP_CODEC_DEV_TYPE_OUT ? true : false, fs);
+        bool playback = (dev_type & ESP_CODEC_DEV_TYPE_OUT) != 0;
+        esp_codec_dev_sample_info_t *cached =
+            playback ? &i2s_data->out_fs : &i2s_data->in_fs;
+        /* Skip an identical reconfiguration. `set_fs` frees and reallocates
+         * the I2S DMA descriptors even when nothing changed; on a fragmented
+         * DMA heap (C6 hosted + SD + display) that allocation can fail, and
+         * IDF leaves the channel with a NULL descriptor while the codec still
+         * enables it -> load access fault on the second identical tone.
+         * Tracked in tools/managed_patches.patch. */
+        if (cached->sample_rate == fs->sample_rate &&
+            cached->bits_per_sample == fs->bits_per_sample &&
+            cached->channel == fs->channel &&
+            cached->channel_mask == fs->channel_mask &&
+            cached->mclk_multiple == fs->mclk_multiple) {
+            ret = ESP_CODEC_DEV_OK;
+        } else {
+            ret = check_fs_compatible(i2s_data, playback, fs);
+        }
     }
     _i2s_unlock(i2s_data);
     return ret;
@@ -786,8 +803,11 @@ static int _i2s_data_close(const audio_codec_data_if_t *h)
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     memset(&i2s_data->fs, 0, sizeof(esp_codec_dev_sample_info_t));
-    memset(&i2s_data->in_fs, 0, sizeof(esp_codec_dev_sample_info_t));
-    memset(&i2s_data->out_fs, 0, sizeof(esp_codec_dev_sample_info_t));
+    /* Keep in_fs/out_fs: they describe the format the I2S hardware is still
+     * configured for. Clearing them forced the next open to free/reallocate
+     * the DMA descriptors, which can fail on a fragmented heap and leaves the
+     * channel with a NULL descriptor (see the cache check in set_fmt).
+     * Tracked in tools/managed_patches.patch. */
     i2s_data->is_open = false;
     remove_from_keeper(i2s_data);
     return ESP_CODEC_DEV_OK;

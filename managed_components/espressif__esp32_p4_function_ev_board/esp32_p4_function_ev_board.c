@@ -330,6 +330,14 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
         esp_err_t err = i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg);
         if (err != ESP_OK) {
             ESP_LOGE("bsp_audio", "i2s tx init failed: %s", esp_err_to_name(err));
+            /* A partial init leaves the channel handle non-NULL with a NULL
+             * DMA descriptor. The next bsp_audio_init() then hits the
+             * "already initialized" early return above and reports success,
+             * and the first i2s_channel_enable dereferences the NULL
+             * descriptor (load access fault). Tear both channels down so a
+             * retry starts from a clean state. */
+            if (i2s_tx_chan != NULL) { i2s_del_channel(i2s_tx_chan); i2s_tx_chan = NULL; }
+            if (i2s_rx_chan != NULL) { i2s_del_channel(i2s_rx_chan); i2s_rx_chan = NULL; }
             return err;
         }
     }
@@ -338,6 +346,8 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
         esp_err_t err = i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg);
         if (err != ESP_OK) {
             ESP_LOGE("bsp_audio", "i2s rx init failed: %s", esp_err_to_name(err));
+            if (i2s_tx_chan != NULL) { i2s_del_channel(i2s_tx_chan); i2s_tx_chan = NULL; }
+            if (i2s_rx_chan != NULL) { i2s_del_channel(i2s_rx_chan); i2s_rx_chan = NULL; }
             return err;
         }
     }

@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.3.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.4.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -303,7 +303,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v1.3.0 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.4.0 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -745,6 +745,7 @@ start MOOD.BAT happy
 start /wait BACKUP.BAT        (join: block until the job finishes, EL=its EL)
 start /t:30 SLOW.BAT          (auto-kill after 30 s, like taskkill)
 taskkill bg0          (cooperative stop: batch lines and `delay` exit early)
+taskkill bg*           (wildcard: stop all jobs matching pattern, e.g. bg*, *.bat)
 ```
 
 Each job owns a private batch context (frames, errorlevel, `%*`, goto),
@@ -1242,6 +1243,21 @@ active TZ and the local time; `timezone UTC` restores UTC, and `timezone
 CET-1CEST,M3.5.0,M10.5.0/3` selects Central European Time with DST rules. The
 local date/time re-renders immediately. Implemented in
 `components/clock/clock_commands.c`.
+
+### locale [US|UK|DE|FR|list]
+Show or set the active locale for date/time/number formatting. `locale` prints
+the current locale with sample date, time, and number formatting; `locale US`,
+`locale UK`, `locale DE`, or `locale FR` sets the locale; `locale list` shows
+available locales. The `%DATE%` and `%TIME%` virtual variables respect the active
+locale (date order, separator, 12/24h clock, decimal/thousands separators).
+Four locales: US (MM-DD-YYYY, 12h AM/PM, period decimal), UK (DD-MM-YYYY, 24h,
+period decimal), DE (DD.MM.YYYY, 24h, comma decimal), FR (DD/MM/YYYY, 24h,
+comma decimal, space thousands). Implemented in `components/shell/locale.c`.
+
+The locale is RAM-only unless persisted: `config LOCALE=US|UK|DE|FR` writes a
+`LOCALE=` line to CONFIG.SYS and boot re-applies it through the same parser
+(`locale_parse`, which also accepts the numeric MS-DOS country code `0..3`).
+`locale <name>` changes the running value only.
 
 ### sntp / ntpsync [sync]
 Show the NTP synchronization state or force a fresh exchange. `sntp` prints the
@@ -4519,6 +4535,106 @@ tcpterm example.com 80 "HEAD / HTTP/1.0\r\n\r\n" > head.txt
 ```
 
 ERRORLEVEL: 0 session completed, 1 resolve/connect/send/Wi-Fi failure, 2 usage.
+
+### httpget <url> [localfile] (alias: wget)
+
+Fetch an `http://` or `https://` URL through the single HTTP owner in
+`components/networking` and either print the body to the transcript or save it
+to SD. TLS uses the user CA store when loaded, the Mozilla bundle otherwise.
+Redirects follow `P4_CONFIG_HTTP_FOLLOW_REDIRECTS`; the body is buffered in PSRAM
+up to `P4_CONFIG_HTTP_MAX_BODY_BYTES`. A `user:pass@host` URL enables HTTP Basic
+auth. Without a file the body prints bounded (`P4_CONFIG_HTTP_PRINT_BODY_BYTES`)
+and sanitized; `httpget url > file` stays redirectable.
+
+Options (any order, before or after the URL):
+
+```
+/h:NAME=VALUE     Extra request header (repeatable, max 4)
+/post NAME=VALUE  Send an application/x-www-form-urlencoded POST (repeatable)
+/stream [file]    Stream the response instead of buffering it
+/cookie           Show the persisted cookie jar
+/cookie clear     Delete every stored cookie
+```
+
+- `/stream` with no file streams to the transcript (bounded like a normal body);
+  with a file it writes the response as it arrives, removes a partial file on
+  failure, and bypasses the in-RAM body cap.
+- The cookie jar is filled automatically from `Set-Cookie` response headers,
+  scoped by request host, and replayed as `Cookie` on later requests. It is
+  persisted at `sd:/HTTPCOOK.TXT` (one `domain<TAB>name<TAB>value` line per
+  cookie) and reloaded lazily, so cookies survive a reboot.
+- `/post` and `/stream` are mutually exclusive.
+
+```
+httpget http://example.com/ > page.txt
+httpget /h:X-Trace=bench http://host/api status.json
+httpget /post user=alice /post pass=secret http://host/login
+httpget /stream http://host/big.bin
+httpget /stream sd:/BIG.BIN http://host/big.bin
+httpget /cookie
+httpget /cookie clear
+```
+
+ERRORLEVEL: 0 on HTTP 2xx, 1 on a network/HTTP failure, 2 on usage.
+
+### browser [<url> | back | forward | bookmark <add|list|del> ...]
+
+Minimal HTML browser rendered into the TUI page. `browser <url>` fetches an
+`http(s)` page (same HTTP/TLS/auth policy as `httpget`, including
+`user:pass@` Basic auth); `browser <file>` reads an SD HTML file and renders it
+with no network at all. The page is parsed into a DOM tree, `<style>` rules are
+applied, and headings, paragraphs, lists, links, image alt text and table cells
+are laid out in document order. The first render enters TUI mode so the page is
+actually visible; `draw close` (or `tui fullscreen off`) returns to the
+transcript. After rendering, `tui dump [from] [to]` reads the page back cell by
+cell for tests and scripts.
+
+```
+browser http://example.com/
+browser http://user:pass@host/private.html
+browser sd:/WEB/INDEX.HTML
+browser back
+browser forward
+browser bookmark add bench http://host/page.html
+browser bookmark list
+browser bookmark del bench
+```
+
+- Navigation history keeps the last `P4_CONFIG_BROWSER_HISTORY_MAX` URLs (8).
+- Bookmarks keep `P4_CONFIG_BROWSER_BOOKMARK_MAX` name/URL pairs (8).
+- Both persist under `sd:/BROWSER.HIST` and `sd:/BROWSER.BOOK`.
+- A network fetch requires an active Wi-Fi connection; the failure path prints
+  `Failed to fetch URL`. Local paths need no AP.
+- The showcase app `WEB.BAT` (deployed by `apps/push_apps.py`) renders
+  `sd:/WEB/INDEX.HTML` and captures it for
+  [`docs/assets/browser-website.png`](docs/assets/browser-website.png). The
+  suite `s20_website` drives and captures the same page.
+
+ERRORLEVEL: 0 rendered, 1 fetch/parse failure, 2 usage.
+
+### js <eval|run|call> ...
+
+Run JavaScript through the embedded engine:
+
+```
+js eval <code>                      Evaluate inline code
+js run <file.js>                    Run a script from SD
+js call <file.js> <fn> [args_json]  Call one exported function
+```
+
+The engine exposes the console/UI/FS/network surface documented in `batch.md`
+(`print`, `html`, `md`, `rssParse`, `tui.*`, `modal.*`, `batch.*`, `fs.*`,
+`sys.*`, `http.get`, `gpio.*`, `audio.*`, `locale.*`, `errors.*`, `event.*`).
+Output goes to the transcript, so redirection and pipes work like any other
+command.
+
+```
+js eval "print('hello')"
+js run sd:/SCRIPT.JS
+js call sd:/SCRIPT.JS main "{}"
+```
+
+ERRORLEVEL: 0 success, 1 script error, 2 usage.
 
 ### net status|broker|connect|sub|pub|msg|onmsg|outbox|tls (event service)
 

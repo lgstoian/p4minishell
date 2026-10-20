@@ -1,6 +1,7 @@
 launch UITEST
 [M-UITEST]
-ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search=
+title: set to 'UI Test'
+ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search= cursor=N,N link=(none)
 ui.targets: N
 N N N N N obj
 N N N N N W   (xN)
@@ -24,5 +25,5 @@ N N N N N
 touch targets: N
 ui.hit: N obj
 hit at N,N: N
-ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search=
+ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search= cursor=N,N link=(none)
 [M-UITEST-DONE]

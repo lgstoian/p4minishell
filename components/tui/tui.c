@@ -293,6 +293,13 @@ void tui_deinit(void)
 
 bool tui_is_active(void) { return s_active; }
 
+bool tui_ready(void)
+{
+    /* lvgl_port_lock() asserts when lvgl_port_init() has not run; the headless
+     * unit-test app renders into the page buffer without a display. */
+    return lv_display_get_default() != NULL;
+}
+
 static void tui_cell_set(tui_cell_t *cell, const char *utf8, uint8_t fg, uint8_t bg)
 {
     if (!cell || !utf8) return;
@@ -1312,6 +1319,12 @@ void tui_viewport_init(int page_rows)
 {
     if (page_rows <= 0) page_rows = P4_CONFIG_TUI_PAGE_ROWS;
     s_page_rows = page_rows;
+    /* Free any previous page first: the browser re-inits per load, so an
+     * unconditional alloc would leak a full page (80x200 cells) every fetch. */
+    if (s_page != NULL) {
+        heap_caps_free(s_page);
+        s_page = NULL;
+    }
     size_t bytes = (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t);
     s_page = p4heap_alloc_psram(bytes);
     if (s_page) memset(s_page, 0, bytes);
@@ -1355,6 +1368,24 @@ void tui_page_set_cell(int col, int row, const char *utf8, uint8_t fg, uint8_t b
     cell->attr = attr;
 }
 
+bool tui_page_get_cell(int col, int row, char *utf8_out, size_t out_size,
+                       uint8_t *fg_out, uint8_t *bg_out, uint8_t *attr_out)
+{
+    if (utf8_out == NULL || out_size == 0) {
+        return false;
+    }
+    utf8_out[0] = '\0';
+    if (!s_page || col < 1 || col > s_cols || row < 1 || row > s_page_rows) {
+        return false;
+    }
+    const tui_cell_t *cell = &s_page[(row - 1) * s_cols + (col - 1)];
+    snprintf(utf8_out, out_size, "%s", cell->utf8);
+    if (fg_out) *fg_out = cell->fg;
+    if (bg_out) *bg_out = cell->bg;
+    if (attr_out) *attr_out = cell->attr;
+    return true;
+}
+
 void tui_page_clear(void)
 {
     if (!s_page) return;
@@ -1363,7 +1394,6 @@ void tui_page_clear(void)
     s_link_count = 0;
     memset(s_links, 0, sizeof(s_links));
 }
-
 void tui_page_render(void)
 {
     if (!s_page || !s_cells) return;

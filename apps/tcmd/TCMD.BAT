@@ -15,6 +15,7 @@ rem  x menu, s swap panes, 1/2 jump pane to a root, q quit.
 rem  Markers: [M-TCMD] / [M-TCMD-R] / [M-TCMD-OP] / [M-TCMD-DONE].
 rem  Foreground-only: draw/browse refuse in background jobs (see :nogfx).
 setlocal
+if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
 echo [M-TCMD]
 title "Commander"
 set LD=/

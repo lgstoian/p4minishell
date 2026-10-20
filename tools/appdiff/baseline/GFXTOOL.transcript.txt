@@ -1,7 +1,24 @@
 launch GFXTOOL
 [M-GFXTOOL]
+title: set to 'GFX Tool'
 gfx: canvas NxN (N KB PSRAM)
 gfx: filled N pixel(s)
+gfx: slot N loaded NxN (N KB PSRAM)
+sx=N
+sy=N
+so=N
+sx=N
+sy=N
+so=N
+sx=N
+sy=N
+so=N
+sx=N
+sy=N
+so=N
+sx=N
+sy=N
+[M-GFXTOOL-BLIT]
 [M-GFXTOOL-IMG]
 gfx: saved /sdcard/GFXTOOL.BMP (N bytes)
 [M-GFXTOOL-DONE]

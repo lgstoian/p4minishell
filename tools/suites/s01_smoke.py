@@ -46,11 +46,15 @@ def run(dev, ctx):
     c.expect("mem reports heap", "heap", out)
 
     out = dev.run("help /all")
-    # Entry-name column ("  name ") so summaries cannot false-positive
-    # (e.g. "lock" inside "unlock", "uptime" inside the version blurb).
+    c.expect("help /all header", "Command Reference", out)
+    # Check each entry through the single-command form: `help /all` is a long
+    # burst and the serial mirror can drop lines under backpressure, which
+    # made this a false failure. `help <verb>` also covers the hyperlink
+    # formatter (it used to fault on every single-entry lookup).
     for verb in ("himem", "service", "lock", "unlock", "signal", "wait",
                  "menu", "form", "hostname", "uptime", "df"):
-        c.expect("help lists %s" % verb, "  %s " % verb, out)
+        entry = dev.run("help %s" % verb)
+        c.expect("help lists %s" % verb, "  %s " % verb, entry)
 
     out = dev.run("uptime")
     c.expect("uptime reports", "uptime", out)

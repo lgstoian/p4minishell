@@ -26,11 +26,16 @@ Committed, curated screenshots for the public docs. This folder is the
 | `apps-tcmd.png` | `TCMD` dual-pane commander |
 | `apps-snake.png` | `SNAKE` gameplay |
 | `theme-amber.png` / `theme-ice.png` / `theme-mono.png` | Same idle shell under each theme |
+| `browser-website.png` | `WEB.BAT` showing the browser rendering `sd:/WEB/INDEX.HTML` (headings, links, list, table) |
 | `header-status.png` | Close crop or full shell showing Wi-Fi/MEM/CPU/BAT header |
 | `wifi-status.png` | `wifi status` connected output |
 
 Aim for ~12 shots minimum: shell, files, editor, one modal, TUI, gfx, plot,
-one app, one theme variant, header. That gives newcomers a full feel.
+one app, one theme variant, header, and the browser. The browser shot is
+reproduced by `python tools/p4test_run.py <COMx> --only s20_website`, which
+renders `apps/website/INDEX.HTML` offline and leaves the BMP in
+`screenshots/regression/browser-website.bmp`; convert it to
+`docs/assets/browser-website.png` (PNG only).
 
 ## How to capture (build mode, board attached)
 

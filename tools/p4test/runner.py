@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .asserts import Checklist, SuiteResult
 from .device import Device
+from .local_config import wifi_credentials
 from .session import PANICS, P4Error, PanicError
 
 # Fast tier: the per-area smoke subset that gates feature delivery in
@@ -180,13 +181,14 @@ def run_suites(mods, port: Optional[str], quick: bool = False,
                keep_going: bool = True) -> int:
     results: List[SuiteResult] = []
     dev = Device(port, boot=True, settle_ms=4000 if quick else 8000)
+    ctx = {"quick": quick, "wifi": wifi_credentials()}
     try:
         for mod in mods:
             name = getattr(mod, "NAME", mod.__name__)
             print("\n" + "=" * 62)
             print("SUITE: %s" % name)
             print("=" * 62)
-            res, _failed = _run_one_suite(mod, dev, {"quick": quick})
+            res, _failed = _run_one_suite(mod, dev, ctx)
             results.append(res)
             if not keep_going and results and not results[-1].ok:
                 break
@@ -246,6 +248,7 @@ def _board_worker(label: str, port: str, mods, quick: bool,
         try:
             dev = Device(port, boot=True,
                          settle_ms=4000 if quick else 8000)
+            ctx = {"quick": quick, "wifi": wifi_credentials()}
             for mod in mods:
                 name = getattr(mod, "NAME", mod.__name__)
                 if stop_event.is_set():
@@ -256,13 +259,13 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                     continue
                 print("\nSUITE [%s]: %s" % (label, name))
                 attempts = 1 + max(0, retry)
-                res, failed = _run_one_suite(mod, dev, {"quick": quick})
+                res, failed = _run_one_suite(mod, dev, ctx)
                 tried = 1
                 while not res.ok and tried < attempts and not (
                         res.error or "").startswith("PANIC"):
                     tried += 1
                     print("  [RETRY %d/%d] %s" % (tried, attempts, name))
-                    res, failed = _run_one_suite(mod, dev, {"quick": quick})
+                    res, failed = _run_one_suite(mod, dev, ctx)
                 if tried > 1 and res.ok:
                     flaky.append(name)
                     print("  [FLAKY] %s passed on attempt %d" % (name, tried))

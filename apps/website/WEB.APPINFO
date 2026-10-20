@@ -1,0 +1,5 @@
+; APPINFO metadata for the browser showcase (INI format, read by `launch`).
+; Copied to sd:/APPS/WEB.APPINFO by apps/push_apps.py.
+title=Browser
+description=Renders a basic website served from sd:/WEB/ with the browser verb
+version=1.0

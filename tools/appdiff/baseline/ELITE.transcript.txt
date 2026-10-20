@@ -1,11 +1,17 @@
 launch ELITE
 [M-ELITE]
+title: set to 'Elite'
 credits=N
 sys=N
-cN=N   (xN)
+HOLD[N]=N   (xN)
 hull=N
+SYSNAME[N]=Lave
+SYSNAME[N]=Zaonce
+SYSNAME[N]=Diso
+SYSNAME[N]=Leesti
+MULT[N]=N   (xN)
 sname=Lave
 mult=N
-pN=N   (xN)
+PRICE[N]=N   (xN)
 [M-ELITE-DOCKED] Lave
 [M-ELITE-DONE]

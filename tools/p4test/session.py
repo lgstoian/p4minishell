@@ -270,6 +270,12 @@ class DeviceSession:
         end = time.time() + timeout
         marked = False
         last_data = time.time()
+        # The prompt is printed as soon as the line is accepted, not when the
+        # worker finishes. A slow command (SD trash cleanup, network fetch) can
+        # therefore swallow one queued marker. Re-send it until seen; the echo is
+        # idempotent and a duplicate tag line is filtered out below.
+        retries = 0
+        next_marker = time.time() + 2.0
         while time.time() < end:
             chunk = self._read_serial(4096, 0.3)
             if chunk:
@@ -282,6 +288,10 @@ class DeviceSession:
             else:
                 if marked and time.time() - last_data > silence:
                     break
+            if not marked and retries < 20 and time.time() >= next_marker:
+                self.write_line("echo " + tag)
+                retries += 1
+                next_marker = time.time() + 2.0
         text = strip_ansi(strip_ansi_bytes(bytes(buf)).decode("utf-8", "replace"))
         if not marked:
             self._analyze(text)
@@ -291,6 +301,10 @@ class DeviceSession:
                           % (cmd, tag, timeout, note, text[-800:]))
         if drop_echo:
             text = self._drop_echo(text, cmd)
+        # Retried markers leave duplicate `echo <tag>` lines; they are harness
+        # bookkeeping, never device output.
+        text = "\n".join(line for line in text.splitlines()
+                         if tag not in line)
         return text
 
     # -- interactive helpers --------------------------------------------
