@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.4.1 Â· **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) Â· **Display:** JD9165 1024x600 MIPI-DSI Â· **License:** MIT
+**Version:** 1.4.1 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -88,15 +88,15 @@ the host regression runners are green. See
   dispatch, `NAME[i]` arrays, `%VAR:~%`/`%VAR:old=new%` string forms,
   `!VAR!` delayed expansion, `goto`,
   `call`/`gosub` (local and shared-library routines with `return`),
-  `on â€¦ goto|gosub` computed dispatch, `shift` (`/n` start index), `title`,
+  `on … goto|gosub` computed dispatch, `shift` (`/n` start index), `title`,
   DOS `echo.`/`echo/`/`echo(`/`echo:` forms, `for /f` with `eol=;` default,
   `alias`, `bind`, `macro`,
   `start`/`taskkill` background jobs, `suspend`/`resume`/`nice` pool control
   with per-slot CPU%/memory and `tmgr_*` automation events, `dialog`/`list`/
   `ask` modals, declarative screens and multi-screen flows (`screen run` /
-  `screen flow`, see [batch.md](batch.md) Â§13), and `exit /b`.
+  `screen flow`, see [batch.md](batch.md) §13), and `exit /b`.
 - **Apps:** every app launches through a `*.bat` shim (pure batch, hybrid, or
-  native-linked â€” see [ABI.md](ABI.md)); PATH + `sd:/APPS` discovery with
+  native-linked — see [ABI.md](ABI.md)); PATH + `sd:/APPS` discovery with
   `APPINFO` metadata, `pkg` install/remove from CRC-checked and **ECDSA-signed**
   bundles (`pkg key`, `tools/pkg_sign.py`), asset manifests (`asset`), and the
   `applib` native-app runtime.
@@ -133,7 +133,7 @@ the host regression runners are green. See
   HTML reader page, or a paginated print layout) for sharing over `httpd`, and
   on-device reading/editing of `.html`/`.htm` (`view`/`open`/`type` render
   them; `edit` highlights the markup) alongside Markdown.
-- **EPUB Reader:** `epub open|read|next|prev|goto|toc` for `.epub` files â€”
+- **EPUB Reader:** `epub open|read|next|prev|goto|toc` for `.epub` files —
   ZIP-based EPUB archives with OPF/NCX/nav parsing, chapter rendering via
   HTML-to-ANSI, spine/TOC navigation, and resource extraction.
 - **RSS / Atom / JSON Feed reader (`components/rss`):** `rss_parse()` handles
@@ -180,10 +180,10 @@ from every app.
 
 - [ESP-IDF **v5.5.5**](https://docs.espressif.com/projects/esp-idf/) and the
   `esp32p4` toolchain.
-- An ESP32-P4 board with a MIPI-DSI display and touch â€” the ESP32-P4 Function
+- An ESP32-P4 board with a MIPI-DSI display and touch — the ESP32-P4 Function
   EV Board / JC1060P470C (JD9165 1024x600 + GT911) is the reference, and the
   M5Stack Tab5 (ILI9881C/ST7123 720x1280, ES8388, Tab5Keyboard) is also
-  supported (`-DP4_BOARD=m5stack_tab5`, see [`PORTING.md`](PORTING.md) Â§6) â€” an
+  supported (`-DP4_BOARD=m5stack_tab5`, see [`PORTING.md`](PORTING.md) §6) — an
   ESP32-C6 co-processor on the SDIO link, and a FAT32 microSD card.
 - Python 3 with `pyserial` (and `opencv-python` for the camera diagnostics) to
   run the host tools.
@@ -292,7 +292,7 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - Command history (32 entries, Up/Down, `Ctrl+R` reverse search) saved to
   `HISTORY.TXT`; tab and ghost completion for commands, aliases, and paths;
   `history /save` `/load` `/search` `/clear`.
-- A configurable `prompt` template (`$p $g $t $d $v $n` â€¦) driving both the
+- A configurable `prompt` template (`$p $g $t $d $v $n` …) driving both the
   serial console and the on-screen input line, plus a `title` session title
   (also listed by `sysinfo`).
 - Serial bridge: `idf.py monitor` is an interactive shell endpoint.
@@ -301,7 +301,7 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 
 - DOS file verbs with wildcards, `dir /W /P /S /B /L /A /O`, `xcopy` (full DOS
   switch set), `attrib`, `label`, `tree`, `fc`, `comp`, `sort`, `find`,
-  `findstr`, `more`, `csv`, `json`, `markdown` â€” all volume-aware across SD
+  `findstr`, `more`, `csv`, `json`, `markdown` — all volume-aware across SD
   and USB MSC sticks (`usb:/`, `u:`/`v:`/`w:`/`x:`, `DEVICE=USB` automount).
 - Recycle bin: `del`/`rd /s` move to `.trash`; `undelete`/`trash restore`
   recover; `trash list|info|purge|empty` manage it.
@@ -330,7 +330,7 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 ### Apps and data
 
 - **Apps launch through a `.bat` shim** (pure batch, hybrid, or native-linked),
-  with Path/`APPS` discovery, `APPINFO` metadata, and the `launch` menu â€” see
+  with Path/`APPS` discovery, `APPINFO` metadata, and the `launch` menu — see
   [ABI.md](ABI.md).
 - **`pkg`** installs apps from CRC-checked `PKGS/<APP>/` bundles and verifies
   optional ECDSA P-256 signatures (`pkg install /signed`, `pkg key`, host
@@ -342,26 +342,26 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
   extensions to apps (`open` dispatches), `startup` runs boot apps,
   `launch <app> /setup` runs setup, and APPINFO `handles=`/`setup=`/
   `autostart=`/`alias=`/`data=`/`requires=`/`min_fw=` keys declare it all.
-- **`db`** â€” a Palm-OS-style record store (records, categories, secret fields,
+- **`db`** — a Palm-OS-style record store (records, categories, secret fields,
   `db /field:`/`/sort:`), with `export`/`import` to CSV/JSON/TXT/VCF/ICS and
   in-place record editing via `edit db <name> <id>` (CSV-safe, sync-stamp
   preserving).
-- **`pim`** â€” serial CardDAV-lite sync: `pim get`/`pim put` over PIMX framing
+- **`pim`** — serial CardDAV-lite sync: `pim get`/`pim put` over PIMX framing
   with uid/newer-wins merge, plus host-side `tools/pim_sync.py`
   (`pull`/`push`/`sync` against a mirror directory); `pim net pull|push|sync`
   speaks HTTP CardDAV to a collection URL.
-- **`sync`** â€” USB-sync handshake for the future P4Sync desktop app: one
-  read-only `sync.*` capability snapshot (see [roadmap.md](roadmap.md) Â§F),
+- **`sync`** — USB-sync handshake for the future P4Sync desktop app: one
+  read-only `sync.*` capability snapshot (see [roadmap.md](roadmap.md) §F),
   plus `tools/p4sync full-image` (handshake + PIM + files + apps + shot).
-- **`alarm`/`cal`** â€” persisted events with recurrence and a background checker
+- **`alarm`/`cal`** — persisted events with recurrence and a background checker
   that can run a `/run:` batch file; `edit alarm <id>` edits one event as
   INI text (sync identity preserved).
-- **`archive`/`backup`** â€” USTAR `.p4a` backups with CRC manifests.
-- **`gfind`** â€” Palm-style global find over `db` records + alarms, plus an
+- **`archive`/`backup`** — USTAR `.p4a` backups with CRC manifests.
+- **`gfind`** — Palm-style global find over `db` records + alarms, plus an
   opt-in `/files` scan of text files (one shared storage search core; no index,
   always live).
-- **`crypt`** â€” AES-256-GCM + PBKDF2 file encryption.
-- **Native app SDK (`applib`)** â€” transcript stdout (so `myapp > out.txt`
+- **`crypt`** — AES-256-GCM + PBKDF2 file encryption.
+- **Native app SDK (`applib`)** — transcript stdout (so `myapp > out.txt`
   works), PSRAM-aware allocation, time/input/state helpers, Wi-Fi accessors,
   message publish/subscribe (`applib_msg.h` over the event service),
   and the native-app ABI (`app_register`).
@@ -463,7 +463,7 @@ ESP-IDF v5.5.5. Full bring-up checklist in [`PORTING.md`](PORTING.md).
 | **RGB LED** | WS2812 status LED on GPIO26 | Two Tab5Keyboard RGB LEDs over I2C (`rgb 1\|2 ...`; LED1 = status, LED2 = user) |
 | **Hosted SDIO** | Slot 1, 40 MHz: CLK=18 CMD=19 D0=14 D1=15 D2=16 D3=17, reset GPIO54 | Slot 1, **10 MHz**: CLK=12 CMD=13 D0=11 D1=10 D2=9 D3=8, reset GPIO15 (40 MHz crashes on assoc; first RPC retried once via transport reset) |
 | **Input** | USB HID + on-screen keyboard | + Tab5Keyboard module (STM32F030, EXT I2C 0x6D, INT GPIO50); OSK auto-hides for any physical keyboard |
-| **Sensors** | â€” | BMI270 IMU (`imu`, tilt auto-rotate, `IMU_*` vars); RX8130CE RTC; SC202CS MIPI-CSI camera (`camera init` + `camera snap <file.bmp>`, BMP stills only) |
+| **Sensors** | — | BMI270 IMU (`imu`, tilt auto-rotate, `IMU_*` vars); RX8130CE RTC; SC202CS MIPI-CSI camera (`camera init` + `camera snap <file.bmp>`, BMP stills only) |
 | **Power** | `shutdown` = deep sleep | `shutdown`/`poweroff` cuts the PMIC rail (PI4IOE5V6408 P4 latch) |
 | **Build it** | `idf.py -DP4_BOARD=jc1060p470c build` | `idf.py -DP4_BOARD=m5stack_tab5 build` (per-board `sdkconfig.<board>`, CI builds both) |
 
@@ -479,7 +479,7 @@ companion `p4minishell_config.yaml` documents each value (type, meaning,
 range). Edit the header, then keep the YAML in sync. Hardware pins and display
 timing live in `boards/<name>/board_config.h` / `.yaml` (default
 `boards/jc1060p470c/`, selected by `-DP4_BOARD=`); build options live in
-`sdkconfig` (generated â€” edit via `idf.py menuconfig`, the committed source
+`sdkconfig` (generated — edit via `idf.py menuconfig`, the committed source
 of truth is `sdkconfig.defaults`). Adding a board is documented in
 [`PORTING.md`](PORTING.md).
 
@@ -505,7 +505,7 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [tutorial_edit.md](tutorial_edit.md) | Complete `edit` editor guide |
 | [editor.md](editor.md) | `edit` quick reference |
 | [command.md](command.md) | Complete command reference |
-| [batch.md](batch.md) | Batch app language spec (loops, arrays, strings, game kit) â€” the single file for writing `.bat` apps |
+| [batch.md](batch.md) | Batch app language spec (loops, arrays, strings, game kit) — the single file for writing `.bat` apps |
 | [architecture.md](architecture.md) | System views: context, runtime flows, concurrency, memory, power/reset domains, persistence, board layer, ADRs |
 | [documentation.md](documentation.md) | Technical reference (per-module layout, boot sequence, data flow) |
 | [SDK.md](SDK.md) | Integration guide for extending the system |
