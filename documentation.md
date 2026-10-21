@@ -10,7 +10,7 @@ code, see [`SDK.md`](SDK.md); for the command surface, see
 [`command.md`](command.md); for the API, see [`API.md`](API.md); for the
 working rules, see [`ai-context.md`](ai-context.md).
 
-- **Version:** v1.4.0 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
+- **Version:** v1.4.1 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
 - **UI:** LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch
 - **License:** MIT (see [`licence.md`](licence.md))
 

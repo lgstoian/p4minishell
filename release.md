@@ -16,7 +16,7 @@ in their owning docs and are linked, not repeated:
 | Change/verification workflow | [`ai-context.md`](ai-context.md) |
 | Open defects | [`bugs.md`](bugs.md) |
 
-Current target version: **v1.4.0** (`P4_CONFIG_VERSION_*` in
+Current target version: **v1.4.1** (`P4_CONFIG_VERSION_*` in
 `p4minishell_config.h`). Substitute your release version throughout.
 
 ---

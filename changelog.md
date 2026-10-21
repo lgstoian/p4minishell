@@ -14,6 +14,56 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [1.4.1] - 2026-10-21
+
+### Fixed
+
+- **F53 - long-sweep heap exhaustion and the editor `0xcececece` fault.**
+  The transcript span group (384 spans, ~80 B internal each) was the
+  dominant internal-RAM consumer; after a long batch/pkg sweep a newlib
+  `fopen` aborted in `__sfp`. The span cap is now **64** with a **40-row**
+  window, the scrollback trim is **silent** and emergency-only (below 2 KB),
+  and it rebases/drops click/link rows so `ui link` can never fire a command
+  from the wrong row. The visible `[history trimmed under memory pressure]`
+  marker is gone. httpd autostart now requires a 24 KB internal block, and
+  the debounced history save skips below 8 KB free internal RAM.
+- **Editor stability.** The cursor blink timer is persistent (created once,
+  paused when closed) instead of deleted inside LVGL's timer pump; all
+  `lv_async_call` use from worker/serial tasks runs under the recursive LVGL
+  port lock; load/save use a 128-byte dynamic DMA fallback when the 4 KB
+  chunk is unavailable; stale autosave crash files are swept before
+  sessions; screenshot retries no longer send Ctrl-C into the editor.
+- **Audio DMA gate.** `beep`/`tone`/`wavplay` check for 9 KB largest / 10 KB
+  free DMA-capable internal RAM **before** codec/I2S init. A fragmented pool
+  now yields a muted "not enough DMA" note instead of the driver's failed
+  slot path (which load-faulted).
+- **`chat peer` without an IP** prints `chat: host IP required` (usage
+  included) instead of a bare usage line.
+- **`cls` clears hyperlink/click regions** (previously stale links survived
+  and `ui link 0` could run a command from an earlier suite). New
+  `ui links /clear` provides an explicit reset for automation.
+
+### Changed
+
+- **Harness:** memory-sensitive areas (`editor`, `input-ui`, `power-audio`,
+  `apps`, `browser`, `http`) start from a clean boot when internal RAM is
+  below 12 KB or DMA below 9 KB (always for those areas); SD state persists.
+  s10 uses `ui links /clear` and a line-wise preview check; s17 fetches the
+  render fixture over loopback so a weak bench AP cannot reset the socket;
+  s09 normalizes crash files/surfaces and retries the unnamed save-as.
+- **Audio** remains lazy and the Tab5 keeps its DMA pool for the hosted C6;
+  on a severely fragmented pool playback is refused gracefully.
+
+### Hardware verification (v1.4.1)
+
+- Firmware builds: **0 errors / 0 warnings** (`jc1060p470c`, `m5stack_tab5`).
+- Full regression tier on **COM3** and **COM6** (details in the release
+  record); editor, input-ui, power-audio and browser pass on both boards,
+  including the display → editor and editor → input-ui transitions.
+- Boot logs clean (no `E`/`W`) on both boards after the memory changes.
+
+---
+
 ## [1.4.0] - 2026-10-19
 
 ### Added

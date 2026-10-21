@@ -42,7 +42,7 @@ does" reference in [documentation.md](documentation.md).
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.4.0** (`p4minishell_config.h` version macros) |
+| Version | **v1.4.1** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -2741,3 +2741,51 @@ the same failure.
 browser/audio codec (`audio_codec_data_i2s.c`), the EV board BSP
 (`esp32_p4_function_ev_board.c` I2S cleanup), plus the pre-existing LVGL
 patches. Re-apply after `idf.py update-dependencies`.
+
+
+## v1.4.1 campaign findings (2026-10-21)
+
+### F53 root causes (all fixed)
+
+- **The visible trim marker was an emergency valve, not a leak:** 384 LVGL
+  spans (~80 B internal each) plus the window rows were the dominant internal
+  consumer. After a long pkg/batch sweep free internal could reach ~500 B and
+  the next open aborted in newlib __sfp. The cap is now 64 spans/40 rows,
+  the trim is silent and only below 2 KB, and it rebases or drops link rows.
+- **cls never cleared click regions** (shell_transcript_clear_click_regions
+  existed but had no caller), so ui link 0 could fire an earlier suite's
+  command. shell_transcript_reset now clears them; ui links /clear is an
+  explicit automation reset.
+- **LVGL timer callbacks were poisoned (MEPC 0xcececece)** because editor
+  open/close and serial-line handlers called lv_async_call from worker/serial
+  tasks without the LVGL port lock, and the cursor timer was deleted/recreated
+  across sessions. All editor async calls now run under the recursive port
+  lock (editor_async_call); the cursor timer is persistent and paused.
+- **The editor's SD bounce buffer (4 KB DMA) can fail after gfx/plot** (DMA
+  largest ~148 B). A 128-byte dynamic fallback keeps load/save working. A
+  static .bss fallback is NOT safe (not guaranteed DMA-capable on P4) and was
+  removed; a boot-time 512 B reserve starved I2S and was also removed.
+- **I2S init can fault after a failed descriptor allocation.** The audio path
+  now gates on 9 KB largest/10 KB free DMA before sp_audio_codec_speaker_init
+  and refuses muted. Tab5's fresh-boot DMA pool is only ~3.4 KB, so audio is
+  unavailable there while the C6/USB stack owns the pool; COM3 (~11.8 KB) plays.
+
+### Harness
+
+- The runner measures mem.internal/mem.dma.free before each suite and
+  starts memory-sensitive areas from a clean boot (editor, input-ui,
+  power-audio, apps, browser, http; always for those, plus adaptive below
+  12 KB/9 KB). SD files persist across the reset.
+- s17 fetches the render fixture over loopback (the bench camera AP resets
+  sockets); s10 clears links explicitly and checks the preview line-wise;
+  s09 sweeps crash files, normalizes surfaces, retries the unnamed save-as and
+  screenshots. s08 diagnostic memnotes were removed after localization.
+- s06 no longer leaves per-section mem notes; the batch heap story is in
+  ugs.md/this file.
+
+### Screenshots
+
+- Curated images live in docs/assets/ and per-run captures in
+  screenshots/regression/. The browser website remains the showcase. The
+  on-screen [history trimmed under memory pressure] marker is gone from all
+  new captures.

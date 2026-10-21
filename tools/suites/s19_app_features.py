@@ -100,7 +100,7 @@ def run(dev, ctx):
     dev.run("del /f JSFEAT.JS", timeout=30)
 
     out = dev.run("browser", timeout=15)
-    c.expect("browser usage", "browser <url>", out)
+    c.expect("browser usage", "browser <url", out)
 
     out = dev.run("httpget /cookie", timeout=15)
     c.check("cookie jar responds", "no stored cookies" in out or "=" in out,

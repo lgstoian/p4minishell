@@ -120,8 +120,9 @@ if (strutil_text_equals_ignore_case(argv[1], "off")) {
 static esp_err_t chat_cmd_peer(int argc, char *argv[])
 {
     if (argc < 2) {
-        shell_print_muted("chat peer <host-ip|off>");
-        return ESP_OK;
+        shell_print_error("chat: host IP required "
+                          "(usage: chat peer <host-ip|off>)");
+        return ESP_ERR_INVALID_ARG;
     }
 
     if (strutil_text_equals_ignore_case(argv[1], "off")) {

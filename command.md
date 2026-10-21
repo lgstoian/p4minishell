@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.4.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.4.1** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -303,7 +303,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v1.4.0 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.4.1 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -480,7 +480,8 @@ same code a finger exercises.
 - `ui target <id>` — activate a listed target (its own click/value event).
 - `ui hit <x> <y> [/v:NAME]` — report the target id under a point.
 - `ui links` — list transcript link/anchor regions as `id label -> command`
-  (dense indices for `ui link`).
+  (dense indices for `ui link`). `ui links /clear` drops every region and any
+  armed preview; `cls` also clears them now (automation reset).
 - `ui link <n>` — semantically activate link `n`: the same fire path as a
   transcript tap (confirm-gated links preview first, `ui.link: preview`; a
   repeat runs — no coordinate race with the auto-scrolling transcript, the

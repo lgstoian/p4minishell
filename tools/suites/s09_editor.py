@@ -83,15 +83,28 @@ def run(dev, ctx):
     created = [FILE_A, FILE_C, FILE_D, FILE_BIG, FILE_E]
 
     def shot(name):
-        try:
-            return dev.screenshot(out_dir=OUT_DIR, name=name)
-        except PanicError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            c.note("screenshot %s failed: %s" % (name, exc))
-            return None
+        # unwind=False: the editor owns serial input; the default Ctrl-C retry
+        # would abort the editor and leave the next section stuck. Retry the
+        # plain capture a couple of times: the console reader occasionally
+        # eats the first screenshot prelude while the editor repaints.
+        last = None
+        for _attempt in range(3):
+            try:
+                return dev.screenshot(out_dir=OUT_DIR, name=name,
+                                      unwind=False)
+            except PanicError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                time.sleep(1.0)
+        c.note("screenshot %s failed: %s" % (name, last))
+        return None
 
     try:
+        # Stale autosave crash files from an earlier run (especially the
+        # unnamed `(unnamed)` buffer) make `edit` open a recover prompt that
+        # eats the next scripted line. Sweep them before the session.
+        dev.run("recover clear", timeout=20)
         # =================================================================
         # 1. Small file: goto / type / undo / redo / find / save / save-as
         # =================================================================
@@ -146,20 +159,39 @@ def run(dev, ctx):
         c.expect("file A keeps marker", "ZZEDMARKER", out_a)
 
         # Save As from an *unnamed* buffer: the prompt is then empty, so the
-        # typed path is not appended to a pre-filled current path.
-        dev.send("edit", 8.0)
-        c.check("unnamed editor opened",
-                _wait_editor(dev, "open", timeout=20) == "open",
+        # typed path is not appended to a pre-filled current path. Run it in a
+        # retry loop: under the full tier the preceding display suite can leave
+        # a TUI/editor surface that makes the first attempt open but not close.
+        c.note("editor: unnamed save-as session")
+        opened = False
+        closed = False
+        for attempt in range(2):
+            # A stale crash file would open a recover prompt over the buffer.
+            dev.run("recover clear", timeout=20)
+            dev.run("del /f %s" % FILE_C, timeout=20)
+            dev.send("edit", 8.0)
+            opened = _wait_editor(dev, "open", timeout=20) == "open"
+            if not opened:
+                continue
+            dev.send("UNNAMED LINE ONE", 2.5)
+            dev.send("\\o", 3.5)
+            dev.send(FILE_C, 5.0)
+            dev.send("ZZCMARKER", 2.5)
+            dev.send("\\s", 8.0)
+            dev.send("\\q", 6.0)
+            dev.send("y", 3.5)
+            closed = _wait_editor(dev, "closed", timeout=12) == "closed"
+            if closed:
+                break
+            # Abort the stuck editor command so the shell owns input again.
+            try:
+                dev.session.write(b"\x03")
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(2.0)
+        c.check("unnamed editor opened", opened,
                 "state=%r" % _ui_state(dev)[-160:])
-        dev.send("UNNAMED LINE ONE", 2.5)
-        dev.send("\\o", 3.5)
-        dev.send(FILE_C, 5.0)
-        dev.send("ZZCMARKER", 2.5)
-        dev.send("\\s", 8.0)
-        dev.send("\\q", 6.0)
-        dev.send("y", 3.5)
-        c.check("editor closed after save-as",
-                _wait_editor(dev, "closed", timeout=12) == "closed",
+        c.check("editor closed after save-as", closed,
                 "state=%r" % _ui_state(dev)[-160:])
 
         out_c = dev.run("type %s" % FILE_C, timeout=20)

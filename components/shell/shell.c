@@ -1173,6 +1173,10 @@ void shell_transcript_reset(void)
         windows_set_transcript_text("");
         lvgl_port_unlock();
     }
+    /* The content is gone: stale link/click targets must not survive `cls`
+     * and fire a command from a previous screen (s10 link activation after
+     * the display/editor suites). Resets the anchor row/column too. */
+    shell_transcript_clear_click_regions();
 }
 
 /**
@@ -1205,14 +1209,19 @@ size_t shell_transcript_trim_count(void)
     return s_transcript_trim_count;
 }
 
+/* Defined with the click-region table below; rebases link rows after a trim. */
+static void shell_click_regions_trim(int dropped_lines);
+
 void shell_transcript_guard_internal(void)
 {
-    static const char truncation_marker[] = "\n[history trimmed under memory pressure]\n";
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     int64_t now_us = esp_timer_get_time();
     size_t plain_len;
     size_t ansi_len;
     size_t keep;
+    size_t dropped_bytes = 0;
+    int dropped_lines = 0;
+    size_t i;
 
     /* Span/struct overhead lives in the internal heap and can exhaust it to
      * the point where a newlib lock allocation aborts, so the guard keys on
@@ -1228,8 +1237,12 @@ void shell_transcript_guard_internal(void)
 
     /* Rate-limit: one trim per window is enough; the freed spans cover the
      * burst that follows. Without this, every append in a long listing
-     * re-trims, re-logs, and re-rebuilds spans (the flicker + log spam). */
-    if (now_us - s_transcript_last_trim_us < SHELL_TRIM_MIN_INTERVAL_US) {
+     * re-trims, re-logs, and re-rebuilds spans (the flicker + log spam).
+     * Under severe pressure (below the 8 KB floor) the rate limit is bypassed:
+     * a fast batch/pkg burst could otherwise exhaust the heap in <2 s and
+     * abort in newlib __sfp before the next scheduled trim (F53). */
+    if (now_us - s_transcript_last_trim_us < SHELL_TRIM_MIN_INTERVAL_US &&
+        free_internal >= SHELL_TRIM_SEVERE_BYTES) {
         return;
     }
     s_transcript_last_trim_us = now_us;
@@ -1257,7 +1270,15 @@ void shell_transcript_guard_internal(void)
     }
     if (keep < 512) keep = 512;
     if (plain_len > keep) {
-        memmove(s_transcript, s_transcript + plain_len - keep, keep);
+        dropped_bytes = plain_len - keep;
+        /* Count the lines that disappear so click/link regions can be
+         * rebased instead of firing a command from a different row. */
+        for (i = 0; i < dropped_bytes; i++) {
+            if (s_transcript[i] == '\n') {
+                dropped_lines++;
+            }
+        }
+        memmove(s_transcript, s_transcript + dropped_bytes, keep);
         plain_len = keep;
         s_transcript[plain_len] = '\0';
         s_transcript_epoch++;
@@ -1266,18 +1287,6 @@ void shell_transcript_guard_internal(void)
         memmove(s_transcript_ansi, s_transcript_ansi + ansi_len - keep, keep);
         ansi_len = keep;
         s_transcript_ansi[ansi_len] = '\0';
-    }
-
-    if (plain_len + sizeof(truncation_marker) < P4_CONFIG_TRANSCRIPT_BYTES) {
-        size_t marker_len = sizeof(truncation_marker) - 1;
-        memcpy(s_transcript + plain_len, truncation_marker, marker_len);
-        plain_len += marker_len;
-        s_transcript[plain_len] = '\0';
-        if (ansi_len + marker_len < P4_CONFIG_TRANSCRIPT_BYTES) {
-            memcpy(s_transcript_ansi + ansi_len, truncation_marker, marker_len);
-            ansi_len += marker_len;
-            s_transcript_ansi[ansi_len] = '\0';
-        }
     }
     s_transcript_len = plain_len;
     s_transcript_ansi_len = ansi_len;
@@ -1292,13 +1301,8 @@ void shell_transcript_guard_internal(void)
     shell_transcript_buf_unlock();
     lvgl_port_unlock();
 
+    shell_click_regions_trim(dropped_lines);
     s_transcript_trim_count++;
-    /* Informational: the Tab5 boots with a tight internal heap and the design
-     * deliberately keeps ~4 KB free by trimming old spans. This is the safety
-     * valve working, not a fault, so it must not pollute the boot W/E gate. */
-    ESP_LOGI(SHELL_TAG, "Transcript trimmed under memory pressure "
-             "(internal free %u B, trims %u)", (unsigned int)free_internal,
-             (unsigned int)s_transcript_trim_count);
 }
 
 void shell_history_transcript_scroll_to_end(void)
@@ -2252,6 +2256,31 @@ void shell_transcript_clear_click_regions(void)
     free(s_link_pending_cmd);
     s_link_pending_cmd = NULL;
     s_link_pending_label[0] = '\0';
+}
+
+/* A transcript trim removed the oldest @p dropped_lines rows. Shift the
+ * surviving link rows so `ui link`/taps never fire a command from a different
+ * row; links whose row is gone are deactivated. */
+static void shell_click_regions_trim(int dropped_lines)
+{
+    int i;
+
+    if (dropped_lines <= 0) {
+        return;
+    }
+    for (i = 0; i < s_click_region_count; i++) {
+        if (!s_click_regions[i].active) {
+            continue;
+        }
+        s_click_regions[i].y -= dropped_lines;
+        if (s_click_regions[i].y < 0) {
+            s_click_regions[i].active = false;
+        }
+    }
+    s_anchor_line -= dropped_lines;
+    if (s_anchor_line < 0) {
+        s_anchor_line = 0;
+    }
 }
 
 static int shell_click_region_hit(int x, int y)

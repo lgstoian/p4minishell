@@ -14,7 +14,7 @@
 > [`documentation.md`](documentation.md) (modules),
 > [`bugs.md`](bugs.md) (findings).
 
-- **Firmware:** v1.4.0 (ESP-IDF v5.5.5)
+- **Firmware:** v1.4.1 (ESP-IDF v5.5.5)
 - **SoC family:** ESP32-P4 (host) + ESP32-C6 (co-processor, ESP-Hosted SDIO)
 - **Boards:** `jc1060p470c` (reference) and `m5stack_tab5`
 - **Serial:** reference `COM3`, Tab5 `COM6` during development

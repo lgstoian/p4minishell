@@ -27,6 +27,8 @@
 #include "db.h"
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "storage.h"
 #include "bsp/esp-bsp.h"
@@ -1653,6 +1655,12 @@ esp_err_t db_import(const char *name, const char *file)
             continue;
         }
         imported++;
+        /* Each db_add rewrites the SD file; a long import can exceed the 5 s
+         * task watchdog without ever yielding (Tab5, large native export).
+         * Yield every few records so the idle task can feed the WDT. */
+        if ((imported & 7) == 0) {
+            vTaskDelay(1);
+        }
 
         if (nl == NULL) break;
         cursor = nl + 1;

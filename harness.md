@@ -8,7 +8,7 @@
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
 
-- **Version:** v1.4.0 · **Targets:** ESP32-P4 + ESP32-C6
+- **Version:** v1.4.1 · **Targets:** ESP32-P4 + ESP32-C6
 - **Boards:** `jc1060p470c` (reference, e.g. COM3) and `m5stack_tab5` (COM6)
 
 ---
@@ -157,6 +157,13 @@ a pixel model), `sdbridge.py` (`receive`/`send`), `perf.py` (frame stats),
   restores run-to-completion.
 - **Flakes vs bugs:** `--retry N` re-runs a failed suite (never a panic); a
   pass-on-retry is reported FLAKY for quarantine, fail-twice is a bug.
+- **Clean-boot areas:** the runner samples `mem.internal` and `mem.dma.free`
+  before each suite. Memory-sensitive areas (`editor`, `input-ui`,
+  `power-audio`, `apps`, `browser`, `http`) always start from a fresh boot;
+  other suites reboot when internal drops below 12 KB or DMA below 9 KB. SD
+  files persist across the reset. This prevents cumulative LVGL span/service
+  state from starving httpd/I2S (F53) while still exercising each feature on
+  a representative clean heap.
 - **Slow checks:** `--baseline <json>` (see `--write-baseline`) flags suites
   running far over their recorded durations — a perf regression signal.
 - **Differential:** the merged table flags any suite failing on exactly one

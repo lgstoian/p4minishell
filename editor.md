@@ -5,7 +5,7 @@
 > `edit` feature, edge case, keyboard/serial cheat sheets, and a line-number
 > gutter guide. This file is the quick overview.
 
-> **Current build (v1.4.0):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
+> **Current build (v1.4.1):** hardware-verified on COM3 (ESP-IDF v5.5.5). The
 > editor is one of six modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;
 > the TUI cell buffer (`components/tui/`), the `draw` verbs, and the `gfx`
@@ -262,6 +262,13 @@ materialized as LVGL spans at once â€” larger files scroll through a moving
 window, so opening a big file stays responsive. Above the snapshot threshold
 undo is unavailable for the session (editing a large file would otherwise copy
 the whole document per keystroke); the byte budget bounds undo memory.
+
+Since v1.4.1 the SD bounce buffer falls back from 4 KB to 512/256/128-byte
+internal DMA blocks when the pool is fragmented; if even 128 bytes do not fit
+the load fails gracefully (no LVGL/timer corruption). The blink timer is
+persistent (created once, paused on close), and every worker/serial
+`lv_async_call` is issued under the recursive LVGL port lock, so editor
+sessions can be opened/closed repeatedly after graphics-heavy work.
 
 ## Troubleshooting
 

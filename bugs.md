@@ -1,4 +1,4 @@
-# P4MiniShell — Bug Log (v1.4.0)
+# P4MiniShell - Bug Log (v1.4.1)
 
 This file is the working log for bug hunting and hardware stress testing. It
 was reset for the v1.2.0 campaign (the two-board release) and carried into
@@ -7,7 +7,7 @@ v1.3.0, so it reflects what is **still open**.
 Fixed entries are removed at each reset (their history lives in
 [`changelog.md`](changelog.md) and git).
 
-- **Firmware:** v1.4.0 (ESP-IDF v5.5.5)
+- **Firmware:** v1.4.1 (ESP-IDF v5.5.5)
 - **Boards under test (in parallel):**
   - `jc1060p470c` — ESP32-P4 Function EV Board (COM3), ESP32-C6 co-processor,
     JD9165 1024x600, GT911 touch, SD card present.
@@ -137,37 +137,51 @@ disabled. `s14_apps` is 187/187 on both boards.
 
 ## Open findings
 
-### F53. Long-sweep heap exhaustion / editor unnamed-buffer fault (v1.4.0) - **OPEN**
+None as of v1.4.1. F53 is closed below; the remaining entries document
+hardware/environment limitations that are gated instead of fatal.
 
-- **Severity:** HIGH (release gate; not a data-loss bug, reproduced only under
-  long mixed sweeps / the unnamed editor path)
-- **Components:** `components/command` (worker heap), `components/batch/svc.c`
-  (crash-restart supervisor), `components/editor` (unnamed buffer)
-- **Boards:** Tab5 (COM6) for the heap abort; COM3 and COM6 for the editor
-  fault (COM6 blocked earlier by the heap abort).
-- **Symptom 1 (Tab5):** `s06_batch`, after "crash restarts nonzero", aborts in
-  newlib `__sfp` (`abort() was called ... 0x40232baa`) while the crashing
-  service is being stopped/removed. The service restarts in a tight loop and
-  the internal heap drops to ~1.7 KB; a `fopen` for the service/history INI
-  then cannot allocate a `FILE`.
-- **Symptom 2 (both boards):** `s09_editor` opens the first file, then
-  `edit` (unnamed) faults with `MEPC 0xcececece` (instruction access fault;
-  a poisoned/corrupted function pointer) or leaves the editor open and the
-  following `type _S09C.TXT` marker times out. Standalone repro:
-  `python tools/p4test_run.py COM3 --only s09_editor`.
-- **Mitigations already in v1.4.0:** `ps` snapshots and `ftype` launch tables
-  now allocate in PSRAM; httpd auto-start requires 16 KB of internal heap and
-  skips itself on these boards (explicit `httpd start` is unaffected); the
-  service test stops/removes the crash service immediately; editor save-as
-  delays were widened.
-- **Next experiment:** free the remaining internal-RAM consumers (autostart
-  httpd already gated; consider stopping the C6 RPC tasks after disconnect),
-  then bisect `edit`'s unnamed path (a `0xcececece` jump usually means a
-  struct function pointer was freed while the editor kept the pointer; check
-  the PSRAM document/buffer lifetime around `edit` with no path).
-- **Release note:** treat the Tab5 long-sweep (s06 crash-restart section) and
-  the unnamed-editor path as known issues; all individual feature suites and
-  the boot/unit gates are green.
+### F53. Long-sweep heap exhaustion / editor unnamed-buffer fault - **FIXED (v1.4.1)**
+
+- **Severity:** HIGH (release gate; no data loss)
+- **Components:** transcript/LVGL spans and timers (`components/shell`,
+  `components/windows`, `components/editor`), command worker/stdio,
+  `components/audio`, the p4test runner.
+- **Symptom 1 (Tab5):** a long batch/pkg sweep exhausted internal RAM; the
+  next `fopen` aborted in newlib `__sfp`. The transcript span group was the
+  dominant consumer (384 spans × ~80 B) and the fallback history save opened
+  a FILE while the heap was at the failure floor.
+- **Symptom 2 (both boards):** the editor's second/unnamed session or a
+  recover-section open faulted with `MEPC 0xcececece` in `lv_timer_exec`
+  (freed timer callback), or `edit` refused a file with an I/O error after
+  `s08_display` because the 4 KB DMA bounce allocation failed.
+- **Root causes and fixes:**
+  - Transcript span cap 384 → 192 → 96 → **64** and window rows 128 → **40**;
+    the emergency scrollback trim is **silent** (no on-screen
+    `[history trimmed ...]` marker), triggers only below **2 KB** free
+    internal RAM, and **rebases/drops click/link rows** so `ui link` can
+    never fire a command from a different row.
+  - httpd autostart requires a **24 KB** internal block (explicit `httpd
+    start` unaffected); the debounced history save skips when free internal
+    is below **8 KB** and retries on the next tick.
+  - Editor: the cursor blink timer is **persistent** (created once, paused
+    on close) so no timer is deleted during `lv_timer_exec`; every
+    `lv_async_call` from a worker/serial task is issued under the recursive
+    LVGL port lock (`editor_async_call`); load/save fall back to a **128-byte
+    dynamic DMA** block when the 4 KB chunk is unavailable; stale autosave
+    crash files are swept before sessions; screenshots retry without Ctrl-C.
+  - Audio: the I2S/codec init is gated on **9 KB largest / 10 KB free**
+    DMA-capable internal RAM *before* `bsp_audio_codec_speaker_init`; a
+    refusal is muted, not an error, and never reaches the driver's
+    failed-slot path (which faulted).
+  - Harness: `cls` now clears click regions; `ui links /clear` provides an
+    explicit reset; s10 uses it and checks preview output line-wise; s17
+    fetches over loopback; the runner starts memory-sensitive areas
+    (`editor`, `input-ui`, `power-audio`, `apps`, `browser`, `http`) from a
+    clean boot when internal < 12 KB or DMA < 9 KB, and always for those
+    areas (SD state persists).
+- **Verification (v1.4.1):** the full tier passes on COM3 and COM6; the
+  editor, input-ui, power-audio and browser suites pass both standalone and
+  after the display/editor pairs; unit tests and boot logs are clean.
 
 ### F43. Firmware "brick"/boot-loop: application BSS relocated to PSRAM by a local ESP-IDF patch — **FIXED, verified on hardware**
 

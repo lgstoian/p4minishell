@@ -1336,6 +1336,11 @@ static void editor_preview_toggle(void)
 static void editor_cursor_blink_cb(lv_timer_t *timer)
 {
     (void)timer;
+    /* Persistent timer: it stays in LVGL's list across sessions (paused while
+     * the editor is closed), so a stray tick during teardown must no-op. */
+    if (!s_editor_view.open || s_editor_view.cursor == NULL) {
+        return;
+    }
     s_editor_view.cursor_visible = !s_editor_view.cursor_visible;
     if (s_editor_view.cursor != NULL) {
         if (s_editor_view.cursor_visible) {
@@ -1400,19 +1405,24 @@ void editor_view_set_blink_ms(uint32_t blink_ms)
         return;
     }
     if (blink_ms == 0) {
+        /* Steady cursor: pause, never delete (persistent timer avoids the
+         * delete-during-exec list hazard). */
         if (s_editor_view.cursor_timer != NULL) {
-            lv_timer_delete(s_editor_view.cursor_timer);
-            s_editor_view.cursor_timer = NULL;
+            lv_timer_pause(s_editor_view.cursor_timer);
         }
         s_editor_view.cursor_visible = true;
         if (s_editor_view.cursor != NULL) {
             lv_obj_remove_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
         }
-    } else if (s_editor_view.cursor_timer != NULL) {
-        lv_timer_set_period(s_editor_view.cursor_timer, blink_ms);
     } else {
-        s_editor_view.cursor_timer = lv_timer_create(editor_cursor_blink_cb,
-                                                     blink_ms, NULL);
+        if (s_editor_view.cursor_timer == NULL) {
+            s_editor_view.cursor_timer = lv_timer_create(
+                editor_cursor_blink_cb, blink_ms, NULL);
+        } else {
+            lv_timer_set_period(s_editor_view.cursor_timer, blink_ms);
+            lv_timer_reset(s_editor_view.cursor_timer);
+            lv_timer_resume(s_editor_view.cursor_timer);
+        }
     }
     lvgl_port_unlock();
 }
@@ -2905,13 +2915,23 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     lv_obj_set_size(s_editor_view.cursor, editor_cell_width(),
                     editor_line_height());
     s_editor_view.cursor_visible = true;
-    /* Blink period 0 = steady cursor: no timer, stays visible. */
-    if (P4_CONFIG_CURSOR_BLINK_MS > 0) {
-        s_editor_view.cursor_timer = lv_timer_create(editor_cursor_blink_cb,
-                                                     P4_CONFIG_CURSOR_BLINK_MS,
-                                                     NULL);
-    } else {
-        s_editor_view.cursor_timer = NULL;
+    /* Blink period 0 = steady cursor. The timer is persistent (created once,
+     * paused while closed) so opening/closing sessions never mutates LVGL's
+     * timer list; a delete racing the timer pump poisoned the callback
+     * (F53: MEPC 0xcececece in lv_timer_exec). */
+    if (s_editor_view.cursor_timer == NULL && P4_CONFIG_CURSOR_BLINK_MS > 0) {
+        s_editor_view.cursor_timer = lv_timer_create(
+            editor_cursor_blink_cb, P4_CONFIG_CURSOR_BLINK_MS, NULL);
+    }
+    if (s_editor_view.cursor_timer != NULL) {
+        if (P4_CONFIG_CURSOR_BLINK_MS > 0) {
+            lv_timer_set_period(s_editor_view.cursor_timer,
+                                P4_CONFIG_CURSOR_BLINK_MS);
+            lv_timer_reset(s_editor_view.cursor_timer);
+            lv_timer_resume(s_editor_view.cursor_timer);
+        } else {
+            lv_timer_pause(s_editor_view.cursor_timer);
+        }
     }
 
     /* Current-line highlight: a full-width bar behind the cursor row. It is
@@ -2984,9 +3004,10 @@ void editor_view_close(void)
         return;
     }
 
+    /* Pause, never delete: the persistent timer stays in LVGL's list and the
+     * callback no-ops while the view is closed. */
     if (s_editor_view.cursor_timer != NULL) {
-        lv_timer_delete(s_editor_view.cursor_timer);
-        s_editor_view.cursor_timer = NULL;
+        lv_timer_pause(s_editor_view.cursor_timer);
     }
 
     /* A worker session owns the document this view renders. Wake it BEFORE

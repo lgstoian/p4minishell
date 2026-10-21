@@ -2000,10 +2000,20 @@ void command_history_save_now(void)
  * A one-shot PSRAM-stack task does the SD write instead (SD, unlike flash, is
  * safe from a PSRAM stack), so the timer task stays shallow. Falls back to the
  * timer task only if the one-shot task cannot be created. */
+/* The debounced save runs on a PSRAM-stack task, but its FILE is a newlib
+ * internal-RAM allocation. Skip it while the internal heap is critically low
+ * (F53: a long pkg/batch burst could reach ~0 and abort in __sfp); the
+ * generation stays dirty and the next timer tick retries. */
+static bool command_history_heap_ok(void)
+{
+    return heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= (8 * 1024);
+}
+
 static void command_history_persist_task(void *arg)
 {
     (void)arg;
-    if (shell_history_generation() != s_history_saved_generation) {
+    if (command_history_heap_ok() &&
+        shell_history_generation() != s_history_saved_generation) {
         command_history_save_now();
     }
     vTaskDelete(NULL);
@@ -2013,6 +2023,9 @@ static void command_history_persist_cb(void *arg)
 {
     (void)arg;
     if (shell_history_generation() == s_history_saved_generation) {
+        return;
+    }
+    if (!command_history_heap_ok()) {
         return;
     }
     if (xTaskCreateWithCaps(command_history_persist_task, "hist_save", 8192,

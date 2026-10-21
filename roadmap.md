@@ -134,6 +134,19 @@ on-disk index — always live.
 - Locale persistence (`config LOCALE=`) and a working `js eval/run/call`
   surface round out the release.
 
+### 13. F53 closure and memory hardening (v1.4.1)
+
+- **Transcript:** span cap 64 with a 40-row window; silent emergency trim
+  below 2 KB internal free; click/link rows rebased or dropped on trim; the
+  on-screen `[history trimmed ...]` marker removed.
+- **Editor:** persistent blink timer, port-locked async dispatch, dynamic
+  128-byte DMA fallback, stale-crash sweep, screenshot retries.
+- **Audio/httpd:** I2S DMA gate before codec init; httpd autostart at 24 KB;
+  history save skips below 8 KB internal.
+- **Harness:** clean boots for memory-sensitive areas, `ui links /clear`,
+  loopback browser fetch, line-wise link preview checks.
+- See [`changelog.md`](changelog.md) `[1.4.1]` and [`bugs.md`](bugs.md) F53.
+
 ---
 
 ## Part 2 — Where we are going

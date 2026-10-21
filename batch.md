@@ -7,7 +7,7 @@
 > for architecture see [`documentation.md`](documentation.md); for the
 > step-by-step tutorial see [`tutorial_batch.md`](tutorial_batch.md).
 
-- **Version:** v1.4.0 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
+- **Version:** v1.4.1 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
   (FATFS long filenames are UTF-8) · **Size:** ≤128 KB runs RAM-resident
   (`P4_CONFIG_BATCH_FILE_MAX_BYTES`); larger files stream from SD with
   identical semantics.

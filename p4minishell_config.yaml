@@ -14,7 +14,7 @@
 #
 # Version: 1.3.1
 # Last updated: 2026-10-01 (1.3.1: Tab5 white-noise fix - amp gating, mic diagnostics)
-config_version: "1.4.0"
+config_version: "1.4.1"
 
 # ---- Shell Identity ----
 shell_identity:
@@ -77,21 +77,26 @@ buffers:
       survive).
     range: "1024..65536"
   transcript_max_spans:
-    value: 384
+    value: 64
     type: int
     description: >-
-      Maximum coloured spans the transcript span group retains at once. The
-      transcript renders windowed: a PSRAM row table keeps the full scrollback,
+      Maximum coloured spans the transcript span group retains at once.
+      Reduced 384 -> 192 -> 96 -> 64 alongside the window rows: the LVGL
+      span objects are internal-RAM allocations and the larger caps left only
+      ~500 B free on Tab5 after a long suite (F53 heap aborts). 64 still
+      covers the visible page (~25 rows, often one span per row) with margin.
+      The transcript renders windowed: a PSRAM row table keeps the full scrollback,
       per-row heights are measured incrementally, and only the rows overlapping
       the viewport become LVGL spans. The oldest spans past this cap are
       dropped when a rendered window fragments into more spans than the cap.
     range: "64..4096"
   transcript_window_rows:
-    value: 128
+    value: 40
     type: int
     description: >-
-      Maximum transcript rows materialized as LVGL spans at once. The window
-      rebuild stays bounded to this many rows regardless of the viewport.
+      Maximum transcript rows materialized as LVGL spans at once (128 -> 48 ->
+      40 to keep internal RAM for commands on Tab5; the visible page is ~25
+      rows). Scrolling re-materializes rows; the 64 KB scrollback is unchanged.
     range: "16..512"
   transcript_window_margin_px:
     value: 96
@@ -2040,9 +2045,9 @@ boot_scripting:
     description: "Maximum bytes the generic INI (ini command, applib state) reads/writes for a KEY=VALUE config file on the SD card"
     range: "4096..65536"
   transcript_internal_trim_bytes:
-    value: 4096
+    value: 2048
     type: size_t
-    description: "Internal (DMA-capable) heap free threshold in bytes that triggers an automatic transcript scrollback trim. Lowered to 4096 in v0.35.4 (dir scratch buffers moved to PSRAM, so internal heap rarely drops below this); trim keeps newest 3/4 and is rate-limited to one per 2 s."
+    description: "Emergency-only internal-heap floor for the transcript safety valve: below this free internal RAM the oldest history is dropped silently (no on-screen marker, links rebased). Normal operation never trims; the v1.4.1 memory work (64 spans, httpd/history gates, editor 128-byte DMA fallback, audio DMA gate) keeps the heap well above this. Trim keeps the newest half and is rate-limited to one per 2 s."
     range: "2048..1048576"
   temp_dir_name:
     value: "tmp"

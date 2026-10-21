@@ -269,7 +269,31 @@ def run(dev, ctx):
                     break
                 time.sleep(0.3)
         c.expect("ui key typed prefix", "co", typed_input)
-        ghost = _between(typed, "ghost", "search") or ""
+        # The ghost hint is computed asynchronously after the input line
+        # repaints; poll briefly instead of sampling the same instant.
+        def ghost_now():
+            st = _ui_state(dev)
+            return (_between(st, "ghost", "search") or ""), st
+
+        ghost, typed = ghost_now()
+        deadline = time.time() + 3.0
+        while not ghost and time.time() < deadline:
+            time.sleep(0.3)
+            ghost, typed = ghost_now()
+        if not ghost:
+            # The completion cache can be cold after the editor suite. Clear
+            # and retype once (still a real assertion: the hint must appear).
+            dev.session.write(b"\x03")
+            time.sleep(0.6)
+            dev.read_for(0.4)
+            dev.run("ui key c", timeout=15)
+            dev.run("ui key o", timeout=15)
+            deadline = time.time() + 3.0
+            while not ghost and time.time() < deadline:
+                ghost, typed = ghost_now()
+                if ghost:
+                    break
+                time.sleep(0.3)
         c.check("ghost completion shown", len(ghost) > 0,
                 "ghost=%r state=%s" % (ghost, typed[-200:]))
         # Submit the pending input line (OSK enter) so the shell starts clean.
@@ -352,6 +376,10 @@ def run(dev, ctx):
         # 7. Hyperlinks: SH_LINK style, tap-confirm, cursor simulation
         # =================================================================
         c.note("hyperlinks + cursor simulation")
+        # Drop click/link regions left by earlier suites. `cls` normally does
+        # this, but a pending on-screen input line can prevent the command
+        # from running, so clear explicitly as well.
+        dev.run("ui links /clear", timeout=20)
         dev.run("cls", timeout=20)
         out = dev.run("link P10LINK echo P10LINK-OK", timeout=20)
         c.expect("link emits label", "P10LINK", out)
@@ -362,7 +390,12 @@ def run(dev, ctx):
         # First activation previews (no execution), second runs.
         prev = dev.run("ui link 0", timeout=20)
         c.expect("first activation previews", "ui.link: preview", prev)
-        c.check("no execution on preview", "P10LINK-OK" not in prev,
+        # The preview message quotes the target command ("... -> echo
+        # P10LINK-OK (tap again to run)"), so a substring test is wrong; the
+        # actual execution prints P10LINK-OK on its own line.
+        preview_executed = any(line.strip() == "P10LINK-OK"
+                               for line in prev.splitlines())
+        c.check("no execution on preview", not preview_executed,
                 "tail=%r" % prev[-160:])
         ran = dev.run("ui link 0", timeout=20)
         c.expect("second activation runs", "P10LINK-OK", ran)

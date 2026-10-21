@@ -554,10 +554,19 @@ static int ui_run(int argc, char **argv)
     }
     if (shell_text_equals_ignore_case(sub, "links")) {
         /* Serial-only listing (like targets): transcript link/anchor regions
-         * with dense indices for `ui link <n>`. */
-        int count = shell_link_count();
+         * with dense indices for `ui link <n>`. `/clear` drops stale regions
+         * and any armed preview (automation helper; also used after `cls`
+         * when the on-screen input line prevented the command from running). */
+        int count;
         int i;
 
+        if (npos >= 1 &&
+            shell_text_equals_ignore_case(argv[pos[0]], "/clear")) {
+            shell_transcript_clear_click_regions();
+            ui_out("ui.links: cleared\n");
+            return 0;
+        }
+        count = shell_link_count();
         ui_out("ui.links: %d\n", count);
         for (i = 0; i < count; i++) {
             const char *label = NULL;

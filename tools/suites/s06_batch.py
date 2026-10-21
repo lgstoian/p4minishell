@@ -1044,9 +1044,26 @@ def run(dev, ctx):
     dev.run("service start P4CRASH")
     dev.run("delay 12000", timeout=60)
     out = dev.run("service list")
-    c.expect("crashed service stays supervised", "pending", out)
-    c.expect("crash restarts counted", "restarts", out)
-    c.expect("crash restarts nonzero", "restarts 0", out, want=False)
+    # The supervisor ticks are independent of this command stream; poll for the
+    # first restart instead of sampling exactly at 12 s (Tab5 can lag under a
+    # long sweep, which used to record `restarts 0`).
+    deadline = time.time() + 15.0
+    while "restarts 0" in out and time.time() < deadline:
+        time.sleep(1.0)
+        out = dev.run("service list")
+    # Match the P4CRASH row only: other resident services (e.g. P14MOOD from
+    # the app sweep) also print "restarts 0" and used to poison the substring
+    # check. Between supervisor ticks the service may read idle +restart.
+    crash_line = next((ln for ln in out.splitlines() if "P4CRASH" in ln), "")
+    m_rest = re.search(r"restarts\s+(\d+)", crash_line)
+    c.check("crashed service stays supervised",
+            any(state in crash_line for state in
+                ("pending", "idle +restart", "parked +restart")),
+            crash_line or out[-200:])
+    c.expect("crash restarts counted", "restarts", crash_line)
+    c.check("crash restarts nonzero",
+            bool(m_rest) and int(m_rest.group(1)) > 0,
+            crash_line or out[-200:])
     dev.run("service stop P4CRASH")
     dev.run("service remove P4CRASH")
     dev.run("del /p SERVICES.INI")

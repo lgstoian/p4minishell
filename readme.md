@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.4.0 Â· **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) Â· **Display:** JD9165 1024x600 MIPI-DSI Â· **License:** MIT
+**Version:** 1.4.1 Â· **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) Â· **Display:** JD9165 1024x600 MIPI-DSI Â· **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -60,7 +60,7 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.4.0)
+## Current state (v1.4.1)
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)

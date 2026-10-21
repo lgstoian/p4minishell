@@ -64,10 +64,12 @@
  * leaves too little behind when the boot heap is tight. On the Tab5 (C6 hosted
  * + 28 KB command worker) and the EV board the largest internal block at
  * Wi-Fi-up is ~5-10 KB, so starting anyway starved later `pkg`/`ps`/stdio
- * paths. Require 16 KB before the automatic start (the cooldown/retry still
+ * paths. Require 24 KB before the automatic start (the cooldown/retry still
  * applies); an explicit `httpd start` always works, and the browser/http
- * suites start it after the rest of the boot has settled. */
-#define HTTPD_AUTOSTART_MIN_INTERNAL_LARGEST  (16 * 1024)
+ * suites start it after the rest of the boot has settled. The gate is above
+ * both boards' steady-state largest block by design: the 8 KB task stack is
+ * only spent when the heap can genuinely spare it. */
+#define HTTPD_AUTOSTART_MIN_INTERNAL_LARGEST  (24 * 1024)
 #define HTTPD_AUTH_USERNAME     P4_CONFIG_HTTPD_AUTH_USERNAME
 #define HTTPD_AUTH_PASSWORD     P4_CONFIG_HTTPD_AUTH_PASSWORD
 #define NETDIAG_TAG             P4_CONFIG_SHELL_TAG

@@ -57,6 +57,14 @@ void *editor_mem_alloc(size_t size);
 void *editor_mem_realloc(void *ptr, size_t size);
 void editor_mem_free(void *ptr);
 
+/**
+ * Small (128-byte) internal DMA bounce buffer for SD/FATFS transfers, used
+ * when the DMA heap is too fragmented for the normal chunk. Allocated on
+ * demand (no boot reserve: that starved I2S). @p size_out gets the usable
+ * size (0 if nothing fits). The caller MUST free the returned pointer.
+ */
+void *editor_io_fallback(size_t *size_out);
+
 /* ========================================================================
  * DOCUMENT MODEL
  * ======================================================================== */

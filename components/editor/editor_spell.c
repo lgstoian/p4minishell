@@ -13,6 +13,7 @@
  */
 
 #include "editor_spell.h"
+#include "editor.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -83,6 +84,7 @@ static char *spell_read_rel(const char *rel, size_t *got_out)
     FILE *file;
     char *pool;
     uint8_t *bounce;
+    size_t bounce_size = P4_CONFIG_FILE_IO_BUFFER_BYTES;
     size_t got = 0;
 
     if (got_out != NULL) {
@@ -104,7 +106,10 @@ static char *spell_read_rel(const char *rel, size_t *got_out)
      * DMA-capable memory. PSRAM is NOT MALLOC_CAP_DMA on this P4 build, so
      * reading straight into the PSRAM pool crashes (same rule the editor's
      * SD load/save follow). Read in chunks and copy into the pool. */
-    bounce = p4heap_alloc_dma(P4_CONFIG_FILE_IO_BUFFER_BYTES);
+    bounce = p4heap_alloc_dma(bounce_size);
+    if (bounce == NULL) {
+        bounce = editor_io_fallback(&bounce_size);
+    }
     if (pool == NULL || bounce == NULL) {
         fclose(file);
         shell_sd_end(&session, "spell");
@@ -115,8 +120,8 @@ static char *spell_read_rel(const char *rel, size_t *got_out)
     while (got < P4_CONFIG_SPELL_MAX_BYTES) {
         size_t want = P4_CONFIG_SPELL_MAX_BYTES - got;
         size_t r;
-        if (want > P4_CONFIG_FILE_IO_BUFFER_BYTES) {
-            want = P4_CONFIG_FILE_IO_BUFFER_BYTES;
+        if (want > bounce_size) {
+            want = bounce_size;
         }
         r = fread(bounce, 1, want, file);
         if (r == 0) {

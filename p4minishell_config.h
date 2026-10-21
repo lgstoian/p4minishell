@@ -56,7 +56,7 @@
  */
 #define P4_CONFIG_VERSION_MAJOR             1
 #define P4_CONFIG_VERSION_MINOR             4
-#define P4_CONFIG_VERSION_PATCH             0
+#define P4_CONFIG_VERSION_PATCH             1
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -132,7 +132,7 @@
  * newest three quarters and is rate-limited to one per 2 s, so scrollback
  * survives long sessions.
  */
-#define P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES   4096
+#define P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES   2048
 
 /**
  * Maximum coloured spans the transcript span group retains AT ONCE.
@@ -147,14 +147,14 @@
  * O(viewport), not O(all history). The oldest spans past this cap are dropped
  * when a rendered window fragments into more spans than the cap.
  */
-#define P4_CONFIG_TRANSCRIPT_MAX_SPANS      384
+#define P4_CONFIG_TRANSCRIPT_MAX_SPANS      64
 
 /**
  * Maximum transcript rows materialized as LVGL spans at once. The window
  * rebuild stays bounded to this many rows regardless of the viewport, so a
  * pathological wrap/scroll cannot trip the LVGL task watchdog.
  */
-#define P4_CONFIG_TRANSCRIPT_WINDOW_ROWS    128
+#define P4_CONFIG_TRANSCRIPT_WINDOW_ROWS    40
 
 /**
  * Extra pixels of rows kept materialized above and below the transcript

@@ -7,7 +7,7 @@ P4MiniShell keeps all board-specific facts in one **board profile**:
 1024x600 MIPI-DSI, GT911 touch). A port means adding a profile, pointing the
 build at it, and wiring the drivers below — no firmware logic changes.
 
-- **Version:** v1.4.0 · **Target family:** ESP32-P4 + ESP32-C6
+- **Version:** v1.4.1 · **Target family:** ESP32-P4 + ESP32-C6
 - Shipped profiles: `boards/jc1060p470c/` (reference) and
   `boards/m5stack_tab5/` (see §6).
 - Related: [`readme.md`](readme.md) (configuration), [`SDK.md`](SDK.md)

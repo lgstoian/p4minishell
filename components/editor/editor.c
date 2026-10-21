@@ -89,6 +89,79 @@ static void *editor_dma_alloc(size_t size)
     return p4heap_alloc_dma(size);
 }
 
+/* Last-resort bounce buffer: 128 bytes, allocated only when the normal 4 KB
+ * chunk (and every smaller halving) fails. It is NOT reserved at boot: a
+ * permanent reserve stole DMA from I2S and made `beep` abort on Tab5. .bss is
+ * not guaranteed DMA-capable on this SoC, so this must be a real heap block.
+ * The caller frees it. */
+#define EDITOR_IO_FALLBACK_BYTES 128
+
+void *editor_io_fallback(size_t *size_out)
+{
+    void *ptr = p4heap_alloc_dma(EDITOR_IO_FALLBACK_BYTES + 1);
+
+    if (size_out != NULL) {
+        *size_out = (ptr != NULL) ? EDITOR_IO_FALLBACK_BYTES : 0;
+    }
+    return ptr;
+}
+
+static void editor_dma_free(void *ptr)
+{
+    if (ptr != NULL) {
+        editor_mem_free(ptr);
+    }
+}
+
+/**
+ * Queue an LVGL async callback from a worker/serial task under the port lock.
+ * lv_async_call() mutates LVGL's timer list; calling it concurrently with
+ * lv_timer_handler corrupted the list and made lv_timer_exec jump through a
+ * freed callback (0xcececece, F53). The port lock is recursive, so calls
+ * already on the LVGL task are safe too.
+ */
+static bool editor_async_call(void (*cb)(void *), void *user_data)
+{
+    lv_result_t res;
+
+    if (!lvgl_port_lock(0)) {
+        return false;
+    }
+    res = lv_async_call(cb, user_data);
+    lvgl_port_unlock();
+    return res == LV_RESULT_OK;
+}
+
+/**
+ * Allocate the SD bounce buffer, halving the chunk when the DMA pool is
+ * fragmented. Heavy UI suites (image/font/theme churn) can leave the largest
+ * DMA block below 4 KB; the editor must still open and save (F53: `edit`
+ * reported an I/O error after s08 because this allocation failed). A 128-byte
+ * dynamic block is the final fallback (freed by the caller).
+ * @p size_out receives the usable chunk size (0 only if nothing is available).
+ */
+static void *editor_dma_alloc_chunk(size_t *size_out)
+{
+    size_t size = EDITOR_SD_CHUNK_BYTES;
+    void *ptr = NULL;
+
+    while (size >= 128) {
+        /* One spare byte lets the loader prepend a carried '\r'. */
+        ptr = editor_dma_alloc(size + 1);
+        if (ptr != NULL) {
+            break;
+        }
+        size /= 2;
+    }
+    if (ptr == NULL) {
+        ptr = editor_io_fallback(&size);
+    }
+    if (size_out != NULL) {
+        *size_out = (ptr != NULL) ? size : 0;
+    }
+    return ptr;
+}
+
 /* ========================================================================
  * LINE HELPERS
  * ======================================================================== */
@@ -390,6 +463,7 @@ editor_doc_t *editor_doc_load(const char *path)
     FILE *file;
     struct stat st;
     char *chunk = NULL;
+    size_t chunk_size = 0;
     size_t file_size;
     size_t read_total = 0;
     esp_err_t err;
@@ -439,7 +513,7 @@ editor_doc_t *editor_doc_load(const char *path)
          * boundary is still recognized. */
         bool pending_cr = false;
 
-        chunk = editor_dma_alloc(EDITOR_SD_CHUNK_BYTES + 1);
+        chunk = editor_dma_alloc_chunk(&chunk_size);
         ok = (file != NULL && chunk != NULL);
         while (ok) {
             size_t off = 0;
@@ -451,7 +525,7 @@ editor_doc_t *editor_doc_load(const char *path)
                 off = 1;
                 pending_cr = false;
             }
-            got = fread(chunk + off, 1, EDITOR_SD_CHUNK_BYTES, file);
+            got = fread(chunk + off, 1, chunk_size, file);
             if (got == 0) {
                 if (off > 0) {
                     if (!editor_doc_append_bytes(doc, chunk, 1)) {
@@ -476,7 +550,7 @@ editor_doc_t *editor_doc_load(const char *path)
             }
         }
     }
-    editor_mem_free(chunk);
+    editor_dma_free(chunk);
     chunk = NULL;
     if (file != NULL) {
         fclose(file);
@@ -541,11 +615,11 @@ bool editor_file_missing(const char *resolved_path)
 
 /** Stream the document lines with the document EOL style (plus the trailing
  *  newline when the original file had one) into @p file, bouncing through
- *  @p chunk (internal DMA-capable, EDITOR_SD_CHUNK_BYTES). Binary-safe
+ *  @p chunk (internal DMA-capable, @p chunk_size bytes). Binary-safe
  *  (length-counted, never strlen). Shared by the atomic save path and the
  *  autosave crash writer so both emit byte-identical content. */
 static esp_err_t editor_doc_write_stream(editor_doc_t *doc, FILE *file,
-                                         char *chunk)
+                                         char *chunk, size_t chunk_size)
 {
     const char crlf[] = "\r\n";
     const char lf[] = "\n";
@@ -553,7 +627,7 @@ static esp_err_t editor_doc_write_stream(editor_doc_t *doc, FILE *file,
     size_t eol_len;
     size_t i;
 
-    if (doc == NULL || file == NULL || chunk == NULL) {
+    if (doc == NULL || file == NULL || chunk == NULL || chunk_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     eol = doc->crlf ? crlf : lf;
@@ -565,8 +639,8 @@ static esp_err_t editor_doc_write_stream(editor_doc_t *doc, FILE *file,
 
         while (off < len) {
             size_t n = len - off;
-            if (n > EDITOR_SD_CHUNK_BYTES) {
-                n = EDITOR_SD_CHUNK_BYTES;
+            if (n > chunk_size) {
+                n = chunk_size;
             }
             memcpy(chunk, text + off, n);
             if (fwrite(chunk, 1, n, file) != n) {
@@ -598,6 +672,7 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
     char resolved[P4_CONFIG_SD_PATH_BYTES];
     shell_sd_session_t session;
     char *chunk = NULL;
+    size_t chunk_size = 0;
     esp_err_t err;
 
     if (doc == NULL) {
@@ -618,7 +693,7 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
     }
 
     /* All FATFS transfers bounce through this internal DMA-capable buffer. */
-    chunk = editor_dma_alloc(EDITOR_SD_CHUNK_BYTES);
+    chunk = editor_dma_alloc_chunk(&chunk_size);
     if (chunk == NULL) {
         shell_sd_end(&session, "edit");
         return ESP_ERR_NO_MEM;
@@ -643,7 +718,7 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
             if (src != NULL && dst != NULL) {
                 size_t got;
                 bool bak_ok = true;
-                while ((got = fread(chunk, 1, EDITOR_SD_CHUNK_BYTES, src)) > 0) {
+                while ((got = fread(chunk, 1, chunk_size, src)) > 0) {
                     if (fwrite(chunk, 1, got, dst) != got) {
                         bak_ok = false;
                         break;
@@ -687,7 +762,7 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
             if (file == NULL) {
                 err = ESP_FAIL;
             } else {
-                err = editor_doc_write_stream(doc, file, chunk);
+                err = editor_doc_write_stream(doc, file, chunk, chunk_size);
                 if (fclose(file) != 0 && err == ESP_OK) {
                     err = ESP_FAIL;
                 }
@@ -701,7 +776,7 @@ esp_err_t editor_doc_save(editor_doc_t *doc, const char *path)
         }
     }
 
-    editor_mem_free(chunk);
+    editor_dma_free(chunk);
     shell_sd_end(&session, "edit");
     return err;
 }
@@ -3126,7 +3201,7 @@ static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
     mctx->session = session;
 
     /* Open the view on the LVGL task via an async call. */
-    if (lv_async_call(editor_session_open_cb, session) != LV_RESULT_OK) {
+    if (editor_async_call(editor_session_open_cb, session) != LV_RESULT_OK) {
         s_session_active = false;
         editor_doc_free(session->control.doc);
         free(session);
@@ -3186,6 +3261,7 @@ static void editor_autosave_write(editor_doc_t *doc)
     shell_sd_session_t session;
     FILE *file = NULL;
     char *chunk = NULL;
+    size_t chunk_size = 0;
     const char *orig;
     char head[P4_CONFIG_SD_PATH_BYTES + 16];
     int n;
@@ -3208,14 +3284,14 @@ static void editor_autosave_write(editor_doc_t *doc)
     if (shell_sd_begin(&session) != ESP_OK) {
         return;
     }
-    chunk = editor_dma_alloc(EDITOR_SD_CHUNK_BYTES);
+    chunk = editor_dma_alloc_chunk(&chunk_size);
     if (chunk == NULL) {
         shell_sd_end(&session, "edit");
         return;
     }
     file = fopen(tmp, "wb");
     if (file == NULL) {
-        editor_mem_free(chunk);
+        editor_dma_free(chunk);
         shell_sd_end(&session, "edit");
         return;
     }
@@ -3230,7 +3306,7 @@ static void editor_autosave_write(editor_doc_t *doc)
             ok = false;
         } else if (fwrite(head, 1, (size_t)n, file) != (size_t)n) {
             ok = false;
-        } else if (editor_doc_write_stream(doc, file, chunk) != ESP_OK) {
+        } else if (editor_doc_write_stream(doc, file, chunk, chunk_size) != ESP_OK) {
             ok = false;
         }
         if (fclose(file) != 0) {
@@ -3243,7 +3319,7 @@ static void editor_autosave_write(editor_doc_t *doc)
             remove(tmp);
         }
     }
-    editor_mem_free(chunk);
+    editor_dma_free(chunk);
     shell_sd_end(&session, "edit");
 }
 
@@ -3335,7 +3411,7 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
         if (err != ESP_OK) {
             mctx->result = err;
         }
-        lv_async_call(editor_view_notify_reloaded_cb,
+        editor_async_call(editor_view_notify_reloaded_cb,
                       (void *)(intptr_t)(err == ESP_OK));
     }
 
@@ -3373,7 +3449,7 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
         }
 
         /* Refresh the status bar on the LVGL task. */
-        lv_async_call(editor_view_notify_saved_cb, (void *)(intptr_t)(err == ESP_OK));
+        editor_async_call(editor_view_notify_saved_cb, (void *)(intptr_t)(err == ESP_OK));
     }
 
     /* Spell learn/forget runs here on the worker: the SD file append and
@@ -3390,7 +3466,7 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
             }
         }
         control->spell_op_ok = ok;
-        lv_async_call(editor_view_notify_spell_cb, (void *)(intptr_t)ok);
+        editor_async_call(editor_view_notify_spell_cb, (void *)(intptr_t)ok);
     }
 
     if ((bits & EDITOR_EVENT_OPEN) == 0) {
@@ -3430,7 +3506,7 @@ static void editor_surface_service(void *ctx, EventBits_t bits)
     if (err != ESP_OK) {
         mctx->result = err;
     }
-    lv_async_call(editor_view_notify_opened_cb, (void *)(intptr_t)(err == ESP_OK));
+    editor_async_call(editor_view_notify_opened_cb, (void *)(intptr_t)(err == ESP_OK));
 }
 
 static void editor_surface_close(void *ctx)
@@ -3439,7 +3515,7 @@ static void editor_surface_close(void *ctx)
     editor_session_t *session = mctx->session;
 
     if (session != NULL) {
-        if (lv_async_call(editor_session_close_cb, session) != LV_RESULT_OK) {
+        if (editor_async_call(editor_session_close_cb, session) != LV_RESULT_OK) {
             /* Async queue full: tear the view down under the port lock and
              * signal CLOSED directly, or the worker waits out its 5 s timeout
              * and then frees the document while the view still references it. */
@@ -3644,7 +3720,7 @@ static bool editor_surface_handle_serial_line(void *ctx, const char *line)
     }
     sl_ctx->session = mctx->session;
 
-    if (lv_async_call(editor_serial_line_cb, sl_ctx) != LV_RESULT_OK) {
+    if (editor_async_call(editor_serial_line_cb, sl_ctx) != LV_RESULT_OK) {
         free(sl_ctx->line);
         free(sl_ctx);
     }

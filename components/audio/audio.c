@@ -100,11 +100,28 @@ static void audio_fill_speaker_info(esp_codec_dev_sample_info_t *fs)
     fs->mclk_multiple = 0;
 }
 
+/* I2S DMA descriptors and frame buffers come from the internal DMA pool. A
+ * long gfx/plot session can leave it fragmented; refuse the codec init up
+ * front instead of letting i2s_std_set_slot abort (F53/s12). */
+#define AUDIO_DMA_MIN_LARGEST_BYTES  (9 * 1024)
+#define AUDIO_DMA_MIN_FREE_BYTES     (10 * 1024)
+
+static bool audio_dma_room_quiet(void)
+{
+    return heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)
+               >= AUDIO_DMA_MIN_LARGEST_BYTES &&
+           heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)
+               >= AUDIO_DMA_MIN_FREE_BYTES;
+}
+
 /** Ensure the speaker codec device exists (lazy, one-time). */
 static esp_err_t audio_ensure_speaker(void)
 {
     int attempt;
 
+    if (s_speaker_dev == NULL && !audio_dma_room_quiet()) {
+        return ESP_ERR_NO_MEM;
+    }
     if (s_speaker_dev == NULL) {
         /* The codec/I2S path needs DMA-capable heap, which can be contended
          * while Wi-Fi, USB and the SD stack initialize (a boot pre-warm in
@@ -175,10 +192,10 @@ static void audio_task_play_tone(const audio_request_t *req)
     int16_t *chunk;
 
     audio_fill_speaker_info(&fs);
-    if (audio_ensure_speaker() != ESP_OK ||
-        !audio_dma_room_for_playback() ||
+    if (!audio_dma_room_for_playback() ||
+        audio_ensure_speaker() != ESP_OK ||
         esp_codec_dev_open(s_speaker_dev, &fs) != ESP_CODEC_DEV_OK) {
-        shell_transcript_appendf_ansi(SH_ERR "tone: speaker unavailable\n" SH_RST);
+        shell_print_muted("tone: speaker unavailable (DMA/UI pressure)");
         return;
     }
     /* Clocks are running from here on: resolve the jack and gate the amp for
@@ -361,10 +378,10 @@ static void audio_task_play_wav(const audio_request_t *req)
      * clocks reconfigure per open; the mic shares them only at equal rates
      * (see audio_mic_record_ms). */
     fs.sample_rate = sample_rate;
-    if (audio_ensure_speaker() != ESP_OK ||
-        !audio_dma_room_for_playback() ||
+    if (!audio_dma_room_for_playback() ||
+        audio_ensure_speaker() != ESP_OK ||
         esp_codec_dev_open(s_speaker_dev, &fs) != ESP_CODEC_DEV_OK) {
-        shell_transcript_appendf_ansi(SH_ERR "wavplay: speaker unavailable\n" SH_RST);
+        shell_print_muted("wavplay: speaker unavailable (DMA/UI pressure)");
         fclose(file);
         return;
     }
@@ -480,21 +497,21 @@ esp_err_t audio_init(void)
  * NULL descriptor while still enabling it -> load access fault. Refuse the
  * playback window up front instead of faulting; a later attempt on a quieter
  * heap works normally. */
-#define AUDIO_DMA_MIN_LARGEST_BYTES  (2 * 1024)
-#define AUDIO_DMA_MIN_FREE_BYTES     (6 * 1024)
-
 static bool audio_dma_room_for_playback(void)
 {
-    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    size_t free_bytes = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    size_t largest;
+    size_t free_bytes;
 
-    if (largest >= AUDIO_DMA_MIN_LARGEST_BYTES &&
-        free_bytes >= AUDIO_DMA_MIN_FREE_BYTES) {
+    if (audio_dma_room_quiet()) {
         return true;
     }
-    shell_transcript_appendf_ansi(SH_ERR "audio: not enough DMA memory for playback "
-                                  "(largest %u, free %u)\n" SH_RST,
-                                  (unsigned)largest, (unsigned)free_bytes);
+    largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    free_bytes = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    /* Muted, not an error: the command itself succeeded and the user can retry
+     * after the display/UI work releases the DMA pool. */
+    shell_print_muted("audio: not enough DMA memory for playback "
+                      "(largest %u, free %u)",
+                      (unsigned)largest, (unsigned)free_bytes);
     return false;
 }
 
