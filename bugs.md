@@ -157,6 +157,19 @@ The budget is now 30 s (`P4_CONFIG_UART_WRITE_TOTAL_MS`), and the host
 never Ctrl-C) before failing. Verified by the two-board fast gate (smoke +
 power-audio screenshots).
 
+### F56. Second I2S tone crashed COM3 after a DMA-descriptor failure - **FIXED, verified on hardware**
+
+The MOOD sampler's second tone (`s14_apps`) hit a fragmented DMA heap; IDF
+logged `i2s_alloc_dma_desc: allocate DMA buffer failed` and
+`i2s_channel_reconfig_std_slot failed`, then `i2s_channel_enable()` load-faulted
+on a NULL DMA descriptor. Two managed-codec defects combined:
+`esp_codec_dev_open()` ignored the `set_fmt`/`enable` return codes, and
+`check_fs_compatible()` cached the requested format before the reconfig, so the
+next open skipped the reconfig and enabled the broken channel. The codec now
+propagates the errors, invalidates the format cache on failure, and guards NULL
+channel handles. Verified by `s14_apps` 127/127 on COM3 and `s12_power_audio`
+49/45 on both boards; the managed delta is in `tools/managed_patches.patch`.
+
 ## Open findings
 
 None as of v1.4.1. F53 is closed below; the remaining entries document

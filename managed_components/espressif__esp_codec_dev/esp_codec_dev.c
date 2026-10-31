@@ -178,10 +178,27 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
     const audio_codec_if_t *codec = dev->codec_if;
     const audio_codec_data_if_t *data_if = dev->data_if;
     if (data_if->set_fmt) {
-        data_if->set_fmt(data_if, dev->dev_caps, fs);
+        int fmt_ret = data_if->set_fmt(data_if, dev->dev_caps, fs);
+        if (fmt_ret != ESP_CODEC_DEV_OK) {
+            /* The I2S DMA descriptor allocation can fail on a fragmented DMA
+             * heap; IDF leaves the channel unusable. Propagate the error so
+             * the caller does not use the half-open device (a later
+             * set_out_mute would dereference a NULL channel and fault).
+             * Tracked in tools/managed_patches.patch. */
+            ESP_LOGE(TAG, "Set format failed: %d", fmt_ret);
+            dev->input_opened = false;
+            dev->output_opened = false;
+            return fmt_ret;
+        }
     }
     if (data_if->enable) {
-        data_if->enable(data_if, dev->dev_caps, true);
+        int en_ret = data_if->enable(data_if, dev->dev_caps, true);
+        if (en_ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "Enable data interface failed: %d", en_ret);
+            dev->input_opened = false;
+            dev->output_opened = false;
+            return en_ret;
+        }
     }
     if (codec) {
         // TODO not set codec fs

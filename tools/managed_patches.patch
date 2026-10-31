@@ -1169,3 +1169,100 @@ index d7a13032..724aae83 100644
      i2s_data->is_open = false;
      remove_from_keeper(i2s_data);
      return ESP_CODEC_DEV_OK;
+diff --git a/managed_components/espressif__esp_codec_dev/esp_codec_dev.c b/managed_components/espressif__esp_codec_dev/esp_codec_dev.c
+index bdb9592b..df2d0491 100644
+--- a/managed_components/espressif__esp_codec_dev/esp_codec_dev.c
++++ b/managed_components/espressif__esp_codec_dev/esp_codec_dev.c
+@@ -178,10 +178,27 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
+     const audio_codec_if_t *codec = dev->codec_if;
+     const audio_codec_data_if_t *data_if = dev->data_if;
+     if (data_if->set_fmt) {
+-        data_if->set_fmt(data_if, dev->dev_caps, fs);
++        int fmt_ret = data_if->set_fmt(data_if, dev->dev_caps, fs);
++        if (fmt_ret != ESP_CODEC_DEV_OK) {
++            /* The I2S DMA descriptor allocation can fail on a fragmented DMA
++             * heap; IDF leaves the channel unusable. Propagate the error so
++             * the caller does not use the half-open device (a later
++             * set_out_mute would dereference a NULL channel and fault).
++             * Tracked in tools/managed_patches.patch. */
++            ESP_LOGE(TAG, "Set format failed: %d", fmt_ret);
++            dev->input_opened = false;
++            dev->output_opened = false;
++            return fmt_ret;
++        }
+     }
+     if (data_if->enable) {
+-        data_if->enable(data_if, dev->dev_caps, true);
++        int en_ret = data_if->enable(data_if, dev->dev_caps, true);
++        if (en_ret != ESP_CODEC_DEV_OK) {
++            ESP_LOGE(TAG, "Enable data interface failed: %d", en_ret);
++            dev->input_opened = false;
++            dev->output_opened = false;
++            return en_ret;
++        }
+     }
+     if (codec) {
+         // TODO not set codec fs
+diff --git a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
+index 724aae83..2fa671fe 100644
+--- a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
++++ b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
+@@ -244,6 +244,10 @@ static int set_drv_fs(i2s_chan_handle_t channel, bool playback, uint8_t slot_bit
+ {
+     i2s_chan_info_t channel_info = {0};
+     int ret = ESP_CODEC_DEV_OK;
++    if (channel == NULL) {
++        ESP_LOGE(TAG, "set_drv_fs: NULL channel");
++        return ESP_CODEC_DEV_NOT_FOUND;
++    }
+     i2s_channel_get_info(channel, &channel_info);
+     switch (channel_info.mode) {
+         case I2S_COMM_MODE_STD: {
+@@ -419,6 +423,10 @@ static int set_fs(i2s_data_t *i2s_data, bool playback, bool skip)
+     i2s_chan_info_t channel_info = {0};
+     esp_codec_dev_sample_info_t *fs = playback ? &i2s_data->out_fs : &i2s_data->in_fs;
+     uint8_t bits_per_sample = get_bits(i2s_data, playback);
++    if (channel == NULL) {
++        ESP_LOGE(TAG, "set_fs: NULL %s channel", playback ? "out" : "in");
++        return ESP_CODEC_DEV_NOT_FOUND;
++    }
+     i2s_channel_get_info(channel, &channel_info);
+     int ret = set_drv_fs(channel, playback, bits_per_sample, i2s_data->clk_src, fs);
+     if (ret != ESP_CODEC_DEV_OK) {
+@@ -692,11 +700,15 @@ static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_
+     if ((dev_type & ESP_CODEC_DEV_TYPE_IN) != 0 &&
+         (dev_type & ESP_CODEC_DEV_TYPE_OUT) != 0) {
+         // Device support playback and record at same time
++        int out_ret;
++        int in_ret;
++
+         memcpy(&i2s_data->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+         memcpy(&i2s_data->in_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+         memcpy(&i2s_data->out_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+-        ret = set_fs(i2s_data, true, true);
+-        ret = set_fs(i2s_data, false, true);
++        out_ret = set_fs(i2s_data, true, true);
++        in_ret = set_fs(i2s_data, false, true);
++        ret = (out_ret != ESP_CODEC_DEV_OK) ? out_ret : in_ret;
+     } else {
+         bool playback = (dev_type & ESP_CODEC_DEV_TYPE_OUT) != 0;
+         esp_codec_dev_sample_info_t *cached =
+@@ -717,6 +729,18 @@ static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_
+             ret = check_fs_compatible(i2s_data, playback, fs);
+         }
+     }
++    if (ret != ESP_CODEC_DEV_OK) {
++        /* check_fs_compatible caches the requested format before the hardware
++         * reconfig. A failed reconfig (DMA allocation) must not leave the
++         * cache claiming the hardware is configured: the next open would skip
++         * the reconfig and enable a channel with a NULL descriptor (load
++         * access fault). Invalidate so the next attempt reconfigures, and
++         * esp_codec_dev_open() returns the error instead of enabling.
++         * Tracked in tools/managed_patches.patch. */
++        memset(&i2s_data->out_fs, 0, sizeof(esp_codec_dev_sample_info_t));
++        memset(&i2s_data->in_fs, 0, sizeof(esp_codec_dev_sample_info_t));
++        memset(&i2s_data->fs, 0, sizeof(esp_codec_dev_sample_info_t));
++    }
+     _i2s_unlock(i2s_data);
+     return ret;
+ #else

@@ -71,6 +71,16 @@ open bugs see [`bugs.md`](bugs.md).
   (~7.7 s at 243 entries on Tab5). It now walks the entries with a `stat` and
   the epoch prefix (`trash_walk_stat()`); `trash list`/`undelete` keep the full
   meta walk because they need the original path.
+- **F56 - I2S DMA failure crashed the board on the second tone (COM3).**
+  `esp_codec_dev_open()` ignored the `set_fmt`/`enable` return codes, and
+  `check_fs_compatible()` cached the requested format *before* the hardware
+  reconfig. When the second MOOD sampler tone hit a fragmented DMA heap
+  (`i2s_alloc_dma_desc` failed), the cache claimed the channel was configured,
+  the next open skipped the reconfig, and `i2s_channel_enable()` dereferenced a
+  NULL DMA descriptor (load access fault). The managed codec now propagates
+  `set_fmt`/`enable` errors, invalidates the format cache on a failed reconfig,
+  and guards NULL channel handles in `set_fs`/`set_drv_fs`. Verified by
+  `s14_apps` 127/127 on COM3 and `s12_power_audio` 49/45 on both boards.
 
 ### Changed
 
