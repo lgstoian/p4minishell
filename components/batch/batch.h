@@ -4,6 +4,13 @@
  */
 /**
  * @file batch.h
+ * @module batch
+ * @layer batch
+ * @domain core
+ * @provides batch engine: frames, env, control flow, sync, services
+ * @status stable
+ * @test test/main/test_batch_expr.c, test/main/test_batch_control.c, test/main/test_himem.c, test/main/test_svc.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Batch engine, environment variables, and batch language commands.
  *
  * Owns everything the `.bat` interpreter needs:
@@ -803,6 +810,14 @@ void shell_command_exit(int argc, char **argv);
  * echo state, and active pipe/`<` input source. ERRORLEVEL: 0 ok, 2 usage.
  */
 void shell_command_proc(int argc, char **argv);
+
+/**
+ * Render the active batch frame stack as a web-style breadcrumb trail
+ * (`ROOT.BAT > CHILD.BAT`), root first. Returns the number of frames; @p out is
+ * always NUL-terminated ("" when no batch file is running). Used by the
+ * `breadcrumb` verb; reads only the existing per-task frame stack.
+ */
+int batch_frame_trail(char *out, size_t out_size);
 
 /**
  * `ini` — persistent state in simple `KEY=VALUE` INI files on the SD card:

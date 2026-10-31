@@ -30,8 +30,17 @@ class SuiteResult:
     error: Optional[str] = None
 
     @property
+    def vacuous(self) -> bool:
+        """True when a non-skipped suite recorded no assertions at all.
+
+        A suite that asserts nothing is a false green, not a pass, so it is
+        treated as a failure by :attr:`ok` and by the runner's summary.
+        """
+        return self.total == 0 and self.skipped == 0 and self.error is None
+
+    @property
     def ok(self) -> bool:
-        return self.failed == 0 and self.error is None
+        return self.failed == 0 and self.error is None and not self.vacuous
 
     @property
     def total(self) -> int:
@@ -91,10 +100,17 @@ class Checklist:
         return len(self.checks)
 
     @property
+    def vacuous(self) -> bool:
+        """True when the suite recorded no assertions (a false green)."""
+        return self.total == 0
+
+    @property
     def ok(self) -> bool:
-        return self.failed == 0
+        return self.failed == 0 and not self.vacuous
 
     def result(self, error: Optional[str] = None) -> SuiteResult:
+        if error is None and self.vacuous:
+            error = "no assertions recorded (vacuous green)"
         return SuiteResult(self.name, self.passed, self.failed,
                            duration=time.time() - self.started, error=error)
 
@@ -103,8 +119,15 @@ class Checklist:
             raise AssertionError("%s: %d check(s) failed" % (self.name, self.failed))
 
     def print_report(self) -> None:
-        status = "PASS" if self.ok else "FAIL"
+        if self.vacuous:
+            status = "VACUOUS"
+        elif self.ok:
+            status = "PASS"
+        else:
+            status = "FAIL"
         print("\n%s: %s (%d/%d checks)" % (self.name, status, self.passed, self.total))
+        if self.vacuous:
+            print("  - no assertions recorded; a green run would be a false green")
         if not self.ok:
             for c in self.checks:
                 if not c.ok:
@@ -112,8 +135,9 @@ class Checklist:
         print("RESULT %s" % ("OK" if self.ok else "FAIL"))
 
     def summary_text(self) -> str:
-        return "%s: %d passed, %d failed, %d total" % (
-            self.name, self.passed, self.failed, self.total)
+        suffix = " (VACUOUS)" if self.vacuous else ""
+        return "%s: %d passed, %d failed, %d total%s" % (
+            self.name, self.passed, self.failed, self.total, suffix)
 
 
 def first_mismatch(got: Sequence, want: Sequence) -> Optional[str]:

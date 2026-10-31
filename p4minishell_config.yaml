@@ -3239,7 +3239,7 @@ task_stacks:
     description: "Bounded wait per segment of a UART transcript mirror write. The mirror bypasses the IDF VFS (which drops the whole line on a false connection-monitor disconnect); this bound stops a stalled TX ring from wedging the writer."
     range: "0..1000"
   uart_write_total_ms:
-    value: 10000
+    value: 30000
     type: int
     description: "Total budget for one shell_uart_console_write_bytes() payload, used by the binary send/screenshot path. Partial writes are retried so transient TX backpressure cannot truncate a multi-megabyte frame; the writer gives up only after this many ms with no progress. The transcript mirror does not use this bound."
     range: "0..60000"

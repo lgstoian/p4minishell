@@ -4,6 +4,13 @@
  */
 /**
  * @file cas.h
+ * @module cas
+ * @layer leaf
+ * @domain app
+ * @provides computer algebra system command surface
+ * @status stable
+ * @test test/main/test_cas.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Computer Algebra System (CAS) public API.
  *
  * Minimal symbolic math engine providing:

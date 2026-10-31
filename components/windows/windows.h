@@ -4,6 +4,13 @@
  */
 /**
  * @file windows.h
+ * @module windows
+ * @layer leaf
+ * @domain ui
+ * @provides LVGL window/screen lifecycle
+ * @status stable
+ * @test test/main/test_tui.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Window manager for P4MiniShell LVGL shell UI.
  *
  * Central window/layout manager that owns the LVGL screen region partitioning

@@ -28,6 +28,11 @@ extern void test_shell_command_busy_tracks(void);
 extern void test_redirect_capture_nested(void);
 extern void test_shell_parser_echo_glued(void);
 
+extern void test_breadcrumb_format_full(void);
+extern void test_breadcrumb_format_empty(void);
+extern void test_breadcrumb_format_truncates(void);
+extern void test_breadcrumb_format_null_out(void);
+
 extern void test_shell_history_store(void);
 extern void test_shell_history_recall(void);
 extern void test_shell_history_password_mask(void);
@@ -151,6 +156,10 @@ extern void test_variable_expansion_replace(void);
 extern void test_variable_expansion_array_names(void);
 extern void test_variable_expansion_delayed(void);
 extern void test_variable_expansion_delayed_scope(void);
+extern void test_variable_expansion_err_level_vars(void);
+extern void test_variable_expansion_system_slots(void);
+extern void test_variable_numeric_names_rejected(void);
+extern void test_variable_virtual_names_not_stored(void);
 extern void test_batch_forl_parse(void);
 extern void test_batch_while_keywords(void);
 extern void test_batch_fora_collect(void);
@@ -573,6 +582,7 @@ extern void test_sw_gcm_empty_vector(void);
 extern void test_sw_gcm_16zero_vector(void);
 extern void test_sw_gcm_ref3_vector(void);
 extern void test_sw_gcm_hw_crosscheck(void);
+extern void test_sw_gcm_64zero_vector(void);
 extern void test_tcp_parse_target_ok(void);
 extern void test_tcp_parse_target_rejects(void);
 extern void test_tcp_unescape(void);
@@ -683,6 +693,14 @@ void app_main(void)
     RUN_TEST(test_shell_command_busy_tracks);
     RUN_TEST(test_redirect_capture_nested);
     RUN_TEST(test_shell_parser_echo_glued);
+    UNITY_END();
+
+    /* On-device breadcrumb trail (pure formatter) */
+    UNITY_BEGIN();
+    RUN_TEST(test_breadcrumb_format_full);
+    RUN_TEST(test_breadcrumb_format_empty);
+    RUN_TEST(test_breadcrumb_format_truncates);
+    RUN_TEST(test_breadcrumb_format_null_out);
     UNITY_END();
 
     /* Shell history tests */
@@ -858,6 +876,10 @@ void app_main(void)
     RUN_TEST(test_variable_expansion_array_names);
     RUN_TEST(test_variable_expansion_delayed);
     RUN_TEST(test_variable_expansion_delayed_scope);
+    RUN_TEST(test_variable_expansion_err_level_vars);
+    RUN_TEST(test_variable_expansion_system_slots);
+    RUN_TEST(test_variable_numeric_names_rejected);
+    RUN_TEST(test_variable_virtual_names_not_stored);
     UNITY_END();
 
     /* Debug log tests */
@@ -1377,6 +1399,7 @@ void app_main(void)
     RUN_TEST(test_sw_gcm_16zero_vector);
     RUN_TEST(test_sw_gcm_ref3_vector);
     RUN_TEST(test_sw_gcm_hw_crosscheck);
+    RUN_TEST(test_sw_gcm_64zero_vector);
     RUN_TEST(test_tcp_parse_target_ok);
     RUN_TEST(test_tcp_parse_target_rejects);
     RUN_TEST(test_tcp_unescape);

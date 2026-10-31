@@ -4,6 +4,13 @@
  */
 /**
  * @file applib.h
+ * @module applib
+ * @layer app
+ * @domain app
+ * @provides native-app runtime library (shell SDK surface)
+ * @status stable
+ * @test test/main/test_applib.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Native-app runtime library (the shell SDK surface) — umbrella header.
  *
  * `applib` is the formal runtime contract for native applications that run on

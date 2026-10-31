@@ -68,11 +68,33 @@ calls `shell_session.hard_reset()`.
 
 ---
 
+## 2.1 Layer 0 — static gates (no hardware)
+
+Run these before a hardware run (or in CI without a board):
+
+```powershell
+python tools/green_guard.py            # false-green / false-positive tests
+python tools/comment_index.py          # machine-readable tags + layering
+python tools/breadcrumbs.py            # breadcrumb map validity
+python tools/harness/verify.py         # on-disk invariants
+# all three through the runner, no board:
+python tools/p4test_run.py --static
+```
+
+`--guard` runs the same gates before a hardware run and aborts on a red gate.
+A zero-assertion `Checklist`/`SuiteResult` is a failure at run time, not a pass.
+The tag vocabulary is in [`docs/comment-tags.md`](docs/comment-tags.md); the
+generated map is [`BREADCRUMBS.md`](BREADCRUMBS.md) / `breadcrumbs.json`.
+
+---
+
 ## 3. Layer 1 — on-target unit tests (Unity)
 
-Pure/headless logic runs on the P4 in `test/` (Unity, 552 tests, 2 ignored
-plus the 9 `test_pim.c` sync tests, build-verified; refresh the count on
-hardware; includes the software AES-256-GCM vectors in `test_sw_gcm.c`).
+Pure/headless logic runs on the P4 in `test/` (Unity; the static case count is
+**663** after the breadcrumb round — 4 new `test_breadcrumb.c` cases plus 5
+tests that were defined but never registered — refresh the hardware count with
+`tools/unit_run.py`; includes the software AES-256-GCM vectors in
+`test_sw_gcm.c`).
 
 ```powershell
 cd test
@@ -317,6 +339,10 @@ it automatically.
 
 ## 10. Adding coverage for a feature
 
+0. **Run the static gates first** (`python tools/green_guard.py`,
+   `python tools/comment_index.py`, `python tools/breadcrumbs.py`) and fix
+   anything they report. A new test must assert; a new suite must record at
+   least one check.
 1. **Pure logic** → a `test/main/test_*.c` case + `RUN_TEST` in `test_main.c`.
 2. **Behaviour on hardware** → extend the matching `tools/suites/sNN_*.py`; add
    a focused driver only if it needs a bespoke loop.

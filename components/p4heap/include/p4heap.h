@@ -10,6 +10,12 @@
 
 /**
  * @file p4heap.h
+ * @module p4heap
+ * @layer leaf
+ * @domain core
+ * @provides PSRAM-first heap allocator
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Central RAM/PSRAM allocation policy for P4MiniShell.
  *
  * One policy, enforced everywhere (see bugs.md F23):

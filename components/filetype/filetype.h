@@ -4,6 +4,13 @@
  */
 /**
  * @file filetype.h
+ * @module filetype
+ * @layer leaf
+ * @domain fs
+ * @provides extension-to-kind registry
+ * @status stable
+ * @test test/main/test_filetype.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Central file-type registry for P4MiniShell.
  *
  * One table maps extensions to kinds; every component (editor syntax,

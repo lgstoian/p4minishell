@@ -4,6 +4,12 @@
  */
 /**
  * @file boot.h
+ * @module boot
+ * @layer leaf
+ * @domain platform
+ * @provides boot script, CONFIG.SYS apply, startup runner
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief DOS-style boot scripting: CONFIG.SYS parser and AUTOEXEC.BAT runner.
  *
  * On every boot the firmware looks for CONFIG.SYS and AUTOEXEC.BAT on the SD

@@ -4,6 +4,13 @@
  */
 /**
  * @file archive.h
+ * @module archive
+ * @layer leaf
+ * @domain fs
+ * @provides USTAR archive core
+ * @status stable
+ * @test test/main/test_archive.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Archive management for P4MiniShell: USTAR (.p4a) and ZIP (.zip).
  *
  * Unified archive interface supporting two formats:

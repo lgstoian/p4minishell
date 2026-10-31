@@ -4,6 +4,13 @@
  */
 /**
  * @file power_monitor.h
+ * @module power_monitor
+ * @layer leaf
+ * @domain platform
+ * @provides battery ADC, charge state, pack-present policy
+ * @status stable
+ * @test test/main/test_power.c, test/main/test_hardware.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Battery fuel-gauge abstraction (Tab5 INA226 pack monitor).
  *
  * The M5Stack Tab5 reports pack voltage/current/power through an INA226 on the

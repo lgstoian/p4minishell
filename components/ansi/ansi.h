@@ -4,6 +4,13 @@
  */
 /**
  * @file ansi.h
+ * @module ansi
+ * @layer leaf
+ * @domain ui
+ * @provides ANSI palette, format-string builder, LVGL recolor
+ * @status stable
+ * @test test/main/test_ansi_format.c
+ * @hard-rule ai-context.md#shell-core-rules
  * @brief ANSI/VT escape sequence module for P4MiniShell.
  *
  * Provides SGR (Select Graphic Rendition) escape sequence parsing and

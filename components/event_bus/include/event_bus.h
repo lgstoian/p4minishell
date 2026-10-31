@@ -4,6 +4,12 @@
  */
 /**
  * @file event_bus.h
+ * @module event_bus
+ * @layer leaf
+ * @domain core
+ * @provides typed event publish/subscribe
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Lightweight pub/sub event bus.
  *
  * Fixed-capacity storage is allocated once, lazily, from PSRAM (internal RAM

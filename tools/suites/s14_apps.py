@@ -154,7 +154,7 @@ def _screenshot(dev, c, name):
 def _push(dev, c, local, remote):
     try:
         dev.push_local(local, remote)
-        c.check("push %s" % remote, True)
+        c.note("pushed %s" % remote)
     except PanicError:
         raise
     except Exception as exc:  # noqa: BLE001

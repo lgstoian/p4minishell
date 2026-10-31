@@ -4,6 +4,13 @@
  */
 /**
  * @file imu.h
+ * @module imu
+ * @layer leaf
+ * @domain platform
+ * @provides BMI270 accelerometer/gyro + orientation
+ * @status stable
+ * @test test/main/test_hardware.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief BMI270 accelerometer/gyroscope leaf (M5Stack Tab5).
  *
  * Wraps the vendored Bosch bmi2/bmi270 driver behind a small, board-agnostic

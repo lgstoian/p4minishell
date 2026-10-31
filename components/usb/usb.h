@@ -7,6 +7,13 @@
 
 /**
  * @file usb.h
+ * @module usb
+ * @layer leaf
+ * @domain platform
+ * @provides USB host: MSC/HID/CDC + userial
+ * @status stable
+ * @test test/main/test_userial.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief USB Host module for P4MiniShell (MSC storage + HID input + CDC serial).
  *
  * Owns ESP-IDF USB Host Library bring-up with three class drivers:

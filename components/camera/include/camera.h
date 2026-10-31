@@ -4,6 +4,12 @@
  */
 /**
  * @file camera.h
+ * @module camera
+ * @layer leaf
+ * @domain media
+ * @provides MIPI-CSI camera capture
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief M5Stack Tab5 MIPI-CSI camera (SC202CS/SC2356) via esp_video.
  *
  * Wraps the Espressif `esp_video` V4L2 stack behind a small surface: probe/init

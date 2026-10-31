@@ -21,8 +21,10 @@ import argparse
 import importlib
 import io
 import json
+import os
 import pkgutil
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -143,6 +145,34 @@ def discover(suites_pkg: str = "suites") -> List:
 def _tools_dir() -> str:
     import os
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+# Static gates that run before (or instead of) hardware. They are the host-side
+# false-green / machine-readable-comment checks: a green hardware run is only
+# meaningful if the suite actually asserts and the tree is structurally sound.
+STATIC_GATES = [
+    ("green guard (false-green tests)", "green_guard.py"),
+    ("machine-readable comments", "comment_index.py"),
+    ("agent breadcrumbs", "breadcrumbs.py"),
+]
+
+
+def run_static_gates() -> int:
+    """Run the host-only gates; return non-zero if any fails."""
+    tools = _tools_dir()
+    root = os.path.dirname(tools)
+    failed = 0
+    for label, script in STATIC_GATES:
+        print("\n" + "=" * 62)
+        print("STATIC GATE: %s" % label)
+        print("=" * 62)
+        rc = subprocess.run([sys.executable, os.path.join(tools, script)],
+                            cwd=root).returncode
+        if rc != 0:
+            failed += 1
+            print("STATIC GATE FAILED: %s" % label)
+    print("\nSTATIC GATES %s" % ("OK" if failed == 0 else "FAIL"))
+    return 1 if failed else 0
 
 
 def _run_one_suite(mod, dev, ctx) -> Tuple[SuiteResult, List[str]]:
@@ -519,7 +549,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="JSON {board: {suite: seconds}} to flag slow-check regressions")
     ap.add_argument("--write-baseline", default=None, metavar="PATH",
                     help="with --boards: record per-suite durations to PATH as a future --baseline")
+    ap.add_argument("--guard", action="store_true",
+                    help="run the static gates (false-green, comments, breadcrumbs) "
+                         "before the hardware run; abort if any fails")
+    ap.add_argument("--static", action="store_true",
+                    help="run only the static gates (no hardware) and exit")
     args = ap.parse_args(argv)
+
+    if args.static or args.guard:
+        rc = run_static_gates()
+        if args.static or rc != 0:
+            return rc
 
     mods = discover()
     if args.list:

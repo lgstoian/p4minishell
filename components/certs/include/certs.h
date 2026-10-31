@@ -4,6 +4,13 @@
  */
 /**
  * @file certs.h
+ * @module certs
+ * @layer leaf
+ * @domain crypto
+ * @provides user CA trust store + DER/PEM conversion
+ * @status stable
+ * @test test/main/test_certs.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief TLS trust store management for P4MiniShell.
  *
  * Manages a certificate store on the SD card (sd:/CERTS/) and loads the

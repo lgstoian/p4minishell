@@ -4,6 +4,13 @@
  */
 /**
  * @file audio.h
+ * @module audio
+ * @layer leaf
+ * @domain media
+ * @provides audio output routing, WAV params, mic stats, Goertzel
+ * @status stable
+ * @test test/main/test_audio.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Codec audio playback for P4MiniShell (`beep` / `tone` / `wavplay`).
  *
  * Owns the speaker codec path (stereo 16-bit; tone rate configurable, WAVs

@@ -1,0 +1,1504 @@
+{
+  "breadcrumbs": {
+    "components/alarm/alarm.c": "module=alarm :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_alarm.c :: rules=ai-context.md#module-layering-rules",
+    "components/alarm/alarm.h": "module=alarm :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_alarm.c :: rules=ai-context.md#module-layering-rules",
+    "components/ansi/ansi.c": "module=ansi :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_ansi_format.c :: rules=ai-context.md#shell-core-rules",
+    "components/ansi/ansi.h": "module=ansi :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_ansi_format.c :: rules=ai-context.md#shell-core-rules",
+    "components/ansi/ansi_palette.h": "module=ansi :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_ansi_format.c :: rules=ai-context.md#shell-core-rules",
+    "components/applib/applib.c": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_app.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_console.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_db.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_env.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_input.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_mem.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_msg.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_net.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_state.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_time.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_tui.c": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_tui.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/applib/applib_ui.h": "module=applib :: layer=app :: domain=app :: status=stable :: tests=test/main/test_applib.c :: rules=ai-context.md#module-layering-rules",
+    "components/archive/archive.c": "module=archive :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_archive.c :: rules=ai-context.md#module-layering-rules",
+    "components/archive/archive.h": "module=archive :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_archive.c :: rules=ai-context.md#module-layering-rules",
+    "components/audio/audio.c": "module=audio :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_audio.c :: rules=ai-context.md#module-layering-rules",
+    "components/audio/audio.h": "module=audio :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_audio.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/batch.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/batch.h": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/batch_dim.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/batch_expr.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/batch_map.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/batch_str.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/batch_trap.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/calc.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/calc.h": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/error_strings.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/error_strings.h": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/himem.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/svc.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/batch/sync.c": "module=batch :: layer=batch :: domain=core :: status=stable :: tests=test/main/test_batch_expr.c,test/main/test_batch_control.c,test/main/test_himem.c,test/main/test_svc.c :: rules=ai-context.md#module-layering-rules",
+    "components/board_caps/include/board_caps.h": "module=board_caps :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/boot/boot.c": "module=boot :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/boot/boot.h": "module=boot :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/c6ota/c6ota.c": "module=c6ota :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/c6ota/c6ota.h": "module=c6ota :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/camera/include/camera.h": "module=camera :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/camera/src/camera.c": "module=camera :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/cas/include/cas.h": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/src/cas.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/src/cas_diff.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/src/cas_integrate.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/src/cas_parser.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/src/cas_series.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/src/cas_simplify.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/src/cas_solve.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/cas/test/test_cas.c": "module=cas :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_cas.c :: rules=ai-context.md#module-layering-rules",
+    "components/certs/certs.c": "module=certs :: layer=leaf :: domain=crypto :: status=stable :: tests=test/main/test_certs.c :: rules=ai-context.md#module-layering-rules",
+    "components/certs/include/certs.h": "module=certs :: layer=leaf :: domain=crypto :: status=stable :: tests=test/main/test_certs.c :: rules=ai-context.md#module-layering-rules",
+    "components/chat/chat.c": "module=chat :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_chat.c :: rules=ai-context.md#module-layering-rules",
+    "components/chat/include/chat.h": "module=chat :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_chat.c :: rules=ai-context.md#module-layering-rules",
+    "components/clock/clock.c": "module=clock :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_clock.c,test/main/test_locale.c :: rules=ai-context.md#module-layering-rules",
+    "components/clock/clock.h": "module=clock :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_clock.c,test/main/test_locale.c :: rules=ai-context.md#module-layering-rules",
+    "components/clock/clock_commands.c": "module=clock :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_clock.c,test/main/test_locale.c :: rules=ai-context.md#module-layering-rules",
+    "components/clock/clock_rtc.c": "module=clock :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_clock.c,test/main/test_locale.c :: rules=ai-context.md#module-layering-rules",
+    "components/clock/clock_timer.c": "module=clock :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_clock.c,test/main/test_locale.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/alarm_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/archive_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/asset_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/audio_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/breadcrumb_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/browser_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/cas_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/certs_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/chat_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/command.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/command.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/command_ui.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/command_ui.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/config_cmd.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/config_cmd.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/crypt_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/csv_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/db_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/edit_record_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/epub_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/export_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/font_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/gfind_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/gfx_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/header_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/image_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/import_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/imu_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/js_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/json_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/math_disp_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/md_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/modal_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/netsvc_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/periph_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/pim_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/pkg_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/plot_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/power_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/screen_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/security_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/security_commands.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/serial_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/sync_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/sync_commands.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/tui_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/ui_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/ui_commands.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/userial_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/db/db.c": "module=db :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_db.c :: rules=ai-context.md#module-layering-rules",
+    "components/db/db.h": "module=db :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_db.c :: rules=ai-context.md#module-layering-rules",
+    "components/display/display.c": "module=display :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/display/display.h": "module=display :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_spell.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_spell.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_view.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_view.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/epub/epub.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
+    "components/epub/epub_internal.h": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
+    "components/epub/epub_nav.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
+    "components/epub/epub_ncx.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
+    "components/epub/epub_opf.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
+    "components/epub/epub_render.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
+    "components/epub/include/epub.h": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
+    "components/event_bus/event_bus.c": "module=event_bus :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/event_bus/include/event_bus.h": "module=event_bus :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/event_bus/include/event_bus_topics.h": "module=event_bus :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/filetype/filetype.c": "module=filetype :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_filetype.c :: rules=ai-context.md#module-layering-rules",
+    "components/filetype/filetype.h": "module=filetype :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_filetype.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/font.c": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/font.h": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/font_fs.c": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/font_fs.h": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/theme.c": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/theme.h": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
+    "components/gfx/gfx.c": "module=gfx :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_gfx.c :: rules=ai-context.md#image-support-rules",
+    "components/gfx/gfx.h": "module=gfx :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_gfx.c :: rules=ai-context.md#image-support-rules",
+    "components/gfx/gfx_font.c": "module=gfx :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_gfx.c :: rules=ai-context.md#image-support-rules",
+    "components/gfx/gfx_view.c": "module=gfx :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_gfx.c :: rules=ai-context.md#image-support-rules",
+    "components/header/header.c": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header.h": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_layout.c": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_layout.h": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_notify_queue.c": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_notify_queue.h": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_refresh.c": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_refresh.h": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_status.c": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/header/header_status.h": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
+    "components/imagefmt/imagefmt.c": "module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules",
+    "components/imagefmt/include/imagefmt.h": "module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules",
+    "components/imu/include/accel_gyro_bmi270.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/bmi2.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/bmi270.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/bmi270_context.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/bmi270_legacy.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/bmi270_maximum_fifo.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/bmi2_defs.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/bmi2_ois.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/include/imu.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/accel_gyro_bmi270.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/bmi2.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/bmi270.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/bmi270_context.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/bmi270_legacy.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/bmi270_maximum_fifo.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/bmi2_ois.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/imu/src/imu.c": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/cutils.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/cutils.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/dtoa.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/dtoa.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/include/jsengine.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/js_bindings.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/js_dom.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/jsengine.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/libregexp-opcode.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/libregexp.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/libregexp.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/libunicode-table.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/libunicode.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/libunicode.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/list.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/quickjs-atom.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/quickjs-opcode.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/quickjs.c": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/jsengine/quickjs.h": "module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/json/include/json.h": "module=json :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_json.c :: rules=ai-context.md#module-layering-rules",
+    "components/json/json.c": "module=json :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_json.c :: rules=ai-context.md#module-layering-rules",
+    "components/keyboard/keyboard.c": "module=keyboard :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_keyboard.c :: rules=ai-context.md#module-layering-rules",
+    "components/keyboard/keyboard.h": "module=keyboard :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_keyboard.c :: rules=ai-context.md#module-layering-rules",
+    "components/led/led.c": "module=led :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/led/led.h": "module=led :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/css.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/css.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/dom.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/dom.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/html.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/html_read.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/markdown.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/markdown.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/markdown_html.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/markdown_print.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/math_disp/include/math_disp.h": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
+    "components/math_disp/src/math_disp.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
+    "components/math_disp/src/math_disp_edit.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
+    "components/math_disp/src/math_disp_layout.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
+    "components/math_disp/src/math_disp_parse.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
+    "components/math_disp/src/math_disp_render.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
+    "components/modal/modal.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
+    "components/modal/modal.h": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
+    "components/modal/modal_surf.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
+    "components/modal/modal_surf.h": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/bluetooth.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/bluetooth.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/http_server.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/http_server.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/mqtt_codec.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/mqtt_codec.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/netbench.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/netbench.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/netdiag.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/netdiag.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/netsvc.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/netsvc.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/networking.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/networking.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/tcpterm.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/wifi_known.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/networking/wifi_known.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
+    "components/p4heap/include/p4heap.h": "module=p4heap :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/p4heap/p4heap.c": "module=p4heap :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/pim/pim.h": "module=pim :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_pim.c,test/main/test_pim_carddav.c,test/main/test_import.c :: rules=ai-context.md#module-layering-rules",
+    "components/pim/pim_carddav.c": "module=pim :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_pim.c,test/main/test_pim_carddav.c,test/main/test_import.c :: rules=ai-context.md#module-layering-rules",
+    "components/pim/pim_doc.c": "module=pim :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_pim.c,test/main/test_pim_carddav.c,test/main/test_import.c :: rules=ai-context.md#module-layering-rules",
+    "components/pim/pim_ical.c": "module=pim :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_pim.c,test/main/test_pim_carddav.c,test/main/test_import.c :: rules=ai-context.md#module-layering-rules",
+    "components/pim/pim_parse.c": "module=pim :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_pim.c,test/main/test_pim_carddav.c,test/main/test_import.c :: rules=ai-context.md#module-layering-rules",
+    "components/pim/pim_store.c": "module=pim :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_pim.c,test/main/test_pim_carddav.c,test/main/test_import.c :: rules=ai-context.md#module-layering-rules",
+    "components/pim/pim_vcard.c": "module=pim :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_pim.c,test/main/test_pim_carddav.c,test/main/test_import.c :: rules=ai-context.md#module-layering-rules",
+    "components/portal/dns_server.c": "module=portal :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_portal.c :: rules=ai-context.md#module-layering-rules",
+    "components/portal/include/portal.h": "module=portal :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_portal.c :: rules=ai-context.md#module-layering-rules",
+    "components/portal/portal.c": "module=portal :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_portal.c :: rules=ai-context.md#module-layering-rules",
+    "components/portal/portal_http.c": "module=portal :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_portal.c :: rules=ai-context.md#module-layering-rules",
+    "components/portal/portal_internal.h": "module=portal :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_portal.c :: rules=ai-context.md#module-layering-rules",
+    "components/power_monitor/include/power_monitor.h": "module=power_monitor :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_power.c,test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/power_monitor/power_monitor.c": "module=power_monitor :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_power.c,test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
+    "components/rss/include/rss.h": "module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/rss/src/rss_fetch.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/rss/src/rss_parser.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/shell/locale.c": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
+    "components/shell/locale.h": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
+    "components/shell/shell.c": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
+    "components/shell/shell.h": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
+    "components/state_machine/include/state_machine.h": "module=state_machine :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/state_machine/state_machine.c": "module=state_machine :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage.h": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_commands.h": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_csv.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_disk.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_fam.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_files.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_ini.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_nav.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/storage_text.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/storage/trash.c": "module=storage :: layer=storage :: domain=fs :: status=stable :: tests=test/main/test_storage_format.c,test/main/test_storage_volumes.c,test/main/test_csv.c :: rules=ai-context.md#module-layering-rules",
+    "components/strutil/include/strutil.h": "module=strutil :: layer=leaf :: domain=core :: status=stable :: tests=test/main/test_himem.c :: rules=ai-context.md#module-layering-rules",
+    "components/strutil/strutil.c": "module=strutil :: layer=leaf :: domain=core :: status=stable :: tests=test/main/test_himem.c :: rules=ai-context.md#module-layering-rules",
+    "components/swgcm/include/sw_gcm.h": "module=swgcm :: layer=leaf :: domain=crypto :: status=stable :: tests=test/main/test_sw_gcm.c :: rules=ai-context.md#module-layering-rules",
+    "components/swgcm/sw_aes.c": "module=swgcm :: layer=leaf :: domain=crypto :: status=stable :: tests=test/main/test_sw_gcm.c :: rules=ai-context.md#module-layering-rules",
+    "components/swgcm/sw_gcm.c": "module=swgcm :: layer=leaf :: domain=crypto :: status=stable :: tests=test/main/test_sw_gcm.c :: rules=ai-context.md#module-layering-rules",
+    "components/tab5kbd/tab5kbd.c": "module=tab5kbd :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/tab5kbd/tab5kbd.h": "module=tab5kbd :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_fonts.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_fonts.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_modal.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_modal.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_pane.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_pane.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/uitest/include/ui_test.h": "module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/uitest/ui_test.c": "module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/usb/usb.c": "module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules",
+    "components/usb/usb.h": "module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules",
+    "components/usb/userial.c": "module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules",
+    "components/windows/windows.c": "module=windows :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/windows/windows.h": "module=windows :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/zip/include/zip.h": "module=zip :: layer=leaf :: domain=fs :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/zip/zip.c": "module=zip :: layer=leaf :: domain=fs :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "main/assets/icon_splash.c": "module=main :: layer=main :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "main/assets/icon_splash.h": "module=main :: layer=main :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "main/main.c": "module=main :: layer=main :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "main/native_apps.c": "module=main :: layer=main :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "main/p4minishell.c": "module=main :: layer=main :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "main/p4minishell.h": "module=main :: layer=main :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules"
+  },
+  "doc_owner": {
+    "alarm": "documentation.md#alarms",
+    "applib": "SDK.md",
+    "batch": "batch.md",
+    "boot": "documentation.md#boot-scripting",
+    "command": "command.md",
+    "db": "documentation.md#database",
+    "editor": "editor.md",
+    "filetype": "documentation.md#filetype",
+    "font": "documentation.md#font",
+    "gfx": "documentation.md#graphics",
+    "header": "documentation.md#header",
+    "main": "architecture.md",
+    "markdown": "documentation.md#markdown",
+    "modal": "documentation.md#modal",
+    "networking": "documentation.md#networking",
+    "pim": "documentation.md#pim",
+    "shell": "documentation.md#shell",
+    "storage": "documentation.md#storage",
+    "tui": "documentation.md#tui"
+  },
+  "entry_points": [
+    "AGENTS.md",
+    "ai-context.md",
+    "architecture.md",
+    "documentation.md",
+    "SDK.md",
+    "command.md",
+    "batch.md",
+    "ABI.md",
+    "harness.md",
+    "test/README.md",
+    "tools/README.md",
+    "PORTING.md",
+    "schematics.md",
+    "SECURITY.md",
+    "release.md",
+    "bugs.md",
+    "roadmap.md",
+    "changelog.md"
+  ],
+  "generated_by": "tools/breadcrumbs.py",
+  "layer_order": [
+    "main",
+    "command",
+    "batch",
+    "storage",
+    "shell",
+    "leaf",
+    "app"
+  ],
+  "modules": {
+    "alarm": {
+      "domain": "data",
+      "header": "components/alarm/alarm.h",
+      "layer": "leaf",
+      "path": "components/alarm",
+      "provides": "SD-persisted alarm/event store + background checker",
+      "requires": [
+        "shell",
+        "clock",
+        "storage",
+        "led",
+        "audio",
+        "board_bsp",
+        "freertos",
+        "esp_timer"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_alarm.c"
+      ]
+    },
+    "ansi": {
+      "domain": "ui",
+      "header": "components/ansi/ansi.h",
+      "layer": "leaf",
+      "path": "components/ansi",
+      "provides": "ANSI palette, format-string builder, LVGL recolor",
+      "requires": [
+        "esp_system"
+      ],
+      "rules": [
+        "ai-context.md#shell-core-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_ansi_format.c"
+      ]
+    },
+    "applib": {
+      "domain": "app",
+      "header": "components/applib/applib.h",
+      "layer": "app",
+      "path": "components/applib",
+      "provides": "native-app runtime library (shell SDK surface)",
+      "requires": [
+        "shell",
+        "clock",
+        "storage",
+        "db",
+        "tui",
+        "heap",
+        "p4heap",
+        "esp_timer",
+        "freertos"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_applib.c"
+      ]
+    },
+    "archive": {
+      "domain": "fs",
+      "header": "components/archive/archive.h",
+      "layer": "leaf",
+      "path": "components/archive",
+      "provides": "USTAR archive core",
+      "requires": [
+        "storage",
+        "shell",
+        "strutil",
+        "p4heap",
+        "zip",
+        "zlib"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_archive.c"
+      ]
+    },
+    "audio": {
+      "domain": "media",
+      "header": "components/audio/audio.h",
+      "layer": "leaf",
+      "path": "components/audio",
+      "provides": "audio output routing, WAV params, mic stats, Goertzel",
+      "requires": [
+        "shell",
+        "ansi",
+        "freertos",
+        "board_bsp",
+        "espressif__esp_codec_dev"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_audio.c"
+      ]
+    },
+    "batch": {
+      "domain": "core",
+      "header": "components/batch/batch.h",
+      "layer": "batch",
+      "path": "components/batch",
+      "provides": "batch engine: frames, env, control flow, sync, services",
+      "requires": [
+        "shell",
+        "storage",
+        "strutil",
+        "modal",
+        "markdown",
+        "filetype",
+        "tui",
+        "clock",
+        "board_bsp",
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_batch_expr.c",
+        "test/main/test_batch_control.c",
+        "test/main/test_himem.c",
+        "test/main/test_svc.c"
+      ]
+    },
+    "board_caps": {
+      "domain": "platform",
+      "header": "components/board_caps/include/board_caps.h",
+      "layer": "leaf",
+      "path": "components/board_caps",
+      "provides": "compile-time board capability queries",
+      "requires": [],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_hardware.c"
+      ]
+    },
+    "boot": {
+      "domain": "platform",
+      "header": "components/boot/boot.h",
+      "layer": "leaf",
+      "path": "components/boot",
+      "provides": "boot script, CONFIG.SYS apply, startup runner",
+      "requires": [
+        "storage",
+        "batch",
+        "certs",
+        "command",
+        "font",
+        "display",
+        "networking",
+        "usb",
+        "keyboard",
+        "header",
+        "ansi"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "c6ota": {
+      "domain": "platform",
+      "header": "components/c6ota/c6ota.h",
+      "layer": "leaf",
+      "path": "components/c6ota",
+      "provides": "ESP32-C6 co-processor OTA over SDIO",
+      "requires": [
+        "board_bsp",
+        "bootloader_support",
+        "certs",
+        "esp_app_format",
+        "esp_http_client",
+        "esp_hosted",
+        "esp-tls",
+        "fatfs",
+        "networking",
+        "p4heap",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "camera": {
+      "domain": "media",
+      "header": "components/camera/include/camera.h",
+      "layer": "leaf",
+      "path": "components/camera",
+      "provides": "MIPI-CSI camera capture",
+      "requires": [
+        "board_bsp",
+        "storage",
+        "imagefmt",
+        "p4heap",
+        "espressif__esp_video",
+        "PRIV_REQUIRES",
+        "esp_driver_i2c",
+        "esp_driver_gpio"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "cas": {
+      "domain": "app",
+      "header": "components/cas/include/cas.h",
+      "layer": "leaf",
+      "path": "components/cas",
+      "provides": "computer algebra system command surface",
+      "requires": [
+        "storage",
+        "strutil",
+        "batch",
+        "PRIV_REQUIRES",
+        "mbedtls"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_cas.c"
+      ]
+    },
+    "certs": {
+      "domain": "crypto",
+      "header": "components/certs/include/certs.h",
+      "layer": "leaf",
+      "path": "components/certs",
+      "provides": "user CA trust store + DER/PEM conversion",
+      "requires": [
+        "mbedtls",
+        "storage",
+        "strutil",
+        "PRIV_REQUIRES",
+        "esp-tls"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_certs.c"
+      ]
+    },
+    "chat": {
+      "domain": "net",
+      "header": "components/chat/include/chat.h",
+      "layer": "leaf",
+      "path": "components/chat",
+      "provides": "board-to-board CLI chat",
+      "requires": [
+        "lwip",
+        "esp_netif",
+        "esp_http_server",
+        "networking",
+        "storage",
+        "strutil",
+        "PRIV_REQUIRES",
+        "esp_wifi"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_chat.c"
+      ]
+    },
+    "clock": {
+      "domain": "platform",
+      "header": "components/clock/clock.h",
+      "layer": "leaf",
+      "path": "components/clock",
+      "provides": "RTC/time anchor, timers, stopwatch, locale",
+      "requires": [
+        "esp_timer",
+        "lwip",
+        "nvs_flash",
+        "esp_driver_i2c",
+        "esp_driver_gpio",
+        "esp_hw_support",
+        "board_bsp",
+        "board_caps"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_clock.c",
+        "test/main/test_locale.c"
+      ]
+    },
+    "command": {
+      "domain": "core",
+      "header": "components/command/command.h",
+      "layer": "command",
+      "path": "components/command",
+      "provides": "the one command dispatcher + worker + built-in verbs",
+      "requires": [
+        "ansi",
+        "applib",
+        "archive",
+        "audio",
+        "alarm",
+        "batch",
+        "board_caps",
+        "camera",
+        "certs",
+        "db",
+        "display",
+        "editor",
+        "font",
+        "header",
+        "imagefmt",
+        "keyboard",
+        "markdown",
+        "filetype",
+        "storage",
+        "windows",
+        "shell",
+        "strutil",
+        "clock",
+        "networking",
+        "power_monitor",
+        "c6ota",
+        "usb",
+        "led",
+        "tab5kbd",
+        "imu",
+        "modal",
+        "tui",
+        "gfx",
+        "uitest",
+        "mbedtls",
+        "p4heap",
+        "pim",
+        "swgcm",
+        "board_bsp",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl",
+        "esp_adc",
+        "fatfs",
+        "esp_pm",
+        "epub",
+        "math_disp",
+        "cas",
+        "chat",
+        "json",
+        "jsengine",
+        "rss"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_shell_parser.c",
+        "test/main/test_assoc.c",
+        "test/main/test_screen.c",
+        "test/main/test_config.c",
+        "test/main/test_breadcrumb.c"
+      ]
+    },
+    "db": {
+      "domain": "data",
+      "header": "components/db/db.h",
+      "layer": "leaf",
+      "path": "components/db",
+      "provides": "Palm-OS-style SD record store",
+      "requires": [
+        "storage",
+        "esp_timer",
+        "freertos",
+        "board_bsp"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_db.c"
+      ]
+    },
+    "display": {
+      "domain": "ui",
+      "header": "components/display/display.h",
+      "layer": "leaf",
+      "path": "components/display",
+      "provides": "LVGL display bring-up, rotation, backlight",
+      "requires": [
+        "board_bsp",
+        "espressif__esp_lcd_touch",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl",
+        "hal",
+        "soc"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "editor": {
+      "domain": "app",
+      "header": "components/editor/editor.h",
+      "layer": "leaf",
+      "path": "components/editor",
+      "provides": "modal text editor, syntax lexers, spell, recover",
+      "requires": [
+        "ansi",
+        "shell",
+        "storage",
+        "windows",
+        "keyboard",
+        "header",
+        "display",
+        "font",
+        "filetype",
+        "markdown",
+        "modal",
+        "p4heap",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_editor.c"
+      ]
+    },
+    "epub": {
+      "domain": "app",
+      "header": "components/epub/include/epub.h",
+      "layer": "leaf",
+      "path": "components/epub",
+      "provides": "EPUB reader: OPF/NCX parse, spine, render",
+      "requires": [
+        "zip",
+        "archive",
+        "storage",
+        "strutil",
+        "markdown",
+        "PRIV_REQUIRES",
+        "expat",
+        "zlib"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_epub.c"
+      ]
+    },
+    "event_bus": {
+      "domain": "core",
+      "header": "components/event_bus/include/event_bus.h",
+      "layer": "leaf",
+      "path": "components/event_bus",
+      "provides": "typed event publish/subscribe",
+      "requires": [
+        "freertos",
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "filetype": {
+      "domain": "fs",
+      "header": "components/filetype/filetype.h",
+      "layer": "leaf",
+      "path": "components/filetype",
+      "provides": "extension-to-kind registry",
+      "requires": [],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_filetype.c"
+      ]
+    },
+    "font": {
+      "domain": "ui",
+      "header": "components/font/font.h",
+      "layer": "leaf",
+      "path": "components/font",
+      "provides": "font registry, SD TTF, CJK, theme registry",
+      "requires": [
+        "lvgl__lvgl",
+        "espressif__esp_lvgl_port",
+        "board_bsp",
+        "ansi"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_theme.c"
+      ]
+    },
+    "gfx": {
+      "domain": "ui",
+      "header": "components/gfx/gfx.h",
+      "layer": "leaf",
+      "path": "components/gfx",
+      "provides": "RGB565 raster, BMP parser/decoder, scaling, 8x8 font",
+      "requires": [
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#image-support-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_gfx.c"
+      ]
+    },
+    "header": {
+      "domain": "ui",
+      "header": "components/header/header.h",
+      "layer": "leaf",
+      "path": "components/header",
+      "provides": "status header: layout, classification, notifications, refresh",
+      "requires": [
+        "lvgl__lvgl",
+        "espressif__esp_lvgl_port",
+        "esp_app_format",
+        "font"
+      ],
+      "rules": [
+        "ai-context.md#header-bar-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_header.c"
+      ]
+    },
+    "imagefmt": {
+      "domain": "media",
+      "header": "components/imagefmt/include/imagefmt.h",
+      "layer": "leaf",
+      "path": "components/imagefmt",
+      "provides": "image format caps and validation",
+      "requires": [],
+      "rules": [
+        "ai-context.md#image-support-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "imu": {
+      "domain": "platform",
+      "header": "components/imu/include/imu.h",
+      "layer": "leaf",
+      "path": "components/imu",
+      "provides": "BMI270 accelerometer/gyro + orientation",
+      "requires": [
+        "board_bsp",
+        "esp_driver_i2c",
+        "esp_driver_gpio",
+        "esp_timer"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_hardware.c"
+      ]
+    },
+    "jsengine": {
+      "domain": "app",
+      "header": "components/jsengine/include/jsengine.h",
+      "layer": "leaf",
+      "path": "components/jsengine",
+      "provides": "QuickJS engine + shell/TUI/FS/batch bindings",
+      "requires": [
+        "shell",
+        "batch",
+        "storage",
+        "markdown",
+        "rss",
+        "json",
+        "tui",
+        "modal",
+        "heap",
+        "networking",
+        "audio",
+        "display",
+        "db",
+        "pim",
+        "event_bus",
+        "esp_timer",
+        "freertos"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "json": {
+      "domain": "data",
+      "header": "components/json/include/json.h",
+      "layer": "leaf",
+      "path": "components/json",
+      "provides": "the ONE JSON reader: validate, pretty, walk, unescape",
+      "requires": [],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_json.c"
+      ]
+    },
+    "keyboard": {
+      "domain": "ui",
+      "header": "components/keyboard/keyboard.h",
+      "layer": "leaf",
+      "path": "components/keyboard",
+      "provides": "on-screen keyboard pages + external input state",
+      "requires": [
+        "display",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl",
+        "font"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_keyboard.c"
+      ]
+    },
+    "led": {
+      "domain": "platform",
+      "header": "components/led/led.h",
+      "layer": "leaf",
+      "path": "components/led",
+      "provides": "WS2812 status/notification LED engine",
+      "requires": [
+        "esp_driver_rmt",
+        "esp_driver_gpio",
+        "esp_timer",
+        "freertos",
+        "log",
+        "espressif__led_strip",
+        "tab5kbd"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "main": {
+      "domain": "platform",
+      "header": null,
+      "layer": "main",
+      "path": "main",
+      "provides": "app entry, boot sequencing, LVGL event callbacks, host bridges",
+      "requires": [],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "markdown": {
+      "domain": "app",
+      "header": "components/markdown/markdown.h",
+      "layer": "leaf",
+      "path": "components/markdown",
+      "provides": "Markdown/HTML renderers, DOM, CSS, print paginator",
+      "requires": [
+        "esp_system",
+        "p4heap",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_markdown.c",
+        "test/main/test_html.c"
+      ]
+    },
+    "math_disp": {
+      "domain": "app",
+      "header": "components/math_disp/include/math_disp.h",
+      "layer": "leaf",
+      "path": "components/math_disp",
+      "provides": "natural-display math editor + CAS/math command surface",
+      "requires": [
+        "storage",
+        "strutil",
+        "batch",
+        "PRIV_REQUIRES",
+        "log"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_calc.c"
+      ]
+    },
+    "modal": {
+      "domain": "ui",
+      "header": "components/modal/modal.h",
+      "layer": "leaf",
+      "path": "components/modal",
+      "provides": "shared modal runtime + surfaces (dialog/list/ask/view)",
+      "requires": [
+        "freertos",
+        "esp_common",
+        "log",
+        "shell",
+        "storage",
+        "windows",
+        "keyboard",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl",
+        "markdown",
+        "filetype",
+        "font",
+        "gfx",
+        "p4heap",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_modal.c"
+      ]
+    },
+    "networking": {
+      "domain": "net",
+      "header": "components/networking/networking.h",
+      "layer": "leaf",
+      "path": "components/networking",
+      "provides": "Wi-Fi/BLE host, HTTP server, MQTT event service",
+      "requires": [
+        "ansi",
+        "bt",
+        "certs",
+        "display",
+        "esp_event",
+        "esp_hosted",
+        "esp_http_client",
+        "esp_http_server",
+        "esp_netif",
+        "esp-tls",
+        "esp_wifi",
+        "led",
+        "lwip",
+        "mbedtls",
+        "nvs_flash",
+        "p4heap",
+        "pim",
+        "portal",
+        "storage",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_wifi_state.c",
+        "test/main/test_netsvc.c",
+        "test/main/test_tcpterm.c"
+      ]
+    },
+    "p4heap": {
+      "domain": "core",
+      "header": "components/p4heap/include/p4heap.h",
+      "layer": "leaf",
+      "path": "components/p4heap",
+      "provides": "PSRAM-first heap allocator",
+      "requires": [],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "pim": {
+      "domain": "data",
+      "header": "components/pim/pim.h",
+      "layer": "leaf",
+      "path": "components/pim",
+      "provides": "vCard/iCalendar codecs + sync identity/merge",
+      "requires": [
+        "db",
+        "alarm",
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_pim.c",
+        "test/main/test_pim_carddav.c",
+        "test/main/test_import.c"
+      ]
+    },
+    "portal": {
+      "domain": "net",
+      "header": "components/portal/include/portal.h",
+      "layer": "leaf",
+      "path": "components/portal",
+      "provides": "first-run captive portal",
+      "requires": [
+        "lwip",
+        "esp_netif",
+        "esp_http_server",
+        "networking",
+        "storage",
+        "strutil",
+        "PRIV_REQUIRES",
+        "esp_wifi"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_portal.c"
+      ]
+    },
+    "power_monitor": {
+      "domain": "platform",
+      "header": "components/power_monitor/include/power_monitor.h",
+      "layer": "leaf",
+      "path": "components/power_monitor",
+      "provides": "battery ADC, charge state, pack-present policy",
+      "requires": [
+        "board_bsp",
+        "esp_driver_i2c",
+        "espressif__esp_io_expander",
+        "PRIV_REQUIRES",
+        "freertos",
+        "log"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_power.c",
+        "test/main/test_hardware.c"
+      ]
+    },
+    "rss": {
+      "domain": "net",
+      "header": "components/rss/include/rss.h",
+      "layer": "leaf",
+      "path": "components/rss",
+      "provides": "RSS/JSON-Feed reader over the shared JSON core",
+      "requires": [
+        "networking",
+        "json",
+        "PRIV_REQUIRES",
+        "expat"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "shell": {
+      "domain": "core",
+      "header": "components/shell/shell.h",
+      "layer": "shell",
+      "path": "components/shell",
+      "provides": "transcript, prompt, key queue, history, debug log, UART console",
+      "requires": [
+        "ansi",
+        "display",
+        "header",
+        "keyboard",
+        "clock",
+        "windows",
+        "p4heap",
+        "board_bsp",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl",
+        "driver",
+        "vfs",
+        "esp_app_format",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#shell-core-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_shell_parser.c",
+        "test/main/test_shell_history.c",
+        "test/main/test_shell_prompt.c"
+      ]
+    },
+    "state_machine": {
+      "domain": "core",
+      "header": "components/state_machine/include/state_machine.h",
+      "layer": "leaf",
+      "path": "components/state_machine",
+      "provides": "generic finite state machine helper",
+      "requires": [
+        "freertos",
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "storage": {
+      "domain": "fs",
+      "header": "components/storage/storage.h",
+      "layer": "storage",
+      "path": "components/storage",
+      "provides": "guarded SD sessions, path resolution, file helpers, redirection",
+      "requires": [
+        "shell",
+        "header",
+        "board_bsp",
+        "fatfs",
+        "markdown",
+        "filetype",
+        "p4heap",
+        "esp_driver_sdmmc",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_storage_format.c",
+        "test/main/test_storage_volumes.c",
+        "test/main/test_csv.c"
+      ]
+    },
+    "strutil": {
+      "domain": "core",
+      "header": "components/strutil/include/strutil.h",
+      "layer": "leaf",
+      "path": "components/strutil",
+      "provides": "shared case-insensitive compare + arg split",
+      "requires": [],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_himem.c"
+      ]
+    },
+    "swgcm": {
+      "domain": "crypto",
+      "header": "components/swgcm/include/sw_gcm.h",
+      "layer": "leaf",
+      "path": "components/swgcm",
+      "provides": "software AES-256-GCM fallback",
+      "requires": [],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_sw_gcm.c"
+      ]
+    },
+    "tab5kbd": {
+      "domain": "platform",
+      "header": "components/tab5kbd/tab5kbd.h",
+      "layer": "leaf",
+      "path": "components/tab5kbd",
+      "provides": "M5Stack Tab5 I2C keyboard",
+      "requires": [
+        "shell",
+        "board_bsp",
+        "esp_driver_i2c",
+        "esp_driver_gpio",
+        "freertos",
+        "log"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "tui": {
+      "domain": "ui",
+      "header": "components/tui/tui.h",
+      "layer": "leaf",
+      "path": "components/tui",
+      "provides": "80x25 cell buffer, draw primitives, workspace/pane/HUD",
+      "requires": [
+        "shell",
+        "windows",
+        "ansi",
+        "display",
+        "gfx",
+        "p4heap",
+        "freertos",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_tui.c"
+      ]
+    },
+    "uitest": {
+      "domain": "ui",
+      "header": "components/uitest/include/ui_test.h",
+      "layer": "leaf",
+      "path": "components/uitest",
+      "provides": "synthetic LVGL pointer/keyboard test verbs",
+      "requires": [
+        "display",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    },
+    "usb": {
+      "domain": "platform",
+      "header": "components/usb/usb.h",
+      "layer": "leaf",
+      "path": "components/usb",
+      "provides": "USB host: MSC/HID/CDC + userial",
+      "requires": [
+        "ansi",
+        "display",
+        "strutil",
+        "usb_host_hid",
+        "usb_host_msc",
+        "usb_host_cdc_acm",
+        "PRIV_REQUIRES",
+        "${priv_requires}"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_userial.c"
+      ]
+    },
+    "windows": {
+      "domain": "ui",
+      "header": "components/windows/windows.h",
+      "layer": "leaf",
+      "path": "components/windows",
+      "provides": "LVGL window/screen lifecycle",
+      "requires": [
+        "font",
+        "display",
+        "header",
+        "keyboard",
+        "ansi",
+        "p4heap",
+        "board_bsp",
+        "espressif__esp_lvgl_port",
+        "lvgl__lvgl"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_tui.c"
+      ]
+    },
+    "zip": {
+      "domain": "fs",
+      "header": "components/zip/include/zip.h",
+      "layer": "leaf",
+      "path": "components/zip",
+      "provides": "the ONE ZIP reader",
+      "requires": [
+        "storage",
+        "strutil",
+        "PRIV_REQUIRES",
+        "zlib"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": []
+    }
+  },
+  "version": 1
+}

@@ -4,6 +4,13 @@
  */
 /**
  * @file epub.h
+ * @module epub
+ * @layer leaf
+ * @domain app
+ * @provides EPUB reader: OPF/NCX parse, spine, render
+ * @status stable
+ * @test test/main/test_epub.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief EPUB reader for P4MiniShell.
  *
  * EPUB is a ZIP-based archive format for digital books containing:

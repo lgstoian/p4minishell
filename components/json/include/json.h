@@ -4,6 +4,13 @@
  */
 /**
  * @file json.h
+ * @module json
+ * @layer leaf
+ * @domain data
+ * @provides the ONE JSON reader: validate, pretty, walk, unescape
+ * @status stable
+ * @test test/main/test_json.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Shared JSON reader: validation, pretty-printing, and path walking.
  *
  * This is the ONE JSON parser in the firmware. It was moved out of

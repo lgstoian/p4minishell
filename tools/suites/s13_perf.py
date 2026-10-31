@@ -65,7 +65,7 @@ def _deploy(dev, c, files):
     for local, remote in files:
         try:
             dev.push_local(local, remote)
-            c.check("push %s" % remote, True)
+            c.note("pushed %s" % remote)
         except PanicError:
             raise
         except Exception as exc:  # noqa: BLE001

@@ -52,6 +52,8 @@ python tools/p4test_run.py --boards COM3,COM6 --tier fast --fail-fast
 # gate a feature on both boards in parallel (minutes)
 python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1
 # release gate: merged table, board differential, FLAKY quarantine
+python tools/p4test_run.py --static          # host-only gates, no board
+python tools/p4test_run.py COM3 --guard      # gates, then the hardware run
 ```
 
 Tiers: `--tier fast` runs the per-area smoke subset for feature delivery;
@@ -77,6 +79,30 @@ reproducible from `--seed`.
 python tools/dogfood.py COM3 --minutes 15
 python tools/dogfood.py COM3 --minutes 3 --seed 7 --out screenshots/dogfood/run7
 ```
+
+## Agent navigation and test guards
+
+These are the host-side systems behind [`AGENTS.md`](../AGENTS.md),
+[`BREADCRUMBS.md`](../BREADCRUMBS.md), and the false-green gate:
+
+- `comment_index.py` — extracts/validates the machine-readable header tags
+  (`docs/comment-tags.md`) and writes `comment-index.json`. It also enforces the
+  forbidden layering edges/includes and the `// AI:` sweep. `--write` refreshes
+  the manifest; the default is check-only.
+- `breadcrumbs.py` — builds `breadcrumbs.json` + `BREADCRUMBS.md` from the
+  manifest. `--for PATH` prints one file's trail, `--layer NAME` lists a layer,
+  `--write` refreshes both artifacts.
+- `agent_trail.py` — per-task activity trail in `.agent/trail.jsonl`
+  (git-ignored): `record`, `list`, `summary`, `show`, `export-md`, `prune`.
+  `--files git` records the current `git status` set.
+- `green_guard.py` — static false-green/false-positive guard for the Unity
+  suite and `tools/suites/`: assertion-free tests, declared-but-never-run
+  tests, missing test `CMakeLists.txt` entries, zero-check `Checklist`s, and
+  tautological checks. `--strict` promotes warnings; `--json` writes a report.
+  `p4test_run.py --static` runs it with the comment/breadcrumb gates.
+
+The p4test runner also treats a zero-assertion `Checklist`/`SuiteResult` as a
+failure at run time, so a suite that asserts nothing can never report green.
 
 ## Files
 

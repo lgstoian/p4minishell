@@ -4,6 +4,12 @@
  */
 /**
  * @file state_machine.h
+ * @module state_machine
+ * @layer leaf
+ * @domain core
+ * @provides generic finite state machine helper
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Lightweight finite state machine.
  *
  * Pool storage is allocated once, lazily, from PSRAM (internal RAM as a

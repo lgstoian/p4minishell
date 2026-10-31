@@ -4,6 +4,12 @@
  */
 /**
  * @file tab5kbd.h
+ * @module tab5kbd
+ * @layer leaf
+ * @domain platform
+ * @provides M5Stack Tab5 I2C keyboard
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief M5Stack Tab5Keyboard (STM32F030, I2C 0x6D) input source.
  *
  * The Tab5Keyboard is a 70-key module on the Tab5 expansion port. It exposes an

@@ -94,6 +94,8 @@ void test_debug_log_push_null(void)
     shell_debug_log_push(NULL, "message");
     shell_debug_log_push("test", NULL);
     shell_debug_log_push(NULL, NULL);
+    /* Explicit pass: surviving the NULL arguments is the assertion. */
+    TEST_PASS();
 }
 
 /* ========================================================================

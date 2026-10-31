@@ -4,6 +4,13 @@
  */
 /**
  * @file storage.h
+ * @module storage
+ * @layer storage
+ * @domain fs
+ * @provides guarded SD sessions, path resolution, file helpers, redirection
+ * @status stable
+ * @test test/main/test_storage_format.c, test/main/test_storage_volumes.c, test/main/test_csv.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief SD session management and filesystem services for P4MiniShell.
  *
  * Owns everything that sits between the shell commands and the SD card:

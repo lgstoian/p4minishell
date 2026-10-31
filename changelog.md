@@ -14,6 +14,71 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Agent breadcrumbs and machine-readable comments.** Every component's primary
+  header now carries a compact tag block (`@module`/`@layer`/`@domain`/
+  `@provides`/`@status`/`@test`/`@hard-rule`, documented in
+  [`docs/comment-tags.md`](docs/comment-tags.md)). `tools/comment_index.py`
+  validates the tags, the forbidden layering edges/includes, and the `// AI:`
+  sweep, and writes `comment-index.json`; `tools/breadcrumbs.py` generates
+  `breadcrumbs.json` + [`BREADCRUMBS.md`](BREADCRUMBS.md) (including a per-file
+  trail); [`AGENTS.md`](AGENTS.md) is the orientation entry point. The
+  on-device `breadcrumb` verb prints the live
+  `cwd > batch stack > bg slot > modal` trail (`/b` machine-readable), backed by
+  the pure `command_breadcrumb_format()` and `batch_frame_trail()`.
+- **Agent activity trail.** `tools/agent_trail.py` records per-task entries in
+  `.agent/trail.jsonl` (git-ignored) with `list`/`summary`/`export-md`/`prune`.
+- **False-green / false-positive test protection.** `tools/green_guard.py`
+  rejects assertion-free Unity tests, declared-but-never-run tests, test files
+  missing from the test `CMakeLists.txt`, zero-check `Checklist` suites, and
+  tautological assertions. The p4test runner treats a zero-assertion
+  `Checklist`/`SuiteResult` as a failure; `p4test_run.py --static`/`--guard`
+  run the gates without/with hardware.
+
+### Fixed
+
+- **Five Unity tests were defined but never registered** (four
+  `test_variable_expansion_*` cases and `test_sw_gcm_64zero_vector`); they are
+  now `RUN_TEST`-ed, so they actually run.
+- **Three host-suite checks were tautological** (`c.check(..., True)` in
+  `s13_perf`, `s14_apps`, and `s17_browser`); they now assert the real result
+  (a push note, or the forward-render dump).
+- **Four assertion-free survival tests** (`test_applib_free_null`,
+  `test_debug_log_push_null`, `test_variable_expansion_null_output`, and
+  `test_tui_default_color_null_safe`) now assert explicitly (`TEST_PASS()` or a
+  real default-colour round-trip).
+- **Serial-console command echoes used the static `PS \>` prompt** instead of
+  the live prompt (`shell_uart_console_submit_command()` appended
+  `SHELL_PROMPT`). The transcript line then disagreed with the serial/UI
+  prompt (`PS /sdcard>`), and a harness marker could be glued to the wrong
+  prompt. The echo now expands the live prompt into a local buffer.
+- **Multi-megabyte binary frames could lose their tail under host
+  backpressure.** The USB-Serial-JTAG writer gave up after a 10 s total budget;
+  a two-board screenshot capture paused long enough to drop 73 bytes of a
+  2.7 MB Tab5 frame. The budget is now 30 s
+  (`P4_CONFIG_UART_WRITE_TOTAL_MS`) and `p4test.screenshot.capture()` retries a
+  short BMPX frame (drain + re-issue, no Ctrl-C) before failing.
+- **`p4test` marker matching missed a tag glued to a prompt/echo.**
+  `_marked()` now removes the `echo <tag>` substring and any prompt anywhere on
+  the line before matching; `tools/harness/verify.py` covers the cases.
+- **Storage-suite recycle-bin calls used the 30 s default** while the Tab5
+  trash scan is O(entries) (`trash info` ~7.7 s at 243 entries); the `del`/
+  `trash`/`undelete` calls now use a 60 s budget.
+- **`trash info` read every `.meta` file** just to print count/size/age
+  (~7.7 s at 243 entries on Tab5). It now walks the entries with a `stat` and
+  the epoch prefix (`trash_walk_stat()`); `trash list`/`undelete` keep the full
+  meta walk because they need the original path.
+
+### Changed
+
+- Firmware and `test/` build clean (zero warnings) on `jc1060p470c`; the test
+  app gains `test_breadcrumb.c` (4 cases) and the five re-registered tests.
+
+---
+
 ## [1.4.1] - 2026-10-21
 
 ### Fixed

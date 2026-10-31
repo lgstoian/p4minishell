@@ -10,6 +10,13 @@
 
 /**
  * @file sw_gcm.h
+ * @module swgcm
+ * @layer leaf
+ * @domain crypto
+ * @provides software AES-256-GCM fallback
+ * @status stable
+ * @test test/main/test_sw_gcm.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Small self-contained software AES-256-GCM (no hardware, no DMA).
  *
  * Fallback for `crypt` when the esp-aes hardware path cannot allocate its

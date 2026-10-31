@@ -7,6 +7,13 @@
 
 /**
  * @file networking.h
+ * @module networking
+ * @layer leaf
+ * @domain net
+ * @provides Wi-Fi/BLE host, HTTP server, MQTT event service
+ * @status stable
+ * @test test/main/test_wifi_state.c, test/main/test_netsvc.c, test/main/test_tcpterm.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Hosted networking module for P4MiniShell.
  *
  * The single owner of every ESP-Hosted and esp_wifi_remote call in the

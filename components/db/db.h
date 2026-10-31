@@ -4,6 +4,13 @@
  */
 /**
  * @file db.h
+ * @module db
+ * @layer leaf
+ * @domain data
+ * @provides Palm-OS-style SD record store
+ * @status stable
+ * @test test/main/test_db.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Palm-OS-style SD-backed record store for P4MiniShell.
  *
  * Named databases live on the SD card under `sd:/DBS/<name>.DB/`:

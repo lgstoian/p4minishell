@@ -4,6 +4,13 @@
  */
 /**
  * @file board_caps.h
+ * @module board_caps
+ * @layer leaf
+ * @domain platform
+ * @provides compile-time board capability queries
+ * @status stable
+ * @test test/main/test_hardware.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Zero-cost board capability queries over BOARD_CFG_* macros.
  *
  * Thin header-only helpers so command/display code asks one question

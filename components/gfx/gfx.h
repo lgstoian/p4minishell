@@ -4,6 +4,13 @@
  */
 /**
  * @file gfx.h
+ * @module gfx
+ * @layer leaf
+ * @domain ui
+ * @provides RGB565 raster, BMP parser/decoder, scaling, 8x8 font
+ * @status stable
+ * @test test/main/test_gfx.c
+ * @hard-rule ai-context.md#image-support-rules
  * @brief Tiny RGB565 raster surface for P4MiniShell `gfx` batch verbs.
  *
  * Pure pixel math, no LVGL dependency: the buffer is PSRAM-backed and the

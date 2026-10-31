@@ -1,3 +1,13 @@
+/**
+ * @file jsengine.h
+ * @module jsengine
+ * @layer leaf
+ * @domain app
+ * @provides QuickJS engine + shell/TUI/FS/batch bindings
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
+ * @brief QuickJS engine + shell/TUI/FS/batch bindings.
+ */
 #ifndef JSENGINE_H
 #define JSENGINE_H
 

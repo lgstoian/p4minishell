@@ -155,7 +155,7 @@ def run(dev, ctx):
     c.expect("back returns to the page", "RenderHeading", dump)
 
     dev.run("browser forward", timeout=60, settle=2.0)
-    c.check("forward responds", True)
+    c.expect("forward returns to the page", "RenderHeading", _dump(dev))
 
     # -- bookmarks ----------------------------------------------------------
     out = dev.run("browser bookmark add bench %s" % url, timeout=15)

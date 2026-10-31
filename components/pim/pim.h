@@ -4,6 +4,13 @@
  */
 /**
  * @file pim.h
+ * @module pim
+ * @layer leaf
+ * @domain data
+ * @provides vCard/iCalendar codecs + sync identity/merge
+ * @status stable
+ * @test test/main/test_pim.c, test/main/test_pim_carddav.c, test/main/test_import.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Personal information interchange: vCard/iCalendar codecs.
  *
  * A LEAF below storage (REQUIRES only db, alarm, and p4heap): it never

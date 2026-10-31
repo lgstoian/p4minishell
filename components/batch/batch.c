@@ -4712,6 +4712,39 @@ void shell_command_proc(int argc, char **argv)
     }
 }
 
+int batch_frame_trail(char *out, size_t out_size)
+{
+    shell_batch_frame_t *stack[SHELL_BATCH_DEPTH_MAX];
+    int count = 0;
+    int index;
+
+    if (out == NULL || out_size == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    for (shell_batch_frame_t *walk = s_active_batch_frame;
+         walk != NULL && count < SHELL_BATCH_DEPTH_MAX; walk = walk->parent) {
+        stack[count++] = walk;
+    }
+    /* Root first, current last: the web-breadcrumb reading order. */
+    for (index = count - 1; index >= 0; index--) {
+        size_t used = strlen(out);
+
+        if (used + 1 >= out_size) {
+            break;
+        }
+        if (used > 0) {
+            strncat(out, " > ", out_size - used - 1);
+            used = strlen(out);
+            if (used + 1 >= out_size) {
+                break;
+            }
+        }
+        strncat(out, stack[index]->args[0], out_size - used - 1);
+    }
+    return count;
+}
+
 /* ========================================================================
  * PERSISTENT STATE: ini + temp (all storage on the SD card)
  * ========================================================================

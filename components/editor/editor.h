@@ -4,6 +4,13 @@
  */
 /**
  * @file editor.h
+ * @module editor
+ * @layer leaf
+ * @domain app
+ * @provides modal text editor, syntax lexers, spell, recover
+ * @status stable
+ * @test test/main/test_editor.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief DOS-style inline text editor for P4MiniShell.
  *
  * A modal, touch-first text editor invoked with `edit <path>`. It edits any

@@ -7,6 +7,12 @@
 
 /**
  * @file c6ota.h
+ * @module c6ota
+ * @layer leaf
+ * @domain platform
+ * @provides ESP32-C6 co-processor OTA over SDIO
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief ESP32-C6 OTA update module via ESP-Hosted SDIO.
  *
  * Owns the full C6 firmware update workflow:

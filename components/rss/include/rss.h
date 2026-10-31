@@ -4,6 +4,12 @@
  */
 /**
  * @file rss.h
+ * @module rss
+ * @layer leaf
+ * @domain net
+ * @provides RSS/JSON-Feed reader over the shared JSON core
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief RSS 2.0 / Atom 1.0 / JSON Feed reader — public API.
  *
  * CONFIG POLICY (two tiers, no hardcoded limits):

@@ -7,6 +7,13 @@
 
 /**
  * @file header.h
+ * @module header
+ * @layer leaf
+ * @domain ui
+ * @provides status header: layout, classification, notifications, refresh
+ * @status stable
+ * @test test/main/test_header.c
+ * @hard-rule ai-context.md#header-bar-rules
  * @brief Fixed top status bar for P4MiniShell.
  *
  * Passive, display-only module owning the LVGL fixed top bar.

@@ -57,10 +57,14 @@ last campaign:
    (`git status`). Generated files (`build*/`, `sdkconfig.*`, `managed_components/`,
    `release/`, `screenshots/`, `assets_out/`) are git-ignored and must not be
    staged.
-2. **AI-comment sweep** — no `// AI:` comments anywhere (see
-   [`ai-context.md`](ai-context.md) §Audit and Hardening Rules):
+2. **Static gates** — no `// AI:` comments, the machine-readable tags are
+   valid, the breadcrumb map is current, and no test is vacuous (see
+   [`ai-context.md`](ai-context.md) §Audit and Hardening Rules and
+   [`docs/comment-tags.md`](docs/comment-tags.md)):
    ```
-   rg -n "// AI:" components main boards test || echo "clean"
+   python tools/comment_index.py
+   python tools/breadcrumbs.py
+   python tools/green_guard.py --strict
    ```
 3. **Version freeze** — update, in one change:
    - `p4minishell_config.h` `P4_CONFIG_VERSION_{MAJOR,MINOR,PATCH}` (+ the
@@ -111,6 +115,7 @@ a raw serial port.
 
 | # | Step | Command | Pass condition |
 |---|------|---------|----------------|
+| 0 | Static gates | `python tools/p4test_run.py --static` | green guard + comment index + breadcrumbs all OK |
 | 1 | Static checks | `python -m compileall tools apps` | no errors |
 | 2 | On-target unit tests | `python tools/unit_run.py COM3 COM6` | `=== All tests completed ===`, 0 failures on both; **refresh `test/README.md` count** |
 | 3 | Hardware suites | `python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1` | merged PASS table (both boards) + no board differential |

@@ -135,6 +135,28 @@ overflowed by ~200 B; it now uses a `goto` loop. The APPLIB probe is invoked
 with `if "%P4_APP_FEATURES%"=="1" gosub …` so it costs no batch frame when
 disabled. `s14_apps` is 187/187 on both boards.
 
+## Fixed findings (2026-10-31 debug sweep)
+
+### F54. Serial-console echoes showed `PS \>` instead of the live prompt - **FIXED, verified on the fast two-board gate**
+
+`shell_uart_console_submit_command()` appended the static `SHELL_PROMPT`
+(`PS \>`) to the transcript, while the serial console and the UI rendered the
+live prompt (`PS /sdcard>`). The transcript line therefore disagreed with the
+prompt, and a serial harness marker could be glued to a stale prompt (a COM6
+storage-suite marker timeout). The echo now expands `shell_prompt_expand()`
+into a local buffer, so all three paths show the same cwd. Verified on
+COM3/COM6 (`PS /sdcard> breadcrumb /b`).
+
+### F55. Tab5 screenshot lost its tail under two-board TX backpressure - **FIXED, verified on the fast two-board gate**
+
+A 2.7 MB Tab5 screenshot arrived 73 bytes short in the concurrent fast gate.
+The USB-Serial-JTAG writer's total budget was 10 s; a host pause while the
+other board was being serviced exceeded it and the writer dropped the tail.
+The budget is now 30 s (`P4_CONFIG_UART_WRITE_TOTAL_MS`), and the host
+`p4test.screenshot.capture()` retries a short BMPX frame (drain + re-issue,
+never Ctrl-C) before failing. Verified by the two-board fast gate (smoke +
+power-audio screenshots).
+
 ## Open findings
 
 None as of v1.4.1. F53 is closed below; the remaining entries document

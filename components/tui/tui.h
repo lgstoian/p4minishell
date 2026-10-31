@@ -4,6 +4,13 @@
  */
 /**
  * @file tui.h
+ * @module tui
+ * @layer leaf
+ * @domain ui
+ * @provides 80x25 cell buffer, draw primitives, workspace/pane/HUD
+ * @status stable
+ * @test test/main/test_tui.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief TUI cell buffer + drawing primitives for P4MiniShell.
  *
  * Logical grid P4_CONFIG_TUI_COLS x ROWS (default 80x25, 1-based DOS coords)

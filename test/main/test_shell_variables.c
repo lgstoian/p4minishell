@@ -267,6 +267,8 @@ void test_variable_expansion_null_output(void)
 {
     /* Should not crash. */
     shell_expand_variables("echo %VAR%", NULL, 0);
+    /* Explicit pass: a NULL output buffer must be a silent no-op. */
+    TEST_PASS();
 }
 
 /* ========================================================================

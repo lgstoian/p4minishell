@@ -5584,6 +5584,13 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* `breadcrumb` — the on-device location trail (cwd > batch stack > bg slot
+     * > modal). The repository-side counterpart is tools/breadcrumbs.py. */
+    if (shell_text_equals_ignore_case(argv[0], "breadcrumb")) {
+        shell_command_breadcrumb(argc, argv);
+        return true;
+    }
+
     /* `ini` — persistent state in KEY=VALUE files on the SD card (get/set/
      * del/list/load/save). */
     if (shell_text_equals_ignore_case(argv[0], "ini")) {

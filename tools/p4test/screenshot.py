@@ -122,33 +122,49 @@ def capture(dev: DeviceSession, out_dir: Optional[str] = None,
     """
     attempts = 4 if unwind else 2
     prelude = b""
+    raw = None
+    last_error = None
     for attempt in range(attempts):
         dev.reset_input()
         dev.write_line("screenshot")
         prelude = dev.read_until(b"streaming", 15.0)
-        if b"streaming" in prelude:
-            break
-        if attempt < attempts - 1:
-            if not unwind:
-                # A foreground app owns the input and will never yield it;
-                # leave it alive and let the caller record the miss.
+        if b"streaming" not in prelude:
+            if attempt < attempts - 1:
+                if not unwind:
+                    # A foreground app owns the input and will never yield it;
+                    # leave it alive and let the caller record the miss.
+                    time.sleep(0.6)
+                    continue
+                # A foreground app owning the input (a `key?` prompt) swallows
+                # the screenshot line; send the documented foreground break so
+                # it unwinds, then retry. Never use this while a batch under
+                # test owns the input: the break aborts the batch (ask/choice
+                # die).
+                try:
+                    dev.write(b"\x03\r\n")
+                except Exception:  # noqa: BLE001
+                    pass
                 time.sleep(0.6)
                 continue
-            # A foreground app owning the input (a `key?` prompt) swallows the
-            # screenshot line; send the documented foreground break so it
-            # unwinds, then retry. Never use this while a batch under test
-            # owns the input: the break aborts the batch (ask/choice die).
-            try:
-                dev.write(b"\x03\r\n")
-            except Exception:  # noqa: BLE001
-                pass
-            time.sleep(0.6)
-            continue
-        raise P4Error("screenshot: no streaming prelude; got %r" % prelude[-200:])
-    # consume the rest of the "... bytes to serial...\r\n" line so the next
-    # four bytes really are the BMPX magic.
-    dev.read_until(b"\n", 5.0)
-    raw = dev.read_binary_frame(b"BMPX", 15.0, timeout)
+            raise P4Error("screenshot: no streaming prelude; got %r" % prelude[-200:])
+        # consume the rest of the "... bytes to serial...\r\n" line so the next
+        # four bytes really are the BMPX magic.
+        dev.read_until(b"\n", 5.0)
+        try:
+            raw = dev.read_binary_frame(b"BMPX", 15.0, timeout)
+            break
+        except P4Error as exc:
+            # A short frame means the board dropped the tail under TX
+            # backpressure (a host pause can exceed the firmware's bounded
+            # write wait). The command itself completed, so drain and re-issue;
+            # do NOT send Ctrl-C here.
+            last_error = exc
+            if attempt < attempts - 1:
+                dev.read_for(0.5)
+                continue
+            raise
+    if raw is None:
+        raise P4Error("screenshot: no frame (%s)" % last_error)
     bmp = _parse_bmp(raw)
     if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)

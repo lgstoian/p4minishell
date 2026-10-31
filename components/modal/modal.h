@@ -4,6 +4,13 @@
  */
 /**
  * @file modal.h
+ * @module modal
+ * @layer leaf
+ * @domain ui
+ * @provides shared modal runtime + surfaces (dialog/list/ask/view)
+ * @status stable
+ * @test test/main/test_modal.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Shared modal-surface runtime for P4MiniShell.
  *
  * The Hybrid route makes batch files the apps and native code the polished

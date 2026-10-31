@@ -283,6 +283,9 @@ static void trash_delete_entry(const trash_entry_t *entry)
  */
 typedef int (*trash_visit_cb)(const trash_entry_t *entry, void *arg);
 
+/** Epoch prefix of a trash entry name (`<epoch>_<name>`); 0 when absent. */
+static uint64_t trash_stamp_from_name(const char *name);
+
 static esp_err_t trash_walk(trash_visit_cb cb, void *arg)
 {
     DIR *dir;
@@ -319,7 +322,56 @@ static esp_err_t trash_walk(trash_visit_cb cb, void *arg)
     return ESP_OK;
 }
 
-/** Move a resolved file or directory tree into the trash (or delete it). */
+/** Walk entries without reading their `.meta` files.
+ *
+ * `trash info` needs only the entry count, total size, and oldest stamp; all
+ * three are available from the directory entry name (the epoch prefix) plus a
+ * `stat`. Reading every `.meta` made `trash info` O(entries) slow file reads
+ * (~7.7 s for 243 entries on Tab5) for data it never printed. `trash list`
+ * and `undelete` still use the full `trash_walk()` because they need the
+ * original path.
+ */
+static esp_err_t trash_walk_stat(trash_visit_cb cb, void *arg)
+{
+    DIR *dir;
+    struct dirent *entry;
+    int count = 0;
+
+    dir = opendir(trash_root_path());
+    if (dir == NULL) {
+        return (errno == ENOENT) ? ESP_ERR_NOT_FOUND : ESP_FAIL;
+    }
+    while ((entry = readdir(dir)) != NULL) {
+        size_t len;
+        trash_entry_t e;
+        char full[TRASH_FULL_PATH_BYTES];
+        struct stat st;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        len = strlen(entry->d_name);
+        if (len > 5 && strcmp(entry->d_name + len - 5, ".meta") == 0) {
+            continue;
+        }
+        if (count >= TRASH_MAX_ENTRIES) {
+            break;
+        }
+        memset(&e, 0, sizeof(e));
+        snprintf(e.entry_name, sizeof(e.entry_name), "%s", entry->d_name);
+        e.time_sec = trash_stamp_from_name(entry->d_name);
+        snprintf(full, sizeof(full), "%s/%s", trash_root_path(), entry->d_name);
+        if (stat(full, &st) == 0 && !S_ISDIR(st.st_mode)) {
+            e.size = (uint64_t)st.st_size;
+        }
+        if (cb != NULL && cb(&e, arg) != 0) {
+            break;
+        }
+        count++;
+    }
+    closedir(dir);
+    return ESP_OK;
+}
 static esp_err_t trash_move_entry(const char *resolved_path, bool is_dir, bool permanent)
 {
     char entry_name[TRASH_PATH_BYTES];
@@ -785,7 +837,7 @@ esp_err_t storage_trash_info(void)
     if (err != ESP_OK) {
         return err;
     }
-    err = trash_walk(trash_info_cb, &info);
+    err = trash_walk_stat(trash_info_cb, &info);
     shell_sd_end(&session, TRASH_TAG);
 
     shell_transcript_appendf_ansi(SH_HEAD "Trash" SH_RST "\n");

@@ -105,6 +105,8 @@ void test_applib_strndup(void)
 void test_applib_free_null(void)
 {
     app_free(NULL);   /* must be a no-op */
+    /* Explicit pass: the assertion is that the call returns without faulting. */
+    TEST_PASS();
 }
 
 /* ========================================================================

@@ -7,6 +7,12 @@
 
 /**
  * @file led.h
+ * @module led
+ * @layer leaf
+ * @domain platform
+ * @provides WS2812 status/notification LED engine
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief RGB status LED (WS2812 on GPIO26) driver and status/notification engine.
  *
  * The Guition JC1060P470 board carries a WS2812 (NeoPixel-style) addressable

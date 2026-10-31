@@ -4,6 +4,13 @@
  */
 /**
  * @file math_disp.h
+ * @module math_disp
+ * @layer leaf
+ * @domain app
+ * @provides natural-display math editor + CAS/math command surface
+ * @status stable
+ * @test test/main/test_calc.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Natural Display math expression layout/rendering/editing engine.
  *
  * This component provides Natural Display (2D math layout) capabilities:

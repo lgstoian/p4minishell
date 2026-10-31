@@ -4,6 +4,12 @@
  */
 /**
  * @file imagefmt.h
+ * @module imagefmt
+ * @layer leaf
+ * @domain media
+ * @provides image format caps and validation
+ * @status stable
+ * @hard-rule ai-context.md#image-support-rules
  * @brief Tiny image-format helpers shared by the screenshot and camera paths.
  *
  * The only format this firmware emits today is a bottom-up 24-bit BI_RGB BMP,

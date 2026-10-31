@@ -4,6 +4,12 @@
  */
 /**
  * @file display.h
+ * @module display
+ * @layer leaf
+ * @domain ui
+ * @provides LVGL display bring-up, rotation, backlight
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Display manager for P4MiniShell — rotation, resolution, refresh rate, backlight.
  *
  * Central display controller that owns all display hardware state and operations.

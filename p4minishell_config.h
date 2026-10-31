@@ -2977,7 +2977,7 @@
  *  gives up only after this many ms with no progress (a genuinely unresponsive
  *  host). The transcript mirror does NOT use this bound (see shell.c): retrying
  *  a full TX ring there would starve the console reader. */
-#define P4_CONFIG_UART_WRITE_TOTAL_MS            10000
+#define P4_CONFIG_UART_WRITE_TOTAL_MS            30000
 
 /**
  * Grace period, in milliseconds, after the connection monitor first reports

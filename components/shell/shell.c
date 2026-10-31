@@ -4204,7 +4204,20 @@ void shell_uart_console_submit_command(const char *command)
         return;
     }
 
-    shell_transcript_appendf("%s%s\n", SHELL_PROMPT, transcript_command);
+    /* Echo the submitted line with the SAME prompt the UI and the serial
+     * prompt use. The old static SHELL_PROMPT always showed "\" regardless of
+     * the cwd, so a serial command's transcript line disagreed with the prompt
+     * (and a harness marker could not be found reliably). Build into a local
+     * buffer: shell_prompt_render_plain() returns a shared static. */
+    {
+        char prompt_buf[SHELL_PROMPT_RENDER_BYTES];
+
+        shell_prompt_expand(prompt_buf, sizeof(prompt_buf), false);
+        if (prompt_buf[0] == '\0') {
+            snprintf(prompt_buf, sizeof(prompt_buf), "%s", SHELL_PROMPT);
+        }
+        shell_transcript_appendf("%s%s\n", prompt_buf, transcript_command);
+    }
     if (shell_command_should_store_history(command_copy)) {
         shell_store_command_history(command_copy);
     }
@@ -5214,6 +5227,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "endlocal", "endlocal - end a local environment scope" },
     { "exit",     "exit [/b] [code] - leave a batch file or the shell" },
     { "proc",     "proc [/args | /name | /depth | /errorlevel | /echo | /stdin | /labels | /goto] - introspect the batch process stack" },
+    { "breadcrumb", "breadcrumb [/b] - print the current location trail (cwd > batch stack > bg slot > modal)" },
     { "ini",      "ini <list|get|set|del|load|save> <file> [key] [value] - persistent state in KEY=VALUE files on the SD card" },
     { "appconfig", "appconfig <app> [path|list|get|set|del] [key] [value] - per-app settings (sd:/APPS/<APP>.INI)" },
     { "temp",     "temp [new [ext] | clean] - SD-backed temporary files" },

@@ -4,6 +4,13 @@
  */
 /**
  * @file strutil.h
+ * @module strutil
+ * @layer leaf
+ * @domain core
+ * @provides shared case-insensitive compare + arg split
+ * @status stable
+ * @test test/main/test_himem.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Shared string helpers (case-insensitive compare, argument split,
  * hexdump row formatting).
  *

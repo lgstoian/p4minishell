@@ -4,6 +4,13 @@
  */
 /**
  * @file portal.h
+ * @module portal
+ * @layer leaf
+ * @domain net
+ * @provides first-run captive portal
+ * @status stable
+ * @test test/main/test_portal.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Captive-portal Wi-Fi setup for first-run without an SD card.
  *
  * When the device boots without a configured Wi-Fi network the portal

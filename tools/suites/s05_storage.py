@@ -21,6 +21,9 @@ NAME = "storage"
 TAGS = ["core", "sd"]
 
 D = "sd:/P4TEST"
+# Tab5's SDIO is slow and the recycle-bin scan is O(entries); give the
+# trash/undelete operations a realistic budget instead of the 30 s default.
+TRASH_TIMEOUT = 60.0
 
 
 def _confirm_destructive(dev, cmd, timeout=90.0):
@@ -88,17 +91,17 @@ def run(dev, ctx):
     # ---- del -> trash -> undelete / restore --------------------------
     ft = "%s/P4TRASH%s.TXT" % (D, stamp)
     dev.run('write %s "P4TRASHLINE-%s"' % (ft, stamp))
-    out = dev.run("del %s" % ft)
+    out = dev.run("del %s" % ft, timeout=TRASH_TIMEOUT)
     c.expect("del moves to trash", "moved to", out)
-    out = dev.run("trash list")
+    out = dev.run("trash list", timeout=TRASH_TIMEOUT)
     c.expect("trash list shows entry", "P4TRASH%s.TXT" % stamp, out)
-    out = dev.run("trash info")
+    out = dev.run("trash info", timeout=TRASH_TIMEOUT)
     c.expect("trash info counts entries", "entries:", out)
-    out = dev.run("undelete P4TRASH%s.TXT" % stamp)
+    out = dev.run("undelete P4TRASH%s.TXT" % stamp, timeout=TRASH_TIMEOUT)
     c.expect("undelete restores", "restored", out)
     out = dev.run("type %s" % ft)
     c.expect("restored content", "P4TRASHLINE-%s" % stamp, out)
-    out = dev.run("del /p %s" % ft)
+    out = dev.run("del /p %s" % ft, timeout=TRASH_TIMEOUT)
     c.expect("del /p permanent", "deleted", out)
     out = dev.run("if exist %s echo P4TRASHLEFT" % ft)
     c.expect("del /p removed file", "P4TRASHLEFT", out, want=False)

@@ -4,6 +4,13 @@
  */
 /**
  * @file shell.h
+ * @module shell
+ * @layer shell
+ * @domain core
+ * @provides transcript, prompt, key queue, history, debug log, UART console
+ * @status stable
+ * @test test/main/test_shell_parser.c, test/main/test_shell_history.c, test/main/test_shell_prompt.c
+ * @hard-rule ai-context.md#shell-core-rules
  * @brief Shell core module for P4MiniShell — transcript, history, debug log,
  *        UART console, boot banner, system info commands, and utility functions.
  *

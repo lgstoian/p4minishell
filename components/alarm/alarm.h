@@ -4,6 +4,13 @@
  */
 /**
  * @file alarm.h
+ * @module alarm
+ * @layer leaf
+ * @domain data
+ * @provides SD-persisted alarm/event store + background checker
+ * @status stable
+ * @test test/main/test_alarm.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief SD-persisted alarm / event store + one background checker task.
  *
  * A small, batch-friendly alarm system for P4MiniShell:

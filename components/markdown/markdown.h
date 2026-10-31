@@ -4,6 +4,13 @@
  */
 /**
  * @file markdown.h
+ * @module markdown
+ * @layer leaf
+ * @domain app
+ * @provides Markdown/HTML renderers, DOM, CSS, print paginator
+ * @status stable
+ * @test test/main/test_markdown.c, test/main/test_html.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Markdown rendering for P4MiniShell (CommonMark-ish subset).
  *
  * Line mode (`markdown_render_line`) renders single blocks (headings,

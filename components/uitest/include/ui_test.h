@@ -4,6 +4,12 @@
  */
 /**
  * @file ui_test.h
+ * @module uitest
+ * @layer leaf
+ * @domain ui
+ * @provides synthetic LVGL pointer/keyboard test verbs
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Synthetic touch injection for firmware UI automation and tests.
  *
  * Owns a second LVGL pointer indev whose read callback reports a scripted

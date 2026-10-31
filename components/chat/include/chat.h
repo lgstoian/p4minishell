@@ -4,6 +4,13 @@
  */
 /**
  * @file chat.h
+ * @module chat
+ * @layer leaf
+ * @domain net
+ * @provides board-to-board CLI chat
+ * @status stable
+ * @test test/main/test_chat.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Board-to-board chat transport (leaf module, mirrors portal pattern).
  *
  * A minimal CLI chat between two P4MiniShell boards. One board runs a

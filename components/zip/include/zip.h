@@ -4,6 +4,12 @@
  */
 /**
  * @file zip.h
+ * @module zip
+ * @layer leaf
+ * @domain fs
+ * @provides the ONE ZIP reader
+ * @status stable
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Minimal ZIP reader for EPUB extraction.
  *
  * A bounded, streaming ZIP reader tailored for EPUB extraction:

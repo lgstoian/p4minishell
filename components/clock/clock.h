@@ -2,6 +2,17 @@
  * SPDX-FileCopyrightText: 2026 Stoian Alexandru
  * SPDX-License-Identifier: MIT
  */
+/**
+ * @file clock.h
+ * @module clock
+ * @layer leaf
+ * @domain platform
+ * @provides RTC/time anchor, timers, stopwatch, locale
+ * @status stable
+ * @test test/main/test_clock.c, test/main/test_locale.c
+ * @hard-rule ai-context.md#module-layering-rules
+ * @brief RTC/time anchor, timers, stopwatch, locale.
+ */
 #ifndef P4MINISHELL_CLOCK_H
 #define P4MINISHELL_CLOCK_H
 #include <stdbool.h>

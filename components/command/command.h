@@ -4,6 +4,13 @@
  */
 /**
  * @file command.h
+ * @module command
+ * @layer command
+ * @domain core
+ * @provides the one command dispatcher + worker + built-in verbs
+ * @status stable
+ * @test test/main/test_shell_parser.c, test/main/test_assoc.c, test/main/test_screen.c, test/main/test_config.c, test/main/test_breadcrumb.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Command parser and dispatcher for P4MiniShell.
  *
  * Owns the command execution pipeline â€” variable-expansion entry, output
@@ -82,6 +89,25 @@ void shell_execute_command_async(char *command);
  * @return true if OTA confirmation is pending.
  */
 bool shell_command_ota_is_pending(void);
+
+/**
+ * `breadcrumb` — print the current shell location trail
+ * (`cwd=... | batch=ROOT.BAT > CHILD.BAT | bg=N | modal=on|off`).
+ *
+ * `/b` prints one bare machine-readable line. The trail is assembled from the
+ * existing accessors (storage cwd, batch frame stack, background slot, modal
+ * runtime); there is no second state store. ERRORLEVEL 0 ok, 2 usage.
+ */
+void shell_command_breadcrumb(int argc, char **argv);
+
+/**
+ * Format the breadcrumb trail. Pure (no SD, LVGL, or batch-frame access), so it
+ * is unit-testable. @p batch_trail is the pre-rendered frame stack; NULL/empty
+ * prints `none`. @p out is always NUL-terminated when @p out_size > 0.
+ */
+void command_breadcrumb_format(const char *cwd, const char *batch_trail,
+                               int bg_slot, bool modal_active,
+                               char *out, size_t out_size);
 
 /* ========================================================================
  * TASK MANAGER PRIORITY HELPERS (pure, unit-tested)

@@ -39,10 +39,17 @@ void test_tui_default_color_roundtrip(void)
 
 void test_tui_default_color_null_safe(void)
 {
+    uint8_t fg = 0;
+    uint8_t bg = 0;
+
     /* NULL outputs are ignored, never dereferenced. */
     tui_set_default_color(7, 0);
     tui_get_default_color(NULL, NULL);
-    tui_get_default_color(NULL, &(uint8_t){0});
+    tui_get_default_color(NULL, &bg);
+    tui_get_default_color(&fg, NULL);
+    tui_get_default_color(&fg, &bg);
+    TEST_ASSERT_EQUAL_UINT8(7, fg);
+    TEST_ASSERT_EQUAL_UINT8(0, bg);
 }
 
 void test_tui_cursor_save_restore(void)

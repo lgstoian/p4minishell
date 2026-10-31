@@ -4,6 +4,13 @@
  */
 /**
  * @file font.h
+ * @module font
+ * @layer leaf
+ * @domain ui
+ * @provides font registry, SD TTF, CJK, theme registry
+ * @status stable
+ * @test test/main/test_theme.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief Unified font registry with roles and fallback chains.
  *
  * Two roles: TERMINAL (pure monospace bitmap; transcript, TUI, editor,

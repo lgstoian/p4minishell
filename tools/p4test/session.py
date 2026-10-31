@@ -30,6 +30,9 @@ from shell_session import default_port, hard_reset, open_port  # noqa: E402
 ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 ANSI_STR_RE = re.compile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
 PROMPT_GLUED = re.compile(r"^(?:PS \S*> *)+")
+# A prompt may appear anywhere on a line when the serial-console prompt, the
+# transcript echo, and the command output are glued together (see _marked).
+PROMPT_ANY = re.compile(r"PS [^\s>]*> *")
 # ROM boot-log reset-cause line, e.g. `rst:0x9 (TG1WDT_SYS_RST)`. The name in
 # parentheses (when present) is kept verbatim, so attribution never depends on
 # a local table; the raw code survives either way. This is how a silent reboot
@@ -216,9 +219,14 @@ class DeviceSession:
     def _marked(text: str, tag: str) -> bool:
         for line in text.splitlines():
             raw = strip_ansi(line)
-            if ("echo %s" % tag) in raw:
-                continue
-            if PROMPT_GLUED.sub("", raw).strip() == tag:
+            # The command echo (`echo <tag>`) and the tag output can share a
+            # line when a prompt, the transcript echo, and the output are glued
+            # (the serial console and the UI render prompts independently).
+            # Remove the echo wherever it appears, strip any prompt, then
+            # require the remaining text to be exactly the tag.
+            probe = raw.replace("echo %s" % tag, "")
+            probe = PROMPT_ANY.sub("", probe).strip()
+            if probe == tag:
                 return True
         return False
 

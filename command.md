@@ -1590,6 +1590,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | exit /b [code] | Leave only the current batch file |
 | proc | List every active batch process (script, depth, args, echo state) |
 | proc /args \| /name \| /depth \| /errorlevel \| /echo \| /stdin | Report the current batch process's arguments, name (%0), depth, exit code, echo state, or active pipe/`<` input source |
+| breadcrumb [/b] | Print the current location trail (`cwd > batch stack > bg slot > modal`); `/b` is one bare machine-readable line |
 | ini list <file> | List every `KEY=VALUE` line in an INI file on the SD card |
 | ini get <file> <key> | Print the value of `<key>` in an INI file |
 | ini set <file> <key> <value> | Create or update `<key>` in an INI file |

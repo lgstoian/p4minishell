@@ -32,10 +32,40 @@ does" reference in [documentation.md](documentation.md).
   `p4minishell_config.h`, mirrored in `p4minishell_config.yaml`. Hardware pins
   live in `boards/<name>/board_config.h` / `.yaml` (default
   `boards/jc1060p470c/`, selected by `-DP4_BOARD=`); build options in `sdkconfig`.
-- **No `// AI:` comments.** Write plain descriptive comments. Replace any that
-  exist.
+- **No `// AI:` comments.** Write plain descriptive comments. The sanctioned
+  machine-readable form is the tag block in
+  [`docs/comment-tags.md`](docs/comment-tags.md)
+  (`@module`/`@layer`/`@domain`/`@provides`/`@status`/`@test`/`@hard-rule`);
+  a `// AI:` marker is still a release-blocking defect. Replace any that exist.
 - **Docs follow code.** Update them in the same change (see Documentation
   Updates below).
+
+## 0.1 Agent breadcrumbs, false-green guard, and machine-readable comments
+
+Three host-side systems make the tree navigable and keep "green" honest. They
+are additive; they do not replace this document.
+
+- **Breadcrumbs.** [`AGENTS.md`](AGENTS.md) is the orientation entry point;
+  [`BREADCRUMBS.md`](BREADCRUMBS.md) + `breadcrumbs.json` are the generated
+  module map (layer/domain/provides/tests/rules and a per-file trail).
+  `python tools/breadcrumbs.py --for <path>` prints one file's trail. Every
+  component's primary header carries the machine-readable tag block documented
+  in [`docs/comment-tags.md`](docs/comment-tags.md). Dependencies stay in each
+  component's `CMakeLists.txt` `REQUIRES`; never copy them into a comment.
+- **Activity trail.** `python tools/agent_trail.py record ...` appends to
+  `.agent/trail.jsonl` (git-ignored); `list`/`summary`/`export-md` read it.
+  Record one short entry per task so the next agent can follow the work.
+- **False-green guard.** `python tools/green_guard.py` rejects assertion-free
+  Unity tests, declared-but-never-run tests, test files missing from the test
+  `CMakeLists.txt`, zero-check `Checklist` suites, and tautological assertions.
+  The p4test runner also treats a zero-assertion `Checklist`/`SuiteResult` as a
+  failure. `python tools/p4test_run.py --static` runs the guards without
+  hardware; `--guard` runs them before a hardware run.
+- **On-device trail.** The `breadcrumb` verb prints the live location trail
+  (`cwd > batch stack > bg slot > modal`); `/b` is one machine-readable line.
+
+Regenerate the committed manifests after changing tags or components:
+`python tools/comment_index.py --write` then `python tools/breadcrumbs.py --write`.
 
 ## 1. Project snapshot
 
@@ -366,6 +396,10 @@ the bug-campaign log live in [`bugs.md`](bugs.md).
 
 ```
 main/            app entry, boot sequencing, LVGL event callbacks, host bridges
+AGENTS.md        agent orientation entry point (read this first)
+BREADCRUMBS.md   generated module map; breadcrumbs.json is the machine form
+comment-index.json  generated manifest of the header tags
+docs/comment-tags.md  the machine-readable comment vocabulary
 p4minishell_config.h/.yaml   central tunables (C source of truth + documentation)
 boards/<name>/board_config.h/.yaml  board profile: pins, display timing (jc1060p470c + m5stack_tab5, see PORTING.md)
 boards/<name>/board_bsp/            staged `board_bsp` component (thin wrapper or vendored BSP)
@@ -513,6 +547,11 @@ tools use a webcam to observe the device; prefer them over guessing.
   errors and zero warnings, the on-board unit suite is green
   (`tools/unit_run.py COM3`), and the affected hardware behaviour is verified
   on the board. Reflash the main firmware after any test-app run.
+- **No false green.** Every test must assert something (or use Unity's explicit
+  `TEST_PASS()` for a survival test), every declared test must be `RUN_TEST`-ed,
+  and every host suite must record at least one check. `tools/green_guard.py`
+  enforces the static side and the p4test runner treats a zero-assertion suite
+  as a failure.
 
 ### Comments
 - All major sections need descriptive comments explaining purpose and behavior

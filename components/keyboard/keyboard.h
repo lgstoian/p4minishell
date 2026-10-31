@@ -4,6 +4,13 @@
  */
 /**
  * @file keyboard.h
+ * @module keyboard
+ * @layer leaf
+ * @domain ui
+ * @provides on-screen keyboard pages + external input state
+ * @status stable
+ * @test test/main/test_keyboard.c
+ * @hard-rule ai-context.md#module-layering-rules
  * @brief On-screen keyboard manager for P4MiniShell LVGL shell UI.
  *
  * Owns the LVGL keyboard widget and all keyboard-related state:
