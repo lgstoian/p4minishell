@@ -155,7 +155,10 @@ def run(dev, ctx):
     c.expect("back returns to the page", "RenderHeading", dump)
 
     dev.run("browser forward", timeout=60, settle=2.0)
-    c.expect("forward returns to the page", "RenderHeading", _dump(dev))
+    # Forward returns to the page after RENDER.HTML (the root directory
+    # listing), not back to RENDER.HTML itself. Assert the listing's stable
+    # heading rather than the previous page's marker.
+    c.expect("forward returns to the root listing", "P4MiniShell SD share", _dump(dev))
 
     # -- bookmarks ----------------------------------------------------------
     out = dev.run("browser bookmark add bench %s" % url, timeout=15)
