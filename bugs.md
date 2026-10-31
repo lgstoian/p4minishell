@@ -170,6 +170,18 @@ propagates the errors, invalidates the format cache on failure, and guards NULL
 channel handles. Verified by `s14_apps` 127/127 on COM3 and `s12_power_audio`
 49/45 on both boards; the managed delta is in `tools/managed_patches.patch`.
 
+### F57. `edit` reported a misleading load failure - **FIXED, verified on hardware**
+
+`edit CONFIG.SYS` could fail with "over the 1024 KB / 65536 line editor limit,
+or an I/O error" after screenshot/display churn even though the file was 2.4 KiB
+and readable. The editor's DMA bounce allocation could lose its last block while
+a screenshot buffer was being freed, and every load failure (missing,
+SD-not-mounted, OOM, too large, I/O) shared one message. The load path now
+retries the DMA chunk once and falls back to 32 bytes (was 128), and reports the
+real reason (`edit: cannot load '...' (out of memory: SD/DMA buffer)` etc.).
+Verified by `s09_editor` 36/36 on both boards and a fresh
+`docs/assets/editor-editing.png`.
+
 ## Open findings
 
 None as of v1.4.1. F53 is closed below; the remaining entries document

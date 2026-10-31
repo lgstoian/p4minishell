@@ -201,6 +201,19 @@ editor_doc_t *editor_doc_new(const char *path);
  *  Returns NULL on failure (missing file, too large, allocation failure). */
 editor_doc_t *editor_doc_load(const char *path);
 
+/** Load with a machine-readable failure reason (for the `edit` error message).
+ *
+ *  @param path        File to load.
+ *  @param reason_out  Optional. Set to ESP_OK on success, or one of
+ *                     ESP_ERR_NOT_FOUND (missing/unreadable),
+ *                     ESP_ERR_INVALID_SIZE (over the size/line limit),
+ *                     ESP_ERR_NO_MEM (DMA/heap allocation),
+ *                     ESP_ERR_INVALID_STATE (SD not mounted),
+ *                     ESP_ERR_INVALID_ARG (bad path), or ESP_FAIL (I/O).
+ *  @return The document, or NULL on failure.
+ */
+editor_doc_t *editor_doc_load_ex(const char *path, esp_err_t *reason_out);
+
 /** Free a document and all its lines. */
 void editor_doc_free(editor_doc_t *doc);
 

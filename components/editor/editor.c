@@ -89,12 +89,14 @@ static void *editor_dma_alloc(size_t size)
     return p4heap_alloc_dma(size);
 }
 
-/* Last-resort bounce buffer: 128 bytes, allocated only when the normal 4 KB
+/* Last-resort bounce buffer: 32 bytes, allocated only when the normal 4 KB
  * chunk (and every smaller halving) fails. It is NOT reserved at boot: a
  * permanent reserve stole DMA from I2S and made `beep` abort on Tab5. .bss is
  * not guaranteed DMA-capable on this SoC, so this must be a real heap block.
- * The caller frees it. */
-#define EDITOR_IO_FALLBACK_BYTES 128
+ * 32 bytes is one cache line and still moves a small file; a screenshot or
+ * display buffer being freed can otherwise leave only tiny DMA blocks. The
+ * caller frees it. */
+#define EDITOR_IO_FALLBACK_BYTES 32
 
 void *editor_io_fallback(size_t *size_out)
 {
@@ -145,7 +147,7 @@ static void *editor_dma_alloc_chunk(size_t *size_out)
     size_t size = EDITOR_SD_CHUNK_BYTES;
     void *ptr = NULL;
 
-    while (size >= 128) {
+    while (size >= 32) {
         /* One spare byte lets the loader prepend a carried '\r'. */
         ptr = editor_dma_alloc(size + 1);
         if (ptr != NULL) {
@@ -455,7 +457,7 @@ static bool editor_doc_append_bytes(editor_doc_t *doc, const char *buf, size_t l
     return true;
 }
 
-editor_doc_t *editor_doc_load(const char *path)
+editor_doc_t *editor_doc_load_ex(const char *path, esp_err_t *reason_out)
 {
     editor_doc_t *doc;
     char resolved[P4_CONFIG_SD_PATH_BYTES];
@@ -467,30 +469,49 @@ editor_doc_t *editor_doc_load(const char *path)
     size_t file_size;
     size_t read_total = 0;
     esp_err_t err;
+    esp_err_t reason = ESP_FAIL;
     bool ok = false;
 
+    if (reason_out != NULL) {
+        *reason_out = ESP_OK;
+    }
     if (path == NULL || path[0] == '\0') {
+        if (reason_out != NULL) {
+            *reason_out = ESP_ERR_INVALID_ARG;
+        }
         return NULL;
     }
 
     err = shell_fs_resolve_path(path, resolved, sizeof(resolved));
     if (err != ESP_OK) {
+        if (reason_out != NULL) {
+            *reason_out = ESP_ERR_INVALID_ARG;
+        }
         return NULL;
     }
 
     err = shell_sd_begin(&session);
     if (err != ESP_OK) {
+        if (reason_out != NULL) {
+            *reason_out = ESP_ERR_INVALID_STATE;
+        }
         return NULL;
     }
 
     if (stat(resolved, &st) != 0 || !S_ISREG(st.st_mode)) {
         shell_sd_end(&session, "edit");
+        if (reason_out != NULL) {
+            *reason_out = ESP_ERR_NOT_FOUND;
+        }
         return NULL;
     }
 
     file_size = (size_t)st.st_size;
     if (file_size > P4_CONFIG_EDITOR_MAX_BYTES) {
         shell_sd_end(&session, "edit");
+        if (reason_out != NULL) {
+            *reason_out = ESP_ERR_INVALID_SIZE;
+        }
         return NULL;
     }
 
@@ -501,6 +522,9 @@ editor_doc_t *editor_doc_load(const char *path)
             fclose(file);
         }
         shell_sd_end(&session, "edit");
+        if (reason_out != NULL) {
+            *reason_out = ESP_ERR_NO_MEM;
+        }
         return NULL;
     }
     snprintf(doc->path, sizeof(doc->path), "%s", path);
@@ -514,7 +538,18 @@ editor_doc_t *editor_doc_load(const char *path)
         bool pending_cr = false;
 
         chunk = editor_dma_alloc_chunk(&chunk_size);
+        if (chunk == NULL) {
+            /* A screenshot/display buffer may be mid-free; one short retry
+             * recovers the small fallback chunk without a visible delay. */
+            vTaskDelay(pdMS_TO_TICKS(20));
+            chunk = editor_dma_alloc_chunk(&chunk_size);
+        }
         ok = (file != NULL && chunk != NULL);
+        if (file == NULL) {
+            reason = ESP_FAIL;
+        } else if (chunk == NULL) {
+            reason = ESP_ERR_NO_MEM;
+        }
         while (ok) {
             size_t off = 0;
             size_t got;
@@ -530,6 +565,7 @@ editor_doc_t *editor_doc_load(const char *path)
                 if (off > 0) {
                     if (!editor_doc_append_bytes(doc, chunk, 1)) {
                         ok = false;
+                        reason = ESP_ERR_INVALID_SIZE;
                     } else {
                         read_total += 1;
                     }
@@ -544,11 +580,14 @@ editor_doc_t *editor_doc_load(const char *path)
             if (total > 0) {
                 if (!editor_doc_append_bytes(doc, chunk, total)) {
                     ok = false;
+                    reason = ESP_ERR_INVALID_SIZE;
                     break;
                 }
                 read_total += total;
             }
         }
+    } else {
+        reason = ESP_ERR_NO_MEM;
     }
     editor_dma_free(chunk);
     chunk = NULL;
@@ -579,6 +618,9 @@ editor_doc_t *editor_doc_load(const char *path)
         if (doc != NULL) {
             editor_doc_free(doc);
         }
+        if (reason_out != NULL) {
+            *reason_out = reason;
+        }
         return NULL;
     }
 
@@ -591,6 +633,11 @@ editor_doc_t *editor_doc_load(const char *path)
     }
 
     return doc;
+}
+
+editor_doc_t *editor_doc_load(const char *path)
+{
+    return editor_doc_load_ex(path, NULL);
 }
 
 bool editor_file_missing(const char *resolved_path)
@@ -3122,18 +3169,42 @@ static bool editor_surface_open(void *ctx, EventGroupHandle_t event_group)
         session->control.doc = editor_doc_new(NULL);
     } else if (!editor_file_missing(resolved)) {
         /* The file exists (or SD is present): a load failure now is a
-         * real error. Never fall through to a fresh buffer here — the
+         * real error. Never fall through to a fresh buffer here - the
          * user would save an empty buffer over the original file. */
-        session->control.doc = editor_doc_load(resolved);
-        if (session->control.doc == NULL) {
-            free(session);
-            shell_print_error("edit: cannot load '%s' (over the %u KB / %u line "
-                              "editor limit, or an I/O error)",
-                              path,
-                              (unsigned)(P4_CONFIG_EDITOR_MAX_BYTES / 1024),
-                              (unsigned)P4_CONFIG_EDITOR_MAX_LINES);
-            mctx->result = ESP_ERR_NOT_SUPPORTED;
-            return false;
+        {
+            esp_err_t load_err = ESP_OK;
+
+            session->control.doc = editor_doc_load_ex(resolved, &load_err);
+            if (session->control.doc == NULL) {
+                free(session);
+                switch (load_err) {
+                case ESP_ERR_NOT_FOUND:
+                    shell_print_error("edit: cannot load '%s' (not found or unreadable)",
+                                      path);
+                    break;
+                case ESP_ERR_INVALID_SIZE:
+                    shell_print_error("edit: cannot load '%s' (over the %u KB / %u line limit)",
+                                      path,
+                                      (unsigned)(P4_CONFIG_EDITOR_MAX_BYTES / 1024),
+                                      (unsigned)P4_CONFIG_EDITOR_MAX_LINES);
+                    break;
+                case ESP_ERR_NO_MEM:
+                    shell_print_error("edit: cannot load '%s' (out of memory: SD/DMA buffer)",
+                                      path);
+                    break;
+                case ESP_ERR_INVALID_STATE:
+                    shell_print_error("edit: cannot load '%s' (SD card not mounted)", path);
+                    break;
+                case ESP_ERR_INVALID_ARG:
+                    shell_print_error("edit: cannot load '%s' (invalid path)", path);
+                    break;
+                default:
+                    shell_print_error("edit: cannot load '%s' (I/O error)", path);
+                    break;
+                }
+                mctx->result = ESP_ERR_NOT_SUPPORTED;
+                return false;
+            }
         }
     } else {
         /* Missing file: start a new buffer bound to the path. */

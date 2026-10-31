@@ -81,11 +81,21 @@ open bugs see [`bugs.md`](bugs.md).
   `set_fmt`/`enable` errors, invalidates the format cache on a failed reconfig,
   and guards NULL channel handles in `set_fs`/`set_drv_fs`. Verified by
   `s14_apps` 127/127 on COM3 and `s12_power_audio` 49/45 on both boards.
+- **F57 - `edit` reported a misleading "over the limit or I/O error" for any
+  load failure.** The load path now reports the real reason (not found, SD not
+  mounted, out of memory/DMA, too large, I/O), retries the DMA bounce
+  allocation once, and falls back to a 32-byte chunk (was 128) so a
+  screenshot/display buffer being freed cannot block the editor. Verified by
+  `s09_editor` 36/36 on both boards and the refreshed
+  `docs/assets/editor-editing.png`.
 
 ### Changed
 
 - Firmware and `test/` build clean (zero warnings) on `jc1060p470c`; the test
   app gains `test_breadcrumb.c` (4 cases) and the five re-registered tests.
+- Refreshed the curated `docs/assets/` screenshots with
+  `tools/capture_docs.py`; the editor shot now shows `CONFIG.SYS` open with the
+  Nav page.
 
 ---
 
