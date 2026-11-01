@@ -598,6 +598,12 @@
 /** Maximum total in-page JavaScript bytes per page. */
 #define P4_CONFIG_BROWSER_JS_MAX_BYTES          (16 * 1024)
 
+/** Enable in-page `<script>` execution in the browser (0/1). */
+#define P4_CONFIG_BROWSER_JS                    1
+
+/** Enable `<img>` fetching/decoding in the browser (0/1). */
+#define P4_CONFIG_BROWSER_IMAGES                1
+
 /* ========================================================================
  * Event Bus
  * ======================================================================== */

@@ -91,10 +91,10 @@ generated map is [`BREADCRUMBS.md`](BREADCRUMBS.md) / `breadcrumbs.json`.
 ## 3. Layer 1 — on-target unit tests (Unity)
 
 Pure/headless logic runs on the P4 in `test/` (Unity; the static case count is
-**663** after the breadcrumb round — 4 new `test_breadcrumb.c` cases plus 5
-tests that were defined but never registered — refresh the hardware count with
-`tools/unit_run.py`; includes the software AES-256-GCM vectors in
-`test_sw_gcm.c`).
+**668** after the breadcrumb/MCP round - 4 `test_breadcrumb.c`, 5
+`test_mcp.c`, and 5 tests that were defined but never registered - refresh the
+hardware count with `tools/unit_run.py`; includes the software AES-256-GCM
+vectors in `test_sw_gcm.c`).
 
 ```powershell
 cd test
@@ -151,10 +151,10 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s14_apps` | every reference app (launch, drive, markers), incl. the hybrid demo and the `taskmgr` task-manager app (kill/suspend/resume/nice through its own UI) |
 | `s15_p4sync` | P4Sync handshake (`sync status` lines), file push/pull round-trip, screenshot geometry |
 | `s16_netsvc` | event service (`net status/subs/msg/outbox`, hook set/clear, usage errors); broker-dependent live checks skip cleanly without a LAN broker (documented Mosquitto fixture) |
-| `s17_browser` | `browser` render matrix over the board's own httpd (heading/paragraph/list/link/image-alt/table), `tui dump` readback, back/forward, bookmark round-trip, no-connection path, Basic auth |
+| `s17_browser` | `browser` render matrix over the board's own httpd (heading/paragraph/list/link/image/table + CSS colours), `tui dump` readback, back/forward, bookmark round-trip, `browser js`, no-connection path, Basic auth |
 | `s18_http` | `httpget` flags (`/h:`, `/post`, `/stream` to transcript and SD, `/cookie` show/clear/persist); loopback after httpd is up; a missing AP is a note (`s11` gates Wi-Fi) |
 | `s19_app_features` | the opt-in `APPLIB.BAT::probe` (`P4_APP_FEATURES=1`) across a nonstop app, a menu app and a demo; direct `js eval/run`; locale persistence through a real reboot |
-| `s20_website` | the offline browser showcase: deploys `apps/website/`, renders `sd:/WEB/INDEX.HTML`, captures `browser-website.bmp` for the docs |
+| `s20_website` | the offline browser dashboard: deploys `apps/website/` (HTML + BMP logo), renders `sd:/WEB/INDEX.HTML`, runs the JS event hook, captures `browser-website.bmp` for the docs |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
 `run()`, panic detection, byte-exact `BMPX`/`SDFX` framing, ANSI+OSC 8 strip

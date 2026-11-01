@@ -979,8 +979,11 @@ void tui_flush(void)
             uint32_t col = 0;
 
             if (tagged) {
-                col = ansi_get_palette_color((ansi_color_index_t)fg);
-                if (col == 0 && fg != 0) col = ansi_get_palette_color(ANSI_COLOR_WHITE);
+                /* Cell fg/bg are DOS palette indices; the ANSI palette enum
+                 * uses a different order (ANSI 11 is bright yellow, DOS 11 is
+                 * bright cyan), so map through the DOS table, not the ANSI
+                 * palette. */
+                col = tui_dos_color_rgb(fg);
                 int n = snprintf(buf + pos, cap - pos, "#%06x ", (unsigned)(col & 0xFFFFFF));
                 if (n < 0) break;
                 if ((size_t)n >= cap - pos) { pos = cap - 1; break; }

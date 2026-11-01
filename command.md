@@ -4579,17 +4579,31 @@ httpget /cookie clear
 
 ERRORLEVEL: 0 on HTTP 2xx, 1 on a network/HTTP failure, 2 on usage.
 
-### browser [<url> | back | forward | bookmark <add|list|del> ...]
+### browser [<url> | back | forward | js <id> | css | bookmark <add|list|del> ...]
 
-Minimal HTML browser rendered into the TUI page. `browser <url>` fetches an
-`http(s)` page (same HTTP/TLS/auth policy as `httpget`, including
-`user:pass@` Basic auth); `browser <file>` reads an SD HTML file and renders it
-with no network at all. The page is parsed into a DOM tree, `<style>` rules are
-applied, and headings, paragraphs, lists, links, image alt text and table cells
-are laid out in document order. The first render enters TUI mode so the page is
-actually visible; `draw close` (or `tui fullscreen off`) returns to the
-transcript. After rendering, `tui dump [from] [to]` reads the page back cell by
-cell for tests and scripts.
+The on-device browser. `browser <url>` fetches an `http(s)` page (same
+HTTP/TLS/auth policy as `httpget`, including `user:pass@` Basic auth);
+`browser <file>` reads an SD HTML file and renders it with no network at all.
+The page is parsed into a DOM tree, the `<style>` cascade is applied
+(tag/class/id/attribute selectors, descendant/child combinators, specificity,
+colour/background/alignment/weight/decoration), and **one shared DOM renderer**
+lays out headings, paragraphs, nested lists, tables, pre, blockquotes, rules,
+links, inline emphasis, and images. Images are fetched/read, decoded by the one
+gfx BMP decoder, and drawn as coloured blocks (`P4_CONFIG_BROWSER_IMAGES`);
+alt text is the fallback.
+
+In-page JavaScript (`P4_CONFIG_BROWSER_JS`) runs `<script>` blocks and
+`onload`/`onclick` handlers through the existing QuickJS engine. The DOM
+bindings are `document.getElementById`/`body`/`title`/`write`, element
+`textContent`/`innerHTML`/`style`/`getAttribute`/`setAttribute`/
+`addEventListener`, `console.log`, and `fetch`. A `<button id="x">` with an
+`onclick` registers a tappable link that runs `browser js x`.
+
+`browser js <id>` dispatches that element's click handler and re-renders.
+`browser css` prints the parsed rules and the computed body/h1/th styles (a
+diagnostic). The first render enters TUI mode so the page is visible;
+`draw close` (or `tui fullscreen off`) returns to the transcript. After
+rendering, `tui dump [from] [to]` reads the page back cell by cell.
 
 ```
 browser http://example.com/
@@ -4597,6 +4611,8 @@ browser http://user:pass@host/private.html
 browser sd:/WEB/INDEX.HTML
 browser back
 browser forward
+browser js go
+browser css
 browser bookmark add bench http://host/page.html
 browser bookmark list
 browser bookmark del bench
@@ -4605,14 +4621,28 @@ browser bookmark del bench
 - Navigation history keeps the last `P4_CONFIG_BROWSER_HISTORY_MAX` URLs (8).
 - Bookmarks keep `P4_CONFIG_BROWSER_BOOKMARK_MAX` name/URL pairs (8).
 - Both persist under `sd:/BROWSER.HIST` and `sd:/BROWSER.BOOK`.
+- Image cap `P4_CONFIG_BROWSER_IMAGE_MAX_BYTES` (64 KiB); grid
+  `..._MAX_WIDTH`/`..._MAX_HEIGHT` (80x40 cells); script cap
+  `P4_CONFIG_BROWSER_JS_MAX_BYTES` (16 KiB per page).
 - A network fetch requires an active Wi-Fi connection; the failure path prints
   `Failed to fetch URL`. Local paths need no AP.
-- The showcase app `WEB.BAT` (deployed by `apps/push_apps.py`) renders
-  `sd:/WEB/INDEX.HTML` and captures it for
+- The showcase app `WEB.BAT` renders `sd:/WEB/INDEX.HTML` (a dashboard: CSS
+  table, BMP logo, JS event status) and captures it for
   [`docs/assets/browser-website.png`](docs/assets/browser-website.png). The
   suite `s20_website` drives and captures the same page.
 
 ERRORLEVEL: 0 rendered, 1 fetch/parse failure, 2 usage.
+
+### mcp <status|connect|tools|call>
+
+Minimal MCP (Model Context Protocol) client over the shared HTTP transport.
+`mcp connect <url> [token]` runs the JSON-RPC `initialize` handshake and the
+`notifications/initialized` notification; `mcp tools` runs `tools/list`;
+`mcp call <tool> [json]` runs `tools/call` (the JSON is the `arguments`
+object). Responses are parsed by the one JSON reader and `error.message` is
+surfaced as a failure. `mcp status` reports the session. The optional `token`
+is stored for a future bearer header; the current transport uses the
+networking TLS/auth policy. ERRORLEVEL: 0 ok, 1 failure, 2 usage.
 
 ### js <eval|run|call> ...
 

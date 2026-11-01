@@ -3277,6 +3277,49 @@ task_stacks:
       8192 gives the handler path real headroom. Pinned in sdkconfig.defaults.
     range: "4096..32768"
 
+# ---- Browser ----
+browser:
+  history_max:
+    value: 8
+    type: int
+    description: "Maximum browser history entries."
+    range: "1..64"
+  bookmark_max:
+    value: 8
+    type: int
+    description: "Maximum browser bookmarks."
+    range: "1..64"
+  image_max_bytes:
+    value: 65536
+    type: size_t
+    description: "Maximum bytes for a browser image download."
+    range: "1024..4194304"
+  image_max_width:
+    value: 80
+    type: int
+    description: "Maximum browser image width in terminal columns."
+    range: "1..256"
+  image_max_height:
+    value: 40
+    type: int
+    description: "Maximum browser image height in terminal rows."
+    range: "1..128"
+  js_max_bytes:
+    value: 16384
+    type: size_t
+    description: "Maximum total in-page JavaScript bytes per page."
+    range: "0..65536"
+  js:
+    value: 1
+    type: int
+    description: "Enable in-page <script> execution in the browser (0/1)."
+    range: "0..1"
+  images:
+    value: 1
+    type: int
+    description: "Enable <img> fetching/decoding in the browser (0/1)."
+    range: "0..1"
+
 # ---- Task introspection (ps / tasks / top) ----
 task_introspection:
   snapshot_max:

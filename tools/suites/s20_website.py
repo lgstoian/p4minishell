@@ -36,6 +36,7 @@ def run(dev, ctx):
     dev.run("md WEB", timeout=20)
     _push(dev, "website", "INDEX.HTML", "WEB/INDEX.HTML")
     _push(dev, "website", "PAGE2.HTML", "WEB/PAGE2.HTML")
+    _push(dev, "website", "LOGO.BMP", "WEB/LOGO.BMP")
     _push(dev, "website", "WEB.BAT", "WEB.BAT")
     _push(dev, "", "APPLIB.BAT", "APPLIB.BAT")
 

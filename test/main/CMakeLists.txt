@@ -4,6 +4,7 @@ idf_component_register(
     SRCS
         test_main.c
         test_breadcrumb.c
+        test_mcp.c
         test_shell_parser.c
         test_shell_abort.c
         test_shell_history.c
@@ -140,6 +141,7 @@ idf_component_register(
         header
         json
         rss
+        mcp
         esp_timer
         mbedtls
 )

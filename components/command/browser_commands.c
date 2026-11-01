@@ -2,12 +2,15 @@
 #include "shell.h"
 #include "jsengine.h"
 #include "dom.h"
+#include "dom_render.h"
 #include "css.h"
 #include "html.h"
 #include "networking.h"
 #include "tui.h"
 #include "storage.h"
 #include "p4heap.h"
+#include "gfx.h"
+#include "command.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -272,73 +275,206 @@ static int browser_bookmark_del(const char *name) {
     return -1;
 }
 
-static void browser_render_dom(dom_tree_t *tree, int start_row, int end_row) {
-    if (!tree || !tree->body) return;
-    int row = start_row;
-    dom_node_t *stack[64];
-    int sp = 0;
-    stack[sp++] = tree->body;
-    while (sp > 0 && row <= end_row) {
-        dom_node_t *node = stack[--sp];
-        if (node->type == DOM_NODE_TEXT) {
-            const char *text = node->text;
-            int col = 1;
-            while (*text && col <= P4_CONFIG_TUI_COLS) {
-                char ch[2] = {*text, '\0'};
-                tui_page_set_cell(col, row, ch, 16, 16, 0);
-                col++;
-                text++;
+/* ---- Page state (kept alive for in-page JS event dispatch) ---- */
+static dom_tree_t *s_page_tree = NULL;
+static css_ruleset_t *s_page_rules = NULL;
+static char s_page_base[BROWSER_URL_LEN];
+static size_t s_js_budget = 0;
+
+static void browser_page_release(void)
+{
+    if (s_page_tree != NULL) {
+        dom_free(s_page_tree);
+        s_page_tree = NULL;
+    }
+    if (s_page_rules != NULL) {
+        p4heap_free(s_page_rules);
+        s_page_rules = NULL;
+    }
+    s_page_base[0] = '\0';
+}
+
+static void browser_put_cell(void *ctx, int col, int row, const char *utf8,
+                             uint8_t fg, uint8_t bg, uint8_t attr)
+{
+    (void)ctx;
+    tui_page_set_cell(col, row, utf8, fg, bg, attr);
+}
+
+static void browser_put_link(void *ctx, int x, int y, int w, int h, const char *url)
+{
+    (void)ctx;
+    tui_link_register(x, y, w, h, url);
+}
+
+static uint32_t browser_rgb565_to_rgb888(uint16_t c)
+{
+    uint32_t r = (c >> 11) & 0x1F;
+    uint32_t g = (c >> 5) & 0x3F;
+    uint32_t b = c & 0x1F;
+    return (((r * 255) / 31) << 16) | (((g * 255) / 63) << 8) | ((b * 255) / 31);
+}
+
+/* Image loader for the renderer: resolve the src against the page URL, fetch
+ * (HTTP) or read (SD), decode with the one gfx BMP decoder, and map to DOS
+ * cells. Returns false so the renderer falls back to alt text. */
+static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
+{
+    const char *base = (const char *)ctx;
+    char target[1024];
+    uint8_t *data = NULL;
+    size_t len = 0;
+    gfx_bmp_info_t info;
+    gfx_surface_t surf;
+    uint8_t *pixels;
+    int w;
+    int h;
+    int x;
+    int y;
+
+    if (src == NULL || out == NULL || !P4_CONFIG_BROWSER_IMAGES) return false;
+    memset(out, 0, sizeof(*out));
+    if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0 ||
+        strncmp(src, "sd:", 3) == 0 || src[0] == '/') {
+        snprintf(target, sizeof(target), "%s", src);
+    } else {
+        const char *slash = base != NULL ? strrchr(base, '/') : NULL;
+        if (slash != NULL) {
+            snprintf(target, sizeof(target), "%.*s/%s", (int)(slash - base), base, src);
+        } else {
+            snprintf(target, sizeof(target), "%s/%s", base != NULL ? base : "sd:/", src);
+        }
+    }
+    if (strncmp(target, "http://", 7) == 0 || strncmp(target, "https://", 8) == 0) {
+        networking_http_result_t result;
+        memset(&result, 0, sizeof(result));
+        if (networking_http_get(target, &result) != ESP_OK) return false;
+        data = result.body;
+        len = result.body_size;
+    } else if (command_load_file_psram(target, "browser image",
+                                       P4_CONFIG_BROWSER_IMAGE_MAX_BYTES,
+                                       &data, &len) != 0) {
+        return false;
+    }
+    if (data == NULL || len == 0) {
+        free(data);
+        return false;
+    }
+    memset(&info, 0, sizeof(info));
+    if (!gfx_bmp_parse_header_ex(data, len, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
+        free(data);
+        return false;
+    }
+    w = info.w;
+    h = info.h;
+    if (w > P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH) {
+        h = h * P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH / w;
+        w = P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH;
+    }
+    if (h > P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT) {
+        w = w * P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT / h;
+        h = P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT;
+    }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    memset(&surf, 0, sizeof(surf));
+    if (!gfx_bmp_decode_scaled_565(data, len, &info, w, h, &surf)) {
+        free(data);
+        return false;
+    }
+    pixels = malloc((size_t)w * (size_t)h);
+    if (pixels == NULL) {
+        gfx_surface_free(&surf);
+        free(data);
+        return false;
+    }
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            uint16_t c = gfx_surface_get(&surf, x, y);
+            pixels[y * w + x] = tui_rgb_to_dos(browser_rgb565_to_rgb888(c));
+        }
+    }
+    gfx_surface_free(&surf);
+    free(data);
+    out->width = w;
+    out->height = h;
+    out->pixels = pixels;
+    return true;
+}
+
+static void browser_run_scripts(dom_node_t *node)
+{
+    for (dom_node_t *ch = node != NULL ? node->first_child : NULL;
+         ch != NULL; ch = ch->next_sibling) {
+        if (ch->type != DOM_NODE_ELEMENT) continue;
+        if (strcmp(ch->tag, "script") == 0) {
+            const char *code = (ch->first_child != NULL &&
+                                ch->first_child->type == DOM_NODE_TEXT)
+                                   ? ch->first_child->text : NULL;
+            if (code != NULL && code[0] != '\0') {
+                size_t len = strlen(code);
+                if (len <= s_js_budget) {
+                    char result[128];
+                    s_js_budget -= len;
+                    (void)jsengine_eval(code, result, sizeof(result));
+                }
             }
-            row++;
-        } else if (node->type == DOM_NODE_ELEMENT) {
-            if (node->display == DOM_DISPLAY_NONE) continue;
-            if (strcmp(node->tag, "a") == 0 && node->href[0]) {
-                const char *text = dom_get_text(node);
-                int col = 1;
-                while (*text && col <= P4_CONFIG_TUI_COLS) {
-                    char ch[2] = {*text, '\0'};
-                    tui_page_set_cell(col, row, ch, 9, 16, 8);
-                    col++;
-                    text++;
-                }
-                tui_link_register(1, row, col - 1, 1, node->href);
-                row++;
-            } else if (strcmp(node->tag, "img") == 0) {
-                const char *alt = node->alt[0] ? node->alt : "[image]";
-                int col = 1;
-                while (*alt && col <= P4_CONFIG_TUI_COLS) {
-                    char ch[2] = {*alt, '\0'};
-                    tui_page_set_cell(col, row, ch, 16, 16, 0);
-                    col++;
-                    alt++;
-                }
-                row++;
-            } else if (node->display == DOM_DISPLAY_BLOCK) {
-                /* Push last-to-first so the LIFO stack pops siblings in
-                 * document order; first-to-last drew every page upside down
-                 * (the text-presence tests could not see the reversal). */
-                dom_node_t *child = node->last_child;
-                while (child) {
-                    if (sp < 64) stack[sp++] = child;
-                    child = child->prev_sibling;
-                }
-                row++;
-            } else {
-                dom_node_t *child = node->last_child;
-                while (child) {
-                    if (sp < 64) stack[sp++] = child;
-                    child = child->prev_sibling;
-                }
-            }
+        } else {
+            browser_run_scripts(ch);
         }
     }
 }
 
+static void browser_run_onload(dom_node_t *node)
+{
+    for (dom_node_t *ch = node != NULL ? node->first_child : NULL;
+         ch != NULL; ch = ch->next_sibling) {
+        if (ch->type != DOM_NODE_ELEMENT) continue;
+        if (ch->onload[0] != '\0') {
+            char result[128];
+            (void)jsengine_eval(ch->onload, result, sizeof(result));
+        }
+        browser_run_onload(ch);
+    }
+}
+
+static void browser_page_render(void)
+{
+    dom_render_ops_t ops;
+
+    if (s_page_tree == NULL) return;
+    if (!tui_is_active() && tui_ready()) {
+        (void)tui_init();
+    }
+    tui_viewport_init(P4_CONFIG_TUI_PAGE_ROWS);
+    tui_page_clear();
+    tui_link_clear();
+    tui_address_bar_set(s_page_base);
+    memset(&ops, 0, sizeof(ops));
+    ops.put_cell = browser_put_cell;
+    ops.put_link = browser_put_link;
+    ops.load_image = browser_load_image;
+    ops.ctx = s_page_base;
+    ops.cols = P4_CONFIG_TUI_COLS;
+    ops.rows = P4_CONFIG_TUI_PAGE_ROWS;
+    ops.tui = true;
+    ops.base_url = s_page_base;
+    dom_render_tree(s_page_tree, &ops);
+    tui_page_render();
+    tui_address_bar_render();
+    tui_status_bar_set(" links ");
+    tui_status_bar_render();
+    tui_flush();
+}
+
 int browser_render_html(const char *html, const char *base_url) {
+    dom_tree_t *tree;
+    css_ruleset_t *rules;
+
     if (html == NULL) {
         return 1;
     }
-    dom_tree_t *tree = dom_parse(html);
+    tree = dom_parse(html);
     if (tree == NULL) {
         return 1;
     }
@@ -346,13 +482,13 @@ int browser_render_html(const char *html, const char *base_url) {
      * which alone forced the command worker to reserve 32 KB of internal RAM
      * and starved C6 hosted bring-up. PSRAM-first keeps the stack small; if
      * every pool refuses, render without styles rather than fail the page. */
-    css_ruleset_t *rules = p4heap_calloc_psram(1, sizeof(*rules));
+    rules = p4heap_calloc_psram(1, sizeof(*rules));
     if (rules == NULL) {
         rules = p4heap_calloc_any(1, sizeof(*rules));
     }
     if (rules != NULL) {
         dom_node_t *child = tree->head ? tree->head->first_child : NULL;
-        while (child) {
+        while (child != NULL) {
             if (strcmp(child->tag, "style") == 0) {
                 const char *css_text = dom_get_text(child);
                 css_parse_block(css_text, rules);
@@ -361,25 +497,24 @@ int browser_render_html(const char *html, const char *base_url) {
         }
         css_compute_styles(tree, rules);
     }
-    /* The browser is a visible surface: enter TUI mode if the caller was at the
-     * transcript. Without this the page buffer was filled but never shown
-     * (tui_page_render only copies into the active cell grid), so `browser`
-     * looked like a no-op on screen even though `tui dump` saw the page. */
-    if (!tui_is_active() && tui_ready()) {
-        (void)tui_init();
+    browser_page_release();
+    s_page_tree = tree;
+    s_page_rules = rules;
+    snprintf(s_page_base, sizeof(s_page_base), "%s", base_url != NULL ? base_url : "");
+    if (P4_CONFIG_BROWSER_JS) {
+        char result[128];
+
+        jsengine_set_dom_tree(tree);
+        s_js_budget = P4_CONFIG_BROWSER_JS_MAX_BYTES;
+        browser_run_scripts(tree->root);
+        browser_run_onload(tree->root);
+        (void)jsengine_eval("if (typeof onload === 'function') onload();",
+                            result, sizeof(result));
+        (void)jsengine_eval("if (typeof window !== 'undefined' && typeof window.onload === 'function') window.onload();",
+                            result, sizeof(result));
+        jsengine_set_dom_tree(NULL);
     }
-    tui_viewport_init(P4_CONFIG_TUI_PAGE_ROWS);
-    tui_page_clear();
-    tui_link_clear();
-    tui_address_bar_set(base_url != NULL ? base_url : "");
-    browser_render_dom(tree, 1, P4_CONFIG_TUI_PAGE_ROWS);
-    tui_page_render();
-    tui_address_bar_render();
-    tui_status_bar_set(" links ");
-    tui_status_bar_render();
-    tui_flush();
-    dom_free(tree);
-    p4heap_free(rules);
+    browser_page_render();
     return 0;
 }
 
@@ -516,8 +651,38 @@ static int browser_load_url(const char *url) {
 
 int shell_command_browser(int argc, char **argv) {
     if (argc < 2) {
-        shell_print_usage("browser <url|file> | browser back | browser forward | browser bookmark [add|del|list]");
+        shell_print_usage("browser <url|file> | browser back | browser forward | browser js <id> | browser css | browser bookmark [add|del|list]");
         return 2;
+    }
+    if (strcmp(argv[1], "css") == 0) {
+        shell_transcript_appendf("css: rules=%d tree=%p\n",
+                                 s_page_rules != NULL ? s_page_rules->count : -1,
+                                 (void *)s_page_tree);
+        if (s_page_rules != NULL) {
+            for (int i = 0; i < s_page_rules->count && i < 24; i++) {
+                shell_transcript_appendf("  %s { %s: %s } spec=%d\n",
+                                         s_page_rules->rules[i].selector,
+                                         s_page_rules->rules[i].property,
+                                         s_page_rules->rules[i].value,
+                                         s_page_rules->rules[i].specificity);
+            }
+        }
+        if (s_page_tree != NULL && s_page_tree->body != NULL) {
+            dom_node_t *h1 = dom_find_first_by_tag(s_page_tree, "h1");
+            dom_node_t *th = dom_find_first_by_tag(s_page_tree, "th");
+            shell_transcript_appendf("body fg=%u bg=%u\n",
+                                     (unsigned)s_page_tree->body->fg,
+                                     (unsigned)s_page_tree->body->bg);
+            if (h1 != NULL) {
+                shell_transcript_appendf("h1 fg=%u bold=%d\n",
+                                         (unsigned)h1->fg, h1->bold);
+            }
+            if (th != NULL) {
+                shell_transcript_appendf("th fg=%u bg=%u\n",
+                                         (unsigned)th->fg, (unsigned)th->bg);
+            }
+        }
+        return 0;
     }
     if (strcmp(argv[1], "back") == 0) {
         const char *url = browser_back();
@@ -534,6 +699,35 @@ int shell_command_browser(int argc, char **argv) {
         }
         shell_print_error("No history");
         return 1;
+    }
+    if (strcmp(argv[1], "js") == 0) {
+        dom_node_t *node;
+        char result[128];
+
+        if (argc < 3) {
+            shell_print_usage("browser js <element-id>");
+            return 2;
+        }
+        if (s_page_tree == NULL) {
+            shell_print_error("No page loaded");
+            return 1;
+        }
+        node = dom_find_by_id(s_page_tree, argv[2]);
+        if (node == NULL) {
+            shell_print_error("No element '%s'", argv[2]);
+            return 1;
+        }
+        if (node->onclick[0] == '\0') {
+            shell_print_error("Element '%s' has no click handler", argv[2]);
+            return 1;
+        }
+        jsengine_set_dom_tree(s_page_tree);
+        (void)jsengine_eval(node->onclick, result, sizeof(result));
+        (void)jsengine_eval("if (typeof onload === 'function') onload();",
+                            result, sizeof(result));
+        jsengine_set_dom_tree(NULL);
+        browser_page_render();
+        return 0;
     }
     if (strcmp(argv[1], "bookmark") == 0) {
         browser_bookmarks_load();

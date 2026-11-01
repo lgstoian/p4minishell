@@ -25,12 +25,18 @@ typedef struct dom_node {
     char src[512];
     char alt[256];
     char text[1024];
+    char style[256];      /* raw style="..." attribute (inline CSS, applied last) */
+    char onclick[512];    /* inline click handler (JS) */
+    char onload[512];     /* inline load handler (JS) */
     dom_display_t display;
     uint8_t fg;
     uint8_t bg;
+    uint8_t align;        /* 0 left, 1 center, 2 right */
+    uint8_t font_scale;   /* 1 normal, 2 heading/large */
     bool bold;
     bool italic;
     bool underline;
+    bool border;          /* draw a box border around the block */
     int margin_top;
     int margin_bottom;
     int margin_left;
@@ -46,7 +52,7 @@ typedef struct dom_node {
     struct dom_node *prev_sibling;
 } dom_node_t;
 
-typedef struct {
+typedef struct dom_tree {
     dom_node_t *root;
     dom_node_t *head;
     dom_node_t *body;
@@ -76,5 +82,8 @@ const char *dom_get_style(const dom_node_t *node, const char *property);
 
 void dom_add_event_listener(dom_node_t *node, const char *event, const char *handler);
 void dom_dispatch_event(dom_node_t *node, const char *event);
+
+/** True when @p node's class list contains @p name (space/tab separated). */
+bool dom_node_has_class(const dom_node_t *node, const char *name);
 
 #endif

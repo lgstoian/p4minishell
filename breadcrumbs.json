@@ -94,6 +94,7 @@
     "components/command/js_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/json_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/math_disp_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/mcp_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/md_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/modal_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/netsvc_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
@@ -202,6 +203,8 @@
     "components/markdown/css.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/dom.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/dom.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/dom_render.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
+    "components/markdown/dom_render.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/html.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/html_read.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/markdown.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
@@ -214,6 +217,8 @@
     "components/math_disp/src/math_disp_layout.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
     "components/math_disp/src/math_disp_parse.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
     "components/math_disp/src/math_disp_render.c": "module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules",
+    "components/mcp/include/mcp.h": "module=mcp :: layer=leaf :: domain=net :: status=experimental :: tests=test/main/test_mcp.c :: rules=ai-context.md#module-layering-rules",
+    "components/mcp/mcp.c": "module=mcp :: layer=leaf :: domain=net :: status=experimental :: tests=test/main/test_mcp.c :: rules=ai-context.md#module-layering-rules",
     "components/modal/modal.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
     "components/modal/modal.h": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
     "components/modal/modal_surf.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
@@ -727,7 +732,8 @@
         "chat",
         "json",
         "jsengine",
-        "rss"
+        "rss",
+        "mcp"
       ],
       "rules": [
         "ai-context.md#module-layering-rules"
@@ -1095,6 +1101,28 @@
       "status": "stable",
       "tests": [
         "test/main/test_calc.c"
+      ]
+    },
+    "mcp": {
+      "domain": "net",
+      "header": "components/mcp/include/mcp.h",
+      "layer": "leaf",
+      "path": "components/mcp",
+      "provides": "MCP (Model Context Protocol) JSON-RPC client: initialize, tools/list, tools/call",
+      "requires": [
+        "networking",
+        "json",
+        "p4heap",
+        "esp_http_client",
+        "esp_timer",
+        "freertos"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "experimental",
+      "tests": [
+        "test/main/test_mcp.c"
       ]
     },
     "modal": {

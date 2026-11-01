@@ -1,24 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>P4MiniShell Web - Documentation</title>
+<title>P4MiniShell // Documentation</title>
 <style>
-h1 { font-weight: bold; }
-h2 { font-weight: bold; margin-top: 1; }
+body { background-color: #001830; color: #c0c0c0; }
+h1 { color: #00ffff; text-align: center; font-weight: bold; }
+h2 { color: #ffff55; font-weight: bold; }
+p { color: #c0c0c0; }
+a { color: #55ffff; text-decoration: underline; }
+li { color: #c0c0c0; }
+footer { color: #808080; }
 </style>
 </head>
 <body>
-<h1>Documentation</h1>
+<h1>DOCUMENTATION</h1>
 <p>The browser is one verb: browser &lt;url&gt;.</p>
+<h2>Navigation</h2>
 <ul>
 <li>browser back / browser forward keep a navigation history</li>
 <li>browser bookmark add NAME URL stores a bookmark on the SD card</li>
+<li>browser js ID dispatches an element's click handler</li>
 <li>tui dump reads the rendered page back cell by cell</li>
 </ul>
 <h2>Where the page came from</h2>
 <p>This file lives on the device at sd:/WEB/PAGE2.HTML and is served by the</p>
 <p>board's own httpd, fetched over the local network or loopback.</p>
-<a href="sd:/WEB/INDEX.HTML">Back to the home page</a>
+<a href="sd:/WEB/INDEX.HTML">Back to the dashboard</a>
 <footer>P4MiniShell - a self-contained computer.</footer>
 </body>
 </html>

@@ -61,7 +61,8 @@ components/editor/              `edit` editor: byte-preserving document model + 
 components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_flush
 components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport
 components/filetype/            Central extension -> kind registry
-components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader
+components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader + unified DOM renderer (TUI/ANSI)
+components/mcp/                 MCP (Model Context Protocol) JSON-RPC client (networking + json)
 components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes
 components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
 components/alarm/               SD alarm store + single background checker (sd:/ALARMS)

@@ -33,6 +33,12 @@ extern void test_breadcrumb_format_empty(void);
 extern void test_breadcrumb_format_truncates(void);
 extern void test_breadcrumb_format_null_out(void);
 
+extern void test_mcp_build_request_basic(void);
+extern void test_mcp_build_request_no_params(void);
+extern void test_mcp_build_request_truncates(void);
+extern void test_mcp_build_request_rejects_empty(void);
+extern void test_mcp_init_defaults(void);
+
 extern void test_shell_history_store(void);
 extern void test_shell_history_recall(void);
 extern void test_shell_history_password_mask(void);
@@ -701,6 +707,15 @@ void app_main(void)
     RUN_TEST(test_breadcrumb_format_empty);
     RUN_TEST(test_breadcrumb_format_truncates);
     RUN_TEST(test_breadcrumb_format_null_out);
+    UNITY_END();
+
+    /* MCP JSON-RPC request builder + client defaults */
+    UNITY_BEGIN();
+    RUN_TEST(test_mcp_build_request_basic);
+    RUN_TEST(test_mcp_build_request_no_params);
+    RUN_TEST(test_mcp_build_request_truncates);
+    RUN_TEST(test_mcp_build_request_rejects_empty);
+    RUN_TEST(test_mcp_init_defaults);
     UNITY_END();
 
     /* Shell history tests */

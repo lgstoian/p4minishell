@@ -18,11 +18,13 @@ display/TUI/GFX stack you can build on.
 | ![Sine and cosine plot](docs/assets/plot-graph.png) | ![edit editor](docs/assets/editor-editing.png) |
 
 **The browser, rendering a real website on the device.** `browser` parses HTML
-and CSS, lays out headings, lists, links, tables and image alt text into the
-80x25 TUI page, and can read the page from SD with no network at all. The
-showcase page ships in `apps/website/` and is driven by `WEB.BAT`.
+and CSS, lays out headings, lists, links, tables, images and in-page JavaScript
+into the 80x25 TUI page, and can read the page from SD with no network at all.
+CSS colours, block-glyph images (decoded by the gfx core), and JS `onload`/
+`onclick` handlers are live on the device. The showcase dashboard ships in
+`apps/website/` and is driven by `WEB.BAT`.
 
-![The P4MiniShell browser rendering a basic website from sd:/WEB/INDEX.HTML](docs/assets/browser-website.png)
+![The P4MiniShell browser rendering the device dashboard from sd:/WEB/INDEX.HTML](docs/assets/browser-website.png)
 
 All screenshots are captured live from the device over USB serial
 (`python tools/capture_docs.py <COM_PORT>`); the full set is in

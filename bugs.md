@@ -182,6 +182,16 @@ real reason (`edit: cannot load '...' (out of memory: SD/DMA buffer)` etc.).
 Verified by `s09_editor` 36/36 on both boards and a fresh
 `docs/assets/editor-editing.png`.
 
+### F58. TUI cell colours rendered with the ANSI palette order - **FIXED, verified on hardware**
+
+`tui_flush` looked up `ansi_get_palette_color((ansi_color_index_t)cell->fg)`
+while cells store **DOS** indices (0 black, 1 blue, 2 green, 3 cyan, 4 red...).
+The ANSI enum is black/red/green/yellow/blue/..., so DOS 11 (bright cyan) was
+painted bright yellow and DOS 12 (bright red) bright blue; the new browser CSS
+colours exposed it immediately. The flush now maps through
+`tui_dos_color_rgb()`. Verified by the refreshed `browser-website.png` (cyan
+title, red event status, cyan table header).
+
 ## Open findings
 
 None as of v1.4.1. F53 is closed below; the remaining entries document

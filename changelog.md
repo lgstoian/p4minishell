@@ -18,6 +18,19 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Added
 
+- **Browser dashboard: CSS cascade, images, and in-page JavaScript.** The
+  browser now uses one shared DOM renderer (`components/markdown/dom_render.c`)
+  for the TUI page and ANSI; CSS supports tag/class/id/attribute selectors,
+  descendant/child combinators, specificity, colour/background/alignment/
+  weight/decoration; `<img>` fetches/reads and decodes through the one gfx BMP
+  decoder into coloured blocks; `<script>`/`onload`/`onclick` run on the
+  existing QuickJS engine with `document.*`, element text/style/attributes,
+  `addEventListener`, and `fetch`. New `browser js <id>` and `browser css`
+  verbs; the `WEB.BAT` showcase is now a device dashboard.
+- **MCP (Model Context Protocol) client.** New `components/mcp/` leaf
+  (JSON-RPC over the shared networking HTTP transport, responses parsed by the
+  one JSON reader) with `mcp status|connect|tools|call`; `test_mcp.c` covers
+  the request builder.
 - **Agent breadcrumbs and machine-readable comments.** Every component's primary
   header now carries a compact tag block (`@module`/`@layer`/`@domain`/
   `@provides`/`@status`/`@test`/`@hard-rule`, documented in
@@ -40,6 +53,10 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Fixed
 
+- **TUI cell colours used the ANSI palette order instead of DOS.** `tui_flush`
+  looked up `ansi_get_palette_color(cell->fg)` while cells store DOS indices;
+  ANSI 11 is bright yellow but DOS 11 is bright cyan, so browser CSS colours
+  rendered shifted. The flush now maps through `tui_dos_color_rgb()`.
 - **Five Unity tests were defined but never registered** (four
   `test_variable_expansion_*` cases and `test_sw_gcm_64zero_vector`); they are
   now `RUN_TEST`-ed, so they actually run.
@@ -96,6 +113,8 @@ open bugs see [`bugs.md`](bugs.md).
 - Refreshed the curated `docs/assets/` screenshots with
   `tools/capture_docs.py`; the editor shot now shows `CONFIG.SYS` open with the
   Nav page.
+- Refreshed `docs/assets/browser-website.png` to the new device dashboard
+  (CSS-coloured table, BMP logo, JS event status, links/button).
 
 ---
 

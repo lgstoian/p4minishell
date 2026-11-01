@@ -3,11 +3,10 @@
 This directory contains the unit tests for the P4MiniShell components. Tests
 use the Unity test framework (included in ESP-IDF) and run on the P4 target.
 
-Current baseline: **603 tests, 0 failures, 2 ignored** (hardware baseline;
-verify with `tools/unit_run.py <COM_PORT>`). The static case count after the
-breadcrumb round is **663** (4 new `test_breadcrumb.c` cases plus 5 tests that
-were defined but never registered); refresh the hardware count on the next run.
-The runner completes cleanly with
+Current baseline: **617 tests, 0 failures, 2 ignored** on COM3 and COM6
+(`tools/unit_run.py COM3 COM6`). The static case count is **668** (4
+`test_breadcrumb.c` + 5 `test_mcp.c` + 5 tests that were defined but never
+registered). The runner completes cleanly with
 `=== All tests completed ===` and no reboot; if the board is reset-looping,
 check for a newly added test that calls an LVGL/heap path before `lv_init()`.
 The latest additions — the 14 `test_pim.c` sync tests, the 3 `test_alarm.c`
@@ -27,7 +26,7 @@ the shell round (`test_shell_prompt.c`: session title,
   parsing/guards, volume classification, MBR decode; `test_certs.c`:
   DER→PEM conversion; `test_portal.c`: HTML escaping;
   `test_pim_carddav.c`: multistatus scan, card split, UID, URL join) — plus the **chat transport tests** (`test_chat.c`: config init, inbox/log ring, sequence, send/poll/clear) and **EPUB transport tests** (`test_epub.c`: config init, OPF parse, spine/TOC, render) — bring the
-suite to **663 Unity cases** (static count; refresh the hardware baseline with `tools/unit_run.py`). Latest coverage: `test_epub.c` EPUB transport tests on top of `test_chat.c` chat transport tests, `test_ansi_osc8_strip` for OSC 8 hyperlink stripping, `test_editor_link_under_cursor` for the edit Open link prefill, the 3 `test_assoc.c` association argument cases, the 3 `test_pkg.c` version/dependency/sanitize cases, the 7 `test_tmgr.c` task-manager cases, and the 4 `test_breadcrumb.c` trail-formatter cases; build-verified on
+suite to **668 Unity cases** (static count; refresh the hardware baseline with `tools/unit_run.py`). Latest coverage: `test_epub.c` EPUB transport tests on top of `test_chat.c` chat transport tests, `test_ansi_osc8_strip` for OSC 8 hyperlink stripping, `test_editor_link_under_cursor` for the edit Open link prefill, the 3 `test_assoc.c` association argument cases, the 3 `test_pkg.c` version/dependency/sanitize cases, the 7 `test_tmgr.c` task-manager cases, the 4 `test_breadcrumb.c` trail-formatter cases, and the 5 `test_mcp.c` MCP request-builder cases; hardware-verified on both boards
 `jc1060p470c`, refresh the hardware count with `tools/unit_run.py <COM_PORT>`.
 
 ## Test Structure
@@ -39,6 +38,7 @@ test/
     CMakeLists.txt          # Test main component (lists every test_*.c)
     test_main.c             # Test runner entry point (RUN_TEST registrations)
     test_breadcrumb.c       # breadcrumb trail formatter (pure)
+    test_mcp.c              # MCP JSON-RPC request builder + client defaults
     test_shell_parser.c     # split_args, trim, text_equals, percentage parse, echo-glued detector
     test_shell_history.c    # history store/recall/password mask
     test_shell_prompt.c     # prompt template + metacharacters, session title

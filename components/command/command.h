@@ -598,6 +598,10 @@ int shell_command_pim(int argc, char **argv);
  *  2 usage. */
 int shell_command_sync(int argc, char **argv);
 
+/** MCP (Model Context Protocol) client verbs (`mcp status|connect|tools|call`,
+ *  mcp_commands.c over components/mcp). Returns 0 ok / 1 failure / 2 usage. */
+int shell_command_mcp(int argc, char **argv);
+
 /** Event service verbs (`net ...`, netsvc_commands.c): thin shells over
  *  components/networking/netsvc.c (status/broker/connect/sub/pub/msg/onmsg/
  *  outbox). Returns 0 ok/queued, 1 failed, 2 usage. */

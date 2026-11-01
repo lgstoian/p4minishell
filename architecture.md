@@ -54,8 +54,14 @@ The internal container view (one P4, cooperating tasks, one-way dependencies):
   main ─▶ command ─▶ batch ─▶ storage ─▶ shell ─▶ ansi/display/windows/header/keyboard/clock
                                                    ▲            ▲
                        (inverted via registration tables)       │
-     applib · networking · usb · c6ota · alarm · pim · editor ───┘
+     applib · networking · usb · c6ota · alarm · pim · editor · mcp ───┘
 ```
+
+The **MCP client** (`components/mcp/`) is a leaf: JSON-RPC over the shared
+`networking` HTTP transport, parsed by `json`, surfaced by `mcp` verbs. It owns
+no socket and no parser. The **browser** uses one DOM renderer
+(`components/markdown/dom_render.c`) for its TUI page and ANSI surfaces; CSS,
+images, and in-page JS are layered on the existing DOM/CSS/gfx/jsengine modules.
 
 The dependency chain, the two registration tables, and the "never require
 `main`" rule are specified in [`documentation.md`](documentation.md)

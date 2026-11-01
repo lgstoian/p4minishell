@@ -41,6 +41,7 @@ set(EXTRA_COMPONENT_DIRS
   components/keyboard
   components/led
   components/markdown
+  components/mcp
   components/modal
   components/networking
   components/portal

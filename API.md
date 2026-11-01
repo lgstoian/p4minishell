@@ -2647,6 +2647,61 @@ size_t html_render_ansi(const char *html, char *out, size_t out_size);
   `markdown_strip_ansi()` for plain surfaces. Bounded by
   `P4_CONFIG_HTML_RENDER_MAX_BYTES`.
 
+### Unified DOM renderer (`dom_render.h`)
+
+```c
+typedef struct { int width; int height; uint8_t *pixels; } dom_image_t;
+
+typedef struct {
+    void (*put_cell)(void *ctx, int col, int row, const char *utf8,
+                     uint8_t fg, uint8_t bg, uint8_t attr);
+    void (*put_link)(void *ctx, int x, int y, int w, int h, const char *url);
+    void (*put_ansi)(void *ctx, const char *text);
+    bool (*load_image)(void *ctx, const char *src, dom_image_t *out);
+    void *ctx;
+    int cols, rows;
+    bool tui;              /* true: cells; false: ANSI */
+    bool ansi_links;       /* append " (url)" after link text */
+    const char *base_url;
+} dom_render_ops_t;
+
+void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops);
+```
+- One layout engine for the browser's TUI page and ANSI surfaces; it never
+  parses HTML/CSS and never touches SD/network. The caller supplies the image
+  loader (the browser resolves/fetches/decodes via `gfx`; the markdown leaf
+  stays a leaf).
+- Styles come from `dom_node_t` (fg/bg/bold/italic/underline/align/font_scale),
+  computed by `css_compute_styles()` (tag/class/id/attribute selectors,
+  descendant/child combinators, specificity, inline `style=` last).
+- Block constructs: headings, paragraphs/divs, nested ul/ol, tables, pre,
+  blockquote, hr, images. Inline: text, a, strong/b, em/i, u, code, span, br,
+  button (with a `browser js <id>` link).
+
+## MCP API (`components/mcp/include/mcp.h`)
+
+```c
+typedef struct {
+    char url[256], token[128], server_name[64], server_version[64];
+    int next_id;
+    bool connected, initialized;
+} mcp_client_t;
+
+void      mcp_init(mcp_client_t *client);
+esp_err_t mcp_connect(mcp_client_t *client, const char *url, const char *token);
+esp_err_t mcp_list_tools(mcp_client_t *client, char *out, size_t out_size);
+esp_err_t mcp_call_tool(mcp_client_t *client, const char *tool,
+                        const char *args_json, char *out, size_t out_size);
+size_t    mcp_build_request(int id, const char *method, const char *params_json,
+                            char *out, size_t out_size);
+```
+- MCP is JSON-RPC 2.0. Requests go through `networking_http_request(POST)`;
+  responses are walked by the one `json_walk()` reader. `initialize`,
+  `notifications/initialized`, `tools/list`, and `tools/call` are implemented.
+  The command surface is `mcp status|connect|tools|call`
+  (`components/command/mcp_commands.c`). `token` is reserved for a future
+  bearer header.
+
 ## Font API (`components/font/`)
 
 ```c

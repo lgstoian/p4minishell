@@ -70,6 +70,7 @@ invert the only upward edges. Never add a trampoline.
 | main | main | platform | app entry, boot sequencing, LVGL event callbacks, host bridges | - | `ai-context.md#module-layering-rules` | `main` |
 | markdown | leaf | app | Markdown/HTML renderers, DOM, CSS, print paginator | [t](test/main/test_markdown.c), [t](test/main/test_html.c) | `ai-context.md#module-layering-rules` | `components/markdown` |
 | math_disp | leaf | app | natural-display math editor + CAS/math command surface | [t](test/main/test_calc.c) | `ai-context.md#module-layering-rules` | `components/math_disp` |
+| mcp | leaf | net | MCP (Model Context Protocol) JSON-RPC client: initialize, tools/list, tools/call | [t](test/main/test_mcp.c) | `ai-context.md#module-layering-rules` | `components/mcp` |
 | modal | leaf | ui | shared modal runtime + surfaces (dialog/list/ask/view) | [t](test/main/test_modal.c) | `ai-context.md#module-layering-rules` | `components/modal` |
 | networking | leaf | net | Wi-Fi/BLE host, HTTP server, MQTT event service | [t](test/main/test_wifi_state.c), [t](test/main/test_netsvc.c), [t](test/main/test_tcpterm.c) | `ai-context.md#module-layering-rules` | `components/networking` |
 | p4heap | leaf | core | PSRAM-first heap allocator | - | `ai-context.md#module-layering-rules` | `components/p4heap` |
@@ -187,6 +188,7 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/command/js_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/json_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/math_disp_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
+- `components/command/mcp_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/md_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/modal_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/netsvc_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
@@ -295,6 +297,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/markdown/css.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
+- `components/markdown/dom_render.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
+- `components/markdown/dom_render.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/html.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/html_read.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/markdown.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
@@ -307,6 +311,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/math_disp/src/math_disp_layout.c` :: module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules
 - `components/math_disp/src/math_disp_parse.c` :: module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules
 - `components/math_disp/src/math_disp_render.c` :: module=math_disp :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_calc.c :: rules=ai-context.md#module-layering-rules
+- `components/mcp/include/mcp.h` :: module=mcp :: layer=leaf :: domain=net :: status=experimental :: tests=test/main/test_mcp.c :: rules=ai-context.md#module-layering-rules
+- `components/mcp/mcp.c` :: module=mcp :: layer=leaf :: domain=net :: status=experimental :: tests=test/main/test_mcp.c :: rules=ai-context.md#module-layering-rules
 - `components/modal/modal.c` :: module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules
 - `components/modal/modal.h` :: module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules
 - `components/modal/modal_surf.c` :: module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules

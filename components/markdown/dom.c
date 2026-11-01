@@ -1,4 +1,5 @@
 #include "dom.h"
+#include "html.h"
 #include "strutil.h"
 #include <string.h>
 #include <stdlib.h>
@@ -69,6 +70,33 @@ static void skip_whitespace(const char **p) {
     while (**p && isspace((unsigned char)**p)) (*p)++;
 }
 
+/** Decode HTML entities in a text run (shared html_entity_decode table). */
+static void dom_decode_entities(const char *src, size_t len, char *dst, size_t dst_size) {
+    const char *p = src;
+    const char *end = src + len;
+    size_t out = 0;
+
+    if (dst == NULL || dst_size == 0) return;
+    while (p < end && out + 1 < dst_size) {
+        if (*p == '&') {
+            unsigned long cp = 0;
+            size_t consumed = 0;
+            if (html_entity_decode(p, end, &cp, &consumed)) {
+                char utf8[4];
+                size_t n = html_utf8_encode(cp, utf8);
+                size_t i;
+                for (i = 0; i < n && out + 1 < dst_size; i++) {
+                    dst[out++] = utf8[i];
+                }
+                p += consumed;
+                continue;
+            }
+        }
+        dst[out++] = *p++;
+    }
+    dst[out] = '\0';
+}
+
 static void parse_tag_name(const char **p, char *out, size_t out_size) {
     size_t i = 0;
     while (**p && !isspace((unsigned char)**p) && **p != '>' && **p != '/' && i < out_size - 1) {
@@ -116,6 +144,12 @@ static void parse_attributes(const char **p, dom_node_t *node) {
             strncpy(node->src, attr_value, sizeof(node->src) - 1);
         } else if (strcmp(attr_name, "alt") == 0) {
             strncpy(node->alt, attr_value, sizeof(node->alt) - 1);
+        } else if (strcmp(attr_name, "style") == 0) {
+            strncpy(node->style, attr_value, sizeof(node->style) - 1);
+        } else if (strcmp(attr_name, "onclick") == 0) {
+            strncpy(node->onclick, attr_value, sizeof(node->onclick) - 1);
+        } else if (strcmp(attr_name, "onload") == 0) {
+            strncpy(node->onload, attr_value, sizeof(node->onload) - 1);
         }
         skip_whitespace(p);
     }
@@ -249,12 +283,8 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth) 
             if (end > start) {
                 dom_node_t *text_node = dom_node_new(DOM_NODE_TEXT);
                 if (text_node) {
-                    size_t len = (size_t)(end - start);
-                    if (len >= sizeof(text_node->text)) {
-                        len = sizeof(text_node->text) - 1;
-                    }
-                    memcpy(text_node->text, start, len);
-                    text_node->text[len] = '\0';
+                    dom_decode_entities(start, (size_t)(end - start),
+                                        text_node->text, sizeof(text_node->text));
                     dom_node_append_child(node, text_node);
                 }
             }
@@ -442,12 +472,95 @@ void dom_set_text(dom_node_t *node, const char *text) {
     }
 }
 
+/* CSS color name / #rgb / #rrggbb / rgb() -> DOS 16-color index.
+ * 16 is "default" (no explicit color). Shared by every style application. */
+static int dom_css_color(const char *value)
+{
+    static const struct { const char *name; uint8_t color; } names[] = {
+        {"black", 0}, {"red", 4}, {"green", 2}, {"yellow", 6},
+        {"blue", 1}, {"magenta", 5}, {"fuchsia", 5}, {"cyan", 3},
+        {"aqua", 3}, {"white", 15}, {"gray", 8}, {"grey", 8},
+        {"darkgray", 8}, {"darkgrey", 8}, {"lightgray", 7},
+        {"lightgrey", 7}, {"silver", 7}, {"maroon", 4},
+        {"olive", 6}, {"navy", 1}, {"teal", 3}, {"purple", 5},
+        {"lime", 2}, {"orange", 6}, {"brown", 6}, {"transparent", 16},
+    };
+    static const uint8_t dos_rgb[16][3] = {
+        {0,0,0},{0,0,170},{0,170,0},{0,170,170},
+        {170,0,0},{170,0,170},{170,85,0},{170,170,170},
+        {85,85,85},{85,85,255},{85,255,85},{85,255,255},
+        {255,85,85},{255,85,255},{255,255,85},{255,255,255}
+    };
+    unsigned long r = 0, g = 0, b = 0;
+    size_t i;
+
+    if (value == NULL || value[0] == '\0') return 16;
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (strcasecmp(value, names[i].name) == 0) return names[i].color;
+    }
+    if (value[0] == '#') {
+        const char *hex = value + 1;
+        size_t len = strlen(hex);
+        unsigned long rgb;
+        if (len == 3) {
+            rgb = strtoul(hex, NULL, 16);
+            r = ((rgb >> 8) & 0xF) * 17;
+            g = ((rgb >> 4) & 0xF) * 17;
+            b = (rgb & 0xF) * 17;
+        } else if (len >= 6) {
+            rgb = strtoul(hex, NULL, 16);
+            r = (rgb >> 16) & 0xFF;
+            g = (rgb >> 8) & 0xFF;
+            b = rgb & 0xFF;
+        } else {
+            return 16;
+        }
+    } else if (strncasecmp(value, "rgb(", 4) == 0) {
+        if (sscanf(value, "rgb(%lu,%lu,%lu)", &r, &g, &b) != 3) return 16;
+    } else if (isdigit((unsigned char)value[0])) {
+        int n = atoi(value);
+        return (n >= 0 && n <= 16) ? n : 16;
+    } else {
+        return 16;
+    }
+    {
+        int best = 0;
+        unsigned long best_d = 0xFFFFFFFFul;
+        int c;
+        for (c = 0; c < 16; c++) {
+            long dr = (long)r - dos_rgb[c][0];
+            long dg = (long)g - dos_rgb[c][1];
+            long db = (long)b - dos_rgb[c][2];
+            unsigned long d = (unsigned long)(dr * dr + dg * dg + db * db);
+            if (d < best_d) { best_d = d; best = c; }
+        }
+        return best;
+    }
+}
+
 void dom_set_style(dom_node_t *node, const char *property, const char *value) {
     if (!node || !property || !value) return;
     if (strcmp(property, "display") == 0) {
         if (strcmp(value, "none") == 0) node->display = DOM_DISPLAY_NONE;
         else if (strcmp(value, "block") == 0) node->display = DOM_DISPLAY_BLOCK;
         else if (strcmp(value, "inline") == 0) node->display = DOM_DISPLAY_INLINE;
+    } else if (strcmp(property, "color") == 0) {
+        node->fg = (uint8_t)dom_css_color(value);
+    } else if (strcmp(property, "background-color") == 0 ||
+               strcmp(property, "background") == 0) {
+        node->bg = (uint8_t)dom_css_color(value);
+    } else if (strcmp(property, "text-align") == 0) {
+        if (strcmp(value, "center") == 0) node->align = 1;
+        else if (strcmp(value, "right") == 0) node->align = 2;
+        else node->align = 0;
+    } else if (strcmp(property, "font-size") == 0) {
+        if (strstr(value, "3") != NULL || strstr(value, "x-large") != NULL) node->font_scale = 3;
+        else if (strstr(value, "2") != NULL || strstr(value, "large") != NULL) node->font_scale = 2;
+        else node->font_scale = 1;
+    } else if (strcmp(property, "border") == 0) {
+        node->border = (strcmp(value, "none") != 0 && strcmp(value, "0") != 0);
+    } else if (strcmp(property, "border-width") == 0) {
+        node->border = (atoi(value) > 0);
     } else if (strcmp(property, "font-weight") == 0) {
         node->bold = (strcmp(value, "bold") == 0 || strcmp(value, "bolder") == 0);
     } else if (strcmp(property, "font-style") == 0) {
@@ -484,6 +597,19 @@ const char *dom_get_style(const dom_node_t *node, const char *property) {
         if (node->display == DOM_DISPLAY_NONE) return "none";
         if (node->display == DOM_DISPLAY_BLOCK) return "block";
         return "inline";
+    } else if (strcmp(property, "color") == 0) {
+        snprintf(buf, sizeof(buf), "%u", (unsigned)node->fg);
+        return buf;
+    } else if (strcmp(property, "background-color") == 0) {
+        snprintf(buf, sizeof(buf), "%u", (unsigned)node->bg);
+        return buf;
+    } else if (strcmp(property, "text-align") == 0) {
+        return node->align == 1 ? "center" : (node->align == 2 ? "right" : "left");
+    } else if (strcmp(property, "font-size") == 0) {
+        snprintf(buf, sizeof(buf), "%u", (unsigned)node->font_scale);
+        return buf;
+    } else if (strcmp(property, "border") == 0) {
+        return node->border ? "1" : "0";
     } else if (strcmp(property, "font-weight") == 0) {
         return node->bold ? "bold" : "normal";
     } else if (strcmp(property, "font-style") == 0) {
@@ -500,10 +626,33 @@ const char *dom_get_style(const dom_node_t *node, const char *property) {
     return "";
 }
 
+bool dom_node_has_class(const dom_node_t *node, const char *name) {
+    const char *p;
+    size_t want;
+
+    if (!node || !name || name[0] == '\0') return false;
+    want = strlen(name);
+    p = node->class;
+    while (*p) {
+        const char *start;
+        size_t len;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') break;
+        start = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        len = (size_t)(p - start);
+        if (len == want && strncmp(start, name, len) == 0) return true;
+    }
+    return false;
+}
+
 void dom_add_event_listener(dom_node_t *node, const char *event, const char *handler) {
-    (void)node;
-    (void)event;
-    (void)handler;
+    if (!node || !event || !handler) return;
+    if (strcmp(event, "click") == 0) {
+        snprintf(node->onclick, sizeof(node->onclick), "%s", handler);
+    } else if (strcmp(event, "load") == 0) {
+        snprintf(node->onload, sizeof(node->onload), "%s", handler);
+    }
 }
 
 void dom_dispatch_event(dom_node_t *node, const char *event) {

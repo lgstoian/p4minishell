@@ -22,6 +22,7 @@
 #ifndef P4MINISHELL_HTML_H
 #define P4MINISHELL_HTML_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -44,6 +45,15 @@ extern "C" {
  *         a value >= out_size means the destination was truncated.
  */
 size_t html_render_ansi(const char *html, char *out, size_t out_size);
+
+/** Decode one HTML entity at @p p (points at '&'). On success writes the
+ *  codepoint and the bytes consumed (including '&' and ';'). Shared with the
+ *  DOM parser so there is one entity table. */
+bool html_entity_decode(const char *p, const char *end, unsigned long *cp_out,
+                        size_t *consumed_out);
+
+/** UTF-8 encode @p cp into @p buf (max 4 bytes); returns the byte count. */
+size_t html_utf8_encode(unsigned long cp, char *buf);
 
 #ifdef __cplusplus
 }

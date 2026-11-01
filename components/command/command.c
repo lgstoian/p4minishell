@@ -4953,6 +4953,12 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- MCP (Model Context Protocol) client; int return -> ERRORLEVEL. */
+    if (shell_text_equals_ignore_case(argv[0], "mcp")) {
+        batch_set_errorlevel(shell_command_mcp(argc, argv));
+        return true;
+    }
+
     /* ---- Board-to-board chat (chat) ----
      * argv-verb dispatcher: chat host|peer|send|poll|log|clear|status|onmsg.
      * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage). */

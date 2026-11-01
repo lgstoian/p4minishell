@@ -14,6 +14,7 @@ typedef struct {
     char selector[CSS_MAX_SELECTOR_LEN];
     char property[CSS_MAX_PROPERTY_LEN];
     char value[CSS_MAX_VALUE_LEN];
+    int specificity;   /* id=100, class/attr=10, tag=1; higher wins */
 } css_rule_t;
 
 typedef struct {
@@ -23,6 +24,9 @@ typedef struct {
 
 void css_parse_inline(const char *style_attr, css_ruleset_t *rules);
 void css_parse_block(const char *css_text, css_ruleset_t *rules);
+/** Apply a `prop: value; ...` declaration string directly to @p node (no
+ *  ruleset, so no 28 KB stack local). Shared with the JS `style` setter. */
+void css_apply_inline_text(dom_node_t *node, const char *style);
 void css_apply(dom_node_t *node, const css_ruleset_t *rules);
 void css_compute_styles(dom_tree_t *tree, const css_ruleset_t *rules);
 

@@ -45,6 +45,7 @@ PRIMARY_HEADER = {
     "jsengine": "include/jsengine.h",
     "json": "include/json.h",
     "math_disp": "include/math_disp.h",
+    "mcp": "include/mcp.h",
     "p4heap": "include/p4heap.h",
     "portal": "include/portal.h",
     "power_monitor": "include/power_monitor.h",

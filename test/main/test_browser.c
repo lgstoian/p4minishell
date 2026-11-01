@@ -81,7 +81,7 @@ void test_browser_render_link_is_colored(void)
             uint8_t fg = 0;
             tui_page_get_cell(c, r, u, sizeof(u), &fg, NULL, NULL);
             if (u[0] == 'C') {
-                TEST_ASSERT_EQUAL_UINT8(9, fg);   /* link foreground */
+                TEST_ASSERT_EQUAL_UINT8(11, fg);  /* bright-cyan link foreground */
                 checked = true;
                 break;
             }

@@ -394,7 +394,8 @@
         "chat",
         "json",
         "jsengine",
-        "rss"
+        "rss",
+        "mcp"
       ],
       "rules": [
         "ai-context.md#module-layering-rules"
@@ -762,6 +763,28 @@
       "status": "stable",
       "tests": [
         "test/main/test_calc.c"
+      ]
+    },
+    "mcp": {
+      "domain": "net",
+      "header": "components/mcp/include/mcp.h",
+      "layer": "leaf",
+      "path": "components/mcp",
+      "provides": "MCP (Model Context Protocol) JSON-RPC client: initialize, tools/list, tools/call",
+      "requires": [
+        "networking",
+        "json",
+        "p4heap",
+        "esp_http_client",
+        "esp_timer",
+        "freertos"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "experimental",
+      "tests": [
+        "test/main/test_mcp.c"
       ]
     },
     "modal": {

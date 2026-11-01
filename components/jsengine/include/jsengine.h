@@ -29,6 +29,11 @@ bool jsengine_call(const char *path, const char *func,
 void jsengine_set_timeout_ms(uint32_t ms);
 void jsengine_set_heap_limit(size_t bytes);
 
+/** Bind the DOM the browser is currently rendering (or NULL to clear it).
+ *  The document.* bindings read this pointer; the browser sets it around
+ *  `<script>` execution so no second DOM registry exists. */
+void jsengine_set_dom_tree(struct dom_tree *tree);
+
 void js_bindings_register(JSContext *ctx);
 void js_dom_bindings_register(JSContext *ctx, struct dom_tree *tree);
 

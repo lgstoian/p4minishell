@@ -5115,6 +5115,7 @@ static const shell_help_entry_t s_shell_help_entries[] = {
     { "import",   "import db <name> <csv|json|vcf> <file> | import alarms <csv|json|ics> <file> - store interchange in, fresh ids (ERRORLEVEL 0/1/2)" },
     { "pim",      "pim get db <name> | pim get alarms | pim put db <name> <size> [/crc] | pim put alarms <size> [/crc] - serial PIM sync, merge by uid (ERRORLEVEL 0/1/2)" },
     { "sync",     "sync [status] - P4Sync handshake: sync.* capability snapshot for USB desktop sync (ERRORLEVEL 0/2)" },
+    { "mcp",      "mcp status | mcp connect <url> [token] | mcp tools | mcp call <tool> [json] - MCP JSON-RPC client (ERRORLEVEL 0/1/2)" },
     { "net",      "net status|broker|connect|sub|pub|msg|onmsg|outbox - persistent MQTT service with SD outbox (ERRORLEVEL 0/1/2)" },
     { "archive",  "archive create|extract|list|verify ... - USTAR backups with CRC manifest (ERRORLEVEL 0/1/2)" },
     { "backup",   "backup <file> [paths...] - archive DBS + alarms by default (ERRORLEVEL 0/1/2)" },

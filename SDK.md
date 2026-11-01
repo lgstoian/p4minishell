@@ -349,6 +349,18 @@ and font modules — no new app model:
   page breaks visibly. To add a document format, extend this component — never
   add a second Markdown/HTML parser, and classify files through
   `components/filetype/` rather than a local extension check.
+- **Browser DOM renderer** (`components/markdown/dom_render.c`): the browser's
+  TUI page and ANSI surfaces share `dom_render_tree(tree, ops)`. `ops` supplies
+  the cell/link sinks (TUI) or the ANSI sink, plus an optional image loader; the
+  markdown leaf never touches SD/network. CSS is computed by `css.c`
+  (tag/class/id/attribute, descendant/child, specificity, inline last); the
+  browser's `browser_load_image` resolves/fetches/decodes via `gfx` and maps to
+  DOS cells. To add a layout construct, extend `dom_render.c`; do not add a
+  second browser renderer.
+- **MCP** (`components/mcp/`): `mcp_build_request()` is the JSON-RPC builder;
+  `mcp_connect/list_tools/call_tool` use `networking_http_request(POST)` and
+  `json_walk`. The `mcp` command lives in `components/command/mcp_commands.c`.
+  Add MCP methods here, never a second HTTP client or JSON parser.
 - **Fonts** (`components/font/`): `FONT_ROLE_READING` is the third role
   (proportional/serif allowed, `DejaVuSerif` vendored); the viewer and editor
   preview use `windows_get_reading_font()`, cell-metric surfaces stay on

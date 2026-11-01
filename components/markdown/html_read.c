@@ -71,7 +71,7 @@ static size_t hw_finish(hw_t *w)
  * UTF-8 ENCODE (for decoded numeric entities; no decoder needed here)
  * ======================================================================== */
 
-static size_t html_utf8(unsigned long cp, char *buf)
+size_t html_utf8_encode(unsigned long cp, char *buf)
 {
     if (cp == 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
         buf[0] = '?';
@@ -114,7 +114,7 @@ static bool html_cp_is_space(unsigned long cp)
  * decoded codepoint to @p cp_out and the bytes consumed (including '&' and
  * ';') to @p consumed_out. Returns false when there is no valid entity here.
  */
-static bool html_entity(const char *p, const char *end, unsigned long *cp_out,
+bool html_entity_decode(const char *p, const char *end, unsigned long *cp_out,
                         size_t *consumed_out)
 {
     const char *semi;
@@ -442,7 +442,7 @@ static void html_emit_cp(html_ctx_t *c, unsigned long cp)
 
     html_line_start(c);
     html_flush_space(c);
-    n = html_utf8(cp, buf);
+    n = html_utf8_encode(cp, buf);
     hw_raw(&c->w, buf, n);
 }
 
@@ -470,7 +470,7 @@ static void html_text(html_ctx_t *c, const char *s, size_t n)
         if (ch == '&') {
             unsigned long cp = 0;
             size_t consumed = 0;
-            if (html_entity(s + i, s + n, &cp, &consumed)) {
+            if (html_entity_decode(s + i, s + n, &cp, &consumed)) {
                 if (html_cp_is_space(cp)) {
                     c->pending_space = true;
                 } else {

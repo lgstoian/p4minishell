@@ -119,10 +119,15 @@ on-disk index — always live.
 ### 12. Browser and app sweep (v1.4.0)
 
 - **Browser:** `browser <url|file>` renders HTML+CSS visibly in the 80x25 TUI
-  page (headings, lists, links, tables, image alt), with navigation history,
-  bookmarks, Basic auth, and an offline SD path. Test readback is
-  `tui dump`; the offline showcase is `apps/website/` + `WEB.BAT`, captured as
+  page (headings, lists, links, tables, CSS colours, BMP images as coloured
+  blocks, and in-page JS `onload`/`onclick`), with navigation history,
+  bookmarks, Basic auth, and an offline SD path. `browser js <id>` dispatches an
+  element handler; `browser css` is the diagnostic. Test readback is
+  `tui dump`; the offline dashboard is `apps/website/` + `WEB.BAT`, captured as
   [`docs/assets/browser-website.png`](docs/assets/browser-website.png).
+- **MCP:** `components/mcp/` speaks Model Context Protocol JSON-RPC over the
+  shared networking HTTP transport (`mcp status|connect|tools|call`); responses
+  are parsed by the one JSON reader.
 - **HTTP:** `httpget` gained `/h:`, `/post`, `/stream` and a persisted cookie
   jar (`/cookie`, `sd:/HTTPCOOK.TXT`).
 - **Apps:** a shared `APPLIB.BAT` routine library and opt-in feature probe

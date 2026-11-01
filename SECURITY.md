@@ -158,6 +158,22 @@ and keep their contract; prefer `link` for anything destructive.
 - **Opt-in extraction:** `epub extract <n> <file>` writes resources (images,
   CSS, fonts) to SD card; the source archive is never modified.
 
+## Browser JavaScript and MCP
+
+- **In-page JavaScript is a trust boundary.** `<script>`, `onload`, and
+  `onclick` run in the existing QuickJS sandbox (5 s timeout, PSRAM heap cap)
+  with a per-page `P4_CONFIG_BROWSER_JS_MAX_BYTES` limit. A page read from
+  `sd:/` is user-authored (the same trust as a `.bat`); an `http(s)` page is
+  remote content and must be treated as untrusted. `P4_CONFIG_BROWSER_JS=0`
+  disables execution entirely.
+- **MCP is a remote client.** `mcp connect` uses the networking HTTP/TLS
+  policy; responses are displayed, never auto-run. The optional `token` is not
+  yet sent (bearer transport is a follow-up); do not rely on it for
+  authentication until that lands. Treat a remote MCP server as untrusted.
+- **Images** are fetched/read only when `P4_CONFIG_BROWSER_IMAGES=1`, capped at
+  `P4_CONFIG_BROWSER_IMAGE_MAX_BYTES` (64 KiB) and decoded by the existing gfx
+  BMP validator (no shell, no code execution).
+
 ## Known gaps (not bugs)
 
 - Physical SD access defeats the device lock (recovery path above).

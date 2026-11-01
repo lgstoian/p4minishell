@@ -31,6 +31,10 @@ delay 500
 browser sd:/WEB/INDEX.HTML
 if errorlevel 1 goto :fail
 
+rem Demonstrate the in-page JS event hook: dispatch the RUN DEMO button's
+rem onclick before the capture so the screenshot shows the live status update.
+browser js go
+
 rem Capture the framebuffer while the page is still on screen, then keep it
 rem visible briefly. Writing the BMP to SD (instead of streaming) keeps the
 rem capture off the serial console and works while this batch owns the worker.

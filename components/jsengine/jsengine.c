@@ -17,6 +17,11 @@ static volatile bool s_interrupt_flag = false;
 
 struct dom_tree *g_dom_tree = NULL;
 
+void jsengine_set_dom_tree(struct dom_tree *tree)
+{
+    g_dom_tree = tree;
+}
+
 static void *js_psram_malloc(JSMallocState *s, size_t size)
 {
     (void)s;

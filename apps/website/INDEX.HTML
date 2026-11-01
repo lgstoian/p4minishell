@@ -1,26 +1,38 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>P4MiniShell Web</title>
+<title>P4MiniShell // Device Dashboard</title>
 <style>
-h1 { font-weight: bold; }
-h2 { font-weight: bold; }
+body { background-color: #001830; color: #c0c0c0; }
+h1 { color: #00ffff; text-align: center; font-weight: bold; }
+h2 { color: #ffff55; font-weight: bold; }
+p { color: #c0c0c0; }
+a { color: #55ffff; text-decoration: underline; }
+#status { color: #55ff55; font-weight: bold; }
+table { color: #ffffff; }
+th { color: #00ffff; font-weight: bold; background-color: #003050; }
+td { color: #c0c0c0; }
+.hot { color: #ff5555; font-weight: bold; }
+pre { color: #ffff55; background-color: #002040; }
+button { color: #ffff55; font-weight: bold; }
+footer { color: #808080; }
 </style>
 </head>
 <body>
-<h1>P4MiniShell Browser</h1>
-<p>A basic website rendered entirely on the ESP32-P4.</p>
-<a href="sd:/WEB/PAGE2.HTML">Home</a>
-<a href="sd:/WEB/PAGE2.HTML">Documentation</a>
-<a href="sd:/WEB/PAGE2.HTML">Reference apps</a>
-<h2>This page</h2>
-<ul>
-<li>HTML parsed into a DOM tree</li>
-<li>CSS applied before layout</li>
-<li>Links, lists and image alt text</li>
-</ul>
-<h2>Device</h2>
-<p>ESP32-C6 hosted radio over SDIO.</p>
+<h1>P4MINISHELL // DEVICE DASHBOARD</h1>
+<p id="status">JS booting...</p>
+<table>
+<tr><th>SUBSYSTEM</th><th>STATE</th><th>DETAIL</th></tr>
+<tr><td>CPU</td><td class="hot">ESP32-P4</td><td>360 MHz dual-core</td></tr>
+<tr><td>RADIO</td><td>ESP32-C6</td><td>Wi-Fi over SDIO</td></tr>
+<tr><td>STORAGE</td><td>microSD</td><td>15.0 GiB FAT</td></tr>
+<tr><td>DISPLAY</td><td>MIPI-DSI</td><td>1024 x 600</td></tr>
+</table>
+<img src="sd:/WEB/LOGO.BMP" alt="P4 logo">
+<p><a href="sd:/WEB/PAGE2.HTML">Docs</a> | <a href="sd:/WEB/PAGE2.HTML">Home</a> | <button id="go" onclick="document.getElementById('status').textContent = 'JS EVENT OK: button click handled'; document.getElementById('status').style = 'color:#ff5555;font-weight:bold';">RUN DEMO</button></p>
 <footer>sd:/WEB/INDEX.HTML - no cloud required.</footer>
+<script>
+document.getElementById('status').textContent = 'JS online: DOM + CSS + image + events';
+</script>
 </body>
 </html>
