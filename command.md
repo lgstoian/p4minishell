@@ -4589,8 +4589,12 @@ The page is parsed into a DOM tree, the `<style>` cascade is applied
 colour/background/alignment/weight/decoration), and **one shared DOM renderer**
 lays out headings, paragraphs, nested lists, tables, pre, blockquotes, rules,
 links, inline emphasis, and images. Images are fetched/read, decoded by the one
-gfx BMP decoder, and drawn as coloured blocks (`P4_CONFIG_BROWSER_IMAGES`);
-alt text is the fallback.
+gfx BMP decoder, and drawn as a luminance-ramp ASCII grid (`P4_CONFIG_BROWSER_IMAGES`):
+each pixel becomes one shade glyph from the shared `ANSI_IMAGE_RAMP` (which never
+contains the LVGL recolor delimiter `#`, so no cell can lose its colour), coloured
+with the nearest DOS palette entry; alt text is the fallback. A centered element
+(`text-align: center`, inherited from `body`) shifts its whole block into the
+page's content column.
 
 In-page JavaScript (`P4_CONFIG_BROWSER_JS`) runs `<script>` blocks and
 `onload`/`onclick` handlers through the existing QuickJS engine. The DOM

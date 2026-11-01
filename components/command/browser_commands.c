@@ -391,7 +391,17 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
             uint16_t c = gfx_surface_get(&surf, x, y);
-            pixels[y * w + x] = tui_rgb_to_dos(browser_rgb565_to_rgb888(c));
+            uint32_t rgb = browser_rgb565_to_rgb888(c);
+            uint8_t dos = tui_rgb_to_dos(rgb);
+            /* Pack the DOS foreground and the luminance-ramp level (0..9) so
+             * the renderer can pick a shade glyph without a local palette. */
+            int lum = (int)((((rgb >> 16) & 0xFF) * 30 +
+                             ((rgb >> 8) & 0xFF) * 59 +
+                             (rgb & 0xFF) * 11) / 100);
+            int level = lum * 9 / 255;
+            if (level < 0) level = 0;
+            if (level > 9) level = 9;
+            pixels[y * w + x] = (uint8_t)((dos << 4) | level);
         }
     }
     gfx_surface_free(&surf);

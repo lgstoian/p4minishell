@@ -7,7 +7,7 @@
  * @module ansi
  * @layer leaf
  * @domain ui
- * @provides ANSI palette, format-string builder, LVGL recolor
+ * @provides ANSI palette, format-string builder, LVGL recolor, image glyph ramp
  * @status stable
  * @test test/main/test_ansi_format.c
  * @hard-rule ai-context.md#shell-core-rules
@@ -361,6 +361,31 @@ int ansi_vformat(char *dst, size_t dst_size, const char *format, va_list args);
 
 /** OSC 8 close sequence: ends the hyperlink, back to plain styled text. */
 #define ANSI_OSC8_CLOSE          "\x1B]8;;\x1B\\"
+
+/* ========================================================================
+ * IMAGE -> TEXT RAMP
+ * ========================================================================
+ * Rendering an image into a text cell grid (TUI page or ANSI) picks one glyph
+ * per pixel from a luminance ramp. The ramp MUST NOT contain '#': LVGL recolor
+ * treats '#' as the colour delimiter, and its only literal escape (a '#' seen in
+ * the PARAMETER state) is drawn in the label's base colour, not the run colour,
+ * so a '#' cell silently loses its colour. There is exactly one ramp, shared by
+ * tui_draw_image() (components/tui) and the DOM renderer (components/markdown).
+ */
+
+/** 10-level dark->bright glyph ramp (index 0 = darkest). Never contains '#'. */
+#define ANSI_IMAGE_RAMP          " .:-=+*X%@"
+
+/** Highest valid index into ANSI_IMAGE_RAMP. */
+#define ANSI_IMAGE_RAMP_LAST     9
+
+/** Glyph for a luminance level (clamped to the ramp). Pure, headless-safe. */
+static inline char ansi_image_glyph(int level)
+{
+    if (level < 0) level = 0;
+    if (level > ANSI_IMAGE_RAMP_LAST) level = ANSI_IMAGE_RAMP_LAST;
+    return ANSI_IMAGE_RAMP[level];
+}
 
 /* ========================================================================
  * ANSI TEXT PROCESSING

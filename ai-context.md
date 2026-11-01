@@ -94,7 +94,10 @@ the bug-campaign log live in [`bugs.md`](bugs.md).
   - Images: `browser_load_image` resolves the src against the page URL,
     fetches (HTTP) or reads (SD), decodes with `gfx_bmp_parse_header_ex` /
     `gfx_bmp_decode_scaled_565`, maps to DOS via `tui_rgb_to_dos`, and the
-    renderer draws full-block glyphs (the TUI label renders foreground only).
+    renderer draws one luminance-ramp glyph per pixel (the TUI label renders
+    foreground only; the shared `ANSI_IMAGE_RAMP` excludes the LVGL recolor
+    delimiter `#`, which would otherwise be drawn in the base colour).
+    `tui_draw_image` uses the same ramp, so there is no second one.
   - In-page JS: `<script>`/`onload`/`onclick` run on the existing `jsengine`;
     `js_dom.c` exposes `document.getElementById`/`body`/`title`/`write`,
     element `textContent`/`innerHTML`/`style`/attributes, `addEventListener`,

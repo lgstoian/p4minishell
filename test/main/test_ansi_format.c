@@ -243,6 +243,30 @@ void test_ansi_to_lvgl_recolor(void)
 }
 
 /* ========================================================================
+ * IMAGE -> TEXT RAMP TESTS (the one shared image glyph ramp)
+ * ======================================================================== */
+
+void test_ansi_image_ramp(void)
+{
+    /* The ramp is the single glyph source for image-to-text rendering and MUST
+     * never contain '#': LVGL recolor treats '#' as the colour delimiter, and
+     * its only literal escape is drawn in the label's base colour, so a '#'
+     * cell would silently lose its run colour. */
+    TEST_ASSERT_EQUAL_STRING(" .:-=+*X%@", ANSI_IMAGE_RAMP);
+
+    for (int level = 0; level <= ANSI_IMAGE_RAMP_LAST; level++) {
+        char glyph = ansi_image_glyph(level);
+        TEST_ASSERT_TRUE(glyph != '#');
+        TEST_ASSERT_EQUAL_INT(ANSI_IMAGE_RAMP[level], glyph);
+    }
+
+    /* Out-of-range levels clamp instead of indexing past the literal. */
+    TEST_ASSERT_EQUAL_INT(ANSI_IMAGE_RAMP[0], ansi_image_glyph(-5));
+    TEST_ASSERT_EQUAL_INT(ANSI_IMAGE_RAMP[ANSI_IMAGE_RAMP_LAST],
+                          ansi_image_glyph(999));
+}
+
+/* ========================================================================
  * OSC 8 HYPERLINK TESTS (metadata dropped, label kept)
  * ========================================================================
  * Hyperlinks (`ESC ] 8 ;; <target> ST <label> ESC ] 8 ;; ST`) are metadata:

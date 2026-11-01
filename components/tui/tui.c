@@ -641,10 +641,9 @@ uint8_t tui_rgb_to_dos(uint32_t rgb)
 void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img)
 {
     /* The TUI label renders only the foreground colour (LVGL recolor has no
-     * per-span background), so a pixel is drawn as an ASCII glyph chosen from a
-     * luminance ramp, coloured with the nearest DOS palette entry as fg. */
-    static const char k_ramp[] = " .:-=+*#%@";
-    const int ramp_last = (int)(sizeof(k_ramp) - 2);
+     * per-span background), so a pixel is drawn as an ASCII glyph chosen from the
+     * shared image ramp (components/ansi: it excludes the recolor delimiter '#'),
+     * coloured with the nearest DOS palette entry as fg. */
     int cy;
 
     if (s_cells == NULL || img == NULL || img->px == NULL) return;
@@ -683,10 +682,10 @@ void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img)
             rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 
             lum = (r * 30 + g * 59 + b * 11) / 100; /* 0..255 luma */
-            level = lum * ramp_last / 255;
+            level = lum * ANSI_IMAGE_RAMP_LAST / 255;
             if (level < 0) level = 0;
-            if (level > ramp_last) level = ramp_last;
-            ch[0] = k_ramp[level];
+            if (level > ANSI_IMAGE_RAMP_LAST) level = ANSI_IMAGE_RAMP_LAST;
+            ch[0] = ansi_image_glyph(level);
             ch[1] = '\0';
             tui_print_at(col, row, ch, tui_rgb_to_dos(rgb), 16);
         }
@@ -1013,7 +1012,11 @@ void tui_flush(void)
                 }
             }
             if (tagged) {
-                if (pos + 2 < cap) { buf[pos++] = ' '; buf[pos++] = '#'; }
+                /* Close the recolor run with '#' only. A space before the
+                 * closing '#' is rendered as a real space by LVGL, so every
+                 * coloured run shifted the following cells right (the table
+                 * columns and the image border drifted). */
+                if (pos + 1 < cap) { buf[pos++] = '#'; }
             }
             c += run;
         }

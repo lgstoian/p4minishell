@@ -15,6 +15,8 @@
 
 #include "dom_render.h"
 
+#include "ansi.h" /* ansi_image_glyph / ANSI_IMAGE_RAMP_* */
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -226,43 +228,57 @@ static void render_image(render_ctx_t *c, dom_node_t *node, const style_t *st)
         int cell_w = c->ops->cols - c->col - 2;
         int cell_h;
         int x, y;
+        int saved_indent = c->indent;
 
         if (cell_w > 32) cell_w = 32;
         if (cell_w < 4) cell_w = 4;
         cell_h = (cell_w * img.height) / (img.width * 2);
         if (cell_h < 2) cell_h = 2;
-        if (cell_h > 4) cell_h = 4;
+        if (cell_h > 6) cell_h = 6;
         if (c->row + cell_h + 2 > c->ops->rows) {
             free(img.pixels);
             goto alt_text;
         }
-        /* Top border. */
-        for (x = 0; x < cell_w + 2 && !c->done; x++) {
-            emit_utf8(c, x == 0 ? "\xe2\x94\x8c" :
-                         (x == cell_w + 1 ? "\xe2\x94\x90" : "\xe2\x94\x80"), 3, st);
+        /* A centered image shifts the whole box (border included) so it sits in
+         * the page's content column instead of hugging the left edge. The indent
+         * makes newline() restart each row at the box's left cell. */
+        if (c->ops->tui && st->align == 1) {
+            c->indent = (c->ops->cols - (cell_w + 2)) / 2;
+            if (c->indent < 0) c->indent = 0;
+            c->col = c->indent + 1;
         }
+        /* ASCII border/cells: the TUI font's box/block glyphs are full-width,
+         * which breaks the 80-column grid; ASCII is monospace. */
+        emit_text(c, "+", st);
+        for (x = 0; x < cell_w && !c->done; x++) emit_text(c, "-", st);
+        emit_text(c, "+", st);
         newline(c);
         for (y = 0; y < cell_h && !c->done; y++) {
-            emit_utf8(c, "\xe2\x94\x82", 3, st);
+            emit_text(c, "|", st);
             for (x = 0; x < cell_w; x++) {
                 int sx = (x * img.width) / cell_w;
                 int sy = (y * img.height) / cell_h;
-                uint8_t color = img.pixels[sy * img.width + sx];
+                uint8_t packed = img.pixels[sy * img.width + sx];
                 style_t cell = *st;
-                /* The TUI label renders foreground only (no per-cell bg), so
-                 * a full block glyph carries the image pixel colour. */
-                cell.fg = color;
+                /* The TUI label renders only the foreground colour and LVGL
+                 * treats a literal '#' as the recolor delimiter, so the ramp
+                 * MUST NOT contain '#' (see ansi_image_glyph): a '#' cell would
+                 * be drawn in the label's base colour and lose its colour. */
+                char glyph[2];
+                glyph[0] = ansi_image_glyph(packed & 0x0F);
+                glyph[1] = '\0';
+                cell.fg = (uint8_t)(packed >> 4);
                 cell.bg = 16;
-                emit_utf8(c, "\xe2\x96\x88", 3, &cell);
+                emit_text(c, glyph, &cell);
             }
-            emit_utf8(c, "\xe2\x94\x82", 3, st);
+            emit_text(c, "|", st);
             newline(c);
         }
-        for (x = 0; x < cell_w + 2 && !c->done; x++) {
-            emit_utf8(c, x == 0 ? "\xe2\x94\x94" :
-                         (x == cell_w + 1 ? "\xe2\x94\x98" : "\xe2\x94\x80"), 3, st);
-        }
+        emit_text(c, "+", st);
+        for (x = 0; x < cell_w && !c->done; x++) emit_text(c, "-", st);
+        emit_text(c, "+", st);
         newline(c);
+        c->indent = saved_indent;
         free(img.pixels);
         return;
     }
@@ -406,8 +422,23 @@ static void render_table(render_ctx_t *c, dom_node_t *node, style_t st, int inde
     }
     if (rows == 0 || cols == 0) return;
 
+    /* Total grid width of the table body (cells + 2-space gutters). */
+    int total = 0;
+    for (int x = 0; x < cols; x++) {
+        total += widths[x];
+        if (x + 1 < cols) total += 2;
+    }
+    /* Center the table when the element's CSS text-align is center. Every row
+     * (and the header rule) must restart at this column: newline() resets c->col
+     * to the indent, so setting it once would center only the first row. */
+    int start = 1;
+    if (st.align == 1) {
+        start = 1 + (c->ops->cols - total) / 2;
+        if (start < 1) start = 1;
+    }
+
     for (int r = 0; r < rows && !c->done; r++) {
-        emit_text(c, "|", &st);
+        c->col = start;
         for (int x = 0; x < cols; x++) {
             char padded[80];
             int len = (int)strlen(cells[r][x]);
@@ -417,16 +448,16 @@ static void render_table(render_ctx_t *c, dom_node_t *node, style_t st, int inde
             memcpy(padded, cells[r][x], (size_t)len);
             memset(padded + len, ' ', (size_t)pad);
             padded[len + pad] = '\0';
-            emit_text(c, " ", &st);
             emit_text(c, padded, &cell_styles[r][x]);
-            emit_text(c, " |", &st);
+            if (x + 1 < cols) {
+                emit_text(c, "  ", &st);
+            }
         }
         newline(c);
         if (header[r]) {
-            emit_text(c, "+", &st);
-            for (int x = 0; x < cols; x++) {
-                for (int k = 0; k < widths[x] + 2; k++) emit_text(c, "-", &st);
-                emit_text(c, "+", &st);
+            c->col = start;
+            for (int k = 0; k < total && !c->done; k++) {
+                emit_text(c, "-", &st);
             }
             newline(c);
         }
@@ -492,22 +523,32 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         node->tag[2] == '\0') {
         static const uint8_t head_color[6] = {15, 14, 11, 13, 12, 10};
         int level = node->tag[1] - '1';
+        char text[512];
+        int len;
+        int start = 1;
+
         st.bold = true;
         if (st.fg == 16) st.fg = head_color[level];
         if (st.font_scale < 2) st.font_scale = 2;
+        node_plain_text(node, text, sizeof(text));
+        len = (int)strlen(text);
         newline(c);
         if (st.align == 1) {
-            char text[512];
-            node_plain_text(node, text, sizeof(text));
-            {
-                int len = (int)strlen(text);
-                int start = 1 + (c->ops->cols - len) / 2;
-                if (start < 1) start = 1;
-                c->col = start;
-            }
+            start = 1 + (c->ops->cols - len) / 2;
+            if (start < 1) start = 1;
+            c->col = start;
         }
         render_children(c, node, st, indent);
         newline(c);
+        if (level == 0 && len > 0) {
+            /* An ASCII rule under the title gives the h1 a visual hierarchy
+             * the fixed-size TUI font cannot express by point size. */
+            c->col = start;
+            for (int i = 0; i < len && !c->done; i++) {
+                emit_text(c, "=", &st);
+            }
+            newline(c);
+        }
         return;
     }
     if (strcmp(node->tag, "p") == 0 || strcmp(node->tag, "div") == 0 ||
@@ -554,7 +595,7 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         c->indent = indent + 2;
         c->col = c->indent + 1;
         quote.fg = 8;
-        emit_text(c, "\xe2\x94\x82 ", &quote);
+        emit_text(c, "| ", &quote);
         render_children(c, node, quote, indent + 2);
         newline(c);
         c->indent = saved;
@@ -563,7 +604,7 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
     if (strcmp(node->tag, "hr") == 0) {
         newline(c);
         for (int x = 1; x < c->ops->cols && !c->done; x++) {
-            emit_utf8(c, "\xe2\x94\x80", 3, &st);
+            emit_text(c, "-", &st);
         }
         newline(c);
         return;

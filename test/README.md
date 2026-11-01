@@ -47,7 +47,7 @@ test/
     test_shell_abort.c      # foreground-break flag and worker-busy state
     test_shell_variables.c  # variable expansion
     test_shell_debug_log.c  # debug log buffer
-    test_ansi_format.c      # ANSI format string builder
+    test_ansi_format.c      # ANSI format string builder + image glyph ramp
     test_storage_format.c   # size formatting, path helpers
     test_storage_volumes.c  # hexdump rows, DEBUG number parsing + guards, volume classification, MBR decode
     test_certs.c            # DER->PEM conversion (real CA cert fixture)

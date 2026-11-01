@@ -61,6 +61,12 @@ def run(dev, ctx):
     c.check("page render did not fail", "[M-WEB-FAIL]" not in rest_text,
             rest_text[-300:])
 
+    # The app dispatches the RUN DEMO onclick and reads the status row back with
+    # `tui dump`; the screenshot is captured before the click, so the event is
+    # asserted here instead of being visible in the capture.
+    c.check("in-page JS event updated the status", "JS EVENT OK" in rest_text,
+            rest_text[-400:])
+
     if "[M-WEB-DONE]" in rest_text and "[M-WEB-FAIL]" not in rest_text:
         try:
             data = dev.pull_file("WEB/SHOT.BMP")

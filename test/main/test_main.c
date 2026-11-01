@@ -188,6 +188,7 @@ extern void test_ansi_format_colors(void);
 extern void test_ansi_strip_to_plain(void);
 extern void test_ansi_format_width_flags(void);
 extern void test_ansi_to_lvgl_recolor(void);
+extern void test_ansi_image_ramp(void);
 extern void test_ansi_csi_trailing_complete(void);
 extern void test_ansi_csi_trailing_split(void);
 extern void test_ansi_osc8_strip(void);
@@ -921,6 +922,7 @@ void app_main(void)
     RUN_TEST(test_ansi_strip_to_plain);
     RUN_TEST(test_ansi_format_width_flags);
     RUN_TEST(test_ansi_to_lvgl_recolor);
+    RUN_TEST(test_ansi_image_ramp);
     RUN_TEST(test_ansi_csi_trailing_complete);
     RUN_TEST(test_ansi_csi_trailing_split);
     RUN_TEST(test_ansi_osc8_strip);

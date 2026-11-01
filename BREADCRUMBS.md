@@ -38,7 +38,7 @@ invert the only upward edges. Never add a trampoline.
 | Module | Layer | Domain | Provides | Tests | Rules | Path |
 |--------|-------|--------|----------|-------|-------|------|
 | alarm | leaf | data | SD-persisted alarm/event store + background checker | [t](test/main/test_alarm.c) | `ai-context.md#module-layering-rules` | `components/alarm` |
-| ansi | leaf | ui | ANSI palette, format-string builder, LVGL recolor | [t](test/main/test_ansi_format.c) | `ai-context.md#shell-core-rules` | `components/ansi` |
+| ansi | leaf | ui | ANSI palette, format-string builder, LVGL recolor, image glyph ramp | [t](test/main/test_ansi_format.c) | `ai-context.md#shell-core-rules` | `components/ansi` |
 | applib | app | app | native-app runtime library (shell SDK surface) | [t](test/main/test_applib.c) | `ai-context.md#module-layering-rules` | `components/applib` |
 | archive | leaf | fs | USTAR archive core | [t](test/main/test_archive.c) | `ai-context.md#module-layering-rules` | `components/archive` |
 | audio | leaf | media | audio output routing, WAV params, mic stats, Goertzel | [t](test/main/test_audio.c) | `ai-context.md#module-layering-rules` | `components/audio` |

@@ -388,7 +388,7 @@
       "header": "components/ansi/ansi.h",
       "layer": "leaf",
       "path": "components/ansi",
-      "provides": "ANSI palette, format-string builder, LVGL recolor",
+      "provides": "ANSI palette, format-string builder, LVGL recolor, image glyph ramp",
       "requires": [
         "esp_system"
       ],
@@ -1070,6 +1070,7 @@
       "provides": "Markdown/HTML renderers, DOM, CSS, print paginator",
       "requires": [
         "esp_system",
+        "ansi",
         "p4heap",
         "strutil"
       ],

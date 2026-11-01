@@ -33,6 +33,11 @@ extern "C" {
  *
  * The caller's load_image owns the decode (BMP via components/gfx) and the
  * RGB565 -> DOS mapping (tui_rgb_to_dos); the renderer only samples the grid.
+ * Each byte packs `(dos_fg << 4) | ramp_level`: the high nibble is the DOS
+ * foreground colour and the low nibble is the luminance-ramp level (0..9)
+ * that picks the shade glyph. Packing keeps one byte per pixel while letting
+ * the renderer choose a glyph that is never the LVGL recolor delimiter '#'
+ * (see ansi_image_glyph in components/ansi/ansi.h - the one shared ramp).
  * @p pixels is a plain malloc() buffer the renderer frees. */
 typedef struct {
     int width;

@@ -5,6 +5,7 @@ idf_component_register(
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         esp_system
+        ansi
         p4heap
         strutil
 )
