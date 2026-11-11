@@ -1,33 +1,22 @@
-# P4MiniShell Unit Tests (firmware v1.4.0)
+# P4MiniShell Unit Tests (firmware v1.4.1)
 
-This directory contains the unit tests for the P4MiniShell components. Tests
-use the Unity test framework (included in ESP-IDF) and run on the P4 target.
+This directory contains the unit tests for the P4MiniShell components. They use
+the Unity framework (included in ESP-IDF) and run in two places:
 
-Current baseline: **617 tests, 0 failures, 2 ignored** on COM3 and COM6
-(`tools/unit_run.py COM3 COM6`). The static case count is **668** (4
-`test_breadcrumb.c` + 5 `test_mcp.c` + 5 tests that were defined but never
-registered). The runner completes cleanly with
-`=== All tests completed ===` and no reboot; if the board is reset-looping,
-check for a newly added test that calls an LVGL/heap path before `lv_init()`.
-The latest additions — the 14 `test_pim.c` sync tests, the 3 `test_alarm.c`
-render/parse tests, the editor CSV tests, the power deep-wake test, the new
-`test_html.c` reader tests (12), the `test_markdown.c` strip/auto/form-feed
-tests (3), `test_filetype_html`, the `test_editor.c` HTML lexer/comment
-tests (2), the 7 `test_audio.c` output-mode/route/amp-gate/WAV/mic-stats/Goertzel
-tests, the 4 spell
-overlay/cursor-word tests, the USB/HID spell key-map test, the batch
-round (`test_batch_control.c`: `shift /n` parser, `for /f` defaults),
-the shell round (`test_shell_prompt.c`: session title,
-`test_shell_pipeline.c`: echo-glued detector, redirect devices/missing
-  targets/handle prefixes), and the 7 `test_netsvc.c` event-service tests
-  (MQTT codec, topic matcher, backoff, outbox framing) — plus the 3 new
-  `test_audio.c` amp-gate/mic-stats/Goertzel cases — plus the DOS-parity and
-  deferred-hardware rounds (`test_storage_volumes.c`: hexdump rows, DEBUG
-  parsing/guards, volume classification, MBR decode; `test_certs.c`:
-  DER→PEM conversion; `test_portal.c`: HTML escaping;
-  `test_pim_carddav.c`: multistatus scan, card split, UID, URL join) — plus the **chat transport tests** (`test_chat.c`: config init, inbox/log ring, sequence, send/poll/clear) and **EPUB transport tests** (`test_epub.c`: config init, OPF parse, spine/TOC, render) — bring the
-suite to **685 Unity cases** (static count; refresh the hardware baseline with `tools/unit_run.py`). Latest coverage: the 6 `test_browser_cache.c` cases (image round-trip, miss/NULL handling, refresh-in-place, LRU eviction, clear, and the page cache's no-page degradation), the 8 `test_rss_store.c` RSS store cases (name validation, record round-trip, malformed-record rejection, `'|'`-in-field refusal, read-line parsing, CONFIG.SYS directive parsing), `test_epub.c` EPUB transport tests on top of `test_chat.c` chat transport tests, `test_ansi_osc8_strip` for OSC 8 hyperlink stripping, `test_editor_link_under_cursor` for the edit Open link prefill, the 3 `test_assoc.c` association argument cases, the 3 `test_pkg.c` version/dependency/sanitize cases, the 7 `test_tmgr.c` task-manager cases, the 4 `test_breadcrumb.c` trail-formatter cases, and the 5 `test_mcp.c` MCP request-builder cases; hardware-verified on both boards
-`jc1060p470c`, refresh the hardware count with `tools/unit_run.py <COM_PORT>`.
+- **On the P4 target** - the authoritative run (`tools/unit_run.py COM3 COM6`).
+- **On the host** - a hardware-free pre-gate for the pure logic (`test/host/`,
+  ESP-IDF `linux` target, 132 of the 634 cases). See `harness.md` 2.2 and
+  section "Host suite" below.
+
+Current baseline: **633 tests, 0 failures, 2 ignored** on COM3 and COM6. The
+static case count is **685** (what `tools/green_guard.py` sees in
+`test/main/test_*.c`); the difference is cases that only compile for the
+target. The runner completes cleanly with `=== All tests completed ===` and no
+reboot; if the board is reset-looping, check for a newly added test that calls
+an LVGL/heap path before `lv_init()`.
+
+The suite is organised by component. Dated round-by-round detail lives in
+`changelog.md`; this file documents the layout and how to run it.
 
 ## Test Structure
 
@@ -82,7 +71,7 @@ test/
     test_markdown.c         # markdown ANSI renderer + HTML serializer + print paginator
     test_filetype.c         # filetype registry
     test_json.c             # json validate/pretty
-    test_gfx.c             # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
+    test_gfx.c              # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
     test_asset.c            # CRC-32 vectors + asset manifest parser
     test_pkg.c              # pkg APPINFO-name helper + ECDSA signature vectors + version compare + requires= parse
     test_assoc.c            # assoc extension normalize + argument split
@@ -95,16 +84,24 @@ test/
     test_bind.c             # F-key bind table (set/lookup/count/index)
     test_crypt.c            # PBKDF2 key derivation + AES-GCM envelope round-trip (unit always runs; the former s07 hardware skip is gone — crypt now passes on both boards, F23 fixed)
     test_tcpterm.c          # tcpterm target parse, escape expansion, reply sanitize
-test_netsvc.c           # MQTT codec, topic matcher, backoff, outbox framing
-test_archive.c          # USTAR core
-test_epub.c             # EPUB config, OPF/NCX parse, spine/TOC, render
+    test_netsvc.c           # MQTT codec, topic matcher, backoff, outbox framing
+    test_archive.c          # USTAR core
+    test_epub.c             # EPUB config, OPF/NCX parse, spine/TOC, render
     test_rss_store.c        # RSS store record editors (name/round-trip/reject/separator), read-line parse, CONFIG.SYS directives
     test_browser_cache.c    # browser PSRAM caches: image round-trip/miss/refresh/LRU/clear, page-cache no-page degradation
-test_hardware.c         # Tab5 hardware-support pure helpers
+    test_hardware.c         # Tab5 hardware-support pure helpers
     test_sw_gcm.c           # software AES-256-GCM fallback
     test_userial.c          # userial VID:PID + line-coding parsers
     test_import.c           # vCard/iCalendar line + DATE-TIME parsers, JSON unescape
     test_pim.c              # PIM render buffer + uid mint + newer-wins + identity payload
+    test_browser.c          # website renderer (DOM/CSS/images/JS hooks)
+    test_cas.c              # CAS parser/simplify/diff/solve/series
+    test_chat.c             # chat transport (config, inbox/log ring, sequence, send/poll/clear)
+    test_error_strings.c    # error-code -> message table
+    test_html.c             # HTML reader (components/markdown/html_read.c)
+    test_httpget.c          # cookie jar for httpget/browser
+    test_imgdec.c           # PNG/JPEG/BMP format probe
+    test_locale.c           # locale formatting (date order, 12/24h, decimals, thousands)
 ```
 
 ## Running Tests
@@ -173,3 +170,4 @@ and the default 1 MB single-app partition ran out of room.
 - Pure/headless logic is unit-tested; anything needing the LVGL label, SD
   card, or display (transcript flush, TUI rendering, modals, screenshot) is
   hardware-verified via the `apps/companion` drivers and `tools/`.
+

@@ -192,6 +192,54 @@ colours exposed it immediately. The flush now maps through
 `tui_dos_color_rgb()`. Verified by the refreshed `browser-website.png` (cyan
 title, red event status, cyan table header).
 
+## Fixed findings (2026-11-11 host-unit lane)
+
+### F42. `hard_reset()` over USB-Serial-JTAG did not reboot this board - **FIXED (2026-11-11)**
+
+- **Severity:** MEDIUM (harness confusion, not a firmware fault)
+- **Component:** harness (`tools/shell_session.py::hard_reset`) vs board
+  (COM3 reference)
+- **Found on:** 2026-10-11, task-manager debugging: repeated "fresh boot"
+  probes ran on stale state (an ancient suspended pool job haunted a full
+  day of debugging); a `reboot_check.py` showing zero boot bytes proved
+  `hard_reset()` never reset.
+- **Symptom:** `hard_reset()` returned normally but no ROM boot text
+  followed; pool slots, SD state and uptime all survived. Only the serial
+  `reboot` verb (or a real power cycle) reset.
+- **Root cause:** USB-Serial-JTAG has no DTR reset line; the DTR/RTS ritual
+  only affects classic USB-serial bridges. Pre-setting DTR/RTS low prevents
+  reset-on-open, but cannot trigger one.
+- **Fix:** `hard_reset()` now resets with `esptool --after watchdog_reset`,
+  which starts the image reliably on these boards. Before the change the
+  discipline was: any "fresh boot" claim must show boot text, otherwise
+  assume stale state.
+- **Verification:** `unit_run.py COM3 COM6` no longer produces the spurious
+  cold-start misses; both boards report `=== All tests completed ===`
+  633/0/2 after a watchdog reset. First hit during the host-lane work, when
+  both boards sat in ROM download mode after flashing.
+
+### F59. `history /load` stored whitespace-only lines as entries - **FIXED (2026-11-11)**
+
+- **Severity:** LOW (cosmetic history pollution; no data loss)
+- **Component:** `components/shell/shell_core.c` (`shell_history_load_lines`)
+- **Found on:** 2026-11-11, by the host unit-test lane: `test_history_file.c`
+  runs on the host (where `tmpfile()` works) and reported `Expected 2 Was 4`.
+  The same cases are IGNORED on ESP-IDF, so the target suite never saw it.
+- **Symptom:** loading a history file containing a blank or whitespace-only
+  line added an empty entry to the recall ring.
+- **Root cause:** the loop called `shell_trim(line);` and discarded the
+  returned pointer. `shell_trim()` skips leading whitespace by advancing the
+  pointer, so the buffer's first byte stayed a space and the `line[0] == '\0'`
+  skip never fired.
+- **Fix:** keep the allocation pointer for `free()` and test/use the trimmed
+  view (`const char *trimmed = shell_trim(line);`). Assigning the result back
+  to `line` would have freed an interior pointer.
+- **Verification:** `test_history_file.c` 3/3 on the host; on-target
+  `unit_run.py COM3 COM6` 633/0/2 (the two `tmpfile()` cases remain IGNORED).
+
+---
+
+
 ## Open findings
 
 None as of v1.4.1. F53 is closed below; the remaining entries document
@@ -382,6 +430,14 @@ hardware/environment limitations that are gated instead of fatal.
   With both fixes the full sweep is clean **3 consecutive** on COM6 and COM3,
   `boot_regression.py COMX 20` is 20/20 clean on both, and `dogfood.py` passes
   on both. The historical detail below is kept for the record.
+- **Recurrence (2026-11-03, RSS round):** the same signature reappeared once in a
+  full COM6 sweep - `task_wdt: IDLE0 (CPU 0)` with `CPU 0: shell_cmd` during
+  `launch GFXTOOL`, immediately after `[M-GFXTOOL-IMG]`. `s14_apps` passes 127/127
+  on an isolated re-run and COM3 is unaffected, so it stays transient. The yield
+  throttle in `batch_run_nested` is one second; the remaining suspects are a single
+  command that blocks longer than the watchdog window (`gfx save` / `gfx image` on
+  a slow card) and the Tab5's marginal C6 SDIO link (F6). Tracked by the roadmap's
+  two-board stability exit criterion, which asks for three clean full sweeps.
 - **Severity:** HIGH (crash/reboot under sustained mixed load; not reproduced
   on any targeted re-run yet)
 - **Component:** under determination — the F26 transcript pump, esp_hosted
@@ -715,26 +771,92 @@ hardware/environment limitations that are gated instead of fatal.
   182/182 COM3+COM6; `s01`/`s06`/`s10` green both boards; 4-image
   zero-warning builds; `boot_regression` 10/10 both boards, clean logs.
 
-### F42. `hard_reset()` over USB-Serial-JTAG does not reboot this board
 
-- **Severity:** MEDIUM (harness confusion, not a firmware fault)
-- **Component:** harness (`tools/shell_session.py::hard_reset`) vs board
-  (COM3 reference)
-- **Found on:** 2026-10-11, task-manager debugging: repeated "fresh boot"
-  probes ran on stale state (an ancient suspended pool job haunted a full
-  day of debugging); a `reboot_check.py` showing zero boot bytes proved
-  `hard_reset()` never reset.
-- **Symptom:** `hard_reset()` returns normally but no ROM boot text follows;
-  pool slots, SD state, and uptime all survive. Only the serial `reboot`
-  verb (or a real power cycle) resets.
-- **Root cause:** USB-Serial-JTAG has no DTR reset line; the DTR/RTS ritual
-  only affects classic USB-serial bridges. `hard_reset()` pre-setting
-  DTR/RTS low prevents reset-on-open, but cannot trigger one.
-- **Fix:** harness discipline, no code change — "fresh boot" claims must
-  show boot text (`ESP-IDF` / `boot complete`); otherwise assume stale
-  state. `reboot` verb for a real reset.
-- **Verification:** `reboot` verb shows ROM boot text; pool returns to
-  boot state (bg0/bg1 SUS-never-launched, bg2 unavailable).
+### F43. Image viewer stack overflow (infinite recursion in `image_surface_free`)
+
+- **Severity:** HIGH (Guru Meditation / stack protection fault in `shell_cmd`)
+- **Component:** `components/modal/modal_surf.c`
+- **Found on:** 2026-11-02, ESP-Brookesia round hardware validation (COM3/COM6).
+- **Symptom:** `screen run P4SCR_I.FRM` (`type=image`) panicked with
+  `Guru Meditation Error: Core 0 panic'ed (Stack protection fault)` in task
+  `shell_cmd`; the faulting PC resolved to `modal_surf.c:1178`
+  (`image_surface_free`) and the backtrace was an unbounded repeat of
+  `modal_surf.c:1186`.
+- **Root cause:** the `image_surface_free()` helper added for the PNG/JPEG
+  viewer called **itself** in the non-imgdec branch instead of
+  `gfx_surface_free(&ctx->surface)` — infinite recursion until the 32 KiB
+  command-worker stack overflowed (the F41 class).
+- **Fix:** call `gfx_surface_free()` for the BMP path and `imgdec_free()` for
+  the imgdec path; the helper now frees through the decoder that produced the
+  pixels.
+- **Verification:** `s06_batch` (which drives `screen run type=image`) PASS on
+  both boards; the full release gate is green.
+
+### F44. Hosted NimBLE host will not initialize (`nimble_port_init` → ESP_FAIL)
+
+- **Severity:** MEDIUM (BLE scan/advertise/GATT unusable)
+- **Component:** `components/networking/bluetooth.c`, `esp_hosted` NimBLE port
+- **Found on:** 2026-11-02, ESP-Brookesia round hardware validation (COM3);
+  reproduces after a clean reboot.
+- **Symptom:** `bluetooth enable`, `bluetooth scan`, and `bluetooth gatt on`
+  all fail with `E (...) BLE_INIT: nimble host init failed` /
+  `bluetooth: Hosted BLE startup failed (0xffffffff)`. `bluetooth status`
+  shows `hosted ready: yes`, `controller: enabled`, `NimBLE host: off`,
+  `synced: no`, `last error: ESP_FAIL`.
+- **Root cause:** the IDF default `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL`
+  allocates every NimBLE host pool (msys + HCI evt/cmd/acl) from internal DRAM.
+  On this board the P4's internal DRAM is fully committed by the LVGL/display
+  buffers, the ESP-Hosted SDIO transport and the USB host — only ~3 KB was free
+  at startup — so `ble_buf_alloc()` returned `ESP_ERR_NO_MEM` and
+  `esp_nimble_init()` propagated `ESP_FAIL`. The controller and the hosted HCI
+  transport were healthy; it was purely a host-side RAM-region problem.
+- **Fix:** `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`. The host talks to an
+  external C6 controller over ESP-Hosted, so its pools have no DMA/IRAM
+  requirement and can come out of PSRAM. Also added an explicit
+  `xTaskGetHandle("nimble_host")` check: `esp_nimble_enable()` ignores the
+  `xTaskCreatePinnedToCore()` result, so a failed host-task creation would
+  otherwise look exactly like success and leave the stack permanently
+  `synced: no`.
+- **Verification:** on COM3 `bluetooth enable` now prints
+  `BLE host synchronized with the C6 controller`, `ps` lists `nimble_host`,
+  and `bluetooth status` reports `synced: yes`; `bluetooth gatt on`,
+  `bluetooth advertise on` (issued repeatedly), and `bluetooth scan` all
+  succeed with no error-level log lines. Internal DRAM contiguous headroom rose
+  from ~3 KB to ~21 KB.
+- **Status:** FIXED (hardware-verified on COM3).
+
+---
+
+### F45. USB MSC attach hard-hangs the whole firmware
+
+- **Severity:** HIGH (device unresponsive; needs a power cycle)
+- **Component:** `components/usb/usb.c` (`USB_MODULE_EVENT_MSC_CONNECTED`),
+  `components/storage` (FATFS mount)
+- **Found on:** 2026-11-02, ESP-Brookesia round hardware validation (COM3,
+  jc1060p470c): attaching a USB flash stick hung the board completely.
+- **Symptom:** the instant the stick is inserted the shell stops responding;
+  `q`/`reboot` over serial produce nothing (not even the ROM boot log after a
+  serial reboot). The board must be power-cycled.
+- **Root cause:** never reproduced under control, but the structural defect is
+  clear. The MSC connect path runs `msc_host_install_device()` in the
+  `usb_module` task while holding `s_usb_lock`. That call performs blocking SCSI
+  transfers (each bounded by `xfer->timeout_ms = 5000`, plus a 5 s
+  `msc_wait_for_ready_state()`), so one slow or non-responsive stick stalled
+  every other USB operation — the shell's `usb`/`dir u:` commands and the UI
+  pointer included — behind it. The remaining candidates (a brownout from the
+  stick's power draw, and the FATFS mount of a large volume) stay unconfirmed
+  because the board never produced a log.
+- **Fix applied:** `s_usb_lock` is now released around enumeration (a per-slot
+  `connecting` flag claims the slot across the unlocked enumeration window).
+  Raising the USB task stacks was also tried and **reverted**: it cost ~6 KB of
+  internal DRAM on the Tab5 (the three stacks grew by 2 KB each), dropping the
+  reboot-time headroom from ~14 KB to ~8 KB and regressing `s17_browser` there.
+  Internal DRAM is the scarce resource on this board; leave the IDF defaults alone.
+- **Impact:** the MSC path stays unusable until this is confirmed; `usb msc`,
+  automount, and `u:` I/O are all affected.
+- **Status:** FIX APPLIED, awaiting hardware confirmation — needs a controlled
+  repro with a small low-power stick while capturing serial, checking that
+  `usb.msc: connected=yes` appears and that the board stays responsive throughout.
 
 ---
 
@@ -756,6 +878,12 @@ one.
   modal) until a rebuild. Cosmetic only.
 - **Screenshot captures can show horizontal wrap artifact.** Assert layout
   through `header status` / `tui status`, not pixel positions.
+- **RSS read state is bounded** (`P4_CONFIG_RSS_READ_MAX`, default 200 entries across
+  all feeds). The oldest entries are evicted FIFO, so an item whose hash has been
+  evicted reads as unread again. Raise the limit or use `rss reset <name>` to clear it.
+- **RSS `read` after switching feeds can report "unchanged"**: the session cache holds
+  one feed at a time, so a conditional GET that answers 304 with no cached copy has
+  nothing to render. Reading the same feed repeatedly is served from the cache.
 - **Boot "No SD card" sometimes prints even though the card works.** Early
   probe can miss during lazy-mount; batch apps run normally.
 - **First `tone` after boot logs a benign `i2s_common` error.** Clears after

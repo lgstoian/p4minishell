@@ -1102,7 +1102,7 @@ after the ring last changed; `reboot` flushes it before reset.
 |------|--------|
 | history | List the numbered recall buffer (redirectable: `history > hist.txt`). |
 | history /save [file] | Write the history to SD (default `P4_CONFIG_HISTORY_PROFILE`), atomic with partial-file cleanup. |
-| history /load [file] | Restore history from SD (append, dedupe). |
+| history /load [file] | Restore history from SD (append, dedupe; blank and whitespace-only lines are skipped). |
 | history /search <text> | Print matching entries (newest first, case-insensitive substring). Its own command line is skipped so the query cannot self-match. |
 | history /clear | Clear the RAM history. |
 
@@ -3435,8 +3435,13 @@ delete, so `undelete` can recover an uninstalled payload.
 - **Bundle side** (`sd:/PKGS/<APP>/`): `<APP>.ASSETS` (manifest),
   `<APP>.APPINFO` (metadata), and payload files at their install-relative
   paths. A root payload `FOO.BAT` installs to `sd:/FOO.BAT`; a payload
-  `sub/x` installs to `sd:/sub/x`. Bundles are built host-side by
-  `apps/push_pkgs.py` (add `--sign NAME.priv.pem` to sign every manifest).
+  `sub/x` installs to `sd:/sub/x`. A bundle may also arrive as a single-file
+  `sd:/PKGS/<APP>.PKG` ZIP archive whose entries mirror that layout (the
+  leading `<APP>/` is optional); `pkg install` unpacks it through the ONE ZIP
+  reader and then runs the ordinary directory flow, and `pkg unpack` does only
+  the unpack. Bundles are built host-side by `apps/push_pkgs.py` (add
+  `--sign NAME.priv.pem` to sign every manifest) or `tools/make_pkg.py` (which
+  writes the `.PKG` archive).
 
 | Command | Description |
 |---------|-------------|
@@ -3444,16 +3449,19 @@ delete, so `undelete` can recover an uninstalled payload.
 | `pkg info <app>` | Title/description/version/type (+abi), a `signed:` line, plus each manifest entry as `ok`/`MISSING`/`BAD` |
 | `pkg verify <app>` | CRC-check the installed manifest and report its signature verdict (`pkg: OK n/m ok`) |
 | `pkg check` | Run the verify check over every installed app and summarise `pkg: n/m package(s) ok` |
-| `pkg install <app> [/signed] [/force]` | Two-pass copy of `PKGS/<app>/`: version/dependency gates, then pass 1 verifies CRCs **and** the signature, pass 2 copies payloads, then the APPINFO and manifest into `APPS/` |
+| `pkg install <app> [/signed] [/force]` | Two-pass copy of `PKGS/<app>/` (or the `PKGS/<app>.PKG` archive, which is unpacked first): version/dependency gates, then pass 1 verifies CRCs **and** the signature, pass 2 stages backups and installs each file atomically (temp + rename), then the APPINFO and manifest into `APPS/` |
+| `pkg unpack <app>` | Unpack `PKGS/<app>.PKG` into `PKGS/<app>/` only (no install) |
+| `pkg scan [dir]` | List `.PKG` archives and bundle directories in `dir` (default `PKGS/`) |
 | `pkg remove <app>` | Trash every manifest payload plus `<APP>.APPINFO` and `<APP>.ASSETS`; app data is KEPT with a `pkg purge` hint |
 | `pkg purge <app>` | `pkg remove` plus app-data cleanup (`data=` entries + `APPS/<APP>.INI`) |
 | `pkg outdated` | Installed apps whose staged `PKGS/` bundle is newer (`UPDATE <app> <old> -> <new>`) |
 | `pkg key show \| install <file> \| clear` | Manage the trusted ECDSA P-256 public key (`p4sign` NVS store) |
 
 `pkg install` aborts without touching installed files if the bundle needs a
-newer firmware (`min_fw=`, always enforced), a `requires=APP>=ver` dependency
-is missing or too old, the install would be a downgrade (without `/force`;
-`/force` skips the downgrade guard only), any bundle payload is missing or
+newer firmware (`min_fw=`, always enforced), a `requires=APP>=ver` or
+`services=` dependency is missing or too old, the install would be a downgrade
+(without `/force`; `/force` skips the downgrade guard only), any bundle
+payload is missing or
 corrupt (`pkg: install aborted (n bad file(s))`), if the bundle
 `type=` is anything but `batch`/`hybrid`/`native`, or if a **present but bad
 signature** fails (`pkg: bundle <app> has a BAD signature`). Versions compare
@@ -3476,6 +3484,33 @@ missing/corrupt/untrusted/empty-manifest, `2` usage or bad app name. Full
 trust rules in [`ABI.md`](ABI.md) §4; Companion UI: **Live System ‣ Packages**
 in `apps/companion/SYS.BAT`; HW driver `tools/pkg_test.py`; host signer
 `tools/pkg_sign.py`.
+
+### store - remote app store (index over HTTP)
+
+`store` is a thin client over the shared networking stack: it fetches a JSON
+`apps[]` index, prints it, and installs an entry by streaming its `bpk_url` to
+`PKGS/<id>.PKG` and running the ordinary `pkg install`. The index URL is the
+compile-time `P4_CONFIG_STORE_INDEX_URL` (empty disables the verb; set it in
+`sdkconfig`/`p4minishell_config.h`).
+
+| Command | Description |
+|---------|-------------|
+| `store url` | Print the configured index URL (or `store: no index URL configured`) |
+| `store list` | Fetch the index and print `id  vVERSION  name` per entry |
+| `store install <id>` | Download the entry's `bpk_url` to `PKGS/<id>.PKG`, then `pkg install <id>` |
+
+The index shape (the same idea as ESP-Brookesia's store index):
+
+```json
+{ "apps": [ { "package_name": "demo", "latest_version": "1.0",
+              "app_name": {"en": "Demo"},
+              "bpk_url": "https://host/demo.PKG" } ] }
+```
+
+Parsing uses the ONE JSON reader (`json_walk`), the download uses
+`networking_http_get_stream()`, and the install reuses `pkg install` — there is
+no second parser, HTTP client, package format, or dispatcher. ERRORLEVEL: `0`
+ok, `1` fetch/parse/download/install failed, `2` usage or bad app name.
 
 ### color
 
@@ -4579,7 +4614,7 @@ httpget /cookie clear
 
 ERRORLEVEL: 0 on HTTP 2xx, 1 on a network/HTTP failure, 2 on usage.
 
-### browser [<url> | back | forward | js <id> | css | bookmark <add|list|del> ...]
+### browser [<url> | back | forward | swipe <back|forward> | js <id> | css | cache [clear] | bookmark <add|list|del> ...]
 
 The on-device browser. `browser <url>` fetches an `http(s)` page (same
 HTTP/TLS/auth policy as `httpget`, including `user:pass@` Basic auth);
@@ -4588,8 +4623,9 @@ The page is parsed into a DOM tree, the `<style>` cascade is applied
 (tag/class/id/attribute selectors, descendant/child combinators, specificity,
 colour/background/alignment/weight/decoration), and **one shared DOM renderer**
 lays out headings, paragraphs, nested lists, tables, pre, blockquotes, rules,
-links, inline emphasis, and images. Images are fetched/read, decoded by the one
-gfx BMP decoder, and drawn as a luminance-ramp ASCII grid (`P4_CONFIG_BROWSER_IMAGES`):
+links, inline emphasis, and images. Images are fetched/read, decoded through the
+**one image path** (BMP in `components/gfx`, PNG and JPEG in `components/imgdec`),
+and drawn as a luminance-ramp ASCII grid (`P4_CONFIG_BROWSER_IMAGES`):
 each pixel becomes one shade glyph from the shared `ANSI_IMAGE_RAMP` (which never
 contains the LVGL recolor delimiter `#`, so no cell can lose its colour), coloured
 with the nearest DOS palette entry; alt text is the fallback. A centered element
@@ -4609,21 +4645,34 @@ diagnostic). The first render enters TUI mode so the page is visible;
 `draw close` (or `tui fullscreen off`) returns to the transcript. After
 rendering, `tui dump [from] [to]` reads the page back cell by cell.
 
+Caching (both in PSRAM, `components/browser/`):
+- **Image cache** — the decoded cell grid per source URL. A hit skips both the
+  network fetch and the PNG/JPEG decode, so re-renders and back/forward are cheap.
+- **Page cache** — a whole rendered page (cells, link regions, address bar) per
+  URL. A hit restores it by `memcpy`: no fetch, no parse, no render. This is what
+  makes `browser back` / `browser forward` instant.
+- `browser cache` prints the entry counts and byte totals; `browser cache clear`
+  empties both. A page that was never rendered is never cached, and a failed fetch
+  never evicts the page you were reading.
+
 ```
 browser http://example.com/
 browser http://user:pass@host/private.html
 browser sd:/WEB/INDEX.HTML
 browser back
 browser forward
+browser swipe back      # gesture entry point (also `browser swipe forward`)
 browser js go
 browser css
+browser cache
+browser cache clear
 browser bookmark add bench http://host/page.html
 browser bookmark list
 browser bookmark del bench
 ```
 
-- Navigation history keeps the last `P4_CONFIG_BROWSER_HISTORY_MAX` URLs (8).
-- Bookmarks keep `P4_CONFIG_BROWSER_BOOKMARK_MAX` name/URL pairs (8).
+- Navigation history keeps the last `P4_CONFIG_BROWSER_HISTORY_MAX` URLs (150).
+- Bookmarks keep `P4_CONFIG_BROWSER_BOOKMARK_MAX` name/URL pairs (32).
 - Both persist under `sd:/BROWSER.HIST` and `sd:/BROWSER.BOOK`.
 - Image cap `P4_CONFIG_BROWSER_IMAGE_MAX_BYTES` (64 KiB); grid
   `..._MAX_WIDTH`/`..._MAX_HEIGHT` (80x40 cells); script cap
@@ -4808,6 +4857,54 @@ epub close
 **Read-only scope:** No modification of EPUB files. Resources (images, CSS) can be
 extracted to SD card but not modified in-place.
 
+### rss list|add|remove|enable|interval|refresh|read|open|reset|import|export|set (RSS reader)
+
+RSS 2.0 / Atom 1.0 / JSON Feed reader. Subscriptions live in `sd:/RSS/SUBS.INI`
+(one pipe-separated record per feed) and read/unread state in `sd:/RSS/READING`;
+both are hand-editable. OPML is the interchange format (`rss import`/`rss export`).
+
+```
+rss list                       Show subscriptions: interval, last fetch, title
+rss add <name> <url> [user] [token]
+                               Subscribe (Basic auth when user/token are given)
+rss remove <name>              Unsubscribe
+rss enable <name> <on|off>     Include or exclude a feed from polling
+rss interval <name> <minutes>  Per-feed poll interval (0 = the CONFIG.SYS default)
+rss refresh [name]             Fetch now (every enabled feed when omitted)
+rss read <name> [n]            Render an item (n, or the first unread)
+rss open <name> [n]            Open an item's link in the browser
+rss reset <name>               Mark every item read
+rss import <file.opml>         Merge an OPML list (existing names are untouched)
+rss export [file.opml]         Write an OPML list (default sd:/RSS/FEEDS.OPML)
+rss set <key> <value>          Runtime: autopoll|interval|retention|saveread
+```
+
+Storage and state:
+- `sd:/RSS/SUBS.INI` holds one `NAME|URL|TYPE|USER|TOKEN|ETAG|MODIFIED|FETCHED|ENABLED|INTERVAL|TITLE`
+  record per feed. `FETCHED` is unix seconds; `TYPE` is 0=none, 1=basic, 2=bearer.
+- `sd:/RSS/READING` holds `NAME|HASH`, where HASH is a 64-bit FNV-1a of the item
+  guid (falling back to the link). Hashing keeps the table bounded at
+  `P4_CONFIG_RSS_READ_MAX` entries instead of storing whole guids in RAM.
+- Conditional GET is used when the server sends `ETag` or `Last-Modified`, so an
+  unchanged feed costs no body download.
+- Feed tokens are persisted (the feed needs them) but never printed, logged or
+  echoed; `rss list` shows the auth type only. `rss export` writes them to the
+  OPML file and says so.
+
+CONFIG.SYS directives (persistent): `RSS_INTERVAL` (minutes, default 60),
+`RSS_AUTOPOLL` (ON/OFF, default OFF), `RSS_RETENTION` (items kept, default 200),
+`RSS_SAVEREAD` (ON/OFF, default ON). `rss set` changes the same tunables for the
+current session only.
+
+Examples:
+```
+rss add news https://example.com/feed.xml
+rss refresh news
+rss read news
+rss open news 1
+rss export
+```
+
 ERRORLEVEL: 0 ok, 1 state/failure, 2 usage.
 
 ### httpd start | httpd stop | httpd status
@@ -4873,7 +4970,7 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | bluetooth status | Colour-coded report: hosted readiness, controller, NimBLE, sync, scan, advertising (with active name), C6 firmware version, last error |
 | bluetooth scan [limit] | Bounded BLE scan (default 8 s) through hosted NimBLE on C6; prints name + address + RSSI sorted strongest-first, up to `limit` (default 8) |
 | bluetooth enable | Initialize the hosted controller + NimBLE host and report readiness (idempotent; scan/advertise also bring it up on demand) |
-| bluetooth advertise on [name] | Start non-connectable BLE advertising. `name` is session-only (RAM-only, never persisted); without it the configured default name is used |
+| bluetooth advertise on [name] | Start non-connectable BLE advertising. `name` is session-only (RAM-only, never persisted); without it the configured default name is used. Re-issuing it while an advert is running stops and restarts it instead of failing |
 | bluetooth advertise off | Stop BLE advertising |
 | bluetooth connect XX:XX:XX:XX:XX:XX | Connect to a BLE HID keyboard/mouse (BLE central). Discovers the HID service (0x1812), subscribes to reports, and routes keystrokes to the shell input line; the on-screen keyboard hides while connected |
 | bluetooth disconnect | Disconnect the current BLE HID device |
@@ -4891,6 +4988,13 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 - The hosted controller and NimBLE host initialize once on first use
 - Subsequent scan/advertise/connect commands reuse active session
 - Hosted NimBLE VHCI on ESP32-C6 over ESP-Hosted SDIO
+- The NimBLE host pools are allocated from PSRAM
+  (`CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`): internal DRAM is fully committed by the
+  display buffers, ESP-Hosted SDIO and the USB host, so the IDF default
+  (`..._INTERNAL`) leaves `ble_buf_alloc()` without a contiguous block and the host never
+  initializes. Bring-up is retried once (`P4_CONFIG_BT_INIT_RETRIES` /
+  `P4_CONFIG_BT_INIT_RETRY_DELAY_MS`) because the C6 BT service shares its SDIO link with
+  Wi-Fi
 - `bluetooth scan` is always bounded by `P4_CONFIG_BT_SCAN_DURATION_MS`, so it
   always terminates and the worker task never hangs
 - `bluetooth connect` acts as a BLE central: it stops any scan/advertising, connects with

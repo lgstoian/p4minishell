@@ -26,7 +26,7 @@
  * @layer test
  * @domain testing
  * @provides Host Unity runner (native, no hardware)
- * @status active
+ * @status stable
  * @test tools/host_unit_run.py
  * @hard-rule pure logic only - no display, storage, USB, radio or LVGL
  */

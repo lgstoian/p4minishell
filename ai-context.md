@@ -27,7 +27,12 @@ does" reference in [documentation.md](documentation.md).
 - **A change is finished only when:** the firmware **and** `test/` build with
   zero errors and zero warnings, the on-board unit suite is green, and the
   affected hardware behaviour is verified on the board. Reflash the main
-  firmware after running the test app.
+  firmware after running the test app. When the change touches a source the
+  host lane compiles (`test/host/`, or the hardware-free translation units in
+  `components/shell`, `components/clock`, `components/header`,
+  `components/font`), `tools/host_unit_run.py --static` and
+  `tools/host_gen_runner.py --check` must be green too — but a host pass is
+  never hardware sign-off (`harness.md` §2.2).
 - **Config values are never hardcoded.** All tunables live in
   `p4minishell_config.h`, mirrored in `p4minishell_config.yaml`. Hardware pins
   live in `boards/<name>/board_config.h` / `.yaml` (default
@@ -39,6 +44,13 @@ does" reference in [documentation.md](documentation.md).
   a `// AI:` marker is still a release-blocking defect. Replace any that exist.
 - **Docs follow code.** Update them in the same change (see Documentation
   Updates below).
+- **Third-party code is only taken from a repo that actually ships a licence
+  file.** A README claim is not a grant: verify the licence file exists in the
+  tree (GitHub's API reports `"license": null` when none is detected). For an
+  unlicensed repo, take *ideas and architecture only* and re-express them in our
+  own code — copyright protects expression, not design — and record the source in
+  `licence.md`. Never copy a file, a function body, or a table verbatim from a
+  repo whose licence cannot be shown.
 
 ## 0.1 Agent breadcrumbs, false-green guard, and machine-readable comments
 
@@ -77,7 +89,7 @@ Regenerate the committed manifests after changing tags or components:
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
 | UI | LVGL 9.5.0 / esp_lvgl_port 2.9.0; reference: JD9165 1024x600 + GT911; Tab5: ILI9881C/ST7123 720x1280 + integrated touch |
-| License | MIT (Copyright (c) 2026 Stoian Alexandru); vendored Tab5 BSP is Apache-2.0 (see `licence.md`) |
+| License | MIT (Copyright (c) 2026 Stoian Alexandru); vendored Tab5 BSP and `tools/font_subset.py` are Apache-2.0 (see `licence.md`) |
 | Boards | `boards/jc1060p470c/` (reference, ESP32-P4 Function EV Board) and `boards/m5stack_tab5/` (M5Stack Tab5); serial port `<COM_PORT>` (e.g. `COM3`/`COM6` during development) |
 
 Recent changes are recorded in [`changelog.md`](changelog.md). Known quirks and
@@ -470,6 +482,11 @@ idf.py -p <COM_PORT> flash monitor
 cd test; idf.py build flash; cd ..
 python tools/unit_run.py <COM_PORT>     # capture Unity summaries from the board
 
+# Host unit lane (hardware-free pre-gate; Linux/WSL2, also the CI host-unit job)
+python3 tools/host_gen_runner.py --check
+python3 tools/host_unit_run.py --build  # build + run + parse
+python3 tools/host_unit_run.py --static # manifest/orphan/case-count gates
+
 # Host hardware suites (one or two boards in parallel, fail-fast, tiers)
 python tools/p4test_run.py --boards COM3,COM6 --tier fast --fail-fast
 # Full release gate: python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1
@@ -479,7 +496,9 @@ python tools/p4test_run.py --boards COM3,COM6 --tier fast --fail-fast
   trailing `<COM_PORT>` argument.
 - `tools/shell_session.open_port()` pre-sets DTR/RTS low **before** `open()` so
   opening the port does not reset the board. Never open a raw `serial.Serial`.
-  Use `shell_session.hard_reset()` when a fresh boot is required.
+  Use `shell_session.hard_reset()` when a fresh boot is required — it resets
+  with `esptool --after watchdog_reset`, because a plain RTS hard reset
+  intermittently leaves these USB-JTAG boards not running (bugs.md F42).
 - After flashing the test app, always reflash the main firmware.
 
 ## 4. Bugs and known quirks
@@ -657,6 +676,14 @@ tools use a webcam to observe the device; prefer them over guessing.
 - `header_render()` must release the LVGL port lock on EVERY exit path
 
 ### Image Support Rules
+- PNG and JPEG have exactly ONE implementation each, in `components/imgdec/`
+  (LodePNG / TJpgDec — the decoders LVGL already compiles, so there is no
+  second PNG/JPEG decoder in the firmware). `imgdec_probe` sniffs the format
+  and native size; `imgdec_decode_scaled` scales to RGB565 (PSRAM) like
+  `gfx_bmp_decode_scaled_565`. Never add a second PNG/JPEG decoder, and never
+  enable LVGL's own PNG/JPEG decoders for the same path. The native decode is
+  capped by `P4_CONFIG_IMGDEC_MAX_W/H`; a caller routes by `imgdec_probe()`'s
+  format, never by re-sniffing magic bytes locally.
 - There is exactly ONE BMP implementation: `gfx_bmp_parse_header_ex` /
   `gfx_bmp_decode_scaled_565` / `gfx_bmp_fit` / `gfx_surface_blit_scaled` in
   `components/gfx/`. Never add a second BMP parser, decoder, or scaler, and
@@ -1903,6 +1930,46 @@ the raster core + 8x8 font are `components/gfx/`
   shell reaches the keyboard input path only through the host-ops callback. When
   `CONFIG_BT_NIMBLE_ENABLED` is off the connect/disconnect/is_device_connected surface compiles
   to no-op stubs so the command layer stays link-complete.
+- The NimBLE host pools MUST come from PSRAM
+  (`CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`). The P4's internal DRAM is fully committed by
+  the LVGL/display buffers, the ESP-Hosted SDIO transport and the USB host; under the IDF
+  default (`..._INTERNAL`) `ble_buf_alloc()` returns `ESP_ERR_NO_MEM` and
+  `nimble_port_init()` fails with `ESP_FAIL` even though the controller and the hosted HCI
+  transport are healthy. The host needs no DMA/IRAM because the controller lives on the C6.
+- `esp_nimble_enable()` ignores the `xTaskCreatePinnedToCore()` result, so a failed host-task
+  creation looks exactly like success and leaves the stack permanently `synced: no`.
+  `bluetooth_ensure_ready_once()` therefore verifies `xTaskGetHandle("nimble_host")` and
+  reports the failure rather than proceeding.
+- Starting advertising while an advert is already running MUST stop and restart it: NimBLE
+  rejects a second `ble_gap_adv_start()` with `EALREADY`. That is also what lets
+  `bluetooth gatt on` switch a running non-connectable advert to a connectable one.
+- Host bring-up gets ONE bounded retry (`P4_CONFIG_BT_INIT_RETRIES`,
+  `P4_CONFIG_BT_INIT_RETRY_DELAY_MS`): the C6 BT service comes up over the same SDIO link as
+  Wi-Fi and can still be settling when the first attempt runs.
+
+### RSS Rules
+- `components/rss` is the single owner of feed parsing, fetching, the subscription
+  store, read state and OPML interchange. Nothing outside it touches expat, the
+  conditional-GET request shape, or the `sd:/RSS` files.
+- Item bodies render through `html_render_ansi()` — the one HTML-to-ANSI path the
+  browser uses. Never add a second HTML stripper or parser.
+- The subscription mirror and the read-state table live in PSRAM: at
+  `P4_CONFIG_RSS_SUB_CAPACITY` x ~1.4 KB the mirror alone is ~45 KB, which exhausts
+  the P4's internal DRAM at link time (the linker fails placing `.sbss` long before
+  runtime).
+- `rss_item_t` is ~11 KB. Never hold one on a task stack: `rss read` / `rss open`
+  take a PSRAM copy from `rss_store_cached_item()`.
+- Feed tokens are persisted (the feed needs them) but MUST never reach the
+  transcript, history or debug log. `rss list` shows the auth type only;
+  `rss export` warns that the OPML file carries them.
+- Only the command worker writes the session feed cache (the poller always passes
+  its own feed), so handing out item copies under the store lock is race-free.
+- The poller's stack MUST stay in PSRAM (`xTaskCreateWithCaps`): internal DRAM is
+  scarce and autopoll is opt-in. The fetch path needs ~6.5 KB, so
+  `P4_CONFIG_RSS_POLLER_TASK_STACK` is 16 KB.
+- The CONFIG.SYS spelling and the `rss set` command share ONE parser
+  (`rss_store_apply_directive`); the boot handler and the `config` table both call
+  it instead of re-implementing the validation.
 
 ### TLS Trust Store Rules
 - `components/certs/` is the single owner of the SD certificate store and the mbedTLS global CA
@@ -2015,16 +2082,57 @@ the raster core + 8x8 font are `components/gfx/`
 - The CSS parser (`css.c`) is the single CSS engine. It supports: color, background-color, font-weight, font-style, text-decoration, text-align, margin, padding, display (block/inline/none), font-size (normal/large/small).
 
 ### Browser Rules
-- `components/command/browser_commands.c` is the browser command. It is reached through `shell_execute_command_core()` (NOT a private dispatcher).
-- The browser pipeline: `networking_http_get()` -> `dom_parse()` -> `css_compute_styles()` -> `browser_render_dom()` -> `tui_page_render()` -> `tui_flush()`.
-- The browser uses the TUI viewport system: a page buffer (P4_CONFIG_TUI_PAGE_ROWS rows) larger than the viewport (P4_CONFIG_TUI_ROWS rows), with scroll offset tracking.
-- Links are registered via `tui_link_register()` with viewport coordinates. Link hit-testing uses `tui_link_hit_test()`.
-- The address bar is rendered at the top of the TUI via `tui_address_bar_render()`. The status bar is rendered at the bottom via `tui_status_bar_render()`.
-- Navigation history is a simple stack of visited URLs (BROWSER_HISTORY_MAX entries).
-- The browser is a modal surface on the shared runtime in `components/modal/`. It is NOT a private loop.
-- The browser renders HTML to the TUI page buffer using `tui_page_set_cell()`. CSS styles are applied to DOM nodes before rendering.
-- The browser supports: headings, paragraphs, lists, links, images (as alt text), tables, forms (as text), and basic CSS (colors, fonts, margins, padding, display, text-align).
-- The browser does NOT support: CSS layout (flexbox/grid), JavaScript execution during page load, cookies, sessions, or image fetching from URLs.
+- `components/command/browser_commands.c` is the browser command surface; the
+  memory caches live in the `components/browser/` leaf. It is reached through
+  `shell_execute_command_core()` (NOT a private dispatcher).
+- Pipeline: fetch/read -> `dom_parse()` -> `css_compute_styles()` ->
+  `dom_render_tree()` -> `tui_page_render()` -> `tui_flush()`. One DOM renderer
+  (`components/markdown/dom_render.c`) serves both the TUI page and the ANSI
+  surfaces; never add a second layout engine.
+- **DOM memory**: a parsed page's nodes come from a bounded bump arena
+  (`components/markdown/dom_arena.c`) in PSRAM, so a page costs a few 256 KB blocks
+  instead of hundreds of `calloc` calls. Arena nodes carry `arena != NULL` and are
+  released by *unlinking* (`dom_node_free()` never frees them); only the arena's
+  destroy reclaims the blocks. A JS-created node (`dom_node_new()`, `arena == NULL`)
+  is still owned individually, and `dom_free()` releases those before destroying the
+  arena. When the arena limit is reached, further nodes fall back to plain `calloc`
+  so a pathological page renders instead of failing.
+- **DOM caps**: `P4_CONFIG_DOM_MAX_NODES` bounds a parsed document and
+  `P4_CONFIG_DOM_ARENA_LIMIT_BYTES` bounds the arena, so a huge page cannot exhaust
+  memory.
+- `components/browser/` owns two bounded LRU caches, both in PSRAM:
+  - the **decoded-image cache**, keyed by source URL - a hit skips the network
+    fetch *and* the PNG/JPEG decode;
+  - the **rendered-page cache**, a `tui_page_shot_t` blob per URL - a hit restores
+    the cell grid, link regions and address bar by `memcpy`.
+  Both entry tables are PSRAM-allocated: a static image table alone would be
+  ~136 KB of `.bss`, which the P4's internal DRAM cannot afford.
+- A cache store commits nothing until its payload exists, so an entry is never
+  visible half-populated; a failed store must not consume a slot.
+- A page is cached only after a successful render, and a failed fetch never
+  evicts or replaces the page you were reading.
+- The page cache is keyed by the same string history uses (the URL with userinfo,
+  or the `sd:` path) and covers http(s) and local pages alike.
+- The browser uses the TUI viewport system: a page buffer (`P4_CONFIG_TUI_PAGE_ROWS`
+  rows) larger than the viewport (`P4_CONFIG_TUI_ROWS` rows), with scroll offset
+  tracking.
+- Links are registered via `tui_link_register()` with viewport coordinates; hit
+  testing uses `tui_link_hit_test()`. The address bar renders at the top via
+  `tui_address_bar_render()`; the status bar at the bottom via
+  `tui_status_bar_render()`.
+- Supported: headings, paragraphs, lists, links, images (native BMP/PNG/JPEG
+  decoded to a DOS-cell grid), tables, in-page QuickJS (`<script>`, `onload`/
+  `onclick`), the `<style>` cascade, and `fetch` from JS.
+- Not supported by design (do not paper over with a second engine): CSS layout
+  (flexbox/grid), cookies, sessions, tabs.
+- **The network fetch is synchronous on the command worker, and that is
+  deliberate.** babe32/mini_browser keep the fetch off the UI task because their
+  UI *is* the thing that would block; here the LVGL task keeps running during a
+  fetch, so the display never freezes - only the shell stops accepting commands
+  until the page is ready. Making the render asynchronous would require a real
+  lock around the TUI cell buffer (`s_page`, `s_links`, `s_address_bar` are
+  written without one, so a background render would corrupt a concurrent
+  `tui dump`). That is a distinct change; do not half-add it.
 
 ### SD Card Rules
 - All SD access goes through `components/storage/`. No other module may call `bsp_sdcard_mount()`
@@ -2088,6 +2196,10 @@ the raster core + 8x8 font are `components/gfx/`
 - Full US keyboard layout supported (60+ HID key codes with modifier-aware mapping)
 - Auto-detect runs in periodic header refresh timer; state transitions trigger notifications
 - keyboard_set_external_input() / keyboard_clear_force_visible() for manual control
+- `s_usb_lock` MUST NOT be held across a blocking class-driver call. `msc_host_install_device()`
+  performs SCSI transfers that can take seconds; holding the lock across it stalls every other
+  USB command and the UI behind one slow stick. The MSC connect path claims its slot
+  (`usb_msc_state_t.connecting`) and releases the lock for the whole enumeration window.
 
 ### OTA Rules (c6ota)
 - Lives in components/c6ota with stable public API
@@ -2103,6 +2215,21 @@ the raster core + 8x8 font are `components/gfx/`
   the matching 3.x image, `c6ota` works normally.
 
 ### Stack Discipline
+- **Internal DRAM is the scarce resource on both boards**: the Tab5 reboots with only ~8–14 KB
+  free. PSRAM holds the display buffers, the TLS certificate store and the other large
+  allocations, but task stacks, the ESP-Hosted SDIO transport, Wi-Fi and the USB host are all
+  served out of internal DRAM first. Raising the three USB stacks by 2 KB each dropped the Tab5's
+  reboot-time headroom from ~14 KB to ~8 KB and broke `s17_browser` there while COM3 stayed green,
+  so it looked board-specific. Before raising any stack or adding a persistent allocation, read
+  the `[MEM]` line the gate prints after its reboot and check the headroom delta on BOTH boards.
+- **The HTTP fetch path is stack-hungry**: `networking_http_get_ex` + newlib's `vfprintf` + the
+  feed parser need ~6.5 KB together, and the RSS store save adds ~1 KB. A task that fetches needs
+  a stack of 12 KB or more, and a `rss_item_t` (~11 KB) must never be a local — both the RSS poller
+  and `rss read` had to be reworked around this.
+- **`shell_cmd` runs close to its 32 KB ceiling on both boards**: after the `s14_apps` sweep it
+  reports only ~800 bytes of headroom (COM3 and COM6 alike), so `launch`ed batch apps are the
+  deepest path. Keep new command handlers off that path unless they add no frame, and treat any
+  new `launch`-able app as a stack risk (F41/F27).
 - The command worker task stack is `P4_CONFIG_COMMAND_TASK_STACK` (32768 bytes) and is shared by
   the whole dispatch path
 - `shell_execute_batch_file()`, `shell_execute_command()`, and `shell_execute_command_core()`
@@ -2805,8 +2932,15 @@ the same failure.
 
 `tools/managed_patches.patch` records the vendored changes:
 browser/audio codec (`audio_codec_data_i2s.c`), the EV board BSP
-(`esp32_p4_function_ev_board.c` I2S cleanup), plus the pre-existing LVGL
+(`esp32_p4_function_ev_board.c` I2S cleanup), the USB HID host (`hid_host.c`:
+an enumerate failure no longer aborts the firmware, and the uninstall path no
+longer removes a device that was never inserted), plus the pre-existing LVGL
 patches. Re-apply after `idf.py update-dependencies`.
+
+**Known stale hunk:** the patch's `esp32_p4_function_ev_board.h` hunk is
+obsolete - the vendored BSP now ships those `board_config.h` / `BOARD_CFG_*`
+changes itself, so `git apply --check` fails on that file. Drop that hunk (and
+re-record the rest with `git diff`) when the dependencies are next updated.
 
 
 ## v1.4.1 campaign findings (2026-10-21)

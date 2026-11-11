@@ -15,7 +15,7 @@
  * @layer leaf
  * @domain time
  * @provides clock_format_hm_snapshot, clock_rtc_restore_math, BCD conversion
- * @status active
+ * @status stable
  * @test test/main/test_clock.c
  * @hard-rule pure C only - no NVS, I2C, SNTP, board BSP or LVGL in this file
  */

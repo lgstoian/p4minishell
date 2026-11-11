@@ -34,6 +34,7 @@ STATUSES = ["stable", "experimental", "deprecated"]
 # component -> primary header relative to components/<name>/
 PRIMARY_HEADER = {
     "board_caps": "include/board_caps.h",
+    "browser": "include/browser.h",
     "camera": "include/camera.h",
     "cas": "include/cas.h",
     "certs": "include/certs.h",
@@ -328,6 +329,42 @@ def build_manifest(modules):
     }
 
 
+def check_tagged_files(errors):
+    """Validate tags on EVERY file that carries them, not just primary headers.
+
+    collect_modules() reads one header per component, so a split translation
+    unit (shell_core.c, shell_transcript.c, clock_core.c, ...) could carry an
+    invalid @status and still pass. Scan the rest with the same vocabulary.
+    """
+    primary = set()
+    for comp, header_rel in PRIMARY_HEADER.items():
+        primary.add(os.path.normcase(os.path.join(ROOT, "components", comp, header_rel)))
+    for comp in IN_TREE:
+        primary.add(os.path.normcase(os.path.join(ROOT, "components", comp, comp + ".h")))
+
+    bases = [os.path.join(ROOT, "components"), os.path.join(ROOT, "test", "host")]
+    for base in bases:
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = sorted(d for d in dirnames
+                                 if d not in ("build", "managed_components", "__pycache__"))
+            for name in sorted(filenames):
+                if not name.endswith((".c", ".h")):
+                    continue
+                path = os.path.join(dirpath, name)
+                if os.path.normcase(path) in primary:
+                    continue
+                tags = parse_tags(leading_doc_block(read_text(path)))
+                if not tags:
+                    continue
+                status = tags.get("status")
+                if status is not None and status not in STATUSES:
+                    errors.append("%s: unknown @status %r (expected one of %s)"
+                                  % (rel(path), status, ", ".join(STATUSES)))
+                for t in [x.strip() for x in tags.get("test", "").split(",") if x.strip()]:
+                    if not os.path.exists(os.path.join(ROOT, t)):
+                        errors.append("%s: @test path %r does not exist" % (rel(path), t))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Extract/validate machine-readable comment tags")
     ap.add_argument("--write", action="store_true",
@@ -338,6 +375,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     modules, errors, warnings = collect_modules()
+    check_tagged_files(errors)
     manifest = build_manifest(modules)
 
     # The committed manifest must match the tree; a stale manifest makes the

@@ -19,7 +19,7 @@
  * @layer shell
  * @domain shell
  * @provides internal declarations for state owned by shell_core.c
- * @status active
+ * @status stable
  * @test test/main/test_shell_abort.c, test/main/test_history_file.c
  * @hard-rule declarations only - no storage, display, USB or board BSP here
  */

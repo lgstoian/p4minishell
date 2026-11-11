@@ -1,9 +1,10 @@
 # P4MiniShell Testing Harness
 
-> The complete guide to testing this firmware on real hardware. It covers the
-> four test layers, how to run and extend them, the two-board workflow, and the
-> webcam diagnostics. The companion implementation reference is
-> [`tools/README.md`](tools/README.md) (every driver) and
+> The complete guide to testing this firmware. It covers the seven rungs of the
+> ladder (static gates, the host unit suite, on-target Unity, hardware suites,
+> focused drivers, one-shots, webcam diagnostics), how to run and extend them,
+> the two-board workflow, and the visual checks. The companion implementation
+> reference is [`tools/README.md`](tools/README.md) (every driver) and
 > [`test/README.md`](test/README.md) (the Unity layout). Change and verification
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
@@ -20,6 +21,11 @@ errors and zero warnings**, the on-board **unit suite is green** on the
 affected board(s), and the **affected hardware behaviour is verified** on the
 board. After flashing the test app, **reflash the main firmware**.
 (`ai-context.md` → Hard Rules.)
+
+The **host unit lane** (§2.2) is an additional pre-gate: it catches logic
+regressions before a board is free, and it must stay green when a change
+touches a source it compiles. It is **never** a substitute for this rule — a
+host pass signs off nothing about hardware.
 
 ---
 
@@ -398,7 +404,12 @@ it automatically.
    `python tools/comment_index.py`, `python tools/breadcrumbs.py`) and fix
    anything they report. A new test must assert; a new suite must record at
    least one check.
-1. **Pure logic** → a `test/main/test_*.c` case + `RUN_TEST` in `test_main.c`.
+1. **Pure logic** — a `test/main/test_*.c` case + `RUN_TEST` in `test_main.c`,
+   then classify the file in `tools/host_test_manifest.json`: either add it to
+   the host lane (when the component's `REQUIRES` chain reaches no board-only
+   component) or list it under `excluded` **with a reason**. `green_guard` and
+   `host_unit_run.py --static` both fail on an unclassified file, because a
+   test that runs in neither lane is a false green.
 2. **Behaviour on hardware** → extend the matching `tools/suites/sNN_*.py`; add
    a focused driver only if it needs a bespoke loop.
 3. **Cross-app behaviour** → the `s14_apps` markers and, if a reference app's
@@ -409,3 +420,4 @@ it automatically.
 Register any new host suite automatically by dropping `sNN_*.py` in
 `tools/suites/` with the `NAME`/`TAGS`/`run` contract; the runner discovers it.
 Keep new serial logic out of bespoke drivers — import `tools/p4test/`.
+

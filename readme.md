@@ -100,19 +100,23 @@ the host regression runners are green. See
 - **Apps:** every app launches through a `*.bat` shim (pure batch, hybrid, or
   native-linked — see [ABI.md](ABI.md)); PATH + `sd:/APPS` discovery with
   `APPINFO` metadata, `pkg` install/remove from CRC-checked and **ECDSA-signed**
-  bundles (`pkg key`, `tools/pkg_sign.py`), asset manifests (`asset`), and the
-  `applib` native-app runtime.
+  bundles (`pkg key`, `tools/pkg_sign.py`, `tools/make_pkg.py`), single-file
+  `.PKG` ZIP archives (`pkg unpack`/`pkg scan`), a remote `store` client,
+  asset manifests (`asset`), and the `applib` native-app runtime.
 - **Data:** `db` record store, `csv` grid + `=EXPR` evaluation, `export`/`import`
   interchange, `pim` serial sync (PIMX + `tools/pim_sync.py`), `archive`/`backup`,
   `crypt` (AES-256-GCM), `ini`/`appconfig`/`temp`.
-- **Display:** `draw` TUI verbs, `gfx` RGB565 canvas with sprites and images,
-  `plot` graphs, `font` registry with SD TTFs and CJK fallback, and UI themes.
+- **Display:** `draw` TUI verbs, `gfx` RGB565 canvas with sprites and images
+  (BMP in `gfx`, **PNG/JPEG in `imgdec`**), `plot` graphs, `font` registry with
+  SD TTFs and CJK fallback, and UI themes.
 - **Connectivity:** hosted Wi-Fi (station + known-network list), BLE,
   `ping`/`dns`/`httpget`/`tcpterm`, `httpd` file server, `netstat`/`ipconfig`,
   **`browser`** (HTML/CSS pages over HTTP or from an SD file, navigation
-  history, bookmarks, Basic auth), **`httpget` flags** (`/h:`, `/post`,
-  `/stream`, `/cookie` with a persisted cookie jar), USB host (MSC, HID,
-  CDC-ACM `usb userial`), **board-to-board `chat` over SoftAP + HTTP**, and C6 OTA.
+  history, bookmarks, Basic auth, in-page JavaScript, native PNG/JPEG/BMP images,
+  and PSRAM image/page caches that make back and forward instant), **`httpget`
+  flags** (`/h:`, `/post`, `/stream`, `/cookie` with a persisted cookie jar),
+  USB host (MSC, HID, CDC-ACM `usb userial`), **board-to-board `chat` over
+  SoftAP + HTTP**, and C6 OTA.
 - **Internationalization:** locale-aware date/time/number formatting
   (`locale`, `config LOCALE=` persisted in CONFIG.SYS) and an embedded
   JavaScript engine (`js eval|run|call`).
@@ -270,10 +274,17 @@ so on. Install a package with `pkg install <app>` and remove it with
 ```powershell
 python tools/unit_run.py <COM_PORT>     # on-board unit suite (Unity)
 python tools/regression.py <COM_PORT>   # host regression (apps, modals, gfx, ...)
+
+# Hardware-free pre-gate (Linux/WSL2, and the CI host-unit job): the pure-logic
+# Unity cases on ESP-IDF's "linux" target. No board, ~50 ms.
+python3 tools/host_unit_run.py --build
+python3 tools/host_unit_run.py --static
 ```
 
 `tools/regression.py` resets the board and runs every host-side suite and
-guard, printing a PASS/FAIL table with a non-zero exit on failure.
+guard, printing a PASS/FAIL table with a non-zero exit on failure. The host
+lane is a **pre-gate only**: hardware sign-off still comes from
+`unit_run.py` plus `p4test_run.py` (see `harness.md` §2.2 and §0).
 
 ---
 
@@ -334,12 +345,27 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - **Apps launch through a `.bat` shim** (pure batch, hybrid, or native-linked),
   with Path/`APPS` discovery, `APPINFO` metadata, and the `launch` menu — see
   [ABI.md](ABI.md).
-- **`pkg`** installs apps from CRC-checked `PKGS/<APP>/` bundles and verifies
-  optional ECDSA P-256 signatures (`pkg install /signed`, `pkg key`, host
-  signer `tools/pkg_sign.py`); **`asset`** verifies asset manifests; **`crc32`**
-  hashes files. Installs enforce versions/dependencies (`/force` downgrades,
-  `requires=`/`min_fw=` gates); `pkg outdated` flags staged updates, `pkg
-  remove` keeps app data (with a hint), `pkg purge` deletes it.
+- **`pkg`** installs apps from CRC-checked `PKGS/<APP>/` bundles (or a
+  single-file `PKGS/<APP>.PKG` ZIP archive) and verifies optional ECDSA P-256
+  signatures (`pkg install /signed`, `pkg key`, host signer `tools/pkg_sign.py`);
+  installs are staged (backup + atomic replace + rollback). **`asset`**
+  verifies asset manifests; **`crc32`** hashes files. Installs enforce
+  versions/dependencies (`/force` downgrades, `requires=`/`services=`/`min_fw=`
+  gates); `pkg outdated` flags staged updates, `pkg remove` keeps app data
+  (with a hint), `pkg purge` deletes it.
+- **`store`** is a remote app-store client: `store list` fetches a JSON
+  `apps[]` index and `store install <id>` streams an entry's archive to
+  `PKGS/<id>.PKG` and installs it (index URL: `P4_CONFIG_STORE_INDEX_URL`).
+- **`download <url> <path> [/resume] [/progress]`** streams a resource to SD
+  (defaults into `sd:/DOWNLOAD/`) with a `Range`-header resume and coalesced
+  progress, through the ONE HTTP client.
+- **Bluetooth** runs BLE central + HID host, and `bluetooth gatt on|off` adds a
+  GATT server (Device Information + a P4MiniShell status characteristic) with
+  connectable advertising.
+- **RSS reader** — RSS 2.0 / Atom 1.0 / JSON Feed with conditional GET and
+  Basic/Bearer auth. `rss add|remove|enable|interval|refresh|read|open|reset|
+  import|export|set`; subscriptions persist in `sd:/RSS/SUBS.INI`, read state in
+  `sd:/RSS/READING`, and OPML is the interchange format.
 - **Apps register DOS-style, with no registry**: `assoc`/`ftype` map
   extensions to apps (`open` dispatches), `startup` runs boot apps,
   `launch <app> /setup` runs setup, and APPINFO `handles=`/`setup=`/
@@ -400,7 +426,8 @@ guard, printing a PASS/FAIL table with a non-zero exit on failure.
 - An MQTT **event service** (`net` verbs + `/onmsg` batch hook): one task
   owns a persistent session (plain TCP, or TLS via `net tls on`) with an SD outbox (offline
   publishes flush on reconnect) and newer-wins `$pim/...` merges.
-- Hosted BLE (scan/advertise), USB host MSC/HID/CDC-ACM, and C6 OTA.
+- Hosted BLE on the C6 (scan/advertise, GATT server, BLE HID host), USB host
+  MSC/HID/CDC-ACM, and C6 OTA.
 - Brightness/rotation, battery, audio, status LED(s), GPIO/PWM/ADC/I2C, and
   power management (idle display-off, sleep, deep-sleep, and `shutdown`).
 - Status LED(s): a single WS2812 on the EV board, or the two **independently

@@ -28,7 +28,7 @@
  * @domain core
  * @provides transcript model: scrollback buffers, ANSI text assembly,
  *           output-redirection capture, RAM clipboard
- * @status active
+ * @status stable
  * @test test/main/test_shell_parser.c, test/main/test_clipboard.c
  * @hard-rule ai-context.md#shell-core-rules
  */

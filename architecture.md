@@ -411,3 +411,17 @@ decision is enforced.
   through the existing `pim` merger. Delivery to batch is the registered
   async hook plus the last-message slot — no second dispatcher, no private
   notification loop. Enforced `components/networking/netsvc.c`.
+
+- **ADR-12 - Hardware-free cores, and a host pre-gate that is never a sign-off.**
+  Pure logic lives in dedicated translation units (`shell_core.c`,
+  `shell_transcript.c`, `shell_print.c`, `clock_core.c`, the `header_*.c`
+  policy files, `font/theme.c`) that link without LVGL, USB, SD or the board
+  BSP. They are compiled for ESP-IDF's preview `linux` target by `test/host/`,
+  so a logic regression is caught on every PR without a board. Hardware
+  behaviour is still signed off only by the on-board unit suite and `p4test`
+  (harness.md 2.2).
+- **ADR-13 - View seams are optional hooks, never stubs.** Where a hardware-free
+  core needs the view (transcript label, UART mirror), it calls an optional sink
+  the view registers (`shell_transcript_set_sink()`); a NULL sink is a supported
+  "text only" mode. No fake hardware implementation exists in production code -
+  if a component needs one, it is not ready for the host lane.

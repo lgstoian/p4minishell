@@ -12,6 +12,7 @@ in P4MiniShell. Read it, then follow the pointers. It is the companion to
 | I want to... | Read |
 |--------------|------|
 | Know the rules before touching code | [`ai-context.md`](ai-context.md) §0 Ground rules, §Hard Rules, §Module Layering Rules |
+| Check the license before copying anything | [`licence.md`](licence.md) (MIT project; Apache-2.0 third-party table) |
 | See the system shape | [`architecture.md`](architecture.md) |
 | Find a module and what governs it | [`BREADCRUMBS.md`](BREADCRUMBS.md) + `breadcrumbs.json` |
 | Change a command | [`command.md`](command.md) |
@@ -20,6 +21,7 @@ in P4MiniShell. Read it, then follow the pointers. It is the companion to
 | Touch hardware (pins, buses, display, audio, power) | [`schematics.md`](schematics.md) first |
 | Add a board | [`PORTING.md`](PORTING.md) |
 | Understand the test ladder | [`harness.md`](harness.md), [`test/README.md`](test/README.md) |
+| Run the tests without boards | [`harness.md`](harness.md) §2.2 (host unit lane, `test/host/`) |
 | Understand a host tool | [`tools/README.md`](tools/README.md) |
 | Report/track a bug | [`bugs.md`](bugs.md) |
 | Cut a release | [`release.md`](release.md) |
@@ -102,4 +104,9 @@ python tools/green_guard.py
 python tools/comment_index.py
 python tools/breadcrumbs.py
 python tools/harness/verify.py
+
+# Hardware-free pre-gate (Linux/WSL2; also the CI host-unit job)
+python3 tools/host_gen_runner.py --check
+python3 tools/host_unit_run.py --static
+python3 tools/host_unit_run.py --build
 ```

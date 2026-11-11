@@ -26,7 +26,7 @@
  * @layer shell
  * @domain shell
  * @provides shell_trim, shell_split_args, shell_split_chain, quote/escape scanner, group depth, history store, abort/busy flags, help registry
- * @status active
+ * @status stable
  * @test test/main/test_shell_quoting.c, test/main/test_shell_abort.c,
  *       test/main/test_history_file.c, test/main/test_history_search.c
  * @hard-rule pure C only - no LVGL, display, USB, storage or board BSP in this file
