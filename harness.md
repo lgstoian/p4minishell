@@ -115,8 +115,9 @@ python3 tools/host_gen_runner.py --check  # generated runner is up to date
   board-only component through `REQUIRES` — `batch → shell` (display/LVGL,
   USB-Serial-JTAG), `archive → storage` (SDMMC/FAT), `modal → windows/keyboard`,
   `clock → board RTC over I2C`. `tools/host_test_manifest.json` records the
-  reason for every excluded file, and `--static` fails if a new `test_*.c` is
-  neither included nor excluded.
+  reason for every excluded file. `tools/green_guard.py` and
+  `tools/host_unit_run.py --static` both fail if a new `test_*.c` is neither
+  included nor excluded, so a new suite cannot silently miss both lanes.
 - **The split so far:** `shell.c` → `shell_core.c` moved the pure text helpers
   and the statement scanner (548 lines, no globals, no hardware). The same
   recipe applies to the next block (`shell_transcript_*`, prompt/title, history

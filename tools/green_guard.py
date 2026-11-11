@@ -22,6 +22,11 @@ Host suites (``tools/suites/*.py``, ``tools/p4test/agent.py``)
   * an always-true substring assertion (``c.expect(n, "", text)``);
   * ``assert True`` / ``assert 1``.
 
+Host lane (``tools/host_test_manifest.json``)
+  * a test source that is neither included nor excluded with a reason;
+  * an exclusion with no reason;
+  * a listed test source that does not exist.
+
 Helpers that assert are supported: a test that calls a same-file helper whose
 body asserts is not vacuous. An explicit escape hatch for anything else is
 ``/* green-guard: helper-asserts */`` in the test body.
@@ -291,6 +296,47 @@ def scan_python_suite():
     return errors, warnings
 
 
+MANIFEST = os.path.join(ROOT, "tools", "host_test_manifest.json")
+
+
+def scan_host_manifest():
+    """Every test source is either in the host lane or excluded with a reason.
+
+    The host lane (test/host) is the hardware-free pre-gate, so a new
+    test_*.c that nobody classified would silently never run there. That is a
+    false-green risk, hence a gate rather than a convention.
+    """
+    if not os.path.isfile(MANIFEST):
+        return ["tools/host_test_manifest.json is missing"]
+    try:
+        with open(MANIFEST, "r", encoding="utf-8-sig") as fh:
+            manifest = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        return ["tools/host_test_manifest.json is unreadable: %s" % exc]
+
+    errors = []
+    included = manifest.get("tests", [])
+    excluded = manifest.get("excluded", {})
+
+    for name in included:
+        if not os.path.isfile(os.path.join(TEST_DIR, name)):
+            errors.append("host manifest lists a missing test source: %s" % name)
+
+    on_disk = sorted(f for f in os.listdir(TEST_DIR)
+                     if f.startswith("test_") and f.endswith(".c"))
+    for name in on_disk:
+        if name not in included and name not in excluded:
+            errors.append("%s is neither in the host lane nor excluded with a "
+                          "reason (tools/host_test_manifest.json)"
+                          % rel(os.path.join(TEST_DIR, name)))
+
+    for name, reason in sorted(excluded.items()):
+        if not str(reason).strip():
+            errors.append("%s is excluded from the host lane with no reason"
+                          % name)
+    return errors
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Reject false-green / false-positive tests")
     ap.add_argument("--strict", action="store_true", help="warnings become errors")
@@ -300,7 +346,8 @@ def main(argv=None):
 
     c_errors, c_warnings, tests = scan_c_suite()
     py_errors, py_warnings = scan_python_suite()
-    errors = c_errors + py_errors
+    host_errors = scan_host_manifest()
+    errors = c_errors + py_errors + host_errors
     warnings = c_warnings + py_warnings
 
     if not args.quiet:
