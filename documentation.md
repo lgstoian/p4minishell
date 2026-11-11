@@ -54,12 +54,14 @@ components/storage/             SD sessions, path resolution, FATFS conversion, 
 components/batch/               Batch engine (labels, for/for /f, pipes, env, PATH, aliases, binds)
   batch_expr.c / calc.c         Integer-expression evaluator + floating-point calculator
 components/boot/                CONFIG.SYS parser + AUTOEXEC.BAT runner + default-file generation
-components/command/             Command dispatch, worker task, pipeline, and the split *_commands.c verb files
+components/browser/             Browser memory caches: PSRAM image cache + rendered-page back/forward cache
+components/command/             Command dispatch, worker task, pipeline, and the split *_commands.c verb files (incl. download_commands.c)
 components/applib/              Native-app runtime library (transcript stdout, memory, time, input, state, ABI)
 components/modal/               Shared modal runtime + ready-made surfaces (dialog/list/ask/browse/view/hexview/imageview/form)
 components/editor/              `edit` editor: byte-preserving document model + LVGL surface + focus/spell/templates
 components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_flush
 components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport
+components/imgdec/              PNG (LodePNG) + JPEG (TJpgDec) decode to scaled RGB565
 components/filetype/            Central extension -> kind registry
 components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader + unified DOM renderer (TUI/ANSI)
 components/mcp/                 MCP (Model Context Protocol) JSON-RPC client (networking + json)
@@ -86,7 +88,7 @@ components/cas/                  Exact-rational CAS core (parse/simplify/expand/
 components/chat/                Board-to-board chat transport: SoftAP host + bounded HTTP server + singleton host API
 components/epub/                EPUB reader: ZIP-based archives, OPF/NCX/nav (Expat) parsing, HTML-to-ANSI chapters
 components/math_disp/           Natural-display math: parse/edit/layout/render + serialize+evaluate via calc
-components/rss/                 RSS 2.0 / Atom 1.0 / JSON Feed reader: rss_parse + rss_fetch (conditional GET + auth)
+components/rss/                 RSS 2.0 / Atom 1.0 / JSON Feed reader: rss_parse + rss_fetch (conditional GET + auth), sd:/RSS subscription store + read state, OPML exchange, background poller
 samples/whoami/               Sample native app component (`whoami`, applib-only)
 coprocessor/esp32c6_slave/      ESP32-C6 hosted slave firmware project
 ```
@@ -95,7 +97,8 @@ The command module's verb bodies live in focused files under
 `components/command/` (`tui_commands.c`, `gfx_commands.c`, `image_commands.c`,
 `plot_commands.c`, `serial_commands.c`, `periph_commands.c`,
 `power_commands.c`, `audio_commands.c`, `font_commands.c`, `md_commands.c`,
-`json_commands.c`, `asset_commands.c`, `pkg_commands.c`, `db_commands.c`,
+`json_commands.c`, `asset_commands.c`, `pkg_commands.c`, `store_commands.c`,
+`download_commands.c`, `db_commands.c`,
 `alarm_commands.c`, `config_cmd.c`, `gfind_commands.c`, `csv_commands.c`,
 `export_commands.c`, `import_commands.c`, `pim_commands.c`,
 `sync_commands.c`, `netsvc_commands.c`,
@@ -192,6 +195,26 @@ local functions.
 ### Shell Core (components/shell)
 
 Owns the shell's runtime surface and output plumbing:
+
+**File layout.** The component is four translation units, split so the pure
+half can run without a board (`harness.md` §2.2):
+
+- `shell.c` — the view and console: LVGL transcript label, click regions,
+  scroll, the USB-Serial/JTAG bridge, the input line, recall, the debug
+  command and the system-info verbs.
+- `shell_core.c` — hardware-free state: text helpers and the quote/escape
+  statement scanner, the command-history store/search (with password masking),
+  the abort/busy flags and the help registry.
+- `shell_transcript.c` — the transcript model: scrollback buffers, ANSI text
+  assembly, output-redirection capture and the RAM clipboard. It reaches the
+  view only through the optional `shell_transcript_sink_t` that `shell.c`
+  registers in `shell_init()`; with no sink it runs text-only.
+- `shell_print.c` — the semantic print helpers. They are hardware-free because
+  they end in the model's `shell_transcript_append_ansi()`.
+
+Objects crossing a seam are defined once and declared in
+`shell_core_internal.h` / `shell_transcript_internal.h`; neither internal
+header is part of the public API (`shell.h` is unchanged).
 
 - **Transcript system**: Scrollable LVGL span group backed by a 65536-byte ANSI buffer
   (`P4_CONFIG_TRANSCRIPT_BYTES`, PSRAM) with overflow protection. Appends track the buffer length
@@ -775,6 +798,15 @@ The app/package contract is frozen in [`ABI.md`](ABI.md); the code follows it:
   `asset_verify_app()` reports the verdict but delegates the crypto, so there
   is one signature implementation. Bad signatures refuse before any copy;
   unsigned bundles keep the CRC-only contract unless enforcement is on.
+- **Package delivery.** Bundles are `PKGS/<APP>/` directories or single-file
+  `PKGS/<APP>.PKG` ZIP archives (`pkg_unpack_archive()` via the ONE ZIP reader,
+  `components/zip`); `pkg install` unpacks the archive and then runs the
+  ordinary directory flow, `pkg unpack` does only the unpack, and `pkg scan`
+  lists both forms. Installs are staged: existing destinations are backed up
+  under `PKGS/.installing/<APP>/`, each file is replaced atomically (temp +
+  rename), and the backups are restored on failure. `store_commands.c` adds a
+  remote app-store client (`store url|list|install`) that downloads an index
+  entry to `PKGS/<id>.PKG` and installs it through `pkg_install_app()`.
 
 ### Command Module (components/command)
 
@@ -1191,7 +1223,18 @@ Owns hosted NimBLE Bluetooth on ESP32-C6:
   limit).
 - **BLE advertising**: Non-connectable advertising. `bluetooth advertise on [name]` accepts a
   session-only advertising name stored in `s_bluetooth_state.session_advertise_name` (RAM-only,
-  never persisted); without one the configured default device name is used.
+  never persisted); without one the configured default device name is used. Issuing it while an
+  advert is already running stops and restarts it — NimBLE rejects a second
+  `ble_gap_adv_start()` with `EALREADY` — which is also how `bluetooth gatt on` switches a
+  running non-connectable advert to a connectable one.
+- **Host memory and lifecycle**: the NimBLE host pools come from PSRAM
+  (`CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`). The P4's internal DRAM is fully committed by
+  the LVGL/display buffers, the ESP-Hosted SDIO transport and the USB host, so the IDF default
+  (`..._INTERNAL`) leaves `ble_buf_alloc()` without a contiguous block and
+  `nimble_port_init()` fails. Bring-up gets one bounded retry
+  (`P4_CONFIG_BT_INIT_RETRIES`, `P4_CONFIG_BT_INIT_RETRY_DELAY_MS`) because the C6 BT service
+  shares its SDIO link with Wi-Fi and can still be settling; the host task creation is verified
+  through `xTaskGetHandle("nimble_host")`.
 - **BLE HID host**: `bluetooth connect XX:XX:XX:XX:XX:XX` acts as a BLE central for external HID
   keyboards/mice. It stops any scan/advertising, connects (`P4_CONFIG_BLE_CONNECT_TIMEOUT_MS`),
   negotiates the MTU (`P4_CONFIG_BLE_MTU`), and discovers the HID service (0x1812) through the
@@ -1205,6 +1248,33 @@ Owns hosted NimBLE Bluetooth on ESP32-C6:
   `bluetooth disconnect` terminates the connection; `bluetooth_is_device_connected()` reports
   whether a HID peripheral is attached (distinct from `bluetooth_is_connected()`, which only means
   the NimBLE host is synced).
+- **RSS reader**: RSS 2.0 / Atom 1.0 / JSON Feed parsing plus conditional GET
+  (`If-None-Match` / `If-Modified-Since`) and Basic/Bearer auth. Subscriptions persist in
+  `sd:/RSS/SUBS.INI`, read/unread state in `sd:/RSS/READING` (a bounded 64-bit hash table),
+  and OPML is the interchange format. The verb surface is `rss list|add|remove|enable|
+  interval|refresh|read|open|reset|import|export|set`; item bodies render through the one
+  HTML-to-ANSI path the browser uses. An opt-in background poller (`RSS_AUTOPOLL`, stack in
+  PSRAM) refreshes due feeds, and `RSS_INTERVAL` / `RSS_RETENTION` / `RSS_SAVEREAD` tune it.
+- **Browser memory caches**: `components/browser/` keeps two bounded LRU caches in
+  PSRAM — a decoded-image cache (keyed by source URL, one hit skips the fetch *and*
+  the PNG/JPEG decode) and a rendered-page cache (cells + link regions + address bar,
+  restored by memcpy). `browser cache [clear]` reports and clears them.
+- **Browser memory budget** (all large regions are PSRAM; internal DRAM stays the
+  scarce resource):
+
+  | Region | Where | Size |
+  |--------|-------|------|
+  | HTML source buffer | heap (PSRAM-backed) | ≤ `P4_CONFIG_HTTP_MAX_BODY_BYTES` (512 KB) |
+  | DOM arena | PSRAM | ≤ `P4_CONFIG_DOM_ARENA_LIMIT_BYTES` (4 MB), 256 KB blocks |
+  | DOM node cap | — | `P4_CONFIG_DOM_MAX_NODES` (20 000) |
+  | CSS ruleset | PSRAM | ~28 KB |
+  | Image source buffer | heap | ≤ 64 KB |
+  | Image decode grid | heap | 80 × 40 B = 3.2 KB |
+  | Image cache | PSRAM | 256 × 3.2 KB ≈ 819 KB |
+  | Page cache | PSRAM | 6 × ~112 KB ≈ 672 KB |
+  | History | PSRAM | 150 × 512 B = 75 KB |
+  | Bookmarks | PSRAM | 32 × 576 B = 18 KB |
+  | **Total** | | **≈ 1.5 MB typical, ≤ 6.2 MB worst case, of the 32 MB pool** |
 - **Status reporting**: Colour-coded report of controller readiness, NimBLE sync state,
   advertising state (with active name), connected HID device (name/address), C6 firmware version,
   and last error
@@ -1214,7 +1284,10 @@ Owns hosted NimBLE Bluetooth on ESP32-C6:
 
 Owns ESP-IDF USB Host Library with two class drivers:
 
-- **MSC (Mass Storage Class)**: VFS/FATFS registration at `/usb0`, mount on demand
+- **MSC (Mass Storage Class)**: VFS/FATFS registration at `/usb0`, mount on demand.
+  Enumeration (`msc_host_install_device()`) runs with `s_usb_lock` released — it performs
+  blocking SCSI transfers, and holding the module lock across them stalls every other USB
+  operation behind one slow stick.
 - **HID (Human Interface Device)**: Keyboard and mouse with opt-in transcript echo
 - **USB keyboard auto-detect**: Automatically detects USB HID keyboard on plug-in; routes keystrokes to CLI input line via `shell_usb_keyboard_input()` bridge
 - **Full US key map**: 60+ USB HID key codes including symbols, keypad, navigation, function keys, and modifier-aware shifted characters
@@ -1280,10 +1353,15 @@ built on the same runtime (v0.35.0: 6 surfaces).
     route to the image viewer and `.md`/`.html` render (through the markdown
     renderer / HTML reader, ANSI stripped) via the `components/filetype/`
     registry. `--raw` keeps the source.
-  - `imageview` — fit-to-screen BMP viewer (`image show`/`view`/`open`): reuses
-    the pure decoder in `components/gfx`, decodes straight to a fit-to-screen
-    RGB565 `lv_canvas` (source never materialized), `Esc`/`q`/Close.
+  - `imageview` — fit-to-screen BMP/PNG/JPEG viewer (`image show`/`view`/`open`):
+    reuses the one image path (`components/gfx` BMP, `components/imgdec`
+    PNG/JPEG), decodes straight to a fit-to-screen RGB565 `lv_canvas` (source
+    never materialized), `Esc`/`q`/Close.
   - `hexview` — 16-byte hex dump pager for SD files.
+  - **One image path:** BMP is owned by `components/gfx/`; PNG and JPEG by
+    `components/imgdec/` (LodePNG / TJpgDec, the decoders LVGL already
+    compiles). A caller routes by `imgdec_probe()`'s format, never by a local
+    magic-byte sniff, and never adds a second decoder for any of the three.
   - All accept `/t:secs` to auto-cancel: each surface starts a FreeRTOS
     one-shot timer in `open` that fires `MODAL_EVENT_CLOSE_REQUEST`, so an
     unattended batch script can never hang on a dialog.

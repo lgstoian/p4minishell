@@ -18,6 +18,41 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Added
 
+- **Hardware-free host unit lane.** `test/host/` builds the pure-logic Unity
+  sources against ESP-IDF's preview `linux` target and runs them natively
+  (132 of 634 cases today, ~50 ms), so a logic regression is caught on every
+  PR without a board. `tools/host_test_manifest.json` is the single source of
+  truth - every `test_*.c` is either included or excluded with the component
+  reason it cannot run yet; `tools/host_gen_runner.py` generates the runner
+  from it, and `tools/host_unit_run.py` builds, runs and enforces the manifest
+  (`--static`). A `host-unit` CI job runs it, `green_guard` now fails on a test
+  file that is neither included nor excluded, and `comment_index` validates
+  `@status`/`@test` on every tagged file instead of one header per component.
+  The lane is a pre-gate only: hardware sign-off still comes from the on-board
+  suite and `p4test`.
+
+- **Browser PSRAM caches and a DOM arena.** New `components/browser/` owns two
+  bounded LRU caches in the PSRAM pool (32 MB on these boards; internal DRAM stays
+  the scarce resource). The **decoded-image cache** stores the DOS-cell grid per
+  source URL, so a re-render or back/forward skips both the network fetch and the
+  PNG/JPEG decode. The **rendered-page cache** stores a whole page (cells + link
+  regions + address bar) captured through a new `tui_page_shot_*` API, so
+  back/forward restores by memcpy instead of re-fetching, re-parsing and
+  re-rendering. New `dom_arena.c` hands parsed nodes from bounded PSRAM blocks
+  instead of a `calloc` per node, with a node cap and an arena limit so a huge page
+  degrades gracefully rather than exhausting memory. `browser cache [clear]`
+  reports and clears the caches; history grew from 8 to 150 entries (each carrying
+  its page title) and bookmarks from 8 to 32, both in PSRAM. The whole browser now
+  budgets ~2.2 MB of the 32 MB pool - see the table in `documentation.md`.
+- **RSS reader surface.** The `components/rss` core (RSS 2.0 / Atom 1.0 / JSON Feed
+  parsing plus conditional-GET fetch) now has a complete surface: an SD-backed
+  subscription store (`sd:/RSS/SUBS.INI`, hand-editable pipe-separated records),
+  persisted read/unread state (`sd:/RSS/READING`, a bounded 64-bit hash table),
+  OPML import/export, and a background poller. New `rss` verb family: `list`,
+  `add`, `remove`, `enable`, `interval`, `refresh`, `read`, `open`, `reset`,
+  `import`, `export`, `set`. CONFIG.SYS gained `RSS_INTERVAL`, `RSS_AUTOPOLL`,
+  `RSS_RETENTION` and `RSS_SAVEREAD`. Item bodies render through the one
+  HTML-to-ANSI path the browser uses.
 - **Browser dashboard: CSS cascade, images, and in-page JavaScript.** The
   browser now uses one shared DOM renderer (`components/markdown/dom_render.c`)
   for the TUI page and ANSI; CSS supports tag/class/id/attribute selectors,
@@ -50,9 +85,126 @@ open bugs see [`bugs.md`](bugs.md).
   tautological assertions. The p4test runner treats a zero-assertion
   `Checklist`/`SuiteResult` as a failure; `p4test_run.py --static`/`--guard`
   run the gates without/with hardware.
+- **Single-file `.PKG` bundle archives + staged installs** (inspired by
+  ESP-Brookesia's `.bpk` packages; see [`licence.md`](licence.md)). A bundle may
+  now arrive as `PKGS/<APP>.PKG`, a ZIP container whose entries mirror the
+  `PKGS/<APP>/` directory layout; `pkg install <APP>` unpacks it through the ONE
+  ZIP reader (`components/zip`) and then runs the ordinary directory flow, and
+  `pkg unpack <APP>` does only the unpack. `pkg scan [dir]` lists both forms.
+  `pkg install` is now staged: existing destinations are backed up under
+  `PKGS/.installing/<APP>/`, each file is replaced atomically (temp + rename),
+  and the backups are restored if the install fails. Host builder:
+  `tools/make_pkg.py`.
+- **`services=` dependency list (additive APPINFO metadata).** A bundle may
+  declare `services=APP>=1.2,APP2` (a bare name = any version); `pkg install`
+  enforces every declared service is installed and satisfies its version, and
+  `pkg info` reports the list. No ABI bump (additive metadata only).
+- **`store` verb — remote app-store client.** `store url|list|install <id>`
+  fetches a JSON `apps[]` index, prints it, and installs an entry by streaming
+  its `bpk_url` to `PKGS/<id>.PKG` via `networking_http_get_stream()` and then
+  running the ordinary `pkg install`. The index URL is the compile-time
+  `P4_CONFIG_STORE_INDEX_URL` (empty disables the verb). Implemented in
+  `components/command/store_commands.c`; uses the ONE JSON reader and the ONE
+  HTTP client.
+- **Host tooling.** `tools/font_subset.py` (CJK/English charset builder for
+  font subsetting; adapted from ESP-Brookesia, Apache-2.0),
+  `tools/lvgl_image_pack.py` (PNG/JPEG → LVGL v9 `.bin` + `imageSet` index),
+  and `tools/dev_mcp_server.py` (MCP dev plugin exposing the repo's own host
+  tools over stdio).
+- **PNG + JPEG image decode.** New `components/imgdec/` leaf decodes PNG
+  (LodePNG) and JPEG (TJpgDec) — the two decoders LVGL already compiles — to a
+  scaled RGB565 buffer, the same contract as `gfx_bmp_decode_scaled_565`. The
+  browser's `<img>`, `view`, `image`, and `gfx image` all accept PNG/JPEG
+  through the ONE image path (`gfx` owns BMP; `imgdec` owns PNG/JPEG). Native
+  decode is capped by `P4_CONFIG_IMGDEC_MAX_W/H`; the scaled output is PSRAM.
+- **`download` verb.** `download <url> <path> [/resume] [/progress]` streams a
+  resource to SD through the ONE HTTP client
+  (`networking_http_get_stream_ex`), with a `Range` header for resume and
+  coalesced progress. Defaults into the public `sd:/DOWNLOAD/` directory
+  (`P4_CONFIG_DOWNLOAD_DIR_NAME`).
+- **HTTP retry + streaming headers.** `networking_http_get_ex` retries bounded
+  transient failures (a timeout or a 5xx); `networking_http_get_stream_ex`
+  adds caller-supplied request headers (the same pull-based stream, no second
+  client).
+- **Provisioning JSON API.** The captive portal now serves
+  `GET /api/wifi/scan`, `POST /api/wifi/connect`, and `GET /api/wifi/status`
+  alongside the HTML form, so a programmatic client can provision the device.
+  The scan is the ONE scan implementation (`networking_wifi_scan_records`).
+- **BLE GATT server.** `bluetooth gatt on|off` registers a Device Information
+  service (manufacturer / model / firmware revision) plus a P4MiniShell status
+  characteristic, and switches advertising to connectable.
+- **Browser gestures.** LVGL gesture recognition is enabled
+  (`CONFIG_LV_USE_GESTURE_RECOGNITION`) and the browser exposes
+  `browser swipe <back|forward>` as the batch-callable gesture entry point.
 
 ### Fixed
 
+- **`history /load` stored blank lines** (bugs.md F59): `shell_history_load_lines()`
+  called `shell_trim(line)` and dropped the returned pointer, so a
+  whitespace-only line became an entry. Found by the host lane, where the
+  `tmpfile()` cases actually run (they are IGNORED on ESP-IDF).
+- **`hard_reset()` now uses `esptool --after watchdog_reset`** (bugs.md F42):
+  a plain RTS reset intermittently left these USB-Serial/JTAG boards not
+  running, which made `unit_run`/`boot_regression` report spurious cold-start
+  misses.
+
+- **`rss_fetch()` never returned the validators.** The `etag_out` /
+  `last_modified_out` parameters documented in `rss.h` were always emptied, so a
+  stored ETag / Last-Modified never advanced and every refresh re-downloaded the
+  whole body even though the conditional-GET headers were being sent. They are
+  now captured from the response (the timestamp rendered as an IMF-fixdate for
+  `If-Modified-Since`) before the result is freed.
+- **RSS 2.0 item `<link>` was never parsed.** The XML handler only understood
+  Atom's `href` attribute form, so `rss open` reported "item has no link" for
+  every RSS 2.0 feed. The element text is now captured when no `href` exists.
+- **`s10_input_ui` ghost-completion check was flaky (recurring `coo`).** The
+  typing loop judged each key with `endswith()`, which also accepts a duplicated
+  character (`cc`), and a repaint-lagged read could break the loop after the
+  first of two identical keys — the second landed afterwards and corrupted the
+  prefix to `coo`, which has no ghost hint. Keys are now confirmed by observing
+  the input line actually grow, an exact-prefix mismatch triggers a verified
+  clear+retype, and the cold-cache fallback uses the OSK enter key instead of
+  Ctrl+C (Ctrl+C clears the shell line, not OSK-typed text). The same failure
+  signature appears in logs dating back to the F53 round; verified 3/3 on COM6
+  and 1/1 on COM3.
+- **Hosted NimBLE host would not initialize (F44).** The IDF default
+  `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL` puts every NimBLE host pool (msys + HCI evt/cmd)
+  in internal DRAM, which this board has fully committed to the LVGL/display buffers,
+  ESP-Hosted SDIO and the USB host (~3 KB free at startup). `ble_buf_alloc()` therefore
+  returned `ESP_ERR_NO_MEM` and `nimble_port_init()` failed with
+  `BLE_INIT: nimble host init failed`, leaving `synced: no` and every BLE command unusable —
+  even though the controller and hosted HCI transport were healthy. The host now allocates
+  from PSRAM (`CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`; the controller is external on
+  the C6, so the pools have no DMA/IRAM requirement), and the ignored
+  `xTaskCreatePinnedToCore()` result inside `esp_nimble_enable()` is now verified with
+  `xTaskGetHandle("nimble_host")` instead of silently reporting success. Bring-up also gets
+  one bounded retry (`P4_CONFIG_BT_INIT_RETRIES`) for the C6 BT service settling on the
+  shared SDIO link.
+- **`bluetooth advertise on` failed while advertising was already active.** NimBLE rejects a
+  second `ble_gap_adv_start()` with `EALREADY`, so re-issuing `bluetooth advertise on` — or
+  running `bluetooth gatt on` while non-connectable advertising was active — logged
+  `Hosted BLE startup failed` and recorded an error. Advertising now stops and restarts,
+  which is also what lets the GATT server switch a running advert to connectable mode.
+- **Image viewer stack overflow (F43).** The `image_surface_free()` helper added
+  for the PNG/JPEG viewer called itself in the non-imgdec branch instead of
+  `gfx_surface_free()`, recursing until the 32 KiB command-worker stack
+  overflowed (`screen run type=image` panicked with a stack protection fault).
+  It now frees through the decoder that produced the pixels.
+- **`pkg_services_parse` rejected valid `services=` entries.** It applied
+  `asset_app_ok()` to the whole token (`MOOD>=1.2`), which contains `>`/`=`/`.`
+  and so failed; only a bare name is name-checked now, and the operator form is
+  validated by `pkg_requires_parse()`.
+- **`store_path_parse` crashed on a NULL path.** The pure store-index helper had
+  no NULL guard, so the unit test's `NULL` case dereferenced address 0 (load
+  access fault). It now returns false.
+- **`download` did not create its default directory.** `download <url>` with no
+  path derives `sd:/DOWNLOAD/<name>` but never created it, so the first download
+  failed with "cannot create". The parent directory is now created before the
+  stream opens.
+- **`s08_display` TUI visibility check was stale.** It counted near-(200,204,200)
+  pixels in a hardcoded jc1060p470c region; the TUI text renders DOS 15
+  (255,255,255) and the region is invalid on the Tab5. It now counts near-white
+  pixels in the board-independent TUI transcript area.
 - **TUI cell colours used the ANSI palette order instead of DOS.** `tui_flush`
   looked up `ansi_get_palette_color(cell->fg)` while cells store DOS indices;
   ANSI 11 is bright yellow but DOS 11 is bright cyan, so browser CSS colours
@@ -108,6 +260,28 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Changed
 
+- **The shell is four translation units.** `shell.c` keeps the view and
+  console (LVGL transcript label, click regions, USB-Serial/JTAG bridge, input
+  line); `shell_core.c` owns the hardware-free state (text helpers, statement
+  scanner, history store, abort/busy flags, help registry);
+  `shell_transcript.c` is the transcript model behind an optional sink that the
+  view registers in `shell_init()`; `shell_print.c` holds the semantic print
+  helpers. Behaviour is unchanged.
+- **The clock and the batch environment split the same way.** `clock_core.c`
+  holds the display formatter and the RTC restore math; `batch_env.c`
+  (+ `batch_env_internal.h`) holds the environment pool, variable expansion,
+  background slots and the nested-run context. `batch.c` dropped ~1600 lines and
+  keeps every console/command entry point.
+
+- **USB MSC enumeration no longer holds the module lock.** `msc_host_install_device()`
+  performs blocking SCSI transfers; holding `s_usb_lock` across them stalled every other
+  USB operation behind one slow stick. The lock is now released around enumeration (a
+  per-slot `connecting` flag claims the slot across the unlocked enumeration
+  window). Raising the USB task stacks was also tried and **reverted**: it cost
+  ~6 KB of internal DRAM on the Tab5 (three stacks × 2 KB), dropping reboot-time
+  headroom from ~14 KB to ~8 KB and regressing `s17_browser` there. Internal DRAM
+  is the scarce resource on this board; leave the IDF defaults alone. Hardware
+  confirmation of the lock change with a real flash stick is still pending.
 - Firmware and `test/` build clean (zero warnings) on `jc1060p470c`; the test
   app gains `test_breadcrumb.c` (4 cases) and the five re-registered tests.
 - Refreshed the curated `docs/assets/` screenshots with

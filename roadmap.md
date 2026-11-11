@@ -152,6 +152,56 @@ on-disk index — always live.
   loopback browser fetch, line-wise link preview checks.
 - See [`changelog.md`](changelog.md) `[1.4.1]` and [`bugs.md`](bugs.md) F53.
 
+### 14. ESP-Brookesia study — packaging, store, and tooling (v1.4.2)
+
+A study of Espressif's [ESP-Brookesia](https://github.com/espressif/esp-brookesia)
+(Apache-2.0) to see what is compatible with this project's model and license.
+The full analysis (what was adopted, adapted, and rejected, and why) is in
+[`licence.md`](licence.md); the outcome:
+
+- **Adopted/adapted:** single-file `.PKG` ZIP bundles (from `.bpk`), staged
+  installs with backup + rollback, a remote app-store client (`store`), a
+  `services=` dependency list, a CJK font-subset tool, an LVGL image packager,
+  and an MCP dev plugin. All reuse this project's ONE implementations (ZIP
+  reader, JSON reader, HTTP client, `pkg` flow).
+- **Rejected as duplicates:** the service framework (we have `event_bus` +
+  registration tables), `lib_utils` (we have the `start` pool + `state_machine`),
+  the Lua/JS/WASM/ELF runtimes (we have `jsengine` + the `applib` ABI), the
+  JSON-UI document model and its LVGL backend (a second windowing model), the
+  HAL/system core+super (our own layers), and the PNG/JPEG/font-cache/display
+  source code (duplicates of our ONE implementations).
+- **Rejected as incompatible:** `brookesia_emulation_nes` vendors the GPL-2.0
+  `nofrendo` emulator — GPL must not enter this MIT project.
+- **Deferred (inspiration only):** PC/WASM simulation (needs a HAL seam this
+  project does not have), the thread profiler (would duplicate
+  `shell_sample_cpu_percent`), and the `-u` linker-symbol registration trick
+  (our `app_register` table has no dead-strip problem today).
+
+### 15. ESP-Brookesia-inspired browser/networking round (v1.4.2)
+
+Follow-on work from the study above, prioritising the browser:
+
+- **PNG + JPEG decode** (`components/imgdec/`, LodePNG + TJpgDec — the decoders
+  LVGL already compiles). The browser, `view`, `image`, and `gfx image` accept
+  PNG/JPEG through the one image path; `gfx` stays the ONE BMP decoder.
+- **`download` verb** (`/resume`, `/progress`) streaming to SD through the ONE
+  HTTP client; defaults into the public `sd:/DOWNLOAD/` directory.
+- **HTTP retry** (bounded, transient-only) and **streaming request headers**
+  (`networking_http_get_stream_ex`).
+- **Provisioning JSON API** (`/api/wifi/scan|connect|status`) beside the portal
+  HTML form; the scan is the one `networking_wifi_scan_records` implementation.
+- **BLE GATT server** (`bluetooth gatt on|off`): Device Information + a
+  P4MiniShell status characteristic, connectable advertising.
+- **Browser gestures**: LVGL gesture recognition enabled; `browser swipe
+  <back|forward>` is the batch-callable entry point.
+- **Already present (no work needed):** touch injection (`ui tap|swipe|...`),
+  backlight persistence (`BRIGHTNESS=` in CONFIG.SYS), timezone (`timezone`).
+
+**Not adopted from ESP-Brookesia:** the KV storage layer (we have `storage_ini`
++ NVS — a third store would be a duplicate), a generic tree-copy (xcopy /S
+owns recursive copy), the Lua/JS/WASM/ELF runtimes, the JSON-UI model, the
+service framework, and `brookesia_emulation_nes` (GPL).
+
 ---
 
 ## Part 2 — Where we are going
@@ -167,6 +217,8 @@ commitments.
 | Build-tree hygiene | Release-ready tree | Done: `build-tab5/` + `test/build-tab5/` untracked from git (were committed before the ignore rules); `git ls-files` shows no build output. See [`release.md`](release.md) §0 |
 | Single capability-query style | One way to ask | Done: runtime code queries `board_caps_*` (battery ADC/INA226, RTC BSP-I2C, keyboard RGB routing); preprocessor `#if BOARD_CFG` remains only where required (macro definitions, includes, table entries, value defaults). Both boards + `test/` build clean |
 | CI board auto-discovery | Scaling | Done: `build.yml` discovers `boards/*/` for the matrix and completeness lint — adding a profile needs no workflow edit |
+| Hardware-free host unit lane | PR-time logic coverage | Done: `test/host/` on the IDF `linux` target, 132 of 634 cases, CI `host-unit` job; manifest + generator + guard classification. Hardware sign-off unchanged ([`harness.md`](harness.md) 2.2) |
+| Remaining hardware-coupled models | More host coverage | Open: `calc` needs a storage/MAC seam (`shell_get_cwd`, `shell_fs_resolve_path`, `esp_read_mac`) and a host-reachable `batch_env_init`; the editor document model and `tui.c` still need a view split. LVGL-on-host is rejected (esp_lcd/esp_vfs_fat) |
 | Per-board release artifacts | Shippable images | Done: `make_release.py bins` verified for both boards (`p4minishell-<board>.bin` merge; `release/` stays ignored) |
 | Two-board stability gate | Exit criterion | Open: `bugs.md` F27 (transient Tab5 crash under long mixed sweeps) must close with three clean full sweeps on both boards + a `dogfood` soak before this chapter is declared complete |
 
@@ -176,7 +228,7 @@ commitments.
 |---------|-----|-------|
 | Contacts / tasks apps | Complete the PIM story | Build on `db` store; batch apps with modal surfaces |
 | Agenda integration | One place for time | Merge `alarm`/`cal` events, tasks, documents into today view |
-| RSS / plain-text reader | Classic PDA use | Core landed in `components/rss`: `rss_parse()` (RSS 2.0 / Atom 1.0 / JSON Feed) and `rss_fetch()` (conditional GET + Basic/Bearer auth). Subscription store, polling scheduler, and the reading surface remain. |
+| RSS / plain-text reader | Classic PDA use | Done: `components/rss` parses RSS 2.0 / Atom 1.0 / JSON Feed and fetches with conditional GET + Basic/Bearer auth; `sd:/RSS/SUBS.INI` subscription store, `sd:/RSS/READING` read state, OPML import/export, the `rss` verb family, and a PSRAM-backed poller |
 | Secrets manager | Passwords on the go | `crypt` core + `db` secret fields, behind passcode lock |
 | **EPUB e-book reader** | Classic PDA use | `epub` verb family: open/read/next/prev/goto/toc/extract; OPF/NCX/nav parsing; HTML-to-ANSI chapter rendering; spine/TOC navigation; resource extraction |
 
@@ -226,6 +278,18 @@ cores (one dispatcher, one framing writer, one CRC-32, one search core — see
 | 3 | `tools/p4sync/` host prototype | Reusable sync core for the future desktop app | Python client reusing `p4test.device/sdbridge/screenshot` + `pim_sync` merge; no raw `serial.Serial`, DTR-safe open only |
 | 3 | Full-image CLI run | PIM + files + apps + screenshot in one session | `tools/p4sync full-image` (handshake + PIM mirror sync + file provisioning + app inventory + shot + `image.json`), HW-verified on COM3 |
 | 4 | Two-board verification ladder | No regressions | Firmware + `test/` zero warnings, unit suite green, `p4test_run` + `regression.py` PASS, `dogfood` soak, main firmware reflashed |
+
+### G. ESP-Brookesia study — deferred (inspiration only)
+
+Recorded so the decision is not re-litigated; see [`licence.md`](licence.md)
+for the full adopt/adapt/reject analysis.
+
+| Item | Why deferred |
+|------|--------------|
+| PC/WASM simulation (`hal_linux`/`hal_wasm`) | Would let the shell/TUI/batch run offline in CI, but needs a HAL seam this project does not have (we have `boards/` + `board_bsp` + `board_caps`). Revisit after a board-abstraction refactor. |
+| Thread profiler (`lib_utils`) | Stack high-water marks / per-core CPU% would be a better `ps`/`top`, but folding it in risks a second sampler; extend `shell_sample_cpu_percent` only, never add a parallel one. |
+| `-u <symbol>` plugin registration | Keeps static-library registrants alive; our `app_register` table has no dead-strip problem today. |
+| `esp_lvgl_adapter` migration | Evaluated: FreeType/PNG-JPEG/mmap-FS/gestures are attractive, but it touches ~15 components and would sit beside our ONE font registry. Not migrated. |
 
 ### Not planned
 

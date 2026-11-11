@@ -19,7 +19,12 @@ Current stack/memory baselines live in `p4minishell_config.h` (documented in
 - `components/shell` owns the transcript and async buffer, command history, debug log, UART 
 console, the input-line prompt contract, the interactive keypress queue, the DOS prompt template engine, the boot 
 banner, the system info commands, and the read-only FreeRTOS task introspection (`ps` / `tasks` / `top` via
-  `shell_command_ps()`).
+  `shell_command_ps()`). It is split into `shell.c` (view and console), `shell_core.c`
+  (hardware-free state and the statement scanner), `shell_transcript.c` (the transcript
+  model behind an optional sink) and `shell_print.c` (output formatting). Put new
+  hardware-free helpers in the core files so the host lane can compile them
+  ([`harness.md`](harness.md) §2.2); hardware never belongs in `shell_core.c` or
+  `shell_transcript.c`.
 - `components/storage` owns the guarded SD session, persistent mount tracking, path resolution, FATFS conversion, size formatting, DOS wildcard matching, the RAM-only current working directory, the output-redirection writer, every DOS file command, and the hidden `.trash` recycle bin (`trash.c`) that `del`/`rd /s` move entries into and `undelete`/`trash` manage.
 - `components/batch` owns the batch engine (file execution, `:label`s, `goto`, `call :label`,
   `gosub`/`return`/`on` computed dispatch, `switch` string dispatch, `for` loops incl. `for /f`/`/L`/`/A`/`/D`/`/R` and `while`, `!VAR!` delayed expansion, the
@@ -314,6 +319,16 @@ The app/package contract is frozen in [`ABI.md`](ABI.md). In short:
   re-implements the crypto. The host signs with `tools/pkg_sign.py`
   (`apps/push_pkgs.py --sign`), and the device trusts one raw P-256 public key
   installed with `pkg key install`.
+- **Bundles are directories or archives.** A bundle is `PKGS/<APP>/` or a
+  single-file `PKGS/<APP>.PKG` ZIP archive (`tools/make_pkg.py`,
+  `apps/push_pkgs.py --pkg`); `pkg install` unpacks the archive through the ONE
+  ZIP reader (`components/zip`), `pkg unpack` does only the unpack, and
+  `pkg scan` lists both. Installs are staged: existing destinations are backed
+  up under `PKGS/.installing/<APP>/`, each file is replaced atomically (temp +
+  rename), and the backups are restored on failure. Additive `services=`
+  metadata declares dependencies enforced at install; `store_commands.c` adds
+  a remote app-store client (`store url|list|install`) that downloads an index
+  entry to `PKGS/<id>.PKG` and installs it via `pkg_install_app()`.
 - **Extending it:** new metadata keys are optional and additive; a breaking
   change to the entry ABI or a metadata key bumps `P4_CONFIG_NATIVE_ABI`, and
   `ABI.md` / `docs/native_packaging.md` / the changelog move together.
