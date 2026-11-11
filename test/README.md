@@ -131,11 +131,12 @@ python ..\tools\unit_run.py COM3 COM6
 
 The same sources also build natively with ESP-IDF's preview `linux` target
 (`test/host/`), so the pure-logic cases run on the host and in CI without a
-board. Coverage today is **113 of 634 cases** — the leaf components with no board
+board. Coverage today is **132 of 634 cases** — the leaf components with no board
 dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
-hardware-free halves of the shell (`shell_core.c`), header
-(`header_layout/status/notify_queue/refresh.c`), theme (`font/theme.c`) and
-clock (`clock_core.c`, `clock_timer.c`).
+hardware-free halves of the shell (`shell_core.c` for text/scanning/history/
+abort/help, `shell_transcript.c` for the transcript model behind an optional
+sink), header (`header_layout/status/notify_queue/refresh.c`), theme
+(`font/theme.c`) and clock (`clock_core.c`, `clock_timer.c`).
 
 ```sh
 cd test/host && idf.py build && ./build/p4minishell_host_tests.elf

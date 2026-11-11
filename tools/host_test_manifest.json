@@ -9,7 +9,7 @@
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 113,
+  "expected_cases": 132,
   "components": [
     "strutil",
     "json",
@@ -25,13 +25,18 @@
   ],
   "tests": [
     "test_ansi_format.c",
+    "test_clipboard.c",
     "test_clock.c",
     "test_filetype.c",
     "test_gfx.c",
     "test_header.c",
+    "test_history_file.c",
+    "test_history_search.c",
     "test_html.c",
     "test_json.c",
     "test_markdown.c",
+    "test_shell_abort.c",
+    "test_shell_parser.c",
     "test_shell_quoting.c",
     "test_theme.c"
   ],
@@ -52,7 +57,6 @@
     "test_cas.c": "cas: REQUIRES storage and batch (mbedtls is host-capable, storage is not)",
     "test_certs.c": "certs: REQUIRES mbedtls and storage (mbedtls is host-capable, storage is not)",
     "test_chat.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
-    "test_clipboard.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_comp.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_completion.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_config.c": "data store: REQUIRES storage + board_bsp for its on-disk backend",
@@ -66,8 +70,6 @@
     "test_gfind.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_hardware.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_himem.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
-    "test_history_file.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
-    "test_history_search.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_httpget.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_imgdec.c": "UI model lives in LVGL-coupled translation units (editor_view.c, tui_fonts.c, header.c)",
     "test_import.c": "command layer: components/command REQUIRES shell, storage, USB and display",
@@ -86,12 +88,8 @@
     "test_rss_store.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_screen.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_serial.c": "command layer: components/command REQUIRES shell, storage, USB and display",
-    "test_shell_abort.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
-    "test_shell_debug_log.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_shell_history.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
-    "test_shell_parser.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_shell_pipeline.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
-    "test_shell_prompt.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_shell_variables.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_storage_format.c": "storage: REQUIRES SDMMC/FAT VFS (no filesystem on the host lane)",
     "test_storage_volumes.c": "storage: REQUIRES SDMMC/FAT VFS (no filesystem on the host lane)",
@@ -102,6 +100,8 @@
     "test_tmgr.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_tui.c": "UI model lives in LVGL-coupled translation units (editor_view.c, tui_fonts.c, header.c)",
     "test_userial.c": "command layer: components/command REQUIRES shell, storage, USB and display",
-    "test_wifi_state.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)"
+    "test_wifi_state.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
+    "test_shell_prompt.c": "prompt/title/key-wait still live in shell.c; move that block to shell_core.c first",
+    "test_shell_debug_log.c": "debug log + shell_record_* still in shell.c and schedule transcript flushes (view glue)"
   }
 }

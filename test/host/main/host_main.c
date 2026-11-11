@@ -48,6 +48,12 @@ extern void test_ansi_osc8_strip(void);
 extern void test_ansi_csi_trailing_complete(void);
 extern void test_ansi_csi_trailing_split(void);
 
+/* --- test_clipboard.c ---------------------------------------- */
+extern void test_clipboard_set_get(void);
+extern void test_clipboard_empty_and_null(void);
+extern void test_clipboard_file_flag(void);
+extern void test_clipboard_copy_transcript(void);
+
 /* --- test_clock.c -------------------------------------------- */
 extern void test_clock_format_hm_snapshot(void);
 extern void test_clock_timer_start_stop(void);
@@ -114,6 +120,16 @@ extern void test_header_notify_queue_clear_and_blank(void);
 extern void test_header_refresh_priority(void);
 extern void test_header_refresh_clock_and_idle_off(void);
 
+/* --- test_history_file.c ------------------------------------- */
+extern void test_history_file_roundtrip(void);
+extern void test_history_file_skips_blanks(void);
+extern void test_history_file_null_stream(void);
+
+/* --- test_history_search.c ----------------------------------- */
+extern void test_history_search_matches_basic(void);
+extern void test_history_search_matches_null(void);
+extern void test_history_generation_advances(void);
+
 /* --- test_html.c --------------------------------------------- */
 extern void test_html_render_basic(void);
 extern void test_html_render_entities(void);
@@ -155,6 +171,19 @@ extern void test_markdown_strip_ansi(void);
 extern void test_markdown_auto_toggle(void);
 extern void test_markdown_expand_form_feeds(void);
 
+/* --- test_shell_abort.c -------------------------------------- */
+extern void test_shell_abort_initially_clear(void);
+extern void test_shell_abort_request_and_clear(void);
+extern void test_shell_command_busy_tracks(void);
+
+/* --- test_shell_parser.c ------------------------------------- */
+extern void test_shell_parser_trim(void);
+extern void test_shell_parser_split_args(void);
+extern void test_shell_parser_count_args(void);
+extern void test_shell_parser_text_equals(void);
+extern void test_shell_parser_percentage_parse(void);
+extern void test_redirect_capture_nested(void);
+
 /* --- test_shell_quoting.c ------------------------------------ */
 extern void test_shell_quoting_find_unquoted(void);
 extern void test_shell_quoting_unescape(void);
@@ -192,6 +221,12 @@ void app_main(void)
     RUN_TEST(test_ansi_osc8_strip);
     RUN_TEST(test_ansi_csi_trailing_complete);
     RUN_TEST(test_ansi_csi_trailing_split);
+
+    /* test_clipboard.c */
+    RUN_TEST(test_clipboard_set_get);
+    RUN_TEST(test_clipboard_empty_and_null);
+    RUN_TEST(test_clipboard_file_flag);
+    RUN_TEST(test_clipboard_copy_transcript);
 
     /* test_clock.c */
     RUN_TEST(test_clock_format_hm_snapshot);
@@ -259,6 +294,16 @@ void app_main(void)
     RUN_TEST(test_header_refresh_priority);
     RUN_TEST(test_header_refresh_clock_and_idle_off);
 
+    /* test_history_file.c */
+    RUN_TEST(test_history_file_roundtrip);
+    RUN_TEST(test_history_file_skips_blanks);
+    RUN_TEST(test_history_file_null_stream);
+
+    /* test_history_search.c */
+    RUN_TEST(test_history_search_matches_basic);
+    RUN_TEST(test_history_search_matches_null);
+    RUN_TEST(test_history_generation_advances);
+
     /* test_html.c */
     RUN_TEST(test_html_render_basic);
     RUN_TEST(test_html_render_entities);
@@ -299,6 +344,19 @@ void app_main(void)
     RUN_TEST(test_markdown_strip_ansi);
     RUN_TEST(test_markdown_auto_toggle);
     RUN_TEST(test_markdown_expand_form_feeds);
+
+    /* test_shell_abort.c */
+    RUN_TEST(test_shell_abort_initially_clear);
+    RUN_TEST(test_shell_abort_request_and_clear);
+    RUN_TEST(test_shell_command_busy_tracks);
+
+    /* test_shell_parser.c */
+    RUN_TEST(test_shell_parser_trim);
+    RUN_TEST(test_shell_parser_split_args);
+    RUN_TEST(test_shell_parser_count_args);
+    RUN_TEST(test_shell_parser_text_equals);
+    RUN_TEST(test_shell_parser_percentage_parse);
+    RUN_TEST(test_redirect_capture_nested);
 
     /* test_shell_quoting.c */
     RUN_TEST(test_shell_quoting_find_unquoted);

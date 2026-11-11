@@ -19,10 +19,16 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_header.c"
     "${HOST_TEST_DIR}/test_theme.c"
     "${HOST_TEST_DIR}/test_clock.c"
+    "${HOST_TEST_DIR}/test_shell_abort.c"
+    "${HOST_TEST_DIR}/test_history_search.c"
+    "${HOST_TEST_DIR}/test_history_file.c"
+    "${HOST_TEST_DIR}/test_shell_parser.c"
+    "${HOST_TEST_DIR}/test_clipboard.c"
     # Production sources that are hardware-free by construction (see each
     # file's @hard-rule): compiled directly so the lane exercises the real
     # code rather than a copy or a stub.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_core.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_transcript.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_layout.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_status.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_notify_queue.c"

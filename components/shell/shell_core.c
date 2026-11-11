@@ -866,11 +866,12 @@ size_t shell_history_load_lines(FILE *fp)
         return 0;
     }
     while (fgets(line, P4_CONFIG_COMMAND_BYTES, fp) != NULL) {
-        shell_trim(line);
-        if (line[0] == '\0') {
+        /* Keep the allocation pointer for free(); trim only the view of it. */
+        const char *trimmed = shell_trim(line);
+        if (trimmed[0] == '\0') {
             continue;
         }
-        shell_store_command_history(line);
+        shell_store_command_history(trimmed);
         loaded++;
     }
     free(line);
