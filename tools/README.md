@@ -156,6 +156,34 @@ holder per port.
   `powershell -File tools/reapply_managed_patches.ps1`
   (`-Check` for a dry run). See `changelog.md` 0.35.1/0.35.2.
 
+## Packaging, assets, and dev tooling
+
+- `pkg_sign.py` — ECDSA P-256 manifest keys and signatures (`keygen`, `sign`,
+  `verify`); the device verifies `SIGN=<128 hex>` over the canonical manifest
+  bytes (see [`ABI.md`](../ABI.md) §4).
+- `make_pkg.py` — build a single-file `.PKG` ZIP bundle archive from an app
+  source dir or an assembled `PKGS/<APP>/` (`--src`/`--bundle`, optional
+  `--sign`). The archive mirrors the directory layout; `pkg install` unpacks it
+  on the device through the ONE ZIP reader.
+- `font_subset.py` — build a small CJK/English charset for font subsetting
+  (GB2312 level-1/level-2 or the GBK Han range, plus ASCII/Latin-1/CJK
+  punctuation/fullwidth forms and forced `--ui-strings`). Feed the result to
+  `fonttools subset` or `lv_font_conv`. Adapted from ESP-Brookesia
+  (`charset_filter.py`, Apache-2.0 — see [`../licence.md`](../licence.md)).
+  Relative outputs go under `tools/build/` (git-ignored).
+- `lvgl_image_pack.py` — pack PNG/JPEG images into LVGL v9 `.bin`
+  (`RGB565A8`) plus an `imageSet` `index.json`, with an optional C header of
+  `lv_image_dsc_t` descriptors (`--c-header`). The firmware needs no second
+  decoder — LVGL's own image decoder consumes the `.bin`.
+- `dev_mcp_server.py` — MCP dev plugin over stdio exposing this repo's host
+  tools (`p4_repo_status`, `p4_newapp`, `p4_make_pkg`, `p4_sign`,
+  `p4_verify_manifest`, `p4_font_subset`, `p4_image_pack`, `p4_docs_guards`,
+  `p4_firmware_build`). Run `python tools/dev_mcp_server.py --list`; point an
+  editor agent's MCP client at the script.
+- `make_icon.py` — generate the repo icon and the firmware boot-splash asset
+  (`icon/icon-512.png`, `main/assets/icon_splash.c/.h`) from the git-ignored
+  `icon/icon.png` master.
+
 ## Focused drivers (recent)
 
 - `bg_run.py` — shared marker-sync drain driver (`run_quiet`, `marker_done`,
@@ -229,6 +257,12 @@ holder per port.
   screenshot to `spikes/plot_tui.bmp`.
 - `unit_run.py` — build-independent capture of the unit-test summaries, one
   or two ports concurrently (`unit_run.py COM3 COM6`).
+- `host_unit_run.py` — the hardware-free counterpart: builds and runs the
+  host subset of the same Unity sources on ESP-IDF's `linux` target, parses the
+  same summaries, and (with `--static`) enforces `host_test_manifest.json`:
+  every `test_*.c` included or excluded-with-reason, and the case count
+  unchanged. `host_gen_runner.py` generates `test/host/main/host_main.c` from
+  that manifest (`--check` for drift). See `harness.md` §2.2.
 - `regression.py` — one-command host regression: one reset, then the full
   p4test suite plus the unique-coverage drivers (companion deep/db/alarm,
   package deploy/install, large-editor soak, touch sweep, TX integrity, boot

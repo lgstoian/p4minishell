@@ -86,15 +86,59 @@ A zero-assertion `Checklist`/`SuiteResult` is a failure at run time, not a pass.
 The tag vocabulary is in [`docs/comment-tags.md`](docs/comment-tags.md); the
 generated map is [`BREADCRUMBS.md`](BREADCRUMBS.md) / `breadcrumbs.json`.
 
+## 2.2 Layer 1a — host unit suite (no hardware)
+
+The same pure-logic `test/main/test_*.c` sources also build and run natively on
+the host with ESP-IDF's preview `linux` target, so a logic regression is caught
+on every PR without a board. CI runs it in the `host-unit` job of
+`.github/workflows/build.yml`.
+
+```powershell
+# Linux or WSL2 (the "linux" target is a POSIX host target), IDF 5.5.5 sourced:
+cd test/host
+idf.py build
+./build/p4minishell_host_tests.elf
+
+# from the repository root, same shell:
+python3 tools/host_unit_run.py            # build (if needed) + run + parse
+python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
+python3 tools/host_gen_runner.py --check  # generated runner is up to date
+```
+
+- **Coverage today: 113 of 634 cases** — the leaf components with no board
+  dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
+  `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
+  (`shell_core.c`), header (`header_layout/status/notify_queue/refresh.c`),
+  theme (`font/theme.c`) and clock (`clock_core.c`, `clock_timer.c`). Runs in
+  well under a second.
+- **What cannot run yet, and why:** almost every other component reaches a
+  board-only component through `REQUIRES` — `batch → shell` (display/LVGL,
+  USB-Serial-JTAG), `archive → storage` (SDMMC/FAT), `modal → windows/keyboard`,
+  `clock → board RTC over I2C`. `tools/host_test_manifest.json` records the
+  reason for every excluded file, and `--static` fails if a new `test_*.c` is
+  neither included nor excluded.
+- **The split so far:** `shell.c` → `shell_core.c` moved the pure text helpers
+  and the statement scanner (548 lines, no globals, no hardware). The same
+  recipe applies to the next block (`shell_transcript_*`, prompt/title, history
+  store), but the transcript's LVGL label and UART mirror must be separated
+  first — that change is board-gated.
+- **Never a substitute:** this lane is a pre-gate. A host pass says nothing
+  about hardware behaviour, and `harness.md` §0 still governs. The honest way to
+  grow it is to split hardware out of the mixed components, not to stub the
+  hardware.
+- **Extending it:** add the source (or the hardware-free translation unit) to
+  `test/host/main/CMakeLists.txt`, add the test file to
+  `tools/host_test_manifest.json`, then re-run `tools/host_gen_runner.py` (it
+  writes `test/host/main/host_main.c` and the expected case count).
+
 ---
 
 ## 3. Layer 1 — on-target unit tests (Unity)
 
 Pure/headless logic runs on the P4 in `test/` (Unity; the static case count is
-**668** after the breadcrumb/MCP round - 4 `test_breadcrumb.c`, 5
-`test_mcp.c`, and 5 tests that were defined but never registered - refresh the
-hardware count with `tools/unit_run.py`; includes the software AES-256-GCM
-vectors in `test_sw_gcm.c`).
+**685** after the browser-cache round, which added the 6 `test_browser_cache.c`
+cases - refresh the hardware count with `tools/unit_run.py`; includes the software
+AES-256-GCM vectors in `test_sw_gcm.c`).
 
 ```powershell
 cd test
@@ -140,7 +184,7 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 |-------|--------|
 | `s01_smoke` | identity (`about`/`version`/`sysinfo`), help, memory, screenshot geometry |
 | `s05_storage` | `dir`/`copy`/`xdel`, `chkdsk`, `disk detail`, labels, recycle bin |
-| `s06_batch` | the whole batch language (loops, `if`, pipes, redirection, `screen`, `screen flow`) + task-manager verbs (`suspend`/`resume`/`nice`, `start /b`, `tmgr_*` events) + app registration (`assoc`/`ftype`/`open` dispatch, `startup`, `launch /setup`, `pkg` install gates/outdated/remove/purge) |
+| `s06_batch` | the whole batch language (loops, `if`, pipes, redirection, `screen`, `screen flow`) + task-manager verbs (`suspend`/`resume`/`nice`, `start /b`, `tmgr_*` events) + app registration (`assoc`/`ftype`/`open` dispatch, `startup`, `launch /setup`, `pkg` install gates/outdated/remove/purge, `pkg unpack`/`pkg scan`, `services=` gate) |
 | `s07_data` | `db`, `csv`, `export`/`import`, `archive`, `crypt` (lock/unlock round-trip, passes on both boards since F23 fixed in v1.2.1), `json`, `markdown` (render + `export` html/print/text pulled and validated, incl. the on-device HTML reader via `type`), alarms, `gfind` (+ `/files`) |
 | `s08_display` | `draw`/`tui`/`gfx`/`plot`/`font`/`theme`/header/cursor + screenshot invariants |
 | `s09_editor` | the `edit` editor surfaces and save round-trips, the spell user dictionary (`\spell-add` learn, `spell list/forget`), and the autosave/`recover` crash round-trip |
@@ -237,6 +281,7 @@ logic (`tools/README.md` has the full list).
 | `tools/wifi_bench.py` | host peer for the firmware `wifi throughput` command |
 | `tools/ui_touch_test.py COM3 [--sweep]` | exhaustive synthetic touch: every OSK key, header, modals |
 | `tools/pkg_test.py COM3` | `pkg` round-trip + the full ECDSA signing matrix (fresh keypair) |
+| `tools/make_pkg.py`, `tools/font_subset.py`, `tools/lvgl_image_pack.py`, `tools/dev_mcp_server.py` | host-only package/asset/dev tooling (no hardware); see `tools/README.md` |
 | `tools/appdiff.py COM3 [--update]` | reference-app transcript parity gate |
 | `tools/dogfood.py COM3 --minutes 15` | autonomous curious-user drive; screenshots every action, journals anomalies |
 | `tools/completion_test.py`, `editor_test.py`, `header_test.py`, `plot_test.py`, `theme_test.py` | focused subsystem drivers |
@@ -320,8 +365,12 @@ it automatically.
 - **Known flakes** (treat one occurrence as non-reproducible until it repeats;
   see `bugs.md`): `tcpterm` occasionally missing a `RESULT OK` in a long
   sweep (`crypt` was flaky before bugs.md F23 was fixed in v1.2.1 and now
-  passes); the Tab5's marginal C6 SDIO link can produce hosted-RPC timeouts under
-  load (`bugs.md` F6).
+  passes); `s10_input_ui`'s ghost-completion check could corrupt its own prefix
+  to `coo` when an OSK key event arrived late, leaving no ghost hint (fixed in
+  this round — keys are now confirmed by observing the input line grow, and the
+  cold-cache fallback uses the OSK enter key rather than Ctrl+C, which does not
+  clear OSK-typed text); the Tab5's marginal C6 SDIO link can produce hosted-RPC
+  timeouts under load (`bugs.md` F6).
 - **A modal eating the marker** shows as `run(...): marker ... not seen`; raise
   `settle` (the command was still legitimately running). This is a harness
   timing issue, not a firmware bug.

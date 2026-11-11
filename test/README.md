@@ -26,7 +26,7 @@ the shell round (`test_shell_prompt.c`: session title,
   parsing/guards, volume classification, MBR decode; `test_certs.c`:
   DER→PEM conversion; `test_portal.c`: HTML escaping;
   `test_pim_carddav.c`: multistatus scan, card split, UID, URL join) — plus the **chat transport tests** (`test_chat.c`: config init, inbox/log ring, sequence, send/poll/clear) and **EPUB transport tests** (`test_epub.c`: config init, OPF parse, spine/TOC, render) — bring the
-suite to **668 Unity cases** (static count; refresh the hardware baseline with `tools/unit_run.py`). Latest coverage: `test_epub.c` EPUB transport tests on top of `test_chat.c` chat transport tests, `test_ansi_osc8_strip` for OSC 8 hyperlink stripping, `test_editor_link_under_cursor` for the edit Open link prefill, the 3 `test_assoc.c` association argument cases, the 3 `test_pkg.c` version/dependency/sanitize cases, the 7 `test_tmgr.c` task-manager cases, the 4 `test_breadcrumb.c` trail-formatter cases, and the 5 `test_mcp.c` MCP request-builder cases; hardware-verified on both boards
+suite to **685 Unity cases** (static count; refresh the hardware baseline with `tools/unit_run.py`). Latest coverage: the 6 `test_browser_cache.c` cases (image round-trip, miss/NULL handling, refresh-in-place, LRU eviction, clear, and the page cache's no-page degradation), the 8 `test_rss_store.c` RSS store cases (name validation, record round-trip, malformed-record rejection, `'|'`-in-field refusal, read-line parsing, CONFIG.SYS directive parsing), `test_epub.c` EPUB transport tests on top of `test_chat.c` chat transport tests, `test_ansi_osc8_strip` for OSC 8 hyperlink stripping, `test_editor_link_under_cursor` for the edit Open link prefill, the 3 `test_assoc.c` association argument cases, the 3 `test_pkg.c` version/dependency/sanitize cases, the 7 `test_tmgr.c` task-manager cases, the 4 `test_breadcrumb.c` trail-formatter cases, and the 5 `test_mcp.c` MCP request-builder cases; hardware-verified on both boards
 `jc1060p470c`, refresh the hardware count with `tools/unit_run.py <COM_PORT>`.
 
 ## Test Structure
@@ -98,6 +98,8 @@ test/
 test_netsvc.c           # MQTT codec, topic matcher, backoff, outbox framing
 test_archive.c          # USTAR core
 test_epub.c             # EPUB config, OPF/NCX parse, spine/TOC, render
+    test_rss_store.c        # RSS store record editors (name/round-trip/reject/separator), read-line parse, CONFIG.SYS directives
+    test_browser_cache.c    # browser PSRAM caches: image round-trip/miss/refresh/LRU/clear, page-cache no-page degradation
 test_hardware.c         # Tab5 hardware-support pure helpers
     test_sw_gcm.c           # software AES-256-GCM fallback
     test_userial.c          # userial VID:PID + line-coding parsers
@@ -124,6 +126,30 @@ python ..\tools\unit_run.py COM3 COM6
 > only the serial console speaks (Unity output). This is expected. Always
 > reflash the **main** firmware from the repo root (`idf.py flash`) when you
 > are done, and take a screenshot to confirm the shell UI is back.
+
+## Host suite
+
+The same sources also build natively with ESP-IDF's preview `linux` target
+(`test/host/`), so the pure-logic cases run on the host and in CI without a
+board. Coverage today is **113 of 634 cases** — the leaf components with no board
+dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
+hardware-free halves of the shell (`shell_core.c`), header
+(`header_layout/status/notify_queue/refresh.c`), theme (`font/theme.c`) and
+clock (`clock_core.c`, `clock_timer.c`).
+
+```sh
+cd test/host && idf.py build && ./build/p4minishell_host_tests.elf
+python3 tools/host_unit_run.py            # build + run + parse (repo root)
+python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
+```
+
+`tools/host_test_manifest.json` is the single source of truth: it lists the
+included test files, the excluded ones with a reason, and the expected case
+count. `tools/host_gen_runner.py` generates `test/host/main/host_main.c` from it.
+To add a suite, the owning component must not pull a board-only `REQUIRES`
+(`shell`/`storage`/`display`/LVGL); add it to `test/host/CMakeLists.txt` and the
+manifest, then re-run the generator. This lane is a pre-gate only — see
+`harness.md` §2.2.
 
 ## False-green guard
 

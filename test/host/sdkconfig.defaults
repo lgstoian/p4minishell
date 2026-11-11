@@ -1,0 +1,7 @@
+# Host unit-test lane (ESP-IDF "linux" preview target).
+#
+# This file configures ONLY test/host. It never affects the firmware image,
+# the on-target Unity app in test/, or any board profile.
+#
+# Keep it minimal: add an option here only when the host build fails without
+# it, and record the reason next to the option.

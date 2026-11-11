@@ -77,12 +77,12 @@ def hard_reset(port=None, baud=460800, chip="esp32p4"):
     Note: on these USB-Serial/JTAG boards a plain `--after hard_reset` (RTS)
     intermittently does not restart the application, so the following capture
     sees only leftover output and the caller records a spurious miss without any
-    panic or firmware warning (bugs.md F42). This is a harness limitation, not
-    a firmware fault: a real `reboot` (or `watchdog_reset`) boots cleanly.
+    panic or firmware warning (bugs.md F42). A watchdog reset starts the image
+    reliably, so use that. This is a harness limitation, not a firmware fault.
     """
     cmd = [sys.executable, "-m", "esptool", "--chip", chip,
            "-p", port or default_port(), "-b", str(baud),
-           "--before", "default_reset", "--after", "hard_reset", "read_mac"]
+           "--before", "default_reset", "--after", "watchdog_reset", "read_mac"]
     try:
         return subprocess.run(cmd, capture_output=True, timeout=90).returncode == 0
     except Exception:
