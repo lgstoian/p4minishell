@@ -3,6 +3,7 @@
 idf_component_register(
     SRCS
         "clock.c"
+        "clock_core.c"
         "clock_commands.c"
         "clock_timer.c"
         "clock_rtc.c"

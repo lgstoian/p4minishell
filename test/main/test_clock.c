@@ -94,29 +94,29 @@ void test_clock_timer_usage_and_restart(void)
 
 void test_clock_rtc_restore_math(void)
 {
-    int64_t unix = -1;
+    int64_t unix_ts = -1;
     const int64_t epoch = 1577836800LL; /* P4_CONFIG_CLOCK_VALID_EPOCH */
 
     /* Counter kept running: 10 s of RTC elapse replay as 10 s of wall time. */
     TEST_ASSERT_EQUAL_INT(CLOCK_RTC_RESTORED,
-        clock_rtc_restore_math(1700000000LL, 5000000u, 15000000u, epoch, &unix));
-    TEST_ASSERT_EQUAL_INT32(1700000010L, (int32_t)unix);
+        clock_rtc_restore_math(1700000000LL, 5000000u, 15000000u, epoch, &unix_ts));
+    TEST_ASSERT_EQUAL_INT32(1700000010L, (int32_t)unix_ts);
     /* Zero elapse replays the anchor exactly. */
     TEST_ASSERT_EQUAL_INT(CLOCK_RTC_RESTORED,
-        clock_rtc_restore_math(1700000000LL, 5000000u, 5000000u, epoch, &unix));
-    TEST_ASSERT_EQUAL_INT32(1700000000L, (int32_t)unix);
+        clock_rtc_restore_math(1700000000LL, 5000000u, 5000000u, epoch, &unix_ts));
+    TEST_ASSERT_EQUAL_INT32(1700000000L, (int32_t)unix_ts);
     /* Counter reset below the anchor: stale last-known time. */
     TEST_ASSERT_EQUAL_INT(CLOCK_RTC_STALE,
-        clock_rtc_restore_math(1700000000LL, 9000000u, 1000u, epoch, &unix));
-    TEST_ASSERT_EQUAL_INT32(1700000000L, (int32_t)unix);
+        clock_rtc_restore_math(1700000000LL, 9000000u, 1000u, epoch, &unix_ts));
+    TEST_ASSERT_EQUAL_INT32(1700000000L, (int32_t)unix_ts);
     /* Predated anchor: invalid, output cleared. */
     TEST_ASSERT_EQUAL_INT(CLOCK_RTC_INVALID,
-        clock_rtc_restore_math(1000LL, 5000000u, 15000000u, epoch, &unix));
-    TEST_ASSERT_EQUAL_INT32(0, (int32_t)unix);
+        clock_rtc_restore_math(1000LL, 5000000u, 15000000u, epoch, &unix_ts));
+    TEST_ASSERT_EQUAL_INT32(0, (int32_t)unix_ts);
     /* Implausible delta (> 10 years): invalid. */
     TEST_ASSERT_EQUAL_INT(CLOCK_RTC_INVALID,
         clock_rtc_restore_math(1700000000LL, 0u, (uint64_t)11LL * 365 * 24 * 3600 * 1000000u,
-                               epoch, &unix));
+                               epoch, &unix_ts));
     /* NULL output: invalid. */
     TEST_ASSERT_EQUAL_INT(CLOCK_RTC_INVALID,
         clock_rtc_restore_math(1700000000LL, 0u, 0u, epoch, NULL));

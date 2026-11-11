@@ -132,7 +132,7 @@ void clock_rtc_note_synced(const char *source);
 esp_err_t clock_rtc_ext_read(time_t *unix_out);
 
 /** Push wall time to the external chip (best-effort). */
-void clock_rtc_ext_write(time_t unix);
+void clock_rtc_ext_write(time_t unix_ts);
 
 /** Time-source label: none|anchor|stale|manual|sntp|ext|preset. */
 const char *clock_rtc_source(void);

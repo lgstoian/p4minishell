@@ -187,18 +187,6 @@ const char *time_get_timezone_label(void)
     return (s_tz_label[0] != '\0') ? s_tz_label : s_tz_string;
 }
 
-void clock_format_hm_snapshot(const struct tm *tm, char *buf, size_t buflen)
-{
-    if (buf == NULL || buflen == 0) {
-        return;
-    }
-    if (tm == NULL) {
-        snprintf(buf, buflen, "--:--");
-        return;
-    }
-    snprintf(buf, buflen, "%02d:%02d", tm->tm_hour, tm->tm_min);
-}
-
 bool time_format_hm(char *buf, size_t buflen)
 {
     struct tm ti;

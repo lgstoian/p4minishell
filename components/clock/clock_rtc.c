@@ -50,8 +50,6 @@
 #define RTC_NVS_KEY_UNIX "unix"
 #define RTC_NVS_KEY_RTC "rtc"
 
-/** Deltas above this (10 years) are implausible: refuse, don't set garbage. */
-#define RTC_MAX_DELTA_US (10LL * 365 * 24 * 3600 * 1000000LL)
 
 #ifndef P4_CONFIG_RTC_ANCHOR_PERIOD_S
 #define P4_CONFIG_RTC_ANCHOR_PERIOD_S 3600
@@ -137,48 +135,6 @@ static int s_ext_present = -1; /* -1 unknown, 0 absent, 1 present */
 static esp_timer_handle_t s_anchor_timer = NULL;
 static esp_timer_handle_t s_anchor_defer = NULL;
 
-/* ========================================================================
- * Pure core (unit-tested)
- * ======================================================================== */
-
-clock_rtc_restore_t clock_rtc_restore_math(int64_t anchor_unix, uint64_t anchor_rtc,
-                                           uint64_t rtc_now, int64_t valid_epoch,
-                                           int64_t *unix_out)
-{
-    if (unix_out == NULL) {
-        return CLOCK_RTC_INVALID;
-    }
-    *unix_out = 0;
-    if (anchor_unix < valid_epoch) {
-        return CLOCK_RTC_INVALID;
-    }
-    if (rtc_now < anchor_rtc) {
-        /* The counter reset: power loss without VBAT backup. */
-        *unix_out = anchor_unix;
-        return CLOCK_RTC_STALE;
-    }
-    {
-        uint64_t delta_us = rtc_now - anchor_rtc;
-        if (delta_us > (uint64_t)RTC_MAX_DELTA_US) {
-            return CLOCK_RTC_INVALID;
-        }
-        *unix_out = anchor_unix + (int64_t)(delta_us / 1000000u);
-    }
-    if (*unix_out < valid_epoch) {
-        return CLOCK_RTC_INVALID;
-    }
-    return CLOCK_RTC_RESTORED;
-}
-
-uint8_t clock_rtc_bcd_to_bin(uint8_t bcd)
-{
-    return (uint8_t)(((bcd >> 4) * 10) + (bcd & 0x0F));
-}
-
-uint8_t clock_rtc_bin_to_bcd(uint8_t bin)
-{
-    return (uint8_t)(((bin / 10) << 4) | (bin % 10));
-}
 
 /* ========================================================================
  * NVS anchor store
@@ -200,7 +156,7 @@ static bool clock_rtc_nvs_ready(void)
 static bool clock_rtc_anchor_read(int64_t *unix_out, uint64_t *rtc_out)
 {
     nvs_handle_t h;
-    int64_t unix = 0;
+    int64_t unix_ts = 0;
     uint64_t rtc = 0;
 
     if (!clock_rtc_nvs_ready()) {
@@ -209,18 +165,18 @@ static bool clock_rtc_anchor_read(int64_t *unix_out, uint64_t *rtc_out)
     if (nvs_open(RTC_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
-    if (nvs_get_i64(h, RTC_NVS_KEY_UNIX, &unix) != ESP_OK ||
+    if (nvs_get_i64(h, RTC_NVS_KEY_UNIX, &unix_ts) != ESP_OK ||
         nvs_get_u64(h, RTC_NVS_KEY_RTC, &rtc) != ESP_OK) {
         nvs_close(h);
         return false;
     }
     nvs_close(h);
-    *unix_out = unix;
+    *unix_out = unix_ts;
     *rtc_out = rtc;
     return true;
 }
 
-static void clock_rtc_anchor_store(int64_t unix, uint64_t rtc)
+static void clock_rtc_anchor_store(int64_t unix_ts, uint64_t rtc)
 {
     nvs_handle_t h;
 
@@ -230,7 +186,7 @@ static void clock_rtc_anchor_store(int64_t unix, uint64_t rtc)
     if (nvs_open(RTC_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
         return;
     }
-    if (nvs_set_i64(h, RTC_NVS_KEY_UNIX, unix) == ESP_OK &&
+    if (nvs_set_i64(h, RTC_NVS_KEY_UNIX, unix_ts) == ESP_OK &&
         nvs_set_u64(h, RTC_NVS_KEY_RTC, rtc) == ESP_OK) {
         if (nvs_commit(h) == ESP_OK) {
             s_anchor_at_us = esp_timer_get_time();
@@ -457,7 +413,7 @@ esp_err_t clock_rtc_ext_read(time_t *unix_out)
 }
 
 /** Push wall time to the external chip (best-effort, errors ignored). */
-void clock_rtc_ext_write(time_t unix)
+void clock_rtc_ext_write(time_t unix_ts)
 {
     clock_rtc_ext_session_t s;
     struct tm tmv;
@@ -467,7 +423,7 @@ void clock_rtc_ext_write(time_t unix)
     if (!clock_rtc_ext_configured()) {
         return;
     }
-    if (localtime_r(&unix, &tmv) == NULL) {
+    if (localtime_r(&unix_ts, &tmv) == NULL) {
         return;
     }
     year = tmv.tm_year + 1900;
@@ -638,14 +594,14 @@ esp_err_t clock_rtc_ext_clear_flags(unsigned flags)
  * ======================================================================== */
 
 /** Apply one unix timestamp as the system clock (best-effort). */
-static void clock_rtc_apply(time_t unix)
+static void clock_rtc_apply(time_t unix_ts)
 {
     struct timeval tv;
 
-    tv.tv_sec = unix;
+    tv.tv_sec = unix_ts;
     tv.tv_usec = 0;
     if (settimeofday(&tv, NULL) == 0) {
-        clock_rtc_anchor_store((int64_t)unix, esp_rtc_get_time_us());
+        clock_rtc_anchor_store((int64_t)unix_ts, esp_rtc_get_time_us());
     } else {
         ESP_LOGW(RTC_TAG, "settimeofday failed during restore");
     }
@@ -660,7 +616,7 @@ void clock_rtc_restore(void)
     int64_t anchor_unix = 0;
     uint64_t anchor_rtc = 0;
     uint64_t rtc_now;
-    int64_t unix = 0;
+    int64_t unix_ts = 0;
 
     if (time(NULL) >= (time_t)P4_CONFIG_CLOCK_VALID_EPOCH) {
         s_source = "preset"; /* already set (ULP, bootloader, prior init) */
@@ -683,16 +639,16 @@ void clock_rtc_restore(void)
     }
     rtc_now = esp_rtc_get_time_us();
     switch (clock_rtc_restore_math(anchor_unix, anchor_rtc, rtc_now,
-                                   (int64_t)P4_CONFIG_CLOCK_VALID_EPOCH, &unix)) {
+                                   (int64_t)P4_CONFIG_CLOCK_VALID_EPOCH, &unix_ts)) {
     case CLOCK_RTC_RESTORED:
         s_source = "anchor";
         s_stale = false;
-        clock_rtc_apply((time_t)unix);
+        clock_rtc_apply((time_t)unix_ts);
         break;
     case CLOCK_RTC_STALE:
         s_source = "stale";
         s_stale = true;
-        clock_rtc_apply((time_t)unix);
+        clock_rtc_apply((time_t)unix_ts);
         ESP_LOGW(RTC_TAG, "RTC counter reset (no VBAT?); last-known time applied as stale");
         break;
     case CLOCK_RTC_INVALID:
