@@ -119,10 +119,13 @@ python3 tools/host_gen_runner.py --check  # generated runner is up to date
   `tools/host_unit_run.py --static` both fail if a new `test_*.c` is neither
   included nor excluded, so a new suite cannot silently miss both lanes.
 - **The split so far:** `shell.c` → `shell_core.c` moved the pure text helpers
-  and the statement scanner (548 lines, no globals, no hardware). The same
-  recipe applies to the next block (`shell_transcript_*`, prompt/title, history
-  store), but the transcript's LVGL label and UART mirror must be separated
-  first — that change is board-gated.
+  and the statement scanner, then the hardware-free shell state: the recall
+  history store (with its password masking), the abort/busy flags the command
+  worker polls, the reverse-search matcher and the help registry. State both
+  files share is declared in `shell_core_internal.h`, so each object is
+  defined once. The same recipe applies to the next block (`shell_transcript_*`,
+  prompt/title), but the transcript's LVGL label and UART mirror must be
+  separated first — that change is board-gated.
 - **Never a substitute:** this lane is a pre-gate. A host pass says nothing
   about hardware behaviour, and `harness.md` §0 still governs. The honest way to
   grow it is to split hardware out of the mixed components, not to stub the

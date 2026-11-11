@@ -7,19 +7,23 @@
  * @brief Shell core implementation for P4MiniShell.
  *
  * Owns the transcript's VIEW/GLUE (LVGL label staging, deferred repaint
- * batching, click regions, scroll-to-end, the USB-Serial-JTAG mirror), plus
- * command history, the debug log, the UART console bridge, system info
- * commands and shell utility functions. The hardware-free transcript MODEL
- * (scrollback buffers, text assembly, redirection capture, RAM clipboard)
- * lives in shell_transcript.c and is reached through the optional sink this
- * file registers in shell_init() - so the model never calls into the view
- * directly and can be linked without LVGL or USB.
+ * batching, click regions, scroll-to-end, the USB-Serial-JTAG mirror), history
+ * recall, the debug log, the UART console bridge, system info commands and
+ * shell utility functions.
+ *
+ * The hardware-free transcript MODEL (scrollback buffers, text assembly,
+ * redirection capture, RAM clipboard) lives in shell_transcript.c and is
+ * reached through the optional sink this file registers in shell_init(); the
+ * hardware-free shell state (text helpers, statement scanner, history store,
+ * abort/busy flags, help registry) lives in shell_core.c and is shared through
+ * shell_core_internal.h. Neither core can call into LVGL or USB.
  *
  * Provides the public API that command.c and main.c use for all shell output
  * and state management.
  */
 
 #include "shell.h"
+#include "shell_core_internal.h"
 #include "shell_transcript_internal.h"
 #include "locale.h"
 #include "strutil.h"
@@ -254,16 +258,9 @@ static size_t s_async_transcript_len;
 static bool s_async_transcript_flush_queued;
 static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
 
-/* Command history, heap-backed so very long (up to P4_CONFIG_COMMAND_BYTES)
- * commands do not reserve a fixed grid of RAM. Each entry is a strdup'd line;
- * the pointer table and total byte usage are bounded by
- * SHELL_COMMAND_HISTORY_DEPTH and SHELL_HISTORY_TOTAL_BYTES. */
-static char **s_command_history;
-static size_t s_command_history_count;
-static size_t s_command_history_bytes;
-static size_t s_command_history_generation;
-static int s_command_history_cursor = -1;
-static char s_history_draft[SHELL_COMMAND_BYTES];
+/* The redirection-capture state and functions live with the transcript model
+ * (shell_transcript.c); the command-history store lives in shell_core.c and is
+ * reached through shell_core_internal.h. */
 
 /* Debug log */
 typedef struct {
@@ -314,8 +311,8 @@ static char s_title[SHELL_TITLE_BYTES] = "";
 /* Boot timestamp */
 static int64_t s_boot_timestamp_us;
 
-/* Command module operations, registered by command_init() */
-static shell_command_ops_t s_command_ops;
+/* Command module operations, registered by command_init(); the table is
+ * defined in shell_core.c (see shell_core_internal.h). */
 
 /* ========================================================================
  * COMMAND MODULE HOOKS
@@ -324,11 +321,11 @@ static shell_command_ops_t s_command_ops;
 void shell_register_command_ops(const shell_command_ops_t *ops)
 {
     if (ops == NULL) {
-        memset(&s_command_ops, 0, sizeof(s_command_ops));
+        memset(&shell_core_command_ops, 0, sizeof(shell_core_command_ops));
         return;
     }
 
-    s_command_ops = *ops;
+    shell_core_command_ops = *ops;
 }
 
 /**
@@ -337,11 +334,11 @@ void shell_register_command_ops(const shell_command_ops_t *ops)
  */
 static const char *shell_current_cwd(void)
 {
-    if (s_command_ops.get_cwd == NULL) {
+    if (shell_core_command_ops.get_cwd == NULL) {
         return BSP_SD_MOUNT_POINT;
     }
 
-    return s_command_ops.get_cwd();
+    return shell_core_command_ops.get_cwd();
 }
 
 /* ========================================================================
@@ -1143,305 +1140,57 @@ bool shell_app_mode_active(void)
 }
 
 /* ========================================================================
- * COMMAND HISTORY
+ * COMMAND HISTORY RECALL
  * ======================================================================== */
 
-/**
- * Detect `wifi connect <ssid> <password>` and `crypt ... /p:<password>`,
- * which must never reach the transcript or the recall buffer in clear text.
- */
-static bool shell_command_is_sensitive(const char *command)
-{
-    char *buffer = malloc(SHELL_COMMAND_BYTES);
-    char *argv[8];
-    int argc;
-    int i;
-    bool sensitive = false;
-
-    if (buffer == NULL) {
-        return false;
-    }
-
-    snprintf(buffer, SHELL_COMMAND_BYTES, "%s", command != NULL ? command : "");
-    argc = shell_split_args(buffer, argv, 8);
-    if (argc >= 4 && strcmp(argv[0], "wifi") == 0 && strcmp(argv[1], "connect") == 0) {
-        sensitive = true;
-    }
-    /* crypt and pim both take inline /p:<password> tokens. */
-    if (argc >= 2 && (strcmp(argv[0], "crypt") == 0 || strcmp(argv[0], "pim") == 0)) {
-        for (i = 1; i < argc; i++) {
-            if (strncasecmp(argv[i], "/p:", 3) == 0) {
-                sensitive = true;
-                break;
-            }
-        }
-    }
-    free(buffer);
-    return sensitive;
-}
-
-/** Overwrite the value of a `/p:<password>` token with asterisks (in place,
- *  length-preserving so history byte accounting is unaffected). */
-static void shell_mask_inline_password(char *command)
-{
-    char *at = command;
-
-    while (*at != '\0') {
-        if ((at[0] == '/' || at[0] == '-') &&
-            (at[1] == 'p' || at[1] == 'P') && at[2] == ':') {
-            char *value = at + 3;
-            while (*value != '\0' && *value != ' ' && *value != '\t') {
-                *value++ = '*';
-            }
-            at = value;
-        } else {
-            at++;
-        }
-    }
-}
-
-bool shell_command_should_store_history(const char *command)
-{
-    /* OTA confirmation replies (YES/NO) are not shell commands. */
-    if (s_command_ops.c6ota_is_pending != NULL && s_command_ops.c6ota_is_pending()) {
-        return false;
-    }
-
-    return !shell_command_is_sensitive(command);
-}
-
-void shell_format_command_for_transcript(const char *command, char *output, size_t output_size)
-{
-    char *buffer = malloc(SHELL_COMMAND_BYTES);
-    char *argv[4];
-    int argc;
-
-    if (output == NULL || output_size == 0) {
-        free(buffer);
-        return;
-    }
-    if (buffer == NULL) {
-        snprintf(output, output_size, "%s", command != NULL ? command : "");
-        return;
-    }
-
-    snprintf(buffer, SHELL_COMMAND_BYTES, "%s", command != NULL ? command : "");
-    argc = shell_split_args(buffer, argv, 4);
-
-    if (argc >= 4 && strcmp(argv[0], "wifi") == 0 && strcmp(argv[1], "connect") == 0) {
-        snprintf(output, output_size, "wifi connect %s ********", argv[2]);
-        free(buffer);
-        return;
-    }
-
-    /* crypt and pim both take inline /p:<password> tokens: mask the value so
-     * it never reaches the transcript or history in the clear. */
-    if (argc >= 2 && (strcmp(argv[0], "crypt") == 0 || strcmp(argv[0], "pim") == 0)) {
-        snprintf(output, output_size, "%s", command != NULL ? command : "");
-        shell_mask_inline_password(output);
-        free(buffer);
-        return;
-    }
-
-    snprintf(output, output_size, "%s", command != NULL ? command : "");
-    free(buffer);
-}
-
-/** Drop the oldest history entry and slide the rest down (pointer array). */
-static void shell_history_drop_oldest(void)
-{
-    size_t index;
-
-    if (s_command_history_count == 0) {
-        return;
-    }
-    s_command_history_bytes -= strlen(s_command_history[0]) + 1;
-    free(s_command_history[0]);
-    for (index = 1; index < s_command_history_count; index++) {
-        s_command_history[index - 1] = s_command_history[index];
-    }
-    s_command_history_count--;
-}
-
-void shell_store_command_history(const char *command)
-{
-    char *masked = NULL;
-    const char *entry;
-    size_t entry_bytes;
-
-    if (command == NULL || command[0] == '\0') {
-        return;
-    }
-
-    /* Defence in depth: callers are expected to filter sensitive commands
-     * via shell_command_should_store_history(), but mask here as well so no
-     * code path can ever persist a Wi-Fi password in the recall buffer. */
-    if (shell_command_is_sensitive(command)) {
-        masked = malloc(SHELL_COMMAND_BYTES);
-        if (masked == NULL) {
-            return;
-        }
-        shell_format_command_for_transcript(command, masked, SHELL_COMMAND_BYTES);
-        entry = masked;
-    } else {
-        entry = command;
-    }
-
-    /* Skip consecutive duplicates so repeated Enter presses do not flood the
-     * recall buffer. */
-    if (s_command_history_count > 0 &&
-        strcmp(s_command_history[s_command_history_count - 1], entry) == 0) {
-        free(masked);
-        return;
-    }
-
-    /* Make sure the pointer table exists. */
-    if (s_command_history == NULL) {
-        s_command_history = calloc(SHELL_COMMAND_HISTORY_DEPTH, sizeof(char *));
-        if (s_command_history == NULL) {
-            free(masked);
-            return;
-        }
-    }
-
-    /* Make room for the new entry: depth cap first, then the byte cap. */
-    while (s_command_history_count >= SHELL_COMMAND_HISTORY_DEPTH) {
-        shell_history_drop_oldest();
-    }
-    entry_bytes = strlen(entry) + 1;
-    while (s_command_history_count > 0 &&
-           s_command_history_bytes + entry_bytes > SHELL_HISTORY_TOTAL_BYTES) {
-        shell_history_drop_oldest();
-    }
-
-    s_command_history[s_command_history_count] = strdup(entry);
-    if (s_command_history[s_command_history_count] != NULL) {
-        s_command_history_bytes += entry_bytes;
-        s_command_history_count++;
-        s_command_history_generation++;
-    }
-
-    free(masked);
-}
-
+/* The store, its byte accounting and the search matcher live in
+ * shell_core.c; what raises the recall cursor here is the LVGL input
+ * line, which only this file can paint. */
 void shell_recall_history(int direction)
 {
     char *current_input = malloc(SHELL_COMMAND_BYTES);
 
-    if (s_command_history_count == 0 || current_input == NULL) {
+    if (shell_core_command_history_count == 0 || current_input == NULL) {
         free(current_input);
         return;
     }
 
     shell_extract_input_text(current_input, SHELL_COMMAND_BYTES);
 
-    if (s_command_history_cursor < 0) {
+    if (shell_core_command_history_cursor < 0) {
         /* Entering recall: remember what the user was typing. */
-        snprintf(s_history_draft, sizeof(s_history_draft), "%s", current_input);
+        snprintf(shell_core_history_draft, sizeof(shell_core_history_draft), "%s", current_input);
         if (direction < 0) {
-            s_command_history_cursor = (int)s_command_history_count - 1;
+            shell_core_command_history_cursor = (int)shell_core_command_history_count - 1;
         } else {
             free(current_input);
             return;
         }
     } else {
-        s_command_history_cursor += direction;
-        if (s_command_history_cursor < 0 ||
-            s_command_history_cursor >= (int)s_command_history_count) {
+        shell_core_command_history_cursor += direction;
+        if (shell_core_command_history_cursor < 0 ||
+            shell_core_command_history_cursor >= (int)shell_core_command_history_count) {
             /* Walked off either end: restore the saved draft. */
-            s_command_history_cursor = -1;
-            shell_input_line_set_text(s_history_draft);
+            shell_core_command_history_cursor = -1;
+            shell_input_line_set_text(shell_core_history_draft);
             free(current_input);
             return;
         }
     }
 
-    shell_input_line_set_text(s_command_history[s_command_history_cursor]);
+    shell_input_line_set_text(shell_core_command_history[shell_core_command_history_cursor]);
     free(current_input);
 }
 
 const char *shell_get_history_draft(void)
 {
-    return s_history_draft;
+    return shell_core_history_draft;
 }
 
 void shell_reset_history_cursor(void)
 {
-    s_command_history_cursor = -1;
-    s_history_draft[0] = '\0';
-}
-
-size_t shell_history_get_count(void)
-{
-    return s_command_history_count;
-}
-
-const char *shell_history_get(size_t index)
-{
-    if (index >= s_command_history_count || s_command_history == NULL) {
-        return NULL;
-    }
-    return s_command_history[index];
-}
-
-size_t shell_history_generation(void)
-{
-    return s_command_history_generation;
-}
-
-void shell_history_clear(void)
-{
-    size_t index;
-
-    for (index = 0; index < s_command_history_count; index++) {
-        free(s_command_history[index]);
-    }
-    free(s_command_history);
-    s_command_history = NULL;
-    s_command_history_count = 0;
-    s_command_history_bytes = 0;
-    s_command_history_cursor = -1;
-    s_history_draft[0] = '\0';
-}
-
-bool shell_history_save_lines(FILE *fp)
-{
-    size_t index;
-
-    if (fp == NULL) {
-        return false;
-    }
-    for (index = 0; index < shell_history_get_count(); index++) {
-        const char *line = shell_history_get(index);
-
-        if (line != NULL && fprintf(fp, "%s\n", line) < 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
-size_t shell_history_load_lines(FILE *fp)
-{
-    // Command-sized and heap-allocated: `history /load` can run from a
-    // nested batch line, so a stack buffer would eat into the worker stack.
-    char *line = malloc(SHELL_COMMAND_BYTES);
-    size_t loaded = 0;
-
-    if (fp == NULL || line == NULL) {
-        free(line);
-        return 0;
-    }
-    while (fgets(line, SHELL_COMMAND_BYTES, fp) != NULL) {
-        shell_trim(line);
-        if (line[0] == '\0') {
-            continue;
-        }
-        shell_store_command_history(line);
-        loaded++;
-    }
-    free(line);
-    return loaded;
+    shell_core_command_history_cursor = -1;
+    shell_core_history_draft[0] = '\0';
 }
 
 /* ========================================================================
@@ -1997,10 +1746,10 @@ bool shell_link_tap_command(const char *command, const char *label)
         snprintf(copy, P4_CONFIG_COMMAND_BYTES, "%s", command);
         shell_transcript_appendf("%s%s\n", shell_prompt_render_plain(), copy);
         shell_force_transcript_scroll_to_end();
-        if (s_command_ops.execute_command_async != NULL) {
-            s_command_ops.execute_command_async(copy);
-        } else if (s_command_ops.execute_command != NULL) {
-            s_command_ops.execute_command(copy);
+        if (shell_core_command_ops.execute_command_async != NULL) {
+            shell_core_command_ops.execute_command_async(copy);
+        } else if (shell_core_command_ops.execute_command != NULL) {
+            shell_core_command_ops.execute_command(copy);
         }
         free(copy);
         return true;
@@ -2056,10 +1805,10 @@ bool shell_link_fire(const char *command, const char *label, bool confirm)
     snprintf(copy, P4_CONFIG_COMMAND_BYTES, "%s", command);
     shell_transcript_appendf("%s%s\n", shell_prompt_render_plain(), copy);
     shell_force_transcript_scroll_to_end();
-    if (s_command_ops.execute_command_async != NULL) {
-        s_command_ops.execute_command_async(copy);
-    } else if (s_command_ops.execute_command != NULL) {
-        s_command_ops.execute_command(copy);
+    if (shell_core_command_ops.execute_command_async != NULL) {
+        shell_core_command_ops.execute_command_async(copy);
+    } else if (shell_core_command_ops.execute_command != NULL) {
+        shell_core_command_ops.execute_command(copy);
     }
     free(copy);
     return true;
@@ -2339,8 +2088,8 @@ static void shell_debug_maybe_show_modal(const char *title, const uint8_t *bytes
     if (shell_is_batch_active() || !shell_key_input_available()) {
         return;
     }
-    if (s_command_ops.debug_show_hexview != NULL) {
-        (void)s_command_ops.debug_show_hexview(title, bytes, len, base_addr);
+    if (shell_core_command_ops.debug_show_hexview != NULL) {
+        (void)shell_core_command_ops.debug_show_hexview(title, bytes, len, base_addr);
     }
 }
 
@@ -2424,8 +2173,8 @@ static int shell_debug_do_poke(uint32_t addr, uint8_t *bytes, size_t count)
 
     snprintf(detail, sizeof(detail), "%u byte(s) at %08X",
              (unsigned int)count, (unsigned int)addr);
-    if (s_command_ops.debug_confirm_destructive != NULL) {
-        if (!s_command_ops.debug_confirm_destructive("debug poke",
+    if (shell_core_command_ops.debug_confirm_destructive != NULL) {
+        if (!shell_core_command_ops.debug_confirm_destructive("debug poke",
                                                      "WARNING: This will write raw bytes to RAM.",
                                                      detail)) {
             shell_print_warning("debug: poke cancelled, memory was not modified");
@@ -2456,7 +2205,7 @@ static int shell_debug_do_disk(uint32_t lba, uint32_t count)
                           (unsigned int)P4_CONFIG_DEBUG_DISK_MAX_SECTORS);
         return 2;
     }
-    if (s_command_ops.debug_read_sectors == NULL) {
+    if (shell_core_command_ops.debug_read_sectors == NULL) {
         shell_print_error("debug disk: sector reader unavailable (command layer not registered)");
         shell_record_warningf("debug", "Refused debug disk without sector hook");
         return 1;
@@ -2469,7 +2218,7 @@ static int shell_debug_do_disk(uint32_t lba, uint32_t count)
         return 1;
     }
 
-    error = s_command_ops.debug_read_sectors(lba, heap, count);
+    error = shell_core_command_ops.debug_read_sectors(lba, heap, count);
     if (error != ESP_OK) {
         shell_print_error("debug disk: sector %lu read failed (%s)",
                           (unsigned long)lba, esp_err_to_name(error));
@@ -2921,7 +2670,7 @@ bool shell_key_input_available(void)
      * keyboard is the other one; ask the USB module directly so an
      * on-screen-only session still falls back to the timed path. */
     return s_uart_console_running ||
-           (s_command_ops.usb_is_keyboard_attached != NULL && s_command_ops.usb_is_keyboard_attached());
+           (shell_core_command_ops.usb_is_keyboard_attached != NULL && shell_core_command_ops.usb_is_keyboard_attached());
 }
 
 void shell_set_batch_active(bool active)
@@ -2934,27 +2683,10 @@ bool shell_is_batch_active(void)
     return s_batch_active;
 }
 
-/* Foreground break + worker-busy state (see shell.h). Written from the
- * LVGL task (USB Ctrl+C, Stop button), read on the command worker; plain
- * bools like the background kill flags. */
-static volatile bool s_foreground_abort;
-static volatile bool s_command_busy;
+/* Foreground break flag (see shell.h). Written from the LVGL task (USB
+ * Ctrl+C, Stop button), read on the command worker; a plain bool like the
+ * background kill flags. The abort/busy pair lives in shell_core.c. */
 static volatile bool s_foreground_break_seen;
-
-void shell_request_abort(void)
-{
-    s_foreground_abort = true;
-}
-
-bool shell_abort_requested(void)
-{
-    return s_foreground_abort;
-}
-
-void shell_clear_abort(void)
-{
-    s_foreground_abort = false;
-}
 
 void shell_mark_foreground_break(void)
 {
@@ -2969,16 +2701,6 @@ bool shell_foreground_break_pending(void)
 void shell_clear_foreground_break(void)
 {
     s_foreground_break_seen = false;
-}
-
-void shell_set_command_busy(bool busy)
-{
-    s_command_busy = busy;
-}
-
-bool shell_is_command_busy(void)
-{
-    return s_command_busy;
 }
 
 /* ========================================================================
@@ -3364,8 +3086,8 @@ static void shell_uart_console_task(void *arg)
                 /* While a native modal surface is open, serial lines are
                  * routed to that surface instead of being dispatched as shell
                  * commands (the worker is blocked in the modal session). */
-                bool modal_active = s_command_ops.modal_is_active != NULL &&
-                                    s_command_ops.modal_is_active();
+                bool modal_active = shell_core_command_ops.modal_is_active != NULL &&
+                                    shell_core_command_ops.modal_is_active();
 
                 if (modal_active) {
                     /* Console-local commands that must run on THIS task while
@@ -3373,8 +3095,8 @@ static void shell_uart_console_task(void *arg)
                      * modal can be captured). The handler claims only its own
                      * exact tokens and returns false otherwise, so the modal
                      * still receives its input. */
-                    if (s_command_ops.modal_console_command != NULL &&
-                        s_command_ops.modal_console_command(trimmed)) {
+                    if (shell_core_command_ops.modal_console_command != NULL &&
+                        shell_core_command_ops.modal_console_command(trimmed)) {
                         length = 0;
                         line_done_us = esp_timer_get_time();
                         prompt_visible = false;
@@ -3386,8 +3108,8 @@ static void shell_uart_console_task(void *arg)
                      * modal closes, and a burst then overflows the command
                      * queue and drops input (including the modal's own quit
                      * line). Route it to the modal and drop it there. */
-                    if (s_command_ops.modal_handle_serial_line != NULL) {
-                        (void)s_command_ops.modal_handle_serial_line(trimmed);
+                    if (shell_core_command_ops.modal_handle_serial_line != NULL) {
+                        (void)shell_core_command_ops.modal_handle_serial_line(trimmed);
                     }
                     length = 0;
                     line_done_us = esp_timer_get_time();
@@ -3667,8 +3389,8 @@ void shell_uart_console_submit_command(const char *command)
 
     /* A serial command is user activity: reset the power idle clock and wake
      * the display if the idle timer had switched it off. */
-    if (s_command_ops.pm_notify_activity != NULL) {
-        s_command_ops.pm_notify_activity();
+    if (shell_core_command_ops.pm_notify_activity != NULL) {
+        shell_core_command_ops.pm_notify_activity();
     }
 
     snprintf(command_copy, SHELL_COMMAND_BYTES, "%s", command);
@@ -3724,10 +3446,10 @@ void shell_uart_console_submit_command(const char *command)
     lvgl_port_unlock();
 
     /* Run the command on the worker task when possible. */
-    if (s_command_ops.execute_command_async != NULL) {
-        s_command_ops.execute_command_async(command_copy);
-    } else if (s_command_ops.execute_command != NULL) {
-        s_command_ops.execute_command(command_copy);
+    if (shell_core_command_ops.execute_command_async != NULL) {
+        shell_core_command_ops.execute_command_async(command_copy);
+    } else if (shell_core_command_ops.execute_command != NULL) {
+        shell_core_command_ops.execute_command(command_copy);
     }
 
     if (s_shell_command_lock != NULL) {
@@ -3841,7 +3563,7 @@ void shell_input_line_tab_complete(void)
         return;
     }
 
-    if (s_command_ops.complete_line == NULL) {
+    if (shell_core_command_ops.complete_line == NULL) {
         free(input);
         free(completion);
         free(rebuilt);
@@ -3871,7 +3593,7 @@ void shell_input_line_tab_complete(void)
         s_tab_match_index = 0;
     }
 
-    total = s_command_ops.complete_line(input, s_tab_match_index, completion, 384);
+    total = shell_core_command_ops.complete_line(input, s_tab_match_index, completion, 384);
     if (total <= 0) {
         free(input);
         free(completion);
@@ -3934,7 +3656,7 @@ void shell_input_line_ghost_refresh(void)
     return;
 #endif
 
-    if (il == NULL || ghost == NULL || s_command_ops.ghost_line == NULL) {
+    if (il == NULL || ghost == NULL || shell_core_command_ops.ghost_line == NULL) {
         shell_ghost_hide();
         return;
     }
@@ -3942,7 +3664,7 @@ void shell_input_line_ghost_refresh(void)
         shell_ghost_hide();
         return;
     }
-    if (s_command_ops.modal_is_active != NULL && s_command_ops.modal_is_active()) {
+    if (shell_core_command_ops.modal_is_active != NULL && shell_core_command_ops.modal_is_active()) {
         shell_ghost_hide();
         return;
     }
@@ -3975,7 +3697,7 @@ void shell_input_line_ghost_refresh(void)
         return;
     }
 
-    total = s_command_ops.ghost_line(input, best, 384);
+    total = shell_core_command_ops.ghost_line(input, best, 384);
     if (total <= 0) {
         free(input);
         free(best);
@@ -4032,26 +3754,6 @@ static shell_history_search_t s_search;
 bool shell_history_search_active(void)
 {
     return s_search.active;
-}
-
-/** Case-insensitive substring test (newlib lacks a portable strcasestr). */
-bool shell_history_search_matches(const char *entry, const char *query)
-{
-    size_t nl;
-
-    if (entry == NULL || query == NULL) {
-        return false;
-    }
-    nl = strlen(query);
-    if (nl == 0) {
-        return true;
-    }
-    for (; *entry != '\0'; entry++) {
-        if (strncasecmp(entry, query, nl) == 0) {
-            return true;
-        }
-    }
-    return false;
 }
 
 static void shell_history_search_hide_label(void)
@@ -4309,18 +4011,18 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
     }
 
     /* While a native modal surface is open, every USB key goes to it. */
-    if (s_command_ops.modal_is_active != NULL && s_command_ops.modal_is_active()) {
+    if (shell_core_command_ops.modal_is_active != NULL && shell_core_command_ops.modal_is_active()) {
         /* Global chord hotkeys fire in non-editor modals (dialog/list are
          * consumed on close, so the line runs next); the editor keeps its
          * full Ctrl vocabulary and never yields a chord. */
         if (!windows_editor_mode_active() &&
-            s_command_ops.bind_lookup_chord != NULL &&
-            s_command_ops.execute_command_async != NULL) {
+            shell_core_command_ops.bind_lookup_chord != NULL &&
+            shell_core_command_ops.execute_command_async != NULL) {
             char *bound = malloc(SHELL_COMMAND_BYTES);
             if (bound != NULL) {
-                if (s_command_ops.bind_lookup_chord(ctx->key_code, ctx->modifiers,
+                if (shell_core_command_ops.bind_lookup_chord(ctx->key_code, ctx->modifiers,
                                                     bound, SHELL_COMMAND_BYTES)) {
-                    s_command_ops.execute_command_async(bound);
+                    shell_core_command_ops.execute_command_async(bound);
                     free(bound);
                     free(ctx);
                     return;
@@ -4329,14 +4031,14 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
             }
         }
         char ch = '\0';
-        if (s_command_ops.usb_key_to_ascii != NULL &&
-            s_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &ch)) {
+        if (shell_core_command_ops.usb_key_to_ascii != NULL &&
+            shell_core_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &ch)) {
             /* fall through with the ascii char */
         } else {
             ch = '\0';
         }
-        if (s_command_ops.modal_handle_usb_key != NULL) {
-            s_command_ops.modal_handle_usb_key(ctx->key_code, ctx->modifiers, ch);
+        if (shell_core_command_ops.modal_handle_usb_key != NULL) {
+            shell_core_command_ops.modal_handle_usb_key(ctx->key_code, ctx->modifiers, ch);
         }
         free(ctx);
         return;
@@ -4372,8 +4074,8 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
     {
         char search_ch = '\0';
 
-        if (s_command_ops.usb_key_to_ascii != NULL) {
-            (void)s_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &search_ch);
+        if (shell_core_command_ops.usb_key_to_ascii != NULL) {
+            (void)shell_core_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &search_ch);
         }
         if (shell_history_search_handle_key(ctx->key_code, ctx->modifiers, search_ch)) {
             free(ctx);
@@ -4386,13 +4088,13 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
      * here instead, before printing. ^C is reserved for break (handled
      * above) and never matches. Queued behind a running command like any
      * submission. */
-    if (s_command_ops.bind_lookup_chord != NULL &&
-        s_command_ops.execute_command_async != NULL) {
+    if (shell_core_command_ops.bind_lookup_chord != NULL &&
+        shell_core_command_ops.execute_command_async != NULL) {
         char *bound = malloc(SHELL_COMMAND_BYTES);
         if (bound != NULL) {
-            if (s_command_ops.bind_lookup_chord(ctx->key_code, ctx->modifiers,
+            if (shell_core_command_ops.bind_lookup_chord(ctx->key_code, ctx->modifiers,
                                                 bound, SHELL_COMMAND_BYTES)) {
-                s_command_ops.execute_command_async(bound);
+                shell_core_command_ops.execute_command_async(bound);
                 free(bound);
                 free(ctx);
                 return;
@@ -4404,8 +4106,8 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
     {
         char ch = '\0';
 
-        if (s_command_ops.usb_key_to_ascii != NULL &&
-            s_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &ch)) {
+        if (shell_core_command_ops.usb_key_to_ascii != NULL &&
+            shell_core_command_ops.usb_key_to_ascii(ctx->key_code, ctx->modifiers, &ch)) {
             if (ch == '\n' || ch == '\r') {
                 /* Enter key: submit the command */
                 lv_obj_send_event(input_line, LV_EVENT_READY, NULL);
@@ -4474,13 +4176,13 @@ static void shell_usb_keyboard_inject_cb(void *user_data)
                  * here (they are claimed earlier), so a bind cannot hijack
                  * a prompt. The line buffer is heap-sized: the LVGL task
                  * stack is no place for a command-sized local. */
-                if (s_command_ops.bind_lookup_fkey != NULL &&
-                    s_command_ops.execute_command_async != NULL) {
+                if (shell_core_command_ops.bind_lookup_fkey != NULL &&
+                    shell_core_command_ops.execute_command_async != NULL) {
                     char *bound = malloc(P4_CONFIG_COMMAND_BYTES);
                     if (bound != NULL) {
-                        if (s_command_ops.bind_lookup_fkey(ctx->key_code, bound,
+                        if (shell_core_command_ops.bind_lookup_fkey(ctx->key_code, bound,
                                                            P4_CONFIG_COMMAND_BYTES)) {
-                            s_command_ops.execute_command_async(bound);
+                            shell_core_command_ops.execute_command_async(bound);
                             free(bound);
                             free(ctx);
                             return;
@@ -4512,8 +4214,8 @@ void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed)
     if (s_key_wait_active) {
         char ch = '\0';
 
-        if (s_command_ops.usb_key_to_ascii != NULL &&
-            s_command_ops.usb_key_to_ascii(key_code, modifiers, &ch)) {
+        if (shell_core_command_ops.usb_key_to_ascii != NULL &&
+            shell_core_command_ops.usb_key_to_ascii(key_code, modifiers, &ch)) {
             if (ch == '\n') {
                 ch = '\r';
             }
@@ -4545,234 +4247,9 @@ void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed)
  * SYSTEM INFO COMMANDS
  * ======================================================================== */
 
-/* One-line entry in the offline command reference (`help /all`, `help <cmd>`). */
-typedef struct {
-    const char *name;      /* primary command name (aliases listed in summary) */
-    const char *summary;   /* one-line usage + description */
-} shell_help_entry_t;
-
-static const shell_help_entry_t s_shell_help_entries[] = {
-    { "help",     "help [cmd | /all] - this summary; help /all lists every command; help <cmd> shows one" },
-    { "about",    "about - project identity, build date/time, Git hash, license, third-party summary" },
-    { "version",  "version | ver - banner, version, build date/time, Git hash, IDF, board, heap, uptime" },
-    { "sysinfo",  "sysinfo - board, display, storage, heap, FreeRTOS tasks, uptime, Wi-Fi, OTA state" },
-    { "mem",      "mem - free heap, total, minimum, internal, task count, PSRAM state" },
-    { "debug",    "debug [save [file] [txt|csv|json] | mem <addr> [len] | peek <addr> | poke <addr> <hex..> | disk <lba> [count]] - log, RAM/sector hexdumps" },
-    { "clear",    "clear | cls - clear transcript history and redraw the prompt" },
-    { "reboot",   "reboot - restart the board" },
-    { "launch",   "launch | launch <name> [args] | launch /list - discover and run script apps .bat/.cmd (PATH + sd:/APPS)" },
-    { "apps",     "apps - list the registered native apps (applib ABI table)" },
-    { "ps",       "ps | tasks | top [/b] [/O:key] - FreeRTOS task list (name, state, prio, core, stack, CPU%)" },
-    { "tasks",    "tasks - alias of ps (FreeRTOS task list)" },
-    { "top",      "top [/b] [/O:key] - task list sorted by CPU with a live summary header" },
-    { "brightness", "brightness <0-100> - set display backlight" },
-    { "rotate",   "rotate <0|90|180|270> - rotate the display (touch coordinates follow)" },
-    { "battery",  "battery - read battery voltage/percent from the ADC divider" },
-    { "power",    "power [status] | power idle [seconds|off] - display power state and idle display-off timeout" },
-    { "sleep",    "sleep - enter light sleep (timer/GPIO wake); display-only idle is power/display off" },
-    { "deepsleep", "deepsleep - enter ESP deep sleep (wake on configured source)" },
-    { "shutdown", "shutdown (poweroff) - flush, LEDs off, and cut board power (deep sleep when no latch)" },
-    { "pwm",      "pwm <pin> <freq> <duty%> - LEDC PWM tone on a pin" },
-    { "freq",     "freq <pin> <hz> - square wave generator on a pin" },
-    { "tone",     "tone <freq> [duration_ms] - play a tone through the speaker" },
-    { "wavplay",  "wavplay <file.wav> - play a WAV file from SD" },
-    { "audio",    "audio status | audio stop - background playback state" },
-    { "mic",      "mic level [ms] | mic hear <freq> [ms] | mic audit [freq] | mic selftest - mic level, tone detect, speaker audit + hiss probe" },
-    { "adc",      "adc <pin> - one-shot ADC read on a pin" },
-    { "i2c",      "i2c scan | peek <addr> <reg> | poke <addr> <reg> <val> - I2C bus tools" },
-    { "spi",      "spi status | spi loopback <sclk> <mosi> <miso> | spi peek|poke <sclk> <mosi> <miso> <cs> <reg> [value] | spi release - SPI master (SPI3, GPIO-matrix pins)" },
-    { "rgb",      "rgb status | rgb <#RRGGBB|r g b|effect> | rgb auto <on|off> | rgb <1|2> r g b - status LED(s)" },
-    { "imu",      "imu [read] | imu status | imu rotate <on|off> - BMI270 accel/gyro + tilt auto-rotate" },
-    { "gpio",     "gpio list | status | read <pin> | set <pin> <0|1> - digital IO" },
-    { "volume",   "volume <0-100> - set speaker volume" },
-    { "display",  "display info | resolution | refresh | power <on|sleep|off>" },
-    { "keyboard", "keyboard show | hide | toggle | status - on-screen keyboard" },
-    { "windows",  "windows info - window layout state" },
-    { "ui",       "ui tap|longpress|swipe|press|move|release|key|target|targets|hit|state - synthetic touch automation" },
-    { "dialog",   "dialog [/t:secs] \"title\" \"message\" [button1] [button2] - message box (ERRORLEVEL 0/1/255)" },
-    { "list",     "list [/t:secs] [/v:NAME] \"title\" item... - scrollable selector (ERRORLEVEL = 0-based index)" },
-    { "ask",      "ask [/t:secs] [/v:NAME] [/p] \"prompt\" [default] - text input to ASK_RESULT (ERRORLEVEL 0/1)" },
-    { "screen",   "screen run <file.frm> | screen flow <file.flow> | screen info <file> - declarative screen (dialog|list|ask|form|menu|browse|view|hexview|image) or multi-screen flow, results to env" },
-    { "browse",   "browse [/t:secs] [/v:NAME] [path] - fullscreen file picker (ERRORLEVEL 0/1)" },
-    { "view",     "view [/t:secs] [--raw] <file> - text viewer pager (.md renders in the reading font, .bmp/.dib open the image viewer) (ERRORLEVEL 0/1)" },
-    { "open",     "open [/t:secs] [--raw] <file> - open by type: scripts in editor, md rendered, images viewed, rest as text (never executes)" },
-    { "json",     "json validate|pretty <file> - check structure or print 2-space indented JSON (ERRORLEVEL 0/1)" },
-    { "js",       "js eval <code> | js run <file.js> | js call <file.js> <fn> [args] - JavaScript engine (ERRORLEVEL 0/1/2)" },
-    { "browser",  "browser <url> | browser back | browser forward - basic web browser (ERRORLEVEL 0/1/2)" },
-    { "csv",      "csv rows|cols|cell|get|set|eval <file> [row col] [/b] [/v:NAME] - CSV grid (R1C1 refs, ranges, =EXPR via calc) (ERRORLEVEL 0/1/2)" },
-    { "export",   "export <db NAME|alarms> <csv|json|txt|vcf|ics> <file> - portable store interchange (ERRORLEVEL 0/1/2)" },
-    { "import",   "import db <name> <csv|json|vcf> <file> | import alarms <csv|json|ics> <file> - store interchange in, fresh ids (ERRORLEVEL 0/1/2)" },
-    { "pim",      "pim get db <name> | pim get alarms | pim put db <name> <size> [/crc] | pim put alarms <size> [/crc] - serial PIM sync, merge by uid (ERRORLEVEL 0/1/2)" },
-    { "sync",     "sync [status] - P4Sync handshake: sync.* capability snapshot for USB desktop sync (ERRORLEVEL 0/2)" },
-    { "mcp",      "mcp status | mcp connect <url> [token] | mcp tools | mcp call <tool> [json] - MCP JSON-RPC client (ERRORLEVEL 0/1/2)" },
-    { "net",      "net status|broker|connect|sub|pub|msg|onmsg|outbox - persistent MQTT service with SD outbox (ERRORLEVEL 0/1/2)" },
-    { "archive",  "archive create|extract|list|verify ... - USTAR backups with CRC manifest (ERRORLEVEL 0/1/2)" },
-    { "backup",   "backup <file> [paths...] - archive DBS + alarms by default (ERRORLEVEL 0/1/2)" },
-    { "crypt",    "crypt lock|unlock <src> <dst> [/p:pass|/ask] - password file encryption (ERRORLEVEL 0/1/2)" },
-    { "hexview",  "hexview [/t:secs] <file> - 16-byte hex dump pager (ERRORLEVEL 0/1)" },
-    { "image",    "image info <file.bmp> | image show [/t:secs] <file.bmp> - BMP metadata / fit-to-screen viewer (ERRORLEVEL 0/1/2)" },
-    { "draw",     "draw <box|line|fill|text|bar|table|list|image|clear|window|save|restore|cursor|hold|alt-screen|close|refresh|fullscreen> - TUI drawing (foreground only)" },
-    { "anchor",   "anchor <label> <command> [continue_line] - named transcript anchor region" },
-    { "link",     "link <label> <command...> | link list | link open <n> - tap-confirm hyperlink (underline)" },
-    { "complete", "complete <partial line> - list Tab-completion matches as runnable links" },
-    { "tui",      "tui status|stats|clear|fullscreen|refresh|selftest - TUI control (selftest runs headless palette/coverage/metrics checks)" },
-    { "wig",     "wig /panel|text|gauge|button|list|clear|render - declarative widget layer (foreground only)" },
-    { "pane",     "pane /add|split|focus|cycle|hide|close|list - pane stack management (foreground only)" },
-    { "hud",      "hud /add|refresh|flash|del - HUD status cells (foreground only)" },
-    { "key",      "key /bind|unbind|inject|mode|list - key bindings and synthetic input" },
-    { "tap",      "tap /on|off|clear|list - touch hotspot binding (foreground only)" },
-    { "event",    "event /wait|type|field|dispatch|post|clear|count - script-visible event multiplexer" },
-    { "trace",    "trace /on|off|level|status - on-screen diagnostics" },
-    { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
-    { "locate",   "locate <row> <col> - DOS LOCATE parity (1-based, 80x25)" },
-    { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },
-    { "prompt",   "prompt [template] - set the command prompt template" },
-    { "title",    "title [text] - show or set the session title (empty clears)" },
-    { "cd",       "cd | chdir [path] - show or change the working directory" },
-    { "dir",      "dir [path] [/W] [/P] [/S] [/B] [/L] [/A:attrs] [/O:order] - list directory" },
-    { "copy",     "copy <src> <dst> - copy a file (dir target keeps basename)" },
-    { "cursor",   "cursor [block|bar] [blink <ms 0..2000|off>] - input-line cursor style (session-only)" },
-    { "move",     "move <src> <dst> - move a file (cwd-relative destination)" },
-    { "del",      "del [/s] [/p|/f|/permanent] <path> - delete file(s); aliases erase" },
-    { "ren",      "ren | rename <src> <dst> - rename a file" },
-    { "md",       "md | mkdir <path> - create a directory" },
-    { "rd",       "rd | rmdir <path> - remove a directory" },
-    { "type",     "type <path> - print a file to the transcript" },
-    { "write",    "write <path> <text> - write (overwrite) a file" },
-    { "append",   "append <path> <text> - append text to a file" },
-    { "touch",    "touch <path> - create/update a file timestamp" },
-    { "attrib",   "attrib [+-RHSA] <path> - show/set file attributes" },
-    { "label",    "label [name] - show/set the volume label" },
-    { "vol",      "vol - show the volume label and serial number" },
-    { "xcopy",    "xcopy <src> <dst> [/S] [/E] [/I] [/Y] - recursive copy" },
-    { "chkdsk",   "chkdsk | scandisk [path] [/F] - read-only filesystem check" },
-    { "format",   "format [/FS:FAT|FAT32] [/A:size] [/V:label] [/Q] - format the SD volume (interactive)" },
-    { "find",     "find <text> [file] [/I] [/N] [/C] [/V] - text search, or recursive file discovery (/NAME: et al)" },
-    { "findstr",  "findstr [switches] <search> [file...] - literal or regex-lite text search (/R /C /I /N /V /X /E /B /L /S /M /F /G)" },
-    { "more",     "more [file] - paginated output (keypress- or timer-bounded)" },
-    { "tree",     "tree [path] [/F] [/A] - directory tree" },
-    { "fc",       "fc <f1> <f2> - compare two files" },
-    { "font",     "font info | font coverage | font list | font set <terminal|ui|reading> <name> [/save] | font size <terminal|ui|reading> <px> [/save] - roles, coverage, live TTF switching + sizes" },
-    { "theme",    "theme list | show [name] | set <name> [/save] - switch the UI color theme (persists in SHELL.INI)" },
-    { "comp",     "comp <f1> <f2> - compare two files byte-by-byte" },
-    { "sort",     "sort [file] [/R] [/I] [/U] - sort lines (pipes: sort < f | sort)" },
-    { "clip",     "clip [text | copy [N] | file <path> | read <file> | paste <dest>] - clipboard" },
-    { "history",  "history [ /save [file] | /load [file] | /search <text> | /clear ] - command recall buffer" },
-    { "edit",     "edit <file> | edit db <name> <id> | edit alarm <id> [/focus] [/template <name>] - modal text editor (byte-preserving document model)" },
-    { "spell",    "spell learn <word> | spell forget <word> | spell list user - user dictionary overlay" },
-    { "recover",  "recover [list] | recover restore <path> | recover discard <path> | recover clear - editor crash-file recovery" },
-    { "trash",    "trash - show trash | trash <path> - move to trash | trash empty - empty it" },
-    { "undelete", "undelete <path> - restore a file from trash" },
-    { "receive",  "receive <path> <size> [/crc] - host-to-device binary transfer (USB serial)" },
-    { "send",     "send <path> [offset] [count] | send /diag - device-to-host binary transfer" },
-    { "screenshot", "screenshot | scr | capture [file.bmp] - capture the screen to a BMP" },
-    { "sd",       "sd info | ls [path] | stat <path> | cat <path> [bytes] | mount | eject" },
-    { "sdeject",  "sdeject - safe SD unmount before card removal" },
-    { "disk",     "disk list | detail | clean | create partition primary [size=N] | delete partition N | active N|none | type N <hex> | mbr [save|restore] | verify | geometry | image save|restore | format" },
-    { "set",      "set [NAME=VALUE] | set /a NAME=<expr> | set /p NAME=<prompt> - environment variables" },
-    { "calc",     "calc [NAME=] <expr> | calc /deg | /rad | /angle | /hex | /fin | /date - float calculator (BASIC/financial/date funcs, PI, RAN#, &H hex)" },
-    { "path",     "path [dirs] - show/set the executable search path" },
-    { "echo",     "echo <text> | echo on|off - print text or toggle command echo" },
-    { "call",     "call <file.bat> [args] - run a batch file from another" },
-    { "if",       "if [not] errorlevel|exist|\"a\"==\"b\" <cmd> - conditional execution" },
-    { "goto",     "goto :label - jump to a label in a batch file" },
-    { "gosub",    "gosub :label [args] | <file>::<routine> - call a labelled subroutine" },
-    { "return",   "return [code] - return from a gosub/call :label (ends the file at top level)" },
-    { "on",       "on <expr> goto|gosub <label>[,<label>...] - computed dispatch" },
-    { "switch",   "switch <value> <match>:<label> [...] [/d:<label>] - string-match dispatch to a label" },
-    { "shift",    "shift - shift batch arguments" },
-    { "pause",    "pause [message] - wait for a key (30 s timeout)" },
-    { "choice",   "choice [/C:keys] [/N] [/T:c,secs] [/S] [text] - interactive selection" },
-    { "delay",    "delay <ms> - pure deterministic wait (melodies/demos), clamped to P4_CONFIG_DELAY_MAX_MS" },
-    { "gfx",      "gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|blitmany|free|slots|save - RGB565 canvas + toolkit (max 320x240); image <file.bmp> blits a scaled BMP; load ingests 24/32-bit BMP sprites (max 64x64); blitmany stamps one slot at many X Y pairs; stats reports frame pacing" },
-    { "plot",     "plot tui|window|auto|axes|func|polar|para|data|bar|table|line|point|clear|status - world-coordinate graphs + charts on the gfx canvas or TUI (uses calc)" },
-    { "crc32",    "crc32 <path> - print a file's CRC-32 checksum (ERRORLEVEL 0/1)" },
-    { "asset",    "asset check|list <app> - verify/list an app's APPS/<APP>.ASSETS manifest (ERRORLEVEL 0/1)" },
-    { "pkg",      "pkg list|info <app>|verify <app>|check|install <app>|remove <app> - SD app packages (APPS/<APP>.APPINFO + .ASSETS, bundles under PKGS/)" },
-    { "header",   "header [status] | mode [auto|full|compact] [/save] | show|hide - responsive status-bar layout" },
-    { "start",    "start [/wait] [/t:secs] <command> [args] | start /b - run as a background job; bare start lists the pool (/b: machine rows bgN|state|exit|prio|cpu|stack|ovl|himem|line); /wait joins, /t: auto-kills" },
-    { "taskkill", "taskkill <job> - cooperatively stop a background job (name like bg0, or slot number)" },
-    { "kill",     "kill <job> - alias of taskkill (Unix name, DOS behavior)" },
-    { "suspend",  "suspend <job> - freeze a background pool job (pool slots only; taskkill wakes it to stop)" },
-    { "resume",   "resume <job> - thaw a suspended background pool job" },
-    { "nice",     "nice <job> <1..3|+n|-n> - set a pool job priority within P4_CONFIG_TMGR_PRIO bounds (renice is an alias)" },
-    { "renice",   "renice <job> <1..3|+n|-n> - alias of nice" },
-    { "taskmgr",  "taskmgr - open the task manager app (same as launch TASKMGR)" },
-    { "assoc",    "assoc [.ext[=app]] - show/set/clear file associations (bare lists; .ext= clears)" },
-    { "ftype",    "ftype [app] - show declared (APPINFO handles=) and assigned handlers" },
-    { "startup",  "startup [list] | add <app> | remove <app> - one-shot apps run at boot (sd:/STARTUP.INI)" },
-    { "service",  "service list | install <name> <line> [/restart] [/noauto] | remove|start|stop <name> - resident services (supervised, boot-persistent)" },
-    { "lock",     "lock <name> [/t:secs] - take a named batch mutex (auto-released at job exit)" },
-    { "unlock",   "unlock <name> - release a named batch mutex" },
-    { "signal",   "signal <name> - set a named batch event (sticky until taken)" },
-    { "wait",     "wait <name> [/t:secs] - wait for a named batch event (auto-clears on take)" },
-    { "himem",    "himem [info] | alloc <bytes>[K|M] [/v:VAR] | free|lock|unlock <h> | fill|load|save|crc <h> ... - XMS-style extended memory over PSRAM" },
-    { "uptime",   "uptime - seconds since boot (also in version)" },
-    { "df",       "df - free/total space for every mounted volume (SD + USB sticks)" },
-    { "env",      "env | printenv - alias of bare set (list environment variables)" },
-    { "hostname", "hostname [name] - show or set the device hostname (persisted in CONFIG.SYS)" },
-    { "for",      "for %v in (set) do <cmd> | for /f \"delims= tokens=\\n\" %%v in (file) do <cmd> | for /L %%v in (start,step,end) do <cmd> | for /A %%k in (PREFIX) do <cmd> | for /D %%v in (set) do <cmd> | for /R [path] %%v in (set) do <cmd> - loops" },
-    { "while",    "while <expr> do <cmd> - re-run while a set /a expression is nonzero (ERRORLEVEL 0/1/2)" },
-    { "setlocal", "setlocal [enabledelayedexpansion|disabledelayedexpansion] - begin a local environment scope (!VAR! when enabled)" },
-    { "endlocal", "endlocal - end a local environment scope" },
-    { "exit",     "exit [/b] [code] - leave a batch file or the shell" },
-    { "proc",     "proc [/args | /name | /depth | /errorlevel | /echo | /stdin | /labels | /goto] - introspect the batch process stack" },
-    { "breadcrumb", "breadcrumb [/b] - print the current location trail (cwd > batch stack > bg slot > modal)" },
-    { "ini",      "ini <list|get|set|del|load|save> <file> [key] [value] - persistent state in KEY=VALUE files on the SD card" },
-    { "appconfig", "appconfig <app> [path|list|get|set|del] [key] [value] - per-app settings (sd:/APPS/<APP>.INI)" },
-    { "temp",     "temp [new [ext] | clean] - SD-backed temporary files" },
-    { "ansi",     "ansi <sgr-codes> [text...] - emit ANSI-styled text (reverse, bold, color) into the transcript" },
-    { "menu",     "menu <item> [item...] - numbered menu; ERRORLEVEL = chosen index (0 = cancel)" },
-    { "mode",     "mode /push NAME [/type T] [/map M] | mode /pop | mode /switch NAME | mode /top | mode /list | mode /count | mode /drop TYPE | mode /timeout MS - mode stack" },
-    { "form",     "form [/t:secs] \"title\" \"Label=type[:arg]:VAR\" ... - multi-field modal (text|password|check|select|range), values to env (ERRORLEVEL 0/255)" },
-    { "markdown", "markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print] - render/export Markdown (echo/type auto-render; /raw bypasses)" },
-    { "notify",   "notify [/t:secs] <text> | notify - - header notification (clear with -)" },
-    { "appmode",  "appmode on [/full] [/clear] | appmode off | appmode status - enter/exit app mode (save/restore screen)" },
-    { "rem",      "rem <text> - batch comment" },
-    { "alias",    "alias [name[=value]] | alias /save [/load] [file] - DOSKEY-style macros" },
-    { "unalias",  "unalias <name> - remove a macro alias" },
-    { "bind",     "bind [F1..F12|^A..^Z <line>] | bind unbind <key> | bind /save [/load] [file] | bind /clear - key bindings (^C reserved)" },
-    { "mbind",    "mbind /map NAME CHORD LABEL | mbind /unbind NAME CHORD | mbind /leader KEY | mbind /list NAME - modal keymap chords" },
-    { "mcmd",     "mcmd /def NAME LABEL [/doc D] | mcmd /list | mcmd /run NAME | mcmd /undef NAME - named commands" },
-    { "mdialog",  "mdialog /confirm TEXT [/var V] | mdialog /input TEXT [/default D] [/var V] | mdialog /result V - nested dialogs" },
-    { "guard",    "guard /on enter|leave TYPE LABEL | guard /off enter|leave TYPE | guard /list - transition guards" },
-    { "scope",    "scope /save MODE VAR [VAR ...] | scope /restore MODE | scope /list MODE | scope /clear MODE - mode-scoped state" },
-    { "palette",  "palette /open | palette /close | palette /source NAME - command palette" },
-    { "mmacro",   "mmacro /record NAME | mmacro /stop | mmacro /replay NAME [N] | mmacro /list - event macro record/replay" },
-    { "pending",  "pending /get | pending /clear | pending /timeout MS - chord buffer" },
-    { "mstatus",  "mstatus /set TYPE FORMAT | mstatus /render - per-mode statusline" },
-    { "repeat",   "repeat /last [N] | repeat /set N | repeat /clear - repeat count" },
-    { "cancel",   "cancel [/to NAME] [/all] [/code N] - unwind modal state" },
-    { "buffer",   "buffer /open NAME | buffer /close NAME | buffer /list | buffer /mode NAME MODE - modal text buffer" },
-    { "macro",    "macro record [file] | macro stop | macro play <file> | macro status - capture/replay command macros" },
-    { "date",     "date [MM-DD-YYYY] - show/set the date" },
-    { "db",       "db <create|list|info|drop|open|close|categories|add|get|set|del|purge|count|find|export|import> [...] - Palm-OS-style SD record store" },
-    { "alarm",    "alarm <add|list|del|enable|disable|snooze|status|purge> [...] - SD-persisted alarms (daily/weekly/monthly/yearly, header notify / beep / LED / optional run)" },
-    { "cal",      "cal [today|week|next|YYYY-MM] - calendar grid + events over the alarm store" },
-    { "gfind",    "gfind <text> [/b] [/i] [/count] [/db:name] [/cat:N] [/field:k=v] [/files [/root:path] [/ext:.txt,.md] [/hidden] [/filesonly]] - Palm-style global find over db + alarms + (opt-in) text files" },
-    { "time",     "time [HH:MM[:SS]] - show/set the time" },
-    { "timer",    "timer|stopwatch start|stop|lap|status [name] [/b] [/v:NAME] - named stopwatch runs" },
-    { "timezone", "timezone - show/set the timezone" },
-    { "sntp",     "sntp | ntpsync [server] - sync the clock via SNTP" },
-    { "locale",   "locale [US|UK|DE|FR|list] - show/set locale for date/time/number formatting" },
-    { "rtc",      "rtc [anchor] - RTC backup status (source, anchor age, ext chip)" },
-    { "wifi",     "wifi status | scan [/b] | diag | connect [ssid pass] | disconnect | setup [on|off]" },
-    { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect | mouse <on|off|cursor <on|off>|click <on|off>>" },
-    { "usb",      "usb status | ls [path] | keyboard <on|off> | mouse <on|off|cursor <on|off>|click <on|off>> | userial <status|open|close|send|recv|term>" },
-    { "httpd",    "httpd status | start | stop - HTTP file server on port 80" },
-    { "certs",    "certs [info|list|add <file>|remove <name>|rebuild|clear|reload] - TLS trust store" },
-    { "netstat",  "netstat - active TCP/UDP connections and listeners" },
-    { "ipconfig", "ipconfig [/all] - IP configuration" },
-    { "ping",     "ping <host-or-ip> [count] - ICMP echo" },
-    { "dns",      "dns | nslookup <hostname> - resolve a hostname" },
-    { "httpget",  "httpget | wget <url> [localfile] - download over HTTP(S)" },
-    { "tcpterm",  "tcpterm <host> <port> [/t:secs] [text...] - one-shot TCP request/response (ERRORLEVEL 0/1/2)" },
-    { "c6ota",    "c6ota <sd:/path | http[s]://url | default> - OTA the ESP32-C6 firmware" },
-    { "camera",   "camera init | snap <filename> - camera stack (stub: not wired)" },
-};
-
-#define SHELL_HELP_ENTRY_COUNT \
-    ((int)(sizeof(s_shell_help_entries) / sizeof(s_shell_help_entries[0])))
+/* The command table itself lives in shell_core.c (see the accessors in
+ * shell.h); its size is the public entry count. */
+#define SHELL_HELP_ENTRY_COUNT ((int)shell_help_entry_count())
 
 /** Print one help entry with the given label prefix. The command name is a
  *  tap-confirm hyperlink (`help <name>`); padding is applied to the plain
@@ -4800,25 +4277,6 @@ static void shell_help_print_entry(const shell_help_entry_t *e)
     shell_transcript_appendf_ansi(" %s\n", e->summary);
 }
 
-size_t shell_help_entry_count(void)
-{
-    return (size_t)SHELL_HELP_ENTRY_COUNT;
-}
-
-bool shell_help_entry_get(size_t index, const char **name, const char **usage)
-{
-    if (index >= (size_t)SHELL_HELP_ENTRY_COUNT) {
-        return false;
-    }
-    if (name != NULL) {
-        *name = s_shell_help_entries[index].name;
-    }
-    if (usage != NULL) {
-        *usage = s_shell_help_entries[index].summary;
-    }
-    return true;
-}
-
 void shell_command_help(int argc, char **argv)
 {
     /* help <cmd> - print one entry */
@@ -4826,10 +4284,10 @@ void shell_command_help(int argc, char **argv)
         argv[1][0] != '\0' && argv[1][0] != '/') {
         int i;
         for (i = 0; i < SHELL_HELP_ENTRY_COUNT; i++) {
-            if (shell_text_equals_ignore_case(argv[1], s_shell_help_entries[i].name)) {
+            if (shell_text_equals_ignore_case(argv[1], shell_core_help_entries[i].name)) {
                 shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell: %s" SH_RST "\n",
-                                              s_shell_help_entries[i].name);
-                shell_help_print_entry(&s_shell_help_entries[i]);
+                                              shell_core_help_entries[i].name);
+                shell_help_print_entry(&shell_core_help_entries[i]);
                 shell_transcript_appendf_ansi(SH_MUTE "Run " SH_EXE "help /all" SH_RST
                                               SH_MUTE " to list every command.\n" SH_RST);
                 return;
@@ -4852,8 +4310,8 @@ void shell_command_help(int argc, char **argv)
                                       SHELL_HELP_ENTRY_COUNT);
         for (i = 0; i < SHELL_HELP_ENTRY_COUNT; i++) {
             shell_transcript_appendf_ansi("  " SH_LINK "%-12s" SH_RST " %s\n",
-                                          s_shell_help_entries[i].name,
-                                          s_shell_help_entries[i].summary);
+                                          shell_core_help_entries[i].name,
+                                          shell_core_help_entries[i].summary);
         }
         shell_transcript_appendf_ansi(SH_MUTE "Offline reference: every command above is runnable. "
                                       "Run " SH_EXE "help <command>" SH_RST SH_MUTE
@@ -4863,7 +4321,7 @@ void shell_command_help(int argc, char **argv)
 
     /* help - quick summary (existing curated list) */
     shell_transcript_appendf_ansi(SH_SUBHEAD SH_BOLD "P4MiniShell Commands:" SH_RST "\n");
-    if (s_command_ops.sd_is_mounted != NULL && !s_command_ops.sd_is_mounted()) {
+    if (shell_core_command_ops.sd_is_mounted != NULL && !shell_core_command_ops.sd_is_mounted()) {
         shell_transcript_appendf_ansi(SH_MUTE "No SD card detected - insert a microSD card to use files, "
                                       "config, and scripts.\n" SH_RST);
     }
@@ -5016,8 +4474,8 @@ void shell_command_sysinfo(void)
                              BSP_I2S_DOUT,
                              BSP_I2S_MCLK,
                              BSP_POWER_AMP_IO,
-                             s_command_ops.get_volume_percent != NULL
-                                 ? s_command_ops.get_volume_percent() : 0);
+                             shell_core_command_ops.get_volume_percent != NULL
+                                 ? shell_core_command_ops.get_volume_percent() : 0);
     shell_transcript_appendf_ansi("  " SH_LBL "battery:" SH_RST " adc_gpio=%d divider=%d:%d range=%dmV..%dmV\n",
                              BOARD_CFG_BATTERY_ADC_GPIO,
                              BOARD_CFG_BATTERY_DIVIDER_NUMERATOR,
@@ -5032,7 +4490,7 @@ void shell_command_sysinfo(void)
     shell_transcript_appendf_ansi("  " SH_LBL "storage:" SH_RST " spiffs=%s, sd=%s\n", BSP_SPIFFS_MOUNT_POINT, BSP_SD_MOUNT_POINT);
     shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport:" SH_RST " sdio reset_gpio=%d\n",
                                  BOARD_CFG_C6_HOST_RESET_GPIO);
-    if (s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy()) {
+    if (shell_core_command_ops.c6ota_is_busy != NULL && shell_core_command_ops.c6ota_is_busy()) {
         shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport.busy:" SH_RST " " SH_WARN "yes" SH_RST "\n");
     } else {
         shell_transcript_appendf_ansi("  " SH_LBL "c6.hosted_transport.busy:" SH_RST " " SH_OK "no" SH_RST "\n");
@@ -5056,8 +4514,8 @@ void shell_command_sysinfo(void)
     shell_transcript_appendf_ansi("  " SH_LBL "psram:" SH_RST " " SH_MUTE "disabled" SH_RST "\n");
 #endif
 
-    if (s_command_ops.append_sysinfo_summary != NULL) {
-        s_command_ops.append_sysinfo_summary();
+    if (shell_core_command_ops.append_sysinfo_summary != NULL) {
+        shell_core_command_ops.append_sysinfo_summary();
     }
 }
 
@@ -5771,7 +5229,7 @@ static void shell_telemetry_sample(void)
 {
     /* Skip during a C6 OTA: PSRAM is unavailable while the flash is written, so
      * the snapshot would only add contention, and the header is not updated. */
-    if (s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy()) {
+    if (shell_core_command_ops.c6ota_is_busy != NULL && shell_core_command_ops.c6ota_is_busy()) {
         return;
     }
 
@@ -5783,12 +5241,12 @@ static void shell_telemetry_sample(void)
     /* Battery: record failure too so the panel can show "BAT N/C" instead of a
      * stale percentage. */
     s_tlm_battery_ok = false;
-    if (s_command_ops.battery_read != NULL &&
-        s_command_ops.battery_read(NULL, &s_tlm_battery_percent, NULL, NULL) == ESP_OK) {
+    if (shell_core_command_ops.battery_read != NULL &&
+        shell_core_command_ops.battery_read(NULL, &s_tlm_battery_percent, NULL, NULL) == ESP_OK) {
         s_tlm_battery_ok = true;
     }
-    s_tlm_battery_charging = s_command_ops.battery_is_charging != NULL &&
-                             s_command_ops.battery_is_charging();
+    s_tlm_battery_charging = shell_core_command_ops.battery_is_charging != NULL &&
+                             shell_core_command_ops.battery_is_charging();
 }
 
 static void shell_telemetry_task(void *arg)
@@ -5822,9 +5280,9 @@ void shell_start_telemetry(void)
 
 void shell_header_status_refresh(void)
 {
-    bool wifi_connected = s_command_ops.wifi_is_connected != NULL && s_command_ops.wifi_is_connected();
+    bool wifi_connected = shell_core_command_ops.wifi_is_connected != NULL && shell_core_command_ops.wifi_is_connected();
     int wifi_rssi = P4_CONFIG_HEADER_RSSI_UNKNOWN;
-    bool sd_mounted = s_command_ops.sd_is_mounted != NULL && s_command_ops.sd_is_mounted();
+    bool sd_mounted = shell_core_command_ops.sd_is_mounted != NULL && shell_core_command_ops.sd_is_mounted();
     uint32_t uptime_sec = (uint32_t)((esp_timer_get_time() - s_boot_timestamp_us) / 1000000);
     char clock_text[16];
 
@@ -5832,8 +5290,8 @@ void shell_header_status_refresh(void)
      * start SNTP. The hook is cheap and idempotent (it only kicks off a task);
      * the blocking HTTP work never runs here on the LVGL task. Must happen
      * before the display-off early-return so time is set even while dark. */
-    if (wifi_connected && s_command_ops.time_auto_sync != NULL) {
-        (void)s_command_ops.time_auto_sync();
+    if (wifi_connected && shell_core_command_ops.time_auto_sync != NULL) {
+        (void)shell_core_command_ops.time_auto_sync();
     }
 
     /* Idle display-off: do no LVGL work while the backlight is off; the power
@@ -5844,8 +5302,8 @@ void shell_header_status_refresh(void)
 
     /* Signal strength comes through the networking module's accessor, so no
      * esp_wifi_* call escapes components/networking/. */
-    if (s_command_ops.wifi_get_rssi != NULL) {
-        (void)s_command_ops.wifi_get_rssi(&wifi_rssi);
+    if (shell_core_command_ops.wifi_get_rssi != NULL) {
+        (void)shell_core_command_ops.wifi_get_rssi(&wifi_rssi);
     }
 
     /* Restore the transcript if a hidden-skip (gfx canvas / TUI / app mode)
@@ -5864,9 +5322,9 @@ void shell_header_status_refresh(void)
         .battery_percent = s_tlm_battery_percent,
         .battery_adc_ready = s_tlm_battery_ok,
         .battery_charging = s_tlm_battery_charging,
-        .bt_enabled = s_command_ops.bluetooth_is_enabled != NULL && s_command_ops.bluetooth_is_enabled(),
-        .bt_connected = s_command_ops.bluetooth_is_connected != NULL && s_command_ops.bluetooth_is_connected(),
-        .usb_connected = s_command_ops.usb_is_connected != NULL && s_command_ops.usb_is_connected(),
+        .bt_enabled = shell_core_command_ops.bluetooth_is_enabled != NULL && shell_core_command_ops.bluetooth_is_enabled(),
+        .bt_connected = shell_core_command_ops.bluetooth_is_connected != NULL && shell_core_command_ops.bluetooth_is_connected(),
+        .usb_connected = shell_core_command_ops.usb_is_connected != NULL && shell_core_command_ops.usb_is_connected(),
         .sd_state = sd_mounted ? HEADER_SD_MOUNTED : HEADER_SD_NONE,
         .free_heap = s_tlm_free_heap,
         .total_heap = s_tlm_total_heap,
@@ -5874,8 +5332,8 @@ void shell_header_status_refresh(void)
         .task_count = s_tlm_task_count,
         .uptime_seconds = uptime_sec,
         .clock_text = clock_text,
-        .c6ota_busy = s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy(),
-        .bg_jobs_running = s_command_ops.bg_jobs_running != NULL && s_command_ops.bg_jobs_running(),
+        .c6ota_busy = shell_core_command_ops.c6ota_is_busy != NULL && shell_core_command_ops.c6ota_is_busy(),
+        .bg_jobs_running = shell_core_command_ops.bg_jobs_running != NULL && shell_core_command_ops.bg_jobs_running(),
     };
     header_update_batch(&batch);
 
@@ -5885,8 +5343,8 @@ void shell_header_status_refresh(void)
      * Edge-triggered so the keyboard is not forced on every refresh tick. */
     {
         static bool s_last_physical_kb = false;
-        bool physical_kb = s_command_ops.physical_keyboard_present != NULL &&
-                           s_command_ops.physical_keyboard_present();
+        bool physical_kb = shell_core_command_ops.physical_keyboard_present != NULL &&
+                           shell_core_command_ops.physical_keyboard_present();
 
         if (physical_kb != s_last_physical_kb) {
             s_last_physical_kb = physical_kb;
@@ -5949,14 +5407,14 @@ uint32_t shell_header_refresh_interval_ms(void)
     header_refresh_state_t state = { 0 };
 
     state.display_off = (display_get_power_state() != DISPLAY_POWER_ON);
-    state.busy = (s_command_ops.c6ota_is_busy != NULL && s_command_ops.c6ota_is_busy()) ||
-                 (s_command_ops.bg_jobs_running != NULL && s_command_ops.bg_jobs_running());
+    state.busy = (shell_core_command_ops.c6ota_is_busy != NULL && shell_core_command_ops.c6ota_is_busy()) ||
+                 (shell_core_command_ops.bg_jobs_running != NULL && shell_core_command_ops.bg_jobs_running());
 
     if (!state.busy && !state.display_off) {
-        bool connected = s_command_ops.wifi_is_connected != NULL &&
-                         s_command_ops.wifi_is_connected();
-        const char *wifi_state = (s_command_ops.wifi_state_string != NULL)
-                                     ? s_command_ops.wifi_state_string()
+        bool connected = shell_core_command_ops.wifi_is_connected != NULL &&
+                         shell_core_command_ops.wifi_is_connected();
+        const char *wifi_state = (shell_core_command_ops.wifi_state_string != NULL)
+                                     ? shell_core_command_ops.wifi_state_string()
                                      : NULL;
         /* Only the stack bring-up window ("starting"); an associated link is
          * excluded by !connected, and terminal states fall back to idle. */
@@ -5973,8 +5431,8 @@ uint32_t shell_header_refresh_interval_ms(void)
         state.seconds_to_next_minute = 60 - ti.tm_sec; /* 1..60 */
     }
 
-    state.ms_to_idle_off = (s_command_ops.pm_ms_until_idle_off != NULL)
-                               ? s_command_ops.pm_ms_until_idle_off()
+    state.ms_to_idle_off = (shell_core_command_ops.pm_ms_until_idle_off != NULL)
+                               ? shell_core_command_ops.pm_ms_until_idle_off()
                                : 0;
 
     return header_refresh_interval_ms(&state);
@@ -6097,9 +5555,9 @@ void shell_init(void)
     s_async_transcript[0] = '\0';
     s_async_transcript_len = 0;
     s_async_transcript_flush_queued = false;
-    s_command_history_count = 0;
-    s_command_history_cursor = -1;
-    s_history_draft[0] = '\0';
+    shell_core_command_history_count = 0;
+    shell_core_command_history_cursor = -1;
+    shell_core_history_draft[0] = '\0';
     memset(&s_debug_log, 0, sizeof(s_debug_log));
     s_runtime_warning_count = 0;
 
