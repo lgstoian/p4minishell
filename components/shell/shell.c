@@ -87,15 +87,6 @@
 #define SHELL_PROMPT_RENDER_BYTES       (P4_CONFIG_PROMPT_TEMPLATE_BYTES + P4_CONFIG_PS_PATH_MAX_DISPLAY + 64)
 #define SHELL_TITLE_BYTES               P4_CONFIG_TITLE_BYTES
 
-/**
- * Body budget for the semantic print helpers.
- *
- * Each helper renders the caller's text into this, then wraps it with a
- * colour prefix, a label, and a reset inside a full P4_CONFIG_ANSI_BUFFER_BYTES
- * line. Reserving 64 bytes of headroom guarantees the wrap always fits.
- */
-#define SHELL_SEMANTIC_BODY_BYTES       (P4_CONFIG_ANSI_BUFFER_BYTES - 64)
-
 /* ========================================================================
  * BUILD IDENTITY
  * ======================================================================== */
@@ -569,139 +560,10 @@ static const shell_transcript_sink_t s_transcript_sink = {
     .on_mirror = shell_transcript_sink_on_mirror,
 };
 
-/* ========================================================================
- * SEMANTIC OUTPUT HELPERS
- * ========================================================================
- * These apply the shared palette so no command has to pick colours. Each
- * builds the coloured form and hands it to shell_transcript_append_ansi(),
- * which keeps the LVGL transcript and the UART console in step.
- */
-
-/**
- * Shared body for the single-colour helpers.
- *
- * @param colour   Palette macro for the whole line.
- * @param format   printf-style format, ANSI specifiers already resolved by
- *                 the caller's palette macros.
- * @param newline  When true, a '\n' is appended after the reset sequence.
- */
-static void shell_print_coloured(const char *colour, const char *format,
-                                 bool newline, va_list args)
-{
-    char line[P4_CONFIG_ANSI_BUFFER_BYTES];
-    char fmt[P4_CONFIG_ANSI_BUFFER_BYTES];
-
-    if (format == NULL) {
-        return;
-    }
-
-    /* Compose the full format string with the colour prefix and reset suffix
-     * literal, then render the whole thing through ansi_vformat so every
-     * @-specifier (both the palette wrapper and any the caller embedded, e.g.
-     * SH_LBL/SH_VAL in shell_print_field) is converted to real SGR escapes.
-     * The caller's args go straight through ansi_vformat, so any '%s' value
-     * containing '@' is treated as data (injection guard). */
-    snprintf(fmt, sizeof(fmt), "%s%s%s%s", colour, format, SH_RST, newline ? "\n" : "");
-    ansi_vformat(line, sizeof(line), fmt, args);
-    shell_transcript_append_ansi(line);
-}
-
-void shell_print_heading(const char *format, ...)
-{
-    va_list args;
-
-    va_start(args, format);
-    shell_print_coloured(SH_HEAD, format, true, args);
-    va_end(args);
-}
-
-void shell_print_field(const char *label, const char *format, ...)
-{
-    char value[SHELL_SEMANTIC_BODY_BYTES];
-    char line[P4_CONFIG_ANSI_BUFFER_BYTES];
-    va_list args;
-
-    if (label == NULL) {
-        return;
-    }
-
-    value[0] = '\0';
-    if (format != NULL) {
-        va_start(args, format);
-        vsnprintf(value, sizeof(value), format, args);
-        va_end(args);
-    }
-
-    /* The SH_* macros expand to @-specifiers; render the whole line through
-     * ansi_format so every specifier (label colour, value colour, resets) is
-     * converted to real SGR escapes. label and value are substituted as %s
-     * arguments so any literal '%' or '@' in them stays data. */
-    const char *fmt = SH_LBL "%s" SH_RST " " SH_VAL "%s" SH_RST "\n";
-    ansi_format(line, sizeof(line), fmt, label, value);
-    shell_transcript_append_ansi(line);
-}
-
-void shell_print_field_num(const char *label, long value)
-{
-    char line[P4_CONFIG_ANSI_BUFFER_BYTES];
-
-    if (label == NULL) {
-        return;
-    }
-
-    /* The SH_* macros expand to @-specifiers; render the whole line through
-     * ansi_format so every specifier is converted to real SGR escapes. label
-     * is substituted as a %s argument so any literal '%' or '@' in it stays
-     * data. */
-    const char *fmt = SH_LBL "%s" SH_RST " " SH_NUM "%ld" SH_RST "\n";
-    ansi_format(line, sizeof(line), fmt, label, value);
-    shell_transcript_append_ansi(line);
-}
-
-void shell_print_ok(const char *format, ...)
-{
-    va_list args;
-
-    va_start(args, format);
-    shell_print_coloured(SH_OK, format, true, args);
-    va_end(args);
-}
-
-void shell_print_error(const char *format, ...)
-{
-    va_list args;
-
-    va_start(args, format);
-    shell_print_coloured(SH_ERR, format, true, args);
-    va_end(args);
-}
-
-void shell_print_warning(const char *format, ...)
-{
-    va_list args;
-
-    va_start(args, format);
-    shell_print_coloured(SH_WARN, format, true, args);
-    va_end(args);
-}
-
-void shell_print_muted(const char *format, ...)
-{
-    va_list args;
-
-    va_start(args, format);
-    shell_print_coloured(SH_MUTE, format, true, args);
-    va_end(args);
-}
-
-void shell_print_usage(const char *format, ...)
-{
-    va_list args;
-
-    va_start(args, format);
-    shell_print_coloured(SH_USAGE, format, true, args);
-    va_end(args);
-}
+/* The semantic print helpers (shell_print_heading/field/ok/error/...) live
+ * in the hardware-free shell_print.c: they only format a line through the
+ * ANSI builder and hand it to shell_transcript_append_ansi(), so they need
+ * no LVGL, display, USB or board state. */
 
 /**
  * Stage text in the async buffer, dropping the oldest bytes when full.

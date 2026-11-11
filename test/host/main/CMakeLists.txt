@@ -28,6 +28,7 @@ set(HOST_TEST_SRCS
     # file's @hard-rule): compiled directly so the lane exercises the real
     # code rather than a copy or a stub.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_core.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_print.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_transcript.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_layout.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_status.c"
