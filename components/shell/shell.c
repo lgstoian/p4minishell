@@ -6,12 +6,21 @@
  * @file shell.c
  * @brief Shell core implementation for P4MiniShell.
  *
- * Owns transcript buffers, command history, debug log, UART console bridge,
- * system info commands, and shell utility functions. Provides the public API
- * that command.c and main.c use for all shell output and state management.
+ * Owns the transcript's VIEW/GLUE (LVGL label staging, deferred repaint
+ * batching, click regions, scroll-to-end, the USB-Serial-JTAG mirror), plus
+ * command history, the debug log, the UART console bridge, system info
+ * commands and shell utility functions. The hardware-free transcript MODEL
+ * (scrollback buffers, text assembly, redirection capture, RAM clipboard)
+ * lives in shell_transcript.c and is reached through the optional sink this
+ * file registers in shell_init() - so the model never calls into the view
+ * directly and can be linked without LVGL or USB.
+ *
+ * Provides the public API that command.c and main.c use for all shell output
+ * and state management.
  */
 
 #include "shell.h"
+#include "shell_transcript_internal.h"
 #include "locale.h"
 #include "strutil.h"
 #include "esp_memory_utils.h"
@@ -57,9 +66,7 @@
 #define SHELL_BOARD_DETECTED            BOARD_CFG_DETECTED_NAME
 #define SHELL_BOOT_MESSAGE              P4_CONFIG_BOOT_MESSAGE
 #define SHELL_PROMPT                    P4_CONFIG_SHELL_PROMPT
-#define SHELL_TRANSCRIPT_BYTES          P4_CONFIG_TRANSCRIPT_BYTES
 #define SHELL_ASYNC_TRANSCRIPT_BYTES    P4_CONFIG_ASYNC_TRANSCRIPT_BYTES
-#define SHELL_CLIPBOARD_BYTES           P4_CONFIG_CLIPBOARD_BYTES
 #define SHELL_COMMAND_BYTES             P4_CONFIG_COMMAND_BYTES
 #define SHELL_COMMAND_HISTORY_DEPTH     P4_CONFIG_COMMAND_HISTORY_DEPTH
 #define SHELL_HISTORY_TOTAL_BYTES       P4_CONFIG_HISTORY_TOTAL_BYTES
@@ -120,30 +127,11 @@ void shell_get_build_details(const esp_app_desc_t **desc_out)
 
 static bool s_initialized = false;
 
-/* Transcript. Held in PSRAM (not internal SRAM) because the pair of 16 KB
- * buffers plus the clipboard dominate the small internal heap; keeping them
- * out of internal RAM preserves headroom for the WiFi/SDIO transport mempool
- * and the USB-Serial/JTAG ring buffers, which need DMA-capable memory. */
-static char *s_transcript = NULL;
-/* ANSI form of the transcript (real SGR escapes). Kept in parallel with the
- * plain s_transcript: the span-group transcript parses this into coloured
- * spans so on-screen colours match the UART console, while history/
- * redirection keep using the plain form. */
-static char *s_transcript_ansi = NULL;
-
-/* Cached lengths of the two transcript buffers. Recomputing them with
- * strlen() on every append scanned the whole 64 KB buffer, making appends
- * O(buffer) and long output loops quadratic. Every mutation site keeps these
- * in sync, and all reads use them instead of strlen(). */
-static size_t s_transcript_len = 0;
-static size_t s_transcript_ansi_len = 0;
-
-/* Scrollback-generation counter (bugs.md F26). The render path detects
- * head-moving truncation in O(1) from this value instead of comparing a
- * snapshot of the rendered prefix: every site that drops the oldest bytes
- * (reset, memory-pressure trim, buffer-full truncation) bumps it, and the
- * window manager rebuilds spans only when the epoch changes. */
-static uint32_t s_transcript_epoch = 1;
+/* The scrollback buffers (plain + ANSI), their cached lengths, the scrollback
+ * epoch, the buffer mutex, the redirection capture and the RAM clipboard all
+ * live in the hardware-free transcript model (components/shell/shell_transcript.c).
+ * This file owns their view: the LVGL label, the deferred repaint batching,
+ * the click regions and the USB-Serial-JTAG mirror. */
 
 /* Deferred label repaint batching (see shell_transcript_defer_begin()).
  * Repainting the LVGL span group costs O(buffer): each repaint re-parses the
@@ -258,72 +246,13 @@ bool shell_is_background_task(void)
     }
     return false;
 }
-/* Guards the plain/ANSI scrollback buffers (NOT the LVGL widgets: those stay
- * under the LVGL port lock). Lets worker appends proceed without serializing
- * behind LVGL render passes, which hold the port lock O(buffer) at a full
- * scrollback. Strict order everywhere: LVGL port lock outer, buffer lock
- * inner; buffer-only paths never take the port lock. Recursive. */
-static SemaphoreHandle_t s_transcript_buf_lock = NULL;
-
-static bool shell_transcript_buf_lock(void)
-{
-    if (s_transcript_buf_lock == NULL) {
-        s_transcript_buf_lock = xSemaphoreCreateRecursiveMutex();
-    }
-    if (s_transcript_buf_lock == NULL) {
-        return false;
-    }
-    xSemaphoreTakeRecursive(s_transcript_buf_lock, portMAX_DELAY);
-    return true;
-}
-
-static void shell_transcript_buf_unlock(void)
-{
-    if (s_transcript_buf_lock != NULL) {
-        xSemaphoreGiveRecursive(s_transcript_buf_lock);
-    }
-}
-
-/* RAM clipboard backing the `clip` / `paste` commands. */
-static char *s_clipboard = NULL;
-static bool s_clipboard_is_file;
+/* Async staging buffer for `shell_schedule_transcript_appendf*()`: producers
+ * outside the LVGL task stage text here and a single LVGL async callback drains
+ * it through the normal append path. Part of the view/glue, not the model. */
 static char s_async_transcript[SHELL_ASYNC_TRANSCRIPT_BYTES];
 static size_t s_async_transcript_len;
 static bool s_async_transcript_flush_queued;
 static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
-
-/* Output-redirection capture. When a command is being redirected, its output
- * is mirrored into this dedicated heap buffer (bounded by
- * P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES) so the redirected file holds the
- * command's FULL output even when the 16 KB transcript truncates. Owned by
- * the shell; the command module opens/closes the window around dispatch. */
-static char *s_redirect_capture = NULL;
-static size_t s_redirect_capture_len = 0;
-static size_t s_redirect_capture_cap = 0;
-static bool s_redirect_capturing = false;
-static bool s_redirect_capture_truncated = false;
-
-/* Used by shell_transcript_append_to_buffer() before its definition below. */
-static void shell_redirect_capture_add(const char *text, size_t len);
-
-/**
- * One saved redirection-capture level. When a redirected command runs another
- * redirected command (a pipeline whose stages spool to their own files inside
- * an outer `>` / `>>`), `shell_redirect_capture_begin()` pushes the current
- * capture onto this stack and starts a fresh one; the inner `_reset()` pops
- * the outer state back so the outer file still receives the command's full
- * output. Without the stack, the inner stage's reset freed the buffer the
- * outer capture depended on, so `cmd1 | cmd2 > out.txt` wrote an empty file.
- */
-typedef struct {
-    char *buffer;
-    size_t len;
-    size_t cap;
-    bool truncated;
-} shell_redirect_capture_level_t;
-
-static shell_redirect_capture_level_t s_redirect_capture_stack[P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH];
-static int s_capture_depth = 0;
 
 /* Command history, heap-backed so very long (up to P4_CONFIG_COMMAND_BYTES)
  * commands do not reserve a fixed grid of RAM. Each entry is a strdup'd line;
@@ -422,6 +351,9 @@ static const char *shell_current_cwd(void)
 static void shell_async_transcript_flush_cb(void *user_data);
 static void shell_uart_console_task(void *arg);
 static void shell_prompt_expand(char *output, size_t output_size, bool allow_escape);
+/* Defined with the click-region table below; the model sink calls it for every
+ * plain append. */
+void shell_transcript_update_anchor_position(const char *text);
 
 /* ========================================================================
  * TRANSCRIPT MANAGEMENT
@@ -455,98 +387,12 @@ static const char *shell_colour_value(char *buf, size_t buf_size, const char *co
     return buf;
 }
 
-/**
- * Append to the plain transcript buffer with tail-keeping / truncation, and
- * mirror the same tail-cut into the ANSI transcript buffer so the two stay
- * aligned for the label render.
+/* ========================================================================
+ * TRANSCRIPT LABEL (LVGL view)
+ * ========================================================================
+ * Everything below is the on-screen half: staging the ANSI scrollback into
+ * the window manager, and batching repaints across a burst of appends.
  */
-static void shell_transcript_append_to_buffer(char *plain, size_t plain_size,
-                                               size_t *plain_len_io,
-                                               char *ansi, size_t ansi_size,
-                                               size_t *ansi_len_io,
-                                               const char *plain_text,
-                                               const char *ansi_text,
-                                               const char *truncation_marker)
-{
-    size_t plain_len;
-    size_t ansi_len;
-    size_t plain_text_len;
-    size_t ansi_text_len;
-
-    if (plain_text == NULL || plain_text[0] == '\0' || ansi_text == NULL) {
-        return;
-    }
-
-    /* Lengths are tracked by the caller (see s_transcript_len), so appends no
-     * longer scan the whole buffer. Fall back to strlen for a NULL pointer. */
-    plain_len = (plain_len_io != NULL) ? *plain_len_io : strlen(plain);
-    ansi_len = (ansi_len_io != NULL) ? *ansi_len_io : strlen(ansi);
-    plain_text_len = strlen(plain_text);
-    ansi_text_len = strlen(ansi_text);
-
-    /* A single append larger than the whole buffer keeps only its tail. */
-    if (plain_text_len >= plain_size) {
-        plain_text += plain_text_len - (plain_size - 1);
-        plain_text_len = strlen(plain_text);
-        ansi_text += ansi_text_len - (ansi_size - 1);
-        ansi_text_len = strlen(ansi_text);
-        plain[0] = '\0';
-        plain_len = 0;
-        ansi[0] = '\0';
-        ansi_len = 0;
-        s_transcript_epoch++;   /* the rendered prefix was thrown away */
-    }
-
-    /* Drop the oldest half and mark the cut. */
-    if (plain_len + plain_text_len + 1 >= plain_size) {
-        size_t keep = plain_size / 2;
-
-        s_transcript_epoch++;
-
-        if (plain_len > keep) {
-            memmove(plain, plain + plain_len - keep, keep);
-            plain_len = keep;
-            plain[plain_len] = '\0';
-        }
-        if (ansi_len > keep) {
-            memmove(ansi, ansi + ansi_len - keep, keep);
-            ansi_len = keep;
-            ansi[ansi_len] = '\0';
-        }
-
-        if (plain_len + strlen(truncation_marker) < plain_size) {
-            size_t marker_len = strlen(truncation_marker);
-            memcpy(plain + plain_len, truncation_marker, marker_len);
-            plain_len += marker_len;
-            plain[plain_len] = '\0';
-            if (ansi_len + marker_len < ansi_size) {
-                memcpy(ansi + ansi_len, truncation_marker, marker_len);
-                ansi_len += marker_len;
-                ansi[ansi_len] = '\0';
-            }
-        }
-    }
-
-    if (plain_len + plain_text_len + 1 >= plain_size) {
-        plain_text_len = plain_size - plain_len - 1;
-    }
-    memcpy(plain + plain_len, plain_text, plain_text_len);
-    plain[plain_len + plain_text_len] = '\0';
-
-    if (ansi_len + ansi_text_len + 1 >= ansi_size) {
-        ansi_text_len = ansi_size - ansi_len - 1;
-    }
-    memcpy(ansi + ansi_len, ansi_text, ansi_text_len);
-    ansi[ansi_len + ansi_text_len] = '\0';
-
-    /* Publish the new lengths so the next append needs no strlen scan. */
-    if (plain_len_io != NULL) {
-        *plain_len_io = plain_len + plain_text_len;
-    }
-    if (ansi_len_io != NULL) {
-        *ansi_len_io = ansi_len + ansi_text_len;
-    }
-}
 
 /**
  * Repaint the transcript label from the ANSI transcript buffer, converting
@@ -577,8 +423,9 @@ static void shell_transcript_update_label(void)
     /* windows_set_transcript_text_len() stages the raw ANSI text (with the
      * scrollback epoch so the render can append incrementally) and hands the
      * widget work to the LVGL task's coalesced apply timer. */
-    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len,
-                                    s_transcript_epoch);
+    windows_set_transcript_text_len(shell_transcript_get_ansi_from(0),
+                                    shell_transcript_get_ansi_length(),
+                                    shell_transcript_model_epoch());
 }
 
 /**
@@ -615,9 +462,9 @@ void shell_transcript_flush_now(void)
      * inner. */
     if (windows_get_transcript() != NULL) {
         lvgl_port_lock(0);
-        shell_transcript_buf_lock();
+        shell_transcript_model_lock();
         shell_transcript_update_label();
-        shell_transcript_buf_unlock();
+        shell_transcript_model_unlock();
         windows_transcript_sync_apply();
         lvgl_port_unlock();
     }
@@ -641,9 +488,9 @@ void shell_transcript_defer_end(void)
     s_transcript_defer_dirty = false;
     s_transcript_last_flush_us = esp_timer_get_time();
     if (windows_get_transcript() != NULL) {
-        shell_transcript_buf_lock();
+        shell_transcript_model_lock();
         shell_transcript_update_label();
-        shell_transcript_buf_unlock();
+        shell_transcript_model_unlock();
     }
 }
 
@@ -670,161 +517,60 @@ static void shell_transcript_maybe_update_label(void)
          * still reconciles anything appended after this repaint. */
     }
     if (windows_get_transcript() != NULL) {
-        shell_transcript_buf_lock();
+        shell_transcript_model_lock();
         shell_transcript_update_label();
-        shell_transcript_buf_unlock();
+        shell_transcript_model_unlock();
     }
     s_transcript_last_flush_us = esp_timer_get_time();
 }
 
-/**
- * Append text to the transcript buffer and repaint the LVGL label.
- *
- * @param text           Text to append (already plain, no ANSI sequences).
- * @param mirror_to_uart When true, the same text is echoed to the serial
- *                       console. ANSI callers pass false because they emit the
- *                       raw escape-sequence form to the terminal themselves.
+/* ========================================================================
+ * TRANSCRIPT MODEL SINK
+ * ========================================================================
+ * The model (shell_transcript.c) owns the scrollback buffers and calls these
+ * hooks only when they are installed. Registration happens in shell_init().
+ * Each body is exactly the code the model used to call inline, at exactly the
+ * same point in the append path, so the target keeps the same text, the same
+ * ordering and the same flush points. With no sink installed (host tests) the
+ * model just fills its buffers: no fake view exists anywhere.
  */
-static void shell_transcript_append_internal(const char *text, bool mirror_to_uart)
+
+/** Before an append: reclaim scrollback from the internal heap if it is low. */
+static void shell_transcript_sink_on_pressure(void *ctx)
 {
-    static const char truncation_marker[] = "\n[history truncated]\n";
-
-    if (text == NULL || text[0] == '\0') {
-        return;
-    }
-
-    /* An active output-redirection capture owns stdout: the command's text
-     * goes to the capture (and thus the redirect file) ONLY, never the visible
-     * transcript or the serial mirror. This is DOS `>` semantics; mirroring it
-     * would both duplicate the output on screen and leak the intermediate
-     * stages of `cmd1 | cmd2 > file`. */
-    if (s_redirect_capturing) {
-        shell_redirect_capture_add(text, strlen(text));
-        return;
-    }
-
-    /* A single command with a large output can grow the span group fast
-     * enough to exhaust the internal heap mid-command. Reclaim scrollback
-     * when the internal heap drops below the threshold (rate-limited, keeps
-     * the newest three quarters), so a tiny stdio allocation never aborts
-     * the board while output is still being emitted. Cheap when memory is
-     * fine (a single free-size query plus a timestamp check). Takes its own
-     * locks (LVGL port outer, transcript buffer inner). */
+    (void)ctx;
     shell_transcript_guard_internal();
+}
 
-    /* Serialize buffer appends (worker, LVGL task via the async drain,
-     * console task) against each other with the lightweight buffer mutex —
-     * deliberately NOT the LVGL port lock, which the render task can hold
-     * O(buffer) per frame at a full scrollback. Widget/label work happens
-     * below in the deferred label step, which takes the port lock itself. */
-    shell_transcript_buf_lock();
-    shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
-                                      &s_transcript_len,
-                                      s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
-                                      &s_transcript_ansi_len,
-                                      text, text, truncation_marker);
-    shell_transcript_buf_unlock();
-
-    /* Mirror plain transcript output to the serial console so idf.py monitor
-     * stays a first-class shell endpoint. Outside both locks: UART has its
-     * own lock, and pacing serial bytes on LVGL work is exactly the stall
-     * this discipline removes. */
-    if (mirror_to_uart) {
-        shell_uart_console_write_text(text);
-    }
-
+/** After text landed: stage/schedule the LVGL label repaint. */
+static void shell_transcript_sink_on_append(void *ctx)
+{
+    (void)ctx;
     shell_transcript_maybe_update_label();
+}
 
-    /* Update anchor position tracking for click regions */
-    extern void shell_transcript_update_anchor_position(const char *text);
+/** Plain text landed: advance the click-region anchor row/column tracker. */
+static void shell_transcript_sink_on_text(void *ctx, const char *text, size_t len)
+{
+    (void)ctx;
+    (void)len;   /* text is NUL-terminated */
     shell_transcript_update_anchor_position(text);
 }
 
-void shell_transcript_append_text(const char *text)
+/** Mirror the appended bytes to the USB-Serial-JTAG console. */
+static void shell_transcript_sink_on_mirror(void *ctx, const char *text, size_t len)
 {
-    shell_transcript_append_internal(text, true);
-}
-
-void shell_transcript_appendf(const char *format, ...)
-{
-    /* Command-sized because callers (notably `echo`) format an entire
-     * interactive command line, which can be up to P4_CONFIG_COMMAND_BYTES.
-     * Heap-allocated: this runs on the command worker task, and a fixed
-     * 512-byte stack buffer silently truncates long output. */
-    char *buffer = malloc(P4_CONFIG_COMMAND_BYTES);
-    va_list args;
-
-    if (format == NULL) {
-        free(buffer);
-        return;
-    }
-
-    if (buffer == NULL) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(buffer, P4_CONFIG_COMMAND_BYTES, format, args);
-    va_end(args);
-
-    shell_transcript_append_text(buffer);
-    free(buffer);
-}
-
-void shell_transcript_append_ansi(const char *text)
-{
-    char plain[P4_CONFIG_ANSI_BUFFER_BYTES];
-
-    if (text == NULL) {
-        return;
-    }
-
-    /* The UART console passes the raw ANSI code through natively for real
-     * terminals; the LVGL transcript renders it via recolor markup so colours
-     * appear on screen too. s_transcript stays plain for history/redirection,
-     * while s_transcript_ansi keeps the real escape sequences for the label. */
-    ansi_strip_to_plain(plain, sizeof(plain), text);
-
-    /* While an output-redirection capture is active, the (stripped) output
-     * goes to the capture only — see shell_transcript_append_internal. */
-    if (s_redirect_capturing) {
-        shell_redirect_capture_add(plain, strlen(plain));
-        return;
-    }
-
-    /* Buffer appends serialize on the lightweight buffer mutex (see
-     * shell_transcript_append_internal); the label step takes the LVGL port
-     * lock itself only when it actually repaints. */
-    shell_transcript_buf_lock();
-    shell_transcript_append_to_buffer(s_transcript, SHELL_TRANSCRIPT_BYTES,
-                                      &s_transcript_len,
-                                      s_transcript_ansi, SHELL_TRANSCRIPT_BYTES,
-                                      &s_transcript_ansi_len,
-                                      plain, text, "\n[history truncated]\n");
-    shell_transcript_buf_unlock();
-
-    shell_transcript_maybe_update_label();
-
-    /* Write the raw ANSI text to the UART console for
-     * terminals that support ANSI rendering. */
+    (void)ctx;
+    (void)len;   /* text is NUL-terminated */
     shell_uart_console_write_text(text);
 }
 
-void shell_transcript_appendf_ansi(const char *format, ...)
-{
-    char buffer[P4_CONFIG_ANSI_BUFFER_BYTES];
-    va_list args;
-
-    if (format == NULL) {
-        return;
-    }
-
-    va_start(args, format);
-    ansi_vformat(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
-    shell_transcript_append_ansi(buffer);
-}
+static const shell_transcript_sink_t s_transcript_sink = {
+    .on_pressure = shell_transcript_sink_on_pressure,
+    .on_append = shell_transcript_sink_on_append,
+    .on_text = shell_transcript_sink_on_text,
+    .on_mirror = shell_transcript_sink_on_mirror,
+};
 
 /* ========================================================================
  * SEMANTIC OUTPUT HELPERS
@@ -1155,19 +901,15 @@ void shell_transcript_reset(void)
 {
     lv_obj_t *transcript = windows_get_transcript();
 
-    /* Lock order PORT outer, buffer inner (strict everywhere). */
+    /* Lock order PORT outer, buffer inner (strict everywhere): the model's
+     * recursive scrollback lock nests inside the port lock, exactly as the
+     * inline buffer clear used to. */
     if (transcript != NULL) {
         lvgl_port_lock(0);
     }
-    shell_transcript_buf_lock();
-    s_transcript[0] = '\0';
-    s_transcript_ansi[0] = '\0';
-    s_transcript_len = 0;
-    s_transcript_ansi_len = 0;
-    s_transcript_epoch++;
+    shell_transcript_model_clear();
     /* Content was replaced, not appended: no pending repaint can be valid. */
     s_transcript_defer_dirty = false;
-    shell_transcript_buf_unlock();
 
     if (transcript != NULL) {
         windows_set_transcript_text("");
@@ -1216,12 +958,8 @@ void shell_transcript_guard_internal(void)
 {
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     int64_t now_us = esp_timer_get_time();
-    size_t plain_len;
-    size_t ansi_len;
     size_t keep;
-    size_t dropped_bytes = 0;
-    int dropped_lines = 0;
-    size_t i;
+    size_t dropped_lines = 0;
 
     /* Span/struct overhead lives in the internal heap and can exhaust it to
      * the point where a newlib lock allocation aborts, so the guard keys on
@@ -1249,14 +987,12 @@ void shell_transcript_guard_internal(void)
 
     /* Lock order is LVGL-port outer, buffer inner (strict everywhere: flush,
      * reset, and this guard). The widget tail below needs the port lock;
-     * buffer surgery needs the buffer lock. Callers hold no locks. */
+     * buffer surgery needs the model's scrollback lock. Callers hold no
+     * locks. */
     if (!lvgl_port_lock(0)) {
         return;
     }
-    shell_transcript_buf_lock();
-
-    plain_len = s_transcript_len;
-    ansi_len = s_transcript_ansi_len;
+    shell_transcript_model_lock();
 
     /* Gentle trim: keep the newest three quarters so a single trim rarely
      * repeats; only under severe internal pressure fall back to keeping
@@ -1269,39 +1005,24 @@ void shell_transcript_guard_internal(void)
         keep = (P4_CONFIG_TRANSCRIPT_BYTES * 3) / 4;
     }
     if (keep < 512) keep = 512;
-    if (plain_len > keep) {
-        dropped_bytes = plain_len - keep;
-        /* Count the lines that disappear so click/link regions can be
-         * rebased instead of firing a command from a different row. */
-        for (i = 0; i < dropped_bytes; i++) {
-            if (s_transcript[i] == '\n') {
-                dropped_lines++;
-            }
-        }
-        memmove(s_transcript, s_transcript + dropped_bytes, keep);
-        plain_len = keep;
-        s_transcript[plain_len] = '\0';
-        s_transcript_epoch++;
-    }
-    if (ansi_len > keep) {
-        memmove(s_transcript_ansi, s_transcript_ansi + ansi_len - keep, keep);
-        ansi_len = keep;
-        s_transcript_ansi[ansi_len] = '\0';
-    }
-    s_transcript_len = plain_len;
-    s_transcript_ansi_len = ansi_len;
+
+    /* The model drops the bytes and reports how many rows disappeared, so
+     * click/link regions can be rebased instead of firing a command from a
+     * different row. */
+    dropped_lines = shell_transcript_model_trim_oldest(keep);
 
     /* Sync the staging buffer to the newly-trimmed ANSI transcript BEFORE
      * trimming spans. Otherwise windows_transcript_trim() works on stale
      * content, and the subsequent shell_transcript_update_label() overwrites
      * it again, causing a full span rebuild (blue flash). */
-    windows_set_transcript_text_len(s_transcript_ansi, s_transcript_ansi_len,
-                                    s_transcript_epoch);
+    windows_set_transcript_text_len(shell_transcript_get_ansi_from(0),
+                                    shell_transcript_get_ansi_length(),
+                                    shell_transcript_model_epoch());
     windows_transcript_trim();
-    shell_transcript_buf_unlock();
+    shell_transcript_model_unlock();
     lvgl_port_unlock();
 
-    shell_click_regions_trim(dropped_lines);
+    shell_click_regions_trim((int)dropped_lines);
     s_transcript_trim_count++;
 }
 
@@ -1318,37 +1039,6 @@ void shell_force_transcript_scroll_to_end(void)
      * reading earlier history. Deferred to the LVGL task by the window
      * manager's coalesced repaint. */
     windows_force_scroll_transcript_to_end();
-}
-
-size_t shell_transcript_get_length(void)
-{
-    return s_transcript_len;
-}
-
-const char *shell_transcript_get_text_from(size_t offset)
-{
-    size_t length = s_transcript_len;
-
-    if (offset > length) {
-        return NULL;
-    }
-
-    return s_transcript + offset;
-}
-
-size_t shell_transcript_get_ansi_length(void)
-{
-    return s_transcript_ansi_len;
-}
-
-const char *shell_transcript_get_ansi_from(size_t offset)
-{
-    size_t length = s_transcript_ansi_len;
-
-    if (offset > length) {
-        return NULL;
-    }
-    return s_transcript_ansi + offset;
 }
 
 /* ========================================================================
@@ -1371,19 +1061,19 @@ char *shell_screen_save(void)
     char *copy;
 
     /* Snapshot atomically: an async append mid-copy would tear the text. */
-    shell_transcript_buf_lock();
+    shell_transcript_model_lock();
     length = shell_transcript_get_ansi_length();
     if (length == 0) {
-        shell_transcript_buf_unlock();
+        shell_transcript_model_unlock();
         return NULL;
     }
     copy = malloc(length + 1);
     if (copy == NULL) {
-        shell_transcript_buf_unlock();
+        shell_transcript_model_unlock();
         return NULL;
     }
     memcpy(copy, shell_transcript_get_ansi_from(0), length + 1);
-    shell_transcript_buf_unlock();
+    shell_transcript_model_unlock();
     return copy;
 }
 
@@ -1450,136 +1140,6 @@ void shell_app_mode_exit(void)
 bool shell_app_mode_active(void)
 {
     return s_app_mode_full_screen;
-}
-
-/* ========================================================================
- * OUTPUT-REDIRECTION CAPTURE
- * ======================================================================== */
-
-/** Append @p len bytes of @p text to the active redirection capture. */
-static void shell_redirect_capture_add(const char *text, size_t len)
-{
-    size_t new_len;
-
-    if (!s_redirect_capturing || text == NULL || len == 0) {
-        return;
-    }
-
-    /* Bound the capture: drop anything past the cap and remember it so the
-     * caller can warn. */
-    if (s_redirect_capture_len + len > P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES) {
-        len = P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES - s_redirect_capture_len;
-        s_redirect_capture_truncated = true;
-        if (len == 0) {
-            return;
-        }
-    }
-
-    new_len = s_redirect_capture_len + len;
-    if (new_len + 1 > s_redirect_capture_cap) {
-        size_t new_cap = s_redirect_capture_cap == 0 ? 1024 : s_redirect_capture_cap;
-        char *nb;
-
-        while (new_cap < new_len + 1) {
-            new_cap *= 2;
-        }
-        nb = realloc(s_redirect_capture, new_cap);
-        if (nb == NULL) {
-            /* Out of memory: stop capturing so the command keeps working. */
-            s_redirect_capturing = false;
-            return;
-        }
-        s_redirect_capture = nb;
-        s_redirect_capture_cap = new_cap;
-    }
-
-    memcpy(s_redirect_capture + s_redirect_capture_len, text, len);
-    s_redirect_capture_len = new_len;
-    s_redirect_capture[s_redirect_capture_len] = '\0';
-}
-
-/** Open the redirection-capture window (call before dispatching a redirected
- *  command). When a capture is already active (nested redirect), the current
- *  capture is pushed onto the stack so the outer file still gets the whole
- *  output after the inner captures finish. */
-void shell_redirect_capture_begin(void)
-{
-    if (s_redirect_capturing) {
-        if (s_capture_depth < P4_CONFIG_REDIRECT_CAPTURE_MAX_DEPTH) {
-            s_redirect_capture_stack[s_capture_depth].buffer = s_redirect_capture;
-            s_redirect_capture_stack[s_capture_depth].len = s_redirect_capture_len;
-            s_redirect_capture_stack[s_capture_depth].cap = s_redirect_capture_cap;
-            s_redirect_capture_stack[s_capture_depth].truncated = s_redirect_capture_truncated;
-            s_capture_depth++;
-        } else {
-            /* Depth exhausted: drop the current capture so the command keeps
-             * working; the outer file loses its content but nothing breaks. */
-            free(s_redirect_capture);
-        }
-    } else {
-        free(s_redirect_capture);
-    }
-
-    /* Start a fresh capture for this (possibly nested) command. The pushed
-     * outer state is restored by the matching shell_redirect_capture_reset(). */
-    s_redirect_capture = NULL;
-    s_redirect_capture_len = 0;
-    s_redirect_capture_cap = 0;
-    s_redirect_capture_truncated = false;
-    s_redirect_capturing = true;
-}
-
-/** Close the redirection-capture window. */
-void shell_redirect_capture_end(void)
-{
-    s_redirect_capturing = false;
-}
-
-/** Return the captured output (NUL-terminated) and its length. The buffer
- *  stays valid until the next shell_redirect_capture_begin()/reset(). */
-const char *shell_redirect_capture_get(size_t *out_len)
-{
-    if (out_len != NULL) {
-        *out_len = s_redirect_capture_len;
-    }
-    return s_redirect_capture != NULL ? s_redirect_capture : "";
-}
-
-/** Release the capture buffer (call after the redirected file is written).
- *  If a nested capture is being closed, the saved outer capture is restored
- *  and recording resumes for it. */
-void shell_redirect_capture_reset(void)
-{
-    if (s_capture_depth > 0) {
-        /* Pop the saved outer capture back into place and resume recording
-         * for it; the inner capture's buffer has already been written out. */
-        s_capture_depth--;
-        free(s_redirect_capture);
-        s_redirect_capture = s_redirect_capture_stack[s_capture_depth].buffer;
-        s_redirect_capture_len = s_redirect_capture_stack[s_capture_depth].len;
-        s_redirect_capture_cap = s_redirect_capture_stack[s_capture_depth].cap;
-        s_redirect_capture_truncated = s_redirect_capture_stack[s_capture_depth].truncated;
-        s_redirect_capture_stack[s_capture_depth].buffer = NULL;
-        s_redirect_capturing = true;
-    } else {
-        s_redirect_capturing = false;
-        free(s_redirect_capture);
-        s_redirect_capture = NULL;
-        s_redirect_capture_len = 0;
-        s_redirect_capture_cap = 0;
-        s_redirect_capture_truncated = false;
-    }
-}
-
-/** Report whether the capture hit its size cap (output dropped). */
-bool shell_redirect_capture_was_truncated(void)
-{
-    return s_redirect_capture_truncated;
-}
-
-bool shell_redirect_capture_active(void)
-{
-    return s_redirect_capturing;
 }
 
 /* ========================================================================
@@ -2081,77 +1641,6 @@ void shell_input_line_paste(const char *text)
     lvgl_port_lock(0);
     lv_textarea_add_text(input_line, text);
     lvgl_port_unlock();
-}
-
-/* ========================================================================
- * RAM CLIPBOARD (clip / paste)
- * ======================================================================== */
-
-void shell_clipboard_set(const char *text)
-{
-    if (text == NULL) {
-        s_clipboard[0] = '\0';
-    } else {
-        snprintf(s_clipboard, SHELL_CLIPBOARD_BYTES, "%s", text);
-    }
-    s_clipboard_is_file = false;
-}
-
-void shell_clipboard_set_file(const char *path)
-{
-    if (path != NULL) {
-        snprintf(s_clipboard, SHELL_CLIPBOARD_BYTES, "%s", path);
-    }
-    s_clipboard_is_file = true;
-}
-
-const char *shell_clipboard_get(void)
-{
-    return s_clipboard;
-}
-
-bool shell_clipboard_is_file(void)
-{
-    return s_clipboard_is_file;
-}
-
-bool shell_clipboard_copy_transcript(int n_lines)
-{
-    const char *text;
-    size_t length;
-    size_t pos;
-    int lines = 0;
-
-    if (n_lines < 1) {
-        n_lines = 1;
-    }
-
-    length = shell_transcript_get_length();
-    text = shell_transcript_get_text_from(0);
-    if (text == NULL) {
-        return false;
-    }
-
-    /* Walk backwards counting newlines to find the start of the last
-     * n_lines; cap n_lines by the actual line count. A single trailing
-     * newline terminates the last line, it does not start a new (empty)
-     * one, so skip it before counting. */
-    pos = length;
-    if (pos > 0 && text[pos - 1] == '\n') {
-        pos--;
-    }
-    while (pos > 0 && lines < n_lines) {
-        pos--;
-        if (text[pos] == '\n') {
-            lines++;
-        }
-    }
-    if (pos > 0 && text[pos] == '\n') {
-        pos++;   /* start just after the newline of the previous line */
-    }
-
-    shell_clipboard_set(text + pos);
-    return s_clipboard[0] != '\0';
 }
 
 /* ========================================================================
@@ -6573,33 +6062,20 @@ void shell_init(void)
         s_uart_console_lock = xSemaphoreCreateMutex();
     }
 
-    /* Transcript buffer mutex (see s_transcript_buf_lock): guards the plain
-     * and ANSI scrollback buffers against concurrent appends from the worker
-     * and the LVGL task. Recursive: some paths touch buffers under both this
-     * and the LVGL port lock (always port-outer/buffer-inner). */
-    if (s_transcript_buf_lock == NULL) {
-        s_transcript_buf_lock = xSemaphoreCreateRecursiveMutex();
-    }
-
-    /* Allocate the large transcript and clipboard buffers from PSRAM so the
-     * tight internal heap stays available for DMA-capable users (WiFi/SDIO
-     * transport mempool, USB-Serial/JTAG rings). */
-    if (s_transcript == NULL) {
-        s_transcript = p4heap_alloc_psram(SHELL_TRANSCRIPT_BYTES);
-    }
-    if (s_transcript_ansi == NULL) {
-        s_transcript_ansi = p4heap_alloc_psram(SHELL_TRANSCRIPT_BYTES);
-    }
-    if (s_clipboard == NULL) {
-        s_clipboard = p4heap_alloc_psram(SHELL_CLIPBOARD_BYTES);
-    }
-    if (s_transcript == NULL || s_transcript_ansi == NULL || s_clipboard == NULL) {
+    /* Allocate the transcript model's scrollback and clipboard buffers from
+     * PSRAM (the model owns the sizing and the scrollback mutex) and install
+     * the view sink: from here on every append reaches the LVGL label, the
+     * click-region tracker, the internal-heap guard and the USB-Serial-JTAG
+     * mirror. Without this registration the model is text-only, which is what
+     * the host unit-test lane relies on. */
+    if (!shell_transcript_model_init()) {
         shell_record_errorf("shell", ESP_ERR_NO_MEM,
                             "Failed to allocate transcript/clipboard buffers");
         // Continuing would dereference NULL below; boot cannot proceed
         // without the transcript buffers.
         return;
     }
+    shell_transcript_set_sink(&s_transcript_sink, NULL);
 
     /* Interactive keypress queue used by pause, choice, and more. Created
      * before any input source starts so no keystroke can be lost. */
@@ -6617,11 +6093,7 @@ void shell_init(void)
     /* Clear the session title */
     shell_title_reset();
 
-    /* Clear state */
-    s_transcript[0] = '\0';
-    s_transcript_ansi[0] = '\0';
-    s_transcript_len = 0;
-    s_transcript_ansi_len = 0;
+    /* Clear state (the model cleared its own buffers in model_init) */
     s_async_transcript[0] = '\0';
     s_async_transcript_len = 0;
     s_async_transcript_flush_queued = false;
