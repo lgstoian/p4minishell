@@ -39,19 +39,13 @@ def sh(dev, cmd, sleep_s=1.5):
 
 
 def shot(dev, name, out_dir):
-    """Capture a frame, retrying until two consecutive frames are identical.
+    """Capture one frame after the state has settled.
 
-    A modal or a scroll can be mid-render when the first frame is taken; two
-    identical frames mean the surface has settled, so the recorded shot is not
-    an animation artifact.
+    One capture only: a second one would record the first capture's own
+    `screenshot:` status lines (and the half-typed command in the input line),
+    which is exactly the noise the state preludes exist to avoid.
     """
     bmp = dev.screenshot()
-    for _ in range(3):
-        time.sleep(0.35)
-        nxt = dev.screenshot()
-        if nxt.data == bmp.data:
-            break
-        bmp = nxt
     path = os.path.join(out_dir, name + ".png")
     bmp.save_png(path)
     print("  saved %s (%dx%d)" % (path, bmp.width, bmp.height))
@@ -89,6 +83,16 @@ def prelude(dev):
     sh(dev, "cursor block blink 0", 1.0)
     sh(dev, "theme set default", 1.0)
     sh(dev, "wifi disconnect", 2.0)
+    # The hardware suites leave the shell wherever they finished: a different
+    # OSK page, a different cwd, maybe hidden. Reset both so the prompt text
+    # and the keyboard match on every capture.
+    sh(dev, "keyboard mode text_lower", 1.0)
+    sh(dev, "keyboard show", 1.0)
+    sh(dev, "cd \\", 1.0)
+    # Restore the project's prompt style and clear whatever ended up in the
+    # input line (a boot-time USB-JTAG artefact, or the last suite's typing).
+    # Setting the template rewrites the line, so no character survives.
+    sh(dev, "prompt PS $p$g", 1.0)
     wait_quiet(dev)
     sh(dev, "cls", 1.0)
 
