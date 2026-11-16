@@ -5,7 +5,7 @@ the Unity framework (included in ESP-IDF) and run in two places:
 
 - **On the P4 target** - the authoritative run (`tools/unit_run.py COM3 COM6`).
 - **On the host** - a hardware-free pre-gate for the pure logic (`test/host/`,
-  ESP-IDF `linux` target, 132 of the 634 cases). See `harness.md` 2.2 and
+  ESP-IDF `linux` target, 220 of the 634 cases). See `harness.md` 2.2 and
   section "Host suite" below.
 
 Current baseline: **633 tests, 0 failures, 2 ignored** on COM3 and COM6. The
@@ -128,7 +128,7 @@ python ..\tools\unit_run.py COM3 COM6
 
 The same sources also build natively with ESP-IDF's preview `linux` target
 (`test/host/`), so the pure-logic cases run on the host and in CI without a
-board. Coverage today is **132 of 634 cases** — the leaf components with no board
+board. Coverage today is **220 of 634 cases** — the leaf components with no board
 dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
 hardware-free halves of the shell (`shell_core.c` for text/scanning/history/
 abort/help, `shell_transcript.c` for the transcript model behind an optional

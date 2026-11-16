@@ -196,8 +196,8 @@ local functions.
 
 Owns the shell's runtime surface and output plumbing:
 
-**File layout.** The component is four translation units, split so the pure
-half can run without a board (`harness.md` §2.2):
+**File layout.** The component is five translation units, split so the pure
+logic can run without a board (`harness.md` §2.2):
 
 - `shell.c` — the view and console: LVGL transcript label, click regions,
   scroll, the USB-Serial/JTAG bridge, the input line, recall, the debug
@@ -211,6 +211,9 @@ half can run without a board (`harness.md` §2.2):
   registers in `shell_init()`; with no sink it runs text-only.
 - `shell_print.c` — the semantic print helpers. They are hardware-free because
   they end in the model's `shell_transcript_append_ansi()`.
+- `shell_log.c` — the debug-log ring, the warning counter and
+  `shell_record_{error,warning,info}f`. It schedules transcript output through
+  the model's optional `on_schedule` sink, so it needs no LVGL either.
 
 Objects crossing a seam are defined once and declared in
 `shell_core_internal.h` / `shell_transcript_internal.h`; neither internal
@@ -389,6 +392,13 @@ Captive-portal Wi-Fi setup for first-run without an SD card:
 ### Storage Module (components/storage)
 
 Owns everything that sits between the shell commands and the SD card. Split across several files:
+
+**`storage_path.c` — pure path layer (hardware-free)**
+`shell_get_cwd()` / `storage_set_cwd()`, `shell_sd_resolve_path()`,
+`shell_fs_resolve_path()`, `shell_resolve_target_from_source()`, the
+`shell_path_has_*` predicates and the USB drive-letter/slot helpers. It performs
+no VFS/FATFS/driver calls, so the host lane compiles it; `storage.h` includes
+`storage_path.h` and keeps only the VFS/FATFS declarations.
 
 **`storage.c` — services and state**
 
@@ -1422,17 +1432,23 @@ A foreground batch app (the TUI cell buffer or the `gfx` RGB565 canvas) owns the
 Implements the DOS-style `edit` command as a reusable modal surface on the
 shared modal runtime (see SDK.md, "Modal app surfaces").
 
-- **`editor.c`** owns the byte-preserving document model: heap lines with
+- **`editor_doc.c`** owns the byte-preserving document model: heap lines with
   exact lengths, CRLF/LF EOL tracking, cursor/selection state, snapshot
   undo/redo (`P4_CONFIG_EDITOR_UNDO_DEPTH`), word navigation, delete
-  line/EOL, pure find/replace helpers, the guarded SD load/save (atomic
-  temp+rename via `storage_replace_file()`, `.bak` kept — a failed save
-  leaves the original untouched), the dirty-buffer autosave spill to
-  `sd:/tmp/edit/`, and the user-dictionary overlay plus session ignore list
-  for spellcheck. It also runs the modal
-  session on the command worker: it loads the file, opens the view via
-  `lv_async_call`, then services save requests and waits for quit — file I/O
-  never runs on the LVGL task.
+  line/EOL, pure find/replace helpers, the four syntax lexers
+  (`editor_lex_batch` / `_markdown` / `_json` / `_html`, all sharing
+  `editor_syntax_run_t` and one emit helper), `editor_format_line_number`, the
+  USB/label key maps and the word-count helper. It is hardware-free: the host
+  lane compiles it, and `test_editor.c` drives it.
+- **`editor.c`** is the board half: the guarded SD load/save (atomic
+  temp+rename via `storage_replace_file()`, `.bak` kept — a failed save leaves
+  the original untouched), the DMA bounce-buffer loader, the dirty-buffer
+  autosave spill to `sd:/tmp/edit/`, template seeding, and the modal session on
+  the command worker (load, open the view via `lv_async_call`, service save
+  requests, wait for quit — file I/O never runs on the LVGL task).
+- **`editor_spell.c`** is the pure spellcheck core (wordlist sets, lookups,
+  tokenizer, session ignore list, validation); **`editor_spell_sd.c`** carries
+  the two SD-backed overlay writes (`spell learn` / `spell forget`).
 - **`editor_view.c`** owns the LVGL surface. It renders one row per document
   line into a dedicated span group (with syntax colours applied through the
   per-syntax lexers `editor_lex_batch` / `editor_lex_markdown` /

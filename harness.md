@@ -111,14 +111,17 @@ python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
 python3 tools/host_gen_runner.py --check  # generated runner is up to date
 ```
 
-- **Coverage today: 132 of 634 cases** — the leaf components with no board
+- **Coverage today: 220 of 634 cases** — the leaf components with no board
   dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
   `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
   (`shell_core.c`: text helpers, statement scanner, history store, abort/busy,
   help registry; `shell_transcript.c`: the transcript model behind an optional
-  sink), header (`header_layout/status/notify_queue/refresh.c`), theme
-  (`font/theme.c`) and clock (`clock_core.c`, `clock_timer.c`). Runs in well
-  under a second.
+  sink; `shell_print.c`; `shell_log.c`), header
+  (`header_layout/status/notify_queue/refresh.c`), theme (`font/theme.c`),
+  clock (`clock_core.c`, `clock_timer.c`), the editor document model
+  (`editor_doc.c`, `editor_spell.c`), the batch environment and expression core
+  (`batch_env.c`, `batch_forf.c`, `calc.c`, `himem.c`) and the pure storage path
+  layer (`storage_path.c`). Runs in well under a second.
 - **What cannot run yet, and why:** almost every other component reaches a
   board-only component through `REQUIRES` — `batch → shell` (display/LVGL,
   USB-Serial-JTAG), `archive → storage` (SDMMC/FAT), `modal → windows/keyboard`,

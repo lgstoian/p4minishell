@@ -192,6 +192,25 @@ colours exposed it immediately. The flush now maps through
 `tui_dos_color_rgb()`. Verified by the refreshed `browser-website.png` (cyan
 title, red event status, cyan table header).
 
+## Fixed findings (2026-11-16 host lane, second round)
+
+### F60. `shell_fs_resolve_path()` read past an empty cwd - **FIXED (2026-11-16)**
+
+- **Severity:** LOW (latent; only reachable before `storage_init()`)
+- **Component:** `components/storage/storage_path.c` (was `storage.c`)
+- **Found on:** 2026-11-16, while moving the path layer out of `storage.c` so
+  the host lane could compile the batch environment.
+- **Symptom:** with an empty cwd, resolution computed
+  `s_shell_cwd + strlen(mount_point)`, i.e. a pointer past the cwd buffer, so
+  the first resolve before mount could read out of bounds.
+- **Fix:** an empty cwd is treated as the mount root. Behaviour after
+  `storage_init()` is unchanged.
+- **Verification:** `test_himem.c`/`test_calc.c` pass on the host lane;
+  on-target `unit_run.py COM3 COM6` 633/0/2 and the fast tier are green.
+
+---
+
+
 ## Fixed findings (2026-11-11 host-unit lane)
 
 ### F42. `hard_reset()` over USB-Serial-JTAG did not reboot this board - **FIXED (2026-11-11)**

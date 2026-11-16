@@ -139,6 +139,11 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Fixed
 
+- **`shell_fs_resolve_path()` read past an empty cwd** (bugs.md F60): an
+  uninitialised cwd made the resolver offset by the mount-point length. Fixed
+  while extracting the path layer; behaviour after `storage_init()` is
+  unchanged.
+
 - **`history /load` stored blank lines** (bugs.md F59): `shell_history_load_lines()`
   called `shell_trim(line)` and dropped the returned pointer, so a
   whitespace-only line became an entry. Found by the host lane, where the
@@ -259,6 +264,20 @@ open bugs see [`bugs.md`](bugs.md).
   `docs/assets/editor-editing.png`.
 
 ### Changed
+
+- **The editor document model is a separate TU.** `editor.c` (4412 -> 1428
+  lines) keeps the SD/DMA/autosave/modal half; `editor_doc.c` is the
+  hardware-free model (lines, cursor/selection, undo, find/replace, the four
+  lexers, key maps). `editor_spell.c` lost its two SD write paths to
+  `editor_spell_sd.c`, so the spellcheck core is testable too.
+- **The batch environment and the storage path layer are hardware-free.**
+  `batch_env.c` holds the variable pool, expansion, background slots and the
+  nested-run context; `storage_path.c` holds cwd/path resolution with no
+  VFS/FATFS calls; `board_identity.h` carries the board name/serial without
+  `driver/gpio.h`, and `%SERIAL%` is target-conditional instead of a fake MAC.
+  The debug-log ring moved to `shell_log.c` behind a transcript schedule sink,
+  and the host generator gained a manifest `prelude` hook
+  (`batch_env_pool_init`).
 
 - **The shell is four translation units.** `shell.c` keeps the view and
   console (LVGL transcript label, click regions, USB-Serial/JTAG bridge, input

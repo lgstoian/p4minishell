@@ -45,6 +45,7 @@ invert the only upward edges. Never add a trampoline.
 | batch | batch | core | batch engine: frames, env, control flow, sync, services | [t](test/main/test_batch_expr.c), [t](test/main/test_batch_control.c), [t](test/main/test_himem.c), [t](test/main/test_svc.c) | `ai-context.md#module-layering-rules` | `components/batch` |
 | board_caps | leaf | platform | compile-time board capability queries | [t](test/main/test_hardware.c) | `ai-context.md#module-layering-rules` | `components/board_caps` |
 | boot | leaf | platform | boot script, CONFIG.SYS apply, startup runner | - | `ai-context.md#module-layering-rules` | `components/boot` |
+| browser | leaf | ui | PSRAM image cache and rendered-page back/forward cache for the browser | [t](test/main/test_browser_cache.c) | `ai-context.md#module-layering-rules` | `components/browser` |
 | c6ota | leaf | platform | ESP32-C6 co-processor OTA over SDIO | - | `ai-context.md#module-layering-rules` | `components/c6ota` |
 | camera | leaf | media | MIPI-CSI camera capture | - | `ai-context.md#module-layering-rules` | `components/camera` |
 | cas | leaf | app | computer algebra system command surface | [t](test/main/test_cas.c) | `ai-context.md#module-layering-rules` | `components/cas` |
@@ -62,6 +63,7 @@ invert the only upward edges. Never add a trampoline.
 | gfx | leaf | ui | RGB565 raster, BMP parser/decoder, scaling, 8x8 font | [t](test/main/test_gfx.c) | `ai-context.md#image-support-rules` | `components/gfx` |
 | header | leaf | ui | status header: layout, classification, notifications, refresh | [t](test/main/test_header.c) | `ai-context.md#header-bar-rules` | `components/header` |
 | imagefmt | leaf | media | image format caps and validation | - | `ai-context.md#image-support-rules` | `components/imagefmt` |
+| imgdec | leaf | media | the ONE PNG + JPEG decoder (LodePNG / TJpgDec, the libs LVGL already compiles) | [t](test/main/test_imgdec.c) | `ai-context.md#image-support-rules` | `components/imgdec` |
 | imu | leaf | platform | BMI270 accelerometer/gyro + orientation | [t](test/main/test_hardware.c) | `ai-context.md#module-layering-rules` | `components/imu` |
 | jsengine | leaf | app | QuickJS engine + shell/TUI/FS/batch bindings | - | `ai-context.md#module-layering-rules` | `components/jsengine` |
 | json | leaf | data | the ONE JSON reader: validate, pretty, walk, unescape | [t](test/main/test_json.c) | `ai-context.md#module-layering-rules` | `components/json` |
@@ -77,7 +79,7 @@ invert the only upward edges. Never add a trampoline.
 | pim | leaf | data | vCard/iCalendar codecs + sync identity/merge | [t](test/main/test_pim.c), [t](test/main/test_pim_carddav.c), [t](test/main/test_import.c) | `ai-context.md#module-layering-rules` | `components/pim` |
 | portal | leaf | net | first-run captive portal | [t](test/main/test_portal.c) | `ai-context.md#module-layering-rules` | `components/portal` |
 | power_monitor | leaf | platform | battery ADC, charge state, pack-present policy | [t](test/main/test_power.c), [t](test/main/test_hardware.c) | `ai-context.md#module-layering-rules` | `components/power_monitor` |
-| rss | leaf | net | RSS/JSON-Feed reader over the shared JSON core | - | `ai-context.md#module-layering-rules` | `components/rss` |
+| rss | leaf | net | RSS/JSON-Feed reader over the shared JSON core | [t](test/main/test_rss_store.c) | `ai-context.md#module-layering-rules` | `components/rss` |
 | shell | shell | core | transcript, prompt, key queue, history, debug log, UART console | [t](test/main/test_shell_parser.c), [t](test/main/test_shell_history.c), [t](test/main/test_shell_prompt.c) | `ai-context.md#shell-core-rules` | `components/shell` |
 | state_machine | leaf | core | generic finite state machine helper | - | `ai-context.md#module-layering-rules` | `components/state_machine` |
 | storage | storage | fs | guarded SD sessions, path resolution, file helpers, redirection | [t](test/main/test_storage_format.c), [t](test/main/test_storage_volumes.c), [t](test/main/test_csv.c) | `ai-context.md#module-layering-rules` | `components/storage` |
@@ -138,6 +140,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/board_caps/include/board_caps.h` :: module=board_caps :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules
 - `components/boot/boot.c` :: module=boot :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/boot/boot.h` :: module=boot :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules
+- `components/browser/include/browser.h` :: module=browser :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_browser_cache.c :: rules=ai-context.md#module-layering-rules
+- `components/browser/src/browser_cache.c` :: module=browser :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_browser_cache.c :: rules=ai-context.md#module-layering-rules
 - `components/c6ota/c6ota.c` :: module=c6ota :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/c6ota/c6ota.h` :: module=c6ota :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/camera/include/camera.h` :: module=camera :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#module-layering-rules
@@ -179,6 +183,7 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/command/crypt_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/csv_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/db_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
+- `components/command/download_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/edit_record_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/epub_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/export_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
@@ -201,10 +206,12 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/command/pkg_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/plot_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/power_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
+- `components/command/rss_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/screen_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/security_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/security_commands.h` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/serial_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
+- `components/command/store_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/sync_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/sync_commands.h` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/tui_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
@@ -259,6 +266,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/header/header_status.h` :: module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules
 - `components/imagefmt/imagefmt.c` :: module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules
 - `components/imagefmt/include/imagefmt.h` :: module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules
+- `components/imgdec/imgdec.c` :: module=imgdec :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_imgdec.c :: rules=ai-context.md#image-support-rules
+- `components/imgdec/imgdec.h` :: module=imgdec :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_imgdec.c :: rules=ai-context.md#image-support-rules
 - `components/imu/include/accel_gyro_bmi270.h` :: module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules
 - `components/imu/include/bmi2.h` :: module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules
 - `components/imu/include/bmi270.h` :: module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules
@@ -305,6 +314,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/markdown/css.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
+- `components/markdown/dom_arena.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
+- `components/markdown/dom_arena.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom_render.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom_render.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/html.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
@@ -358,9 +369,12 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/portal/portal_internal.h` :: module=portal :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_portal.c :: rules=ai-context.md#module-layering-rules
 - `components/power_monitor/include/power_monitor.h` :: module=power_monitor :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_power.c,test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules
 - `components/power_monitor/power_monitor.c` :: module=power_monitor :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_power.c,test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules
-- `components/rss/include/rss.h` :: module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules
-- `components/rss/src/rss_fetch.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules
-- `components/rss/src/rss_parser.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules
+- `components/rss/include/rss.h` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
+- `components/rss/include/rss_store.h` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
+- `components/rss/src/rss_fetch.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
+- `components/rss/src/rss_opml.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
+- `components/rss/src/rss_parser.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
+- `components/rss/src/rss_store.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
 - `components/shell/locale.c` :: module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules
 - `components/shell/locale.h` :: module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules
 - `components/shell/shell.c` :: module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules
