@@ -8,6 +8,7 @@
  */
 
 #include "tui.h"
+#include "tui_page_shot_internal.h"
 #include "windows.h"
 #include "ansi.h"
 #include "ansi_palette.h"
@@ -71,6 +72,37 @@ static tui_link_t s_links[TUI_MAX_LINKS];
 static int s_link_count = 0;
 static char s_address_bar[256] = {0};
 static char s_status_bar[256] = {0};
+
+/* ==== Page-shot view (the model in tui_page_shot.c owns the blob) ==== */
+
+/**
+ * Publish where the live page's bytes are, or report that no page is up.
+ *
+ * The snapshot model (tui_page_shot.c) owns the blob layout, the size
+ * arithmetic and the shape validation; it never touches the page buffer, the
+ * link table or the address bar itself. This callback is the whole seam: the
+ * live storage stays here, in the LVGL-coupled TU, and goes away with the page
+ * on tui_viewport_init()/tui_deinit(), at which point capture returns NULL.
+ */
+static bool tui_page_shot_view_acquire(void *ctx, tui_page_shot_view_t *out)
+{
+    (void)ctx;
+    if (s_page == NULL || s_page_rows <= 0) {
+        return false;   /* no page is up: nothing to snapshot */
+    }
+    out->cols = s_cols;
+    out->rows = s_page_rows;
+    out->cells = s_page;
+    out->links = s_links;
+    out->link_count = &s_link_count;
+    out->address = s_address_bar;
+    out->address_size = sizeof(s_address_bar);
+    return true;
+}
+
+static const tui_page_shot_view_ops_t s_page_shot_view = {
+    .acquire = tui_page_shot_view_acquire,
+};
 
 /* Box-glyph spec table for `tui selftest` and the unit tests: macro bytes
  * plus the codepoint each MUST decode to. The expected column is the
@@ -216,6 +248,8 @@ static void tui_apply_layout(void)
 bool tui_init(void)
 {
     if (s_active) return true;
+    /* Hand the snapshot model the live-page accessor (see the seam above). */
+    tui_page_shot_set_view(&s_page_shot_view, NULL);
     s_rows = P4_CONFIG_TUI_ROWS;
     s_cols = P4_CONFIG_TUI_COLS;
     tui_alloc_cells();
@@ -1324,6 +1358,10 @@ int tui_selftest_check(const char **fail_name_out)
 void tui_viewport_init(int page_rows)
 {
     if (page_rows <= 0) page_rows = P4_CONFIG_TUI_PAGE_ROWS;
+    /* The page buffer is this TU's storage; the snapshot model only sees it
+     * through the accessor. Registered here too because the browser drives the
+     * viewport without necessarily entering TUI mode. */
+    tui_page_shot_set_view(&s_page_shot_view, NULL);
     s_page_rows = page_rows;
     /* Free any previous page first: the browser re-inits per load, so an
      * unconditional alloc would leak a full page (80x200 cells) every fetch. */
@@ -1366,82 +1404,11 @@ int tui_viewport_get_page_rows(void)
     return s_page_rows;
 }
 
-/* ==== Page snapshots (the browser back/forward cache) ==== */
-
-void *tui_page_shot_capture(void)
-{
-    tui_page_shot_t *shot;
-    tui_cell_t *cells;
-    tui_link_t *links;
-    size_t cell_bytes;
-    size_t total;
-
-    if (s_page == NULL || s_page_rows <= 0) {
-        return NULL;
-    }
-    cell_bytes = (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t);
-    total = ((sizeof(tui_page_shot_t) + cell_bytes) + 3u) & ~(size_t)3u;
-    total += (size_t)s_link_count * sizeof(tui_link_t);
-
-    shot = p4heap_alloc_psram(total);
-    if (shot == NULL) {
-        return NULL;
-    }
-    shot->cols = s_cols;
-    shot->rows = s_page_rows;
-    shot->link_count = s_link_count;
-    shot->link_offset = (uint32_t)(((sizeof(tui_page_shot_t) + cell_bytes) + 3u) & ~(size_t)3u);
-    memcpy(shot->address, s_address_bar, sizeof(shot->address));
-
-    cells = (tui_cell_t *)(shot + 1);
-    memcpy(cells, s_page, cell_bytes);
-    links = (tui_link_t *)((char *)shot + shot->link_offset);
-    if (s_link_count > 0) {
-        memcpy(links, s_links, (size_t)s_link_count * sizeof(tui_link_t));
-    }
-    return shot;
-}
-
-bool tui_page_shot_restore(const void *blob)
-{
-    const tui_page_shot_t *shot = (const tui_page_shot_t *)blob;
-    const tui_cell_t *cells;
-    const tui_link_t *links;
-    size_t cell_bytes;
-    int count;
-
-    if (shot == NULL || s_page == NULL) {
-        return false;
-    }
-    /* A snapshot from another grid (or a truncated blob) is refused, not
-     * blitted: the cell stride would be wrong and the page would be garbage. */
-    if (shot->cols != s_cols || shot->rows != s_page_rows) {
-        return false;
-    }
-    cell_bytes = (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t);
-    if (shot->link_offset < sizeof(tui_page_shot_t) + cell_bytes) {
-        return false;
-    }
-    cells = (const tui_cell_t *)(shot + 1);
-    memcpy(s_page, cells, cell_bytes);
-
-    count = shot->link_count;
-    if (count < 0 || count > TUI_MAX_LINKS) {
-        count = TUI_MAX_LINKS;
-    }
-    links = (const tui_link_t *)((const char *)shot + shot->link_offset);
-    if (count > 0) {
-        memcpy(s_links, links, (size_t)count * sizeof(tui_link_t));
-    }
-    s_link_count = count;
-    snprintf(s_address_bar, sizeof(s_address_bar), "%s", shot->address);
-    return true;
-}
-
-void tui_page_shot_release(void *blob)
-{
-    p4heap_free(blob);
-}
+/* ==== Page snapshots (the browser back/forward cache) ====
+ * The blob model (layout, alignment, shape validation, allocation) lives in
+ * tui_page_shot.c, which is hardware-free: it reads and writes this TU's page
+ * only through the page-shot view accessor above. Nothing about the snapshot
+ * format is implemented here any more. */
 
 void tui_page_set_cell(int col, int row, const char *utf8, uint8_t fg, uint8_t bg, uint8_t attr)
 {

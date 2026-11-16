@@ -48,6 +48,15 @@ set(HOST_TEST_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/clock/clock_timer.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/editor/editor_doc.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/editor/editor_spell.c"
+    # Page-shot blob model: capture/restore/release of a rendered page as
+    # bytes. Real production source, split out of tui.c so no LVGL is linked;
+    # the live page stays in tui.c behind the accessor seam
+    # (components/tui/tui_page_shot_internal.h).
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/tui/tui_page_shot.c"
+    # Browser PSRAM caches (image LRU + rendered-page LRU). Reaches the page
+    # only through the public tui_page_shot_* API above.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/browser/src/browser_cache.c"
+    "${HOST_TEST_DIR}/test_browser_cache.c"
     # Host-lane backing for the two storage-backed spellchecker calls (the
     # lane has no SD card). Never part of the firmware image.
     "host_spell_storage.c"
@@ -70,6 +79,8 @@ idf_component_register(
         "../../../components/font"
         "../../../components/clock"
         "../../../components/editor"
+        "../../../components/browser/include"
+        "../../../components/tui"
     REQUIRES
         unity
         strutil

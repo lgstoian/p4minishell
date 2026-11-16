@@ -317,6 +317,8 @@
     "components/tui/tui_fonts.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_modal.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_modal.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_page_shot.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_page_shot_internal.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_pane.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_pane.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/uitest/include/ui_test.h": "module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",

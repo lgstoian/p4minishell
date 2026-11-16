@@ -53,6 +53,14 @@ extern void test_ansi_osc8_strip(void);
 extern void test_ansi_csi_trailing_complete(void);
 extern void test_ansi_csi_trailing_split(void);
 
+/* --- test_browser_cache.c ------------------------------------ */
+extern void test_browser_image_cache_roundtrip(void);
+extern void test_browser_image_cache_miss_and_null(void);
+extern void test_browser_image_cache_refresh_in_place(void);
+extern void test_browser_image_cache_lru_eviction(void);
+extern void test_browser_image_cache_clear(void);
+extern void test_browser_page_cache_degrades_without_a_page(void);
+
 /* --- test_calc.c --------------------------------------------- */
 extern void test_calc_arithmetic(void);
 extern void test_calc_power_and_mod(void);
@@ -323,6 +331,14 @@ void app_main(void)
     RUN_TEST(test_ansi_osc8_strip);
     RUN_TEST(test_ansi_csi_trailing_complete);
     RUN_TEST(test_ansi_csi_trailing_split);
+
+    /* test_browser_cache.c */
+    RUN_TEST(test_browser_image_cache_roundtrip);
+    RUN_TEST(test_browser_image_cache_miss_and_null);
+    RUN_TEST(test_browser_image_cache_refresh_in_place);
+    RUN_TEST(test_browser_image_cache_lru_eviction);
+    RUN_TEST(test_browser_image_cache_clear);
+    RUN_TEST(test_browser_page_cache_degrades_without_a_page);
 
     /* test_calc.c */
     RUN_TEST(test_calc_arithmetic);
