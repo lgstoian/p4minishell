@@ -197,6 +197,11 @@ Follow-on work from the study above, prioritising the browser:
 - **Already present (no work needed):** touch injection (`ui tap|swipe|...`),
   backlight persistence (`BRIGHTNESS=` in CONFIG.SYS), timezone (`timezone`).
 
+**Status in v1.4.2:** shipped - PNG/JPEG decode through the one image path,
+the browser PSRAM caches + DOM arena, and the RSS subscription/read-state/OPML
+surface. The rest of this list (download verb, bounded HTTP retry/streaming
+headers, provisioning JSON API, BLE GATT server) remains future work.
+
 **Not adopted from ESP-Brookesia:** the KV storage layer (we have `storage_ini`
 + NVS — a third store would be a duplicate), a generic tree-copy (xcopy /S
 owns recursive copy), the Lua/JS/WASM/ELF runtimes, the JSON-UI model, the

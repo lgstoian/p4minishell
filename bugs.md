@@ -1,4 +1,4 @@
-# P4MiniShell - Bug Log (v1.4.1)
+# P4MiniShell - Bug Log (v1.4.2)
 
 This file is the working log for bug hunting and hardware stress testing. It
 was reset for the v1.2.0 campaign (the two-board release) and carried into
@@ -7,7 +7,7 @@ v1.3.0, so it reflects what is **still open**.
 Fixed entries are removed at each reset (their history lives in
 [`changelog.md`](changelog.md) and git).
 
-- **Firmware:** v1.4.1 (ESP-IDF v5.5.5)
+- **Firmware:** v1.4.2 (ESP-IDF v5.5.5)
 - **Boards under test (in parallel):**
   - `jc1060p470c` — ESP32-P4 Function EV Board (COM3), ESP32-C6 co-processor,
     JD9165 1024x600, GT911 touch, SD card present.
@@ -261,7 +261,7 @@ title, red event status, cyan table header).
 
 ## Open findings
 
-None as of v1.4.1. F53 is closed below; the remaining entries document
+None as of v1.4.2. F53 is closed below; the remaining entries document
 hardware/environment limitations that are gated instead of fatal.
 
 ### F53. Long-sweep heap exhaustion / editor unnamed-buffer fault - **FIXED (v1.4.1)**

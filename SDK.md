@@ -5,7 +5,7 @@ How to extend and integrate P4MiniShell. This is the practical companion to the
 registration tables, the modal/native-app patterns, and how to add commands,
 files, and boot hooks.
 
-- **Version:** v1.4.1 (ESP-IDF v5.5.5)
+- **Version:** v1.4.2 (ESP-IDF v5.5.5)
 - **Working rules and invariants:** [`ai-context.md`](ai-context.md)
 - **Architecture:** [`documentation.md`](documentation.md)
 - **User-facing commands:** [`command.md`](command.md)
@@ -369,9 +369,12 @@ and font modules — no new app model:
   the cell/link sinks (TUI) or the ANSI sink, plus an optional image loader; the
   markdown leaf never touches SD/network. CSS is computed by `css.c`
   (tag/class/id/attribute, descendant/child, specificity, inline last); the
-  browser's `browser_load_image` resolves/fetches/decodes via `gfx` and maps to
-  DOS cells. To add a layout construct, extend `dom_render.c`; do not add a
-  second browser renderer.
+  browser's `browser_load_image` resolves/fetches/decodes via `gfx` (BMP) and
+  `components/imgdec` (PNG/JPEG; `imgdec_probe()` routes by format, never by a
+  local magic-byte sniff), and maps to DOS cells. `components/browser` owns only
+  the PSRAM caches (decoded-image cache, rendered-page shot) built on the
+  hardware-free `tui_page_shot` model. To add a layout construct, extend
+  `dom_render.c`; do not add a second browser renderer or a second decoder.
 - **MCP** (`components/mcp/`): `mcp_build_request()` is the JSON-RPC builder;
   `mcp_connect/list_tools/call_tool` use `networking_http_request(POST)` and
   `json_walk`. The `mcp` command lives in `components/command/mcp_commands.c`.

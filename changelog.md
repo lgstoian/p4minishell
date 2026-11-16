@@ -14,7 +14,7 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
-## [Unreleased]
+## [1.4.2] - 2026-11-16
 
 ### Added
 

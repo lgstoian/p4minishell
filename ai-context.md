@@ -84,7 +84,7 @@ Regenerate the committed manifests after changing tags or components:
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.4.1** (`p4minishell_config.h` version macros) |
+| Version | **v1.4.2** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |

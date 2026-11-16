@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.4.1** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.4.2** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -303,7 +303,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v1.4.1 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.4.2 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -3039,6 +3039,7 @@ A literal `#` in cell text (e.g. bar `#` fills) is recolor-escaped by
 | `tui clear` | Clear TUI grid (same as `draw clear`). |
 | `tui fullscreen on\|off` | Per-app fullscreen: `on` hides header (`windows_set_fullscreen`), `off` restores; kept visible by default. |
 | `tui refresh` | Re-apply transcript rect via `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` (call after rotation/keyboard). |
+| `tui dump [from] [to] [/a]` | Read-only text dump of the logical page (1-based rows). `/a` (or `attrs`) appends one `NNN@start-end:fg ...` colour-run line per row, so a suite can assert link/heading colouring without pixels. |
 | `tui selftest` | Run pure headless checks (palette spec, glyph coverage, metrics) and report per-group PASS/FAIL with location. Safe in background jobs; zero display dependency. Returns ERRORLEVEL 0 on clean, 1 on any failure. |
 
 `tui` and `draw fullscreen` both route to `components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`; `tui` is the per-app alias, `draw fullscreen` is the global batch verb. Screenshot debug: `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
@@ -3343,7 +3344,11 @@ sessions never leak PSRAM. Sample art: `apps/push_assets.py` generates
 repo) and pushes them with CRC manifests, plus `PHOTO.BMP` (96×64) used by the
 `picture` reference app (`apps/pics/PICS.BAT`: `view`, `draw image`, `gfx
 image`, `image info`). Generic image caps: `GFX_IMAGE_MAX_W/H`
-(`components/gfx/gfx.h`) and `P4_CONFIG_IMAGE_MAX_BYTES`.
+(`components/gfx/gfx.h`) and `P4_CONFIG_IMAGE_MAX_BYTES`. PNG/JPEG decode
+(`components/imgdec`, LodePNG/TJpgDec) is capped by
+`P4_CONFIG_IMGDEC_MAX_W/H`: a larger image probes as `IMGDEC_FMT_UNKNOWN`, so
+the browser falls back to alt text and `image`/`gfx image` report "malformed or
+exceeds the decode cap" instead of allocating a huge buffer.
 
 Colors are DOS 0-15 from the CGA table (`tui_dos_color_rgb`, so pixel colors
 match TUI cell colors), `16` = black, anything larger is 24-bit RGB hex used
@@ -4619,6 +4624,13 @@ ERRORLEVEL: 0 on HTTP 2xx, 1 on a network/HTTP failure, 2 on usage.
 The on-device browser. `browser <url>` fetches an `http(s)` page (same
 HTTP/TLS/auth policy as `httpget`, including `user:pass@` Basic auth);
 `browser <file>` reads an SD HTML file and renders it with no network at all.
+Protocol-relative sources (`//host/path`, as real Wikipedia pages use) resolve
+to `https://`. An `https://` load waits (bounded, 5 s) for a sane clock before
+the TLS handshake, because certificate validation needs one; if the clock never
+syncs the command reports the failure instead of connecting anyway. A page
+larger than the `P4_CONFIG_BROWSER_PAGE_MAX_BYTES` fetch budget is refused with
+that message, and a network image larger than the 64 KB image budget is skipped
+with its alt text.
 The page is parsed into a DOM tree, the `<style>` cascade is applied
 (tag/class/id/attribute selectors, descendant/child combinators, specificity,
 colour/background/alignment/weight/decoration), and **one shared DOM renderer**
